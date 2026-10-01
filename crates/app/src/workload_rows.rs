@@ -1,8 +1,15 @@
 //! Row builders for the workload kinds.
 
-use crate::kind_row::{DetailRow, DetailSection, KindCell, KindRow, PodOwner, chips};
+use cluster::{
+    ClaimTemplate, ControllerRef, DaemonSetSummary, DeploymentSummary, PodSummary,
+    ReplicaSetSummary, StatefulSetSummary, TemplateContainer, WorkloadCondition,
+};
+
+use crate::kind_row::{
+    DAEMON_SET_KIND, DetailRow, DetailSection, KindCell, KindRow, PodOwner, REPLICA_SET_KIND,
+    STATEFUL_SET_KIND, chips,
+};
 use crate::status_tone::{StatusLabel, StatusTone};
-use cluster::{DeploymentSummary, TemplateContainer, WorkloadCondition};
 
 /// The condition and reason the Deployment controller reports when a rollout stops.
 const PROGRESSING: &str = "Progressing";
@@ -58,22 +65,10 @@ pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
             title: "Replicas",
             rows: replicas,
         },
-        DetailSection {
-            title: "Selector",
-            rows: vec![DetailRow::Chips(chips(&deployment.selector))],
-        },
-        DetailSection {
-            title: "Containers",
-            rows: container_rows(&deployment.containers),
-        },
+        selector_section(&deployment.selector),
+        containers_section(&deployment.containers),
     ];
-    let ports = port_rows(&deployment.containers);
-    if !ports.is_empty() {
-        sections.push(DetailSection {
-            title: "Ports",
-            rows: ports,
-        });
-    }
+    sections.extend(ports_section(&deployment.containers));
     sections.push(DetailSection {
         title: "Conditions",
         rows: deployment.conditions.iter().map(condition_row).collect(),
@@ -137,7 +132,7 @@ fn strategy_text(deployment: &DeploymentSummary) -> Option<String> {
     Some(parts.join(" · "))
 }
 
-fn non_empty(text: &str) -> Option<&str> {
+pub(crate) fn non_empty(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }
 
@@ -175,7 +170,7 @@ fn port_rows(containers: &[TemplateContainer]) -> Vec<DetailRow> {
 }
 
 /// `True` is ok; `False` is a warning, with the reason when the controller gave one.
-fn condition_row(condition: &WorkloadCondition) -> DetailRow {
+pub(crate) fn condition_row(condition: &WorkloadCondition) -> DetailRow {
     let (text, tone) = match (condition.is_true, &condition.reason) {
         (true, _) => ("True".to_owned(), StatusTone::Ok),
         (false, Some(reason)) => (format!("False · {reason}"), StatusTone::Warn),
@@ -188,6 +183,266 @@ fn condition_row(condition: &WorkloadCondition) -> DetailRow {
             tone,
         }),
     }
+}
+
+pub(crate) fn stateful_set_row(set: &StatefulSetSummary) -> KindRow {
+    let mut sections = vec![
+        DetailSection {
+            title: "Replicas",
+            rows: vec![
+                DetailRow::field("Desired", KindCell::count(set.desired)),
+                DetailRow::field("Ready", KindCell::count(set.ready)),
+                DetailRow::field("Current", KindCell::count(set.current)),
+                DetailRow::field("Updated", KindCell::count(set.updated)),
+                DetailRow::field(
+                    "Service",
+                    KindCell::mono_or_absent(set.service_name.as_deref().unwrap_or_default()),
+                ),
+                DetailRow::field(
+                    "Update strategy",
+                    KindCell::text_or_absent(non_empty(&set.update_strategy)),
+                ),
+                DetailRow::field(
+                    "Pod management",
+                    KindCell::text_or_absent(non_empty(&set.pod_management_policy)),
+                ),
+            ],
+        },
+        selector_section(&set.selector),
+        containers_section(&set.containers),
+    ];
+    sections.extend(ports_section(&set.containers));
+    sections.push(DetailSection {
+        title: "Volume claim templates",
+        rows: set
+            .claim_templates
+            .iter()
+            .map(|claim| DetailRow::field(claim.name.clone(), claim_text(claim)))
+            .collect(),
+    });
+    KindRow {
+        namespace: Some(set.namespace.clone()),
+        name: set.name.clone(),
+        created_at: set.created_at,
+        status: replicas_status(set.ready, set.desired),
+        cells: vec![
+            ready_cell(set.ready, set.desired),
+            KindCell::mono_or_absent(set.service_name.as_deref().unwrap_or_default()),
+            KindCell::text_or_absent(non_empty(&set.update_strategy)),
+            KindCell::age(set.created_at),
+        ],
+        sections,
+        related_pods: controller_owner(&set.namespace, STATEFUL_SET_KIND, &set.name),
+        labels: chips(&set.labels),
+    }
+}
+
+pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
+    let status = if set.desired == 0 {
+        StatusLabel {
+            text: "No nodes scheduled".into(),
+            tone: StatusTone::Done,
+        }
+    } else {
+        ready_status(set.ready, set.desired)
+    };
+    let node_selector = (!set.node_selector.is_empty()).then(|| set.node_selector.join(", "));
+    let mut rollout = vec![
+        DetailRow::field("Desired", KindCell::count(set.desired)),
+        DetailRow::field("Current", KindCell::count(set.current)),
+        DetailRow::field("Ready", KindCell::count(set.ready)),
+        DetailRow::field("Up-to-date", KindCell::count(set.up_to_date)),
+        DetailRow::field("Available", KindCell::count(set.available)),
+    ];
+    if set.misscheduled > 0 {
+        rollout.push(DetailRow::field(
+            "Misscheduled",
+            toned_number(set.misscheduled, StatusTone::Warn),
+        ));
+    }
+    rollout.push(DetailRow::field(
+        "Update strategy",
+        KindCell::text_or_absent(non_empty(&set.update_strategy)),
+    ));
+    let mut sections = vec![
+        DetailSection {
+            title: "Rollout",
+            rows: rollout,
+        },
+        DetailSection {
+            title: "Node selector",
+            rows: vec![DetailRow::Chips(chips(&set.node_selector))],
+        },
+        selector_section(&set.selector),
+        containers_section(&set.containers),
+    ];
+    sections.extend(ports_section(&set.containers));
+    KindRow {
+        namespace: Some(set.namespace.clone()),
+        name: set.name.clone(),
+        created_at: set.created_at,
+        status,
+        cells: vec![
+            KindCell::count(set.desired),
+            KindCell::count(set.current),
+            toned_number(set.ready, replica_tone(set.ready, set.desired)),
+            KindCell::count(set.up_to_date),
+            KindCell::count(set.available),
+            KindCell::text_or_absent(node_selector.as_deref()),
+            KindCell::age(set.created_at),
+        ],
+        sections,
+        related_pods: controller_owner(&set.namespace, DAEMON_SET_KIND, &set.name),
+        labels: chips(&set.labels),
+    }
+}
+
+pub(crate) fn replica_set_row(set: &ReplicaSetSummary) -> KindRow {
+    let owner = owner_text(set.owner.as_ref());
+    KindRow {
+        namespace: Some(set.namespace.clone()),
+        name: set.name.clone(),
+        created_at: set.created_at,
+        status: replicas_status(set.ready, set.desired),
+        cells: vec![
+            KindCell::count(set.desired),
+            KindCell::count(set.current),
+            toned_number(set.ready, replica_tone(set.ready, set.desired)),
+            KindCell::text_or_absent(owner.as_deref()),
+            KindCell::age(set.created_at),
+        ],
+        sections: vec![
+            DetailSection {
+                title: "Replicas",
+                rows: vec![
+                    DetailRow::field("Desired", KindCell::count(set.desired)),
+                    DetailRow::field("Current", KindCell::count(set.current)),
+                    DetailRow::field("Ready", KindCell::count(set.ready)),
+                    DetailRow::field("Owner", KindCell::text_or_absent(owner.as_deref())),
+                    DetailRow::field(
+                        "Revision",
+                        KindCell::text_or_absent(set.revision.as_deref()),
+                    ),
+                ],
+            },
+            selector_section(&set.selector),
+            containers_section(&set.containers),
+        ],
+        related_pods: controller_owner(&set.namespace, REPLICA_SET_KIND, &set.name),
+        labels: chips(&set.labels),
+    }
+}
+
+/// The pods of a StatefulSet in ordinal order; a pod without an ordinal sorts last.
+pub(crate) fn sort_by_ordinal(pods: &mut [&PodSummary], set_name: &str) {
+    pods.sort_by_key(|pod| {
+        ordinal(&pod.name, set_name).map_or((true, 0), |ordinal| (false, ordinal))
+    });
+}
+
+/// The `-{n}` suffix of a StatefulSet pod name.
+fn ordinal(pod_name: &str, set_name: &str) -> Option<u32> {
+    let digits = pod_name.strip_prefix(set_name)?.strip_prefix('-')?;
+    // `parse` alone would accept a leading `+`.
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// kubectl style: `{kind lowercased}/{name}`.
+pub(crate) fn owner_text(owner: Option<&ControllerRef>) -> Option<String> {
+    owner.map(|owner| format!("{}/{}", owner.kind.to_lowercase(), owner.name))
+}
+
+pub(crate) fn controller_owner(
+    namespace: &str,
+    kind: &'static str,
+    name: &str,
+) -> Option<PodOwner> {
+    Some(PodOwner::Controller {
+        namespace: namespace.to_owned(),
+        kind,
+        name: name.to_owned(),
+    })
+}
+
+/// `{ready}/{desired}` toned by `replica_tone`.
+fn ready_cell(ready: u32, desired: u32) -> KindCell {
+    toned(format!("{ready}/{desired}"), replica_tone(ready, desired))
+}
+
+pub(crate) fn toned_number(count: u32, tone: StatusTone) -> KindCell {
+    toned(count.to_string(), tone)
+}
+
+fn toned(text: String, tone: StatusTone) -> KindCell {
+    KindCell::Toned(StatusLabel {
+        text: text.into(),
+        tone,
+    })
+}
+
+/// `{ready}/{desired} ready` toned by `replica_tone`.
+fn ready_status(ready: u32, desired: u32) -> StatusLabel {
+    StatusLabel {
+        text: format!("{ready}/{desired} ready").into(),
+        tone: replica_tone(ready, desired),
+    }
+}
+
+/// StatefulSets and ReplicaSets read "Scaled to zero" when nothing is desired.
+fn replicas_status(ready: u32, desired: u32) -> StatusLabel {
+    if desired == 0 {
+        return StatusLabel {
+            text: "Scaled to zero".into(),
+            tone: StatusTone::Done,
+        };
+    }
+    ready_status(ready, desired)
+}
+
+pub(crate) fn optional_count(count: Option<u32>) -> KindCell {
+    count.map_or(KindCell::Absent, KindCell::count)
+}
+
+/// `{storage} · {class} · {modes}`, leaving out the parts the claim does not set.
+fn claim_text(claim: &ClaimTemplate) -> KindCell {
+    let modes = (!claim.access_modes.is_empty()).then(|| claim.access_modes.join(","));
+    let parts: Vec<&str> = claim
+        .storage
+        .as_deref()
+        .into_iter()
+        .chain(claim.storage_class.as_deref())
+        .chain(modes.as_deref())
+        .collect();
+    if parts.is_empty() {
+        return KindCell::Absent;
+    }
+    KindCell::Text(parts.join(" · ").into())
+}
+
+fn selector_section(selector: &[String]) -> DetailSection {
+    DetailSection {
+        title: "Selector",
+        rows: vec![DetailRow::Chips(chips(selector))],
+    }
+}
+
+pub(crate) fn containers_section(containers: &[TemplateContainer]) -> DetailSection {
+    DetailSection {
+        title: "Containers",
+        rows: container_rows(containers),
+    }
+}
+
+/// `None` when no container declares a port.
+fn ports_section(containers: &[TemplateContainer]) -> Option<DetailSection> {
+    let rows = port_rows(containers);
+    (!rows.is_empty()).then_some(DetailSection {
+        title: "Ports",
+        rows,
+    })
 }
 
 #[cfg(test)]

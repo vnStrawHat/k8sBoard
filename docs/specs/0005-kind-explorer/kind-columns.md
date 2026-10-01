@@ -68,7 +68,7 @@
 ```rust
 enum LastRun { NeverRun, Running, Succeeded, Failed }
 fn last_run(cron_job: &CronJobSummary) -> LastRun;
-fn last_run_tone(cron_job: &CronJobSummary) -> Option<StatusTone>; // Running: Info, Succeeded: Ok, Failed: Bad, NeverRun: None
+fn last_run_tone(cron_job: &CronJobSummary) -> Option<StatusTone>; // Running: Info, Succeeded: Ok, Failed: Warn, NeverRun: None
 ```
 
 | Case (in order) | `last_run` |

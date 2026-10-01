@@ -42,7 +42,19 @@
 | 24 | CronJob "Last schedule" is toned by outcome. "Next run" is deferred | no cron parser dependency in this spec |
 | 25 | Screenshot screens: `<kind>` and `<kind>-drawer` for every kind. The drawer opens on row 0 | deterministic and simple |
 | 26 | Owner cells and fields use kubectl's `{kind lowercased}/{name}`, e.g. `deployment/api` | matches `kubectl` output and W7 |
-| 27 | App row modules by concept: `workload_rows.rs` (incl. CronJob), `network_rows.rs`, `config_map_rows.rs`, `namespace_rows.rs` | one primary concept per module (style guide) |
+| 27 | App row modules by concept: `workload_rows.rs`, `batch_rows.rs` (Job and CronJob), `network_rows.rs`, `config_map_rows.rs`, `namespace_rows.rs` | one primary concept per module (style guide) |
+
+## Implementation amendments (steps 2 and 3)
+
+| # | Decision | Rationale |
+|---|---|---|
+| 28 | Port and Service-port text is port-first: `{port}/{protocol} · {name} · {container}`, `{port} → {target}/{protocol} · {name} · node {n}` | one truncated line with a tooltip still shows the port |
+| 29 | Drawer labels are 136 px and truncate with a tooltip. `DetailRow::Stacked` (label above value) is used for ingress hosts and TLS hosts, never for ConfigMap keys | hosts are too long for a label column; a key must keep its size beside it |
+| 30 | A ConfigMap drawer's section title is the static "Data". The key count is in the subtitle ("4 keys") | section titles are `&'static str` |
+| 31 | `DetailRow::Note` is muted wrapping text: "No keys", "Values are not shown in this version", the selector-less Service note | explanations are not label and value pairs |
+| 32 | ReplicaSet and DaemonSet "Ready" cells are a toned number, not `{ready}/{desired}` | Desired is its own column there |
+| 33 | `--screen <kind>-drawer` settles when its row is selected or when the launch request found no row to select (`SettleInput.is_drawer_ready`) | an empty list previously waited out the 30 s timeout |
+| 34 | A CronJob whose last run failed is Warn in both the "Last schedule" cell and the subtitle (the spec's cell said Bad) | one tone per state; the CronJob itself is healthy |
 
 ## Known ceilings
 

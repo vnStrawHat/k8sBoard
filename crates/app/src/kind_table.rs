@@ -256,6 +256,18 @@ fn cell_element(cell: &KindCell, align: Align, mono: SharedString, cx: &App) -> 
         KindCell::Mono(text) => base().font_family(mono).child(text.clone()),
         KindCell::Toned(label) => base().child(toned_text(label.clone(), cx)),
         KindCell::Absent => base().text_color(cx.theme().muted_foreground).child("—"),
+        KindCell::Duration {
+            started_at: None, ..
+        } => base().text_color(cx.theme().muted_foreground).child("—"),
+        KindCell::Duration {
+            started_at,
+            finished_at,
+        } => {
+            let now = jiff::Timestamp::now();
+            base()
+                .font_family(mono)
+                .child(format_age(*started_at, finished_at.unwrap_or(now)))
+        }
         KindCell::Age { at, tone } => {
             // Read per cell: a render has no shared clock, and a second of skew is invisible.
             let age = base()

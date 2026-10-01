@@ -4,9 +4,12 @@ use cluster::{AccessCheck, ClusterConnection, NamespaceScope, WatchUpdate};
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 
+use crate::batch_rows::{cron_job_row, job_row};
+use crate::config_map_rows::config_map_row;
 use crate::kind_row::KindRow;
 use crate::namespace_rows::namespace_row;
-use crate::workload_rows::deployment_row;
+use crate::network_rows::{ingress_row, service_row};
+use crate::workload_rows::{daemon_set_row, deployment_row, replica_set_row, stateful_set_row};
 
 /// One kind with an explorer screen. Per-kind variation is data (the tables below) plus one
 /// `match` in `watch_rows`; there is no trait.
@@ -14,6 +17,14 @@ use crate::workload_rows::deployment_row;
 pub(crate) enum ResourceKind {
     Namespaces,
     Deployments,
+    StatefulSets,
+    DaemonSets,
+    ReplicaSets,
+    Jobs,
+    CronJobs,
+    Services,
+    Ingresses,
+    ConfigMaps,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,13 +93,179 @@ static DEPLOYMENTS: KindSpec = KindSpec {
     has_port_forward: true,
 };
 
+static STATEFUL_SETS: KindSpec = KindSpec {
+    label: "StatefulSets",
+    singular: "statefulset",
+    plural: "statefulsets",
+    badge: "Ss",
+    is_namespaced: true,
+    access_check: AccessCheck::ListStatefulSets,
+    columns: &[
+        column("Ready", 80., Align::Left),
+        column("Service", 200., Align::Left),
+        column("Update strategy", 140., Align::Left),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &["Scale…", "Restart rollout"],
+    delete_label: "Delete statefulset…",
+    has_port_forward: true,
+};
+
+static DAEMON_SETS: KindSpec = KindSpec {
+    label: "DaemonSets",
+    singular: "daemonset",
+    plural: "daemonsets",
+    badge: "Ds",
+    is_namespaced: true,
+    access_check: AccessCheck::ListDaemonSets,
+    columns: &[
+        column("Desired", 80., Align::Right),
+        column("Current", 80., Align::Right),
+        column("Ready", 80., Align::Right),
+        column("Up-to-date", 100., Align::Right),
+        column("Available", 90., Align::Right),
+        column("Node selector", 200., Align::Left),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &["Restart rollout"],
+    delete_label: "Delete daemonset…",
+    has_port_forward: false,
+};
+
+static REPLICA_SETS: KindSpec = KindSpec {
+    label: "ReplicaSets",
+    singular: "replicaset",
+    plural: "replicasets",
+    badge: "Rs",
+    is_namespaced: true,
+    access_check: AccessCheck::ListReplicaSets,
+    columns: &[
+        column("Desired", 80., Align::Right),
+        column("Current", 80., Align::Right),
+        column("Ready", 80., Align::Right),
+        column("Owner", 220., Align::Left),
+        AGE_COLUMN,
+    ],
+    // Scale belongs to the owning Deployment.
+    read_only_actions: &[],
+    delete_label: "Delete replicaset…",
+    has_port_forward: false,
+};
+
+static JOBS: KindSpec = KindSpec {
+    label: "Jobs",
+    singular: "job",
+    plural: "jobs",
+    badge: "Jb",
+    is_namespaced: true,
+    access_check: AccessCheck::ListJobs,
+    columns: &[
+        column("Status", 120., Align::Left),
+        column("Completions", 110., Align::Left),
+        column("Duration", 90., Align::Right),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &["Re-run job"],
+    delete_label: "Delete job…",
+    has_port_forward: false,
+};
+
+static CRON_JOBS: KindSpec = KindSpec {
+    label: "CronJobs",
+    singular: "cronjob",
+    plural: "cronjobs",
+    badge: "Cj",
+    is_namespaced: true,
+    access_check: AccessCheck::ListCronJobs,
+    columns: &[
+        column("Schedule", 140., Align::Left),
+        column("Suspend", 80., Align::Left),
+        column("Active", 70., Align::Right),
+        column("Last schedule", 120., Align::Right),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &["Trigger now", "Suspend"],
+    delete_label: "Delete cronjob…",
+    has_port_forward: false,
+};
+
+static SERVICES: KindSpec = KindSpec {
+    label: "Services",
+    singular: "service",
+    plural: "services",
+    badge: "Sv",
+    is_namespaced: true,
+    access_check: AccessCheck::ListServices,
+    columns: &[
+        column("Type", 130., Align::Left),
+        column("Cluster IP", 140., Align::Left),
+        column("External IP", 200., Align::Left),
+        column("Ports", 180., Align::Left),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete service…",
+    has_port_forward: true,
+};
+
+static INGRESSES: KindSpec = KindSpec {
+    label: "Ingresses",
+    singular: "ingress",
+    plural: "ingresses",
+    badge: "In",
+    is_namespaced: true,
+    access_check: AccessCheck::ListIngresses,
+    columns: &[
+        column("Class", 100., Align::Left),
+        column("Hosts", 260., Align::Left),
+        column("Address", 180., Align::Left),
+        column("Ports", 80., Align::Left),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete ingress…",
+    has_port_forward: false,
+};
+
+static CONFIG_MAPS: KindSpec = KindSpec {
+    label: "ConfigMaps",
+    singular: "configmap",
+    plural: "configmaps",
+    badge: "Cm",
+    is_namespaced: true,
+    access_check: AccessCheck::ListConfigMaps,
+    columns: &[column("Data", 70., Align::Right), AGE_COLUMN],
+    read_only_actions: &["Edit"],
+    delete_label: "Delete configmap…",
+    has_port_forward: false,
+};
+
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 2] = [Self::Namespaces, Self::Deployments];
+    pub(crate) const ALL: [Self; 10] = [
+        Self::Namespaces,
+        Self::Deployments,
+        Self::StatefulSets,
+        Self::DaemonSets,
+        Self::ReplicaSets,
+        Self::Jobs,
+        Self::CronJobs,
+        Self::Services,
+        Self::Ingresses,
+        Self::ConfigMaps,
+    ];
 
     fn spec(self) -> &'static KindSpec {
         match self {
             Self::Namespaces => &NAMESPACES,
             Self::Deployments => &DEPLOYMENTS,
+            Self::StatefulSets => &STATEFUL_SETS,
+            Self::DaemonSets => &DAEMON_SETS,
+            Self::ReplicaSets => &REPLICA_SETS,
+            Self::Jobs => &JOBS,
+            Self::CronJobs => &CRON_JOBS,
+            Self::Services => &SERVICES,
+            Self::Ingresses => &INGRESSES,
+            Self::ConfigMaps => &CONFIG_MAPS,
         }
     }
 
@@ -161,6 +338,38 @@ impl ResourceKind {
                 .watch_deployments(scope)
                 .map(|update| rows(update, deployment_row))
                 .boxed(),
+            Self::StatefulSets => connection
+                .watch_stateful_sets(scope)
+                .map(|update| rows(update, stateful_set_row))
+                .boxed(),
+            Self::DaemonSets => connection
+                .watch_daemon_sets(scope)
+                .map(|update| rows(update, daemon_set_row))
+                .boxed(),
+            Self::ReplicaSets => connection
+                .watch_replica_sets(scope)
+                .map(|update| rows(update, replica_set_row))
+                .boxed(),
+            Self::Jobs => connection
+                .watch_jobs(scope)
+                .map(|update| rows(update, job_row))
+                .boxed(),
+            Self::CronJobs => connection
+                .watch_cron_jobs(scope)
+                .map(|update| rows(update, cron_job_row))
+                .boxed(),
+            Self::Services => connection
+                .watch_services(scope)
+                .map(|update| rows(update, service_row))
+                .boxed(),
+            Self::Ingresses => connection
+                .watch_ingresses(scope)
+                .map(|update| rows(update, ingress_row))
+                .boxed(),
+            Self::ConfigMaps => connection
+                .watch_config_maps(scope)
+                .map(|update| rows(update, config_map_row))
+                .boxed(),
         }
     }
 }
@@ -210,6 +419,22 @@ mod tests {
             assert_eq!(last.name, "Age");
             assert_eq!(last.align, Align::Right);
         }
+    }
+
+    #[test]
+    fn port_forward_kinds_are_deployments_stateful_sets_services() {
+        let kinds: Vec<ResourceKind> = ResourceKind::ALL
+            .into_iter()
+            .filter(|kind| kind.has_port_forward())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ResourceKind::Deployments,
+                ResourceKind::StatefulSets,
+                ResourceKind::Services
+            ]
+        );
     }
 
     #[test]

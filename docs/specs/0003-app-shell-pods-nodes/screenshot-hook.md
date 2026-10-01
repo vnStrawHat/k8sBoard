@@ -37,7 +37,7 @@ Without the feature, `--screenshot` exits 2 before GPUI starts ([bootstrap.md](b
 | `node-drawer` | Nodes, select row 0 |
 | `logs-dock` / `logs-zoomed` | Pods with the log dock open on a pod (spec 0004); zoomed also zooms the dock |
 | `<plural>` (spec 0005) | the kind screen, e.g. `deployments`, no selection |
-| `<plural>-drawer` (spec 0005) | the kind screen with row 0 selected, e.g. `deployments-drawer`. Step 2 wires `namespaces` and `deployments` |
+| `<plural>-drawer` (spec 0005) | the kind screen with row 0 selected, e.g. `deployments-drawer`. Wired for all ten kinds of spec 0005 |
 
 3. Wait condition, pure and testable: `fn is_screen_settled(screen, &SettleInput) -> bool`. True when:
    - the session is `Failed`, or

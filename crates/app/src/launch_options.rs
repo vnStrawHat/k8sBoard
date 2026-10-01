@@ -13,7 +13,8 @@ Options:
   --namespace <name>     namespace to show (default: all namespaces if allowed)
   --theme light|dark     colour theme (default: follow the system)
   --screen pods|nodes|pod-drawer|pod-containers|node-drawer|logs-dock|logs-zoomed|
-           namespaces|deployments|<kind>-drawer
+           namespaces|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
+           services|ingresses|configmaps|<kind>-drawer
                          screen to open (default: pods)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help

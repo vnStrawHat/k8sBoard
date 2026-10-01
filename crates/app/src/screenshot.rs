@@ -55,7 +55,8 @@ pub(crate) enum TargetState {
 #[cfg(any(feature = "screenshot", test))]
 pub(crate) struct SettleInput {
     pub(crate) target: TargetState,
-    pub(crate) has_selection: bool,
+    /// A drawer screen has its row selected, or found no row to select.
+    pub(crate) is_drawer_ready: bool,
     /// A logs screen whose tab is not open yet or still connecting.
     pub(crate) is_log_pending: bool,
 }
@@ -67,7 +68,7 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
         TargetState::Unavailable => true,
         TargetState::Loading => false,
         TargetState::Loaded if screen.has_log_dock() => !input.is_log_pending,
-        TargetState::Loaded => !screen.has_drawer() || input.has_selection,
+        TargetState::Loaded => !screen.has_drawer() || input.is_drawer_ready,
     }
 }
 
@@ -204,10 +205,10 @@ mod tests {
         }
     }
 
-    fn input(target: TargetState, has_selection: bool) -> SettleInput {
+    fn input(target: TargetState, is_drawer_ready: bool) -> SettleInput {
         SettleInput {
             target,
-            has_selection,
+            is_drawer_ready,
             is_log_pending: false,
         }
     }

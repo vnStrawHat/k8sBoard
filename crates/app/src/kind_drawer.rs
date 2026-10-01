@@ -17,14 +17,17 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::drawer::{
-    DRAWER_WIDTH, DrawerHeader, absent_text, created_text, detail_row, drawer_frame, menu_button,
-    section_title, truncated_text,
+    DRAWER_WIDTH, DrawerHeader, absent_text, created_text, drawer_frame, menu_button,
+    section_title, truncated_text, wide_detail_row,
 };
-use crate::kind_row::{DetailRow, KindCell, KindRow, PodOwner, owns_pod};
+use crate::kind_row::{
+    DAEMON_SET_KIND, DetailRow, KindCell, KindRow, PodOwner, STATEFUL_SET_KIND, owns_pod,
+};
 use crate::resource_actions::{kind_menu, port_forward_reason};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{pod_status_label, tone_color, toned_text};
 use crate::table_selection::ResourceKey;
+use crate::workload_rows::sort_by_ordinal;
 
 /// Bounds the render cost of a workload with very many pods.
 const MAX_RELATED_PODS: usize = 50;
@@ -137,11 +140,31 @@ fn detail_element(
 ) -> AnyElement {
     match detail {
         DetailRow::Field { label, value } => {
-            detail_row(label.clone(), field_value(value, id, now, cx), cx).into_any_element()
+            wide_detail_row(label.clone(), field_value(value, id, now, cx), cx).into_any_element()
         }
         DetailRow::Chips(terms) => chips(terms, cx),
+        DetailRow::Note(text) => div()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(text.clone())
+            .into_any_element(),
         DetailRow::Port { text } => port_row(text, id, forward_reason, cx),
+        DetailRow::Stacked { label, value } => {
+            stacked_row(label, field_value(value, id, now, cx), id, cx)
+        }
     }
+}
+
+/// The label above its value, for labels that do not fit the label column.
+fn stacked_row(label: &SharedString, value: AnyElement, id: usize, cx: &App) -> AnyElement {
+    v_flex()
+        .py_1()
+        .text_sm()
+        .child(
+            truncated_text(("stacked", id), label.clone()).text_color(cx.theme().muted_foreground),
+        )
+        .child(div().min_w_0().overflow_hidden().child(value))
+        .into_any_element()
 }
 
 fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> AnyElement {
@@ -153,6 +176,16 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
             .into_any_element(),
         KindCell::Toned(label) => toned_text(label.clone(), cx).truncate().into_any_element(),
         KindCell::Absent => absent_text(cx).into_any_element(),
+        KindCell::Duration {
+            started_at: None, ..
+        } => absent_text(cx).into_any_element(),
+        KindCell::Duration {
+            started_at,
+            finished_at,
+        } => div()
+            .truncate()
+            .child(format_age(*started_at, finished_at.unwrap_or(now)))
+            .into_any_element(),
         KindCell::Age { at: None, .. } => absent_text(cx).into_any_element(),
         KindCell::Age { at: Some(at), tone } => {
             let text = div()
@@ -219,12 +252,24 @@ fn port_row(text: &SharedString, id: usize, reason: &SharedString, cx: &App) -> 
 /// The pods of `owner`, read from the live pods list at render time so they stay current.
 /// A click opens the pod on the Pods screen.
 fn pods_section(owner: &PodOwner, live: &LiveCluster, cx: &Context<AppShell>) -> AnyElement {
-    let pods: Vec<&PodSummary> = live
+    let mut pods: Vec<&PodSummary> = live
         .pods
         .items()
         .iter()
         .filter(|pod| owns_pod(owner, pod))
         .collect();
+    // StatefulSet pods read best in ordinal order; the others keep the snapshot order.
+    if let PodOwner::Controller { kind, name, .. } = owner
+        && *kind == STATEFUL_SET_KIND
+    {
+        sort_by_ordinal(&mut pods, name);
+    }
+    // A DaemonSet runs one pod per node, so the node is what tells its pods apart.
+    let detail = if matches!(owner, PodOwner::Controller { kind, .. } if *kind == DAEMON_SET_KIND) {
+        PodRowDetail::StatusAndNode
+    } else {
+        PodRowDetail::StatusOnly
+    };
     let (title, note) = if live.pods.is_loading() {
         ("Pods".to_owned(), Some("Loading pods…"))
     } else if live.pods.failure().is_some() {
@@ -249,7 +294,7 @@ fn pods_section(owner: &PodOwner, live: &LiveCluster, cx: &Context<AppShell>) ->
             pods.iter()
                 .take(MAX_RELATED_PODS)
                 .enumerate()
-                .map(|(index, pod)| related_pod_row(index, pod, cx)),
+                .map(|(index, pod)| related_pod_row(index, pod, detail, cx)),
         )
         .children((hidden > 0).then(|| {
             div()
@@ -261,7 +306,19 @@ fn pods_section(owner: &PodOwner, live: &LiveCluster, cx: &Context<AppShell>) ->
         .into_any_element()
 }
 
-fn related_pod_row(index: usize, pod: &PodSummary, cx: &Context<AppShell>) -> AnyElement {
+/// What a related-pod row shows after the pod name.
+#[derive(Clone, Copy)]
+enum PodRowDetail {
+    StatusOnly,
+    StatusAndNode,
+}
+
+fn related_pod_row(
+    index: usize,
+    pod: &PodSummary,
+    detail: PodRowDetail,
+    cx: &Context<AppShell>,
+) -> AnyElement {
     let theme = cx.theme();
     let key = ResourceKey::of_pod(pod);
     let hover_bg = theme.muted;
@@ -285,5 +342,11 @@ fn related_pod_row(index: usize, pod: &PodSummary, cx: &Context<AppShell>) -> An
                 .child(pod.name.clone()),
         )
         .child(toned_text(pod_status_label(pod), cx))
+        .children(matches!(detail, PodRowDetail::StatusAndNode).then(|| {
+            div()
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground)
+                .child(pod.node_name.clone().unwrap_or_default())
+        }))
         .into_any_element()
 }

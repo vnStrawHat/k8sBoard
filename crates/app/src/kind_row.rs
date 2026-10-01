@@ -34,6 +34,12 @@ pub(crate) enum KindCell {
         at: Option<jiff::Timestamp>,
         tone: Option<StatusTone>,
     },
+    /// `format_age(started_at, finished_at.unwrap_or(now))`, read at paint time so a running
+    /// job keeps counting; `Absent` when not started.
+    Duration {
+        started_at: Option<jiff::Timestamp>,
+        finished_at: Option<jiff::Timestamp>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,16 +55,36 @@ pub(crate) enum DetailRow {
         value: KindCell,
     },
     Chips(Vec<SharedString>),
+    /// A muted explanation that wraps, such as "No keys".
+    Note(SharedString),
     /// A port, followed by its disabled Forward button.
     Port {
         text: SharedString,
+    },
+    /// A label above its value, for labels that are too long for the label column, such as
+    /// ingress hosts.
+    Stacked {
+        label: SharedString,
+        value: KindCell,
     },
 }
 
 impl KindCell {
     /// A number as text.
-    pub(crate) fn count(count: u32) -> Self {
+    pub(crate) fn count(count: impl std::fmt::Display) -> Self {
         Self::Text(count.to_string().into())
+    }
+
+    pub(crate) fn age(at: Option<jiff::Timestamp>) -> Self {
+        Self::Age { at, tone: None }
+    }
+
+    /// Monospaced text, or `Absent` when it is empty. Join a list before passing it.
+    pub(crate) fn mono_or_absent(text: &str) -> Self {
+        if text.is_empty() {
+            return Self::Absent;
+        }
+        Self::Mono(text.to_owned().into())
     }
 
     pub(crate) fn text_or_absent(text: Option<&str>) -> Self {
@@ -73,6 +99,21 @@ impl DetailRow {
             value,
         }
     }
+
+    pub(crate) fn stacked(label: impl Into<SharedString>, value: KindCell) -> Self {
+        Self::Stacked {
+            label: label.into(),
+            value,
+        }
+    }
+}
+
+impl KindRow {
+    /// The drawer section with `title`, for tests.
+    #[cfg(test)]
+    pub(crate) fn section(&self, title: &str) -> Option<&DetailSection> {
+        self.sections.iter().find(|section| section.title == title)
+    }
 }
 
 /// Label or selector terms as drawer chips.
@@ -80,9 +121,22 @@ pub(crate) fn chips(terms: &[String]) -> Vec<SharedString> {
     terms.iter().cloned().map(SharedString::from).collect()
 }
 
+/// The `kind` of a controller owner reference. The pods section orders StatefulSet pods and
+/// shows the node of DaemonSet pods.
+pub(crate) const STATEFUL_SET_KIND: &str = "StatefulSet";
+pub(crate) const DAEMON_SET_KIND: &str = "DaemonSet";
+pub(crate) const REPLICA_SET_KIND: &str = "ReplicaSet";
+pub(crate) const JOB_KIND: &str = "Job";
+
 /// Who owns the pods that a drawer lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PodOwner {
+    /// Pods whose controller owner reference is exactly `kind` and `name`.
+    Controller {
+        namespace: String,
+        kind: &'static str,
+        name: String,
+    },
     /// Pods belong to a Deployment through its ReplicaSets.
     Deployment { namespace: String, name: String },
 }
@@ -93,10 +147,21 @@ const POD_TEMPLATE_HASH_ALPHABET: &str = "bcdfghjklmnpqrstvwxz2456789";
 
 pub(crate) fn owns_pod(owner: &PodOwner, pod: &PodSummary) -> bool {
     match owner {
+        PodOwner::Controller {
+            namespace,
+            kind,
+            name,
+        } => {
+            *namespace == pod.namespace
+                && pod
+                    .controller
+                    .as_ref()
+                    .is_some_and(|controller| controller.kind == *kind && controller.name == *name)
+        }
         PodOwner::Deployment { namespace, name } => {
             *namespace == pod.namespace
                 && pod.controller.as_ref().is_some_and(|controller| {
-                    controller.kind == "ReplicaSet"
+                    controller.kind == REPLICA_SET_KIND
                         && is_deployment_replica_set(name, &controller.name)
                 })
         }
@@ -184,6 +249,26 @@ mod tests {
         assert!(!owns_pod(
             &owner,
             &pod("ns", Some(("StatefulSet", "api-7d9f8c")))
+        ));
+        assert!(!owns_pod(&owner, &pod("ns", None)));
+    }
+
+    #[test]
+    fn owns_pod_by_controller_kind_and_name() {
+        let owner = PodOwner::Controller {
+            namespace: "ns".to_owned(),
+            kind: STATEFUL_SET_KIND,
+            name: "web".to_owned(),
+        };
+        assert!(owns_pod(&owner, &pod("ns", Some(("StatefulSet", "web")))));
+        assert!(!owns_pod(&owner, &pod("ns", Some(("DaemonSet", "web")))));
+        assert!(!owns_pod(
+            &owner,
+            &pod("ns", Some(("StatefulSet", "web-2")))
+        ));
+        assert!(!owns_pod(
+            &owner,
+            &pod("other", Some(("StatefulSet", "web")))
         ));
         assert!(!owns_pod(&owner, &pod("ns", None)));
     }

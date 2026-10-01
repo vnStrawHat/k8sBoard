@@ -231,7 +231,23 @@ mod tests {
             .copied()
             .filter(|name| screen_of(name).is_some())
             .collect();
-        assert_eq!(enabled, ["Nodes", "Namespaces", "Pods", "Deployments"]);
+        assert_eq!(
+            enabled,
+            [
+                "Nodes",
+                "Namespaces",
+                "Pods",
+                "Deployments",
+                "StatefulSets",
+                "DaemonSets",
+                "ReplicaSets",
+                "Jobs",
+                "CronJobs",
+                "Services",
+                "Ingresses",
+                "ConfigMaps",
+            ]
+        );
     }
 
     #[test]

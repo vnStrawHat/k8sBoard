@@ -2,8 +2,10 @@
 
 mod age;
 mod app_shell;
+mod batch_rows;
 mod cluster_runtime;
 mod cluster_session;
+mod config_map_rows;
 mod drawer;
 mod kind_drawer;
 mod kind_row;
@@ -14,6 +16,7 @@ mod log_dock;
 mod log_tab;
 mod namespace_rows;
 mod navigation;
+mod network_rows;
 mod node_drawer;
 mod node_table;
 mod pod_drawer;

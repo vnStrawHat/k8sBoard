@@ -1,4 +1,8 @@
-use cluster::{ContainerPort, DeploymentSummary, TemplateContainer, WorkloadCondition};
+use cluster::{
+    ClaimTemplate, ContainerPort, ControllerRef, DaemonSetSummary, DeploymentSummary, PodStatus,
+    PodSummary, ReadyCount, ReplicaSetSummary, StatefulSetSummary, StatusReason, TemplateContainer,
+    WorkloadCondition,
+};
 
 use super::*;
 use crate::resource_kind::ResourceKind;
@@ -47,15 +51,21 @@ fn condition(name: &str, is_true: bool, reason: Option<&str>) -> WorkloadConditi
     }
 }
 
-fn section<'a>(row: &'a KindRow, title: &str) -> Option<&'a DetailSection> {
-    row.sections.iter().find(|section| section.title == title)
-}
-
 #[test]
 fn workload_row_cells_match_column_count() {
-    let row = deployment_row(&deployment());
-    assert_eq!(row.cells.len(), ResourceKind::Deployments.columns().len());
-    assert_eq!(row.namespace.as_deref(), Some("team-a"));
+    let rows = [
+        (ResourceKind::Deployments, deployment_row(&deployment())),
+        (
+            ResourceKind::StatefulSets,
+            stateful_set_row(&stateful_set()),
+        ),
+        (ResourceKind::DaemonSets, daemon_set_row(&daemon_set())),
+        (ResourceKind::ReplicaSets, replica_set_row(&replica_set())),
+    ];
+    for (kind, row) in rows {
+        assert_eq!(row.cells.len(), kind.columns().len(), "{kind:?}");
+        assert_eq!(row.namespace.as_deref(), Some("team-a"));
+    }
 }
 
 #[test]
@@ -121,23 +131,29 @@ fn deployment_strategy_reads_surge_and_unavailable() {
         strategy_text(&deployment()).as_deref(),
         Some("RollingUpdate · max surge 25% · max unavailable 25%")
     );
+}
+
+#[test]
+fn deployment_recreate_strategy_names_no_surge() {
     let mut recreate = deployment();
     recreate.strategy = "Recreate".to_owned();
     recreate.max_surge = None;
     recreate.max_unavailable = None;
     assert_eq!(strategy_text(&recreate).as_deref(), Some("Recreate"));
-    recreate.strategy.clear();
-    assert_eq!(strategy_text(&recreate), None);
-    assert_eq!(
-        deployment_row(&recreate).cells.get(3),
-        Some(&KindCell::Absent)
-    );
+}
+
+#[test]
+fn deployment_without_strategy_shows_absent() {
+    let mut unset = deployment();
+    unset.strategy.clear();
+    assert_eq!(strategy_text(&unset), None);
+    assert_eq!(deployment_row(&unset).cells.get(3), Some(&KindCell::Absent));
 }
 
 #[test]
 fn deployment_ports_section_lists_named_and_unnamed_ports() {
     let row = deployment_row(&deployment());
-    let ports = section(&row, "Ports").expect("ports section");
+    let ports = row.section("Ports").expect("ports section");
     assert_eq!(
         ports.rows,
         [
@@ -155,14 +171,14 @@ fn deployment_ports_section_lists_named_and_unnamed_ports() {
 fn deployment_without_ports_omits_the_ports_section() {
     let mut portless = deployment();
     portless.containers[0].ports.clear();
-    assert!(section(&deployment_row(&portless), "Ports").is_none());
+    assert!(deployment_row(&portless).section("Ports").is_none());
 }
 
 #[test]
 fn deployment_paused_field_appears_only_when_paused() {
     let has_paused = |deployment: &DeploymentSummary| {
         let row = deployment_row(deployment);
-        section(&row, "Replicas")
+        row.section("Replicas")
             .expect("replicas section")
             .rows
             .iter()
@@ -182,7 +198,7 @@ fn deployment_conditions_show_reason_when_false() {
         condition("Progressing", false, Some("NewReplicaSetAvailable")),
     ];
     let row = deployment_row(&stalled);
-    let conditions = section(&row, "Conditions").expect("conditions section");
+    let conditions = row.section("Conditions").expect("conditions section");
     let texts: Vec<_> = conditions
         .rows
         .iter()
@@ -217,4 +233,240 @@ fn deployment_related_pods_use_the_deployment_owner() {
         })
     );
     assert_eq!(row.labels, ["app=api"]);
+}
+
+fn stateful_set() -> StatefulSetSummary {
+    StatefulSetSummary {
+        namespace: "team-a".to_owned(),
+        name: "web".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        desired: 3,
+        ready: 2,
+        current: 3,
+        updated: 3,
+        service_name: Some("web-headless".to_owned()),
+        update_strategy: "RollingUpdate".to_owned(),
+        pod_management_policy: "OrderedReady".to_owned(),
+        selector: vec!["app=web".to_owned()],
+        containers: Vec::new(),
+        claim_templates: vec![ClaimTemplate {
+            name: "data".to_owned(),
+            storage: Some("10Gi".to_owned()),
+            storage_class: Some("fast".to_owned()),
+            access_modes: vec!["ReadWriteOnce".to_owned()],
+        }],
+    }
+}
+
+fn daemon_set() -> DaemonSetSummary {
+    DaemonSetSummary {
+        namespace: "team-a".to_owned(),
+        name: "agent".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        desired: 4,
+        current: 4,
+        ready: 4,
+        up_to_date: 4,
+        available: 4,
+        misscheduled: 0,
+        node_selector: vec!["disk=ssd".to_owned(), "zone=a".to_owned()],
+        update_strategy: "RollingUpdate".to_owned(),
+        selector: Vec::new(),
+        containers: Vec::new(),
+    }
+}
+
+fn replica_set() -> ReplicaSetSummary {
+    ReplicaSetSummary {
+        namespace: "team-a".to_owned(),
+        name: "api-7d9f8c".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        desired: 2,
+        current: 2,
+        ready: 2,
+        owner: Some(ControllerRef {
+            kind: "Deployment".to_owned(),
+            name: "api".to_owned(),
+        }),
+        revision: Some("3".to_owned()),
+        selector: Vec::new(),
+        containers: Vec::new(),
+    }
+}
+
+fn pod_named(name: &str) -> PodSummary {
+    PodSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        status: PodStatus::Reason(StatusReason::Running),
+        ready: ReadyCount { ready: 1, total: 1 },
+        restarts: 0,
+        node_name: None,
+        created_at: None,
+        pod_ip: None,
+        qos_class: None,
+        service_account: None,
+        controller: None,
+        conditions: Vec::new(),
+        containers: Vec::new(),
+    }
+}
+
+#[test]
+fn replica_and_stateful_set_status_say_scaled_to_zero_when_nothing_is_desired() {
+    let mut stateful = stateful_set();
+    stateful.desired = 0;
+    stateful.ready = 0;
+    assert_eq!(stateful_set_row(&stateful).status.text, "Scaled to zero");
+    let mut replicas = replica_set();
+    replicas.desired = 0;
+    replicas.ready = 0;
+    let status = replica_set_row(&replicas).status;
+    assert_eq!(status.text, "Scaled to zero");
+    assert_eq!(status.tone, StatusTone::Done);
+}
+
+#[test]
+fn stateful_set_status_reads_ready_over_desired() {
+    let status = stateful_set_row(&stateful_set()).status;
+    assert_eq!(status.text, "2/3 ready");
+    assert_eq!(status.tone, StatusTone::Warn);
+}
+
+#[test]
+fn stateful_set_service_cell_is_mono() {
+    let row = stateful_set_row(&stateful_set());
+    assert_eq!(
+        row.cells.get(1),
+        Some(&KindCell::Mono("web-headless".into()))
+    );
+}
+
+#[test]
+fn stateful_set_lists_volume_claim_templates() {
+    let row = stateful_set_row(&stateful_set());
+    let claims = row
+        .section("Volume claim templates")
+        .expect("claims section");
+    assert_eq!(
+        claims.rows,
+        [DetailRow::field(
+            "data",
+            KindCell::Text("10Gi · fast · ReadWriteOnce".into())
+        )]
+    );
+}
+
+#[test]
+fn claim_text_skips_unset_parts() {
+    let claim = ClaimTemplate {
+        name: "data".to_owned(),
+        storage: Some("1Gi".to_owned()),
+        storage_class: None,
+        access_modes: Vec::new(),
+    };
+    assert_eq!(claim_text(&claim), KindCell::Text("1Gi".into()));
+    let empty = ClaimTemplate {
+        storage: None,
+        ..claim
+    };
+    assert_eq!(claim_text(&empty), KindCell::Absent);
+}
+
+#[test]
+fn daemon_set_status_reads_ready_over_desired() {
+    assert_eq!(daemon_set_row(&daemon_set()).status.text, "4/4 ready");
+}
+
+#[test]
+fn daemon_set_node_selector_cell_joins_terms() {
+    assert_eq!(
+        daemon_set_row(&daemon_set()).cells.get(5),
+        Some(&KindCell::Text("disk=ssd, zone=a".into()))
+    );
+}
+
+#[test]
+fn idle_daemon_set_has_no_nodes_and_no_selector() {
+    let mut idle = daemon_set();
+    idle.desired = 0;
+    idle.ready = 0;
+    idle.node_selector.clear();
+    let row = daemon_set_row(&idle);
+    assert_eq!(row.status.text, "No nodes scheduled");
+    assert_eq!(row.status.tone, StatusTone::Done);
+    assert_eq!(row.cells.get(5), Some(&KindCell::Absent));
+}
+
+#[test]
+fn daemon_set_misscheduled_field_appears_only_when_positive() {
+    let has_misscheduled = |set: &DaemonSetSummary| {
+        let row = daemon_set_row(set);
+        row.section("Rollout")
+            .expect("rollout section")
+            .rows
+            .iter()
+            .any(|row| matches!(row, DetailRow::Field { label, .. } if label == "Misscheduled"))
+    };
+    let mut set = daemon_set();
+    assert!(!has_misscheduled(&set));
+    set.misscheduled = 1;
+    assert!(has_misscheduled(&set));
+}
+
+#[test]
+fn owner_cells_use_lowercase_kind() {
+    let replicas = replica_set_row(&replica_set());
+    assert_eq!(
+        replicas.cells.get(3),
+        Some(&KindCell::Text("deployment/api".into()))
+    );
+}
+
+#[test]
+fn replica_set_without_owner_shows_absent() {
+    let mut orphan = replica_set();
+    orphan.owner = None;
+    assert_eq!(
+        replica_set_row(&orphan).cells.get(3),
+        Some(&KindCell::Absent)
+    );
+}
+
+#[test]
+fn stateful_set_pods_sort_by_ordinal() {
+    let pods = [
+        pod_named("web-10"),
+        pod_named("web-2"),
+        pod_named("web-abc"),
+        pod_named("web-0"),
+        pod_named("web-+1"),
+    ];
+    let mut sorted: Vec<&PodSummary> = pods.iter().collect();
+    sort_by_ordinal(&mut sorted, "web");
+    let names: Vec<&str> = sorted.iter().map(|pod| pod.name.as_str()).collect();
+    assert_eq!(names, ["web-0", "web-2", "web-10", "web-abc", "web-+1"]);
+}
+
+#[test]
+fn workload_related_pods_name_their_controller_kind() {
+    let owner = |row: KindRow| match row.related_pods {
+        Some(PodOwner::Controller { kind, name, .. }) => Some((kind, name)),
+        _ => None,
+    };
+    assert_eq!(
+        owner(stateful_set_row(&stateful_set())),
+        Some((STATEFUL_SET_KIND, "web".to_owned()))
+    );
+    assert_eq!(
+        owner(daemon_set_row(&daemon_set())),
+        Some((DAEMON_SET_KIND, "agent".to_owned()))
+    );
+    assert_eq!(
+        owner(replica_set_row(&replica_set())),
+        Some(("ReplicaSet", "api-7d9f8c".to_owned()))
+    );
 }

@@ -15,6 +15,9 @@ use crate::age::format_age;
 pub(crate) const DRAWER_WIDTH: Pixels = px(420.);
 pub(crate) const DRAWER_EXPANDED_WIDTH: Pixels = px(640.);
 const LABEL_WIDTH: Pixels = px(104.);
+/// The kind drawers have longer labels, such as "Concurrency policy". Anything longer still
+/// truncates with a tooltip, or uses `DetailRow::Stacked`.
+const WIDE_LABEL_WIDTH: Pixels = px(136.);
 
 /// The drawer is open exactly while a row is selected, so this holds only what the user
 /// changes inside an open drawer. The tab and the expanded flag survive a change of
@@ -187,19 +190,35 @@ pub(crate) fn detail_row(
     value: impl IntoElement,
     cx: &App,
 ) -> impl IntoElement {
+    labeled_row(LABEL_WIDTH, label.into(), value, cx)
+}
+
+/// `detail_row` with the wider label column of the kind drawers.
+pub(crate) fn wide_detail_row(
+    label: impl Into<SharedString>,
+    value: impl IntoElement,
+    cx: &App,
+) -> impl IntoElement {
+    labeled_row(WIDE_LABEL_WIDTH, label.into(), value, cx)
+}
+
+fn labeled_row(
+    label_width: Pixels,
+    label: SharedString,
+    value: impl IntoElement,
+    cx: &App,
+) -> impl IntoElement {
     h_flex()
         .gap_3()
         .py_1()
         .items_start()
         .text_sm()
         .child(
-            div()
-                .w(LABEL_WIDTH)
+            // Dynamic labels (container and key names) can be long, so the full text is a tooltip.
+            truncated_text(label.clone(), label)
+                .w(label_width)
                 .flex_shrink_0()
-                // Dynamic labels (container and key names) can be long.
-                .truncate()
-                .text_color(cx.theme().muted_foreground)
-                .child(label.into()),
+                .text_color(cx.theme().muted_foreground),
         )
         // `overflow_hidden` keeps a long value inside the drawer; text values ellipsize.
         .child(div().flex_1().min_w_0().overflow_hidden().child(value))

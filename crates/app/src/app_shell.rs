@@ -674,7 +674,8 @@ impl AppShell {
             || self.log_dock.read(cx).is_connecting(cx);
         SettleInput {
             target,
-            has_selection: self.selected.is_some(),
+            // An empty list opens no drawer, but the launch request is resolved then, so it settles.
+            is_drawer_ready: self.selected.is_some() || self.pending_launch_screen.is_none(),
             is_log_pending,
         }
     }
