@@ -14,7 +14,7 @@ use tokio::time::Instant;
 use crate::connection::{ClusterConnection, ClusterError, classify_error};
 
 /// Changes inside one window are merged into a single snapshot.
-const BATCH_WINDOW: Duration = Duration::from_millis(100);
+pub(crate) const BATCH_WINDOW: Duration = Duration::from_millis(100);
 
 /// One item of a resource watch stream.
 #[derive(Debug)]
@@ -184,7 +184,7 @@ where
     }
 }
 
-async fn wait_until(deadline: Option<Instant>) {
+pub(crate) async fn wait_until(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
         None => future::pending().await,

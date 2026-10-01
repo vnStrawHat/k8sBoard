@@ -2,7 +2,7 @@
 //! credentials, and never `Debug` output of kube types.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>]
 //! ```
 
 use std::collections::BTreeMap;
@@ -13,13 +13,13 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use cluster::{
-    AccessDecision, ClusterConnection, ClusterError, ContainerState, ContainerSummary, Kubeconfig,
-    MetricsApi, NamespaceScope, NodeReadiness, NodeScheduling, PodStatus, PodSummary, StatusReason,
-    Termination, WatchUpdate,
+    AccessDecision, ClusterConnection, ClusterError, ContainerKind, ContainerState,
+    ContainerSummary, Kubeconfig, LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceScope,
+    NodeReadiness, NodeScheduling, PodStatus, PodSummary, StatusReason, Termination, WatchUpdate,
 };
 use futures::StreamExt;
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -29,6 +29,7 @@ struct Args {
     context: Option<String>,
     namespace: Option<String>,
     watch_seconds: Option<u64>,
+    logs_seconds: Option<u64>,
 }
 
 enum Parsed {
@@ -41,6 +42,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut context = None;
     let mut namespace = None;
     let mut watch_seconds = None;
+    let mut logs_seconds = None;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
         match flag.as_str() {
@@ -49,7 +51,13 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
             "--context" => context = Some(value("--context")?),
             "--namespace" => namespace = Some(value("--namespace")?),
             "--watch-seconds" => {
-                watch_seconds = Some(parse_watch_seconds(&value("--watch-seconds")?)?)
+                watch_seconds = Some(parse_seconds(
+                    "--watch-seconds",
+                    &value("--watch-seconds")?,
+                )?)
+            }
+            "--logs-seconds" => {
+                logs_seconds = Some(parse_seconds("--logs-seconds", &value("--logs-seconds")?)?)
             }
             other => return Err(format!("unknown argument '{other}'")),
         }
@@ -60,16 +68,15 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         context,
         namespace,
         watch_seconds,
+        logs_seconds,
     }))
 }
 
 /// A positive integer number of seconds.
-fn parse_watch_seconds(text: &str) -> Result<u64, String> {
+fn parse_seconds(flag: &str, text: &str) -> Result<u64, String> {
     match text.parse::<u64>() {
         Ok(seconds) if seconds > 0 => Ok(seconds),
-        _ => Err(format!(
-            "--watch-seconds needs a positive integer, got '{text}'"
-        )),
+        _ => Err(format!("{flag} needs a positive integer, got '{text}'")),
     }
 }
 
@@ -91,7 +98,7 @@ impl WatchStats {
             }
             WatchUpdate::Failed(error) => {
                 self.failures += 1;
-                self.last_error = Some(error.to_string());
+                self.last_error = Some(error_summary(&error));
             }
         }
     }
@@ -150,6 +157,103 @@ async fn watch_for(
         if stats.is_silent() {
             probe.all_succeeded = false;
         }
+    }
+    Ok(())
+}
+
+/// Counts of what one log stream produced. Never holds log text.
+#[derive(Default)]
+struct LogStats {
+    is_started: bool,
+    lines: usize,
+    batches: usize,
+    failures: usize,
+    last_error: Option<String>,
+}
+
+impl LogStats {
+    fn record(&mut self, update: LogUpdate) {
+        match update {
+            LogUpdate::Started => self.is_started = true,
+            LogUpdate::Lines(lines) => {
+                self.batches += 1;
+                self.lines += lines.len();
+            }
+            LogUpdate::Failed(error) => {
+                self.failures += 1;
+                self.last_error = Some(error_summary(&error));
+            }
+        }
+    }
+
+    fn line(&self, target: &str, is_ended: bool) -> String {
+        let started = if self.is_started {
+            "started"
+        } else {
+            "not started"
+        };
+        let ended = if is_ended { "yes" } else { "no" };
+        let mut line = format!(
+            "logs {target}: {started}, {} lines in {} batches, ended: {ended}, {} failures",
+            self.lines, self.batches, self.failures
+        );
+        if let Some(error) = &self.last_error {
+            line.push_str("; last error: ");
+            line.push_str(error);
+        }
+        line
+    }
+}
+
+/// The first pod with a running main container, with that container.
+fn pod_with_running_container(pods: &[PodSummary]) -> Option<(&PodSummary, &ContainerSummary)> {
+    pods.iter().find_map(|pod| {
+        let container = pod.containers.iter().find(|container| {
+            container.kind == ContainerKind::Main
+                && matches!(container.state, ContainerState::Running { .. })
+        })?;
+        Some((pod, container))
+    })
+}
+
+/// Streams the current logs of one running container for `seconds` and prints counts only.
+async fn logs_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    pods: &[PodSummary],
+    seconds: u64,
+) -> io::Result<()> {
+    probe.section(&format!("logs ({seconds}s)"))?;
+    let Some((pod, container)) = pod_with_running_container(pods) else {
+        probe.all_succeeded = false;
+        return writeln!(probe.out, "logs: no running pod in scope");
+    };
+    let target = format!("{}/{}/{}", pod.namespace, pod.name, container.name);
+    let mut updates = Box::pin(connection.pod_logs(LogRequest {
+        namespace: pod.namespace.clone(),
+        pod: pod.name.clone(),
+        container: container.name.clone(),
+        source: LogSource::Current,
+    }));
+    let mut stats = LogStats::default();
+    let mut is_ended = false;
+    let timer = tokio::time::sleep(Duration::from_secs(seconds));
+    tokio::pin!(timer);
+    loop {
+        tokio::select! {
+            () = &mut timer => break,
+            update = updates.next() => match update {
+                Some(update) => stats.record(update),
+                None => {
+                    is_ended = true;
+                    break;
+                }
+            },
+        }
+    }
+    writeln!(probe.out, "{}", stats.line(&target, is_ended))?;
+    if !stats.is_started && stats.failures == 0 {
+        probe.all_succeeded = false;
     }
     Ok(())
 }
@@ -311,16 +415,21 @@ async fn run(args: &Args) -> io::Result<bool> {
         }
     }
 
-    match connection.list_pods(scope.clone()).await {
-        Ok(pods) => probe.print_pods(scope_label, &pods)?,
+    let pods = connection.list_pods(scope.clone()).await;
+    match &pods {
+        Ok(pods) => probe.print_pods(scope_label, pods)?,
         Err(error) => {
             probe.section("pods")?;
-            probe.fail(&error)?;
+            probe.fail(error)?;
         }
     }
 
     if let Some(seconds) = args.watch_seconds {
         watch_for(&mut probe, &connection, scope, seconds).await?;
+    }
+    if let Some(seconds) = args.logs_seconds {
+        let pods = pods.as_ref().map_or(&[][..], Vec::as_slice);
+        logs_for(&mut probe, &connection, pods, seconds).await?;
     }
 
     Ok(probe.all_succeeded)
@@ -478,6 +587,18 @@ fn print_error_chain(kind: &str, error: &(impl Error + ?Sized)) {
     while let Some(cause) = source {
         eprintln!("caused by: {cause}");
         source = cause.source();
+    }
+}
+
+/// The error plus the first line of its cause, so `Unreachable` shows its io error. Domain
+/// errors only: their messages never carry credentials.
+fn error_summary(error: &ClusterError) -> String {
+    let cause = error
+        .source()
+        .and_then(|source| source.to_string().lines().next().map(str::to_owned));
+    match cause {
+        Some(cause) if !cause.is_empty() => format!("{error}: {cause}"),
+        _ => error.to_string(),
     }
 }
 

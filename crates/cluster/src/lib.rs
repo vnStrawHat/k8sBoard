@@ -8,6 +8,7 @@ mod metrics_api;
 mod namespace;
 mod node;
 mod pod;
+mod pod_log;
 mod pod_status;
 mod resource_watch;
 
@@ -21,5 +22,6 @@ pub use pod::{
     ContainerKind, ContainerState, ContainerSummary, PodCondition, PodController, PodSummary,
     ReadyCount, Termination,
 };
+pub use pod_log::{LogLine, LogRequest, LogSource, LogUpdate};
 pub use pod_status::{InitStatus, PodStatus, StatusReason};
 pub use resource_watch::WatchUpdate;

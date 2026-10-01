@@ -3,7 +3,7 @@
 [Back to index](README.md)
 
 ```text
-cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>]
+cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>]
 ```
 
 ## CLI
@@ -14,6 +14,7 @@ cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context 
 | `--context <name>` | optional; when omitted, the probe uses `resolve_context(None)` |
 | `--namespace <name>` | optional; sets the `NamespaceScope` for pods and access review (default `All`) |
 | `--watch-seconds <n>` | optional, positive integer. After all other sections, runs the pods (in the scope), nodes, and namespaces watches (spec 0002) for `n` seconds. Prints `watch <kind>: N snapshots, last M items, K failures[; last error: …]` per kind. An invalid value prints usage and exits 2. Exits 1 if a kind got neither a snapshot nor a failure |
+| `--logs-seconds <n>` | optional, positive integer. After all other sections (spec 0004), streams the current logs of the first pod in scope that has a running main container, for `n` seconds. Prints one counts-only line, `logs <ns>/<pod>/<container>: started, N lines in M batches, ended: yes/no, K failures[; last error: …]`, or `logs: no running pod in scope`. Log text is never printed. An invalid value prints usage and exits 2. Exits 1 if no pod was found, or neither a start nor a failure arrived |
 | `--help` | prints usage |
 
 - Arguments are parsed by hand from `std::env::args()`, with no new dependency.
