@@ -4,6 +4,7 @@ use kube::Api;
 
 use crate::connection::{ClusterConnection, ClusterError};
 use crate::resource_watch::{WatchUpdate, summary_watch};
+use crate::workload::label_terms;
 
 /// Which namespaces a query covers. Passed by value so futures and streams own it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub enum NamespaceScope {
 pub struct NamespaceSummary {
     pub name: String,
     pub phase: NamespacePhase,
+    /// `key=value` terms in key order.
+    pub labels: Vec<String>,
     pub created_at: Option<jiff::Timestamp>,
 }
 
@@ -57,6 +60,7 @@ pub(crate) fn namespace_summary(namespace: &Namespace) -> NamespaceSummary {
     };
     NamespaceSummary {
         name: namespace.metadata.name.clone().unwrap_or_default(),
+        labels: label_terms(&namespace.metadata),
         phase,
         created_at: namespace
             .metadata
@@ -94,6 +98,25 @@ mod tests {
             namespace_summary(&Namespace::default()).phase,
             NamespacePhase::Unknown
         );
+    }
+
+    #[test]
+    fn namespace_summary_reads_labels_in_key_order() {
+        let namespace = Namespace {
+            metadata: ObjectMeta {
+                labels: Some(
+                    [
+                        ("team".to_owned(), "a".to_owned()),
+                        ("env".to_owned(), "dev".to_owned()),
+                    ]
+                    .into(),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(namespace_summary(&namespace).labels, ["env=dev", "team=a"]);
+        assert!(namespace_summary(&Namespace::default()).labels.is_empty());
     }
 
     #[test]
