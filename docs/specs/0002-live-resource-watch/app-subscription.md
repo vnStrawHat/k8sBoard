@@ -29,11 +29,13 @@ impl ClusterRuntime {
     pub(crate) fn spawn<F>(&self, future: F) -> RuntimeTask<F::Output>
     where F: Future + Send + 'static, F::Output: Send + 'static;
 
-    pub(crate) fn subscribe<V: 'static, T: Send + 'static>(
+    /// Generic over the item type `U` since 0004 (pod log updates use it too).
+    pub(crate) fn subscribe<V: 'static, U: Send + 'static>(
         &self,
-        updates: impl Stream<Item = WatchUpdate<T>> + Send + 'static,
+        updates: impl Stream<Item = U> + Send + 'static,
         cx: &mut Context<V>,
-        apply: impl Fn(&mut V, WatchUpdate<T>, &mut Context<V>) + 'static,
+        apply: impl Fn(&mut V, U, &mut Context<V>) + 'static,
+        on_closed: impl FnOnce(&mut V, &mut Context<V>) + 'static,
     ) -> WatchSubscription;
 }
 ```
@@ -42,7 +44,7 @@ impl ClusterRuntime {
 
 1. `let (sender, mut receiver) = tokio::sync::mpsc::channel(1);`
 2. Pump, spawned on tokio: poll `updates` and `sender.send(update).await` each item. Stop when the send fails (receiver gone).
-3. Receiver, spawned with `cx.spawn(async move |this, cx| …)`: for each `receiver.recv().await`, call `this.update(cx, |view, cx| { apply(view, update, cx); cx.notify(); })`. Stop on `None` or when the entity is gone.
+3. Receiver, spawned with `cx.spawn(async move |this, cx| …)`: for each `receiver.recv().await`, call `this.update(cx, |view, cx| { apply(view, update, cx); cx.notify(); })`. Stop when the entity is gone. On `None` (the stream ended for any reason), call `on_closed(view, cx)` and `cx.notify()` if the entity is still alive. Watch owners use it to mark the list as stopped.
 4. Return both handles in a `WatchSubscription`.
 
 | Concern | Rule |
