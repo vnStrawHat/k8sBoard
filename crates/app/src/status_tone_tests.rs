@@ -250,3 +250,38 @@ fn new_reasons_are_bad() {
         );
     }
 }
+
+#[test]
+fn node_condition_tone_table() {
+    let tone = |name: &str, status| {
+        node_condition_tone(&NodeCondition {
+            name: name.to_owned(),
+            status,
+            reason: None,
+            message: None,
+            changed_at: None,
+        })
+    };
+    use ConditionStatus::{False, True, Unknown};
+    assert_eq!(tone("Ready", True), StatusTone::Ok);
+    assert_eq!(tone("Ready", False), StatusTone::Bad);
+    assert_eq!(tone("Ready", Unknown), StatusTone::Warn);
+    for problem in [
+        "MemoryPressure",
+        "DiskPressure",
+        "PIDPressure",
+        "KernelDeadlock",
+    ] {
+        assert_eq!(tone(problem, True), StatusTone::Bad, "{problem}");
+        assert_eq!(tone(problem, False), StatusTone::Ok, "{problem}");
+        assert_eq!(tone(problem, Unknown), StatusTone::Warn, "{problem}");
+    }
+}
+
+#[test]
+fn condition_status_text_names_each_status() {
+    use ConditionStatus::{False, True, Unknown};
+    assert_eq!(condition_status_text(True), "True");
+    assert_eq!(condition_status_text(False), "False");
+    assert_eq!(condition_status_text(Unknown), "Unknown");
+}

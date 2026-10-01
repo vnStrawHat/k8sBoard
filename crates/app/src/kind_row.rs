@@ -157,7 +157,7 @@ pub(crate) const DAEMON_SET_KIND: &str = "DaemonSet";
 pub(crate) const REPLICA_SET_KIND: &str = "ReplicaSet";
 pub(crate) const JOB_KIND: &str = "Job";
 
-/// Who owns the pods that a drawer lists.
+/// Which pods a drawer lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PodOwner {
     /// Pods whose controller owner reference is exactly `kind` and `name`.
@@ -168,6 +168,8 @@ pub(crate) enum PodOwner {
     },
     /// Pods belong to a Deployment through its ReplicaSets.
     Deployment { namespace: String, name: String },
+    /// Pods scheduled on the node, in any namespace.
+    Node { name: String },
 }
 
 /// The characters of a pod-template hash: Kubernetes `SafeEncodeString` drops vowels, `0`,
@@ -194,6 +196,7 @@ pub(crate) fn owns_pod(owner: &PodOwner, pod: &PodSummary) -> bool {
                         && is_deployment_replica_set(name, &controller.name)
                 })
         }
+        PodOwner::Node { name } => pod.node_name.as_deref() == Some(name.as_str()),
     }
 }
 
@@ -301,6 +304,22 @@ mod tests {
             &pod("other", Some(("StatefulSet", "web")))
         ));
         assert!(!owns_pod(&owner, &pod("ns", None)));
+    }
+
+    #[test]
+    fn owns_pod_on_node_in_any_namespace() {
+        let owner = PodOwner::Node {
+            name: "node-1".to_owned(),
+        };
+        let on = |namespace: &str, node: Option<&str>| {
+            let mut pod = pod(namespace, None);
+            pod.node_name = node.map(str::to_owned);
+            owns_pod(&owner, &pod)
+        };
+        assert!(on("ns", Some("node-1")));
+        assert!(on("other", Some("node-1")));
+        assert!(!on("ns", Some("node-2")));
+        assert!(!on("ns", None));
     }
 
     #[test]

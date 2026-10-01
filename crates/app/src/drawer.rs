@@ -31,7 +31,7 @@ pub(crate) const DRAWER_EXPANDED_WIDTH: Pixels = px(640.);
 const LABEL_WIDTH: Pixels = px(104.);
 /// The kind drawers have longer labels, such as "Concurrency policy". Anything longer still
 /// truncates with a tooltip, or uses `DetailRow::Stacked`.
-const WIDE_LABEL_WIDTH: Pixels = px(136.);
+pub(crate) const WIDE_LABEL_WIDTH: Pixels = px(136.);
 
 /// The drawer is open exactly while a row is selected, so this holds only what the user
 /// changes inside an open drawer. The tab and the expanded flag survive a change of

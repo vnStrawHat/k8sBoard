@@ -1,6 +1,6 @@
 use cluster::{
-    ContainerKind, ContainerState, ContainerSummary, InitStatus, NodeReadiness, NodeScheduling,
-    NodeStatus, PodStatus, PodSummary, StatusReason,
+    ConditionStatus, ContainerKind, ContainerState, ContainerSummary, InitStatus, NodeCondition,
+    NodeReadiness, NodeScheduling, NodeStatus, PodStatus, PodSummary, StatusReason,
 };
 use gpui_kit::component::{ActiveTheme as _, Colorize as _};
 use gpui_kit::{App, Div, Hsla, ParentElement as _, SharedString, Styled as _, div};
@@ -108,6 +108,26 @@ pub(crate) fn node_status_label(status: NodeStatus) -> StatusLabel {
                 readiness_tone
             },
         },
+    }
+}
+
+/// Ready: True is Ok, False is Bad, Unknown is Warn. Every other type (pressure,
+/// NetworkUnavailable, node-problem-detector conditions) reports a problem when True: True is
+/// Bad, False is Ok, Unknown is Warn.
+pub(crate) fn node_condition_tone(condition: &NodeCondition) -> StatusTone {
+    let is_healthy_when_true = condition.name == "Ready";
+    match (condition.status, is_healthy_when_true) {
+        (ConditionStatus::Unknown, _) => StatusTone::Warn,
+        (ConditionStatus::True, true) | (ConditionStatus::False, false) => StatusTone::Ok,
+        (ConditionStatus::True, false) | (ConditionStatus::False, true) => StatusTone::Bad,
+    }
+}
+
+pub(crate) fn condition_status_text(status: ConditionStatus) -> &'static str {
+    match status {
+        ConditionStatus::True => "True",
+        ConditionStatus::False => "False",
+        ConditionStatus::Unknown => "Unknown",
     }
 }
 

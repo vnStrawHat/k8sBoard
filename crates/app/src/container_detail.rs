@@ -412,11 +412,12 @@ fn last_run_text(termination: &Termination, now: jiff::Timestamp) -> Option<Stri
     ))
 }
 
-fn resource_label(name: &str) -> String {
+pub(crate) fn resource_label(name: &str) -> String {
     match name {
         "cpu" => "CPU".to_owned(),
         "memory" => "Memory".to_owned(),
         "ephemeral-storage" => "Ephemeral storage".to_owned(),
+        "pods" => "Pods".to_owned(),
         other => other.to_owned(),
     }
 }

@@ -27,8 +27,8 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 | Area | Status | Covered by | Next spec |
 |---|---|---|---|
 | Shell frame, tables, overlay drawer, status bar | Partial | 0003 | 0009, 0028 |
-| Pods (W4/W4b) | Partial | 0003, 0004 | 0007, 0008, 0010 |
-| Nodes (W5) | Partial | 0003 | 0008, 0010, 0034 |
+| Pods (W4/W4b) | Partial | 0003, 0004, 0007, 0008 | 0010 |
+| Nodes (W5) | Partial | 0003, 0008 | 0010, 0034 |
 | Logs dock (W8/W8b) | Partial | 0004 | 0019 |
 | Kind Explorer (W7): 12 of 29 kinds live | Partial | 0003, 0005 | 0006, 0012–0018 |
 | Events screen and drawer events | Planned(0006) | 0006 | — |

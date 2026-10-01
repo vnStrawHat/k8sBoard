@@ -25,6 +25,7 @@ mod object_events;
 mod pod_diagnosis;
 mod pod_drawer;
 mod pod_table;
+mod related_pods;
 mod resource_actions;
 mod resource_kind;
 mod screenshot;

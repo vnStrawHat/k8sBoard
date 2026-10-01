@@ -3,12 +3,11 @@
 
 use std::rc::Rc;
 
-use cluster::PodSummary;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
+    AnyElement, App, Context, Entity, IntoElement, ParentElement as _, SharedString, Styled as _,
+    WeakEntity, div,
 };
 
 use crate::age::format_age;
@@ -19,18 +18,13 @@ use crate::drawer::{
     drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, link_text, menu_button, port_row,
     section_title, shown_tab, tab_titles, truncated_text, wide_detail_row, yaml_body,
 };
-use crate::kind_row::{
-    DAEMON_SET_KIND, DetailRow, KindCell, KindRow, PodOwner, STATEFUL_SET_KIND, owns_pod,
-};
+use crate::kind_row::{DetailRow, KindCell, KindRow};
 use crate::object_events::{event_subject, recent_events};
+use crate::related_pods::pods_section;
 use crate::resource_actions::{kind_menu, port_forward_reason};
 use crate::resource_kind::ResourceKind;
-use crate::status_tone::{pod_status_label, tone_color, toned_text};
+use crate::status_tone::{tone_color, toned_text};
 use crate::table_selection::ResourceKey;
-use crate::workload_rows::sort_by_ordinal;
-
-/// Bounds the render cost of a workload with very many pods.
-const MAX_RELATED_PODS: usize = 50;
 
 pub(crate) fn kind_drawer(
     kind: ResourceKind,
@@ -264,106 +258,4 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
             .into_any_element()
         }
     }
-}
-
-/// The pods of `owner`, read from the live pods list at render time so they stay current.
-/// A click opens the pod on the Pods screen.
-fn pods_section(owner: &PodOwner, live: &LiveCluster, cx: &Context<AppShell>) -> AnyElement {
-    let mut pods: Vec<&PodSummary> = live
-        .pods
-        .items()
-        .iter()
-        .filter(|pod| owns_pod(owner, pod))
-        .collect();
-    // StatefulSet pods read best in ordinal order; the others keep the snapshot order.
-    if let PodOwner::Controller { kind, name, .. } = owner
-        && *kind == STATEFUL_SET_KIND
-    {
-        sort_by_ordinal(&mut pods, name);
-    }
-    // A DaemonSet runs one pod per node, so the node is what tells its pods apart.
-    let detail = if matches!(owner, PodOwner::Controller { kind, .. } if *kind == DAEMON_SET_KIND) {
-        PodRowDetail::StatusAndNode
-    } else {
-        PodRowDetail::StatusOnly
-    };
-    let (title, note) = if live.pods.is_loading() {
-        ("Pods".to_owned(), Some("Loading pods…"))
-    } else if live.pods.failure().is_some() {
-        ("Pods".to_owned(), Some("Pods are unavailable"))
-    } else {
-        (
-            format!("Pods {}", pods.len()),
-            pods.is_empty().then_some("No pods"),
-        )
-    };
-    let hidden = pods.len().saturating_sub(MAX_RELATED_PODS);
-    let theme = cx.theme();
-    v_flex()
-        .child(section_title(title, cx))
-        .children(note.map(|note| {
-            div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(note)
-        }))
-        .children(
-            pods.iter()
-                .take(MAX_RELATED_PODS)
-                .enumerate()
-                .map(|(index, pod)| related_pod_row(index, pod, detail, cx)),
-        )
-        .children((hidden > 0).then(|| {
-            div()
-                .px_2()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(format!("+{hidden} more"))
-        }))
-        .into_any_element()
-}
-
-/// What a related-pod row shows after the pod name.
-#[derive(Clone, Copy)]
-enum PodRowDetail {
-    StatusOnly,
-    StatusAndNode,
-}
-
-fn related_pod_row(
-    index: usize,
-    pod: &PodSummary,
-    detail: PodRowDetail,
-    cx: &Context<AppShell>,
-) -> AnyElement {
-    let theme = cx.theme();
-    let key = ResourceKey::of_pod(pod);
-    let hover_bg = theme.muted;
-    h_flex()
-        .id(("related-pod", index))
-        .gap_2()
-        .items_center()
-        .px_2()
-        .py_1()
-        .rounded(theme.radius)
-        .text_sm()
-        .cursor_pointer()
-        .hover(move |style| style.bg(hover_bg))
-        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .font_family(theme.mono_font_family.clone())
-                .child(pod.name.clone()),
-        )
-        .child(toned_text(pod_status_label(pod), cx))
-        .children(matches!(detail, PodRowDetail::StatusAndNode).then(|| {
-            div()
-                .flex_shrink_0()
-                .text_color(theme.muted_foreground)
-                .child(pod.node_name.clone().unwrap_or_default())
-        }))
-        .into_any_element()
 }
