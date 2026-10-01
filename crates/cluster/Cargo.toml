@@ -1,0 +1,23 @@
+[package]
+name = "k8sboard-cluster"
+description = "Kubeconfig loading, context selection, and read-only cluster access for k8sBoard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "cluster"
+
+[dependencies]
+kube.workspace = true
+k8s-openapi.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+futures.workspace = true
+jiff.workspace = true
+
+[lints]
+workspace = true

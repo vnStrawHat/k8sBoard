@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96.0"
+license = "Apache-2.0"
+publish = false
+version = "0.1.0"
+
+[workspace.dependencies]
+gpui-kit = "0.7"
+kube = { version = "4.2", default-features = false, features = ["client", "config", "runtime", "rustls-tls", "ring"] }
+# Lowest API version k8s-openapi 0.28 supports; the UAT cluster runs v1.29.5.
+k8s-openapi = { version = "0.28", features = ["v1_32"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+jiff = { version = "0.2", default-features = false, features = ["std"] }
+# oneterm-vt = { git = "https://github.com/vnStrawHat/OneTerm", rev = "<pin a commit sha>", default-features = false }  # terminal engine for pod/node shell; replaces alacritty_terminal
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"
+expect_used = "warn"
+print_stdout = "warn"
+
+[profile.dev]
+codegen-units = 16
+debug = "line-tables-only"
+
+# GPUI is slow when unoptimized.
+[profile.dev.package."*"]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+opt-level = 3
