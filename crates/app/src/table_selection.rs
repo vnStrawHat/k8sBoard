@@ -1,11 +1,24 @@
 use cluster::{NodeSummary, PodSummary};
 
+use crate::kind_row::KindRow;
+use crate::resource_kind::ResourceKind;
+
 /// The identity of a selected row. Rows move when a snapshot reorders them, so the
 /// selection is a key and the row index is looked up again after every update.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ResourceKey {
-    Pod { namespace: String, name: String },
-    Node { name: String },
+    Pod {
+        namespace: String,
+        name: String,
+    },
+    Node {
+        name: String,
+    },
+    Kind {
+        kind: ResourceKind,
+        namespace: Option<String>,
+        name: String,
+    },
 }
 
 impl ResourceKey {
@@ -22,6 +35,14 @@ impl ResourceKey {
         }
     }
 
+    pub(crate) fn of_row(kind: ResourceKind, row: &KindRow) -> Self {
+        Self::Kind {
+            kind,
+            namespace: row.namespace.clone(),
+            name: row.name.clone(),
+        }
+    }
+
     pub(crate) fn is_pod(&self, pod: &PodSummary) -> bool {
         matches!(self, Self::Pod { namespace, name }
             if *namespace == pod.namespace && *name == pod.name)
@@ -29,6 +50,11 @@ impl ResourceKey {
 
     pub(crate) fn is_node(&self, node: &NodeSummary) -> bool {
         matches!(self, Self::Node { name } if *name == node.name)
+    }
+
+    pub(crate) fn is_row(&self, kind: ResourceKind, row: &KindRow) -> bool {
+        matches!(self, Self::Kind { kind: key_kind, namespace, name }
+            if *key_kind == kind && *namespace == row.namespace && *name == row.name)
     }
 }
 

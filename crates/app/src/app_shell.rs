@@ -6,14 +6,15 @@ use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Subscription, Window,
+    App, AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Point,
+    Render, Styled as _, Subscription, Window,
 };
 
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
 use crate::cluster_session::{ClusterSession, LiveCluster, error_text};
 use crate::drawer::{DrawerState, PodDrawerTab};
+use crate::kind_table::KindTableDelegate;
 use crate::launch_options::{
     LaunchOptions, LaunchScreen, has_ignored_kubeconfig_entries, kubeconfig_path,
 };
@@ -22,6 +23,7 @@ use crate::log_tab::LogTarget;
 use crate::navigation::{NavigationCounts, sidebar};
 use crate::node_table::NodeTableDelegate;
 use crate::pod_table::PodTableDelegate;
+use crate::resource_kind::ResourceKind;
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{SettleInput, TargetState};
 use crate::screenshot::{pick_drawer_pod, pick_logs_pod};
@@ -39,6 +41,17 @@ const IGNORED_KUBECONFIG_NOTE: &str =
 pub(crate) enum Screen {
     Pods,
     Nodes,
+    Kind(ResourceKind),
+}
+
+impl Screen {
+    /// The explorer kind this screen lists, if it is a kind screen.
+    pub(crate) fn kind(self) -> Option<ResourceKind> {
+        match self {
+            Self::Kind(kind) => Some(kind),
+            Self::Pods | Self::Nodes => None,
+        }
+    }
 }
 
 enum KubeconfigState {
@@ -64,6 +77,7 @@ pub(crate) struct AppShell {
     screen: Screen,
     pod_table: Entity<TableState<PodTableDelegate>>,
     node_table: Entity<TableState<NodeTableDelegate>>,
+    kind_table: Entity<TableState<KindTableDelegate>>,
     _table_subscriptions: Vec<Subscription>,
     /// The drawer is open exactly while this is set.
     selected: Option<ResourceKey>,
@@ -107,10 +121,19 @@ impl AppShell {
         });
         let node_table =
             cx.new(|cx| configure(TableState::new(NodeTableDelegate::new(), window, cx)));
+        let initial_kind = options.screen.screen().kind();
+        let kind_table = cx.new(|cx| {
+            configure(TableState::new(
+                KindTableDelegate::new(initial_kind),
+                window,
+                cx,
+            ))
+        });
         // The workspace layout depends on the dock's mode and tab count.
         let table_subscriptions = vec![
             cx.subscribe_in(&pod_table, window, Self::on_pod_table_event),
             cx.subscribe_in(&node_table, window, Self::on_node_table_event),
+            cx.subscribe_in(&kind_table, window, Self::on_kind_table_event),
             cx.observe(&log_dock, |_, _, cx| cx.notify()),
         ];
 
@@ -127,6 +150,7 @@ impl AppShell {
             screen: options.screen.screen(),
             pod_table,
             node_table,
+            kind_table,
             _table_subscriptions: table_subscriptions,
             selected: None,
             drawer,
@@ -199,9 +223,10 @@ impl AppShell {
         namespace: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        let kind = self.screen.kind();
         self.close_drawer(cx);
         self.log_dock.update(cx, |dock, cx| dock.close_all(cx));
-        let session = cx.new(|cx| ClusterSession::new(kubeconfig, summary, namespace, cx));
+        let session = cx.new(|cx| ClusterSession::new(kubeconfig, summary, namespace, kind, cx));
         self._session_observer = Some(cx.observe(&session, |shell, _, cx| {
             shell.on_session_changed(cx);
         }));
@@ -211,6 +236,10 @@ impl AppShell {
             cx.notify();
         });
         self.node_table.update(cx, |table, cx| {
+            table.delegate_mut().set_session(shared.clone());
+            cx.notify();
+        });
+        self.kind_table.update(cx, |table, cx| {
             table.delegate_mut().set_session(shared);
             cx.notify();
         });
@@ -261,10 +290,46 @@ impl AppShell {
         session.update(cx, |session, cx| session.set_scope(scope, cx));
     }
 
+    /// Opens `screen`. The explorer watch follows it: it starts for a kind screen, is replaced on
+    /// a kind switch, and is dropped when leaving to Pods or Nodes.
     pub(crate) fn show_screen(&mut self, screen: Screen, cx: &mut Context<Self>) {
         self.screen = screen;
+        if let Some(session) = &self.session {
+            session.update(cx, |session, cx| {
+                session.set_explorer_kind(screen.kind(), cx)
+            });
+        }
+        self.kind_table.update(cx, |table, cx| {
+            let is_switch = table.delegate_mut().set_kind(screen.kind());
+            if is_switch {
+                table.refresh(cx);
+                // The new kind starts at the top-left. `scroll_to_row(0)` is not used: GPUI drops
+                // `deferred_scroll_to_item` on an empty list, and the list is empty while it switches.
+                table.scroll_to_col(0, cx);
+                table
+                    .vertical_scroll_handle
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(Point::default());
+            }
+        });
         self.close_drawer(cx);
         self.log_dock.update(cx, |dock, cx| dock.unzoom(cx));
+    }
+
+    /// Opens the Pods screen on `key`'s pod, or with no selection when the pod is gone.
+    pub(crate) fn reveal_pod(&mut self, key: ResourceKey, cx: &mut Context<Self>) {
+        self.show_screen(Screen::Pods, cx);
+        let Some(row) = self
+            .live(cx)
+            .and_then(|live| row_index(live.pods.items(), |pod| key.is_pod(pod)))
+        else {
+            return;
+        };
+        self.change_selection(Some(key), cx);
+        self.pod_table
+            .update(cx, |table, cx| table.set_selected_row(row, cx));
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {
@@ -280,6 +345,8 @@ impl AppShell {
         self.pod_table
             .update(cx, |table, cx| table.clear_selection(cx));
         self.node_table
+            .update(cx, |table, cx| table.clear_selection(cx));
+        self.kind_table
             .update(cx, |table, cx| table.clear_selection(cx));
         cx.notify();
     }
@@ -368,6 +435,31 @@ impl AppShell {
         }
     }
 
+    fn on_kind_table_event(
+        &mut self,
+        table: &Entity<TableState<KindTableDelegate>>,
+        event: &TableEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            TableEvent::SelectRow(row) => {
+                let key = self.screen.kind().and_then(|kind| {
+                    let explorer = self.live(cx)?.kind_list(kind)?;
+                    let row = explorer.list.items().get(*row)?;
+                    Some(ResourceKey::of_row(kind, row))
+                });
+                if self.change_selection(key, cx) {
+                    focus_table(table, window, cx);
+                }
+            }
+            TableEvent::ClearSelection => {
+                self.change_selection(None, cx);
+            }
+            _ => {}
+        }
+    }
+
     fn live<'a>(&self, cx: &'a App) -> Option<&'a LiveCluster> {
         self.session.as_ref()?.read(cx).live()
     }
@@ -402,6 +494,17 @@ impl AppShell {
                 }
                 let found = row_index(live.nodes.items(), |node| key.is_node(node));
                 let table = self.node_table.clone();
+                self.apply_selection_sync(&table, found, cx);
+            }
+            ResourceKey::Kind { kind, .. } => {
+                let Some(explorer) = live.kind_list(*kind) else {
+                    return;
+                };
+                if explorer.list.ready_count().is_none() {
+                    return;
+                }
+                let found = row_index(explorer.list.items(), |row| key.is_row(*kind, row));
+                let table = self.kind_table.clone();
                 self.apply_selection_sync(&table, found, cx);
             }
         }
@@ -444,6 +547,15 @@ impl AppShell {
                 live.nodes.is_loading(),
                 (!live.nodes.items().is_empty()).then_some(0),
             ),
+            LaunchScreen::KindDrawer(kind) => {
+                let explorer = live.kind_list(kind);
+                (
+                    explorer.is_none_or(|explorer| explorer.list.is_loading()),
+                    explorer
+                        .is_some_and(|explorer| !explorer.list.items().is_empty())
+                        .then_some(0),
+                )
+            }
             _ => (live.pods.is_loading(), pick_drawer_pod(live.pods.items())),
         };
         if is_loading {
@@ -461,6 +573,15 @@ impl AppShell {
                     .map(ResourceKey::of_node);
                 self.change_selection(key, cx);
                 self.node_table
+                    .update(cx, |table, cx| table.set_selected_row(row, cx));
+            }
+            LaunchScreen::KindDrawer(kind) => {
+                let key = self
+                    .live(cx)
+                    .and_then(|live| live.kind_list(kind)?.list.items().get(row))
+                    .map(|row| ResourceKey::of_row(kind, row));
+                self.change_selection(key, cx);
+                self.kind_table
                     .update(cx, |table, cx| table.set_selected_row(row, cx));
             }
             _ => {
@@ -525,6 +646,15 @@ impl AppShell {
                     let (is_loading, has_failed) = match self.screen {
                         Screen::Pods => (live.pods.is_loading(), live.pods.failure().is_some()),
                         Screen::Nodes => (live.nodes.is_loading(), live.nodes.failure().is_some()),
+                        // A missing explorer is the moment between a switch and its first watch.
+                        Screen::Kind(kind) => {
+                            live.kind_list(kind).map_or((true, false), |explorer| {
+                                (
+                                    explorer.list.is_loading(),
+                                    explorer.list.failure().is_some(),
+                                )
+                            })
+                        }
                     };
                     // A failed list shows an error screen, which is the target to capture.
                     if has_failed {
@@ -556,6 +686,7 @@ impl AppShell {
         NavigationCounts {
             pods: live.and_then(|live| live.pods.ready_count()),
             nodes: live.and_then(|live| live.nodes.ready_count()),
+            explorer: live.and_then(LiveCluster::explorer_count),
         }
     }
 }
@@ -577,7 +708,7 @@ impl Render for AppShell {
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(sidebar(self.screen, &counts, cx))
+                    .child(sidebar(self.screen, &counts, self.live(cx), cx))
                     .child(self.render_workspace(cx)),
             )
             .child(status_bar(session, is_kubeconfig_loading, cx))

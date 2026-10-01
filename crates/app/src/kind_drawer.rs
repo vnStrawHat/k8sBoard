@@ -1,0 +1,289 @@
+//! The overview drawer shared by the explorer kinds. The sections come from the row
+//! builders; this module only renders them.
+
+use std::rc::Rc;
+
+use cluster::PodSummary;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::DropdownMenu as _;
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::{
+    AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _, div,
+};
+
+use crate::age::format_age;
+use crate::app_shell::AppShell;
+use crate::cluster_session::{ClusterSession, LiveCluster};
+use crate::drawer::{
+    DRAWER_WIDTH, DrawerHeader, absent_text, created_text, detail_row, drawer_frame, menu_button,
+    section_title, truncated_text,
+};
+use crate::kind_row::{DetailRow, KindCell, KindRow, PodOwner, owns_pod};
+use crate::resource_actions::{kind_menu, port_forward_reason};
+use crate::resource_kind::ResourceKind;
+use crate::status_tone::{pod_status_label, tone_color, toned_text};
+use crate::table_selection::ResourceKey;
+
+/// Bounds the render cost of a workload with very many pods.
+const MAX_RELATED_PODS: usize = 50;
+
+pub(crate) fn kind_drawer(
+    kind: ResourceKind,
+    row: &KindRow,
+    live: &LiveCluster,
+    session: &Entity<ClusterSession>,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let now = jiff::Timestamp::now();
+    let header = DrawerHeader {
+        kind_badge: kind.badge(),
+        name: row.name.clone().into(),
+        subtitle: subtitle(row, now, cx),
+        menu: kind_menu_button(kind, row, session),
+        // Only the Overview exists, so there is nothing to expand.
+        expand: None,
+        on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
+    };
+    drawer_frame(header, None, body(row, live, now, cx), DRAWER_WIDTH, cx).into_any_element()
+}
+
+/// The status, then `· namespace · created 2d ago`.
+fn subtitle(row: &KindRow, now: jiff::Timestamp, cx: &App) -> AnyElement {
+    let detail: Vec<String> = row
+        .namespace
+        .iter()
+        .cloned()
+        .chain(created_text(row.created_at, now))
+        .collect();
+    h_flex()
+        .gap_1()
+        .text_sm()
+        .child(toned_text(row.status.clone(), cx))
+        .children((!detail.is_empty()).then(|| {
+            div()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("· {}", detail.join(" · ")))
+        }))
+        .into_any_element()
+}
+
+/// The menu reads the session when it opens, so it shows the access state and the row of
+/// that moment.
+fn kind_menu_button(
+    kind: ResourceKind,
+    row: &KindRow,
+    session: &Entity<ClusterSession>,
+) -> AnyElement {
+    let session = session.clone();
+    let key = ResourceKey::of_row(kind, row);
+    menu_button()
+        .dropdown_menu(move |menu, _, cx| {
+            let Some(live) = session.read(cx).live() else {
+                return menu;
+            };
+            let current = live.kind_list(kind).and_then(|explorer| {
+                explorer
+                    .list
+                    .items()
+                    .iter()
+                    .find(|row| key.is_row(kind, row))
+            });
+            match current {
+                Some(row) => kind_menu(menu, kind, row, &live.access),
+                None => menu,
+            }
+        })
+        .into_any_element()
+}
+
+/// The row's sections in order, then the related pods, then the labels.
+fn body(
+    row: &KindRow,
+    live: &LiveCluster,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let forward_reason = port_forward_reason(&live.access);
+    // Gives every element that needs an id one that is unique inside the drawer.
+    let mut next_id = 0_usize;
+    let mut column = v_flex();
+    for section in &row.sections {
+        column = column.child(section_title(section.title, cx));
+        if section.rows.is_empty() {
+            column = column.child(absent_text(cx));
+        }
+        for detail in &section.rows {
+            next_id += 1;
+            column = column.child(detail_element(detail, next_id, &forward_reason, now, cx));
+        }
+    }
+    if let Some(owner) = &row.related_pods {
+        column = column.child(pods_section(owner, live, cx));
+    }
+    column
+        .child(section_title("Labels", cx))
+        .child(chips(&row.labels, cx))
+        .into_any_element()
+}
+
+fn detail_element(
+    detail: &DetailRow,
+    id: usize,
+    forward_reason: &SharedString,
+    now: jiff::Timestamp,
+    cx: &App,
+) -> AnyElement {
+    match detail {
+        DetailRow::Field { label, value } => {
+            detail_row(label.clone(), field_value(value, id, now, cx), cx).into_any_element()
+        }
+        DetailRow::Chips(terms) => chips(terms, cx),
+        DetailRow::Port { text } => port_row(text, id, forward_reason, cx),
+    }
+}
+
+fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> AnyElement {
+    let mono = cx.theme().mono_font_family.clone();
+    match value {
+        KindCell::Text(text) => truncated_text(("detail", id), text.clone()).into_any_element(),
+        KindCell::Mono(text) => truncated_text(("detail", id), text.clone())
+            .font_family(mono)
+            .into_any_element(),
+        KindCell::Toned(label) => toned_text(label.clone(), cx).truncate().into_any_element(),
+        KindCell::Absent => absent_text(cx).into_any_element(),
+        KindCell::Age { at: None, .. } => absent_text(cx).into_any_element(),
+        KindCell::Age { at: Some(at), tone } => {
+            let text = div()
+                .truncate()
+                .child(format!("{at} ({} ago)", format_age(Some(*at), now)));
+            match tone {
+                Some(tone) => text.text_color(tone_color(*tone, cx)),
+                None => text,
+            }
+            .into_any_element()
+        }
+    }
+}
+
+/// Wrapping chips, or a dash when there are none.
+fn chips(terms: &[SharedString], cx: &App) -> AnyElement {
+    if terms.is_empty() {
+        return absent_text(cx).into_any_element();
+    }
+    let theme = cx.theme();
+    h_flex()
+        .flex_wrap()
+        .gap_1()
+        .children(terms.iter().map(|term| {
+            div()
+                .max_w_full()
+                .truncate()
+                .px_1p5()
+                .rounded(theme.radius)
+                .bg(theme.muted)
+                .font_family(theme.mono_font_family.clone())
+                .text_xs()
+                .child(term.clone())
+        }))
+        .into_any_element()
+}
+
+/// A port with its Forward button. The button is always disabled: port-forwarding is not
+/// available in this version, and the tooltip says why.
+fn port_row(text: &SharedString, id: usize, reason: &SharedString, cx: &App) -> AnyElement {
+    h_flex()
+        .gap_2()
+        .py_1()
+        .items_center()
+        .text_sm()
+        .child(
+            truncated_text(("port", id), text.clone())
+                .flex_1()
+                .min_w_0()
+                .font_family(cx.theme().mono_font_family.clone()),
+        )
+        .child(
+            Button::new(("forward", id))
+                .label("Forward")
+                .icon(Icon::new(IconName::ArrowLeftRight))
+                .xsmall()
+                .ghost()
+                .disabled(true)
+                .tooltip(reason.clone()),
+        )
+        .into_any_element()
+}
+
+/// The pods of `owner`, read from the live pods list at render time so they stay current.
+/// A click opens the pod on the Pods screen.
+fn pods_section(owner: &PodOwner, live: &LiveCluster, cx: &Context<AppShell>) -> AnyElement {
+    let pods: Vec<&PodSummary> = live
+        .pods
+        .items()
+        .iter()
+        .filter(|pod| owns_pod(owner, pod))
+        .collect();
+    let (title, note) = if live.pods.is_loading() {
+        ("Pods".to_owned(), Some("Loading pods…"))
+    } else if live.pods.failure().is_some() {
+        ("Pods".to_owned(), Some("Pods are unavailable"))
+    } else {
+        (
+            format!("Pods {}", pods.len()),
+            pods.is_empty().then_some("No pods"),
+        )
+    };
+    let hidden = pods.len().saturating_sub(MAX_RELATED_PODS);
+    let theme = cx.theme();
+    v_flex()
+        .child(section_title(title, cx))
+        .children(note.map(|note| {
+            div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(note)
+        }))
+        .children(
+            pods.iter()
+                .take(MAX_RELATED_PODS)
+                .enumerate()
+                .map(|(index, pod)| related_pod_row(index, pod, cx)),
+        )
+        .children((hidden > 0).then(|| {
+            div()
+                .px_2()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(format!("+{hidden} more"))
+        }))
+        .into_any_element()
+}
+
+fn related_pod_row(index: usize, pod: &PodSummary, cx: &Context<AppShell>) -> AnyElement {
+    let theme = cx.theme();
+    let key = ResourceKey::of_pod(pod);
+    let hover_bg = theme.muted;
+    h_flex()
+        .id(("related-pod", index))
+        .gap_2()
+        .items_center()
+        .px_2()
+        .py_1()
+        .rounded(theme.radius)
+        .text_sm()
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover_bg))
+        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal_pod(key.clone(), cx)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_family(theme.mono_font_family.clone())
+                .child(pod.name.clone()),
+        )
+        .child(toned_text(pod_status_label(pod), cx))
+        .into_any_element()
+}

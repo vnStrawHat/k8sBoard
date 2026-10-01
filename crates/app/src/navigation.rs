@@ -1,8 +1,16 @@
-use gpui_kit::component::ActiveTheme as _;
+use cluster::NamespaceScope;
+use gpui_kit::assets::IconName;
 use gpui_kit::component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
-use gpui_kit::{Context, IntoElement, ParentElement as _, Pixels, Styled as _, div, px};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme as _, Icon};
+use gpui_kit::{
+    Context, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, SharedString,
+    StatefulInteractiveElement as _, Styled as _, div, px,
+};
 
 use crate::app_shell::{AppShell, Screen};
+use crate::cluster_session::{AccessState, LiveCluster};
+use crate::resource_kind::ResourceKind;
 
 pub(crate) const SIDEBAR_WIDTH: Pixels = px(220.);
 
@@ -84,19 +92,56 @@ fn screen_of(item: &str) -> Option<Screen> {
     match item {
         "Pods" => Some(Screen::Pods),
         "Nodes" => Some(Screen::Nodes),
-        _ => None,
+        _ => ResourceKind::from_label(item).map(Screen::Kind),
     }
 }
 
-/// Snapshot lengths shown next to Pods and Nodes; `None` while a list is not loaded.
+/// Snapshot lengths shown next to Pods, Nodes, and the visible kind; `None` while a list is not
+/// loaded. Other kinds show no count, because their watches are not running.
 pub(crate) struct NavigationCounts {
     pub(crate) pods: Option<usize>,
     pub(crate) nodes: Option<usize>,
+    pub(crate) explorer: Option<(ResourceKind, usize)>,
+}
+
+/// Whether a kind item can be opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum KindAvailability {
+    Enabled,
+    Denied { reason: SharedString },
+}
+
+/// A kind is disabled only when the access review is known and denies listing it. While the
+/// review runs or has failed the item stays enabled; the list's error state explains a 403.
+fn kind_availability(
+    kind: ResourceKind,
+    access: &AccessState,
+    scope: &NamespaceScope,
+) -> KindAvailability {
+    let AccessState::Known(report) = access else {
+        return KindAvailability::Enabled;
+    };
+    if report.is_allowed(kind.access_check()) {
+        return KindAvailability::Enabled;
+    }
+    let reason = match scope {
+        // The review asked cluster-wide, so say so.
+        NamespaceScope::All if kind.is_namespaced() => {
+            format!("Not permitted: {} in all namespaces", kind.access_check())
+        }
+        NamespaceScope::All | NamespaceScope::Named(_) => {
+            format!("Not permitted: {}", kind.access_check())
+        }
+    };
+    KindAvailability::Denied {
+        reason: reason.into(),
+    }
 }
 
 pub(crate) fn sidebar(
     active: Screen,
     counts: &NavigationCounts,
+    live: Option<&LiveCluster>,
     cx: &Context<AppShell>,
 ) -> impl IntoElement {
     let top =
@@ -109,7 +154,7 @@ pub(crate) fn sidebar(
                 section
                     .items
                     .iter()
-                    .map(|name| item(name, active, counts, cx)),
+                    .map(|name| item(name, active, counts, live, cx)),
             )
     }));
     Sidebar::<SidebarMenu>::new("navigation")
@@ -123,14 +168,26 @@ fn item(
     name: &'static str,
     active: Screen,
     counts: &NavigationCounts,
+    live: Option<&LiveCluster>,
     cx: &Context<AppShell>,
 ) -> SidebarMenuItem {
     let Some(screen) = screen_of(name) else {
         return SidebarMenuItem::new(name).disable(true);
     };
+    if let Screen::Kind(kind) = screen
+        && let Some(live) = live
+        && let KindAvailability::Denied { reason } =
+            kind_availability(kind, &live.access, &live.scope)
+    {
+        return denied_item(name, reason, screen == active);
+    }
     let count = match screen {
         Screen::Pods => counts.pods,
         Screen::Nodes => counts.nodes,
+        Screen::Kind(kind) => counts
+            .explorer
+            .filter(|(counted, _)| *counted == kind)
+            .map(|(_, count)| count),
     };
     SidebarMenuItem::new(name)
         .active(screen == active)
@@ -143,19 +200,111 @@ fn item(
         })
 }
 
+/// A greyed-out item with a lock whose tooltip says what is missing.
+fn denied_item(name: &'static str, reason: SharedString, is_active: bool) -> SidebarMenuItem {
+    SidebarMenuItem::new(name)
+        .active(is_active)
+        .disable(true)
+        .suffix(move |_, cx| {
+            let reason = reason.clone();
+            div()
+                .id(name)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(Icon::new(IconName::Lock))
+                .tooltip(move |window, cx| Tooltip::new(reason.clone()).build(window, cx))
+        })
+}
+
 #[cfg(test)]
 mod tests {
+    use cluster::{AccessCheck, AccessDecision, AccessReport, AccessReview};
+    use gpui_kit::Task;
+
     use super::*;
 
     #[test]
-    fn only_pods_and_nodes_are_enabled() {
+    fn enabled_items_are_pods_nodes_and_explorer_kinds() {
         let enabled: Vec<&str> = TOP_ITEMS
             .iter()
             .chain(SECTIONS.iter().flat_map(|section| section.items.iter()))
             .copied()
             .filter(|name| screen_of(name).is_some())
             .collect();
-        assert_eq!(enabled, ["Nodes", "Pods"]);
+        assert_eq!(enabled, ["Nodes", "Namespaces", "Pods", "Deployments"]);
+    }
+
+    #[test]
+    fn kind_labels_match_navigation_items() {
+        let items: Vec<&str> = SECTIONS
+            .iter()
+            .flat_map(|section| section.items.iter())
+            .copied()
+            .collect();
+        for kind in ResourceKind::ALL {
+            assert!(items.contains(&kind.label()), "{}", kind.label());
+            assert_eq!(screen_of(kind.label()), Some(Screen::Kind(kind)));
+        }
+    }
+
+    fn report_denying(denied: &[AccessCheck]) -> AccessState {
+        let reviews = AccessCheck::ALL
+            .into_iter()
+            .map(|check| AccessReview {
+                check,
+                decision: if denied.contains(&check) {
+                    AccessDecision::Denied { reason: None }
+                } else {
+                    AccessDecision::Allowed
+                },
+            })
+            .collect();
+        AccessState::Known(AccessReport { reviews })
+    }
+
+    fn denied(reason: &str) -> KindAvailability {
+        KindAvailability::Denied {
+            reason: reason.to_owned().into(),
+        }
+    }
+
+    #[test]
+    fn denied_kind_reason_names_all_namespaces_scope() {
+        let access = report_denying(&[AccessCheck::ListDeployments, AccessCheck::ListNamespaces]);
+        let all = NamespaceScope::All;
+        let named = NamespaceScope::Named("team-a".to_owned());
+        assert_eq!(
+            kind_availability(ResourceKind::Deployments, &access, &all),
+            denied("Not permitted: list deployments in all namespaces")
+        );
+        assert_eq!(
+            kind_availability(ResourceKind::Deployments, &access, &named),
+            denied("Not permitted: list deployments")
+        );
+        // Namespaces are cluster-scoped, so the scope never applies to them.
+        assert_eq!(
+            kind_availability(ResourceKind::Namespaces, &access, &all),
+            denied("Not permitted: list namespaces")
+        );
+        assert_eq!(
+            kind_availability(ResourceKind::Deployments, &report_denying(&[]), &all),
+            KindAvailability::Enabled
+        );
+    }
+
+    #[test]
+    fn checking_and_unknown_access_keep_kinds_enabled() {
+        let checking = AccessState::Checking {
+            _task: Task::ready(()),
+        };
+        for access in [checking, AccessState::Unknown] {
+            for kind in ResourceKind::ALL {
+                assert_eq!(
+                    kind_availability(kind, &access, &NamespaceScope::All),
+                    KindAvailability::Enabled
+                );
+            }
+        }
     }
 
     #[test]

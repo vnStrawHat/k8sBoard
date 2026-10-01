@@ -15,6 +15,7 @@ pub(crate) enum StatusTone {
     Done,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StatusLabel {
     pub(crate) text: SharedString,
     pub(crate) tone: StatusTone,

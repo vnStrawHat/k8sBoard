@@ -112,3 +112,38 @@ fn error_text_adds_first_source_line() {
         "cannot reach the API server of context 'ctx' while listing pods: connection refused"
     );
 }
+
+fn failed_list<T>() -> LiveList<T> {
+    LiveList::Failed {
+        message: "boom".to_owned(),
+    }
+}
+
+fn ready_list<T>() -> LiveList<T> {
+    LiveList::Ready {
+        items: Vec::new(),
+        interruption: None,
+    }
+}
+
+#[test]
+fn watch_state_reports_explorer_problem() {
+    let failed = failed_list();
+    let ready = ready_list();
+    let problem =
+        |explorer| any_list_has_problem(&ready_list(), &ready_list(), &ready_list(), explorer);
+    assert!(problem(Some(&failed)));
+    assert!(!problem(Some(&ready)));
+    assert!(!problem(None));
+}
+
+#[test]
+fn watch_state_still_reports_core_list_problems() {
+    let nodes_failed = failed_list();
+    assert!(any_list_has_problem(
+        &ready_list(),
+        &ready_list(),
+        &nodes_failed,
+        None
+    ));
+}

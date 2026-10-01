@@ -183,7 +183,7 @@ pub(crate) fn section_title(text: impl Into<SharedString>, cx: &App) -> impl Int
 
 /// A label with its value, in the two-column layout shared by both drawers.
 pub(crate) fn detail_row(
-    label: &'static str,
+    label: impl Into<SharedString>,
     value: impl IntoElement,
     cx: &App,
 ) -> impl IntoElement {
@@ -196,8 +196,10 @@ pub(crate) fn detail_row(
             div()
                 .w(LABEL_WIDTH)
                 .flex_shrink_0()
+                // Dynamic labels (container and key names) can be long.
+                .truncate()
                 .text_color(cx.theme().muted_foreground)
-                .child(label),
+                .child(label.into()),
         )
         // `overflow_hidden` keeps a long value inside the drawer; text values ellipsize.
         .child(div().flex_1().min_w_0().overflow_hidden().child(value))

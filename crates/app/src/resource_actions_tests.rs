@@ -147,3 +147,16 @@ fn logs_denied_reason_names_access_check() {
         "Not permitted: get pods/log"
     );
 }
+
+#[test]
+fn forward_button_reason_follows_the_port_forward_gate() {
+    assert_eq!(
+        port_forward_reason(&known_denying(&[AccessCheck::CreatePodPortForward])),
+        "Not permitted: create pods/portforward"
+    );
+    assert_eq!(
+        port_forward_reason(&known_denying(&[])),
+        "Not available in read-only mode"
+    );
+    assert_eq!(port_forward_reason(&checking()), "Checking permissions…");
+}

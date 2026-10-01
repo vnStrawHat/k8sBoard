@@ -1,6 +1,7 @@
 use cluster::{NodeReadiness, NodeScheduling, NodeStatus, PodStatus, ReadyCount, StatusReason};
 
 use super::*;
+use crate::status_tone::{StatusLabel, StatusTone};
 
 fn pod(namespace: &str, name: &str) -> PodSummary {
     PodSummary {
@@ -71,4 +72,32 @@ fn selection_sync_moves_on_reorder() {
 fn selection_sync_clears_when_subject_deleted() {
     assert_eq!(selection_sync(Some(3), None), SelectionSync::Clear);
     assert_eq!(selection_sync(None, None), SelectionSync::Clear);
+}
+
+fn kind_row(namespace: Option<&str>, name: &str) -> KindRow {
+    KindRow {
+        namespace: namespace.map(str::to_owned),
+        name: name.to_owned(),
+        created_at: None,
+        status: StatusLabel {
+            text: "Active".into(),
+            tone: StatusTone::Ok,
+        },
+        cells: Vec::new(),
+        sections: Vec::new(),
+        related_pods: None,
+        labels: Vec::new(),
+    }
+}
+
+#[test]
+fn kind_key_matches_row_by_kind_namespace_and_name() {
+    let row = kind_row(Some("team-a"), "api");
+    let key = ResourceKey::of_row(ResourceKind::Deployments, &row);
+    assert!(key.is_row(ResourceKind::Deployments, &row));
+    assert!(!key.is_row(ResourceKind::Namespaces, &row));
+    assert!(!key.is_row(ResourceKind::Deployments, &kind_row(Some("team-b"), "api")));
+    assert!(!key.is_row(ResourceKind::Deployments, &kind_row(Some("team-a"), "web")));
+    assert!(!key.is_row(ResourceKind::Deployments, &kind_row(None, "api")));
+    assert!(!key.is_pod(&pod("team-a", "api")));
 }

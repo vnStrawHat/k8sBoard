@@ -63,15 +63,11 @@ pub(crate) struct SettleInput {
 /// Whether the screen shows what `--screen` asked for, so a screenshot is worth taking.
 #[cfg(any(feature = "screenshot", test))]
 pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bool {
-    let is_drawer_screen = matches!(
-        screen,
-        LaunchScreen::PodDrawer | LaunchScreen::PodContainers | LaunchScreen::NodeDrawer
-    );
     match input.target {
         TargetState::Unavailable => true,
         TargetState::Loading => false,
         TargetState::Loaded if screen.has_log_dock() => !input.is_log_pending,
-        TargetState::Loaded => !is_drawer_screen || input.has_selection,
+        TargetState::Loaded => !screen.has_drawer() || input.has_selection,
     }
 }
 
@@ -174,6 +170,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::resource_kind::ResourceKind;
 
     fn container(name: &str) -> ContainerSummary {
         ContainerSummary {
@@ -238,11 +235,31 @@ mod tests {
     }
 
     #[test]
+    fn kind_drawer_screen_needs_selection() {
+        let screen = LaunchScreen::KindDrawer(ResourceKind::Namespaces);
+        assert!(!is_screen_settled(
+            screen,
+            &input(TargetState::Loaded, false)
+        ));
+        assert!(is_screen_settled(screen, &input(TargetState::Loaded, true)));
+        let list_screen = LaunchScreen::Kind(ResourceKind::Namespaces);
+        assert!(is_screen_settled(
+            list_screen,
+            &input(TargetState::Loaded, false)
+        ));
+        assert!(!is_screen_settled(
+            list_screen,
+            &input(TargetState::Loading, false)
+        ));
+    }
+
+    #[test]
     fn drawer_screen_needs_selection_to_settle() {
         for screen in [
             LaunchScreen::PodDrawer,
             LaunchScreen::PodContainers,
             LaunchScreen::NodeDrawer,
+            LaunchScreen::KindDrawer(ResourceKind::Deployments),
         ] {
             assert!(!is_screen_settled(
                 screen,

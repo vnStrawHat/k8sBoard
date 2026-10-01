@@ -4,11 +4,15 @@ use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{ClipboardItem, ParentElement as _, SharedString, Styled as _, WeakEntity, div};
 
 use crate::cluster_session::{AccessState, LiveCluster};
+use crate::kind_row::KindRow;
 use crate::log_dock::LogDock;
 use crate::log_tab::LogTarget;
+use crate::resource_kind::ResourceKind;
 
 const READ_ONLY_FEATURE_REASON: &str = "Not available in read-only mode";
 const READ_ONLY_MODE_REASON: &str = "Read-only mode";
+/// Why "View YAML" is disabled on every kind.
+pub(crate) const YAML_DEFERRED_REASON: &str = "YAML view comes in a later version";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResourceAction {
@@ -137,6 +141,46 @@ pub(crate) fn node_menu(menu: PopupMenu, node: &NodeSummary, access: &AccessStat
     .item(action_item(ResourceAction::Drain, "Drain…", access))
     .separator()
     .item(copy_name_item(&node.name, access))
+}
+
+/// The row context menu and the drawer ⋯ menu of an explorer kind. Every item except Copy name
+/// is disabled, because this version is read-only and has no YAML view.
+pub(crate) fn kind_menu(
+    menu: PopupMenu,
+    kind: ResourceKind,
+    row: &KindRow,
+    access: &AccessState,
+) -> PopupMenu {
+    let mut menu = menu.item(disabled_menu_item("View YAML", YAML_DEFERRED_REASON.into()));
+    if kind.has_port_forward() {
+        menu = menu.item(action_item(
+            ResourceAction::PortForward,
+            "Port-forward",
+            access,
+        ));
+    }
+    let change_actions = kind.read_only_actions();
+    if !change_actions.is_empty() {
+        menu = menu.separator();
+    }
+    for label in change_actions {
+        menu = menu.item(disabled_menu_item(label, READ_ONLY_MODE_REASON.into()));
+    }
+    menu.separator()
+        .item(copy_name_item(&row.name, access))
+        .separator()
+        .item(disabled_menu_item(
+            kind.delete_label(),
+            READ_ONLY_MODE_REASON.into(),
+        ))
+}
+
+/// The tooltip of a disabled Forward button. Port-forward is never enabled in this version.
+pub(crate) fn port_forward_reason(access: &AccessState) -> SharedString {
+    match action_availability(ResourceAction::PortForward, access) {
+        ActionAvailability::Disabled { reason } => reason,
+        ActionAvailability::Enabled => READ_ONLY_FEATURE_REASON.into(),
+    }
 }
 
 /// Disabled items stay visible with their reason, so users learn what exists.

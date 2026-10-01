@@ -26,8 +26,7 @@ fn watch_state(session: Option<&ClusterSession>, is_kubeconfig_loading: bool) ->
         SessionPhase::Connecting { .. } => WatchState::Connecting,
         SessionPhase::Failed { .. } => WatchState::Disconnected,
         SessionPhase::Live(live) => {
-            if live.namespaces.has_problem() || live.pods.has_problem() || live.nodes.has_problem()
-            {
+            if live.has_problem() {
                 WatchState::Interrupted
             } else {
                 WatchState::Watching

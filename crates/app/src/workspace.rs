@@ -16,6 +16,7 @@ use gpui_kit::{
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{LiveCluster, SessionPhase};
 use crate::drawer::ClickHandler;
+use crate::kind_drawer::kind_drawer;
 use crate::log_dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
 use crate::navigation::SIDEBAR_WIDTH;
 use crate::node_drawer::node_drawer;
@@ -33,6 +34,11 @@ impl AppShell {
             }
         });
         self.node_table.update(cx, |table, cx| {
+            if table.delegate_mut().fit_width(table_width) {
+                table.refresh(cx);
+            }
+        });
+        self.kind_table.update(cx, |table, cx| {
             if table.delegate_mut().fit_width(table_width) {
                 table.refresh(cx);
             }
@@ -95,7 +101,11 @@ impl AppShell {
                 "Pods",
                 live.and_then(|live| {
                     live.pods.ready_count().map(|count| {
-                        format!("{} · {}", count_label(count, "pod"), live.scope_label())
+                        format!(
+                            "{} · {}",
+                            count_label(count, "pod", "pods"),
+                            live.scope_label()
+                        )
                     })
                 }),
             ),
@@ -104,7 +114,19 @@ impl AppShell {
                 live.and_then(|live| {
                     live.nodes
                         .ready_count()
-                        .map(|count| count_label(count, "node"))
+                        .map(|count| count_label(count, "node", "nodes"))
+                }),
+            ),
+            Screen::Kind(kind) => (
+                kind.label(),
+                live.and_then(|live| {
+                    let count = live.kind_list(kind)?.list.ready_count()?;
+                    let label = count_label(count, kind.singular(), kind.plural());
+                    Some(if kind.is_namespaced() {
+                        format!("{label} · {}", live.scope_label())
+                    } else {
+                        label
+                    })
                 }),
             ),
         };
@@ -130,6 +152,7 @@ impl AppShell {
         let message = match self.screen {
             Screen::Pods => live.pods.interruption(),
             Screen::Nodes => live.nodes.interruption(),
+            Screen::Kind(kind) => live.kind_list(kind)?.list.interruption(),
         }?;
         Some(
             div()
@@ -183,17 +206,31 @@ impl AppShell {
 
     fn render_list(&self, live: &LiveCluster, cx: &Context<Self>) -> AnyElement {
         let (title, failure) = match self.screen {
-            Screen::Pods => ("Pods are unavailable", live.pods.failure()),
-            Screen::Nodes => ("Nodes are unavailable", live.nodes.failure()),
+            Screen::Pods => ("Pods".to_owned(), live.pods.failure()),
+            Screen::Nodes => ("Nodes".to_owned(), live.nodes.failure()),
+            Screen::Kind(kind) => (
+                kind.label().to_owned(),
+                live.kind_list(kind)
+                    .and_then(|explorer| explorer.list.failure()),
+            ),
         };
         if let Some(message) = failure {
-            return error_view(title, message, Some("Retrying automatically."), None, cx);
+            return error_view(
+                &format!("{title} are unavailable"),
+                message,
+                Some("Retrying automatically."),
+                None,
+                cx,
+            );
         }
         match self.screen {
             Screen::Pods => DataTable::new(&self.pod_table)
                 .bordered(false)
                 .into_any_element(),
             Screen::Nodes => DataTable::new(&self.node_table)
+                .bordered(false)
+                .into_any_element(),
+            Screen::Kind(_) => DataTable::new(&self.kind_table)
                 .bordered(false)
                 .into_any_element(),
         }
@@ -220,15 +257,24 @@ impl AppShell {
                 let node = live.nodes.items().iter().find(|node| key.is_node(node))?;
                 Some(node_drawer(node, session, cx))
             }
+            ResourceKey::Kind { kind, .. } => {
+                let row = live
+                    .kind_list(*kind)?
+                    .list
+                    .items()
+                    .iter()
+                    .find(|row| key.is_row(*kind, row))?;
+                Some(kind_drawer(*kind, row, live, session, cx))
+            }
         }
     }
 }
 
-fn count_label(count: usize, noun: &str) -> String {
+fn count_label(count: usize, singular: &str, plural: &str) -> String {
     if count == 1 {
-        format!("1 {noun}")
+        format!("1 {singular}")
     } else {
-        format!("{count} {noun}s")
+        format!("{count} {plural}")
     }
 }
 
@@ -283,8 +329,10 @@ mod tests {
 
     #[test]
     fn count_label_pluralizes() {
-        assert_eq!(count_label(1, "pod"), "1 pod");
-        assert_eq!(count_label(0, "pod"), "0 pods");
-        assert_eq!(count_label(104, "node"), "104 nodes");
+        assert_eq!(count_label(1, "pod", "pods"), "1 pod");
+        assert_eq!(count_label(0, "pod", "pods"), "0 pods");
+        assert_eq!(count_label(104, "node", "nodes"), "104 nodes");
+        assert_eq!(count_label(1, "ingress", "ingresses"), "1 ingress");
+        assert_eq!(count_label(2, "ingress", "ingresses"), "2 ingresses");
     }
 }

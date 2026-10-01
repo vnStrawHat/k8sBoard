@@ -1,4 +1,5 @@
 use super::*;
+use crate::resource_kind::ResourceKind;
 
 fn parse(args: &[&str]) -> Result<LaunchRequest, String> {
     parse_launch_options(args.iter().map(|arg| (*arg).to_owned()))
@@ -131,4 +132,20 @@ fn parses_logs_screens() {
         assert!(screen.has_log_dock());
         assert!(!screen.has_drawer());
     }
+}
+
+#[test]
+fn kind_screens_parse_from_plural_slugs() {
+    for kind in ResourceKind::ALL {
+        let list = run_options(&["--screen", kind.plural()]).screen;
+        assert_eq!(list, LaunchScreen::Kind(kind));
+        assert_eq!(list.screen(), Screen::Kind(kind));
+        assert!(!list.has_drawer());
+
+        let drawer = run_options(&["--screen", &format!("{}-drawer", kind.plural())]).screen;
+        assert_eq!(drawer, LaunchScreen::KindDrawer(kind));
+        assert_eq!(drawer.screen(), Screen::Kind(kind));
+        assert!(drawer.has_drawer());
+    }
+    assert!(parse(&["--screen", "pods-drawer"]).is_err());
 }

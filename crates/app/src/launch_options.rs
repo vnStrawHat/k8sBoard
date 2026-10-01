@@ -2,6 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 use crate::app_shell::Screen;
+use crate::resource_kind::ResourceKind;
 
 pub(crate) const USAGE: &str = "\
 Usage: k8sboard [options]
@@ -11,14 +12,15 @@ Options:
   --context <name>       context to open (default: the kubeconfig current-context)
   --namespace <name>     namespace to show (default: all namespaces if allowed)
   --theme light|dark     colour theme (default: follow the system)
-  --screen pods|nodes|pod-drawer|pod-containers|node-drawer|logs-dock|logs-zoomed
+  --screen pods|nodes|pod-drawer|pod-containers|node-drawer|logs-dock|logs-zoomed|
+           namespaces|deployments|<kind>-drawer
                          screen to open (default: pods)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
 ";
 
-/// The screen to open. The drawer values open Pods or Nodes with a row already selected, and
-/// the logs values open Pods with the log dock on a pod.
+/// The screen to open. The drawer values open Pods, Nodes, or a kind with a row already
+/// selected, and the logs values open Pods with the log dock on a pod.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LaunchScreen {
     Pods,
@@ -28,6 +30,10 @@ pub(crate) enum LaunchScreen {
     NodeDrawer,
     LogsDock,
     LogsZoomed,
+    /// `--screen <plural>`, e.g. `deployments`.
+    Kind(ResourceKind),
+    /// `--screen <plural>-drawer`: the kind's first row selected.
+    KindDrawer(ResourceKind),
 }
 
 impl LaunchScreen {
@@ -40,6 +46,7 @@ impl LaunchScreen {
             | Self::LogsDock
             | Self::LogsZoomed => Screen::Pods,
             Self::Nodes | Self::NodeDrawer => Screen::Nodes,
+            Self::Kind(kind) | Self::KindDrawer(kind) => Screen::Kind(kind),
         }
     }
 
@@ -47,7 +54,7 @@ impl LaunchScreen {
     pub(crate) fn has_drawer(self) -> bool {
         matches!(
             self,
-            Self::PodDrawer | Self::PodContainers | Self::NodeDrawer
+            Self::PodDrawer | Self::PodContainers | Self::NodeDrawer | Self::KindDrawer(_)
         )
     }
 
@@ -65,7 +72,10 @@ impl LaunchScreen {
             "node-drawer" => Some(Self::NodeDrawer),
             "logs-dock" => Some(Self::LogsDock),
             "logs-zoomed" => Some(Self::LogsZoomed),
-            _ => None,
+            _ => match text.strip_suffix("-drawer") {
+                Some(plural) => ResourceKind::from_plural(plural).map(Self::KindDrawer),
+                None => ResourceKind::from_plural(text).map(Self::Kind),
+            },
         }
     }
 }
