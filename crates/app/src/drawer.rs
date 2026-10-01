@@ -1,16 +1,23 @@
 use std::rc::Rc;
 
+use cluster::EventSummary;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement as _, IntoElement,
+    AnyElement, App, ClickEvent, Context, Div, ElementId, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _,
     Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::age::format_age;
+use crate::app_shell::AppShell;
+use crate::cluster_session::LiveList;
+use crate::object_events::events_title;
+use crate::resource_kind::ResourceKind;
+use crate::table_selection::ResourceKey;
 
 pub(crate) const DRAWER_WIDTH: Pixels = px(420.);
 pub(crate) const DRAWER_EXPANDED_WIDTH: Pixels = px(640.);
@@ -21,9 +28,10 @@ const WIDE_LABEL_WIDTH: Pixels = px(136.);
 
 /// The drawer is open exactly while a row is selected, so this holds only what the user
 /// changes inside an open drawer. The tab and the expanded flag survive a change of
-/// subject; the selected container does not.
+/// subject on the same screen; `show_screen` resets the tab to Overview. The selected container
+/// does not survive a change of subject.
 pub(crate) struct DrawerState {
-    pub(crate) tab: PodDrawerTab,
+    pub(crate) tab: DrawerTab,
     pub(crate) is_expanded: bool,
     pub(crate) selected_container: Option<String>,
 }
@@ -31,7 +39,7 @@ pub(crate) struct DrawerState {
 impl DrawerState {
     pub(crate) fn new() -> Self {
         Self {
-            tab: PodDrawerTab::Overview,
+            tab: DrawerTab::Overview,
             is_expanded: false,
             selected_container: None,
         }
@@ -46,11 +54,92 @@ impl DrawerState {
     }
 }
 
+/// Step 3 of spec 0007 adds `Yaml` between `Containers` and `Events`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PodDrawerTab {
+pub(crate) enum DrawerTab {
     Overview,
     Containers,
     Events,
+}
+
+/// The tabs a drawer shows, in wireframe order. An event's own drawer has no events of its own.
+pub(crate) fn drawer_tabs(key: &ResourceKey) -> &'static [DrawerTab] {
+    match key {
+        ResourceKey::Pod { .. } => &[
+            DrawerTab::Overview,
+            DrawerTab::Containers,
+            DrawerTab::Events,
+        ],
+        ResourceKey::Kind {
+            kind: ResourceKind::Events,
+            ..
+        } => &[DrawerTab::Overview],
+        ResourceKey::Node { .. } | ResourceKey::Kind { .. } => {
+            &[DrawerTab::Overview, DrawerTab::Events]
+        }
+    }
+}
+
+/// `tab` when the drawer has it, else `Overview`.
+pub(crate) fn shown_tab(tabs: &[DrawerTab], tab: DrawerTab) -> DrawerTab {
+    if tabs.contains(&tab) {
+        tab
+    } else {
+        DrawerTab::Overview
+    }
+}
+
+/// The label of each tab. `containers` is the pod's container count, which only a pod drawer
+/// has a Containers tab for.
+pub(crate) fn tab_titles(
+    tabs: &[DrawerTab],
+    containers: usize,
+    events: Option<&LiveList<EventSummary>>,
+) -> Vec<(DrawerTab, SharedString)> {
+    tabs.iter()
+        .map(|&tab| {
+            let title = match tab {
+                DrawerTab::Overview => "Overview".to_owned(),
+                DrawerTab::Containers => format!("Containers {containers}"),
+                DrawerTab::Events => events_title(events),
+            };
+            (tab, title.into())
+        })
+        .collect()
+}
+
+/// The underline tab bar shared by every drawer; `None` when there is only one tab. A click
+/// calls `AppShell::set_drawer_tab`.
+pub(crate) fn drawer_tab_bar(
+    tabs: Vec<(DrawerTab, SharedString)>,
+    shown: DrawerTab,
+    cx: &Context<AppShell>,
+) -> Option<AnyElement> {
+    if tabs.len() < 2 {
+        return None;
+    }
+    let selected_index = tabs.iter().position(|(tab, _)| *tab == shown).unwrap_or(0);
+    let order: Vec<DrawerTab> = tabs.iter().map(|(tab, _)| *tab).collect();
+    let bar = TabBar::new("drawer-tabs")
+        .underline()
+        .selected_index(selected_index)
+        .on_click(cx.listener(move |shell, index: &usize, _, cx| {
+            if let Some(&tab) = order.get(*index) {
+                shell.set_drawer_tab(tab, cx);
+            }
+        }))
+        // Same horizontal padding as the drawer header.
+        .prefix(div().w_4())
+        .children(tabs.into_iter().map(|(_, title)| Tab::new().label(title)));
+    Some(bar.into_any_element())
+}
+
+/// The ⤢/⤡ button of every drawer.
+pub(crate) fn expand_toggle(state: &DrawerState, cx: &Context<AppShell>) -> ExpandToggle {
+    ExpandToggle {
+        is_expanded: state.is_expanded,
+        on_click: Rc::new(cx.listener(|shell, _, _, cx| shell.toggle_drawer_expanded(cx))),
+    }
 }
 
 pub(crate) type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -67,8 +156,7 @@ pub(crate) struct DrawerHeader {
     pub(crate) subtitle: AnyElement,
     /// The ⋯ button with its dropdown menu.
     pub(crate) menu: AnyElement,
-    /// `None` for drawers that have only one column.
-    pub(crate) expand: Option<ExpandToggle>,
+    pub(crate) expand: ExpandToggle,
     pub(crate) on_close: ClickHandler,
 }
 
@@ -111,6 +199,12 @@ pub(crate) fn drawer_frame(
 fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     let on_close = header.on_close;
+    let on_expand = header.expand.on_click;
+    let expand_icon = if header.expand.is_expanded {
+        IconName::Minimize2
+    } else {
+        IconName::Maximize2
+    };
     v_flex()
         .flex_shrink_0()
         .gap_1()
@@ -140,21 +234,13 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                         .font_family(theme.mono_font_family.clone()),
                 )
                 .child(header.menu)
-                .when_some(header.expand, |this, expand| {
-                    let icon = if expand.is_expanded {
-                        IconName::Minimize2
-                    } else {
-                        IconName::Maximize2
-                    };
-                    let on_click = expand.on_click;
-                    this.child(
-                        Button::new("drawer-expand")
-                            .ghost()
-                            .small()
-                            .icon(Icon::new(icon))
-                            .on_click(move |event, window, cx| on_click(event, window, cx)),
-                    )
-                })
+                .child(
+                    Button::new("drawer-expand")
+                        .ghost()
+                        .small()
+                        .icon(Icon::new(expand_icon))
+                        .on_click(move |event, window, cx| on_expand(event, window, cx)),
+                )
                 .child(
                     Button::new("drawer-close")
                         .ghost()
@@ -274,6 +360,64 @@ mod tests {
             Some("created 2h ago")
         );
         assert_eq!(created_text(None, now), None);
+    }
+
+    #[test]
+    fn drawer_tabs_follow_the_wireframe_order() {
+        let pod = ResourceKey::Pod {
+            namespace: "shop".to_owned(),
+            name: "api-0".to_owned(),
+        };
+        let node = ResourceKey::Node {
+            name: "node-1".to_owned(),
+        };
+        let kind = |kind| ResourceKey::Kind {
+            kind,
+            namespace: Some("shop".to_owned()),
+            name: "x".to_owned(),
+        };
+        assert_eq!(
+            drawer_tabs(&pod),
+            [
+                DrawerTab::Overview,
+                DrawerTab::Containers,
+                DrawerTab::Events
+            ]
+        );
+        assert_eq!(drawer_tabs(&node), [DrawerTab::Overview, DrawerTab::Events]);
+        assert_eq!(
+            drawer_tabs(&kind(ResourceKind::Deployments)),
+            [DrawerTab::Overview, DrawerTab::Events]
+        );
+        assert_eq!(
+            drawer_tabs(&kind(ResourceKind::Events)),
+            [DrawerTab::Overview]
+        );
+    }
+
+    #[test]
+    fn shown_tab_falls_back_to_overview() {
+        let tabs = [DrawerTab::Overview, DrawerTab::Events];
+        assert_eq!(shown_tab(&tabs, DrawerTab::Events), DrawerTab::Events);
+        assert_eq!(shown_tab(&tabs, DrawerTab::Containers), DrawerTab::Overview);
+        assert_eq!(
+            shown_tab(&[DrawerTab::Overview], DrawerTab::Events),
+            DrawerTab::Overview
+        );
+    }
+
+    #[test]
+    fn tab_titles_count_containers_and_events() {
+        let tabs = [
+            DrawerTab::Overview,
+            DrawerTab::Containers,
+            DrawerTab::Events,
+        ];
+        let titles: Vec<String> = tab_titles(&tabs, 3, None)
+            .into_iter()
+            .map(|(_, title)| title.to_string())
+            .collect();
+        assert_eq!(titles, ["Overview", "Containers 3", "Events"]);
     }
 
     #[test]

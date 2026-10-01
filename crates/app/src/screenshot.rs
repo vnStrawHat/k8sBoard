@@ -182,6 +182,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::drawer::DrawerTab;
     use crate::resource_kind::ResourceKind;
 
     fn container(name: &str) -> ContainerSummary {
@@ -226,7 +227,10 @@ mod tests {
 
     #[test]
     fn settled_when_session_failed() {
-        for screen in [LaunchScreen::Pods, LaunchScreen::PodContainers] {
+        for screen in [
+            LaunchScreen::Pods,
+            LaunchScreen::PodDrawer(DrawerTab::Containers),
+        ] {
             assert!(is_screen_settled(
                 screen,
                 &input(TargetState::Unavailable, false)
@@ -248,7 +252,7 @@ mod tests {
 
     #[test]
     fn kind_drawer_screen_needs_selection() {
-        let screen = LaunchScreen::KindDrawer(ResourceKind::Namespaces);
+        let screen = LaunchScreen::KindDrawer(ResourceKind::Namespaces, DrawerTab::Overview);
         assert!(!is_screen_settled(
             screen,
             &input(TargetState::Loaded, false)
@@ -268,10 +272,13 @@ mod tests {
     #[test]
     fn drawer_screen_needs_selection_to_settle() {
         for screen in [
-            LaunchScreen::PodDrawer,
-            LaunchScreen::PodContainers,
-            LaunchScreen::NodeDrawer,
-            LaunchScreen::KindDrawer(ResourceKind::Deployments),
+            LaunchScreen::PodDrawer(DrawerTab::Overview),
+            LaunchScreen::PodDrawer(DrawerTab::Containers),
+            LaunchScreen::PodDrawer(DrawerTab::Events),
+            LaunchScreen::NodeDrawer(DrawerTab::Overview),
+            LaunchScreen::NodeDrawer(DrawerTab::Events),
+            LaunchScreen::KindDrawer(ResourceKind::Deployments, DrawerTab::Overview),
+            LaunchScreen::KindDrawer(ResourceKind::Deployments, DrawerTab::Events),
         ] {
             assert!(!is_screen_settled(
                 screen,

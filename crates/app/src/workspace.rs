@@ -291,7 +291,7 @@ impl AppShell {
             }
             ResourceKey::Node { .. } => {
                 let node = live.nodes.items().iter().find(|node| key.is_node(node))?;
-                Some(node_drawer(node, session, cx))
+                Some(node_drawer(node, &self.drawer, session, cx))
             }
             ResourceKey::Kind { kind, .. } => {
                 let row = live
@@ -300,7 +300,7 @@ impl AppShell {
                     .items()
                     .iter()
                     .find(|row| key.is_row(*kind, row))?;
-                Some(kind_drawer(*kind, row, live, session, cx))
+                Some(kind_drawer(*kind, row, &self.drawer, live, session, cx))
             }
         }
     }

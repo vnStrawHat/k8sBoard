@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use cluster::{EventSummary, NodeSummary};
+use cluster::NodeSummary;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
@@ -9,18 +9,20 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
-use crate::cluster_session::{ClusterSession, LiveList};
+use crate::cluster_session::ClusterSession;
 use crate::drawer::{
-    DRAWER_WIDTH, DrawerHeader, absent_text, created_text, detail_row, drawer_frame, menu_button,
-    truncated_text, value_or_absent,
+    DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row, drawer_frame,
+    drawer_tab_bar, drawer_tabs, expand_toggle, menu_button, shown_tab, tab_titles, truncated_text,
+    value_or_absent,
 };
-use crate::object_events::{event_subject, events_section};
+use crate::object_events::{event_subject, recent_events};
 use crate::resource_actions::node_menu;
 use crate::status_tone::{node_status_label, toned_text};
 use crate::table_selection::ResourceKey;
 
 pub(crate) fn node_drawer(
     node: &NodeSummary,
+    state: &DrawerState,
     session: &Entity<ClusterSession>,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -30,13 +32,20 @@ pub(crate) fn node_drawer(
         name: node.name.clone().into(),
         subtitle: subtitle(node, now, cx),
         menu: node_menu_button(node, session),
-        // One column is enough for a node, so there is nothing to expand.
-        expand: None,
+        expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
-    let events = event_subject(&ResourceKey::of_node(node))
-        .and_then(|subject| session.read(cx).live()?.events_of(&subject));
-    drawer_frame(header, None, body(node, events, now, cx), DRAWER_WIDTH, cx).into_any_element()
+    let key = ResourceKey::of_node(node);
+    let events =
+        event_subject(&key).and_then(|subject| session.read(cx).live()?.events_of(&subject));
+    let tabs = drawer_tabs(&key);
+    let shown = shown_tab(tabs, state.tab);
+    let body = match shown {
+        DrawerTab::Events => recent_events(events, cx),
+        DrawerTab::Overview | DrawerTab::Containers => overview(node, now, cx),
+    };
+    let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
+    drawer_frame(header, tab_bar, body, state.width(), cx).into_any_element()
 }
 
 fn subtitle(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
@@ -69,12 +78,7 @@ fn node_menu_button(node: &NodeSummary, session: &Entity<ClusterSession>) -> Any
         .into_any_element()
 }
 
-fn body(
-    node: &NodeSummary,
-    events: Option<&LiveList<EventSummary>>,
-    now: jiff::Timestamp,
-    cx: &App,
-) -> AnyElement {
+fn overview(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
     let mono = cx.theme().mono_font_family.clone();
     let taints = if node.taints.is_empty() {
         absent_text(cx).into_any_element()
@@ -130,6 +134,5 @@ fn body(
             value_or_absent(created.as_deref(), cx),
             cx,
         ))
-        .child(events_section(events, cx))
         .into_any_element()
 }

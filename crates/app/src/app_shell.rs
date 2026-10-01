@@ -16,7 +16,7 @@ use gpui_kit::{
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
 use crate::cluster_session::{ClusterSession, LiveCluster, error_text};
-use crate::drawer::{DrawerState, PodDrawerTab};
+use crate::drawer::{DrawerState, DrawerTab};
 use crate::kind_table::KindTableDelegate;
 use crate::launch_options::{
     LaunchOptions, LaunchScreen, has_ignored_kubeconfig_entries, kubeconfig_path,
@@ -149,12 +149,9 @@ impl AppShell {
         ];
 
         let mut drawer = DrawerState::new();
-        if options.screen == LaunchScreen::PodContainers {
-            drawer.tab = PodDrawerTab::Containers;
-            drawer.is_expanded = true;
-        } else if options.screen == LaunchScreen::PodEvents {
-            drawer.tab = PodDrawerTab::Events;
-        }
+        drawer.tab = options.screen.drawer_tab().unwrap_or(DrawerTab::Overview);
+        // W4b shows the Containers tab expanded.
+        drawer.is_expanded = options.screen == LaunchScreen::PodDrawer(DrawerTab::Containers);
         Self {
             kubeconfig,
             context_error: None,
@@ -308,6 +305,7 @@ impl AppShell {
     /// a kind switch, and is dropped when leaving to Pods or Nodes.
     pub(crate) fn show_screen(&mut self, screen: Screen, cx: &mut Context<Self>) {
         self.screen = screen;
+        self.drawer.tab = DrawerTab::Overview;
         if let Some(session) = &self.session {
             session.update(cx, |session, cx| {
                 session.set_explorer_kind(screen.kind(), cx)
@@ -360,7 +358,7 @@ impl AppShell {
         cx.notify();
     }
 
-    pub(crate) fn set_drawer_tab(&mut self, tab: PodDrawerTab, cx: &mut Context<Self>) {
+    pub(crate) fn set_drawer_tab(&mut self, tab: DrawerTab, cx: &mut Context<Self>) {
         self.drawer.tab = tab;
         cx.notify();
     }
@@ -377,7 +375,7 @@ impl AppShell {
 
     /// A container row of the Overview tab opens the Containers tab on that container.
     pub(crate) fn open_container(&mut self, name: String, cx: &mut Context<Self>) {
-        self.drawer.tab = PodDrawerTab::Containers;
+        self.drawer.tab = DrawerTab::Containers;
         self.select_container(name, cx);
     }
 
@@ -596,11 +594,11 @@ impl AppShell {
             return;
         };
         let (is_loading, row) = match launch {
-            LaunchScreen::NodeDrawer => (
+            LaunchScreen::NodeDrawer(_) => (
                 live.nodes.is_loading(),
                 (!live.nodes.items().is_empty()).then_some(0),
             ),
-            LaunchScreen::KindDrawer(kind) => {
+            LaunchScreen::KindDrawer(kind, _) => {
                 let explorer = live.kind_list(kind);
                 (
                     explorer.is_none_or(|explorer| explorer.list.is_loading()),
@@ -619,7 +617,7 @@ impl AppShell {
             return;
         };
         match launch {
-            LaunchScreen::NodeDrawer => {
+            LaunchScreen::NodeDrawer(_) => {
                 let key = self
                     .live(cx)
                     .and_then(|live| live.nodes.items().get(row))
@@ -628,7 +626,7 @@ impl AppShell {
                 self.node_table
                     .update(cx, |table, cx| table.set_selected_row(row, cx));
             }
-            LaunchScreen::KindDrawer(kind) => {
+            LaunchScreen::KindDrawer(kind, _) => {
                 let key = self
                     .live(cx)
                     .and_then(|live| live.kind_list(kind)?.list.items().get(row))

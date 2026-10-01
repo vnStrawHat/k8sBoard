@@ -11,7 +11,6 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::cluster_session::LiveList;
-use crate::drawer::section_title;
 use crate::event_rows::event_tone;
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::toned_text;
@@ -89,14 +88,6 @@ fn event_note(list: Option<&LiveList<EventSummary>>) -> Option<&'static str> {
         Some(LiveList::Ready { items, .. }) if items.is_empty() => Some("No recent events"),
         Some(LiveList::Ready { .. }) => None,
     }
-}
-
-/// A section title and the events under it, for drawers that show events inline.
-pub(crate) fn events_section(list: Option<&LiveList<EventSummary>>, cx: &App) -> AnyElement {
-    v_flex()
-        .child(section_title(events_title(list), cx))
-        .child(recent_events(list, cx))
-        .into_any_element()
 }
 
 /// The note, or at most `MAX_EVENT_ROWS` rows (already newest first). It has no title, so a

@@ -22,8 +22,8 @@ div().absolute().top_0().right_0().bottom_0().w(width)
 - No action buttons in the body. Actions live only in the header ⋯ menu and the row context menu ([actions.md](actions.md)).
 
 ```rust
-pub(crate) struct DrawerState { tab: PodDrawerTab, is_expanded: bool, selected_container: Option<String> }
-pub(crate) enum PodDrawerTab { Overview, Containers }
+pub(crate) struct DrawerState { tab: DrawerTab, is_expanded: bool, selected_container: Option<String> }
+pub(crate) enum DrawerTab { Overview, Containers, Events } // spec 0007 replaces `PodDrawerTab`; every drawer has a tab bar
 /// Shared frame: header, subtitle, optional tab bar, scrollable body.
 pub(crate) fn drawer_frame(header: DrawerHeader, tabs: Option<AnyElement>, body: AnyElement,
     width: Pixels, cx: &App) -> impl IntoElement;

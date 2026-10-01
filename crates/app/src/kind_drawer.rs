@@ -18,13 +18,14 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::drawer::{
-    DRAWER_WIDTH, DrawerHeader, absent_text, created_text, drawer_frame, menu_button,
-    section_title, truncated_text, wide_detail_row,
+    DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, drawer_frame, drawer_tab_bar,
+    drawer_tabs, expand_toggle, menu_button, section_title, shown_tab, tab_titles, truncated_text,
+    wide_detail_row,
 };
 use crate::kind_row::{
     DAEMON_SET_KIND, DetailRow, KindCell, KindRow, PodOwner, STATEFUL_SET_KIND, owns_pod,
 };
-use crate::object_events::{event_subject, events_section};
+use crate::object_events::{event_subject, recent_events};
 use crate::resource_actions::{kind_menu, port_forward_reason};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{pod_status_label, tone_color, toned_text};
@@ -37,6 +38,7 @@ const MAX_RELATED_PODS: usize = 50;
 pub(crate) fn kind_drawer(
     kind: ResourceKind,
     row: &KindRow,
+    state: &DrawerState,
     live: &LiveCluster,
     session: &Entity<ClusterSession>,
     cx: &Context<AppShell>,
@@ -47,18 +49,19 @@ pub(crate) fn kind_drawer(
         name: header_name(row),
         subtitle: subtitle(row, now, cx),
         menu: kind_menu_button(kind, row, session, cx.weak_entity()),
-        // Only the Overview exists, so there is nothing to expand.
-        expand: None,
+        expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
-    drawer_frame(
-        header,
-        None,
-        body(kind, row, live, now, cx),
-        DRAWER_WIDTH,
-        cx,
-    )
-    .into_any_element()
+    let key = ResourceKey::of_row(kind, row);
+    let events = event_subject(&key).and_then(|subject| live.events_of(&subject));
+    let tabs = drawer_tabs(&key);
+    let shown = shown_tab(tabs, state.tab);
+    let body = match shown {
+        DrawerTab::Events => recent_events(events, cx),
+        DrawerTab::Overview | DrawerTab::Containers => overview(kind, row, live, now, cx),
+    };
+    let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
+    drawer_frame(header, tab_bar, body, state.width(), cx).into_any_element()
 }
 
 /// The event title for events, else the object name.
@@ -128,7 +131,7 @@ fn kind_menu_button(
 }
 
 /// The row's sections in order, then the related pods, then the labels.
-fn body(
+fn overview(
     kind: ResourceKind,
     row: &KindRow,
     live: &LiveCluster,
@@ -151,9 +154,6 @@ fn body(
     }
     if let Some(owner) = &row.related_pods {
         column = column.child(pods_section(owner, live, cx));
-    }
-    if let Some(subject) = event_subject(&ResourceKey::of_row(kind, row)) {
-        column = column.child(events_section(live.events_of(&subject), cx));
     }
     if kind.has_labels() {
         column = column

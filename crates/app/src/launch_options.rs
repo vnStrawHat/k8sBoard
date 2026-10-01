@@ -2,6 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 use crate::app_shell::Screen;
+use crate::drawer::DrawerTab;
 use crate::resource_kind::ResourceKind;
 
 pub(crate) const USAGE: &str = "\
@@ -12,9 +13,9 @@ Options:
   --context <name>       context to open (default: the kubeconfig current-context)
   --namespace <name>     namespace to show (default: all namespaces if allowed)
   --theme light|dark     colour theme (default: follow the system)
-  --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|logs-dock|logs-zoomed|
+  --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|node-events|logs-dock|logs-zoomed|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
-           services|ingresses|configmaps|<kind>-drawer
+           services|ingresses|configmaps|<kind>-drawer|<kind>-events
                          screen to open (default: pods)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
@@ -26,31 +27,25 @@ Options:
 pub(crate) enum LaunchScreen {
     Pods,
     Nodes,
-    PodDrawer,
-    PodContainers,
-    /// `--screen pod-events`: a pod drawer on its Events tab.
-    PodEvents,
-    NodeDrawer,
+    /// `--screen pod-drawer|pod-containers|pod-events`: a pod drawer on that tab.
+    PodDrawer(DrawerTab),
+    /// `--screen node-drawer|node-events`.
+    NodeDrawer(DrawerTab),
     LogsDock,
     LogsZoomed,
     /// `--screen <plural>`, e.g. `deployments`.
     Kind(ResourceKind),
-    /// `--screen <plural>-drawer`: the kind's first row selected.
-    KindDrawer(ResourceKind),
+    /// `--screen <plural>-drawer|<plural>-events`: the kind's first row selected, on that tab.
+    KindDrawer(ResourceKind, DrawerTab),
 }
 
 impl LaunchScreen {
     /// The list screen this request opens on.
     pub(crate) fn screen(self) -> Screen {
         match self {
-            Self::Pods
-            | Self::PodDrawer
-            | Self::PodContainers
-            | Self::PodEvents
-            | Self::LogsDock
-            | Self::LogsZoomed => Screen::Pods,
-            Self::Nodes | Self::NodeDrawer => Screen::Nodes,
-            Self::Kind(kind) | Self::KindDrawer(kind) => Screen::Kind(kind),
+            Self::Pods | Self::PodDrawer(_) | Self::LogsDock | Self::LogsZoomed => Screen::Pods,
+            Self::Nodes | Self::NodeDrawer(_) => Screen::Nodes,
+            Self::Kind(kind) | Self::KindDrawer(kind, _) => Screen::Kind(kind),
         }
     }
 
@@ -58,12 +53,16 @@ impl LaunchScreen {
     pub(crate) fn has_drawer(self) -> bool {
         matches!(
             self,
-            Self::PodDrawer
-                | Self::PodContainers
-                | Self::PodEvents
-                | Self::NodeDrawer
-                | Self::KindDrawer(_)
+            Self::PodDrawer(_) | Self::NodeDrawer(_) | Self::KindDrawer(..)
         )
+    }
+
+    /// The drawer tab this request opens on; `None` for screens without a drawer.
+    pub(crate) fn drawer_tab(self) -> Option<DrawerTab> {
+        match self {
+            Self::PodDrawer(tab) | Self::NodeDrawer(tab) | Self::KindDrawer(_, tab) => Some(tab),
+            _ => None,
+        }
     }
 
     /// Whether the log dock must be open on a pod.
@@ -75,16 +74,24 @@ impl LaunchScreen {
         match text {
             "pods" => Some(Self::Pods),
             "nodes" => Some(Self::Nodes),
-            "pod-drawer" => Some(Self::PodDrawer),
-            "pod-containers" => Some(Self::PodContainers),
-            "pod-events" => Some(Self::PodEvents),
-            "node-drawer" => Some(Self::NodeDrawer),
+            "pod-drawer" => Some(Self::PodDrawer(DrawerTab::Overview)),
+            "pod-containers" => Some(Self::PodDrawer(DrawerTab::Containers)),
+            "pod-events" => Some(Self::PodDrawer(DrawerTab::Events)),
+            "node-drawer" => Some(Self::NodeDrawer(DrawerTab::Overview)),
+            "node-events" => Some(Self::NodeDrawer(DrawerTab::Events)),
             "logs-dock" => Some(Self::LogsDock),
             "logs-zoomed" => Some(Self::LogsZoomed),
-            _ => match text.strip_suffix("-drawer") {
-                Some(plural) => ResourceKind::from_plural(plural).map(Self::KindDrawer),
-                None => ResourceKind::from_plural(text).map(Self::Kind),
-            },
+            _ => {
+                if let Some(plural) = text.strip_suffix("-drawer") {
+                    let kind = ResourceKind::from_plural(plural)?;
+                    return Some(Self::KindDrawer(kind, DrawerTab::Overview));
+                }
+                if let Some(plural) = text.strip_suffix("-events") {
+                    let kind = ResourceKind::from_plural(plural)?;
+                    return Some(Self::KindDrawer(kind, DrawerTab::Events));
+                }
+                ResourceKind::from_plural(text).map(Self::Kind)
+            }
         }
     }
 }

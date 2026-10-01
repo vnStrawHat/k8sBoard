@@ -4,7 +4,6 @@ use cluster::{
     ContainerKind, ContainerState, ContainerSummary, EventSummary, PodSummary, Termination,
 };
 use gpui_kit::component::menu::DropdownMenu as _;
-use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -16,11 +15,12 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{ClusterSession, LiveList};
 use crate::drawer::{
-    DrawerHeader, DrawerState, ExpandToggle, PodDrawerTab, absent_text, created_text, detail_row,
-    drawer_frame, menu_button, section_title, truncated_text, value_or_absent,
+    DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row, drawer_frame,
+    drawer_tab_bar, drawer_tabs, expand_toggle, menu_button, section_title, shown_tab, tab_titles,
+    truncated_text, value_or_absent,
 };
 use crate::log_dock::LogDock;
-use crate::object_events::{event_subject, events_title, recent_events};
+use crate::object_events::{event_subject, recent_events};
 use crate::resource_actions::pod_menu;
 use crate::status_tone::{
     StatusLabel, container_state_label, pod_status_label, tone_color, toned_text,
@@ -42,20 +42,20 @@ pub(crate) fn pod_drawer(
         name: pod.name.clone().into(),
         subtitle: subtitle(pod, now, cx),
         menu: pod_menu_button(pod, session, dock),
-        expand: Some(ExpandToggle {
-            is_expanded: state.is_expanded,
-            on_click: Rc::new(cx.listener(|shell, _, _, cx| shell.toggle_drawer_expanded(cx))),
-        }),
+        expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
     let events = pod_events(pod, session, cx);
-    let body = match state.tab {
-        PodDrawerTab::Overview => overview(pod, cx),
-        PodDrawerTab::Containers => containers_tab(pod, state, now, cx),
-        PodDrawerTab::Events => recent_events(events, cx),
+    let tabs = drawer_tabs(&ResourceKey::of_pod(pod));
+    let shown = shown_tab(tabs, state.tab);
+    let body = match shown {
+        DrawerTab::Overview => overview(pod, cx),
+        DrawerTab::Containers => containers_tab(pod, state, now, cx),
+        DrawerTab::Events => recent_events(events, cx),
     };
-    let tabs = tab_bar(pod, state, events, cx);
-    drawer_frame(header, Some(tabs), body, state.width(), cx).into_any_element()
+    let titles = tab_titles(tabs, pod.containers.len(), events);
+    let tab_bar = drawer_tab_bar(titles, shown, cx);
+    drawer_frame(header, tab_bar, body, state.width(), cx).into_any_element()
 }
 
 fn subtitle(pod: &PodSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
@@ -108,36 +108,6 @@ fn pod_events<'a>(
 ) -> Option<&'a LiveList<EventSummary>> {
     let subject = event_subject(&ResourceKey::of_pod(pod))?;
     session.read(cx).live()?.events_of(&subject)
-}
-
-fn tab_bar(
-    pod: &PodSummary,
-    state: &DrawerState,
-    events: Option<&LiveList<EventSummary>>,
-    cx: &Context<AppShell>,
-) -> AnyElement {
-    let selected_index = match state.tab {
-        PodDrawerTab::Overview => 0,
-        PodDrawerTab::Containers => 1,
-        PodDrawerTab::Events => 2,
-    };
-    TabBar::new("pod-drawer-tabs")
-        .underline()
-        .selected_index(selected_index)
-        .on_click(cx.listener(|shell, index: &usize, _, cx| {
-            let tab = match index {
-                0 => PodDrawerTab::Overview,
-                1 => PodDrawerTab::Containers,
-                _ => PodDrawerTab::Events,
-            };
-            shell.set_drawer_tab(tab, cx);
-        }))
-        // Same horizontal padding as the drawer header.
-        .prefix(div().w_4())
-        .child(Tab::new().label("Overview"))
-        .child(Tab::new().label(format!("Containers {}", pod.containers.len())))
-        .child(Tab::new().label(events_title(events)))
-        .into_any_element()
 }
 
 fn overview(pod: &PodSummary, cx: &Context<AppShell>) -> AnyElement {

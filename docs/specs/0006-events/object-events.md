@@ -95,8 +95,8 @@ pub(crate) fn recent_events(list: Option<&LiveList<EventSummary>>, cx: &App) -> 
 | Drawer | Where |
 |---|---|
 | Pod | third tab, `PodDrawerTab::Events`, label `events_title(list)`; the body is `recent_events`. The tab survives a subject change like the others |
-| Node | after Created: `section_title(events_title(list))`, then `recent_events` |
-| Kind | after Pods and before Labels, only when `event_subject(&key)` is `Some` |
+| Node | the Events tab (spec 0007 moved it from an Overview section): `recent_events` |
+| Kind | the Events tab, only when `event_subject(&key)` is `Some` (spec 0007) |
 
 `list` is `live.events_of(&subject)`; `None` (debounce or switch in progress) renders as Loading.
 
@@ -104,5 +104,5 @@ pub(crate) fn recent_events(list: Option<&LiveList<EventSummary>>, cx: &App) -> 
 
 ## Screenshots
 
-- `LaunchScreen::PodEvents` (`--screen pod-events`): Pods with a pod drawer on the Events tab, like `PodContainers` (`AppShell::new` sets `drawer.tab`). `has_drawer` is true. Update `USAGE`.
+- `LaunchScreen::PodEvents` (`--screen pod-events`): Pods with a pod drawer on the Events tab, (spec 0007 folds it into `LaunchScreen::PodDrawer(DrawerTab::Events)`; `AppShell::new` sets `drawer.tab`). `has_drawer` is true. Update `USAGE`.
 - Pure `pub(crate) fn is_drawer_ready(has_selection: bool, is_launch_pending: bool, is_object_events_pending: bool) -> bool` in `screenshot.rs` = `(has_selection || !is_launch_pending) && !is_object_events_pending`. `settle_input` passes `event_subject_task.is_some() || live.is_object_events_loading()`, so every drawer screen waits for the debounce and then its events.

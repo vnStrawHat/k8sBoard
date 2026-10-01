@@ -33,7 +33,7 @@
 | # | Decision | Rationale |
 |---|---|---|
 | 17 | Columns follow `kubectl get` (wide where useful). Wireframe-only columns that need more data are dropped ([kind-columns.md](kind-columns.md)) | familiar to DevOps; no extra watches |
-| 18 | Drawers are Overview only, with no tab bar and no expand toggle | Monitor, YAML, and Events are deferred; one column is enough |
+| 18 | Superseded by spec 0007: every drawer has a tab bar and the expand toggle | the 0006 Events and 0007 YAML tabs need them |
 | 19 | Related pods come from the existing pods watch, matched by the controller owner reference. For a Deployment, the owner is a ReplicaSet named `{deployment}-{hash}`. A click opens the pod on the Pods screen | no new watch; the pod-template hash never contains `-`, so the match is exact |
 | 20 | Each port row has a disabled **Forward** button whose tooltip is the port-forward gate reason | user decision; UAT denies `create pods/portforward` |
 | 21 | Sidebar items are disabled only for `Known` plus denied. `Checking` and `Unknown` stay enabled | does not block navigation during the review; the error state still explains a 403 |

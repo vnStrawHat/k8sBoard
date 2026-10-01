@@ -1,4 +1,5 @@
 use super::*;
+use crate::drawer::DrawerTab;
 use crate::resource_kind::ResourceKind;
 
 fn parse(args: &[&str]) -> Result<LaunchRequest, String> {
@@ -35,7 +36,7 @@ fn parses_all_flags() {
             context: Some("ctx".to_owned()),
             namespace: Some("team-a".to_owned()),
             theme: Some(ThemeChoice::Dark),
-            screen: LaunchScreen::PodContainers,
+            screen: LaunchScreen::PodDrawer(DrawerTab::Containers),
             screenshot: Some(PathBuf::from("out.png")),
         }
     );
@@ -143,7 +144,7 @@ fn kind_screens_parse_from_plural_slugs() {
         assert!(!list.has_drawer());
 
         let drawer = run_options(&["--screen", &format!("{}-drawer", kind.plural())]).screen;
-        assert_eq!(drawer, LaunchScreen::KindDrawer(kind));
+        assert_eq!(drawer, LaunchScreen::KindDrawer(kind, DrawerTab::Overview));
         assert_eq!(drawer.screen(), Screen::Kind(kind));
         assert!(drawer.has_drawer());
     }
@@ -151,10 +152,58 @@ fn kind_screens_parse_from_plural_slugs() {
 }
 
 #[test]
-fn pod_events_screen_opens_pods_with_drawer() {
-    let options = run_options(&["--screen", "pod-events"]);
-    assert_eq!(options.screen, LaunchScreen::PodEvents);
-    assert_eq!(options.screen.screen(), Screen::Pods);
-    assert!(options.screen.has_drawer());
-    assert!(!options.screen.has_log_dock());
+fn drawer_screens_parse_with_their_tab() {
+    let cases = [
+        (
+            "pod-drawer",
+            LaunchScreen::PodDrawer(DrawerTab::Overview),
+            Screen::Pods,
+        ),
+        (
+            "pod-containers",
+            LaunchScreen::PodDrawer(DrawerTab::Containers),
+            Screen::Pods,
+        ),
+        (
+            "pod-events",
+            LaunchScreen::PodDrawer(DrawerTab::Events),
+            Screen::Pods,
+        ),
+        (
+            "node-drawer",
+            LaunchScreen::NodeDrawer(DrawerTab::Overview),
+            Screen::Nodes,
+        ),
+        (
+            "node-events",
+            LaunchScreen::NodeDrawer(DrawerTab::Events),
+            Screen::Nodes,
+        ),
+        (
+            "deployments-events",
+            LaunchScreen::KindDrawer(ResourceKind::Deployments, DrawerTab::Events),
+            Screen::Kind(ResourceKind::Deployments),
+        ),
+    ];
+    for (name, expected, screen) in cases {
+        let launch = run_options(&["--screen", name]).screen;
+        assert_eq!(launch, expected, "{name}");
+        assert_eq!(launch.screen(), screen, "{name}");
+        assert!(launch.has_drawer(), "{name}");
+        assert!(!launch.has_log_dock(), "{name}");
+    }
+    assert_eq!(LaunchScreen::Pods.drawer_tab(), None);
+    assert_eq!(
+        LaunchScreen::NodeDrawer(DrawerTab::Events).drawer_tab(),
+        Some(DrawerTab::Events)
+    );
+}
+
+#[test]
+fn every_kind_has_an_events_screen() {
+    for kind in ResourceKind::ALL {
+        let launch = run_options(&["--screen", &format!("{}-events", kind.plural())]).screen;
+        assert_eq!(launch, LaunchScreen::KindDrawer(kind, DrawerTab::Events));
+    }
+    assert!(parse(&["--screen", "pods-events"]).is_err());
 }
