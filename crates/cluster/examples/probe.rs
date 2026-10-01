@@ -1,7 +1,8 @@
 //! Read-only probe of one cluster context. Prints domain summaries only: never
 //! credentials, and never `Debug` output of kube types. With `--watch-seconds` it runs
-//! the pods, nodes, namespaces, and nine workload, network, and config watches together
-//! and prints counts per kind; the access section is also the RBAC probe of the context.
+//! the pods, nodes, namespaces, nine workload, network, and config watches plus two
+//! events watches together, and prints counts per kind. The access section doubles as
+//! the RBAC probe of the context.
 //!
 //! ```text
 //! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>]
@@ -16,8 +17,9 @@ use std::time::Duration;
 
 use cluster::{
     AccessDecision, ClusterConnection, ClusterError, ContainerKind, ContainerState,
-    ContainerSummary, Kubeconfig, LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceScope,
-    NodeReadiness, NodeScheduling, PodStatus, PodSummary, StatusReason, Termination, WatchUpdate,
+    ContainerSummary, EventFilter, Kubeconfig, LogRequest, LogSource, LogUpdate, MetricsApi,
+    NamespaceScope, NodeReadiness, NodeScheduling, PodStatus, PodSummary, StatusReason,
+    Termination, WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
@@ -144,7 +146,7 @@ fn tally_source<T: Send + 'static>(
     (kind, tallies.boxed())
 }
 
-/// Runs all twelve watches together for `seconds` and prints one line per kind.
+/// Runs all fourteen watches together for `seconds` and prints one line per kind.
 async fn watch_for(
     probe: &mut Probe,
     connection: &ClusterConnection,
@@ -167,7 +169,15 @@ async fn watch_for(
         tally_source("cron jobs", connection.watch_cron_jobs(scope.clone())),
         tally_source("services", connection.watch_services(scope.clone())),
         tally_source("ingresses", connection.watch_ingresses(scope.clone())),
-        tally_source("config maps", connection.watch_config_maps(scope)),
+        tally_source("config maps", connection.watch_config_maps(scope.clone())),
+        tally_source(
+            "events",
+            connection.watch_events(scope.clone(), EventFilter::All),
+        ),
+        tally_source(
+            "warning events",
+            connection.watch_events(scope, EventFilter::WarningsOnly),
+        ),
     ];
     let mut stats: Vec<(&'static str, WatchStats)> = sources
         .iter()

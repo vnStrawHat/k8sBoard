@@ -27,6 +27,12 @@ pub enum WatchUpdate<T> {
     Failed(ClusterError),
 }
 
+/// Keeps a watch store to the `max_items` most recent summaries. `None` recency is oldest.
+pub(crate) struct StoreLimit<T> {
+    pub(crate) max_items: usize,
+    pub(crate) recency: fn(&T) -> Option<jiff::Timestamp>,
+}
+
 /// Watches `api` and streams batched snapshots of `summarize`d objects. Nothing happens
 /// until the stream is polled, and dropping it drops the HTTP watch.
 pub(crate) fn summary_watch<K, T>(
@@ -40,7 +46,37 @@ where
     T: Clone + PartialEq + Send + 'static,
 {
     let events = watcher::watcher(api, watcher::Config::default()).default_backoff();
-    batch_updates(events, connection.context().to_owned(), action, summarize)
+    batch_updates(
+        events,
+        connection.context().to_owned(),
+        action,
+        summarize,
+        None,
+    )
+}
+
+/// Like `summary_watch`, with a server-side `config` and a store that keeps only the
+/// `limit.max_items` most recent summaries.
+pub(crate) fn limited_summary_watch<K, T>(
+    connection: &ClusterConnection,
+    api: Api<K>,
+    config: watcher::Config,
+    action: &'static str,
+    summarize: fn(&K) -> T,
+    limit: StoreLimit<T>,
+) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
+where
+    K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
+    T: Clone + PartialEq + Send + 'static,
+{
+    let events = watcher::watcher(api, config).default_backoff();
+    batch_updates(
+        events,
+        connection.context().to_owned(),
+        action,
+        summarize,
+        Some(limit),
+    )
 }
 
 /// The testable core: any source of watcher events works, including fakes.
@@ -49,6 +85,7 @@ fn batch_updates<K, T, S>(
     context: String,
     action: &'static str,
     summarize: fn(&K) -> T,
+    limit: Option<StoreLimit<T>>,
 ) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
 where
     S: Stream<Item = Result<Event<K>, watcher::Error>> + Send + 'static,
@@ -60,7 +97,7 @@ where
         context,
         action,
         summarize,
-        store: SummaryStore::default(),
+        store: SummaryStore::new(limit),
         is_synced: false,
         is_dirty: false,
         is_recovering: false,
@@ -232,36 +269,50 @@ struct SummaryStore<T> {
     items: BTreeMap<ObjectKey, T>,
     /// The relist in progress. `items` stay visible until `finish_init`.
     pending_init: Option<BTreeMap<ObjectKey, T>>,
-}
-
-impl<T> Default for SummaryStore<T> {
-    fn default() -> Self {
-        Self {
-            items: BTreeMap::new(),
-            pending_init: None,
-        }
-    }
+    limit: Option<StoreLimit<T>>,
 }
 
 impl<T: Clone + PartialEq> SummaryStore<T> {
+    fn new(limit: Option<StoreLimit<T>>) -> Self {
+        Self {
+            items: BTreeMap::new(),
+            pending_init: None,
+            limit,
+        }
+    }
+
     fn begin_init(&mut self) {
         self.pending_init = Some(BTreeMap::new());
     }
 
     fn init_apply(&mut self, key: ObjectKey, summary: T) {
-        self.pending_init
-            .get_or_insert_with(BTreeMap::new)
-            .insert(key, summary);
+        let buffer = self.pending_init.get_or_insert_with(BTreeMap::new);
+        buffer.insert(key, summary);
+        // Trimming only at twice the limit keeps the relist cost amortized while the
+        // buffer stays bounded.
+        if let Some(limit) = &self.limit
+            && buffer.len() >= limit.max_items.saturating_mul(2)
+        {
+            trim(buffer, limit);
+        }
     }
 
     /// Swaps the relist in. Objects that vanished while disconnected are dropped.
     fn finish_init(&mut self) {
         self.items = self.pending_init.take().unwrap_or_default();
+        if let Some(limit) = &self.limit {
+            trim(&mut self.items, limit);
+        }
     }
 
-    /// Returns whether the object was absent or different.
+    /// Returns whether the object was absent or different. An object older than all the
+    /// retained ones is evicted at once, which is not a change.
     fn apply(&mut self, key: ObjectKey, summary: T) -> bool {
-        self.items.insert(key, summary.clone()).as_ref() != Some(&summary)
+        let previous = self.items.insert(key.clone(), summary);
+        if let Some(limit) = &self.limit {
+            trim(&mut self.items, limit);
+        }
+        previous.as_ref() != self.items.get(&key)
     }
 
     /// Returns whether the object was present.
@@ -271,6 +322,36 @@ impl<T: Clone + PartialEq> SummaryStore<T> {
 
     fn snapshot(&self) -> Vec<T> {
         self.items.values().cloned().collect()
+    }
+}
+
+/// Drops the oldest items beyond `max_items`. Ties fall to key order, so it is
+/// deterministic.
+// ponytail: a bulk trim sorts the whole map, O(n log n) at n = 2,000; a min-heap if a
+// profile shows it.
+fn trim<T>(map: &mut BTreeMap<ObjectKey, T>, limit: &StoreLimit<T>) {
+    let excess = map.len().saturating_sub(limit.max_items);
+    if excess == 0 {
+        return;
+    }
+    if excess == 1 {
+        // Steady state: one apply at the cap evicts one item, so skip the sort.
+        let oldest = map
+            .iter()
+            .min_by_key(|(key, item)| ((limit.recency)(item), *key))
+            .map(|(key, _)| key.clone());
+        if let Some(key) = oldest {
+            map.remove(&key);
+        }
+        return;
+    }
+    let mut ranked: Vec<_> = map
+        .iter()
+        .map(|(key, item)| ((limit.recency)(item), key.clone()))
+        .collect();
+    ranked.sort();
+    for (_, key) in ranked.into_iter().take(excess) {
+        map.remove(&key);
     }
 }
 

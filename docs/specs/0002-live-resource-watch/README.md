@@ -8,10 +8,7 @@ Give the app live, read-only data for pods, nodes, and namespaces, with one watc
 
 ## Non-goals
 
-- **Events (deferred).** There is no `watch_events`, no `EventSummary`, and no store cap. They return with the Events/Overview screen spec, which must add:
-  - a store size cap with oldest-first eviction;
-  - message truncation;
-  - a check for the `watch events` permission.
+- **Events (moved to [0006](../0006-events/README.md)).** `watch_events`, `EventSummary`, the store cap, and message truncation live there. 0006 decision 7 supersedes the `watch events` permission check: only `ListEvents` gates the sidebar item.
 - kube `reflector::Store` and shared reader handles. The store lives inside the stream, and the app keeps the last snapshot.
 - Diffs or incremental updates to the UI. Snapshots are the only output.
 - Watches for other kinds, label or field selectors, metric values, and logs.

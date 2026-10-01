@@ -3,7 +3,7 @@ use std::pin::pin;
 use futures::channel::mpsc::{self, UnboundedSender};
 use futures::stream;
 use k8s_openapi::api::core::v1::{Pod, PodSpec};
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
 use kube::core::Status;
 
 use super::*;
@@ -60,7 +60,7 @@ fn api_error(code: u16) -> kube::Error {
 fn watch_of(
     source: impl Stream<Item = FakeItem> + Send + 'static,
 ) -> impl Stream<Item = WatchUpdate<PodSummary>> {
-    batch_updates(source, "test".to_owned(), ACTION, pod_summary)
+    batch_updates(source, "test".to_owned(), ACTION, pod_summary, None)
 }
 
 fn channel() -> (FakeSender, mpsc::UnboundedReceiver<FakeItem>) {
@@ -106,7 +106,7 @@ fn names(update: &WatchUpdate<PodSummary>) -> Vec<String> {
 
 #[test]
 fn store_snapshot_is_ordered_by_namespace_then_name() {
-    let mut store = SummaryStore::default();
+    let mut store = SummaryStore::new(None);
     for (namespace, name) in [("b", "a"), ("a", "z"), ("a", "b")] {
         store.apply(key(namespace, name), pod_summary(&pod(namespace, name)));
     }
@@ -122,7 +122,7 @@ fn store_snapshot_is_ordered_by_namespace_then_name() {
 
 #[test]
 fn store_apply_of_equal_summary_reports_unchanged() {
-    let mut store = SummaryStore::default();
+    let mut store = SummaryStore::new(None);
     let summary = pod_summary(&pod("ns", "a"));
     assert!(store.apply(key("ns", "a"), summary.clone()));
     assert!(!store.apply(key("ns", "a"), summary));
@@ -131,7 +131,7 @@ fn store_apply_of_equal_summary_reports_unchanged() {
 
 #[test]
 fn store_delete_of_missing_key_reports_unchanged() {
-    let mut store = SummaryStore::default();
+    let mut store = SummaryStore::new(None);
     assert!(!store.delete(&key("ns", "a")));
     store.apply(key("ns", "a"), pod_summary(&pod("ns", "a")));
     assert!(store.delete(&key("ns", "a")));
@@ -139,7 +139,7 @@ fn store_delete_of_missing_key_reports_unchanged() {
 
 #[test]
 fn store_keeps_old_items_visible_during_init() {
-    let mut store = SummaryStore::default();
+    let mut store = SummaryStore::new(None);
     store.apply(key("ns", "old"), pod_summary(&pod("ns", "old")));
     store.begin_init();
     store.init_apply(key("ns", "new"), pod_summary(&pod("ns", "new")));
@@ -149,7 +149,7 @@ fn store_keeps_old_items_visible_during_init() {
 
 #[test]
 fn store_finish_init_replaces_items_and_drops_vanished() {
-    let mut store = SummaryStore::default();
+    let mut store = SummaryStore::new(None);
     store.apply(key("ns", "old"), pod_summary(&pod("ns", "old")));
     store.begin_init();
     store.init_apply(key("ns", "new"), pod_summary(&pod("ns", "new")));
@@ -388,4 +388,131 @@ fn watch_error_maps_watch_start_and_watch_failed() {
     assert!(matches!(start, Some(ClusterError::Forbidden { .. })));
     let stream = watch_error("test", ACTION, watcher::Error::WatchFailed(api_error(401)));
     assert!(matches!(stream, Some(ClusterError::Unauthorized { .. })));
+}
+
+// Store limit
+
+/// An item with an id and a last-seen time in seconds; `None` means unknown.
+type Stamped = (u32, Option<i64>);
+
+fn stamped_limit(max_items: usize) -> StoreLimit<Stamped> {
+    StoreLimit {
+        max_items,
+        recency: |(_, seconds)| {
+            seconds.and_then(|seconds| jiff::Timestamp::from_second(seconds).ok())
+        },
+    }
+}
+
+fn limited_store(max_items: usize) -> SummaryStore<Stamped> {
+    SummaryStore::new(Some(stamped_limit(max_items)))
+}
+
+fn stamped_key(id: u32) -> ObjectKey {
+    key("ns", &format!("item-{id:03}"))
+}
+
+fn apply_stamped(store: &mut SummaryStore<Stamped>, id: u32, seconds: Option<i64>) -> bool {
+    store.apply(stamped_key(id), (id, seconds))
+}
+
+fn kept_ids(store: &SummaryStore<Stamped>) -> Vec<u32> {
+    store.snapshot().into_iter().map(|(id, _)| id).collect()
+}
+
+#[test]
+fn store_limit_evicts_oldest_on_apply() {
+    let mut store = limited_store(3);
+    for (id, seconds) in [(1, 40), (2, 10), (3, 30), (4, 20)] {
+        apply_stamped(&mut store, id, Some(seconds));
+    }
+    assert_eq!(kept_ids(&store), [1, 3, 4]);
+}
+
+#[test]
+fn store_limit_unknown_recency_is_evicted_first() {
+    let mut store = limited_store(2);
+    apply_stamped(&mut store, 1, None);
+    apply_stamped(&mut store, 2, Some(1));
+    apply_stamped(&mut store, 3, Some(2));
+    assert_eq!(kept_ids(&store), [2, 3]);
+}
+
+#[test]
+fn store_limit_new_item_older_than_all_is_not_a_change() {
+    let mut store = limited_store(2);
+    apply_stamped(&mut store, 1, Some(10));
+    apply_stamped(&mut store, 2, Some(20));
+    assert!(!apply_stamped(&mut store, 3, Some(5)));
+    assert_eq!(kept_ids(&store), [1, 2]);
+}
+
+#[test]
+fn store_limit_ties_fall_to_key_order() {
+    let mut store = limited_store(2);
+    for id in [3, 1, 2] {
+        apply_stamped(&mut store, id, Some(10));
+    }
+    assert_eq!(kept_ids(&store), [2, 3]);
+}
+
+#[test]
+fn store_limit_keeps_newest_after_relist() {
+    let mut store = limited_store(3);
+    store.begin_init();
+    for (id, seconds) in [(1, 50), (2, 10), (3, 40), (4, 20), (5, 30)] {
+        store.init_apply(stamped_key(id), (id, Some(seconds)));
+    }
+    store.finish_init();
+    assert_eq!(kept_ids(&store), [1, 3, 5]);
+}
+
+#[test]
+fn store_limit_trims_relist_buffer_at_twice_the_limit() {
+    let mut store = limited_store(2);
+    store.begin_init();
+    let buffered = |store: &SummaryStore<Stamped>| store.pending_init.as_ref().map(BTreeMap::len);
+    for id in 1..=3 {
+        store.init_apply(stamped_key(id), (id, Some(i64::from(id))));
+    }
+    assert_eq!(buffered(&store), Some(3));
+    store.init_apply(stamped_key(4), (4, Some(4)));
+    assert_eq!(buffered(&store), Some(2));
+}
+
+#[tokio::test(start_paused = true)]
+async fn limited_watch_snapshot_holds_at_most_limit() {
+    let stamped = |name: &str, seconds: i64| {
+        let mut pod = pod("ns", name);
+        let created = jiff::Timestamp::from_second(seconds).expect("valid timestamp");
+        pod.metadata.creation_timestamp = Some(Time(created));
+        pod
+    };
+    let limit = StoreLimit {
+        max_items: 3,
+        recency: |pod: &PodSummary| pod.created_at,
+    };
+    let (sender, receiver) = channel();
+    send(
+        &sender,
+        initial_list(&[
+            stamped("a", 10),
+            stamped("b", 50),
+            stamped("c", 20),
+            stamped("d", 40),
+            stamped("e", 30),
+        ]),
+    );
+    send(&sender, [Ok(Event::Apply(stamped("f", 60)))]);
+    let source = receiver;
+    let mut stream = pin!(batch_updates(
+        source,
+        "test".to_owned(),
+        ACTION,
+        pod_summary,
+        Some(limit),
+    ));
+    let first = next_update(&mut stream).await.expect("a snapshot");
+    assert_eq!(names(&first), ["ns/b", "ns/d", "ns/f"]);
+    assert!(next_update(&mut stream).await.is_none());
 }
