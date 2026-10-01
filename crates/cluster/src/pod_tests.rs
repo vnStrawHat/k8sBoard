@@ -1,8 +1,8 @@
 use k8s_openapi::api::core::v1::{
     ContainerState as ApiContainerState, ContainerStateRunning, ContainerStateWaiting,
-    ContainerStatus, PodSpec, PodStatus as ApiPodStatus,
+    ContainerStatus, PodCondition as ApiPodCondition, PodSpec, PodStatus as ApiPodStatus,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference, Time};
 
 use super::*;
 
@@ -278,4 +278,105 @@ fn pod_summary_reads_namespace_name_node_and_creation_time() {
     assert_eq!(summary.ready, ReadyCount { ready: 0, total: 1 });
     assert_eq!(summary.restarts, 0);
     assert_eq!(summary.containers.len(), 1);
+}
+
+#[test]
+fn pod_summary_reads_ip_qos_service_account() {
+    let mut pod = pod_with_containers(Vec::new(), vec![container("main", None)]);
+    if let Some(spec) = pod.spec.as_mut() {
+        spec.service_account_name = Some("web".to_owned());
+    }
+    pod.status = Some(ApiPodStatus {
+        pod_ip: Some("10.1.2.3".to_owned()),
+        qos_class: Some("Burstable".to_owned()),
+        ..Default::default()
+    });
+    let summary = pod_summary(&pod);
+    assert_eq!(summary.pod_ip.as_deref(), Some("10.1.2.3"));
+    assert_eq!(summary.qos_class.as_deref(), Some("Burstable"));
+    assert_eq!(summary.service_account.as_deref(), Some("web"));
+
+    if let Some(spec) = pod.spec.as_mut() {
+        spec.service_account_name = Some(String::new());
+    }
+    pod.status = Some(ApiPodStatus {
+        pod_ip: Some(String::new()),
+        ..Default::default()
+    });
+    let summary = pod_summary(&pod);
+    assert_eq!(summary.pod_ip, None);
+    assert_eq!(summary.qos_class, None);
+    assert_eq!(summary.service_account, None);
+}
+
+#[test]
+fn pod_summary_controller_is_owner_with_controller_true() {
+    let owner = |kind: &str, name: &str, is_controller: Option<bool>| OwnerReference {
+        kind: kind.to_owned(),
+        name: name.to_owned(),
+        controller: is_controller,
+        ..Default::default()
+    };
+    let mut pod = pod_with_containers(Vec::new(), Vec::new());
+    pod.metadata.owner_references = Some(vec![
+        owner("Node", "node-1", None),
+        owner("ReplicaSet", "web-abc", Some(true)),
+        owner("Other", "x", Some(false)),
+    ]);
+    assert_eq!(
+        pod_summary(&pod).controller,
+        Some(PodController {
+            kind: "ReplicaSet".to_owned(),
+            name: "web-abc".to_owned(),
+        })
+    );
+
+    pod.metadata.owner_references = Some(vec![owner("Node", "node-1", Some(false))]);
+    assert_eq!(pod_summary(&pod).controller, None);
+}
+
+#[test]
+fn pod_summary_conditions_keep_api_order_and_truth() {
+    let condition = |name: &str, status: &str| ApiPodCondition {
+        type_: name.to_owned(),
+        status: status.to_owned(),
+        ..Default::default()
+    };
+    let mut pod = pod_with_containers(Vec::new(), Vec::new());
+    pod.status = Some(ApiPodStatus {
+        conditions: Some(vec![
+            condition("PodScheduled", "True"),
+            condition("Ready", "False"),
+            condition("ContainersReady", "Unknown"),
+        ]),
+        ..Default::default()
+    });
+    let listed: Vec<_> = pod_summary(&pod)
+        .conditions
+        .into_iter()
+        .map(|condition| (condition.name, condition.is_true))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("PodScheduled".to_owned(), true),
+            ("Ready".to_owned(), false),
+            ("ContainersReady".to_owned(), false),
+        ]
+    );
+}
+
+#[test]
+fn container_summary_reads_image() {
+    let with_image = Container {
+        name: "main".to_owned(),
+        image: Some("nginx:1.27".to_owned()),
+        ..Default::default()
+    };
+    let pod = pod_with_containers(Vec::new(), vec![with_image, container("bare", None)]);
+    let images: Vec<_> = summaries(&pod)
+        .into_iter()
+        .map(|summary| summary.image)
+        .collect();
+    assert_eq!(images, ["nginx:1.27", ""]);
 }

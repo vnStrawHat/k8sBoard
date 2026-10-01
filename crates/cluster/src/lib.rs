@@ -18,7 +18,8 @@ pub use metrics_api::MetricsApi;
 pub use namespace::{NamespacePhase, NamespaceScope, NamespaceSummary};
 pub use node::{NodeReadiness, NodeScheduling, NodeStatus, NodeSummary, NodeTaint};
 pub use pod::{
-    ContainerKind, ContainerState, ContainerSummary, PodSummary, ReadyCount, Termination,
+    ContainerKind, ContainerState, ContainerSummary, PodCondition, PodController, PodSummary,
+    ReadyCount, Termination,
 };
 pub use pod_status::{InitStatus, PodStatus, StatusReason};
 pub use resource_watch::WatchUpdate;

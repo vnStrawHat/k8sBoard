@@ -21,8 +21,32 @@ pub struct PodSummary {
     pub restarts: u32,
     pub node_name: Option<String>,
     pub created_at: Option<jiff::Timestamp>,
+    /// `status.podIP`; empty is `None`.
+    pub pod_ip: Option<String>,
+    /// `Guaranteed`, `Burstable`, or `BestEffort`. Display only, so it stays text.
+    pub qos_class: Option<String>,
+    /// `spec.serviceAccountName`; empty is `None`.
+    pub service_account: Option<String>,
+    /// The owner reference with `controller == true`.
+    pub controller: Option<PodController>,
+    /// `status.conditions` in API order.
+    pub conditions: Vec<PodCondition>,
     /// Init and sidecar containers in spec order, then main containers.
     pub containers: Vec<ContainerSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PodController {
+    pub kind: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PodCondition {
+    /// The condition type, for example `Ready`.
+    pub name: String,
+    /// `status == "True"`; `False` and `Unknown` are both `false`.
+    pub is_true: bool,
 }
 
 /// Ready containers over total (main plus sidecar), like kubectl's `READY` column.
@@ -41,6 +65,8 @@ impl fmt::Display for ReadyCount {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContainerSummary {
     pub name: String,
+    /// The image as written in the spec; digests are not resolved.
+    pub image: String,
     pub kind: ContainerKind,
     pub state: ContainerState,
     pub is_ready: bool,
@@ -116,8 +142,53 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
         restarts: display.restarts,
         node_name: pod.spec.as_ref().and_then(|spec| spec.node_name.clone()),
         created_at: pod.metadata.creation_timestamp.as_ref().map(|time| time.0),
+        pod_ip: non_empty(
+            pod.status
+                .as_ref()
+                .and_then(|status| status.pod_ip.as_deref()),
+        ),
+        qos_class: non_empty(
+            pod.status
+                .as_ref()
+                .and_then(|status| status.qos_class.as_deref()),
+        ),
+        service_account: non_empty(
+            pod.spec
+                .as_ref()
+                .and_then(|spec| spec.service_account_name.as_deref()),
+        ),
+        controller: pod_controller(pod),
+        conditions: pod
+            .status
+            .iter()
+            .flat_map(|status| status.conditions.iter().flatten())
+            .map(|condition| PodCondition {
+                name: condition.type_.clone(),
+                is_true: condition.status == "True",
+            })
+            .collect(),
         containers: container_summaries(pod),
     }
+}
+
+fn non_empty(text: Option<&str>) -> Option<String> {
+    text.filter(|text| !text.is_empty()).map(str::to_owned)
+}
+
+fn pod_controller(pod: &Pod) -> Option<PodController> {
+    pod.metadata
+        .owner_references
+        .iter()
+        .flatten()
+        .find(|owner| owner.controller == Some(true))
+        .map(|owner| PodController {
+            kind: owner.kind.clone(),
+            name: owner.name.clone(),
+        })
+}
+
+fn image(container: &Container) -> String {
+    container.image.clone().unwrap_or_default()
 }
 
 fn container_summaries(pod: &Pod) -> Vec<ContainerSummary> {
@@ -155,6 +226,7 @@ fn container_summary(
     let Some(status) = statuses.iter().find(|status| status.name == container.name) else {
         return ContainerSummary {
             name: container.name.clone(),
+            image: image(container),
             kind,
             state: ContainerState::NotReported,
             is_ready: false,
@@ -164,6 +236,7 @@ fn container_summary(
     };
     ContainerSummary {
         name: container.name.clone(),
+        image: image(container),
         kind,
         state: status
             .state
