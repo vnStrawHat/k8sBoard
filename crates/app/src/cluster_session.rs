@@ -440,6 +440,11 @@ impl LiveCluster {
         Some((explorer.kind, explorer.list.ready_count()?))
     }
 
+    /// Open watches: namespaces, pods, nodes, plus the explorer's when one is shown.
+    pub(crate) fn watch_count(&self) -> usize {
+        open_watch_count(self.explorer.as_ref().map(|explorer| &explorer.list))
+    }
+
     /// Whether any watch has failed or is interrupted, for the status bar.
     pub(crate) fn has_problem(&self) -> bool {
         any_list_has_problem(
@@ -514,6 +519,11 @@ impl LiveCluster {
             subscriptions,
         }
     }
+}
+
+/// Namespaces, pods and nodes are always watched; the explorer adds one more.
+fn open_watch_count(explorer: Option<&LiveList<KindRow>>) -> usize {
+    3 + usize::from(explorer.is_some())
 }
 
 /// The explorer list counts like the three always-on lists: its failure is a live-update problem.

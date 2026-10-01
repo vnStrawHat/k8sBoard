@@ -147,3 +147,9 @@ fn watch_state_still_reports_core_list_problems() {
         None
     ));
 }
+
+#[test]
+fn open_watch_count_includes_explorer_watch() {
+    assert_eq!(open_watch_count(None), 3);
+    assert_eq!(open_watch_count(Some(&ready_list())), 4);
+}

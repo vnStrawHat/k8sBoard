@@ -9,7 +9,7 @@ use crate::cluster_session::{ClusterSession, SessionPhase};
 enum WatchState {
     LoadingKubeconfig,
     Connecting,
-    Watching,
+    Watching(usize),
     Interrupted,
     Disconnected,
 }
@@ -29,7 +29,7 @@ fn watch_state(session: Option<&ClusterSession>, is_kubeconfig_loading: bool) ->
             if live.has_problem() {
                 WatchState::Interrupted
             } else {
-                WatchState::Watching
+                WatchState::Watching(live.watch_count())
             }
         }
     }
@@ -46,7 +46,10 @@ pub(crate) fn status_bar(
     let (text, dot): (String, Option<Hsla>) = match state {
         WatchState::LoadingKubeconfig => ("Loading kubeconfig…".to_owned(), None),
         WatchState::Connecting => (format!("Connecting to {context}…"), None),
-        WatchState::Watching => ("Watching 3 resource types".to_owned(), Some(theme.success)),
+        WatchState::Watching(count) => (
+            format!("Watching {count} resource types"),
+            Some(theme.success),
+        ),
         WatchState::Interrupted => ("Live updates interrupted".to_owned(), Some(theme.warning)),
         WatchState::Disconnected => ("Disconnected".to_owned(), Some(theme.danger)),
     };
