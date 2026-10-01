@@ -17,7 +17,7 @@
 ```text
 cargo run -p k8sboard --features screenshot -- \
   --kubeconfig monitor-uat-readonly.yml --context readonly@Monitor \
-  --screen pods|nodes|pod-drawer|pod-containers|node-drawer|logs-dock|logs-zoomed|<plural>|<plural>-drawer [--theme light|dark] \
+  --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|logs-dock|logs-zoomed|<plural>|<plural>-drawer [--theme light|dark] \
   --screenshot .tmp/ui-shots/<name>.png
 ```
 
@@ -34,6 +34,7 @@ Without the feature, `--screenshot` exits 2 before GPUI starts ([bootstrap.md](b
 | `nodes` | screen Nodes, no selection |
 | `pod-drawer` | Pods. Select the first pod with ≥ 2 containers, else row 0. Overview tab |
 | `pod-containers` | as `pod-drawer`, plus the Containers tab and `is_expanded = true` |
+| `pod-events` | as `pod-drawer`, on the Events tab (spec 0006); the capture waits for the debounced object events watch |
 | `node-drawer` | Nodes, select row 0 |
 | `logs-dock` / `logs-zoomed` | Pods with the log dock open on a pod (spec 0004); zoomed also zooms the dock |
 | `<plural>` (spec 0005) | the kind screen, e.g. `deployments`, no selection |

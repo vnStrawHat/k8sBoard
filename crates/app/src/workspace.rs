@@ -3,17 +3,19 @@
 use std::rc::Rc;
 
 use gpui_kit::component::alert::Alert;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::table::DataTable;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
 use gpui_kit::{
     AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Window, div,
     prelude::FluentBuilder as _,
 };
 
-use cluster::EVENT_LIMIT;
+use cluster::{EVENT_LIMIT, EventFilter};
 
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{LiveCluster, SessionPhase};
@@ -154,6 +156,31 @@ impl AppShell {
                     .text_color(cx.theme().muted_foreground)
                     .child(count)
             }))
+            .children(self.render_warnings_only(cx))
+    }
+
+    /// The Events screen's server-side filter toggle, right-aligned in the header.
+    fn render_warnings_only(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if self.screen != Screen::Kind(ResourceKind::Events) {
+            return None;
+        }
+        let session = self.session.as_ref()?;
+        let is_on = session.read(cx).event_filter() == EventFilter::WarningsOnly;
+        let button = Button::new("warnings-only")
+            .label("Warnings only")
+            .small()
+            .map(|button| {
+                if is_on {
+                    button.primary()
+                } else {
+                    button.outline()
+                }
+            })
+            .selected(is_on)
+            .toggled(is_on)
+            .tooltip("Show only Warning events")
+            .on_click(cx.listener(|shell, _, _, cx| shell.toggle_warnings_only(cx)));
+        Some(div().ml_auto().child(button).into_any_element())
     }
 
     fn render_interruption_banner(&self, cx: &Context<Self>) -> Option<AnyElement> {

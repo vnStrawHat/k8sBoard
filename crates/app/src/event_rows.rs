@@ -13,10 +13,20 @@ use crate::table_selection::ResourceKey;
 /// Sorts a snapshot newest first, then builds its rows. This runs on tokio, so the main
 /// thread only swaps a `Vec`.
 pub(crate) fn event_rows(update: WatchUpdate<EventSummary>) -> WatchUpdate<KindRow> {
+    match newest_first(update) {
+        WatchUpdate::Snapshot(events) => {
+            WatchUpdate::Snapshot(events.iter().map(event_row).collect())
+        }
+        WatchUpdate::Failed(error) => WatchUpdate::Failed(error),
+    }
+}
+
+/// Sorts a snapshot newest first and passes a failure through.
+pub(crate) fn newest_first(update: WatchUpdate<EventSummary>) -> WatchUpdate<EventSummary> {
     match update {
         WatchUpdate::Snapshot(mut events) => {
             sort_newest_first(&mut events);
-            WatchUpdate::Snapshot(events.iter().map(event_row).collect())
+            WatchUpdate::Snapshot(events)
         }
         WatchUpdate::Failed(error) => WatchUpdate::Failed(error),
     }

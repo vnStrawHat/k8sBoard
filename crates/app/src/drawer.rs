@@ -50,6 +50,7 @@ impl DrawerState {
 pub(crate) enum PodDrawerTab {
     Overview,
     Containers,
+    Events,
 }
 
 pub(crate) type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;

@@ -149,7 +149,11 @@ fn watch_state_still_reports_core_list_problems() {
 }
 
 #[test]
-fn open_watch_count_includes_explorer_watch() {
-    assert_eq!(open_watch_count(None), 3);
-    assert_eq!(open_watch_count(Some(&ready_list())), 4);
+fn open_watch_count_includes_object_events() {
+    let explorer = LiveList::<KindRow>::Loading;
+    let events = LiveList::<EventSummary>::Loading;
+    assert_eq!(open_watch_count(None, None), 3);
+    assert_eq!(open_watch_count(Some(&explorer), None), 4);
+    assert_eq!(open_watch_count(Some(&explorer), Some(&events)), 5);
+    assert_eq!(open_watch_count(None, Some(&events)), 4);
 }

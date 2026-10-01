@@ -24,6 +24,7 @@ use crate::drawer::{
 use crate::kind_row::{
     DAEMON_SET_KIND, DetailRow, KindCell, KindRow, PodOwner, STATEFUL_SET_KIND, owns_pod,
 };
+use crate::object_events::{event_subject, events_section};
 use crate::resource_actions::{kind_menu, port_forward_reason};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{pod_status_label, tone_color, toned_text};
@@ -150,6 +151,9 @@ fn body(
     }
     if let Some(owner) = &row.related_pods {
         column = column.child(pods_section(owner, live, cx));
+    }
+    if let Some(subject) = event_subject(&ResourceKey::of_row(kind, row)) {
+        column = column.child(events_section(live.events_of(&subject), cx));
     }
     if kind.has_labels() {
         column = column

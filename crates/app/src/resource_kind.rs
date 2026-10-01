@@ -414,11 +414,13 @@ impl ResourceKind {
     }
 
     /// The only per-kind `match` over cluster calls: watch, then map to rows on tokio, so the
-    /// main thread only swaps a `Vec`. Namespaces are cluster-scoped and ignore `scope`.
+    /// main thread only swaps a `Vec`. Namespaces are cluster-scoped and ignore `scope`. Only
+    /// Events reads `events`.
     pub(crate) fn watch_rows(
         self,
         connection: &ClusterConnection,
         scope: NamespaceScope,
+        events: EventFilter,
     ) -> BoxStream<'static, WatchUpdate<KindRow>> {
         match self {
             Self::Namespaces => connection
@@ -426,7 +428,7 @@ impl ResourceKind {
                 .map(|update| rows(update, namespace_row))
                 .boxed(),
             Self::Events => connection
-                .watch_events(scope, EventFilter::All)
+                .watch_events(scope, events)
                 .map(event_rows)
                 .boxed(),
             Self::Deployments => connection

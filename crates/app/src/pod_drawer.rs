@@ -1,6 +1,8 @@
 use std::rc::Rc;
 
-use cluster::{ContainerKind, ContainerState, ContainerSummary, PodSummary, Termination};
+use cluster::{
+    ContainerKind, ContainerState, ContainerSummary, EventSummary, PodSummary, Termination,
+};
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
@@ -12,12 +14,13 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
-use crate::cluster_session::ClusterSession;
+use crate::cluster_session::{ClusterSession, LiveList};
 use crate::drawer::{
     DrawerHeader, DrawerState, ExpandToggle, PodDrawerTab, absent_text, created_text, detail_row,
     drawer_frame, menu_button, section_title, truncated_text, value_or_absent,
 };
 use crate::log_dock::LogDock;
+use crate::object_events::{event_subject, events_title, recent_events};
 use crate::resource_actions::pod_menu;
 use crate::status_tone::{
     StatusLabel, container_state_label, pod_status_label, tone_color, toned_text,
@@ -45,11 +48,13 @@ pub(crate) fn pod_drawer(
         }),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
+    let events = pod_events(pod, session, cx);
     let body = match state.tab {
         PodDrawerTab::Overview => overview(pod, cx),
         PodDrawerTab::Containers => containers_tab(pod, state, now, cx),
+        PodDrawerTab::Events => recent_events(events, cx),
     };
-    let tabs = tab_bar(pod, state, cx);
+    let tabs = tab_bar(pod, state, events, cx);
     drawer_frame(header, Some(tabs), body, state.width(), cx).into_any_element()
 }
 
@@ -95,19 +100,35 @@ fn pod_menu_button(
         .into_any_element()
 }
 
-fn tab_bar(pod: &PodSummary, state: &DrawerState, cx: &Context<AppShell>) -> AnyElement {
+/// The pod's events list, or `None` while the debounce or a switch is in progress.
+fn pod_events<'a>(
+    pod: &PodSummary,
+    session: &'a Entity<ClusterSession>,
+    cx: &'a App,
+) -> Option<&'a LiveList<EventSummary>> {
+    let subject = event_subject(&ResourceKey::of_pod(pod))?;
+    session.read(cx).live()?.events_of(&subject)
+}
+
+fn tab_bar(
+    pod: &PodSummary,
+    state: &DrawerState,
+    events: Option<&LiveList<EventSummary>>,
+    cx: &Context<AppShell>,
+) -> AnyElement {
     let selected_index = match state.tab {
         PodDrawerTab::Overview => 0,
         PodDrawerTab::Containers => 1,
+        PodDrawerTab::Events => 2,
     };
     TabBar::new("pod-drawer-tabs")
         .underline()
         .selected_index(selected_index)
         .on_click(cx.listener(|shell, index: &usize, _, cx| {
-            let tab = if *index == 0 {
-                PodDrawerTab::Overview
-            } else {
-                PodDrawerTab::Containers
+            let tab = match index {
+                0 => PodDrawerTab::Overview,
+                1 => PodDrawerTab::Containers,
+                _ => PodDrawerTab::Events,
             };
             shell.set_drawer_tab(tab, cx);
         }))
@@ -115,6 +136,7 @@ fn tab_bar(pod: &PodSummary, state: &DrawerState, cx: &Context<AppShell>) -> Any
         .prefix(div().w_4())
         .child(Tab::new().label("Overview"))
         .child(Tab::new().label(format!("Containers {}", pod.containers.len())))
+        .child(Tab::new().label(events_title(events)))
         .into_any_element()
 }
 

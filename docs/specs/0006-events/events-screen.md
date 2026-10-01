@@ -87,4 +87,4 @@ Builds on the step 2 screen and the step 3 session; nothing else changes.
 
 Header button (`workspace.rs`, `Screen::Kind(Events)` only):
 
-- Right side (`ml_auto`): `Button::new("warnings-only").label("Warnings only").small().outline().selected(is_on)` (the kit's `Selectable`), `on_click` → `toggle_warnings_only`. Tooltip: "Show only Warning events".
+- Right side (`ml_auto`): `Button::new("warnings-only").label("Warnings only").small()`, primary variant when on and outline when off, `.selected(is_on).toggled(is_on)` (the kit's `Selectable` plus the real-toggle a11y flag), `on_click` → `toggle_warnings_only`. Tooltip: "Show only Warning events".

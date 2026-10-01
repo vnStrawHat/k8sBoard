@@ -2,12 +2,15 @@ use std::error::Error;
 use std::sync::Arc;
 
 use cluster::{
-    AccessCheck, AccessReport, ClusterConnection, ClusterError, ContextSummary, Kubeconfig,
-    NamespaceScope, NamespaceSummary, NodeSummary, PodSummary, ServerVersion, WatchUpdate,
+    AccessCheck, AccessReport, ClusterConnection, ClusterError, ContextSummary, EventFilter,
+    EventSummary, InvolvedObject, Kubeconfig, NamespaceScope, NamespaceSummary, NodeSummary,
+    PodSummary, ServerVersion, WatchUpdate,
 };
+use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
 
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
+use crate::event_rows::newest_first;
 use crate::kind_row::KindRow;
 use crate::resource_kind::ResourceKind;
 
@@ -20,6 +23,9 @@ pub(crate) struct ClusterSession {
     /// The kind screen being shown, kept across Connecting and retry so that `LiveCluster::start`
     /// can start its watch.
     explorer_kind: Option<ResourceKind>,
+    /// Which events the Events screen asks the server for. Kept across Connecting and retry like
+    /// `explorer_kind`; a new session starts at `All`.
+    event_filter: EventFilter,
 }
 
 /// What `connect` needs, kept so that `retry` can run it again.
@@ -50,6 +56,8 @@ pub(crate) struct LiveCluster {
     pub(crate) nodes: LiveList<NodeSummary>,
     /// The watch of the visible kind screen; `None` on Pods and Nodes.
     explorer: Option<KindList>,
+    /// The open drawer's events; `None` while no drawer needs them.
+    object_events: Option<ObjectEvents>,
     connection: ClusterConnection,
     subscriptions: Subscriptions,
 }
@@ -58,6 +66,13 @@ pub(crate) struct LiveCluster {
 pub(crate) struct KindList {
     pub(crate) kind: ResourceKind,
     pub(crate) list: LiveList<KindRow>,
+    _subscription: WatchSubscription,
+}
+
+/// The events of the object whose drawer is open. Dropping it stops the watch.
+pub(crate) struct ObjectEvents {
+    pub(crate) subject: InvolvedObject,
+    pub(crate) list: LiveList<EventSummary>,
     _subscription: WatchSubscription,
 }
 
@@ -266,6 +281,7 @@ impl ClusterSession {
             user: summary.user.clone(),
             phase,
             explorer_kind,
+            event_filter: EventFilter::All,
         }
     }
 
@@ -294,6 +310,13 @@ impl ClusterSession {
             .explorer
             .as_mut()
             .filter(|explorer| explorer.kind == kind)
+    }
+
+    fn object_events_mut(&mut self, subject: &InvolvedObject) -> Option<&mut ObjectEvents> {
+        self.live_mut()?
+            .object_events
+            .as_mut()
+            .filter(|events| events.subject == *subject)
     }
 
     fn live_mut(&mut self) -> Option<&mut LiveCluster> {
@@ -335,6 +358,7 @@ impl ClusterSession {
             Ok(Ok(connected)) => SessionPhase::Live(Box::new(LiveCluster::start(
                 connected,
                 self.explorer_kind,
+                self.event_filter,
                 cx,
             ))),
             Ok(Err(error)) => SessionPhase::Failed {
@@ -349,6 +373,7 @@ impl ClusterSession {
 
     /// Switches the pods watch to `scope` and reviews access again for it.
     pub(crate) fn set_scope(&mut self, scope: NamespaceScope, cx: &mut Context<Self>) {
+        let event_filter = self.event_filter;
         let Some(live) = self.live_mut() else {
             return;
         };
@@ -371,6 +396,7 @@ impl ClusterSession {
                 &runtime,
                 &live.connection,
                 scope.clone(),
+                event_filter,
                 cx,
             ));
         }
@@ -383,6 +409,7 @@ impl ClusterSession {
     /// no-op, so there is no re-list. Before the session is live only the choice is stored.
     pub(crate) fn set_explorer_kind(&mut self, kind: Option<ResourceKind>, cx: &mut Context<Self>) {
         self.explorer_kind = kind;
+        let event_filter = self.event_filter;
         let runtime = cx.global::<ClusterRuntime>().clone();
         let Some(live) = self.live_mut() else {
             return;
@@ -392,8 +419,66 @@ impl ClusterSession {
         }
         // The old subscription drops first, so two explorer watches never overlap.
         live.explorer = None;
-        live.explorer = kind
-            .map(|kind| KindList::start(kind, &runtime, &live.connection, live.scope.clone(), cx));
+        live.explorer = kind.map(|kind| {
+            KindList::start(
+                kind,
+                &runtime,
+                &live.connection,
+                live.scope.clone(),
+                event_filter,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn event_filter(&self) -> EventFilter {
+        self.event_filter
+    }
+
+    /// Switches the Events screen between all events and warnings only. The server filters, so the
+    /// list reloads; other screens only remember the choice.
+    pub(crate) fn set_event_filter(&mut self, filter: EventFilter, cx: &mut Context<Self>) {
+        if self.event_filter == filter {
+            return;
+        }
+        self.event_filter = filter;
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        if let Some(live) = self.live_mut()
+            && live.explorer.as_ref().map(|explorer| explorer.kind) == Some(ResourceKind::Events)
+        {
+            // The old subscription drops first, so two explorer watches never overlap.
+            live.explorer = None;
+            live.explorer = Some(KindList::start(
+                ResourceKind::Events,
+                &runtime,
+                &live.connection,
+                live.scope.clone(),
+                filter,
+                cx,
+            ));
+        }
+        cx.notify();
+    }
+
+    /// Starts, replaces, or stops the object events watch. The same subject again is a no-op, so
+    /// there is no re-list. A session that is not live ignores it: a new session has no selection.
+    pub(crate) fn set_event_subject(
+        &mut self,
+        subject: Option<InvolvedObject>,
+        cx: &mut Context<Self>,
+    ) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        if live.event_subject() == subject.as_ref() {
+            return;
+        }
+        // The old subscription drops first, so two object events watches never overlap.
+        live.object_events = None;
+        live.object_events =
+            subject.map(|subject| ObjectEvents::start(subject, &runtime, &live.connection, cx));
         cx.notify();
     }
 
@@ -440,9 +525,35 @@ impl LiveCluster {
         Some((explorer.kind, explorer.list.ready_count()?))
     }
 
-    /// Open watches: namespaces, pods, nodes, plus the explorer's when one is shown.
+    /// Open watches: namespaces, pods, nodes, plus the explorer's and the drawer's events when
+    /// they are open.
     pub(crate) fn watch_count(&self) -> usize {
-        open_watch_count(self.explorer.as_ref().map(|explorer| &explorer.list))
+        open_watch_count(
+            self.explorer.as_ref().map(|explorer| &explorer.list),
+            self.object_events.as_ref().map(|events| &events.list),
+        )
+    }
+
+    /// The subject of the running object events watch.
+    pub(crate) fn event_subject(&self) -> Option<&InvolvedObject> {
+        self.object_events.as_ref().map(|events| &events.subject)
+    }
+
+    /// The events list of `subject`, or `None` while another subject (or none) is watched.
+    pub(crate) fn events_of(&self, subject: &InvolvedObject) -> Option<&LiveList<EventSummary>> {
+        self.object_events
+            .as_ref()
+            .filter(|events| events.subject == *subject)
+            .map(|events| &events.list)
+    }
+
+    /// Whether the object events watch runs and has not delivered its first snapshot. Only the
+    /// screenshot hook waits on it.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn is_object_events_loading(&self) -> bool {
+        self.object_events
+            .as_ref()
+            .is_some_and(|events| events.list.is_loading())
     }
 
     /// Whether any watch has failed or is interrupted, for the status bar.
@@ -465,6 +576,7 @@ impl LiveCluster {
     fn start(
         connected: Connected,
         explorer_kind: Option<ResourceKind>,
+        event_filter: EventFilter,
         cx: &mut Context<ClusterSession>,
     ) -> Self {
         let runtime = cx.global::<ClusterRuntime>().clone();
@@ -505,8 +617,9 @@ impl LiveCluster {
                 },
             ),
         };
-        let explorer = explorer_kind
-            .map(|kind| KindList::start(kind, &runtime, &connection, scope.clone(), cx));
+        let explorer = explorer_kind.map(|kind| {
+            KindList::start(kind, &runtime, &connection, scope.clone(), event_filter, cx)
+        });
         Self {
             server_version,
             scope,
@@ -515,15 +628,20 @@ impl LiveCluster {
             pods: LiveList::Loading,
             nodes: LiveList::Loading,
             explorer,
+            object_events: None,
             connection,
             subscriptions,
         }
     }
 }
 
-/// Namespaces, pods and nodes are always watched; the explorer adds one more.
-fn open_watch_count(explorer: Option<&LiveList<KindRow>>) -> usize {
-    3 + usize::from(explorer.is_some())
+/// Namespaces, pods and nodes are always watched; the explorer and the drawer's events add one
+/// each.
+fn open_watch_count(
+    explorer: Option<&LiveList<KindRow>>,
+    object_events: Option<&LiveList<EventSummary>>,
+) -> usize {
+    3 + usize::from(explorer.is_some()) + usize::from(object_events.is_some())
 }
 
 /// The explorer list counts like the three always-on lists: its failure is a live-update problem.
@@ -545,12 +663,13 @@ impl KindList {
         runtime: &ClusterRuntime,
         connection: &ClusterConnection,
         scope: NamespaceScope,
+        events: EventFilter,
         cx: &mut Context<ClusterSession>,
     ) -> Self {
         Self {
             kind,
             list: LiveList::Loading,
-            _subscription: subscribe_explorer(runtime, connection, kind, scope, cx),
+            _subscription: subscribe_explorer(runtime, connection, kind, scope, events, cx),
         }
     }
 }
@@ -560,11 +679,12 @@ fn subscribe_explorer(
     connection: &ClusterConnection,
     kind: ResourceKind,
     scope: NamespaceScope,
+    events: EventFilter,
     cx: &mut Context<ClusterSession>,
 ) -> WatchSubscription {
     // The kind guards are defense in depth: dropping the subscription already cancels it.
     runtime.subscribe(
-        kind.watch_rows(connection, scope),
+        kind.watch_rows(connection, scope, events),
         cx,
         move |session: &mut ClusterSession, update, _| {
             if let Some(explorer) = session.explorer_mut(kind) {
@@ -577,6 +697,38 @@ fn subscribe_explorer(
             }
         },
     )
+}
+
+impl ObjectEvents {
+    fn start(
+        subject: InvolvedObject,
+        runtime: &ClusterRuntime,
+        connection: &ClusterConnection,
+        cx: &mut Context<ClusterSession>,
+    ) -> Self {
+        let updates = connection.watch_object_events(&subject).map(newest_first);
+        let applied = subject.clone();
+        let closed = subject.clone();
+        let subscription = runtime.subscribe(
+            updates,
+            cx,
+            move |session: &mut ClusterSession, update, _| {
+                if let Some(events) = session.object_events_mut(&applied) {
+                    events.list.apply(update);
+                }
+            },
+            move |session, _| {
+                if let Some(events) = session.object_events_mut(&closed) {
+                    events.list.mark_stopped();
+                }
+            },
+        );
+        Self {
+            subject,
+            list: LiveList::Loading,
+            _subscription: subscription,
+        }
+    }
 }
 
 fn subscribe_pods(

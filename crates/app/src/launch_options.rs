@@ -12,7 +12,7 @@ Options:
   --context <name>       context to open (default: the kubeconfig current-context)
   --namespace <name>     namespace to show (default: all namespaces if allowed)
   --theme light|dark     colour theme (default: follow the system)
-  --screen pods|nodes|pod-drawer|pod-containers|node-drawer|logs-dock|logs-zoomed|
+  --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|logs-dock|logs-zoomed|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer
                          screen to open (default: pods)
@@ -28,6 +28,8 @@ pub(crate) enum LaunchScreen {
     Nodes,
     PodDrawer,
     PodContainers,
+    /// `--screen pod-events`: a pod drawer on its Events tab.
+    PodEvents,
     NodeDrawer,
     LogsDock,
     LogsZoomed,
@@ -44,6 +46,7 @@ impl LaunchScreen {
             Self::Pods
             | Self::PodDrawer
             | Self::PodContainers
+            | Self::PodEvents
             | Self::LogsDock
             | Self::LogsZoomed => Screen::Pods,
             Self::Nodes | Self::NodeDrawer => Screen::Nodes,
@@ -55,7 +58,11 @@ impl LaunchScreen {
     pub(crate) fn has_drawer(self) -> bool {
         matches!(
             self,
-            Self::PodDrawer | Self::PodContainers | Self::NodeDrawer | Self::KindDrawer(_)
+            Self::PodDrawer
+                | Self::PodContainers
+                | Self::PodEvents
+                | Self::NodeDrawer
+                | Self::KindDrawer(_)
         )
     }
 
@@ -70,6 +77,7 @@ impl LaunchScreen {
             "nodes" => Some(Self::Nodes),
             "pod-drawer" => Some(Self::PodDrawer),
             "pod-containers" => Some(Self::PodContainers),
+            "pod-events" => Some(Self::PodEvents),
             "node-drawer" => Some(Self::NodeDrawer),
             "logs-dock" => Some(Self::LogsDock),
             "logs-zoomed" => Some(Self::LogsZoomed),

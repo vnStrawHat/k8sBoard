@@ -20,6 +20,7 @@ mod navigation;
 mod network_rows;
 mod node_drawer;
 mod node_table;
+mod object_events;
 mod pod_drawer;
 mod pod_table;
 mod resource_actions;

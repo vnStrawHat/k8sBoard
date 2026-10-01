@@ -1,13 +1,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
-use cluster::{ContextSummary, Kubeconfig, KubeconfigError, NamespaceScope};
+use cluster::{
+    ContextSummary, EventFilter, InvolvedObject, Kubeconfig, KubeconfigError, NamespaceScope,
+};
 use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Point,
-    Render, Styled as _, Subscription, Window,
+    Render, Styled as _, Subscription, Task, Window,
 };
 
 #[cfg(feature = "screenshot")]
@@ -22,10 +25,11 @@ use crate::log_dock::{DockMode, LogDock};
 use crate::log_tab::LogTarget;
 use crate::navigation::{NavigationCounts, sidebar};
 use crate::node_table::NodeTableDelegate;
+use crate::object_events::{SubjectChange, event_subject, subject_change};
 use crate::pod_table::PodTableDelegate;
 use crate::resource_kind::ResourceKind;
 #[cfg(feature = "screenshot")]
-use crate::screenshot::{SettleInput, TargetState};
+use crate::screenshot::{SettleInput, TargetState, is_drawer_ready};
 use crate::screenshot::{pick_drawer_pod, pick_logs_pod};
 use crate::status_bar::status_bar;
 use crate::table_selection::{ResourceKey, SelectionSync, list_row_index, selection_sync};
@@ -33,6 +37,10 @@ use crate::title_bar::title_bar;
 
 #[path = "workspace.rs"]
 mod workspace;
+
+/// How long a selection must rest before its drawer events are fetched: each start is an uncached
+/// list plus watch on the API server, so arrow-key navigation must not start one per row.
+const EVENT_SUBJECT_DELAY: Duration = Duration::from_millis(250);
 
 const IGNORED_KUBECONFIG_NOTE: &str =
     "Only the first KUBECONFIG entry is used; merging kubeconfigs is not supported";
@@ -82,6 +90,8 @@ pub(crate) struct AppShell {
     /// The drawer is open exactly while this is set.
     selected: Option<ResourceKey>,
     drawer: DrawerState,
+    /// The pending debounced start of the object events watch. Replacing or dropping it cancels it.
+    event_subject_task: Option<Task<()>>,
     log_dock: Entity<LogDock>,
     /// Keeps the dock height across zoom and minimize, which unmount the split.
     dock_split: Entity<ResizableState>,
@@ -142,6 +152,8 @@ impl AppShell {
         if options.screen == LaunchScreen::PodContainers {
             drawer.tab = PodDrawerTab::Containers;
             drawer.is_expanded = true;
+        } else if options.screen == LaunchScreen::PodEvents {
+            drawer.tab = PodDrawerTab::Events;
         }
         Self {
             kubeconfig,
@@ -155,6 +167,7 @@ impl AppShell {
             _table_subscriptions: table_subscriptions,
             selected: None,
             drawer,
+            event_subject_task: None,
             log_dock,
             dock_split,
             pending_launch_screen: (options.screen.has_drawer() || options.screen.has_log_dock())
@@ -337,7 +350,7 @@ impl AppShell {
     // ---- drawer ----
 
     pub(crate) fn close_drawer(&mut self, cx: &mut Context<Self>) {
-        self.selected = None;
+        self.change_selection(None, cx);
         self.pod_table
             .update(cx, |table, cx| table.clear_selection(cx));
         self.node_table
@@ -379,8 +392,54 @@ impl AppShell {
         }
         self.selected = key;
         self.drawer.selected_container = None;
+        self.follow_event_subject(cx);
         cx.notify();
         true
+    }
+
+    /// Points the object events watch at the selected object. Stopping is immediate; a start
+    /// waits for the selection to rest, and a newer selection cancels the pending start.
+    fn follow_event_subject(&mut self, cx: &mut Context<Self>) {
+        let next = self.selected.as_ref().and_then(event_subject);
+        if next.is_none() {
+            // A pending start must not outlive a selection that has no events, such as an event row.
+            self.event_subject_task = None;
+        }
+        let running = self.live(cx).and_then(|live| live.event_subject()).cloned();
+        match subject_change(running.as_ref(), next) {
+            SubjectChange::Keep => {}
+            SubjectChange::Stop => {
+                self.event_subject_task = None;
+                self.set_event_subject(None, cx);
+            }
+            SubjectChange::Start(subject) => {
+                self.set_event_subject(None, cx);
+                self.event_subject_task = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(EVENT_SUBJECT_DELAY).await;
+                    let _ = this.update(cx, |shell, cx| {
+                        shell.event_subject_task = None;
+                        shell.set_event_subject(Some(subject), cx);
+                    });
+                }));
+            }
+        }
+    }
+
+    fn set_event_subject(&mut self, subject: Option<InvolvedObject>, cx: &mut Context<Self>) {
+        if let Some(session) = &self.session {
+            session.update(cx, |session, cx| session.set_event_subject(subject, cx));
+        }
+    }
+
+    /// Switches the Events screen between all events and warnings only. The drawer stays;
+    /// `sync_selection` closes it when its row is filtered out.
+    pub(crate) fn toggle_warnings_only(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        session.update(cx, |session, cx| {
+            session.set_event_filter(toggled(session.event_filter()), cx);
+        });
     }
 
     fn on_pod_table_event(
@@ -661,6 +720,11 @@ impl AppShell {
                 }
             },
         };
+        // A drawer waits for the debounce, then for its events.
+        let is_object_events_pending = self.event_subject_task.is_some()
+            || self
+                .live(cx)
+                .is_some_and(LiveCluster::is_object_events_loading);
         // A logs screen is pending until its tab exists and has opened its stream.
         let is_log_pending = self
             .pending_launch_screen
@@ -669,7 +733,11 @@ impl AppShell {
         SettleInput {
             target,
             // An empty list opens no drawer, but the launch request is resolved then, so it settles.
-            is_drawer_ready: self.selected.is_some() || self.pending_launch_screen.is_none(),
+            is_drawer_ready: is_drawer_ready(
+                self.selected.is_some(),
+                self.pending_launch_screen.is_some(),
+                is_object_events_pending,
+            ),
             is_log_pending,
         }
     }
@@ -710,6 +778,14 @@ impl Render for AppShell {
     }
 }
 
+/// The other filter.
+fn toggled(filter: EventFilter) -> EventFilter {
+    match filter {
+        EventFilter::All => EventFilter::WarningsOnly,
+        EventFilter::WarningsOnly => EventFilter::All,
+    }
+}
+
 /// Row selection with a movable, non-sortable, fixed-order layout; a click on a header
 /// selects nothing.
 fn configure<D: TableDelegate>(table: TableState<D>) -> TableState<D> {
@@ -745,6 +821,12 @@ fn kubeconfig_error_message(message: String, has_ignored_entries: bool) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toggled_event_filter_switches_between_all_and_warnings_only() {
+        assert_eq!(toggled(EventFilter::All), EventFilter::WarningsOnly);
+        assert_eq!(toggled(EventFilter::WarningsOnly), EventFilter::All);
+    }
 
     #[test]
     fn kubeconfig_error_message_adds_note_only_for_ignored_entries() {

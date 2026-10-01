@@ -149,3 +149,12 @@ fn kind_screens_parse_from_plural_slugs() {
     }
     assert!(parse(&["--screen", "pods-drawer"]).is_err());
 }
+
+#[test]
+fn pod_events_screen_opens_pods_with_drawer() {
+    let options = run_options(&["--screen", "pod-events"]);
+    assert_eq!(options.screen, LaunchScreen::PodEvents);
+    assert_eq!(options.screen.screen(), Screen::Pods);
+    assert!(options.screen.has_drawer());
+    assert!(!options.screen.has_log_dock());
+}

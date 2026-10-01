@@ -61,6 +61,17 @@ pub(crate) struct SettleInput {
     pub(crate) is_log_pending: bool,
 }
 
+/// A drawer screen is ready when its row is selected (or no row was found to select) and its
+/// events are no longer pending.
+#[cfg(any(feature = "screenshot", test))]
+pub(crate) fn is_drawer_ready(
+    has_selection: bool,
+    is_launch_pending: bool,
+    is_object_events_pending: bool,
+) -> bool {
+    (has_selection || !is_launch_pending) && !is_object_events_pending
+}
+
 /// Whether the screen shows what `--screen` asked for, so a screenshot is worth taking.
 #[cfg(any(feature = "screenshot", test))]
 pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bool {
@@ -322,5 +333,17 @@ mod tests {
         let single = [pod("a", 1), pod("b", 1)];
         assert_eq!(pick_drawer_pod(&single), Some(0));
         assert_eq!(pick_drawer_pod(&[]), None);
+    }
+
+    #[test]
+    fn drawer_waits_for_object_events() {
+        // Selected, nothing pending.
+        assert!(is_drawer_ready(true, false, false));
+        // Selected, but the events are still pending.
+        assert!(!is_drawer_ready(true, false, true));
+        // The launch request found no row to select.
+        assert!(is_drawer_ready(false, false, false));
+        // The launch request still waits for its list.
+        assert!(!is_drawer_ready(false, true, false));
     }
 }

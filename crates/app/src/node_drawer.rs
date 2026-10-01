@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use cluster::NodeSummary;
+use cluster::{EventSummary, NodeSummary};
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
@@ -9,11 +9,12 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
-use crate::cluster_session::ClusterSession;
+use crate::cluster_session::{ClusterSession, LiveList};
 use crate::drawer::{
     DRAWER_WIDTH, DrawerHeader, absent_text, created_text, detail_row, drawer_frame, menu_button,
     truncated_text, value_or_absent,
 };
+use crate::object_events::{event_subject, events_section};
 use crate::resource_actions::node_menu;
 use crate::status_tone::{node_status_label, toned_text};
 use crate::table_selection::ResourceKey;
@@ -33,7 +34,9 @@ pub(crate) fn node_drawer(
         expand: None,
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
-    drawer_frame(header, None, body(node, now, cx), DRAWER_WIDTH, cx).into_any_element()
+    let events = event_subject(&ResourceKey::of_node(node))
+        .and_then(|subject| session.read(cx).live()?.events_of(&subject));
+    drawer_frame(header, None, body(node, events, now, cx), DRAWER_WIDTH, cx).into_any_element()
 }
 
 fn subtitle(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
@@ -66,7 +69,12 @@ fn node_menu_button(node: &NodeSummary, session: &Entity<ClusterSession>) -> Any
         .into_any_element()
 }
 
-fn body(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
+fn body(
+    node: &NodeSummary,
+    events: Option<&LiveList<EventSummary>>,
+    now: jiff::Timestamp,
+    cx: &App,
+) -> AnyElement {
     let mono = cx.theme().mono_font_family.clone();
     let taints = if node.taints.is_empty() {
         absent_text(cx).into_any_element()
@@ -122,5 +130,6 @@ fn body(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
             value_or_absent(created.as_deref(), cx),
             cx,
         ))
+        .child(events_section(events, cx))
         .into_any_element()
 }

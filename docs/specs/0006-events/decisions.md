@@ -58,4 +58,5 @@ The API server keeps **no watch cache for events**, and event field selectors ar
 
 - **Selection scroll.** With newest-first order, every new event shifts the selected row, so `SelectionSync::Move` scrolls to it. Pause stream (open item 1) fixes this.
 - **Apply at the cap** sorts the store (O(n log n), n = 2,000) per inserted event. Measure before optimizing (a min-heap would do).
+- **Warnings only with a drawer open.** Toggling it with an event drawer open briefly unmounts the drawer while the list reloads.
 - **`default` namespace convention (decision 9).** Events of cluster-scoped objects are found only where client-go's recorder puts them (`default`). A recorder that writes them elsewhere is missed. Upgrade path: a cluster-wide read, only with `list events` at cluster scope and a measured need.
