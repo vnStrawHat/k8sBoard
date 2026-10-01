@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::Button;
+use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::table::DataTable;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
@@ -15,6 +16,7 @@ use gpui_kit::{
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{LiveCluster, SessionPhase};
 use crate::drawer::ClickHandler;
+use crate::log_dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
 use crate::navigation::SIDEBAR_WIDTH;
 use crate::node_drawer::node_drawer;
 use crate::pod_drawer::pod_drawer;
@@ -37,13 +39,49 @@ impl AppShell {
         });
     }
 
+    /// The region right of the sidebar: the list region with the log dock below it, or the
+    /// dock alone over the whole region when zoomed.
     pub(super) fn render_workspace(&self, cx: &Context<Self>) -> impl IntoElement {
-        v_flex()
+        let region = v_flex()
             .flex_1()
             .min_w_0()
             .h_full()
+            .bg(cx.theme().background);
+        let dock = self.log_dock.read(cx);
+        if !dock.has_tabs() {
+            return region.child(self.render_upper(cx));
+        }
+        match dock.mode() {
+            DockMode::Zoomed => region.child(self.log_dock.clone()),
+            DockMode::Minimized => region
+                .child(self.render_upper(cx))
+                .child(self.log_dock.clone()),
+            DockMode::Normal => {
+                let max_height = dock_max_height(self.dock_split.read(cx).container_size());
+                region.child(
+                    v_resizable("workspace-split")
+                        .with_state(&self.dock_split)
+                        .child(resizable_panel().child(self.render_upper(cx)))
+                        .child(
+                            resizable_panel()
+                                .size(DEFAULT_DOCK_HEIGHT)
+                                .flex_none()
+                                .size_range(MIN_DOCK_HEIGHT..max_height)
+                                .child(self.log_dock.clone()),
+                        ),
+                )
+            }
+        }
+    }
+
+    /// Header, banner, body, and the drawer overlay. The drawer covers this region only, so
+    /// it never covers the dock.
+    fn render_upper(&self, cx: &Context<Self>) -> impl IntoElement {
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
             .relative()
-            .bg(cx.theme().background)
             .child(self.render_header(cx))
             .children(self.render_interruption_banner(cx))
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
@@ -170,7 +208,13 @@ impl AppShell {
         match key {
             ResourceKey::Pod { .. } => {
                 let pod = live.pods.items().iter().find(|pod| key.is_pod(pod))?;
-                Some(pod_drawer(pod, &self.drawer, session, cx))
+                Some(pod_drawer(
+                    pod,
+                    &self.drawer,
+                    session,
+                    &self.log_dock.downgrade(),
+                    cx,
+                ))
             }
             ResourceKey::Node { .. } => {
                 let node = live.nodes.items().iter().find(|node| key.is_node(node))?;

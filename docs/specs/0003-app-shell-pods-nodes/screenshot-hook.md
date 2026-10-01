@@ -17,7 +17,7 @@
 ```text
 cargo run -p k8sboard --features screenshot -- \
   --kubeconfig monitor-uat-readonly.yml --context readonly@Monitor \
-  --screen pods|nodes|pod-drawer|pod-containers|node-drawer [--theme light|dark] \
+  --screen pods|nodes|pod-drawer|pod-containers|node-drawer|logs-dock|logs-zoomed [--theme light|dark] \
   --screenshot .tmp/ui-shots/<name>.png
 ```
 
@@ -35,6 +35,7 @@ Without the feature, `--screenshot` exits 2 before GPUI starts ([bootstrap.md](b
 | `pod-drawer` | Pods. Select the first pod with ≥ 2 containers, else row 0. Overview tab |
 | `pod-containers` | as `pod-drawer`, plus the Containers tab and `is_expanded = true` |
 | `node-drawer` | Nodes, select row 0 |
+| `logs-dock` / `logs-zoomed` | Pods with the log dock open on a pod (spec 0004); zoomed also zooms the dock |
 
 3. Wait condition, pure and testable: `fn is_screen_settled(screen, &SettleInput) -> bool`. True when:
    - the session is `Failed`, or

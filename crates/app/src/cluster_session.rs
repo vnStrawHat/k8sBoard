@@ -360,6 +360,11 @@ impl LiveCluster {
         self.connection.default_namespace()
     }
 
+    /// The connection that log streams open on.
+    pub(crate) fn connection(&self) -> &ClusterConnection {
+        &self.connection
+    }
+
     /// `all namespaces` or the namespace name, as used in headers and empty states.
     pub(crate) fn scope_label(&self) -> String {
         match &self.scope {

@@ -112,24 +112,6 @@ fn shell_allowed_still_disabled_in_read_only_mode() {
 }
 
 #[test]
-fn logs_allowed_disabled_with_later_version_reason() {
-    assert_eq!(
-        reason(action_availability(
-            ResourceAction::ViewLogs,
-            &known_denying(&[])
-        )),
-        "Logs open in the dock, coming in a later version"
-    );
-    assert_eq!(
-        reason(action_availability(
-            ResourceAction::ViewLogs,
-            &known_denying(&[AccessCheck::GetPodLogs])
-        )),
-        "Not permitted: get pods/log"
-    );
-}
-
-#[test]
 fn node_shell_gated_by_create_pods_exec() {
     assert_eq!(
         reason(action_availability(
@@ -144,5 +126,24 @@ fn node_shell_gated_by_create_pods_exec() {
             &known_denying(&[AccessCheck::CreatePodPortForward])
         )),
         "Not available in read-only mode"
+    );
+}
+
+#[test]
+fn logs_allowed_is_enabled() {
+    assert_eq!(
+        action_availability(ResourceAction::ViewLogs, &known_denying(&[])),
+        ActionAvailability::Enabled
+    );
+}
+
+#[test]
+fn logs_denied_reason_names_access_check() {
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::ViewLogs,
+            &known_denying(&[AccessCheck::GetPodLogs])
+        )),
+        "Not permitted: get pods/log"
     );
 }

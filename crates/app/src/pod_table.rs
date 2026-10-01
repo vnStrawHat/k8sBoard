@@ -4,11 +4,12 @@ use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, HighlightStyle, IntoElement, ParentElement as _, Pixels,
-    SharedString, Styled as _, StyledText, Window, div, px,
+    SharedString, Styled as _, StyledText, WeakEntity, Window, div, px,
 };
 
 use crate::age::format_age;
 use crate::cluster_session::ClusterSession;
+use crate::log_dock::LogDock;
 use crate::resource_actions::pod_menu;
 use crate::status_tone::{pod_status_label, toned_text};
 use crate::table_layout::{flexible_width, header_cell};
@@ -27,6 +28,7 @@ const FIXED_WIDTH: Pixels = px(170. + 70. + 80. + 180. + 70.);
 /// Rows come straight from the session, so the table never owns a copy of the pods.
 pub(crate) struct PodTableDelegate {
     session: Option<Entity<ClusterSession>>,
+    log_dock: WeakEntity<LogDock>,
     columns: Vec<Column>,
 }
 
@@ -46,9 +48,10 @@ fn columns(name_width: Pixels) -> Vec<Column> {
 }
 
 impl PodTableDelegate {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(log_dock: WeakEntity<LogDock>) -> Self {
         Self {
             session: None,
+            log_dock,
             columns: columns(NAME_MIN_WIDTH),
         }
     }
@@ -168,7 +171,7 @@ impl TableDelegate for PodTableDelegate {
             return menu;
         };
         match live.pods.items().get(row_ix) {
-            Some(pod) => pod_menu(menu, pod, &live.access),
+            Some(pod) => pod_menu(menu, pod, live, &self.log_dock),
             None => menu,
         }
     }

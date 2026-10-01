@@ -2,7 +2,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
 
-use cluster::WatchUpdate;
 use futures::{Stream, StreamExt as _};
 use gpui_kit::{Context, Global, Task};
 
@@ -51,15 +50,16 @@ impl ClusterRuntime {
         RuntimeTask(self.handle.spawn(future))
     }
 
-    /// Feeds `updates` into `view`: the stream is polled on tokio, and `apply` runs on the
+    /// Feeds `updates` (resource watches and pod logs) into `view`: the stream is polled on
+    /// tokio, and `apply` runs on the
     /// GPUI thread, followed by one `cx.notify()` per update (the crate already batches
     /// at 100 ms). `on_closed` runs when the update stream ends for any reason (the watch
     /// streams normally never end), so the owner can mark the list as stopped.
-    pub(crate) fn subscribe<V: 'static, T: Send + 'static>(
+    pub(crate) fn subscribe<V: 'static, U: Send + 'static>(
         &self,
-        updates: impl Stream<Item = WatchUpdate<T>> + Send + 'static,
+        updates: impl Stream<Item = U> + Send + 'static,
         cx: &mut Context<V>,
-        apply: impl Fn(&mut V, WatchUpdate<T>, &mut Context<V>) + 'static,
+        apply: impl Fn(&mut V, U, &mut Context<V>) + 'static,
         on_closed: impl FnOnce(&mut V, &mut Context<V>) + 'static,
     ) -> WatchSubscription {
         // Capacity 1 bounds memory: a slow UI pauses the pump instead of queueing snapshots.

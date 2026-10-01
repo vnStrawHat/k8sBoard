@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use cluster::{ContextSummary, Kubeconfig, KubeconfigError, NamespaceScope};
+use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
@@ -16,12 +17,14 @@ use crate::drawer::{DrawerState, PodDrawerTab};
 use crate::launch_options::{
     LaunchOptions, LaunchScreen, has_ignored_kubeconfig_entries, kubeconfig_path,
 };
+use crate::log_dock::{DockMode, LogDock};
+use crate::log_tab::LogTarget;
 use crate::navigation::{NavigationCounts, sidebar};
 use crate::node_table::NodeTableDelegate;
 use crate::pod_table::PodTableDelegate;
-use crate::screenshot::pick_drawer_pod;
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{SettleInput, TargetState};
+use crate::screenshot::{pick_drawer_pod, pick_logs_pod};
 use crate::status_bar::status_bar;
 use crate::table_selection::{ResourceKey, SelectionSync, row_index, selection_sync};
 use crate::title_bar::title_bar;
@@ -65,8 +68,11 @@ pub(crate) struct AppShell {
     /// The drawer is open exactly while this is set.
     selected: Option<ResourceKey>,
     drawer: DrawerState,
-    /// A `--screen` drawer request that waits for its list to load.
-    pending_drawer_screen: Option<LaunchScreen>,
+    log_dock: Entity<LogDock>,
+    /// Keeps the dock height across zoom and minimize, which unmount the split.
+    dock_split: Entity<ResizableState>,
+    /// A `--screen` drawer or logs request that waits for its list to load.
+    pending_launch_screen: Option<LaunchScreen>,
     requested: RequestedStart,
 }
 
@@ -90,13 +96,22 @@ impl AppShell {
             ),
         };
 
-        let pod_table =
-            cx.new(|cx| configure(TableState::new(PodTableDelegate::new(), window, cx)));
+        let log_dock = cx.new(|_| LogDock::new());
+        let dock_split = cx.new(|_| ResizableState::default());
+        let pod_table = cx.new(|cx| {
+            configure(TableState::new(
+                PodTableDelegate::new(log_dock.downgrade()),
+                window,
+                cx,
+            ))
+        });
         let node_table =
             cx.new(|cx| configure(TableState::new(NodeTableDelegate::new(), window, cx)));
+        // The workspace layout depends on the dock's mode and tab count.
         let table_subscriptions = vec![
             cx.subscribe_in(&pod_table, window, Self::on_pod_table_event),
             cx.subscribe_in(&node_table, window, Self::on_node_table_event),
+            cx.observe(&log_dock, |_, _, cx| cx.notify()),
         ];
 
         let mut drawer = DrawerState::new();
@@ -115,7 +130,10 @@ impl AppShell {
             _table_subscriptions: table_subscriptions,
             selected: None,
             drawer,
-            pending_drawer_screen: options.screen.has_drawer().then_some(options.screen),
+            log_dock,
+            dock_split,
+            pending_launch_screen: (options.screen.has_drawer() || options.screen.has_log_dock())
+                .then_some(options.screen),
             requested: RequestedStart {
                 context: options.context,
                 namespace: options.namespace,
@@ -182,6 +200,7 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) {
         self.close_drawer(cx);
+        self.log_dock.update(cx, |dock, cx| dock.close_all(cx));
         let session = cx.new(|cx| ClusterSession::new(kubeconfig, summary, namespace, cx));
         self._session_observer = Some(cx.observe(&session, |shell, _, cx| {
             shell.on_session_changed(cx);
@@ -245,6 +264,7 @@ impl AppShell {
     pub(crate) fn show_screen(&mut self, screen: Screen, cx: &mut Context<Self>) {
         self.screen = screen;
         self.close_drawer(cx);
+        self.log_dock.update(cx, |dock, cx| dock.unzoom(cx));
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {
@@ -353,7 +373,7 @@ impl AppShell {
     }
 
     fn on_session_changed(&mut self, cx: &mut Context<Self>) {
-        self.apply_pending_drawer_screen(cx);
+        self.apply_pending_launch_screen(cx);
         self.sync_selection(cx);
         cx.notify();
     }
@@ -407,9 +427,13 @@ impl AppShell {
         }
     }
 
-    /// Opens the drawer that `--screen` asked for, once its list has loaded.
-    fn apply_pending_drawer_screen(&mut self, cx: &mut Context<Self>) {
-        let Some(launch) = self.pending_drawer_screen else {
+    /// Opens the drawer that `--screen` asked for, once its list has loaded. The logs screens
+    /// wait for `open_pending_logs`, which needs a window.
+    fn apply_pending_launch_screen(&mut self, cx: &mut Context<Self>) {
+        let Some(launch) = self
+            .pending_launch_screen
+            .filter(|launch| !launch.has_log_dock())
+        else {
             return;
         };
         let Some(live) = self.live(cx) else {
@@ -425,7 +449,7 @@ impl AppShell {
         if is_loading {
             return;
         }
-        self.pending_drawer_screen = None;
+        self.pending_launch_screen = None;
         let Some(row) = row else {
             return;
         };
@@ -449,6 +473,41 @@ impl AppShell {
                     .update(cx, |table, cx| table.set_selected_row(row, cx));
             }
         }
+    }
+
+    /// Opens the log dock that `--screen` asked for, once the pod list has loaded. It runs
+    /// from `render` because a new tab needs a window. The RBAC gate is skipped on purpose:
+    /// on a denied cluster the error state is what a screenshot should show.
+    fn open_pending_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(launch) = self
+            .pending_launch_screen
+            .filter(|launch| launch.has_log_dock())
+        else {
+            return;
+        };
+        let Some(live) = self.live(cx) else {
+            return;
+        };
+        if live.pods.is_loading() {
+            return;
+        }
+        let opened = pick_logs_pod(live.pods.items())
+            .and_then(|row| live.pods.items().get(row))
+            .and_then(LogTarget::of_pod)
+            .map(|target| (live.connection().clone(), target));
+        self.pending_launch_screen = None;
+        let Some((connection, target)) = opened else {
+            return;
+        };
+        let mode = if launch == LaunchScreen::LogsZoomed {
+            DockMode::Zoomed
+        } else {
+            DockMode::Normal
+        };
+        self.log_dock.update(cx, |dock, cx| {
+            dock.open(connection, target, window, cx);
+            dock.set_mode(mode, cx);
+        });
     }
 
     /// What the screenshot hook inspects to know when the screen shows its target.
@@ -478,9 +537,15 @@ impl AppShell {
                 }
             },
         };
+        // A logs screen is pending until its tab exists and has opened its stream.
+        let is_log_pending = self
+            .pending_launch_screen
+            .is_some_and(LaunchScreen::has_log_dock)
+            || self.log_dock.read(cx).is_connecting(cx);
         SettleInput {
             target,
             has_selection: self.selected.is_some(),
+            is_log_pending,
         }
     }
 
@@ -498,6 +563,7 @@ impl AppShell {
 impl Render for AppShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.fit_table_widths(window, cx);
+        self.open_pending_logs(window, cx);
         let theme = cx.theme();
         let counts = self.navigation_counts(cx);
         let session = self.session.as_ref().map(|session| session.read(cx));

@@ -1,11 +1,12 @@
 use cluster::{AccessCheck, NodeSummary, PodSummary};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
-use gpui_kit::{ClipboardItem, ParentElement as _, SharedString, Styled as _, div};
+use gpui_kit::{ClipboardItem, ParentElement as _, SharedString, Styled as _, WeakEntity, div};
 
-use crate::cluster_session::AccessState;
+use crate::cluster_session::{AccessState, LiveCluster};
+use crate::log_dock::LogDock;
+use crate::log_tab::LogTarget;
 
-const LOGS_REASON: &str = "Logs open in the dock, coming in a later version";
 const READ_ONLY_FEATURE_REASON: &str = "Not available in read-only mode";
 const READ_ONLY_MODE_REASON: &str = "Read-only mode";
 
@@ -27,20 +28,23 @@ pub(crate) enum ActionAvailability {
 }
 
 /// What an action needs: the permission it is gated on, and why it is still unavailable
-/// when that permission is granted (this phase never runs anything but Copy name).
+/// when that permission is granted. `None` means the permission is all the action needs.
 struct ActionGate {
     check: AccessCheck,
-    read_only_reason: &'static str,
+    read_only_reason: Option<&'static str>,
 }
 
 impl ResourceAction {
     fn gate(self) -> Option<ActionGate> {
         let (check, read_only_reason) = match self {
-            Self::ViewLogs => (AccessCheck::GetPodLogs, LOGS_REASON),
-            Self::OpenShell => (AccessCheck::CreatePodExec, READ_ONLY_FEATURE_REASON),
-            Self::PortForward => (AccessCheck::CreatePodPortForward, READ_ONLY_FEATURE_REASON),
+            Self::ViewLogs => (AccessCheck::GetPodLogs, None),
+            Self::OpenShell => (AccessCheck::CreatePodExec, Some(READ_ONLY_FEATURE_REASON)),
+            Self::PortForward => (
+                AccessCheck::CreatePodPortForward,
+                Some(READ_ONLY_FEATURE_REASON),
+            ),
             // The node shell is a debug pod, so it needs the same right as a pod shell.
-            Self::OpenNodeShell => (AccessCheck::CreatePodExec, READ_ONLY_FEATURE_REASON),
+            Self::OpenNodeShell => (AccessCheck::CreatePodExec, Some(READ_ONLY_FEATURE_REASON)),
             Self::Cordon | Self::Drain | Self::CopyName => return None,
         };
         Some(ActionGate {
@@ -66,7 +70,10 @@ pub(crate) fn action_availability(
         AccessState::Known(report) if !report.is_allowed(gate.check) => {
             disabled(format!("Not permitted: {}", gate.check))
         }
-        AccessState::Known(_) => disabled(gate.read_only_reason),
+        AccessState::Known(_) => match gate.read_only_reason {
+            Some(reason) => disabled(reason),
+            None => ActionAvailability::Enabled,
+        },
     }
 }
 
@@ -77,8 +84,14 @@ fn disabled(reason: impl Into<SharedString>) -> ActionAvailability {
 }
 
 /// Shared by the row context menu and the drawer header menu, so both always agree.
-pub(crate) fn pod_menu(menu: PopupMenu, pod: &PodSummary, access: &AccessState) -> PopupMenu {
-    menu.item(action_item(ResourceAction::ViewLogs, "View logs", access))
+pub(crate) fn pod_menu(
+    menu: PopupMenu,
+    pod: &PodSummary,
+    live: &LiveCluster,
+    dock: &WeakEntity<LogDock>,
+) -> PopupMenu {
+    let access = &live.access;
+    menu.item(view_logs_item(pod, live, dock))
         .item(action_item(ResourceAction::OpenShell, "Open shell", access))
         .item(action_item(
             ResourceAction::PortForward,
@@ -87,6 +100,30 @@ pub(crate) fn pod_menu(menu: PopupMenu, pod: &PodSummary, access: &AccessState) 
         ))
         .separator()
         .item(copy_name_item(&pod.name, access))
+}
+
+/// Opens the pod in the log dock. Without containers there is nothing to read.
+fn view_logs_item(
+    pod: &PodSummary,
+    live: &LiveCluster,
+    dock: &WeakEntity<LogDock>,
+) -> PopupMenuItem {
+    const LABEL: &str = "View logs";
+    match action_availability(ResourceAction::ViewLogs, &live.access) {
+        ActionAvailability::Disabled { reason } => disabled_menu_item(LABEL, reason),
+        ActionAvailability::Enabled => match LogTarget::of_pod(pod) {
+            None => disabled_menu_item(LABEL, "The pod has no containers".into()),
+            Some(target) => {
+                let connection = live.connection().clone();
+                let dock = dock.clone();
+                PopupMenuItem::new(LABEL).on_click(move |_, window, cx| {
+                    let _ = dock.update(cx, |dock, cx| {
+                        dock.open(connection.clone(), target.clone(), window, cx)
+                    });
+                })
+            }
+        },
+    }
 }
 
 pub(crate) fn node_menu(menu: PopupMenu, node: &NodeSummary, access: &AccessState) -> PopupMenu {

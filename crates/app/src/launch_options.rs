@@ -11,13 +11,14 @@ Options:
   --context <name>       context to open (default: the kubeconfig current-context)
   --namespace <name>     namespace to show (default: all namespaces if allowed)
   --theme light|dark     colour theme (default: follow the system)
-  --screen pods|nodes|pod-drawer|pod-containers|node-drawer
+  --screen pods|nodes|pod-drawer|pod-containers|node-drawer|logs-dock|logs-zoomed
                          screen to open (default: pods)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
 ";
 
-/// The screen to open. The drawer values open Pods or Nodes with a row already selected.
+/// The screen to open. The drawer values open Pods or Nodes with a row already selected, and
+/// the logs values open Pods with the log dock on a pod.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LaunchScreen {
     Pods,
@@ -25,13 +26,19 @@ pub(crate) enum LaunchScreen {
     PodDrawer,
     PodContainers,
     NodeDrawer,
+    LogsDock,
+    LogsZoomed,
 }
 
 impl LaunchScreen {
     /// The list screen this request opens on.
     pub(crate) fn screen(self) -> Screen {
         match self {
-            Self::Pods | Self::PodDrawer | Self::PodContainers => Screen::Pods,
+            Self::Pods
+            | Self::PodDrawer
+            | Self::PodContainers
+            | Self::LogsDock
+            | Self::LogsZoomed => Screen::Pods,
             Self::Nodes | Self::NodeDrawer => Screen::Nodes,
         }
     }
@@ -44,6 +51,11 @@ impl LaunchScreen {
         )
     }
 
+    /// Whether the log dock must be open on a pod.
+    pub(crate) fn has_log_dock(self) -> bool {
+        matches!(self, Self::LogsDock | Self::LogsZoomed)
+    }
+
     fn parse(text: &str) -> Option<Self> {
         match text {
             "pods" => Some(Self::Pods),
@@ -51,6 +63,8 @@ impl LaunchScreen {
             "pod-drawer" => Some(Self::PodDrawer),
             "pod-containers" => Some(Self::PodContainers),
             "node-drawer" => Some(Self::NodeDrawer),
+            "logs-dock" => Some(Self::LogsDock),
+            "logs-zoomed" => Some(Self::LogsZoomed),
             _ => None,
         }
     }

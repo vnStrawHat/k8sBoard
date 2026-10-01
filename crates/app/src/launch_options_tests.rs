@@ -115,3 +115,20 @@ fn kubeconfig_falls_back_to_home_dot_kube_config() {
 fn kubeconfig_none_when_nothing_available() {
     assert_eq!(kubeconfig_path(None, None, None), None);
 }
+
+#[test]
+fn parses_logs_screens() {
+    assert_eq!(
+        run_options(&["--screen", "logs-dock"]).screen,
+        LaunchScreen::LogsDock
+    );
+    assert_eq!(
+        run_options(&["--screen", "logs-zoomed"]).screen,
+        LaunchScreen::LogsZoomed
+    );
+    for screen in [LaunchScreen::LogsDock, LaunchScreen::LogsZoomed] {
+        assert_eq!(screen.screen(), Screen::Pods);
+        assert!(screen.has_log_dock());
+        assert!(!screen.has_drawer());
+    }
+}

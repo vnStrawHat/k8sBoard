@@ -6,7 +6,8 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _, px,
+    Pixels, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::age::format_age;
@@ -16,6 +17,7 @@ use crate::drawer::{
     DrawerHeader, DrawerState, ExpandToggle, PodDrawerTab, absent_text, created_text, detail_row,
     drawer_frame, menu_button, section_title, truncated_text, value_or_absent,
 };
+use crate::log_dock::LogDock;
 use crate::resource_actions::pod_menu;
 use crate::status_tone::{
     StatusLabel, container_state_label, pod_status_label, tone_color, toned_text,
@@ -28,6 +30,7 @@ pub(crate) fn pod_drawer(
     pod: &PodSummary,
     state: &DrawerState,
     session: &Entity<ClusterSession>,
+    dock: &WeakEntity<LogDock>,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let now = jiff::Timestamp::now();
@@ -35,7 +38,7 @@ pub(crate) fn pod_drawer(
         kind_badge: "Po",
         name: pod.name.clone().into(),
         subtitle: subtitle(pod, now, cx),
-        menu: pod_menu_button(pod, session),
+        menu: pod_menu_button(pod, session, dock),
         expand: Some(ExpandToggle {
             is_expanded: state.is_expanded,
             on_click: Rc::new(cx.listener(|shell, _, _, cx| shell.toggle_drawer_expanded(cx))),
@@ -71,8 +74,13 @@ fn subtitle_detail(pod: &PodSummary, now: jiff::Timestamp) -> String {
 
 /// The menu reads the session when it opens, so it shows the access state and the pod of
 /// that moment.
-fn pod_menu_button(pod: &PodSummary, session: &Entity<ClusterSession>) -> AnyElement {
+fn pod_menu_button(
+    pod: &PodSummary,
+    session: &Entity<ClusterSession>,
+    dock: &WeakEntity<LogDock>,
+) -> AnyElement {
     let session = session.clone();
+    let dock = dock.clone();
     let key = ResourceKey::of_pod(pod);
     menu_button()
         .dropdown_menu(move |menu, _, cx| {
@@ -80,7 +88,7 @@ fn pod_menu_button(pod: &PodSummary, session: &Entity<ClusterSession>) -> AnyEle
                 return menu;
             };
             match live.pods.items().iter().find(|pod| key.is_pod(pod)) {
-                Some(pod) => pod_menu(menu, pod, &live.access),
+                Some(pod) => pod_menu(menu, pod, live, &dock),
                 None => menu,
             }
         })
@@ -252,7 +260,7 @@ fn kind_tag(kind: ContainerKind, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn kind_tag_text(kind: ContainerKind) -> &'static str {
+pub(crate) fn kind_tag_text(kind: ContainerKind) -> &'static str {
     match kind {
         ContainerKind::Init => "INIT",
         ContainerKind::Sidecar => "SIDECAR",
@@ -261,7 +269,7 @@ fn kind_tag_text(kind: ContainerKind) -> &'static str {
 }
 
 /// The first main container that is not ready, else the first main one, else the first.
-fn default_container(containers: &[ContainerSummary]) -> Option<usize> {
+pub(crate) fn default_container(containers: &[ContainerSummary]) -> Option<usize> {
     containers
         .iter()
         .position(|container| container.kind == ContainerKind::Main && !container.is_ready)

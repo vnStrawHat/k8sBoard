@@ -1,6 +1,8 @@
-use cluster::PodSummary;
+use cluster::{ContainerState, PodSummary};
 #[cfg(feature = "screenshot")]
 use gpui_kit::{AnyWindowHandle, App, Entity};
+
+use crate::pod_drawer::default_container;
 
 #[cfg(any(feature = "screenshot", test))]
 use crate::launch_options::LaunchScreen;
@@ -26,6 +28,19 @@ pub(crate) fn pick_drawer_pod(pods: &[PodSummary]) -> Option<usize> {
         .or_else(|| (!pods.is_empty()).then_some(0))
 }
 
+/// The pod the logs screens open: the first whose default container is running (a running
+/// container usually has log history), else the drawer pod.
+pub(crate) fn pick_logs_pod(pods: &[PodSummary]) -> Option<usize> {
+    let has_running_default = |pod: &PodSummary| {
+        default_container(&pod.containers)
+            .and_then(|index| pod.containers.get(index))
+            .is_some_and(|container| matches!(container.state, ContainerState::Running { .. }))
+    };
+    pods.iter()
+        .position(has_running_default)
+        .or_else(|| pick_drawer_pod(pods))
+}
+
 /// How far the data behind the screen is.
 #[cfg(any(feature = "screenshot", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +56,8 @@ pub(crate) enum TargetState {
 pub(crate) struct SettleInput {
     pub(crate) target: TargetState,
     pub(crate) has_selection: bool,
+    /// A logs screen whose tab is not open yet or still connecting.
+    pub(crate) is_log_pending: bool,
 }
 
 /// Whether the screen shows what `--screen` asked for, so a screenshot is worth taking.
@@ -53,6 +70,7 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
     match input.target {
         TargetState::Unavailable => true,
         TargetState::Loading => false,
+        TargetState::Loaded if screen.has_log_dock() => !input.is_log_pending,
         TargetState::Loaded => !is_drawer_screen || input.has_selection,
     }
 }
@@ -193,6 +211,7 @@ mod tests {
         SettleInput {
             target,
             has_selection,
+            is_log_pending: false,
         }
     }
 
@@ -231,6 +250,44 @@ mod tests {
             ));
             assert!(is_screen_settled(screen, &input(TargetState::Loaded, true)));
         }
+    }
+
+    #[test]
+    fn logs_screen_waits_for_log_stream() {
+        for screen in [LaunchScreen::LogsDock, LaunchScreen::LogsZoomed] {
+            let pending = SettleInput {
+                is_log_pending: true,
+                ..input(TargetState::Loaded, false)
+            };
+            assert!(!is_screen_settled(screen, &pending));
+            assert!(is_screen_settled(
+                screen,
+                &input(TargetState::Loaded, false)
+            ));
+            assert!(is_screen_settled(
+                screen,
+                &input(TargetState::Unavailable, false)
+            ));
+        }
+    }
+
+    #[test]
+    fn logs_pod_prefers_running_default_container() {
+        let mut running = pod("b", 1);
+        running.containers[0].state = ContainerState::Running { started_at: None };
+        let pods = [pod("a", 3), running];
+        assert_eq!(pick_logs_pod(&pods), Some(1));
+    }
+
+    #[test]
+    fn logs_pod_falls_back_to_drawer_pod_without_running_container() {
+        let none_running = [pod("a", 1), pod("b", 3)];
+        assert_eq!(pick_logs_pod(&none_running), pick_drawer_pod(&none_running));
+    }
+
+    #[test]
+    fn logs_pod_is_none_for_empty_list() {
+        assert_eq!(pick_logs_pod(&[]), None);
     }
 
     #[test]
