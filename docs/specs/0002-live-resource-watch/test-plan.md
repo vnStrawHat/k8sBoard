@@ -29,11 +29,13 @@ Time is `#[tokio::test(start_paused = true)]`, so `BATCH_WINDOW` elapses instant
 | `burst_within_window_emits_one_snapshot` | 50 `Apply`s with no time gap produce one `Snapshot` holding the final state |
 | `changes_in_separate_windows_emit_separate_snapshots` | advance 150 ms between applies |
 | `unchanged_apply_emits_nothing` | equal summary |
+| `delete_event_emits_snapshot` | `Delete` of a synced pod goes through `batch_updates` to a `Snapshot` without it |
 | `gone_410_is_silent_and_relist_replaces_items` | `WatchError(410)`, then `Init…InitDone` without one pod: no `Failed`, and the snapshot lacks that pod |
 | `failure_flushes_pending_snapshot_before_failed` | after sync: `Snapshot`, then `Failed` |
 | `failure_during_initial_list_emits_failed_without_snapshot` | `Init`, `InitApply`, then a 403: only `Failed` is emitted, no partial snapshot; a later `InitDone` then emits the full snapshot |
 | `forbidden_maps_to_cluster_error_forbidden` | a 403 `WatchError` becomes `Failed(ClusterError::Forbidden { action: "watching pods", .. })` |
 | `event_after_failure_reemits_snapshot_even_if_unchanged` | recovery clears the UI error |
+| `retry_failure_after_sync_emits_failed_without_snapshot` | after sync: failure, then `Init` (retry), then another failure. Only `Failed`, `Failed` is emitted, and the `Init` stages but emits no snapshot |
 | `source_end_flushes_pending_changes` | |
 | `dropping_stream_drops_source` | with an mpsc fake, `sender.is_closed()` is true after the watch stream is dropped |
 
@@ -43,6 +45,7 @@ Time is `#[tokio::test(start_paused = true)]`, so `BATCH_WINDOW` elapses instant
 |---|---|
 | `watch_error_watch_410_is_none` | `WatchError(410)` |
 | `watch_error_initial_list_410_is_none` | `InitialListFailed(Api 410)`, an expired continue token |
+| `watch_error_maps_watch_start_and_watch_failed` | `WatchStartFailed` and `WatchFailed` (non-410) are classified with `classify_error`, e.g. a 403 becomes `Forbidden` |
 | `watch_error_no_resource_version_is_unexpected_response` | |
 
 ## Live check (coder-lite, not part of `cargo test`)

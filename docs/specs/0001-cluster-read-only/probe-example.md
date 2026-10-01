@@ -3,7 +3,7 @@
 [Back to index](README.md)
 
 ```text
-cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>]
+cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>]
 ```
 
 ## CLI
@@ -13,6 +13,7 @@ cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context 
 | `--kubeconfig <path>` | required |
 | `--context <name>` | optional; when omitted, the probe uses `resolve_context(None)` |
 | `--namespace <name>` | optional; sets the `NamespaceScope` for pods and access review (default `All`) |
+| `--watch-seconds <n>` | optional, positive integer. After all other sections, runs the pods (in the scope), nodes, and namespaces watches (spec 0002) for `n` seconds. Prints `watch <kind>: N snapshots, last M items, K failures[; last error: …]` per kind. An invalid value prints usage and exits 2. Exits 1 if a kind got neither a snapshot nor a failure |
 | `--help` | prints usage |
 
 - Arguments are parsed by hand from `std::env::args()`, with no new dependency.

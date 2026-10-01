@@ -43,4 +43,4 @@ This contract is for the app spec. 0001 does not change `crates/app`.
 - Summary types are `Clone + Eq`, so batched changes can be diffed. Identity is `(namespace, name)` for pods and `name` for cluster-scoped objects. 0002 may add `uid` or `resource_version` if reflector keys need them.
 - `NamespaceScope` and `classify_error` are shared, so watch errors classify the same way.
 - The client sets no `read_timeout`, so long watch reads survive. The 30 s deadline applies only to `run`.
-- The crate still spawns nothing. The app drives the streams on its runtime and batches events before `cx.notify()`.
+- The crate still spawns nothing. The app drives the streams on its runtime. ~~The app batches events before `cx.notify()`.~~ **Superseded by spec 0002:** the crate stream batches at 100 ms, and the app calls `cx.notify()` once per update ([0002 README](../0002-live-resource-watch/README.md), decision 2).

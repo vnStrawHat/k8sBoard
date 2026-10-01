@@ -53,7 +53,7 @@ State: `store`, `is_synced` (the first `InitDone` was seen), `is_dirty`, `is_rec
 The timer is a `tokio::time::sleep_until(deadline)` polled inside the stream, never a spawned task. It needs tokio `time` and a tokio-driven poller (the app pump, or `#[tokio::test]`).
 
 1. `tokio::select!` on `events.next()` and the sleep, the latter only when a deadline is set. Both are cancel-safe.
-2. On `Ok(event)`, update the store. If it changed, or `is_recovering` is set, set `is_dirty` and clear `is_recovering`. If `is_synced && is_dirty` and there is no deadline, set `deadline = now + BATCH_WINDOW`.
+2. On `Ok(event)`, update the store. Only `InitDone`, `Apply`, and `Delete` can mark dirty or clear recovery. If such an event changed the store, or is one of these while `is_recovering` is set, set `is_dirty` and clear `is_recovering`. `Init` and `InitApply` only stage the relist buffer and never touch `is_dirty` or `is_recovering`. kube-runtime 4.2 emits `Init` before every list attempt, including backoff retries after a failure, so treating it as a change would make the UI "interrupted" state flap with a stale snapshot. If `is_synced && is_dirty` and there is no deadline, set `deadline = now + BATCH_WINDOW`.
 3. When the deadline fires, emit `Snapshot(store.snapshot())`, clear `is_dirty`, and clear the deadline.
 4. On `Err(error)`, map it with `watch_error` (below):
    - `None` (expected 410): continue silently.
