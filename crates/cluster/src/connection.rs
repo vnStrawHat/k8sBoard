@@ -312,6 +312,12 @@ pub(crate) fn classify_error(
         },
         // Nothing is logged or kept: exec plugin output can hold secrets.
         kube::Error::Auth(_) => ClusterError::CredentialsUnavailable { context, action },
+        // Serde messages can quote fragments of the response body.
+        kube::Error::SerdeError(_) => ClusterError::UnexpectedResponse {
+            context,
+            action,
+            source: "response body could not be decoded".into(),
+        },
         kube::Error::HyperError(_)
         | kube::Error::Service(_)
         | kube::Error::RustlsTls(_)

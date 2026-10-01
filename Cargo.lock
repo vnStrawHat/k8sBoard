@@ -3844,6 +3844,8 @@ dependencies = [
  "jiff",
  "k8s-openapi",
  "kube",
+ "serde-saphyr 1.3.0",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

@@ -14,6 +14,7 @@ mod kubeconfig;
 mod metrics_api;
 mod namespace;
 mod node;
+mod object_yaml;
 mod pod;
 mod pod_log;
 mod pod_status;
@@ -36,6 +37,7 @@ pub use kubeconfig::{ContextOrigin, ContextSummary, Kubeconfig, KubeconfigError}
 pub use metrics_api::MetricsApi;
 pub use namespace::{NamespacePhase, NamespaceScope, NamespaceSummary};
 pub use node::{NodeReadiness, NodeScheduling, NodeStatus, NodeSummary, NodeTaint};
+pub use object_yaml::{EnvValues, ObjectKind, ObjectRef, ObjectYaml};
 pub use pod::{
     ContainerKind, ContainerState, ContainerSummary, PodCondition, PodSummary, ReadyCount,
     Termination,

@@ -1,11 +1,12 @@
 //! Read-only probe of one cluster context. Prints domain summaries only: never
 //! credentials, and never `Debug` output of kube types. With `--watch-seconds` it runs
 //! the pods, nodes, namespaces, nine workload, network, and config watches plus two
-//! events watches together, and prints counts per kind. The access section doubles as
-//! the RBAC probe of the context.
+//! events watches together, and prints counts per kind. With `--yaml` it reads the masked
+//! YAML of the first pod and the first node and prints line counts and masking checks, never
+//! the YAML text. The access section doubles as the RBAC probe of the context.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>] [--yaml]
 //! ```
 
 use std::collections::BTreeMap;
@@ -17,14 +18,14 @@ use std::time::Duration;
 
 use cluster::{
     AccessDecision, ClusterConnection, ClusterError, ContainerKind, ContainerState,
-    ContainerSummary, EventFilter, Kubeconfig, LogRequest, LogSource, LogUpdate, MetricsApi,
-    NamespaceScope, NodeReadiness, NodeScheduling, PodStatus, PodSummary, StatusReason,
-    Termination, WatchUpdate,
+    ContainerSummary, EnvValues, EventFilter, Kubeconfig, LogRequest, LogSource, LogUpdate,
+    MetricsApi, NamespaceScope, NodeReadiness, NodeScheduling, ObjectKind, ObjectRef, PodStatus,
+    PodSummary, StatusReason, Termination, WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>] [--yaml]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -35,6 +36,7 @@ struct Args {
     namespace: Option<String>,
     watch_seconds: Option<u64>,
     logs_seconds: Option<u64>,
+    yaml: bool,
 }
 
 enum Parsed {
@@ -48,10 +50,12 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut namespace = None;
     let mut watch_seconds = None;
     let mut logs_seconds = None;
+    let mut yaml = false;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
         match flag.as_str() {
             "--help" => return Ok(Parsed::Help),
+            "--yaml" => yaml = true,
             "--kubeconfig" => kubeconfig = Some(PathBuf::from(value("--kubeconfig")?)),
             "--context" => context = Some(value("--context")?),
             "--namespace" => namespace = Some(value("--namespace")?),
@@ -74,6 +78,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         namespace,
         watch_seconds,
         logs_seconds,
+        yaml,
     }))
 }
 
@@ -431,8 +436,10 @@ async fn run(args: &Args) -> io::Result<bool> {
         }
     }
 
+    let mut first_node = None;
     match connection.list_nodes().await {
         Ok(nodes) => {
+            first_node = nodes.first().map(|node| node.name.clone());
             probe.section(&format!("nodes ({})", nodes.len()))?;
             writeln!(
                 probe.out,
@@ -476,6 +483,34 @@ async fn run(args: &Args) -> io::Result<bool> {
         }
     }
 
+    if args.yaml {
+        probe.section("yaml")?;
+        let first_pod = pods.as_ref().ok().and_then(|pods| pods.first());
+        let pod_ref = first_pod.and_then(|pod| {
+            let namespace = Some(pod.namespace.clone());
+            ObjectRef::new(ObjectKind::Pod, namespace, pod.name.clone())
+        });
+        let node_ref = first_node
+            .clone()
+            .and_then(|name| ObjectRef::new(ObjectKind::Node, None, name));
+        let targets = [
+            (
+                first_pod.map(|pod| format!("{}/{}", pod.namespace, pod.name)),
+                pod_ref,
+                "pod",
+            ),
+            (first_node, node_ref, "node"),
+        ];
+        for (name, object, label) in targets {
+            let (Some(name), Some(object)) = (name, object) else {
+                probe.all_succeeded = false;
+                writeln!(probe.out, "  yaml {label}: none in scope")?;
+                continue;
+            };
+            probe.print_yaml(label, &name, &object, &connection).await?;
+        }
+    }
+
     if let Some(seconds) = args.watch_seconds {
         watch_for(&mut probe, &connection, scope, seconds).await?;
     }
@@ -503,6 +538,43 @@ impl Probe {
         writeln!(self.out, "  failed (details on stderr)")?;
         print_error_chain(error_kind(error), error);
         Ok(())
+    }
+
+    /// Reads one object's masked YAML and prints counts and masking checks, never the text.
+    async fn print_yaml(
+        &mut self,
+        label: &str,
+        name: &str,
+        object: &ObjectRef,
+        connection: &ClusterConnection,
+    ) -> io::Result<()> {
+        let yaml = match connection.object_yaml(object, EnvValues::Hidden).await {
+            Ok(yaml) => yaml,
+            Err(error) => {
+                writeln!(self.out, "yaml {label} {name}: failed (details on stderr)")?;
+                self.all_succeeded = false;
+                print_error_chain(error_kind(&error), &error);
+                return Ok(());
+            }
+        };
+        let managed_fields = if yaml.text.contains("managedFields") {
+            "PRESENT"
+        } else {
+            "absent"
+        };
+        let last_applied = if yaml.text.contains("last-applied-configuration: <hidden>") {
+            "hidden"
+        } else if yaml.text.contains("last-applied-configuration") {
+            "VISIBLE"
+        } else {
+            "absent"
+        };
+        writeln!(
+            self.out,
+            "yaml {label} {name}: {} lines, {} env values hidden, managedFields {managed_fields}, last-applied {last_applied}",
+            yaml.text.lines().count(),
+            yaml.hidden_env_values,
+        )
     }
 
     fn print_kubeconfig(&mut self, kubeconfig: &Kubeconfig) -> io::Result<()> {

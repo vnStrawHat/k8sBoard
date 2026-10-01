@@ -219,6 +219,15 @@ fn auth_error_from_client_build_is_redacted() {
 }
 
 #[test]
+fn serde_error_from_response_is_redacted() {
+    let decode_error = serde_json::from_str::<u32>("\"body-distinctive\"").expect_err("not a u32");
+    assert!(decode_error.to_string().contains("body-distinctive"));
+    let error = classify_error("ctx", "get", kube::Error::SerdeError(decode_error));
+    let text = visible_text(&error);
+    assert!(!text.contains("body-distinctive"), "{text}");
+}
+
+#[test]
 fn proxy_is_kept_only_when_kubeconfig_sets_proxy_url() {
     assert_eq!(proxy_for(true, Some("proxy")), Some("proxy"));
     assert_eq!(proxy_for(false, Some("proxy")), None);

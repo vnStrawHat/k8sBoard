@@ -3,7 +3,7 @@
 [Back to index](README.md)
 
 ```text
-cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>]
+cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>] [--yaml]
 ```
 
 ## CLI
@@ -15,6 +15,7 @@ cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context 
 | `--namespace <name>` | optional; sets the `NamespaceScope` for pods and access review (default `All`) |
 | `--watch-seconds <n>` | optional, positive integer. After all other sections, runs 14 watches together for `n` seconds: pods, nodes, namespaces (spec 0002), then deployments, stateful sets, daemon sets, replica sets, jobs, cron jobs, services, ingresses, and config maps (spec 0005), then events and warning events (spec 0006), all in the scope except nodes and namespaces. Prints `watch <kind>: N snapshots, last M items, K failures[; last error: …]` per kind, in that order. A kind denied by RBAC prints its 403 as a failure, which is information, not a probe failure. An invalid value prints usage and exits 2. Exits 1 if a kind got neither a snapshot nor a failure |
 | `--logs-seconds <n>` | optional, positive integer. After all other sections (spec 0004), streams the current logs of the first pod in scope that has a running main container, for `n` seconds. Prints one counts-only line, `logs <ns>/<pod>/<container>: started, N lines in M batches, ended: yes/no, K failures[; last error: …]`, or `logs: no running pod in scope`. Log text is never printed. An invalid value prints usage and exits 2. Exits 1 if no pod was found, or neither a start nor a failure arrived |
+| `--yaml` | optional flag (spec 0007). After the pod list, reads the masked YAML of the first listed pod and the first node. Prints `yaml pod <ns>/<name>: N lines, K env values hidden, managedFields absent|PRESENT, last-applied hidden|absent|VISIBLE`, and the same for `yaml node <name>`. The YAML text is never printed. Exits 1 if an object is missing or a read fails |
 | `--help` | prints usage |
 
 - Arguments are parsed by hand from `std::env::args()`, with no new dependency.
