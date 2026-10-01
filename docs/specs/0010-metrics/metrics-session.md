@@ -30,7 +30,7 @@ pub(crate) enum FeedStatus {
 pub(crate) enum PodsGate { Wait, Poll { scope: NamespaceScope, note: Option<String> }, Off(String) }
 pub(crate) enum NodesGate { Wait, Poll, Off(String) }
 pub(crate) fn pods_gate(review: Option<&Result<Vec<NamespaceAccess>, String>>, scope: &NamespaceScope) -> PodsGate;
-pub(crate) fn nodes_gate(access: &AccessState) -> NodesGate;
+pub(crate) fn nodes_gate(access: &AccessState, check: AccessCheck) -> NodesGate;   // 0011 passes GetNodeProxy
 /// The text shown for a failed poll (decision 6).
 pub(crate) fn poll_error_text(error: &ClusterError) -> String;
 ```
@@ -47,10 +47,10 @@ pub(crate) fn poll_error_text(error: &ClusterError) -> String;
 | some allowed | `Poll { scope: NamespaceScope::of_namespaces(allowed), note: Some("no access in {denied, …}") }` |
 | none allowed | `Off("not allowed to list pods.metrics.k8s.io in {denied, …}")` plus `: {reason}` of the first denial when present; All reads `in all namespaces` |
 
-| `nodes_gate` (`ListNodeMetrics` in the session report) | Result |
+| `nodes_gate(access, ListNodeMetrics)` (the check in the session report) | Result |
 |---|---|
 | `AccessState::Checking` | `Wait` |
-| `Known`, denied | `Off("not allowed to list nodes.metrics.k8s.io")` plus `: {reason}` |
+| `Known`, denied | `Off("not allowed to {check}")` (`list nodes.metrics.k8s.io`) plus `: {reason}` |
 | `Known` allowed, or `Unknown` | `Poll` |
 
 | `poll_error_text` | Text |

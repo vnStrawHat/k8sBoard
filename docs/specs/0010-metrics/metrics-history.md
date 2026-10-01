@@ -1,6 +1,6 @@
 # 0010 · App: formatting and history
 
-[Back to index](README.md) · Steps 2–3 · Modules: `usage_format.rs` (new, tests in module), `metrics_history.rs` (new) + `metrics_history_tests.rs`, `kind_row.rs`
+[Back to index](README.md) · Steps 2–3 · Modules: `usage_format.rs` (new, tests in module), `history_rings.rs` (new, tests in module), `metrics_history.rs` (new) + `metrics_history_tests.rs`, `kind_row.rs`
 
 ## Formatting (`usage_format.rs`, pure)
 
@@ -27,6 +27,7 @@ pub(crate) fn format_offset(seconds: u64) -> String;         // before now (step
 ## History (`metrics_history.rs`, pure)
 
 ```rust
+// history_rings.rs: the three constants and `Resolution`; the rest is metrics_history.rs
 pub(crate) const FINE_TICKS: usize = 240;        // 1 h at METRICS_INTERVAL
 pub(crate) const TICKS_PER_COARSE: usize = 20;   // 5 min
 pub(crate) const COARSE_POINTS: usize = 288;     // 24 h
@@ -55,9 +56,9 @@ impl PodUsageHistory {
 // NodeUsageHistory: record(at, &[NodeMetrics]), latest(node), node_series(node, resolution), tick_count, span.
 ```
 
-Private shape: fine and coarse `Timeline`s (`VecDeque<jiff::Timestamp>`); `Rings<P> { fine: Option<VecDeque<Option<P>>>, coarse: VecDeque<Option<P>> }` with `P` = `UsagePoint` for containers and `ResourceUsage` (u64, decision 10) for nodes; `PodHistory { controller: Option<ControllerRef>, containers: BTreeMap<String, Rings<UsagePoint>>, oom: Vec<OomMark>, sampled_at: Option<Timestamp>, last_seen: u64 }`.
+Shared shape (`history_rings.rs`, `pub(crate)`, reused by 0011's kubelet history): fine and coarse `Timeline`s (`VecDeque<jiff::Timestamp>`); `Rings<P> { fine: Option<VecDeque<Option<P>>>, coarse: VecDeque<Option<P>> }` with push, align, freeing, and the coarse fold; `FINE_TICKS`, `TICKS_PER_COARSE`, `COARSE_POINTS`, and `Resolution` live there too. The fold averages through `pub(crate) trait RingPoint: Copy { fn mean(points: &[Self]) -> Self; }` (field-wise mean of the `Some` values), implemented here for `UsagePoint` and `ResourceUsage`. Private here: `P` = `UsagePoint` for containers and `ResourceUsage` (u64, decision 10) for nodes; `PodHistory { controller: Option<ControllerRef>, containers: BTreeMap<String, Rings<UsagePoint>>, oom: Vec<OomMark>, sampled_at: Option<Timestamp>, last_seen: u64 }`.
 
-Step split (dead-code rule: nothing lands before its first reader): step 2 lands fine rings (`record` steps 1, 2, 4), `retain_scope`, `latest*`, `tick_count`; step 3 adds the coarse rings (step 3), `sampled_at`, `controller`, OOM marks (step 5), `UsageSeries`, `Resolution`, `span`, the `*_series` calls, `owns`, and `format_offset`; `record` gains its `pods` parameter in step 3.
+Step split (dead-code rule: nothing lands before its first reader): step 2 lands `history_rings.rs` with fine rings and `metrics_history.rs` (`record` steps 1, 2, 4), `retain_scope`, `latest*`, `tick_count`; step 3 adds the coarse rings and `RingPoint` (step 3), `sampled_at`, `controller`, OOM marks (step 5), `UsageSeries`, `Resolution`, `span`, the `*_series` calls, `owns`, and `format_offset`; `record` gains its `pods` parameter in step 3.
 
 ### Invariants
 

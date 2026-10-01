@@ -23,8 +23,9 @@ No changes in any step. `DynamicObject`/`ApiResource` (kube), `serde_json`, `fut
 | S | File | Change |
 |---|---|---|
 | 2 | `src/usage_format.rs` (new) | `Measure` (`format`, `format_pair`), `format_percent`, `usage_tone`; tests in module (step 3 adds `format_offset`) |
+| 2 | `src/history_rings.rs` (new) | `Timeline`, `Rings<P>`, fine push/align/freeing, constants; tests in module (step 3 adds the coarse fold, `RingPoint`, `Resolution`); shared with 0011 |
 | 2 | `src/metrics_history.rs` (new) + `metrics_history_tests.rs` | fine rings: `FINE_TICKS`, `UsagePoint`, `PodUsageHistory`, `NodeUsageHistory` (step 3 adds coarse rings, `sampled_at`, `controller`, `UsageSeries`, `Resolution`, series calls, OOM marks) |
-| 2 | `src/cluster_metrics.rs` (new) + `cluster_metrics_tests.rs` | `ClusterMetrics`, `MetricsFeed`, `FeedStatus`, `PodsGate`, `NodesGate`, `pods_gate`, `nodes_gate`, `poll_error_text`, `is_metrics_settled` |
+| 2 | `src/cluster_metrics.rs` (new) + `cluster_metrics_tests.rs` | `ClusterMetrics`, `MetricsFeed`, `FeedStatus`, `PodsGate`, `NodesGate`, `pods_gate`, `nodes_gate(access, check)`, `poll_error_text`, `is_metrics_settled` |
 | 2 | `src/cluster_session.rs` | `LiveCluster.metrics`; pod review task; `update_metrics_feeds`; `set_scope` and `finish_access_review` hooks; the two subscriptions |
 | 3 | `src/kind_row.rs` | `owns(owner, namespace, controller)`; `owns_pod` delegates |
 | 2 | `src/node_usage.rs` (new) | `NodeUsage`, `node_usage`, `node_allocatable`, `node_requests`, `node_pod_count`; tests in module |

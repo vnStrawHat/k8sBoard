@@ -43,7 +43,7 @@
 | 2 | `cluster_metrics_tests.rs` | `gate_polls_allowed_namespaces_only` | `Several([a, b, c])`, `b` denied → `Poll { scope: Several([a, c]), note: "no access in b" }` |
 | 2 | `cluster_metrics_tests.rs` | `pods_gate_is_off_when_no_namespace_is_allowed` | reason names every denied namespace and the first review reason |
 | 2 | `cluster_metrics_tests.rs` | `pods_gate_polls_after_a_failed_review` | |
-| 2 | `cluster_metrics_tests.rs` | `nodes_gate_follows_the_session_review` | Checking → Wait; denied → Off; allowed/Unknown → Poll |
+| 2 | `cluster_metrics_tests.rs` | `nodes_gate_follows_the_session_review` | Checking → Wait; denied → Off naming the check; allowed/Unknown → Poll |
 | 2 | `cluster_metrics_tests.rs` | `poll_error_text_names_missing_or_broken_metrics_server` | 404, 503, other |
 | 2 | `cluster_metrics_tests.rs` | `metrics_settle_after_min_ticks_or_unavailable` | |
 | 2 | `node_usage.rs` | `node_usage_divides_by_allocatable` / `node_usage_is_none_without_sample_or_allocatable` | zero allocatable too |
