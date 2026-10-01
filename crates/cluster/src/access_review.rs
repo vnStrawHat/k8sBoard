@@ -23,18 +23,30 @@ pub enum AccessCheck {
     GetNodeProxy,
     ListEvents,
     WatchPods,
+    ListNamespaces,
+    ListDeployments,
+    ListStatefulSets,
+    ListDaemonSets,
+    ListReplicaSets,
+    ListJobs,
+    ListCronJobs,
+    ListServices,
+    ListIngresses,
+    ListConfigMaps,
 }
 
-/// The core-group resource a check asks about.
+/// The API resource a check asks about.
 struct CheckTarget {
     verb: &'static str,
+    /// The API group; empty is the core group.
+    group: &'static str,
     resource: &'static str,
     subresource: Option<&'static str>,
     is_namespaced: bool,
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 9] = [
+    pub const ALL: [AccessCheck; 19] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::CreatePodExec,
@@ -44,22 +56,43 @@ impl AccessCheck {
         Self::GetNodeProxy,
         Self::ListEvents,
         Self::WatchPods,
+        Self::ListNamespaces,
+        Self::ListDeployments,
+        Self::ListStatefulSets,
+        Self::ListDaemonSets,
+        Self::ListReplicaSets,
+        Self::ListJobs,
+        Self::ListCronJobs,
+        Self::ListServices,
+        Self::ListIngresses,
+        Self::ListConfigMaps,
     ];
 
     fn target(self) -> CheckTarget {
-        let (verb, resource, subresource, is_namespaced) = match self {
-            Self::ListPods => ("list", "pods", None, true),
-            Self::GetPodLogs => ("get", "pods", Some("log"), true),
-            Self::CreatePodExec => ("create", "pods", Some("exec"), true),
-            Self::CreatePodPortForward => ("create", "pods", Some("portforward"), true),
-            Self::ListSecrets => ("list", "secrets", None, true),
-            Self::ListNodes => ("list", "nodes", None, false),
-            Self::GetNodeProxy => ("get", "nodes", Some("proxy"), false),
-            Self::ListEvents => ("list", "events", None, true),
-            Self::WatchPods => ("watch", "pods", None, true),
+        let (verb, group, resource, subresource, is_namespaced) = match self {
+            Self::ListPods => ("list", "", "pods", None, true),
+            Self::GetPodLogs => ("get", "", "pods", Some("log"), true),
+            Self::CreatePodExec => ("create", "", "pods", Some("exec"), true),
+            Self::CreatePodPortForward => ("create", "", "pods", Some("portforward"), true),
+            Self::ListSecrets => ("list", "", "secrets", None, true),
+            Self::ListNodes => ("list", "", "nodes", None, false),
+            Self::GetNodeProxy => ("get", "", "nodes", Some("proxy"), false),
+            Self::ListEvents => ("list", "", "events", None, true),
+            Self::WatchPods => ("watch", "", "pods", None, true),
+            Self::ListNamespaces => ("list", "", "namespaces", None, false),
+            Self::ListDeployments => ("list", "apps", "deployments", None, true),
+            Self::ListStatefulSets => ("list", "apps", "statefulsets", None, true),
+            Self::ListDaemonSets => ("list", "apps", "daemonsets", None, true),
+            Self::ListReplicaSets => ("list", "apps", "replicasets", None, true),
+            Self::ListJobs => ("list", "batch", "jobs", None, true),
+            Self::ListCronJobs => ("list", "batch", "cronjobs", None, true),
+            Self::ListServices => ("list", "", "services", None, true),
+            Self::ListIngresses => ("list", "networking.k8s.io", "ingresses", None, true),
+            Self::ListConfigMaps => ("list", "", "configmaps", None, true),
         };
         CheckTarget {
             verb,
+            group,
             resource,
             subresource,
             is_namespaced,
@@ -105,8 +138,9 @@ impl AccessReport {
 }
 
 impl ClusterConnection {
-    /// Asks the API server nine SelfSubjectAccessReview questions concurrently. The
-    /// review is non-mutating and the only POST this crate sends. A denial is data;
+    /// Asks the API server one SelfSubjectAccessReview question per
+    /// `AccessCheck::ALL` entry, concurrently. The review is non-mutating and the only
+    /// POST this crate sends. A denial is data;
     /// any request error fails the whole call, so a report is never partial.
     pub async fn review_access(&self, scope: NamespaceScope) -> Result<AccessReport, ClusterError> {
         let scope = &scope;
@@ -152,7 +186,7 @@ fn resource_attributes(check: AccessCheck, scope: &NamespaceScope) -> ResourceAt
         _ => None,
     };
     ResourceAttributes {
-        group: Some(String::new()),
+        group: Some(target.group.to_owned()),
         namespace,
         resource: Some(target.resource.to_owned()),
         subresource: target.subresource.map(str::to_owned),
@@ -199,10 +233,10 @@ mod tests {
     }
 
     #[test]
-    fn all_checks_cover_nine_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 9);
+    fn all_checks_cover_distinct_permissions() {
+        assert_eq!(AccessCheck::ALL.len(), 19);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 9);
+        assert_eq!(distinct.len(), 19);
     }
 
     #[test]
@@ -225,6 +259,42 @@ mod tests {
     }
 
     #[test]
+    fn kind_checks_use_their_api_group() {
+        let group = |check| resource_attributes(check, &NamespaceScope::All).group;
+        for check in [
+            AccessCheck::ListDeployments,
+            AccessCheck::ListStatefulSets,
+            AccessCheck::ListDaemonSets,
+            AccessCheck::ListReplicaSets,
+        ] {
+            assert_eq!(group(check).as_deref(), Some("apps"), "{check}");
+        }
+        for check in [AccessCheck::ListJobs, AccessCheck::ListCronJobs] {
+            assert_eq!(group(check).as_deref(), Some("batch"), "{check}");
+        }
+        assert_eq!(
+            group(AccessCheck::ListIngresses).as_deref(),
+            Some("networking.k8s.io")
+        );
+        for check in [
+            AccessCheck::ListServices,
+            AccessCheck::ListConfigMaps,
+            AccessCheck::ListNamespaces,
+            AccessCheck::ListPods,
+        ] {
+            assert_eq!(group(check).as_deref(), Some(""), "{check}");
+        }
+    }
+
+    #[test]
+    fn namespace_check_is_cluster_scoped() {
+        let attributes = resource_attributes(AccessCheck::ListNamespaces, &named("team-a"));
+        assert_eq!(attributes.namespace, None);
+        assert_eq!(attributes.resource.as_deref(), Some("namespaces"));
+        assert_eq!(attributes.verb.as_deref(), Some("list"));
+    }
+
+    #[test]
     fn named_scope_sets_namespace_on_namespaced_checks() {
         let attributes = resource_attributes(AccessCheck::ListPods, &named("team-a"));
         assert_eq!(attributes.namespace.as_deref(), Some("team-a"));
@@ -240,7 +310,11 @@ mod tests {
 
     #[test]
     fn cluster_scoped_checks_ignore_scope() {
-        for check in [AccessCheck::ListNodes, AccessCheck::GetNodeProxy] {
+        for check in [
+            AccessCheck::ListNodes,
+            AccessCheck::GetNodeProxy,
+            AccessCheck::ListNamespaces,
+        ] {
             let attributes = resource_attributes(check, &named("team-a"));
             assert_eq!(attributes.namespace, None, "{check}");
         }
@@ -320,6 +394,16 @@ mod tests {
                 "get nodes/proxy",
                 "list events",
                 "watch pods",
+                "list namespaces",
+                "list deployments",
+                "list statefulsets",
+                "list daemonsets",
+                "list replicasets",
+                "list jobs",
+                "list cronjobs",
+                "list services",
+                "list ingresses",
+                "list configmaps",
             ]
         );
     }

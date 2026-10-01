@@ -2,12 +2,14 @@ use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 
+use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::serde::de::DeserializeOwned;
 use kube::Api;
 use kube::api::ListParams;
 use kube::config::KubeConfigOptions;
 
 use crate::kubeconfig::{Kubeconfig, KubeconfigError};
+use crate::namespace::NamespaceScope;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -159,6 +161,19 @@ impl ClusterConnection {
 
     pub(crate) fn client(&self) -> &kube::Client {
         &self.client
+    }
+
+    /// An API handle for a namespaced kind: every namespace, or just the named one.
+    pub(crate) fn scoped_api<K>(&self, scope: NamespaceScope) -> Api<K>
+    where
+        K: kube::Resource<Scope = NamespaceResourceScope>,
+        K::DynamicType: Default,
+    {
+        let client = self.client().clone();
+        match scope {
+            NamespaceScope::All => Api::all(client),
+            NamespaceScope::Named(namespace) => Api::namespaced(client, &namespace),
+        }
     }
 
     /// Runs one request under `REQUEST_TIMEOUT`; errors go through `classify_error`.

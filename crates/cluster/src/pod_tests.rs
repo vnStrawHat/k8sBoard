@@ -2,7 +2,7 @@ use k8s_openapi::api::core::v1::{
     ContainerState as ApiContainerState, ContainerStateRunning, ContainerStateWaiting,
     ContainerStatus, PodCondition as ApiPodCondition, PodSpec, PodStatus as ApiPodStatus,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference, Time};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
 
 use super::*;
 
@@ -307,32 +307,6 @@ fn pod_summary_reads_ip_qos_service_account() {
     assert_eq!(summary.pod_ip, None);
     assert_eq!(summary.qos_class, None);
     assert_eq!(summary.service_account, None);
-}
-
-#[test]
-fn pod_summary_controller_is_owner_with_controller_true() {
-    let owner = |kind: &str, name: &str, is_controller: Option<bool>| OwnerReference {
-        kind: kind.to_owned(),
-        name: name.to_owned(),
-        controller: is_controller,
-        ..Default::default()
-    };
-    let mut pod = pod_with_containers(Vec::new(), Vec::new());
-    pod.metadata.owner_references = Some(vec![
-        owner("Node", "node-1", None),
-        owner("ReplicaSet", "web-abc", Some(true)),
-        owner("Other", "x", Some(false)),
-    ]);
-    assert_eq!(
-        pod_summary(&pod).controller,
-        Some(PodController {
-            kind: "ReplicaSet".to_owned(),
-            name: "web-abc".to_owned(),
-        })
-    );
-
-    pod.metadata.owner_references = Some(vec![owner("Node", "node-1", Some(false))]);
-    assert_eq!(pod_summary(&pod).controller, None);
 }
 
 #[test]

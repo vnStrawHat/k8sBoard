@@ -5,12 +5,12 @@ use k8s_openapi::api::core::v1::{
     Container, ContainerState as ApiContainerState, ContainerStateTerminated,
     ContainerStatus as ApiContainerStatus, Pod,
 };
-use kube::Api;
 
 use crate::connection::{ClusterConnection, ClusterError};
 use crate::namespace::NamespaceScope;
 use crate::pod_status::{PodStatus, StatusReason, is_sidecar, non_negative, pod_display};
 use crate::resource_watch::{WatchUpdate, summary_watch};
+use crate::workload::{ControllerRef, controller_ref, non_empty};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PodSummary {
@@ -28,17 +28,11 @@ pub struct PodSummary {
     /// `spec.serviceAccountName`; empty is `None`.
     pub service_account: Option<String>,
     /// The owner reference with `controller == true`.
-    pub controller: Option<PodController>,
+    pub controller: Option<ControllerRef>,
     /// `status.conditions` in API order.
     pub conditions: Vec<PodCondition>,
     /// Init and sidecar containers in spec order, then main containers.
     pub containers: Vec<ContainerSummary>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PodController {
-    pub kind: String,
-    pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,7 +101,9 @@ pub struct Termination {
 impl ClusterConnection {
     /// Lists pods in `scope`, ordered by (namespace, name).
     pub async fn list_pods(&self, scope: NamespaceScope) -> Result<Vec<PodSummary>, ClusterError> {
-        let pods = self.list_all(self.pods_api(scope), "listing pods").await?;
+        let pods = self
+            .list_all(self.scoped_api(scope), "listing pods")
+            .await?;
         let mut summaries: Vec<_> = pods.iter().map(pod_summary).collect();
         summaries.sort_by(|left, right| {
             (&left.namespace, &left.name).cmp(&(&right.namespace, &right.name))
@@ -120,15 +116,7 @@ impl ClusterConnection {
         &self,
         scope: NamespaceScope,
     ) -> impl Stream<Item = WatchUpdate<PodSummary>> + Send + 'static {
-        summary_watch(self, self.pods_api(scope), "watching pods", pod_summary)
-    }
-
-    fn pods_api(&self, scope: NamespaceScope) -> Api<Pod> {
-        let client = self.client().clone();
-        match scope {
-            NamespaceScope::All => Api::all(client),
-            NamespaceScope::Named(namespace) => Api::namespaced(client, &namespace),
-        }
+        summary_watch(self, self.scoped_api(scope), "watching pods", pod_summary)
     }
 }
 
@@ -157,7 +145,7 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
                 .as_ref()
                 .and_then(|spec| spec.service_account_name.as_deref()),
         ),
-        controller: pod_controller(pod),
+        controller: controller_ref(&pod.metadata),
         conditions: pod
             .status
             .iter()
@@ -169,22 +157,6 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
             .collect(),
         containers: container_summaries(pod),
     }
-}
-
-fn non_empty(text: Option<&str>) -> Option<String> {
-    text.filter(|text| !text.is_empty()).map(str::to_owned)
-}
-
-fn pod_controller(pod: &Pod) -> Option<PodController> {
-    pod.metadata
-        .owner_references
-        .iter()
-        .flatten()
-        .find(|owner| owner.controller == Some(true))
-        .map(|owner| PodController {
-            kind: owner.kind.clone(),
-            name: owner.name.clone(),
-        })
 }
 
 fn image(container: &Container) -> String {

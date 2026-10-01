@@ -13,7 +13,7 @@ cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context 
 | `--kubeconfig <path>` | required |
 | `--context <name>` | optional; when omitted, the probe uses `resolve_context(None)` |
 | `--namespace <name>` | optional; sets the `NamespaceScope` for pods and access review (default `All`) |
-| `--watch-seconds <n>` | optional, positive integer. After all other sections, runs the pods (in the scope), nodes, and namespaces watches (spec 0002) for `n` seconds. Prints `watch <kind>: N snapshots, last M items, K failures[; last error: …]` per kind. An invalid value prints usage and exits 2. Exits 1 if a kind got neither a snapshot nor a failure |
+| `--watch-seconds <n>` | optional, positive integer. After all other sections, runs 12 watches together for `n` seconds: pods, nodes, namespaces (spec 0002), then deployments, stateful sets, daemon sets, replica sets, jobs, cron jobs, services, ingresses, and config maps (spec 0005), all in the scope except nodes and namespaces. Prints `watch <kind>: N snapshots, last M items, K failures[; last error: …]` per kind, in that order. A kind denied by RBAC prints its 403 as a failure, which is information, not a probe failure. An invalid value prints usage and exits 2. Exits 1 if a kind got neither a snapshot nor a failure |
 | `--logs-seconds <n>` | optional, positive integer. After all other sections (spec 0004), streams the current logs of the first pod in scope that has a running main container, for `n` seconds. Prints one counts-only line, `logs <ns>/<pod>/<container>: started, N lines in M batches, ended: yes/no, K failures[; last error: …]`, or `logs: no running pod in scope`. Log text is never printed. An invalid value prints usage and exits 2. Exits 1 if no pod was found, or neither a start nor a failure arrived |
 | `--help` | prints usage |
 
@@ -31,7 +31,7 @@ Every section after 2 runs even if an earlier section failed. A failed section p
 2. `context`: the resolved context. If resolution fails with a `KubeconfigError`, print the chain and exit 1.
 3. `server`: `git_version` and `platform`.
 4. `metrics.k8s.io`: `available <gv>`, `unavailable <gv>: <reason>`, or `not installed`.
-5. `access (<scope>)`: nine rows, each `allowed`, or `denied` plus the reason when one is given.
+5. `access (<scope>)`: 19 rows (spec 0005 added 10), each `allowed`, or `denied` plus the reason when one is given.
 6. `namespaces (<n>)`: `NAME  PHASE  CREATED`.
 7. `nodes (<n>)`: `NAME  STATUS  ROLES  TAINTS  VERSION  INTERNAL-IP  CREATED`.
    - STATUS is the readiness, plus `,SchedulingDisabled` when cordoned.

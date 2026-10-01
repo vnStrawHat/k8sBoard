@@ -3,6 +3,7 @@ use std::fmt;
 use k8s_openapi::api::core::v1::{Container, Pod, PodStatus as ApiPodStatus};
 
 use crate::pod::ReadyCount;
+use crate::workload::non_empty;
 
 /// The kubectl `STATUS` column of a pod.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,7 +164,9 @@ pub(crate) fn pod_display(pod: &Pod) -> PodDisplay {
 
     let phase = status.phase.as_deref().unwrap_or("Unknown");
     let mut display_status = PodStatus::Reason(StatusReason::from_api(
-        non_empty(status.reason.as_deref()).unwrap_or(phase),
+        non_empty(status.reason.as_deref())
+            .as_deref()
+            .unwrap_or(phase),
     ));
     if has_condition_reason(status, "PodScheduled", "SchedulingGated") {
         display_status = PodStatus::Reason(StatusReason::SchedulingGated);
@@ -204,16 +207,16 @@ pub(crate) fn pod_display(pod: &Pod) -> PodDisplay {
         let waiting_reason = state
             .and_then(|state| state.waiting.as_ref())
             .and_then(|waiting| non_empty(waiting.reason.as_deref()))
-            .filter(|reason| *reason != "PodInitializing");
+            .filter(|reason| reason != "PodInitializing");
         display_status = if let Some(terminated) = terminated {
             PodStatus::Init(InitStatus::Reason(
-                match non_empty(terminated.reason.as_deref()) {
+                match non_empty(terminated.reason.as_deref()).as_deref() {
                     Some(reason) => StatusReason::from_api(reason),
                     None => exit_reason(terminated.signal, terminated.exit_code),
                 },
             ))
         } else if let Some(reason) = waiting_reason {
-            PodStatus::Init(InitStatus::Reason(StatusReason::from_api(reason)))
+            PodStatus::Init(InitStatus::Reason(StatusReason::from_api(&reason)))
         } else {
             PodStatus::Init(InitStatus::Progress {
                 first_incomplete: u32::try_from(index).unwrap_or(u32::MAX),
@@ -236,12 +239,13 @@ pub(crate) fn pod_display(pod: &Pod) -> PodDisplay {
                 .and_then(|waiting| non_empty(waiting.reason.as_deref()));
             let terminated = state.and_then(|state| state.terminated.as_ref());
             if let Some(reason) = waiting_reason {
-                display_status = PodStatus::Reason(StatusReason::from_api(reason));
+                display_status = PodStatus::Reason(StatusReason::from_api(&reason));
             } else if let Some(terminated) = terminated {
-                display_status = PodStatus::Reason(match non_empty(terminated.reason.as_deref()) {
-                    Some(reason) => StatusReason::from_api(reason),
-                    None => exit_reason(terminated.signal, terminated.exit_code),
-                });
+                display_status =
+                    PodStatus::Reason(match non_empty(terminated.reason.as_deref()).as_deref() {
+                        Some(reason) => StatusReason::from_api(reason),
+                        None => exit_reason(terminated.signal, terminated.exit_code),
+                    });
             } else if container_status.ready && state.is_some_and(|state| state.running.is_some()) {
                 has_running = true;
                 ready += 1;
@@ -272,10 +276,6 @@ pub(crate) fn pod_display(pod: &Pod) -> PodDisplay {
         },
         restarts,
     }
-}
-
-fn non_empty(text: Option<&str>) -> Option<&str> {
-    text.filter(|text| !text.is_empty())
 }
 
 /// The reason for a terminated container that reports none: its signal, else its exit code.

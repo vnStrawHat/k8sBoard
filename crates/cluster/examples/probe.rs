@@ -1,5 +1,7 @@
 //! Read-only probe of one cluster context. Prints domain summaries only: never
-//! credentials, and never `Debug` output of kube types.
+//! credentials, and never `Debug` output of kube types. With `--watch-seconds` it runs
+//! the pods, nodes, namespaces, and nine workload, network, and config watches together
+//! and prints counts per kind; the access section is also the RBAC probe of the context.
 //!
 //! ```text
 //! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>]
@@ -17,7 +19,8 @@ use cluster::{
     ContainerSummary, Kubeconfig, LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceScope,
     NodeReadiness, NodeScheduling, PodStatus, PodSummary, StatusReason, Termination, WatchUpdate,
 };
-use futures::StreamExt;
+use futures::stream::{self, BoxStream};
+use futures::{Stream, StreamExt};
 
 const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>]";
 const MAX_LISTED_PODS: usize = 30;
@@ -80,6 +83,12 @@ fn parse_seconds(flag: &str, text: &str) -> Result<u64, String> {
     }
 }
 
+/// What one watch update contributed. Never holds object contents.
+enum Tally {
+    Snapshot(usize),
+    Failed(String),
+}
+
 /// Counts of what one watch stream produced. Never holds object contents.
 #[derive(Default)]
 struct WatchStats {
@@ -90,15 +99,15 @@ struct WatchStats {
 }
 
 impl WatchStats {
-    fn record<T>(&mut self, update: WatchUpdate<T>) {
-        match update {
-            WatchUpdate::Snapshot(items) => {
+    fn record(&mut self, tally: Tally) {
+        match tally {
+            Tally::Snapshot(items) => {
                 self.snapshots += 1;
-                self.last_items = items.len();
+                self.last_items = items;
             }
-            WatchUpdate::Failed(error) => {
+            Tally::Failed(error) => {
                 self.failures += 1;
-                self.last_error = Some(error_summary(&error));
+                self.last_error = Some(error);
             }
         }
     }
@@ -121,7 +130,21 @@ impl WatchStats {
     }
 }
 
-/// Runs the three watches together for `seconds` and prints one line per kind.
+/// A watch stream reduced to tallies, tagged with the kind it watches.
+type TallySource = (&'static str, BoxStream<'static, Tally>);
+
+fn tally_source<T: Send + 'static>(
+    kind: &'static str,
+    updates: impl Stream<Item = WatchUpdate<T>> + Send + 'static,
+) -> TallySource {
+    let tallies = updates.map(|update| match update {
+        WatchUpdate::Snapshot(items) => Tally::Snapshot(items.len()),
+        WatchUpdate::Failed(error) => Tally::Failed(error_summary(&error)),
+    });
+    (kind, tallies.boxed())
+}
+
+/// Runs all twelve watches together for `seconds` and prints one line per kind.
 async fn watch_for(
     probe: &mut Probe,
     connection: &ClusterConnection,
@@ -129,32 +152,51 @@ async fn watch_for(
     seconds: u64,
 ) -> io::Result<()> {
     probe.section(&format!("watch ({seconds}s)"))?;
-    let mut pods = Box::pin(connection.watch_pods(scope));
-    let mut nodes = Box::pin(connection.watch_nodes());
-    let mut namespaces = Box::pin(connection.watch_namespaces());
-    let (mut pod_stats, mut node_stats, mut namespace_stats) = (
-        WatchStats::default(),
-        WatchStats::default(),
-        WatchStats::default(),
+    let sources = vec![
+        tally_source("pods", connection.watch_pods(scope.clone())),
+        tally_source("nodes", connection.watch_nodes()),
+        tally_source("namespaces", connection.watch_namespaces()),
+        tally_source("deployments", connection.watch_deployments(scope.clone())),
+        tally_source(
+            "stateful sets",
+            connection.watch_stateful_sets(scope.clone()),
+        ),
+        tally_source("daemon sets", connection.watch_daemon_sets(scope.clone())),
+        tally_source("replica sets", connection.watch_replica_sets(scope.clone())),
+        tally_source("jobs", connection.watch_jobs(scope.clone())),
+        tally_source("cron jobs", connection.watch_cron_jobs(scope.clone())),
+        tally_source("services", connection.watch_services(scope.clone())),
+        tally_source("ingresses", connection.watch_ingresses(scope.clone())),
+        tally_source("config maps", connection.watch_config_maps(scope)),
+    ];
+    let mut stats: Vec<(&'static str, WatchStats)> = sources
+        .iter()
+        .map(|(kind, _)| (*kind, WatchStats::default()))
+        .collect();
+    let mut merged = stream::select_all(
+        sources
+            .into_iter()
+            .enumerate()
+            .map(|(index, (_, tallies))| tallies.map(move |tally| (index, tally))),
     );
     let timer = tokio::time::sleep(Duration::from_secs(seconds));
     tokio::pin!(timer);
     loop {
         tokio::select! {
             () = &mut timer => break,
-            Some(update) = pods.next() => pod_stats.record(update),
-            Some(update) = nodes.next() => node_stats.record(update),
-            Some(update) = namespaces.next() => namespace_stats.record(update),
-            else => break,
+            item = merged.next() => match item {
+                Some((index, tally)) => {
+                    if let Some((_, kind_stats)) = stats.get_mut(index) {
+                        kind_stats.record(tally);
+                    }
+                }
+                None => break,
+            },
         }
     }
-    for (kind, stats) in [
-        ("pods", &pod_stats),
-        ("nodes", &node_stats),
-        ("namespaces", &namespace_stats),
-    ] {
-        writeln!(probe.out, "{}", stats.line(kind))?;
-        if stats.is_silent() {
+    for (kind, kind_stats) in &stats {
+        writeln!(probe.out, "{}", kind_stats.line(kind))?;
+        if kind_stats.is_silent() {
             probe.all_succeeded = false;
         }
     }

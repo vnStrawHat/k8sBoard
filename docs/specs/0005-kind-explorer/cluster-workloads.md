@@ -87,11 +87,11 @@ pub struct CronJobSummary { /* common */ pub schedule: String, pub time_zone: Op
     pub last_success_at: Option<jiff::Timestamp>, pub containers: Vec<TemplateContainer> }
 ```
 
-- `JobStatus` (the private `fn job_status`) is the first true condition, in this order:
-  1. `Failed` gives Failed;
-  2. `Complete` gives Complete;
-  3. `FailureTarget` gives Failing;
-  4. `Suspended` gives Suspended;
+- `JobStatus` (the private `fn job_status`) is the first true condition, in kubectl 1.32 `printJob` order (`Terminating` is not modelled):
+  1. `Complete` gives Complete;
+  2. `Failed` gives Failed;
+  3. `Suspended` gives Suspended;
+  4. `FailureTarget` gives Failing;
   5. otherwise, Running.
 - `finished_at` is `status.completionTime`, else the `lastTransitionTime` of the true `Failed` condition. This keeps a failed job's duration from growing forever.
 - `CronJobSummary.active_jobs` holds the names in `status.active[]`. `containers` come from `spec.jobTemplate.spec.template`.
