@@ -231,6 +231,7 @@ mod tests {
                 name: name.to_owned(),
             }),
             conditions: Vec::new(),
+            status_message: None,
             containers: Vec::new(),
         }
     }

@@ -50,3 +50,5 @@ pub use pod::{ /* existing */, PodCondition, PodController };
 | `pod_tests.rs` | `container_summary_reads_image` |
 
 No new dependencies. The probe example does not change. Each field above is shown by the drawer (Overview: IP, QoS, service account, controller, conditions; Containers: image) and nothing else is added.
+
+Spec 0008 adds the pod, container, event, and node detail fields to these summaries; see `docs/specs/0008-pod-node-details/cluster-pod-fields.md` and `cluster-node-fields.md`.

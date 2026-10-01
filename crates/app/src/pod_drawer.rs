@@ -1,30 +1,31 @@
 use std::rc::Rc;
 
 use cluster::{
-    ContainerKind, ContainerState, ContainerSummary, EventSummary, PodSummary, Termination,
+    ContainerKind, ContainerState, ContainerSummary, EventSummary, PodCondition, PodSummary,
 };
+use gpui_kit::component::alert::Alert;
 use gpui_kit::component::menu::DropdownMenu as _;
-use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
+    Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
     prelude::FluentBuilder as _, px,
 };
 
-use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{ClusterSession, LiveList};
+use crate::container_detail::{ContainerDetailInput, container_detail};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row,
-    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, menu_button, section_title,
-    shown_tab, tab_titles, truncated_text, value_or_absent, yaml_body,
+    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, link_text, menu_button,
+    section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
 };
 use crate::log_dock::LogDock;
 use crate::object_events::{event_subject, recent_events};
-use crate::resource_actions::pod_menu;
-use crate::status_tone::{
-    StatusLabel, container_state_label, pod_status_label, tone_color, toned_text,
-};
+use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
+use crate::resource_actions::{pod_menu, port_forward_reason};
+use crate::status_tone::{StatusTone, container_state_label, pod_status_label, toned_text};
 use crate::table_selection::ResourceKey;
 
 const CONTAINER_LIST_WIDTH: Pixels = px(240.);
@@ -48,9 +49,21 @@ pub(crate) fn pod_drawer(
     let events = pod_events(pod, session, cx);
     let tabs = drawer_tabs(&ResourceKey::of_pod(pod));
     let shown = shown_tab(tabs, state.tab);
+    let loaded_events = events.and_then(LiveList::ready_items);
     let body = match shown {
-        DrawerTab::Overview => DrawerBody::Scrolling(overview(pod, cx)),
-        DrawerTab::Containers => DrawerBody::Scrolling(containers_tab(pod, state, now, cx)),
+        DrawerTab::Overview => DrawerBody::Scrolling(overview(pod, loaded_events, now, cx)),
+        DrawerTab::Containers => DrawerBody::Scrolling(containers_tab(
+            pod,
+            state,
+            loaded_events,
+            &session
+                .read(cx)
+                .live()
+                .map(|live| port_forward_reason(&live.access))
+                .unwrap_or_default(),
+            now,
+            cx,
+        )),
         DrawerTab::Yaml => yaml_body(state),
         DrawerTab::Events => DrawerBody::Scrolling(recent_events(events, cx)),
     };
@@ -95,7 +108,7 @@ fn pod_menu_button(
                 return menu;
             };
             match live.pods.items().iter().find(|pod| key.is_pod(pod)) {
-                Some(pod) => pod_menu(menu, pod, live, &dock, &shell),
+                Some(pod) => pod_menu(menu, pod, live, session.read(cx).context(), &dock, &shell),
                 None => menu,
             }
         })
@@ -112,23 +125,40 @@ fn pod_events<'a>(
     session.read(cx).live()?.events_of(&subject)
 }
 
-fn overview(pod: &PodSummary, cx: &Context<AppShell>) -> AnyElement {
+fn overview(
+    pod: &PodSummary,
+    events: Option<&[EventSummary]>,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> AnyElement {
     let running = pod
         .containers
         .iter()
         .filter(|container| matches!(container.state, ContainerState::Running { .. }))
         .count();
-    let controller = pod
-        .controller
-        .as_ref()
-        .map(|controller| format!("{}/{}", controller.kind, controller.name));
-    v_flex()
-        .child(section_title("Pod", cx))
-        .child(detail_row(
-            "Node",
-            value_or_absent(pod.node_name.as_deref(), cx),
+    let node = match &pod.node_name {
+        Some(name) => link_text(
+            1,
+            &name.clone().into(),
+            ResourceKey::Node { name: name.clone() },
             cx,
-        ))
+        )
+        .into_any_element(),
+        None => absent_text(cx).into_any_element(),
+    };
+    let controller = pod.controller.as_ref().map(|controller| {
+        let text = format!("{}/{}", controller.kind, controller.name);
+        let target =
+            ResourceKey::of_object(&controller.kind, Some(&pod.namespace), &controller.name);
+        match target {
+            Some(target) => link_text(2, &text.into(), target, cx).into_any_element(),
+            None => div().truncate().child(text).into_any_element(),
+        }
+    });
+    v_flex()
+        .children(pod_diagnosis(pod, events, now).map(|diagnosis| why_box(&diagnosis, cx)))
+        .child(section_title("Pod", cx))
+        .child(detail_row("Node", node, cx))
         .child(detail_row(
             "Pod IP",
             mono_or_absent(pod.pod_ip.as_deref(), cx),
@@ -146,7 +176,7 @@ fn overview(pod: &PodSummary, cx: &Context<AppShell>) -> AnyElement {
         ))
         .child(detail_row(
             "Controlled by",
-            value_or_absent(controller.as_deref(), cx),
+            controller.unwrap_or_else(|| absent_text(cx).into_any_element()),
             cx,
         ))
         .child(section_title("Conditions", cx))
@@ -175,6 +205,46 @@ fn mono_or_absent(value: Option<&str>, cx: &App) -> AnyElement {
     }
 }
 
+/// The WHY box. `Alert` has no children, so the link that opens the container is a sibling
+/// right under it.
+fn why_box(diagnosis: &PodDiagnosis, cx: &Context<AppShell>) -> AnyElement {
+    let title = match &diagnosis.container {
+        Some(name) => format!("WHY · CONTAINER {name}"),
+        None => "WHY · POD".to_owned(),
+    };
+    let text = diagnosis.text.clone();
+    let alert = match diagnosis.tone {
+        StatusTone::Bad => Alert::error("why-box", text),
+        _ => Alert::warning("why-box", text),
+    };
+    v_flex()
+        .gap_1()
+        .child(alert.title(title))
+        .children(diagnosis.container.clone().map(|name| {
+            let label = format!("Open container {name} →");
+            div()
+                .id("why-open-container")
+                .cursor_pointer()
+                .text_sm()
+                .text_color(cx.theme().link)
+                .underline()
+                .on_click(
+                    cx.listener(move |shell, _, _, cx| shell.open_container(name.clone(), cx)),
+                )
+                .child(label)
+        }))
+        .into_any_element()
+}
+
+/// `{reason}: {message}`, either part may be missing; `None` when both are.
+fn condition_tooltip(condition: &PodCondition) -> Option<String> {
+    match (&condition.reason, &condition.message) {
+        (Some(reason), Some(message)) => Some(format!("{reason}: {message}")),
+        (Some(text), None) | (None, Some(text)) => Some(text.clone()),
+        (None, None) => None,
+    }
+}
+
 fn conditions(pod: &PodSummary, cx: &App) -> AnyElement {
     if pod.conditions.is_empty() {
         return absent_text(cx).into_any_element();
@@ -183,13 +253,17 @@ fn conditions(pod: &PodSummary, cx: &App) -> AnyElement {
     h_flex()
         .flex_wrap()
         .gap_2()
-        .children(pod.conditions.iter().map(|condition| {
+        .children(pod.conditions.iter().enumerate().map(|(index, condition)| {
             let dot_color = if condition.is_true {
                 theme.success
             } else {
                 theme.muted_foreground
             };
+            let tooltip = (!condition.is_true)
+                .then(|| condition_tooltip(condition))
+                .flatten();
             h_flex()
+                .id(("condition", index))
                 .gap_1p5()
                 .items_center()
                 .px_2()
@@ -200,6 +274,9 @@ fn conditions(pod: &PodSummary, cx: &App) -> AnyElement {
                 .text_xs()
                 .child(div().size_2().rounded_full().bg(dot_color))
                 .child(condition.name.clone())
+                .when_some(tooltip, |this, text| {
+                    this.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+                })
         }))
         .into_any_element()
 }
@@ -241,7 +318,7 @@ fn container_row(index: usize, container: &ContainerSummary, cx: &Context<AppShe
         .into_any_element()
 }
 
-fn kind_tag(kind: ContainerKind, cx: &App) -> AnyElement {
+pub(crate) fn kind_tag(kind: ContainerKind, cx: &App) -> AnyElement {
     let theme = cx.theme();
     div()
         .px_1()
@@ -278,6 +355,8 @@ pub(crate) fn default_container(containers: &[ContainerSummary]) -> Option<usize
 fn containers_tab(
     pod: &PodSummary,
     state: &DrawerState,
+    events: Option<&[EventSummary]>,
+    forward_reason: &SharedString,
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -294,7 +373,17 @@ fn containers_tab(
         return absent_text(cx).into_any_element();
     };
     let list = container_list(&pod.containers, selected, cx);
-    let detail = container_detail(&pod.containers[selected], now, cx);
+    let detail = container_detail(
+        &ContainerDetailInput {
+            pod,
+            container: &pod.containers[selected],
+            tab: state.container_tab,
+            events,
+            forward_reason,
+            now,
+        },
+        cx,
+    );
     // At the default width the list stacks above the detail; expanded, they sit side by side.
     if state.is_expanded {
         h_flex()
@@ -419,91 +508,6 @@ fn list_item(
         )
         .child(toned_text(container_state_label(container), cx))
         .into_any_element()
-}
-
-fn container_detail(
-    container: &ContainerSummary,
-    now: jiff::Timestamp,
-    cx: &Context<AppShell>,
-) -> AnyElement {
-    let theme = cx.theme();
-    let mono = theme.mono_font_family.clone();
-    let label = container_state_label(container);
-    let tone = label.tone;
-    let state = StatusLabel {
-        text: state_text(container, &label, now).into(),
-        tone,
-    };
-    let last_state = container
-        .last_termination
-        .as_ref()
-        .map(|termination| last_state_text(termination, now));
-    v_flex()
-        .child(
-            h_flex()
-                .gap_2()
-                .items_center()
-                .pb_2()
-                .child(
-                    div()
-                        .font_semibold()
-                        .font_family(mono.clone())
-                        .child(container.name.clone()),
-                )
-                .child(div().text_color(tone_color(tone, cx)).child(label.text))
-                .child(kind_tag(container.kind, cx)),
-        )
-        .child(detail_row("State", toned_text(state, cx), cx))
-        .child(detail_row(
-            "Last state",
-            value_or_absent(last_state.as_deref(), cx),
-            cx,
-        ))
-        .child(detail_row(
-            "Restarts",
-            div()
-                .font_family(mono.clone())
-                .child(container.restart_count.to_string()),
-            cx,
-        ))
-        .child(detail_row(
-            "Image",
-            truncated_text("container-image", container.image.clone()).font_family(mono),
-            cx,
-        ))
-        .into_any_element()
-}
-
-/// The state label, plus how long a running container has been up.
-fn state_text(container: &ContainerSummary, label: &StatusLabel, now: jiff::Timestamp) -> String {
-    match &container.state {
-        ContainerState::Running {
-            started_at: Some(started_at),
-        } => format!(
-            "{} · started {} ago",
-            label.text,
-            format_age(Some(*started_at), now)
-        ),
-        _ => label.text.to_string(),
-    }
-}
-
-fn last_state_text(termination: &Termination, now: jiff::Timestamp) -> String {
-    let reason = termination
-        .reason
-        .as_ref()
-        .map_or_else(|| "Terminated".to_owned(), ToString::to_string);
-    let mut text = format!("{reason} · exit {}", termination.exit_code);
-    if let Some(signal) = termination.signal {
-        text.push_str(&format!(" · signal {signal}"));
-    }
-    if let Some(finished_at) = termination.finished_at {
-        text.push_str(&format!(
-            " · ended {} ago",
-            format_age(Some(finished_at), now)
-        ));
-    }
-    text
 }
 
 #[cfg(test)]

@@ -61,7 +61,7 @@ Usage numbers and bars (0010), Monitor and Logs sub-tabs (0010, 0019), live port
 | 22 | `status_message` is kept only for phase Failed or reason Evicted | P3 must not fire on transient messages of live pods; less memory |
 | 23 | Wireframe-shown items stay: the "Other containers are healthy" suffix, `next retry in`, env/mount source summaries. Cut (not in the wireframe): liveness-failing-while-ready and recent-OOM WHY rules | user goal is everything in the wireframe, nothing beyond it |
 
-Known ceilings: memory ≈ 3 × 1.5 KiB × pods for the new fields (~4.5 MiB at 1,000 pods), because the watch store, the `LiveList`, and a transient clone each hold a copy, and every batch deep-clones the whole list. Upgrade path: `Arc<ContainerSpec>` for the immutable spec part (cheap clones, same API shape), not an on-demand fetch. The `PartialEq` dedupe means any churning field causes snapshots; every chosen field is stable (no heartbeats, no probe times). Probe "×N" is one event series and may include failures from before the current run when the series started earlier.
+Known ceilings: memory ≈ 3 × 3–6 KiB per container for the new fields (roughly 10–20 MiB at 1,000 pods; env-heavy pods drive it), because the watch store, the `LiveList`, and a transient clone each hold a copy, and every batch deep-clones the whole list. Upgrade path: `Arc<ContainerSpec>` for the immutable spec part (cheap clones, same API shape), not an on-demand fetch. The `PartialEq` dedupe means any churning field causes snapshots; every chosen field is stable (no heartbeats, no probe times). Probe "×N" is one event series and may include failures from before the current run when the series started earlier.
 
 ## Acceptance criteria
 

@@ -59,6 +59,9 @@ pub struct EventSummary {
     pub last_seen: Option<jiff::Timestamp>,
     /// For example `kubelet on ip-10-0-1-23`.
     pub source: Option<String>,
+    /// The container named by `involvedObject.fieldPath`: `spec.containers{api}`,
+    /// `spec.initContainers{api}`, or `spec.ephemeralContainers{api}`; else `None`.
+    pub container: Option<String>,
 }
 
 impl ClusterConnection {
@@ -167,6 +170,11 @@ pub(crate) fn event_summary(event: &Event) -> EventSummary {
         first_seen,
         last_seen,
         source: event_source(event),
+        container: event
+            .involved_object
+            .field_path
+            .as_deref()
+            .and_then(field_path_container),
     }
 }
 
@@ -211,6 +219,29 @@ fn first_non_empty<'a>(first: Option<&'a str>, second: Option<&'a str>) -> Optio
     first
         .filter(|text| !text.is_empty())
         .or(second.filter(|text| !text.is_empty()))
+}
+
+/// `truncate_message`, with empty text as `None`.
+pub(crate) fn optional_message(message: Option<&str>) -> Option<String> {
+    Some(truncate_message(message?)).filter(|message| !message.is_empty())
+}
+
+/// The container in a `spec.containers{name}`-style field path. The kubelet's
+/// `implicitly required container {name}` and any other text give `None`.
+fn field_path_container(path: &str) -> Option<String> {
+    [
+        "spec.containers",
+        "spec.initContainers",
+        "spec.ephemeralContainers",
+    ]
+    .iter()
+    .find_map(|prefix| {
+        path.strip_prefix(prefix)?
+            .strip_prefix('{')?
+            .strip_suffix('}')
+    })
+    .filter(|name| !name.is_empty())
+    .map(str::to_owned)
 }
 
 /// Trims both ends like Go's `strings.TrimSpace`, then cuts at the largest char boundary

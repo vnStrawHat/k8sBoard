@@ -52,7 +52,7 @@ Pod-level, in order:
 | P2 | status Reason `SchedulingGated` | Warn | `Waiting for its scheduling gates to be removed.` |
 | P3 | `status_message` is Some (the crate keeps it only for phase Failed or reason Evicted) | Bad | `{pod status}: {status_message}` (e.g. `Evicted: The node was low on resource: memory.`) |
 
-Otherwise every container gets `container_problem` (below). The box shows the first **Bad** problem in container order (init and sidecars, then main), else the first **Warn** one. Suffix (W4 shows it): ` Other containers are healthy.` when the pod has 2+ containers and one problem; ` {n} other containers also have problems.` (`1 other container also has a problem.`) when more.
+Otherwise every container gets `container_problem` (below). The box shows the first **Bad** problem in container order (init and sidecars, then main), else the first **Warn** one. Suffix (W4 shows it; joined to the text with a full stop added when the text does not already end in `.`, `!`, or `?`): ` Other containers are healthy.` when the pod has 2+ containers and one problem; ` {n} other containers also have problems.` (`1 other container also has a problem.`) when more.
 
 C1 and C5 decide on `status_tone::is_bad_reason` (now `pub(crate)`, with the new `InvalidImageName`, `ErrImageNeverPull`, `CreateContainerError` variants), so the WHY box and the state label never disagree. No rule string-matches `StatusReason::Other`.
 

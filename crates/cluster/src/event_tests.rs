@@ -268,3 +268,36 @@ fn empty_series_counts_one_and_keeps_last_timestamp() {
 fn empty_object_namespace_reads_default() {
     assert_eq!(object_events_namespace(&pod_object(Some(""))), "default");
 }
+
+#[test]
+fn field_path_names_the_container() {
+    let cases = [
+        ("spec.containers{api}", Some("api")),
+        ("spec.initContainers{migrate}", Some("migrate")),
+        ("spec.ephemeralContainers{debugger}", Some("debugger")),
+        ("spec.volumes{data}", None),
+        ("implicitly required container POD", None),
+        ("spec.containers{}", None),
+        ("spec.containers", None),
+        ("", None),
+    ];
+    for (path, expected) in cases {
+        assert_eq!(field_path_container(path).as_deref(), expected, "{path}");
+    }
+}
+
+#[test]
+fn event_summary_reads_the_container_from_the_field_path() {
+    let event = |field_path: Option<&str>| Event {
+        involved_object: ObjectReference {
+            field_path: field_path.map(str::to_owned),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(
+        event_summary(&event(Some("spec.containers{api}"))).container,
+        Some("api".to_owned())
+    );
+    assert_eq!(event_summary(&event(None)).container, None);
+}

@@ -11,6 +11,15 @@ fn container(kind: ContainerKind, state: ContainerState, is_ready: bool) -> Cont
         is_ready,
         restart_count: 0,
         last_termination: None,
+        image_digest: None,
+        pull_policy: None,
+        is_started: None,
+        ports: Vec::new(),
+        resources: Vec::new(),
+        probes: cluster::ContainerProbes::default(),
+        env: Vec::new(),
+        env_from: Vec::new(),
+        mounts: Vec::new(),
     }
 }
 
@@ -43,6 +52,7 @@ fn pod(status: PodStatus, ready: u32, containers: Vec<ContainerSummary>) -> PodS
         service_account: None,
         controller: None,
         conditions: Vec::new(),
+        status_message: None,
         containers,
     }
 }
@@ -88,7 +98,10 @@ fn pod_running_not_ready_with_waiting_container_keeps_status_text() {
             container(ContainerKind::Main, running(), false),
             container(
                 ContainerKind::Main,
-                ContainerState::Waiting { reason: None },
+                ContainerState::Waiting {
+                    reason: None,
+                    message: None,
+                },
                 false,
             ),
         ],
@@ -105,6 +118,9 @@ fn pod_bad_reasons_are_bad() {
         StatusReason::ImagePullBackOff,
         StatusReason::ErrImagePull,
         StatusReason::CreateContainerConfigError,
+        StatusReason::InvalidImageName,
+        StatusReason::ErrImageNeverPull,
+        StatusReason::CreateContainerError,
         StatusReason::OomKilled,
         StatusReason::Error,
         StatusReason::ContainerCannotRun,
@@ -209,4 +225,28 @@ fn light_theme_text_is_darker_than_the_fill_colour() {
     let text = readable_on_light(green, foreground);
     assert!(text.l < green.l);
     assert!(text.l > foreground.l);
+}
+
+#[test]
+fn new_reasons_are_bad() {
+    for reason in [
+        StatusReason::InvalidImageName,
+        StatusReason::ErrImageNeverPull,
+        StatusReason::CreateContainerError,
+    ] {
+        assert!(is_bad_reason(&reason), "{reason}");
+        let waiting = container(
+            ContainerKind::Main,
+            ContainerState::Waiting {
+                reason: Some(reason.clone()),
+                message: None,
+            },
+            false,
+        );
+        assert_eq!(
+            container_state_label(&waiting).tone,
+            StatusTone::Bad,
+            "{reason}"
+        );
+    }
 }

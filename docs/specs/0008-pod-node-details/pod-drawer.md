@@ -20,7 +20,7 @@
 
 ## Containers tab
 
-- Master list unchanged. Detail header: name, state label, kind tag, then muted `next retry in {d}` when `next_retry` is Some (`d` formatted like ages).
+- Master list unchanged. Detail header: name, state label, kind tag, then muted `next retry in {d}` when `next_retry` is Some (`d` in Go style via `age::format_countdown`: `40s`, `3m20s`, `1h0m5s`).
 - Sub-tab bar under the header: kit `TabBar::new("container-tabs").segmented().xsmall()` with `Info`, `Env {env.len() + env_from.len()}`, `Mounts {mounts.len()}`. Logs (0019) and Monitor (0010) are not shown.
 
 ```rust

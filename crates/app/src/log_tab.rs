@@ -542,6 +542,15 @@ mod tests {
             is_ready,
             restart_count: 0,
             last_termination: None,
+            image_digest: None,
+            pull_policy: None,
+            is_started: None,
+            ports: Vec::new(),
+            resources: Vec::new(),
+            probes: cluster::ContainerProbes::default(),
+            env: Vec::new(),
+            env_from: Vec::new(),
+            mounts: Vec::new(),
         }
     }
 
@@ -559,6 +568,7 @@ mod tests {
             service_account: None,
             controller: None,
             conditions: Vec::new(),
+            status_message: None,
             containers,
         }
     }

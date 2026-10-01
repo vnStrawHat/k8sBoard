@@ -17,6 +17,7 @@ fn pod(namespace: &str, name: &str) -> PodSummary {
         service_account: None,
         controller: None,
         conditions: Vec::new(),
+        status_message: None,
         containers: Vec::new(),
     }
 }
@@ -33,6 +34,11 @@ fn node(name: &str) -> NodeSummary {
         kubelet_version: "v1.29.5".to_owned(),
         internal_ip: None,
         created_at: None,
+        conditions: Vec::new(),
+        addresses: Vec::new(),
+        system: cluster::NodeSystemInfo::default(),
+        resources: Vec::new(),
+        labels: Vec::new(),
     }
 }
 
@@ -148,4 +154,41 @@ fn list_row_index_waits_while_loading_and_drops_a_failed_list() {
         interruption: None,
     };
     assert_eq!(list_row_index(&ready, is_key), Some(Some(1)));
+}
+
+#[test]
+fn of_object_maps_pods_nodes_and_kinds() {
+    assert_eq!(
+        ResourceKey::of_object("Pod", Some("shop"), "api-0"),
+        Some(ResourceKey::Pod {
+            namespace: "shop".to_owned(),
+            name: "api-0".to_owned(),
+        })
+    );
+    assert_eq!(ResourceKey::of_object("Pod", None, "api-0"), None);
+    assert_eq!(
+        ResourceKey::of_object("Node", None, "node-1"),
+        Some(ResourceKey::Node {
+            name: "node-1".to_owned()
+        })
+    );
+    assert_eq!(
+        ResourceKey::of_object("ReplicaSet", Some("shop"), "api-7d"),
+        Some(ResourceKey::Kind {
+            kind: ResourceKind::ReplicaSets,
+            namespace: Some("shop".to_owned()),
+            name: "api-7d".to_owned(),
+        })
+    );
+    // Cluster-scoped kinds drop the namespace.
+    assert_eq!(
+        ResourceKey::of_object("Namespace", Some("shop"), "shop"),
+        Some(ResourceKey::Kind {
+            kind: ResourceKind::Namespaces,
+            namespace: None,
+            name: "shop".to_owned(),
+        })
+    );
+    assert_eq!(ResourceKey::of_object("Event", Some("shop"), "e"), None);
+    assert_eq!(ResourceKey::of_object("Widget", Some("shop"), "w"), None);
 }

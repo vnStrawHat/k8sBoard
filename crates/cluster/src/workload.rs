@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use k8s_openapi::api::core::v1::PodTemplateSpec;
+use k8s_openapi::api::core::v1::{Container, PodTemplateSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
@@ -103,19 +103,24 @@ pub(crate) fn template_containers(template: &PodTemplateSpec) -> Vec<TemplateCon
         .map(|container| TemplateContainer {
             name: container.name.clone(),
             image: container.image.clone().unwrap_or_default(),
-            ports: container
-                .ports
-                .iter()
-                .flatten()
-                .filter_map(|port| {
-                    Some(ContainerPort {
-                        name: port.name.clone(),
-                        // The API rejects ports outside u16, so such a port is dropped.
-                        port: u16::try_from(port.container_port).ok()?,
-                        protocol: port.protocol.clone().unwrap_or_else(|| "TCP".to_owned()),
-                    })
-                })
-                .collect(),
+            ports: container_ports(container),
+        })
+        .collect()
+}
+
+/// The container's declared ports in spec order.
+pub(crate) fn container_ports(container: &Container) -> Vec<ContainerPort> {
+    container
+        .ports
+        .iter()
+        .flatten()
+        .filter_map(|port| {
+            Some(ContainerPort {
+                name: port.name.clone(),
+                // The API rejects ports outside u16, so such a port is dropped.
+                port: u16::try_from(port.container_port).ok()?,
+                protocol: port.protocol.clone().unwrap_or_else(|| "TCP".to_owned()),
+            })
         })
         .collect()
 }

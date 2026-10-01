@@ -4,11 +4,8 @@
 use std::rc::Rc;
 
 use cluster::PodSummary;
-use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::DropdownMenu as _;
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
@@ -18,9 +15,9 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::drawer::{
-    DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, drawer_frame,
-    drawer_tab_bar, drawer_tabs, expand_toggle, menu_button, section_title, shown_tab, tab_titles,
-    truncated_text, wide_detail_row, yaml_body,
+    DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
+    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, link_text, menu_button, port_row,
+    section_title, shown_tab, tab_titles, truncated_text, wide_detail_row, yaml_body,
 };
 use crate::kind_row::{
     DAEMON_SET_KIND, DetailRow, KindCell, KindRow, PodOwner, STATEFUL_SET_KIND, owns_pod,
@@ -189,7 +186,7 @@ fn detail_element(
             text,
             target,
         } => {
-            let link = link_value(text, target.clone(), id, cx);
+            let link = link_text(id, text, target.clone(), cx);
             wide_detail_row(label.clone(), link, cx).into_any_element()
         }
         DetailRow::Port { text } => port_row(text, id, forward_reason, cx),
@@ -211,28 +208,6 @@ fn code_block(text: &SharedString, cx: &App) -> AnyElement {
         .bg(theme.muted)
         .font_family(theme.mono_font_family.clone())
         .text_xs()
-        .child(text.clone())
-        .into_any_element()
-}
-
-/// A mono value that opens `target` on its own screen.
-fn link_value(
-    text: &SharedString,
-    target: ResourceKey,
-    id: usize,
-    cx: &Context<AppShell>,
-) -> AnyElement {
-    let theme = cx.theme();
-    let tooltip_text = SharedString::from(format!("Open {text}"));
-    div()
-        .id(("link", id))
-        .truncate()
-        .cursor_pointer()
-        .font_family(theme.mono_font_family.clone())
-        .text_color(theme.link)
-        .underline()
-        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
-        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(target.clone(), cx)))
         .child(text.clone())
         .into_any_element()
 }
@@ -289,55 +264,6 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
             .into_any_element()
         }
     }
-}
-
-/// Wrapping chips, or a dash when there are none.
-fn chips(terms: &[SharedString], cx: &App) -> AnyElement {
-    if terms.is_empty() {
-        return absent_text(cx).into_any_element();
-    }
-    let theme = cx.theme();
-    h_flex()
-        .flex_wrap()
-        .gap_1()
-        .children(terms.iter().map(|term| {
-            div()
-                .max_w_full()
-                .truncate()
-                .px_1p5()
-                .rounded(theme.radius)
-                .bg(theme.muted)
-                .font_family(theme.mono_font_family.clone())
-                .text_xs()
-                .child(term.clone())
-        }))
-        .into_any_element()
-}
-
-/// A port with its Forward button. The button is always disabled: port-forwarding is not
-/// available in this version, and the tooltip says why.
-fn port_row(text: &SharedString, id: usize, reason: &SharedString, cx: &App) -> AnyElement {
-    h_flex()
-        .gap_2()
-        .py_1()
-        .items_center()
-        .text_sm()
-        .child(
-            truncated_text(("port", id), text.clone())
-                .flex_1()
-                .min_w_0()
-                .font_family(cx.theme().mono_font_family.clone()),
-        )
-        .child(
-            Button::new(("forward", id))
-                .label("Forward")
-                .icon(Icon::new(IconName::ArrowLeftRight))
-                .xsmall()
-                .ghost()
-                .disabled(true)
-                .tooltip(reason.clone()),
-        )
-        .into_any_element()
 }
 
 /// The pods of `owner`, read from the live pods list at render time so they stay current.

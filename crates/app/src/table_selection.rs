@@ -37,6 +37,30 @@ impl ResourceKey {
         }
     }
 
+    /// The key of an object named by an event or an owner reference, when k8sBoard has a screen
+    /// for its kind. A Pod needs a namespace; Events have no screen of their own.
+    pub(crate) fn of_object(kind: &str, namespace: Option<&str>, name: &str) -> Option<Self> {
+        let name = name.to_owned();
+        match (kind, namespace) {
+            ("Pod", Some(namespace)) => Some(Self::Pod {
+                namespace: namespace.to_owned(),
+                name,
+            }),
+            ("Node", _) => Some(Self::Node { name }),
+            (kind, namespace) => {
+                let kind = ResourceKind::from_object_kind(kind)
+                    .filter(|kind| *kind != ResourceKind::Events)?;
+                Some(Self::Kind {
+                    kind,
+                    namespace: namespace
+                        .filter(|_| kind.is_namespaced())
+                        .map(str::to_owned),
+                    name,
+                })
+            }
+        }
+    }
+
     pub(crate) fn of_row(kind: ResourceKind, row: &KindRow) -> Self {
         Self::Kind {
             kind,

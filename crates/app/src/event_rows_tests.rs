@@ -1,4 +1,5 @@
 use super::*;
+use crate::resource_kind::ResourceKind;
 
 fn at(seconds: i64) -> jiff::Timestamp {
     jiff::Timestamp::from_second(seconds).expect("valid timestamp")
@@ -19,6 +20,7 @@ fn summary() -> EventSummary {
         event_type: EventType::Warning,
         reason: "BackOff".to_owned(),
         object: object("Pod", Some("team-a"), "api-0"),
+        container: None,
         message: "Back-off restarting failed container".to_owned(),
         count: 4,
         first_seen: Some(at(100)),
@@ -193,6 +195,7 @@ fn event_row_has_details_and_message_sections() {
 fn event_object_without_a_screen_is_plain_text_and_empty_message_is_a_note() {
     let event = EventSummary {
         object: object("HorizontalPodAutoscaler", Some("team-a"), "web"),
+        container: None,
         message: String::new(),
         ..summary()
     };
@@ -212,6 +215,7 @@ fn event_object_without_a_screen_is_plain_text_and_empty_message_is_a_note() {
 fn event_title_falls_back_to_the_event_name_without_an_object_name() {
     let nameless = EventSummary {
         object: object("", None, ""),
+        container: None,
         ..summary()
     };
     let row = event_row(&nameless);

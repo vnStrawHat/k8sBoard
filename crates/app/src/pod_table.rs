@@ -175,7 +175,14 @@ impl TableDelegate for PodTableDelegate {
             return menu;
         };
         match live.pods.items().get(row_ix) {
-            Some(pod) => pod_menu(menu, pod, live, &self.log_dock, &self.shell),
+            Some(pod) => pod_menu(
+                menu,
+                pod,
+                live,
+                session.read(cx).context(),
+                &self.log_dock,
+                &self.shell,
+            ),
             None => menu,
         }
     }

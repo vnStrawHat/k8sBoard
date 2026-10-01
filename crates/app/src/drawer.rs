@@ -6,7 +6,9 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, Div, ElementId, Entity, InteractiveElement as _,
     IntoElement, ParentElement as _, Pixels, SharedString, Stateful,
@@ -39,6 +41,9 @@ pub(crate) struct DrawerState {
     pub(crate) tab: DrawerTab,
     pub(crate) is_expanded: bool,
     pub(crate) selected_container: Option<String>,
+    /// The sub-tab of the container detail. Like `tab`, it survives a change of container and
+    /// subject; `show_screen` resets it.
+    pub(crate) container_tab: ContainerTab,
     /// The YAML tab's view; `AppShell::sync_yaml_view` keeps it for the shown subject only.
     pub(crate) yaml: Option<Entity<YamlView>>,
 }
@@ -49,6 +54,7 @@ impl DrawerState {
             tab: DrawerTab::Overview,
             is_expanded: false,
             selected_container: None,
+            container_tab: ContainerTab::Info,
             yaml: None,
         }
     }
@@ -60,6 +66,13 @@ impl DrawerState {
             DRAWER_WIDTH
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContainerTab {
+    Info,
+    Env,
+    Mounts,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -394,6 +407,82 @@ pub(crate) fn created_text(
     created_at.map(|created_at| format!("created {} ago", format_age(Some(created_at), now)))
 }
 
+/// A mono value that opens `target` on its own screen.
+pub(crate) fn link_text(
+    id: usize,
+    text: &SharedString,
+    target: ResourceKey,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let tooltip_text = SharedString::from(format!("Open {text}"));
+    div()
+        .id(("link", id))
+        .truncate()
+        .cursor_pointer()
+        .font_family(theme.mono_font_family.clone())
+        .text_color(theme.link)
+        .underline()
+        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(target.clone(), cx)))
+        .child(text.clone())
+        .into_any_element()
+}
+
+/// Wrapping chips, or a dash when there are none.
+pub(crate) fn chips(terms: &[SharedString], cx: &App) -> AnyElement {
+    if terms.is_empty() {
+        return absent_text(cx).into_any_element();
+    }
+    let theme = cx.theme();
+    h_flex()
+        .flex_wrap()
+        .gap_1()
+        .children(terms.iter().map(|term| {
+            div()
+                .max_w_full()
+                .truncate()
+                .px_1p5()
+                .rounded(theme.radius)
+                .bg(theme.muted)
+                .font_family(theme.mono_font_family.clone())
+                .text_xs()
+                .child(term.clone())
+        }))
+        .into_any_element()
+}
+
+/// A port with its Forward button. The button is always disabled: port-forwarding is not
+/// available in this version, and the tooltip says why.
+pub(crate) fn port_row(
+    text: &SharedString,
+    id: usize,
+    reason: &SharedString,
+    cx: &App,
+) -> AnyElement {
+    h_flex()
+        .gap_2()
+        .py_1()
+        .items_center()
+        .text_sm()
+        .child(
+            truncated_text(("port", id), text.clone())
+                .flex_1()
+                .min_w_0()
+                .font_family(cx.theme().mono_font_family.clone()),
+        )
+        .child(
+            Button::new(("forward", id))
+                .label("Forward")
+                .icon(Icon::new(IconName::ArrowLeftRight))
+                .xsmall()
+                .ghost()
+                .disabled(true)
+                .tooltip(reason.clone()),
+        )
+        .into_any_element()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,6 +565,13 @@ mod tests {
             .map(|(_, title)| title.to_string())
             .collect();
         assert_eq!(titles, ["Overview", "Containers 3", "YAML", "Events"]);
+    }
+
+    #[test]
+    fn drawer_state_starts_on_info() {
+        let state = DrawerState::new();
+        assert_eq!(state.container_tab, ContainerTab::Info);
+        assert_eq!(state.tab, DrawerTab::Overview);
     }
 
     #[test]

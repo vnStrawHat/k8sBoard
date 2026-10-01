@@ -46,7 +46,7 @@ pub(crate) struct DrawerHeader { kind_badge: &'static str /* "Po" | "No" */, nam
 | Containers · {running} of {total} running | one row per container in lifecycle order: kind tag (`INIT`/`SIDECAR`/`MAIN`), name (mono), state label in its tone, restarts (right). Clicking a row sets `tab = Containers` and `selected_container = name` |
 
 - The label/value rows use the kit `DescriptionList` if it fits, otherwise a two-column `h_flex` with a muted label.
-- No "WHY" box and no links (non-goals).
+- Spec 0008 adds the WHY box above the Pod section, Node and Controlled by links, and tooltips on conditions that are not true.
 
 ## Pod Containers tab (W4b, master-detail)
 
@@ -67,7 +67,7 @@ pub(crate) struct DrawerHeader { kind_badge: &'static str /* "Po" | "No" */, nam
 | Restarts | `restart_count` |
 | Image | `image` (mono, selectable if the kit text supports it) |
 
-- No sub-tabs, ports, resources, probes, env, or mounts (non-goals). No container ⋯ menu.
+- Spec 0008 replaces these rows with Info · Env · Mounts sub-tabs (digest, pull policy, ports, resources, probes, env and mount names and sources). No container ⋯ menu.
 
 ## Node drawer
 

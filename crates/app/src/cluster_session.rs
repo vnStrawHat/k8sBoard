@@ -155,6 +155,14 @@ impl<T> LiveList<T> {
         matches!(self, Self::Loading)
     }
 
+    /// The items once the first snapshot has arrived; `None` while loading or failed.
+    pub(crate) fn ready_items(&self) -> Option<&[T]> {
+        match self {
+            Self::Ready { items, .. } => Some(items),
+            Self::Loading | Self::Failed { .. } => None,
+        }
+    }
+
     /// The number of items once the first snapshot has arrived.
     pub(crate) fn ready_count(&self) -> Option<usize> {
         match self {

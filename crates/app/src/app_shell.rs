@@ -15,7 +15,7 @@ use gpui_kit::{
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
 use crate::cluster_session::{ClusterSession, LiveCluster, error_text};
-use crate::drawer::{DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab};
+use crate::drawer::{ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab};
 use crate::kind_table::KindTableDelegate;
 use crate::launch_options::{
     LaunchOptions, LaunchScreen, has_ignored_kubeconfig_entries, kubeconfig_path,
@@ -307,6 +307,7 @@ impl AppShell {
     pub(crate) fn show_screen(&mut self, screen: Screen, cx: &mut Context<Self>) {
         self.screen = screen;
         self.drawer.tab = DrawerTab::Overview;
+        self.drawer.container_tab = ContainerTab::Info;
         if let Some(session) = &self.session {
             session.update(cx, |session, cx| {
                 session.set_explorer_kind(screen.kind(), cx)
@@ -366,6 +367,11 @@ impl AppShell {
 
     pub(crate) fn toggle_drawer_expanded(&mut self, cx: &mut Context<Self>) {
         self.drawer.is_expanded = !self.drawer.is_expanded;
+        cx.notify();
+    }
+
+    pub(crate) fn set_container_tab(&mut self, tab: ContainerTab, cx: &mut Context<Self>) {
+        self.drawer.container_tab = tab;
         cx.notify();
     }
 

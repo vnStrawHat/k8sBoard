@@ -6,7 +6,6 @@ use cluster::{EventSummary, EventType, InvolvedObject, WatchUpdate};
 use gpui_kit::SharedString;
 
 use crate::kind_row::{DetailRow, DetailSection, EventDetail, KindCell, KindRow};
-use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusLabel, StatusTone};
 use crate::table_selection::ResourceKey;
 
@@ -155,27 +154,11 @@ fn object_text(object: &InvolvedObject) -> String {
 
 /// The key of the object when k8sBoard has a screen for its kind.
 fn object_key(object: &InvolvedObject) -> Option<ResourceKey> {
-    let name = object.name.clone();
-    match (object.kind.as_str(), &object.namespace) {
-        ("Pod", Some(namespace)) => Some(ResourceKey::Pod {
-            namespace: namespace.clone(),
-            name,
-        }),
-        ("Node", _) => Some(ResourceKey::Node { name }),
-        (kind, namespace) => {
-            let kind = ResourceKind::from_object_kind(kind)
-                .filter(|kind| *kind != ResourceKind::Events)?;
-            Some(ResourceKey::Kind {
-                kind,
-                namespace: namespace.clone().filter(|_| kind.is_namespaced()),
-                name,
-            })
-        }
-    }
+    ResourceKey::of_object(&object.kind, object.namespace.as_deref(), &object.name)
 }
 
 /// The table shows one line, so line breaks become single spaces.
-fn message_line(message: &str) -> String {
+pub(crate) fn message_line(message: &str) -> String {
     message
         .lines()
         .filter(|line| !line.is_empty())

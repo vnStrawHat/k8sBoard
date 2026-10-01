@@ -20,6 +20,7 @@ pub(crate) fn node_menu(menu: PopupMenu, node: &NodeSummary, access: &AccessStat
 | view | Port-forward | disabled: RBAC reason if `CreatePodPortForward` is denied, else "Not available in read-only mode" |
 | separator | | |
 | copy | Copy name | enabled: writes `name` to the clipboard (`cx.write_to_clipboard(ClipboardItem::new_string(..))`) |
+| copy | Copy kubectl command | enabled (spec 0008): writes `kubectl --context C -n NS describe pod NAME` |
 
 - No container submenus: they would only lead to disabled items.
 - No Edit/Restart/Evict/Delete/Attach (non-goal).

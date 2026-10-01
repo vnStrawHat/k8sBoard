@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
+
 use k8s_openapi::api::core::v1::{
     ContainerState as ApiContainerState, ContainerStateRunning, ContainerStateWaiting,
-    ContainerStatus, PodCondition as ApiPodCondition, PodSpec, PodStatus as ApiPodStatus,
+    ContainerStatus, EnvVar, PodCondition as ApiPodCondition, PodSpec, PodStatus as ApiPodStatus,
+    Probe,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
 
@@ -170,9 +173,13 @@ fn container_state_maps_waiting_running_terminated() {
         states,
         [
             ContainerState::Waiting {
-                reason: Some(StatusReason::ImagePullBackOff)
+                reason: Some(StatusReason::ImagePullBackOff),
+                message: None,
             },
-            ContainerState::Waiting { reason: None },
+            ContainerState::Waiting {
+                reason: None,
+                message: None,
+            },
             ContainerState::Running {
                 started_at: Some(started)
             },
@@ -353,4 +360,197 @@ fn container_summary_reads_image() {
         .map(|summary| summary.image)
         .collect();
     assert_eq!(images, ["nginx:1.27", ""]);
+}
+
+fn pod_with_status(status: ApiPodStatus) -> Pod {
+    let mut pod = pod_with_containers(Vec::new(), vec![container("main", None)]);
+    pod.status = Some(status);
+    pod
+}
+
+fn failed_status(message: Option<&str>) -> ApiPodStatus {
+    ApiPodStatus {
+        phase: Some("Failed".to_owned()),
+        message: message.map(str::to_owned),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn pod_summary_reads_status_message_cut_at_limit() {
+    let trimmed = pod_summary(&pod_with_status(failed_status(Some("  node is low  \n"))));
+    assert_eq!(trimmed.status_message.as_deref(), Some("node is low"));
+
+    let long = "x".repeat(2_000);
+    let cut = pod_summary(&pod_with_status(failed_status(Some(&long))));
+    let message = cut.status_message.expect("a cut message");
+    assert!(message.ends_with('…'));
+    assert_eq!(message.len(), 1_024 + '…'.len_utf8());
+
+    let empty = pod_summary(&pod_with_status(failed_status(Some("  "))));
+    assert_eq!(empty.status_message, None);
+}
+
+#[test]
+fn status_message_kept_only_for_failed_or_evicted() {
+    let with_message = |phase: &str, reason: Option<&str>| {
+        pod_summary(&pod_with_status(ApiPodStatus {
+            phase: Some(phase.to_owned()),
+            reason: reason.map(str::to_owned),
+            message: Some("transient".to_owned()),
+            ..Default::default()
+        }))
+        .status_message
+    };
+    assert_eq!(with_message("Running", None), None);
+    assert_eq!(with_message("Pending", Some("Unschedulable")), None);
+    assert_eq!(
+        with_message("Running", Some("Evicted")).as_deref(),
+        Some("transient")
+    );
+    assert_eq!(with_message("Failed", None).as_deref(), Some("transient"));
+}
+
+#[test]
+fn pod_conditions_keep_reason_and_message() {
+    let mut pod = pod_with_containers(Vec::new(), Vec::new());
+    pod.status = Some(ApiPodStatus {
+        conditions: Some(vec![
+            ApiPodCondition {
+                type_: "PodScheduled".to_owned(),
+                status: "False".to_owned(),
+                reason: Some("Unschedulable".to_owned()),
+                message: Some(" 0/4 nodes are available ".to_owned()),
+                ..Default::default()
+            },
+            ApiPodCondition {
+                type_: "Ready".to_owned(),
+                status: "True".to_owned(),
+                reason: Some(String::new()),
+                message: Some(String::new()),
+                ..Default::default()
+            },
+        ]),
+        ..Default::default()
+    });
+    let conditions = pod_summary(&pod).conditions;
+    assert_eq!(conditions[0].reason.as_deref(), Some("Unschedulable"));
+    assert_eq!(
+        conditions[0].message.as_deref(),
+        Some("0/4 nodes are available")
+    );
+    assert_eq!(conditions[1].reason, None);
+    assert_eq!(conditions[1].message, None);
+}
+
+#[test]
+fn waiting_state_keeps_message() {
+    let waiting = ApiContainerState {
+        waiting: Some(ContainerStateWaiting {
+            reason: Some("ImagePullBackOff".to_owned()),
+            message: Some("Back-off pulling image \"nginx:nope\"".to_owned()),
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        container_state(&waiting),
+        ContainerState::Waiting {
+            reason: Some(StatusReason::ImagePullBackOff),
+            message: Some("Back-off pulling image \"nginx:nope\"".to_owned()),
+        }
+    );
+}
+
+#[test]
+fn container_reads_digest_pull_policy_and_started() {
+    let mut pulled = status_with_state("pulled", None);
+    pulled.image_id = "docker-pullable://nginx@sha256:ab".to_owned();
+    pulled.started = Some(true);
+    let mut bare = status_with_state("bare", None);
+    bare.image_id = "sha256:cd".to_owned();
+    let mut other = status_with_state("other", None);
+    other.image_id = "docker://nginx".to_owned();
+
+    let mut pulled_spec = container("pulled", None);
+    pulled_spec.image_pull_policy = Some("IfNotPresent".to_owned());
+    let pod = with_statuses(
+        pod_with_containers(
+            Vec::new(),
+            vec![
+                pulled_spec,
+                container("bare", None),
+                container("other", None),
+            ],
+        ),
+        Vec::new(),
+        vec![pulled, bare, other],
+    );
+    let listed = summaries(&pod);
+    assert_eq!(listed[0].image_digest.as_deref(), Some("sha256:ab"));
+    assert_eq!(listed[0].pull_policy.as_deref(), Some("IfNotPresent"));
+    assert_eq!(listed[0].is_started, Some(true));
+    assert_eq!(listed[1].image_digest.as_deref(), Some("sha256:cd"));
+    assert_eq!(listed[1].pull_policy, None);
+    assert_eq!(listed[1].is_started, None);
+    assert_eq!(listed[2].image_digest, None);
+}
+
+#[test]
+fn spec_fields_are_filled_without_a_status() {
+    let spec = Container {
+        name: "main".to_owned(),
+        ports: Some(vec![k8s_openapi::api::core::v1::ContainerPort {
+            container_port: 8080,
+            name: Some("http".to_owned()),
+            ..Default::default()
+        }]),
+        readiness_probe: Some(Probe::default()),
+        env: Some(vec![EnvVar {
+            name: "MODE".to_owned(),
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+    let pod = pod_with_containers(Vec::new(), vec![spec]);
+    let summary = &summaries(&pod)[0];
+    assert_eq!(summary.state, ContainerState::NotReported);
+    assert_eq!(summary.ports.len(), 1);
+    assert_eq!(summary.ports[0].port, 8080);
+    assert!(summary.probes.readiness.is_some());
+    assert_eq!(summary.env[0].name, "MODE");
+    assert_eq!(summary.image_digest, None);
+    assert_eq!(summary.is_started, None);
+}
+
+#[test]
+fn terminated_message_is_not_kept() {
+    let mut status = status_with_state("main", None);
+    status.last_state = Some(ApiContainerState {
+        terminated: Some(ContainerStateTerminated {
+            message: Some("panic: SECRETTERMINATION".to_owned()),
+            exit_code: 2,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    status.state = Some(ApiContainerState {
+        terminated: Some(ContainerStateTerminated {
+            message: Some("panic: SECRETTERMINATION".to_owned()),
+            exit_code: 2,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut pod = with_statuses(
+        pod_with_containers(Vec::new(), vec![container("main", None)]),
+        Vec::new(),
+        vec![status],
+    );
+    pod.metadata.annotations = Some(BTreeMap::from([(
+        "owner".to_owned(),
+        "SECRETANNOTATION".to_owned(),
+    )]));
+    let debug = format!("{:?}", pod_summary(&pod));
+    assert!(!debug.contains("SECRETTERMINATION"), "{debug}");
+    assert!(!debug.contains("SECRETANNOTATION"), "{debug}");
 }

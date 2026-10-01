@@ -20,6 +20,23 @@ pub(crate) fn format_age(created_at: Option<jiff::Timestamp>, now: jiff::Timesta
     }
 }
 
+/// A time left in Go duration style: `40s`, `3m20s`, `1h0m5s`. Negative values read as `0s`.
+pub(crate) fn format_countdown(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    let (hours, minutes, seconds) = (
+        seconds / SECONDS_PER_HOUR,
+        seconds % SECONDS_PER_HOUR / SECONDS_PER_MINUTE,
+        seconds % SECONDS_PER_MINUTE,
+    );
+    if hours > 0 {
+        format!("{hours}h{minutes}m{seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m{seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,6 +59,16 @@ mod tests {
         assert_eq!(age(60 * 60), "1h");
         assert_eq!(age(23 * 3600), "23h");
         assert_eq!(age(24 * 3600), "1d");
+    }
+
+    #[test]
+    fn countdown_text_forms() {
+        assert_eq!(format_countdown(40), "40s");
+        assert_eq!(format_countdown(200), "3m20s");
+        assert_eq!(format_countdown(180), "3m0s");
+        assert_eq!(format_countdown(3_605), "1h0m5s");
+        assert_eq!(format_countdown(0), "0s");
+        assert_eq!(format_countdown(-5), "0s");
     }
 
     #[test]

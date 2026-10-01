@@ -160,3 +160,15 @@ fn forward_button_reason_follows_the_port_forward_gate() {
     );
     assert_eq!(port_forward_reason(&checking()), "Checking permissions…");
 }
+
+#[test]
+fn kubectl_command_quotes_only_unsafe_parts() {
+    assert_eq!(
+        kubectl_describe_command("readonly@Monitor", "shop", "api-0"),
+        "kubectl --context readonly@Monitor -n shop describe pod api-0"
+    );
+    assert_eq!(
+        kubectl_describe_command("my ctx", "shop", "it's"),
+        "kubectl --context 'my ctx' -n shop describe pod 'it'\\''s'"
+    );
+}

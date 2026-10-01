@@ -19,8 +19,8 @@ use std::time::Duration;
 use cluster::{
     AccessDecision, ClusterConnection, ClusterError, ContainerKind, ContainerState,
     ContainerSummary, EnvValues, EventFilter, Kubeconfig, LogRequest, LogSource, LogUpdate,
-    MetricsApi, NamespaceScope, NodeReadiness, NodeScheduling, ObjectKind, ObjectRef, PodStatus,
-    PodSummary, StatusReason, Termination, WatchUpdate,
+    MetricsApi, NamespaceScope, NodeReadiness, NodeScheduling, NodeSummary, ObjectKind, ObjectRef,
+    PodStatus, PodSummary, StatusReason, Termination, WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
@@ -467,6 +467,7 @@ async fn run(args: &Args) -> io::Result<bool> {
                     timestamp_text(node.created_at),
                 )?;
             }
+            probe.print_node_field_counts(&nodes)?;
         }
         Err(error) => {
             probe.section("nodes")?;
@@ -476,7 +477,10 @@ async fn run(args: &Args) -> io::Result<bool> {
 
     let pods = connection.list_pods(scope.clone()).await;
     match &pods {
-        Ok(pods) => probe.print_pods(scope_label, pods)?,
+        Ok(pods) => {
+            probe.print_pods(scope_label, pods)?;
+            probe.print_container_spec_counts(pods)?;
+        }
         Err(error) => {
             probe.section("pods")?;
             probe.fail(error)?;
@@ -530,6 +534,71 @@ struct Probe {
 impl Probe {
     fn section(&mut self, title: &str) -> io::Result<()> {
         writeln!(self.out, "\n{title}")
+    }
+
+    /// Counts only: how many containers carry each new spec field. Never prints a value.
+    fn print_container_spec_counts(&mut self, pods: &[PodSummary]) -> io::Result<()> {
+        let containers: Vec<&ContainerSummary> =
+            pods.iter().flat_map(|pod| &pod.containers).collect();
+        let count =
+            |has: fn(&ContainerSummary) -> bool| containers.iter().filter(|c| has(c)).count();
+        self.section("container spec fields (counts)")?;
+        writeln!(
+            self.out,
+            "  containers {}  liveness {}  readiness {}  startup {}  env {}  envFrom {}  mounts {}  ports {}  resources {}  digest {}  started {}",
+            containers.len(),
+            count(|c| c.probes.liveness.is_some()),
+            count(|c| c.probes.readiness.is_some()),
+            count(|c| c.probes.startup.is_some()),
+            count(|c| !c.env.is_empty()),
+            count(|c| !c.env_from.is_empty()),
+            count(|c| !c.mounts.is_empty()),
+            count(|c| !c.ports.is_empty()),
+            count(|c| !c.resources.is_empty()),
+            count(|c| c.image_digest.is_some()),
+            count(|c| c.is_started.is_some()),
+        )?;
+        let env_entries: usize = containers.iter().map(|c| c.env.len()).sum();
+        let mount_entries: usize = containers.iter().map(|c| c.mounts.len()).sum();
+        writeln!(
+            self.out,
+            "  env entries {env_entries}  mount entries {mount_entries}"
+        )?;
+        let with_condition_text = pods
+            .iter()
+            .flat_map(|pod| &pod.conditions)
+            .filter(|condition| condition.reason.is_some() || condition.message.is_some())
+            .count();
+        let with_status_message = pods
+            .iter()
+            .filter(|pod| pod.status_message.is_some())
+            .count();
+        writeln!(
+            self.out,
+            "  pod conditions with reason or message {with_condition_text}  pods with status message {with_status_message}"
+        )
+    }
+
+    /// Counts only: node conditions by name and status, plus the other new node fields.
+    fn print_node_field_counts(&mut self, nodes: &[NodeSummary]) -> io::Result<()> {
+        let mut conditions: BTreeMap<String, usize> = BTreeMap::new();
+        for condition in nodes.iter().flat_map(|node| &node.conditions) {
+            let key = format!("{}={:?}", condition.name, condition.status);
+            *conditions.entry(key).or_default() += 1;
+        }
+        self.section("node fields (counts)")?;
+        let listed: Vec<String> = conditions
+            .iter()
+            .map(|(key, count)| format!("{key} x{count}"))
+            .collect();
+        writeln!(self.out, "  conditions {}", joined_or_none(&listed))?;
+        writeln!(
+            self.out,
+            "  addresses {}  resources {}  labels {}",
+            nodes.iter().map(|node| node.addresses.len()).sum::<usize>(),
+            nodes.iter().map(|node| node.resources.len()).sum::<usize>(),
+            nodes.iter().map(|node| node.labels.len()).sum::<usize>(),
+        )
     }
 
     /// Records the failure and prints the error chain to stderr.
@@ -659,7 +728,9 @@ fn is_running_or_completed(status: &PodStatus) -> bool {
 
 fn container_text(container: &ContainerSummary) -> String {
     let state = match &container.state {
-        ContainerState::Waiting { reason } => format!("waiting({})", reason_text(reason.as_ref())),
+        ContainerState::Waiting { reason, .. } => {
+            format!("waiting({})", reason_text(reason.as_ref()))
+        }
         ContainerState::Running { .. } => "running".to_owned(),
         ContainerState::Terminated(termination) => {
             format!("terminated({})", termination_text(termination))

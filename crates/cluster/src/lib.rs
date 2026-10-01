@@ -4,6 +4,7 @@
 mod access_review;
 mod config_map;
 mod connection;
+mod container_spec;
 mod cron_job;
 mod daemon_set;
 mod deployment;
@@ -27,6 +28,10 @@ mod workload;
 pub use access_review::{AccessCheck, AccessDecision, AccessReport, AccessReview};
 pub use config_map::{ConfigMapKey, ConfigMapSummary};
 pub use connection::{ClusterConnection, ClusterError, ServerVersion};
+pub use container_spec::{
+    ContainerProbes, ContainerResource, EnvEntry, EnvFromEntry, EnvFromSource, EnvSource,
+    MountEntry, ProbeAction, ProbeSummary, VolumeSource,
+};
 pub use cron_job::CronJobSummary;
 pub use daemon_set::DaemonSetSummary;
 pub use deployment::DeploymentSummary;
@@ -36,7 +41,10 @@ pub use job::{JobStatus, JobSummary};
 pub use kubeconfig::{ContextOrigin, ContextSummary, Kubeconfig, KubeconfigError};
 pub use metrics_api::MetricsApi;
 pub use namespace::{NamespacePhase, NamespaceScope, NamespaceSummary};
-pub use node::{NodeReadiness, NodeScheduling, NodeStatus, NodeSummary, NodeTaint};
+pub use node::{
+    ConditionStatus, NodeAddress, NodeCondition, NodeReadiness, NodeResource, NodeScheduling,
+    NodeStatus, NodeSummary, NodeSystemInfo, NodeTaint,
+};
 pub use object_yaml::{EnvValues, ObjectKind, ObjectRef, ObjectYaml};
 pub use pod::{
     ContainerKind, ContainerState, ContainerSummary, PodCondition, PodSummary, ReadyCount,

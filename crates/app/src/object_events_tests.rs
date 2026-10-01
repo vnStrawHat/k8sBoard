@@ -17,6 +17,7 @@ fn event() -> EventSummary {
         event_type: EventType::Normal,
         reason: "Pulled".to_owned(),
         object: subject("Pod", Some("team-a"), "api-0"),
+        container: None,
         message: "pulled".to_owned(),
         count: 1,
         first_seen: None,

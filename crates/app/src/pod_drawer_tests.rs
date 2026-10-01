@@ -1,10 +1,6 @@
-use cluster::StatusReason;
+use cluster::{PodCondition, StatusReason, Termination};
 
 use super::*;
-
-fn at(seconds: i64) -> jiff::Timestamp {
-    jiff::Timestamp::from_second(seconds).expect("valid timestamp")
-}
 
 fn container(
     name: &str,
@@ -20,6 +16,15 @@ fn container(
         is_ready,
         restart_count: 0,
         last_termination: None,
+        image_digest: None,
+        pull_policy: None,
+        is_started: None,
+        ports: Vec::new(),
+        resources: Vec::new(),
+        probes: cluster::ContainerProbes::default(),
+        env: Vec::new(),
+        env_from: Vec::new(),
+        mounts: Vec::new(),
     }
 }
 
@@ -84,39 +89,28 @@ fn group_titles_count_progress_per_kind() {
 }
 
 #[test]
-fn last_state_text_lists_reason_exit_signal_and_age() {
-    let mut last = termination(137);
-    last.reason = Some(StatusReason::OomKilled);
-    last.signal = Some(9);
-    last.finished_at = Some(at(1_000));
+fn condition_tooltip_joins_reason_and_message() {
+    let condition = |reason: Option<&str>, message: Option<&str>| PodCondition {
+        name: "Ready".to_owned(),
+        is_true: false,
+        reason: reason.map(str::to_owned),
+        message: message.map(str::to_owned),
+    };
     assert_eq!(
-        last_state_text(&last, at(1_000 + 3 * 3_600)),
-        "OOMKilled · exit 137 · signal 9 · ended 3h ago"
+        condition_tooltip(&condition(
+            Some("ContainersNotReady"),
+            Some("containers with unready status: [api]")
+        ))
+        .as_deref(),
+        Some("ContainersNotReady: containers with unready status: [api]")
     );
-    let bare = Termination {
-        reason: None,
-        exit_code: 1,
-        signal: None,
-        started_at: None,
-        finished_at: None,
-    };
-    assert_eq!(last_state_text(&bare, at(0)), "Terminated · exit 1");
-}
-
-#[test]
-fn state_text_running_includes_started_age() {
-    let started = ContainerState::Running {
-        started_at: Some(at(0)),
-    };
-    let up = container("m", ContainerKind::Main, started, true);
-    let label = container_state_label(&up);
-    assert_eq!(state_text(&up, &label, at(120)), "Running · started 2m ago");
-    let waiting = container(
-        "w",
-        ContainerKind::Main,
-        ContainerState::Waiting { reason: None },
-        false,
+    assert_eq!(
+        condition_tooltip(&condition(Some("Unschedulable"), None)).as_deref(),
+        Some("Unschedulable")
     );
-    let label = container_state_label(&waiting);
-    assert_eq!(state_text(&waiting, &label, at(120)), "Waiting");
+    assert_eq!(
+        condition_tooltip(&condition(None, Some("no nodes"))).as_deref(),
+        Some("no nodes")
+    );
+    assert_eq!(condition_tooltip(&condition(None, None)), None);
 }

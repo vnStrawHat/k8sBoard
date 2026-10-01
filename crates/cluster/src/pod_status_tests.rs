@@ -529,3 +529,16 @@ fn status_display_matches_kubectl_text() {
         assert_eq!(status.to_string(), text);
     }
 }
+
+#[test]
+fn status_reason_reads_new_image_and_create_errors() {
+    let cases = [
+        ("InvalidImageName", StatusReason::InvalidImageName),
+        ("ErrImageNeverPull", StatusReason::ErrImageNeverPull),
+        ("CreateContainerError", StatusReason::CreateContainerError),
+    ];
+    for (text, expected) in cases {
+        assert_eq!(StatusReason::from_api(text), expected);
+        assert_eq!(expected.to_string(), text);
+    }
+}

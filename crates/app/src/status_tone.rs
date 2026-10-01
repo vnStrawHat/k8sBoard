@@ -121,7 +121,7 @@ pub(crate) fn container_state_label(container: &ContainerSummary) -> StatusLabel
                 StatusTone::Warn
             },
         },
-        ContainerState::Waiting { reason } => StatusLabel {
+        ContainerState::Waiting { reason, .. } => StatusLabel {
             text: reason
                 .as_ref()
                 .map_or_else(|| "Waiting".to_owned(), ToString::to_string)
@@ -166,13 +166,16 @@ fn reason_tone(reason: &StatusReason) -> StatusTone {
     }
 }
 
-fn is_bad_reason(reason: &StatusReason) -> bool {
+pub(crate) fn is_bad_reason(reason: &StatusReason) -> bool {
     matches!(
         reason,
         StatusReason::CrashLoopBackOff
             | StatusReason::ImagePullBackOff
             | StatusReason::ErrImagePull
             | StatusReason::CreateContainerConfigError
+            | StatusReason::InvalidImageName
+            | StatusReason::ErrImageNeverPull
+            | StatusReason::CreateContainerError
             | StatusReason::OomKilled
             | StatusReason::Error
             | StatusReason::ContainerCannotRun

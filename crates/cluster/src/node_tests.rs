@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::{
-    NodeAddress, NodeCondition, NodeSpec, NodeStatus as ApiNodeStatus, NodeSystemInfo,
+    NodeAddress, NodeCondition, NodeSpec, NodeStatus as ApiNodeStatus,
+    NodeSystemInfo as ApiNodeSystemInfo,
 };
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
 
 use super::*;
@@ -226,7 +228,7 @@ fn node_summary_reads_kubelet_version_and_creation_time() {
             ..Default::default()
         },
         status: Some(ApiNodeStatus {
-            node_info: Some(NodeSystemInfo {
+            node_info: Some(ApiNodeSystemInfo {
                 kubelet_version: "v1.29.5".to_owned(),
                 ..Default::default()
             }),
@@ -240,4 +242,194 @@ fn node_summary_reads_kubelet_version_and_creation_time() {
     assert_eq!(summary.created_at, Some(created));
 
     assert_eq!(node_summary(&Node::default()).kubelet_version, "");
+}
+
+fn node_with_status(status: ApiNodeStatus) -> Node {
+    Node {
+        status: Some(status),
+        ..Default::default()
+    }
+}
+
+fn quantity_map(pairs: &[(&str, &str)]) -> Option<BTreeMap<String, Quantity>> {
+    Some(
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), Quantity((*value).to_owned())))
+            .collect(),
+    )
+}
+
+fn api_condition(type_: &str, status: &str) -> NodeCondition {
+    NodeCondition {
+        type_: type_.to_owned(),
+        status: status.to_owned(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn node_conditions_keep_status_reason_message_and_transition() {
+    let changed = "2024-05-01T10:00:00Z".parse().expect("valid timestamp");
+    let node = node_with_status(ApiNodeStatus {
+        conditions: Some(vec![
+            NodeCondition {
+                reason: Some("KubeletReady".to_owned()),
+                message: Some(" kubelet is posting ready status ".to_owned()),
+                last_transition_time: Some(Time(changed)),
+                ..api_condition("Ready", "True")
+            },
+            api_condition("MemoryPressure", "False"),
+            api_condition("DiskPressure", "Unknown"),
+            api_condition("PIDPressure", "Weird"),
+        ]),
+        ..Default::default()
+    });
+    let conditions = node_summary(&node).conditions;
+    let listed: Vec<_> = conditions
+        .iter()
+        .map(|condition| (condition.name.as_str(), condition.status))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("Ready", ConditionStatus::True),
+            ("MemoryPressure", ConditionStatus::False),
+            ("DiskPressure", ConditionStatus::Unknown),
+            ("PIDPressure", ConditionStatus::Unknown),
+        ]
+    );
+    assert_eq!(conditions[0].reason.as_deref(), Some("KubeletReady"));
+    assert_eq!(
+        conditions[0].message.as_deref(),
+        Some("kubelet is posting ready status")
+    );
+    assert_eq!(conditions[0].changed_at, Some(changed));
+    assert_eq!(conditions[1].reason, None);
+    assert_eq!(conditions[1].message, None);
+    assert_eq!(conditions[1].changed_at, None);
+}
+
+#[test]
+fn node_conditions_ignore_heartbeat() {
+    let at = |text: &str| Time(text.parse().expect("valid timestamp"));
+    let node_at = |heartbeat: &str| {
+        node_with_status(ApiNodeStatus {
+            conditions: Some(vec![NodeCondition {
+                last_heartbeat_time: Some(at(heartbeat)),
+                last_transition_time: Some(at("2024-05-01T10:00:00Z")),
+                ..api_condition("Ready", "True")
+            }]),
+            ..Default::default()
+        })
+    };
+    assert_eq!(
+        node_summary(&node_at("2024-05-02T10:00:00Z")),
+        node_summary(&node_at("2024-05-02T10:00:10Z"))
+    );
+}
+
+#[test]
+fn node_addresses_keep_api_order() {
+    let node = node_with_status(ApiNodeStatus {
+        addresses: Some(vec![
+            address("Hostname", "node-1"),
+            address("InternalIP", "10.0.0.5"),
+            address("ExternalIP", "203.0.113.9"),
+        ]),
+        ..Default::default()
+    });
+    let listed: Vec<_> = node_summary(&node)
+        .addresses
+        .into_iter()
+        .map(|address| (address.kind, address.address))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("Hostname".to_owned(), "node-1".to_owned()),
+            ("InternalIP".to_owned(), "10.0.0.5".to_owned()),
+            ("ExternalIP".to_owned(), "203.0.113.9".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn node_system_info_reads_node_info() {
+    let node = node_with_status(ApiNodeStatus {
+        node_info: Some(ApiNodeSystemInfo {
+            operating_system: "linux".to_owned(),
+            architecture: "amd64".to_owned(),
+            os_image: "Ubuntu 22.04.4 LTS".to_owned(),
+            kernel_version: "5.15.0-105".to_owned(),
+            container_runtime_version: "containerd://1.7.13".to_owned(),
+            kubelet_version: "v1.29.5".to_owned(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let summary = node_summary(&node);
+    assert_eq!(summary.system.operating_system, "linux");
+    assert_eq!(summary.system.architecture, "amd64");
+    assert_eq!(summary.system.os_image, "Ubuntu 22.04.4 LTS");
+    assert_eq!(summary.system.kernel_version, "5.15.0-105");
+    assert_eq!(summary.system.container_runtime, "containerd://1.7.13");
+    assert_eq!(summary.kubelet_version, "v1.29.5");
+
+    assert_eq!(
+        node_summary(&Node::default()).system,
+        NodeSystemInfo::default()
+    );
+}
+
+#[test]
+fn node_resources_union_order_and_drop_zero_hugepages() {
+    let node = node_with_status(ApiNodeStatus {
+        capacity: quantity_map(&[
+            ("pods", "110"),
+            ("hugepages-2Mi", "0"),
+            ("hugepages-1Gi", "0"),
+            ("cpu", "4"),
+            ("memory", "16Gi"),
+            ("ephemeral-storage", "100Gi"),
+            ("example.com/gpu", "2"),
+        ]),
+        allocatable: quantity_map(&[
+            ("pods", "110"),
+            ("hugepages-2Mi", "0"),
+            ("hugepages-1Gi", "1Gi"),
+            ("cpu", "3920m"),
+            ("memory", "15Gi"),
+        ]),
+        ..Default::default()
+    });
+    let listed: Vec<_> = node_summary(&node)
+        .resources
+        .into_iter()
+        .map(|resource| (resource.name, resource.capacity, resource.allocatable))
+        .collect();
+    let text = |value: &str| Some(value.to_owned());
+    assert_eq!(
+        listed,
+        [
+            ("cpu".to_owned(), text("4"), text("3920m")),
+            ("memory".to_owned(), text("16Gi"), text("15Gi")),
+            ("pods".to_owned(), text("110"), text("110")),
+            ("ephemeral-storage".to_owned(), text("100Gi"), None),
+            ("example.com/gpu".to_owned(), text("2"), None),
+            ("hugepages-1Gi".to_owned(), text("0"), text("1Gi")),
+        ]
+    );
+}
+
+#[test]
+fn node_labels_are_terms_and_annotations_are_absent() {
+    let mut node = node_with_labels(&[("zone", "a"), ("arch", "amd64")]);
+    node.metadata.annotations = Some(BTreeMap::from([(
+        "owner".to_owned(),
+        "SECRETANNOTATION".to_owned(),
+    )]));
+    let summary = node_summary(&node);
+    assert_eq!(summary.labels, ["arch=amd64", "zone=a"]);
+    assert!(!format!("{summary:?}").contains("SECRETANNOTATION"));
 }

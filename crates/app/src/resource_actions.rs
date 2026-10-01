@@ -92,6 +92,7 @@ pub(crate) fn pod_menu(
     menu: PopupMenu,
     pod: &PodSummary,
     live: &LiveCluster,
+    context: &str,
     dock: &WeakEntity<LogDock>,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
@@ -106,6 +107,39 @@ pub(crate) fn pod_menu(
         .item(view_yaml_item(ResourceKey::of_pod(pod), shell))
         .separator()
         .item(copy_name_item(&pod.name, access))
+        .item(copy_kubectl_command_item(context, pod))
+}
+
+/// Copies the read-only `kubectl describe` command for the pod.
+fn copy_kubectl_command_item(context: &str, pod: &PodSummary) -> PopupMenuItem {
+    let command = kubectl_describe_command(context, &pod.namespace, &pod.name);
+    PopupMenuItem::new("Copy kubectl command").on_click(move |_, _, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
+    })
+}
+
+/// `kubectl --context C -n NS describe pod NAME`. It has no `--kubeconfig`: a path is specific
+/// to this machine.
+pub(crate) fn kubectl_describe_command(context: &str, namespace: &str, name: &str) -> String {
+    format!(
+        "kubectl --context {} -n {} describe pod {}",
+        shell_quote(context),
+        shell_quote(namespace),
+        shell_quote(name)
+    )
+}
+
+/// Single-quotes a part that has a character outside the shell-safe set.
+// ponytail: POSIX sh quoting only; PowerShell and cmd need other rules — add a per-shell variant if Windows users paste into them.
+fn shell_quote(text: &str) -> String {
+    let is_safe = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "@%+=:,./_-".contains(c));
+    if is_safe {
+        return text.to_owned();
+    }
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 /// Opens the pod in the log dock. Without containers there is nothing to read.
