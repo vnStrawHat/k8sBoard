@@ -1,0 +1,272 @@
+use cluster::{NodeSummary, NodeTaint};
+use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::table::{Column, TableDelegate, TableState};
+use gpui_kit::component::{ActiveTheme as _, h_flex};
+use gpui_kit::{
+    AnyElement, App, Context, Entity, IntoElement, ParentElement as _, Pixels, Styled as _, Window,
+    div, px,
+};
+
+use crate::age::format_age;
+use crate::cluster_session::ClusterSession;
+use crate::resource_actions::node_menu;
+use crate::status_tone::{node_status_label, toned_text};
+use crate::table_layout::{flexible_width, header_cell};
+
+const NAME: usize = 0;
+const STATUS: usize = 1;
+const ROLES: usize = 2;
+const TAINTS: usize = 3;
+const VERSION: usize = 4;
+const INTERNAL_IP: usize = 5;
+const AGE: usize = 6;
+
+/// Marks a value the node does not have.
+const ABSENT: &str = "—";
+
+const TAINTS_MIN_WIDTH: Pixels = px(160.);
+/// The Taints column takes the rest of the width: it holds the longest values.
+const FIXED_WIDTH: Pixels = px(180. + 200. + 130. + 100. + 120. + 60.);
+
+pub(crate) struct NodeTableDelegate {
+    session: Option<Entity<ClusterSession>>,
+    columns: Vec<Column>,
+}
+
+fn columns(taints_width: Pixels) -> Vec<Column> {
+    vec![
+        Column::new("name", "Name").width(px(180.)),
+        Column::new("status", "Status").width(px(200.)),
+        Column::new("roles", "Roles").width(px(130.)),
+        Column::new("taints", "Taints")
+            .width(taints_width)
+            .min_width(TAINTS_MIN_WIDTH),
+        Column::new("version", "Version").width(px(100.)),
+        Column::new("internal_ip", "Internal IP").width(px(120.)),
+        Column::new("age", "Age").width(px(60.)).text_right(),
+    ]
+}
+
+impl NodeTableDelegate {
+    pub(crate) fn new() -> Self {
+        Self {
+            session: None,
+            columns: columns(TAINTS_MIN_WIDTH),
+        }
+    }
+
+    /// Resizes the Taints column for a table `table_width` wide. Returns whether it changed,
+    /// so the caller refreshes the table only then.
+    pub(crate) fn fit_width(&mut self, table_width: Pixels) -> bool {
+        let taints_width = flexible_width(table_width, FIXED_WIDTH, TAINTS_MIN_WIDTH);
+        if self
+            .columns
+            .get(TAINTS)
+            .is_some_and(|column| column.width == taints_width)
+        {
+            return false;
+        }
+        self.columns = columns(taints_width);
+        true
+    }
+
+    pub(crate) fn set_session(&mut self, session: Option<Entity<ClusterSession>>) {
+        self.session = session;
+    }
+
+    fn nodes<'a>(&self, cx: &'a App) -> &'a [NodeSummary] {
+        let Some(session) = &self.session else {
+            return &[];
+        };
+        session
+            .read(cx)
+            .live()
+            .map_or(&[], |live| live.nodes.items())
+    }
+}
+
+impl TableDelegate for NodeTableDelegate {
+    fn columns_count(&self, _: &App) -> usize {
+        self.columns.len()
+    }
+
+    fn rows_count(&self, cx: &App) -> usize {
+        self.nodes(cx).len()
+    }
+
+    fn column(&self, col_ix: usize, _: &App) -> Column {
+        self.columns.get(col_ix).cloned().unwrap_or_default()
+    }
+
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        match self.columns.get(col_ix) {
+            Some(column) => header_cell(column, cx),
+            None => div().size_full(),
+        }
+    }
+
+    fn render_td(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let Some(node) = self.nodes(cx).get(row_ix) else {
+            return div().into_any_element();
+        };
+        let mono = cx.theme().mono_font_family.clone();
+        match col_ix {
+            NAME => div().truncate().child(node.name.clone()).into_any_element(),
+            STATUS => toned_text(node_status_label(node.status), cx).into_any_element(),
+            ROLES => cell_text(&roles_cell(&node.roles), cx),
+            TAINTS => taints_cell(&node.taints, mono, cx),
+            VERSION => div()
+                .font_family(mono)
+                .child(node.kubelet_version.clone())
+                .into_any_element(),
+            INTERNAL_IP => match &node.internal_ip {
+                Some(ip) => div().font_family(mono).child(ip.clone()).into_any_element(),
+                None => cell_text(ABSENT, cx),
+            },
+            AGE => div()
+                .w_full()
+                .text_right()
+                .font_family(mono)
+                // Read per cell: a render has no shared clock, and a second of skew is invisible.
+                .child(format_age(node.created_at, jiff::Timestamp::now()))
+                .into_any_element(),
+            _ => div().into_any_element(),
+        }
+    }
+
+    fn context_menu(
+        &mut self,
+        row_ix: usize,
+        menu: PopupMenu,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        let Some(session) = &self.session else {
+            return menu;
+        };
+        let Some(live) = session.read(cx).live() else {
+            return menu;
+        };
+        match live.nodes.items().get(row_ix) {
+            Some(node) => node_menu(menu, node, &live.access),
+            None => menu,
+        }
+    }
+
+    fn render_empty(
+        &mut self,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        h_flex()
+            .size_full()
+            .justify_center()
+            .items_center()
+            .text_color(cx.theme().muted_foreground)
+            .child("No nodes")
+    }
+
+    fn loading(&self, cx: &App) -> bool {
+        self.session
+            .as_ref()
+            .and_then(|session| session.read(cx).live())
+            .is_some_and(|live| live.nodes.is_loading())
+    }
+}
+
+/// Roles joined with commas; "—" when the node has none. No `worker` is inferred.
+fn roles_cell(roles: &[String]) -> String {
+    if roles.is_empty() {
+        return ABSENT.to_owned();
+    }
+    roles.join(", ")
+}
+
+/// The first taint, plus how many more there are.
+struct TaintsSummary {
+    first: String,
+    more: usize,
+}
+
+fn taints_summary(taints: &[NodeTaint]) -> Option<TaintsSummary> {
+    let (first, rest) = taints.split_first()?;
+    Some(TaintsSummary {
+        first: first.to_string(),
+        more: rest.len(),
+    })
+}
+
+fn taints_cell(taints: &[NodeTaint], mono: gpui_kit::SharedString, cx: &App) -> AnyElement {
+    let Some(summary) = taints_summary(taints) else {
+        return cell_text(ABSENT, cx);
+    };
+    let more = (summary.more > 0).then(|| {
+        div()
+            .flex_shrink_0()
+            .text_color(cx.theme().muted_foreground)
+            .child(format!(" +{}", summary.more))
+    });
+    // The taint is cut with an ellipsis; the "+N" stays visible.
+    h_flex()
+        .w_full()
+        .font_family(mono)
+        .child(div().min_w_0().truncate().child(summary.first))
+        .children(more)
+        .into_any_element()
+}
+
+/// Shows `text`, or a muted dash when the value is absent.
+fn cell_text(text: &str, cx: &App) -> AnyElement {
+    if text == ABSENT {
+        return div()
+            .text_color(cx.theme().muted_foreground)
+            .child("—")
+            .into_any_element();
+    }
+    div().truncate().child(text.to_owned()).into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn taint(key: &str, effect: &str) -> NodeTaint {
+        NodeTaint {
+            key: key.to_owned(),
+            value: None,
+            effect: effect.to_owned(),
+        }
+    }
+
+    #[test]
+    fn taints_cell_shows_first_and_plus_count() {
+        let taints = [
+            taint("a", "NoSchedule"),
+            taint("b", "NoExecute"),
+            taint("c", "NoSchedule"),
+        ];
+        let summary = taints_summary(&taints).expect("has taints");
+        assert_eq!(summary.first, "a:NoSchedule");
+        assert_eq!(summary.more, 2);
+        assert!(taints_summary(&[]).is_none());
+        assert_eq!(taints_summary(&taints[..1]).expect("one taint").more, 0);
+    }
+
+    #[test]
+    fn roles_cell_dash_when_empty() {
+        assert_eq!(roles_cell(&[]), ABSENT);
+        let roles = ["control-plane".to_owned(), "etcd".to_owned()];
+        assert_eq!(roles_cell(&roles), "control-plane, etcd");
+    }
+}

@@ -1,0 +1,117 @@
+use super::*;
+
+fn parse(args: &[&str]) -> Result<LaunchRequest, String> {
+    parse_launch_options(args.iter().map(|arg| (*arg).to_owned()))
+}
+
+fn run_options(args: &[&str]) -> LaunchOptions {
+    match parse(args) {
+        Ok(LaunchRequest::Run(options)) => options,
+        other => panic!("expected run options, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_all_flags() {
+    let options = run_options(&[
+        "--kubeconfig",
+        "kube.yml",
+        "--context",
+        "ctx",
+        "--namespace",
+        "team-a",
+        "--theme",
+        "dark",
+        "--screen",
+        "pod-containers",
+        "--screenshot",
+        "out.png",
+    ]);
+    assert_eq!(
+        options,
+        LaunchOptions {
+            kubeconfig: Some(PathBuf::from("kube.yml")),
+            context: Some("ctx".to_owned()),
+            namespace: Some("team-a".to_owned()),
+            theme: Some(ThemeChoice::Dark),
+            screen: LaunchScreen::PodContainers,
+            screenshot: Some(PathBuf::from("out.png")),
+        }
+    );
+}
+
+#[test]
+fn defaults_without_flags() {
+    let options = run_options(&[]);
+    assert_eq!(options.screen, LaunchScreen::Pods);
+    assert_eq!(options.theme, None);
+    assert_eq!(options.screenshot, None);
+    assert_eq!(options.kubeconfig, None);
+    assert_eq!(options.context, None);
+    assert_eq!(options.namespace, None);
+}
+
+#[test]
+fn unknown_flag_is_error() {
+    let error = parse(&["--bogus"]).expect_err("unknown flag must fail");
+    assert!(error.contains("--bogus"), "{error}");
+}
+
+#[test]
+fn missing_value_is_error() {
+    let error = parse(&["--context"]).expect_err("missing value must fail");
+    assert!(error.contains("--context"), "{error}");
+}
+
+#[test]
+fn invalid_screen_or_theme_is_error() {
+    assert!(parse(&["--screen", "overview"]).is_err());
+    assert!(parse(&["--theme", "sepia"]).is_err());
+}
+
+#[test]
+fn help_flag_returns_help() {
+    assert_eq!(
+        parse(&["--context", "a", "--help"]),
+        Ok(LaunchRequest::Help)
+    );
+}
+
+fn join(entries: &[&str]) -> OsString {
+    std::env::join_paths(entries).expect("joinable paths")
+}
+
+#[test]
+fn kubeconfig_flag_wins_over_env_and_home() {
+    let path = kubeconfig_path(
+        Some(PathBuf::from("flag.yml")),
+        Some(join(&["env.yml"])),
+        Some(PathBuf::from("home")),
+    );
+    assert_eq!(path, Some(PathBuf::from("flag.yml")));
+}
+
+#[test]
+fn kubeconfig_env_uses_first_entry() {
+    let env = join(&["first.yml", "second.yml"]);
+    assert!(has_ignored_kubeconfig_entries(Some(env.as_os_str())));
+    let path = kubeconfig_path(None, Some(env), Some(PathBuf::from("home")));
+    assert_eq!(path, Some(PathBuf::from("first.yml")));
+    assert!(!has_ignored_kubeconfig_entries(Some(
+        join(&["only.yml"]).as_os_str()
+    )));
+}
+
+#[test]
+fn kubeconfig_falls_back_to_home_dot_kube_config() {
+    let home = PathBuf::from("home");
+    let path = kubeconfig_path(None, None, Some(home.clone()));
+    assert_eq!(path, Some(home.join(".kube").join("config")));
+    let from_empty_env = kubeconfig_path(None, Some(OsString::new()), Some(home.clone()));
+    assert_eq!(from_empty_env, Some(home.join(".kube").join("config")));
+}
+
+#[test]
+fn kubeconfig_none_when_nothing_available() {
+    assert_eq!(kubeconfig_path(None, None, None), None);
+}

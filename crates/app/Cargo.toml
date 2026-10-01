@@ -11,11 +11,18 @@ publish.workspace = true
 name = "k8sboard"
 path = "src/main.rs"
 
+[features]
+# Dev-only: lets `--screenshot` render a window to a PNG. Never a default feature.
+screenshot = ["gpui-kit/test-support"]
+
 [dependencies]
 gpui-kit.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tokio.workspace = true
+futures.workspace = true
+jiff.workspace = true
 k8sboard-cluster = { path = "../cluster" }
 
 [lints]
