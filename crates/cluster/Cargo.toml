@@ -19,5 +19,8 @@ tracing.workspace = true
 futures.workspace = true
 jiff.workspace = true
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [lints]
 workspace = true

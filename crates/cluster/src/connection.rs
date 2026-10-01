@@ -270,7 +270,11 @@ where
     }
 }
 
-fn classify_error(context: &str, action: &'static str, error: kube::Error) -> ClusterError {
+pub(crate) fn classify_error(
+    context: &str,
+    action: &'static str,
+    error: kube::Error,
+) -> ClusterError {
     let context = context.to_owned();
     match error {
         kube::Error::Api(status) => match status.code {

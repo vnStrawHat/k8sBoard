@@ -2,7 +2,7 @@
 //! credentials, and never `Debug` output of kube types.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>]
 //! ```
 
 use std::collections::BTreeMap;
@@ -10,14 +10,16 @@ use std::error::Error;
 use std::io::{self, StdoutLock, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use cluster::{
     AccessDecision, ClusterConnection, ClusterError, ContainerState, ContainerSummary, Kubeconfig,
     MetricsApi, NamespaceScope, NodeReadiness, NodeScheduling, PodStatus, PodSummary, StatusReason,
-    Termination,
+    Termination, WatchUpdate,
 };
+use futures::StreamExt;
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name>]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -26,6 +28,7 @@ struct Args {
     kubeconfig: PathBuf,
     context: Option<String>,
     namespace: Option<String>,
+    watch_seconds: Option<u64>,
 }
 
 enum Parsed {
@@ -37,6 +40,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut kubeconfig = None;
     let mut context = None;
     let mut namespace = None;
+    let mut watch_seconds = None;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
         match flag.as_str() {
@@ -44,6 +48,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
             "--kubeconfig" => kubeconfig = Some(PathBuf::from(value("--kubeconfig")?)),
             "--context" => context = Some(value("--context")?),
             "--namespace" => namespace = Some(value("--namespace")?),
+            "--watch-seconds" => {
+                watch_seconds = Some(parse_watch_seconds(&value("--watch-seconds")?)?)
+            }
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
@@ -52,7 +59,99 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         kubeconfig,
         context,
         namespace,
+        watch_seconds,
     }))
+}
+
+/// A positive integer number of seconds.
+fn parse_watch_seconds(text: &str) -> Result<u64, String> {
+    match text.parse::<u64>() {
+        Ok(seconds) if seconds > 0 => Ok(seconds),
+        _ => Err(format!(
+            "--watch-seconds needs a positive integer, got '{text}'"
+        )),
+    }
+}
+
+/// Counts of what one watch stream produced. Never holds object contents.
+#[derive(Default)]
+struct WatchStats {
+    snapshots: usize,
+    last_items: usize,
+    failures: usize,
+    last_error: Option<String>,
+}
+
+impl WatchStats {
+    fn record<T>(&mut self, update: WatchUpdate<T>) {
+        match update {
+            WatchUpdate::Snapshot(items) => {
+                self.snapshots += 1;
+                self.last_items = items.len();
+            }
+            WatchUpdate::Failed(error) => {
+                self.failures += 1;
+                self.last_error = Some(error.to_string());
+            }
+        }
+    }
+
+    /// Nothing at all happened: no snapshot and no failure.
+    fn is_silent(&self) -> bool {
+        self.snapshots == 0 && self.failures == 0
+    }
+
+    fn line(&self, kind: &str) -> String {
+        let mut line = format!(
+            "watch {kind}: {} snapshots, last {} items, {} failures",
+            self.snapshots, self.last_items, self.failures
+        );
+        if let Some(error) = &self.last_error {
+            line.push_str("; last error: ");
+            line.push_str(error);
+        }
+        line
+    }
+}
+
+/// Runs the three watches together for `seconds` and prints one line per kind.
+async fn watch_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    scope: NamespaceScope,
+    seconds: u64,
+) -> io::Result<()> {
+    probe.section(&format!("watch ({seconds}s)"))?;
+    let mut pods = Box::pin(connection.watch_pods(scope));
+    let mut nodes = Box::pin(connection.watch_nodes());
+    let mut namespaces = Box::pin(connection.watch_namespaces());
+    let (mut pod_stats, mut node_stats, mut namespace_stats) = (
+        WatchStats::default(),
+        WatchStats::default(),
+        WatchStats::default(),
+    );
+    let timer = tokio::time::sleep(Duration::from_secs(seconds));
+    tokio::pin!(timer);
+    loop {
+        tokio::select! {
+            () = &mut timer => break,
+            Some(update) = pods.next() => pod_stats.record(update),
+            Some(update) = nodes.next() => node_stats.record(update),
+            Some(update) = namespaces.next() => namespace_stats.record(update),
+            else => break,
+        }
+    }
+    for (kind, stats) in [
+        ("pods", &pod_stats),
+        ("nodes", &node_stats),
+        ("namespaces", &namespace_stats),
+    ] {
+        writeln!(probe.out, "{}", stats.line(kind))?;
+        if stats.is_silent() {
+            probe.all_succeeded = false;
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -212,12 +311,16 @@ async fn run(args: &Args) -> io::Result<bool> {
         }
     }
 
-    match connection.list_pods(scope).await {
+    match connection.list_pods(scope.clone()).await {
         Ok(pods) => probe.print_pods(scope_label, &pods)?,
         Err(error) => {
             probe.section("pods")?;
             probe.fail(&error)?;
         }
+    }
+
+    if let Some(seconds) = args.watch_seconds {
+        watch_for(&mut probe, &connection, scope, seconds).await?;
     }
 
     Ok(probe.all_succeeded)

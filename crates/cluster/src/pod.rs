@@ -1,5 +1,6 @@
 use std::fmt;
 
+use futures::Stream;
 use k8s_openapi::api::core::v1::{
     Container, ContainerState as ApiContainerState, ContainerStateTerminated,
     ContainerStatus as ApiContainerStatus, Pod,
@@ -9,6 +10,7 @@ use kube::Api;
 use crate::connection::{ClusterConnection, ClusterError};
 use crate::namespace::NamespaceScope;
 use crate::pod_status::{PodStatus, StatusReason, is_sidecar, non_negative, pod_display};
+use crate::resource_watch::{WatchUpdate, summary_watch};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PodSummary {
@@ -79,17 +81,28 @@ pub struct Termination {
 impl ClusterConnection {
     /// Lists pods in `scope`, ordered by (namespace, name).
     pub async fn list_pods(&self, scope: NamespaceScope) -> Result<Vec<PodSummary>, ClusterError> {
-        let client = self.client().clone();
-        let api = match scope {
-            NamespaceScope::All => Api::<Pod>::all(client),
-            NamespaceScope::Named(namespace) => Api::<Pod>::namespaced(client, &namespace),
-        };
-        let pods = self.list_all(api, "listing pods").await?;
+        let pods = self.list_all(self.pods_api(scope), "listing pods").await?;
         let mut summaries: Vec<_> = pods.iter().map(pod_summary).collect();
         summaries.sort_by(|left, right| {
             (&left.namespace, &left.name).cmp(&(&right.namespace, &right.name))
         });
         Ok(summaries)
+    }
+
+    /// Watches pods in `scope`. Yields batched snapshots ordered by (namespace, name).
+    pub fn watch_pods(
+        &self,
+        scope: NamespaceScope,
+    ) -> impl Stream<Item = WatchUpdate<PodSummary>> + Send + 'static {
+        summary_watch(self, self.pods_api(scope), "watching pods", pod_summary)
+    }
+
+    fn pods_api(&self, scope: NamespaceScope) -> Api<Pod> {
+        let client = self.client().clone();
+        match scope {
+            NamespaceScope::All => Api::all(client),
+            NamespaceScope::Named(namespace) => Api::namespaced(client, &namespace),
+        }
     }
 }
 

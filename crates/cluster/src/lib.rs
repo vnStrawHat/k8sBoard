@@ -9,6 +9,7 @@ mod namespace;
 mod node;
 mod pod;
 mod pod_status;
+mod resource_watch;
 
 pub use access_review::{AccessCheck, AccessDecision, AccessReport, AccessReview};
 pub use connection::{ClusterConnection, ClusterError, ServerVersion};
@@ -20,3 +21,4 @@ pub use pod::{
     ContainerKind, ContainerState, ContainerSummary, PodSummary, ReadyCount, Termination,
 };
 pub use pod_status::{InitStatus, PodStatus, StatusReason};
+pub use resource_watch::WatchUpdate;

@@ -1,10 +1,12 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use futures::Stream;
 use k8s_openapi::api::core::v1::{Node, Taint};
 use kube::Api;
 
 use crate::connection::{ClusterConnection, ClusterError};
+use crate::resource_watch::{WatchUpdate, summary_watch};
 
 const ROLE_LABEL_PREFIX: &str = "node-role.kubernetes.io/";
 const LEGACY_ROLE_LABEL: &str = "kubernetes.io/role";
@@ -68,6 +70,12 @@ impl ClusterConnection {
         let mut summaries: Vec<_> = nodes.iter().map(node_summary).collect();
         summaries.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(summaries)
+    }
+
+    /// Watches all nodes. Yields batched snapshots ordered by name.
+    pub fn watch_nodes(&self) -> impl Stream<Item = WatchUpdate<NodeSummary>> + Send + 'static {
+        let api = Api::<Node>::all(self.client().clone());
+        summary_watch(self, api, "watching nodes", node_summary)
     }
 }
 
