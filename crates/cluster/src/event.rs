@@ -78,7 +78,7 @@ impl ClusterConnection {
         }
         limited_summary_watch(
             self,
-            self.scoped_api(scope),
+            self.scoped_apis(&scope),
             config,
             "watching events",
             event_summary,
@@ -96,7 +96,7 @@ impl ClusterConnection {
         let config = watcher::Config::default().fields(&object_field_selector(object));
         limited_summary_watch(
             self,
-            self.scoped_api(scope),
+            self.scoped_apis(&scope),
             config,
             "watching object events",
             event_summary,

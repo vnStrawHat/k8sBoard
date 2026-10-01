@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use futures::Stream;
 use k8s_openapi::api::core::v1::Namespace;
 use kube::Api;
@@ -11,6 +13,33 @@ use crate::workload::label_terms;
 pub enum NamespaceScope {
     All,
     Named(String),
+    /// Two or more namespaces, sorted and unique. Build it with `of_namespaces`.
+    Several(Vec<String>),
+}
+
+impl NamespaceScope {
+    /// Sorts and dedups: none is `All`, one is `Named`, more is `Several`.
+    pub fn of_namespaces(names: impl IntoIterator<Item = String>) -> Self {
+        let mut names: Vec<String> = names
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        match names.len() {
+            0 => Self::All,
+            1 => Self::Named(names.swap_remove(0)),
+            _ => Self::Several(names),
+        }
+    }
+
+    /// The picked namespaces in order; empty for `All`.
+    pub fn namespaces(&self) -> &[String] {
+        match self {
+            Self::All => &[],
+            Self::Named(namespace) => std::slice::from_ref(namespace),
+            Self::Several(namespaces) => namespaces,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,7 +73,12 @@ impl ClusterConnection {
         &self,
     ) -> impl Stream<Item = WatchUpdate<NamespaceSummary>> + Send + 'static {
         let api = Api::<Namespace>::all(self.client().clone());
-        summary_watch(self, api, "watching namespaces", namespace_summary)
+        summary_watch(
+            self,
+            vec![(None, api)],
+            "watching namespaces",
+            namespace_summary,
+        )
     }
 }
 
@@ -85,6 +119,36 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn of_namespaces_normalizes_to_all_named_or_several() {
+        assert_eq!(NamespaceScope::of_namespaces([]), NamespaceScope::All);
+        assert_eq!(
+            NamespaceScope::of_namespaces(names(&["a", "a"])),
+            NamespaceScope::Named("a".to_owned())
+        );
+        assert_eq!(
+            NamespaceScope::of_namespaces(names(&["b", "a", "b"])),
+            NamespaceScope::Several(names(&["a", "b"]))
+        );
+    }
+
+    #[test]
+    fn namespaces_lists_picked_names() {
+        assert!(NamespaceScope::All.namespaces().is_empty());
+        assert_eq!(
+            NamespaceScope::Named("a".to_owned()).namespaces(),
+            ["a".to_owned()]
+        );
+        assert_eq!(
+            NamespaceScope::Several(names(&["a", "b"])).namespaces(),
+            ["a".to_owned(), "b".to_owned()]
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ use cluster::{EVENT_LIMIT, EventFilter};
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{LiveCluster, SessionPhase};
 use crate::drawer::ClickHandler;
+use crate::filter_bar::filter_bar;
 use crate::kind_drawer::kind_drawer;
 use crate::log_dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
 use crate::navigation::SIDEBAR_WIDTH;
@@ -94,6 +95,7 @@ impl AppShell {
             .min_h_0()
             .relative()
             .child(self.render_header(cx))
+            .children(self.render_filter_bar(cx))
             .children(self.render_interruption_banner(cx))
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
             .children(self.render_drawer(cx))
@@ -101,6 +103,7 @@ impl AppShell {
 
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
         let live = self.live(cx);
+        let toolkit = self.toolkit_state(cx);
         let (title, count) = match self.screen {
             Screen::Pods => (
                 "Pods",
@@ -141,6 +144,13 @@ impl AppShell {
                 }),
             ),
         };
+        // A filter replaces the total with how many rows match it.
+        let count = match (&toolkit, count) {
+            (Some(state), Some(_)) if state.is_filtering => {
+                Some(match_count_label(state.shown, state.total))
+            }
+            (_, count) => count,
+        };
         h_flex()
             .flex_shrink_0()
             .gap_3()
@@ -157,6 +167,13 @@ impl AppShell {
                     .child(count)
             }))
             .children(self.render_warnings_only(cx))
+    }
+
+    /// The filter bar under the header, once the session is live.
+    fn render_filter_bar(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        self.live(cx)?;
+        let state = self.toolkit_state(cx)?;
+        Some(filter_bar(&state, &self.quick_filter, cx))
     }
 
     /// The Events screen's server-side filter toggle, right-aligned in the header.
@@ -306,6 +323,11 @@ impl AppShell {
     }
 }
 
+/// `38 of 1,284 match`.
+fn match_count_label(shown: usize, total: usize) -> String {
+    format!("{} of {} match", group_digits(shown), group_digits(total))
+}
+
 fn count_label(count: usize, singular: &str, plural: &str) -> String {
     if count == 1 {
         format!("1 {singular}")
@@ -383,6 +405,12 @@ mod tests {
         assert_eq!(count_label(104, "node", "nodes"), "104 nodes");
         assert_eq!(count_label(1, "ingress", "ingresses"), "1 ingress");
         assert_eq!(count_label(2, "ingress", "ingresses"), "2 ingresses");
+    }
+
+    #[test]
+    fn match_count_label_groups_both_numbers() {
+        assert_eq!(match_count_label(38, 1_284), "38 of 1,284 match");
+        assert_eq!(match_count_label(0, 12), "0 of 12 match");
     }
 
     #[test]

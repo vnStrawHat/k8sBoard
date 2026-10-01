@@ -233,3 +233,37 @@ fn proxy_is_kept_only_when_kubeconfig_sets_proxy_url() {
     assert_eq!(proxy_for(false, Some("proxy")), None);
     assert_eq!(proxy_for::<&str>(true, None), None);
 }
+
+#[tokio::test]
+async fn scoped_apis_builds_one_api_per_namespace() {
+    let config = kube::Config::new("http://127.0.0.1:1".parse().expect("valid uri"));
+    let connection = ClusterConnection {
+        client: kube::Client::try_from(config).expect("client builds"),
+        context: "ctx".to_owned(),
+        default_namespace: "default".to_owned(),
+    };
+    let apis = |scope| connection.scoped_apis::<k8s_openapi::api::core::v1::Pod>(&scope);
+    let described = |scope| {
+        apis(scope)
+            .into_iter()
+            .map(|(namespace, api)| (namespace, api.resource_url().to_owned()))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        described(NamespaceScope::All),
+        [(None, "/api/v1/pods".to_owned())]
+    );
+    assert_eq!(
+        described(NamespaceScope::Named("a".to_owned())),
+        [(Some("a".to_owned()), "/api/v1/namespaces/a/pods".to_owned())]
+    );
+    let several = NamespaceScope::of_namespaces(["b".to_owned(), "a".to_owned()]);
+    assert_eq!(
+        described(several),
+        [
+            (Some("a".to_owned()), "/api/v1/namespaces/a/pods".to_owned()),
+            (Some("b".to_owned()), "/api/v1/namespaces/b/pods".to_owned()),
+        ]
+    );
+}

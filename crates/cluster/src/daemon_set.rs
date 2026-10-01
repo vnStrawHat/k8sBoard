@@ -41,7 +41,7 @@ impl ClusterConnection {
     ) -> impl Stream<Item = WatchUpdate<DaemonSetSummary>> + Send + 'static {
         summary_watch(
             self,
-            self.scoped_api(scope),
+            self.scoped_apis(&scope),
             "watching daemon sets",
             daemon_set_summary,
         )

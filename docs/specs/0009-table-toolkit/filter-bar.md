@@ -25,7 +25,7 @@
 
 ## Chips
 
-- Each active chip is `Button::new(("filter-chip", ix)).small().outline().label(text).icon(close icon)` with tooltip "Remove filter"; a click removes it (`update_view`). No hardcoded colors.
+- Each active chip is `Button::new(("filter-chip", ix)).small().outline().label(text).child(Icon::new(IconName::X))` (the × follows the label) with tooltip "Remove filter"; a click removes it (`update_view`). No hardcoded colors.
 - Texts: `Status: not Running` (Pods) or `Status: unhealthy` (others); `{title}: {value}` for `Equals` (`Node: wk-03`, `Reason: BackOff`); `label:…` for a label chip.
 
 ## + Filter (`DropdownMenu` on a ghost small button "+ Filter")
@@ -42,10 +42,10 @@
 ## Quick filter (`/`)
 
 - `AppShell.quick_filter: Entity<InputState>`, placeholder `Filter  /`, rendered `Input::new(..).small().cleanable(true)`, width 220.
-- `InputEvent::Change` → `update_view(|view| view.filter.text = value)`.
+- `InputEvent::Change` → `update_view(|view| view.filter.text = quick_filter_text(value))`. `quick_filter_text` returns an empty text while the trimmed input starts with `label:`: a label query waits for Enter and filters nothing by its literal text. `+ Filter` > `Label…` also clears `view.filter.text` (through `update_view`) before it sets the input to `label:`.
 - `InputEvent::PressEnter { .. }`: if `parse_label_queries(value)` is `Some`, add those chips, clear `text`, and `set_value("")`. Otherwise nothing.
 - Per screen: the text lives in the screen's `TableView`. `AppShell.quick_filter_screen: Option<Screen>` records which screen the input shows (`None` after `start_session`); `render` (which has the window) calls `set_value(view.filter.text)` when it is not `Some(self.screen)`, then stores it. `set_value` emits no `Change`.
-- Key: `actions!(k8sboard, [FocusQuickFilter])` and `KeyBinding::new("/", FocusQuickFilter, Some("AppShell && !Input"))` bound in `main.rs`. The root `v_flex` in `AppShell::render` gets `.key_context("AppShell")` and `.on_action(..)` that focuses the input. `!Input` (the kit input's context) keeps `/` typable in every input, the YAML editor included (decision 13). Live check: `/` right after start, before any click.
+- Key: `actions!(k8sboard, [FocusQuickFilter])` and `KeyBinding::new("/", FocusQuickFilter, Some("AppShell && !Input"))` bound in `app_shell::bind_keys(cx)`, which `run` calls. The root `v_flex` in `AppShell::render` gets `.key_context("AppShell")` and `.on_action(..)` that focuses the input. `!Input` (the kit input's context) keeps `/` typable in every input, the YAML editor included (decision 13). Live check: `/` right after start, before any click. The shell also registers `cx.on_focus_lost` and focuses `window.focus_lost_restore_target(cx)` (else its own root handle), so `/` keeps matching after a focused input or editor leaves the tree; `app_shell_tests.rs` covers it in a headless window.
 
 ## Sort header (`table_layout.rs`)
 

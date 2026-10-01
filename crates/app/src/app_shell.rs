@@ -4,18 +4,22 @@ use std::sync::Arc;
 use cluster::{
     ContextSummary, EventFilter, InvolvedObject, Kubeconfig, KubeconfigError, NamespaceScope,
 };
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Point,
-    Render, Styled as _, Subscription, Task, Window,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, InteractiveElement as _,
+    IntoElement, KeyBinding, ParentElement as _, Point, Render, Styled as _, Subscription, Task,
+    Window,
 };
 
+use crate::FocusQuickFilter;
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
 use crate::cluster_session::{ClusterSession, LiveCluster, error_text};
 use crate::drawer::{ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab};
+use crate::filter_bar::ToolkitState;
 use crate::kind_table::KindTableDelegate;
 use crate::launch_options::{
     LaunchOptions, LaunchScreen, has_ignored_kubeconfig_entries, kubeconfig_path,
@@ -31,12 +35,19 @@ use crate::resource_kind::ResourceKind;
 use crate::screenshot::{SettleInput, TargetState, is_drawer_ready};
 use crate::screenshot::{pick_drawer_pod, pick_logs_pod};
 use crate::status_bar::status_bar;
+use crate::table_filter::{FilterChip, parse_label_queries, quick_filter_text};
 use crate::table_selection::{ResourceKey, SelectionSync, list_row_index, selection_sync};
+use crate::table_sort::next_sort;
+use crate::table_view::{FilteredTable, TableView};
 use crate::title_bar::title_bar;
 use crate::yaml_view::{YamlView, yaml_subject};
 
 #[path = "workspace.rs"]
 mod workspace;
+
+#[cfg(test)]
+#[path = "app_shell_tests.rs"]
+mod app_shell_tests;
 
 const IGNORED_KUBECONFIG_NOTE: &str =
     "Only the first KUBECONFIG entry is used; merging kubeconfigs is not supported";
@@ -94,6 +105,25 @@ pub(crate) struct AppShell {
     /// A `--screen` drawer or logs request that waits for its list to load.
     pending_launch_screen: Option<LaunchScreen>,
     requested: RequestedStart,
+    /// The `/` input. Its text belongs to the screen in `quick_filter_screen`.
+    quick_filter: Entity<InputState>,
+    /// The screen whose filter text the input shows; `None` makes the next render load it.
+    quick_filter_screen: Option<Screen>,
+    /// Keeps the keyboard inside the `AppShell` key context, so `/` works before any click.
+    focus_handle: FocusHandle,
+    _quick_filter_events: Subscription,
+    /// Puts the focus back inside the key context when the focused element disappears.
+    _focus_lost: Subscription,
+}
+
+/// The key bindings of the shell. `!Input` keeps `/` typable in every input, the YAML editor
+/// included.
+pub(crate) fn bind_keys(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        "/",
+        FocusQuickFilter,
+        Some("AppShell && !Input"),
+    )]);
 }
 
 impl AppShell {
@@ -149,11 +179,26 @@ impl AppShell {
             cx.observe(&log_dock, |_, _, cx| cx.notify()),
         ];
 
+        let quick_filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter  /"));
+        let quick_filter_events =
+            cx.subscribe_in(&quick_filter, window, Self::on_quick_filter_event);
+        let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle, cx);
+        // A focused input or editor that leaves the tree (a drawer closing, a screen change)
+        // would leave nothing focused, and `/` only matches inside the `AppShell` context.
+        let focus_lost = cx.on_focus_lost(window, |shell, window, cx| {
+            let target = window
+                .focus_lost_restore_target(cx)
+                .unwrap_or_else(|| shell.focus_handle.clone());
+            window.focus(&target, cx);
+        });
+
         let mut drawer = DrawerState::new();
         drawer.tab = options.screen.drawer_tab().unwrap_or(DrawerTab::Overview);
         // W4b shows the Containers tab expanded.
         drawer.is_expanded = options.screen == LaunchScreen::PodDrawer(DrawerTab::Containers);
-        Self {
+        let launch_filter = options.filter;
+        let mut shell = Self {
             kubeconfig,
             context_error: None,
             session: None,
@@ -174,7 +219,16 @@ impl AppShell {
                 context: options.context,
                 namespace: options.namespace,
             },
+            quick_filter,
+            quick_filter_screen: None,
+            focus_handle,
+            _quick_filter_events: quick_filter_events,
+            _focus_lost: focus_lost,
+        };
+        if let Some(text) = launch_filter {
+            shell.apply_launch_filter(&text, cx);
         }
+        shell
     }
 
     /// Reading the file is blocking I/O, so it runs on the background executor, not on the
@@ -236,6 +290,7 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) {
         let kind = self.screen.kind();
+        let is_switch = self.session.is_some();
         self.close_drawer(cx);
         self.log_dock.update(cx, |dock, cx| dock.close_all(cx));
         let session = cx.new(|cx| ClusterSession::new(kubeconfig, summary, namespace, kind, cx));
@@ -256,6 +311,11 @@ impl AppShell {
             cx.notify();
         });
         self.session = Some(session);
+        // A filter set for one cluster would surprise in another. The first session keeps the
+        // filter of `--filter`.
+        if is_switch {
+            self.clear_all_filters(cx);
+        }
         cx.notify();
     }
 
@@ -328,6 +388,7 @@ impl AppShell {
                     .set_offset(Point::default());
             }
         });
+        self.rebuild_visible_view(cx, |_| {});
         self.close_drawer(cx);
         self.log_dock.update(cx, |dock, cx| dock.unzoom(cx));
     }
@@ -502,8 +563,8 @@ impl AppShell {
         match event {
             TableEvent::SelectRow(row) => {
                 let key = self
-                    .live(cx)
-                    .and_then(|live| live.pods.items().get(*row))
+                    .shown_item(table, *row, cx)
+                    .and_then(|item| self.live(cx)?.pods.items().get(item))
                     .map(ResourceKey::of_pod);
                 if self.change_selection(key, cx) {
                     focus_table(table, window, cx);
@@ -526,8 +587,8 @@ impl AppShell {
         match event {
             TableEvent::SelectRow(row) => {
                 let key = self
-                    .live(cx)
-                    .and_then(|live| live.nodes.items().get(*row))
+                    .shown_item(table, *row, cx)
+                    .and_then(|item| self.live(cx)?.nodes.items().get(item))
                     .map(ResourceKey::of_node);
                 if self.change_selection(key, cx) {
                     focus_table(table, window, cx);
@@ -551,8 +612,8 @@ impl AppShell {
             TableEvent::SelectRow(row) => {
                 let key = self.screen.kind().and_then(|kind| {
                     let explorer = self.live(cx)?.kind_list(kind)?;
-                    let row = explorer.list.items().get(*row)?;
-                    Some(ResourceKey::of_row(kind, row))
+                    let item = self.shown_item(table, *row, cx)?;
+                    Some(ResourceKey::of_row(kind, explorer.list.items().get(item)?))
                 });
                 if self.change_selection(key, cx) {
                     focus_table(table, window, cx);
@@ -570,13 +631,25 @@ impl AppShell {
     }
 
     fn on_session_changed(&mut self, cx: &mut Context<Self>) {
+        self.rebuild_visible_view(cx, |_| {});
         self.apply_pending_launch_screen(cx);
         self.sync_selection(cx);
         cx.notify();
     }
 
+    /// The item shown at `row` of `table`.
+    fn shown_item<D: FilteredTable>(
+        &self,
+        table: &Entity<TableState<D>>,
+        row: usize,
+        cx: &App,
+    ) -> Option<usize> {
+        table.read(cx).delegate().view()?.item_index(row)
+    }
+
     /// Keeps the table highlight and the drawer on the selected object after a snapshot has
-    /// reordered, added, or removed rows. A loading list proves nothing; a failed one has no rows.
+    /// reordered, added, or removed rows, or a filter hid it. A loading list proves nothing; a
+    /// failed one has no rows.
     fn sync_selection(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.selected.clone() else {
             return;
@@ -586,14 +659,21 @@ impl AppShell {
         };
         match &key {
             ResourceKey::Pod { .. } => {
-                let Some(found) = list_row_index(&live.pods, |pod| key.is_pod(pod)) else {
+                let Some(view) = self.pod_table.read(cx).delegate().view() else {
+                    return;
+                };
+                let Some(found) = list_row_index(&live.pods, view, |pod| key.is_pod(pod)) else {
                     return;
                 };
                 let table = self.pod_table.clone();
                 self.apply_selection_sync(&table, found, cx);
             }
             ResourceKey::Node { .. } => {
-                let Some(found) = list_row_index(&live.nodes, |node| key.is_node(node)) else {
+                let Some(view) = self.node_table.read(cx).delegate().view() else {
+                    return;
+                };
+                let Some(found) = list_row_index(&live.nodes, view, |node| key.is_node(node))
+                else {
                     return;
                 };
                 let table = self.node_table.clone();
@@ -603,7 +683,11 @@ impl AppShell {
                 let Some(explorer) = live.kind_list(*kind) else {
                     return;
                 };
-                let Some(found) = list_row_index(&explorer.list, |row| key.is_row(*kind, row))
+                let Some(view) = self.kind_table.read(cx).delegate().view() else {
+                    return;
+                };
+                let Some(found) =
+                    list_row_index(&explorer.list, view, |row| key.is_row(*kind, row))
                 else {
                     return;
                 };
@@ -634,7 +718,8 @@ impl AppShell {
     }
 
     /// Opens the drawer that `--screen` asked for, once its list has loaded. The logs screens
-    /// wait for `open_pending_logs`, which needs a window.
+    /// wait for `open_pending_logs`, which needs a window. A filter that hides the first item
+    /// opens no drawer.
     fn apply_pending_launch_screen(&mut self, cx: &mut Context<Self>) {
         let Some(launch) = self
             .pending_launch_screen
@@ -645,7 +730,7 @@ impl AppShell {
         let Some(live) = self.live(cx) else {
             return;
         };
-        let (is_loading, row) = match launch {
+        let (is_loading, item) = match launch {
             LaunchScreen::NodeDrawer(_) => (
                 live.nodes.is_loading(),
                 (!live.nodes.items().is_empty()).then_some(0),
@@ -665,38 +750,57 @@ impl AppShell {
             return;
         }
         self.pending_launch_screen = None;
-        let Some(row) = row else {
+        let Some(item) = item else {
             return;
         };
         match launch {
             LaunchScreen::NodeDrawer(_) => {
+                let Some(row) = self.row_of_item(&self.node_table, item, cx) else {
+                    return;
+                };
                 let key = self
                     .live(cx)
-                    .and_then(|live| live.nodes.items().get(row))
+                    .and_then(|live| live.nodes.items().get(item))
                     .map(ResourceKey::of_node);
                 self.change_selection(key, cx);
                 self.node_table
                     .update(cx, |table, cx| table.set_selected_row(row, cx));
             }
             LaunchScreen::KindDrawer(kind, _) => {
+                let Some(row) = self.row_of_item(&self.kind_table, item, cx) else {
+                    return;
+                };
                 let key = self
                     .live(cx)
-                    .and_then(|live| live.kind_list(kind)?.list.items().get(row))
+                    .and_then(|live| live.kind_list(kind)?.list.items().get(item))
                     .map(|row| ResourceKey::of_row(kind, row));
                 self.change_selection(key, cx);
                 self.kind_table
                     .update(cx, |table, cx| table.set_selected_row(row, cx));
             }
             _ => {
+                let Some(row) = self.row_of_item(&self.pod_table, item, cx) else {
+                    return;
+                };
                 let key = self
                     .live(cx)
-                    .and_then(|live| live.pods.items().get(row))
+                    .and_then(|live| live.pods.items().get(item))
                     .map(ResourceKey::of_pod);
                 self.change_selection(key, cx);
                 self.pod_table
                     .update(cx, |table, cx| table.set_selected_row(row, cx));
             }
         }
+    }
+
+    /// The row of `table` that shows `item`; `None` while a filter hides it.
+    fn row_of_item<D: FilteredTable>(
+        &self,
+        table: &Entity<TableState<D>>,
+        item: usize,
+        cx: &App,
+    ) -> Option<usize> {
+        table.read(cx).delegate().view()?.row_of(item)
     }
 
     /// Opens the log dock that `--screen` asked for, once the pod list has loaded. It runs
@@ -793,6 +897,163 @@ impl AppShell {
         }
     }
 
+    // ---- table toolkit ----
+
+    /// Applies `change` to the visible table's view, then rebuilds it. A change of the column
+    /// layout refreshes the table.
+    fn rebuild_visible_view(
+        &mut self,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut TableView),
+    ) {
+        match self.screen {
+            Screen::Pods => rebuild_table(&self.pod_table, change, cx),
+            Screen::Nodes => rebuild_table(&self.node_table, change, cx),
+            Screen::Kind(_) => rebuild_table(&self.kind_table, change, cx),
+        }
+    }
+
+    /// The one path of every toolkit action: change the view, then keep the selection and the
+    /// drawer consistent with the rows that remain.
+    fn update_view(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut TableView)) {
+        self.rebuild_visible_view(cx, change);
+        self.sync_selection(cx);
+        cx.notify();
+    }
+
+    /// A header click: ascending, descending, then the source order.
+    pub(crate) fn cycle_sort(&mut self, column: usize, cx: &mut Context<Self>) {
+        self.update_view(cx, |view| view.sort = next_sort(view.sort, column));
+    }
+
+    pub(crate) fn remove_chip(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.update_view(cx, |view| {
+            if index < view.filter.chips.len() {
+                view.filter.chips.remove(index);
+            }
+        });
+    }
+
+    pub(crate) fn toggle_unhealthy(&mut self, cx: &mut Context<Self>) {
+        self.update_view(cx, |view| {
+            let chips = &mut view.filter.chips;
+            match chips.iter().position(|chip| *chip == FilterChip::Unhealthy) {
+                Some(index) => {
+                    chips.remove(index);
+                }
+                None => chips.push(FilterChip::Unhealthy),
+            }
+        });
+    }
+
+    pub(crate) fn toggle_column(&mut self, column: usize, cx: &mut Context<Self>) {
+        self.update_view(cx, |view| {
+            if !view.hidden.remove(&column) {
+                view.hidden.insert(column);
+            }
+        });
+    }
+
+    /// Removes the text and the chips of the visible table, and empties the input.
+    pub(crate) fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.update_view(cx, TableView::clear_filter);
+        self.quick_filter
+            .update(cx, |input, cx| input.set_value("", window, cx));
+    }
+
+    /// `+ Filter` > `Label…`: the input starts a label query, which Enter turns into chips.
+    pub(crate) fn begin_label_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.update_view(cx, |view| view.filter.text.clear());
+        self.quick_filter.update(cx, |input, cx| {
+            input.set_value("label:", window, cx);
+            input.focus(window, cx);
+        });
+    }
+
+    fn focus_quick_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.quick_filter
+            .update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// `--filter`: a `label:` text becomes chips, as on Enter; anything else is the quick text.
+    fn apply_launch_filter(&mut self, text: &str, cx: &mut Context<Self>) {
+        let text = text.to_owned();
+        self.update_view(cx, move |view| match parse_label_queries(&text) {
+            Some(queries) => view.add_chips(queries.into_iter().map(FilterChip::Label).collect()),
+            None => view.filter.text = text,
+        });
+    }
+
+    /// A context switch: a filter written for one cluster would surprise in another.
+    fn clear_all_filters(&mut self, cx: &mut Context<Self>) {
+        self.pod_table.update(cx, |table, _| {
+            if let Some(view) = table.delegate_mut().view_mut() {
+                view.clear_filter();
+            }
+        });
+        self.node_table.update(cx, |table, _| {
+            if let Some(view) = table.delegate_mut().view_mut() {
+                view.clear_filter();
+            }
+        });
+        self.kind_table
+            .update(cx, |table, _| table.delegate_mut().clear_filters());
+        self.quick_filter_screen = None;
+        self.rebuild_visible_view(cx, |_| {});
+    }
+
+    fn on_quick_filter_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                let text = quick_filter_text(&input.read(cx).value()).to_owned();
+                self.update_view(cx, move |view| view.filter.text = text);
+            }
+            InputEvent::PressEnter { .. } => {
+                let text = input.read(cx).value();
+                let Some(queries) = parse_label_queries(&text) else {
+                    return;
+                };
+                let chips = queries.into_iter().map(FilterChip::Label).collect();
+                self.update_view(cx, move |view| {
+                    view.add_chips(chips);
+                    view.filter.text.clear();
+                });
+                input.update(cx, |input, cx| input.set_value("", window, cx));
+            }
+            InputEvent::Focus | InputEvent::Blur => {}
+        }
+    }
+
+    /// Loads the visible screen's filter text into the input when the screen changed. It runs
+    /// in `render` because `set_value` needs a window, and it emits no `Change`.
+    fn sync_quick_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quick_filter_screen == Some(self.screen) {
+            return;
+        }
+        self.quick_filter_screen = Some(self.screen);
+        let text = self
+            .toolkit_state(cx)
+            .map(|state| state.text)
+            .unwrap_or_default();
+        self.quick_filter
+            .update(cx, |input, cx| input.set_value(text, window, cx));
+    }
+
+    /// What the filter bar and the screen header read; `None` before the table has a view.
+    pub(crate) fn toolkit_state(&self, cx: &App) -> Option<ToolkitState> {
+        match self.screen {
+            Screen::Pods => ToolkitState::of(self.pod_table.read(cx).delegate(), self.screen),
+            Screen::Nodes => ToolkitState::of(self.node_table.read(cx).delegate(), self.screen),
+            Screen::Kind(_) => ToolkitState::of(self.kind_table.read(cx).delegate(), self.screen),
+        }
+    }
+
     // ---- rendering ----
 
     fn navigation_counts(&self, cx: &App) -> NavigationCounts {
@@ -810,12 +1071,18 @@ impl Render for AppShell {
         self.fit_table_widths(window, cx);
         self.open_pending_logs(window, cx);
         self.sync_yaml_view(window, cx);
+        self.sync_quick_filter(window, cx);
         let theme = cx.theme();
         let counts = self.navigation_counts(cx);
         let session = self.session.as_ref().map(|session| session.read(cx));
         let is_kubeconfig_loading = matches!(self.kubeconfig, KubeconfigState::Loading);
         v_flex()
             .size_full()
+            .track_focus(&self.focus_handle)
+            .key_context("AppShell")
+            .on_action(cx.listener(|shell, _: &FocusQuickFilter, window, cx| {
+                shell.focus_quick_filter(window, cx);
+            }))
             .bg(theme.background)
             .text_color(theme.foreground)
             .child(title_bar(self, cx))
@@ -828,6 +1095,25 @@ impl Render for AppShell {
             )
             .child(status_bar(session, is_kubeconfig_loading, cx))
     }
+}
+
+/// Applies `change` to the view of `table`, then rebuilds it from the session. A new column
+/// layout needs a table refresh; otherwise the rows are read again at the next render.
+fn rebuild_table<D: FilteredTable>(
+    table: &Entity<TableState<D>>,
+    change: impl FnOnce(&mut TableView),
+    cx: &mut App,
+) {
+    table.update(cx, |table, cx| {
+        if let Some(view) = table.delegate_mut().view_mut() {
+            change(view);
+        }
+        if table.delegate_mut().rebuild_view(cx) {
+            table.refresh(cx);
+        } else {
+            cx.notify();
+        }
+    });
 }
 
 /// The other filter.

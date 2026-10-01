@@ -157,3 +157,15 @@ fn open_watch_count_includes_object_events() {
     assert_eq!(open_watch_count(Some(&explorer), Some(&events)), 5);
     assert_eq!(open_watch_count(None, Some(&events)), 4);
 }
+
+#[test]
+fn namespaces_label_lists_two_then_counts_the_rest() {
+    let names = |count: usize| -> Vec<String> {
+        ["a", "b", "c", "d", "e"][..count]
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect()
+    };
+    assert_eq!(namespaces_label(&names(2)), "a, b");
+    assert_eq!(namespaces_label(&names(5)), "a, b +3");
+}

@@ -221,6 +221,7 @@ mod tests {
             controller: None,
             conditions: Vec::new(),
             status_message: None,
+            labels: Vec::new(),
             containers: (0..container_count)
                 .map(|index| container(&format!("c{index}")))
                 .collect(),

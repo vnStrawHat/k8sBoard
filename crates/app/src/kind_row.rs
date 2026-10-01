@@ -235,6 +235,7 @@ mod tests {
             }),
             conditions: Vec::new(),
             status_message: None,
+            labels: Vec::new(),
             containers: Vec::new(),
         }
     }

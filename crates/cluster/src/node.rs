@@ -135,7 +135,7 @@ impl ClusterConnection {
     /// Watches all nodes. Yields batched snapshots ordered by name.
     pub fn watch_nodes(&self) -> impl Stream<Item = WatchUpdate<NodeSummary>> + Send + 'static {
         let api = Api::<Node>::all(self.client().clone());
-        summary_watch(self, api, "watching nodes", node_summary)
+        summary_watch(self, vec![(None, api)], "watching nodes", node_summary)
     }
 }
 

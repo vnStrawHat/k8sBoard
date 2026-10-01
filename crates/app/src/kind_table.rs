@@ -1,10 +1,13 @@
 //! The table of the explorer kinds: one delegate serves every `ResourceKind`, so a kind
 //! switch only replaces the columns.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
+
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, HighlightStyle, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, SharedString, StatefulInteractiveElement as _, Styled as _,
@@ -15,108 +18,74 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::drawer::truncated_text;
+use crate::filter_bar::filtered_empty_state;
 use crate::kind_row::{KindCell, KindRow};
 use crate::resource_actions::kind_menu;
-use crate::resource_kind::{Align, NameColumn, ResourceKind};
-use crate::status_tone::{tone_color, toned_text};
-use crate::table_layout::{flexible_width, header_cell};
+use crate::resource_kind::{Align, NAME_COLUMN, NameColumn, ResourceKind, kind_columns};
+use crate::status_tone::{StatusTone, tone_color, toned_text};
+use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
+use crate::table_view::{CellValue, FilteredTable, TableRow, TableView};
 
+/// The logical column of the Name column, for the kinds that show it.
 const NAME: usize = 0;
-const NAME_MIN_WIDTH: Pixels = px(200.);
+const NAME_MIN_WIDTH: Pixels = px(NAME_COLUMN.width);
 
 /// Rows come straight from the session, so the table never owns a copy of the rows.
 pub(crate) struct KindTableDelegate {
     session: Option<Entity<ClusterSession>>,
     /// `None` while Pods or Nodes is shown; the table is not rendered then.
     kind: Option<ResourceKind>,
-    columns: Vec<Column>,
+    layout: TableLayout,
+    /// One view per kind, so a filter, a sort, and hidden columns survive a kind switch.
+    views: HashMap<ResourceKind, TableView>,
     /// The row menu's "Go to object" reveals a row through the shell.
     shell: WeakEntity<AppShell>,
 }
 
-/// Name first, then the kind's own columns; or only the kind's columns when it hides Name.
-/// The flexible column gets `flexible_width`.
-fn columns(kind: Option<ResourceKind>, flexible_width: Pixels) -> Vec<Column> {
+/// The logical columns of `kind`, and which one takes the rest of the table.
+fn kind_plan(kind: Option<ResourceKind>) -> ColumnPlan {
     let Some(kind) = kind else {
-        return Vec::new();
-    };
-    let name_column = kind.name_column();
-    let rest = kind.columns().iter().enumerate().map(|(index, spec)| {
-        let column = Column::new(spec.name, spec.name).width(px(spec.width));
-        let column = match spec.align {
-            Align::Left => column,
-            Align::Right => column.text_right(),
+        return ColumnPlan {
+            specs: Vec::new(),
+            flexible: 0,
+            flexible_min: Pixels::ZERO,
         };
-        match name_column {
-            NameColumn::Hidden { flexible } if flexible == index => {
-                column.width(flexible_width).min_width(px(spec.width))
-            }
-            NameColumn::Hidden { .. } | NameColumn::Flexible => column,
-        }
-    });
-    match name_column {
-        NameColumn::Flexible => {
-            let name = Column::new("name", "Name")
-                .width(flexible_width)
-                .min_width(NAME_MIN_WIDTH);
-            std::iter::once(name).chain(rest).collect()
-        }
-        NameColumn::Hidden { .. } => rest.collect(),
-    }
-}
-
-/// The index in `columns` of the column that takes the rest of the table, and its minimum
-/// width.
-fn flexible_column(kind: ResourceKind) -> (usize, Pixels) {
-    match kind.name_column() {
+    };
+    let specs = kind_columns(kind);
+    let (flexible, flexible_min) = match kind.name_column() {
         NameColumn::Flexible => (NAME, NAME_MIN_WIDTH),
         NameColumn::Hidden { flexible } => {
-            let width = kind
-                .columns()
-                .get(flexible)
-                .map_or(0., |column| column.width);
+            let width = specs.get(flexible).map_or(0., |column| column.width);
             (flexible, px(width))
         }
+    };
+    ColumnPlan {
+        specs,
+        flexible,
+        flexible_min,
     }
 }
 
-/// The columns of a kind before any `fit_width`: the flexible column at its minimum.
-fn initial_columns(kind: Option<ResourceKind>) -> Vec<Column> {
-    kind.map_or_else(Vec::new, |kind| {
-        columns(Some(kind), flexible_column(kind).1)
-    })
-}
-
-/// The width of every column except the flexible one.
-fn fixed_width(kind: ResourceKind) -> Pixels {
-    let flexible = match kind.name_column() {
-        NameColumn::Flexible => None,
-        NameColumn::Hidden { flexible } => Some(flexible),
-    };
-    px(kind
-        .columns()
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| Some(*index) != flexible)
-        .map(|(_, column)| column.width)
-        .sum())
-}
-
-/// The index into `KindRow::cells` that table column `col_ix` shows, or `None` for the Name
+/// The index into `KindRow::cells` that logical column `column` shows, or `None` for the Name
 /// column.
-fn cell_index(name_column: NameColumn, col_ix: usize) -> Option<usize> {
+fn cell_index(name_column: NameColumn, column: usize) -> Option<usize> {
     match name_column {
-        NameColumn::Flexible => col_ix.checked_sub(1),
-        NameColumn::Hidden { .. } => Some(col_ix),
+        NameColumn::Flexible => column.checked_sub(1),
+        NameColumn::Hidden { .. } => Some(column),
     }
 }
 
 impl KindTableDelegate {
     pub(crate) fn new(kind: Option<ResourceKind>, shell: WeakEntity<AppShell>) -> Self {
+        let views = kind
+            .into_iter()
+            .map(|kind| (kind, TableView::default()))
+            .collect();
         Self {
             session: None,
             kind,
-            columns: initial_columns(kind),
+            layout: TableLayout::new(kind_plan(kind)),
+            views,
             shell,
         }
     }
@@ -125,34 +94,38 @@ impl KindTableDelegate {
         self.session = session;
     }
 
-    /// Switches the columns and returns whether the kind changed. The flexible column goes back
-    /// to its minimum width, so the next `fit_width` fits it again.
+    /// Switches the columns and returns whether the kind changed. The flexible column keeps the
+    /// last table width, so it fills the table at once.
     pub(crate) fn set_kind(&mut self, kind: Option<ResourceKind>) -> bool {
         if self.kind == kind {
             return false;
         }
         self.kind = kind;
-        self.columns = initial_columns(kind);
+        if let Some(kind) = kind {
+            self.views.entry(kind).or_default();
+        }
+        self.layout.replace_plan(kind_plan(kind), &self.hidden());
         true
     }
 
-    /// Resizes the flexible column for a table `table_width` wide. Returns whether it changed,
-    /// so the caller refreshes the table only then.
-    pub(crate) fn fit_width(&mut self, table_width: Pixels) -> bool {
-        let Some(kind) = self.kind else {
-            return false;
-        };
-        let (index, min_width) = flexible_column(kind);
-        let width = flexible_width(table_width, fixed_width(kind), min_width);
-        if self
-            .columns
-            .get(index)
-            .is_some_and(|column| column.width == width)
-        {
-            return false;
+    /// Removes the text and the chips of every kind (a context switch).
+    pub(crate) fn clear_filters(&mut self) {
+        for view in self.views.values_mut() {
+            view.clear_filter();
         }
-        self.columns = columns(Some(kind), width);
-        true
+    }
+
+    /// Resizes the flexible column for a table `table_width` wide. Returns whether the columns
+    /// changed, so the caller refreshes the table only then.
+    pub(crate) fn fit_width(&mut self, table_width: Pixels) -> bool {
+        let hidden = self.hidden();
+        self.layout.fit_width(table_width, &hidden)
+    }
+
+    fn hidden(&self) -> std::collections::BTreeSet<usize> {
+        self.view()
+            .map(|view| view.hidden.clone())
+            .unwrap_or_default()
     }
 
     fn live<'a>(&self, cx: &'a App) -> Option<&'a LiveCluster> {
@@ -164,29 +137,126 @@ impl KindTableDelegate {
         explorer.map_or(&[], |explorer| explorer.list.items())
     }
 
+    /// The row shown at table row `row_ix`.
+    fn row_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<&'a KindRow> {
+        self.rows(cx).get(self.view()?.item_index(row_ix)?)
+    }
+
     fn scope_label(&self, cx: &App) -> String {
         self.live(cx)
             .map_or_else(String::new, |live| live.scope_label())
     }
 
-    fn align(&self, col_ix: usize) -> Align {
-        self.kind
-            .and_then(|kind| kind.columns().get(cell_index(kind.name_column(), col_ix)?))
+    fn align(&self, logical: usize) -> Align {
+        self.layout
+            .plan
+            .specs
+            .get(logical)
             .map_or(Align::Left, |column| column.align)
+    }
+}
+
+/// A row with the Name layout of its kind, so a logical column maps to a cell without guessing
+/// the kind from the row.
+struct KindTableRow<'a> {
+    row: &'a KindRow,
+    name_column: NameColumn,
+}
+
+impl TableRow for KindTableRow<'_> {
+    fn namespace(&self) -> Option<&str> {
+        self.row.namespace.as_deref()
+    }
+
+    fn name(&self) -> &str {
+        &self.row.name
+    }
+
+    fn labels(&self) -> impl Iterator<Item = &str> {
+        self.row.labels.iter().map(SharedString::as_ref)
+    }
+
+    fn tone(&self) -> StatusTone {
+        self.row.status.tone
+    }
+
+    fn value(&self, column: usize) -> CellValue<'_> {
+        let Some(cell) = cell_index(self.name_column, column) else {
+            return CellValue::Qualified {
+                prefix: self.row.namespace.as_deref(),
+                text: &self.row.name,
+            };
+        };
+        match self.row.cells.get(cell) {
+            Some(KindCell::Text(text) | KindCell::Mono(text)) => {
+                CellValue::Text(Cow::Borrowed(text.as_ref()))
+            }
+            Some(KindCell::Qualified { prefix, text }) => CellValue::Qualified {
+                prefix: prefix.as_deref(),
+                text,
+            },
+            Some(KindCell::Toned(label)) => CellValue::Status {
+                tone: label.tone,
+                text: label.text.clone(),
+            },
+            Some(KindCell::Age { at, .. }) => CellValue::Age(*at),
+            Some(KindCell::Duration {
+                started_at,
+                finished_at,
+            }) => CellValue::Span {
+                started: *started_at,
+                finished: *finished_at,
+            },
+            Some(KindCell::Absent) | None => CellValue::Absent,
+        }
+    }
+}
+
+impl FilteredTable for KindTableDelegate {
+    fn view(&self) -> Option<&TableView> {
+        self.views.get(&self.kind?)
+    }
+
+    fn view_mut(&mut self) -> Option<&mut TableView> {
+        self.views.get_mut(&self.kind?)
+    }
+
+    fn column_plan(&self) -> Option<&ColumnPlan> {
+        self.kind.map(|_| &self.layout.plan)
+    }
+
+    fn rebuild_view(&mut self, cx: &App) -> bool {
+        let Some(kind) = self.kind else {
+            return false;
+        };
+        let name_column = kind.name_column();
+        let rows: Vec<KindTableRow> = self
+            .rows(cx)
+            .iter()
+            .map(|row| KindTableRow { row, name_column })
+            .collect();
+        let view = self.views.entry(kind).or_default();
+        view.rebuild(&rows, self.layout.plan.specs.len(), jiff::Timestamp::now());
+        self.layout.relayout(&view.hidden)
     }
 }
 
 impl TableDelegate for KindTableDelegate {
     fn columns_count(&self, _: &App) -> usize {
-        self.columns.len()
+        self.layout.columns.columns.len()
     }
 
-    fn rows_count(&self, cx: &App) -> usize {
-        self.rows(cx).len()
+    fn rows_count(&self, _: &App) -> usize {
+        self.view().map_or(0, |view| view.rows().len())
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        self.columns.get(col_ix).cloned().unwrap_or_default()
+        self.layout
+            .columns
+            .columns
+            .get(col_ix)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn render_th(
@@ -195,10 +265,8 @@ impl TableDelegate for KindTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        match self.columns.get(col_ix) {
-            Some(column) => header_cell(column, cx),
-            None => div().size_full(),
-        }
+        let sort = self.view().and_then(|view| view.sort);
+        header_cell(&self.layout, sort, &self.shell, col_ix, cx)
     }
 
     fn render_td(
@@ -208,18 +276,19 @@ impl TableDelegate for KindTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(row) = self.rows(cx).get(row_ix) else {
+        let (Some(row), Some(logical), Some(kind)) = (
+            self.row_at(row_ix, cx),
+            self.layout.columns.logical(col_ix),
+            self.kind,
+        ) else {
             return div().into_any_element();
         };
         let mono = cx.theme().mono_font_family.clone();
-        let Some(cell_ix) = self
-            .kind
-            .and_then(|kind| cell_index(kind.name_column(), col_ix))
-        else {
+        let Some(cell_ix) = cell_index(kind.name_column(), logical) else {
             return name_cell(row, row_ix, mono, cx);
         };
         match row.cells.get(cell_ix) {
-            Some(cell) => cell_element(cell, row_ix, self.align(col_ix), mono, cx),
+            Some(cell) => cell_element(cell, row_ix, self.align(logical), mono, cx),
             None => div().into_any_element(),
         }
     }
@@ -234,7 +303,7 @@ impl TableDelegate for KindTableDelegate {
         let (Some(kind), Some(live)) = (self.kind, self.live(cx)) else {
             return menu;
         };
-        match self.rows(cx).get(row_ix) {
+        match self.row_at(row_ix, cx) {
             Some(row) => kind_menu(menu, kind, row, &live.access, &self.shell),
             None => menu,
         }
@@ -245,16 +314,13 @@ impl TableDelegate for KindTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let text = self
-            .kind
-            .map(|kind| empty_text(kind, &self.scope_label(cx)))
-            .unwrap_or_default();
-        h_flex()
-            .size_full()
-            .justify_center()
-            .items_center()
-            .text_color(cx.theme().muted_foreground)
-            .child(text)
+        let (empty, plural) = self.kind.map_or((String::new(), ""), |kind| {
+            (empty_text(kind, &self.scope_label(cx)), kind.plural())
+        });
+        match self.view() {
+            Some(view) => filtered_empty_state(view, empty, plural, &self.shell, cx),
+            None => div().into_any_element(),
+        }
     }
 
     /// Loading also covers a kind switch, while the session still shows the previous kind.
@@ -379,6 +445,9 @@ fn cell_element(
 
 #[cfg(test)]
 mod tests {
+    use crate::status_tone::StatusLabel;
+    use crate::table_layout::layout_columns;
+
     use super::*;
 
     #[test]
@@ -410,12 +479,12 @@ mod tests {
 
     #[test]
     fn columns_start_with_name_unless_the_kind_hides_it() {
-        assert!(columns(None, NAME_MIN_WIDTH).is_empty());
+        assert!(kind_plan(None).specs.is_empty());
         for kind in ResourceKind::ALL {
-            let columns = columns(Some(kind), NAME_MIN_WIDTH);
+            let columns = kind_columns(kind);
             assert_eq!(columns.len(), kind.columns().len() + extra_columns(kind));
             assert_eq!(
-                columns.first().map(|column| column.name.as_ref()),
+                columns.first().map(|column| column.name),
                 Some(if kind == ResourceKind::Events {
                     "Type"
                 } else {
@@ -437,12 +506,19 @@ mod tests {
 
     #[test]
     fn events_columns_flex_message_with_minimum_width() {
-        let columns = columns(Some(ResourceKind::Events), px(640.));
-        let message = columns.get(3).expect("a Message column");
+        let plan = kind_plan(Some(ResourceKind::Events));
+        let layout = layout_columns(
+            &plan.specs,
+            plan.flexible,
+            plan.flexible_min,
+            Pixels::ZERO,
+            &Default::default(),
+        );
+        let message = layout.columns.get(3).expect("a Message column");
         assert_eq!(message.name.as_ref(), "Message");
-        assert_eq!(message.width, px(640.));
+        assert_eq!(message.width, px(280.));
         assert_eq!(message.min_width, px(280.));
-        let reason = columns.get(1).expect("a Reason column");
+        let reason = layout.columns.get(1).expect("a Reason column");
         assert_eq!(reason.width, px(170.));
     }
 
@@ -451,50 +527,13 @@ mod tests {
         let mut events = delegate(Some(ResourceKind::Events));
         assert!(events.fit_width(px(1400.)));
         assert!(!events.fit_width(px(1400.)));
-        let message_width = events.columns.get(3).map(|column| column.width);
-        assert_eq!(
-            message_width,
-            Some(flexible_width(
-                px(1400.),
-                fixed_width(ResourceKind::Events),
-                px(280.)
-            ))
-        );
+        let message_width = events.layout.columns.columns.get(3).map(|c| c.width);
         assert!(message_width > Some(px(280.)));
 
         let mut deployments = delegate(Some(ResourceKind::Deployments));
         assert!(deployments.fit_width(px(1400.)));
-        let name_width = deployments.columns.first().map(|column| column.width);
-        assert_eq!(
-            name_width,
-            Some(flexible_width(
-                px(1400.),
-                fixed_width(ResourceKind::Deployments),
-                NAME_MIN_WIDTH
-            ))
-        );
-    }
-
-    #[test]
-    fn fixed_width_leaves_out_the_flexible_column() {
-        let total =
-            |kind: ResourceKind| -> f32 { kind.columns().iter().map(|column| column.width).sum() };
-        let NameColumn::Hidden { flexible } = ResourceKind::Events.name_column() else {
-            panic!("Events hide the Name column");
-        };
-        let flexible_width = ResourceKind::Events
-            .columns()
-            .get(flexible)
-            .map_or(0., |column| column.width);
-        assert_eq!(
-            fixed_width(ResourceKind::Events),
-            px(total(ResourceKind::Events) - flexible_width)
-        );
-        // Name is the flexible column of the other kinds and is not part of `columns`.
-        assert_eq!(
-            fixed_width(ResourceKind::ConfigMaps),
-            px(total(ResourceKind::ConfigMaps))
-        );
+        let name_width = deployments.layout.columns.columns.first().map(|c| c.width);
+        assert!(name_width > Some(NAME_MIN_WIDTH));
     }
 
     #[test]
@@ -510,18 +549,108 @@ mod tests {
     }
 
     #[test]
-    fn set_kind_resets_the_flexible_column_to_its_minimum() {
+    fn set_kind_keeps_the_table_width_and_the_view_of_each_kind() {
         let mut delegate = delegate(Some(ResourceKind::Deployments));
         assert!(delegate.fit_width(px(1400.)));
-        assert!(delegate.set_kind(Some(ResourceKind::Namespaces)));
-        assert_eq!(
-            delegate.columns.first().map(|column| column.width),
-            Some(NAME_MIN_WIDTH)
-        );
+        if let Some(view) = delegate.view_mut() {
+            view.filter.text = "api".to_owned();
+        }
         assert!(delegate.set_kind(Some(ResourceKind::Events)));
+        let message = delegate.layout.columns.columns.get(3).map(|c| c.width);
+        assert!(message > Some(px(280.)));
+        assert!(delegate.view().is_some_and(|view| !view.is_filtering()));
+        delegate.set_kind(Some(ResourceKind::Deployments));
         assert_eq!(
-            delegate.columns.get(3).map(|column| column.width),
-            Some(px(280.))
+            delegate.view().map(|view| view.filter.text.as_str()),
+            Some("api")
         );
+        delegate.clear_filters();
+        assert!(delegate.view().is_some_and(|view| !view.is_filtering()));
+    }
+
+    fn row(cells: Vec<KindCell>) -> KindRow {
+        KindRow {
+            namespace: Some("team-a".to_owned()),
+            name: "api".to_owned(),
+            created_at: None,
+            status: StatusLabel {
+                text: "Active".into(),
+                tone: StatusTone::Ok,
+            },
+            cells,
+            sections: Vec::new(),
+            related_pods: None,
+            event: None,
+            labels: vec!["app=api".into()],
+        }
+    }
+
+    #[test]
+    fn kind_row_values_follow_columns() {
+        let at = jiff::Timestamp::from_second(100).expect("valid timestamp");
+        let status = StatusLabel {
+            text: "Failed".into(),
+            tone: StatusTone::Bad,
+        };
+        let row = row(vec![
+            KindCell::Text("3/3".into()),
+            KindCell::Mono("RollingUpdate".into()),
+            KindCell::Qualified {
+                prefix: Some("ns".into()),
+                text: "svc".into(),
+            },
+            KindCell::Toned(status),
+            KindCell::Absent,
+            KindCell::Age {
+                at: Some(at),
+                tone: None,
+            },
+            KindCell::Duration {
+                started_at: Some(at),
+                finished_at: None,
+            },
+        ]);
+        let row = KindTableRow {
+            row: &row,
+            name_column: NameColumn::Flexible,
+        };
+        assert!(matches!(
+            row.value(0),
+            CellValue::Qualified {
+                prefix: Some("team-a"),
+                text: "api"
+            }
+        ));
+        assert!(matches!(row.value(1), CellValue::Text(text) if text == "3/3"));
+        assert!(matches!(row.value(2), CellValue::Text(text) if text == "RollingUpdate"));
+        assert!(matches!(
+            row.value(3),
+            CellValue::Qualified {
+                prefix: Some("ns"),
+                text: "svc"
+            }
+        ));
+        assert!(matches!(
+            row.value(4),
+            CellValue::Status {
+                tone: StatusTone::Bad,
+                ..
+            }
+        ));
+        assert!(matches!(row.value(5), CellValue::Absent));
+        assert!(matches!(row.value(6), CellValue::Age(Some(_))));
+        assert!(matches!(row.value(7), CellValue::Span { .. }));
+        assert!(matches!(row.value(8), CellValue::Absent));
+    }
+
+    #[test]
+    fn rows_without_a_name_column_start_at_their_first_cell() {
+        let row = row(vec![KindCell::Text("Warning".into())]);
+        let row = KindTableRow {
+            row: &row,
+            name_column: NameColumn::Hidden { flexible: 3 },
+        };
+        assert!(matches!(row.value(0), CellValue::Text(text) if text == "Warning"));
+        assert!(matches!(row.value(1), CellValue::Absent));
     }
 }

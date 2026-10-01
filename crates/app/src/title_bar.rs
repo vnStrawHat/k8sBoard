@@ -10,7 +10,7 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
-use crate::cluster_session::{ClusterSession, LiveList};
+use crate::cluster_session::{ClusterSession, LiveList, namespaces_label};
 use crate::resource_actions::disabled_menu_item;
 
 pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
@@ -77,6 +77,7 @@ fn namespace_picker(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
     let label = match &live.scope {
         NamespaceScope::All => "ns: all".to_owned(),
         NamespaceScope::Named(namespace) => format!("ns: {namespace}"),
+        NamespaceScope::Several(names) => format!("ns: {}", namespaces_label(names)),
     };
     let shell_handle = cx.weak_entity();
     picker

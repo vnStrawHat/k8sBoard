@@ -37,7 +37,7 @@ No limit in the crate; the app enforces `MAX_NAMESPACES` (decision 15).
 ```rust
 /// One input per namespace, in namespace order. Coalesces like the Batcher: at most one merged
 /// snapshot per `BATCH_WINDOW`. A failing namespace never hides the others' data.
-pub(crate) fn merge_snapshots<T: Clone + Send + 'static>(
+fn merge_snapshots<T: Clone + Send + 'static>(
     inputs: Vec<(String, BoxStream<'static, WatchUpdate<T>>)>,
     limit: Option<StoreLimit<T>>,
 ) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static;
@@ -50,9 +50,10 @@ Per input state: `Waiting` (nothing yet), `Items(Vec<T>)` (latest snapshot), `Fa
 | `Snapshot(items)` | state `Items(items)`; mark dirty; start the window (`deadline = now + BATCH_WINDOW`) if none |
 | window ends (`wait_until(deadline)`), all settled, at least one `Items` | emit `Snapshot(concatenation)`, trimmed by `limit` |
 | `Failed(error)` | `Waiting` → `FailedEmpty` (an `Items` input keeps its stale items). Flush now: if dirty, all settled, and one `Items` exists, emit the merged snapshot. Then emit `Failed(ClusterError::Namespace { namespace, source })` |
-| an input ends | dropped from `select_all`; its last state stays; the merge ends when every input ended |
+| an input ends | one that ends while `Waiting` becomes `FailedEmpty` and announces a fixed "watch ended" failure, so it never stalls the merge; otherwise its last state stays. The merge ends when every input ended |
 
 - Order follows the Batcher: pending snapshot first, then the failure. So a `LiveList` gets Ready data from the healthy namespaces, then an interruption naming the failing one; the existing banner shows it, and that namespace's next snapshot clears it. No failing namespace with data anywhere → only `Failed` reaches the list (its error state).
+- Recovery: the merger keeps each input's last failure as rendered text (`ClusterError` is not `Clone`) while the input is unresolved, and after every merged `Snapshot` it emits a `Failed(Namespace { namespace, source: Rendered { message } })` for each still-failing input, so one namespace's snapshot never clears another's banner. Only that input's own next snapshot clears its failure. `ClusterError::Rendered { message }` is the cloneable form: it holds the same `Display` text the first announcement showed, never more.
 - Shape: a struct like `Batcher` driven by `stream::unfold`, with `tokio::select! { biased; wait_until(deadline), select_all.next() }`. No task is spawned; dropping it drops every watch.
 - Order: inputs are sorted by (namespace, name) and in namespace order, so the concatenation keeps the crate's snapshot order. `limit` keeps the `max_items` most recent, preserving order. `StoreLimit` derives `Clone, Copy`.
 
@@ -60,6 +61,8 @@ Per input state: `Waiting` (nothing yet), `Items(Vec<T>)` (latest snapshot), `Fa
 // connection.rs, ClusterError
 #[error("namespace '{namespace}'")]
 Namespace { namespace: String, #[source] source: Box<ClusterError> },
+#[error("{message}")]
+Rendered { message: String },
 ```
 
 The app's `error_text` then reads `namespace 'web': cannot reach the API server …`.

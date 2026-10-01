@@ -8,7 +8,7 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
-use crate::cluster_session::LiveCluster;
+use crate::cluster_session::{LiveCluster, namespaces_label};
 use crate::drawer::section_title;
 use crate::kind_row::{DAEMON_SET_KIND, PodOwner, STATEFUL_SET_KIND, owns_pod};
 use crate::status_tone::{pod_status_label, toned_text};
@@ -94,6 +94,10 @@ fn scope_note(owner: &PodOwner, scope: &NamespaceScope) -> Option<String> {
         (PodOwner::Node { .. }, NamespaceScope::Named(namespace)) => {
             Some(format!("Only pods in {namespace} are listed"))
         }
+        (PodOwner::Node { .. }, NamespaceScope::Several(names)) => Some(format!(
+            "Only pods in {} are listed",
+            namespaces_label(names)
+        )),
         _ => None,
     }
 }

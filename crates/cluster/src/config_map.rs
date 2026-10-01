@@ -36,7 +36,7 @@ impl ClusterConnection {
     ) -> impl Stream<Item = WatchUpdate<ConfigMapSummary>> + Send + 'static {
         summary_watch(
             self,
-            self.scoped_api(scope),
+            self.scoped_apis(&scope),
             "watching config maps",
             config_map_summary,
         )

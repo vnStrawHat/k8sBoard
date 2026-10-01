@@ -9,7 +9,7 @@ use gpui_kit::{
 };
 
 use crate::app_shell::{AppShell, Screen};
-use crate::cluster_session::{AccessState, LiveCluster};
+use crate::cluster_session::{AccessState, LiveCluster, namespaces_label};
 use crate::resource_kind::ResourceKind;
 
 pub(crate) const SIDEBAR_WIDTH: Pixels = px(220.);
@@ -129,7 +129,12 @@ fn kind_availability(
         NamespaceScope::All if kind.is_namespaced() => {
             format!("Not permitted: {} in all namespaces", kind.access_check())
         }
-        NamespaceScope::All | NamespaceScope::Named(_) => {
+        NamespaceScope::Several(names) if kind.is_namespaced() => format!(
+            "Not permitted: {} in {}",
+            kind.access_check(),
+            namespaces_label(names)
+        ),
+        NamespaceScope::All | NamespaceScope::Named(_) | NamespaceScope::Several(_) => {
             format!("Not permitted: {}", kind.access_check())
         }
     };
@@ -314,6 +319,20 @@ mod tests {
         assert_eq!(
             kind_availability(ResourceKind::Deployments, &report_denying(&[]), &all),
             KindAvailability::Enabled
+        );
+    }
+
+    #[test]
+    fn kind_availability_names_the_picked_namespaces_for_several() {
+        let access = report_denying(&[AccessCheck::ListDeployments, AccessCheck::ListNamespaces]);
+        let several = NamespaceScope::of_namespaces(["b".to_owned(), "a".to_owned()]);
+        assert_eq!(
+            kind_availability(ResourceKind::Deployments, &access, &several),
+            denied("Not permitted: list deployments in a, b")
+        );
+        assert_eq!(
+            kind_availability(ResourceKind::Namespaces, &access, &several),
+            denied("Not permitted: list namespaces")
         );
     }
 

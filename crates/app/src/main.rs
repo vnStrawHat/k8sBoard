@@ -9,6 +9,7 @@ mod config_map_rows;
 mod container_detail;
 mod drawer;
 mod event_rows;
+mod filter_bar;
 mod kind_drawer;
 mod kind_row;
 mod kind_table;
@@ -31,8 +32,11 @@ mod resource_kind;
 mod screenshot;
 mod status_bar;
 mod status_tone;
+mod table_filter;
 mod table_layout;
 mod table_selection;
+mod table_sort;
+mod table_view;
 mod title_bar;
 mod workload_rows;
 mod yaml_view;
@@ -47,6 +51,8 @@ use tracing_subscriber::EnvFilter;
 use crate::app_shell::AppShell;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::launch_options::{LaunchOptions, LaunchRequest, ThemeChoice, USAGE};
+
+gpui_kit::actions!(k8sboard, [FocusQuickFilter]);
 
 const WINDOW_WIDTH: f32 = 1320.;
 const WINDOW_HEIGHT: f32 = 900.;
@@ -103,6 +109,7 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
             gpui_kit::init(cx);
             apply_theme(options.theme, cx);
             cx.set_global(ClusterRuntime::new(handle));
+            app_shell::bind_keys(cx);
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();

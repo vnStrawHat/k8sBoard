@@ -2,6 +2,8 @@ use cluster::{NodeReadiness, NodeScheduling, NodeStatus, PodStatus, ReadyCount, 
 
 use super::*;
 use crate::status_tone::{StatusLabel, StatusTone};
+use crate::table_sort::{SortDirection, TableSort};
+use crate::table_view::{CellValue, TableRow};
 
 fn pod(namespace: &str, name: &str) -> PodSummary {
     PodSummary {
@@ -18,6 +20,7 @@ fn pod(namespace: &str, name: &str) -> PodSummary {
         controller: None,
         conditions: Vec::new(),
         status_message: None,
+        labels: Vec::new(),
         containers: Vec::new(),
     }
 }
@@ -42,25 +45,108 @@ fn node(name: &str) -> NodeSummary {
     }
 }
 
-#[test]
-fn row_index_finds_key_after_reorder() {
-    let key = ResourceKey::of_pod(&pod("b", "web"));
-    let before = [pod("a", "web"), pod("b", "web"), pod("c", "web")];
-    let after = [pod("b", "web"), pod("a", "web"), pod("c", "web")];
-    assert_eq!(row_index(&before, |item| key.is_pod(item)), Some(1));
-    assert_eq!(row_index(&after, |item| key.is_pod(item)), Some(0));
+/// The selection only needs the view to list item indices, so the cells do not matter.
+impl TableRow for KindRow {
+    fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
 
-    let node_key = ResourceKey::of_node(&node("n2"));
-    let nodes = [node("n1"), node("n2")];
-    assert_eq!(row_index(&nodes, |item| node_key.is_node(item)), Some(1));
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn labels(&self) -> impl Iterator<Item = &str> {
+        std::iter::empty()
+    }
+
+    fn tone(&self) -> StatusTone {
+        self.status.tone
+    }
+
+    fn value(&self, _: usize) -> CellValue<'_> {
+        CellValue::Absent
+    }
+}
+
+/// A ready list and the view of it as a table shows it.
+fn ready_with_view<T: TableRow>(
+    items: Vec<T>,
+    sort: Option<TableSort>,
+) -> (LiveList<T>, TableView) {
+    let mut view = TableView::default();
+    view.sort = sort;
+    view.rebuild(&items, 6, jiff::Timestamp::UNIX_EPOCH);
+    let list = LiveList::Ready {
+        items,
+        interruption: None,
+    };
+    (list, view)
 }
 
 #[test]
-fn row_index_none_when_key_vanished() {
+fn list_row_index_finds_key_after_reorder() {
+    let key = ResourceKey::of_pod(&pod("b", "web"));
+    let (list, view) = ready_with_view(
+        vec![pod("a", "web"), pod("b", "web"), pod("c", "web")],
+        None,
+    );
+    assert_eq!(
+        list_row_index(&list, &view, |item| key.is_pod(item)),
+        Some(Some(1))
+    );
+    let by_name_descending = Some(TableSort {
+        column: 0,
+        direction: SortDirection::Descending,
+    });
+    let (list, view) = ready_with_view(
+        vec![pod("a", "web"), pod("b", "web"), pod("c", "web")],
+        by_name_descending,
+    );
+    assert_eq!(
+        list_row_index(&list, &view, |item| key.is_pod(item)),
+        Some(Some(1))
+    );
+    let key = ResourceKey::of_pod(&pod("a", "web"));
+    assert_eq!(
+        list_row_index(&list, &view, |item| key.is_pod(item)),
+        Some(Some(2))
+    );
+
+    let node_key = ResourceKey::of_node(&node("n2"));
+    let (nodes, node_view) = ready_with_view(vec![node("n1"), node("n2")], None);
+    assert_eq!(
+        list_row_index(&nodes, &node_view, |item| node_key.is_node(item)),
+        Some(Some(1))
+    );
+}
+
+#[test]
+fn list_row_index_none_when_key_vanished() {
     let key = ResourceKey::of_pod(&pod("a", "gone"));
-    let pods = [pod("a", "web"), pod("b", "gone")];
-    assert_eq!(row_index(&pods, |item| key.is_pod(item)), None);
+    let (list, view) = ready_with_view(vec![pod("a", "web"), pod("b", "gone")], None);
+    assert_eq!(
+        list_row_index(&list, &view, |item| key.is_pod(item)),
+        Some(None)
+    );
     assert!(!key.is_node(&node("gone")));
+}
+
+#[test]
+fn list_row_index_searches_the_view() {
+    let key = ResourceKey::of_pod(&pod("a", "api"));
+    let mut view = TableView::default();
+    let items = vec![pod("a", "web"), pod("a", "api")];
+    view.filter.text = "web".to_owned();
+    view.rebuild(&items, 6, jiff::Timestamp::UNIX_EPOCH);
+    let list = LiveList::Ready {
+        items,
+        interruption: None,
+    };
+    // The filter hides the subject, so its drawer must close.
+    assert_eq!(
+        list_row_index(&list, &view, |item| key.is_pod(item)),
+        Some(None)
+    );
 }
 
 #[test]
@@ -126,13 +212,22 @@ fn resource_key_screen_matches_kind() {
 #[test]
 fn pending_reveal_key_resolves_through_selection_sync() {
     let key = ResourceKey::of_row(ResourceKind::Deployments, &kind_row(Some("ns"), "api"));
-    let rows = [kind_row(Some("ns"), "web"), kind_row(Some("ns"), "api")];
-    let found = row_index(&rows, |row| key.is_row(ResourceKind::Deployments, row));
+    let (list, view) = ready_with_view(
+        vec![kind_row(Some("ns"), "web"), kind_row(Some("ns"), "api")],
+        None,
+    );
+    let found = list_row_index(&list, &view, |row| {
+        key.is_row(ResourceKind::Deployments, row)
+    })
+    .flatten();
     // The table has nothing selected yet, so the row is moved to.
     assert_eq!(selection_sync(None, found), SelectionSync::Move(1));
 
-    let other = [kind_row(Some("ns"), "web")];
-    let missing = row_index(&other, |row| key.is_row(ResourceKind::Deployments, row));
+    let (list, view) = ready_with_view(vec![kind_row(Some("ns"), "web")], None);
+    let missing = list_row_index(&list, &view, |row| {
+        key.is_row(ResourceKind::Deployments, row)
+    })
+    .flatten();
     assert_eq!(selection_sync(None, missing), SelectionSync::Clear);
 }
 
@@ -141,19 +236,22 @@ fn list_row_index_waits_while_loading_and_drops_a_failed_list() {
     let key = ResourceKey::of_row(ResourceKind::Deployments, &kind_row(Some("ns"), "api"));
     let is_key = |row: &KindRow| key.is_row(ResourceKind::Deployments, row);
 
+    let no_view = TableView::default();
     let loading = LiveList::<KindRow>::Loading;
-    assert_eq!(list_row_index(&loading, is_key), None);
+    assert_eq!(list_row_index(&loading, &no_view, is_key), None);
 
     let failed = LiveList::<KindRow>::Failed {
         message: "denied".to_owned(),
     };
-    assert_eq!(list_row_index(&failed, is_key), Some(None));
+    assert_eq!(list_row_index(&failed, &no_view, is_key), Some(None));
 
     let ready = LiveList::Ready {
         items: vec![kind_row(Some("ns"), "web"), kind_row(Some("ns"), "api")],
         interruption: None,
     };
-    assert_eq!(list_row_index(&ready, is_key), Some(Some(1)));
+    let mut view = TableView::default();
+    view.rebuild(ready.items(), 6, jiff::Timestamp::UNIX_EPOCH);
+    assert_eq!(list_row_index(&ready, &view, is_key), Some(Some(1)));
 }
 
 #[test]

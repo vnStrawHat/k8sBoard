@@ -312,6 +312,7 @@ fn pod_named(name: &str) -> PodSummary {
         controller: None,
         conditions: Vec::new(),
         status_message: None,
+        labels: Vec::new(),
         containers: Vec::new(),
     }
 }

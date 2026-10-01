@@ -135,6 +135,29 @@ impl AccessReport {
             .iter()
             .any(|review| review.check == check && review.decision == AccessDecision::Allowed)
     }
+
+    /// One review per check, in `AccessCheck::ALL` order: Allowed only if allowed in every
+    /// report that contains it; else the first denial.
+    pub(crate) fn all_of(reports: Vec<AccessReport>) -> AccessReport {
+        let reviews = AccessCheck::ALL
+            .into_iter()
+            .filter_map(|check| {
+                let mut decisions = reports
+                    .iter()
+                    .flat_map(|report| &report.reviews)
+                    .filter(|review| review.check == check)
+                    .map(|review| &review.decision)
+                    .peekable();
+                decisions.peek()?;
+                let decision = decisions
+                    .find(|decision| **decision != AccessDecision::Allowed)
+                    .cloned()
+                    .unwrap_or(AccessDecision::Allowed);
+                Some(AccessReview { check, decision })
+            })
+            .collect();
+        AccessReport { reviews }
+    }
 }
 
 impl ClusterConnection {
@@ -142,26 +165,53 @@ impl ClusterConnection {
     /// `AccessCheck::ALL` entry, concurrently. The review is non-mutating and the only
     /// POST this crate sends. A denial is data;
     /// any request error fails the whole call, so a report is never partial.
+    ///
+    /// For `Several` the cluster-scoped checks run once, then the namespaced checks run
+    /// one namespace at a time (16 x N + 3 requests); a check is allowed only when every
+    /// namespace allows it. That gates menus, it never filters data.
     pub async fn review_access(&self, scope: NamespaceScope) -> Result<AccessReport, ClusterError> {
-        let scope = &scope;
-        let reviews = try_join_all(
-            AccessCheck::ALL
-                .into_iter()
-                .map(|check| self.review_one(check, scope)),
+        let NamespaceScope::Several(namespaces) = &scope else {
+            let namespace = scope.namespaces().first().map(String::as_str);
+            let reviews = self.review_checks(&AccessCheck::ALL, namespace).await?;
+            return Ok(AccessReport { reviews });
+        };
+        let (namespaced, cluster_scoped): (Vec<_>, Vec<_>) = AccessCheck::ALL
+            .into_iter()
+            .partition(|check| check.target().is_namespaced);
+        let mut reports = vec![AccessReport {
+            reviews: self.review_checks(&cluster_scoped, None).await?,
+        }];
+        for namespace in namespaces {
+            reports.push(AccessReport {
+                reviews: self.review_checks(&namespaced, Some(namespace)).await?,
+            });
+        }
+        Ok(AccessReport::all_of(reports))
+    }
+
+    /// Reviews `checks` concurrently. `namespace` applies to the namespaced checks only.
+    async fn review_checks(
+        &self,
+        checks: &[AccessCheck],
+        namespace: Option<&str>,
+    ) -> Result<Vec<AccessReview>, ClusterError> {
+        try_join_all(
+            checks
+                .iter()
+                .map(|check| self.review_one(*check, namespace)),
         )
-        .await?;
-        Ok(AccessReport { reviews })
+        .await
     }
 
     async fn review_one(
         &self,
         check: AccessCheck,
-        scope: &NamespaceScope,
+        namespace: Option<&str>,
     ) -> Result<AccessReview, ClusterError> {
         let api = Api::<SelfSubjectAccessReview>::all(self.client().clone());
         let review = SelfSubjectAccessReview {
             spec: SelfSubjectAccessReviewSpec {
-                resource_attributes: Some(resource_attributes(check, scope)),
+                resource_attributes: Some(resource_attributes(check, namespace)),
                 non_resource_attributes: None,
             },
             ..Default::default()
@@ -179,15 +229,14 @@ impl ClusterConnection {
     }
 }
 
-fn resource_attributes(check: AccessCheck, scope: &NamespaceScope) -> ResourceAttributes {
+/// `namespace` is ignored by cluster-scoped checks.
+fn resource_attributes(check: AccessCheck, namespace: Option<&str>) -> ResourceAttributes {
     let target = check.target();
-    let namespace = match scope {
-        NamespaceScope::Named(namespace) if target.is_namespaced => Some(namespace.clone()),
-        _ => None,
-    };
     ResourceAttributes {
         group: Some(target.group.to_owned()),
-        namespace,
+        namespace: namespace
+            .filter(|_| target.is_namespaced)
+            .map(str::to_owned),
         resource: Some(target.resource.to_owned()),
         subresource: target.subresource.map(str::to_owned),
         verb: Some(target.verb.to_owned()),
@@ -228,10 +277,6 @@ mod tests {
         }
     }
 
-    fn named(namespace: &str) -> NamespaceScope {
-        NamespaceScope::Named(namespace.to_owned())
-    }
-
     #[test]
     fn all_checks_cover_distinct_permissions() {
         assert_eq!(AccessCheck::ALL.len(), 19);
@@ -241,7 +286,7 @@ mod tests {
 
     #[test]
     fn pod_log_check_uses_get_on_pods_log() {
-        let attributes = resource_attributes(AccessCheck::GetPodLogs, &NamespaceScope::All);
+        let attributes = resource_attributes(AccessCheck::GetPodLogs, None);
         assert_eq!(attributes.verb.as_deref(), Some("get"));
         assert_eq!(attributes.resource.as_deref(), Some("pods"));
         assert_eq!(attributes.subresource.as_deref(), Some("log"));
@@ -250,17 +295,17 @@ mod tests {
 
     #[test]
     fn exec_and_port_forward_checks_use_create() {
-        let exec = resource_attributes(AccessCheck::CreatePodExec, &NamespaceScope::All);
+        let exec = resource_attributes(AccessCheck::CreatePodExec, None);
         assert_eq!(exec.verb.as_deref(), Some("create"));
         assert_eq!(exec.subresource.as_deref(), Some("exec"));
-        let forward = resource_attributes(AccessCheck::CreatePodPortForward, &NamespaceScope::All);
+        let forward = resource_attributes(AccessCheck::CreatePodPortForward, None);
         assert_eq!(forward.verb.as_deref(), Some("create"));
         assert_eq!(forward.subresource.as_deref(), Some("portforward"));
     }
 
     #[test]
     fn kind_checks_use_their_api_group() {
-        let group = |check| resource_attributes(check, &NamespaceScope::All).group;
+        let group = |check| resource_attributes(check, None).group;
         for check in [
             AccessCheck::ListDeployments,
             AccessCheck::ListStatefulSets,
@@ -288,7 +333,7 @@ mod tests {
 
     #[test]
     fn namespace_check_is_cluster_scoped() {
-        let attributes = resource_attributes(AccessCheck::ListNamespaces, &named("team-a"));
+        let attributes = resource_attributes(AccessCheck::ListNamespaces, Some("team-a"));
         assert_eq!(attributes.namespace, None);
         assert_eq!(attributes.resource.as_deref(), Some("namespaces"));
         assert_eq!(attributes.verb.as_deref(), Some("list"));
@@ -296,14 +341,14 @@ mod tests {
 
     #[test]
     fn named_scope_sets_namespace_on_namespaced_checks() {
-        let attributes = resource_attributes(AccessCheck::ListPods, &named("team-a"));
+        let attributes = resource_attributes(AccessCheck::ListPods, Some("team-a"));
         assert_eq!(attributes.namespace.as_deref(), Some("team-a"));
     }
 
     #[test]
     fn all_scope_leaves_namespace_unset() {
         for check in AccessCheck::ALL {
-            let attributes = resource_attributes(check, &NamespaceScope::All);
+            let attributes = resource_attributes(check, None);
             assert_eq!(attributes.namespace, None, "{check}");
         }
     }
@@ -315,7 +360,7 @@ mod tests {
             AccessCheck::GetNodeProxy,
             AccessCheck::ListNamespaces,
         ] {
-            let attributes = resource_attributes(check, &named("team-a"));
+            let attributes = resource_attributes(check, Some("team-a"));
             assert_eq!(attributes.namespace, None, "{check}");
         }
     }
@@ -377,6 +422,44 @@ mod tests {
         assert!(report.is_allowed(AccessCheck::ListPods));
         assert!(!report.is_allowed(AccessCheck::ListSecrets));
         assert!(!report.is_allowed(AccessCheck::ListNodes));
+    }
+
+    fn review(check: AccessCheck, reason: Option<&str>) -> AccessReview {
+        let decision = match reason {
+            None => AccessDecision::Allowed,
+            Some(reason) => AccessDecision::Denied {
+                reason: Some(reason.to_owned()),
+            },
+        };
+        AccessReview { check, decision }
+    }
+
+    #[test]
+    fn all_of_allows_only_when_every_report_allows() {
+        let cluster_scoped = AccessReport {
+            reviews: vec![review(AccessCheck::ListNodes, None)],
+        };
+        let first = AccessReport {
+            reviews: vec![
+                review(AccessCheck::ListPods, None),
+                review(AccessCheck::ListSecrets, Some("first")),
+            ],
+        };
+        let second = AccessReport {
+            reviews: vec![
+                review(AccessCheck::ListPods, Some("second")),
+                review(AccessCheck::ListSecrets, Some("second")),
+            ],
+        };
+        let report = AccessReport::all_of(vec![cluster_scoped, first, second]);
+        assert_eq!(
+            report.reviews,
+            [
+                review(AccessCheck::ListPods, Some("second")),
+                review(AccessCheck::ListSecrets, Some("first")),
+                review(AccessCheck::ListNodes, None),
+            ]
+        );
     }
 
     #[test]

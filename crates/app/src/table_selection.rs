@@ -4,6 +4,7 @@ use crate::app_shell::Screen;
 use crate::cluster_session::LiveList;
 use crate::kind_row::KindRow;
 use crate::resource_kind::ResourceKind;
+use crate::table_view::TableView;
 
 /// The identity of a selected row. Rows move when a snapshot reorders them, so the
 /// selection is a key and the row index is looked up again after every update.
@@ -93,21 +94,24 @@ impl ResourceKey {
     }
 }
 
-pub(crate) fn row_index<T>(items: &[T], is_selected: impl Fn(&T) -> bool) -> Option<usize> {
-    items.iter().position(is_selected)
-}
-
-/// The selected row in `list`. `None` while the list is loading, so the selection waits for
-/// the first snapshot; otherwise `Some(found)`. A failed list has no rows, so its selection is
-/// dropped like a missing row (a denied kind reached through a reveal).
+/// The table row of the selected item in `list`, searched in the rows `view` shows. `None`
+/// while the list is loading, so the selection waits for the first snapshot; otherwise
+/// `Some(found)`. A failed list has no rows, and a filter can hide the item, so the selection
+/// is dropped like a missing row (a denied kind reached through a reveal).
 pub(crate) fn list_row_index<T>(
     list: &LiveList<T>,
+    view: &TableView,
     is_selected: impl Fn(&T) -> bool,
 ) -> Option<Option<usize>> {
     if list.is_loading() {
         return None;
     }
-    Some(row_index(list.items(), is_selected))
+    let items = list.items();
+    Some(
+        view.rows()
+            .iter()
+            .position(|&item| items.get(item).is_some_and(&is_selected)),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

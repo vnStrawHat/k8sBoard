@@ -66,7 +66,7 @@ impl ClusterConnection {
         &self,
         scope: NamespaceScope,
     ) -> impl Stream<Item = WatchUpdate<JobSummary>> + Send + 'static {
-        summary_watch(self, self.scoped_api(scope), "watching jobs", job_summary)
+        summary_watch(self, self.scoped_apis(&scope), "watching jobs", job_summary)
     }
 }
 

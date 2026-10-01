@@ -554,3 +554,18 @@ fn terminated_message_is_not_kept() {
     assert!(!debug.contains("SECRETTERMINATION"), "{debug}");
     assert!(!debug.contains("SECRETANNOTATION"), "{debug}");
 }
+
+#[test]
+fn pod_summary_reads_labels_in_key_order() {
+    let mut pod = pod_with_containers(Vec::new(), vec![container("main", None)]);
+    pod.metadata.labels = Some(
+        [
+            ("tier".to_owned(), "web".to_owned()),
+            ("app".to_owned(), "api".to_owned()),
+        ]
+        .into(),
+    );
+    assert_eq!(pod_summary(&pod).labels, ["app=api", "tier=web"]);
+    pod.metadata.labels = None;
+    assert!(pod_summary(&pod).labels.is_empty());
+}

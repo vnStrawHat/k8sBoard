@@ -211,6 +211,17 @@ pub(crate) fn error_text(error: &(dyn Error + 'static)) -> String {
     }
 }
 
+/// The picked namespaces as shown in the title bar and in messages: `a, b`, or `a, b +N` when
+/// there are more than two.
+pub(crate) fn namespaces_label(names: &[String]) -> String {
+    match names {
+        [first, second, rest @ ..] if !rest.is_empty() => {
+            format!("{first}, {second} +{}", rest.len())
+        }
+        _ => names.join(", "),
+    }
+}
+
 /// `all_namespaces_access` is `None` when `review_access(All)` failed or was not asked.
 fn initial_scope(
     requested: Option<&str>,
@@ -524,6 +535,7 @@ impl LiveCluster {
         match &self.scope {
             NamespaceScope::All => "all namespaces".to_owned(),
             NamespaceScope::Named(namespace) => namespace.clone(),
+            NamespaceScope::Several(names) => namespaces_label(names),
         }
     }
 

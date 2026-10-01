@@ -25,5 +25,9 @@ futures.workspace = true
 jiff.workspace = true
 k8sboard-cluster = { path = "../cluster" }
 
+[dev-dependencies]
+# Headless windows for the key binding tests; `screenshot` already enables the same feature.
+gpui-kit = { workspace = true, features = ["test-support"] }
+
 [lints]
 workspace = true

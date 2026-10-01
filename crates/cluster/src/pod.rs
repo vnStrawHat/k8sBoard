@@ -1,6 +1,7 @@
 use std::fmt;
 
 use futures::Stream;
+use futures::future::try_join_all;
 use k8s_openapi::api::core::v1::{
     Container, ContainerState as ApiContainerState, ContainerStateTerminated,
     ContainerStatus as ApiContainerStatus, Pod, Volume,
@@ -15,7 +16,9 @@ use crate::event::optional_message;
 use crate::namespace::NamespaceScope;
 use crate::pod_status::{PodStatus, StatusReason, is_sidecar, non_negative, pod_display};
 use crate::resource_watch::{WatchUpdate, summary_watch};
-use crate::workload::{ContainerPort, ControllerRef, container_ports, controller_ref, non_empty};
+use crate::workload::{
+    ContainerPort, ControllerRef, container_ports, controller_ref, label_terms, non_empty,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PodSummary {
@@ -41,6 +44,8 @@ pub struct PodSummary {
     /// `status.message`, kept only when the phase is `Failed` or the reason is `Evicted`.
     /// Cut like event messages.
     pub status_message: Option<String>,
+    /// `key=value` terms in key order. Labels only: annotations are never read.
+    pub labels: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -130,10 +135,26 @@ pub struct Termination {
 impl ClusterConnection {
     /// Lists pods in `scope`, ordered by (namespace, name).
     pub async fn list_pods(&self, scope: NamespaceScope) -> Result<Vec<PodSummary>, ClusterError> {
-        let pods = self
-            .list_all(self.scoped_api(scope), "listing pods")
-            .await?;
-        let mut summaries: Vec<_> = pods.iter().map(pod_summary).collect();
+        let is_several = scope.namespaces().len() > 1;
+        let lists = self
+            .scoped_apis(&scope)
+            .into_iter()
+            .map(|(namespace, api)| async move {
+                let pods = self.list_all(api, "listing pods").await;
+                pods.map_err(|source| match namespace {
+                    Some(namespace) if is_several => ClusterError::Namespace {
+                        namespace,
+                        source: Box::new(source),
+                    },
+                    _ => source,
+                })
+            });
+        let mut summaries: Vec<PodSummary> = try_join_all(lists)
+            .await?
+            .iter()
+            .flatten()
+            .map(pod_summary)
+            .collect();
         summaries.sort_by(|left, right| {
             (&left.namespace, &left.name).cmp(&(&right.namespace, &right.name))
         });
@@ -145,7 +166,7 @@ impl ClusterConnection {
         &self,
         scope: NamespaceScope,
     ) -> impl Stream<Item = WatchUpdate<PodSummary>> + Send + 'static {
-        summary_watch(self, self.scoped_api(scope), "watching pods", pod_summary)
+        summary_watch(self, self.scoped_apis(&scope), "watching pods", pod_summary)
     }
 }
 
@@ -188,6 +209,7 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
             .collect(),
         containers: container_summaries(pod),
         status_message: status_message(pod),
+        labels: label_terms(&pod.metadata),
     }
 }
 

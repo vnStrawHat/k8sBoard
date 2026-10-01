@@ -67,6 +67,7 @@ fn pod(status: PodStatus, containers: Vec<ContainerSummary>) -> PodSummary {
         conditions: Vec::new(),
         containers,
         status_message: None,
+        labels: Vec::new(),
     }
 }
 

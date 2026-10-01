@@ -12,6 +12,7 @@ Options:
   --kubeconfig <path>    kubeconfig file (default: first KUBECONFIG entry, else ~/.kube/config)
   --context <name>       context to open (default: the kubeconfig current-context)
   --namespace <name>     namespace to show (default: all namespaces if allowed)
+  --filter <text>        quick filter of the start screen; label:k=v,k2!=v2 becomes label chips
   --theme light|dark     colour theme (default: follow the system)
   --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|node-events|pod-yaml|node-yaml|logs-dock|logs-zoomed|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
@@ -113,6 +114,8 @@ pub(crate) struct LaunchOptions {
     pub(crate) kubeconfig: Option<PathBuf>,
     pub(crate) context: Option<String>,
     pub(crate) namespace: Option<String>,
+    /// The start screen's quick filter text; a `label:` text becomes chips.
+    pub(crate) filter: Option<String>,
     pub(crate) theme: Option<ThemeChoice>,
     pub(crate) screen: LaunchScreen,
     pub(crate) screenshot: Option<PathBuf>,
@@ -134,6 +137,7 @@ pub(crate) fn parse_launch_options(
         kubeconfig: None,
         context: None,
         namespace: None,
+        filter: None,
         theme: None,
         screen: LaunchScreen::Pods,
         screenshot: None,
@@ -150,6 +154,7 @@ pub(crate) fn parse_launch_options(
             "--kubeconfig" => options.kubeconfig = Some(PathBuf::from(value()?)),
             "--context" => options.context = Some(value()?),
             "--namespace" => options.namespace = Some(value()?),
+            "--filter" => options.filter = Some(value()?),
             "--theme" => options.theme = Some(parse_theme(&value()?)?),
             "--screen" => {
                 let text = value()?;

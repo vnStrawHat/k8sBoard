@@ -37,7 +37,7 @@ impl ClusterConnection {
     ) -> impl Stream<Item = WatchUpdate<ReplicaSetSummary>> + Send + 'static {
         summary_watch(
             self,
-            self.scoped_api(scope),
+            self.scoped_apis(&scope),
             "watching replica sets",
             replica_set_summary,
         )

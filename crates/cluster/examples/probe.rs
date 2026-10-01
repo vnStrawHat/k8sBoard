@@ -6,7 +6,7 @@
 //! the YAML text. The access section doubles as the RBAC probe of the context.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>] [--yaml]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--yaml]
 //! ```
 
 use std::collections::BTreeMap;
@@ -25,7 +25,7 @@ use cluster::{
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>] [--yaml]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--yaml]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -371,10 +371,18 @@ async fn run(args: &Args) -> io::Result<bool> {
     };
 
     let scope = match &args.namespace {
-        Some(namespace) => NamespaceScope::Named(namespace.clone()),
+        Some(namespaces) => NamespaceScope::of_namespaces(
+            namespaces
+                .split(',')
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned),
+        ),
         None => NamespaceScope::All,
     };
-    let scope_label = args.namespace.as_deref().unwrap_or("all namespaces");
+    let scope_label = match scope.namespaces() {
+        [] => "all namespaces".to_owned(),
+        names => names.join(","),
+    };
 
     probe.section("server")?;
     match connection.server_version().await {
@@ -478,7 +486,7 @@ async fn run(args: &Args) -> io::Result<bool> {
     let pods = connection.list_pods(scope.clone()).await;
     match &pods {
         Ok(pods) => {
-            probe.print_pods(scope_label, pods)?;
+            probe.print_pods(&scope_label, pods)?;
             probe.print_container_spec_counts(pods)?;
         }
         Err(error) => {
@@ -573,9 +581,10 @@ impl Probe {
             .iter()
             .filter(|pod| pod.status_message.is_some())
             .count();
+        let with_labels = pods.iter().filter(|pod| !pod.labels.is_empty()).count();
         writeln!(
             self.out,
-            "  pod conditions with reason or message {with_condition_text}  pods with status message {with_status_message}"
+            "  pod conditions with reason or message {with_condition_text}  pods with status message {with_status_message}  pods with labels {with_labels}"
         )
     }
 
@@ -809,5 +818,7 @@ fn error_kind(error: &ClusterError) -> &'static str {
         ClusterError::Forbidden { .. } => "Forbidden: ",
         ClusterError::Api { .. } => "Api: ",
         ClusterError::UnexpectedResponse { .. } => "UnexpectedResponse: ",
+        ClusterError::Namespace { .. } => "Namespace: ",
+        ClusterError::Rendered { .. } => "Rendered: ",
     }
 }

@@ -569,6 +569,7 @@ mod tests {
             controller: None,
             conditions: Vec::new(),
             status_message: None,
+            labels: Vec::new(),
             containers,
         }
     }

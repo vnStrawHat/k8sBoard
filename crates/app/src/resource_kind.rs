@@ -48,13 +48,14 @@ pub(crate) enum NameColumn {
 }
 
 /// A column after the Name column, or all the columns when the Name column is hidden.
+#[derive(Clone, Copy)]
 pub(crate) struct KindColumn {
     pub(crate) name: &'static str,
     pub(crate) width: f32,
     pub(crate) align: Align,
 }
 
-const fn column(name: &'static str, width: f32, align: Align) -> KindColumn {
+pub(crate) const fn column(name: &'static str, width: f32, align: Align) -> KindColumn {
     KindColumn { name, width, align }
 }
 
@@ -311,6 +312,19 @@ static CONFIG_MAPS: KindSpec = KindSpec {
     delete_label: "Delete configmap…",
     has_port_forward: false,
 };
+
+/// The Name column of a kind that shows it, as wide as its minimum.
+pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left);
+
+/// Every logical column of a kind's table: Name first unless the kind hides it, then
+/// `ResourceKind::columns`.
+pub(crate) fn kind_columns(kind: ResourceKind) -> Vec<KindColumn> {
+    let rest = kind.columns().iter().copied();
+    match kind.name_column() {
+        NameColumn::Flexible => std::iter::once(NAME_COLUMN).chain(rest).collect(),
+        NameColumn::Hidden { .. } => rest.collect(),
+    }
+}
 
 impl ResourceKind {
     pub(crate) const ALL: [Self; 11] = [

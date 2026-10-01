@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use cluster::{NodeSummary, NodeTaint};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
@@ -11,9 +13,12 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::ClusterSession;
 use crate::drawer::truncated_text;
+use crate::filter_bar::filtered_empty_state;
 use crate::resource_actions::node_menu;
-use crate::status_tone::{node_status_label, toned_text};
-use crate::table_layout::{flexible_width, header_cell};
+use crate::resource_kind::{Align, KindColumn, column};
+use crate::status_tone::{StatusTone, node_status_label, toned_text};
+use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
+use crate::table_view::{CellValue, FilteredTable, TableRow, TableView};
 
 const NAME: usize = 0;
 const STATUS: usize = 1;
@@ -27,28 +32,24 @@ const AGE: usize = 6;
 const ABSENT: &str = "—";
 
 const TAINTS_MIN_WIDTH: Pixels = px(160.);
+
 /// The Taints column takes the rest of the width: it holds the longest values.
-const FIXED_WIDTH: Pixels = px(180. + 200. + 130. + 100. + 120. + 60.);
+const NODE_COLUMNS: [KindColumn; 7] = [
+    column("Name", 180., Align::Left),
+    column("Status", 200., Align::Left),
+    column("Roles", 130., Align::Left),
+    column("Taints", 160., Align::Left),
+    column("Version", 100., Align::Left),
+    column("Internal IP", 120., Align::Left),
+    column("Age", 60., Align::Right),
+];
 
 pub(crate) struct NodeTableDelegate {
     session: Option<Entity<ClusterSession>>,
     /// The row menu's "View YAML" opens the drawer through the shell.
     shell: WeakEntity<AppShell>,
-    columns: Vec<Column>,
-}
-
-fn columns(taints_width: Pixels) -> Vec<Column> {
-    vec![
-        Column::new("name", "Name").width(px(180.)),
-        Column::new("status", "Status").width(px(200.)),
-        Column::new("roles", "Roles").width(px(130.)),
-        Column::new("taints", "Taints")
-            .width(taints_width)
-            .min_width(TAINTS_MIN_WIDTH),
-        Column::new("version", "Version").width(px(100.)),
-        Column::new("internal_ip", "Internal IP").width(px(120.)),
-        Column::new("age", "Age").width(px(60.)).text_right(),
-    ]
+    layout: TableLayout,
+    view: TableView,
 }
 
 impl NodeTableDelegate {
@@ -56,23 +57,19 @@ impl NodeTableDelegate {
         Self {
             session: None,
             shell,
-            columns: columns(TAINTS_MIN_WIDTH),
+            layout: TableLayout::new(ColumnPlan {
+                specs: NODE_COLUMNS.to_vec(),
+                flexible: TAINTS,
+                flexible_min: TAINTS_MIN_WIDTH,
+            }),
+            view: TableView::default(),
         }
     }
 
-    /// Resizes the Taints column for a table `table_width` wide. Returns whether it changed,
-    /// so the caller refreshes the table only then.
+    /// Resizes the Taints column for a table `table_width` wide. Returns whether the columns
+    /// changed, so the caller refreshes the table only then.
     pub(crate) fn fit_width(&mut self, table_width: Pixels) -> bool {
-        let taints_width = flexible_width(table_width, FIXED_WIDTH, TAINTS_MIN_WIDTH);
-        if self
-            .columns
-            .get(TAINTS)
-            .is_some_and(|column| column.width == taints_width)
-        {
-            return false;
-        }
-        self.columns = columns(taints_width);
-        true
+        self.layout.fit_width(table_width, &self.view.hidden)
     }
 
     pub(crate) fn set_session(&mut self, session: Option<Entity<ClusterSession>>) {
@@ -88,19 +85,93 @@ impl NodeTableDelegate {
             .live()
             .map_or(&[], |live| live.nodes.items())
     }
+
+    /// The node shown at table row `row_ix`.
+    fn node_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<&'a NodeSummary> {
+        self.nodes(cx).get(self.view.item_index(row_ix)?)
+    }
+}
+
+impl TableRow for NodeSummary {
+    fn namespace(&self) -> Option<&str> {
+        None
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn labels(&self) -> impl Iterator<Item = &str> {
+        self.labels.iter().map(String::as_str)
+    }
+
+    fn tone(&self) -> StatusTone {
+        node_status_label(self.status).tone
+    }
+
+    fn value(&self, column: usize) -> CellValue<'_> {
+        match column {
+            NAME => CellValue::Text(Cow::Borrowed(&self.name)),
+            STATUS => {
+                let label = node_status_label(self.status);
+                CellValue::Status {
+                    tone: label.tone,
+                    text: label.text,
+                }
+            }
+            ROLES if self.roles.is_empty() => CellValue::Absent,
+            ROLES => CellValue::Text(Cow::Owned(self.roles.join(", "))),
+            TAINTS => self.taints.first().map_or(CellValue::Absent, |taint| {
+                CellValue::Text(Cow::Owned(taint.to_string()))
+            }),
+            VERSION => CellValue::Text(Cow::Borrowed(&self.kubelet_version)),
+            INTERNAL_IP => self
+                .internal_ip
+                .as_deref()
+                .map_or(CellValue::Absent, |ip| CellValue::Text(Cow::Borrowed(ip))),
+            AGE => CellValue::Age(self.created_at),
+            _ => CellValue::Absent,
+        }
+    }
+}
+
+impl FilteredTable for NodeTableDelegate {
+    fn view(&self) -> Option<&TableView> {
+        Some(&self.view)
+    }
+
+    fn view_mut(&mut self) -> Option<&mut TableView> {
+        Some(&mut self.view)
+    }
+
+    fn column_plan(&self) -> Option<&ColumnPlan> {
+        Some(&self.layout.plan)
+    }
+
+    fn rebuild_view(&mut self, cx: &App) -> bool {
+        let nodes = self.nodes(cx);
+        self.view
+            .rebuild(nodes, NODE_COLUMNS.len(), jiff::Timestamp::now());
+        self.layout.relayout(&self.view.hidden)
+    }
 }
 
 impl TableDelegate for NodeTableDelegate {
     fn columns_count(&self, _: &App) -> usize {
-        self.columns.len()
+        self.layout.columns.columns.len()
     }
 
-    fn rows_count(&self, cx: &App) -> usize {
-        self.nodes(cx).len()
+    fn rows_count(&self, _: &App) -> usize {
+        self.view.rows().len()
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        self.columns.get(col_ix).cloned().unwrap_or_default()
+        self.layout
+            .columns
+            .columns
+            .get(col_ix)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn render_th(
@@ -109,10 +180,7 @@ impl TableDelegate for NodeTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        match self.columns.get(col_ix) {
-            Some(column) => header_cell(column, cx),
-            None => div().size_full(),
-        }
+        header_cell(&self.layout, self.view.sort, &self.shell, col_ix, cx)
     }
 
     fn render_td(
@@ -122,11 +190,14 @@ impl TableDelegate for NodeTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(node) = self.nodes(cx).get(row_ix) else {
+        let (Some(node), Some(logical)) = (
+            self.node_at(row_ix, cx),
+            self.layout.columns.logical(col_ix),
+        ) else {
             return div().into_any_element();
         };
         let mono = cx.theme().mono_font_family.clone();
-        match col_ix {
+        match logical {
             NAME => truncated_text("name", node.name.clone()).into_any_element(),
             STATUS => toned_text(node_status_label(node.status), cx).into_any_element(),
             ROLES => cell_text(&roles_cell(&node.roles), cx),
@@ -163,7 +234,7 @@ impl TableDelegate for NodeTableDelegate {
         let Some(live) = session.read(cx).live() else {
             return menu;
         };
-        match live.nodes.items().get(row_ix) {
+        match self.node_at(row_ix, cx) {
             Some(node) => node_menu(menu, node, &live.access, &self.shell),
             None => menu,
         }
@@ -174,12 +245,7 @@ impl TableDelegate for NodeTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        h_flex()
-            .size_full()
-            .justify_center()
-            .items_center()
-            .text_color(cx.theme().muted_foreground)
-            .child("No nodes")
+        filtered_empty_state(&self.view, "No nodes".to_owned(), "nodes", &self.shell, cx)
     }
 
     fn loading(&self, cx: &App) -> bool {
@@ -266,6 +332,66 @@ mod tests {
         assert_eq!(summary.more, 2);
         assert!(taints_summary(&[]).is_none());
         assert_eq!(taints_summary(&taints[..1]).expect("one taint").more, 0);
+    }
+
+    fn node() -> NodeSummary {
+        NodeSummary {
+            name: "wk-03".to_owned(),
+            status: cluster::NodeStatus {
+                readiness: cluster::NodeReadiness::NotReady,
+                scheduling: cluster::NodeScheduling::Enabled,
+            },
+            roles: vec!["control-plane".to_owned(), "etcd".to_owned()],
+            taints: vec![taint("a", "NoSchedule"), taint("b", "NoExecute")],
+            kubelet_version: "v1.29.5".to_owned(),
+            internal_ip: Some("10.0.0.3".to_owned()),
+            created_at: None,
+            conditions: Vec::new(),
+            addresses: Vec::new(),
+            system: cluster::NodeSystemInfo::default(),
+            resources: Vec::new(),
+            labels: vec!["role=db".to_owned()],
+        }
+    }
+
+    #[test]
+    fn node_row_values_follow_columns() {
+        let node = node();
+        assert!(matches!(node.value(NAME), CellValue::Text(text) if text == "wk-03"));
+        assert!(matches!(
+            node.value(STATUS),
+            CellValue::Status {
+                tone: StatusTone::Bad,
+                ..
+            }
+        ));
+        assert!(
+            matches!(node.value(ROLES), CellValue::Text(text) if text == "control-plane, etcd")
+        );
+        assert!(matches!(node.value(TAINTS), CellValue::Text(text) if text == "a:NoSchedule"));
+        assert!(matches!(node.value(VERSION), CellValue::Text(text) if text == "v1.29.5"));
+        assert!(matches!(node.value(INTERNAL_IP), CellValue::Text(text) if text == "10.0.0.3"));
+        assert!(matches!(node.value(AGE), CellValue::Age(None)));
+    }
+
+    #[test]
+    fn node_row_reads_scope_and_labels() {
+        let node = node();
+        assert_eq!(node.namespace(), None);
+        assert_eq!(node.labels().collect::<Vec<_>>(), ["role=db"]);
+    }
+
+    #[test]
+    fn node_row_values_are_absent_without_roles_taints_or_ip() {
+        let bare = NodeSummary {
+            roles: Vec::new(),
+            taints: Vec::new(),
+            internal_ip: None,
+            ..node()
+        };
+        assert!(matches!(bare.value(ROLES), CellValue::Absent));
+        assert!(matches!(bare.value(TAINTS), CellValue::Absent));
+        assert!(matches!(bare.value(INTERNAL_IP), CellValue::Absent));
     }
 
     #[test]

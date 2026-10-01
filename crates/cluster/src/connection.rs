@@ -92,7 +92,21 @@ pub enum ClusterError {
         #[source]
         source: BoxError,
     },
+    /// One namespace of a merged multi-namespace watch failed; the others may be fine.
+    #[error("namespace '{namespace}'")]
+    Namespace {
+        namespace: String,
+        #[source]
+        source: Box<ClusterError>,
+    },
+    /// A failure kept as the text it was first announced with, so a merged watch can repeat
+    /// it (`ClusterError` is not `Clone`). Holds no more than the original `Display`.
+    #[error("{message}")]
+    Rendered { message: String },
 }
+
+/// An API handle with the namespace it is scoped to; `None` is every namespace.
+pub(crate) type ScopedApi<K> = (Option<String>, Api<K>);
 
 /// One page of a paged list. `None` or an empty token marks the last page.
 struct Page<K> {
@@ -163,17 +177,25 @@ impl ClusterConnection {
         &self.client
     }
 
-    /// An API handle for a namespaced kind: every namespace, or just the named one.
-    pub(crate) fn scoped_api<K>(&self, scope: NamespaceScope) -> Api<K>
+    /// API handles for a namespaced kind: one unnamed handle for every namespace, or one
+    /// named handle per picked namespace, in scope order.
+    pub(crate) fn scoped_apis<K>(&self, scope: &NamespaceScope) -> Vec<ScopedApi<K>>
     where
         K: kube::Resource<Scope = NamespaceResourceScope>,
         K::DynamicType: Default,
     {
-        let client = self.client().clone();
-        match scope {
-            NamespaceScope::All => Api::all(client),
-            NamespaceScope::Named(namespace) => Api::namespaced(client, &namespace),
+        let client = self.client();
+        if matches!(scope, NamespaceScope::All) {
+            return vec![(None, Api::all(client.clone()))];
         }
+        scope
+            .namespaces()
+            .iter()
+            .map(|namespace| {
+                let api = Api::namespaced(client.clone(), namespace);
+                (Some(namespace.clone()), api)
+            })
+            .collect()
     }
 
     /// Runs one request under `REQUEST_TIMEOUT`; errors go through `classify_error`.

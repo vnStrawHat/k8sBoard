@@ -38,7 +38,7 @@ impl ClusterConnection {
     ) -> impl Stream<Item = WatchUpdate<CronJobSummary>> + Send + 'static {
         summary_watch(
             self,
-            self.scoped_api(scope),
+            self.scoped_apis(&scope),
             "watching cron jobs",
             cron_job_summary,
         )

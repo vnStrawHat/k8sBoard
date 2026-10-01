@@ -516,3 +516,262 @@ async fn limited_watch_snapshot_holds_at_most_limit() {
     assert_eq!(names(&first), ["ns/b", "ns/d", "ns/f"]);
     assert!(next_update(&mut stream).await.is_none());
 }
+
+// Merging
+
+fn merge_input(
+    namespace: &str,
+    updates: impl Stream<Item = WatchUpdate<u32>> + Send + 'static,
+) -> (String, BoxStream<'static, WatchUpdate<u32>>) {
+    (namespace.to_owned(), updates.boxed())
+}
+
+/// One live input per namespace: the senders feed the merge.
+fn live_merge(
+    namespaces: &[&str],
+    limit: Option<StoreLimit<u32>>,
+) -> (
+    Vec<UnboundedSender<WatchUpdate<u32>>>,
+    impl Stream<Item = WatchUpdate<u32>> + Unpin,
+) {
+    let mut senders = Vec::new();
+    let mut inputs = Vec::new();
+    for namespace in namespaces {
+        let (sender, receiver) = mpsc::unbounded();
+        senders.push(sender);
+        inputs.push(merge_input(namespace, receiver));
+    }
+    (senders, Box::pin(merge_snapshots(inputs, limit)))
+}
+
+fn feed(sender: &UnboundedSender<WatchUpdate<u32>>, update: WatchUpdate<u32>) {
+    sender.unbounded_send(update).expect("receiver is alive");
+}
+
+async fn next_merged<S>(stream: &mut S) -> Option<WatchUpdate<u32>>
+where
+    S: Stream<Item = WatchUpdate<u32>> + Unpin,
+{
+    tokio::time::timeout(Duration::from_secs(10), stream.next())
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Lets the merge take in what was fed so far without outlasting its window, so the next
+/// feed arrives in a known order.
+async fn absorb<S>(stream: &mut S)
+where
+    S: Stream<Item = WatchUpdate<u32>> + Unpin,
+{
+    let early = tokio::time::timeout(Duration::from_millis(10), stream.next()).await;
+    assert!(early.is_err(), "nothing is due inside the window");
+}
+
+fn merged_items(update: Option<WatchUpdate<u32>>) -> Vec<u32> {
+    match update {
+        Some(WatchUpdate::Snapshot(items)) => items,
+        other => panic!("expected a snapshot, got {other:?}"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_waits_for_every_input() {
+    let (senders, mut merged) = live_merge(&["a", "b"], None);
+    feed(&senders[0], WatchUpdate::Snapshot(vec![1]));
+    assert!(next_merged(&mut merged).await.is_none());
+
+    feed(&senders[1], WatchUpdate::Snapshot(vec![2]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1, 2]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_concatenates_in_input_order() {
+    let inputs = vec![
+        merge_input("a", stream::iter([WatchUpdate::Snapshot(vec![1, 2])])),
+        merge_input("b", stream::iter([WatchUpdate::Snapshot(vec![3])])),
+    ];
+    let updates: Vec<_> = merge_snapshots(inputs, None).collect().await;
+    assert_eq!(updates.len(), 1);
+    assert_eq!(merged_items(updates.into_iter().next()), [1, 2, 3]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_reemits_with_latest_of_each_input() {
+    let (senders, mut merged) = live_merge(&["a", "b"], None);
+    feed(&senders[0], WatchUpdate::Snapshot(vec![1]));
+    feed(&senders[1], WatchUpdate::Snapshot(vec![2]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1, 2]);
+
+    feed(&senders[0], WatchUpdate::Snapshot(vec![3]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [3, 2]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_emits_partial_snapshot_then_failure() {
+    let (senders, mut merged) = live_merge(&["a", "b"], None);
+    feed(&senders[0], WatchUpdate::Snapshot(vec![1]));
+    absorb(&mut merged).await;
+    let failure = ClusterError::Forbidden {
+        context: "test".to_owned(),
+        action: "watching pods",
+        message: "scripted failure".to_owned(),
+    };
+    feed(&senders[1], WatchUpdate::Failed(failure));
+
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1]);
+    let Some(WatchUpdate::Failed(ClusterError::Namespace { namespace, source })) =
+        next_merged(&mut merged).await
+    else {
+        panic!("expected a failure naming the namespace");
+    };
+    assert_eq!(namespace, "b");
+    assert!(matches!(*source, ClusterError::Forbidden { .. }));
+
+    feed(&senders[1], WatchUpdate::Snapshot(vec![2]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1, 2]);
+}
+
+fn forbidden() -> ClusterError {
+    ClusterError::Forbidden {
+        context: "test".to_owned(),
+        action: "watching pods",
+        message: "scripted failure".to_owned(),
+    }
+}
+
+/// The namespace and the repeated message of a re-announced failure.
+fn repeated_failure(update: Option<WatchUpdate<u32>>) -> (String, String) {
+    let Some(WatchUpdate::Failed(ClusterError::Namespace { namespace, source })) = update else {
+        panic!("expected a failure naming the namespace, got {update:?}");
+    };
+    let ClusterError::Rendered { message } = *source else {
+        panic!("expected a repeated failure");
+    };
+    (namespace, message)
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_coalesces_snapshots_within_a_window() {
+    let (senders, mut merged) = live_merge(&["a", "b"], None);
+    feed(&senders[0], WatchUpdate::Snapshot(vec![1]));
+    feed(&senders[1], WatchUpdate::Snapshot(vec![2]));
+    feed(&senders[0], WatchUpdate::Snapshot(vec![3]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [3, 2]);
+    assert!(next_merged(&mut merged).await.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_reemits_after_the_window() {
+    let (senders, mut merged) = live_merge(&["a", "b"], None);
+    feed(&senders[0], WatchUpdate::Snapshot(vec![1]));
+    feed(&senders[1], WatchUpdate::Snapshot(vec![2]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1, 2]);
+
+    tokio::time::advance(BATCH_WINDOW).await;
+    feed(&senders[1], WatchUpdate::Snapshot(vec![4]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1, 4]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_reannounces_unresolved_failure_after_other_snapshot() {
+    let (senders, mut merged) = live_merge(&["a", "b"], None);
+    feed(&senders[0], WatchUpdate::Snapshot(vec![1]));
+    absorb(&mut merged).await;
+    feed(&senders[1], WatchUpdate::Failed(forbidden()));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1]);
+    assert!(matches!(
+        next_merged(&mut merged).await,
+        Some(WatchUpdate::Failed(ClusterError::Namespace { .. }))
+    ));
+
+    feed(&senders[0], WatchUpdate::Snapshot(vec![3]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [3]);
+    let (namespace, message) = repeated_failure(next_merged(&mut merged).await);
+    assert_eq!(namespace, "b");
+    assert_eq!(message, forbidden().to_string());
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_clears_failure_on_that_namespace_snapshot() {
+    let (senders, mut merged) = live_merge(&["a", "b"], None);
+    feed(&senders[0], WatchUpdate::Snapshot(vec![1]));
+    absorb(&mut merged).await;
+    feed(&senders[1], WatchUpdate::Failed(forbidden()));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1]);
+    assert!(next_merged(&mut merged).await.is_some());
+
+    feed(&senders[1], WatchUpdate::Snapshot(vec![2]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1, 2]);
+    feed(&senders[0], WatchUpdate::Snapshot(vec![3]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [3, 2]);
+    assert!(next_merged(&mut merged).await.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_keeps_stale_items_of_failed_input() {
+    let (senders, mut merged) = live_merge(&["a", "b"], None);
+    feed(&senders[0], WatchUpdate::Snapshot(vec![1]));
+    feed(&senders[1], WatchUpdate::Snapshot(vec![2]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1, 2]);
+
+    feed(&senders[1], WatchUpdate::Failed(forbidden()));
+    assert!(matches!(
+        next_merged(&mut merged).await,
+        Some(WatchUpdate::Failed(ClusterError::Namespace { .. }))
+    ));
+    assert!(next_merged(&mut merged).await.is_none());
+
+    feed(&senders[0], WatchUpdate::Snapshot(vec![5]));
+    assert_eq!(merged_items(next_merged(&mut merged).await), [5, 2]);
+    let (namespace, _) = repeated_failure(next_merged(&mut merged).await);
+    assert_eq!(namespace, "b");
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_all_failed_emits_only_failures() {
+    let (senders, mut merged) = live_merge(&["a", "b"], None);
+    feed(&senders[0], WatchUpdate::Failed(forbidden()));
+    feed(&senders[1], WatchUpdate::Failed(forbidden()));
+    for namespace in ["a", "b"] {
+        let Some(WatchUpdate::Failed(ClusterError::Namespace {
+            namespace: named, ..
+        })) = next_merged(&mut merged).await
+        else {
+            panic!("expected a failure naming {namespace}");
+        };
+        assert_eq!(named, namespace);
+    }
+    assert!(next_merged(&mut merged).await.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_input_ending_while_waiting_does_not_stall() {
+    let (mut senders, mut merged) = live_merge(&["a", "b"], None);
+    feed(&senders[0], WatchUpdate::Snapshot(vec![1]));
+    absorb(&mut merged).await;
+    drop(senders.remove(1));
+
+    assert_eq!(merged_items(next_merged(&mut merged).await), [1]);
+    let Some(WatchUpdate::Failed(ClusterError::Namespace { namespace, source })) =
+        next_merged(&mut merged).await
+    else {
+        panic!("expected a failure naming the ended namespace");
+    };
+    assert_eq!(namespace, "b");
+    assert!(matches!(*source, ClusterError::Rendered { .. }));
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_limit_keeps_newest_in_order() {
+    let limit = StoreLimit {
+        max_items: 2,
+        recency: |item: &u32| jiff::Timestamp::from_second(i64::from(*item)).ok(),
+    };
+    let inputs = vec![
+        merge_input("a", stream::iter([WatchUpdate::Snapshot(vec![10, 30])])),
+        merge_input("b", stream::iter([WatchUpdate::Snapshot(vec![20])])),
+    ];
+    let updates: Vec<_> = merge_snapshots(inputs, Some(limit)).collect().await;
+    assert_eq!(merged_items(updates.into_iter().next()), [30, 20]);
+}

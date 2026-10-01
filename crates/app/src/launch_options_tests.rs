@@ -22,6 +22,8 @@ fn parses_all_flags() {
         "ctx",
         "--namespace",
         "team-a",
+        "--filter",
+        "label:app=api",
         "--theme",
         "dark",
         "--screen",
@@ -35,6 +37,7 @@ fn parses_all_flags() {
             kubeconfig: Some(PathBuf::from("kube.yml")),
             context: Some("ctx".to_owned()),
             namespace: Some("team-a".to_owned()),
+            filter: Some("label:app=api".to_owned()),
             theme: Some(ThemeChoice::Dark),
             screen: LaunchScreen::PodDrawer(DrawerTab::Containers),
             screenshot: Some(PathBuf::from("out.png")),
@@ -225,4 +228,17 @@ fn yaml_screens_open_the_yaml_tab() {
         assert_eq!(launch.drawer_tab(), Some(DrawerTab::Yaml), "{name}");
     }
     assert!(parse(&["--screen", "pods-yaml"]).is_err());
+}
+
+#[test]
+fn filter_flag_is_parsed() {
+    assert_eq!(
+        run_options(&["--filter", "argo"]).filter.as_deref(),
+        Some("argo")
+    );
+    assert_eq!(run_options(&[]).filter, None);
+    assert_eq!(
+        parse(&["--filter"]),
+        Err("missing value for --filter".to_owned())
+    );
 }

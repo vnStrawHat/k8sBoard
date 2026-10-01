@@ -1,7 +1,9 @@
+use std::borrow::Cow;
+
 use cluster::PodSummary;
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
-use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, HighlightStyle, IntoElement, ParentElement as _, Pixels,
     SharedString, Styled as _, StyledText, WeakEntity, Window, div, px,
@@ -10,10 +12,13 @@ use gpui_kit::{
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::ClusterSession;
+use crate::filter_bar::filtered_empty_state;
 use crate::log_dock::LogDock;
 use crate::resource_actions::pod_menu;
-use crate::status_tone::{pod_status_label, toned_text};
-use crate::table_layout::{flexible_width, header_cell};
+use crate::resource_kind::{Align, KindColumn, column};
+use crate::status_tone::{StatusTone, pod_status_label, toned_text};
+use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
+use crate::table_view::{CellValue, FilteredTable, TableRow, TableView};
 
 const NAME: usize = 0;
 const STATUS: usize = 1;
@@ -23,8 +28,16 @@ const NODE: usize = 4;
 const AGE: usize = 5;
 
 const NAME_MIN_WIDTH: Pixels = px(160.);
+
 /// The Name column takes the rest of the width: pod names are the longest values.
-const FIXED_WIDTH: Pixels = px(170. + 70. + 80. + 180. + 70.);
+const POD_COLUMNS: [KindColumn; 6] = [
+    column("Name", 160., Align::Left),
+    column("Status", 170., Align::Left),
+    column("Ready", 70., Align::Left),
+    column("Restarts", 80., Align::Right),
+    column("Node", 180., Align::Left),
+    column("Age", 70., Align::Right),
+];
 
 /// Rows come straight from the session, so the table never owns a copy of the pods.
 pub(crate) struct PodTableDelegate {
@@ -32,22 +45,8 @@ pub(crate) struct PodTableDelegate {
     log_dock: WeakEntity<LogDock>,
     /// The row menu's "View YAML" opens the drawer through the shell.
     shell: WeakEntity<AppShell>,
-    columns: Vec<Column>,
-}
-
-fn columns(name_width: Pixels) -> Vec<Column> {
-    vec![
-        Column::new("name", "Name")
-            .width(name_width)
-            .min_width(NAME_MIN_WIDTH),
-        Column::new("status", "Status").width(px(170.)),
-        Column::new("ready", "Ready").width(px(70.)),
-        Column::new("restarts", "Restarts")
-            .width(px(80.))
-            .text_right(),
-        Column::new("node", "Node").width(px(180.)),
-        Column::new("age", "Age").width(px(70.)).text_right(),
-    ]
+    layout: TableLayout,
+    view: TableView,
 }
 
 impl PodTableDelegate {
@@ -56,23 +55,19 @@ impl PodTableDelegate {
             session: None,
             log_dock,
             shell,
-            columns: columns(NAME_MIN_WIDTH),
+            layout: TableLayout::new(ColumnPlan {
+                specs: POD_COLUMNS.to_vec(),
+                flexible: NAME,
+                flexible_min: NAME_MIN_WIDTH,
+            }),
+            view: TableView::default(),
         }
     }
 
-    /// Resizes the Name column for a table `table_width` wide. Returns whether it changed,
-    /// so the caller refreshes the table only then.
+    /// Resizes the Name column for a table `table_width` wide. Returns whether the columns
+    /// changed, so the caller refreshes the table only then.
     pub(crate) fn fit_width(&mut self, table_width: Pixels) -> bool {
-        let name_width = flexible_width(table_width, FIXED_WIDTH, NAME_MIN_WIDTH);
-        if self
-            .columns
-            .get(NAME)
-            .is_some_and(|column| column.width == name_width)
-        {
-            return false;
-        }
-        self.columns = columns(name_width);
-        true
+        self.layout.fit_width(table_width, &self.view.hidden)
     }
 
     pub(crate) fn set_session(&mut self, session: Option<Entity<ClusterSession>>) {
@@ -89,6 +84,11 @@ impl PodTableDelegate {
             .map_or(&[], |live| live.pods.items())
     }
 
+    /// The pod shown at table row `row_ix`.
+    fn pod_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<&'a PodSummary> {
+        self.pods(cx).get(self.view.item_index(row_ix)?)
+    }
+
     fn scope_label(&self, cx: &App) -> String {
         self.session
             .as_ref()
@@ -97,17 +97,84 @@ impl PodTableDelegate {
     }
 }
 
-impl TableDelegate for PodTableDelegate {
-    fn columns_count(&self, _: &App) -> usize {
-        self.columns.len()
+impl TableRow for PodSummary {
+    fn namespace(&self) -> Option<&str> {
+        Some(&self.namespace)
     }
 
-    fn rows_count(&self, cx: &App) -> usize {
-        self.pods(cx).len()
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn labels(&self) -> impl Iterator<Item = &str> {
+        self.labels.iter().map(String::as_str)
+    }
+
+    fn tone(&self) -> StatusTone {
+        pod_status_label(self).tone
+    }
+
+    fn value(&self, column: usize) -> CellValue<'_> {
+        match column {
+            NAME => CellValue::Qualified {
+                prefix: Some(&self.namespace),
+                text: &self.name,
+            },
+            STATUS => {
+                let label = pod_status_label(self);
+                CellValue::Status {
+                    tone: label.tone,
+                    text: label.text,
+                }
+            }
+            READY => CellValue::Text(Cow::Owned(self.ready.to_string())),
+            RESTARTS => CellValue::Number(i64::from(self.restarts)),
+            NODE => self.node_name.as_deref().map_or(CellValue::Absent, |node| {
+                CellValue::Text(Cow::Borrowed(node))
+            }),
+            AGE => CellValue::Age(self.created_at),
+            _ => CellValue::Absent,
+        }
+    }
+}
+
+impl FilteredTable for PodTableDelegate {
+    fn view(&self) -> Option<&TableView> {
+        Some(&self.view)
+    }
+
+    fn view_mut(&mut self) -> Option<&mut TableView> {
+        Some(&mut self.view)
+    }
+
+    fn column_plan(&self) -> Option<&ColumnPlan> {
+        Some(&self.layout.plan)
+    }
+
+    fn rebuild_view(&mut self, cx: &App) -> bool {
+        let pods = self.pods(cx);
+        self.view
+            .rebuild(pods, POD_COLUMNS.len(), jiff::Timestamp::now());
+        self.layout.relayout(&self.view.hidden)
+    }
+}
+
+impl TableDelegate for PodTableDelegate {
+    fn columns_count(&self, _: &App) -> usize {
+        self.layout.columns.columns.len()
+    }
+
+    fn rows_count(&self, _: &App) -> usize {
+        self.view.rows().len()
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        self.columns.get(col_ix).cloned().unwrap_or_default()
+        self.layout
+            .columns
+            .columns
+            .get(col_ix)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn render_th(
@@ -116,10 +183,7 @@ impl TableDelegate for PodTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        match self.columns.get(col_ix) {
-            Some(column) => header_cell(column, cx),
-            None => div().size_full(),
-        }
+        header_cell(&self.layout, self.view.sort, &self.shell, col_ix, cx)
     }
 
     fn render_td(
@@ -129,11 +193,13 @@ impl TableDelegate for PodTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(pod) = self.pods(cx).get(row_ix) else {
+        let (Some(pod), Some(logical)) =
+            (self.pod_at(row_ix, cx), self.layout.columns.logical(col_ix))
+        else {
             return div().into_any_element();
         };
         let mono = cx.theme().mono_font_family.clone();
-        match col_ix {
+        match logical {
             NAME => name_cell(pod, mono, cx),
             STATUS => toned_text(pod_status_label(pod), cx).into_any_element(),
             READY => div()
@@ -174,7 +240,7 @@ impl TableDelegate for PodTableDelegate {
         let Some(live) = session.read(cx).live() else {
             return menu;
         };
-        match live.pods.items().get(row_ix) {
+        match self.pod_at(row_ix, cx) {
             Some(pod) => pod_menu(
                 menu,
                 pod,
@@ -192,12 +258,8 @@ impl TableDelegate for PodTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        h_flex()
-            .size_full()
-            .justify_center()
-            .items_center()
-            .text_color(cx.theme().muted_foreground)
-            .child(format!("No pods in {}", self.scope_label(cx)))
+        let empty = format!("No pods in {}", self.scope_label(cx));
+        filtered_empty_state(&self.view, empty, "pods", &self.shell, cx)
     }
 
     fn loading(&self, cx: &App) -> bool {
@@ -231,4 +293,62 @@ fn dash_cell(cx: &App) -> AnyElement {
         .text_color(cx.theme().muted_foreground)
         .child("—")
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use cluster::{PodStatus, ReadyCount, StatusReason};
+
+    use super::*;
+
+    fn pod() -> PodSummary {
+        PodSummary {
+            namespace: "payments".to_owned(),
+            name: "api-7".to_owned(),
+            status: PodStatus::Reason(StatusReason::Running),
+            ready: ReadyCount { ready: 3, total: 4 },
+            restarts: 12,
+            node_name: Some("wk-03".to_owned()),
+            created_at: None,
+            pod_ip: None,
+            qos_class: None,
+            service_account: None,
+            controller: None,
+            conditions: Vec::new(),
+            containers: Vec::new(),
+            status_message: None,
+            labels: vec!["app=api".to_owned()],
+        }
+    }
+
+    #[test]
+    fn pod_row_values_follow_columns() {
+        let pod = pod();
+        assert!(matches!(
+            pod.value(NAME),
+            CellValue::Qualified {
+                prefix: Some("payments"),
+                text: "api-7"
+            }
+        ));
+        assert!(matches!(pod.value(STATUS), CellValue::Status { .. }));
+        assert!(matches!(pod.value(READY), CellValue::Text(text) if text == "3/4"));
+        assert!(matches!(pod.value(RESTARTS), CellValue::Number(12)));
+        assert!(matches!(pod.value(NODE), CellValue::Text(text) if text == "wk-03"));
+        assert!(matches!(pod.value(AGE), CellValue::Age(None)));
+        assert!(matches!(pod.value(POD_COLUMNS.len()), CellValue::Absent));
+        let unscheduled = PodSummary {
+            node_name: None,
+            ..pod
+        };
+        assert!(matches!(unscheduled.value(NODE), CellValue::Absent));
+    }
+
+    #[test]
+    fn pod_row_reads_labels_and_scope() {
+        let pod = pod();
+        assert_eq!(pod.namespace(), Some("payments"));
+        assert_eq!(pod.name(), "api-7");
+        assert_eq!(pod.labels().collect::<Vec<_>>(), ["app=api"]);
+    }
 }

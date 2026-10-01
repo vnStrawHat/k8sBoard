@@ -1,17 +1,19 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt::Debug;
 use std::future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use futures::future::Either;
+use futures::stream::{self, BoxStream, SelectAll, select_all};
 use futures::{Stream, StreamExt};
 use k8s_openapi::serde::de::DeserializeOwned;
+use kube::ResourceExt;
 use kube::runtime::WatchStreamExt;
 use kube::runtime::watcher::{self, Event};
-use kube::{Api, ResourceExt};
 use tokio::time::Instant;
 
-use crate::connection::{ClusterConnection, ClusterError, classify_error};
+use crate::connection::{ClusterConnection, ClusterError, ScopedApi, classify_error};
 
 /// Changes inside one window are merged into a single snapshot.
 pub(crate) const BATCH_WINDOW: Duration = Duration::from_millis(100);
@@ -33,11 +35,21 @@ pub(crate) struct StoreLimit<T> {
     pub(crate) recency: fn(&T) -> Option<jiff::Timestamp>,
 }
 
-/// Watches `api` and streams batched snapshots of `summarize`d objects. Nothing happens
-/// until the stream is polled, and dropping it drops the HTTP watch.
+// Manual: the derives would demand `T: Clone` and `T: Copy`, but only a `fn` pointer is held.
+impl<T> Clone for StoreLimit<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for StoreLimit<T> {}
+
+/// Watches `apis` and streams batched snapshots of `summarize`d objects. One api streams
+/// as is; several are merged into one snapshot stream (see `merge_snapshots`). Nothing
+/// happens until the stream is polled, and dropping it drops every HTTP watch.
 pub(crate) fn summary_watch<K, T>(
     connection: &ClusterConnection,
-    api: Api<K>,
+    apis: Vec<ScopedApi<K>>,
     action: &'static str,
     summarize: fn(&K) -> T,
 ) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
@@ -45,10 +57,10 @@ where
     K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
     T: Clone + PartialEq + Send + 'static,
 {
-    let events = watcher::watcher(api, watcher::Config::default()).default_backoff();
-    batch_updates(
-        events,
-        connection.context().to_owned(),
+    watch_apis(
+        connection,
+        apis,
+        watcher::Config::default(),
         action,
         summarize,
         None,
@@ -59,7 +71,7 @@ where
 /// `limit.max_items` most recent summaries.
 pub(crate) fn limited_summary_watch<K, T>(
     connection: &ClusterConnection,
-    api: Api<K>,
+    apis: Vec<ScopedApi<K>>,
     config: watcher::Config,
     action: &'static str,
     summarize: fn(&K) -> T,
@@ -69,14 +81,40 @@ where
     K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
     T: Clone + PartialEq + Send + 'static,
 {
-    let events = watcher::watcher(api, config).default_backoff();
-    batch_updates(
-        events,
-        connection.context().to_owned(),
-        action,
-        summarize,
-        Some(limit),
-    )
+    watch_apis(connection, apis, config, action, summarize, Some(limit))
+}
+
+fn watch_apis<K, T>(
+    connection: &ClusterConnection,
+    apis: Vec<ScopedApi<K>>,
+    config: watcher::Config,
+    action: &'static str,
+    summarize: fn(&K) -> T,
+    limit: Option<StoreLimit<T>>,
+) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
+where
+    K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
+    T: Clone + PartialEq + Send + 'static,
+{
+    let mut watches: Vec<_> = apis
+        .into_iter()
+        .map(|(namespace, api)| {
+            let events = watcher::watcher(api, config.clone()).default_backoff();
+            let updates = batch_updates(
+                events,
+                connection.context().to_owned(),
+                action,
+                summarize,
+                limit,
+            );
+            (namespace.unwrap_or_default(), updates.boxed())
+        })
+        .collect();
+    if watches.len() == 1 {
+        let (_, only) = watches.remove(0);
+        return Either::Left(only);
+    }
+    Either::Right(merge_snapshots(watches, limit))
 }
 
 /// The testable core: any source of watcher events works, including fakes.
@@ -219,6 +257,222 @@ where
         self.is_dirty = false;
         self.deadline = None;
     }
+}
+
+/// Merges one snapshot stream per namespace into one, concatenating the latest snapshot of
+/// each input in input order. `inputs` pair a namespace with its stream, in namespace order.
+/// Coalesces like the Batcher: at most one merged snapshot per `BATCH_WINDOW`, and none until
+/// every input has settled (a snapshot or a failure). A failing namespace never hides the
+/// others' data: its failure is flushed after the pending merged snapshot and names it, and
+/// is announced again after every later merged snapshot until its next snapshot clears it.
+fn merge_snapshots<T: Clone + Send + 'static>(
+    inputs: Vec<(String, BoxStream<'static, WatchUpdate<T>>)>,
+    limit: Option<StoreLimit<T>>,
+) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static {
+    let mut merge_inputs = Vec::new();
+    let mut tagged = Vec::new();
+    for (index, (namespace, updates)) in inputs.into_iter().enumerate() {
+        merge_inputs.push(MergeInput {
+            namespace,
+            state: InputState::Waiting,
+            failure: None,
+        });
+        // The end marker lets an input that ends while `Waiting` settle instead of stalling
+        // the merge.
+        let events = updates
+            .map(MergeEvent::Update)
+            .chain(stream::once(future::ready(MergeEvent::Ended)));
+        tagged.push(events.map(move |event| (index, event)).boxed());
+    }
+    let merger = Merger {
+        events: select_all(tagged),
+        inputs: merge_inputs,
+        limit,
+        is_dirty: false,
+        is_ended: false,
+        deadline: None,
+        outbox: VecDeque::new(),
+    };
+    futures::stream::unfold(merger, |mut merger| async move {
+        let update = merger.next_update().await?;
+        Some((update, merger))
+    })
+}
+
+enum MergeEvent<T> {
+    Update(WatchUpdate<T>),
+    /// The input stream finished.
+    Ended,
+}
+
+enum InputState<T> {
+    /// Nothing yet.
+    Waiting,
+    /// The latest snapshot. Kept stale across a failure.
+    Items(Vec<T>),
+    /// Failed before any snapshot.
+    FailedEmpty,
+}
+
+struct MergeInput<T> {
+    namespace: String,
+    state: InputState<T>,
+    /// The last failure while the input is unresolved, rendered because `ClusterError` is not
+    /// `Clone`. It is the same text the first announcement shows. The next snapshot clears it.
+    failure: Option<String>,
+}
+
+// ponytail: every input keeps its own latest snapshot, so before the merge trims, the
+// retained summaries reach N namespaces x `limit.max_items`; one shared store if that bites.
+struct Merger<T> {
+    events: SelectAll<BoxStream<'static, (usize, MergeEvent<T>)>>,
+    inputs: Vec<MergeInput<T>>,
+    limit: Option<StoreLimit<T>>,
+    /// A snapshot arrived since the last emitted merge.
+    is_dirty: bool,
+    is_ended: bool,
+    deadline: Option<Instant>,
+    /// Updates produced by one step: a flush followed by failures.
+    outbox: VecDeque<WatchUpdate<T>>,
+}
+
+impl<T: Clone> Merger<T> {
+    async fn next_update(&mut self) -> Option<WatchUpdate<T>> {
+        loop {
+            if let Some(update) = self.outbox.pop_front() {
+                return Some(update);
+            }
+            if self.is_ended {
+                return None;
+            }
+            // Cancel-safe like the Batcher: the deadline lives in `self`. The timer is
+            // polled first so a busy input cannot push a snapshot past its window.
+            tokio::select! {
+                biased;
+                () = wait_until(self.deadline) => self.flush_if_ready(),
+                item = self.events.next() => match item {
+                    Some((index, MergeEvent::Update(WatchUpdate::Snapshot(items)))) => {
+                        self.handle_snapshot(index, items);
+                    }
+                    Some((index, MergeEvent::Update(WatchUpdate::Failed(error)))) => {
+                        self.handle_failure(index, error);
+                    }
+                    Some((index, MergeEvent::Ended)) => self.handle_end(index),
+                    None => {
+                        self.flush_if_ready();
+                        self.is_ended = true;
+                    }
+                },
+            }
+        }
+    }
+
+    fn handle_snapshot(&mut self, index: usize, items: Vec<T>) {
+        let input = &mut self.inputs[index];
+        input.state = InputState::Items(items);
+        input.failure = None;
+        self.is_dirty = true;
+        if self.deadline.is_none() {
+            self.deadline = Some(Instant::now() + BATCH_WINDOW);
+        }
+    }
+
+    fn handle_failure(&mut self, index: usize, error: ClusterError) {
+        let input = &mut self.inputs[index];
+        if matches!(input.state, InputState::Waiting) {
+            input.state = InputState::FailedEmpty;
+        }
+        // Cleared first so the flush does not repeat the older failure of this input.
+        input.failure = None;
+        self.flush_if_ready();
+        let input = &mut self.inputs[index];
+        input.failure = Some(error.to_string());
+        self.outbox
+            .push_back(WatchUpdate::Failed(ClusterError::Namespace {
+                namespace: input.namespace.clone(),
+                source: Box::new(error),
+            }));
+    }
+
+    /// An input that ends before its first snapshot would keep every merge waiting.
+    fn handle_end(&mut self, index: usize) {
+        if !matches!(self.inputs[index].state, InputState::Waiting) {
+            return;
+        }
+        self.handle_failure(
+            index,
+            ClusterError::Rendered {
+                message: "the watch ended before its first snapshot".to_owned(),
+            },
+        );
+    }
+
+    /// Emits the merged snapshot when something changed, every input has settled, and at
+    /// least one holds a snapshot, then repeats the failures still unresolved. Otherwise the
+    /// change stays pending for a later input.
+    fn flush_if_ready(&mut self) {
+        self.deadline = None;
+        let is_settled = self
+            .inputs
+            .iter()
+            .all(|input| !matches!(input.state, InputState::Waiting));
+        let has_items = self
+            .inputs
+            .iter()
+            .any(|input| matches!(input.state, InputState::Items(_)));
+        if !(self.is_dirty && is_settled && has_items) {
+            return;
+        }
+        let mut merged: Vec<T> = self
+            .inputs
+            .iter()
+            .filter_map(|input| match &input.state {
+                InputState::Items(items) => Some(items),
+                _ => None,
+            })
+            .flatten()
+            .cloned()
+            .collect();
+        if let Some(limit) = &self.limit {
+            keep_newest(&mut merged, limit);
+        }
+        self.outbox.push_back(WatchUpdate::Snapshot(merged));
+        self.is_dirty = false;
+        let repeats = self.inputs.iter().filter_map(|input| {
+            let message = input.failure.clone()?;
+            Some(WatchUpdate::Failed(ClusterError::Namespace {
+                namespace: input.namespace.clone(),
+                source: Box::new(ClusterError::Rendered { message }),
+            }))
+        });
+        self.outbox.extend(repeats);
+    }
+}
+
+/// Drops the oldest items beyond `max_items`, keeping the rest in order. Ties drop the
+/// earlier item, like `trim`.
+fn keep_newest<T>(items: &mut Vec<T>, limit: &StoreLimit<T>) {
+    let excess = items.len().saturating_sub(limit.max_items);
+    if excess == 0 {
+        return;
+    }
+    let mut ranked: Vec<_> = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| ((limit.recency)(item), index))
+        .collect();
+    ranked.sort();
+    let dropped: HashSet<usize> = ranked
+        .into_iter()
+        .take(excess)
+        .map(|(_, index)| index)
+        .collect();
+    let mut index = 0;
+    items.retain(|_| {
+        let is_kept = !dropped.contains(&index);
+        index += 1;
+        is_kept
+    });
 }
 
 pub(crate) async fn wait_until(deadline: Option<Instant>) {
