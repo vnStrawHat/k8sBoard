@@ -1,0 +1,5 @@
+# Keep LF line endings in the repo and working tree on all platforms.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
