@@ -6,8 +6,7 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, div,
-    prelude::FluentBuilder as _, px,
+    Pixels, StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::age::format_age;
@@ -15,7 +14,7 @@ use crate::app_shell::AppShell;
 use crate::cluster_session::ClusterSession;
 use crate::drawer::{
     DrawerHeader, DrawerState, ExpandToggle, PodDrawerTab, absent_text, created_text, detail_row,
-    drawer_frame, menu_button, section_title, value_or_absent,
+    drawer_frame, menu_button, section_title, truncated_text, value_or_absent,
 };
 use crate::resource_actions::pod_menu;
 use crate::status_tone::{
@@ -384,7 +383,8 @@ fn list_item(
 ) -> AnyElement {
     let theme = cx.theme();
     let name = container.name.clone();
-    let selected_bg = theme.accent;
+    // The same colour the tables use for their selected row.
+    let selected_bg = theme.table_active;
     let hover_bg = theme.secondary_hover;
     let mono = theme.mono_font_family.clone();
     h_flex()
@@ -466,10 +466,7 @@ fn container_detail(
         ))
         .child(detail_row(
             "Image",
-            div()
-                .truncate()
-                .font_family(mono)
-                .child(SharedString::from(container.image.clone())),
+            truncated_text("container-image", container.image.clone()).font_family(mono),
             cx,
         ))
         .into_any_element()

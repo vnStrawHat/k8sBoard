@@ -9,6 +9,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::cluster_session::ClusterSession;
+use crate::drawer::truncated_text;
 use crate::resource_actions::node_menu;
 use crate::status_tone::{node_status_label, toned_text};
 use crate::table_layout::{flexible_width, header_cell};
@@ -122,7 +123,7 @@ impl TableDelegate for NodeTableDelegate {
         };
         let mono = cx.theme().mono_font_family.clone();
         match col_ix {
-            NAME => div().truncate().child(node.name.clone()).into_any_element(),
+            NAME => truncated_text("name", node.name.clone()).into_any_element(),
             STATUS => toned_text(node_status_label(node.status), cx).into_any_element(),
             ROLES => cell_text(&roles_cell(&node.roles), cx),
             TAINTS => taints_cell(&node.taints, mono, cx),
@@ -221,7 +222,7 @@ fn taints_cell(taints: &[NodeTaint], mono: gpui_kit::SharedString, cx: &App) -> 
     h_flex()
         .w_full()
         .font_family(mono)
-        .child(div().min_w_0().truncate().child(summary.first))
+        .child(truncated_text("taints", summary.first).min_w_0())
         .children(more)
         .into_any_element()
 }

@@ -201,3 +201,12 @@ fn container_terminated_exit_zero_is_done_nonzero_is_bad() {
     assert_eq!(label.text, "Error");
     assert_eq!(label.tone, StatusTone::Bad);
 }
+
+#[test]
+fn light_theme_text_is_darker_than_the_fill_colour() {
+    let green = gpui_kit::hsla(0.38, 0.6, 0.5, 1.);
+    let foreground = gpui_kit::hsla(0., 0., 0.05, 1.);
+    let text = readable_on_light(green, foreground);
+    assert!(text.l < green.l);
+    assert!(text.l > foreground.l);
+}

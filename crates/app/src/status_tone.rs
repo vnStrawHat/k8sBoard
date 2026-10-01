@@ -2,7 +2,7 @@ use cluster::{
     ContainerKind, ContainerState, ContainerSummary, InitStatus, NodeReadiness, NodeScheduling,
     NodeStatus, PodStatus, PodSummary, StatusReason,
 };
-use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::{ActiveTheme as _, Colorize as _};
 use gpui_kit::{App, Div, Hsla, ParentElement as _, SharedString, Styled as _, div};
 
 /// How a status reads at a glance. Each tone maps to one theme token in `tone_color`.
@@ -20,18 +20,32 @@ pub(crate) struct StatusLabel {
     pub(crate) tone: StatusTone,
 }
 
+/// The share of its own hue a tone keeps on a light background. It is the `factor` of
+/// `mix_oklab`, which computes `self * factor + other * (1 - factor)`, so at 0.6 the tone
+/// moves 40% toward the foreground to reach a readable contrast.
+const LIGHT_THEME_TONE_SHARE: f32 = 0.6;
+
 /// The only place a tone touches the theme, so every status colour comes from one table.
 pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla {
     let theme = cx.theme();
-    match tone {
-        // The pressed-state green is darker, which reads better as text on a light background.
-        StatusTone::Ok if theme.is_dark() => theme.success,
-        StatusTone::Ok => theme.success_active,
+    let color = match tone {
+        StatusTone::Ok => theme.success,
         StatusTone::Warn => theme.warning,
         StatusTone::Bad => theme.danger,
         StatusTone::Info => theme.info,
-        StatusTone::Done => theme.muted_foreground,
+        // Already a text token; blending it would make "Completed" look like normal text.
+        StatusTone::Done => return theme.muted_foreground,
+    };
+    // The success/warning/danger/info colours are tuned as fills; as text they wash out on white.
+    if theme.is_dark() {
+        color
+    } else {
+        readable_on_light(color, theme.foreground)
     }
+}
+
+fn readable_on_light(color: Hsla, foreground: Hsla) -> Hsla {
+    color.mix_oklab(foreground, LIGHT_THEME_TONE_SHARE)
 }
 
 /// The label text coloured by its tone.

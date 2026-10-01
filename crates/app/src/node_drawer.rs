@@ -12,7 +12,7 @@ use crate::app_shell::AppShell;
 use crate::cluster_session::ClusterSession;
 use crate::drawer::{
     DRAWER_WIDTH, DrawerHeader, absent_text, created_text, detail_row, drawer_frame, menu_button,
-    value_or_absent,
+    truncated_text, value_or_absent,
 };
 use crate::resource_actions::node_menu;
 use crate::status_tone::{node_status_label, toned_text};
@@ -76,7 +76,8 @@ fn body(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
             .children(
                 node.taints
                     .iter()
-                    .map(|taint| div().truncate().child(taint.to_string())),
+                    .enumerate()
+                    .map(|(index, taint)| truncated_text(("taint", index), taint.to_string())),
             )
             .into_any_element()
     };

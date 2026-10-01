@@ -2,11 +2,12 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, ClickEvent, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement as _, IntoElement,
+    ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::age::format_age;
@@ -128,13 +129,11 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                         .child(header.kind_badge),
                 )
                 .child(
-                    div()
+                    truncated_text("drawer-title", header.name)
                         .flex_1()
                         .min_w_0()
-                        .truncate()
                         .font_semibold()
-                        .font_family(theme.mono_font_family.clone())
-                        .child(header.name),
+                        .font_family(theme.mono_font_family.clone()),
                 )
                 .child(header.menu)
                 .when_some(header.expand, |this, expand| {
@@ -202,6 +201,21 @@ pub(crate) fn detail_row(
         )
         // `overflow_hidden` keeps a long value inside the drawer; text values ellipsize.
         .child(div().flex_1().min_w_0().overflow_hidden().child(value))
+}
+
+/// Text cut with an ellipsis that shows its full value in a tooltip on hover. The `id` must
+/// be unique among the elements that can be on screen together.
+pub(crate) fn truncated_text(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+) -> Stateful<Div> {
+    let text = text.into();
+    let tooltip_text = text.clone();
+    div()
+        .id(id)
+        .truncate()
+        .child(text)
+        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
 }
 
 /// A muted dash for a value the object does not have.
