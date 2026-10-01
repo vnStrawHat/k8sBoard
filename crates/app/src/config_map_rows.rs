@@ -48,6 +48,7 @@ pub(crate) fn config_map_row(config_map: &ConfigMapSummary) -> KindRow {
             title: "Data",
             rows: data,
         }],
+        event: None,
         related_pods: None,
         labels: chips(&config_map.labels),
     }

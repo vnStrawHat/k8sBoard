@@ -236,6 +236,7 @@ mod tests {
             [
                 "Nodes",
                 "Namespaces",
+                "Events",
                 "Pods",
                 "Deployments",
                 "StatefulSets",
@@ -286,7 +287,11 @@ mod tests {
 
     #[test]
     fn denied_kind_reason_names_all_namespaces_scope() {
-        let access = report_denying(&[AccessCheck::ListDeployments, AccessCheck::ListNamespaces]);
+        let access = report_denying(&[
+            AccessCheck::ListDeployments,
+            AccessCheck::ListNamespaces,
+            AccessCheck::ListEvents,
+        ]);
         let all = NamespaceScope::All;
         let named = NamespaceScope::Named("team-a".to_owned());
         assert_eq!(
@@ -296,6 +301,10 @@ mod tests {
         assert_eq!(
             kind_availability(ResourceKind::Deployments, &access, &named),
             denied("Not permitted: list deployments")
+        );
+        assert_eq!(
+            kind_availability(ResourceKind::Events, &access, &all),
+            denied("Not permitted: list events in all namespaces")
         );
         // Namespaces are cluster-scoped, so the scope never applies to them.
         assert_eq!(

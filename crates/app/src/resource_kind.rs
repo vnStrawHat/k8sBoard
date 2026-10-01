@@ -1,11 +1,12 @@
 //! The Kubernetes kinds that have an explorer screen, and the data that differs per kind.
 
-use cluster::{AccessCheck, ClusterConnection, NamespaceScope, WatchUpdate};
+use cluster::{AccessCheck, ClusterConnection, EventFilter, NamespaceScope, WatchUpdate};
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 
 use crate::batch_rows::{cron_job_row, job_row};
 use crate::config_map_rows::config_map_row;
+use crate::event_rows::event_rows;
 use crate::kind_row::KindRow;
 use crate::namespace_rows::namespace_row;
 use crate::network_rows::{ingress_row, service_row};
@@ -16,6 +17,7 @@ use crate::workload_rows::{daemon_set_row, deployment_row, replica_set_row, stat
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ResourceKind {
     Namespaces,
+    Events,
     Deployments,
     StatefulSets,
     DaemonSets,
@@ -33,7 +35,17 @@ pub(crate) enum Align {
     Right,
 }
 
-/// A column after the Name column.
+/// Whether a kind leads with the Name column, or hides it and flexes one of its own columns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NameColumn {
+    Flexible,
+    /// `flexible` indexes `ResourceKind::columns`.
+    Hidden {
+        flexible: usize,
+    },
+}
+
+/// A column after the Name column, or all the columns when the Name column is hidden.
 pub(crate) struct KindColumn {
     pub(crate) name: &'static str,
     pub(crate) width: f32,
@@ -50,6 +62,11 @@ const AGE_COLUMN: KindColumn = column("Age", 70., Align::Right);
 /// one arm in `spec`, and one arm in `watch_rows`.
 struct KindSpec {
     label: &'static str,
+    /// The Kubernetes `kind`, as an event's `involvedObject.kind` spells it.
+    object_kind: &'static str,
+    name_column: NameColumn,
+    /// Whether the drawer has a Labels section.
+    has_labels: bool,
     singular: &'static str,
     plural: &'static str,
     badge: &'static str,
@@ -63,6 +80,9 @@ struct KindSpec {
 
 static NAMESPACES: KindSpec = KindSpec {
     label: "Namespaces",
+    object_kind: "Namespace",
+    name_column: NameColumn::Flexible,
+    has_labels: true,
     singular: "namespace",
     plural: "namespaces",
     badge: "Ns",
@@ -74,8 +94,34 @@ static NAMESPACES: KindSpec = KindSpec {
     has_port_forward: false,
 };
 
+static EVENTS: KindSpec = KindSpec {
+    label: "Events",
+    object_kind: "Event",
+    name_column: NameColumn::Hidden { flexible: 3 },
+    has_labels: false,
+    singular: "event",
+    plural: "events",
+    badge: "Ev",
+    is_namespaced: true,
+    access_check: AccessCheck::ListEvents,
+    columns: &[
+        column("Type", 90., Align::Left),
+        column("Reason", 170., Align::Left),
+        column("Object", 260., Align::Left),
+        column("Message", 280., Align::Left),
+        column("Count", 80., Align::Right),
+        column("Last seen", 80., Align::Right),
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete event…",
+    has_port_forward: false,
+};
+
 static DEPLOYMENTS: KindSpec = KindSpec {
     label: "Deployments",
+    object_kind: "Deployment",
+    name_column: NameColumn::Flexible,
+    has_labels: true,
     singular: "deployment",
     plural: "deployments",
     badge: "De",
@@ -95,6 +141,9 @@ static DEPLOYMENTS: KindSpec = KindSpec {
 
 static STATEFUL_SETS: KindSpec = KindSpec {
     label: "StatefulSets",
+    object_kind: "StatefulSet",
+    name_column: NameColumn::Flexible,
+    has_labels: true,
     singular: "statefulset",
     plural: "statefulsets",
     badge: "Ss",
@@ -113,6 +162,9 @@ static STATEFUL_SETS: KindSpec = KindSpec {
 
 static DAEMON_SETS: KindSpec = KindSpec {
     label: "DaemonSets",
+    object_kind: "DaemonSet",
+    name_column: NameColumn::Flexible,
+    has_labels: true,
     singular: "daemonset",
     plural: "daemonsets",
     badge: "Ds",
@@ -134,6 +186,9 @@ static DAEMON_SETS: KindSpec = KindSpec {
 
 static REPLICA_SETS: KindSpec = KindSpec {
     label: "ReplicaSets",
+    object_kind: "ReplicaSet",
+    name_column: NameColumn::Flexible,
+    has_labels: true,
     singular: "replicaset",
     plural: "replicasets",
     badge: "Rs",
@@ -154,6 +209,9 @@ static REPLICA_SETS: KindSpec = KindSpec {
 
 static JOBS: KindSpec = KindSpec {
     label: "Jobs",
+    object_kind: "Job",
+    name_column: NameColumn::Flexible,
+    has_labels: true,
     singular: "job",
     plural: "jobs",
     badge: "Jb",
@@ -172,6 +230,9 @@ static JOBS: KindSpec = KindSpec {
 
 static CRON_JOBS: KindSpec = KindSpec {
     label: "CronJobs",
+    object_kind: "CronJob",
+    name_column: NameColumn::Flexible,
+    has_labels: true,
     singular: "cronjob",
     plural: "cronjobs",
     badge: "Cj",
@@ -191,6 +252,9 @@ static CRON_JOBS: KindSpec = KindSpec {
 
 static SERVICES: KindSpec = KindSpec {
     label: "Services",
+    object_kind: "Service",
+    name_column: NameColumn::Flexible,
+    has_labels: true,
     singular: "service",
     plural: "services",
     badge: "Sv",
@@ -210,6 +274,9 @@ static SERVICES: KindSpec = KindSpec {
 
 static INGRESSES: KindSpec = KindSpec {
     label: "Ingresses",
+    object_kind: "Ingress",
+    name_column: NameColumn::Flexible,
+    has_labels: true,
     singular: "ingress",
     plural: "ingresses",
     badge: "In",
@@ -229,6 +296,9 @@ static INGRESSES: KindSpec = KindSpec {
 
 static CONFIG_MAPS: KindSpec = KindSpec {
     label: "ConfigMaps",
+    object_kind: "ConfigMap",
+    name_column: NameColumn::Flexible,
+    has_labels: true,
     singular: "configmap",
     plural: "configmaps",
     badge: "Cm",
@@ -241,8 +311,9 @@ static CONFIG_MAPS: KindSpec = KindSpec {
 };
 
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 11] = [
         Self::Namespaces,
+        Self::Events,
         Self::Deployments,
         Self::StatefulSets,
         Self::DaemonSets,
@@ -257,6 +328,7 @@ impl ResourceKind {
     fn spec(self) -> &'static KindSpec {
         match self {
             Self::Namespaces => &NAMESPACES,
+            Self::Events => &EVENTS,
             Self::Deployments => &DEPLOYMENTS,
             Self::StatefulSets => &STATEFUL_SETS,
             Self::DaemonSets => &DAEMON_SETS,
@@ -296,7 +368,7 @@ impl ResourceKind {
         self.spec().access_check
     }
 
-    /// The columns after Name.
+    /// The columns after Name, or all of them when Name is hidden.
     pub(crate) fn columns(self) -> &'static [KindColumn] {
         self.spec().columns
     }
@@ -312,6 +384,25 @@ impl ResourceKind {
 
     pub(crate) fn has_port_forward(self) -> bool {
         self.spec().has_port_forward
+    }
+
+    /// The Kubernetes `kind`, such as `Deployment`.
+    pub(crate) fn object_kind(self) -> &'static str {
+        self.spec().object_kind
+    }
+
+    pub(crate) fn name_column(self) -> NameColumn {
+        self.spec().name_column
+    }
+
+    pub(crate) fn has_labels(self) -> bool {
+        self.spec().has_labels
+    }
+
+    pub(crate) fn from_object_kind(text: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.object_kind() == text)
     }
 
     pub(crate) fn from_label(text: &str) -> Option<Self> {
@@ -333,6 +424,10 @@ impl ResourceKind {
             Self::Namespaces => connection
                 .watch_namespaces()
                 .map(|update| rows(update, namespace_row))
+                .boxed(),
+            Self::Events => connection
+                .watch_events(scope, EventFilter::All)
+                .map(event_rows)
                 .boxed(),
             Self::Deployments => connection
                 .watch_deployments(scope)
@@ -414,13 +509,54 @@ mod tests {
 
     #[test]
     fn every_kind_ends_with_a_right_aligned_age_column() {
+        let age_name = |kind| {
+            if kind == ResourceKind::Events {
+                "Last seen"
+            } else {
+                "Age"
+            }
+        };
         for kind in ResourceKind::ALL {
             let last = kind.columns().last().expect("kinds have columns");
-            assert_eq!(last.name, "Age");
+            assert_eq!(last.name, age_name(kind));
             assert_eq!(last.align, Align::Right);
         }
     }
 
+    #[test]
+    fn object_kinds_round_trip() {
+        for kind in ResourceKind::ALL {
+            assert_eq!(
+                ResourceKind::from_object_kind(kind.object_kind()),
+                Some(kind)
+            );
+        }
+        assert_eq!(ResourceKind::from_object_kind("Pod"), None);
+    }
+
+    #[test]
+    fn only_events_hide_the_name_column() {
+        for kind in ResourceKind::ALL {
+            match (kind, kind.name_column()) {
+                (ResourceKind::Events, NameColumn::Hidden { flexible }) => {
+                    let column = kind
+                        .columns()
+                        .get(flexible)
+                        .expect("flexible column exists");
+                    assert_eq!(column.name, "Message");
+                }
+                (ResourceKind::Events, NameColumn::Flexible) => panic!("Events hide Name"),
+                (_, name_column) => assert_eq!(name_column, NameColumn::Flexible),
+            }
+        }
+    }
+
+    #[test]
+    fn only_events_have_no_labels() {
+        for kind in ResourceKind::ALL {
+            assert_eq!(kind.has_labels(), kind != ResourceKind::Events);
+        }
+    }
     #[test]
     fn port_forward_kinds_are_deployments_stateful_sets_services() {
         let kinds: Vec<ResourceKind> = ResourceKind::ALL
@@ -458,6 +594,7 @@ mod tests {
                 },
                 cells: Vec::new(),
                 sections: Vec::new(),
+                event: None,
                 related_pods: None,
                 labels: Vec::new(),
             }

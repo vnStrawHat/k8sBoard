@@ -13,6 +13,8 @@ use gpui_kit::{
     prelude::FluentBuilder as _,
 };
 
+use cluster::EVENT_LIMIT;
+
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{LiveCluster, SessionPhase};
 use crate::drawer::ClickHandler;
@@ -21,6 +23,7 @@ use crate::log_dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_h
 use crate::navigation::SIDEBAR_WIDTH;
 use crate::node_drawer::node_drawer;
 use crate::pod_drawer::pod_drawer;
+use crate::resource_kind::ResourceKind;
 use crate::table_selection::ResourceKey;
 
 impl AppShell {
@@ -122,10 +125,16 @@ impl AppShell {
                 live.and_then(|live| {
                     let count = live.kind_list(kind)?.list.ready_count()?;
                     let label = count_label(count, kind.singular(), kind.plural());
-                    Some(if kind.is_namespaced() {
+                    let text = if kind.is_namespaced() {
                         format!("{label} · {}", live.scope_label())
                     } else {
                         label
+                    };
+                    // The events store keeps only the newest ones, so say so at the cap.
+                    Some(if kind == ResourceKind::Events && count >= EVENT_LIMIT {
+                        format!("{text} · newest {}", group_digits(EVENT_LIMIT))
+                    } else {
+                        text
                     })
                 }),
             ),
@@ -274,8 +283,21 @@ fn count_label(count: usize, singular: &str, plural: &str) -> String {
     if count == 1 {
         format!("1 {singular}")
     } else {
-        format!("{count} {plural}")
+        format!("{} {plural}", group_digits(count))
     }
+}
+
+/// `2000` as `2,000`.
+fn group_digits(number: usize) -> String {
+    let digits = number.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
 }
 
 fn busy_view(text: &str, cx: &App) -> AnyElement {
@@ -334,5 +356,16 @@ mod tests {
         assert_eq!(count_label(104, "node", "nodes"), "104 nodes");
         assert_eq!(count_label(1, "ingress", "ingresses"), "1 ingress");
         assert_eq!(count_label(2, "ingress", "ingresses"), "2 ingresses");
+    }
+
+    #[test]
+    fn group_digits_inserts_thousands_separators() {
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(group_digits(999), "999");
+        assert_eq!(group_digits(1_000), "1,000");
+        assert_eq!(group_digits(2_000), "2,000");
+        assert_eq!(group_digits(12_345), "12,345");
+        assert_eq!(group_digits(1_234_567), "1,234,567");
+        assert_eq!(count_label(2_000, "event", "events"), "2,000 events");
     }
 }

@@ -5,6 +5,7 @@ use cluster::PodSummary;
 use gpui_kit::SharedString;
 
 use crate::status_tone::{StatusLabel, StatusTone};
+use crate::table_selection::ResourceKey;
 
 /// A table row and its drawer content, built on tokio so the main thread only swaps a `Vec`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,13 +21,33 @@ pub(crate) struct KindRow {
     /// The drawer body, in order.
     pub(crate) sections: Vec<DetailSection>,
     pub(crate) related_pods: Option<PodOwner>,
+    /// `Some` for Events only.
+    pub(crate) event: Option<EventDetail>,
     pub(crate) labels: Vec<SharedString>,
+}
+
+/// Events only: what the drawer header, subtitle, and menu need.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EventDetail {
+    /// `BackOff · api-7d9f8c-x2k4q`; the object name alone without a reason.
+    pub(crate) title: SharedString,
+    /// `None` when k8sBoard has no screen for the object's kind.
+    pub(crate) object: Option<ResourceKey>,
+    /// `kubelet on ip-10-0-1-23`, for the subtitle.
+    pub(crate) source: Option<SharedString>,
+    /// The full (trimmed, truncated) message, for Copy message.
+    pub(crate) message: SharedString,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum KindCell {
     Text(SharedString),
     Mono(SharedString),
+    /// Mono text with a muted `{prefix}/`, cut with an ellipsis.
+    Qualified {
+        prefix: Option<SharedString>,
+        text: SharedString,
+    },
     Toned(StatusLabel),
     Absent,
     /// Rendered at paint time, so ages never go stale. `tone` colours it.
@@ -66,6 +87,14 @@ pub(crate) enum DetailRow {
     Stacked {
         label: SharedString,
         value: KindCell,
+    },
+    /// Preformatted text that wraps: mono, small, on a muted background.
+    Code(SharedString),
+    /// A label and a clickable mono value that reveals `target`.
+    Link {
+        label: SharedString,
+        text: SharedString,
+        target: ResourceKey,
     },
 }
 

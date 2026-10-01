@@ -3,8 +3,9 @@ use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{ClipboardItem, ParentElement as _, SharedString, Styled as _, WeakEntity, div};
 
+use crate::app_shell::AppShell;
 use crate::cluster_session::{AccessState, LiveCluster};
-use crate::kind_row::KindRow;
+use crate::kind_row::{EventDetail, KindRow};
 use crate::log_dock::LogDock;
 use crate::log_tab::LogTarget;
 use crate::resource_kind::ResourceKind;
@@ -144,14 +145,23 @@ pub(crate) fn node_menu(menu: PopupMenu, node: &NodeSummary, access: &AccessStat
 }
 
 /// The row context menu and the drawer ⋯ menu of an explorer kind. Every item except Copy name
-/// is disabled, because this version is read-only and has no YAML view.
+/// (and, for events, Go to object and Copy message) is disabled, because this version is
+/// read-only and has no YAML view.
 pub(crate) fn kind_menu(
     menu: PopupMenu,
     kind: ResourceKind,
     row: &KindRow,
     access: &AccessState,
+    shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
-    let mut menu = menu.item(disabled_menu_item("View YAML", YAML_DEFERRED_REASON.into()));
+    let mut menu = menu;
+    if let Some(event) = &row.event {
+        menu = menu
+            .item(go_to_object_item(event, shell))
+            .item(copy_message_item(event))
+            .separator();
+    }
+    menu = menu.item(disabled_menu_item("View YAML", YAML_DEFERRED_REASON.into()));
     if kind.has_port_forward() {
         menu = menu.item(action_item(
             ResourceAction::PortForward,
@@ -173,6 +183,25 @@ pub(crate) fn kind_menu(
             kind.delete_label(),
             READ_ONLY_MODE_REASON.into(),
         ))
+}
+
+/// Reveals the involved object on its own screen; disabled when there is none.
+fn go_to_object_item(event: &EventDetail, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    const LABEL: &str = "Go to object";
+    let Some(key) = event.object.clone() else {
+        return disabled_menu_item(LABEL, "No screen for this kind yet".into());
+    };
+    let shell = shell.clone();
+    PopupMenuItem::new(LABEL).on_click(move |_, _, cx| {
+        let _ = shell.update(cx, |shell, cx| shell.reveal(key.clone(), cx));
+    })
+}
+
+fn copy_message_item(event: &EventDetail) -> PopupMenuItem {
+    let message = event.message.clone();
+    PopupMenuItem::new("Copy message").on_click(move |_, _, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string(message.to_string()));
+    })
 }
 
 /// The tooltip of a disabled Forward button. Port-forward is never enabled in this version.

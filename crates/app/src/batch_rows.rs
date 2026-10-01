@@ -55,6 +55,7 @@ pub(crate) fn job_row(job: &JobSummary) -> KindRow {
             },
             containers_section(&job.containers),
         ],
+        event: None,
         related_pods: controller_owner(&job.namespace, JOB_KIND, &job.name),
         labels: chips(&job.labels),
     }
@@ -134,6 +135,7 @@ pub(crate) fn cron_job_row(cron_job: &CronJobSummary) -> KindRow {
             },
             containers_section(&cron_job.containers),
         ],
+        event: None,
         related_pods: None,
         labels: chips(&cron_job.labels),
     }

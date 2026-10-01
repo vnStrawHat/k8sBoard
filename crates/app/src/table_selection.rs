@@ -1,5 +1,7 @@
 use cluster::{NodeSummary, PodSummary};
 
+use crate::app_shell::Screen;
+use crate::cluster_session::LiveList;
 use crate::kind_row::KindRow;
 use crate::resource_kind::ResourceKind;
 
@@ -43,6 +45,15 @@ impl ResourceKey {
         }
     }
 
+    /// The screen that lists this object.
+    pub(crate) fn screen(&self) -> Screen {
+        match self {
+            Self::Pod { .. } => Screen::Pods,
+            Self::Node { .. } => Screen::Nodes,
+            Self::Kind { kind, .. } => Screen::Kind(*kind),
+        }
+    }
+
     pub(crate) fn is_pod(&self, pod: &PodSummary) -> bool {
         matches!(self, Self::Pod { namespace, name }
             if *namespace == pod.namespace && *name == pod.name)
@@ -60,6 +71,19 @@ impl ResourceKey {
 
 pub(crate) fn row_index<T>(items: &[T], is_selected: impl Fn(&T) -> bool) -> Option<usize> {
     items.iter().position(is_selected)
+}
+
+/// The selected row in `list`. `None` while the list is loading, so the selection waits for
+/// the first snapshot; otherwise `Some(found)`. A failed list has no rows, so its selection is
+/// dropped like a missing row (a denied kind reached through a reveal).
+pub(crate) fn list_row_index<T>(
+    list: &LiveList<T>,
+    is_selected: impl Fn(&T) -> bool,
+) -> Option<Option<usize>> {
+    if list.is_loading() {
+        return None;
+    }
+    Some(row_index(list.items(), is_selected))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

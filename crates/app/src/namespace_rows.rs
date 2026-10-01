@@ -24,6 +24,7 @@ pub(crate) fn namespace_row(namespace: &NamespaceSummary) -> KindRow {
                 DetailRow::field("Created", age),
             ],
         }],
+        event: None,
         related_pods: None,
         labels: chips(&namespace.labels),
     }

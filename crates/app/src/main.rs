@@ -7,6 +7,7 @@ mod cluster_runtime;
 mod cluster_session;
 mod config_map_rows;
 mod drawer;
+mod event_rows;
 mod kind_drawer;
 mod kind_row;
 mod kind_table;

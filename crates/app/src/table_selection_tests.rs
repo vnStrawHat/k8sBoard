@@ -85,6 +85,7 @@ fn kind_row(namespace: Option<&str>, name: &str) -> KindRow {
         },
         cells: Vec::new(),
         sections: Vec::new(),
+        event: None,
         related_pods: None,
         labels: Vec::new(),
     }
@@ -100,4 +101,51 @@ fn kind_key_matches_row_by_kind_namespace_and_name() {
     assert!(!key.is_row(ResourceKind::Deployments, &kind_row(Some("team-a"), "web")));
     assert!(!key.is_row(ResourceKind::Deployments, &kind_row(None, "api")));
     assert!(!key.is_pod(&pod("team-a", "api")));
+}
+
+#[test]
+fn resource_key_screen_matches_kind() {
+    use crate::app_shell::Screen;
+
+    assert_eq!(ResourceKey::of_pod(&pod("ns", "a")).screen(), Screen::Pods);
+    let node = ResourceKey::Node {
+        name: "n1".to_owned(),
+    };
+    assert_eq!(node.screen(), Screen::Nodes);
+    let row = kind_row(Some("ns"), "api");
+    let key = ResourceKey::of_row(ResourceKind::Deployments, &row);
+    assert_eq!(key.screen(), Screen::Kind(ResourceKind::Deployments));
+}
+
+#[test]
+fn pending_reveal_key_resolves_through_selection_sync() {
+    let key = ResourceKey::of_row(ResourceKind::Deployments, &kind_row(Some("ns"), "api"));
+    let rows = [kind_row(Some("ns"), "web"), kind_row(Some("ns"), "api")];
+    let found = row_index(&rows, |row| key.is_row(ResourceKind::Deployments, row));
+    // The table has nothing selected yet, so the row is moved to.
+    assert_eq!(selection_sync(None, found), SelectionSync::Move(1));
+
+    let other = [kind_row(Some("ns"), "web")];
+    let missing = row_index(&other, |row| key.is_row(ResourceKind::Deployments, row));
+    assert_eq!(selection_sync(None, missing), SelectionSync::Clear);
+}
+
+#[test]
+fn list_row_index_waits_while_loading_and_drops_a_failed_list() {
+    let key = ResourceKey::of_row(ResourceKind::Deployments, &kind_row(Some("ns"), "api"));
+    let is_key = |row: &KindRow| key.is_row(ResourceKind::Deployments, row);
+
+    let loading = LiveList::<KindRow>::Loading;
+    assert_eq!(list_row_index(&loading, is_key), None);
+
+    let failed = LiveList::<KindRow>::Failed {
+        message: "denied".to_owned(),
+    };
+    assert_eq!(list_row_index(&failed, is_key), Some(None));
+
+    let ready = LiveList::Ready {
+        items: vec![kind_row(Some("ns"), "web"), kind_row(Some("ns"), "api")],
+        interruption: None,
+    };
+    assert_eq!(list_row_index(&ready, is_key), Some(Some(1)));
 }

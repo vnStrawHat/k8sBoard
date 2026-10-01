@@ -7,10 +7,11 @@ use cluster::PodSummary;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::DropdownMenu as _;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, div,
+    SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
 };
 
 use crate::age::format_age;
@@ -42,24 +43,47 @@ pub(crate) fn kind_drawer(
     let now = jiff::Timestamp::now();
     let header = DrawerHeader {
         kind_badge: kind.badge(),
-        name: row.name.clone().into(),
+        name: header_name(row),
         subtitle: subtitle(row, now, cx),
-        menu: kind_menu_button(kind, row, session),
+        menu: kind_menu_button(kind, row, session, cx.weak_entity()),
         // Only the Overview exists, so there is nothing to expand.
         expand: None,
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
-    drawer_frame(header, None, body(row, live, now, cx), DRAWER_WIDTH, cx).into_any_element()
+    drawer_frame(
+        header,
+        None,
+        body(kind, row, live, now, cx),
+        DRAWER_WIDTH,
+        cx,
+    )
+    .into_any_element()
 }
 
-/// The status, then `· namespace · created 2d ago`.
+/// The event title for events, else the object name.
+fn header_name(row: &KindRow) -> SharedString {
+    match &row.event {
+        Some(event) => event.title.clone(),
+        None => row.name.clone().into(),
+    }
+}
+
+/// The status, then `· namespace · created 2d ago`; events show their source instead of an age.
 fn subtitle(row: &KindRow, now: jiff::Timestamp, cx: &App) -> AnyElement {
-    let detail: Vec<String> = row
-        .namespace
-        .iter()
-        .cloned()
-        .chain(created_text(row.created_at, now))
-        .collect();
+    let detail: Vec<String> = match &row.event {
+        Some(event) => row
+            .namespace
+            .iter()
+            .cloned()
+            .chain(event.source.iter().map(ToString::to_string))
+            .collect(),
+        None => row
+            .namespace
+            .iter()
+            .cloned()
+            .chain(created_text(row.created_at, now))
+            .collect(),
+    };
     h_flex()
         .gap_1()
         .text_sm()
@@ -78,6 +102,7 @@ fn kind_menu_button(
     kind: ResourceKind,
     row: &KindRow,
     session: &Entity<ClusterSession>,
+    shell: WeakEntity<AppShell>,
 ) -> AnyElement {
     let session = session.clone();
     let key = ResourceKey::of_row(kind, row);
@@ -94,7 +119,7 @@ fn kind_menu_button(
                     .find(|row| key.is_row(kind, row))
             });
             match current {
-                Some(row) => kind_menu(menu, kind, row, &live.access),
+                Some(row) => kind_menu(menu, kind, row, &live.access, &shell),
                 None => menu,
             }
         })
@@ -103,6 +128,7 @@ fn kind_menu_button(
 
 /// The row's sections in order, then the related pods, then the labels.
 fn body(
+    kind: ResourceKind,
     row: &KindRow,
     live: &LiveCluster,
     now: jiff::Timestamp,
@@ -125,10 +151,12 @@ fn body(
     if let Some(owner) = &row.related_pods {
         column = column.child(pods_section(owner, live, cx));
     }
-    column
-        .child(section_title("Labels", cx))
-        .child(chips(&row.labels, cx))
-        .into_any_element()
+    if kind.has_labels() {
+        column = column
+            .child(section_title("Labels", cx))
+            .child(chips(&row.labels, cx));
+    }
+    column.into_any_element()
 }
 
 fn detail_element(
@@ -136,7 +164,7 @@ fn detail_element(
     id: usize,
     forward_reason: &SharedString,
     now: jiff::Timestamp,
-    cx: &App,
+    cx: &Context<AppShell>,
 ) -> AnyElement {
     match detail {
         DetailRow::Field { label, value } => {
@@ -148,11 +176,58 @@ fn detail_element(
             .text_color(cx.theme().muted_foreground)
             .child(text.clone())
             .into_any_element(),
+        DetailRow::Code(text) => code_block(text, cx),
+        DetailRow::Link {
+            label,
+            text,
+            target,
+        } => {
+            let link = link_value(text, target.clone(), id, cx);
+            wide_detail_row(label.clone(), link, cx).into_any_element()
+        }
         DetailRow::Port { text } => port_row(text, id, forward_reason, cx),
         DetailRow::Stacked { label, value } => {
             stacked_row(label, field_value(value, id, now, cx), id, cx)
         }
     }
+}
+
+/// Preformatted text that wraps, such as an event message.
+fn code_block(text: &SharedString, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .w_full()
+        .min_w_0()
+        .px_2()
+        .py_1p5()
+        .rounded(theme.radius)
+        .bg(theme.muted)
+        .font_family(theme.mono_font_family.clone())
+        .text_xs()
+        .child(text.clone())
+        .into_any_element()
+}
+
+/// A mono value that opens `target` on its own screen.
+fn link_value(
+    text: &SharedString,
+    target: ResourceKey,
+    id: usize,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let tooltip_text = SharedString::from(format!("Open {text}"));
+    div()
+        .id(("link", id))
+        .truncate()
+        .cursor_pointer()
+        .font_family(theme.mono_font_family.clone())
+        .text_color(theme.link)
+        .underline()
+        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(target.clone(), cx)))
+        .child(text.clone())
+        .into_any_element()
 }
 
 /// The label above its value, for labels that do not fit the label column.
@@ -174,6 +249,15 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
         KindCell::Mono(text) => truncated_text(("detail", id), text.clone())
             .font_family(mono)
             .into_any_element(),
+        KindCell::Qualified { prefix, text } => {
+            let text = match prefix {
+                Some(prefix) => SharedString::from(format!("{prefix}/{text}")),
+                None => text.clone(),
+            };
+            truncated_text(("detail", id), text)
+                .font_family(mono)
+                .into_any_element()
+        }
         KindCell::Toned(label) => toned_text(label.clone(), cx).truncate().into_any_element(),
         KindCell::Absent => absent_text(cx).into_any_element(),
         KindCell::Duration {
@@ -332,7 +416,7 @@ fn related_pod_row(
         .text_sm()
         .cursor_pointer()
         .hover(move |style| style.bg(hover_bg))
-        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal_pod(key.clone(), cx)))
+        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
         .child(
             div()
                 .flex_1()

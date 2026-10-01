@@ -28,7 +28,7 @@ use crate::resource_kind::ResourceKind;
 use crate::screenshot::{SettleInput, TargetState};
 use crate::screenshot::{pick_drawer_pod, pick_logs_pod};
 use crate::status_bar::status_bar;
-use crate::table_selection::{ResourceKey, SelectionSync, row_index, selection_sync};
+use crate::table_selection::{ResourceKey, SelectionSync, list_row_index, selection_sync};
 use crate::title_bar::title_bar;
 
 #[path = "workspace.rs"]
@@ -122,9 +122,10 @@ impl AppShell {
         let node_table =
             cx.new(|cx| configure(TableState::new(NodeTableDelegate::new(), window, cx)));
         let initial_kind = options.screen.screen().kind();
+        let shell = cx.weak_entity();
         let kind_table = cx.new(|cx| {
             configure(TableState::new(
-                KindTableDelegate::new(initial_kind),
+                KindTableDelegate::new(initial_kind, shell),
                 window,
                 cx,
             ))
@@ -318,18 +319,13 @@ impl AppShell {
         self.log_dock.update(cx, |dock, cx| dock.unzoom(cx));
     }
 
-    /// Opens the Pods screen on `key`'s pod, or with no selection when the pod is gone.
-    pub(crate) fn reveal_pod(&mut self, key: ResourceKey, cx: &mut Context<Self>) {
-        self.show_screen(Screen::Pods, cx);
-        let Some(row) = self
-            .live(cx)
-            .and_then(|live| row_index(live.pods.items(), |pod| key.is_pod(pod)))
-        else {
-            return;
-        };
+    /// Opens the key's screen with its row selected, replacing the drawer. A list that is still
+    /// loading keeps the key, and `on_session_changed` resolves it after the first snapshot; a
+    /// loaded list without the row drops it.
+    pub(crate) fn reveal(&mut self, key: ResourceKey, cx: &mut Context<Self>) {
+        self.show_screen(key.screen(), cx);
         self.change_selection(Some(key), cx);
-        self.pod_table
-            .update(cx, |table, cx| table.set_selected_row(row, cx));
+        self.sync_selection(cx);
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {
@@ -471,7 +467,7 @@ impl AppShell {
     }
 
     /// Keeps the table highlight and the drawer on the selected object after a snapshot has
-    /// reordered, added, or removed rows. A list that is not loaded yet proves nothing.
+    /// reordered, added, or removed rows. A loading list proves nothing; a failed one has no rows.
     fn sync_selection(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.selected.clone() else {
             return;
@@ -481,18 +477,16 @@ impl AppShell {
         };
         match &key {
             ResourceKey::Pod { .. } => {
-                if live.pods.ready_count().is_none() {
+                let Some(found) = list_row_index(&live.pods, |pod| key.is_pod(pod)) else {
                     return;
-                }
-                let found = row_index(live.pods.items(), |pod| key.is_pod(pod));
+                };
                 let table = self.pod_table.clone();
                 self.apply_selection_sync(&table, found, cx);
             }
             ResourceKey::Node { .. } => {
-                if live.nodes.ready_count().is_none() {
+                let Some(found) = list_row_index(&live.nodes, |node| key.is_node(node)) else {
                     return;
-                }
-                let found = row_index(live.nodes.items(), |node| key.is_node(node));
+                };
                 let table = self.node_table.clone();
                 self.apply_selection_sync(&table, found, cx);
             }
@@ -500,10 +494,10 @@ impl AppShell {
                 let Some(explorer) = live.kind_list(*kind) else {
                     return;
                 };
-                if explorer.list.ready_count().is_none() {
+                let Some(found) = list_row_index(&explorer.list, |row| key.is_row(*kind, row))
+                else {
                     return;
-                }
-                let found = row_index(explorer.list.items(), |row| key.is_row(*kind, row));
+                };
                 let table = self.kind_table.clone();
                 self.apply_selection_sync(&table, found, cx);
             }
@@ -524,7 +518,7 @@ impl AppShell {
                 table.update(cx, |table, cx| table.set_selected_row(row, cx))
             }
             SelectionSync::Clear => {
-                self.selected = None;
+                self.change_selection(None, cx);
                 table.update(cx, |table, cx| table.clear_selection(cx));
             }
         }

@@ -73,6 +73,7 @@ pub(crate) fn service_row(service: &ServiceSummary) -> KindRow {
             KindCell::age(service.created_at),
         ],
         sections,
+        event: None,
         related_pods: None,
         labels: chips(&service.labels),
     }
@@ -162,6 +163,7 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
             KindCell::age(ingress.created_at),
         ],
         sections,
+        event: None,
         related_pods: None,
         labels: chips(&ingress.labels),
     }

@@ -80,6 +80,7 @@ pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
         status: deployment_status(deployment),
         cells,
         sections,
+        event: None,
         related_pods: Some(PodOwner::Deployment {
             namespace: deployment.namespace.clone(),
             name: deployment.name.clone(),
@@ -232,6 +233,7 @@ pub(crate) fn stateful_set_row(set: &StatefulSetSummary) -> KindRow {
             KindCell::age(set.created_at),
         ],
         sections,
+        event: None,
         related_pods: controller_owner(&set.namespace, STATEFUL_SET_KIND, &set.name),
         labels: chips(&set.labels),
     }
@@ -292,6 +294,7 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
             KindCell::age(set.created_at),
         ],
         sections,
+        event: None,
         related_pods: controller_owner(&set.namespace, DAEMON_SET_KIND, &set.name),
         labels: chips(&set.labels),
     }
@@ -328,6 +331,7 @@ pub(crate) fn replica_set_row(set: &ReplicaSetSummary) -> KindRow {
             selector_section(&set.selector),
             containers_section(&set.containers),
         ],
+        event: None,
         related_pods: controller_owner(&set.namespace, REPLICA_SET_KIND, &set.name),
         labels: chips(&set.labels),
     }
