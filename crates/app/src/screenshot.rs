@@ -62,14 +62,14 @@ pub(crate) struct SettleInput {
 }
 
 /// A drawer screen is ready when its row is selected (or no row was found to select) and its
-/// events are no longer pending.
+/// events and YAML are no longer pending.
 #[cfg(any(feature = "screenshot", test))]
 pub(crate) fn is_drawer_ready(
     has_selection: bool,
     is_launch_pending: bool,
-    is_object_events_pending: bool,
+    is_content_pending: bool,
 ) -> bool {
-    (has_selection || !is_launch_pending) && !is_object_events_pending
+    (has_selection || !is_launch_pending) && !is_content_pending
 }
 
 /// Whether the screen shows what `--screen` asked for, so a screenshot is worth taking.
@@ -343,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn drawer_waits_for_object_events() {
+    fn drawer_waits_for_its_content() {
         // Selected, nothing pending.
         assert!(is_drawer_ready(true, false, false));
         // Selected, but the events are still pending.

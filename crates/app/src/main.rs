@@ -32,6 +32,7 @@ mod table_layout;
 mod table_selection;
 mod title_bar;
 mod workload_rows;
+mod yaml_view;
 
 use std::process::ExitCode;
 use std::time::Duration;

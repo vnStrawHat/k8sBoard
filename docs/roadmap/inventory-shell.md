@@ -49,7 +49,7 @@
 |---|---|---|---|---|
 | D1 | Overlay drawer, table keeps width, shadow | Done | 0003 | — |
 | D2 | Header ⋯ ⤢ ✕; ⋯ equals the row context menu | Partial | 0003 (pods: all three), 0005 (kinds: no ⤢) | ⤢ for kinds with Monitor → 0010 |
-| D3 | Tab bar Overview / Monitor / YAML / Events | Partial | pods: Overview, Containers; 0006 adds the pod Events tab | tab bar for Node and kind drawers + YAML → 0007; Monitor → 0010 |
+| D3 | Tab bar Overview / Monitor / YAML / Events | Partial | Overview, Containers (pods), YAML, Events in every drawer (0006, 0007) | Monitor → 0010 |
 | D4 | WHY / alert box per kind | Missing | — | pods 0008; kinds 0012–0018 |
 | D5 | `→` links to related objects (node, owner, target) | Partial | related pods 0005 | 0008, 0012 |
 | D6 | ↑↓ moves rows while open, Esc or table click closes | Partial | mouse only | 0028 |

@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use cluster::{
     ContextSummary, EventFilter, InvolvedObject, Kubeconfig, KubeconfigError, NamespaceScope,
@@ -16,7 +15,7 @@ use gpui_kit::{
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
 use crate::cluster_session::{ClusterSession, LiveCluster, error_text};
-use crate::drawer::{DrawerState, DrawerTab};
+use crate::drawer::{DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab};
 use crate::kind_table::KindTableDelegate;
 use crate::launch_options::{
     LaunchOptions, LaunchScreen, has_ignored_kubeconfig_entries, kubeconfig_path,
@@ -34,13 +33,10 @@ use crate::screenshot::{pick_drawer_pod, pick_logs_pod};
 use crate::status_bar::status_bar;
 use crate::table_selection::{ResourceKey, SelectionSync, list_row_index, selection_sync};
 use crate::title_bar::title_bar;
+use crate::yaml_view::{YamlView, yaml_subject};
 
 #[path = "workspace.rs"]
 mod workspace;
-
-/// How long a selection must rest before its drawer events are fetched: each start is an uncached
-/// list plus watch on the API server, so arrow-key navigation must not start one per row.
-const EVENT_SUBJECT_DELAY: Duration = Duration::from_millis(250);
 
 const IGNORED_KUBECONFIG_NOTE: &str =
     "Only the first KUBECONFIG entry is used; merging kubeconfigs is not supported";
@@ -120,19 +116,24 @@ impl AppShell {
             ),
         };
 
+        let shell = cx.weak_entity();
         let log_dock = cx.new(|_| LogDock::new());
         let dock_split = cx.new(|_| ResizableState::default());
         let pod_table = cx.new(|cx| {
             configure(TableState::new(
-                PodTableDelegate::new(log_dock.downgrade()),
+                PodTableDelegate::new(log_dock.downgrade(), shell.clone()),
                 window,
                 cx,
             ))
         });
-        let node_table =
-            cx.new(|cx| configure(TableState::new(NodeTableDelegate::new(), window, cx)));
+        let node_table = cx.new(|cx| {
+            configure(TableState::new(
+                NodeTableDelegate::new(shell.clone()),
+                window,
+                cx,
+            ))
+        });
         let initial_kind = options.screen.screen().kind();
-        let shell = cx.weak_entity();
         let kind_table = cx.new(|cx| {
             configure(TableState::new(
                 KindTableDelegate::new(initial_kind, shell),
@@ -379,6 +380,51 @@ impl AppShell {
         self.select_container(name, cx);
     }
 
+    /// Opens the drawer of `key` on its YAML tab. When the key is not the selection it is revealed
+    /// first; a vanished row clears the selection again, and then no drawer opens on YAML.
+    pub(crate) fn open_yaml(&mut self, key: ResourceKey, cx: &mut Context<Self>) {
+        if self.selected.as_ref() != Some(&key) {
+            self.reveal(key.clone(), cx);
+        }
+        if self.selected.as_ref() != Some(&key) {
+            return;
+        }
+        self.drawer.tab = DrawerTab::Yaml;
+        cx.notify();
+    }
+
+    /// Keeps `drawer.yaml` for the shown subject only: the view lives exactly while the YAML tab of
+    /// an open drawer is shown. It runs inside `render`, so it only assigns and never notifies, and
+    /// it is the only place that creates a `YamlView`. Comparing by object alone is enough because
+    /// every context or namespace switch closes the drawer first.
+    fn sync_yaml_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(subject) = yaml_subject(self.selected.as_ref(), self.drawer.tab) else {
+            self.drawer.yaml = None;
+            return;
+        };
+        if let Some(view) = &self.drawer.yaml
+            && view.read(cx).is_for(&subject)
+        {
+            return;
+        }
+        let Some(connection) = self.live(cx).map(|live| live.connection().clone()) else {
+            self.drawer.yaml = None;
+            return;
+        };
+        self.drawer.yaml = Some(cx.new(|cx| YamlView::new(connection, subject, window, cx)));
+    }
+
+    /// The YAML tab is shown and its first fetch has not finished. A failed fetch is settled.
+    #[cfg(feature = "screenshot")]
+    fn is_yaml_loading(&self, cx: &App) -> bool {
+        yaml_subject(self.selected.as_ref(), self.drawer.tab).is_some()
+            && self
+                .drawer
+                .yaml
+                .as_ref()
+                .is_none_or(|view| view.read(cx).is_loading())
+    }
+
     // ---- selection ----
 
     /// Returns whether the subject changed. The same key again is a no-op: it is the
@@ -413,7 +459,7 @@ impl AppShell {
             SubjectChange::Start(subject) => {
                 self.set_event_subject(None, cx);
                 self.event_subject_task = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(EVENT_SUBJECT_DELAY).await;
+                    cx.background_executor().timer(DRAWER_SUBJECT_DELAY).await;
                     let _ = this.update(cx, |shell, cx| {
                         shell.event_subject_task = None;
                         shell.set_event_subject(Some(subject), cx);
@@ -718,11 +764,12 @@ impl AppShell {
                 }
             },
         };
-        // A drawer waits for the debounce, then for its events.
-        let is_object_events_pending = self.event_subject_task.is_some()
+        // A drawer waits for the debounce, then for its events and its YAML.
+        let is_content_pending = self.event_subject_task.is_some()
             || self
                 .live(cx)
-                .is_some_and(LiveCluster::is_object_events_loading);
+                .is_some_and(LiveCluster::is_object_events_loading)
+            || self.is_yaml_loading(cx);
         // A logs screen is pending until its tab exists and has opened its stream.
         let is_log_pending = self
             .pending_launch_screen
@@ -734,7 +781,7 @@ impl AppShell {
             is_drawer_ready: is_drawer_ready(
                 self.selected.is_some(),
                 self.pending_launch_screen.is_some(),
-                is_object_events_pending,
+                is_content_pending,
             ),
             is_log_pending,
         }
@@ -756,6 +803,7 @@ impl Render for AppShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.fit_table_widths(window, cx);
         self.open_pending_logs(window, cx);
+        self.sync_yaml_view(window, cx);
         let theme = cx.theme();
         let counts = self.navigation_counts(cx);
         let session = self.session.as_ref().map(|session| session.read(cx));

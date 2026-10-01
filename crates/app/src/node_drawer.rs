@@ -4,16 +4,16 @@ use cluster::NodeSummary;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Entity, IntoElement, ParentElement as _, Styled as _, div,
+    AnyElement, App, Context, Entity, IntoElement, ParentElement as _, Styled as _, WeakEntity, div,
 };
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::ClusterSession;
 use crate::drawer::{
-    DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row, drawer_frame,
-    drawer_tab_bar, drawer_tabs, expand_toggle, menu_button, shown_tab, tab_titles, truncated_text,
-    value_or_absent,
+    DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row,
+    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, menu_button, shown_tab, tab_titles,
+    truncated_text, value_or_absent, yaml_body,
 };
 use crate::object_events::{event_subject, recent_events};
 use crate::resource_actions::node_menu;
@@ -31,7 +31,7 @@ pub(crate) fn node_drawer(
         kind_badge: "No",
         name: node.name.clone().into(),
         subtitle: subtitle(node, now, cx),
-        menu: node_menu_button(node, session),
+        menu: node_menu_button(node, session, cx.weak_entity()),
         expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
@@ -41,8 +41,11 @@ pub(crate) fn node_drawer(
     let tabs = drawer_tabs(&key);
     let shown = shown_tab(tabs, state.tab);
     let body = match shown {
-        DrawerTab::Events => recent_events(events, cx),
-        DrawerTab::Overview | DrawerTab::Containers => overview(node, now, cx),
+        DrawerTab::Events => DrawerBody::Scrolling(recent_events(events, cx)),
+        DrawerTab::Yaml => yaml_body(state),
+        DrawerTab::Overview | DrawerTab::Containers => {
+            DrawerBody::Scrolling(overview(node, now, cx))
+        }
     };
     let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
     drawer_frame(header, tab_bar, body, state.width(), cx).into_any_element()
@@ -62,7 +65,11 @@ fn subtitle(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
 }
 
 /// The menu reads the session when it opens, so it shows the access state of that moment.
-fn node_menu_button(node: &NodeSummary, session: &Entity<ClusterSession>) -> AnyElement {
+fn node_menu_button(
+    node: &NodeSummary,
+    session: &Entity<ClusterSession>,
+    shell: WeakEntity<AppShell>,
+) -> AnyElement {
     let session = session.clone();
     let key = ResourceKey::of_node(node);
     menu_button()
@@ -71,7 +78,7 @@ fn node_menu_button(node: &NodeSummary, session: &Entity<ClusterSession>) -> Any
                 return menu;
             };
             match live.nodes.items().iter().find(|node| key.is_node(node)) {
-                Some(node) => node_menu(menu, node, &live.access),
+                Some(node) => node_menu(menu, node, &live.access, &shell),
                 None => menu,
             }
         })

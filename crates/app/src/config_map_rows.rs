@@ -25,9 +25,7 @@ pub(crate) fn config_map_row(config_map: &ConfigMapSummary) -> KindRow {
             KindCell::Mono(format!("{}{binary}", format_bytes(key.size_bytes)).into()),
         )
     }));
-    data.push(DetailRow::Note(
-        "Values are not shown in this version".into(),
-    ));
+    data.push(DetailRow::Note("Values are in the YAML tab".into()));
     let status_text = match key_count {
         1 => "1 key".to_owned(),
         count => format!("{count} keys"),

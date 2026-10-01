@@ -15,9 +15,9 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{ClusterSession, LiveList};
 use crate::drawer::{
-    DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row, drawer_frame,
-    drawer_tab_bar, drawer_tabs, expand_toggle, menu_button, section_title, shown_tab, tab_titles,
-    truncated_text, value_or_absent,
+    DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row,
+    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, menu_button, section_title,
+    shown_tab, tab_titles, truncated_text, value_or_absent, yaml_body,
 };
 use crate::log_dock::LogDock;
 use crate::object_events::{event_subject, recent_events};
@@ -41,7 +41,7 @@ pub(crate) fn pod_drawer(
         kind_badge: "Po",
         name: pod.name.clone().into(),
         subtitle: subtitle(pod, now, cx),
-        menu: pod_menu_button(pod, session, dock),
+        menu: pod_menu_button(pod, session, dock, cx.weak_entity()),
         expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
@@ -49,9 +49,10 @@ pub(crate) fn pod_drawer(
     let tabs = drawer_tabs(&ResourceKey::of_pod(pod));
     let shown = shown_tab(tabs, state.tab);
     let body = match shown {
-        DrawerTab::Overview => overview(pod, cx),
-        DrawerTab::Containers => containers_tab(pod, state, now, cx),
-        DrawerTab::Events => recent_events(events, cx),
+        DrawerTab::Overview => DrawerBody::Scrolling(overview(pod, cx)),
+        DrawerTab::Containers => DrawerBody::Scrolling(containers_tab(pod, state, now, cx)),
+        DrawerTab::Yaml => yaml_body(state),
+        DrawerTab::Events => DrawerBody::Scrolling(recent_events(events, cx)),
     };
     let titles = tab_titles(tabs, pod.containers.len(), events);
     let tab_bar = drawer_tab_bar(titles, shown, cx);
@@ -83,6 +84,7 @@ fn pod_menu_button(
     pod: &PodSummary,
     session: &Entity<ClusterSession>,
     dock: &WeakEntity<LogDock>,
+    shell: WeakEntity<AppShell>,
 ) -> AnyElement {
     let session = session.clone();
     let dock = dock.clone();
@@ -93,7 +95,7 @@ fn pod_menu_button(
                 return menu;
             };
             match live.pods.items().iter().find(|pod| key.is_pod(pod)) {
-                Some(pod) => pod_menu(menu, pod, live, &dock),
+                Some(pod) => pod_menu(menu, pod, live, &dock, &shell),
                 None => menu,
             }
         })

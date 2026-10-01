@@ -73,7 +73,7 @@ fn config_map_without_keys_says_so_and_notes_hidden_values() {
         data_rows(&row),
         [
             DetailRow::Note("No keys".into()),
-            DetailRow::Note("Values are not shown in this version".into()),
+            DetailRow::Note("Values are in the YAML tab".into()),
         ]
     );
     assert_eq!(row.status.text, "0 keys");

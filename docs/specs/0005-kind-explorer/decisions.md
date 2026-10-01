@@ -37,7 +37,7 @@
 | 19 | Related pods come from the existing pods watch, matched by the controller owner reference. For a Deployment, the owner is a ReplicaSet named `{deployment}-{hash}`. A click opens the pod on the Pods screen | no new watch; the pod-template hash never contains `-`, so the match is exact |
 | 20 | Each port row has a disabled **Forward** button whose tooltip is the port-forward gate reason | user decision; UAT denies `create pods/portforward` |
 | 21 | Sidebar items are disabled only for `Known` plus denied. `Checking` and `Unknown` stay enabled | does not block navigation during the review; the error state still explains a 403 |
-| 22 | Menus: W7 mutating items disabled with "Read-only mode"; "View YAML" on every kind, disabled with "YAML view comes in a later version"; Copy name; Delete last. Port-forward ▸ is gated for Deployments, StatefulSets, and Services | user decisions; users learn what exists; one wording for YAML across kinds |
+| 22 | Menus: W7 mutating items disabled with "Read-only mode"; "View YAML" on every kind, enabled since spec 0007; Copy name; Delete last. Port-forward ▸ is gated for Deployments, StatefulSets, and Services | user decisions; users learn what exists; one wording for YAML across kinds |
 | 23 | ReplicaSets with desired 0 are shown (muted), not hidden | there is no filter UI yet ([README](README.md) open item 5) |
 | 24 | CronJob "Last schedule" is toned by outcome. "Next run" is deferred | no cron parser dependency in this spec |
 | 25 | Screenshot screens: `<kind>` and `<kind>-drawer` for every kind. The drawer opens on row 0 | deterministic and simple |
@@ -51,7 +51,7 @@
 | 28 | Port and Service-port text is port-first: `{port}/{protocol} · {name} · {container}`, `{port} → {target}/{protocol} · {name} · node {n}` | one truncated line with a tooltip still shows the port |
 | 29 | Drawer labels are 136 px and truncate with a tooltip. `DetailRow::Stacked` (label above value) is used for ingress hosts and TLS hosts, never for ConfigMap keys | hosts are too long for a label column; a key must keep its size beside it |
 | 30 | A ConfigMap drawer's section title is the static "Data". The key count is in the subtitle ("4 keys") | section titles are `&'static str` |
-| 31 | `DetailRow::Note` is muted wrapping text: "No keys", "Values are not shown in this version", the selector-less Service note | explanations are not label and value pairs |
+| 31 | `DetailRow::Note` is muted wrapping text: "No keys", "Values are in the YAML tab", the selector-less Service note | explanations are not label and value pairs |
 | 32 | ReplicaSet and DaemonSet "Ready" cells are a toned number, not `{ready}/{desired}` | Desired is its own column there |
 | 33 | `--screen <kind>-drawer` settles when its row is selected or when the launch request found no row to select (`SettleInput.is_drawer_ready`) | an empty list previously waited out the 30 s timeout |
 | 34 | A CronJob whose last run failed is Warn in both the "Last schedule" cell and the subtitle (the spec's cell said Bad) | one tone per state; the CronJob itself is healthy |

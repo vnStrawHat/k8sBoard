@@ -9,11 +9,10 @@ use crate::kind_row::{EventDetail, KindRow};
 use crate::log_dock::LogDock;
 use crate::log_tab::LogTarget;
 use crate::resource_kind::ResourceKind;
+use crate::table_selection::ResourceKey;
 
 const READ_ONLY_FEATURE_REASON: &str = "Not available in read-only mode";
 const READ_ONLY_MODE_REASON: &str = "Read-only mode";
-/// Why "View YAML" is disabled on every kind.
-pub(crate) const YAML_DEFERRED_REASON: &str = "YAML view comes in a later version";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResourceAction {
@@ -94,6 +93,7 @@ pub(crate) fn pod_menu(
     pod: &PodSummary,
     live: &LiveCluster,
     dock: &WeakEntity<LogDock>,
+    shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
     let access = &live.access;
     menu.item(view_logs_item(pod, live, dock))
@@ -103,6 +103,7 @@ pub(crate) fn pod_menu(
             "Port-forward",
             access,
         ))
+        .item(view_yaml_item(ResourceKey::of_pod(pod), shell))
         .separator()
         .item(copy_name_item(&pod.name, access))
 }
@@ -131,12 +132,18 @@ fn view_logs_item(
     }
 }
 
-pub(crate) fn node_menu(menu: PopupMenu, node: &NodeSummary, access: &AccessState) -> PopupMenu {
+pub(crate) fn node_menu(
+    menu: PopupMenu,
+    node: &NodeSummary,
+    access: &AccessState,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenu {
     menu.item(action_item(
         ResourceAction::OpenNodeShell,
         "Open node shell",
         access,
     ))
+    .item(view_yaml_item(ResourceKey::of_node(node), shell))
     .separator()
     .item(action_item(ResourceAction::Cordon, "Cordon", access))
     .item(action_item(ResourceAction::Drain, "Drain…", access))
@@ -144,9 +151,9 @@ pub(crate) fn node_menu(menu: PopupMenu, node: &NodeSummary, access: &AccessStat
     .item(copy_name_item(&node.name, access))
 }
 
-/// The row context menu and the drawer ⋯ menu of an explorer kind. Every item except Copy name
-/// (and, for events, Go to object and Copy message) is disabled, because this version is
-/// read-only and has no YAML view.
+/// The row context menu and the drawer ⋯ menu of an explorer kind. Every item except View YAML and
+/// Copy name (and, for events, Go to object and Copy message) is disabled, because this version
+/// is read-only.
 pub(crate) fn kind_menu(
     menu: PopupMenu,
     kind: ResourceKind,
@@ -161,7 +168,7 @@ pub(crate) fn kind_menu(
             .item(copy_message_item(event))
             .separator();
     }
-    menu = menu.item(disabled_menu_item("View YAML", YAML_DEFERRED_REASON.into()));
+    menu = menu.item(view_yaml_item(ResourceKey::of_row(kind, row), shell));
     if kind.has_port_forward() {
         menu = menu.item(action_item(
             ResourceAction::PortForward,
@@ -201,6 +208,14 @@ fn copy_message_item(event: &EventDetail) -> PopupMenuItem {
     let message = event.message.clone();
     PopupMenuItem::new("Copy message").on_click(move |_, _, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string(message.to_string()));
+    })
+}
+
+/// Opens the drawer of `key` on its YAML tab. Always enabled: a missing right shows inline there.
+fn view_yaml_item(key: ResourceKey, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    let shell = shell.clone();
+    PopupMenuItem::new("View YAML").on_click(move |_, _, cx| {
+        let _ = shell.update(cx, |shell, cx| shell.open_yaml(key.clone(), cx));
     })
 }
 

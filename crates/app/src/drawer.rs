@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use std::time::Duration;
 
 use cluster::EventSummary;
 use gpui_kit::assets::IconName;
@@ -7,9 +8,9 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, Div, ElementId, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, ClickEvent, Context, Div, ElementId, Entity, InteractiveElement as _,
+    IntoElement, ParentElement as _, Pixels, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::age::format_age;
@@ -18,7 +19,11 @@ use crate::cluster_session::LiveList;
 use crate::object_events::events_title;
 use crate::resource_kind::ResourceKind;
 use crate::table_selection::ResourceKey;
+use crate::yaml_view::{YamlView, object_ref};
 
+/// How long a drawer subject must rest before its background fetch starts (the object events
+/// watch, the first YAML GET): arrowing through rows must not send one request per row.
+pub(crate) const DRAWER_SUBJECT_DELAY: Duration = Duration::from_millis(250);
 pub(crate) const DRAWER_WIDTH: Pixels = px(420.);
 pub(crate) const DRAWER_EXPANDED_WIDTH: Pixels = px(640.);
 const LABEL_WIDTH: Pixels = px(104.);
@@ -34,6 +39,8 @@ pub(crate) struct DrawerState {
     pub(crate) tab: DrawerTab,
     pub(crate) is_expanded: bool,
     pub(crate) selected_container: Option<String>,
+    /// The YAML tab's view; `AppShell::sync_yaml_view` keeps it for the shown subject only.
+    pub(crate) yaml: Option<Entity<YamlView>>,
 }
 
 impl DrawerState {
@@ -42,6 +49,7 @@ impl DrawerState {
             tab: DrawerTab::Overview,
             is_expanded: false,
             selected_container: None,
+            yaml: None,
         }
     }
 
@@ -54,17 +62,25 @@ impl DrawerState {
     }
 }
 
-/// Step 3 of spec 0007 adds `Yaml` between `Containers` and `Events`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DrawerTab {
     Overview,
     Containers,
+    Yaml,
     Events,
 }
 
-/// The tabs a drawer shows, in wireframe order. An event's own drawer has no events of its own.
+/// The tabs a drawer shows, in wireframe order. An event's own drawer has no events of its own,
+/// and a key the cluster crate cannot address has no YAML tab.
 pub(crate) fn drawer_tabs(key: &ResourceKey) -> &'static [DrawerTab] {
+    let has_yaml = object_ref(key).is_some();
     match key {
+        ResourceKey::Pod { .. } if has_yaml => &[
+            DrawerTab::Overview,
+            DrawerTab::Containers,
+            DrawerTab::Yaml,
+            DrawerTab::Events,
+        ],
         ResourceKey::Pod { .. } => &[
             DrawerTab::Overview,
             DrawerTab::Containers,
@@ -73,7 +89,14 @@ pub(crate) fn drawer_tabs(key: &ResourceKey) -> &'static [DrawerTab] {
         ResourceKey::Kind {
             kind: ResourceKind::Events,
             ..
+        } if has_yaml => &[DrawerTab::Overview, DrawerTab::Yaml],
+        ResourceKey::Kind {
+            kind: ResourceKind::Events,
+            ..
         } => &[DrawerTab::Overview],
+        ResourceKey::Node { .. } | ResourceKey::Kind { .. } if has_yaml => {
+            &[DrawerTab::Overview, DrawerTab::Yaml, DrawerTab::Events]
+        }
         ResourceKey::Node { .. } | ResourceKey::Kind { .. } => {
             &[DrawerTab::Overview, DrawerTab::Events]
         }
@@ -101,6 +124,7 @@ pub(crate) fn tab_titles(
             let title = match tab {
                 DrawerTab::Overview => "Overview".to_owned(),
                 DrawerTab::Containers => format!("Containers {containers}"),
+                DrawerTab::Yaml => "YAML".to_owned(),
                 DrawerTab::Events => events_title(events),
             };
             (tab, title.into())
@@ -134,6 +158,14 @@ pub(crate) fn drawer_tab_bar(
     Some(bar.into_any_element())
 }
 
+/// The YAML tab body: the view fills the drawer, and there is nothing while it is not created yet.
+pub(crate) fn yaml_body(state: &DrawerState) -> DrawerBody {
+    DrawerBody::Filling(match &state.yaml {
+        Some(view) => view.clone().into_any_element(),
+        None => div().into_any_element(),
+    })
+}
+
 /// The ⤢/⤡ button of every drawer.
 pub(crate) fn expand_toggle(state: &DrawerState, cx: &Context<AppShell>) -> ExpandToggle {
     ExpandToggle {
@@ -160,13 +192,21 @@ pub(crate) struct DrawerHeader {
     pub(crate) on_close: ClickHandler,
 }
 
-/// The shared frame: header, subtitle, optional tab bar, and a scrollable body. It is a
+/// What fills a drawer below its tab bar.
+pub(crate) enum DrawerBody {
+    /// Padded, and scrolled by the frame.
+    Scrolling(AnyElement),
+    /// Fills the rest with no padding; the content (the code editor) scrolls itself.
+    Filling(AnyElement),
+}
+
+/// The shared frame: header, subtitle, optional tab bar, and the body. It is a
 /// plain element laid over the workspace (the caller's container is `.relative()`), not
 /// the kit `Sheet`: that one covers the sidebar and takes focus from the table.
 pub(crate) fn drawer_frame(
     header: DrawerHeader,
     tabs: Option<AnyElement>,
-    body: AnyElement,
+    body: DrawerBody,
     width: Pixels,
     cx: &App,
 ) -> impl IntoElement {
@@ -185,15 +225,22 @@ pub(crate) fn drawer_frame(
         .occlude()
         .child(header_row(header, cx))
         .when_some(tabs, |this, tabs| this.child(tabs))
-        .child(
-            div()
+        .child(match body {
+            DrawerBody::Scrolling(body) => div()
                 .id("drawer-body")
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
                 .p_4()
-                .child(body),
-        )
+                .child(body)
+                .into_any_element(),
+            DrawerBody::Filling(body) => div()
+                .id("drawer-body")
+                .flex_1()
+                .min_h_0()
+                .child(body)
+                .into_any_element(),
+        })
 }
 
 fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
@@ -376,23 +423,33 @@ mod tests {
             namespace: Some("shop".to_owned()),
             name: "x".to_owned(),
         };
+        let with_events = [DrawerTab::Overview, DrawerTab::Yaml, DrawerTab::Events];
         assert_eq!(
             drawer_tabs(&pod),
             [
                 DrawerTab::Overview,
                 DrawerTab::Containers,
+                DrawerTab::Yaml,
                 DrawerTab::Events
             ]
         );
-        assert_eq!(drawer_tabs(&node), [DrawerTab::Overview, DrawerTab::Events]);
-        assert_eq!(
-            drawer_tabs(&kind(ResourceKind::Deployments)),
-            [DrawerTab::Overview, DrawerTab::Events]
-        );
+        assert_eq!(drawer_tabs(&node), with_events);
+        assert_eq!(drawer_tabs(&kind(ResourceKind::Deployments)), with_events);
         assert_eq!(
             drawer_tabs(&kind(ResourceKind::Events)),
-            [DrawerTab::Overview]
+            [DrawerTab::Overview, DrawerTab::Yaml]
         );
+    }
+
+    #[test]
+    fn drawer_tabs_omit_yaml_for_an_unaddressable_key() {
+        // A cluster-scoped kind never has a namespace, so the cluster crate rejects it.
+        let key = ResourceKey::Kind {
+            kind: ResourceKind::Namespaces,
+            namespace: Some("shop".to_owned()),
+            name: "x".to_owned(),
+        };
+        assert_eq!(drawer_tabs(&key), [DrawerTab::Overview, DrawerTab::Events]);
     }
 
     #[test]
@@ -411,13 +468,14 @@ mod tests {
         let tabs = [
             DrawerTab::Overview,
             DrawerTab::Containers,
+            DrawerTab::Yaml,
             DrawerTab::Events,
         ];
         let titles: Vec<String> = tab_titles(&tabs, 3, None)
             .into_iter()
             .map(|(_, title)| title.to_string())
             .collect();
-        assert_eq!(titles, ["Overview", "Containers 3", "Events"]);
+        assert_eq!(titles, ["Overview", "Containers 3", "YAML", "Events"]);
     }
 
     #[test]

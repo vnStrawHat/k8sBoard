@@ -18,9 +18,9 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::drawer::{
-    DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, drawer_frame, drawer_tab_bar,
-    drawer_tabs, expand_toggle, menu_button, section_title, shown_tab, tab_titles, truncated_text,
-    wide_detail_row,
+    DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, drawer_frame,
+    drawer_tab_bar, drawer_tabs, expand_toggle, menu_button, section_title, shown_tab, tab_titles,
+    truncated_text, wide_detail_row, yaml_body,
 };
 use crate::kind_row::{
     DAEMON_SET_KIND, DetailRow, KindCell, KindRow, PodOwner, STATEFUL_SET_KIND, owns_pod,
@@ -57,8 +57,11 @@ pub(crate) fn kind_drawer(
     let tabs = drawer_tabs(&key);
     let shown = shown_tab(tabs, state.tab);
     let body = match shown {
-        DrawerTab::Events => recent_events(events, cx),
-        DrawerTab::Overview | DrawerTab::Containers => overview(kind, row, live, now, cx),
+        DrawerTab::Events => DrawerBody::Scrolling(recent_events(events, cx)),
+        DrawerTab::Yaml => yaml_body(state),
+        DrawerTab::Overview | DrawerTab::Containers => {
+            DrawerBody::Scrolling(overview(kind, row, live, now, cx))
+        }
     };
     let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
     drawer_frame(header, tab_bar, body, state.width(), cx).into_any_element()

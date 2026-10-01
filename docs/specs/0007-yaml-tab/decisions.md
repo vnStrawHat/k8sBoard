@@ -46,6 +46,6 @@
 
 - **Editor size.** The kit editor documents a limit of about 50K lines. Real objects stay far below it (the API server caps an object near 1.5 MiB; the largest UAT node YAML is measured in the step 3 live check). Upgrade path: plain text or a truncation notice above the limit.
 - **Session identity.** `sync_yaml_view` compares only `ObjectRef`. This relies on the invariant that every context or namespace switch closes the drawer first (`start_session`, `set_namespace`); a future switch path must keep it.
-- **Large objects** (ConfigMaps near 1 MiB, nodes with many images) are parsed by tree-sitter on the main thread once per fetch. Measure on UAT (live check); upgrade path: plain text above a size limit.
+- **Large objects** (ConfigMaps near 1 MiB, nodes with many images) cost main-thread time in `replace_text` and layout once per fetch; the kit parses on the background executor (synchronous parse is bounded to 2 ms and skipped above 256 KiB). Measure on UAT (live check); upgrade path: plain text above a size limit.
 - **Refresh resets the scroll** to the top (`set_value`). Keeping the position needs the kit's scroll API.
 - `command`/`args` literals are not masked (open item 2).

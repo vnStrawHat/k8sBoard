@@ -3,11 +3,12 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Entity, IntoElement, ParentElement as _, Pixels, Styled as _, Window,
-    div, px,
+    AnyElement, App, Context, Entity, IntoElement, ParentElement as _, Pixels, Styled as _,
+    WeakEntity, Window, div, px,
 };
 
 use crate::age::format_age;
+use crate::app_shell::AppShell;
 use crate::cluster_session::ClusterSession;
 use crate::drawer::truncated_text;
 use crate::resource_actions::node_menu;
@@ -31,6 +32,8 @@ const FIXED_WIDTH: Pixels = px(180. + 200. + 130. + 100. + 120. + 60.);
 
 pub(crate) struct NodeTableDelegate {
     session: Option<Entity<ClusterSession>>,
+    /// The row menu's "View YAML" opens the drawer through the shell.
+    shell: WeakEntity<AppShell>,
     columns: Vec<Column>,
 }
 
@@ -49,9 +52,10 @@ fn columns(taints_width: Pixels) -> Vec<Column> {
 }
 
 impl NodeTableDelegate {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(shell: WeakEntity<AppShell>) -> Self {
         Self {
             session: None,
+            shell,
             columns: columns(TAINTS_MIN_WIDTH),
         }
     }
@@ -160,7 +164,7 @@ impl TableDelegate for NodeTableDelegate {
             return menu;
         };
         match live.nodes.items().get(row_ix) {
-            Some(node) => node_menu(menu, node, &live.access),
+            Some(node) => node_menu(menu, node, &live.access, &self.shell),
             None => menu,
         }
     }

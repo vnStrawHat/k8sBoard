@@ -34,7 +34,7 @@ impl LiveCluster {
 Each start is an uncached list plus watch on the API server ([decisions.md](decisions.md), cost model), so arrow-key navigation must not start one per row.
 
 ```rust
-const EVENT_SUBJECT_DELAY: Duration = Duration::from_millis(250);
+const DRAWER_SUBJECT_DELAY: Duration = Duration::from_millis(250); // drawer.rs since spec 0007; also the first YAML fetch
 struct AppShell { /* … */ event_subject_task: Option<Task<()>> } // app_shell.rs; replaced on every change; dropping cancels it
 // object_events.rs, pure and unit-tested:
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,7 +53,7 @@ pub(crate) fn subject_change(running: Option<&InvolvedObject>, next: Option<Invo
 
 - `Keep`: nothing. (While a start is pending, `running` is `None`, so a quick A → B → A restarts A once, after the delay.)
 - `Stop`: `event_subject_task = None`, then `set_event_subject(None)` at once (stopping is free).
-- `Start(subject)`: `set_event_subject(None)` at once, then `event_subject_task = Some(cx.spawn(..))` (replacing, and so cancelling, a pending one), which waits `cx.background_executor().timer(EVENT_SUBJECT_DELAY)`, then in one `update` sets `event_subject_task = None` and calls `set_event_subject(Some(subject))`.
+- `Start(subject)`: `set_event_subject(None)` at once, then `event_subject_task = Some(cx.spawn(..))` (replacing, and so cancelling, a pending one), which waits `cx.background_executor().timer(DRAWER_SUBJECT_DELAY)`, then in one `update` sets `event_subject_task = None` and calls `set_event_subject(Some(subject))`.
 
 Also:
 

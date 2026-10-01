@@ -8,6 +8,7 @@ use gpui_kit::{
 };
 
 use crate::age::format_age;
+use crate::app_shell::AppShell;
 use crate::cluster_session::ClusterSession;
 use crate::log_dock::LogDock;
 use crate::resource_actions::pod_menu;
@@ -29,6 +30,8 @@ const FIXED_WIDTH: Pixels = px(170. + 70. + 80. + 180. + 70.);
 pub(crate) struct PodTableDelegate {
     session: Option<Entity<ClusterSession>>,
     log_dock: WeakEntity<LogDock>,
+    /// The row menu's "View YAML" opens the drawer through the shell.
+    shell: WeakEntity<AppShell>,
     columns: Vec<Column>,
 }
 
@@ -48,10 +51,11 @@ fn columns(name_width: Pixels) -> Vec<Column> {
 }
 
 impl PodTableDelegate {
-    pub(crate) fn new(log_dock: WeakEntity<LogDock>) -> Self {
+    pub(crate) fn new(log_dock: WeakEntity<LogDock>, shell: WeakEntity<AppShell>) -> Self {
         Self {
             session: None,
             log_dock,
+            shell,
             columns: columns(NAME_MIN_WIDTH),
         }
     }
@@ -171,7 +175,7 @@ impl TableDelegate for PodTableDelegate {
             return menu;
         };
         match live.pods.items().get(row_ix) {
-            Some(pod) => pod_menu(menu, pod, live, &self.log_dock),
+            Some(pod) => pod_menu(menu, pod, live, &self.log_dock, &self.shell),
             None => menu,
         }
     }

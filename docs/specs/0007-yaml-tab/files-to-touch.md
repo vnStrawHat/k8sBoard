@@ -10,7 +10,7 @@
 | 1 | `crates/cluster/Cargo.toml` | `serde_json.workspace = true`, `serde-saphyr.workspace = true` |
 | 3 | root `Cargo.toml` | `gpui-kit = { version = "0.7", features = ["tree-sitter-yaml"] }` |
 
-Step 1 must not add a `[[package]]` to `Cargo.lock` (check `git diff Cargo.lock`: only dependency edges change). Step 3 adds exactly four packages: `tree-sitter`, `tree-sitter-yaml`, `tree-sitter-json`, `tree-sitter-language`; all compile C through `cc` (already used by `ring`). Any other new package is a deviation to report.
+Step 1 must not add a `[[package]]` to `Cargo.lock` (check `git diff Cargo.lock`: only dependency edges change). Step 3 adds exactly five packages: four tree-sitter crates (`tree-sitter`, `tree-sitter-yaml`, `tree-sitter-json`, `tree-sitter-language`; all compile C through `cc`, already used by `ring`) and the transitive `streaming-iterator`. Any other new package is a deviation to report.
 
 ## `crates/cluster` (step 1)
 

@@ -42,7 +42,7 @@
 | W5-2 | CPU and Memory bar columns | Missing | — | 0010 |
 | W5-3 | Summary chips as filters, version-skew highlight, Columns ▾ | Missing | — | 0009 |
 | W5-4 | Node drawer: conditions, allocatable used, system info | Partial | 0003 (basic rows) | 0008 (spec data), 0010 (usage) |
-| W5-5 | Menu: node shell, Cordon, Drain…, Edit taints/labels, View pods on node, View YAML, Copy name | Partial | shell/cordon/drain disabled; Copy name | View pods on node → 0009; View YAML → 0007; rest → 0034, 0037 |
+| W5-5 | Menu: node shell, Cordon, Drain…, Edit taints/labels, View pods on node, View YAML, Copy name | Partial | shell/cordon/drain disabled; Copy name | View pods on node → 0009; View YAML done (0007); rest → 0034, 0037 |
 | W5-6 | Multi-select + selection bar (Cordon, Uncordon, Drain…) | Missing | — | 0009 (select), 0034 (actions) |
 | W5-7 | Dock tabs "node shell (debug pod)" and "logs · kubelet" | Missing | — | 0037, 0019 |
 | W6-1 | Drain dialog: 3 steps, kubectl-flag options with consequences, grace, timeout | Missing | — | 0034 |
@@ -53,7 +53,7 @@
 
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
-| W10-1 | Read-only YAML view (managedFields and status hidden) | Missing | 0007 |
+| W10-1 | Read-only YAML view (managedFields hidden, status kept) | Done (0007) | — |
 | W10-2 | Editor (GPUI Kit Code Editor, Tree-sitter, LSP with cluster schema) | Missing | 0031 (LSP: decision C6) |
 | W10-3 | Diff vs cluster (default), semantic change list, checks (dry-run, quota, rollout impact) | Missing | 0031 |
 | W10-4 | Revision history tab | Missing | read-only list 0012; diff/restore 0031 |

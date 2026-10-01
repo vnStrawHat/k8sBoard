@@ -1,6 +1,8 @@
 //! The Kubernetes kinds that have an explorer screen, and the data that differs per kind.
 
-use cluster::{AccessCheck, ClusterConnection, EventFilter, NamespaceScope, WatchUpdate};
+use cluster::{
+    AccessCheck, ClusterConnection, EventFilter, NamespaceScope, ObjectKind, WatchUpdate,
+};
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 
@@ -63,7 +65,7 @@ const AGE_COLUMN: KindColumn = column("Age", 70., Align::Right);
 struct KindSpec {
     label: &'static str,
     /// The Kubernetes `kind`, as an event's `involvedObject.kind` spells it.
-    object_kind: &'static str,
+    object: ObjectKind,
     name_column: NameColumn,
     /// Whether the drawer has a Labels section.
     has_labels: bool,
@@ -80,7 +82,7 @@ struct KindSpec {
 
 static NAMESPACES: KindSpec = KindSpec {
     label: "Namespaces",
-    object_kind: "Namespace",
+    object: ObjectKind::Namespace,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "namespace",
@@ -96,7 +98,7 @@ static NAMESPACES: KindSpec = KindSpec {
 
 static EVENTS: KindSpec = KindSpec {
     label: "Events",
-    object_kind: "Event",
+    object: ObjectKind::Event,
     name_column: NameColumn::Hidden { flexible: 3 },
     has_labels: false,
     singular: "event",
@@ -119,7 +121,7 @@ static EVENTS: KindSpec = KindSpec {
 
 static DEPLOYMENTS: KindSpec = KindSpec {
     label: "Deployments",
-    object_kind: "Deployment",
+    object: ObjectKind::Deployment,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "deployment",
@@ -141,7 +143,7 @@ static DEPLOYMENTS: KindSpec = KindSpec {
 
 static STATEFUL_SETS: KindSpec = KindSpec {
     label: "StatefulSets",
-    object_kind: "StatefulSet",
+    object: ObjectKind::StatefulSet,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "statefulset",
@@ -162,7 +164,7 @@ static STATEFUL_SETS: KindSpec = KindSpec {
 
 static DAEMON_SETS: KindSpec = KindSpec {
     label: "DaemonSets",
-    object_kind: "DaemonSet",
+    object: ObjectKind::DaemonSet,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "daemonset",
@@ -186,7 +188,7 @@ static DAEMON_SETS: KindSpec = KindSpec {
 
 static REPLICA_SETS: KindSpec = KindSpec {
     label: "ReplicaSets",
-    object_kind: "ReplicaSet",
+    object: ObjectKind::ReplicaSet,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "replicaset",
@@ -209,7 +211,7 @@ static REPLICA_SETS: KindSpec = KindSpec {
 
 static JOBS: KindSpec = KindSpec {
     label: "Jobs",
-    object_kind: "Job",
+    object: ObjectKind::Job,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "job",
@@ -230,7 +232,7 @@ static JOBS: KindSpec = KindSpec {
 
 static CRON_JOBS: KindSpec = KindSpec {
     label: "CronJobs",
-    object_kind: "CronJob",
+    object: ObjectKind::CronJob,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "cronjob",
@@ -252,7 +254,7 @@ static CRON_JOBS: KindSpec = KindSpec {
 
 static SERVICES: KindSpec = KindSpec {
     label: "Services",
-    object_kind: "Service",
+    object: ObjectKind::Service,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "service",
@@ -274,7 +276,7 @@ static SERVICES: KindSpec = KindSpec {
 
 static INGRESSES: KindSpec = KindSpec {
     label: "Ingresses",
-    object_kind: "Ingress",
+    object: ObjectKind::Ingress,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "ingress",
@@ -296,7 +298,7 @@ static INGRESSES: KindSpec = KindSpec {
 
 static CONFIG_MAPS: KindSpec = KindSpec {
     label: "ConfigMaps",
-    object_kind: "ConfigMap",
+    object: ObjectKind::ConfigMap,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "configmap",
@@ -387,8 +389,13 @@ impl ResourceKind {
     }
 
     /// The Kubernetes `kind`, such as `Deployment`.
+    pub(crate) fn object(self) -> ObjectKind {
+        self.spec().object
+    }
+
+    /// The Kubernetes `kind` name, as an event's `involvedObject.kind` spells it.
     pub(crate) fn object_kind(self) -> &'static str {
-        self.spec().object_kind
+        self.object().name()
     }
 
     pub(crate) fn name_column(self) -> NameColumn {

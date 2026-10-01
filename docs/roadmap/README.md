@@ -32,7 +32,8 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 | Logs dock (W8/W8b) | Partial | 0004 | 0019 |
 | Kind Explorer (W7): 12 of 29 kinds live | Partial | 0003, 0005 | 0006, 0012–0018 |
 | Events screen and drawer events | Planned(0006) | 0006 | — |
-| Drawer YAML and Monitor tabs (W4c) | Missing | — | 0007, 0010, 0011 |
+| Drawer YAML tab (W4c) | Done | 0007 | — |
+| Drawer Monitor tab (W4c) | Missing | — | 0010, 0011 |
 | Overview (W3), Issues, Topology (W11) | Missing | — | 0020, 0021, 0022 |
 | Settings (W2), multi-cluster (W1), env colors | Missing | — | 0024–0027 |
 | Keyboard map, command palette (W9) | Missing | — | 0028, 0029 |

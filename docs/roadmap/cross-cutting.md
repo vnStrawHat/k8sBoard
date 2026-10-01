@@ -6,7 +6,7 @@
 
 | ID | Topic | Proposed default | First consumer |
 |---|---|---|---|
-| C1 | **Secret handling** (Secrets kind, YAML view, Helm values and manifests, env literals, `last-applied-configuration`, TLS parsing) | Summaries never keep values (names, sizes, type only). Values are fetched per object on an explicit action, held only in drawer state, masked by default, revealed for 30 s, then dropped. Copy works without reveal. Nothing secret is traced, logged, persisted, or put in the audit log. YAML of a Secret and Helm manifests mask `data`/`stringData`; Helm values are masked until revealed. Pod Env/Mounts show names and sources, not literal values. "Reveal all" is per drawer, not per list. Screenshot runs never reveal. Open: auto-clear the clipboard after N s? | 0007 |
+| C1 | **Secret handling** (Secrets kind, YAML view, Helm values and manifests, env literals, `last-applied-configuration`, TLS parsing) | Summaries never keep values (names, sizes, type only). Values are fetched per object on an explicit action, held only in drawer state, masked by default, revealed for 30 s, then dropped. Copy works without reveal. Nothing secret is traced, logged, persisted, or put in the audit log. YAML of a Secret and Helm manifests mask `data`/`stringData`; Helm values are masked until revealed. Pod Env/Mounts show names and sources, not literal values. "Reveal all" is per drawer, not per list. Screenshot runs never reveal. Open: auto-clear the clipboard after N s? 0007 masks Secret `data`/`stringData`, manifest annotations (last-applied, kapp), and env literals in the cluster crate; env literals show only through a per-view "Env values" toggle (no 30 s timer); no Secret reveal in the YAML view. | 0007 |
 | C2 | **Persistence location** of the shipped app (registry, UI state, presets, audit log) | OS config dir (`%APPDATA%\k8sBoard`, `~/.config/k8sboard`, `~/Library/Application Support/k8sBoard`). A `--config-dir <path>` flag (and env var) overrides it. **Flag:** the "work only in the project folder" rule binds agents, not the shipped app, but agents, coder-lite, and ui-verifier must always run the app with `--config-dir .tmp/...` so no run writes outside the project. Never store tokens or key data; only paths and context names | 0024 |
 | C3 | **Enabling mutations** | The project rule needs user approval per feature. Ask once for the 0030 framework, then per spec (0031–0038). The kube `ws` feature is enabled only by 0035/0036. The 0001 read-only grep becomes an allow-list of named mutating call sites | 0030 |
 | C4 | **Multi-cluster model** | One `ClusterSession` per selected cluster, each with its own watches; unselected clusters get a cheap health poll only (`/version` + node readiness every 60 s, while the switcher is open or every 5 min). Issue counts only for live sessions | 0026 |
@@ -24,7 +24,7 @@
 
 | Need | Candidates (to verify by advisor) | Spec |
 |---|---|---|
-| YAML serialization | `serde_yaml` is unmaintained; maintained forks (e.g. `serde_yaml_ng`, `serde_norway`) or GPUI Kit facilities | 0007 |
+| YAML serialization | `serde-saphyr` 1.3 (chosen in 0007; `serde_json` is a direct dependency of the cluster crate) | 0007 |
 | Charts | GPUI Kit chart (stack table says it exists; verify ref lines, crosshair, gaps) or a custom `canvas` | 0010 |
 | Cron schedules + time zones | a cron parser crate; `jiff` time-zone features (0004 open item 3) | 0012 |
 | x509 not-after | an x509 parser crate | 0016 |

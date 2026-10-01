@@ -16,7 +16,7 @@
 1. **WHY box** first, when `pod_diagnosis(pod, events, now)` is Some ([pod-diagnosis.md](pod-diagnosis.md)); `events` = `live.events_of(&subject)` items when Ready. `gpui_kit::component::Alert::error` (Bad) or `Alert::warning` (Warn), `.title("WHY · CONTAINER {name}")` or `"WHY · POD"`, message = text. `Alert` has no children, so for a container the `Open container {name} →` link (theme `link` color, calls `open_container(name)`) is a **sibling** right under it, both in one `v_flex`. No hardcoded colors.
 2. **Pod** rows: Node → `link_text` to `ResourceKey::Node` ("—" when unscheduled); Pod IP; QoS class; Service account (plain text; the ServiceAccounts screen is 0015); Controlled by → `link_text` to `of_object(kind, Some(ns), name)`, plain `{kind}/{name}` when `None`.
 3. **Conditions** chips as today; a chip that is not true gets a tooltip `{reason}: {message}` (either part may be missing; no tooltip when both are).
-4. **Containers** summary unchanged.
+4. **Containers** summary unchanged. Since 0007 the Containers arm must wrap its content in `DrawerBody::Scrolling(..)`.
 
 ## Containers tab
 

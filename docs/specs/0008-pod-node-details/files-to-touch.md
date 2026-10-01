@@ -26,7 +26,7 @@ No changes. No new `[[package]]` in `Cargo.lock` in any step (`git diff Cargo.lo
 | 2 | `src/pod_diagnosis.rs` (new) + `pod_diagnosis_tests.rs` | [pod-diagnosis.md](pod-diagnosis.md) |
 | 2 | `src/status_tone.rs` | `is_bad_reason` → `pub(crate)` |
 | 2 | `src/container_detail.rs` (new) + `container_detail_tests.rs` | container detail header, sub-tab bar, Info/Env/Mounts bodies, text builders, `SourceRow`, `env_rows`, `mount_rows`, `resource_label` |
-| 2 | `src/pod_drawer.rs` (+ tests) | WHY box, Overview links and condition tooltips; `container_detail` moves out; Containers tab calls `container_detail` |
+| 2 | `src/pod_drawer.rs` (+ tests) | WHY box, Overview links and condition tooltips; `container_detail` moves out; Containers tab calls `container_detail` (wrap in `DrawerBody::Scrolling(..)` since 0007) |
 | 2 | `src/drawer.rs` | `ContainerTab`, `DrawerState.container_tab`; receives `link_text`, `port_row`, `chips` |
 | 2 | `src/kind_drawer.rs` | uses the moved `link_text`, `port_row`, `chips` |
 | 2 | `src/table_selection.rs` (+ tests) | `ResourceKey::of_object` |

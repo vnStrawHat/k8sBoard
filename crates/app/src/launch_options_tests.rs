@@ -207,3 +207,22 @@ fn every_kind_has_an_events_screen() {
     }
     assert!(parse(&["--screen", "pods-events"]).is_err());
 }
+
+#[test]
+fn yaml_screens_open_the_yaml_tab() {
+    let cases = [
+        ("pod-yaml", LaunchScreen::PodDrawer(DrawerTab::Yaml)),
+        ("node-yaml", LaunchScreen::NodeDrawer(DrawerTab::Yaml)),
+        (
+            "deployments-yaml",
+            LaunchScreen::KindDrawer(ResourceKind::Deployments, DrawerTab::Yaml),
+        ),
+    ];
+    for (name, expected) in cases {
+        let launch = run_options(&["--screen", name]).screen;
+        assert_eq!(launch, expected, "{name}");
+        assert!(launch.has_drawer(), "{name}");
+        assert_eq!(launch.drawer_tab(), Some(DrawerTab::Yaml), "{name}");
+    }
+    assert!(parse(&["--screen", "pods-yaml"]).is_err());
+}

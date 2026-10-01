@@ -23,7 +23,7 @@ pub(crate) fn node_menu(menu: PopupMenu, node: &NodeSummary, access: &AccessStat
 
 - No container submenus: they would only lead to disabled items.
 - No Edit/Restart/Evict/Delete/Attach (non-goal).
-- View YAML is deferred ([README](README.md) non-goals).
+- View YAML (spec 0007) opens the drawer on its YAML tab and is always enabled.
 
 ## Node menu (read-only subset of W5)
 
