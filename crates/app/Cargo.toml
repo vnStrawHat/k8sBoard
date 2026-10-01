@@ -1,0 +1,22 @@
+[package]
+name = "k8sboard"
+description = "k8sBoard desktop application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "k8sboard"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+k8sboard-cluster = { path = "../cluster" }
+
+[lints]
+workspace = true

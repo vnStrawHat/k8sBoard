@@ -1,0 +1,6 @@
+/target/
+/.tmp/
+/.cargo-home/
+/monitor-uat-readonly.yml
+*.kubeconfig
+/.claude/settings.local.json

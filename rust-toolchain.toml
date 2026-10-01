@@ -1,0 +1,5 @@
+# Must match `rust-version` in Cargo.toml. Pinning keeps new clippy lints
+# from breaking `-D warnings` when a newer toolchain is released.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]
