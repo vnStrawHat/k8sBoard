@@ -1,0 +1,9 @@
+{
+  "enabledPlugins": { "ponytail@ponytail": true },
+  "env": {
+    "CARGO_HOME": "D:/TrungKFC-Research/Rust/k8sBoard/.cargo-home",
+    "TMP": "D:/TrungKFC-Research/Rust/k8sBoard/.tmp",
+    "TEMP": "D:/TrungKFC-Research/Rust/k8sBoard/.tmp",
+    "TMPDIR": "D:/TrungKFC-Research/Rust/k8sBoard/.tmp"
+  }
+}
