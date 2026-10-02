@@ -1,0 +1,59 @@
+# 0035 · Port Forwarding page, Forward buttons, menus, dialogs
+
+[Back to index](README.md) · Steps 2–3 · Modules: `port_forward_page.rs` (new), `app_shell.rs` (`Screen::PortForwarding`), `navigation.rs`, `status_bar.rs`, `drawer.rs` (`port_row`), `container_detail.rs`, `kind_drawer.rs`, `resource_actions.rs`, `keyboard_navigation.rs` (0028), `screenshot.rs`, `launch_options.rs`. Wireframes: W7 Port Forwarding, W4b note 4, W7 Services/Deployments/StatefulSets, status bar.
+
+## Page (`Screen::PortForwarding`, Network › Port Forwarding)
+
+Not a Kubernetes kind (W7 note): a local list rendered with the 0009 table toolkit from `PortForwards`, not a `ResourceKind`.
+
+| Part | Content |
+|---|---|
+| Header | `Port Forwarding` + muted `{total} ({active} active)`; buttons `+ New forward`, `Stop all` (disabled with no running forward) |
+| Columns | Target (`{ns}/{pod|svc|deploy|sts}/{name}`), Ports (`{remote} → localhost:{local}`, local `—` before bind), Status (theme token pill, decision texts in forward-model.md), Cluster (env badge + label), Uptime (`2h 14m`, `—` when not Active), action |
+| Action cell | Active / Paused / Reconnecting / Starting → `■ Stop`; Failed → `↻ Retry`; Stopped preset → `▶ Start` (W7 rows) |
+| Empty state | `No port forwards. Use Forward next to a port, or + New forward.` |
+| Sort / filter | 0009 toolkit: filter text over Target and Cluster; default sort: running first, then target |
+
+Sidebar item count = running forwards (W7 sidebar `3`); hidden when 0.
+
+## Drawer (W7 "pod/postgres-0 · 5432")
+
+- Title `{target} · {remote}`; status pill; meta `{ns} · {cluster} · since {HH:MM}`.
+- ⋯ menu (W7 order): `Stop forward` (Del), `Restart`, `Open in browser`, `Copy local address`, `Change local port…`, `Save as preset`, `Go to target` (⏎), separator, `Remove preset…` (danger; presets only). Stop-type items follow the state; Restart/Start-type items read the gate (forward-model.md step 1–3) and show its reason when disabled.
+- Section **Forward**: Target (`pod/{pod} · container {c}` when known), Remote port `{n}/TCP`, Local address `127.0.0.1:{n}`, Bind `localhost only`, Auto-reconnect `on · up to 5 tries`.
+- Section **Traffic**: Open connections, Received, Sent (binary units, `182 MB`).
+- Section **Recent events**: newest first, `HH:MM` + text, success/warning tokens; e.g. `reconnected after pod restart`, `connection lost: pod deleted`, `started from drawer of postgres-0`.
+- Go to target: `reveal(ResourceKey)` in that cluster; disabled `Open {cluster} first` when not viewed.
+
+## Forward buttons (W4b note 4, W7 Services)
+
+- `drawer::port_row` gets a state: `Offer { on_click }`, `Live { local, on_stop }`, `Disabled { reason }`. Live renders `● localhost:{n} · Stop` in the success token (W4b), click stops that forward.
+- Live match = same cluster, namespace, target, and remote port as a running forward (`PortForwards::running_for`).
+- Pod container ports (W4b, 0008 `container_detail.rs`) → `ForwardTarget::Pod`, remote = container port. Service ports (W7 drawer) → `Service`, remote = the Service port. UDP ports → `Disabled("UDP ports cannot be forwarded")`. ExternalName or selector-less Services → `Disabled("Forward a pod: this Service selects no pods")`.
+- Enabled click → `start_forward(spec with LocalPort::Auto, Trigger::Pointer)`.
+
+## Menus and key F
+
+| Where | Item |
+|---|---|
+| Pod row / drawer ⋯ (W4) | `Port-forward ▸`: one item per declared TCP container port, `{container} · {name} {port}/TCP` with MAIN/SIDECAR tag (W4 note 2); a single port starts directly; none declared → `Port-forward…` opens New forward prefilled with the pod |
+| Deployment / StatefulSet ⋯ (W7) | `Port-forward ▸`: template container ports → `Deployment` / `StatefulSet` target |
+| Service ⋯ (W7) | `Port-forward ▸`: Service ports → `Service` target |
+| F (0028 `PortForward`) | cursor row: one port → start; several or none → New forward dialog prefilled |
+| Palette `>` Port-forward (0029) | same as F |
+
+All read `action_availability(PortForward, guard)` (0030 order: shipped → checking → `Not permitted: get and create pods/portforward` → `{cluster} is read-only`). `port_forward_reason` and `READ_ONLY_FEATURE_REASON` go away.
+
+## Dialogs (kit `Dialog`, width 420)
+
+- **New forward**: Cluster (select of viewed clusters, default the primary; env badge), Namespace (input, default the single scoped namespace), Target (input `pod/NAME`, `svc/NAME`, `deploy/NAME`, `sts/NAME`; pure `parse_target`), Remote port (1–65535), Local port (empty = auto). `Forward` runs `start_forward`; invalid fields show inline errors and keep the dialog.
+- **Change local port…**: one number input, preset value or current; `Apply` validates 1–65535 and decision 19; restarts a running forward (guarded).
+- **Remove preset…**: `Remove the preset {target}:{port}?`, `Cancel` / `Remove` (danger), click only.
+
+## Status bar (wireframe `⇄ 3 port-forwards`)
+
+`status_bar.rs`: `⇄ {n} port-forward(s)` when `n ≥ 1`; click → `Screen::PortForwarding`. Counts running forwards of every cluster.
+
+## Screenshot (`--screen port-forwards`, `screenshot` feature only)
+
+Fills `PortForwards` with the five W7 fixture rows (no subscription, no request): Active ×2, Reconnecting 2/5, `Port 3000 in use`, `Stopped · preset`, across two fixture cluster labels; opens the drawer of the first row with fixture traffic and three events. Listed in `USAGE`.

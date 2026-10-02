@@ -26,6 +26,7 @@ impl ClusterConnection {
 - `ShellInput` and `ShellUpdate` have **no derived `Debug`**: the manual impl prints `Bytes(12 bytes)`, `Output(4096 bytes)` (C1; AC 7).
 - `ExecPermit`: the only non-test constructor is `AccessReport::exec_permit(&self) -> Option<ExecPermit>` in `access_review.rs`, `Some` only when both `GetPodExec` and `CreatePodExec` are allowed. `#[cfg(test)] ExecPermit::for_tests()` for transport tests. The app cannot open a shell without a report that allows it.
 - No kube or k8s-openapi type in a public signature (0009 AC 3).
+- **Kill switch first**: before anything else `pod_shell` reads the connection's 0030 `WritePolicy`; `Blocked` (debug build without `K8SBOARD_ALLOW_WRITES=1`) yields one `ShellUpdate::Failed(ClusterError::Rendered { message })` with the 0030 `WritesBlocked` text and ends, with zero requests. Exec can change anything in a container, so the first real exec needs the user's approval like a write (C3).
 - Open: `Api::<Pod>::namespaced(..).exec(pod, argv(shell), &AttachParams::interactive_tty().container(c))` inside `connection.run(SHELL_ACTION, ..)`: one HTTP `GET` with a WebSocket upgrade (no POST). Then `Started`, then the initial `Resize(request.size)`.
 - **Upgrade errors (mandatory mapping)**: `kube::Error::UpgradeConnection(UpgradeConnectionError::ProtocolSwitch(code))` carries no `Status` body, so `fn upgrade_error(code: StatusCode, context) -> ClusterError` uses fixed text:
 

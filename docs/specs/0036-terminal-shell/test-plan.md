@@ -17,6 +17,7 @@
 | 1 | same | `upgrade_unauthorized_and_not_found_map_to_typed_errors` | 401 → `Unauthorized`; 404 → `Api { code: 404 }` |
 | 1 | same | `shell_debug_prints_byte_counts_only` | `format!("{:?}", ShellInput::Bytes(b"secret".to_vec()))` = `Bytes(6 bytes)`; same for `Output` |
 | 1 | `access_review.rs` | `exec_permit_needs_get_and_create` | both allowed → `Some`; either denied or missing → `None` |
+| 1 | `pod_shell_tests.rs` | `blocked_policy_sends_no_exec` | `WritePolicy::Blocked` → one `Failed` with the `WritesBlocked` text, then the stream ends; the `FakeApi` records zero requests |
 
 ## Terminal core (`terminal_session_tests.rs`, `terminal_input.rs`, `terminal_element.rs`)
 
