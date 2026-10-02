@@ -337,6 +337,18 @@ pub(crate) enum PodOwner {
     Node { name: String },
 }
 
+impl PodOwner {
+    /// The namespace of a workload; `None` for a node.
+    pub(crate) fn namespace(&self) -> Option<&str> {
+        match self {
+            Self::Controller { namespace, .. } | Self::Deployment { namespace, .. } => {
+                Some(namespace)
+            }
+            Self::Node { .. } => None,
+        }
+    }
+}
+
 /// The characters of a pod-template hash: Kubernetes `SafeEncodeString` drops vowels, `0`,
 /// `1`, `3`, and a few lookalikes.
 const POD_TEMPLATE_HASH_ALPHABET: &str = "bcdfghjklmnpqrstvwxz2456789";

@@ -30,7 +30,7 @@ const LEAVE_GRACE: Duration = Duration::from_secs(10);
 ```
 
 - A pod tab has exactly one `TabStream` (SourceId 0) and no prefix column; Previous, picker, and status behave as in 0004.
-- `restart_stream` (Reconnect, Previous, container change) drops every stream, clears buffer, streams, slots, and staging, re-runs `sync_members` from an empty member list, and arms `Staging`.
+- `restart_stream` (Reconnect, Previous, container change) drops every stream, clears buffer, streams, slots, and staging, re-runs `sync_members` from an empty member list. `Staging` is armed lazily, by the first sync that admits a pod while no stream exists (so a late pods snapshot still gets the 1000-line tail).
 
 ## Membership sync (workload only)
 

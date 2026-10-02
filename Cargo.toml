@@ -29,6 +29,8 @@ pem = "3"
 zeroize = "1"
 flate2 = "1"
 base64 = "0.22"
+# 1.13.x is already locked through tracing-subscriber env-filter.
+regex = "1"
 # oneterm-vt = { git = "https://github.com/vnStrawHat/OneTerm", rev = "<pin a commit sha>", default-features = false }  # terminal engine for pod/node shell; replaces alacritty_terminal
 
 [workspace.lints.rust]

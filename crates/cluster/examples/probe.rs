@@ -958,6 +958,7 @@ async fn logs_for(
         pod: pod.name.clone(),
         container: container.name.clone(),
         source: LogSource::Current,
+        tail_lines: 1000,
     }));
     let mut stats = LogStats::default();
     let mut is_ended = false;

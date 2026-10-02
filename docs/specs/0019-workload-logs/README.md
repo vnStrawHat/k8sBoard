@@ -18,10 +18,10 @@ Kubelet/node logs (decision 24); Pop out; CronJob "View logs of last job"; Shell
 
 | Step | Scope | ACs |
 |---|---|---|
-| 1 | `log_level.rs`, `line_matcher.rs`, `log_json.rs`, `log_rows.rs`, buffer view, toolbar controls, Cargo edges | 1–5, 8 |
+| 1 | `log_level.rs`, `line_matcher.rs`, `log_json.rs`, `log_rows.rs`, buffer view, toolbar controls, Cargo edges (`LogBuffer::revision` and `LineTime::Rfc3339` move to step 3) | 1–5, 8 |
 | 2a | `log_target.rs`, `log_workload.rs`, `LogRequest.tail_lines`, multi-stream `LogTab`, merge, stream budget, rejoin, status/tone, prefixes, `open_workload_logs`, `kind_menu` item | 1–6, 8 |
 | 2b | workload container picker, legend, `selected_log_target` + `NoLogTarget`, `logs-workload` launch screen and screenshot | 1–8 |
-| 3 | `LogLayout`, histogram (`log_volume.rs`), Export (`log_export.rs`), "+ ▾", tab reorder, container Logs sub-tab | 1–8 |
+| 3 | `LogLayout`, histogram (`log_volume.rs`), Export (`log_export.rs`), "+ ▾", tab reorder, container Logs sub-tab, plus the pieces deferred from 1 and 2a: `LogBuffer::revision`, `LineTime::Rfc3339`, `ContainerChoice` with `PodTarget.choice`, `LogTarget::of_container`, `TabStream.full_prefix` | 1–8 |
 
 ## Files
 
@@ -54,3 +54,4 @@ Kubelet/node logs (decision 24); Pop out; CronJob "View logs of last job"; Shell
 3. **Buffer fairness ceiling:** one 10k-line buffer per tab; a chatty pod can evict a quiet pod's lines. Upgrade: per-source quotas.
 4. Kubelet logs: revisit on ≥ 1.30 with `NodeLogQuery` + `enableSystemLogQuery` on; needs a probe and a fixed path allow-list like 0011.
 5. Rejoin needs a snapshot without the pod; a StatefulSet pod recreated between two pods-watch batches keeps its ended stream until Reconnect (no pod UID in `PodSummary`).
+6. "Ended" members (a selected container the pod lacks, or a stream the server closed) stay members and keep a pod slot until the pod leaves the list or Reconnect; only leavers free a slot after their grace.

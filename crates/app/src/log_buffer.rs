@@ -1,29 +1,77 @@
-//! The bounded line store behind one log tab: caps, filter, and match ranges. No GPUI types.
+//! The bounded line store behind one log tab: caps, view (matcher and levels), and levels per
+//! line. The only GPUI type is `SharedString`, a plain string.
 
 use std::collections::VecDeque;
-use std::ops::Range;
 
 use cluster::LogLine;
+use gpui_kit::SharedString;
+
+use crate::line_matcher::LineMatcher;
+use crate::log_level::{LevelSet, LogLevel, detect_level};
 
 const MAX_LINES: usize = 10_000;
 /// Sum of `text.len()` over the kept lines.
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 
+/// An index into the tab's source table (one source per pod container stream).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct SourceId(pub(crate) u16);
+
+pub(crate) struct SourcedLine {
+    pub(crate) source: SourceId,
+    pub(crate) line: LogLine,
+}
+
+pub(crate) struct BufferedLine {
+    pub(crate) source: SourceId,
+    pub(crate) level: Option<LogLevel>,
+    pub(crate) line: LogLine,
+}
+
+/// What the tab shows: lines that match the filter and are not at a hidden level.
+#[derive(Default)]
+pub(crate) struct LineView {
+    pub(crate) matcher: Option<LineMatcher>,
+    pub(crate) hidden_levels: LevelSet,
+}
+
+impl LineView {
+    /// Whether the view can hide a line.
+    pub(crate) fn is_filtering(&self) -> bool {
+        self.matcher.is_some() || !self.hidden_levels.hides_none()
+    }
+
+    /// A line without a detected level counts as INFO (decision 15).
+    fn shows(&self, line: &BufferedLine) -> bool {
+        let level = line.level.unwrap_or(LogLevel::Info);
+        !self.hidden_levels.is_hidden(level)
+            && self
+                .matcher
+                .as_ref()
+                .is_none_or(|matcher| matcher.is_match(&line.line.text))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LineTime {
+    Hidden,
+    Clock,
+}
+
 pub(crate) struct LogBuffer {
-    lines: VecDeque<LogLine>,
+    lines: VecDeque<BufferedLine>,
     bytes: usize,
     /// The sequence number of `lines[0]`. Every pushed line gets the next one, so a line's
     /// sequence number never changes while it is kept.
     first_seq: u64,
     /// Lines evicted since the last clear.
     dropped: u64,
-    filter: Option<LineFilter>,
-}
-
-struct LineFilter {
-    needle: String,
-    /// Sequence numbers of the matching lines, ascending.
-    matches: VecDeque<u64>,
+    view: LineView,
+    /// Sequence numbers of the visible lines, ascending; `None` exactly when the view hides
+    /// nothing.
+    visible: Option<VecDeque<u64>>,
+    /// The level of the last pushed line per source, for indented continuation lines.
+    last_levels: Vec<Option<LogLevel>>,
 }
 
 /// How the visible list changed, applied to the scroller as `splice(0..removed_visible, 0)`
@@ -41,24 +89,28 @@ impl LogBuffer {
             bytes: 0,
             first_seq: 0,
             dropped: 0,
-            filter: None,
+            view: LineView::default(),
+            visible: None,
+            last_levels: Vec::new(),
         }
     }
 
-    pub(crate) fn push(&mut self, lines: Vec<LogLine>) -> BufferChange {
+    pub(crate) fn push(&mut self, lines: Vec<SourcedLine>) -> BufferChange {
         let first_new_seq = self.next_seq();
         let mut added_visible = 0;
-        for line in lines {
+        for sourced in lines {
             let seq = self.next_seq();
-            self.bytes += line.text.len();
-            let is_visible = match &mut self.filter {
-                Some(filter) if is_match(&line.text, &filter.needle) => {
-                    filter.matches.push_back(seq);
-                    true
-                }
-                Some(_) => false,
-                None => true,
+            let level = self.level_of(&sourced);
+            let line = BufferedLine {
+                source: sourced.source,
+                level,
+                line: sourced.line,
             };
+            self.bytes += line.line.text.len();
+            let is_visible = self.view.shows(&line);
+            if let (true, Some(visible)) = (is_visible, &mut self.visible) {
+                visible.push_back(seq);
+            }
             added_visible += usize::from(is_visible);
             self.lines.push_back(line);
         }
@@ -69,12 +121,12 @@ impl LogBuffer {
                 break;
             };
             let seq = self.first_seq;
-            self.bytes -= evicted.text.len();
+            self.bytes -= evicted.line.text.len();
             self.first_seq += 1;
             self.dropped += 1;
-            let was_visible = match &mut self.filter {
-                Some(filter) if filter.matches.front() == Some(&seq) => {
-                    filter.matches.pop_front();
+            let was_visible = match &mut self.visible {
+                Some(visible) if visible.front() == Some(&seq) => {
+                    visible.pop_front();
                     true
                 }
                 Some(_) => false,
@@ -97,56 +149,79 @@ impl LogBuffer {
         }
     }
 
-    /// Drops every line and keeps the filter.
+    /// The detected level; an indented line without one continues the previous line of its
+    /// source (a stack trace follows its error).
+    fn level_of(&mut self, sourced: &SourcedLine) -> Option<LogLevel> {
+        let slot = usize::from(sourced.source.0);
+        if self.last_levels.len() <= slot {
+            self.last_levels.resize(slot + 1, None);
+        }
+        let text = &sourced.line.text;
+        let is_indented = text.starts_with([' ', '\t']);
+        let level = detect_level(text).or_else(|| {
+            if is_indented {
+                self.last_levels[slot]
+            } else {
+                None
+            }
+        });
+        self.last_levels[slot] = level;
+        level
+    }
+
+    /// Drops every line and keeps the view.
     pub(crate) fn clear(&mut self) {
         self.lines.clear();
         self.bytes = 0;
         self.first_seq = 0;
         self.dropped = 0;
-        if let Some(filter) = &mut self.filter {
-            filter.matches.clear();
+        self.last_levels.clear();
+        if let Some(visible) = &mut self.visible {
+            visible.clear();
         }
     }
 
-    /// An empty or whitespace-only needle removes the filter.
-    pub(crate) fn set_filter(&mut self, needle: &str) {
-        if needle.trim().is_empty() {
-            self.filter = None;
-            return;
-        }
-        // At most `MAX_LINES` lines are scanned, on each keystroke; profile before debouncing.
-        let matches = self
-            .lines
-            .iter()
-            .zip(self.first_seq..)
-            .filter(|(line, _)| is_match(&line.text, needle))
-            .map(|(_, seq)| seq)
-            .collect();
-        self.filter = Some(LineFilter {
-            needle: needle.to_owned(),
-            matches,
-        });
+    pub(crate) fn set_view(&mut self, view: LineView) {
+        self.visible = if view.is_filtering() {
+            // At most `MAX_LINES` lines are scanned, on each keystroke; profile before
+            // debouncing.
+            Some(
+                self.lines
+                    .iter()
+                    .zip(self.first_seq..)
+                    .filter(|(line, _)| view.shows(line))
+                    .map(|(_, seq)| seq)
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        self.view = view;
     }
 
-    pub(crate) fn needle(&self) -> Option<&str> {
-        self.filter.as_ref().map(|filter| filter.needle.as_str())
+    pub(crate) fn view(&self) -> &LineView {
+        &self.view
     }
 
     pub(crate) fn visible_len(&self) -> usize {
-        match &self.filter {
-            Some(filter) => filter.matches.len(),
+        match &self.visible {
+            Some(visible) => visible.len(),
             None => self.lines.len(),
         }
     }
 
-    pub(crate) fn visible_line(&self, index: usize) -> Option<&LogLine> {
-        match &self.filter {
+    pub(crate) fn visible_line(&self, index: usize) -> Option<&BufferedLine> {
+        match &self.visible {
             None => self.lines.get(index),
-            Some(filter) => {
-                let seq = *filter.matches.get(index)?;
+            Some(visible) => {
+                let seq = *visible.get(index)?;
                 self.lines.get(usize::try_from(seq - self.first_seq).ok()?)
             }
         }
+    }
+
+    pub(crate) fn visible_lines(&self) -> impl Iterator<Item = &BufferedLine> {
+        (0..self.visible_len()).filter_map(|index| self.visible_line(index))
     }
 
     pub(crate) fn total_len(&self) -> usize {
@@ -157,21 +232,27 @@ impl LogBuffer {
         self.dropped > 0
     }
 
-    /// One line per visible line. The time is shown only for lines that have one.
-    pub(crate) fn visible_text(&self, shows_timestamps: bool) -> String {
+    /// One line per visible line: `{time} {prefix} {text}`. The time is written only for
+    /// lines that have one; `prefixes` is indexed by source, and a missing index writes none.
+    pub(crate) fn visible_text(&self, time: LineTime, prefixes: &[SharedString]) -> String {
         let mut text = String::new();
-        for index in 0..self.visible_len() {
-            let Some(line) = self.visible_line(index) else {
-                continue;
-            };
+        for (index, buffered) in self.visible_lines().enumerate() {
             if index > 0 {
                 text.push('\n');
             }
-            if let (true, Some(timestamp)) = (shows_timestamps, line.timestamp) {
-                text.push_str(&format_log_time(timestamp));
+            let stamp = buffered.line.timestamp.and_then(|timestamp| match time {
+                LineTime::Hidden => None,
+                LineTime::Clock => Some(format_log_time(timestamp)),
+            });
+            if let Some(stamp) = stamp {
+                text.push_str(&stamp);
                 text.push(' ');
             }
-            text.push_str(&line.text);
+            if let Some(prefix) = prefixes.get(usize::from(buffered.source.0)) {
+                text.push_str(prefix);
+                text.push(' ');
+            }
+            text.push_str(&buffered.line.text);
         }
         text
     }
@@ -179,33 +260,6 @@ impl LogBuffer {
     fn next_seq(&self) -> u64 {
         self.first_seq + self.lines.len() as u64
     }
-}
-
-fn is_match(text: &str, needle: &str) -> bool {
-    !find_matches(text, needle).is_empty()
-}
-
-/// Non-overlapping byte ranges of `needle` in `text`, compared with ASCII case folding.
-/// Other characters must match exactly, so every range falls on char boundaries and the
-/// offsets stay valid for the original string. Full Unicode folding can change lengths.
-pub(crate) fn find_matches(text: &str, needle: &str) -> Vec<Range<usize>> {
-    let (text_bytes, needle_bytes) = (text.as_bytes(), needle.as_bytes());
-    let mut ranges = Vec::new();
-    if needle_bytes.is_empty() {
-        return ranges;
-    }
-    let mut start = 0;
-    while start + needle_bytes.len() <= text_bytes.len() {
-        let end = start + needle_bytes.len();
-        if text.is_char_boundary(start) && text_bytes[start..end].eq_ignore_ascii_case(needle_bytes)
-        {
-            ranges.push(start..end);
-            start = end;
-        } else {
-            start += 1;
-        }
-    }
-    ranges
 }
 
 /// `HH:MM:SS.mmm` in UTC, for example `10:47:58.902`. The workspace jiff has no time-zone

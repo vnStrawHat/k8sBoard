@@ -10,10 +10,10 @@ use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::{AccessState, LiveCluster};
 use crate::custom_kind::CustomKind;
 use crate::drawer::DrawerTab;
-use crate::kind_row::{EventDetail, KindObject, KindRow};
+use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
 use crate::live_sections::claim_pods;
 use crate::log_dock::LogDock;
-use crate::log_tab::LogTarget;
+use crate::log_target::{LogTarget, workload_label};
 use crate::network_rows::ingress_urls;
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, ValueAccess};
@@ -175,6 +175,44 @@ fn view_logs_item(
     }
 }
 
+/// The label and availability of the logs item of a workload row; `None` for a row that has
+/// no workload (a ConfigMap, a node).
+fn workload_logs_entry(
+    related_pods: Option<&PodOwner>,
+    access: &AccessState,
+) -> Option<(&'static str, ActionAvailability)> {
+    let owner = related_pods?;
+    workload_label(owner)?;
+    let is_job = matches!(owner, PodOwner::Controller { kind, .. } if *kind == JOB_KIND);
+    let label = if is_job {
+        "View logs"
+    } else {
+        "View logs (all pods)"
+    };
+    Some((label, action_availability(ResourceAction::ViewLogs, access)))
+}
+
+/// Merges the logs of every pod of the workload into one dock tab.
+fn workload_logs_item(
+    row: &KindRow,
+    access: &AccessState,
+    shell: &WeakEntity<AppShell>,
+) -> Option<PopupMenuItem> {
+    let (label, availability) = workload_logs_entry(row.related_pods.as_ref(), access)?;
+    Some(match availability {
+        ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
+        ActionAvailability::Enabled => {
+            let owner = row.related_pods.clone()?;
+            let shell = shell.clone();
+            PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.open_workload_logs(owner.clone(), window, cx);
+                });
+            })
+        }
+    })
+}
+
 pub(crate) fn node_menu(
     menu: PopupMenu,
     node: &NodeSummary,
@@ -239,6 +277,9 @@ pub(crate) fn kind_menu(
     extras: MenuExtras,
 ) -> PopupMenu {
     let mut menu = menu;
+    if let Some(item) = workload_logs_item(row, access, shell) {
+        menu = menu.item(item);
+    }
     if let Some(secret) = extras.secret {
         menu = menu.item(secret.reveal).item(secret.copy).separator();
     }

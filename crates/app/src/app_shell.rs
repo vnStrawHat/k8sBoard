@@ -33,14 +33,14 @@ use crate::filter_bar::ToolkitState;
 use crate::helm_release_view::{
     HelmReleaseView, HistoryState, ShowLatest, ValuesLayout, earlier_revision, helm_subject,
 };
-use crate::kind_row::KindObject;
+use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
 use crate::launch_options::{
     LaunchOptions, LaunchScreen, has_ignored_kubeconfig_entries, kubeconfig_path,
 };
 use crate::log_dock::{DockMode, LogDock};
-use crate::log_tab::LogTarget;
+use crate::log_target::LogTarget;
 use crate::monitor_data::{MonitorInput, MonitorSubject, monitor_data};
 use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
 use crate::navigation::{NavigationCounts, sidebar};
@@ -463,6 +463,9 @@ impl AppShell {
             table.delegate_mut().set_session(shared);
             cx.notify();
         });
+        let weak_session = session.downgrade();
+        self.log_dock
+            .update(cx, |dock, _| dock.set_session(Some(weak_session)));
         self.session = Some(session);
         // A filter set for one cluster would surprise in another. The first session keeps the
         // filter of `--filter`.
@@ -1344,6 +1347,25 @@ impl AppShell {
 
     fn live<'a>(&self, cx: &'a App) -> Option<&'a LiveCluster> {
         self.session.as_ref()?.read(cx).live()
+    }
+
+    /// Opens the logs of every pod of a workload in the dock. Nothing opens without a live
+    /// session or for a node.
+    pub(crate) fn open_workload_logs(
+        &mut self,
+        owner: PodOwner,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = LogTarget::of_workload(owner) else {
+            return;
+        };
+        let Some(live) = self.live(cx) else {
+            return;
+        };
+        let connection = live.connection().clone();
+        self.log_dock
+            .update(cx, |dock, cx| dock.open(connection, target, window, cx));
     }
 
     fn on_session_changed(&mut self, cx: &mut Context<Self>) {

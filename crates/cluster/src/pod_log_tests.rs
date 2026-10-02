@@ -14,6 +14,7 @@ fn request(source: LogSource) -> LogRequest {
         pod: "pod".to_owned(),
         container: "app".to_owned(),
         source,
+        tail_lines: 1000,
     }
 }
 
@@ -81,6 +82,15 @@ fn log_params_previous_does_not_follow() {
     assert!(!params.follow);
     assert_eq!(params.tail_lines, Some(1000));
     assert!(params.timestamps);
+}
+
+#[test]
+fn log_params_uses_requested_tail() {
+    let params = log_params(&LogRequest {
+        tail_lines: 50,
+        ..request(LogSource::Current)
+    });
+    assert_eq!(params.tail_lines, Some(50));
 }
 
 // Splitter

@@ -727,3 +727,49 @@ fn custom_menus_have_no_read_only_actions() {
     assert!(!kind.has_port_forward());
     assert_eq!(kind.delete_label(), "Delete widget…");
 }
+
+fn deployment_owner() -> PodOwner {
+    PodOwner::Deployment {
+        namespace: "team-a".to_owned(),
+        name: "api".to_owned(),
+    }
+}
+
+#[test]
+fn workload_menu_offers_view_logs_when_allowed() {
+    let entry = workload_logs_entry(Some(&deployment_owner()), &known_denying(&[]));
+    assert_eq!(
+        entry,
+        Some(("View logs (all pods)", ActionAvailability::Enabled))
+    );
+}
+
+#[test]
+fn job_menu_labels_view_logs() {
+    let owner = PodOwner::Controller {
+        namespace: "team-a".to_owned(),
+        kind: JOB_KIND,
+        name: "migrate".to_owned(),
+    };
+    let entry = workload_logs_entry(Some(&owner), &known_denying(&[]));
+    assert_eq!(entry, Some(("View logs", ActionAvailability::Enabled)));
+}
+
+#[test]
+fn workload_view_logs_denied_reason_names_access_check() {
+    let access = known_denying(&[AccessCheck::GetPodLogs]);
+    let (_, availability) =
+        workload_logs_entry(Some(&deployment_owner()), &access).expect("a workload entry");
+    assert_eq!(
+        reason(availability),
+        format!("Not permitted: {}", AccessCheck::GetPodLogs)
+    );
+}
+
+#[test]
+fn non_workload_kind_menu_has_no_view_logs() {
+    // A ConfigMap row has no related pods; a node has them but is not one workload.
+    assert_eq!(workload_logs_entry(None, &known_denying(&[])), None);
+    let node = PodOwner::Node { name: "n1".into() };
+    assert_eq!(workload_logs_entry(Some(&node), &known_denying(&[])), None);
+}

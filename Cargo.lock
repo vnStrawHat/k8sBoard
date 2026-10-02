@@ -3876,6 +3876,8 @@ dependencies = [
  "gpui-kit",
  "jiff",
  "k8sboard-cluster",
+ "regex",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

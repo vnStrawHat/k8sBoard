@@ -1,4 +1,4 @@
-//! The bottom dock that holds one log tab per pod: tab bar, zoom, and minimize.
+//! The bottom dock that holds the log tabs: tab bar, zoom, and minimize.
 
 use cluster::ClusterConnection;
 use gpui_kit::assets::IconName;
@@ -6,11 +6,13 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, Render, StatefulInteractiveElement as _, Styled as _, Window, div,
+    Pixels, Render, StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div,
     prelude::FluentBuilder as _, px,
 };
 
-use crate::log_tab::{LogTab, LogTarget};
+use crate::cluster_session::ClusterSession;
+use crate::log_tab::LogTab;
+use crate::log_target::LogTarget;
 use crate::status_tone::tone_color;
 
 pub(crate) const DEFAULT_DOCK_HEIGHT: Pixels = px(280.);
@@ -40,6 +42,8 @@ pub(crate) struct LogDock {
     /// `None` exactly when `tabs` is empty.
     active: Option<usize>,
     mode: DockMode,
+    /// Weak: workload tabs observe the session, but a tab never keeps it alive.
+    session: Option<WeakEntity<ClusterSession>>,
 }
 
 impl LogDock {
@@ -48,10 +52,16 @@ impl LogDock {
             tabs: Vec::new(),
             active: None,
             mode: DockMode::Normal,
+            session: None,
         }
     }
 
-    /// Activates the pod's tab if one exists, else adds one. Minimized becomes Normal.
+    pub(crate) fn set_session(&mut self, session: Option<WeakEntity<ClusterSession>>) {
+        self.session = session;
+    }
+
+    /// Activates the target's tab if one exists, else adds one. Minimized becomes Normal.
+    /// Nothing opens without a session.
     pub(crate) fn open(
         &mut self,
         connection: ClusterConnection,
@@ -59,14 +69,17 @@ impl LogDock {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(session) = self.session.as_ref().and_then(WeakEntity::upgrade) else {
+            return;
+        };
         let existing = self
             .tabs
             .iter()
-            .position(|tab| tab.read(cx).is_for(&target.namespace, &target.pod));
+            .position(|tab| tab.read(cx).is_for(&target));
         let index = match existing {
             Some(index) => index,
             None => {
-                let tab = cx.new(|cx| LogTab::new(connection, target, window, cx));
+                let tab = cx.new(|cx| LogTab::new(connection, target, &session, window, cx));
                 self.tabs.push(tab);
                 self.tabs.len() - 1
             }

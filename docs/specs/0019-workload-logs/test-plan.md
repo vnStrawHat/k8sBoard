@@ -24,6 +24,7 @@
 | | the 0004 `find_matches_*` tests | moved unchanged |
 | `log_json.rs` | `json_line_splits_message_and_details` | `msg` headline; `level`, `time` dropped; remaining keys pretty, sorted |
 | | `json_line_without_message_has_no_headline` | |
+| | `json_line_with_only_a_message_has_no_details` | split from the test above |
 | | `non_object_text_is_not_json` | `[1,2]`, `{broken`, plain text → `None` |
 | `log_buffer_tests.rs` | 0004 tests adapted | same names, `SourcedLine` input, `set_view` |
 | | `push_detects_and_stores_levels` | |
@@ -31,8 +32,7 @@
 | | `hidden_level_hides_lines` | INFO hidden hides Info and unknown-level lines (decision 15) |
 | | `view_combines_levels_and_matcher` | |
 | | `change_counts_match_visible_len_with_levels_hidden` | the 0004 invariant |
-| | `visible_text_writes_prefixes_and_rfc3339_time` | `LineTime::Rfc3339`, full `{pod}/{container}` prefixes by `SourceId`, missing prefix → none |
-| | `revision_bumps_on_push_clear_and_view` | |
+| | `visible_text_writes_prefixes_and_clock_time` | `LineTime::Clock` and `Hidden`, short prefixes by `SourceId`, missing prefix → none (the Rfc3339 variant moves to step 3) |
 
 ## Step 2a
 
@@ -40,7 +40,6 @@
 |---|---|---|
 | `pod_log_tests.rs` (cluster) | `log_params_uses_requested_tail` | `tail_lines: 50` → `Some(50)`; existing `log_params_*` pass 1000 |
 | `log_target.rs` | `workload_label_uses_kubectl_short_kinds` | deploy, sts, ds, rs, job; node → `None` |
-| | `log_target_of_container_is_explicit` | missing container → `None` |
 | | `log_target_of_workload_rejects_nodes` | pure, no session |
 | | `same_target_matches_pods_by_name_and_workloads_by_owner` | |
 | `log_workload.rs` | `ranked_pods_put_ready_first_then_newest` | ties broken by name; `None` created last |
@@ -56,6 +55,11 @@
 | `log_tab.rs` | `workload_tone_follows_stream_states` | table in [workload-streams.md](workload-streams.md) |
 | | `staged_lines_sort_by_timestamp_stably` | pure `sort_staged`; equal times keep order; `None` first |
 | | `slot_for_reuses_slot_of_returning_pod` | pure `fn slot_for(pod_slots: &mut Vec<String>, pod: &str) -> usize` |
+| | `first_sync_selects_default_container_of_first_ranked_pod` | pure `plan_membership` |
+| | `plan_admits_only_selected_containers_the_pod_has` | |
+| | `plan_without_pods_selects_nothing_yet` | |
+| | `plan_is_frozen_when_scope_excludes_the_workload` | |
+| | `merge_window_opens_with_the_first_admission_only` | staging is armed lazily, on the first admission |
 | `resource_actions_tests.rs` | `workload_menu_offers_view_logs_when_allowed` | Deployment row: first item `View logs (all pods)` |
 | | `job_menu_labels_view_logs` | |
 | | `workload_view_logs_denied_reason_names_access_check` | |
@@ -71,6 +75,8 @@
 | `screenshot.rs` | `controller_owner_of_maps_known_kinds` | ReplicaSet, StatefulSet, DaemonSet, Job; others `None` |
 
 ## Step 3
+
+Moved here from steps 1 and 2a (they need code that lands in step 3): `revision_bumps_on_push_clear_and_view` and `visible_text_writes_prefixes_and_rfc3339_time` (`LogBuffer::revision`, `LineTime::Rfc3339`), and `log_target_of_container_is_explicit` (`ContainerChoice`, `LogTarget::of_container`, `TabStream.full_prefix`).
 
 | File | Test | Verifies |
 |---|---|---|

@@ -14,8 +14,6 @@ use crate::connection::{ClusterConnection, ClusterError};
 use crate::resource_watch::{BATCH_WINDOW, wait_until};
 
 const LOG_ACTION: &str = "streaming pod logs";
-/// The last lines requested when a stream opens.
-const LOG_TAIL_LINES: i64 = 1000;
 /// Longer lines are cut, so one line can never exceed the app's per-tab byte cap.
 const MAX_LINE_BYTES: usize = 16 * 1024;
 const TRUNCATION_MARKER: &str = " … [truncated]";
@@ -26,13 +24,15 @@ pub struct LogRequest {
     pub pod: String,
     pub container: String,
     pub source: LogSource,
+    /// Lines of history requested at open.
+    pub tail_lines: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogSource {
-    /// The running instance: the last 1,000 lines, then follow.
+    /// The running instance: the requested tail, then follow.
     Current,
-    /// The last terminated instance (`previous=true`): the last 1,000 lines, then end.
+    /// The last terminated instance (`previous=true`): the requested tail, then end.
     Previous,
 }
 
@@ -78,7 +78,7 @@ fn log_params(request: &LogRequest) -> LogParams {
         container: Some(request.container.clone()),
         follow: request.source == LogSource::Current,
         previous: request.source == LogSource::Previous,
-        tail_lines: Some(LOG_TAIL_LINES),
+        tail_lines: Some(i64::from(request.tail_lines)),
         timestamps: true,
         ..LogParams::default()
     }

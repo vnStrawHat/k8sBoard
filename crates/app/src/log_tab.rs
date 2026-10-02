@@ -1,6 +1,9 @@
-//! One pod container's log view: toolbar, stream state, and the line list.
+//! One log view: a pod container or every pod of a workload. Toolbar, streams, merge, and the
+//! line list.
 
-use cluster::{ClusterConnection, ContainerSummary, LogRequest, LogSource, LogUpdate, PodSummary};
+use std::time::Duration;
+
+use cluster::{ClusterConnection, LogRequest, LogSource, LogUpdate, NamespaceScope, PodSummary};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _, Toggle};
@@ -10,42 +13,38 @@ use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerStat
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, HighlightStyle, IntoElement,
-    ParentElement as _, Rems, Render, StyleRefinement, Styled as _, StyledText, Subscription,
-    WeakEntity, Window, div, prelude::FluentBuilder as _, px, rems,
+    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, Hsla, IntoElement,
+    ParentElement as _, Render, SharedString, StyleRefinement, Styled as _, Subscription, Task,
+    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
-use crate::cluster_session::error_text;
-use crate::log_buffer::{LogBuffer, find_matches, format_log_time};
+use crate::cluster_session::{ClusterSession, error_text};
+use crate::kind_row::PodOwner;
+use crate::line_matcher::{FilterMode, InvalidRegex, LineMatcher};
+use crate::log_buffer::{LineTime, LineView, LogBuffer, SourceId, SourcedLine};
+use crate::log_level::{LevelSet, LogLevel};
+use crate::log_rows::{RowPrefix, RowStyle, log_row};
+use crate::log_target::{LogTarget, PodTarget, WorkloadTarget};
+use crate::log_workload::{
+    MemberChange, join_slots, member_change, pod_short_name, ranked_pods, scope_covers,
+};
 use crate::pod_drawer::{default_container, kind_tag_text};
-use crate::status_tone::StatusTone;
+use crate::status_tone::{StatusTone, tone_color};
 
-/// 13 characters of the mono `text_xs` font (0.75 rem at about 0.6 em per character).
-const TIME_COLUMN_WIDTH: Rems = rems(5.85);
-
-/// What a tab streams: one pod, with the containers the picker offers.
-#[derive(Clone)]
-pub(crate) struct LogTarget {
-    pub(crate) namespace: String,
-    pub(crate) pod: String,
-    containers: Vec<ContainerSummary>,
-    initial_container: String,
-}
-
-impl LogTarget {
-    /// `None` when the pod has no containers to read.
-    pub(crate) fn of_pod(pod: &PodSummary) -> Option<Self> {
-        let index = default_container(&pod.containers)?;
-        let initial_container = pod.containers.get(index)?.name.clone();
-        Some(Self {
-            namespace: pod.namespace.clone(),
-            pod: pod.name.clone(),
-            containers: pod.containers.clone(),
-            initial_container,
-        })
-    }
-}
+/// The lines requested when a pod tab opens, and for the members that open with a workload tab.
+const POD_TAIL_LINES: u32 = 1000;
+/// A pod that joins after the merge flush asks for little history, so it cannot land far out of
+/// order.
+const LATE_JOIN_TAIL_LINES: u32 = 50;
+/// Initial tails arrive pod by pod; waiting this long lets them be sorted by time first.
+const MERGE_WINDOW: Duration = Duration::from_secs(2);
+/// A pod that left the list is usually closed by the server with its final lines; this is how
+/// long its streams may still deliver them.
+const LEAVE_GRACE: Duration = Duration::from_secs(10);
+const MAX_STAGING_BYTES: usize = 8 * 1024 * 1024;
+/// `chart_1..chart_5`.
+const POD_COLOR_SLOTS: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LogInstance {
@@ -79,9 +78,28 @@ impl LogStreamState {
         }
     }
 
+    fn is_live(&self) -> bool {
+        matches!(self, Self::Connecting | Self::Streaming)
+    }
+}
+
+/// What the streams of a tab add up to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TabPhase {
+    /// A workload tab with no stream yet.
+    Waiting,
+    Connecting,
+    Streaming,
+    Ended,
+    Failed {
+        message: String,
+    },
+}
+
+impl TabPhase {
     fn tone(&self) -> StatusTone {
         match self {
-            Self::Connecting => StatusTone::Info,
+            Self::Waiting | Self::Connecting => StatusTone::Info,
             Self::Streaming => StatusTone::Ok,
             Self::Ended => StatusTone::Done,
             Self::Failed { .. } => StatusTone::Bad,
@@ -89,19 +107,105 @@ impl LogStreamState {
     }
 }
 
+fn stream_phase<'a>(states: impl Iterator<Item = &'a LogStreamState>) -> TabPhase {
+    let (mut total, mut failed) = (0, 0);
+    let (mut is_streaming, mut is_connecting) = (false, false);
+    let mut first_failure = None;
+    for state in states {
+        total += 1;
+        match state {
+            LogStreamState::Connecting => is_connecting = true,
+            LogStreamState::Streaming => is_streaming = true,
+            LogStreamState::Ended => {}
+            LogStreamState::Failed { message } => {
+                failed += 1;
+                first_failure.get_or_insert(message);
+            }
+        }
+    }
+    if total == 0 {
+        return TabPhase::Waiting;
+    }
+    if is_streaming {
+        return TabPhase::Streaming;
+    }
+    if is_connecting {
+        return TabPhase::Connecting;
+    }
+    match first_failure {
+        Some(message) if failed == total => TabPhase::Failed {
+            message: message.clone(),
+        },
+        _ => TabPhase::Ended,
+    }
+}
+
+/// The tab dot: Info while waiting or opening, Ok while any stream flows, Bad when every stream
+/// failed, otherwise Done.
+fn workload_tone<'a>(states: impl Iterator<Item = &'a LogStreamState>) -> StatusTone {
+    stream_phase(states).tone()
+}
+
+/// One pod container's stream inside a tab. Its index in `LogTab::streams` is its `SourceId`.
+struct TabStream {
+    pod: String,
+    /// `{short}/{container}`, as shown on screen.
+    prefix: SharedString,
+    color_slot: usize,
+    /// The pod is still listed; a leaver keeps streaming until its grace ends.
+    is_member: bool,
+    state: LogStreamState,
+    /// Dropping it aborts the stream and closes the HTTP connection.
+    _stream: Option<WatchSubscription>,
+    _grace: Option<Task<()>>,
+}
+
+/// Lines held back during the merge window so the first batches can be sorted by time.
+struct Staging {
+    lines: Vec<SourcedLine>,
+    bytes: usize,
+    _timer: Task<()>,
+}
+
+enum LogSubject {
+    Pod {
+        target: PodTarget,
+        container: String,
+    },
+    Workload(WorkloadSubject),
+}
+
+struct WorkloadSubject {
+    target: WorkloadTarget,
+    /// Weak: the tab never keeps the session alive.
+    session: WeakEntity<ClusterSession>,
+    /// Names of the pods whose streams are followed.
+    members: Vec<String>,
+    /// The containers every member streams; empty until a pod is listed.
+    selected: Vec<String>,
+    /// The namespace filter no longer covers the workload, so membership stays as it was.
+    is_frozen: bool,
+    _pods_observer: Subscription,
+}
+
 pub(crate) struct LogTab {
     connection: ClusterConnection,
-    target: LogTarget,
-    container: String,
+    subject: LogSubject,
     instance: LogInstance,
     shows_timestamps: bool,
     wraps_lines: bool,
+    shows_json: bool,
+    filter_mode: FilterMode,
+    hidden_levels: LevelSet,
+    /// The regex in the input does not compile; the previous matcher stays in force.
+    has_invalid_filter: bool,
     buffer: LogBuffer,
-    stream: LogStreamState,
+    streams: Vec<TabStream>,
+    staging: Option<Staging>,
+    /// The color slot of each pod name, in join order; a returning pod keeps its slot.
+    pod_slots: Vec<String>,
     filter_input: Entity<InputState>,
     scroller: Entity<MessageScrollerState>,
-    /// Dropping it aborts the stream and closes the HTTP connection.
-    _stream: Option<WatchSubscription>,
     _filter_events: Subscription,
     /// The "Paused" status and the jump button depend on the scroll position.
     _scroller_observer: Subscription,
@@ -111,6 +215,7 @@ impl LogTab {
     pub(crate) fn new(
         connection: ClusterConnection,
         target: LogTarget,
+        session: &Entity<ClusterSession>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -118,107 +223,382 @@ impl LogTab {
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
         let filter_events = cx.subscribe(&filter_input, Self::on_filter_event);
         let scroller_observer = cx.observe(&scroller, |_, _, cx| cx.notify());
+        let subject = match target {
+            LogTarget::Pod(target) => LogSubject::Pod {
+                container: target.initial_container.clone(),
+                target,
+            },
+            LogTarget::Workload(target) => LogSubject::Workload(WorkloadSubject {
+                target,
+                session: session.downgrade(),
+                members: Vec::new(),
+                selected: Vec::new(),
+                is_frozen: false,
+                _pods_observer: cx.observe(session, |tab, _, cx| tab.sync_members(cx)),
+            }),
+        };
         let mut tab = Self {
             connection,
-            container: target.initial_container.clone(),
-            target,
+            subject,
             instance: LogInstance::Current,
             shows_timestamps: true,
             wraps_lines: false,
+            shows_json: false,
+            filter_mode: FilterMode::Plain,
+            hidden_levels: LevelSet::default(),
+            has_invalid_filter: false,
             buffer: LogBuffer::new(),
-            stream: LogStreamState::Connecting,
+            streams: Vec::new(),
+            staging: None,
+            pod_slots: Vec::new(),
             filter_input,
             scroller,
-            _stream: None,
             _filter_events: filter_events,
             _scroller_observer: scroller_observer,
         };
-        tab.start_stream(cx);
+        tab.start_streams(cx);
         tab
     }
 
-    pub(crate) fn is_for(&self, namespace: &str, pod: &str) -> bool {
-        self.target.namespace == namespace && self.target.pod == pod
+    pub(crate) fn is_for(&self, target: &LogTarget) -> bool {
+        match (&self.subject, target) {
+            (LogSubject::Pod { target: mine, .. }, LogTarget::Pod(other)) => mine.is_same(other),
+            (LogSubject::Workload(mine), LogTarget::Workload(other)) => mine.target.is_same(other),
+            _ => false,
+        }
     }
 
-    /// `{pod}/{container}`, the tab title.
+    /// The tab title: `{pod}/{container}`, or the workload label.
     pub(crate) fn label(&self) -> String {
-        format!("{}/{}", self.target.pod, self.container)
+        match &self.subject {
+            LogSubject::Pod { target, container } => format!("{}/{container}", target.pod),
+            LogSubject::Workload(workload) => workload.target.label.clone(),
+        }
     }
 
     pub(crate) fn tone(&self) -> StatusTone {
-        self.stream.tone()
+        workload_tone(self.streams.iter().map(|stream| &stream.state))
     }
 
+    fn phase(&self) -> TabPhase {
+        stream_phase(self.streams.iter().map(|stream| &stream.state))
+    }
+
+    fn is_workload(&self) -> bool {
+        matches!(self.subject, LogSubject::Workload(_))
+    }
+
+    /// Whether the tab still waits for its streams to open or its merge window to close.
     #[cfg(feature = "screenshot")]
     pub(crate) fn is_connecting(&self) -> bool {
-        self.stream == LogStreamState::Connecting
+        self.staging.is_some() || self.phase() == TabPhase::Connecting
     }
 
     /// Every start is fresh: no resume, so there is nothing to de-duplicate.
     fn restart_stream(&mut self, cx: &mut Context<Self>) {
-        self._stream = None;
+        self.streams.clear();
+        self.staging = None;
+        self.pod_slots.clear();
+        if let LogSubject::Workload(workload) = &mut self.subject {
+            workload.members.clear();
+        }
         self.buffer.clear();
         self.scroller
             .update(cx, |scroller, cx| scroller.reset(0, cx));
-        self.stream = LogStreamState::Connecting;
-        self.start_stream(cx);
+        self.start_streams(cx);
     }
 
-    /// Subscribes to the pod logs of the current container and toggle.
-    fn start_stream(&mut self, cx: &mut Context<Self>) {
+    fn start_streams(&mut self, cx: &mut Context<Self>) {
+        match &self.subject {
+            LogSubject::Pod { target, container } => {
+                let open = StreamOpen {
+                    namespace: target.namespace.clone(),
+                    pod: target.pod.clone(),
+                    container: container.clone(),
+                    prefix: SharedString::from(format!("{}/{container}", target.pod)),
+                    color_slot: 0,
+                    tail_lines: POD_TAIL_LINES,
+                };
+                self.open_stream(open, cx);
+            }
+            LogSubject::Workload(_) => {
+                self.sync_members(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Subscribes to the logs of one container and adds it to `streams`.
+    fn open_stream(&mut self, open: StreamOpen, cx: &mut Context<Self>) {
+        // A source id is a u16; a tab would need 65,536 stream opens (churn without Reconnect) to
+        // reach it, and a full table simply stops opening streams.
+        let Ok(index) = u16::try_from(self.streams.len()) else {
+            return;
+        };
+        let id = SourceId(index);
         let source = match self.instance {
             LogInstance::Current => LogSource::Current,
             LogInstance::Previous => LogSource::Previous,
         };
         let updates = self.connection.pod_logs(LogRequest {
-            namespace: self.target.namespace.clone(),
-            pod: self.target.pod.clone(),
-            container: self.container.clone(),
+            namespace: open.namespace,
+            pod: open.pod.clone(),
+            container: open.container,
             source,
+            tail_lines: open.tail_lines,
         });
         let runtime = cx.global::<ClusterRuntime>().clone();
-        self._stream =
-            Some(runtime.subscribe(updates, cx, Self::apply_update, |tab, _| tab.stream.close()));
+        let subscription = runtime.subscribe(
+            updates,
+            cx,
+            move |tab, update, cx| tab.apply_update(id, update, cx),
+            move |tab, cx| tab.close_stream(id, cx),
+        );
+        self.streams.push(TabStream {
+            pod: open.pod,
+            prefix: open.prefix,
+            color_slot: open.color_slot,
+            is_member: true,
+            state: LogStreamState::Connecting,
+            _stream: Some(subscription),
+            _grace: None,
+        });
+    }
+
+    fn arm_staging(&mut self, cx: &mut Context<Self>) {
+        let timer = cx.spawn(async move |tab, cx| {
+            cx.background_executor().timer(MERGE_WINDOW).await;
+            let _ = tab.update(cx, |tab, cx| tab.flush_staging(cx));
+        });
+        self.staging = Some(Staging {
+            lines: Vec::new(),
+            bytes: 0,
+            _timer: timer,
+        });
+    }
+
+    fn apply_update(&mut self, id: SourceId, update: LogUpdate, cx: &mut Context<Self>) {
+        match update {
+            LogUpdate::Started => {
+                if let Some(stream) = self.streams.get_mut(usize::from(id.0)) {
+                    stream.state.start();
+                }
+            }
+            LogUpdate::Lines(lines) => {
+                let lines: Vec<SourcedLine> = lines
+                    .into_iter()
+                    .map(|line| SourcedLine { source: id, line })
+                    .collect();
+                let Some(staging) = &mut self.staging else {
+                    self.push_lines(lines, cx);
+                    return;
+                };
+                staging.bytes += lines.iter().map(|line| line.line.text.len()).sum::<usize>();
+                staging.lines.extend(lines);
+                if staging.bytes > MAX_STAGING_BYTES {
+                    self.flush_staging(cx);
+                }
+            }
+            LogUpdate::Failed(error) => {
+                if let Some(stream) = self.streams.get_mut(usize::from(id.0)) {
+                    stream.state.fail(error_text(&error));
+                }
+            }
+        }
+    }
+
+    fn close_stream(&mut self, id: SourceId, cx: &mut Context<Self>) {
+        if let Some(stream) = self.streams.get_mut(usize::from(id.0)) {
+            stream.state.close();
+        }
+        // A closed stream frees a slot for a pod that was waiting.
+        self.sync_members(cx);
+    }
+
+    fn push_lines(&mut self, lines: Vec<SourcedLine>, cx: &mut Context<Self>) {
+        let change = self.buffer.push(lines);
+        self.scroller.update(cx, |scroller, cx| {
+            scroller.splice(0..change.removed_visible, 0, cx);
+            scroller.append(change.added_visible, cx);
+        });
+    }
+
+    /// Pushes the staged lines once, sorted by kubelet time. Later lines append on arrival.
+    fn flush_staging(&mut self, cx: &mut Context<Self>) {
+        let Some(mut staging) = self.staging.take() else {
+            return;
+        };
+        sort_staged(&mut staging.lines);
+        self.push_lines(staging.lines, cx);
         cx.notify();
     }
 
-    fn apply_update(&mut self, update: LogUpdate, cx: &mut Context<Self>) {
-        match update {
-            LogUpdate::Started => self.stream.start(),
-            LogUpdate::Lines(lines) => {
-                let change = self.buffer.push(lines);
-                self.scroller.update(cx, |scroller, cx| {
-                    scroller.splice(0..change.removed_visible, 0, cx);
-                    scroller.append(change.added_visible, cx);
-                });
+    /// Follows the pods of a workload: starts streams for pods that joined the list, and lets
+    /// the streams of pods that left run out their grace.
+    fn sync_members(&mut self, cx: &mut Context<Self>) {
+        let LogSubject::Workload(workload) = &self.subject else {
+            return;
+        };
+        let live_streams = self
+            .streams
+            .iter()
+            .filter(|stream| stream.state.is_live())
+            .count();
+        let Some(plan) = plan_sync(workload, live_streams, cx) else {
+            return;
+        };
+        let LogSubject::Workload(workload) = &mut self.subject else {
+            return;
+        };
+        let owner = workload.target.owner.clone();
+        let mut has_changed = workload.is_frozen != plan.is_frozen;
+        workload.is_frozen = plan.is_frozen;
+        if plan.is_frozen {
+            if has_changed {
+                cx.notify();
             }
-            LogUpdate::Failed(error) => self.stream.fail(error_text(&error)),
+            return;
+        }
+        workload.selected = plan.selected;
+        workload
+            .members
+            .retain(|member| !plan.change.left.contains(member));
+        workload.members.extend(plan.change.joined.iter().cloned());
+        for name in &plan.change.left {
+            has_changed = true;
+            self.leave_pod(name, cx);
+        }
+        if opens_merge_window(
+            self.streams.len(),
+            self.staging.is_some(),
+            plan.admissions.len(),
+        ) {
+            self.arm_staging(cx);
+        }
+        for admission in plan.admissions {
+            has_changed = true;
+            // A pod name that returns (a StatefulSet recreate) starts clean: its old streams
+            // stop, and their buffered lines stay.
+            self.drop_streams_of(&admission.pod);
+            let color_slot = slot_for(&mut self.pod_slots, &admission.pod);
+            let tail_lines = if self.staging.is_some() {
+                POD_TAIL_LINES
+            } else {
+                LATE_JOIN_TAIL_LINES
+            };
+            let short = pod_short_name(&owner, &admission.pod).to_owned();
+            for container in admission.containers {
+                let open = StreamOpen {
+                    namespace: admission.namespace.clone(),
+                    pod: admission.pod.clone(),
+                    prefix: SharedString::from(format!("{short}/{container}")),
+                    container,
+                    color_slot,
+                    tail_lines,
+                };
+                self.open_stream(open, cx);
+            }
+        }
+        if has_changed {
+            cx.notify();
+        }
+    }
+
+    /// The pod left the list: its streams stay for `LEAVE_GRACE`, then end.
+    fn leave_pod(&mut self, name: &str, cx: &mut Context<Self>) {
+        for (index, stream) in self.streams.iter_mut().enumerate() {
+            if stream.pod != name || !stream.is_member {
+                continue;
+            }
+            stream.is_member = false;
+            let id = SourceId(u16::try_from(index).unwrap_or(u16::MAX));
+            stream._grace = Some(cx.spawn(async move |tab, cx| {
+                cx.background_executor().timer(LEAVE_GRACE).await;
+                let _ = tab.update(cx, |tab, cx| tab.end_stream(id, cx));
+            }));
+        }
+    }
+
+    /// The grace of a leaver is over: stop its stream and free its slot.
+    fn end_stream(&mut self, id: SourceId, cx: &mut Context<Self>) {
+        if let Some(stream) = self.streams.get_mut(usize::from(id.0)) {
+            stream._stream = None;
+            stream.state.close();
+        }
+        self.sync_members(cx);
+        cx.notify();
+    }
+
+    fn drop_streams_of(&mut self, pod: &str) {
+        for stream in self.streams.iter_mut().filter(|stream| stream.pod == pod) {
+            stream._stream = None;
+            stream._grace = None;
+            stream.is_member = false;
+            stream.state.close();
         }
     }
 
     fn on_filter_event(
         &mut self,
-        input: Entity<InputState>,
+        _: Entity<InputState>,
         event: &InputEvent,
         cx: &mut Context<Self>,
     ) {
         if !matches!(event, InputEvent::Change) {
             return;
         }
-        let value = input.read(cx).value();
-        self.buffer.set_filter(&value);
+        self.refresh_view(cx);
+    }
+
+    /// Applies the input text, the filter mode, and the level chips to the buffer. An invalid
+    /// regex keeps the previous matcher, so typing `a|(` never blanks the view.
+    fn refresh_view(&mut self, cx: &mut Context<Self>) {
+        let text = self.filter_input.read(cx).value();
+        let matcher = match LineMatcher::parse(&text, self.filter_mode) {
+            Ok(matcher) => {
+                self.has_invalid_filter = false;
+                matcher
+            }
+            Err(_) => {
+                self.has_invalid_filter = true;
+                self.buffer.view().matcher.clone()
+            }
+        };
+        self.buffer.set_view(LineView {
+            matcher,
+            hidden_levels: self.hidden_levels,
+        });
         let visible = self.buffer.visible_len();
         self.scroller
             .update(cx, |scroller, cx| scroller.reset(visible, cx));
         cx.notify();
     }
 
+    /// Switching the mode re-reads the input, so the placeholder and the matcher agree.
+    fn set_filter_mode(&mut self, is_regex: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter_mode = if is_regex {
+            FilterMode::Regex
+        } else {
+            FilterMode::Plain
+        };
+        let placeholder = match self.filter_mode {
+            FilterMode::Plain => "Filter lines",
+            FilterMode::Regex => "Regex, e.g. error|timeout",
+        };
+        self.filter_input.update(cx, |input, cx| {
+            input.set_placeholder(placeholder, window, cx);
+        });
+        self.refresh_view(cx);
+    }
+
     fn pick_container(&mut self, name: String, cx: &mut Context<Self>) {
-        if name == self.container {
+        let LogSubject::Pod { container, .. } = &mut self.subject else {
+            return;
+        };
+        if name == *container {
             return;
         }
-        self.container = name;
+        *container = name;
         self.restart_stream(cx);
     }
 
@@ -241,26 +621,64 @@ impl LogTab {
         let count = count_text(
             self.buffer.visible_len(),
             self.buffer.total_len(),
-            self.buffer.needle().is_some(),
+            self.buffer.view().is_filtering(),
             self.buffer.has_dropped(),
         );
-        match (&self.stream, self.instance) {
-            (LogStreamState::Connecting, _) => "Opening…".to_owned(),
-            (LogStreamState::Streaming, _) if is_scrolled_up => format!("Paused · {count}"),
-            (LogStreamState::Streaming, _) => format!("Streaming · {count}"),
-            (LogStreamState::Ended, LogInstance::Current) => format!("Stream ended · {count}"),
-            (LogStreamState::Ended, LogInstance::Previous) => {
-                format!("Previous instance · {count}")
+        let phase = self.phase();
+        let LogSubject::Workload(workload) = &self.subject else {
+            return match (&phase, self.instance) {
+                (TabPhase::Waiting | TabPhase::Connecting, _) => "Opening…".to_owned(),
+                (TabPhase::Streaming, _) if is_scrolled_up => format!("Paused · {count}"),
+                (TabPhase::Streaming, _) => format!("Streaming · {count}"),
+                (TabPhase::Ended, LogInstance::Current) => format!("Stream ended · {count}"),
+                (TabPhase::Ended, LogInstance::Previous) => {
+                    format!("Previous instance · {count}")
+                }
+                (TabPhase::Failed { .. }, _) => format!("Failed · {count}"),
+            };
+        };
+        match phase {
+            TabPhase::Waiting => format!("Waiting for pods of {}", workload.target.label),
+            TabPhase::Connecting => {
+                let opening = self
+                    .streams
+                    .iter()
+                    .filter(|stream| stream.state == LogStreamState::Connecting)
+                    .count();
+                format!("Opening {opening} streams…")
             }
-            (LogStreamState::Failed { .. }, _) => format!("Failed · {count}"),
+            TabPhase::Streaming => {
+                let pods = self.streaming_pod_count();
+                let noun = if pods == 1 { "pod" } else { "pods" };
+                let lead = if is_scrolled_up {
+                    "Paused"
+                } else {
+                    "Streaming"
+                };
+                format!("{lead} · {pods} {noun} · {count}")
+            }
+            TabPhase::Ended => format!("Streams ended · {count}"),
+            TabPhase::Failed { .. } => format!("Failed · {count}"),
         }
+    }
+
+    fn streaming_pod_count(&self) -> usize {
+        let mut pods: Vec<&str> = self
+            .streams
+            .iter()
+            .filter(|stream| stream.state == LogStreamState::Streaming)
+            .map(|stream| stream.pod.as_str())
+            .collect();
+        pods.sort_unstable();
+        pods.dedup();
+        pods.len()
     }
 
     fn render_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_scrolled_up = self.scroller.read(cx).is_scrolled_up();
         let status = self.status_text(is_scrolled_up);
-        let is_connecting = self.stream == LogStreamState::Connecting;
+        let is_connecting = self.phase() == TabPhase::Connecting;
         h_flex()
             .flex_shrink_0()
             .flex_wrap()
@@ -270,21 +688,54 @@ impl LogTab {
             .py_1p5()
             .border_b_1()
             .border_color(theme.border)
-            .child(self.render_container_picker(cx))
+            .children(self.render_container_picker(cx))
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(160.))
-                    .max_w(px(360.))
+                    .min_w(px(140.))
+                    .max_w(px(240.))
                     .child(Input::new(&self.filter_input).small().cleanable(true)),
             )
             .child(
-                Toggle::new("log-previous")
+                Toggle::new("log-regex")
                     .small()
-                    .label("Previous")
-                    .tooltip("Logs of the previous container instance")
-                    .checked(self.instance == LogInstance::Previous)
-                    .on_click(cx.listener(|tab, _: &bool, _, cx| tab.toggle_previous(cx))),
+                    .icon(Icon::new(IconName::Regex))
+                    .tooltip("Regular expression")
+                    .checked(self.filter_mode == FilterMode::Regex)
+                    .on_click(cx.listener(|tab, checked: &bool, window, cx| {
+                        tab.set_filter_mode(*checked, window, cx);
+                    })),
+            )
+            .children(LogLevel::ALL.map(|level| {
+                Toggle::new(("log-level", level as usize))
+                    .small()
+                    .label(level.label())
+                    .checked(!self.hidden_levels.is_hidden(level))
+                    .on_click(cx.listener(move |tab, _: &bool, _, cx| {
+                        tab.hidden_levels = tab.hidden_levels.toggled(level);
+                        tab.refresh_view(cx);
+                    }))
+            }))
+            .when(!self.is_workload(), |toolbar| {
+                toolbar.child(
+                    Toggle::new("log-previous")
+                        .small()
+                        .label("Previous")
+                        .tooltip("Logs of the previous container instance")
+                        .checked(self.instance == LogInstance::Previous)
+                        .on_click(cx.listener(|tab, _: &bool, _, cx| tab.toggle_previous(cx))),
+                )
+            })
+            .child(
+                Toggle::new("log-json")
+                    .small()
+                    .label("JSON")
+                    .tooltip("Show JSON lines as a message and fields")
+                    .checked(self.shows_json)
+                    .on_click(cx.listener(|tab, checked: &bool, _, cx| {
+                        tab.shows_json = *checked;
+                        tab.remeasure(cx);
+                    })),
             )
             .child(
                 Toggle::new("log-timestamps")
@@ -314,16 +765,23 @@ impl LogTab {
                     .icon(Icon::new(IconName::Copy))
                     .tooltip("Copy visible lines")
                     .on_click(cx.listener(|tab, _, _, cx| {
-                        let text = tab.buffer.visible_text(tab.shows_timestamps);
+                        let time = if tab.shows_timestamps {
+                            LineTime::Clock
+                        } else {
+                            LineTime::Hidden
+                        };
+                        // A pod tab has one source and no prefix column.
+                        let prefixes: Vec<SharedString> = if tab.is_workload() {
+                            tab.streams
+                                .iter()
+                                .map(|stream| stream.prefix.clone())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let text = tab.buffer.visible_text(time, &prefixes);
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     })),
-            )
-            .child(
-                div()
-                    .ml_auto()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(status),
             )
             .when(!is_connecting, |toolbar| {
                 toolbar.child(
@@ -335,21 +793,39 @@ impl LogTab {
                         .on_click(cx.listener(|tab, _, _, cx| tab.restart_stream(cx))),
                 )
             })
+            .child(
+                h_flex()
+                    .ml_auto()
+                    .gap_1p5()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .when(self.has_invalid_filter, |status| {
+                        status.child(
+                            div()
+                                .text_color(tone_color(StatusTone::Bad, cx))
+                                .child(InvalidRegex.to_string()),
+                        )
+                    })
+                    .child(status),
+            )
     }
 
-    fn render_container_picker(&self, cx: &Context<Self>) -> AnyElement {
+    /// The pod container picker; a workload tab has none yet.
+    fn render_container_picker(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let LogSubject::Pod { target, container } = &self.subject else {
+            return None;
+        };
         let theme = cx.theme();
-        let current_kind = self
-            .target
+        let current_kind = target
             .containers
             .iter()
-            .find(|container| container.name == self.container)
-            .map(|container| kind_tag_text(container.kind));
+            .find(|candidate| candidate.name == *container)
+            .map(|candidate| kind_tag_text(candidate.kind));
         let label = h_flex()
             .gap_1p5()
             .items_center()
             .font_family(theme.mono_font_family.clone())
-            .child(self.container.clone())
+            .child(container.clone())
             .children(current_kind.map(|kind| {
                 div()
                     .text_xs()
@@ -357,33 +833,36 @@ impl LogTab {
                     .child(kind)
             }));
         // A single container has nothing to pick, so it is plain text, not a disabled button.
-        if self.target.containers.len() < 2 {
-            return label.px_2().text_sm().into_any_element();
+        if target.containers.len() < 2 {
+            return Some(label.px_2().text_sm().into_any_element());
         }
         let button = Button::new("log-container").ghost().small().child(label);
         let tab = cx.weak_entity();
-        let containers = self.target.containers.clone();
-        let selected = self.container.clone();
-        button
-            .dropdown_caret(true)
-            .dropdown_menu(move |menu, _, _| {
-                containers.iter().fold(menu, |menu, container| {
-                    let name = container.name.clone();
-                    let tab = tab.clone();
-                    menu.item(
-                        PopupMenuItem::new(format!(
-                            "{} · {}",
-                            container.name,
-                            kind_tag_text(container.kind)
-                        ))
-                        .checked(container.name == selected)
-                        .on_click(move |_, _, cx| {
-                            let _ = tab.update(cx, |tab, cx| tab.pick_container(name.clone(), cx));
-                        }),
-                    )
+        let containers = target.containers.clone();
+        let selected = container.clone();
+        Some(
+            button
+                .dropdown_caret(true)
+                .dropdown_menu(move |menu, _, _| {
+                    containers.iter().fold(menu, |menu, container| {
+                        let name = container.name.clone();
+                        let tab = tab.clone();
+                        menu.item(
+                            PopupMenuItem::new(format!(
+                                "{} · {}",
+                                container.name,
+                                kind_tag_text(container.kind)
+                            ))
+                            .checked(container.name == selected)
+                            .on_click(move |_, _, cx| {
+                                let _ =
+                                    tab.update(cx, |tab, cx| tab.pick_container(name.clone(), cx));
+                            }),
+                        )
+                    })
                 })
-            })
-            .into_any_element()
+                .into_any_element(),
+        )
     }
 
     fn render_body(&self, cx: &Context<Self>) -> AnyElement {
@@ -400,8 +879,14 @@ impl LogTab {
                 .into_any_element()
         };
         if self.buffer.total_len() == 0 {
-            return match &self.stream {
-                LogStreamState::Connecting => v_flex()
+            return match self.phase() {
+                TabPhase::Waiting => match &self.subject {
+                    LogSubject::Workload(workload) => {
+                        muted(format!("Waiting for pods of {}", workload.target.label))
+                    }
+                    LogSubject::Pod { .. } => div().into_any_element(),
+                },
+                TabPhase::Connecting => v_flex()
                     .size_full()
                     .items_center()
                     .justify_center()
@@ -411,19 +896,19 @@ impl LogTab {
                         div()
                             .text_sm()
                             .text_color(theme.muted_foreground)
-                            .child(format!(
-                                "Opening logs of {}/{}…",
-                                self.target.pod, self.container
-                            )),
+                            .child(format!("Opening logs of {}…", self.label())),
                     )
                     .into_any_element(),
-                LogStreamState::Ended => muted("The container wrote no log lines".to_owned()),
-                LogStreamState::Streaming => muted("No log lines yet".to_owned()),
-                LogStreamState::Failed { .. } => div().into_any_element(),
+                TabPhase::Ended => muted("The containers wrote no log lines".to_owned()),
+                TabPhase::Streaming => muted("No log lines yet".to_owned()),
+                TabPhase::Failed { .. } => div().into_any_element(),
             };
         }
-        if let (0, Some(needle)) = (self.buffer.visible_len(), self.buffer.needle()) {
-            return muted(format!("No lines match \"{needle}\""));
+        if self.buffer.visible_len() == 0 {
+            return match &self.buffer.view().matcher {
+                Some(matcher) => muted(format!("No lines match \"{}\"", matcher.pattern())),
+                None => muted("No lines at the selected levels".to_owned()),
+            };
         }
         let tab = cx.weak_entity();
         let background = theme.background;
@@ -440,51 +925,22 @@ impl LogTab {
         let Some(line) = self.buffer.visible_line(index) else {
             return div().into_any_element();
         };
-        let theme = cx.theme();
-        let highlights = match self.buffer.needle() {
-            Some(needle) => find_matches(&line.text, needle)
-                .into_iter()
-                .map(|range| {
-                    let style = HighlightStyle {
-                        background_color: Some(theme.selection),
-                        ..Default::default()
-                    };
-                    (range, style)
-                })
-                .collect(),
-            None => Vec::new(),
+        let prefix = self
+            .is_workload()
+            .then(|| self.streams.get(usize::from(line.source.0)))
+            .flatten()
+            .map(|stream| RowPrefix {
+                text: stream.prefix.clone(),
+                color: pod_color(stream.color_slot, cx),
+            });
+        let style = RowStyle {
+            shows_timestamps: self.shows_timestamps,
+            wraps_lines: self.wraps_lines,
+            shows_json: self.shows_json,
+            matcher: self.buffer.view().matcher.as_ref(),
+            prefix,
         };
-        // An empty line still needs a line box, or the row would collapse to nothing.
-        let shown = if line.text.is_empty() {
-            " ".to_owned()
-        } else {
-            line.text.clone()
-        };
-        let time = line.timestamp.map(format_log_time).unwrap_or_default();
-        h_flex()
-            .items_start()
-            .gap_2()
-            .font_family(theme.mono_font_family.clone())
-            .text_xs()
-            .when(self.shows_timestamps, |row| {
-                row.child(
-                    div()
-                        .w(TIME_COLUMN_WIDTH)
-                        .flex_shrink_0()
-                        .text_color(theme.muted_foreground)
-                        .child(time),
-                )
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .when(!self.wraps_lines, |text| {
-                        text.whitespace_nowrap().truncate()
-                    })
-                    .child(StyledText::new(shown).with_highlights(highlights)),
-            )
-            .into_any_element()
+        log_row(line, &style, cx)
     }
 }
 
@@ -495,8 +951,8 @@ fn row_of(tab: &WeakEntity<LogTab>, index: usize, cx: &App) -> AnyElement {
 
 impl Render for LogTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let failure = match &self.stream {
-            LogStreamState::Failed { message } => Some(message.clone()),
+        let failure = match self.phase() {
+            TabPhase::Failed { message } => Some(message),
             _ => None,
         };
         v_flex()
@@ -511,6 +967,141 @@ impl Render for LogTab {
             }))
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
     }
+}
+
+/// A pod container stream to open.
+struct StreamOpen {
+    namespace: String,
+    pod: String,
+    container: String,
+    prefix: SharedString,
+    color_slot: usize,
+    tail_lines: u32,
+}
+
+/// A pod admitted to a workload tab, with the selected containers it has.
+struct Admission {
+    namespace: String,
+    pod: String,
+    containers: Vec<String>,
+}
+
+struct SyncPlan {
+    is_frozen: bool,
+    selected: Vec<String>,
+    change: MemberChange,
+    admissions: Vec<Admission>,
+}
+
+/// Reads the session and decides what changes. `None` while the session is gone, not live, or
+/// has no pods snapshot yet: membership then stays as it was.
+fn plan_sync(workload: &WorkloadSubject, live_streams: usize, cx: &App) -> Option<SyncPlan> {
+    let session = workload.session.upgrade()?;
+    let session = session.read(cx);
+    let live = session.live()?;
+    let pods = live.pods.ready_items()?;
+    Some(plan_membership(
+        &workload.target.owner,
+        &workload.members,
+        &workload.selected,
+        pods,
+        &live.scope,
+        live_streams,
+    ))
+}
+
+/// The pure part of `plan_sync`. `selected` is empty until a pod has been listed; the first
+/// ranked pod then decides the container.
+fn plan_membership(
+    owner: &PodOwner,
+    members: &[String],
+    selected: &[String],
+    pods: &[PodSummary],
+    scope: &NamespaceScope,
+    live_streams: usize,
+) -> SyncPlan {
+    let covers = owner
+        .namespace()
+        .is_some_and(|namespace| scope_covers(scope, namespace));
+    if !covers {
+        // A scope change must not end streams the user opened.
+        return SyncPlan {
+            is_frozen: true,
+            selected: Vec::new(),
+            change: MemberChange {
+                joined: Vec::new(),
+                left: Vec::new(),
+            },
+            admissions: Vec::new(),
+        };
+    }
+    let ranked = ranked_pods(owner, pods);
+    let selected: Vec<String> = if selected.is_empty() {
+        ranked
+            .first()
+            .and_then(|pod| {
+                let index = default_container(&pod.containers)?;
+                Some(pod.containers.get(index)?.name.clone())
+            })
+            .into_iter()
+            .collect()
+    } else {
+        selected.to_vec()
+    };
+    let slots = join_slots(members.len(), live_streams, selected.len());
+    let change = member_change(members, &ranked, slots);
+    let admissions = change
+        .joined
+        .iter()
+        .filter_map(|name| ranked.iter().find(|pod| pod.name == *name))
+        .map(|pod| Admission {
+            namespace: pod.namespace.clone(),
+            pod: pod.name.clone(),
+            containers: pod
+                .containers
+                .iter()
+                .filter(|container| selected.contains(&container.name))
+                .map(|container| container.name.clone())
+                .collect(),
+        })
+        .collect();
+    SyncPlan {
+        is_frozen: false,
+        selected,
+        change,
+        admissions,
+    }
+}
+
+/// The merge window opens with the first pod that gets a stream, so the initial tails of the
+/// pods admitted together are sorted. Later pods join without one and ask for a short tail.
+fn opens_merge_window(stream_count: usize, has_staging: bool, admitted: usize) -> bool {
+    admitted > 0 && stream_count == 0 && !has_staging
+}
+
+/// The color slot of `pod`; a name seen before keeps its slot.
+fn slot_for(pod_slots: &mut Vec<String>, pod: &str) -> usize {
+    if let Some(slot) = pod_slots.iter().position(|name| name == pod) {
+        return slot;
+    }
+    pod_slots.push(pod.to_owned());
+    pod_slots.len() - 1
+}
+
+fn pod_color(slot: usize, cx: &App) -> Hsla {
+    let theme = cx.theme();
+    match slot % POD_COLOR_SLOTS {
+        0 => theme.chart_1,
+        1 => theme.chart_2,
+        2 => theme.chart_3,
+        3 => theme.chart_4,
+        _ => theme.chart_5,
+    }
+}
+
+/// Stable by kubelet time, so equal times keep arrival order; lines without a time come first.
+fn sort_staged(lines: &mut [SourcedLine]) {
+    lines.sort_by_key(|line| line.line.timestamp);
 }
 
 /// `N lines`, or `V of N lines` while a filter hides some, then the eviction note.
@@ -529,50 +1120,31 @@ fn count_text(visible: usize, total: usize, has_filter: bool, has_dropped: bool)
 
 #[cfg(test)]
 mod tests {
-    use cluster::{ContainerKind, ContainerState, PodStatus, ReadyCount, StatusReason};
+    use cluster::{
+        ContainerKind, ContainerState, ContainerSummary, ControllerRef, LogLine, PodStatus,
+        ReadyCount, StatusReason,
+    };
 
     use super::*;
+    use crate::kind_row::JOB_KIND;
 
-    fn container(name: &str, kind: ContainerKind, is_ready: bool) -> ContainerSummary {
-        ContainerSummary {
-            name: name.to_owned(),
-            image: "img".to_owned(),
-            kind,
-            state: ContainerState::NotReported,
-            is_ready,
-            restart_count: 0,
-            last_termination: None,
-            image_digest: None,
-            pull_policy: None,
-            is_started: None,
-            ports: Vec::new(),
-            resources: Vec::new(),
-            probes: cluster::ContainerProbes::default(),
-            env: Vec::new(),
-            env_from: Vec::new(),
-            mounts: Vec::new(),
+    fn tone_of(list: &[LogStreamState]) -> StatusTone {
+        workload_tone(list.iter())
+    }
+
+    fn failed() -> LogStreamState {
+        LogStreamState::Failed {
+            message: "boom".to_owned(),
         }
     }
 
-    fn pod(containers: Vec<ContainerSummary>) -> PodSummary {
-        PodSummary {
-            namespace: "ns".to_owned(),
-            name: "pod".to_owned(),
-            status: PodStatus::Reason(StatusReason::Running),
-            ready: ReadyCount { ready: 0, total: 0 },
-            restarts: 0,
-            node_name: None,
-            created_at: None,
-            pod_ip: None,
-            qos_class: None,
-            service_account: None,
-            controller: None,
-            conditions: Vec::new(),
-            status_message: None,
-            labels: Vec::new(),
-            host_network: false,
-            image_pull_secrets: Vec::new(),
-            containers,
+    fn staged(source: u16, time: Option<&str>, text: &str) -> SourcedLine {
+        SourcedLine {
+            source: SourceId(source),
+            line: LogLine {
+                timestamp: time.map(|time| time.parse().expect("valid time")),
+                text: text.to_owned(),
+            },
         }
     }
 
@@ -602,33 +1174,177 @@ mod tests {
         let mut state = LogStreamState::Streaming;
         state.fail("boom".to_owned());
         state.close();
+        assert_eq!(state, failed());
+    }
+
+    #[test]
+    fn workload_tone_follows_stream_states() {
+        use LogStreamState::{Connecting, Ended, Streaming};
+        assert_eq!(tone_of(&[]), StatusTone::Info);
+        assert_eq!(tone_of(&[Connecting, Connecting]), StatusTone::Info);
+        assert_eq!(tone_of(&[Connecting, Streaming]), StatusTone::Ok);
+        assert_eq!(tone_of(&[Ended, Streaming, failed()]), StatusTone::Ok);
+        assert_eq!(tone_of(&[failed(), failed()]), StatusTone::Bad);
+        assert_eq!(tone_of(&[Ended, Ended]), StatusTone::Done);
+        assert_eq!(tone_of(&[Ended, failed()]), StatusTone::Done);
+    }
+
+    #[test]
+    fn stream_phase_reports_a_failure_only_when_every_stream_failed() {
+        let mixed = stream_phase([failed(), LogStreamState::Ended].iter());
+        assert_eq!(mixed, TabPhase::Ended);
+        let all = stream_phase([failed()].iter());
         assert_eq!(
-            state,
-            LogStreamState::Failed {
+            all,
+            TabPhase::Failed {
                 message: "boom".to_owned()
             }
         );
+        assert_eq!(stream_phase([].iter()), TabPhase::Waiting);
     }
 
     #[test]
-    fn log_target_of_pod_picks_default_container() {
-        let pod = pod(vec![
-            container("init", ContainerKind::Init, true),
-            container("ready", ContainerKind::Main, true),
-            container("waiting", ContainerKind::Main, false),
-        ]);
-        let target = LogTarget::of_pod(&pod).expect("a target");
-        assert_eq!(target.initial_container, "waiting");
-        assert_eq!(target.containers.len(), 3);
+    fn staged_lines_sort_by_timestamp_stably() {
+        let mut lines = vec![
+            staged(0, Some("2024-05-01T10:00:02Z"), "late"),
+            staged(1, Some("2024-05-01T10:00:01Z"), "first of two"),
+            staged(2, None, "untimed"),
+            staged(0, Some("2024-05-01T10:00:01Z"), "second of two"),
+        ];
+        sort_staged(&mut lines);
+        let order: Vec<&str> = lines.iter().map(|line| line.line.text.as_str()).collect();
+        assert_eq!(order, ["untimed", "first of two", "second of two", "late"]);
+    }
+
+    fn container(name: &str, kind: ContainerKind, is_ready: bool) -> ContainerSummary {
+        ContainerSummary {
+            name: name.to_owned(),
+            image: "img".to_owned(),
+            kind,
+            state: ContainerState::NotReported,
+            is_ready,
+            restart_count: 0,
+            last_termination: None,
+            image_digest: None,
+            pull_policy: None,
+            is_started: None,
+            ports: Vec::new(),
+            resources: Vec::new(),
+            probes: cluster::ContainerProbes::default(),
+            env: Vec::new(),
+            env_from: Vec::new(),
+            mounts: Vec::new(),
+        }
+    }
+
+    fn job_pod(name: &str, containers: Vec<ContainerSummary>) -> PodSummary {
+        PodSummary {
+            namespace: "ns".to_owned(),
+            name: name.to_owned(),
+            status: PodStatus::Reason(StatusReason::Running),
+            ready: ReadyCount { ready: 1, total: 1 },
+            restarts: 0,
+            node_name: None,
+            created_at: None,
+            pod_ip: None,
+            qos_class: None,
+            service_account: None,
+            controller: Some(ControllerRef {
+                kind: JOB_KIND.to_owned(),
+                name: "batch".to_owned(),
+            }),
+            conditions: Vec::new(),
+            status_message: None,
+            labels: Vec::new(),
+            host_network: false,
+            image_pull_secrets: Vec::new(),
+            containers,
+        }
+    }
+
+    fn job_owner() -> PodOwner {
+        PodOwner::Controller {
+            namespace: "ns".to_owned(),
+            kind: JOB_KIND,
+            name: "batch".to_owned(),
+        }
+    }
+
+    fn two_container_pod(name: &str) -> PodSummary {
+        job_pod(
+            name,
+            vec![
+                container("app", ContainerKind::Main, true),
+                container("sidecar", ContainerKind::Main, true),
+            ],
+        )
+    }
+
+    #[test]
+    fn first_sync_selects_default_container_of_first_ranked_pod() {
+        let pods = [two_container_pod("a")];
+        let plan = plan_membership(&job_owner(), &[], &[], &pods, &NamespaceScope::All, 0);
+        assert!(!plan.is_frozen);
+        assert_eq!(plan.selected, ["app"]);
+        assert_eq!(plan.change.joined, ["a"]);
+    }
+
+    #[test]
+    fn plan_admits_only_selected_containers_the_pod_has() {
+        let pods = [
+            two_container_pod("a"),
+            job_pod("b", vec![container("other", ContainerKind::Main, true)]),
+        ];
+        let selected = ["sidecar".to_owned()];
+        let plan = plan_membership(&job_owner(), &[], &selected, &pods, &NamespaceScope::All, 0);
+        assert_eq!(plan.selected, ["sidecar"]);
+        let admitted: Vec<_> = plan
+            .admissions
+            .iter()
+            .map(|admission| (admission.pod.as_str(), admission.containers.clone()))
+            .collect();
         assert_eq!(
-            (target.namespace.as_str(), target.pod.as_str()),
-            ("ns", "pod")
+            admitted,
+            [("a", vec!["sidecar".to_owned()]), ("b", Vec::new())]
         );
     }
 
     #[test]
-    fn log_target_of_pod_without_containers_is_none() {
-        assert!(LogTarget::of_pod(&pod(Vec::new())).is_none());
+    fn plan_without_pods_selects_nothing_yet() {
+        let plan = plan_membership(&job_owner(), &[], &[], &[], &NamespaceScope::All, 0);
+        assert!(plan.selected.is_empty());
+        assert!(plan.admissions.is_empty());
+    }
+
+    #[test]
+    fn plan_is_frozen_when_scope_excludes_the_workload() {
+        let pods = [two_container_pod("a")];
+        let members = ["a".to_owned()];
+        let scope = NamespaceScope::Named("elsewhere".to_owned());
+        let plan = plan_membership(&job_owner(), &members, &[], &pods, &scope, 0);
+        assert!(plan.is_frozen);
+        assert!(plan.change.joined.is_empty());
+        assert!(plan.change.left.is_empty());
+        assert!(plan.admissions.is_empty());
+    }
+
+    #[test]
+    fn merge_window_opens_with_the_first_admission_only() {
+        assert!(opens_merge_window(0, false, 1));
+        // Nothing admitted yet, so a late pods snapshot still gets the full tail.
+        assert!(!opens_merge_window(0, false, 0));
+        assert!(!opens_merge_window(0, true, 2));
+        // Streams exist: a later joiner asks for a short tail.
+        assert!(!opens_merge_window(3, false, 1));
+    }
+
+    #[test]
+    fn slot_for_reuses_slot_of_returning_pod() {
+        let mut slots = Vec::new();
+        assert_eq!(slot_for(&mut slots, "db-0"), 0);
+        assert_eq!(slot_for(&mut slots, "db-1"), 1);
+        assert_eq!(slot_for(&mut slots, "db-0"), 0);
+        assert_eq!(slots.len(), 2);
     }
 
     #[test]
