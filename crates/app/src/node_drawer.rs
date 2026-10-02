@@ -1,17 +1,18 @@
 use std::rc::Rc;
 
-use cluster::{NodeCondition, NodeSummary, NodeSystemInfo};
+use cluster::{CpuAmount, NodeCondition, NodeSummary, NodeSystemInfo, ResourceUsage};
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
-    prelude::FluentBuilder as _,
+    prelude::FluentBuilder as _, relative,
 };
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
+use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::container_detail::resource_label;
 use crate::drawer::{
@@ -21,6 +22,9 @@ use crate::drawer::{
     yaml_body,
 };
 use crate::kind_row::PodOwner;
+use crate::node_usage::{
+    node_allocatable, node_pod_count, node_pod_limit, node_quantity_text, node_requests,
+};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
 use crate::resource_actions::node_menu;
@@ -28,6 +32,8 @@ use crate::status_tone::{
     StatusLabel, condition_status_text, node_condition_tone, node_status_label, toned_text,
 };
 use crate::table_selection::ResourceKey;
+use crate::usage_bar::{UsageBar, usage_bar};
+use crate::usage_format::Measure;
 
 pub(crate) fn node_drawer(
     node: &NodeSummary,
@@ -144,6 +150,10 @@ fn overview(
         column = column.child(condition_row(index, condition, now, cx));
     }
 
+    column = column
+        .child(section_title("Allocatable used", cx))
+        .child(allocatable_used(node, live, cx));
+
     column = column.child(section_title("Addresses", cx));
     if node.addresses.is_empty() {
         column = column.child(absent_text(cx));
@@ -193,14 +203,18 @@ fn overview(
             cx,
         ));
     }
-    let quantity = |value: &Option<String>| value.as_deref().unwrap_or("—").to_owned();
+    let quantity = |name: &str, value: &Option<String>| {
+        value
+            .as_deref()
+            .map_or_else(|| "—".to_owned(), |text| node_quantity_text(name, text))
+    };
     for resource in &node.resources {
         column = column.child(resource_row(
             ResourceRowKind::Quantity,
             ResourceCells {
                 name: &resource_label(&resource.name),
-                capacity: &quantity(&resource.capacity),
-                allocatable: &quantity(&resource.allocatable),
+                capacity: &quantity(&resource.name, &resource.capacity),
+                allocatable: &quantity(&resource.name, &resource.allocatable),
             },
             cx,
         ));
@@ -225,6 +239,129 @@ fn overview(
                 .collect::<Vec<_>>(),
             cx,
         ))
+        .into_any_element()
+}
+
+/// What the pods on a node request and how many there are; only known for the All scope, since
+/// a namespace scope would understate both.
+struct NodePods {
+    cpu_request: CpuAmount,
+    memory_request: cluster::ByteAmount,
+    count: usize,
+}
+
+/// One line of the "Allocatable used" section.
+#[derive(Debug, PartialEq)]
+struct AllocatableRow {
+    label: &'static str,
+    value: String,
+    bar: Option<UsageBar>,
+}
+
+/// CPU, Memory, and (with `pods`) Pods rows. A value without a sample or without an allocatable
+/// is "—" and has no bar.
+fn allocatable_rows(
+    node: &NodeSummary,
+    latest: Option<ResourceUsage>,
+    pods: Option<&NodePods>,
+) -> Vec<AllocatableRow> {
+    let (cpu, memory) = node_allocatable(node);
+    let share = |measure: Measure, used: Option<f64>, total: Option<f64>, request: Option<f64>| {
+        let (Some(used), Some(total)) = (used, total.filter(|total| *total > 0.)) else {
+            return (ABSENT_VALUE.to_owned(), None);
+        };
+        let bar = UsageBar::of_ratio(used / total, request.map(|request| request / total));
+        (measure.format_pair(used, total, " / "), Some(bar))
+    };
+    let (cpu_value, cpu_bar) = share(
+        Measure::Cpu,
+        latest.map(|usage| usage.cpu.cores()),
+        cpu.map(CpuAmount::cores),
+        pods.map(|pods| pods.cpu_request.cores()),
+    );
+    let (memory_value, memory_bar) = share(
+        Measure::Bytes,
+        latest.map(|usage| usage.memory.bytes() as f64),
+        memory.map(|memory| memory.bytes() as f64),
+        pods.map(|pods| pods.memory_request.bytes() as f64),
+    );
+    let mut rows = vec![
+        AllocatableRow {
+            label: "CPU",
+            value: cpu_value,
+            bar: cpu_bar,
+        },
+        AllocatableRow {
+            label: "Memory",
+            value: memory_value,
+            bar: memory_bar,
+        },
+    ];
+    if let Some(pods) = pods {
+        rows.push(pod_count_row(pods.count, node_pod_limit(node)));
+    }
+    rows
+}
+
+fn pod_count_row(count: usize, limit: Option<u64>) -> AllocatableRow {
+    let Some(limit) = limit.filter(|limit| *limit > 0) else {
+        return AllocatableRow {
+            label: "Pods",
+            value: count.to_string(),
+            bar: None,
+        };
+    };
+    AllocatableRow {
+        label: "Pods",
+        value: format!("{count} / {limit}"),
+        bar: Some(UsageBar::of_ratio(count as f64 / limit as f64, None)),
+    }
+}
+
+const ABSENT_VALUE: &str = "—";
+
+/// The section body: the rows, or one muted line when the nodes feed has no data to show.
+fn allocatable_used(node: &NodeSummary, live: Option<&LiveCluster>, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let feed = live.map(|live| &live.metrics.nodes);
+    if let Some(FeedStatus::Unavailable(reason) | FeedStatus::Failed(reason)) =
+        feed.map(|feed| &feed.status)
+    {
+        return div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(format!("Usage unavailable: {reason}"))
+            .into_any_element();
+    }
+    let latest = feed.and_then(|feed| feed.history.latest(&node.name));
+    // Requests and the pod count come from the pods list, which holds every namespace only when
+    // the scope is All.
+    let pods = live.and_then(|live| {
+        let items = live.pods.ready_items()?;
+        if live.scope != cluster::NamespaceScope::All {
+            return None;
+        }
+        let (cpu_request, memory_request) = node_requests(&node.name, items);
+        Some(NodePods {
+            cpu_request,
+            memory_request,
+            count: node_pod_count(&node.name, items),
+        })
+    });
+    let mono = theme.mono_font_family.clone();
+    v_flex()
+        .children(
+            allocatable_rows(node, latest, pods.as_ref())
+                .into_iter()
+                .map(|row| {
+                    let value = v_flex()
+                        .w_full()
+                        .gap_1()
+                        .child(div().font_family(mono.clone()).child(row.value))
+                        .children(row.bar.map(|bar| usage_bar(bar, relative(1.), cx)));
+                    wide_detail_row(row.label, value, cx)
+                }),
+        )
         .into_any_element()
 }
 

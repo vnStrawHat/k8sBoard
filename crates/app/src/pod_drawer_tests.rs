@@ -1,4 +1,4 @@
-use cluster::{PodCondition, StatusReason, Termination};
+use cluster::{ByteAmount, ContainerResource, CpuAmount, PodCondition, StatusReason, Termination};
 
 use super::*;
 
@@ -113,4 +113,66 @@ fn condition_tooltip_joins_reason_and_message() {
         Some("no nodes")
     );
     assert_eq!(condition_tooltip(&condition(None, None)), None);
+}
+
+fn resource(name: &str, request: Option<&str>, limit: Option<&str>) -> ContainerResource {
+    ContainerResource {
+        name: name.to_owned(),
+        request: request.map(str::to_owned),
+        limit: limit.map(str::to_owned),
+    }
+}
+
+fn usage(millicores: u64, mebibytes: u64) -> ResourceUsage {
+    ResourceUsage {
+        cpu: CpuAmount::from_nanocores(millicores * 1_000_000),
+        memory: ByteAmount::from_bytes(mebibytes << 20),
+    }
+}
+
+#[test]
+fn container_usage_row_shows_usage_of_limit() {
+    let row = container_usage_row(
+        &resource("memory", Some("256Mi"), Some("512Mi")),
+        Some(usage(0, 498)),
+    )
+    .expect("a usage row");
+    assert_eq!(row.value, "498 of 512Mi");
+    assert_eq!(row.tone, Some(StatusTone::Bad));
+    assert_eq!(row.note.as_deref(), Some("request 256Mi"));
+    let bar = row.bar.expect("a bar");
+    assert!((bar.fill - 0.972).abs() < 0.001, "{}", bar.fill);
+    assert_eq!(bar.marker, Some(0.5));
+    assert_eq!(bar.tone, Some(StatusTone::Bad));
+
+    let cpu = container_usage_row(&resource("cpu", None, Some("1")), Some(usage(310, 0)))
+        .expect("a usage row");
+    assert_eq!(cpu.value, "310m of 1 core");
+    assert_eq!(cpu.tone, None);
+    assert_eq!(cpu.note, None);
+    assert_eq!(cpu.bar.expect("a bar").marker, None);
+}
+
+#[test]
+fn container_usage_row_without_limit_has_no_bar() {
+    let row = container_usage_row(&resource("cpu", Some("250m"), None), Some(usage(310, 0)))
+        .expect("a usage row");
+    assert_eq!(row.value, "310m used");
+    assert_eq!(row.bar, None);
+    assert_eq!(row.tone, None);
+    assert_eq!(row.note.as_deref(), Some("request 250m · no limit"));
+    let bare = container_usage_row(&resource("memory", None, None), Some(usage(0, 498)))
+        .expect("a usage row");
+    assert_eq!(bare.note.as_deref(), Some("no request · no limit"));
+    let zero = container_usage_row(&resource("cpu", None, Some("0")), Some(usage(10, 0)))
+        .expect("a usage row");
+    assert_eq!(zero.bar, None);
+}
+
+#[test]
+fn container_usage_row_keeps_the_text_without_usage_or_for_other_resources() {
+    let memory = resource("memory", Some("1Mi"), Some("2Mi"));
+    assert_eq!(container_usage_row(&memory, None), None);
+    let storage = resource("ephemeral-storage", Some("1Gi"), None);
+    assert_eq!(container_usage_row(&storage, Some(usage(1, 1))), None);
 }

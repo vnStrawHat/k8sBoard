@@ -25,7 +25,7 @@ fn parse_quantity(text: &str) -> Option<Quantity>;
 | Number | digits with an optional `.` fraction (`5`, `5.`, `.5`); at least one digit; digits go into the u128 mantissa (over 38 digits → `None`), each fraction digit lowers `exponent` by 1 |
 | Then exactly one of | a binary suffix `Ki`…`Ei` (`binary` = 2^10…2^60); a decimal suffix `n` −9, `u` −6, `m` −3, `k` 3, `M` 6, `G` 9, `T` 12, `P` 15, `E` 18 (added to `exponent`); an exponent `e`/`E` + optional sign + digits (`129e6`, `1E3`; `E` alone is exa); or nothing |
 | Rejected | `1.2.3`, `5x`, `Mi`, `1 Gi`, exponent with a suffix (`1e3Ki`, `1.5e2m`) |
-| Conversion | target unit: nanocores (`exponent + 9`) or bytes; a positive power multiplies, a negative one divides rounding half up; checked u128 math; above `u64::MAX` → `None` |
+| Conversion | target unit: nanocores (`exponent + 9`) or bytes; a positive power multiplies, a negative one divides rounding up (like Kubernetes: `1.5n` → 2 n, `0.4` bytes → 1); checked u128 math (trailing fraction zeros are dropped first, so `1.000…0Ki` cannot overflow); above `u64::MAX` → `None` |
 
 ## Metrics types (`resource_metrics.rs`)
 
@@ -56,7 +56,7 @@ impl ClusterConnection {
 ## Requests
 
 - `ApiResource { group: "metrics.k8s.io", version: "v1beta1", api_version: "metrics.k8s.io/v1beta1", kind: "PodMetrics" | "NodeMetrics", plural: "pods" | "nodes" }`, read through `Api<DynamicObject>` like `object_yaml.rs`. No serde derive, no new dependency.
-- `connection.rs` gains `scoped_dynamic_apis(scope, &ApiResource) -> Vec<(Option<String>, Api<DynamicObject>)>`, the `DynamicObject` twin of 0009's `scoped_apis`. Each api is listed with `list_all(api, "listing pod metrics")` in order; the results go through the pure `concat_namespaces(results: Vec<(Option<String>, Result<Vec<T>, ClusterError>>)) -> Result<Vec<T>, ClusterError>`: concatenation in order, or the first error, wrapped in 0009's `ClusterError::Namespace` when it names a namespace and there are several. Nodes: one `Api::all_with`, action `"listing node metrics"`.
+- `connection.rs` gains `scoped_dynamic_apis(scope, &ApiResource) -> Vec<(Option<String>, Api<DynamicObject>)>`, the `DynamicObject` twin of 0009's `scoped_apis`. Each api is listed with `list_all(api, "listing pod metrics")` in order, stopping at the first failure; the results go through the pure `concat_namespaces(results, namespace_count)`: concatenation in order, or the first error, wrapped in 0009's `ClusterError::Namespace` when it names a namespace and `namespace_count > 1`. Nodes: one `Api::all_with`, action `"listing node metrics"`.
 - A 404 or 503 surfaces as `ClusterError::Api { code, .. }`; the app words it (decision 6). `metrics_api()` (0001) stays for the probe only.
 - Mapping (private, pure): `pod_metrics(&DynamicObject) -> Option<PodMetrics>` reads metadata namespace and name, `data["timestamp"]` (RFC 3339 via jiff; bad text → `None`), and `data["containers"][*]` with `name`, `usage.cpu`, `usage.memory`. A container missing a field or failing to parse is skipped; no container left → `None`. `node_metrics` reads `data["timestamp"]` and `data["usage"]`. Labels and `window` are not kept.
 - Snapshots are sorted like watch snapshots. Only counts are traced (`tracing::debug!(pods, containers)`), never values or names.
@@ -79,13 +79,13 @@ fn next_delay(failures: u32) -> Duration;   // 0 → 15 s, 1 → 30 s, 2 → 60 
 | `ListPodMetrics` | list | `metrics.k8s.io` | pods | yes |
 | `ListNodeMetrics` | list | `metrics.k8s.io` | nodes | no |
 
-- Appended to `AccessCheck::ALL`, which becomes `[AccessCheck; 21]`. `Display` adds the group when not core: `list pods.metrics.k8s.io`.
+- Appended to `AccessCheck::ALL`, which becomes `[AccessCheck; 21]`. `Display` spells out the group only for `metrics.k8s.io` (`list pods.metrics.k8s.io`); built-in kinds keep `list deployments`. The group name is one shared `pub(crate) const`.
 - New, for decision 7 (reuses 0009's private `review_checks`; SSAR `create` only):
 
 ```rust
 pub struct NamespaceAccess { pub namespace: Option<String>, pub decision: AccessDecision }
 impl ClusterConnection {
-    /// One review of `check` per namespace of `scope` (one cluster-wide review for `All`), in order.
+    /// One review of `check` per namespace of `scope` (one cluster-wide review for `All`), with results in scope order; requests run concurrently (at most 5 picked namespaces, so at most 5 in flight).
     pub async fn review_namespaces(&self, check: AccessCheck, scope: &NamespaceScope)
         -> Result<Vec<NamespaceAccess>, ClusterError>;
 }

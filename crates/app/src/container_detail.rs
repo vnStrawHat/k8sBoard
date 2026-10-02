@@ -4,15 +4,17 @@
 //! Secret safety: the cluster crate keeps only names and sources of env vars, so nothing here
 //! can show a value; a literal env var points to the YAML tab instead.
 
+use std::borrow::Cow;
+
 use cluster::{
     ContainerResource, ContainerState, ContainerSummary, EnvFromSource, EnvSource, EventSummary,
-    PodSummary, ProbeAction, ProbeSummary, Termination, VolumeSource,
+    PodSummary, ProbeAction, ProbeSummary, ResourceUsage, Termination, VolumeSource,
 };
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, div,
+    SharedString, StatefulInteractiveElement as _, Styled as _, div, relative,
 };
 
 use crate::age::{format_age, format_countdown};
@@ -22,9 +24,10 @@ use crate::drawer::{
     value_or_absent,
 };
 use crate::pod_diagnosis::{ProbeKind, ProbeResult, next_retry, probe_of, probe_result};
-use crate::pod_drawer::kind_tag;
+use crate::pod_drawer::{UsageRow, container_usage_row, kind_tag};
 use crate::status_tone::{StatusLabel, StatusTone, container_state_label, tone_color, toned_text};
 use crate::table_selection::ResourceKey;
+use crate::usage_bar::usage_bar;
 
 /// How many distinct env sources `env_summary` names before `+N more`.
 const MAX_SUMMARY_SOURCES: usize = 3;
@@ -59,6 +62,8 @@ pub(crate) struct ContainerDetailInput<'a> {
     pub(crate) events: Option<&'a [EventSummary]>,
     /// Why the disabled Forward button is disabled.
     pub(crate) forward_reason: &'a SharedString,
+    /// The container's newest usage; `None` without a sample.
+    pub(crate) usage: Option<ResourceUsage>,
     pub(crate) now: jiff::Timestamp,
 }
 
@@ -217,18 +222,23 @@ fn info_body(input: &ContainerDetailInput<'_>, cx: &Context<AppShell>) -> AnyEle
     }
 
     column = column.child(section_title("Resources", cx));
-    if container.resources.is_empty() {
+    let resources = resource_rows(container, input.usage);
+    if resources.is_empty() {
         column = column.child(muted_note("No requests or limits", cx));
     }
-    for resource in &container.resources {
-        column = column.child(detail_row(
-            resource_label(&resource.name),
-            truncated_text(
-                SharedString::from(format!("resource-{}", resource.name)),
-                resource_text(resource),
-            ),
-            cx,
-        ));
+    for resource in resources.iter() {
+        let label = resource_label(&resource.name);
+        column = match container_usage_row(resource, input.usage) {
+            Some(row) => column.child(detail_row(label, usage_value(row, cx), cx)),
+            None => column.child(detail_row(
+                label,
+                truncated_text(
+                    SharedString::from(format!("resource-{}", resource.name)),
+                    resource_text(resource),
+                ),
+                cx,
+            )),
+        };
     }
 
     column = column.child(section_title("Probes", cx));
@@ -420,6 +430,60 @@ pub(crate) fn resource_label(name: &str) -> String {
         "pods" => "Pods".to_owned(),
         other => other.to_owned(),
     }
+}
+
+/// The container's resources. With usage, a `cpu` or `memory` the container has no request or limit
+/// for (a BestEffort container) is added as an empty row, so its usage still shows (`no request ·
+/// no limit`); only then are the rows copied and ordered `cpu`, `memory`, the rest.
+fn resource_rows(
+    container: &ContainerSummary,
+    usage: Option<ResourceUsage>,
+) -> Cow<'_, [ContainerResource]> {
+    let missing: Vec<&str> = ["cpu", "memory"]
+        .into_iter()
+        .filter(|name| container.resources.iter().all(|row| row.name != *name))
+        .collect();
+    if usage.is_none() || missing.is_empty() {
+        return Cow::Borrowed(&container.resources);
+    }
+    let mut rows = container.resources.clone();
+    rows.extend(missing.into_iter().map(|name| ContainerResource {
+        name: name.to_owned(),
+        request: None,
+        limit: None,
+    }));
+    rows.sort_by_key(|row| match row.name.as_str() {
+        "cpu" => 0,
+        "memory" => 1,
+        _ => 2,
+    });
+    Cow::Owned(rows)
+}
+
+/// The usage of one resource: the text in its tone, the bar when there is a limit, and the
+/// request below.
+fn usage_value(row: UsageRow, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let color = row
+        .tone
+        .map_or(theme.foreground, |tone| tone_color(tone, cx));
+    v_flex()
+        .w_full()
+        .gap_1()
+        .child(
+            div()
+                .font_family(theme.mono_font_family.clone())
+                .text_color(color)
+                .child(row.value),
+        )
+        .children(row.bar.map(|bar| usage_bar(bar, relative(1.), cx)))
+        .children(row.note.map(|note| {
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(note)
+        }))
+        .into_any_element()
 }
 
 /// `request 250m · limit 1`, `request 250m · no limit`, `no request · limit 512Mi`.

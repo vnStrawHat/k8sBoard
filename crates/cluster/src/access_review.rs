@@ -9,6 +9,7 @@ use kube::Api;
 use kube::api::PostParams;
 
 use crate::connection::{ClusterConnection, ClusterError};
+use crate::metrics_api::METRICS_GROUP;
 use crate::namespace::NamespaceScope;
 
 /// One permission the UI needs to know about.
@@ -33,6 +34,8 @@ pub enum AccessCheck {
     ListServices,
     ListIngresses,
     ListConfigMaps,
+    ListPodMetrics,
+    ListNodeMetrics,
 }
 
 /// The API resource a check asks about.
@@ -46,7 +49,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 19] = [
+    pub const ALL: [AccessCheck; 21] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::CreatePodExec,
@@ -66,6 +69,8 @@ impl AccessCheck {
         Self::ListServices,
         Self::ListIngresses,
         Self::ListConfigMaps,
+        Self::ListPodMetrics,
+        Self::ListNodeMetrics,
     ];
 
     fn target(self) -> CheckTarget {
@@ -89,6 +94,8 @@ impl AccessCheck {
             Self::ListServices => ("list", "", "services", None, true),
             Self::ListIngresses => ("list", "networking.k8s.io", "ingresses", None, true),
             Self::ListConfigMaps => ("list", "", "configmaps", None, true),
+            Self::ListPodMetrics => ("list", METRICS_GROUP, "pods", None, true),
+            Self::ListNodeMetrics => ("list", METRICS_GROUP, "nodes", None, false),
         };
         CheckTarget {
             verb,
@@ -104,6 +111,11 @@ impl fmt::Display for AccessCheck {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let target = self.target();
         write!(formatter, "{} {}", target.verb, target.resource)?;
+        // Only this group is spelled out, so the established wording of the built-in kinds
+        // (`list deployments`) stays as it is.
+        if target.group == METRICS_GROUP {
+            write!(formatter, ".{METRICS_GROUP}")?;
+        }
         match target.subresource {
             Some(subresource) => write!(formatter, "/{subresource}"),
             None => Ok(()),
@@ -127,6 +139,13 @@ pub struct AccessReview {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessReport {
     pub reviews: Vec<AccessReview>,
+}
+
+/// The decision of one check in one namespace; `None` is the cluster-wide review.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceAccess {
+    pub namespace: Option<String>,
+    pub decision: AccessDecision,
 }
 
 impl AccessReport {
@@ -167,7 +186,7 @@ impl ClusterConnection {
     /// any request error fails the whole call, so a report is never partial.
     ///
     /// For `Several` the cluster-scoped checks run once, then the namespaced checks run
-    /// one namespace at a time (16 x N + 3 requests); a check is allowed only when every
+    /// one namespace at a time (17 x N + 4 requests); a check is allowed only when every
     /// namespace allows it. That gates menus, it never filters data.
     pub async fn review_access(&self, scope: NamespaceScope) -> Result<AccessReport, ClusterError> {
         let NamespaceScope::Several(namespaces) = &scope else {
@@ -187,6 +206,28 @@ impl ClusterConnection {
             });
         }
         Ok(AccessReport::all_of(reports))
+    }
+
+    /// One review of `check` per namespace of `scope` (one cluster-wide review for `All`), with
+    /// the results in scope order. The requests run concurrently: at most 5 picked namespaces,
+    /// so at most 5 are in flight. Like `review_access`, a request error fails the whole call.
+    pub async fn review_namespaces(
+        &self,
+        check: AccessCheck,
+        scope: &NamespaceScope,
+    ) -> Result<Vec<NamespaceAccess>, ClusterError> {
+        try_join_all(
+            review_targets(scope)
+                .into_iter()
+                .map(|namespace| async move {
+                    let review = self.review_one(check, namespace).await?;
+                    Ok(NamespaceAccess {
+                        namespace: namespace.map(str::to_owned),
+                        decision: review.decision,
+                    })
+                }),
+        )
+        .await
     }
 
     /// Reviews `checks` concurrently. `namespace` applies to the namespaced checks only.
@@ -226,6 +267,18 @@ impl ClusterConnection {
             check,
             decision: access_decision(response.status),
         })
+    }
+}
+
+/// The namespace of each review `scope` needs: `None` for the single cluster-wide review.
+fn review_targets(scope: &NamespaceScope) -> Vec<Option<&str>> {
+    match scope {
+        NamespaceScope::All => vec![None],
+        _ => scope
+            .namespaces()
+            .iter()
+            .map(|namespace| Some(namespace.as_str()))
+            .collect(),
     }
 }
 
@@ -279,9 +332,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 19);
+        assert_eq!(AccessCheck::ALL.len(), 21);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 19);
+        assert_eq!(distinct.len(), 21);
     }
 
     #[test]
@@ -487,7 +540,44 @@ mod tests {
                 "list services",
                 "list ingresses",
                 "list configmaps",
+                "list pods.metrics.k8s.io",
+                "list nodes.metrics.k8s.io",
             ]
         );
+    }
+
+    #[test]
+    fn metrics_checks_target_the_metrics_group() {
+        let pods = resource_attributes(AccessCheck::ListPodMetrics, Some("team-a"));
+        assert_eq!(pods.group.as_deref(), Some("metrics.k8s.io"));
+        assert_eq!(pods.resource.as_deref(), Some("pods"));
+        assert_eq!(pods.verb.as_deref(), Some("list"));
+        assert_eq!(pods.namespace.as_deref(), Some("team-a"));
+        let nodes = resource_attributes(AccessCheck::ListNodeMetrics, Some("team-a"));
+        assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
+        assert_eq!(nodes.resource.as_deref(), Some("nodes"));
+        assert_eq!(nodes.namespace, None);
+        assert_eq!(AccessCheck::ALL.len(), 21);
+    }
+
+    #[test]
+    fn display_names_the_metrics_group_only() {
+        assert_eq!(
+            AccessCheck::ListPodMetrics.to_string(),
+            "list pods.metrics.k8s.io"
+        );
+        assert_eq!(AccessCheck::ListPods.to_string(), "list pods");
+        assert_eq!(AccessCheck::ListDeployments.to_string(), "list deployments");
+    }
+
+    #[test]
+    fn review_targets_follow_the_scope() {
+        assert_eq!(review_targets(&NamespaceScope::All), [None]);
+        assert_eq!(
+            review_targets(&NamespaceScope::Named("a".to_owned())),
+            [Some("a")]
+        );
+        let several = NamespaceScope::of_namespaces(["b".to_owned(), "a".to_owned()]);
+        assert_eq!(review_targets(&several), [Some("a"), Some("b")]);
     }
 }

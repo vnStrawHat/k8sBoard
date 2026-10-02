@@ -1,7 +1,8 @@
 use std::rc::Rc;
 
 use cluster::{
-    ContainerKind, ContainerState, ContainerSummary, EventSummary, PodCondition, PodSummary,
+    ByteAmount, ContainerKind, ContainerResource, ContainerState, ContainerSummary, CpuAmount,
+    EventSummary, PodCondition, PodSummary, ResourceUsage,
 };
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::menu::DropdownMenu as _;
@@ -22,11 +23,14 @@ use crate::drawer::{
     section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
 };
 use crate::log_dock::LogDock;
+use crate::metrics_history::PodUsageHistory;
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
 use crate::resource_actions::{pod_menu, port_forward_reason};
 use crate::status_tone::{StatusTone, container_state_label, pod_status_label, toned_text};
 use crate::table_selection::ResourceKey;
+use crate::usage_bar::UsageBar;
+use crate::usage_format::{Measure, usage_tone};
 
 const CONTAINER_LIST_WIDTH: Pixels = px(240.);
 
@@ -61,6 +65,10 @@ pub(crate) fn pod_drawer(
                 .live()
                 .map(|live| port_forward_reason(&live.access))
                 .unwrap_or_default(),
+            session
+                .read(cx)
+                .live()
+                .map(|live| &live.metrics.pods.history),
             now,
             cx,
         )),
@@ -352,11 +360,66 @@ pub(crate) fn default_container(containers: &[ContainerSummary]) -> Option<usize
         .or_else(|| (!containers.is_empty()).then_some(0))
 }
 
+/// How a container's `cpu` or `memory` row reads once usage is known.
+#[derive(Debug, PartialEq)]
+pub(crate) struct UsageRow {
+    pub(crate) value: String,
+    pub(crate) tone: Option<StatusTone>,
+    pub(crate) bar: Option<UsageBar>,
+    pub(crate) note: Option<String>,
+}
+
+/// `None` when the row keeps its request and limit text: no usage, or not `cpu` or `memory`.
+pub(crate) fn container_usage_row(
+    resource: &ContainerResource,
+    usage: Option<ResourceUsage>,
+) -> Option<UsageRow> {
+    let usage = usage?;
+    let (measure, used) = match resource.name.as_str() {
+        "cpu" => (Measure::Cpu, usage.cpu.cores()),
+        "memory" => (Measure::Bytes, usage.memory.bytes() as f64),
+        _ => return None,
+    };
+    let quantity = |text: &Option<String>| {
+        let text = text.as_deref()?;
+        match measure {
+            Measure::Cpu => CpuAmount::parse(text).map(CpuAmount::cores),
+            Measure::Bytes => ByteAmount::parse(text).map(|bytes| bytes.bytes() as f64),
+        }
+    };
+    let request = quantity(&resource.request);
+    // A zero limit has no ratio, so it reads like no limit.
+    let limit = quantity(&resource.limit).filter(|limit| *limit > 0.);
+    let Some(limit) = limit else {
+        let request = request.map_or_else(
+            || "no request".to_owned(),
+            |request| format!("request {}", measure.format(request)),
+        );
+        return Some(UsageRow {
+            value: format!("{} used", measure.format(used)),
+            tone: None,
+            bar: None,
+            note: Some(format!("{request} · no limit")),
+        });
+    };
+    let ratio = used / limit;
+    Some(UsageRow {
+        value: measure.format_pair(used, limit, " of "),
+        tone: usage_tone(ratio),
+        bar: Some(UsageBar::of_ratio(
+            ratio,
+            request.map(|request| request / limit),
+        )),
+        note: request.map(|request| format!("request {}", measure.format(request))),
+    })
+}
+
 fn containers_tab(
     pod: &PodSummary,
     state: &DrawerState,
     events: Option<&[EventSummary]>,
     forward_reason: &SharedString,
+    history: Option<&PodUsageHistory>,
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -380,6 +443,9 @@ fn containers_tab(
             tab: state.container_tab,
             events,
             forward_reason,
+            usage: history.and_then(|history| {
+                history.latest_container(&pod.namespace, &pod.name, &pod.containers[selected].name)
+            }),
             now,
         },
         cx,

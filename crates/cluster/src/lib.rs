@@ -19,13 +19,15 @@ mod object_yaml;
 mod pod;
 mod pod_log;
 mod pod_status;
+mod quantity;
 mod replica_set;
+mod resource_metrics;
 mod resource_watch;
 mod service;
 mod stateful_set;
 mod workload;
 
-pub use access_review::{AccessCheck, AccessDecision, AccessReport, AccessReview};
+pub use access_review::{AccessCheck, AccessDecision, AccessReport, AccessReview, NamespaceAccess};
 pub use config_map::{ConfigMapKey, ConfigMapSummary};
 pub use connection::{ClusterConnection, ClusterError, ServerVersion};
 pub use container_spec::{
@@ -52,7 +54,11 @@ pub use pod::{
 };
 pub use pod_log::{LogLine, LogRequest, LogSource, LogUpdate};
 pub use pod_status::{InitStatus, PodStatus, StatusReason};
+pub use quantity::{ByteAmount, CpuAmount};
 pub use replica_set::ReplicaSetSummary;
+pub use resource_metrics::{
+    ContainerMetrics, METRICS_INTERVAL, NodeMetrics, PodMetrics, ResourceUsage,
+};
 pub use resource_watch::WatchUpdate;
 pub use service::{ServicePortSummary, ServiceSummary};
 pub use stateful_set::{ClaimTemplate, StatefulSetSummary};

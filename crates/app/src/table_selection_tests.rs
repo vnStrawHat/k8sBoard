@@ -73,6 +73,67 @@ impl TableRow for KindRow {
     }
 }
 
+impl TableRow for PodSummary {
+    fn namespace(&self) -> Option<&str> {
+        Some(&self.namespace)
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn labels(&self) -> impl Iterator<Item = &str> {
+        std::iter::empty()
+    }
+
+    fn tone(&self) -> StatusTone {
+        StatusTone::Ok
+    }
+
+    fn value(&self, column: usize) -> CellValue<'_> {
+        match column {
+            0 => CellValue::Qualified {
+                prefix: Some(&self.namespace),
+                text: &self.name,
+            },
+            _ => CellValue::Absent,
+        }
+    }
+
+    fn in_preset(&self, _: &FilterPreset) -> bool {
+        true
+    }
+}
+
+impl TableRow for NodeSummary {
+    fn namespace(&self) -> Option<&str> {
+        None
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn labels(&self) -> impl Iterator<Item = &str> {
+        std::iter::empty()
+    }
+
+    fn tone(&self) -> StatusTone {
+        StatusTone::Ok
+    }
+
+    fn value(&self, column: usize) -> CellValue<'_> {
+        match column {
+            0 => CellValue::Text(std::borrow::Cow::Borrowed(&self.name)),
+            _ => CellValue::Absent,
+        }
+    }
+
+    fn in_preset(&self, _: &FilterPreset) -> bool {
+        true
+    }
+}
+
 /// A ready list and the view of it as a table shows it.
 fn ready_with_view<T: TableRow>(
     items: Vec<T>,

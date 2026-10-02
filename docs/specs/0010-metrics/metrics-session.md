@@ -15,6 +15,7 @@ pub(crate) struct MetricsFeed<H> {
     pub(crate) history: H,
     pub(crate) status: FeedStatus,
     /// Namespaces left out for lack of access, e.g. `no access in web`; pods feed only.
+    // Step 3: the Monitor tab is its first reader. Step 2 logs the pods gate note instead.
     pub(crate) note: Option<String>,
     subscription: Option<WatchSubscription>,    // Some exactly while polling
 }
@@ -65,7 +66,7 @@ pub(crate) fn poll_error_text(error: &ClusterError) -> String;
 |---|---|
 | `LiveCluster::start` | `ClusterMetrics::start`: spawn `review_namespaces(ListPodMetrics, &scope)` on the runtime (a `cx.spawn` stores it and calls `update_metrics_feeds`); both feeds `Checking` |
 | pod review done, `finish_access_review` | `ClusterSession::update_metrics_feeds(cx)` |
-| `update_metrics_feeds` | per feed from its gate: `Wait` → a running poll continues, a stopped feed shows `Checking`; `Off(reason)` → drop the subscription, `Unavailable(reason)`; `Poll` → subscribe if none (pods: `poll_pod_metrics(gate scope)`, store `note`; nodes: `poll_node_metrics()`), status `Waiting` unless `Live`/`Interrupted` |
+| `update_metrics_feeds` | per feed from its gate: `Wait` → a running poll continues, a stopped feed shows `Checking`; `Off(reason)` → drop the subscription, `Unavailable(reason)`; `Poll` → subscribe if none (pods: `poll_pod_metrics(gate scope)`, step 2 only logs `note`, step 3 stores it in `MetricsFeed.note` once the Monitor tab reads it; nodes: `poll_node_metrics()`), status `Waiting` unless `Live`/`Interrupted` |
 | `set_scope` | drop the pods subscription, `pods.history.retain_scope(&scope)`, pods `Checking`, start a new pod review. The nodes feed keeps running |
 | pods `Snapshot(items)` | `pods.history.record(jiff::Timestamp::now(), &items, live.pods.items())`; `Live` |
 | nodes `Snapshot(items)` | `nodes.history.record(now, &items)`; `Live` |

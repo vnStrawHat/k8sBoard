@@ -447,3 +447,44 @@ fn state_text_running_includes_started_age() {
     let label = container_state_label(&waiting);
     assert_eq!(state_text(&waiting, &label, at(120)), "Waiting");
 }
+
+#[test]
+fn resource_rows_add_usage_rows_for_missing_cpu_and_memory() {
+    let mut container = ContainerSummary {
+        resources: vec![resource("ephemeral-storage", Some("1Gi"), None)],
+        ..container()
+    };
+    let usage = ResourceUsage::default();
+    let names = |rows: &[ContainerResource]| -> Vec<String> {
+        rows.iter().map(|row| row.name.clone()).collect()
+    };
+    // Without usage the rows are exactly the container's, not a copy.
+    let plain = resource_rows(&container, None);
+    assert!(matches!(plain, Cow::Borrowed(_)));
+    assert_eq!(names(&plain), ["ephemeral-storage"]);
+    // A BestEffort-style container gets empty cpu and memory rows, ordered first.
+    let added = resource_rows(&container, Some(usage));
+    assert_eq!(names(&added), ["cpu", "memory", "ephemeral-storage"]);
+    assert_eq!(added[0].request, None);
+    container
+        .resources
+        .push(resource("memory", Some("64Mi"), None));
+    let partial = resource_rows(&container, Some(usage));
+    assert_eq!(names(&partial), ["cpu", "memory", "ephemeral-storage"]);
+    assert_eq!(partial[1].request.as_deref(), Some("64Mi"));
+}
+
+#[test]
+fn resource_rows_keep_the_order_when_nothing_is_added() {
+    let container = ContainerSummary {
+        resources: vec![
+            resource("memory", None, Some("1Gi")),
+            resource("cpu", Some("1"), None),
+        ],
+        ..container()
+    };
+    let rows = resource_rows(&container, Some(ResourceUsage::default()));
+    assert!(matches!(rows, Cow::Borrowed(_)));
+    let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
+    assert_eq!(names, ["memory", "cpu"]);
+}

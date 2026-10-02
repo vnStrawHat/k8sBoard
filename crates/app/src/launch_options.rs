@@ -81,6 +81,24 @@ impl LaunchScreen {
         matches!(self, Self::PodsSelected | Self::NodesSelected)
     }
 
+    /// Whether the screen shows pod usage, so a screenshot waits for a metrics tick.
+    #[cfg(any(feature = "screenshot", test))]
+    pub(crate) fn shows_pod_usage(self) -> bool {
+        matches!(
+            self,
+            Self::Pods | Self::PodsSelected | Self::PodDrawer(DrawerTab::Containers)
+        )
+    }
+
+    /// Whether the screen shows node usage.
+    #[cfg(any(feature = "screenshot", test))]
+    pub(crate) fn shows_node_usage(self) -> bool {
+        matches!(
+            self,
+            Self::Nodes | Self::NodesSelected | Self::NodeDrawer(DrawerTab::Overview)
+        )
+    }
+
     /// Whether the log dock must be open on a pod.
     pub(crate) fn has_log_dock(self) -> bool {
         matches!(self, Self::LogsDock | Self::LogsZoomed)

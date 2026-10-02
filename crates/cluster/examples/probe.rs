@@ -1,12 +1,13 @@
 //! Read-only probe of one cluster context. Prints domain summaries only: never
 //! credentials, and never `Debug` output of kube types. With `--watch-seconds` it runs
 //! the pods, nodes, namespaces, nine workload, network, and config watches plus two
-//! events watches together, and prints counts per kind. With `--yaml` it reads the masked
+//! events watches together, and prints counts per kind. With `--metrics-seconds` it polls pod
+//! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--yaml` it reads the masked
 //! YAML of the first pod and the first node and prints line counts and masking checks, never
 //! the YAML text. The access section doubles as the RBAC probe of the context.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--yaml]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--yaml]
 //! ```
 
 use std::collections::BTreeMap;
@@ -19,13 +20,14 @@ use std::time::Duration;
 use cluster::{
     AccessDecision, ClusterConnection, ClusterError, ContainerKind, ContainerState,
     ContainerSummary, EnvValues, EventFilter, Kubeconfig, LogRequest, LogSource, LogUpdate,
-    MetricsApi, NamespaceScope, NodeReadiness, NodeScheduling, NodeSummary, ObjectKind, ObjectRef,
-    PodStatus, PodSummary, StatusReason, Termination, WatchUpdate,
+    MetricsApi, NamespaceScope, NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary,
+    ObjectKind, ObjectRef, PodMetrics, PodStatus, PodSummary, StatusReason, Termination,
+    WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--yaml]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--yaml]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -36,6 +38,7 @@ struct Args {
     namespace: Option<String>,
     watch_seconds: Option<u64>,
     logs_seconds: Option<u64>,
+    metrics_seconds: Option<u64>,
     yaml: bool,
 }
 
@@ -50,6 +53,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut namespace = None;
     let mut watch_seconds = None;
     let mut logs_seconds = None;
+    let mut metrics_seconds = None;
     let mut yaml = false;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
@@ -68,6 +72,12 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
             "--logs-seconds" => {
                 logs_seconds = Some(parse_seconds("--logs-seconds", &value("--logs-seconds")?)?)
             }
+            "--metrics-seconds" => {
+                metrics_seconds = Some(parse_seconds(
+                    "--metrics-seconds",
+                    &value("--metrics-seconds")?,
+                )?)
+            }
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
@@ -78,6 +88,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         namespace,
         watch_seconds,
         logs_seconds,
+        metrics_seconds,
         yaml,
     }))
 }
@@ -315,6 +326,135 @@ async fn logs_for(
     Ok(())
 }
 
+/// One update of either metrics poll.
+enum MetricsUpdate {
+    Pods(WatchUpdate<PodMetrics>),
+    Nodes(WatchUpdate<NodeMetrics>),
+}
+
+/// Listed pods with no running container: metrics-server has no sample for them.
+fn pods_not_running(pods: &[PodSummary]) -> usize {
+    pods.iter()
+        .filter(|pod| {
+            !pod.containers
+                .iter()
+                .any(|container| matches!(container.state, ContainerState::Running { .. }))
+        })
+        .count()
+}
+
+/// Seconds since the newest server scrape, or `unknown` without a readable timestamp.
+fn newest_scrape_age(samples: impl Iterator<Item = Option<jiff::Timestamp>>) -> String {
+    match samples.flatten().max() {
+        Some(newest) => format!(
+            "{}s ago",
+            (jiff::Timestamp::now().as_second() - newest.as_second()).max(0)
+        ),
+        None => "unknown".to_owned(),
+    }
+}
+
+fn usage_sums(nanocores: u128, bytes: u128) -> String {
+    format!(
+        "cpu {:.3} cores, memory {:.1} GiB",
+        nanocores as f64 / 1e9,
+        bytes as f64 / f64::from(1u32 << 30)
+    )
+}
+
+fn pod_metrics_line(samples: &[PodMetrics], listed: &[PodSummary]) -> String {
+    let usages = samples
+        .iter()
+        .flat_map(|pod| &pod.containers)
+        .map(|container| container.usage);
+    let containers = usages.clone().count();
+    let nanocores: u128 = usages
+        .clone()
+        .map(|usage| u128::from(usage.cpu.nanocores()))
+        .sum();
+    let bytes: u128 = usages.map(|usage| u128::from(usage.memory.bytes())).sum();
+    format!(
+        "pod metrics: {} pods (listed {}, not running {}), {containers} containers, {}, newest scrape {}",
+        samples.len(),
+        listed.len(),
+        pods_not_running(listed),
+        usage_sums(nanocores, bytes),
+        newest_scrape_age(samples.iter().map(|pod| pod.sampled_at)),
+    )
+}
+
+fn node_metrics_line(samples: &[NodeMetrics]) -> String {
+    let nanocores: u128 = samples
+        .iter()
+        .map(|node| u128::from(node.usage.cpu.nanocores()))
+        .sum();
+    let bytes: u128 = samples
+        .iter()
+        .map(|node| u128::from(node.usage.memory.bytes()))
+        .sum();
+    format!(
+        "node metrics: {} nodes, {}, newest scrape {}",
+        samples.len(),
+        usage_sums(nanocores, bytes),
+        newest_scrape_age(samples.iter().map(|node| node.sampled_at)),
+    )
+}
+
+/// Polls pod and node metrics for `seconds` and prints one line per update: counts and sums
+/// only, never names.
+async fn metrics_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    scope: NamespaceScope,
+    listed: &[PodSummary],
+    seconds: u64,
+) -> io::Result<()> {
+    probe.section(&format!("metrics ({seconds}s)"))?;
+    let mut updates = stream::select(
+        connection
+            .poll_pod_metrics(scope)
+            .map(MetricsUpdate::Pods)
+            .boxed(),
+        connection
+            .poll_node_metrics()
+            .map(MetricsUpdate::Nodes)
+            .boxed(),
+    );
+    let (mut pod_polls, mut node_polls) = (0, 0);
+    let timer = tokio::time::sleep(Duration::from_secs(seconds));
+    tokio::pin!(timer);
+    loop {
+        let update = tokio::select! {
+            () = &mut timer => break,
+            update = updates.next() => update,
+        };
+        let line = match update {
+            Some(MetricsUpdate::Pods(WatchUpdate::Snapshot(pods))) => {
+                pod_polls += 1;
+                pod_metrics_line(&pods, listed)
+            }
+            Some(MetricsUpdate::Nodes(WatchUpdate::Snapshot(nodes))) => {
+                node_polls += 1;
+                node_metrics_line(&nodes)
+            }
+            Some(MetricsUpdate::Pods(WatchUpdate::Failed(error))) => {
+                probe.all_succeeded = false;
+                format!("pod metrics failed: {}", error_summary(&error))
+            }
+            Some(MetricsUpdate::Nodes(WatchUpdate::Failed(error))) => {
+                probe.all_succeeded = false;
+                format!("node metrics failed: {}", error_summary(&error))
+            }
+            None => break,
+        };
+        writeln!(probe.out, "  {line}")?;
+    }
+    if pod_polls == 0 || node_polls == 0 {
+        probe.all_succeeded = false;
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = match parse_args(std::env::args().skip(1)) {
@@ -524,7 +664,11 @@ async fn run(args: &Args) -> io::Result<bool> {
     }
 
     if let Some(seconds) = args.watch_seconds {
-        watch_for(&mut probe, &connection, scope, seconds).await?;
+        watch_for(&mut probe, &connection, scope.clone(), seconds).await?;
+    }
+    if let Some(seconds) = args.metrics_seconds {
+        let pods = pods.as_ref().map_or(&[][..], Vec::as_slice);
+        metrics_for(&mut probe, &connection, scope, pods, seconds).await?;
     }
     if let Some(seconds) = args.logs_seconds {
         let pods = pods.as_ref().map_or(&[][..], Vec::as_slice);

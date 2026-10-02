@@ -2,7 +2,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::APIGroupList;
 
 use crate::connection::{ClusterConnection, ClusterError};
 
-const METRICS_GROUP: &str = "metrics.k8s.io";
+pub(crate) const METRICS_GROUP: &str = "metrics.k8s.io";
 
 /// Whether `metrics.k8s.io` is served. Discovery only; metric values are never read.
 #[derive(Clone, Debug, PartialEq, Eq)]

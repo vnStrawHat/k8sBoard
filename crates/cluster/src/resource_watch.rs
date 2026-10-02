@@ -18,7 +18,7 @@ use crate::connection::{ClusterConnection, ClusterError, ScopedApi, classify_err
 /// Changes inside one window are merged into a single snapshot.
 pub(crate) const BATCH_WINDOW: Duration = Duration::from_millis(100);
 
-/// One item of a resource watch stream.
+/// One item of a resource watch or a metrics poll.
 #[derive(Debug)]
 pub enum WatchUpdate<T> {
     /// The complete current set, ordered by (namespace, name). Cluster-scoped kinds

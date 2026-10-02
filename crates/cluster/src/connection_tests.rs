@@ -267,3 +267,46 @@ async fn scoped_apis_builds_one_api_per_namespace() {
         ]
     );
 }
+
+#[tokio::test]
+async fn scoped_dynamic_apis_builds_one_api_per_namespace() {
+    let config = kube::Config::new("http://127.0.0.1:1".parse().expect("valid uri"));
+    let connection = ClusterConnection {
+        client: kube::Client::try_from(config).expect("client builds"),
+        context: "ctx".to_owned(),
+        default_namespace: "default".to_owned(),
+    };
+    let resource = ApiResource {
+        group: "metrics.k8s.io".to_owned(),
+        version: "v1beta1".to_owned(),
+        api_version: "metrics.k8s.io/v1beta1".to_owned(),
+        kind: "PodMetrics".to_owned(),
+        plural: "pods".to_owned(),
+    };
+    let described = |scope| {
+        connection
+            .scoped_dynamic_apis(&scope, &resource)
+            .into_iter()
+            .map(|(namespace, api)| (namespace, api.resource_url().to_owned()))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        described(NamespaceScope::All),
+        [(None, "/apis/metrics.k8s.io/v1beta1/pods".to_owned())]
+    );
+    let several = NamespaceScope::of_namespaces(["b".to_owned(), "a".to_owned()]);
+    assert_eq!(
+        described(several),
+        [
+            (
+                Some("a".to_owned()),
+                "/apis/metrics.k8s.io/v1beta1/namespaces/a/pods".to_owned()
+            ),
+            (
+                Some("b".to_owned()),
+                "/apis/metrics.k8s.io/v1beta1/namespaces/b/pods".to_owned()
+            ),
+        ]
+    );
+}

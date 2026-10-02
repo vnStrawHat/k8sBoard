@@ -20,8 +20,8 @@ pub(crate) fn format_offset(seconds: u64) -> String;         // before now (step
 | Function | Examples |
 |---|---|
 | `Cpu.format` | `0` → `0m`; `0.0004` → `<1m`; `0.31` → `310m`; `0.9996` → `1 core`; `2.5` → `2.5 cores`; `12.04` → `12 cores` |
-| `Bytes.format` | `0` → `0B`; `512` → `512B`; `2048` → `2Ki`; `498 Mi` → `498Mi`; `1.1 Gi` → `1.1Gi`; `15.6 Gi` → `15.6Gi`; `120 Gi` → `120Gi`; `1.5 Ti` → `1.5Ti`. Ki and Mi whole; Gi and up one decimal below 100; a value rounding to 1024 moves up a unit (`1023.7Mi` → `1.0Gi`) |
-| `format_pair` | `(9.8, 15.8 cores, " / ")` → `9.8 / 15.8 cores`; `(498Mi, 512Mi, " of ")` → `498 of 512Mi`; `(0.31, 1 core, " of ")` → `310m of 1 core` |
+| `Bytes.format` | `0` → `0B`; `512` → `512B`; `2048` → `2Ki`; `498 Mi` → `498Mi`; `1.1 Gi` → `1.1Gi`; `15.6 Gi` → `15.6Gi`; `43 Gi` → `43Gi`; `120 Gi` → `120Gi`; `1.5 Ti` → `1.5Ti`. Ki and Mi whole; Gi and up one decimal below 100, dropped when zero; a value rounding to 1024 moves up a unit (`1023.7Mi` → `1Gi`) |
+| `format_pair` | `(9.8, 15.8 cores, " / ")` → `9.8 / 15.8 cores`; `(498Mi, 512Mi, " of ")` → `498 of 512Mi`; `(0.31, 1 core, " of ")` → `310m of 1 core`; millicores always keep the `m` (`44m of 300m`) |
 | `format_percent` / `format_offset` | `0.314` → `31%`; `0` → `now`, `45` → `-45s`, `195` → `-3m 15s`, `20400` → `-5h 40m` |
 
 ## History (`metrics_history.rs`, pure)
@@ -58,7 +58,7 @@ impl PodUsageHistory {
 
 Shared shape (`history_rings.rs`, `pub(crate)`, reused by 0011's kubelet history): fine and coarse `Timeline`s (`VecDeque<jiff::Timestamp>`); `Rings<P> { fine: Option<VecDeque<Option<P>>>, coarse: VecDeque<Option<P>> }` with push, align, freeing, and the coarse fold; `FINE_TICKS`, `TICKS_PER_COARSE`, `COARSE_POINTS`, and `Resolution` live there too. The fold averages through `pub(crate) trait RingPoint: Copy { fn mean(points: &[Self]) -> Self; }` (field-wise mean of the `Some` values), implemented here for `UsagePoint` and `ResourceUsage`. Private here: `P` = `UsagePoint` for containers and `ResourceUsage` (u64, decision 10) for nodes; `PodHistory { controller: Option<ControllerRef>, containers: BTreeMap<String, Rings<UsagePoint>>, oom: Vec<OomMark>, sampled_at: Option<Timestamp>, last_seen: u64 }`.
 
-Step split (dead-code rule: nothing lands before its first reader): step 2 lands `history_rings.rs` with fine rings and `metrics_history.rs` (`record` steps 1, 2, 4), `retain_scope`, `latest*`, `tick_count`; step 3 adds the coarse rings and `RingPoint` (step 3), `sampled_at`, `controller`, OOM marks (step 5), `UsageSeries`, `Resolution`, `span`, the `*_series` calls, `owns`, and `format_offset`; `record` gains its `pods` parameter in step 3.
+Step split (dead-code rule: nothing lands before its first reader): step 2 lands `history_rings.rs` with fine rings and `metrics_history.rs` (`record` steps 1, 2, 4), `retain_scope`, `latest*`, `tick_count`; step 3 adds the controller fill-in (`PodHistory.controller`, filled whenever it is still `None` and the pod is in the pods list, which needs the `pods` parameter of `record`; step 2 has neither, since nothing reads them yet), the coarse rings and `RingPoint` (step 3), `sampled_at`, `controller`, OOM marks (step 5), `UsageSeries`, `Resolution`, `span`, the `*_series` calls, `owns`, and `format_offset`; `record` gains its `pods` parameter in step 3.
 
 ### Invariants
 

@@ -5,7 +5,7 @@ use std::time::Duration;
 use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::serde::de::DeserializeOwned;
 use kube::Api;
-use kube::api::ListParams;
+use kube::api::{ApiResource, DynamicObject, ListParams};
 use kube::config::KubeConfigOptions;
 
 use crate::kubeconfig::{Kubeconfig, KubeconfigError};
@@ -193,6 +193,26 @@ impl ClusterConnection {
             .iter()
             .map(|namespace| {
                 let api = Api::namespaced(client.clone(), namespace);
+                (Some(namespace.clone()), api)
+            })
+            .collect()
+    }
+
+    /// Like `scoped_apis`, for a kind known only by its `ApiResource`.
+    pub(crate) fn scoped_dynamic_apis(
+        &self,
+        scope: &NamespaceScope,
+        resource: &ApiResource,
+    ) -> Vec<ScopedApi<DynamicObject>> {
+        let client = self.client();
+        if matches!(scope, NamespaceScope::All) {
+            return vec![(None, Api::all_with(client.clone(), resource))];
+        }
+        scope
+            .namespaces()
+            .iter()
+            .map(|namespace| {
+                let api = Api::namespaced_with(client.clone(), namespace, resource);
                 (Some(namespace.clone()), api)
             })
             .collect()

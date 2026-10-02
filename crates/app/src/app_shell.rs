@@ -16,6 +16,8 @@ use gpui_kit::{
 
 use crate::FocusQuickFilter;
 #[cfg(feature = "screenshot")]
+use crate::cluster_metrics::is_metrics_settled;
+#[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
 use crate::cluster_session::{ClusterSession, FlowState, LiveCluster, error_text};
 use crate::drawer::{ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab};
@@ -969,6 +971,20 @@ impl AppShell {
                 is_content_pending,
             ),
             is_log_pending,
+            is_pod_metrics_pending: self.live(cx).is_some_and(|live| {
+                !is_metrics_settled(
+                    &live.metrics.pods.status,
+                    live.metrics.pods.history.tick_count(),
+                    1,
+                )
+            }),
+            is_node_metrics_pending: self.live(cx).is_some_and(|live| {
+                !is_metrics_settled(
+                    &live.metrics.nodes.status,
+                    live.metrics.nodes.history.tick_count(),
+                    1,
+                )
+            }),
         }
     }
 

@@ -3,12 +3,15 @@ use std::sync::Arc;
 
 use cluster::{
     AccessCheck, AccessReport, ClusterConnection, ClusterError, ContextSummary, EventFilter,
-    EventSummary, InvolvedObject, Kubeconfig, NamespaceScope, NamespaceSummary, NodeSummary,
-    PodSummary, ServerVersion, WatchUpdate,
+    EventSummary, InvolvedObject, Kubeconfig, NamespaceAccess, NamespaceScope, NamespaceSummary,
+    NodeSummary, PodSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
 
+use crate::cluster_metrics::{
+    ClusterMetrics, NodesGate, PodReview, PodReviewResult, PodsGate, nodes_gate, pods_gate,
+};
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::event_rows::newest_first;
 use crate::kind_row::KindRow;
@@ -54,6 +57,8 @@ pub(crate) struct LiveCluster {
     pub(crate) namespaces: LiveList<NamespaceSummary>,
     pub(crate) pods: LiveList<PodSummary>,
     pub(crate) nodes: LiveList<NodeSummary>,
+    /// Pod and node usage, polled while the metrics API is reachable and allowed.
+    pub(crate) metrics: ClusterMetrics,
     /// The watch of the visible kind screen; `None` on Pods and Nodes.
     explorer: Option<KindList>,
     /// The open drawer's events; `None` while no drawer needs them.
@@ -429,6 +434,7 @@ impl ClusterSession {
                 message: "the connection task stopped unexpectedly".to_owned(),
             },
         };
+        self.update_metrics_feeds(cx);
         cx.notify();
     }
 
@@ -462,6 +468,8 @@ impl ClusterSession {
             ));
         }
         live.access = review_access_again(&runtime, &live.connection, scope.clone(), cx);
+        let review = start_pod_review(&runtime, &live.connection, scope.clone(), cx);
+        live.metrics.restart_pods(&scope, review);
         live.scope = scope;
         cx.notify();
     }
@@ -573,6 +581,58 @@ impl ClusterSession {
             Err(_) => Err("the access review task stopped unexpectedly".to_owned()),
         };
         live.access = AccessState::from_review(review);
+        self.update_metrics_feeds(cx);
+        cx.notify();
+    }
+
+    fn finish_pod_review(
+        &mut self,
+        result: Result<Result<Vec<NamespaceAccess>, ClusterError>, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        let review: PodReviewResult = match result {
+            Ok(Ok(entries)) => Ok(entries),
+            Ok(Err(error)) => Err(error_text(&error)),
+            Err(_) => Err("the metrics access review task stopped unexpectedly".to_owned()),
+        };
+        live.metrics.finish_pod_review(review);
+        self.update_metrics_feeds(cx);
+        cx.notify();
+    }
+
+    /// Starts or stops each metrics poll from its access gate. Safe to call at any time: a feed
+    /// that already polls is left running.
+    fn update_metrics_feeds(&mut self, cx: &mut Context<Self>) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        match pods_gate(live.metrics.pod_review(), &live.scope) {
+            PodsGate::Wait => live.metrics.pods.wait(),
+            PodsGate::Off(reason) => live.metrics.pods.turn_off(reason),
+            PodsGate::Poll { scope, note } => {
+                let connection = &live.connection;
+                live.metrics.pods.poll(|| {
+                    if let Some(note) = &note {
+                        tracing::info!(%note, "polling pod metrics for the allowed namespaces only");
+                    }
+                    subscribe_pod_metrics(&runtime, connection, scope, cx)
+                });
+            }
+        }
+        match nodes_gate(&live.access, AccessCheck::ListNodeMetrics) {
+            NodesGate::Wait => live.metrics.nodes.wait(),
+            NodesGate::Off(reason) => live.metrics.nodes.turn_off(reason),
+            NodesGate::Poll => {
+                let connection = &live.connection;
+                live.metrics
+                    .nodes
+                    .poll(|| subscribe_node_metrics(&runtime, connection, cx));
+            }
+        }
         cx.notify();
     }
 }
@@ -708,6 +768,8 @@ impl LiveCluster {
         let explorer = explorer_kind.map(|kind| {
             KindList::start(kind, &runtime, &connection, scope.clone(), event_filter, cx)
         });
+        let metrics =
+            ClusterMetrics::new(start_pod_review(&runtime, &connection, scope.clone(), cx));
         Self {
             server_version,
             scope,
@@ -715,6 +777,7 @@ impl LiveCluster {
             namespaces: LiveList::Loading,
             pods: LiveList::Loading,
             nodes: LiveList::Loading,
+            metrics,
             explorer,
             object_events: None,
             connection,
@@ -837,6 +900,70 @@ fn subscribe_pods(
         |session, _| {
             if let Some(live) = session.live_mut() {
                 live.pods.mark_stopped();
+            }
+        },
+    )
+}
+
+/// Reviews pod metrics access per namespace of `scope` on tokio. The returned state owns the
+/// task, so replacing it (a scope change) or the session aborts the old review.
+fn start_pod_review(
+    runtime: &ClusterRuntime,
+    connection: &ClusterConnection,
+    scope: NamespaceScope,
+    cx: &mut Context<ClusterSession>,
+) -> PodReview {
+    let connection = connection.clone();
+    let reviewing = runtime.spawn(async move {
+        connection
+            .review_namespaces(AccessCheck::ListPodMetrics, &scope)
+            .await
+    });
+    let task = cx.spawn(async move |this, cx| {
+        let result = reviewing.await;
+        let _ = this.update(cx, |session, cx| session.finish_pod_review(result, cx));
+    });
+    PodReview::Running { _task: task }
+}
+
+fn subscribe_pod_metrics(
+    runtime: &ClusterRuntime,
+    connection: &ClusterConnection,
+    scope: NamespaceScope,
+    cx: &mut Context<ClusterSession>,
+) -> WatchSubscription {
+    runtime.subscribe(
+        connection.poll_pod_metrics(scope),
+        cx,
+        |session: &mut ClusterSession, update, _| {
+            if let Some(live) = session.live_mut() {
+                live.metrics.pods.receive(update);
+            }
+        },
+        |session, _| {
+            if let Some(live) = session.live_mut() {
+                live.metrics.pods.mark_stopped();
+            }
+        },
+    )
+}
+
+fn subscribe_node_metrics(
+    runtime: &ClusterRuntime,
+    connection: &ClusterConnection,
+    cx: &mut Context<ClusterSession>,
+) -> WatchSubscription {
+    runtime.subscribe(
+        connection.poll_node_metrics(),
+        cx,
+        |session: &mut ClusterSession, update, _| {
+            if let Some(live) = session.live_mut() {
+                live.metrics.nodes.receive(update);
+            }
+        },
+        |session, _| {
+            if let Some(live) = session.live_mut() {
+                live.metrics.nodes.mark_stopped();
             }
         },
     )

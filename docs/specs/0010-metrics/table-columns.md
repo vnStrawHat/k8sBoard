@@ -69,6 +69,8 @@ For the `cpu` and `memory` rows of a container, with `latest_container(ns, pod, 
 | some | set | `format_pair(usage, limit, " of ")` (`498 of 512Mi`, `310m of 1 core`; mono, toned by `usage_tone(usage / limit)`), `usage_bar` full width (fill usage / limit, marker request / limit), muted `text_xs` `request {request}` when set |
 | some | none | `{usage} used`, muted `request {request} · no limit` (or `no request · no limit`); no bar |
 
+**BestEffort containers.** A container with usage but no `cpu` or `memory` request or limit (no resource entry) gets an empty row for each missing one, so its usage still shows as `{usage} used` with `no request · no limit`. Rows are copied and ordered `cpu`, `memory`, the rest only when a row is added; otherwise the container's own list is used as is. `format_pair` keeps the unit on millicores (`44m of 300m`, never `44 of 300m`); cores and bytes share it (`1 / 15.8 cores`, `498 of 512Mi`).
+
 Values use `Measure::format`/`format_pair`; the request keeps 0008's as-written text only in the first row case. The decision is a pure helper in `pod_drawer.rs`, rendered by the view:
 
 ```rust

@@ -10,7 +10,8 @@
 | 1 | `quantity.rs` | `parses_decimal_suffixes` | `250m` → 250,000,000 n; `1234567n`; `1k` → 1000 B; `1G` |
 | 1 | `quantity.rs` | `parses_binary_suffixes` | `512Mi` → 536,870,912 B; `16384256Ki`; `1.5Gi` |
 | 1 | `quantity.rs` | `parses_exponents` | `129e6`; `1E3` = 1000; `1E` = exa; `1e-3` cores = 1,000,000 n |
-| 1 | `quantity.rs` | `rounds_sub_unit_values_half_up` | `1.5n` → 2 n; `0.4` bytes → 0 |
+| 1 | `quantity.rs` | `rounds_sub_unit_values_up` | `1.5n` → 2 n; `1.4n` → 2 n; `0.4` bytes → 1; zero stays 0 |
+| 1 | `quantity.rs` | `long_fraction_zeros_do_not_overflow` | `1.` + 45 zeros + `Ki` = 1024 B |
 | 1 | `quantity.rs` | `rejects_malformed_text` | ``, `-1`, `1.2.3`, `5x`, `Mi`, `1 Gi` |
 | 1 | `quantity.rs` | `rejects_exponent_with_suffix` | `1e3Ki`, `1.5e2m` |
 | 1 | `quantity.rs` | `rejects_values_beyond_u64` | `20Ei` bytes; a 39-digit mantissa |
@@ -26,7 +27,7 @@
 | 1 | `resource_metrics_tests.rs` | `poll_reports_failures_and_keeps_polling` | `Failed` then `Snapshot` |
 | 1 | `connection_tests.rs` | `scoped_dynamic_apis_builds_one_api_per_namespace` | All → one unnamed; Several → one per name, in order |
 | 1 | `access_review.rs` | `metrics_checks_target_the_metrics_group` | group `metrics.k8s.io`; pods namespaced, nodes not; `ALL.len() == 21` |
-| 1 | `access_review.rs` | `display_names_non_core_groups` | `list pods.metrics.k8s.io`; `list pods` unchanged |
+| 1 | `access_review.rs` | `display_names_the_metrics_group_only` | `list pods.metrics.k8s.io`; `list pods` and `list deployments` unchanged |
 | 2 | `usage_format.rs` | `cpu_format_uses_millicores_below_one_core` | `0m`, `<1m`, `310m`, `1 core`, `2.5 cores`, `12 cores` |
 | 2 | `usage_format.rs` | `bytes_format_uses_binary_units` | `0B`, `512B`, `2Ki`, `498Mi`, `15.6Gi`, `120Gi`, the 1024 roll-up |
 | 2 | `usage_format.rs` | `format_pair_shows_a_shared_unit_once` | `9.8 / 15.8 cores`, `498 of 512Mi`, `310m of 1 core` |

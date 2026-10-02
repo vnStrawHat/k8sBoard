@@ -59,6 +59,10 @@ pub(crate) struct SettleInput {
     pub(crate) is_drawer_ready: bool,
     /// A logs screen whose tab is not open yet or still connecting.
     pub(crate) is_log_pending: bool,
+    /// The pods metrics feed has no tick yet and may still get one.
+    pub(crate) is_pod_metrics_pending: bool,
+    /// The same for the nodes feed.
+    pub(crate) is_node_metrics_pending: bool,
 }
 
 /// A drawer screen is ready when its row is selected (or no row was found to select) and its
@@ -79,6 +83,8 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
         TargetState::Unavailable => true,
         TargetState::Loading => false,
         TargetState::Loaded if screen.has_log_dock() => !input.is_log_pending,
+        TargetState::Loaded if screen.shows_pod_usage() && input.is_pod_metrics_pending => false,
+        TargetState::Loaded if screen.shows_node_usage() && input.is_node_metrics_pending => false,
         TargetState::Loaded => !screen.has_drawer() || input.is_drawer_ready,
     }
 }
@@ -233,6 +239,8 @@ mod tests {
             target,
             is_drawer_ready,
             is_log_pending: false,
+            is_pod_metrics_pending: false,
+            is_node_metrics_pending: false,
         }
     }
 
@@ -316,6 +324,45 @@ mod tests {
                 &input(TargetState::Unavailable, false)
             ));
         }
+    }
+
+    #[test]
+    fn usage_screens_wait_for_their_metrics_feed() {
+        let pending = |pods, nodes| SettleInput {
+            is_pod_metrics_pending: pods,
+            is_node_metrics_pending: nodes,
+            ..input(TargetState::Loaded, true)
+        };
+        let pod_screens = [
+            LaunchScreen::Pods,
+            LaunchScreen::PodDrawer(DrawerTab::Containers),
+        ];
+        for screen in pod_screens {
+            assert!(!is_screen_settled(screen, &pending(true, false)));
+            assert!(is_screen_settled(screen, &pending(false, true)));
+        }
+        for screen in [
+            LaunchScreen::Nodes,
+            LaunchScreen::NodeDrawer(DrawerTab::Overview),
+        ] {
+            assert!(!is_screen_settled(screen, &pending(false, true)));
+            assert!(is_screen_settled(screen, &pending(true, false)));
+        }
+        // Regression screens do not depend on metrics.
+        let kind = LaunchScreen::Kind(ResourceKind::Deployments);
+        assert!(is_screen_settled(kind, &pending(true, true)));
+        assert!(is_screen_settled(
+            LaunchScreen::LogsDock,
+            &pending(true, true)
+        ));
+        // A failed feed is "settled": the screen shows its dashes.
+        assert!(is_screen_settled(
+            LaunchScreen::Pods,
+            &SettleInput {
+                target: TargetState::Unavailable,
+                ..pending(true, true)
+            }
+        ));
     }
 
     #[test]
