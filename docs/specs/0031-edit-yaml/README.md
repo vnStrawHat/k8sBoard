@@ -1,6 +1,6 @@
 # 0031 — Edit YAML (W10)
 
-Status: draft, amended after the advisor review (M1–M3, S1–S8, N1–N4), HEAD `1c859ae`. **Mutating.** Steps 0–3 send no mutating request: no `PUT`, not even a dry-run. **Step 4 ships Edit YAML, the dry-run preview, and the first real `update`. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. **Decision 1 (replace vs SSA, C8) is pending a user decision (research requested 2026-10-02).** Requires 0030 with the one-line amendments the 0032 architect owns (`GuardedIntent.warnings`, `WriteOutcome.effect` / `WriteEffect`, `ObjectKind::{ALL, resource}`, "no SSA / no Force" for C8), the 0036 `run_guarded`, 0028 (E key), and 0007 (masking, kit editor). Secret edits wait for 0016; 0027 is optional. Roadmap: gap plan 0031; C1, C3, C6, C8; R1, R2.
+Status: draft, amended after the advisor review (M1–M3, S1–S8, N1–N4), HEAD `1c859ae`. **Mutating.** Steps 0–3 send no mutating request: no `PUT`, not even a dry-run. **Step 4 ships Edit YAML, the dry-run preview, and the first real `update`. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. **Decision 1 (replace vs SSA, C8): replace, decided by the user on 2026-10-02.** Requires 0030 with the one-line amendments the 0032 architect owns (`GuardedIntent.warnings`, `WriteOutcome.effect` / `WriteEffect`, `ObjectKind::{ALL, resource}`, "no SSA / no Force" for C8), the 0036 `run_guarded`, 0028 (E key), and 0007 (masking, kit editor). Secret edits wait for 0016; 0027 is optional. Roadmap: gap plan 0031; C1, C3, C6, C8; R1, R2.
 
 ## Goal
 
@@ -57,4 +57,4 @@ Revision history tab, pre-apply snapshot and rollback (W10 note 5), "New" from t
 1. R2: no write-capable cluster. The commit is proven only by fake-transport tests.
 2. 0030 open item 5 applies to the lazy checks too: with scope All, namespace-only `update` rights show as denied.
 3. Deferred W10 parts (non-goals) need their own spec. Snapshots of Secrets and ConfigMaps need a C1 decision first.
-4. (user) C8, decision 1 (replace vs SSA): Pending user decision (research requested 2026-10-02).
+4. Closed: C8, decision 1 (replace vs SSA) decided by the user on 2026-10-02 (option 1: `PUT` with base `resourceVersion`, no SSA, no Force).
