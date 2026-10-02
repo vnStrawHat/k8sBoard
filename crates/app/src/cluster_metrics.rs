@@ -10,15 +10,18 @@ use gpui_kit::Task;
 
 use crate::cluster_runtime::WatchSubscription;
 use crate::cluster_session::{AccessState, error_text};
+use crate::kubelet_metrics::KubeletFeed;
 use crate::metrics_history::{NodeUsageHistory, PodUsageHistory};
 
 /// The pod metrics access review: one entry per namespace of the scope.
 pub(crate) type PodReviewResult = Result<Vec<NamespaceAccess>, String>;
 
-/// Both metrics feeds of a live session. Dropping it stops the review and both polls.
+/// The metrics feeds of a live session: pod and node usage, and the kubelet counters. Dropping it
+/// stops the review and every poll.
 pub(crate) struct ClusterMetrics {
     pub(crate) pods: MetricsFeed<PodUsageHistory>,
     pub(crate) nodes: MetricsFeed<NodeUsageHistory>,
+    pub(crate) kubelet: KubeletFeed,
     pod_review: PodReview,
 }
 
@@ -33,6 +36,7 @@ impl ClusterMetrics {
         Self {
             pods: MetricsFeed::new("pod metrics"),
             nodes: MetricsFeed::new("node metrics"),
+            kubelet: KubeletFeed::new(),
             pod_review,
         }
     }
@@ -88,7 +92,7 @@ pub(crate) enum FeedStatus {
 }
 
 impl FeedStatus {
-    fn reason(&self) -> Option<&str> {
+    pub(crate) fn reason(&self) -> Option<&str> {
         match self {
             Self::Interrupted(reason) | Self::Failed(reason) | Self::Unavailable(reason) => {
                 Some(reason)

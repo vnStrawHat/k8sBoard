@@ -50,16 +50,17 @@
 | Nodes, PVCs | ≈ 25 KB per node; ≈ 250 B per PVC |
 | Typical (10 nodes, 300 pods, 200 disk containers) | ≈ 3.5 MB steady; worst always-on (10 × 110 pods) ≈ 9 MB; plus 0010's ≈ 14 MB |
 | Network | summary ≈ 2–4 KB per pod per round: 300 pods ≈ 60 KB/s; cAdvisor ≤ 3 × 1–4 MB per 15 s while a Monitor tab shows |
+| In flight | at most 8 requests per round: 4 nodes at once, each with its summary and (disk nodes only) cAdvisor read, under one 30 s deadline per cAdvisor read |
 | Transient | one summary body as text per in-flight node (≤ 4 × ≈ 0.5 MB) plus the small decoded structs; cAdvisor one line |
 
 ## UAT probe (filled by coder-lite after step 1)
 
 | Measure | Value |
 |---|---|
-| Ready nodes; pods; PVCs with stats | — |
-| Summary bytes per node (min / max) | — |
-| cAdvisor bytes for one node; disk series kept | — |
-| Root `id="/"` disk series present | — |
+| Ready nodes; pods; PVCs with stats | 4 (1 control-plane, 3 workers); 102 pods; 28 PVCs (8 to 11 on each of 3 workers) |
+| Summary bytes per node (min / max) | 38.6 KB (11 pods) / 174.8 KB (43 pods); about 3.5 to 4.1 KB per pod, stable across 3 rounds (probe, step 1 trace) |
+| cAdvisor bytes for one node; disk series kept | 895.7 KB (control-plane node, 11 pods); 158 kept `container_fs_reads_bytes_total`/`container_fs_writes_bytes_total` lines; 11 containers with read counters, 3 with write counters (counters above 0) |
+| Root `id="/"` disk series present | yes (control-plane node); per-container series exist, so Disk I/O has data on this cluster. Open item 1 not triggered (below 5 MB) |
 
 ## Known ceilings
 

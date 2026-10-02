@@ -15,6 +15,8 @@ mod history_rings;
 mod kind_drawer;
 mod kind_row;
 mod kind_table;
+mod kubelet_history;
+mod kubelet_metrics;
 mod launch_options;
 mod log_buffer;
 mod log_dock;

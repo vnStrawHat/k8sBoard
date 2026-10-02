@@ -51,7 +51,7 @@ pub(crate) fn kubelet_error_text(error: &ClusterError) -> String;
 | Event | Effect |
 |---|---|
 | `update_metrics_feeds` (0010) | gate `Wait` → `Checking`; `Off(reason)` → drop the subscription, `Unavailable(reason)`; `Poll` → `refresh_kubelet_targets`, then subscribe once if none: `poll_kubelet_stats(targets.subscribe())`; status `Waiting` unless `Live`/`Interrupted` |
-| `set_kubelet_demand(demand, cx)` | store; `refresh_kubelet_targets`. Never notifies (it runs from `render`) |
+| `set_kubelet_demand(demand)` | store; `refresh_kubelet_targets`. Takes no `cx` and never notifies (it runs from `render`) |
 | pods or nodes snapshot | `refresh_kubelet_targets` |
 | `refresh_kubelet_targets` | compute; `targets.send_if_modified` (a no-op when equal). The poll loop reads the newest value each round and starts early only for new nodes (decision 13). One subscription lives for the whole session |
 | `Snapshot(round)` | `history.record(Timestamp::now(), &round, live.pods.items(), &live.scope)`; `node_errors` rebuilt: `summary` from `Err` summaries, `disk_io` from `Some(Err)` disk reads, both through `kubelet_error_text`; `Live` |
@@ -70,7 +70,7 @@ The subscribe callback borrows `live.metrics.kubelet` mutably and `live.pods`, `
 
 ## Demand from the shell (`app_shell.rs`)
 
-`fn sync_kubelet_demand(&mut self, cx)` runs in `render` right after `sync_yaml_view` and calls `set_kubelet_demand` only when the value differs from the session's:
+`fn sync_kubelet_demand(&mut self, cx)` runs in `render` right after `sync_yaml_view` and calls `set_kubelet_demand` only when the value differs from the session's: (Pod and Node subjects come from the drawer key alone; only a Workload reads its row's `related_pods`, for kinds with `has_monitor`.)
 
 | Open drawer | `subject` | `wants_disk_io` (step 3) |
 |---|---|---|
@@ -84,7 +84,7 @@ Step 2 always sends `wants_disk_io: false`.
 ## Mounts consumer (`container_detail.rs`, step 2)
 
 - `ContainerDetailInput` gains `pub(crate) kubelet: Option<&'a KubeletHistory>`.
-- `mount_rows`: for `VolumeSource::PersistentVolumeClaim { claim }` whose `pvc_usage(namespace, claim)` has `used` and a non-zero `capacity`, append ` · {used} of {capacity} used ({percent})` with 0010's `Measure::Bytes.format_pair(used, capacity, " of ")` and `format_percent`, e.g. `pvc/data-kafka-0 · 83 of 100Gi used (83%)`. Otherwise unchanged. No tone; 0014 adds Warn ≥ 80 % in its column.
+- `mount_rows`: for `VolumeSource::PersistentVolumeClaim { claim }` whose `pvc_usage(namespace, claim)` has `used` and a non-zero `capacity`, the row gets a second, muted line under the source: `{used} of {capacity} used ({percent})` with 0010's `Measure::Bytes.format_pair(used, capacity, " of ")` and `format_percent`, e.g. `83 of 100Gi used (83%)`. The source text stays the claim alone (`pvc/data-kafka-0`, truncated with its tooltip), so the usage is never cut off by a long claim name. The line is toned like the usage bars: Warn from 80 %, Bad from 90 % (`usage_tone`). Otherwise the row is unchanged. Decision: the first layout appended ` · {usage}` to the source, which the 0.6/0.4 column split truncated at the default drawer width (screenshots of UAT postgres `coroot-0`).
 
 ## Screenshot settle (`screenshot.rs`, step 3)
 

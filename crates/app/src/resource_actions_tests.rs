@@ -190,6 +190,7 @@ fn pod_on(node: Option<&str>) -> PodSummary {
         containers: Vec::new(),
         status_message: None,
         labels: Vec::new(),
+        host_network: false,
     }
 }
 

@@ -455,6 +455,7 @@ fn containers_tab(
                     .history
                     .latest_container(&pod.namespace, &pod.name, name)
             }),
+            kubelet: live.map(|live| &live.metrics.kubelet.history),
             monitor: live.map(|live| MonitorView::of_container(state, live)),
             now,
         },

@@ -24,6 +24,7 @@ use crate::drawer::{
 };
 use crate::filter_bar::ToolkitState;
 use crate::kind_table::KindTableDelegate;
+use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
 use crate::launch_options::{
     LaunchOptions, LaunchScreen, has_ignored_kubeconfig_entries, kubeconfig_path,
 };
@@ -655,6 +656,49 @@ impl AppShell {
             return;
         };
         self.drawer.yaml = Some(cx.new(|cx| YamlView::new(connection, subject, window, cx)));
+    }
+
+    /// Tells the session which kubelets the open drawer wants. It runs inside `render`, so it
+    /// only assigns and never notifies; the session is touched only when the demand changed.
+    fn sync_kubelet_demand(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let demand = self.kubelet_demand(cx);
+        let is_current = session
+            .read(cx)
+            .live()
+            .is_none_or(|live| *live.metrics.kubelet.demand() == demand);
+        if !is_current {
+            session.update(cx, |session, _| session.set_kubelet_demand(demand));
+        }
+    }
+
+    /// The subject of the open drawer, from its key alone; only a workload reads its row, for
+    /// the pods it owns. Disk I/O is never wanted before step 3.
+    fn kubelet_demand(&self, cx: &App) -> KubeletDemand {
+        let subject = self.selected.as_ref().and_then(|key| match key {
+            ResourceKey::Pod { namespace, name } => Some(KubeletSubject::Pod {
+                namespace: namespace.clone(),
+                name: name.clone(),
+            }),
+            ResourceKey::Node { name } => Some(KubeletSubject::Node(name.clone())),
+            ResourceKey::Kind { kind, .. } if kind.has_monitor() => self
+                .live(cx)?
+                .kind_list(*kind)?
+                .list
+                .items()
+                .iter()
+                .find(|row| key.is_row(*kind, row))?
+                .related_pods
+                .clone()
+                .map(KubeletSubject::Workload),
+            ResourceKey::Kind { .. } => None,
+        });
+        KubeletDemand {
+            subject,
+            wants_disk_io: false,
+        }
     }
 
     /// The YAML tab is shown and its first fetch has not finished. A failed fetch is settled.
@@ -1371,6 +1415,7 @@ impl Render for AppShell {
         self.refresh_monitor_cache(cx);
         self.open_pending_logs(window, cx);
         self.sync_yaml_view(window, cx);
+        self.sync_kubelet_demand(cx);
         self.sync_quick_filter(window, cx);
         let theme = cx.theme();
         let counts = self.navigation_counts(cx);

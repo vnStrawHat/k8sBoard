@@ -569,3 +569,15 @@ fn pod_summary_reads_labels_in_key_order() {
     pod.metadata.labels = None;
     assert!(pod_summary(&pod).labels.is_empty());
 }
+
+#[test]
+fn host_network_follows_spec() {
+    let mut pod = pod_with_containers(Vec::new(), vec![container("main", None)]);
+    assert!(!pod_summary(&pod).host_network);
+    if let Some(spec) = pod.spec.as_mut() {
+        spec.host_network = Some(true);
+    }
+    assert!(pod_summary(&pod).host_network);
+    pod.spec = None;
+    assert!(!pod_summary(&pod).host_network);
+}

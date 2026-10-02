@@ -570,6 +570,7 @@ mod tests {
             conditions: Vec::new(),
             status_message: None,
             labels: Vec::new(),
+            host_network: false,
             containers,
         }
     }

@@ -69,6 +69,7 @@ fn summary(namespace: &str, name: &str, controller: Option<(&str, &str)>) -> Pod
         conditions: Vec::new(),
         status_message: None,
         labels: Vec::new(),
+        host_network: false,
         containers: Vec::new(),
     }
 }

@@ -3,11 +3,12 @@ use std::sync::Arc;
 
 use cluster::{
     AccessCheck, AccessReport, ClusterConnection, ClusterError, ContextSummary, EventFilter,
-    EventSummary, InvolvedObject, Kubeconfig, NamespaceAccess, NamespaceScope, NamespaceSummary,
-    NodeSummary, PodSummary, ServerVersion, WatchUpdate,
+    EventSummary, InvolvedObject, Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope,
+    NamespaceSummary, NodeSummary, PodSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
+use tokio::sync::watch;
 
 use crate::cluster_metrics::{
     ClusterMetrics, NodesGate, PodReview, PodReviewResult, PodsGate, nodes_gate, pods_gate,
@@ -15,6 +16,7 @@ use crate::cluster_metrics::{
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::event_rows::newest_first;
 use crate::kind_row::KindRow;
+use crate::kubelet_metrics::KubeletDemand;
 use crate::resource_kind::ResourceKind;
 
 /// One connected kubeconfig context: the connection, its live lists, and the access report.
@@ -470,7 +472,9 @@ impl ClusterSession {
         live.access = review_access_again(&runtime, &live.connection, scope.clone(), cx);
         let review = start_pod_review(&runtime, &live.connection, scope.clone(), cx);
         live.metrics.restart_pods(&scope, review);
+        live.metrics.kubelet.history.retain_scope(&scope);
         live.scope = scope;
+        live.refresh_kubelet_targets();
         cx.notify();
     }
 
@@ -567,6 +571,17 @@ impl ClusterSession {
         cx.notify();
     }
 
+    /// The kubelet demand of the open drawer. It runs from `render`, so it never notifies: the
+    /// targets move through a watch channel and the poll's own updates notify.
+    pub(crate) fn set_kubelet_demand(&mut self, demand: KubeletDemand) {
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        live.metrics
+            .kubelet
+            .set_demand(demand, live.nodes.items(), live.pods.items());
+    }
+
     fn finish_access_review(
         &mut self,
         result: Result<Result<AccessReport, ClusterError>, tokio::task::JoinError>,
@@ -630,11 +645,30 @@ impl ClusterSession {
                     .poll(None, || subscribe_node_metrics(&runtime, connection, cx));
             }
         }
+        match nodes_gate(&live.access, AccessCheck::GetNodeProxy) {
+            NodesGate::Wait => live.metrics.kubelet.wait(),
+            NodesGate::Off(reason) => live.metrics.kubelet.turn_off(reason),
+            NodesGate::Poll => {
+                let connection = &live.connection;
+                live.metrics
+                    .kubelet
+                    .poll(live.nodes.items(), live.pods.items(), |targets| {
+                        subscribe_kubelet_stats(&runtime, connection, targets, cx)
+                    });
+            }
+        }
         cx.notify();
     }
 }
 
 impl LiveCluster {
+    /// Moves the kubelet targets with the nodes and pods lists.
+    fn refresh_kubelet_targets(&self) {
+        self.metrics
+            .kubelet
+            .refresh_targets(self.nodes.items(), self.pods.items());
+    }
+
     /// The context namespace, or `default`.
     pub(crate) fn default_namespace(&self) -> &str {
         self.connection.default_namespace()
@@ -753,6 +787,7 @@ impl LiveCluster {
                 |session: &mut ClusterSession, update, _| {
                     if let Some(live) = session.live_mut() {
                         live.nodes.apply(update);
+                        live.refresh_kubelet_targets();
                     }
                 },
                 |session, _| {
@@ -892,6 +927,7 @@ fn subscribe_pods(
         |session: &mut ClusterSession, update, _| {
             if let Some(live) = session.live_mut() {
                 live.pods.apply(update);
+                live.refresh_kubelet_targets();
             }
         },
         |session, _| {
@@ -940,6 +976,30 @@ fn subscribe_pod_metrics(
         |session, _| {
             if let Some(live) = session.live_mut() {
                 live.metrics.pods.mark_stopped();
+            }
+        },
+    )
+}
+
+fn subscribe_kubelet_stats(
+    runtime: &ClusterRuntime,
+    connection: &ClusterConnection,
+    targets: watch::Receiver<KubeletTargets>,
+    cx: &mut Context<ClusterSession>,
+) -> WatchSubscription {
+    runtime.subscribe(
+        connection.poll_kubelet_stats(targets),
+        cx,
+        |session: &mut ClusterSession, update, _| {
+            if let Some(live) = session.live_mut() {
+                live.metrics
+                    .kubelet
+                    .receive(update, live.pods.items(), &live.scope);
+            }
+        },
+        |session, _| {
+            if let Some(live) = session.live_mut() {
+                live.metrics.kubelet.mark_stopped();
             }
         },
     )

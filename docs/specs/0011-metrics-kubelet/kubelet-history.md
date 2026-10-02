@@ -10,21 +10,21 @@
 pub(crate) struct RatePair<T> { pub(crate) first: T, pub(crate) second: T }
 // impl RingPoint for RatePair<u32> and RatePair<u64> (field-wise mean)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RateKind { Network, DiskIo }
+pub(crate) enum RateKind { Network, DiskIo }          // step 3 (no reader before it)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DiskIoState { NotSampled, Sampled { has_root: bool } }   // the node's newest disk sample
+pub(crate) enum DiskIoState { NotSampled, Sampled { has_root: bool } }   // step 3: the node's newest disk sample, stored by `record` from then on
 pub(crate) struct RateSeries {
     pub(crate) points: Vec<(jiff::Timestamp, Option<RatePair<u64>>)>,  // oldest first
     pub(crate) step: Duration,
     pub(crate) pod_count: usize,      // pods with a value in `points`
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct PodKey { pub(crate) namespace: String, pub(crate) name: String }
+struct PodKey { namespace: String, name: String }   // private
 pub(crate) struct KubeletHistory { /* fine, coarse: Timeline; tick_count; nodes: BTreeMap<String, NodeKubelet>;
-    pods: BTreeMap<PodKey, PodKubelet>; pvcs: BTreeMap<ClaimKey, SeenPvc> */ }
+    pods: BTreeMap<PodKey, PodKubelet>; pvcs: BTreeMap<String /* namespace */, BTreeMap<String /* claim */, SeenPvc>> */ }
 ```
 
-Private: `ClaimKey { namespace, claim }`; `CounterState { at, first: u64, second: u64, last_rate: Option<RatePair<u64>> }`; `NodeKubelet { network, disk: Rings<RatePair<u64>>, network_counter, disk_counter: Option<CounterState>, disk_io: DiskIoState, last_seen }`; `PodKubelet { uid, node, controller: Option<ControllerRef>, network: Option<Rings<RatePair<u32>>>, network_counter, containers: BTreeMap<String, ContainerKubelet>, last_seen }`; `ContainerKubelet { disk: Rings<RatePair<u32>>, disk_counter, last_seen }`; `SeenPvc { usage: PvcUsage, last_seen: u64 }`.
+Private: `CounterState { at, first: u64, second: u64, last_rate: Option<RatePair<u64>> }`; `CounterRings<P> { counter: Option<CounterState>, rings: Option<Rings<P>> }` (the rings exist from the first rate on, so a new entry is not aged out in its first tick); `NodeKubelet { network, disk: CounterRings<RatePair<u64>>, last_seen }` (step 3 adds `disk_io: DiskIoState`); `PodKubelet { uid: Option<String>, controller: Option<ControllerRef>, network: Option<CounterRings<RatePair<u32>>>, containers: BTreeMap<String, ContainerKubelet>, last_seen }` (step 3 adds `node`, which has no reader before it); `ContainerKubelet { disk: CounterRings<RatePair<u32>>, last_seen }`; `SeenPvc { usage: PvcUsage, last_seen: u64 }`.
 
 ## Rate rule (pure; decisions 16–17)
 
@@ -49,9 +49,11 @@ pub(crate) fn record(&mut self, at: jiff::Timestamp, round: &[NodeKubeletStats],
     pods: &[PodSummary], scope: &NamespaceScope);
 ```
 
+`pods` must be ordered by (namespace, name), as every pods snapshot is (`debug_assert!`); the host-network lookup is a binary search.
+
 1. Push `at` on the fine timeline; `tick_count += 1`; push `None` to every fine ring (0010 shape).
-2. Each node with `summary: Ok(s)`: node network rate from `s.network`. Each pod of `s.pods` whose namespace is in `scope`: get or create its entry (`node` = this node); a different `uid` resets its counters (decision 18). Its `PodSummary` (binary search) says `host_network` → `network = None` and no counter (decision 21; a later-known flag frees existing rings); else the network rate. Mark seen. Each `PvcUsage` in scope replaces the stored one unless the stored `sampled_at` is newer (RWX claims appear under several pods).
-3. Each node with `disk_io: Some(Ok(d))`: `disk_io = Sampled { has_root: d.node.is_some() }`; `d.node` → node disk rate; each `ContainerDiskIo` in scope → that pod's container entry (pod created if absent) → container disk rate. A node with no disk sample this tick → `NotSampled`.
+2. Each node with `summary: Ok(s)`: node network rate from `s.network`. Each pod of `s.pods` whose namespace is in `scope`: get or create its entry; a different `uid` resets only its counters (`network` and every container's `disk`), while the rings and the controller stay with the pod name (decision 18). `uid` is an `Option`: a pod first named by a disk series has none yet, and the summary fills it in without a reset. Its `PodSummary` (binary search) says `host_network` → `network = None` and no counter (decision 21; a later-known flag frees existing rings); else the network rate. Mark seen. Each `PvcUsage` in scope replaces the stored one unless the stored `sampled_at` is newer (RWX claims appear under several pods).
+3. Each node with `disk_io: Some(Ok(d))`: (step 3 also sets `disk_io = Sampled { has_root: d.node.is_some() }`, and `NotSampled` for a node with no disk sample this tick); `d.node` → node disk rate; each `ContainerDiskIo` in scope → that pod's container entry (pod created if absent) → container disk rate. A node with no disk sample this tick → `NotSampled`.
 4. Every `TICKS_PER_COARSE`-th tick: coarse fold via `RingPoint::mean`; free fine rings unseen `FINE_TICKS` ticks; remove pods and nodes unseen 24 h; remove PVCs unseen `FINE_TICKS` ticks (decision 24).
 5. Each `PodSummary` with an entry: fill `controller` when `None`.
 

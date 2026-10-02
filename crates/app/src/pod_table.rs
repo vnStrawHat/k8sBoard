@@ -427,6 +427,7 @@ mod tests {
             containers: Vec::new(),
             status_message: None,
             labels: vec!["app=api".to_owned()],
+            host_network: false,
         }
     }
 

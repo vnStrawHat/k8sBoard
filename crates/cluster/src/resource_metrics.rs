@@ -211,7 +211,7 @@ fn concat_namespaces<T>(
 }
 
 /// The wait before the next poll after `failures` failures in a row.
-fn next_delay(failures: u32) -> Duration {
+pub(crate) fn next_delay(failures: u32) -> Duration {
     match failures {
         0 => METRICS_INTERVAL,
         1 => Duration::from_secs(30),

@@ -12,7 +12,7 @@ use crate::kubeconfig::{Kubeconfig, KubeconfigError};
 use crate::namespace::NamespaceScope;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const LIST_PAGE_SIZE: u32 = 500;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;

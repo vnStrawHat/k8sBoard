@@ -367,7 +367,7 @@ fn mount_rows_text_and_targets() {
             },
         ),
     ];
-    let rows = mount_rows(&summary, "shop");
+    let rows = mount_rows(&summary, "shop", None);
     let listed: Vec<_> = rows
         .iter()
         .map(|row| (row.name.as_str(), row.source.as_str()))
@@ -395,6 +395,133 @@ fn mount_rows_text_and_targets() {
     );
     // A Secret or claim has no screen yet, and an empty name never becomes a link.
     assert!(rows[1..].iter().all(|row| row.target.is_none()));
+}
+
+fn history_with_claim(used: Option<u64>, capacity: Option<u64>) -> KubeletHistory {
+    const GI: u64 = 1 << 30;
+    let usage = cluster::PvcUsage {
+        namespace: "shop".to_owned(),
+        claim: "data-claim".to_owned(),
+        sampled_at: Some(at(15)),
+        used: used.map(|gi| cluster::ByteAmount::from_bytes(gi * GI)),
+        capacity: capacity.map(|gi| cluster::ByteAmount::from_bytes(gi * GI)),
+        available: None,
+        inodes_used: None,
+        inodes: None,
+    };
+    let pod = cluster::PodKubeletStats {
+        namespace: "shop".to_owned(),
+        name: "db-0".to_owned(),
+        uid: "u".to_owned(),
+        network: None,
+        volumes: vec![usage],
+    };
+    let node = cluster::NodeKubeletStats {
+        node: "node-a".to_owned(),
+        summary: Ok(cluster::KubeletSummary {
+            network: None,
+            pods: vec![pod],
+        }),
+        disk_io: None,
+    };
+    let mut history = KubeletHistory::default();
+    history.record(at(15), &[node], &[], &cluster::NamespaceScope::All);
+    history
+}
+
+fn claim_mount_row(kubelet: Option<&KubeletHistory>) -> SourceRow {
+    let mut summary = container();
+    summary.mounts = vec![mount(
+        "/data",
+        "data",
+        VolumeSource::PersistentVolumeClaim {
+            claim: "data-claim".to_owned(),
+        },
+    )];
+    mount_rows(&summary, "shop", kubelet).remove(0)
+}
+
+fn usage_of(used: u64, capacity: u64) -> Option<UsageNote> {
+    claim_mount_row(Some(&history_with_claim(Some(used), Some(capacity)))).usage
+}
+
+#[test]
+fn pvc_mount_shows_usage() {
+    let history = history_with_claim(Some(83), Some(100));
+    let row = claim_mount_row(Some(&history));
+    // The source keeps the claim name alone; the usage is its own line.
+    assert_eq!(row.source, "pvc/data-claim");
+    assert_eq!(
+        row.usage,
+        Some(UsageNote {
+            text: "83 of 100Gi used (83%)".to_owned(),
+            tone: Some(StatusTone::Warn),
+        })
+    );
+}
+
+#[test]
+fn pvc_usage_turns_warn_at_80_and_bad_at_90_percent() {
+    assert_eq!(
+        usage_of(50, 100).map(|usage| (usage.text, usage.tone)),
+        Some(("50 of 100Gi used (50%)".to_owned(), None))
+    );
+    assert_eq!(usage_of(79, 100).and_then(|usage| usage.tone), None);
+    assert_eq!(
+        usage_of(80, 100).and_then(|usage| usage.tone),
+        Some(StatusTone::Warn)
+    );
+    assert_eq!(
+        usage_of(89, 100).and_then(|usage| usage.tone),
+        Some(StatusTone::Warn)
+    );
+    assert_eq!(
+        usage_of(90, 100).and_then(|usage| usage.tone),
+        Some(StatusTone::Bad)
+    );
+}
+
+#[test]
+fn pvc_mount_without_stats_is_unchanged() {
+    let row = claim_mount_row(None);
+    assert_eq!(row.source, "pvc/data-claim");
+    assert_eq!(row.usage, None);
+}
+
+#[test]
+fn pvc_mount_of_an_unseen_claim_is_unchanged() {
+    let other_claim = history_with_claim(Some(1), Some(2));
+    let mut summary = container();
+    summary.mounts = vec![mount(
+        "/data",
+        "data",
+        VolumeSource::PersistentVolumeClaim {
+            claim: "unknown".to_owned(),
+        },
+    )];
+    let rows = mount_rows(&summary, "shop", Some(&other_claim));
+    assert_eq!(rows[0].source, "pvc/unknown");
+    assert_eq!(rows[0].usage, None);
+}
+
+#[test]
+fn pvc_mount_without_a_used_amount_has_no_usage_line() {
+    let no_used = history_with_claim(None, Some(100));
+    assert_eq!(claim_mount_row(Some(&no_used)).usage, None);
+}
+
+#[test]
+fn pvc_mount_with_zero_capacity_has_no_usage_line() {
+    let zero = history_with_claim(Some(0), Some(0));
+    assert_eq!(claim_mount_row(Some(&zero)).usage, None);
+}
+
+#[test]
+fn other_mounts_have_no_usage_line() {
+    let mut summary = container();
+    summary.mounts = vec![mount("/tmp", "scratch", VolumeSource::EmptyDir)];
+    let history = history_with_claim(Some(83), Some(100));
+    assert_eq!(mount_rows(&summary, "shop", Some(&history))[0].usage, None);
 }
 
 #[test]

@@ -2,12 +2,12 @@
 //! credentials, and never `Debug` output of kube types. With `--watch-seconds` it runs
 //! the pods, nodes, namespaces, nine workload, network, and config watches plus two
 //! events watches together, and prints counts per kind. With `--metrics-seconds` it polls pod
-//! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--yaml` it reads the masked
+//! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--kubelet-seconds` it polls the kubelet stats of every Ready node through the node proxy (cAdvisor disk I/O for the first one) and prints counts per node per round. With `--yaml` it reads the masked
 //! YAML of the first pod and the first node and prints line counts and masking checks, never
 //! the YAML text. The access section doubles as the RBAC probe of the context.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--yaml]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--yaml]
 //! ```
 
 use std::collections::BTreeMap;
@@ -19,15 +19,16 @@ use std::time::Duration;
 
 use cluster::{
     AccessDecision, ClusterConnection, ClusterError, ContainerKind, ContainerState,
-    ContainerSummary, EnvValues, EventFilter, Kubeconfig, LogRequest, LogSource, LogUpdate,
-    MetricsApi, NamespaceScope, NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary,
-    ObjectKind, ObjectRef, PodMetrics, PodStatus, PodSummary, StatusReason, Termination,
-    WatchUpdate,
+    ContainerSummary, EnvValues, EventFilter, Kubeconfig, KubeletTargets, LogRequest, LogSource,
+    LogUpdate, MetricsApi, NamespaceScope, NodeKubeletStats, NodeMetrics, NodeReadiness,
+    NodeScheduling, NodeSummary, ObjectKind, ObjectRef, PodMetrics, PodStatus, PodSummary,
+    StatusReason, Termination, WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
+use tokio::sync::watch;
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--yaml]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--yaml]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -39,6 +40,7 @@ struct Args {
     watch_seconds: Option<u64>,
     logs_seconds: Option<u64>,
     metrics_seconds: Option<u64>,
+    kubelet_seconds: Option<u64>,
     yaml: bool,
 }
 
@@ -54,6 +56,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut watch_seconds = None;
     let mut logs_seconds = None;
     let mut metrics_seconds = None;
+    let mut kubelet_seconds = None;
     let mut yaml = false;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
@@ -78,6 +81,12 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
                     &value("--metrics-seconds")?,
                 )?)
             }
+            "--kubelet-seconds" => {
+                kubelet_seconds = Some(parse_seconds(
+                    "--kubelet-seconds",
+                    &value("--kubelet-seconds")?,
+                )?)
+            }
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
@@ -89,6 +98,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         watch_seconds,
         logs_seconds,
         metrics_seconds,
+        kubelet_seconds,
         yaml,
     }))
 }
@@ -455,6 +465,110 @@ async fn metrics_for(
     Ok(())
 }
 
+/// Decimal gigabytes, for a network counter.
+fn gigabytes(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / 1e9)
+}
+
+/// One node of one kubelet round, as lines of counts only: no pod, claim, or image names.
+fn kubelet_node_lines(stats: &NodeKubeletStats) -> Vec<String> {
+    let node = &stats.node;
+    let mut lines = vec![match &stats.summary {
+        Ok(summary) => {
+            let pvcs: usize = summary.pods.iter().map(|pod| pod.volumes.len()).sum();
+            let network = summary.network.map_or_else(
+                || "none".to_owned(),
+                |counters| {
+                    format!(
+                        "rx {} tx {}",
+                        gigabytes(counters.rx_bytes),
+                        gigabytes(counters.tx_bytes)
+                    )
+                },
+            );
+            format!(
+                "kubelet {node}: {} pods, {pvcs} PVCs, network {network}",
+                summary.pods.len()
+            )
+        }
+        Err(error) => format!("kubelet {node} failed: {}", error_summary(error)),
+    }];
+    match &stats.disk_io {
+        Some(Ok(sample)) => {
+            let with_reads = sample
+                .containers
+                .iter()
+                .filter(|container| container.counters.read_bytes > 0)
+                .count();
+            let with_writes = sample
+                .containers
+                .iter()
+                .filter(|container| container.counters.write_bytes > 0)
+                .count();
+            lines.push(format!(
+                "disk io: {} containers ({with_reads} with reads, {with_writes} with writes), node root series {}",
+                sample.containers.len(),
+                if sample.node.is_some() { "yes" } else { "no" },
+            ));
+        }
+        Some(Err(error)) => lines.push(format!(
+            "kubelet {node} disk io failed: {}",
+            error_summary(error)
+        )),
+        None => {}
+    }
+    lines
+}
+
+/// Polls the kubelet stats of every Ready node for `seconds` (cAdvisor disk I/O for the
+/// first one only) and prints counts per node per round.
+async fn kubelet_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    ready_nodes: &[String],
+    seconds: u64,
+) -> io::Result<()> {
+    probe.section(&format!("kubelet stats ({seconds}s)"))?;
+    let Some(disk_node) = ready_nodes.first() else {
+        probe.all_succeeded = false;
+        return writeln!(probe.out, "  no Ready node");
+    };
+    let (sender, receiver) = watch::channel(KubeletTargets {
+        summary_nodes: ready_nodes.to_vec(),
+        disk_io_nodes: vec![disk_node.clone()],
+    });
+    let mut updates = Box::pin(connection.poll_kubelet_stats(receiver));
+    let mut rounds = 0;
+    let timer = tokio::time::sleep(Duration::from_secs(seconds));
+    tokio::pin!(timer);
+    loop {
+        let update = tokio::select! {
+            () = &mut timer => break,
+            update = updates.next() => update,
+        };
+        match update {
+            Some(WatchUpdate::Snapshot(nodes)) => {
+                rounds += 1;
+                writeln!(probe.out, "  round {rounds}")?;
+                for line in nodes.iter().flat_map(kubelet_node_lines) {
+                    writeln!(probe.out, "    {line}")?;
+                }
+            }
+            Some(WatchUpdate::Failed(error)) => {
+                probe.all_succeeded = false;
+                writeln!(probe.out, "  round failed: {}", error_summary(&error))?;
+            }
+            None => break,
+        }
+    }
+    // The sender stays alive until here: dropping it would end the poll.
+    drop(sender);
+    if rounds < 2 {
+        probe.all_succeeded = false;
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = match parse_args(std::env::args().skip(1)) {
@@ -585,9 +699,15 @@ async fn run(args: &Args) -> io::Result<bool> {
     }
 
     let mut first_node = None;
+    let mut ready_nodes = Vec::new();
     match connection.list_nodes().await {
         Ok(nodes) => {
             first_node = nodes.first().map(|node| node.name.clone());
+            ready_nodes = nodes
+                .iter()
+                .filter(|node| node.status.readiness == NodeReadiness::Ready)
+                .map(|node| node.name.clone())
+                .collect();
             probe.section(&format!("nodes ({})", nodes.len()))?;
             writeln!(
                 probe.out,
@@ -669,6 +789,9 @@ async fn run(args: &Args) -> io::Result<bool> {
     if let Some(seconds) = args.metrics_seconds {
         let pods = pods.as_ref().map_or(&[][..], Vec::as_slice);
         metrics_for(&mut probe, &connection, scope, pods, seconds).await?;
+    }
+    if let Some(seconds) = args.kubelet_seconds {
+        kubelet_for(&mut probe, &connection, &ready_nodes, seconds).await?;
     }
     if let Some(seconds) = args.logs_seconds {
         let pods = pods.as_ref().map_or(&[][..], Vec::as_slice);

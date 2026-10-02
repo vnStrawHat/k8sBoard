@@ -15,7 +15,7 @@ pub(crate) const TICKS_PER_COARSE: usize = 20;
 /// One day of coarse points.
 pub(crate) const COARSE_POINTS: usize = 288;
 /// A series unseen for a day is dropped altogether.
-const DROP_AFTER_TICKS: u64 = FINE_TICKS as u64 * 24;
+pub(crate) const DROP_AFTER_TICKS: u64 = FINE_TICKS as u64 * 24;
 
 /// How finely a series is read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

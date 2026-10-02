@@ -57,8 +57,9 @@
 | 2 | `kubelet_metrics_tests.rs` | `targets_are_sorted_for_equality` | |
 | 2 | `kubelet_metrics_tests.rs` | `subject_nodes_skip_done_and_unscheduled_pods` | |
 | 2 | `kubelet_metrics_tests.rs` | `kubelet_errors_are_worded` | 503, 404, other |
-| 2 | `container_detail_tests.rs` | `pvc_mount_shows_usage` | `pvc/data · 83 of 100Gi used (83%)` |
+| 2 | `container_detail_tests.rs` | `pvc_mount_shows_usage` | source `pvc/data`, usage line `83 of 100Gi used (83%)`, tone Warn |
 | 2 | `container_detail_tests.rs` | `pvc_mount_without_stats_is_unchanged` | also zero capacity |
+| 2 | `container_detail_tests.rs` | `pvc_usage_turns_warn_at_80_and_bad_at_90_percent` | tones of the usage line |
 | 3 | `kubelet_history_tests.rs` | `pod_disk_total_sums_containers` | |
 | 3 | `kubelet_history_tests.rs` | `container_scope_network_is_the_pods` | |
 | 3 | `kubelet_history_tests.rs` | `owner_network_skips_host_network_pods` | they add nothing to the sum |
@@ -81,7 +82,7 @@
 
 1. Step 1: `probe --kubeconfig monitor-uat-readonly.yml --context readonly@Monitor --kubelet-seconds 40` → ≥ 2 rounds per node and one disk line. Byte sizes: after step 3, run the app on `pod-monitor` with `RUST_LOG=cluster::kubelet_stats=debug` and read the `bytes` fields. Fill the "UAT probe" table. Nothing from the kubeconfig in any output.
 2. Step 1: the 0001 read-only grep (`create|replace|patch|delete|exec|attach|portforward`) finds only the SSAR `create`; `grep -rn "proxy/" crates/cluster/src` finds only the `KubeletPath` literals.
-3. Step 2: open a pod drawer on a pod with a PVC (if UAT has one) → Mounts shows usage.
+3. Step 2: open a pod drawer on a pod with a PVC (if UAT has one) → Mounts shows the usage line under the claim.
 4. Step 3: screenshots `pod-monitor`, `node-monitor`, `deployments-monitor`, light and dark.
 
 ## ui-verifier checklist (step 3)

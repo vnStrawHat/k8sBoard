@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use cluster::{
     ContainerResource, ContainerState, ContainerSummary, EnvFromSource, EnvSource, EventSummary,
-    PodSummary, ProbeAction, ProbeSummary, ResourceUsage, Termination, VolumeSource,
+    PodSummary, ProbeAction, ProbeSummary, PvcUsage, ResourceUsage, Termination, VolumeSource,
 };
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
@@ -23,12 +23,14 @@ use crate::drawer::{
     ContainerTab, absent_text, detail_row, link_text, port_row, section_title, truncated_text,
     value_or_absent,
 };
+use crate::kubelet_history::KubeletHistory;
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::pod_diagnosis::{ProbeKind, ProbeResult, next_retry, probe_of, probe_result};
 use crate::pod_drawer::{UsageRow, container_usage_row, kind_tag};
 use crate::status_tone::{StatusLabel, StatusTone, container_state_label, tone_color, toned_text};
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::usage_bar;
+use crate::usage_format::{Measure, format_percent, usage_tone};
 
 /// How many distinct env sources `env_summary` names before `+N more`.
 const MAX_SUMMARY_SOURCES: usize = 3;
@@ -56,6 +58,15 @@ struct SourceRow {
     name: String,
     source: String,
     target: Option<ResourceKey>,
+    /// A second, muted line under the source: the usage of a PVC mount.
+    usage: Option<UsageNote>,
+}
+
+/// `83 of 100Gi used (83%)` and its tone (Warn from 80 %, Bad from 90 %).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UsageNote {
+    text: String,
+    tone: Option<StatusTone>,
 }
 
 /// What the container detail needs from the open pod.
@@ -69,6 +80,8 @@ pub(crate) struct ContainerDetailInput<'a> {
     pub(crate) forward_reason: &'a SharedString,
     /// The container's newest usage; `None` without a sample.
     pub(crate) usage: Option<ResourceUsage>,
+    /// The kubelet history, for the usage of PVC mounts; `None` while the session is not live.
+    pub(crate) kubelet: Option<&'a KubeletHistory>,
     /// The Monitor sub-tab; `None` while the session is not live.
     pub(crate) monitor: Option<MonitorView<'a>>,
     pub(crate) now: jiff::Timestamp,
@@ -109,7 +122,7 @@ pub(crate) fn container_detail(
             cx,
         ),
         ContainerTab::Mounts => source_body(
-            &mount_rows(container, &input.pod.namespace),
+            &mount_rows(container, &input.pod.namespace, input.kubelet),
             "No mounts",
             cx,
         ),
@@ -376,6 +389,16 @@ fn source_body(rows: &[SourceRow], empty_text: &'static str, cx: &Context<AppShe
                 .text_color(theme.muted_foreground)
                 .into_any_element(),
             };
+            let usage = row.usage.as_ref().map(|usage| {
+                let color = usage
+                    .tone
+                    .map_or(theme.muted_foreground, |tone| tone_color(tone, cx));
+                // Not truncated: it is short, and the percentage is its point.
+                div()
+                    .text_color(color)
+                    .text_xs()
+                    .child(SharedString::from(usage.text.clone()))
+            });
             h_flex()
                 .gap_3()
                 .py_1()
@@ -387,7 +410,14 @@ fn source_body(rows: &[SourceRow], empty_text: &'static str, cx: &Context<AppShe
                         .flex_shrink_0()
                         .font_family(theme.mono_font_family.clone()),
                 )
-                .child(div().flex_1().min_w_0().overflow_hidden().child(source))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(source)
+                        .children(usage),
+                )
         }))
         .into_any_element()
 }
@@ -649,16 +679,19 @@ fn env_rows(container: &ContainerSummary, namespace: &str) -> Vec<SourceRow> {
                 name,
                 source: format!("all keys of configmap/{source}"),
                 target: config_map_target(namespace, source),
+                usage: None,
             },
             EnvFromSource::Secret { name: source } => SourceRow {
                 name,
                 source: format!("all keys of secret/{source}"),
                 target: None,
+                usage: None,
             },
             EnvFromSource::Unknown => SourceRow {
                 name,
                 source: "unknown source".to_owned(),
                 target: None,
+                usage: None,
             },
         }
     });
@@ -678,12 +711,17 @@ fn env_rows(container: &ContainerSummary, namespace: &str) -> Vec<SourceRow> {
             name: entry.name.clone(),
             source,
             target,
+            usage: None,
         }
     });
     from_rows.chain(variable_rows).collect()
 }
 
-fn mount_rows(container: &ContainerSummary, namespace: &str) -> Vec<SourceRow> {
+fn mount_rows(
+    container: &ContainerSummary,
+    namespace: &str,
+    kubelet: Option<&KubeletHistory>,
+) -> Vec<SourceRow> {
     container
         .mounts
         .iter()
@@ -699,13 +737,38 @@ fn mount_rows(container: &ContainerSummary, namespace: &str) -> Vec<SourceRow> {
                 VolumeSource::ConfigMap { name } => config_map_target(namespace, name),
                 _ => None,
             };
+            let usage = match &mount.source {
+                VolumeSource::PersistentVolumeClaim { claim } => kubelet
+                    .and_then(|kubelet| kubelet.pvc_usage(namespace, claim))
+                    .and_then(pvc_usage_note),
+                _ => None,
+            };
             SourceRow {
                 name: mount.path.clone(),
                 source,
                 target,
+                usage,
             }
         })
         .collect()
+}
+
+/// `None` without a used amount or a capacity.
+fn pvc_usage_note(usage: &PvcUsage) -> Option<UsageNote> {
+    let used = usage.used?.bytes() as f64;
+    let capacity = usage.capacity?.bytes() as f64;
+    if capacity <= 0. {
+        return None;
+    }
+    let ratio = used / capacity;
+    Some(UsageNote {
+        text: format!(
+            "{} used ({})",
+            Measure::Bytes.format_pair(used, capacity, " of "),
+            format_percent(ratio)
+        ),
+        tone: usage_tone(ratio),
+    })
 }
 
 #[cfg(test)]

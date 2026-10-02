@@ -2,6 +2,7 @@
 //! read-only access to Kubernetes clusters.
 
 mod access_review;
+mod cadvisor_text;
 mod config_map;
 mod connection;
 mod container_spec;
@@ -12,6 +13,7 @@ mod event;
 mod ingress;
 mod job;
 mod kubeconfig;
+mod kubelet_stats;
 mod metrics_api;
 mod namespace;
 mod node;
@@ -28,6 +30,7 @@ mod stateful_set;
 mod workload;
 
 pub use access_review::{AccessCheck, AccessDecision, AccessReport, AccessReview, NamespaceAccess};
+pub use cadvisor_text::{ContainerDiskIo, DiskIoCounters, DiskIoSample};
 pub use config_map::{ConfigMapKey, ConfigMapSummary};
 pub use connection::{ClusterConnection, ClusterError, ServerVersion};
 pub use container_spec::{
@@ -41,6 +44,9 @@ pub use event::{EVENT_LIMIT, EventFilter, EventSummary, EventType, InvolvedObjec
 pub use ingress::{IngressPath, IngressSummary, IngressTls};
 pub use job::{JobStatus, JobSummary};
 pub use kubeconfig::{ContextOrigin, ContextSummary, Kubeconfig, KubeconfigError};
+pub use kubelet_stats::{
+    KubeletSummary, KubeletTargets, NetworkCounters, NodeKubeletStats, PodKubeletStats, PvcUsage,
+};
 pub use metrics_api::MetricsApi;
 pub use namespace::{NamespacePhase, NamespaceScope, NamespaceSummary};
 pub use node::{

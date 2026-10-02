@@ -241,3 +241,30 @@ fn closed_stream_marks_the_feed_failed() {
         FeedStatus::Failed("metrics polling stopped unexpectedly".to_owned())
     );
 }
+
+#[test]
+fn kubelet_gate_reads_the_node_proxy_review() {
+    let denied = report(
+        AccessCheck::GetNodeProxy,
+        AccessDecision::Denied {
+            reason: Some("no rule".to_owned()),
+        },
+    );
+    let NodesGate::Off(reason) = nodes_gate(&denied, AccessCheck::GetNodeProxy) else {
+        panic!("a denied review turns the kubelet feed off");
+    };
+    assert!(
+        reason.starts_with("not allowed to get nodes/proxy"),
+        "{reason}"
+    );
+    assert!(reason.ends_with(": no rule"), "{reason}");
+    // A denial of the metrics API does not stop the kubelet feed.
+    let metrics_denied = report(
+        AccessCheck::ListNodeMetrics,
+        AccessDecision::Denied { reason: None },
+    );
+    assert_eq!(
+        nodes_gate(&metrics_denied, AccessCheck::GetNodeProxy),
+        NodesGate::Poll
+    );
+}

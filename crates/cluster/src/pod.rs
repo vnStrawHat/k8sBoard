@@ -46,6 +46,8 @@ pub struct PodSummary {
     pub status_message: Option<String>,
     /// `key=value` terms in key order. Labels only: annotations are never read.
     pub labels: Vec<String>,
+    /// The pod uses the node's network namespace; its network stats are the node's.
+    pub host_network: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,6 +212,11 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
         containers: container_summaries(pod),
         status_message: status_message(pod),
         labels: label_terms(&pod.metadata),
+        host_network: pod
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.host_network)
+            .unwrap_or(false),
     }
 }
 

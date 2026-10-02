@@ -74,6 +74,7 @@ fn pod(name: &str, containers: Vec<ContainerSummary>) -> PodSummary {
         conditions: Vec::new(),
         status_message: None,
         labels: Vec::new(),
+        host_network: false,
         containers,
     }
 }
