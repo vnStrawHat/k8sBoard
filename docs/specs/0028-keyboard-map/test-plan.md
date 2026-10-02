@@ -23,6 +23,7 @@ Helper: `resolve(cx, "down", &["Root", "AppShell", "DataTable"]) -> Option<&'sta
 | 1 | `bindings_avoid_reserved_keys` | each `RESERVED_KEYS` entry is parsed with `Keystroke::parse`; no app binding's keystroke equals one ([keymap.md](keymap.md) "Keys of other specs") |
 | 1 | `every_sheet_row_has_a_binding` | each `shortcut_rows()` action has at least one binding |
 | 1 | `every_bound_action_is_on_the_sheet` | each app binding's action is on the sheet, except `LeaveInput` |
+| 1 | `settings_window_gets_no_shell_keys` | under `SettingsWindow` and `SettingsWindow > Input`: `j`, `?`, `/`, `enter`, `l`, `secondary-n`, `secondary-w` resolve to no app action; `escape` under `SettingsWindow > Input` and under `Dialog > Input` never resolves to `LeaveInput` |
 | 1 | `settings_keys_keep_their_0025_contexts` | `secondary-,` → `OpenSettings` with no context (also under `Dialog`); `secondary-o` → `ImportKubeconfig` only under `SettingsWindow` |
 
 ## Pure helpers

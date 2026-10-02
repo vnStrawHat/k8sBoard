@@ -30,6 +30,7 @@ Wireframe context → GPUI context: workspace = `WINDOW`/`WORKSPACE`; table = `T
 4. **Open menus, popovers, and dialogs own the keyboard.** Single keys are off there; their own arrows, Enter, Esc (kit) work. Menu letters are hints, not accelerators (open item 4).
 5. **Kit table keys**: `TABLE` re-binds every kit key that moves the row (decision 6). `tab`, `shift-tab`, `left`, `right` stay with the kit.
 6. **Copy**: `secondary-c` copies the cursor row's name unless the window has a text selection (`gpui_kit::base::TextSelection::has_selection`); then the handler calls `cx.propagate()` and the kit Root `Copy` copies the text.
+7. **Settings window (0025)**: its focus path is `Root > SettingsWindow …`, with no `AppShell` in it. So `WINDOW`, `WORKSPACE`, and `TABLE` never match there: no single key and no shell chord fires in Settings. Only `OpenSettings` (no context) and `ImportKubeconfig` (`SettingsWindow`) apply. The `FIELD` predicates name `QuickFilter`, `Drawer`, and `LogDock`, none of which exist in Settings, so `LeaveInput` never takes Esc from a Settings input or from a kit dialog there. Esc stays with the kit `Input` and the kit dialog, as in 0025. Test: `settings_window_gets_no_shell_keys`.
 
 ## Esc ladder (`Dismiss`, pure fn in `keyboard_navigation.rs`)
 
