@@ -145,7 +145,7 @@ fn object_key_maps_viewable_kinds() {
             name: "team-a".to_owned(),
         })
     );
-    assert_eq!(key("HorizontalPodAutoscaler", Some("team-a"), "web"), None);
+    assert_eq!(key("Lease", Some("team-a"), "web"), None);
     assert_eq!(key("Event", Some("team-a"), "e"), None);
     assert_eq!(key("Pod", None, "api-0"), None);
 }
@@ -194,7 +194,7 @@ fn event_row_has_details_and_message_sections() {
 #[test]
 fn event_object_without_a_screen_is_plain_text_and_empty_message_is_a_note() {
     let event = EventSummary {
-        object: object("HorizontalPodAutoscaler", Some("team-a"), "web"),
+        object: object("Lease", Some("team-a"), "web"),
         container: None,
         message: String::new(),
         ..summary()
@@ -205,7 +205,7 @@ fn event_object_without_a_screen_is_plain_text_and_empty_message_is_a_note() {
     assert!(matches!(
         details.rows.first(),
         Some(DetailRow::Field { value: KindCell::Mono(text), .. })
-            if text.as_ref() == "team-a/horizontalpodautoscaler/web"
+            if text.as_ref() == "team-a/lease/web"
     ));
     let message = row.section("Message").expect("message section");
     assert_eq!(message.rows, [DetailRow::Note("No message".into())]);

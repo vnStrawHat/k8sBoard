@@ -20,7 +20,7 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Group | Kind | T | Dr | Read-only gaps → spec | Mutating actions → spec |
 |---|---|---|---|---|---|
 | Cluster | Nodes | Done | Partial | conditions, allocatable, system 0008; CPU/Mem 0010; View pods on node 0009 | shell 0037; cordon, drain, taints, labels 0034; delete 0033 |
-| Cluster | Namespaces | Partial | Partial | Pods, CPU req, Memory req columns Done (0012); STUCK box and remaining resources 0018; quota section 0013; "Set as default" 0024 | New 0031; delete 0033 |
+| Cluster | Namespaces | Partial | Partial | Pods, CPU req, Memory req columns Done (0012); STUCK box and remaining resources 0018; quota section Done (0013; LimitRange row open); "Set as default" 0024 | New 0031; delete 0033 |
 | Cluster | Events | Planned(0006) | Planned(0006) | Warnings only, Go to object, Copy message: 0006; Pause stream, Filter similar 0009 | — |
 | Workloads | Pods | Done | Partial | see [inventory-screens.md](inventory-screens.md) W4 rows | see W4 rows |
 | Workloads | Deployments | Done | Done (WHY box, Revisions: 0012) | View logs (all pods) 0019 | scale, restart, roll back, pause 0032; port-forward 0035 |
@@ -31,13 +31,13 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Workloads | CronJobs | Done (0012) | Done (next runs, recent jobs: 0012) | logs of last job 0019 | Trigger now, Suspend 0032 |
 | Network | Services | Done (0012) | Done (Endpoints, "matches no pods": 0012) | Show in Topology 0022 | port-forward 0035 |
 | Network | Ingresses | Partial | Partial | TLS expiry column and CERTIFICATE box 0016; Show in Topology 0022 (Open URL and backend links done in 0012) | — |
-| Network | NetworkPolicies | Missing | Missing | 0013 (rules as sentences, Affects); Test traffic 0023 | — |
+| Network | NetworkPolicies | Done (0013) | Done (rules as sentences, Affects: 0013) | Test traffic 0023 | — |
 | Network | Port Forwarding (local page) | Missing | Missing | — | 0035 |
 | Config | ConfigMaps | Done (0012) | Done (Used by, value previews: 0012) | — | Edit, New, Compare with previous 0031 |
 | Config | Secrets | Missing | Missing | 0016 (masked, Reveal 30 s, Copy, Used by, unused flag) | Edit 0031 |
-| Config | HPAs | Missing | Missing | 0013 (metrics bars, scaling events from 0006) | Edit min/max 0032 |
-| Config | ResourceQuotas | Missing | Missing | 0013 (usage bars, blocked Pending pods) | New, Edit 0031 |
-| Config | PDBs | Missing | Missing | 0013 (allowed disruptions, BLOCKS DRAIN, selected pods) | New 0031 |
+| Config | HPAs | Done (0013) | Done (metric bars, scaling events, AT MAX box: 0013) | — | Edit min/max 0032 |
+| Config | ResourceQuotas | Done (0013) | Done (usage bars, blocked creations: 0013) | — | New, Edit 0031 |
+| Config | PDBs | Done (0013) | Done (allowed disruptions, BLOCKS DRAIN, selected pods: 0013) | — | New 0031 |
 | Storage | PVCs | Missing | Missing | 0014; Used % and inodes: data ready (0011), UI 0014; Go to pod 0014 | Expand 0032 |
 | Storage | PVs | Missing | Missing | 0014 (Released cleanup hint) | — |
 | Storage | StorageClasses | Missing | Missing | 0014 (default ★, PV count) | Set default 0032 |

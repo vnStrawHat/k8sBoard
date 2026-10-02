@@ -7,7 +7,7 @@ use cluster::{
     AccessCheck, AccessReport, ClusterConnection, ClusterError, ConfigMapValues, ContextSummary,
     EndpointSliceSummary, EventFilter, EventSummary, InvolvedObject, JobSummary, Kubeconfig,
     KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, PodSummary,
-    ReplicaSetSummary, ServerVersion, WatchUpdate,
+    ReplicaSetSummary, ResourceQuotaSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
@@ -242,6 +242,9 @@ pub(crate) enum RelatedList {
     Jobs(LiveList<JobSummary>),
     /// The value previews of one config map. They can be sensitive, so nothing here logs them.
     ConfigMapValues(LiveList<ConfigMapValues>),
+    /// The FailedCreate events of a namespace.
+    Events(LiveList<EventSummary>),
+    ResourceQuotas(LiveList<ResourceQuotaSummary>),
 }
 
 /// One related watch update, typed on tokio so one subscription serves every subject.
@@ -249,6 +252,8 @@ enum RelatedUpdate {
     ReplicaSets(WatchUpdate<ReplicaSetSummary>),
     Jobs(WatchUpdate<JobSummary>),
     ConfigMapValues(WatchUpdate<ConfigMapValues>),
+    Events(WatchUpdate<EventSummary>),
+    ResourceQuotas(WatchUpdate<ResourceQuotaSummary>),
 }
 
 impl RelatedList {
@@ -257,6 +262,8 @@ impl RelatedList {
             RelatedSubject::ReplicaSets { .. } => Self::ReplicaSets(LiveList::Loading),
             RelatedSubject::Jobs { .. } => Self::Jobs(LiveList::Loading),
             RelatedSubject::ConfigMapValues { .. } => Self::ConfigMapValues(LiveList::Loading),
+            RelatedSubject::QuotaRejections { .. } => Self::Events(LiveList::Loading),
+            RelatedSubject::NamespaceQuotas { .. } => Self::ResourceQuotas(LiveList::Loading),
         }
     }
 
@@ -268,10 +275,12 @@ impl RelatedList {
             (Self::ConfigMapValues(list), RelatedUpdate::ConfigMapValues(update)) => {
                 list.apply(update);
             }
-            (Self::ReplicaSets(_), RelatedUpdate::Jobs(_) | RelatedUpdate::ConfigMapValues(_))
-            | (Self::Jobs(_), RelatedUpdate::ReplicaSets(_) | RelatedUpdate::ConfigMapValues(_))
-            | (Self::ConfigMapValues(_), RelatedUpdate::ReplicaSets(_) | RelatedUpdate::Jobs(_)) => {
+            (Self::Events(list), RelatedUpdate::Events(update)) => list.apply(update),
+            (Self::ResourceQuotas(list), RelatedUpdate::ResourceQuotas(update)) => {
+                list.apply(update);
             }
+            // A stale update of another subject's kind.
+            _ => {}
         }
     }
 
@@ -280,6 +289,29 @@ impl RelatedList {
             Self::ReplicaSets(list) => list.mark_stopped(),
             Self::Jobs(list) => list.mark_stopped(),
             Self::ConfigMapValues(list) => list.mark_stopped(),
+            Self::Events(list) => list.mark_stopped(),
+            Self::ResourceQuotas(list) => list.mark_stopped(),
+        }
+    }
+
+    /// The events of a quota's namespace, when this list holds them.
+    pub(crate) fn events(&self) -> Option<&LiveList<EventSummary>> {
+        match self {
+            Self::Events(list) => Some(list),
+            Self::ReplicaSets(_)
+            | Self::Jobs(_)
+            | Self::ConfigMapValues(_)
+            | Self::ResourceQuotas(_) => None,
+        }
+    }
+
+    /// The quotas of a namespace, when this list holds them.
+    pub(crate) fn resource_quotas(&self) -> Option<&LiveList<ResourceQuotaSummary>> {
+        match self {
+            Self::ResourceQuotas(list) => Some(list),
+            Self::ReplicaSets(_) | Self::Jobs(_) | Self::ConfigMapValues(_) | Self::Events(_) => {
+                None
+            }
         }
     }
 
@@ -290,7 +322,28 @@ impl RelatedList {
             Self::ReplicaSets(list) => list.is_loading(),
             Self::Jobs(list) => list.is_loading(),
             Self::ConfigMapValues(list) => list.is_loading(),
+            Self::Events(list) => list.is_loading(),
+            Self::ResourceQuotas(list) => list.is_loading(),
         }
+    }
+}
+
+/// The check that denies the related watch of `subject`, when the access report is known and says
+/// no. The watch is not started then, and the drawer names the check as the reason.
+pub(crate) fn denied_related_check(
+    subject: &RelatedSubject,
+    access: &AccessState,
+) -> Option<AccessCheck> {
+    let check = match subject {
+        RelatedSubject::QuotaRejections { .. } => AccessCheck::ListEvents,
+        RelatedSubject::NamespaceQuotas { .. } => AccessCheck::ListResourceQuotas,
+        RelatedSubject::ReplicaSets { .. }
+        | RelatedSubject::Jobs { .. }
+        | RelatedSubject::ConfigMapValues { .. } => return None,
+    };
+    match access {
+        AccessState::Known(report) if !report.is_allowed(check) => Some(check),
+        AccessState::Known(_) | AccessState::Checking { .. } | AccessState::Unknown => None,
     }
 }
 
@@ -1520,6 +1573,14 @@ impl RelatedObjects {
             RelatedSubject::ConfigMapValues { namespace, name } => connection
                 .watch_config_map_values(namespace, name)
                 .map(RelatedUpdate::ConfigMapValues)
+                .boxed(),
+            RelatedSubject::QuotaRejections { namespace, .. } => connection
+                .watch_failed_creates(namespace)
+                .map(RelatedUpdate::Events)
+                .boxed(),
+            RelatedSubject::NamespaceQuotas { namespace } => connection
+                .watch_resource_quotas(NamespaceScope::Named(namespace.clone()))
+                .map(RelatedUpdate::ResourceQuotas)
                 .boxed(),
         };
         let applied = subject.clone();

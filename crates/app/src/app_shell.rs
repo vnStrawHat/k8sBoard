@@ -18,7 +18,9 @@ use gpui_kit::{
 use crate::FocusQuickFilter;
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
-use crate::cluster_session::{ClusterSession, CountTrigger, FlowState, LiveCluster, error_text};
+use crate::cluster_session::{
+    ClusterSession, CountTrigger, FlowState, LiveCluster, denied_related_check, error_text,
+};
 use crate::drawer::{
     ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab, MonitorCache, MonitorKey,
     MonitorRange, MonitorScope, MonitorState, drawer_tabs,
@@ -875,14 +877,15 @@ impl AppShell {
             return None;
         };
         let key = self.selected.as_ref()?;
-        let row = self
-            .live(cx)?
+        let live = self.live(cx)?;
+        let row = live
             .kind_list(*kind)?
             .list
             .items()
             .iter()
             .find(|row| key.is_row(*kind, row))?;
         related_subject(*kind, row)
+            .filter(|subject| denied_related_check(subject, &live.access).is_none())
     }
 
     fn set_related_subject(&mut self, subject: Option<RelatedSubject>, cx: &mut Context<Self>) {

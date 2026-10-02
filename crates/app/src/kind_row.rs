@@ -3,8 +3,9 @@
 
 use cluster::{
     ConfigMapSummary, ControllerRef, CronJobSummary, CronSchedule, DaemonSetSummary,
-    DeploymentSummary, IngressSummary, JobSummary, NetworkPolicySummary,
-    PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary, ServiceSummary, StatefulSetSummary,
+    DeploymentSummary, HorizontalPodAutoscalerSummary, IngressSummary, JobSummary,
+    NetworkPolicySummary, PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary,
+    ResourceQuotaSummary, ServiceSummary, StatefulSetSummary,
 };
 use gpui_kit::SharedString;
 
@@ -46,6 +47,8 @@ pub(crate) enum KindObject {
     Ingress(IngressSummary),
     ConfigMap(ConfigMapSummary),
     NetworkPolicy(NetworkPolicySummary),
+    HorizontalPodAutoscaler(HorizontalPodAutoscalerSummary),
+    ResourceQuota(ResourceQuotaSummary),
     PodDisruptionBudget(PodDisruptionBudgetSummary),
 }
 
@@ -61,6 +64,9 @@ pub(crate) enum LiveContent {
     UsedBy,
     ConfigMapData,
     SelectedPods,
+    ScalingEvents,
+    BlockedCreations,
+    NamespaceQuotas,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.

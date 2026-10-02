@@ -1,18 +1,23 @@
-//! The WHY box of Deployments, DaemonSets, Jobs, Services, and PodDisruptionBudgets: what is wrong and, when the pods
-//! say so, why. Pure: the drawer reads the live lists and calls `kind_diagnosis`. Pod causes reuse
+//! The WHY box of Deployments, DaemonSets, Jobs, Services, PodDisruptionBudgets, HPAs, and
+//! ResourceQuotas: what is wrong and, when the pods say so, why. Pure: the drawer reads the live
+//! lists and calls `kind_diagnosis`. Pod causes reuse
 //! `pod_diagnosis` without events, so probe-failure detail stays in the pod drawer. Condition and
 //! status messages are arbitrary text, so nothing here logs them.
 
 use cluster::{
     BlockCause, ContainerKind, ContainerState, DaemonSetSummary, DeploymentSummary,
-    DisruptionState, JobStatus, JobSummary, NodeReadiness, NodeSummary, PodDisruptionBudgetSummary,
-    PodStatus, PodSummary, ServiceSummary, StatusReason, Termination, WorkloadCondition,
+    DisruptionState, HorizontalPodAutoscalerSummary, JobStatus, JobSummary, NodeReadiness,
+    NodeSummary, PodDisruptionBudgetSummary, PodStatus, PodSummary, ResourceQuotaSummary,
+    ServiceSummary, StatusReason, Termination, WorkloadCondition,
 };
 use jiff::Timestamp;
 
 use crate::kind_join::ServiceHealth;
 use crate::kind_row::KindObject;
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
+use crate::policy_rows::{
+    fullest_item, is_above_target, is_at_max, is_scaling_disabled, metric_text, quota_text,
+};
 use crate::status_tone::{StatusTone, pod_status_label, readiness_text};
 use crate::table_selection::ResourceKey;
 use crate::workload_rows::{DEADLINE_EXCEEDED, PROGRESSING};
@@ -56,6 +61,8 @@ pub(crate) fn kind_diagnosis(
         KindObject::Job(job) => job_diagnosis(job, inputs),
         KindObject::Service(service) => service_diagnosis(service, inputs),
         KindObject::PodDisruptionBudget(budget) => pod_disruption_budget_diagnosis(budget),
+        KindObject::HorizontalPodAutoscaler(hpa) => horizontal_pod_autoscaler_diagnosis(hpa),
+        KindObject::ResourceQuota(quota) => resource_quota_diagnosis(quota),
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
@@ -82,7 +89,7 @@ fn failing_pod<'a>(inputs: &DiagnosisInputs<'a>) -> Option<(&'a PodSummary, PodD
     })
 }
 
-fn find_condition<'a>(
+pub(crate) fn find_condition<'a>(
     conditions: &'a [WorkloadCondition],
     name: &str,
 ) -> Option<&'a WorkloadCondition> {
@@ -144,6 +151,97 @@ fn pod_disruption_budget_diagnosis(budget: &PodDisruptionBudgetSummary) -> Optio
         tone: StatusTone::Bad,
         title: "BLOCKS DRAIN".to_owned(),
         text,
+        pod: None,
+    })
+}
+
+// ---- HorizontalPodAutoscalers ----
+
+/// Whether `reason` names a failed metric read (`FailedGetResourceMetric`, ...).
+fn is_metric_failure(reason: &str) -> bool {
+    (reason.starts_with("FailedGet") && reason.ends_with("Metric"))
+        || reason == "InvalidMetricSourceType"
+}
+
+fn is_scale_failure(reason: &str) -> bool {
+    matches!(reason, "FailedGetScale" | "FailedUpdateScale")
+}
+
+/// The WHY box of an HPA, first match: a failed metric read, a failed scale call, an inactive or
+/// unable controller, then the max-replicas cap. Reads only the object. A target scaled to zero
+/// by hand has no box.
+fn horizontal_pod_autoscaler_diagnosis(
+    hpa: &HorizontalPodAutoscalerSummary,
+) -> Option<KindDiagnosis> {
+    if is_scaling_disabled(hpa) {
+        return None;
+    }
+    let failed =
+        |name: &str| find_condition(&hpa.conditions, name).filter(|condition| !condition.is_true);
+    let (active, able) = (failed("ScalingActive"), failed("AbleToScale"));
+    let reason_is = |is_match: fn(&str) -> bool| {
+        [active, able]
+            .into_iter()
+            .flatten()
+            .find(|condition| condition.reason.as_deref().is_some_and(is_match))
+    };
+    let (title, condition) = if let Some(condition) = reason_is(is_metric_failure) {
+        ("METRICS UNAVAILABLE", condition)
+    } else if let Some(condition) = reason_is(is_scale_failure) {
+        ("CANNOT SCALE", condition)
+    } else if let Some(condition) = active {
+        ("SCALING INACTIVE", condition)
+    } else if let Some(condition) = able {
+        ("CANNOT SCALE", condition)
+    } else {
+        return at_max_diagnosis(hpa);
+    };
+    Some(KindDiagnosis {
+        tone: StatusTone::Bad,
+        title: title.to_owned(),
+        text: reason_and_message(condition).unwrap_or_else(|| "No detail was given.".to_owned()),
+        pod: None,
+    })
+}
+
+fn at_max_diagnosis(hpa: &HorizontalPodAutoscalerSummary) -> Option<KindDiagnosis> {
+    if !is_at_max(hpa) {
+        return None;
+    }
+    let mut text = format!(
+        "Running {} of max {} replicas and the metrics ask for more.",
+        hpa.current_replicas, hpa.max_replicas
+    );
+    if let Some(metric) = hpa
+        .metrics
+        .iter()
+        .find(|metric| is_above_target(metric) == Some(true))
+    {
+        text.push_str(&format!(" {} is above target.", metric_text(metric)));
+    }
+    text.push_str(" Raise maxReplicas or reduce the load.");
+    Some(KindDiagnosis {
+        tone: StatusTone::Bad,
+        title: "AT MAX REPLICAS".to_owned(),
+        text,
+        pod: None,
+    })
+}
+
+// ---- ResourceQuotas ----
+
+fn resource_quota_diagnosis(quota: &ResourceQuotaSummary) -> Option<KindDiagnosis> {
+    // The same item the status names: the fullest one, when it is at its limit.
+    let (item, _) = fullest_item(quota).filter(|(_, ratio)| *ratio >= 1.0)?;
+    let usage = quota_text(item);
+    Some(KindDiagnosis {
+        tone: StatusTone::Bad,
+        title: "AT QUOTA".to_owned(),
+        text: format!(
+            "{} is at its limit ({usage}). New objects that need it are rejected; see Blocked \
+             creations.",
+            item.resource
+        ),
         pod: None,
     })
 }

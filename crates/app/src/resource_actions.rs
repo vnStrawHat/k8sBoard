@@ -237,6 +237,9 @@ pub(crate) fn kind_menu(
     if let Some(item) = open_url {
         menu = menu.item(item);
     }
+    if has_go_to_target(kind) {
+        menu = menu.item(go_to_target_item(row, shell));
+    }
     if has_go_to_owner(kind) {
         menu = menu.item(go_to_owner_item(row, shell));
     }
@@ -333,16 +336,57 @@ fn owner_target(row: &KindRow) -> Option<ResourceKey> {
     ResourceKey::of_owner(&set.namespace, set.owner.as_ref()?)
 }
 
-/// Reveals the owner (a Deployment, usually); disabled when there is none.
-fn go_to_owner_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
-    const LABEL: &str = "Go to owner";
-    let Some(key) = owner_target(row) else {
-        return disabled_menu_item(LABEL, "No owner".into());
+/// A menu item that reveals `target`; disabled with `reason` when there is none.
+fn go_to_item(
+    label: &'static str,
+    target: Option<ResourceKey>,
+    reason: SharedString,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let Some(key) = target else {
+        return disabled_menu_item(label, reason);
     };
     let shell = shell.clone();
-    PopupMenuItem::new(LABEL).on_click(move |_, _, cx| {
+    PopupMenuItem::new(label).on_click(move |_, _, cx| {
         let _ = shell.update(cx, |shell, cx| shell.reveal(key.clone(), cx));
     })
+}
+
+/// Reveals the owner (a Deployment, usually); disabled when there is none.
+fn go_to_owner_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    go_to_item("Go to owner", owner_target(row), "No owner".into(), shell)
+}
+
+/// Only HPAs offer Go to target.
+fn has_go_to_target(kind: ResourceKind) -> bool {
+    kind == ResourceKind::HorizontalPodAutoscalers
+}
+
+/// The key of the workload an HPA scales; `None` when k8sBoard has no screen for its kind.
+fn scale_target(row: &KindRow) -> Option<ResourceKey> {
+    let KindObject::HorizontalPodAutoscaler(hpa) = &row.object else {
+        return None;
+    };
+    ResourceKey::of_owner(&hpa.namespace, &hpa.target)
+}
+
+/// Why Go to target is disabled: the kind has no screen.
+fn no_target_screen_reason(row: &KindRow) -> SharedString {
+    match &row.object {
+        KindObject::HorizontalPodAutoscaler(hpa) => {
+            format!("No screen for {}", hpa.target.kind).into()
+        }
+        _ => "No target".into(),
+    }
+}
+
+fn go_to_target_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    go_to_item(
+        "Go to target",
+        scale_target(row),
+        no_target_screen_reason(row),
+        shell,
+    )
 }
 
 /// Reveals the involved object on its own screen; disabled when there is none.

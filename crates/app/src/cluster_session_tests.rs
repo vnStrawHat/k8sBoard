@@ -423,6 +423,26 @@ fn related_list_ignores_other_variant() {
     assert!(matches!(&jobs_list, RelatedList::Jobs(jobs) if jobs.is_loading()));
     jobs_list.mark_stopped();
     assert!(matches!(&jobs_list, RelatedList::Jobs(jobs) if jobs.failure().is_some()));
+    // The new lists take their own updates only.
+    let rejections = RelatedSubject::QuotaRejections {
+        namespace: "team-a".to_owned(),
+        quota: "compute".to_owned(),
+    };
+    let mut events_list = RelatedList::loading_for(&rejections);
+    events_list.apply(RelatedUpdate::ResourceQuotas(WatchUpdate::Snapshot(
+        Vec::new(),
+    )));
+    assert!(matches!(&events_list, RelatedList::Events(events) if events.is_loading()));
+    events_list.apply(RelatedUpdate::Events(WatchUpdate::Snapshot(Vec::new())));
+    assert!(matches!(&events_list, RelatedList::Events(events) if events.ready_count() == Some(0)));
+    let quotas = RelatedSubject::NamespaceQuotas {
+        namespace: "team-a".to_owned(),
+    };
+    let mut quotas_list = RelatedList::loading_for(&quotas);
+    quotas_list.apply(RelatedUpdate::Events(WatchUpdate::Snapshot(Vec::new())));
+    assert!(matches!(&quotas_list, RelatedList::ResourceQuotas(list) if list.is_loading()));
+    assert!(quotas_list.resource_quotas().is_some());
+    assert!(quotas_list.events().is_none());
 }
 
 fn counted(scope: &NamespaceScope, started_at: Instant) -> KindCounts {
@@ -529,4 +549,54 @@ fn counted_events_are_hidden_while_the_list_shows_warnings_only() {
     let warnings = counts.all(EventFilter::WarningsOnly);
     assert_eq!(warnings.get(&ResourceKind::Events), None);
     assert_eq!(warnings.get(&ResourceKind::Jobs), Some(&5));
+}
+
+fn access_with(denied: AccessCheck) -> AccessState {
+    AccessState::Known(AccessReport {
+        reviews: AccessCheck::ALL
+            .into_iter()
+            .map(|check| AccessReview {
+                check,
+                decision: if check == denied {
+                    AccessDecision::Denied { reason: None }
+                } else {
+                    AccessDecision::Allowed
+                },
+            })
+            .collect(),
+    })
+}
+
+#[test]
+fn denied_quota_subject_does_not_start() {
+    let rejections = RelatedSubject::QuotaRejections {
+        namespace: "team-a".to_owned(),
+        quota: "compute".to_owned(),
+    };
+    let quotas = RelatedSubject::NamespaceQuotas {
+        namespace: "team-a".to_owned(),
+    };
+    assert_eq!(
+        denied_related_check(&rejections, &access_with(AccessCheck::ListEvents)),
+        Some(AccessCheck::ListEvents)
+    );
+    assert_eq!(
+        denied_related_check(&quotas, &access_with(AccessCheck::ListResourceQuotas)),
+        Some(AccessCheck::ListResourceQuotas)
+    );
+    // Another denial does not stop it, and a report that is not known never does.
+    assert_eq!(
+        denied_related_check(&quotas, &access_with(AccessCheck::ListEvents)),
+        None
+    );
+    assert_eq!(denied_related_check(&quotas, &AccessState::Unknown), None);
+    // Subjects of other kinds are not gated here.
+    let jobs = RelatedSubject::Jobs {
+        namespace: "team-a".to_owned(),
+        cron_job: "nightly".to_owned(),
+    };
+    assert_eq!(
+        denied_related_check(&jobs, &access_with(AccessCheck::ListEvents)),
+        None
+    );
 }

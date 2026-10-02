@@ -128,7 +128,9 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::Ingress(_)
         | KindObject::ConfigMap(_)
         | KindObject::NetworkPolicy(_)
-        | KindObject::PodDisruptionBudget(_) => None,
+        | KindObject::PodDisruptionBudget(_)
+        | KindObject::HorizontalPodAutoscaler(_)
+        | KindObject::ResourceQuota(_) => None,
     }
 }
 

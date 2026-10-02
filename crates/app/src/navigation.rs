@@ -276,6 +276,8 @@ mod tests {
                 "Ingresses",
                 "NetworkPolicies",
                 "ConfigMaps",
+                "HPAs",
+                "ResourceQuotas",
                 "PDBs",
             ]
         );

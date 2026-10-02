@@ -6,8 +6,8 @@
 
 use cluster::{
     ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule, DeploymentSummary,
-    EndpointSliceSummary, JobSummary, NodeSummary, PodDisruptionBudgetSummary, PodSummary,
-    ReplicaSetSummary, ServiceSummary, ValuePreview,
+    EndpointSliceSummary, EventSummary, JobSummary, NodeSummary, PodDisruptionBudgetSummary,
+    PodSummary, ReplicaSetSummary, ResourceQuotaSummary, ServiceSummary, ValuePreview,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -15,12 +15,14 @@ use gpui_kit::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
     StatefulInteractiveElement as _, Styled as _, div, px,
 };
+use jiff::tz::TimeZone;
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::batch_rows::job_status_label;
 use crate::cluster_session::{
     CompanionLists, CompanionPlan, LiveCluster, LiveList, RelatedList, companion_plan,
+    denied_related_check,
 };
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::drawer::{link_text, wide_detail_row};
@@ -30,10 +32,13 @@ use crate::kind_join::{
     users_of,
 };
 use crate::kind_row::{KindObject, KindRow, LiveContent, owns_pod};
-use crate::related_objects::related_subject;
+use crate::object_events::event_subject;
+use crate::policy_rows::{fullest_item, quota_text};
+use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusLabel, StatusTone, pod_status_label, readiness_text, toned_text};
 use crate::table_selection::ResourceKey;
+use crate::usage_format::format_percent;
 
 /// Bounds the render cost of a Deployment with very many ReplicaSets or a CronJob with many jobs.
 const MAX_LISTED_OBJECTS: usize = 10;
@@ -75,6 +80,17 @@ pub(crate) fn live_rows(
         (LiveContent::ConfigMapData, KindObject::ConfigMap(config_map)) => {
             config_map_data_rows(kind, row, config_map, live, cx)
         }
+        (LiveContent::ScalingEvents, KindObject::HorizontalPodAutoscaler(_)) => {
+            scaling_events_rows(kind, row, live, now, cx)
+        }
+        (LiveContent::BlockedCreations, KindObject::ResourceQuota(quota)) => {
+            match related_subject(kind, row) {
+                Some(subject) => blocked_creations_rows(&subject, &quota.name, live, now, cx),
+                None => Vec::new(),
+            }
+        }
+        // The Namespaces row holds no summary, so its name is the namespace.
+        (LiveContent::NamespaceQuotas, _) => namespace_quota_rows(&row.name, live, cx),
         // A placeholder on a row of another kind has nothing to show.
         _ => Vec::new(),
     }
@@ -156,7 +172,13 @@ fn revisions(
     };
     let list = match live.related_of(&subject) {
         Some(RelatedList::ReplicaSets(list)) => Some(list),
-        Some(RelatedList::Jobs(_) | RelatedList::ConfigMapValues(_)) | None => None,
+        Some(
+            RelatedList::Jobs(_)
+            | RelatedList::ConfigMapValues(_)
+            | RelatedList::Events(_)
+            | RelatedList::ResourceQuotas(_),
+        )
+        | None => None,
     };
     match list {
         None | Some(LiveList::Loading) => vec![note("Loading revisions…", cx)],
@@ -386,7 +408,13 @@ fn recent_jobs_rows(
 ) -> Vec<AnyElement> {
     let list = match related_subject(kind, row).and_then(|subject| live.related_of(&subject)) {
         Some(RelatedList::Jobs(list)) => Some(list),
-        Some(RelatedList::ReplicaSets(_) | RelatedList::ConfigMapValues(_)) | None => None,
+        Some(
+            RelatedList::ReplicaSets(_)
+            | RelatedList::ConfigMapValues(_)
+            | RelatedList::Events(_)
+            | RelatedList::ResourceQuotas(_),
+        )
+        | None => None,
     };
     match list {
         None | Some(LiveList::Loading) => vec![note("Loading jobs…", cx)],
@@ -753,7 +781,13 @@ fn config_map_data_rows(
     }
     let list = match related_subject(kind, row).and_then(|subject| live.related_of(&subject)) {
         Some(RelatedList::ConfigMapValues(list)) => Some(list),
-        Some(RelatedList::ReplicaSets(_) | RelatedList::Jobs(_)) | None => None,
+        Some(
+            RelatedList::ReplicaSets(_)
+            | RelatedList::Jobs(_)
+            | RelatedList::Events(_)
+            | RelatedList::ResourceQuotas(_),
+        )
+        | None => None,
     };
     let values = list.and_then(|list| {
         list.ready_items()?.iter().find(|values| {
@@ -950,6 +984,255 @@ fn selected_pod_element(ix: usize, entry: &SelectedPod, cx: &Context<AppShell>) 
             .flex_shrink_0(),
         )
         .into_any_element()
+}
+
+// ---- Scaling events ----
+
+/// How many scaling events an HPA drawer lists.
+const MAX_SCALING_EVENTS: usize = 10;
+/// How many blocked creations a ResourceQuota drawer lists.
+const MAX_BLOCKED_CREATIONS: usize = 20;
+/// Characters of a scaling event message, and of a blocked creation message.
+const SCALING_MESSAGE_CHARS: usize = 120;
+const REJECTION_MESSAGE_CHARS: usize = 160;
+const RESCALE_REASON: &str = "SuccessfulRescale";
+
+/// `text` cut at `limit` characters with an ellipsis.
+fn cut_text(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(limit).collect();
+    cut.push('…');
+    cut
+}
+
+/// The rescale events, newest first, at most `MAX_SCALING_EVENTS`.
+fn scaling_events(events: &[EventSummary]) -> Vec<&EventSummary> {
+    let mut rescales: Vec<&EventSummary> = events
+        .iter()
+        .filter(|event| event.reason == RESCALE_REASON)
+        .collect();
+    rescales.sort_by_key(|event| std::cmp::Reverse(event.last_seen));
+    rescales.truncate(MAX_SCALING_EVENTS);
+    rescales
+}
+
+/// `10:45 UTC` for an event of today's date in `zone`, else `Oct 6 02:30 UTC`; `—` without a time.
+fn event_time_label(at: Option<jiff::Timestamp>, now: jiff::Timestamp, zone: &TimeZone) -> String {
+    match at {
+        Some(at) => run_label(&at.to_zoned(zone.clone()), now),
+        None => "—".to_owned(),
+    }
+}
+
+fn scaling_events_rows(
+    kind: ResourceKind,
+    row: &KindRow,
+    live: &LiveCluster,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let events =
+        event_subject(&ResourceKey::of_row(kind, row)).and_then(|subject| live.events_of(&subject));
+    match events {
+        None | Some(LiveList::Loading) => vec![note("Loading events…", cx)],
+        Some(LiveList::Failed { .. }) => vec![note("Events are unavailable", cx)],
+        Some(LiveList::Ready { items, .. }) => {
+            let rescales = scaling_events(items);
+            if rescales.is_empty() {
+                return vec![note("No scaling events kept", cx)];
+            }
+            let zone = TimeZone::system();
+            rescales
+                .into_iter()
+                .map(|event| {
+                    let message = event.message.lines().next().unwrap_or_default();
+                    wide_detail_row(
+                        event_time_label(event.last_seen, now, &zone),
+                        div()
+                            .truncate()
+                            .child(cut_text(message, SCALING_MESSAGE_CHARS)),
+                        cx,
+                    )
+                    .into_any_element()
+                })
+                .collect()
+        }
+    }
+}
+
+/// Ids for the links that live content paints, high so they never meet the drawer's own link ids.
+const LIVE_LINK_ID_BASE: usize = 10_000;
+
+// ---- Blocked creations ----
+
+/// The two phrases of the API server's admission that name a quota, built once per quota: `exceeded
+/// quota: {quota}` followed by `,` or the end, or `failed quota: {quota}:`. The follow-up
+/// character keeps `compute-quota` from matching `compute-quota-2`.
+struct QuotaNeedles {
+    exceeded: String,
+    failed: String,
+}
+
+impl QuotaNeedles {
+    fn of(quota: &str) -> Self {
+        Self {
+            exceeded: format!("exceeded quota: {quota}"),
+            failed: format!("failed quota: {quota}:"),
+        }
+    }
+
+    fn matches(&self, message: &str) -> bool {
+        let is_exceeded = message.match_indices(&self.exceeded).any(|(start, _)| {
+            let rest = &message[start + self.exceeded.len()..];
+            rest.is_empty() || rest.starts_with(',')
+        });
+        is_exceeded || message.contains(&self.failed)
+    }
+}
+
+/// The events that name `quota`, newest first, at most `MAX_BLOCKED_CREATIONS`.
+fn blocked_creations<'a>(events: &'a [EventSummary], quota: &str) -> Vec<&'a EventSummary> {
+    let needles = QuotaNeedles::of(quota);
+    let mut blocked: Vec<&EventSummary> = events
+        .iter()
+        .filter(|event| needles.matches(&event.message))
+        .collect();
+    blocked.sort_by_key(|event| std::cmp::Reverse(event.last_seen));
+    blocked.truncate(MAX_BLOCKED_CREATIONS);
+    blocked
+}
+
+fn blocked_creations_rows(
+    subject: &RelatedSubject,
+    quota: &str,
+    live: &LiveCluster,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    if let Some(check) = denied_related_check(subject, &live.access) {
+        return vec![note(&format!("Not permitted: {check}"), cx)];
+    }
+    let list = live.related_of(subject).and_then(RelatedList::events);
+    let mut rows = match list {
+        None | Some(LiveList::Loading) => vec![note("Loading events…", cx)],
+        Some(LiveList::Failed { message }) => {
+            vec![note("Events are unavailable", cx), detail_note(message, cx)]
+        }
+        Some(LiveList::Ready { items, .. }) => {
+            let blocked = blocked_creations(items, quota);
+            if blocked.is_empty() {
+                vec![note("No creations blocked recently", cx)]
+            } else {
+                let zone = TimeZone::system();
+                blocked
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ix, event)| blocked_creation_element(ix, event, now, &zone, cx))
+                    .collect()
+            }
+        }
+    };
+    rows.push(note(
+        "From FailedCreate events of controllers that the API server still keeps; a pod created \
+         directly is rejected without an event",
+        cx,
+    ));
+    rows
+}
+
+fn blocked_creation_element(
+    ix: usize,
+    event: &EventSummary,
+    now: jiff::Timestamp,
+    zone: &TimeZone,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let label = event_time_label(event.last_seen, now, zone);
+    let text = format!("{}/{}", event.object.kind.to_lowercase(), event.object.name);
+    let target = ResourceKey::of_object(
+        &event.object.kind,
+        event.object.namespace.as_deref(),
+        &event.object.name,
+    );
+    let object = match target {
+        // The ids of live links start high, so they never meet the drawer's own link ids.
+        Some(target) => wide_detail_row(
+            label,
+            link_text(LIVE_LINK_ID_BASE + ix, &text.into(), target, cx),
+            cx,
+        )
+        .into_any_element(),
+        None => wide_detail_row(label, div().truncate().child(text), cx).into_any_element(),
+    };
+    v_flex()
+        .child(object)
+        .child(note(&cut_text(&event.message, REJECTION_MESSAGE_CHARS), cx))
+        .into_any_element()
+}
+
+// ---- Namespace quotas ----
+
+/// `requests.cpu 3.1 / 4 cores (78%)` for the fullest item of a quota; the first item without
+/// usage; `no limits` for none.
+fn quota_summary_text(quota: &ResourceQuotaSummary) -> String {
+    if let Some((item, ratio)) = fullest_item(quota) {
+        return format!(
+            "{} {} ({})",
+            item.resource,
+            quota_text(item),
+            format_percent(ratio)
+        );
+    }
+    match quota.items.first() {
+        Some(item) => format!("{} {}", item.resource, quota_text(item)),
+        None => "no limits".to_owned(),
+    }
+}
+
+fn namespace_quota_rows(
+    namespace: &str,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let subject = RelatedSubject::NamespaceQuotas {
+        namespace: namespace.to_owned(),
+    };
+    if let Some(check) = denied_related_check(&subject, &live.access) {
+        return vec![note(&format!("Not permitted: {check}"), cx)];
+    }
+    match live
+        .related_of(&subject)
+        .and_then(RelatedList::resource_quotas)
+    {
+        None | Some(LiveList::Loading) => vec![note("Loading quotas…", cx)],
+        Some(LiveList::Failed { .. }) => vec![note("Quotas are unavailable", cx)],
+        Some(LiveList::Ready { items, .. }) => {
+            if items.is_empty() {
+                return vec![note("No ResourceQuota", cx)];
+            }
+            items
+                .iter()
+                .enumerate()
+                .map(|(ix, quota)| {
+                    let text = quota_summary_text(quota);
+                    // A quota is a namespaced kind with a screen, so its key is built directly.
+                    let target = ResourceKey::Kind {
+                        kind: ResourceKind::ResourceQuotas,
+                        namespace: Some(namespace.to_owned()),
+                        name: quota.name.clone(),
+                    };
+                    wide_detail_row(
+                        quota.name.clone(),
+                        link_text(LIVE_LINK_ID_BASE + ix, &text.into(), target, cx),
+                        cx,
+                    )
+                    .into_any_element()
+                })
+                .collect()
+        }
+    }
 }
 
 // ---- shared ----

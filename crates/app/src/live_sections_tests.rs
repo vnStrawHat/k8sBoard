@@ -579,3 +579,120 @@ fn null_selector_selects_no_pods() {
     // An empty selector selects every pod of the namespace.
     assert_eq!(selected_pods(&selected_budget(Some(&[])), &pods).len(), 1);
 }
+
+// ---- Scaling events and blocked creations ----
+
+fn event(reason: &str, message: &str, last_seen: &str) -> EventSummary {
+    EventSummary {
+        namespace: "team-a".to_owned(),
+        name: format!("event-{last_seen}"),
+        event_type: cluster::EventType::Warning,
+        reason: reason.to_owned(),
+        object: cluster::InvolvedObject {
+            kind: "ReplicaSet".to_owned(),
+            namespace: Some("team-a".to_owned()),
+            name: "web-7d9f8c".to_owned(),
+        },
+        message: message.to_owned(),
+        count: 1,
+        first_seen: None,
+        last_seen: Some(at(last_seen)),
+        source: None,
+        container: None,
+    }
+}
+
+#[test]
+fn scaling_events_newest_first_rescale_only() {
+    let events = [
+        event("SuccessfulRescale", "New size: 4", "2026-10-02T10:00:00Z"),
+        event(
+            "FailedGetResourceMetric",
+            "no metrics",
+            "2026-10-02T10:30:00Z",
+        ),
+        event("SuccessfulRescale", "New size: 6", "2026-10-02T11:00:00Z"),
+    ];
+    let order: Vec<&str> = scaling_events(&events)
+        .iter()
+        .map(|event| event.message.as_str())
+        .collect();
+    assert_eq!(order, ["New size: 6", "New size: 4"]);
+}
+
+fn rejection(quota: &str) -> String {
+    format!("Error creating: pods \"x\" is forbidden: exceeded quota: {quota}, requested: pods=1")
+}
+
+#[test]
+fn blocked_creations_match_quota_name_exactly() {
+    let needles = QuotaNeedles::of("compute-quota");
+    assert!(needles.matches(&rejection("compute-quota")));
+    // A longer name that starts with the quota name is another quota.
+    assert!(!needles.matches(&rejection("compute-quota-2")));
+    assert!(needles.matches("exceeded quota: compute-quota"));
+    assert!(!needles.matches("something else"));
+    let events = [
+        event(
+            "FailedCreate",
+            &rejection("compute-quota-2"),
+            "2026-10-02T10:00:00Z",
+        ),
+        event(
+            "FailedCreate",
+            &rejection("compute-quota"),
+            "2026-10-02T11:00:00Z",
+        ),
+    ];
+    assert_eq!(blocked_creations(&events, "compute-quota").len(), 1);
+}
+
+#[test]
+fn blocked_creations_newest_first() {
+    let events = [
+        event(
+            "FailedCreate",
+            &rejection("compute-quota"),
+            "2026-10-02T11:00:00Z",
+        ),
+        event(
+            "FailedCreate",
+            &rejection("compute-quota"),
+            "2026-10-02T12:00:00Z",
+        ),
+    ];
+    let blocked = blocked_creations(&events, "compute-quota");
+    assert_eq!(blocked[0].last_seen, Some(at("2026-10-02T12:00:00Z")));
+    assert_eq!(blocked[1].last_seen, Some(at("2026-10-02T11:00:00Z")));
+}
+
+#[test]
+fn blocked_creations_include_failed_quota() {
+    let needles = QuotaNeedles::of("compute-quota");
+    assert!(
+        needles.matches(
+            "pods \"x\" is forbidden: failed quota: compute-quota: must specify limits.cpu"
+        )
+    );
+    assert!(!needles.matches("failed quota: compute-quota-2: must specify limits.cpu"));
+}
+
+#[test]
+fn event_time_label_uses_the_zone_and_reads_a_missing_time() {
+    let now = at("2026-10-02T12:00:00Z");
+    assert_eq!(
+        event_time_label(Some(at("2026-10-02T10:45:00Z")), now, &TimeZone::UTC),
+        "10:45 UTC"
+    );
+    assert_eq!(
+        event_time_label(Some(at("2026-10-01T02:30:00Z")), now, &TimeZone::UTC),
+        "Oct 1 02:30 UTC"
+    );
+    assert_eq!(event_time_label(None, now, &TimeZone::UTC), "—");
+}
+
+#[test]
+fn cut_text_adds_an_ellipsis_only_when_cut() {
+    assert_eq!(cut_text("short", 10), "short");
+    assert_eq!(cut_text("abcdef", 3), "abc…");
+}

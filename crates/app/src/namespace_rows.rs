@@ -2,7 +2,9 @@
 
 use cluster::{NamespacePhase, NamespaceSummary};
 
-use crate::kind_row::{DetailRow, DetailSection, KindCell, KindObject, KindRow, chips};
+use crate::kind_row::{
+    DetailRow, DetailSection, KindCell, KindObject, KindRow, LiveContent, chips,
+};
 use crate::status_tone::{StatusLabel, StatusTone};
 
 pub(crate) fn namespace_row(namespace: &NamespaceSummary) -> KindRow {
@@ -24,13 +26,19 @@ pub(crate) fn namespace_row(namespace: &NamespaceSummary) -> KindRow {
             KindCell::Absent,
             age.clone(),
         ],
-        sections: vec![DetailSection {
-            title: "Namespace",
-            rows: vec![
-                DetailRow::field("Status", KindCell::Toned(status)),
-                DetailRow::field("Created", age),
-            ],
-        }],
+        sections: vec![
+            DetailSection {
+                title: "Namespace",
+                rows: vec![
+                    DetailRow::field("Status", KindCell::Toned(status)),
+                    DetailRow::field("Created", age),
+                ],
+            },
+            DetailSection {
+                title: "Quota",
+                rows: vec![DetailRow::Live(LiveContent::NamespaceQuotas)],
+            },
+        ],
         event: None,
         related_pods: None,
         labels: chips(&namespace.labels),
@@ -78,5 +86,16 @@ mod tests {
         assert_eq!(tone(NamespacePhase::Active), StatusTone::Ok);
         assert_eq!(tone(NamespacePhase::Terminating), StatusTone::Info);
         assert_eq!(tone(NamespacePhase::Unknown), StatusTone::Warn);
+    }
+
+    #[test]
+    fn namespace_row_has_quota_section() {
+        let row = namespace_row(&summary(NamespacePhase::Active));
+        let titles: Vec<&str> = row.sections.iter().map(|section| section.title).collect();
+        assert_eq!(titles, ["Namespace", "Quota"]);
+        assert_eq!(
+            row.section("Quota").map(|section| section.rows.as_slice()),
+            Some([DetailRow::Live(LiveContent::NamespaceQuotas)].as_slice())
+        );
     }
 }

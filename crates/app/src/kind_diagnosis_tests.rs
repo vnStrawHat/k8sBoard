@@ -819,3 +819,223 @@ fn pdb_blocks_drain_with_a_single_pod() {
          node that runs this pod will wait until the budget changes."
     );
 }
+
+// ---- HorizontalPodAutoscalers ----
+
+fn autoscaler(conditions: Vec<WorkloadCondition>) -> HorizontalPodAutoscalerSummary {
+    HorizontalPodAutoscalerSummary {
+        namespace: "team-a".to_owned(),
+        name: "web".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        target: cluster::ControllerRef {
+            kind: "Deployment".to_owned(),
+            name: "web".to_owned(),
+        },
+        min_replicas: 2,
+        max_replicas: 10,
+        current_replicas: 10,
+        desired_replicas: 10,
+        metrics: Vec::new(),
+        conditions,
+        last_scaled_at: None,
+    }
+}
+
+fn autoscaler_diagnosis(hpa: HorizontalPodAutoscalerSummary) -> Option<KindDiagnosis> {
+    kind_diagnosis(
+        &KindObject::HorizontalPodAutoscaler(hpa),
+        &DiagnosisInputs {
+            pods: None,
+            nodes: &[],
+            service: None,
+            now: at(1_000),
+        },
+    )
+}
+
+/// The title of the box for one false condition.
+fn title_for(name: &str, reason: &str) -> Option<String> {
+    autoscaler_diagnosis(autoscaler(vec![condition(
+        name,
+        false,
+        Some(reason),
+        Some("detail"),
+    )]))
+    .map(|diagnosis| diagnosis.title)
+}
+
+#[test]
+fn hpa_metrics_unavailable_by_reason() {
+    for reason in [
+        "FailedGetResourceMetric",
+        "FailedGetExternalMetric",
+        "InvalidMetricSourceType",
+    ] {
+        assert_eq!(
+            title_for("ScalingActive", reason).as_deref(),
+            Some("METRICS UNAVAILABLE"),
+            "{reason}"
+        );
+    }
+    let diagnosis = autoscaler_diagnosis(autoscaler(vec![condition(
+        "ScalingActive",
+        false,
+        Some("FailedGetResourceMetric"),
+        Some("no metrics returned"),
+    )]))
+    .expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(
+        diagnosis.text,
+        "FailedGetResourceMetric: no metrics returned"
+    );
+}
+
+#[test]
+fn hpa_cannot_scale_by_reason() {
+    for reason in ["FailedGetScale", "FailedUpdateScale"] {
+        assert_eq!(
+            title_for("AbleToScale", reason).as_deref(),
+            Some("CANNOT SCALE"),
+            "{reason}"
+        );
+        // The scale reasons win over the inactive-condition rule.
+        assert_eq!(
+            title_for("ScalingActive", reason).as_deref(),
+            Some("CANNOT SCALE"),
+            "{reason}"
+        );
+    }
+    assert_eq!(
+        title_for("AbleToScale", "SomethingElse").as_deref(),
+        Some("CANNOT SCALE")
+    );
+}
+
+#[test]
+fn hpa_scaling_inactive_other_reason() {
+    assert_eq!(
+        title_for("ScalingActive", "SomethingElse").as_deref(),
+        Some("SCALING INACTIVE")
+    );
+}
+
+#[test]
+fn hpa_scaling_disabled_has_no_box() {
+    assert_eq!(title_for("ScalingActive", "ScalingDisabled"), None);
+}
+
+#[test]
+fn hpa_at_max_replicas() {
+    let mut capped = autoscaler(vec![condition(
+        "ScalingLimited",
+        true,
+        Some("TooManyReplicas"),
+        None,
+    )]);
+    capped.metrics = vec![cluster::HpaMetric {
+        name: "cpu".to_owned(),
+        source: cluster::MetricSource::Resource,
+        target: cluster::MetricValue::Utilization(70),
+        current: Some(cluster::MetricValue::Utilization(92)),
+    }];
+    let diagnosis = autoscaler_diagnosis(capped).expect("a box");
+    assert_eq!(diagnosis.title, "AT MAX REPLICAS");
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(
+        diagnosis.text,
+        "Running 10 of max 10 replicas and the metrics ask for more. cpu 92% / 70% is above \
+         target. Raise maxReplicas or reduce the load."
+    );
+}
+
+#[test]
+fn hpa_scaling_normally_has_no_box() {
+    let healthy = autoscaler(vec![
+        condition("AbleToScale", true, Some("ReadyForNewScale"), None),
+        condition("ScalingActive", true, Some("ValidMetricFound"), None),
+        condition("ScalingLimited", false, Some("DesiredWithinRange"), None),
+    ]);
+    assert_eq!(autoscaler_diagnosis(healthy), None);
+}
+
+// ---- ResourceQuotas ----
+
+#[test]
+fn quota_at_limit() {
+    let quota = |used: &str| ResourceQuotaSummary {
+        namespace: "team-a".to_owned(),
+        name: "compute".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        items: vec![
+            cluster::QuotaItem {
+                resource: "requests.cpu".to_owned(),
+                hard: "4".to_owned(),
+                used: Some("1".to_owned()),
+            },
+            cluster::QuotaItem {
+                resource: "pods".to_owned(),
+                hard: "10".to_owned(),
+                used: Some(used.to_owned()),
+            },
+        ],
+        scopes: Vec::new(),
+    };
+    let diagnose = |quota| {
+        kind_diagnosis(
+            &KindObject::ResourceQuota(quota),
+            &DiagnosisInputs {
+                pods: None,
+                nodes: &[],
+                service: None,
+                now: at(1_000),
+            },
+        )
+    };
+    let diagnosis = diagnose(quota("10")).expect("a box");
+    assert_eq!(diagnosis.title, "AT QUOTA");
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(
+        diagnosis.text,
+        "pods is at its limit (10 / 10). New objects that need it are rejected; see Blocked \
+         creations."
+    );
+    assert_eq!(diagnose(quota("9")), None);
+}
+
+#[test]
+fn quota_status_and_box_name_the_same_item() {
+    let item = |resource: &str, hard: &str, used: &str| cluster::QuotaItem {
+        resource: resource.to_owned(),
+        hard: hard.to_owned(),
+        used: Some(used.to_owned()),
+    };
+    // Pods come first and are exactly at the limit, but CPU is further over it.
+    let quota = ResourceQuotaSummary {
+        namespace: "team-a".to_owned(),
+        name: "compute".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        items: vec![item("pods", "10", "10"), item("requests.cpu", "4", "5")],
+        scopes: Vec::new(),
+    };
+    let row = crate::policy_rows::resource_quota_row(&quota);
+    assert_eq!(row.status.text.as_ref(), "CPU at quota");
+    let diagnosis = kind_diagnosis(
+        &row.object,
+        &DiagnosisInputs {
+            pods: None,
+            nodes: &[],
+            service: None,
+            now: at(1_000),
+        },
+    )
+    .expect("a box");
+    assert!(
+        diagnosis.text.starts_with("requests.cpu is at its limit"),
+        "{}",
+        diagnosis.text
+    );
+}

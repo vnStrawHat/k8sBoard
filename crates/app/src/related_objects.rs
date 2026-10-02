@@ -19,11 +19,20 @@ pub(crate) enum RelatedSubject {
     Jobs { namespace: String, cron_job: String },
     /// The value previews of one ConfigMap.
     ConfigMapValues { namespace: String, name: String },
+    /// The FailedCreate events of the namespace; the drawer keeps those that name the quota.
+    QuotaRejections { namespace: String, quota: String },
+    /// The ResourceQuotas of one namespace, for the Namespace drawer.
+    NamespaceQuotas { namespace: String },
 }
 
 /// The related subject of a row. A kind without related content, and a Deployment without a
 /// selector (which would match every ReplicaSet), have none.
 pub(crate) fn related_subject(kind: ResourceKind, row: &KindRow) -> Option<RelatedSubject> {
+    if kind == ResourceKind::Namespaces {
+        return Some(RelatedSubject::NamespaceQuotas {
+            namespace: row.name.clone(),
+        });
+    }
     let namespace = row.namespace.clone()?;
     match (kind, &row.object) {
         (ResourceKind::Deployments, KindObject::Deployment(deployment)) => {
@@ -44,6 +53,12 @@ pub(crate) fn related_subject(kind: ResourceKind, row: &KindRow) -> Option<Relat
             Some(RelatedSubject::ConfigMapValues {
                 namespace,
                 name: config_map.name.clone(),
+            })
+        }
+        (ResourceKind::ResourceQuotas, KindObject::ResourceQuota(quota)) => {
+            Some(RelatedSubject::QuotaRejections {
+                namespace,
+                quota: quota.name.clone(),
             })
         }
         _ => None,
@@ -123,6 +138,34 @@ mod tests {
         // A row is read as the kind it was asked for.
         assert_eq!(related_subject(ResourceKind::Services, &cron_job), None);
         assert_eq!(related_subject(ResourceKind::Deployments, &cron_job), None);
+        let quota = crate::policy_rows::resource_quota_row(&cluster::ResourceQuotaSummary {
+            namespace: "team-a".to_owned(),
+            name: "compute-quota".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            items: Vec::new(),
+            scopes: Vec::new(),
+        });
+        assert_eq!(
+            related_subject(ResourceKind::ResourceQuotas, &quota),
+            Some(RelatedSubject::QuotaRejections {
+                namespace: "team-a".to_owned(),
+                quota: "compute-quota".to_owned(),
+            })
+        );
+        // The Namespaces row is cluster-scoped: its name is the namespace.
+        let namespace = crate::namespace_rows::namespace_row(&cluster::NamespaceSummary {
+            name: "team-a".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            phase: cluster::NamespacePhase::Active,
+        });
+        assert_eq!(
+            related_subject(ResourceKind::Namespaces, &namespace),
+            Some(RelatedSubject::NamespaceQuotas {
+                namespace: "team-a".to_owned(),
+            })
+        );
     }
 
     #[test]

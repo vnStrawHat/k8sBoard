@@ -89,7 +89,7 @@ fn quota_tone(ratio: f64) -> Option<StatusTone>;  // decision 16
 
 Status: the item with the highest ratio: ≥ 1 → Bad "{short} at quota"; ≥ 0.9 → Warn "{pct} {short} used" (`format_percent`); else Ok "Within quota"; no items → Done "No limits". `{short}`: CPU for cpu items, memory for memory items, else the resource name.
 
-WHY **AT QUOTA** (Bad), first item with ratio ≥ 1: `{resource} is at its limit ({quota_text}). New objects that need it are rejected; see Blocked creations.`
+WHY **AT QUOTA** (Bad), the fullest item (highest ratio), when its ratio is ≥ 1, so the status and the box name the same item: `{resource} is at its limit ({quota_text}). New objects that need it are rejected; see Blocked creations.`
 
 ### Sections
 
@@ -106,3 +106,10 @@ WHY **AT QUOTA** (Bad), first item with ratio ≥ 1: `{resource} is at its limit
 ## Namespace drawer: Quota section
 
 `namespace_row` appends section **Quota** = `Live(NamespaceQuotas)` before Labels. Rows: one `Link { label: quota name, text: "{resource} {quota_text} ({pct})" of the highest-ratio item, target: the quota }` per quota (links carry no tone; the quota drawer has the colored bars); none → "No ResourceQuota"; loading / failed / denied: "Loading quotas…" / "Quotas are unavailable" / "Not permitted: list resourcequotas".
+
+### Implementation notes
+
+- The Metrics cell is Warn when any metric is above target or has no current value (not only the first).
+- Event times in Scaling events and Blocked creations use `run_label` in the system time zone.
+- A denied related watch is not started: the shell filters the subject with `denied_related_check`, and the section paints "Not permitted: {check}".
+- A quota item with no `used` yet reads `— / {hard}` and has no bar (a plain field).

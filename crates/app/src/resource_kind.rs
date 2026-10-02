@@ -13,7 +13,9 @@ use crate::kind_row::KindRow;
 use crate::namespace_rows::namespace_row;
 use crate::network_policy_rows::network_policy_row;
 use crate::network_rows::{ingress_row, service_row};
-use crate::policy_rows::pod_disruption_budget_row;
+use crate::policy_rows::{
+    horizontal_pod_autoscaler_row, pod_disruption_budget_row, resource_quota_row,
+};
 use crate::workload_rows::{daemon_set_row, deployment_row, replica_set_row, stateful_set_row};
 
 /// One kind with an explorer screen. Per-kind variation is data (the tables below) plus one
@@ -33,6 +35,8 @@ pub(crate) enum ResourceKind {
     ConfigMaps,
     NetworkPolicies,
     PodDisruptionBudgets,
+    HorizontalPodAutoscalers,
+    ResourceQuotas,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -371,6 +375,49 @@ static POD_DISRUPTION_BUDGETS: KindSpec = KindSpec {
     has_port_forward: false,
 };
 
+static HORIZONTAL_POD_AUTOSCALERS: KindSpec = KindSpec {
+    label: "HPAs",
+    object: ObjectKind::HorizontalPodAutoscaler,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "horizontalpodautoscaler",
+    plural: "horizontalpodautoscalers",
+    badge: "Hp",
+    is_namespaced: true,
+    access_check: AccessCheck::ListHorizontalPodAutoscalers,
+    columns: &[
+        column("Target", 220., Align::Left),
+        column("Min / Max", 90., Align::Left),
+        column("Replicas", 80., Align::Right),
+        column("Metrics", 200., Align::Left),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &["Edit min / max…"],
+    delete_label: "Delete HPA…",
+    has_port_forward: false,
+};
+
+static RESOURCE_QUOTAS: KindSpec = KindSpec {
+    label: "ResourceQuotas",
+    object: ObjectKind::ResourceQuota,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "resourcequota",
+    plural: "resourcequotas",
+    badge: "Rq",
+    is_namespaced: true,
+    access_check: AccessCheck::ListResourceQuotas,
+    columns: &[
+        column("CPU req", 130., Align::Right),
+        column("Memory req", 150., Align::Right),
+        column("Pods", 100., Align::Right),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &["Edit"],
+    delete_label: "Delete quota…",
+    has_port_forward: false,
+};
+
 /// The Name column of a kind that shows it, as wide as its minimum.
 pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left);
 
@@ -385,7 +432,7 @@ pub(crate) fn kind_columns(kind: ResourceKind) -> Vec<KindColumn> {
 }
 
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 13] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::Namespaces,
         Self::Events,
         Self::Deployments,
@@ -399,6 +446,8 @@ impl ResourceKind {
         Self::ConfigMaps,
         Self::NetworkPolicies,
         Self::PodDisruptionBudgets,
+        Self::HorizontalPodAutoscalers,
+        Self::ResourceQuotas,
     ];
 
     fn spec(self) -> &'static KindSpec {
@@ -416,6 +465,8 @@ impl ResourceKind {
             Self::ConfigMaps => &CONFIG_MAPS,
             Self::NetworkPolicies => &NETWORK_POLICIES,
             Self::PodDisruptionBudgets => &POD_DISRUPTION_BUDGETS,
+            Self::HorizontalPodAutoscalers => &HORIZONTAL_POD_AUTOSCALERS,
+            Self::ResourceQuotas => &RESOURCE_QUOTAS,
         }
     }
 
@@ -569,6 +620,14 @@ impl ResourceKind {
             Self::PodDisruptionBudgets => connection
                 .watch_pod_disruption_budgets(scope)
                 .map(|update| rows(update, pod_disruption_budget_row))
+                .boxed(),
+            Self::HorizontalPodAutoscalers => connection
+                .watch_horizontal_pod_autoscalers(scope)
+                .map(|update| rows(update, horizontal_pod_autoscaler_row))
+                .boxed(),
+            Self::ResourceQuotas => connection
+                .watch_resource_quotas(scope)
+                .map(|update| rows(update, resource_quota_row))
                 .boxed(),
         }
     }

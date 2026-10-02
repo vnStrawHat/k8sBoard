@@ -350,3 +350,47 @@ fn open_url_is_unavailable_for_other_kinds() {
     });
     assert_eq!(open_url_choice(&row), OpenUrl::Unavailable);
 }
+
+fn hpa_row_targeting(kind: &str, name: &str) -> KindRow {
+    crate::policy_rows::horizontal_pod_autoscaler_row(&cluster::HorizontalPodAutoscalerSummary {
+        namespace: "team-a".to_owned(),
+        name: "web".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        target: cluster::ControllerRef {
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+        },
+        min_replicas: 1,
+        max_replicas: 5,
+        current_replicas: 2,
+        desired_replicas: 2,
+        metrics: Vec::new(),
+        conditions: Vec::new(),
+        last_scaled_at: None,
+    })
+}
+
+#[test]
+fn hpa_menu_has_go_to_target() {
+    assert!(has_go_to_target(ResourceKind::HorizontalPodAutoscalers));
+    assert!(!has_go_to_target(ResourceKind::Deployments));
+    assert_eq!(
+        scale_target(&hpa_row_targeting("Deployment", "web")),
+        Some(ResourceKey::Kind {
+            kind: ResourceKind::Deployments,
+            namespace: Some("team-a".to_owned()),
+            name: "web".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn go_to_target_disabled_without_screen() {
+    let row = hpa_row_targeting("Rollout", "web");
+    assert_eq!(scale_target(&row), None);
+    assert_eq!(
+        no_target_screen_reason(&row).as_ref(),
+        "No screen for Rollout"
+    );
+}

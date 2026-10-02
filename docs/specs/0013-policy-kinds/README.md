@@ -1,6 +1,6 @@
 # 0013 — Policy kinds: NetworkPolicies, HPAs, ResourceQuotas, PDBs (read-only)
 
-Status: amended after advisor review (HEAD `81497ba`); architect defaults, the user asked not to stop for questions. Crates: `crates/cluster` (step 1), `crates/app` (steps 2–3). Requires the amended 0012 merged (`KindObject`, `DetailRow::{Live, Bar}`, `KindCell::Quantity { tone }`, `cluster::Selector`, `kind_join.rs`, `related_objects.rs`, `kind_diagnosis.rs`, counts) and 0010 (`quantity.rs`, `usage_format.rs`). Wireframes: W7 `k("NetworkPolicies")`, `k("HPAs")`, `k("ResourceQuotas")`, `k("PDBs")`, Namespace drawer "Quota". Applies C1, C7, C11.
+Status: **implemented** (steps 1 to 3); amended after advisor review (HEAD `81497ba`); architect defaults, the user asked not to stop for questions. Crates: `crates/cluster` (step 1), `crates/app` (steps 2–3). Requires the amended 0012 merged (`KindObject`, `DetailRow::{Live, Bar}`, `KindCell::Quantity { tone }`, `cluster::Selector`, `kind_join.rs`, `related_objects.rs`, `kind_diagnosis.rs`, counts) and 0010 (`quantity.rs`, `usage_format.rs`). Wireframes: W7 `k("NetworkPolicies")`, `k("HPAs")`, `k("ResourceQuotas")`, `k("PDBs")`, Namespace drawer "Quota". Applies C1, C7, C11.
 
 ## Goal
 
