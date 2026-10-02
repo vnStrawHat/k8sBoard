@@ -41,7 +41,7 @@ pub(crate) struct ConnectIntent { pub(crate) object: AuditObject, pub(crate) fie
 
 `run_guarded` takes the matching permit from the guard's `AccessReport` (`exec_permit` / `port_forward_permit`) right before `open`; `None` → the gate reason, nothing opens, no audit line.
 
-`AppShell::start_forward(spec, cluster, existing: Option<ForwardId>, trigger, window, cx)`:
+`AppShell::start_forward(spec, cluster, existing: Option<ForwardId>, window, cx)`:
 
 1. `guard_for(&cluster)`; `None` → notice `Open {cluster} to start this forward`.
 2. Own-port check (decision 19) for `Exact` ports.

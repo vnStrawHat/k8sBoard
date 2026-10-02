@@ -1,6 +1,6 @@
 # 0036 — Terminal and pod shell
 
-Status: draft, HEAD `1c859ae`. **Mutating: needs the user's approval before implementation** (project rule on exec; C3). Lands after 0028, 0016 (private clipboard), 0030 (guarded core, tiers, audit, allow-list), and 0026. Crates: `crates/cluster` (exec transport), `crates/app` (terminal, dock). Wireframes: W8 and W8b (Logs and Shell tabs, never side by side, ≤ 60 % height, zoom), W4 menu "Open shell ▸" and note 2, W4b note 3, keyboard map S.
+Status: draft, HEAD `1c859ae`. **Mutating (project rule on exec). C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still refuse exec unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. The new dependencies (C6, [dependencies.md](dependencies.md)) are a separate approval. Lands after 0028, 0016 (private clipboard), 0030 (guarded core, tiers, audit, allow-list), and 0026. Crates: `crates/cluster` (exec transport), `crates/app` (terminal, dock). Wireframes: W8 and W8b (Logs and Shell tabs, never side by side, ≤ 60 % height, zoom), W4 menu "Open shell ▸" and note 2, W4b note 3, keyboard map S.
 
 ## Goal
 

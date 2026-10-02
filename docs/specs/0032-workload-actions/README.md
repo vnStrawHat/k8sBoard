@@ -2,7 +2,7 @@
 
 Status: draft, amended after the advisor review (M1–M3, S1–S9, nice-to-haves). Builds strictly on 0030 as amended (decisions 30–36: `run_guarded`, `checked_write`, `CommitMode::Commit { confirmed }`, `GuardedIntent.warnings`, `WriteEffect`, `created_name`, gate by kind). Owns the one bulk mechanism, `GuardedKind::Batch`. Prerequisites merged: 0030, 0028, 0029, 0012. Roadmap: gap plan 0032; C3, C8, C10; R2. Wireframes: W7 kind menus and drawers, W9 palette (Scale `Ctrl ⏎`, Roll back to rev 37), keyboard map (R, ⇧S).
 
-**User approval (C3):** step 1 sends nothing (fake transport). Step 2a-i adds the first real commits of these operations and needs the user's explicit approval before it merges; 2a-ii, 2a-iii, and 2b each add new commit paths and are shown to the user before they merge.
+**User approval (C3):** Approved by the user on 2026-10-02 (one approval for all mutating specs). Step 1 sends nothing (fake transport); 2a-i adds the first real commits, and 2a-ii, 2a-iii, and 2b add new commit paths. Debug builds still block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only.
 
 ## Goal
 
@@ -21,7 +21,7 @@ Status: draft, amended after the advisor review (M1–M3, S1–S9, nice-to-haves
 | Step | Scope | ACs |
 |---|---|---|
 | 1 | Cluster crate: operations, `WriteEffect::Created`, `AccessCheck`s, kube `jsonpatch`, clippy additions, fake-transport tests | 1–4 |
-| 2a-i | App: `checked_write` use, `Scale(kind)`/`RestartRollout(kind)`, gate, `row_block`, menus and R for Restart, Pause/Resume, Suspend/Resume, Trigger now, Re-run. **Needs user approval** | 1, 2, 5–7, 10 |
+| 2a-i | App: `checked_write` use, `Scale(kind)`/`RestartRollout(kind)`, gate, `row_block`, menus and R for Restart, Pause/Resume, Suspend/Resume, Trigger now, Re-run. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5–7, 10 |
 | 2a-ii | Scale popover (menu, ⇧S, palette fallback), palette `Ctrl ⏎` argument | 1, 2, 8 |
 | 2a-iii | Roll back: drawer Revisions buttons, menu, palette entry | 1, 2, 5 |
 | 2b | `Batch`, selection-bar buttons, bulk Scale popover; UAT denied path; ui-verifier | 1, 2, 9, 11, 12 |

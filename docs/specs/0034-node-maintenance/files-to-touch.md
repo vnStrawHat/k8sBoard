@@ -1,6 +1,6 @@
 # 0034 · Files to touch
 
-[Back to index](README.md). **S** is the step. Each step passes the gate on its own; every new item has a production user in its step. Prerequisites: 0030, 0032, 0013, 0009, 0028 merged. Steps 2, 3a, and 3b need the user's approval (C3).
+[Back to index](README.md). **S** is the step. Each step passes the gate on its own; every new item has a production user in its step. Prerequisites: 0030, 0032, 0013, 0009, 0028 merged. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).
 
 No Cargo change. No clippy change (0032 already forbids `Api::cordon` / `Api::uncordon`; `Api::evict` and `create_subresource` are on the 0030 list).
 

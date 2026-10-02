@@ -1,6 +1,6 @@
 # 0033 · Files to touch
 
-[Back to index](README.md). **S** is the step. Each step passes the gate on its own, and every new item has a production user in its own step. Prerequisites: 0030 with the 0032 architect's amendments, 0032 `checked_write` and `GuardedKind::Batch`, 0031 step 1 (lazy kind checks), 0028, 0009; 0016 before Secrets can be deleted. **Steps 2 and 3 each need the user's approval (C3).** No Cargo change.
+[Back to index](README.md). **S** is the step. Each step passes the gate on its own, and every new item has a production user in its own step. Prerequisites: 0030 with the 0032 architect's amendments, 0032 `checked_write` and `GuardedKind::Batch`, 0031 step 1 (lazy kind checks), 0028, 0009; 0016 before Secrets can be deleted. **C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** No Cargo change.
 
 ## `crates/cluster` (step 1)
 

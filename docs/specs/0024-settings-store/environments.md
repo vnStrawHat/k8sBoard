@@ -29,7 +29,7 @@ Input: the context name and the kubeconfig cluster entry name. Each is lowercase
 | Staging | a token equals `stg` or `uat`, or starts with `stag` (`stage`, `staging`) |
 | Development | a token starts with `dev` (`dev`, `develop`, `devops`) or `test` (`test`, `testing`) |
 | Local | the whole lowercased name starts with `kind-` or `k3d-`, or contains `docker-desktop`, or a token equals `minikube` or `localhost` |
-| none matched | **Staging** (C5 default: asks for Enter, not a typed name) |
+| none matched | **Staging** (C5 default: a confirm dialog with a click, not a typed name; 0030 decision 9) |
 
 Examples (all in the test table): `prod-eu-1` PROD · `arn:aws:eks:eu-central-1:4471:cluster/prod-eu-1` PROD · `stg-us-1` STG · `uat` STG · `dev-shared` DEV · `kind-k8sboard` LOCAL · `minikube` LOCAL · `docker-desktop` LOCAL · `kind-prod` PROD (riskiest) · `latest` STG (token, not substring) · `readonly@Monitor` STG (unknown) · context `admin`, cluster `prod-1` PROD.
 

@@ -49,7 +49,7 @@ Window tests: `r_restarts_the_cursor_row` (dialog opens; key trigger), `trigger_
 
 ## Step 2b — Batch (`write_flow_tests.rs`, `row_selection` tests)
 
-`batch_requires_one_cluster`, `batch_caps_at_fifty`, `batch_skips_rows_with_a_row_block`, `batch_never_runs_without_a_dialog` (tier None + pointer → `ClickOnly`), **`batch_apply_needs_every_dry_run_to_pass`**, `batch_dry_runs_are_sequential_and_unaudited`, `batch_continues_after_a_failed_commit`, `batch_stops_when_blocked` (lock between items → rest `Not sent`), `batch_audits_each_commit` (temp config dir, N lines), `batch_list_honours_expected_name`, `bulk_suspend_label_reads_resume_when_all_suspended`, `bulk_actions_follow_the_wireframe`, `bulk_roll_back_is_disabled_with_reason`.
+`batch_requires_one_cluster`, `batch_caps_at_fifty`, `batch_skips_rows_with_a_row_block`, **`batch_apply_needs_every_dry_run_to_pass`**, `batch_dry_runs_are_sequential_and_unaudited`, `batch_continues_after_a_failed_commit`, `batch_stops_when_blocked` (lock between items → rest `Not sent`), `batch_audits_each_commit` (temp config dir, N lines), `batch_list_honours_expected_name`, `bulk_suspend_label_reads_resume_when_all_suspended`, `bulk_actions_follow_the_wireframe`, `bulk_roll_back_is_disabled_with_reason`.
 
 ## Live checks (coder-lite, UAT, read-only, denied path only; debug build)
 

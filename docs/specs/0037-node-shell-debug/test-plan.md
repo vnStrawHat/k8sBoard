@@ -27,7 +27,7 @@
 
 | Test | Checks |
 |---|---|
-| `privileged_risk_always_types_the_name` | every mode × trigger → `TypeName { expected }` |
+| `privileged_risk_always_types_the_name` | every mode → `TypeName { expected }` |
 | `debug_container_gate_table` | each missing check → its reason; no running container; locked |
 | `create_then_attach_takes_the_permit_before_commit` | no attach permit → no commit request recorded, no audit line |
 | `create_then_attach_opens_after_commit` | `open` gets the permit and the outcome uid; commit error → `open` not called |

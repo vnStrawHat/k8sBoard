@@ -23,7 +23,7 @@
 | 17 | Warnings use 0030 `GuardedIntent.warnings`: HPA, scale-down, OnDelete, CronJob concurrency (S9 texts) | non-blocking context the dry-run cannot give |
 | 18 | The HPA warning uses the HPA list only when already loaded | no new watch for a hint (open item 2) |
 | 19 | `checked_write` is the single caller of `ClusterConnection::write` (0030 decision 30) | one place keeps `commit_block` and the audit unskippable |
-| 20 | Batch = one cluster, ≤ 50 items, always a dialog (even tier None) | 0027 non-goal "cross-cluster bulk"; a click must never fan out unseen |
+| 20 | Batch = one cluster, ≤ 50 items, always a dialog (as every 0030 tier) | 0027 non-goal "cross-cluster bulk"; a click must never fan out unseen |
 | 21 | Batch dry-runs and commits run one at a time | gentle on the API server; no limiter code |
 | 22 | **Every** batch item must pass its dry-run before Apply (B) | one rule for 0032, 0033, 0034; a partial apply is a surprise |
 | 23 | `BatchPlan.on_failure`: `Continue` (0032, 0033, 0034) lets the next item run after a failed commit; `Stop` (0032b Set default) sends nothing more. A `Blocked` result always stops the rest | independent objects vs an ordered plan where a later step depends on an earlier one; a lock or session change is a global stop |

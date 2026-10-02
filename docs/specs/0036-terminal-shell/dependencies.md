@@ -1,6 +1,6 @@
 # 0036 · Dependencies: `oneterm-vt` and kube `ws`
 
-[Back to index](README.md) · Steps 1–2. Decisions 1–5. Both changes need user approval (C3, C6, project rule on exec).
+[Back to index](README.md) · Steps 1–2. Decisions 1–5. C3 (exec, project rule) was approved by the user on 2026-10-02 (one approval for all mutating specs); the dependency changes themselves (C6) still need the user's approval.
 
 ## `oneterm-vt` (terminal engine)
 

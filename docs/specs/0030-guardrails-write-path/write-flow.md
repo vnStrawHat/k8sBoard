@@ -30,8 +30,7 @@ pub(crate) enum GuardedKind {
     Batch(BatchPlan),                                                       // 0032 bulk-write.md
     CreateThenAttach { request: WriteRequest,
         open: Box<dyn FnOnce(AttachPermit, WriteOutcome, &mut Window, &mut App)> }, // 0037 session-flow.md
-    Helm { cli: HelmCli, request: HelmRequest },                            // 0038 release-actions.md
-}
+}   // 0038 `Helm` is deferred (user, 2026-10-02): not built until 0038 is scheduled
 /// App-side mode: a commit carries the proof that the confirm step was satisfied.
 pub(crate) enum CommitMode { DryRun, Commit { confirmed: Confirmed } }   // maps to `cluster::WriteMode` (unchanged)
 #[derive(Clone, Copy)] pub(crate) struct Confirmed { dry_run_generation: u64 }   // private field: only `confirmed()` builds it; Copy so a batch or drain reuses it per commit
@@ -48,24 +47,24 @@ pub(crate) async fn checked_write(shell: &WeakEntity<AppShell>, step: WriteStep,
 impl AppShell {
     /// The one guarded core: gate → confirm step → dry-run (`Write` only) → (dialog) → lock re-check →
     /// commit or connect → audit → notice. The dry-run is the only branch on `kind`.
-    pub(crate) fn run_guarded(&mut self, intent: GuardedIntent, trigger: Trigger, window: &mut Window, cx: &mut Context<Self>);
+    pub(crate) fn run_guarded(&mut self, intent: GuardedIntent, window: &mut Window, cx: &mut Context<Self>);
     /// Thin wrapper: `run_guarded` with `GuardedKind::Write(intent.request)`.
-    pub(crate) fn start_write(&mut self, intent: WriteIntent, trigger: Trigger, window: &mut Window, cx: &mut Context<Self>);
+    pub(crate) fn start_write(&mut self, intent: WriteIntent, window: &mut Window, cx: &mut Context<Self>);
 }
-/// Pure: may the commit go now? Runs right before **every** commit, on the Dialog and the Run path.
+/// Pure: may the commit go now? Runs right before **every** commit (dialog and each batch item).
 pub(crate) fn commit_block(guard: Option<&ClusterGuard>, dry_run_generation: u64, dry_run: &DryRunState,
     typed: TypedMatch) -> Option<SharedString>;
 pub(crate) enum DryRunState { Running, Passed { elapsed: Duration }, Failed(SharedString), Rejected(SharedString), NotSupported }
 pub(crate) enum TypedMatch { NotNeeded, Matches, Differs }
 ```
 
-The steps below are `run_guarded`'s. **Dry-run in steps 3–4:** `Write`, `Batch` (one item at a time; all must pass), `CreateThenAttach` (its `request`), and `Helm` (the CLI's own dry-run, 0038). **No dry-run:** `Connect` (`DryRunState::NotSupported`, dialog line `Dry-run not supported for this action`); its step 5 calls the connect callback instead of `write` (0036 `start_connect` is the wrapper). Every other step, reason, and check is shared.
+The steps below are `run_guarded`'s. **Dry-run in steps 3–4:** `Write`, `Batch` (one item at a time; all must pass), and `CreateThenAttach` (its `request`). **No dry-run:** `Connect` (`DryRunState::NotSupported`, dialog line `Dry-run not supported for this action`); its step 5 calls the connect callback instead of `write` (0036 `start_connect` is the wrapper). Every other step, reason, and check is shared.
 
 1. `guard_for(&intent.cluster)` (the row's cluster, never the primary; guardrails.md); `action_availability` must be `Enabled` (a stale menu cannot bypass it). Remember `guard.generation` as the dry-run generation.
-2. `confirm_step(guard.confirm, risk, trigger, expected)`.
-3. `Run`: dry-run; when it passed, step 5 at once; otherwise an error notice and no commit.
-4. `Dialog`: open the confirm dialog and start the dry-run at once; Apply is enabled only while `commit_block` is `None`.
-5. Commit (both paths): `Write` → `checked_write(WriteStep { intent, generation, mode: Commit { confirmed }, note })`, which re-resolves `guard_for(&intent.cluster)`, runs `commit_block`, and only on `None` sends `connection.write(&request, Commit)`. `Connect` → the lock re-check, then its callback. `Batch` → one `checked_write` per item (0032 bulk-write.md).
+2. `confirm_step(guard.confirm, risk, expected)` → `DialogConfirm` (decision 9: there is no path without a dialog).
+3. Start the dry-run at once.
+4. Open the confirm dialog; Apply is enabled only while `commit_block` is `None`.
+5. Commit (from the dialog): `Write` → `checked_write(WriteStep { intent, generation, mode: Commit { confirmed }, note })`, which re-resolves `guard_for(&intent.cluster)`, runs `commit_block`, and only on `None` sends `connection.write(&request, Commit)`. `Connect` → the lock re-check, then its callback. `Batch` → one `checked_write` per item (0032 bulk-write.md).
 6. Audit line (inside `checked_write` for writes; audit-log.md), then a notification: success `{label}: done`, or `{label}: created {created_name}` when the outcome names one (theme success); failure per the table below.
 
 `commit_block` reasons, first match wins: guard `None` or generation changed → `{cluster} is no longer open; nothing was changed`; `Locked` → `{cluster} was locked; nothing was changed`; dry-run `Running` → `Waiting for the dry-run…`; `Failed(text)` → text; `Rejected(reason)` → `An admission webhook does not support dry-run, so this change cannot be checked: {reason}. Nothing was changed.`; `Differs` → `Type {expected} to confirm`.
@@ -87,8 +86,8 @@ W10 small modal, kit `Dialog`, width 480:
 | Note | checkbox `Add a note to the audit log` + an `Input` (≤ 500 chars) shown when checked |
 | Buttons | `Back` (cancel), primary = the label (`Cordon`); danger variant for `Destructive` |
 
-- **Enter handling (held Enter never confirms)**: the dialog content has `key_context("WriteConfirm")`; `keymap.rs` binds `enter` → `gpui::NoAction` in `WriteConfirm` and `WriteConfirm > Input` (after kit init), which suppresses the kit `Dialog`/`Input` Enter bindings there. The content's `on_key_down` confirms on `enter` only when `!event.is_held` and the tier is `EnterOrClick` or `TypeName` (and `commit_block` is `None`). gpui dispatches bindings before key-down listeners (`window.rs` `dispatch_key_event`), so a binding could not see `is_held`; this is why Enter is handled as a key event. Test `held_enter_does_not_confirm`.
-- `ClickOnly` (Click tier, pointer): Enter does nothing; only a click on the primary button confirms. `EnterOrClick`: the primary button is focused. `TypeName`: focus starts in the input.
+- **Focus**: `DialogConfirm::Click` focuses the primary button when the dialog opens; `TypeName` focuses the input.
+- **Enter handling (decision 28; held or repeated Enter never confirms)**: the dialog content has `key_context("WriteConfirm")`; `keymap.rs` binds `enter` → `gpui::NoAction` in `WriteConfirm` and `WriteConfirm > Input` (after kit init), which suppresses the kit `Dialog`/`Input` Enter bindings there. The content's `on_key_down` confirms on `enter` only when `!event.is_held` and `commit_block` is `None` (for `TypeName` that includes the name match); it is the keyboard way to press the focused confirm button. gpui dispatches bindings before key-down listeners (`window.rs` `dispatch_key_event`), so a binding could not see `is_held`; this is why Enter is handled as a key event. Tests `held_enter_does_not_confirm`, `enter_confirms_the_focused_button`.
 - Closing the dialog drops the dry-run task. A started commit is not cancelled (its task is detached; decision 16).
 - Unlock uses the same dialog with no object row, no dry-run, and primary `Unlock`.
 
@@ -100,7 +99,7 @@ W10 small modal, kit `Dialog`, width 480:
 | dialog dry-run line | `DryRunRejected` | the webhook text above; Apply stays disabled |
 | dialog after commit | `Conflict` | `The object changed since the check: {message}` + `Retry` (re-runs the dry-run) |
 | dialog after commit or dry-run | `TooManyRequests` | `The server refused for now: {message}` + `Retry` (re-runs the dry-run), like Conflict |
-| notification (`Run` path or after a closed dialog) | any | `{label} failed: {error}`; `OutcomeUnknown` (any commit error after the request may have left: timeout, transport, service, unreadable response) → `{label}: the outcome is unknown; the change may have been applied. Refresh to check.` |
+| notification (after a closed dialog) | any | `{label} failed: {error}`; `OutcomeUnknown` (any commit error after the request may have left: timeout, transport, service, unreadable response) → `{label}: the outcome is unknown; the change may have been applied. Refresh to check.` |
 | menus, keys | gate | guardrails.md reasons |
 
 Credentials never appear (0001 errors carry none); request bodies never appear in any text.
@@ -115,7 +114,7 @@ Credentials never appear (0001 errors carry none); request bodies never appear i
 
 ## First consumer: Cordon / Uncordon
 
-- Node menu item (0003): label `Uncordon` when `NodeScheduling::Disabled`, else `Cordon`; 0028 key C runs the same `start_write` with `Trigger::Key`. `ResourceAction::Cordon` becomes shipped; `Drain` stays `Comes in a later version` (0034).
+- Node menu item (0003): label `Uncordon` when `NodeScheduling::Disabled`, else `Cordon`; 0028 key C runs the same `start_write` (both open the dialog). `ResourceAction::Cordon` becomes shipped; `Drain` stays `Comes in a later version` (0034).
 - Request: `WriteRequest::new(ObjectRef(Node, None, name), SetNodeSchedulable { schedulable })`; risk `Change`; expected name = cluster display name.
 - The node row updates from the existing nodes watch; no optimistic UI.
 - Rationale: one field, reversible, cluster-scoped (no namespace SSAR question), dry-run supported, already a menu item and key. 0034 keeps bulk cordon, drain, taints, labels.

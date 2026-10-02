@@ -2,7 +2,7 @@
 
 Status: draft. The "object actions" of the roadmap 0032 entry, split out of 0032. Builds strictly on 0030 as amended (decisions 30–36: `run_guarded`, `checked_write`, `GuardedIntent.warnings`, `WriteEffect::Patched`, gate) and on 0032 (`GuardedKind::Batch`, the Scale popover). Prerequisites merged: 0030, 0032, 0013 (HPAs), 0014 (PVCs, StorageClasses). Roadmap: gap plan 0032; C3, C8, C10; R2. Wireframe: W7 kind data for HPAs (`Edit min / max…`, top `Edit limits`), PVCs (`Expand…`, top `Expand`), StorageClasses (`Set as default`, top `Set default`).
 
-**User approval (C3):** step 1 sends nothing (fake transport). Steps 2, 3, and 4 each add the first real commit of one operation and each needs the user's explicit approval before it merges.
+**User approval (C3):** Approved by the user on 2026-10-02 (one approval for all mutating specs). Step 1 sends nothing (fake transport); steps 2, 3, and 4 each add the first real commit of one operation. Debug builds still block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only.
 
 ## Goal
 
@@ -20,9 +20,9 @@ Status: draft. The "object actions" of the roadmap 0032 entry, split out of 0032
 | Step | Scope | ACs |
 |---|---|---|
 | 1 | Cluster crate: three operations, three `AccessCheck`s, fake-transport tests | 1–4 |
-| 2 | `ValueForm::ReplicaRange`, HPA Edit min / max and Edit limits. **Needs user approval** | 1, 2, 5, 6, 9 |
-| 3 | PVC Expand and bulk Expand. **Needs user approval** | 1, 2, 5, 7, 9 |
-| 4 | StorageClass Set default (two-object `Batch`); UAT denied path; ui-verifier. **Needs user approval** | 1, 2, 5, 8–10 |
+| 2 | `ValueForm::ReplicaRange`, HPA Edit min / max and Edit limits. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 6, 9 |
+| 3 | PVC Expand and bulk Expand. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 7, 9 |
+| 4 | StorageClass Set default (two-object `Batch`); UAT denied path; ui-verifier. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 8–10 |
 
 ## Files
 

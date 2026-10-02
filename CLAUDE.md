@@ -30,7 +30,7 @@ Cargo virtual workspace at the root; shared versions, lints, and profiles live i
 export CARGO_HOME="D:/TrungKFC-Research/Rust/k8sBoard/.cargo-home" TMP="D:/TrungKFC-Research/Rust/k8sBoard/.tmp" TEMP="D:/TrungKFC-Research/Rust/k8sBoard/.tmp" TMPDIR="D:/TrungKFC-Research/Rust/k8sBoard/.tmp"
 ```
 
-- Kubernetes access is read-only. Do not commit unless asked.
+- Kubernetes mutating calls go only through the `object_write.rs` allow-list and the named connect files (`pod_shell.rs`, `port_forward.rs`, `debug_shell.rs`), as specified in spec 0030; the user approved all mutating specs on 2026-10-02. Debug builds block writes unless `K8SBOARD_ALLOW_WRITES=1`; agents never set it, and live checks on the read-only UAT cluster stay on the denied path. Do not commit unless asked.
 - Keep docs short: split by topic into files ≤ ~120 lines with a README.md index.
 
 ## Quality gate

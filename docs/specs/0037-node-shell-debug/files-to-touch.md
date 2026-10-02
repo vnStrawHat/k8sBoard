@@ -19,7 +19,7 @@ No Cargo change (kube `ws`, `kube::runtime`, tokio features are already on).
 
 | S | File | Change |
 |---|---|---|
-| 2 | `src/write_guard.rs` (0030, + tests) | `ActionRisk::Privileged`; `confirm_step` → `TypeName { expected }` for every mode and trigger |
+| 2 | `src/write_guard.rs` (0030, + tests) | `ActionRisk::Privileged`; `confirm_step` → `TypeName { expected }` for every mode |
 | 2 | `src/write_flow.rs` (0030, + tests) | `GuardedKind::CreateThenAttach`; permit before commit; `run_cleanup` |
 | 2 | `src/cluster_registry.rs` (0024, + tests) | `allow_node_shell`, `debug_image`, `node_shell_namespace` on `ClusterEntry` and `ClusterProfile`; allow-list test |
 | 2 | `src/settings_window.rs` (0025, + tests) | W2 Safety `Allow node shell` toggle with hint |

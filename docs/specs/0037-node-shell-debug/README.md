@@ -1,6 +1,6 @@
 # 0037 — Node shell and debug containers
 
-Status: draft, HEAD `1c859ae`. **Mutating and privileged: needs the user's approval before step 1 (it adds the `WriteOperation` bodies of a privileged pod), again before step 2, and each first real call (debug container, node shell) needs it again (C3).** Lands after 0030 (write path, gate, tiers, audit, `run_guarded`, kill switch), 0036 (terminal, Shell tabs, `drive`, `ws`), 0035 (`ConnectOpen`), 0025 (Clusters › Safety). Wireframes: W2 Safety "Allow node shell" (hint "Creates a privileged debug pod on the node. Off by default for production."), W4 menu + note 2 "Debug container… · ephemeral", W5 menu "Open node shell" (S), W5 note 7 and dock tab `›_ node shell · wk-03 (debug pod)`.
+Status: draft, HEAD `1c859ae`. **Mutating and privileged. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still block every create, patch, delete, and attach unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only; node shell still always types the node name. Lands after 0030 (write path, gate, tiers, audit, `run_guarded`, kill switch), 0036 (terminal, Shell tabs, `drive`, `ws`), 0035 (`ConnectOpen`), 0025 (Clusters › Safety). Wireframes: W2 Safety "Allow node shell" (hint "Creates a privileged debug pod on the node. Off by default for production."), W4 menu + note 2 "Debug container… · ephemeral", W5 menu "Open node shell" (S), W5 note 7 and dock tab `›_ node shell · wk-03 (debug pod)`.
 
 ## Goal
 
@@ -17,9 +17,9 @@ Removing an ephemeral container (the API cannot); kubectl debug profiles (`gener
 
 | Step | Scope | ACs |
 |---|---|---|
-| 1 | Cluster crate: `AccessCheck`s, `AttachPermit`, `WriteOperation::{AddDebugContainer, CreateNodeShellPod, DeleteNodeShellPod}`, `WriteOutcome.uid`, `debug_shell.rs` (wait + attach + 0036 `drive`); fake tests. **Needs user approval** | 1–5 |
-| 2 | App: `ActionRisk::Privileged`, settings keys and the W2 toggle, gate rows, `GuardedKind::CreateThenAttach`, cleanup path, Debug container… end to end; UAT denied path. **Needs user approval** | 1, 2, 6–9, 12 |
-| 3 | Node shell end to end: options dialog, typed node name, tab, cleanup on every end, quit hook, leftover sweep; `--screen node-shell-confirm`. **Needs user approval** | 1, 2, 6–13 |
+| 1 | Cluster crate: `AccessCheck`s, `AttachPermit`, `WriteOperation::{AddDebugContainer, CreateNodeShellPod, DeleteNodeShellPod}`, `WriteOutcome.uid`, `debug_shell.rs` (wait + attach + 0036 `drive`); fake tests. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1–5 |
+| 2 | App: `ActionRisk::Privileged`, settings keys and the W2 toggle, gate rows, `GuardedKind::CreateThenAttach`, cleanup path, Debug container… end to end; UAT denied path. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 6–9, 12 |
+| 3 | Node shell end to end: options dialog, typed node name, tab, cleanup on every end, quit hook, leftover sweep; `--screen node-shell-confirm`. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 6–13 |
 
 ## Files
 

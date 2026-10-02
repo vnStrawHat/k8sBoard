@@ -1,6 +1,6 @@
 # 0036 · Decisions
 
-[Back to index](README.md). Architect defaults; "user" marks a decision the user made. The whole spec needs the user's approval for exec (project rule, C3).
+[Back to index](README.md). Architect defaults; "user" marks a decision the user made. Exec (project rule, C3): Approved by the user on 2026-10-02 (one approval for all mutating specs).
 
 ## Dependencies
 

@@ -1,6 +1,6 @@
 # 0030 · Files to touch
 
-[Back to index](README.md). **S** is the step. Each step passes the gate on its own; every new item has a production user in its step (dead-code rule). Prerequisites: 0024, 0025, 0028 merged. Step 4 needs the user's approval (C3).
+[Back to index](README.md). **S** is the step. Each step passes the gate on its own; every new item has a production user in its step (dead-code rule). Prerequisites: 0024, 0025, 0028 merged. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).
 
 ## Cargo and lint config
 
@@ -30,14 +30,14 @@ No runtime dependency change. kube features unchanged (no `ws`).
 
 | S | File | Change |
 |---|---|---|
-| 2a | `src/write_guard.rs` (new) + `write_guard_tests.rs` | `ClusterGuard`, `WriteLock` (+ `at_open`), `ConfirmMode`, `ActionRisk`, `Trigger`, `ConfirmStep`, `DialogConfirm`, `confirm_step`; test `app_has_no_kube_dependency` (`include_str!("../Cargo.toml")`) |
+| 2a | `src/write_guard.rs` (new) + `write_guard_tests.rs` | `ClusterGuard`, `WriteLock` (+ `at_open`), `ConfirmMode` (`TypeName`, `Click`), `ActionRisk`, `DialogConfirm`, `confirm_step`; test `app_has_no_kube_dependency` (`include_str!("../Cargo.toml")`) |
 | 2a | `src/cluster_registry.rs` (+ tests) | `ClusterEntry.confirm`, `ClusterProfile.confirm`; allow-list test gains `confirm` |
 | 2a | `src/resource_actions.rs` (+ tests) | gate order on `ClusterGuard`; `mutates`; reason constants replaced; `action_risk` |
 | 2a | `src/app_shell.rs` | `guard_for(&ClusterRef)` (lock = `WriteLock::at_open(profile)` and generation 0 until 2b adds the session fields) |
 | 2a | `src/settings_window.rs` (0025, + tests) | "Confirm changes by" select; Safety page (tier table); `pages_follow_w2_order` |
 | 2b | `src/cluster_session.rs` | `lock: WriteLock` set at session start; `generation: u64` bumped on reconnect |
 | 2b | `src/app_shell.rs` | `toggle_write_lock` (lock at once; unlock via `confirm_step`) |
-| 2b | `src/confirm_dialog.rs` (new) | unlock variant (title, typed name, Enter handling, click-only) |
+| 2b | `src/confirm_dialog.rs` (new) | unlock variant (title, typed name, focused confirm button, Enter handling) |
 | 2b | `src/keymap.rs` (0028, + tests) | `ToggleReadOnly` on `secondary-shift-r` (`WINDOW`); out of `RESERVED_KEYS`; sheet row; `enter` → `NoAction` in `WriteConfirm` and `WriteConfirm > Input` |
 | 2b | `src/title_bar.rs` | badge toggle, dashed env border, two states; multi-mode menu when 0027 is merged |
 | 3 | `src/audit_log.rs` (new) + `audit_log_tests.rs` | `AuditEntry`, `AuditObject`, `AuditField`, `AuditOutcome`, `lock_entry`, `append_audit`; `toggle_write_lock` appends lock lines; Safety page audit path and `Show in folder` |

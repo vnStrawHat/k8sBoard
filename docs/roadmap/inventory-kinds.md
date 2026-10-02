@@ -46,7 +46,7 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Access Control | ClusterRoles | Missing | Missing | 0015 (aggregated, VERY BROAD box, Hide system); Who can… 0023 | — |
 | Access Control | RoleBindings | Missing | Missing | 0015 (two-way links) | New 0031 |
 | Access Control | ClusterRoleBindings | Missing | Missing | 0015 (cluster-admin to SA flag, Hide system) | — |
-| Helm | Releases | Missing | Missing | 0017 (history, values, manifest, values diff, UPGRADE FAILED box) | Roll back, Uninstall 0038 |
+| Helm | Releases | Missing | Missing | 0017 (history, values, manifest, values diff, UPGRADE FAILED box) | Roll back, Uninstall 0038 (deferred) |
 | Custom Resources | CRDs | Missing | Missing | 0018 (versions, printer columns, schema, Browse instances) | — |
 | Custom Resources | Certificates (any discovered CR) | Missing | Missing | 0018 (printer columns, schema drawer, status box) | Renew 0032 |
 

@@ -34,7 +34,7 @@ pub(crate) fn batch_intent(rows: &[CheckedRow], action: ResourceAction, label: S
 
 ## Sequence (`run_guarded`, `Batch` branch)
 
-1. Gate once with `guard_for(cluster)`; `confirm_step(guard.confirm, risk, trigger, expected)`. `expected` = `intent.expected_name` or the cluster display name; the list variant honours it (a single delete in 0033 types the object name). **A batch always opens a dialog**: `Run` becomes `Dialog(ClickOnly)`.
+1. Gate once with `guard_for(cluster)`; `confirm_step(guard.confirm, risk, expected)`. `expected` = `intent.expected_name` or the cluster display name; the list variant honours it (a single delete in 0033 types the object name). **A batch always opens a dialog**, like every 0030 tier (decision 9).
 2. Dry-runs one item at a time, in list order, each `checked_write(WriteStep { mode: DryRun, .. })` (no audit). Rows show `…` / `passed` / the error.
 3. **Every item must pass.** Apply is enabled only when all dry-runs passed and `commit_block` (aggregated state, typed name) is `None`; any failure keeps Apply disabled and the dry-run line names it. With `BatchExtras::Delete`, a 404 is not a failure: the item moves to `already_gone` and shows as skipped (0033).
 4. An extras control change (0033: propagation) rebuilds `items` from the extras and restarts every dry-run; Apply waits again. `BatchExtras::None` has no control.

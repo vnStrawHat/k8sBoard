@@ -23,7 +23,7 @@ The W5 header button `Edit labels` acts on the single ticked node; otherwise dis
 
 ## Shared editor dialog
 
-Both editors are a kit `Dialog` (width 560) that first calls `node_for_edit(name)` on the runtime (spinner `Loading node…`; failure → the error and `Close`). Rows are editable inputs; `+ Add` appends an empty row; `✕` removes a row. Footer: `Cancel` · `Review…` (primary). `Review…` closes the editor and calls `run_guarded(intent, Trigger::Pointer)`, so the 0030 confirm dialog (tier, dry-run, typed name, note) follows. No change → `Review…` disabled `No changes`.
+Both editors are a kit `Dialog` (width 560) that first calls `node_for_edit(name)` on the runtime (spinner `Loading node…`; failure → the error and `Close`). Rows are editable inputs; `+ Add` appends an empty row; `✕` removes a row. Footer: `Cancel` · `Review…` (primary). `Review…` closes the editor and calls `run_guarded(intent)`, so the 0030 confirm dialog (tier, dry-run, typed name, note) follows. No change → `Review…` disabled `No changes`.
 
 Client checks (everything else is the server dry-run's job, shown as 0030 `Invalid { fields }`): key not empty; no duplicate key (labels) or key + effect (taints).
 

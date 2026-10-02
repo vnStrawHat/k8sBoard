@@ -1,6 +1,6 @@
 # 0038 — Helm write actions (roll back, uninstall)
 
-Status: draft, HEAD `1c859ae`. **Mutating: needs the user's approval of C12 (CLI) before step 1, and the first real rollback or uninstall needs it again (C3).** Lands after 0017 (releases, history, statuses), 0030 (gate, tiers, dry-run, audit, `run_guarded`, kill switch), 0024 (kubeconfig sources). Wireframes: W7 Releases — top button `Rollback`, ⋯ `Roll back…`, `View values`, `View manifest`, `Uninstall release…` (danger), History rows `Roll back`; phase 2 card "Helm releases: view values, diff, rollback".
+Status: **Deferred by the user (2026-10-02); not scheduled.** Draft kept for reference, HEAD `1c859ae`. The 2026-10-02 C3 approval does not cover 0038; C12 stays open. If scheduled, realign with 0030 as amended (two confirm tiers, no `Trigger`; `GuardedKind::Helm`, the allow-list row, and the `helm_command.rs` clippy exception are re-added to 0030 then). **Mutating: needs the user's approval of C12 (CLI) before step 1, and the first real rollback or uninstall needs it again (C3).** Lands after 0017 (releases, history, statuses), 0030 (gate, tiers, dry-run, audit, `run_guarded`, kill switch), 0024 (kubeconfig sources). Wireframes: W7 Releases — top button `Rollback`, ⋯ `Roll back…`, `View values`, `View manifest`, `Uninstall release…` (danger), History rows `Roll back`; phase 2 card "Helm releases: view values, diff, rollback".
 
 ## Goal
 

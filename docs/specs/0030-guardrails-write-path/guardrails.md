@@ -12,7 +12,7 @@ impl WriteLock { pub(crate) fn at_open(profile: &ClusterProfile) -> Self; } // p
 
 - `ClusterSession` holds `lock: WriteLock`, set by `at_open` when the session starts (and on switch); a reconnect keeps it. 0027 has one per session.
 - `profile.read_only` = `entry.read_only.unwrap_or(environment == Production)` (0024 decision 27, 0025 decision 17). The W2 switch "Open as read-only" is that stored default; toggling the lock in the title bar is **session-only** and never writes `settings.json`.
-- **Locking** is immediate. **Unlocking** runs `confirm_step(guard.confirm, Change, trigger, display_name)` (write-flow.md dialog, title `Unlock {cluster} for changes?`, no dry-run). Lock and unlock each append an audit line from step 3 (audit-log.md).
+- **Locking** is immediate. **Unlocking** runs `confirm_step(guard.confirm, Change, display_name)` (write-flow.md dialog, title `Unlock {cluster} for changes?`, no dry-run). Lock and unlock each append an audit line from step 3 (audit-log.md).
 - Enforcement point: `write_flow.rs` re-reads the lock right before every commit (write-flow.md). The gate below only decides what the UI offers.
 
 ## The gate (one function)
@@ -42,24 +42,22 @@ pub(crate) fn action_availability(action: ResourceAction, guard: &ClusterGuard) 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum ConfirmMode { TypeName, Enter, Click, None }
-impl ConfirmMode { pub(crate) fn for_environment(environment: Environment) -> Self; } // PROD, STG, DEV, LOCAL order
-pub(crate) enum ActionRisk { Change, Destructive }   // declared per ResourceAction
-pub(crate) enum Trigger { Pointer, Key }
-pub(crate) enum ConfirmStep { Run, Dialog(DialogConfirm) }
-pub(crate) enum DialogConfirm { ClickOnly, EnterOrClick, TypeName { expected: String } }
-pub(crate) fn confirm_step(mode: ConfirmMode, risk: ActionRisk, trigger: Trigger, expected: &str) -> ConfirmStep;
+pub(crate) enum ConfirmMode { TypeName, Click }   // "type-name", "click"
+impl ConfirmMode { pub(crate) fn for_environment(environment: Environment) -> Self; } // Production → TypeName, else Click
+pub(crate) enum ActionRisk { Change, Destructive }   // declared per ResourceAction; 0037 adds Privileged
+pub(crate) enum DialogConfirm { Click, TypeName { expected: String } }
+/// Every guarded action opens the confirm dialog; this only picks how it is confirmed.
+pub(crate) fn confirm_step(mode: ConfirmMode, risk: ActionRisk, expected: &str) -> DialogConfirm;
 ```
 
 | Mode (default env) | Change | Destructive |
 |---|---|---|
-| `TypeName` (PROD) | dialog, type the name | dialog, type the name |
-| `Enter` (STG) | dialog, Enter or click | dialog, Enter or click |
-| `Click` (DEV) | pointer: dialog, one click on Apply (Enter does nothing); key: dialog, Enter or click | dialog, Enter or click |
-| `None` (LOCAL) | pointer: run; key: dialog, Enter or click | dialog, Enter or click |
+| `TypeName` (PROD) | dialog, type the name | dialog, type the name, danger button |
+| `Click` (STG, DEV, LOCAL; unknown → STG) | dialog, click the focused confirm button | dialog, click the focused danger button |
 
-- Wireframe rule "no destructive action runs from one key; destructive actions always open a confirmation" overrides `Click` and `None`. A key never runs a change without a dialog; `None` differs from `Click` only for the pointer.
-- **Proposed reading** of the W10 tiers ("dev one click, staging Enter, prod type the name", LOCAL none): the user is asked to confirm it before the commit step (step 4).
+- (user, 2026-10-02, decision 9) **Every guarded action opens a dialog**, for every tier, risk, and trigger (pointer, key, palette). The Enter, one-click-without-dialog, and None tiers are removed; `Trigger` and `ConfirmStep::Run` went with them, since they only chose between those tiers.
+- Enter inside the dialog activates the focused confirm button; held or repeated Enter is ignored (decision 28, write-flow.md).
+- `Change` and `Destructive` confirm the same way (the risk only picks the danger button); `confirm_step` still matches on `risk` exhaustively, so 0037's `Privileged` arm is one more arm.
 - `expected`: the cluster display name (W10, W2 "Typing the cluster name") unless the action names its object (W6 drain types the node name; the feature passes it). Match: exact after trimming surrounding spaces; case-sensitive.
 - Cordon / Uncordon is `Change`.
 
@@ -67,8 +65,8 @@ pub(crate) fn confirm_step(mode: ConfirmMode, risk: ActionRisk, trigger: Trigger
 
 - Registry key `registry.clusters[].confirm: Option<ConfirmMode>` (reserved in 0024; `None` = `for_environment`). Add to the 0024 allow-list test.
 - `ClusterProfile.confirm: ConfirmMode` resolved like `read_only`.
-- 0025 Clusters form, Safety section, below "Open as read-only": `Confirm changes by` select: `Auto ({default label})`, `Typing the cluster name`, `Pressing Enter`, `One click`, `No confirmation`. Reset clears it with the entry.
-- Settings › **Safety** page at W2 position 5 (0025 page order): group "Audit log" with the file path (mono) and `Show in folder` (`cx.reveal_path`), plus a static table of the four tiers. Row added to `pages_follow_w2_order`.
+- 0025 Clusters form, Safety section, below "Open as read-only": `Confirm changes by` select: `Auto ({default label})`, `Typing the cluster name`, `Clicking Confirm`. Reset clears it with the entry.
+- Settings › **Safety** page at W2 position 5 (0025 page order): group "Audit log" with the file path (mono) and `Show in folder` (`cx.reveal_path`), plus a static table of the two tiers. Row added to `pages_follow_w2_order`.
 
 ## Row's own cluster (0027 contract)
 

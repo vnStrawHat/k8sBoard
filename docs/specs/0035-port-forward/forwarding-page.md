@@ -30,7 +30,7 @@ Sidebar item count = running forwards (W7 sidebar `3`); hidden when 0.
 - `drawer::port_row` gets a state: `Offer { on_click }`, `Live { local, on_stop }`, `Disabled { reason }`. Live renders `● localhost:{n} · Stop` in the success token (W4b), click stops that forward.
 - Live match = same cluster, namespace, target, and remote port as a running forward (`PortForwards::running_for`).
 - Pod container ports (W4b, 0008 `container_detail.rs`) → `ForwardTarget::Pod`, remote = container port. Service ports (W7 drawer) → `Service`, remote = the Service port. UDP ports → `Disabled("UDP ports cannot be forwarded")`. ExternalName or selector-less Services → `Disabled("Forward a pod: this Service selects no pods")`.
-- Enabled click → `start_forward(spec with LocalPort::Auto, Trigger::Pointer)`.
+- Enabled click → `start_forward(spec with LocalPort::Auto)`.
 
 ## Menus and key F
 

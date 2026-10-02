@@ -2,7 +2,7 @@
 
 Status: draft, amended after the advisor review (M2, M3, S2–S6, nice-to-haves). Builds strictly on 0030 as amended (decisions 30–36: `checked_write`, `CommitMode::Commit { confirmed }`, `GuardedIntent.warnings`, `WriteEffect`, `TooManyRequests`, 429 audit rule) and on 0032 (`GuardedKind::Batch`). 0030 already ships single-node Cordon/Uncordon; this spec does not redo it. Prerequisites merged: 0030, 0032, 0013, 0009, 0028; 0036 optional (dock tabs). Roadmap: gap plan 0034; C3, C8, C10; R2. Wireframes: W5 (node menu, selection bar, Edit labels), W6 (drain dialog), keyboard map (C, D).
 
-**User approval (C3):** step 1 sends nothing (fake transport). Steps 2, 3a, and 3b each add real commits (bulk cordon, taints, labels; drain-dialog cordon; evictions) and each needs the user's explicit approval before it merges.
+**User approval (C3):** Approved by the user on 2026-10-02 (one approval for all mutating specs). Step 1 sends nothing (fake transport); steps 2, 3a, and 3b add real commits (bulk cordon, taints, labels; drain-dialog cordon; evictions). Debug builds still block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only.
 
 ## Goal
 
@@ -20,9 +20,9 @@ Status: draft, amended after the advisor review (M2, M3, S2–S6, nice-to-haves)
 | Step | Scope | ACs |
 |---|---|---|
 | 1 | Cluster crate: `EvictPod` (Status-decoded response), `SetNodeTaints`, `SetNodeLabels`, 429 mapping, `drain_pods`, `list_pod_disruption_budgets`, `node_for_edit`, `AccessCheck::CreatePodEviction`; fake-transport tests incl. both 429 shapes and a 201 `Failure` | 1–4 |
-| 2 | Bulk cordon/uncordon (`Batch`), Edit taints, Edit labels. **Needs user approval** | 1, 2, 5, 6, 12 |
-| 3a | `drain_plan.rs` (pure), W6 dialog, dry-runs, Cordon only. **Needs user approval** (cordon commits) | 1, 2, 7, 8, 12 |
-| 3b | `drain_run.rs` (state machine + driver), evictions, dock tab, audit summary; UAT denied path; ui-verifier. **Needs user approval** | 1, 2, 9–11, 13 |
+| 2 | Bulk cordon/uncordon (`Batch`), Edit taints, Edit labels. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 6, 12 |
+| 3a | `drain_plan.rs` (pure), W6 dialog, dry-runs, Cordon only. Approved by the user on 2026-10-02 (one approval for all mutating specs; cordon commits). | 1, 2, 7, 8, 12 |
+| 3b | `drain_run.rs` (state machine + driver), evictions, dock tab, audit summary; UAT denied path; ui-verifier. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 9–11, 13 |
 
 ## Files
 

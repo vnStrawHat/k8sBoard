@@ -86,7 +86,7 @@
 | S4 | Add cluster: scan AWS EKS, GKE, AKS | Missing | backlog |
 | S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Missing | 0025 (frame), owners: 0028, 0030, 0036, 0019, backlog |
 | M1 | Multi-cluster aggregated tables | Missing | 0027 |
-| G1 | Env tiers: prod typed name, staging Enter, dev one click, local none | Missing | 0030 |
+| G1 | Env tiers: prod typed name; staging, dev, local a confirm dialog with a click (user 2026-10-02; W10 text superseded) | Missing | 0030 |
 | G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Missing | 0030, 0031 |
 | G3 | Tokens: status tones OK/WARN/BAD/INFO/DONE | Done | 0003 `status_tone.rs` |
 | G4 | Env tokens PROD/STG/DEV/LOCAL as theme colors | Missing | 0024 |

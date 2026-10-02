@@ -69,7 +69,8 @@ impl ClusterConnection {
 | `pods/exec` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/exec?…` | stream | no | 0036 step 1 (`pod_shell.rs`) |
 | `AddDebugContainer`, `CreateNodeShellPod`, `DeleteNodeShellPod` | PATCH (strategic) `ephemeralcontainers`, POST pod, DELETE pod | 0037 pod-specs.md | 0037 pod-specs.md | yes, yes, no (delete is commit only) | 0037 step 1 |
 | `pods/attach` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/attach?…` | stream | no | 0037 step 1 (`debug_shell.rs`) |
-| `helm rollback`, `helm uninstall` | external process (the user's `helm` CLI) | n/a | argv per 0038 helm-command.md | yes (CLI dry-run) | 0038 step 1 (`helm_command.rs`) |
+
+Deferred (user, 2026-10-02): 0038 Helm writes (`helm rollback`, `helm uninstall` through the user's `helm` CLI, call site `helm_command.rs`) are not scheduled; their allow-list row and clippy exception are added only if 0038 is.
 
 Enforcement:
 
@@ -84,7 +85,6 @@ Enforcement:
    | `pod_shell.rs` | `exec` | 0036 |
    | `port_forward.rs` | `portforward` | 0035 |
    | `debug_shell.rs` | `attach` | 0037 |
-   | `helm_command.rs` | process spawn (`std::process::Command` lint, not a kube method) | 0038 |
 3. The grep stays as documentation: `grep -rnE "\.(create|patch|replace|delete|delete_collection|exec|attach|portforward|evict|create_subresource|patch_subresource|replace_subresource|patch_status|replace_status|patch_scale|replace_scale)\(" crates/cluster/src crates/cluster/examples` lists only the kube files of that table that have shipped.
 4. `crates/app` has no `kube` dependency (test `app_has_no_kube_dependency`), so it can only write through `ClusterConnection::write`.
 5. `allow_list_matches_the_operations` pins method, path, query, content type, and body per variant through the fake transport. Connect calls do not live in `object_write.rs`: they are rows with "Dry-run: no" whose call sites are `pod_shell.rs` (0036), `port_forward.rs` (0035), and `debug_shell.rs` (0037), each with its own permit.

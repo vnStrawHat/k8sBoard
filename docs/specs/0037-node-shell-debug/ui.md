@@ -54,7 +54,7 @@ Continue → `run_guarded(GuardedIntent { cluster, action, label, risk, expected
 | Debug container | `Add debug container to {pod}` | `Change` | `None` (cluster name when TypeName) |
 | Node shell | `Open node shell on {node}` | `Privileged` | `Some(node)` |
 
-`confirm_step` (0030, extended): `Privileged` → `Dialog(TypeName { expected })` for every mode and trigger; the dialog primary button uses the danger variant. The 0030 confirm dialog shows the dry-run line and `changed_fields` (e.g. `spec.hostPID → true`, `…privileged → true`). After a successful start, `debug_image` and `node_shell_namespace` are written to the cluster's registry entry when they differ from the stored value.
+`confirm_step` (0030, extended): `Privileged` → `DialogConfirm::TypeName { expected }` for every mode; the dialog primary button uses the danger variant. The 0030 confirm dialog shows the dry-run line and `changed_fields` (e.g. `spec.hostPID → true`, `…privileged → true`). After a successful start, `debug_image` and `node_shell_namespace` are written to the cluster's registry entry when they differ from the stored value.
 
 ## Settings (0024 keys, 0025 W2 Clusters › Safety)
 

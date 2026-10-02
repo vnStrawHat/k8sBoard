@@ -30,10 +30,10 @@ Ctrl K and the title-bar search box; prefixes `:` kind, `@` cluster, `#` namespa
 
 ## Mutating (RBAC-gated by SSAR, confirmation for destructive actions, disabled on UAT)
 
-Every spec here needs explicit user approval (project rule) and a write-capable test cluster ([risks.md](risks.md) R2). On UAT each action must render disabled with its SSAR reason.
+C3: the user approved 0030–0037 once on 2026-10-02 (one approval for all mutating specs); 0038 is deferred. Live allowed-path checks still need a write-capable test cluster ([risks.md](risks.md) R2). On UAT each action must render disabled with its SSAR reason.
 
 ### 0030 — Guardrails and write path
-Per-cluster read-only mode (default on for PROD), lock toggle and Ctrl Shift R, one action gate = lock ∧ SSAR (per verb/subresource) ∧ env tier, confirmation dialog (prod: type name, staging: Enter, dev: click, local: none), server-side dry-run helper, local audit log with optional note (C8, C10), and an allow-list replacing the 0001 read-only grep.
+Per-cluster read-only mode (default on for PROD), lock toggle and Ctrl Shift R, one action gate = lock ∧ SSAR (per verb/subresource) ∧ env tier, confirmation dialog for every action (prod: type the name; staging, dev, local: click Confirm; user 2026-10-02), server-side dry-run helper, local audit log with optional note (C8, C10), and an allow-list replacing the 0001 read-only grep.
 - Deps: 0024. Risk: Med (the contract every later spec relies on).
 
 ### 0031 — Edit YAML (W10)
@@ -67,7 +67,7 @@ Privileged debug pod (hostPID, nsenter PID 1) like `kubectl debug node/`, delete
 - Deps: 0036, 0025. Risk: High (privileged pod creation; orphan cleanup).
 
 ### 0038 — Helm write actions
-Roll back and Uninstall releases; decision C12 (native vs `helm` CLI).
+**Deferred by the user (2026-10-02); not scheduled.** Roll back and Uninstall releases; decision C12 (native vs `helm` CLI). No other spec depends on it.
 - Deps: 0017, 0030. Risk: High.
 
 ## Backlog (no wireframe screen; needs a user decision)

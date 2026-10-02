@@ -1,6 +1,6 @@
 # 0032 · Files to touch
 
-[Back to index](README.md). **S** is the step. Each step passes the gate on its own; every new item has a production user in its step. Prerequisites: 0030 code (with decisions 30–36), 0028, 0029, 0012 merged. Step 2a-i needs the user's approval (C3).
+[Back to index](README.md). **S** is the step. Each step passes the gate on its own; every new item has a production user in its step. Prerequisites: 0030 code (with decisions 30–36), 0028, 0029, 0012 merged. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).
 
 ## Cargo and lint config (step 1)
 

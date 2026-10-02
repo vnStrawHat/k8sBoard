@@ -1,6 +1,6 @@
 # 0030 · Decisions
 
-[Back to index](README.md). Architect defaults; items marked (user) need confirmation.
+[Back to index](README.md). Architect defaults; items marked (user) are the user's. C3 approved by the user on 2026-10-02 (one approval for all mutating specs).
 
 | # | Decision | Rationale |
 |---|---|---|
@@ -12,7 +12,7 @@
 | 6 | The lock is per session, starts from `profile.read_only` (PROD on), and toggles session-only; the W2 switch is the stored default | W2 "Open as read-only" names the open state; a toggle that rewrote settings would surprise |
 | 7 | Unlocking asks the cluster's confirm tier; locking is immediate | removing a guard deserves the same friction as a change |
 | 8 | One gate in `action_availability`, order: shipped → permission state → SSAR → lock | the first failing reason is the actionable one; menus, keys, palette agree |
-| 9 | (user, proposed reading, asked before step 4) Tiers: TypeName and Enter always show a dialog; a key never runs a change without an Enter dialog; for the pointer, Click shows a click-only dialog and None runs at once (None differs from Click only for the pointer); Destructive always gets a dialog | wireframe env rows plus the keyboard rule "no destructive action from one key" |
+| 9 | (user, 2026-10-02) Two tiers: `TypeName` (PROD) and `Click` (STG, DEV, LOCAL; an unknown environment is STG). Every guarded action opens a confirm dialog, for every tier, risk, and trigger (pointer, key, palette); nothing runs without it. The Enter, one-click-without-dialog, and None tiers are removed, and with them `Trigger`, `ConfirmStep::Run`, and `ClickOnly`. Privileged (0037) always types the name | user decision; one rule everywhere, and "no destructive action from one key" holds by construction |
 | 10 | Typed confirm matches the cluster display name by default; an action may require its object name (drain) | W10 vs W6 |
 | 11 | `confirm` per cluster, `None` = env default, edited in Clusters › Safety | 0024 reserved key; W2 "Confirm changes by" |
 | 12 | The badge is a toggle button with an env-colored dashed border, `Read-only` / `Unlocked` | W1 `.lock`; 0024 left the toggle to 0030 |
@@ -30,8 +30,8 @@
 | 24 | Crate-level kill switch: `write` returns `WritesBlocked` before building a request when the connection's `WritePolicy` is `Blocked`; debug builds are `Blocked` unless `K8SBOARD_ALLOW_WRITES=1`; tests inject the policy | every agent and screenshot run is a debug build; no stray write even with a bug upstream |
 | 25 | A commit error after the request may have left the client (timeout, transport, service, unreadable response) is `OutcomeUnknown`, audited as `unknown` | claiming "failed" when the server may have applied it would mislead |
 | 26 | A webhook that rejects dry-run blocks the commit; no escape in 0030 | C8 "dry-run before every apply" stays absolute; a later spec may add an audited escape |
-| 27 | clippy `disallowed-methods` for raw `kube::Client` requests and mutating `kube::Api` methods, with named exceptions kept in one canonical table (write-path.md): 0030 owns SSAR (`access_review.rs`), `object_write.rs`, and the read-only kubelet GETs (`kubelet_stats.rs`); 0035–0038 add one row each | compile-time guard instead of a grep; the kubelet exception exists because 0011 already uses `request_text`/`request_stream` for GETs |
-| 28 | Enter in the confirm dialog is a key-down handler that ignores `is_held`; the kit Enter bindings are suppressed there with `NoAction` | gpui runs bindings before key listeners, so only a key handler can see `is_held`; a held Enter from the menu must not confirm |
+| 27 | clippy `disallowed-methods` for raw `kube::Client` requests and mutating `kube::Api` methods, with named exceptions kept in one canonical table (write-path.md): 0030 owns SSAR (`access_review.rs`), `object_write.rs`, and the read-only kubelet GETs (`kubelet_stats.rs`); 0035–0037 add one row each (0038 `helm_command.rs` is deferred) | compile-time guard instead of a grep; the kubelet exception exists because 0011 already uses `request_text`/`request_stream` for GETs |
+| 28 | (2026-10-02) Enter stays a keyboard path inside the dialog: `Click` focuses the confirm button and Enter activates it; `TypeName` focuses the input and Enter confirms once the name matches. A key-down handler confirms only when `!is_held`, so a held or repeated Enter is ignored; the kit Enter bindings are suppressed there with `NoAction` | keyboard accessibility; gpui runs bindings before key listeners, so only a key handler can see `is_held`; a held Enter from the menu or palette must not confirm |
 | 29 | Secret redaction runs on the final `WriteError`, any variant, and on the audit `error` field | one place, no variant forgotten |
 | 30 | (amendment, 0032) `checked_write(WriteStep { intent, generation, mode, note })` is the `GuardedKind::Write` branch of `run_guarded` steps 5–6 and the only caller of `ClusterConnection::write`; `Connect` keeps its callback | bulk and drain repeat commits; `commit_block` and the audit line stay unskippable |
 | 31 | (amendment) App `CommitMode { DryRun, Commit { confirmed: Confirmed } }` (named apart from `cluster::WriteMode`, which stays); `Confirmed` is built only when the confirm step is satisfied (dry-run passed, typed name matches) | a commit cannot be expressed without a confirmation |

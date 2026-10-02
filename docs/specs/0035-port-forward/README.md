@@ -1,6 +1,6 @@
 # 0035 — Port-forward and the Port Forwarding page
 
-Status: draft, HEAD `1c859ae`. **Mutating (connect verb): needs the user's approval before step 3, and the first real forward needs it again (C3).** Lands after 0030 (gate, tiers, audit, `run_guarded`, kill switch), 0036 (kube `ws`, `ConnectIntent`, `start_connect`), 0024 (presets key), 0026/0027 (switch, slots). Wireframes: W4b note 4 (Forward next to each port), W7 "Port Forwarding" (page, drawer), W7 Services/Deployments/StatefulSets "Port-forward ▸", status bar `⇄ N port-forwards`, keyboard F.
+Status: draft, HEAD `1c859ae`. **Mutating (connect verb). C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still refuse a forward unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. Lands after 0030 (gate, tiers, audit, `run_guarded`, kill switch), 0036 (kube `ws`, `ConnectIntent`, `start_connect`), 0024 (presets key), 0026/0027 (switch, slots). Wireframes: W4b note 4 (Forward next to each port), W7 "Port Forwarding" (page, drawer), W7 Services/Deployments/StatefulSets "Port-forward ▸", status bar `⇄ N port-forwards`, keyboard F.
 
 ## Goal
 
@@ -21,7 +21,7 @@ UDP; binding any non-loopback address (never `0.0.0.0` or `::`); forwarding seve
 |---|---|---|
 | 1 | Cluster crate: `GetPodPortForward`, `PortForwardPermit`, `port_forward.rs` (resolve, listener, per-connection socket, counters, reconnect, upgrade errors); fake tests | 1–4, 6 |
 | 2 | App: `port_forwards.rs` entity (pure state, presets, port choice), `Screen::PortForwarding` page and drawer with fixture rows, status bar; `--screen port-forwards` | 1, 2, 7, 8, 11 |
-| 3a | Guarded start: `ConnectOpen::PortForward` in `run_guarded`, `start_forward`, Stop/Restart/Retry/Start, Forward buttons (W4b, Services), audit, lock pause; UAT denied path. **Needs user approval** | 1, 2, 5, 9, 10, 13 |
+| 3a | Guarded start: `ConnectOpen::PortForward` in `run_guarded`, `start_forward`, Stop/Restart/Retry/Start, Forward buttons (W4b, Services), audit, lock pause; UAT denied path. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 9, 10, 13 |
 | 3b | Menus (`Port-forward ▸`), F, palette, New forward, Change local port…, Remove preset… dialogs | 1, 2, 9 |
 
 ## Files
@@ -53,7 +53,7 @@ UDP; binding any non-loopback address (never `0.0.0.0` or `::`); forwarding seve
 ## Open items
 
 1. R2: no write-capable cluster; the allowed path is fake-tested only until the user provides one.
-2. (user) Kept strict: every start, restart, retry, and preset start asks the cluster tier (PROD types the name), like 0036 shells. A relief (for example one confirm per preset per app run) is a user decision.
+2. (user) Kept strict: every start, restart, retry, and preset start asks the cluster tier (PROD types the name; every other environment clicks Confirm in the dialog), like 0036 shells. A relief (for example one confirm per preset per app run) is a user decision.
 3. Windows lets a process bind `127.0.0.1:N` while another holds `0.0.0.0:N` without `SO_EXCLUSIVEADDRUSE`; our forward then shadows that service for loopback clients. Accepted; documented in the drawer tooltip.
 4. Namespace-only RBAC with scope All shows as denied (0030 open item 5); applies here too.
 5. Asymmetry with 0036: shells close on a cluster switch, forwards keep running on a held `ClusterConnection` clone. 0026 decision 1 ("teardown releases everything of the old session") gains the exception "except port-forwards, which hold their own connection clone" (orchestrator edit).

@@ -24,14 +24,14 @@ Errors reuse the 0032 texts: `Select rows of one cluster`, `Select at most 50 ro
 /// 0033's extras of the 0032 BatchPlan.
 pub(crate) enum BatchExtras { /* 0032 … */ Delete { propagation: DeletePropagation, already_gone: Vec<SharedString>, warnings: Vec<SharedString> } }
 pub(crate) struct DeleteTarget { pub(crate) object: ObjectRef, pub(crate) name: SharedString, pub(crate) identity: ObjectIdentity }
-impl AppShell { pub(crate) fn start_delete(&mut self, scope: Vec<ClusterObject>, trigger: Trigger, window: &mut Window, cx: &mut Context<Self>); }
+impl AppShell { pub(crate) fn start_delete(&mut self, scope: Vec<ClusterObject>, window: &mut Window, cx: &mut Context<Self>); }
 fn delete_items(targets: &[DeleteTarget], propagation: DeletePropagation) -> Vec<BatchItem>;   // one DeleteObject each
 fn delete_warnings(kind: ObjectKind, targets: &[DeleteTarget], live: &LiveCluster, now: Timestamp) -> Vec<SharedString>;
 ```
 
 1. Gate first: a disabled gate sends no request.
 2. `object_identity` for each target, **sequentially** on the runtime. 404 → `already_gone`. Any other error stops: `Could not read {name} to pin its uid ({error}); nothing was deleted` (decision 3).
-3. Every target gone → notice `{name} was already deleted` / `All {n} objects were already deleted`. Otherwise `run_guarded(GuardedIntent { action: Delete, label, risk: Destructive, expected_name, kind: GuardedKind::Batch(BatchPlan { items, skipped: vec![], extras: BatchExtras::Delete { propagation: Background, already_gone, warnings }, on_failure: BatchFailure::Continue }), warnings, on_commit: None }, trigger)`.
+3. Every target gone → notice `{name} was already deleted` / `All {n} objects were already deleted`. Otherwise `run_guarded(GuardedIntent { action: Delete, label, risk: Destructive, expected_name, kind: GuardedKind::Batch(BatchPlan { items, skipped: vec![], extras: BatchExtras::Delete { propagation: Background, already_gone, warnings }, on_failure: BatchFailure::Continue }), warnings, on_commit: None })`.
    - `label`: `Delete pod` (single) or `Delete 12 pods`.
    - `expected_name`: `Some(object name)` for a single delete, `None` (the cluster name) for bulk (decision 10).
 
@@ -83,4 +83,4 @@ One line per committed object: `{"action":"Delete","object":{…},"fields":[{"pa
 | Screen | Fixture |
 |---|---|
 | `delete-confirm` | first Deployment, PROD TypeName tier (object name), propagation radio, one row `passed · 98 ms`, `Has finalizers: foregroundDeletion` |
-| `delete-bulk-confirm` | Pods, 12 checked, STG Enter tier, the list with `passed` rows, `2 pods are not managed by a controller`, danger `Delete 12 of 12` |
+| `delete-bulk-confirm` | Pods, 12 checked, STG Click tier, the list with `passed` rows, `2 pods are not managed by a controller`, danger `Delete 12 of 12` |

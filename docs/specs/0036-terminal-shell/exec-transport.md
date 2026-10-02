@@ -26,7 +26,7 @@ impl ClusterConnection {
 - `ShellInput` and `ShellUpdate` have **no derived `Debug`**: the manual impl prints `Bytes(12 bytes)`, `Output(4096 bytes)` (C1; AC 7).
 - `ExecPermit`: the only non-test constructor is `AccessReport::exec_permit(&self) -> Option<ExecPermit>` in `access_review.rs`, `Some` only when both `GetPodExec` and `CreatePodExec` are allowed. `#[cfg(test)] ExecPermit::for_tests()` for transport tests. The app cannot open a shell without a report that allows it.
 - No kube or k8s-openapi type in a public signature (0009 AC 3).
-- **Kill switch first**: before anything else `pod_shell` reads the connection's 0030 `WritePolicy`; `Blocked` (debug build without `K8SBOARD_ALLOW_WRITES=1`) yields one `ShellUpdate::Failed(ClusterError::Rendered { message })` with the 0030 `WritesBlocked` text and ends, with zero requests. Exec can change anything in a container, so the first real exec needs the user's approval like a write (C3).
+- **Kill switch first**: before anything else `pod_shell` reads the connection's 0030 `WritePolicy`; `Blocked` (debug build without `K8SBOARD_ALLOW_WRITES=1`) yields one `ShellUpdate::Failed(ClusterError::Rendered { message })` with the 0030 `WritesBlocked` text and ends, with zero requests. Exec can change anything in a container, so it is gated like a write (C3: approved by the user on 2026-10-02, one approval for all mutating specs).
 - Open: `Api::<Pod>::namespaced(..).exec(pod, argv(shell), &AttachParams::interactive_tty().container(c))` inside `connection.run(SHELL_ACTION, ..)`: one HTTP `GET` with a WebSocket upgrade (no POST). Then `Started`, then the initial `Resize(request.size)`.
 - **Upgrade errors (mandatory mapping)**: `kube::Error::UpgradeConnection(UpgradeConnectionError::ProtocolSwitch(code))` carries no `Status` body, so `fn upgrade_error(code: StatusCode, context) -> ClusterError` uses fixed text:
 
@@ -60,7 +60,7 @@ API servers before 1.35 authorize a WebSocket exec as verb **`get`** on `pods/ex
 |---|---|
 | `action_availability(ResourceAction::OpenShell, &ClusterGuard)` | `ActionGate` with both checks above, `mutates: true`, shipped in step 4. Order: `Checking permissions…` → `Not permitted: get and create pods/exec` → `{cluster} is read-only` |
 | `guard_for(&cluster)` | the target pod's own cluster (0027 contract) |
-| `confirm_step(guard.confirm, ActionRisk::Change, trigger, guard.display_name)` | PROD types the cluster name, STG Enter, DEV click (dialog for a key), LOCAL none |
+| `confirm_step(guard.confirm, ActionRisk::Change, guard.display_name)` | always a dialog: PROD types the cluster name; STG, DEV, LOCAL click Confirm |
 | `run_guarded(GuardedIntent { kind: Connect(..) })` (0030 write-flow.md) | no dry-run (`NotSupported`); after the lock re-check, the connect callback opens the tab |
 | `audit_entry(&GuardedIntent, ..)` | one line per session start: action `Open shell`, object `{ Pod, ns, name }`, fields `container`, `command`; outcome `applied` when `Started` arrives, `failed` with the error otherwise; never stream bytes |
 | allow-list (write-path.md rule 4) | row `pods/exec`, `GET` + WebSocket upgrade, `/api/v1/namespaces/{ns}/pods/{pod}/exec`, dry-run no, 0036; the grep expects `access_review.rs`, `object_write.rs`, `pod_shell.rs` |
@@ -69,10 +69,10 @@ API servers before 1.35 authorize a WebSocket exec as verb **`get`** on `pods/ex
 pub(crate) struct ConnectIntent { pub(crate) object: AuditObject, pub(crate) fields: Vec<AuditField>,
     pub(crate) open: Box<dyn FnOnce(ExecPermit, &mut Window, &mut App)> }
 impl AppShell { // thin wrapper, like start_write
-    pub(crate) fn start_connect(&mut self, intent: GuardedIntent, trigger: Trigger, window: &mut Window, cx: &mut Context<Self>);
+    pub(crate) fn start_connect(&mut self, intent: GuardedIntent, window: &mut Window, cx: &mut Context<Self>);
 }
 ```
 
 - `run_guarded` takes the `ExecPermit` from the guard's `AccessReport` right before `open`; no permit → the gate reason, nothing opens. 0035 decides how its own permit enters `Connect` (it may generalize `open`).
-- Locking a cluster does not end shells already open; Reconnect runs `start_connect` again and is blocked while locked. On a `Live` tab, Reconnect skips its own "Restart this shell?" question when the tier dialog opens anyway ([shell-tab.md](shell-tab.md)).
+- Locking a cluster does not end shells already open; Reconnect runs `start_connect` again and is blocked while locked. On a `Live` tab, Reconnect asks no question of its own: the 0030 tier dialog always opens (0030 decision 9; [shell-tab.md](shell-tab.md)).
 - The allowed path is verified by fake-transport tests and `--screen shell-fixture`; a live allowed-path run needs a write-capable cluster (risks R2).

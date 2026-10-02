@@ -31,7 +31,7 @@ Clippy check (coder-lite, once): a scratch `api.delete(..)` in a non-excepted cl
 
 ## Step 2a — pure guard and gate
 
-`write_guard_tests.rs`: `confirm_mode_defaults_per_environment`, `confirm_step_table` (every mode × risk × trigger row of guardrails.md, incl. Click + pointer → `ClickOnly`, None + key → `EnterOrClick`), `destructive_never_runs_without_a_dialog`, `keys_never_run_a_change_without_a_dialog`, `confirm_mode_serializes_kebab_case`, `lock_at_open_follows_the_profile`, `app_has_no_kube_dependency` (`include_str!("../Cargo.toml")`: no line starting with `kube`).
+`write_guard_tests.rs`: `confirm_mode_defaults_per_environment` (PROD → `TypeName`; STG, DEV, LOCAL → `Click`), `confirm_step_table` (every mode × risk row of guardrails.md), **`non_prod_tiers_always_show_a_dialog`** (STG, DEV, LOCAL, and an unknown context name classified STG, × `Change`/`Destructive` → `DialogConfirm::Click`, never a run without a dialog), `confirm_mode_serializes_kebab_case` (`type-name`, `click`), `lock_at_open_follows_the_profile`, `app_has_no_kube_dependency` (`include_str!("../Cargo.toml")`: no line starting with `kube`).
 
 `resource_actions_tests.rs`: `gate_order_table` (exact texts), `read_only_actions_ignore_the_lock`, `rbac_reason_wins_over_the_lock`, and **`gate_and_confirm_use_the_rows_cluster`**: guard A = `dev-1`, DEV, `Locked`; guard B = `prod-eu-1`, PROD, `Unlocked`; both allow `patch nodes`. Cordon on an A row → `dev-1 is read-only`; on a B row → `Enabled`, `confirm_step` → `TypeName { expected: "prod-eu-1" }`, badge env PROD. Swapping which guard is "primary" in the fixture changes nothing.
 
@@ -39,7 +39,7 @@ Clippy check (coder-lite, once): a scratch `api.delete(..)` in a non-excepted cl
 
 ## Step 2b — lock, badge, key, unlock dialog
 
-`keymap_tests.rs` (0028): `toggle_read_only_is_bound_in_window`, `enter_is_suppressed_in_write_confirm`. Window tests (`app_shell_tests.rs`): `ctrl_shift_r_locks_at_once`, `unlocking_prod_asks_for_the_typed_name`, `unlock_by_key_with_tier_none_opens_the_enter_dialog`, `unlock_by_click_with_tier_none_needs_no_dialog`, `badge_shows_the_lock_state`, `lock_toggle_does_not_write_settings`, `reconnect_bumps_the_generation`.
+`keymap_tests.rs` (0028): `toggle_read_only_is_bound_in_window`, `enter_is_suppressed_in_write_confirm`. Window tests (`app_shell_tests.rs`): `ctrl_shift_r_locks_at_once`, `unlocking_prod_asks_for_the_typed_name`, `unlocking_non_prod_asks_for_a_click` (dialog with the focused `Unlock` button), `badge_shows_the_lock_state`, `lock_toggle_does_not_write_settings`, `reconnect_bumps_the_generation`.
 
 ## Step 3 — audit (`audit_log_tests.rs`)
 
@@ -47,11 +47,11 @@ Clippy check (coder-lite, once): a scratch `api.delete(..)` in a non-excepted cl
 
 ## Step 4 — write flow
 
-`write_flow_tests.rs`: `commit_block_table` (guard gone; generation changed; Locked; Running; Failed; Rejected; Differs; all clear → `None`, exact texts), `run_path_checks_commit_block` (lock toggled between dry-run and commit on the Run path → no commit), `typed_name_must_match_exactly`, `cordon_label_follows_scheduling`, `cordon_intent_targets_the_node`, `write_entry_records_unknown_outcome`, `write_entry_uses_the_intent_cluster`.
+`write_flow_tests.rs`: `commit_block_table` (guard gone; generation changed; Locked; Running; Failed; Rejected; Differs; all clear → `None`, exact texts), `typed_name_must_match_exactly`, `cordon_label_follows_scheduling`, `cordon_intent_targets_the_node`, `write_entry_records_unknown_outcome`, `write_entry_uses_the_intent_cluster`.
 
 Amendment tests (decisions 30–36): `checked_write_runs_commit_block_before_commit`, `checked_write_dry_run_writes_no_audit`, `blocked_is_never_audited`, `confirmed_needs_a_passed_dry_run_and_match`, `warnings_render_under_changes`, `created_name_in_notice_and_audit`; cluster crate: `too_many_requests_maps_429`, `outcome_reports_patched_effect`, `rbac_403_is_denied`, `admission_403_is_invalid` (a 403 without `is forbidden: User` never reads "not permitted"), `commit_outcome_carries_uid`.
 
-Window tests: `confirm_dialog_enables_apply_after_dry_run_passes`, `rejected_dry_run_keeps_apply_disabled`, `enter_confirms_in_enter_tier`, `held_enter_does_not_confirm` (`simulate_event(KeyDownEvent { is_held: true, .. "enter" })` → no commit), `click_only_ignores_enter`, `type_name_tier_needs_the_match`, `closing_the_dialog_drops_the_dry_run`, `commit_rechecks_the_row_cluster_lock`.
+Window tests: `confirm_dialog_enables_apply_after_dry_run_passes`, `rejected_dry_run_keeps_apply_disabled`, `enter_confirms_the_focused_button` (Click tier: the primary button has focus; one non-held Enter → commit), `held_enter_does_not_confirm` (`simulate_event(KeyDownEvent { is_held: true, .. "enter" })` → no commit), `type_name_tier_needs_the_match`, `closing_the_dialog_drops_the_dry_run`, `commit_rechecks_the_row_cluster_lock`.
 
 ## Live checks (coder-lite, UAT, read-only, denied path only; debug build)
 
@@ -72,4 +72,4 @@ Write-capable cluster (R2): a later, user-run check with `K8SBOARD_ALLOW_WRITES=
 | `nodes`, seeded PROD | as above | `Read-only` badge, danger dashed border |
 | `nodes`, clean dir | none | `Unlocked` badge, warning dashed border (STG) |
 
-Report color literals, clipped text, and a missing env border as defects.
+Report color literals, clipped text, and a missing env border as defects. Known deviation: W10 names tiers "dev one click, staging Enter"; decision 9 replaced them.

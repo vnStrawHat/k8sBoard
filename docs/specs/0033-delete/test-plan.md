@@ -32,7 +32,7 @@
 | `uncontrolled_pod_warns`, `finalizer_lines`, `dependents_text_per_owner_kind` | |
 | `pod_pending_without_finalizers_reads_grace_period` | `{label}: terminating (grace period)`; a Deployment → `terminating` |
 | `delete_gate_order` | shipped → `Checking permissions…` (lazy) → `Not permitted: delete pods` → `{cluster} is read-only` |
-| `delete_always_opens_a_dialog` | every tier × trigger |
+| `delete_always_opens_a_dialog` | both tiers, single and bulk |
 | `single_type_name_expects_the_object_name` | TypeName → `expected_name` = `api-x` |
 | `identity_404_shows_already_deleted`, `identity_error_stops_before_the_dialog` | no `run_guarded`; zero `DELETE` |
 | `single_delete_is_a_one_item_batch` | `GuardedKind::Batch` with one item, `BatchExtras::Delete` |

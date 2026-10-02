@@ -1,6 +1,6 @@
 # 0033 — Delete
 
-Status: draft, amended after the advisor review (M1, S1–S5, N1–N3), HEAD `1c859ae`. **Mutating.** Step 1 sends no write. **Steps 2 and 3 send real deletes. Each needs the user's explicit approval before it merges (C3); step 3 needs its own because bulk delete widens the blast radius.** Requires: 0030 with the 0032 architect's amendments (`GuardedIntent.warnings`, `WriteOutcome.effect` / `WriteEffect`, `ObjectKind::{ALL, resource}`, the delete exception to the field manager); 0032's `checked_write` and `GuardedKind::Batch(BatchPlan)`; 0031 step 1 (lazy per-kind write checks); 0028 (Del); 0009 (row checks, selection bar). Secrets wait for 0016; 0027 is optional. Roadmap: gap plan 0033 (delete part); C1, C3, C8, C10; R1, R2.
+Status: draft, amended after the advisor review (M1, S1–S5, N1–N3), HEAD `1c859ae`. **Mutating.** Step 1 sends no write. **Steps 2 and 3 send real deletes. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. Requires: 0030 with the 0032 architect's amendments (`GuardedIntent.warnings`, `WriteOutcome.effect` / `WriteEffect`, `ObjectKind::{ALL, resource}`, the delete exception to the field manager); 0032's `checked_write` and `GuardedKind::Batch(BatchPlan)`; 0031 step 1 (lazy per-kind write checks); 0028 (Del); 0009 (row checks, selection bar). Secrets wait for 0016; 0027 is optional. Roadmap: gap plan 0033 (delete part); C1, C3, C8, C10; R1, R2.
 
 ## Goal
 
@@ -10,7 +10,7 @@ Status: draft, amended after the advisor review (M1, S1–S5, N1–N3), HEAD `1c
 - **Finalizer hints** before the delete (finalizers present, or already terminating) and after it (waiting for finalizers, or terminating through the grace period).
 - The 0030 core and the 0032 batch, used for single and bulk deletes alike:
   - the lazy SSAR `delete {resource}` and the lock;
-  - the Destructive tier: always a dialog; on PROD, type the **object name** (single) or the **cluster name** (bulk);
+  - the Destructive risk: always a dialog (as every 0030 tier); on PROD (`TypeName`), type the **object name** (single) or the **cluster name** (bulk); elsewhere click the danger button;
   - a dry-run of every object, `checked_write`, and one audit line per object.
 
 ## Non-goals
@@ -22,8 +22,8 @@ Restart pod (0032 or a follow-up), Evict (0034), force delete or a grace-period 
 | Step | Scope | ACs |
 |---|---|---|
 | 1 | Cluster: `WriteOperation::DeleteObject`, `DeletePropagation`, `WriteEffect::{Deleted, DeletionPending}`, `object_identity` (metadata GET), lazy `AccessCheck::Delete(kind)`, `ObjectKind::owns_dependents` | 1–4, 11 |
-| 2 | App, single delete through a one-item `BatchPlan` with `BatchExtras::Delete`: menus, Del and ⌘⌫, palette, dialog extras, notices, audit, `--screen delete-confirm`. **Needs user approval** | 1, 2, 5–10 |
-| 3 | App, multi-select: scope rule, selection bar `Delete…`, checked-row menu, `--screen delete-bulk-confirm`. **Needs user approval** | 1, 2, 5–10, 12 |
+| 2 | App, single delete through a one-item `BatchPlan` with `BatchExtras::Delete`: menus, Del and ⌘⌫, palette, dialog extras, notices, audit, `--screen delete-confirm`. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5–10 |
+| 3 | App, multi-select: scope rule, selection bar `Delete…`, checked-row menu, `--screen delete-bulk-confirm`. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5–10, 12 |
 
 ## Files
 
@@ -41,7 +41,7 @@ Restart pod (0032 or a follow-up), Evict (0034), force delete or a grace-period 
 - [ ] 3. Request shape: `DELETE {path}/{name}`, no query, JSON body `{"propagationPolicy":…,"preconditions":{"uid":…}}` (+ `"dryRun":["All"]`). No `fieldManager` and no `resourceVersion` precondition (0030 decision 14). The `propagationPolicy` string equals `DeletePropagation::as_str`.
 - [ ] 4. A uid mismatch (409) reads `A new object with this name exists; nothing was deleted`. `WriteRequest::new` refuses an empty uid. A refused identity read stops before the dialog.
 - [ ] 5. Delete is enabled only when shipped, the lazy `delete {resource}` check allows it, and the row's cluster is unlocked. Menus, Del/⌘⌫, the palette, and the selection bar agree.
-- [ ] 6. Every delete opens the dialog. On TypeName tiers, a single delete types the object name and a bulk delete the cluster name. Danger primary; a held Enter never confirms.
+- [ ] 6. Every delete opens the dialog. On TypeName tiers, a single delete types the object name and a bulk delete the cluster name. On `Click` tiers the focused danger primary confirms by click or Enter; a held Enter never confirms.
 - [ ] 7. Owner kinds show the propagation radio. Changing it rebuilds the batch items and reruns the dry-run. Other kinds send `Background`.
 - [ ] 8. Finalizer hints before and after the commit. A pod reads `{label}: terminating (grace period)`.
 - [ ] 9. One audit line per committed object (through `checked_write`): action `Delete`, object, `deleteOptions.propagationPolicy` and its value. No Secret value or server message of a Secret target.

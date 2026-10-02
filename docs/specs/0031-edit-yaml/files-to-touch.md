@@ -1,6 +1,6 @@
 # 0031 · Files to touch
 
-[Back to index](README.md). **S** is the step. Each step passes the gate on its own, and every new item has a production user in its own step. Prerequisites: 0030 code merged with the 0032 architect's one-line amendments (`GuardedIntent.warnings`, `WriteOutcome.effect` / `WriteEffect`, `ObjectKind::{ALL, resource}`, "no SSA / no Force"), the 0036 `run_guarded`, 0032 `checked_write`, 0028, 0007; 0016 before Secret edits. **Step 4 needs the user's approval (C3). Steps 0–3 send no mutating-verb request.**
+[Back to index](README.md). **S** is the step. Each step passes the gate on its own, and every new item has a production user in its own step. Prerequisites: 0030 code merged with the 0032 architect's one-line amendments (`GuardedIntent.warnings`, `WriteOutcome.effect` / `WriteEffect`, `ObjectKind::{ALL, resource}`, "no SSA / no Force"), the 0036 `run_guarded`, 0032 `checked_write`, 0028, 0007; 0016 before Secret edits. **C3: Approved by the user on 2026-10-02 (one approval for all mutating specs). Steps 0–3 send no mutating-verb request.**
 
 ## Cargo
 

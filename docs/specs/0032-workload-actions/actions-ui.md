@@ -44,7 +44,7 @@ After a create, the 0030 notice reads `Run cronjob reconcile now: created reconc
 | CronJobs | `Trigger now`, `Suspend`/`Resume` |
 
 - `KindSpec.read_only_actions` (0028 `KindAction`) gets `action: Some(..)` for every item; items use `action_item` (gate + `row_block`), so menus, keys, and palette agree.
-- Plain items → `run_guarded(intent, Trigger::Pointer)`; R → the same with `Trigger::Key` on the cursor row.
+- Plain items → `run_guarded(intent)`; R → the same on the cursor row. Both open the 0030 confirm dialog (decision 9).
 - New unit key actions without default bindings (so the palette can dispatch them): `PauseRollout`, `RollBack`, `SuspendCronJob`, `TriggerCronJob`, `RerunJob`, plus `ScaleCursorRow` (palette only). Not on the shortcut sheet.
 
 ## Scale popover: `ValuePopover` with `ValueForm::Replicas` (2a-ii; one surface for every Scale entry point)
@@ -58,9 +58,9 @@ pub(crate) enum ValueForm { Replicas { input: Entity<InputState> } }
 pub(crate) enum ValueTargets { One(KindRow), Ticked(Vec<CheckedRow>) /* bulk, bulk-write.md */ }
 ```
 
-| Entry point | Opens the popover | Commit trigger |
+| Entry point | Opens the popover | Submit |
 |---|---|---|
-| menu `Scale…` | for that row | click `Scale` → Pointer; Enter in the input → Key |
+| menu `Scale…` | for that row | click `Scale` or Enter in the input → the 0030 confirm dialog |
 | ⇧S | for the cursor row | same |
 | palette ⏎ on the `Scale` entry (fallback) | dispatches ⇧S after the palette closes | same |
 | selection bar `Scale…` | for the ticked rows | → `Batch` (bulk-write.md) |
@@ -71,12 +71,12 @@ pub(crate) enum ValueTargets { One(KindRow), Ticked(Vec<CheckedRow>) /* bulk, bu
 ## Palette (W9)
 
 - Row actions of the cursor row show the "needs confirm" pill (keys always get a dialog, 0030 decision 9).
-- **Inline argument (W9 `Ctrl ⏎`)**: `Ctrl ⏎` (`secondary-enter`, context `CommandPalette`, action `ScaleCursorRow`) while the cursor row offers Scale turns the input into `Replicas for deployment/payments-api (now 3)` with `3` selected and footer `⏎ scale · Esc back`. Enter with a valid `u32` closes the palette and runs `run_guarded(scale intent, Trigger::Key)`; otherwise `Enter a whole number`. Esc returns to the list. `secondary-enter` leaves 0028 `RESERVED_KEYS`.
+- **Inline argument (W9 `Ctrl ⏎`)**: `Ctrl ⏎` (`secondary-enter`, context `CommandPalette`, action `ScaleCursorRow`) while the cursor row offers Scale turns the input into `Replicas for deployment/payments-api (now 3)` with `3` selected and footer `⏎ scale · Esc back`. Enter with a valid `u32` closes the palette and runs `run_guarded(scale intent)` (the 0030 confirm dialog opens); otherwise `Enter a whole number`. Esc returns to the list. `secondary-enter` leaves 0028 `RESERVED_KEYS`.
 - `Roll back to rev {n}` only from loaded revisions (0029: no new list calls); otherwise disabled with the `row_block` reason.
 
 ## Roll back (2a-iii)
 
-- Drawer **Revisions** (0012 `revision_element`): the disabled `Roll back` button becomes gated (`action_item` rules); click → `run_guarded(roll_back_intent(deployment, set), Pointer)`. No button on the current revision, nor on a revision whose ReplicaSet is the current one.
+- Drawer **Revisions** (0012 `revision_element`): the disabled `Roll back` button becomes gated (`action_item` rules); click → `run_guarded(roll_back_intent(deployment, set))`. No button on the current revision, nor on a revision whose ReplicaSet is the current one.
 - Menu `Roll back…` → reveal the row, open its drawer scrolled to Revisions. Palette entry → the previous revision.
 - The crate also refuses a target with the current template (write-operations.md step 3), so a stale list cannot roll back to "itself".
 

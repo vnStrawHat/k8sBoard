@@ -3,7 +3,7 @@
 ## 2. Project-specific rules
 
 - **English-only** in code, comments, docs, commit messages, and UI strings.
-- **Kubernetes access is read-only for now.** Production code must not call create/update/patch/delete/exec/attach/portforward APIs until a feature explicitly requires it and the user approves. Non-mutating review APIs (SelfSubjectAccessReview / SelfSubjectRulesReview) are allowed.
+- **Mutating Kubernetes calls only through the spec 0030 write path.** create/update/patch/delete go only through `crates/cluster/src/object_write.rs` (its `WriteOperation` allow-list). exec/attach/portforward go only through the named connect files (`pod_shell.rs`, `port_forward.rs`, `debug_shell.rs`). clippy `disallowed-methods` enforces this, with the exceptions named in 0030. The user approved all mutating specs on 2026-10-02. Debug builds block writes unless `K8SBOARD_ALLOW_WRITES=1`, and agents never set it. Non-mutating review APIs (SelfSubjectAccessReview / SelfSubjectRulesReview) are allowed.
 - **Never log or display kubeconfig secrets** (tokens, client keys, certificate data). Secret values are hidden by default in the UI.
 - **Never block the GPUI main thread on network I/O.** kube-rs runs on a dedicated tokio runtime; results reach the UI through channels and `cx.spawn`; batch watch events before `cx.notify()`.
 - **UI colors come from the GPUI Kit theme** (no hardcoded colors); semantic status colors use named theme tokens.
