@@ -454,7 +454,7 @@ fn labeled(text: &str, tone: StatusTone) -> StatusLabel {
     }
 }
 
-/// A hidden value (see `is_secret_parameter`) reads as muted `hidden`, never as an empty string.
+/// A hidden value (see `is_secret_key`) reads as muted `hidden`, never as an empty string.
 fn parameter_row(parameter: &StorageParameter) -> DetailRow {
     let value = match &parameter.value {
         Some(value) => KindCell::Mono(value.clone().into()),

@@ -4,10 +4,10 @@
 //! events watches together, and prints counts per kind. With `--metrics-seconds` it polls pod
 //! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--kubelet-seconds` it polls the kubelet stats of every Ready node through the node proxy (cAdvisor disk I/O for the first one) and prints counts per node per round. With `--counts` it prints one object-count line per kind (`limit=1` lists, nothing else is read). With `--yaml` it reads the masked
 //! YAML of the first pod and the first node and prints line counts and masking checks, never
-//! the YAML text. With `--secrets` it prints Secret counts by type and certificate parse counts, then reads one TLS secret and prints its key and byte counts, never a value. With `--helm` it prints Helm release counts by status, then reads the first release and prints line and document counts, never values, manifest text, notes, or descriptions. The access section doubles as the RBAC probe of the context.
+//! the YAML text. With `--secrets` it prints Secret counts by type and certificate parse counts, then reads one TLS secret and prints its key and byte counts, never a value. With `--helm` it prints Helm release counts by status, then reads the first release and prints line and document counts, never values, manifest text, notes, or descriptions. With `--crds` it prints CRD counts and printer-column support, then access, count, object watch, and YAML lines for the established CRDs (add `--watch-seconds` for the watch line and `--yaml` for the YAML line), never object names or values. The access section doubles as the RBAC probe of the context.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds]
 //! ```
 
 use std::collections::BTreeMap;
@@ -18,18 +18,19 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use cluster::{
-    AccessCheck, AccessDecision, AccessReport, ClusterConnection, ClusterError, ContainerKind,
-    ContainerState, ContainerSummary, CronJobSummary, EnvValues, EventFilter, HelmReleaseSummary,
-    HelmRevisionRef, Kubeconfig, KubeletTargets, LogRequest, LogSource, LogUpdate, MetricsApi,
-    NamespaceScope, NodeKubeletStats, NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary,
-    ObjectKind, ObjectRef, PodMetrics, PodStatus, PodSummary, SecretDetails, SecretSummary,
-    StatusReason, Termination, ValueVisibility, WatchUpdate,
+    AccessCheck, AccessDecision, AccessReport, ClusterConnection, ClusterError, ColumnValue,
+    ContainerKind, ContainerState, ContainerSummary, CrdState, CrdSummary, CronJobSummary,
+    EnvValues, EventFilter, HelmReleaseSummary, HelmRevisionRef, Kubeconfig, KubeletTargets,
+    LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceScope, NodeKubeletStats, NodeMetrics,
+    NodeReadiness, NodeScheduling, NodeSummary, ObjectKind, ObjectRef, PodMetrics, PodStatus,
+    PodSummary, SecretDetails, SecretSummary, StatusReason, Termination, ValueVisibility,
+    WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 use tokio::sync::watch;
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -46,6 +47,7 @@ struct Args {
     yaml: bool,
     secrets: bool,
     helm: bool,
+    crds: bool,
 }
 
 enum Parsed {
@@ -65,6 +67,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut yaml = false;
     let mut secrets = false;
     let mut helm = false;
+    let mut crds = false;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
         match flag.as_str() {
@@ -73,6 +76,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
             "--yaml" => yaml = true,
             "--secrets" => secrets = true,
             "--helm" => helm = true,
+            "--crds" => crds = true,
             "--kubeconfig" => kubeconfig = Some(PathBuf::from(value("--kubeconfig")?)),
             "--context" => context = Some(value("--context")?),
             "--namespace" => namespace = Some(value("--namespace")?),
@@ -113,6 +117,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         yaml,
         secrets,
         helm,
+        crds,
     }))
 }
 
@@ -331,7 +336,7 @@ async fn watch_for(
 }
 
 /// The kinds `--counts` counts, in sidebar order, with the check that gates each.
-const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 26] = [
+const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 27] = [
     (ObjectKind::Pod, "pods", AccessCheck::ListPods),
     (ObjectKind::Node, "nodes", AccessCheck::ListNodes),
     (
@@ -425,6 +430,11 @@ const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 26] = [
         ObjectKind::ClusterRoleBinding,
         "clusterrolebindings",
         AccessCheck::ListClusterRoleBindings,
+    ),
+    (
+        ObjectKind::CustomResourceDefinition,
+        "customresourcedefinitions",
+        AccessCheck::ListCustomResourceDefinitions,
     ),
 ];
 
@@ -689,6 +699,190 @@ fn status_counts(releases: &[HelmReleaseSummary]) -> String {
         return NONE_TEXT.to_owned();
     }
     parts.join(" \u{b7} ")
+}
+
+/// How long `--crds` waits for the first CRD or custom object snapshot.
+const CRDS_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Most CRDs `--crds` prints a line for.
+const MAX_LISTED_CRDS: usize = 10;
+
+/// The first snapshot of `updates`, or `None` after the failure was recorded.
+async fn first_snapshot<T>(
+    probe: &mut Probe,
+    what: &str,
+    updates: impl Stream<Item = WatchUpdate<T>>,
+) -> io::Result<Option<Vec<T>>> {
+    tokio::pin!(updates);
+    match tokio::time::timeout(CRDS_SNAPSHOT_TIMEOUT, updates.next()).await {
+        Ok(Some(WatchUpdate::Snapshot(items))) => Ok(Some(items)),
+        Ok(Some(WatchUpdate::Failed(error))) => {
+            probe.fail(&error)?;
+            Ok(None)
+        }
+        Ok(None) | Err(_) => {
+            probe.all_succeeded = false;
+            writeln!(
+                probe.out,
+                "  no {what} snapshot in {CRDS_SNAPSHOT_TIMEOUT:?}"
+            )?;
+            Ok(None)
+        }
+    }
+}
+
+/// `--crds`: CRD counts, printer-column support per CRD, then access, count, object watch, and
+/// YAML lines for the established CRDs. Prints counts and CRD or column names only: never an
+/// object name, a field, or a value.
+async fn crds_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    scope: NamespaceScope,
+    args: &Args,
+) -> io::Result<()> {
+    probe.section("crds")?;
+    let Some(crds) = first_snapshot(probe, "crds", connection.watch_crds()).await? else {
+        return Ok(());
+    };
+    let established: Vec<&CrdSummary> = crds
+        .iter()
+        .filter(|crd| crd.state == CrdState::Established && crd.preferred_version().is_some())
+        .collect();
+    writeln!(
+        probe.out,
+        "  crds: {} ({} established)",
+        crds.len(),
+        established.len()
+    )?;
+    let (mut total_columns, mut total_unsupported) = (0, 0);
+    for (index, crd) in established.iter().enumerate() {
+        let Some(version) = crd.preferred_version() else {
+            continue;
+        };
+        let unsupported: Vec<&str> = version
+            .printer_columns
+            .iter()
+            .filter(|column| !column.is_supported)
+            .map(|column| column.name.as_str())
+            .collect();
+        total_columns += version.printer_columns.len();
+        total_unsupported += unsupported.len();
+        if index < MAX_LISTED_CRDS {
+            writeln!(
+                probe.out,
+                "  crd {} {} {:?} columns {} unsupported {}",
+                crd.name,
+                version.name,
+                crd.scope,
+                version.printer_columns.len(),
+                unsupported.len()
+            )?;
+        }
+        for name in unsupported {
+            writeln!(probe.out, "  unsupported {}: {name}", crd.name)?;
+        }
+    }
+    writeln!(
+        probe.out,
+        "  printer columns: {total_columns} in total, {total_unsupported} unsupported"
+    )?;
+    let mut target = None;
+    let mut target_has_instances = false;
+    for crd in established.iter().take(MAX_LISTED_CRDS) {
+        let Some(version) = crd.preferred_version() else {
+            continue;
+        };
+        let resource = crd.resource(version);
+        let label = format!("{}.{}", resource.plural, resource.group);
+        match connection.review_custom_access(&resource, &scope).await {
+            Ok(AccessDecision::Allowed) => writeln!(probe.out, "  access list {label}: allowed")?,
+            Ok(AccessDecision::Denied { .. }) => {
+                writeln!(probe.out, "  access list {label}: denied")?;
+                continue;
+            }
+            Err(error) => {
+                writeln!(probe.out, "  access list {label}")?;
+                probe.fail(&error)?;
+                continue;
+            }
+        }
+        let count = match connection.count_custom_objects(&resource).await {
+            Ok(Some(count)) => {
+                writeln!(probe.out, "  count {label} {count}")?;
+                Some(count)
+            }
+            Ok(None) => {
+                writeln!(probe.out, "  count {label} unknown")?;
+                None
+            }
+            Err(error) => {
+                writeln!(probe.out, "  count {label}")?;
+                probe.fail(&error)?;
+                None
+            }
+        };
+        // The first CRD with instances makes the better watch and YAML target.
+        let has_instances = count.is_some_and(|count| count > 0);
+        if target.is_none() || (has_instances && !target_has_instances) {
+            target = Some((crd, version, resource));
+            target_has_instances = has_instances;
+        }
+    }
+    let Some((crd, version, resource)) = target else {
+        return Ok(());
+    };
+    if args.watch_seconds.is_none() && !args.yaml {
+        return Ok(());
+    }
+    let label = format!("{}.{}", resource.plural, resource.group);
+    let updates =
+        connection.watch_custom_objects(&resource, &version.printer_columns, scope.clone());
+    let Some(objects) = first_snapshot(probe, &label, updates).await? else {
+        return Ok(());
+    };
+    if args.watch_seconds.is_some() {
+        let total = objects.len() * version.printer_columns.len();
+        let filled = objects
+            .iter()
+            .flat_map(|object| &object.columns)
+            .filter(|value| !matches!(value, ColumnValue::Absent))
+            .count();
+        writeln!(
+            probe.out,
+            "  custom {label}: {} objects, {filled} of {total} column values filled",
+            objects.len()
+        )?;
+    }
+    if args.yaml {
+        let first = objects.first().and_then(|object| {
+            ObjectRef::custom(
+                resource.clone(),
+                object.namespace.clone(),
+                object.name.clone(),
+            )
+        });
+        let Some(object) = first else {
+            probe.all_succeeded = false;
+            return writeln!(probe.out, "  yaml custom {}: no object", crd.name);
+        };
+        match connection.object_yaml(&object, EnvValues::Hidden).await {
+            Ok(yaml) => writeln!(
+                probe.out,
+                "  yaml custom {}: {} lines, masked {}",
+                crd.name,
+                yaml.text.lines().count(),
+                if yaml.text.starts_with("# k8sBoard hid") {
+                    "yes"
+                } else {
+                    "no"
+                }
+            )?,
+            Err(error) => {
+                writeln!(probe.out, "  yaml custom {}", crd.name)?;
+                probe.fail(&error)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Counts of what one log stream produced. Never holds log text.
@@ -1241,6 +1435,9 @@ async fn run(args: &Args) -> io::Result<bool> {
     }
     if args.helm {
         helm_for(&mut probe, &connection, scope.clone()).await?;
+    }
+    if args.crds {
+        crds_for(&mut probe, &connection, scope.clone(), args).await?;
     }
     if let Some(seconds) = args.watch_seconds {
         watch_for(&mut probe, &connection, scope.clone(), seconds).await?;

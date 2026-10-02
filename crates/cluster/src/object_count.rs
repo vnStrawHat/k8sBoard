@@ -12,6 +12,7 @@ use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::api::rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding};
 use k8s_openapi::api::storage::v1::StorageClass;
+use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use k8s_openapi::serde::de::DeserializeOwned;
 use kube::Api;
 use kube::api::ListParams;
@@ -128,6 +129,12 @@ impl ClusterConnection {
                 self.count_cluster::<ClusterRoleBinding>("counting cluster role bindings")
                     .await
             }
+            ObjectKind::CustomResourceDefinition => {
+                self.count_cluster::<CustomResourceDefinition>(
+                    "counting custom resource definitions",
+                )
+                .await
+            }
         }
     }
 
@@ -161,7 +168,7 @@ impl ClusterConnection {
         self.count_one(&api, action).await
     }
 
-    async fn count_one<K>(
+    pub(crate) async fn count_one<K>(
         &self,
         api: &Api<K>,
         action: &'static str,

@@ -14,13 +14,15 @@ use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::api::rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding};
 use k8s_openapi::api::storage::v1::StorageClass;
+use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::Api;
 use kube::api::{ApiResource, DynamicObject};
 use serde_json::Value;
 use serde_saphyr::SerializerOptions;
 
 use crate::connection::{ClusterConnection, ClusterError};
-use crate::storage_class::{is_secret_parameter, mask_mount_option};
+use crate::custom_resource_definition::{CustomResourceType, ResourceScope, custom_api_resource};
+use crate::storage_class::mask_mount_option;
 
 const ACTION: &str = "reading the object YAML";
 /// Fixed on purpose: the library error could quote the object's content.
@@ -64,6 +66,7 @@ pub enum ObjectKind {
     ClusterRole,
     RoleBinding,
     ClusterRoleBinding,
+    CustomResourceDefinition,
 }
 
 impl ObjectKind {
@@ -96,6 +99,7 @@ impl ObjectKind {
             Self::ClusterRole => "ClusterRole",
             Self::RoleBinding => "RoleBinding",
             Self::ClusterRoleBinding => "ClusterRoleBinding",
+            Self::CustomResourceDefinition => "CustomResourceDefinition",
         }
     }
 
@@ -108,14 +112,31 @@ impl ObjectKind {
                 | Self::StorageClass
                 | Self::ClusterRole
                 | Self::ClusterRoleBinding
+                | Self::CustomResourceDefinition
         )
+    }
+}
+
+/// What an `ObjectRef` points at: a built-in kind, or one served version of a custom resource.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ObjectTarget {
+    Builtin(ObjectKind),
+    Custom(CustomResourceType),
+}
+
+impl ObjectTarget {
+    fn is_namespaced(&self) -> bool {
+        match self {
+            Self::Builtin(kind) => kind.is_namespaced(),
+            Self::Custom(resource) => resource.scope == ResourceScope::Namespaced,
+        }
     }
 }
 
 /// One object. Always valid: it has a namespace exactly when its kind is namespaced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectRef {
-    kind: ObjectKind,
+    target: ObjectTarget,
     namespace: Option<String>,
     name: String,
 }
@@ -123,8 +144,29 @@ pub struct ObjectRef {
 impl ObjectRef {
     /// `None` when the namespace does not fit the kind's scope.
     pub fn new(kind: ObjectKind, namespace: Option<String>, name: String) -> Option<Self> {
-        (namespace.is_some() == kind.is_namespaced()).then_some(Self {
-            kind,
+        Self::of_target(ObjectTarget::Builtin(kind), namespace, name)
+    }
+
+    /// An object of a custom resource. `None` when the namespace does not fit the scope.
+    pub fn custom(
+        resource: CustomResourceType,
+        namespace: Option<String>,
+        name: String,
+    ) -> Option<Self> {
+        Self::of_target(ObjectTarget::Custom(resource), namespace, name)
+    }
+
+    /// The resource, namespace, and name when this points at a custom object.
+    pub(crate) fn as_custom(&self) -> Option<(&CustomResourceType, Option<&str>, &str)> {
+        let ObjectTarget::Custom(resource) = &self.target else {
+            return None;
+        };
+        Some((resource, self.namespace.as_deref(), &self.name))
+    }
+
+    fn of_target(target: ObjectTarget, namespace: Option<String>, name: String) -> Option<Self> {
+        (namespace.is_some() == target.is_namespaced()).then_some(Self {
+            target,
             namespace,
             name,
         })
@@ -153,7 +195,10 @@ impl ClusterConnection {
         object: &ObjectRef,
         env: EnvValues,
     ) -> Result<ObjectYaml, ClusterError> {
-        let resource = api_resource(object.kind);
+        let resource = match &object.target {
+            ObjectTarget::Builtin(kind) => api_resource(*kind),
+            ObjectTarget::Custom(resource) => custom_api_resource(resource),
+        };
         let client = self.client().clone();
         let api: Api<DynamicObject> = match &object.namespace {
             Some(namespace) => Api::namespaced_with(client, namespace, &resource),
@@ -166,7 +211,11 @@ impl ClusterConnection {
             source: message.into(),
         };
         let value = serde_json::to_value(&found).map_err(|_| unexpected(CONVERSION_FAILURE))?;
-        to_masked_yaml(value, env).map_err(unexpected)
+        let masked = match object.target {
+            ObjectTarget::Builtin(_) => to_masked_yaml(value, env),
+            ObjectTarget::Custom(_) => to_masked_custom_yaml(value, env),
+        };
+        masked.map_err(unexpected)
     }
 }
 
@@ -198,11 +247,33 @@ fn api_resource(kind: ObjectKind) -> ApiResource {
         ObjectKind::ClusterRole => ApiResource::erase::<ClusterRole>(&()),
         ObjectKind::RoleBinding => ApiResource::erase::<RoleBinding>(&()),
         ObjectKind::ClusterRoleBinding => ApiResource::erase::<ClusterRoleBinding>(&()),
+        ObjectKind::CustomResourceDefinition => ApiResource::erase::<CustomResourceDefinition>(&()),
     }
 }
 
 /// Masks, sorts keys like kubectl, and serializes. The error is a fixed message.
-fn to_masked_yaml(mut object: Value, env: EnvValues) -> Result<ObjectYaml, &'static str> {
+fn to_masked_yaml(object: Value, env: EnvValues) -> Result<ObjectYaml, &'static str> {
+    mask_to_yaml(object, env, |_| 0)
+}
+
+/// Like `to_masked_yaml`, plus the custom object rules S2-S4 for objects of unknown kinds.
+fn to_masked_custom_yaml(object: Value, env: EnvValues) -> Result<ObjectYaml, &'static str> {
+    mask_to_yaml(object, env, |object| {
+        let kind = object
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        mask_custom_object(object, &kind)
+    })
+}
+
+/// `extra` runs after the built-in rules and before the keys are sorted; it returns its count.
+fn mask_to_yaml(
+    mut object: Value,
+    env: EnvValues,
+    extra: impl FnOnce(&mut Value) -> usize,
+) -> Result<ObjectYaml, &'static str> {
     if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
         metadata.remove("managedFields");
     }
@@ -217,6 +288,7 @@ fn to_masked_yaml(mut object: Value, env: EnvValues) -> Result<ObjectYaml, &'sta
         hidden_env_values = mask_env_values(spec);
     }
     hidden += hidden_env_values;
+    hidden += extra(&mut object);
     object.sort_all_objects();
     let body = yaml_text(&object)?;
     Ok(ObjectYaml {
@@ -288,7 +360,7 @@ fn mask_storage_class_parameters(object: &mut Value) -> usize {
     };
     let mut hidden = 0;
     for (key, value) in parameters {
-        if is_secret_parameter(key) {
+        if is_secret_key(key) {
             *value = Value::from(HIDDEN);
             hidden += 1;
         }
@@ -375,6 +447,158 @@ fn hide_container_env(container: &mut Value) -> usize {
         hidden += 1;
     }
     hidden
+}
+
+/// Reference suffixes: a key that only names another object is never a credential
+/// (`secretRef`, `passwordSecretRef`, `*-secret-name`).
+const REFERENCE_SUFFIXES: [&str; 4] = ["secretname", "secretnamespace", "ref", "refs"];
+/// Key fragments that mark a plaintext credential, after normalizing the key.
+const SECRET_FRAGMENTS: [&str; 14] = [
+    "secret",
+    "password",
+    "passwd",
+    "token",
+    "credential",
+    "accesskey",
+    "userkey",
+    "privatekey",
+    "apikey",
+    "passphrase",
+    "bearer",
+    "clientkey",
+    "kubeconfig",
+    "connectionstring",
+];
+
+/// Whether a key looks like it holds a credential. A name heuristic: the key is lowercased and
+/// stripped of `-`, `_`, `.`, and `/`, references are never secret, and any credential fragment
+/// makes it secret.
+pub(crate) fn is_secret_key(key: &str) -> bool {
+    let normalized: String = key
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | '_' | '.' | '/'))
+        .flat_map(char::to_lowercase)
+        .collect();
+    if REFERENCE_SUFFIXES
+        .iter()
+        .any(|suffix| normalized.ends_with(suffix))
+    {
+        return false;
+    }
+    SECRET_FRAGMENTS
+        .iter()
+        .any(|fragment| normalized.contains(fragment))
+}
+
+/// A kind whose objects keep plain values under `data` or `spec`, like `ClusterSecret`.
+pub(crate) fn is_secret_kind(kind: &str) -> bool {
+    kind.to_ascii_lowercase().contains("secret") || is_secret_key(kind)
+}
+
+/// The custom object rules S2-S4 on one object (or on a `{spec, status}` wrapper): hides what
+/// they select and returns how many values were hidden. `metadata`, `apiVersion`, and `kind`
+/// are never touched. A scalar inside an array counts under the array's key.
+pub(crate) fn mask_custom_object(object: &mut Value, kind: &str) -> usize {
+    let Some(root) = object.as_object_mut() else {
+        return 0;
+    };
+    let is_secret_kind = is_secret_kind(kind);
+    let mut hidden = 0;
+    for (key, value) in root.iter_mut() {
+        if matches!(key.as_str(), "metadata" | "apiVersion" | "kind") {
+            continue;
+        }
+        // The status of a secret-like kind stays readable; S3 and S4 still apply inside it.
+        let hides_all = is_secret_kind && key != "status";
+        hidden += mask_custom_value(key, value, hides_all);
+    }
+    hidden
+}
+
+/// Env-style `{name, value}` pairs outside container lists (`env`, `extraEnv`, `params`): the
+/// value of a pair whose `name` is secret-like is hidden, whatever the pair is called.
+fn hide_named_value(map: &mut serde_json::Map<String, Value>) -> usize {
+    let has_secret_name = map
+        .get("name")
+        .and_then(Value::as_str)
+        .is_some_and(is_secret_key);
+    if !has_secret_name {
+        return 0;
+    }
+    match map.get_mut("value") {
+        Some(value @ (Value::String(_) | Value::Number(_))) if *value != HIDDEN => {
+            *value = Value::from(HIDDEN);
+            1
+        }
+        _ => 0,
+    }
+}
+
+fn mask_custom_value(key: &str, value: &mut Value, hides_all: bool) -> usize {
+    match value {
+        Value::Object(map) => {
+            let hidden_pair = hide_named_value(map);
+            hidden_pair
+                + map
+                    .iter_mut()
+                    .map(|(key, child)| mask_custom_value(key, child, hides_all))
+                    .sum::<usize>()
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .map(|item| mask_custom_value(key, item, hides_all))
+            .sum(),
+        Value::String(text) if text == HIDDEN => 0,
+        Value::String(text) => {
+            if hides_all || is_secret_key(key) {
+                *value = Value::from(HIDDEN);
+                return 1;
+            }
+            match mask_url_userinfo(text) {
+                Some(masked) => {
+                    *value = Value::from(masked);
+                    1
+                }
+                None => 0,
+            }
+        }
+        Value::Number(_) if hides_all || is_secret_key(key) => {
+            *value = Value::from(HIDDEN);
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// `scheme://userinfo@host` with `userinfo` replaced by `<hidden>`, for every URL in `text`.
+/// The authority ends at the first `/`, `?`, `#`, or whitespace after `://`, and only an `@`
+/// inside it counts (the last one). `None` when nothing changed.
+pub(crate) fn mask_url_userinfo(text: &str) -> Option<String> {
+    if !text.contains("://") {
+        return None;
+    }
+    let mut masked = String::with_capacity(text.len());
+    let mut is_changed = false;
+    let mut rest = text;
+    while let Some(index) = rest.find("://") {
+        let (head, tail) = rest.split_at(index + "://".len());
+        masked.push_str(head);
+        let end = tail
+            .find(|ch: char| matches!(ch, '/' | '?' | '#') || ch.is_whitespace())
+            .unwrap_or(tail.len());
+        let authority = &tail[..end];
+        match authority.rfind('@') {
+            Some(at) if &authority[..at] != HIDDEN => {
+                masked.push_str(HIDDEN);
+                masked.push_str(&authority[at..]);
+                is_changed = true;
+            }
+            _ => masked.push_str(authority),
+        }
+        rest = &tail[end..];
+    }
+    masked.push_str(rest);
+    is_changed.then_some(masked)
 }
 
 #[cfg(test)]

@@ -83,7 +83,7 @@ pub(crate) enum RelatedSubject { /* … */ CustomFields { kind: CustomKind, name
 pub(crate) enum RelatedList { /* … */ CustomFields(LiveList<CustomObjectFields>) }
 ```
 
-`related_subject` builds it from `ResourceKind::Custom` rows; stream `watch_custom_object_fields(kind.resource(), namespace, name)`; no gate (the explorer gate already allowed list/watch). Lifecycle, debounce, and settle are 0012's.
+`related_subject` builds it from `ResourceKind::Custom` rows; stream `watch_custom_object_fields(&object_ref)`; no gate (the explorer gate already allowed list/watch). Lifecycle, debounce, and settle are 0012's.
 
 ### Menus
 

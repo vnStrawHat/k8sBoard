@@ -817,3 +817,24 @@ async fn batch_updates_accepts_partial_object_meta() {
     };
     assert_eq!(names, &["a", "b", "c"]);
 }
+
+#[tokio::test(start_paused = true)]
+async fn closure_summarizer_captures_runtime_data() {
+    // Runtime data a `fn` pointer cannot carry, such as printer columns chosen per custom kind.
+    let suffix = "-custom".to_owned();
+    let summarize =
+        move |pod: &Pod| format!("{}{suffix}", pod.metadata.name.clone().unwrap_or_default());
+    let updates: Vec<_> = batch_updates(
+        stream::iter(initial_list(&[pod("ns", "a")])),
+        "test".to_owned(),
+        ACTION,
+        summarize,
+        None,
+    )
+    .collect()
+    .await;
+    let WatchUpdate::Snapshot(items) = &updates[0] else {
+        panic!("expected a snapshot");
+    };
+    assert_eq!(items, &["a-custom"]);
+}

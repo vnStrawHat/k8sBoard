@@ -9,6 +9,7 @@ use kube::Api;
 use kube::api::PostParams;
 
 use crate::connection::{ClusterConnection, ClusterError};
+use crate::custom_resource_definition::{CustomResourceType, ResourceScope};
 use crate::metrics_api::METRICS_GROUP;
 use crate::namespace::NamespaceScope;
 
@@ -51,6 +52,7 @@ pub enum AccessCheck {
     ListClusterRoles,
     ListRoleBindings,
     ListClusterRoleBindings,
+    ListCustomResourceDefinitions,
 }
 
 /// The API resource a check asks about.
@@ -64,7 +66,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 34] = [
+    pub const ALL: [AccessCheck; 35] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::CreatePodExec,
@@ -99,6 +101,7 @@ impl AccessCheck {
         Self::ListClusterRoles,
         Self::ListRoleBindings,
         Self::ListClusterRoleBindings,
+        Self::ListCustomResourceDefinitions,
     ];
 
     fn target(self) -> CheckTarget {
@@ -149,6 +152,13 @@ impl AccessCheck {
             Self::ListClusterRoleBindings => {
                 ("list", RBAC_GROUP, "clusterrolebindings", None, false)
             }
+            Self::ListCustomResourceDefinitions => (
+                "list",
+                "apiextensions.k8s.io",
+                "customresourcedefinitions",
+                None,
+                false,
+            ),
         };
         CheckTarget {
             verb,
@@ -302,10 +312,40 @@ impl ClusterConnection {
         check: AccessCheck,
         namespace: Option<&str>,
     ) -> Result<AccessReview, ClusterError> {
+        let decision = self
+            .review_attributes(resource_attributes(check, namespace))
+            .await?;
+        Ok(AccessReview { check, decision })
+    }
+
+    /// Asks whether the user may `list` a custom resource. One cluster-wide review for `All` or a
+    /// cluster-scoped resource, else one per picked namespace, concurrently (at most 5 picked
+    /// namespaces, so at most 5 in flight); the first denial wins. Like `review_access`, a request
+    /// error fails the whole call.
+    pub async fn review_custom_access(
+        &self,
+        resource: &CustomResourceType,
+        scope: &NamespaceScope,
+    ) -> Result<AccessDecision, ClusterError> {
+        let namespaces = match resource.scope {
+            ResourceScope::Cluster => vec![None],
+            ResourceScope::Namespaced => review_targets(scope),
+        };
+        let decisions = try_join_all(namespaces.into_iter().map(|namespace| {
+            self.review_attributes(custom_resource_attributes(resource, namespace))
+        }))
+        .await?;
+        Ok(first_denial(decisions))
+    }
+
+    async fn review_attributes(
+        &self,
+        attributes: ResourceAttributes,
+    ) -> Result<AccessDecision, ClusterError> {
         let api = Api::<SelfSubjectAccessReview>::all(self.client().clone());
         let review = SelfSubjectAccessReview {
             spec: SelfSubjectAccessReviewSpec {
-                resource_attributes: Some(resource_attributes(check, namespace)),
+                resource_attributes: Some(attributes),
                 non_resource_attributes: None,
             },
             ..Default::default()
@@ -316,10 +356,7 @@ impl ClusterConnection {
                 api.create(&PostParams::default(), &review),
             )
             .await?;
-        Ok(AccessReview {
-            check,
-            decision: access_decision(response.status),
-        })
+        Ok(access_decision(response.status))
     }
 }
 
@@ -348,6 +385,30 @@ fn resource_attributes(check: AccessCheck, namespace: Option<&str>) -> ResourceA
         verb: Some(target.verb.to_owned()),
         ..Default::default()
     }
+}
+
+/// The `list` question for a custom resource; `namespace` is ignored for cluster-scoped ones.
+fn custom_resource_attributes(
+    resource: &CustomResourceType,
+    namespace: Option<&str>,
+) -> ResourceAttributes {
+    ResourceAttributes {
+        group: Some(resource.group.clone()),
+        namespace: namespace
+            .filter(|_| resource.scope == ResourceScope::Namespaced)
+            .map(str::to_owned),
+        resource: Some(resource.plural.clone()),
+        verb: Some("list".to_owned()),
+        ..Default::default()
+    }
+}
+
+/// Allowed only when every decision allows; else the first denial.
+fn first_denial(decisions: Vec<AccessDecision>) -> AccessDecision {
+    decisions
+        .into_iter()
+        .find(|decision| *decision != AccessDecision::Allowed)
+        .unwrap_or(AccessDecision::Allowed)
 }
 
 fn access_decision(status: Option<SubjectAccessReviewStatus>) -> AccessDecision {
@@ -385,9 +446,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 34);
+        assert_eq!(AccessCheck::ALL.len(), 35);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 34);
+        assert_eq!(distinct.len(), 35);
     }
 
     #[test]
@@ -608,6 +669,7 @@ mod tests {
                 "list clusterroles",
                 "list rolebindings",
                 "list clusterrolebindings",
+                "list customresourcedefinitions",
             ]
         );
     }
@@ -730,7 +792,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 34);
+        assert_eq!(AccessCheck::ALL.len(), 35);
     }
 
     #[test]
@@ -752,5 +814,82 @@ mod tests {
         );
         let several = NamespaceScope::of_namespaces(["b".to_owned(), "a".to_owned()]);
         assert_eq!(review_targets(&several), [Some("a"), Some("b")]);
+    }
+
+    fn custom_type(scope: ResourceScope) -> CustomResourceType {
+        CustomResourceType {
+            group: "cert-manager.io".to_owned(),
+            version: "v1".to_owned(),
+            kind: "Certificate".to_owned(),
+            plural: "certificates".to_owned(),
+            scope,
+        }
+    }
+
+    #[test]
+    fn crd_check_targets_apiextensions_cluster_scope() {
+        let attributes = resource_attributes(AccessCheck::ListCustomResourceDefinitions, Some("a"));
+        assert_eq!(attributes.group.as_deref(), Some("apiextensions.k8s.io"));
+        assert_eq!(
+            attributes.resource.as_deref(),
+            Some("customresourcedefinitions")
+        );
+        assert_eq!(attributes.verb.as_deref(), Some("list"));
+        assert_eq!(attributes.namespace, None);
+        assert_eq!(
+            AccessCheck::ListCustomResourceDefinitions.to_string(),
+            "list customresourcedefinitions"
+        );
+    }
+
+    #[test]
+    fn custom_review_asks_list_only() {
+        let attributes =
+            custom_resource_attributes(&custom_type(ResourceScope::Namespaced), Some("shop"));
+        assert_eq!(attributes.verb.as_deref(), Some("list"));
+        assert_eq!(attributes.group.as_deref(), Some("cert-manager.io"));
+        assert_eq!(attributes.resource.as_deref(), Some("certificates"));
+        assert_eq!(attributes.subresource, None);
+        assert_eq!(attributes.namespace.as_deref(), Some("shop"));
+    }
+
+    #[test]
+    fn custom_review_runs_per_namespace_for_several() {
+        let several = NamespaceScope::of_namespaces(["b".to_owned(), "a".to_owned()]);
+        let targets = review_targets(&several);
+        let namespaces: Vec<_> = targets
+            .into_iter()
+            .map(|namespace| {
+                custom_resource_attributes(&custom_type(ResourceScope::Namespaced), namespace)
+                    .namespace
+            })
+            .collect();
+        assert_eq!(namespaces, [Some("a".to_owned()), Some("b".to_owned())]);
+    }
+
+    #[test]
+    fn custom_review_ignores_scope_for_cluster_resources() {
+        let attributes =
+            custom_resource_attributes(&custom_type(ResourceScope::Cluster), Some("shop"));
+        assert_eq!(attributes.namespace, None);
+    }
+
+    #[test]
+    fn first_custom_denial_wins() {
+        let denied = |reason: &str| AccessDecision::Denied {
+            reason: Some(reason.to_owned()),
+        };
+        assert_eq!(
+            first_denial(vec![
+                AccessDecision::Allowed,
+                denied("first"),
+                denied("second")
+            ]),
+            denied("first")
+        );
+        assert_eq!(
+            first_denial(vec![AccessDecision::Allowed]),
+            AccessDecision::Allowed
+        );
     }
 }

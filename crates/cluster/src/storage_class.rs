@@ -3,23 +3,13 @@ use k8s_openapi::api::storage::v1::StorageClass;
 use kube::Api;
 
 use crate::connection::ClusterConnection;
+use crate::object_yaml::is_secret_key;
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::label_terms;
 
 const DEFAULT_ANNOTATIONS: [&str; 2] = [
     "storageclass.kubernetes.io/is-default-class",
     "storageclass.beta.kubernetes.io/is-default-class",
-];
-/// Parameter-name fragments that mark a plaintext credential (after normalizing the key).
-const SECRET_FRAGMENTS: [&str; 8] = [
-    "password",
-    "passwd",
-    "token",
-    "credential",
-    "secretkey",
-    "accesskey",
-    "userkey",
-    "privatekey",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,7 +80,7 @@ pub(crate) fn storage_class_summary(class: &StorageClass) -> StorageClassSummary
             .flatten()
             .map(|(key, value)| StorageParameter {
                 key: key.clone(),
-                value: (!is_secret_parameter(key)).then(|| value.clone()),
+                value: (!is_secret_key(key)).then(|| value.clone()),
             })
             .collect(),
         mount_options: class
@@ -117,25 +107,9 @@ fn is_default_class(class: &StorageClass) -> bool {
 /// `password=`); any other option is returned as is. The same key heuristic as for parameters.
 pub(crate) fn mask_mount_option(option: &str) -> String {
     match option.split_once('=') {
-        Some((key, _)) if is_secret_parameter(key) => format!("{key}=<hidden>"),
+        Some((key, _)) if is_secret_key(key) => format!("{key}=<hidden>"),
         _ => option.to_owned(),
     }
-}
-
-/// Whether a StorageClass parameter value looks like a credential. A key-name heuristic:
-/// `*-secret-name` and `*-secret-namespace` are references and stay visible.
-pub(crate) fn is_secret_parameter(key: &str) -> bool {
-    let normalized: String = key
-        .chars()
-        .filter(|ch| !matches!(ch, '-' | '_' | '.'))
-        .flat_map(char::to_lowercase)
-        .collect();
-    if normalized.ends_with("secretname") || normalized.ends_with("secretnamespace") {
-        return false;
-    }
-    SECRET_FRAGMENTS
-        .iter()
-        .any(|fragment| normalized.contains(fragment))
 }
 
 #[cfg(test)]

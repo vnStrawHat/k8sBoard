@@ -569,3 +569,234 @@ fn secret_yaml_hides_data_values() {
     assert!(!text.contains("data-distinctive"));
     assert!(text.contains("password: <hidden>"));
 }
+
+// Custom resources
+
+fn custom_text(object: Value) -> String {
+    to_masked_custom_yaml(object, EnvValues::Hidden)
+        .expect("fixture serializes")
+        .text
+}
+
+fn custom_type(scope: ResourceScope) -> CustomResourceType {
+    CustomResourceType {
+        group: "example.io".to_owned(),
+        version: "v1".to_owned(),
+        kind: "Widget".to_owned(),
+        plural: "widgets".to_owned(),
+        scope,
+    }
+}
+
+#[test]
+fn crd_kind_has_name_and_cluster_scope() {
+    let kind = ObjectKind::CustomResourceDefinition;
+    assert_eq!(kind.name(), "CustomResourceDefinition");
+    assert!(!kind.is_namespaced());
+    let resource = api_resource(kind);
+    assert_eq!(resource.group, "apiextensions.k8s.io");
+    assert_eq!(resource.version, "v1");
+    assert_eq!(resource.plural, "customresourcedefinitions");
+    assert!(ObjectRef::new(kind, None, "x.example.io".to_owned()).is_some());
+    assert!(ObjectRef::new(kind, Some("ns".to_owned()), "x.example.io".to_owned()).is_none());
+}
+
+#[test]
+fn client_secret_and_api_key_are_hidden() {
+    for key in [
+        "clientSecret",
+        "apiKey",
+        "passphrase",
+        "bearerToken",
+        "access_key",
+        "private-key",
+        "dbPassword",
+        "adminPasswd",
+        "serviceCredentials",
+        "restuserkey",
+        "clientKey",
+        "kubeconfig",
+        "connectionString",
+    ] {
+        assert!(is_secret_key(key), "{key}");
+    }
+}
+
+#[test]
+fn secret_refs_stay_readable() {
+    for key in [
+        "secretRef",
+        "passwordSecretRef",
+        "tokenSecretRefs",
+        "secretName",
+        "csi.storage.k8s.io/provisioner-secret-name",
+        "csi.storage.k8s.io/node-stage-secret-namespace",
+        "imagePullSecretRefs",
+        "clientKeySecretRef",
+        "clientKeyRef",
+        "kmsKeyId",
+        "type",
+        "fsType",
+        "host",
+    ] {
+        assert!(!is_secret_key(key), "{key}");
+    }
+}
+
+#[test]
+fn custom_ref_requires_matching_scope() {
+    let name = || "x".to_owned();
+    let namespaced = custom_type(ResourceScope::Namespaced);
+    let cluster = custom_type(ResourceScope::Cluster);
+    assert!(ObjectRef::custom(namespaced.clone(), Some("ns".to_owned()), name()).is_some());
+    assert!(ObjectRef::custom(namespaced, None, name()).is_none());
+    assert!(ObjectRef::custom(cluster.clone(), None, name()).is_some());
+    assert!(ObjectRef::custom(cluster, Some("ns".to_owned()), name()).is_none());
+}
+
+#[test]
+fn custom_yaml_hides_secret_like_keys() {
+    let text = custom_text(json!({
+        "apiVersion": "example.io/v1",
+        "kind": "Widget",
+        "metadata": {"name": "w", "namespace": "shop"},
+        "spec": {
+            "clientSecret": "distinctive-1",
+            "nested": {"apiKey": "distinctive-2", "port": 8080, "secretRef": {"name": "creds"}},
+            "tokens": ["distinctive-3", "distinctive-4"],
+            "pin": 1234,
+            "adminPassword": 98765,
+            "replicas": 3,
+        },
+    }));
+    assert!(!text.contains("distinctive"), "{text}");
+    assert!(!text.contains("98765"), "{text}");
+    assert!(text.contains("name: creds"), "{text}");
+    assert!(text.contains("port: 8080"), "{text}");
+    assert!(text.contains("replicas: 3"), "{text}");
+    assert!(text.contains("pin: 1234"), "{text}");
+    assert!(
+        text.starts_with("# k8sBoard hid 5 values as <hidden>."),
+        "{text}"
+    );
+}
+
+#[test]
+fn secret_like_kinds_hide_all_scalars_but_status() {
+    let text = custom_text(json!({
+        "apiVersion": "example.io/v1",
+        "kind": "ClusterSecret",
+        "metadata": {"name": "shared", "labels": {"team": "ops"}},
+        "data": {"password": "distinctive-1", "user": "distinctive-2", "count": 7},
+        "spec": {"match": "distinctive-3", "enabled": true, "empty": {}},
+        "status": {"phase": "Synced", "syncedAt": "2026-01-01T00:00:00Z", "apiKey": "distinctive-4"},
+    }));
+    assert!(!text.contains("distinctive"), "{text}");
+    assert!(text.contains("name: shared"), "{text}");
+    assert!(text.contains("team: ops"), "{text}");
+    assert!(text.contains("kind: ClusterSecret"), "{text}");
+    assert!(text.contains("enabled: true"), "{text}");
+    assert!(text.contains("phase: Synced"), "{text}");
+    assert!(text.contains("syncedAt: "), "{text}");
+    // Keys stay, so the shape of the data is still visible.
+    assert!(text.contains("password: <hidden>"), "{text}");
+    assert!(text.contains("count: <hidden>"), "{text}");
+}
+
+#[test]
+fn url_userinfo_is_hidden() {
+    assert_eq!(
+        mask_url_userinfo("postgres://u:p@db:5432/x").as_deref(),
+        Some("postgres://<hidden>@db:5432/x")
+    );
+    assert_eq!(
+        mask_url_userinfo("a https://u:p@one/x and amqp://v@two").as_deref(),
+        Some("a https://<hidden>@one/x and amqp://<hidden>@two")
+    );
+    assert_eq!(
+        mask_url_userinfo("https://a@b@host/path").as_deref(),
+        Some("https://<hidden>@host/path")
+    );
+    let text = custom_text(json!({
+        "apiVersion": "example.io/v1",
+        "kind": "Widget",
+        "metadata": {"name": "w"},
+        "spec": {"dsn": "postgres://svc:distinctive-1@db:5432/x"},
+    }));
+    assert!(!text.contains("distinctive"), "{text}");
+    assert!(text.contains("postgres://<hidden>@db:5432/x"), "{text}");
+}
+
+#[test]
+fn urls_without_userinfo_are_unchanged() {
+    for text in [
+        "https://example.com/a@b",
+        "https://example.com?mail=a@b",
+        "https://example.com#frag@x",
+        "postgres://db:5432/x",
+        "no url here, a@b",
+        "https://<hidden>@host/x",
+    ] {
+        assert_eq!(mask_url_userinfo(text), None, "{text}");
+    }
+}
+
+#[test]
+fn custom_masking_counts_toward_header() {
+    let object = json!({
+        "kind": "Widget",
+        "metadata": {"name": "w", "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "{}"}},
+        "spec": {
+            "password": "p",
+            "dsn": "redis://u:p@h",
+            "containers": [{"name": "c", "env": [{"name": "A", "value": "literal"}]}],
+        },
+    });
+    // Annotation, env literal, password, and DSN: the env literal is not counted twice.
+    let yaml = to_masked_custom_yaml(object, EnvValues::Hidden).expect("serializes");
+    assert!(
+        yaml.text
+            .starts_with("# k8sBoard hid 4 values as <hidden>."),
+        "{}",
+        yaml.text
+    );
+    assert_eq!(yaml.hidden_env_values, 1);
+}
+
+#[test]
+fn builtin_yaml_is_unchanged_by_custom_rules() {
+    let object = json!({
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": "settings"},
+        "data": {"password": "shown-as-before", "url": "https://u:p@host/x"},
+    });
+    let text = masked_text(object);
+    assert!(text.contains("password: shown-as-before"), "{text}");
+    assert!(text.contains("https://u:p@host/x"), "{text}");
+    assert!(!text.contains("<hidden>"), "{text}");
+}
+
+#[test]
+fn env_style_pairs_hide_secret_named_values_in_custom_yaml() {
+    let text = custom_text(json!({
+        "apiVersion": "example.io/v1",
+        "kind": "Widget",
+        "metadata": {"name": "w"},
+        "spec": {
+            "extraEnv": [
+                {"name": "DB_PASSWORD", "value": "distinctive-1"},
+                {"name": "LOG_LEVEL", "value": "debug"},
+                {"name": "PIN_TOKEN", "value": 4242},
+            ],
+            "param": {"name": "clientSecret", "value": "distinctive-2"},
+        },
+    }));
+    assert!(!text.contains("distinctive"), "{text}");
+    assert!(!text.contains("4242"), "{text}");
+    assert!(text.contains("value: debug"), "{text}");
+    assert!(
+        text.starts_with("# k8sBoard hid 3 values as <hidden>."),
+        "{text}"
+    );
+}

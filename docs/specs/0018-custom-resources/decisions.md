@@ -67,12 +67,14 @@
 - Events match custom objects by `kind` only; a custom kind named like a builtin (`Service` in another group) shares event matches, and `from_object_kind` routes its Go to object to the builtin screen.
 - Cluster-wide counts need cluster-wide `list`; a namespace-limited user gets no Instances.
 - Masking heuristics miss credentials under innocuous keys (`config: "user=a password=b"`).
+- `is_secret_kind` over-hides reference-only kinds such as `ExternalSecret` and `SecretStore`: every scalar outside `status` reads `<hidden>`, including the names and keys they only reference.
+- `is_secret_key` false negatives remain: keys such as `auth`, `webhookUrl`, `signingKey`, `encryptionKey`, `sshKey`, `hmacKey`; DSNs without a scheme; credentials in `?password=` query strings (S4 hides userinfo only).
 
 ## UAT probe (`--crds`, filled by coder-lite in 1a and 1b)
 
 | Item | Result |
 |---|---|
-| `list customresourcedefinitions` | TBD |
-| CRDs / Established | TBD |
-| Unsupported printer columns | TBD (names only) |
-| First CRD: access, count, watch, yaml | TBD (1b) |
+| `list customresourcedefinitions` | allowed (access line; `count customresourcedefinitions` 72) |
+| CRDs / Established | 72 / 72 (every CRD has a served version) |
+| Unsupported printer columns | 0 of 183 columns in 72 CRDs (names only; none to list) |
+| First CRD with instances: access, count, watch, yaml | `applications.argoproj.io`: access allowed, count 10, watch 10 objects with 31 of 40 column values filled, yaml 253 lines, masked yes. The first ten CRDs were all listable (10 allowed); counts 10, 0, 1, 1, 0, 0, 4, 0, 7, 0 |

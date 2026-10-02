@@ -5,11 +5,14 @@ mod access_review;
 mod autoscaler;
 mod cadvisor_text;
 mod certificate;
+mod column_path;
 mod config_map;
 mod connection;
 mod container_spec;
 mod cron_job;
 mod cron_schedule;
+mod custom_object;
+mod custom_resource_definition;
 mod daemon_set;
 mod deployment;
 mod disruption_budget;
@@ -62,6 +65,14 @@ pub use container_spec::{
 };
 pub use cron_job::CronJobSummary;
 pub use cron_schedule::{CronSchedule, ScheduleError};
+pub use custom_object::{
+    ColumnValue, CustomObjectFields, CustomObjectSummary, FieldEntry, FieldList, FieldValue,
+    ObjectCondition,
+};
+pub use custom_resource_definition::{
+    ColumnType, CrdState, CrdSummary, CrdVersion, CustomResourceType, PrinterColumn, ResourceScope,
+    SchemaField, SchemaOutline,
+};
 pub use daemon_set::DaemonSetSummary;
 pub use deployment::DeploymentSummary;
 pub use disruption_budget::{BlockCause, DisruptionState, PodDisruptionBudgetSummary};

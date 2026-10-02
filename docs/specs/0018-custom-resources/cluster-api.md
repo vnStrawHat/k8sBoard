@@ -71,18 +71,18 @@ impl ClusterConnection {
     pub fn watch_custom_objects(&self, resource: &CustomResourceType, columns: &[PrinterColumn], scope: NamespaceScope)
         -> impl Stream<Item = WatchUpdate<CustomObjectSummary>> + Send + 'static;
     /// Snapshots of 0 or 1 item.
-    pub fn watch_custom_object_fields(&self, resource: &CustomResourceType, namespace: Option<&str>, name: &str)
+    pub fn watch_custom_object_fields(&self, object: &ObjectRef)
         -> impl Stream<Item = WatchUpdate<CustomObjectFields>> + Send + 'static;
     /// Cluster-wide, whatever the explorer scope (decision 31).
     pub async fn count_custom_objects(&self, resource: &CustomResourceType) -> Result<Option<u64>, ClusterError>;
 }
 ```
 
-- APIs: `scoped_dynamic_apis(&scope, &api_resource)` for namespaced resources; one `Api::all_with` for cluster-scoped ones (scope ignored). `api_resource(&CustomResourceType) -> ApiResource` is one private helper shared with `object_yaml.rs`.
-- Objects watch: config `MostRecent` + `page_size(50)`; columns compiled once (`ColumnPath::parse`), moved into the summarizer closure (decision 10). Action `watching {plural}.{group}`.
-- Fields watch: `Api` namespaced or all, config `.fields("metadata.name={name}")`, same page size; summarizer `object_fields` ([custom-object-safety.md](custom-object-safety.md) rules apply to every value).
+- APIs: `scoped_dynamic_apis(&scope, &api_resource)` for namespaced resources; one `Api::all_with` for cluster-scoped ones (scope ignored). `custom_api_resource(&CustomResourceType) -> ApiResource` is one `pub(crate)` helper shared with `object_yaml.rs`.
+- Objects watch: config `MostRecent` + `page_size(50)`; columns compiled once (`ColumnPath::parse`), moved into the summarizer closure (decision 10). Fixed action `watching custom resources` (`ClusterError.action` is `&'static str`, so the text cannot name the resource; the app adds that context).
+- Fields watch: `watch_custom_object_fields(&self, object: &ObjectRef)` reads the resource, namespace, and name from a custom `ObjectRef` (which already enforces the scope; a built-in ref yields one empty snapshot), fixed action `watching a custom resource`; `Api` namespaced or all, config `.fields("metadata.name={name}")`, same page size; summarizer `object_fields` ([custom-object-safety.md](custom-object-safety.md) rules apply to every value).
 - `object_fields` flattening: walk `spec` and `status` (skip `status.conditions`); key order; path depth ≤ 3; scalar → `Text` (strings as is, numbers and booleans as JSON text, `null` skipped); array of scalars → `Text` of the first 5 joined `, ` plus ` +{n}`; array with an object → `Items(len)`; object at depth 3 → `Fields(len)`; empty object or array skipped; text cut at 200 chars with `…`; at most 60 entries per side, the rest counted in `omitted`.
-- Counts: 0012's private count params (`limit=1`, no resource version), `list_metadata` on one `Api::all_with` (one request per CRD); action `counting {plural}.{group}`.
+- Counts: 0012's private count params (`limit=1`, no resource version), `list_metadata` on one `Api::all_with` (one request per CRD); fixed action `counting custom resources` (same reason).
 
 ## Access (`access_review.rs`)
 

@@ -48,15 +48,16 @@ impl<T> Copy for StoreLimit<T> {}
 /// Watches `apis` and streams batched snapshots of `summarize`d objects. One api streams
 /// as is; several are merged into one snapshot stream (see `merge_snapshots`). Nothing
 /// happens until the stream is polled, and dropping it drops every HTTP watch.
-pub(crate) fn summary_watch<K, T>(
+pub(crate) fn summary_watch<K, T, F>(
     connection: &ClusterConnection,
     apis: Vec<ScopedApi<K>>,
     action: &'static str,
-    summarize: fn(&K) -> T,
+    summarize: F,
 ) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
 where
     K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
     T: Clone + PartialEq + Send + 'static,
+    F: Fn(&K) -> T + Clone + Send + 'static,
 {
     selected_summary_watch(
         connection,
@@ -69,16 +70,17 @@ where
 
 /// Like `summary_watch`, with a server-side `config` (a selector or a field selector) and no
 /// store limit: for drawer-scoped watches whose result is small by construction.
-pub(crate) fn selected_summary_watch<K, T>(
+pub(crate) fn selected_summary_watch<K, T, F>(
     connection: &ClusterConnection,
     apis: Vec<ScopedApi<K>>,
     config: watcher::Config,
     action: &'static str,
-    summarize: fn(&K) -> T,
+    summarize: F,
 ) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
 where
     K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
     T: Clone + PartialEq + Send + 'static,
+    F: Fn(&K) -> T + Clone + Send + 'static,
 {
     watch_apis(connection, apis, config, action, summarize, None)
 }
@@ -109,32 +111,34 @@ where
 
 /// Like `summary_watch`, with a server-side `config` and a store that keeps only the
 /// `limit.max_items` most recent summaries.
-pub(crate) fn limited_summary_watch<K, T>(
+pub(crate) fn limited_summary_watch<K, T, F>(
     connection: &ClusterConnection,
     apis: Vec<ScopedApi<K>>,
     config: watcher::Config,
     action: &'static str,
-    summarize: fn(&K) -> T,
+    summarize: F,
     limit: StoreLimit<T>,
 ) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
 where
     K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
     T: Clone + PartialEq + Send + 'static,
+    F: Fn(&K) -> T + Clone + Send + 'static,
 {
     watch_apis(connection, apis, config, action, summarize, Some(limit))
 }
 
-fn watch_apis<K, T>(
+fn watch_apis<K, T, F>(
     connection: &ClusterConnection,
     apis: Vec<ScopedApi<K>>,
     config: watcher::Config,
     action: &'static str,
-    summarize: fn(&K) -> T,
+    summarize: F,
     limit: Option<StoreLimit<T>>,
 ) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
 where
     K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
     T: Clone + PartialEq + Send + 'static,
+    F: Fn(&K) -> T + Clone + Send + 'static,
 {
     let mut watches: Vec<_> = apis
         .into_iter()
@@ -144,7 +148,7 @@ where
                 events,
                 connection.context().to_owned(),
                 action,
-                summarize,
+                summarize.clone(),
                 limit,
             );
             (namespace.unwrap_or_default(), updates.boxed())
@@ -158,17 +162,18 @@ where
 }
 
 /// The testable core: any source of watcher events works, including fakes.
-fn batch_updates<K, T, S>(
+fn batch_updates<K, T, S, F>(
     events: S,
     context: String,
     action: &'static str,
-    summarize: fn(&K) -> T,
+    summarize: F,
     limit: Option<StoreLimit<T>>,
 ) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
 where
     S: Stream<Item = Result<Event<K>, watcher::Error>> + Send + 'static,
     K: kube::Resource + Send + 'static,
     T: Clone + PartialEq + Send + 'static,
+    F: Fn(&K) -> T + Clone + Send + 'static,
 {
     let batcher = Batcher {
         events: Box::pin(events),
@@ -189,11 +194,11 @@ where
     })
 }
 
-struct Batcher<K, T, S> {
+struct Batcher<T, S, F> {
     events: Pin<Box<S>>,
     context: String,
     action: &'static str,
-    summarize: fn(&K) -> T,
+    summarize: F,
     store: SummaryStore<T>,
     /// The first `InitDone` was seen. Nothing is emitted before it.
     is_synced: bool,
@@ -207,11 +212,12 @@ struct Batcher<K, T, S> {
     outbox: VecDeque<WatchUpdate<T>>,
 }
 
-impl<K, T, S> Batcher<K, T, S>
+impl<K, T, S, F> Batcher<T, S, F>
 where
     S: Stream<Item = Result<Event<K>, watcher::Error>>,
     K: kube::Resource,
     T: Clone + PartialEq,
+    F: Fn(&K) -> T,
 {
     async fn next_update(&mut self) -> Option<WatchUpdate<T>> {
         loop {
