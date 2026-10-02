@@ -70,13 +70,13 @@
 | File | Test | Verifies |
 |---|---|---|
 | `log_workload.rs` | `container_names_union_in_first_seen_order_init_last` | |
-| `log_target.rs` | `no_log_target_displays_reason` | `Not connected`, `Select a pod or workload` |
+| `log_tab.rs` | `toggled_selection_keeps_offer_order_and_the_last_container` | the picker toggle keeps the offer order; the last checked container stays |
 | `launch_options_tests.rs` | `parses_logs_workload_screen` | |
 | `screenshot.rs` | `controller_owner_of_maps_known_kinds` | ReplicaSet, StatefulSet, DaemonSet, Job; others `None` |
 
 ## Step 3
 
-Moved here from steps 1 and 2a (they need code that lands in step 3): `revision_bumps_on_push_clear_and_view` and `visible_text_writes_prefixes_and_rfc3339_time` (`LogBuffer::revision`, `LineTime::Rfc3339`), and `log_target_of_container_is_explicit` (`ContainerChoice`, `LogTarget::of_container`, `TabStream.full_prefix`).
+Moved here from steps 1, 2a, and 2b (they need code that lands in step 3): `no_log_target_displays_reason` (`NoLogTarget`, `selected_log_target`), `revision_bumps_on_push_clear_and_view` and `visible_text_writes_prefixes_and_rfc3339_time` (`LogBuffer::revision`, `LineTime::Rfc3339`), and `log_target_of_container_is_explicit` (`ContainerChoice`, `LogTarget::of_container`, `TabStream.full_prefix`).
 
 | File | Test | Verifies |
 |---|---|---|
@@ -87,6 +87,8 @@ Moved here from steps 1 and 2a (they need code that lands in step 3): `revision_
 | | `volume_without_two_timestamps_is_none` | |
 | | `bucket_label_formats_by_width` | |
 | `log_export.rs` | `export_file_name_sanitizes_label_and_stamps_utc` | `deploy/api` + 2024-05-01T10:47:58Z → `deploy_api-20240501-104758Z.log` |
+| | `export_state_is_busy_while_choosing_or_saving` | |
+| `log_volume.rs` | `width_label_names_the_unit` | the caption unit |
 | `log_dock.rs` | `move_tab_keeps_active_tab_active` | forward and backward moves |
 | | `move_tab_ignores_same_or_out_of_range_index` | |
 | `container_detail_tests.rs` | `container_tabs_put_logs_before_monitor` | `CONTAINER_TABS` order |

@@ -762,6 +762,29 @@ fn view_tab_item(
     })
 }
 
+/// Why the logs of a container cannot be opened, or `None` when they can. Without a live session
+/// there is nothing to read from.
+pub(crate) fn view_logs_reason(live: Option<&LiveCluster>) -> Option<SharedString> {
+    let Some(live) = live else {
+        return Some(READ_ONLY_MODE_REASON.into());
+    };
+    match action_availability(ResourceAction::ViewLogs, &live.access) {
+        ActionAvailability::Disabled { reason } => Some(reason),
+        ActionAvailability::Enabled => None,
+    }
+}
+
+/// Why "Shell into selected" is disabled. A shell is never available in this version.
+pub(crate) fn open_shell_reason(live: Option<&LiveCluster>) -> SharedString {
+    let Some(live) = live else {
+        return READ_ONLY_MODE_REASON.into();
+    };
+    match action_availability(ResourceAction::OpenShell, &live.access) {
+        ActionAvailability::Disabled { reason } => reason,
+        ActionAvailability::Enabled => READ_ONLY_FEATURE_REASON.into(),
+    }
+}
+
 /// The tooltip of a disabled Forward button. Port-forward is never enabled in this version.
 pub(crate) fn port_forward_reason(access: &AccessState) -> SharedString {
     match action_availability(ResourceAction::PortForward, access) {

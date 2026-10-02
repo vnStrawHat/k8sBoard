@@ -1,6 +1,7 @@
 //! One log view: a pod container or every pod of a workload. Toolbar, streams, merge, and the
 //! line list.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use cluster::{ClusterConnection, LogRequest, LogSource, LogUpdate, NamespaceScope, PodSummary};
@@ -11,9 +12,9 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, Hsla, IntoElement,
+    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, IntoElement,
     ParentElement as _, Render, SharedString, StyleRefinement, Styled as _, Subscription, Task,
     WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
@@ -23,11 +24,15 @@ use crate::cluster_session::{ClusterSession, error_text};
 use crate::kind_row::PodOwner;
 use crate::line_matcher::{FilterMode, InvalidRegex, LineMatcher};
 use crate::log_buffer::{LineTime, LineView, LogBuffer, SourceId, SourcedLine};
+use crate::log_export::{ExportState, export_file_name, start_export};
+use crate::log_legend::{LegendChip, legend_row, pod_color};
 use crate::log_level::{LevelSet, LogLevel};
 use crate::log_rows::{RowPrefix, RowStyle, log_row};
 use crate::log_target::{LogTarget, PodTarget, WorkloadTarget};
+use crate::log_volume::{Volume, volume, volume_chart};
 use crate::log_workload::{
-    MemberChange, join_slots, member_change, pod_short_name, ranked_pods, scope_covers,
+    MemberChange, container_names, join_slots, member_change, pod_short_name, ranked_pods,
+    scope_covers,
 };
 use crate::pod_drawer::{default_container, kind_tag_text};
 use crate::status_tone::{StatusTone, tone_color};
@@ -43,8 +48,13 @@ const MERGE_WINDOW: Duration = Duration::from_secs(2);
 /// long its streams may still deliver them.
 const LEAVE_GRACE: Duration = Duration::from_secs(10);
 const MAX_STAGING_BYTES: usize = 8 * 1024 * 1024;
-/// `chart_1..chart_5`.
-const POD_COLOR_SLOTS: usize = 5;
+
+/// Compact is the docked tab; Full (the zoomed dock) adds the pod legend and the histogram.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LogLayout {
+    Compact,
+    Full,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LogInstance {
@@ -151,6 +161,8 @@ struct TabStream {
     pod: String,
     /// `{short}/{container}`, as shown on screen.
     prefix: SharedString,
+    /// `{pod}/{container}`, as written by Export.
+    full_prefix: SharedString,
     color_slot: usize,
     /// The pod is still listed; a leaver keeps streaming until its grace ends.
     is_member: bool,
@@ -183,6 +195,8 @@ struct WorkloadSubject {
     members: Vec<String>,
     /// The containers every member streams; empty until a pod is listed.
     selected: Vec<String>,
+    /// The container names the picker offers, over the pods of the workload.
+    offered: Vec<String>,
     /// The namespace filter no longer covers the workload, so membership stays as it was.
     is_frozen: bool,
     _pods_observer: Subscription,
@@ -204,6 +218,13 @@ pub(crate) struct LogTab {
     staging: Option<Staging>,
     /// The color slot of each pod name, in join order; a returning pod keeps its slot.
     pod_slots: Vec<String>,
+    layout: LogLayout,
+    /// The histogram of the visible lines, computed for the buffer revision it carries.
+    volume_memo: Option<(u64, Option<Rc<Volume>>)>,
+    export_state: ExportState,
+    /// The line count of the last saved export, for the status text.
+    exported_lines: usize,
+    _export: Option<Task<()>>,
     filter_input: Entity<InputState>,
     scroller: Entity<MessageScrollerState>,
     _filter_events: Subscription,
@@ -233,6 +254,7 @@ impl LogTab {
                 session: session.downgrade(),
                 members: Vec::new(),
                 selected: Vec::new(),
+                offered: Vec::new(),
                 is_frozen: false,
                 _pods_observer: cx.observe(session, |tab, _, cx| tab.sync_members(cx)),
             }),
@@ -251,6 +273,11 @@ impl LogTab {
             streams: Vec::new(),
             staging: None,
             pod_slots: Vec::new(),
+            layout: LogLayout::Compact,
+            volume_memo: None,
+            export_state: ExportState::Idle,
+            exported_lines: 0,
+            _export: None,
             filter_input,
             scroller,
             _filter_events: filter_events,
@@ -299,6 +326,12 @@ impl LogTab {
         self.streams.clear();
         self.staging = None;
         self.pod_slots.clear();
+        // A save in flight finishes: dropping its task would cut the file short and hide the
+        // result.
+        if self.export_state != ExportState::Saving {
+            self.export_state = ExportState::Idle;
+            self._export = None;
+        }
         if let LogSubject::Workload(workload) = &mut self.subject {
             workload.members.clear();
         }
@@ -316,6 +349,7 @@ impl LogTab {
                     pod: target.pod.clone(),
                     container: container.clone(),
                     prefix: SharedString::from(format!("{}/{container}", target.pod)),
+                    full_prefix: SharedString::from(format!("{}/{container}", target.pod)),
                     color_slot: 0,
                     tail_lines: POD_TAIL_LINES,
                 };
@@ -357,6 +391,7 @@ impl LogTab {
         self.streams.push(TabStream {
             pod: open.pod,
             prefix: open.prefix,
+            full_prefix: open.full_prefix,
             color_slot: open.color_slot,
             is_member: true,
             state: LogStreamState::Connecting,
@@ -460,6 +495,10 @@ impl LogTab {
             return;
         }
         workload.selected = plan.selected;
+        if workload.offered != plan.offered {
+            workload.offered = plan.offered;
+            has_changed = true;
+        }
         workload
             .members
             .retain(|member| !plan.change.left.contains(member));
@@ -492,6 +531,7 @@ impl LogTab {
                     namespace: admission.namespace.clone(),
                     pod: admission.pod.clone(),
                     prefix: SharedString::from(format!("{short}/{container}")),
+                    full_prefix: SharedString::from(format!("{}/{container}", admission.pod)),
                     container,
                     color_slot,
                     tail_lines,
@@ -591,7 +631,7 @@ impl LogTab {
         self.refresh_view(cx);
     }
 
-    fn pick_container(&mut self, name: String, cx: &mut Context<Self>) {
+    pub(crate) fn pick_container(&mut self, name: String, cx: &mut Context<Self>) {
         let LogSubject::Pod { container, .. } = &mut self.subject else {
             return;
         };
@@ -608,6 +648,73 @@ impl LogTab {
             LogInstance::Previous => LogInstance::Current,
         };
         self.restart_stream(cx);
+    }
+
+    pub(crate) fn set_layout(&mut self, layout: LogLayout, cx: &mut Context<Self>) {
+        if self.layout == layout {
+            return;
+        }
+        self.layout = layout;
+        cx.notify();
+    }
+
+    /// The visible lines for the file: full RFC 3339 times and full `{pod}/{container}`
+    /// prefixes (a saved file must name its pods without the legend), and their count.
+    pub(crate) fn export_snapshot(&self) -> (String, usize) {
+        // A pod tab has one source and no prefix column.
+        let prefixes: Vec<SharedString> = if self.is_workload() {
+            self.streams
+                .iter()
+                .map(|stream| stream.full_prefix.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut text = self.buffer.visible_text(LineTime::Rfc3339, &prefixes);
+        text.push('\n');
+        (text, self.buffer.visible_len())
+    }
+
+    pub(crate) fn set_export_state(&mut self, state: ExportState, cx: &mut Context<Self>) {
+        self.export_state = state;
+        cx.notify();
+    }
+
+    pub(crate) fn set_exported_lines(&mut self, lines: usize) {
+        self.exported_lines = lines;
+    }
+
+    /// Opens the save dialog; nothing is written unless the user confirms a path.
+    fn export(&mut self, cx: &mut Context<Self>) {
+        if self.export_state.is_busy() || self.buffer.visible_len() == 0 {
+            return;
+        }
+        let label = match &self.subject {
+            LogSubject::Pod { target, container } => format!("{}-{container}", target.pod),
+            LogSubject::Workload(workload) => workload.target.label.clone(),
+        };
+        let name = export_file_name(&label, jiff::Timestamp::now());
+        self.export_state = ExportState::Choosing;
+        self._export = Some(start_export(name, cx));
+        cx.notify();
+    }
+
+    /// The histogram of the visible lines; recomputed only when the buffer changed.
+    fn current_volume(&mut self) -> Option<Rc<Volume>> {
+        let revision = self.buffer.revision();
+        if let Some((memo_revision, memo)) = &self.volume_memo
+            && *memo_revision == revision
+        {
+            return memo.clone();
+        }
+        let computed = volume(
+            self.buffer
+                .visible_lines()
+                .filter_map(|line| Some((line.line.timestamp?, line.level))),
+        )
+        .map(Rc::new);
+        self.volume_memo = Some((revision, computed.clone()));
+        computed
     }
 
     /// Row heights depend on both toggles, so the list measures its rows again.
@@ -678,6 +785,15 @@ impl LogTab {
         let theme = cx.theme();
         let is_scrolled_up = self.scroller.read(cx).is_scrolled_up();
         let status = self.status_text(is_scrolled_up);
+        let status = match &self.export_state {
+            ExportState::Saved { file_name } => {
+                format!(
+                    "Saved {} lines to {file_name} · {status}",
+                    self.exported_lines
+                )
+            }
+            _ => status,
+        };
         let is_connecting = self.phase() == TabPhase::Connecting;
         h_flex()
             .flex_shrink_0()
@@ -783,6 +899,15 @@ impl LogTab {
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     })),
             )
+            .child(
+                Button::new("log-export")
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(IconName::Download))
+                    .tooltip("Export visible lines…")
+                    .disabled(self.export_state.is_busy() || self.buffer.visible_len() == 0)
+                    .on_click(cx.listener(|tab, _, _, cx| tab.export(cx))),
+            )
             .when(!is_connecting, |toolbar| {
                 toolbar.child(
                     Button::new("log-reconnect")
@@ -810,10 +935,91 @@ impl LogTab {
             )
     }
 
-    /// The pod container picker; a workload tab has none yet.
+    /// `Containers: api, worker ▾`: every member streams the checked containers.
+    fn render_workload_picker(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let LogSubject::Workload(workload) = &self.subject else {
+            return None;
+        };
+        if workload.selected.is_empty() {
+            return None;
+        }
+        let label = format!("Containers: {}", workload.selected.join(", "));
+        let tab = cx.weak_entity();
+        let offered = workload.offered.clone();
+        let selected = workload.selected.clone();
+        Some(
+            Button::new("log-containers")
+                .ghost()
+                .small()
+                .child(label)
+                .dropdown_caret(true)
+                .dropdown_menu(move |menu, _, _| {
+                    offered.iter().fold(menu, |menu, name| {
+                        let toggled = name.clone();
+                        let tab = tab.clone();
+                        menu.item(
+                            PopupMenuItem::new(name.clone())
+                                .checked(selected.contains(name))
+                                .on_click(move |_, _, cx| {
+                                    let _ = tab.update(cx, |tab, cx| {
+                                        tab.toggle_container(&toggled, cx);
+                                    });
+                                }),
+                        )
+                    })
+                })
+                .into_any_element(),
+        )
+    }
+
+    /// Checks or unchecks a container for every member and reopens the streams. The last
+    /// checked container stays.
+    fn toggle_container(&mut self, name: &str, cx: &mut Context<Self>) {
+        let LogSubject::Workload(workload) = &mut self.subject else {
+            return;
+        };
+        let Some(selected) = toggled_selection(&workload.selected, &workload.offered, name) else {
+            return;
+        };
+        workload.selected = selected;
+        self.restart_stream(cx);
+    }
+
+    /// One chip per pod name, in join order.
+    fn legend_chips(&self) -> Vec<LegendChip> {
+        let LogSubject::Workload(workload) = &self.subject else {
+            return Vec::new();
+        };
+        self.pod_slots
+            .iter()
+            .enumerate()
+            .map(|(slot, pod)| {
+                let streams: Vec<&TabStream> = self
+                    .streams
+                    .iter()
+                    .filter(|stream| stream.pod == *pod)
+                    .collect();
+                let failure = streams.iter().find_map(|stream| match &stream.state {
+                    LogStreamState::Failed { message } => Some(SharedString::from(message.clone())),
+                    _ => None,
+                });
+                LegendChip {
+                    short_name: pod_short_name(&workload.target.owner, pod)
+                        .to_owned()
+                        .into(),
+                    color_slot: slot,
+                    tone: workload_tone(streams.iter().map(|stream| &stream.state)),
+                    is_deleted: !streams.is_empty() && streams.iter().all(|s| !s.is_member),
+                    failure,
+                }
+            })
+            .collect()
+    }
+
+    /// The pod container picker, or the workload container picker.
     fn render_container_picker(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let LogSubject::Pod { target, container } = &self.subject else {
-            return None;
+            return self.render_workload_picker(cx);
         };
         let theme = cx.theme();
         let current_kind = target
@@ -951,20 +1157,45 @@ fn row_of(tab: &WeakEntity<LogTab>, index: usize, cx: &App) -> AnyElement {
 
 impl Render for LogTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let failure = match self.phase() {
-            TabPhase::Failed { message } => Some(message),
+        let stream_failure = match self.phase() {
+            TabPhase::Failed { message } => Some(("log-error", "Cannot read the logs", message)),
             _ => None,
+        };
+        let export_failure = match &self.export_state {
+            ExportState::Failed { message } => {
+                Some(("log-export-error", "Export failed", message.clone()))
+            }
+            _ => None,
+        };
+        let is_full = self.layout == LogLayout::Full;
+        let legend = match &self.subject {
+            LogSubject::Workload(workload)
+                if is_full && (!self.pod_slots.is_empty() || workload.is_frozen) =>
+            {
+                Some(legend_row(self.legend_chips(), workload.is_frozen, cx))
+            }
+            _ => None,
+        };
+        let histogram = if is_full {
+            self.current_volume()
+                .map(|volume| volume_chart(&volume, cx))
+        } else {
+            None
         };
         v_flex()
             .size_full()
+            .children(legend)
             .child(self.render_toolbar(cx))
-            .children(failure.map(|message| {
-                div()
-                    .flex_shrink_0()
-                    .px_3()
-                    .py_2()
-                    .child(Alert::error("log-error", message).title("Cannot read the logs"))
-            }))
+            .children(histogram)
+            .children([stream_failure, export_failure].into_iter().flatten().map(
+                |(id, title, message)| {
+                    div()
+                        .flex_shrink_0()
+                        .px_3()
+                        .py_2()
+                        .child(Alert::error(id, message).title(title))
+                },
+            ))
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
     }
 }
@@ -975,6 +1206,7 @@ struct StreamOpen {
     pod: String,
     container: String,
     prefix: SharedString,
+    full_prefix: SharedString,
     color_slot: usize,
     tail_lines: u32,
 }
@@ -989,6 +1221,7 @@ struct Admission {
 struct SyncPlan {
     is_frozen: bool,
     selected: Vec<String>,
+    offered: Vec<String>,
     change: MemberChange,
     admissions: Vec<Admission>,
 }
@@ -1028,6 +1261,7 @@ fn plan_membership(
         return SyncPlan {
             is_frozen: true,
             selected: Vec::new(),
+            offered: Vec::new(),
             change: MemberChange {
                 joined: Vec::new(),
                 left: Vec::new(),
@@ -1068,6 +1302,7 @@ fn plan_membership(
     SyncPlan {
         is_frozen: false,
         selected,
+        offered: container_names(&ranked),
         change,
         admissions,
     }
@@ -1088,15 +1323,30 @@ fn slot_for(pod_slots: &mut Vec<String>, pod: &str) -> usize {
     pod_slots.len() - 1
 }
 
-fn pod_color(slot: usize, cx: &App) -> Hsla {
-    let theme = cx.theme();
-    match slot % POD_COLOR_SLOTS {
-        0 => theme.chart_1,
-        1 => theme.chart_2,
-        2 => theme.chart_3,
-        3 => theme.chart_4,
-        _ => theme.chart_5,
+/// The selection after toggling `name`, kept in the order the picker offers. `None` when the
+/// last checked container would be unchecked.
+fn toggled_selection(selected: &[String], offered: &[String], name: &str) -> Option<Vec<String>> {
+    if selected.iter().any(|checked| checked == name) {
+        if selected.len() == 1 {
+            return None;
+        }
+        return Some(
+            selected
+                .iter()
+                .filter(|checked| *checked != name)
+                .cloned()
+                .collect(),
+        );
     }
+    let mut toggled = selected.to_vec();
+    toggled.push(name.to_owned());
+    toggled.sort_by_key(|checked| {
+        offered
+            .iter()
+            .position(|candidate| candidate == checked)
+            .unwrap_or(usize::MAX)
+    });
+    Some(toggled)
 }
 
 /// Stable by kubelet time, so equal times keep arrival order; lines without a time come first.
@@ -1338,6 +1588,21 @@ mod tests {
         assert!(!opens_merge_window(3, false, 1));
     }
 
+    #[test]
+    fn toggled_selection_keeps_offer_order_and_the_last_container() {
+        let offered = ["api".to_owned(), "worker".to_owned(), "setup".to_owned()];
+        let selected = ["worker".to_owned()];
+        assert_eq!(
+            toggled_selection(&selected, &offered, "api"),
+            Some(vec!["api".to_owned(), "worker".to_owned()])
+        );
+        assert_eq!(toggled_selection(&selected, &offered, "worker"), None);
+        let both = ["api".to_owned(), "worker".to_owned()];
+        assert_eq!(
+            toggled_selection(&both, &offered, "api"),
+            Some(vec!["worker".to_owned()])
+        );
+    }
     #[test]
     fn slot_for_reuses_slot_of_returning_pod() {
         let mut slots = Vec::new();

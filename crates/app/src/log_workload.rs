@@ -1,6 +1,6 @@
 //! Which pods of a workload a log tab follows, as pure functions over the pods list.
 
-use cluster::{NamespaceScope, PodSummary};
+use cluster::{ContainerKind, NamespaceScope, PodSummary};
 
 use crate::kind_row::{PodOwner, STATEFUL_SET_KIND, owns_pod};
 
@@ -83,6 +83,25 @@ pub(crate) fn scope_covers(scope: &NamespaceScope, namespace: &str) -> bool {
         NamespaceScope::Named(name) => name == namespace,
         NamespaceScope::Several(names) => names.iter().any(|name| name == namespace),
     }
+}
+
+/// Container names over `members`, in first-seen order with init containers last.
+pub(crate) fn container_names(members: &[&PodSummary]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut init_names: Vec<String> = Vec::new();
+    for container in members.iter().flat_map(|pod| &pod.containers) {
+        let group = if container.kind == ContainerKind::Init {
+            &mut init_names
+        } else {
+            &mut names
+        };
+        if !group.contains(&container.name) {
+            group.push(container.name.clone());
+        }
+    }
+    init_names.retain(|name| !names.contains(name));
+    names.extend(init_names);
+    names
 }
 
 #[cfg(test)]
@@ -261,6 +280,48 @@ mod tests {
         assert_eq!(pod_short_name(&stateful, "postgres-0"), "postgres-0");
     }
 
+    fn container(name: &str, kind: ContainerKind) -> cluster::ContainerSummary {
+        cluster::ContainerSummary {
+            name: name.to_owned(),
+            image: "img".to_owned(),
+            kind,
+            state: cluster::ContainerState::NotReported,
+            is_ready: true,
+            restart_count: 0,
+            last_termination: None,
+            image_digest: None,
+            pull_policy: None,
+            is_started: None,
+            ports: Vec::new(),
+            resources: Vec::new(),
+            probes: cluster::ContainerProbes::default(),
+            env: Vec::new(),
+            env_from: Vec::new(),
+            mounts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn container_names_union_in_first_seen_order_init_last() {
+        let mut a = pod("a", (1, 1), None);
+        a.containers = vec![
+            container("setup", ContainerKind::Init),
+            container("api", ContainerKind::Main),
+            container("proxy", ContainerKind::Sidecar),
+        ];
+        let mut b = pod("b", (1, 1), None);
+        b.containers = vec![
+            container("worker", ContainerKind::Main),
+            container("api", ContainerKind::Main),
+            container("migrate", ContainerKind::Init),
+            container("setup", ContainerKind::Init),
+        ];
+        assert_eq!(
+            container_names(&[&a, &b]),
+            ["api", "proxy", "worker", "setup", "migrate"]
+        );
+        assert!(container_names(&[]).is_empty());
+    }
     #[test]
     fn scope_covers_named_several_and_all() {
         assert!(scope_covers(&NamespaceScope::All, "any"));

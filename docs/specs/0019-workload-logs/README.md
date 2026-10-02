@@ -1,6 +1,6 @@
 # 0019 — Workload logs and dock polish (read-only)
 
-Status: amended after the advisor review (must-fix 1–2, should-fix 3–8, nice-to-haves 9–13). HEAD `d2f98f9`; **start after 0011 step 3 merges** (it edits `container_detail.rs`, `pod_drawer.rs`). Requires 0004, 0008, 0010, 0012 (`PodOwner`, `KindRow.related_pods`). Crates: `crates/app`, plus **one field** in `crates/cluster` (`LogRequest.tail_lines`, step 2a; decision 33). Wireframes: W8, W8b, W4b note 3, W7 workload menus. Applies C1 (no change), C6 (no new package), C9 (Export, user-approved).
+Status: implemented (steps 1, 2a, 2b, 3); AC 6 awaits the user spot-check. Amended after the advisor review (must-fix 1–2, should-fix 3–8, nice-to-haves 9–13). HEAD `d2f98f9`; **start after 0011 step 3 merges** (it edits `container_detail.rs`, `pod_drawer.rs`). Requires 0004, 0008, 0010, 0012 (`PodOwner`, `KindRow.related_pods`). Crates: `crates/app`, plus **one field** in `crates/cluster` (`LogRequest.tail_lines`, step 2a; decision 33). Wireframes: W8, W8b, W4b note 3, W7 workload menus. Applies C1 (no change), C6 (no new package), C9 (Export, user-approved).
 
 ## Goal
 
@@ -20,7 +20,7 @@ Kubelet/node logs (decision 24); Pop out; CronJob "View logs of last job"; Shell
 |---|---|---|
 | 1 | `log_level.rs`, `line_matcher.rs`, `log_json.rs`, `log_rows.rs`, buffer view, toolbar controls, Cargo edges (`LogBuffer::revision` and `LineTime::Rfc3339` move to step 3) | 1–5, 8 |
 | 2a | `log_target.rs`, `log_workload.rs`, `LogRequest.tail_lines`, multi-stream `LogTab`, merge, stream budget, rejoin, status/tone, prefixes, `open_workload_logs`, `kind_menu` item | 1–6, 8 |
-| 2b | workload container picker, legend, `selected_log_target` + `NoLogTarget`, `logs-workload` launch screen and screenshot | 1–8 |
+| 2b | workload container picker, legend, `logs-workload` launch screen and screenshot (`selected_log_target` + `NoLogTarget` move to step 3 with their only caller, the "+ ▾" menu; `controller_owner_of` is `pub(crate)` because `AppShell` calls it) | 1–8 |
 | 3 | `LogLayout`, histogram (`log_volume.rs`), Export (`log_export.rs`), "+ ▾", tab reorder, container Logs sub-tab, plus the pieces deferred from 1 and 2a: `LogBuffer::revision`, `LineTime::Rfc3339`, `ContainerChoice` with `PodTarget.choice`, `LogTarget::of_container`, `TabStream.full_prefix` | 1–8 |
 
 ## Files
@@ -38,14 +38,14 @@ Kubelet/node logs (decision 24); Pop out; CronJob "View logs of last job"; Shell
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
-- [ ] 2. Every test in [test-plan.md](test-plan.md) exists under that name and passes; none touches a network or the file system.
-- [ ] 3. `Cargo.lock` gains no `[[package]]`; `regex` stays 1.13.x, `serde_json` 1.0.x.
-- [ ] 4. No `tracing` call in the 0019 log modules receives line text, a file path, or export content (review + the scoped grep in [test-plan.md](test-plan.md), which lists files explicitly and leaves out the pre-existing `log_filter.rs` tracing pin). The only new file write is in `log_export.rs`, reached only from the Export button after the dialog returns a path.
-- [ ] 5. `crates/cluster` diff = `LogRequest.tail_lines`, `log_params`, its tests, and the probe call site only; the 0001 read-only guard holds; `ws` stays off.
-- [ ] 6. App on UAT: a Deployment's "View logs (all pods)" merges prefixed lines from its pods; a new pod (if observable) joins; regex `error|timeout`, level chips, and JSON work; Export writes only after Save; Logs sub-tab focuses the dock.
-- [ ] 7. Screenshots `logs-dock`, `logs-zoomed`, `logs-workload`, `pod-containers` in light and dark; no high-severity ui-verifier defect against W8, W8b, W4b beyond the accepted deviations.
-- [ ] 8. The 0003 AC4 color-literal grep is still clean (pod colors `chart_1..chart_5`; tints derive from tone tokens).
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 2. Every test in [test-plan.md](test-plan.md) exists under that name and passes; none touches a network or the file system.
+- [x] 3. `Cargo.lock` gains no `[[package]]`; `regex` stays 1.13.x, `serde_json` 1.0.x.
+- [x] 4. No `tracing` call in the 0019 log modules receives line text, a file path, or export content (review + the scoped grep in [test-plan.md](test-plan.md), which lists files explicitly and leaves out the pre-existing `log_filter.rs` tracing pin). The only new file write is in `log_export.rs`, reached only from the Export button after the dialog returns a path.
+- [x] 5. `crates/cluster` diff = `LogRequest.tail_lines`, `log_params`, its tests, and the probe call site only; the 0001 read-only guard holds; `ws` stays off.
+- [ ] 6. App on UAT: a Deployment's "View logs (all pods)" merges prefixed lines from its pods; a new pod (if observable) joins; regex `error|timeout`, level chips, and JSON work; Export writes only after Save; Logs sub-tab focuses the dock. **Open:** a workload tab on `ds/kube-proxy` merged four pods with colored prefixes, legend, and histogram (v46 shots); regex, level chips, JSON, the Export dialog, and drag reorder are user spot-checks (not capturable headlessly, test-plan "Live checks" 4).
+- [x] 7. Screenshots `logs-dock`, `logs-zoomed`, `logs-workload`, `pod-containers` in light and dark; no high-severity ui-verifier defect against W8, W8b, W4b beyond the accepted deviations. ui-verifier 2026-10-02 (v46v shots): no high-severity defect.
+- [x] 8. The 0003 AC4 color-literal grep is still clean (pod colors `chart_1..chart_5`; tints derive from tone tokens).
 
 ## Open items
 

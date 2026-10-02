@@ -10,8 +10,10 @@ use cluster::{
     ContainerResource, ContainerState, ContainerSummary, EnvFromSource, EnvSource, EventSummary,
     PodSummary, ProbeAction, ProbeSummary, PvcUsage, ResourceUsage, Termination, VolumeSource,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, div, relative,
@@ -42,10 +44,11 @@ const PROBE_KINDS: [ProbeKind; 3] = [
 /// The share of an Env or Mounts row that the name column takes; names are longer than sources
 /// are informative, so they get 3 parts to the source's 2.
 const SOURCE_NAME_SHARE: f32 = 0.6;
-const CONTAINER_TABS: [ContainerTab; 4] = [
+const CONTAINER_TABS: [ContainerTab; 5] = [
     ContainerTab::Info,
     ContainerTab::Env,
     ContainerTab::Mounts,
+    ContainerTab::Logs,
     ContainerTab::Monitor,
 ];
 /// Element ids of the links inside the container detail; the drawer's kind links use small ids.
@@ -78,6 +81,8 @@ pub(crate) struct ContainerDetailInput<'a> {
     pub(crate) events: Option<&'a [EventSummary]>,
     /// Why the disabled Forward button is disabled.
     pub(crate) forward_reason: &'a SharedString,
+    /// Why the Logs sub-tab cannot open the dock, or `None` when it can.
+    pub(crate) logs_reason: Option<SharedString>,
     /// The container's newest usage; `None` without a sample.
     pub(crate) usage: Option<ResourceUsage>,
     /// The kubelet history, for the usage of PVC mounts; `None` while the session is not live.
@@ -126,6 +131,7 @@ pub(crate) fn container_detail(
             "No mounts",
             cx,
         ),
+        ContainerTab::Logs => logs_body(input, cx),
         ContainerTab::Monitor => match &input.monitor {
             Some(view) => monitor_tab(view, cx),
             None => div().into_any_element(),
@@ -151,6 +157,7 @@ fn sub_tab_bar(
         ContainerTab::Info => "Info".to_owned(),
         ContainerTab::Env => format!("Env {}", container.env.len() + container.env_from.len()),
         ContainerTab::Mounts => format!("Mounts {}", container.mounts.len()),
+        ContainerTab::Logs => "Logs".to_owned(),
         ContainerTab::Monitor => "Monitor".to_owned(),
     };
     div()
@@ -160,9 +167,14 @@ fn sub_tab_bar(
                 .segmented()
                 .xsmall()
                 .selected_index(selected_index)
-                .on_click(cx.listener(move |shell, index: &usize, _, cx| {
+                .on_click(cx.listener(move |shell, index: &usize, window, cx| {
                     if let Some(&tab) = CONTAINER_TABS.get(*index) {
                         shell.set_container_tab(tab, cx);
+                        // The dock sits right below the drawer, so this click is the explicit
+                        // action that opens the stream; navigation alone never does.
+                        if tab == ContainerTab::Logs {
+                            shell.open_container_logs(window, cx);
+                        }
                     }
                 }))
                 .children(
@@ -295,6 +307,37 @@ fn info_body(input: &ContainerDetailInput<'_>, cx: &Context<AppShell>) -> AnyEle
         ));
     }
     column.into_any_element()
+}
+
+/// The Logs sub-tab never streams by itself: it names the container and offers the button that
+/// opens or focuses the dock tab.
+fn logs_body(input: &ContainerDetailInput<'_>, cx: &Context<AppShell>) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    if let Some(reason) = &input.logs_reason {
+        return div()
+            .text_sm()
+            .text_color(muted)
+            .child(reason.clone())
+            .into_any_element();
+    }
+    v_flex()
+        .gap_2()
+        .items_start()
+        .child(div().text_sm().text_color(muted).child(format!(
+            "Logs of {} open in the dock below.",
+            input.container.name
+        )))
+        .child(
+            Button::new("container-logs-show")
+                .ghost()
+                .small()
+                .icon(Icon::new(IconName::FileText))
+                .label("Show in dock")
+                .on_click(
+                    cx.listener(|shell, _, window, cx| shell.open_container_logs(window, cx)),
+                ),
+        )
+        .into_any_element()
 }
 
 fn muted_note(text: &'static str, cx: &App) -> AnyElement {

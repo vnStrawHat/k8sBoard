@@ -19,7 +19,7 @@ Options:
   --select <name>       with a drawer screen, open the row named <name> or <namespace>/<name>
                          (default: the first row)
   --theme light|dark     colour theme (default: follow the system)
-  --screen pods|nodes|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|pods-selected|nodes-selected|
+  --screen pods|nodes|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]
@@ -40,6 +40,8 @@ pub(crate) enum LaunchScreen {
     NodeDrawer(DrawerTab),
     LogsDock,
     LogsZoomed,
+    /// `--screen logs-workload`: the dock zoomed on the workload that owns the logs pod.
+    LogsWorkload,
     /// `--screen pods-selected|nodes-selected`: the first two rows are ticked.
     PodsSelected,
     NodesSelected,
@@ -65,6 +67,7 @@ impl LaunchScreen {
             | Self::PodDrawer(_)
             | Self::LogsDock
             | Self::LogsZoomed
+            | Self::LogsWorkload
             | Self::PodsSelected => Screen::Pods,
             // The sidebar group of Custom Resources starts open; the shell then resolves the kind
             // against the CRD list.
@@ -156,7 +159,7 @@ impl LaunchScreen {
 
     /// Whether the log dock must be open on a pod.
     pub(crate) fn has_log_dock(self) -> bool {
-        matches!(self, Self::LogsDock | Self::LogsZoomed)
+        matches!(self, Self::LogsDock | Self::LogsZoomed | Self::LogsWorkload)
     }
 
     fn parse(text: &str) -> Option<Self> {
@@ -174,6 +177,7 @@ impl LaunchScreen {
             "node-yaml" => Some(Self::NodeDrawer(DrawerTab::Yaml)),
             "logs-dock" => Some(Self::LogsDock),
             "logs-zoomed" => Some(Self::LogsZoomed),
+            "logs-workload" => Some(Self::LogsWorkload),
             "pods-selected" => Some(Self::PodsSelected),
             "nodes-selected" => Some(Self::NodesSelected),
             _ => {

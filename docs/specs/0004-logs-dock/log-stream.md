@@ -50,7 +50,7 @@ impl ClusterConnection {
 | `container` | `Some(container)` | same |
 | `follow` | true | false |
 | `previous` | false | true |
-| `tail_lines` | `Some(1000)` (`LOG_TAIL_LINES`) | `Some(1000)` |
+| `tail_lines` | `Some(request.tail_lines)`: 1000 for pod tabs (0019 decision 33 made it a request field) | same |
 | `timestamps` | true | true |
 
 The other fields (`since_seconds`, `since_time`, `limit_bytes`, `pretty`) keep their defaults. There is no resume: Reconnect starts over ([log-tab.md](log-tab.md)).

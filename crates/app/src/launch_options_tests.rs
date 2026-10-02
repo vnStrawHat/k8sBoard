@@ -134,7 +134,15 @@ fn parses_logs_screens() {
         run_options(&["--screen", "logs-zoomed"]).screen,
         LaunchScreen::LogsZoomed
     );
-    for screen in [LaunchScreen::LogsDock, LaunchScreen::LogsZoomed] {
+    assert_eq!(
+        run_options(&["--screen", "logs-workload"]).screen,
+        LaunchScreen::LogsWorkload
+    );
+    for screen in [
+        LaunchScreen::LogsDock,
+        LaunchScreen::LogsZoomed,
+        LaunchScreen::LogsWorkload,
+    ] {
         assert_eq!(screen.screen(), Screen::Pods);
         assert!(screen.has_log_dock());
         assert!(!screen.has_drawer());
@@ -426,4 +434,12 @@ fn custom_names_with_dashes_keep_their_dashes() {
             tab: None
         }
     );
+}
+
+#[test]
+fn parses_logs_workload_screen() {
+    let screen = run_options(&["--screen", "logs-workload"]).screen;
+    assert_eq!(screen, LaunchScreen::LogsWorkload);
+    assert!(screen.has_log_dock());
+    assert_eq!(screen.screen(), Screen::Pods);
 }

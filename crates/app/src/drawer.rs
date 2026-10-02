@@ -185,6 +185,7 @@ pub(crate) enum ContainerTab {
     Info,
     Env,
     Mounts,
+    Logs,
     Monitor,
 }
 

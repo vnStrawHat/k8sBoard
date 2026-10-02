@@ -65,14 +65,14 @@ pub(crate) fn start_export(name: String, cx: &mut Context<LogTab>) -> Task<()>;
 ## "+ ▾" new-tab menu (`log_dock.rs`)
 
 - `LogDock::new(shell: WeakEntity<AppShell>)` (AppShell passes its weak handle).
-- After the last tab: ghost xsmall `Button` with `IconName::Plus` and `dropdown_caret`, tooltip `New tab`.
+- After the last tab: ghost xsmall `Button` whose content is the `Plus` and `ChevronDown` icons (the kit `dropdown_caret` rendered as a dot at this size), tooltip `New tab`.
 
 | Item | Enabled when | Click |
 |---|---|---|
-| `Logs of selected` | `shell.read(cx).selected_log_target(cx)` is `Ok`; else `disabled_menu_item` with the `NoLogTarget` `Display` text | `shell.update(…, open_logs_of_selection(window, cx))` |
+| `Logs of selected` | `shell.read(cx).selected_log_target(cx)` is `Ok`. It first checks `action_availability(ViewLogs, access)`: a denial is `NoLogTarget::AccessDenied(reason)` and shows that reason. Otherwise `disabled_menu_item` with the `NoLogTarget` `Display` text | `shell.update(…, open_logs_of_selection(window, cx))` |
 | `Shell into selected` | never in this version: `disabled_menu_item` with the `action_availability(OpenShell, access)` reason (or `Read-only mode` without a session) | — |
 
-- The builder runs during event dispatch, not inside an `AppShell` update, so reading the shell is safe.
+- The builder runs when the menu opens (popover render) and its result is cached until dismiss; it does not run inside an `AppShell` update, so reading the shell is safe.
 
 ## Tab reorder (`log_dock.rs`)
 

@@ -622,3 +622,17 @@ fn resource_rows_keep_the_order_when_nothing_is_added() {
     let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
     assert_eq!(names, ["memory", "cpu"]);
 }
+
+#[test]
+fn container_tabs_put_logs_before_monitor() {
+    assert_eq!(
+        CONTAINER_TABS,
+        [
+            ContainerTab::Info,
+            ContainerTab::Env,
+            ContainerTab::Mounts,
+            ContainerTab::Logs,
+            ContainerTab::Monitor,
+        ]
+    );
+}

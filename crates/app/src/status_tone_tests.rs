@@ -293,3 +293,13 @@ fn condition_status_text_names_each_status() {
     assert_eq!(condition_status_text(False), "False");
     assert_eq!(condition_status_text(Unknown), "Unknown");
 }
+
+#[test]
+fn chart_text_color_moves_toward_the_foreground_on_both_themes() {
+    let pale_blue = gpui_kit::hsla(0.58, 0.8, 0.8, 1.);
+    let black = gpui_kit::hsla(0., 0., 0.05, 1.);
+    assert!(chart_text_color(pale_blue, black, false).l < pale_blue.l);
+    let dark_blue = gpui_kit::hsla(0.62, 0.7, 0.3, 1.);
+    let white = gpui_kit::hsla(0., 0., 0.95, 1.);
+    assert!(chart_text_color(dark_blue, white, true).l > dark_blue.l);
+}

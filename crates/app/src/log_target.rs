@@ -1,6 +1,9 @@
 //! What a log tab streams: one pod, or every pod of a workload. Pure: no session, no GPUI.
 
+use std::fmt;
+
 use cluster::{ContainerSummary, PodSummary};
+use gpui_kit::SharedString;
 
 use crate::kind_row::{DAEMON_SET_KIND, JOB_KIND, PodOwner, REPLICA_SET_KIND, STATEFUL_SET_KIND};
 use crate::pod_drawer::default_container;
@@ -11,6 +14,13 @@ pub(crate) enum LogTarget {
     Workload(WorkloadTarget),
 }
 
+/// Whether a target names its container or takes the default one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContainerChoice {
+    Default,
+    Explicit,
+}
+
 /// One pod, with the containers the picker offers.
 #[derive(Clone)]
 pub(crate) struct PodTarget {
@@ -18,6 +28,7 @@ pub(crate) struct PodTarget {
     pub(crate) pod: String,
     pub(crate) containers: Vec<ContainerSummary>,
     pub(crate) initial_container: String,
+    pub(crate) choice: ContainerChoice,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,7 +48,21 @@ impl LogTarget {
             pod: pod.name.clone(),
             containers: pod.containers.clone(),
             initial_container,
+            choice: ContainerChoice::Default,
         }))
+    }
+
+    /// A pod tab on `container`; `None` when the pod has no container of that name.
+    pub(crate) fn of_container(pod: &PodSummary, container: &str) -> Option<Self> {
+        let Self::Pod(mut target) = Self::of_pod(pod)? else {
+            return None;
+        };
+        pod.containers
+            .iter()
+            .find(|candidate| candidate.name == container)?;
+        target.initial_container = container.to_owned();
+        target.choice = ContainerChoice::Explicit;
+        Some(Self::Pod(target))
     }
 
     /// `None` for a node: its pods are not one workload.
@@ -76,6 +101,34 @@ pub(crate) fn workload_label(owner: &PodOwner) -> Option<String> {
         PodOwner::Node { .. } => return None,
     };
     Some(format!("{short_kind}/{name}"))
+}
+
+/// Why "Logs of selected" cannot open a tab.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NoLogTarget {
+    NotConnected,
+    NotLoggable,
+    /// The access review denies `get pods/log`, or has no answer yet; the text says which.
+    AccessDenied(SharedString),
+}
+
+impl fmt::Display for NoLogTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotConnected => "Not connected",
+            Self::NotLoggable => "Select a pod or workload",
+            Self::AccessDenied(reason) => reason,
+        })
+    }
+}
+
+/// The ViewLogs access check as a target error: the first thing "Logs of selected" asks, so a
+/// denied cluster shows the real reason instead of "Select a pod".
+pub(crate) fn check_logs_access(reason: Option<SharedString>) -> Result<(), NoLogTarget> {
+    match reason {
+        Some(reason) => Err(NoLogTarget::AccessDenied(reason)),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -191,6 +244,52 @@ mod tests {
     #[test]
     fn log_target_of_pod_without_containers_is_none() {
         assert!(LogTarget::of_pod(&pod("pod", Vec::new())).is_none());
+    }
+
+    #[test]
+    fn log_target_of_container_is_explicit() {
+        let pod = pod(
+            "pod",
+            vec![
+                container("app", ContainerKind::Main, true),
+                container("sidecar", ContainerKind::Main, true),
+            ],
+        );
+        let Some(LogTarget::Pod(target)) = LogTarget::of_container(&pod, "sidecar") else {
+            panic!("a pod target");
+        };
+        assert_eq!(target.initial_container, "sidecar");
+        assert_eq!(target.choice, ContainerChoice::Explicit);
+        assert!(LogTarget::of_container(&pod, "missing").is_none());
+        let Some(LogTarget::Pod(default)) = LogTarget::of_pod(&pod) else {
+            panic!("a pod target");
+        };
+        assert_eq!(default.choice, ContainerChoice::Default);
+    }
+
+    #[test]
+    fn no_log_target_displays_reason() {
+        assert_eq!(NoLogTarget::NotConnected.to_string(), "Not connected");
+        assert_eq!(
+            NoLogTarget::NotLoggable.to_string(),
+            "Select a pod or workload"
+        );
+    }
+
+    #[test]
+    fn denied_logs_access_is_a_target_error_with_the_reason() {
+        assert_eq!(check_logs_access(None), Ok(()));
+        let denied = check_logs_access(Some("Not permitted: get pods/log".into()));
+        assert_eq!(
+            denied,
+            Err(NoLogTarget::AccessDenied(
+                "Not permitted: get pods/log".into()
+            ))
+        );
+        assert_eq!(
+            denied.expect_err("denied").to_string(),
+            "Not permitted: get pods/log"
+        );
     }
 
     #[test]

@@ -53,6 +53,7 @@ Discovery; CRDs kind (versions, printer columns, schema); every established CRD 
 ### 0019 — Workload logs and dock polish (W8, W8b)
 `deploy/`, `sts/`, `ds/`, `job/` log tabs merging pods by selector with pod colors; container chips; level toggles; JSON pretty-print; regex; density histogram; container submenu in menus; "+ ▾" new tab; tab reorder; kubelet logs for nodes (nodes/proxy `/logs/`); Pop out window; Export only via a save dialog (C9).
 - Deps: 0004, 0012. Risk: Med (merge ordering, many streams). New dep: regex.
+- Status: Done (spec 0019, steps 1–3). Deferred: Pop out, kubelet logs, container submenu (decision 30), Follow toggle, SYS marker lines, histogram brush; AC 6 awaits the user spot-check.
 
 ### 0020 — Issues engine and Issues screen
 Pure rule engine over watch snapshots (pod and container states, Warning events, node conditions, cert expiry, PDB blocks, stuck namespaces, unmatched Services) with plain-language causes and one primary action; Issues screen; red sidebar counts; `⚑ N` title-bar button.

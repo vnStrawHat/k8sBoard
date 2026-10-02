@@ -4,6 +4,7 @@ use gpui_kit::{AnyWindowHandle, App, Entity};
 
 #[cfg(any(feature = "screenshot", test))]
 use crate::cluster_metrics::{FeedStatus, is_metrics_settled};
+use crate::kind_row::{DAEMON_SET_KIND, JOB_KIND, PodOwner, REPLICA_SET_KIND, STATEFUL_SET_KIND};
 use crate::pod_drawer::default_container;
 
 #[cfg(any(feature = "screenshot", test))]
@@ -64,6 +65,26 @@ pub(crate) fn pick_logs_pod(pods: &[PodSummary]) -> Option<usize> {
     pods.iter()
         .position(has_running_default)
         .or_else(|| pick_drawer_pod(pods))
+}
+
+/// The workload that owns `pod`, as the `logs-workload` screen opens it: its controller when that
+/// is a ReplicaSet, StatefulSet, DaemonSet, or Job. A bare pod, or one owned by anything else,
+/// has none.
+pub(crate) fn controller_owner_of(pod: &PodSummary) -> Option<PodOwner> {
+    let controller = pod.controller.as_ref()?;
+    let kind = [
+        REPLICA_SET_KIND,
+        STATEFUL_SET_KIND,
+        DAEMON_SET_KIND,
+        JOB_KIND,
+    ]
+    .into_iter()
+    .find(|kind| *kind == controller.kind)?;
+    Some(PodOwner::Controller {
+        namespace: pod.namespace.clone(),
+        kind,
+        name: controller.name.clone(),
+    })
 }
 
 /// How far the data behind the screen is.
@@ -539,6 +560,34 @@ mod tests {
         assert_eq!(pick_logs_pod(&[]), None);
     }
 
+    #[test]
+    fn controller_owner_of_maps_known_kinds() {
+        let owned_by = |kind: &str| {
+            let mut owned = pod("p", 1);
+            owned.controller = Some(cluster::ControllerRef {
+                kind: kind.to_owned(),
+                name: "owner".to_owned(),
+            });
+            owned
+        };
+        for kind in [
+            REPLICA_SET_KIND,
+            STATEFUL_SET_KIND,
+            DAEMON_SET_KIND,
+            JOB_KIND,
+        ] {
+            assert_eq!(
+                controller_owner_of(&owned_by(kind)),
+                Some(PodOwner::Controller {
+                    namespace: "ns".to_owned(),
+                    kind,
+                    name: "owner".to_owned(),
+                })
+            );
+        }
+        assert_eq!(controller_owner_of(&owned_by("Node")), None);
+        assert_eq!(controller_owner_of(&pod("bare", 1)), None);
+    }
     #[test]
     fn outcome_exit_codes() {
         assert_eq!(ScreenshotOutcome::Saved.exit_code(), 0);

@@ -56,6 +56,26 @@ fn readable_on_light(color: Hsla, foreground: Hsla, share: f32) -> Hsla {
     color.mix_oklab(foreground, share)
 }
 
+/// The share of its own hue a chart color keeps as text. Chart colors are fills tuned for bars,
+/// so as text they are pulled toward the foreground: toward black on a light theme, toward white
+/// on a dark one.
+const LIGHT_THEME_CHART_TEXT_SHARE: f32 = 0.45;
+const DARK_THEME_CHART_TEXT_SHARE: f32 = 0.55;
+
+/// A chart color that stays readable as text or a small dot on the current theme background.
+pub(crate) fn readable_chart_color(color: Hsla, cx: &App) -> Hsla {
+    let theme = cx.theme();
+    chart_text_color(color, theme.foreground, theme.is_dark())
+}
+
+fn chart_text_color(color: Hsla, foreground: Hsla, is_dark: bool) -> Hsla {
+    let share = if is_dark {
+        DARK_THEME_CHART_TEXT_SHARE
+    } else {
+        LIGHT_THEME_CHART_TEXT_SHARE
+    };
+    color.mix_oklab(foreground, share)
+}
 /// The label text coloured by its tone.
 pub(crate) fn toned_text(label: StatusLabel, cx: &App) -> Div {
     div()

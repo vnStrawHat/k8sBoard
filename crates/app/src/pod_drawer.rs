@@ -26,7 +26,7 @@ use crate::log_dock::LogDock;
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
-use crate::resource_actions::{pod_menu, port_forward_reason};
+use crate::resource_actions::{pod_menu, port_forward_reason, view_logs_reason};
 use crate::status_tone::{StatusTone, container_state_label, pod_status_label, toned_text};
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::UsageBar;
@@ -452,6 +452,7 @@ fn containers_tab(
             container: &pod.containers[selected],
             tab: state.container_tab,
             events,
+            logs_reason: view_logs_reason(live),
             forward_reason,
             usage: live.and_then(|live| {
                 let name = &pod.containers[selected].name;

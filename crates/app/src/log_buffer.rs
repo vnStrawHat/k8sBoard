@@ -56,6 +56,7 @@ impl LineView {
 pub(crate) enum LineTime {
     Hidden,
     Clock,
+    Rfc3339,
 }
 
 pub(crate) struct LogBuffer {
@@ -72,6 +73,7 @@ pub(crate) struct LogBuffer {
     visible: Option<VecDeque<u64>>,
     /// The level of the last pushed line per source, for indented continuation lines.
     last_levels: Vec<Option<LogLevel>>,
+    revision: u64,
 }
 
 /// How the visible list changed, applied to the scroller as `splice(0..removed_visible, 0)`
@@ -92,10 +94,12 @@ impl LogBuffer {
             view: LineView::default(),
             visible: None,
             last_levels: Vec::new(),
+            revision: 0,
         }
     }
 
     pub(crate) fn push(&mut self, lines: Vec<SourcedLine>) -> BufferChange {
+        self.revision += 1;
         let first_new_seq = self.next_seq();
         let mut added_visible = 0;
         for sourced in lines {
@@ -171,6 +175,7 @@ impl LogBuffer {
 
     /// Drops every line and keeps the view.
     pub(crate) fn clear(&mut self) {
+        self.revision += 1;
         self.lines.clear();
         self.bytes = 0;
         self.first_seq = 0;
@@ -182,6 +187,7 @@ impl LogBuffer {
     }
 
     pub(crate) fn set_view(&mut self, view: LineView) {
+        self.revision += 1;
         self.visible = if view.is_filtering() {
             // At most `MAX_LINES` lines are scanned, on each keystroke; profile before
             // debouncing.
@@ -232,6 +238,11 @@ impl LogBuffer {
         self.dropped > 0
     }
 
+    /// Bumps on push, clear, and set_view; the histogram memo key.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// One line per visible line: `{time} {prefix} {text}`. The time is written only for
     /// lines that have one; `prefixes` is indexed by source, and a missing index writes none.
     pub(crate) fn visible_text(&self, time: LineTime, prefixes: &[SharedString]) -> String {
@@ -243,6 +254,7 @@ impl LogBuffer {
             let stamp = buffered.line.timestamp.and_then(|timestamp| match time {
                 LineTime::Hidden => None,
                 LineTime::Clock => Some(format_log_time(timestamp)),
+                LineTime::Rfc3339 => Some(timestamp.to_string()),
             });
             if let Some(stamp) = stamp {
                 text.push_str(&stamp);

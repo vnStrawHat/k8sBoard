@@ -306,3 +306,47 @@ fn format_log_time_is_utc_with_millis() {
     let timestamp: jiff::Timestamp = "2024-05-01T10:47:58.902345678Z".parse().expect("valid");
     assert_eq!(format_log_time(timestamp), "10:47:58.902");
 }
+
+#[test]
+fn visible_text_writes_prefixes_and_rfc3339_time() {
+    let stamped = |source: u16, text: &str| SourcedLine {
+        source: SourceId(source),
+        line: LogLine {
+            timestamp: "2024-05-01T10:47:58.902345678Z".parse().ok(),
+            text: text.to_owned(),
+        },
+    };
+    let mut buffer = LogBuffer::new();
+    push_checked(
+        &mut buffer,
+        vec![stamped(0, "hello"), stamped(1, "world"), line("plain")],
+    );
+    let prefixes = [
+        SharedString::from("api-7d9f8c-x2k4q/app"),
+        SharedString::from("api-7d9f8c-z9z9z/app"),
+    ];
+    assert_eq!(
+        buffer.visible_text(LineTime::Rfc3339, &prefixes),
+        "2024-05-01T10:47:58.902345678Z api-7d9f8c-x2k4q/app hello\n\
+         2024-05-01T10:47:58.902345678Z api-7d9f8c-z9z9z/app world\n\
+         api-7d9f8c-x2k4q/app plain"
+    );
+}
+
+#[test]
+fn revision_bumps_on_push_clear_and_view() {
+    let mut buffer = LogBuffer::new();
+    let mut last = buffer.revision();
+    let mut has_bumped = |buffer: &LogBuffer| {
+        let changed = buffer.revision() != last;
+        last = buffer.revision();
+        changed
+    };
+    buffer.push(lines(&["a"]));
+    assert!(has_bumped(&buffer));
+    buffer.set_view(plain_view("a"));
+    assert!(has_bumped(&buffer));
+    buffer.clear();
+    assert!(has_bumped(&buffer));
+    assert!(!has_bumped(&buffer));
+}

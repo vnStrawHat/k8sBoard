@@ -17,7 +17,7 @@
 ```text
 cargo run -p k8sboard --features screenshot -- \
   --kubeconfig monitor-uat-readonly.yml --context readonly@Monitor \
-  --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|node-events|pod-yaml|node-yaml|logs-dock|logs-zoomed|<plural>|<plural>-drawer|<plural>-events|<plural>-yaml [--theme light|dark] \
+  --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|node-events|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|<plural>|<plural>-drawer|<plural>-events|<plural>-yaml [--theme light|dark] \
   [--select <name>] \
   --screenshot .tmp/ui-shots/<name>.png
 ```
@@ -42,6 +42,7 @@ Without the feature, `--screenshot` exits 2 before GPUI starts ([bootstrap.md](b
 | `node-events` / `<plural>-events` (spec 0007) | as the drawer screen, on the Events tab; the capture waits for the debounced object events watch |
 | `pod-yaml` / `node-yaml` / `<plural>-yaml` (spec 0007) | as the drawer screen, on the YAML tab at the default width; the capture waits for the YAML. Never `configmaps-yaml` (config values in a PNG) or a Secret; Env values is never toggled |
 | `logs-dock` / `logs-zoomed` | Pods with the log dock open on a pod (spec 0004); zoomed also zooms the dock |
+| `logs-workload` | Pods with the zoomed dock on the workload (ReplicaSet, StatefulSet, DaemonSet, Job) that owns the logs pod (spec 0019); `--select <ns/pod>` names the pod |
 | `<plural>` (spec 0005) | the kind screen, e.g. `deployments`, no selection |
 | `<plural>-drawer` (spec 0005) | the kind screen with row 0 selected, e.g. `deployments-drawer`. Wired for all ten kinds of spec 0005 |
 

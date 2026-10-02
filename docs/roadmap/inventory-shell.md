@@ -60,9 +60,9 @@
 |---|---|---|---|---|
 | K1 | Log tabs, resize ≤ 60 %, zoom, minimize, close | Done | 0004 | — |
 | K2 | Toolbar: filter, Follow, Previous, Wrap, Timestamps, Reconnect | Done | 0004 | — |
-| K3 | Regex, level toggles, JSON, density histogram, Export, Pop out | Missing | — | 0019 |
-| K4 | Workload log tabs (`deploy/…`), pod colors, container picker chips | Missing | — | 0019 |
-| K5 | "+ ▾" new tab, drag to reorder, dashed max line, double-click reset, remembered height | Missing | — | 0019; height persistence 0024 |
+| K3 | Regex, level toggles, JSON, density histogram, Export, Pop out | Partial | 0019 (regex, level chips, JSON, histogram, Export via the save dialog) | Pop out (decision 25) |
+| K4 | Workload log tabs (`deploy/…`), pod colors, container picker chips | Done | 0019 | — |
+| K5 | "+ ▾" new tab, drag to reorder, dashed max line, double-click reset, remembered height | Partial | 0019 ("+ ▾", drag to reorder) | dashed max line and double-click reset (0004 non-goals); height persistence 0024 |
 | K6 | Shell tabs (W8b shell pane) | Missing | — | 0036 |
 | K7 | Drain progress tab (W6 note 5) | Missing | — | 0034 |
 

@@ -13,8 +13,8 @@ use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, InteractiveElement as _,
-    IntoElement, KeyBinding, ParentElement as _, Point, Render, Styled as _, Subscription, Task,
-    Window,
+    IntoElement, KeyBinding, ParentElement as _, Point, Render, SharedString, Styled as _,
+    Subscription, Task, Window,
 };
 
 use crate::FocusQuickFilter;
@@ -40,7 +40,7 @@ use crate::launch_options::{
     LaunchOptions, LaunchScreen, has_ignored_kubeconfig_entries, kubeconfig_path,
 };
 use crate::log_dock::{DockMode, LogDock};
-use crate::log_target::LogTarget;
+use crate::log_target::{LogTarget, NoLogTarget, check_logs_access};
 use crate::monitor_data::{MonitorInput, MonitorSubject, monitor_data};
 use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
 use crate::navigation::{NavigationCounts, sidebar};
@@ -49,12 +49,13 @@ use crate::object_events::{SubjectChange, event_subject, subject_change};
 use crate::pod_drawer::selected_container_index;
 use crate::pod_table::PodTableDelegate;
 use crate::related_objects::{RelatedSubject, related_subject};
+use crate::resource_actions::{open_shell_reason, view_logs_reason};
 use crate::resource_kind::ResourceKind;
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{FeedProgress, kubelet_progress};
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{SettleInput, TargetState, is_drawer_ready};
-use crate::screenshot::{pick_drawer_pod, pick_logs_pod, pick_selected};
+use crate::screenshot::{controller_owner_of, pick_drawer_pod, pick_logs_pod, pick_selected};
 use crate::secret_clipboard::{
     CLIPBOARD_CLEAR_DELAY, ClearStep, ClipboardMark, clear_if_unchanged, next_clear_step,
 };
@@ -272,7 +273,7 @@ impl AppShell {
         };
 
         let shell = cx.weak_entity();
-        let log_dock = cx.new(|_| LogDock::new());
+        let log_dock = cx.new(|_| LogDock::new(shell.clone()));
         let dock_split = cx.new(|_| ResizableState::default());
         let pod_table = cx.new(|cx| {
             configure(TableState::new(
@@ -1368,6 +1369,78 @@ impl AppShell {
             .update(cx, |dock, cx| dock.open(connection, target, window, cx));
     }
 
+    /// What "Logs of selected" would open: the selected pod, or the workload of the selected row.
+    pub(crate) fn selected_log_target(&self, cx: &App) -> Result<LogTarget, NoLogTarget> {
+        let live = self.live(cx).ok_or(NoLogTarget::NotConnected)?;
+        check_logs_access(view_logs_reason(Some(live)))?;
+        let key = self.selected.as_ref().ok_or(NoLogTarget::NotLoggable)?;
+        let target = match key {
+            ResourceKey::Pod { .. } => live
+                .pods
+                .items()
+                .iter()
+                .find(|pod| key.is_pod(pod))
+                .and_then(LogTarget::of_pod),
+            ResourceKey::Node { .. } => None,
+            ResourceKey::Kind { kind, .. } => live
+                .kind_list(*kind)
+                .and_then(|explorer| {
+                    explorer
+                        .list
+                        .items()
+                        .iter()
+                        .find(|row| key.is_row(*kind, row))
+                })
+                .and_then(|row| row.related_pods.clone())
+                .and_then(LogTarget::of_workload),
+        };
+        target.ok_or(NoLogTarget::NotLoggable)
+    }
+
+    /// The "+ ▾" menu entry; an `Err` has no target and the menu item is disabled.
+    pub(crate) fn open_logs_of_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Ok(target) = self.selected_log_target(cx) else {
+            return;
+        };
+        let Some(live) = self.live(cx) else {
+            return;
+        };
+        let connection = live.connection().clone();
+        self.log_dock
+            .update(cx, |dock, cx| dock.open(connection, target, window, cx));
+    }
+
+    /// The Logs sub-tab of a container: opens or focuses the dock tab on the container shown
+    /// in the drawer. Nothing happens while the logs are not permitted.
+    pub(crate) fn open_container_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(live) = self.live(cx) else {
+            return;
+        };
+        if view_logs_reason(Some(live)).is_some() {
+            return;
+        }
+        let Some(key) = &self.selected else {
+            return;
+        };
+        let Some(pod) = live.pods.items().iter().find(|pod| key.is_pod(pod)) else {
+            return;
+        };
+        let Some(index) = selected_container_index(pod, &self.drawer) else {
+            return;
+        };
+        let Some(target) = LogTarget::of_container(pod, &pod.containers[index].name) else {
+            return;
+        };
+        let connection = live.connection().clone();
+        self.log_dock
+            .update(cx, |dock, cx| dock.open(connection, target, window, cx));
+    }
+
+    /// Why "Shell into selected" is disabled.
+    pub(crate) fn open_shell_unavailable_reason(&self, cx: &App) -> SharedString {
+        open_shell_reason(self.live(cx))
+    }
+
     fn on_session_changed(&mut self, cx: &mut Context<Self>) {
         self.apply_pending_custom_launch(cx);
         self.follow_custom_kinds(cx);
@@ -1668,15 +1741,36 @@ impl AppShell {
         if live.pods.is_loading() {
             return;
         }
-        let opened = pick_logs_pod(live.pods.items())
-            .and_then(|row| live.pods.items().get(row))
-            .and_then(LogTarget::of_pod)
+        let pods = live.pods.items();
+        // `--select` names the pod, so a run can capture a system workload on purpose.
+        let picked = self
+            .launch_select
+            .as_deref()
+            .and_then(|select| {
+                pick_selected(
+                    select,
+                    pods.iter()
+                        .map(|pod| (Some(pod.namespace.as_str()), pod.name.as_str())),
+                )
+            })
+            .or_else(|| pick_logs_pod(pods))
+            .and_then(|row| pods.get(row));
+        // A bare pod has no workload to merge, so it falls back to the pod's own tab.
+        let workload = (launch == LaunchScreen::LogsWorkload)
+            .then(|| {
+                picked
+                    .and_then(controller_owner_of)
+                    .and_then(LogTarget::of_workload)
+            })
+            .flatten();
+        let opened = workload
+            .or_else(|| picked.and_then(LogTarget::of_pod))
             .map(|target| (live.connection().clone(), target));
         self.pending_launch_screen = None;
         let Some((connection, target)) = opened else {
             return;
         };
-        let mode = if launch == LaunchScreen::LogsZoomed {
+        let mode = if launch != LaunchScreen::LogsDock {
             DockMode::Zoomed
         } else {
             DockMode::Normal
