@@ -306,3 +306,13 @@ fn event_summary_reads_the_container_from_the_field_path() {
 fn failed_create_selector_filters_warning_failed_create() {
     assert_eq!(failed_create_selector(), "type=Warning,reason=FailedCreate");
 }
+
+#[test]
+fn message_hides_url_userinfo() {
+    let masked = truncate_message("Get \"https://ci:s3cret@registry.example.com/v2/\": denied");
+    assert_eq!(
+        masked,
+        "Get \"https://<hidden>@registry.example.com/v2/\": denied"
+    );
+    assert!(!masked.contains("s3cret"));
+}

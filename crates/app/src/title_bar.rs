@@ -3,13 +3,17 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{Disableable as _, Icon, Sizable as _, StyledExt as _, TitleBar, h_flex};
-use gpui_kit::{AnyElement, Context, IntoElement, ParentElement as _, Styled as _, div};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, TitleBar, h_flex,
+};
+use gpui_kit::{AnyElement, Context, Hsla, IntoElement, ParentElement as _, Styled as _, div};
 
 use crate::app_shell::AppShell;
 use crate::cluster_session::namespaces_label;
+use crate::issue_board::IssueSummary;
 use crate::namespace_picker::{PickerAnchor, namespace_picker as picker};
 use crate::resource_actions::disabled_menu_item;
+use crate::status_tone::tone_color;
 
 pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
     TitleBar::new()
@@ -26,8 +30,69 @@ pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoEl
                 .gap_2()
                 .items_center()
                 .child(read_only_badge())
+                .child(issues_button(shell, cx))
                 .child(settings_button()),
         )
+}
+
+/// The flag with the issue count, in the tone of the worst issue. Without a count it is a muted
+/// icon: nothing to show yet, or no issues.
+fn issues_button(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
+    let button = Button::new("issues").ghost().small();
+    let muted = cx.theme().muted_foreground;
+    let live_session = shell
+        .session()
+        .map(|session| session.read(cx))
+        .filter(|session| session.live().is_some());
+    let Some(session) = live_session else {
+        return button
+            .child(flag(muted, None))
+            .tooltip("Not connected")
+            .disabled(true)
+            .into_any_element();
+    };
+    let Some(summary) = session.issues().summary() else {
+        return button
+            .child(flag(muted, None))
+            .tooltip("Checking for issues…")
+            .into_any_element();
+    };
+    let shown = match summary.total {
+        0 => flag(muted, None),
+        total => flag(tone_color(summary.worst().tone(), cx), Some(total)),
+    };
+    button
+        .child(shown)
+        .tooltip(issues_tooltip(summary, session.issues().coverage().note()))
+        .into_any_element()
+}
+
+fn flag(color: Hsla, total: Option<usize>) -> impl IntoElement {
+    h_flex()
+        .gap_1()
+        .items_center()
+        .text_color(color)
+        .child(Icon::new(IconName::Flag))
+        .children(total.map(|total| total.to_string()))
+}
+
+/// `4 issues (1 critical)`; a rule that could not run is named after `partial coverage`.
+fn issues_tooltip(summary: IssueSummary, coverage_note: Option<String>) -> String {
+    let unit = if summary.total == 1 {
+        "issue"
+    } else {
+        "issues"
+    };
+    let mut text = format!("{} {unit} ({} critical)", summary.total, summary.critical);
+    if summary.is_partial {
+        text.push_str(" · partial coverage");
+        if let Some(note) = coverage_note {
+            text.push_str(": ");
+            text.push_str(&note);
+        }
+    }
+    text.push_str(" · Issues screen comes next");
+    text
 }
 
 fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {

@@ -588,6 +588,30 @@ fn pvc_usage_keeps_the_newest_sample() {
 }
 
 #[test]
+fn pvc_usages_yield_newest_per_claim() {
+    let mut history = KubeletHistory::default();
+    let round = vec![node_with(
+        "node-a",
+        vec![
+            pvc_pod("web-1", pvc("shop", "shared", 30, 80)),
+            pvc_pod("web-2", pvc("shop", "shared", 15, 70)),
+            pvc_pod("web-3", pvc("shop", "data", 30, 10)),
+        ],
+    )];
+    record_all(&mut history, 30, &round);
+    let mut used: Vec<(String, u64)> = history
+        .pvc_usages()
+        .filter_map(|usage| Some((usage.claim.clone(), usage.used?.bytes())))
+        .collect();
+    used.sort();
+    assert_eq!(
+        used,
+        [("data".to_owned(), 10), ("shared".to_owned(), 80)],
+        "one entry per claim, the newest sample"
+    );
+}
+
+#[test]
 fn a_later_round_replaces_the_pvc_usage() {
     let mut history = KubeletHistory::default();
     let round = vec![node_with(

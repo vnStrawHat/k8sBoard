@@ -164,13 +164,16 @@ fn probe_actions_map_each_handler() {
 fn probe_defaults_period_and_threshold() {
     let bare = readiness(&container_with_probe(Probe::default()));
     assert_eq!((bare.period_seconds, bare.failure_threshold), (10, 3));
+    assert_eq!(bare.initial_delay_seconds, 0);
 
     let tuned = readiness(&container_with_probe(Probe {
         period_seconds: Some(5),
         failure_threshold: Some(7),
+        initial_delay_seconds: Some(20),
         ..Default::default()
     }));
     assert_eq!((tuned.period_seconds, tuned.failure_threshold), (5, 7));
+    assert_eq!(tuned.initial_delay_seconds, 20);
 }
 
 #[test]

@@ -50,6 +50,7 @@ fn probe(action: ProbeAction, period_seconds: u32) -> ProbeSummary {
         action,
         period_seconds,
         failure_threshold: 3,
+        initial_delay_seconds: 0,
     }
 }
 

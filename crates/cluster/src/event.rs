@@ -8,6 +8,7 @@ use kube::runtime::watcher;
 
 use crate::connection::ClusterConnection;
 use crate::namespace::NamespaceScope;
+use crate::object_yaml::mask_url_userinfo;
 use crate::resource_watch::{StoreLimit, WatchUpdate, limited_summary_watch};
 use crate::workload::non_empty;
 
@@ -266,10 +267,13 @@ fn field_path_container(path: &str) -> Option<String> {
     .map(str::to_owned)
 }
 
-/// Trims both ends like Go's `strings.TrimSpace`, then cuts at the largest char boundary
-/// within `MESSAGE_LIMIT` bytes and appends `…`.
+/// Trims both ends like Go's `strings.TrimSpace`, hides URL userinfo, then cuts at the largest
+/// char boundary within `MESSAGE_LIMIT` bytes and appends `…`. The userinfo goes first so a cut
+/// can never split a credential; the Issues screen quotes these messages.
 fn truncate_message(message: &str) -> String {
     let message = message.trim();
+    let masked = mask_url_userinfo(message);
+    let message = masked.as_deref().unwrap_or(message);
     if message.len() <= MESSAGE_LIMIT {
         return message.to_owned();
     }

@@ -37,6 +37,21 @@ pub(crate) struct WatchSubscription {
     _receiver: Task<()>,
 }
 
+/// Whether an applied update repaints its owner.
+#[derive(Clone, Copy)]
+enum UpdateNotice {
+    Notify,
+    Silent,
+}
+
+impl UpdateNotice {
+    fn notify<V: 'static>(self, cx: &mut Context<V>) {
+        if matches!(self, Self::Notify) {
+            cx.notify();
+        }
+    }
+}
+
 impl ClusterRuntime {
     pub(crate) fn new(handle: tokio::runtime::Handle) -> Self {
         Self { handle }
@@ -62,6 +77,29 @@ impl ClusterRuntime {
         apply: impl Fn(&mut V, U, &mut Context<V>) + 'static,
         on_closed: impl FnOnce(&mut V, &mut Context<V>) + 'static,
     ) -> WatchSubscription {
+        self.subscribe_with(UpdateNotice::Notify, updates, cx, apply, on_closed)
+    }
+
+    /// `subscribe` without the repaint: for feeds that only mark the issue board dirty, which
+    /// repaints on its own tick when something changed.
+    pub(crate) fn subscribe_silent<V: 'static, U: Send + 'static>(
+        &self,
+        updates: impl Stream<Item = U> + Send + 'static,
+        cx: &mut Context<V>,
+        apply: impl Fn(&mut V, U, &mut Context<V>) + 'static,
+        on_closed: impl FnOnce(&mut V, &mut Context<V>) + 'static,
+    ) -> WatchSubscription {
+        self.subscribe_with(UpdateNotice::Silent, updates, cx, apply, on_closed)
+    }
+
+    fn subscribe_with<V: 'static, U: Send + 'static>(
+        &self,
+        notice: UpdateNotice,
+        updates: impl Stream<Item = U> + Send + 'static,
+        cx: &mut Context<V>,
+        apply: impl Fn(&mut V, U, &mut Context<V>) + 'static,
+        on_closed: impl FnOnce(&mut V, &mut Context<V>) + 'static,
+    ) -> WatchSubscription {
         // Capacity 1 bounds memory: a slow UI pauses the pump instead of queueing snapshots.
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let pump = self.spawn(async move {
@@ -76,7 +114,7 @@ impl ClusterRuntime {
             while let Some(update) = receiver.recv().await {
                 let applied = this.update(cx, |view, cx| {
                     apply(view, update, cx);
-                    cx.notify();
+                    notice.notify(cx);
                 });
                 if applied.is_err() {
                     return;
@@ -85,7 +123,7 @@ impl ClusterRuntime {
             // The entity may already be gone, in which case there is nothing to mark.
             let _ = this.update(cx, |view, cx| {
                 on_closed(view, cx);
-                cx.notify();
+                notice.notify(cx);
             });
         });
         WatchSubscription {

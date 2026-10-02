@@ -268,6 +268,17 @@ impl PodUsageHistory {
         rings.newest().map(UsagePoint::usage)
     }
 
+    /// One container's usage at the last two ticks, oldest first; `None` unless both reported.
+    pub(crate) fn latest_container_pair(
+        &self,
+        namespace: &str,
+        pod: &str,
+        container: &str,
+    ) -> Option<[ResourceUsage; 2]> {
+        let rings = self.pod(namespace, pod)?.containers.get(container)?;
+        rings.newest_pair().map(|pair| pair.map(UsagePoint::usage))
+    }
+
     /// The pod (`container` `None`) or one of its containers.
     pub(crate) fn pod_series(
         &self,

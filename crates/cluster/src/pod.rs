@@ -42,7 +42,7 @@ pub struct PodSummary {
     /// Init and sidecar containers in spec order, then main containers.
     pub containers: Vec<ContainerSummary>,
     /// `status.message`, kept only when the phase is `Failed` or the reason is `Evicted`.
-    /// Cut like event messages.
+    /// URL userinfo hidden, then cut like event messages.
     pub status_message: Option<String>,
     /// `key=value` terms in key order. Labels only: annotations are never read.
     pub labels: Vec<String>,
@@ -60,8 +60,10 @@ pub struct PodCondition {
     pub is_true: bool,
     /// An empty reason is `None`.
     pub reason: Option<String>,
-    /// Cut like event messages.
+    /// URL userinfo hidden, then cut like event messages.
     pub message: Option<String>,
+    /// `lastTransitionTime`.
+    pub changed_at: Option<jiff::Timestamp>,
 }
 
 /// Ready containers over total (main plus sidecar), like kubectl's `READY` column.
@@ -115,7 +117,7 @@ pub enum ContainerKind {
 pub enum ContainerState {
     Waiting {
         reason: Option<StatusReason>,
-        /// Cut like event messages.
+        /// URL userinfo hidden, then cut like event messages.
         message: Option<String>,
     },
     Running {
@@ -209,6 +211,7 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
                 is_true: condition.status == "True",
                 reason: non_empty(condition.reason.as_deref()),
                 message: optional_message(condition.message.as_deref()),
+                changed_at: condition.last_transition_time.as_ref().map(|time| time.0),
             })
             .collect(),
         containers: container_summaries(pod),

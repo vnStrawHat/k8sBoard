@@ -109,6 +109,7 @@ fn http_probe() -> ProbeSummary {
         },
         period_seconds: 5,
         failure_threshold: 3,
+        initial_delay_seconds: 0,
     }
 }
 
@@ -181,6 +182,7 @@ fn diagnosis_p1_unschedulable() {
         is_true: false,
         reason: Some("Unschedulable".to_owned()),
         message: Some("0/4 nodes are available: 4 Insufficient memory.".to_owned()),
+        changed_at: None,
     }];
     let diagnosis = diagnose(&pending).expect("a diagnosis");
     assert_eq!(diagnosis.tone, StatusTone::Bad);
@@ -723,5 +725,85 @@ fn probe_failures_with_equal_times_keep_list_order() {
     assert_eq!(
         result(&pod, ProbeKind::Readiness, Some(&[first, second])),
         ProbeResult::Failing { failures: 7 }
+    );
+}
+
+#[test]
+fn cause_names_the_rule_that_fired() {
+    let mut unschedulable = pod(PodStatus::Reason(StatusReason::Pending), Vec::new());
+    unschedulable.conditions = vec![PodCondition {
+        name: "PodScheduled".to_owned(),
+        is_true: false,
+        reason: Some("Unschedulable".to_owned()),
+        message: None,
+        changed_at: None,
+    }];
+    let mut failed = pod(
+        PodStatus::Reason(StatusReason::Evicted),
+        vec![main_container("api", waiting(StatusReason::Error, None))],
+    );
+    failed.status_message = Some("low on memory".to_owned());
+    let mut starting = main_container("api", running());
+    starting.probes.startup = Some(http_probe());
+    let cases = [
+        (unschedulable, DiagnosisCause::Unschedulable { since: None }),
+        (
+            pod(PodStatus::Reason(StatusReason::SchedulingGated), Vec::new()),
+            DiagnosisCause::SchedulingGated,
+        ),
+        (failed, DiagnosisCause::PodFailed),
+        (
+            running_pod(vec![main_container(
+                "api",
+                waiting(StatusReason::ErrImagePull, None),
+            )]),
+            DiagnosisCause::ImagePull(StatusReason::ErrImagePull),
+        ),
+        (
+            running_pod(vec![crash_looping(None)]),
+            DiagnosisCause::CrashLoop,
+        ),
+        (
+            running_pod(vec![main_container(
+                "api",
+                waiting(StatusReason::CreateContainerConfigError, None),
+            )]),
+            DiagnosisCause::Waiting(StatusReason::CreateContainerConfigError),
+        ),
+        (
+            running_pod(vec![main_container(
+                "api",
+                ContainerState::Terminated(termination(Some(StatusReason::Error), 1, None, None)),
+            )]),
+            DiagnosisCause::Exited {
+                reason: Some(StatusReason::Error),
+            },
+        ),
+        (running_pod(vec![starting]), DiagnosisCause::StartupPending),
+        (
+            running_pod(vec![main_container("api", running())]),
+            DiagnosisCause::NotReady,
+        ),
+    ];
+    for (pod, cause) in cases {
+        assert_eq!(diagnose(&pod).expect("a diagnosis").cause, cause);
+    }
+}
+
+#[test]
+fn unschedulable_cause_carries_condition_time() {
+    let mut pending = pod(PodStatus::Reason(StatusReason::Pending), Vec::new());
+    pending.conditions = vec![PodCondition {
+        name: "PodScheduled".to_owned(),
+        is_true: false,
+        reason: Some("Unschedulable".to_owned()),
+        message: None,
+        changed_at: Some(at(500)),
+    }];
+    assert_eq!(
+        diagnose(&pending).expect("a diagnosis").cause,
+        DiagnosisCause::Unschedulable {
+            since: Some(at(500))
+        }
     );
 }

@@ -7,6 +7,8 @@
 | File | Change |
 |---|---|
 | `src/pod.rs` (+ `pod_tests.rs`) | `PodCondition.changed_at: Option<jiff::Timestamp>` from `lastTransitionTime` (same doc as `NodeCondition.changed_at`) |
+| `src/event.rs` (+ `event_tests.rs`) | `truncate_message` (the source of every event, pod, node, and workload message) hides URL userinfo before the cut, as 0018 does for custom objects, so no issue cause can quote a credential; tests `message_hides_url_userinfo`, `node_condition_message_hides_url_userinfo`, `pod_condition_and_waiting_messages_hide_url_userinfo` |
+| `src/container_spec.rs` (+ tests) | `ProbeSummary.initial_delay_seconds` (`initialDelaySeconds`, default 0): the startup grace adds it |
 
 ## `crates/app`
 

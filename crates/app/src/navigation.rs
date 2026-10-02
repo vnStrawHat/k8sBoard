@@ -4,21 +4,25 @@ use cluster::{CrdSummary, NamespaceScope};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, Icon};
+use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, SharedString,
+    App, Context, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, SharedString,
     StatefulInteractiveElement as _, Styled as _, div, px,
 };
 
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::{AccessState, CustomGate, LiveCluster, LiveList, namespaces_label};
 use crate::custom_kind::CustomKind;
+use crate::issue::IssueSeverity;
+use crate::issue_board::IssueBoard;
 use crate::resource_kind::ResourceKind;
+use crate::status_tone::tone_color;
 
 pub(crate) const SIDEBAR_WIDTH: Pixels = px(220.);
 
 /// The items above the groups.
-const TOP_ITEMS: [&str; 3] = ["Overview", "Issues", "Topology"];
+const TOP_ITEMS: [&str; 3] = ["Overview", ISSUES_ITEM, "Topology"];
+const ISSUES_ITEM: &str = "Issues";
 
 /// The section whose items are followed by one submenu per API group of the custom kinds.
 const CUSTOM_RESOURCES: &str = "Custom Resources";
@@ -110,9 +114,44 @@ pub(crate) struct NavigationCounts {
     pub(crate) explorer: Option<(ResourceKind, usize)>,
     /// Counted numbers of kinds, from one-shot requests.
     pub(crate) kinds: HashMap<ResourceKind, usize>,
+    /// The issue total with its worst severity; `None` before the issues are known and at zero.
+    pub(crate) issue_total: Option<IssueCount>,
+    /// The issues whose row a screen lists, for the screens that have any.
+    pub(crate) issue_counts: Vec<ScreenIssues>,
+}
+/// How many issues, and the worst severity among them.
+type IssueCount = (usize, IssueSeverity);
+/// The issues one screen lists.
+type ScreenIssues = (Screen, usize, IssueSeverity);
+
+/// The issue numbers of the sidebar: the total, and the count of every screen that has issues.
+/// Nothing before pods and nodes have loaded, and nothing at zero.
+pub(crate) fn issue_counts(board: &IssueBoard) -> (Option<IssueCount>, Vec<ScreenIssues>) {
+    let Some(summary) = board.summary() else {
+        return (None, Vec::new());
+    };
+    let total = (summary.total > 0).then_some((summary.total, summary.worst()));
+    let screens = [Screen::Pods, Screen::Nodes]
+        .into_iter()
+        .chain(ResourceKind::ALL.into_iter().map(Screen::Kind));
+    let counts = screens
+        .filter_map(|screen| {
+            let (count, severity) = board.count_for(screen)?;
+            Some((screen, count, severity))
+        })
+        .collect();
+    (total, counts)
 }
 
 impl NavigationCounts {
+    /// The issues of `screen` with the worst severity among them.
+    fn issues_of(&self, screen: Screen) -> Option<IssueCount> {
+        self.issue_counts
+            .iter()
+            .find(|(counted, ..)| *counted == screen)
+            .map(|(_, count, severity)| (*count, *severity))
+    }
+
     /// The number of `kind`: the live list of the visible screen wins over a counted one.
     fn of_kind(&self, kind: ResourceKind) -> Option<usize> {
         let live = self
@@ -183,8 +222,7 @@ pub(crate) fn sidebar(
     live: Option<&LiveCluster>,
     cx: &Context<AppShell>,
 ) -> impl IntoElement {
-    let top =
-        SidebarMenu::new().children(TOP_ITEMS.map(|name| SidebarMenuItem::new(name).disable(true)));
+    let top = SidebarMenu::new().children(TOP_ITEMS.map(|name| top_item(name, counts)));
     let sections = SidebarMenu::new().children(SECTIONS.iter().map(|section| {
         SidebarMenuItem::new(section.name)
             .default_open(is_section_open(section, active))
@@ -202,6 +240,40 @@ pub(crate) fn sidebar(
         .collapsible(false)
         .child(top)
         .child(sections)
+}
+
+/// An item above the groups. Issues shows its total, toned by the worst severity, while it is
+/// still disabled.
+fn top_item(name: &'static str, counts: &NavigationCounts) -> SidebarMenuItem {
+    let item = SidebarMenuItem::new(name).disable(true);
+    let (ISSUES_ITEM, Some((total, severity))) = (name, counts.issue_total) else {
+        return item;
+    };
+    item.suffix(move |_, cx| {
+        issue_badge(
+            name,
+            total,
+            severity,
+            "Issues screen comes in the next step".into(),
+            cx,
+        )
+    })
+}
+
+/// The count of issues, in the tone of the worst one, with a tooltip.
+fn issue_badge(
+    name: &'static str,
+    count: usize,
+    severity: IssueSeverity,
+    tooltip: SharedString,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    div()
+        .id(SharedString::from(format!("issues-{name}")))
+        .text_xs()
+        .text_color(tone_color(severity.tone(), cx))
+        .child(count.to_string())
+        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
 }
 
 fn item(
@@ -318,15 +390,30 @@ fn screen_item(
         Screen::Nodes => counts.nodes,
         Screen::Kind(kind) => counts.of_kind(kind),
     };
+    let issues = counts.issues_of(screen);
     SidebarMenuItem::new(name)
         .active(screen == active)
         .on_click(cx.listener(move |shell, _, _, cx| shell.show_screen(screen, cx)))
         .suffix(move |_, cx| {
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .children(count.map(|count| count.to_string()))
+            h_flex()
+                .gap_1()
+                .children(issues.map(|(issues, severity)| {
+                    issue_badge(name, issues, severity, issues_tooltip(issues), cx)
+                }))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .children(count.map(|count| count.to_string())),
+                )
         })
+}
+
+fn issues_tooltip(count: usize) -> SharedString {
+    match count {
+        1 => "1 issue".into(),
+        count => format!("{count} issues").into(),
+    }
 }
 
 /// A greyed-out item with a lock whose tooltip says what is missing.
@@ -347,7 +434,9 @@ fn denied_item(name: &'static str, reason: SharedString, is_active: bool) -> Sid
 
 #[cfg(test)]
 mod tests {
-    use cluster::{AccessCheck, AccessDecision, AccessReport, AccessReview};
+    use cluster::{
+        AccessCheck, AccessDecision, AccessReport, AccessReview, ContainerState, PodSummary,
+    };
     use gpui_kit::Task;
 
     use super::*;
@@ -635,10 +724,124 @@ mod tests {
                 (ResourceKind::Services, 70),
                 (ResourceKind::Deployments, 31),
             ]),
+            issue_total: None,
+            issue_counts: Vec::new(),
         };
         // The visible kind shows its live list; the others show what was counted.
         assert_eq!(counts.of_kind(ResourceKind::Services), Some(71));
         assert_eq!(counts.of_kind(ResourceKind::Deployments), Some(31));
         assert_eq!(counts.of_kind(ResourceKind::Jobs), None);
+    }
+
+    fn pod(name: &str, controller: Option<(&str, &str)>, state: ContainerState) -> PodSummary {
+        let container = cluster::ContainerSummary {
+            name: "api".to_owned(),
+            image: "registry/app:1".to_owned(),
+            kind: cluster::ContainerKind::Main,
+            state,
+            is_ready: false,
+            restart_count: 0,
+            last_termination: None,
+            image_digest: None,
+            pull_policy: None,
+            is_started: None,
+            ports: Vec::new(),
+            resources: Vec::new(),
+            probes: cluster::ContainerProbes::default(),
+            env: Vec::new(),
+            env_from: Vec::new(),
+            mounts: Vec::new(),
+        };
+        PodSummary {
+            namespace: "shop".to_owned(),
+            name: name.to_owned(),
+            status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
+            ready: cluster::ReadyCount { ready: 0, total: 1 },
+            restarts: 0,
+            node_name: None,
+            created_at: None,
+            pod_ip: None,
+            qos_class: None,
+            service_account: None,
+            controller: controller.map(|(kind, name)| cluster::ControllerRef {
+                kind: kind.to_owned(),
+                name: name.to_owned(),
+            }),
+            conditions: Vec::new(),
+            containers: vec![container],
+            status_message: None,
+            labels: Vec::new(),
+            host_network: false,
+            image_pull_secrets: Vec::new(),
+        }
+    }
+
+    fn board_of(pods: &[PodSummary]) -> IssueBoard {
+        let mut board = IssueBoard::default();
+        let inputs = crate::issue_board::IssueInputs {
+            pods: Some(pods),
+            nodes: Some(&[]),
+            events: None,
+            pod_usage: None,
+            node_usage: None,
+            kubelet: None,
+            is_job_feed_live: false,
+            now: jiff::Timestamp::from_second(1_000_000).expect("valid timestamp"),
+        };
+        use crate::issue_feeds::{Coverage, FeedState, IssueFeed};
+        let coverage = Coverage {
+            feeds: vec![
+                (IssueFeed::Pods, FeedState::Live),
+                (IssueFeed::Nodes, FeedState::Live),
+            ],
+        };
+        board.refresh(&inputs, coverage);
+        board
+    }
+
+    #[test]
+    fn issue_count_suffix_uses_worst_severity() {
+        let crash = ContainerState::Waiting {
+            reason: Some(cluster::StatusReason::CrashLoopBackOff),
+            message: None,
+        };
+        let exited = ContainerState::Terminated(cluster::Termination {
+            reason: None,
+            exit_code: 1,
+            signal: None,
+            started_at: None,
+            finished_at: None,
+        });
+        let board = board_of(&[
+            pod("a-0", None, exited),
+            pod("b-0", None, crash.clone()),
+            pod("c-0", Some(("StatefulSet", "c")), crash),
+        ]);
+        let (total, counts) = issue_counts(&board);
+        // A Warning (exited) and two Criticals (crash loops): the worst sets the tone.
+        assert_eq!(total, Some((3, IssueSeverity::Critical)));
+        assert_eq!(counts, [(Screen::Pods, 3, IssueSeverity::Critical)]);
+        let navigation = NavigationCounts {
+            pods: Some(3),
+            nodes: None,
+            explorer: None,
+            kinds: HashMap::new(),
+            issue_total: total,
+            issue_counts: counts,
+        };
+        assert_eq!(
+            navigation.issues_of(Screen::Pods),
+            Some((3, IssueSeverity::Critical))
+        );
+        assert_eq!(navigation.issues_of(Screen::Nodes), None);
+        assert_eq!(issues_tooltip(1), "1 issue");
+        assert_eq!(issues_tooltip(3), "3 issues");
+    }
+
+    #[test]
+    fn a_calm_cluster_shows_no_issue_numbers() {
+        // Nothing before the first run, and nothing at zero.
+        assert_eq!(issue_counts(&IssueBoard::default()), (None, Vec::new()));
+        assert_eq!(issue_counts(&board_of(&[])), (None, Vec::new()));
     }
 }

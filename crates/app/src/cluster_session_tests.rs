@@ -270,6 +270,7 @@ fn watches(
         companion,
         object_events,
         related,
+        issue_feeds: 0,
     }
 }
 
@@ -1011,6 +1012,8 @@ fn releases_have_a_history_related_list() {
 
 #[test]
 fn open_watch_count_stays_within_3n_plus_5() {
+    // Without the Issues engine's Warning events watches (`issue_feeds` is 0 here); the total with
+    // them is `4N + 5`, checked by `open_watch_count_counts_warning_events`.
     let with_crds = |watches: OpenWatches| OpenWatches {
         crds: true,
         ..watches
@@ -1360,4 +1363,39 @@ fn denied_kinds_are_not_counted_for_instances() {
         countable_custom_kinds(&[allowed, denied], &HashMap::new()),
         [allowed, denied]
     );
+}
+
+#[test]
+fn open_watch_count_counts_warning_events() {
+    // One Warning events watch per namespace on top of the 3N + 5 worst case (CRD watch, drawer
+    // events and related objects, a namespaced explorer and companion): 4N + 5.
+    for namespaces in [1, 2, 3, 5] {
+        let count = open_watch_count(OpenWatches {
+            crds: true,
+            issue_feeds: namespaces,
+            ..watches(namespaces, namespaces, namespaces, true, true)
+        });
+        assert_eq!(count, 4 * namespaces + 5);
+    }
+    // A scope change that waits to restart the events watch counts none.
+    assert_eq!(open_watch_count(watches(1, 0, 0, false, false)), 3);
+}
+
+#[test]
+fn time_refresh_notifies_only_when_issues_visible() {
+    use IssueChange::{Shape, Unchanged};
+    for reason in [RunReason::Dirty, RunReason::TimeRefresh] {
+        assert!(refresh_repaints(Shape, reason, false));
+    }
+    assert!(!refresh_repaints(Unchanged, RunReason::Dirty, true));
+    assert!(!refresh_repaints(Unchanged, RunReason::TimeRefresh, false));
+    assert!(refresh_repaints(Unchanged, RunReason::TimeRefresh, true));
+}
+
+#[test]
+fn hidden_board_does_not_notify_for_an_age_change() {
+    for reason in [RunReason::Dirty, RunReason::TimeRefresh] {
+        assert!(!refresh_repaints(IssueChange::TextOnly, reason, false));
+        assert!(refresh_repaints(IssueChange::TextOnly, reason, true));
+    }
 }

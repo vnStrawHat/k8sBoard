@@ -671,6 +671,7 @@ fn labelled_pod(namespace: &str, name: &str, label: &str, is_ready: bool) -> Pod
             is_true: is_ready,
             reason: None,
             message: None,
+            changed_at: None,
         }],
         status_message: None,
         labels: vec![label.to_owned()],

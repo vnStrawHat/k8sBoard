@@ -21,6 +21,31 @@ pub(crate) struct PodDiagnosis {
     /// The container the text is about; `None` for a pod-level cause.
     pub(crate) container: Option<String>,
     pub(crate) text: String,
+    /// The rule that fired. The box ignores it; the issue rules read it.
+    pub(crate) cause: DiagnosisCause,
+}
+
+/// Which diagnosis rule fired.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DiagnosisCause {
+    /// P1; `since` is the `PodScheduled` condition's transition time.
+    Unschedulable { since: Option<Timestamp> },
+    /// P2.
+    SchedulingGated,
+    /// P3.
+    PodFailed,
+    /// C1.
+    ImagePull(StatusReason),
+    /// C2 to C4.
+    CrashLoop,
+    /// C5.
+    Waiting(StatusReason),
+    /// C6.
+    Exited { reason: Option<StatusReason> },
+    /// C7.
+    StartupPending,
+    /// C8.
+    NotReady,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +89,7 @@ pub(crate) enum ProbeResult {
 struct Problem {
     tone: StatusTone,
     text: String,
+    cause: DiagnosisCause,
 }
 
 pub(crate) fn pod_diagnosis(
@@ -71,11 +97,7 @@ pub(crate) fn pod_diagnosis(
     events: Option<&[EventSummary]>,
     now: Timestamp,
 ) -> Option<PodDiagnosis> {
-    if matches!(
-        pod.status,
-        PodStatus::Terminating
-            | PodStatus::Reason(StatusReason::Succeeded | StatusReason::Completed)
-    ) {
+    if is_diagnosis_skipped(pod) {
         return None;
     }
     if let Some(problem) = pod_problem(pod) {
@@ -83,6 +105,7 @@ pub(crate) fn pod_diagnosis(
             tone: problem.tone,
             container: None,
             text: problem.text,
+            cause: problem.cause,
         });
     }
 
@@ -114,7 +137,17 @@ pub(crate) fn pod_diagnosis(
         tone: problem.tone,
         container: Some(container.name.clone()),
         text,
+        cause: problem.cause.clone(),
     })
+}
+
+/// P0: a pod that is going away or is done has nothing to explain.
+pub(crate) fn is_diagnosis_skipped(pod: &PodSummary) -> bool {
+    matches!(
+        pod.status,
+        PodStatus::Terminating
+            | PodStatus::Reason(StatusReason::Succeeded | StatusReason::Completed)
+    )
 }
 
 /// `text` followed by `next`, with a full stop added when `text` does not end a sentence.
@@ -142,17 +175,22 @@ fn pod_problem(pod: &PodSummary) -> Option<Problem> {
                 Some(message) => format!("Cannot be scheduled: {message}"),
                 None => "Cannot be scheduled.".to_owned(),
             },
+            cause: DiagnosisCause::Unschedulable {
+                since: condition.changed_at,
+            },
         });
     }
     if pod.status == PodStatus::Reason(StatusReason::SchedulingGated) {
         return Some(Problem {
             tone: StatusTone::Warn,
             text: "Waiting for its scheduling gates to be removed.".to_owned(),
+            cause: DiagnosisCause::SchedulingGated,
         });
     }
     pod.status_message.as_ref().map(|message| Problem {
         tone: StatusTone::Bad,
         text: format!("{}: {message}", pod.status),
+        cause: DiagnosisCause::PodFailed,
     })
 }
 
@@ -179,25 +217,35 @@ fn waiting_problem(
     reason: &StatusReason,
     message: Option<&str>,
 ) -> Option<Problem> {
-    let text = match reason {
+    let (text, cause) = match reason {
         StatusReason::ImagePullBackOff
         | StatusReason::ErrImagePull
         | StatusReason::InvalidImageName
-        | StatusReason::ErrImageNeverPull => format!(
-            "Cannot pull image {}: {}",
-            container.image,
-            message.map_or_else(|| reason.to_string(), str::to_owned)
+        | StatusReason::ErrImageNeverPull => (
+            format!(
+                "Cannot pull image {}: {}",
+                container.image,
+                message.map_or_else(|| reason.to_string(), str::to_owned)
+            ),
+            DiagnosisCause::ImagePull(reason.clone()),
         ),
-        StatusReason::CrashLoopBackOff => crash_loop_text(container, message),
-        reason if is_bad_reason(reason) => match message {
-            Some(message) => format!("{reason}: {message}"),
-            None => format!("{reason}."),
-        },
+        StatusReason::CrashLoopBackOff => (
+            crash_loop_text(container, message),
+            DiagnosisCause::CrashLoop,
+        ),
+        reason if is_bad_reason(reason) => (
+            match message {
+                Some(message) => format!("{reason}: {message}"),
+                None => format!("{reason}."),
+            },
+            DiagnosisCause::Waiting(reason.clone()),
+        ),
         _ => return None,
     };
     Some(Problem {
         tone: StatusTone::Bad,
         text,
+        cause,
     })
 }
 
@@ -244,6 +292,9 @@ fn terminated_problem(container: &ContainerSummary, termination: &Termination) -
     Problem {
         tone: StatusTone::Bad,
         text,
+        cause: DiagnosisCause::Exited {
+            reason: termination.reason.clone(),
+        },
     }
 }
 
@@ -262,6 +313,7 @@ fn running_problem(
         return Some(Problem {
             tone: StatusTone::Warn,
             text,
+            cause: DiagnosisCause::StartupPending,
         });
     }
     let is_ready_expected = matches!(container.kind, ContainerKind::Main | ContainerKind::Sidecar);
@@ -283,6 +335,7 @@ fn running_problem(
     Some(Problem {
         tone: StatusTone::Warn,
         text,
+        cause: DiagnosisCause::NotReady,
     })
 }
 

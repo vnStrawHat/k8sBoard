@@ -41,6 +41,8 @@ pub struct ProbeSummary {
     pub period_seconds: u32,
     /// Defaults to 3.
     pub failure_threshold: u32,
+    /// `initialDelaySeconds`; defaults to 0.
+    pub initial_delay_seconds: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -220,6 +222,7 @@ fn probe_summary(probe: &Probe) -> ProbeSummary {
                 .failure_threshold
                 .unwrap_or(DEFAULT_PROBE_FAILURE_THRESHOLD),
         ),
+        initial_delay_seconds: non_negative(probe.initial_delay_seconds.unwrap_or(0)),
     }
 }
 

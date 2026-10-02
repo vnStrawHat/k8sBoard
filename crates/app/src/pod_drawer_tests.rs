@@ -95,6 +95,7 @@ fn condition_tooltip_joins_reason_and_message() {
         is_true: false,
         reason: reason.map(str::to_owned),
         message: message.map(str::to_owned),
+        changed_at: None,
     };
     assert_eq!(
         condition_tooltip(&condition(

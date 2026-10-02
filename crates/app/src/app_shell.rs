@@ -43,7 +43,7 @@ use crate::log_dock::{DockMode, LogDock};
 use crate::log_target::{LogTarget, NoLogTarget, check_logs_access};
 use crate::monitor_data::{MonitorInput, MonitorSubject, monitor_data};
 use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
-use crate::navigation::{NavigationCounts, sidebar};
+use crate::navigation::{NavigationCounts, issue_counts, sidebar};
 use crate::node_table::NodeTableDelegate;
 use crate::object_events::{SubjectChange, event_subject, subject_change};
 use crate::pod_drawer::selected_container_index;
@@ -1821,6 +1821,7 @@ impl AppShell {
                         || (self.screen == Screen::Kind(ResourceKind::Crds)
                             && live.is_counting_instances())
                         || live.kind_counts().is_running()
+                        || session.read(cx).is_issues_pending()
                         || (matches!(self.screen, Screen::Kind(_)) && live.is_join_loading())
                     {
                         TargetState::Loading
@@ -2123,7 +2124,14 @@ impl AppShell {
             .session
             .as_ref()
             .map_or(EventFilter::All, |session| session.read(cx).event_filter());
+        // A session that is not live keeps its last board, which says nothing about the cluster.
+        let (issue_total, issue_counts) = match (live, self.session.as_ref()) {
+            (Some(_), Some(session)) => issue_counts(session.read(cx).issues()),
+            _ => (None, Vec::new()),
+        };
         NavigationCounts {
+            issue_total,
+            issue_counts,
             pods: live.and_then(|live| live.pods.ready_count()),
             nodes: live.and_then(|live| live.nodes.ready_count()),
             explorer: live.and_then(LiveCluster::explorer_count),

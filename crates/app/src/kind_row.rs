@@ -11,6 +11,7 @@ use cluster::{
 };
 use gpui_kit::SharedString;
 
+use crate::issue::IssueObject;
 use crate::status_tone::{StatusLabel, StatusTone};
 use crate::table_selection::ResourceKey;
 
@@ -408,11 +409,61 @@ pub(crate) fn deployment_of_replica_set(replica_set: &str) -> Option<&str> {
     (is_hash && !deployment.is_empty()).then_some(deployment)
 }
 
+/// The workload a pod's problem belongs to: the Deployment behind a hashed ReplicaSet, else the
+/// controller itself; `None` for a pod without a controller.
+pub(crate) fn pod_workload(
+    namespace: &str,
+    controller: Option<&ControllerRef>,
+) -> Option<IssueObject> {
+    let controller = controller?;
+    let deployment = (controller.kind == REPLICA_SET_KIND)
+        .then(|| deployment_of_replica_set(&controller.name))
+        .flatten();
+    Some(match deployment {
+        Some(deployment) => IssueObject::new("Deployment", Some(namespace), deployment),
+        None => IssueObject::new(&controller.kind, Some(namespace), &controller.name),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use cluster::{ControllerRef, PodStatus, ReadyCount, StatusReason};
 
     use super::*;
+
+    #[test]
+    fn pod_workload_maps_hashed_replica_set_to_deployment() {
+        let replica_set = ControllerRef {
+            kind: "ReplicaSet".to_owned(),
+            name: "api-7d9f8c".to_owned(),
+        };
+        assert_eq!(
+            pod_workload("shop", Some(&replica_set)),
+            Some(IssueObject::new("Deployment", Some("shop"), "api"))
+        );
+    }
+
+    #[test]
+    fn pod_workload_keeps_other_controllers() {
+        let controller = |kind: &str, name: &str| ControllerRef {
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+        };
+        assert_eq!(
+            pod_workload("shop", Some(&controller("StatefulSet", "db"))),
+            Some(IssueObject::new("StatefulSet", Some("shop"), "db"))
+        );
+        // A ReplicaSet without a pod-template hash is its own workload.
+        assert_eq!(
+            pod_workload("shop", Some(&controller("ReplicaSet", "api-canary"))),
+            Some(IssueObject::new("ReplicaSet", Some("shop"), "api-canary"))
+        );
+    }
+
+    #[test]
+    fn pod_workload_none_without_controller() {
+        assert_eq!(pod_workload("shop", None), None);
+    }
 
     fn pod(namespace: &str, controller: Option<(&str, &str)>) -> PodSummary {
         PodSummary {

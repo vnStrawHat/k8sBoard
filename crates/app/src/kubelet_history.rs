@@ -550,6 +550,14 @@ impl KubeletHistory {
         self.pvcs.get(namespace)?.get(claim).map(|seen| &seen.usage)
     }
 
+    /// The newest sample of every claim.
+    pub(crate) fn pvc_usages(&self) -> impl Iterator<Item = &PvcUsage> {
+        self.pvcs
+            .values()
+            .flat_map(BTreeMap::values)
+            .map(|seen| &seen.usage)
+    }
+
     /// Drops the pods and claims outside `scope`. `All` keeps everything; the timelines stay.
     pub(crate) fn retain_scope(&mut self, scope: &NamespaceScope) {
         if matches!(scope, NamespaceScope::All) {

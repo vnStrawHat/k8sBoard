@@ -444,6 +444,31 @@ fn pod_conditions_keep_reason_and_message() {
 }
 
 #[test]
+fn pod_condition_keeps_transition_time() {
+    let changed = timestamp("2026-03-01T10:00:00Z");
+    let mut pod = pod_with_containers(Vec::new(), Vec::new());
+    pod.status = Some(ApiPodStatus {
+        conditions: Some(vec![
+            ApiPodCondition {
+                type_: "Ready".to_owned(),
+                status: "False".to_owned(),
+                last_transition_time: Some(Time(changed)),
+                ..Default::default()
+            },
+            ApiPodCondition {
+                type_: "PodScheduled".to_owned(),
+                status: "True".to_owned(),
+                ..Default::default()
+            },
+        ]),
+        ..Default::default()
+    });
+    let conditions = pod_summary(&pod).conditions;
+    assert_eq!(conditions[0].changed_at, Some(changed));
+    assert_eq!(conditions[1].changed_at, None);
+}
+
+#[test]
 fn waiting_state_keeps_message() {
     let waiting = ApiContainerState {
         waiting: Some(ContainerStateWaiting {
@@ -599,5 +624,42 @@ fn image_pull_secret_names_are_kept() {
     assert_eq!(
         pod_summary(&pod).image_pull_secrets,
         ["registry-a", "registry-b"]
+    );
+}
+
+#[test]
+fn pod_condition_and_waiting_messages_hide_url_userinfo() {
+    let mut pod = pod_with_containers(Vec::new(), vec![container("api", None)]);
+    pod.status = Some(ApiPodStatus {
+        conditions: Some(vec![ApiPodCondition {
+            type_: "Ready".to_owned(),
+            status: "False".to_owned(),
+            message: Some("probe https://u:s3cret@host/health failed".to_owned()),
+            ..Default::default()
+        }]),
+        container_statuses: Some(vec![ContainerStatus {
+            name: "api".to_owned(),
+            state: Some(ApiContainerState {
+                waiting: Some(ContainerStateWaiting {
+                    reason: Some("ImagePullBackOff".to_owned()),
+                    message: Some("Back-off pulling https://u:s3cret@registry/app".to_owned()),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]),
+        ..Default::default()
+    });
+    let summary = pod_summary(&pod);
+    assert_eq!(
+        summary.conditions[0].message.as_deref(),
+        Some("probe https://<hidden>@host/health failed")
+    );
+    let ContainerState::Waiting { message, .. } = &summary.containers[0].state else {
+        panic!("a waiting container");
+    };
+    assert_eq!(
+        message.as_deref(),
+        Some("Back-off pulling https://<hidden>@registry/app")
     );
 }

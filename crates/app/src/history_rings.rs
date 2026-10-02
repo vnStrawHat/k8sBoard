@@ -251,6 +251,14 @@ impl<P: Copy> Rings<P> {
         self.fine.as_ref()?.back().copied().flatten()
     }
 
+    /// The values of the last two ticks, oldest first; `None` unless the series reported both.
+    pub(crate) fn newest_pair(&self) -> Option<[P; 2]> {
+        let fine = self.fine.as_ref()?;
+        let previous = fine.get(fine.len().checked_sub(2)?).copied().flatten()?;
+        let newest = fine.back().copied().flatten()?;
+        Some([previous, newest])
+    }
+
     /// Frees the fine ring after an hour without a value and drops the series after a day.
     pub(crate) fn age(&mut self, tick: u64) -> Retention {
         let unseen = tick.saturating_sub(self.last_seen);

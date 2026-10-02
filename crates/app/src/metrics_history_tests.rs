@@ -223,6 +223,23 @@ fn latest_sums_containers_and_reads_one() {
 }
 
 #[test]
+fn latest_container_pair_needs_both_ticks() {
+    let mut history = PodUsageHistory::default();
+    let sample = |millicores| [pod("a", "web", &[("c", usage(millicores, 10))])];
+    history.record(at(15), &sample(1), &[]);
+    assert_eq!(history.latest_container_pair("a", "web", "c"), None);
+    history.record(at(30), &sample(2), &[]);
+    assert_eq!(
+        history.latest_container_pair("a", "web", "c"),
+        Some([usage(1, 10), usage(2, 10)])
+    );
+    // A tick without the container breaks the pair.
+    history.record(at(45), &[], &[]);
+    assert_eq!(history.latest_container_pair("a", "web", "c"), None);
+    assert_eq!(history.latest_container_pair("a", "web", "none"), None);
+}
+
+#[test]
 fn fine_ring_is_freed_after_an_hour_and_pod_removed_after_a_day() {
     let mut history = PodUsageHistory::default();
     history.record(at(15), &[pod("a", "gone", &[("c", usage(1, 1))])], &[]);

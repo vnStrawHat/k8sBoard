@@ -22,6 +22,8 @@ use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::crd_rows::crd_row;
 use crate::custom_kind::{CustomKind, CustomKindCache, custom_kinds};
 use crate::event_rows::newest_first;
+use crate::issue_board::{ISSUE_TICK, IssueBoard, IssueChange, IssueInputs, RunReason};
+use crate::issue_feeds::{FeedState, IssueFeeds, core_coverage};
 use crate::kind_join::{JoinInputs, join_rows};
 use crate::kind_row::KindRow;
 use crate::kubelet_metrics::KubeletDemand;
@@ -42,6 +44,12 @@ pub(crate) struct ClusterSession {
     event_filter: EventFilter,
     /// Every custom kind definition seen so far; moves to the next session on a context switch.
     custom_kind_cache: CustomKindCache,
+    /// The problems found in the live lists. It lives here, not in `LiveCluster`, so a retry and a
+    /// scope change keep the first-seen times; a context switch makes a new session and clears it.
+    issues: IssueBoard,
+    /// The Issues screen is shown, so a time-only refresh repaints it (the ages move).
+    is_issues_visible: bool,
+    _issue_tick: Task<()>,
 }
 
 /// What `connect` needs, kept so that `retry` can run it again.
@@ -89,6 +97,8 @@ pub(crate) struct LiveCluster {
     related: Option<RelatedObjects>,
     /// The sidebar numbers of kinds without a running watch.
     kind_counts: KindCounts,
+    /// The watches only the Issues engine reads, running for the whole session.
+    pub(crate) issue_feeds: IssueFeeds,
     connection: ClusterConnection,
     subscriptions: Subscriptions,
 }
@@ -782,7 +792,7 @@ impl<T> LiveList<T> {
     }
 
     /// The watch stream ended, for whatever reason; the watches normally run forever.
-    fn mark_stopped(&mut self) {
+    pub(crate) fn mark_stopped(&mut self) {
         self.fail("watch stopped unexpectedly".to_owned());
     }
 
@@ -961,7 +971,96 @@ impl ClusterSession {
             explorer_kind,
             event_filter: EventFilter::All,
             custom_kind_cache,
+            issues: IssueBoard::default(),
+            is_issues_visible: false,
+            _issue_tick: Self::start_issue_tick(cx),
         }
+    }
+
+    /// Looks every `ISSUE_TICK` whether the board needs a run. The task ends with the entity.
+    fn start_issue_tick(cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(ISSUE_TICK).await;
+                if this
+                    .update(cx, |session, cx| session.refresh_issues(cx))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+    }
+
+    /// The problems found in the live lists, for the sidebar, the title bar, and the Issues screen.
+    pub(crate) fn issues(&self) -> &IssueBoard {
+        &self.issues
+    }
+
+    /// Whether the board has not run on loaded lists yet, or a feed it reads still loads. Only the
+    /// screenshot hook waits on it, so the sidebar and title bar numbers are on screen.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn is_issues_pending(&self) -> bool {
+        self.issues.summary().is_none()
+            || self
+                .issues
+                .coverage()
+                .feeds
+                .iter()
+                .any(|(_, state)| *state == FeedState::Loading)
+    }
+
+    /// Runs the board when something changed or the clock moved enough. It repaints only when the
+    /// issues or the coverage changed, or, while the Issues screen is shown, on a time refresh.
+    fn refresh_issues(&mut self, cx: &mut Context<Self>) {
+        let now = jiff::Timestamp::now();
+        let Some(reason) = self.issues.run_due(now) else {
+            return;
+        };
+        let SessionPhase::Live(live) = &self.phase else {
+            return;
+        };
+        let events = &live.issue_feeds.events;
+        let inputs = IssueInputs {
+            pods: live.pods.ready_items(),
+            nodes: live.nodes.ready_items(),
+            events: (events.state() == FeedState::Live).then_some(events),
+            pod_usage: Some(&live.metrics.pods.history),
+            node_usage: Some(&live.metrics.nodes.history),
+            kubelet: Some(&live.metrics.kubelet.history),
+            is_job_feed_live: false,
+            now,
+        };
+        let change = self.issues.refresh(&inputs, core_coverage(live, events));
+        if refresh_repaints(change, reason, self.is_issues_visible) {
+            cx.notify();
+        }
+    }
+
+    /// A Warning events update: it only marks the board, which repaints when it finds a change.
+    pub(crate) fn apply_warning_events(&mut self, update: WatchUpdate<EventSummary>) {
+        self.issues.mark_dirty();
+        if let Some(live) = self.live_mut() {
+            live.issue_feeds.events.apply(update);
+        }
+    }
+
+    pub(crate) fn stop_warning_events(&mut self) {
+        self.issues.mark_dirty();
+        if let Some(live) = self.live_mut() {
+            live.issue_feeds.events.mark_stopped();
+        }
+    }
+
+    /// The scope has settled: starts the Warning events watch for it.
+    pub(crate) fn start_issue_events(&mut self, cx: &mut Context<Self>) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        let (connection, scope) = (live.connection.clone(), live.scope.clone());
+        live.issue_feeds
+            .finish_restart(&runtime, &connection, scope, cx);
     }
 
     /// Hands the custom kind definitions to the next session, so a context switch reuses them.
@@ -1067,6 +1166,7 @@ impl ClusterSession {
     /// Switches the pods watch to `scope` and reviews access again for it.
     pub(crate) fn set_scope(&mut self, scope: NamespaceScope, cx: &mut Context<Self>) {
         let event_filter = self.event_filter;
+        self.issues.mark_dirty();
         let Some(live) = self.live_mut() else {
             return;
         };
@@ -1094,6 +1194,8 @@ impl ClusterSession {
         let review = start_pod_review(&runtime, &live.connection, scope.clone(), cx);
         live.metrics.restart_pods(&scope, review);
         live.metrics.kubelet.history.retain_scope(&scope);
+        // The events watch scans etcd, so it waits for the scope to settle.
+        live.issue_feeds.restart_events(cx);
         live.scope = scope;
         // The numbers are for the old scope; the review for the new one counts again.
         live.kind_counts = KindCounts::default();
@@ -1482,6 +1584,8 @@ impl ClusterSession {
     /// Starts or stops each metrics poll from its access gate. Safe to call at any time: a feed
     /// that already polls is left running.
     fn update_metrics_feeds(&mut self, cx: &mut Context<Self>) {
+        // The coverage reads the feed states, which this may change.
+        self.issues.mark_dirty();
         let runtime = cx.global::<ClusterRuntime>().clone();
         let Some(live) = self.live_mut() else {
             return;
@@ -1565,8 +1669,9 @@ impl LiveCluster {
         self.crds.as_ref().map_or(&[], |crds| &crds.kinds)
     }
 
-    /// Open watches: namespaces, pods, nodes, the explorer's and its companion, and the drawer's
-    /// events and related objects when they are open.
+    /// Open watches: namespaces, pods, nodes, the Warning events of the Issues engine, the
+    /// explorer's and its companion, and the drawer's events and related objects when they are
+    /// open.
     pub(crate) fn watch_count(&self) -> usize {
         let namespaces = scope_multiplicity(&self.scope);
         open_watch_count(OpenWatches {
@@ -1582,6 +1687,11 @@ impl LiveCluster {
                 .map_or(0, |lists| lists.watches(namespaces)),
             object_events: self.object_events.is_some(),
             related: self.related.is_some(),
+            issue_feeds: if self.issue_feeds.is_watching_events() {
+                namespaces
+            } else {
+                0
+            },
         })
     }
 
@@ -1789,12 +1899,14 @@ impl LiveCluster {
                 connection.watch_nodes(),
                 cx,
                 |session: &mut ClusterSession, update, _| {
+                    session.issues.mark_dirty();
                     if let Some(live) = session.live_mut() {
                         live.nodes.apply(update);
                         live.refresh_kubelet_targets();
                     }
                 },
                 |session, _| {
+                    session.issues.mark_dirty();
                     if let Some(live) = session.live_mut() {
                         live.nodes.mark_stopped();
                     }
@@ -1805,6 +1917,7 @@ impl LiveCluster {
         let metrics =
             ClusterMetrics::new(start_pod_review(&runtime, &connection, scope.clone(), cx));
         let explorer_scope = scope.clone();
+        let issue_feeds = IssueFeeds::start(&runtime, &connection, scope.clone(), cx);
         let mut live = Self {
             server_version,
             scope,
@@ -1820,6 +1933,7 @@ impl LiveCluster {
             object_events: None,
             related: None,
             kind_counts: KindCounts::default(),
+            issue_feeds,
             connection,
             subscriptions,
         };
@@ -2146,11 +2260,15 @@ struct OpenWatches {
     companion: usize,
     object_events: bool,
     related: bool,
+    /// The Issues engine's watches: one Warning events watch per namespace; 0 while a scope
+    /// change waits to restart it.
+    issue_feeds: usize,
 }
 
 /// The namespaces list and the nodes are always watched, pods once per namespace of the scope,
-/// then the explorer's watches and its companion's, and one each for the drawer's events and
-/// related objects. The total stays within `3N + 5` for N picked namespaces.
+/// then the explorer's watches and its companion's, one each for the drawer's events and
+/// related objects, and the Warning events of the Issues engine, one per namespace. The total
+/// stays within `4N + 5` for N picked namespaces.
 fn open_watch_count(watches: OpenWatches) -> usize {
     2 + watches.namespaces
         + usize::from(watches.crds)
@@ -2158,6 +2276,18 @@ fn open_watch_count(watches: OpenWatches) -> usize {
         + watches.companion
         + usize::from(watches.object_events)
         + usize::from(watches.related)
+        + watches.issue_feeds
+}
+
+/// Whether a refresh that ran for `reason` repaints the app. A new, gone, or changed issue always
+/// does; a text that only aged, and the clock alone, matter only while the Issues screen shows
+/// them.
+fn refresh_repaints(change: IssueChange, reason: RunReason, is_issues_visible: bool) -> bool {
+    match change {
+        IssueChange::Shape => true,
+        IssueChange::TextOnly => is_issues_visible,
+        IssueChange::Unchanged => reason == RunReason::TimeRefresh && is_issues_visible,
+    }
 }
 
 /// A cluster-scoped explorer (Namespaces, PVs) does not depend on the scope, so a scope change
@@ -2459,6 +2589,7 @@ fn subscribe_pods(
         connection.watch_pods(scope),
         cx,
         |session: &mut ClusterSession, update, _| {
+            session.issues.mark_dirty();
             if let Some(live) = session.live_mut() {
                 live.pods.apply(update);
                 live.refresh_kubelet_targets();
@@ -2466,6 +2597,7 @@ fn subscribe_pods(
             }
         },
         |session, _| {
+            session.issues.mark_dirty();
             if let Some(live) = session.live_mut() {
                 live.pods.mark_stopped();
                 live.join_explorer();
@@ -2505,11 +2637,13 @@ fn subscribe_pod_metrics(
         connection.poll_pod_metrics(scope),
         cx,
         |session: &mut ClusterSession, update, _| {
+            session.issues.mark_dirty();
             if let Some(live) = session.live_mut() {
                 live.metrics.pods.receive(update, live.pods.items());
             }
         },
         |session, _| {
+            session.issues.mark_dirty();
             if let Some(live) = session.live_mut() {
                 live.metrics.pods.mark_stopped();
             }
@@ -2527,6 +2661,7 @@ fn subscribe_kubelet_stats(
         connection.poll_kubelet_stats(targets),
         cx,
         |session: &mut ClusterSession, update, _| {
+            session.issues.mark_dirty();
             if let Some(live) = session.live_mut() {
                 live.metrics
                     .kubelet
@@ -2541,6 +2676,7 @@ fn subscribe_kubelet_stats(
             }
         },
         |session, _| {
+            session.issues.mark_dirty();
             if let Some(live) = session.live_mut() {
                 live.metrics.kubelet.mark_stopped();
             }
@@ -2557,11 +2693,13 @@ fn subscribe_node_metrics(
         connection.poll_node_metrics(),
         cx,
         |session: &mut ClusterSession, update, _| {
+            session.issues.mark_dirty();
             if let Some(live) = session.live_mut() {
                 live.metrics.nodes.receive(update);
             }
         },
         |session, _| {
+            session.issues.mark_dirty();
             if let Some(live) = session.live_mut() {
                 live.metrics.nodes.mark_stopped();
             }

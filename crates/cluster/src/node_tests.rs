@@ -433,3 +433,19 @@ fn node_labels_are_terms_and_annotations_are_absent() {
     assert_eq!(summary.labels, ["arch=amd64", "zone=a"]);
     assert!(!format!("{summary:?}").contains("SECRETANNOTATION"));
 }
+
+#[test]
+fn node_condition_message_hides_url_userinfo() {
+    let node = node_with_status(ApiNodeStatus {
+        conditions: Some(vec![NodeCondition {
+            message: Some("pull from https://ci:s3cret@registry.example.com/v2 failed".to_owned()),
+            ..api_condition("ImagePullProblem", "True")
+        }]),
+        ..Default::default()
+    });
+    let message = node_summary(&node).conditions[0].message.clone();
+    assert_eq!(
+        message.as_deref(),
+        Some("pull from https://<hidden>@registry.example.com/v2 failed")
+    );
+}

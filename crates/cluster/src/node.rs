@@ -45,7 +45,7 @@ pub struct NodeCondition {
     pub status: ConditionStatus,
     /// An empty reason is `None`.
     pub reason: Option<String>,
-    /// Cut like event messages.
+    /// URL userinfo hidden, then cut like event messages.
     pub message: Option<String>,
     /// `lastTransitionTime`.
     pub changed_at: Option<jiff::Timestamp>,

@@ -18,6 +18,7 @@ All network I/O stays on the cluster runtime. Feeds reach the session through `s
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum IssueFeed { Pods, Nodes, Namespaces, WarningEvents, PodMetrics, NodeMetrics, VolumeUsage, Kind(ResourceKind) }
+// Step 1a declares Pods, Nodes, WarningEvents, PodMetrics, NodeMetrics, VolumeUsage; Namespaces and Kind(..) arrive in step 2 with NamespaceStuck and the condition feeds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FeedState { Live, Loading, Limited(String), Off(String) }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -46,8 +47,8 @@ pub(crate) enum FeedPlan { Start { watch_scope: NamespaceScope }, Wait, Off(Stri
 
 - Multiplicity `N = max(1, scope.namespaces().len())`. `condition_plan`: review `Checking` → `Wait`; N ≤ 2 and a `Known` report denying the kind's list check (`ListSecrets` for TLS) → `Off("not permitted: {check}")`; else `Start` with `watch_scope` = the session scope for N ≤ 2, `NamespaceScope::All` for N > 2.
 - An All-scope feed for a narrower scope drops objects outside `scope.namespaces()` in the tokio map, before the snapshot reaches the session. Its first `Failed(ClusterError::Forbidden { .. })` turns it Off(`not permitted cluster-wide`) and drops the subscription (no retry storm); a scope change or retry plans again.
-- `LiveCluster.issue_feeds` is built in `LiveCluster::start` (Warning events at once); `finish_access_review` and a scope change call `IssueFeeds::restart_conditions`; a scope change also restarts the events watch.
-- Core states come from the lists (`Loading`; `Ready` → Live; `Failed` → Off(message)) and the metrics `FeedStatus` (`Live`/`Interrupted` → Live; `Unavailable`/`Failed` → Off; `Checking`/`Waiting` → Loading). `VolumeUsage` is `Limited("{k} of {n} nodes polled")` when the kubelet feed covers fewer Ready nodes than exist.
+- `LiveCluster.issue_feeds` is built in `LiveCluster::start` (Warning events at once); `finish_access_review` and a scope change call `IssueFeeds::restart_conditions`; a scope change also restarts the events watch, **debounced by 1 s** (`EVENTS_RESTART_DELAY`): an events watch scans every event of the scope in etcd, so picking namespaces one after another must not run one scan per click. While the restart waits the feed reads Loading and counts no watch.
+- Core states come from the lists (`Loading`; `Ready` → Live; `Failed` → Off(message); a failed list still counts as settled for core readiness, so the header reads "partial", not "checking" forever) and the metrics `FeedStatus` (`Live`/`Interrupted` → Live; `Unavailable`/`Failed` → Off; `Checking`/`Waiting` → Loading). `VolumeUsage` is `Limited("{k} of {n} nodes polled")` when the kubelet feed polls fewer Ready nodes than exist, while `Live`, `Interrupted`, or `Waiting` (with no node to poll no round ever comes, so waiting must not read as loading).
 
 ## Coverage note
 

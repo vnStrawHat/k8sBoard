@@ -13,9 +13,10 @@ impl IssueSeverity { pub(crate) fn tone(self) -> StatusTone; pub(crate) fn label
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum IssueRule { /* PodImage, PodCrash, …, EventBurst */ }
 
-/// An object as the engine names it. Kind is the API kind ("Pod", "Deployment").
+/// An object as the engine names it. Kind is the API kind ("Pod", "Deployment"); it is text, not a
+/// `ResourceKind`, because an owner or an event can name a kind without a screen (`target` is then `None`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct IssueObject { pub(crate) kind: &'static str, pub(crate) namespace: Option<String>, pub(crate) name: String }
+pub(crate) struct IssueObject { pub(crate) kind: String, pub(crate) namespace: Option<String>, pub(crate) name: String }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct IssueKey { pub(crate) rule: IssueRule, pub(crate) object: IssueObject } // group: object = workload
@@ -81,13 +82,13 @@ fn dedupe(groups: Vec<Grouped>) -> Vec<Grouped>;                       // decisi
 ```rust
 pub(crate) struct IssueBoard {
     issues: Vec<Issue>, coverage: Coverage,
-    first_seen: HashMap<IssueKey, jiff::Timestamp>,   // pruned to the current keys (held ones included)
+    first_seen: HashMap<IssueKey, jiff::Timestamp>,   // the current keys (held ones included), plus those of a rule whose feed input is `None` this run (a reload keeps its ages)
     is_dirty: bool, last_run: Option<jiff::Timestamp>,
 }
 impl IssueBoard {
     pub(crate) fn mark_dirty(&mut self);
     pub(crate) fn run_due(&self, now: jiff::Timestamp) -> Option<RunReason>;   // Dirty, or TimeRefresh after 30 s
-    /// Runs the pipeline; returns whether issues or coverage changed.
+    /// Runs the pipeline; `IssueChange` is `Unchanged`, `TextOnly` (only cause texts, where an age moved: repaint only while Issues is visible), or `Shape`.
     pub(crate) fn refresh(&mut self, inputs: &IssueInputs, coverage: Coverage) -> bool;
     pub(crate) fn issues(&self) -> &[Issue];                     // 0021 reads the top ones
     pub(crate) fn coverage(&self) -> &Coverage;

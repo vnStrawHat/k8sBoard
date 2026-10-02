@@ -16,7 +16,7 @@ Any mutation (W3 "Fix image" → 0032); snooze, acknowledge, persistence (first-
 
 | Step | Scope | ACs |
 |---|---|---|
-| 1a | `PodCondition.changed_at`; `DiagnosisCause`; `pod_workload`; engine (`issue.rs`, `issue_rules.rs`, `issue_board.rs` with grace); core feeds, Warning events, board and tick in `ClusterSession`, `subscribe_silent`; sidebar counts; title-bar button (tooltip only) | 1–6, 9 |
+| 1a | `PodCondition.changed_at`; `DiagnosisCause`; `pod_workload`; engine (`issue.rs`, `issue_rules.rs`, `issue_board.rs` with grace); core feeds (pods, nodes, metrics, volume usage; the Namespaces feed comes with NamespaceStuck in step 2), Warning events, board and tick in `ClusterSession`, `subscribe_silent`; sidebar counts; title-bar button (tooltip only) | 1–6, 9 |
 | 1b | Issues screen and table, menu, reveal, button click, Issues item enabled, `--screen issues`, screenshots | 1, 2, 7, 9, 10 |
 | 2 | Condition feeds (`condition_plan`, All-scope above 2 namespaces), `issue_kind_rules.rs` incl. NamespaceStuck, coverage labels, watch count; budget measurements; roadmap updates; full ui-verifier run | 1–10 |
 

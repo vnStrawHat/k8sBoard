@@ -54,4 +54,4 @@
 | Idle RSS after 5 min, UAT, scope All | | |
 | Watches (status bar), scope All / 3 namespaces | | |
 | UAT Jobs count (probe `count` line, 0012) | | — |
-| `issue_evaluation_budget` (release, ms) | — | |
+| `issue_evaluation_budget` (release, ms) | — | 0.95 (1,000 pods, 50 problems, 2,000 events; step 1a, no kind rules yet) |
