@@ -1,0 +1,38 @@
+# 0024 · Decisions
+
+[Back to index](README.md). Defaults picked without a user round-trip (user instruction); each can be revisited in review.
+
+| # | Decision | Rationale |
+|---|---|---|
+| 1 | **JSON** (`serde_json`, pretty-printed, trailing newline), one file `settings.json` | already a workspace dependency; matches the C10 JSON-lines audit log; comments would be lost on rewrite anyway, so TOML's hand-edit edge is small |
+| 2 | **`dirs` 6** for the OS config dir (`dirs::config_dir()`) | already in `Cargo.lock` (via `shellexpand`), so no new package; correct Known-Folder lookup on Windows without hand-written per-OS code |
+| 3 | Folder name `k8sboard` on every OS (C2 wrote `k8sBoard` for Windows/macOS) | one constant, no `cfg`; Windows and default macOS file systems are case-insensitive |
+| 4 | Config dir precedence: `--config-dir` > `K8SBOARD_CONFIG_DIR` (non-empty) > **debug build: `<workspace>/.tmp/config`** > `dirs::config_dir()/k8sboard` | the env var lets the orchestrator set it once per shell; the debug default enforces the "write only inside the project" agent rule by construction; release builds use the OS dir |
+| 5 | Relative `--config-dir`, `--kubeconfig`, `KUBECONFIG`, and registry paths go through `std::path::absolute` (no I/O, no symlink resolution) | stable registry keys; no `\\?\` prefixes from `canonicalize` |
+| 6 | Schema `version: u32` = 1. Missing, `0`, or not-a-`u32` version, invalid JSON, or a type error → corrupt: rename to `settings.json.bak` (replacing an older one), start with defaults, notice | one backup is enough to recover by hand; never refuse to start |
+| 7 | A **newer** `version` loads leniently (unknown fields ignored) and turns writes off for the session, with a notice | protects a newer app's file from a downgrade; avoids carrying unknown fields through every struct |
+| 8 | Unknown fields are ignored (no `deny_unknown_fields`). Containers with all-optional content (`Settings`, `ClusterRegistry`, `TablePrefs`) carry `#[serde(default)]`; `ClusterRef`/`ClusterEntry` do not (their key fields are required) | later specs add sections without a version bump |
+| 9 | An I/O error other than NotFound on read → defaults, writes off, notice | never overwrite a file we could not read |
+| 10 | Atomic write: `settings.json.tmp` in the same dir, `sync_all`, `std::fs::rename` over the target; **one retry after 50 ms** when the rename fails (Windows sharing violation from an antivirus, indexer, or editor handle), then a `WriteFailed` notice | a crash leaves the old or the new file, never half of one; transient locks are common on Windows |
+| 11 | **One writer task** fed by an unbounded channel; it drains to the newest snapshot, then writes. No debounce timer. Every write passes a `WriteGate` (mutex + generation): an older generation never overwrites a newer one | writes follow discrete user actions; the gate also orders the quit flush (decision 31) against an in-flight background write |
+| 12 | `AppSettings::update` skips the write when the serialized bytes equal the last ones sent | context switches and re-applied prefs cost no disk I/O |
+| 13 | `--screenshot` runs load settings but never save them (a corrupt file is still moved to `.bak`) | screenshots stay deterministic; ui-verifier reseeds each case |
+| 14 | Settings load **synchronously in `main` before the UI starts** | a small local file; the theme must apply before the first frame; no loading state |
+| 15 | Settings are a GPUI **`Global`** (`AppSettings`, in `settings.rs` next to the model), observed with `cx.observe_global` | the 0025 window shares it with no extra entity plumbing; two modules (model + global, file I/O) instead of three |
+| 16 | Parse errors are traced as `classify()` + line/column only, never `Display` or content | serde messages can quote values; same care as the kubeconfig parse error |
+| 17 | The **launch chain** (`--kubeconfig`, else every `KUBECONFIG` entry, else `~/.kube/config`) is merged with `kube::config::Kubeconfig::merge` (kubectl: first file wins for every named entry and `current-context`). Before each `merge`, `next.kind`/`next.api_version` are compared with the merged document (both `pub`); a mismatch skips the file as `Incompatible`, because `merge(self, next)` consumes `self` and would drop the accumulator on `Err`. Unreadable or unparsable files are skipped too; all failing → error | replaces "first entry only"; cross-file user/cluster references work as in kubectl; no lost state |
+| 18 | Registry `kubeconfigs` are loaded **standalone**, one `Kubeconfig` each, never appended to the chain; a registry file already in the chain is not loaded twice | a registry file's users and clusters are never shadowed by another file's same-named entries |
+| 19 | A cluster is identified by **(absolute kubeconfig path, context name)** (`ClusterRef`); `ContextSummary.source` is the file that defined the context. Same-named contexts from different sources all appear in the switcher, labeled with their file name | the same kubeadm context name appears in many files |
+| 20 | Entries hold only overrides. Unregistered contexts get defaults (name, guessed env); nothing is auto-registered | no settings churn from browsing; 0025 registers on edit |
+| 21 | Start cluster: `--context` (first match in load order: chain, then registry files) > `last_used` (exact `ClusterRef` still loaded) > `current-context` of the first loaded kubeconfig. With `--kubeconfig X` and no `--context`, a `last_used` in X beats X's `current-context` | the CLI keeps priority; a stale last-used falls back silently |
+| 22 | `last_used` is written after every successful `start_session` | "reopen where I was"; no write when unchanged (decision 12) |
+| 23 | Four fixed environments, no custom ones | 0030 maps confirmation tiers to exactly these four |
+| 24 | Guessing: tokens of context and cluster names; **riskiest match wins** (PROD > STG > DEV > LOCAL); unknown → STG (C5) | a mixed name must never look safer than it is |
+| 25 | Env colors: PROD `danger`, STG `warning`, DEV `info`, LOCAL `muted_foreground`; badge text `background` | named theme tokens (project rule); mirrors the wireframe `--prod/--stg/--dev/--loc` hues |
+| 26 | The `TitleBar` itself gets `.border_t(px(3.)).border_color(color)` for **every** env (W1 `.tb` border-top); `color` = `title_bar_border` with no session; the riskiest-env rule for several clusters is 0027 | follows the wireframe CSS; no extra element. GPUI has one border color per element, so the 1 px bottom border takes the env color too (accepted) |
+| 27 | `read_only: Option<bool>` is stored now; the resolver (default on for PROD) lands with 0030 | no dead code; the schema is stable before 0030 |
+| 28 | Table prefs persist **sort and hidden columns by column name**, per screen key; filters are not persisted | 0009 decision; names survive column reordering between versions |
+| 29 | `--theme` accepts `system|light|dark` and maps to the same `ThemePreference` as the file | one enum instead of `ThemeChoice` + a pref |
+| 30 | Notices (settings and skipped kubeconfigs) share one title-bar warning button: tooltip lists them, click dismisses all | there is no notification layer in the shell; keeps the message visible until read |
+| 31 | **Flush on quit**: `cx.on_app_quit` calls `AppSettings::flush`, which writes the last sent snapshot synchronously through the `WriteGate` | a change made just before quitting is not lost; the gate keeps an older in-flight write from winning |
+| 32 | A `serde_json` serialization failure (unreachable for these types) is a `tracing::warn!` without content, and nothing is sent | no `unwrap`; no partial file |
