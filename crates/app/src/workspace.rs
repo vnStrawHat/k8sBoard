@@ -260,6 +260,9 @@ impl AppShell {
             Screen::Kind(ResourceKind::ReplicaSets) => {
                 self.render_hide_inactive(toolkit, cx).into_iter().collect()
             }
+            Screen::Kind(ResourceKind::ServiceAccounts) => {
+                self.render_check_permissions(cx).into_iter().collect()
+            }
             Screen::Kind(ResourceKind::Roles) => self.render_who_can(cx).into_iter().collect(),
             Screen::Kind(ResourceKind::ClusterRoles) => [
                 self.render_who_can(cx),
@@ -324,6 +327,28 @@ impl AppShell {
                 .child(status)
                 .into_any_element(),
         )
+    }
+
+    /// Opens Check permissions for the account whose drawer is open, else for You.
+    fn render_check_permissions(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let button = Button::new("check-permissions")
+            .label("Check permissions")
+            .small()
+            .outline();
+        let button = if self.live(cx).is_some() {
+            button
+                .tooltip("See what You or a service account can do")
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    let (subject, namespace) = match shell.drawer_account() {
+                        Some((subject, namespace)) => (Some(subject), Some(namespace)),
+                        None => (None, shell.tool_namespace(cx)),
+                    };
+                    shell.open_permissions(subject, namespace, true, window, cx);
+                }))
+        } else {
+            button.disabled(true).tooltip("Not connected")
+        };
+        Some(button.into_any_element())
     }
 
     /// Opens the Who can… dialog on the namespace the scope starts in.

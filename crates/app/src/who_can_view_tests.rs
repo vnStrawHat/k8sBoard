@@ -265,6 +265,24 @@ fn coverage_notes_per_gap() {
 }
 
 #[test]
+fn namespace_options_add_a_missing_namespace() {
+    let listed = vec!["a".to_owned(), "b".to_owned()];
+    assert_eq!(
+        namespace_options(listed.clone(), Some("c")),
+        [ALL_NAMESPACES, "c", "a", "b"]
+    );
+    assert_eq!(
+        namespace_options(listed.clone(), Some("b")),
+        [ALL_NAMESPACES, "a", "b"]
+    );
+    assert_eq!(namespace_options(listed, None), [ALL_NAMESPACES, "a", "b"]);
+    assert_eq!(
+        namespace_options(Vec::new(), Some("x")),
+        [ALL_NAMESPACES, "x"]
+    );
+}
+
+#[test]
 fn coverage_note_pluralizes_the_namespace_count() {
     let mut gaps = coverage();
     gaps.roles = NamespaceCoverage::Namespaces(vec!["a".to_owned(), "b".to_owned()]);

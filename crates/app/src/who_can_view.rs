@@ -26,7 +26,7 @@ use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ResourceKey;
 
-const ALL_NAMESPACES: &str = "All namespaces (cluster-wide grants)";
+pub(crate) const ALL_NAMESPACES: &str = "All namespaces (cluster-wide grants)";
 const MAX_LISTED_NAMES: usize = 5;
 /// How `subject_text` spells the superuser group.
 const MASTERS_SUBJECT: &str = "group system:masters";
@@ -191,6 +191,18 @@ fn headline_text(request: &AccessRequest, subjects: usize) -> String {
     format!("{count} can {} {target} {scope}", request.verb)
 }
 
+/// `All namespaces`, then the listed ones, plus `wanted` when the list lacks it (the list may not
+/// have loaded, or the account may not list namespaces), so a preselected namespace is never
+/// silently replaced by All.
+pub(crate) fn namespace_options(listed: Vec<String>, wanted: Option<&str>) -> Vec<String> {
+    let mut names = vec![ALL_NAMESPACES.to_owned()];
+    names.extend(listed);
+    if let Some(wanted) = wanted.filter(|wanted| !names.iter().any(|name| name == wanted)) {
+        names.insert(1, wanted.to_owned());
+    }
+    names
+}
+
 /// One Warn line per gap in what the snapshot could list.
 pub(crate) fn coverage_notes(
     coverage: &RbacCoverage,
@@ -274,13 +286,14 @@ impl WhoCanView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut names = vec![ALL_NAMESPACES.to_owned()];
+        let mut listed = Vec::new();
         if let Some(live) = session.read(cx).live() {
             match live.namespaces.ready_items() {
-                Some(namespaces) => names.extend(namespaces.iter().map(|item| item.name.clone())),
-                None => names.extend(live.scope.namespaces().iter().cloned()),
+                Some(namespaces) => listed.extend(namespaces.iter().map(|item| item.name.clone())),
+                None => listed.extend(live.scope.namespaces().iter().cloned()),
             }
         }
+        let names = namespace_options(listed, namespace.as_deref());
         let selected = namespace
             .as_deref()
             .and_then(|namespace| names.iter().position(|name| name == namespace))
@@ -627,7 +640,7 @@ fn awaits_listing(state: &RbacState) -> bool {
     matches!(state, RbacState::Idle | RbacState::Loading { .. })
 }
 
-fn clock_text(time: jiff::Timestamp) -> String {
+pub(crate) fn clock_text(time: jiff::Timestamp) -> String {
     time.to_zoned(jiff::tz::TimeZone::system())
         .strftime("%H:%M:%S")
         .to_string()

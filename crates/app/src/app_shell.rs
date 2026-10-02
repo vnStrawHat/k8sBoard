@@ -21,7 +21,7 @@ use crate::FocusQuickFilter;
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
 use crate::cluster_session::{
-    ClusterSession, CountTrigger, FlowState, LiveCluster, LiveList, RelatedList,
+    ClusterSession, CountTrigger, FlowState, LiveCluster, LiveList, RbacState, RelatedList,
     denied_related_check, error_text,
 };
 use crate::custom_kind::CustomKind;
@@ -47,6 +47,7 @@ use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
 use crate::navigation::{NavigationCounts, issue_counts, sidebar};
 use crate::node_table::NodeTableDelegate;
 use crate::object_events::{SubjectChange, event_subject, subject_change};
+use crate::permissions_view::PermissionsView;
 use crate::pod_drawer::selected_container_index;
 use crate::pod_table::PodTableDelegate;
 use crate::related_objects::{RelatedSubject, related_subject};
@@ -227,6 +228,9 @@ pub(crate) struct AppShell {
     /// The open Who can dialog, which a screenshot waits on.
     #[cfg(feature = "screenshot")]
     who_can: Option<gpui_kit::WeakEntity<WhoCanView>>,
+    /// The open Check permissions dialog, which a screenshot waits on.
+    #[cfg(feature = "screenshot")]
+    permissions: Option<gpui_kit::WeakEntity<PermissionsView>>,
     /// `--screen custom:<crd-name>`: waits for the CRD list, then opens the kind.
     pending_custom_launch: Option<CustomLaunch>,
     /// Why a `--screen custom:` request found no kind; a screenshot run fails with it.
@@ -376,6 +380,8 @@ impl AppShell {
             pending_dialog_launch: options.screen.opens_dialog().then_some(options.screen),
             #[cfg(feature = "screenshot")]
             who_can: None,
+            #[cfg(feature = "screenshot")]
+            permissions: None,
             pending_custom_launch: match options.screen {
                 LaunchScreen::Custom { crd_name, tab } => Some(CustomLaunch { crd_name, tab }),
                 _ => None,
@@ -729,6 +735,47 @@ impl AppShell {
         });
     }
 
+    /// Opens the Check permissions dialog. `subject` is the text to prefill (`None` is You);
+    /// `namespace: None` is cluster-wide grants for a subject other than You.
+    pub(crate) fn open_permissions(
+        &mut self,
+        subject: Option<String>,
+        namespace: Option<String>,
+        check_now: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let shell = cx.weak_entity();
+        let view = cx.new(|cx| {
+            PermissionsView::new(shell, &session, subject, namespace, check_now, window, cx)
+        });
+        #[cfg(feature = "screenshot")]
+        {
+            self.permissions = Some(view.downgrade());
+        }
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title("Check permissions")
+                .w(px(DIALOG_WIDTH))
+                .child(view.clone())
+        });
+    }
+
+    /// The service account whose drawer is open, as `(subject text, namespace)`.
+    pub(crate) fn drawer_account(&self) -> Option<(String, String)> {
+        match &self.selected {
+            Some(ResourceKey::Kind {
+                kind: ResourceKind::ServiceAccounts,
+                namespace: Some(namespace),
+                name,
+            }) => Some((format!("sa {namespace}/{name}"), namespace.clone())),
+            _ => None,
+        }
+    }
+
     /// The namespace the top-level tool buttons start in: the first one of the scope, else
     /// cluster-wide.
     pub(crate) fn tool_namespace(&self, cx: &App) -> Option<String> {
@@ -738,12 +785,57 @@ impl AppShell {
     /// Opens the `--screen` dialog once the session is live. It runs from `render` because a
     /// dialog needs a window.
     fn open_pending_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending_dialog_launch.is_none() || self.live(cx).is_none() {
+        let Some(launch) = self.pending_dialog_launch else {
+            return;
+        };
+        if self.live(cx).is_none() {
             return;
         }
-        self.pending_dialog_launch = None;
         let namespace = self.tool_namespace(cx);
-        self.open_who_can(Some("get secrets".to_owned()), namespace, true, window, cx);
+        match launch {
+            LaunchScreen::WhoCan => {
+                self.open_who_can(Some("get secrets".to_owned()), namespace, true, window, cx);
+            }
+            LaunchScreen::CheckPermissions => {
+                self.open_permissions(None, namespace, true, window, cx);
+            }
+            LaunchScreen::AccountPermissions => {
+                let Some(account) = self.launch_account(cx) else {
+                    return;
+                };
+                let (subject, namespace) = match account {
+                    Some((subject, namespace)) => (Some(subject), Some(namespace)),
+                    None => (None, namespace),
+                };
+                self.open_permissions(subject, namespace, true, window, cx);
+            }
+            _ => {}
+        }
+        self.pending_dialog_launch = None;
+    }
+
+    /// `--screen account-permissions`: the first service account the table shows (or the one
+    /// `--select` names), as `(subject text, namespace)`. The outer `None` means the list has not
+    /// loaded yet; the inner `None` means it holds no such account, so the dialog opens for You.
+    fn launch_account(&self, cx: &App) -> Option<Option<(String, String)>> {
+        let explorer = self.live(cx)?.kind_list(ResourceKind::ServiceAccounts)?;
+        let rows = explorer.list.ready_items()?;
+        let item = match self.launch_select.as_deref() {
+            Some(select) => pick_selected(
+                select,
+                rows.iter()
+                    .map(|row| (row.namespace.as_deref(), row.name.as_str())),
+            ),
+            None => {
+                let view = self.kind_table.read(cx).delegate().view()?;
+                view.item_index(0)
+            }
+        };
+        let account = item.and_then(|item| rows.get(item)).and_then(|row| {
+            let namespace = row.namespace.clone()?;
+            Some((format!("sa {namespace}/{}", row.name), namespace))
+        });
+        Some(account)
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {
@@ -1279,6 +1371,24 @@ impl AppShell {
         true
     }
 
+    /// A service account drawer shows Can do, which needs the RBAC snapshot. Only an idle
+    /// snapshot is requested here: a failed one waits for the Retry button instead of looping.
+    fn request_rbac_for_account(&self, cx: &mut Context<Self>) {
+        if self.drawer_account().is_none() {
+            return;
+        }
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let is_idle = session
+            .read(cx)
+            .live()
+            .is_some_and(|live| matches!(live.rbac, RbacState::Idle));
+        if is_idle {
+            session.update(cx, |session, cx| session.request_rbac(cx));
+        }
+    }
+
     /// Points the drawer's watches (object events, related objects) at the selected object.
     /// Stopping is immediate. A start waits for the selection to rest, so arrowing through rows
     /// sends no request per row: one timer starts every pending subject together, and a newer
@@ -1286,6 +1396,7 @@ impl AppShell {
     /// when the session changes, because a row that was not loaded at selection time (a reveal)
     /// only now tells what to watch; an unchanged pending start keeps its timer.
     fn follow_drawer_subjects(&mut self, cx: &mut Context<Self>) {
+        self.request_rbac_for_account(cx);
         let next_events = self.selected.as_ref().and_then(event_subject);
         let next_related = self.selected_related_subject(cx);
         let (running_events, running_related) = self.live(cx).map_or((None, None), |live| {
@@ -2003,6 +2114,10 @@ impl AppShell {
             is_log_pending,
             is_dialog_pending: self.pending_dialog_launch.is_some()
                 || self.who_can.as_ref().is_some_and(|view| {
+                    view.read_with(cx, |view, cx| view.is_pending(cx))
+                        .unwrap_or(false)
+                })
+                || self.permissions.as_ref().is_some_and(|view| {
                     view.read_with(cx, |view, cx| view.is_pending(cx))
                         .unwrap_or(false)
                 }),

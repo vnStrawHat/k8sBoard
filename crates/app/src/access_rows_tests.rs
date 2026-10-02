@@ -496,7 +496,13 @@ fn cloud_identity_section_after_bound_roles() {
     let row = service_account_row(&irsa);
     assert_eq!(
         titles(&row),
-        ["Bound roles", "Cloud identity", "Used by", "Secrets"]
+        [
+            "Bound roles",
+            "Cloud identity",
+            "Can do",
+            "Used by",
+            "Secrets"
+        ]
     );
     assert_eq!(
         row.section("Cloud identity").expect("section").rows,
@@ -510,7 +516,10 @@ fn cloud_identity_section_after_bound_roles() {
 #[test]
 fn no_cloud_identity_section_when_empty() {
     let row = service_account_row(&account("api"));
-    assert_eq!(titles(&row), ["Bound roles", "Used by", "Secrets"]);
+    assert_eq!(
+        titles(&row),
+        ["Bound roles", "Can do", "Used by", "Secrets"]
+    );
 }
 
 #[test]
@@ -534,4 +543,29 @@ fn automount_default_text() {
     assert_eq!(text(None), "Default (yes)");
     assert_eq!(text(Some(true)), "Yes");
     assert_eq!(text(Some(false)), "No");
+}
+
+#[test]
+fn service_account_sections_put_can_do_after_cloud_identity() {
+    let irsa = ServiceAccountSummary {
+        cloud_identities: vec![cluster::CloudIdentity {
+            provider: cluster::CloudProvider::Aws,
+            value: "arn:aws:iam::1:role/x".to_owned(),
+        }],
+        ..account("api")
+    };
+    assert_eq!(
+        titles(&service_account_row(&irsa)),
+        [
+            "Bound roles",
+            "Cloud identity",
+            "Can do",
+            "Used by",
+            "Secrets"
+        ]
+    );
+    assert_eq!(
+        titles(&service_account_row(&account("api"))),
+        ["Bound roles", "Can do", "Used by", "Secrets"]
+    );
 }

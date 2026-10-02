@@ -319,3 +319,95 @@ fn who_can_prefill_puts_the_group_before_the_subresource() {
     let core = [rule(&[""], &["pods/log"], &["get"])];
     assert_eq!(who_can_prefill(&core).as_deref(), Some("get pods/log"));
 }
+
+fn account(namespace: &str, name: &str) -> SubjectQuery {
+    parse_subject(&format!("sa {namespace}/{name}")).expect("parses")
+}
+
+#[test]
+fn parses_subject_forms() {
+    assert_eq!(parse_subject(""), Ok(SubjectQuery::You));
+    assert_eq!(parse_subject("  "), Ok(SubjectQuery::You));
+    assert_eq!(parse_subject("You"), Ok(SubjectQuery::You));
+    let expected = SubjectQuery::Other {
+        text: "sa shop/robot".to_owned(),
+        identity: Identity::service_account("shop", "robot"),
+        account: Some(ResourceKey::Kind {
+            kind: ResourceKind::ServiceAccounts,
+            namespace: Some("shop".to_owned()),
+            name: "robot".to_owned(),
+        }),
+    };
+    for text in [
+        "sa shop/robot",
+        "serviceaccount shop/robot",
+        "SA shop/robot",
+        "system:serviceaccount:shop:robot",
+        "user system:serviceaccount:shop:robot",
+    ] {
+        assert_eq!(parse_subject(text), Ok(expected.clone()), "{text}");
+    }
+    assert_eq!(
+        parse_subject("user ann"),
+        Ok(SubjectQuery::Other {
+            text: "user ann".to_owned(),
+            identity: Identity::user("ann"),
+            account: None,
+        })
+    );
+    assert_eq!(
+        parse_subject("group devs"),
+        Ok(SubjectQuery::Other {
+            text: "group devs".to_owned(),
+            identity: Identity::group("devs"),
+            account: None,
+        })
+    );
+}
+
+#[test]
+fn invalid_subject_is_error() {
+    for text in [
+        "sa robot",
+        "sa /robot",
+        "sa shop/",
+        "sa a/b/c",
+        "user",
+        "robot",
+        "team devs",
+        "group a b",
+        "system:serviceaccount:shop",
+        "system:serviceaccount:shop:a:b",
+        "system:serviceaccount::robot",
+    ] {
+        assert_eq!(
+            parse_subject(text),
+            Err(QueryError::InvalidSubject),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn service_account_form_is_never_a_plain_user() {
+    // The account gets its group memberships, which a plain user identity would miss.
+    assert_eq!(
+        account("shop", "robot"),
+        parse_subject("system:serviceaccount:shop:robot").expect("parses")
+    );
+}
+
+#[test]
+fn only_the_masters_group_is_masters() {
+    assert!(
+        parse_subject("group system:masters")
+            .expect("parses")
+            .is_masters()
+    );
+    assert!(
+        !parse_subject("user system:masters")
+            .expect("parses")
+            .is_masters()
+    );
+    assert!(!SubjectQuery::You.is_masters());
+}

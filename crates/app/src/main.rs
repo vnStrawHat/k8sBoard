@@ -63,6 +63,8 @@ mod node_summary;
 mod node_table;
 mod node_usage;
 mod object_events;
+mod permission_table;
+mod permissions_view;
 mod pod_diagnosis;
 mod pod_drawer;
 mod pod_table;

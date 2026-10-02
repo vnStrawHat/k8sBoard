@@ -794,6 +794,13 @@ fn role_menus_start_with_who_can() {
 }
 
 #[test]
+fn service_account_menu_starts_with_check_permissions() {
+    assert!(has_check_permissions(ResourceKind::ServiceAccounts));
+    assert!(!has_check_permissions(ResourceKind::Roles));
+    assert!(!has_check_permissions(ResourceKind::Secrets));
+}
+
+#[test]
 fn who_can_query_prefills_from_the_first_resource_rule() {
     let row = role_with_rules(vec![cluster::RbacRule {
         api_groups: vec!["apps".to_owned()],

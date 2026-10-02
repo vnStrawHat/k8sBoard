@@ -93,6 +93,8 @@ pub(crate) enum LiveContent {
     RoleBindings,
     RoleSubjects,
     BoundRoles,
+    /// What a service account can do, from the RBAC snapshot (`permission_table.rs`).
+    CanDo,
     ServiceAccountPods,
     /// The masked keys of a Secret, and the Reveal and Copy controls (`secret_values.rs`).
     IngressTls,

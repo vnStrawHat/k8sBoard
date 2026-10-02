@@ -1,7 +1,10 @@
 //! The one-line request syntax of the RBAC tools: `verb resource[.group][/subresource] [name]`
 //! or `verb /url`. Pure; the dialogs show the hints and errors it returns.
 
-use cluster::{AccessRequest, RbacRule, RequestTarget, ResourceRequest};
+use cluster::{AccessRequest, Identity, RbacRule, RequestTarget, ResourceRequest};
+
+use crate::resource_kind::ResourceKind;
+use crate::table_selection::ResourceKey;
 
 const WILDCARD: &str = "*";
 
@@ -155,6 +158,7 @@ pub(crate) enum QueryError {
     EmptyPart,
     NameWithUrl,
     TooManyWords,
+    InvalidSubject,
 }
 
 impl QueryError {
@@ -167,6 +171,7 @@ impl QueryError {
             }
             Self::NameWithUrl => "A URL takes no object name",
             Self::TooManyWords => "Use: verb resource [name]",
+            Self::InvalidSubject => "Write sa ns/name, user name, or group name",
         }
     }
 }
@@ -254,6 +259,87 @@ pub(crate) fn parse_request(
         }),
     };
     Ok(ParsedRequest { request, hint })
+}
+
+/// Who a permission check is about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SubjectQuery {
+    /// The caller: answered by the API server itself.
+    You,
+    /// Evaluated client-side from RBAC objects.
+    Other {
+        /// `sa ns/name`, `user x`, or `group x`, as the binding screens spell a subject.
+        text: String,
+        identity: Identity,
+        /// The row of a service account.
+        account: Option<ResourceKey>,
+    },
+}
+
+impl SubjectQuery {
+    /// Members of `system:masters` bypass RBAC, so no binding evaluation applies to them.
+    pub(crate) fn is_masters(&self) -> bool {
+        matches!(self, Self::Other { text, .. } if text == "group system:masters")
+    }
+}
+
+/// `you` or nothing; `sa ns/name`, `serviceaccount ns/name`, or `system:serviceaccount:ns:name`;
+/// `user name`; `group name`. A user named like a service account is that account.
+pub(crate) fn parse_subject(text: &str) -> Result<SubjectQuery, QueryError> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let (kind, name) = match words.as_slice() {
+        [] => return Ok(SubjectQuery::You),
+        [single] if single.eq_ignore_ascii_case("you") => return Ok(SubjectQuery::You),
+        [single] => {
+            let (namespace, name) = parse_account_user(single).ok_or(QueryError::InvalidSubject)?;
+            return Ok(account_subject(namespace, name));
+        }
+        [kind, name] => (kind.to_lowercase(), *name),
+        _ => return Err(QueryError::InvalidSubject),
+    };
+    match kind.as_str() {
+        "sa" | "serviceaccount" => {
+            let (namespace, name) = name.split_once('/').ok_or(QueryError::InvalidSubject)?;
+            if namespace.is_empty() || name.is_empty() || name.contains('/') {
+                return Err(QueryError::InvalidSubject);
+            }
+            Ok(account_subject(namespace, name))
+        }
+        "user" => Ok(match parse_account_user(name) {
+            Some((namespace, name)) => account_subject(namespace, name),
+            None => SubjectQuery::Other {
+                text: format!("user {name}"),
+                identity: Identity::user(name),
+                account: None,
+            },
+        }),
+        "group" => Ok(SubjectQuery::Other {
+            text: format!("group {name}"),
+            identity: Identity::group(name),
+            account: None,
+        }),
+        _ => Err(QueryError::InvalidSubject),
+    }
+}
+
+/// `(namespace, name)` of `system:serviceaccount:{namespace}:{name}`.
+fn parse_account_user(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix("system:serviceaccount:")?;
+    let (namespace, name) = rest.split_once(':')?;
+    // A service account name has no colon, so `ns:a:b` is no account.
+    (!namespace.is_empty() && !name.is_empty() && !name.contains(':')).then_some((namespace, name))
+}
+
+fn account_subject(namespace: &str, name: &str) -> SubjectQuery {
+    SubjectQuery::Other {
+        text: format!("sa {namespace}/{name}"),
+        identity: Identity::service_account(namespace, name),
+        account: Some(ResourceKey::Kind {
+            kind: ResourceKind::ServiceAccounts,
+            namespace: Some(namespace.to_owned()),
+            name: name.to_owned(),
+        }),
+    }
 }
 
 /// The kubectl short name or the singular form of a built-in kind becomes its plural; any other

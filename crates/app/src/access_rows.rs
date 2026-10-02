@@ -342,6 +342,10 @@ pub(crate) fn service_account_row(account: &ServiceAccountSummary) -> KindRow {
         });
     }
     sections.push(DetailSection {
+        title: "Can do",
+        rows: vec![DetailRow::Live(LiveContent::CanDo)],
+    });
+    sections.push(DetailSection {
         title: "Used by",
         rows: vec![DetailRow::Live(LiveContent::ServiceAccountPods)],
     });

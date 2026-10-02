@@ -5,19 +5,23 @@
 //! are tested without a window.
 
 use cluster::{
-    BindingSummary, ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule,
-    DeploymentSummary, EndpointSliceSummary, EventSummary, IngressSummary, JobSummary, NodeSummary,
-    PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary,
-    PvcUsage, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, SecretSummary,
-    ServiceAccountSummary, ServiceSummary, ValuePreview, VolumeSource,
+    BindingSummary, BroadGroup, ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule,
+    DeploymentSummary, EndpointSliceSummary, EventSummary, Identity, IngressSummary, JobSummary,
+    NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary,
+    PodSummary, PvcUsage, RbacSnapshot, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary,
+    SecretSummary, ServiceAccountSummary, ServiceSummary, Subject, SubjectKind, ValuePreview,
+    VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _, px,
+    SharedString, StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _,
+    px,
 };
 use jiff::tz::TimeZone;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use crate::access_bindings::{
     BindingIndex, BindingsStatus, BoundRole, RoleSubject, binding_key, binding_text,
@@ -28,7 +32,7 @@ use crate::app_shell::AppShell;
 use crate::batch_rows::job_status_label;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{
-    CompanionLists, CompanionPlan, LiveCluster, LiveList, RelatedList, companion_plan,
+    CompanionLists, CompanionPlan, LiveCluster, LiveList, RbacState, RelatedList, companion_plan,
     denied_related_check,
 };
 use crate::config_map_rows::{format_bytes, key_size_text};
@@ -46,14 +50,18 @@ use crate::kind_join::{UsageSample, claim_sample, is_shared_filesystem};
 use crate::kind_row::{DetailRow, KindObject, KindRow, LiveContent, owns_pod, percent};
 use crate::network_rows::{TlsSecrets, ingress_tls_rows};
 use crate::object_events::event_subject;
+use crate::permission_table::{CanDoChips, can_do_chips, permission_table};
 use crate::policy_rows::{fullest_item, quota_text};
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_kind::ResourceKind;
 use crate::secret_rows::{MASK, MaskedKeyRow, certificate_rows, secret_data_rows};
-use crate::status_tone::{StatusLabel, StatusTone, pod_status_label, readiness_text, toned_text};
+use crate::status_tone::{
+    StatusLabel, StatusTone, pod_status_label, readiness_text, tone_color, toned_text,
+};
 use crate::storage_rows::phase_label;
 use crate::table_selection::ResourceKey;
 use crate::usage_format::{Measure, format_percent, usage_tone};
+use crate::who_can_view::coverage_notes;
 
 /// Bounds the render cost of a Deployment with very many ReplicaSets or a CronJob with many jobs.
 const MAX_LISTED_OBJECTS: usize = 10;
@@ -131,6 +139,7 @@ pub(crate) fn live_rows(
         (LiveContent::BoundRoles, KindObject::ServiceAccount(account)) => {
             bound_roles_rows(kind, account, live, cx)
         }
+        (LiveContent::CanDo, KindObject::ServiceAccount(account)) => can_do_rows(account, live, cx),
         (LiveContent::ServiceAccountPods, KindObject::ServiceAccount(account)) => {
             account_pods_rows(account, live, cx)
         }
@@ -1963,6 +1972,152 @@ fn bound_roles_rows(
             )))
             .collect()
     })
+}
+
+/// What the Can do section shows for one account.
+enum CanDoContent {
+    /// The snapshot is not ready: one muted line.
+    Line(String),
+    Ready(Rc<CanDoSummary>),
+}
+
+struct CanDoSummary {
+    chips: CanDoChips,
+    /// Warn lines for what the snapshot could not list.
+    warnings: Vec<SharedString>,
+}
+
+/// The chips of the last account painted, kept because the drawer repaints often and the
+/// evaluation walks every binding. The cache holds the snapshot it was computed from, so a
+/// refreshed snapshot (a different `Rc`) always recomputes and an address is never reused.
+pub(crate) struct CanDoCache {
+    snapshot: Rc<RbacSnapshot>,
+    namespace: String,
+    name: String,
+    summary: Rc<CanDoSummary>,
+}
+
+pub(crate) type CanDoCell = RefCell<Option<CanDoCache>>;
+
+/// The chips of what `namespace/name` can do in its own namespace and cluster-wide. Grants that
+/// reach it only through `system:authenticated` are left out: the basic-user review grants sit on
+/// every account and would drown the real ones (the Check permissions dialog keeps them).
+fn can_do_content(
+    state: &RbacState,
+    namespace: &str,
+    name: &str,
+    cache: &CanDoCell,
+) -> CanDoContent {
+    let (snapshot, _) = match state {
+        RbacState::Idle | RbacState::Loading { .. } => {
+            return CanDoContent::Line("Listing RBAC objects…".to_owned());
+        }
+        RbacState::Failed(message) => {
+            return CanDoContent::Line(format!("RBAC objects are unavailable: {message}"));
+        }
+        RbacState::Ready {
+            snapshot,
+            listed_at,
+        } => (snapshot, listed_at),
+    };
+    let cached = cache.borrow().as_ref().and_then(|cached| {
+        let is_current = Rc::ptr_eq(&cached.snapshot, snapshot)
+            && cached.namespace == namespace
+            && cached.name == name;
+        is_current.then(|| Rc::clone(&cached.summary))
+    });
+    if let Some(summary) = cached {
+        return CanDoContent::Ready(summary);
+    }
+    let identity = Identity::service_account(namespace, name);
+    let rules = snapshot.rules_of(&identity, Some(namespace));
+    let own = rules
+        .iter()
+        .filter(|effective| !is_authenticated_group(effective.subject))
+        .map(|effective| effective.rule);
+    let summary = Rc::new(CanDoSummary {
+        chips: can_do_chips(&permission_table(own)),
+        warnings: coverage_notes(&snapshot.coverage, Some(namespace)),
+    });
+    *cache.borrow_mut() = Some(CanDoCache {
+        snapshot: Rc::clone(snapshot),
+        namespace: namespace.to_owned(),
+        name: name.to_owned(),
+        summary: Rc::clone(&summary),
+    });
+    CanDoContent::Ready(summary)
+}
+
+fn is_authenticated_group(subject: &Subject) -> bool {
+    subject.kind == SubjectKind::Group
+        && matches!(subject.broad_group(), Some(BroadGroup::Authenticated))
+}
+
+fn can_do_rows(
+    account: &ServiceAccountSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    match can_do_content(&live.rbac, &account.namespace, &account.name, &live.can_do) {
+        CanDoContent::Line(text) => vec![note(&text, cx)],
+        CanDoContent::Ready(summary) => {
+            let CanDoSummary { chips, warnings } = &*summary;
+            let mut rows = Vec::new();
+            if chips.chips.is_empty() {
+                rows.push(note("No permissions from RBAC bindings", cx));
+            } else {
+                let more = (chips.more > 0).then(|| (format!("+{} more", chips.more).into(), None));
+                rows.push(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .children(
+                            chips
+                                .chips
+                                .iter()
+                                .cloned()
+                                .chain(more)
+                                .map(|(text, tone)| can_do_chip(text, tone, cx)),
+                        )
+                        .into_any_element(),
+                );
+            }
+            rows.extend(warnings.iter().map(|warning| {
+                div()
+                    .text_sm()
+                    .text_color(tone_color(StatusTone::Warn, cx))
+                    .child(warning.clone())
+                    .into_any_element()
+            }));
+            rows.push(note(
+                &format!(
+                    "In {} and cluster-wide · computed from RBAC objects. Check permissions shows the full table.",
+                    account.namespace
+                ),
+                cx,
+            ));
+            rows
+        }
+    }
+}
+
+fn can_do_chip(
+    text: gpui_kit::SharedString,
+    tone: Option<StatusTone>,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .max_w_full()
+        .truncate()
+        .px_1p5()
+        .rounded(theme.radius)
+        .bg(theme.muted)
+        .font_family(theme.mono_font_family.clone())
+        .text_xs()
+        .when_some(tone, |chip, tone| chip.text_color(tone_color(tone, cx)))
+        .child(text)
+        .into_any_element()
 }
 
 /// ` · group system:serviceaccounts` after the binding, when the account is reached through a

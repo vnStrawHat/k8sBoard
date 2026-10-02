@@ -22,7 +22,7 @@ Options:
   --screen pods|nodes|issues|issues-drawer|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
-           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can
+           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions
                          screen to open (default: pods)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
@@ -51,6 +51,11 @@ pub(crate) enum LaunchScreen {
     NodesSelected,
     /// `--screen who-can`: ClusterRoles with the Who can dialog open on `get secrets`.
     WhoCan,
+    /// `--screen check-permissions`: ServiceAccounts with the Check permissions dialog open for You.
+    CheckPermissions,
+    /// `--screen account-permissions`: the same dialog for the first service account shown (after
+    /// `--filter`), or the one `--select` names.
+    AccountPermissions,
     /// `--screen <plural>`, e.g. `deployments`.
     Kind(ResourceKind),
     /// `--screen <plural>-drawer|<plural>-events|<plural>-yaml`: the kind's first row selected, on that tab.
@@ -82,6 +87,9 @@ impl LaunchScreen {
             Self::Issues | Self::IssuesDrawer => Screen::Issues,
             Self::Kind(kind) | Self::KindDrawer(kind, _) => Screen::Kind(kind),
             Self::WhoCan => Screen::Kind(ResourceKind::ClusterRoles),
+            Self::CheckPermissions | Self::AccountPermissions => {
+                Screen::Kind(ResourceKind::ServiceAccounts)
+            }
         }
     }
 
@@ -168,7 +176,10 @@ impl LaunchScreen {
 
     /// Whether a tool dialog opens once the session is live.
     pub(crate) fn opens_dialog(self) -> bool {
-        matches!(self, Self::WhoCan)
+        matches!(
+            self,
+            Self::WhoCan | Self::CheckPermissions | Self::AccountPermissions
+        )
     }
 
     /// Whether the log dock must be open on a pod.
@@ -197,6 +208,8 @@ impl LaunchScreen {
             "pods-selected" => Some(Self::PodsSelected),
             "nodes-selected" => Some(Self::NodesSelected),
             "who-can" => Some(Self::WhoCan),
+            "check-permissions" => Some(Self::CheckPermissions),
+            "account-permissions" => Some(Self::AccountPermissions),
             _ => {
                 if let Some(plural) = text.strip_suffix("-drawer") {
                     let kind = ResourceKind::from_plural(plural)?;

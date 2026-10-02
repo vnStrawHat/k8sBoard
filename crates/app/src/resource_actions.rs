@@ -286,6 +286,9 @@ pub(crate) fn kind_menu(
     if has_who_can(kind) {
         menu = menu.item(who_can_item(row, shell));
     }
+    if has_check_permissions(kind) {
+        menu = menu.item(check_permissions_item(row, shell));
+    }
     if let Some(item) = workload_logs_item(row, access, shell) {
         menu = menu.item(item);
     }
@@ -755,6 +758,27 @@ fn copy_message_item(event: &EventDetail) -> PopupMenuItem {
 /// Roles and ClusterRoles offer Who can… as their first menu item.
 fn has_who_can(kind: ResourceKind) -> bool {
     matches!(kind, ResourceKind::Roles | ResourceKind::ClusterRoles)
+}
+
+/// Service accounts offer Check permissions as their first menu item.
+fn has_check_permissions(kind: ResourceKind) -> bool {
+    kind == ResourceKind::ServiceAccounts
+}
+
+/// Opens Check permissions for this account, in its own namespace, checked at once.
+fn check_permissions_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    let shell = shell.clone();
+    let namespace = row.namespace.clone();
+    let subject = namespace
+        .as_ref()
+        .map(|namespace| format!("sa {namespace}/{}", row.name));
+    PopupMenuItem::new("Check permissions").on_click(move |_, window, cx| {
+        let subject = subject.clone();
+        let namespace = namespace.clone();
+        let _ = shell.update(cx, |shell, cx| {
+            shell.open_permissions(subject, namespace, true, window, cx);
+        });
+    })
 }
 
 /// The Who can… query a role row prefills: its first resource rule, if it has one.

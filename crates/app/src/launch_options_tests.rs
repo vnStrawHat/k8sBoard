@@ -465,4 +465,13 @@ fn parses_analysis_screens() {
     assert!(!screen.has_drawer() && !screen.has_log_dock());
     assert_eq!(screen.screen(), Screen::Kind(ResourceKind::ClusterRoles));
     assert!(!LaunchScreen::Pods.opens_dialog());
+    for (text, expected) in [
+        ("check-permissions", LaunchScreen::CheckPermissions),
+        ("account-permissions", LaunchScreen::AccountPermissions),
+    ] {
+        let screen = run_options(&["--screen", text]).screen;
+        assert_eq!(screen, expected);
+        assert!(screen.opens_dialog());
+        assert_eq!(screen.screen(), Screen::Kind(ResourceKind::ServiceAccounts));
+    }
 }

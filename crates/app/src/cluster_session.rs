@@ -28,6 +28,7 @@ use crate::issue_feeds::{FeedState, IssueFeeds, core_coverage};
 use crate::kind_join::{JoinInputs, join_rows};
 use crate::kind_row::{KindObject, KindRow};
 use crate::kubelet_metrics::KubeletDemand;
+use crate::live_sections::CanDoCell;
 use crate::related_objects::RelatedSubject;
 use crate::resource_kind::ResourceKind;
 
@@ -78,6 +79,8 @@ pub(crate) struct LiveCluster {
     pub(crate) access: AccessState,
     /// The RBAC snapshot of the analysis tools, listed on first need.
     pub(crate) rbac: RbacState,
+    /// The Can do chips of the account whose drawer is open (`live_sections.rs`).
+    pub(crate) can_do: CanDoCell,
     pub(crate) namespaces: LiveList<NamespaceSummary>,
     pub(crate) pods: LiveList<PodSummary>,
     pub(crate) nodes: LiveList<NodeSummary>,
@@ -2077,6 +2080,7 @@ impl LiveCluster {
             scope,
             access,
             rbac: RbacState::Idle,
+            can_do: CanDoCell::default(),
             namespaces: LiveList::Loading,
             pods: LiveList::Loading,
             nodes: LiveList::Loading,

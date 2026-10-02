@@ -1248,3 +1248,177 @@ fn ingresses_state_follows_the_list_and_the_plan() {
     );
     assert_eq!(ingresses_state(None, start), IngressesState::Unavailable);
 }
+
+// ---- Can do ----
+
+fn rbac_rule(resources: &[&str], verbs: &[&str]) -> cluster::RbacRule {
+    let texts = |values: &[&str]| values.iter().map(|value| (*value).to_owned()).collect();
+    cluster::RbacRule {
+        api_groups: vec![String::new()],
+        resources: texts(resources),
+        resource_names: Vec::new(),
+        verbs: texts(verbs),
+        non_resource_urls: Vec::new(),
+    }
+}
+
+fn group_subject(name: &str) -> cluster::Subject {
+    cluster::Subject {
+        kind: cluster::SubjectKind::Group,
+        name: name.to_owned(),
+        namespace: None,
+    }
+}
+
+fn snapshot_with(
+    roles: Vec<(&str, Vec<cluster::RbacRule>)>,
+    bindings: Vec<BindingSummary>,
+) -> cluster::RbacSnapshot {
+    cluster::RbacSnapshot {
+        roles: Vec::new(),
+        cluster_roles: roles
+            .into_iter()
+            .map(|(name, rules)| RoleSummary {
+                namespace: None,
+                name: name.to_owned(),
+                created_at: None,
+                labels: Vec::new(),
+                rules,
+                aggregation: Vec::new(),
+            })
+            .collect(),
+        role_bindings: Vec::new(),
+        cluster_role_bindings: bindings,
+        coverage: cluster::RbacCoverage {
+            cluster_roles: true,
+            cluster_bindings: true,
+            roles: cluster::NamespaceCoverage::AllNamespaces,
+            role_bindings: cluster::NamespaceCoverage::AllNamespaces,
+        },
+    }
+}
+
+fn ready(snapshot: cluster::RbacSnapshot) -> RbacState {
+    RbacState::Ready {
+        snapshot: std::rc::Rc::new(snapshot),
+        listed_at: jiff::Timestamp::UNIX_EPOCH,
+    }
+}
+
+fn chip_texts(content: &CanDoContent) -> Vec<String> {
+    let CanDoContent::Ready(summary) = content else {
+        panic!("expected chips");
+    };
+    summary
+        .chips
+        .chips
+        .iter()
+        .map(|(text, _)| text.to_string())
+        .collect()
+}
+
+#[test]
+fn can_do_excludes_authenticated_only_grants() {
+    let data = snapshot_with(
+        vec![
+            (
+                "basic",
+                vec![rbac_rule(&["selfsubjectreviews"], &["create"])],
+            ),
+            ("reader", vec![rbac_rule(&["pods"], &["get"])]),
+        ],
+        vec![
+            binding_named(
+                None,
+                "everyone",
+                (cluster::RoleKind::ClusterRole, "basic"),
+                vec![group_subject("system:authenticated")],
+            ),
+            binding_named(
+                None,
+                "own",
+                (cluster::RoleKind::ClusterRole, "reader"),
+                vec![account_subject("shop", "robot")],
+            ),
+        ],
+    );
+    let content = can_do_content(&ready(data), "shop", "robot", &CanDoCell::default());
+    assert_eq!(chip_texts(&content), ["get pods"]);
+}
+
+fn summary_of(content: CanDoContent) -> Rc<CanDoSummary> {
+    match content {
+        CanDoContent::Ready(summary) => summary,
+        CanDoContent::Line(_) => panic!("expected chips"),
+    }
+}
+
+#[test]
+fn can_do_chips_are_reused_for_the_same_snapshot_and_account() {
+    let state = ready(snapshot_with(Vec::new(), Vec::new()));
+    let cache = CanDoCell::default();
+    let first = summary_of(can_do_content(&state, "shop", "robot", &cache));
+    let again = summary_of(can_do_content(&state, "shop", "robot", &cache));
+    assert!(Rc::ptr_eq(&first, &again));
+    // Another account is a different key.
+    let other = summary_of(can_do_content(&state, "shop", "worker", &cache));
+    assert!(!Rc::ptr_eq(&first, &other));
+}
+
+#[test]
+fn can_do_chips_are_recomputed_for_a_refreshed_snapshot() {
+    let cache = CanDoCell::default();
+    let first = summary_of(can_do_content(
+        &ready(snapshot_with(Vec::new(), Vec::new())),
+        "shop",
+        "robot",
+        &cache,
+    ));
+    // An equal snapshot listed again is a new `Rc`.
+    let refreshed = summary_of(can_do_content(
+        &ready(snapshot_with(Vec::new(), Vec::new())),
+        "shop",
+        "robot",
+        &cache,
+    ));
+    assert!(!Rc::ptr_eq(&first, &refreshed));
+}
+
+#[test]
+fn can_do_loading_and_failed_lines() {
+    let loading = RbacState::Loading {
+        _task: gpui_kit::Task::ready(()),
+    };
+    for state in [RbacState::Idle, loading] {
+        let CanDoContent::Line(text) =
+            can_do_content(&state, "shop", "robot", &CanDoCell::default())
+        else {
+            panic!("a line");
+        };
+        assert_eq!(text, "Listing RBAC objects…");
+    }
+    let failed = RbacState::Failed("timed out".to_owned());
+    let CanDoContent::Line(text) = can_do_content(&failed, "shop", "robot", &CanDoCell::default())
+    else {
+        panic!("a line");
+    };
+    assert_eq!(text, "RBAC objects are unavailable: timed out");
+}
+
+#[test]
+fn can_do_coverage_warning() {
+    let mut data = snapshot_with(Vec::new(), Vec::new());
+    data.coverage.cluster_bindings = false;
+    let state = ready(data);
+    let summary = summary_of(can_do_content(
+        &state,
+        "shop",
+        "robot",
+        &CanDoCell::default(),
+    ));
+    assert!(summary.chips.chips.is_empty());
+    assert_eq!(
+        summary.warnings,
+        ["ClusterRoleBindings were not listed; only namespace grants are shown."]
+    );
+}
