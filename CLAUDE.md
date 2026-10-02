@@ -21,7 +21,7 @@ Cargo virtual workspace at the root; shared versions, lints, and profiles live i
 
 ## Environment rules
 
-- Work only inside this project folder. Temp files go to `.tmp/`, caches to `.cargo-home/`. Do not use git worktrees.
+- Work only inside this project folder. Temp files go to `.tmp/`, caches to `.cargo-home/`. Git worktrees are allowed only inside the project folder (e.g. `.tmp/wt-*`); check free disk space before creating one and keep the build cache under control.
 - Use Git Bash + GNU coreutils for shell work, never PowerShell.
 - Every find/grep/ls must target an explicit folder inside the project; never scan a drive.
 - Before every cargo command, export in the same Bash call:
