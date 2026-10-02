@@ -4,10 +4,10 @@
 //! events watches together, and prints counts per kind. With `--metrics-seconds` it polls pod
 //! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--kubelet-seconds` it polls the kubelet stats of every Ready node through the node proxy (cAdvisor disk I/O for the first one) and prints counts per node per round. With `--counts` it prints one object-count line per kind (`limit=1` lists, nothing else is read). With `--yaml` it reads the masked
 //! YAML of the first pod and the first node and prints line counts and masking checks, never
-//! the YAML text. With `--secrets` it prints Secret counts by type and certificate parse counts, then reads one TLS secret and prints its key and byte counts, never a value. The access section doubles as the RBAC probe of the context.
+//! the YAML text. With `--secrets` it prints Secret counts by type and certificate parse counts, then reads one TLS secret and prints its key and byte counts, never a value. With `--helm` it prints Helm release counts by status, then reads the first release and prints line and document counts, never values, manifest text, notes, or descriptions. The access section doubles as the RBAC probe of the context.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm]
 //! ```
 
 use std::collections::BTreeMap;
@@ -19,16 +19,17 @@ use std::time::Duration;
 
 use cluster::{
     AccessCheck, AccessDecision, AccessReport, ClusterConnection, ClusterError, ContainerKind,
-    ContainerState, ContainerSummary, CronJobSummary, EnvValues, EventFilter, Kubeconfig,
-    KubeletTargets, LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceScope, NodeKubeletStats,
-    NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary, ObjectKind, ObjectRef, PodMetrics,
-    PodStatus, PodSummary, SecretDetails, SecretSummary, StatusReason, Termination, WatchUpdate,
+    ContainerState, ContainerSummary, CronJobSummary, EnvValues, EventFilter, HelmReleaseSummary,
+    HelmRevisionRef, Kubeconfig, KubeletTargets, LogRequest, LogSource, LogUpdate, MetricsApi,
+    NamespaceScope, NodeKubeletStats, NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary,
+    ObjectKind, ObjectRef, PodMetrics, PodStatus, PodSummary, SecretDetails, SecretSummary,
+    StatusReason, Termination, ValueVisibility, WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 use tokio::sync::watch;
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -44,6 +45,7 @@ struct Args {
     counts: bool,
     yaml: bool,
     secrets: bool,
+    helm: bool,
 }
 
 enum Parsed {
@@ -62,6 +64,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut counts = false;
     let mut yaml = false;
     let mut secrets = false;
+    let mut helm = false;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
         match flag.as_str() {
@@ -69,6 +72,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
             "--counts" => counts = true,
             "--yaml" => yaml = true,
             "--secrets" => secrets = true,
+            "--helm" => helm = true,
             "--kubeconfig" => kubeconfig = Some(PathBuf::from(value("--kubeconfig")?)),
             "--context" => context = Some(value("--context")?),
             "--namespace" => namespace = Some(value("--namespace")?),
@@ -108,6 +112,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         counts,
         yaml,
         secrets,
+        helm,
     }))
 }
 
@@ -268,6 +273,10 @@ async fn watch_for(
         ),
         tally_source("secrets", connection.watch_secrets(scope.clone())),
         tally_source("tls secrets", connection.watch_tls_secrets(scope.clone())),
+        tally_source(
+            "helm releases",
+            connection.watch_helm_releases(scope.clone()),
+        ),
         tally_source("roles", connection.watch_roles(scope.clone())),
         tally_source("cluster roles", connection.watch_cluster_roles()),
         tally_source(
@@ -535,6 +544,150 @@ fn type_counts(secrets: &[SecretSummary]) -> String {
         .iter()
         .map(|(secret_type, count)| format!("{secret_type} {count}"))
         .collect();
+    parts.join(" \u{b7} ")
+}
+
+/// How long `--helm` waits for each first snapshot.
+const HELM_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `--helm`: release counts by status, then one revision read of the first release. Prints
+/// counts, line counts, `{namespace}/{name}`, and revision numbers only: never a value, manifest
+/// text, notes, or description text.
+async fn helm_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    scope: NamespaceScope,
+) -> io::Result<()> {
+    probe.section("helm")?;
+    let updates = connection.watch_helm_releases(scope);
+    tokio::pin!(updates);
+    let first = tokio::time::timeout(HELM_SNAPSHOT_TIMEOUT, updates.next()).await;
+    let releases = match first {
+        Ok(Some(WatchUpdate::Snapshot(releases))) => releases,
+        Ok(Some(WatchUpdate::Failed(error))) => return probe.fail(&error),
+        Ok(None) | Err(_) => {
+            probe.all_succeeded = false;
+            return writeln!(
+                probe.out,
+                "  no helm releases snapshot in {HELM_SNAPSHOT_TIMEOUT:?}"
+            );
+        }
+    };
+    let decoded = releases
+        .iter()
+        .filter(|release| release.chart.is_some())
+        .count();
+    writeln!(
+        probe.out,
+        "  helm releases {}: {}; payload decoded {decoded}/{}",
+        releases.len(),
+        status_counts(&releases),
+        releases.len()
+    )?;
+    let Some(release) = releases.first() else {
+        return writeln!(probe.out, "  first helm release none");
+    };
+    let target = format!("{}/{}", release.namespace, release.name);
+    writeln!(
+        probe.out,
+        "  first helm release {target} rev {}",
+        release.revision
+    )?;
+    let history = connection.watch_helm_history(&release.namespace, &release.name);
+    tokio::pin!(history);
+    let revisions = match tokio::time::timeout(HELM_SNAPSHOT_TIMEOUT, history.next()).await {
+        Ok(Some(WatchUpdate::Snapshot(revisions))) => revisions,
+        Ok(Some(WatchUpdate::Failed(error))) => return probe.fail(&error),
+        Ok(None) | Err(_) => {
+            probe.all_succeeded = false;
+            return writeln!(probe.out, "  no helm history snapshot for {target}");
+        }
+    };
+    writeln!(
+        probe.out,
+        "  helm history {target}: {} revisions",
+        revisions.len()
+    )?;
+    let revision = HelmRevisionRef {
+        namespace: release.namespace.clone(),
+        release: release.name.clone(),
+        revision: release.revision,
+    };
+    let description_chars = release
+        .description
+        .as_ref()
+        .map_or(0, |text| text.chars().count());
+    match connection
+        .helm_release_detail(&revision, EnvValues::Hidden)
+        .await
+    {
+        Ok(detail) => {
+            let manifest = detail.manifest.as_str();
+            let documents = match manifest.is_empty() {
+                true => 0,
+                false => manifest.lines().filter(|line| *line == "---").count() + 1,
+            };
+            writeln!(
+                probe.out,
+                "  helm detail {target} rev {}: values {} lines ({} hidden), computed {} lines, manifest {documents} documents {} lines ({} env values hidden), notes {} lines, description {description_chars} chars",
+                release.revision,
+                detail.user_values.as_str().lines().count(),
+                detail.hidden_user_values,
+                detail.computed_values.as_str().lines().count(),
+                manifest.lines().count(),
+                detail.hidden_env_values,
+                detail.notes_lines,
+            )?;
+        }
+        Err(error) => {
+            writeln!(probe.out, "  helm detail {target} rev {}", release.revision)?;
+            probe.fail(&error)?;
+        }
+    }
+    let earlier = revisions
+        .iter()
+        .map(|revision| revision.revision)
+        .find(|number| *number < release.revision);
+    let Some(earlier) = earlier else {
+        return Ok(());
+    };
+    let before = HelmRevisionRef {
+        revision: earlier,
+        ..revision.clone()
+    };
+    match connection
+        .helm_values_diff(&before, &revision, ValueVisibility::Masked)
+        .await
+    {
+        Ok(diff) => writeln!(
+            probe.out,
+            "  helm diff {target} rev {earlier} \u{2192} {}: user {} changes, computed {} changes",
+            release.revision,
+            diff.user.len() + diff.omitted_user,
+            diff.computed.len() + diff.omitted_computed
+        ),
+        Err(error) => {
+            writeln!(probe.out, "  helm diff {target} rev {earlier}")?;
+            probe.fail(&error)
+        }
+    }
+}
+
+/// `{status} {count} · …`, by count then name.
+fn status_counts(releases: &[HelmReleaseSummary]) -> String {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for release in releases {
+        *counts.entry(release.status.label()).or_default() += 1;
+    }
+    let mut counts: Vec<_> = counts.into_iter().collect();
+    counts.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(right.0)));
+    let parts: Vec<String> = counts
+        .iter()
+        .map(|(status, count)| format!("{status} {count}"))
+        .collect();
+    if parts.is_empty() {
+        return NONE_TEXT.to_owned();
+    }
     parts.join(" \u{b7} ")
 }
 
@@ -1085,6 +1238,9 @@ async fn run(args: &Args) -> io::Result<bool> {
 
     if args.secrets {
         secrets_for(&mut probe, &connection, scope.clone()).await?;
+    }
+    if args.helm {
+        helm_for(&mut probe, &connection, scope.clone()).await?;
     }
     if let Some(seconds) = args.watch_seconds {
         watch_for(&mut probe, &connection, scope.clone(), seconds).await?;

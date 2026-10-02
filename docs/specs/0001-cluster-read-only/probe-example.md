@@ -3,7 +3,7 @@
 [Back to index](README.md)
 
 ```text
-cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>] [--counts] [--yaml] [--secrets]
+cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>] [--counts] [--yaml] [--secrets] [--helm]
 ```
 
 ## CLI
@@ -18,6 +18,7 @@ cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context 
 | `--counts` | optional flag (spec 0012). After the access section, prints one line per kind in sidebar order (17): `count <plural> <n>`, `count <plural> unknown` (a continue token without a remaining count), or `count <plural> denied` (no request sent when the access review denied the list). Uses one `list` with `limit=1` per namespace |
 | `--yaml` | optional flag (spec 0007). After the pod list, reads the masked YAML of the first listed pod and the first node. Prints `yaml pod <ns>/<name>: N lines, K env values hidden, managedFields absent|PRESENT, last-applied hidden|absent|VISIBLE`, and the same for `yaml node <name>`. The YAML text is never printed. Exits 1 if an object is missing or a read fails |
 | `--secrets` | optional flag (spec 0016). After the pod and yaml sections, prints `secrets {n}: {type} {count} · …`, `tls certificates {parsed}/{tls} parsed, earliest leaf not-after {RFC 3339} ({ns}/{name})`, `first tls secret {ns}/{name}`, and one `secret values {ns}/{name}: {k} keys, {bytes} bytes` line from a single read of that secret. Never prints a value, a SAN, or a registry host. The `--watch-seconds` run also prints `secrets` and `tls secrets` watch lines, and `--counts` prints `count secrets`. |
+| `--helm` | optional flag (spec 0017). Prints `helm releases {n}: {status} {count} · …; payload decoded {d}/{n}`, `first helm release {ns}/{name} rev {r}`, `helm history {ns}/{name}: {k} revisions`, `helm detail {ns}/{name} rev {r}: values {l} lines ({h} hidden), computed {l} lines, manifest {d} documents {l} lines ({e} env values hidden), notes {n} lines, description {c} chars`, and `helm diff {ns}/{name} rev {p} → {r}: user {u} changes, computed {c} changes` (masked). Never prints a value, manifest text, notes, or description text. The `--watch-seconds` run also prints a `helm releases` watch line. |
 | `--help` | prints usage |
 
 - Arguments are parsed by hand from `std::env::args()`, with no new dependency.

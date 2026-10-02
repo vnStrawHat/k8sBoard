@@ -11,6 +11,7 @@
 | `release_json_rejects_bad_base64_and_bad_gzip` | `NotBase64`, `NotGzip` |
 | `release_json_stops_at_size_limit` | `release_json` calls private `release_json_within(bytes, limit)`; with limit 1024, a 1025-byte payload → `TooLarge`, 1024 → Ok |
 | `gzip_capacity_reads_isize_capped_at_limit` | private `gzip_output_capacity(bytes, limit)`: ISIZE trailer value, capped at `limit`; a short input → 0 (decision 9) |
+| `gzip_capacity_ignores_a_lying_isize` | a small stream with ISIZE 0xFFFFFFFF reserves at most 1032 times its length, far below the limit |
 | `revision_head_reads_labels_and_chart` | name, revision, status, chart name/version/app version, last deployed, description |
 | `revision_head_without_identity_labels_is_none` | decision 8 |
 | `revision_head_with_bad_payload_keeps_row` | `chart: None`, times fall back to creation |
@@ -25,7 +26,7 @@
 | `history_sorts_newest_first` | 10 before 9 (numeric, not name order) |
 | `secret_name_of_revision` | `sh.helm.release.v1.api.v38` |
 
-`resource_watch_tests.rs`: `metadata_summary_watch_batches_like_summary_watch` (fake event stream through `batch_updates` with `PartialObjectMeta<Secret>`).
+`resource_watch_tests.rs`: `batch_updates_accepts_partial_object_meta` (fake event stream through `batch_updates` with `PartialObjectMeta<Secret>`).
 
 ## Step 1 · `helm_release_detail_tests.rs` and `helm_values_diff_tests.rs`
 

@@ -3887,6 +3887,8 @@ dependencies = [
 name = "k8sboard-cluster"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "flate2",
  "futures",
  "jiff",
  "k8s-openapi",

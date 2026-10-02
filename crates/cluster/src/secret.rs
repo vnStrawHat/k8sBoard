@@ -139,16 +139,28 @@ impl ClusterConnection {
         namespace: &str,
         name: &str,
     ) -> Result<Vec<SecretValue>, ClusterError> {
+        let body = self.secret_text(namespace, name, READ_ACTION).await?;
+        Ok(values_of(decode_secret(self.context(), &body)?))
+    }
+
+    /// The JSON body of one Secret GET, wiped on drop. Callers decode it themselves because
+    /// kube-client logs the whole body when a decode fails; `action` names the caller's work
+    /// in errors. The body holds every value of the Secret.
+    pub(crate) async fn secret_text(
+        &self,
+        namespace: &str,
+        name: &str,
+        action: &'static str,
+    ) -> Result<Zeroizing<String>, ClusterError> {
         let context = self.context();
         let request = secret_collection(namespace)
             .get(name, &GetParams::default())
-            .map_err(|_| unexpected(context, "the secret request could not be built"))?;
+            .map_err(|_| unexpected(context, action, "the secret request could not be built"))?;
         let body = self
-            .run(READ_ACTION, self.client().request_text(request))
+            .run(action, self.client().request_text(request))
             .await
             .map_err(|error| without_body_bytes(context, error))?;
-        let body = Zeroizing::new(body);
-        Ok(values_of(decode_secret(context, &body)?))
+        Ok(Zeroizing::new(body))
     }
 }
 
@@ -169,10 +181,10 @@ fn secret_collection(namespace: &str) -> Request {
 }
 
 /// Fixed text only: serde and UTF-8 errors can quote the body.
-fn unexpected(context: &str, source: &'static str) -> ClusterError {
+fn unexpected(context: &str, action: &'static str, source: &'static str) -> ClusterError {
     ClusterError::UnexpectedResponse {
         context: context.to_owned(),
-        action: READ_ACTION,
+        action,
         source: source.into(),
     }
 }
@@ -181,18 +193,19 @@ fn unexpected(context: &str, source: &'static str) -> ClusterError {
 /// body (the UTF-8 error keeps its bytes), so it is replaced with fixed text. Other kinds of
 /// error (403, 404, transport) hold no body and pass through for the caller to word.
 fn without_body_bytes(context: &str, error: ClusterError) -> ClusterError {
-    let ClusterError::UnexpectedResponse { source, .. } = &error else {
+    let ClusterError::UnexpectedResponse { action, source, .. } = &error else {
         return error;
     };
     let text = match source.downcast_ref::<kube::Error>() {
         Some(kube::Error::FromUtf8(_)) => "the secret response was not valid UTF-8",
         _ => "the secret response could not be read",
     };
-    unexpected(context, text)
+    unexpected(context, action, text)
 }
 
 fn decode_secret(context: &str, body: &str) -> Result<Secret, ClusterError> {
-    serde_json::from_str(body).map_err(|_| unexpected(context, "the secret could not be decoded"))
+    serde_json::from_str(body)
+        .map_err(|_| unexpected(context, READ_ACTION, "the secret could not be decoded"))
 }
 
 /// Moves each value out of the decoded Secret (no copy) and wipes the annotations, which

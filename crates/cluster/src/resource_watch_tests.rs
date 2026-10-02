@@ -4,7 +4,7 @@ use futures::channel::mpsc::{self, UnboundedSender};
 use futures::stream;
 use k8s_openapi::api::core::v1::{Pod, PodSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
-use kube::core::Status;
+use kube::core::{PartialObjectMeta, PartialObjectMetaExt, Status};
 
 use super::*;
 use crate::pod::{PodSummary, pod_summary};
@@ -774,4 +774,46 @@ async fn merge_limit_keeps_newest_in_order() {
     ];
     let updates: Vec<_> = merge_snapshots(inputs, Some(limit)).collect().await;
     assert_eq!(merged_items(updates.into_iter().next()), [30, 20]);
+}
+
+// Metadata watches
+
+fn partial(namespace: &str, name: &str) -> PartialObjectMeta<Pod> {
+    ObjectMeta {
+        namespace: Some(namespace.to_owned()),
+        name: Some(name.to_owned()),
+        ..Default::default()
+    }
+    .into_response_partial::<Pod>()
+}
+
+fn partial_name(meta: &PartialObjectMeta<Pod>) -> String {
+    meta.metadata.name.clone().unwrap_or_default()
+}
+
+#[tokio::test(start_paused = true)]
+async fn batch_updates_accepts_partial_object_meta() {
+    let mut items = vec![Ok(Event::Init)];
+    items.extend(
+        [partial("ns", "b"), partial("ns", "a")]
+            .into_iter()
+            .map(|meta| Ok(Event::InitApply(meta))),
+    );
+    items.push(Ok(Event::InitDone));
+    items.push(Ok(Event::Apply(partial("ns", "c"))));
+    let updates: Vec<_> = batch_updates(
+        stream::iter(items),
+        "test".to_owned(),
+        ACTION,
+        partial_name,
+        None,
+    )
+    .collect()
+    .await;
+    // The apply after the initial list lands inside the same batch window.
+    assert_eq!(updates.len(), 1);
+    let WatchUpdate::Snapshot(names) = &updates[0] else {
+        panic!("expected a snapshot");
+    };
+    assert_eq!(names, &["a", "b", "c"]);
 }

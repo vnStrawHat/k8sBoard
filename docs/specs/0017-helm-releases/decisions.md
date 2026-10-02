@@ -49,6 +49,9 @@
 
 - The release watch downloads every current revision's payload (≤ 10 per page), freed not wiped (0016 ceiling). **Failed revisions stay current** (Helm never supersedes them), so each one up to the history limit is downloaded again at every screen open (S4).
 - A decompressed release can reach 64 MiB in memory during one decode. serde builds `Option<String>` fields (manifest, notes) through scratch buffers that are freed, not wiped (S2); a wrong ISIZE makes the buffer grow and free unwiped copies.
+- The manifest parse budget is `max_nodes` 2,000,000 (decision 13): a document that large builds a transient tree of about 100-200 MiB before it is masked, freed not wiped.
+- `# Source: ` lines of the manifest are kept verbatim. Helm writes them from chart paths, but a template could echo a value there.
+- The gzip output reservation is also bounded by 1032 times the compressed length (the DEFLATE maximum ratio), so a lying ISIZE cannot make a tiny Secret reserve 64 MiB on every watch event.
 - Masked YAML still shows key names and **array lengths** (e.g. how many hosts or users) (S7).
 - Values masked in Values can appear in rendered non-Secret manifests (ConfigMap data, args).
 - `info.description` is Helm's text; a Kubernetes validation error inside it can quote a field value (helm-safety rule 1).
@@ -59,7 +62,7 @@
 
 | Item | Result |
 |---|---|
-| Release Secrets found / decoded | TBD |
-| Status mix | TBD |
-| First release (screenshot filter) | TBD (metadata only) |
-| `get secrets` on a release revision | TBD |
+| Release Secrets found / decoded | 0 / 0 (`helm releases 0`, `payload decoded 0/0`) |
+| Status mix | none |
+| First release (screenshot filter) | none: the UAT cluster has no `helm.sh/release.v1` Secret, so screenshots cover the empty state only |
+| `get secrets` on a release revision | not probed: no release exists; the GET path is `secret_text`, shared with 0016 `secret_values` (live-proven there) |

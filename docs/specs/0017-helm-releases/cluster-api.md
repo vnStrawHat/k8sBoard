@@ -55,7 +55,7 @@ pub(crate) fn release_json(release: &[u8]) -> Result<Zeroizing<Vec<u8>>, Payload
 ```
 
 - `base64::engine::general_purpose::STANDARD.decode` into `Zeroizing<Vec<u8>>`; error → `NotBase64`.
-- Starts with `1f 8b` → read the gzip ISIZE trailer (last 4 bytes, little-endian), `Zeroizing::new(Vec::with_capacity(min(isize, limit)))` once (decision 9), then `GzDecoder::new(&bytes[..]).take(limit + 1).read_to_end(&mut out)`; error → `NotGzip`; over the limit → `TooLarge`. Otherwise the bytes are the JSON (decision 10), same limit. Ceiling: a wrong ISIZE regrows `out` and frees unwiped copies.
+- Starts with `1f 8b` → read the gzip ISIZE trailer (last 4 bytes, little-endian), `Zeroizing::new(Vec::with_capacity(min(isize, limit, 1032 * compressed_len)))` once (decision 9), then `GzDecoder::new(&bytes[..]).take(limit + 1).read_to_end(&mut out)`; error → `NotGzip`; over the limit → `TooLarge`. Otherwise the bytes are the JSON (decision 10), same limit. Ceiling: a wrong ISIZE regrows `out` and frees unwiped copies.
 - No step logs or keeps an error (they can quote bytes).
 
 ## Summarizer and grouping (private)

@@ -25,7 +25,7 @@ use crate::storage_class::{is_secret_parameter, mask_mount_option};
 const ACTION: &str = "reading the object YAML";
 /// Fixed on purpose: the library error could quote the object's content.
 const CONVERSION_FAILURE: &str = "the object could not be converted to YAML";
-const HIDDEN: &str = "<hidden>";
+pub(crate) const HIDDEN: &str = "<hidden>";
 
 /// Annotations that embed a whole applied manifest, so they can carry Secret data and env literals.
 const MASKED_ANNOTATIONS: [&str; 3] = [
@@ -218,26 +218,33 @@ fn to_masked_yaml(mut object: Value, env: EnvValues) -> Result<ObjectYaml, &'sta
     }
     hidden += hidden_env_values;
     object.sort_all_objects();
-
-    // The options type is non-exhaustive, so it cannot be built with struct update syntax.
-    let mut options = SerializerOptions::default();
-    // Long single-line strings stay on one line, like kubectl.
-    options.folded_wrap_chars = usize::MAX;
-    let body =
-        serde_saphyr::to_string_with_options(&object, options).map_err(|_| CONVERSION_FAILURE)?;
-    let text = match hidden {
-        0 => body,
-        1 => format!("# k8sBoard hid 1 value as {HIDDEN}.\n{body}"),
-        count => format!("# k8sBoard hid {count} values as {HIDDEN}.\n{body}"),
-    };
+    let body = yaml_text(&object)?;
     Ok(ObjectYaml {
-        text,
+        text: with_hidden_header(body, hidden),
         hidden_env_values,
     })
 }
 
+/// Serializes like kubectl. The error is a fixed message.
+pub(crate) fn yaml_text(value: &Value) -> Result<String, &'static str> {
+    // The options type is non-exhaustive, so it cannot be built with struct update syntax.
+    let mut options = SerializerOptions::default();
+    // Long single-line strings stay on one line, like kubectl.
+    options.folded_wrap_chars = usize::MAX;
+    serde_saphyr::to_string_with_options(value, options).map_err(|_| CONVERSION_FAILURE)
+}
+
+/// Prefixes the comment that says how many values were hidden; no prefix for zero.
+pub(crate) fn with_hidden_header(body: String, hidden: usize) -> String {
+    match hidden {
+        0 => body,
+        1 => format!("# k8sBoard hid 1 value as {HIDDEN}.\n{body}"),
+        count => format!("# k8sBoard hid {count} values as {HIDDEN}.\n{body}"),
+    }
+}
+
 /// Hides `MASKED_ANNOTATIONS` in every `metadata.annotations` map at any depth.
-fn mask_manifest_annotations(value: &mut Value, is_metadata: bool) -> usize {
+pub(crate) fn mask_manifest_annotations(value: &mut Value, is_metadata: bool) -> usize {
     match value {
         Value::Object(map) => {
             let mut hidden = 0;
@@ -317,7 +324,7 @@ fn mask_credential_mount_options(object: &mut Value) -> usize {
 }
 
 /// Hides every `data` and `stringData` value of a Secret, keyed on the response's `kind`.
-fn mask_secret_data(object: &mut Value) -> usize {
+pub(crate) fn mask_secret_data(object: &mut Value) -> usize {
     if object.get("kind").and_then(Value::as_str) != Some("Secret") {
         return 0;
     }
@@ -336,7 +343,7 @@ fn mask_secret_data(object: &mut Value) -> usize {
 
 /// Hides `env[].value` literals of every container list under `spec`, at any depth, so pod,
 /// workload, and job templates are all covered. `valueFrom` references stay.
-fn mask_env_values(value: &mut Value) -> usize {
+pub(crate) fn mask_env_values(value: &mut Value) -> usize {
     match value {
         Value::Object(map) => {
             let mut hidden = 0;

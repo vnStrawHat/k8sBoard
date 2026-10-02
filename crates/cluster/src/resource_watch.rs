@@ -8,9 +8,10 @@ use futures::future::Either;
 use futures::stream::{self, BoxStream, SelectAll, select_all};
 use futures::{Stream, StreamExt};
 use k8s_openapi::serde::de::DeserializeOwned;
-use kube::ResourceExt;
+use kube::core::PartialObjectMeta;
 use kube::runtime::WatchStreamExt;
 use kube::runtime::watcher::{self, Event};
+use kube::{Api, ResourceExt};
 use tokio::time::Instant;
 
 use crate::connection::{ClusterConnection, ClusterError, ScopedApi, classify_error};
@@ -80,6 +81,30 @@ where
     T: Clone + PartialEq + Send + 'static,
 {
     watch_apis(connection, apis, config, action, summarize, None)
+}
+
+/// Like `selected_summary_watch` for one `api`, over object metadata only: `Api<PartialObjectMeta<K>>`
+/// makes the server send no `spec`, `data`, or `status`, so only labels and metadata are downloaded.
+pub(crate) fn metadata_summary_watch<K, T>(
+    connection: &ClusterConnection,
+    api: Api<PartialObjectMeta<K>>,
+    config: watcher::Config,
+    action: &'static str,
+    summarize: fn(&PartialObjectMeta<K>) -> T,
+) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
+where
+    K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
+    K::DynamicType: Default,
+    T: Clone + PartialEq + Send + 'static,
+{
+    let events = watcher::watcher(api, config).default_backoff();
+    batch_updates(
+        events,
+        connection.context().to_owned(),
+        action,
+        summarize,
+        None,
+    )
 }
 
 /// Like `summary_watch`, with a server-side `config` and a store that keeps only the

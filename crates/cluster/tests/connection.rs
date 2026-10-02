@@ -2,8 +2,9 @@ use std::future::Future;
 use std::path::Path;
 
 use cluster::{
-    AccessReport, ClusterConnection, ClusterError, ContextOrigin, Kubeconfig, KubeconfigError,
-    MetricsApi, NamespaceScope, NamespaceSummary, NodeSummary, PodSummary, ServerVersion,
+    AccessReport, ClusterConnection, ClusterError, ContextOrigin, EnvValues, HelmReleaseDetail,
+    HelmReleaseSummary, HelmRevisionRef, HelmValuesDiff, Kubeconfig, KubeconfigError, MetricsApi,
+    NamespaceScope, NamespaceSummary, NodeSummary, PodSummary, ServerVersion, ValueVisibility,
 };
 
 const FIXTURE: &str = concat!(
@@ -67,6 +68,9 @@ async fn connection_and_query_futures_are_send() {
     assert_send_sync_static::<PodSummary>();
     assert_send_sync_static::<AccessReport>();
     assert_send_sync_static::<MetricsApi>();
+    assert_send_sync_static::<HelmReleaseSummary>();
+    assert_send_sync_static::<HelmReleaseDetail>();
+    assert_send_sync_static::<HelmValuesDiff>();
 
     let kubeconfig = fixture();
     let connection = ClusterConnection::open(&kubeconfig, "alpha")
@@ -80,6 +84,14 @@ async fn connection_and_query_futures_are_send() {
     assert_send_future(&connection.metrics_api());
     assert_send_future(&connection.list_pods(NamespaceScope::All));
     assert_send_future(&connection.review_access(NamespaceScope::All));
+    let revision = HelmRevisionRef {
+        namespace: "shop".to_owned(),
+        release: "api".to_owned(),
+        revision: 2,
+    };
+    assert_send_future(&connection.helm_release_detail(&revision, EnvValues::Hidden));
+    assert_send_future(&connection.helm_revealed(&revision));
+    assert_send_future(&connection.helm_values_diff(&revision, &revision, ValueVisibility::Masked));
 }
 
 #[tokio::test]
