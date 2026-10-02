@@ -4,6 +4,7 @@ use cluster::{
 };
 
 use super::*;
+use crate::kind_join::EndpointCounts;
 
 fn at(seconds: i64) -> Timestamp {
     Timestamp::from_second(seconds).expect("valid timestamp")
@@ -189,6 +190,7 @@ fn run(
         &DiagnosisInputs {
             pods: refs.as_deref(),
             nodes,
+            service: None,
             now: at(1_000),
         },
     )
@@ -615,4 +617,108 @@ fn container_cause_names_the_pod_status() {
         "Pod api-2 is CrashLoopBackOff: CrashLoopBackOff."
     );
     assert_eq!(diagnosis.pod, pod_key("api-2"));
+}
+
+// ---- Services ----
+
+fn service() -> ServiceSummary {
+    ServiceSummary {
+        namespace: "team-a".to_owned(),
+        name: "api".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        service_type: "ClusterIP".to_owned(),
+        cluster_ips: Vec::new(),
+        is_headless: false,
+        external_addresses: Vec::new(),
+        ports: Vec::new(),
+        selector: vec!["app=api".to_owned(), "tier=web".to_owned()],
+    }
+}
+
+fn run_service(health: ServiceHealth, pods: &[PodSummary]) -> Option<KindDiagnosis> {
+    let refs: Vec<&PodSummary> = pods.iter().collect();
+    kind_diagnosis(
+        &KindObject::Service(service()),
+        &DiagnosisInputs {
+            pods: Some(&refs),
+            nodes: &[],
+            service: Some(health),
+            now: at(1_000),
+        },
+    )
+}
+
+fn endpoint_health(ready: usize, total: usize) -> ServiceHealth {
+    ServiceHealth {
+        matching_pods: Some(total.max(1)),
+        endpoints: Some(EndpointCounts { ready, total }),
+    }
+}
+
+#[test]
+fn service_no_matching_pods() {
+    let health = ServiceHealth {
+        matching_pods: Some(0),
+        endpoints: None,
+    };
+    let diagnosis = run_service(health, &[]).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(diagnosis.title, "NO MATCHING PODS");
+    assert_eq!(
+        diagnosis.text,
+        "No pod in team-a has the labels app=api, tier=web."
+    );
+    assert_eq!(diagnosis.pod, None);
+}
+
+#[test]
+fn service_no_ready_endpoints() {
+    let pods = [pod("api-1", None), crash_looping("api-2")];
+    let diagnosis = run_service(endpoint_health(0, 3), &pods).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(diagnosis.title, "NO READY ENDPOINTS");
+    assert_eq!(
+        diagnosis.text,
+        "3 endpoints, none ready. Pod api-2: CrashLoopBackOff."
+    );
+    assert_eq!(diagnosis.pod, pod_key("api-2"));
+}
+
+#[test]
+fn service_no_ready_endpoints_without_an_unhealthy_pod_has_no_pod_link() {
+    let diagnosis = run_service(endpoint_health(0, 1), &[pod("api-1", None)]).expect("a box");
+    assert_eq!(diagnosis.text, "1 endpoint, none ready.");
+    assert_eq!(diagnosis.pod, None);
+}
+
+#[test]
+fn service_with_some_ready_endpoints_has_no_box() {
+    assert_eq!(run_service(endpoint_health(1, 3), &[]), None);
+}
+
+#[test]
+fn service_without_endpoints_has_no_box() {
+    // An empty list is the status column's "No endpoints", not a WHY box.
+    assert_eq!(run_service(endpoint_health(0, 0), &[]), None);
+}
+
+#[test]
+fn service_with_unknown_health_has_no_box() {
+    assert_eq!(run_service(ServiceHealth::default(), &[]), None);
+}
+
+#[test]
+fn service_no_ready_endpoints_waits_for_the_pods() {
+    let health = endpoint_health(0, 3);
+    let diagnosis = kind_diagnosis(
+        &KindObject::Service(service()),
+        &DiagnosisInputs {
+            pods: None,
+            nodes: &[],
+            service: Some(health),
+            now: at(1_000),
+        },
+    );
+    assert_eq!(diagnosis, None);
 }

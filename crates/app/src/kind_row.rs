@@ -3,7 +3,7 @@
 
 use cluster::{
     ControllerRef, CronJobSummary, CronSchedule, DaemonSetSummary, DeploymentSummary, JobSummary,
-    PodSummary, ReplicaSetSummary, StatefulSetSummary,
+    PodSummary, ReplicaSetSummary, ServiceSummary, StatefulSetSummary,
 };
 use gpui_kit::SharedString;
 
@@ -41,6 +41,7 @@ pub(crate) enum KindObject {
     DaemonSet(DaemonSetSummary),
     ReplicaSet(ReplicaSetSummary),
     Job(JobSummary),
+    Service(ServiceSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -51,6 +52,7 @@ pub(crate) enum LiveContent {
     NextRuns,
     RecentJobs,
     NotReadyPods,
+    Endpoints,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.

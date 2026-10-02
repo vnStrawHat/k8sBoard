@@ -1,15 +1,16 @@
-//! The WHY box of Deployments, DaemonSets, and Jobs: what is wrong and, when the pods say so,
-//! why. Pure: the drawer reads the live lists and calls `kind_diagnosis`. Pod causes reuse
+//! The WHY box of Deployments, DaemonSets, Jobs, and Services: what is wrong and, when the pods
+//! say so, why. Pure: the drawer reads the live lists and calls `kind_diagnosis`. Pod causes reuse
 //! `pod_diagnosis` without events, so probe-failure detail stays in the pod drawer. Condition and
 //! status messages are arbitrary text, so nothing here logs them.
 
 use cluster::{
     ContainerKind, ContainerState, DaemonSetSummary, DeploymentSummary, JobStatus, JobSummary,
-    NodeReadiness, NodeSummary, PodStatus, PodSummary, StatusReason, Termination,
+    NodeReadiness, NodeSummary, PodStatus, PodSummary, ServiceSummary, StatusReason, Termination,
     WorkloadCondition,
 };
 use jiff::Timestamp;
 
+use crate::kind_join::ServiceHealth;
 use crate::kind_row::KindObject;
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
 use crate::status_tone::{StatusTone, pod_status_label, readiness_text};
@@ -38,6 +39,8 @@ pub(crate) struct DiagnosisInputs<'a> {
     /// The pods the object owns, in snapshot order; `None` while the pods list has not loaded.
     pub(crate) pods: Option<&'a [&'a PodSummary]>,
     pub(crate) nodes: &'a [NodeSummary],
+    /// Services only: what the pods and endpoint slices say. `pods` then holds the matching pods.
+    pub(crate) service: Option<ServiceHealth>,
     pub(crate) now: Timestamp,
 }
 
@@ -51,6 +54,7 @@ pub(crate) fn kind_diagnosis(
         KindObject::Deployment(deployment) => deployment_diagnosis(deployment, inputs),
         KindObject::DaemonSet(set) => daemon_set_diagnosis(set, inputs),
         KindObject::Job(job) => job_diagnosis(job, inputs),
+        KindObject::Service(service) => service_diagnosis(service, inputs),
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
@@ -378,6 +382,49 @@ fn last_failed_pod<'a>(inputs: &DiagnosisInputs<'a>) -> Option<(&'a PodSummary, 
             Some((*pod, termination))
         })
         .max_by_key(|(pod, _)| pod.created_at)
+}
+
+// ---- Services ----
+
+fn service_diagnosis(service: &ServiceSummary, inputs: &DiagnosisInputs) -> Option<KindDiagnosis> {
+    let health = inputs.service?;
+    // V1: the selector finds no pod. The health leaves `matching_pods` unknown for a Service that
+    // has no selector or is an ExternalName, so neither gets this box.
+    if health.matching_pods == Some(0) {
+        return Some(KindDiagnosis {
+            tone: StatusTone::Bad,
+            title: "NO MATCHING PODS".to_owned(),
+            text: format!(
+                "No pod in {} has the labels {}.",
+                service.namespace,
+                service.selector.join(", ")
+            ),
+            pod: None,
+        });
+    }
+    // V2: endpoints exist and none takes traffic. Like every rule that reads pods, it waits for
+    // the pods list.
+    inputs.pods?;
+    let counts = health.endpoints.filter(|_| health.is_unserved())?;
+    let unhealthy = unhealthy_pod(inputs);
+    let mut text = format!(
+        "{} {}, none ready.",
+        counts.total,
+        if counts.total == 1 {
+            "endpoint"
+        } else {
+            "endpoints"
+        }
+    );
+    if let Some((pod, diagnosis)) = &unhealthy {
+        text.push_str(&format!(" Pod {}: {}", pod.name, diagnosis.text));
+    }
+    Some(KindDiagnosis {
+        tone: StatusTone::Bad,
+        title: "NO READY ENDPOINTS".to_owned(),
+        text,
+        pod: unhealthy.map(|(pod, _)| ResourceKey::of_pod(pod)),
+    })
 }
 
 #[cfg(test)]

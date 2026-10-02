@@ -18,8 +18,11 @@
 cargo run -p k8sboard --features screenshot -- \
   --kubeconfig monitor-uat-readonly.yml --context readonly@Monitor \
   --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|node-events|pod-yaml|node-yaml|logs-dock|logs-zoomed|<plural>|<plural>-drawer|<plural>-events|<plural>-yaml [--theme light|dark] \
+  [--select <name>] \
   --screenshot .tmp/ui-shots/<name>.png
 ```
+
+`--select <name>` (parsed in every build) picks the row a drawer screen opens: `<name>`, or `<namespace>/<name>` for a namespaced object, matched exactly against the loaded list. Without it the drawer opens the first row (for `pod-*` screens, the first pod with at least two containers). It composes with `--namespace` and `--filter`; a filter that hides the chosen row opens no drawer, and a name that matches nothing opens none either, so the capture settles on the list. Example: `--screen services-drawer --namespace postgres --select kong-config`.
 
 Without the feature, `--screenshot` exits 2 before GPUI starts ([bootstrap.md](bootstrap.md)). `--screen` alone works in every build, which is useful for manual checks.
 

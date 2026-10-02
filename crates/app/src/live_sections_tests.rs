@@ -1,4 +1,7 @@
-use cluster::{ControllerRef, CronSchedule, DeploymentSummary, JobStatus, TemplateContainer};
+use cluster::{
+    ControllerRef, CronSchedule, DeploymentSummary, EndpointPort, EndpointSummary, JobStatus,
+    ServicePortSummary, TemplateContainer,
+};
 
 use super::*;
 
@@ -273,4 +276,135 @@ fn next_run_text_counts_down_to_the_next_run() {
     );
     let impossible = CronSchedule::parse("0 0 30 2 *", None).expect("valid schedule");
     assert_eq!(next_run_text(&impossible, at("2024-10-04T10:00:30Z")), None);
+}
+
+fn service() -> ServiceSummary {
+    ServiceSummary {
+        namespace: "team-a".to_owned(),
+        name: "api".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        service_type: "ClusterIP".to_owned(),
+        cluster_ips: Vec::new(),
+        is_headless: false,
+        external_addresses: Vec::new(),
+        ports: Vec::new(),
+        selector: vec!["app=api".to_owned()],
+    }
+}
+
+fn slice(ports: &[(u16, &str)], endpoints: Vec<EndpointSummary>) -> EndpointSliceSummary {
+    EndpointSliceSummary {
+        namespace: "team-a".to_owned(),
+        name: "api-abc".to_owned(),
+        service: Some("api".to_owned()),
+        address_type: "IPv4".to_owned(),
+        ports: ports
+            .iter()
+            .map(|(port, protocol)| EndpointPort {
+                name: None,
+                port: Some(*port),
+                protocol: (*protocol).to_owned(),
+            })
+            .collect(),
+        endpoints,
+    }
+}
+
+fn endpoint(address: &str, pod: Option<&str>, is_ready: bool) -> EndpointSummary {
+    EndpointSummary {
+        address: address.to_owned(),
+        is_ready,
+        is_terminating: false,
+        pod: pod.map(str::to_owned),
+        node: None,
+    }
+}
+
+fn endpoint_pod(name: &str) -> Option<ResourceKey> {
+    ResourceKey::of_object("Pod", Some("team-a"), name)
+}
+
+#[test]
+fn endpoint_rows_single_and_multi_port() {
+    let endpoints = vec![endpoint("10.0.0.1", Some("api-1"), true)];
+    // One port joins the address, and there is no Ports field.
+    let single = endpoints_content(&service(), &[slice(&[(8080, "TCP")], endpoints.clone())]);
+    assert_eq!(single.ports, None);
+    assert_eq!(single.rows[0].text, "10.0.0.1:8080 · api-1");
+    // Several ports move to a Ports field, and the rows drop the port.
+    let several = endpoints_content(
+        &service(),
+        &[slice(&[(8080, "TCP"), (9090, "UDP")], endpoints)],
+    );
+    assert_eq!(several.ports.as_deref(), Some("8080/TCP, 9090/UDP"));
+    assert_eq!(several.rows[0].text, "10.0.0.1 · api-1");
+}
+
+#[test]
+fn endpoint_rows_carry_their_state() {
+    let mut terminating = endpoint("10.0.0.3", Some("api-3"), false);
+    terminating.is_terminating = true;
+    let endpoints = vec![
+        endpoint("10.0.0.1", Some("api-1"), true),
+        endpoint("10.0.0.2", None, false),
+        terminating,
+    ];
+    let content = endpoints_content(&service(), &[slice(&[(8080, "TCP")], endpoints)]);
+    let states: Vec<EndpointState> = content.rows.iter().map(|row| row.state).collect();
+    assert_eq!(
+        states,
+        [
+            EndpointState::Ready,
+            EndpointState::NotReady,
+            EndpointState::Terminating
+        ]
+    );
+}
+
+#[test]
+fn endpoint_rows_link_only_endpoints_with_a_pod() {
+    let endpoints = vec![
+        endpoint("10.0.0.1", Some("api-1"), true),
+        endpoint("10.0.0.2", None, true),
+    ];
+    let content = endpoints_content(&service(), &[slice(&[(8080, "TCP")], endpoints)]);
+    assert_eq!(content.rows[0].pod, endpoint_pod("api-1"));
+    assert_eq!(content.rows[1].pod, None);
+}
+
+#[test]
+fn endpoint_ports_follow_the_service_port_order() {
+    let mut own = service();
+    own.ports = ["webhook", "metrics"]
+        .map(|name| ServicePortSummary {
+            name: Some(name.to_owned()),
+            port: 80,
+            target_port: None,
+            node_port: None,
+            protocol: "TCP".to_owned(),
+        })
+        .to_vec();
+    let mut api = slice(&[(8080, "TCP"), (7000, "TCP")], Vec::new());
+    // The API lists the ports in another order than the Service does.
+    api.ports[0].name = Some("metrics".to_owned());
+    api.ports[1].name = Some("webhook".to_owned());
+    let content = endpoints_content(&own, &[api]);
+    assert_eq!(content.ports.as_deref(), Some("7000/TCP, 8080/TCP"));
+}
+
+#[test]
+fn endpoint_rows_bracket_ipv6_addresses() {
+    let content = endpoints_content(
+        &service(),
+        &[slice(&[(80, "TCP")], vec![endpoint("fd00::1", None, true)])],
+    );
+    assert_eq!(content.rows[0].text, "[fd00::1]:80");
+}
+
+#[test]
+fn endpoint_rows_skip_slices_of_other_services() {
+    let mut other = slice(&[(80, "TCP")], vec![endpoint("10.0.0.9", None, true)]);
+    other.service = Some("web".to_owned());
+    assert!(endpoints_content(&service(), &[other]).rows.is_empty());
 }

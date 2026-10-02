@@ -2,13 +2,15 @@
 
 use cluster::{IngressSummary, ServicePortSummary, ServiceSummary};
 
-use crate::kind_row::{DetailRow, DetailSection, KindCell, KindObject, KindRow, chips};
+use crate::kind_row::{
+    DetailRow, DetailSection, KindCell, KindObject, KindRow, LiveContent, chips,
+};
 use crate::status_tone::{StatusLabel, StatusTone};
 
 const LOAD_BALANCER: &str = "LoadBalancer";
 
 pub(crate) fn service_row(service: &ServiceSummary) -> KindRow {
-    let is_pending = service.service_type == LOAD_BALANCER && service.external_addresses.is_empty();
+    let is_pending = is_address_pending(service);
     let cluster_ip = cluster_ip_cell(service);
     let external = if is_pending {
         KindCell::Toned(StatusLabel {
@@ -19,17 +21,6 @@ pub(crate) fn service_row(service: &ServiceSummary) -> KindRow {
         KindCell::mono_or_absent(&service.external_addresses.join(","))
     };
     let ports: Vec<String> = service.ports.iter().map(ToString::to_string).collect();
-    let status = if is_pending {
-        StatusLabel {
-            text: "Address pending".into(),
-            tone: StatusTone::Warn,
-        }
-    } else {
-        StatusLabel {
-            text: service.service_type.clone().into(),
-            tone: StatusTone::Ok,
-        }
-    };
     let mut details = vec![
         DetailRow::field("Type", KindCell::Text(service.service_type.clone().into())),
         DetailRow::field("Cluster IP", cluster_ip.clone()),
@@ -60,23 +51,29 @@ pub(crate) fn service_row(service: &ServiceSummary) -> KindRow {
         title: "Selector",
         rows: vec![DetailRow::Chips(chips(&service.selector))],
     });
+    sections.push(DetailSection {
+        title: "Endpoints",
+        rows: vec![DetailRow::Live(LiveContent::Endpoints)],
+    });
     KindRow {
         namespace: Some(service.namespace.clone()),
         name: service.name.clone(),
         created_at: service.created_at,
-        status,
+        status: service_status(service),
         cells: vec![
             KindCell::Text(service.service_type.clone().into()),
             cluster_ip,
             external,
             KindCell::mono_or_absent(&ports.join(",")),
+            // The endpoint join fills it once the pods and endpoint slices have loaded.
+            KindCell::Absent,
             KindCell::age(service.created_at),
         ],
         sections,
         event: None,
         related_pods: None,
         labels: chips(&service.labels),
-        object: KindObject::Plain,
+        object: KindObject::Service(service.clone()),
     }
 }
 
@@ -169,6 +166,26 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
         labels: chips(&ingress.labels),
         object: KindObject::Plain,
     }
+}
+
+/// The status a Service has before its pods and endpoint slices are known; the endpoint join
+/// replaces it once they are.
+pub(crate) fn service_status(service: &ServiceSummary) -> StatusLabel {
+    if is_address_pending(service) {
+        return StatusLabel {
+            text: "Address pending".into(),
+            tone: StatusTone::Warn,
+        };
+    }
+    StatusLabel {
+        text: service.service_type.clone().into(),
+        tone: StatusTone::Ok,
+    }
+}
+
+/// A LoadBalancer the cloud has not given an address yet.
+pub(crate) fn is_address_pending(service: &ServiceSummary) -> bool {
+    service.service_type == LOAD_BALANCER && service.external_addresses.is_empty()
 }
 
 /// `None` (muted) for a headless service, else the cluster IPs.

@@ -36,6 +36,23 @@ pub(crate) fn pick_drawer_pod(pods: &[PodSummary]) -> Option<usize> {
         .or_else(|| (!pods.is_empty()).then_some(0))
 }
 
+/// The first item that `select` names: `name`, or `namespace/name` for a namespaced one. Items are
+/// `(namespace, name)` pairs in list order.
+pub(crate) fn pick_selected<'a>(
+    select: &str,
+    mut items: impl Iterator<Item = (Option<&'a str>, &'a str)>,
+) -> Option<usize> {
+    items.position(|(namespace, name)| {
+        select == name
+            || namespace.is_some_and(|namespace| {
+                select
+                    .strip_prefix(namespace)
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    == Some(name)
+            })
+    })
+}
+
 /// The pod the logs screens open: the first whose default container is running (a running
 /// container usually has log history), else the drawer pod.
 pub(crate) fn pick_logs_pod(pods: &[PodSummary]) -> Option<usize> {
@@ -506,6 +523,22 @@ mod tests {
         let single = [pod("a", 1), pod("b", 1)];
         assert_eq!(pick_drawer_pod(&single), Some(0));
         assert_eq!(pick_drawer_pod(&[]), None);
+    }
+
+    #[test]
+    fn select_picks_by_name_or_namespace_and_name() {
+        let items = || [(Some("a"), "api"), (Some("b"), "api"), (None, "node-1")].into_iter();
+        assert_eq!(pick_selected("api", items()), Some(0));
+        assert_eq!(pick_selected("b/api", items()), Some(1));
+        assert_eq!(pick_selected("node-1", items()), Some(2));
+    }
+
+    #[test]
+    fn select_finds_nothing_for_an_unknown_or_partial_name() {
+        let items = || [(Some("a"), "api")].into_iter();
+        assert_eq!(pick_selected("web", items()), None);
+        assert_eq!(pick_selected("c/api", items()), None);
+        assert_eq!(pick_selected("a/ap", items()), None);
     }
 
     #[test]

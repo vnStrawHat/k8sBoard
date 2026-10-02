@@ -1,12 +1,12 @@
 //! Drawer content computed at paint time from a row's `KindObject` and the session's live
 //! lists: Deployment revisions, CronJob next runs and recent jobs, DaemonSet pods that are not
-//! ready. The row builders only leave
-//! a `DetailRow::Live` placeholder; everything here reads the live state when it paints, so it
-//! never goes stale. The pure helpers are tested without a window.
+//! ready, Service endpoints. The row builders only leave a `DetailRow::Live` placeholder;
+//! everything here reads the live state when it paints, so it never goes stale. The pure helpers
+//! are tested without a window.
 
 use cluster::{
-    CronJobSummary, CronSchedule, DeploymentSummary, JobSummary, NodeSummary, PodSummary,
-    ReplicaSetSummary,
+    CronJobSummary, CronSchedule, DeploymentSummary, EndpointSliceSummary, JobSummary, NodeSummary,
+    PodSummary, ReplicaSetSummary, ServiceSummary,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -18,9 +18,12 @@ use gpui_kit::{
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::batch_rows::job_status_label;
-use crate::cluster_session::{LiveCluster, LiveList, RelatedList};
+use crate::cluster_session::{
+    CompanionLists, CompanionPlan, LiveCluster, LiveList, RelatedList, companion_plan,
+};
 use crate::drawer::wide_detail_row;
 use crate::kind_diagnosis::{is_pod_not_ready, unready_node};
+use crate::kind_join::{EndpointState, endpoint_entries, endpoint_ports, service_slices};
 use crate::kind_row::{KindObject, KindRow, LiveContent, owns_pod};
 use crate::related_objects::related_subject;
 use crate::resource_kind::ResourceKind;
@@ -55,6 +58,9 @@ pub(crate) fn live_rows(
             recent_jobs_rows(kind, row, cron_job, live, now, cx)
         }
         (LiveContent::NotReadyPods, KindObject::DaemonSet(_)) => not_ready_rows(row, live, cx),
+        (LiveContent::Endpoints, KindObject::Service(service)) => {
+            endpoints(kind, service, live, cx)
+        }
         // A placeholder on a row of another kind has nothing to show.
         _ => Vec::new(),
     }
@@ -510,6 +516,170 @@ fn not_ready_element(
                 .child(title),
         )
         .child(toned_text(not_ready_label(pod, nodes), cx).flex_shrink_0())
+        .into_any_element()
+}
+
+// ---- Endpoints ----
+
+/// How many endpoints a Service drawer lists.
+const MAX_LISTED_ENDPOINTS: usize = 50;
+
+/// One endpoint of a Service as the drawer lists it.
+#[derive(Debug, PartialEq, Eq)]
+struct EndpointRow {
+    /// `10.0.0.5:8080 · api-7d9f8c-x2k4q`; the port moves to a "Ports" field when there are
+    /// several.
+    text: String,
+    state: EndpointState,
+    /// The pod behind the endpoint, when it names one.
+    pod: Option<ResourceKey>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct EndpointsContent {
+    /// `8080/TCP, 9090/TCP`, only when the Service has several ports.
+    ports: Option<String>,
+    rows: Vec<EndpointRow>,
+}
+
+/// The endpoints of `service` from `slices`, each pod once, in slice order.
+fn endpoints_content(
+    service: &ServiceSummary,
+    slices: &[EndpointSliceSummary],
+) -> EndpointsContent {
+    let slices = service_slices(service, slices);
+    let mut ports = endpoint_ports(&slices);
+    // The Ports section above lists them in the Service's order; endpoint ports match by name.
+    ports.sort_by_key(|port| {
+        service
+            .ports
+            .iter()
+            .position(|own| own.name == port.name)
+            .unwrap_or(usize::MAX)
+    });
+    // With one port every row shows it, so the address and the port read as one `ip:port`.
+    let single_port = match ports.as_slice() {
+        [only] => only.port,
+        _ => None,
+    };
+    let ports = (ports.len() > 1).then(|| {
+        ports
+            .iter()
+            .filter_map(|port| Some(format!("{}/{}", port.port?, port.protocol)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
+    let rows =
+        endpoint_entries(&slices)
+            .into_iter()
+            .map(|entry| {
+                let address = match single_port {
+                    // An IPv6 address holds colons, so it needs brackets before a port.
+                    Some(port) if entry.endpoint.address.contains(':') => {
+                        format!("[{}]:{port}", entry.endpoint.address)
+                    }
+                    Some(port) => format!("{}:{port}", entry.endpoint.address),
+                    None => entry.endpoint.address.clone(),
+                };
+                let text = match &entry.endpoint.pod {
+                    Some(pod) => format!("{address} · {pod}"),
+                    None => address,
+                };
+                EndpointRow {
+                    text,
+                    state: entry.state,
+                    pod: entry.endpoint.pod.as_deref().and_then(|pod| {
+                        ResourceKey::of_object("Pod", Some(&service.namespace), pod)
+                    }),
+                }
+            })
+            .collect();
+    EndpointsContent { ports, rows }
+}
+
+fn endpoint_state_label(state: EndpointState) -> StatusLabel {
+    let (text, tone) = match state {
+        EndpointState::Ready => ("ready", StatusTone::Ok),
+        EndpointState::NotReady => ("not ready", StatusTone::Bad),
+        EndpointState::Terminating => ("terminating", StatusTone::Done),
+    };
+    StatusLabel {
+        text: text.into(),
+        tone,
+    }
+}
+
+fn endpoints(
+    kind: ResourceKind,
+    service: &ServiceSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let Some(slices) = live.companion().and_then(CompanionLists::endpoint_slices) else {
+        // Without a companion the report denied it, or the explorer has not started it yet.
+        if let CompanionPlan::Denied(check) = companion_plan(kind, &live.access) {
+            return vec![note(&format!("Not permitted: {check}"), cx)];
+        }
+        return vec![note("Loading endpoints…", cx)];
+    };
+    match slices {
+        LiveList::Loading => vec![note("Loading endpoints…", cx)],
+        LiveList::Failed { message } => vec![
+            note("Endpoints are unavailable", cx),
+            detail_note(message, cx),
+        ],
+        LiveList::Ready { items, .. } => {
+            let content = endpoints_content(service, items);
+            if content.rows.is_empty() {
+                return vec![note("No endpoints", cx)];
+            }
+            let hidden = content.rows.len().saturating_sub(MAX_LISTED_ENDPOINTS);
+            content
+                .ports
+                .map(|ports| {
+                    wide_detail_row("Ports", div().truncate().child(ports), cx).into_any_element()
+                })
+                .into_iter()
+                .chain(
+                    content
+                        .rows
+                        .iter()
+                        .take(MAX_LISTED_ENDPOINTS)
+                        .enumerate()
+                        .map(|(ix, row)| endpoint_element(ix, row, cx)),
+                )
+                .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+                .collect()
+        }
+    }
+}
+
+fn endpoint_element(ix: usize, row: &EndpointRow, cx: &Context<AppShell>) -> AnyElement {
+    let theme = cx.theme();
+    let mut element = h_flex()
+        .id(("endpoint", ix))
+        .gap_2()
+        .items_center()
+        .py_1()
+        .rounded(theme.radius)
+        .text_sm();
+    if let Some(target) = row.pod.clone() {
+        let hover_bg = theme.muted;
+        element = element
+            .cursor_pointer()
+            .hover(move |style| style.bg(hover_bg))
+            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(target.clone(), cx)));
+    }
+    element
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_family(theme.mono_font_family.clone())
+                .child(row.text.clone()),
+        )
+        .child(toned_text(endpoint_state_label(row.state), cx).flex_shrink_0())
         .into_any_element()
 }
 

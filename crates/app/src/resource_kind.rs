@@ -269,6 +269,7 @@ static SERVICES: KindSpec = KindSpec {
         column("Cluster IP", 140., Align::Left),
         column("External IP", 200., Align::Left),
         column("Ports", 180., Align::Left),
+        column("Endpoints", 100., Align::Right),
         AGE_COLUMN,
     ],
     read_only_actions: &[],

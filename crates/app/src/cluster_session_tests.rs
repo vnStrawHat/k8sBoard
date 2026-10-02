@@ -256,10 +256,17 @@ fn pausing_a_paused_list_keeps_its_held_snapshot() {
     assert!(matches!(&flow, StreamFlow::Paused { held: Some(held) } if *held == [2]));
 }
 
-fn watches(namespaces: usize, explorer: usize, object_events: bool, related: bool) -> OpenWatches {
+fn watches(
+    namespaces: usize,
+    explorer: usize,
+    companion: usize,
+    object_events: bool,
+    related: bool,
+) -> OpenWatches {
     OpenWatches {
         namespaces,
         explorer,
+        companion,
         object_events,
         related,
     }
@@ -268,15 +275,103 @@ fn watches(namespaces: usize, explorer: usize, object_events: bool, related: boo
 #[test]
 fn open_watch_count_counts_several_related_and_companion() {
     // All with nothing open: namespaces, pods, nodes.
-    assert_eq!(open_watch_count(watches(1, 0, false, false)), 3);
-    assert_eq!(open_watch_count(watches(1, 1, false, false)), 4);
-    assert_eq!(open_watch_count(watches(1, 1, true, false)), 5);
-    assert_eq!(open_watch_count(watches(1, 1, true, true)), 6);
+    assert_eq!(open_watch_count(watches(1, 0, 0, false, false)), 3);
+    assert_eq!(open_watch_count(watches(1, 1, 0, false, false)), 4);
+    assert_eq!(open_watch_count(watches(1, 1, 0, true, false)), 5);
+    assert_eq!(open_watch_count(watches(1, 1, 0, true, true)), 6);
     // Three picked namespaces, everything open: 2 + 3 pods + 3 explorer + events + related.
-    assert_eq!(open_watch_count(watches(3, 3, true, true)), 2 + 3 + 3 + 2);
-    // Within 3N + 4 (the companion watch of step 4a adds the last N).
-    assert_eq!(open_watch_count(watches(5, 5, true, true)), 2 + 5 + 5 + 2);
-    assert!(open_watch_count(watches(5, 5, true, true)) <= 3 * 5 + 4);
+    assert_eq!(
+        open_watch_count(watches(3, 3, 0, true, true)),
+        2 + 3 + 3 + 2
+    );
+    // The Services screen adds one slice watch per namespace.
+    assert_eq!(
+        open_watch_count(watches(3, 3, 3, true, true)),
+        2 + 3 + 3 + 3 + 2
+    );
+    // Five namespaces reach the 3N + 4 bound exactly.
+    assert_eq!(open_watch_count(watches(5, 5, 5, true, true)), 3 * 5 + 4);
+}
+
+fn denial_of_slices(decision: AccessDecision) -> AccessState {
+    AccessState::Known(AccessReport {
+        reviews: vec![AccessReview {
+            check: AccessCheck::ListEndpointSlices,
+            decision,
+        }],
+    })
+}
+
+#[test]
+fn companion_plan_per_kind() {
+    let allowed = denial_of_slices(AccessDecision::Allowed);
+    assert_eq!(
+        companion_plan(ResourceKind::Services, &allowed),
+        CompanionPlan::Start(CompanionKind::EndpointSlices)
+    );
+    // Only Services join with a second list so far.
+    for kind in [
+        ResourceKind::Deployments,
+        ResourceKind::ConfigMaps,
+        ResourceKind::Namespaces,
+        ResourceKind::Events,
+    ] {
+        assert_eq!(companion_plan(kind, &allowed), CompanionPlan::None);
+    }
+}
+
+#[test]
+fn services_start_endpoint_companion_unless_denied() {
+    let denied = denial_of_slices(AccessDecision::Denied { reason: None });
+    assert_eq!(
+        companion_plan(ResourceKind::Services, &denied),
+        CompanionPlan::Denied(AccessCheck::ListEndpointSlices)
+    );
+    // A review that failed does not block the watch: it shows its own failure.
+    assert_eq!(
+        companion_plan(ResourceKind::Services, &AccessState::Unknown),
+        CompanionPlan::Start(CompanionKind::EndpointSlices)
+    );
+}
+
+#[test]
+fn companion_lists_start_loading_and_apply_snapshots() {
+    let mut lists = CompanionLists::loading_for(CompanionKind::EndpointSlices);
+    assert!(matches!(&lists, CompanionLists::EndpointSlices(slices) if slices.is_loading()));
+    lists.apply(CompanionUpdate::EndpointSlices(WatchUpdate::Snapshot(
+        Vec::new(),
+    )));
+    assert_eq!(
+        lists.endpoint_slices().and_then(LiveList::ready_count),
+        Some(0)
+    );
+}
+
+#[test]
+fn companion_lists_mark_a_stopped_stream_as_a_problem() {
+    let mut lists = CompanionLists::loading_for(CompanionKind::EndpointSlices);
+    lists.mark_stopped();
+    assert!(lists.endpoint_slices().is_some_and(LiveList::has_problem));
+}
+
+#[test]
+fn companion_watches_run_once_per_namespace() {
+    let lists = CompanionLists::loading_for(CompanionKind::EndpointSlices);
+    assert_eq!(lists.watches(3), 3);
+}
+
+#[test]
+fn items_mut_is_empty_until_the_list_loads() {
+    let mut list = LiveList::<u32>::Loading;
+    assert!(list.items_mut().is_empty());
+}
+
+#[test]
+fn items_mut_edits_a_loaded_list_in_place() {
+    let mut list = LiveList::<u32>::Loading;
+    list.apply(WatchUpdate::Snapshot(vec![1, 2]));
+    list.items_mut()[0] = 9;
+    assert_eq!(list.items(), [9, 2]);
 }
 
 #[test]

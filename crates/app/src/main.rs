@@ -14,6 +14,7 @@ mod filter_bar;
 mod history_rings;
 mod kind_diagnosis;
 mod kind_drawer;
+mod kind_join;
 mod kind_row;
 mod kind_table;
 mod kubelet_history;

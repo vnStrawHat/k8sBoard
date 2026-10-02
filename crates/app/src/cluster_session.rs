@@ -2,10 +2,10 @@ use std::error::Error;
 use std::sync::Arc;
 
 use cluster::{
-    AccessCheck, AccessReport, ClusterConnection, ClusterError, ContextSummary, EventFilter,
-    EventSummary, InvolvedObject, JobSummary, Kubeconfig, KubeletTargets, NamespaceAccess,
-    NamespaceScope, NamespaceSummary, NodeSummary, PodSummary, ReplicaSetSummary, ServerVersion,
-    WatchUpdate,
+    AccessCheck, AccessReport, ClusterConnection, ClusterError, ContextSummary,
+    EndpointSliceSummary, EventFilter, EventSummary, InvolvedObject, JobSummary, Kubeconfig,
+    KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, PodSummary,
+    ReplicaSetSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
@@ -16,6 +16,7 @@ use crate::cluster_metrics::{
 };
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::event_rows::newest_first;
+use crate::kind_join::{JoinInputs, join_rows};
 use crate::kind_row::KindRow;
 use crate::kubelet_metrics::KubeletDemand;
 use crate::related_objects::RelatedSubject;
@@ -120,7 +121,101 @@ pub(crate) struct KindList {
     pub(crate) kind: ResourceKind,
     pub(crate) list: LiveList<KindRow>,
     flow: StreamFlow<KindRow>,
+    /// A second watch whose lists fill cells of the rows; `None` when the kind needs none or the
+    /// access report denies it.
+    companion: Option<Companion>,
     _subscription: WatchSubscription,
+}
+
+/// The watch of a second kind that the explorer rows join with (the endpoint slices of the
+/// Services screen). Dropping it stops the watch.
+struct Companion {
+    lists: CompanionLists,
+    _subscription: WatchSubscription,
+}
+
+/// The latest state of the companion watch, by what it lists.
+pub(crate) enum CompanionLists {
+    EndpointSlices(LiveList<EndpointSliceSummary>),
+}
+
+/// One companion watch update, typed on tokio so one subscription serves every companion.
+enum CompanionUpdate {
+    EndpointSlices(WatchUpdate<EndpointSliceSummary>),
+}
+
+/// Which companion an explorer kind starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompanionKind {
+    EndpointSlices,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompanionPlan {
+    None,
+    Start(CompanionKind),
+    /// The access report denies the companion list; the drawer shows the check as the reason.
+    Denied(AccessCheck),
+}
+
+/// Which companion `kind` starts, or why not. A review that is still running or failed does not
+/// block it: the watch then shows its own failure.
+pub(crate) fn companion_plan(kind: ResourceKind, access: &AccessState) -> CompanionPlan {
+    if kind != ResourceKind::Services {
+        return CompanionPlan::None;
+    }
+    let check = AccessCheck::ListEndpointSlices;
+    match access {
+        AccessState::Known(report) if !report.is_allowed(check) => CompanionPlan::Denied(check),
+        AccessState::Known(_) | AccessState::Checking { .. } | AccessState::Unknown => {
+            CompanionPlan::Start(CompanionKind::EndpointSlices)
+        }
+    }
+}
+
+impl CompanionLists {
+    fn loading_for(kind: CompanionKind) -> Self {
+        match kind {
+            CompanionKind::EndpointSlices => Self::EndpointSlices(LiveList::Loading),
+        }
+    }
+
+    /// An update of another variant is ignored: a stale one cannot reach a new companion.
+    fn apply(&mut self, update: CompanionUpdate) {
+        match (self, update) {
+            (Self::EndpointSlices(list), CompanionUpdate::EndpointSlices(update)) => {
+                list.apply(update);
+            }
+        }
+    }
+
+    fn mark_stopped(&mut self) {
+        match self {
+            Self::EndpointSlices(list) => list.mark_stopped(),
+        }
+    }
+
+    /// The endpoint slices, when this companion lists them.
+    pub(crate) fn endpoint_slices(&self) -> Option<&LiveList<EndpointSliceSummary>> {
+        match self {
+            Self::EndpointSlices(list) => Some(list),
+        }
+    }
+
+    /// Whether the first snapshot has not arrived.
+    #[cfg(feature = "screenshot")]
+    fn is_loading(&self) -> bool {
+        match self {
+            Self::EndpointSlices(list) => list.is_loading(),
+        }
+    }
+
+    /// How many watches the companion runs: one per namespace of the scope.
+    fn watches(&self, namespaces: usize) -> usize {
+        match self {
+            Self::EndpointSlices(_) => namespaces,
+        }
+    }
 }
 
 /// The events of the object whose drawer is open. Dropping it stops the watch.
@@ -256,6 +351,14 @@ impl<T> LiveList<T> {
         match self {
             Self::Ready { items, .. } => items,
             Self::Loading | Self::Failed { .. } => &[],
+        }
+    }
+
+    /// The items once loaded, for rewriting cells in place; empty while loading or failed.
+    pub(crate) fn items_mut(&mut self) -> &mut [T] {
+        match self {
+            Self::Ready { items, .. } => items,
+            Self::Loading | Self::Failed { .. } => &mut [],
         }
     }
 
@@ -518,6 +621,9 @@ impl ClusterSession {
         let runtime = cx.global::<ClusterRuntime>().clone();
         live.pods = LiveList::Loading;
         live.subscriptions._pods = subscribe_pods(&runtime, &live.connection, scope.clone(), cx);
+        // Before the explorer restarts, so a companion plan never reads the report of the old
+        // scope.
+        live.access = review_access_again(&runtime, &live.connection, scope.clone(), cx);
         // Namespaces are cluster-scoped, so their watch does not depend on the scope.
         if let Some(kind) = live
             .explorer
@@ -532,10 +638,10 @@ impl ClusterSession {
                 &live.connection,
                 scope.clone(),
                 event_filter,
+                &live.access,
                 cx,
             ));
         }
-        live.access = review_access_again(&runtime, &live.connection, scope.clone(), cx);
         let review = start_pod_review(&runtime, &live.connection, scope.clone(), cx);
         live.metrics.restart_pods(&scope, review);
         live.metrics.kubelet.history.retain_scope(&scope);
@@ -565,6 +671,7 @@ impl ClusterSession {
                 &live.connection,
                 live.scope.clone(),
                 event_filter,
+                &live.access,
                 cx,
             )
         });
@@ -610,6 +717,7 @@ impl ClusterSession {
                 &live.connection,
                 live.scope.clone(),
                 filter,
+                &live.access,
                 cx,
             ));
         }
@@ -684,6 +792,7 @@ impl ClusterSession {
             Err(_) => Err("the access review task stopped unexpectedly".to_owned()),
         };
         live.access = AccessState::from_review(review);
+        live.drop_denied_companion();
         self.update_metrics_feeds(cx);
         cx.notify();
     }
@@ -782,8 +891,8 @@ impl LiveCluster {
         Some((explorer.kind, explorer.list.ready_count()?))
     }
 
-    /// Open watches: namespaces, pods, nodes, the explorer's, and the drawer's events and related
-    /// objects when they are open.
+    /// Open watches: namespaces, pods, nodes, the explorer's and its companion, and the drawer's
+    /// events and related objects when they are open.
     pub(crate) fn watch_count(&self) -> usize {
         let namespaces = scope_multiplicity(&self.scope);
         open_watch_count(OpenWatches {
@@ -792,9 +901,79 @@ impl LiveCluster {
                 .explorer
                 .as_ref()
                 .map_or(0, |explorer| explorer_watches(explorer.kind, namespaces)),
+            companion: self
+                .companion()
+                .map_or(0, |lists| lists.watches(namespaces)),
             object_events: self.object_events.is_some(),
             related: self.related.is_some(),
         })
+    }
+
+    /// The companion lists of the explorer, when it runs a companion watch.
+    pub(crate) fn companion(&self) -> Option<&CompanionLists> {
+        let companion = self.explorer.as_ref()?.companion.as_ref()?;
+        Some(&companion.lists)
+    }
+
+    /// Rewrites the joined cells of the explorer rows from the current pods and companion lists.
+    /// Runs after every update of the explorer, the pods, or the companion; the explorer and the
+    /// companion are never paused, so frozen rows need no join.
+    fn join_explorer(&mut self) {
+        let Some(explorer) = self.explorer.as_mut() else {
+            return;
+        };
+        let inputs = JoinInputs {
+            pods: &self.pods,
+            companion: explorer
+                .companion
+                .as_ref()
+                .map(|companion| &companion.lists),
+        };
+        join_rows(explorer.kind, explorer.list.items_mut(), &inputs);
+    }
+
+    /// Stops the companion watch once the access report denies its list, so a 403 does not retry
+    /// forever; the drawer then shows the check as the reason.
+    fn drop_denied_companion(&mut self) {
+        let Some(explorer) = self.explorer.as_mut() else {
+            return;
+        };
+        let is_denied = matches!(
+            companion_plan(explorer.kind, &self.access),
+            CompanionPlan::Denied(_)
+        );
+        if is_denied && explorer.companion.take().is_some() {
+            self.join_explorer();
+        }
+    }
+
+    /// Applies a companion update for the explorer of `kind`; a stale one for another kind is
+    /// dropped.
+    fn apply_companion_update(&mut self, kind: ResourceKind, update: CompanionUpdate) {
+        let Some(companion) = self
+            .explorer
+            .as_mut()
+            .filter(|explorer| explorer.kind == kind)
+            .and_then(|explorer| explorer.companion.as_mut())
+        else {
+            return;
+        };
+        companion.lists.apply(update);
+        self.join_explorer();
+    }
+
+    /// Marks the companion of the explorer of `kind` as stopped after its stream ended.
+    fn stop_companion(&mut self, kind: ResourceKind) {
+        let Some(companion) = self
+            .explorer
+            .as_mut()
+            .filter(|explorer| explorer.kind == kind)
+            .and_then(|explorer| explorer.companion.as_mut())
+        else {
+            return;
+        };
+        companion.lists.mark_stopped();
+        self.join_explorer();
     }
 
     /// The subject of the running related watch.
@@ -817,6 +996,14 @@ impl LiveCluster {
         self.related
             .as_ref()
             .is_some_and(|related| related.list.is_loading())
+    }
+
+    /// Whether the explorer runs a companion watch that, or the pods it joins with, have not
+    /// delivered a first snapshot. Only the screenshot hook waits on it.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn is_companion_loading(&self) -> bool {
+        self.companion()
+            .is_some_and(|lists| lists.is_loading() || self.pods.is_loading())
     }
 
     /// The subject of the running object events watch.
@@ -913,15 +1100,24 @@ impl LiveCluster {
                 },
             ),
         };
+        let access = AccessState::from_review(access);
         let explorer = explorer_kind.map(|kind| {
-            KindList::start(kind, &runtime, &connection, scope.clone(), event_filter, cx)
+            KindList::start(
+                kind,
+                &runtime,
+                &connection,
+                scope.clone(),
+                event_filter,
+                &access,
+                cx,
+            )
         });
         let metrics =
             ClusterMetrics::new(start_pod_review(&runtime, &connection, scope.clone(), cx));
         Self {
             server_version,
             scope,
-            access: AccessState::from_review(access),
+            access,
             namespaces: LiveList::Loading,
             pods: LiveList::Loading,
             nodes: LiveList::Loading,
@@ -941,16 +1137,20 @@ struct OpenWatches {
     namespaces: usize,
     /// The explorer's watches: 0 without one, 1 for a cluster-scoped kind, else one per namespace.
     explorer: usize,
+    /// The explorer companion's watches: one per namespace for a namespaced companion, 0 without
+    /// one.
+    companion: usize,
     object_events: bool,
     related: bool,
 }
 
 /// The namespaces list and the nodes are always watched, pods once per namespace of the scope,
-/// then the explorer's watches, and one each for the drawer's events and related objects. The
-/// total stays within `3N + 4` for N picked namespaces.
+/// then the explorer's watches and its companion's, and one each for the drawer's events and
+/// related objects. The total stays within `3N + 4` for N picked namespaces.
 fn open_watch_count(watches: OpenWatches) -> usize {
     2 + watches.namespaces
         + watches.explorer
+        + watches.companion
         + usize::from(watches.object_events)
         + usize::from(watches.related)
 }
@@ -989,13 +1189,63 @@ impl KindList {
         connection: &ClusterConnection,
         scope: NamespaceScope,
         events: EventFilter,
+        access: &AccessState,
         cx: &mut Context<ClusterSession>,
     ) -> Self {
+        let companion = match companion_plan(kind, access) {
+            CompanionPlan::Start(companion) => Some(Companion::start(
+                companion,
+                kind,
+                runtime,
+                connection,
+                scope.clone(),
+                cx,
+            )),
+            CompanionPlan::None | CompanionPlan::Denied(_) => None,
+        };
         Self {
             kind,
             list: LiveList::Loading,
             flow: StreamFlow::Live,
+            companion,
             _subscription: subscribe_explorer(runtime, connection, kind, scope, events, cx),
+        }
+    }
+}
+
+impl Companion {
+    /// Starts the watch for the explorer of `explorer`; its updates are ignored once another kind
+    /// is shown.
+    fn start(
+        kind: CompanionKind,
+        explorer: ResourceKind,
+        runtime: &ClusterRuntime,
+        connection: &ClusterConnection,
+        scope: NamespaceScope,
+        cx: &mut Context<ClusterSession>,
+    ) -> Self {
+        let updates = match kind {
+            CompanionKind::EndpointSlices => connection
+                .watch_endpoint_slices(scope)
+                .map(CompanionUpdate::EndpointSlices),
+        };
+        let subscription = runtime.subscribe(
+            updates,
+            cx,
+            move |session: &mut ClusterSession, update, _| {
+                if let Some(live) = session.live_mut() {
+                    live.apply_companion_update(explorer, update);
+                }
+            },
+            move |session, _| {
+                if let Some(live) = session.live_mut() {
+                    live.stop_companion(explorer);
+                }
+            },
+        );
+        Self {
+            lists: CompanionLists::loading_for(kind),
+            _subscription: subscription,
         }
     }
 }
@@ -1015,6 +1265,9 @@ fn subscribe_explorer(
         move |session: &mut ClusterSession, update, _| {
             if let Some(explorer) = session.explorer_mut(kind) {
                 explorer.flow.receive(&mut explorer.list, update);
+            }
+            if let Some(live) = session.live_mut() {
+                live.join_explorer();
             }
         },
         move |session, _| {
@@ -1115,11 +1368,13 @@ fn subscribe_pods(
             if let Some(live) = session.live_mut() {
                 live.pods.apply(update);
                 live.refresh_kubelet_targets();
+                live.join_explorer();
             }
         },
         |session, _| {
             if let Some(live) = session.live_mut() {
                 live.pods.mark_stopped();
+                live.join_explorer();
             }
         },
     )

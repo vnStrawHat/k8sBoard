@@ -249,3 +249,30 @@ fn ingress_addresses_join_with_a_comma_like_hosts() {
         Some(&KindCell::Mono("10.1.1.1,10.1.1.2".into()))
     );
 }
+
+#[test]
+fn service_row_has_endpoints_placeholder() {
+    let service = service("ClusterIP");
+    let row = service_row(&service);
+    assert_eq!(
+        row.cells.get(crate::kind_join::SERVICE_ENDPOINTS),
+        Some(&KindCell::Absent)
+    );
+    let endpoints = row.section("Endpoints").expect("an Endpoints section");
+    assert_eq!(endpoints.rows, [DetailRow::Live(LiveContent::Endpoints)]);
+}
+
+#[test]
+fn service_sections_end_with_endpoints() {
+    let row = service_row(&service("ClusterIP"));
+    let titles: Vec<&str> = row.sections.iter().map(|section| section.title).collect();
+    assert_eq!(titles, ["Service", "Ports", "Selector", "Endpoints"]);
+}
+
+#[test]
+fn service_row_keeps_builder_status_and_object_until_joined() {
+    let service = service("ClusterIP");
+    let row = service_row(&service);
+    assert_eq!(row.status.text, "ClusterIP");
+    assert_eq!(row.object, KindObject::Service(service));
+}

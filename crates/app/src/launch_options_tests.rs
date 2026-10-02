@@ -24,6 +24,8 @@ fn parses_all_flags() {
         "team-a",
         "--filter",
         "label:app=api",
+        "--select",
+        "team-a/api",
         "--theme",
         "dark",
         "--screen",
@@ -38,6 +40,7 @@ fn parses_all_flags() {
             context: Some("ctx".to_owned()),
             namespace: Some(NamespaceScope::Named("team-a".to_owned())),
             filter: Some("label:app=api".to_owned()),
+            select: Some("team-a/api".to_owned()),
             theme: Some(ThemeChoice::Dark),
             screen: LaunchScreen::PodDrawer(DrawerTab::Containers),
             screenshot: Some(PathBuf::from("out.png")),
@@ -305,4 +308,17 @@ fn monitor_screens_parse() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn select_flag_is_parsed() {
+    assert_eq!(
+        run_options(&["--select", "kong-config"]).select.as_deref(),
+        Some("kong-config")
+    );
+    assert_eq!(run_options(&[]).select, None);
+    assert_eq!(
+        parse(&["--select"]),
+        Err("missing value for --select".to_owned())
+    );
 }

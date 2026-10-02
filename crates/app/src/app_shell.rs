@@ -43,7 +43,7 @@ use crate::resource_kind::ResourceKind;
 use crate::screenshot::FeedProgress;
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{SettleInput, TargetState, is_drawer_ready};
-use crate::screenshot::{pick_drawer_pod, pick_logs_pod};
+use crate::screenshot::{pick_drawer_pod, pick_logs_pod, pick_selected};
 use crate::status_bar::status_bar;
 use crate::table_filter::{
     FilterChip, FilterPreset, TableFilter, parse_label_queries, quick_filter_text,
@@ -142,6 +142,8 @@ pub(crate) struct AppShell {
     dock_split: Entity<ResizableState>,
     /// A `--screen` drawer or logs request that waits for its list to load.
     pending_launch_screen: Option<LaunchScreen>,
+    /// `--select`: the row that request opens instead of the first one.
+    launch_select: Option<String>,
     requested: RequestedStart,
     /// The `/` input. Its text belongs to the screen in `quick_filter_screen`.
     quick_filter: Entity<InputState>,
@@ -238,6 +240,7 @@ impl AppShell {
         // W4b shows the Containers tab expanded, and W4c the Monitor tab.
         drawer.is_expanded = options.screen.opens_expanded();
         let launch_filter = options.filter;
+        let launch_select = options.select;
         let mut shell = Self {
             kubeconfig,
             context_error: None,
@@ -258,6 +261,7 @@ impl AppShell {
                 || options.screen.has_log_dock()
                 || options.screen.checks_rows())
             .then_some(options.screen),
+            launch_select,
             requested: RequestedStart {
                 context: options.context,
                 namespace: options.namespace,
@@ -1085,21 +1089,46 @@ impl AppShell {
         let Some(live) = self.live(cx) else {
             return;
         };
+        let select = self.launch_select.as_deref();
         let (is_loading, item) = match launch {
-            LaunchScreen::NodeDrawer(_) => (
-                live.nodes.is_loading(),
-                (!live.nodes.items().is_empty()).then_some(0),
-            ),
+            LaunchScreen::NodeDrawer(_) => {
+                let nodes = live.nodes.items();
+                let item = match select {
+                    Some(select) => {
+                        pick_selected(select, nodes.iter().map(|node| (None, node.name.as_str())))
+                    }
+                    None => (!nodes.is_empty()).then_some(0),
+                };
+                (live.nodes.is_loading(), item)
+            }
             LaunchScreen::KindDrawer(kind, _) => {
                 let explorer = live.kind_list(kind);
+                let rows = explorer.map_or(&[][..], |explorer| explorer.list.items());
+                let item = match select {
+                    Some(select) => pick_selected(
+                        select,
+                        rows.iter()
+                            .map(|row| (row.namespace.as_deref(), row.name.as_str())),
+                    ),
+                    None => (!rows.is_empty()).then_some(0),
+                };
                 (
                     explorer.is_none_or(|explorer| explorer.list.is_loading()),
-                    explorer
-                        .is_some_and(|explorer| !explorer.list.items().is_empty())
-                        .then_some(0),
+                    item,
                 )
             }
-            _ => (live.pods.is_loading(), pick_drawer_pod(live.pods.items())),
+            _ => {
+                let pods = live.pods.items();
+                let item = match select {
+                    Some(select) => pick_selected(
+                        select,
+                        pods.iter()
+                            .map(|pod| (Some(pod.namespace.as_str()), pod.name.as_str())),
+                    ),
+                    None => pick_drawer_pod(pods),
+                };
+                (live.pods.is_loading(), item)
+            }
         };
         if is_loading {
             return;
@@ -1245,7 +1274,9 @@ impl AppShell {
                     // A failed list shows an error screen, which is the target to capture.
                     if has_failed {
                         TargetState::Unavailable
-                    } else if is_loading {
+                    } else if is_loading
+                        || (matches!(self.screen, Screen::Kind(_)) && live.is_companion_loading())
+                    {
                         TargetState::Loading
                     } else {
                         TargetState::Loaded

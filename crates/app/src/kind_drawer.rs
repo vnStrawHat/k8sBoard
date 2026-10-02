@@ -14,7 +14,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
-use crate::cluster_session::{ClusterSession, LiveCluster};
+use crate::cluster_session::{ClusterSession, CompanionLists, LiveCluster};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
     drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, link_text, menu_button, port_row,
@@ -22,6 +22,7 @@ use crate::drawer::{
     wide_detail_row, yaml_body,
 };
 use crate::kind_diagnosis::{DiagnosisInputs, KindDiagnosis, kind_diagnosis};
+use crate::kind_join::{matching_pods, service_health_of};
 use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow};
 use crate::live_sections::{live_rows, next_run_text, owned_pods};
 use crate::monitor_tab::{MonitorView, monitor_tab};
@@ -120,7 +121,8 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::StatefulSet(_)
         | KindObject::DaemonSet(_)
         | KindObject::ReplicaSet(_)
-        | KindObject::Job(_) => None,
+        | KindObject::Job(_)
+        | KindObject::Service(_) => None,
     }
 }
 
@@ -196,15 +198,32 @@ fn overview(
     column.into_any_element()
 }
 
-/// The WHY box of the row, read from its object, its owned pods, and the nodes. Rules that need
-/// pods wait until the pods list has loaded.
+/// The WHY box of the row, read from its object, its owned pods (a Service's matching pods), and
+/// the nodes. Rules that need pods wait until the pods list has loaded.
 fn row_diagnosis(row: &KindRow, live: &LiveCluster, now: jiff::Timestamp) -> Option<KindDiagnosis> {
-    let pods = owned_pods(row, live);
+    let (pods, service) = match &row.object {
+        KindObject::Service(service) => {
+            let slices = live.companion().and_then(CompanionLists::endpoint_slices);
+            let health = service_health_of(service, &live.pods, slices);
+            // Only V2 reads the pods, and only when no endpoint is ready, so the pass over the pods
+            // that finds the matching ones runs only then; `service_health_of` made the other.
+            let pods = live.pods.ready_items().map(|pods| {
+                if health.is_unserved() {
+                    matching_pods(service, pods)
+                } else {
+                    Vec::new()
+                }
+            });
+            (pods, Some(health))
+        }
+        _ => (owned_pods(row, live), None),
+    };
     kind_diagnosis(
         &row.object,
         &DiagnosisInputs {
             pods: pods.as_deref(),
             nodes: live.nodes.items(),
+            service,
             now,
         },
     )
