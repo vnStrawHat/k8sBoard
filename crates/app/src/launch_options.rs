@@ -19,7 +19,7 @@ Options:
   --select <name>       with a drawer screen, open the row named <name> or <namespace>/<name>
                          (default: the first row)
   --theme light|dark     colour theme (default: follow the system)
-  --screen pods|nodes|issues|issues-drawer|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
+  --screen overview|pods|nodes|issues|issues-drawer|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic
@@ -32,6 +32,8 @@ Options:
 /// selected, and the logs values open Pods with the log dock on a pod.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LaunchScreen {
+    /// `--screen overview`.
+    Overview,
     Pods,
     Nodes,
     /// `--screen issues`.
@@ -77,6 +79,7 @@ impl LaunchScreen {
     /// The list screen this request opens on.
     pub(crate) fn screen(self) -> Screen {
         match self {
+            Self::Overview => Screen::Overview,
             Self::Pods
             | Self::PodDrawer(_)
             | Self::LogsDock
@@ -160,6 +163,8 @@ impl LaunchScreen {
     #[cfg(any(feature = "screenshot", test))]
     pub(crate) fn shows_kubelet_stats(self) -> bool {
         match self {
+            // The Capacity panel sums the volumes of the same feed.
+            Self::Overview => true,
             // The Used column and the Usage bars of PVCs read the same feed.
             Self::Kind(ResourceKind::PersistentVolumeClaims)
             | Self::KindDrawer(ResourceKind::PersistentVolumeClaims, DrawerTab::Overview) => true,
@@ -172,7 +177,8 @@ impl LaunchScreen {
     pub(crate) fn shows_node_usage(self) -> bool {
         matches!(
             self,
-            Self::Nodes
+            Self::Overview
+                | Self::Nodes
                 | Self::NodesSelected
                 | Self::NodeDrawer(DrawerTab::Overview | DrawerTab::Monitor)
         )
@@ -193,6 +199,7 @@ impl LaunchScreen {
 
     fn parse(text: &str) -> Option<Self> {
         match text {
+            "overview" => Some(Self::Overview),
             "pods" => Some(Self::Pods),
             "nodes" => Some(Self::Nodes),
             "issues" => Some(Self::Issues),

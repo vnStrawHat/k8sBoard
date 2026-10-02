@@ -67,7 +67,7 @@ pub(crate) fn volume_totals<'a>(usages: impl Iterator<Item = &'a PvcUsage>) -> V
 | Volumes | `volume_totals(kubelet.history.pvc_usages())` | `Measure::Bytes.format_pair(used, capacity, " / ")` + ` · {claims} PVCs` | `limited` (`Volume usage: 10 of 42 nodes polled.`) |
 
 - **Ceilings.** `ceiling()` for Cpu/Memory: `Init-container requests are not counted. Allocatable includes NotReady and cordoned nodes.`; for Pods, the second sentence only.
-- **Volumes.** Only usages with `capacity: Some` count (`used: None` adds 0); `claims` counts them, and the row is omitted when `claims == 0`. The store is scoped (0011 `retain_scope`), so a narrower scope adds ` in {namespaces_label}`. `limited` uses the 0020 `FeedState::Limited` text. `pvc_usages()` comes from 0020; add it here if 0020 has not merged.
+- **Volumes.** Only usages with `capacity: Some` count (`used: None` adds 0); `claims` counts them, and the row is omitted when `claims == 0` and no claim was skipped as shared (a row of skipped claims shows `—` and the note). A claim whose kubelet capacity is larger than its own size reports the node disk (0014 `is_shared_filesystem`, read against the always-on PVC condition feed): it is skipped and counted in `shared_claims`; `is_sharing_unchecked` is set while that feed is not Live. Without a polling feed the row shows `—`. The store is scoped (0011 `retain_scope`), so a narrower scope adds ` in {namespaces_label}`. `limited` uses the 0020 `FeedState::Limited` text. `pvc_usages()` comes from 0020; add it here if 0020 has not merged.
 - **Cost.** `node_requests` scans pods once per node, O(pods × nodes) per render. Fold it into one pass only if `capacity_budget` (1,000 pods × 50 nodes, release) exceeds 2 ms. `ponytail:` per-node scan first.
 - **Tones.** Used and requested figures are toned by `usage_tone(x / allocatable)`.
 
@@ -97,6 +97,6 @@ pub(crate) fn heat_cells(nodes: &[NodeSummary], usage: Option<&NodeUsageHistory>
 pub(crate) fn node_heatmap(cells: &[HeatCell], cx: &Context<AppShell>) -> impl IntoElement;
 ```
 
-- **Render.** `h_flex().flex_wrap().gap(px(3.)).p_3()`. Each cell is `size(px(24.))`, `rounded(theme.radius)`, `id(("node", index))`. Fill per decision 20 (a `theme.muted` base plus a child `theme.foreground.opacity(intensity)`). A not-ready cell gets `border_2().border_color(tone_color(Bad))` and no fill. Each cell has a tooltip; a click calls `shell.reveal(ResourceKey::Node { name })`.
+- **Render.** `h_flex().flex_wrap().gap(px(3.)).p_3()`. Each cell is `size(px(24.))`, `rounded(theme.radius)`, `id("node-{name}")` (stable across list changes). Fill per decision 20 (a `theme.muted` base plus a child `theme.foreground.opacity(0.15 + 0.85 * intensity)`). A not-ready cell gets `border_2().border_color(tone_color(Bad))` and no fill. Each cell has a tooltip; a click calls `shell.reveal(ResourceKey::Node { name })`.
 - **Inputs.** `usage` = `node_usage(node, history.latest(&node.name))` (0010); cordon comes from `NodeScheduling::Disabled`.
 - **Size ceiling.** About 20 cells fit per row in a 560 px panel, so 500 nodes is ~25 rows (~675 px) and the page scrolls. `ponytail:` fixed 24 px cells; shrink them or group by node pool above ~300 nodes.

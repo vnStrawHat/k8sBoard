@@ -59,7 +59,7 @@ Discovery; CRDs kind (versions, printer columns, schema); every established CRD 
 Pure rule engine over watch snapshots (pod and container states, Warning events, node conditions, cert expiry, PDB blocks, stuck namespaces, unmatched Services) with plain-language causes and one primary action; Issues screen; red sidebar counts; `⚑ N` title-bar button.
 - Deps: 0006, 0013, 0016. Risk: Med (needs pods, nodes, events watched at all times: memory).
 
-### 0021 — Overview dashboard (W3)
+### 0021 — Overview dashboard (W3) ([spec](../specs/0021-overview/README.md))
 Needs attention (top issues), Capacity three-layer bars, node heatmap with click-through, Recent changes timeline (events + revisions; managedFields later), "Last 15 min ▾", Export report (C9).
 - Deps: 0010, 0011, 0020. Risk: Med.
 

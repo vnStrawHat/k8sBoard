@@ -518,6 +518,25 @@ mod tests {
     }
 
     #[test]
+    fn overview_waits_for_node_metrics_and_kubelet() {
+        let overview = LaunchScreen::Overview;
+        let feeds = |nodes: u64, kubelet: u64| SettleInput {
+            node_metrics: progress(FeedStatus::Waiting, nodes),
+            kubelet: progress(FeedStatus::Live, kubelet),
+            ..input(TargetState::Loaded, true)
+        };
+        assert!(!is_screen_settled(overview, &feeds(0, 4)));
+        assert!(!is_screen_settled(overview, &feeds(1, 3)));
+        assert!(is_screen_settled(overview, &feeds(1, 4)));
+        // Pod metrics play no part: Overview shows no pod usage.
+        let pods_pending = SettleInput {
+            pod_metrics: progress(FeedStatus::Waiting, 0),
+            ..feeds(1, 4)
+        };
+        assert!(is_screen_settled(overview, &pods_pending));
+    }
+
+    #[test]
     fn feed_without_targets_is_settled() {
         let waiting = kubelet_progress(FeedStatus::Waiting, 0, false);
         assert!(waiting.is_settled(4));

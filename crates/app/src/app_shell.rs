@@ -97,6 +97,8 @@ const IGNORED_KUBECONFIG_NOTE: &str =
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Screen {
+    /// What is broken, how much room is left, what changed; it lists no kind and opens no drawer.
+    Overview,
     Pods,
     Nodes,
     /// The problems the engine found; it lists no explorer kind and opens no drawer.
@@ -109,7 +111,7 @@ impl Screen {
     pub(crate) fn kind(self) -> Option<ResourceKind> {
         match self {
             Self::Kind(kind) => Some(kind),
-            Self::Pods | Self::Nodes | Self::Issues => None,
+            Self::Overview | Self::Pods | Self::Nodes | Self::Issues => None,
         }
     }
 }
@@ -2130,6 +2132,13 @@ impl AppShell {
                 SessionPhase::Failed { .. } => TargetState::Unavailable,
                 SessionPhase::Live(live) => {
                     let (is_loading, has_failed) = match self.screen {
+                        // The panels read these three lists; a failed one is a state the panel shows.
+                        Screen::Overview => (
+                            live.pods.is_loading()
+                                || live.nodes.is_loading()
+                                || live.namespaces.is_loading(),
+                            false,
+                        ),
                         Screen::Pods => (live.pods.is_loading(), live.pods.failure().is_some()),
                         Screen::Nodes => (live.nodes.is_loading(), live.nodes.failure().is_some()),
                         // The table shows what the pods and nodes lists found; a failed one is a
@@ -2237,6 +2246,8 @@ impl AppShell {
         match self.screen {
             Screen::Pods => rebuild_table(&self.pod_table, change, cx),
             Screen::Nodes => rebuild_table(&self.node_table, change, cx),
+            // Overview has no table.
+            Screen::Overview => {}
             Screen::Issues => rebuild_table(&self.issue_table, change, cx),
             Screen::Kind(_) => rebuild_table(&self.kind_table, change, cx),
         }
@@ -2307,6 +2318,7 @@ impl AppShell {
         match self.screen {
             Screen::Pods => check_table(&self.pod_table, change, cx),
             Screen::Nodes => check_table(&self.node_table, change, cx),
+            Screen::Overview => {}
             Screen::Issues => check_table(&self.issue_table, change, cx),
             Screen::Kind(_) => check_table(&self.kind_table, change, cx),
         }
@@ -2450,6 +2462,7 @@ impl AppShell {
     /// What the filter bar and the screen header read; `None` before the table has a view.
     pub(crate) fn toolkit_state(&self, cx: &App) -> Option<ToolkitState> {
         let mut state = match self.screen {
+            Screen::Overview => return None,
             Screen::Pods => ToolkitState::of(self.pod_table.read(cx).delegate(), self.screen)?,
             Screen::Nodes => {
                 let mut state = ToolkitState::of(self.node_table.read(cx).delegate(), self.screen)?;
@@ -2462,7 +2475,7 @@ impl AppShell {
         // Nodes and Namespaces are cluster-scoped: the scope does not apply to them.
         let is_namespaced = match self.screen {
             Screen::Pods | Screen::Issues => true,
-            Screen::Nodes => false,
+            Screen::Overview | Screen::Nodes => false,
             Screen::Kind(kind) => kind.is_namespaced(),
         };
         if is_namespaced {

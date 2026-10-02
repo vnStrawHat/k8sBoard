@@ -102,6 +102,7 @@ fn screen_of(item: &str) -> Option<Screen> {
     match item {
         "Pods" => Some(Screen::Pods),
         "Nodes" => Some(Screen::Nodes),
+        "Overview" => Some(Screen::Overview),
         ISSUES_ITEM => Some(Screen::Issues),
         _ => ResourceKind::from_label(item).map(Screen::Kind),
     }
@@ -244,7 +245,7 @@ pub(crate) fn sidebar(
 }
 
 /// An item above the groups. Issues opens its screen and shows its total, toned by the worst
-/// severity; Overview and Topology are not built yet.
+/// severity; Topology is not built yet.
 fn top_item(
     name: &'static str,
     active: Screen,
@@ -393,8 +394,8 @@ fn screen_item(
     let count = match screen {
         Screen::Pods => counts.pods,
         Screen::Nodes => counts.nodes,
-        // The Issues item shows the issue total instead of a list count.
-        Screen::Issues => None,
+        // Overview and Issues show no list count; Issues shows the issue total instead.
+        Screen::Overview | Screen::Issues => None,
         Screen::Kind(kind) => counts.of_kind(kind),
     };
     let issues = counts.issues_of(screen);
@@ -449,7 +450,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn enabled_items_are_issues_pods_nodes_and_explorer_kinds() {
+    fn enabled_items_are_overview_issues_pods_nodes_and_explorer_kinds() {
         let enabled: Vec<&str> = TOP_ITEMS
             .iter()
             .chain(SECTIONS.iter().flat_map(|section| section.items.iter()))
@@ -459,6 +460,7 @@ mod tests {
         assert_eq!(
             enabled,
             [
+                "Overview",
                 "Issues",
                 "Nodes",
                 "Namespaces",
@@ -859,8 +861,9 @@ mod tests {
     #[test]
     fn issues_item_opens_issues_screen() {
         assert_eq!(screen_of("Issues"), Some(Screen::Issues));
-        // Overview and Topology stay disabled until their specs land.
-        assert_eq!(screen_of("Overview"), None);
+        assert_eq!(screen_of("Overview"), Some(Screen::Overview));
+        assert_eq!(Screen::Overview.kind(), None);
+        // Topology stays disabled until its spec lands.
         assert_eq!(screen_of("Topology"), None);
         assert_eq!(Screen::Issues.kind(), None);
     }

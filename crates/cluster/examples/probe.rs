@@ -1627,6 +1627,12 @@ impl Probe {
             nodes.iter().map(|node| node.addresses.len()).sum::<usize>(),
             nodes.iter().map(|node| node.resources.len()).sum::<usize>(),
             nodes.iter().map(|node| node.labels.len()).sum::<usize>(),
+        )?;
+        let (cpu, memory, pods) = allocatable_totals(nodes);
+        writeln!(
+            self.out,
+            "  allocatable totals: cpu {cpu:.1} cores  memory {:.2} GiB  pods {pods}",
+            memory as f64 / (1u64 << 30) as f64,
         )
     }
 
@@ -1841,4 +1847,23 @@ fn error_kind(error: &ClusterError) -> &'static str {
         ClusterError::Namespace { .. } => "Namespace: ",
         ClusterError::Rendered { .. } => "Rendered: ",
     }
+}
+
+/// The `cpu`, `memory`, and `pods` allocatable summed over `nodes`: cores, bytes, and pod slots.
+fn allocatable_totals(nodes: &[NodeSummary]) -> (f64, u64, u64) {
+    let mut totals = (0., 0, 0);
+    for resource in nodes.iter().flat_map(|node| &node.resources) {
+        let Some(text) = resource.allocatable.as_deref() else {
+            continue;
+        };
+        match resource.name.as_str() {
+            "cpu" => totals.0 += cluster::CpuAmount::parse(text).map_or(0., |cpu| cpu.cores()),
+            "memory" => {
+                totals.1 += cluster::ByteAmount::parse(text).map_or(0, |bytes| bytes.bytes())
+            }
+            "pods" => totals.2 += text.parse::<u64>().unwrap_or(0),
+            _ => {}
+        }
+    }
+    totals
 }

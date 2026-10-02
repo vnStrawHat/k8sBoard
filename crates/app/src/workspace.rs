@@ -29,12 +29,14 @@ use crate::log_dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_h
 use crate::navigation::SIDEBAR_WIDTH;
 use crate::node_drawer::node_drawer;
 use crate::node_summary::role_counts;
+use crate::overview::{headline_text, overview_body, stats_line};
 use crate::pod_drawer::pod_drawer;
 use crate::resource_kind::ResourceKind;
 use crate::row_selection::{bulk_actions, selection_bar};
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
+use crate::usage_format::group_digits;
 
 impl AppShell {
     /// The tables have fixed pixel columns, so one column is resized to fill the workspace
@@ -111,6 +113,7 @@ impl AppShell {
             .relative()
             .child(self.render_header(toolkit, cx))
             .children(self.render_filter_bar(toolkit, cx))
+            .children(self.render_overview_stats(cx))
             .children(self.render_interruption_banner(cx))
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
             .children(self.render_selection_bar(toolkit, cx))
@@ -124,6 +127,16 @@ impl AppShell {
     ) -> impl IntoElement {
         let live = self.live(cx);
         let (title, count) = match self.screen {
+            Screen::Overview => (
+                "Overview",
+                self.session.as_ref().zip(live).map(|(session, live)| {
+                    headline_text(
+                        session.read(cx).context(),
+                        &live.server_version,
+                        live.nodes.ready_items(),
+                    )
+                }),
+            ),
             Screen::Pods => (
                 "Pods",
                 live.and_then(|live| {
@@ -213,6 +226,7 @@ impl AppShell {
             return None;
         }
         let (singular, plural) = match self.screen {
+            Screen::Overview => return None,
             Screen::Pods => ("pod", "pods"),
             Screen::Nodes => ("node", "nodes"),
             Screen::Issues => ("issue", "issues"),
@@ -236,6 +250,15 @@ impl AppShell {
                 .child(bar)
                 .into_any_element(),
         )
+    }
+
+    /// The counts under the Overview header.
+    fn render_overview_stats(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if self.screen != Screen::Overview {
+            return None;
+        }
+        let live = self.live(cx)?;
+        Some(stats_line(live, cx).into_any_element())
     }
 
     /// The filter bar under the header, once the session is live.
@@ -462,6 +485,10 @@ impl AppShell {
     fn render_interruption_banner(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let live = self.live(cx)?;
         let message = match self.screen {
+            Screen::Overview => live
+                .pods
+                .interruption()
+                .or_else(|| live.nodes.interruption()),
             Screen::Pods => live.pods.interruption(),
             Screen::Nodes => live.nodes.interruption(),
             // The problem is in the lists the issues come from.
@@ -523,6 +550,8 @@ impl AppShell {
 
     fn render_list(&self, live: &LiveCluster, cx: &Context<Self>) -> AnyElement {
         let (title, failure) = match self.screen {
+            // A list that failed shows inside its panels.
+            Screen::Overview => ("Overview".to_owned(), None),
             Screen::Pods => ("Pods".to_owned(), live.pods.failure()),
             Screen::Nodes => ("Nodes".to_owned(), live.nodes.failure()),
             // A list that failed is a gap in the coverage, not a failure of this screen.
@@ -543,6 +572,7 @@ impl AppShell {
             );
         }
         match self.screen {
+            Screen::Overview => overview_body(live, cx),
             Screen::Pods => DataTable::new(&self.pod_table)
                 .bordered(false)
                 .into_any_element(),
@@ -669,19 +699,6 @@ fn count_label(count: usize, singular: &str, plural: &str) -> String {
     }
 }
 
-/// `2000` as `2,000`.
-fn group_digits(number: usize) -> String {
-    let digits = number.to_string();
-    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    grouped
-}
-
 fn busy_view(text: &str, cx: &App) -> AnyElement {
     v_flex()
         .size_full()
@@ -747,13 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn group_digits_inserts_thousands_separators() {
-        assert_eq!(group_digits(0), "0");
-        assert_eq!(group_digits(999), "999");
-        assert_eq!(group_digits(1_000), "1,000");
-        assert_eq!(group_digits(2_000), "2,000");
-        assert_eq!(group_digits(12_345), "12,345");
-        assert_eq!(group_digits(1_234_567), "1,234,567");
+    fn count_label_groups_digits() {
         assert_eq!(count_label(2_000, "event", "events"), "2,000 events");
     }
 }

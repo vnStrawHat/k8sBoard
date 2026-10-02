@@ -73,7 +73,7 @@ fn missing_value_is_error() {
 
 #[test]
 fn invalid_screen_or_theme_is_error() {
-    assert!(parse(&["--screen", "overview"]).is_err());
+    assert!(parse(&["--screen", "topology"]).is_err());
     assert!(parse(&["--theme", "sepia"]).is_err());
 }
 
@@ -478,4 +478,12 @@ fn parses_analysis_screens() {
         assert!(screen.opens_dialog());
         assert_eq!(screen.screen(), Screen::Kind(ResourceKind::ServiceAccounts));
     }
+}
+
+#[test]
+fn screen_overview_parses() {
+    let overview = run_options(&["--screen", "overview"]).screen;
+    assert_eq!(overview, LaunchScreen::Overview);
+    assert_eq!(overview.screen(), Screen::Overview);
+    assert!(!overview.has_drawer());
 }

@@ -35,7 +35,7 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 | Drawer YAML tab (W4c) | Done | 0007 | — |
 | Drawer Monitor tab (W4c) | Done | 0010, 0011 | |
 | RBAC and policy analysis: Who can…, Check permissions, Can do, Test traffic | Done | 0023 | — |
-| Overview (W3), Issues, Topology (W11) | Partial (Issues engine and screen done in 0020) | 0020 | 0021, 0022 |
+| Overview (W3), Issues, Topology (W11) | Partial (Issues in 0020; Overview Capacity and Nodes panels in 0021 step 1) | 0020, 0021 | 0021 steps 2-4, 0022 |
 | Settings (W2), multi-cluster (W1), env colors | Missing | — | 0024–0027 |
 | Keyboard map, command palette (W9) | Missing | — | 0028, 0029 |
 | Every mutation: YAML edit (W10), drain (W6), shell, port-forward, delete | Missing | — | 0030–0037 (0038 Helm writes deferred) |

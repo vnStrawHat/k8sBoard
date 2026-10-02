@@ -40,14 +40,29 @@ impl Measure {
     /// The unit once when both values share it (`9.8 / 15.8 cores`, `498 of 512Mi`); else both
     /// (`310m of 1 core`).
     pub(crate) fn format_pair(self, used: f64, total: f64, separator: &str) -> String {
-        let (used, total) = (self.parts(used), self.parts(total));
-        if same_unit(used.unit, total.unit) {
-            return format!("{}{separator}{}{}", used.number, total.number, total.unit);
-        }
-        format!(
-            "{}{}{separator}{}{}",
-            used.number, used.unit, total.number, total.unit
-        )
+        self.format_shared(&[used, total]).join(separator)
+    }
+
+    /// The numbers of `values`, with the unit printed only on the last one when every value shares
+    /// it (`["104", "131", "168 cores"]`); otherwise each keeps its own unit.
+    pub(crate) fn format_shared(self, values: &[f64]) -> Vec<String> {
+        let parts: Vec<Parts> = values.iter().map(|value| self.parts(*value)).collect();
+        let Some(last) = parts.last() else {
+            return Vec::new();
+        };
+        let is_shared = parts.iter().all(|part| same_unit(part.unit, last.unit));
+        let last_index = parts.len() - 1;
+        parts
+            .iter()
+            .enumerate()
+            .map(|(index, part)| {
+                if is_shared && index < last_index {
+                    part.number.clone()
+                } else {
+                    format!("{}{}", part.number, part.unit)
+                }
+            })
+            .collect()
     }
 
     fn parts(self, value: f64) -> Parts {
@@ -167,6 +182,19 @@ pub(crate) fn format_offset(seconds: u64) -> String {
     format!("-{}", text.join(" "))
 }
 
+/// `2000` as `2,000`.
+pub(crate) fn group_digits(number: usize) -> String {
+    let digits = number.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 /// `0.314` is `31%`; may pass 100 %.
 pub(crate) fn format_percent(ratio: f64) -> String {
     format!("{:.0}%", (ratio * 100.).max(0.).round())
@@ -252,6 +280,38 @@ mod tests {
     }
 
     #[test]
+    fn format_shared_prints_unit_once() {
+        assert_eq!(
+            Measure::Cpu.format_shared(&[104., 131., 168.]),
+            ["104", "131", "168 cores"]
+        );
+        assert_eq!(
+            Measure::Bytes.format_shared(&[100. * MI, 200. * MI, 512. * MI]),
+            ["100", "200", "512Mi"]
+        );
+    }
+
+    #[test]
+    fn format_shared_keeps_units_that_differ() {
+        assert_eq!(
+            Measure::Bytes.format_shared(&[900. * MI, 2. * GI]),
+            ["900Mi", "2Gi"]
+        );
+        assert_eq!(
+            Measure::Cpu.format_shared(&[0.5, 4., 16.]),
+            ["500m", "4 cores", "16 cores"]
+        );
+    }
+
+    #[test]
+    fn format_shared_never_shares_millicores() {
+        assert_eq!(
+            Measure::Cpu.format_shared(&[0.044, 0.1, 0.3]),
+            ["44m", "100m", "300m"]
+        );
+    }
+
+    #[test]
     fn format_rate_uses_decimal_units() {
         let text = |bytes_per_second| Measure::Rate.format(bytes_per_second);
         assert_eq!(text(0.), "0 B/s");
@@ -274,6 +334,16 @@ mod tests {
         assert_eq!(format_offset(20_400), "-5h 40m");
         assert_eq!(format_offset(20_415), "-5h 40m");
         assert_eq!(format_offset(86_400), "-24h");
+    }
+
+    #[test]
+    fn group_digits_inserts_thousands_separators() {
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(group_digits(999), "999");
+        assert_eq!(group_digits(1_000), "1,000");
+        assert_eq!(group_digits(2_000), "2,000");
+        assert_eq!(group_digits(12_345), "12,345");
+        assert_eq!(group_digits(1_234_567), "1,234,567");
     }
 
     #[test]

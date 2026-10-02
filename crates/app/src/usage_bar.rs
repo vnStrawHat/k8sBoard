@@ -2,9 +2,10 @@
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
-    App, DefiniteLength, IntoElement, ParentElement as _, Styled as _, div, px, relative,
+    App, DefiniteLength, Hsla, IntoElement, ParentElement as _, Styled as _, div, px, relative,
 };
 
+use crate::cluster_capacity::CapacityRow;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::usage_format::usage_tone;
 
@@ -79,8 +80,77 @@ pub(crate) fn usage_bar(
         .children(marker)
 }
 
+const CAPACITY_BAR_HEIGHT: f32 = 10.;
+/// Requested layer of a capacity bar: the foreground, faint, under the used layer.
+const REQUESTED_OPACITY: f32 = 0.28;
+/// The notch that keeps the requested position visible when the used layer covers it.
+const REQUESTED_MARKER_WIDTH: f32 = 2.;
+
+/// The layers of a capacity row's bar, as shares of its total.
+#[derive(Debug, PartialEq)]
+pub(crate) struct CapacityBar {
+    /// Clamped to 0..=1; `None` draws no used layer.
+    pub(crate) used: Option<f32>,
+    /// Clamped to 0..=1; `None` draws no requested layer.
+    pub(crate) requested: Option<f32>,
+}
+
+impl CapacityBar {
+    pub(crate) fn of_row(row: &CapacityRow) -> Self {
+        let (used, requested) = row.ratios();
+        Self {
+            used: used.map(clamp_unit),
+            requested: requested.map(clamp_unit),
+        }
+    }
+}
+
+/// A full-width track with the requested layer under the used one, and a background-colored notch
+/// at the requested position. The layers are neutral, like the wireframe; the figures beside the
+/// bar carry the tone.
+pub(crate) fn capacity_bar(bar: CapacityBar, cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+    let layer = |share: f32, color: Hsla| {
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .h_full()
+            .w(relative(share))
+            .bg(color)
+    };
+    div()
+        .relative()
+        .w_full()
+        .h(px(CAPACITY_BAR_HEIGHT))
+        .rounded(theme.radius)
+        .overflow_hidden()
+        .bg(theme.muted)
+        .children(
+            bar.requested
+                .map(|share| layer(share, theme.foreground.opacity(REQUESTED_OPACITY))),
+        )
+        .children(bar.used.map(|share| layer(share, theme.foreground)))
+        .children(
+            bar.requested
+                .filter(|share| *share > 0. && *share < 1.)
+                .map(|share| {
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(relative(share))
+                        .ml(px(-REQUESTED_MARKER_WIDTH / 2.))
+                        .w(px(REQUESTED_MARKER_WIDTH))
+                        .h_full()
+                        .bg(theme.background)
+                }),
+        )
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::cluster_capacity::FromPods;
+
     use super::*;
 
     #[test]
@@ -90,6 +160,33 @@ mod tests {
         assert_eq!(bar.marker, Some(0.));
         assert_eq!(UsageBar::of_ratio(f64::NAN, None).fill, 0.);
         assert_eq!(UsageBar::of_ratio(0.25, Some(2.)).marker, Some(1.));
+    }
+
+    fn compute_row(used: Option<f64>, requested: Option<f64>) -> CapacityRow {
+        CapacityRow::Cpu(crate::cluster_capacity::Layers {
+            used,
+            requested: requested.map_or(FromPods::NeedsAllNamespaces, FromPods::Known),
+            allocatable: 10.,
+            nodes: 1,
+            unsampled_nodes: 0,
+        })
+    }
+
+    #[test]
+    fn capacity_bar_clamps_layers() {
+        let bar = CapacityBar::of_row(&compute_row(Some(25.), Some(5.)));
+        assert_eq!(bar.used, Some(1.));
+        assert_eq!(bar.requested, Some(0.5));
+    }
+
+    #[test]
+    fn capacity_bar_without_usage_has_no_used_layer() {
+        let bar = CapacityBar::of_row(&compute_row(None, Some(5.)));
+        assert_eq!(bar.used, None);
+        assert_eq!(
+            CapacityBar::of_row(&compute_row(Some(2.), None)).requested,
+            None
+        );
     }
 
     #[test]

@@ -44,7 +44,7 @@ Any mutation (W3 "Fix image" → 0032); diff on change click (W10 → 0031); man
 - [ ] 3. Read-only: the only new requests are the two change-events `list`/`watch` (step 2). The 0001 grep still finds only the SSAR `create`. No kube type appears in a public signature, and the cluster crate spawns no task.
 - [ ] 4. The 0003 AC4 color-literal grep is clean; bars and cells use theme tokens and `tone_color` only.
 - [ ] 5. No new always-on watch: with Overview hidden, the status-bar watch count equals the 0020 count. While Overview is visible it adds `2 × scope_multiplicity` (step 2 onward).
-- [ ] 6. On UAT, CPU and Memory allocatable equal the sums from `kubectl --context readonly@Monitor get nodes` allocatable (read-only `get`). Used matches the Nodes screen bars of the same tick, within rounding.
+- [x] 6. On UAT, CPU and Memory allocatable equal the sums from `kubectl --context readonly@Monitor get nodes` allocatable (read-only `get`). Used matches the Nodes screen bars of the same tick, within rounding. Checked with the probe (`allocatable totals`: 82.0 cores, 101.25 GiB, 440 pods), which equals the panel.
 - [ ] 7. On UAT, the heatmap has one cell per node. A click reveals that node with its drawer. A NotReady node, if any, is outlined.
 - [ ] 8. On UAT, Needs attention equals the first 6 rows of the Issues screen. View logs opens the dock on the issue's pod; a row click reveals the target.
 - [ ] 9. On UAT, Recent changes lists the window's `ScalingReplicaSet` events (spot-check against `kubectl get events --field-selector reason=ScalingReplicaSet`), and the footnote shows.
