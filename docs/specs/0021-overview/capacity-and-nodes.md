@@ -1,0 +1,102 @@
+# 0021 · Headline, Capacity, Nodes heatmap (step 1)
+
+[Back to index](README.md) · Modules: `overview.rs` (headline, stats), `cluster_capacity.rs` (new, + `cluster_capacity_tests.rs`), `node_heatmap.rs` (new; model and render, tests in module), `usage_bar.rs` (`CapacityBar`), `usage_format.rs` (`format_shared`). Every model is pure: no GPUI context, and the inputs are the Ready snapshots.
+
+## Headline and stats (`overview.rs`)
+
+```rust
+/// `{context} · Kubernetes {git_version}`, plus ` · {region}` when known.
+fn headline_text(context: &str, version: &ServerVersion, nodes: Option<&[NodeSummary]>) -> String;
+/// The `topology.kubernetes.io/region` of the labelled nodes: one value → it; several → `{n} regions`; none → None.
+fn cluster_region(nodes: &[NodeSummary]) -> Option<String>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Counted { ready: usize, total: usize }        // nodes: Ready; pods: running
+struct ClusterStats { nodes: Option<Counted>, pods: Option<Counted>, namespaces: Option<usize> }
+fn cluster_stats(live: &LiveCluster) -> ClusterStats; // a part is None while its list is not Ready
+```
+
+- A Ready node has `status.readiness == NodeReadiness::Ready`. A running pod is `PodStatus::Reason(StatusReason::Running) | PodStatus::NotReady` (phase Running).
+- Numbers use `group_digits` from `workspace.rs` (make it `pub(super)`).
+
+## Shared-unit format (`usage_format.rs`)
+
+```rust
+/// The numbers of `values`, with the unit printed only on the last one when every value shares it
+/// (`["104", "131", "168 cores"]`); otherwise each keeps its own unit. `format_pair` is built on it.
+pub(crate) fn format_shared(self, values: &[f64]) -> Vec<String>;
+```
+
+## Capacity model (`cluster_capacity.rs`)
+
+```rust
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Layers {
+    pub(crate) used: Option<f64>,        // None: no node feed, or no node has a sample
+    pub(crate) requested: Option<f64>,   // None: scope is not All
+    pub(crate) allocatable: f64,         // > 0, else the row is omitted
+    pub(crate) unsampled_nodes: usize,   // nodes without a metrics sample
+}
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CapacityRow {
+    Cpu(Layers),                                                     // cores
+    Memory(Layers),                                                  // bytes
+    Pods { taking_room: Option<usize>, allocatable: u64 },           // None: scope is not All
+    Volumes(VolumeTotals),
+}
+pub(crate) struct VolumeTotals { pub(crate) used: u64, pub(crate) capacity: u64, pub(crate) claims: usize, pub(crate) limited: Option<String> }
+impl CapacityRow {
+    pub(crate) fn name(&self) -> &'static str;      // "CPU", "Memory", "Pods", "Volumes"
+    pub(crate) fn label(&self) -> String;           // right-hand figures, below
+    pub(crate) fn note(&self) -> Option<String>;    // muted line under the bar
+    pub(crate) fn ceiling(&self) -> Option<&'static str>; // tooltip (decision 13)
+}
+pub(crate) struct CapacityInputs<'a> {
+    pub(crate) nodes: &'a [NodeSummary],
+    pub(crate) pods: Option<&'a [PodSummary]>,           // Some only when the scope is All and pods are Ready
+    pub(crate) node_usage: Option<&'a NodeUsageHistory>, // None unless the node feed is Live/Interrupted
+    pub(crate) volumes: Option<VolumeTotals>,            // None unless the kubelet feed is Live/Interrupted
+}
+pub(crate) fn cluster_capacity(inputs: &CapacityInputs) -> Vec<CapacityRow>; // CPU, Memory, Pods, Volumes
+pub(crate) fn volume_totals<'a>(usages: impl Iterator<Item = &'a PvcUsage>) -> VolumeTotals;
+```
+
+| Row | Built from (all through `node_usage.rs`, no second quantity math) | `label()` | `note()` |
+|---|---|---|---|
+| Cpu / Memory | used: Σ `latest(node)` over sampled nodes. requested: Σ `node_requests(node, pods)`. allocatable: Σ `node_allocatable` | `format_shared([used, req, alloc])` → `104 used · 131 req · 168 cores`. A missing used prints `—`; a missing req drops its part | `used from {k} of {n} nodes` when `unsampled_nodes > 0`; `Requests need all namespaces` when `requested` is None |
+| Pods | taking_room: `takes_room` count. allocatable: Σ `node_pod_limit` | `1,284 / 4,620` (`— / 4,620`) | `Pod counts need all namespaces` when None |
+| Volumes | `volume_totals(kubelet.history.pvc_usages())` | `Measure::Bytes.format_pair(used, capacity, " / ")` + ` · {claims} PVCs` | `limited` (`Volume usage: 10 of 42 nodes polled.`) |
+
+- **Ceilings.** `ceiling()` for Cpu/Memory: `Init-container requests are not counted. Allocatable includes NotReady and cordoned nodes.`; for Pods, the second sentence only.
+- **Volumes.** Only usages with `capacity: Some` count (`used: None` adds 0); `claims` counts them, and the row is omitted when `claims == 0`. The store is scoped (0011 `retain_scope`), so a narrower scope adds ` in {namespaces_label}`. `limited` uses the 0020 `FeedState::Limited` text. `pvc_usages()` comes from 0020; add it here if 0020 has not merged.
+- **Cost.** `node_requests` scans pods once per node, O(pods × nodes) per render. Fold it into one pass only if `capacity_budget` (1,000 pods × 50 nodes, release) exceeds 2 ms. `ponytail:` per-node scan first.
+- **Tones.** Used and requested figures are toned by `usage_tone(x / allocatable)`.
+
+## `CapacityBar` (`usage_bar.rs`)
+
+```rust
+#[derive(Debug, PartialEq)]
+pub(crate) struct CapacityBar { pub(crate) used: Option<f32>, pub(crate) requested: Option<f32> } // clamped 0..=1
+impl CapacityBar { pub(crate) fn of_row(row: &CapacityRow) -> Self; }    // ratios over allocatable/capacity; NaN → 0
+pub(crate) fn capacity_bar(bar: CapacityBar, cx: &App) -> impl IntoElement; // full width, 10 px, theme.radius
+```
+
+- **Bar layers.** Track `theme.muted`; requested `theme.foreground.opacity(0.28)`; used `theme.foreground` on top.
+- **Row layout.** `v_flex().gap_1()`: an `h_flex` (bold name left, mono muted label right, toned figures), then the bar, then the note. The row tooltip is `ceiling()`. Panel body: `p_3().gap_3()`.
+
+## Heatmap (`node_heatmap.rs`)
+
+```rust
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HeatCell { pub(crate) node: String, pub(crate) usage: NodeUsage, pub(crate) readiness: NodeReadiness, pub(crate) is_cordoned: bool }
+impl HeatCell {
+    pub(crate) fn intensity(&self) -> Option<f32>; // usage.cpu clamped 0..=1; None without a sample or when not Ready
+    pub(crate) fn is_not_ready(&self) -> bool;     // NotReady or Unknown
+    pub(crate) fn tooltip(&self) -> String;        // `ip-10-0-3-17 · CPU 62% · Memory 48% · Ready` (+ ` · SchedulingDisabled`); `—` when missing
+}
+pub(crate) fn heat_cells(nodes: &[NodeSummary], usage: Option<&NodeUsageHistory>) -> Vec<HeatCell>; // list order
+pub(crate) fn node_heatmap(cells: &[HeatCell], cx: &Context<AppShell>) -> impl IntoElement;
+```
+
+- **Render.** `h_flex().flex_wrap().gap(px(3.)).p_3()`. Each cell is `size(px(24.))`, `rounded(theme.radius)`, `id(("node", index))`. Fill per decision 20 (a `theme.muted` base plus a child `theme.foreground.opacity(intensity)`). A not-ready cell gets `border_2().border_color(tone_color(Bad))` and no fill. Each cell has a tooltip; a click calls `shell.reveal(ResourceKey::Node { name })`.
+- **Inputs.** `usage` = `node_usage(node, history.latest(&node.name))` (0010); cordon comes from `NodeScheduling::Disabled`.
+- **Size ceiling.** About 20 cells fit per row in a 560 px panel, so 500 nodes is ~25 rows (~675 px) and the page scrolls. `ponytail:` fixed 24 px cells; shrink them or group by node pool above ~300 nodes.

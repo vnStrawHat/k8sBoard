@@ -38,7 +38,7 @@ pub(crate) fn volume_chart(volume: Rc<Volume>, cx: &App) -> AnyElement;
 ## Export (`log_export.rs`: state, flow, file name; inline tests for the pure part)
 
 ```rust
-pub(crate) enum ExportState { Idle, Choosing, Saving, Saved { file_name: String, lines: usize }, Failed { message: String } }
+pub(crate) enum ExportState { Idle, Choosing, Saving, Saved { file_name: String }, Failed { message: String } } // shared with 0021 (it moves to `file_export.rs` there)
 /// `{label}-{YYYYMMDD-HHMMSS}Z.log`; every char outside `[A-Za-z0-9._-]` becomes `_`.
 pub(crate) fn export_file_name(label: &str, now: jiff::Timestamp) -> String;
 /// Steps 1–6 below. `LogTab` stores the returned task and exposes `export_snapshot()` and `set_export_state()`.
@@ -55,9 +55,9 @@ pub(crate) fn start_export(name: String, cx: &mut Context<LogTab>) -> Task<()>;
 | 3 cancel | `Ok(Ok(None))` or a dropped sender → `Idle`; `Ok(Err(e))` → `Failed("Could not open the save dialog: {e}")` |
 | 4 confirm | snapshot now via `tab.export_snapshot()`: `buffer.visible_text(LineTime::Rfc3339, &full_prefixes)` (`{pod}/{container}`, decision 32) + trailing `\n`, line count; `state = Saving` |
 | 5 write | `cx.background_spawn(async move { std::fs::write(&path, text) }).await` |
-| 6 result | `Saved { file_name: path.file_name() lossy, lines }` or `Failed("Could not save the logs: {io error}")` |
+| 6 result | `exported_lines = lines` on the tab, then `Saved { file_name: path.file_name() lossy }` or `Failed("Could not save the logs: {io error}")` |
 
-- Saved → status prefix `Saved {lines} lines to {file_name} · `; Failed → an error `Alert` above the lines; both clear on the next export or restart.
+- Saved → status prefix `Saved {exported_lines} lines to {file_name} · ` (the count is tab text, not part of `ExportState`); Failed → an error `Alert` above the lines; both clear on the next export or restart.
 - Overwrite confirmation is the platform dialog's (Windows `IFileSaveDialog` default `FOS_OVERWRITEPROMPT`). Nothing is written on cancel. No retry loop. No tracing of `path`, `file_name`, or `text` (AC 4).
 - No other code path writes files; never automatic (C9).
 - **Partial-write trade-off (decision 35):** `std::fs::write` truncates, then writes; a failure mid-write can leave a partial file and is reported as `Could not save the logs: …`. No temp file + rename.
