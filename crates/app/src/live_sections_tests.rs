@@ -922,3 +922,64 @@ fn own_filesystem_claim_has_no_node_note() {
             .any(|row| matches!(row, DetailRow::Note(text) if text.contains("Shared")))
     );
 }
+
+// ---- StorageClasses ----
+
+fn volume_in(name: &str, class: &str, phase: &str) -> PersistentVolumeSummary {
+    PersistentVolumeSummary {
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        capacity: None,
+        access_modes: Vec::new(),
+        reclaim_policy: "Retain".to_owned(),
+        phase: phase.to_owned(),
+        is_terminating: false,
+        claim: None,
+        storage_class: Some(class.to_owned()),
+        volume_mode: None,
+        backend: cluster::VolumeBackend::Other { kind: "unknown" },
+        node_affinity: Vec::new(),
+        mount_options: Vec::new(),
+        reason: None,
+        message: None,
+    }
+}
+
+#[test]
+fn class_volumes_counts_bound_and_released() {
+    let volumes = [
+        volume_in("pv-1", "gp3", "Bound"),
+        volume_in("pv-2", "gp3", "Bound"),
+        volume_in("pv-3", "gp3", "Released"),
+        volume_in("pv-4", "gp3", "Available"),
+    ];
+    assert_eq!(
+        class_volumes_text(&class_volumes("gp3", &volumes)),
+        "4 · 2 bound · 1 released"
+    );
+}
+
+#[test]
+fn class_volumes_filters_by_class() {
+    let volumes = [
+        volume_in("pv-1", "gp3", "Bound"),
+        volume_in("pv-2", "other", "Bound"),
+        volume_in("pv-3", "gp3", "Released"),
+    ];
+    let own = class_volumes("gp3", &volumes);
+    let names: Vec<&str> = own.iter().map(|volume| volume.name.as_str()).collect();
+    assert_eq!(names, ["pv-1", "pv-3"]);
+}
+
+#[test]
+fn class_volumes_text_skips_zero_parts() {
+    let volumes = [volume_in("pv-1", "gp3", "Available")];
+    assert_eq!(class_volumes_text(&class_volumes("gp3", &volumes)), "1");
+    assert_eq!(class_volumes_text(&class_volumes("none", &volumes)), "0");
+    let released = [volume_in("pv-1", "gp3", "Released")];
+    assert_eq!(
+        class_volumes_text(&class_volumes("gp3", &released)),
+        "1 · 1 released"
+    );
+}

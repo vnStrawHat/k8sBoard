@@ -281,6 +281,7 @@ mod tests {
                 "PDBs",
                 "PVCs",
                 "PVs",
+                "StorageClasses",
             ]
         );
     }

@@ -30,7 +30,7 @@
 
 | Module | Tests |
 |---|---|
-| `storage_rows_tests.rs` | `storage_class_row_cells_match_column_count`, `pvc_and_pv_class_link_to_storage_class` (a `Text` in step 2, when the kind has no screen yet), `default_class_star_and_status`, `hidden_parameter_reads_hidden` |
+| `storage_rows_tests.rs` | `storage_class_row_cells_match_column_count`, `pvc_and_pv_class_link_to_storage_class` (a `Link` once StorageClasses has its screen; asserts both rows), `default_class_star_and_status`, `hidden_parameter_reads_hidden` |
 | `kind_join_tests.rs` | `class_volumes_count_by_class`, `class_volumes_absent_without_companion` |
 | `live_sections_tests.rs` | `class_volumes_counts_bound_and_released` |
 | `cluster_session_tests.rs` | `companion_plan_per_kind` (Services, StorageClasses, none, denied), `companion_list_ignores_other_variant`, `open_watch_count_counts_several_related_and_companion` (cluster-scoped companion counts 1) |

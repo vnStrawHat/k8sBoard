@@ -7,6 +7,7 @@ use kube::Api;
 use crate::connection::ClusterConnection;
 use crate::event::optional_message;
 use crate::resource_watch::{WatchUpdate, summary_watch};
+use crate::storage_class::mask_mount_option;
 use crate::workload::{label_terms, non_empty};
 
 const STORAGE: &str = "storage";
@@ -122,8 +123,11 @@ pub(crate) fn persistent_volume_summary(volume: &PersistentVolume) -> Persistent
             .map(node_selector_term)
             .collect(),
         mount_options: spec
-            .and_then(|spec| spec.mount_options.clone())
-            .unwrap_or_default(),
+            .and_then(|spec| spec.mount_options.as_ref())
+            .into_iter()
+            .flatten()
+            .map(|option| mask_mount_option(option))
+            .collect(),
         reason: non_empty(status.and_then(|status| status.reason.as_deref())),
         message: optional_message(status.and_then(|status| status.message.as_deref())),
     }
@@ -426,6 +430,19 @@ mod tests {
                 "!gpu",
             ]
         );
+    }
+
+    #[test]
+    fn credential_mount_options_are_hidden() {
+        let summary = volume(PersistentVolumeSpec {
+            mount_options: Some(vec![
+                "vers=3.0".to_owned(),
+                "password=distinctive-secret".to_owned(),
+            ]),
+            ..Default::default()
+        });
+        assert_eq!(summary.mount_options, ["vers=3.0", "password=<hidden>"]);
+        assert!(!format!("{summary:?}").contains("distinctive-secret"));
     }
 
     #[test]

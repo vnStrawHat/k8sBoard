@@ -93,7 +93,12 @@ pub(crate) fn storage_class_summary(class: &StorageClass) -> StorageClassSummary
                 value: (!is_secret_parameter(key)).then(|| value.clone()),
             })
             .collect(),
-        mount_options: class.mount_options.clone().unwrap_or_default(),
+        mount_options: class
+            .mount_options
+            .iter()
+            .flatten()
+            .map(|option| mask_mount_option(option))
+            .collect(),
     }
 }
 
@@ -108,6 +113,15 @@ fn is_default_class(class: &StorageClass) -> bool {
             .get(*key)
             .is_some_and(|value| value.eq_ignore_ascii_case("true"))
     })
+}
+
+/// A `key=value` mount option whose key looks like a credential keeps only its key (CIFS
+/// `password=`); any other option is returned as is. The same key heuristic as for parameters.
+pub(crate) fn mask_mount_option(option: &str) -> String {
+    match option.split_once('=') {
+        Some((key, _)) if is_secret_parameter(key) => format!("{key}=<hidden>"),
+        _ => option.to_owned(),
+    }
 }
 
 /// Whether a StorageClass parameter value looks like a credential. A key-name heuristic:
@@ -224,6 +238,24 @@ mod tests {
             ),
         ]);
         assert!(summary.parameters.iter().all(|item| item.value.is_some()));
+    }
+
+    #[test]
+    fn credential_mount_options_are_hidden() {
+        let summary = storage_class_summary(&StorageClass {
+            mount_options: Some(vec![
+                "vers=3.0".to_owned(),
+                "password=distinctive-secret".to_owned(),
+                "username=svc".to_owned(),
+                "hard".to_owned(),
+            ]),
+            ..Default::default()
+        });
+        assert_eq!(
+            summary.mount_options,
+            ["vers=3.0", "password=<hidden>", "username=svc", "hard"]
+        );
+        assert!(!format!("{summary:?}").contains("distinctive-secret"));
     }
 
     #[test]

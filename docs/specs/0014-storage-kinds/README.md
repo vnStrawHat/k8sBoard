@@ -1,6 +1,6 @@
 # 0014 — Storage kinds: PVCs, PVs, StorageClasses (read-only)
 
-Status: amended after advisor review (HEAD `81497ba`); architect defaults, the user asked not to stop for questions. Crates: `crates/cluster` (step 1), `crates/app` (steps 2–3). Requires the amended 0012 (`KindObject`, `Live`, `Bar`, joins, the general `KindList.companion`, counts), 0011 (`KubeletHistory::pvc_usage`, `KubeletSubject`, `sync_kubelet_demand`), and 0013 (`go_to_item`, `quantity_ratio`) merged. Wireframes: W7 `k("PVCs")`, `k("PVs")`, `k("StorageClasses")`. Applies C1, C11.
+Status: **implemented** (steps 1 to 3); amended after advisor review (HEAD `81497ba`); architect defaults, the user asked not to stop for questions. Crates: `crates/cluster` (step 1), `crates/app` (steps 2–3). Requires the amended 0012 (`KindObject`, `Live`, `Bar`, joins, the general `KindList.companion`, counts), 0011 (`KubeletHistory::pvc_usage`, `KubeletSubject`, `sync_kubelet_demand`), and 0013 (`go_to_item`, `quantity_ratio`) merged. Wireframes: W7 `k("PVCs")`, `k("PVs")`, `k("StorageClasses")`. Applies C1, C11.
 
 ## Goal
 
@@ -35,14 +35,14 @@ Expand, Set default, Delete, Clean up (0032/0033; menu items disabled); VolumeSn
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. No `Cargo.lock` change.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. No kube or k8s-openapi type in a public signature; the crate spawns no task; the 0001 read-only grep finds only the SSAR `create`. Summaries keep no annotation except the default-class flag (decision 4); no CSI `volumeAttributes` or secret references are copied.
-- [ ] 4. On UAT the probe prints 3 new watch, access, and count lines; results are in [decisions.md](decisions.md) "UAT probe". The AC7 credential script reports 0.
-- [ ] 5. On UAT each allowed kind shows live rows and a drawer with Overview, YAML, Events tabs; a denied kind is disabled with "Not permitted: list …".
-- [ ] 6. On UAT, if a mounted PVC exists: its Used cell and Usage bars match the kubelet `stats/summary` volume numbers (read through `nodes/proxy`) within 1 % (spot check), and Mounted by lists its pod.
-- [ ] 7. The 0003 AC4 color-literal grep is clean; the step's screenshots exist; the ui-verifier reports no high-severity defect against W7.
-- [ ] 8. Watches per session stay at most `3N + 4` (`open_watch_count` test covers the PV companion).
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. No `Cargo.lock` change.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
+- [x] 3. No kube or k8s-openapi type in a public signature; the crate spawns no task; the 0001 read-only grep finds only the SSAR `create`. Summaries keep no annotation except the default-class flag (decision 4); no CSI `volumeAttributes` or secret references are copied.
+- [ ] 4. On UAT the probe prints 3 new watch, access, and count lines; results are in [decisions.md](decisions.md) "UAT probe". The AC7 credential script reports 0. Not ticked: the AC7 credential script was not run; the substitute is in decisions.md "UAT probe".
+- [x] 5. On UAT each allowed kind shows live rows and a drawer with Overview, YAML, Events tabs; a denied kind is disabled with "Not permitted: list …".
+- [ ] 6. On UAT, if a mounted PVC exists: its Used cell and Usage bars match the kubelet `stats/summary` volume numbers (read through `nodes/proxy`) within 1 % (spot check), and Mounted by lists its pod. Not ticked: `kubectl` was not available for the independent spot check; see decisions.md "Known ceilings" (shared filesystems) and the 0014 step 2 report.
+- [x] 7. The 0003 AC4 color-literal grep is clean; the step's screenshots exist; the ui-verifier reports no high-severity defect against W7.
+- [x] 8. Watches per session stay at most `3N + 4` (`open_watch_count` test covers the PV companion).
 
 ## Open items
 

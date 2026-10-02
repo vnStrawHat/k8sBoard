@@ -19,7 +19,7 @@ use serde_json::Value;
 use serde_saphyr::SerializerOptions;
 
 use crate::connection::{ClusterConnection, ClusterError};
-use crate::storage_class::is_secret_parameter;
+use crate::storage_class::{is_secret_parameter, mask_mount_option};
 
 const ACTION: &str = "reading the object YAML";
 /// Fixed on purpose: the library error could quote the object's content.
@@ -184,7 +184,8 @@ fn to_masked_yaml(mut object: Value, env: EnvValues) -> Result<ObjectYaml, &'sta
     }
     let mut hidden = mask_manifest_annotations(&mut object, false)
         + mask_secret_data(&mut object)
-        + mask_storage_class_parameters(&mut object);
+        + mask_storage_class_parameters(&mut object)
+        + mask_credential_mount_options(&mut object);
     let mut hidden_env_values = 0;
     if env == EnvValues::Hidden
         && let Some(spec) = object.get_mut("spec")
@@ -258,6 +259,33 @@ fn mask_storage_class_parameters(object: &mut Value) -> usize {
     for (key, value) in parameters {
         if is_secret_parameter(key) {
             *value = Value::from(HIDDEN);
+            hidden += 1;
+        }
+    }
+    hidden
+}
+
+/// Hides credential values of mount options (CIFS `password=`): `mountOptions` of a StorageClass,
+/// `spec.mountOptions` of a PersistentVolume, keyed on the response's `kind`.
+fn mask_credential_mount_options(object: &mut Value) -> usize {
+    let options = match object.get("kind").and_then(Value::as_str) {
+        Some("StorageClass") => object.get_mut("mountOptions"),
+        Some("PersistentVolume") => object
+            .get_mut("spec")
+            .and_then(|spec| spec.get_mut("mountOptions")),
+        _ => None,
+    };
+    let Some(options) = options.and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    let mut hidden = 0;
+    for option in options {
+        let Some(text) = option.as_str() else {
+            continue;
+        };
+        let masked = mask_mount_option(text);
+        if masked != text {
+            *option = Value::from(masked);
             hidden += 1;
         }
     }

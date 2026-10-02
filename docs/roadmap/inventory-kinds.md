@@ -40,7 +40,7 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Config | PDBs | Done (0013) | Done (allowed disruptions, BLOCKS DRAIN, selected pods: 0013) | — | New 0031 |
 | Storage | PVCs | Done (0014) | Done (Used %, Usage bars, Mounted by, Go to pod: 0014) | — | Expand 0032 |
 | Storage | PVs | Done (0014) | Done (source, node affinity, RELEASED box, Go to claim: 0014) | — | — |
-| Storage | StorageClasses | Missing | Missing | 0014 (default ★, PV count) | Set default 0032 |
+| Storage | StorageClasses | Done (0014) | Done (default ★, PV count, parameters with hidden values, volumes list: 0014) | — | Set default 0032 |
 | Access Control | ServiceAccounts | Missing | Missing | 0015 (bound roles, used by, cloud identity, can-do); Check permissions 0023 | — |
 | Access Control | Roles | Missing | Missing | 0015 (rules table, bindings); Who can… 0023 | — |
 | Access Control | ClusterRoles | Missing | Missing | 0015 (aggregated, VERY BROAD box, Hide system); Who can… 0023 | — |

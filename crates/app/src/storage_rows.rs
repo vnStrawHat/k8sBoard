@@ -1,8 +1,9 @@
-//! Row builders for the storage kinds: PersistentVolumeClaims and PersistentVolumes.
+//! Row builders for the storage kinds: PersistentVolumeClaims, PersistentVolumes, and
+//! StorageClasses.
 
 use cluster::{
-    ByteAmount, PersistentVolumeClaimSummary, PersistentVolumeSummary, VolumeBackend,
-    WorkloadCondition,
+    ByteAmount, PersistentVolumeClaimSummary, PersistentVolumeSummary, StorageClassSummary,
+    StorageParameter, VolumeBackend, WorkloadCondition,
 };
 
 use crate::kind_row::{
@@ -21,7 +22,7 @@ const RESIZE_PENDING_DETAIL: &str = "Resize pending; restart the pod";
 
 /// The phase as the status the tables and drawers show. The tones are the app's own: idle
 /// states are Ok or Done, because Info and Warn count as unhealthy in the table chips.
-fn phase_label(phase: &str, is_terminating: bool) -> StatusLabel {
+pub(crate) fn phase_label(phase: &str, is_terminating: bool) -> StatusLabel {
     let tone = if is_terminating {
         StatusTone::Info
     } else {
@@ -368,6 +369,98 @@ fn source_rows(backend: &VolumeBackend) -> Vec<DetailRow> {
             vec![DetailRow::field("Type", KindCell::Text((*kind).into()))]
         }
     }
+}
+
+// ---- StorageClasses ----
+
+fn yes_no(is_yes: bool) -> KindCell {
+    KindCell::Text(if is_yes { "Yes" } else { "No" }.into())
+}
+
+pub(crate) fn storage_class_row(class: &StorageClassSummary) -> KindRow {
+    let status = if class.is_default {
+        labeled("Default", StatusTone::Ok)
+    } else {
+        labeled("Not default", StatusTone::Done)
+    };
+    let mut class_rows = vec![
+        mono_field("Provisioner", &class.provisioner),
+        DetailRow::field("Default", yes_no(class.is_default)),
+        DetailRow::field(
+            "Reclaim policy",
+            KindCell::Text(class.reclaim_policy.clone().into()),
+        ),
+        DetailRow::field(
+            "Binding mode",
+            KindCell::Text(class.binding_mode.clone().into()),
+        ),
+        DetailRow::field("Volume expansion", yes_no(class.allows_expansion)),
+    ];
+    if !class.mount_options.is_empty() {
+        class_rows.push(DetailRow::field(
+            "Mount options",
+            KindCell::Mono(class.mount_options.join(", ").into()),
+        ));
+    }
+    let parameter_rows = if class.parameters.is_empty() {
+        vec![DetailRow::Note("No parameters".into())]
+    } else {
+        class.parameters.iter().map(parameter_row).collect()
+    };
+    KindRow {
+        namespace: None,
+        name: class.name.clone(),
+        created_at: class.created_at,
+        status,
+        cells: vec![
+            KindCell::mono_or_absent(&class.provisioner),
+            KindCell::Text(class.reclaim_policy.clone().into()),
+            KindCell::Text(class.binding_mode.clone().into()),
+            yes_no(class.allows_expansion),
+            if class.is_default {
+                KindCell::Text("★".into())
+            } else {
+                KindCell::Absent
+            },
+            // The PV companion join fills PVs.
+            KindCell::Absent,
+            KindCell::age(class.created_at),
+        ],
+        sections: vec![
+            DetailSection {
+                title: "Class",
+                rows: class_rows,
+            },
+            DetailSection {
+                title: "Parameters",
+                rows: parameter_rows,
+            },
+            DetailSection {
+                title: "Volumes",
+                rows: vec![DetailRow::Live(LiveContent::ClassVolumes)],
+            },
+        ],
+        event: None,
+        related_pods: None,
+        labels: chips(&class.labels),
+        object: KindObject::Plain,
+    }
+}
+
+fn labeled(text: &str, tone: StatusTone) -> StatusLabel {
+    StatusLabel {
+        text: text.to_owned().into(),
+        tone,
+    }
+}
+
+/// A hidden value (see `is_secret_parameter`) reads as muted `hidden`, never as an empty string.
+fn parameter_row(parameter: &StorageParameter) -> DetailRow {
+    let value = match &parameter.value {
+        Some(value) => KindCell::Mono(value.clone().into()),
+        None => KindCell::Toned(labeled("hidden", StatusTone::Done)),
+    };
+    DetailRow::field(parameter.key.clone(), value)
 }
 
 #[cfg(test)]

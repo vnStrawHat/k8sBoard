@@ -143,6 +143,11 @@ fn joined_column_indices_name_their_columns() {
             .map(|column| column.name),
         Some("Affects")
     );
+    let class_columns = ResourceKind::StorageClasses.columns();
+    assert_eq!(
+        class_columns.get(CLASS_VOLUMES).map(|column| column.name),
+        Some("PVs")
+    );
     let claim_columns = ResourceKind::PersistentVolumeClaims.columns();
     assert_eq!(
         claim_columns.get(CLAIM_USED).map(|column| column.name),
@@ -1140,4 +1145,96 @@ fn rejoin_without_stats_restores_the_builder_status() {
     }
     assert_eq!(rows[0].status, toned("Bound", StatusTone::Ok));
     assert_eq!(used_cell(&rows[0]), &KindCell::Absent);
+}
+
+// ---- StorageClasses ----
+
+fn class(name: &str) -> cluster::StorageClassSummary {
+    cluster::StorageClassSummary {
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        provisioner: "ebs.csi.aws.com".to_owned(),
+        reclaim_policy: "Delete".to_owned(),
+        binding_mode: "Immediate".to_owned(),
+        allows_expansion: false,
+        is_default: false,
+        parameters: Vec::new(),
+        mount_options: Vec::new(),
+    }
+}
+
+fn volume_of(name: &str, class: Option<&str>) -> cluster::PersistentVolumeSummary {
+    cluster::PersistentVolumeSummary {
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        capacity: None,
+        access_modes: Vec::new(),
+        reclaim_policy: "Delete".to_owned(),
+        phase: "Bound".to_owned(),
+        is_terminating: false,
+        claim: None,
+        storage_class: class.map(str::to_owned),
+        volume_mode: None,
+        backend: cluster::VolumeBackend::Other { kind: "unknown" },
+        node_affinity: Vec::new(),
+        mount_options: Vec::new(),
+        reason: None,
+        message: None,
+    }
+}
+
+fn joined_classes(names: &[&str], companion: Option<&CompanionLists>) -> Vec<KindRow> {
+    let mut rows: Vec<KindRow> = names
+        .iter()
+        .map(|name| crate::storage_rows::storage_class_row(&class(name)))
+        .collect();
+    let pods = LiveList::Loading;
+    let inputs = JoinInputs {
+        pods: &pods,
+        companion,
+        kubelet: None,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(ResourceKind::StorageClasses, &mut rows, &inputs);
+    rows
+}
+
+#[test]
+fn class_volumes_count_by_class() {
+    let companion = CompanionLists::PersistentVolumes(ready_list(vec![
+        volume_of("pv-1", Some("gp3")),
+        volume_of("pv-2", Some("gp3")),
+        volume_of("pv-3", Some("fast")),
+        // A volume without a class (static provisioning) belongs to no class row.
+        volume_of("pv-4", None),
+    ]));
+    let rows = joined_classes(&["gp3", "fast", "empty"], Some(&companion));
+    let count = |row: &KindRow| row.cells[CLASS_VOLUMES].clone();
+    let quantity = |count: u64| KindCell::Quantity {
+        text: count.to_string().into(),
+        value: count,
+        tone: None,
+    };
+    assert_eq!(count(&rows[0]), quantity(2));
+    assert_eq!(count(&rows[1]), quantity(1));
+    assert_eq!(count(&rows[2]), quantity(0));
+}
+
+#[test]
+fn class_volumes_absent_without_companion() {
+    let rows = joined_classes(&["gp3"], None);
+    assert_eq!(rows[0].cells[CLASS_VOLUMES], KindCell::Absent);
+    // A companion that has not loaded yet reads the same.
+    let loading = CompanionLists::PersistentVolumes(LiveList::Loading);
+    let rows = joined_classes(&["gp3"], Some(&loading));
+    assert_eq!(rows[0].cells[CLASS_VOLUMES], KindCell::Absent);
+}
+
+#[test]
+fn class_join_ignores_the_endpoint_slice_companion() {
+    let slices = CompanionLists::EndpointSlices(ready_list(Vec::new()));
+    let rows = joined_classes(&["gp3"], Some(&slices));
+    assert_eq!(rows[0].cells[CLASS_VOLUMES], KindCell::Absent);
 }

@@ -7,8 +7,8 @@
 use cluster::{
     ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule, DeploymentSummary,
     EndpointSliceSummary, EventSummary, JobSummary, NodeSummary, PersistentVolumeClaimSummary,
-    PodDisruptionBudgetSummary, PodSummary, PvcUsage, ReplicaSetSummary, ResourceQuotaSummary,
-    ServiceSummary, ValuePreview, VolumeSource,
+    PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary, PvcUsage, ReplicaSetSummary,
+    ResourceQuotaSummary, ServiceSummary, ValuePreview, VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -41,6 +41,7 @@ use crate::policy_rows::{fullest_item, quota_text};
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusLabel, StatusTone, pod_status_label, readiness_text, toned_text};
+use crate::storage_rows::phase_label;
 use crate::table_selection::ResourceKey;
 use crate::usage_format::{Measure, format_percent, usage_tone};
 
@@ -99,6 +100,8 @@ pub(crate) fn live_rows(
         (LiveContent::MountedBy, KindObject::PersistentVolumeClaim(claim)) => {
             mounted_by_rows(claim, live, cx)
         }
+        // A StorageClass row holds no summary either: its name is the class.
+        (LiveContent::ClassVolumes, _) => class_volumes_rows(kind, &row.name, live, cx),
         // The Namespaces row holds no summary, so its name is the namespace.
         (LiveContent::NamespaceQuotas, _) => namespace_quota_rows(&row.name, live, cx),
         // A placeholder on a row of another kind has nothing to show.
@@ -1176,6 +1179,109 @@ fn mounting_pod_element(
                 .text_color(theme.muted_foreground)
                 .child(format!("on {node} · {path}")),
         )
+        .into_any_element()
+}
+
+// ---- Class volumes ----
+
+/// How many persistent volumes a StorageClass drawer lists.
+const MAX_LISTED_VOLUMES: usize = 20;
+
+/// The volumes of `class`, in list order.
+fn class_volumes<'a>(
+    class: &str,
+    volumes: &'a [PersistentVolumeSummary],
+) -> Vec<&'a PersistentVolumeSummary> {
+    volumes
+        .iter()
+        .filter(|volume| volume.storage_class.as_deref() == Some(class))
+        .collect()
+}
+
+/// `12 · 10 bound · 2 released`; the bound and released parts are skipped when zero.
+fn class_volumes_text(volumes: &[&PersistentVolumeSummary]) -> String {
+    let count = |phase: &str| {
+        volumes
+            .iter()
+            .filter(|volume| volume.phase == phase)
+            .count()
+    };
+    let mut parts = vec![volumes.len().to_string()];
+    for (phase, label) in [("Bound", "bound"), ("Released", "released")] {
+        let phase_count = count(phase);
+        if phase_count > 0 {
+            parts.push(format!("{phase_count} {label}"));
+        }
+    }
+    parts.join(" · ")
+}
+
+fn class_volumes_rows(
+    kind: ResourceKind,
+    class: &str,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let Some(volumes) = live
+        .companion()
+        .and_then(CompanionLists::persistent_volumes)
+    else {
+        // Without a companion the report denied it, or the explorer has not started it yet.
+        if let CompanionPlan::Denied(check) = companion_plan(kind, &live.access) {
+            return vec![note(&format!("Not permitted: {check}"), cx)];
+        }
+        return vec![note("Loading volumes…", cx)];
+    };
+    match volumes {
+        LiveList::Loading => vec![note("Loading volumes…", cx)],
+        LiveList::Failed { message } => vec![
+            note("Volumes are unavailable", cx),
+            detail_note(message, cx),
+        ],
+        LiveList::Ready { items, .. } => {
+            let own = class_volumes(class, items);
+            let hidden = own.len().saturating_sub(MAX_LISTED_VOLUMES);
+            std::iter::once(
+                wide_detail_row(
+                    "Persistent volumes",
+                    div().truncate().child(class_volumes_text(&own)),
+                    cx,
+                )
+                .into_any_element(),
+            )
+            .chain(
+                own.iter()
+                    .take(MAX_LISTED_VOLUMES)
+                    .enumerate()
+                    .map(|(ix, volume)| class_volume_element(ix, volume, cx)),
+            )
+            .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+            .collect()
+        }
+    }
+}
+
+/// A volume as a link to its drawer, with its phase.
+fn class_volume_element(
+    ix: usize,
+    volume: &PersistentVolumeSummary,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let name = volume.name.clone().into();
+    let target = ResourceKey::Kind {
+        kind: ResourceKind::PersistentVolumes,
+        namespace: None,
+        name: volume.name.clone(),
+    };
+    let link = link_text(ix, &name, target, cx);
+    h_flex()
+        .id(("class-volume", ix))
+        .gap_2()
+        .items_center()
+        .py_1()
+        .text_sm()
+        .child(div().flex_1().min_w_0().child(link))
+        .child(toned_text(phase_label(&volume.phase, volume.is_terminating), cx).flex_shrink_0())
         .into_any_element()
 }
 

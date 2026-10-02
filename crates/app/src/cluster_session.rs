@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 use cluster::{
     AccessCheck, AccessReport, ClusterConnection, ClusterError, ConfigMapValues, ContextSummary,
     EndpointSliceSummary, EventFilter, EventSummary, InvolvedObject, JobSummary, Kubeconfig,
-    KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, PodSummary,
-    ReplicaSetSummary, ResourceQuotaSummary, ServerVersion, WatchUpdate,
+    KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary,
+    PersistentVolumeSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, ServerVersion,
+    WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
@@ -141,17 +142,20 @@ struct Companion {
 /// The latest state of the companion watch, by what it lists.
 pub(crate) enum CompanionLists {
     EndpointSlices(LiveList<EndpointSliceSummary>),
+    PersistentVolumes(LiveList<PersistentVolumeSummary>),
 }
 
 /// One companion watch update, typed on tokio so one subscription serves every companion.
 enum CompanionUpdate {
     EndpointSlices(WatchUpdate<EndpointSliceSummary>),
+    PersistentVolumes(WatchUpdate<PersistentVolumeSummary>),
 }
 
 /// Which companion an explorer kind starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompanionKind {
     EndpointSlices,
+    PersistentVolumes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,14 +169,21 @@ pub(crate) enum CompanionPlan {
 /// Which companion `kind` starts, or why not. A review that is still running or failed does not
 /// block it: the watch then shows its own failure.
 pub(crate) fn companion_plan(kind: ResourceKind, access: &AccessState) -> CompanionPlan {
-    if kind != ResourceKind::Services {
-        return CompanionPlan::None;
-    }
-    let check = AccessCheck::ListEndpointSlices;
+    let (companion, check) = match kind {
+        ResourceKind::Services => (
+            CompanionKind::EndpointSlices,
+            AccessCheck::ListEndpointSlices,
+        ),
+        ResourceKind::StorageClasses => (
+            CompanionKind::PersistentVolumes,
+            AccessCheck::ListPersistentVolumes,
+        ),
+        _ => return CompanionPlan::None,
+    };
     match access {
         AccessState::Known(report) if !report.is_allowed(check) => CompanionPlan::Denied(check),
         AccessState::Known(_) | AccessState::Checking { .. } | AccessState::Unknown => {
-            CompanionPlan::Start(CompanionKind::EndpointSlices)
+            CompanionPlan::Start(companion)
         }
     }
 }
@@ -181,6 +192,7 @@ impl CompanionLists {
     fn loading_for(kind: CompanionKind) -> Self {
         match kind {
             CompanionKind::EndpointSlices => Self::EndpointSlices(LiveList::Loading),
+            CompanionKind::PersistentVolumes => Self::PersistentVolumes(LiveList::Loading),
         }
     }
 
@@ -190,12 +202,18 @@ impl CompanionLists {
             (Self::EndpointSlices(list), CompanionUpdate::EndpointSlices(update)) => {
                 list.apply(update);
             }
+            (Self::PersistentVolumes(list), CompanionUpdate::PersistentVolumes(update)) => {
+                list.apply(update);
+            }
+            (Self::EndpointSlices(_), CompanionUpdate::PersistentVolumes(_))
+            | (Self::PersistentVolumes(_), CompanionUpdate::EndpointSlices(_)) => {}
         }
     }
 
     fn mark_stopped(&mut self) {
         match self {
             Self::EndpointSlices(list) => list.mark_stopped(),
+            Self::PersistentVolumes(list) => list.mark_stopped(),
         }
     }
 
@@ -203,6 +221,15 @@ impl CompanionLists {
     pub(crate) fn endpoint_slices(&self) -> Option<&LiveList<EndpointSliceSummary>> {
         match self {
             Self::EndpointSlices(list) => Some(list),
+            Self::PersistentVolumes(_) => None,
+        }
+    }
+
+    /// The persistent volumes, when this companion lists them.
+    pub(crate) fn persistent_volumes(&self) -> Option<&LiveList<PersistentVolumeSummary>> {
+        match self {
+            Self::PersistentVolumes(list) => Some(list),
+            Self::EndpointSlices(_) => None,
         }
     }
 
@@ -211,13 +238,16 @@ impl CompanionLists {
     fn is_loading(&self) -> bool {
         match self {
             Self::EndpointSlices(list) => list.is_loading(),
+            Self::PersistentVolumes(list) => list.is_loading(),
         }
     }
 
-    /// How many watches the companion runs: one per namespace of the scope.
+    /// How many watches the companion runs: one per namespace of the scope for a namespaced kind,
+    /// one for a cluster-scoped one.
     fn watches(&self, namespaces: usize) -> usize {
         match self {
             Self::EndpointSlices(_) => namespaces,
+            Self::PersistentVolumes(_) => 1,
         }
     }
 }
@@ -1475,10 +1505,16 @@ impl Companion {
         scope: NamespaceScope,
         cx: &mut Context<ClusterSession>,
     ) -> Self {
+        // Boxed because each kind has its own stream type.
         let updates = match kind {
             CompanionKind::EndpointSlices => connection
                 .watch_endpoint_slices(scope)
-                .map(CompanionUpdate::EndpointSlices),
+                .map(CompanionUpdate::EndpointSlices)
+                .boxed(),
+            CompanionKind::PersistentVolumes => connection
+                .watch_persistent_volumes()
+                .map(CompanionUpdate::PersistentVolumes)
+                .boxed(),
         };
         let subscription = runtime.subscribe(
             updates,

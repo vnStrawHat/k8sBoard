@@ -34,6 +34,8 @@ pub(crate) const NAMESPACE_MEMORY: usize = 3;
 pub(crate) const NETWORK_POLICY_AFFECTS: usize = 2;
 /// The index of the Used cell in a PVCs row.
 pub(crate) const CLAIM_USED: usize = 2;
+/// The index of the PVs cell in a StorageClasses row.
+pub(crate) const CLASS_VOLUMES: usize = 5;
 
 const EXTERNAL_NAME: &str = "ExternalName";
 /// Slices of this address type name hosts, not pods; counting them would double a dual-stack
@@ -59,6 +61,7 @@ pub(crate) fn join_rows(kind: ResourceKind, rows: &mut [KindRow], inputs: &JoinI
         ResourceKind::Namespaces => join_namespaces(rows, inputs),
         ResourceKind::NetworkPolicies => join_network_policies(rows, inputs),
         ResourceKind::PersistentVolumeClaims => join_claims(rows, inputs),
+        ResourceKind::StorageClasses => join_classes(rows, inputs),
         _ => {}
     }
 }
@@ -711,6 +714,41 @@ fn join_claims(rows: &mut [KindRow], inputs: &JoinInputs) {
         };
         row.status = status;
         if let Some(slot) = row.cells.get_mut(CLAIM_USED) {
+            *slot = cell;
+        }
+    }
+}
+
+// ---- StorageClasses ----
+
+/// The PVs cell: how many persistent volumes use each class, from the PV companion. `Absent`
+/// until the companion has loaded, and when it is denied.
+fn join_classes(rows: &mut [KindRow], inputs: &JoinInputs) {
+    let volumes = inputs
+        .companion
+        .and_then(CompanionLists::persistent_volumes)
+        .and_then(LiveList::ready_items);
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for class in volumes
+        .into_iter()
+        .flatten()
+        .filter_map(|volume| volume.storage_class.as_deref())
+    {
+        *counts.entry(class).or_default() += 1;
+    }
+    for row in rows {
+        let cell = match volumes {
+            None => KindCell::Absent,
+            Some(_) => {
+                let count = counts.get(row.name.as_str()).copied().unwrap_or(0);
+                KindCell::Quantity {
+                    text: count.to_string().into(),
+                    value: u64::try_from(count).unwrap_or(u64::MAX),
+                    tone: None,
+                }
+            }
+        };
+        if let Some(slot) = row.cells.get_mut(CLASS_VOLUMES) {
             *slot = cell;
         }
     }

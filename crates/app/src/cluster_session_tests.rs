@@ -291,6 +291,24 @@ fn open_watch_count_counts_several_related_and_companion() {
     );
     // Five namespaces reach the 3N + 4 bound exactly.
     assert_eq!(open_watch_count(watches(5, 5, 5, true, true)), 3 * 5 + 4);
+    // StorageClasses is cluster-scoped: one explorer watch and one PV companion watch whatever the
+    // scope, so three picked namespaces stay below the bound.
+    let companion = CompanionLists::loading_for(CompanionKind::PersistentVolumes);
+    let explorer = explorer_watches(ResourceKind::StorageClasses, 3);
+    assert_eq!(explorer, 1);
+    assert_eq!(
+        open_watch_count(watches(3, explorer, companion.watches(3), true, true)),
+        2 + 3 + 1 + 1 + 2
+    );
+}
+
+fn denial_of_volumes(decision: AccessDecision) -> AccessState {
+    AccessState::Known(AccessReport {
+        reviews: vec![AccessReview {
+            check: AccessCheck::ListPersistentVolumes,
+            decision,
+        }],
+    })
 }
 
 fn denial_of_slices(decision: AccessDecision) -> AccessState {
@@ -306,11 +324,27 @@ fn denial_of_slices(decision: AccessDecision) -> AccessState {
 fn companion_plan_per_kind() {
     let allowed = denial_of_slices(AccessDecision::Allowed);
     assert_eq!(
+        companion_plan(
+            ResourceKind::StorageClasses,
+            &denial_of_volumes(AccessDecision::Allowed)
+        ),
+        CompanionPlan::Start(CompanionKind::PersistentVolumes)
+    );
+    assert_eq!(
+        companion_plan(
+            ResourceKind::StorageClasses,
+            &denial_of_volumes(AccessDecision::Denied { reason: None })
+        ),
+        CompanionPlan::Denied(AccessCheck::ListPersistentVolumes)
+    );
+    assert_eq!(
         companion_plan(ResourceKind::Services, &allowed),
         CompanionPlan::Start(CompanionKind::EndpointSlices)
     );
-    // Only Services join with a second list so far.
+    // Only Services and StorageClasses join with a second list.
     for kind in [
+        ResourceKind::PersistentVolumes,
+        ResourceKind::PersistentVolumeClaims,
         ResourceKind::Deployments,
         ResourceKind::ConfigMaps,
         ResourceKind::Namespaces,
@@ -358,6 +392,40 @@ fn companion_lists_mark_a_stopped_stream_as_a_problem() {
 fn companion_watches_run_once_per_namespace() {
     let lists = CompanionLists::loading_for(CompanionKind::EndpointSlices);
     assert_eq!(lists.watches(3), 3);
+}
+
+#[test]
+fn cluster_scoped_companion_runs_one_watch() {
+    let lists = CompanionLists::loading_for(CompanionKind::PersistentVolumes);
+    assert_eq!(lists.watches(3), 1);
+}
+
+#[test]
+fn companion_list_ignores_other_variant() {
+    let mut lists = CompanionLists::loading_for(CompanionKind::PersistentVolumes);
+    lists.apply(CompanionUpdate::EndpointSlices(WatchUpdate::Snapshot(
+        Vec::new(),
+    )));
+    assert!(lists.persistent_volumes().is_some_and(LiveList::is_loading));
+    assert!(lists.endpoint_slices().is_none());
+    lists.apply(CompanionUpdate::PersistentVolumes(WatchUpdate::Snapshot(
+        Vec::new(),
+    )));
+    assert_eq!(
+        lists.persistent_volumes().and_then(LiveList::ready_count),
+        Some(0)
+    );
+}
+
+#[test]
+fn volume_companion_marks_a_stopped_stream_as_a_problem() {
+    let mut lists = CompanionLists::loading_for(CompanionKind::PersistentVolumes);
+    lists.mark_stopped();
+    assert!(
+        lists
+            .persistent_volumes()
+            .is_some_and(LiveList::has_problem)
+    );
 }
 
 #[test]

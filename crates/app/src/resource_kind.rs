@@ -16,7 +16,7 @@ use crate::network_rows::{ingress_row, service_row};
 use crate::policy_rows::{
     horizontal_pod_autoscaler_row, pod_disruption_budget_row, resource_quota_row,
 };
-use crate::storage_rows::{persistent_volume_claim_row, persistent_volume_row};
+use crate::storage_rows::{persistent_volume_claim_row, persistent_volume_row, storage_class_row};
 use crate::workload_rows::{daemon_set_row, deployment_row, replica_set_row, stateful_set_row};
 
 /// One kind with an explorer screen. Per-kind variation is data (the tables below) plus one
@@ -40,6 +40,7 @@ pub(crate) enum ResourceKind {
     ResourceQuotas,
     PersistentVolumeClaims,
     PersistentVolumes,
+    StorageClasses,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -468,6 +469,30 @@ static PERSISTENT_VOLUMES: KindSpec = KindSpec {
     has_port_forward: false,
 };
 
+static STORAGE_CLASSES: KindSpec = KindSpec {
+    label: "StorageClasses",
+    object: ObjectKind::StorageClass,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "storageclass",
+    plural: "storageclasses",
+    badge: "Sc",
+    is_namespaced: false,
+    access_check: AccessCheck::ListStorageClasses,
+    columns: &[
+        column("Provisioner", 200., Align::Left),
+        column("Reclaim", 90., Align::Left),
+        column("Binding mode", 190., Align::Left),
+        column("Expansion", 90., Align::Left),
+        column("Default", 70., Align::Left),
+        column("PVs", 70., Align::Right),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &["Set as default"],
+    delete_label: "Delete storage class…",
+    has_port_forward: false,
+};
+
 /// The Name column of a kind that shows it, as wide as its minimum.
 pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left);
 
@@ -482,7 +507,7 @@ pub(crate) fn kind_columns(kind: ResourceKind) -> Vec<KindColumn> {
 }
 
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 17] = [
+    pub(crate) const ALL: [Self; 18] = [
         Self::Namespaces,
         Self::Events,
         Self::Deployments,
@@ -500,6 +525,7 @@ impl ResourceKind {
         Self::ResourceQuotas,
         Self::PersistentVolumeClaims,
         Self::PersistentVolumes,
+        Self::StorageClasses,
     ];
 
     fn spec(self) -> &'static KindSpec {
@@ -521,6 +547,7 @@ impl ResourceKind {
             Self::ResourceQuotas => &RESOURCE_QUOTAS,
             Self::PersistentVolumeClaims => &PERSISTENT_VOLUME_CLAIMS,
             Self::PersistentVolumes => &PERSISTENT_VOLUMES,
+            Self::StorageClasses => &STORAGE_CLASSES,
         }
     }
 
@@ -614,7 +641,7 @@ impl ResourceKind {
     }
 
     /// The only per-kind `match` over cluster calls: watch, then map to rows on tokio, so the
-    /// main thread only swaps a `Vec`. Cluster-scoped kinds (Namespaces, PVs) ignore `scope`. Only
+    /// main thread only swaps a `Vec`. Cluster-scoped kinds (Namespaces, PVs, StorageClasses) ignore `scope`. Only
     /// Events reads `events`.
     pub(crate) fn watch_rows(
         self,
@@ -691,6 +718,10 @@ impl ResourceKind {
                 .watch_persistent_volumes()
                 .map(|update| rows(update, persistent_volume_row))
                 .boxed(),
+            Self::StorageClasses => connection
+                .watch_storage_classes()
+                .map(|update| rows(update, storage_class_row))
+                .boxed(),
         }
     }
 }
@@ -755,7 +786,11 @@ mod tests {
             .collect();
         assert_eq!(
             cluster_scoped,
-            [ResourceKind::Namespaces, ResourceKind::PersistentVolumes]
+            [
+                ResourceKind::Namespaces,
+                ResourceKind::PersistentVolumes,
+                ResourceKind::StorageClasses
+            ]
         );
     }
 

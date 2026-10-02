@@ -88,7 +88,7 @@ Status: `phase_label`.
 |---|---|---|
 | Provisioner | 200 | `Mono` |
 | Reclaim | 90 | `Text` |
-| Binding mode | 170 | `Text` |
+| Binding mode | 190 | `Text` |
 | Expansion | 90 | `Yes` / `No` |
 | Default | 70 | `Text("★")` or `Absent` |
 | PVs | 70 r | joined: `Quantity { n, n, None }`; companion not ready or denied → `Absent` |

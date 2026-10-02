@@ -457,3 +457,38 @@ fn only_storage_classes_have_parameters_masked() {
     let text = masked_text(json!({"kind": "Pod", "parameters": {"password": "visible"}}));
     assert!(text.contains("password: visible"));
 }
+
+#[test]
+fn credential_mount_options_are_masked_in_yaml() {
+    let class = masked(
+        json!({
+            "kind": "StorageClass",
+            "metadata": {"name": "smb"},
+            "mountOptions": ["vers=3.0", "password=distinctive-secret", "hard"],
+        }),
+        EnvValues::Hidden,
+    );
+    assert!(
+        class
+            .text
+            .starts_with("# k8sBoard hid 1 value as <hidden>.\n"),
+        "{}",
+        class.text
+    );
+    assert!(!class.text.contains("distinctive-secret"));
+    assert!(class.text.contains("- password=<hidden>"));
+    assert!(class.text.contains("- vers=3.0"));
+    let volume = masked_text(json!({
+        "kind": "PersistentVolume",
+        "metadata": {"name": "pv"},
+        "spec": {"mountOptions": ["password=distinctive-secret"]},
+    }));
+    assert!(!volume.contains("distinctive-secret"));
+    assert!(volume.contains("- password=<hidden>"));
+}
+
+#[test]
+fn mount_options_of_other_kinds_are_not_masked() {
+    let text = masked_text(json!({"kind": "Pod", "mountOptions": ["password=visible"]}));
+    assert!(text.contains("password=visible"));
+}

@@ -316,26 +316,27 @@ fn pvc_volume_is_a_link() {
 
 #[test]
 fn pvc_and_pv_class_link_to_storage_class() {
-    // StorageClasses has no screen yet, so the class is plain text. Step 3 adds the screen and
-    // flips both rows to a Link.
+    let link = DetailRow::Link {
+        label: "Class".into(),
+        text: "gp3".into(),
+        target: ResourceKey::Kind {
+            kind: ResourceKind::StorageClasses,
+            namespace: None,
+            name: "gp3".to_owned(),
+        },
+    };
     let row = persistent_volume_claim_row(&claim());
-    assert_eq!(
-        claim_section_row(&row, "Class"),
-        &DetailRow::field("Class", KindCell::Text("gp3".into()))
-    );
+    assert_eq!(claim_section_row(&row, "Class"), &link);
     let row = persistent_volume_row(&volume());
     let class = row
         .section("Volume")
         .and_then(|section| {
             section.rows.iter().find(|detail| {
-                matches!(detail, DetailRow::Field { label, .. } if label.as_ref() == "Class")
+                matches!(detail, DetailRow::Link { label, .. } if label.as_ref() == "Class")
             })
         })
         .expect("class row");
-    assert_eq!(
-        class,
-        &DetailRow::field("Class", KindCell::Text("gp3".into()))
-    );
+    assert_eq!(class, &link);
 }
 
 #[test]
@@ -429,4 +430,133 @@ fn pv_node_affinity_and_mount_options_only_when_present() {
         "Mount options",
         KindCell::Mono("hard, nfsvers=4.1".into())
     )));
+}
+
+// ---- StorageClasses ----
+
+fn storage_class() -> StorageClassSummary {
+    StorageClassSummary {
+        name: "gp3".to_owned(),
+        created_at: None,
+        labels: vec!["tier=fast".to_owned()],
+        provisioner: "ebs.csi.aws.com".to_owned(),
+        reclaim_policy: "Delete".to_owned(),
+        binding_mode: "WaitForFirstConsumer".to_owned(),
+        allows_expansion: true,
+        is_default: true,
+        parameters: vec![
+            StorageParameter {
+                key: "type".to_owned(),
+                value: Some("gp3".to_owned()),
+            },
+            StorageParameter {
+                key: "adminPassword".to_owned(),
+                value: None,
+            },
+        ],
+        mount_options: Vec::new(),
+    }
+}
+
+#[test]
+fn storage_class_row_cells_match_column_count() {
+    let row = storage_class_row(&storage_class());
+    assert_eq!(
+        row.cells.len(),
+        ResourceKind::StorageClasses.columns().len()
+    );
+}
+
+#[test]
+fn storage_class_cells_show_provisioner_policies_and_expansion() {
+    let row = storage_class_row(&storage_class());
+    assert_eq!(row.namespace, None);
+    assert_eq!(row.cells[0], KindCell::Mono("ebs.csi.aws.com".into()));
+    assert_eq!(row.cells[2], KindCell::Text("WaitForFirstConsumer".into()));
+    assert_eq!(row.cells[3], KindCell::Text("Yes".into()));
+}
+
+#[test]
+fn storage_class_pvs_cell_waits_for_the_join() {
+    let row = storage_class_row(&storage_class());
+    assert_eq!(row.cells[5], KindCell::Absent);
+}
+
+#[test]
+fn default_class_shows_star() {
+    let default = storage_class_row(&storage_class());
+    assert_eq!(default.cells[4], KindCell::Text("★".into()));
+    let mut other = storage_class();
+    other.is_default = false;
+    assert_eq!(storage_class_row(&other).cells[4], KindCell::Absent);
+}
+
+#[test]
+fn default_class_status() {
+    let default = storage_class_row(&storage_class());
+    assert_eq!(default.status, labeled("Default", StatusTone::Ok));
+    let mut other = storage_class();
+    other.is_default = false;
+    assert_eq!(
+        storage_class_row(&other).status,
+        labeled("Not default", StatusTone::Done)
+    );
+}
+
+#[test]
+fn hidden_parameter_reads_hidden() {
+    let row = storage_class_row(&storage_class());
+    let parameters = row.section("Parameters").expect("section");
+    assert_eq!(
+        parameters.rows,
+        [
+            DetailRow::field("type", KindCell::Mono("gp3".into())),
+            DetailRow::field(
+                "adminPassword",
+                KindCell::Toned(labeled("hidden", StatusTone::Done))
+            ),
+        ]
+    );
+}
+
+#[test]
+fn class_without_parameters_has_a_note() {
+    let mut bare = storage_class();
+    bare.parameters.clear();
+    let row = storage_class_row(&bare);
+    assert_eq!(
+        row.section("Parameters")
+            .map(|section| section.rows.clone()),
+        Some(vec![DetailRow::Note("No parameters".into())])
+    );
+}
+
+#[test]
+fn class_mount_options_only_when_present() {
+    let row = storage_class_row(&storage_class());
+    let class = row.section("Class").expect("section");
+    assert!(!class.rows.iter().any(
+        |detail| matches!(detail, DetailRow::Field { label, .. } if label.as_ref() == "Mount options")
+    ));
+    let mut with_options = storage_class();
+    with_options.mount_options = vec!["debug".to_owned(), "noatime".to_owned()];
+    let row = storage_class_row(&with_options);
+    assert!(
+        row.section("Class")
+            .expect("section")
+            .rows
+            .contains(&DetailRow::field(
+                "Mount options",
+                KindCell::Mono("debug, noatime".into())
+            ))
+    );
+}
+
+#[test]
+fn class_drawer_lists_volumes_live() {
+    let row = storage_class_row(&storage_class());
+    assert_eq!(
+        row.section("Volumes").map(|section| section.rows.clone()),
+        Some(vec![DetailRow::Live(LiveContent::ClassVolumes)])
+    );
 }

@@ -72,6 +72,7 @@ pub(crate) enum LiveContent {
     NamespaceQuotas,
     ClaimUsage,
     MountedBy,
+    ClassVolumes,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.
