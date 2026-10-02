@@ -30,11 +30,11 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Workloads | Jobs | Done | Done (attempts, BACKOFF LIMIT box: 0012) | logs 0019 | Re-run 0032 |
 | Workloads | CronJobs | Done (0012) | Done (next runs, recent jobs: 0012) | logs of last job 0019 | Trigger now, Suspend 0032 |
 | Network | Services | Done (0012) | Done (Endpoints, "matches no pods": 0012) | Show in Topology 0022 | port-forward 0035 |
-| Network | Ingresses | Partial | Partial | TLS expiry column and CERTIFICATE box 0016; Show in Topology 0022 (Open URL and backend links done in 0012) | — |
+| Network | Ingresses | Done (0016) | Done (TLS column with expiry replaces Ports, TLS section with Secret links and leaf facts, CERTIFICATE box: 0016; Open URL and backend links: 0012) | Show in Topology 0022 | — |
 | Network | NetworkPolicies | Done (0013) | Done (rules as sentences, Affects: 0013) | Test traffic 0023 | — |
 | Network | Port Forwarding (local page) | Missing | Missing | — | 0035 |
 | Config | ConfigMaps | Done (0012) | Done (Used by, value previews: 0012) | — | Edit, New, Compare with previous 0031 |
-| Config | Secrets | Missing | Missing | 0016 (masked, Reveal 30 s, Copy, Used by, unused flag) | Edit 0031 |
+| Config | Secrets | Done (0016) | Done (masked Data, per-key Reveal and Reveal all for 30 s, Copy without reveal with private clipboard and 30 s clear, certificate section, CERTIFICATE box, Used by, unused flag: 0016) | — | Edit 0031 |
 | Config | HPAs | Done (0013) | Done (metric bars, scaling events, AT MAX box: 0013) | — | Edit min/max 0032 |
 | Config | ResourceQuotas | Done (0013) | Done (usage bars, blocked creations: 0013) | — | New, Edit 0031 |
 | Config | PDBs | Done (0013) | Done (allowed disruptions, BLOCKS DRAIN, selected pods: 0013) | — | New 0031 |

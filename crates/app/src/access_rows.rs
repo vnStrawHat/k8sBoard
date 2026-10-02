@@ -280,20 +280,20 @@ fn automount_text(account: &ServiceAccountSummary) -> &'static str {
     }
 }
 
-/// Secret references are names only: a Secret is never requested, so no link and no value.
+/// Secret references are names only: no value is read here. Each name links to its Secrets row.
 fn secrets_rows(account: &ServiceAccountSummary) -> Vec<DetailRow> {
     let references = account
         .secrets
         .iter()
-        .map(|name| (name, "token reference"))
+        .map(|name| (name, "Token reference"))
         .chain(
             account
                 .image_pull_secrets
                 .iter()
-                .map(|name| (name, "image pull secret")),
+                .map(|name| (name, "Image pull secret")),
         );
     let mut rows: Vec<DetailRow> = references
-        .map(|(name, way)| DetailRow::field(name.clone(), KindCell::Text(way.into())))
+        .map(|(name, way)| secret_reference_row(&account.namespace, name, way))
         .collect();
     let has_references = !rows.is_empty();
     if !has_references {
@@ -307,6 +307,18 @@ fn secrets_rows(account: &ServiceAccountSummary) -> Vec<DetailRow> {
         rows.push(DetailRow::Note("Secret contents are never read".into()));
     }
     rows
+}
+
+/// How the account references a secret, as a label above a link to the secret's row.
+fn secret_reference_row(namespace: &str, name: &str, way: &str) -> DetailRow {
+    match ResourceKey::of_object("Secret", Some(namespace), name) {
+        Some(target) => DetailRow::Link {
+            label: way.to_owned().into(),
+            text: name.to_owned().into(),
+            target,
+        },
+        None => DetailRow::field(way.to_owned(), KindCell::Mono(name.to_owned().into())),
+    }
 }
 
 pub(crate) fn service_account_row(account: &ServiceAccountSummary) -> KindRow {

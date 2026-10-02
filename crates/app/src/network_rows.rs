@@ -1,10 +1,11 @@
 //! Row builders for the network kinds: Services and Ingresses.
 
-use cluster::{IngressSummary, IngressTls, ServicePortSummary, ServiceSummary};
+use cluster::{IngressSummary, IngressTls, SecretSummary, ServicePortSummary, ServiceSummary};
 
 use crate::kind_row::{
     DetailRow, DetailSection, KindCell, KindObject, KindRow, LiveContent, chips,
 };
+use crate::secret_rows::certificate_summary_rows;
 use crate::status_tone::{StatusLabel, StatusTone};
 use crate::table_selection::ResourceKey;
 
@@ -139,24 +140,10 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
         },
     ];
     if has_tls {
+        // Paint-time: the certificate facts come from the TLS secrets companion.
         sections.push(DetailSection {
             title: "TLS",
-            rows: ingress
-                .tls
-                .iter()
-                .map(|tls| {
-                    let label = if tls.hosts.is_empty() {
-                        "*".to_owned()
-                    } else {
-                        tls.hosts.join(", ")
-                    };
-                    let secret = tls
-                        .secret_name
-                        .as_ref()
-                        .map(|name| format!("secret {name}"));
-                    DetailRow::stacked(label, KindCell::text_or_absent(secret.as_deref()))
-                })
-                .collect(),
+            rows: vec![DetailRow::Live(LiveContent::IngressTls)],
         });
     }
     KindRow {
@@ -168,7 +155,12 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
             KindCell::text_or_absent(ingress.class.as_deref()),
             KindCell::Text(hosts.into()),
             address,
-            KindCell::Text(if has_tls { "80, 443" } else { "80" }.into()),
+            // The TLS join fills the expiry once the secrets have loaded.
+            if has_tls {
+                KindCell::Text("yes".into())
+            } else {
+                KindCell::Absent
+            },
             KindCell::age(ingress.created_at),
         ],
         sections,
@@ -176,6 +168,81 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
         related_pods: None,
         labels: chips(&ingress.labels),
         object: KindObject::Ingress(ingress.clone()),
+    }
+}
+
+/// What the TLS section can say about the secrets an Ingress names.
+pub(crate) enum TlsSecrets<'a> {
+    Loading,
+    /// The access report denies `list secrets`.
+    Denied,
+    /// The list failed, or its watch has not started.
+    Unavailable,
+    Ready(&'a [SecretSummary]),
+}
+
+/// The TLS section of an Ingress: per entry its hosts and secret, and when the secret is known
+/// the leaf's subject, issuer, and expiry. Built at paint time from the TLS secrets companion.
+pub(crate) fn ingress_tls_rows(ingress: &IngressSummary, secrets: &TlsSecrets) -> Vec<DetailRow> {
+    let mut rows = Vec::new();
+    for tls in &ingress.tls {
+        let hosts = if tls.hosts.is_empty() {
+            vec!["*".to_owned()]
+        } else {
+            tls.hosts.clone()
+        };
+        rows.push(DetailRow::Chips(chips(&hosts)));
+        let name = tls.secret_name.as_deref().filter(|name| !name.is_empty());
+        let Some(name) = name else {
+            rows.push(DetailRow::field(
+                "Secret",
+                KindCell::Text("default certificate".into()),
+            ));
+            continue;
+        };
+        rows.push(secret_link(&ingress.namespace, name));
+        rows.extend(match secrets {
+            TlsSecrets::Loading => vec![DetailRow::Note("Loading…".into())],
+            TlsSecrets::Denied => vec![DetailRow::Note("Not permitted: list secrets".into())],
+            TlsSecrets::Unavailable => {
+                vec![DetailRow::Note("TLS secrets are unavailable".into())]
+            }
+            TlsSecrets::Ready(secrets) => match find_secret(secrets, &ingress.namespace, name) {
+                Some(secret) => certificate_summary_rows(&secret.details),
+                None => vec![DetailRow::Note(
+                    format!(
+                        "No TLS secret {name} in {} (missing, or not of type kubernetes.io/tls).",
+                        ingress.namespace
+                    )
+                    .into(),
+                )],
+            },
+        });
+    }
+    rows
+}
+
+/// The secret by (namespace, name): a linear scan, because this runs once per paint over a few
+/// entries and an index would cost more to build than to search.
+pub(crate) fn find_secret<'a>(
+    secrets: &'a [SecretSummary],
+    namespace: &str,
+    name: &str,
+) -> Option<&'a SecretSummary> {
+    secrets
+        .iter()
+        .find(|secret| secret.namespace == namespace && secret.name == name)
+}
+
+/// A link to the Secret's row, or its name as text when the kind has no screen.
+fn secret_link(namespace: &str, name: &str) -> DetailRow {
+    match ResourceKey::of_object("Secret", Some(namespace), name) {
+        Some(target) => DetailRow::Link {
+            label: "Secret".into(),
+            text: name.to_owned().into(),
+            target,
+        },
+        None => DetailRow::field("Secret", KindCell::Mono(name.to_owned().into())),
     }
 }
 

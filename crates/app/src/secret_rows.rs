@@ -2,7 +2,7 @@
 //! and never a value; the drawer's Data, Certificate, and Used by sections are `Live` placeholders
 //! that read the summary and the live lists at paint time (`live_sections.rs`).
 
-use cluster::{CertificateIssue, SecretDetails, SecretKey, SecretSummary};
+use cluster::{CertificateInfo, CertificateIssue, SecretDetails, SecretKey, SecretSummary};
 
 use crate::certificate_expiry::{date_text, date_time_text, intermediate_expires_first};
 use crate::config_map_rows::format_bytes;
@@ -183,21 +183,48 @@ pub(crate) fn certificate_rows(details: &SecretDetails) -> Vec<DetailRow> {
             not_after: leaf.not_after,
         },
     ));
-    if let Some(earliest) = intermediate_expires_first(chain) {
-        rows.push(DetailRow::field(
-            "Intermediate",
-            KindCell::Toned(StatusLabel {
-                text: format!("expires {}, before the leaf", date_text(earliest)).into(),
-                tone: StatusTone::Warn,
-            }),
-        ));
-    }
+    rows.extend(intermediate_row(chain));
     if chain.len() > 1 {
         rows.push(DetailRow::field(
             "Chain",
             KindCell::Text(format!("{} certificates", chain.len()).into()),
         ));
     }
+    rows
+}
+
+/// The Intermediate warning, only when a CA of the chain expires before the leaf.
+fn intermediate_row(chain: &[CertificateInfo]) -> Option<DetailRow> {
+    let earliest = intermediate_expires_first(chain)?;
+    Some(DetailRow::field(
+        "Intermediate",
+        KindCell::Toned(StatusLabel {
+            text: format!("expires {}, before the leaf", date_text(earliest)).into(),
+            tone: StatusTone::Warn,
+        }),
+    ))
+}
+
+/// The leaf facts an Ingress shows for a secret it names: Subject, Issuer, Not after, and the
+/// Intermediate warning. Notes for a secret without a usable certificate.
+pub(crate) fn certificate_summary_rows(details: &SecretDetails) -> Vec<DetailRow> {
+    let SecretDetails::Certificate { chain } = details else {
+        return certificate_rows(details);
+    };
+    let Some(leaf) = chain.first() else {
+        return Vec::new();
+    };
+    let mut rows = vec![
+        DetailRow::field("Subject", KindCell::Mono(leaf.subject.clone().into())),
+        DetailRow::field("Issuer", KindCell::Mono(leaf.issuer.clone().into())),
+        DetailRow::field(
+            "Not after",
+            KindCell::Expiry {
+                not_after: leaf.not_after,
+            },
+        ),
+    ];
+    rows.extend(intermediate_row(chain));
     rows
 }
 

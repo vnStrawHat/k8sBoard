@@ -7,7 +7,7 @@
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
 | O1 | Header: cluster, version, region; "Last 15 min ▾"; Export report | Missing | 0021 (export: decision C9) |
-| O2 | Needs attention: rule engine (pod and container states, Warning events, node conditions, cert expiry, PDB blocks, stuck namespace), plain-language cause, one primary action per row | Missing | 0020 (engine), 0021 (panel) |
+| O2 | Needs attention: rule engine (pod and container states, Warning events, node conditions, cert expiry (data source: 0016 `watch_tls_secrets`), PDB blocks, stuck namespace), plain-language cause, one primary action per row | Missing | 0020 (engine), 0021 (panel) |
 | O3 | Capacity: three-layer bars (used, requested, allocatable) for CPU, Memory, Pods, Volumes | Missing | 0021 (needs 0010; Volumes data ready from 0011) |
 | O4 | Node heatmap, NotReady outlined, click opens Nodes with the node selected | Missing | 0021 |
 | O5 | Recent changes timeline (revisions, managedFields, events), click opens a diff | Missing | 0021 (diff view: 0031) |

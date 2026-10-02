@@ -1948,3 +1948,110 @@ fn tls_secrets_are_never_unused() {
     let rows = joined_secrets(&secrets, Some(Vec::new()), Some(Vec::new()));
     assert_eq!(rows[0].cells[SECRET_USED_BY], KindCell::Absent);
 }
+
+// ---- Ingress TLS ----
+
+fn tls_secret_with(name: &str, details: SecretDetails) -> cluster::SecretSummary {
+    let mut secret = secret_of("kubernetes.io/tls", name);
+    secret.details = details;
+    secret
+}
+
+fn leaf_expiring(not_after_second: i64) -> SecretDetails {
+    SecretDetails::Certificate {
+        chain: vec![cluster::CertificateInfo {
+            subject: "CN=shop".to_owned(),
+            issuer: "CN=ca".to_owned(),
+            alt_names: Vec::new(),
+            not_before: jiff::Timestamp::from_second(0).expect("timestamp"),
+            not_after: jiff::Timestamp::from_second(not_after_second).expect("timestamp"),
+        }],
+    }
+}
+
+/// The TLS cell of one ingress after a join; `secrets` is `None` while the companion is absent.
+fn tls_cell_of(ingress: &IngressSummary, secrets: Option<Vec<cluster::SecretSummary>>) -> KindCell {
+    let mut rows = vec![crate::network_rows::ingress_row(ingress)];
+    let pods = ready_list(Vec::new());
+    let companion = secrets.map(|secrets| CompanionLists::TlsSecrets(ready_list(secrets)));
+    let inputs = JoinInputs {
+        pods: &pods,
+        companion: companion.as_ref(),
+        kubelet: None,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(ResourceKind::Ingresses, &mut rows, &inputs);
+    rows.remove(0).cells.remove(INGRESS_TLS)
+}
+
+#[test]
+fn ingress_tls_column_is_named_tls() {
+    let columns = ResourceKind::Ingresses.columns();
+    assert_eq!(
+        columns.get(INGRESS_TLS).map(|column| column.name),
+        Some("TLS")
+    );
+}
+
+#[test]
+fn ingress_tls_earliest_leaf_expiry() {
+    let ingress = ingress_using("shop", &[Some("late"), Some("early"), Some("early")]);
+    let mut elsewhere = tls_secret_with("early", leaf_expiring(100));
+    elsewhere.namespace = "elsewhere".to_owned();
+    let secrets = vec![
+        tls_secret_with("late", leaf_expiring(900)),
+        tls_secret_with("early", leaf_expiring(500)),
+        // A secret of the same name in another namespace is not the one named.
+        elsewhere,
+    ];
+    assert_eq!(
+        tls_cell_of(&ingress, Some(secrets)),
+        KindCell::Expiry {
+            not_after: jiff::Timestamp::from_second(500).expect("timestamp")
+        }
+    );
+}
+
+#[test]
+fn ingress_tls_missing_secret() {
+    let ingress = ingress_using("shop", &[Some("gone"), Some("present")]);
+    let secrets = vec![tls_secret_with("present", leaf_expiring(500))];
+    assert_eq!(
+        tls_cell_of(&ingress, Some(secrets)),
+        KindCell::Toned(toned("no TLS secret", StatusTone::Warn))
+    );
+}
+
+#[test]
+fn ingress_tls_not_parsed() {
+    let ingress = ingress_using("shop", &[Some("broken")]);
+    let secrets = vec![tls_secret_with(
+        "broken",
+        SecretDetails::NoCertificate(cluster::CertificateIssue::Unparsed),
+    )];
+    assert_eq!(
+        tls_cell_of(&ingress, Some(secrets)),
+        KindCell::Toned(toned("not parsed", StatusTone::Warn))
+    );
+}
+
+#[test]
+fn ingress_tls_default_cert() {
+    let ingress = ingress_using("shop", &[None]);
+    assert_eq!(
+        tls_cell_of(&ingress, Some(Vec::new())),
+        KindCell::Text("default cert".into())
+    );
+}
+
+#[test]
+fn ingress_tls_unjoined_without_companion() {
+    let ingress = ingress_using("shop", &[Some("shop-tls")]);
+    assert_eq!(tls_cell_of(&ingress, None), KindCell::Text("yes".into()));
+}
+
+#[test]
+fn ingress_without_tls_keeps_an_absent_cell() {
+    let ingress = ingress_using("shop", &[]);
+    assert_eq!(tls_cell_of(&ingress, Some(Vec::new())), KindCell::Absent);
+}

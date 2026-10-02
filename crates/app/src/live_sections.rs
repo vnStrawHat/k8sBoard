@@ -41,6 +41,7 @@ use crate::kind_join::{
 };
 use crate::kind_join::{UsageSample, claim_sample, is_shared_filesystem};
 use crate::kind_row::{DetailRow, KindObject, KindRow, LiveContent, owns_pod, percent};
+use crate::network_rows::{TlsSecrets, ingress_tls_rows};
 use crate::object_events::event_subject;
 use crate::policy_rows::{fullest_item, quota_text};
 use crate::related_objects::{RelatedSubject, related_subject};
@@ -87,6 +88,9 @@ pub(crate) fn live_rows(
         }
         (LiveContent::UsedBy, KindObject::Secret(secret)) => secret_used_by_rows(secret, live, cx),
         (LiveContent::SecretData, KindObject::Secret(secret)) => masked_rows(secret, cx),
+        (LiveContent::IngressTls, KindObject::Ingress(ingress)) => {
+            ingress_tls_section(ingress, kind, row, live, now, cx)
+        }
         (LiveContent::Certificate, KindObject::Secret(secret)) => live_detail_rows(
             &certificate_rows(&secret.details),
             CERTIFICATE_ID_BASE,
@@ -916,6 +920,8 @@ fn used_by_element(ix: usize, used_by: &UsedBy, cx: &Context<AppShell>) -> AnyEl
 
 /// Element ids of the Certificate section's rows start here, clear of the drawer's own.
 const CERTIFICATE_ID_BASE: usize = 10_000;
+/// The TLS section of an Ingress; its element ids start here.
+const INGRESS_TLS_ID_BASE: usize = 20_000;
 const UNUSED_NOTE: &str = "No pod or ingress in this namespace uses it. Workloads with no running pod, CronJob templates, Gateway API and Istio references, and readers through the API are not checked.";
 /// The first note when the ingresses could not be checked.
 const UNUSED_NOTE_PODS_ONLY: &str = "No pod in this namespace uses it. Workloads with no running pod, CronJob templates, Gateway API and Istio references, and readers through the API are not checked.";
@@ -1032,6 +1038,42 @@ fn secret_used_by_rows(
         .map(|(ix, used_by)| used_by_element(ix, used_by, cx))
         .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
         .collect()
+}
+
+/// The TLS section of an Ingress: its entries, and what the TLS secrets companion says about the
+/// secrets they name.
+fn ingress_tls_section(
+    ingress: &IngressSummary,
+    kind: ResourceKind,
+    row: &KindRow,
+    live: &LiveCluster,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let list = live.companion().and_then(CompanionLists::tls_secrets);
+    let secrets = list.and_then(LiveList::ready_items);
+    let state = match (secrets, list) {
+        (Some(secrets), _) => TlsSecrets::Ready(secrets),
+        (None, Some(list)) if list.is_loading() => TlsSecrets::Loading,
+        (None, _)
+            if matches!(
+                companion_plan(ResourceKind::Ingresses, &live.access),
+                CompanionPlan::Denied(_)
+            ) =>
+        {
+            TlsSecrets::Denied
+        }
+        (None, Some(_)) => TlsSecrets::Unavailable,
+        // Not started yet: the explorer starts it with the screen.
+        (None, None) => TlsSecrets::Loading,
+    };
+    let rows = ingress_tls_rows(ingress, &state);
+    live_detail_rows(
+        &rows,
+        INGRESS_TLS_ID_BASE,
+        &DrawerPaint::new(kind, row, live, now),
+        cx,
+    )
 }
 
 // ---- Selected pods ----

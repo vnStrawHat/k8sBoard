@@ -928,3 +928,52 @@ fn open_watch_count_with_secret_companion() {
         assert!(count <= 3 * namespaces + 4);
     }
 }
+
+fn denial_of_secrets(decision: AccessDecision) -> AccessState {
+    AccessState::Known(AccessReport {
+        reviews: vec![AccessReview {
+            check: AccessCheck::ListSecrets,
+            decision,
+        }],
+    })
+}
+
+#[test]
+fn ingresses_start_the_tls_secrets_companion_unless_denied() {
+    assert_eq!(
+        companion_plan(
+            ResourceKind::Ingresses,
+            &denial_of_secrets(AccessDecision::Allowed)
+        ),
+        CompanionPlan::Start(CompanionKind::TlsSecrets)
+    );
+    assert_eq!(
+        companion_plan(
+            ResourceKind::Ingresses,
+            &denial_of_secrets(AccessDecision::Denied { reason: None })
+        ),
+        CompanionPlan::Denied(AccessCheck::ListSecrets)
+    );
+}
+
+#[test]
+fn tls_secrets_companion_applies_and_counts_watches() {
+    let mut lists = CompanionLists::loading_for(CompanionKind::TlsSecrets);
+    assert!(matches!(&lists, CompanionLists::TlsSecrets(list) if list.is_loading()));
+    lists.apply(CompanionUpdate::TlsSecrets(WatchUpdate::Snapshot(
+        Vec::new(),
+    )));
+    assert_eq!(lists.tls_secrets().and_then(LiveList::ready_count), Some(0));
+    // The Ingresses screen: one TLS secret watch per namespace, within 3N + 4.
+    for namespaces in 1..=5 {
+        let explorer = explorer_watches(ResourceKind::Ingresses, namespaces);
+        let count = open_watch_count(watches(
+            namespaces,
+            explorer,
+            lists.watches(namespaces),
+            true,
+            true,
+        ));
+        assert!(count <= 3 * namespaces + 4);
+    }
+}

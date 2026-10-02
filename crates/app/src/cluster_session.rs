@@ -8,7 +8,7 @@ use cluster::{
     ContextSummary, EndpointSliceSummary, EventFilter, EventSummary, IngressSummary,
     InvolvedObject, JobSummary, Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope,
     NamespaceSummary, NodeSummary, PersistentVolumeSummary, PodSummary, ReplicaSetSummary,
-    ResourceQuotaSummary, ServerVersion, WatchUpdate,
+    ResourceQuotaSummary, SecretSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
@@ -145,6 +145,8 @@ pub(crate) enum CompanionLists {
     PersistentVolumes(LiveList<PersistentVolumeSummary>),
     /// The Ingresses of the Secrets screen: the TLS users of a secret.
     Ingresses(LiveList<IngressSummary>),
+    /// The TLS secrets of the Ingresses screen: the certificates its TLS column reads.
+    TlsSecrets(LiveList<SecretSummary>),
     /// `cluster_role_bindings` is `None` for a kind that does not need it (Roles). The companion
     /// only starts when the access report allows every list its kind needs.
     Bindings {
@@ -158,6 +160,7 @@ enum CompanionUpdate {
     EndpointSlices(WatchUpdate<EndpointSliceSummary>),
     PersistentVolumes(WatchUpdate<PersistentVolumeSummary>),
     Ingresses(WatchUpdate<IngressSummary>),
+    TlsSecrets(WatchUpdate<SecretSummary>),
     RoleBindings(WatchUpdate<BindingSummary>),
     ClusterRoleBindings(WatchUpdate<BindingSummary>),
 }
@@ -168,6 +171,7 @@ pub(crate) enum CompanionKind {
     EndpointSlices,
     PersistentVolumes,
     Ingresses,
+    TlsSecrets,
     Bindings { with_cluster_role_bindings: bool },
 }
 
@@ -195,6 +199,7 @@ pub(crate) fn companion_plan(kind: ResourceKind, access: &AccessState) -> Compan
             AccessCheck::ListPersistentVolumes,
         ),
         ResourceKind::Secrets => (CompanionKind::Ingresses, AccessCheck::ListIngresses),
+        ResourceKind::Ingresses => (CompanionKind::TlsSecrets, AccessCheck::ListSecrets),
         _ => return CompanionPlan::None,
     };
     match access {
@@ -248,6 +253,7 @@ impl CompanionLists {
             CompanionKind::EndpointSlices => Self::EndpointSlices(LiveList::Loading),
             CompanionKind::PersistentVolumes => Self::PersistentVolumes(LiveList::Loading),
             CompanionKind::Ingresses => Self::Ingresses(LiveList::Loading),
+            CompanionKind::TlsSecrets => Self::TlsSecrets(LiveList::Loading),
             CompanionKind::Bindings {
                 with_cluster_role_bindings,
             } => Self::Bindings {
@@ -267,6 +273,7 @@ impl CompanionLists {
                 list.apply(update);
             }
             (Self::Ingresses(list), CompanionUpdate::Ingresses(update)) => list.apply(update),
+            (Self::TlsSecrets(list), CompanionUpdate::TlsSecrets(update)) => list.apply(update),
             (Self::Bindings { role_bindings, .. }, CompanionUpdate::RoleBindings(update)) => {
                 role_bindings.apply(update);
             }
@@ -287,6 +294,7 @@ impl CompanionLists {
             Self::EndpointSlices(list) => list.mark_stopped(),
             Self::PersistentVolumes(list) => list.mark_stopped(),
             Self::Ingresses(list) => list.mark_stopped(),
+            Self::TlsSecrets(list) => list.mark_stopped(),
             Self::Bindings {
                 role_bindings,
                 cluster_role_bindings,
@@ -303,7 +311,10 @@ impl CompanionLists {
     pub(crate) fn endpoint_slices(&self) -> Option<&LiveList<EndpointSliceSummary>> {
         match self {
             Self::EndpointSlices(list) => Some(list),
-            Self::PersistentVolumes(_) | Self::Ingresses(_) | Self::Bindings { .. } => None,
+            Self::PersistentVolumes(_)
+            | Self::Ingresses(_)
+            | Self::TlsSecrets(_)
+            | Self::Bindings { .. } => None,
         }
     }
 
@@ -311,7 +322,10 @@ impl CompanionLists {
     pub(crate) fn persistent_volumes(&self) -> Option<&LiveList<PersistentVolumeSummary>> {
         match self {
             Self::PersistentVolumes(list) => Some(list),
-            Self::EndpointSlices(_) | Self::Ingresses(_) | Self::Bindings { .. } => None,
+            Self::EndpointSlices(_)
+            | Self::Ingresses(_)
+            | Self::TlsSecrets(_)
+            | Self::Bindings { .. } => None,
         }
     }
 
@@ -319,7 +333,21 @@ impl CompanionLists {
     pub(crate) fn ingresses(&self) -> Option<&LiveList<IngressSummary>> {
         match self {
             Self::Ingresses(list) => Some(list),
-            Self::EndpointSlices(_) | Self::PersistentVolumes(_) | Self::Bindings { .. } => None,
+            Self::EndpointSlices(_)
+            | Self::PersistentVolumes(_)
+            | Self::TlsSecrets(_)
+            | Self::Bindings { .. } => None,
+        }
+    }
+
+    /// The TLS secrets, when this companion lists them.
+    pub(crate) fn tls_secrets(&self) -> Option<&LiveList<SecretSummary>> {
+        match self {
+            Self::TlsSecrets(list) => Some(list),
+            Self::EndpointSlices(_)
+            | Self::PersistentVolumes(_)
+            | Self::Ingresses(_)
+            | Self::Bindings { .. } => None,
         }
     }
 
@@ -330,6 +358,7 @@ impl CompanionLists {
             Self::EndpointSlices(list) => list.is_loading(),
             Self::PersistentVolumes(list) => list.is_loading(),
             Self::Ingresses(list) => list.is_loading(),
+            Self::TlsSecrets(list) => list.is_loading(),
             Self::Bindings {
                 role_bindings,
                 cluster_role_bindings,
@@ -348,7 +377,7 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(_) => namespaces,
             Self::PersistentVolumes(_) => 1,
-            Self::Ingresses(_) => namespaces,
+            Self::Ingresses(_) | Self::TlsSecrets(_) => namespaces,
             Self::Bindings {
                 cluster_role_bindings,
                 ..
@@ -1624,6 +1653,10 @@ impl Companion {
             CompanionKind::Ingresses => connection
                 .watch_ingresses(scope)
                 .map(CompanionUpdate::Ingresses)
+                .boxed(),
+            CompanionKind::TlsSecrets => connection
+                .watch_tls_secrets(scope)
+                .map(CompanionUpdate::TlsSecrets)
                 .boxed(),
             CompanionKind::Bindings {
                 with_cluster_role_bindings,

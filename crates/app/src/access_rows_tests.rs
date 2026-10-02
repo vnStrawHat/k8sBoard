@@ -453,8 +453,17 @@ fn binding_service_account_subject_is_a_link() {
     assert!(matches!(subjects.rows[1], DetailRow::Stacked { .. }));
 }
 
+/// The link row of a secret in the test account's namespace.
+fn secret_link_row(name: &str, way: &str) -> DetailRow {
+    DetailRow::Link {
+        label: way.to_owned().into(),
+        text: name.to_owned().into(),
+        target: ResourceKey::of_object("Secret", Some("shop"), name).expect("a Secrets key"),
+    }
+}
+
 #[test]
-fn service_account_secrets_section_names_only() {
+fn service_account_secret_names_link_to_secrets() {
     let mut with_secrets = account("api");
     with_secrets.secrets = vec!["api-token-x1".to_owned()];
     with_secrets.image_pull_secrets = vec!["registry".to_owned()];
@@ -464,8 +473,8 @@ fn service_account_secrets_section_names_only() {
     assert_eq!(
         secrets.rows,
         [
-            DetailRow::field("api-token-x1", KindCell::Text("token reference".into())),
-            DetailRow::field("registry", KindCell::Text("image pull secret".into())),
+            secret_link_row("api-token-x1", "Token reference"),
+            secret_link_row("registry", "Image pull secret"),
             DetailRow::field("Automount token", KindCell::Text("No".into())),
             DetailRow::Note("Secret contents are never read".into()),
         ]

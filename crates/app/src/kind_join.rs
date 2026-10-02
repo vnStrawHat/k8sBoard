@@ -49,6 +49,8 @@ pub(crate) const ACCOUNT_BOUND_ROLES: usize = 0;
 pub(crate) const ACCOUNT_USED_BY: usize = 1;
 /// The index of the Used by cell in a Secrets row.
 pub(crate) const SECRET_USED_BY: usize = 2;
+/// The index of the TLS cell in an Ingresses row.
+pub(crate) const INGRESS_TLS: usize = 3;
 
 const EXTERNAL_NAME: &str = "ExternalName";
 /// Slices of this address type name hosts, not pods; counting them would double a dual-stack
@@ -79,6 +81,7 @@ pub(crate) fn join_rows(kind: ResourceKind, rows: &mut [KindRow], inputs: &JoinI
         ResourceKind::ClusterRoles => join_roles(rows, inputs, CLUSTER_ROLE_BINDINGS),
         ResourceKind::ServiceAccounts => join_service_accounts(rows, inputs),
         ResourceKind::Secrets => join_secrets(rows, inputs),
+        ResourceKind::Ingresses => join_ingresses(rows, inputs),
         _ => {}
     }
 }
@@ -706,6 +709,93 @@ fn secret_used_by_cell(
         });
     }
     used_by_cell(list.iter())
+}
+
+// ---- Ingresses ----
+
+/// The TLS cell of an Ingresses row. Rows without TLS keep their builder cell.
+fn join_ingresses(rows: &mut [KindRow], inputs: &JoinInputs) {
+    let secrets = inputs
+        .companion
+        .and_then(CompanionLists::tls_secrets)
+        .and_then(LiveList::ready_items);
+    let index = secrets.map(tls_secret_index);
+    for row in rows {
+        let KindObject::Ingress(ingress) = &row.object else {
+            continue;
+        };
+        if ingress.tls.is_empty() {
+            continue;
+        }
+        if let Some(slot) = row.cells.get_mut(INGRESS_TLS) {
+            *slot = ingress_tls_cell(ingress, index.as_ref());
+        }
+    }
+}
+
+/// The TLS secrets by `(namespace, name)`, once per join.
+pub(crate) type TlsSecretIndex<'a> = HashMap<(&'a str, &'a str), &'a SecretSummary>;
+
+pub(crate) fn tls_secret_index(secrets: &[SecretSummary]) -> TlsSecretIndex<'_> {
+    secrets
+        .iter()
+        .map(|secret| ((secret.namespace.as_str(), secret.name.as_str()), secret))
+        .collect()
+}
+
+/// The distinct secret names `ingress` references; entries without a name are ignored.
+pub(crate) fn tls_secret_names(ingress: &IngressSummary) -> BTreeSet<&str> {
+    ingress
+        .tls
+        .iter()
+        .filter_map(|tls| tls.secret_name.as_deref())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// The first matching case wins; `index` is `None` while the companion is not ready or denied.
+fn ingress_tls_cell(ingress: &IngressSummary, index: Option<&TlsSecretIndex>) -> KindCell {
+    let Some(index) = index else {
+        return KindCell::Text("yes".into());
+    };
+    let names = tls_secret_names(ingress);
+    if names.is_empty() {
+        return KindCell::Text("default cert".into());
+    }
+    let warn = |text: &str| {
+        KindCell::Toned(StatusLabel {
+            text: text.to_owned().into(),
+            tone: StatusTone::Warn,
+        })
+    };
+    let mut earliest: Option<jiff::Timestamp> = None;
+    let mut is_missing = false;
+    let mut is_unparsed = false;
+    for name in names {
+        let Some(secret) = index.get(&(ingress.namespace.as_str(), name)) else {
+            is_missing = true;
+            continue;
+        };
+        match &secret.details {
+            SecretDetails::Certificate { chain } if !chain.is_empty() => {
+                let not_after = chain[0].not_after;
+                earliest = Some(earliest.map_or(not_after, |known| known.min(not_after)));
+            }
+            _ => is_unparsed = true,
+        }
+    }
+    if is_missing {
+        return warn("no TLS secret");
+    }
+    if is_unparsed {
+        return warn("not parsed");
+    }
+    // `names` is not empty, so with nothing missing or unparsed a leaf was seen; the fallback only
+    // keeps the function total.
+    earliest.map_or_else(
+        || KindCell::Text("yes".into()),
+        |not_after| KindCell::Expiry { not_after },
+    )
 }
 
 // ---- Namespaces ----

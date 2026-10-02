@@ -31,7 +31,7 @@
 | Jobs | Status 120 · Completions 110 · Duration 90 r · Age | follows kubectl 1.31+ order (Status first) rather than W7 (Completions, Duration, Status) |
 | CronJobs | Schedule 140 · Suspend 80 · Active 70 r · Last schedule 120 r · Age | kubectl's Last schedule instead of Last run and Next run |
 | Services | Type 130 · Cluster IP 140 · External IP 200 · Ports 180 · Age | kubectl columns; no Endpoints (needs EndpointSlices) |
-| Ingresses | Class 100 · Hosts 260 · Address 180 · Ports 80 · Age | kubectl columns; no TLS expiry (needs the Secret) |
+| Ingresses | Class 100 · Hosts 260 · Address 180 · TLS 140 · Age | kubectl columns; 0016 replaced Ports with a TLS expiry column (needs the TLS secrets) |
 | ConfigMaps | Data 70 r · Age | kubectl `DATA`; no Used by |
 
 ## Cells
@@ -46,7 +46,7 @@
 | Jobs | Status toned (below). Completions are `{succeeded}/{completions}`. When `completions` is `None`: `{succeeded}/1 of {parallelism}` if parallelism > 1, else `{succeeded}/1` (kubectl). Duration is `KindCell::Duration` |
 | CronJobs | Schedule `Mono`; Suspend `Yes` toned `Done`, or `No`; Active = `active_jobs.len()`; Last schedule = `Age { at: last_schedule_at, tone: last_run_tone }` |
 | Services | Type as-is. Cluster IP: `None` (muted `Text`) when headless, else `cluster_ips` joined `,`, or `Absent`. External IP: `<pending>` (`Toned` Warn) for a LoadBalancer with no address, else the addresses joined `,`, or `Absent`. Ports: `Display` joined `,` |
-| Ingresses | Class or `Absent`. Hosts joined `,`, or `*`. Address joined `,`, or `Absent`. Ports `80`, or `80, 443` when `tls` is non-empty |
+| Ingresses | Class or `Absent`. Hosts joined `,`, or `*`. Address joined `,`, or `Absent`. TLS `Absent` without `tls`, else the expiry from the TLS secrets companion (0016) |
 | ConfigMaps | Data = `keys.len()` |
 
 ## Status label (drawer subtitle, `KindRow.status`)

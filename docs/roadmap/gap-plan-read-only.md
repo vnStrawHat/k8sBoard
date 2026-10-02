@@ -38,7 +38,7 @@ PVC status, capacity, Used % (from 0011, "—" without it), access, class, mount
 ServiceAccounts, Roles, ClusterRoles, RoleBindings, ClusterRoleBindings: rules table, aggregation flag, two-way binding links, bound roles computed locally from bindings, cloud identity from three allowlisted annotation keys, cluster-admin warnings, Hide system. The computed "can do" list moves to 0023 (0015 decision 12).
 - Deps: 0012 (used-by). Risk: Low (data), Med (rule aggregation correctness).
 
-### 0016 — Secrets and TLS expiry
+### 0016 — Secrets and TLS expiry (done)
 Secrets kind with values never kept in summaries (key names, sizes, type), drawer values fetched on demand, masked, Reveal for 30 s, Copy without reveal, Used by, unused flag; "Reveal all" per C1. TLS Secrets parsed for not-after: Ingress TLS column and CERTIFICATE box, Overview cert rule.
 - Deps: C1 (blocking), 0012. Risk: High (real credentials; UAT allows `list secrets`). New dep: x509 parser.
 

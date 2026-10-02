@@ -85,6 +85,7 @@ pub(crate) enum LiveContent {
     BoundRoles,
     ServiceAccountPods,
     /// The masked keys of a Secret, and the Reveal and Copy controls (`secret_values.rs`).
+    IngressTls,
     SecretData,
     /// The certificate of a TLS Secret.
     Certificate,

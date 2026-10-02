@@ -77,7 +77,7 @@ Index the companion by `(namespace, name)` once per call. Per ingress with TLS, 
 
 ### ServiceAccount links (0015, step 4)
 
-`access_rows.rs` `service_account_row`: the Secrets section `Field { name, "token reference" | "image pull secret" }` rows become `Link`s to the Secrets row (`ResourceKey` of `(ns, name)`) with the same texts; the note "Secret contents are never read" stays. Test `service_account_secret_names_link_to_secrets` (`access_rows_tests.rs`).
+`access_rows.rs` `service_account_row`: the Secrets section `Field { name, "token reference" | "image pull secret" }` rows become `Link { label: "Token reference" | "Image pull secret", text: name }` to the Secrets row (`ResourceKey` of `(ns, name)`), so the tooltip reads "Open {name}"; the note "Secret contents are never read" stays. Test `service_account_secret_names_link_to_secrets` (`access_rows_tests.rs`).
 
 ## Contract for 0020/0021 (not built here)
 

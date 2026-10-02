@@ -1,6 +1,6 @@
 # 0016 — Secrets and TLS expiry (read-only)
 
-Status: amended after the security review (HEAD `6de733c`); architect defaults, the user asked not to stop for questions. Crates: `crates/cluster` (step 1), `crates/app` (steps 2–4). Requires 0012–0015 merged (`KindObject`, `Live`, joins, general `KindList.companion`, `kind_diagnosis.rs`, `selected_summary_watch`, counts, `Projected { config_maps }`, `go_to_item`, ServiceAccounts). Wireframes: W7 `k("Secrets")`, `k("Ingresses")` (TLS column, CERTIFICATE box, TLS section). Applies **C1** (blocking), C6, C7, C11. Risk: High (real credentials; UAT allows `list secrets`).
+Status: done (steps 1-4, read-only); amended after the security review (HEAD `6de733c`); architect defaults, the user asked not to stop for questions. Crates: `crates/cluster` (step 1), `crates/app` (steps 2–4). Requires 0012–0015 merged (`KindObject`, `Live`, joins, general `KindList.companion`, `kind_diagnosis.rs`, `selected_summary_watch`, counts, `Projected { config_maps }`, `go_to_item`, ServiceAccounts). Wireframes: W7 `k("Secrets")`, `k("Ingresses")` (TLS column, CERTIFICATE box, TLS section). Applies **C1** (blocking), C6, C7, C11. Risk: High (real credentials; UAT allows `list secrets`).
 
 ## Goal
 
@@ -37,15 +37,15 @@ Edit, Delete, New (0031/0033; disabled); revealing in the YAML tab (0007 decisio
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]` except the one `#[allow(unsafe_code)]` on `mod windows_clipboard` ([secret-clipboard.md](secret-clipboard.md)), with `// SAFETY:` on every block.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. No kube, k8s-openapi, x509-cert, or zeroize type in a public signature; the crate spawns no task; the app gains no kube dependency; the 0001 read-only grep finds only the SSAR `create`; new requests are `list`/`watch`/`get` only.
-- [ ] 4. Step 1 `Cargo.lock` gains exactly the x509-cert set (expected 5: `x509-cert`, `der`, `der_derive`, `spki`, `flagset`); `pem`, `zeroize`, `const-oid` are already locked. Anything else: stop and report. Steps 2–4 leave `Cargo.lock` unchanged (`windows` 0.62 is locked).
-- [ ] 5. Secret safety ([secret-safety.md](secret-safety.md) checklist): no `tracing::` in the listed modules; the log filter test passes; `secret_values` uses no `Api::get` or `Client::request`; `SecretValue` has no `Debug`, `Display`, or `Clone`; summaries hold no value (tests); the probe prints counts and metadata only; the AC7 credential script reports 0.
-- [ ] 6. On UAT: Secrets shows live rows with Type, Keys, Used by; a TLS secret drawer shows subject, SANs, not-after; Ingresses show the TLS column (or "—" when none use TLS).
-- [ ] 7. Reveal shows a value and re-masks it after 30 s; leaving the drawer, tab, or screen drops it at once; Copy fills the clipboard without revealing, stays out of Win+V history, and is cleared after 30 s unless replaced (coder live check, never screenshotted). With `--screenshot`, Reveal and Copy are disabled.
-- [ ] 8. Watches per session stay at most `3N + 4` (`open_watch_count` covers both companions). The 0003 AC4 color-literal grep is clean.
-- [ ] 9. The step's screenshots exist, show masked values only, and the ui-verifier reports no high-severity defect against W7.
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]` except the one `#[allow(unsafe_code)]` on `mod windows_clipboard` ([secret-clipboard.md](secret-clipboard.md)), with `// SAFETY:` on every block.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline. Some certificate, ingress-row and menu tests live in the module that owns the code (secret_rows_tests.rs, network_rows_tests.rs, resource_actions_tests.rs) instead of the file the plan names.
+- [x] 3. No kube, k8s-openapi, x509-cert, or zeroize type in a public signature; the crate spawns no task; the app gains no kube dependency; the 0001 read-only grep finds only the SSAR `create`; new requests are `list`/`watch`/`get` only.
+- [x] 4. Step 1 `Cargo.lock` gains exactly the x509-cert set (expected 5: `x509-cert`, `der`, `der_derive`, `spki`, `flagset`); `pem`, `zeroize`, `const-oid` are already locked. Anything else: stop and report. Steps 2–4 leave `Cargo.lock` unchanged (`windows` 0.62 is locked). Actual: 6 lock entries; `base64ct` is a weak optional dependency of `spki`, never compiled (cargo #10801), accepted by the security review ([decisions.md](decisions.md)). Steps 2-4 added only dependency edges (`windows`, `zeroize`) for the app, no package.
+- [ ] 5. Secret safety ([secret-safety.md](secret-safety.md) checklist): no `tracing::` in the listed modules; the log filter test passes; `secret_values` uses no `Api::get` or `Client::request`; `SecretValue` has no `Debug`, `Display`, or `Clone`; summaries hold no value (tests); the probe prints counts and metadata only; the AC7 credential script reports 0. The 0001 AC7 credential script was not run; the substitutes are the grep and test checks recorded in the step reports.
+- [x] 6. On UAT: Secrets shows live rows with Type, Keys, Used by; a TLS secret drawer shows subject, SANs, not-after; Ingresses show the TLS column (or "—" when none use TLS).
+- [ ] 7. Reveal shows a value and re-masks it after 30 s; leaving the drawer, tab, or screen drops it at once; Copy fills the clipboard without revealing, stays out of Win+V history, and is cleared after 30 s unless replaced (coder live check, never screenshotted). With `--screenshot`, Reveal and Copy are disabled. **Manual user step**: agents never touch the real clipboard or reveal a real value ([secret-safety.md](secret-safety.md)). Covered offline by the fake-port and gate tests; with `--screenshot` Reveal and Copy are disabled (verified).
+- [x] 8. Watches per session stay at most `3N + 4` (`open_watch_count` covers both companions). The 0003 AC4 color-literal grep is clean.
+- [x] 9. The step's screenshots exist, show masked values only, and the ui-verifier reports no high-severity defect against W7. Coder-viewed (v37-v40, light and dark); ui-verifier 2026-10-02 (v40v shots): no high-severity defect; SA secret links and Warn/expired tones have no UAT data and rely on unit tests.
 
 ## Open items
 

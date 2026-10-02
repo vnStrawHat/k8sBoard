@@ -7,10 +7,11 @@
 use cluster::{
     BindingSummary, BlockCause, BroadGroup, CertificateIssue, ContainerKind, ContainerState,
     DaemonSetSummary, DeploymentSummary, DisruptionState, HorizontalPodAutoscalerSummary,
-    JobStatus, JobSummary, NodeReadiness, NodeSummary, PersistentVolumeClaimSummary,
-    PersistentVolumeSummary, PodDisruptionBudgetSummary, PodStatus, PodSummary,
-    ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary, ServiceAccountSummary,
-    ServiceSummary, StatusReason, Subject, SubjectKind, Termination, WorkloadCondition,
+    IngressSummary, JobStatus, JobSummary, NodeReadiness, NodeSummary,
+    PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary, PodStatus,
+    PodSummary, ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary,
+    ServiceAccountSummary, ServiceSummary, StatusReason, Subject, SubjectKind, Termination,
+    WorkloadCondition,
 };
 use jiff::Timestamp;
 
@@ -19,8 +20,9 @@ use crate::access_bindings::{
 };
 use crate::age::format_age;
 use crate::certificate_expiry::{ExpiryState, date_text, expiry_state};
-use crate::kind_join::ServiceHealth;
+use crate::kind_join::{ServiceHealth, tls_secret_names};
 use crate::kind_row::KindObject;
+use crate::network_rows::find_secret;
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
 use crate::policy_rows::{
     fullest_item, is_above_target, is_at_max, is_scaling_disabled, metric_text, quota_text,
@@ -43,8 +45,8 @@ pub(crate) struct KindDiagnosis {
     /// Upper case, such as `1 OF 3 NOT READY`.
     pub(crate) title: String,
     pub(crate) text: String,
-    /// The pod the text is about, for the "Open pod" link.
-    pub(crate) pod: Option<ResourceKey>,
+    /// The object the text is about, for the "Open …" link: a pod, or the Secret of an Ingress.
+    pub(crate) link: Option<ResourceKey>,
 }
 
 pub(crate) struct DiagnosisInputs<'a> {
@@ -55,6 +57,8 @@ pub(crate) struct DiagnosisInputs<'a> {
     pub(crate) service: Option<ServiceHealth>,
     /// ClusterRoles: the bindings of a ready Bindings companion; `None` while it is not ready.
     pub(crate) bindings: Option<&'a BindingIndex<'a>>,
+    /// Ingresses: the TLS secrets of a ready companion; `None` while it is not ready or denied.
+    pub(crate) tls_secrets: Option<&'a [SecretSummary]>,
     pub(crate) now: Timestamp,
 }
 
@@ -78,11 +82,11 @@ pub(crate) fn kind_diagnosis(
         KindObject::Binding(binding) => binding_diagnosis(binding),
         KindObject::ServiceAccount(account) => service_account_diagnosis(account, inputs.bindings),
         KindObject::Secret(secret) => secret_diagnosis(secret, inputs.now),
+        KindObject::Ingress(ingress) => ingress_diagnosis(ingress, inputs),
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
         | KindObject::ReplicaSet(_)
-        | KindObject::Ingress(_)
         | KindObject::ConfigMap(_)
         | KindObject::NetworkPolicy(_) => None,
     }
@@ -166,7 +170,7 @@ fn pod_disruption_budget_diagnosis(budget: &PodDisruptionBudgetSummary) -> Optio
         tone: StatusTone::Bad,
         title: "BLOCKS DRAIN".to_owned(),
         text,
-        pod: None,
+        link: None,
     })
 }
 
@@ -215,7 +219,7 @@ fn horizontal_pod_autoscaler_diagnosis(
         tone: StatusTone::Bad,
         title: title.to_owned(),
         text: reason_and_message(condition).unwrap_or_else(|| "No detail was given.".to_owned()),
-        pod: None,
+        link: None,
     })
 }
 
@@ -239,7 +243,7 @@ fn at_max_diagnosis(hpa: &HorizontalPodAutoscalerSummary) -> Option<KindDiagnosi
         tone: StatusTone::Bad,
         title: "AT MAX REPLICAS".to_owned(),
         text,
-        pod: None,
+        link: None,
     })
 }
 
@@ -257,7 +261,7 @@ fn resource_quota_diagnosis(quota: &ResourceQuotaSummary) -> Option<KindDiagnosi
              creations.",
             item.resource
         ),
-        pod: None,
+        link: None,
     })
 }
 
@@ -276,7 +280,7 @@ fn claim_diagnosis(claim: &PersistentVolumeClaimSummary) -> Option<KindDiagnosis
         tone: StatusTone::Bad,
         title: "VOLUME LOST".to_owned(),
         text: format!("{gone} The data on it is gone or unreachable."),
-        pod: None,
+        link: None,
     })
 }
 
@@ -289,7 +293,7 @@ fn volume_diagnosis(volume: &PersistentVolumeSummary) -> Option<KindDiagnosis> {
             tone: StatusTone::Bad,
             title: "RECLAIM FAILED".to_owned(),
             text: reclaim_failure_text(volume),
-            pod: None,
+            link: None,
         }),
         _ => None,
     }
@@ -316,7 +320,7 @@ fn released_diagnosis(volume: &PersistentVolumeSummary) -> KindDiagnosis {
         tone: StatusTone::Warn,
         title: "RELEASED".to_owned(),
         text,
-        pod: None,
+        link: None,
     }
 }
 
@@ -355,7 +359,7 @@ fn role_diagnosis(role: &RoleSummary, bindings: Option<&BindingIndex>) -> Option
         tone: StatusTone::Warn,
         title: "VERY BROAD".to_owned(),
         text,
-        pod: None,
+        link: None,
     })
 }
 
@@ -410,7 +414,7 @@ fn service_account_diagnosis(
         tone: StatusTone::Warn,
         title: "CLUSTER ADMIN".to_owned(),
         text,
-        pod: None,
+        link: None,
     })
 }
 
@@ -453,7 +457,7 @@ fn binding_diagnosis(binding: &BindingSummary) -> Option<KindDiagnosis> {
             tone,
             title: "REVIEW".to_owned(),
             text: format!("Group {} gives {who} full access to {place}.", subject.name),
-            pod: None,
+            link: None,
         });
     }
     let accounts: Vec<String> = binding
@@ -478,7 +482,7 @@ fn binding_diagnosis(binding: &BindingSummary) -> Option<KindDiagnosis> {
         tone: StatusTone::Warn,
         title: "REVIEW".to_owned(),
         text,
-        pod: None,
+        link: None,
     })
 }
 
@@ -506,7 +510,7 @@ fn deployment_diagnosis(
             tone: StatusTone::Bad,
             title: "ROLLOUT STALLED".to_owned(),
             text,
-            pod: unhealthy.map(|(pod, _)| ResourceKey::of_pod(pod)),
+            link: unhealthy.map(|(pod, _)| ResourceKey::of_pod(pod)),
         });
     }
     if let Some(condition) = find_condition(&deployment.conditions, "ReplicaFailure")
@@ -517,7 +521,7 @@ fn deployment_diagnosis(
             title: "REPLICA FAILURE".to_owned(),
             text: reason_and_message(condition)
                 .unwrap_or_else(|| "The controller cannot create pods.".to_owned()),
-            pod: None,
+            link: None,
         });
     }
     if deployment.ready >= deployment.desired {
@@ -548,7 +552,7 @@ fn deployment_diagnosis(
             deployment.desired
         ),
         text,
-        pod: Some(ResourceKey::of_pod(pod)),
+        link: Some(ResourceKey::of_pod(pod)),
     })
 }
 
@@ -608,7 +612,7 @@ fn daemon_set_diagnosis(set: &DaemonSetSummary, inputs: &DiagnosisInputs) -> Opt
                 tone: StatusTone::Warn,
                 title: format!("{count} {} MISSING", plural(count, "NODE", "NODES")),
                 text,
-                pod: Some(ResourceKey::of_pod(pod)),
+                link: Some(ResourceKey::of_pod(pod)),
             });
         }
         // S2: a pod on a healthy node that has its own problem.
@@ -624,7 +628,7 @@ fn daemon_set_diagnosis(set: &DaemonSetSummary, inputs: &DiagnosisInputs) -> Opt
                 tone: StatusTone::Warn,
                 title: format!("{} OF {} NOT READY", set.desired - set.ready, set.desired),
                 text: format!("Pod {}{place}: {}", pod.name, diagnosis.text),
-                pod: Some(ResourceKey::of_pod(pod)),
+                link: Some(ResourceKey::of_pod(pod)),
             });
         }
     }
@@ -643,7 +647,7 @@ fn daemon_set_diagnosis(set: &DaemonSetSummary, inputs: &DiagnosisInputs) -> Opt
                 plural(set.desired, "node", "nodes"),
                 set.current
             ),
-            pod: None,
+            link: None,
         });
     }
     // S4
@@ -660,7 +664,7 @@ fn daemon_set_diagnosis(set: &DaemonSetSummary, inputs: &DiagnosisInputs) -> Opt
             tone: StatusTone::Warn,
             title: "MISSCHEDULED".to_owned(),
             text,
-            pod: None,
+            link: None,
         });
     }
     None
@@ -699,7 +703,7 @@ fn job_diagnosis(job: &JobSummary, inputs: &DiagnosisInputs) -> Option<KindDiagn
                     "Retrying; the job fails after {} failed attempts.",
                     limit.saturating_add(1)
                 ),
-                pod: None,
+                link: None,
             })
         }
         JobStatus::Running | JobStatus::Complete | JobStatus::Suspended => None,
@@ -733,7 +737,7 @@ fn failed_job_diagnosis(job: &JobSummary, inputs: &DiagnosisInputs) -> Option<Ki
                 tone: StatusTone::Bad,
                 title: "BACKOFF LIMIT REACHED".to_owned(),
                 text,
-                pod: last.map(|(pod, _)| ResourceKey::of_pod(pod)),
+                link: last.map(|(pod, _)| ResourceKey::of_pod(pod)),
             })
         }
         Some(JOB_DEADLINE_EXCEEDED) => Some(KindDiagnosis {
@@ -745,13 +749,13 @@ fn failed_job_diagnosis(job: &JobSummary, inputs: &DiagnosisInputs) -> Option<Ki
                 }
                 None => "The job ran longer than its active deadline.".to_owned(),
             },
-            pod: None,
+            link: None,
         }),
         _ => Some(KindDiagnosis {
             tone: StatusTone::Bad,
             title: "JOB FAILED".to_owned(),
             text: reason_and_message(condition).unwrap_or_else(|| "The job failed.".to_owned()),
-            pod: None,
+            link: None,
         }),
     }
 }
@@ -783,7 +787,7 @@ fn service_diagnosis(service: &ServiceSummary, inputs: &DiagnosisInputs) -> Opti
                 service.namespace,
                 service.selector.join(", ")
             ),
-            pod: None,
+            link: None,
         });
     }
     // V2: endpoints exist and none takes traffic. Like every rule that reads pods, it waits for
@@ -807,7 +811,7 @@ fn service_diagnosis(service: &ServiceSummary, inputs: &DiagnosisInputs) -> Opti
         tone: StatusTone::Bad,
         title: "NO READY ENDPOINTS".to_owned(),
         text,
-        pod: unhealthy.map(|(pod, _)| ResourceKey::of_pod(pod)),
+        link: unhealthy.map(|(pod, _)| ResourceKey::of_pod(pod)),
     })
 }
 
@@ -867,8 +871,53 @@ fn secret_diagnosis(secret: &SecretSummary, now: Timestamp) -> Option<KindDiagno
         tone,
         title: "CERTIFICATE".to_owned(),
         text,
-        pod: None,
+        link: None,
     })
+}
+
+/// CERTIFICATE of an Ingress: the worst of the TLS secrets it names. An expired certificate comes
+/// first, then a missing secret, then the rest (expiring, not yet valid, unusable), the earliest
+/// not-after first. The text is the Secret box text prefixed with the secret's name. It waits for
+/// the TLS secrets companion, and links to the Secret it is about.
+fn ingress_diagnosis(ingress: &IngressSummary, inputs: &DiagnosisInputs) -> Option<KindDiagnosis> {
+    let secrets = inputs.tls_secrets?;
+    let mut worst: Option<((u8, i64, &str), KindDiagnosis)> = None;
+    for name in tls_secret_names(ingress) {
+        let secret = find_secret(secrets, &ingress.namespace, name);
+        let (rank, tone, text) = match secret {
+            None => (
+                1,
+                StatusTone::Warn,
+                format!("No TLS secret {name} in {}.", ingress.namespace),
+            ),
+            Some(secret) => {
+                // A valid certificate says nothing; the other names still count.
+                let Some((tone, text)) = certificate_verdict(&secret.details, inputs.now) else {
+                    continue;
+                };
+                let rank = if tone == StatusTone::Bad { 0 } else { 2 };
+                (rank, tone, format!("{name}: {text}"))
+            }
+        };
+        let not_after = secret
+            .and_then(|secret| match &secret.details {
+                SecretDetails::Certificate { chain } => chain.first(),
+                _ => None,
+            })
+            .map_or(i64::MAX, |leaf| leaf.not_after.as_second());
+        let key = (rank, not_after, name);
+        if worst.as_ref().is_some_and(|(known, _)| *known <= key) {
+            continue;
+        }
+        let diagnosis = KindDiagnosis {
+            tone,
+            title: "CERTIFICATE".to_owned(),
+            text,
+            link: ResourceKey::of_object("Secret", Some(&ingress.namespace), name),
+        };
+        worst = Some((key, diagnosis));
+    }
+    worst.map(|(_, diagnosis)| diagnosis)
 }
 
 #[cfg(test)]

@@ -319,7 +319,7 @@ static INGRESSES: KindSpec = KindSpec {
         column("Class", 100., Align::Left),
         column("Hosts", 260., Align::Left),
         column("Address", 180., Align::Left),
-        column("Ports", 80., Align::Left),
+        column("TLS", 140., Align::Left),
         AGE_COLUMN,
     ],
     read_only_actions: &[],

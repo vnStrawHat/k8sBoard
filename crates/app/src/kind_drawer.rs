@@ -297,6 +297,10 @@ fn row_diagnosis(row: &KindRow, live: &LiveCluster, now: jiff::Timestamp) -> Opt
             nodes: live.nodes.items(),
             service,
             bindings: bindings.as_ref(),
+            tls_secrets: live
+                .companion()
+                .and_then(CompanionLists::tls_secrets)
+                .and_then(|list| list.ready_items()),
             now,
         },
     )
@@ -313,8 +317,13 @@ fn why_box(diagnosis: &KindDiagnosis, cx: &Context<AppShell>) -> AnyElement {
             Alert::warning("why-box", text)
         }
     };
-    let link = diagnosis.pod.clone().and_then(|key| match &key {
+    let link = diagnosis.link.clone().and_then(|key| match &key {
         ResourceKey::Pod { name, .. } => Some((format!("Open pod {name} →"), key.clone())),
+        ResourceKey::Kind {
+            kind: ResourceKind::Secrets,
+            name,
+            ..
+        } => Some((format!("Open secret {name} →"), key.clone())),
         ResourceKey::Node { .. } | ResourceKey::Kind { .. } => None,
     });
     v_flex()
@@ -322,7 +331,7 @@ fn why_box(diagnosis: &KindDiagnosis, cx: &Context<AppShell>) -> AnyElement {
         .child(alert.title(title))
         .children(link.map(|(label, key)| {
             div()
-                .id("why-open-pod")
+                .id("why-open-object")
                 .cursor_pointer()
                 .text_sm()
                 .text_color(cx.theme().link)

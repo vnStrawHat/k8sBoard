@@ -193,6 +193,7 @@ fn run(
             nodes,
             service: None,
             bindings: None,
+            tls_secrets: None,
             now: at(1_000),
         },
     )
@@ -221,7 +222,7 @@ fn deployment_stalled() {
     assert_eq!(bare.tone, StatusTone::Bad);
     assert_eq!(bare.title, "ROLLOUT STALLED");
     assert_eq!(bare.text, "No progress for 600s.");
-    assert_eq!(bare.pod, None);
+    assert_eq!(bare.link, None);
     let mut once = failed_job("BackoffLimitExceeded", None);
     once.failed = 1;
     let single = run(KindObject::Job(once), None, &[]).expect("a box");
@@ -233,7 +234,7 @@ fn deployment_stalled() {
         explained.text,
         "No progress for 600s. Pod api-2: Evicted: The node was low on resource: memory."
     );
-    assert_eq!(explained.pod, pod_key("api-2"));
+    assert_eq!(explained.link, pod_key("api-2"));
     // The condition alone is enough, so it fires while the pods load.
     assert!(run(object(), None, &[]).is_some());
 }
@@ -271,7 +272,7 @@ fn deployment_not_ready_names_pod() {
         partial.text,
         "Pod api-2: Evicted: The node was low on resource: memory."
     );
-    assert_eq!(partial.pod, pod_key("api-2"));
+    assert_eq!(partial.link, pod_key("api-2"));
     let none_ready =
         run(KindObject::Deployment(deployment(3, 0)), Some(&pods), &[]).expect("a box");
     assert_eq!(none_ready.tone, StatusTone::Bad);
@@ -335,7 +336,7 @@ fn daemon_set_node_missing() {
         diagnosis.text,
         "The pod on wk-03 is not ready because the node is NotReady."
     );
-    assert_eq!(diagnosis.pod, pod_key("agent-a"));
+    assert_eq!(diagnosis.link, pod_key("agent-a"));
 }
 
 #[test]
@@ -381,7 +382,7 @@ fn daemon_set_pod_not_ready() {
         diagnosis.text,
         "Pod agent-b on wk-01: Evicted: The node was low on resource: memory."
     );
-    assert_eq!(diagnosis.pod, pod_key("agent-b"));
+    assert_eq!(diagnosis.link, pod_key("agent-b"));
 }
 
 #[test]
@@ -449,11 +450,11 @@ fn job_backoff_limit_with_exit_code() {
         diagnosis.text,
         "7 attempts failed. Last pod exited with code 137 (OOMKilled)."
     );
-    assert_eq!(diagnosis.pod, pod_key("migrate-new"));
+    assert_eq!(diagnosis.link, pod_key("migrate-new"));
     // Without pods the count still shows.
     let bare = run(KindObject::Job(job), None, &[]).expect("a box");
     assert_eq!(bare.text, "7 attempts failed.");
-    assert_eq!(bare.pod, None);
+    assert_eq!(bare.link, None);
     let mut once = failed_job("BackoffLimitExceeded", None);
     once.failed = 1;
     let single = run(KindObject::Job(once), None, &[]).expect("a box");
@@ -618,7 +619,7 @@ fn container_cause_names_the_pod_status() {
         diagnosis.text,
         "Pod api-2 is CrashLoopBackOff: CrashLoopBackOff."
     );
-    assert_eq!(diagnosis.pod, pod_key("api-2"));
+    assert_eq!(diagnosis.link, pod_key("api-2"));
 }
 
 // ---- Services ----
@@ -647,6 +648,7 @@ fn run_service(health: ServiceHealth, pods: &[PodSummary]) -> Option<KindDiagnos
             nodes: &[],
             service: Some(health),
             bindings: None,
+            tls_secrets: None,
             now: at(1_000),
         },
     )
@@ -672,7 +674,7 @@ fn service_no_matching_pods() {
         diagnosis.text,
         "No pod in team-a has the labels app=api, tier=web."
     );
-    assert_eq!(diagnosis.pod, None);
+    assert_eq!(diagnosis.link, None);
 }
 
 #[test]
@@ -685,14 +687,14 @@ fn service_no_ready_endpoints() {
         diagnosis.text,
         "3 endpoints, none ready. Pod api-2: CrashLoopBackOff."
     );
-    assert_eq!(diagnosis.pod, pod_key("api-2"));
+    assert_eq!(diagnosis.link, pod_key("api-2"));
 }
 
 #[test]
 fn service_no_ready_endpoints_without_an_unhealthy_pod_has_no_pod_link() {
     let diagnosis = run_service(endpoint_health(0, 1), &[pod("api-1", None)]).expect("a box");
     assert_eq!(diagnosis.text, "1 endpoint, none ready.");
-    assert_eq!(diagnosis.pod, None);
+    assert_eq!(diagnosis.link, None);
 }
 
 #[test]
@@ -721,6 +723,7 @@ fn service_no_ready_endpoints_waits_for_the_pods() {
             nodes: &[],
             service: Some(health),
             bindings: None,
+            tls_secrets: None,
             now: at(1_000),
         },
     );
@@ -757,6 +760,7 @@ fn budget_diagnosis(budget: PodDisruptionBudgetSummary) -> Option<KindDiagnosis>
             nodes: &[],
             service: None,
             bindings: None,
+            tls_secrets: None,
             now: at(1_000),
         },
     )
@@ -772,7 +776,7 @@ fn pdb_blocks_drain_with_unhealthy_pods() {
         "Only 2 of 3 pods are healthy and minAvailable is 2. Draining any node that runs these \
          pods will wait."
     );
-    assert_eq!(diagnosis.pod, None);
+    assert_eq!(diagnosis.link, None);
 }
 
 #[test]
@@ -855,6 +859,7 @@ fn autoscaler_diagnosis(hpa: HorizontalPodAutoscalerSummary) -> Option<KindDiagn
             nodes: &[],
             service: None,
             bindings: None,
+            tls_secrets: None,
             now: at(1_000),
         },
     )
@@ -997,6 +1002,7 @@ fn quota_at_limit() {
                 nodes: &[],
                 service: None,
                 bindings: None,
+                tls_secrets: None,
                 now: at(1_000),
             },
         )
@@ -1037,6 +1043,7 @@ fn quota_status_and_box_name_the_same_item() {
             nodes: &[],
             service: None,
             bindings: None,
+            tls_secrets: None,
             now: at(1_000),
         },
     )
@@ -1054,6 +1061,7 @@ fn storage_inputs() -> DiagnosisInputs<'static> {
         nodes: &[],
         service: None,
         bindings: None,
+        tls_secrets: None,
         now: at(1_000),
     }
 }
@@ -1647,6 +1655,7 @@ fn secret_box(object: KindObject, now: i64) -> Option<KindDiagnosis> {
             nodes: &[],
             service: None,
             bindings: None,
+            tls_secrets: None,
             now: at(now),
         },
     )
@@ -1659,7 +1668,7 @@ fn secret_certificate_expired_box() {
     assert_eq!(diagnosis.tone, StatusTone::Bad);
     assert_eq!(diagnosis.title, "CERTIFICATE");
     assert_eq!(diagnosis.text, "Expired Apr 8, 1970 (3d ago).");
-    assert_eq!(diagnosis.pod, None);
+    assert_eq!(diagnosis.link, None);
 }
 
 #[test]
@@ -1720,4 +1729,118 @@ fn opaque_secret_has_no_box() {
     assert_eq!(secret_box(tls_secret(SecretDetails::None), 0), None);
     let registries = SecretDetails::Registries(vec!["registry.example.test".to_owned()]);
     assert_eq!(secret_box(tls_secret(registries), 0), None);
+}
+
+// ---- Ingress certificate ----
+
+fn tls_ingress(secrets: &[&str]) -> KindObject {
+    KindObject::Ingress(cluster::IngressSummary {
+        namespace: "team-a".to_owned(),
+        name: "shop".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        class: None,
+        hosts: Vec::new(),
+        addresses: Vec::new(),
+        rules: Vec::new(),
+        default_backend: None,
+        default_service: None,
+        tls: secrets
+            .iter()
+            .map(|name| cluster::IngressTls {
+                hosts: Vec::new(),
+                secret_name: Some((*name).to_owned()),
+            })
+            .collect(),
+    })
+}
+
+fn named_secret(name: &str, details: SecretDetails) -> cluster::SecretSummary {
+    cluster::SecretSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        secret_type: "kubernetes.io/tls".to_owned(),
+        keys: Vec::new(),
+        details,
+        is_immutable: false,
+        is_owned: false,
+    }
+}
+
+fn ingress_box(
+    object: &KindObject,
+    secrets: Option<&[cluster::SecretSummary]>,
+    now: i64,
+) -> Option<KindDiagnosis> {
+    kind_diagnosis(
+        object,
+        &DiagnosisInputs {
+            pods: None,
+            nodes: &[],
+            service: None,
+            bindings: None,
+            tls_secrets: secrets,
+            now: at(now),
+        },
+    )
+}
+
+fn secret_key_of(name: &str) -> Option<ResourceKey> {
+    ResourceKey::of_object("Secret", Some("team-a"), name)
+}
+
+#[test]
+fn ingress_certificate_box_worst_secret() {
+    let secrets = [
+        named_secret("fine", leaf(0, 400 * DAY)),
+        named_secret("soon", leaf(0, 106 * DAY)),
+        named_secret("old", leaf(0, 97 * DAY)),
+    ];
+    let object = tls_ingress(&["fine", "soon", "old"]);
+    let diagnosis = ingress_box(&object, Some(&secrets), 100 * DAY).expect("a box");
+    // Expired comes before expiring.
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(diagnosis.title, "CERTIFICATE");
+    assert_eq!(diagnosis.text, "old: Expired Apr 8, 1970 (3d ago).");
+    assert_eq!(diagnosis.link, secret_key_of("old"));
+    // Without the expired one, the expiring one shows.
+    let object = tls_ingress(&["fine", "soon"]);
+    let diagnosis = ingress_box(&object, Some(&secrets), 100 * DAY).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(diagnosis.text, "soon: Expires Apr 17, 1970 (in 6d).");
+    assert_eq!(diagnosis.link, secret_key_of("soon"));
+    // Only fine certificates: no box.
+    let object = tls_ingress(&["fine"]);
+    assert_eq!(ingress_box(&object, Some(&secrets), 100 * DAY), None);
+}
+
+#[test]
+fn ingress_certificate_box_picks_the_earlier_of_two_expiring() {
+    let secrets = [
+        named_secret("later", leaf(0, 110 * DAY)),
+        named_secret("sooner", leaf(0, 103 * DAY)),
+    ];
+    let object = tls_ingress(&["later", "sooner"]);
+    let diagnosis = ingress_box(&object, Some(&secrets), 100 * DAY).expect("a box");
+    assert_eq!(diagnosis.link, secret_key_of("sooner"));
+}
+
+#[test]
+fn ingress_missing_tls_secret_box() {
+    let secrets = [named_secret("fine", leaf(0, 400 * DAY))];
+    let object = tls_ingress(&["fine", "gone"]);
+    let diagnosis = ingress_box(&object, Some(&secrets), 100 * DAY).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(diagnosis.text, "No TLS secret gone in team-a.");
+    assert_eq!(diagnosis.link, secret_key_of("gone"));
+}
+
+#[test]
+fn ingress_box_waits_for_companion() {
+    let object = tls_ingress(&["shop-tls"]);
+    assert_eq!(ingress_box(&object, None, 100 * DAY), None);
+    // An ingress without TLS needs no box even with the list loaded.
+    assert_eq!(ingress_box(&tls_ingress(&[]), Some(&[]), 100 * DAY), None);
 }

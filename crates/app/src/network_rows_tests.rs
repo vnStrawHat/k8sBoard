@@ -147,37 +147,47 @@ fn service_has_no_related_pods() {
 }
 
 #[test]
-fn ingress_row_hosts_star_when_empty_and_tls_ports() {
+fn ingress_row_hosts_star_when_empty() {
     let mut open = ingress();
     open.hosts.clear();
     assert_eq!(
         ingress_row(&open).cells.get(1),
         Some(&KindCell::Text("*".into()))
     );
+}
+
+#[test]
+fn ingress_row_cells_match_column_count() {
+    let row = ingress_row(&ingress());
+    assert_eq!(row.cells.len(), ResourceKind::Ingresses.columns().len());
+    let names: Vec<&str> = ResourceKind::Ingresses
+        .columns()
+        .iter()
+        .map(|column| column.name)
+        .collect();
+    // TLS replaces Ports.
+    assert_eq!(names, ["Class", "Hosts", "Address", "TLS", "Age"]);
+}
+
+#[test]
+fn ingress_tls_cell_before_join() {
+    let mut secured = ingress();
+    secured.tls.clear();
+    assert_eq!(ingress_row(&secured).cells.get(3), Some(&KindCell::Absent));
+    secured.tls = vec![tls("a.example.com", "a-tls")];
     assert_eq!(
-        ingress_row(&open).cells.get(3),
-        Some(&KindCell::Text("80".into()))
-    );
-    open.tls = vec![tls("a.example.com", "a-tls")];
-    assert_eq!(
-        ingress_row(&open).cells.get(3),
-        Some(&KindCell::Text("80, 443".into()))
+        ingress_row(&secured).cells.get(3),
+        Some(&KindCell::Text("yes".into()))
     );
 }
 
 #[test]
-fn ingress_tls_section_names_hosts_and_secrets() {
+fn ingress_tls_section_is_live_only() {
     let mut secured = ingress();
     secured.tls = vec![tls("a.example.com", "a-tls")];
     let row = ingress_row(&secured);
     let tls = row.section("TLS").expect("tls section");
-    assert_eq!(
-        tls.rows,
-        [DetailRow::stacked(
-            "a.example.com",
-            KindCell::Text("secret a-tls".into())
-        )]
-    );
+    assert_eq!(tls.rows, [DetailRow::Live(LiveContent::IngressTls)]);
     assert!(ingress_row(&ingress()).section("TLS").is_none());
 }
 
@@ -379,4 +389,108 @@ fn ingress_urls_repeat_nothing() {
         rule(Some("a.example.com"), Some("/x")),
     ];
     assert_eq!(urls_of(rules, Vec::new()), ["http://a.example.com/x"]);
+}
+
+// ---- TLS section ----
+
+fn secret_with(name: &str, details: cluster::SecretDetails) -> cluster::SecretSummary {
+    cluster::SecretSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        secret_type: "kubernetes.io/tls".to_owned(),
+        keys: Vec::new(),
+        details,
+        is_immutable: false,
+        is_owned: false,
+    }
+}
+
+fn leaf_details() -> cluster::SecretDetails {
+    cluster::SecretDetails::Certificate {
+        chain: vec![cluster::CertificateInfo {
+            subject: "CN=a.example.com".to_owned(),
+            issuer: "CN=ca".to_owned(),
+            alt_names: Vec::new(),
+            not_before: jiff::Timestamp::from_second(0).expect("timestamp"),
+            not_after: jiff::Timestamp::from_second(86_400).expect("timestamp"),
+        }],
+    }
+}
+
+fn secured() -> IngressSummary {
+    let mut secured = ingress();
+    secured.namespace = "team-a".to_owned();
+    secured.tls = vec![tls("a.example.com", "a-tls")];
+    secured
+}
+
+#[test]
+fn ingress_tls_rows_link_secret() {
+    let secrets = [secret_with("a-tls", leaf_details())];
+    let rows = ingress_tls_rows(&secured(), &TlsSecrets::Ready(&secrets));
+    assert_eq!(rows[0], DetailRow::Chips(vec!["a.example.com".into()]));
+    assert_eq!(
+        rows[1],
+        DetailRow::Link {
+            label: "Secret".into(),
+            text: "a-tls".into(),
+            target: ResourceKey::of_object("Secret", Some("team-a"), "a-tls").expect("a key"),
+        }
+    );
+    assert_eq!(
+        rows[2],
+        DetailRow::field("Subject", KindCell::Mono("CN=a.example.com".into()))
+    );
+    assert!(rows.contains(&DetailRow::field(
+        "Not after",
+        KindCell::Expiry {
+            not_after: jiff::Timestamp::from_second(86_400).expect("timestamp")
+        }
+    )));
+}
+
+#[test]
+fn ingress_tls_rows_default_certificate_and_star_hosts() {
+    let mut open = secured();
+    open.tls = vec![IngressTls {
+        hosts: Vec::new(),
+        secret_name: None,
+    }];
+    let rows = ingress_tls_rows(&open, &TlsSecrets::Loading);
+    assert_eq!(
+        rows,
+        [
+            DetailRow::Chips(vec!["*".into()]),
+            DetailRow::field("Secret", KindCell::Text("default certificate".into())),
+        ]
+    );
+}
+
+#[test]
+fn ingress_tls_missing_secret_note() {
+    let rows = ingress_tls_rows(&secured(), &TlsSecrets::Ready(&[]));
+    assert_eq!(
+        rows[2],
+        DetailRow::Note(
+            "No TLS secret a-tls in team-a (missing, or not of type kubernetes.io/tls).".into()
+        )
+    );
+}
+
+#[test]
+fn ingress_tls_note_when_denied() {
+    let rows = ingress_tls_rows(&secured(), &TlsSecrets::Denied);
+    assert_eq!(
+        rows[2],
+        DetailRow::Note("Not permitted: list secrets".into())
+    );
+    let loading = ingress_tls_rows(&secured(), &TlsSecrets::Loading);
+    assert_eq!(loading[2], DetailRow::Note("Loading…".into()));
+    let unavailable = ingress_tls_rows(&secured(), &TlsSecrets::Unavailable);
+    assert_eq!(
+        unavailable[2],
+        DetailRow::Note("TLS secrets are unavailable".into())
+    );
 }
