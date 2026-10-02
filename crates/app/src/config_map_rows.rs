@@ -1,9 +1,12 @@
-//! The ConfigMap row builder. It shows key names and sizes only: the summary never carries
-//! values, and the drawer says so.
+//! The ConfigMap row builder. The row holds the summary (key names and sizes, never values); the
+//! drawer's Data section shows value previews from the related watch, and Used by comes from the
+//! live pods, both at paint time (`live_sections.rs`).
 
-use cluster::ConfigMapSummary;
+use cluster::{ConfigMapKey, ConfigMapSummary};
 
-use crate::kind_row::{DetailRow, DetailSection, KindCell, KindObject, KindRow, chips};
+use crate::kind_row::{
+    DetailRow, DetailSection, KindCell, KindObject, KindRow, LiveContent, chips,
+};
 use crate::status_tone::{StatusLabel, StatusTone};
 
 const BYTES_PER_UNIT: usize = 1024;
@@ -15,17 +18,7 @@ pub(crate) fn config_map_row(config_map: &ConfigMapSummary) -> KindRow {
     if config_map.is_immutable {
         data.push(DetailRow::field("Immutable", KindCell::Text("Yes".into())));
     }
-    if config_map.keys.is_empty() {
-        data.push(DetailRow::Note("No keys".into()));
-    }
-    data.extend(config_map.keys.iter().map(|key| {
-        let binary = if key.is_binary { " · binary" } else { "" };
-        DetailRow::field(
-            key.name.clone(),
-            KindCell::Mono(format!("{}{binary}", format_bytes(key.size_bytes)).into()),
-        )
-    }));
-    data.push(DetailRow::Note("Values are in the YAML tab".into()));
+    data.push(DetailRow::Live(LiveContent::ConfigMapData));
     let status_text = match key_count {
         1 => "1 key".to_owned(),
         count => format!("{count} keys"),
@@ -40,21 +33,35 @@ pub(crate) fn config_map_row(config_map: &ConfigMapSummary) -> KindRow {
         },
         cells: vec![
             KindCell::count(key_count),
+            // The pods join fills it once the pods list has loaded.
+            KindCell::Absent,
             KindCell::age(config_map.created_at),
         ],
-        sections: vec![DetailSection {
-            title: "Data",
-            rows: data,
-        }],
+        sections: vec![
+            DetailSection {
+                title: "Data",
+                rows: data,
+            },
+            DetailSection {
+                title: "Used by",
+                rows: vec![DetailRow::Live(LiveContent::UsedBy)],
+            },
+        ],
         event: None,
         related_pods: None,
         labels: chips(&config_map.labels),
-        object: KindObject::Plain,
+        object: KindObject::ConfigMap(config_map.clone()),
     }
 }
 
+/// What a key reads before its value preview arrives: `412 B`, `2.0 KiB · binary`.
+pub(crate) fn key_size_text(key: &ConfigMapKey) -> String {
+    let binary = if key.is_binary { " · binary" } else { "" };
+    format!("{}{binary}", format_bytes(key.size_bytes))
+}
+
 /// 1024-based: `412 B`, `2.0 KiB`, `1.1 MiB`.
-fn format_bytes(bytes: usize) -> String {
+pub(crate) fn format_bytes(bytes: usize) -> String {
     if bytes < BYTES_PER_UNIT {
         return format!("{bytes} B");
     }

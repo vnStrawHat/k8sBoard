@@ -4,10 +4,10 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
     AnyElement, App, Context, Div, Entity, HighlightStyle, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _,
@@ -21,7 +21,7 @@ use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
 use crate::kind_row::{KindCell, KindRow};
 use crate::live_sections::next_run_text;
-use crate::resource_actions::kind_menu;
+use crate::resource_actions::{kind_menu, open_url_choice, open_url_menu_item};
 use crate::resource_kind::{Align, NAME_COLUMN, NameColumn, ResourceKind, kind_columns};
 use crate::status_tone::{StatusTone, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
@@ -244,6 +244,12 @@ impl TableRow for KindTableRow<'_> {
                 .map_or(CellValue::Absent, |next| {
                     CellValue::Number(next.timestamp().as_second())
                 }),
+            Some(KindCell::MonoWithMore { text, .. }) => {
+                CellValue::Text(Cow::Borrowed(text.as_ref()))
+            }
+            Some(KindCell::Quantity { value, .. }) => {
+                CellValue::Number(i64::try_from(*value).unwrap_or(i64::MAX))
+            }
             Some(KindCell::Absent) | None => CellValue::Absent,
         }
     }
@@ -361,16 +367,23 @@ impl TableDelegate for KindTableDelegate {
         &mut self,
         row_ix: usize,
         menu: PopupMenu,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        let (Some(kind), Some(live)) = (self.kind, self.live(cx)) else {
+        let Some(kind) = self.kind else {
             return menu;
         };
-        match self.row_at(row_ix, cx) {
-            Some(row) => kind_menu(menu, kind, row, &live.access, &self.shell),
-            None => menu,
-        }
+        // Cloned so the session is not borrowed while a submenu is built: that needs the app
+        // mutably.
+        let Some(row) = self.row_at(row_ix, cx).cloned() else {
+            return menu;
+        };
+        let open_url = (kind == ResourceKind::Ingresses)
+            .then(|| open_url_menu_item(open_url_choice(&row), window, cx));
+        let Some(live) = self.live(cx) else {
+            return menu;
+        };
+        kind_menu(menu, kind, &row, &live.access, &self.shell, open_url)
     }
 
     fn render_empty(
@@ -480,6 +493,32 @@ fn cell_element(
             );
         }
         KindCell::Toned(label) => base().child(toned_text(label.clone(), cx)),
+        KindCell::MonoWithMore { text, more } => base().child(
+            h_flex()
+                .w_full()
+                .gap_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(mono)
+                        .child(text.clone()),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("+{more}")),
+                ),
+        ),
+        KindCell::Quantity { text, tone, .. } => {
+            let quantity = base().font_family(mono).child(text.clone());
+            match tone {
+                Some(tone) => quantity.text_color(tone_color(*tone, cx)),
+                None => quantity,
+            }
+        }
         KindCell::Absent => base().text_color(cx.theme().muted_foreground).child("—"),
         KindCell::Duration {
             started_at: None, ..
@@ -756,6 +795,43 @@ mod tests {
         };
         assert!(matches!(row.value(0), CellValue::Text(text) if text == "Warning"));
         assert!(matches!(row.value(1), CellValue::Absent));
+    }
+
+    #[test]
+    fn mono_with_more_filters_and_sorts_by_its_text_only() {
+        let row = row(vec![KindCell::MonoWithMore {
+            text: "deployment/api".into(),
+            more: 5,
+        }]);
+        let table_row = KindTableRow {
+            row: &row,
+            name_column: NameColumn::Flexible,
+        };
+        let value = table_row.value(1);
+        assert!(matches!(value, CellValue::Text(text) if text == "deployment/api"));
+    }
+
+    #[test]
+    fn quantity_sorts_by_its_value_not_its_text() {
+        let quantity = |text: &str, value: u64| {
+            row(vec![KindCell::Quantity {
+                text: text.to_owned().into(),
+                value,
+                tone: None,
+            }])
+        };
+        let number = |row: &KindRow| {
+            let row = KindTableRow {
+                row,
+                name_column: NameColumn::Flexible,
+            };
+            match row.value(1) {
+                CellValue::Number(number) => Some(number),
+                _ => None,
+            }
+        };
+        // "9Mi" sorts after "10Mi" as text, but before it by bytes.
+        assert!(number(&quantity("9Mi", 9 << 20)) < number(&quantity("10Mi", 10 << 20)));
     }
 
     #[test]

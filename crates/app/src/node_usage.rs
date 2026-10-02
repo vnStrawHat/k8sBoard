@@ -76,12 +76,19 @@ fn pods_on_node<'a>(node: &'a str, pods: &'a [PodSummary]) -> impl Iterator<Item
         .filter(move |pod| pod.node_name.as_deref() == Some(node) && takes_room(pod))
 }
 
-/// The `cpu` and `memory` requests of the pods on `node`: main and sidecar containers, since
-/// init containers do not run alongside them.
+/// The `cpu` and `memory` requests of the pods on `node`.
 pub(crate) fn node_requests(node: &str, pods: &[PodSummary]) -> (CpuAmount, ByteAmount) {
+    requests_of(pods_on_node(node, pods))
+}
+
+/// The `cpu` and `memory` requests of `pods`, which the caller has limited to those that take room:
+/// main and sidecar containers, since init containers do not run alongside them.
+pub(crate) fn requests_of<'a>(
+    pods: impl Iterator<Item = &'a PodSummary>,
+) -> (CpuAmount, ByteAmount) {
     let mut cpu: u64 = 0;
     let mut memory: u64 = 0;
-    for container in pods_on_node(node, pods)
+    for container in pods
         .flat_map(|pod| &pod.containers)
         .filter(|container| container.kind != ContainerKind::Init)
     {

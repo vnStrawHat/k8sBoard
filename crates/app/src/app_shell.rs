@@ -1275,7 +1275,7 @@ impl AppShell {
                     if has_failed {
                         TargetState::Unavailable
                     } else if is_loading
-                        || (matches!(self.screen, Screen::Kind(_)) && live.is_companion_loading())
+                        || (matches!(self.screen, Screen::Kind(_)) && live.is_join_loading())
                     {
                         TargetState::Loading
                     } else {

@@ -58,7 +58,9 @@ pub(crate) fn kind_diagnosis(
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
-        | KindObject::ReplicaSet(_) => None,
+        | KindObject::ReplicaSet(_)
+        | KindObject::Ingress(_)
+        | KindObject::ConfigMap(_) => None,
     }
 }
 

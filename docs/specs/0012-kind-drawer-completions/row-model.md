@@ -20,6 +20,9 @@ pub(crate) enum DetailRow { /* … */
     /// A labelled bar. `percent` is 0–100 (builders clamp with `percent`); `tone: None` uses the
     /// kit default color. Step 3 (DaemonSets); 0013–0015 reuse it for quantities.
     Bar { label: SharedString, percent: u8, text: SharedString, tone: Option<StatusTone> },
+    /// Like `Link`, with the label above the link, for labels too long for the label column (an
+    /// ingress host and path). Step 4b.
+    StackedLink { label: SharedString, text: SharedString, target: ResourceKey },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LiveContent {
@@ -33,6 +36,8 @@ pub(crate) enum KindCell { /* … */
     /// Right-aligned mono text that sorts by `value`: request sums. `tone` colors the text
     /// (`None` here; 0013–0015 tone usage cells). Step 4b.
     Quantity { text: SharedString, value: u64, tone: Option<StatusTone> },
+    /// Mono text that shrinks with an ellipsis, then a pinned ` +{more}` (the Used by cell). Step 4b.
+    MonoWithMore { text: SharedString, more: usize },
 }
 /// Rounds a ratio to a bar percent, clamped to 0–100. Step 3.
 pub(crate) fn percent(ratio: f64) -> u8;
@@ -48,9 +53,9 @@ pub(crate) fn percent(ratio: f64) -> u8;
 | Kind | Columns after Name | Step |
 |---|---|---|
 | CronJobs | Schedule 140 · Suspend 80 · Active 70 r · Last schedule 120 r · **Next run 100 r** · Age | 2 |
-| Services | Type 130 · Cluster IP 140 · External IP 200 · Ports 180 · **Endpoints 100** · Age | 4a |
+| Services | Type 130 · Cluster IP 140 · External IP 200 · Ports 180 · **Endpoints 100 r** · Age | 4a |
 | ConfigMaps | Data 70 r · **Used by 220** · Age | 4b |
-| Namespaces | Status 140 · **Pods 70 r · CPU req 90 r · Memory req 100 r** · Age | 4b |
+| Namespaces | Status 140 · **Pods 70 r · CPU req 110 r · Memory req 120 r** · Age | 4b |
 
 Joined columns are built as `KindCell::Absent` and filled by the join. `kind_join.rs` names their indices (`SERVICE_ENDPOINTS`, `CONFIG_MAP_USED_BY`, `NAMESPACE_PODS`, `NAMESPACE_CPU`, `NAMESPACE_MEMORY`), and a test asserts each index names the right column.
 

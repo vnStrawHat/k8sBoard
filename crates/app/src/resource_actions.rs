@@ -1,13 +1,16 @@
 use cluster::{AccessCheck, NodeSummary, PodSummary};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
-use gpui_kit::{ClipboardItem, ParentElement as _, SharedString, Styled as _, WeakEntity, div};
+use gpui_kit::{
+    App, ClipboardItem, ParentElement as _, SharedString, Styled as _, WeakEntity, Window, div,
+};
 
 use crate::app_shell::AppShell;
 use crate::cluster_session::{AccessState, LiveCluster};
 use crate::kind_row::{EventDetail, KindObject, KindRow};
 use crate::log_dock::LogDock;
 use crate::log_tab::LogTarget;
+use crate::network_rows::ingress_urls;
 use crate::resource_kind::ResourceKind;
 use crate::table_selection::ResourceKey;
 
@@ -220,6 +223,7 @@ pub(crate) fn kind_menu(
     row: &KindRow,
     access: &AccessState,
     shell: &WeakEntity<AppShell>,
+    open_url: Option<PopupMenuItem>,
 ) -> PopupMenu {
     let mut menu = menu;
     if let Some(event) = &row.event {
@@ -230,6 +234,9 @@ pub(crate) fn kind_menu(
             .separator();
     }
     menu = menu.item(view_yaml_item(ResourceKey::of_row(kind, row), shell));
+    if let Some(item) = open_url {
+        menu = menu.item(item);
+    }
     if has_go_to_owner(kind) {
         menu = menu.item(go_to_owner_item(row, shell));
     }
@@ -254,6 +261,62 @@ pub(crate) fn kind_menu(
             kind.delete_label(),
             READ_ONLY_MODE_REASON.into(),
         ))
+}
+
+/// How many URLs the Open URL submenu lists.
+const MAX_OPEN_URLS: usize = 10;
+
+/// What the Open URL item of an Ingress offers.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum OpenUrl {
+    /// No rule has a host to open.
+    Unavailable,
+    One(String),
+    Several(Vec<String>),
+}
+
+pub(crate) fn open_url_choice(row: &KindRow) -> OpenUrl {
+    let KindObject::Ingress(ingress) = &row.object else {
+        return OpenUrl::Unavailable;
+    };
+    let mut urls = ingress_urls(ingress);
+    match urls.len() {
+        0 => OpenUrl::Unavailable,
+        1 => OpenUrl::One(urls.swap_remove(0)),
+        _ => {
+            urls.truncate(MAX_OPEN_URLS);
+            OpenUrl::Several(urls)
+        }
+    }
+}
+
+/// The Open URL item after View YAML: the default browser, through the platform's open-URL call.
+/// Nothing is logged; the URLs hold only plain hosts and paths (`ingress_urls`). The caller builds
+/// it before it borrows the session, because a submenu needs the app mutably.
+pub(crate) fn open_url_menu_item(
+    choice: OpenUrl,
+    window: &mut Window,
+    cx: &mut App,
+) -> PopupMenuItem {
+    // The kit wires the parent of `PopupMenuItem::submenu` in `PopupMenu::render`, so `build` is the
+    // sanctioned path from the table context menu.
+    const LABEL: &str = "Open URL";
+    match choice {
+        OpenUrl::Unavailable => disabled_menu_item(LABEL, "No host to open".into()),
+        OpenUrl::One(url) => open_url_item(LABEL, url),
+        OpenUrl::Several(urls) => {
+            let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
+                urls.iter().fold(submenu, |submenu, url| {
+                    submenu.item(open_url_item(url.clone(), url.clone()))
+                })
+            });
+            PopupMenuItem::submenu(LABEL, submenu)
+        }
+    }
+}
+
+fn open_url_item(label: impl Into<SharedString>, url: String) -> PopupMenuItem {
+    PopupMenuItem::new(label).on_click(move |_, _, cx| cx.open_url(&url))
 }
 
 /// Only ReplicaSets offer Go to owner: a Job's owner is a link in its drawer.

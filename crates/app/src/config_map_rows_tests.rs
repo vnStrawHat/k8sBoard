@@ -1,6 +1,7 @@
 use cluster::ConfigMapKey;
 
 use super::*;
+use crate::kind_join::CONFIG_MAP_USED_BY;
 use crate::resource_kind::ResourceKind;
 
 fn config_map(keys: Vec<ConfigMapKey>) -> ConfigMapSummary {
@@ -34,6 +35,30 @@ fn config_map_row_cells_match_column_count() {
 }
 
 #[test]
+fn config_map_used_by_cell_waits_for_the_join() {
+    let row = config_map_row(&config_map(Vec::new()));
+    assert_eq!(row.cells.get(CONFIG_MAP_USED_BY), Some(&KindCell::Absent));
+}
+
+#[test]
+fn config_map_sections_are_live_data_and_used_by() {
+    let summary = config_map(vec![key("a", 1, false)]);
+    let row = config_map_row(&summary);
+    let titles: Vec<&str> = row.sections.iter().map(|section| section.title).collect();
+    assert_eq!(titles, ["Data", "Used by"]);
+    assert_eq!(
+        data_rows(&row),
+        [DetailRow::Live(LiveContent::ConfigMapData)]
+    );
+    assert_eq!(
+        row.section("Used by")
+            .map(|section| section.rows.as_slice()),
+        Some(&[DetailRow::Live(LiveContent::UsedBy)][..])
+    );
+    assert_eq!(row.object, KindObject::ConfigMap(summary));
+}
+
+#[test]
 fn format_bytes_uses_binary_units() {
     assert_eq!(format_bytes(0), "0 B");
     assert_eq!(format_bytes(412), "412 B");
@@ -44,45 +69,32 @@ fn format_bytes_uses_binary_units() {
 }
 
 #[test]
-fn config_map_lists_key_sizes_and_marks_binary_keys() {
-    let row = config_map_row(&config_map(vec![
-        key("app.yaml", 412, false),
-        key("logo.png", 2048, true),
-    ]));
-    let rows = data_rows(&row);
+fn key_size_text_marks_binary_keys() {
+    assert_eq!(key_size_text(&key("app.yaml", 412, false)), "412 B");
     assert_eq!(
-        rows.first(),
-        Some(&DetailRow::field(
-            "app.yaml",
-            KindCell::Mono("412 B".into())
-        ))
-    );
-    assert_eq!(
-        rows.get(1),
-        Some(&DetailRow::field(
-            "logo.png",
-            KindCell::Mono("2.0 KiB · binary".into())
-        ))
+        key_size_text(&key("logo.png", 2048, true)),
+        "2.0 KiB · binary"
     );
 }
 
 #[test]
-fn config_map_without_keys_says_so_and_notes_hidden_values() {
-    let row = config_map_row(&config_map(Vec::new()));
+fn config_map_status_counts_keys() {
     assert_eq!(
-        data_rows(&row),
-        [
-            DetailRow::Note("No keys".into()),
-            DetailRow::Note("Values are in the YAML tab".into()),
-        ]
+        config_map_row(&config_map(Vec::new())).status.text,
+        "0 keys"
     );
-    assert_eq!(row.status.text, "0 keys");
-}
-
-#[test]
-fn config_map_status_is_singular_for_one_key() {
-    let row = config_map_row(&config_map(vec![key("a", 1, false)]));
-    assert_eq!(row.status.text, "1 key");
+    assert_eq!(
+        config_map_row(&config_map(vec![key("a", 1, false)]))
+            .status
+            .text,
+        "1 key"
+    );
+    assert_eq!(
+        config_map_row(&config_map(vec![key("a", 1, false), key("b", 1, false)]))
+            .status
+            .text,
+        "2 keys"
+    );
 }
 
 #[test]
@@ -96,22 +108,4 @@ fn config_map_immutable_field_appears_only_when_true() {
     assert!(!has_immutable(&summary));
     summary.is_immutable = true;
     assert!(has_immutable(&summary));
-}
-
-#[test]
-fn config_map_keys_stay_in_the_label_and_value_layout() {
-    let row = config_map_row(&config_map(vec![
-        key("statusbadge.enabled", 4, false),
-        key("a-very-long-key-name-that-would-never-fit.yaml", 4, false),
-    ]));
-    let fields = data_rows(&row)
-        .iter()
-        .filter(|row| matches!(row, DetailRow::Field { .. }))
-        .count();
-    assert_eq!(fields, 2);
-    assert!(
-        !data_rows(&row)
-            .iter()
-            .any(|row| matches!(row, DetailRow::Stacked { .. }))
-    );
 }

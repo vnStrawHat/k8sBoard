@@ -28,7 +28,9 @@ use crate::live_sections::{live_rows, next_run_text, owned_pods};
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
-use crate::resource_actions::{kind_menu, port_forward_reason};
+use crate::resource_actions::{
+    OpenUrl, kind_menu, open_url_choice, open_url_menu_item, port_forward_reason,
+};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusTone, tone_color, toned_text};
 use crate::table_selection::ResourceKey;
@@ -122,7 +124,9 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::DaemonSet(_)
         | KindObject::ReplicaSet(_)
         | KindObject::Job(_)
-        | KindObject::Service(_) => None,
+        | KindObject::Service(_)
+        | KindObject::Ingress(_)
+        | KindObject::ConfigMap(_) => None,
     }
 }
 
@@ -137,7 +141,22 @@ fn kind_menu_button(
     let session = session.clone();
     let key = ResourceKey::of_row(kind, row);
     menu_button()
-        .dropdown_menu(move |menu, _, cx| {
+        .dropdown_menu(move |menu, window, cx| {
+            let open_url = (kind == ResourceKind::Ingresses).then(|| {
+                let choice = session
+                    .read(cx)
+                    .live()
+                    .and_then(|live| live.kind_list(kind))
+                    .and_then(|explorer| {
+                        explorer
+                            .list
+                            .items()
+                            .iter()
+                            .find(|row| key.is_row(kind, row))
+                    })
+                    .map_or(OpenUrl::Unavailable, open_url_choice);
+                open_url_menu_item(choice, window, cx)
+            });
             let Some(live) = session.read(cx).live() else {
                 return menu;
             };
@@ -149,7 +168,7 @@ fn kind_menu_button(
                     .find(|row| key.is_row(kind, row))
             });
             match current {
-                Some(row) => kind_menu(menu, kind, row, &live.access, &shell),
+                Some(row) => kind_menu(menu, kind, row, &live.access, &shell, open_url),
                 None => menu,
             }
         })
@@ -306,6 +325,14 @@ fn detail_element(
             let link = link_text(id, text, target.clone(), cx);
             wide_detail_row(label.clone(), link, cx).into_any_element()
         }
+        DetailRow::StackedLink {
+            label,
+            text,
+            target,
+        } => {
+            let link = link_text(id, text, target.clone(), cx);
+            stacked_row(label, link, id, cx)
+        }
         DetailRow::Port { text } => port_row(text, id, &paint.forward_reason, cx),
         DetailRow::Stacked { label, value } => {
             stacked_row(label, field_value(value, id, now, cx), id, cx)
@@ -388,6 +415,20 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
                 .into_any_element()
         }
         KindCell::Toned(label) => toned_text(label.clone(), cx).truncate().into_any_element(),
+        KindCell::MonoWithMore { text, more } => truncated_text(
+            ("detail", id),
+            SharedString::from(format!("{text} +{more}")),
+        )
+        .font_family(mono)
+        .into_any_element(),
+        KindCell::Quantity { text, tone, .. } => {
+            let quantity = truncated_text(("detail", id), text.clone()).font_family(mono);
+            match tone {
+                Some(tone) => quantity.text_color(tone_color(*tone, cx)),
+                None => quantity,
+            }
+            .into_any_element()
+        }
         KindCell::Absent => absent_text(cx).into_any_element(),
         KindCell::NextRun(schedule) => match next_run_text(schedule, now) {
             Some(text) => div().truncate().child(text).into_any_element(),

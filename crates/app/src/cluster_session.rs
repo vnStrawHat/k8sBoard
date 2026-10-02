@@ -2,7 +2,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use cluster::{
-    AccessCheck, AccessReport, ClusterConnection, ClusterError, ContextSummary,
+    AccessCheck, AccessReport, ClusterConnection, ClusterError, ConfigMapValues, ContextSummary,
     EndpointSliceSummary, EventFilter, EventSummary, InvolvedObject, JobSummary, Kubeconfig,
     KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, PodSummary,
     ReplicaSetSummary, ServerVersion, WatchUpdate,
@@ -236,12 +236,15 @@ struct RelatedObjects {
 pub(crate) enum RelatedList {
     ReplicaSets(LiveList<ReplicaSetSummary>),
     Jobs(LiveList<JobSummary>),
+    /// The value previews of one config map. They can be sensitive, so nothing here logs them.
+    ConfigMapValues(LiveList<ConfigMapValues>),
 }
 
 /// One related watch update, typed on tokio so one subscription serves every subject.
 enum RelatedUpdate {
     ReplicaSets(WatchUpdate<ReplicaSetSummary>),
     Jobs(WatchUpdate<JobSummary>),
+    ConfigMapValues(WatchUpdate<ConfigMapValues>),
 }
 
 impl RelatedList {
@@ -249,6 +252,7 @@ impl RelatedList {
         match subject {
             RelatedSubject::ReplicaSets { .. } => Self::ReplicaSets(LiveList::Loading),
             RelatedSubject::Jobs { .. } => Self::Jobs(LiveList::Loading),
+            RelatedSubject::ConfigMapValues { .. } => Self::ConfigMapValues(LiveList::Loading),
         }
     }
 
@@ -257,8 +261,13 @@ impl RelatedList {
         match (self, update) {
             (Self::ReplicaSets(list), RelatedUpdate::ReplicaSets(update)) => list.apply(update),
             (Self::Jobs(list), RelatedUpdate::Jobs(update)) => list.apply(update),
-            (Self::ReplicaSets(_), RelatedUpdate::Jobs(_))
-            | (Self::Jobs(_), RelatedUpdate::ReplicaSets(_)) => {}
+            (Self::ConfigMapValues(list), RelatedUpdate::ConfigMapValues(update)) => {
+                list.apply(update);
+            }
+            (Self::ReplicaSets(_), RelatedUpdate::Jobs(_) | RelatedUpdate::ConfigMapValues(_))
+            | (Self::Jobs(_), RelatedUpdate::ReplicaSets(_) | RelatedUpdate::ConfigMapValues(_))
+            | (Self::ConfigMapValues(_), RelatedUpdate::ReplicaSets(_) | RelatedUpdate::Jobs(_)) => {
+            }
         }
     }
 
@@ -266,6 +275,7 @@ impl RelatedList {
         match self {
             Self::ReplicaSets(list) => list.mark_stopped(),
             Self::Jobs(list) => list.mark_stopped(),
+            Self::ConfigMapValues(list) => list.mark_stopped(),
         }
     }
 
@@ -275,6 +285,7 @@ impl RelatedList {
         match self {
             Self::ReplicaSets(list) => list.is_loading(),
             Self::Jobs(list) => list.is_loading(),
+            Self::ConfigMapValues(list) => list.is_loading(),
         }
     }
 }
@@ -928,6 +939,7 @@ impl LiveCluster {
                 .companion
                 .as_ref()
                 .map(|companion| &companion.lists),
+            scope: &self.scope,
         };
         join_rows(explorer.kind, explorer.list.items_mut(), &inputs);
     }
@@ -998,12 +1010,20 @@ impl LiveCluster {
             .is_some_and(|related| related.list.is_loading())
     }
 
-    /// Whether the explorer runs a companion watch that, or the pods it joins with, have not
-    /// delivered a first snapshot. Only the screenshot hook waits on it.
+    /// Whether what the explorer rows join with has not delivered a first snapshot: the pods for
+    /// Services, ConfigMaps, and Namespaces, and the companion watch. Only the screenshot hook
+    /// waits on it.
     #[cfg(feature = "screenshot")]
-    pub(crate) fn is_companion_loading(&self) -> bool {
-        self.companion()
-            .is_some_and(|lists| lists.is_loading() || self.pods.is_loading())
+    pub(crate) fn is_join_loading(&self) -> bool {
+        let Some(explorer) = self.explorer.as_ref() else {
+            return false;
+        };
+        let joins_pods = matches!(
+            explorer.kind,
+            ResourceKind::Services | ResourceKind::ConfigMaps | ResourceKind::Namespaces
+        );
+        (joins_pods && self.pods.is_loading())
+            || self.companion().is_some_and(CompanionLists::is_loading)
     }
 
     /// The subject of the running object events watch.
@@ -1329,6 +1349,10 @@ impl RelatedObjects {
             RelatedSubject::Jobs { namespace, .. } => connection
                 .watch_namespace_jobs(namespace)
                 .map(RelatedUpdate::Jobs)
+                .boxed(),
+            RelatedSubject::ConfigMapValues { namespace, name } => connection
+                .watch_config_map_values(namespace, name)
+                .map(RelatedUpdate::ConfigMapValues)
                 .boxed(),
         };
         let applied = subject.clone();

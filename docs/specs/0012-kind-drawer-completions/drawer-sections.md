@@ -13,10 +13,10 @@
 | Jobs | WHY · Status (Owner is a **Link**; **Active deadline** `{n}s`, **TTL after finish** `{n}s` rows) · Conditions · Containers · **Attempts** (pods) · Labels |
 | CronJobs | **Next runs [Live]** · Schedule · Runs · **Recent jobs [Live]** · Containers · Labels |
 | Services | WHY · Service · Ports · Selector · **Endpoints [Live]** · Labels |
-| Ingresses | Ingress (Default backend a **Link** when a service) · Rules (backend a **Link** when a service) · TLS · Labels |
+| Ingresses | Ingress (Default backend a **Link** when a service) · Rules (backend a **StackedLink** when a service: the host and path above a link, because they are too long for the label column) · TLS · Labels |
 | ConfigMaps | **Data [Live]** · **Used by [Live]** · Labels |
 
-Links use `DetailRow::Link` (0008) with `ResourceKey::of_object("Service", ns, name)` and `of_owner`.
+Links use `DetailRow::Link` (0008; `DetailRow::StackedLink` for the Ingress rules) with `ResourceKey::of_object("Service", ns, name)` and `of_owner`.
 
 ## Live content (`live_sections.rs`)
 

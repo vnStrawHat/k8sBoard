@@ -205,8 +205,8 @@ fn ingress_rules_label_host_and_path_with_star_for_missing_host() {
     assert_eq!(
         rules.rows,
         [
-            DetailRow::stacked("a.example.com/api", KindCell::Mono("api:80".into())),
-            DetailRow::stacked("*", KindCell::Mono("fallback:80".into())),
+            service_link_row("a.example.com/api", "api:80", "api"),
+            service_link_row("*", "fallback:80", "fallback"),
         ]
     );
 }
@@ -275,4 +275,108 @@ fn service_row_keeps_builder_status_and_object_until_joined() {
     let row = service_row(&service);
     assert_eq!(row.status.text, "ClusterIP");
     assert_eq!(row.object, KindObject::Service(service));
+}
+
+fn service_target(name: &str) -> ResourceKey {
+    ResourceKey::of_object("Service", Some("team-a"), name).expect("a Service key")
+}
+
+fn service_link_row(label: &str, text: &str, service: &str) -> DetailRow {
+    DetailRow::StackedLink {
+        label: label.to_owned().into(),
+        text: text.to_owned().into(),
+        target: service_target(service),
+    }
+}
+
+#[test]
+fn ingress_backend_is_a_link() {
+    let mut routed = ingress();
+    routed.default_backend = Some("fallback:80".to_owned());
+    routed.default_service = Some("fallback".to_owned());
+    // A resource backend names no Service, so it stays plain text.
+    routed.rules.push(IngressPath {
+        host: Some("b.example.com".to_owned()),
+        path: None,
+        backend: "StorageBucket/assets".to_owned(),
+        service: None,
+    });
+    let row = ingress_row(&routed);
+    let rules = row.section("Rules").expect("rules section");
+    assert_eq!(
+        rules.rows,
+        [
+            service_link_row("a.example.com/api", "api:80", "api"),
+            DetailRow::stacked(
+                "b.example.com",
+                KindCell::Mono("StorageBucket/assets".into())
+            ),
+        ]
+    );
+    let ingress_section = row.section("Ingress").expect("ingress section");
+    assert!(ingress_section.rows.contains(&DetailRow::Link {
+        label: "Default backend".into(),
+        text: "fallback:80".into(),
+        target: service_target("fallback"),
+    }));
+}
+
+fn rule(host: Option<&str>, path: Option<&str>) -> IngressPath {
+    IngressPath {
+        host: host.map(str::to_owned),
+        path: path.map(str::to_owned),
+        backend: "api:80".to_owned(),
+        service: Some("api".to_owned()),
+    }
+}
+
+fn urls_of(rules: Vec<IngressPath>, tls: Vec<IngressTls>) -> Vec<String> {
+    let mut summary = ingress();
+    summary.rules = rules;
+    summary.tls = tls;
+    ingress_urls(&summary)
+}
+
+#[test]
+fn ingress_urls_https_for_tls_and_wildcard() {
+    let tls = vec![
+        tls("secure.example.com", "a"),
+        tls("*.apps.example.com", "b"),
+    ];
+    let rules = vec![
+        rule(Some("secure.example.com"), Some("/")),
+        rule(Some("web.apps.example.com"), Some("/ui")),
+        rule(Some("plain.example.com"), None),
+        // A wildcard covers one label only.
+        rule(Some("a.b.apps.example.com"), None),
+    ];
+    assert_eq!(
+        urls_of(rules, tls),
+        [
+            "https://secure.example.com/",
+            "https://web.apps.example.com/ui",
+            "http://plain.example.com/",
+            "http://a.b.apps.example.com/",
+        ]
+    );
+}
+
+#[test]
+fn ingress_urls_skip_wildcard_hosts_and_regex_paths() {
+    let rules = vec![
+        rule(Some("*.example.com"), Some("/")),
+        rule(None, Some("/")),
+        rule(Some("bad host.example.com"), Some("/")),
+        rule(Some("api.example.com"), Some("/v1(/|$)(.*)")),
+    ];
+    assert_eq!(urls_of(rules, Vec::new()), ["http://api.example.com/"]);
+}
+
+#[test]
+fn ingress_urls_repeat_nothing() {
+    let rules = vec![
+        rule(Some("a.example.com"), Some("/x")),
+        rule(Some("a.example.com"), Some("/x")),
+    ];
+    assert_eq!(urls_of(rules, Vec::new()), ["http://a.example.com/x"]);
 }

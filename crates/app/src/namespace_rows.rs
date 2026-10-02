@@ -16,7 +16,14 @@ pub(crate) fn namespace_row(namespace: &NamespaceSummary) -> KindRow {
         name: namespace.name.clone(),
         created_at: namespace.created_at,
         status: status.clone(),
-        cells: vec![KindCell::Toned(status.clone()), age.clone()],
+        cells: vec![
+            KindCell::Toned(status.clone()),
+            // The pods join fills the Pods, CPU req, and Memory req cells.
+            KindCell::Absent,
+            KindCell::Absent,
+            KindCell::Absent,
+            age.clone(),
+        ],
         sections: vec![DetailSection {
             title: "Namespace",
             rows: vec![

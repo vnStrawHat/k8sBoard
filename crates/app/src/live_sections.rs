@@ -5,8 +5,9 @@
 //! are tested without a window.
 
 use cluster::{
-    CronJobSummary, CronSchedule, DeploymentSummary, EndpointSliceSummary, JobSummary, NodeSummary,
-    PodSummary, ReplicaSetSummary, ServiceSummary,
+    ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule, DeploymentSummary,
+    EndpointSliceSummary, JobSummary, NodeSummary, PodSummary, ReplicaSetSummary, ServiceSummary,
+    ValuePreview,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -21,9 +22,13 @@ use crate::batch_rows::job_status_label;
 use crate::cluster_session::{
     CompanionLists, CompanionPlan, LiveCluster, LiveList, RelatedList, companion_plan,
 };
-use crate::drawer::wide_detail_row;
+use crate::config_map_rows::{format_bytes, key_size_text};
+use crate::drawer::{link_text, wide_detail_row};
 use crate::kind_diagnosis::{is_pod_not_ready, unready_node};
-use crate::kind_join::{EndpointState, endpoint_entries, endpoint_ports, service_slices};
+use crate::kind_join::{
+    EndpointState, UsedBy, config_map_users, endpoint_entries, endpoint_ports, service_slices,
+    users_of,
+};
 use crate::kind_row::{KindObject, KindRow, LiveContent, owns_pod};
 use crate::related_objects::related_subject;
 use crate::resource_kind::ResourceKind;
@@ -60,6 +65,12 @@ pub(crate) fn live_rows(
         (LiveContent::NotReadyPods, KindObject::DaemonSet(_)) => not_ready_rows(row, live, cx),
         (LiveContent::Endpoints, KindObject::Service(service)) => {
             endpoints(kind, service, live, cx)
+        }
+        (LiveContent::UsedBy, KindObject::ConfigMap(config_map)) => {
+            used_by_rows(config_map, live, cx)
+        }
+        (LiveContent::ConfigMapData, KindObject::ConfigMap(config_map)) => {
+            config_map_data_rows(kind, row, config_map, live, cx)
         }
         // A placeholder on a row of another kind has nothing to show.
         _ => Vec::new(),
@@ -142,7 +153,7 @@ fn revisions(
     };
     let list = match live.related_of(&subject) {
         Some(RelatedList::ReplicaSets(list)) => Some(list),
-        Some(RelatedList::Jobs(_)) | None => None,
+        Some(RelatedList::Jobs(_) | RelatedList::ConfigMapValues(_)) | None => None,
     };
     match list {
         None | Some(LiveList::Loading) => vec![note("Loading revisions…", cx)],
@@ -372,7 +383,7 @@ fn recent_jobs_rows(
 ) -> Vec<AnyElement> {
     let list = match related_subject(kind, row).and_then(|subject| live.related_of(&subject)) {
         Some(RelatedList::Jobs(list)) => Some(list),
-        Some(RelatedList::ReplicaSets(_)) | None => None,
+        Some(RelatedList::ReplicaSets(_) | RelatedList::ConfigMapValues(_)) | None => None,
     };
     match list {
         None | Some(LiveList::Loading) => vec![note("Loading jobs…", cx)],
@@ -680,6 +691,148 @@ fn endpoint_element(ix: usize, row: &EndpointRow, cx: &Context<AppShell>) -> Any
                 .child(row.text.clone()),
         )
         .child(toned_text(endpoint_state_label(row.state), cx).flex_shrink_0())
+        .into_any_element()
+}
+
+// ---- ConfigMap data ----
+
+/// One key of a ConfigMap as the Data section shows it. No `Debug` outside tests: the text can
+/// be a config value.
+#[derive(PartialEq, Eq)]
+#[cfg_attr(test, derive(Debug))]
+struct DataLine {
+    key: String,
+    text: String,
+}
+
+/// A line per key of the summary: the value preview when the related watch has delivered it, else
+/// the size. The previews are never logged; they can be sensitive.
+fn data_lines(config_map: &ConfigMapSummary, values: Option<&ConfigMapValues>) -> Vec<DataLine> {
+    config_map
+        .keys
+        .iter()
+        .map(|key| {
+            let preview = values
+                .and_then(|values| values.entries.iter().find(|entry| entry.key == key.name))
+                .map(|entry| preview_text(&entry.preview));
+            DataLine {
+                key: key.name.clone(),
+                text: preview.unwrap_or_else(|| key_size_text(key)),
+            }
+        })
+        .collect()
+}
+
+/// A single line as written, else its kind and size: `JSON · 412 B`, `text · 3 lines · 1.2 KiB`,
+/// `binary · 2.0 KiB`.
+fn preview_text(preview: &ValuePreview) -> String {
+    match preview {
+        ValuePreview::Line(line) => line.clone(),
+        ValuePreview::Json { size_bytes } => format!("JSON · {}", format_bytes(*size_bytes)),
+        ValuePreview::Text { size_bytes, lines } => format!(
+            "text · {lines} {} · {}",
+            if *lines == 1 { "line" } else { "lines" },
+            format_bytes(*size_bytes)
+        ),
+        ValuePreview::Binary { size_bytes } => format!("binary · {}", format_bytes(*size_bytes)),
+    }
+}
+
+fn config_map_data_rows(
+    kind: ResourceKind,
+    row: &KindRow,
+    config_map: &ConfigMapSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    if config_map.keys.is_empty() {
+        return vec![note("No keys", cx)];
+    }
+    let list = match related_subject(kind, row).and_then(|subject| live.related_of(&subject)) {
+        Some(RelatedList::ConfigMapValues(list)) => Some(list),
+        Some(RelatedList::ReplicaSets(_) | RelatedList::Jobs(_)) | None => None,
+    };
+    let values = list.and_then(|list| {
+        list.ready_items()?.iter().find(|values| {
+            values.namespace == config_map.namespace && values.name == config_map.name
+        })
+    });
+    let mono = cx.theme().mono_font_family.clone();
+    let mut rows: Vec<AnyElement> = data_lines(config_map, values)
+        .into_iter()
+        .map(|line| {
+            let value = div().truncate().font_family(mono.clone()).child(line.text);
+            wide_detail_row(line.key, value, cx).into_any_element()
+        })
+        .collect();
+    // Until the values arrive the sizes stand in, so a failure only adds why.
+    if let Some(message) = list.and_then(LiveList::failure) {
+        rows.push(note(&format!("Values are unavailable: {message}"), cx));
+    }
+    rows
+}
+
+// ---- Used by ----
+
+/// How many users a ConfigMap drawer lists.
+const MAX_LISTED_USERS: usize = 20;
+
+fn used_by_rows(
+    config_map: &ConfigMapSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    if live.pods.is_loading() {
+        return vec![note("Loading pods…", cx)];
+    }
+    let Some(pods) = live.pods.ready_items() else {
+        return vec![note("Pods are unavailable", cx)];
+    };
+    let scope = live.scope_label();
+    // Only the pods of the ConfigMap's namespace can use it, so the index stays small per paint.
+    let users = config_map_users(
+        pods.iter()
+            .filter(|pod| pod.namespace == config_map.namespace),
+    );
+    let users: Vec<&UsedBy> = users_of(&users, &config_map.namespace, &config_map.name).collect();
+    if users.is_empty() {
+        return vec![note(&format!("Not used by any pod in {scope}"), cx)];
+    }
+    let hidden = users.len().saturating_sub(MAX_LISTED_USERS);
+    users
+        .iter()
+        .take(MAX_LISTED_USERS)
+        .enumerate()
+        .map(|(ix, used_by)| used_by_element(ix, used_by, cx))
+        .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+        .chain(std::iter::once(note(&format!("From pods in {scope}"), cx)))
+        .collect()
+}
+
+fn used_by_element(ix: usize, used_by: &UsedBy, cx: &Context<AppShell>) -> AnyElement {
+    let theme = cx.theme();
+    let ways = used_by.ways.iter().copied().collect::<Vec<_>>().join(", ");
+    let owner = match used_by.target.clone() {
+        Some(target) => link_text(ix, &used_by.owner.clone().into(), target, cx),
+        None => div()
+            .truncate()
+            .font_family(theme.mono_font_family.clone())
+            .child(used_by.owner.clone())
+            .into_any_element(),
+    };
+    h_flex()
+        .id(("used-by", ix))
+        .gap_2()
+        .items_center()
+        .py_1()
+        .text_sm()
+        .child(div().flex_1().min_w_0().child(owner))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground)
+                .child(ways),
+        )
         .into_any_element()
 }
 

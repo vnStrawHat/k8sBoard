@@ -2,8 +2,9 @@
 //! Row builders (`*_rows.rs`) are pure: they take a summary and produce a `KindRow`.
 
 use cluster::{
-    ControllerRef, CronJobSummary, CronSchedule, DaemonSetSummary, DeploymentSummary, JobSummary,
-    PodSummary, ReplicaSetSummary, ServiceSummary, StatefulSetSummary,
+    ConfigMapSummary, ControllerRef, CronJobSummary, CronSchedule, DaemonSetSummary,
+    DeploymentSummary, IngressSummary, JobSummary, PodSummary, ReplicaSetSummary, ServiceSummary,
+    StatefulSetSummary,
 };
 use gpui_kit::SharedString;
 
@@ -42,6 +43,8 @@ pub(crate) enum KindObject {
     ReplicaSet(ReplicaSetSummary),
     Job(JobSummary),
     Service(ServiceSummary),
+    Ingress(IngressSummary),
+    ConfigMap(ConfigMapSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -53,6 +56,8 @@ pub(crate) enum LiveContent {
     RecentJobs,
     NotReadyPods,
     Endpoints,
+    UsedBy,
+    ConfigMapData,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.
@@ -93,6 +98,19 @@ pub(crate) enum KindCell {
     },
     /// The next run, painted relative to now so it never goes stale.
     NextRun(CronSchedule),
+    /// Mono text that shrinks with an ellipsis, then a pinned ` +{more}` that never does, such as
+    /// the first owner and the count of the others.
+    MonoWithMore {
+        text: SharedString,
+        more: usize,
+    },
+    /// Right-aligned mono text that sorts by `value`, such as a request sum. `tone` colours the text
+    /// (`None` for a plain quantity).
+    Quantity {
+        text: SharedString,
+        value: u64,
+        tone: Option<StatusTone>,
+    },
     /// `format_age(started_at, finished_at.unwrap_or(now))`, read at paint time so a running
     /// job keeps counting; `Absent` when not started.
     Duration {
@@ -137,6 +155,13 @@ pub(crate) enum DetailRow {
         percent: u8,
         text: SharedString,
         tone: Option<StatusTone>,
+    },
+    /// Like `Link`, with the label above the link, for labels that are too long for the label
+    /// column (an ingress host and path).
+    StackedLink {
+        label: SharedString,
+        text: SharedString,
+        target: ResourceKey,
     },
     /// A label and a clickable mono value that reveals `target`.
     Link {
@@ -279,6 +304,14 @@ fn is_deployment_replica_set(deployment: &str, replica_set: &str) -> bool {
         .is_some_and(|hash| {
             !hash.is_empty() && hash.chars().all(|c| POD_TEMPLATE_HASH_ALPHABET.contains(c))
         })
+}
+
+/// The Deployment of a ReplicaSet named `{deployment}-{hash}`; `None` when the suffix is not a
+/// pod-template hash (a standalone ReplicaSet).
+pub(crate) fn deployment_of_replica_set(replica_set: &str) -> Option<&str> {
+    let (deployment, hash) = replica_set.rsplit_once('-')?;
+    let is_hash = !hash.is_empty() && hash.chars().all(|c| POD_TEMPLATE_HASH_ALPHABET.contains(c));
+    (is_hash && !deployment.is_empty()).then_some(deployment)
 }
 
 #[cfg(test)]

@@ -1,11 +1,12 @@
 //! Row builders for the network kinds: Services and Ingresses.
 
-use cluster::{IngressSummary, ServicePortSummary, ServiceSummary};
+use cluster::{IngressSummary, IngressTls, ServicePortSummary, ServiceSummary};
 
 use crate::kind_row::{
     DetailRow, DetailSection, KindCell, KindObject, KindRow, LiveContent, chips,
 };
 use crate::status_tone::{StatusLabel, StatusTone};
+use crate::table_selection::ResourceKey;
 
 const LOAD_BALANCER: &str = "LoadBalancer";
 
@@ -96,19 +97,22 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
         ingress.hosts.join(",")
     };
     let address = KindCell::mono_or_absent(&ingress.addresses.join(","));
-    let default_backend = ingress
-        .default_backend
-        .as_ref()
-        .map_or(KindCell::Absent, |backend| {
-            KindCell::Mono(backend.clone().into())
-        });
+    let default_backend = match (&ingress.default_backend, &ingress.default_service) {
+        (Some(backend), Some(service)) => {
+            service_link("Default backend", backend, &ingress.namespace, service)
+        }
+        (Some(backend), None) => {
+            DetailRow::field("Default backend", KindCell::Mono(backend.clone().into()))
+        }
+        (None, _) => DetailRow::field("Default backend", KindCell::Absent),
+    };
     let mut sections = vec![
         DetailSection {
             title: "Ingress",
             rows: vec![
                 DetailRow::field("Class", KindCell::text_or_absent(ingress.class.as_deref())),
                 DetailRow::field("Address", address.clone()),
-                DetailRow::field("Default backend", default_backend),
+                default_backend,
             ],
         },
         DetailSection {
@@ -122,7 +126,14 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
                         rule.host.as_deref().unwrap_or("*"),
                         rule.path.as_deref().unwrap_or("")
                     );
-                    DetailRow::stacked(label, KindCell::Mono(rule.backend.clone().into()))
+                    match &rule.service {
+                        Some(service) => {
+                            stacked_service_link(label, &rule.backend, &ingress.namespace, service)
+                        }
+                        None => {
+                            DetailRow::stacked(label, KindCell::Mono(rule.backend.clone().into()))
+                        }
+                    }
                 })
                 .collect(),
         },
@@ -164,8 +175,86 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
         event: None,
         related_pods: None,
         labels: chips(&ingress.labels),
-        object: KindObject::Plain,
+        object: KindObject::Ingress(ingress.clone()),
     }
+}
+
+/// A row whose backend text opens the Service it names.
+fn service_link(label: &str, backend: &str, namespace: &str, service: &str) -> DetailRow {
+    match ResourceKey::of_object("Service", Some(namespace), service) {
+        Some(target) => DetailRow::Link {
+            label: label.to_owned().into(),
+            text: backend.to_owned().into(),
+            target,
+        },
+        None => DetailRow::field(label.to_owned(), KindCell::Mono(backend.to_owned().into())),
+    }
+}
+
+/// `service_link` with the label above the text, for a rule's host and path.
+fn stacked_service_link(label: String, backend: &str, namespace: &str, service: &str) -> DetailRow {
+    match ResourceKey::of_object("Service", Some(namespace), service) {
+        Some(target) => DetailRow::StackedLink {
+            label: label.into(),
+            text: backend.to_owned().into(),
+            target,
+        },
+        None => DetailRow::stacked(label, KindCell::Mono(backend.to_owned().into())),
+    }
+}
+
+/// The URLs the Open URL action offers, in rule order and without duplicates. Only plain hosts and
+/// paths become URLs, so nothing but `http` or `https` and a safe string ever reaches the browser.
+pub(crate) fn ingress_urls(ingress: &IngressSummary) -> Vec<String> {
+    let mut urls: Vec<String> = Vec::new();
+    for rule in &ingress.rules {
+        let Some(host) = rule.host.as_deref().filter(|host| is_plain_host(host)) else {
+            continue;
+        };
+        let scheme = if is_covered_by_tls(host, &ingress.tls) {
+            "https"
+        } else {
+            "http"
+        };
+        let path = rule
+            .path
+            .as_deref()
+            .filter(|path| is_plain_path(path))
+            .unwrap_or("/");
+        let url = format!("{scheme}://{host}{path}");
+        if !urls.contains(&url) {
+            urls.push(url);
+        }
+    }
+    urls
+}
+
+/// Letters, digits, `.` and `-` only: a wildcard host (`*.example.com`) is not one.
+fn is_plain_host(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+}
+
+/// A path of unreserved characters and `/`; anything else (a regex, a query) falls back to `/`.
+fn is_plain_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.' | '~'))
+}
+
+/// Whether a TLS entry lists `host`, or a wildcard `*.suffix` that covers exactly one more label.
+fn is_covered_by_tls(host: &str, tls: &[IngressTls]) -> bool {
+    tls.iter()
+        .flat_map(|entry| &entry.hosts)
+        .any(|listed| match listed.strip_prefix("*") {
+            Some(suffix) if suffix.starts_with('.') => host
+                .strip_suffix(suffix)
+                .is_some_and(|label| !label.is_empty() && !label.contains('.')),
+            _ => listed == host,
+        })
 }
 
 /// The status a Service has before its pods and endpoint slices are known; the endpoint join

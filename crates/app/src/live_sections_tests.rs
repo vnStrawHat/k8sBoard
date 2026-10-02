@@ -1,6 +1,6 @@
 use cluster::{
-    ControllerRef, CronSchedule, DeploymentSummary, EndpointPort, EndpointSummary, JobStatus,
-    ServicePortSummary, TemplateContainer,
+    ConfigMapKey, ConfigMapValue, ControllerRef, CronSchedule, DeploymentSummary, EndpointPort,
+    EndpointSummary, JobStatus, ServicePortSummary, TemplateContainer,
 };
 
 use super::*;
@@ -407,4 +407,97 @@ fn endpoint_rows_skip_slices_of_other_services() {
     let mut other = slice(&[(80, "TCP")], vec![endpoint("10.0.0.9", None, true)]);
     other.service = Some("web".to_owned());
     assert!(endpoints_content(&service(), &[other]).rows.is_empty());
+}
+
+fn config_map(keys: &[(&str, usize, bool)]) -> ConfigMapSummary {
+    ConfigMapSummary {
+        namespace: "team-a".to_owned(),
+        name: "settings".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        keys: keys
+            .iter()
+            .map(|(name, size_bytes, is_binary)| ConfigMapKey {
+                name: (*name).to_owned(),
+                size_bytes: *size_bytes,
+                is_binary: *is_binary,
+            })
+            .collect(),
+        is_immutable: false,
+    }
+}
+
+fn values(entries: Vec<(&str, ValuePreview)>) -> ConfigMapValues {
+    ConfigMapValues {
+        namespace: "team-a".to_owned(),
+        name: "settings".to_owned(),
+        entries: entries
+            .into_iter()
+            .map(|(key, preview)| ConfigMapValue {
+                key: key.to_owned(),
+                preview,
+            })
+            .collect(),
+    }
+}
+
+fn texts(lines: &[DataLine]) -> Vec<(&str, &str)> {
+    lines
+        .iter()
+        .map(|line| (line.key.as_str(), line.text.as_str()))
+        .collect()
+}
+
+#[test]
+fn config_map_data_prefers_previews() {
+    let summary = config_map(&[
+        ("app.yaml", 40, false),
+        ("config.json", 412, false),
+        ("logo.png", 2048, true),
+        ("motd", 3, false),
+        ("script.sh", 1229, false),
+    ]);
+    let loaded = values(vec![
+        ("app.yaml", ValuePreview::Line("debug=true".to_owned())),
+        ("config.json", ValuePreview::Json { size_bytes: 412 }),
+        ("logo.png", ValuePreview::Binary { size_bytes: 2048 }),
+        (
+            "script.sh",
+            ValuePreview::Text {
+                size_bytes: 1229,
+                lines: 3,
+            },
+        ),
+    ]);
+    let lines = data_lines(&summary, Some(&loaded));
+    assert_eq!(
+        texts(&lines),
+        [
+            ("app.yaml", "debug=true"),
+            ("config.json", "JSON · 412 B"),
+            ("logo.png", "binary · 2.0 KiB"),
+            // A key the watch has not delivered keeps its size.
+            ("motd", "3 B"),
+            ("script.sh", "text · 3 lines · 1.2 KiB"),
+        ]
+    );
+}
+
+#[test]
+fn config_map_data_shows_sizes_before_the_values_load() {
+    let summary = config_map(&[("app.yaml", 412, false), ("logo.png", 2048, true)]);
+    let lines = data_lines(&summary, None);
+    assert_eq!(
+        texts(&lines),
+        [("app.yaml", "412 B"), ("logo.png", "2.0 KiB · binary")]
+    );
+}
+
+#[test]
+fn text_preview_of_one_line_is_singular() {
+    let preview = ValuePreview::Text {
+        size_bytes: 300,
+        lines: 1,
+    };
+    assert_eq!(preview_text(&preview), "text · 1 line · 300 B");
 }

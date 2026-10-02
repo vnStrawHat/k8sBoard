@@ -17,6 +17,8 @@ pub(crate) enum RelatedSubject {
     },
     /// Every Job of the namespace; the drawer keeps those the CronJob owns.
     Jobs { namespace: String, cron_job: String },
+    /// The value previews of one ConfigMap.
+    ConfigMapValues { namespace: String, name: String },
 }
 
 /// The related subject of a row. A kind without related content, and a Deployment without a
@@ -38,6 +40,12 @@ pub(crate) fn related_subject(kind: ResourceKind, row: &KindRow) -> Option<Relat
             namespace,
             cron_job: cron_job.name.clone(),
         }),
+        (ResourceKind::ConfigMaps, KindObject::ConfigMap(config_map)) => {
+            Some(RelatedSubject::ConfigMapValues {
+                namespace,
+                name: config_map.name.clone(),
+            })
+        }
         _ => None,
     }
 }
@@ -121,5 +129,25 @@ mod tests {
     fn deployment_without_selector_has_no_subject() {
         let row = deployment_row(&deployment(&[]));
         assert_eq!(related_subject(ResourceKind::Deployments, &row), None);
+    }
+
+    #[test]
+    fn config_map_subject_names_the_object() {
+        let row = crate::config_map_rows::config_map_row(&cluster::ConfigMapSummary {
+            namespace: "team-a".to_owned(),
+            name: "settings".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            keys: Vec::new(),
+            is_immutable: false,
+        });
+        assert_eq!(
+            related_subject(ResourceKind::ConfigMaps, &row),
+            Some(RelatedSubject::ConfigMapValues {
+                namespace: "team-a".to_owned(),
+                name: "settings".to_owned(),
+            })
+        );
+        assert_eq!(related_subject(ResourceKind::Services, &row), None);
     }
 }

@@ -1,4 +1,9 @@
-use cluster::{ReadyCount, ServicePortSummary, StatusReason};
+use cluster::{
+    ContainerKind, ContainerProbes, ContainerResource, ContainerState, ContainerSummary,
+    ControllerRef, EnvEntry, EnvFromEntry, EnvFromSource, EnvSource, MountEntry, NamespacePhase,
+    NamespaceScope, NamespaceSummary, PodStatus, ReadyCount, ServicePortSummary, StatusReason,
+    VolumeSource,
+};
 
 use super::*;
 use crate::network_rows::service_row;
@@ -89,6 +94,7 @@ fn joined(
     let inputs = JoinInputs {
         pods: &pods,
         companion: companion.as_ref(),
+        scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::Services, &mut rows, &inputs);
     rows.remove(0)
@@ -360,11 +366,13 @@ fn rejoin_starts_from_the_builder_status() {
     let with_slices = JoinInputs {
         pods: &pods,
         companion: Some(&companion),
+        scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::Services, &mut rows, &with_slices);
     let without = JoinInputs {
         pods: &pods,
         companion: None,
+        scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::Services, &mut rows, &without);
     assert_eq!(rows[0].status, toned("ClusterIP", StatusTone::Ok));
@@ -378,6 +386,7 @@ fn unloaded_pods_do_not_claim_no_match() {
     let inputs = JoinInputs {
         pods: &pods,
         companion: None,
+        scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::Services, &mut rows, &inputs);
     assert_eq!(rows[0].status, toned("ClusterIP", StatusTone::Ok));
@@ -391,6 +400,7 @@ fn other_kinds_are_not_joined() {
     let inputs = JoinInputs {
         pods: &pods,
         companion: None,
+        scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::Deployments, &mut rows, &inputs);
     assert_eq!(rows, before);
@@ -468,4 +478,364 @@ fn matching_pods_use_the_selector_in_the_namespace() {
 #[test]
 fn selector_less_service_matches_no_pods() {
     assert!(matching_pods(&service(&[]), &api_pods()).is_empty());
+}
+
+// ---- ConfigMaps and Namespaces ----
+
+fn container(kind: ContainerKind) -> ContainerSummary {
+    ContainerSummary {
+        name: "main".to_owned(),
+        image: "registry/app:1".to_owned(),
+        kind,
+        state: ContainerState::Running { started_at: None },
+        is_ready: true,
+        restart_count: 0,
+        last_termination: None,
+        image_digest: None,
+        pull_policy: None,
+        is_started: None,
+        ports: Vec::new(),
+        resources: Vec::new(),
+        probes: ContainerProbes::default(),
+        env: Vec::new(),
+        env_from: Vec::new(),
+        mounts: Vec::new(),
+    }
+}
+
+fn owned_by(mut pod: PodSummary, kind: &str, name: &str) -> PodSummary {
+    pod.controller = Some(ControllerRef {
+        kind: kind.to_owned(),
+        name: name.to_owned(),
+    });
+    pod
+}
+
+fn with_container(mut pod: PodSummary, container: ContainerSummary) -> PodSummary {
+    pod.containers.push(container);
+    pod
+}
+
+fn env_from_config_map(name: &str) -> ContainerSummary {
+    let mut container = container(ContainerKind::Main);
+    container.env_from = vec![EnvFromEntry {
+        source: EnvFromSource::ConfigMap {
+            name: name.to_owned(),
+        },
+        prefix: None,
+    }];
+    container
+}
+
+fn users_in_team_a(users: &ConfigMapUsers, config_map: &str) -> Vec<UsedBy> {
+    users_of(users, "team-a", config_map).cloned().collect()
+}
+
+fn ways_of(used_by: &UsedBy) -> Vec<&'static str> {
+    used_by.ways.iter().copied().collect()
+}
+
+#[test]
+fn config_map_users_from_env_env_from_volume_projected() {
+    let mut main = container(ContainerKind::Main);
+    main.env = vec![
+        EnvEntry {
+            name: "A".to_owned(),
+            source: EnvSource::ConfigMapKey {
+                name: "settings".to_owned(),
+                key: "a".to_owned(),
+            },
+        },
+        // A Secret reference is not a config map.
+        EnvEntry {
+            name: "B".to_owned(),
+            source: EnvSource::SecretKey {
+                name: "settings".to_owned(),
+                key: "b".to_owned(),
+            },
+        },
+    ];
+    main.env_from = env_from_config_map("settings").env_from;
+    let mut init = container(ContainerKind::Init);
+    init.mounts = vec![
+        MountEntry {
+            path: "/etc/a".to_owned(),
+            volume: "a".to_owned(),
+            source: VolumeSource::ConfigMap {
+                name: "settings".to_owned(),
+            },
+            is_read_only: true,
+            sub_path: None,
+        },
+        MountEntry {
+            path: "/etc/b".to_owned(),
+            volume: "b".to_owned(),
+            source: VolumeSource::Projected {
+                config_maps: vec!["kube-root-ca.crt".to_owned()],
+            },
+            is_read_only: true,
+            sub_path: None,
+        },
+    ];
+    let pod = with_container(with_container(pod("team-a", "api-1", &[]), main), init);
+    let users = config_map_users(&[pod]);
+    let settings = users_in_team_a(&users, "settings");
+    assert_eq!(settings.len(), 1);
+    assert_eq!(ways_of(&settings[0]), ["env", "env from", "volume"]);
+    let projected = users_in_team_a(&users, "kube-root-ca.crt");
+    assert_eq!(ways_of(&projected[0]), ["volume"]);
+}
+
+#[test]
+fn owner_mapping_deployment_cronjob_bare_pod() {
+    let using = |name: &str| with_container(pod("team-a", name, &[]), env_from_config_map("c"));
+    let bare = using("debug");
+    let deployment = owned_by(using("api-1"), "ReplicaSet", "api-7d9f8c");
+    let cron_job = owned_by(using("n-1"), "Job", "nightly-29012345");
+    let stateful = owned_by(using("db-0"), "StatefulSet", "db");
+    // A ReplicaSet without a hash suffix and a Job without a schedule suffix keep their own names.
+    let standalone = owned_by(using("w-1"), "ReplicaSet", "standalone");
+    let manual = owned_by(using("m-1"), "Job", "migrate-once");
+    let users = config_map_users(&[bare, deployment, cron_job, stateful, standalone, manual]);
+    let owners: Vec<String> = users_in_team_a(&users, "c")
+        .into_iter()
+        .map(|used_by| used_by.owner)
+        .collect();
+    assert_eq!(
+        owners,
+        [
+            "cronjob/nightly",
+            "deployment/api",
+            "job/migrate-once",
+            "pod/debug",
+            "replicaset/standalone",
+            "statefulset/db"
+        ]
+    );
+}
+
+#[test]
+fn owner_links_open_the_workload() {
+    let pod = owned_by(
+        with_container(pod("team-a", "api-1", &[]), env_from_config_map("c")),
+        "ReplicaSet",
+        "api-7d9f8c",
+    );
+    let users = config_map_users(&[pod]);
+    assert_eq!(
+        users_in_team_a(&users, "c")[0].target,
+        ResourceKey::of_object("Deployment", Some("team-a"), "api")
+    );
+}
+
+#[test]
+fn pods_of_one_owner_merge_into_one_user() {
+    let replica = |name: &str| {
+        owned_by(
+            with_container(pod("team-a", name, &[]), env_from_config_map("c")),
+            "ReplicaSet",
+            "api-7d9f8c",
+        )
+    };
+    let users = config_map_users(&[replica("api-1"), replica("api-2")]);
+    assert_eq!(users_in_team_a(&users, "c").len(), 1);
+}
+
+fn config_map_row_in(namespace: &str, name: &str) -> KindRow {
+    crate::config_map_rows::config_map_row(&cluster::ConfigMapSummary {
+        namespace: namespace.to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        keys: Vec::new(),
+        is_immutable: false,
+    })
+}
+
+fn join_config_maps_of(pods: &LiveList<PodSummary>, rows: &mut [KindRow]) {
+    let inputs = JoinInputs {
+        pods,
+        companion: None,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(ResourceKind::ConfigMaps, rows, &inputs);
+}
+
+#[test]
+fn used_by_cell_shows_first_and_more() {
+    let user = |name: &str, owner: &str| {
+        owned_by(
+            with_container(pod("team-a", name, &[]), env_from_config_map("settings")),
+            "StatefulSet",
+            owner,
+        )
+    };
+    let pods = ready_list(vec![user("a-0", "a"), user("b-0", "b"), user("c-0", "c")]);
+    let mut rows = vec![
+        config_map_row_in("team-a", "settings"),
+        config_map_row_in("team-a", "unused"),
+    ];
+    join_config_maps_of(&pods, &mut rows);
+    assert_eq!(
+        rows[0].cells.get(CONFIG_MAP_USED_BY),
+        Some(&KindCell::MonoWithMore {
+            text: "statefulset/a".into(),
+            more: 2
+        })
+    );
+    assert_eq!(
+        rows[1].cells.get(CONFIG_MAP_USED_BY),
+        Some(&KindCell::Absent)
+    );
+}
+
+#[test]
+fn used_by_cell_is_absent_until_the_pods_load() {
+    let mut rows = vec![config_map_row_in("team-a", "settings")];
+    join_config_maps_of(&LiveList::Loading, &mut rows);
+    assert_eq!(
+        rows[0].cells.get(CONFIG_MAP_USED_BY),
+        Some(&KindCell::Absent)
+    );
+}
+
+fn requesting(mut pod: PodSummary, kind: ContainerKind, cpu: &str, memory: &str) -> PodSummary {
+    let mut container = container(kind);
+    container.resources = ["cpu", "memory"]
+        .into_iter()
+        .zip([cpu, memory])
+        .map(|(name, request)| ContainerResource {
+            name: name.to_owned(),
+            request: Some(request.to_owned()),
+            limit: None,
+        })
+        .collect();
+    pod.containers.push(container);
+    pod
+}
+
+#[test]
+fn namespace_load_sums_requests_of_active_pods() {
+    let main = requesting(
+        pod("team-a", "a", &[]),
+        ContainerKind::Main,
+        "250m",
+        "128Mi",
+    );
+    let sidecar = requesting(
+        pod("team-a", "b", &[]),
+        ContainerKind::Sidecar,
+        "250m",
+        "128Mi",
+    );
+    // Init containers do not run alongside the others.
+    let init = requesting(pod("team-a", "c", &[]), ContainerKind::Init, "2", "1Gi");
+    let mut finished = requesting(pod("team-a", "d", &[]), ContainerKind::Main, "1", "1Gi");
+    finished.status = PodStatus::Reason(StatusReason::Completed);
+    let pods = [main, sidecar, init, finished];
+    let refs: Vec<&PodSummary> = pods.iter().collect();
+    let load = namespace_load(&refs);
+    // A finished pod still counts as a pod but holds no requests.
+    assert_eq!(load.pods, 4);
+    assert_eq!(load.cpu.nanocores(), 500_000_000);
+    assert_eq!(load.memory.bytes(), 256 * 1024 * 1024);
+}
+
+fn namespace_row_named(name: &str) -> KindRow {
+    crate::namespace_rows::namespace_row(&NamespaceSummary {
+        name: name.to_owned(),
+        phase: NamespacePhase::Active,
+        labels: Vec::new(),
+        created_at: None,
+    })
+}
+
+fn join_namespaces_of(scope: &NamespaceScope, pods: &LiveList<PodSummary>, rows: &mut [KindRow]) {
+    let inputs = JoinInputs {
+        pods,
+        companion: None,
+        scope,
+    };
+    join_rows(ResourceKind::Namespaces, rows, &inputs);
+}
+
+fn load_cells_of(row: &KindRow) -> [Option<&KindCell>; 3] {
+    [NAMESPACE_PODS, NAMESPACE_CPU, NAMESPACE_MEMORY].map(|index| row.cells.get(index))
+}
+
+#[test]
+fn namespace_cells_show_pods_and_requests() {
+    let pods = ready_list(vec![requesting(
+        pod("team-a", "a", &[]),
+        ContainerKind::Main,
+        "250m",
+        "128Mi",
+    )]);
+    let mut rows = vec![namespace_row_named("team-a")];
+    join_namespaces_of(&NamespaceScope::All, &pods, &mut rows);
+    assert_eq!(
+        load_cells_of(&rows[0]),
+        [
+            Some(&KindCell::count(1)),
+            Some(&KindCell::Quantity {
+                text: "250m".into(),
+                value: 250_000_000,
+                tone: None
+            }),
+            Some(&KindCell::Quantity {
+                text: "128Mi".into(),
+                value: 128 * 1024 * 1024,
+                tone: None
+            }),
+        ]
+    );
+}
+
+#[test]
+fn namespace_without_pods_reads_zero_not_unknown() {
+    let mut rows = vec![namespace_row_named("empty")];
+    join_namespaces_of(&NamespaceScope::All, &ready_list(Vec::new()), &mut rows);
+    assert_eq!(load_cells_of(&rows[0])[0], Some(&KindCell::count(0)));
+}
+
+#[test]
+fn namespace_outside_scope_is_absent() {
+    let pods = ready_list(vec![pod("team-a", "a", &[])]);
+    let scope = NamespaceScope::Named("team-a".to_owned());
+    let mut rows = vec![namespace_row_named("team-a"), namespace_row_named("other")];
+    join_namespaces_of(&scope, &pods, &mut rows);
+    assert_eq!(load_cells_of(&rows[0])[0], Some(&KindCell::count(1)));
+    assert_eq!(load_cells_of(&rows[1]), [Some(&KindCell::Absent); 3]);
+}
+
+#[test]
+fn namespace_cells_are_absent_until_the_pods_load() {
+    let mut rows = vec![namespace_row_named("team-a")];
+    join_namespaces_of(&NamespaceScope::All, &LiveList::Loading, &mut rows);
+    assert_eq!(load_cells_of(&rows[0]), [Some(&KindCell::Absent); 3]);
+}
+
+#[test]
+fn namespace_column_indices_name_their_columns() {
+    let columns = ResourceKind::Namespaces.columns();
+    let names = [NAMESPACE_PODS, NAMESPACE_CPU, NAMESPACE_MEMORY]
+        .map(|index| columns.get(index).map(|column| column.name));
+    assert_eq!(names, [Some("Pods"), Some("CPU req"), Some("Memory req")]);
+}
+
+#[test]
+fn config_map_column_index_names_used_by() {
+    let columns = ResourceKind::ConfigMaps.columns();
+    assert_eq!(
+        columns.get(CONFIG_MAP_USED_BY).map(|column| column.name),
+        Some("Used by")
+    );
+}
+
+#[test]
+fn cron_job_suffix_needs_eight_digits() {
+    assert_eq!(cron_job_of_job("nightly-29012345"), Some("nightly"));
+    assert_eq!(cron_job_of_job("nightly-123"), None);
+    assert_eq!(cron_job_of_job("nightly-2901234a"), None);
+    assert_eq!(cron_job_of_job("-29012345"), None);
 }

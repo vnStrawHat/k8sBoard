@@ -270,3 +270,83 @@ fn go_to_owner_disabled_without_owner() {
     let unknown = replica_set_row_owned_by(Some(("ReplicationController", "old")));
     assert_eq!(owner_target(&unknown), None);
 }
+
+fn ingress_row_with(hosts: &[&str]) -> KindRow {
+    let rules = hosts
+        .iter()
+        .map(|host| cluster::IngressPath {
+            host: Some((*host).to_owned()),
+            path: Some("/".to_owned()),
+            backend: "api:80".to_owned(),
+            service: Some("api".to_owned()),
+        })
+        .collect();
+    crate::network_rows::ingress_row(&cluster::IngressSummary {
+        namespace: "team-a".to_owned(),
+        name: "web".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        class: None,
+        hosts: hosts.iter().map(|host| (*host).to_owned()).collect(),
+        addresses: Vec::new(),
+        rules,
+        default_backend: None,
+        default_service: None,
+        tls: Vec::new(),
+    })
+}
+
+#[test]
+fn open_url_disabled_without_host() {
+    assert_eq!(
+        open_url_choice(&ingress_row_with(&[])),
+        OpenUrl::Unavailable
+    );
+    // A wildcard host has nothing to open either.
+    assert_eq!(
+        open_url_choice(&ingress_row_with(&["*.example.com"])),
+        OpenUrl::Unavailable
+    );
+}
+
+#[test]
+fn open_url_opens_the_only_url_directly() {
+    assert_eq!(
+        open_url_choice(&ingress_row_with(&["a.example.com"])),
+        OpenUrl::One("http://a.example.com/".to_owned())
+    );
+}
+
+#[test]
+fn open_url_submenu_for_several() {
+    assert_eq!(
+        open_url_choice(&ingress_row_with(&["a.example.com", "b.example.com"])),
+        OpenUrl::Several(vec![
+            "http://a.example.com/".to_owned(),
+            "http://b.example.com/".to_owned()
+        ])
+    );
+}
+
+#[test]
+fn open_url_submenu_lists_at_most_ten() {
+    let hosts: Vec<String> = (0..12).map(|n| format!("h{n}.example.com")).collect();
+    let hosts: Vec<&str> = hosts.iter().map(String::as_str).collect();
+    let OpenUrl::Several(urls) = open_url_choice(&ingress_row_with(&hosts)) else {
+        panic!("expected a submenu");
+    };
+    assert_eq!(urls.len(), 10);
+}
+
+#[test]
+fn open_url_is_unavailable_for_other_kinds() {
+    let row = crate::config_map_rows::config_map_row(&cluster::ConfigMapSummary {
+        namespace: "team-a".to_owned(),
+        name: "settings".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        keys: Vec::new(),
+        is_immutable: false,
+    });
+    assert_eq!(open_url_choice(&row), OpenUrl::Unavailable);
+}
