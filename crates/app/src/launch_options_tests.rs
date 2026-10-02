@@ -331,3 +331,30 @@ fn pvc_screens_wait_for_kubelet_stats() {
     assert!(!LaunchScreen::KindDrawer(pvcs, DrawerTab::Yaml).shows_kubelet_stats());
     assert!(!LaunchScreen::Kind(ResourceKind::Deployments).shows_kubelet_stats());
 }
+
+#[test]
+fn releases_values_and_manifest_slugs_parse() {
+    for (name, tab) in [
+        ("releases-values", DrawerTab::Values),
+        ("releases-manifest", DrawerTab::Manifest),
+    ] {
+        let launch = run_options(&["--screen", name]).screen;
+        assert_eq!(
+            launch,
+            LaunchScreen::KindDrawer(ResourceKind::HelmReleases, tab)
+        );
+        assert!(launch.has_drawer(), "{name}");
+    }
+    let drawer = run_options(&["--screen", "releases-drawer"]).screen;
+    assert_eq!(
+        drawer,
+        LaunchScreen::KindDrawer(ResourceKind::HelmReleases, DrawerTab::Overview)
+    );
+}
+
+#[test]
+fn values_slug_rejected_for_other_kinds() {
+    assert!(parse(&["--screen", "secrets-values"]).is_err());
+    assert!(parse(&["--screen", "deployments-manifest"]).is_err());
+    assert!(parse(&["--screen", "pods-values"]).is_err());
+}

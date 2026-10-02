@@ -46,7 +46,7 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Access Control | ClusterRoles | Done (0015) | Done (aggregated, built-in, bound to, VERY BROAD box, Hide system: 0015) | Who can… 0023 | — |
 | Access Control | RoleBindings | Done (0015) | Done (role and service-account links, REVIEW box, Go to role: 0015) | — | New 0031 |
 | Access Control | ClusterRoleBindings | Done (0015) | Done (cluster-admin to everyone or service accounts flag, REVIEW box, Hide system: 0015) | — | — |
-| Helm | Releases | Missing | Missing | 0017 (history, values, manifest, values diff, UPGRADE FAILED box) | Roll back, Uninstall 0038 (deferred) |
+| Helm | Releases | Done (0017) | Done (history, values and diff masked with 30 s Reveal, manifest, notes, UPGRADE FAILED box: 0017) | — | Roll back, Uninstall 0038 (deferred) |
 | Custom Resources | CRDs | Missing | Missing | 0018 (versions, printer columns, schema, Browse instances) | — |
 | Custom Resources | Certificates (any discovered CR) | Missing | Missing | 0018 (printer columns, schema drawer, status box) | Renew 0032 |
 

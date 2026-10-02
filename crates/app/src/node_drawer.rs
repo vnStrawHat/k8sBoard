@@ -63,7 +63,12 @@ pub(crate) fn node_drawer(
             None => div().into_any_element(),
         }),
         DrawerTab::Yaml => yaml_body(state),
-        DrawerTab::Overview | DrawerTab::Containers => {
+        // A node drawer has no Helm tabs, so `shown_tab` never yields them.
+        DrawerTab::Overview
+        | DrawerTab::Containers
+        | DrawerTab::Values
+        | DrawerTab::Manifest
+        | DrawerTab::Notes => {
             DrawerBody::Scrolling(overview(node, session.read(cx).live(), now, cx))
         }
     };

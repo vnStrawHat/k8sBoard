@@ -1844,3 +1844,115 @@ fn ingress_box_waits_for_companion() {
     // An ingress without TLS needs no box even with the list loaded.
     assert_eq!(ingress_box(&tls_ingress(&[]), Some(&[]), 100 * DAY), None);
 }
+
+// ---- Helm releases ----
+
+fn helm_release(status: HelmStatus, description: Option<&str>) -> HelmReleaseSummary {
+    HelmReleaseSummary {
+        namespace: "shop".to_owned(),
+        name: "api".to_owned(),
+        revision: 5,
+        status,
+        chart: None,
+        updated_at: Some(at(1_000)),
+        description: description.map(str::to_owned),
+        deployed_revision: None,
+    }
+}
+
+fn helm_box(release: &HelmReleaseSummary) -> Option<KindDiagnosis> {
+    helm_release_diagnosis(release, at(1_000 + 7_200))
+}
+
+#[test]
+fn upgrade_failed_box_names_deployed_revision() {
+    let mut release = helm_release(
+        HelmStatus::Failed,
+        Some("Upgrade \"api\" failed: timed out"),
+    );
+    release.deployed_revision = Some(4);
+    let diagnosis = helm_box(&release).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(diagnosis.title, "UPGRADE FAILED");
+    assert_eq!(
+        diagnosis.text,
+        "Upgrade \"api\" failed: timed out Revision 4 is still deployed."
+    );
+    release.deployed_revision = None;
+    assert_eq!(
+        helm_box(&release).expect("a box").text,
+        "Upgrade \"api\" failed: timed out"
+    );
+}
+
+#[test]
+fn rollback_failed_by_description_prefix() {
+    let release = helm_release(
+        HelmStatus::Failed,
+        Some("Rollback \"api\" failed: no revision"),
+    );
+    let diagnosis = helm_box(&release).expect("a box");
+    assert_eq!(diagnosis.title, "ROLLBACK FAILED");
+    assert_eq!(diagnosis.text, "Rollback \"api\" failed: no revision");
+}
+
+#[test]
+fn install_failed_for_other_descriptions() {
+    for description in [
+        "Release \"api\" failed: boom",
+        "failed pre-install: timed out",
+    ] {
+        let diagnosis =
+            helm_box(&helm_release(HelmStatus::Failed, Some(description))).expect("a box");
+        assert_eq!(diagnosis.title, "INSTALL FAILED");
+        assert_eq!(diagnosis.text, description);
+    }
+}
+
+#[test]
+fn failed_without_description_has_fallback_text() {
+    let diagnosis = helm_box(&helm_release(HelmStatus::Failed, None)).expect("a box");
+    assert_eq!(diagnosis.title, "INSTALL FAILED");
+    assert_eq!(diagnosis.text, "Helm gave no reason.");
+}
+
+#[test]
+fn pending_release_box_warns() {
+    for (status, title) in [
+        (HelmStatus::PendingInstall, "PENDING INSTALL"),
+        (HelmStatus::PendingUpgrade, "PENDING UPGRADE"),
+        (HelmStatus::PendingRollback, "PENDING ROLLBACK"),
+    ] {
+        let diagnosis = helm_box(&helm_release(status, None)).expect("a box");
+        assert_eq!(diagnosis.tone, StatusTone::Warn);
+        assert_eq!(diagnosis.title, title);
+        assert_eq!(
+            diagnosis.text,
+            "Helm started this operation 2h ago and has not finished. A pending release blocks the next helm upgrade."
+        );
+    }
+    let uninstalling = helm_box(&helm_release(HelmStatus::Uninstalling, None)).expect("a box");
+    assert_eq!(uninstalling.title, "UNINSTALLING");
+    assert_eq!(
+        uninstalling.text,
+        "Helm started uninstalling this release 2h ago."
+    );
+    let unknown =
+        helm_box(&helm_release(HelmStatus::Unknown("odd".to_owned()), None)).expect("a box");
+    assert_eq!(unknown.title, "UNKNOWN STATUS");
+    assert_eq!(unknown.text, "Helm reports status \"odd\".");
+}
+
+#[test]
+fn deployed_release_has_no_box() {
+    for status in [
+        HelmStatus::Deployed,
+        HelmStatus::Uninstalled,
+        HelmStatus::Superseded,
+    ] {
+        assert_eq!(
+            helm_box(&helm_release(status, Some("Install complete"))),
+            None
+        );
+    }
+}

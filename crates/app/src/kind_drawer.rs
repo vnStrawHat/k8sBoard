@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use cluster::HelmRevisionRef;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::progress::Progress;
@@ -20,14 +21,16 @@ use crate::certificate_expiry::expiry_label;
 use crate::cluster_session::{ClusterSession, CompanionLists, LiveCluster};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
-    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, link_text, menu_button, port_row,
-    section_title, shown_tab, tab_titles, truncated_text, truncated_text_with_tooltip,
+    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, helm_body, link_text, menu_button,
+    port_row, section_title, shown_tab, tab_titles, truncated_text, truncated_text_with_tooltip,
     wide_detail_row, yaml_body,
 };
+use crate::helm_release_view::HelmReleaseView;
+use crate::helm_rows::VALUES_CHANGE_TITLE;
 use crate::kind_diagnosis::{DiagnosisInputs, KindDiagnosis, kind_diagnosis};
 use crate::kind_join::{matching_pods, service_health_of};
 use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow, LiveContent};
-use crate::live_sections::{live_rows, next_run_text, owned_pods};
+use crate::live_sections::{helm_history_rows, live_rows, next_run_text, owned_pods};
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
@@ -72,14 +75,10 @@ pub(crate) fn kind_drawer(
                 .into_any_element(),
         }),
         DrawerTab::Yaml => yaml_body(state),
-        DrawerTab::Overview | DrawerTab::Containers => DrawerBody::Scrolling(overview(
-            kind,
-            row,
-            live,
-            state.secret_values.as_ref(),
-            now,
-            cx,
-        )),
+        DrawerTab::Values | DrawerTab::Manifest | DrawerTab::Notes => helm_body(state),
+        DrawerTab::Overview | DrawerTab::Containers => {
+            DrawerBody::Scrolling(overview(kind, row, live, state, now, cx))
+        }
     };
     let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
     drawer_frame(header, tab_bar, body, state.width(), cx).into_any_element()
@@ -146,7 +145,8 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::Role(_)
         | KindObject::Binding(_)
         | KindObject::ServiceAccount(_)
-        | KindObject::Secret(_) => None,
+        | KindObject::Secret(_)
+        | KindObject::HelmRelease(_) => None,
     }
 }
 
@@ -228,11 +228,13 @@ fn overview(
     kind: ResourceKind,
     row: &KindRow,
     live: &LiveCluster,
-    secret_values: Option<&Entity<SecretValuesView>>,
+    state: &DrawerState,
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> AnyElement {
-    let paint = DrawerPaint::new(kind, row, live, now).with_secret_values(secret_values);
+    let paint = DrawerPaint::new(kind, row, live, now)
+        .with_secret_values(state.secret_values.as_ref())
+        .with_helm(state.helm.as_ref(), state.helm_revision);
     // Gives every element that needs an id one that is unique inside the drawer.
     let mut next_id = 0_usize;
     let mut column = v_flex();
@@ -240,7 +242,10 @@ fn overview(
         column = column.child(why_box(&diagnosis, cx));
     }
     for section in &row.sections {
-        column = column.child(section_title(section.title, cx));
+        // The values view draws its own heading, which names the revision.
+        if section.title != VALUES_CHANGE_TITLE {
+            column = column.child(section_title(section.title, cx));
+        }
         if section.rows.is_empty() {
             column = column.child(absent_text(cx));
         }
@@ -351,6 +356,10 @@ pub(crate) struct DrawerPaint<'a> {
     now: jiff::Timestamp,
     /// The values view of the open Secret drawer, which draws the Data section.
     secret_values: Option<&'a Entity<SecretValuesView>>,
+    /// The Helm view of the open release drawer, which draws the values diff.
+    helm: Option<&'a Entity<HelmReleaseView>>,
+    /// The revision a History button chose, for the `shown` mark.
+    helm_revision: Option<u32>,
 }
 
 impl<'a> DrawerPaint<'a> {
@@ -367,6 +376,8 @@ impl<'a> DrawerPaint<'a> {
             forward_reason: port_forward_reason(&live.access),
             now,
             secret_values: None,
+            helm: None,
+            helm_revision: None,
         }
     }
 }
@@ -374,6 +385,16 @@ impl<'a> DrawerPaint<'a> {
 impl<'a> DrawerPaint<'a> {
     fn with_secret_values(mut self, view: Option<&'a Entity<SecretValuesView>>) -> Self {
         self.secret_values = view;
+        self
+    }
+
+    fn with_helm(
+        mut self,
+        view: Option<&'a Entity<HelmReleaseView>>,
+        revision: Option<u32>,
+    ) -> Self {
+        self.helm = view;
+        self.helm_revision = revision;
         self
     }
 }
@@ -419,6 +440,17 @@ fn detail_element(
                 |view| view.clone().into_any_element(),
             )
         }
+        DetailRow::Live(LiveContent::HelmValuesChange) => helm_values_change(paint, cx),
+        DetailRow::Live(LiveContent::HelmHistory) => v_flex()
+            .children(helm_history_rows(
+                paint.kind,
+                paint.row,
+                paint.live,
+                effective_helm_revision(paint),
+                now,
+                cx,
+            ))
+            .into_any_element(),
         DetailRow::Live(content) => v_flex()
             .children(live_rows(
                 *content, paint.kind, paint.row, paint.live, now, cx,
@@ -456,6 +488,40 @@ fn detail_element(
             stacked_row(label, field_value(value, id, now, cx), id, cx)
         }
     }
+}
+
+/// The revision the Helm tabs show: the one a History button chose, else the latest.
+fn effective_helm_revision(paint: &DrawerPaint) -> Option<u32> {
+    let latest = match &paint.row.object {
+        KindObject::HelmRelease(release) => Some(release.revision),
+        _ => None,
+    };
+    paint.helm_revision.or(latest)
+}
+
+/// The values-change section of a release: the Helm view when it is for the latest revision, else
+/// a heading and a note (one frame before the shell's sync creates the view).
+fn helm_values_change(paint: &DrawerPaint, cx: &Context<AppShell>) -> AnyElement {
+    let KindObject::HelmRelease(release) = &paint.row.object else {
+        return div().into_any_element();
+    };
+    let revision = HelmRevisionRef {
+        namespace: release.namespace.clone(),
+        release: release.name.clone(),
+        revision: release.revision,
+    };
+    if let Some(view) = paint.helm.filter(|view| view.read(cx).is_for(&revision)) {
+        return view.clone().into_any_element();
+    }
+    v_flex()
+        .child(section_title(VALUES_CHANGE_TITLE, cx))
+        .child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("Loading…"),
+        )
+        .into_any_element()
 }
 
 /// A label, a bar toned by `tone` (the kit color without one), then the text in mono.

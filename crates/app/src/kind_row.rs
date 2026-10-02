@@ -3,10 +3,11 @@
 
 use cluster::{
     BindingSummary, ConfigMapSummary, ControllerRef, CronJobSummary, CronSchedule,
-    DaemonSetSummary, DeploymentSummary, HorizontalPodAutoscalerSummary, IngressSummary,
-    JobSummary, NetworkPolicySummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
-    PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary,
-    SecretSummary, ServiceAccountSummary, ServiceSummary, StatefulSetSummary,
+    DaemonSetSummary, DeploymentSummary, HelmReleaseSummary, HorizontalPodAutoscalerSummary,
+    IngressSummary, JobSummary, NetworkPolicySummary, PersistentVolumeClaimSummary,
+    PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary,
+    ResourceQuotaSummary, RoleSummary, SecretSummary, ServiceAccountSummary, ServiceSummary,
+    StatefulSetSummary,
 };
 use gpui_kit::SharedString;
 
@@ -60,6 +61,8 @@ pub(crate) enum KindObject {
     ServiceAccount(ServiceAccountSummary),
     /// Key names and sizes only: a Secret row never holds a value.
     Secret(SecretSummary),
+    /// A Helm release: names, numbers, and chart facts, never a value.
+    HelmRelease(HelmReleaseSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -89,6 +92,11 @@ pub(crate) enum LiveContent {
     SecretData,
     /// The certificate of a TLS Secret.
     Certificate,
+    /// The user values that changed from the previous revision to the latest, masked, with Reveal
+    /// (`helm_release_view.rs`).
+    HelmValuesChange,
+    /// Every revision of a Helm release, newest first, from the related history watch.
+    HelmHistory,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.

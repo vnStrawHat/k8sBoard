@@ -12,6 +12,7 @@ use crate::access_rows::{
 use crate::batch_rows::{cron_job_row, job_row};
 use crate::config_map_rows::config_map_row;
 use crate::event_rows::event_rows;
+use crate::helm_rows::helm_release_row;
 use crate::kind_row::KindRow;
 use crate::namespace_rows::namespace_row;
 use crate::network_policy_rows::network_policy_row;
@@ -51,6 +52,9 @@ pub(crate) enum ResourceKind {
     ClusterRoleBindings,
     ServiceAccounts,
     Secrets,
+    /// Helm releases, read from their `helm.sh/release.v1` Secrets. It shares `ObjectKind::Secret`
+    /// with `Secrets`, so `from_object_kind` keeps finding Secrets first.
+    HelmReleases,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -625,6 +629,29 @@ static SECRETS: KindSpec = KindSpec {
     has_port_forward: false,
 };
 
+static HELM_RELEASES: KindSpec = KindSpec {
+    label: "Releases",
+    object: ObjectKind::Secret,
+    name_column: NameColumn::Flexible,
+    // Helm's labels are bookkeeping (owner, status, version), not the user's.
+    has_labels: false,
+    singular: "release",
+    plural: "releases",
+    badge: "Hm",
+    is_namespaced: true,
+    access_check: AccessCheck::ListSecrets,
+    columns: &[
+        column("Chart", 260., Align::Left),
+        column("App version", 110., Align::Left),
+        column("Revision", 80., Align::Right),
+        column("Status", 130., Align::Left),
+        column("Updated", 100., Align::Right),
+    ],
+    read_only_actions: &["Roll back…"],
+    delete_label: "Uninstall release…",
+    has_port_forward: false,
+};
+
 /// The Name column of a kind that shows it, as wide as its minimum.
 pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left);
 
@@ -639,7 +666,7 @@ pub(crate) fn kind_columns(kind: ResourceKind) -> Vec<KindColumn> {
 }
 
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 24] = [
+    pub(crate) const ALL: [Self; 25] = [
         Self::Namespaces,
         Self::Events,
         Self::Deployments,
@@ -664,6 +691,7 @@ impl ResourceKind {
         Self::ClusterRoleBindings,
         Self::ServiceAccounts,
         Self::Secrets,
+        Self::HelmReleases,
     ];
 
     fn spec(self) -> &'static KindSpec {
@@ -692,6 +720,7 @@ impl ResourceKind {
             Self::ClusterRoleBindings => &CLUSTER_ROLE_BINDINGS,
             Self::ServiceAccounts => &SERVICE_ACCOUNTS,
             Self::Secrets => &SECRETS,
+            Self::HelmReleases => &HELM_RELEASES,
         }
     }
 
@@ -756,6 +785,12 @@ impl ResourceKind {
 
     pub(crate) fn has_labels(self) -> bool {
         self.spec().has_labels
+    }
+
+    /// Whether the sidebar counts the kind with a one-shot list. Releases do not: counting their
+    /// Secrets would count revisions, not releases.
+    pub(crate) fn has_count(self) -> bool {
+        self != Self::HelmReleases
     }
 
     /// Whether the drawer has a Monitor tab: the workloads that own pods (a CronJob has none).
@@ -891,6 +926,10 @@ impl ResourceKind {
                 .watch_secrets(scope)
                 .map(|update| rows(update, secret_row))
                 .boxed(),
+            Self::HelmReleases => connection
+                .watch_helm_releases(scope)
+                .map(|update| rows(update, helm_release_row))
+                .boxed(),
         }
     }
 }
@@ -967,12 +1006,10 @@ mod tests {
 
     #[test]
     fn every_kind_ends_with_a_right_aligned_age_column() {
-        let age_name = |kind| {
-            if kind == ResourceKind::Events {
-                "Last seen"
-            } else {
-                "Age"
-            }
+        let age_name = |kind| match kind {
+            ResourceKind::Events => "Last seen",
+            ResourceKind::HelmReleases => "Updated",
+            _ => "Age",
         };
         for kind in ResourceKind::ALL {
             let last = kind.columns().last().expect("kinds have columns");
@@ -984,12 +1021,38 @@ mod tests {
     #[test]
     fn object_kinds_round_trip() {
         for kind in ResourceKind::ALL {
+            // Releases are Secrets, and Secrets come first in `ALL`.
+            let expected = if kind == ResourceKind::HelmReleases {
+                ResourceKind::Secrets
+            } else {
+                kind
+            };
             assert_eq!(
                 ResourceKind::from_object_kind(kind.object_kind()),
-                Some(kind)
+                Some(expected)
             );
         }
         assert_eq!(ResourceKind::from_object_kind("Pod"), None);
+    }
+
+    #[test]
+    fn releases_follow_secrets_in_all() {
+        let position = |kind| ResourceKind::ALL.iter().position(|listed| *listed == kind);
+        assert_eq!(
+            position(ResourceKind::HelmReleases),
+            position(ResourceKind::Secrets).map(|index| index + 1)
+        );
+        assert_eq!(
+            ResourceKind::from_label("Releases"),
+            Some(ResourceKind::HelmReleases)
+        );
+    }
+
+    #[test]
+    fn releases_have_no_count() {
+        for kind in ResourceKind::ALL {
+            assert_eq!(kind.has_count(), kind != ResourceKind::HelmReleases);
+        }
     }
 
     #[test]
@@ -1010,9 +1073,10 @@ mod tests {
     }
 
     #[test]
-    fn only_events_have_no_labels() {
+    fn only_events_and_releases_have_no_labels() {
         for kind in ResourceKind::ALL {
-            assert_eq!(kind.has_labels(), kind != ResourceKind::Events);
+            let has_none = matches!(kind, ResourceKind::Events | ResourceKind::HelmReleases);
+            assert_eq!(kind.has_labels(), !has_none);
         }
     }
     #[test]

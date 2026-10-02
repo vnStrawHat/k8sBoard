@@ -6,10 +6,10 @@
 
 use cluster::{
     BindingSummary, BlockCause, BroadGroup, CertificateIssue, ContainerKind, ContainerState,
-    DaemonSetSummary, DeploymentSummary, DisruptionState, HorizontalPodAutoscalerSummary,
-    IngressSummary, JobStatus, JobSummary, NodeReadiness, NodeSummary,
-    PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary, PodStatus,
-    PodSummary, ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary,
+    DaemonSetSummary, DeploymentSummary, DisruptionState, HelmReleaseSummary, HelmStatus,
+    HorizontalPodAutoscalerSummary, IngressSummary, JobStatus, JobSummary, NodeReadiness,
+    NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary,
+    PodStatus, PodSummary, ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary,
     ServiceAccountSummary, ServiceSummary, StatusReason, Subject, SubjectKind, Termination,
     WorkloadCondition,
 };
@@ -83,6 +83,7 @@ pub(crate) fn kind_diagnosis(
         KindObject::ServiceAccount(account) => service_account_diagnosis(account, inputs.bindings),
         KindObject::Secret(secret) => secret_diagnosis(secret, inputs.now),
         KindObject::Ingress(ingress) => ingress_diagnosis(ingress, inputs),
+        KindObject::HelmRelease(release) => helm_release_diagnosis(release, inputs.now),
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
@@ -812,6 +813,70 @@ fn service_diagnosis(service: &ServiceSummary, inputs: &DiagnosisInputs) -> Opti
         title: "NO READY ENDPOINTS".to_owned(),
         text,
         link: unhealthy.map(|(pod, _)| ResourceKey::of_pod(pod)),
+    })
+}
+
+// ---- Helm releases ----
+
+/// What the box says when Helm gave no description.
+const HELM_NO_REASON: &str = "Helm gave no reason.";
+
+/// A failed release (the title follows the prefix Helm writes in the description), or one that is
+/// pending, uninstalling, or in a status this build does not know. Reads the release alone, so it
+/// shows at once. The description is Helm's text and can quote a field value: it is shown here and
+/// never logged.
+fn helm_release_diagnosis(release: &HelmReleaseSummary, now: Timestamp) -> Option<KindDiagnosis> {
+    let since = || match release.updated_at {
+        Some(_) => format!("{} ago", format_age(release.updated_at, now)),
+        None => "a while ago".to_owned(),
+    };
+    let (tone, title, text) = match &release.status {
+        HelmStatus::Failed => {
+            let description = release.description.as_deref().unwrap_or(HELM_NO_REASON);
+            if description.starts_with("Rollback \"") {
+                (StatusTone::Bad, "ROLLBACK FAILED", description.to_owned())
+            } else if description.starts_with("Upgrade \"") {
+                let text = match release.deployed_revision {
+                    Some(deployed) => {
+                        format!("{description} Revision {deployed} is still deployed.")
+                    }
+                    None => description.to_owned(),
+                };
+                (StatusTone::Bad, "UPGRADE FAILED", text)
+            } else {
+                (StatusTone::Bad, "INSTALL FAILED", description.to_owned())
+            }
+        }
+        HelmStatus::PendingInstall | HelmStatus::PendingUpgrade | HelmStatus::PendingRollback => {
+            let title = match release.status {
+                HelmStatus::PendingInstall => "PENDING INSTALL",
+                HelmStatus::PendingUpgrade => "PENDING UPGRADE",
+                _ => "PENDING ROLLBACK",
+            };
+            let text = format!(
+                "Helm started this operation {} and has not finished. A pending release blocks \
+                 the next helm upgrade.",
+                since()
+            );
+            (StatusTone::Warn, title, text)
+        }
+        HelmStatus::Uninstalling => (
+            StatusTone::Warn,
+            "UNINSTALLING",
+            format!("Helm started uninstalling this release {}.", since()),
+        ),
+        HelmStatus::Unknown(status) => (
+            StatusTone::Warn,
+            "UNKNOWN STATUS",
+            format!("Helm reports status \"{status}\"."),
+        ),
+        HelmStatus::Deployed | HelmStatus::Uninstalled | HelmStatus::Superseded => return None,
+    };
+    Some(KindDiagnosis {
+        tone,
+        title: title.to_owned(),
+        text,
+        link: None,
     })
 }
 

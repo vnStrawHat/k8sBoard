@@ -62,6 +62,11 @@ pub(crate) fn event_subject(key: &ResourceKey) -> Option<InvolvedObject> {
             kind: ResourceKind::Events,
             ..
         } => None,
+        // A release is a set of Secrets; the events of those are not the release's.
+        ResourceKey::Kind {
+            kind: ResourceKind::HelmReleases,
+            ..
+        } => None,
         ResourceKey::Kind {
             kind,
             namespace,

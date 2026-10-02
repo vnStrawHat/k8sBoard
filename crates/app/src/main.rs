@@ -14,6 +14,8 @@ mod container_detail;
 mod drawer;
 mod event_rows;
 mod filter_bar;
+mod helm_release_view;
+mod helm_rows;
 mod history_rings;
 mod kind_diagnosis;
 mod kind_drawer;

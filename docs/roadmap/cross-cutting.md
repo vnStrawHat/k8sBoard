@@ -6,7 +6,7 @@
 
 | ID | Topic | Proposed default | First consumer |
 |---|---|---|---|
-| C1 | **Secret handling** (Secrets kind, YAML view, Helm values and manifests, env literals, `last-applied-configuration`, TLS parsing) | Summaries never keep values (names, sizes, type only). Values are fetched per object on an explicit action, held only in drawer state, masked by default, revealed for 30 s, then dropped. Copy works without reveal. Nothing secret is traced, logged, persisted, or put in the audit log. YAML of a Secret and Helm manifests mask `data`/`stringData`; Helm values are masked until revealed. Pod Env/Mounts show names and sources, not literal values. "Reveal all" is per drawer, not per list. Screenshot runs never reveal. Open: auto-clear the clipboard after N s? 0007 masks Secret `data`/`stringData`, manifest annotations (last-applied, kapp), and env literals in the cluster crate; env literals show only through a per-view "Env values" toggle (no 30 s timer); no Secret reveal in the YAML view. | 0007 |
+| C1 | **Secret handling** (Secrets kind, YAML view, Helm values and manifests, env literals, `last-applied-configuration`, TLS parsing) | Summaries never keep values (names, sizes, type only). Values are fetched per object on an explicit action, held only in drawer state, masked by default, revealed for 30 s, then dropped. Copy works without reveal. Nothing secret is traced, logged, persisted, or put in the audit log. YAML of a Secret and Helm manifests mask `data`/`stringData`; Helm values are masked until revealed. Pod Env/Mounts show names and sources, not literal values. "Reveal all" is per drawer, not per list. Screenshot runs never reveal. 0016: per-key reveal, Copy without reveal (private on Windows, cleared after 30 s with retries), zeroize ceiling; the clipboard question is settled. 0017: Helm values are masked by leaf (every string and number reads `<hidden>`), Reveal is per drawer for 30 s, manifests are masked per document and never revealed, notes are masked until revealed, and revealed copies go through the private clipboard. 0007 masks Secret `data`/`stringData`, manifest annotations (last-applied, kapp), and env literals in the cluster crate; env literals show only through a per-view "Env values" toggle (no 30 s timer); no Secret reveal in the YAML view. | 0007 |
 | C2 | **Persistence location** of the shipped app (registry, UI state, presets, audit log) | OS config dir (`%APPDATA%\k8sBoard`, `~/.config/k8sboard`, `~/Library/Application Support/k8sBoard`). A `--config-dir <path>` flag (and env var) overrides it. **Flag:** the "work only in the project folder" rule binds agents, not the shipped app, but agents, coder-lite, and ui-verifier must always run the app with `--config-dir .tmp/...` so no run writes outside the project. Never store tokens or key data; only paths and context names | 0024 |
 | C3 | **Enabling mutations** | Approved by the user on 2026-10-02 (one approval for all mutating specs, 0030–0037; 0038 deferred). Debug builds still block writes unless `K8SBOARD_ALLOW_WRITES=1`, which agents never set. The kube `ws` feature is enabled only by 0035/0036. The 0001 read-only grep becomes an allow-list of named mutating call sites | 0030 |
 | C4 | **Multi-cluster model** | One `ClusterSession` per selected cluster, each with its own watches; unselected clusters get a cheap health poll only (`/version` + node readiness every 60 s, while the switcher is open or every 5 min). Issue counts only for live sessions | 0026 |
@@ -27,9 +27,9 @@
 | YAML serialization | `serde-saphyr` 1.3 (chosen in 0007; `serde_json` is a direct dependency of the cluster crate) | 0007 |
 | Charts | Own `Plot` implementation on the kit primitives (0010); no dependency | 0010 |
 | Cron schedules + time zones | own robfig port + `jiff` `tzdb-bundle-always` (0012, done) | 0012 |
-| x509 not-after | an x509 parser crate | 0016 |
-| Helm decoding | gzip (`flate2`), base64, `serde_json` | 0017 |
-| Diff | `similar` (named in the stack table) | 0017, 0031 |
+| x509 not-after | `x509-cert` 0.3 with `pem` 3 and `zeroize` (0016, done; Cargo.lock also records the inert `base64ct`) | 0016 |
+| Helm decoding | `flate2` 1 + `base64` 0.22 + `serde-saphyr` `deserialize` for manifests (0017, done; all were already locked, so `Cargo.lock` only lists them under `k8sboard-cluster`) | 0017 |
+| Diff | `similar` (named in the stack table); 0017 uses a path diff of the values, so `similar` waits for 0031 | 0031 |
 | Regex log filter | `regex` | 0019 |
 | Topology layout | hand-written Sugiyama vs a layout crate | 0022 |
 | Config dirs and format | a config-dir crate; TOML or JSON | 0024 |
@@ -47,7 +47,7 @@
 | `get pods/log` | allowed | 0019 verifiable |
 | `metrics.k8s.io/v1beta1` | available | 0010 verifiable |
 | `get nodes/proxy` | allowed | verified by the 0011 probe (summary 39 to 175 KB per node, cAdvisor about 0.9 MB); node logs 0019 |
-| `list secrets` | allowed | real Secret values reachable: C1 must land before 0016/0017; Helm data readable if releases exist |
+| `list secrets` | allowed | real Secret values reachable: C1 landed with 0016 (0016 probe: 42 secrets, 8 TLS all parsed, earliest leaf not-after 2026-12-26); Helm data readable if releases exist; 0017 probe: 0 Helm releases on UAT (no `helm.sh/release.v1` Secret), so Releases is verified by fixture tests and the empty state |
 | `create pods/exec`, `create pods/portforward` | denied | 0035–0037 render disabled; live checks need another cluster |
 | PVCs, PVs, StorageClasses | allowed (0014 probe: 29 PVCs, 57 PVs, 2 StorageClasses) | 0014 verifiable |
 | NetworkPolicies, HPAs, quotas, PDBs | allowed (0013 probe: 8 policies, 1 HPA, 0 quotas, 7 PDBs) | 0013 verifiable; quotas only by unit tests and the empty state |

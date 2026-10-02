@@ -23,6 +23,8 @@ pub(crate) enum RelatedSubject {
     QuotaRejections { namespace: String, quota: String },
     /// The ResourceQuotas of one namespace, for the Namespace drawer.
     NamespaceQuotas { namespace: String },
+    /// Every revision of one Helm release, from metadata only.
+    HelmHistory { namespace: String, release: String },
 }
 
 /// The related subject of a row. A kind without related content, and a Deployment without a
@@ -59,6 +61,12 @@ pub(crate) fn related_subject(kind: ResourceKind, row: &KindRow) -> Option<Relat
             Some(RelatedSubject::QuotaRejections {
                 namespace,
                 quota: quota.name.clone(),
+            })
+        }
+        (ResourceKind::HelmReleases, KindObject::HelmRelease(release)) => {
+            Some(RelatedSubject::HelmHistory {
+                namespace,
+                release: release.name.clone(),
             })
         }
         _ => None,
@@ -192,5 +200,27 @@ mod tests {
             })
         );
         assert_eq!(related_subject(ResourceKind::Services, &row), None);
+    }
+
+    #[test]
+    fn helm_release_row_has_history_subject() {
+        let row = crate::helm_rows::helm_release_row(&cluster::HelmReleaseSummary {
+            namespace: "team-a".to_owned(),
+            name: "api".to_owned(),
+            revision: 3,
+            status: cluster::HelmStatus::Deployed,
+            chart: None,
+            updated_at: None,
+            description: None,
+            deployed_revision: None,
+        });
+        assert_eq!(
+            related_subject(ResourceKind::HelmReleases, &row),
+            Some(RelatedSubject::HelmHistory {
+                namespace: "team-a".to_owned(),
+                release: "api".to_owned(),
+            })
+        );
+        assert_eq!(related_subject(ResourceKind::Secrets, &row), None);
     }
 }

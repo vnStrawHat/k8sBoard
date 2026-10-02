@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cluster::{
-    ContextSummary, EventFilter, InvolvedObject, Kubeconfig, KubeconfigError, NamespaceScope,
-    SecretSummary,
+    ContextSummary, EventFilter, HelmReleaseSummary, InvolvedObject, Kubeconfig, KubeconfigError,
+    NamespaceScope, SecretSummary,
 };
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::resizable::ResizableState;
@@ -21,13 +21,17 @@ use crate::FocusQuickFilter;
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
 use crate::cluster_session::{
-    ClusterSession, CountTrigger, FlowState, LiveCluster, denied_related_check, error_text,
+    ClusterSession, CountTrigger, FlowState, LiveCluster, LiveList, RelatedList,
+    denied_related_check, error_text,
 };
 use crate::drawer::{
     ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab, MonitorCache, MonitorKey,
-    MonitorRange, MonitorScope, MonitorState, drawer_tabs,
+    MonitorRange, MonitorScope, MonitorState, drawer_tabs, shown_tab,
 };
 use crate::filter_bar::ToolkitState;
+use crate::helm_release_view::{
+    HelmReleaseView, HistoryState, ShowLatest, ValuesLayout, earlier_revision, helm_subject,
+};
 use crate::kind_row::KindObject;
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
@@ -734,16 +738,43 @@ impl AppShell {
         self.select_container(name, cx);
     }
 
-    /// Opens the drawer of `key` on its YAML tab. When the key is not the selection it is revealed
-    /// first; a vanished row clears the selection again, and then no drawer opens on YAML.
-    pub(crate) fn open_yaml(&mut self, key: ResourceKey, cx: &mut Context<Self>) {
+    /// Opens the drawer of `key` on `tab`. When the key is not the selection it is revealed first; a
+    /// vanished row clears the selection again, and then no drawer opens on that tab.
+    pub(crate) fn open_drawer_tab(
+        &mut self,
+        key: ResourceKey,
+        tab: DrawerTab,
+        cx: &mut Context<Self>,
+    ) {
         if self.selected.as_ref() != Some(&key) {
             self.reveal(key.clone(), cx);
         }
         if self.selected.as_ref() != Some(&key) {
             return;
         }
-        self.drawer.tab = DrawerTab::Yaml;
+        self.drawer.tab = tab;
+        cx.notify();
+    }
+
+    /// Opens the drawer of `key` on the Values tab for `revision`, in `layout`. The key is revealed
+    /// first when it is not the selection; a vanished row clears the selection, and then nothing
+    /// opens. The layout waits for the view of its revision (`sync_helm_view`).
+    pub(crate) fn open_helm_values(
+        &mut self,
+        key: ResourceKey,
+        revision: u32,
+        layout: ValuesLayout,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected.as_ref() != Some(&key) {
+            self.reveal(key.clone(), cx);
+        }
+        if self.selected.as_ref() != Some(&key) {
+            return;
+        }
+        self.drawer.helm_revision = Some(revision);
+        self.drawer.tab = DrawerTab::Values;
+        self.drawer.pending_helm_layout = Some((key, layout));
         cx.notify();
     }
 
@@ -907,6 +938,69 @@ impl AppShell {
         self.drawer.yaml = Some(cx.new(|cx| YamlView::new(connection, subject, window, cx)));
     }
 
+    /// Keeps `drawer.helm` for the shown release revision only: the view lives exactly while a
+    /// release drawer shows a Helm tab or its Overview. It runs inside `render`, so it only assigns
+    /// and never notifies, and it is the only place that creates the view. A changed revision
+    /// (a History button, or a new latest one) drops the old view, which wipes its texts.
+    fn sync_helm_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let found = self.selected.clone().and_then(|key| {
+            let tab = shown_tab(drawer_tabs(&key), self.drawer.tab);
+            let live = self.live(cx)?;
+            let summary = helm_release_of(live, &key)?;
+            let subject = helm_subject(Some(&key), tab, Some(summary), self.drawer.helm_revision)?;
+            let history = helm_history_of(live, &key, subject.0.revision);
+            Some((
+                key.clone(),
+                subject,
+                summary.revision,
+                live.connection().clone(),
+                history,
+            ))
+        });
+        let Some((key, (revision, tab), latest, connection, history)) = found else {
+            self.drawer.helm = None;
+            return;
+        };
+        let existing = self
+            .drawer
+            .helm
+            .clone()
+            .filter(|view| view.read(cx).is_for(&revision));
+        let view = match existing {
+            Some(view) => view,
+            None => {
+                let access = self.secret_value_access;
+                let view = cx.new(|cx| {
+                    HelmReleaseView::new(connection, revision, latest, access, tab, window, cx)
+                });
+                // The subscriptions end with the view, which only this shell holds.
+                cx.subscribe(&view, |shell, _, _: &ShowLatest, cx| {
+                    shell.drawer.helm_revision = None;
+                    cx.notify();
+                })
+                .detach();
+                cx.subscribe(&view, |shell, _, event: &SecretCopied, cx| {
+                    shell.arm_clipboard_clear(event.0.clone(), cx);
+                })
+                .detach();
+                self.drawer.helm = Some(view.clone());
+                view
+            }
+        };
+        let layout = match self.drawer.pending_helm_layout.take() {
+            Some((pending, layout)) if pending == key => Some(layout),
+            _ => None,
+        };
+        view.update(cx, |view, cx| {
+            view.set_latest(latest);
+            view.set_tab(tab, window, cx);
+            view.set_history(history, window, cx);
+            if let Some(layout) = layout {
+                view.set_layout(layout, window, cx);
+            }
+        });
+    }
+
     /// Tells the session which kubelets the open drawer wants. It runs inside `render`, so it
     /// only assigns and never notifies; the session is touched only when the demand changed.
     fn sync_kubelet_demand(&mut self, cx: &mut Context<Self>) {
@@ -973,6 +1067,15 @@ impl AppShell {
         is_container_tab || is_tab
     }
 
+    /// The Helm view of an open release drawer has not read what it shows yet.
+    #[cfg(feature = "screenshot")]
+    fn is_helm_loading(&self, cx: &App) -> bool {
+        self.drawer
+            .helm
+            .as_ref()
+            .is_some_and(|view| view.read(cx).is_loading())
+    }
+
     /// The YAML tab is shown and its first fetch has not finished. A failed fetch is settled.
     #[cfg(feature = "screenshot")]
     fn is_yaml_loading(&self, cx: &App) -> bool {
@@ -996,6 +1099,9 @@ impl AppShell {
         self.selected = key;
         self.drawer.selected_container = None;
         self.drop_secret_values();
+        // A revision belongs to one release.
+        self.drawer.helm_revision = None;
+        self.drawer.pending_helm_layout = None;
         // A part of one subject (a container, a pod) means nothing for the next.
         self.drawer.monitor.scope = MonitorScope::Total;
         self.follow_drawer_subjects(cx);
@@ -1487,7 +1593,8 @@ impl AppShell {
             || self
                 .live(cx)
                 .is_some_and(|live| live.is_object_events_loading() || live.is_related_loading())
-            || self.is_yaml_loading(cx);
+            || self.is_yaml_loading(cx)
+            || self.is_helm_loading(cx);
         // A logs screen is pending until its tab exists and has opened its stream.
         let is_log_pending = self
             .pending_launch_screen
@@ -1789,6 +1896,7 @@ impl Render for AppShell {
         self.refresh_monitor_cache(cx);
         self.open_pending_logs(window, cx);
         self.sync_yaml_view(window, cx);
+        self.sync_helm_view(window, cx);
         self.sync_secret_values(cx);
         self.sync_kubelet_demand(cx);
         self.sync_quick_filter(window, cx);
@@ -1881,6 +1989,47 @@ fn kubeconfig_error_message(message: String, has_ignored_entries: bool) -> Strin
         format!("{message}. {IGNORED_KUBECONFIG_NOTE}")
     } else {
         message
+    }
+}
+
+/// The release row of the shown subject.
+fn helm_release_of<'a>(
+    live: &'a LiveCluster,
+    subject: &ResourceKey,
+) -> Option<&'a HelmReleaseSummary> {
+    let row = live
+        .kind_list(ResourceKind::HelmReleases)?
+        .list
+        .items()
+        .iter()
+        .find(|row| subject.is_row(ResourceKind::HelmReleases, row))?;
+    match &row.object {
+        KindObject::HelmRelease(release) => Some(release),
+        _ => None,
+    }
+}
+
+/// What the release's History says about `revision`: the watch is loading (or not started), has
+/// failed before any data, or has loaded; the earlier revision is found without copying the list.
+fn helm_history_of(live: &LiveCluster, subject: &ResourceKey, revision: u32) -> HistoryState {
+    let list = live
+        .kind_list(ResourceKind::HelmReleases)
+        .and_then(|explorer| {
+            explorer
+                .list
+                .items()
+                .iter()
+                .find(|row| subject.is_row(ResourceKind::HelmReleases, row))
+        })
+        .and_then(|row| related_subject(ResourceKind::HelmReleases, row))
+        .and_then(|related| live.related_of(&related))
+        .and_then(RelatedList::helm_history);
+    match list {
+        None | Some(LiveList::Loading) => HistoryState::Loading,
+        Some(LiveList::Failed { .. }) => HistoryState::Failed,
+        Some(LiveList::Ready { items, .. }) => HistoryState::Loaded {
+            earlier: earlier_revision(items.iter().map(|item| item.revision), revision),
+        },
     }
 }
 

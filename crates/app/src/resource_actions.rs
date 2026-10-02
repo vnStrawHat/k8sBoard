@@ -8,6 +8,7 @@ use gpui_kit::{
 use crate::access_bindings::role_key;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{AccessState, LiveCluster};
+use crate::drawer::DrawerTab;
 use crate::kind_row::{EventDetail, KindObject, KindRow};
 use crate::live_sections::claim_pods;
 use crate::log_dock::LogDock;
@@ -16,6 +17,7 @@ use crate::network_rows::ingress_urls;
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, ValueAccess};
 use crate::table_selection::ResourceKey;
+use crate::yaml_view::object_ref;
 
 const READ_ONLY_FEATURE_REASON: &str = "Not available in read-only mode";
 pub(crate) const READ_ONLY_MODE_REASON: &str = "Read-only mode";
@@ -217,6 +219,12 @@ fn pods_on_node(pods: &[PodSummary], node: &str) -> usize {
         .count()
 }
 
+/// The items a release adds before its disabled ones: each opens the drawer on a Helm tab.
+const HELM_VIEW_ITEMS: [(&str, DrawerTab); 2] = [
+    ("View values", DrawerTab::Values),
+    ("View manifest", DrawerTab::Manifest),
+];
+
 /// The row context menu and the drawer ⋯ menu of an explorer kind. Every item except View YAML and
 /// Copy name (and, for events, Go to object and Copy message) is disabled, because this version
 /// is read-only.
@@ -240,7 +248,16 @@ pub(crate) fn kind_menu(
             .item(copy_message_item(event))
             .separator();
     }
-    menu = menu.item(view_yaml_item(ResourceKey::of_row(kind, row), shell));
+    let key = ResourceKey::of_row(kind, row);
+    // A key without an object reference (a Helm release) has no YAML tab.
+    if kind == ResourceKind::HelmReleases {
+        for (label, tab) in HELM_VIEW_ITEMS {
+            menu = menu.item(view_tab_item(label, key.clone(), tab, shell));
+        }
+    }
+    if object_ref(&key).is_some() {
+        menu = menu.item(view_yaml_item(key, shell));
+    }
     if let Some(item) = extras.open_url {
         menu = menu.item(item);
     }
@@ -649,9 +666,20 @@ fn copy_message_item(event: &EventDetail) -> PopupMenuItem {
 
 /// Opens the drawer of `key` on its YAML tab. Always enabled: a missing right shows inline there.
 fn view_yaml_item(key: ResourceKey, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    view_tab_item("View YAML", key, DrawerTab::Yaml, shell)
+}
+
+/// Opens the drawer of `key` on `tab`; the same item serves View YAML, View values, and View
+/// manifest.
+fn view_tab_item(
+    label: &'static str,
+    key: ResourceKey,
+    tab: DrawerTab,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
     let shell = shell.clone();
-    PopupMenuItem::new("View YAML").on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.open_yaml(key.clone(), cx));
+    PopupMenuItem::new(label).on_click(move |_, _, cx| {
+        let _ = shell.update(cx, |shell, cx| shell.open_drawer_tab(key.clone(), tab, cx));
     })
 }
 

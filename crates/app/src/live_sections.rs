@@ -15,7 +15,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    StatefulInteractiveElement as _, Styled as _, div, px,
+    StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _, px,
 };
 use jiff::tz::TimeZone;
 
@@ -33,6 +33,8 @@ use crate::cluster_session::{
 };
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::drawer::{link_text, wide_detail_row};
+use crate::helm_release_view::ValuesLayout;
+use crate::helm_rows::{HistoryModel, HistoryRow, history_model};
 use crate::kind_diagnosis::{is_pod_not_ready, unready_node};
 use crate::kind_drawer::{DrawerPaint, bar_row, live_detail_rows};
 use crate::kind_join::{
@@ -61,6 +63,7 @@ const AGE_SLOT: Pixels = px(64.);
 const STATE_SLOT: Pixels = px(54.);
 const READY_SLOT: Pixels = px(34.);
 const BUTTON_SLOT: Pixels = px(76.);
+const DIFF_BUTTON_SLOT: Pixels = px(48.);
 
 /// The rows of one live section. A section whose data is not loaded shows one muted note.
 pub(crate) fn live_rows(
@@ -219,7 +222,8 @@ fn revisions(
             RelatedList::Jobs(_)
             | RelatedList::ConfigMapValues(_)
             | RelatedList::Events(_)
-            | RelatedList::ResourceQuotas(_),
+            | RelatedList::ResourceQuotas(_)
+            | RelatedList::HelmHistory(_),
         )
         | None => None,
     };
@@ -455,7 +459,8 @@ fn recent_jobs_rows(
             RelatedList::ReplicaSets(_)
             | RelatedList::ConfigMapValues(_)
             | RelatedList::Events(_)
-            | RelatedList::ResourceQuotas(_),
+            | RelatedList::ResourceQuotas(_)
+            | RelatedList::HelmHistory(_),
         )
         | None => None,
     };
@@ -828,7 +833,8 @@ fn config_map_data_rows(
             RelatedList::ReplicaSets(_)
             | RelatedList::Jobs(_)
             | RelatedList::Events(_)
-            | RelatedList::ResourceQuotas(_),
+            | RelatedList::ResourceQuotas(_)
+            | RelatedList::HelmHistory(_),
         )
         | None => None,
     };
@@ -2005,6 +2011,117 @@ fn account_pods_rows(
         })
         .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
         .collect()
+}
+
+// ---- Helm history ----
+
+const HISTORY_STATUS_SLOT: Pixels = px(110.);
+
+/// The revisions of a release, newest first: the revision, its status, when it was stored, and
+/// the Values and Diff buttons. `shown_revision` is the one the Helm tabs show, when the History
+/// chose one.
+pub(crate) fn helm_history_rows(
+    kind: ResourceKind,
+    row: &KindRow,
+    live: &LiveCluster,
+    shown_revision: Option<u32>,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let list = related_subject(kind, row)
+        .and_then(|subject| live.related_of(&subject))
+        .and_then(RelatedList::helm_history);
+    match history_model(list) {
+        HistoryModel::Note(text) => vec![note(&text, cx)],
+        HistoryModel::Rows { rows, omitted } => rows
+            .iter()
+            .enumerate()
+            .map(|(ix, revision)| {
+                let key = ResourceKey::of_row(kind, row);
+                let is_shown = shown_revision == Some(revision.revision);
+                history_element(ix, revision, key, is_shown, now, cx)
+            })
+            .chain(
+                (omitted > 0).then(|| note(&format!("{omitted} older revisions not shown."), cx)),
+            )
+            .collect(),
+    }
+}
+
+fn history_element(
+    ix: usize,
+    revision: &HistoryRow,
+    key: ResourceKey,
+    is_shown: bool,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let age = match revision.updated_at {
+        Some(_) => format!("{} ago", format_age(revision.updated_at, now)),
+        None => "—".to_owned(),
+    };
+    let number = revision.revision;
+    let values_key = key.clone();
+    let title = if is_shown {
+        format!("rev {number} · shown")
+    } else {
+        format!("rev {number}")
+    };
+    h_flex()
+        .id(("helm-revision", ix))
+        .gap_2()
+        .items_center()
+        .py_1()
+        .text_sm()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_family(theme.mono_font_family.clone())
+                .when(is_shown, |title| title.text_color(theme.muted_foreground))
+                .child(title),
+        )
+        .child(
+            toned_text(revision.status.clone(), cx)
+                .w(HISTORY_STATUS_SLOT)
+                .flex_shrink_0()
+                .truncate(),
+        )
+        .child(
+            div()
+                .w(AGE_SLOT)
+                .flex_shrink_0()
+                .text_right()
+                .text_color(theme.muted_foreground)
+                .child(age),
+        )
+        .child(
+            Button::new(("helm-values", ix))
+                .label("Values")
+                .ghost()
+                .xsmall()
+                .on_click(cx.listener(move |shell, _, _, cx| {
+                    shell.open_helm_values(values_key.clone(), number, ValuesLayout::Document, cx);
+                })),
+        )
+        // The oldest revision has nothing to compare with; an empty slot keeps the columns aligned.
+        .child(
+            div()
+                .w(DIFF_BUTTON_SLOT)
+                .flex_shrink_0()
+                .children(revision.can_diff.then(|| {
+                    Button::new(("helm-diff", ix))
+                        .label("Diff")
+                        .ghost()
+                        .xsmall()
+                        .on_click(cx.listener(move |shell, _, _, cx| {
+                            shell.open_helm_values(key.clone(), number, ValuesLayout::Diff, cx);
+                        }))
+                })),
+        )
+        .into_any_element()
 }
 
 // ---- shared ----

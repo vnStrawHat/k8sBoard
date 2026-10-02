@@ -19,6 +19,7 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::LiveList;
+use crate::helm_release_view::{HelmReleaseView, ValuesLayout};
 use crate::history_rings::Resolution;
 use crate::monitor_data::MonitorData;
 use crate::object_events::events_title;
@@ -55,6 +56,13 @@ pub(crate) struct DrawerState {
     pub(crate) secret_values: Option<Entity<SecretValuesView>>,
     /// A menu's Reveal or Copy that waits for the view of its Secret to exist.
     pub(crate) pending_secret_action: Option<(ResourceKey, SecretAction)>,
+    /// The Helm content of an open release drawer; `AppShell::sync_helm_view` keeps it for the
+    /// shown revision only, so dropping it aborts requests and wipes every text.
+    pub(crate) helm: Option<Entity<HelmReleaseView>>,
+    /// The revision a History button chose; `None` is the latest. Reset on a change of subject.
+    pub(crate) helm_revision: Option<u32>,
+    /// A History button's layout that waits for the view of its revision to exist.
+    pub(crate) pending_helm_layout: Option<(ResourceKey, ValuesLayout)>,
     /// The Monitor tab: range and Table view survive a change of subject, the scope does not.
     pub(crate) monitor: MonitorState,
 }
@@ -69,6 +77,9 @@ impl DrawerState {
             yaml: None,
             secret_values: None,
             pending_secret_action: None,
+            helm: None,
+            helm_revision: None,
+            pending_helm_layout: None,
             monitor: MonitorState::new(),
         }
     }
@@ -184,6 +195,10 @@ pub(crate) enum DrawerTab {
     Monitor,
     Yaml,
     Events,
+    /// The Helm tabs of a release drawer.
+    Values,
+    Manifest,
+    Notes,
 }
 
 /// The tabs a drawer shows, in wireframe order. An event's own drawer has no events of its own,
@@ -219,6 +234,17 @@ pub(crate) fn drawer_tabs(key: &ResourceKey) -> &'static [DrawerTab] {
             DrawerTab::Events,
         ],
         ResourceKey::Node { .. } => &[DrawerTab::Overview, DrawerTab::Monitor, DrawerTab::Events],
+        // A release has no YAML (the Secret is a masked blob) and no events of its own; its Helm
+        // tabs show the values, manifest, and notes.
+        ResourceKey::Kind {
+            kind: ResourceKind::HelmReleases,
+            ..
+        } => &[
+            DrawerTab::Overview,
+            DrawerTab::Values,
+            DrawerTab::Manifest,
+            DrawerTab::Notes,
+        ],
         ResourceKey::Kind { kind, .. } if kind.has_monitor() && has_yaml => &[
             DrawerTab::Overview,
             DrawerTab::Monitor,
@@ -259,6 +285,9 @@ pub(crate) fn tab_titles(
                 DrawerTab::Monitor => "Monitor".to_owned(),
                 DrawerTab::Yaml => "YAML".to_owned(),
                 DrawerTab::Events => events_title(events),
+                DrawerTab::Values => "Values".to_owned(),
+                DrawerTab::Manifest => "Manifest".to_owned(),
+                DrawerTab::Notes => "Notes".to_owned(),
             };
             (tab, title.into())
         })
@@ -294,6 +323,14 @@ pub(crate) fn drawer_tab_bar(
 /// The YAML tab body: the view fills the drawer, and there is nothing while it is not created yet.
 pub(crate) fn yaml_body(state: &DrawerState) -> DrawerBody {
     DrawerBody::Filling(match &state.yaml {
+        Some(view) => view.clone().into_any_element(),
+        None => div().into_any_element(),
+    })
+}
+
+/// The Helm tabs: the view fills the drawer, and there is nothing while it is not created yet.
+pub(crate) fn helm_body(state: &DrawerState) -> DrawerBody {
+    DrawerBody::Filling(match &state.helm {
         Some(view) => view.clone().into_any_element(),
         None => div().into_any_element(),
     })
@@ -668,6 +705,24 @@ mod tests {
         assert_eq!(
             drawer_tabs(&kind(ResourceKind::Events)),
             [DrawerTab::Overview, DrawerTab::Yaml]
+        );
+    }
+
+    #[test]
+    fn helm_release_drawer_has_helm_tabs() {
+        let key = ResourceKey::Kind {
+            kind: ResourceKind::HelmReleases,
+            namespace: Some("shop".to_owned()),
+            name: "api".to_owned(),
+        };
+        assert_eq!(
+            drawer_tabs(&key),
+            [
+                DrawerTab::Overview,
+                DrawerTab::Values,
+                DrawerTab::Manifest,
+                DrawerTab::Notes
+            ]
         );
     }
 

@@ -141,3 +141,13 @@ fn subject_change_is_generic() {
         SubjectChange::Start(b)
     );
 }
+
+#[test]
+fn helm_release_has_no_event_subject() {
+    let key = ResourceKey::Kind {
+        kind: ResourceKind::HelmReleases,
+        namespace: Some("shop".to_owned()),
+        name: "api".to_owned(),
+    };
+    assert_eq!(event_subject(&key), None);
+}

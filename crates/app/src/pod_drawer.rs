@@ -55,7 +55,10 @@ pub(crate) fn pod_drawer(
     let shown = shown_tab(tabs, state.tab);
     let loaded_events = events.and_then(LiveList::ready_items);
     let body = match shown {
-        DrawerTab::Overview => DrawerBody::Scrolling(overview(pod, loaded_events, now, cx)),
+        // A pod drawer has no Helm tabs, so `shown_tab` never yields them.
+        DrawerTab::Overview | DrawerTab::Values | DrawerTab::Manifest | DrawerTab::Notes => {
+            DrawerBody::Scrolling(overview(pod, loaded_events, now, cx))
+        }
         DrawerTab::Containers => DrawerBody::Scrolling(containers_tab(
             pod,
             state,

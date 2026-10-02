@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use cluster::{
     AccessCheck, AccessReport, BindingSummary, ClusterConnection, ClusterError, ConfigMapValues,
-    ContextSummary, EndpointSliceSummary, EventFilter, EventSummary, IngressSummary,
+    ContextSummary, EndpointSliceSummary, EventFilter, EventSummary, HelmRevision, IngressSummary,
     InvolvedObject, JobSummary, Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope,
     NamespaceSummary, NodeSummary, PersistentVolumeSummary, PodSummary, ReplicaSetSummary,
     ResourceQuotaSummary, SecretSummary, ServerVersion, WatchUpdate,
@@ -409,6 +409,8 @@ pub(crate) enum RelatedList {
     /// The FailedCreate events of a namespace.
     Events(LiveList<EventSummary>),
     ResourceQuotas(LiveList<ResourceQuotaSummary>),
+    /// Every revision of one Helm release, newest first. Labels and metadata only.
+    HelmHistory(LiveList<HelmRevision>),
 }
 
 /// One related watch update, typed on tokio so one subscription serves every subject.
@@ -418,6 +420,7 @@ enum RelatedUpdate {
     ConfigMapValues(WatchUpdate<ConfigMapValues>),
     Events(WatchUpdate<EventSummary>),
     ResourceQuotas(WatchUpdate<ResourceQuotaSummary>),
+    HelmHistory(WatchUpdate<HelmRevision>),
 }
 
 impl RelatedList {
@@ -428,6 +431,7 @@ impl RelatedList {
             RelatedSubject::ConfigMapValues { .. } => Self::ConfigMapValues(LiveList::Loading),
             RelatedSubject::QuotaRejections { .. } => Self::Events(LiveList::Loading),
             RelatedSubject::NamespaceQuotas { .. } => Self::ResourceQuotas(LiveList::Loading),
+            RelatedSubject::HelmHistory { .. } => Self::HelmHistory(LiveList::Loading),
         }
     }
 
@@ -443,6 +447,7 @@ impl RelatedList {
             (Self::ResourceQuotas(list), RelatedUpdate::ResourceQuotas(update)) => {
                 list.apply(update);
             }
+            (Self::HelmHistory(list), RelatedUpdate::HelmHistory(update)) => list.apply(update),
             // A stale update of another subject's kind.
             _ => {}
         }
@@ -455,6 +460,7 @@ impl RelatedList {
             Self::ConfigMapValues(list) => list.mark_stopped(),
             Self::Events(list) => list.mark_stopped(),
             Self::ResourceQuotas(list) => list.mark_stopped(),
+            Self::HelmHistory(list) => list.mark_stopped(),
         }
     }
 
@@ -465,7 +471,8 @@ impl RelatedList {
             Self::ReplicaSets(_)
             | Self::Jobs(_)
             | Self::ConfigMapValues(_)
-            | Self::ResourceQuotas(_) => None,
+            | Self::ResourceQuotas(_)
+            | Self::HelmHistory(_) => None,
         }
     }
 
@@ -473,9 +480,23 @@ impl RelatedList {
     pub(crate) fn resource_quotas(&self) -> Option<&LiveList<ResourceQuotaSummary>> {
         match self {
             Self::ResourceQuotas(list) => Some(list),
-            Self::ReplicaSets(_) | Self::Jobs(_) | Self::ConfigMapValues(_) | Self::Events(_) => {
-                None
-            }
+            Self::ReplicaSets(_)
+            | Self::Jobs(_)
+            | Self::ConfigMapValues(_)
+            | Self::Events(_)
+            | Self::HelmHistory(_) => None,
+        }
+    }
+
+    /// The revisions of a Helm release, when this list holds them.
+    pub(crate) fn helm_history(&self) -> Option<&LiveList<HelmRevision>> {
+        match self {
+            Self::HelmHistory(list) => Some(list),
+            Self::ReplicaSets(_)
+            | Self::Jobs(_)
+            | Self::ConfigMapValues(_)
+            | Self::Events(_)
+            | Self::ResourceQuotas(_) => None,
         }
     }
 
@@ -488,6 +509,7 @@ impl RelatedList {
             Self::ConfigMapValues(list) => list.is_loading(),
             Self::Events(list) => list.is_loading(),
             Self::ResourceQuotas(list) => list.is_loading(),
+            Self::HelmHistory(list) => list.is_loading(),
         }
     }
 }
@@ -501,9 +523,11 @@ pub(crate) fn denied_related_check(
     let check = match subject {
         RelatedSubject::QuotaRejections { .. } => AccessCheck::ListEvents,
         RelatedSubject::NamespaceQuotas { .. } => AccessCheck::ListResourceQuotas,
+        // The history reads the same Secrets the Releases kind lists, which its access check gates.
         RelatedSubject::ReplicaSets { .. }
         | RelatedSubject::Jobs { .. }
-        | RelatedSubject::ConfigMapValues { .. } => return None,
+        | RelatedSubject::ConfigMapValues { .. }
+        | RelatedSubject::HelmHistory { .. } => return None,
     };
     match access {
         AccessState::Known(report) if !report.is_allowed(check) => Some(check),
@@ -610,7 +634,7 @@ fn countable_kinds(access: &AccessState) -> Vec<ResourceKind> {
     };
     ResourceKind::ALL
         .into_iter()
-        .filter(|kind| report.is_allowed(kind.access_check()))
+        .filter(|kind| kind.has_count() && report.is_allowed(kind.access_check()))
         .collect()
 }
 
@@ -1789,6 +1813,10 @@ impl RelatedObjects {
             RelatedSubject::NamespaceQuotas { namespace } => connection
                 .watch_resource_quotas(NamespaceScope::Named(namespace.clone()))
                 .map(RelatedUpdate::ResourceQuotas)
+                .boxed(),
+            RelatedSubject::HelmHistory { namespace, release } => connection
+                .watch_helm_history(namespace, release)
+                .map(RelatedUpdate::HelmHistory)
                 .boxed(),
         };
         let applied = subject.clone();

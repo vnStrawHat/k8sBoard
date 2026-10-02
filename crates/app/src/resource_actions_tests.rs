@@ -639,3 +639,42 @@ fn secret_menu_blocked_in_screenshot_runs() {
             .all(|entry| matches!(entry.state, MenuState::Disabled(_)))
     );
 }
+
+#[test]
+fn helm_release_menu_disables_rollback_and_uninstall() {
+    // The menu shows the disabled items from the kind's data, and View YAML only for a key with an
+    // object reference, which a release has not.
+    assert_eq!(
+        ResourceKind::HelmReleases.read_only_actions(),
+        ["Roll back…"]
+    );
+    assert_eq!(
+        ResourceKind::HelmReleases.delete_label(),
+        "Uninstall release…"
+    );
+    let key = ResourceKey::Kind {
+        kind: ResourceKind::HelmReleases,
+        namespace: Some("shop".to_owned()),
+        name: "api".to_owned(),
+    };
+    assert!(object_ref(&key).is_none());
+}
+
+#[test]
+fn helm_release_menu_opens_values_and_manifest() {
+    // The menu model: one item per Helm view tab, in order, and each tab exists on the release
+    // drawer, so the click reaches a tab that is shown.
+    let labels: Vec<&str> = HELM_VIEW_ITEMS.iter().map(|(label, _)| *label).collect();
+    assert_eq!(labels, ["View values", "View manifest"]);
+    let key = ResourceKey::Kind {
+        kind: ResourceKind::HelmReleases,
+        namespace: Some("shop".to_owned()),
+        name: "api".to_owned(),
+    };
+    let tabs = crate::drawer::drawer_tabs(&key);
+    for (_, tab) in HELM_VIEW_ITEMS {
+        assert!(tabs.contains(&tab), "{tab:?}");
+    }
+    assert_eq!(HELM_VIEW_ITEMS[0].1, DrawerTab::Values);
+    assert_eq!(HELM_VIEW_ITEMS[1].1, DrawerTab::Manifest);
+}

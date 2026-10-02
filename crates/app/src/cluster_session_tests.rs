@@ -604,7 +604,9 @@ fn denied_kinds_are_not_counted() {
     let kinds = countable_kinds(&report);
     assert!(!kinds.contains(&ResourceKind::Deployments));
     assert!(kinds.contains(&ResourceKind::Services));
-    assert_eq!(kinds.len(), ResourceKind::ALL.len() - 1);
+    // Releases are never counted: their Secrets would count revisions.
+    assert!(!kinds.contains(&ResourceKind::HelmReleases));
+    assert_eq!(kinds.len(), ResourceKind::ALL.len() - 2);
 }
 
 #[test]
@@ -976,4 +978,32 @@ fn tls_secrets_companion_applies_and_counts_watches() {
         ));
         assert!(count <= 3 * namespaces + 4);
     }
+}
+
+#[test]
+fn releases_watch_count_within_bound() {
+    // Releases have no object events and no companion: the explorer (one watch per namespace)
+    // plus the history watch.
+    for namespaces in 1..=5 {
+        let explorer = explorer_watches(ResourceKind::HelmReleases, namespaces);
+        assert_eq!(explorer, namespaces);
+        let total = open_watch_count(watches(namespaces, explorer, 0, false, true));
+        assert_eq!(total, 2 + namespaces + namespaces + 1);
+        assert!(total <= 3 * namespaces + 4);
+    }
+}
+
+#[test]
+fn releases_have_a_history_related_list() {
+    let subject = RelatedSubject::HelmHistory {
+        namespace: "shop".to_owned(),
+        release: "api".to_owned(),
+    };
+    let list = RelatedList::loading_for(&subject);
+    assert!(list.helm_history().is_some());
+    assert!(list.events().is_none());
+    assert_eq!(
+        denied_related_check(&subject, &report_denying(&[AccessCheck::ListSecrets])),
+        None
+    );
 }

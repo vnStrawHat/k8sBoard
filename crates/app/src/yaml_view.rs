@@ -21,6 +21,7 @@ use crate::age::format_age;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
 use crate::drawer::{DRAWER_SUBJECT_DELAY, DrawerTab, drawer_tabs, shown_tab};
+use crate::resource_kind::ResourceKind;
 use crate::table_selection::ResourceKey;
 
 /// The YAML tab of the open drawer. Dropping it aborts the request and frees the text.
@@ -284,6 +285,11 @@ impl Render for YamlView {
 /// `None` for a key the cluster crate cannot address (cannot happen for today's keys).
 pub(crate) fn object_ref(key: &ResourceKey) -> Option<ObjectRef> {
     match key {
+        // The release Secrets hold values the YAML tab must never show.
+        ResourceKey::Kind {
+            kind: ResourceKind::HelmReleases,
+            ..
+        } => None,
         ResourceKey::Pod { namespace, name } => ObjectRef::new(
             cluster::ObjectKind::Pod,
             Some(namespace.clone()),
@@ -404,6 +410,17 @@ mod tests {
                 "api-0.1".to_owned()
             )
         );
+    }
+
+    #[test]
+    fn helm_release_has_no_object_ref() {
+        let key = ResourceKey::Kind {
+            kind: ResourceKind::HelmReleases,
+            namespace: Some("shop".to_owned()),
+            name: "api".to_owned(),
+        };
+        assert_eq!(object_ref(&key), None);
+        assert_eq!(yaml_subject(Some(&key), DrawerTab::Yaml), None);
     }
 
     #[test]

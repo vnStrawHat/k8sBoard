@@ -66,3 +66,13 @@
 | Status mix | none |
 | First release (screenshot filter) | none: the UAT cluster has no `helm.sh/release.v1` Secret, so screenshots cover the empty state only |
 | `get secrets` on a release revision | not probed: no release exists; the GET path is `secret_text`, shared with 0016 `secret_values` (live-proven there) |
+
+## As built (app steps)
+
+- The **Release** section is built statically in `helm_rows.rs` (a `Live(HelmRelease)` placeholder had nothing to compute at paint time); `LiveContent` has `HelmHistory` and `HelmValuesChange` only.
+- A release row has `created_at: None`: the Updated cell and field carry the last deploy, so the subtitle does not say "created".
+- The Overview section's static title is `Values changed`; the drawer skips its heading and the view draws `Values changed in rev N` itself, because section titles are `&'static str`.
+- The History model and its tests live in `helm_rows.rs`; `can_diff` is false only for the oldest revision of a history that is not cut at 50.
+- `open_helm_values` always stores the chosen revision (`helm_revision`), even when it equals the latest; the view's Latest button compares revisions itself.
+- `view_tab_item` serves View YAML, View values, and View manifest; Releases get no View YAML item (`object_ref` is `None`).
+- The History has three states in the view (`HistoryState`: loading, failed, loaded). A failed History reads "The history could not be read.", disables Diff with that reason, and counts as settled for screenshots. A failed Reveal fetch still starts the 30 s countdown, so the ticker drops the Reveal and its alert. The History row of the shown revision is marked "shown" also when it is shown implicitly (the latest).

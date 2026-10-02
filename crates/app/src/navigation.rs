@@ -288,6 +288,7 @@ mod tests {
                 "ClusterRoles",
                 "RoleBindings",
                 "ClusterRoleBindings",
+                "Releases",
             ]
         );
     }

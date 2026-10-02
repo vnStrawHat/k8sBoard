@@ -21,7 +21,7 @@ Options:
   --theme light|dark     colour theme (default: follow the system)
   --screen pods|nodes|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
-           services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml
+           services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest
                          screen to open (default: pods)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
@@ -174,6 +174,17 @@ impl LaunchScreen {
                     let kind =
                         ResourceKind::from_plural(plural).filter(|kind| kind.has_monitor())?;
                     return Some(Self::KindDrawer(kind, DrawerTab::Monitor));
+                }
+                for (suffix, tab) in [
+                    ("-values", DrawerTab::Values),
+                    ("-manifest", DrawerTab::Manifest),
+                ] {
+                    if let Some(plural) = text.strip_suffix(suffix) {
+                        // Only a release drawer has the Helm tabs.
+                        let kind = ResourceKind::from_plural(plural)
+                            .filter(|kind| *kind == ResourceKind::HelmReleases)?;
+                        return Some(Self::KindDrawer(kind, tab));
+                    }
                 }
                 if let Some(plural) = text.strip_suffix("-events") {
                     let kind = ResourceKind::from_plural(plural)?;

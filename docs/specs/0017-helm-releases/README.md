@@ -1,6 +1,6 @@
 # 0017 — Helm releases (read-only)
 
-Status: amended after the advisor review (HEAD `ef69712`: 0010 done, 0011 step 1 in progress). **Not startable yet: 0012 and 0016 must be implemented first** (0013–0015 too, since 0016 depends on them); `secret_text` extracts code that 0016 creates. Crates: `crates/cluster` (step 1), `crates/app` (steps 2–3). Requires (`KindObject`, `Live`, `kind_diagnosis.rs`, related subjects, `selected_summary_watch`, `ObjectKind::Secret`, `ListSecrets`, `secret.rs` GET via `request_text`, `zeroize`, the `kube_client::client=error` log guard, `AppShell.secret_value_access`, `REVEAL_DURATION`, `write_private_text`, `SecretCopied`). Wireframes: W7 `k("Releases")`, sidebar group **Helm**. Applies **C1** (blocking), C6, C7, C11. C12 (Helm writes) stays with 0038.
+Status: implemented; AC 7 manual (steps 1-3, read-only; the UAT cluster has no Helm release, so the live checks are the empty state and fixture tests; AC 9 closed by the ui-verifier); amended after the advisor review and the step 1 security review. Crates: `crates/cluster` (step 1), `crates/app` (steps 2–3). Requires (`KindObject`, `Live`, `kind_diagnosis.rs`, related subjects, `selected_summary_watch`, `ObjectKind::Secret`, `ListSecrets`, `secret.rs` GET via `request_text`, `zeroize`, the `kube_client::client=error` log guard, `AppShell.secret_value_access`, `REVEAL_DURATION`, `write_private_text`, `SecretCopied`). Wireframes: W7 `k("Releases")`, sidebar group **Helm**. Applies **C1** (blocking), C6, C7, C11. C12 (Helm writes) stays with 0038.
 
 ## Goal
 
@@ -35,15 +35,15 @@ Roll back, Uninstall, upgrade (0038, C12; menu items disabled "Read-only mode");
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. No kube, k8s-openapi, flate2, base64, or zeroize type in a public signature; the crate spawns no task; the app gains no kube dependency; the 0001 read-only grep finds only the SSAR `create`; new requests are `list`/`watch`/`get` only.
-- [ ] 4. `Cargo.lock` gains **no package** (`flate2` 1.1, `base64` 0.22, serde-saphyr `deserialize` deps, `serde` are locked); only the `k8sboard-cluster` dependency list changes. Anything else: stop and report.
-- [ ] 5. Helm safety ([helm-safety.md](helm-safety.md) checklist): no `tracing::` in the listed modules; summaries hold no values, manifest, or notes (tests) and are never traced; detail GETs use `request_text`; `HelmText` has no `Debug`, `Display`, `Clone`; the probe prints counts and metadata only.
-- [ ] 6. On UAT (or an empty state when the probe finds no release): Releases shows live rows with Chart and Status; a drawer shows History newest first.
-- [ ] 7. Values, the Overview diff, and Notes open masked; Reveal shows them and re-masks after 30 s; a tab change hides at once; closing the drawer or changing the subject drops the view; Ctrl+C on revealed text writes the private clipboard (cleared after 30 s, out of Win+V history); Manifest shows Secret `data` as `<hidden>`; with `--screenshot`, every Reveal is disabled.
-- [ ] 8. Watches per session stay at most `3N + 4` (explorer N + history 1). The 0003 AC4 color-literal grep is clean.
-- [ ] 9. The step's screenshots exist, show masked values only, and the ui-verifier reports no high-severity defect against W7.
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline. Some app tests live in the module that owns the code: `helm_rows_tests.rs` holds the history and row tests that the plan lists under `live_sections`, `kind_diagnosis_tests.rs` the box tests, and the menu and launch-option tests sit in their own modules.
+- [x] 3. No kube, k8s-openapi, flate2, base64, or zeroize type in a public signature; the crate spawns no task; the app gains no kube dependency; the 0001 read-only grep finds only the SSAR `create`; new requests are `list`/`watch`/`get` only.
+- [x] 4. `Cargo.lock` gains **no package** (`flate2` 1.1, `base64` 0.22, serde-saphyr `deserialize` deps, `serde` are locked); only the `k8sboard-cluster` dependency list changes. Anything else: stop and report.
+- [x] 5. Helm safety ([helm-safety.md](helm-safety.md) checklist): no `tracing::` in the listed modules; summaries hold no values, manifest, or notes (tests) and are never traced; detail GETs use `request_text`; `HelmText` has no `Debug`, `Display`, `Clone`; the probe prints counts and metadata only.
+- [x] 6. On UAT (or an empty state when the probe finds no release): Releases shows live rows with Chart and Status; a drawer shows History newest first. UAT has 0 release Secrets (probe: `helm releases 0`), so the live check is the empty Releases state (light and dark, `.tmp/ui-shots/v41-releases-*.png`) and the drawers are covered by fixture tests.
+- [ ] 7. Values, the Overview diff, and Notes open masked; Reveal shows them and re-masks after 30 s; a tab change hides at once; closing the drawer or changing the subject drops the view; Ctrl+C on revealed text writes the private clipboard (cleared after 30 s, out of Win+V history); Manifest shows Secret `data` as `<hidden>`; with `--screenshot`, every Reveal is disabled. Not live-verified: UAT has no release to open, and a Reveal or Copy is never run in a screenshot or against the real clipboard; the pure core (`next_need`, `shown_text`, expiry, `private_copy`) is unit-tested.
+- [x] 8. Watches per session stay at most `3N + 4` (explorer N + history 1). The 0003 AC4 color-literal grep is clean.
+- [x] 9. The step's screenshots exist, show masked values only, and the ui-verifier reports no high-severity defect against W7. Coder-viewed (empty state only, light and dark: `v41-releases-*.png`); the masked drawer and the Values, Manifest, and Notes tabs have no UAT release to show, so they were not captured. ui-verifier 2026-10-02 (v41v shots): no high-severity defect on the empty Releases list and Secrets regression; the release drawer and tabs have no UAT data (0 releases) and rely on unit tests.
 
 ## Open items
 
