@@ -4,12 +4,13 @@
 use std::collections::BTreeSet;
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::table::Column;
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::{
-    AnyElement, App, ClickEvent, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    SharedString, StatefulInteractiveElement as _, Styled as _, TextAlign, WeakEntity, Window, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, ClickEvent, Div, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, TextAlign, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::AppShell;
@@ -18,6 +19,9 @@ use crate::table_sort::{SortDirection, TableSort};
 
 /// Width the table cannot use: the empty trailing column and the vertical scrollbar.
 const TABLE_GUTTER: Pixels = px(28.);
+
+/// The checkbox column that opens every table.
+const SELECT_WIDTH: Pixels = px(32.);
 
 /// The logical columns of a table. A logical column is an index into this list, before any
 /// column is hidden.
@@ -82,13 +86,19 @@ fn layout_plan(plan: &ColumnPlan, table_width: Pixels, hidden: &BTreeSet<usize>)
 /// The visible columns, in order, and the logical column each one shows.
 pub(crate) struct TableColumns {
     pub(crate) columns: Vec<Column>,
-    logical: Vec<usize>,
+    /// `None` is the checkbox column.
+    logical: Vec<Option<usize>>,
 }
 
 impl TableColumns {
-    /// The logical column shown at table column `col_ix`.
+    /// The logical column shown at table column `col_ix`; `None` for the checkbox column.
     pub(crate) fn logical(&self, col_ix: usize) -> Option<usize> {
-        self.logical.get(col_ix).copied()
+        self.logical.get(col_ix).copied().flatten()
+    }
+
+    /// Whether table column `col_ix` is the checkbox column.
+    pub(crate) fn is_select(&self, col_ix: usize) -> bool {
+        matches!(self.logical.get(col_ix), Some(None))
     }
 
     /// Whether the table would draw the same columns, so it needs no refresh.
@@ -102,7 +112,7 @@ impl TableColumns {
     }
 }
 
-/// The visible columns of a table `table_width` wide. The `flexible` column takes the width
+/// The visible columns of a table `table_width` wide, after the checkbox column. The `flexible` column takes the width
 /// the others leave over, never less than `flexible_min`, and is shown even when hidden. The
 /// columns are fixed pixel widths, so this runs again whenever the window size changes.
 pub(crate) fn layout_columns(
@@ -122,7 +132,11 @@ pub(crate) fn layout_columns(
         .filter(|(index, _)| *index != flexible)
         .map(|(_, spec)| spec.width)
         .sum();
-    let flexible_width = (table_width - TABLE_GUTTER - px(fixed_width)).max(flexible_min);
+    let flexible_width =
+        (table_width - TABLE_GUTTER - SELECT_WIDTH - px(fixed_width)).max(flexible_min);
+    let select = Column::new("select", "")
+        .width(SELECT_WIDTH)
+        .resizable(false);
     let columns = visible
         .iter()
         .map(|(index, spec)| {
@@ -137,10 +151,12 @@ pub(crate) fn layout_columns(
                 column.width(px(spec.width))
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
     TableColumns {
-        columns,
-        logical: visible.iter().map(|(index, _)| *index).collect(),
+        columns: std::iter::once(select).chain(columns).collect(),
+        logical: std::iter::once(None)
+            .chain(visible.iter().map(|(index, _)| Some(*index)))
+            .collect(),
     }
 }
 
@@ -150,10 +166,14 @@ pub(crate) fn layout_columns(
 pub(crate) fn header_cell(
     layout: &TableLayout,
     sort: Option<TableSort>,
+    all_checked: bool,
     shell: &WeakEntity<AppShell>,
     col_ix: usize,
     cx: &App,
 ) -> AnyElement {
+    if layout.columns.is_select(col_ix) {
+        return select_all_cell(all_checked, shell);
+    }
     let (Some(column), Some(logical)) = (
         layout.columns.columns.get(col_ix),
         layout.columns.logical(col_ix),
@@ -173,6 +193,62 @@ pub(crate) fn header_cell(
         },
         cx,
     )
+}
+
+/// The cell around a checkbox. Text sits a little below the middle of a cell (font metrics), so
+/// the box is pushed down by half the 6 px padding to line up with it.
+fn select_cell_base() -> Div {
+    div().size_full().flex().items_center().pt(px(6.))
+}
+
+/// The header checkbox: ticks every shown row, or unticks them when all are ticked.
+fn select_all_cell(all_checked: bool, shell: &WeakEntity<AppShell>) -> AnyElement {
+    let shell = shell.clone();
+    select_cell_base()
+        .child(
+            Checkbox::new("select-all")
+                .checked(all_checked)
+                .on_click(move |_, _, cx| {
+                    let _ = shell.update(cx, |shell, cx| shell.set_all_checked(!all_checked, cx));
+                }),
+        )
+        .into_any_element()
+}
+
+/// A row's checkbox. The cell stops the mouse down and the click, so ticking a row never also
+/// selects it and opens the drawer.
+pub(crate) fn select_cell(
+    row_ix: usize,
+    is_checked: bool,
+    shell: &WeakEntity<AppShell>,
+) -> AnyElement {
+    let shell = shell.clone();
+    select_cell_base()
+        .id(("select-cell", row_ix))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .child(
+            Checkbox::new(("select", row_ix))
+                .checked(is_checked)
+                .on_click(move |_, _, cx| {
+                    let _ = shell.update(cx, |shell, cx| shell.toggle_row_checked(row_ix, cx));
+                }),
+        )
+        .into_any_element()
+}
+
+/// The row element of a table. Ctrl (Cmd on macOS) and Shift clicks tick rows; the kit adds its
+/// own click after this one, so a modified click also selects the row.
+pub(crate) fn clickable_row(row_ix: usize, shell: &WeakEntity<AppShell>) -> Stateful<Div> {
+    let shell = shell.clone();
+    div().id(("row", row_ix)).on_click(move |event, _, cx| {
+        let modifiers = event.modifiers();
+        if modifiers.secondary() {
+            let _ = shell.update(cx, |shell, cx| shell.toggle_row_checked(row_ix, cx));
+        } else if modifiers.shift {
+            let _ = shell.update(cx, |shell, cx| shell.check_row_range(row_ix, cx));
+        }
+    })
 }
 
 /// The header label plus a sort arrow: solid on the sorted column, a hint while the pointer

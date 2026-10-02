@@ -13,7 +13,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _,
+    prelude::FluentBuilder as _, px,
 };
 
 use cluster::{EVENT_LIMIT, EventFilter};
@@ -21,7 +21,7 @@ use cluster::{EVENT_LIMIT, EventFilter};
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{FlowState, LiveCluster, SessionPhase};
 use crate::drawer::ClickHandler;
-use crate::filter_bar::filter_bar;
+use crate::filter_bar::{ToolkitState, filter_bar};
 use crate::kind_drawer::kind_drawer;
 use crate::log_dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
 use crate::navigation::SIDEBAR_WIDTH;
@@ -29,9 +29,9 @@ use crate::node_drawer::node_drawer;
 use crate::node_summary::role_counts;
 use crate::pod_drawer::pod_drawer;
 use crate::resource_kind::ResourceKind;
+use crate::row_selection::{bulk_actions, selection_bar};
 use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
-use crate::table_view::FilteredTable as _;
 
 impl AppShell {
     /// The tables have fixed pixel columns, so one column is resized to fill the workspace
@@ -93,21 +93,28 @@ impl AppShell {
     /// Header, banner, body, and the drawer overlay. The drawer covers this region only, so
     /// it never covers the dock.
     fn render_upper(&self, cx: &Context<Self>) -> impl IntoElement {
+        // One read of the table view for everything drawn from it in this frame.
+        let toolkit = self.toolkit_state(cx);
+        let toolkit = toolkit.as_ref();
         v_flex()
             .flex_1()
             .min_w_0()
             .min_h_0()
             .relative()
-            .child(self.render_header(cx))
-            .children(self.render_filter_bar(cx))
+            .child(self.render_header(toolkit, cx))
+            .children(self.render_filter_bar(toolkit, cx))
             .children(self.render_interruption_banner(cx))
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
+            .children(self.render_selection_bar(toolkit, cx))
             .children(self.render_drawer(cx))
     }
 
-    fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn render_header(
+        &self,
+        toolkit: Option<&ToolkitState>,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let live = self.live(cx);
-        let toolkit = self.toolkit_state(cx);
         let (title, count) = match self.screen {
             Screen::Pods => (
                 "Pods",
@@ -148,7 +155,7 @@ impl AppShell {
             ),
         };
         // A filter replaces the total with how many rows match it.
-        let count = match (&toolkit, count) {
+        let count = match (toolkit, count) {
             (Some(state), Some(_)) if state.is_filtering => {
                 Some(match_count_label(state.shown, state.total))
             }
@@ -177,22 +184,66 @@ impl AppShell {
                     .text_color(cx.theme().muted_foreground)
                     .child(count)
             }))
-            .children(self.render_header_actions(cx))
+            .children(self.render_header_actions(toolkit, cx))
+    }
+
+    /// The bar over the bottom of the table while rows are ticked. It sits left of an open
+    /// drawer, and the drawer is drawn after it.
+    fn render_selection_bar(
+        &self,
+        state: Option<&ToolkitState>,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        self.live(cx)?;
+        let state = state?;
+        if state.checked == 0 {
+            return None;
+        }
+        let (singular, plural) = match self.screen {
+            Screen::Pods => ("pod", "pods"),
+            Screen::Nodes => ("node", "nodes"),
+            Screen::Kind(kind) => (kind.singular(), kind.plural()),
+        };
+        let text = format!("{} selected", count_label(state.checked, singular, plural));
+        let bar = selection_bar(text, bulk_actions(self.screen), &cx.weak_entity(), cx);
+        let right = if self.selected.is_some() {
+            self.drawer.width()
+        } else {
+            px(0.)
+        };
+        Some(
+            div()
+                .absolute()
+                .bottom_4()
+                .left_0()
+                .right(right)
+                .flex()
+                .justify_center()
+                .child(bar)
+                .into_any_element(),
+        )
     }
 
     /// The filter bar under the header, once the session is live.
-    fn render_filter_bar(&self, cx: &Context<Self>) -> Option<AnyElement> {
+    fn render_filter_bar(
+        &self,
+        state: Option<&ToolkitState>,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
         self.live(cx)?;
-        let state = self.toolkit_state(cx)?;
-        Some(filter_bar(&state, &self.quick_filter, cx))
+        Some(filter_bar(state?, self, &self.quick_filter, cx))
     }
 
     /// The per-screen toggles, right-aligned in the header: Hide inactive on ReplicaSets, and
     /// Warnings only with Pause stream on Events.
-    fn render_header_actions(&self, cx: &Context<Self>) -> Option<AnyElement> {
+    fn render_header_actions(
+        &self,
+        toolkit: Option<&ToolkitState>,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
         let buttons: Vec<AnyElement> = match self.screen {
             Screen::Kind(ResourceKind::ReplicaSets) => {
-                self.render_hide_inactive(cx).into_iter().collect()
+                self.render_hide_inactive(toolkit, cx).into_iter().collect()
             }
             Screen::Kind(ResourceKind::Events) => {
                 [self.render_warnings_only(cx), self.render_pause_stream(cx)]
@@ -212,16 +263,12 @@ impl AppShell {
     }
 
     /// ReplicaSets scaled to zero are hidden while it is on, which is the default.
-    fn render_hide_inactive(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let preset = self
-            .kind_table
-            .read(cx)
-            .delegate()
-            .view()?
-            .filter
-            .preset
-            .clone();
-        let is_on = preset == Some(FilterPreset::HideInactive);
+    fn render_hide_inactive(
+        &self,
+        toolkit: Option<&ToolkitState>,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let is_on = toolkit?.preset == Some(FilterPreset::HideInactive);
         let next = if is_on {
             None
         } else {

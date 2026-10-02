@@ -1,16 +1,14 @@
 use cluster::NamespaceScope;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _, StyledExt as _, TitleBar, h_flex};
-use gpui_kit::{
-    AnyElement, App, Context, Entity, IntoElement, ParentElement as _, SharedString, Styled as _,
-    WeakEntity, div, px,
-};
+use gpui_kit::{AnyElement, Context, IntoElement, ParentElement as _, Styled as _, div};
 
 use crate::app_shell::AppShell;
-use crate::cluster_session::{ClusterSession, LiveList, namespaces_label};
+use crate::cluster_session::namespaces_label;
+use crate::namespace_picker::{PickerAnchor, namespace_picker as picker};
 use crate::resource_actions::disabled_menu_item;
 
 pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
@@ -67,73 +65,17 @@ fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
 }
 
 fn namespace_picker(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
-    let picker = Button::new("namespace-picker").ghost().small();
-    let Some(session) = shell.session().cloned() else {
-        return picker.label("ns: —").disabled(true).into_any_element();
-    };
-    let Some(live) = session.read(cx).live() else {
-        return picker.label("ns: —").disabled(true).into_any_element();
+    let trigger = Button::new("namespace-picker").ghost().small();
+    let Some(live) = shell.session().and_then(|session| session.read(cx).live()) else {
+        return trigger.label("ns: —").disabled(true).into_any_element();
     };
     let label = match &live.scope {
         NamespaceScope::All => "ns: all".to_owned(),
         NamespaceScope::Named(namespace) => format!("ns: {namespace}"),
         NamespaceScope::Several(names) => format!("ns: {}", namespaces_label(names)),
     };
-    let shell_handle = cx.weak_entity();
-    picker
-        .label(label)
-        .dropdown_caret(true)
-        .dropdown_menu(move |menu, _, cx| namespace_menu(menu, &session, &shell_handle, cx))
-        .into_any_element()
-}
-
-/// Built when the picker opens, from the namespaces known at that moment.
-fn namespace_menu(
-    menu: PopupMenu,
-    session: &Entity<ClusterSession>,
-    shell: &WeakEntity<AppShell>,
-    cx: &App,
-) -> PopupMenu {
-    let menu = menu.scrollable(true).max_h(px(360.));
-    let Some(live) = session.read(cx).live() else {
-        return menu;
-    };
-    let item = |name: &str, scope: NamespaceScope| scope_item(name, scope, &live.scope, shell);
-    let menu = menu
-        .item(item("All namespaces", NamespaceScope::All))
-        .separator();
-    match &live.namespaces {
-        LiveList::Loading => menu.item(PopupMenuItem::new("Loading namespaces…").disabled(true)),
-        LiveList::Failed { message } => menu
-            .item(disabled_menu_item(
-                "Could not list namespaces",
-                message.clone().into(),
-            ))
-            .item(item(
-                live.default_namespace(),
-                NamespaceScope::Named(live.default_namespace().to_owned()),
-            )),
-        LiveList::Ready { items, .. } => items.iter().fold(menu, |menu, namespace| {
-            menu.item(item(
-                &namespace.name,
-                NamespaceScope::Named(namespace.name.clone()),
-            ))
-        }),
-    }
-}
-
-fn scope_item(
-    label: &str,
-    scope: NamespaceScope,
-    active: &NamespaceScope,
-    shell: &WeakEntity<AppShell>,
-) -> PopupMenuItem {
-    let shell = shell.clone();
-    PopupMenuItem::new(SharedString::from(label.to_owned()))
-        .checked(*active == scope)
-        .on_click(move |_, _, cx| {
-            let _ = shell.update(cx, |shell, cx| shell.set_namespace(scope.clone(), cx));
-        })
+    let trigger = trigger.label(label).dropdown_caret(true);
+    picker(PickerAnchor::TitleBar, trigger, shell, cx)
 }
 
 /// Always shown: this phase of the app never changes anything in a cluster.

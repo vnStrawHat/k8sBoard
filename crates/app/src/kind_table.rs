@@ -9,9 +9,9 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, Context, Entity, HighlightStyle, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, SharedString, StatefulInteractiveElement as _, Styled as _,
-    StyledText, WeakEntity, Window, div, px,
+    AnyElement, App, Context, Div, Entity, HighlightStyle, InteractiveElement as _, IntoElement,
+    ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, StyledText, WeakEntity, Window, div, px,
 };
 
 use crate::age::format_age;
@@ -24,8 +24,8 @@ use crate::resource_actions::kind_menu;
 use crate::resource_kind::{Align, NAME_COLUMN, NameColumn, ResourceKind, kind_columns};
 use crate::status_tone::{StatusTone, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
-use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
-use crate::table_view::{CellValue, FilteredTable, TableRow, TableView, default_filter};
+use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
+use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 
 /// The logical column of the Name column, for the kinds that show it.
 const NAME: usize = 0;
@@ -148,6 +148,23 @@ impl KindTableDelegate {
         self.rows(cx).get(self.view()?.item_index(row_ix)?)
     }
 
+    /// Whether the row at table row `row_ix` is ticked.
+    fn is_row_checked(&self, row_ix: usize, cx: &App) -> bool {
+        let (Some(row), Some(view), Some(kind)) = (self.row_at(row_ix, cx), self.view(), self.kind)
+        else {
+            return false;
+        };
+        let name_column = kind.name_column();
+        view.is_checked(&KindTableRow { row, name_column })
+    }
+
+    fn are_all_checked(&self, cx: &App) -> bool {
+        let (Some(view), Some(kind)) = (self.view(), self.kind) else {
+            return false;
+        };
+        view.all_checked(&table_rows(self.rows(cx), kind.name_column()))
+    }
+
     fn scope_label(&self, cx: &App) -> String {
         self.live(cx)
             .map_or_else(String::new, |live| live.scope_label())
@@ -167,6 +184,13 @@ impl KindTableDelegate {
 struct KindTableRow<'a> {
     row: &'a KindRow,
     name_column: NameColumn,
+}
+
+/// The rows of a kind with its Name layout, for the toolkit.
+fn table_rows(rows: &[KindRow], name_column: NameColumn) -> Vec<KindTableRow<'_>> {
+    rows.iter()
+        .map(|row| KindTableRow { row, name_column })
+        .collect()
 }
 
 impl TableRow for KindTableRow<'_> {
@@ -239,16 +263,21 @@ impl FilteredTable for KindTableDelegate {
         self.kind.map(|_| &self.layout.plan)
     }
 
+    fn check_rows(&mut self, change: RowCheck, cx: &App) {
+        let Some(kind) = self.kind else {
+            return;
+        };
+        let rows = table_rows(self.rows(cx), kind.name_column());
+        if let Some(view) = self.views.get_mut(&kind) {
+            view.apply_check(&rows, change);
+        }
+    }
+
     fn rebuild_view(&mut self, cx: &App) -> bool {
         let Some(kind) = self.kind else {
             return false;
         };
-        let name_column = kind.name_column();
-        let rows: Vec<KindTableRow> = self
-            .rows(cx)
-            .iter()
-            .map(|row| KindTableRow { row, name_column })
-            .collect();
+        let rows = table_rows(self.rows(cx), kind.name_column());
         let view = self.views.entry(kind).or_insert_with(|| new_view(kind));
         view.rebuild(&rows, self.layout.plan.specs.len(), jiff::Timestamp::now());
         self.layout.relayout(&view.hidden)
@@ -280,7 +309,17 @@ impl TableDelegate for KindTableDelegate {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let sort = self.view().and_then(|view| view.sort);
-        header_cell(&self.layout, sort, &self.shell, col_ix, cx)
+        let all_checked = self.layout.columns.is_select(col_ix) && self.are_all_checked(cx);
+        header_cell(&self.layout, sort, all_checked, &self.shell, col_ix, cx)
+    }
+
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        clickable_row(row_ix, &self.shell)
     }
 
     fn render_td(
@@ -290,6 +329,10 @@ impl TableDelegate for KindTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        if self.layout.columns.is_select(col_ix) {
+            let is_checked = self.is_row_checked(row_ix, cx);
+            return select_cell(row_ix, is_checked, &self.shell);
+        }
         let (Some(row), Some(logical), Some(kind)) = (
             self.row_at(row_ix, cx),
             self.layout.columns.logical(col_ix),
@@ -528,11 +571,11 @@ mod tests {
             Pixels::ZERO,
             &Default::default(),
         );
-        let message = layout.columns.get(3).expect("a Message column");
+        let message = layout.columns.get(4).expect("a Message column");
         assert_eq!(message.name.as_ref(), "Message");
         assert_eq!(message.width, px(280.));
         assert_eq!(message.min_width, px(280.));
-        let reason = layout.columns.get(1).expect("a Reason column");
+        let reason = layout.columns.get(2).expect("a Reason column");
         assert_eq!(reason.width, px(170.));
     }
 
@@ -541,12 +584,12 @@ mod tests {
         let mut events = delegate(Some(ResourceKind::Events));
         assert!(events.fit_width(px(1400.)));
         assert!(!events.fit_width(px(1400.)));
-        let message_width = events.layout.columns.columns.get(3).map(|c| c.width);
+        let message_width = events.layout.columns.columns.get(4).map(|c| c.width);
         assert!(message_width > Some(px(280.)));
 
         let mut deployments = delegate(Some(ResourceKind::Deployments));
         assert!(deployments.fit_width(px(1400.)));
-        let name_width = deployments.layout.columns.columns.first().map(|c| c.width);
+        let name_width = deployments.layout.columns.columns.get(1).map(|c| c.width);
         assert!(name_width > Some(NAME_MIN_WIDTH));
     }
 
@@ -570,7 +613,7 @@ mod tests {
             view.filter.text = "api".to_owned();
         }
         assert!(delegate.set_kind(Some(ResourceKind::Events)));
-        let message = delegate.layout.columns.columns.get(3).map(|c| c.width);
+        let message = delegate.layout.columns.columns.get(4).map(|c| c.width);
         assert!(message > Some(px(280.)));
         assert!(delegate.view().is_some_and(|view| !view.is_filtering()));
         delegate.set_kind(Some(ResourceKind::Deployments));

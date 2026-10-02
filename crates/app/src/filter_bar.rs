@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 
+use cluster::NamespaceScope;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
@@ -14,6 +15,7 @@ use gpui_kit::{
 };
 
 use crate::app_shell::{AppShell, Screen};
+use crate::namespace_picker::{PickerAnchor, namespace_picker};
 use crate::node_summary::{NodeCounts, NodeGroup};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusTone, tone_color};
@@ -34,9 +36,13 @@ pub(crate) struct ToolkitState {
     pub(crate) shown: usize,
     pub(crate) total: usize,
     pub(crate) is_filtering: bool,
+    /// How many rows are ticked.
+    pub(crate) checked: usize,
     pub(crate) preset: Option<FilterPreset>,
     /// Counts of all nodes, for the summary chips; Nodes only.
     pub(crate) node_counts: Option<NodeCounts>,
+    /// The namespace scope, on the screens it applies to.
+    pub(crate) scope: Option<NamespaceScope>,
 }
 
 impl ToolkitState {
@@ -59,8 +65,10 @@ impl ToolkitState {
             shown: view.rows().len(),
             total: view.total(),
             is_filtering: view.is_filtering(),
+            checked: view.checked_count(),
             preset: view.filter.preset.clone(),
             node_counts: None,
+            scope: None,
         })
     }
 }
@@ -78,6 +86,7 @@ fn chip_text(chip: &FilterChip, screen: Screen) -> String {
 /// The filter bar of the visible table. Nodes and the kinds show no namespace chips yet.
 pub(crate) fn filter_bar(
     state: &ToolkitState,
+    shell: &AppShell,
     quick_filter: &Entity<InputState>,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -98,6 +107,7 @@ pub(crate) fn filter_bar(
         .py_1()
         .border_b_1()
         .border_color(cx.theme().border)
+        .children(namespace_chips(state, shell, cx))
         .children(node_summary_chips(state, cx))
         .children(chips)
         .children(add_filter_button(state, cx))
@@ -114,6 +124,48 @@ pub(crate) fn filter_bar(
                 .child(columns_button(state, cx)),
         )
         .into_any_element()
+}
+
+/// `Namespace: all ▾`, which opens the picker, or one removable chip per picked namespace.
+fn namespace_chips(
+    state: &ToolkitState,
+    shell: &AppShell,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let Some(scope) = &state.scope else {
+        return Vec::new();
+    };
+    if *scope == NamespaceScope::All {
+        let trigger = Button::new("namespace-chip")
+            .small()
+            .outline()
+            .label("Namespace: all")
+            .dropdown_caret(true);
+        return vec![namespace_picker(
+            PickerAnchor::FilterBar,
+            trigger,
+            shell,
+            cx,
+        )];
+    }
+    let names = scope.namespaces();
+    names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            // Removing one keeps the others; none left is All.
+            let rest =
+                NamespaceScope::of_namespaces(names.iter().filter(|other| *other != name).cloned());
+            Button::new(("namespace-chip", index))
+                .small()
+                .outline()
+                .label(format!("Namespace: {name}"))
+                .child(Icon::new(IconName::X).size_3())
+                .tooltip("Remove namespace")
+                .on_click(cx.listener(move |shell, _, _, cx| shell.set_namespace(rest.clone(), cx)))
+                .into_any_element()
+        })
+        .collect()
 }
 
 /// The Nodes summary: `All`, then one chip per group that has nodes. A click picks the group

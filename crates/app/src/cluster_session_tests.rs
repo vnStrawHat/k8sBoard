@@ -70,8 +70,19 @@ fn report(list_pods: AccessDecision) -> AccessReport {
 #[test]
 fn initial_scope_uses_requested_namespace() {
     let allowed = report(AccessDecision::Allowed);
-    let scope = initial_scope(Some("team-a"), Some(&allowed), "default");
-    assert_eq!(scope, NamespaceScope::Named("team-a".to_owned()));
+    let requested = NamespaceScope::Named("team-a".to_owned());
+    let scope = initial_scope(Some(&requested), Some(&allowed), "default");
+    assert_eq!(scope, requested);
+}
+
+#[test]
+fn initial_scope_keeps_a_requested_several_scope() {
+    let allowed = report(AccessDecision::Allowed);
+    let requested = NamespaceScope::of_namespaces(["b".to_owned(), "a".to_owned()]);
+    assert_eq!(
+        initial_scope(Some(&requested), Some(&allowed), "default"),
+        requested
+    );
 }
 
 #[test]

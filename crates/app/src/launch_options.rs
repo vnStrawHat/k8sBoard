@@ -1,8 +1,11 @@
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
+use cluster::NamespaceScope;
+
 use crate::app_shell::Screen;
 use crate::drawer::DrawerTab;
+use crate::namespace_picker::MAX_NAMESPACES;
 use crate::resource_kind::ResourceKind;
 
 pub(crate) const USAGE: &str = "\
@@ -11,10 +14,10 @@ Usage: k8sboard [options]
 Options:
   --kubeconfig <path>    kubeconfig file (default: first KUBECONFIG entry, else ~/.kube/config)
   --context <name>       context to open (default: the kubeconfig current-context)
-  --namespace <name>     namespace to show (default: all namespaces if allowed)
+  --namespace <a[,b]>    namespaces to show, at most 5 (default: all namespaces if allowed)
   --filter <text>        quick filter of the start screen; label:k=v,k2!=v2 becomes label chips
   --theme light|dark     colour theme (default: follow the system)
-  --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|node-events|pod-yaml|node-yaml|logs-dock|logs-zoomed|
+  --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|node-events|pod-yaml|node-yaml|logs-dock|logs-zoomed|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-yaml
                          screen to open (default: pods)
@@ -34,6 +37,9 @@ pub(crate) enum LaunchScreen {
     NodeDrawer(DrawerTab),
     LogsDock,
     LogsZoomed,
+    /// `--screen pods-selected|nodes-selected`: the first two rows are ticked.
+    PodsSelected,
+    NodesSelected,
     /// `--screen <plural>`, e.g. `deployments`.
     Kind(ResourceKind),
     /// `--screen <plural>-drawer|<plural>-events|<plural>-yaml`: the kind's first row selected, on that tab.
@@ -44,8 +50,12 @@ impl LaunchScreen {
     /// The list screen this request opens on.
     pub(crate) fn screen(self) -> Screen {
         match self {
-            Self::Pods | Self::PodDrawer(_) | Self::LogsDock | Self::LogsZoomed => Screen::Pods,
-            Self::Nodes | Self::NodeDrawer(_) => Screen::Nodes,
+            Self::Pods
+            | Self::PodDrawer(_)
+            | Self::LogsDock
+            | Self::LogsZoomed
+            | Self::PodsSelected => Screen::Pods,
+            Self::Nodes | Self::NodeDrawer(_) | Self::NodesSelected => Screen::Nodes,
             Self::Kind(kind) | Self::KindDrawer(kind, _) => Screen::Kind(kind),
         }
     }
@@ -66,6 +76,11 @@ impl LaunchScreen {
         }
     }
 
+    /// Whether the first rows must be ticked once the list has loaded.
+    pub(crate) fn checks_rows(self) -> bool {
+        matches!(self, Self::PodsSelected | Self::NodesSelected)
+    }
+
     /// Whether the log dock must be open on a pod.
     pub(crate) fn has_log_dock(self) -> bool {
         matches!(self, Self::LogsDock | Self::LogsZoomed)
@@ -84,6 +99,8 @@ impl LaunchScreen {
             "node-yaml" => Some(Self::NodeDrawer(DrawerTab::Yaml)),
             "logs-dock" => Some(Self::LogsDock),
             "logs-zoomed" => Some(Self::LogsZoomed),
+            "pods-selected" => Some(Self::PodsSelected),
+            "nodes-selected" => Some(Self::NodesSelected),
             _ => {
                 if let Some(plural) = text.strip_suffix("-drawer") {
                     let kind = ResourceKind::from_plural(plural)?;
@@ -113,7 +130,7 @@ pub(crate) enum ThemeChoice {
 pub(crate) struct LaunchOptions {
     pub(crate) kubeconfig: Option<PathBuf>,
     pub(crate) context: Option<String>,
-    pub(crate) namespace: Option<String>,
+    pub(crate) namespace: Option<NamespaceScope>,
     /// The start screen's quick filter text; a `label:` text becomes chips.
     pub(crate) filter: Option<String>,
     pub(crate) theme: Option<ThemeChoice>,
@@ -153,7 +170,7 @@ pub(crate) fn parse_launch_options(
         match flag.as_str() {
             "--kubeconfig" => options.kubeconfig = Some(PathBuf::from(value()?)),
             "--context" => options.context = Some(value()?),
-            "--namespace" => options.namespace = Some(value()?),
+            "--namespace" => options.namespace = Some(parse_namespaces(&value()?)?),
             "--filter" => options.filter = Some(value()?),
             "--theme" => options.theme = Some(parse_theme(&value()?)?),
             "--screen" => {
@@ -166,6 +183,23 @@ pub(crate) fn parse_launch_options(
         }
     }
     Ok(LaunchRequest::Run(options))
+}
+
+/// `a` or `a,b,c`: the namespaces to show. Empty parts are ignored.
+fn parse_namespaces(text: &str) -> Result<NamespaceScope, String> {
+    let names: Vec<String> = text
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect();
+    match NamespaceScope::of_namespaces(names) {
+        NamespaceScope::All => Err("--namespace needs at least one namespace".to_owned()),
+        scope if scope.namespaces().len() > MAX_NAMESPACES => Err(format!(
+            "at most {MAX_NAMESPACES} namespaces for --namespace"
+        )),
+        scope => Ok(scope),
+    }
 }
 
 fn parse_theme(text: &str) -> Result<ThemeChoice, String> {

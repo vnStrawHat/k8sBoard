@@ -36,7 +36,7 @@ fn parses_all_flags() {
         LaunchOptions {
             kubeconfig: Some(PathBuf::from("kube.yml")),
             context: Some("ctx".to_owned()),
-            namespace: Some("team-a".to_owned()),
+            namespace: Some(NamespaceScope::Named("team-a".to_owned())),
             filter: Some("label:app=api".to_owned()),
             theme: Some(ThemeChoice::Dark),
             screen: LaunchScreen::PodDrawer(DrawerTab::Containers),
@@ -241,4 +241,39 @@ fn filter_flag_is_parsed() {
         parse(&["--filter"]),
         Err("missing value for --filter".to_owned())
     );
+}
+
+#[test]
+fn namespace_flag_accepts_a_comma_list_up_to_five() {
+    let scope = |text: &str| run_options(&["--namespace", text]).namespace;
+    assert_eq!(scope("a"), Some(NamespaceScope::Named("a".to_owned())));
+    assert_eq!(
+        scope("b,a,a"),
+        Some(NamespaceScope::of_namespaces([
+            "a".to_owned(),
+            "b".to_owned()
+        ]))
+    );
+    assert!(matches!(scope("a,b,c,d,e"), Some(NamespaceScope::Several(names)) if names.len() == 5));
+    assert_eq!(
+        parse(&["--namespace", "a,b,c,d,e,f"]),
+        Err("at most 5 namespaces for --namespace".to_owned())
+    );
+    assert!(parse(&["--namespace", ",,"]).is_err());
+}
+
+#[test]
+fn selected_screens_tick_the_first_rows() {
+    for (text, screen) in [
+        ("pods-selected", LaunchScreen::PodsSelected),
+        ("nodes-selected", LaunchScreen::NodesSelected),
+    ] {
+        let options = run_options(&["--screen", text]);
+        assert_eq!(options.screen, screen);
+        assert!(screen.checks_rows());
+        assert!(!screen.has_drawer());
+    }
+    assert_eq!(LaunchScreen::PodsSelected.screen(), Screen::Pods);
+    assert_eq!(LaunchScreen::NodesSelected.screen(), Screen::Nodes);
+    assert!(!LaunchScreen::Pods.checks_rows());
 }

@@ -12,7 +12,7 @@ use crate::resource_kind::ResourceKind;
 use crate::table_selection::ResourceKey;
 
 const READ_ONLY_FEATURE_REASON: &str = "Not available in read-only mode";
-const READ_ONLY_MODE_REASON: &str = "Read-only mode";
+pub(crate) const READ_ONLY_MODE_REASON: &str = "Read-only mode";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResourceAction {

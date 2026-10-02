@@ -5,8 +5,8 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Entity, IntoElement, ParentElement as _, Pixels, Styled as _,
-    WeakEntity, Window, div, px,
+    AnyElement, App, Context, Div, Entity, IntoElement, ParentElement as _, Pixels, Stateful,
+    Styled as _, WeakEntity, Window, div, px,
 };
 
 use crate::age::format_age;
@@ -19,8 +19,8 @@ use crate::resource_actions::node_menu;
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::status_tone::{StatusTone, node_status_label, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
-use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
-use crate::table_view::{CellValue, FilteredTable, TableRow, TableView, default_filter};
+use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
+use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 
 const NAME: usize = 0;
 const STATUS: usize = 1;
@@ -166,6 +166,11 @@ impl FilteredTable for NodeTableDelegate {
         Some(&self.layout.plan)
     }
 
+    fn check_rows(&mut self, change: RowCheck, cx: &App) {
+        let nodes = self.nodes(cx);
+        self.view.apply_check(nodes, change);
+    }
+
     fn rebuild_view(&mut self, cx: &App) -> bool {
         let nodes = self.nodes(cx);
         self.counts = Some(node_counts(nodes));
@@ -199,7 +204,25 @@ impl TableDelegate for NodeTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        header_cell(&self.layout, self.view.sort, &self.shell, col_ix, cx)
+        let all_checked =
+            self.layout.columns.is_select(col_ix) && self.view.all_checked(self.nodes(cx));
+        header_cell(
+            &self.layout,
+            self.view.sort,
+            all_checked,
+            &self.shell,
+            col_ix,
+            cx,
+        )
+    }
+
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        clickable_row(row_ix, &self.shell)
     }
 
     fn render_td(
@@ -209,6 +232,12 @@ impl TableDelegate for NodeTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        if self.layout.columns.is_select(col_ix) {
+            let is_checked = self
+                .node_at(row_ix, cx)
+                .is_some_and(|node| self.view.is_checked(node));
+            return select_cell(row_ix, is_checked, &self.shell);
+        }
         let (Some(node), Some(logical)) = (
             self.node_at(row_ix, cx),
             self.layout.columns.logical(col_ix),

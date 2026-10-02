@@ -32,7 +32,7 @@ pub(crate) struct ClusterSession {
 struct ConnectInputs {
     kubeconfig: Arc<Kubeconfig>,
     context: String,
-    requested_namespace: Option<String>,
+    requested_namespace: Option<NamespaceScope>,
 }
 
 pub(crate) enum SessionPhase {
@@ -266,12 +266,12 @@ pub(crate) fn namespaces_label(names: &[String]) -> String {
 
 /// `all_namespaces_access` is `None` when `review_access(All)` failed or was not asked.
 fn initial_scope(
-    requested: Option<&str>,
+    requested: Option<&NamespaceScope>,
     all_namespaces_access: Option<&AccessReport>,
     default_namespace: &str,
 ) -> NamespaceScope {
-    if let Some(namespace) = requested {
-        return NamespaceScope::Named(namespace.to_owned());
+    if let Some(scope) = requested {
+        return scope.clone();
     }
     // Without a report the context namespace is the safest scope: it needs the fewest rights.
     match all_namespaces_access {
@@ -291,7 +291,7 @@ struct Connected {
 async fn connect_cluster(
     kubeconfig: Arc<Kubeconfig>,
     context: String,
-    requested_namespace: Option<String>,
+    requested_namespace: Option<NamespaceScope>,
 ) -> Result<Connected, ClusterError> {
     let connection = ClusterConnection::open(&kubeconfig, &context).await?;
     let server_version = connection.server_version().await?;
@@ -301,7 +301,7 @@ async fn connect_cluster(
         None => Some(connection.review_access(NamespaceScope::All).await),
     };
     let scope = initial_scope(
-        requested_namespace.as_deref(),
+        requested_namespace.as_ref(),
         all_namespaces_review
             .as_ref()
             .and_then(|review| review.as_ref().ok()),
@@ -327,7 +327,7 @@ impl ClusterSession {
     pub(crate) fn new(
         kubeconfig: Arc<Kubeconfig>,
         summary: &ContextSummary,
-        requested_namespace: Option<String>,
+        requested_namespace: Option<NamespaceScope>,
         explorer_kind: Option<ResourceKind>,
         cx: &mut Context<Self>,
     ) -> Self {

@@ -26,6 +26,7 @@ use crate::launch_options::{
 };
 use crate::log_dock::{DockMode, LogDock};
 use crate::log_tab::LogTarget;
+use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
 use crate::navigation::{NavigationCounts, sidebar};
 use crate::node_table::NodeTableDelegate;
 use crate::object_events::{SubjectChange, event_subject, subject_change};
@@ -40,7 +41,7 @@ use crate::table_filter::{
 };
 use crate::table_selection::{ResourceKey, SelectionSync, list_row_index, selection_sync};
 use crate::table_sort::next_sort;
-use crate::table_view::{FilteredTable, TableView};
+use crate::table_view::{FilteredTable, RowCheck, TableView};
 use crate::title_bar::title_bar;
 use crate::yaml_view::{YamlView, yaml_subject};
 
@@ -83,7 +84,7 @@ enum KubeconfigState {
 /// What the command line asked for, used only by the first session.
 struct RequestedStart {
     context: Option<String>,
-    namespace: Option<String>,
+    namespace: Option<NamespaceScope>,
 }
 
 /// The root view: the six regions of the window, the screen choice, and the selection that
@@ -119,6 +120,8 @@ pub(crate) struct AppShell {
     _quick_filter_events: Subscription,
     /// Puts the focus back inside the key context when the focused element disappears.
     _focus_lost: Subscription,
+    /// The picker popover: which trigger is open, and the draft.
+    namespace_picker: NamespacePickerState,
 }
 
 /// The key bindings of the shell. `!Input` keeps `/` typable in every input, the YAML editor
@@ -218,8 +221,10 @@ impl AppShell {
             event_subject_task: None,
             log_dock,
             dock_split,
-            pending_launch_screen: (options.screen.has_drawer() || options.screen.has_log_dock())
-                .then_some(options.screen),
+            pending_launch_screen: (options.screen.has_drawer()
+                || options.screen.has_log_dock()
+                || options.screen.checks_rows())
+            .then_some(options.screen),
             requested: RequestedStart {
                 context: options.context,
                 namespace: options.namespace,
@@ -229,6 +234,7 @@ impl AppShell {
             focus_handle,
             _quick_filter_events: quick_filter_events,
             _focus_lost: focus_lost,
+            namespace_picker: NamespacePickerState::default(),
         };
         if let Some(text) = launch_filter {
             shell.apply_launch_filter(&text, cx);
@@ -291,7 +297,7 @@ impl AppShell {
         &mut self,
         kubeconfig: Arc<Kubeconfig>,
         summary: &ContextSummary,
-        namespace: Option<String>,
+        namespace: Option<NamespaceScope>,
         cx: &mut Context<Self>,
     ) {
         let kind = self.screen.kind();
@@ -320,6 +326,7 @@ impl AppShell {
         // filter of `--filter`.
         if is_switch {
             self.clear_all_filters(cx);
+            self.namespace_picker = NamespacePickerState::default();
         }
         cx.notify();
     }
@@ -357,6 +364,41 @@ impl AppShell {
         }
         self.context_error = None;
         self.start_session(kubeconfig, &summary, None, cx);
+    }
+
+    pub(crate) fn namespace_picker(&self) -> &NamespacePickerState {
+        &self.namespace_picker
+    }
+
+    /// Opens the picker from `anchor`, with the current scope ticked.
+    pub(crate) fn open_namespace_picker(&mut self, anchor: PickerAnchor, cx: &mut Context<Self>) {
+        let Some(scope) = self.live(cx).map(|live| live.scope.clone()) else {
+            return;
+        };
+        self.namespace_picker.open(anchor, &scope);
+        cx.notify();
+    }
+
+    /// `anchor`'s popover closed: only that anchor's own picker is closed.
+    pub(crate) fn close_namespace_picker(&mut self, anchor: PickerAnchor, cx: &mut Context<Self>) {
+        self.namespace_picker.close(anchor);
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_picker_namespace(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.namespace_picker.toggle(name);
+        cx.notify();
+    }
+
+    pub(crate) fn clear_picker_draft(&mut self, cx: &mut Context<Self>) {
+        self.namespace_picker.clear();
+        cx.notify();
+    }
+
+    /// Apply, a namespace name, or All: sets the scope and closes the picker.
+    pub(crate) fn apply_namespace_scope(&mut self, scope: NamespaceScope, cx: &mut Context<Self>) {
+        self.namespace_picker.dismiss();
+        self.set_namespace(scope, cx);
     }
 
     pub(crate) fn set_namespace(&mut self, scope: NamespaceScope, cx: &mut Context<Self>) {
@@ -732,6 +774,10 @@ impl AppShell {
         else {
             return;
         };
+        if launch.checks_rows() {
+            self.check_first_rows(launch, cx);
+            return;
+        }
         let Some(live) = self.live(cx) else {
             return;
         };
@@ -794,6 +840,30 @@ impl AppShell {
                 self.change_selection(key, cx);
                 self.pod_table
                     .update(cx, |table, cx| table.set_selected_row(row, cx));
+            }
+        }
+    }
+
+    /// `--screen pods-selected|nodes-selected`: ticks the first two shown rows once the list has
+    /// loaded. The view is rebuilt before this runs.
+    fn check_first_rows(&mut self, launch: LaunchScreen, cx: &mut Context<Self>) {
+        let Some(live) = self.live(cx) else {
+            return;
+        };
+        let is_loading = match launch {
+            LaunchScreen::NodesSelected => live.nodes.is_loading(),
+            _ => live.pods.is_loading(),
+        };
+        if is_loading {
+            return;
+        }
+        self.pending_launch_screen = None;
+        for row in 0..2 {
+            match launch {
+                LaunchScreen::NodesSelected => {
+                    check_table(&self.node_table, RowCheck::Toggle(row), cx)
+                }
+                _ => check_table(&self.pod_table, RowCheck::Toggle(row), cx),
             }
         }
     }
@@ -959,6 +1029,35 @@ impl AppShell {
         });
     }
 
+    /// A row checkbox, or Ctrl+click.
+    pub(crate) fn toggle_row_checked(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.check_rows(RowCheck::Toggle(row), cx);
+    }
+
+    /// Shift+click: ticks the rows from the anchor to `row`.
+    pub(crate) fn check_row_range(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.check_rows(RowCheck::Range(row), cx);
+    }
+
+    /// The header checkbox.
+    pub(crate) fn set_all_checked(&mut self, checked: bool, cx: &mut Context<Self>) {
+        self.check_rows(RowCheck::All(checked), cx);
+    }
+
+    /// The selection bar's ✕.
+    pub(crate) fn clear_checked(&mut self, cx: &mut Context<Self>) {
+        self.update_view(cx, TableView::clear_checked);
+    }
+
+    fn check_rows(&mut self, change: RowCheck, cx: &mut Context<Self>) {
+        match self.screen {
+            Screen::Pods => check_table(&self.pod_table, change, cx),
+            Screen::Nodes => check_table(&self.node_table, change, cx),
+            Screen::Kind(_) => check_table(&self.kind_table, change, cx),
+        }
+        cx.notify();
+    }
+
     /// Sets or clears the screen's own switch: a Nodes summary chip or Hide inactive.
     pub(crate) fn set_preset(&mut self, preset: Option<FilterPreset>, cx: &mut Context<Self>) {
         self.update_view(cx, move |view| view.filter.preset = preset);
@@ -1090,15 +1189,25 @@ impl AppShell {
 
     /// What the filter bar and the screen header read; `None` before the table has a view.
     pub(crate) fn toolkit_state(&self, cx: &App) -> Option<ToolkitState> {
-        match self.screen {
-            Screen::Pods => ToolkitState::of(self.pod_table.read(cx).delegate(), self.screen),
+        let mut state = match self.screen {
+            Screen::Pods => ToolkitState::of(self.pod_table.read(cx).delegate(), self.screen)?,
             Screen::Nodes => {
                 let mut state = ToolkitState::of(self.node_table.read(cx).delegate(), self.screen)?;
                 state.node_counts = self.node_table.read(cx).delegate().counts().cloned();
-                Some(state)
+                state
             }
-            Screen::Kind(_) => ToolkitState::of(self.kind_table.read(cx).delegate(), self.screen),
+            Screen::Kind(_) => ToolkitState::of(self.kind_table.read(cx).delegate(), self.screen)?,
+        };
+        // Nodes and Namespaces are cluster-scoped: the scope does not apply to them.
+        let is_namespaced = match self.screen {
+            Screen::Pods => true,
+            Screen::Nodes => false,
+            Screen::Kind(kind) => kind.is_namespaced(),
+        };
+        if is_namespaced {
+            state.scope = self.live(cx).map(|live| live.scope.clone());
         }
+        Some(state)
     }
 
     // ---- rendering ----
@@ -1142,6 +1251,14 @@ impl Render for AppShell {
             )
             .child(status_bar(session, is_kubeconfig_loading, cx))
     }
+}
+
+/// Ticks or unticks rows of the view of `table`.
+fn check_table<D: FilteredTable>(table: &Entity<TableState<D>>, change: RowCheck, cx: &mut App) {
+    table.update(cx, |table, cx| {
+        table.delegate_mut().check_rows(change, cx);
+        cx.notify();
+    });
 }
 
 /// Applies `change` to the view of `table`, then rebuilds it from the session. A new column

@@ -2,7 +2,7 @@
 //! indices only, so the table never owns a copy of the rows and a newer snapshot cannot race it.
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::time::Instant;
 
 use gpui_kit::App;
@@ -64,6 +64,8 @@ pub(crate) trait FilteredTable: TableDelegate {
     /// Reads the session items, rebuilds the view, and lays the columns out again at the last
     /// width. Returns whether the columns changed; the caller then refreshes the table.
     fn rebuild_view(&mut self, cx: &App) -> bool;
+    /// Ticks or unticks rows of the view, reading the session items for their identity.
+    fn check_rows(&mut self, change: RowCheck, cx: &App);
 }
 
 /// Filter, sort, and hidden columns of one table, and the item indices they produce.
@@ -75,9 +77,37 @@ pub(crate) struct TableView {
     pub(crate) hidden: BTreeSet<usize>,
     /// What a context switch restores, and what Clear filters does not.
     default_filter: TableFilter,
+    /// The ticked rows by identity, so they survive a reorder. Only visible rows stay ticked.
+    checked: BTreeSet<RowName>,
+    /// The row a Shift click extends the range from.
+    anchor: Option<RowName>,
     /// Item indices in display order.
     rows: Vec<usize>,
     total: usize,
+}
+
+/// A row's identity within one table: `(namespace, name)` is unique there.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct RowName {
+    namespace: Option<String>,
+    name: String,
+}
+
+impl RowName {
+    fn of<T: TableRow>(row: &T) -> Self {
+        Self {
+            namespace: row.namespace().map(str::to_owned),
+            name: row.name().to_owned(),
+        }
+    }
+}
+
+/// A change of the ticked rows, by table row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowCheck {
+    Toggle(usize),
+    Range(usize),
+    All(bool),
 }
 
 /// The filter a screen starts with: ReplicaSets hide the inactive ones (decision 26).
@@ -124,12 +154,116 @@ impl TableView {
             kept = order.into_iter().map(|position| kept[position]).collect();
         }
         self.rows = kept;
+        self.prune_checked(items);
         tracing::trace!(
             rows = self.total,
             kept = self.rows.len(),
             elapsed_us = started.elapsed().as_micros() as u64,
             "rebuilt a table view"
         );
+    }
+
+    /// A filter, a deleted object, or a scope change unticks: bulk actions never reach a row that
+    /// is not shown.
+    fn prune_checked<T: TableRow>(&mut self, items: &[T]) {
+        if self.checked.is_empty() && self.anchor.is_none() {
+            return;
+        }
+        // Borrowed keys: nothing is allocated per row.
+        let visible: HashSet<(Option<&str>, &str)> = self
+            .rows
+            .iter()
+            .map(|&index| (items[index].namespace(), items[index].name()))
+            .collect();
+        let is_visible =
+            |name: &RowName| visible.contains(&(name.namespace.as_deref(), name.name.as_str()));
+        self.checked.retain(is_visible);
+        if self
+            .anchor
+            .as_ref()
+            .is_some_and(|anchor| !is_visible(anchor))
+        {
+            self.anchor = None;
+        }
+    }
+
+    pub(crate) fn is_checked<T: TableRow>(&self, row: &T) -> bool {
+        self.checked.contains(&RowName::of(row))
+    }
+
+    pub(crate) fn checked_count(&self) -> usize {
+        self.checked.len()
+    }
+
+    /// Ticks or unticks one row, and makes it the anchor of the next range.
+    fn toggle_checked<T: TableRow>(&mut self, row: &T) {
+        let name = RowName::of(row);
+        if !self.checked.remove(&name) {
+            self.checked.insert(name.clone());
+        }
+        self.anchor = Some(name);
+    }
+
+    /// Ticks every shown row between the anchor and table row `row`, both included, in view
+    /// order. Without an anchor it acts like `toggle_checked`.
+    fn check_range<T: TableRow>(&mut self, items: &[T], row: usize) {
+        let Some(item) = self.item_index(row) else {
+            return;
+        };
+        let anchor_row = self.anchor.as_ref().and_then(|anchor| {
+            self.rows
+                .iter()
+                .position(|&index| RowName::of(&items[index]) == *anchor)
+        });
+        let Some(anchor_row) = anchor_row else {
+            self.toggle_checked(&items[item]);
+            return;
+        };
+        let (from, to) = (anchor_row.min(row), anchor_row.max(row));
+        for &index in &self.rows[from..=to] {
+            self.checked.insert(RowName::of(&items[index]));
+        }
+    }
+
+    /// Ticks or unticks every shown row; rows the filter hides are not touched.
+    fn set_all_checked<T: TableRow>(&mut self, items: &[T], checked: bool) {
+        for &index in &self.rows {
+            let name = RowName::of(&items[index]);
+            if checked {
+                self.checked.insert(name);
+            } else {
+                self.checked.remove(&name);
+            }
+        }
+        self.anchor = None;
+    }
+
+    /// Whether every shown row is ticked; false for an empty table.
+    pub(crate) fn all_checked<T: TableRow>(&self, items: &[T]) -> bool {
+        !self.rows.is_empty()
+            && self
+                .rows
+                .iter()
+                .all(|&index| self.is_checked(&items[index]))
+    }
+
+    /// Applies one change of the ticked rows.
+    pub(crate) fn apply_check<T: TableRow>(&mut self, items: &[T], change: RowCheck) {
+        match change {
+            RowCheck::Toggle(row) => {
+                if let Some(item) = self.item_index(row) {
+                    self.toggle_checked(&items[item]);
+                }
+            }
+            RowCheck::Range(row) => self.check_range(items, row),
+            RowCheck::All(checked) => self.set_all_checked(items, checked),
+        }
+    }
+
+    /// Unticks every row. Ticked rows also go with the filter that selected them.
+    pub(crate) fn clear_checked(&mut self) {
+        self.checked.clear();
+        self.anchor = None;
     }
 
     /// The item indices to show, in order.
@@ -159,11 +293,13 @@ impl TableView {
     /// Removes the text, the chips, and the preset; the sort and the hidden columns stay.
     pub(crate) fn clear_filter(&mut self) {
         self.filter = TableFilter::default();
+        self.clear_checked();
     }
 
     /// Back to the default filter (a context switch).
     pub(crate) fn reset_filter(&mut self) {
         self.filter = self.default_filter.clone();
+        self.clear_checked();
     }
 
     /// Adds the chips that are not already present.
