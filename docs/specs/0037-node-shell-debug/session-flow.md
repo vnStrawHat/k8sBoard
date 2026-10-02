@@ -31,13 +31,7 @@ impl ClusterConnection {
 
 ## Guarded create-then-attach (0030 `run_guarded`)
 
-```rust
-pub(crate) enum GuardedKind {
-    Write(WriteRequest), Connect(ConnectIntent),                         // 0030, 0036/0035
-    CreateThenAttach { request: WriteRequest,
-        open: Box<dyn FnOnce(AttachPermit, WriteOutcome, &mut Window, &mut App)> },   // 0037
-}
-```
+The variant `GuardedKind::CreateThenAttach { request, open }` is defined in the full enum of 0030 write-flow.md (`open: Box<dyn FnOnce(AttachPermit, WriteOutcome, &mut Window, &mut App)>`); this spec owns its branch:
 
 1. Gate (row's cluster) → `confirm_step` (`Privileged` for node shell, `Change` for debug) → dry-run of `request` (0030 dialog line).
 2. Before the commit: lock re-check and `commit_block` (0030), **then take `attach_permit()`**; `None` → the gate reason, no commit, no audit line.

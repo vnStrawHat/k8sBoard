@@ -69,7 +69,7 @@ Runs on `cx.background_executor()`. Both inputs are masked and have no header.
 ## Write-flow additions (0031, step 4)
 
 ```rust
-/// Dry-run only: gate (EditYaml enabled), then 0032 `checked_write` with `WriteMode::DryRun` (no audit).
+/// Dry-run only: gate (EditYaml enabled), then 0032 `checked_write` with `CommitMode::DryRun` (no audit).
 pub(crate) fn preview_write(&self, cluster: &ClusterRef, request: WriteRequest, cx: &mut Context<AppShell>)
     -> Task<Result<WriteOutcome, WriteError>>;
 pub(crate) struct GuardedIntent { /* 0030 + warnings */ pub(crate) on_commit: Option<CommitCallback> }

@@ -16,11 +16,11 @@ No runtime dependency change. kube features unchanged (no `ws`).
 
 | File | Change |
 |---|---|
-| `src/object_write.rs` (new) + `object_write_tests.rs` | `WriteOperation`, `WriteRequest` (manual `Debug` for both), `WriteMode`, `WriteOutcome`, `ChangedField`, `WritePolicy`, `WriteError`, `FIELD_MANAGER`, `run_raw`, redaction, `ClusterConnection::write`; the named `#[allow(clippy::disallowed_methods)]` |
+| `src/object_write.rs` (new) + `object_write_tests.rs` | `WriteOperation`, `WriteRequest` (manual `Debug` for both), `WriteMode`, `WriteOutcome` (with `effect: WriteEffect` = `Patched` and `created_name`), `ChangedField`, `WritePolicy`, `WriteError`, `FIELD_MANAGER`, `run_raw`, redaction, `ClusterConnection::write`; the named `#[allow(clippy::disallowed_methods)]` |
 | `src/fake_api.rs` (new, `#[cfg(test)]`) | `FakeApi`, `RecordedRequest` |
 | `src/connection.rs` | field `write_policy` set in `open`; `#[cfg(test)] from_client(client, context, policy)` |
 | `src/object_yaml.rs` | `api_resource` and `ObjectRef` accessors → `pub(crate)` (production user: `object_write`) |
-| `src/access_review.rs` | `AccessCheck::PatchNodes`; `ALL` = 27; tests; the named allow on `review_one` (SSAR) |
+| `src/access_review.rs` | `AccessCheck::PatchNodes`; `ALL` + 1; tests; the named allow on `review_one` (SSAR) |
 | `src/kubelet_stats.rs` | the named allow on `kubelet_text` / `kubelet_lines` (read-only GET allow-list, 0011) |
 | `src/lib.rs` | `mod object_write; #[cfg(test)] mod fake_api;`; export the public `object_write` types |
 
@@ -41,7 +41,7 @@ No runtime dependency change. kube features unchanged (no `ws`).
 | 2b | `src/keymap.rs` (0028, + tests) | `ToggleReadOnly` on `secondary-shift-r` (`WINDOW`); out of `RESERVED_KEYS`; sheet row; `enter` → `NoAction` in `WriteConfirm` and `WriteConfirm > Input` |
 | 2b | `src/title_bar.rs` | badge toggle, dashed env border, two states; multi-mode menu when 0027 is merged |
 | 3 | `src/audit_log.rs` (new) + `audit_log_tests.rs` | `AuditEntry`, `AuditObject`, `AuditField`, `AuditOutcome`, `lock_entry`, `append_audit`; `toggle_write_lock` appends lock lines; Safety page audit path and `Show in folder` |
-| 4 | `src/write_flow.rs` (new) + `write_flow_tests.rs` | `WriteIntent`, `GuardedIntent`, `GuardedKind`, `run_guarded` (the one core), `start_write` (wrapper), `commit_block`, `DryRunState`, `TypedMatch` |
+| 4 | `src/write_flow.rs` (new) + `write_flow_tests.rs` | `WriteIntent`, `GuardedIntent`, `GuardedKind`, `run_guarded` (the one core), `start_write` (wrapper), `commit_block`, `DryRunState`, `TypedMatch`, `GuardedIntent.warnings`, app `CommitMode` + `Confirmed`, `WriteStep`, `checked_write`, `CheckedWriteError` (decisions 30–32; `Batch` arrives with 0032) |
 | 4 | `src/audit_log.rs` | `audit_entry` (takes `GuardedIntent`) |
 | 4 | `src/confirm_dialog.rs` | write variant: object row, changes, dry-run line, note, danger variant |
 | 4 | `src/resource_actions.rs`, `src/keyboard_navigation.rs` (0028) | Cordon / Uncordon item and key C → `start_write`; `Cordon` shipped |

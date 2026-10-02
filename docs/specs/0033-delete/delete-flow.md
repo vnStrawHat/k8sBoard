@@ -31,7 +31,7 @@ fn delete_warnings(kind: ObjectKind, targets: &[DeleteTarget], live: &LiveCluste
 
 1. Gate first: a disabled gate sends no request.
 2. `object_identity` for each target, **sequentially** on the runtime. 404 → `already_gone`. Any other error stops: `Could not read {name} to pin its uid ({error}); nothing was deleted` (decision 3).
-3. Every target gone → notice `{name} was already deleted` / `All {n} objects were already deleted`. Otherwise `run_guarded(GuardedIntent { action: Delete, label, risk: Destructive, expected_name, kind: GuardedKind::Batch(BatchPlan { items, skipped: vec![], extras: BatchExtras::Delete { propagation: Background, already_gone, warnings } }), warnings, on_commit: None }, trigger)`.
+3. Every target gone → notice `{name} was already deleted` / `All {n} objects were already deleted`. Otherwise `run_guarded(GuardedIntent { action: Delete, label, risk: Destructive, expected_name, kind: GuardedKind::Batch(BatchPlan { items, skipped: vec![], extras: BatchExtras::Delete { propagation: Background, already_gone, warnings }, on_failure: BatchFailure::Continue }), warnings, on_commit: None }, trigger)`.
    - `label`: `Delete pod` (single) or `Delete 12 pods`.
    - `expected_name`: `Some(object name)` for a single delete, `None` (the cluster name) for bulk (decision 10).
 

@@ -40,7 +40,7 @@
 | S | File | Change |
 |---|---|---|
 | 1 | `docs/roadmap/cross-cutting.md` | C12 resolved: `helm` CLI for rollback and uninstall; no upgrade |
-| 1 | `docs/specs/0030-guardrails-write-path/write-path.md`, `README.md` AC 1 | allow-list rows `helm rollback`, `helm uninstall` (external process); the process clippy entries; AC 1 names four exceptions (SSAR, `object_write.rs`, kubelet GETs, `helm_command.rs`) plus the 0035–0037 connect sites |
+| 1 | `docs/specs/0030-guardrails-write-path/write-path.md`, `README.md` AC 1 | allow-list rows `helm rollback`, `helm uninstall` (external process); the process clippy entries; the canonical clippy exception table (0030 write-path.md) +1: `helm_command.rs` |
 | 1 | `CLAUDE.md`, `docs/agents/code-style/project-rules.md` | one line: "processes run only through `helm_command.rs`" (the user edits or approves the wording) |
 | 2 | `docs/specs/0017-helm-releases/decisions.md` | decision 24 superseded by 0038 |
 | 2 | `docs/roadmap/inventory-kinds.md` | Releases: Roll back, Uninstall → Done |

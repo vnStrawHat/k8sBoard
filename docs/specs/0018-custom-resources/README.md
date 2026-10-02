@@ -57,3 +57,4 @@ Any mutation (Renew, Delete, Edit stay disabled or absent); column overrides bey
 2. More `BUILT_IN_COLUMNS` entries (other well-known CRDs) if users ask.
 3. The 0029 command palette should index custom kinds (large CRD sets).
 4. Event Go to object for custom kinds needs a session-aware `ResourceKey::of_object`.
+5. Certificate `Renew now` (W7 Certificates, moved here from 0032 by 0032b decision 16): a cert-manager action (`cmctl renew` sets the `Issuing` condition through the `certificates/status` subresource of `cert-manager.io/v1`). Needs a new allow-listed operation on the 0030 write path, a cert-manager presence check, and the 0018 custom-object model. Follow-up spec after 0018.

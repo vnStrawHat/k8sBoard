@@ -34,8 +34,8 @@ pub(crate) fn action_availability(action: ResourceAction, guard: &ClusterGuard) 
 
 - RBAC before the lock: unlocking cannot fix a denial, so it is the more useful reason.
 - `READ_ONLY_MODE_REASON` and `READ_ONLY_FEATURE_REASON` are replaced by the row-2 text; the 0028 test strings change with it.
-- `ActionGate` gains `mutates: bool`; `ResourceAction::Cordon` maps to `AccessCheck::PatchNodes`, `mutates: true` (step 4 sets it shipped). `key_availability` (0028) builds the guard from the subject row's cluster.
-- SSAR source: the session `AccessReport` (one review per check at session start and scope change). No extra SSAR per object; the dry-run is the per-object check.
+- `ActionGate` gains `mutates: bool`; `ResourceAction::Cordon` maps to `AccessCheck::PatchNodes`, `mutates: true` (step 4 sets it shipped). Kind-dependent actions carry their kind (`Scale(ObjectKind)`, `RestartRollout(ObjectKind)`, 0032), so `gate()` picks the per-resource check and `action_availability` stays two-argument (decision 35). `key_availability` (0028) builds the guard from the subject row's cluster.
+- SSAR source: the session `AccessReport` (one review per check at session start and scope change). Per-kind Update/Delete checks are lazy: they are not in `AccessCheck::ALL`, and the lookup reads the session's `kind_access` (0031 edit-model.md "Lazy write checks"). No extra SSAR per object; the dry-run is the per-object check.
 
 ## Confirm tiers
 

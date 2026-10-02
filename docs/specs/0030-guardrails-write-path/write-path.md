@@ -14,8 +14,13 @@ pub enum WriteOperation {
 /// Always valid: the target kind fits the operation. Debug is manual: operation, kind, namespace, name.
 #[derive(Clone, PartialEq, Eq)]
 pub struct WriteRequest { target: ObjectRef, operation: WriteOperation }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum WriteMode { DryRun, Commit }
-#[derive(Clone, Debug, PartialEq, Eq)] pub struct WriteOutcome { pub mode: WriteMode, pub elapsed: Duration }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum WriteMode { DryRun, Commit }  // the app wraps it (write-flow.md)
+/// `created_name`: the server-chosen name of a create with `generateName` (0032 Trigger now, Re-run); `uid`: the uid of
+/// a created or replaced object (0037 node-shell pod cleanup). Both are `None` on a dry-run and when not applicable.
+#[derive(Clone, Debug, PartialEq, Eq)] pub struct WriteOutcome { pub mode: WriteMode, pub elapsed: Duration,
+    pub effect: WriteEffect, pub created_name: Option<String>, pub uid: Option<String> }
+/// What the server did. 0030 `Patched`; 0032 `Created`; 0031 adds `Replaced`; 0033 `Deleted`, `DeletionPending`.
+#[derive(Clone, Debug, PartialEq, Eq)] pub enum WriteEffect { Patched, Created }
 #[derive(Clone, Debug)] pub struct ChangedField { pub path: &'static str, pub value: Option<String> } // None = not recorded
 #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum WritePolicy { Allowed, Blocked }
 
@@ -33,8 +38,9 @@ impl WritePolicy {
 }
 impl ClusterConnection {
     /// The only function that sends a mutating request. Returns `WritesBlocked` before building
-    /// any request when the connection's policy is `Blocked`. Both modes set `fieldManager=k8sboard`;
-    /// `DryRun` also sets `dryRun=All`.
+    /// any request when the connection's policy is `Blocked`. Patch, create, and replace set
+    /// `fieldManager=k8sboard` in both modes, and `DryRun` adds `dryRun=All` to the query. Delete
+    /// (0033) is the exception: `DeleteOptions` has no field manager, and its dry-run is `"dryRun":["All"]` in the body.
     pub async fn write(&self, request: &WriteRequest, mode: WriteMode) -> Result<WriteOutcome, WriteError>;
 }
 ```
@@ -43,7 +49,9 @@ impl ClusterConnection {
 - Transport: `Api::<DynamicObject>` from `object_yaml::api_resource(kind)`, `PatchParams { dry_run, field_manager: Some(FIELD_MANAGER.into()), ..Default::default() }` (it also has `field_validation`), `Patch::Merge(json)`.
 - **Uncordon sends `false`, not `null`**: the same body shape as cordon, so the dry-run, the confirm summary, and the audit show one explicit value. `unschedulable` is `omitempty`, so the stored Node is the same as after a `null` delete.
 - Timeout: a private `run_raw(action, future) -> Result<Result<T, kube::Error>, Elapsed>` around `tokio::time::timeout(REQUEST_TIMEOUT, ..)`, because `run` classifies errors before the `Status` can be read.
-- `AccessCheck::PatchNodes` = `("patch", "", "nodes", None, false)`; `ALL` grows to 27.
+- `AccessCheck::PatchNodes` = `("patch", "", "nodes", None, false)`; `ALL` grows by 1 (counts are relative: the code has 29 today, and other specs add theirs).
+- `ObjectKind::ALL` (every variant, in declaration order) and `ObjectKind::resource(self) -> &'static str` (plural API resource, `deployments`) back the per-kind checks of 0031 (`Update(kind)`) and 0033 (`Delete(kind)`); they land with whichever of the two merges first (no production user in 0030 itself).
+- **C8 note (amended):** there is no server-side apply and no Force path. Single-field actions are merge patches (0032 Roll back and taint edits are noted per operation); 0031 replaces with a `resourceVersion` precondition.
 - Manual `Debug`: `WriteOperation` → `SetNodeSchedulable`; `WriteRequest` → `WriteRequest { operation: SetNodeSchedulable, kind: Node, namespace: None, name: "wk-04" }`. Never a body or field value.
 
 ## Allow-list (the controlled 0001 grep)
@@ -52,18 +60,38 @@ impl ClusterConnection {
 |---|---|---|---|---|---|
 | SSAR (exists) | POST | `/apis/authorization.k8s.io/v1/selfsubjectaccessreviews` | review | n/a (non-mutating) | 0001 |
 | `SetNodeSchedulable` | PATCH (merge) | `/api/v1/nodes/{name}` | `{"spec":{"unschedulable":b}}` | yes | 0030 |
+| `ReplaceObject` | GET, then PUT | `{path}/{name}?dryRun=All&fieldManager=k8sboard` (commit: no `dryRun`) | the edited object with the base `resourceVersion` and `uid`; no `status` or other server metadata | yes | 0031 |
+| `DeleteObject` | DELETE | `{path}/{name}`, no query | `{"propagationPolicy":…,"preconditions":{"uid":…}}` plus `"dryRun":["All"]` on a dry-run; no `fieldManager` | yes (body) | 0033 |
+| `ScaleWorkload`, `RestartRollout`, `SetRolloutPaused`, `RollBackDeployment`, `SetCronJobSuspended`, `TriggerCronJob`, `RerunJob` | PATCH (merge; JSON Patch for Roll back), GET + POST for creates | 0032 write-operations.md | 0032 write-operations.md | yes | 0032 |
+| `EvictPod`, `SetNodeTaints`, `SetNodeLabels` | POST (eviction), PATCH (merge) | 0034 write-operations.md | 0034 write-operations.md | yes | 0034 |
+| `SetHpaReplicaRange`, `ExpandClaim`, `SetDefaultStorageClass` | PATCH (merge) | 0032b operations.md | 0032b operations.md | yes | 0032b |
+| `pods/portforward` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/portforward?ports={p}` | stream | no | 0035 step 1 (`port_forward.rs`) |
+| `pods/exec` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/exec?…` | stream | no | 0036 step 1 (`pod_shell.rs`) |
+| `AddDebugContainer`, `CreateNodeShellPod`, `DeleteNodeShellPod` | PATCH (strategic) `ephemeralcontainers`, POST pod, DELETE pod | 0037 pod-specs.md | 0037 pod-specs.md | yes, yes, no (delete is commit only) | 0037 step 1 |
+| `pods/attach` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/attach?…` | stream | no | 0037 step 1 (`debug_shell.rs`) |
+| `helm rollback`, `helm uninstall` | external process (the user's `helm` CLI) | n/a | argv per 0038 helm-command.md | yes (CLI dry-run) | 0038 step 1 (`helm_command.rs`) |
 
 Enforcement:
 
 1. **clippy `disallowed-methods`** in the root `clippy.toml`: `kube::Client::{send, request, request_text, request_status, request_stream, connect}` and the mutating `kube::Api` methods (`create`, `patch`, `replace`, `delete`, `delete_collection`, `create_subresource`, `patch_subresource`, `replace_subresource`, `patch_status`, `replace_status`, `patch_scale`, `replace_scale`, `replace_ephemeral_containers`, `evict`, `exec`, `attach`, `portforward`). Each entry has a `reason`. The coder confirms every path resolves (a scratch call per entry fires the lint; not committed).
-2. **Named exceptions**, each one `#[allow(clippy::disallowed_methods)]` on the smallest item with a comment naming its row: `access_review.rs` `review_one` (SSAR row), `object_write.rs` (the `match` that sends each allow-listed operation), and `kubelet_stats.rs` `kubelet_text` / `kubelet_lines` (`request_text` / `request_stream` GETs of the 0011 kubelet path allow-list; read-only). No other allow.
-3. The grep stays as documentation: `grep -rnE "\.(create|patch|replace|delete|delete_collection|exec|attach|portforward|evict|create_subresource|patch_subresource|replace_subresource|patch_status|replace_status|patch_scale|replace_scale)\(" crates/cluster/src crates/cluster/examples` lists only `access_review.rs` and `object_write.rs`.
+2. **Named exceptions: the canonical list** (single source; other specs point here). Each is one `#[allow(clippy::disallowed_methods)]` on the smallest item with a comment naming its row; no other allow:
+
+   | File | Item | Spec |
+   |---|---|---|
+   | `access_review.rs` | `review_one` (SSAR) | 0030 |
+   | `object_write.rs` | the `match` that sends each allow-listed operation | 0030 |
+   | `kubelet_stats.rs` | `kubelet_text` / `kubelet_lines` (read-only GETs of the 0011 kubelet path allow-list) | 0030 |
+   | `pod_shell.rs` | `exec` | 0036 |
+   | `port_forward.rs` | `portforward` | 0035 |
+   | `debug_shell.rs` | `attach` | 0037 |
+   | `helm_command.rs` | process spawn (`std::process::Command` lint, not a kube method) | 0038 |
+3. The grep stays as documentation: `grep -rnE "\.(create|patch|replace|delete|delete_collection|exec|attach|portforward|evict|create_subresource|patch_subresource|replace_subresource|patch_status|replace_status|patch_scale|replace_scale)\(" crates/cluster/src crates/cluster/examples` lists only the kube files of that table that have shipped.
 4. `crates/app` has no `kube` dependency (test `app_has_no_kube_dependency`), so it can only write through `ClusterConnection::write`.
-5. `allow_list_matches_the_operations` pins method, path, query, content type, and body per variant through the fake transport. 0035/0036 connect calls join `object_write.rs` as rows with "Dry-run: no".
+5. `allow_list_matches_the_operations` pins method, path, query, content type, and body per variant through the fake transport. Connect calls do not live in `object_write.rs`: they are rows with "Dry-run: no" whose call sites are `pod_shell.rs` (0036), `port_forward.rs` (0035), and `debug_shell.rs` (0037), each with its own permit.
 
 ## Dry-run
 
-- Every commit is preceded by a `DryRun` of the same request (write-flow.md). `supports_dry_run` is false only for connect verbs (later specs).
+- Every commit is preceded by a `DryRun` of the same request (write-flow.md). `supports_dry_run` is false only for connect verbs (0035–0037) and 0037 `DeleteNodeShellPod` (own pod, `uid` precondition, commit only); `run_guarded` shows `DryRunState::NotSupported` for it.
 - **An admission webhook that rejects dry-run** (HTTP 400 whose message says the webhook does not support dry run) → `DryRunRejected { reason }`, and the commit is **blocked**. A later spec may add an explicit escape; 0030 offers none.
 
 ## Write errors
@@ -71,10 +99,11 @@ Enforcement:
 | Variant | From | `Display` |
 |---|---|---|
 | `WritesBlocked` | policy `Blocked` | `writes are blocked in this debug build (set K8SBOARD_ALLOW_WRITES=1)` |
-| `Denied { message }` | 403 | `not permitted: {message}` |
+| `Denied { message }` | 403 whose message has the RBAC form (`is forbidden: User`) | `not permitted: {message}` |
 | `NotFound` | 404 | `the object no longer exists` |
-| `Conflict { message, managers }` | 409 (`managers` from SSA conflict causes, 0031) | `the object changed since it was read: {message}` |
-| `Invalid { message, fields }` | 422 (`details.causes[].field`) | `the change is invalid: {message}` |
+| `Conflict { message, managers }` | 409; also the operation-specific mappings of 0032 (Roll back 422) and 0034. `managers` is always empty: there is no SSA | `the object changed since it was read: {message}` |
+| `Invalid { message, fields }` | 422 (`details.causes[].field`); also any **other 403** (an admission plugin or webhook refusal, e.g. `PersistentVolumeClaimResize`), so it never reads "not permitted" | `the change is invalid: {message}` |
+| `TooManyRequests { message, retry_after }` | 429 on either mode (PDB eviction, API priority and fairness), and an eviction answered 201 with a `Failure` status of code 429 (0034); never `OutcomeUnknown` | `refused for now: {message}` |
 | `DryRunRejected { reason }` | 400 on a dry-run naming dry-run support | `an admission webhook does not support dry-run, so the change cannot be checked: {reason}` |
 | `OutcomeUnknown` | **Commit** only: timeout, `HyperError`, `Service`, response `SerdeError` (anything after the request may have left) | `no answer in time; the change may have been applied` |
 | `Cluster(ClusterError)` | the rest, and every non-`Api` error of a `DryRun` | the `ClusterError` text |
@@ -88,7 +117,9 @@ Enforcement:
 | Write style | Precondition | On 409 |
 |---|---|---|
 | Single-field merge patch (cordon, scale, suspend) | none: the patch states the whole intent of one field | shown as Conflict |
-| Server-side apply (0031) | `metadata.resourceVersion` of the edited object | Conflict with managers; Force only with a second confirm (C8) |
+| Replace (0031) | base `metadata.resourceVersion` and `uid` | Conflict; Retry rebases. No Force path (C8 note) |
+| JSON Patch with a `test` op (0032 Roll back), full-list patch with `resourceVersion` (0034 taints) | the test value / `resourceVersion` | Conflict + Retry |
+| Any write answered 429 | — | `TooManyRequests`, shown like Conflict: Retry re-runs the dry-run |
 | Delete (0033) | `Preconditions { uid }` | "a new object with this name exists" |
 
 ## Test transport (`fake_api.rs`, `#[cfg(test)]`)

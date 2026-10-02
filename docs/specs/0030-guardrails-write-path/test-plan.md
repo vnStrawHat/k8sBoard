@@ -25,7 +25,7 @@
 | `changed_fields_name_paths_and_values` | `spec.unschedulable` = `"true"` |
 | `manual_debug_shows_names_only` | `format!("{:?}")` of request and operation: operation name, kind, namespace, name; no `unschedulable`, no body |
 
-`access_review` tests: `all_checks_cover_distinct_permissions` (27), `patch_nodes_check_is_cluster_scoped`.
+`access_review` tests: `all_checks_cover_distinct_permissions` (count + 1), `patch_nodes_check_is_cluster_scoped`.
 
 Clippy check (coder-lite, once): a scratch `api.delete(..)` in a non-excepted cluster file fails `cargo clippy -D warnings`; reverted after.
 
@@ -48,6 +48,8 @@ Clippy check (coder-lite, once): a scratch `api.delete(..)` in a non-excepted cl
 ## Step 4 — write flow
 
 `write_flow_tests.rs`: `commit_block_table` (guard gone; generation changed; Locked; Running; Failed; Rejected; Differs; all clear → `None`, exact texts), `run_path_checks_commit_block` (lock toggled between dry-run and commit on the Run path → no commit), `typed_name_must_match_exactly`, `cordon_label_follows_scheduling`, `cordon_intent_targets_the_node`, `write_entry_records_unknown_outcome`, `write_entry_uses_the_intent_cluster`.
+
+Amendment tests (decisions 30–36): `checked_write_runs_commit_block_before_commit`, `checked_write_dry_run_writes_no_audit`, `blocked_is_never_audited`, `confirmed_needs_a_passed_dry_run_and_match`, `warnings_render_under_changes`, `created_name_in_notice_and_audit`; cluster crate: `too_many_requests_maps_429`, `outcome_reports_patched_effect`, `rbac_403_is_denied`, `admission_403_is_invalid` (a 403 without `is forbidden: User` never reads "not permitted"), `commit_outcome_carries_uid`.
 
 Window tests: `confirm_dialog_enables_apply_after_dry_run_passes`, `rejected_dry_run_keeps_apply_disabled`, `enter_confirms_in_enter_tier`, `held_enter_does_not_confirm` (`simulate_event(KeyDownEvent { is_held: true, .. "enter" })` → no commit), `click_only_ignores_enter`, `type_name_tier_needs_the_match`, `closing_the_dialog_drops_the_dry_run`, `commit_rechecks_the_row_cluster_lock`.
 

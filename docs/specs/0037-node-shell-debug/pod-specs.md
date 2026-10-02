@@ -11,7 +11,7 @@ pub enum WriteOperation {
     CreateNodeShellPod { node: String, image: String, user: Option<String> },
     DeleteNodeShellPod { uid: String },
 }
-pub struct WriteOutcome { pub mode: WriteMode, pub elapsed: Duration, pub uid: Option<String> } // uid: commit only
+// `WriteOutcome` is 0030's (write-path.md): this spec reads `uid` (commit only) and `created_name`.
 ```
 
 `WriteRequest::new` returns `None` unless the target kind is `Pod` and (for the node shell variants) the name starts with `k8sboard-node-shell-`. Manual `Debug` prints the variant name, kind, namespace, name only.

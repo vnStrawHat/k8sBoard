@@ -39,6 +39,7 @@ Per-cluster read-only mode (default on for PROD), lock toggle and Ctrl Shift R, 
 ### 0031 — Edit YAML (W10)
 GPUI Kit Code Editor, diff vs cluster (default view), semantic change list, checks (dry-run, quota, rollout impact), Apply with conflict handling (C8), pre-apply snapshot for one-step rollback (incl. ConfigMaps), Revision history tab, "New" from templates (Namespace, ConfigMap, Quota, PDB, RoleBinding).
 - Deps: 0030, 0007. Risk: High (editor maturity, LSP optional). New dep: `similar`.
+- Spec: [0031-edit-yaml](../specs/0031-edit-yaml/README.md) (draft). Replaces the object with its `resourceVersion` instead of using SSA (C8 amended). Defers quota check, snapshot and rollback, Revision history, and templates to a later spec.
 
 ### 0032 — Workload and object actions
 Scale, Restart rollout, Pause/Resume, Roll back to revision, CronJob Trigger now and Suspend, Job Re-run, HPA min/max, StorageClass set default, PVC Expand, Certificate Renew; list-level buttons on selected rows; palette actions enabled.
@@ -47,6 +48,7 @@ Scale, Restart rollout, Pause/Resume, Roll back to revision, CronJob Trigger now
 ### 0033 — Delete and pod lifecycle
 Delete for every kind (typed confirm on prod, red, last), Restart pod (delete and recreate), Evict (Eviction API), bulk delete from the selection bar.
 - Deps: 0030, 0009. Risk: Med (blast radius; bulk confirm text).
+- Spec: [0033-delete](../specs/0033-delete/README.md) (draft) covers delete only (single, bulk, uid precondition, propagation, finalizer hints). Restart pod moves to 0032 or a follow-up, and Evict to 0034.
 
 ### 0034 — Node maintenance (W5, W6)
 Cordon/Uncordon (bulk), Drain dialog (kubectl-flag options with consequences and counts, PDB-based per-pod preview, grace, timeout, typed node name, Cordon only), sequential multi-node drain that stops when stuck, progress tab in the dock with cancel, Edit taints and labels.

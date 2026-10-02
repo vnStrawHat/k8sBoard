@@ -1,6 +1,6 @@
 # 0030 — Guardrails and write path
 
-Status: draft, amended after the advisor review (M1–M5, S6–S12, N13–N18), HEAD `71cc6f7`. Prerequisites merged: 0024, 0025, 0028 (0027 optional: the row-cluster contract works with one session). Crates: `crates/cluster` (the one write module) and `crates/app` (lock, gate, confirm, audit). Roadmap: gap plan 0030; C3, C5, C8, C10; risks R1, R2. Wireframes: W2 Safety, W10 confirm modal and notes 3–4, W6 typed name, keyboard map Ctrl Shift R, env token rows.
+Status: draft, amended after the advisor review (M1–M5, S6–S12, N13–N18), HEAD `71cc6f7`; shared amendments from 0031–0034 (decisions 30–36: `checked_write`, `CommitMode::Commit { confirmed }`, `GuardedIntent.warnings`, `WriteEffect`, `created_name`, `Batch`, gate by kind, 429, delete exception, no SSA). Prerequisites merged: 0024, 0025, 0028 (0027 optional: the row-cluster contract works with one session). Crates: `crates/cluster` (the one write module) and `crates/app` (lock, gate, confirm, audit). Roadmap: gap plan 0030; C3, C5, C8, C10; risks R1, R2. Wireframes: W2 Safety, W10 confirm modal and notes 3–4, W6 typed name, keyboard map Ctrl Shift R, env token rows.
 
 **User approval (C3):** steps 1–3 send no write to any cluster. Step 4 adds the first real commit (Cordon) and needs the user's explicit approval before it merges, together with the tier reading of decision 9.
 
@@ -42,15 +42,15 @@ Status: draft, amended after the advisor review (M1–M5, S6–S12, N13–N18), 
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No `unsafe`. The only new `#[allow]`s are the three named `clippy::disallowed_methods` exceptions of [write-path.md](write-path.md). `Cargo.lock` gains no package.
+- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No `unsafe`. The only new `#[allow]`s are the three 0030 rows of the canonical `clippy::disallowed_methods` exception table (later specs add their own rows) in [write-path.md](write-path.md). `Cargo.lock` gains no package.
 - [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline. No test talks to a real cluster.
-- [ ] 3. A call to a disallowed kube method outside the three exceptions fails clippy; the documentation grep lists only `access_review.rs` and `object_write.rs`; `app_has_no_kube_dependency` passes.
+- [ ] 3. A call to a disallowed kube method outside the canonical exception table fails clippy; the documentation grep lists only `access_review.rs` and `object_write.rs`; `app_has_no_kube_dependency` passes.
 - [ ] 4. A dry-run carries `dryRun=All` and `fieldManager=k8sboard`; a commit carries `fieldManager=k8sboard` and no `dryRun`; uncordon sends `false` (fake transport).
 - [ ] 5. A PROD cluster opens locked; others unlocked unless the entry's `read_only` says otherwise. Ctrl Shift R and a badge click toggle the session lock; unlocking asks the cluster's tier.
 - [ ] 6. Disabled reasons follow the gate order: not shipped → permission checking/unknown → `Not permitted: {check}` → `{cluster} is read-only`.
 - [ ] 7. `confirm` defaults: PROD type-name, STG Enter, DEV click, LOCAL none; Clusters › Safety edits it; `settings.json` stores the kebab-case value.
 - [ ] 8. The badge reads `Read-only` (lock) or `Unlocked` (open lock) with the env-colored dashed border; theme tokens only.
-- [ ] 9. `ClusterConnection::write` is called only from `write_flow.rs`; `commit_block` runs before every commit on both the Dialog and the Run path (lock, switched or reconnected session, dry-run state, typed name).
+- [ ] 9. `ClusterConnection::write` is called only from `checked_write` in `write_flow.rs`; `commit_block` runs before every commit on the Dialog, Run, and Batch paths (lock, switched or reconnected session, dry-run state, typed name).
 - [ ] 10. Every commit and every lock toggle appends one audit line with the keys in [audit-log.md](audit-log.md); `OutcomeUnknown` records `unknown`; a Secret target records no values and a redacted error; no line holds a request body.
 - [ ] 11. A failed or webhook-rejected dry-run blocks the commit and names the reason; 409 shows a Retry; a commit error after sending says the outcome is unknown; a held Enter never confirms.
 - [ ] 12. Debug builds return `WritesBlocked` before building any request unless `K8SBOARD_ALLOW_WRITES=1` (zero recorded requests); agent runs never set it. UAT: Cordon is disabled with `Not permitted: patch nodes`; pressing C shows the notice; a trace shows only GETs and SSAR POSTs.
@@ -64,4 +64,4 @@ Status: draft, amended after the advisor review (M1–M5, S6–S12, N13–N18), 
 3. `SelfSubjectReview` identity for the audit log: a later item (decision 21 kept).
 4. Audit export (C9) and rotation: later; Settings › Safety offers `Show in folder`.
 5. With namespace scope All, the session SSAR is cluster-wide, so namespace-only rights show as denied in menus (namespaced writes from 0031 on). The dry-run is the precise per-object check.
-6. The clippy exception list has three entries, not two: the 0011 kubelet GETs already use `request_text` / `request_stream`.
+6. The clippy exception list is one table in write-path.md (0030: 3 rows; 0035–0038 add `port_forward.rs`, `pod_shell.rs`, `debug_shell.rs`, `helm_command.rs`).

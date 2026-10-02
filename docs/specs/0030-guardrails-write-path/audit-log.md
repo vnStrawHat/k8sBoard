@@ -21,7 +21,7 @@ pub(crate) struct AuditEntry {                   // no Debug derive needed; hold
     pub(crate) action: String,                   // `ResourceAction` label ("Cordon"), or "Lock" / "Unlock"
     #[serde(skip_serializing_if = "Option::is_none")] pub(crate) object: Option<AuditObject>, // { kind, namespace?, name }; None for lock lines
     pub(crate) fields: Vec<AuditField>,          // { path, value? }
-    pub(crate) outcome: AuditOutcome,            // "applied" | "failed" | "unknown" (`OutcomeUnknown`)
+    pub(crate) outcome: AuditOutcome,            // "applied" | "failed" | "unknown" (`OutcomeUnknown`); 0034 drain summary: "drained" | "stuck" | "cancelled" | "stopped"
     #[serde(skip_serializing_if = "Option::is_none")] pub(crate) error: Option<String>, // redacted WriteError Display
     #[serde(skip_serializing_if = "Option::is_none")] pub(crate) note: Option<String>,
 }
@@ -43,6 +43,8 @@ Key allow-list (test `audit_keys_are_the_allow_list`): `at, cluster, context, us
 
 - Commits, one line each, after the outcome is known (applied, failed, or unknown). Connect verbs: one line per session start. Lock and unlock toggles, one line each (step 3, so the module has a production user before any write exists). Dry-runs are not recorded.
 - `fields` come from `WriteRequest::changed_fields()`: paths always, values only when the operation marks them recordable.
+- A create with `generateName` (0032) adds the field `metadata.name` = `WriteOutcome.created_name` after the commit.
+- **Not recorded** (amendment): a `CheckedWriteError::Blocked` (nothing sent) and a commit refused with `TooManyRequests` (nothing changed; drain retries would flood the log). A drain (0034) writes one summary line per node at its end: action `Drain`, object the Node, fields `evicted`, `refused`, `failed`, `skipped` (counts), outcome `drained`, `stuck`, `cancelled`, or `stopped`; each accepted eviction also has its own line.
 - **Secret rule (C1, C10)**: a pure `recordable_fields(kind_name, fields)` drops every `value` when the kind is `Secret`, regardless of the operation (enforced here, tested with the name; no Secret write exists yet). ConfigMap data values (0031) are recorded as paths only too, since they often hold credentials.
 - **Never** a request body, a YAML document, a diff text, a token, or a server message of a Secret target.
 - `note`: trimmed, control characters replaced by spaces, at most 500 chars; empty → `None`.
