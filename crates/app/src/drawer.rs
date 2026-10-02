@@ -490,11 +490,21 @@ pub(crate) fn truncated_text(
     text: impl Into<SharedString>,
 ) -> Stateful<Div> {
     let text = text.into();
-    let tooltip_text = text.clone();
+    truncated_text_with_tooltip(id, text.clone(), text)
+}
+
+/// Like `truncated_text`, with a tooltip that says more than the text: a short form that stands
+/// for a longer one.
+pub(crate) fn truncated_text_with_tooltip(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+    tooltip: impl Into<SharedString>,
+) -> Stateful<Div> {
+    let tooltip_text = tooltip.into();
     div()
         .id(id)
         .truncate()
-        .child(text)
+        .child(text.into())
         .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
 }
 

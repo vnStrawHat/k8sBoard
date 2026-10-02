@@ -3,11 +3,13 @@
 
 use std::rc::Rc;
 
+use gpui_kit::component::alert::Alert;
 use gpui_kit::component::menu::DropdownMenu as _;
+use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Entity, IntoElement, ParentElement as _, SharedString, Styled as _,
-    WeakEntity, div,
+    AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
 };
 
 use crate::age::format_age;
@@ -16,16 +18,18 @@ use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
     drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, link_text, menu_button, port_row,
-    section_title, shown_tab, tab_titles, truncated_text, wide_detail_row, yaml_body,
+    section_title, shown_tab, tab_titles, truncated_text, truncated_text_with_tooltip,
+    wide_detail_row, yaml_body,
 };
+use crate::kind_diagnosis::{DiagnosisInputs, KindDiagnosis, kind_diagnosis};
 use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow};
-use crate::live_sections::{live_rows, next_run_text};
+use crate::live_sections::{live_rows, next_run_text, owned_pods};
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
 use crate::resource_actions::{kind_menu, port_forward_reason};
 use crate::resource_kind::ResourceKind;
-use crate::status_tone::{tone_color, toned_text};
+use crate::status_tone::{StatusTone, tone_color, toned_text};
 use crate::table_selection::ResourceKey;
 
 pub(crate) fn kind_drawer(
@@ -111,7 +115,12 @@ fn revision_text(row: &KindRow) -> Option<String> {
         KindObject::Deployment(deployment) => {
             Some(format!("rev {}", deployment.revision.as_deref()?))
         }
-        KindObject::Plain | KindObject::CronJob(_) => None,
+        KindObject::Plain
+        | KindObject::CronJob(_)
+        | KindObject::StatefulSet(_)
+        | KindObject::DaemonSet(_)
+        | KindObject::ReplicaSet(_)
+        | KindObject::Job(_) => None,
     }
 }
 
@@ -163,6 +172,9 @@ fn overview(
     // Gives every element that needs an id one that is unique inside the drawer.
     let mut next_id = 0_usize;
     let mut column = v_flex();
+    if let Some(diagnosis) = row_diagnosis(row, live, now) {
+        column = column.child(why_box(&diagnosis, cx));
+    }
     for section in &row.sections {
         column = column.child(section_title(section.title, cx));
         if section.rows.is_empty() {
@@ -174,7 +186,7 @@ fn overview(
         }
     }
     if let Some(owner) = &row.related_pods {
-        column = column.child(pods_section(owner, live, cx));
+        column = column.child(pods_section(owner, &row.object, live, cx));
     }
     if kind.has_labels() {
         column = column
@@ -182,6 +194,51 @@ fn overview(
             .child(chips(&row.labels, cx));
     }
     column.into_any_element()
+}
+
+/// The WHY box of the row, read from its object, its owned pods, and the nodes. Rules that need
+/// pods wait until the pods list has loaded.
+fn row_diagnosis(row: &KindRow, live: &LiveCluster, now: jiff::Timestamp) -> Option<KindDiagnosis> {
+    let pods = owned_pods(row, live);
+    kind_diagnosis(
+        &row.object,
+        &DiagnosisInputs {
+            pods: pods.as_deref(),
+            nodes: live.nodes.items(),
+            now,
+        },
+    )
+}
+
+/// The box: tone, title, text, and under it a link to the pod the text is about. `Alert` has no
+/// children, so the link is a sibling, like the pod drawer's WHY box.
+fn why_box(diagnosis: &KindDiagnosis, cx: &Context<AppShell>) -> AnyElement {
+    let title = format!("WHY · {}", diagnosis.title);
+    let text = diagnosis.text.clone();
+    let alert = match diagnosis.tone {
+        StatusTone::Bad => Alert::error("why-box", text),
+        StatusTone::Warn | StatusTone::Ok | StatusTone::Info | StatusTone::Done => {
+            Alert::warning("why-box", text)
+        }
+    };
+    let link = diagnosis.pod.clone().and_then(|key| match &key {
+        ResourceKey::Pod { name, .. } => Some((format!("Open pod {name} →"), key.clone())),
+        ResourceKey::Node { .. } | ResourceKey::Kind { .. } => None,
+    });
+    v_flex()
+        .gap_1()
+        .child(alert.title(title))
+        .children(link.map(|(label, key)| {
+            div()
+                .id("why-open-pod")
+                .cursor_pointer()
+                .text_sm()
+                .text_color(cx.theme().link)
+                .underline()
+                .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+                .child(label)
+        }))
+        .into_any_element()
 }
 
 /// What painting a drawer row may read besides the row itself.
@@ -201,6 +258,12 @@ fn detail_element(
 ) -> AnyElement {
     let now = paint.now;
     match detail {
+        DetailRow::Bar {
+            label,
+            percent,
+            text,
+            tone,
+        } => bar_row(label, *percent, text, *tone, id, cx),
         DetailRow::Live(content) => v_flex()
             .children(live_rows(
                 *content, paint.kind, paint.row, paint.live, now, cx,
@@ -229,6 +292,32 @@ fn detail_element(
             stacked_row(label, field_value(value, id, now, cx), id, cx)
         }
     }
+}
+
+/// A label, a bar toned by `tone` (the kit color without one), then the text in mono.
+fn bar_row(
+    label: &SharedString,
+    percent: u8,
+    text: &SharedString,
+    tone: Option<StatusTone>,
+    id: usize,
+    cx: &App,
+) -> AnyElement {
+    let mut bar = Progress::new(("bar", id)).value(f32::from(percent));
+    if let Some(tone) = tone {
+        bar = bar.color(tone_color(tone, cx));
+    }
+    let value = h_flex()
+        .gap_2()
+        .items_center()
+        .child(div().flex_1().min_w_0().child(bar))
+        .child(
+            div()
+                .flex_shrink_0()
+                .font_family(cx.theme().mono_font_family.clone())
+                .child(text.clone()),
+        );
+    wide_detail_row(label.clone(), value, cx).into_any_element()
 }
 
 /// Preformatted text that wraps, such as an event message.
@@ -263,6 +352,10 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
     let mono = cx.theme().mono_font_family.clone();
     match value {
         KindCell::Text(text) => truncated_text(("detail", id), text.clone()).into_any_element(),
+        KindCell::Hinted { text, tooltip } => {
+            truncated_text_with_tooltip(("detail", id), text.clone(), tooltip.clone())
+                .into_any_element()
+        }
         KindCell::Mono(text) => truncated_text(("detail", id), text.clone())
             .font_family(mono)
             .into_any_element(),

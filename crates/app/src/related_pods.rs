@@ -1,6 +1,6 @@
 //! The pods section of a drawer: the pods a workload or a node runs.
 
-use cluster::{NamespaceScope, PodSummary};
+use cluster::{ClaimTemplate, NamespaceScope, PodSummary, VolumeSource};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -10,7 +10,10 @@ use gpui_kit::{
 use crate::app_shell::AppShell;
 use crate::cluster_session::{LiveCluster, namespaces_label};
 use crate::drawer::section_title;
-use crate::kind_row::{DAEMON_SET_KIND, PodOwner, STATEFUL_SET_KIND, owns_pod};
+use crate::kind_diagnosis::first_main_termination;
+use crate::kind_row::{
+    DAEMON_SET_KIND, JOB_KIND, KindObject, PodOwner, STATEFUL_SET_KIND, owns_pod,
+};
 use crate::status_tone::{pod_status_label, toned_text};
 use crate::table_selection::ResourceKey;
 use crate::workload_rows::sort_by_ordinal;
@@ -22,6 +25,7 @@ const MAX_RELATED_PODS: usize = 50;
 /// A click opens the pod on the Pods screen. A node lists the pods of the current scope that run on it.
 pub(crate) fn pods_section(
     owner: &PodOwner,
+    object: &KindObject,
     live: &LiveCluster,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -31,27 +35,16 @@ pub(crate) fn pods_section(
         .iter()
         .filter(|pod| owns_pod(owner, pod))
         .collect();
-    // StatefulSet pods read best in ordinal order; the others keep the snapshot order.
-    if let PodOwner::Controller { kind, name, .. } = owner
-        && *kind == STATEFUL_SET_KIND
-    {
-        sort_by_ordinal(&mut pods, name);
-    }
-    // A DaemonSet runs one pod per node, so the node is what tells its pods apart.
-    let detail = match owner {
-        PodOwner::Controller { kind, .. } if *kind == DAEMON_SET_KIND => {
-            PodRowDetail::StatusAndNode
-        }
-        PodOwner::Node { .. } => PodRowDetail::NamespaceAndStatus,
-        _ => PodRowDetail::StatusOnly,
-    };
+    let detail = pod_row_detail(owner, object);
+    sort_pods(&mut pods, owner, detail);
+    let heading = detail.heading();
     let (title, note) = if live.pods.is_loading() {
-        ("Pods".to_owned(), Some("Loading pods…"))
+        (heading.to_owned(), Some("Loading pods…"))
     } else if live.pods.failure().is_some() {
-        ("Pods".to_owned(), Some("Pods are unavailable"))
+        (heading.to_owned(), Some("Pods are unavailable"))
     } else {
         (
-            format!("Pods {}", pods.len()),
+            format!("{heading} {}", pods.len()),
             pods.is_empty().then_some("No pods"),
         )
     };
@@ -103,12 +96,85 @@ fn scope_note(owner: &PodOwner, scope: &NamespaceScope) -> Option<String> {
 }
 
 /// What a related-pod row shows after the pod name.
-#[derive(Clone, Copy)]
-enum PodRowDetail {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PodRowDetail<'a> {
     StatusOnly,
     StatusAndNode,
     /// A node runs pods of any namespace, so the namespace is shown.
     NamespaceAndStatus,
+    /// StatefulSet pods: the claims each pod mounts, from the set's templates.
+    StatusAndClaims(&'a [ClaimTemplate]),
+    /// Job pods are its attempts: the exit code of the first main container.
+    Attempt,
+}
+
+impl PodRowDetail<'_> {
+    /// The section title before the count.
+    fn heading(self) -> &'static str {
+        match self {
+            Self::StatusAndClaims(_) => "Pods by ordinal",
+            Self::Attempt => "Attempts",
+            Self::StatusOnly | Self::StatusAndNode | Self::NamespaceAndStatus => "Pods",
+        }
+    }
+}
+
+/// How the pods of `owner` are listed. A DaemonSet runs one pod per node, so the node tells its
+/// pods apart; a StatefulSet shows the claims of each ordinal, and a Job its attempts.
+fn pod_row_detail<'a>(owner: &PodOwner, object: &'a KindObject) -> PodRowDetail<'a> {
+    match (owner, object) {
+        (PodOwner::Controller { kind, .. }, KindObject::StatefulSet(set))
+            if *kind == STATEFUL_SET_KIND =>
+        {
+            PodRowDetail::StatusAndClaims(&set.claim_templates)
+        }
+        (PodOwner::Controller { kind, .. }, _) if *kind == DAEMON_SET_KIND => {
+            PodRowDetail::StatusAndNode
+        }
+        (PodOwner::Controller { kind, .. }, _) if *kind == JOB_KIND => PodRowDetail::Attempt,
+        (PodOwner::Node { .. }, _) => PodRowDetail::NamespaceAndStatus,
+        _ => PodRowDetail::StatusOnly,
+    }
+}
+
+/// StatefulSet pods read best in ordinal order and Job attempts newest first; the others keep
+/// the snapshot order.
+fn sort_pods(pods: &mut [&PodSummary], owner: &PodOwner, detail: PodRowDetail) {
+    match (detail, owner) {
+        (PodRowDetail::StatusAndClaims(_), PodOwner::Controller { name, .. }) => {
+            sort_by_ordinal(pods, name);
+        }
+        (PodRowDetail::Attempt, _) => {
+            // A pod without a creation time is the oldest.
+            pods.sort_by_key(|pod| std::cmp::Reverse(pod.created_at));
+        }
+        _ => {}
+    }
+}
+
+/// `{claim} {storage}` for each claim template whose PVC (`{template}-{pod}`) the pod mounts.
+fn pod_claims(pod: &PodSummary, templates: &[ClaimTemplate]) -> Vec<String> {
+    templates
+        .iter()
+        .filter(|template| {
+            let claim = format!("{}-{}", template.name, pod.name);
+            pod.containers
+                .iter()
+                .flat_map(|container| &container.mounts)
+                .any(|mount| {
+                    matches!(&mount.source, VolumeSource::PersistentVolumeClaim { claim: mounted } if *mounted == claim)
+                })
+        })
+        .map(|template| match &template.storage {
+            Some(storage) => format!("{} {storage}", template.name),
+            None => template.name.clone(),
+        })
+        .collect()
+}
+
+/// `exit {code}` of the pod's first main container, when it has ended.
+fn exit_text(pod: &PodSummary) -> Option<String> {
+    first_main_termination(pod).map(|termination| format!("exit {}", termination.exit_code))
 }
 
 fn related_pod_row(
@@ -119,6 +185,16 @@ fn related_pod_row(
 ) -> AnyElement {
     let theme = cx.theme();
     let key = ResourceKey::of_pod(pod);
+    // The text after the status: the claims of an ordinal, or the exit code of an attempt.
+    let extra = match detail {
+        PodRowDetail::StatusAndClaims(templates) => {
+            Some(pod_claims(pod, templates).join(", ")).filter(|text| !text.is_empty())
+        }
+        PodRowDetail::Attempt => exit_text(pod),
+        PodRowDetail::StatusOnly
+        | PodRowDetail::StatusAndNode
+        | PodRowDetail::NamespaceAndStatus => None,
+    };
     let hover_bg = theme.muted;
     h_flex()
         .id(("related-pod", index))
@@ -156,6 +232,15 @@ fn related_pod_row(
                 .text_color(theme.muted_foreground)
                 .child(pod.node_name.clone().unwrap_or_default())
         }))
+        .children(extra.map(|text| {
+            div()
+                .flex_shrink_0()
+                .max_w(px(160.))
+                .truncate()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(text)
+        }))
         .into_any_element()
 }
 
@@ -181,5 +266,224 @@ mod tests {
             namespace: "ns".into(),
         };
         assert_eq!(scope_note(&controller, &named), None);
+    }
+
+    use cluster::{
+        ContainerKind, ContainerProbes, ContainerState, ContainerSummary, MountEntry, PodStatus,
+        ReadyCount, StatefulSetSummary, StatusReason, Termination,
+    };
+
+    fn pod(name: &str, created: Option<i64>) -> PodSummary {
+        PodSummary {
+            namespace: "ns".to_owned(),
+            name: name.to_owned(),
+            status: PodStatus::Reason(StatusReason::Running),
+            ready: ReadyCount { ready: 1, total: 1 },
+            restarts: 0,
+            node_name: None,
+            created_at: created
+                .map(|seconds| jiff::Timestamp::from_second(seconds).expect("valid timestamp")),
+            pod_ip: None,
+            qos_class: None,
+            service_account: None,
+            controller: None,
+            conditions: Vec::new(),
+            status_message: None,
+            labels: Vec::new(),
+            host_network: false,
+            containers: Vec::new(),
+        }
+    }
+
+    fn container(
+        kind: ContainerKind,
+        state: ContainerState,
+        mounts: Vec<MountEntry>,
+    ) -> ContainerSummary {
+        ContainerSummary {
+            name: "main".to_owned(),
+            image: "app:1".to_owned(),
+            kind,
+            state,
+            is_ready: true,
+            restart_count: 0,
+            last_termination: None,
+            image_digest: None,
+            pull_policy: None,
+            is_started: None,
+            ports: Vec::new(),
+            resources: Vec::new(),
+            probes: ContainerProbes::default(),
+            env: Vec::new(),
+            env_from: Vec::new(),
+            mounts,
+        }
+    }
+
+    fn running() -> ContainerState {
+        ContainerState::Running { started_at: None }
+    }
+
+    fn mount_of(claim: &str) -> MountEntry {
+        MountEntry {
+            path: "/data".to_owned(),
+            volume: "data".to_owned(),
+            source: VolumeSource::PersistentVolumeClaim {
+                claim: claim.to_owned(),
+            },
+            is_read_only: false,
+            sub_path: None,
+        }
+    }
+
+    fn template(name: &str, storage: Option<&str>) -> ClaimTemplate {
+        ClaimTemplate {
+            name: name.to_owned(),
+            storage: storage.map(str::to_owned),
+            storage_class: None,
+            access_modes: Vec::new(),
+        }
+    }
+
+    fn controller(kind: &'static str) -> PodOwner {
+        PodOwner::Controller {
+            namespace: "ns".to_owned(),
+            kind,
+            name: "web".to_owned(),
+        }
+    }
+
+    fn stateful_set(templates: Vec<ClaimTemplate>) -> KindObject {
+        KindObject::StatefulSet(StatefulSetSummary {
+            namespace: "ns".to_owned(),
+            name: "web".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            desired: 1,
+            ready: 1,
+            current: 1,
+            updated: 1,
+            service_name: None,
+            update_strategy: String::new(),
+            pod_management_policy: String::new(),
+            selector: Vec::new(),
+            containers: Vec::new(),
+            claim_templates: templates,
+            claim_retention: None,
+        })
+    }
+
+    #[test]
+    fn pod_row_detail_per_owner() {
+        let templates = vec![template("data", Some("10Gi"))];
+        let set = stateful_set(templates.clone());
+        assert_eq!(
+            pod_row_detail(&controller(STATEFUL_SET_KIND), &set),
+            PodRowDetail::StatusAndClaims(&templates)
+        );
+        assert_eq!(
+            pod_row_detail(&controller(DAEMON_SET_KIND), &KindObject::Plain),
+            PodRowDetail::StatusAndNode
+        );
+        assert_eq!(
+            pod_row_detail(&controller(JOB_KIND), &KindObject::Plain),
+            PodRowDetail::Attempt
+        );
+        assert_eq!(
+            pod_row_detail(&node(), &KindObject::Plain),
+            PodRowDetail::NamespaceAndStatus
+        );
+        let deployment = PodOwner::Deployment {
+            namespace: "ns".to_owned(),
+            name: "web".to_owned(),
+        };
+        assert_eq!(
+            pod_row_detail(&deployment, &KindObject::Plain),
+            PodRowDetail::StatusOnly
+        );
+        assert_eq!(
+            PodRowDetail::StatusAndClaims(&templates).heading(),
+            "Pods by ordinal"
+        );
+        assert_eq!(PodRowDetail::Attempt.heading(), "Attempts");
+        assert_eq!(PodRowDetail::StatusAndNode.heading(), "Pods");
+    }
+
+    #[test]
+    fn ordinal_detail_lists_claims_of_the_pod() {
+        let templates = [template("data", Some("10Gi")), template("logs", None)];
+        let mut web0 = pod("web-0", None);
+        web0.containers = vec![container(
+            ContainerKind::Main,
+            running(),
+            vec![
+                mount_of("data-web-0"),
+                mount_of("logs-web-0"),
+                mount_of("data-web-1"),
+            ],
+        )];
+        assert_eq!(pod_claims(&web0, &templates), ["data 10Gi", "logs"]);
+        // A claim of another pod, or no mounts at all, lists nothing.
+        let mut web1 = pod("web-1", None);
+        web1.containers = vec![container(
+            ContainerKind::Main,
+            running(),
+            vec![mount_of("data-web-0")],
+        )];
+        assert!(pod_claims(&web1, &templates).is_empty());
+        assert!(pod_claims(&pod("web-2", None), &templates).is_empty());
+        // Ordinal order, with a pod without an ordinal last.
+        let owner = controller(STATEFUL_SET_KIND);
+        let (a, b, c) = (
+            pod("web-10", None),
+            pod("web-abc", None),
+            pod("web-2", None),
+        );
+        let mut pods = vec![&a, &b, &c];
+        sort_pods(&mut pods, &owner, PodRowDetail::StatusAndClaims(&templates));
+        let names: Vec<&str> = pods.iter().map(|pod| pod.name.as_str()).collect();
+        assert_eq!(names, ["web-2", "web-10", "web-abc"]);
+    }
+
+    #[test]
+    fn attempts_newest_first_with_exit_code() {
+        let owner = controller(JOB_KIND);
+        let (old, new, unstamped) = (
+            pod("a-old", Some(100)),
+            pod("a-new", Some(200)),
+            pod("a-none", None),
+        );
+        let mut pods = vec![&old, &unstamped, &new];
+        sort_pods(&mut pods, &owner, PodRowDetail::Attempt);
+        let names: Vec<&str> = pods.iter().map(|pod| pod.name.as_str()).collect();
+        assert_eq!(names, ["a-new", "a-old", "a-none"]);
+        // The exit code is the first main container, its current state before its last one.
+        let termination = |exit_code| Termination {
+            reason: None,
+            exit_code,
+            signal: None,
+            started_at: None,
+            finished_at: None,
+        };
+        let mut failed = pod("a-failed", None);
+        failed.containers = vec![
+            container(
+                ContainerKind::Init,
+                ContainerState::Terminated(termination(9)),
+                Vec::new(),
+            ),
+            container(
+                ContainerKind::Main,
+                ContainerState::Terminated(termination(137)),
+                Vec::new(),
+            ),
+        ];
+        assert_eq!(exit_text(&failed).as_deref(), Some("exit 137"));
+        let mut restarted = pod("a-restarted", None);
+        let mut main = container(ContainerKind::Main, running(), Vec::new());
+        main.last_termination = Some(termination(1));
+        restarted.containers = vec![main];
+        assert_eq!(exit_text(&restarted).as_deref(), Some("exit 1"));
+        assert_eq!(exit_text(&pod("a-running", None)), None);
     }
 }

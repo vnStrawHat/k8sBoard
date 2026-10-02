@@ -219,7 +219,7 @@ impl TableRow for KindTableRow<'_> {
             };
         };
         match self.row.cells.get(cell) {
-            Some(KindCell::Text(text) | KindCell::Mono(text)) => {
+            Some(KindCell::Text(text) | KindCell::Mono(text) | KindCell::Hinted { text, .. }) => {
                 CellValue::Text(Cow::Borrowed(text.as_ref()))
             }
             Some(KindCell::Qualified { prefix, text }) => CellValue::Qualified {
@@ -467,7 +467,7 @@ fn cell_element(
         }
     };
     match cell {
-        KindCell::Text(text) => base().child(text.clone()),
+        KindCell::Text(text) | KindCell::Hinted { text, .. } => base().child(text.clone()),
         KindCell::Mono(text) => base().font_family(mono).child(text.clone()),
         // One qualified column per kind, so the row index alone makes the id unique.
         KindCell::Qualified { prefix, text } => {

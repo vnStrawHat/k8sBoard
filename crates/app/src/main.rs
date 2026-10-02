@@ -12,6 +12,7 @@ mod drawer;
 mod event_rows;
 mod filter_bar;
 mod history_rings;
+mod kind_diagnosis;
 mod kind_drawer;
 mod kind_row;
 mod kind_table;

@@ -227,3 +227,46 @@ fn filter_similar_disabled_without_reason() {
         Some("BackOff")
     );
 }
+
+fn replica_set_row_owned_by(owner: Option<(&str, &str)>) -> KindRow {
+    crate::workload_rows::replica_set_row(&cluster::ReplicaSetSummary {
+        namespace: "team-a".to_owned(),
+        name: "api-7d9f8c".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        desired: 1,
+        current: 1,
+        ready: 1,
+        owner: owner.map(|(kind, name)| cluster::ControllerRef {
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+        }),
+        revision: None,
+        selector: Vec::new(),
+        containers: Vec::new(),
+    })
+}
+
+#[test]
+fn replica_set_menu_has_go_to_owner() {
+    assert!(has_go_to_owner(ResourceKind::ReplicaSets));
+    assert!(!has_go_to_owner(ResourceKind::Deployments));
+    assert!(!has_go_to_owner(ResourceKind::Jobs));
+    let row = replica_set_row_owned_by(Some(("Deployment", "api")));
+    assert_eq!(
+        owner_target(&row),
+        Some(ResourceKey::Kind {
+            kind: ResourceKind::Deployments,
+            namespace: Some("team-a".to_owned()),
+            name: "api".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn go_to_owner_disabled_without_owner() {
+    assert_eq!(owner_target(&replica_set_row_owned_by(None)), None);
+    // An owner kind without a screen cannot be revealed either.
+    let unknown = replica_set_row_owned_by(Some(("ReplicationController", "old")));
+    assert_eq!(owner_target(&unknown), None);
+}

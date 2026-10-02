@@ -414,7 +414,7 @@ fn idle_daemon_set_has_no_nodes_and_no_selector() {
 fn daemon_set_misscheduled_field_appears_only_when_positive() {
     let has_misscheduled = |set: &DaemonSetSummary| {
         let row = daemon_set_row(set);
-        row.section("Rollout")
+        row.section("Rollout by node")
             .expect("rollout section")
             .rows
             .iter()
@@ -533,5 +533,196 @@ fn deployment_rows_keep_their_object() {
         deployment_row(&summary).object,
         KindObject::Deployment(summary)
     );
-    assert_eq!(replica_set_row(&replica_set()).object, KindObject::Plain);
+    let set = replica_set();
+    assert_eq!(replica_set_row(&set).object, KindObject::ReplicaSet(set));
+    assert_eq!(
+        stateful_set_row(&stateful_set()).object,
+        KindObject::StatefulSet(stateful_set())
+    );
+    assert_eq!(
+        daemon_set_row(&daemon_set()).object,
+        KindObject::DaemonSet(daemon_set())
+    );
+}
+
+#[test]
+fn daemon_set_rollout_by_node_starts_with_bars() {
+    let mut set = daemon_set();
+    set.ready = 3;
+    set.up_to_date = 4;
+    let row = daemon_set_row(&set);
+    let titles: Vec<&str> = row.sections.iter().map(|section| section.title).collect();
+    assert_eq!(
+        titles,
+        [
+            "Rollout by node",
+            "Not ready",
+            "Node selector",
+            "Selector",
+            "Containers"
+        ]
+    );
+    let rollout = row.section("Rollout by node").expect("rollout section");
+    assert_eq!(
+        rollout.rows[0],
+        DetailRow::Bar {
+            label: "Ready".into(),
+            percent: 75,
+            text: "3 / 4".into(),
+            tone: Some(StatusTone::Warn),
+        }
+    );
+    assert_eq!(
+        rollout.rows[1],
+        DetailRow::Bar {
+            label: "Updated".into(),
+            percent: 100,
+            text: "4 / 4".into(),
+            tone: Some(StatusTone::Ok),
+        }
+    );
+    // The count fields follow the bars.
+    assert_eq!(
+        rollout.rows[2],
+        DetailRow::field("Desired", KindCell::count(4))
+    );
+    assert_eq!(
+        row.section("Not ready").map(|section| section.rows.clone()),
+        Some(vec![DetailRow::Live(LiveContent::NotReadyPods)])
+    );
+    // Nothing desired: empty bars, not a division by zero.
+    let mut idle = daemon_set();
+    (idle.desired, idle.ready, idle.up_to_date) = (0, 0, 0);
+    let rollout = daemon_set_row(&idle)
+        .section("Rollout by node")
+        .cloned()
+        .expect("rollout section");
+    assert!(matches!(
+        &rollout.rows[0],
+        DetailRow::Bar { percent: 0, text, tone: Some(StatusTone::Done), .. } if text == "0 / 0"
+    ));
+}
+
+#[test]
+fn daemon_set_port_shows_host_port() {
+    let mut set = daemon_set();
+    set.containers = vec![TemplateContainer {
+        name: "agent".to_owned(),
+        image: "agent:1".to_owned(),
+        ports: vec![
+            ContainerPort {
+                name: Some("metrics".to_owned()),
+                port: 9100,
+                protocol: "TCP".to_owned(),
+                host_port: Some(9100),
+            },
+            ContainerPort {
+                name: None,
+                port: 8080,
+                protocol: "TCP".to_owned(),
+                host_port: None,
+            },
+        ],
+    }];
+    let row = daemon_set_row(&set);
+    let ports = row.section("Ports").expect("ports section");
+    assert_eq!(
+        ports.rows,
+        [
+            DetailRow::Port {
+                text: "9100/TCP · metrics · agent · host 9100".into()
+            },
+            DetailRow::Port {
+                text: "8080/TCP · agent".into()
+            },
+        ]
+    );
+}
+
+#[test]
+fn stateful_set_claims_show_retention() {
+    let mut set = stateful_set();
+    set.claim_retention = Some("whenDeleted Retain \u{b7} whenScaled Delete".to_owned());
+    let row = stateful_set_row(&set);
+    let claims = row
+        .section("Volume claim templates")
+        .expect("claims section");
+    assert_eq!(
+        claims.rows.last(),
+        Some(&DetailRow::field(
+            "Retention",
+            KindCell::Hinted {
+                text: "Retain / Delete".into(),
+                tooltip: "whenDeleted Retain \u{b7} whenScaled Delete".into(),
+            }
+        ))
+    );
+    // A set without claim templates has nothing to retain: no Retention row.
+    let mut claimless = set.clone();
+    claimless.claim_templates = Vec::new();
+    let row = stateful_set_row(&claimless);
+    let claims = row
+        .section("Volume claim templates")
+        .expect("claims section");
+    assert!(claims.rows.is_empty());
+    // Unset: no Retention row.
+    let row = stateful_set_row(&stateful_set());
+    let claims = row
+        .section("Volume claim templates")
+        .expect("claims section");
+    assert!(
+        !claims
+            .rows
+            .iter()
+            .any(|row| matches!(row, DetailRow::Field { label, .. } if label == "Retention"))
+    );
+}
+
+#[test]
+fn replica_set_template_shows_hash_and_image() {
+    let container = |name: &str, image: &str| TemplateContainer {
+        name: name.to_owned(),
+        image: image.to_owned(),
+        ports: Vec::new(),
+    };
+    let mut set = replica_set();
+    set.labels = vec!["app=api".to_owned(), "pod-template-hash=7d9f8c".to_owned()];
+    set.containers = vec![container("web", "registry/api:1.4")];
+    let row = replica_set_row(&set);
+    // Template replaces Containers.
+    assert!(row.section("Containers").is_none());
+    let template = row.section("Template").expect("template section");
+    assert_eq!(
+        template.rows,
+        [
+            DetailRow::field("pod-template-hash", KindCell::Mono("7d9f8c".into())),
+            DetailRow::field("Image", KindCell::Mono("registry/api:1.4".into())),
+        ]
+    );
+    // Several containers: one row per container, no hash label: a dash.
+    set.labels = Vec::new();
+    set.containers = vec![
+        container("web", "registry/api:1.4"),
+        container("sidecar", "proxy:2"),
+    ];
+    let row = replica_set_row(&set);
+    let template = row.section("Template").expect("template section");
+    assert_eq!(
+        template.rows,
+        [
+            DetailRow::field("pod-template-hash", KindCell::Absent),
+            DetailRow::field("web", KindCell::Mono("registry/api:1.4".into())),
+            DetailRow::field("sidecar", KindCell::Mono("proxy:2".into())),
+        ]
+    );
+}
+
+#[test]
+fn retention_short_form_drops_the_field_names() {
+    assert_eq!(
+        retention_short("whenDeleted Retain \u{b7} whenScaled Delete"),
+        "Retain / Delete"
+    );
+    // Any other shape is shown as it is.
+    assert_eq!(retention_short("something else"), "something else");
 }

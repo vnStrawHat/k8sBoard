@@ -88,12 +88,22 @@ fn is_readiness_failed(pod: &PodSummary) -> bool {
             .all(|container| matches!(container.state, ContainerState::Running { .. }))
 }
 
+/// The node readiness as the API words it: `Ready`, `NotReady`, or `Unknown`.
+pub(crate) fn readiness_text(readiness: NodeReadiness) -> &'static str {
+    match readiness {
+        NodeReadiness::Ready => "Ready",
+        NodeReadiness::NotReady => "NotReady",
+        NodeReadiness::Unknown => "Unknown",
+    }
+}
+
 pub(crate) fn node_status_label(status: NodeStatus) -> StatusLabel {
-    let (readiness_text, readiness_tone) = match status.readiness {
-        NodeReadiness::Ready => ("Ready", StatusTone::Ok),
-        NodeReadiness::NotReady => ("NotReady", StatusTone::Bad),
-        NodeReadiness::Unknown => ("Unknown", StatusTone::Warn),
+    let readiness_tone = match status.readiness {
+        NodeReadiness::Ready => StatusTone::Ok,
+        NodeReadiness::NotReady => StatusTone::Bad,
+        NodeReadiness::Unknown => StatusTone::Warn,
     };
+    let readiness_text = readiness_text(status.readiness);
     match status.scheduling {
         NodeScheduling::Enabled => StatusLabel {
             text: readiness_text.into(),

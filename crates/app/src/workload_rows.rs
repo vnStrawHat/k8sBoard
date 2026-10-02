@@ -7,14 +7,14 @@ use cluster::{
 
 use crate::kind_row::{
     DAEMON_SET_KIND, DetailRow, DetailSection, KindCell, KindObject, KindRow, LiveContent,
-    PodOwner, REPLICA_SET_KIND, STATEFUL_SET_KIND, chips,
+    PodOwner, REPLICA_SET_KIND, STATEFUL_SET_KIND, chips, percent,
 };
 use crate::status_tone::{StatusLabel, StatusTone};
 use crate::table_selection::ResourceKey;
 
 /// The condition and reason the Deployment controller reports when a rollout stops.
-const PROGRESSING: &str = "Progressing";
-const DEADLINE_EXCEEDED: &str = "ProgressDeadlineExceeded";
+pub(crate) const PROGRESSING: &str = "Progressing";
+pub(crate) const DEADLINE_EXCEEDED: &str = "ProgressDeadlineExceeded";
 
 /// How ready replicas compare with the desired count.
 pub(crate) fn replica_tone(ready: u32, desired: u32) -> StatusTone {
@@ -153,21 +153,24 @@ fn container_rows(containers: &[TemplateContainer]) -> Vec<DetailRow> {
         .collect()
 }
 
-/// `{port}/{protocol} · {name} · {container}`, with the name left out when the port has none.
-/// The port comes first so a truncated line still shows it.
+/// `{port}/{protocol} · {name} · {container} · host {hostPort}`, with the name left out when the
+/// port has none and the host port when it sets none. The port comes first so a truncated line
+/// still shows it.
 fn port_rows(containers: &[TemplateContainer]) -> Vec<DetailRow> {
     containers
         .iter()
         .flat_map(|container| {
             container.ports.iter().map(move |port| {
                 let name = port.name.as_ref().map(|name| format!(" · {name}"));
+                let host = port.host_port.map(|host| format!(" · host {host}"));
                 DetailRow::Port {
                     text: format!(
-                        "{}/{}{} · {}",
+                        "{}/{}{} · {}{}",
                         port.port,
                         port.protocol,
                         name.unwrap_or_default(),
-                        container.name
+                        container.name,
+                        host.unwrap_or_default()
                     )
                     .into(),
                 }
@@ -219,13 +222,24 @@ pub(crate) fn stateful_set_row(set: &StatefulSetSummary) -> KindRow {
         containers_section(&set.containers),
     ];
     sections.extend(ports_section(&set.containers));
+    let mut claims: Vec<DetailRow> = set
+        .claim_templates
+        .iter()
+        .map(|claim| DetailRow::field(claim.name.clone(), claim_text(claim)))
+        .collect();
+    // Retention only means something for a set that has claims.
+    if let Some(retention) = set.claim_retention.as_ref().filter(|_| !claims.is_empty()) {
+        claims.push(DetailRow::field(
+            "Retention",
+            KindCell::Hinted {
+                text: retention_short(retention).into(),
+                tooltip: retention.clone().into(),
+            },
+        ));
+    }
     sections.push(DetailSection {
         title: "Volume claim templates",
-        rows: set
-            .claim_templates
-            .iter()
-            .map(|claim| DetailRow::field(claim.name.clone(), claim_text(claim)))
-            .collect(),
+        rows: claims,
     });
     KindRow {
         namespace: Some(set.namespace.clone()),
@@ -242,7 +256,7 @@ pub(crate) fn stateful_set_row(set: &StatefulSetSummary) -> KindRow {
         event: None,
         related_pods: controller_owner(&set.namespace, STATEFUL_SET_KIND, &set.name),
         labels: chips(&set.labels),
-        object: KindObject::Plain,
+        object: KindObject::StatefulSet(set.clone()),
     }
 }
 
@@ -257,6 +271,8 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
     };
     let node_selector = (!set.node_selector.is_empty()).then(|| set.node_selector.join(", "));
     let mut rollout = vec![
+        rollout_bar("Ready", set.ready, set.desired),
+        rollout_bar("Updated", set.up_to_date, set.desired),
         DetailRow::field("Desired", KindCell::count(set.desired)),
         DetailRow::field("Current", KindCell::count(set.current)),
         DetailRow::field("Ready", KindCell::count(set.ready)),
@@ -275,8 +291,12 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
     ));
     let mut sections = vec![
         DetailSection {
-            title: "Rollout",
+            title: "Rollout by node",
             rows: rollout,
+        },
+        DetailSection {
+            title: "Not ready",
+            rows: vec![DetailRow::Live(LiveContent::NotReadyPods)],
         },
         DetailSection {
             title: "Node selector",
@@ -304,7 +324,23 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
         event: None,
         related_pods: controller_owner(&set.namespace, DAEMON_SET_KIND, &set.name),
         labels: chips(&set.labels),
-        object: KindObject::Plain,
+        object: KindObject::DaemonSet(set.clone()),
+    }
+}
+
+/// `{label}  [bar]  {done} / {total}`, toned by `replica_tone`; an empty bar when nothing is
+/// desired.
+fn rollout_bar(label: &'static str, done: u32, total: u32) -> DetailRow {
+    let ratio = if total == 0 {
+        0.0
+    } else {
+        f64::from(done) / f64::from(total)
+    };
+    DetailRow::Bar {
+        label: label.into(),
+        percent: percent(ratio),
+        text: format!("{done} / {total}").into(),
+        tone: Some(replica_tone(done, total)),
     }
 }
 
@@ -337,12 +373,39 @@ pub(crate) fn replica_set_row(set: &ReplicaSetSummary) -> KindRow {
                 ],
             },
             selector_section(&set.selector),
-            containers_section(&set.containers),
+            template_section(set),
         ],
         event: None,
         related_pods: controller_owner(&set.namespace, REPLICA_SET_KIND, &set.name),
         labels: chips(&set.labels),
-        object: KindObject::Plain,
+        object: KindObject::ReplicaSet(set.clone()),
+    }
+}
+
+const POD_TEMPLATE_HASH_LABEL: &str = "pod-template-hash";
+
+/// The Template section: the `pod-template-hash` label (what ties the pods to this template), then
+/// the image, or one `{container} → image` row per container when there are several.
+fn template_section(set: &ReplicaSetSummary) -> DetailSection {
+    let hash = set.labels.iter().find_map(|term| {
+        term.strip_prefix(POD_TEMPLATE_HASH_LABEL)?
+            .strip_prefix('=')
+    });
+    let mut rows = vec![DetailRow::field(
+        POD_TEMPLATE_HASH_LABEL,
+        KindCell::mono_or_absent(hash.unwrap_or_default()),
+    )];
+    match set.containers.as_slice() {
+        [] => {}
+        [only] => rows.push(DetailRow::field(
+            "Image",
+            KindCell::Mono(only.image.clone().into()),
+        )),
+        _ => rows.extend(container_rows(&set.containers)),
+    }
+    DetailSection {
+        title: "Template",
+        rows,
     }
 }
 
@@ -434,6 +497,19 @@ fn replicas_status(ready: u32, desired: u32) -> StatusLabel {
 
 pub(crate) fn optional_count(count: Option<u32>) -> KindCell {
     count.map_or(KindCell::Absent, KindCell::count)
+}
+
+/// `Retain / Delete` for `whenDeleted Retain · whenScaled Delete`; the text as it is when it does
+/// not have that shape.
+fn retention_short(retention: &str) -> String {
+    retention
+        .split_once(" · ")
+        .and_then(|(deleted, scaled)| {
+            let deleted = deleted.strip_prefix("whenDeleted ")?;
+            let scaled = scaled.strip_prefix("whenScaled ")?;
+            Some(format!("{deleted} / {scaled}"))
+        })
+        .unwrap_or_else(|| retention.to_owned())
 }
 
 /// `{storage} · {class} · {modes}`, leaving out the parts the claim does not set.

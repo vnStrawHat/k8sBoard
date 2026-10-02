@@ -1,9 +1,13 @@
 //! Drawer content computed at paint time from a row's `KindObject` and the session's live
-//! lists: Deployment revisions, CronJob next runs and recent jobs. The row builders only leave
+//! lists: Deployment revisions, CronJob next runs and recent jobs, DaemonSet pods that are not
+//! ready. The row builders only leave
 //! a `DetailRow::Live` placeholder; everything here reads the live state when it paints, so it
 //! never goes stale. The pure helpers are tested without a window.
 
-use cluster::{CronJobSummary, CronSchedule, DeploymentSummary, JobSummary, ReplicaSetSummary};
+use cluster::{
+    CronJobSummary, CronSchedule, DeploymentSummary, JobSummary, NodeSummary, PodSummary,
+    ReplicaSetSummary,
+};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
@@ -16,10 +20,11 @@ use crate::app_shell::AppShell;
 use crate::batch_rows::job_status_label;
 use crate::cluster_session::{LiveCluster, LiveList, RelatedList};
 use crate::drawer::wide_detail_row;
-use crate::kind_row::{KindObject, KindRow, LiveContent};
+use crate::kind_diagnosis::{is_pod_not_ready, unready_node};
+use crate::kind_row::{KindObject, KindRow, LiveContent, owns_pod};
 use crate::related_objects::related_subject;
 use crate::resource_kind::ResourceKind;
-use crate::status_tone::{StatusLabel, StatusTone, toned_text};
+use crate::status_tone::{StatusLabel, StatusTone, pod_status_label, readiness_text, toned_text};
 use crate::table_selection::ResourceKey;
 
 /// Bounds the render cost of a Deployment with very many ReplicaSets or a CronJob with many jobs.
@@ -49,6 +54,7 @@ pub(crate) fn live_rows(
         (LiveContent::RecentJobs, KindObject::CronJob(cron_job)) => {
             recent_jobs_rows(kind, row, cron_job, live, now, cx)
         }
+        (LiveContent::NotReadyPods, KindObject::DaemonSet(_)) => not_ready_rows(row, live, cx),
         // A placeholder on a row of another kind has nothing to show.
         _ => Vec::new(),
     }
@@ -424,6 +430,86 @@ fn job_element(
                 .text_color(theme.muted_foreground)
                 .child(format!("· {duration}"))
         }))
+        .into_any_element()
+}
+
+// ---- Not ready pods ----
+
+/// How many not-ready pods a DaemonSet drawer lists.
+const MAX_NOT_READY_PODS: usize = 20;
+
+/// The pods the row owns, in snapshot order; `None` until the pods list has loaded.
+pub(crate) fn owned_pods<'a>(row: &KindRow, live: &'a LiveCluster) -> Option<Vec<&'a PodSummary>> {
+    let owner = row.related_pods.as_ref()?;
+    let pods = live.pods.ready_items()?;
+    Some(pods.iter().filter(|pod| owns_pod(owner, pod)).collect())
+}
+
+/// What a not-ready pod reads: `node NotReady` (Bad) when its node is down, else the pod status.
+fn not_ready_label(pod: &PodSummary, nodes: &[NodeSummary]) -> StatusLabel {
+    match unready_node(pod, nodes) {
+        Some((_, readiness)) => StatusLabel {
+            text: format!("node {}", readiness_text(readiness)).into(),
+            tone: StatusTone::Bad,
+        },
+        None => pod_status_label(pod),
+    }
+}
+
+fn not_ready_rows(row: &KindRow, live: &LiveCluster, cx: &Context<AppShell>) -> Vec<AnyElement> {
+    if live.pods.is_loading() {
+        return vec![note("Loading pods…", cx)];
+    }
+    let Some(owned) = owned_pods(row, live) else {
+        return vec![note("Pods are unavailable", cx)];
+    };
+    let not_ready: Vec<&PodSummary> = owned
+        .into_iter()
+        .filter(|pod| is_pod_not_ready(pod))
+        .collect();
+    if not_ready.is_empty() {
+        return vec![note("All pods are ready", cx)];
+    }
+    let hidden = not_ready.len().saturating_sub(MAX_NOT_READY_PODS);
+    not_ready
+        .iter()
+        .take(MAX_NOT_READY_PODS)
+        .enumerate()
+        .map(|(ix, pod)| not_ready_element(ix, pod, live.nodes.items(), cx))
+        .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+        .collect()
+}
+
+fn not_ready_element(
+    ix: usize,
+    pod: &PodSummary,
+    nodes: &[NodeSummary],
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let hover_bg = theme.muted;
+    let key = ResourceKey::of_pod(pod);
+    // The node tells the pods of a DaemonSet apart; an unscheduled pod has none.
+    let title = pod.node_name.clone().unwrap_or_else(|| pod.name.clone());
+    h_flex()
+        .id(("not-ready-pod", ix))
+        .gap_2()
+        .items_center()
+        .py_1()
+        .rounded(theme.radius)
+        .text_sm()
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover_bg))
+        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_family(theme.mono_font_family.clone())
+                .child(title),
+        )
+        .child(toned_text(not_ready_label(pod, nodes), cx).flex_shrink_0())
         .into_any_element()
 }
 

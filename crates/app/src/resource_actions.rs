@@ -5,7 +5,7 @@ use gpui_kit::{ClipboardItem, ParentElement as _, SharedString, Styled as _, Wea
 
 use crate::app_shell::AppShell;
 use crate::cluster_session::{AccessState, LiveCluster};
-use crate::kind_row::{EventDetail, KindRow};
+use crate::kind_row::{EventDetail, KindObject, KindRow};
 use crate::log_dock::LogDock;
 use crate::log_tab::LogTarget;
 use crate::resource_kind::ResourceKind;
@@ -230,6 +230,9 @@ pub(crate) fn kind_menu(
             .separator();
     }
     menu = menu.item(view_yaml_item(ResourceKey::of_row(kind, row), shell));
+    if has_go_to_owner(kind) {
+        menu = menu.item(go_to_owner_item(row, shell));
+    }
     if kind.has_port_forward() {
         menu = menu.item(action_item(
             ResourceAction::PortForward,
@@ -251,6 +254,32 @@ pub(crate) fn kind_menu(
             kind.delete_label(),
             READ_ONLY_MODE_REASON.into(),
         ))
+}
+
+/// Only ReplicaSets offer Go to owner: a Job's owner is a link in its drawer.
+fn has_go_to_owner(kind: ResourceKind) -> bool {
+    kind == ResourceKind::ReplicaSets
+}
+
+/// The key of the controller that owns a ReplicaSet row; `None` without an owner or when
+/// k8sBoard has no screen for its kind.
+fn owner_target(row: &KindRow) -> Option<ResourceKey> {
+    let KindObject::ReplicaSet(set) = &row.object else {
+        return None;
+    };
+    ResourceKey::of_owner(&set.namespace, set.owner.as_ref()?)
+}
+
+/// Reveals the owner (a Deployment, usually); disabled when there is none.
+fn go_to_owner_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    const LABEL: &str = "Go to owner";
+    let Some(key) = owner_target(row) else {
+        return disabled_menu_item(LABEL, "No owner".into());
+    };
+    let shell = shell.clone();
+    PopupMenuItem::new(LABEL).on_click(move |_, _, cx| {
+        let _ = shell.update(cx, |shell, cx| shell.reveal(key.clone(), cx));
+    })
 }
 
 /// Reveals the involved object on its own screen; disabled when there is none.

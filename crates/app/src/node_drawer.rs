@@ -21,7 +21,7 @@ use crate::drawer::{
     section_title, shown_tab, tab_titles, truncated_text, value_or_absent, wide_detail_row,
     yaml_body,
 };
-use crate::kind_row::PodOwner;
+use crate::kind_row::{KindObject, PodOwner};
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::node_usage::{
     node_allocatable, node_pod_count, node_pod_limit, node_quantity_text, node_requests,
@@ -230,6 +230,7 @@ fn overview(
             &PodOwner::Node {
                 name: node.name.clone(),
             },
+            &KindObject::Plain,
             live,
             cx,
         ));

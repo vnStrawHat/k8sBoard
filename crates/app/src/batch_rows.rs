@@ -71,7 +71,7 @@ pub(crate) fn job_row(job: &JobSummary) -> KindRow {
         event: None,
         related_pods: controller_owner(&job.namespace, JOB_KIND, &job.name),
         labels: chips(&job.labels),
-        object: KindObject::Plain,
+        object: KindObject::Job(job.clone()),
     }
 }
 

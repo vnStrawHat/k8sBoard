@@ -1,7 +1,10 @@
 //! The data model that one table delegate and one drawer renderer share for every kind.
 //! Row builders (`*_rows.rs`) are pure: they take a summary and produce a `KindRow`.
 
-use cluster::{ControllerRef, CronJobSummary, CronSchedule, DeploymentSummary, PodSummary};
+use cluster::{
+    ControllerRef, CronJobSummary, CronSchedule, DaemonSetSummary, DeploymentSummary, JobSummary,
+    PodSummary, ReplicaSetSummary, StatefulSetSummary,
+};
 use gpui_kit::SharedString;
 
 use crate::status_tone::{StatusLabel, StatusTone};
@@ -34,6 +37,10 @@ pub(crate) enum KindObject {
     Plain,
     Deployment(DeploymentSummary),
     CronJob(CronJobSummary),
+    StatefulSet(StatefulSetSummary),
+    DaemonSet(DaemonSetSummary),
+    ReplicaSet(ReplicaSetSummary),
+    Job(JobSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -43,6 +50,7 @@ pub(crate) enum LiveContent {
     Revisions,
     NextRuns,
     RecentJobs,
+    NotReadyPods,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.
@@ -64,6 +72,11 @@ pub(crate) struct EventDetail {
 pub(crate) enum KindCell {
     Text(SharedString),
     Mono(SharedString),
+    /// Short text that stands for a longer one, which a tooltip gives in full.
+    Hinted {
+        text: SharedString,
+        tooltip: SharedString,
+    },
     /// Mono text with a muted `{prefix}/`, cut with an ellipsis.
     Qualified {
         prefix: Option<SharedString>,
@@ -115,6 +128,14 @@ pub(crate) enum DetailRow {
     Code(SharedString),
     /// Content computed at paint time from `KindObject` and the session's live lists.
     Live(LiveContent),
+    /// A labelled bar. `percent` is 0 to 100 (builders use `percent`); `tone: None` keeps the
+    /// kit color. The text sits after the bar, such as `3 / 4`.
+    Bar {
+        label: SharedString,
+        percent: u8,
+        text: SharedString,
+        tone: Option<StatusTone>,
+    },
     /// A label and a clickable mono value that reveals `target`.
     Link {
         label: SharedString,
@@ -173,6 +194,16 @@ impl KindRow {
 /// Label or selector terms as drawer chips.
 pub(crate) fn chips(terms: &[String]) -> Vec<SharedString> {
     terms.iter().cloned().map(SharedString::from).collect()
+}
+
+/// A ratio as a bar percent: rounded, and clamped to 0 to 100 (a NaN reads as 0).
+pub(crate) fn percent(ratio: f64) -> u8 {
+    if ratio.is_nan() {
+        return 0;
+    }
+    let percent = (ratio * 100.0).round().clamp(0.0, 100.0);
+    // Clamped to 0..=100 above, so the cast is exact.
+    percent as u8
 }
 
 /// The `kind` of a controller owner reference. The pods section orders StatefulSet pods and
@@ -283,6 +314,19 @@ mod tests {
             namespace: namespace.to_owned(),
             name: name.to_owned(),
         }
+    }
+
+    #[test]
+    fn percent_rounds_and_clamps() {
+        assert_eq!(percent(0.0), 0);
+        assert_eq!(percent(0.004), 0);
+        assert_eq!(percent(0.005), 1);
+        assert_eq!(percent(2.0 / 3.0), 67);
+        assert_eq!(percent(1.0), 100);
+        assert_eq!(percent(1.7), 100);
+        assert_eq!(percent(-0.3), 0);
+        assert_eq!(percent(f64::NAN), 0);
+        assert_eq!(percent(f64::INFINITY), 100);
     }
 
     #[test]

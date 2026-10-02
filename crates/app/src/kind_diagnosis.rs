@@ -1,0 +1,385 @@
+//! The WHY box of Deployments, DaemonSets, and Jobs: what is wrong and, when the pods say so,
+//! why. Pure: the drawer reads the live lists and calls `kind_diagnosis`. Pod causes reuse
+//! `pod_diagnosis` without events, so probe-failure detail stays in the pod drawer. Condition and
+//! status messages are arbitrary text, so nothing here logs them.
+
+use cluster::{
+    ContainerKind, ContainerState, DaemonSetSummary, DeploymentSummary, JobStatus, JobSummary,
+    NodeReadiness, NodeSummary, PodStatus, PodSummary, StatusReason, Termination,
+    WorkloadCondition,
+};
+use jiff::Timestamp;
+
+use crate::kind_row::KindObject;
+use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
+use crate::status_tone::{StatusTone, pod_status_label, readiness_text};
+use crate::table_selection::ResourceKey;
+use crate::workload_rows::{DEADLINE_EXCEEDED, PROGRESSING};
+
+/// The `Job` condition reasons the controller reports when it gives up.
+const BACKOFF_LIMIT_EXCEEDED: &str = "BackoffLimitExceeded";
+const JOB_DEADLINE_EXCEEDED: &str = "DeadlineExceeded";
+/// The API default of a Job's `backoffLimit`.
+const DEFAULT_BACKOFF_LIMIT: u32 = 6;
+
+/// The text of a WHY box.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct KindDiagnosis {
+    /// `Bad` or `Warn`.
+    pub(crate) tone: StatusTone,
+    /// Upper case, such as `1 OF 3 NOT READY`.
+    pub(crate) title: String,
+    pub(crate) text: String,
+    /// The pod the text is about, for the "Open pod" link.
+    pub(crate) pod: Option<ResourceKey>,
+}
+
+pub(crate) struct DiagnosisInputs<'a> {
+    /// The pods the object owns, in snapshot order; `None` while the pods list has not loaded.
+    pub(crate) pods: Option<&'a [&'a PodSummary]>,
+    pub(crate) nodes: &'a [NodeSummary],
+    pub(crate) now: Timestamp,
+}
+
+/// The WHY box of an object, or `None` when it needs none. Rules that need pods wait for them;
+/// the rules that read only the object's own conditions (marked * in the spec) never do.
+pub(crate) fn kind_diagnosis(
+    object: &KindObject,
+    inputs: &DiagnosisInputs,
+) -> Option<KindDiagnosis> {
+    match object {
+        KindObject::Deployment(deployment) => deployment_diagnosis(deployment, inputs),
+        KindObject::DaemonSet(set) => daemon_set_diagnosis(set, inputs),
+        KindObject::Job(job) => job_diagnosis(job, inputs),
+        KindObject::Plain
+        | KindObject::CronJob(_)
+        | KindObject::StatefulSet(_)
+        | KindObject::ReplicaSet(_) => None,
+    }
+}
+
+/// The first owned pod (snapshot order) that `pod_diagnosis` finds a cause for.
+fn unhealthy_pod<'a>(inputs: &DiagnosisInputs<'a>) -> Option<(&'a PodSummary, PodDiagnosis)> {
+    inputs.pods?.iter().find_map(|pod| {
+        let diagnosis = pod_diagnosis(pod, None, inputs.now)?;
+        Some((*pod, diagnosis))
+    })
+}
+
+/// The first owned pod whose cause is Bad: the rules that say "not ready" need a real failure.
+fn failing_pod<'a>(inputs: &DiagnosisInputs<'a>) -> Option<(&'a PodSummary, PodDiagnosis)> {
+    inputs.pods?.iter().find_map(|pod| {
+        let diagnosis = pod_diagnosis(pod, None, inputs.now)?;
+        (diagnosis.tone == StatusTone::Bad).then_some((*pod, diagnosis))
+    })
+}
+
+fn find_condition<'a>(
+    conditions: &'a [WorkloadCondition],
+    name: &str,
+) -> Option<&'a WorkloadCondition> {
+    conditions.iter().find(|condition| condition.name == name)
+}
+
+/// `{reason}: {message}`, either part may be missing; `None` when both are.
+fn reason_and_message(condition: &WorkloadCondition) -> Option<String> {
+    match (&condition.reason, &condition.message) {
+        (Some(reason), Some(message)) => Some(format!("{reason}: {message}")),
+        (Some(text), None) | (None, Some(text)) => Some(text.clone()),
+        (None, None) => None,
+    }
+}
+
+fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
+    if count == 1 { one } else { many }
+}
+
+// ---- Deployments ----
+
+fn deployment_diagnosis(
+    deployment: &DeploymentSummary,
+    inputs: &DiagnosisInputs,
+) -> Option<KindDiagnosis> {
+    // A scaled-to-zero or paused Deployment is not expected to progress.
+    if deployment.desired == 0 || deployment.is_paused {
+        return None;
+    }
+    let is_stalled = find_condition(&deployment.conditions, PROGRESSING).is_some_and(|condition| {
+        !condition.is_true && condition.reason.as_deref() == Some(DEADLINE_EXCEEDED)
+    });
+    if is_stalled {
+        // A stall that long explains itself with any cause, a warning included.
+        let unhealthy = unhealthy_pod(inputs);
+        let mut text = format!("No progress for {}s.", deployment.progress_deadline_seconds);
+        if let Some((pod, diagnosis)) = &unhealthy {
+            text.push_str(&format!(" Pod {}: {}", pod.name, diagnosis.text));
+        }
+        return Some(KindDiagnosis {
+            tone: StatusTone::Bad,
+            title: "ROLLOUT STALLED".to_owned(),
+            text,
+            pod: unhealthy.map(|(pod, _)| ResourceKey::of_pod(pod)),
+        });
+    }
+    if let Some(condition) = find_condition(&deployment.conditions, "ReplicaFailure")
+        && condition.is_true
+    {
+        return Some(KindDiagnosis {
+            tone: StatusTone::Bad,
+            title: "REPLICA FAILURE".to_owned(),
+            text: reason_and_message(condition)
+                .unwrap_or_else(|| "The controller cannot create pods.".to_owned()),
+            pod: None,
+        });
+    }
+    if deployment.ready >= deployment.desired {
+        return None;
+    }
+    // Only a Bad cause: a pod that is merely warming up (running, not ready yet) is a normal
+    // rollout, and a long stall is caught by ROLLOUT STALLED.
+    let (pod, diagnosis) = failing_pod(inputs)?;
+    // A container cause reads "Pod x is CrashLoopBackOff: ..."; a pod-level one already says it.
+    let text = match diagnosis.container {
+        Some(_) => format!(
+            "Pod {} is {}: {}",
+            pod.name,
+            pod_status_label(pod).text,
+            diagnosis.text
+        ),
+        None => format!("Pod {}: {}", pod.name, diagnosis.text),
+    };
+    Some(KindDiagnosis {
+        tone: if deployment.ready == 0 {
+            StatusTone::Bad
+        } else {
+            StatusTone::Warn
+        },
+        title: format!(
+            "{} OF {} NOT READY",
+            deployment.desired - deployment.ready,
+            deployment.desired
+        ),
+        text,
+        pod: Some(ResourceKey::of_pod(pod)),
+    })
+}
+
+// ---- DaemonSets ----
+
+/// A pod that is not running with every container ready.
+pub(crate) fn is_pod_not_ready(pod: &PodSummary) -> bool {
+    pod.status != PodStatus::Reason(StatusReason::Running) || pod.ready.ready < pod.ready.total
+}
+
+/// The state of the node `pod` runs on when that node is not Ready; `None` for a Ready node, an
+/// unscheduled pod, or a node the list does not know.
+pub(crate) fn unready_node<'a>(
+    pod: &PodSummary,
+    nodes: &'a [NodeSummary],
+) -> Option<(&'a str, NodeReadiness)> {
+    let name = pod.node_name.as_deref()?;
+    let node = nodes.iter().find(|node| node.name == name)?;
+    match node.status.readiness {
+        NodeReadiness::Ready => None,
+        readiness @ (NodeReadiness::NotReady | NodeReadiness::Unknown) => {
+            Some((node.name.as_str(), readiness))
+        }
+    }
+}
+
+fn daemon_set_diagnosis(set: &DaemonSetSummary, inputs: &DiagnosisInputs) -> Option<KindDiagnosis> {
+    if set.desired == 0 {
+        return None;
+    }
+    if let Some(pods) = inputs.pods {
+        // S1: pods that wait on a node that is down.
+        let stranded: Vec<(&PodSummary, &str, NodeReadiness)> = pods
+            .iter()
+            .filter(|pod| is_pod_not_ready(pod))
+            .filter_map(|pod| {
+                let (node, readiness) = unready_node(pod, inputs.nodes)?;
+                Some((*pod, node, readiness))
+            })
+            .collect();
+        if let Some(&(pod, node, readiness)) = stranded.first() {
+            let count = u32::try_from(stranded.len()).unwrap_or(u32::MAX);
+            let state = if stranded.iter().all(|(_, _, other)| *other == readiness) {
+                readiness_text(readiness)
+            } else {
+                "not Ready"
+            };
+            let text = if count == 1 {
+                format!("The pod on {node} is not ready because the node is {state}.")
+            } else {
+                format!(
+                    "Pods on {node} and {} more nodes are not ready because their nodes are {state}.",
+                    count - 1
+                )
+            };
+            return Some(KindDiagnosis {
+                tone: StatusTone::Warn,
+                title: format!("{count} {} MISSING", plural(count, "NODE", "NODES")),
+                text,
+                pod: Some(ResourceKey::of_pod(pod)),
+            });
+        }
+        // S2: a pod on a healthy node that has its own problem.
+        if set.ready < set.desired
+            && let Some((pod, diagnosis)) = failing_pod(inputs)
+        {
+            let place = pod
+                .node_name
+                .as_deref()
+                .map(|node| format!(" on {node}"))
+                .unwrap_or_default();
+            return Some(KindDiagnosis {
+                tone: StatusTone::Warn,
+                title: format!("{} OF {} NOT READY", set.desired - set.ready, set.desired),
+                text: format!("Pod {}{place}: {}", pod.name, diagnosis.text),
+                pod: Some(ResourceKey::of_pod(pod)),
+            });
+        }
+    }
+    // S3
+    if set.current < set.desired {
+        let missing = set.desired - set.current;
+        return Some(KindDiagnosis {
+            tone: StatusTone::Warn,
+            title: format!(
+                "{missing} {} WITHOUT A POD",
+                plural(missing, "NODE", "NODES")
+            ),
+            text: format!(
+                "{} {} should run a pod; {} do.",
+                set.desired,
+                plural(set.desired, "node", "nodes"),
+                set.current
+            ),
+            pod: None,
+        });
+    }
+    // S4
+    if set.misscheduled > 0 {
+        let text = if set.misscheduled == 1 {
+            "1 pod runs on a node the DaemonSet no longer targets.".to_owned()
+        } else {
+            format!(
+                "{} pods run on nodes the DaemonSet no longer targets.",
+                set.misscheduled
+            )
+        };
+        return Some(KindDiagnosis {
+            tone: StatusTone::Warn,
+            title: "MISSCHEDULED".to_owned(),
+            text,
+            pod: None,
+        });
+    }
+    None
+}
+
+// ---- Jobs ----
+
+/// The termination of the pod's first main container: where it is now, else its last one. The
+/// Attempts section shows its exit code, and the BACKOFF LIMIT box quotes it.
+pub(crate) fn first_main_termination(pod: &PodSummary) -> Option<&Termination> {
+    let container = pod
+        .containers
+        .iter()
+        .find(|container| container.kind == ContainerKind::Main)?;
+    match &container.state {
+        ContainerState::Terminated(termination) => Some(termination),
+        ContainerState::Waiting { .. }
+        | ContainerState::Running { .. }
+        | ContainerState::NotReported => container.last_termination.as_ref(),
+    }
+}
+
+fn job_diagnosis(job: &JobSummary, inputs: &DiagnosisInputs) -> Option<KindDiagnosis> {
+    match job.status {
+        JobStatus::Failed | JobStatus::Failing => failed_job_diagnosis(job, inputs),
+        JobStatus::Running if job.failed > 0 => {
+            let limit = job.backoff_limit.unwrap_or(DEFAULT_BACKOFF_LIMIT);
+            Some(KindDiagnosis {
+                tone: StatusTone::Warn,
+                title: format!(
+                    "{} FAILED {}",
+                    job.failed,
+                    plural(job.failed, "ATTEMPT", "ATTEMPTS")
+                ),
+                text: format!(
+                    "Retrying; the job fails after {} failed attempts.",
+                    limit.saturating_add(1)
+                ),
+                pod: None,
+            })
+        }
+        JobStatus::Running | JobStatus::Complete | JobStatus::Suspended => None,
+    }
+}
+
+fn failed_job_diagnosis(job: &JobSummary, inputs: &DiagnosisInputs) -> Option<KindDiagnosis> {
+    let condition = job.conditions.iter().find(|condition| {
+        matches!(condition.name.as_str(), "Failed" | "FailureTarget") && condition.is_true
+    })?;
+    match condition.reason.as_deref() {
+        Some(BACKOFF_LIMIT_EXCEEDED) => {
+            let last = last_failed_pod(inputs);
+            let mut text = format!(
+                "{} {} failed.",
+                job.failed,
+                plural(job.failed, "attempt", "attempts")
+            );
+            if let Some((_, termination)) = last {
+                text.push_str(&format!(
+                    " Last pod exited with code {}{}.",
+                    termination.exit_code,
+                    termination
+                        .reason
+                        .as_ref()
+                        .map(|reason| format!(" ({reason})"))
+                        .unwrap_or_default()
+                ));
+            }
+            Some(KindDiagnosis {
+                tone: StatusTone::Bad,
+                title: "BACKOFF LIMIT REACHED".to_owned(),
+                text,
+                pod: last.map(|(pod, _)| ResourceKey::of_pod(pod)),
+            })
+        }
+        Some(JOB_DEADLINE_EXCEEDED) => Some(KindDiagnosis {
+            tone: StatusTone::Bad,
+            title: "DEADLINE EXCEEDED".to_owned(),
+            text: match job.active_deadline_seconds {
+                Some(seconds) => {
+                    format!("The job ran longer than its active deadline of {seconds}s.")
+                }
+                None => "The job ran longer than its active deadline.".to_owned(),
+            },
+            pod: None,
+        }),
+        _ => Some(KindDiagnosis {
+            tone: StatusTone::Bad,
+            title: "JOB FAILED".to_owned(),
+            text: reason_and_message(condition).unwrap_or_else(|| "The job failed.".to_owned()),
+            pod: None,
+        }),
+    }
+}
+
+/// The newest owned pod whose first main container ended with a failure, and that termination.
+fn last_failed_pod<'a>(inputs: &DiagnosisInputs<'a>) -> Option<(&'a PodSummary, &'a Termination)> {
+    inputs
+        .pods?
+        .iter()
+        .filter_map(|pod| {
+            let termination = first_main_termination(pod).filter(|term| term.exit_code != 0)?;
+            Some((*pod, termination))
+        })
+        .max_by_key(|(pod, _)| pod.created_at)
+}
+
+#[cfg(test)]
+#[path = "kind_diagnosis_tests.rs"]
+mod kind_diagnosis_tests;

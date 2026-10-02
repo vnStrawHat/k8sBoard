@@ -40,8 +40,8 @@
 
 | Module | Tests |
 |---|---|
-| `kind_diagnosis_tests.rs` | `deployment_stalled`, `deployment_replica_failure`, `deployment_not_ready_names_pod`, `deployment_rollout_without_unhealthy_pod_has_no_box`, `paused_deployment_has_no_box`, `daemon_set_node_missing`, `daemon_set_nodes_missing_plural`, `daemon_set_pod_not_ready`, `daemon_set_without_pod_on_nodes`, `daemon_set_misscheduled`, `job_backoff_limit_with_exit_code`, `job_deadline_exceeded`, `job_failed_other_reason`, `job_retrying`, `no_box_while_pods_load` |
-| `workload_rows_tests.rs` | `daemon_set_rollout_by_node_starts_with_bars`, `daemon_set_port_shows_host_port`, `stateful_set_claims_show_retention`, `replica_set_template_shows_hash_and_image` |
+| `kind_diagnosis_tests.rs` | `deployment_stalled`, `deployment_replica_failure`, `deployment_not_ready_names_pod`, `deployment_rollout_without_unhealthy_pod_has_no_box`, `paused_deployment_has_no_box`, `daemon_set_node_missing`, `daemon_set_nodes_missing_plural`, `daemon_set_pod_not_ready`, `daemon_set_without_pod_on_nodes`, `daemon_set_misscheduled`, `job_backoff_limit_with_exit_code`, `job_deadline_exceeded`, `job_failed_other_reason`, `job_retrying`, `no_box_while_pods_load`, `warming_up_pod_is_a_normal_rollout`, `container_cause_names_the_pod_status` |
+| `workload_rows_tests.rs` | `daemon_set_rollout_by_node_starts_with_bars`, `daemon_set_port_shows_host_port`, `stateful_set_claims_show_retention`, `retention_short_form_drops_the_field_names`, `replica_set_template_shows_hash_and_image` |
 | `kind_row.rs` | `percent_rounds_and_clamps` |
 | `related_pods.rs` | `pod_row_detail_per_owner`, `ordinal_detail_lists_claims_of_the_pod`, `attempts_newest_first_with_exit_code` |
 | `resource_actions_tests.rs` | `replica_set_menu_has_go_to_owner`, `go_to_owner_disabled_without_owner` |
