@@ -690,3 +690,160 @@ fn scope_change_keeps_cluster_scoped_explorer() {
     ));
     assert!(restarts_on_scope_change(ResourceKind::Deployments));
 }
+
+/// A known report that allows every check except those listed.
+fn report_denying(denied: &[AccessCheck]) -> AccessState {
+    let reviews = AccessCheck::ALL
+        .into_iter()
+        .map(|check| AccessReview {
+            check,
+            decision: if denied.contains(&check) {
+                AccessDecision::Denied { reason: None }
+            } else {
+                AccessDecision::Allowed
+            },
+        })
+        .collect();
+    AccessState::Known(AccessReport { reviews })
+}
+
+#[test]
+fn bindings_plan_per_kind_and_denial() {
+    let allowed = report_denying(&[]);
+    // Roles need the role bindings only; ClusterRoles need both lists.
+    assert_eq!(
+        companion_plan(ResourceKind::Roles, &allowed),
+        CompanionPlan::Start(CompanionKind::Bindings {
+            with_cluster_role_bindings: false
+        })
+    );
+    assert_eq!(
+        companion_plan(ResourceKind::ClusterRoles, &allowed),
+        CompanionPlan::Start(CompanionKind::Bindings {
+            with_cluster_role_bindings: true
+        })
+    );
+    // A denied list a kind needs means the companion could never be ready, so it does not start.
+    let no_cluster_list = report_denying(&[AccessCheck::ListClusterRoleBindings]);
+    assert_eq!(
+        companion_plan(ResourceKind::ClusterRoles, &no_cluster_list),
+        CompanionPlan::Denied(AccessCheck::ListClusterRoleBindings)
+    );
+    // Roles do not need that list.
+    assert_eq!(
+        companion_plan(ResourceKind::Roles, &no_cluster_list),
+        CompanionPlan::Start(CompanionKind::Bindings {
+            with_cluster_role_bindings: false
+        })
+    );
+    let no_role_list = report_denying(&[AccessCheck::ListRoleBindings]);
+    assert_eq!(
+        companion_plan(ResourceKind::Roles, &no_role_list),
+        CompanionPlan::Denied(AccessCheck::ListRoleBindings)
+    );
+    assert_eq!(
+        companion_plan(ResourceKind::ClusterRoles, &no_role_list),
+        CompanionPlan::Denied(AccessCheck::ListRoleBindings)
+    );
+    // A review that failed does not block the watches.
+    assert_eq!(
+        companion_plan(ResourceKind::ClusterRoles, &AccessState::Unknown),
+        CompanionPlan::Start(CompanionKind::Bindings {
+            with_cluster_role_bindings: true
+        })
+    );
+}
+
+#[test]
+fn denied_binding_checks_name_every_denied_list() {
+    let neither = report_denying(&[
+        AccessCheck::ListRoleBindings,
+        AccessCheck::ListClusterRoleBindings,
+    ]);
+    assert_eq!(
+        denied_binding_checks(ResourceKind::ClusterRoles, &neither),
+        [
+            AccessCheck::ListRoleBindings,
+            AccessCheck::ListClusterRoleBindings
+        ]
+    );
+    assert_eq!(
+        denied_binding_checks(ResourceKind::Roles, &neither),
+        [AccessCheck::ListRoleBindings]
+    );
+    assert!(denied_binding_checks(ResourceKind::Roles, &report_denying(&[])).is_empty());
+    assert!(denied_binding_checks(ResourceKind::Deployments, &neither).is_empty());
+}
+
+#[test]
+fn bindings_companion_applies_each_list() {
+    let mut lists = CompanionLists::loading_for(CompanionKind::Bindings {
+        with_cluster_role_bindings: true,
+    });
+    lists.apply(CompanionUpdate::ClusterRoleBindings(WatchUpdate::Snapshot(
+        Vec::new(),
+    )));
+    let CompanionLists::Bindings {
+        role_bindings,
+        cluster_role_bindings: Some(cluster_role_bindings),
+    } = &lists
+    else {
+        panic!("both lists were started");
+    };
+    assert!(role_bindings.is_loading());
+    assert_eq!(cluster_role_bindings.ready_count(), Some(0));
+    lists.apply(CompanionUpdate::RoleBindings(WatchUpdate::Snapshot(
+        Vec::new(),
+    )));
+    assert!(matches!(
+        &lists,
+        CompanionLists::Bindings { role_bindings, cluster_role_bindings: Some(second) }
+            if role_bindings.ready_count() == Some(0) && second.ready_count() == Some(0)
+    ));
+}
+
+#[test]
+fn bindings_companion_ignores_a_list_it_does_not_run() {
+    let mut roles = CompanionLists::loading_for(CompanionKind::Bindings {
+        with_cluster_role_bindings: false,
+    });
+    roles.apply(CompanionUpdate::ClusterRoleBindings(WatchUpdate::Snapshot(
+        Vec::new(),
+    )));
+    assert!(matches!(
+        &roles,
+        CompanionLists::Bindings { role_bindings, cluster_role_bindings: None }
+            if role_bindings.is_loading()
+    ));
+    roles.mark_stopped();
+    assert!(matches!(
+        &roles,
+        CompanionLists::Bindings { role_bindings, .. } if role_bindings.has_problem()
+    ));
+}
+
+#[test]
+fn bindings_companion_watch_count() {
+    let watches_of = |with_cluster_role_bindings, namespaces| {
+        CompanionLists::loading_for(CompanionKind::Bindings {
+            with_cluster_role_bindings,
+        })
+        .watches(namespaces)
+    };
+    // One role-binding watch per namespace, plus one cluster-wide watch.
+    assert_eq!(watches_of(false, 3), 3);
+    assert_eq!(watches_of(true, 3), 4);
+    // Roles at five namespaces reach the 3N + 4 bound exactly.
+    let explorer = explorer_watches(ResourceKind::Roles, 5);
+    assert_eq!(
+        open_watch_count(watches(5, explorer, watches_of(false, 5), true, true)),
+        3 * 5 + 4
+    );
+    // ClusterRoles are cluster-scoped: one explorer watch and N + 1 binding watches.
+    let explorer = explorer_watches(ResourceKind::ClusterRoles, 5);
+    assert_eq!(explorer, 1);
+    assert_eq!(
+        open_watch_count(watches(5, explorer, watches_of(true, 5), true, true)),
+        2 + 5 + 1 + 6 + 2
+    );
+}

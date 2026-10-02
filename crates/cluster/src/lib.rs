@@ -34,8 +34,11 @@ mod replica_set;
 mod resource_metrics;
 mod resource_quota;
 mod resource_watch;
+mod role;
+mod role_binding;
 mod selector;
 mod service;
+mod service_account;
 mod stateful_set;
 mod storage_class;
 mod workload;
@@ -89,8 +92,13 @@ pub use resource_metrics::{
 };
 pub use resource_quota::{QuotaItem, ResourceQuotaSummary};
 pub use resource_watch::WatchUpdate;
+pub use role::{RbacRule, RoleSummary};
+pub use role_binding::{
+    BindingSummary, BroadGroup, RoleKind, RoleRef, Subject, SubjectKind, SubjectMatch,
+};
 pub use selector::Selector;
 pub use service::{ServicePortSummary, ServiceSummary};
+pub use service_account::{CloudIdentity, CloudProvider, ServiceAccountSummary};
 pub use stateful_set::{ClaimTemplate, StatefulSetSummary};
 pub use storage_class::{StorageClassSummary, StorageParameter};
 pub use workload::{ContainerPort, ControllerRef, TemplateContainer, WorkloadCondition};

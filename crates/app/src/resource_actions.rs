@@ -5,6 +5,7 @@ use gpui_kit::{
     App, ClipboardItem, ParentElement as _, SharedString, Styled as _, WeakEntity, Window, div,
 };
 
+use crate::access_bindings::role_key;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{AccessState, LiveCluster};
 use crate::kind_row::{EventDetail, KindObject, KindRow};
@@ -250,6 +251,9 @@ pub(crate) fn kind_menu(
             menu = menu.item(go_to_pod_item(row, pods, shell));
         }
         ResourceKind::PersistentVolumes => menu = menu.item(go_to_claim_item(row, shell)),
+        ResourceKind::RoleBindings | ResourceKind::ClusterRoleBindings => {
+            menu = menu.item(go_to_role_item(row, shell));
+        }
         _ => {}
     }
     if kind.has_port_forward() {
@@ -436,6 +440,23 @@ fn go_to_claim_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuIte
         "Go to claim",
         volume_claim_target(row),
         "No claim".into(),
+        shell,
+    )
+}
+
+/// The role a bindings row names; `None` for a kind k8sBoard has no screen for.
+fn binding_role_target(row: &KindRow) -> Option<ResourceKey> {
+    let KindObject::Binding(binding) = &row.object else {
+        return None;
+    };
+    role_key(binding)
+}
+
+fn go_to_role_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    go_to_item(
+        "Go to role",
+        binding_role_target(row),
+        "No screen for this role".into(),
         shell,
     )
 }

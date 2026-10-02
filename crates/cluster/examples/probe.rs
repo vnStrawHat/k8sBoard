@@ -259,6 +259,20 @@ async fn watch_for(
         tally_source("persistent volumes", connection.watch_persistent_volumes()),
         tally_source("storage classes", connection.watch_storage_classes()),
         tally_source(
+            "service accounts",
+            connection.watch_service_accounts(scope.clone()),
+        ),
+        tally_source("roles", connection.watch_roles(scope.clone())),
+        tally_source("cluster roles", connection.watch_cluster_roles()),
+        tally_source(
+            "role bindings",
+            connection.watch_role_bindings(scope.clone()),
+        ),
+        tally_source(
+            "cluster role bindings",
+            connection.watch_cluster_role_bindings(),
+        ),
+        tally_source(
             "events",
             connection.watch_events(scope.clone(), EventFilter::All),
         ),
@@ -302,7 +316,7 @@ async fn watch_for(
 }
 
 /// The kinds `--counts` counts, in sidebar order, with the check that gates each.
-const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 20] = [
+const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 25] = [
     (ObjectKind::Pod, "pods", AccessCheck::ListPods),
     (ObjectKind::Node, "nodes", AccessCheck::ListNodes),
     (
@@ -374,6 +388,27 @@ const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 20] = [
         ObjectKind::StorageClass,
         "storageclasses",
         AccessCheck::ListStorageClasses,
+    ),
+    (
+        ObjectKind::ServiceAccount,
+        "serviceaccounts",
+        AccessCheck::ListServiceAccounts,
+    ),
+    (ObjectKind::Role, "roles", AccessCheck::ListRoles),
+    (
+        ObjectKind::ClusterRole,
+        "clusterroles",
+        AccessCheck::ListClusterRoles,
+    ),
+    (
+        ObjectKind::RoleBinding,
+        "rolebindings",
+        AccessCheck::ListRoleBindings,
+    ),
+    (
+        ObjectKind::ClusterRoleBinding,
+        "clusterrolebindings",
+        AccessCheck::ListClusterRoleBindings,
     ),
 ];
 

@@ -436,6 +436,35 @@ mod tests {
     }
 
     #[test]
+    fn hide_system_ignores_pods_and_nodes() {
+        let mut pod = pod();
+        pod.name = "system:odd".to_owned();
+        assert!(row(&pod).in_preset(&FilterPreset::HideSystem));
+        let node = cluster::NodeSummary {
+            name: "system:odd".to_owned(),
+            status: cluster::NodeStatus {
+                readiness: cluster::NodeReadiness::Ready,
+                scheduling: cluster::NodeScheduling::Enabled,
+            },
+            roles: Vec::new(),
+            taints: Vec::new(),
+            kubelet_version: String::new(),
+            internal_ip: None,
+            created_at: None,
+            conditions: Vec::new(),
+            addresses: Vec::new(),
+            system: cluster::NodeSystemInfo::default(),
+            resources: Vec::new(),
+            labels: Vec::new(),
+        };
+        let node_row = crate::node_table::NodeRow {
+            node: &node,
+            usage: crate::node_usage::NodeUsage::default(),
+        };
+        assert!(node_row.in_preset(&FilterPreset::HideSystem));
+    }
+
+    #[test]
     fn pod_row_values_follow_columns() {
         let pod = pod();
         let row = row(&pod);

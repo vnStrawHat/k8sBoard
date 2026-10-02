@@ -32,7 +32,7 @@ pub struct RoleSummary { pub namespace: Option<String>, pub name: String, pub cr
     pub aggregation: Vec<Selector> /* ClusterRole aggregationRule.clusterRoleSelectors; always empty for Roles */ }
 pub struct RbacRule { pub api_groups: Vec<String>, pub resources: Vec<String>, pub resource_names: Vec<String>,
     pub verbs: Vec<String>, pub non_resource_urls: Vec<String> }
-impl RbacRule { pub fn grants_everything(&self) -> bool; }   // verbs, resources, api_groups each contain "*"
+impl RbacRule { pub fn grants_everything(&self) -> bool; }   // verbs, resources, api_groups each contain "*" and resource_names is empty
 impl RoleSummary { pub fn grants_everything(&self) -> bool; pub fn is_aggregated(&self) -> bool;
     pub fn is_built_in(&self) -> bool; /* label kubernetes.io/bootstrapping=rbac-defaults */ }
 impl ClusterConnection {

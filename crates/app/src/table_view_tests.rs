@@ -152,6 +152,28 @@ fn rebuild_keeps_sort_on_a_hidden_column() {
 }
 
 #[test]
+fn hide_system_is_default_for_cluster_roles_and_bindings() {
+    use crate::app_shell::Screen;
+    use crate::resource_kind::ResourceKind;
+
+    for kind in [
+        ResourceKind::ClusterRoles,
+        ResourceKind::ClusterRoleBindings,
+    ] {
+        let filter = default_filter(Screen::Kind(kind));
+        assert_eq!(filter.preset, Some(FilterPreset::HideSystem), "{kind:?}");
+    }
+    // Roles and RoleBindings are namespaced and have no system: objects to hide.
+    for kind in [ResourceKind::Roles, ResourceKind::RoleBindings] {
+        assert_eq!(
+            default_filter(Screen::Kind(kind)),
+            TableFilter::default(),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
 fn replica_sets_start_with_hide_inactive() {
     use crate::app_shell::Screen;
     use crate::resource_kind::ResourceKind;

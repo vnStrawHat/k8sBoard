@@ -34,6 +34,8 @@ pub(crate) enum FilterChip {
 pub(crate) enum FilterPreset {
     /// ReplicaSets scaled to zero are hidden.
     HideInactive,
+    /// Objects named `system:*` are hidden (ClusterRoles and ClusterRoleBindings).
+    HideSystem,
     /// A Nodes summary chip.
     Nodes(NodeGroup),
 }

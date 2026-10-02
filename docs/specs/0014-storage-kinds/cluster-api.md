@@ -52,7 +52,7 @@ impl ClusterConnection { pub fn watch_storage_classes(&self) -> impl Stream<..>;
 pub(crate) fn is_secret_parameter(key: &str) -> bool; // decision 5
 ```
 
-- `is_default`: annotation `storageclass.kubernetes.io/is-default-class` or `storageclass.beta.kubernetes.io/is-default-class` equals `true` (ASCII case-insensitive). The summarizer reads only these two keys (decision 4).
+- `is_default`: annotation `storageclass.kubernetes.io/is-default-class` or `storageclass.beta.kubernetes.io/is-default-class` equals exactly `true` (case-sensitive, like Kubernetes `IsDefaultAnnotation`). The summarizer reads only these two keys (decision 4).
 - `is_secret_parameter(key)`: lowercase the key and drop `-`, `_`, `.`; keys ending in `secret-name` or `secret-namespace` (references, e.g. `csi.storage.k8s.io/provisioner-secret-name`) are never secret; otherwise secret when it contains `password`, `passwd`, `token`, `credential`, `secretkey`, `accesskey`, `userkey`, `privatekey`, or `restuserkey`. So `restuserkey`, `adminPassword`, `access-key` are hidden; `kmsKeyId`, `type`, `fsType` are shown. Shared matcher: 0018 moves this function to `object_yaml.rs` as `is_secret_key` and widens it (any `secret`, plus `apikey`, `passphrase`, `bearer`; `*secretname`, `*secretnamespace`, `*ref`, `*refs` never secret); these StorageClass examples keep their results.
 - Values of secret parameters are dropped before the summary is built.
 

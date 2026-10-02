@@ -108,11 +108,9 @@ fn is_default_class(class: &StorageClass) -> bool {
     let Some(annotations) = &class.metadata.annotations else {
         return false;
     };
-    DEFAULT_ANNOTATIONS.iter().any(|key| {
-        annotations
-            .get(*key)
-            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
-    })
+    DEFAULT_ANNOTATIONS
+        .iter()
+        .any(|key| annotations.get(*key).is_some_and(|value| value == "true"))
 }
 
 /// A `key=value` mount option whose key looks like a credential keeps only its key (CIFS
@@ -189,13 +187,24 @@ mod tests {
                 .is_default
         );
         assert!(
-            class_with_annotations(&[("storageclass.beta.kubernetes.io/is-default-class", "TRUE")])
+            class_with_annotations(&[("storageclass.beta.kubernetes.io/is-default-class", "true")])
                 .is_default
         );
         assert!(
             !class_with_annotations(&[("storageclass.kubernetes.io/is-default-class", "false")])
                 .is_default
         );
+    }
+
+    #[test]
+    fn default_annotation_is_case_sensitive() {
+        for value in ["TRUE", "True"] {
+            assert!(
+                !class_with_annotations(&[("storageclass.kubernetes.io/is-default-class", value)])
+                    .is_default,
+                "{value}"
+            );
+        }
     }
 
     #[test]

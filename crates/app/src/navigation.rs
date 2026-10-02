@@ -282,6 +282,10 @@ mod tests {
                 "PVCs",
                 "PVs",
                 "StorageClasses",
+                "Roles",
+                "ClusterRoles",
+                "RoleBindings",
+                "ClusterRoleBindings",
             ]
         );
     }

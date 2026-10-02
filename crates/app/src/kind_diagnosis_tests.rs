@@ -191,6 +191,7 @@ fn run(
             pods: refs.as_deref(),
             nodes,
             service: None,
+            bindings: None,
             now: at(1_000),
         },
     )
@@ -644,6 +645,7 @@ fn run_service(health: ServiceHealth, pods: &[PodSummary]) -> Option<KindDiagnos
             pods: Some(&refs),
             nodes: &[],
             service: Some(health),
+            bindings: None,
             now: at(1_000),
         },
     )
@@ -717,6 +719,7 @@ fn service_no_ready_endpoints_waits_for_the_pods() {
             pods: None,
             nodes: &[],
             service: Some(health),
+            bindings: None,
             now: at(1_000),
         },
     );
@@ -752,6 +755,7 @@ fn budget_diagnosis(budget: PodDisruptionBudgetSummary) -> Option<KindDiagnosis>
             pods: None,
             nodes: &[],
             service: None,
+            bindings: None,
             now: at(1_000),
         },
     )
@@ -849,6 +853,7 @@ fn autoscaler_diagnosis(hpa: HorizontalPodAutoscalerSummary) -> Option<KindDiagn
             pods: None,
             nodes: &[],
             service: None,
+            bindings: None,
             now: at(1_000),
         },
     )
@@ -990,6 +995,7 @@ fn quota_at_limit() {
                 pods: None,
                 nodes: &[],
                 service: None,
+                bindings: None,
                 now: at(1_000),
             },
         )
@@ -1029,6 +1035,7 @@ fn quota_status_and_box_name_the_same_item() {
             pods: None,
             nodes: &[],
             service: None,
+            bindings: None,
             now: at(1_000),
         },
     )
@@ -1045,6 +1052,7 @@ fn storage_inputs() -> DiagnosisInputs<'static> {
         pods: None,
         nodes: &[],
         service: None,
+        bindings: None,
         now: at(1_000),
     }
 }
@@ -1207,5 +1215,286 @@ fn bound_pv_has_no_box() {
             &storage_inputs(),
         );
         assert_eq!(diagnosis, None, "{phase}");
+    }
+}
+
+// ---- Access control ----
+
+mod access {
+    use cluster::{BindingSummary, RbacRule, RoleKind, RoleRef, RoleSummary, Subject, SubjectKind};
+
+    use super::*;
+    use crate::access_bindings::{BindingIndex, BindingLists};
+
+    fn wildcard_role(namespace: Option<&str>) -> RoleSummary {
+        let star = || vec!["*".to_owned()];
+        RoleSummary {
+            namespace: namespace.map(str::to_owned),
+            name: "super".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            rules: vec![RbacRule {
+                api_groups: star(),
+                resources: star(),
+                resource_names: Vec::new(),
+                verbs: star(),
+                non_resource_urls: Vec::new(),
+            }],
+            aggregation: Vec::new(),
+        }
+    }
+
+    fn subject(kind: SubjectKind, namespace: Option<&str>, name: &str) -> Subject {
+        Subject {
+            kind,
+            name: name.to_owned(),
+            namespace: namespace.map(str::to_owned),
+        }
+    }
+
+    fn account(namespace: &str, name: &str) -> Subject {
+        subject(SubjectKind::ServiceAccount, Some(namespace), name)
+    }
+
+    fn group(name: &str) -> Subject {
+        subject(SubjectKind::Group, None, name)
+    }
+
+    fn binding(namespace: Option<&str>, role: &str, subjects: Vec<Subject>) -> BindingSummary {
+        BindingSummary {
+            namespace: namespace.map(str::to_owned),
+            name: "bind".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            role: RoleRef {
+                kind: RoleKind::ClusterRole,
+                name: role.to_owned(),
+            },
+            subjects,
+        }
+    }
+
+    fn review(binding: BindingSummary) -> Option<KindDiagnosis> {
+        kind_diagnosis(&KindObject::Binding(binding), &storage_inputs())
+    }
+
+    #[test]
+    fn cluster_role_very_broad_names_first_service_account() {
+        let bindings = [binding(
+            None,
+            "super",
+            vec![
+                subject(SubjectKind::User, None, "ana"),
+                account("kube-system", "tiller"),
+                account("shop", "api"),
+            ],
+        )];
+        let index = BindingIndex::build(&BindingLists {
+            role_bindings: &[],
+            cluster_role_bindings: &bindings,
+        });
+        let inputs = DiagnosisInputs {
+            bindings: Some(&index),
+            ..storage_inputs()
+        };
+        let role = wildcard_role(None);
+        let diagnosis = kind_diagnosis(&KindObject::Role(role), &inputs).expect("a box");
+        assert_eq!(diagnosis.tone, StatusTone::Warn);
+        assert_eq!(diagnosis.title, "VERY BROAD");
+        assert_eq!(
+            diagnosis.text,
+            "Grants every verb on every resource. Bound to 3 subjects, including sa kube-system/tiller."
+        );
+    }
+
+    #[test]
+    fn cluster_role_very_broad_counts_a_repeated_subject_once() {
+        let bindings = [
+            binding(None, "super", vec![account("shop", "api")]),
+            binding(Some("shop"), "super", vec![account("shop", "api")]),
+        ];
+        let index = BindingIndex::build(&BindingLists {
+            role_bindings: &bindings[1..],
+            cluster_role_bindings: &bindings[..1],
+        });
+        let inputs = DiagnosisInputs {
+            bindings: Some(&index),
+            ..storage_inputs()
+        };
+        let diagnosis =
+            kind_diagnosis(&KindObject::Role(wildcard_role(None)), &inputs).expect("a box");
+        assert_eq!(
+            diagnosis.text,
+            "Grants every verb on every resource. Bound to 1 subject, including sa shop/api."
+        );
+    }
+
+    #[test]
+    fn cluster_role_very_broad_without_bindings() {
+        let diagnosis = kind_diagnosis(&KindObject::Role(wildcard_role(None)), &storage_inputs())
+            .expect("a box");
+        assert_eq!(diagnosis.text, "Grants every verb on every resource.");
+        // A ready companion with one subject reads singular.
+        let bindings = [binding(
+            None,
+            "super",
+            vec![subject(SubjectKind::User, None, "ana")],
+        )];
+        let index = BindingIndex::build(&BindingLists {
+            role_bindings: &[],
+            cluster_role_bindings: &bindings,
+        });
+        let inputs = DiagnosisInputs {
+            bindings: Some(&index),
+            ..storage_inputs()
+        };
+        let diagnosis =
+            kind_diagnosis(&KindObject::Role(wildcard_role(None)), &inputs).expect("a box");
+        assert_eq!(
+            diagnosis.text,
+            "Grants every verb on every resource. Bound to 1 subject."
+        );
+    }
+
+    #[test]
+    fn role_very_broad_names_namespace() {
+        let diagnosis = kind_diagnosis(
+            &KindObject::Role(wildcard_role(Some("shop"))),
+            &storage_inputs(),
+        )
+        .expect("a box");
+        assert_eq!(
+            diagnosis.text,
+            "Grants every verb on every resource in shop."
+        );
+        let mut narrow = wildcard_role(Some("shop"));
+        narrow.rules[0].verbs = vec!["get".to_owned()];
+        assert_eq!(
+            kind_diagnosis(&KindObject::Role(narrow), &storage_inputs()),
+            None
+        );
+    }
+
+    #[test]
+    fn cluster_binding_review_single_and_many() {
+        let one = review(binding(
+            None,
+            "cluster-admin",
+            vec![account("kube-system", "tiller")],
+        ))
+        .expect("a box");
+        assert_eq!(one.title, "REVIEW");
+        assert_eq!(one.tone, StatusTone::Warn);
+        assert_eq!(
+            one.text,
+            "Service account kube-system/tiller has full access to the cluster. Consider a namespaced Role instead."
+        );
+        let many = review(binding(
+            None,
+            "cluster-admin",
+            vec![account("a", "x"), account("b", "y"), account("c", "z")],
+        ))
+        .expect("a box");
+        assert_eq!(
+            many.text,
+            "3 service accounts, including a/x, have full access to the cluster."
+        );
+    }
+
+    #[test]
+    fn role_binding_review_names_namespace() {
+        let one = review(binding(
+            Some("shop"),
+            "cluster-admin",
+            vec![account("shop", "api")],
+        ))
+        .expect("a box");
+        assert_eq!(
+            one.text,
+            "Service account shop/api has full access to namespace shop. Consider a narrower Role."
+        );
+        let many = review(binding(
+            Some("shop"),
+            "cluster-admin",
+            vec![account("shop", "api"), account("shop", "web")],
+        ))
+        .expect("a box");
+        assert_eq!(
+            many.text,
+            "2 service accounts, including shop/api, have full access to namespace shop."
+        );
+    }
+
+    #[test]
+    fn review_for_broad_groups() {
+        let cases = [
+            (
+                "system:authenticated",
+                StatusTone::Bad,
+                "Group system:authenticated gives every signed-in user and service account full access to the cluster.",
+            ),
+            (
+                "system:unauthenticated",
+                StatusTone::Bad,
+                "Group system:unauthenticated gives anonymous requests full access to the cluster.",
+            ),
+            (
+                "system:serviceaccounts",
+                StatusTone::Warn,
+                "Group system:serviceaccounts gives every service account full access to the cluster.",
+            ),
+            (
+                "system:serviceaccounts:shop",
+                StatusTone::Warn,
+                "Group system:serviceaccounts:shop gives every service account in shop full access to the cluster.",
+            ),
+        ];
+        for (name, tone, text) in cases {
+            let diagnosis =
+                review(binding(None, "cluster-admin", vec![group(name)])).expect("a box");
+            assert_eq!(diagnosis.tone, tone, "{name}");
+            assert_eq!(diagnosis.text, text, "{name}");
+        }
+        // A group is named before a service account, and the worst group wins.
+        let mixed = review(binding(
+            None,
+            "cluster-admin",
+            vec![
+                account("a", "x"),
+                group("system:serviceaccounts"),
+                group("system:authenticated"),
+            ],
+        ))
+        .expect("a box");
+        assert_eq!(mixed.tone, StatusTone::Bad);
+        assert!(
+            mixed.text.starts_with("Group system:authenticated"),
+            "{}",
+            mixed.text
+        );
+        let namespaced = review(binding(
+            Some("shop"),
+            "cluster-admin",
+            vec![group("system:serviceaccounts:shop")],
+        ))
+        .expect("a box");
+        assert!(
+            namespaced.text.ends_with("full access to namespace shop."),
+            "{}",
+            namespaced.text
+        );
+    }
+
+    #[test]
+    fn view_binding_has_no_box() {
+        assert_eq!(review(binding(None, "view", vec![account("a", "x")])), None);
+        assert_eq!(
+            review(binding(
+                None,
+                "cluster-admin",
+                vec![subject(SubjectKind::User, None, "ana")]
+            )),
+            None
+        );
     }
 }

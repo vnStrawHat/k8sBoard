@@ -60,13 +60,15 @@ enum CompanionUpdate { /* … */ RoleBindings(WatchUpdate<BindingSummary>), Clus
 pub(crate) enum CompanionKind { /* … */ Bindings { with_cluster_role_bindings: bool } }
 ```
 
+**Accepted deviations from the first draft** (steps 1–2 review): `role_bindings` is not an `Option` (every Bindings companion runs it), and `CompanionKind::Bindings { with_cluster_role_bindings }` keeps only that flag. A companion that is missing a list its kind needs could never be Ready, so it does not start: `companion_plan` returns `Denied(first denied check)` when any needed list is denied (`denied_binding_checks` lists them all), and the note names every denied list ("Not permitted: list rolebindings, list clusterrolebindings"). `BindingIndex` is keyed by role name only; the Role namespace or ClusterRole scope is checked at lookup, and `bindings_of_role` returns a `Vec`. `role_text` moves to step 3 with `BoundRole`, its first user. Hide system keeps Bad rows visible. The rules table is a `DetailRow::Table` (scrolls sideways) and ClusterRole Bound to rows stack the binding link under the subject.
+
 | Explorer kind | `role_bindings` | `cluster_role_bindings` |
 |---|---|---|
 | Roles | `watch_role_bindings(scope)` | `None` (not needed) |
 | ClusterRoles, ServiceAccounts | `watch_role_bindings(scope)` | `watch_cluster_role_bindings()` |
 
-- Each list is `None` when its check is `Known` denied; `companion_plan` returns `Denied` only when every needed list is denied. The two streams merge with `futures::stream::select` into one subscription.
-- Ready = every needed list is `Some` and `Ready`; a denied list gives "—" cells and the note "Not permitted: list rolebindings" (or clusterrolebindings).
+- `companion_plan` returns `Denied` when any needed list is denied (see the deviations above). The two streams merge with `futures::stream::select` into one subscription.
+- Ready = every list the companion runs is `Ready`; a denied companion gives "—" cells and the note "Not permitted: list rolebindings" (and clusterrolebindings when both are denied).
 - `OpenWatches.companion` = N (+ 1 with ClusterRoleBindings). ServiceAccounts: `2 + N + N + (N + 1) + 1 = 3N + 4`, 19 at N = 5; no related subject for these kinds.
 
 ## Joins (`kind_join.rs`)

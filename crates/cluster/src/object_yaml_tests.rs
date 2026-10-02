@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::*;
 
-const ALL_KINDS: [ObjectKind; 20] = [
+const ALL_KINDS: [ObjectKind; 25] = [
     ObjectKind::Pod,
     ObjectKind::Node,
     ObjectKind::Namespace,
@@ -23,6 +23,11 @@ const ALL_KINDS: [ObjectKind; 20] = [
     ObjectKind::PersistentVolumeClaim,
     ObjectKind::PersistentVolume,
     ObjectKind::StorageClass,
+    ObjectKind::ServiceAccount,
+    ObjectKind::Role,
+    ObjectKind::ClusterRole,
+    ObjectKind::RoleBinding,
+    ObjectKind::ClusterRoleBinding,
 ];
 
 fn masked(object: Value, env: EnvValues) -> ObjectYaml {
@@ -80,6 +85,11 @@ fn object_kind_names_and_scopes() {
         ),
         (ObjectKind::PersistentVolume, "PersistentVolume", false),
         (ObjectKind::StorageClass, "StorageClass", false),
+        (ObjectKind::ServiceAccount, "ServiceAccount", true),
+        (ObjectKind::Role, "Role", true),
+        (ObjectKind::ClusterRole, "ClusterRole", false),
+        (ObjectKind::RoleBinding, "RoleBinding", true),
+        (ObjectKind::ClusterRoleBinding, "ClusterRoleBinding", false),
     ];
     assert_eq!(table.len(), ALL_KINDS.len());
     for (kind, name, is_namespaced) in table {
@@ -90,6 +100,7 @@ fn object_kind_names_and_scopes() {
 
 #[test]
 fn api_resources_match_kinds() {
+    const RBAC: &str = "rbac.authorization.k8s.io";
     let table = [
         (ObjectKind::Pod, "", "v1", "pods"),
         (ObjectKind::Node, "", "v1", "nodes"),
@@ -135,6 +146,16 @@ fn api_resources_match_kinds() {
             "storage.k8s.io",
             "v1",
             "storageclasses",
+        ),
+        (ObjectKind::ServiceAccount, "", "v1", "serviceaccounts"),
+        (ObjectKind::Role, RBAC, "v1", "roles"),
+        (ObjectKind::ClusterRole, RBAC, "v1", "clusterroles"),
+        (ObjectKind::RoleBinding, RBAC, "v1", "rolebindings"),
+        (
+            ObjectKind::ClusterRoleBinding,
+            RBAC,
+            "v1",
+            "clusterrolebindings",
         ),
     ];
     assert_eq!(table.len(), ALL_KINDS.len());
@@ -491,4 +512,32 @@ fn credential_mount_options_are_masked_in_yaml() {
 fn mount_options_of_other_kinds_are_not_masked() {
     let text = masked_text(json!({"kind": "Pod", "mountOptions": ["password=visible"]}));
     assert!(text.contains("password=visible"));
+}
+
+#[test]
+fn access_kinds_have_names_and_scope() {
+    for kind in &ALL_KINDS[20..25] {
+        let is_cluster_wide = matches!(
+            kind,
+            ObjectKind::ClusterRole | ObjectKind::ClusterRoleBinding
+        );
+        assert_eq!(kind.is_namespaced(), !is_cluster_wide, "{}", kind.name());
+    }
+    assert!(ObjectRef::new(ObjectKind::ClusterRole, None, "view".to_owned()).is_some());
+    assert!(
+        ObjectRef::new(
+            ObjectKind::ClusterRoleBinding,
+            Some("shop".to_owned()),
+            "x".to_owned()
+        )
+        .is_none()
+    );
+    assert!(
+        ObjectRef::new(
+            ObjectKind::ServiceAccount,
+            Some("shop".to_owned()),
+            "default".to_owned()
+        )
+        .is_some()
+    );
 }

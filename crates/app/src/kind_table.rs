@@ -258,6 +258,10 @@ impl TableRow for KindTableRow<'_> {
         match preset {
             // A scaled-to-zero set is `Done`.
             FilterPreset::HideInactive => self.row.status.tone != StatusTone::Done,
+            // A failing object is never hidden by a name rule.
+            FilterPreset::HideSystem => {
+                self.row.status.tone == StatusTone::Bad || !self.row.name.starts_with("system:")
+            }
             FilterPreset::Nodes(_) => true,
         }
     }
@@ -792,6 +796,48 @@ mod tests {
         // A kind has no use for a Nodes group.
         let group = FilterPreset::Nodes(crate::node_summary::NodeGroup::Ready);
         assert!(in_preset(&at(StatusTone::Done), &group));
+    }
+
+    #[test]
+    fn hide_system_hides_system_prefix_only() {
+        let named = |name: &str| {
+            let mut row = row(vec![KindCell::Text("1".into())]);
+            row.name = name.to_owned();
+            row
+        };
+        let is_kept = |name: &str| {
+            let row = named(name);
+            KindTableRow {
+                row: &row,
+                name_column: NameColumn::Flexible,
+            }
+            .in_preset(&FilterPreset::HideSystem)
+        };
+        assert!(!is_kept("system:controller:job-controller"));
+        assert!(!is_kept("system:masters"));
+        assert!(is_kept("cluster-admin"));
+        // Only the prefix counts, and only with its colon.
+        assert!(is_kept("my-system:role"));
+        assert!(is_kept("systemic"));
+    }
+
+    #[test]
+    fn hide_system_keeps_bad_rows() {
+        let mut row = row(vec![KindCell::Text("1".into())]);
+        row.name = "system:anonymous-admin".to_owned();
+        let is_kept = |row: &KindRow| {
+            KindTableRow {
+                row,
+                name_column: NameColumn::Flexible,
+            }
+            .in_preset(&FilterPreset::HideSystem)
+        };
+        assert!(!is_kept(&row));
+        // A binding that hands cluster-admin to everyone must stay in sight.
+        row.status.tone = StatusTone::Bad;
+        assert!(is_kept(&row));
+        row.status.tone = StatusTone::Warn;
+        assert!(!is_kept(&row));
     }
 
     #[test]

@@ -12,6 +12,8 @@ use crate::connection::{ClusterConnection, ClusterError};
 use crate::metrics_api::METRICS_GROUP;
 use crate::namespace::NamespaceScope;
 
+const RBAC_GROUP: &str = "rbac.authorization.k8s.io";
+
 /// One permission the UI needs to know about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AccessCheck {
@@ -44,6 +46,11 @@ pub enum AccessCheck {
     ListPersistentVolumeClaims,
     ListPersistentVolumes,
     ListStorageClasses,
+    ListServiceAccounts,
+    ListRoles,
+    ListClusterRoles,
+    ListRoleBindings,
+    ListClusterRoleBindings,
 }
 
 /// The API resource a check asks about.
@@ -57,7 +64,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 29] = [
+    pub const ALL: [AccessCheck; 34] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::CreatePodExec,
@@ -87,6 +94,11 @@ impl AccessCheck {
         Self::ListPersistentVolumeClaims,
         Self::ListPersistentVolumes,
         Self::ListStorageClasses,
+        Self::ListServiceAccounts,
+        Self::ListRoles,
+        Self::ListClusterRoles,
+        Self::ListRoleBindings,
+        Self::ListClusterRoleBindings,
     ];
 
     fn target(self) -> CheckTarget {
@@ -130,6 +142,13 @@ impl AccessCheck {
             Self::ListPersistentVolumeClaims => ("list", "", "persistentvolumeclaims", None, true),
             Self::ListPersistentVolumes => ("list", "", "persistentvolumes", None, false),
             Self::ListStorageClasses => ("list", "storage.k8s.io", "storageclasses", None, false),
+            Self::ListServiceAccounts => ("list", "", "serviceaccounts", None, true),
+            Self::ListRoles => ("list", RBAC_GROUP, "roles", None, true),
+            Self::ListClusterRoles => ("list", RBAC_GROUP, "clusterroles", None, false),
+            Self::ListRoleBindings => ("list", RBAC_GROUP, "rolebindings", None, true),
+            Self::ListClusterRoleBindings => {
+                ("list", RBAC_GROUP, "clusterrolebindings", None, false)
+            }
         };
         CheckTarget {
             verb,
@@ -366,9 +385,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 29);
+        assert_eq!(AccessCheck::ALL.len(), 34);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 29);
+        assert_eq!(distinct.len(), 34);
     }
 
     #[test]
@@ -584,6 +603,11 @@ mod tests {
                 "list persistentvolumeclaims",
                 "list persistentvolumes",
                 "list storageclasses",
+                "list serviceaccounts",
+                "list roles",
+                "list clusterroles",
+                "list rolebindings",
+                "list clusterrolebindings",
             ]
         );
     }
@@ -649,6 +673,44 @@ mod tests {
     }
 
     #[test]
+    fn rbac_checks_use_rbac_group_and_scope() {
+        let expected = [
+            (
+                AccessCheck::ListServiceAccounts,
+                "",
+                "serviceaccounts",
+                Some("team-a"),
+            ),
+            (AccessCheck::ListRoles, RBAC_GROUP, "roles", Some("team-a")),
+            (
+                AccessCheck::ListClusterRoles,
+                RBAC_GROUP,
+                "clusterroles",
+                None,
+            ),
+            (
+                AccessCheck::ListRoleBindings,
+                RBAC_GROUP,
+                "rolebindings",
+                Some("team-a"),
+            ),
+            (
+                AccessCheck::ListClusterRoleBindings,
+                RBAC_GROUP,
+                "clusterrolebindings",
+                None,
+            ),
+        ];
+        for (check, group, resource, namespace) in expected {
+            let attributes = resource_attributes(check, Some("team-a"));
+            assert_eq!(attributes.group.as_deref(), Some(group), "{check}");
+            assert_eq!(attributes.resource.as_deref(), Some(resource), "{check}");
+            assert_eq!(attributes.verb.as_deref(), Some("list"), "{check}");
+            assert_eq!(attributes.namespace.as_deref(), namespace, "{check}");
+        }
+    }
+
+    #[test]
     fn endpoint_slices_check_targets_discovery_group() {
         let attributes = resource_attributes(AccessCheck::ListEndpointSlices, Some("team-a"));
         assert_eq!(attributes.group.as_deref(), Some("discovery.k8s.io"));
@@ -668,7 +730,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 29);
+        assert_eq!(AccessCheck::ALL.len(), 34);
     }
 
     #[test]

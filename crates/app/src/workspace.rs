@@ -245,6 +245,9 @@ impl AppShell {
             Screen::Kind(ResourceKind::ReplicaSets) => {
                 self.render_hide_inactive(toolkit, cx).into_iter().collect()
             }
+            Screen::Kind(ResourceKind::ClusterRoles | ResourceKind::ClusterRoleBindings) => {
+                self.render_hide_system(toolkit, cx).into_iter().collect()
+            }
             Screen::Kind(ResourceKind::Events) => {
                 [self.render_warnings_only(cx), self.render_pause_stream(cx)]
                     .into_iter()
@@ -277,6 +280,26 @@ impl AppShell {
         Some(
             toggle_button("hide-inactive", "Hide inactive", is_on)
                 .tooltip("Hide ReplicaSets scaled to zero")
+                .on_click(cx.listener(move |shell, _, _, cx| shell.set_preset(next.clone(), cx)))
+                .into_any_element(),
+        )
+    }
+
+    /// Objects named `system:*` are hidden while it is on, which is the default.
+    fn render_hide_system(
+        &self,
+        toolkit: Option<&ToolkitState>,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let is_on = toolkit?.preset == Some(FilterPreset::HideSystem);
+        let next = if is_on {
+            None
+        } else {
+            Some(FilterPreset::HideSystem)
+        };
+        Some(
+            toggle_button("hide-system", "Hide system", is_on)
+                .tooltip("Hide objects named system:*")
                 .on_click(cx.listener(move |shell, _, _, cx| shell.set_preset(next.clone(), cx)))
                 .into_any_element(),
         )

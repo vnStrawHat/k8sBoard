@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cluster::{
-    AccessCheck, AccessReport, ClusterConnection, ClusterError, ConfigMapValues, ContextSummary,
-    EndpointSliceSummary, EventFilter, EventSummary, InvolvedObject, JobSummary, Kubeconfig,
-    KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary,
+    AccessCheck, AccessReport, BindingSummary, ClusterConnection, ClusterError, ConfigMapValues,
+    ContextSummary, EndpointSliceSummary, EventFilter, EventSummary, InvolvedObject, JobSummary,
+    Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary,
     PersistentVolumeSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, ServerVersion,
     WatchUpdate,
 };
@@ -143,12 +143,20 @@ struct Companion {
 pub(crate) enum CompanionLists {
     EndpointSlices(LiveList<EndpointSliceSummary>),
     PersistentVolumes(LiveList<PersistentVolumeSummary>),
+    /// `cluster_role_bindings` is `None` for a kind that does not need it (Roles). The companion
+    /// only starts when the access report allows every list its kind needs.
+    Bindings {
+        role_bindings: LiveList<BindingSummary>,
+        cluster_role_bindings: Option<LiveList<BindingSummary>>,
+    },
 }
 
 /// One companion watch update, typed on tokio so one subscription serves every companion.
 enum CompanionUpdate {
     EndpointSlices(WatchUpdate<EndpointSliceSummary>),
     PersistentVolumes(WatchUpdate<PersistentVolumeSummary>),
+    RoleBindings(WatchUpdate<BindingSummary>),
+    ClusterRoleBindings(WatchUpdate<BindingSummary>),
 }
 
 /// Which companion an explorer kind starts.
@@ -156,6 +164,7 @@ enum CompanionUpdate {
 pub(crate) enum CompanionKind {
     EndpointSlices,
     PersistentVolumes,
+    Bindings { with_cluster_role_bindings: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +178,9 @@ pub(crate) enum CompanionPlan {
 /// Which companion `kind` starts, or why not. A review that is still running or failed does not
 /// block it: the watch then shows its own failure.
 pub(crate) fn companion_plan(kind: ResourceKind, access: &AccessState) -> CompanionPlan {
+    if let Some(plan) = bindings_plan(kind, access) {
+        return plan;
+    }
     let (companion, check) = match kind {
         ResourceKind::Services => (
             CompanionKind::EndpointSlices,
@@ -188,11 +200,54 @@ pub(crate) fn companion_plan(kind: ResourceKind, access: &AccessState) -> Compan
     }
 }
 
+/// The lists the Bindings companion of `kind` needs: Roles need the role bindings; ClusterRoles
+/// (and ServiceAccounts) also the cluster role bindings. `None` for a kind without this companion.
+fn bindings_checks(kind: ResourceKind) -> Option<&'static [AccessCheck]> {
+    match kind {
+        ResourceKind::Roles => Some(&[AccessCheck::ListRoleBindings]),
+        ResourceKind::ClusterRoles => Some(&[
+            AccessCheck::ListRoleBindings,
+            AccessCheck::ListClusterRoleBindings,
+        ]),
+        _ => None,
+    }
+}
+
+/// The needed binding lists the access report denies. A companion with a missing list could never
+/// be ready (counts would be wrong), so it does not start while any is denied.
+pub(crate) fn denied_binding_checks(kind: ResourceKind, access: &AccessState) -> Vec<AccessCheck> {
+    let AccessState::Known(report) = access else {
+        return Vec::new();
+    };
+    bindings_checks(kind)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|check| !report.is_allowed(*check))
+        .collect()
+}
+
+fn bindings_plan(kind: ResourceKind, access: &AccessState) -> Option<CompanionPlan> {
+    bindings_checks(kind)?;
+    if let Some(check) = denied_binding_checks(kind, access).first() {
+        return Some(CompanionPlan::Denied(*check));
+    }
+    Some(CompanionPlan::Start(CompanionKind::Bindings {
+        with_cluster_role_bindings: kind != ResourceKind::Roles,
+    }))
+}
+
 impl CompanionLists {
     fn loading_for(kind: CompanionKind) -> Self {
         match kind {
             CompanionKind::EndpointSlices => Self::EndpointSlices(LiveList::Loading),
             CompanionKind::PersistentVolumes => Self::PersistentVolumes(LiveList::Loading),
+            CompanionKind::Bindings {
+                with_cluster_role_bindings,
+            } => Self::Bindings {
+                role_bindings: LiveList::Loading,
+                cluster_role_bindings: with_cluster_role_bindings.then_some(LiveList::Loading),
+            },
         }
     }
 
@@ -205,8 +260,18 @@ impl CompanionLists {
             (Self::PersistentVolumes(list), CompanionUpdate::PersistentVolumes(update)) => {
                 list.apply(update);
             }
-            (Self::EndpointSlices(_), CompanionUpdate::PersistentVolumes(_))
-            | (Self::PersistentVolumes(_), CompanionUpdate::EndpointSlices(_)) => {}
+            (Self::Bindings { role_bindings, .. }, CompanionUpdate::RoleBindings(update)) => {
+                role_bindings.apply(update);
+            }
+            (
+                Self::Bindings {
+                    cluster_role_bindings: Some(list),
+                    ..
+                },
+                CompanionUpdate::ClusterRoleBindings(update),
+            ) => list.apply(update),
+            // A stale update of another companion's kind, or of a list that is not started.
+            _ => {}
         }
     }
 
@@ -214,6 +279,15 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(list) => list.mark_stopped(),
             Self::PersistentVolumes(list) => list.mark_stopped(),
+            Self::Bindings {
+                role_bindings,
+                cluster_role_bindings,
+            } => {
+                role_bindings.mark_stopped();
+                if let Some(list) = cluster_role_bindings {
+                    list.mark_stopped();
+                }
+            }
         }
     }
 
@@ -221,7 +295,7 @@ impl CompanionLists {
     pub(crate) fn endpoint_slices(&self) -> Option<&LiveList<EndpointSliceSummary>> {
         match self {
             Self::EndpointSlices(list) => Some(list),
-            Self::PersistentVolumes(_) => None,
+            Self::PersistentVolumes(_) | Self::Bindings { .. } => None,
         }
     }
 
@@ -229,7 +303,7 @@ impl CompanionLists {
     pub(crate) fn persistent_volumes(&self) -> Option<&LiveList<PersistentVolumeSummary>> {
         match self {
             Self::PersistentVolumes(list) => Some(list),
-            Self::EndpointSlices(_) => None,
+            Self::EndpointSlices(_) | Self::Bindings { .. } => None,
         }
     }
 
@@ -239,6 +313,15 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(list) => list.is_loading(),
             Self::PersistentVolumes(list) => list.is_loading(),
+            Self::Bindings {
+                role_bindings,
+                cluster_role_bindings,
+            } => {
+                role_bindings.is_loading()
+                    || cluster_role_bindings
+                        .as_ref()
+                        .is_some_and(LiveList::is_loading)
+            }
         }
     }
 
@@ -248,6 +331,10 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(_) => namespaces,
             Self::PersistentVolumes(_) => 1,
+            Self::Bindings {
+                cluster_role_bindings,
+                ..
+            } => namespaces + usize::from(cluster_role_bindings.is_some()),
         }
     }
 }
@@ -1515,6 +1602,24 @@ impl Companion {
                 .watch_persistent_volumes()
                 .map(CompanionUpdate::PersistentVolumes)
                 .boxed(),
+            CompanionKind::Bindings {
+                with_cluster_role_bindings,
+            } => {
+                let role_bindings = connection
+                    .watch_role_bindings(scope)
+                    .map(CompanionUpdate::RoleBindings);
+                let cluster_role_bindings = with_cluster_role_bindings.then(|| {
+                    connection
+                        .watch_cluster_role_bindings()
+                        .map(CompanionUpdate::ClusterRoleBindings)
+                });
+                // One subscription serves both lists; an absent one is an empty stream.
+                futures::stream::select(
+                    role_bindings,
+                    futures::stream::iter(cluster_role_bindings).flatten(),
+                )
+                .boxed()
+            }
         };
         let subscription = runtime.subscribe(
             updates,

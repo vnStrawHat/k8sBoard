@@ -5,6 +5,131 @@ use cluster::{
 
 use super::*;
 
+// ---- Bindings ----
+
+fn account_subject(namespace: &str, name: &str) -> cluster::Subject {
+    cluster::Subject {
+        kind: cluster::SubjectKind::ServiceAccount,
+        name: name.to_owned(),
+        namespace: Some(namespace.to_owned()),
+    }
+}
+
+fn binding_named(
+    namespace: Option<&str>,
+    name: &str,
+    role: (cluster::RoleKind, &str),
+    subjects: Vec<cluster::Subject>,
+) -> BindingSummary {
+    BindingSummary {
+        namespace: namespace.map(str::to_owned),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        role: cluster::RoleRef {
+            kind: role.0,
+            name: role.1.to_owned(),
+        },
+        subjects,
+    }
+}
+
+fn plain_role(namespace: Option<&str>, name: &str, grants_everything: bool) -> RoleSummary {
+    let star = || vec!["*".to_owned()];
+    RoleSummary {
+        namespace: namespace.map(str::to_owned),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        rules: if grants_everything {
+            vec![cluster::RbacRule {
+                api_groups: star(),
+                resources: star(),
+                resource_names: Vec::new(),
+                verbs: star(),
+                non_resource_urls: Vec::new(),
+            }]
+        } else {
+            Vec::new()
+        },
+        aggregation: Vec::new(),
+    }
+}
+
+#[test]
+fn role_bindings_rows_link_back() {
+    let bindings = [
+        binding_named(
+            Some("shop"),
+            "zeta",
+            (cluster::RoleKind::Role, "reader"),
+            Vec::new(),
+        ),
+        binding_named(
+            Some("shop"),
+            "alpha",
+            (cluster::RoleKind::Role, "reader"),
+            Vec::new(),
+        ),
+        binding_named(
+            Some("other"),
+            "beta",
+            (cluster::RoleKind::Role, "reader"),
+            Vec::new(),
+        ),
+    ];
+    let index = BindingIndex::build(&crate::access_bindings::BindingLists {
+        role_bindings: &bindings,
+        cluster_role_bindings: &[],
+    });
+    let listed = role_binding_list(&index, &plain_role(Some("shop"), "reader", false));
+    let names: Vec<&str> = listed.iter().map(|binding| binding.name.as_str()).collect();
+    assert_eq!(names, ["alpha", "zeta"]);
+    // Each row links to the binding row, whose drawer links back to the role.
+    assert_eq!(
+        binding_key(listed[0]),
+        ResourceKey::Kind {
+            kind: ResourceKind::RoleBindings,
+            namespace: Some("shop".to_owned()),
+            name: "alpha".to_owned(),
+        }
+    );
+    assert_eq!(binding_text(listed[0]), "rolebinding/alpha");
+}
+
+#[test]
+fn role_subjects_service_accounts_first_with_review() {
+    let bindings = [binding_named(
+        None,
+        "root",
+        (cluster::RoleKind::ClusterRole, "super"),
+        vec![
+            cluster::Subject {
+                kind: cluster::SubjectKind::User,
+                name: "ana".to_owned(),
+                namespace: None,
+            },
+            account_subject("kube-system", "tiller"),
+        ],
+    )];
+    let index = BindingIndex::build(&crate::access_bindings::BindingLists {
+        role_bindings: &[],
+        cluster_role_bindings: &bindings,
+    });
+    let broad = plain_role(None, "super", true);
+    let subjects = role_subjects(&index.bindings_of_role(&broad));
+    let texts: Vec<&str> = subjects.iter().map(|row| row.text.as_str()).collect();
+    assert_eq!(texts, ["sa kube-system/tiller", "user ana"]);
+    assert!(needs_review(&broad, &subjects[0]));
+    assert!(!needs_review(&broad, &subjects[1]));
+    // A narrow role needs no review.
+    assert!(!needs_review(
+        &plain_role(None, "super", false),
+        &subjects[0]
+    ));
+    assert_eq!(binding_key(subjects[0].binding), binding_key(&bindings[0]));
+}
+
 fn at(text: &str) -> jiff::Timestamp {
     text.parse().expect("valid timestamp")
 }

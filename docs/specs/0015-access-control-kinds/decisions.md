@@ -11,7 +11,7 @@
 | 3 | Roles keep their rules in full (groups, resources, resource names, verbs, non-resource URLs) | rules are not secret (user note); resource names are object names |
 | 4 | RBAC matching rules live in the cluster crate: `Subject` namespace defaulting (an SA subject of a RoleBinding without a namespace means the binding's namespace), `BindingSummary::binds_service_account` (direct subject, or groups `system:serviceaccounts` and `system:serviceaccounts:{ns}`), and `Subject::broad_group` | Kubernetes semantics stay in the cluster crate (0005 decision 3); the first two are the authorizer's `appliesTo` rule |
 | 5 | `system:authenticated` and `system:unauthenticated` do not count as binding one service account (Bound roles), but they do count as broad subjects for REVIEW | they bind everyone; listing `system:basic-user` on every SA is noise, while cluster-admin to everyone is the worst case |
-| 6 | "Full access" = a rule with verb `*` on resource `*` in group `*` (`RbacRule::grants_everything`) | the cluster-admin shape; W7 "1 (all)" |
+| 6 | "Full access" = a rule with verb `*` on resource `*` in group `*` and no `resourceNames` (`RbacRule::grants_everything`) | the cluster-admin shape; W7 "1 (all)"; named objects narrow a wildcard rule. Roles that reach full control through `escalate`, `bind`, or `impersonate` are not flagged: that is rule evaluation, which goes to 0023 |
 | 7 | Built-in = label `kubernetes.io/bootstrapping=rbac-defaults` (a label, not an annotation) | the API server marks its default roles this way |
 | 8 | 5 list `AccessCheck`s (ServiceAccounts, Roles, RoleBindings namespaced; ClusterRoles, ClusterRoleBindings cluster-scoped) | 0005 decision 8; UAT RBAC unknown, the probe records it first |
 | 9 | `roleRef.kind` maps explicitly: `Role`, `ClusterRole`, else `RoleKind::Other(String)` (no link, shown as written) | the API rejects other kinds today; an explicit arm keeps a surprise visible instead of guessing |
@@ -26,7 +26,7 @@
 | 13 | **Cloud identity kept** (user decision): the summarizer reads only `eks.amazonaws.com/role-arn`, `iam.gke.io/gcp-service-account`, `azure.workload.identity/client-id`; every other annotation is ignored | identifiers (role ARN, GCP SA email, client id), not credentials; an allowlist keeps the "never read annotations" rule for everything else |
 | 14 | cluster-admin is detected **by name** on bindings and service accounts (`ClusterRole/cluster-admin`); a wildcard role is detected by its rules on the role itself | bindings carry only the role name (README open item 1) |
 | 15 | REVIEW fires for cluster-admin given to a service account or a broad group (`system:serviceaccounts`, `system:serviceaccounts:{ns}`, `system:authenticated`, `system:unauthenticated`); Bad for the last two, else Warn | a group can hand full access to every pod or every caller |
-| 16 | **Hide system** (`FilterPreset::HideSystem`: hides names starting `system:`) on ClusterRoles and ClusterRoleBindings, on by default | W7 list buttons; ~70 `system:` objects on a stock cluster; same pattern as Hide inactive (0009 decision 26) |
+| 16 | **Hide system** (`FilterPreset::HideSystem`: hides names starting `system:`, except rows whose status is Bad, which always stay visible) on ClusterRoles and ClusterRoleBindings, on by default | W7 list buttons; ~70 `system:` objects on a stock cluster; same pattern as Hide inactive (0009 decision 26) |
 | 17 | Links: binding → role and service-account subjects; Role → its RoleBindings; ClusterRole → its bindings; ServiceAccount → bound roles and pods. Menus: bindings gain **Go to role** | W7 "two-way links"; `go_to_item` (0013) |
 | 18 | Column text follows W7: RoleBindings "Role" as `Role/x`; Bound roles as `role/x, clusterrole/y`; subjects as `sa {ns}/{name}`, `user {name}`, `group {name}` | the wireframe; one subject format everywhere |
 | 19 | Rules render as an aligned `Code` table (`apiGroups resources verbs`), at most 200 rules | W7 Roles drawer; long aggregated roles stay bounded |
@@ -44,8 +44,8 @@
 
 | Check | Result |
 |---|---|
-| `list serviceaccounts` / watch line / count | |
-| `list roles` / watch line / count | |
-| `list clusterroles` / watch line / count | |
-| `list rolebindings` / watch line / count | |
-| `list clusterrolebindings` / watch line / count | |
+| `list serviceaccounts` / watch line / count | allowed / `watch service accounts: 1 snapshots, last 98 items, 0 failures` / 98 |
+| `list roles` / watch line / count | allowed / `watch roles: 1 snapshots, last 28 items, 0 failures` / 28 |
+| `list clusterroles` / watch line / count | allowed / `watch cluster roles: 1 snapshots, last 95 items, 0 failures` / 95 |
+| `list rolebindings` / watch line / count | allowed / `watch role bindings: 1 snapshots, last 31 items, 0 failures` / 31 |
+| `list clusterrolebindings` / watch line / count | allowed / `watch cluster role bindings: 1 snapshots, last 82 items, 0 failures` / 82 |

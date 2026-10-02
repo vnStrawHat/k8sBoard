@@ -6,6 +6,7 @@ use cluster::{
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 
+use crate::access_rows::{cluster_role_binding_row, cluster_role_row, role_binding_row, role_row};
 use crate::batch_rows::{cron_job_row, job_row};
 use crate::config_map_rows::config_map_row;
 use crate::event_rows::event_rows;
@@ -41,6 +42,10 @@ pub(crate) enum ResourceKind {
     PersistentVolumeClaims,
     PersistentVolumes,
     StorageClasses,
+    Roles,
+    ClusterRoles,
+    RoleBindings,
+    ClusterRoleBindings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -493,6 +498,87 @@ static STORAGE_CLASSES: KindSpec = KindSpec {
     has_port_forward: false,
 };
 
+static ROLES: KindSpec = KindSpec {
+    label: "Roles",
+    object: ObjectKind::Role,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "role",
+    plural: "roles",
+    badge: "Ro",
+    is_namespaced: true,
+    access_check: AccessCheck::ListRoles,
+    columns: &[
+        column("Rules", 70., Align::Right),
+        column("Bindings", 90., Align::Right),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete role…",
+    has_port_forward: false,
+};
+
+static CLUSTER_ROLES: KindSpec = KindSpec {
+    label: "ClusterRoles",
+    object: ObjectKind::ClusterRole,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "clusterrole",
+    plural: "clusterroles",
+    badge: "Cr",
+    is_namespaced: false,
+    access_check: AccessCheck::ListClusterRoles,
+    columns: &[
+        column("Rules", 90., Align::Right),
+        column("Aggregated", 100., Align::Left),
+        column("Bindings", 90., Align::Right),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete cluster role…",
+    has_port_forward: false,
+};
+
+static ROLE_BINDINGS: KindSpec = KindSpec {
+    label: "RoleBindings",
+    object: ObjectKind::RoleBinding,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "rolebinding",
+    plural: "rolebindings",
+    badge: "Rb",
+    is_namespaced: true,
+    access_check: AccessCheck::ListRoleBindings,
+    columns: &[
+        column("Role", 220., Align::Left),
+        column("Subjects", 300., Align::Left),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete binding…",
+    has_port_forward: false,
+};
+
+static CLUSTER_ROLE_BINDINGS: KindSpec = KindSpec {
+    label: "ClusterRoleBindings",
+    object: ObjectKind::ClusterRoleBinding,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "clusterrolebinding",
+    plural: "clusterrolebindings",
+    badge: "Cb",
+    is_namespaced: false,
+    access_check: AccessCheck::ListClusterRoleBindings,
+    columns: &[
+        column("ClusterRole", 200., Align::Left),
+        column("Subjects", 300., Align::Left),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete binding…",
+    has_port_forward: false,
+};
+
 /// The Name column of a kind that shows it, as wide as its minimum.
 pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left);
 
@@ -507,7 +593,7 @@ pub(crate) fn kind_columns(kind: ResourceKind) -> Vec<KindColumn> {
 }
 
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 18] = [
+    pub(crate) const ALL: [Self; 22] = [
         Self::Namespaces,
         Self::Events,
         Self::Deployments,
@@ -526,6 +612,10 @@ impl ResourceKind {
         Self::PersistentVolumeClaims,
         Self::PersistentVolumes,
         Self::StorageClasses,
+        Self::Roles,
+        Self::ClusterRoles,
+        Self::RoleBindings,
+        Self::ClusterRoleBindings,
     ];
 
     fn spec(self) -> &'static KindSpec {
@@ -548,6 +638,10 @@ impl ResourceKind {
             Self::PersistentVolumeClaims => &PERSISTENT_VOLUME_CLAIMS,
             Self::PersistentVolumes => &PERSISTENT_VOLUMES,
             Self::StorageClasses => &STORAGE_CLASSES,
+            Self::Roles => &ROLES,
+            Self::ClusterRoles => &CLUSTER_ROLES,
+            Self::RoleBindings => &ROLE_BINDINGS,
+            Self::ClusterRoleBindings => &CLUSTER_ROLE_BINDINGS,
         }
     }
 
@@ -641,7 +735,8 @@ impl ResourceKind {
     }
 
     /// The only per-kind `match` over cluster calls: watch, then map to rows on tokio, so the
-    /// main thread only swaps a `Vec`. Cluster-scoped kinds (Namespaces, PVs, StorageClasses) ignore `scope`. Only
+    /// main thread only swaps a `Vec`. Cluster-scoped kinds (Namespaces, PVs, StorageClasses,
+    /// ClusterRoles, ClusterRoleBindings) ignore `scope`. Only
     /// Events reads `events`.
     pub(crate) fn watch_rows(
         self,
@@ -722,6 +817,22 @@ impl ResourceKind {
                 .watch_storage_classes()
                 .map(|update| rows(update, storage_class_row))
                 .boxed(),
+            Self::Roles => connection
+                .watch_roles(scope)
+                .map(|update| rows(update, role_row))
+                .boxed(),
+            Self::ClusterRoles => connection
+                .watch_cluster_roles()
+                .map(|update| rows(update, cluster_role_row))
+                .boxed(),
+            Self::RoleBindings => connection
+                .watch_role_bindings(scope)
+                .map(|update| rows(update, role_binding_row))
+                .boxed(),
+            Self::ClusterRoleBindings => connection
+                .watch_cluster_role_bindings()
+                .map(|update| rows(update, cluster_role_binding_row))
+                .boxed(),
         }
     }
 }
@@ -789,7 +900,9 @@ mod tests {
             [
                 ResourceKind::Namespaces,
                 ResourceKind::PersistentVolumes,
-                ResourceKind::StorageClasses
+                ResourceKind::StorageClasses,
+                ResourceKind::ClusterRoles,
+                ResourceKind::ClusterRoleBindings
             ]
         );
     }

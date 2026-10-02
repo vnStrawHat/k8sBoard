@@ -6,10 +6,11 @@ use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
     ConfigMap, Event, Namespace, Node, PersistentVolume, PersistentVolumeClaim, Pod, ResourceQuota,
-    Service,
+    Service, ServiceAccount,
 };
 use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
+use k8s_openapi::api::rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding};
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::serde::de::DeserializeOwned;
 use kube::Api;
@@ -104,6 +105,23 @@ impl ClusterConnection {
             }
             ObjectKind::StorageClass => {
                 self.count_cluster::<StorageClass>("counting storage classes")
+                    .await
+            }
+            ObjectKind::ServiceAccount => {
+                self.count_namespaced::<ServiceAccount>(scope, "counting service accounts")
+                    .await
+            }
+            ObjectKind::Role => self.count_namespaced::<Role>(scope, "counting roles").await,
+            ObjectKind::ClusterRole => {
+                self.count_cluster::<ClusterRole>("counting cluster roles")
+                    .await
+            }
+            ObjectKind::RoleBinding => {
+                self.count_namespaced::<RoleBinding>(scope, "counting role bindings")
+                    .await
+            }
+            ObjectKind::ClusterRoleBinding => {
+                self.count_cluster::<ClusterRoleBinding>("counting cluster role bindings")
                     .await
             }
         }

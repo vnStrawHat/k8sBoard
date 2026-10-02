@@ -5,14 +5,15 @@
 //! arbitrary text, so nothing here logs them.
 
 use cluster::{
-    BlockCause, ContainerKind, ContainerState, DaemonSetSummary, DeploymentSummary,
-    DisruptionState, HorizontalPodAutoscalerSummary, JobStatus, JobSummary, NodeReadiness,
-    NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary,
-    PodStatus, PodSummary, ResourceQuotaSummary, ServiceSummary, StatusReason, Termination,
-    WorkloadCondition,
+    BindingSummary, BlockCause, BroadGroup, ContainerKind, ContainerState, DaemonSetSummary,
+    DeploymentSummary, DisruptionState, HorizontalPodAutoscalerSummary, JobStatus, JobSummary,
+    NodeReadiness, NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
+    PodDisruptionBudgetSummary, PodStatus, PodSummary, ResourceQuotaSummary, RoleSummary,
+    ServiceSummary, StatusReason, Subject, SubjectKind, Termination, WorkloadCondition,
 };
 use jiff::Timestamp;
 
+use crate::access_bindings::{BindingIndex, BroadAdmin, broad_admin, service_account_text};
 use crate::kind_join::ServiceHealth;
 use crate::kind_row::KindObject;
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
@@ -47,6 +48,8 @@ pub(crate) struct DiagnosisInputs<'a> {
     pub(crate) nodes: &'a [NodeSummary],
     /// Services only: what the pods and endpoint slices say. `pods` then holds the matching pods.
     pub(crate) service: Option<ServiceHealth>,
+    /// ClusterRoles: the bindings of a ready Bindings companion; `None` while it is not ready.
+    pub(crate) bindings: Option<&'a BindingIndex<'a>>,
     pub(crate) now: Timestamp,
 }
 
@@ -66,6 +69,8 @@ pub(crate) fn kind_diagnosis(
         KindObject::ResourceQuota(quota) => resource_quota_diagnosis(quota),
         KindObject::PersistentVolumeClaim(claim) => claim_diagnosis(claim),
         KindObject::PersistentVolume(volume) => volume_diagnosis(volume),
+        KindObject::Role(role) => role_diagnosis(role, inputs.bindings),
+        KindObject::Binding(binding) => binding_diagnosis(binding),
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
@@ -315,6 +320,125 @@ fn reclaim_failure_text(volume: &PersistentVolumeSummary) -> String {
         (Some(text), None) | (None, Some(text)) => text.clone(),
         (None, None) => "The volume could not be reclaimed. Check the Events tab.".to_owned(),
     }
+}
+
+// ---- Access control ----
+
+fn plural_count(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// VERY BROAD: a role with a rule for every verb on every resource. A ClusterRole also says who
+/// holds it once the bindings are known.
+fn role_diagnosis(role: &RoleSummary, bindings: Option<&BindingIndex>) -> Option<KindDiagnosis> {
+    if !role.grants_everything() {
+        return None;
+    }
+    let text = match &role.namespace {
+        Some(namespace) => format!("Grants every verb on every resource in {namespace}."),
+        None => {
+            let mut text = "Grants every verb on every resource.".to_owned();
+            if let Some(bindings) = bindings {
+                text.push_str(&bound_to_text(&bindings.bindings_of_role(role)));
+            }
+            text
+        }
+    };
+    Some(KindDiagnosis {
+        tone: StatusTone::Warn,
+        title: "VERY BROAD".to_owned(),
+        text,
+        pod: None,
+    })
+}
+
+/// ` Bound to 3 subjects, including sa kube-system/tiller.`
+fn bound_to_text(bindings: &[&BindingSummary]) -> String {
+    // The same subject in two bindings is one subject.
+    let mut subjects: Vec<&Subject> = Vec::new();
+    for subject in bindings.iter().flat_map(|binding| &binding.subjects) {
+        if !subjects.contains(&subject) {
+            subjects.push(subject);
+        }
+    }
+    let count = subjects.len();
+    let mut text = format!(" Bound to {}", plural_count(count, "subject", "subjects"));
+    if let Some(account) = subjects
+        .iter()
+        .find(|subject| subject.kind == SubjectKind::ServiceAccount)
+    {
+        text.push_str(&format!(", including sa {}", service_account_text(account)));
+    }
+    text.push('.');
+    text
+}
+
+/// REVIEW: cluster-admin handed to a broad group or to service accounts. A group is checked first
+/// because it reaches the most callers.
+fn binding_diagnosis(binding: &BindingSummary) -> Option<KindDiagnosis> {
+    let admin = broad_admin(binding)?;
+    let place = match &binding.namespace {
+        Some(namespace) => format!("namespace {namespace}"),
+        None => "the cluster".to_owned(),
+    };
+    let groups: Vec<_> = binding
+        .subjects
+        .iter()
+        .filter_map(|subject| Some((subject, subject.broad_group()?)))
+        .collect();
+    let broadest = groups
+        .iter()
+        .find(|(_, group)| {
+            matches!(
+                group,
+                BroadGroup::Authenticated | BroadGroup::Unauthenticated
+            )
+        })
+        .or(groups.first());
+    if let Some((subject, group)) = broadest {
+        let who = match group {
+            BroadGroup::Authenticated => "every signed-in user and service account".to_owned(),
+            BroadGroup::Unauthenticated => "anonymous requests".to_owned(),
+            BroadGroup::AllServiceAccounts => "every service account".to_owned(),
+            BroadGroup::NamespaceServiceAccounts(namespace) => {
+                format!("every service account in {namespace}")
+            }
+        };
+        let tone = match admin {
+            BroadAdmin::Everyone => StatusTone::Bad,
+            BroadAdmin::ServiceAccounts => StatusTone::Warn,
+        };
+        return Some(KindDiagnosis {
+            tone,
+            title: "REVIEW".to_owned(),
+            text: format!("Group {} gives {who} full access to {place}.", subject.name),
+            pod: None,
+        });
+    }
+    let accounts: Vec<String> = binding
+        .subjects
+        .iter()
+        .filter(|subject| subject.kind == SubjectKind::ServiceAccount)
+        .map(service_account_text)
+        .collect();
+    let first = accounts.first()?;
+    let text = match (accounts.len(), &binding.namespace) {
+        (1, Some(_)) => {
+            format!("Service account {first} has full access to {place}. Consider a narrower Role.")
+        }
+        (1, None) => format!(
+            "Service account {first} has full access to {place}. Consider a namespaced Role instead."
+        ),
+        (count, _) => {
+            format!("{count} service accounts, including {first}, have full access to {place}.")
+        }
+    };
+    Some(KindDiagnosis {
+        tone: StatusTone::Warn,
+        title: "REVIEW".to_owned(),
+        text,
+        pod: None,
+    })
 }
 
 // ---- Deployments ----

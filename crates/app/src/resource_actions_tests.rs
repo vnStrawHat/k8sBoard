@@ -472,6 +472,46 @@ fn pvc_go_to_pod_disabled_when_unmounted() {
 }
 
 #[test]
+fn binding_menu_has_go_to_role() {
+    let binding = |namespace: Option<&str>, kind| cluster::BindingSummary {
+        namespace: namespace.map(str::to_owned),
+        name: "bind".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        role: cluster::RoleRef {
+            kind,
+            name: "reader".to_owned(),
+        },
+        subjects: Vec::new(),
+    };
+    let row_of = |binding: &cluster::BindingSummary| match binding.namespace {
+        Some(_) => crate::access_rows::role_binding_row(binding),
+        None => crate::access_rows::cluster_role_binding_row(binding),
+    };
+    let role = binding(Some("shop"), cluster::RoleKind::Role);
+    assert_eq!(
+        binding_role_target(&row_of(&role)),
+        Some(ResourceKey::Kind {
+            kind: ResourceKind::Roles,
+            namespace: Some("shop".to_owned()),
+            name: "reader".to_owned(),
+        })
+    );
+    let cluster_role = binding(None, cluster::RoleKind::ClusterRole);
+    assert_eq!(
+        binding_role_target(&row_of(&cluster_role)),
+        Some(ResourceKey::Kind {
+            kind: ResourceKind::ClusterRoles,
+            namespace: None,
+            name: "reader".to_owned(),
+        })
+    );
+    // A kind k8sBoard has no screen for disables the item.
+    let other = binding(Some("shop"), cluster::RoleKind::Other("Weird".to_owned()));
+    assert_eq!(binding_role_target(&row_of(&other)), None);
+}
+
+#[test]
 fn pv_menu_go_to_claim() {
     let volume = |claim: Option<(&str, &str)>| {
         crate::storage_rows::persistent_volume_row(&cluster::PersistentVolumeSummary {

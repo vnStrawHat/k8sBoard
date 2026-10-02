@@ -1,5 +1,7 @@
 //! k8sBoard desktop application entry point.
 
+mod access_bindings;
+mod access_rows;
 mod age;
 mod app_shell;
 mod batch_rows;

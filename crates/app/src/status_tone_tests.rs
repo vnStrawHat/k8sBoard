@@ -224,9 +224,14 @@ fn container_terminated_exit_zero_is_done_nonzero_is_bad() {
 fn light_theme_text_is_darker_than_the_fill_colour() {
     let green = gpui_kit::hsla(0.38, 0.6, 0.5, 1.);
     let foreground = gpui_kit::hsla(0., 0., 0.05, 1.);
-    let text = readable_on_light(green, foreground);
+    let text = readable_on_light(green, foreground, LIGHT_THEME_TONE_SHARE);
     assert!(text.l < green.l);
     assert!(text.l > foreground.l);
+    // Amber keeps less of its hue, so it ends darker than the same fill at the common share.
+    let amber = gpui_kit::hsla(0.12, 0.8, 0.5, 1.);
+    let common = readable_on_light(amber, foreground, LIGHT_THEME_TONE_SHARE);
+    let warn = readable_on_light(amber, foreground, LIGHT_THEME_WARN_SHARE);
+    assert!(warn.l < common.l);
 }
 
 #[test]

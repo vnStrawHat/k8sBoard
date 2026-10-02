@@ -2,10 +2,10 @@
 //! Row builders (`*_rows.rs`) are pure: they take a summary and produce a `KindRow`.
 
 use cluster::{
-    ConfigMapSummary, ControllerRef, CronJobSummary, CronSchedule, DaemonSetSummary,
-    DeploymentSummary, HorizontalPodAutoscalerSummary, IngressSummary, JobSummary,
-    NetworkPolicySummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
-    PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary,
+    BindingSummary, ConfigMapSummary, ControllerRef, CronJobSummary, CronSchedule,
+    DaemonSetSummary, DeploymentSummary, HorizontalPodAutoscalerSummary, IngressSummary,
+    JobSummary, NetworkPolicySummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
+    PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary,
     ServiceSummary, StatefulSetSummary,
 };
 use gpui_kit::SharedString;
@@ -53,6 +53,10 @@ pub(crate) enum KindObject {
     PodDisruptionBudget(PodDisruptionBudgetSummary),
     PersistentVolumeClaim(PersistentVolumeClaimSummary),
     PersistentVolume(PersistentVolumeSummary),
+    /// A Role or a ClusterRole (`namespace: None`).
+    Role(RoleSummary),
+    /// A RoleBinding or a ClusterRoleBinding (`namespace: None`).
+    Binding(BindingSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -73,6 +77,8 @@ pub(crate) enum LiveContent {
     ClaimUsage,
     MountedBy,
     ClassVolumes,
+    RoleBindings,
+    RoleSubjects,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.
@@ -161,6 +167,8 @@ pub(crate) enum DetailRow {
     },
     /// Preformatted text that wraps: mono, small, on a muted background.
     Code(SharedString),
+    /// Preformatted columns: like `Code`, but long lines scroll sideways instead of wrapping.
+    Table(SharedString),
     /// Content computed at paint time from `KindObject` and the session's live lists.
     Live(LiveContent),
     /// A labelled bar. `percent` is 0 to 100 (builders use `percent`); `tone: None` keeps the

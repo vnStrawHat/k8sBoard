@@ -148,6 +148,18 @@ fn joined_column_indices_name_their_columns() {
         class_columns.get(CLASS_VOLUMES).map(|column| column.name),
         Some("PVs")
     );
+    let role_columns = ResourceKind::Roles.columns();
+    assert_eq!(
+        role_columns.get(ROLE_BINDINGS).map(|column| column.name),
+        Some("Bindings")
+    );
+    let cluster_role_columns = ResourceKind::ClusterRoles.columns();
+    assert_eq!(
+        cluster_role_columns
+            .get(CLUSTER_ROLE_BINDINGS)
+            .map(|column| column.name),
+        Some("Bindings")
+    );
     let claim_columns = ResourceKind::PersistentVolumeClaims.columns();
     assert_eq!(
         claim_columns.get(CLAIM_USED).map(|column| column.name),
@@ -1237,4 +1249,178 @@ fn class_join_ignores_the_endpoint_slice_companion() {
     let slices = CompanionLists::EndpointSlices(ready_list(Vec::new()));
     let rows = joined_classes(&["gp3"], Some(&slices));
     assert_eq!(rows[0].cells[CLASS_VOLUMES], KindCell::Absent);
+}
+
+// ---- Roles and ClusterRoles ----
+
+fn role_of(
+    namespace: Option<&str>,
+    name: &str,
+    rules: Vec<cluster::RbacRule>,
+) -> cluster::RoleSummary {
+    cluster::RoleSummary {
+        namespace: namespace.map(str::to_owned),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        rules,
+        aggregation: Vec::new(),
+    }
+}
+
+fn wildcard_rule() -> cluster::RbacRule {
+    let star = || vec!["*".to_owned()];
+    cluster::RbacRule {
+        api_groups: star(),
+        resources: star(),
+        resource_names: Vec::new(),
+        verbs: star(),
+        non_resource_urls: Vec::new(),
+    }
+}
+
+fn binding_of(
+    namespace: Option<&str>,
+    name: &str,
+    role: (cluster::RoleKind, &str),
+) -> cluster::BindingSummary {
+    cluster::BindingSummary {
+        namespace: namespace.map(str::to_owned),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        role: cluster::RoleRef {
+            kind: role.0,
+            name: role.1.to_owned(),
+        },
+        subjects: Vec::new(),
+    }
+}
+
+fn bindings_companion(
+    role_bindings: LiveList<cluster::BindingSummary>,
+    cluster_role_bindings: Option<LiveList<cluster::BindingSummary>>,
+) -> CompanionLists {
+    CompanionLists::Bindings {
+        role_bindings,
+        cluster_role_bindings,
+    }
+}
+
+fn joined_roles(
+    kind: ResourceKind,
+    roles: &[cluster::RoleSummary],
+    companion: Option<&CompanionLists>,
+) -> Vec<KindRow> {
+    let mut rows: Vec<KindRow> = roles
+        .iter()
+        .map(|role| match kind {
+            ResourceKind::Roles => crate::access_rows::role_row(role),
+            _ => crate::access_rows::cluster_role_row(role),
+        })
+        .collect();
+    let pods = LiveList::Loading;
+    let inputs = JoinInputs {
+        pods: &pods,
+        companion,
+        kubelet: None,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(kind, &mut rows, &inputs);
+    rows
+}
+
+fn count_cell(count: u64, tone: Option<StatusTone>) -> KindCell {
+    KindCell::Quantity {
+        text: count.to_string().into(),
+        value: count,
+        tone,
+    }
+}
+
+#[test]
+fn binding_counts_per_role() {
+    let companion = bindings_companion(
+        ready_list(vec![
+            binding_of(Some("shop"), "a", (cluster::RoleKind::Role, "reader")),
+            binding_of(Some("shop"), "b", (cluster::RoleKind::Role, "reader")),
+            binding_of(Some("other"), "c", (cluster::RoleKind::Role, "reader")),
+            binding_of(Some("shop"), "d", (cluster::RoleKind::ClusterRole, "view")),
+        ]),
+        None,
+    );
+    let roles = [
+        role_of(Some("shop"), "reader", Vec::new()),
+        role_of(Some("shop"), "lonely", Vec::new()),
+    ];
+    let rows = joined_roles(ResourceKind::Roles, &roles, Some(&companion));
+    assert_eq!(rows[0].cells[ROLE_BINDINGS], count_cell(2, None));
+    assert_eq!(rows[1].cells[ROLE_BINDINGS], count_cell(0, None));
+
+    let companion = bindings_companion(
+        ready_list(vec![binding_of(
+            Some("shop"),
+            "d",
+            (cluster::RoleKind::ClusterRole, "view"),
+        )]),
+        Some(ready_list(vec![binding_of(
+            None,
+            "e",
+            (cluster::RoleKind::ClusterRole, "view"),
+        )])),
+    );
+    let rows = joined_roles(
+        ResourceKind::ClusterRoles,
+        &[role_of(None, "view", Vec::new())],
+        Some(&companion),
+    );
+    assert_eq!(rows[0].cells[CLUSTER_ROLE_BINDINGS], count_cell(2, None));
+}
+
+#[test]
+fn wildcard_role_bindings_warn() {
+    let companion = bindings_companion(
+        ready_list(Vec::new()),
+        Some(ready_list(vec![binding_of(
+            None,
+            "root",
+            (cluster::RoleKind::ClusterRole, "super"),
+        )])),
+    );
+    let roles = [
+        role_of(None, "super", vec![wildcard_rule()]),
+        role_of(None, "unbound-super", vec![wildcard_rule()]),
+    ];
+    let rows = joined_roles(ResourceKind::ClusterRoles, &roles, Some(&companion));
+    assert_eq!(
+        rows[0].cells[CLUSTER_ROLE_BINDINGS],
+        count_cell(1, Some(StatusTone::Warn))
+    );
+    // Nothing to warn about when no binding uses the role.
+    assert_eq!(rows[1].cells[CLUSTER_ROLE_BINDINGS], count_cell(0, None));
+}
+
+#[test]
+fn bindings_absent_until_companion_ready() {
+    let roles = [role_of(None, "view", Vec::new())];
+    let rows = joined_roles(ResourceKind::ClusterRoles, &roles, None);
+    assert_eq!(rows[0].cells[CLUSTER_ROLE_BINDINGS], KindCell::Absent);
+    let loading = bindings_companion(ready_list(Vec::new()), Some(LiveList::Loading));
+    let rows = joined_roles(ResourceKind::ClusterRoles, &roles, Some(&loading));
+    assert_eq!(rows[0].cells[CLUSTER_ROLE_BINDINGS], KindCell::Absent);
+    let unrelated = CompanionLists::EndpointSlices(ready_list(Vec::new()));
+    let rows = joined_roles(ResourceKind::ClusterRoles, &roles, Some(&unrelated));
+    assert_eq!(rows[0].cells[CLUSTER_ROLE_BINDINGS], KindCell::Absent);
+}
+
+#[test]
+fn roles_join_without_the_cluster_role_bindings_list() {
+    // Roles run no cluster-wide list, and their count does not need one.
+    let companion = bindings_companion(ready_list(Vec::new()), None);
+    let rows = joined_roles(
+        ResourceKind::Roles,
+        &[role_of(Some("shop"), "reader", Vec::new())],
+        Some(&companion),
+    );
+    assert_eq!(rows[0].cells[ROLE_BINDINGS], count_cell(0, None));
 }

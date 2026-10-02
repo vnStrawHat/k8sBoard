@@ -110,13 +110,20 @@ pub(crate) enum RowCheck {
     All(bool),
 }
 
-/// The filter a screen starts with: ReplicaSets hide the inactive ones (decision 26).
+/// The filter a screen starts with: ReplicaSets hide the inactive ones (decision 26), and
+/// ClusterRoles and ClusterRoleBindings hide the `system:*` objects (0015 decision 16).
 pub(crate) fn default_filter(screen: Screen) -> TableFilter {
     match screen {
         Screen::Kind(ResourceKind::ReplicaSets) => TableFilter {
             preset: Some(FilterPreset::HideInactive),
             ..TableFilter::default()
         },
+        Screen::Kind(ResourceKind::ClusterRoles | ResourceKind::ClusterRoleBindings) => {
+            TableFilter {
+                preset: Some(FilterPreset::HideSystem),
+                ..TableFilter::default()
+            }
+        }
         Screen::Pods | Screen::Nodes | Screen::Kind(_) => TableFilter::default(),
     }
 }

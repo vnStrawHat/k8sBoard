@@ -10,6 +10,7 @@ use cluster::{
     EnvSource, NamespaceScope, PodSummary, PvcUsage, Selector, ServiceSummary, VolumeSource,
 };
 
+use crate::access_bindings::{BindingIndex, ready_binding_lists};
 use crate::cluster_session::{CompanionLists, LiveList};
 use crate::kind_row::{KindCell, KindObject, KindRow, deployment_of_replica_set};
 use crate::kubelet_history::KubeletHistory;
@@ -36,6 +37,9 @@ pub(crate) const NETWORK_POLICY_AFFECTS: usize = 2;
 pub(crate) const CLAIM_USED: usize = 2;
 /// The index of the PVs cell in a StorageClasses row.
 pub(crate) const CLASS_VOLUMES: usize = 5;
+/// The index of the Bindings cell in a Roles row and in a ClusterRoles row.
+pub(crate) const ROLE_BINDINGS: usize = 1;
+pub(crate) const CLUSTER_ROLE_BINDINGS: usize = 2;
 
 const EXTERNAL_NAME: &str = "ExternalName";
 /// Slices of this address type name hosts, not pods; counting them would double a dual-stack
@@ -62,6 +66,8 @@ pub(crate) fn join_rows(kind: ResourceKind, rows: &mut [KindRow], inputs: &JoinI
         ResourceKind::NetworkPolicies => join_network_policies(rows, inputs),
         ResourceKind::PersistentVolumeClaims => join_claims(rows, inputs),
         ResourceKind::StorageClasses => join_classes(rows, inputs),
+        ResourceKind::Roles => join_roles(rows, inputs, ROLE_BINDINGS),
+        ResourceKind::ClusterRoles => join_roles(rows, inputs, CLUSTER_ROLE_BINDINGS),
         _ => {}
     }
 }
@@ -749,6 +755,31 @@ fn join_classes(rows: &mut [KindRow], inputs: &JoinInputs) {
             }
         };
         if let Some(slot) = row.cells.get_mut(CLASS_VOLUMES) {
+            *slot = cell;
+        }
+    }
+}
+
+// ---- Roles and ClusterRoles ----
+
+/// The Bindings cell of each role: how many bindings name it, from the Bindings companion.
+/// `Absent` until the needed lists have loaded, and when one is denied. Warn when a role that
+/// grants everything is bound at all.
+fn join_roles(rows: &mut [KindRow], inputs: &JoinInputs, column: usize) {
+    let index = ready_binding_lists(inputs.companion).map(|lists| BindingIndex::build(&lists));
+    for row in rows {
+        let KindObject::Role(role) = &row.object else {
+            continue;
+        };
+        let cell = index.as_ref().map_or(KindCell::Absent, |index| {
+            let count = index.bindings_of_role(role).len();
+            KindCell::Quantity {
+                text: count.to_string().into(),
+                value: u64::try_from(count).unwrap_or(u64::MAX),
+                tone: (role.grants_everything() && count > 0).then_some(StatusTone::Warn),
+            }
+        });
+        if let Some(slot) = row.cells.get_mut(column) {
             *slot = cell;
         }
     }

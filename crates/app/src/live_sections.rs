@@ -5,10 +5,11 @@
 //! are tested without a window.
 
 use cluster::{
-    ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule, DeploymentSummary,
-    EndpointSliceSummary, EventSummary, JobSummary, NodeSummary, PersistentVolumeClaimSummary,
-    PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary, PvcUsage, ReplicaSetSummary,
-    ResourceQuotaSummary, ServiceSummary, ValuePreview, VolumeSource,
+    BindingSummary, ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule,
+    DeploymentSummary, EndpointSliceSummary, EventSummary, JobSummary, NodeSummary,
+    PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary,
+    PvcUsage, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, ServiceSummary, ValuePreview,
+    VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -18,6 +19,10 @@ use gpui_kit::{
 };
 use jiff::tz::TimeZone;
 
+use crate::access_bindings::{
+    BindingIndex, BindingsStatus, RoleSubject, binding_key, binding_text, bindings_status,
+    role_subjects, subject_text,
+};
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::batch_rows::job_status_label;
@@ -99,6 +104,12 @@ pub(crate) fn live_rows(
         }
         (LiveContent::MountedBy, KindObject::PersistentVolumeClaim(claim)) => {
             mounted_by_rows(claim, live, cx)
+        }
+        (LiveContent::RoleBindings, KindObject::Role(role)) => {
+            role_bindings_rows(kind, role, live, cx)
+        }
+        (LiveContent::RoleSubjects, KindObject::Role(role)) => {
+            role_subjects_rows(kind, role, live, cx)
         }
         // A StorageClass row holds no summary either: its name is the class.
         (LiveContent::ClassVolumes, _) => class_volumes_rows(kind, &row.name, live, cx),
@@ -1532,6 +1543,157 @@ fn namespace_quota_rows(
                 .collect()
         }
     }
+}
+
+// ---- Bindings ----
+
+/// How many bindings or subjects an access-control drawer lists.
+const MAX_LISTED_BINDINGS: usize = 50;
+
+/// The bindings that name `role`, by name.
+fn role_binding_list<'a>(index: &BindingIndex<'a>, role: &RoleSummary) -> Vec<&'a BindingSummary> {
+    let mut bindings = index.bindings_of_role(role);
+    bindings.sort_by(|a, b| a.name.cmp(&b.name));
+    bindings
+}
+
+/// The Warn "review" tag: a service account that holds a role granting everything.
+fn needs_review(role: &RoleSummary, subject: &RoleSubject) -> bool {
+    role.grants_everything() && subject.is_service_account
+}
+
+/// Runs `rows` once the Bindings companion of `kind` is ready; before that, one note says why not.
+fn with_bindings(
+    kind: ResourceKind,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+    rows: impl FnOnce(&BindingIndex) -> Vec<AnyElement>,
+) -> Vec<AnyElement> {
+    match bindings_status(kind, &live.access, live.companion()) {
+        BindingsStatus::Ready(lists) => rows(&BindingIndex::build(&lists)),
+        BindingsStatus::Loading => vec![note("Loading bindings…", cx)],
+        BindingsStatus::Failed(message) => vec![
+            note("Bindings are unavailable", cx),
+            detail_note(message, cx),
+        ],
+        BindingsStatus::Denied(checks) => {
+            let names: Vec<String> = checks.iter().map(ToString::to_string).collect();
+            vec![note(&format!("Not permitted: {}", names.join(", ")), cx)]
+        }
+    }
+}
+
+fn role_bindings_rows(
+    kind: ResourceKind,
+    role: &RoleSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    with_bindings(kind, live, cx, |index| {
+        let bindings = role_binding_list(index, role);
+        if bindings.is_empty() {
+            return vec![note("Not bound", cx)];
+        }
+        let hidden = bindings.len().saturating_sub(MAX_LISTED_BINDINGS);
+        bindings
+            .iter()
+            .take(MAX_LISTED_BINDINGS)
+            .enumerate()
+            .map(|(ix, binding)| binding_element(ix, binding, cx))
+            .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+            .collect()
+    })
+}
+
+/// A binding as a link to its drawer, with who it binds.
+fn binding_element(ix: usize, binding: &BindingSummary, cx: &Context<AppShell>) -> AnyElement {
+    let subjects: Vec<String> = binding.subjects.iter().map(subject_text).collect();
+    let link = link_text(ix, &binding_text(binding).into(), binding_key(binding), cx);
+    // The subjects sit under the link: beside it, a long binding name would be cut to nothing.
+    v_flex()
+        .id(("role-binding", ix))
+        .py_1()
+        .text_sm()
+        .child(link)
+        .child(
+            div()
+                .truncate()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("→ {}", subjects.join(", "))),
+        )
+        .into_any_element()
+}
+
+fn role_subjects_rows(
+    kind: ResourceKind,
+    role: &RoleSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    with_bindings(kind, live, cx, |index| {
+        let subjects = role_subjects(&index.bindings_of_role(role));
+        if subjects.is_empty() {
+            return vec![note("Not bound", cx)];
+        }
+        let hidden = subjects.len().saturating_sub(MAX_LISTED_BINDINGS);
+        subjects
+            .iter()
+            .take(MAX_LISTED_BINDINGS)
+            .enumerate()
+            .map(|(ix, subject)| role_subject_element(ix, subject, needs_review(role, subject), cx))
+            .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+            .chain(std::iter::once(note(
+                &format!("Role bindings from {}", live.scope_label()),
+                cx,
+            )))
+            .collect()
+    })
+}
+
+/// A subject of a ClusterRole, with the binding that gives it the role as a link under it.
+fn role_subject_element(
+    ix: usize,
+    subject: &RoleSubject,
+    is_review: bool,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let binding = binding_text(subject.binding).into();
+    let link = link_text(ix, &binding, binding_key(subject.binding), cx);
+    v_flex()
+        .id(("role-subject", ix))
+        .py_1()
+        .text_sm()
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(theme.mono_font_family.clone())
+                        .child(subject.text.clone()),
+                )
+                .children(is_review.then(|| {
+                    toned_text(
+                        StatusLabel {
+                            text: "review".into(),
+                            tone: StatusTone::Warn,
+                        },
+                        cx,
+                    )
+                    .flex_shrink_0()
+                })),
+        )
+        .child(
+            h_flex()
+                .gap_1()
+                .text_color(theme.muted_foreground)
+                .child(div().flex_shrink_0().child("via"))
+                .child(div().min_w_0().child(link)),
+        )
+        .into_any_element()
 }
 
 // ---- shared ----

@@ -25,6 +25,9 @@ pub(crate) struct StatusLabel {
 /// `mix_oklab`, which computes `self * factor + other * (1 - factor)`, so at 0.6 the tone
 /// moves 40% toward the foreground to reach a readable contrast.
 const LIGHT_THEME_TONE_SHARE: f32 = 0.6;
+/// Amber is the lightest tone, so on white it keeps less of its hue; that gives it the contrast
+/// of the green and the red (about 5.9 : 1) instead of a washed-out olive.
+const LIGHT_THEME_WARN_SHARE: f32 = 0.5;
 
 /// The only place a tone touches the theme, so every status colour comes from one table.
 pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla {
@@ -41,12 +44,16 @@ pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla {
     if theme.is_dark() {
         color
     } else {
-        readable_on_light(color, theme.foreground)
+        let share = match tone {
+            StatusTone::Warn => LIGHT_THEME_WARN_SHARE,
+            _ => LIGHT_THEME_TONE_SHARE,
+        };
+        readable_on_light(color, theme.foreground, share)
     }
 }
 
-fn readable_on_light(color: Hsla, foreground: Hsla) -> Hsla {
-    color.mix_oklab(foreground, LIGHT_THEME_TONE_SHARE)
+fn readable_on_light(color: Hsla, foreground: Hsla, share: f32) -> Hsla {
+    color.mix_oklab(foreground, share)
 }
 
 /// The label text coloured by its tone.

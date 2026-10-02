@@ -8,10 +8,12 @@ use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
+    AnyElement, App, Context, Div, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity,
+    div,
 };
 
+use crate::access_bindings::{BindingIndex, ready_binding_lists};
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::{ClusterSession, CompanionLists, LiveCluster};
@@ -132,7 +134,9 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::HorizontalPodAutoscaler(_)
         | KindObject::ResourceQuota(_)
         | KindObject::PersistentVolumeClaim(_)
-        | KindObject::PersistentVolume(_) => None,
+        | KindObject::PersistentVolume(_)
+        | KindObject::Role(_)
+        | KindObject::Binding(_) => None,
     }
 }
 
@@ -251,12 +255,21 @@ fn row_diagnosis(row: &KindRow, live: &LiveCluster, now: jiff::Timestamp) -> Opt
         }
         _ => (owned_pods(row, live), None),
     };
+    // Only a ClusterRole that grants everything names its subjects; the index is built for it alone.
+    let lists = match &row.object {
+        KindObject::Role(role) if role.namespace.is_none() && role.grants_everything() => {
+            ready_binding_lists(live.companion())
+        }
+        _ => None,
+    };
+    let bindings = lists.as_ref().map(BindingIndex::build);
     kind_diagnosis(
         &row.object,
         &DiagnosisInputs {
             pods: pods.as_deref(),
             nodes: live.nodes.items(),
             service,
+            bindings: bindings.as_ref(),
             now,
         },
     )
@@ -331,6 +344,7 @@ fn detail_element(
             .child(text.clone())
             .into_any_element(),
         DetailRow::Code(text) => code_block(text, cx),
+        DetailRow::Table(text) => table_block(text, id, cx),
         DetailRow::Link {
             label,
             text,
@@ -382,6 +396,20 @@ pub(crate) fn bar_row(
 
 /// Preformatted text that wraps, such as an event message.
 fn code_block(text: &SharedString, cx: &App) -> AnyElement {
+    code_base(text, cx).into_any_element()
+}
+
+/// A text table whose long lines scroll sideways instead of wrapping, which would break the
+/// column alignment.
+fn table_block(text: &SharedString, id: usize, cx: &App) -> AnyElement {
+    code_base(text, cx)
+        .id(("table", id))
+        .overflow_x_scroll()
+        .whitespace_nowrap()
+        .into_any_element()
+}
+
+fn code_base(text: &SharedString, cx: &App) -> Div {
     let theme = cx.theme();
     div()
         .w_full()
@@ -393,7 +421,6 @@ fn code_block(text: &SharedString, cx: &App) -> AnyElement {
         .font_family(theme.mono_font_family.clone())
         .text_xs()
         .child(text.clone())
-        .into_any_element()
 }
 
 /// The label above its value, for labels that do not fit the label column.

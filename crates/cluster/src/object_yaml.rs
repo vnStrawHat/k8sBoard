@@ -8,10 +8,11 @@ use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
     ConfigMap, Event, Namespace, Node, PersistentVolume, PersistentVolumeClaim, Pod, ResourceQuota,
-    Service,
+    Service, ServiceAccount,
 };
 use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
+use k8s_openapi::api::rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding};
 use k8s_openapi::api::storage::v1::StorageClass;
 use kube::Api;
 use kube::api::{ApiResource, DynamicObject};
@@ -57,6 +58,11 @@ pub enum ObjectKind {
     PersistentVolumeClaim,
     PersistentVolume,
     StorageClass,
+    ServiceAccount,
+    Role,
+    ClusterRole,
+    RoleBinding,
+    ClusterRoleBinding,
 }
 
 impl ObjectKind {
@@ -83,13 +89,23 @@ impl ObjectKind {
             Self::PersistentVolumeClaim => "PersistentVolumeClaim",
             Self::PersistentVolume => "PersistentVolume",
             Self::StorageClass => "StorageClass",
+            Self::ServiceAccount => "ServiceAccount",
+            Self::Role => "Role",
+            Self::ClusterRole => "ClusterRole",
+            Self::RoleBinding => "RoleBinding",
+            Self::ClusterRoleBinding => "ClusterRoleBinding",
         }
     }
 
     pub fn is_namespaced(self) -> bool {
         !matches!(
             self,
-            Self::Node | Self::Namespace | Self::PersistentVolume | Self::StorageClass
+            Self::Node
+                | Self::Namespace
+                | Self::PersistentVolume
+                | Self::StorageClass
+                | Self::ClusterRole
+                | Self::ClusterRoleBinding
         )
     }
 }
@@ -174,6 +190,11 @@ fn api_resource(kind: ObjectKind) -> ApiResource {
         ObjectKind::PersistentVolumeClaim => ApiResource::erase::<PersistentVolumeClaim>(&()),
         ObjectKind::PersistentVolume => ApiResource::erase::<PersistentVolume>(&()),
         ObjectKind::StorageClass => ApiResource::erase::<StorageClass>(&()),
+        ObjectKind::ServiceAccount => ApiResource::erase::<ServiceAccount>(&()),
+        ObjectKind::Role => ApiResource::erase::<Role>(&()),
+        ObjectKind::ClusterRole => ApiResource::erase::<ClusterRole>(&()),
+        ObjectKind::RoleBinding => ApiResource::erase::<RoleBinding>(&()),
+        ObjectKind::ClusterRoleBinding => ApiResource::erase::<ClusterRoleBinding>(&()),
     }
 }
 
