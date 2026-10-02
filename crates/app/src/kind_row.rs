@@ -2,12 +2,12 @@
 //! Row builders (`*_rows.rs`) are pure: they take a summary and produce a `KindRow`.
 
 use cluster::{
-    BindingSummary, ConfigMapSummary, ControllerRef, CronJobSummary, CronSchedule,
-    DaemonSetSummary, DeploymentSummary, HelmReleaseSummary, HorizontalPodAutoscalerSummary,
-    IngressSummary, JobSummary, NetworkPolicySummary, PersistentVolumeClaimSummary,
-    PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary,
-    ResourceQuotaSummary, RoleSummary, SecretSummary, ServiceAccountSummary, ServiceSummary,
-    StatefulSetSummary,
+    BindingSummary, ConfigMapSummary, ControllerRef, CrdSummary, CronJobSummary, CronSchedule,
+    CustomObjectSummary, DaemonSetSummary, DeploymentSummary, HelmReleaseSummary,
+    HorizontalPodAutoscalerSummary, IngressSummary, JobSummary, NetworkPolicySummary,
+    PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary,
+    ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, SecretSummary, ServiceAccountSummary,
+    ServiceSummary, StatefulSetSummary,
 };
 use gpui_kit::SharedString;
 
@@ -63,6 +63,10 @@ pub(crate) enum KindObject {
     Secret(SecretSummary),
     /// A Helm release: names, numbers, and chart facts, never a value.
     HelmRelease(HelmReleaseSummary),
+    /// A custom resource definition: names, versions, and schema field names, no instance data.
+    Crd(CrdSummary),
+    /// An object of a custom resource: metadata, masked column values, conditions, never a raw value.
+    Custom(CustomObjectSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -160,6 +164,20 @@ pub(crate) enum KindCell {
     Expiry {
         not_after: jiff::Timestamp,
     },
+    /// A printer-column date, painted at render: `5d` in the past, `in 6d` in the future. Sorts by
+    /// time.
+    Date {
+        at: jiff::Timestamp,
+        rule: DateRule,
+    },
+}
+
+/// How a `KindCell::Date` is toned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DateRule {
+    Plain,
+    /// Warn within 14 days and Bad once past, like the TLS expiry; no tone otherwise.
+    Expiry,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -21,7 +21,8 @@ Options:
   --theme light|dark     colour theme (default: follow the system)
   --screen pods|nodes|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
-           services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest
+           services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
+           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]
                          screen to open (default: pods)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
@@ -46,6 +47,14 @@ pub(crate) enum LaunchScreen {
     Kind(ResourceKind),
     /// `--screen <plural>-drawer|<plural>-events|<plural>-yaml`: the kind's first row selected, on that tab.
     KindDrawer(ResourceKind, DrawerTab),
+    /// `--screen custom:<crd-name>[-drawer|-events|-yaml]`: a custom kind, known only once the CRD
+    /// list has loaded. The shell resolves it to `Kind` or `KindDrawer`, and the first row is
+    /// selected when a tab is given.
+    Custom {
+        // ponytail: leaked so the request stays `Copy`; one command-line argument per run.
+        crd_name: &'static str,
+        tab: Option<DrawerTab>,
+    },
 }
 
 impl LaunchScreen {
@@ -57,6 +66,9 @@ impl LaunchScreen {
             | Self::LogsDock
             | Self::LogsZoomed
             | Self::PodsSelected => Screen::Pods,
+            // The sidebar group of Custom Resources starts open; the shell then resolves the kind
+            // against the CRD list.
+            Self::Custom { .. } => Screen::Kind(ResourceKind::Crds),
             Self::Nodes | Self::NodeDrawer(_) | Self::NodesSelected => Screen::Nodes,
             Self::Kind(kind) | Self::KindDrawer(kind, _) => Screen::Kind(kind),
         }
@@ -66,7 +78,10 @@ impl LaunchScreen {
     pub(crate) fn has_drawer(self) -> bool {
         matches!(
             self,
-            Self::PodDrawer(_) | Self::NodeDrawer(_) | Self::KindDrawer(..)
+            Self::PodDrawer(_)
+                | Self::NodeDrawer(_)
+                | Self::KindDrawer(..)
+                | Self::Custom { tab: Some(_), .. }
         )
     }
 
@@ -74,6 +89,7 @@ impl LaunchScreen {
     pub(crate) fn drawer_tab(self) -> Option<DrawerTab> {
         match self {
             Self::PodDrawer(tab) | Self::NodeDrawer(tab) | Self::KindDrawer(_, tab) => Some(tab),
+            Self::Custom { tab, .. } => tab,
             _ => None,
         }
     }
@@ -255,6 +271,10 @@ pub(crate) fn parse_launch_options(
             "--theme" => options.theme = Some(parse_theme(&value()?)?),
             "--screen" => {
                 let text = value()?;
+                if let Some(custom) = parse_custom(&text) {
+                    options.screen = custom;
+                    continue;
+                }
                 options.screen = LaunchScreen::parse(&text)
                     .ok_or_else(|| format!("invalid value '{text}' for --screen"))?;
             }
@@ -263,6 +283,24 @@ pub(crate) fn parse_launch_options(
         }
     }
     Ok(LaunchRequest::Run(options))
+}
+
+/// `custom:<crd-name>` with an optional `-drawer`, `-events`, or `-yaml` suffix, which is stripped
+/// first so CRD names keep their dashes. `None` for any other `--screen` value.
+fn parse_custom(text: &str) -> Option<LaunchScreen> {
+    let spec = text.strip_prefix("custom:")?;
+    let (name, tab) = [
+        ("-drawer", DrawerTab::Overview),
+        ("-events", DrawerTab::Events),
+        ("-yaml", DrawerTab::Yaml),
+    ]
+    .into_iter()
+    .find_map(|(suffix, tab)| Some((spec.strip_suffix(suffix)?, Some(tab))))
+    .unwrap_or((spec, None));
+    Some(LaunchScreen::Custom {
+        crd_name: name.to_owned().leak(),
+        tab,
+    })
 }
 
 /// `a` or `a,b,c`: the namespaces to show. Empty parts are ignored.

@@ -228,9 +228,18 @@ async fn capture_when_settled(
     let mut waited = Duration::ZERO;
     let mut is_settled = false;
     while waited < SETTLE_TIMEOUT {
-        is_settled = shell.update(cx, |shell, cx| {
-            is_screen_settled(request.screen, &shell.settle_input(cx))
+        let (failure, settled) = shell.update(cx, |shell, cx| {
+            let failure = shell.launch_failure().map(str::to_owned);
+            (
+                failure,
+                is_screen_settled(request.screen, &shell.settle_input(cx)),
+            )
         });
+        // A request for a CRD that does not exist captures nothing: the fallback is not the target.
+        if let Some(message) = failure {
+            anyhow::bail!(message);
+        }
+        is_settled = settled;
         if is_settled {
             break;
         }

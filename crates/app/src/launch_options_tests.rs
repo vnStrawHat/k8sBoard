@@ -358,3 +358,72 @@ fn values_slug_rejected_for_other_kinds() {
     assert!(parse(&["--screen", "deployments-manifest"]).is_err());
     assert!(parse(&["--screen", "pods-values"]).is_err());
 }
+
+#[test]
+fn crds_slugs_parse_through_plural() {
+    let screen = |name| run_options(&["--screen", name]).screen;
+    assert_eq!(
+        screen("customresourcedefinitions"),
+        LaunchScreen::Kind(ResourceKind::Crds)
+    );
+    for (name, tab) in [
+        ("customresourcedefinitions-drawer", DrawerTab::Overview),
+        ("customresourcedefinitions-events", DrawerTab::Events),
+        ("customresourcedefinitions-yaml", DrawerTab::Yaml),
+    ] {
+        assert_eq!(
+            screen(name),
+            LaunchScreen::KindDrawer(ResourceKind::Crds, tab),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn parses_custom_screen_with_suffixes() {
+    for (text, tab) in [
+        ("custom:certificates.cert-manager.io", None),
+        (
+            "custom:certificates.cert-manager.io-drawer",
+            Some(DrawerTab::Overview),
+        ),
+        (
+            "custom:certificates.cert-manager.io-events",
+            Some(DrawerTab::Events),
+        ),
+        (
+            "custom:certificates.cert-manager.io-yaml",
+            Some(DrawerTab::Yaml),
+        ),
+    ] {
+        let options = run_options(&["--screen", text]);
+        let expected = LaunchScreen::Custom {
+            crd_name: "certificates.cert-manager.io",
+            tab,
+        };
+        assert_eq!(options.screen, expected, "{text}");
+        assert_eq!(options.screen.has_drawer(), tab.is_some(), "{text}");
+        // Until the CRD list resolves it, the launch shows the CRDs screen.
+        assert_eq!(options.screen.screen(), Screen::Kind(ResourceKind::Crds));
+    }
+}
+
+#[test]
+fn custom_names_with_dashes_keep_their_dashes() {
+    let yaml = run_options(&["--screen", "custom:kafka-topics.kafka.strimzi.io-yaml"]);
+    assert_eq!(
+        yaml.screen,
+        LaunchScreen::Custom {
+            crd_name: "kafka-topics.kafka.strimzi.io",
+            tab: Some(DrawerTab::Yaml)
+        }
+    );
+    let plain = run_options(&["--screen", "custom:kafka-topics.kafka.strimzi.io"]);
+    assert_eq!(
+        plain.screen,
+        LaunchScreen::Custom {
+            crd_name: "kafka-topics.kafka.strimzi.io",
+            tab: None
+        }
+    );
+}

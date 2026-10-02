@@ -19,6 +19,7 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_session::{ClusterSession, CompanionLists, LiveCluster};
+use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
     drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, helm_body, link_text, menu_button,
@@ -146,7 +147,9 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::Binding(_)
         | KindObject::ServiceAccount(_)
         | KindObject::Secret(_)
-        | KindObject::HelmRelease(_) => None,
+        | KindObject::HelmRelease(_)
+        | KindObject::Crd(_)
+        | KindObject::Custom(_) => None,
     }
 }
 
@@ -629,6 +632,16 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
         KindCell::Expiry { not_after } => toned_text(expiry_label(*not_after, now), cx)
             .truncate()
             .into_any_element(),
+        KindCell::Date { at, rule } => {
+            let text = div()
+                .truncate()
+                .child(format!("{at} ({})", date_text(*at, now)));
+            match date_tone(*rule, *at, now) {
+                Some(tone) => text.text_color(tone_color(tone, cx)),
+                None => text,
+            }
+            .into_any_element()
+        }
         KindCell::Absent => absent_text(cx).into_any_element(),
         KindCell::NextRun(schedule) => match next_run_text(schedule, now) {
             Some(text) => div().truncate().child(text).into_any_element(),

@@ -24,6 +24,7 @@ use crate::cluster_session::{
     ClusterSession, CountTrigger, FlowState, LiveCluster, LiveList, RelatedList,
     denied_related_check, error_text,
 };
+use crate::custom_kind::CustomKind;
 use crate::drawer::{
     ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab, MonitorCache, MonitorKey,
     MonitorRange, MonitorScope, MonitorState, drawer_tabs, shown_tab,
@@ -109,6 +110,42 @@ enum KubeconfigState {
     Failed(String),
 }
 
+/// A `--screen custom:<crd-name>` request that has not met its CRD list yet.
+struct CustomLaunch {
+    crd_name: &'static str,
+    /// The drawer tab to open on the first row; `None` opens the list only.
+    tab: Option<DrawerTab>,
+}
+
+/// The kind a `--screen custom:` request names, or the failure text of a request whose CRD is not
+/// Established. An interactive run falls back to the CRDs screen; a screenshot run fails with it.
+fn resolve_custom_launch(kinds: &[CustomKind], crd_name: &str) -> Result<CustomKind, String> {
+    kinds
+        .iter()
+        .find(|kind| kind.crd_name() == crd_name)
+        .copied()
+        .ok_or_else(|| format!("no Established CRD named {crd_name}"))
+}
+
+/// The screen that replaces a shown custom kind after the CRD list changed: the kind with the
+/// same CRD name when its definition changed (a new kind), else the CRDs screen when the CRD is
+/// gone. `None` while the shown kind is still served as it is, or when no custom kind is shown.
+pub(crate) fn remapped_screen(screen: Screen, kinds: &[CustomKind]) -> Option<Screen> {
+    let Screen::Kind(ResourceKind::Custom(shown)) = screen else {
+        return None;
+    };
+    if kinds.contains(&shown) {
+        return None;
+    }
+    let replacement = kinds
+        .iter()
+        .find(|kind| kind.crd_name() == shown.crd_name());
+    Some(Screen::Kind(match replacement {
+        Some(kind) => ResourceKind::Custom(*kind),
+        None => ResourceKind::Crds,
+    }))
+}
+
 /// The drawer watches that start once the selection has rested. Dropping it cancels the timer.
 #[derive(Default)]
 struct PendingSubjects {
@@ -176,6 +213,11 @@ pub(crate) struct AppShell {
     pending_launch_screen: Option<LaunchScreen>,
     /// `--select`: the row that request opens instead of the first one.
     launch_select: Option<String>,
+    /// `--screen custom:<crd-name>`: waits for the CRD list, then opens the kind.
+    pending_custom_launch: Option<CustomLaunch>,
+    /// Why a `--screen custom:` request found no kind; a screenshot run fails with it.
+    #[cfg(feature = "screenshot")]
+    launch_failure: Option<String>,
     requested: RequestedStart,
     /// The `/` input. Its text belongs to the screen in `quick_filter_screen`.
     quick_filter: Entity<InputState>,
@@ -302,11 +344,19 @@ impl AppShell {
             pending_reveal: None,
             log_dock,
             dock_split,
+            // A custom launch resolves against the CRD list first, then sets this.
             pending_launch_screen: (options.screen.has_drawer()
                 || options.screen.has_log_dock()
                 || options.screen.checks_rows())
-            .then_some(options.screen),
+            .then_some(options.screen)
+            .filter(|screen| !matches!(screen, LaunchScreen::Custom { .. })),
             launch_select,
+            pending_custom_launch: match options.screen {
+                LaunchScreen::Custom { crd_name, tab } => Some(CustomLaunch { crd_name, tab }),
+                _ => None,
+            },
+            #[cfg(feature = "screenshot")]
+            launch_failure: None,
             requested: RequestedStart {
                 context: options.context,
                 namespace: options.namespace,
@@ -389,7 +439,14 @@ impl AppShell {
         let is_switch = self.session.is_some();
         self.close_drawer(cx);
         self.log_dock.update(cx, |dock, cx| dock.close_all(cx));
-        let session = cx.new(|cx| ClusterSession::new(kubeconfig, summary, namespace, kind, cx));
+        // The definitions seen so far move on, so a context switch reuses them (decision 16).
+        let cache = self
+            .session
+            .as_ref()
+            .map(|session| session.update(cx, |session, _| session.take_custom_kind_cache()))
+            .unwrap_or_default();
+        let session =
+            cx.new(|cx| ClusterSession::new(kubeconfig, summary, namespace, kind, cache, cx));
         self._session_observer = Some(cx.observe(&session, |shell, _, cx| {
             shell.on_session_changed(cx);
         }));
@@ -1287,12 +1344,68 @@ impl AppShell {
     }
 
     fn on_session_changed(&mut self, cx: &mut Context<Self>) {
+        self.apply_pending_custom_launch(cx);
+        self.follow_custom_kinds(cx);
         self.rebuild_visible_view(cx, |_| {});
         self.apply_pending_launch_screen(cx);
         self.apply_pending_reveal(cx);
         self.sync_selection(cx);
         self.follow_drawer_subjects(cx);
         cx.notify();
+    }
+
+    /// Once the CRD list has loaded, opens the kind a `--screen custom:` request names, and hands
+    /// the drawer part to the launch machinery of the kind screens. A CRD that is not Established
+    /// is logged and the CRDs screen opens instead.
+    fn apply_pending_custom_launch(&mut self, cx: &mut Context<Self>) {
+        let Some(launch) = &self.pending_custom_launch else {
+            return;
+        };
+        let Some(live) = self.live(cx) else {
+            return;
+        };
+        // Without a CRD watch a denied list can never load, so the request is not found.
+        let found = match live.crds.as_ref() {
+            Some(crds) if !crds.list.is_loading() => {
+                resolve_custom_launch(&crds.kinds, launch.crd_name)
+            }
+            None if live.is_crds_denied() => resolve_custom_launch(&[], launch.crd_name),
+            Some(_) | None => return,
+        };
+        let tab = launch.tab;
+        self.pending_custom_launch = None;
+        let kind = match found {
+            Ok(kind) => ResourceKind::Custom(kind),
+            Err(message) => {
+                tracing::error!(%message, "custom launch failed");
+                #[cfg(feature = "screenshot")]
+                {
+                    self.launch_failure = Some(message);
+                }
+                self.show_screen(Screen::Kind(ResourceKind::Crds), cx);
+                return;
+            }
+        };
+        self.show_screen(Screen::Kind(kind), cx);
+        if let Some(tab) = tab {
+            self.drawer.tab = tab;
+            self.pending_launch_screen = Some(LaunchScreen::KindDrawer(kind, tab));
+        }
+    }
+
+    /// Follows the shown custom kind through a change of the CRD list (`remapped_screen`). Waits for
+    /// the first snapshot, so a context switch does not drop the screen before the kinds are known.
+    fn follow_custom_kinds(&mut self, cx: &mut Context<Self>) {
+        let Some(crds) = self.live(cx).and_then(|live| live.crds.as_ref()) else {
+            return;
+        };
+        if crds.list.ready_count().is_none() {
+            return;
+        }
+        let Some(next) = remapped_screen(self.screen, &crds.kinds) else {
+            return;
+        };
+        self.show_screen(next, cx);
     }
 
     /// The item shown at `row` of `table`.
@@ -1549,6 +1662,13 @@ impl AppShell {
         });
     }
 
+    /// The failure of a `--screen custom:` request, which a screenshot run reports instead of
+    /// capturing the fallback screen.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn launch_failure(&self) -> Option<&str> {
+        self.launch_failure.as_deref()
+    }
+
     /// What the screenshot hook inspects to know when the screen shows its target.
     #[cfg(feature = "screenshot")]
     pub(crate) fn settle_input(&self, cx: &App) -> SettleInput {
@@ -1578,6 +1698,7 @@ impl AppShell {
                     if has_failed {
                         TargetState::Unavailable
                     } else if is_loading
+                        || self.pending_custom_launch.is_some()
                         || live.kind_counts().is_running()
                         || (matches!(self.screen, Screen::Kind(_)) && live.is_join_loading())
                     {

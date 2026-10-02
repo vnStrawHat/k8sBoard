@@ -60,7 +60,7 @@ impl ResourceKind {
 }
 ```
 
-- `CRDS` static: label `CRDs`, object `ObjectKind::CustomResourceDefinition`, access `ListCustomResourceDefinitions`, singular/plural `customresourcedefinition`/`customresourcedefinitions`, badge `Cd`, cluster-scoped, `has_labels: true`, delete `Delete CRD…`; columns in [tables-and-drawers.md](tables-and-drawers.md). Appended last to `ALL`. Custom kinds are never in `ALL`.
+- `CRDS` static: label `CRDs`, object `ObjectKind::CustomResourceDefinition`, access `ListCustomResourceDefinitions`, singular/plural `customresourcedefinition`/`customresourcedefinitions`, badge `Cd`, cluster-scoped, `has_labels: false` (a CRD summary holds no labels), delete `Delete CRD…`; columns in [tables-and-drawers.md](tables-and-drawers.md). Appended last to `ALL`. Custom kinds are never in `ALL`.
 - Every builtin static: `object: X, access_check: Y` → `api: KindApi::Builtin { object: X, access_check: Y }`.
 - `Custom` arm of `watch_rows`: `watch_custom_objects(custom.resource(), custom.printer_columns(), scope)` mapped by `rows(update, |summary| custom_object_row(custom, summary))`; `rows` takes `impl Fn(&T) -> KindRow`.
 - Callers: `yaml_view::object_ref` → `kind.object_ref(..)`; navigation, menus, and 0012 counts use `access_check()` as `Option` (custom kinds: see the gate); counts use `builtin_object()`.

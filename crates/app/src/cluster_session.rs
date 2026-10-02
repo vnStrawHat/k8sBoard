@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cluster::{
-    AccessCheck, AccessReport, BindingSummary, ClusterConnection, ClusterError, ConfigMapValues,
-    ContextSummary, EndpointSliceSummary, EventFilter, EventSummary, HelmRevision, IngressSummary,
-    InvolvedObject, JobSummary, Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope,
-    NamespaceSummary, NodeSummary, PersistentVolumeSummary, PodSummary, ReplicaSetSummary,
-    ResourceQuotaSummary, SecretSummary, ServerVersion, WatchUpdate,
+    AccessCheck, AccessDecision, AccessReport, BindingSummary, ClusterConnection, ClusterError,
+    ConfigMapValues, ContextSummary, CrdSummary, EndpointSliceSummary, EventFilter, EventSummary,
+    HelmRevision, IngressSummary, InvolvedObject, JobSummary, Kubeconfig, KubeletTargets,
+    NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, PersistentVolumeSummary,
+    PodSummary, ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
@@ -18,6 +18,8 @@ use crate::cluster_metrics::{
     ClusterMetrics, NodesGate, PodReview, PodReviewResult, PodsGate, nodes_gate, pods_gate,
 };
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
+use crate::crd_rows::crd_row;
+use crate::custom_kind::{CustomKind, CustomKindCache, custom_kinds};
 use crate::event_rows::newest_first;
 use crate::kind_join::{JoinInputs, join_rows};
 use crate::kind_row::KindRow;
@@ -37,6 +39,8 @@ pub(crate) struct ClusterSession {
     /// Which events the Events screen asks the server for. Kept across Connecting and retry like
     /// `explorer_kind`; a new session starts at `All`.
     event_filter: EventFilter,
+    /// Every custom kind definition seen so far; moves to the next session on a context switch.
+    custom_kind_cache: CustomKindCache,
 }
 
 /// What `connect` needs, kept so that `retry` can run it again.
@@ -67,6 +71,12 @@ pub(crate) struct LiveCluster {
     pub(crate) nodes: LiveList<NodeSummary>,
     /// Pod and node usage, polled while the metrics API is reachable and allowed.
     pub(crate) metrics: ClusterMetrics,
+    /// Every custom resource definition, watched for the whole session once the access review does
+    /// not deny it. `None` before that and when the review denies the list.
+    pub(crate) crds: Option<CrdWatch>,
+    /// The per-resource list review of each custom kind shown in this scope. Cleared on a scope
+    /// change.
+    pub(crate) custom_gates: HashMap<CustomKind, CustomGate>,
     /// The watch of the visible kind screen; `None` on Pods and Nodes.
     explorer: Option<KindList>,
     /// The open drawer's events; `None` while no drawer needs them.
@@ -121,6 +131,25 @@ pub(crate) enum FlowState {
     Paused { has_held: bool },
 }
 
+/// The CRD watch. The list holds the definitions; the explorer rows of the CRDs screen arrive with
+/// each snapshot, built on tokio. Dropping it stops the watch.
+pub(crate) struct CrdWatch {
+    pub(crate) list: LiveList<CrdSummary>,
+    /// The Established CRDs with a served version as kinds, sorted by (group, label).
+    pub(crate) kinds: Vec<CustomKind>,
+    _subscription: WatchSubscription,
+}
+
+/// One CRD watch update. A snapshot carries the definitions and the CRDs table rows built from
+/// them.
+enum CrdUpdate {
+    Snapshot {
+        crds: Vec<CrdSummary>,
+        rows: Vec<KindRow>,
+    },
+    Failed(ClusterError),
+}
+
 /// The visible explorer kind's list. Dropping it stops the watch.
 pub(crate) struct KindList {
     pub(crate) kind: ResourceKind,
@@ -129,7 +158,8 @@ pub(crate) struct KindList {
     /// A second watch whose lists fill cells of the rows; `None` when the kind needs none or the
     /// access report denies it.
     companion: Option<Companion>,
-    _subscription: WatchSubscription,
+    /// `None` for CRDs: the session's CRD watch feeds that list.
+    subscription: Option<WatchSubscription>,
 }
 
 /// The watch of a second kind that the explorer rows join with (the endpoint slices of the
@@ -634,7 +664,12 @@ fn countable_kinds(access: &AccessState) -> Vec<ResourceKind> {
     };
     ResourceKind::ALL
         .into_iter()
-        .filter(|kind| kind.has_count() && report.is_allowed(kind.access_check()))
+        .filter(|kind| {
+            kind.has_count()
+                && kind
+                    .access_check()
+                    .is_some_and(|check| report.is_allowed(check))
+        })
         .collect()
 }
 
@@ -829,6 +864,7 @@ impl ClusterSession {
         summary: &ContextSummary,
         requested_namespace: Option<NamespaceScope>,
         explorer_kind: Option<ResourceKind>,
+        custom_kind_cache: CustomKindCache,
         cx: &mut Context<Self>,
     ) -> Self {
         let inputs = ConnectInputs {
@@ -843,7 +879,13 @@ impl ClusterSession {
             phase,
             explorer_kind,
             event_filter: EventFilter::All,
+            custom_kind_cache,
         }
+    }
+
+    /// Hands the custom kind definitions to the next session, so a context switch reuses them.
+    pub(crate) fn take_custom_kind_cache(&mut self) -> CustomKindCache {
+        std::mem::take(&mut self.custom_kind_cache)
     }
 
     pub(crate) fn context(&self) -> &str {
@@ -956,22 +998,17 @@ impl ClusterSession {
         // Before the explorer restarts, so a companion plan never reads the report of the old
         // scope.
         live.access = review_access_again(&runtime, &live.connection, scope.clone(), cx);
+        // A review of a namespaced kind is per scope; a cluster-scoped one is not, and its running
+        // explorer is not restarted, so its gate must survive or the list would stay Loading.
+        live.custom_gates
+            .retain(|kind, _| keeps_gate_on_scope_change(*kind));
         if let Some(kind) = live
             .explorer
             .as_ref()
             .map(|explorer| explorer.kind)
             .filter(|kind| restarts_on_scope_change(*kind))
         {
-            live.explorer = None;
-            live.explorer = Some(KindList::start(
-                kind,
-                &runtime,
-                &live.connection,
-                scope.clone(),
-                event_filter,
-                &live.access,
-                cx,
-            ));
+            live.start_explorer(kind, scope.clone(), event_filter, &runtime, cx);
         }
         let review = start_pod_review(&runtime, &live.connection, scope.clone(), cx);
         live.metrics.restart_pods(&scope, review);
@@ -995,19 +1032,14 @@ impl ClusterSession {
         if live.explorer.as_ref().map(|explorer| explorer.kind) == kind {
             return;
         }
-        // The old subscription drops first, so two explorer watches never overlap.
-        live.explorer = None;
-        live.explorer = kind.map(|kind| {
-            KindList::start(
-                kind,
-                &runtime,
-                &live.connection,
-                live.scope.clone(),
-                event_filter,
-                &live.access,
-                cx,
-            )
-        });
+        match kind {
+            Some(kind) => {
+                let scope = live.scope.clone();
+                live.start_explorer(kind, scope, event_filter, &runtime, cx);
+            }
+            None => live.explorer = None,
+        }
+        live.seed_crd_explorer();
         cx.notify();
     }
 
@@ -1134,7 +1166,10 @@ impl ClusterSession {
                         let connection = connection.clone();
                         let scope = scope.clone();
                         async move {
-                            let count = connection.count_objects(kind.object(), &scope).await;
+                            let Some(object) = kind.builtin_object() else {
+                                return (kind, Ok(None));
+                            };
+                            let count = connection.count_objects(object, &scope).await;
                             (kind, count.map_err(|error| error_text(&error)))
                         }
                     })
@@ -1199,10 +1234,76 @@ impl ClusterSession {
             Ok(Err(error)) => Err(error_text(&error)),
             Err(_) => Err("the access review task stopped unexpectedly".to_owned()),
         };
+        let runtime = cx.global::<ClusterRuntime>().clone();
         live.access = AccessState::from_review(review);
         live.drop_denied_companion();
+        live.start_crd_watch(&runtime, cx);
+        // A denial that arrives after the CRDs screen opened fails its list.
+        if live.crds.is_none() {
+            live.seed_crd_explorer();
+        }
         self.refresh_kind_counts(CountTrigger::Review, cx);
         self.update_metrics_feeds(cx);
+        cx.notify();
+    }
+
+    /// Applies a CRD update and rebuilds the custom kinds, reusing every cached definition.
+    fn apply_crd_update(&mut self, update: CrdUpdate) {
+        let kinds = match &update {
+            CrdUpdate::Snapshot { crds, .. } => {
+                Some(custom_kinds(crds, &mut self.custom_kind_cache))
+            }
+            CrdUpdate::Failed(_) => None,
+        };
+        if let Some(live) = self.live_mut() {
+            live.apply_crd_update(update, kinds);
+        }
+    }
+
+    /// The review of a custom kind finished. Allowed, or a review that failed (nothing cached, so
+    /// the next visit asks again), starts the list; a denial caches and fails it with the reason.
+    fn finish_custom_gate(
+        &mut self,
+        custom: CustomKind,
+        result: Result<Result<AccessDecision, ClusterError>, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        let event_filter = self.event_filter;
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        let kind = ResourceKind::Custom(custom);
+        let outcome = gate_outcome(
+            result.as_ref().ok().map(Result::as_ref),
+            custom,
+            &live.scope,
+        );
+        match &outcome {
+            GateOutcome::Allowed => {
+                live.custom_gates.insert(custom, CustomGate::Allowed);
+            }
+            GateOutcome::Denied(reason) => {
+                let gate = CustomGate::Denied {
+                    reason: reason.clone(),
+                };
+                live.custom_gates.insert(custom, gate);
+            }
+            GateOutcome::Unknown => {
+                live.custom_gates.remove(&custom);
+            }
+        }
+        let shown = live.explorer.as_ref().map(|explorer| explorer.kind);
+        match explorer_action(shown, kind, outcome) {
+            ExplorerAction::Leave => {}
+            ExplorerAction::Fail(message) => {
+                live.explorer = Some(KindList::unsubscribed(kind, LiveList::Failed { message }));
+            }
+            ExplorerAction::Start => {
+                let scope = live.scope.clone();
+                live.start_explorer(kind, scope, event_filter, &runtime, cx);
+            }
+        }
         cx.notify();
     }
 
@@ -1311,9 +1412,11 @@ impl LiveCluster {
         let namespaces = scope_multiplicity(&self.scope);
         open_watch_count(OpenWatches {
             namespaces,
+            crds: self.crds.is_some(),
             explorer: self
                 .explorer
                 .as_ref()
+                .filter(|explorer| explorer.is_watching())
                 .map_or(0, |explorer| explorer_watches(explorer.kind, namespaces)),
             companion: self
                 .companion()
@@ -1458,12 +1561,15 @@ impl LiveCluster {
 
     /// Whether any watch has failed or is interrupted, for the status bar.
     pub(crate) fn has_problem(&self) -> bool {
-        any_list_has_problem(
-            &self.namespaces,
-            &self.pods,
-            &self.nodes,
-            self.explorer.as_ref().map(|explorer| &explorer.list),
-        )
+        self.crds
+            .as_ref()
+            .is_some_and(|crds| crds.list.has_problem())
+            || any_list_has_problem(
+                &self.namespaces,
+                &self.pods,
+                &self.nodes,
+                self.explorer.as_ref().map(|explorer| &explorer.list),
+            )
     }
 
     /// Whether the explorer list is paused; `None` without an explorer.
@@ -1529,20 +1635,10 @@ impl LiveCluster {
             ),
         };
         let access = AccessState::from_review(access);
-        let explorer = explorer_kind.map(|kind| {
-            KindList::start(
-                kind,
-                &runtime,
-                &connection,
-                scope.clone(),
-                event_filter,
-                &access,
-                cx,
-            )
-        });
         let metrics =
             ClusterMetrics::new(start_pod_review(&runtime, &connection, scope.clone(), cx));
-        Self {
+        let explorer_scope = scope.clone();
+        let mut live = Self {
             server_version,
             scope,
             access,
@@ -1550,18 +1646,326 @@ impl LiveCluster {
             pods: LiveList::Loading,
             nodes: LiveList::Loading,
             metrics,
-            explorer,
+            crds: None,
+            custom_gates: HashMap::new(),
+            explorer: None,
             object_events: None,
             related: None,
             kind_counts: KindCounts::default(),
             connection,
             subscriptions,
+        };
+        if let Some(kind) = explorer_kind {
+            live.start_explorer(kind, explorer_scope, event_filter, &runtime, cx);
+        }
+        live.start_crd_watch(&runtime, cx);
+        live.seed_crd_explorer();
+        live
+    }
+
+    /// Starts the explorer of `kind` for `scope`, dropping the old one first so two explorer
+    /// watches never overlap. A custom kind first needs its per-resource list review: until it
+    /// is allowed (or failed, which is not cached) the list has no watch of its own.
+    fn start_explorer(
+        &mut self,
+        kind: ResourceKind,
+        scope: NamespaceScope,
+        event_filter: EventFilter,
+        runtime: &ClusterRuntime,
+        cx: &mut Context<ClusterSession>,
+    ) {
+        self.explorer = None;
+        let started = |live: &Self, cx: &mut Context<ClusterSession>| {
+            KindList::start(
+                kind,
+                runtime,
+                &live.connection,
+                scope.clone(),
+                event_filter,
+                &live.access,
+                cx,
+            )
+        };
+        let Some(custom) = kind.custom() else {
+            self.explorer = Some(started(self, cx));
+            return;
+        };
+        let explorer = match self.custom_gates.get(&custom) {
+            Some(CustomGate::Allowed) => started(self, cx),
+            Some(CustomGate::Denied { reason }) => KindList::unsubscribed(
+                kind,
+                LiveList::Failed {
+                    message: reason.clone(),
+                },
+            ),
+            Some(CustomGate::Checking { .. }) => KindList::unsubscribed(kind, LiveList::Loading),
+            None => {
+                let gate = review_custom_gate(runtime, &self.connection, custom, scope.clone(), cx);
+                self.custom_gates.insert(custom, gate);
+                KindList::unsubscribed(kind, LiveList::Loading)
+            }
+        };
+        self.explorer = Some(explorer);
+    }
+
+    /// Whether the access report is known and denies listing CRDs.
+    pub(crate) fn is_crds_denied(&self) -> bool {
+        crds_denied(&self.access)
+    }
+
+    /// Starts the CRD watch unless it runs or the access report denies the list: a denied watch
+    /// would retry a 403 for the whole session. A running or failed review does not block it.
+    fn start_crd_watch(&mut self, runtime: &ClusterRuntime, cx: &mut Context<ClusterSession>) {
+        if self.crds.is_some() || crds_denied(&self.access) {
+            return;
+        }
+        self.crds = Some(CrdWatch::start(runtime, &self.connection, cx));
+    }
+
+    /// Fills the CRDs explorer list from the CRD watch, for a CRDs screen opened after the
+    /// snapshot arrived. The rows are cheap clones of the definitions.
+    fn seed_crd_explorer(&mut self) {
+        let Some(explorer) = self
+            .explorer
+            .as_mut()
+            .filter(|explorer| explorer.kind == ResourceKind::Crds)
+        else {
+            return;
+        };
+        explorer.list = crd_explorer_list(self.crds.as_ref().map(|crds| &crds.list), &self.access);
+    }
+
+    fn apply_crd_update(&mut self, update: CrdUpdate, kinds: Option<Vec<CustomKind>>) {
+        let Some(crds) = self.crds.as_mut() else {
+            return;
+        };
+        if let Some(kinds) = kinds {
+            crds.kinds = kinds;
+        }
+        let explorer = self
+            .explorer
+            .as_mut()
+            .filter(|explorer| explorer.kind == ResourceKind::Crds);
+        feed_crds(&mut crds.list, explorer, update);
+    }
+
+    fn stop_crd_watch(&mut self) {
+        if let Some(crds) = self.crds.as_mut() {
+            crds.list.mark_stopped();
+        }
+        if let Some(explorer) = self
+            .explorer
+            .as_mut()
+            .filter(|explorer| explorer.kind == ResourceKind::Crds)
+        {
+            explorer.list.mark_stopped();
+        }
+    }
+}
+
+/// The CRDs table list for the state of the CRD watch.
+fn crd_explorer_list(
+    crds: Option<&LiveList<CrdSummary>>,
+    access: &AccessState,
+) -> LiveList<KindRow> {
+    match crds {
+        Some(LiveList::Ready {
+            items,
+            interruption,
+        }) => LiveList::Ready {
+            items: items.iter().map(crd_row).collect(),
+            interruption: interruption.clone(),
+        },
+        Some(LiveList::Failed { message }) => LiveList::Failed {
+            message: message.clone(),
+        },
+        // Without a watch the list is denied, or the review has not finished.
+        None if crds_denied(access) => LiveList::Failed {
+            message: crds_denied_reason(),
+        },
+        Some(LiveList::Loading) | None => LiveList::Loading,
+    }
+}
+
+/// Why the CRDs list cannot load, worded like the sidebar lock of `kind_availability`.
+fn crds_denied_reason() -> String {
+    format!(
+        "Not permitted: {}",
+        AccessCheck::ListCustomResourceDefinitions
+    )
+}
+
+/// Applies one CRD update to the definitions and, when the CRDs screen is shown, to its table.
+fn feed_crds(crds: &mut LiveList<CrdSummary>, explorer: Option<&mut KindList>, update: CrdUpdate) {
+    match update {
+        CrdUpdate::Snapshot { crds: items, rows } => {
+            crds.apply(WatchUpdate::Snapshot(items));
+            if let Some(explorer) = explorer {
+                explorer
+                    .flow
+                    .receive(&mut explorer.list, WatchUpdate::Snapshot(rows));
+            }
+        }
+        CrdUpdate::Failed(error) => {
+            let message = error_text(&error);
+            crds.fail(message.clone());
+            if let Some(explorer) = explorer {
+                explorer.list.fail(message);
+            }
+        }
+    }
+}
+
+/// The per-resource list review of a custom kind, which decides whether its list may start
+/// (decision 21): a denied watch would retry a 403 for the whole session.
+pub(crate) enum CustomGate {
+    Checking { _task: Task<()> },
+    Allowed,
+    Denied { reason: String },
+}
+
+/// What a finished custom review says about the kind.
+#[derive(Debug, PartialEq, Eq)]
+enum GateOutcome {
+    Allowed,
+    /// Cached, and the list fails with this reason.
+    Denied(String),
+    /// The review failed or never finished: nothing is cached, and the list starts anyway so the
+    /// watch shows its own error.
+    Unknown,
+}
+
+fn gate_outcome(
+    result: Option<Result<&AccessDecision, &ClusterError>>,
+    custom: CustomKind,
+    scope: &NamespaceScope,
+) -> GateOutcome {
+    match result {
+        Some(Ok(AccessDecision::Allowed)) => GateOutcome::Allowed,
+        Some(Ok(AccessDecision::Denied { .. })) => {
+            GateOutcome::Denied(custom_denied_reason(custom, scope))
+        }
+        Some(Err(_)) | None => GateOutcome::Unknown,
+    }
+}
+
+/// What a finished review does to the shown explorer.
+#[derive(Debug, PartialEq, Eq)]
+enum ExplorerAction {
+    /// The review is for a kind that is not shown: only its gate changes.
+    Leave,
+    /// Replace the list with a failed one that gives the reason.
+    Fail(String),
+    /// Start the list. A review that failed starts it too, so the watch shows its own error.
+    Start,
+}
+
+/// What the explorer of `shown` does when the review of `reviewed` finishes with `outcome`.
+fn explorer_action(
+    shown: Option<ResourceKind>,
+    reviewed: ResourceKind,
+    outcome: GateOutcome,
+) -> ExplorerAction {
+    if shown != Some(reviewed) {
+        return ExplorerAction::Leave;
+    }
+    match outcome {
+        GateOutcome::Denied(reason) => ExplorerAction::Fail(reason),
+        GateOutcome::Allowed | GateOutcome::Unknown => ExplorerAction::Start,
+    }
+}
+
+/// Whether a kind's review survives a scope change. A namespaced kind is reviewed per scope. A
+/// cluster-scoped kind is not, and its running explorer is not restarted, so dropping its gate
+/// would leave a list that is waiting for a review nobody runs.
+fn keeps_gate_on_scope_change(kind: CustomKind) -> bool {
+    !kind.spec().is_namespaced
+}
+
+/// Why a custom kind cannot be listed, like `kind_availability` words the built-in kinds.
+pub(crate) fn custom_denied_reason(custom: CustomKind, scope: &NamespaceScope) -> String {
+    let resource = custom.resource();
+    let target = format!("list {}.{}", resource.plural, resource.group);
+    match scope {
+        NamespaceScope::All if custom.spec().is_namespaced => {
+            format!("Not permitted: {target} in all namespaces")
+        }
+        NamespaceScope::Several(names) if custom.spec().is_namespaced => {
+            format!("Not permitted: {target} in {}", namespaces_label(names))
+        }
+        NamespaceScope::All | NamespaceScope::Named(_) | NamespaceScope::Several(_) => {
+            format!("Not permitted: {target}")
+        }
+    }
+}
+
+/// Reviews listing `custom` on tokio. The returned gate owns the task, so clearing the gates (a
+/// scope change) or dropping the session aborts the review.
+fn review_custom_gate(
+    runtime: &ClusterRuntime,
+    connection: &ClusterConnection,
+    custom: CustomKind,
+    scope: NamespaceScope,
+    cx: &mut Context<ClusterSession>,
+) -> CustomGate {
+    let connection = connection.clone();
+    let resource = custom.resource().clone();
+    let reviewing =
+        runtime.spawn(async move { connection.review_custom_access(&resource, &scope).await });
+    let task = cx.spawn(async move |this, cx| {
+        let result = reviewing.await;
+        let _ = this.update(cx, |session, cx| {
+            session.finish_custom_gate(custom, result, cx)
+        });
+    });
+    CustomGate::Checking { _task: task }
+}
+
+/// Whether the report is known and denies listing CRDs.
+fn crds_denied(access: &AccessState) -> bool {
+    matches!(
+        access,
+        AccessState::Known(report)
+            if !report.is_allowed(AccessCheck::ListCustomResourceDefinitions)
+    )
+}
+
+impl CrdWatch {
+    fn start(
+        runtime: &ClusterRuntime,
+        connection: &ClusterConnection,
+        cx: &mut Context<ClusterSession>,
+    ) -> Self {
+        // The rows are built here, on tokio, so the main thread only swaps vectors.
+        let updates = connection.watch_crds().map(|update| match update {
+            WatchUpdate::Snapshot(crds) => {
+                let rows = crds.iter().map(crd_row).collect();
+                CrdUpdate::Snapshot { crds, rows }
+            }
+            WatchUpdate::Failed(error) => CrdUpdate::Failed(error),
+        });
+        let subscription = runtime.subscribe(
+            updates,
+            cx,
+            |session: &mut ClusterSession, update, _| session.apply_crd_update(update),
+            |session, _| {
+                if let Some(live) = session.live_mut() {
+                    live.stop_crd_watch();
+                }
+            },
+        );
+        Self {
+            list: LiveList::Loading,
+            kinds: Vec::new(),
+            _subscription: subscription,
         }
     }
 }
 
 /// Which watches are open, as `open_watch_count` counts them.
 struct OpenWatches {
+    /// The always-on CRD watch runs.
+    crds: bool,
     /// How many namespaces the scope names; `All` is 1. The pods watch runs once per namespace.
     namespaces: usize,
     /// The explorer's watches: 0 without one, 1 for a cluster-scoped kind, else one per namespace.
@@ -1575,9 +1979,10 @@ struct OpenWatches {
 
 /// The namespaces list and the nodes are always watched, pods once per namespace of the scope,
 /// then the explorer's watches and its companion's, and one each for the drawer's events and
-/// related objects. The total stays within `3N + 4` for N picked namespaces.
+/// related objects. The total stays within `3N + 5` for N picked namespaces.
 fn open_watch_count(watches: OpenWatches) -> usize {
     2 + watches.namespaces
+        + usize::from(watches.crds)
         + watches.explorer
         + watches.companion
         + usize::from(watches.object_events)
@@ -1623,6 +2028,22 @@ fn any_list_has_problem(
 }
 
 impl KindList {
+    /// Whether the list runs a watch of its own.
+    fn is_watching(&self) -> bool {
+        self.subscription.is_some()
+    }
+
+    /// A list that has no watch of its own: CRDs, and a custom kind before its review allows it.
+    fn unsubscribed(kind: ResourceKind, list: LiveList<KindRow>) -> Self {
+        Self {
+            kind,
+            list,
+            flow: StreamFlow::Live,
+            companion: None,
+            subscription: None,
+        }
+    }
+
     fn start(
         kind: ResourceKind,
         runtime: &ClusterRuntime,
@@ -1648,7 +2069,7 @@ impl KindList {
             list: LiveList::Loading,
             flow: StreamFlow::Live,
             companion,
-            _subscription: subscribe_explorer(runtime, connection, kind, scope, events, cx),
+            subscription: subscribe_explorer(runtime, connection, kind, scope, events, cx),
         }
     }
 }
@@ -1722,6 +2143,7 @@ impl Companion {
     }
 }
 
+/// `None` for a kind without a watch of its own (CRDs).
 fn subscribe_explorer(
     runtime: &ClusterRuntime,
     connection: &ClusterConnection,
@@ -1729,10 +2151,11 @@ fn subscribe_explorer(
     scope: NamespaceScope,
     events: EventFilter,
     cx: &mut Context<ClusterSession>,
-) -> WatchSubscription {
+) -> Option<WatchSubscription> {
     // The kind guards are defense in depth: dropping the subscription already cancels it.
-    runtime.subscribe(
-        kind.watch_rows(connection, scope, events),
+    let updates = kind.watch_rows(connection, scope, events)?;
+    Some(runtime.subscribe(
+        updates,
         cx,
         move |session: &mut ClusterSession, update, _| {
             if let Some(explorer) = session.explorer_mut(kind) {
@@ -1747,7 +2170,7 @@ fn subscribe_explorer(
                 explorer.list.mark_stopped();
             }
         },
-    )
+    ))
 }
 
 impl ObjectEvents {

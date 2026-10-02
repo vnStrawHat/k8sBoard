@@ -151,3 +151,39 @@ fn helm_release_has_no_event_subject() {
     };
     assert_eq!(event_subject(&key), None);
 }
+
+#[test]
+fn event_subject_of_a_custom_key_uses_its_kind() {
+    let crd = cluster::CrdSummary {
+        name: "certificates.cert-manager.io".to_owned(),
+        group: "cert-manager.io".to_owned(),
+        kind: "Certificate".to_owned(),
+        plural: "certificates".to_owned(),
+        singular: "certificate".to_owned(),
+        scope: cluster::ResourceScope::Namespaced,
+        versions: vec![cluster::CrdVersion {
+            name: "v1".to_owned(),
+            is_served: true,
+            is_storage: true,
+            is_deprecated: false,
+            deprecation_warning: None,
+            printer_columns: Vec::new(),
+            schema: cluster::SchemaOutline::default(),
+        }],
+        state: cluster::CrdState::Established,
+        created_at: None,
+    };
+    let custom = crate::custom_kind::custom_kinds(
+        &[crd],
+        &mut crate::custom_kind::CustomKindCache::default(),
+    )[0];
+    let key = ResourceKey::Kind {
+        kind: ResourceKind::Custom(custom),
+        namespace: Some("shop".to_owned()),
+        name: "web-tls".to_owned(),
+    };
+    assert_eq!(
+        event_subject(&key),
+        Some(subject("Certificate", Some("shop"), "web-tls"))
+    );
+}

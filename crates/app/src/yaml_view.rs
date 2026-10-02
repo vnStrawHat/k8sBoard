@@ -300,7 +300,7 @@ pub(crate) fn object_ref(key: &ResourceKey) -> Option<ObjectRef> {
             kind,
             namespace,
             name,
-        } => ObjectRef::new(kind.object(), namespace.clone(), name.clone()),
+        } => kind.object_ref(namespace.clone(), name.clone()),
     }
 }
 

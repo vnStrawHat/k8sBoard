@@ -256,3 +256,102 @@ fn changing_the_selection_drops_an_existing_values_view(cx: &mut TestAppContext)
     shell.update(cx, |shell, cx| shell.close_drawer(cx));
     shell.read_with(cx, |shell, _| assert!(shell.drawer.secret_values.is_none()));
 }
+
+fn served_kind(crd_name: &str, extra_column: bool) -> CustomKind {
+    let (plural, group) = crd_name.split_once('.').expect("a CRD name has a group");
+    let mut columns = Vec::new();
+    if extra_column {
+        columns.push(cluster::PrinterColumn::new(
+            "Extra",
+            cluster::ColumnType::String,
+            ".spec.extra",
+            false,
+        ));
+    }
+    let crd = cluster::CrdSummary {
+        name: crd_name.to_owned(),
+        group: group.to_owned(),
+        kind: "Widget".to_owned(),
+        plural: plural.to_owned(),
+        singular: "widget".to_owned(),
+        scope: cluster::ResourceScope::Namespaced,
+        versions: vec![cluster::CrdVersion {
+            name: "v1".to_owned(),
+            is_served: true,
+            is_storage: true,
+            is_deprecated: false,
+            deprecation_warning: None,
+            printer_columns: columns,
+            schema: cluster::SchemaOutline::default(),
+        }],
+        state: cluster::CrdState::Established,
+        created_at: None,
+    };
+    crate::custom_kind::custom_kinds(&[crd], &mut crate::custom_kind::CustomKindCache::default())[0]
+}
+
+#[test]
+fn custom_screen_remaps_to_the_changed_kind() {
+    let shown = Screen::Kind(ResourceKind::Custom(served_kind("widgets.x.io", false)));
+    let changed = served_kind("widgets.x.io", true);
+    assert_eq!(
+        remapped_screen(shown, &[changed]),
+        Some(Screen::Kind(ResourceKind::Custom(changed)))
+    );
+}
+
+#[test]
+fn unchanged_custom_screen_stays() {
+    let kind = served_kind("widgets.x.io", false);
+    let shown = Screen::Kind(ResourceKind::Custom(kind));
+    // Equal by source, even when the kind was built again.
+    let rebuilt = served_kind("widgets.x.io", false);
+    assert_eq!(remapped_screen(shown, &[rebuilt]), None);
+}
+
+#[test]
+fn removed_custom_kind_returns_to_crds() {
+    let shown = Screen::Kind(ResourceKind::Custom(served_kind("widgets.x.io", false)));
+    let other = served_kind("gadgets.x.io", false);
+    assert_eq!(
+        remapped_screen(shown, &[other]),
+        Some(Screen::Kind(ResourceKind::Crds))
+    );
+    assert_eq!(
+        remapped_screen(shown, &[]),
+        Some(Screen::Kind(ResourceKind::Crds))
+    );
+}
+
+#[test]
+fn other_screens_never_remap() {
+    let kinds = [served_kind("widgets.x.io", false)];
+    for screen in [
+        Screen::Pods,
+        Screen::Nodes,
+        Screen::Kind(ResourceKind::Crds),
+        Screen::Kind(ResourceKind::Deployments),
+    ] {
+        assert_eq!(remapped_screen(screen, &kinds), None);
+    }
+}
+
+#[test]
+fn custom_launch_resolves_an_established_crd() {
+    let kind = served_kind("widgets.x.io", false);
+    assert_eq!(resolve_custom_launch(&[kind], "widgets.x.io"), Ok(kind));
+}
+
+#[test]
+fn custom_launch_without_an_established_crd_fails_with_its_name() {
+    let kinds = [served_kind("gadgets.x.io", false)];
+    assert_eq!(
+        resolve_custom_launch(&kinds, "widgets.x.io"),
+        Err("no Established CRD named widgets.x.io".to_owned())
+    );
+    // A denied or empty CRD list finds nothing either.
+    assert_eq!(
+        resolve_custom_launch(&[], "widgets.x.io"),
+        Err("no Established CRD named widgets.x.io".to_owned())
+    );
+}

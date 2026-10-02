@@ -1,7 +1,7 @@
 //! The Kubernetes kinds that have an explorer screen, and the data that differs per kind.
 
 use cluster::{
-    AccessCheck, ClusterConnection, EventFilter, NamespaceScope, ObjectKind, WatchUpdate,
+    AccessCheck, ClusterConnection, EventFilter, NamespaceScope, ObjectKind, ObjectRef, WatchUpdate,
 };
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
@@ -11,6 +11,8 @@ use crate::access_rows::{
 };
 use crate::batch_rows::{cron_job_row, job_row};
 use crate::config_map_rows::config_map_row;
+use crate::custom_kind::CustomKind;
+use crate::custom_rows::custom_object_row;
 use crate::event_rows::event_rows;
 use crate::helm_rows::helm_release_row;
 use crate::kind_row::KindRow;
@@ -55,6 +57,11 @@ pub(crate) enum ResourceKind {
     /// Helm releases, read from their `helm.sh/release.v1` Secrets. It shares `ObjectKind::Secret`
     /// with `Secrets`, so `from_object_kind` keeps finding Secrets first.
     HelmReleases,
+    /// Custom resource definitions. The list is fed by the session's CRD watch, which also drives
+    /// the custom kinds, so the kind has no watch of its own.
+    Crds,
+    /// A served custom resource kind, from an Established CRD. Never in `ALL`.
+    Custom(CustomKind),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,34 +96,46 @@ const AGE_COLUMN: KindColumn = column("Age", 70., Align::Right);
 
 /// Everything that differs between kinds except the watch. A new kind adds one `static` here,
 /// one arm in `spec`, and one arm in `watch_rows`.
-struct KindSpec {
-    label: &'static str,
-    /// The Kubernetes `kind`, as an event's `involvedObject.kind` spells it.
-    object: ObjectKind,
-    name_column: NameColumn,
+pub(crate) struct KindSpec {
+    pub(crate) label: &'static str,
+    pub(crate) name_column: NameColumn,
     /// Whether the drawer has a Labels section.
-    has_labels: bool,
-    singular: &'static str,
-    plural: &'static str,
-    badge: &'static str,
-    is_namespaced: bool,
-    access_check: AccessCheck,
-    columns: &'static [KindColumn],
-    read_only_actions: &'static [&'static str],
-    delete_label: &'static str,
-    has_port_forward: bool,
+    pub(crate) has_labels: bool,
+    pub(crate) singular: &'static str,
+    pub(crate) plural: &'static str,
+    pub(crate) badge: &'static str,
+    pub(crate) is_namespaced: bool,
+    pub(crate) api: KindApi,
+    pub(crate) columns: &'static [KindColumn],
+    pub(crate) read_only_actions: &'static [&'static str],
+    pub(crate) delete_label: &'static str,
+    pub(crate) has_port_forward: bool,
+}
+
+/// How a kind reaches the cluster: a built-in kind has a typed object and a list check; a custom
+/// kind has neither (its resource comes from its CRD, and its gate is a per-resource review).
+#[derive(Clone, Copy)]
+pub(crate) enum KindApi {
+    Builtin {
+        /// The Kubernetes `kind`, as an event's `involvedObject.kind` spells it.
+        object: ObjectKind,
+        access_check: AccessCheck,
+    },
+    Custom,
 }
 
 static NAMESPACES: KindSpec = KindSpec {
     label: "Namespaces",
-    object: ObjectKind::Namespace,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "namespace",
     plural: "namespaces",
     badge: "Ns",
     is_namespaced: false,
-    access_check: AccessCheck::ListNamespaces,
+    api: KindApi::Builtin {
+        object: ObjectKind::Namespace,
+        access_check: AccessCheck::ListNamespaces,
+    },
     columns: &[
         column("Status", 140., Align::Left),
         column("Pods", 70., Align::Right),
@@ -131,14 +150,16 @@ static NAMESPACES: KindSpec = KindSpec {
 
 static EVENTS: KindSpec = KindSpec {
     label: "Events",
-    object: ObjectKind::Event,
     name_column: NameColumn::Hidden { flexible: 3 },
     has_labels: false,
     singular: "event",
     plural: "events",
     badge: "Ev",
     is_namespaced: true,
-    access_check: AccessCheck::ListEvents,
+    api: KindApi::Builtin {
+        object: ObjectKind::Event,
+        access_check: AccessCheck::ListEvents,
+    },
     columns: &[
         column("Type", 90., Align::Left),
         column("Reason", 170., Align::Left),
@@ -154,14 +175,16 @@ static EVENTS: KindSpec = KindSpec {
 
 static DEPLOYMENTS: KindSpec = KindSpec {
     label: "Deployments",
-    object: ObjectKind::Deployment,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "deployment",
     plural: "deployments",
     badge: "De",
     is_namespaced: true,
-    access_check: AccessCheck::ListDeployments,
+    api: KindApi::Builtin {
+        object: ObjectKind::Deployment,
+        access_check: AccessCheck::ListDeployments,
+    },
     columns: &[
         column("Ready", 80., Align::Left),
         column("Up-to-date", 100., Align::Right),
@@ -176,14 +199,16 @@ static DEPLOYMENTS: KindSpec = KindSpec {
 
 static STATEFUL_SETS: KindSpec = KindSpec {
     label: "StatefulSets",
-    object: ObjectKind::StatefulSet,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "statefulset",
     plural: "statefulsets",
     badge: "Ss",
     is_namespaced: true,
-    access_check: AccessCheck::ListStatefulSets,
+    api: KindApi::Builtin {
+        object: ObjectKind::StatefulSet,
+        access_check: AccessCheck::ListStatefulSets,
+    },
     columns: &[
         column("Ready", 80., Align::Left),
         column("Service", 200., Align::Left),
@@ -197,14 +222,16 @@ static STATEFUL_SETS: KindSpec = KindSpec {
 
 static DAEMON_SETS: KindSpec = KindSpec {
     label: "DaemonSets",
-    object: ObjectKind::DaemonSet,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "daemonset",
     plural: "daemonsets",
     badge: "Ds",
     is_namespaced: true,
-    access_check: AccessCheck::ListDaemonSets,
+    api: KindApi::Builtin {
+        object: ObjectKind::DaemonSet,
+        access_check: AccessCheck::ListDaemonSets,
+    },
     columns: &[
         column("Desired", 80., Align::Right),
         column("Current", 80., Align::Right),
@@ -221,14 +248,16 @@ static DAEMON_SETS: KindSpec = KindSpec {
 
 static REPLICA_SETS: KindSpec = KindSpec {
     label: "ReplicaSets",
-    object: ObjectKind::ReplicaSet,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "replicaset",
     plural: "replicasets",
     badge: "Rs",
     is_namespaced: true,
-    access_check: AccessCheck::ListReplicaSets,
+    api: KindApi::Builtin {
+        object: ObjectKind::ReplicaSet,
+        access_check: AccessCheck::ListReplicaSets,
+    },
     columns: &[
         column("Desired", 80., Align::Right),
         column("Current", 80., Align::Right),
@@ -244,14 +273,16 @@ static REPLICA_SETS: KindSpec = KindSpec {
 
 static JOBS: KindSpec = KindSpec {
     label: "Jobs",
-    object: ObjectKind::Job,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "job",
     plural: "jobs",
     badge: "Jb",
     is_namespaced: true,
-    access_check: AccessCheck::ListJobs,
+    api: KindApi::Builtin {
+        object: ObjectKind::Job,
+        access_check: AccessCheck::ListJobs,
+    },
     columns: &[
         column("Status", 120., Align::Left),
         column("Completions", 110., Align::Left),
@@ -265,14 +296,16 @@ static JOBS: KindSpec = KindSpec {
 
 static CRON_JOBS: KindSpec = KindSpec {
     label: "CronJobs",
-    object: ObjectKind::CronJob,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "cronjob",
     plural: "cronjobs",
     badge: "Cj",
     is_namespaced: true,
-    access_check: AccessCheck::ListCronJobs,
+    api: KindApi::Builtin {
+        object: ObjectKind::CronJob,
+        access_check: AccessCheck::ListCronJobs,
+    },
     columns: &[
         column("Schedule", 140., Align::Left),
         column("Suspend", 80., Align::Left),
@@ -288,14 +321,16 @@ static CRON_JOBS: KindSpec = KindSpec {
 
 static SERVICES: KindSpec = KindSpec {
     label: "Services",
-    object: ObjectKind::Service,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "service",
     plural: "services",
     badge: "Sv",
     is_namespaced: true,
-    access_check: AccessCheck::ListServices,
+    api: KindApi::Builtin {
+        object: ObjectKind::Service,
+        access_check: AccessCheck::ListServices,
+    },
     columns: &[
         column("Type", 130., Align::Left),
         column("Cluster IP", 140., Align::Left),
@@ -311,14 +346,16 @@ static SERVICES: KindSpec = KindSpec {
 
 static INGRESSES: KindSpec = KindSpec {
     label: "Ingresses",
-    object: ObjectKind::Ingress,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "ingress",
     plural: "ingresses",
     badge: "In",
     is_namespaced: true,
-    access_check: AccessCheck::ListIngresses,
+    api: KindApi::Builtin {
+        object: ObjectKind::Ingress,
+        access_check: AccessCheck::ListIngresses,
+    },
     columns: &[
         column("Class", 100., Align::Left),
         column("Hosts", 260., Align::Left),
@@ -333,14 +370,16 @@ static INGRESSES: KindSpec = KindSpec {
 
 static CONFIG_MAPS: KindSpec = KindSpec {
     label: "ConfigMaps",
-    object: ObjectKind::ConfigMap,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "configmap",
     plural: "configmaps",
     badge: "Cm",
     is_namespaced: true,
-    access_check: AccessCheck::ListConfigMaps,
+    api: KindApi::Builtin {
+        object: ObjectKind::ConfigMap,
+        access_check: AccessCheck::ListConfigMaps,
+    },
     columns: &[
         column("Data", 70., Align::Right),
         column("Used by", 220., Align::Left),
@@ -353,14 +392,16 @@ static CONFIG_MAPS: KindSpec = KindSpec {
 
 static NETWORK_POLICIES: KindSpec = KindSpec {
     label: "NetworkPolicies",
-    object: ObjectKind::NetworkPolicy,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "networkpolicy",
     plural: "networkpolicies",
     badge: "Np",
     is_namespaced: true,
-    access_check: AccessCheck::ListNetworkPolicies,
+    api: KindApi::Builtin {
+        object: ObjectKind::NetworkPolicy,
+        access_check: AccessCheck::ListNetworkPolicies,
+    },
     columns: &[
         column("Pod selector", 220., Align::Left),
         column("Policy types", 130., Align::Left),
@@ -374,14 +415,16 @@ static NETWORK_POLICIES: KindSpec = KindSpec {
 
 static POD_DISRUPTION_BUDGETS: KindSpec = KindSpec {
     label: "PDBs",
-    object: ObjectKind::PodDisruptionBudget,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "poddisruptionbudget",
     plural: "poddisruptionbudgets",
     badge: "Pd",
     is_namespaced: true,
-    access_check: AccessCheck::ListPodDisruptionBudgets,
+    api: KindApi::Builtin {
+        object: ObjectKind::PodDisruptionBudget,
+        access_check: AccessCheck::ListPodDisruptionBudgets,
+    },
     columns: &[
         column("Min available", 110., Align::Left),
         column("Max unavailable", 135., Align::Left),
@@ -395,14 +438,16 @@ static POD_DISRUPTION_BUDGETS: KindSpec = KindSpec {
 
 static HORIZONTAL_POD_AUTOSCALERS: KindSpec = KindSpec {
     label: "HPAs",
-    object: ObjectKind::HorizontalPodAutoscaler,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "horizontalpodautoscaler",
     plural: "horizontalpodautoscalers",
     badge: "Hp",
     is_namespaced: true,
-    access_check: AccessCheck::ListHorizontalPodAutoscalers,
+    api: KindApi::Builtin {
+        object: ObjectKind::HorizontalPodAutoscaler,
+        access_check: AccessCheck::ListHorizontalPodAutoscalers,
+    },
     columns: &[
         column("Target", 220., Align::Left),
         column("Min / Max", 90., Align::Left),
@@ -417,14 +462,16 @@ static HORIZONTAL_POD_AUTOSCALERS: KindSpec = KindSpec {
 
 static RESOURCE_QUOTAS: KindSpec = KindSpec {
     label: "ResourceQuotas",
-    object: ObjectKind::ResourceQuota,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "resourcequota",
     plural: "resourcequotas",
     badge: "Rq",
     is_namespaced: true,
-    access_check: AccessCheck::ListResourceQuotas,
+    api: KindApi::Builtin {
+        object: ObjectKind::ResourceQuota,
+        access_check: AccessCheck::ListResourceQuotas,
+    },
     columns: &[
         column("CPU req", 130., Align::Right),
         column("Memory req", 150., Align::Right),
@@ -438,14 +485,16 @@ static RESOURCE_QUOTAS: KindSpec = KindSpec {
 
 static PERSISTENT_VOLUME_CLAIMS: KindSpec = KindSpec {
     label: "PVCs",
-    object: ObjectKind::PersistentVolumeClaim,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "persistentvolumeclaim",
     plural: "persistentvolumeclaims",
     badge: "Pc",
     is_namespaced: true,
-    access_check: AccessCheck::ListPersistentVolumeClaims,
+    api: KindApi::Builtin {
+        object: ObjectKind::PersistentVolumeClaim,
+        access_check: AccessCheck::ListPersistentVolumeClaims,
+    },
     columns: &[
         column("Status", 110., Align::Left),
         column("Capacity", 90., Align::Right),
@@ -461,14 +510,16 @@ static PERSISTENT_VOLUME_CLAIMS: KindSpec = KindSpec {
 
 static PERSISTENT_VOLUMES: KindSpec = KindSpec {
     label: "PVs",
-    object: ObjectKind::PersistentVolume,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "persistentvolume",
     plural: "persistentvolumes",
     badge: "Pv",
     is_namespaced: false,
-    access_check: AccessCheck::ListPersistentVolumes,
+    api: KindApi::Builtin {
+        object: ObjectKind::PersistentVolume,
+        access_check: AccessCheck::ListPersistentVolumes,
+    },
     columns: &[
         column("Capacity", 90., Align::Right),
         column("Access", 90., Align::Left),
@@ -485,14 +536,16 @@ static PERSISTENT_VOLUMES: KindSpec = KindSpec {
 
 static STORAGE_CLASSES: KindSpec = KindSpec {
     label: "StorageClasses",
-    object: ObjectKind::StorageClass,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "storageclass",
     plural: "storageclasses",
     badge: "Sc",
     is_namespaced: false,
-    access_check: AccessCheck::ListStorageClasses,
+    api: KindApi::Builtin {
+        object: ObjectKind::StorageClass,
+        access_check: AccessCheck::ListStorageClasses,
+    },
     columns: &[
         column("Provisioner", 200., Align::Left),
         column("Reclaim", 90., Align::Left),
@@ -509,14 +562,16 @@ static STORAGE_CLASSES: KindSpec = KindSpec {
 
 static ROLES: KindSpec = KindSpec {
     label: "Roles",
-    object: ObjectKind::Role,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "role",
     plural: "roles",
     badge: "Ro",
     is_namespaced: true,
-    access_check: AccessCheck::ListRoles,
+    api: KindApi::Builtin {
+        object: ObjectKind::Role,
+        access_check: AccessCheck::ListRoles,
+    },
     columns: &[
         column("Rules", 70., Align::Right),
         column("Bindings", 90., Align::Right),
@@ -529,14 +584,16 @@ static ROLES: KindSpec = KindSpec {
 
 static CLUSTER_ROLES: KindSpec = KindSpec {
     label: "ClusterRoles",
-    object: ObjectKind::ClusterRole,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "clusterrole",
     plural: "clusterroles",
     badge: "Cr",
     is_namespaced: false,
-    access_check: AccessCheck::ListClusterRoles,
+    api: KindApi::Builtin {
+        object: ObjectKind::ClusterRole,
+        access_check: AccessCheck::ListClusterRoles,
+    },
     columns: &[
         column("Rules", 90., Align::Right),
         column("Aggregated", 100., Align::Left),
@@ -550,14 +607,16 @@ static CLUSTER_ROLES: KindSpec = KindSpec {
 
 static ROLE_BINDINGS: KindSpec = KindSpec {
     label: "RoleBindings",
-    object: ObjectKind::RoleBinding,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "rolebinding",
     plural: "rolebindings",
     badge: "Rb",
     is_namespaced: true,
-    access_check: AccessCheck::ListRoleBindings,
+    api: KindApi::Builtin {
+        object: ObjectKind::RoleBinding,
+        access_check: AccessCheck::ListRoleBindings,
+    },
     columns: &[
         column("Role", 220., Align::Left),
         column("Subjects", 300., Align::Left),
@@ -570,14 +629,16 @@ static ROLE_BINDINGS: KindSpec = KindSpec {
 
 static CLUSTER_ROLE_BINDINGS: KindSpec = KindSpec {
     label: "ClusterRoleBindings",
-    object: ObjectKind::ClusterRoleBinding,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "clusterrolebinding",
     plural: "clusterrolebindings",
     badge: "Cb",
     is_namespaced: false,
-    access_check: AccessCheck::ListClusterRoleBindings,
+    api: KindApi::Builtin {
+        object: ObjectKind::ClusterRoleBinding,
+        access_check: AccessCheck::ListClusterRoleBindings,
+    },
     columns: &[
         column("ClusterRole", 200., Align::Left),
         column("Subjects", 300., Align::Left),
@@ -590,14 +651,16 @@ static CLUSTER_ROLE_BINDINGS: KindSpec = KindSpec {
 
 static SERVICE_ACCOUNTS: KindSpec = KindSpec {
     label: "ServiceAccounts",
-    object: ObjectKind::ServiceAccount,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "serviceaccount",
     plural: "serviceaccounts",
     badge: "Sa",
     is_namespaced: true,
-    access_check: AccessCheck::ListServiceAccounts,
+    api: KindApi::Builtin {
+        object: ObjectKind::ServiceAccount,
+        access_check: AccessCheck::ListServiceAccounts,
+    },
     columns: &[
         column("Bound roles", 280., Align::Left),
         column("Used by", 90., Align::Right),
@@ -610,14 +673,16 @@ static SERVICE_ACCOUNTS: KindSpec = KindSpec {
 
 static SECRETS: KindSpec = KindSpec {
     label: "Secrets",
-    object: ObjectKind::Secret,
     name_column: NameColumn::Flexible,
     has_labels: true,
     singular: "secret",
     plural: "secrets",
     badge: "Se",
     is_namespaced: true,
-    access_check: AccessCheck::ListSecrets,
+    api: KindApi::Builtin {
+        object: ObjectKind::Secret,
+        access_check: AccessCheck::ListSecrets,
+    },
     columns: &[
         column("Type", 220., Align::Left),
         column("Keys", 70., Align::Right),
@@ -631,7 +696,6 @@ static SECRETS: KindSpec = KindSpec {
 
 static HELM_RELEASES: KindSpec = KindSpec {
     label: "Releases",
-    object: ObjectKind::Secret,
     name_column: NameColumn::Flexible,
     // Helm's labels are bookkeeping (owner, status, version), not the user's.
     has_labels: false,
@@ -639,7 +703,10 @@ static HELM_RELEASES: KindSpec = KindSpec {
     plural: "releases",
     badge: "Hm",
     is_namespaced: true,
-    access_check: AccessCheck::ListSecrets,
+    api: KindApi::Builtin {
+        object: ObjectKind::Secret,
+        access_check: AccessCheck::ListSecrets,
+    },
     columns: &[
         column("Chart", 260., Align::Left),
         column("App version", 110., Align::Left),
@@ -649,6 +716,31 @@ static HELM_RELEASES: KindSpec = KindSpec {
     ],
     read_only_actions: &["Roll back…"],
     delete_label: "Uninstall release…",
+    has_port_forward: false,
+};
+
+static CRDS: KindSpec = KindSpec {
+    label: "CRDs",
+    name_column: NameColumn::Flexible,
+    // The summary holds no labels.
+    has_labels: false,
+    singular: "customresourcedefinition",
+    plural: "customresourcedefinitions",
+    badge: "Cd",
+    is_namespaced: false,
+    api: KindApi::Builtin {
+        object: ObjectKind::CustomResourceDefinition,
+        access_check: AccessCheck::ListCustomResourceDefinitions,
+    },
+    columns: &[
+        column("Group", 200., Align::Left),
+        column("Version", 90., Align::Left),
+        column("Scope", 110., Align::Left),
+        column("Instances", 90., Align::Right),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete CRD…",
     has_port_forward: false,
 };
 
@@ -666,7 +758,7 @@ pub(crate) fn kind_columns(kind: ResourceKind) -> Vec<KindColumn> {
 }
 
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 25] = [
+    pub(crate) const ALL: [Self; 26] = [
         Self::Namespaces,
         Self::Events,
         Self::Deployments,
@@ -692,6 +784,7 @@ impl ResourceKind {
         Self::ServiceAccounts,
         Self::Secrets,
         Self::HelmReleases,
+        Self::Crds,
     ];
 
     fn spec(self) -> &'static KindSpec {
@@ -721,6 +814,8 @@ impl ResourceKind {
             Self::ServiceAccounts => &SERVICE_ACCOUNTS,
             Self::Secrets => &SECRETS,
             Self::HelmReleases => &HELM_RELEASES,
+            Self::Crds => &CRDS,
+            Self::Custom(kind) => kind.spec(),
         }
     }
 
@@ -747,8 +842,12 @@ impl ResourceKind {
         self.spec().is_namespaced
     }
 
-    pub(crate) fn access_check(self) -> AccessCheck {
-        self.spec().access_check
+    /// The list check of a built-in kind; `None` for a custom kind, which is reviewed per resource.
+    pub(crate) fn access_check(self) -> Option<AccessCheck> {
+        match self.spec().api {
+            KindApi::Builtin { access_check, .. } => Some(access_check),
+            KindApi::Custom => None,
+        }
     }
 
     /// The columns after Name, or all of them when Name is hidden.
@@ -769,14 +868,35 @@ impl ResourceKind {
         self.spec().has_port_forward
     }
 
-    /// The Kubernetes `kind`, such as `Deployment`.
-    pub(crate) fn object(self) -> ObjectKind {
-        self.spec().object
+    /// The typed object kind of a built-in kind; `None` for a custom kind.
+    pub(crate) fn builtin_object(self) -> Option<ObjectKind> {
+        match self.spec().api {
+            KindApi::Builtin { object, .. } => Some(object),
+            KindApi::Custom => None,
+        }
     }
 
     /// The Kubernetes `kind` name, as an event's `involvedObject.kind` spells it.
     pub(crate) fn object_kind(self) -> &'static str {
-        self.object().name()
+        match self {
+            Self::Custom(kind) => &kind.resource().kind,
+            _ => self.builtin_object().map_or("", ObjectKind::name),
+        }
+    }
+
+    /// The reference to one object of this kind; `None` when the namespace does not fit its scope.
+    pub(crate) fn object_ref(self, namespace: Option<String>, name: String) -> Option<ObjectRef> {
+        match self {
+            Self::Custom(kind) => ObjectRef::custom(kind.resource().clone(), namespace, name),
+            _ => ObjectRef::new(self.builtin_object()?, namespace, name),
+        }
+    }
+
+    pub(crate) fn custom(self) -> Option<CustomKind> {
+        match self {
+            Self::Custom(kind) => Some(kind),
+            _ => None,
+        }
     }
 
     pub(crate) fn name_column(self) -> NameColumn {
@@ -790,7 +910,7 @@ impl ResourceKind {
     /// Whether the sidebar counts the kind with a one-shot list. Releases do not: counting their
     /// Secrets would count revisions, not releases.
     pub(crate) fn has_count(self) -> bool {
-        self != Self::HelmReleases
+        !matches!(self, Self::HelmReleases | Self::Custom(_))
     }
 
     /// Whether the drawer has a Monitor tab: the workloads that own pods (a CronJob has none).
@@ -828,8 +948,13 @@ impl ResourceKind {
         connection: &ClusterConnection,
         scope: NamespaceScope,
         events: EventFilter,
-    ) -> BoxStream<'static, WatchUpdate<KindRow>> {
-        match self {
+    ) -> Option<BoxStream<'static, WatchUpdate<KindRow>>> {
+        let stream = match self {
+            Self::Crds => return None,
+            Self::Custom(custom) => connection
+                .watch_custom_objects(custom.resource(), custom.printer_columns(), scope)
+                .map(move |update| rows(update, |summary| custom_object_row(custom, summary)))
+                .boxed(),
             Self::Namespaces => connection
                 .watch_namespaces()
                 .map(|update| rows(update, namespace_row))
@@ -930,12 +1055,13 @@ impl ResourceKind {
                 .watch_helm_releases(scope)
                 .map(|update| rows(update, helm_release_row))
                 .boxed(),
-        }
+        };
+        Some(stream)
     }
 }
 
 /// Maps a snapshot to rows and passes a failure through.
-fn rows<T>(update: WatchUpdate<T>, row: fn(&T) -> KindRow) -> WatchUpdate<KindRow> {
+fn rows<T>(update: WatchUpdate<T>, row: impl Fn(&T) -> KindRow) -> WatchUpdate<KindRow> {
     match update {
         WatchUpdate::Snapshot(items) => WatchUpdate::Snapshot(items.iter().map(row).collect()),
         WatchUpdate::Failed(error) => WatchUpdate::Failed(error),
@@ -999,7 +1125,8 @@ mod tests {
                 ResourceKind::PersistentVolumes,
                 ResourceKind::StorageClasses,
                 ResourceKind::ClusterRoles,
-                ResourceKind::ClusterRoleBindings
+                ResourceKind::ClusterRoleBindings,
+                ResourceKind::Crds
             ]
         );
     }
@@ -1073,12 +1200,37 @@ mod tests {
     }
 
     #[test]
-    fn only_events_and_releases_have_no_labels() {
+    fn only_events_releases_and_crds_have_no_labels() {
         for kind in ResourceKind::ALL {
-            let has_none = matches!(kind, ResourceKind::Events | ResourceKind::HelmReleases);
+            let has_none = matches!(
+                kind,
+                ResourceKind::Events | ResourceKind::HelmReleases | ResourceKind::Crds
+            );
             assert_eq!(kind.has_labels(), !has_none);
         }
     }
+    #[test]
+    fn crds_describe_the_definition_kind() {
+        let kind = ResourceKind::Crds;
+        assert_eq!(kind.label(), "CRDs");
+        assert_eq!(kind.object_kind(), "CustomResourceDefinition");
+        assert_eq!(
+            kind.access_check(),
+            Some(AccessCheck::ListCustomResourceDefinitions)
+        );
+        assert_eq!(kind.plural(), "customresourcedefinitions");
+        let names: Vec<_> = kind_columns(kind)
+            .iter()
+            .map(|column| column.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["Name", "Group", "Version", "Scope", "Instances", "Age"]
+        );
+        // Last in `ALL`, so `from_object_kind` and the sidebar order are unaffected.
+        assert_eq!(ResourceKind::ALL.last(), Some(&kind));
+    }
+
     #[test]
     fn port_forward_kinds_are_deployments_stateful_sets_services() {
         let kinds: Vec<ResourceKind> = ResourceKind::ALL

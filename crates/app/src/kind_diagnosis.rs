@@ -89,7 +89,9 @@ pub(crate) fn kind_diagnosis(
         | KindObject::StatefulSet(_)
         | KindObject::ReplicaSet(_)
         | KindObject::ConfigMap(_)
-        | KindObject::NetworkPolicy(_) => None,
+        | KindObject::NetworkPolicy(_)
+        | KindObject::Crd(_)
+        | KindObject::Custom(_) => None,
     }
 }
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cluster::NamespaceScope;
+use cluster::{CrdSummary, NamespaceScope};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
@@ -11,13 +11,17 @@ use gpui_kit::{
 };
 
 use crate::app_shell::{AppShell, Screen};
-use crate::cluster_session::{AccessState, LiveCluster, namespaces_label};
+use crate::cluster_session::{AccessState, CustomGate, LiveCluster, LiveList, namespaces_label};
+use crate::custom_kind::CustomKind;
 use crate::resource_kind::ResourceKind;
 
 pub(crate) const SIDEBAR_WIDTH: Pixels = px(220.);
 
 /// The items above the groups.
 const TOP_ITEMS: [&str; 3] = ["Overview", "Issues", "Topology"];
+
+/// The section whose items are followed by one submenu per API group of the custom kinds.
+const CUSTOM_RESOURCES: &str = "Custom Resources";
 
 struct NavigationSection {
     name: &'static str,
@@ -133,24 +137,26 @@ fn kind_availability(
     access: &AccessState,
     scope: &NamespaceScope,
 ) -> KindAvailability {
+    // A custom kind has no list check here: its review is per resource, and `item` reads its gate.
+    let Some(check) = kind.access_check() else {
+        return KindAvailability::Enabled;
+    };
     let AccessState::Known(report) = access else {
         return KindAvailability::Enabled;
     };
-    if report.is_allowed(kind.access_check()) {
+    if report.is_allowed(check) {
         return KindAvailability::Enabled;
     }
     let reason = match scope {
         // The review asked cluster-wide, so say so.
         NamespaceScope::All if kind.is_namespaced() => {
-            format!("Not permitted: {} in all namespaces", kind.access_check())
+            format!("Not permitted: {check} in all namespaces")
         }
-        NamespaceScope::Several(names) if kind.is_namespaced() => format!(
-            "Not permitted: {} in {}",
-            kind.access_check(),
-            namespaces_label(names)
-        ),
+        NamespaceScope::Several(names) if kind.is_namespaced() => {
+            format!("Not permitted: {check} in {}", namespaces_label(names))
+        }
         NamespaceScope::All | NamespaceScope::Named(_) | NamespaceScope::Several(_) => {
-            format!("Not permitted: {}", kind.access_check())
+            format!("Not permitted: {check}")
         }
     };
     KindAvailability::Denied {
@@ -167,6 +173,8 @@ fn is_section_open(section: &NavigationSection, active: Screen) -> bool {
             .items
             .iter()
             .any(|name| screen_of(name) == Some(active))
+        || (section.name == CUSTOM_RESOURCES
+            && matches!(active, Screen::Kind(ResourceKind::Custom(_))))
 }
 
 pub(crate) fn sidebar(
@@ -185,7 +193,8 @@ pub(crate) fn sidebar(
                 section
                     .items
                     .iter()
-                    .map(|name| item(name, active, counts, live, cx)),
+                    .map(|name| item(name, active, counts, live, cx))
+                    .chain(custom_groups(section, active, counts, live, cx)),
             )
     }));
     Sidebar::<SidebarMenu>::new("navigation")
@@ -202,13 +211,92 @@ fn item(
     live: Option<&LiveCluster>,
     cx: &Context<AppShell>,
 ) -> SidebarMenuItem {
-    let Some(screen) = screen_of(name) else {
+    screen_item(name, screen_of(name), active, counts, live, cx)
+}
+
+/// One API-group submenu per group of the custom kinds, under Custom Resources, kinds sorted by
+/// label. The group of the shown kind starts open. Nothing before the CRD list has loaded.
+fn custom_groups(
+    section: &NavigationSection,
+    active: Screen,
+    counts: &NavigationCounts,
+    live: Option<&LiveCluster>,
+    cx: &Context<AppShell>,
+) -> Vec<SidebarMenuItem> {
+    if section.name != CUSTOM_RESOURCES {
+        return Vec::new();
+    }
+    let Some(crds) = live.and_then(|live| live.crds.as_ref()) else {
+        return Vec::new();
+    };
+    kind_groups(ready_kinds(&crds.list, &crds.kinds))
+        .into_iter()
+        .map(|(group, kinds)| {
+            let is_open = kinds
+                .iter()
+                .any(|kind| Screen::Kind(ResourceKind::Custom(*kind)) == active);
+            SidebarMenuItem::new(group)
+                .default_open(is_open)
+                .click_to_toggle(true)
+                .children(kinds.into_iter().map(|kind| {
+                    let screen = Screen::Kind(ResourceKind::Custom(kind));
+                    screen_item(kind.spec().label, Some(screen), active, counts, live, cx)
+                }))
+        })
+        .collect()
+}
+
+/// The kinds the sidebar may group: none until the CRD list has loaded, so a stale set never
+/// shows while the list is loading or failed.
+fn ready_kinds<'a>(list: &LiveList<CrdSummary>, kinds: &'a [CustomKind]) -> &'a [CustomKind] {
+    if list.ready_count().is_some() {
+        kinds
+    } else {
+        &[]
+    }
+}
+
+/// The kinds grouped by API group, in the order given (sorted by group).
+fn kind_groups(kinds: &[CustomKind]) -> Vec<(&'static str, Vec<CustomKind>)> {
+    let mut groups: Vec<(&'static str, Vec<CustomKind>)> = Vec::new();
+    for kind in kinds {
+        let group = kind.resource().group.as_str();
+        match groups.last_mut() {
+            Some((last, members)) if *last == group => members.push(*kind),
+            _ => groups.push((group, vec![*kind])),
+        }
+    }
+    groups
+}
+
+/// A kind is denied by the access review (built-in) or by its own list review (custom).
+fn denial(kind: ResourceKind, live: &LiveCluster) -> Option<SharedString> {
+    if let Some(custom) = kind.custom() {
+        return match live.custom_gates.get(&custom) {
+            Some(CustomGate::Denied { reason }) => Some(reason.clone().into()),
+            _ => None,
+        };
+    }
+    match kind_availability(kind, &live.access, &live.scope) {
+        KindAvailability::Enabled => None,
+        KindAvailability::Denied { reason } => Some(reason),
+    }
+}
+
+fn screen_item(
+    name: &'static str,
+    screen: Option<Screen>,
+    active: Screen,
+    counts: &NavigationCounts,
+    live: Option<&LiveCluster>,
+    cx: &Context<AppShell>,
+) -> SidebarMenuItem {
+    let Some(screen) = screen else {
         return SidebarMenuItem::new(name).disable(true);
     };
     if let Screen::Kind(kind) = screen
         && let Some(live) = live
-        && let KindAvailability::Denied { reason } =
-            kind_availability(kind, &live.access, &live.scope)
+        && let Some(reason) = denial(kind, live)
     {
         return denied_item(name, reason, screen == active);
     }
@@ -289,6 +377,7 @@ mod tests {
                 "RoleBindings",
                 "ClusterRoleBindings",
                 "Releases",
+                "CRDs",
             ]
         );
     }
@@ -340,6 +429,99 @@ mod tests {
             })
             .collect();
         AccessState::Known(AccessReport { reviews })
+    }
+
+    fn served(group: &str, plural: &str) -> CustomKind {
+        let crd = cluster::CrdSummary {
+            name: format!("{plural}.{group}"),
+            group: group.to_owned(),
+            kind: plural.trim_end_matches('s').to_owned(),
+            plural: plural.to_owned(),
+            singular: plural.trim_end_matches('s').to_owned(),
+            scope: cluster::ResourceScope::Namespaced,
+            versions: vec![cluster::CrdVersion {
+                name: "v1".to_owned(),
+                is_served: true,
+                is_storage: true,
+                is_deprecated: false,
+                deprecation_warning: None,
+                printer_columns: Vec::new(),
+                schema: cluster::SchemaOutline::default(),
+            }],
+            state: cluster::CrdState::Established,
+            created_at: None,
+        };
+        crate::custom_kind::custom_kinds(
+            &[crd],
+            &mut crate::custom_kind::CustomKindCache::default(),
+        )[0]
+    }
+
+    #[test]
+    fn custom_kinds_group_by_api_group() {
+        let kinds = [
+            served("a.io", "alphas"),
+            served("a.io", "betas"),
+            served("b.io", "gammas"),
+        ];
+        let groups: Vec<_> = kind_groups(&kinds)
+            .into_iter()
+            .map(|(group, members)| (group, members.len()))
+            .collect();
+        assert_eq!(groups, [("a.io", 2), ("b.io", 1)]);
+        assert!(kind_groups(&[]).is_empty());
+    }
+
+    #[test]
+    fn no_groups_without_a_ready_crd_list() {
+        let kinds = [served("a.io", "alphas")];
+        let failed = LiveList::<CrdSummary>::Failed {
+            message: "denied".to_owned(),
+        };
+        let ready = LiveList::<CrdSummary>::Ready {
+            items: Vec::new(),
+            interruption: None,
+        };
+        assert!(ready_kinds(&LiveList::Loading, &kinds).is_empty());
+        assert!(ready_kinds(&failed, &kinds).is_empty());
+        assert_eq!(ready_kinds(&ready, &kinds).len(), 1);
+    }
+
+    #[test]
+    fn crds_item_resolves_through_label() {
+        assert_eq!(screen_of("CRDs"), Some(Screen::Kind(ResourceKind::Crds)));
+    }
+
+    #[test]
+    fn custom_kinds_have_no_list_check_to_deny() {
+        let kind = ResourceKind::Custom(served("a.io", "alphas"));
+        let access = report_denying(&AccessCheck::ALL);
+        assert_eq!(
+            kind_availability(kind, &access, &NamespaceScope::All),
+            KindAvailability::Enabled
+        );
+    }
+
+    #[test]
+    fn crds_are_denied_by_their_list_check() {
+        let access = report_denying(&[AccessCheck::ListCustomResourceDefinitions]);
+        assert_eq!(
+            kind_availability(ResourceKind::Crds, &access, &NamespaceScope::All),
+            KindAvailability::Denied {
+                reason: "Not permitted: list customresourcedefinitions".into()
+            }
+        );
+    }
+
+    #[test]
+    fn the_custom_resources_section_opens_for_a_custom_screen() {
+        let section = SECTIONS
+            .iter()
+            .find(|section| section.name == CUSTOM_RESOURCES)
+            .expect("section exists");
+        let custom = Screen::Kind(ResourceKind::Custom(served("a.io", "alphas")));
+        assert!(is_section_open(section, custom));
+        assert!(!is_section_open(section, Screen::Pods));
     }
 
     fn denied(reason: &str) -> KindAvailability {

@@ -18,6 +18,7 @@ use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_session::{ClusterSession, LiveCluster};
+use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
 use crate::kind_row::{KindCell, KindRow};
@@ -256,6 +257,7 @@ impl TableRow for KindTableRow<'_> {
                 CellValue::Number(i64::try_from(*value).unwrap_or(i64::MAX))
             }
             Some(KindCell::Expiry { not_after }) => CellValue::Number(not_after.as_second()),
+            Some(KindCell::Date { at, .. }) => CellValue::Number(at.as_second()),
             Some(KindCell::Absent) | None => CellValue::Absent,
         }
     }
@@ -571,6 +573,14 @@ fn cell_element(
             // Read per cell: days left change while the screen is open.
             let label = expiry_label(*not_after, jiff::Timestamp::now());
             base().child(toned_text(label, cx))
+        }
+        KindCell::Date { at, rule } => {
+            let now = jiff::Timestamp::now();
+            let text = base().child(date_text(*at, now));
+            match date_tone(*rule, *at, now) {
+                Some(tone) => text.text_color(tone_color(tone, cx)),
+                None => text,
+            }
         }
         KindCell::Age { at, tone } => {
             // Read per cell: a render has no shared clock, and a second of skew is invisible.

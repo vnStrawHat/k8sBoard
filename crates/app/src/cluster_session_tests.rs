@@ -265,6 +265,7 @@ fn watches(
 ) -> OpenWatches {
     OpenWatches {
         namespaces,
+        crds: false,
         explorer,
         companion,
         object_events,
@@ -289,7 +290,7 @@ fn open_watch_count_counts_several_related_and_companion() {
         open_watch_count(watches(3, 3, 3, true, true)),
         2 + 3 + 3 + 3 + 2
     );
-    // Five namespaces reach the 3N + 4 bound exactly.
+    // Five namespaces reach the 3N + 4 bound exactly (before the CRD watch).
     assert_eq!(open_watch_count(watches(5, 5, 5, true, true)), 3 * 5 + 4);
     // StorageClasses is cluster-scoped: one explorer watch and one PV companion watch whatever the
     // scope, so three picked namespaces stay below the bound.
@@ -1005,5 +1006,306 @@ fn releases_have_a_history_related_list() {
     assert_eq!(
         denied_related_check(&subject, &report_denying(&[AccessCheck::ListSecrets])),
         None
+    );
+}
+
+#[test]
+fn open_watch_count_stays_within_3n_plus_5() {
+    let with_crds = |watches: OpenWatches| OpenWatches {
+        crds: true,
+        ..watches
+    };
+    // The CRDs screen adds no watch of its own: the CRD watch feeds it.
+    assert!(!crds_explorer().is_watching());
+    assert_eq!(
+        open_watch_count(with_crds(watches(1, 0, 0, false, false))),
+        4
+    );
+    // Five namespaces, a namespaced companion kind, drawer events and related: the worst case.
+    assert_eq!(
+        open_watch_count(with_crds(watches(5, 5, 5, true, true))),
+        3 * 5 + 5
+    );
+}
+
+fn crd_named(name: &str) -> CrdSummary {
+    CrdSummary {
+        name: name.to_owned(),
+        group: "example.io".to_owned(),
+        kind: "Widget".to_owned(),
+        plural: "widgets".to_owned(),
+        singular: "widget".to_owned(),
+        scope: cluster::ResourceScope::Namespaced,
+        versions: Vec::new(),
+        state: cluster::CrdState::Established,
+        created_at: None,
+    }
+}
+
+fn crds_explorer() -> KindList {
+    KindList {
+        kind: ResourceKind::Crds,
+        list: LiveList::Loading,
+        flow: StreamFlow::Live,
+        companion: None,
+        subscription: None,
+    }
+}
+
+fn crd_snapshot(names: &[&str]) -> CrdUpdate {
+    let crds: Vec<CrdSummary> = names.iter().map(|name| crd_named(name)).collect();
+    let rows = crds.iter().map(crd_row).collect();
+    CrdUpdate::Snapshot { crds, rows }
+}
+
+fn row_names(list: &LiveList<KindRow>) -> Vec<&str> {
+    list.items().iter().map(|row| row.name.as_str()).collect()
+}
+
+#[test]
+fn crd_watch_waits_for_a_non_denying_review() {
+    assert!(!crds_denied(&AccessState::Unknown));
+    let report = |decision| {
+        AccessState::Known(AccessReport {
+            reviews: vec![AccessReview {
+                check: AccessCheck::ListCustomResourceDefinitions,
+                decision,
+            }],
+        })
+    };
+    assert!(!crds_denied(&report(AccessDecision::Allowed)));
+    assert!(crds_denied(&report(AccessDecision::Denied {
+        reason: None
+    })));
+}
+
+#[test]
+fn crd_snapshot_feeds_the_crds_explorer() {
+    let mut crds = LiveList::Loading;
+    let mut explorer = crds_explorer();
+    feed_crds(
+        &mut crds,
+        Some(&mut explorer),
+        crd_snapshot(&["a.example.io", "b.example.io"]),
+    );
+    assert_eq!(crds.ready_count(), Some(2));
+    assert_eq!(row_names(&explorer.list), ["a.example.io", "b.example.io"]);
+}
+
+#[test]
+fn crd_snapshot_without_the_crds_screen_only_updates_definitions() {
+    let mut crds = LiveList::Loading;
+    feed_crds(&mut crds, None, crd_snapshot(&["a.example.io"]));
+    assert_eq!(crds.ready_count(), Some(1));
+}
+
+#[test]
+fn crd_failure_marks_both_lists_and_keeps_stale_rows() {
+    let failure = || {
+        CrdUpdate::Failed(ClusterError::TimedOut {
+            context: "ctx".to_owned(),
+            action: "watching custom resource definitions",
+        })
+    };
+    let mut crds = LiveList::Loading;
+    let mut explorer = crds_explorer();
+    feed_crds(&mut crds, Some(&mut explorer), failure());
+    assert!(crds.failure().is_some());
+    assert!(explorer.list.failure().is_some());
+    feed_crds(
+        &mut crds,
+        Some(&mut explorer),
+        crd_snapshot(&["a.example.io"]),
+    );
+    feed_crds(&mut crds, Some(&mut explorer), failure());
+    assert!(explorer.list.interruption().is_some());
+    assert_eq!(row_names(&explorer.list), ["a.example.io"]);
+}
+
+#[test]
+fn crds_screen_opened_later_is_seeded_from_the_watch() {
+    let unknown = AccessState::Unknown;
+    assert!(crd_explorer_list(None, &unknown).is_loading());
+    let mut crds = LiveList::Loading;
+    assert!(crd_explorer_list(Some(&crds), &unknown).is_loading());
+    feed_crds(&mut crds, None, crd_snapshot(&["a.example.io"]));
+    let seeded = crd_explorer_list(Some(&crds), &unknown);
+    assert_eq!(row_names(&seeded), ["a.example.io"]);
+}
+
+#[test]
+fn paused_crds_screen_holds_the_newest_snapshot() {
+    let mut crds = LiveList::Loading;
+    let mut explorer = crds_explorer();
+    feed_crds(
+        &mut crds,
+        Some(&mut explorer),
+        crd_snapshot(&["a.example.io"]),
+    );
+    assert!(explorer.flow.pause(&explorer.list));
+    feed_crds(
+        &mut crds,
+        Some(&mut explorer),
+        crd_snapshot(&["b.example.io"]),
+    );
+    assert_eq!(row_names(&explorer.list), ["a.example.io"]);
+    explorer.flow.resume(&mut explorer.list);
+    assert_eq!(row_names(&explorer.list), ["b.example.io"]);
+}
+
+fn widget_kind(is_namespaced: bool) -> CustomKind {
+    let crd = CrdSummary {
+        name: "widgets.x.io".to_owned(),
+        group: "x.io".to_owned(),
+        kind: "Widget".to_owned(),
+        plural: "widgets".to_owned(),
+        singular: "widget".to_owned(),
+        scope: if is_namespaced {
+            cluster::ResourceScope::Namespaced
+        } else {
+            cluster::ResourceScope::Cluster
+        },
+        versions: vec![cluster::CrdVersion {
+            name: "v1".to_owned(),
+            is_served: true,
+            is_storage: true,
+            is_deprecated: false,
+            deprecation_warning: None,
+            printer_columns: Vec::new(),
+            schema: cluster::SchemaOutline::default(),
+        }],
+        state: cluster::CrdState::Established,
+        created_at: None,
+    };
+    custom_kinds(&[crd], &mut CustomKindCache::default())[0]
+}
+
+#[test]
+fn custom_denied_reason_names_scope() {
+    let namespaced = widget_kind(true);
+    assert_eq!(
+        custom_denied_reason(namespaced, &NamespaceScope::All),
+        "Not permitted: list widgets.x.io in all namespaces"
+    );
+    assert_eq!(
+        custom_denied_reason(
+            namespaced,
+            &NamespaceScope::of_namespaces(["b".to_owned(), "a".to_owned()])
+        ),
+        "Not permitted: list widgets.x.io in a, b"
+    );
+    assert_eq!(
+        custom_denied_reason(namespaced, &NamespaceScope::Named("a".to_owned())),
+        "Not permitted: list widgets.x.io"
+    );
+    // A cluster-scoped kind never names a scope.
+    assert_eq!(
+        custom_denied_reason(widget_kind(false), &NamespaceScope::All),
+        "Not permitted: list widgets.x.io"
+    );
+}
+
+#[test]
+fn custom_gate_outcome_follows_the_review() {
+    let kind = widget_kind(true);
+    let scope = NamespaceScope::All;
+    assert_eq!(
+        gate_outcome(Some(Ok(&AccessDecision::Allowed)), kind, &scope),
+        GateOutcome::Allowed
+    );
+    assert_eq!(
+        gate_outcome(
+            Some(Ok(&AccessDecision::Denied { reason: None })),
+            kind,
+            &scope
+        ),
+        GateOutcome::Denied(custom_denied_reason(kind, &scope))
+    );
+    // A failed or unfinished review caches nothing and lets the list start.
+    let failure = ClusterError::TimedOut {
+        context: "ctx".to_owned(),
+        action: "reviewing access",
+    };
+    assert_eq!(
+        gate_outcome(Some(Err(&failure)), kind, &scope),
+        GateOutcome::Unknown
+    );
+    assert_eq!(gate_outcome(None, kind, &scope), GateOutcome::Unknown);
+}
+
+#[test]
+fn custom_kind_cache_moves_to_the_next_session() {
+    let mut cache = CustomKindCache::default();
+    let first = custom_kinds(&[crd_named_widget()], &mut cache)[0];
+    // What `take_custom_kind_cache` hands over keeps every definition.
+    let mut moved = std::mem::take(&mut cache);
+    let reused = custom_kinds(&[crd_named_widget()], &mut moved)[0];
+    assert_eq!(first, reused);
+}
+
+fn crd_named_widget() -> CrdSummary {
+    CrdSummary {
+        versions: vec![cluster::CrdVersion {
+            name: "v1".to_owned(),
+            is_served: true,
+            is_storage: true,
+            is_deprecated: false,
+            deprecation_warning: None,
+            printer_columns: Vec::new(),
+            schema: cluster::SchemaOutline::default(),
+        }],
+        ..crd_named("widgets.x.io")
+    }
+}
+
+#[test]
+fn denied_crd_list_seeds_a_failed_crds_screen() {
+    let denied = AccessState::Known(AccessReport {
+        reviews: vec![AccessReview {
+            check: AccessCheck::ListCustomResourceDefinitions,
+            decision: AccessDecision::Denied { reason: None },
+        }],
+    });
+    let list = crd_explorer_list(None, &denied);
+    assert_eq!(
+        list.failure(),
+        Some("Not permitted: list customresourcedefinitions")
+    );
+    // Not denied (or not known yet): the list waits for the watch.
+    assert!(crd_explorer_list(None, &AccessState::Unknown).is_loading());
+}
+
+#[test]
+fn cluster_scoped_gates_survive_a_scope_change() {
+    assert!(keeps_gate_on_scope_change(widget_kind(false)));
+    assert!(!keeps_gate_on_scope_change(widget_kind(true)));
+}
+
+#[test]
+fn explorer_action_follows_the_review_of_the_shown_kind() {
+    let shown = ResourceKind::Custom(widget_kind(true));
+    let other = ResourceKind::Deployments;
+    let denied = || GateOutcome::Denied("no".to_owned());
+    assert_eq!(
+        explorer_action(Some(shown), shown, denied()),
+        ExplorerAction::Fail("no".to_owned())
+    );
+    assert_eq!(
+        explorer_action(Some(shown), shown, GateOutcome::Allowed),
+        ExplorerAction::Start
+    );
+    // A review that failed starts the list so the watch shows its own error.
+    assert_eq!(
+        explorer_action(Some(shown), shown, GateOutcome::Unknown),
+        ExplorerAction::Start
+    );
+    // The result of another kind, or with nothing shown, only changes its gate.
+    assert_eq!(
+        explorer_action(Some(other), shown, denied()),
+        ExplorerAction::Leave
+    );
+    assert_eq!(
+        explorer_action(None, shown, GateOutcome::Allowed),
+        ExplorerAction::Leave
     );
 }
