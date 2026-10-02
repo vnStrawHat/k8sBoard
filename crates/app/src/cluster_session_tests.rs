@@ -424,3 +424,109 @@ fn related_list_ignores_other_variant() {
     jobs_list.mark_stopped();
     assert!(matches!(&jobs_list, RelatedList::Jobs(jobs) if jobs.failure().is_some()));
 }
+
+fn counted(scope: &NamespaceScope, started_at: Instant) -> KindCounts {
+    KindCounts {
+        scope: Some(scope.clone()),
+        counts: HashMap::from([(ResourceKind::Deployments, 3)]),
+        refreshed_at: Some(started_at),
+        task: None,
+    }
+}
+
+#[test]
+fn counts_start_once_per_scope_after_review() {
+    let now = Instant::now();
+    let all = NamespaceScope::All;
+    let named = NamespaceScope::Named("team-a".to_owned());
+    // The first review of a scope counts.
+    assert!(KindCounts::default().wants_run(CountTrigger::Review, &all, now));
+    // A retried review for the same scope does not.
+    assert!(!counted(&all, now).wants_run(CountTrigger::Review, &all, now));
+    // Another scope does.
+    assert!(counted(&all, now).wants_run(CountTrigger::Review, &named, now));
+}
+
+#[test]
+fn navigation_refresh_waits_30_seconds() {
+    let started = Instant::now();
+    let all = NamespaceScope::All;
+    let counts = counted(&all, started);
+    let wants = |seconds| {
+        counts.wants_run(
+            CountTrigger::Navigation,
+            &all,
+            started + Duration::from_secs(seconds),
+        )
+    };
+    assert!(!wants(0));
+    assert!(!wants(29));
+    assert!(wants(30));
+    // Nothing counted yet: the review starts the first run, not a navigation.
+    assert!(!KindCounts::default().wants_run(CountTrigger::Navigation, &all, started));
+    // Another scope waits for its review too.
+    let named = NamespaceScope::Named("team-a".to_owned());
+    assert!(!counts.wants_run(
+        CountTrigger::Navigation,
+        &named,
+        started + Duration::from_secs(60)
+    ));
+}
+
+#[test]
+fn scope_change_clears_counts() {
+    let now = Instant::now();
+    let all = NamespaceScope::All;
+    let counts = counted(&all, now);
+    assert_eq!(
+        counts.all(EventFilter::All).get(&ResourceKind::Deployments),
+        Some(&3)
+    );
+    // `set_scope` starts over with the default, which holds no numbers and counts for any scope.
+    let cleared = KindCounts::default();
+    assert!(cleared.all(EventFilter::All).is_empty());
+    assert!(cleared.wants_run(CountTrigger::Review, &all, now));
+}
+
+#[test]
+fn denied_kinds_are_not_counted() {
+    let allowed = denial_of_slices(AccessDecision::Allowed);
+    // `denial_of_slices` reports only one check, so everything else reads as not allowed.
+    assert!(countable_kinds(&allowed).is_empty());
+    let report = AccessState::Known(AccessReport {
+        reviews: AccessCheck::ALL
+            .into_iter()
+            .map(|check| AccessReview {
+                check,
+                decision: if check == AccessCheck::ListDeployments {
+                    AccessDecision::Denied { reason: None }
+                } else {
+                    AccessDecision::Allowed
+                },
+            })
+            .collect(),
+    });
+    let kinds = countable_kinds(&report);
+    assert!(!kinds.contains(&ResourceKind::Deployments));
+    assert!(kinds.contains(&ResourceKind::Services));
+    assert_eq!(kinds.len(), ResourceKind::ALL.len() - 1);
+}
+
+#[test]
+fn nothing_is_counted_before_the_report_is_known() {
+    assert!(countable_kinds(&AccessState::Unknown).is_empty());
+}
+
+#[test]
+fn counted_events_are_hidden_while_the_list_shows_warnings_only() {
+    let counts = KindCounts {
+        counts: HashMap::from([(ResourceKind::Events, 120), (ResourceKind::Jobs, 5)]),
+        ..KindCounts::default()
+    };
+    let all = counts.all(EventFilter::All);
+    assert_eq!(all.get(&ResourceKind::Events), Some(&120));
+    // The count includes normal events, so it would not match the filtered list.
+    let warnings = counts.all(EventFilter::WarningsOnly);
+    assert_eq!(warnings.get(&ResourceKind::Events), None);
+    assert_eq!(warnings.get(&ResourceKind::Jobs), Some(&5));
+}

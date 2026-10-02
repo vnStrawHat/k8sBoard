@@ -23,7 +23,7 @@
 |---|---|---|---|---|
 | N1 | Groups (Cluster … Custom Resources), collapse, active group open | Done | 0003, 0005 `navigation.rs` | — |
 | N2 | Items disabled with "Not permitted" from SSAR | Done | 0005 | extend per new kind |
-| N3 | Counts per item | Partial | Pods, Nodes, visible kind only | cheap counts for all kinds → 0009 (decision C11) |
+| N3 | Counts per item | Done (0012) | live counts for Pods, Nodes, the visible kind; one-shot counts for the other kinds | — |
 | N4 | Error counts (red) | Missing | — | 0020 |
 | N5 | Top items Overview, Issues, Topology | Missing (disabled) | — | 0021, 0020, 0022 |
 | N6 | Custom Resources group auto-filled from CRDs (e.g. Certificates) | Missing | — | 0018 |

@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use cluster::{
     AccessCheck, AccessReport, ClusterConnection, ClusterError, ConfigMapValues, ContextSummary,
@@ -71,6 +73,8 @@ pub(crate) struct LiveCluster {
     /// The objects related to the open drawer (a Deployment's ReplicaSets); `None` while no
     /// drawer needs them.
     related: Option<RelatedObjects>,
+    /// The sidebar numbers of kinds without a running watch.
+    kind_counts: KindCounts,
     connection: ClusterConnection,
     subscriptions: Subscriptions,
 }
@@ -316,6 +320,81 @@ impl AccessState {
             }
         }
     }
+}
+
+/// How long counted sidebar numbers stay fresh before a navigation counts again.
+const KIND_COUNT_REFRESH: Duration = Duration::from_secs(30);
+/// Count requests in flight at once: a run is about a dozen tiny lists.
+const KIND_COUNT_CONCURRENCY: usize = 4;
+
+/// One kind's result of a count run: the number, `None` when the server reported no remaining
+/// count, or the error text.
+type KindCount = (ResourceKind, Result<Option<u64>, String>);
+
+/// What asks for a count run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CountTrigger {
+    /// An access review finished: counts once per scope, so a retried review does not recount.
+    Review,
+    /// The user went to another screen: counts again only when the numbers are 30 s old.
+    Navigation,
+}
+
+/// The sidebar numbers of kinds whose watch is not running, from one-shot `limit=1` lists.
+#[derive(Default)]
+pub(crate) struct KindCounts {
+    /// The scope the counts, or the run that is filling them, belong to.
+    scope: Option<NamespaceScope>,
+    counts: HashMap<ResourceKind, u64>,
+    /// When the last run started, not finished: navigation re-runs are throttled from the start, so
+    /// a slow run never lets a second one begin right behind it.
+    refreshed_at: Option<Instant>,
+    task: Option<Task<()>>,
+}
+
+impl KindCounts {
+    /// Whether a run should start now. A run for the scope that is already counted or counting
+    /// never starts from a review; from a navigation it starts only once the last one is stale.
+    fn wants_run(&self, trigger: CountTrigger, scope: &NamespaceScope, now: Instant) -> bool {
+        let is_counted = self.scope.as_ref() == Some(scope);
+        match trigger {
+            CountTrigger::Review => !is_counted,
+            CountTrigger::Navigation => {
+                is_counted
+                    && self
+                        .refreshed_at
+                        .is_some_and(|at| now.duration_since(at) >= KIND_COUNT_REFRESH)
+            }
+        }
+    }
+
+    /// Whether a run has not delivered its numbers. Only the screenshot hook waits on it.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn is_running(&self) -> bool {
+        self.task.is_some()
+    }
+
+    /// Every counted number, for the sidebar. Events are counted unfiltered, so they are left out
+    /// while the Events screen shows warnings only: the number would not match its list.
+    pub(crate) fn all(&self, event_filter: EventFilter) -> HashMap<ResourceKind, usize> {
+        self.counts
+            .iter()
+            .filter(|(kind, _)| **kind != ResourceKind::Events || event_filter == EventFilter::All)
+            .filter_map(|(kind, count)| Some((*kind, usize::try_from(*count).ok()?)))
+            .collect()
+    }
+}
+
+/// The kinds a run counts: those whose list the report allows. Without a known report nothing is
+/// counted, so a denied kind never costs a request.
+fn countable_kinds(access: &AccessState) -> Vec<ResourceKind> {
+    let AccessState::Known(report) = access else {
+        return Vec::new();
+    };
+    ResourceKind::ALL
+        .into_iter()
+        .filter(|kind| report.is_allowed(kind.access_check()))
+        .collect()
 }
 
 /// The latest state of one watched kind.
@@ -616,6 +695,7 @@ impl ClusterSession {
                 message: "the connection task stopped unexpectedly".to_owned(),
             },
         };
+        self.refresh_kind_counts(CountTrigger::Review, cx);
         self.update_metrics_feeds(cx);
         cx.notify();
     }
@@ -657,6 +737,8 @@ impl ClusterSession {
         live.metrics.restart_pods(&scope, review);
         live.metrics.kubelet.history.retain_scope(&scope);
         live.scope = scope;
+        // The numbers are for the old scope; the review for the new one counts again.
+        live.kind_counts = KindCounts::default();
         live.refresh_kubelet_targets();
         cx.notify();
     }
@@ -789,6 +871,81 @@ impl ClusterSession {
             .set_demand(demand, live.nodes.items(), live.pods.items());
     }
 
+    /// Counts the kinds whose watch is not running, for the sidebar, with one tiny list per kind
+    /// and namespace on the cluster runtime. A run for the same scope replaces the last one's
+    /// task, and its numbers arrive in one update.
+    pub(crate) fn refresh_kind_counts(&mut self, trigger: CountTrigger, cx: &mut Context<Self>) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        let kinds = countable_kinds(&live.access);
+        let now = Instant::now();
+        if kinds.is_empty() || !live.kind_counts.wants_run(trigger, &live.scope, now) {
+            return;
+        }
+        let connection = live.connection.clone();
+        let scope = live.scope.clone();
+        let counting = {
+            let scope = scope.clone();
+            runtime.spawn(async move {
+                futures::stream::iter(kinds)
+                    .map(|kind| {
+                        let connection = connection.clone();
+                        let scope = scope.clone();
+                        async move {
+                            let count = connection.count_objects(kind.object(), &scope).await;
+                            (kind, count.map_err(|error| error_text(&error)))
+                        }
+                    })
+                    .buffer_unordered(KIND_COUNT_CONCURRENCY)
+                    .collect::<Vec<_>>()
+                    .await
+            })
+        };
+        let task = cx.spawn(async move |this, cx| {
+            let result = counting.await;
+            let _ = this.update(cx, |session, cx| {
+                session.finish_kind_counts(result, cx);
+            });
+        });
+        // The old numbers stay on screen until the new ones arrive, unless the scope changed.
+        live.kind_counts.scope = Some(scope);
+        live.kind_counts.refreshed_at = Some(now);
+        live.kind_counts.task = Some(task);
+    }
+
+    fn finish_kind_counts(
+        &mut self,
+        result: Result<Vec<KindCount>, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        // A scope change drops the run with its `KindCounts`, so a result that arrives is current.
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        live.kind_counts.task = None;
+        // A task that stopped leaves the old numbers; the next navigation after 30 s counts again.
+        let Ok(results) = result else {
+            return;
+        };
+        let mut counts = HashMap::new();
+        for (kind, count) in results {
+            match count {
+                Ok(Some(count)) => {
+                    counts.insert(kind, count);
+                }
+                // A server that reports no remaining count leaves the kind without a number.
+                Ok(None) => {}
+                Err(message) => {
+                    tracing::warn!(kind = kind.label(), %message, "counting objects failed");
+                }
+            }
+        }
+        live.kind_counts.counts = counts;
+        cx.notify();
+    }
+
     fn finish_access_review(
         &mut self,
         result: Result<Result<AccessReport, ClusterError>, tokio::task::JoinError>,
@@ -804,6 +961,7 @@ impl ClusterSession {
         };
         live.access = AccessState::from_review(review);
         live.drop_denied_companion();
+        self.refresh_kind_counts(CountTrigger::Review, cx);
         self.update_metrics_feeds(cx);
         cx.notify();
     }
@@ -894,6 +1052,11 @@ impl LiveCluster {
             NamespaceScope::Named(namespace) => namespace.clone(),
             NamespaceScope::Several(names) => namespaces_label(names),
         }
+    }
+
+    /// The counted sidebar numbers of kinds without a running watch.
+    pub(crate) fn kind_counts(&self) -> &KindCounts {
+        &self.kind_counts
     }
 
     /// The kind and item count of the loaded explorer list, for the sidebar.
@@ -1145,6 +1308,7 @@ impl LiveCluster {
             explorer,
             object_events: None,
             related: None,
+            kind_counts: KindCounts::default(),
             connection,
             subscriptions,
         }

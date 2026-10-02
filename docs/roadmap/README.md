@@ -30,7 +30,7 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 | Pods (W4/W4b) | Partial | 0003, 0004, 0007, 0008 | 0010 |
 | Nodes (W5) | Partial | 0003, 0008 | 0010, 0034 |
 | Logs dock (W8/W8b) | Partial | 0004 | 0019 |
-| Kind Explorer (W7): 12 of 29 kinds live | Partial | 0003, 0005 | 0006, 0012–0018 |
+| Kind Explorer (W7): 12 of 29 kinds live | Partial (drawer completions of the live kinds done in 0012) | 0003, 0005, 0012 | 0013–0018 |
 | Events screen and drawer events | Planned(0006) | 0006 | — |
 | Drawer YAML tab (W4c) | Done | 0007 | — |
 | Drawer Monitor tab (W4c) | Done | 0010, 0011 | |

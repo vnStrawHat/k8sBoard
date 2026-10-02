@@ -22,7 +22,7 @@ A per-session sampler polling `metrics.k8s.io` every 15 s into bounded ring buff
 Read `GET /api/v1/nodes/{node}/proxy/stats/summary` (fixed path allow-list) for Network rx/tx and Disk I/O read/write charts, PVC used bytes and inodes (for 0014), and per-node allocatable usage. One poll per node per 15 s: always on for up to 10 Ready nodes, else while a drawer needs the node; cAdvisor (Disk I/O) only while a Monitor tab shows (at most 3 nodes).
 - Deps: 0010. Risk: Med (nodes/proxy is powerful; must never build arbitrary proxy paths). UAT: `get nodes/proxy` allowed.
 
-### 0012 — Kind drawer completions (0005 open items)
+### 0012 — Kind drawer completions (0005 open items) — implemented
 `PodSummary.labels`; Services Endpoints column and list via an EndpointSlice watch plus "matches no pods"; ConfigMap "Used by" from pod specs and values fetched on drawer open; Deployment revisions (ReplicaSets by owner, read-only list); StatefulSet pods by ordinal with PVCs; DaemonSet rollout-by-node; Job attempts; WHY boxes for DaemonSet, Job, Deployment; CronJob Next run and next runs; Namespace Pods/CPU req/Memory req columns; Ingress Open URL (system browser); Go to owner links.
 - Deps: 0008. Risk: Med (breadth; split into 3 steps). New dep: cron parser + jiff time zones (C6).
 

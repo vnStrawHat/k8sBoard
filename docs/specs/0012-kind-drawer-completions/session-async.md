@@ -78,7 +78,8 @@ pub(crate) struct KindCounts { scope: NamespaceScope, counts: HashMap<ResourceKi
 impl ClusterSession { fn refresh_kind_counts(&mut self, cx: &mut Context<Self>); }
 ```
 
-- **Trigger**: `finish_access_review` with a `Known` report starts a run when `KindCounts.scope` differs from the live scope (once per scope: a retried review for the same scope does not recount); a scope change clears the counts. `AppShell::show_screen` also asks for a run, which starts only when 30 s passed since `refreshed_at`. A new run replaces the task.
+- **Trigger**: `finish_connect` (the first report) and every `finish_access_review` with a `Known` report start a run when `KindCounts.scope` differs from the live scope (once per scope: a retried review for the same scope does not recount); a scope change clears the counts. `AppShell::show_screen` also asks for a run, which starts only when 30 s passed since `refreshed_at`, the start of the last run. A new run replaces the task. Counted Events are hidden while the Events screen shows warnings only.
+- ponytail: the cost grows linearly with a Several scope, `1 + 10N` lists per run for N namespaces (Namespaces is cluster-scoped, the other 10 kinds are namespaced; Pods and Nodes have live counts). Batch per kind if N grows past the 5-namespace cap.
 - A run counts every kind in `ResourceKind::ALL` whose list check is allowed, on the cluster runtime: `stream::iter(kinds).map(count_objects).buffer_unordered(4)`, collected, then one `update` and one `notify`. Failures and `None` leave that kind without a count; only the kind and the error text are logged.
 - `NavigationCounts` gains `kinds: HashMap<ResourceKind, usize>`; a live explorer list's count wins, then the counted one, else none.
 

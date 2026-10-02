@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use cluster::NamespaceScope;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
@@ -97,11 +99,24 @@ fn screen_of(item: &str) -> Option<Screen> {
 }
 
 /// Snapshot lengths shown next to Pods, Nodes, and the visible kind; `None` while a list is not
-/// loaded. Other kinds show no count, because their watches are not running.
+/// loaded. Other kinds show their counted number, when they have one.
 pub(crate) struct NavigationCounts {
     pub(crate) pods: Option<usize>,
     pub(crate) nodes: Option<usize>,
     pub(crate) explorer: Option<(ResourceKind, usize)>,
+    /// Counted numbers of kinds, from one-shot requests.
+    pub(crate) kinds: HashMap<ResourceKind, usize>,
+}
+
+impl NavigationCounts {
+    /// The number of `kind`: the live list of the visible screen wins over a counted one.
+    fn of_kind(&self, kind: ResourceKind) -> Option<usize> {
+        let live = self
+            .explorer
+            .filter(|(listed, _)| *listed == kind)
+            .map(|(_, count)| count);
+        live.or_else(|| self.kinds.get(&kind).copied())
+    }
 }
 
 /// Whether a kind item can be opened.
@@ -189,10 +204,7 @@ fn item(
     let count = match screen {
         Screen::Pods => counts.pods,
         Screen::Nodes => counts.nodes,
-        Screen::Kind(kind) => counts
-            .explorer
-            .filter(|(counted, _)| *counted == kind)
-            .map(|(_, count)| count),
+        Screen::Kind(kind) => counts.of_kind(kind),
     };
     SidebarMenuItem::new(name)
         .active(screen == active)
@@ -359,5 +371,22 @@ mod tests {
             .map(|section| section.name)
             .collect();
         assert_eq!(open, ["Cluster", "Workloads"]);
+    }
+
+    #[test]
+    fn live_count_wins_over_counted() {
+        let counts = NavigationCounts {
+            pods: None,
+            nodes: None,
+            explorer: Some((ResourceKind::Services, 71)),
+            kinds: HashMap::from([
+                (ResourceKind::Services, 70),
+                (ResourceKind::Deployments, 31),
+            ]),
+        };
+        // The visible kind shows its live list; the others show what was counted.
+        assert_eq!(counts.of_kind(ResourceKind::Services), Some(71));
+        assert_eq!(counts.of_kind(ResourceKind::Deployments), Some(31));
+        assert_eq!(counts.of_kind(ResourceKind::Jobs), None);
     }
 }

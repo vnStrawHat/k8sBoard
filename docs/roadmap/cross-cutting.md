@@ -16,7 +16,7 @@
 | C8 | **Write API style** | Server-side apply with field manager `k8sboard` for YAML edits (conflicts shown, force only with confirm); JSON merge patch for single-field actions (scale, cordon, suspend); `dryRun=All` before every apply; Eviction API for drain and evict | 0030 |
 | C9 | **User-chosen exports** (logs, Overview report, Topology PNG, audit log) | Only through a save-file dialog the user confirms; no automatic file writes. This reverses 0004 decision 15 ("logs never written to disk") for explicit Export only, so it needs user consent | 0019 |
 | C10 | **Audit log** | Append-only JSON lines in the C2 dir: time, cluster, user identity, action, object, field paths changed, optional note. Values of Secret fields are never recorded; diffs are recorded as field paths plus non-secret values only | 0030 |
-| C11 | **Sidebar counts for every kind** | Counts only for kinds with a live watch (today's rule) plus a one-shot metadata list on group expand, refreshed on navigation; no always-on watches for counts | 0009 |
+| C11 | **Sidebar counts for every kind** | Counts only for kinds with a live watch (today's rule) plus a one-shot metadata list on group expand, refreshed on navigation; no always-on watches for counts | 0009; Done (0012) |
 | C12 | **Helm writes** | Native rollback (re-apply the previous manifest, write a new release Secret) is large and fragile; proposed: run the user's `helm` CLI with the same kubeconfig/context, shown as a command preview. User decision | 0038 |
 | C13 | **Always-on watch budget** | Issues and Overview need pods, nodes, events, and a few kinds watched for the whole session. Budget: idle RAM < 150 MB (wireframe principle) on a ~1,000-pod cluster; measure before 0020 merges | 0020 |
 
@@ -26,7 +26,7 @@
 |---|---|---|
 | YAML serialization | `serde-saphyr` 1.3 (chosen in 0007; `serde_json` is a direct dependency of the cluster crate) | 0007 |
 | Charts | Own `Plot` implementation on the kit primitives (0010); no dependency | 0010 |
-| Cron schedules + time zones | a cron parser crate; `jiff` time-zone features (0004 open item 3) | 0012 |
+| Cron schedules + time zones | own robfig port + `jiff` `tzdb-bundle-always` (0012, done) | 0012 |
 | x509 not-after | an x509 parser crate | 0016 |
 | Helm decoding | gzip (`flate2`), base64, `serde_json` | 0017 |
 | Diff | `similar` (named in the stack table) | 0017, 0031 |

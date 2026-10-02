@@ -20,20 +20,20 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Group | Kind | T | Dr | Read-only gaps → spec | Mutating actions → spec |
 |---|---|---|---|---|---|
 | Cluster | Nodes | Done | Partial | conditions, allocatable, system 0008; CPU/Mem 0010; View pods on node 0009 | shell 0037; cordon, drain, taints, labels 0034; delete 0033 |
-| Cluster | Namespaces | Partial | Partial | Pods, CPU req, Memory req columns 0012; STUCK box and remaining resources 0018; quota section 0013; "Set as default" 0024 | New 0031; delete 0033 |
+| Cluster | Namespaces | Partial | Partial | Pods, CPU req, Memory req columns Done (0012); STUCK box and remaining resources 0018; quota section 0013; "Set as default" 0024 | New 0031; delete 0033 |
 | Cluster | Events | Planned(0006) | Planned(0006) | Warnings only, Go to object, Copy message: 0006; Pause stream, Filter similar 0009 | — |
 | Workloads | Pods | Done | Partial | see [inventory-screens.md](inventory-screens.md) W4 rows | see W4 rows |
-| Workloads | Deployments | Done | Partial | WHY box, Revisions list 0012; View logs (all pods) 0019 | scale, restart, roll back, pause 0032; port-forward 0035 |
-| Workloads | StatefulSets | Done | Partial | pods by ordinal with their PVC 0012; logs 0019 | scale, restart 0032; port-forward 0035 |
-| Workloads | DaemonSets | Done | Partial | rollout-by-node bars, not-ready nodes, WHY box 0012; logs 0019 | restart 0032 |
-| Workloads | ReplicaSets | Done | Partial | Hide inactive 0009; Go to owner 0012; logs 0019 | — (scale locked by owner) |
-| Workloads | Jobs | Done | Partial | attempts, BACKOFF LIMIT box 0012; logs 0019 | Re-run 0032 |
-| Workloads | CronJobs | Partial | Partial | Next run column, next runs, recent jobs 0012 (cron dependency); logs of last job 0019 | Trigger now, Suspend 0032 |
-| Network | Services | Partial | Partial | Endpoints column and list, "matches no pods" 0012; Show in Topology 0022 | port-forward 0035 |
-| Network | Ingresses | Partial | Partial | TLS expiry column and CERTIFICATE box 0016; Open URL 0012; Show in Topology 0022 | — |
+| Workloads | Deployments | Done | Done (WHY box, Revisions: 0012) | View logs (all pods) 0019 | scale, restart, roll back, pause 0032; port-forward 0035 |
+| Workloads | StatefulSets | Done | Done (pods by ordinal with claims: 0012) | logs 0019 | scale, restart 0032; port-forward 0035 |
+| Workloads | DaemonSets | Done | Done (rollout bars, not-ready nodes, WHY box: 0012) | logs 0019 | restart 0032 |
+| Workloads | ReplicaSets | Done | Done (Hide inactive 0009; Go to owner 0012) | logs 0019 | — (scale locked by owner) |
+| Workloads | Jobs | Done | Done (attempts, BACKOFF LIMIT box: 0012) | logs 0019 | Re-run 0032 |
+| Workloads | CronJobs | Done (0012) | Done (next runs, recent jobs: 0012) | logs of last job 0019 | Trigger now, Suspend 0032 |
+| Network | Services | Done (0012) | Done (Endpoints, "matches no pods": 0012) | Show in Topology 0022 | port-forward 0035 |
+| Network | Ingresses | Partial | Partial | TLS expiry column and CERTIFICATE box 0016; Show in Topology 0022 (Open URL and backend links done in 0012) | — |
 | Network | NetworkPolicies | Missing | Missing | 0013 (rules as sentences, Affects); Test traffic 0023 | — |
 | Network | Port Forwarding (local page) | Missing | Missing | — | 0035 |
-| Config | ConfigMaps | Partial | Partial | Used by 0012; values on demand 0012 | Edit, New, Compare with previous 0031 |
+| Config | ConfigMaps | Done (0012) | Done (Used by, value previews: 0012) | — | Edit, New, Compare with previous 0031 |
 | Config | Secrets | Missing | Missing | 0016 (masked, Reveal 30 s, Copy, Used by, unused flag) | Edit 0031 |
 | Config | HPAs | Missing | Missing | 0013 (metrics bars, scaling events from 0006) | Edit min/max 0032 |
 | Config | ResourceQuotas | Missing | Missing | 0013 (usage bars, blocked Pending pods) | New, Edit 0031 |

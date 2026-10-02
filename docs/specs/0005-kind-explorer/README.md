@@ -60,9 +60,9 @@ Each step is one coder pass and must pass the full quality gate on its own. Noth
 
 ## Open items
 
-1. Related pods for Services, PDBs, and NetworkPolicies need `labels` on `PodSummary`.
-2. The CronJob next run needs a cron crate. That is a dependency decision for the user.
-3. Service Endpoints need an EndpointSlice watch.
-4. ConfigMap "Used by" needs pod-spec references.
+1. Related pods for Services, PDBs, and NetworkPolicies need `labels` on `PodSummary`. Done in 0012 (`PodSummary.labels`, Services); PDBs and NetworkPolicies wait for 0013.
+2. The CronJob next run needs a cron crate. Done in 0012: an own port of the controller grammar, no crate.
+3. Service Endpoints need an EndpointSlice watch. Done in 0012.
+4. ConfigMap "Used by" needs pod-spec references. Done in 0012.
 5. Hiding inactive ReplicaSets waits for filter chips.
 6. If re-listing on a kind switch feels slow, keep the last watch alive as a cache.

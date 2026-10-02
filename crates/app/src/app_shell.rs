@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,7 +18,7 @@ use gpui_kit::{
 use crate::FocusQuickFilter;
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
-use crate::cluster_session::{ClusterSession, FlowState, LiveCluster, error_text};
+use crate::cluster_session::{ClusterSession, CountTrigger, FlowState, LiveCluster, error_text};
 use crate::drawer::{
     ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab, MonitorCache, MonitorKey,
     MonitorRange, MonitorScope, MonitorState, drawer_tabs,
@@ -455,7 +456,8 @@ impl AppShell {
         self.drawer.monitor = MonitorState::new();
         if let Some(session) = &self.session {
             session.update(cx, |session, cx| {
-                session.set_explorer_kind(screen.kind(), cx)
+                session.set_explorer_kind(screen.kind(), cx);
+                session.refresh_kind_counts(CountTrigger::Navigation, cx);
             });
         }
         self.kind_table.update(cx, |table, cx| {
@@ -1275,6 +1277,7 @@ impl AppShell {
                     if has_failed {
                         TargetState::Unavailable
                     } else if is_loading
+                        || live.kind_counts().is_running()
                         || (matches!(self.screen, Screen::Kind(_)) && live.is_join_loading())
                     {
                         TargetState::Loading
@@ -1567,10 +1570,15 @@ impl AppShell {
 
     fn navigation_counts(&self, cx: &App) -> NavigationCounts {
         let live = self.live(cx);
+        let event_filter = self
+            .session
+            .as_ref()
+            .map_or(EventFilter::All, |session| session.read(cx).event_filter());
         NavigationCounts {
             pods: live.and_then(|live| live.pods.ready_count()),
             nodes: live.and_then(|live| live.nodes.ready_count()),
             explorer: live.and_then(LiveCluster::explorer_count),
+            kinds: live.map_or_else(HashMap::new, |live| live.kind_counts().all(event_filter)),
         }
     }
 }

@@ -21,7 +21,7 @@
 | 12 | Revisions only for Deployments (from ReplicaSets); no ControllerRevisions | W7 shows revisions only on Deployments; no new RBAC or data |
 | 13 | ConfigMap previews: a single line ≤ 120 chars as written, else `JSON · 412 B` or `text · 3 lines · 1.2 KiB`; binary → `binary · 2.0 KiB` | W7 Data shows values; 0005 decision 6 keeps list summaries value-free |
 | 14 | One new access check, `ListEndpointSlices`; ReplicaSets, Jobs, ConfigMaps reuse their list checks | same rule as 0005 decision 8 |
-| 15 | **Sidebar counts (C11)**: one `list` with `limit=1` and **no resourceVersion** per allowed kind and namespace, reading `remainingItemCount`; started by `finish_access_review` once per scope, then on navigation at most every 30 s; 4 requests in flight (`buffer_unordered(4)`); a live list's count wins; unknown → no count | ~13 tiny GETs, no watch; C11 default. With `resourceVersion=0` the server answers from its watch cache, ignoring `limit` and sending every object without `remainingItemCount`; the review result tells which kinds are denied |
+| 15 | **Sidebar counts (C11)**: one `list` with `limit=1` and **no resourceVersion** per allowed kind and namespace, reading `remainingItemCount`; started by `finish_connect` and `finish_access_review` once per scope, then on navigation at most every 30 s from the start of the last run; 4 requests in flight (`buffer_unordered(4)`); a live list's count wins; unknown → no count | ~13 tiny GETs, no watch; C11 default. With `resourceVersion=0` the server answers from its watch cache, ignoring `limit` and sending every object without `remainingItemCount`; the review result tells which kinds are denied |
 
 ## App structure
 

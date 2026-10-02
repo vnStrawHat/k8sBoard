@@ -1,6 +1,6 @@
 # 0012 — Kind drawer completions (read-only)
 
-Status: amended after advisor review (HEAD `013ab1f`), then at HEAD `81497ba` so 0013–0015 add no renames: `DetailRow::Bar`, `KindCell::Quantity.tone`, `kind_diagnosis.rs`, `cluster::Selector` (one label matcher), and `KindList.companion` are general from the start. Crates: `crates/cluster` (steps 1a–1b), `crates/app` (steps 2–5). Requires 0009 (`TableRow`, filters, `NamespaceScope::Several`, `PodSummary.labels`) and 0010 (`CpuAmount`, `ByteAmount`, `Measure`) merged; independent of 0011. Wireframes: W7 drawers and columns of the 12 live kinds. Applies C1, C6, C7, C11.
+Status: **implemented** (steps 1a to 5); amended after advisor review (HEAD `013ab1f`), then at HEAD `81497ba` so 0013–0015 add no renames: `DetailRow::Bar`, `KindCell::Quantity.tone`, `kind_diagnosis.rs`, `cluster::Selector` (one label matcher), and `KindList.companion` are general from the start. Crates: `crates/cluster` (steps 1a–1b), `crates/app` (steps 2–5). Requires 0009 (`TableRow`, filters, `NamespaceScope::Several`, `PodSummary.labels`) and 0010 (`CpuAmount`, `ByteAmount`, `Measure`) merged; independent of 0011. Wireframes: W7 drawers and columns of the 12 live kinds. Applies C1, C6, C7, C11.
 
 ## Goal
 
