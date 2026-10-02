@@ -387,3 +387,84 @@ fn reveal_clears_a_filter_that_hides_the_target() {
     view.rebuild(&rows, 2, now());
     assert!(view.row_of(hidden).is_some());
 }
+
+fn plan() -> ColumnPlan {
+    use crate::resource_kind::{Align, column};
+    ColumnPlan {
+        specs: vec![
+            column("Name", 100., Align::Left),
+            column("Status", 80., Align::Left),
+            column("Node", 80., Align::Left),
+        ],
+        flexible: 0,
+        flexible_min: gpui_kit::px(100.),
+    }
+}
+
+fn saved(column: &str, direction: SortDirection, hidden: &[&str]) -> TablePrefs {
+    TablePrefs {
+        sort: Some(SavedSort {
+            column: column.to_owned(),
+            direction,
+        }),
+        hidden: hidden.iter().map(|name| (*name).to_owned()).collect(),
+    }
+}
+
+#[test]
+fn prefs_round_trip_by_column_name() {
+    let mut view = TableView::default();
+    view.apply_prefs(
+        &saved("Node", SortDirection::Descending, &["Status"]),
+        &plan(),
+    );
+    assert_eq!(
+        view.sort,
+        Some(TableSort {
+            column: 2,
+            direction: SortDirection::Descending
+        })
+    );
+    assert_eq!(view.hidden, BTreeSet::from([1]));
+    assert_eq!(
+        view.prefs(&plan()),
+        saved("Node", SortDirection::Descending, &["Status"])
+    );
+}
+
+#[test]
+fn unknown_column_names_are_dropped() {
+    let mut view = TableView::default();
+    view.apply_prefs(
+        &saved("Name", SortDirection::Ascending, &["Gone", "Node"]),
+        &plan(),
+    );
+    assert_eq!(view.hidden, BTreeSet::from([2]));
+}
+
+#[test]
+fn flexible_column_is_never_hidden() {
+    let mut view = TableView::default();
+    view.apply_prefs(&saved("Name", SortDirection::Ascending, &["Name"]), &plan());
+    assert!(view.hidden.is_empty());
+}
+
+#[test]
+fn sort_on_unknown_column_is_dropped() {
+    let mut view = TableView::default();
+    view.apply_prefs(&saved("Gone", SortDirection::Ascending, &[]), &plan());
+    assert_eq!(view.sort, None);
+}
+
+#[test]
+fn applied_prefs_replace_the_defaults() {
+    let mut view = TableView::default();
+    view.hidden.insert(1);
+    view.apply_prefs(&TablePrefs::default(), &plan());
+    assert!(view.hidden.is_empty());
+}
+
+#[test]
+fn prefs_of_an_untouched_view_are_empty() {
+    assert_eq!(TableView::default().prefs(&plan()), TablePrefs::default());
+}

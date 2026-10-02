@@ -1,6 +1,7 @@
 //! The settings model and the `AppSettings` global that the views read and update. File I/O
 //! lives in `settings_store.rs`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures::StreamExt as _;
@@ -8,11 +9,14 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui_kit::{App, BorrowAppContext as _, Global, Subscription};
 use serde::{Deserialize, Serialize};
 
+use crate::app_shell::Screen;
 use crate::cluster_registry::ClusterRegistry;
+use crate::resource_kind::ResourceKind;
 use crate::settings_store::{
     LoadedSettings, SettingsNotice, WriteGate, WriteMode, serialize_settings, settings_path,
     write_settings,
 };
+use crate::table_sort::SortDirection;
 
 pub(crate) const SETTINGS_VERSION: u32 = 1;
 
@@ -24,6 +28,9 @@ pub(crate) struct Settings {
     pub(crate) version: u32,
     pub(crate) theme: ThemePreference,
     pub(crate) registry: ClusterRegistry,
+    /// Per screen key (`screen_key`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) tables: BTreeMap<String, TablePrefs>,
 }
 
 impl Default for Settings {
@@ -32,6 +39,7 @@ impl Default for Settings {
             version: SETTINGS_VERSION,
             theme: ThemePreference::default(),
             registry: ClusterRegistry::default(),
+            tables: BTreeMap::new(),
         }
     }
 }
@@ -43,6 +51,34 @@ pub(crate) enum ThemePreference {
     System,
     Light,
     Dark,
+}
+
+/// What one table remembers: the sort and the hidden columns, by column name so they survive a
+/// reordering of columns. Filters are not saved.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct TablePrefs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sort: Option<SavedSort>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) hidden: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SavedSort {
+    pub(crate) column: String,
+    pub(crate) direction: SortDirection,
+}
+
+/// The key of a screen in `Settings::tables`.
+pub(crate) fn screen_key(screen: Screen) -> &'static str {
+    match screen {
+        Screen::Pods => "pods",
+        Screen::Nodes => "nodes",
+        // A custom plural has no group, so it could equal a built-in key; the CRD name never does.
+        Screen::Kind(ResourceKind::Custom(kind)) => kind.crd_name(),
+        Screen::Kind(kind) => kind.plural(),
+    }
 }
 
 /// The settings in memory, plus the writer that saves every change.

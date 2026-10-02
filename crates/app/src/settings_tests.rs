@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::TestAppContext;
@@ -7,6 +8,7 @@ use super::*;
 use crate::cluster_registry::{ClusterEntry, ClusterRef};
 use crate::environment::Environment;
 use crate::settings_store::settings_path;
+use crate::table_sort::SortDirection;
 
 #[test]
 fn default_settings_have_the_current_version() {
@@ -39,6 +41,16 @@ fn full_settings() -> Settings {
             }],
             last_used: Some(cluster),
         },
+        tables: BTreeMap::from([(
+            "pods".to_owned(),
+            TablePrefs {
+                sort: Some(SavedSort {
+                    column: "Age".to_owned(),
+                    direction: SortDirection::Ascending,
+                }),
+                hidden: vec!["Node".to_owned()],
+            },
+        )]),
         ..Settings::default()
     }
 }
@@ -110,6 +122,12 @@ fn settings_keys_are_the_allow_list() {
             "registry.last_used",
             "registry.last_used.context",
             "registry.last_used.kubeconfig",
+            "tables",
+            "tables.pods",
+            "tables.pods.hidden",
+            "tables.pods.sort",
+            "tables.pods.sort.column",
+            "tables.pods.sort.direction",
             "theme",
             "version",
         ]
@@ -249,4 +267,70 @@ fn dismiss_clears_the_notice(cx: &mut TestAppContext) {
         AppSettings::dismiss_notice(cx);
         assert!(AppSettings::notice(cx).is_none());
     });
+}
+
+#[test]
+fn screen_key_per_screen() {
+    use crate::app_shell::Screen;
+    use crate::resource_kind::ResourceKind;
+    assert_eq!(screen_key(Screen::Pods), "pods");
+    assert_eq!(screen_key(Screen::Nodes), "nodes");
+    assert_eq!(
+        screen_key(Screen::Kind(ResourceKind::Deployments)),
+        "deployments"
+    );
+}
+
+#[test]
+fn table_prefs_serialize_by_name() {
+    let prefs = TablePrefs {
+        sort: Some(SavedSort {
+            column: "Restarts".to_owned(),
+            direction: SortDirection::Descending,
+        }),
+        hidden: vec!["Node".to_owned()],
+    };
+    assert_eq!(
+        serde_json::to_value(prefs).expect("serializes"),
+        json!({ "sort": { "column": "Restarts", "direction": "descending" }, "hidden": ["Node"] })
+    );
+}
+
+#[test]
+fn empty_table_prefs_serialize_to_an_empty_object() {
+    let empty = TablePrefs {
+        sort: None,
+        hidden: Vec::new(),
+    };
+    assert_eq!(serde_json::to_value(empty).expect("serializes"), json!({}));
+}
+
+#[test]
+fn custom_kind_key_is_the_crd_name_never_a_builtin_key() {
+    use crate::custom_kind::{CustomKindCache, custom_kinds};
+    let crd = cluster::CrdSummary {
+        name: "nodes.longhorn.io".to_owned(),
+        group: "longhorn.io".to_owned(),
+        kind: "Node".to_owned(),
+        plural: "nodes".to_owned(),
+        singular: "node".to_owned(),
+        scope: cluster::ResourceScope::Namespaced,
+        versions: vec![cluster::CrdVersion {
+            name: "v1".to_owned(),
+            is_served: true,
+            is_storage: true,
+            is_deprecated: false,
+            deprecation_warning: None,
+            printer_columns: Vec::new(),
+            schema: cluster::SchemaOutline::default(),
+        }],
+        state: cluster::CrdState::Established,
+        created_at: None,
+    };
+    let kind = custom_kinds(&[crd], &mut CustomKindCache::default())
+        .pop()
+        .expect("an Established CRD becomes a kind");
+    let key = screen_key(Screen::Kind(ResourceKind::Custom(kind)));
+    assert_eq!(key, "nodes.longhorn.io");
+    assert_ne!(key, screen_key(Screen::Nodes));
 }

@@ -61,8 +61,7 @@ pub(crate) struct ClusterProfile { pub(crate) display_name: String,
     pub(crate) environment: Environment, pub(crate) default_namespace: Option<String> }
 impl ClusterRef { pub(crate) fn of(summary: &ContextSummary) -> Self; } // clones path and name
 impl ClusterRegistry {
-    // `entry` and `entry_mut` land in step 5 (first user: "Set as default namespace"); step 3 matches through a private `entry_of(summary)`.
-    pub(crate) fn entry(&self, cluster: &ClusterRef) -> Option<&ClusterEntry>;
+    // Step 5 (first user: "Set as default namespace"); step 3 matches through a private `entry_of(summary)`.
     pub(crate) fn entry_mut(&mut self, cluster: &ClusterRef) -> &mut ClusterEntry; // appends when missing
     pub(crate) fn profile(&self, summary: &ContextSummary) -> ClusterProfile;
 }
@@ -97,6 +96,6 @@ pub(crate) fn start_choice(requested: Option<&str>, last_used: Option<&ClusterRe
 
 ## "Set as default namespace" (`resource_actions.rs`, step 5)
 
-- `kind_menu` gains `default_namespace: Option<&str>` (the active profile's). For `ResourceKind::Namespaces`, before the change-action separator: an enabled item `Set as default namespace`, `checked` when the row name equals it. Click (clone the row name into the closure first) → `AppShell::toggle_default_namespace(name)`: `Some(name)`, or `None` when already set, via `entry_mut(&ClusterRef::of(active))`.
+- The active profile's default namespace travels in `MenuExtras.default_namespace: Option<String>` (read through `AppShell::default_namespace`), not as a `kind_menu` parameter (clippy's argument limit). For `ResourceKind::Namespaces`, before the change-action separator: an enabled item `Set as default namespace`, `checked` when the row name equals it. Click (clone the row name into the closure first) → `AppShell::toggle_default_namespace(name)`: `Some(name)`, or `None` when already set, via `entry_mut(&ClusterRef::of(active))`.
 - No cluster call; the current scope does not change (the default applies at the next start or switch).
 - An entry missing `kubeconfig` or `context` makes the file corrupt (decision 6).

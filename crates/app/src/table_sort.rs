@@ -2,10 +2,13 @@
 
 use std::cmp::Ordering;
 
+use serde::{Deserialize, Serialize};
+
 use crate::status_tone::StatusTone;
 use crate::table_view::CellValue;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum SortDirection {
     Ascending,
     Descending,

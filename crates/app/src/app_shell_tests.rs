@@ -501,3 +501,87 @@ fn last_used_is_written_once_per_session(cx: &mut TestAppContext) {
     });
     assert_eq!(last_used(cx), Some(ClusterRef::of(&context("ctx"))));
 }
+
+fn saved_pods(cx: &mut TestAppContext) -> Option<crate::settings::TablePrefs> {
+    cx.update(|cx| AppSettings::get(cx).tables.get("pods").cloned())
+}
+
+#[gpui_kit::test]
+fn cycle_sort_persists_the_sort_by_column_name(cx: &mut TestAppContext) {
+    let (_window, shell) = open_shell(cx);
+    assert_eq!(saved_pods(cx), None);
+    // Logical column 3 of the Pods table is Restarts.
+    cx.update(|cx| shell.update(cx, |shell, cx| shell.cycle_sort(3, cx)));
+    let sort = saved_pods(cx).and_then(|prefs| prefs.sort);
+    assert_eq!(
+        sort,
+        Some(crate::settings::SavedSort {
+            column: "Restarts".to_owned(),
+            direction: crate::table_sort::SortDirection::Ascending,
+        })
+    );
+}
+
+#[gpui_kit::test]
+fn toggle_column_persists_hidden_columns_by_name(cx: &mut TestAppContext) {
+    let (_window, shell) = open_shell(cx);
+    // Logical column 6 of the Pods table is Node; CPU is hidden by default.
+    cx.update(|cx| shell.update(cx, |shell, cx| shell.toggle_column(6, cx)));
+    let hidden = saved_pods(cx).map(|prefs| prefs.hidden);
+    assert_eq!(hidden, Some(vec!["CPU".to_owned(), "Node".to_owned()]));
+}
+
+#[test]
+fn start_namespace_prefers_the_flag() {
+    let flag = NamespaceScope::Named("flag-ns".to_owned());
+    assert_eq!(
+        start_namespace(Some(flag.clone()), Some("saved")),
+        Some(flag)
+    );
+}
+
+#[test]
+fn start_namespace_falls_back_to_the_saved_default() {
+    assert_eq!(
+        start_namespace(None, Some("saved")),
+        Some(NamespaceScope::Named("saved".to_owned()))
+    );
+}
+
+#[test]
+fn start_namespace_is_none_without_flag_or_default() {
+    assert_eq!(start_namespace(None, None), None);
+}
+
+fn toggle_default(shell: &Entity<AppShell>, cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        shell.update(cx, |shell, cx| {
+            shell.active = Some(context("ctx"));
+            shell.toggle_default_namespace("monitoring", cx);
+        });
+    });
+}
+
+fn saved_default(cx: &mut TestAppContext) -> Option<String> {
+    cx.update(|cx| {
+        AppSettings::get(cx)
+            .registry
+            .profile(&context("ctx"))
+            .default_namespace
+    })
+}
+
+#[gpui_kit::test]
+fn toggle_default_namespace_stores_the_namespace(cx: &mut TestAppContext) {
+    let (_window, shell) = open_shell(cx);
+    toggle_default(&shell, cx);
+    assert_eq!(saved_default(cx).as_deref(), Some("monitoring"));
+}
+
+#[gpui_kit::test]
+fn toggle_default_namespace_clears_it_when_already_set(cx: &mut TestAppContext) {
+    let (_window, shell) = open_shell(cx);
+    toggle_default(&shell, cx);
+    toggle_default(&shell, cx);
+    assert_eq!(saved_default(cx), None);
+}

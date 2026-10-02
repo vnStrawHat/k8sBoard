@@ -48,7 +48,7 @@ impl TableView {
 ```
 
 - `apply_prefs`: map each name to its first logical index; unknown names are dropped; `plan.flexible` is never hidden; a sort on an unknown column → `None`.
-- `prefs`: hidden in logical order; an empty result is still stored (it overrides nothing but keeps the code simple).
+- `prefs`: hidden in logical order. The saved list replaces the screen's defaults (Pods hides CPU by default); an empty entry shows every column. Known ceiling: a column that later becomes hidden by default stays visible for users who already have a saved entry.
 - **Read**: when a view is created. Pods and Nodes: `AppShell::new` passes `AppSettings::get(cx).tables` entries to the delegate constructors. Kinds: `KindTableDelegate` keeps a startup copy `saved: BTreeMap<String, TablePrefs>` and applies it in `new_view(kind)`. A view created later in the session already holds the latest state, so the startup copy is enough.
 - **Write**: `AppShell::cycle_sort` and `toggle_column` call `persist_table_prefs(cx)` after `update_view`: read the visible view and plan → `AppSettings::update(cx, |s| { s.tables.insert(key, prefs); })`. Nothing else writes table prefs.
 - `reset_filter` / `clear_filter` (context switch, Clear filters) keep sort and hidden, as today.

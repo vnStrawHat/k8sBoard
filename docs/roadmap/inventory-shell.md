@@ -7,9 +7,9 @@
 | ID | Item | Status | Covered by | Gap → spec |
 |---|---|---|---|---|
 | T1 | Custom GPUI title bar, logo, window controls | Done | 0003 `title_bar.rs` | — |
-| T2 | Cluster switcher (single cluster, contexts of one kubeconfig) | Partial | 0003 | env groups, health, Ctrl 1–9, filter, Retry → 0026 |
+| T2 | Cluster switcher (single cluster, every context of every loaded kubeconfig, env badge) | Partial | 0003, 0024 | env groups, health, Ctrl 1–9, filter, Retry → 0026 |
 | T3 | Multi-select clusters, "View N clusters", `prod-eu-1 +1` label | Missing | — | 0027 |
-| T4 | Environment badge and env-colored top border (riskiest env) | Missing | — | 0024 (single), 0027 (multi) |
+| T4 | Environment badge and env-colored top border (riskiest env) | Partial (single cluster) | 0024 `environment.rs`, `title_bar.rs` | riskiest env of several clusters 0027 |
 | T5 | Namespace picker (wireframe shows several namespaces: `ns: payments, web`) | Partial | 0003 (one or all) | multi-namespace → 0009 |
 | T6 | Search box "Search resources or run a command… Ctrl K" | Missing | — | 0029 |
 | T7 | Read-only lock badge | Partial | 0003 (static) | per-cluster toggle, Ctrl Shift R → 0030 |
@@ -35,7 +35,7 @@
 |---|---|---|---|---|
 | H1 | Title, kind icon, count | Done | 0003, 0005 | "38 of 1,284 match" → 0009 |
 | H2 | Filter chips (Namespace, Status, label query, "+ Filter") and `/` filter | Missing | — | 0009 |
-| H3 | Columns ▾ (toggle columns), sort | Missing | — | 0009 |
+| H3 | Columns ▾ (toggle columns), sort | Done | 0009 `table_view.rs`; saved per screen by 0024 | — |
 | H4 | Summary chips as filters (Nodes: Ready, NotReady, Cordoned, version skew) | Missing | — | 0009 |
 | H5 | List-level buttons (Scale, Trigger now, Reveal all, Hide inactive, Hide system, …) | Missing | — | read-only ones 0009/0015/0016; mutating 0032 |
 | H6 | Row checkboxes, multi-select, floating selection bar | Missing | — | selection 0009; bulk actions 0032–0034 |
@@ -62,7 +62,7 @@
 | K2 | Toolbar: filter, Follow, Previous, Wrap, Timestamps, Reconnect | Done | 0004 | — |
 | K3 | Regex, level toggles, JSON, density histogram, Export, Pop out | Partial | 0019 (regex, level chips, JSON, histogram, Export via the save dialog) | Pop out (decision 25) |
 | K4 | Workload log tabs (`deploy/…`), pod colors, container picker chips | Done | 0019 | — |
-| K5 | "+ ▾" new tab, drag to reorder, dashed max line, double-click reset, remembered height | Partial | 0019 ("+ ▾", drag to reorder) | dashed max line and double-click reset (0004 non-goals); height persistence 0024 |
+| K5 | "+ ▾" new tab, drag to reorder, dashed max line, double-click reset, remembered height | Partial | 0019 ("+ ▾", drag to reorder) | dashed max line and double-click reset (0004 non-goals); height persistence: reserved key `dock.height` (0019 or 0025) |
 | K6 | Shell tabs (W8b shell pane) | Missing | — | 0036 |
 | K7 | Drain progress tab (W6 note 5) | Missing | — | 0034 |
 
@@ -81,12 +81,12 @@
 | P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Missing | 0029 |
 | P2 | Keyboard map (22 bindings) and `?` cheat sheet | Missing | 0028 |
 | S1 | Settings window (W2) as a separate OS window, single instance | Missing | 0025 |
-| S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Missing | 0024, 0025 |
-| S3 | Add cluster: import file, watch folder, paste YAML | Missing | 0024, 0025 |
+| S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (data model only) | 0024 registry fields; the page is 0025 |
+| S3 | Add cluster: import file, watch folder, paste YAML | Partial (data model only) | 0024 `registry.kubeconfigs` loaded standalone; the editing UI is 0025 |
 | S4 | Add cluster: scan AWS EKS, GKE, AKS | Missing | backlog |
 | S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Missing | 0025 (frame), owners: 0028, 0030, 0036, 0019, backlog |
 | M1 | Multi-cluster aggregated tables | Missing | 0027 |
 | G1 | Env tiers: prod typed name; staging, dev, local a confirm dialog with a click (user 2026-10-02; W10 text superseded) | Missing | 0030 |
 | G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Missing | 0030, 0031 |
 | G3 | Tokens: status tones OK/WARN/BAD/INFO/DONE | Done | 0003 `status_tone.rs` |
-| G4 | Env tokens PROD/STG/DEV/LOCAL as theme colors | Missing | 0024 |
+| G4 | Env tokens PROD/STG/DEV/LOCAL as theme colors | Done | 0024 `environment_color` |

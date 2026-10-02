@@ -38,11 +38,11 @@ Removed: `load_reports_missing_file_with_path` (covered by `load_fails_when_no_f
 
 ## Step 4 — `table_view.rs` tests
 
-`prefs_round_trip_by_column_name`, `unknown_column_names_are_dropped`, `flexible_column_is_never_hidden`, `sort_on_unknown_column_is_dropped`, `screen_key_per_screen`; `kind_table`: `new_view_applies_saved_prefs`.
+`prefs_round_trip_by_column_name`, `unknown_column_names_are_dropped`, `flexible_column_is_never_hidden`, `sort_on_unknown_column_is_dropped`, `screen_key_per_screen`, `custom_kind_key_is_the_crd_name_never_a_builtin_key`; `kind_table`: `new_view_applies_saved_prefs`.
 
 ## Step 5
 
-`cluster_registry` test: `entry_mut_appends_once`. `resource_actions` tests: `namespaces_menu_has_set_as_default`, `set_as_default_is_checked_for_the_default`, `other_kinds_have_no_set_as_default`; `app_shell` (pure helper): `start_namespace_prefers_flag_then_default`.
+`cluster_registry` test: `entry_mut_appends_once`. `resource_actions` tests: `namespaces_menu_has_set_as_default`, `set_as_default_is_checked_for_the_default`, `other_kinds_have_no_set_as_default`; `app_shell` (pure helper): `start_namespace_prefers_the_flag`, `start_namespace_falls_back_to_the_saved_default`, `toggle_default_namespace_stores_the_namespace`, `toggle_default_namespace_clears_it_when_already_set`.
 
 ## Live checks (coder-lite, read-only, UAT)
 

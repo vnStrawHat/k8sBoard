@@ -17,6 +17,7 @@ use crate::log_dock::LogDock;
 use crate::metrics_history::PodUsageHistory;
 use crate::resource_actions::pod_menu;
 use crate::resource_kind::{Align, KindColumn, column};
+use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, pod_status_label, toned_text};
 use crate::table_filter::FilterPreset;
 use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
@@ -57,17 +58,26 @@ pub(crate) struct PodTableDelegate {
 }
 
 impl PodTableDelegate {
-    pub(crate) fn new(log_dock: WeakEntity<LogDock>, shell: WeakEntity<AppShell>) -> Self {
+    pub(crate) fn new(
+        log_dock: WeakEntity<LogDock>,
+        shell: WeakEntity<AppShell>,
+        saved: Option<&TablePrefs>,
+    ) -> Self {
+        let plan = ColumnPlan {
+            specs: POD_COLUMNS.to_vec(),
+            flexible: NAME,
+            flexible_min: NAME_MIN_WIDTH,
+        };
+        let mut view = pods_view();
+        if let Some(saved) = saved {
+            view.apply_prefs(saved, &plan);
+        }
         Self {
             session: None,
             log_dock,
             shell,
-            layout: TableLayout::new(ColumnPlan {
-                specs: POD_COLUMNS.to_vec(),
-                flexible: NAME,
-                flexible_min: NAME_MIN_WIDTH,
-            }),
-            view: pods_view(),
+            layout: TableLayout::new(plan),
+            view,
         }
     }
 

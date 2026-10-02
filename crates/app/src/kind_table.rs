@@ -2,7 +2,7 @@
 //! switch only replaces the columns.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
@@ -28,6 +28,7 @@ use crate::resource_actions::{
 };
 use crate::resource_kind::{Align, NAME_COLUMN, NameColumn, ResourceKind, kind_columns};
 use crate::secret_values::ValueAccess;
+use crate::settings::{TablePrefs, screen_key};
 use crate::status_tone::{StatusTone, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
 use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
@@ -46,13 +47,22 @@ pub(crate) struct KindTableDelegate {
     layout: TableLayout,
     /// One view per kind, so a filter, a sort, and hidden columns survive a kind switch.
     views: HashMap<ResourceKind, TableView>,
+    /// The prefs of the last run. A view created later in the session starts from them; one that
+    /// already exists holds newer state.
+    // ponytail: a startup copy, not live settings; it goes stale only if a CRD definition changes mid-session (column names then no longer match). Read AppSettings at view creation if that matters.
+    saved: BTreeMap<String, TablePrefs>,
     /// The row menu's "Go to object" reveals a row through the shell.
     shell: WeakEntity<AppShell>,
 }
 
-/// A kind's view starts with the filter its screen starts with.
-fn new_view(kind: ResourceKind) -> TableView {
-    TableView::new(default_filter(Screen::Kind(kind)))
+/// A kind's view starts with the filter its screen starts with, and the sort and hidden columns
+/// saved for it.
+fn new_view(kind: ResourceKind, saved: &BTreeMap<String, TablePrefs>) -> TableView {
+    let mut view = TableView::new(default_filter(Screen::Kind(kind)));
+    if let Some(prefs) = saved.get(screen_key(Screen::Kind(kind))) {
+        view.apply_prefs(prefs, &kind_plan(Some(kind)));
+    }
+    view
 }
 
 /// The logical columns of `kind`, and which one takes the rest of the table.
@@ -89,16 +99,21 @@ fn cell_index(name_column: NameColumn, column: usize) -> Option<usize> {
 }
 
 impl KindTableDelegate {
-    pub(crate) fn new(kind: Option<ResourceKind>, shell: WeakEntity<AppShell>) -> Self {
+    pub(crate) fn new(
+        kind: Option<ResourceKind>,
+        shell: WeakEntity<AppShell>,
+        saved: BTreeMap<String, TablePrefs>,
+    ) -> Self {
         let views = kind
             .into_iter()
-            .map(|kind| (kind, new_view(kind)))
+            .map(|kind| (kind, new_view(kind, &saved)))
             .collect();
         Self {
             session: None,
             kind,
             layout: TableLayout::new(kind_plan(kind)),
             views,
+            saved,
             shell,
         }
     }
@@ -115,7 +130,9 @@ impl KindTableDelegate {
         }
         self.kind = kind;
         if let Some(kind) = kind {
-            self.views.entry(kind).or_insert_with(|| new_view(kind));
+            self.views
+                .entry(kind)
+                .or_insert_with(|| new_view(kind, &self.saved));
         }
         self.layout.replace_plan(kind_plan(kind), &self.hidden());
         true
@@ -303,7 +320,10 @@ impl FilteredTable for KindTableDelegate {
             return false;
         };
         let rows = table_rows(self.rows(cx), kind.name_column());
-        let view = self.views.entry(kind).or_insert_with(|| new_view(kind));
+        let view = self
+            .views
+            .entry(kind)
+            .or_insert_with(|| new_view(kind, &self.saved));
         view.rebuild(&rows, self.layout.plan.specs.len(), jiff::Timestamp::now());
         self.layout.relayout(&view.hidden)
     }
@@ -402,6 +422,11 @@ impl TableDelegate for KindTableDelegate {
                 secret_menu(&row, key, access, &self.shell, window, cx)
             })
             .flatten();
+        let default_namespace = self
+            .shell
+            .read_with(cx, |shell, cx| shell.default_namespace(cx))
+            .ok()
+            .flatten();
         let Some(live) = self.live(cx) else {
             return menu;
         };
@@ -416,6 +441,7 @@ impl TableDelegate for KindTableDelegate {
                 open_url,
                 secret,
                 browse: browse_instances_item(&row, live.crd_kinds(), &self.shell),
+                default_namespace,
             },
         )
     }
@@ -602,6 +628,8 @@ fn cell_element(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use crate::status_tone::StatusLabel;
     use crate::table_layout::layout_columns;
 
@@ -625,7 +653,7 @@ mod tests {
     }
 
     fn delegate(kind: Option<ResourceKind>) -> KindTableDelegate {
-        KindTableDelegate::new(kind, WeakEntity::new_invalid())
+        KindTableDelegate::new(kind, WeakEntity::new_invalid(), BTreeMap::new())
     }
 
     fn extra_columns(kind: ResourceKind) -> usize {
@@ -697,6 +725,41 @@ mod tests {
     #[test]
     fn fit_width_does_nothing_without_a_kind() {
         assert!(!delegate(None).fit_width(px(1400.)));
+    }
+
+    fn saved_last_column(kind: ResourceKind) -> BTreeMap<String, TablePrefs> {
+        let plan = kind_plan(Some(kind));
+        let hidden_name = plan.specs[plan.specs.len() - 1].name;
+        BTreeMap::from([(
+            screen_key(Screen::Kind(kind)).to_owned(),
+            TablePrefs {
+                sort: None,
+                hidden: vec![hidden_name.to_owned()],
+            },
+        )])
+    }
+
+    #[test]
+    fn new_view_applies_saved_prefs() {
+        let kind = ResourceKind::Deployments;
+        let columns = kind_plan(Some(kind)).specs.len();
+        let mut delegate =
+            KindTableDelegate::new(None, WeakEntity::new_invalid(), saved_last_column(kind));
+        delegate.set_kind(Some(kind));
+        let view = delegate.view().expect("a view for the kind");
+        assert_eq!(view.hidden, BTreeSet::from([columns - 1]));
+    }
+
+    #[test]
+    fn new_view_of_a_kind_without_saved_prefs_keeps_the_defaults() {
+        let mut delegate = KindTableDelegate::new(
+            None,
+            WeakEntity::new_invalid(),
+            saved_last_column(ResourceKind::Deployments),
+        );
+        delegate.set_kind(Some(ResourceKind::Services));
+        let view = delegate.view().expect("a view for the kind");
+        assert!(view.hidden.is_empty());
     }
 
     #[test]

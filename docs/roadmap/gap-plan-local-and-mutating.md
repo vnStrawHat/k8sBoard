@@ -5,7 +5,7 @@
 ## Local only (no cluster writes; the app writes its own config)
 
 ### 0024 — Settings store, cluster registry, environments
-App config directory with a `--config-dir` override (C2), versioned file format, a cluster registry (kubeconfig files, contexts, display name, env, color, order, default namespace, safety and metrics prefs; never tokens), `KUBECONFIG` multi-entry merge, env guessing from context names (C5), env theme tokens, env badge and top border in the title bar, persisted UI state (dock height, theme), "Set as default" namespace.
+App config directory with a `--config-dir` override (C2), versioned file format, a cluster registry (kubeconfig files, contexts, display name, env, color, order, default namespace, safety and metrics prefs; never tokens), `KUBECONFIG` multi-entry merge, env guessing from context names (C5), env theme tokens, env badge and top border in the title bar, persisted UI state (theme, table sort and hidden columns; dock height is a reserved key owned by 0019/0025), "Set as default" namespace.
 - Deps: C2, C5. Risk: Med (first disk writes; agents must use `.tmp/`). New deps: config dirs, TOML/JSON (C6).
 
 ### 0025 — Settings window (W2)

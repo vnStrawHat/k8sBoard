@@ -11,6 +11,7 @@ use gpui_kit::component::table::TableDelegate;
 
 use crate::app_shell::Screen;
 use crate::resource_kind::ResourceKind;
+use crate::settings::{SavedSort, TablePrefs};
 use crate::status_tone::StatusTone;
 use crate::table_filter::{FilterChip, FilterPreset, TableFilter, matches};
 use crate::table_layout::ColumnPlan;
@@ -137,6 +138,42 @@ impl TableView {
             filter: default_filter.clone(),
             default_filter,
             ..Self::default()
+        }
+    }
+
+    /// Replaces the sort and the hidden columns with saved ones. A name the plan does not know
+    /// is dropped, and the flexible column is never hidden.
+    pub(crate) fn apply_prefs(&mut self, prefs: &TablePrefs, plan: &ColumnPlan) {
+        let index_of = |name: &str| plan.specs.iter().position(|spec| spec.name == name);
+        self.hidden = prefs
+            .hidden
+            .iter()
+            .filter_map(|name| index_of(name))
+            .filter(|&column| column != plan.flexible)
+            .collect();
+        self.sort = prefs.sort.as_ref().and_then(|saved| {
+            Some(TableSort {
+                column: index_of(&saved.column)?,
+                direction: saved.direction,
+            })
+        });
+    }
+
+    /// The sort and the hidden columns by column name, in logical order.
+    pub(crate) fn prefs(&self, plan: &ColumnPlan) -> TablePrefs {
+        let name_of = |column: usize| plan.specs.get(column).map(|spec| spec.name.to_owned());
+        TablePrefs {
+            sort: self.sort.and_then(|sort| {
+                Some(SavedSort {
+                    column: name_of(sort.column)?,
+                    direction: sort.direction,
+                })
+            }),
+            hidden: self
+                .hidden
+                .iter()
+                .filter_map(|&column| name_of(column))
+                .collect(),
         }
     }
 

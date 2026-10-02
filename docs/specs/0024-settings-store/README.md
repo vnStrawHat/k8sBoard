@@ -1,6 +1,6 @@
 # 0024 — Settings store, cluster registry, environments
 
-Status: amended after the advisor review (M1–M3, S1–S7, N1–N6), HEAD `95aac91`. Crates: `crates/cluster` (merged kubeconfig loading) and `crates/app`. Local only: the app writes its own config file; nothing is written to a cluster. Settles C2 and C5 and the C6 row "Config dirs and format". Wireframes: W1 (env badge and title-bar border), W2 (Clusters form fields: data model only).
+Status: implemented (steps 1–5) and verified; amended after the advisor review (M1–M3, S1–S7, N1–N6), HEAD `95aac91`. Crates: `crates/cluster` (merged kubeconfig loading) and `crates/app`. Local only: the app writes its own config file; nothing is written to a cluster. Settles C2 and C5 and the C6 row "Config dirs and format". Wireframes: W1 (env badge and title-bar border), W2 (Clusters form fields: data model only).
 
 ## Goal
 
@@ -40,18 +40,18 @@ Status: amended after the advisor review (M1–M3, S1–S7, N1–N6), HEAD `95aa
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
-- [ ] 2. Every test in [test-plan.md](test-plan.md) for the step exists under that name and passes offline. Tests write only under `std::env::temp_dir()` (the project `.tmp/` in agent runs).
-- [ ] 3. `KUBECONFIG=a;b` (`:` on Unix) lists the contexts of both files; a duplicate context name resolves to the first file; an unreadable or incompatible entry is skipped with a notice and earlier files stay merged. A registry file loads standalone: its same-named context appears as a separate switcher item labeled with its file name.
-- [ ] 4. `Cargo.lock` gains no new package: `dirs` 6 and `serde_json` are already locked (`git diff Cargo.lock` shows only the `k8sboard` dependency lines).
-- [ ] 5. A corrupt `settings.json` is renamed to `settings.json.bak`, the app starts with defaults, and the title bar shows the notice. A file with a newer `version` loads but is never overwritten.
-- [ ] 6. `settings.json` never holds kubeconfig content: the serialized keys are exactly the allow-list in [settings-store.md](settings-store.md). `grep -rnE "(trace|debug|info|warn|error)!.*[?%] *(settings|loaded|entry|registry)" crates/app/src` finds nothing (no `Debug`/`Display` capture of settings values in tracing).
-- [ ] 7. `readonly@Monitor` with no registry entry shows an **STG** badge and an amber title-bar top border; with a seeded entry `"environment": "production"` it shows **PROD** and the danger-colored top border.
-- [ ] 8. The 0003 color-literal grep stays clean: env colors come from theme tokens only.
-- [ ] 9. Without `--context`, the app reopens the last-used cluster when it is still loaded; with `--kubeconfig X` and no `--context`, a `last_used` in X beats X's `current-context`, and a `last_used` from another (registry) file never overrides an explicit `--kubeconfig`. `--context`, `--namespace`, `--theme` still override.
-- [ ] 10. A sort or hidden column set on a screen is restored on the next run (seeded-file screenshot + writer unit test).
-- [ ] 11. "Set as default namespace" on a Namespaces row stores the namespace for the active cluster; the next start or switch opens it.
-- [ ] 12. Every agent run of the app passes `--config-dir .tmp/config` (or a sub-folder); debug builds default to `<workspace>/.tmp/config` anyway (decision 4).
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 2. Every test in [test-plan.md](test-plan.md) for the step exists under that name and passes offline. Tests write only under `std::env::temp_dir()` (the project `.tmp/` in agent runs).
+- [x] 3. `KUBECONFIG=a;b` (`:` on Unix) lists the contexts of both files; a duplicate context name resolves to the first file; an unreadable or incompatible entry is skipped with a notice and earlier files stay merged. A registry file loads standalone: its same-named context appears as a separate switcher item labeled with its file name.
+- [x] 4. `Cargo.lock` gains no new package: `dirs` 6 and `serde_json` are already locked (`git diff Cargo.lock` shows only the `k8sboard` dependency lines).
+- [x] 5. A corrupt `settings.json` is renamed to `settings.json.bak`, the app starts with defaults, and the title bar shows the notice. A file with a newer `version` loads but is never overwritten.
+- [x] 6. `settings.json` never holds kubeconfig content: the serialized keys are exactly the allow-list in [settings-store.md](settings-store.md). `grep -rnE "(trace|debug|info|warn|error)!.*[?%] *(settings|loaded|entry|registry)" crates/app/src` finds nothing (no `Debug`/`Display` capture of settings values in tracing).
+- [x] 7. `readonly@Monitor` with no registry entry shows an **STG** badge and an amber title-bar top border; with a seeded entry `"environment": "production"` it shows **PROD** and the danger-colored top border.
+- [x] 8. The 0003 color-literal grep stays clean: env colors come from theme tokens only.
+- [x] 9. Without `--context`, the app reopens the last-used cluster when it is still loaded; with `--kubeconfig X` and no `--context`, a `last_used` in X beats X's `current-context`, and a `last_used` from another (registry) file never overrides an explicit `--kubeconfig`. `--context`, `--namespace`, `--theme` still override.
+- [x] 10. A sort or hidden column set on a screen is restored on the next run (seeded-file screenshot + writer unit test).
+- [x] 11. "Set as default namespace" on a Namespaces row stores the namespace for the active cluster; the next start or switch opens it.
+- [x] 12. Every agent run of the app passes `--config-dir .tmp/config` (or a sub-folder); debug builds default to `<workspace>/.tmp/config` anyway (decision 4).
 
 ## Open items
 

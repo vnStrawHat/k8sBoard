@@ -192,3 +192,17 @@ fn without_explicit_kubeconfig_any_last_used_counts() {
     assert_eq!(launch_last_used(Some(&saved), None), Some(&saved));
     assert_eq!(launch_last_used(None, None), None);
 }
+
+#[test]
+fn entry_mut_appends_once() {
+    let mut registry = ClusterRegistry::default();
+    let target = cluster("ctx", "a.yaml");
+    registry.entry_mut(&target).default_namespace = Some("monitoring".to_owned());
+    registry.entry_mut(&target).display_name = Some("renamed".to_owned());
+    assert_eq!(registry.clusters.len(), 1);
+    let entry = &registry.clusters[0];
+    assert_eq!(entry.default_namespace.as_deref(), Some("monitoring"));
+    assert_eq!(entry.display_name.as_deref(), Some("renamed"));
+    registry.entry_mut(&cluster("ctx", "b.yaml"));
+    assert_eq!(registry.clusters.len(), 2);
+}

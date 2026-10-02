@@ -69,7 +69,7 @@ use crate::secret_values::{
     PendingAction, SecretAction, SecretCopied, SecretValuesView, ValueAccess, fetcher,
     pending_action, value_access, values_subject,
 };
-use crate::settings::AppSettings;
+use crate::settings::{AppSettings, TablePrefs, screen_key};
 use crate::status_bar::status_bar;
 use crate::table_filter::{
     FilterChip, FilterPreset, TableFilter, parse_label_queries, quick_filter_text,
@@ -318,16 +318,21 @@ impl AppShell {
         let shell = cx.weak_entity();
         let log_dock = cx.new(|_| LogDock::new(shell.clone()));
         let dock_split = cx.new(|_| ResizableState::default());
+        let saved_tables = AppSettings::get(cx).tables.clone();
         let pod_table = cx.new(|cx| {
             configure(TableState::new(
-                PodTableDelegate::new(log_dock.downgrade(), shell.clone()),
+                PodTableDelegate::new(
+                    log_dock.downgrade(),
+                    shell.clone(),
+                    saved_tables.get(screen_key(Screen::Pods)),
+                ),
                 window,
                 cx,
             ))
         });
         let node_table = cx.new(|cx| {
             configure(TableState::new(
-                NodeTableDelegate::new(shell.clone()),
+                NodeTableDelegate::new(shell.clone(), saved_tables.get(screen_key(Screen::Nodes))),
                 window,
                 cx,
             ))
@@ -342,7 +347,7 @@ impl AppShell {
         let initial_kind = options.screen.screen().kind();
         let kind_table = cx.new(|cx| {
             configure(TableState::new(
-                KindTableDelegate::new(initial_kind, shell),
+                KindTableDelegate::new(initial_kind, shell, saved_tables),
                 window,
                 cx,
             ))
@@ -507,6 +512,11 @@ impl AppShell {
             .as_ref()
             .map(|session| session.update(cx, |session, _| session.take_custom_kind_cache()))
             .unwrap_or_default();
+        let default_namespace = AppSettings::get(cx)
+            .registry
+            .profile(summary)
+            .default_namespace;
+        let namespace = start_namespace(namespace, default_namespace.as_deref());
         let session =
             cx.new(|cx| ClusterSession::new(kubeconfig, summary, namespace, kind, cache, cx));
         self._session_observer = Some(cx.observe(&session, |shell, _, cx| {
@@ -588,10 +598,31 @@ impl AppShell {
             .collect()
     }
 
+    /// The active cluster's saved default namespace, for the Namespaces menu.
+    pub(crate) fn default_namespace(&self, cx: &App) -> Option<String> {
+        self.active_profile(cx)?.default_namespace
+    }
+
     /// The active context's profile; `None` before a session starts.
     pub(crate) fn active_profile(&self, cx: &App) -> Option<ClusterProfile> {
         let active = self.active.as_ref()?;
         Some(AppSettings::get(cx).registry.profile(active))
+    }
+
+    /// "Set as default namespace": stores `name` as the active cluster's default, or clears it
+    /// when it already is. Local only: the scope of the running session does not change; the
+    /// default applies at the next start or switch.
+    pub(crate) fn toggle_default_namespace(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(active) = &self.active else {
+            return;
+        };
+        let cluster = ClusterRef::of(active);
+        let name = name.to_owned();
+        AppSettings::update(cx, |settings| {
+            let entry = settings.registry.entry_mut(&cluster);
+            let is_default = entry.default_namespace.as_deref() == Some(name.as_str());
+            entry.default_namespace = (!is_default).then_some(name);
+        });
     }
 
     pub(crate) fn switch_cluster(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
@@ -2342,6 +2373,7 @@ impl AppShell {
     /// A header click: ascending, descending, then the source order.
     pub(crate) fn cycle_sort(&mut self, column: usize, cx: &mut Context<Self>) {
         self.update_view(cx, |view| view.sort = next_sort(view.sort, column));
+        self.persist_table_prefs(cx);
     }
 
     pub(crate) fn remove_chip(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -2369,6 +2401,24 @@ impl AppShell {
             if !view.hidden.remove(&column) {
                 view.hidden.insert(column);
             }
+        });
+        self.persist_table_prefs(cx);
+    }
+
+    /// Saves the visible table's sort and hidden columns. Only a sort or a column toggle calls
+    /// it, so nothing else writes table prefs.
+    fn persist_table_prefs(&self, cx: &mut Context<Self>) {
+        let screen = self.screen;
+        let prefs = match screen {
+            Screen::Pods => table_prefs(&self.pod_table, cx),
+            Screen::Nodes => table_prefs(&self.node_table, cx),
+            Screen::Kind(_) => table_prefs(&self.kind_table, cx),
+        };
+        let Some(prefs) = prefs else {
+            return;
+        };
+        AppSettings::update(cx, |settings| {
+            settings.tables.insert(screen_key(screen).to_owned(), prefs);
         });
     }
 
@@ -2634,6 +2684,12 @@ impl Render for AppShell {
     }
 }
 
+/// The sort and hidden columns of the view of `table`, by column name.
+fn table_prefs<D: FilteredTable>(table: &Entity<TableState<D>>, cx: &App) -> Option<TablePrefs> {
+    let delegate = table.read(cx).delegate();
+    Some(delegate.view()?.prefs(delegate.column_plan()?))
+}
+
 /// Ticks or unticks rows of the view of `table`.
 fn check_table<D: FilteredTable>(table: &Entity<TableState<D>>, change: RowCheck, cx: &mut App) {
     table.update(cx, |table, cx| {
@@ -2689,6 +2745,18 @@ fn focus_table<D: TableDelegate>(
 ) {
     let handle = table.read(cx).focus_handle(cx);
     window.focus(&handle, cx);
+}
+
+/// The namespace a session starts in: `--namespace` (first session only), else the cluster's
+/// saved default, else `None` for the session's own default.
+fn start_namespace(
+    requested: Option<NamespaceScope>,
+    default_namespace: Option<&str>,
+) -> Option<NamespaceScope> {
+    requested.or_else(|| {
+        let name = default_namespace?;
+        Some(NamespaceScope::of_namespaces(vec![name.to_owned()]))
+    })
 }
 
 /// The loaded kubeconfig that defines `cluster`, with its context.

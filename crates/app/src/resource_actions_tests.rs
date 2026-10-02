@@ -821,3 +821,30 @@ fn who_can_query_prefills_from_the_first_resource_rule() {
     assert_eq!(who_can_query(&role_with_rules(Vec::new())), None);
     assert_eq!(who_can_query(&claim_row()), None);
 }
+
+#[test]
+fn namespaces_menu_has_set_as_default() {
+    assert_eq!(
+        default_namespace_state(ResourceKind::Namespaces, "team-a", None),
+        Some(false)
+    );
+    assert_eq!(
+        default_namespace_state(ResourceKind::Namespaces, "team-a", Some("team-b")),
+        Some(false)
+    );
+}
+
+#[test]
+fn set_as_default_is_checked_for_the_default() {
+    assert_eq!(
+        default_namespace_state(ResourceKind::Namespaces, "team-a", Some("team-a")),
+        Some(true)
+    );
+}
+
+#[test]
+fn other_kinds_have_no_set_as_default() {
+    for kind in [ResourceKind::Deployments, ResourceKind::Services] {
+        assert_eq!(default_namespace_state(kind, "x", None), None);
+    }
+}

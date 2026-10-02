@@ -344,6 +344,11 @@ pub(crate) fn kind_menu(
             access,
         ));
     }
+    if let Some(is_default) =
+        default_namespace_state(kind, &row.name, extras.default_namespace.as_deref())
+    {
+        menu = menu.item(default_namespace_item(row.name.clone(), is_default, shell));
+    }
     let change_actions = kind.read_only_actions();
     if !change_actions.is_empty() {
         menu = menu.separator();
@@ -358,6 +363,31 @@ pub(crate) fn kind_menu(
             kind.delete_label(),
             READ_ONLY_MODE_REASON.into(),
         ))
+}
+
+/// Whether the Namespaces menu offers "Set as default namespace" for `row_name`, and if so
+/// whether it already is the default (the item is then checked). `None` for every other kind.
+fn default_namespace_state(
+    kind: ResourceKind,
+    row_name: &str,
+    default_namespace: Option<&str>,
+) -> Option<bool> {
+    (kind == ResourceKind::Namespaces).then(|| default_namespace == Some(row_name))
+}
+
+/// Stores the namespace as the cluster's default, or clears it when it already is. Local only:
+/// nothing is sent to the cluster, and the current scope does not change.
+fn default_namespace_item(
+    name: String,
+    is_default: bool,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let shell = shell.clone();
+    PopupMenuItem::new("Set as default namespace")
+        .checked(is_default)
+        .on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.toggle_default_namespace(&name, cx));
+        })
 }
 
 /// The custom kind a CRD row opens: the served kind with its name, `None` while the CRD is not
@@ -392,14 +422,17 @@ pub(crate) fn browse_instances_item(
     }))
 }
 
-/// Items that need the window or the app to be built, so the caller builds them before it borrows
-/// the session (a submenu needs the app mutably).
+/// What the caller supplies beyond the row and the access state: items that need the window or
+/// the app to be built (so the caller builds them before it borrows the session; a submenu needs
+/// the app mutably), and data the menu reads, such as the default namespace.
 #[derive(Default)]
 pub(crate) struct MenuExtras {
     pub(crate) open_url: Option<PopupMenuItem>,
     pub(crate) secret: Option<SecretMenu>,
     /// A CRD row's Browse instances item.
     pub(crate) browse: Option<PopupMenuItem>,
+    /// The active cluster's default namespace, for the Namespaces menu.
+    pub(crate) default_namespace: Option<String>,
 }
 
 /// The Reveal and Copy items of a Secret.

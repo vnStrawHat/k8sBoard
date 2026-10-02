@@ -42,7 +42,7 @@
 | 4 | `src/pod_table.rs`, `src/node_table.rs`, `src/kind_table.rs` (+ tests) | apply startup prefs at view creation |
 | 4 | `src/app_shell.rs` | `persist_table_prefs` after `cycle_sort` and `toggle_column` |
 | 5 | `src/resource_actions.rs` (+ tests) | `kind_menu(.., default_namespace)`; "Set as default namespace" for Namespaces |
-| 5 | `src/cluster_registry.rs` (+ tests) | `entry`, `entry_mut` (appends when missing), test `entry_mut_appends_once` |
+| 5 | `src/cluster_registry.rs` (+ tests) | `entry_mut` (appends when missing), test `entry_mut_appends_once` |
 | 5 | `src/app_shell.rs` | `toggle_default_namespace`; default namespace at start and in `switch_cluster` |
 
 ## Docs (after merge, by the orchestrator or architect)

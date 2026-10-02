@@ -201,6 +201,10 @@ fn kind_menu_button(
                     secret_menu(&row, key.clone(), access, &shell, window, cx)
                 })
                 .flatten();
+            let default_namespace = shell
+                .read_with(cx, |shell, cx| shell.default_namespace(cx))
+                .ok()
+                .flatten();
             let Some(live) = session.read(cx).live() else {
                 return menu;
             };
@@ -223,6 +227,7 @@ fn kind_menu_button(
                         open_url,
                         secret,
                         browse: browse_instances_item(row, live.crd_kinds(), &shell),
+                        default_namespace,
                     },
                 ),
                 None => menu,

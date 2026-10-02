@@ -9,7 +9,7 @@
 | YAML tab and "View YAML" | Done (0007); the Y key → 0028 | 0007, 0028 |
 | Events tab | Planned(0006): a tab on Pods, a section on Node and kind drawers | 0006; becomes a tab in 0007 |
 | Copy name | Done for live kinds | 0005 |
-| Columns ▾, filter chips, sort | Missing | 0009 |
+| Columns ▾, filter chips, sort | Done (0009); sort and hidden columns are saved per screen (0024) | 0009, 0024 |
 | Edit YAML (E) / Delete … (red, last) | Missing (disabled) | 0031 / 0033 |
 | Monitor tab (◔ kinds: Pod, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, Node) | Done | 0010 (CPU, Memory), 0011 (Network, Disk I/O) |
 
@@ -20,7 +20,7 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Group | Kind | T | Dr | Read-only gaps → spec | Mutating actions → spec |
 |---|---|---|---|---|---|
 | Cluster | Nodes | Done | Partial | conditions, allocatable, system 0008; CPU/Mem 0010; View pods on node 0009 | shell 0037; cordon, drain, taints, labels 0034; delete 0033 |
-| Cluster | Namespaces | Partial | Partial | Pods, CPU req, Memory req columns Done (0012); STUCK box and remaining resources Done (0018; object names not listed); quota section Done (0013; LimitRange row open); "Set as default" 0024 | New 0031; delete 0033 |
+| Cluster | Namespaces | Partial | Partial | Pods, CPU req, Memory req columns Done (0012); STUCK box and remaining resources Done (0018; object names not listed); quota section Done (0013; LimitRange row open); "Set as default" Done (0024) | New 0031; delete 0033 |
 | Cluster | Events | Planned(0006) | Planned(0006) | Warnings only, Go to object, Copy message: 0006; Pause stream, Filter similar 0009 | — |
 | Workloads | Pods | Done | Partial | see [inventory-screens.md](inventory-screens.md) W4 rows | see W4 rows |
 | Workloads | Deployments | Done | Done (WHY box, Revisions: 0012) | View logs (all pods) 0019 | scale, restart, roll back, pause 0032; port-forward 0035 |

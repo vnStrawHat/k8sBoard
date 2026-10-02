@@ -72,6 +72,26 @@ impl ClusterRegistry {
             .find(|entry| entry.cluster.is_of(summary))
     }
 
+    /// The entry for `cluster`; a missing one is appended with no overrides, so the first
+    /// edit of a context registers it (nothing registers on browsing).
+    pub(crate) fn entry_mut(&mut self, cluster: &ClusterRef) -> &mut ClusterEntry {
+        let position = self
+            .clusters
+            .iter()
+            .position(|entry| entry.cluster == *cluster);
+        let index = position.unwrap_or_else(|| {
+            self.clusters.push(ClusterEntry {
+                cluster: cluster.clone(),
+                display_name: None,
+                environment: None,
+                read_only: None,
+                default_namespace: None,
+            });
+            self.clusters.len() - 1
+        });
+        &mut self.clusters[index]
+    }
+
     pub(crate) fn profile(&self, summary: &ContextSummary) -> ClusterProfile {
         let entry = self.entry_of(summary);
         let display_name = entry

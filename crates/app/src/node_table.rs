@@ -19,6 +19,7 @@ use crate::node_summary::{NodeCounts, node_counts, node_in_group};
 use crate::node_usage::{NodeUsage, node_usage};
 use crate::resource_actions::node_menu;
 use crate::resource_kind::{Align, KindColumn, column};
+use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, node_status_label, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
 use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
@@ -67,16 +68,21 @@ pub(crate) struct NodeTableDelegate {
 }
 
 impl NodeTableDelegate {
-    pub(crate) fn new(shell: WeakEntity<AppShell>) -> Self {
+    pub(crate) fn new(shell: WeakEntity<AppShell>, saved: Option<&TablePrefs>) -> Self {
+        let plan = ColumnPlan {
+            specs: NODE_COLUMNS.to_vec(),
+            flexible: TAINTS,
+            flexible_min: TAINTS_MIN_WIDTH,
+        };
+        let mut view = TableView::new(default_filter(Screen::Nodes));
+        if let Some(saved) = saved {
+            view.apply_prefs(saved, &plan);
+        }
         Self {
             session: None,
             shell,
-            layout: TableLayout::new(ColumnPlan {
-                specs: NODE_COLUMNS.to_vec(),
-                flexible: TAINTS,
-                flexible_min: TAINTS_MIN_WIDTH,
-            }),
-            view: TableView::new(default_filter(Screen::Nodes)),
+            layout: TableLayout::new(plan),
+            view,
             counts: None,
         }
     }
