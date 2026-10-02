@@ -1,8 +1,9 @@
 use cluster::{ControllerRef, CronJobSummary, JobStatus, JobSummary};
 
 use super::*;
-use crate::kind_row::PodOwner;
+use crate::kind_row::{KindObject, LiveContent, PodOwner};
 use crate::resource_kind::ResourceKind;
+use crate::table_selection::ResourceKey;
 
 fn job() -> JobSummary {
     JobSummary {
@@ -17,6 +18,8 @@ fn job() -> JobSummary {
         failed: 0,
         active: 1,
         backoff_limit: Some(6),
+        active_deadline_seconds: None,
+        ttl_seconds_after_finished: None,
         started_at: None,
         finished_at: None,
         owner: Some(ControllerRef {
@@ -36,6 +39,7 @@ fn cron_job() -> CronJobSummary {
         labels: Vec::new(),
         schedule: "*/5 * * * *".to_owned(),
         time_zone: None,
+        timetable: cluster::CronSchedule::parse("*/5 * * * *", None),
         is_suspended: false,
         concurrency_policy: "Forbid".to_owned(),
         starting_deadline_seconds: Some(60),
@@ -155,7 +159,7 @@ fn cron_drawer_defaults_time_zone_and_formats_history_limits() {
     let schedule = row.section("Schedule").expect("schedule section");
     assert!(schedule.rows.contains(&DetailRow::field(
         "Time zone",
-        KindCell::Text("Cluster default".into())
+        KindCell::Text("Cluster default (UTC assumed)".into())
     )));
     assert!(schedule.rows.contains(&DetailRow::field(
         "Starting deadline",
@@ -177,25 +181,6 @@ fn batch_row_cells_match_column_count() {
     assert_eq!(
         cron_job_row(&cron_job()).cells.len(),
         ResourceKind::CronJobs.columns().len()
-    );
-}
-
-#[test]
-fn job_owner_cell_uses_lowercase_kind() {
-    let row = job_row(&job());
-    let status = row.section("Status").expect("status section");
-    assert!(status.rows.contains(&DetailRow::field(
-        "Owner",
-        KindCell::Text("cronjob/reconcile".into())
-    )));
-    let mut orphan = job();
-    orphan.owner = None;
-    let row = job_row(&orphan);
-    let status = row.section("Status").expect("status section");
-    assert!(
-        status
-            .rows
-            .contains(&DetailRow::field("Owner", KindCell::Absent))
     );
 }
 
@@ -266,5 +251,117 @@ fn cron_suspend_cell_reads_yes_toned_or_plain_no() {
             text: "Yes".into(),
             tone: StatusTone::Done,
         }))
+    );
+}
+
+#[test]
+fn job_owner_is_a_link() {
+    let row = job_row(&job());
+    let status = row.section("Status").expect("status section");
+    assert!(status.rows.contains(&DetailRow::Link {
+        label: "Owner".into(),
+        text: "cronjob/reconcile".into(),
+        target: ResourceKey::Kind {
+            kind: ResourceKind::CronJobs,
+            namespace: Some("team-a".to_owned()),
+            name: "reconcile".to_owned(),
+        },
+    }));
+    // An owner kind without a screen stays text; no owner is a dash.
+    let mut other = job();
+    other.owner = Some(ControllerRef {
+        kind: "Workflow".to_owned(),
+        name: "nightly".to_owned(),
+    });
+    let status = job_row(&other).section("Status").cloned().expect("status");
+    assert!(status.rows.contains(&DetailRow::field(
+        "Owner",
+        KindCell::Text("workflow/nightly".into())
+    )));
+    let mut orphan = job();
+    orphan.owner = None;
+    let status = job_row(&orphan).section("Status").cloned().expect("status");
+    assert!(
+        status
+            .rows
+            .contains(&DetailRow::field("Owner", KindCell::Absent))
+    );
+}
+
+#[test]
+fn job_status_shows_deadline_and_ttl() {
+    let mut limited = job();
+    limited.active_deadline_seconds = Some(3_600);
+    limited.ttl_seconds_after_finished = Some(86_400);
+    let row = job_row(&limited);
+    let status = row.section("Status").expect("status section");
+    assert!(status.rows.contains(&DetailRow::field(
+        "Active deadline",
+        KindCell::Text("3600s".into())
+    )));
+    assert!(status.rows.contains(&DetailRow::field(
+        "TTL after finish",
+        KindCell::Text("86400s".into())
+    )));
+    let row = job_row(&job());
+    let status = row.section("Status").expect("status section");
+    assert!(
+        status
+            .rows
+            .contains(&DetailRow::field("Active deadline", KindCell::Absent))
+    );
+    assert!(
+        status
+            .rows
+            .contains(&DetailRow::field("TTL after finish", KindCell::Absent))
+    );
+}
+
+#[test]
+fn cron_job_row_has_next_run_cell() {
+    let row = cron_job_row(&cron_job());
+    let columns = ResourceKind::CronJobs.columns();
+    let next_run = columns
+        .iter()
+        .position(|column| column.name == "Next run")
+        .expect("a Next run column");
+    assert_eq!(next_run, 4);
+    assert!(matches!(
+        row.cells.get(next_run),
+        Some(KindCell::NextRun(_))
+    ));
+    assert_eq!(columns[next_run].align, crate::resource_kind::Align::Right);
+    assert!(matches!(row.object, KindObject::CronJob(_)));
+}
+
+#[test]
+fn suspended_cron_job_has_no_next_run() {
+    let mut suspended = cron_job();
+    suspended.is_suspended = true;
+    assert_eq!(
+        cron_job_row(&suspended).cells.get(4),
+        Some(&KindCell::Absent)
+    );
+    let mut invalid = cron_job();
+    invalid.timetable = cluster::CronSchedule::parse("61 * * * *", None);
+    assert_eq!(cron_job_row(&invalid).cells.get(4), Some(&KindCell::Absent));
+}
+
+#[test]
+fn cron_job_sections_start_with_next_runs() {
+    let row = cron_job_row(&cron_job());
+    let titles: Vec<&str> = row.sections.iter().map(|section| section.title).collect();
+    assert_eq!(
+        titles,
+        ["Next runs", "Schedule", "Runs", "Recent jobs", "Containers"]
+    );
+    assert_eq!(
+        row.section("Next runs").map(|section| section.rows.clone()),
+        Some(vec![DetailRow::Live(LiveContent::NextRuns)])
+    );
+    assert_eq!(
+        row.section("Recent jobs")
+            .map(|section| section.rows.clone()),
+        Some(vec![DetailRow::Live(LiveContent::RecentJobs)])
     );
 }

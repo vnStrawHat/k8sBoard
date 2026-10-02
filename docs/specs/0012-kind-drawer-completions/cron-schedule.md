@@ -10,11 +10,13 @@ pub struct CronSchedule { timetable: Timetable, zone: jiff::tz::TimeZone, // Clo
     zone_name: Option<String> }                                          // None: `timeZone` unset, UTC assumed
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Timetable {
-    Calendar { minutes: u64, hours: u64, days_of_month: u64, months: u64, days_of_week: u64, // bit n = value n
-               is_day_of_month_star: bool, is_day_of_week_star: bool },
+    Calendar(Calendar),
     /// `@every`: runs `delay` after the anchor (lastScheduleTime, else creationTimestamp).
     Every { delay: jiff::SignedDuration, anchor: Option<jiff::Timestamp> },
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Calendar { minutes: u64, hours: u64, days_of_month: u64, months: u64, days_of_week: u64, // bit n = value n
+                  is_day_of_month_star: bool, is_day_of_week_star: bool }  // `next(&self, zone, after)` ports robfig `Next`
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ScheduleError {
     #[error("expected 5 fields, found {0}")] FieldCount(usize),
@@ -41,16 +43,16 @@ Error texts carry only schedule text. The module does not log.
 | Rule | Detail |
 |---|---|
 | 1. Prefix | `TZ=` or `CRON_TZ=` at the start → `Unsupported` (the API rejects them for new objects since 1.27) |
-| 2. Trim | ASCII whitespace at both ends |
+| 2. Descriptor check | `@every ` and any other `@` are read from the untrimmed text, as robfig does: a leading space hides the `@` (the text becomes one invalid field), and a trailing space spoils a descriptor. Fields split on ASCII whitespace, so they need no trim |
 | 3. Descriptors (exact, lowercase) | `@yearly`/`@annually` = `0 0 1 1 *`; `@monthly` = `0 0 1 * *`; `@weekly` = `0 0 * * 0`; `@daily`/`@midnight` = `0 0 * * *`; `@hourly` = `0 * * * *`; `@every <d>` (below); any other `@…` → `Unsupported` |
 | 4. Fields | split on ASCII whitespace; exactly 5: minute 0–59, hour 0–23, day of month 1–31, month 1–12, day of week 0–6 |
-| List, range, step | `,`-separated parts; `*` or `?` (whole range), `N`, `N-M` (`N ≤ M`); optional `/step`, `step ≥ 1`; `N/step` means `N-max/step` |
+| List, range, step | `,`-separated parts; empty parts are skipped (robfig `FieldsFunc`), and a field with no value at all (`,`) is an error; `*` or `?` (whole range), `N`, `N-M` (`N ≤ M`); optional `/step`, `step ≥ 1`; `N/step` means `N-max/step`. Deviation: robfig `getRange` reads any part whose first hyphen piece is `*` or `?` (`*-5`) as `*`; here only an exact `*` or `?` is accepted |
 | Numbers | ASCII digits only (`bytes().all(is_ascii_digit)` before `parse`), so `+5` and `٣` fail |
 | Names | months `jan`–`dec`, days `sun`–`sat`, ASCII case-insensitive; allowed as a value or a range end, with or without a step |
 | Star flag | a part that is `*` or `?` with no step > 1 marks the field star (`*/2` and `?/2` do not) |
-| Errors | empty part, more than one `/` or `-`, non-digits, out of range, start > end, step 0 → `Value` with the field name |
+| Errors | more than one `/` or `-`, non-digits, out of range, start > end, step 0, a field with no value → `Value` with the field name |
 
-`@every <d>`: Go duration subset, one or more `<digits><h|m|s>` groups (`1h30m`, `90s`); anything else → `Value { field: "every" }`. The delay is rounded down to whole seconds; under 1 s becomes 1 s (robfig `Every`).
+`@every <d>`: a Go `time.ParseDuration` value: optional sign, one or more `<decimal><unit>` groups (`1h30m`, `1.5h`, `90s`, `250ms`) with units `ns`, `us`, `µs`, `ms`, `s`, `m`, `h`, or a bare `0`; anything else → `Value { field: "every" }`. Nanoseconds accumulate, then the delay is cut to whole seconds; under 1 s (zero and negative included) becomes 1 s (robfig `Every`).
 
 ## Day rule
 
@@ -58,7 +60,7 @@ If the day-of-month **or** day-of-week field is star: `dom ∧ dow`; else `dom �
 
 ## Next run: a direct port of robfig `SpecSchedule.Next` (calendar)
 
-`t` is a `jiff::Zoned` in the schedule's zone; civil construction uses `zone.to_ambiguous_zoned(dt).compatible()` (Go `time.Date` behaviour). `added = false`; `year_limit = t.year() + 5`.
+`t` is a `jiff::Zoned` in the schedule's zone; civil construction follows Go `time.Date`, which reads the wall time as UTC to pick the zone period: `zone.to_ambiguous_zoned(dt)` with `compatible()` (a gap moves forward, a repeated time takes the first), except in a zone east of UTC a fold (`Fold { before }` with a positive `before`) takes `later()`, and in a zone west of UTC a gap (`Gap { before }` with a negative `before`) uses `earlier()`, so Santiago's skipped midnight becomes 23:00 of the day before. `added = false`; `year_limit = t.year() + 5`.
 
 1. Start: `t = after + 1 s`, truncated to the second.
 2. **WRAP**: if `t.year() > year_limit` → `None`.
@@ -85,5 +87,5 @@ Consequences, as in the controller: a spring-forward skips the missing hour (`30
 | Next run cell | `KindCell::NextRun(schedule)`; paint `in {format_age(Some(now), next)}` (`in 11m`, `in 15h`, `in 3d`); no next → "—"; suspended or `Err` → `Absent` |
 | Next run sort | `CellValue::Number(next.timestamp().as_second())`: ascending = soonest; no next → `Absent` |
 | Next runs section | 3 rows of `next_runs(now, 3)`: label `%H:%M %Z` (`10:45 UTC`) on today's date in the zone, else `%b %-d %H:%M %Z` (`Oct 6 02:30 UTC`; jiff supports the `-` flag); value `in 11m` |
-| Notes | suspended: "Suspended: no runs are scheduled"; `Err(e)`: "Cannot compute next runs: {e}"; `@every` without anchor: "Next run is known after the first run" |
+| Notes | suspended: "Suspended: no runs are scheduled"; `Err(e)`: "Cannot compute next runs: {e}"; no run and `CronSchedule::is_every()`: "Next run is known after the first run"; no run otherwise (past the 5-year limit): "No run within the next 5 years" |
 | Time zone field | the name, or "Cluster default (UTC assumed)" |

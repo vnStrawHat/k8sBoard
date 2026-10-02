@@ -1,13 +1,13 @@
 //! Read-only probe of one cluster context. Prints domain summaries only: never
 //! credentials, and never `Debug` output of kube types. With `--watch-seconds` it runs
-//! the pods, nodes, namespaces, nine workload, network, and config watches plus two
+//! the pods, nodes, namespaces, nine workload, network, and config watches, the endpointslices watch, and two
 //! events watches together, and prints counts per kind. With `--metrics-seconds` it polls pod
-//! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--kubelet-seconds` it polls the kubelet stats of every Ready node through the node proxy (cAdvisor disk I/O for the first one) and prints counts per node per round. With `--yaml` it reads the masked
+//! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--kubelet-seconds` it polls the kubelet stats of every Ready node through the node proxy (cAdvisor disk I/O for the first one) and prints counts per node per round. With `--counts` it prints one object-count line per kind (`limit=1` lists, nothing else is read). With `--yaml` it reads the masked
 //! YAML of the first pod and the first node and prints line counts and masking checks, never
 //! the YAML text. The access section doubles as the RBAC probe of the context.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--yaml]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml]
 //! ```
 
 use std::collections::BTreeMap;
@@ -18,17 +18,17 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use cluster::{
-    AccessDecision, ClusterConnection, ClusterError, ContainerKind, ContainerState,
-    ContainerSummary, EnvValues, EventFilter, Kubeconfig, KubeletTargets, LogRequest, LogSource,
-    LogUpdate, MetricsApi, NamespaceScope, NodeKubeletStats, NodeMetrics, NodeReadiness,
-    NodeScheduling, NodeSummary, ObjectKind, ObjectRef, PodMetrics, PodStatus, PodSummary,
-    StatusReason, Termination, WatchUpdate,
+    AccessCheck, AccessDecision, AccessReport, ClusterConnection, ClusterError, ContainerKind,
+    ContainerState, ContainerSummary, CronJobSummary, EnvValues, EventFilter, Kubeconfig,
+    KubeletTargets, LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceScope, NodeKubeletStats,
+    NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary, ObjectKind, ObjectRef, PodMetrics,
+    PodStatus, PodSummary, StatusReason, Termination, WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 use tokio::sync::watch;
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--yaml]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -41,6 +41,7 @@ struct Args {
     logs_seconds: Option<u64>,
     metrics_seconds: Option<u64>,
     kubelet_seconds: Option<u64>,
+    counts: bool,
     yaml: bool,
 }
 
@@ -57,11 +58,13 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut logs_seconds = None;
     let mut metrics_seconds = None;
     let mut kubelet_seconds = None;
+    let mut counts = false;
     let mut yaml = false;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
         match flag.as_str() {
             "--help" => return Ok(Parsed::Help),
+            "--counts" => counts = true,
             "--yaml" => yaml = true,
             "--kubeconfig" => kubeconfig = Some(PathBuf::from(value("--kubeconfig")?)),
             "--context" => context = Some(value("--context")?),
@@ -99,6 +102,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         logs_seconds,
         metrics_seconds,
         kubelet_seconds,
+        counts,
         yaml,
     }))
 }
@@ -113,7 +117,7 @@ fn parse_seconds(flag: &str, text: &str) -> Result<u64, String> {
 
 /// What one watch update contributed. Never holds object contents.
 enum Tally {
-    Snapshot(usize),
+    Snapshot { items: usize, note: Option<String> },
     Failed(String),
 }
 
@@ -122,6 +126,7 @@ enum Tally {
 struct WatchStats {
     snapshots: usize,
     last_items: usize,
+    last_note: Option<String>,
     failures: usize,
     last_error: Option<String>,
 }
@@ -129,9 +134,10 @@ struct WatchStats {
 impl WatchStats {
     fn record(&mut self, tally: Tally) {
         match tally {
-            Tally::Snapshot(items) => {
+            Tally::Snapshot { items, note } => {
                 self.snapshots += 1;
                 self.last_items = items;
+                self.last_note = note;
             }
             Tally::Failed(error) => {
                 self.failures += 1;
@@ -150,6 +156,10 @@ impl WatchStats {
             "watch {kind}: {} snapshots, last {} items, {} failures",
             self.snapshots, self.last_items, self.failures
         );
+        if let Some(note) = &self.last_note {
+            line.push_str("; ");
+            line.push_str(note);
+        }
         if let Some(error) = &self.last_error {
             line.push_str("; last error: ");
             line.push_str(error);
@@ -165,14 +175,36 @@ fn tally_source<T: Send + 'static>(
     kind: &'static str,
     updates: impl Stream<Item = WatchUpdate<T>> + Send + 'static,
 ) -> TallySource {
-    let tallies = updates.map(|update| match update {
-        WatchUpdate::Snapshot(items) => Tally::Snapshot(items.len()),
+    tally_source_noted(kind, updates, |_| None)
+}
+
+/// Like `tally_source`, with a short note about the last snapshot appended to the kind's line.
+fn tally_source_noted<T: Send + 'static>(
+    kind: &'static str,
+    updates: impl Stream<Item = WatchUpdate<T>> + Send + 'static,
+    note: fn(&[T]) -> Option<String>,
+) -> TallySource {
+    let tallies = updates.map(move |update| match update {
+        WatchUpdate::Snapshot(items) => Tally::Snapshot {
+            items: items.len(),
+            note: note(&items),
+        },
         WatchUpdate::Failed(error) => Tally::Failed(error_summary(&error)),
     });
     (kind, tallies.boxed())
 }
 
-/// Runs all fourteen watches together for `seconds` and prints one line per kind.
+/// The next run of the first cron job that has one, in its own zone: shows that the bundled
+/// time zone database works on this machine. Prints a time only, never the cron job.
+fn next_run_note(cron_jobs: &[CronJobSummary]) -> Option<String> {
+    let now = jiff::Timestamp::now();
+    let next = cron_jobs
+        .iter()
+        .find_map(|cron_job| cron_job.timetable.as_ref().ok()?.next_after(now))?;
+    Some(format!("next {}", next.strftime("%Y-%m-%d %H:%M:%S %Z")))
+}
+
+/// Runs all fifteen watches together for `seconds` and prints one line per kind.
 async fn watch_for(
     probe: &mut Probe,
     connection: &ClusterConnection,
@@ -192,10 +224,18 @@ async fn watch_for(
         tally_source("daemon sets", connection.watch_daemon_sets(scope.clone())),
         tally_source("replica sets", connection.watch_replica_sets(scope.clone())),
         tally_source("jobs", connection.watch_jobs(scope.clone())),
-        tally_source("cron jobs", connection.watch_cron_jobs(scope.clone())),
+        tally_source_noted(
+            "cron jobs",
+            connection.watch_cron_jobs(scope.clone()),
+            next_run_note,
+        ),
         tally_source("services", connection.watch_services(scope.clone())),
         tally_source("ingresses", connection.watch_ingresses(scope.clone())),
         tally_source("config maps", connection.watch_config_maps(scope.clone())),
+        tally_source(
+            "endpointslices",
+            connection.watch_endpoint_slices(scope.clone()),
+        ),
         tally_source(
             "events",
             connection.watch_events(scope.clone(), EventFilter::All),
@@ -234,6 +274,73 @@ async fn watch_for(
         writeln!(probe.out, "{}", kind_stats.line(kind))?;
         if kind_stats.is_silent() {
             probe.all_succeeded = false;
+        }
+    }
+    Ok(())
+}
+
+/// The kinds `--counts` counts, in sidebar order, with the check that gates each.
+const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 13] = [
+    (ObjectKind::Pod, "pods", AccessCheck::ListPods),
+    (ObjectKind::Node, "nodes", AccessCheck::ListNodes),
+    (
+        ObjectKind::Namespace,
+        "namespaces",
+        AccessCheck::ListNamespaces,
+    ),
+    (ObjectKind::Event, "events", AccessCheck::ListEvents),
+    (
+        ObjectKind::Deployment,
+        "deployments",
+        AccessCheck::ListDeployments,
+    ),
+    (
+        ObjectKind::StatefulSet,
+        "statefulsets",
+        AccessCheck::ListStatefulSets,
+    ),
+    (
+        ObjectKind::DaemonSet,
+        "daemonsets",
+        AccessCheck::ListDaemonSets,
+    ),
+    (
+        ObjectKind::ReplicaSet,
+        "replicasets",
+        AccessCheck::ListReplicaSets,
+    ),
+    (ObjectKind::Job, "jobs", AccessCheck::ListJobs),
+    (ObjectKind::CronJob, "cronjobs", AccessCheck::ListCronJobs),
+    (ObjectKind::Service, "services", AccessCheck::ListServices),
+    (ObjectKind::Ingress, "ingresses", AccessCheck::ListIngresses),
+    (
+        ObjectKind::ConfigMap,
+        "configmaps",
+        AccessCheck::ListConfigMaps,
+    ),
+];
+
+/// One line per kind: the object count, `unknown`, or `denied` without a request when the
+/// access review already said no. A missing report (the review failed) counts anyway.
+async fn counts_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    scope: &NamespaceScope,
+    access: Option<&AccessReport>,
+) -> io::Result<()> {
+    probe.section("counts")?;
+    for (kind, plural, check) in COUNT_KINDS {
+        if access.is_some_and(|report| !report.is_allowed(check)) {
+            writeln!(probe.out, "  count {plural} denied")?;
+            continue;
+        }
+        match connection.count_objects(kind, scope).await {
+            Ok(Some(count)) => writeln!(probe.out, "  count {plural} {count}")?,
+            Ok(None) => writeln!(probe.out, "  count {plural} unknown")?,
+            Err(error) => {
+                writeln!(probe.out, "  count {plural}")?;
+                probe.fail(&error)?;
+            }
         }
     }
     Ok(())
@@ -658,25 +765,26 @@ async fn run(args: &Args) -> io::Result<bool> {
     }
 
     probe.section(&format!("access ({scope_label})"))?;
-    match connection.review_access(scope.clone()).await {
-        Ok(report) => {
-            for review in &report.reviews {
-                match &review.decision {
-                    AccessDecision::Allowed => {
-                        writeln!(probe.out, "  {:<26} allowed", review.check)?
-                    }
-                    AccessDecision::Denied {
-                        reason: Some(reason),
-                    } => {
-                        writeln!(probe.out, "  {:<26} denied: {reason}", review.check)?;
-                    }
-                    AccessDecision::Denied { reason: None } => {
-                        writeln!(probe.out, "  {:<26} denied", review.check)?;
-                    }
-                }
+    let access = match connection.review_access(scope.clone()).await {
+        Ok(report) => Some(report),
+        Err(error) => {
+            probe.fail(&error)?;
+            None
+        }
+    };
+    for review in access.iter().flat_map(|report| &report.reviews) {
+        match &review.decision {
+            AccessDecision::Allowed => writeln!(probe.out, "  {:<26} allowed", review.check)?,
+            AccessDecision::Denied {
+                reason: Some(reason),
+            } => writeln!(probe.out, "  {:<26} denied: {reason}", review.check)?,
+            AccessDecision::Denied { reason: None } => {
+                writeln!(probe.out, "  {:<26} denied", review.check)?;
             }
         }
-        Err(error) => probe.fail(&error)?,
+    }
+    if args.counts {
+        counts_for(&mut probe, &connection, &scope, access.as_ref()).await?;
     }
 
     match connection.list_namespaces().await {

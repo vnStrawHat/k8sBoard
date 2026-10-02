@@ -18,7 +18,8 @@ use crate::drawer::{
     drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, link_text, menu_button, port_row,
     section_title, shown_tab, tab_titles, truncated_text, wide_detail_row, yaml_body,
 };
-use crate::kind_row::{DetailRow, KindCell, KindRow};
+use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow};
+use crate::live_sections::{live_rows, next_run_text};
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
@@ -88,6 +89,7 @@ fn subtitle(row: &KindRow, now: jiff::Timestamp, cx: &App) -> AnyElement {
             .namespace
             .iter()
             .cloned()
+            .chain(revision_text(row))
             .chain(created_text(row.created_at, now))
             .collect(),
     };
@@ -101,6 +103,16 @@ fn subtitle(row: &KindRow, now: jiff::Timestamp, cx: &App) -> AnyElement {
                 .child(format!("· {}", detail.join(" · ")))
         }))
         .into_any_element()
+}
+
+/// `rev 7` for a Deployment that has a revision, shown after its namespace in the subtitle.
+fn revision_text(row: &KindRow) -> Option<String> {
+    match &row.object {
+        KindObject::Deployment(deployment) => {
+            Some(format!("rev {}", deployment.revision.as_deref()?))
+        }
+        KindObject::Plain | KindObject::CronJob(_) => None,
+    }
 }
 
 /// The menu reads the session when it opens, so it shows the access state and the row of
@@ -141,7 +153,13 @@ fn overview(
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> AnyElement {
-    let forward_reason = port_forward_reason(&live.access);
+    let paint = DrawerPaint {
+        kind,
+        row,
+        live,
+        forward_reason: port_forward_reason(&live.access),
+        now,
+    };
     // Gives every element that needs an id one that is unique inside the drawer.
     let mut next_id = 0_usize;
     let mut column = v_flex();
@@ -152,7 +170,7 @@ fn overview(
         }
         for detail in &section.rows {
             next_id += 1;
-            column = column.child(detail_element(detail, next_id, &forward_reason, now, cx));
+            column = column.child(detail_element(detail, next_id, &paint, cx));
         }
     }
     if let Some(owner) = &row.related_pods {
@@ -166,14 +184,28 @@ fn overview(
     column.into_any_element()
 }
 
+/// What painting a drawer row may read besides the row itself.
+struct DrawerPaint<'a> {
+    kind: ResourceKind,
+    row: &'a KindRow,
+    live: &'a LiveCluster,
+    forward_reason: SharedString,
+    now: jiff::Timestamp,
+}
+
 fn detail_element(
     detail: &DetailRow,
     id: usize,
-    forward_reason: &SharedString,
-    now: jiff::Timestamp,
+    paint: &DrawerPaint,
     cx: &Context<AppShell>,
 ) -> AnyElement {
+    let now = paint.now;
     match detail {
+        DetailRow::Live(content) => v_flex()
+            .children(live_rows(
+                *content, paint.kind, paint.row, paint.live, now, cx,
+            ))
+            .into_any_element(),
         DetailRow::Field { label, value } => {
             wide_detail_row(label.clone(), field_value(value, id, now, cx), cx).into_any_element()
         }
@@ -192,7 +224,7 @@ fn detail_element(
             let link = link_text(id, text, target.clone(), cx);
             wide_detail_row(label.clone(), link, cx).into_any_element()
         }
-        DetailRow::Port { text } => port_row(text, id, forward_reason, cx),
+        DetailRow::Port { text } => port_row(text, id, &paint.forward_reason, cx),
         DetailRow::Stacked { label, value } => {
             stacked_row(label, field_value(value, id, now, cx), id, cx)
         }
@@ -245,6 +277,10 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
         }
         KindCell::Toned(label) => toned_text(label.clone(), cx).truncate().into_any_element(),
         KindCell::Absent => absent_text(cx).into_any_element(),
+        KindCell::NextRun(schedule) => match next_run_text(schedule, now) {
+            Some(text) => div().truncate().child(text).into_any_element(),
+            None => absent_text(cx).into_any_element(),
+        },
         KindCell::Duration {
             started_at: None, ..
         } => absent_text(cx).into_any_element(),

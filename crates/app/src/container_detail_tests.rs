@@ -356,7 +356,13 @@ fn mount_rows_text_and_targets() {
                 path: "/var/log".to_owned(),
             },
         ),
-        mount("/token", "token", VolumeSource::Projected),
+        mount(
+            "/token",
+            "token",
+            VolumeSource::Projected {
+                config_maps: Vec::new(),
+            },
+        ),
         mount("/labels", "labels", VolumeSource::DownwardApi),
         mount("/share", "share", VolumeSource::Other),
         mount(

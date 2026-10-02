@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use cluster::{
     AccessCheck, AccessReport, ClusterConnection, ClusterError, ContextSummary, EventFilter,
-    EventSummary, InvolvedObject, Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope,
-    NamespaceSummary, NodeSummary, PodSummary, ServerVersion, WatchUpdate,
+    EventSummary, InvolvedObject, JobSummary, Kubeconfig, KubeletTargets, NamespaceAccess,
+    NamespaceScope, NamespaceSummary, NodeSummary, PodSummary, ReplicaSetSummary, ServerVersion,
+    WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
@@ -17,6 +18,7 @@ use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::event_rows::newest_first;
 use crate::kind_row::KindRow;
 use crate::kubelet_metrics::KubeletDemand;
+use crate::related_objects::RelatedSubject;
 use crate::resource_kind::ResourceKind;
 
 /// One connected kubeconfig context: the connection, its live lists, and the access report.
@@ -65,6 +67,9 @@ pub(crate) struct LiveCluster {
     explorer: Option<KindList>,
     /// The open drawer's events; `None` while no drawer needs them.
     object_events: Option<ObjectEvents>,
+    /// The objects related to the open drawer (a Deployment's ReplicaSets); `None` while no
+    /// drawer needs them.
+    related: Option<RelatedObjects>,
     connection: ClusterConnection,
     subscriptions: Subscriptions,
 }
@@ -123,6 +128,60 @@ pub(crate) struct ObjectEvents {
     pub(crate) subject: InvolvedObject,
     pub(crate) list: LiveList<EventSummary>,
     _subscription: WatchSubscription,
+}
+
+/// The objects related to the object whose drawer is open. Dropping it stops the watch.
+struct RelatedObjects {
+    subject: RelatedSubject,
+    list: RelatedList,
+    _subscription: WatchSubscription,
+}
+
+/// The latest state of the related watch, by what it lists.
+pub(crate) enum RelatedList {
+    ReplicaSets(LiveList<ReplicaSetSummary>),
+    Jobs(LiveList<JobSummary>),
+}
+
+/// One related watch update, typed on tokio so one subscription serves every subject.
+enum RelatedUpdate {
+    ReplicaSets(WatchUpdate<ReplicaSetSummary>),
+    Jobs(WatchUpdate<JobSummary>),
+}
+
+impl RelatedList {
+    fn loading_for(subject: &RelatedSubject) -> Self {
+        match subject {
+            RelatedSubject::ReplicaSets { .. } => Self::ReplicaSets(LiveList::Loading),
+            RelatedSubject::Jobs { .. } => Self::Jobs(LiveList::Loading),
+        }
+    }
+
+    /// An update of the other variant is ignored: a stale one cannot reach a new subject.
+    fn apply(&mut self, update: RelatedUpdate) {
+        match (self, update) {
+            (Self::ReplicaSets(list), RelatedUpdate::ReplicaSets(update)) => list.apply(update),
+            (Self::Jobs(list), RelatedUpdate::Jobs(update)) => list.apply(update),
+            (Self::ReplicaSets(_), RelatedUpdate::Jobs(_))
+            | (Self::Jobs(_), RelatedUpdate::ReplicaSets(_)) => {}
+        }
+    }
+
+    fn mark_stopped(&mut self) {
+        match self {
+            Self::ReplicaSets(list) => list.mark_stopped(),
+            Self::Jobs(list) => list.mark_stopped(),
+        }
+    }
+
+    /// Whether the watch has not delivered its first snapshot.
+    #[cfg(feature = "screenshot")]
+    fn is_loading(&self) -> bool {
+        match self {
+            Self::ReplicaSets(list) => list.is_loading(),
+            Self::Jobs(list) => list.is_loading(),
+        }
+    }
 }
 
 /// Dropping a field stops that watch.
@@ -387,6 +446,13 @@ impl ClusterSession {
             .filter(|events| events.subject == *subject)
     }
 
+    fn related_mut(&mut self, subject: &RelatedSubject) -> Option<&mut RelatedObjects> {
+        self.live_mut()?
+            .related
+            .as_mut()
+            .filter(|related| related.subject == *subject)
+    }
+
     fn live_mut(&mut self) -> Option<&mut LiveCluster> {
         match &mut self.phase {
             SessionPhase::Live(live) => Some(live),
@@ -571,6 +637,28 @@ impl ClusterSession {
         cx.notify();
     }
 
+    /// Starts, replaces, or stops the related objects watch. The same subject again is a no-op,
+    /// so there is no re-list. A session that is not live ignores it: a new session has no
+    /// selection.
+    pub(crate) fn set_related_subject(
+        &mut self,
+        subject: Option<RelatedSubject>,
+        cx: &mut Context<Self>,
+    ) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        if live.related_subject() == subject.as_ref() {
+            return;
+        }
+        // The old subscription drops first, so two related watches never overlap.
+        live.related = None;
+        live.related =
+            subject.map(|subject| RelatedObjects::start(subject, &runtime, &live.connection, cx));
+        cx.notify();
+    }
+
     /// The kubelet demand of the open drawer. It runs from `render`, so it never notifies: the
     /// targets move through a watch channel and the poll's own updates notify.
     pub(crate) fn set_kubelet_demand(&mut self, demand: KubeletDemand) {
@@ -694,13 +782,41 @@ impl LiveCluster {
         Some((explorer.kind, explorer.list.ready_count()?))
     }
 
-    /// Open watches: namespaces, pods, nodes, plus the explorer's and the drawer's events when
-    /// they are open.
+    /// Open watches: namespaces, pods, nodes, the explorer's, and the drawer's events and related
+    /// objects when they are open.
     pub(crate) fn watch_count(&self) -> usize {
-        open_watch_count(
-            self.explorer.as_ref().map(|explorer| &explorer.list),
-            self.object_events.as_ref().map(|events| &events.list),
-        )
+        let namespaces = scope_multiplicity(&self.scope);
+        open_watch_count(OpenWatches {
+            namespaces,
+            explorer: self
+                .explorer
+                .as_ref()
+                .map_or(0, |explorer| explorer_watches(explorer.kind, namespaces)),
+            object_events: self.object_events.is_some(),
+            related: self.related.is_some(),
+        })
+    }
+
+    /// The subject of the running related watch.
+    pub(crate) fn related_subject(&self) -> Option<&RelatedSubject> {
+        self.related.as_ref().map(|related| &related.subject)
+    }
+
+    /// The related list of `subject`, or `None` while another subject (or none) is watched.
+    pub(crate) fn related_of(&self, subject: &RelatedSubject) -> Option<&RelatedList> {
+        self.related
+            .as_ref()
+            .filter(|related| related.subject == *subject)
+            .map(|related| &related.list)
+    }
+
+    /// Whether the related watch runs and has not delivered its first snapshot. Only the
+    /// screenshot hook waits on it.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn is_related_loading(&self) -> bool {
+        self.related
+            .as_ref()
+            .is_some_and(|related| related.list.is_loading())
     }
 
     /// The subject of the running object events watch.
@@ -812,19 +928,45 @@ impl LiveCluster {
             metrics,
             explorer,
             object_events: None,
+            related: None,
             connection,
             subscriptions,
         }
     }
 }
 
-/// Namespaces, pods and nodes are always watched; the explorer and the drawer's events add one
-/// each.
-fn open_watch_count(
-    explorer: Option<&LiveList<KindRow>>,
-    object_events: Option<&LiveList<EventSummary>>,
-) -> usize {
-    3 + usize::from(explorer.is_some()) + usize::from(object_events.is_some())
+/// Which watches are open, as `open_watch_count` counts them.
+struct OpenWatches {
+    /// How many namespaces the scope names; `All` is 1. The pods watch runs once per namespace.
+    namespaces: usize,
+    /// The explorer's watches: 0 without one, 1 for a cluster-scoped kind, else one per namespace.
+    explorer: usize,
+    object_events: bool,
+    related: bool,
+}
+
+/// The namespaces list and the nodes are always watched, pods once per namespace of the scope,
+/// then the explorer's watches, and one each for the drawer's events and related objects. The
+/// total stays within `3N + 4` for N picked namespaces.
+fn open_watch_count(watches: OpenWatches) -> usize {
+    2 + watches.namespaces
+        + watches.explorer
+        + usize::from(watches.object_events)
+        + usize::from(watches.related)
+}
+
+/// Namespaces are cluster-scoped, so their explorer is one watch whatever the scope; every
+/// other kind runs one watch per namespace.
+fn explorer_watches(kind: ResourceKind, namespaces: usize) -> usize {
+    if kind.is_namespaced() { namespaces } else { 1 }
+}
+
+/// The number of namespaces a scope watches per namespaced kind; `All` is one watch.
+fn scope_multiplicity(scope: &NamespaceScope) -> usize {
+    match scope {
+        NamespaceScope::All | NamespaceScope::Named(_) => 1,
+        NamespaceScope::Several(names) => names.len(),
+    }
 }
 
 /// The explorer list counts like the three always-on lists: its failure is a live-update problem.
@@ -910,6 +1052,51 @@ impl ObjectEvents {
         Self {
             subject,
             list: LiveList::Loading,
+            _subscription: subscription,
+        }
+    }
+}
+
+impl RelatedObjects {
+    fn start(
+        subject: RelatedSubject,
+        runtime: &ClusterRuntime,
+        connection: &ClusterConnection,
+        cx: &mut Context<ClusterSession>,
+    ) -> Self {
+        let updates = match &subject {
+            RelatedSubject::ReplicaSets {
+                namespace,
+                selector,
+                ..
+            } => connection
+                .watch_selected_replica_sets(namespace, selector)
+                .map(RelatedUpdate::ReplicaSets)
+                .boxed(),
+            RelatedSubject::Jobs { namespace, .. } => connection
+                .watch_namespace_jobs(namespace)
+                .map(RelatedUpdate::Jobs)
+                .boxed(),
+        };
+        let applied = subject.clone();
+        let closed = subject.clone();
+        let subscription = runtime.subscribe(
+            updates,
+            cx,
+            move |session: &mut ClusterSession, update, _| {
+                if let Some(related) = session.related_mut(&applied) {
+                    related.list.apply(update);
+                }
+            },
+            move |session, _| {
+                if let Some(related) = session.related_mut(&closed) {
+                    related.list.mark_stopped();
+                }
+            },
+        );
+        Self {
+            list: RelatedList::loading_for(&subject),
+            subject,
             _subscription: subscription,
         }
     }

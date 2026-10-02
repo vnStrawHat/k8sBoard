@@ -2,7 +2,7 @@
 
 use cluster::{IngressSummary, ServicePortSummary, ServiceSummary};
 
-use crate::kind_row::{DetailRow, DetailSection, KindCell, KindRow, chips};
+use crate::kind_row::{DetailRow, DetailSection, KindCell, KindObject, KindRow, chips};
 use crate::status_tone::{StatusLabel, StatusTone};
 
 const LOAD_BALANCER: &str = "LoadBalancer";
@@ -76,6 +76,7 @@ pub(crate) fn service_row(service: &ServiceSummary) -> KindRow {
         event: None,
         related_pods: None,
         labels: chips(&service.labels),
+        object: KindObject::Plain,
     }
 }
 
@@ -166,6 +167,7 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
         event: None,
         related_pods: None,
         labels: chips(&ingress.labels),
+        object: KindObject::Plain,
     }
 }
 

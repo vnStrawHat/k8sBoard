@@ -160,16 +160,6 @@ fn watch_state_still_reports_core_list_problems() {
 }
 
 #[test]
-fn open_watch_count_includes_object_events() {
-    let explorer = LiveList::<KindRow>::Loading;
-    let events = LiveList::<EventSummary>::Loading;
-    assert_eq!(open_watch_count(None, None), 3);
-    assert_eq!(open_watch_count(Some(&explorer), None), 4);
-    assert_eq!(open_watch_count(Some(&explorer), Some(&events)), 5);
-    assert_eq!(open_watch_count(None, Some(&events)), 4);
-}
-
-#[test]
 fn namespaces_label_lists_two_then_counts_the_rest() {
     let names = |count: usize| -> Vec<String> {
         ["a", "b", "c", "d", "e"][..count]
@@ -264,4 +254,78 @@ fn pausing_a_paused_list_keeps_its_held_snapshot() {
     flow.receive(&mut list, WatchUpdate::Snapshot(vec![2]));
     assert!(!flow.pause(&list));
     assert!(matches!(&flow, StreamFlow::Paused { held: Some(held) } if *held == [2]));
+}
+
+fn watches(namespaces: usize, explorer: usize, object_events: bool, related: bool) -> OpenWatches {
+    OpenWatches {
+        namespaces,
+        explorer,
+        object_events,
+        related,
+    }
+}
+
+#[test]
+fn open_watch_count_counts_several_related_and_companion() {
+    // All with nothing open: namespaces, pods, nodes.
+    assert_eq!(open_watch_count(watches(1, 0, false, false)), 3);
+    assert_eq!(open_watch_count(watches(1, 1, false, false)), 4);
+    assert_eq!(open_watch_count(watches(1, 1, true, false)), 5);
+    assert_eq!(open_watch_count(watches(1, 1, true, true)), 6);
+    // Three picked namespaces, everything open: 2 + 3 pods + 3 explorer + events + related.
+    assert_eq!(open_watch_count(watches(3, 3, true, true)), 2 + 3 + 3 + 2);
+    // Within 3N + 4 (the companion watch of step 4a adds the last N).
+    assert_eq!(open_watch_count(watches(5, 5, true, true)), 2 + 5 + 5 + 2);
+    assert!(open_watch_count(watches(5, 5, true, true)) <= 3 * 5 + 4);
+}
+
+#[test]
+fn explorer_watches_follow_the_scope_except_for_namespaces() {
+    assert_eq!(explorer_watches(ResourceKind::Deployments, 3), 3);
+    assert_eq!(explorer_watches(ResourceKind::Deployments, 1), 1);
+    assert_eq!(explorer_watches(ResourceKind::Namespaces, 3), 1);
+}
+
+#[test]
+fn scope_multiplicity_counts_picked_namespaces() {
+    assert_eq!(scope_multiplicity(&NamespaceScope::All), 1);
+    assert_eq!(
+        scope_multiplicity(&NamespaceScope::Named("a".to_owned())),
+        1
+    );
+    let several = NamespaceScope::Several(vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
+    assert_eq!(scope_multiplicity(&several), 3);
+}
+
+fn replica_set_subject() -> RelatedSubject {
+    RelatedSubject::ReplicaSets {
+        namespace: "team-a".to_owned(),
+        deployment: "api".to_owned(),
+        selector: "app=api".to_owned(),
+    }
+}
+
+#[test]
+fn related_list_ignores_other_variant() {
+    let mut list = RelatedList::loading_for(&replica_set_subject());
+    // A stale Jobs update cannot reach a ReplicaSets list.
+    list.apply(RelatedUpdate::Jobs(WatchUpdate::Snapshot(Vec::new())));
+    assert!(matches!(&list, RelatedList::ReplicaSets(replica_sets) if replica_sets.is_loading()));
+    list.apply(RelatedUpdate::ReplicaSets(
+        WatchUpdate::Snapshot(Vec::new()),
+    ));
+    assert!(
+        matches!(&list, RelatedList::ReplicaSets(replica_sets) if replica_sets.ready_count() == Some(0))
+    );
+    let jobs = RelatedSubject::Jobs {
+        namespace: "team-a".to_owned(),
+        cron_job: "nightly".to_owned(),
+    };
+    let mut jobs_list = RelatedList::loading_for(&jobs);
+    jobs_list.apply(RelatedUpdate::ReplicaSets(
+        WatchUpdate::Snapshot(Vec::new()),
+    ));
+    assert!(matches!(&jobs_list, RelatedList::Jobs(jobs) if jobs.is_loading()));
+    jobs_list.mark_stopped();
+    assert!(matches!(&jobs_list, RelatedList::Jobs(jobs) if jobs.failure().is_some()));
 }

@@ -1,4 +1,4 @@
-use cluster::{NodeSummary, PodSummary};
+use cluster::{ControllerRef, NodeSummary, PodSummary};
 
 use crate::app_shell::Screen;
 use crate::cluster_session::LiveList;
@@ -62,6 +62,12 @@ impl ResourceKey {
         }
     }
 
+    /// The key of a controller owner of an object in `namespace`. Owners live in the object's
+    /// namespace.
+    pub(crate) fn of_owner(namespace: &str, owner: &ControllerRef) -> Option<Self> {
+        Self::of_object(&owner.kind, Some(namespace), &owner.name)
+    }
+
     pub(crate) fn of_row(kind: ResourceKind, row: &KindRow) -> Self {
         Self::Kind {
             kind,
@@ -92,6 +98,19 @@ impl ResourceKey {
         matches!(self, Self::Kind { kind: key_kind, namespace, name }
             if *key_kind == kind && *namespace == row.namespace && *name == row.name)
     }
+}
+
+/// The index of the item `is_target` picks in `list`, whatever the filter shows. `None` while
+/// the list is loading; otherwise `Some(found)`, with `Some(None)` for a failed list or a missing
+/// item. A reveal uses it to make a filtered-out target visible.
+pub(crate) fn list_item_index<T>(
+    list: &LiveList<T>,
+    is_target: impl Fn(&T) -> bool,
+) -> Option<Option<usize>> {
+    if list.is_loading() {
+        return None;
+    }
+    Some(list.items().iter().position(is_target))
 }
 
 /// The table row of the selected item in `list`, searched in the rows `view` shows. `None`

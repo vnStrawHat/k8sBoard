@@ -1,5 +1,5 @@
 use futures::Stream;
-use k8s_openapi::api::apps::v1::StatefulSet;
+use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::PersistentVolumeClaim;
 
 use crate::connection::ClusterConnection;
@@ -30,6 +30,9 @@ pub struct StatefulSetSummary {
     pub selector: Vec<String>,
     pub containers: Vec<TemplateContainer>,
     pub claim_templates: Vec<ClaimTemplate>,
+    /// `persistentVolumeClaimRetentionPolicy` as `whenDeleted Retain · whenScaled Delete`;
+    /// `None` when unset.
+    pub claim_retention: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,7 +90,20 @@ pub(crate) fn stateful_set_summary(stateful_set: &StatefulSet) -> StatefulSetSum
             .flat_map(|spec| spec.volume_claim_templates.iter().flatten())
             .map(claim_template)
             .collect(),
+        claim_retention: spec.and_then(claim_retention),
     }
+}
+
+/// An unset field reads `Retain`, the API default.
+fn claim_retention(spec: &StatefulSetSpec) -> Option<String> {
+    let policy = spec.persistent_volume_claim_retention_policy.as_ref()?;
+    let behavior =
+        |value: &Option<String>| non_empty(value.as_deref()).unwrap_or_else(|| "Retain".to_owned());
+    Some(format!(
+        "whenDeleted {} · whenScaled {}",
+        behavior(&policy.when_deleted),
+        behavior(&policy.when_scaled)
+    ))
 }
 
 fn claim_template(claim: &PersistentVolumeClaim) -> ClaimTemplate {
@@ -113,7 +129,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use k8s_openapi::api::apps::v1::{
-        StatefulSetSpec, StatefulSetStatus, StatefulSetUpdateStrategy,
+        StatefulSetPersistentVolumeClaimRetentionPolicy, StatefulSetStatus,
+        StatefulSetUpdateStrategy,
     };
     use k8s_openapi::api::core::v1::{PersistentVolumeClaimSpec, VolumeResourceRequirements};
     use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -213,5 +230,32 @@ mod tests {
         let summary = stateful_set_summary(&stateful_set);
         assert_eq!(summary.service_name, None);
         assert_eq!(summary.desired, 1);
+    }
+
+    #[test]
+    fn claim_retention_text() {
+        let with_policy = |when_deleted: Option<&str>, when_scaled: Option<&str>| StatefulSet {
+            spec: Some(StatefulSetSpec {
+                persistent_volume_claim_retention_policy: Some(
+                    StatefulSetPersistentVolumeClaimRetentionPolicy {
+                        when_deleted: when_deleted.map(str::to_owned),
+                        when_scaled: when_scaled.map(str::to_owned),
+                    },
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let retention =
+            |stateful_set: &StatefulSet| stateful_set_summary(stateful_set).claim_retention;
+        assert_eq!(
+            retention(&with_policy(Some("Retain"), Some("Delete"))).as_deref(),
+            Some("whenDeleted Retain \u{b7} whenScaled Delete")
+        );
+        assert_eq!(
+            retention(&with_policy(None, Some("Delete"))).as_deref(),
+            Some("whenDeleted Retain \u{b7} whenScaled Delete")
+        );
+        assert_eq!(retention(&StatefulSet::default()), None);
     }
 }

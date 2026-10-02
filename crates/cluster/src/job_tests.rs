@@ -128,3 +128,26 @@ fn job_summary_reads_counts_and_spec() {
     );
     assert_eq!(summary.started_at, Some(started));
 }
+
+#[test]
+fn job_keeps_deadline_and_ttl() {
+    let job = Job {
+        spec: Some(JobSpec {
+            active_deadline_seconds: Some(3_600),
+            ttl_seconds_after_finished: Some(86_400),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let summary = job_summary(&job);
+    assert_eq!(summary.active_deadline_seconds, Some(3_600));
+    assert_eq!(summary.ttl_seconds_after_finished, Some(86_400));
+    let bare = job_summary(&Job::default());
+    assert_eq!(
+        (
+            bare.active_deadline_seconds,
+            bare.ttl_seconds_after_finished
+        ),
+        (None, None)
+    );
+}

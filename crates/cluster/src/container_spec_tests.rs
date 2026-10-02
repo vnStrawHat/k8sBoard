@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::{
-    ConfigMapEnvSource, ConfigMapKeySelector, ConfigMapVolumeSource, DownwardAPIVolumeSource,
-    EmptyDirVolumeSource, EnvVarSource, ExecAction, GRPCAction, HTTPGetAction, HTTPHeader,
-    HostPathVolumeSource, NFSVolumeSource, ObjectFieldSelector, PersistentVolumeClaimVolumeSource,
-    Pod, PodSpec, ProjectedVolumeSource, ResourceFieldSelector, ResourceRequirements,
-    SecretEnvSource, SecretKeySelector, SecretVolumeSource, TCPSocketAction,
+    ConfigMapEnvSource, ConfigMapKeySelector, ConfigMapProjection, ConfigMapVolumeSource,
+    DownwardAPIVolumeSource, EmptyDirVolumeSource, EnvVarSource, ExecAction, GRPCAction,
+    HTTPGetAction, HTTPHeader, HostPathVolumeSource, NFSVolumeSource, ObjectFieldSelector,
+    PersistentVolumeClaimVolumeSource, Pod, PodSpec, ProjectedVolumeSource, ResourceFieldSelector,
+    ResourceRequirements, SecretEnvSource, SecretKeySelector, SecretProjection, SecretVolumeSource,
+    TCPSocketAction, VolumeProjection,
 };
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
@@ -492,7 +493,14 @@ fn mounts_resolve_volume_sources() {
                 false,
                 None
             ),
-            (named("/token"), VolumeSource::Projected, false, None),
+            (
+                named("/token"),
+                VolumeSource::Projected {
+                    config_maps: Vec::new()
+                },
+                false,
+                None
+            ),
             (named("/labels"), VolumeSource::DownwardApi, false, None),
             (named("/share"), VolumeSource::Other, false, None),
             (named("/gone"), VolumeSource::Other, false, None),
@@ -513,4 +521,48 @@ fn image_digest_reads_after_last_at_or_bare_sha256() {
     for (id, expected) in cases {
         assert_eq!(image_digest(id).as_deref(), expected, "{id}");
     }
+}
+
+#[test]
+fn projected_volume_names_config_maps() {
+    let projected = Volume {
+        projected: Some(ProjectedVolumeSource {
+            sources: Some(vec![
+                VolumeProjection {
+                    config_map: Some(ConfigMapProjection {
+                        name: "kube-root-ca.crt".to_owned(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                VolumeProjection {
+                    secret: Some(SecretProjection {
+                        name: "token-secret".to_owned(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                VolumeProjection {
+                    config_map: Some(ConfigMapProjection {
+                        name: "extra".to_owned(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        }),
+        ..volume("bundle")
+    };
+    let container = Container {
+        volume_mounts: Some(vec![mount("bundle", "/bundle")]),
+        ..Default::default()
+    };
+    let entries = mount_entries(&container, &[projected]);
+    assert_eq!(
+        entries[0].source,
+        VolumeSource::Projected {
+            config_maps: vec!["kube-root-ca.crt".to_owned(), "extra".to_owned()]
+        }
+    );
 }

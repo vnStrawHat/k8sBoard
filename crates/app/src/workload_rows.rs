@@ -6,10 +6,11 @@ use cluster::{
 };
 
 use crate::kind_row::{
-    DAEMON_SET_KIND, DetailRow, DetailSection, KindCell, KindRow, PodOwner, REPLICA_SET_KIND,
-    STATEFUL_SET_KIND, chips,
+    DAEMON_SET_KIND, DetailRow, DetailSection, KindCell, KindObject, KindRow, LiveContent,
+    PodOwner, REPLICA_SET_KIND, STATEFUL_SET_KIND, chips,
 };
 use crate::status_tone::{StatusLabel, StatusTone};
+use crate::table_selection::ResourceKey;
 
 /// The condition and reason the Deployment controller reports when a rollout stops.
 const PROGRESSING: &str = "Progressing";
@@ -73,6 +74,10 @@ pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
         title: "Conditions",
         rows: deployment.conditions.iter().map(condition_row).collect(),
     });
+    sections.push(DetailSection {
+        title: "Revisions",
+        rows: vec![DetailRow::Live(LiveContent::Revisions)],
+    });
     KindRow {
         namespace: Some(deployment.namespace.clone()),
         name: deployment.name.clone(),
@@ -86,6 +91,7 @@ pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
             name: deployment.name.clone(),
         }),
         labels: chips(&deployment.labels),
+        object: KindObject::Deployment(deployment.clone()),
     }
 }
 
@@ -236,6 +242,7 @@ pub(crate) fn stateful_set_row(set: &StatefulSetSummary) -> KindRow {
         event: None,
         related_pods: controller_owner(&set.namespace, STATEFUL_SET_KIND, &set.name),
         labels: chips(&set.labels),
+        object: KindObject::Plain,
     }
 }
 
@@ -297,6 +304,7 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
         event: None,
         related_pods: controller_owner(&set.namespace, DAEMON_SET_KIND, &set.name),
         labels: chips(&set.labels),
+        object: KindObject::Plain,
     }
 }
 
@@ -321,7 +329,7 @@ pub(crate) fn replica_set_row(set: &ReplicaSetSummary) -> KindRow {
                     DetailRow::field("Desired", KindCell::count(set.desired)),
                     DetailRow::field("Current", KindCell::count(set.current)),
                     DetailRow::field("Ready", KindCell::count(set.ready)),
-                    DetailRow::field("Owner", KindCell::text_or_absent(owner.as_deref())),
+                    owner_row(&set.namespace, set.owner.as_ref()),
                     DetailRow::field(
                         "Revision",
                         KindCell::text_or_absent(set.revision.as_deref()),
@@ -334,6 +342,7 @@ pub(crate) fn replica_set_row(set: &ReplicaSetSummary) -> KindRow {
         event: None,
         related_pods: controller_owner(&set.namespace, REPLICA_SET_KIND, &set.name),
         labels: chips(&set.labels),
+        object: KindObject::Plain,
     }
 }
 
@@ -352,6 +361,23 @@ fn ordinal(pod_name: &str, set_name: &str) -> Option<u32> {
         return None;
     }
     digits.parse().ok()
+}
+
+/// The Owner row: a link to the owner's drawer when k8sBoard has a screen for its kind, else
+/// its text, else a dash.
+pub(crate) fn owner_row(namespace: &str, owner: Option<&ControllerRef>) -> DetailRow {
+    let Some(owner) = owner else {
+        return DetailRow::field("Owner", KindCell::Absent);
+    };
+    let text = owner_text(Some(owner)).unwrap_or_default();
+    match ResourceKey::of_owner(namespace, owner) {
+        Some(target) => DetailRow::Link {
+            label: "Owner".into(),
+            text: text.into(),
+            target,
+        },
+        None => DetailRow::field("Owner", KindCell::Text(text.into())),
+    }
 }
 
 /// kubectl style: `{kind lowercased}/{name}`.

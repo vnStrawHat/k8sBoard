@@ -37,8 +37,10 @@ fn ingress() -> IngressSummary {
             host: Some("a.example.com".to_owned()),
             path: Some("/api".to_owned()),
             backend: "api:80".to_owned(),
+            service: Some("api".to_owned()),
         }],
         default_backend: None,
+        default_service: None,
         tls: Vec::new(),
     }
 }
@@ -196,6 +198,7 @@ fn ingress_rules_label_host_and_path_with_star_for_missing_host() {
         host: None,
         path: None,
         backend: "fallback:80".to_owned(),
+        service: Some("fallback".to_owned()),
     });
     let row = ingress_row(&catch_all);
     let rules = row.section("Rules").expect("rules section");

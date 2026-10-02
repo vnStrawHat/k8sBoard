@@ -246,6 +246,7 @@ static CRON_JOBS: KindSpec = KindSpec {
         column("Suspend", 80., Align::Left),
         column("Active", 70., Align::Right),
         column("Last schedule", 120., Align::Right),
+        column("Next run", 100., Align::Right),
         AGE_COLUMN,
     ],
     read_only_actions: &["Trigger now", "Suspend"],
@@ -517,6 +518,7 @@ mod tests {
     use cluster::ClusterError;
 
     use super::*;
+    use crate::kind_row::KindObject;
     use crate::status_tone::{StatusLabel, StatusTone};
 
     #[test]
@@ -652,6 +654,7 @@ mod tests {
                 event: None,
                 related_pods: None,
                 labels: Vec::new(),
+                object: KindObject::Plain,
             }
         }
         let WatchUpdate::Snapshot(mapped) = rows(WatchUpdate::Snapshot(vec![1, 2]), row) else {

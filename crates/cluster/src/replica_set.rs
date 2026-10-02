@@ -1,10 +1,12 @@
-use futures::Stream;
+use futures::future::Either;
+use futures::{Stream, future, stream};
 use k8s_openapi::api::apps::v1::ReplicaSet;
+use kube::runtime::watcher;
 
 use crate::connection::ClusterConnection;
 use crate::namespace::NamespaceScope;
 use crate::pod_status::non_negative;
-use crate::resource_watch::{WatchUpdate, summary_watch};
+use crate::resource_watch::{WatchUpdate, selected_summary_watch, summary_watch};
 use crate::workload::{
     ControllerRef, TemplateContainer, controller_ref, label_terms, optional_count, revision,
     selector_terms, template_containers,
@@ -41,6 +43,31 @@ impl ClusterConnection {
             "watching replica sets",
             replica_set_summary,
         )
+    }
+
+    /// Watches the replica sets of `namespace` matching `selector` (kubectl selector syntax,
+    /// for example `app=api,tier in (a,b)`), as one drawer-scoped watch. An empty selector,
+    /// which would select every replica set, or one with an `<invalid>` term, yields one empty
+    /// snapshot and ends.
+    pub fn watch_selected_replica_sets(
+        &self,
+        namespace: &str,
+        selector: &str,
+    ) -> impl Stream<Item = WatchUpdate<ReplicaSetSummary>> + Send + 'static {
+        // `<invalid>` is what `Selector::terms` prints for a requirement that never matches.
+        if selector.is_empty() || selector.contains("<invalid>") {
+            return Either::Left(stream::once(future::ready(WatchUpdate::Snapshot(
+                Vec::new(),
+            ))));
+        }
+        let scope = NamespaceScope::Named(namespace.to_owned());
+        Either::Right(selected_summary_watch(
+            self,
+            self.scoped_apis(&scope),
+            watcher::Config::default().labels(selector),
+            "watching selected replica sets",
+            replica_set_summary,
+        ))
     }
 }
 

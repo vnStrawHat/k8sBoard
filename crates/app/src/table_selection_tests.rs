@@ -1,6 +1,7 @@
 use cluster::{NodeReadiness, NodeScheduling, NodeStatus, PodStatus, ReadyCount, StatusReason};
 
 use super::*;
+use crate::kind_row::KindObject;
 use crate::status_tone::{StatusLabel, StatusTone};
 use crate::table_filter::FilterPreset;
 use crate::table_sort::{SortDirection, TableSort};
@@ -247,6 +248,7 @@ fn kind_row(namespace: Option<&str>, name: &str) -> KindRow {
         event: None,
         related_pods: None,
         labels: Vec::new(),
+        object: KindObject::Plain,
     }
 }
 
@@ -356,4 +358,55 @@ fn of_object_maps_pods_nodes_and_kinds() {
     );
     assert_eq!(ResourceKey::of_object("Event", Some("shop"), "e"), None);
     assert_eq!(ResourceKey::of_object("Widget", Some("shop"), "w"), None);
+}
+
+#[test]
+fn of_owner_maps_controller_kinds() {
+    let owner = |kind: &str, name: &str| cluster::ControllerRef {
+        kind: kind.to_owned(),
+        name: name.to_owned(),
+    };
+    let key = |kind, name: &str| ResourceKey::Kind {
+        kind,
+        namespace: Some("shop".to_owned()),
+        name: name.to_owned(),
+    };
+    assert_eq!(
+        ResourceKey::of_owner("shop", &owner("Deployment", "api")),
+        Some(key(ResourceKind::Deployments, "api"))
+    );
+    assert_eq!(
+        ResourceKey::of_owner("shop", &owner("CronJob", "nightly")),
+        Some(key(ResourceKind::CronJobs, "nightly"))
+    );
+    assert_eq!(
+        ResourceKey::of_owner("shop", &owner("ReplicaSet", "api-7d")),
+        Some(key(ResourceKind::ReplicaSets, "api-7d"))
+    );
+    // A kind without a screen has no key.
+    assert_eq!(
+        ResourceKey::of_owner("shop", &owner("ReplicationController", "old")),
+        None
+    );
+}
+
+#[test]
+fn list_item_index_ignores_the_filter_and_waits_while_loading() {
+    let key = ResourceKey::of_row(ResourceKind::Deployments, &kind_row(Some("ns"), "api"));
+    let is_key = |row: &KindRow| key.is_row(ResourceKind::Deployments, row);
+    assert_eq!(list_item_index(&LiveList::<KindRow>::Loading, is_key), None);
+    let failed = LiveList::<KindRow>::Failed {
+        message: "denied".to_owned(),
+    };
+    assert_eq!(list_item_index(&failed, is_key), Some(None));
+    let ready = LiveList::Ready {
+        items: vec![kind_row(Some("ns"), "web"), kind_row(Some("ns"), "api")],
+        interruption: None,
+    };
+    assert_eq!(list_item_index(&ready, is_key), Some(Some(1)));
+    let other = ResourceKey::of_row(ResourceKind::Deployments, &kind_row(Some("ns"), "gone"));
+    assert_eq!(
+        list_item_index(&ready, |row| other.is_row(ResourceKind::Deployments, row)),
+        Some(None)
+    );
 }

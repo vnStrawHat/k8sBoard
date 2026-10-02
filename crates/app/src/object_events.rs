@@ -21,20 +21,21 @@ const MAX_EVENT_ROWS: usize = 50;
 /// The message lines shown per row; the tooltip has the whole message.
 const MESSAGE_LINES: usize = 3;
 
-/// What the object events watch must do when the selection changes.
+/// What a drawer watch (the object events, the related objects) must do when the selection
+/// changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SubjectChange {
+pub(crate) enum SubjectChange<S> {
     Keep,
     Stop,
-    Start(InvolvedObject),
+    Start(S),
 }
 
-/// Pure: what the watch must do when the selection becomes `next`. `running` is the session's
+/// Pure: what a watch must do when the selection becomes `next`. `running` is the session's
 /// subject, which is `None` while a debounced start is still pending.
-pub(crate) fn subject_change(
-    running: Option<&InvolvedObject>,
-    next: Option<InvolvedObject>,
-) -> SubjectChange {
+pub(crate) fn subject_change<S: PartialEq>(
+    running: Option<&S>,
+    next: Option<S>,
+) -> SubjectChange<S> {
     if running == next.as_ref() {
         return SubjectChange::Keep;
     }

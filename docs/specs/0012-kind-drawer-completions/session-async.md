@@ -37,14 +37,14 @@ impl LiveCluster {
 `follow_event_subject` becomes `follow_drawer_subjects`, called from `change_selection`:
 
 ```rust
-drawer_subject_task: Option<Task<()>>,   // replaces event_subject_task; one 250 ms timer for both watches
+pending_subjects: Option<Task<()>>,   // replaces event_subject_task; one 250 ms timer for both watches
 fn follow_drawer_subjects(&mut self, cx: &mut Context<Self>);
 pub(crate) fn subject_change<S: PartialEq>(running: Option<&S>, next: Option<S>) -> SubjectChange<S>; // 0006, now generic
 ```
 
 - Next subjects: `event_subject(key)` and `related_subject(kind, row)` (the row is read from `live.kind_list(kind)`).
 - Each watch whose change is `Stop` or `Start` is stopped at once. If any change is `Start`, one task waits `DRAWER_SUBJECT_DELAY` and then starts every pending subject in one `update`; a newer selection replaces the task. `Keep` leaves that watch running.
-- Screenshot settle: `is_content_pending` waits for `drawer_subject_task` plus a `Loading` events or related list.
+- Screenshot settle: `is_content_pending` waits for `pending_subjects` plus a `Loading` events or related list.
 
 ## Explorer companion: endpoint slices (step 4a)
 

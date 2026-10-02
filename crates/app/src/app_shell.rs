@@ -37,6 +37,7 @@ use crate::node_table::NodeTableDelegate;
 use crate::object_events::{SubjectChange, event_subject, subject_change};
 use crate::pod_drawer::selected_container_index;
 use crate::pod_table::PodTableDelegate;
+use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_kind::ResourceKind;
 #[cfg(feature = "screenshot")]
 use crate::screenshot::FeedProgress;
@@ -47,7 +48,9 @@ use crate::status_bar::status_bar;
 use crate::table_filter::{
     FilterChip, FilterPreset, TableFilter, parse_label_queries, quick_filter_text,
 };
-use crate::table_selection::{ResourceKey, SelectionSync, list_row_index, selection_sync};
+use crate::table_selection::{
+    ResourceKey, SelectionSync, list_item_index, list_row_index, selection_sync,
+};
 use crate::table_sort::next_sort;
 use crate::table_view::{FilteredTable, RowCheck, TableView};
 use crate::title_bar::title_bar;
@@ -89,6 +92,24 @@ enum KubeconfigState {
     Failed(String),
 }
 
+/// The drawer watches that start once the selection has rested. Dropping it cancels the timer.
+#[derive(Default)]
+struct PendingSubjects {
+    events: Option<InvolvedObject>,
+    related: Option<RelatedSubject>,
+    task: Option<Task<()>>,
+}
+
+impl PendingSubjects {
+    fn is_empty(&self) -> bool {
+        self.events.is_none() && self.related.is_none()
+    }
+
+    fn has_same_subjects(&self, other: &Self) -> bool {
+        self.events == other.events && self.related == other.related
+    }
+}
+
 /// What the command line asked for, used only by the first session.
 struct RequestedStart {
     context: Option<String>,
@@ -111,8 +132,11 @@ pub(crate) struct AppShell {
     /// The drawer is open exactly while this is set.
     selected: Option<ResourceKey>,
     drawer: DrawerState,
-    /// The pending debounced start of the object events watch. Replacing or dropping it cancels it.
-    event_subject_task: Option<Task<()>>,
+    /// The debounced start of the drawer watches (object events, related objects) that is waiting
+    /// for the selection to rest. Replacing or dropping it cancels it.
+    pending_subjects: Option<PendingSubjects>,
+    /// A reveal that waits for its list to load before it clears a filter hiding the row.
+    pending_reveal: Option<ResourceKey>,
     log_dock: Entity<LogDock>,
     /// Keeps the dock height across zoom and minimize, which unmount the split.
     dock_split: Entity<ResizableState>,
@@ -226,7 +250,8 @@ impl AppShell {
             _table_subscriptions: table_subscriptions,
             selected: None,
             drawer,
-            event_subject_task: None,
+            pending_subjects: None,
+            pending_reveal: None,
             log_dock,
             dock_split,
             pending_launch_screen: (options.screen.has_drawer()
@@ -449,13 +474,46 @@ impl AppShell {
         self.log_dock.update(cx, |dock, cx| dock.unzoom(cx));
     }
 
-    /// Opens the key's screen with its row selected, replacing the drawer. A list that is still
-    /// loading keeps the key, and `on_session_changed` resolves it after the first snapshot; a
-    /// loaded list without the row drops it.
+    /// Opens the key's screen with its row selected, replacing the drawer. A filter that hides
+    /// the row is cleared, or the drawer would close at once. A list that is still loading keeps
+    /// the key, and `on_session_changed` resolves it after the first snapshot; a loaded list
+    /// without the row drops it.
     pub(crate) fn reveal(&mut self, key: ResourceKey, cx: &mut Context<Self>) {
         self.show_screen(key.screen(), cx);
+        self.pending_reveal = Some(key.clone());
         self.change_selection(Some(key), cx);
+        self.apply_pending_reveal(cx);
         self.sync_selection(cx);
+    }
+
+    /// Clears the filter of the revealed row's table when it hides the row, once the list has
+    /// loaded. Waits while the list loads; forgets a reveal the selection has moved away from.
+    fn apply_pending_reveal(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.pending_reveal.clone() else {
+            return;
+        };
+        if self.selected.as_ref() != Some(&key) {
+            self.pending_reveal = None;
+            return;
+        }
+        let Some(live) = self.live(cx) else {
+            return;
+        };
+        let found = match &key {
+            ResourceKey::Pod { .. } => list_item_index(&live.pods, |pod| key.is_pod(pod)),
+            ResourceKey::Node { .. } => list_item_index(&live.nodes, |node| key.is_node(node)),
+            ResourceKey::Kind { kind, .. } => live
+                .kind_list(*kind)
+                .and_then(|explorer| list_item_index(&explorer.list, |row| key.is_row(*kind, row))),
+        };
+        // `None`: still loading, or the explorer has not switched to the kind yet.
+        let Some(found) = found else {
+            return;
+        };
+        self.pending_reveal = None;
+        if let Some(item) = found {
+            self.rebuild_visible_view(cx, move |view| view.reveal(item));
+        }
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {
@@ -740,36 +798,90 @@ impl AppShell {
         self.drawer.selected_container = None;
         // A part of one subject (a container, a pod) means nothing for the next.
         self.drawer.monitor.scope = MonitorScope::Total;
-        self.follow_event_subject(cx);
+        self.follow_drawer_subjects(cx);
         cx.notify();
         true
     }
 
-    /// Points the object events watch at the selected object. Stopping is immediate; a start
-    /// waits for the selection to rest, and a newer selection cancels the pending start.
-    fn follow_event_subject(&mut self, cx: &mut Context<Self>) {
-        let next = self.selected.as_ref().and_then(event_subject);
-        if next.is_none() {
-            // A pending start must not outlive a selection that has no events, such as an event row.
-            self.event_subject_task = None;
-        }
-        let running = self.live(cx).and_then(|live| live.event_subject()).cloned();
-        match subject_change(running.as_ref(), next) {
+    /// Points the drawer's watches (object events, related objects) at the selected object.
+    /// Stopping is immediate. A start waits for the selection to rest, so arrowing through rows
+    /// sends no request per row: one timer starts every pending subject together, and a newer
+    /// selection replaces it. A watch whose subject does not change keeps running. It also runs
+    /// when the session changes, because a row that was not loaded at selection time (a reveal)
+    /// only now tells what to watch; an unchanged pending start keeps its timer.
+    fn follow_drawer_subjects(&mut self, cx: &mut Context<Self>) {
+        let next_events = self.selected.as_ref().and_then(event_subject);
+        let next_related = self.selected_related_subject(cx);
+        let (running_events, running_related) = self.live(cx).map_or((None, None), |live| {
+            (
+                live.event_subject().cloned(),
+                live.related_subject().cloned(),
+            )
+        });
+        let mut pending = PendingSubjects::default();
+        match subject_change(running_events.as_ref(), next_events) {
             SubjectChange::Keep => {}
-            SubjectChange::Stop => {
-                self.event_subject_task = None;
-                self.set_event_subject(None, cx);
-            }
+            SubjectChange::Stop => self.set_event_subject(None, cx),
             SubjectChange::Start(subject) => {
                 self.set_event_subject(None, cx);
-                self.event_subject_task = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(DRAWER_SUBJECT_DELAY).await;
-                    let _ = this.update(cx, |shell, cx| {
-                        shell.event_subject_task = None;
-                        shell.set_event_subject(Some(subject), cx);
-                    });
-                }));
+                pending.events = Some(subject);
             }
+        }
+        match subject_change(running_related.as_ref(), next_related) {
+            SubjectChange::Keep => {}
+            SubjectChange::Stop => self.set_related_subject(None, cx),
+            SubjectChange::Start(subject) => {
+                self.set_related_subject(None, cx);
+                pending.related = Some(subject);
+            }
+        }
+        if pending.is_empty() {
+            self.pending_subjects = None;
+            return;
+        }
+        if self
+            .pending_subjects
+            .as_ref()
+            .is_some_and(|running| running.has_same_subjects(&pending))
+        {
+            return;
+        }
+        let (events, related) = (pending.events.clone(), pending.related.clone());
+        pending.task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(DRAWER_SUBJECT_DELAY).await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.pending_subjects = None;
+                if events.is_some() {
+                    shell.set_event_subject(events, cx);
+                }
+                if related.is_some() {
+                    shell.set_related_subject(related, cx);
+                }
+            });
+        }));
+        self.pending_subjects = Some(pending);
+    }
+
+    /// What the selected row needs watched besides its events; `None` while its list has not
+    /// loaded the row.
+    fn selected_related_subject(&self, cx: &App) -> Option<RelatedSubject> {
+        let ResourceKey::Kind { kind, .. } = self.selected.as_ref()? else {
+            return None;
+        };
+        let key = self.selected.as_ref()?;
+        let row = self
+            .live(cx)?
+            .kind_list(*kind)?
+            .list
+            .items()
+            .iter()
+            .find(|row| key.is_row(*kind, row))?;
+        related_subject(*kind, row)
+    }
+
+    fn set_related_subject(&mut self, subject: Option<RelatedSubject>, cx: &mut Context<Self>) {
+        if let Some(session) = &self.session {
+            session.update(cx, |session, cx| session.set_related_subject(subject, cx));
         }
     }
 
@@ -870,7 +982,9 @@ impl AppShell {
     fn on_session_changed(&mut self, cx: &mut Context<Self>) {
         self.rebuild_visible_view(cx, |_| {});
         self.apply_pending_launch_screen(cx);
+        self.apply_pending_reveal(cx);
         self.sync_selection(cx);
+        self.follow_drawer_subjects(cx);
         cx.notify();
     }
 
@@ -1139,11 +1253,11 @@ impl AppShell {
                 }
             },
         };
-        // A drawer waits for the debounce, then for its events and its YAML.
-        let is_content_pending = self.event_subject_task.is_some()
+        // A drawer waits for the debounce, then for its events, related objects, and YAML.
+        let is_content_pending = self.pending_subjects.is_some()
             || self
                 .live(cx)
-                .is_some_and(LiveCluster::is_object_events_loading)
+                .is_some_and(|live| live.is_object_events_loading() || live.is_related_loading())
             || self.is_yaml_loading(cx);
         // A logs screen is pending until its tab exists and has opened its stream.
         let is_log_pending = self

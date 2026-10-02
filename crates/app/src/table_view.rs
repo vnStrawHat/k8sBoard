@@ -296,6 +296,15 @@ impl TableView {
         self.clear_checked();
     }
 
+    /// Makes `item` visible for a reveal: when the filter hides it, removes the text, the chips,
+    /// and the preset (the sort and the hidden columns stay). A visible item leaves the filter
+    /// alone. Rebuild afterwards.
+    pub(crate) fn reveal(&mut self, item: usize) {
+        if self.row_of(item).is_none() {
+            self.clear_filter();
+        }
+    }
+
     /// Back to the default filter (a context switch).
     pub(crate) fn reset_filter(&mut self) {
         self.filter = self.default_filter.clone();

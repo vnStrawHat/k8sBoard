@@ -135,7 +135,10 @@ pub enum VolumeSource {
     HostPath {
         path: String,
     },
-    Projected,
+    Projected {
+        /// The config map names of `projected.sources[].configMap`, in order.
+        config_maps: Vec<String>,
+    },
     DownwardApi,
     /// Any other volume type, or a volume name missing from `spec.volumes`.
     Other,
@@ -352,8 +355,16 @@ fn volume_source(volume: &Volume) -> VolumeSource {
         VolumeSource::HostPath {
             path: host_path.path.clone(),
         }
-    } else if volume.projected.is_some() {
-        VolumeSource::Projected
+    } else if let Some(projected) = &volume.projected {
+        VolumeSource::Projected {
+            config_maps: projected
+                .sources
+                .iter()
+                .flatten()
+                .filter_map(|source| source.config_map.as_ref())
+                .map(|config_map| config_map.name.clone())
+                .collect(),
+        }
     } else if volume.downward_api.is_some() {
         VolumeSource::DownwardApi
     } else {

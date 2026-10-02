@@ -41,7 +41,7 @@ No other dependency in any step: `thiserror` and `futures` (`buffer_unordered`) 
 | 2 | `src/related_objects.rs` (new), `src/object_events.rs` | `RelatedSubject`, `related_subject`; generic `subject_change` |
 | 2 | `src/cluster_session.rs` (+ tests) | `RelatedObjects`, `RelatedList`, `set_related_subject`, `related_of`; `OpenWatches` and `open_watch_count` (Several multiplicity, related; replaces the two-argument form and its test) |
 | 2 | `src/table_selection.rs`, `src/table_view.rs` (+ tests) | `ResourceKey::of_owner`; `TableView::reveal(item)` clears text, chips, preset when they hide `item` |
-| 2 | `src/app_shell.rs`, `src/screenshot.rs` | `follow_drawer_subjects` and `drawer_subject_task` (replace the events-only pair); settle; `reveal` calls `TableView::reveal` |
+| 2 | `src/app_shell.rs`, `src/screenshot.rs` | `follow_drawer_subjects` and `pending_subjects` (replace the events-only pair); settle; `reveal` calls `TableView::reveal` |
 | 3 | `src/kind_diagnosis.rs` (new) + `kind_diagnosis_tests.rs` | rules D, S, J |
 | 3 | `src/kind_row.rs` | `DetailRow::Bar`, `percent`, `LiveContent::NotReadyPods`, `KindObject::{StatefulSet, DaemonSet, ReplicaSet, Job}` |
 | 3 | `src/workload_rows.rs` (+ tests) | DaemonSet "Rollout by node", Not ready placeholder, host port suffix; StatefulSet Retention; ReplicaSet Template section |

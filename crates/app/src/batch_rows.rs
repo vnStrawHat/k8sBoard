@@ -2,16 +2,17 @@
 
 use cluster::{CronJobSummary, JobStatus, JobSummary};
 
-use crate::kind_row::{DetailRow, DetailSection, JOB_KIND, KindCell, KindRow, chips};
+use crate::kind_row::{
+    DetailRow, DetailSection, JOB_KIND, KindCell, KindObject, KindRow, LiveContent, chips,
+};
 use crate::status_tone::{StatusLabel, StatusTone};
 use crate::workload_rows::{
-    condition_row, containers_section, controller_owner, non_empty, optional_count, owner_text,
+    condition_row, containers_section, controller_owner, non_empty, optional_count, owner_row,
     toned_number,
 };
 
 pub(crate) fn job_row(job: &JobSummary) -> KindRow {
     let status = job_status_label(job.status);
-    let owner = owner_text(job.owner.as_ref());
     let completions = KindCell::Text(completions_text(job).into());
     let duration = KindCell::Duration {
         started_at: job.started_at,
@@ -46,7 +47,19 @@ pub(crate) fn job_row(job: &JobSummary) -> KindRow {
                     DetailRow::field("Backoff limit", optional_count(job.backoff_limit)),
                     DetailRow::field("Started", KindCell::age(job.started_at)),
                     DetailRow::field("Duration", duration),
-                    DetailRow::field("Owner", KindCell::text_or_absent(owner.as_deref())),
+                    DetailRow::field(
+                        "Active deadline",
+                        KindCell::text_or_absent(
+                            seconds_text(job.active_deadline_seconds).as_deref(),
+                        ),
+                    ),
+                    DetailRow::field(
+                        "TTL after finish",
+                        KindCell::text_or_absent(
+                            seconds_text(job.ttl_seconds_after_finished).as_deref(),
+                        ),
+                    ),
+                    owner_row(&job.namespace, job.owner.as_ref()),
                 ],
             },
             DetailSection {
@@ -58,7 +71,13 @@ pub(crate) fn job_row(job: &JobSummary) -> KindRow {
         event: None,
         related_pods: controller_owner(&job.namespace, JOB_KIND, &job.name),
         labels: chips(&job.labels),
+        object: KindObject::Plain,
     }
+}
+
+/// `{n}s`, or `None` when the field is unset.
+fn seconds_text(seconds: Option<impl std::fmt::Display>) -> Option<String> {
+    seconds.map(|seconds| format!("{seconds}s"))
 }
 
 pub(crate) fn cron_job_row(cron_job: &CronJobSummary) -> KindRow {
@@ -85,7 +104,15 @@ pub(crate) fn cron_job_row(cron_job: &CronJobSummary) -> KindRow {
         KindCell::Text("No".into())
     };
     let active_jobs = (!cron_job.active_jobs.is_empty()).then(|| cron_job.active_jobs.join(", "));
-    let time_zone = cron_job.time_zone.as_deref().unwrap_or("Cluster default");
+    let time_zone = cron_job
+        .time_zone
+        .as_deref()
+        .unwrap_or("Cluster default (UTC assumed)");
+    // A suspended CronJob runs nothing, and an invalid schedule has no next run to show.
+    let next_run = match &cron_job.timetable {
+        Ok(timetable) if !cron_job.is_suspended => KindCell::NextRun(timetable.clone()),
+        Ok(_) | Err(_) => KindCell::Absent,
+    };
     let starting_deadline = cron_job
         .starting_deadline_seconds
         .map(|seconds| format!("{seconds}s"));
@@ -102,9 +129,14 @@ pub(crate) fn cron_job_row(cron_job: &CronJobSummary) -> KindRow {
             suspend.clone(),
             KindCell::count(cron_job.active_jobs.len()),
             last_schedule.clone(),
+            next_run,
             KindCell::age(cron_job.created_at),
         ],
         sections: vec![
+            DetailSection {
+                title: "Next runs",
+                rows: vec![DetailRow::Live(LiveContent::NextRuns)],
+            },
             DetailSection {
                 title: "Schedule",
                 rows: vec![
@@ -133,11 +165,16 @@ pub(crate) fn cron_job_row(cron_job: &CronJobSummary) -> KindRow {
                     ),
                 ],
             },
+            DetailSection {
+                title: "Recent jobs",
+                rows: vec![DetailRow::Live(LiveContent::RecentJobs)],
+            },
             containers_section(&cron_job.containers),
         ],
         event: None,
         related_pods: None,
         labels: chips(&cron_job.labels),
+        object: KindObject::CronJob(cron_job.clone()),
     }
 }
 
@@ -190,7 +227,7 @@ fn history_limits(cron_job: &CronJobSummary) -> KindCell {
     KindCell::Text(parts.join(" · ").into())
 }
 
-fn job_status_label(status: JobStatus) -> StatusLabel {
+pub(crate) fn job_status_label(status: JobStatus) -> StatusLabel {
     let tone = match status {
         JobStatus::Complete => StatusTone::Ok,
         JobStatus::Running => StatusTone::Info,

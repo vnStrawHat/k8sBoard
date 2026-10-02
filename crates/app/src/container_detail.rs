@@ -655,7 +655,7 @@ fn source_text(source: &VolumeSource, volume: &str) -> String {
         VolumeSource::PersistentVolumeClaim { claim } => format!("pvc/{claim}"),
         VolumeSource::EmptyDir => format!("emptyDir {volume}"),
         VolumeSource::HostPath { path } => format!("hostPath {path}"),
-        VolumeSource::Projected => format!("projected {volume}"),
+        VolumeSource::Projected { .. } => format!("projected {volume}"),
         VolumeSource::DownwardApi => format!("downwardAPI {volume}"),
         VolumeSource::Other => format!("volume {volume}"),
     }

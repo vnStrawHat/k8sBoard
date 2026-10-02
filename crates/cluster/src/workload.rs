@@ -6,7 +6,9 @@ use k8s_openapi::api::core::v1::{Container, PodTemplateSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
+use crate::event::optional_message;
 use crate::pod_status::non_negative;
+use crate::selector::Selector;
 
 const REVISION_ANNOTATION: &str = "deployment.kubernetes.io/revision";
 
@@ -25,6 +27,8 @@ pub struct WorkloadCondition {
     pub is_true: bool,
     /// An empty reason is `None`.
     pub reason: Option<String>,
+    /// `conditions[].message`, cut to 1 KiB; empty is `None`.
+    pub message: Option<String>,
 }
 
 /// A main container of a pod template. Only the name, image, and ports are kept:
@@ -43,6 +47,8 @@ pub struct ContainerPort {
     pub port: u16,
     /// Defaults to `TCP`.
     pub protocol: String,
+    /// `hostPort`; a value outside `u16` is `None`.
+    pub host_port: Option<u16>,
 }
 
 pub(crate) fn controller_ref(metadata: &ObjectMeta) -> Option<ControllerRef> {
@@ -72,25 +78,7 @@ pub(crate) fn key_value_terms(pairs: Option<&BTreeMap<String, String>>) -> Vec<S
 
 /// kubectl's selector syntax: `matchLabels` first, then the expressions in order.
 pub(crate) fn selector_terms(selector: &LabelSelector) -> Vec<String> {
-    let mut terms = key_value_terms(selector.match_labels.as_ref());
-    for expression in selector.match_expressions.iter().flatten() {
-        let key = &expression.key;
-        let values = expression
-            .values
-            .iter()
-            .flatten()
-            .cloned()
-            .collect::<Vec<_>>();
-        let values = values.join(",");
-        match expression.operator.as_str() {
-            "In" => terms.push(format!("{key} in ({values})")),
-            "NotIn" => terms.push(format!("{key} notin ({values})")),
-            "Exists" => terms.push(key.clone()),
-            "DoesNotExist" => terms.push(format!("!{key}")),
-            _ => {}
-        }
-    }
-    terms
+    Selector::of(selector).terms()
 }
 
 /// Main containers in spec order; init containers are excluded.
@@ -120,16 +108,23 @@ pub(crate) fn container_ports(container: &Container) -> Vec<ContainerPort> {
                 // The API rejects ports outside u16, so such a port is dropped.
                 port: u16::try_from(port.container_port).ok()?,
                 protocol: port.protocol.clone().unwrap_or_else(|| "TCP".to_owned()),
+                host_port: port.host_port.and_then(|port| u16::try_from(port).ok()),
             })
         })
         .collect()
 }
 
-pub(crate) fn condition(name: &str, status: &str, reason: Option<&str>) -> WorkloadCondition {
+pub(crate) fn condition(
+    name: &str,
+    status: &str,
+    reason: Option<&str>,
+    message: Option<&str>,
+) -> WorkloadCondition {
     WorkloadCondition {
         name: name.to_owned(),
         is_true: status == "True",
         reason: non_empty(reason),
+        message: optional_message(message),
     }
 }
 

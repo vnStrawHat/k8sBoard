@@ -57,14 +57,29 @@ where
     K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
     T: Clone + PartialEq + Send + 'static,
 {
-    watch_apis(
+    selected_summary_watch(
         connection,
         apis,
         watcher::Config::default(),
         action,
         summarize,
-        None,
     )
+}
+
+/// Like `summary_watch`, with a server-side `config` (a selector or a field selector) and no
+/// store limit: for drawer-scoped watches whose result is small by construction.
+pub(crate) fn selected_summary_watch<K, T>(
+    connection: &ClusterConnection,
+    apis: Vec<ScopedApi<K>>,
+    config: watcher::Config,
+    action: &'static str,
+    summarize: fn(&K) -> T,
+) -> impl Stream<Item = WatchUpdate<T>> + Send + 'static
+where
+    K: kube::Resource + Clone + DeserializeOwned + Debug + Send + 'static,
+    T: Clone + PartialEq + Send + 'static,
+{
+    watch_apis(connection, apis, config, action, summarize, None)
 }
 
 /// Like `summary_watch`, with a server-side `config` and a store that keeps only the

@@ -61,6 +61,7 @@ fn deployment_summary_reads_replica_counts() {
             name: "Available".to_owned(),
             is_true: true,
             reason: None,
+            message: None,
         }]
     );
 }
@@ -113,4 +114,39 @@ fn deployment_revision_reads_annotation() {
         Some("7")
     );
     assert_eq!(deployment_summary(&Deployment::default()).revision, None);
+}
+
+#[test]
+fn progress_deadline_defaults_to_600() {
+    let summary = deployment_summary(&Deployment::default());
+    assert_eq!(summary.progress_deadline_seconds, 600);
+    let configured = deployment_with_spec(DeploymentSpec {
+        progress_deadline_seconds: Some(120),
+        ..Default::default()
+    });
+    assert_eq!(
+        deployment_summary(&configured).progress_deadline_seconds,
+        120
+    );
+}
+
+#[test]
+fn condition_message_is_kept() {
+    let deployment = Deployment {
+        status: Some(DeploymentStatus {
+            conditions: Some(vec![DeploymentCondition {
+                type_: "ReplicaFailure".to_owned(),
+                status: "True".to_owned(),
+                message: Some("quota exceeded".to_owned()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let summary = deployment_summary(&deployment);
+    assert_eq!(
+        summary.conditions[0].message.as_deref(),
+        Some("quota exceeded")
+    );
 }

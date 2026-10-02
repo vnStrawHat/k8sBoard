@@ -10,6 +10,9 @@ use crate::workload::{
     optional_count, revision, selector_terms, template_containers,
 };
 
+/// The API server default for `spec.progressDeadlineSeconds`.
+const DEFAULT_PROGRESS_DEADLINE_SECONDS: u32 = 600;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeploymentSummary {
     pub namespace: String,
@@ -26,6 +29,8 @@ pub struct DeploymentSummary {
     pub strategy: String,
     pub max_surge: Option<String>,
     pub max_unavailable: Option<String>,
+    /// `spec.progressDeadlineSeconds`.
+    pub progress_deadline_seconds: u32,
     pub is_paused: bool,
     /// The `deployment.kubernetes.io/revision` annotation.
     pub revision: Option<String>,
@@ -77,13 +82,23 @@ pub(crate) fn deployment_summary(deployment: &Deployment) -> DeploymentSummary {
             .and_then(|update| update.max_unavailable.as_ref())
             .map(int_or_string_text),
         is_paused: spec.and_then(|spec| spec.paused) == Some(true),
+        progress_deadline_seconds: spec
+            .and_then(|spec| spec.progress_deadline_seconds)
+            .map_or(DEFAULT_PROGRESS_DEADLINE_SECONDS, non_negative),
         revision: revision(&deployment.metadata),
         selector: spec.map_or_else(Vec::new, |spec| selector_terms(&spec.selector)),
         containers: spec.map_or_else(Vec::new, |spec| template_containers(&spec.template)),
         conditions: status
             .into_iter()
             .flat_map(|status| status.conditions.iter().flatten())
-            .map(|item| condition(&item.type_, &item.status, item.reason.as_deref()))
+            .map(|item| {
+                condition(
+                    &item.type_,
+                    &item.status,
+                    item.reason.as_deref(),
+                    item.message.as_deref(),
+                )
+            })
             .collect(),
     }
 }

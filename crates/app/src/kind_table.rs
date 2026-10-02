@@ -20,6 +20,7 @@ use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
 use crate::kind_row::{KindCell, KindRow};
+use crate::live_sections::next_run_text;
 use crate::resource_actions::kind_menu;
 use crate::resource_kind::{Align, NAME_COLUMN, NameColumn, ResourceKind, kind_columns};
 use crate::status_tone::{StatusTone, tone_color, toned_text};
@@ -237,6 +238,12 @@ impl TableRow for KindTableRow<'_> {
                 started: *started_at,
                 finished: *finished_at,
             },
+            // Ascending is soonest first; a schedule with no next run sorts last.
+            Some(KindCell::NextRun(schedule)) => schedule
+                .next_after(jiff::Timestamp::now())
+                .map_or(CellValue::Absent, |next| {
+                    CellValue::Number(next.timestamp().as_second())
+                }),
             Some(KindCell::Absent) | None => CellValue::Absent,
         }
     }
@@ -486,6 +493,13 @@ fn cell_element(
                 .font_family(mono)
                 .child(format_age(*started_at, finished_at.unwrap_or(now)))
         }
+        KindCell::NextRun(schedule) => {
+            // Read per cell, like an age: the countdown never goes stale.
+            match next_run_text(schedule, jiff::Timestamp::now()) {
+                Some(text) => base().child(text),
+                None => base().text_color(cx.theme().muted_foreground).child("—"),
+            }
+        }
         KindCell::Age { at, tone } => {
             // Read per cell: a render has no shared clock, and a second of skew is invisible.
             let age = base()
@@ -506,6 +520,7 @@ mod tests {
     use crate::table_layout::layout_columns;
 
     use super::*;
+    use crate::kind_row::KindObject;
 
     #[test]
     fn empty_text_mentions_scope_only_for_namespaced_kinds() {
@@ -639,6 +654,7 @@ mod tests {
             related_pods: None,
             event: None,
             labels: vec!["app=api".into()],
+            object: KindObject::Plain,
         }
     }
 
@@ -740,5 +756,53 @@ mod tests {
         };
         assert!(matches!(row.value(0), CellValue::Text(text) if text == "Warning"));
         assert!(matches!(row.value(1), CellValue::Absent));
+    }
+
+    #[test]
+    fn next_run_sorts_soonest_first() {
+        use std::cmp::Ordering;
+
+        use crate::table_sort::{SortDirection, compare_values};
+
+        let next_run = |schedule: &str| {
+            row(vec![KindCell::NextRun(
+                cluster::CronSchedule::parse(schedule, None).expect("valid schedule"),
+            )])
+        };
+        let soon = next_run("* * * * *");
+        let far = next_run("0 0 1 1 *");
+        let never = next_run("0 0 30 2 *");
+        let value = |row: &KindRow| {
+            let row = KindTableRow {
+                row,
+                name_column: NameColumn::Flexible,
+            };
+            // Column 1 is the first cell: Name comes first.
+            let value = row.value(1);
+            match value {
+                CellValue::Number(seconds) => Some(seconds),
+                _ => None,
+            }
+        };
+        let now = jiff::Timestamp::now();
+        let order = |a: &KindRow, b: &KindRow| {
+            let (a, b) = (
+                KindTableRow {
+                    row: a,
+                    name_column: NameColumn::Flexible,
+                },
+                KindTableRow {
+                    row: b,
+                    name_column: NameColumn::Flexible,
+                },
+            );
+            compare_values(&a.value(1), &b.value(1), SortDirection::Ascending, now)
+        };
+        assert!(value(&soon) < value(&far));
+        assert_eq!(order(&soon, &far), Ordering::Less);
+        // A schedule with no next run sorts last.
+        assert_eq!(value(&never), None);
+        assert_eq!(order(&far, &never), Ordering::Less);
+        assert_eq!(order(&never, &soon), Ordering::Greater);
     }
 }

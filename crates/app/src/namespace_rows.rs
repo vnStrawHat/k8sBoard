@@ -2,7 +2,7 @@
 
 use cluster::{NamespacePhase, NamespaceSummary};
 
-use crate::kind_row::{DetailRow, DetailSection, KindCell, KindRow, chips};
+use crate::kind_row::{DetailRow, DetailSection, KindCell, KindObject, KindRow, chips};
 use crate::status_tone::{StatusLabel, StatusTone};
 
 pub(crate) fn namespace_row(namespace: &NamespaceSummary) -> KindRow {
@@ -27,6 +27,7 @@ pub(crate) fn namespace_row(namespace: &NamespaceSummary) -> KindRow {
         event: None,
         related_pods: None,
         labels: chips(&namespace.labels),
+        object: KindObject::Plain,
     }
 }
 

@@ -101,20 +101,24 @@ fn ingress_paths_flatten_host_path_backend() {
                 host: Some("shop.example.com".to_owned()),
                 path: Some("/api".to_owned()),
                 backend: "api:8080".to_owned(),
+                service: Some("api".to_owned()),
             },
             IngressPath {
                 host: Some("shop.example.com".to_owned()),
                 path: Some("/static".to_owned()),
                 backend: "StorageBucket/assets".to_owned(),
+                service: None,
             },
             IngressPath {
                 host: None,
                 path: None,
                 backend: "web:http".to_owned(),
+                service: Some("web".to_owned()),
             },
         ]
     );
     assert_eq!(summary.default_backend.as_deref(), Some("fallback:80"));
+    assert_eq!(summary.default_service.as_deref(), Some("fallback"));
 }
 
 #[test]
@@ -165,5 +169,39 @@ fn ingress_reads_addresses_and_tls_names() {
             hosts: vec!["shop.example.com".to_owned()],
             secret_name: Some("shop-tls".to_owned()),
         }]
+    );
+}
+
+#[test]
+fn ingress_paths_name_their_service() {
+    let resource = IngressBackend {
+        resource: Some(TypedLocalObjectReference {
+            kind: "StorageBucket".to_owned(),
+            name: "assets".to_owned(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut ingress = ingress_with_rules(vec![rule(
+        Some("shop.example.com"),
+        vec![
+            path(Some("/api"), service_backend("api", Some(8080), None)),
+            path(Some("/static"), resource.clone()),
+        ],
+    )]);
+    if let Some(spec) = ingress.spec.as_mut() {
+        spec.default_backend = Some(resource);
+    }
+    let summary = ingress_summary(&ingress);
+    let services: Vec<_> = summary
+        .rules
+        .iter()
+        .map(|rule| rule.service.as_deref())
+        .collect();
+    assert_eq!(services, [Some("api"), None]);
+    assert_eq!(summary.default_service, None);
+    assert_eq!(
+        summary.default_backend.as_deref(),
+        Some("StorageBucket/assets")
     );
 }

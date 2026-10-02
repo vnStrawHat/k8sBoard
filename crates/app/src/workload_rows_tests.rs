@@ -6,6 +6,7 @@ use cluster::{
 
 use super::*;
 use crate::resource_kind::ResourceKind;
+use crate::table_selection::ResourceKey;
 
 fn deployment() -> DeploymentSummary {
     DeploymentSummary {
@@ -20,6 +21,7 @@ fn deployment() -> DeploymentSummary {
         strategy: "RollingUpdate".to_owned(),
         max_surge: Some("25%".to_owned()),
         max_unavailable: Some("25%".to_owned()),
+        progress_deadline_seconds: 600,
         is_paused: false,
         revision: Some("7".to_owned()),
         selector: vec!["app=api".to_owned()],
@@ -31,11 +33,13 @@ fn deployment() -> DeploymentSummary {
                     name: Some("http".to_owned()),
                     port: 8080,
                     protocol: "TCP".to_owned(),
+                    host_port: None,
                 },
                 ContainerPort {
                     name: None,
                     port: 9090,
                     protocol: "UDP".to_owned(),
+                    host_port: None,
                 },
             ],
         }],
@@ -48,6 +52,7 @@ fn condition(name: &str, is_true: bool, reason: Option<&str>) -> WorkloadConditi
         name: name.to_owned(),
         is_true,
         reason: reason.map(str::to_owned),
+        message: None,
     }
 }
 
@@ -250,6 +255,7 @@ fn stateful_set() -> StatefulSetSummary {
         pod_management_policy: "OrderedReady".to_owned(),
         selector: vec!["app=web".to_owned()],
         containers: Vec::new(),
+        claim_retention: None,
         claim_templates: vec![ClaimTemplate {
             name: "data".to_owned(),
             storage: Some("10Gi".to_owned()),
@@ -472,4 +478,60 @@ fn workload_related_pods_name_their_controller_kind() {
         owner(replica_set_row(&replica_set())),
         Some(("ReplicaSet", "api-7d9f8c".to_owned()))
     );
+}
+
+#[test]
+fn deployment_row_has_revisions_section() {
+    let row = deployment_row(&deployment());
+    let titles: Vec<&str> = row.sections.iter().map(|section| section.title).collect();
+    // Revisions follow Conditions; the pods and labels sections are added by the drawer.
+    assert_eq!(
+        titles,
+        [
+            "Replicas",
+            "Selector",
+            "Containers",
+            "Ports",
+            "Conditions",
+            "Revisions"
+        ]
+    );
+    assert_eq!(
+        row.section("Revisions").map(|section| section.rows.clone()),
+        Some(vec![DetailRow::Live(LiveContent::Revisions)])
+    );
+}
+
+#[test]
+fn replica_set_owner_is_a_link() {
+    let row = replica_set_row(&replica_set());
+    let replicas = row.section("Replicas").expect("replicas section");
+    assert!(replicas.rows.contains(&DetailRow::Link {
+        label: "Owner".into(),
+        text: "deployment/api".into(),
+        target: ResourceKey::Kind {
+            kind: ResourceKind::Deployments,
+            namespace: Some("team-a".to_owned()),
+            name: "api".to_owned(),
+        },
+    }));
+    let mut orphan = replica_set();
+    orphan.owner = None;
+    let row = replica_set_row(&orphan);
+    let replicas = row.section("Replicas").expect("replicas section");
+    assert!(
+        replicas
+            .rows
+            .contains(&DetailRow::field("Owner", KindCell::Absent))
+    );
+}
+
+#[test]
+fn deployment_rows_keep_their_object() {
+    let summary = deployment();
+    assert_eq!(
+        deployment_row(&summary).object,
+        KindObject::Deployment(summary)
+    );
+    assert_eq!(replica_set_row(&replica_set()).object, KindObject::Plain);
 }

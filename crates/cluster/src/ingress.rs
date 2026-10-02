@@ -24,6 +24,8 @@ pub struct IngressSummary {
     /// One entry per HTTP path.
     pub rules: Vec<IngressPath>,
     pub default_backend: Option<String>,
+    /// The service named by `defaultBackend`; `None` for a resource backend.
+    pub default_service: Option<String>,
     pub tls: Vec<IngressTls>,
 }
 
@@ -33,6 +35,8 @@ pub struct IngressPath {
     pub path: Option<String>,
     /// `name:port` for a service, or `Kind/name` for a resource backend.
     pub backend: String,
+    /// The service backend's name; `None` for a resource backend.
+    pub service: Option<String>,
 }
 
 /// Names only: the TLS secret is never read.
@@ -100,12 +104,16 @@ pub(crate) fn ingress_summary(ingress: &Ingress) -> IngressSummary {
                     host: non_empty(rule.host.as_deref()),
                     path: non_empty(path.path.as_deref()),
                     backend: backend_text(&path.backend).unwrap_or_default(),
+                    service: backend_service(&path.backend),
                 })
             })
             .collect(),
         default_backend: spec
             .and_then(|spec| spec.default_backend.as_ref())
             .and_then(backend_text),
+        default_service: spec
+            .and_then(|spec| spec.default_backend.as_ref())
+            .and_then(backend_service),
         tls: spec
             .into_iter()
             .flat_map(|spec| spec.tls.iter().flatten())
@@ -115,6 +123,10 @@ pub(crate) fn ingress_summary(ingress: &Ingress) -> IngressSummary {
             })
             .collect(),
     }
+}
+
+fn backend_service(backend: &IngressBackend) -> Option<String> {
+    Some(backend.service.as_ref()?.name.clone())
 }
 
 /// A service backend as `name:port` (the port number, else its name; just the name when

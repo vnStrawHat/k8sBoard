@@ -333,3 +333,35 @@ fn clearing_or_resetting_the_filter_unticks_every_row() {
     view.reset_filter();
     assert_eq!(view.checked_count(), 0);
 }
+
+#[test]
+fn reveal_clears_a_filter_that_hides_the_target() {
+    let mut rows = items();
+    rows.push(row("pod-done", "g=a", StatusTone::Done));
+    let hidden = 4;
+    let mut view = TableView::new(TableFilter {
+        text: "pod".to_owned(),
+        chips: vec![FilterChip::Unhealthy],
+        preset: Some(FilterPreset::HideInactive),
+    });
+    view.sort = Some(TableSort {
+        column: 0,
+        direction: SortDirection::Descending,
+    });
+    view.rebuild(&rows, 2, now());
+    assert_eq!(view.row_of(hidden), None);
+    // A visible target leaves the filter alone.
+    let visible = view.rows()[0];
+    view.reveal(visible);
+    assert!(view.is_filtering());
+    assert_eq!(view.filter.chips.len(), 1);
+    // A hidden one clears the text, the chips, and the preset, and keeps the sort.
+    view.reveal(hidden);
+    assert!(!view.is_filtering());
+    assert_eq!(
+        view.sort.map(|sort| sort.direction),
+        Some(SortDirection::Descending)
+    );
+    view.rebuild(&rows, 2, now());
+    assert!(view.row_of(hidden).is_some());
+}

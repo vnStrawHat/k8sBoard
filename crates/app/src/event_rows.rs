@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use cluster::{EventSummary, EventType, InvolvedObject, WatchUpdate};
 use gpui_kit::SharedString;
 
-use crate::kind_row::{DetailRow, DetailSection, EventDetail, KindCell, KindRow};
+use crate::kind_row::{DetailRow, DetailSection, EventDetail, KindCell, KindObject, KindRow};
 use crate::status_tone::{StatusLabel, StatusTone};
 use crate::table_selection::ResourceKey;
 
@@ -107,6 +107,7 @@ fn event_row(event: &EventSummary) -> KindRow {
         }),
         related_pods: None,
         labels: Vec::new(),
+        object: KindObject::Plain,
     }
 }
 

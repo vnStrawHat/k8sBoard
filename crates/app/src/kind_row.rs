@@ -1,7 +1,7 @@
 //! The data model that one table delegate and one drawer renderer share for every kind.
 //! Row builders (`*_rows.rs`) are pure: they take a summary and produce a `KindRow`.
 
-use cluster::{ControllerRef, PodSummary};
+use cluster::{ControllerRef, CronJobSummary, CronSchedule, DeploymentSummary, PodSummary};
 use gpui_kit::SharedString;
 
 use crate::status_tone::{StatusLabel, StatusTone};
@@ -24,6 +24,25 @@ pub(crate) struct KindRow {
     /// `Some` for Events only.
     pub(crate) event: Option<EventDetail>,
     pub(crate) labels: Vec<SharedString>,
+    pub(crate) object: KindObject,
+}
+
+/// The summary a row was built from, for content computed at paint time (decision 16). Kinds
+/// whose rows need nothing beyond their cells use `Plain`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum KindObject {
+    Plain,
+    Deployment(DeploymentSummary),
+    CronJob(CronJobSummary),
+}
+
+/// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
+/// session's live lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LiveContent {
+    Revisions,
+    NextRuns,
+    RecentJobs,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.
@@ -57,6 +76,8 @@ pub(crate) enum KindCell {
         at: Option<jiff::Timestamp>,
         tone: Option<StatusTone>,
     },
+    /// The next run, painted relative to now so it never goes stale.
+    NextRun(CronSchedule),
     /// `format_age(started_at, finished_at.unwrap_or(now))`, read at paint time so a running
     /// job keeps counting; `Absent` when not started.
     Duration {
@@ -92,6 +113,8 @@ pub(crate) enum DetailRow {
     },
     /// Preformatted text that wraps: mono, small, on a muted background.
     Code(SharedString),
+    /// Content computed at paint time from `KindObject` and the session's live lists.
+    Live(LiveContent),
     /// A label and a clickable mono value that reveals `target`.
     Link {
         label: SharedString,

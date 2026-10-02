@@ -38,7 +38,7 @@
 | 24 | Disabled **Roll back** button on older revisions, tooltip "Read-only mode" | same pattern as Forward (0005 decision 20) |
 | 25 | **Open URL**: `https` when a TLS entry covers the host (wildcards too), else `http`; plain paths only; wildcard hosts skipped; one item, or a submenu for several URLs (max 10); `cx.open_url` | local action, allowed; never another scheme |
 | 26 | Links: ReplicaSet and Job owners, Ingress backends → Service, Revisions → ReplicaSet, Recent jobs → Job, Endpoints and Not ready → Pod, Used by → workload | W7 "related objects" |
-| 27 | `reveal` clears the target table's filter (text, chips, preset) when it hides the target | ReplicaSets start with Hide inactive (0009 decision 26), so a revision link would close at once (0009 decision 12) |
+| 27 | `reveal` clears the target table's filter (text, chips, preset) when it hides the target; clearing a filter also unticks the checked rows (`clear_checked`) | ReplicaSets start with Hide inactive (0009 decision 26), so a revision link would close at once (0009 decision 12) |
 | 28 | Namespace columns: Pods = all pods in the namespace; requests = main + sidecar containers of pods whose tone is not Done (0010 rule); namespaces outside the scope read "—" | no extra watch; same rule as node requests |
 | 29 | New launch screens: none; settle waits for the related watch like object events. ConfigMap screenshots on UAT use only `--filter kube-root-ca.crt` | `<kind>` and `<kind>-drawer` exist for every kind; `--filter` picks a row; that ConfigMap holds a public CA, so previews in screenshots expose nothing |
 | 30 | W7 names: DaemonSet "Rollout by node", ReplicaSet "Template" section (hash, image), Deployment subtitle `· rev {n}` | match the wireframe |
@@ -54,10 +54,11 @@
 - With N picked namespaces the Services screen runs N slice watches.
 - `remainingItemCount` can still be absent (e.g. a future server serving paginated lists from its cache); those kinds show no count.
 
-## UAT probe (coder-lite fills after step 1b)
+## UAT probe (step 1b, `readonly@Monitor`, Kubernetes v1.29.5)
 
 | Check | Result |
 |---|---|
-| `list endpointslices` | |
-| endpointslices watch, `--watch-seconds 5` | |
-| `--counts` (13 kinds) | |
+| `list endpointslices` | allowed |
+| endpointslices watch, `--watch-seconds 5` | `watch endpointslices: 1 snapshots, last 67 items, 0 failures` |
+| `--counts` (13 kinds) | pods 104, nodes 4, namespaces 20, events 10, deployments 31, statefulsets 15, daemonsets 7, replicasets 99, jobs 5, cronjobs 0, services 71, ingresses 16, configmaps 88; none unknown or denied. Each equals the matching watch snapshot count, so `remainingItemCount` is present on v1.29.5 |
+| `cron jobs` line (step 1a) | `last 0 items`: UAT has no CronJobs, so the `next ...` note is unit-tested only |

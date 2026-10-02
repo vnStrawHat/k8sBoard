@@ -2,11 +2,12 @@ use std::fmt;
 
 use futures::Stream;
 use k8s_openapi::api::batch::v1::{Job, JobCondition};
+use kube::runtime::watcher;
 
 use crate::connection::ClusterConnection;
 use crate::namespace::NamespaceScope;
 use crate::pod_status::non_negative;
-use crate::resource_watch::{WatchUpdate, summary_watch};
+use crate::resource_watch::{WatchUpdate, selected_summary_watch, summary_watch};
 use crate::workload::{
     ControllerRef, TemplateContainer, WorkloadCondition, condition, controller_ref, label_terms,
     optional_count, template_containers,
@@ -26,6 +27,10 @@ pub struct JobSummary {
     pub failed: u32,
     pub active: u32,
     pub backoff_limit: Option<u32>,
+    /// `spec.activeDeadlineSeconds`.
+    pub active_deadline_seconds: Option<u64>,
+    /// `spec.ttlSecondsAfterFinished`.
+    pub ttl_seconds_after_finished: Option<u32>,
     pub started_at: Option<jiff::Timestamp>,
     /// `status.completionTime`, else the transition time of the true `Failed` condition,
     /// so a failed job's duration does not grow forever.
@@ -68,6 +73,22 @@ impl ClusterConnection {
     ) -> impl Stream<Item = WatchUpdate<JobSummary>> + Send + 'static {
         summary_watch(self, self.scoped_apis(&scope), "watching jobs", job_summary)
     }
+
+    /// Watches every job of `namespace` as one drawer-scoped watch; the caller keeps the
+    /// jobs owned by its cron job.
+    pub fn watch_namespace_jobs(
+        &self,
+        namespace: &str,
+    ) -> impl Stream<Item = WatchUpdate<JobSummary>> + Send + 'static {
+        let scope = NamespaceScope::Named(namespace.to_owned());
+        selected_summary_watch(
+            self,
+            self.scoped_apis(&scope),
+            watcher::Config::default(),
+            "watching namespace jobs",
+            job_summary,
+        )
+    }
 }
 
 pub(crate) fn job_summary(job: &Job) -> JobSummary {
@@ -88,6 +109,12 @@ pub(crate) fn job_summary(job: &Job) -> JobSummary {
         failed: optional_count(status.and_then(|status| status.failed)),
         active: optional_count(status.and_then(|status| status.active)),
         backoff_limit: spec.and_then(|spec| spec.backoff_limit).map(non_negative),
+        active_deadline_seconds: spec
+            .and_then(|spec| spec.active_deadline_seconds)
+            .and_then(|seconds| u64::try_from(seconds).ok()),
+        ttl_seconds_after_finished: spec
+            .and_then(|spec| spec.ttl_seconds_after_finished)
+            .map(non_negative),
         started_at: status
             .and_then(|status| status.start_time.as_ref())
             .map(|time| time.0),
@@ -95,7 +122,14 @@ pub(crate) fn job_summary(job: &Job) -> JobSummary {
         owner: controller_ref(&job.metadata),
         conditions: api_conditions
             .iter()
-            .map(|item| condition(&item.type_, &item.status, item.reason.as_deref()))
+            .map(|item| {
+                condition(
+                    &item.type_,
+                    &item.status,
+                    item.reason.as_deref(),
+                    item.message.as_deref(),
+                )
+            })
             .collect(),
         containers: spec.map_or_else(Vec::new, |spec| template_containers(&spec.template)),
     }

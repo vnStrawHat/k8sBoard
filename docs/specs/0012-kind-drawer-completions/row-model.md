@@ -87,7 +87,7 @@ Each index is built once per join call, then each row is a lookup. Pods are inde
 | some ready | Warn "{r} of {n} endpoints ready" | Warn `{r} of {n}` |
 | slices not loaded or denied | builder status | `Absent` |
 
-Matching: only the pods of the service's namespace (one index lookup); `cluster::Selector::of_labels(&service.selector)` is built once per service, then `matches(&pod.labels)` per pod ([cluster-api.md](cluster-api.md) "Selector"; the one label matcher in the project). Counting: decision 7.
+Matching: only the pods of the service's namespace (one index lookup); `cluster::Selector::of_labels(&service.selector)` (`None` for a selector-less Service, which matches no pod) is built once per service, then `matches(&pod.labels)` per pod ([cluster-api.md](cluster-api.md) "Selector"; the one label matcher in the project). Counting: decision 7.
 
 ### ConfigMaps
 

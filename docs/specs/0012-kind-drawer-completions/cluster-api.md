@@ -26,7 +26,7 @@ pub struct Selector { requirements: Vec<Requirement> }   // empty selects everyt
 enum Requirement { Equals(String, String), In(String, Vec<String>), NotIn(String, Vec<String>), Exists(String), DoesNotExist(String), Invalid }
 impl Selector {
     pub(crate) fn of(selector: &LabelSelector) -> Self;   // matchLabels (key order), then expressions
-    pub fn of_labels(terms: &[String]) -> Self;           // `k=v` terms (Service selector); a term without `=` → Invalid
+    pub fn of_labels(terms: &[String]) -> Option<Self>;  // `k=v` terms (Service selector); `None` for no terms (a selector-less Service selects nothing); a term without `=` → Invalid
     pub fn selects_everything(&self) -> bool;
     pub fn matches(&self, labels: &[String]) -> bool;     // `k=v` terms in key order (`label_terms`)
     pub fn terms(&self) -> Vec<String>;                   // kubectl syntax; Invalid prints `<invalid>`
@@ -73,7 +73,7 @@ impl ClusterConnection {
 pub(crate) fn selected_summary_watch<K, T>(connection, apis, config: watcher::Config, action, summarize) -> impl Stream<..>;
 ```
 
-- An empty selector would select every ReplicaSet: `watch_selected_replica_sets` with `""` returns a stream that emits `Snapshot(vec![])` once and ends.
+- An empty selector would select every ReplicaSet, and a selector with a `<invalid>` term (what `Selector::terms` prints for a requirement that never matches) is not valid kubectl syntax: `watch_selected_replica_sets` with either returns a stream that emits `Snapshot(vec![])` once and ends.
 - `ConfigMapValues` (`config_map.rs`):
 
 ```rust

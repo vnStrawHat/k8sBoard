@@ -36,6 +36,7 @@ pub enum AccessCheck {
     ListConfigMaps,
     ListPodMetrics,
     ListNodeMetrics,
+    ListEndpointSlices,
 }
 
 /// The API resource a check asks about.
@@ -49,7 +50,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 21] = [
+    pub const ALL: [AccessCheck; 22] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::CreatePodExec,
@@ -71,6 +72,7 @@ impl AccessCheck {
         Self::ListConfigMaps,
         Self::ListPodMetrics,
         Self::ListNodeMetrics,
+        Self::ListEndpointSlices,
     ];
 
     fn target(self) -> CheckTarget {
@@ -96,6 +98,7 @@ impl AccessCheck {
             Self::ListConfigMaps => ("list", "", "configmaps", None, true),
             Self::ListPodMetrics => ("list", METRICS_GROUP, "pods", None, true),
             Self::ListNodeMetrics => ("list", METRICS_GROUP, "nodes", None, false),
+            Self::ListEndpointSlices => ("list", "discovery.k8s.io", "endpointslices", None, true),
         };
         CheckTarget {
             verb,
@@ -186,7 +189,7 @@ impl ClusterConnection {
     /// any request error fails the whole call, so a report is never partial.
     ///
     /// For `Several` the cluster-scoped checks run once, then the namespaced checks run
-    /// one namespace at a time (17 x N + 4 requests); a check is allowed only when every
+    /// one namespace at a time (18 x N + 4 requests); a check is allowed only when every
     /// namespace allows it. That gates menus, it never filters data.
     pub async fn review_access(&self, scope: NamespaceScope) -> Result<AccessReport, ClusterError> {
         let NamespaceScope::Several(namespaces) = &scope else {
@@ -332,9 +335,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 21);
+        assert_eq!(AccessCheck::ALL.len(), 22);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 21);
+        assert_eq!(distinct.len(), 22);
     }
 
     #[test]
@@ -542,8 +545,18 @@ mod tests {
                 "list configmaps",
                 "list pods.metrics.k8s.io",
                 "list nodes.metrics.k8s.io",
+                "list endpointslices",
             ]
         );
+    }
+
+    #[test]
+    fn endpoint_slices_check_targets_discovery_group() {
+        let attributes = resource_attributes(AccessCheck::ListEndpointSlices, Some("team-a"));
+        assert_eq!(attributes.group.as_deref(), Some("discovery.k8s.io"));
+        assert_eq!(attributes.resource.as_deref(), Some("endpointslices"));
+        assert_eq!(attributes.verb.as_deref(), Some("list"));
+        assert_eq!(attributes.namespace.as_deref(), Some("team-a"));
     }
 
     #[test]
@@ -557,7 +570,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 21);
+        assert_eq!(AccessCheck::ALL.len(), 22);
     }
 
     #[test]

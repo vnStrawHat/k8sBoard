@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::{Container, ContainerPort as ApiContainerPort, EnvVar, PodSpec};
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelectorRequirement, OwnerReference};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 
 use super::*;
 
@@ -11,14 +11,6 @@ fn owner(kind: &str, name: &str, is_controller: Option<bool>) -> OwnerReference 
         name: name.to_owned(),
         controller: is_controller,
         ..Default::default()
-    }
-}
-
-fn expression(key: &str, operator: &str, values: &[&str]) -> LabelSelectorRequirement {
-    LabelSelectorRequirement {
-        key: key.to_owned(),
-        operator: operator.to_owned(),
-        values: Some(values.iter().map(|value| (*value).to_owned()).collect()),
     }
 }
 
@@ -40,34 +32,6 @@ fn api_port(port: i32, name: Option<&str>, protocol: Option<&str>) -> ApiContain
         protocol: protocol.map(str::to_owned),
         ..Default::default()
     }
-}
-
-#[test]
-fn selector_terms_format_labels_and_expressions() {
-    let selector = LabelSelector {
-        match_labels: Some(BTreeMap::from([
-            ("tier".to_owned(), "web".to_owned()),
-            ("app".to_owned(), "api".to_owned()),
-        ])),
-        match_expressions: Some(vec![
-            expression("env", "In", &["prod", "stage"]),
-            expression("zone", "NotIn", &["a"]),
-            expression("canary", "Exists", &[]),
-            expression("legacy", "DoesNotExist", &[]),
-        ]),
-    };
-    assert_eq!(
-        selector_terms(&selector),
-        [
-            "app=api",
-            "tier=web",
-            "env in (prod,stage)",
-            "zone notin (a)",
-            "canary",
-            "!legacy",
-        ]
-    );
-    assert!(selector_terms(&LabelSelector::default()).is_empty());
 }
 
 #[test]
@@ -141,11 +105,13 @@ fn template_containers_read_main_images_and_ports() {
                         name: Some("http".to_owned()),
                         port: 80,
                         protocol: "TCP".to_owned(),
+                        host_port: None,
                     },
                     ContainerPort {
                         name: None,
                         port: 53,
                         protocol: "UDP".to_owned(),
+                        host_port: None,
                     },
                 ],
             },
@@ -193,13 +159,13 @@ fn int_or_string_text_reads_percent_and_number() {
 
 #[test]
 fn condition_reads_truth_and_drops_empty_reason() {
-    let reasoned = condition("Available", "True", Some("MinimumReplicasAvailable"));
+    let reasoned = condition("Available", "True", Some("MinimumReplicasAvailable"), None);
     assert!(reasoned.is_true);
     assert_eq!(reasoned.reason.as_deref(), Some("MinimumReplicasAvailable"));
-    let unknown = condition("Progressing", "Unknown", Some(""));
+    let unknown = condition("Progressing", "Unknown", Some(""), None);
     assert!(!unknown.is_true);
     assert_eq!(unknown.reason, None);
-    assert!(!condition("Failed", "False", None).is_true);
+    assert!(!condition("Failed", "False", None, None).is_true);
 }
 
 #[test]
@@ -223,4 +189,39 @@ fn revision_keeps_only_the_deployment_revision_annotation() {
     };
     assert_eq!(revision(&metadata).as_deref(), Some("12"));
     assert_eq!(revision(&ObjectMeta::default()), None);
+}
+
+#[test]
+fn condition_message_is_cut() {
+    let short = condition("Failed", "True", None, Some("  quota exceeded \n"));
+    assert_eq!(short.message.as_deref(), Some("quota exceeded"));
+    assert_eq!(condition("Failed", "True", None, Some("")).message, None);
+    assert_eq!(condition("Failed", "True", None, None).message, None);
+    let long = "x".repeat(5_000);
+    let cut = condition("Failed", "True", None, Some(&long));
+    let message = cut.message.expect("message kept");
+    assert!(message.len() < 1_100);
+    assert!(message.ends_with('\u{2026}'));
+}
+
+#[test]
+fn container_port_keeps_host_port() {
+    let with_host = ApiContainerPort {
+        host_port: Some(8080),
+        ..api_port(80, None, None)
+    };
+    let out_of_range = ApiContainerPort {
+        host_port: Some(70_000),
+        ..api_port(81, None, None)
+    };
+    let container = Container {
+        name: "web".to_owned(),
+        ports: Some(vec![with_host, out_of_range, api_port(82, None, None)]),
+        ..Default::default()
+    };
+    let host_ports: Vec<_> = container_ports(&container)
+        .iter()
+        .map(|port| port.host_port)
+        .collect();
+    assert_eq!(host_ports, [Some(8080), None, None]);
 }

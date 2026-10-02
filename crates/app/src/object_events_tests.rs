@@ -74,7 +74,10 @@ fn subject_change_keeps_stops_and_starts() {
         subject_change(Some(&a), Some(a.clone())),
         SubjectChange::Keep
     );
-    assert_eq!(subject_change(None, None), SubjectChange::Keep);
+    assert_eq!(
+        subject_change::<InvolvedObject>(None, None),
+        SubjectChange::Keep
+    );
     assert_eq!(subject_change(Some(&a), None), SubjectChange::Stop);
     assert_eq!(
         subject_change(Some(&a), Some(b.clone())),
@@ -117,4 +120,24 @@ fn events_title_counts_only_ready_lists() {
         "Events 2"
     );
     assert_eq!(events_title(Some(&ready(Vec::new()))), "Events 0");
+}
+
+#[test]
+fn subject_change_is_generic() {
+    let a = "a".to_owned();
+    let b = "b".to_owned();
+    assert_eq!(
+        subject_change(Some(&a), Some(a.clone())),
+        SubjectChange::Keep
+    );
+    assert_eq!(subject_change::<String>(None, None), SubjectChange::Keep);
+    assert_eq!(subject_change(Some(&a), None), SubjectChange::Stop);
+    assert_eq!(
+        subject_change(Some(&a), Some(b.clone())),
+        SubjectChange::Start(b.clone())
+    );
+    assert_eq!(
+        subject_change(None, Some(b.clone())),
+        SubjectChange::Start(b)
+    );
 }

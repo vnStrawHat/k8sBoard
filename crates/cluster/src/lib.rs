@@ -7,8 +7,10 @@ mod config_map;
 mod connection;
 mod container_spec;
 mod cron_job;
+mod cron_schedule;
 mod daemon_set;
 mod deployment;
+mod endpoint_slice;
 mod event;
 mod ingress;
 mod job;
@@ -17,6 +19,7 @@ mod kubelet_stats;
 mod metrics_api;
 mod namespace;
 mod node;
+mod object_count;
 mod object_yaml;
 mod pod;
 mod pod_log;
@@ -25,21 +28,26 @@ mod quantity;
 mod replica_set;
 mod resource_metrics;
 mod resource_watch;
+mod selector;
 mod service;
 mod stateful_set;
 mod workload;
 
 pub use access_review::{AccessCheck, AccessDecision, AccessReport, AccessReview, NamespaceAccess};
 pub use cadvisor_text::{ContainerDiskIo, DiskIoCounters, DiskIoSample};
-pub use config_map::{ConfigMapKey, ConfigMapSummary};
+pub use config_map::{
+    ConfigMapKey, ConfigMapSummary, ConfigMapValue, ConfigMapValues, ValuePreview,
+};
 pub use connection::{ClusterConnection, ClusterError, ServerVersion};
 pub use container_spec::{
     ContainerProbes, ContainerResource, EnvEntry, EnvFromEntry, EnvFromSource, EnvSource,
     MountEntry, ProbeAction, ProbeSummary, VolumeSource,
 };
 pub use cron_job::CronJobSummary;
+pub use cron_schedule::{CronSchedule, ScheduleError};
 pub use daemon_set::DaemonSetSummary;
 pub use deployment::DeploymentSummary;
+pub use endpoint_slice::{EndpointPort, EndpointSliceSummary, EndpointSummary};
 pub use event::{EVENT_LIMIT, EventFilter, EventSummary, EventType, InvolvedObject};
 pub use ingress::{IngressPath, IngressSummary, IngressTls};
 pub use job::{JobStatus, JobSummary};
@@ -66,6 +74,7 @@ pub use resource_metrics::{
     ContainerMetrics, METRICS_INTERVAL, NodeMetrics, PodMetrics, ResourceUsage,
 };
 pub use resource_watch::WatchUpdate;
+pub use selector::Selector;
 pub use service::{ServicePortSummary, ServiceSummary};
 pub use stateful_set::{ClaimTemplate, StatefulSetSummary};
 pub use workload::{ContainerPort, ControllerRef, TemplateContainer, WorkloadCondition};

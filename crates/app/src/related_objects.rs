@@ -1,0 +1,125 @@
+//! What a drawer needs beyond its own row: the objects related to it, watched while it is open.
+//! Pure: the session starts the watch from the subject.
+
+use crate::kind_row::{KindObject, KindRow};
+use crate::resource_kind::ResourceKind;
+
+/// The objects whose watch the open drawer needs. One watch runs at a time, like the object
+/// events watch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RelatedSubject {
+    /// The ReplicaSets of a Deployment, selected by its label selector.
+    ReplicaSets {
+        namespace: String,
+        deployment: String,
+        /// The selector terms joined with `,`.
+        selector: String,
+    },
+    /// Every Job of the namespace; the drawer keeps those the CronJob owns.
+    Jobs { namespace: String, cron_job: String },
+}
+
+/// The related subject of a row. A kind without related content, and a Deployment without a
+/// selector (which would match every ReplicaSet), have none.
+pub(crate) fn related_subject(kind: ResourceKind, row: &KindRow) -> Option<RelatedSubject> {
+    let namespace = row.namespace.clone()?;
+    match (kind, &row.object) {
+        (ResourceKind::Deployments, KindObject::Deployment(deployment)) => {
+            if deployment.selector.is_empty() {
+                return None;
+            }
+            Some(RelatedSubject::ReplicaSets {
+                namespace,
+                deployment: deployment.name.clone(),
+                selector: deployment.selector.join(","),
+            })
+        }
+        (ResourceKind::CronJobs, KindObject::CronJob(cron_job)) => Some(RelatedSubject::Jobs {
+            namespace,
+            cron_job: cron_job.name.clone(),
+        }),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cluster::{CronJobSummary, CronSchedule, DeploymentSummary};
+
+    use super::*;
+    use crate::batch_rows::cron_job_row;
+    use crate::workload_rows::deployment_row;
+
+    fn deployment(selector: &[&str]) -> DeploymentSummary {
+        DeploymentSummary {
+            namespace: "team-a".to_owned(),
+            name: "api".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            desired: 1,
+            ready: 1,
+            up_to_date: 1,
+            available: 1,
+            strategy: String::new(),
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: 600,
+            is_paused: false,
+            revision: Some("7".to_owned()),
+            selector: selector.iter().map(|term| (*term).to_owned()).collect(),
+            containers: Vec::new(),
+            conditions: Vec::new(),
+        }
+    }
+
+    fn cron_job() -> CronJobSummary {
+        CronJobSummary {
+            namespace: "team-a".to_owned(),
+            name: "reconcile".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            schedule: "*/5 * * * *".to_owned(),
+            time_zone: None,
+            timetable: CronSchedule::parse("*/5 * * * *", None),
+            is_suspended: false,
+            concurrency_policy: String::new(),
+            starting_deadline_seconds: None,
+            successful_history_limit: None,
+            failed_history_limit: None,
+            active_jobs: Vec::new(),
+            last_schedule_at: None,
+            last_success_at: None,
+            containers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn related_subject_per_kind() {
+        let deployment = deployment_row(&deployment(&["app=api", "tier in (a,b)"]));
+        assert_eq!(
+            related_subject(ResourceKind::Deployments, &deployment),
+            Some(RelatedSubject::ReplicaSets {
+                namespace: "team-a".to_owned(),
+                deployment: "api".to_owned(),
+                selector: "app=api,tier in (a,b)".to_owned(),
+            })
+        );
+        let cron_job = cron_job_row(&cron_job());
+        assert_eq!(
+            related_subject(ResourceKind::CronJobs, &cron_job),
+            Some(RelatedSubject::Jobs {
+                namespace: "team-a".to_owned(),
+                cron_job: "reconcile".to_owned(),
+            })
+        );
+        // A row is read as the kind it was asked for.
+        assert_eq!(related_subject(ResourceKind::Services, &cron_job), None);
+        assert_eq!(related_subject(ResourceKind::Deployments, &cron_job), None);
+    }
+
+    #[test]
+    fn deployment_without_selector_has_no_subject() {
+        let row = deployment_row(&deployment(&[]));
+        assert_eq!(related_subject(ResourceKind::Deployments, &row), None);
+    }
+}

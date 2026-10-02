@@ -3,7 +3,7 @@
 
 use cluster::ConfigMapSummary;
 
-use crate::kind_row::{DetailRow, DetailSection, KindCell, KindRow, chips};
+use crate::kind_row::{DetailRow, DetailSection, KindCell, KindObject, KindRow, chips};
 use crate::status_tone::{StatusLabel, StatusTone};
 
 const BYTES_PER_UNIT: usize = 1024;
@@ -49,6 +49,7 @@ pub(crate) fn config_map_row(config_map: &ConfigMapSummary) -> KindRow {
         event: None,
         related_pods: None,
         labels: chips(&config_map.labels),
+        object: KindObject::Plain,
     }
 }
 
