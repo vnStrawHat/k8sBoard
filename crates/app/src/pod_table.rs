@@ -520,6 +520,7 @@ mod tests {
                     usage,
                 }],
             }],
+            &[],
         );
         let pods = [first, second];
         let rows = pod_rows(&pods, Some(&history));

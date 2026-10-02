@@ -4,7 +4,7 @@
 
 use cluster::{
     AccessCheck, AccessDecision, ClusterError, NamespaceAccess, NamespaceScope, NodeMetrics,
-    PodMetrics, WatchUpdate,
+    PodMetrics, PodSummary, WatchUpdate,
 };
 use gpui_kit::Task;
 
@@ -53,6 +53,7 @@ impl ClusterMetrics {
     /// of the new scope is reviewed. The nodes feed does not depend on the scope.
     pub(crate) fn restart_pods(&mut self, scope: &NamespaceScope, review: PodReview) {
         self.pods.stop_polling();
+        self.pods.note = None;
         self.pods.history.retain_scope(scope);
         self.pods.status = FeedStatus::Checking;
         self.pod_review = review;
@@ -63,6 +64,8 @@ impl ClusterMetrics {
 pub(crate) struct MetricsFeed<H> {
     pub(crate) history: H,
     pub(crate) status: FeedStatus,
+    /// Namespaces left out for lack of access, such as `no access in web`; the pods feed only.
+    pub(crate) note: Option<String>,
     /// What the logs call this feed.
     name: &'static str,
     /// `Some` exactly while polling.
@@ -100,6 +103,7 @@ impl<H: Default> MetricsFeed<H> {
         Self {
             history: H::default(),
             status: FeedStatus::Checking,
+            note: None,
             name,
             subscription: None,
         }
@@ -117,11 +121,18 @@ impl<H> MetricsFeed<H> {
     /// Denied: stops polling. Logged once per transition, never per update.
     pub(crate) fn turn_off(&mut self, reason: String) {
         self.subscription = None;
+        self.note = None;
         self.set_status(FeedStatus::Unavailable(reason));
     }
 
-    /// Allowed: starts polling with `subscribe` unless it already does.
-    pub(crate) fn poll(&mut self, subscribe: impl FnOnce() -> WatchSubscription) {
+    /// Allowed: starts polling with `subscribe` unless it already does. `note` names the
+    /// namespaces left out.
+    pub(crate) fn poll(
+        &mut self,
+        note: Option<String>,
+        subscribe: impl FnOnce() -> WatchSubscription,
+    ) {
+        self.note = note;
         if self.subscription.is_some() {
             return;
         }
@@ -164,10 +175,11 @@ impl<H> MetricsFeed<H> {
 }
 
 impl MetricsFeed<PodUsageHistory> {
-    pub(crate) fn receive(&mut self, update: WatchUpdate<PodMetrics>) {
+    /// `pods` is the live pods list, for the controllers and OOM kills of the history.
+    pub(crate) fn receive(&mut self, update: WatchUpdate<PodMetrics>, pods: &[PodSummary]) {
         match update {
             WatchUpdate::Snapshot(items) => {
-                self.history.record(jiff::Timestamp::now(), &items);
+                self.history.record(jiff::Timestamp::now(), &items, pods);
                 self.status = FeedStatus::Live;
             }
             WatchUpdate::Failed(error) => self.fail(&error, self.history.tick_count()),

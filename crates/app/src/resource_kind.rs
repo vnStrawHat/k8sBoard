@@ -420,6 +420,18 @@ impl ResourceKind {
         self.spec().has_labels
     }
 
+    /// Whether the drawer has a Monitor tab: the workloads that own pods (a CronJob has none).
+    pub(crate) fn has_monitor(self) -> bool {
+        matches!(
+            self,
+            Self::Deployments
+                | Self::StatefulSets
+                | Self::DaemonSets
+                | Self::ReplicaSets
+                | Self::Jobs
+        )
+    }
+
     pub(crate) fn from_object_kind(text: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -513,6 +525,26 @@ mod tests {
             assert_eq!(ResourceKind::from_plural(kind.plural()), Some(kind));
         }
         assert_eq!(ResourceKind::from_plural("pods"), None);
+    }
+
+    #[test]
+    fn has_monitor_matches_the_wireframe_kinds() {
+        let with: Vec<_> = ResourceKind::ALL
+            .into_iter()
+            .filter(|kind| kind.has_monitor())
+            .map(ResourceKind::plural)
+            .collect();
+        assert_eq!(
+            with,
+            [
+                "deployments",
+                "statefulsets",
+                "daemonsets",
+                "replicasets",
+                "jobs"
+            ]
+        );
+        assert!(!ResourceKind::CronJobs.has_monitor());
     }
 
     #[test]

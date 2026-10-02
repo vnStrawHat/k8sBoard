@@ -80,4 +80,4 @@ Known ceilings: memory ≈ 3 × 3–6 KiB per container for the new fields (roug
 1. `pod-containers` shows Info only; screenshots of Env/Mounts need a launch screen for a container sub-tab, if the ui-verifier asks.
 2. A container stuck in `ContainerCreating` (e.g. FailedMount) gets no WHY box; a rule using Warning events and the pod's age could add it.
 3. Copy kubectl command omits `--kubeconfig`; add it if users launch with `--kubeconfig` and paste into a shell without `KUBECONFIG`.
-4. Human-readable quantities (`15.6 GiB`) wait for 0010's parser.
+4. Human-readable quantities (`15.6Gi`): resolved in 0010.

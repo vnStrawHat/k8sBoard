@@ -22,6 +22,7 @@ use crate::drawer::{
     yaml_body,
 };
 use crate::kind_row::PodOwner;
+use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::node_usage::{
     node_allocatable, node_pod_count, node_pod_limit, node_quantity_text, node_requests,
 };
@@ -57,6 +58,10 @@ pub(crate) fn node_drawer(
     let shown = shown_tab(tabs, state.tab);
     let body = match shown {
         DrawerTab::Events => DrawerBody::Scrolling(recent_events(events, cx)),
+        DrawerTab::Monitor => DrawerBody::Scrolling(match session.read(cx).live() {
+            Some(live) => monitor_tab(&MonitorView::of_nodes(state, live), cx),
+            None => div().into_any_element(),
+        }),
         DrawerTab::Yaml => yaml_body(state),
         DrawerTab::Overview | DrawerTab::Containers => {
             DrawerBody::Scrolling(overview(node, session.read(cx).live(), now, cx))

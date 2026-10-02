@@ -2,6 +2,8 @@ use cluster::{ContainerState, PodSummary};
 #[cfg(feature = "screenshot")]
 use gpui_kit::{AnyWindowHandle, App, Entity};
 
+#[cfg(any(feature = "screenshot", test))]
+use crate::cluster_metrics::{FeedStatus, is_metrics_settled};
 use crate::pod_drawer::default_container;
 
 #[cfg(any(feature = "screenshot", test))]
@@ -59,10 +61,35 @@ pub(crate) struct SettleInput {
     pub(crate) is_drawer_ready: bool,
     /// A logs screen whose tab is not open yet or still connecting.
     pub(crate) is_log_pending: bool,
-    /// The pods metrics feed has no tick yet and may still get one.
-    pub(crate) is_pod_metrics_pending: bool,
+    /// Where the pods metrics feed stands.
+    pub(crate) pod_metrics: FeedProgress,
     /// The same for the nodes feed.
-    pub(crate) is_node_metrics_pending: bool,
+    pub(crate) node_metrics: FeedProgress,
+}
+
+/// A metrics feed's status and how many ticks it has recorded.
+#[cfg(any(feature = "screenshot", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FeedProgress {
+    pub(crate) status: FeedStatus,
+    pub(crate) ticks: u64,
+}
+
+#[cfg(any(feature = "screenshot", test))]
+impl FeedProgress {
+    /// No session: nothing to wait for.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn unavailable() -> Self {
+        Self {
+            status: FeedStatus::Unavailable(String::new()),
+            ticks: 0,
+        }
+    }
+
+    /// Whether the feed has what a screen needing `min_ticks` ticks asks for.
+    fn is_settled(&self, min_ticks: u64) -> bool {
+        is_metrics_settled(&self.status, self.ticks, min_ticks)
+    }
 }
 
 /// A drawer screen is ready when its row is selected (or no row was found to select) and its
@@ -83,8 +110,18 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
         TargetState::Unavailable => true,
         TargetState::Loading => false,
         TargetState::Loaded if screen.has_log_dock() => !input.is_log_pending,
-        TargetState::Loaded if screen.shows_pod_usage() && input.is_pod_metrics_pending => false,
-        TargetState::Loaded if screen.shows_node_usage() && input.is_node_metrics_pending => false,
+        TargetState::Loaded
+            if screen.shows_pod_usage()
+                && !input.pod_metrics.is_settled(screen.min_metrics_ticks()) =>
+        {
+            false
+        }
+        TargetState::Loaded
+            if screen.shows_node_usage()
+                && !input.node_metrics.is_settled(screen.min_metrics_ticks()) =>
+        {
+            false
+        }
         TargetState::Loaded => !screen.has_drawer() || input.is_drawer_ready,
     }
 }
@@ -234,13 +271,17 @@ mod tests {
         }
     }
 
+    fn progress(status: FeedStatus, ticks: u64) -> FeedProgress {
+        FeedProgress { status, ticks }
+    }
+
     fn input(target: TargetState, is_drawer_ready: bool) -> SettleInput {
         SettleInput {
             target,
             is_drawer_ready,
             is_log_pending: false,
-            is_pod_metrics_pending: false,
-            is_node_metrics_pending: false,
+            pod_metrics: progress(FeedStatus::Live, 1),
+            node_metrics: progress(FeedStatus::Live, 1),
         }
     }
 
@@ -328,9 +369,9 @@ mod tests {
 
     #[test]
     fn usage_screens_wait_for_their_metrics_feed() {
-        let pending = |pods, nodes| SettleInput {
-            is_pod_metrics_pending: pods,
-            is_node_metrics_pending: nodes,
+        let feeds = |pods: u64, nodes: u64| SettleInput {
+            pod_metrics: progress(FeedStatus::Waiting, pods),
+            node_metrics: progress(FeedStatus::Waiting, nodes),
             ..input(TargetState::Loaded, true)
         };
         let pod_screens = [
@@ -338,31 +379,50 @@ mod tests {
             LaunchScreen::PodDrawer(DrawerTab::Containers),
         ];
         for screen in pod_screens {
-            assert!(!is_screen_settled(screen, &pending(true, false)));
-            assert!(is_screen_settled(screen, &pending(false, true)));
+            assert!(!is_screen_settled(screen, &feeds(0, 1)));
+            assert!(is_screen_settled(screen, &feeds(1, 0)));
         }
         for screen in [
             LaunchScreen::Nodes,
             LaunchScreen::NodeDrawer(DrawerTab::Overview),
         ] {
-            assert!(!is_screen_settled(screen, &pending(false, true)));
-            assert!(is_screen_settled(screen, &pending(true, false)));
+            assert!(!is_screen_settled(screen, &feeds(1, 0)));
+            assert!(is_screen_settled(screen, &feeds(0, 1)));
         }
         // Regression screens do not depend on metrics.
         let kind = LaunchScreen::Kind(ResourceKind::Deployments);
-        assert!(is_screen_settled(kind, &pending(true, true)));
-        assert!(is_screen_settled(
-            LaunchScreen::LogsDock,
-            &pending(true, true)
-        ));
+        assert!(is_screen_settled(kind, &feeds(0, 0)));
+        assert!(is_screen_settled(LaunchScreen::LogsDock, &feeds(0, 0)));
         // A failed feed is "settled": the screen shows its dashes.
-        assert!(is_screen_settled(
-            LaunchScreen::Pods,
-            &SettleInput {
-                target: TargetState::Unavailable,
-                ..pending(true, true)
-            }
-        ));
+        let failed = SettleInput {
+            pod_metrics: progress(FeedStatus::Failed("no".to_owned()), 0),
+            ..feeds(0, 0)
+        };
+        assert!(is_screen_settled(LaunchScreen::Pods, &failed));
+    }
+
+    #[test]
+    fn monitor_screens_wait_for_two_ticks() {
+        let feeds = |pods: u64, nodes: u64| SettleInput {
+            pod_metrics: progress(FeedStatus::Live, pods),
+            node_metrics: progress(FeedStatus::Live, nodes),
+            ..input(TargetState::Loaded, true)
+        };
+        let pod = LaunchScreen::PodDrawer(DrawerTab::Monitor);
+        let workload = LaunchScreen::KindDrawer(ResourceKind::Deployments, DrawerTab::Monitor);
+        for screen in [pod, workload] {
+            assert!(!is_screen_settled(screen, &feeds(1, 5)));
+            assert!(is_screen_settled(screen, &feeds(2, 0)));
+        }
+        let node = LaunchScreen::NodeDrawer(DrawerTab::Monitor);
+        assert!(!is_screen_settled(node, &feeds(5, 1)));
+        assert!(is_screen_settled(node, &feeds(0, 2)));
+        // An unavailable feed settles at once.
+        let denied = SettleInput {
+            pod_metrics: progress(FeedStatus::Unavailable("denied".to_owned()), 0),
+            ..feeds(0, 0)
+        };
+        assert!(is_screen_settled(pod, &denied));
     }
 
     #[test]

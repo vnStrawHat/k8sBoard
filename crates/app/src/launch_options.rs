@@ -17,9 +17,9 @@ Options:
   --namespace <a[,b]>    namespaces to show, at most 5 (default: all namespaces if allowed)
   --filter <text>        quick filter of the start screen; label:k=v,k2!=v2 becomes label chips
   --theme light|dark     colour theme (default: follow the system)
-  --screen pods|nodes|pod-drawer|pod-containers|pod-events|node-drawer|node-events|pod-yaml|node-yaml|logs-dock|logs-zoomed|pods-selected|nodes-selected|
+  --screen pods|nodes|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
-           services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-yaml
+           services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml
                          screen to open (default: pods)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
@@ -76,6 +76,26 @@ impl LaunchScreen {
         }
     }
 
+    /// Whether the drawer opens expanded: W4b shows the Containers tab so, and W4c the Monitor tab.
+    pub(crate) fn opens_expanded(self) -> bool {
+        matches!(
+            self,
+            Self::PodDrawer(DrawerTab::Containers | DrawerTab::Monitor)
+                | Self::NodeDrawer(DrawerTab::Monitor)
+                | Self::KindDrawer(_, DrawerTab::Monitor)
+        )
+    }
+
+    /// How many ticks of its metrics feed the screen waits for: a chart needs two points.
+    #[cfg(any(feature = "screenshot", test))]
+    pub(crate) fn min_metrics_ticks(self) -> u64 {
+        if self.drawer_tab() == Some(DrawerTab::Monitor) {
+            2
+        } else {
+            1
+        }
+    }
+
     /// Whether the first rows must be ticked once the list has loaded.
     pub(crate) fn checks_rows(self) -> bool {
         matches!(self, Self::PodsSelected | Self::NodesSelected)
@@ -86,7 +106,10 @@ impl LaunchScreen {
     pub(crate) fn shows_pod_usage(self) -> bool {
         matches!(
             self,
-            Self::Pods | Self::PodsSelected | Self::PodDrawer(DrawerTab::Containers)
+            Self::Pods
+                | Self::PodsSelected
+                | Self::PodDrawer(DrawerTab::Containers | DrawerTab::Monitor)
+                | Self::KindDrawer(_, DrawerTab::Monitor)
         )
     }
 
@@ -95,7 +118,9 @@ impl LaunchScreen {
     pub(crate) fn shows_node_usage(self) -> bool {
         matches!(
             self,
-            Self::Nodes | Self::NodesSelected | Self::NodeDrawer(DrawerTab::Overview)
+            Self::Nodes
+                | Self::NodesSelected
+                | Self::NodeDrawer(DrawerTab::Overview | DrawerTab::Monitor)
         )
     }
 
@@ -111,6 +136,8 @@ impl LaunchScreen {
             "pod-drawer" => Some(Self::PodDrawer(DrawerTab::Overview)),
             "pod-containers" => Some(Self::PodDrawer(DrawerTab::Containers)),
             "pod-events" => Some(Self::PodDrawer(DrawerTab::Events)),
+            "pod-monitor" => Some(Self::PodDrawer(DrawerTab::Monitor)),
+            "node-monitor" => Some(Self::NodeDrawer(DrawerTab::Monitor)),
             "node-drawer" => Some(Self::NodeDrawer(DrawerTab::Overview)),
             "node-events" => Some(Self::NodeDrawer(DrawerTab::Events)),
             "pod-yaml" => Some(Self::PodDrawer(DrawerTab::Yaml)),
@@ -127,6 +154,12 @@ impl LaunchScreen {
                 if let Some(plural) = text.strip_suffix("-yaml") {
                     let kind = ResourceKind::from_plural(plural)?;
                     return Some(Self::KindDrawer(kind, DrawerTab::Yaml));
+                }
+                if let Some(plural) = text.strip_suffix("-monitor") {
+                    // Only the workloads that own pods have a Monitor tab.
+                    let kind =
+                        ResourceKind::from_plural(plural).filter(|kind| kind.has_monitor())?;
+                    return Some(Self::KindDrawer(kind, DrawerTab::Monitor));
                 }
                 if let Some(plural) = text.strip_suffix("-events") {
                     let kind = ResourceKind::from_plural(plural)?;

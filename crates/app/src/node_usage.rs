@@ -1,10 +1,10 @@
 //! What a node's usage means against its allocatable resources, and what its pods request.
 
 use cluster::{
-    ByteAmount, ContainerKind, CpuAmount, NodeResource, NodeSummary, PodSummary, ResourceUsage,
+    ByteAmount, ContainerKind, CpuAmount, NodeResource, NodeSummary, PodStatus, PodSummary,
+    ResourceUsage, StatusReason,
 };
 
-use crate::status_tone::{StatusTone, pod_status_label};
 use crate::usage_format::Measure;
 
 /// Usage as a share of allocatable (1.0 is all of it). `None` without a sample, without the
@@ -55,11 +55,25 @@ fn resource<'a>(node: &'a NodeSummary, name: &str) -> Option<&'a NodeResource> {
     node.resources.iter().find(|resource| resource.name == name)
 }
 
+/// Whether a pod still takes room: a finished pod (Completed, Succeeded, Failed, Evicted, or Error)
+/// holds no requests, so its containers no longer count.
+pub(crate) fn takes_room(pod: &PodSummary) -> bool {
+    !matches!(
+        pod.status,
+        PodStatus::Reason(
+            StatusReason::Completed
+                | StatusReason::Succeeded
+                | StatusReason::Failed
+                | StatusReason::Evicted
+                | StatusReason::Error
+        )
+    )
+}
+
 /// The pods that take room on `node`: scheduled there and not finished.
 fn pods_on_node<'a>(node: &'a str, pods: &'a [PodSummary]) -> impl Iterator<Item = &'a PodSummary> {
-    pods.iter().filter(move |pod| {
-        pod.node_name.as_deref() == Some(node) && pod_status_label(pod).tone != StatusTone::Done
-    })
+    pods.iter()
+        .filter(move |pod| pod.node_name.as_deref() == Some(node) && takes_room(pod))
 }
 
 /// The `cpu` and `memory` requests of the pods on `node`: main and sidecar containers, since
@@ -252,6 +266,23 @@ mod tests {
         assert_eq!(memory.bytes(), 128 << 20);
         assert_eq!(node_pod_count("wk-1", &pods), 1);
         assert_eq!(node_pod_count("wk-9", &pods), 0);
+    }
+
+    #[test]
+    fn finished_pods_take_no_room() {
+        let with = |reason: StatusReason| pod(Some("wk-1"), reason, Vec::new());
+        assert!(takes_room(&with(StatusReason::Running)));
+        assert!(takes_room(&with(StatusReason::CrashLoopBackOff)));
+        assert!(takes_room(&with(StatusReason::Pending)));
+        for finished in [
+            StatusReason::Completed,
+            StatusReason::Succeeded,
+            StatusReason::Failed,
+            StatusReason::Evicted,
+            StatusReason::Error,
+        ] {
+            assert!(!takes_room(&with(finished.clone())), "{finished:?}");
+        }
     }
 
     #[test]

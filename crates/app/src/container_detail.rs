@@ -23,6 +23,7 @@ use crate::drawer::{
     ContainerTab, absent_text, detail_row, link_text, port_row, section_title, truncated_text,
     value_or_absent,
 };
+use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::pod_diagnosis::{ProbeKind, ProbeResult, next_retry, probe_of, probe_result};
 use crate::pod_drawer::{UsageRow, container_usage_row, kind_tag};
 use crate::status_tone::{StatusLabel, StatusTone, container_state_label, tone_color, toned_text};
@@ -39,8 +40,12 @@ const PROBE_KINDS: [ProbeKind; 3] = [
 /// The share of an Env or Mounts row that the name column takes; names are longer than sources
 /// are informative, so they get 3 parts to the source's 2.
 const SOURCE_NAME_SHARE: f32 = 0.6;
-const CONTAINER_TABS: [ContainerTab; 3] =
-    [ContainerTab::Info, ContainerTab::Env, ContainerTab::Mounts];
+const CONTAINER_TABS: [ContainerTab; 4] = [
+    ContainerTab::Info,
+    ContainerTab::Env,
+    ContainerTab::Mounts,
+    ContainerTab::Monitor,
+];
 /// Element ids of the links inside the container detail; the drawer's kind links use small ids.
 const LINK_ID_BASE: usize = 1_000;
 
@@ -64,6 +69,8 @@ pub(crate) struct ContainerDetailInput<'a> {
     pub(crate) forward_reason: &'a SharedString,
     /// The container's newest usage; `None` without a sample.
     pub(crate) usage: Option<ResourceUsage>,
+    /// The Monitor sub-tab; `None` while the session is not live.
+    pub(crate) monitor: Option<MonitorView<'a>>,
     pub(crate) now: jiff::Timestamp,
 }
 
@@ -106,6 +113,10 @@ pub(crate) fn container_detail(
             "No mounts",
             cx,
         ),
+        ContainerTab::Monitor => match &input.monitor {
+            Some(view) => monitor_tab(view, cx),
+            None => div().into_any_element(),
+        },
     };
     v_flex()
         .child(header)
@@ -127,6 +138,7 @@ fn sub_tab_bar(
         ContainerTab::Info => "Info".to_owned(),
         ContainerTab::Env => format!("Env {}", container.env.len() + container.env_from.len()),
         ContainerTab::Mounts => format!("Mounts {}", container.mounts.len()),
+        ContainerTab::Monitor => "Monitor".to_owned(),
     };
     div()
         .pb_2()

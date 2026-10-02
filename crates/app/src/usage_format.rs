@@ -117,6 +117,26 @@ fn round_for_unit(unit: usize, scaled: f64) -> (String, f64) {
     (format!("{whole:.0}"), whole)
 }
 
+/// How long before now: `now`, `-45s`, `-3m 15s`, `-5h 40m`. A zero part is left out (`-3m`, `-5h`), and
+/// seconds drop from an hour on.
+pub(crate) fn format_offset(seconds: u64) -> String {
+    let (hours, minutes, seconds) = (seconds / 3600, seconds % 3600 / 60, seconds % 60);
+    let parts = if hours > 0 {
+        [(hours, "h"), (minutes, "m"), (0, "s")]
+    } else {
+        [(0, "h"), (minutes, "m"), (seconds, "s")]
+    };
+    let text: Vec<String> = parts
+        .into_iter()
+        .filter(|(value, _)| *value > 0)
+        .map(|(value, unit)| format!("{value}{unit}"))
+        .collect();
+    if text.is_empty() {
+        return "now".to_owned();
+    }
+    format!("-{}", text.join(" "))
+}
+
 /// `0.314` is `31%`; may pass 100 %.
 pub(crate) fn format_percent(ratio: f64) -> String {
     format!("{:.0}%", (ratio * 100.).max(0.).round())
@@ -199,6 +219,17 @@ mod tests {
             Measure::Bytes.format_pair(498. * MI, 512. * MI, " of "),
             "498 of 512Mi"
         );
+    }
+
+    #[test]
+    fn format_offset_reads_hours_minutes_seconds() {
+        assert_eq!(format_offset(0), "now");
+        assert_eq!(format_offset(45), "-45s");
+        assert_eq!(format_offset(195), "-3m 15s");
+        assert_eq!(format_offset(180), "-3m");
+        assert_eq!(format_offset(20_400), "-5h 40m");
+        assert_eq!(format_offset(20_415), "-5h 40m");
+        assert_eq!(format_offset(86_400), "-24h");
     }
 
     #[test]

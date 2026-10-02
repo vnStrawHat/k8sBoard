@@ -41,7 +41,7 @@ pub(crate) fn usage_chart_card(model: Rc<UsageChartModel>, height: Pixels, cx: &
 ## Pure geometry (unit-tested)
 
 ```rust
-pub(crate) fn nice_max(value: f64, unit: Measure) -> f64;    // 1, 2, 2.5, 5, 10 × 10^k; floor 10m CPU, 1 Mi bytes
+pub(crate) fn nice_max(value: f64, unit: Measure) -> f64;    // CPU 1, 2, 5 × 10^k (halves stay whole); bytes a power of two of the value's binary unit (900Mi → 1Gi); floor 10m CPU, 1 Mi bytes
 fn y_max(model: &UsageChartModel) -> f64;                     // nice_max(max(values, references) × 1.06)
 fn x_at(at: jiff::Timestamp, start: jiff::Timestamp, end: jiff::Timestamp, width: f32) -> f32;
 fn segments(points: &[(jiff::Timestamp, Option<f64>)], start: jiff::Timestamp, max_gap: Duration)
@@ -61,7 +61,7 @@ fn nearest_tick(points: &[(jiff::Timestamp, Option<f64>)], at: jiff::Timestamp) 
 | Area | one series only: per segment, from the baseline | `chart_1.opacity(0.1)` |
 | Line | per segment, linear, 2 px | series `i` → `chart_1`, `chart_2` |
 | Last dot | at the newest non-`None` point of each series, 8 px, 2 px ring | series color, ring `background` |
-| References | dashed (4, 3) 1 px full-width line; label `{label} {value}` right-aligned just above it | Request, Allocatable → `muted_foreground`; Limit → `tone_color(Bad)` |
+| References | dashed (4, 3) 1 px full-width line; label `{label} {value}` right-aligned just above it (below it near the top), 14 px left of the right edge so the newest value's dot never covers it; a request equal to the limit within 0.5% is one Limit line labelled `request = limit` | Request, Allocatable → `muted_foreground`; Limit → `tone_color(Bad)` |
 | Markers | 8 px dot centered on the baseline at `x_at(marker)`, 2 px ring | `tone_color(Bad)`, ring `background` |
 
 Order: grid, area, lines, references, markers, last dots. A reference above `y_max` cannot happen (`y_max` includes it).

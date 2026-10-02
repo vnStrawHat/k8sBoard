@@ -25,7 +25,7 @@
 | Need | Candidates (to verify by advisor) | Spec |
 |---|---|---|
 | YAML serialization | `serde-saphyr` 1.3 (chosen in 0007; `serde_json` is a direct dependency of the cluster crate) | 0007 |
-| Charts | GPUI Kit chart (stack table says it exists; verify ref lines, crosshair, gaps) or a custom `canvas` | 0010 |
+| Charts | Own `Plot` implementation on the kit primitives (0010); no dependency | 0010 |
 | Cron schedules + time zones | a cron parser crate; `jiff` time-zone features (0004 open item 3) | 0012 |
 | x509 not-after | an x509 parser crate | 0016 |
 | Helm decoding | gzip (`flate2`), base64, `serde_json` | 0017 |

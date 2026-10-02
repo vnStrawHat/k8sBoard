@@ -11,7 +11,7 @@
 | Copy name | Done for live kinds | 0005 |
 | Columns ▾, filter chips, sort | Missing | 0009 |
 | Edit YAML (E) / Delete … (red, last) | Missing (disabled) | 0031 / 0033 |
-| Monitor tab (◔ kinds: Pod, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, Node) | Missing | 0010, 0011 |
+| Monitor tab (◔ kinds: Pod, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, Node) | Partial | 0010 (CPU, Memory); Network and Disk I/O → 0011 |
 
 ## Per kind
 

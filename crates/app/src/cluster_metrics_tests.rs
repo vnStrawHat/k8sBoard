@@ -214,16 +214,16 @@ fn feed_starts_checking_and_a_stopped_feed_keeps_checking() {
 #[test]
 fn failed_poll_is_failed_before_any_sample_and_interrupted_after() {
     let mut feed = pod_feed();
-    feed.receive(WatchUpdate::Failed(api_error(404)));
+    feed.receive(WatchUpdate::Failed(api_error(404)), &[]);
     assert!(
         matches!(feed.status, FeedStatus::Failed(_)),
         "{:?}",
         feed.status
     );
-    feed.receive(WatchUpdate::Snapshot(Vec::new()));
+    feed.receive(WatchUpdate::Snapshot(Vec::new()), &[]);
     assert_eq!(feed.status, FeedStatus::Live);
     assert_eq!(feed.history.tick_count(), 1);
-    feed.receive(WatchUpdate::Failed(api_error(503)));
+    feed.receive(WatchUpdate::Failed(api_error(503)), &[]);
     assert!(
         matches!(feed.status, FeedStatus::Interrupted(_)),
         "{:?}",

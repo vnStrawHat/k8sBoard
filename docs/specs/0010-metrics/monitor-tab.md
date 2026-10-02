@@ -43,7 +43,7 @@ pub(crate) struct MonitorInput<'a> { pub(crate) subject: MonitorSubject<'a>, pub
     pub(crate) range: MonitorRange, pub(crate) pods: &'a [PodSummary], pub(crate) pod_history: &'a PodUsageHistory,
     pub(crate) node_history: &'a NodeUsageHistory, pub(crate) is_all_namespaces: bool }
 pub(crate) struct MonitorData { pub(crate) charts: Vec<Rc<UsageChartModel>>, pub(crate) rows: Vec<MonitorRow>,
-    pub(crate) choices: Vec<ScopeChoice>, pub(crate) stale_since: Option<jiff::Timestamp>, pub(crate) is_short: bool }
+    pub(crate) choices: Vec<ScopeChoice>, pub(crate) stale_since: Option<jiff::Timestamp>, pub(crate) span: Option<Duration>, pub(crate) scope: MonitorScope }
 pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData;
 ```
 
@@ -51,7 +51,7 @@ pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData;
 |---|---|---|---|
 | Pod · Total | `pod_series(.., None, r)` (`pod total`) | `request` / `request (partial)`, `limit`: main + sidecar sums (decision 22) | all containers |
 | Pod · Part(c), Container | `pod_series(.., Some(c), r)` (`c`) | the container's own | `c` |
-| Workload · Total | `owner_series(owner, None, r)` (`{n} pods`) | sums over owned pods now in `pods` | union |
+| Workload · Total | `owner_series(owner, None, r)` (`{n} pods`) | sums over owned pods now in `pods` that still take room (not Completed, Succeeded, Failed, Evicted, or Error), like `node_requests` | union |
 | Workload · Part(p) | `owner_series(owner, Some(p), r)` (`p`) | that pod's sums | that pod |
 | Node | `node_series(node, r)` (`used`) | `requested` (All only), `allocatable` (decision 23) | none |
 
@@ -59,11 +59,11 @@ pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData;
 - `charts`: `[CPU, Memory]`, ids `monitor-cpu`, `monitor-memory`; 0011 appends.
 - `choices`: Pod → `Pod total` + main and sidecar containers (`Container: {name}`); Workload → `All pods` + owned pods (`Pod: {name}`); Node → `Node total`. A `Part` no longer offered falls back to Total.
 - `rows` (`MonitorRow { offset: u64, cpu: Option<f64>, memory: Option<f64>, is_oom: bool }`): one per point, newest first; `is_oom` when a mark is within half a step of the point.
-- `stale_since`: the series' `sampled_at` when it is older than `end − 2 × 15 s`. `is_short`: the history `span()` is shorter than the range.
+- `stale_since`: the series' `sampled_at` once the server timestamp has not advanced for 4 polls in a row (counted in ticks, so it does not depend on the clock or the range; a pod that did not report the newest tick is not stale). `is_short_for(range)`: the history `span()` plus one step of the range's resolution is shorter than the range, so a full history (at most 24 h less a coarse step) does not dim 24h forever.
 
 ## Toolbar
 
-- Range: kit `ButtonGroup` of four small buttons, all enabled, the current one selected. When `is_short`, the selected label is muted and has the tooltip "Showing data since k8sBoard connected; connect Prometheus for 30 days".
+- Range: kit `ButtonGroup` of four small buttons, all enabled, the current one selected. Each range button for which `is_short_for(range)` holds is dimmed and has the tooltip "Showing data since k8sBoard connected; connect Prometheus for 30 days".
 - Scope: small outline `Button` with the current choice and a dropdown caret + `DropdownMenu` of `choices`; Node shows the muted text `Node total`. Hidden in the container sub-tab.
 - `Table view`: small outline `Button`, `.selected(is_table)`.
 - Right (`ml_auto`, muted `text_xs`): `Live` → `step 15s · live` (`step 5m` for coarse ranges), or `stale · last sample {age} ago` when `stale_since` is set; `Checking`/`Waiting` → `collecting…`; `Interrupted` → `paused · retrying` with the error as tooltip.
@@ -82,7 +82,7 @@ Pod, Container, and Workload read the pods feed; Node reads the nodes feed.
 
 ## Table view
 
-Rows `Time · CPU · Memory`, mono `text_xs`, from `rows`: `format_offset`, `Measure::format` or muted `not running`; an OOM row adds `OOMKilled` toned Bad. At most 308 rows (288 coarse + 20 fine); the drawer body scrolls.
+Rows `Time · CPU · Memory`, mono `text_xs`, from `rows`: `format_offset`, `Measure::format` or muted `not running`; an OOM row adds `OOMKilled` toned Bad. At most 307 rows (288 coarse + 19 fine); the drawer body scrolls.
 
 ## Tabs
 

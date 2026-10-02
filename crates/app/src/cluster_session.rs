@@ -615,10 +615,7 @@ impl ClusterSession {
             PodsGate::Off(reason) => live.metrics.pods.turn_off(reason),
             PodsGate::Poll { scope, note } => {
                 let connection = &live.connection;
-                live.metrics.pods.poll(|| {
-                    if let Some(note) = &note {
-                        tracing::info!(%note, "polling pod metrics for the allowed namespaces only");
-                    }
+                live.metrics.pods.poll(note, || {
                     subscribe_pod_metrics(&runtime, connection, scope, cx)
                 });
             }
@@ -630,7 +627,7 @@ impl ClusterSession {
                 let connection = &live.connection;
                 live.metrics
                     .nodes
-                    .poll(|| subscribe_node_metrics(&runtime, connection, cx));
+                    .poll(None, || subscribe_node_metrics(&runtime, connection, cx));
             }
         }
         cx.notify();
@@ -937,7 +934,7 @@ fn subscribe_pod_metrics(
         cx,
         |session: &mut ClusterSession, update, _| {
             if let Some(live) = session.live_mut() {
-                live.metrics.pods.receive(update);
+                live.metrics.pods.receive(update, live.pods.items());
             }
         },
         |session, _| {

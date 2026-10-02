@@ -1,7 +1,7 @@
 //! The data model that one table delegate and one drawer renderer share for every kind.
 //! Row builders (`*_rows.rs`) are pure: they take a summary and produce a `KindRow`.
 
-use cluster::PodSummary;
+use cluster::{ControllerRef, PodSummary};
 use gpui_kit::SharedString;
 
 use crate::status_tone::{StatusLabel, StatusTone};
@@ -180,25 +180,37 @@ const POD_TEMPLATE_HASH_ALPHABET: &str = "bcdfghjklmnpqrstvwxz2456789";
 
 pub(crate) fn owns_pod(owner: &PodOwner, pod: &PodSummary) -> bool {
     match owner {
+        PodOwner::Node { name } => pod.node_name.as_deref() == Some(name.as_str()),
+        PodOwner::Controller { .. } | PodOwner::Deployment { .. } => {
+            owns(owner, &pod.namespace, pod.controller.as_ref())
+        }
+    }
+}
+
+/// Whether a pod in `namespace` with `controller` belongs to a workload `owner`. A node owns pods
+/// by where they run, which a namespace and controller cannot tell, so it owns none here.
+pub(crate) fn owns(owner: &PodOwner, namespace: &str, controller: Option<&ControllerRef>) -> bool {
+    match owner {
         PodOwner::Controller {
-            namespace,
+            namespace: owner_namespace,
             kind,
             name,
         } => {
-            *namespace == pod.namespace
-                && pod
-                    .controller
-                    .as_ref()
+            owner_namespace == namespace
+                && controller
                     .is_some_and(|controller| controller.kind == *kind && controller.name == *name)
         }
-        PodOwner::Deployment { namespace, name } => {
-            *namespace == pod.namespace
-                && pod.controller.as_ref().is_some_and(|controller| {
+        PodOwner::Deployment {
+            namespace: owner_namespace,
+            name,
+        } => {
+            owner_namespace == namespace
+                && controller.is_some_and(|controller| {
                     controller.kind == REPLICA_SET_KIND
                         && is_deployment_replica_set(name, &controller.name)
                 })
         }
-        PodOwner::Node { name } => pod.node_name.as_deref() == Some(name.as_str()),
+        PodOwner::Node { .. } => false,
     }
 }
 
@@ -287,6 +299,40 @@ mod tests {
             &pod("ns", Some(("StatefulSet", "api-7d9f8c")))
         ));
         assert!(!owns_pod(&owner, &pod("ns", None)));
+    }
+
+    #[test]
+    fn owns_matches_namespace_and_controller() {
+        let controller = |kind: &str, name: &str| ControllerRef {
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+        };
+        let stateful = PodOwner::Controller {
+            namespace: "ns".to_owned(),
+            kind: STATEFUL_SET_KIND,
+            name: "web".to_owned(),
+        };
+        let web = controller("StatefulSet", "web");
+        assert!(owns(&stateful, "ns", Some(&web)));
+        assert!(!owns(&stateful, "other", Some(&web)));
+        assert!(!owns(&stateful, "ns", None));
+        // The Deployment hash rule still applies.
+        let api = deployment("ns", "api");
+        assert!(owns(
+            &api,
+            "ns",
+            Some(&controller("ReplicaSet", "api-7d9f8c"))
+        ));
+        assert!(!owns(
+            &api,
+            "ns",
+            Some(&controller("ReplicaSet", "api-worker-7d9f8c"))
+        ));
+        // A node owns pods by where they run, which this cannot tell.
+        let node = PodOwner::Node {
+            name: "wk".to_owned(),
+        };
+        assert!(!owns(&node, "ns", Some(&web)));
     }
 
     #[test]

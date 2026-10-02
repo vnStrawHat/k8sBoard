@@ -18,8 +18,11 @@ mod kind_table;
 mod launch_options;
 mod log_buffer;
 mod log_dock;
+mod log_filter;
 mod log_tab;
 mod metrics_history;
+mod monitor_data;
+mod monitor_tab;
 mod namespace_picker;
 mod namespace_rows;
 mod navigation;
@@ -46,6 +49,7 @@ mod table_sort;
 mod table_view;
 mod title_bar;
 mod usage_bar;
+mod usage_chart;
 mod usage_format;
 mod workload_rows;
 mod yaml_view;
@@ -55,7 +59,6 @@ use std::time::Duration;
 
 use gpui_kit::component::{Theme, ThemeMode, TitleBar};
 use gpui_kit::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
-use tracing_subscriber::EnvFilter;
 
 use crate::app_shell::AppShell;
 use crate::cluster_runtime::ClusterRuntime;
@@ -71,7 +74,7 @@ const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(log_filter::log_filter())
         .init();
 
     let options = match launch_options::parse_launch_options(std::env::args().skip(1)) {

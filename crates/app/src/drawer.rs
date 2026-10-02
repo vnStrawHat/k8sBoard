@@ -18,6 +18,8 @@ use gpui_kit::{
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_session::LiveList;
+use crate::history_rings::Resolution;
+use crate::monitor_data::MonitorData;
 use crate::object_events::events_title;
 use crate::resource_kind::ResourceKind;
 use crate::table_selection::ResourceKey;
@@ -46,6 +48,8 @@ pub(crate) struct DrawerState {
     pub(crate) container_tab: ContainerTab,
     /// The YAML tab's view; `AppShell::sync_yaml_view` keeps it for the shown subject only.
     pub(crate) yaml: Option<Entity<YamlView>>,
+    /// The Monitor tab: range and Table view survive a change of subject, the scope does not.
+    pub(crate) monitor: MonitorState,
 }
 
 impl DrawerState {
@@ -56,6 +60,7 @@ impl DrawerState {
             selected_container: None,
             container_tab: ContainerTab::Info,
             yaml: None,
+            monitor: MonitorState::new(),
         }
     }
 
@@ -68,17 +73,103 @@ impl DrawerState {
     }
 }
 
+/// What the Monitor tab shows: the range, which part of the subject, the Table view toggle, and
+/// the data memoized for the current key (see `MonitorKey`).
+pub(crate) struct MonitorState {
+    pub(crate) range: MonitorRange,
+    pub(crate) scope: MonitorScope,
+    pub(crate) is_table: bool,
+    pub(crate) cache: Option<MonitorCache>,
+}
+
+impl MonitorState {
+    pub(crate) fn new() -> Self {
+        Self {
+            range: MonitorRange::Minutes15,
+            scope: MonitorScope::Total,
+            is_table: false,
+            cache: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MonitorRange {
+    Minutes15,
+    Hour1,
+    Hours6,
+    Hours24,
+}
+
+impl MonitorRange {
+    pub(crate) const ALL: [Self; 4] = [Self::Minutes15, Self::Hour1, Self::Hours6, Self::Hours24];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Minutes15 => "15m",
+            Self::Hour1 => "1h",
+            Self::Hours6 => "6h",
+            Self::Hours24 => "24h",
+        }
+    }
+
+    pub(crate) fn duration(self) -> Duration {
+        let minutes = match self {
+            Self::Minutes15 => 15,
+            Self::Hour1 => 60,
+            Self::Hours6 => 6 * 60,
+            Self::Hours24 => 24 * 60,
+        };
+        Duration::from_secs(minutes * 60)
+    }
+
+    /// The short ranges read the fine ticks; the long ones read the coarse points.
+    pub(crate) fn resolution(self) -> Resolution {
+        match self {
+            Self::Minutes15 | Self::Hour1 => Resolution::Fine,
+            Self::Hours6 | Self::Hours24 => Resolution::Coarse,
+        }
+    }
+}
+
+/// Which part of the subject the charts show.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MonitorScope {
+    Total,
+    /// A container of a pod, or a pod of a workload.
+    Part(String),
+}
+
+/// What the cached data was built for. The cache is reused while the key is the same, so a hover
+/// repaint or an unrelated notify never rebuilds the series.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MonitorKey {
+    pub(crate) subject: ResourceKey,
+    pub(crate) container: Option<String>,
+    /// The feed's `tick_count()`.
+    pub(crate) ticks: u64,
+    pub(crate) scope: MonitorScope,
+    pub(crate) range: MonitorRange,
+}
+
+pub(crate) struct MonitorCache {
+    pub(crate) key: MonitorKey,
+    pub(crate) data: MonitorData,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ContainerTab {
     Info,
     Env,
     Mounts,
+    Monitor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DrawerTab {
     Overview,
     Containers,
+    Monitor,
     Yaml,
     Events,
 }
@@ -91,12 +182,14 @@ pub(crate) fn drawer_tabs(key: &ResourceKey) -> &'static [DrawerTab] {
         ResourceKey::Pod { .. } if has_yaml => &[
             DrawerTab::Overview,
             DrawerTab::Containers,
+            DrawerTab::Monitor,
             DrawerTab::Yaml,
             DrawerTab::Events,
         ],
         ResourceKey::Pod { .. } => &[
             DrawerTab::Overview,
             DrawerTab::Containers,
+            DrawerTab::Monitor,
             DrawerTab::Events,
         ],
         ResourceKey::Kind {
@@ -107,12 +200,26 @@ pub(crate) fn drawer_tabs(key: &ResourceKey) -> &'static [DrawerTab] {
             kind: ResourceKind::Events,
             ..
         } => &[DrawerTab::Overview],
-        ResourceKey::Node { .. } | ResourceKey::Kind { .. } if has_yaml => {
+        ResourceKey::Node { .. } if has_yaml => &[
+            DrawerTab::Overview,
+            DrawerTab::Monitor,
+            DrawerTab::Yaml,
+            DrawerTab::Events,
+        ],
+        ResourceKey::Node { .. } => &[DrawerTab::Overview, DrawerTab::Monitor, DrawerTab::Events],
+        ResourceKey::Kind { kind, .. } if kind.has_monitor() && has_yaml => &[
+            DrawerTab::Overview,
+            DrawerTab::Monitor,
+            DrawerTab::Yaml,
+            DrawerTab::Events,
+        ],
+        ResourceKey::Kind { kind, .. } if kind.has_monitor() => {
+            &[DrawerTab::Overview, DrawerTab::Monitor, DrawerTab::Events]
+        }
+        ResourceKey::Kind { .. } if has_yaml => {
             &[DrawerTab::Overview, DrawerTab::Yaml, DrawerTab::Events]
         }
-        ResourceKey::Node { .. } | ResourceKey::Kind { .. } => {
-            &[DrawerTab::Overview, DrawerTab::Events]
-        }
+        ResourceKey::Kind { .. } => &[DrawerTab::Overview, DrawerTab::Events],
     }
 }
 
@@ -137,6 +244,7 @@ pub(crate) fn tab_titles(
             let title = match tab {
                 DrawerTab::Overview => "Overview".to_owned(),
                 DrawerTab::Containers => format!("Containers {containers}"),
+                DrawerTab::Monitor => "Monitor".to_owned(),
                 DrawerTab::Yaml => "YAML".to_owned(),
                 DrawerTab::Events => events_title(events),
             };
@@ -513,17 +621,28 @@ mod tests {
             name: "x".to_owned(),
         };
         let with_events = [DrawerTab::Overview, DrawerTab::Yaml, DrawerTab::Events];
+        let with_monitor = [
+            DrawerTab::Overview,
+            DrawerTab::Monitor,
+            DrawerTab::Yaml,
+            DrawerTab::Events,
+        ];
         assert_eq!(
             drawer_tabs(&pod),
             [
                 DrawerTab::Overview,
                 DrawerTab::Containers,
+                DrawerTab::Monitor,
                 DrawerTab::Yaml,
                 DrawerTab::Events
             ]
         );
-        assert_eq!(drawer_tabs(&node), with_events);
-        assert_eq!(drawer_tabs(&kind(ResourceKind::Deployments)), with_events);
+        assert_eq!(drawer_tabs(&node), with_monitor);
+        assert_eq!(drawer_tabs(&kind(ResourceKind::Deployments)), with_monitor);
+        assert_eq!(drawer_tabs(&kind(ResourceKind::Jobs)), with_monitor);
+        // ConfigMaps and CronJobs have no pods to monitor.
+        assert_eq!(drawer_tabs(&kind(ResourceKind::ConfigMaps)), with_events);
+        assert_eq!(drawer_tabs(&kind(ResourceKind::CronJobs)), with_events);
         assert_eq!(
             drawer_tabs(&kind(ResourceKind::Events)),
             [DrawerTab::Overview, DrawerTab::Yaml]
@@ -565,6 +684,32 @@ mod tests {
             .map(|(_, title)| title.to_string())
             .collect();
         assert_eq!(titles, ["Overview", "Containers 3", "YAML", "Events"]);
+    }
+
+    #[test]
+    fn long_ranges_read_coarse_points() {
+        assert_eq!(MonitorRange::Minutes15.resolution(), Resolution::Fine);
+        assert_eq!(MonitorRange::Hour1.resolution(), Resolution::Fine);
+        assert_eq!(MonitorRange::Hours6.resolution(), Resolution::Coarse);
+        assert_eq!(MonitorRange::Hours24.resolution(), Resolution::Coarse);
+        assert_eq!(
+            MonitorRange::Hours24.duration(),
+            Duration::from_secs(86_400)
+        );
+        let labels: Vec<_> = MonitorRange::ALL
+            .iter()
+            .map(|range| range.label())
+            .collect();
+        assert_eq!(labels, ["15m", "1h", "6h", "24h"]);
+    }
+
+    #[test]
+    fn monitor_state_starts_on_the_short_range_without_a_cache() {
+        let state = DrawerState::new();
+        assert_eq!(state.monitor.range, MonitorRange::Minutes15);
+        assert_eq!(state.monitor.scope, MonitorScope::Total);
+        assert!(!state.monitor.is_table);
+        assert!(state.monitor.cache.is_none());
     }
 
     #[test]

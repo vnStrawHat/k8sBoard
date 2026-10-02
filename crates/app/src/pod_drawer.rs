@@ -15,7 +15,7 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
-use crate::cluster_session::{ClusterSession, LiveList};
+use crate::cluster_session::{ClusterSession, LiveCluster, LiveList};
 use crate::container_detail::{ContainerDetailInput, container_detail};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row,
@@ -23,7 +23,7 @@ use crate::drawer::{
     section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
 };
 use crate::log_dock::LogDock;
-use crate::metrics_history::PodUsageHistory;
+use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
 use crate::resource_actions::{pod_menu, port_forward_reason};
@@ -65,13 +65,14 @@ pub(crate) fn pod_drawer(
                 .live()
                 .map(|live| port_forward_reason(&live.access))
                 .unwrap_or_default(),
-            session
-                .read(cx)
-                .live()
-                .map(|live| &live.metrics.pods.history),
+            session.read(cx).live(),
             now,
             cx,
         )),
+        DrawerTab::Monitor => DrawerBody::Scrolling(match session.read(cx).live() {
+            Some(live) => monitor_tab(&MonitorView::of_pods(state, live), cx),
+            None => div().into_any_element(),
+        }),
         DrawerTab::Yaml => yaml_body(state),
         DrawerTab::Events => DrawerBody::Scrolling(recent_events(events, cx)),
     };
@@ -414,16 +415,9 @@ pub(crate) fn container_usage_row(
     })
 }
 
-fn containers_tab(
-    pod: &PodSummary,
-    state: &DrawerState,
-    events: Option<&[EventSummary]>,
-    forward_reason: &SharedString,
-    history: Option<&PodUsageHistory>,
-    now: jiff::Timestamp,
-    cx: &Context<AppShell>,
-) -> AnyElement {
-    let selected = state
+/// The index of the container the Containers tab shows: the clicked one, else the default.
+pub(crate) fn selected_container_index(pod: &PodSummary, state: &DrawerState) -> Option<usize> {
+    state
         .selected_container
         .as_deref()
         .and_then(|name| {
@@ -431,8 +425,19 @@ fn containers_tab(
                 .iter()
                 .position(|container| container.name == name)
         })
-        .or_else(|| default_container(&pod.containers));
-    let Some(selected) = selected else {
+        .or_else(|| default_container(&pod.containers))
+}
+
+fn containers_tab(
+    pod: &PodSummary,
+    state: &DrawerState,
+    events: Option<&[EventSummary]>,
+    forward_reason: &SharedString,
+    live: Option<&LiveCluster>,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let Some(selected) = selected_container_index(pod, state) else {
         return absent_text(cx).into_any_element();
     };
     let list = container_list(&pod.containers, selected, cx);
@@ -443,9 +448,14 @@ fn containers_tab(
             tab: state.container_tab,
             events,
             forward_reason,
-            usage: history.and_then(|history| {
-                history.latest_container(&pod.namespace, &pod.name, &pod.containers[selected].name)
+            usage: live.and_then(|live| {
+                let name = &pod.containers[selected].name;
+                live.metrics
+                    .pods
+                    .history
+                    .latest_container(&pod.namespace, &pod.name, name)
             }),
+            monitor: live.map(|live| MonitorView::of_container(state, live)),
             now,
         },
         cx,

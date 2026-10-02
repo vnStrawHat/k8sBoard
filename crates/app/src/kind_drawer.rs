@@ -19,6 +19,7 @@ use crate::drawer::{
     section_title, shown_tab, tab_titles, truncated_text, wide_detail_row, yaml_body,
 };
 use crate::kind_row::{DetailRow, KindCell, KindRow};
+use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
 use crate::resource_actions::{kind_menu, port_forward_reason};
@@ -49,6 +50,14 @@ pub(crate) fn kind_drawer(
     let shown = shown_tab(tabs, state.tab);
     let body = match shown {
         DrawerTab::Events => DrawerBody::Scrolling(recent_events(events, cx)),
+        DrawerTab::Monitor => DrawerBody::Scrolling(match row.related_pods {
+            Some(_) => monitor_tab(&MonitorView::of_pods(state, live), cx),
+            None => div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("No pods to monitor")
+                .into_any_element(),
+        }),
         DrawerTab::Yaml => yaml_body(state),
         DrawerTab::Overview | DrawerTab::Containers => {
             DrawerBody::Scrolling(overview(kind, row, live, now, cx))

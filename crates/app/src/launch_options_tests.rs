@@ -277,3 +277,32 @@ fn selected_screens_tick_the_first_rows() {
     assert_eq!(LaunchScreen::NodesSelected.screen(), Screen::Nodes);
     assert!(!LaunchScreen::Pods.checks_rows());
 }
+
+#[test]
+fn monitor_screens_parse() {
+    let screen = |name: &str| run_options(&["--kubeconfig", "k", "--screen", name]).screen;
+    assert_eq!(
+        screen("pod-monitor"),
+        LaunchScreen::PodDrawer(DrawerTab::Monitor)
+    );
+    assert_eq!(
+        screen("node-monitor"),
+        LaunchScreen::NodeDrawer(DrawerTab::Monitor)
+    );
+    assert_eq!(
+        screen("deployments-monitor"),
+        LaunchScreen::KindDrawer(ResourceKind::Deployments, DrawerTab::Monitor)
+    );
+    // They open expanded (W4c) and wait for two ticks of their feed.
+    assert!(screen("pod-monitor").opens_expanded());
+    assert_eq!(screen("pod-monitor").min_metrics_ticks(), 2);
+    assert_eq!(screen("pods").min_metrics_ticks(), 1);
+    assert!(!screen("pod-drawer").opens_expanded());
+    // Only the workloads that own pods have a Monitor tab.
+    for name in ["configmaps-monitor", "cronjobs-monitor", "nope-monitor"] {
+        assert!(
+            parse(&["--kubeconfig", "k", "--screen", name]).is_err(),
+            "{name}"
+        );
+    }
+}

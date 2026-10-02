@@ -6,7 +6,7 @@
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | Poll `metrics.k8s.io/v1beta1` PodMetrics and NodeMetrics every **15 s**, the first poll at once; keep each item's server `timestamp` | metrics-server scrapes kubelets every 15 s by default (`--metric-resolution`), so a 15 s poll lags by at most one scrape; W4c says "every 15s"; the timestamp exposes a stalled server ("stale · last sample …") |
+| 1 | Poll `metrics.k8s.io/v1beta1` PodMetrics and NodeMetrics every **15 s**, the first poll at once; keep each item's server `timestamp` | metrics-server scrapes kubelets every 15 s by default (`--metric-resolution`), so a 15 s poll lags by at most one scrape; W4c says "every 15s"; the timestamp exposes a stalled server: "stale · last sample …" shows when it has not advanced for 4 polls in a row (a tick count, so it holds for any clock or range) |
 | 2 | Sampling is **always on** while the session is live and allowed, not only while a Monitor tab shows | history must exist when a drawer opens (W4c: "while the app is open"); two LISTs per 15 s fit the budget below |
 | 3 | Pod metrics follow the pods watch scope (All, Named, 0009 Several: one list per allowed namespace); node metrics are cluster-wide | same RBAC and size as the pods list; a scope change restarts the pod poll |
 | 4 | Polls reuse `WatchUpdate<T>`: `Snapshot` = one full sample, `Failed` = retrying | same meaning as a watch update; `subscribe` and `error_text` work unchanged |

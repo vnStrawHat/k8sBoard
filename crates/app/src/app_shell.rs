@@ -16,11 +16,12 @@ use gpui_kit::{
 
 use crate::FocusQuickFilter;
 #[cfg(feature = "screenshot")]
-use crate::cluster_metrics::is_metrics_settled;
-#[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
 use crate::cluster_session::{ClusterSession, FlowState, LiveCluster, error_text};
-use crate::drawer::{ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab};
+use crate::drawer::{
+    ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab, MonitorCache, MonitorKey,
+    MonitorRange, MonitorScope, MonitorState, drawer_tabs,
+};
 use crate::filter_bar::ToolkitState;
 use crate::kind_table::KindTableDelegate;
 use crate::launch_options::{
@@ -28,12 +29,16 @@ use crate::launch_options::{
 };
 use crate::log_dock::{DockMode, LogDock};
 use crate::log_tab::LogTarget;
+use crate::monitor_data::{MonitorInput, MonitorSubject, monitor_data};
 use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
 use crate::navigation::{NavigationCounts, sidebar};
 use crate::node_table::NodeTableDelegate;
 use crate::object_events::{SubjectChange, event_subject, subject_change};
+use crate::pod_drawer::selected_container_index;
 use crate::pod_table::PodTableDelegate;
 use crate::resource_kind::ResourceKind;
+#[cfg(feature = "screenshot")]
+use crate::screenshot::FeedProgress;
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{SettleInput, TargetState, is_drawer_ready};
 use crate::screenshot::{pick_drawer_pod, pick_logs_pod};
@@ -205,8 +210,8 @@ impl AppShell {
 
         let mut drawer = DrawerState::new();
         drawer.tab = options.screen.drawer_tab().unwrap_or(DrawerTab::Overview);
-        // W4b shows the Containers tab expanded.
-        drawer.is_expanded = options.screen == LaunchScreen::PodDrawer(DrawerTab::Containers);
+        // W4b shows the Containers tab expanded, and W4c the Monitor tab.
+        drawer.is_expanded = options.screen.opens_expanded();
         let launch_filter = options.filter;
         let mut shell = Self {
             kubeconfig,
@@ -417,6 +422,7 @@ impl AppShell {
         self.screen = screen;
         self.drawer.tab = DrawerTab::Overview;
         self.drawer.container_tab = ContainerTab::Info;
+        self.drawer.monitor = MonitorState::new();
         if let Some(session) = &self.session {
             session.update(cx, |session, cx| {
                 session.set_explorer_kind(screen.kind(), cx)
@@ -483,6 +489,127 @@ impl AppShell {
     pub(crate) fn set_container_tab(&mut self, tab: ContainerTab, cx: &mut Context<Self>) {
         self.drawer.container_tab = tab;
         cx.notify();
+    }
+
+    pub(crate) fn set_monitor_range(&mut self, range: MonitorRange, cx: &mut Context<Self>) {
+        self.drawer.monitor.range = range;
+        cx.notify();
+    }
+
+    pub(crate) fn set_monitor_scope(&mut self, scope: MonitorScope, cx: &mut Context<Self>) {
+        self.drawer.monitor.scope = scope;
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_monitor_table(&mut self, cx: &mut Context<Self>) {
+        self.drawer.monitor.is_table = !self.drawer.monitor.is_table;
+        cx.notify();
+    }
+
+    /// Keeps `drawer.monitor.cache` for what the open drawer shows, and frees it while no Monitor
+    /// is shown. It runs inside `render`, so it only assigns and never notifies. The series are
+    /// rebuilt only when the key changes (a new tick, range, scope, or subject), so a hover repaint
+    /// or an unrelated notify reuses them.
+    fn refresh_monitor_cache(&mut self, cx: &App) {
+        let is_tab = self.drawer.tab == DrawerTab::Monitor;
+        let is_container_tab = self.drawer.tab == DrawerTab::Containers
+            && self.drawer.container_tab == ContainerTab::Monitor;
+        let shows_monitor = self.selected.as_ref().is_some_and(|key| {
+            is_container_tab || (is_tab && drawer_tabs(key).contains(&DrawerTab::Monitor))
+        });
+        if !shows_monitor {
+            self.drawer.monitor.cache = None;
+            return;
+        }
+        let (Some(subject), Some(live)) = (self.selected.clone(), self.live(cx)) else {
+            return;
+        };
+        let container = self.monitor_container(&subject, live, is_container_tab);
+        let ticks = match subject {
+            ResourceKey::Node { .. } => live.metrics.nodes.history.tick_count(),
+            ResourceKey::Pod { .. } | ResourceKey::Kind { .. } => {
+                live.metrics.pods.history.tick_count()
+            }
+        };
+        let key = MonitorKey {
+            subject,
+            container,
+            ticks,
+            scope: self.drawer.monitor.scope.clone(),
+            range: self.drawer.monitor.range,
+        };
+        if self
+            .drawer
+            .monitor
+            .cache
+            .as_ref()
+            .is_some_and(|cache| cache.key == key)
+        {
+            return;
+        }
+        let Some(monitor_subject) =
+            Self::monitor_subject(&key.subject, key.container.as_deref(), live)
+        else {
+            return;
+        };
+        let data = monitor_data(&MonitorInput {
+            subject: monitor_subject,
+            scope: &key.scope,
+            range: key.range,
+            pods: live.pods.items(),
+            pod_history: &live.metrics.pods.history,
+            node_history: &live.metrics.nodes.history,
+            is_all_namespaces: live.scope == NamespaceScope::All,
+        });
+        self.drawer.monitor.cache = Some(MonitorCache { key, data });
+    }
+
+    /// The container whose Monitor sub-tab is shown (`is_shown`), else `None`.
+    fn monitor_container(
+        &self,
+        subject: &ResourceKey,
+        live: &LiveCluster,
+        is_shown: bool,
+    ) -> Option<String> {
+        if !is_shown {
+            return None;
+        }
+        let pod = live.pods.items().iter().find(|pod| subject.is_pod(pod))?;
+        let index = selected_container_index(pod, &self.drawer)?;
+        Some(pod.containers[index].name.clone())
+    }
+
+    /// The subject of the open drawer, read from the live lists. `container` is the container
+    /// sub-tab's container; `None` for a pod's own Monitor tab.
+    fn monitor_subject<'a>(
+        key: &ResourceKey,
+        container: Option<&'a str>,
+        live: &'a LiveCluster,
+    ) -> Option<MonitorSubject<'a>> {
+        match key {
+            ResourceKey::Pod { .. } => {
+                let pod = live.pods.items().iter().find(|pod| key.is_pod(pod))?;
+                Some(match container {
+                    Some(container) => MonitorSubject::Container { pod, container },
+                    None => MonitorSubject::Pod(pod),
+                })
+            }
+            ResourceKey::Node { .. } => live
+                .nodes
+                .items()
+                .iter()
+                .find(|node| key.is_node(node))
+                .map(MonitorSubject::Node),
+            ResourceKey::Kind { kind, .. } => {
+                let row = live
+                    .kind_list(*kind)?
+                    .list
+                    .items()
+                    .iter()
+                    .find(|row| key.is_row(*kind, row))?;
+                row.related_pods.as_ref().map(MonitorSubject::Workload)
+            }
+        }
     }
 
     pub(crate) fn select_container(&mut self, name: String, cx: &mut Context<Self>) {
@@ -552,6 +679,8 @@ impl AppShell {
         }
         self.selected = key;
         self.drawer.selected_container = None;
+        // A part of one subject (a container, a pod) means nothing for the next.
+        self.drawer.monitor.scope = MonitorScope::Total;
         self.follow_event_subject(cx);
         cx.notify();
         true
@@ -971,20 +1100,18 @@ impl AppShell {
                 is_content_pending,
             ),
             is_log_pending,
-            is_pod_metrics_pending: self.live(cx).is_some_and(|live| {
-                !is_metrics_settled(
-                    &live.metrics.pods.status,
-                    live.metrics.pods.history.tick_count(),
-                    1,
-                )
-            }),
-            is_node_metrics_pending: self.live(cx).is_some_and(|live| {
-                !is_metrics_settled(
-                    &live.metrics.nodes.status,
-                    live.metrics.nodes.history.tick_count(),
-                    1,
-                )
-            }),
+            pod_metrics: self
+                .live(cx)
+                .map_or_else(FeedProgress::unavailable, |live| FeedProgress {
+                    status: live.metrics.pods.status.clone(),
+                    ticks: live.metrics.pods.history.tick_count(),
+                }),
+            node_metrics: self
+                .live(cx)
+                .map_or_else(FeedProgress::unavailable, |live| FeedProgress {
+                    status: live.metrics.nodes.status.clone(),
+                    ticks: live.metrics.nodes.history.tick_count(),
+                }),
         }
     }
 
@@ -1241,6 +1368,7 @@ impl AppShell {
 impl Render for AppShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.fit_table_widths(window, cx);
+        self.refresh_monitor_cache(cx);
         self.open_pending_logs(window, cx);
         self.sync_yaml_view(window, cx);
         self.sync_quick_filter(window, cx);
