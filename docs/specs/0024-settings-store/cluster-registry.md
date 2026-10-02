@@ -61,6 +61,7 @@ pub(crate) struct ClusterProfile { pub(crate) display_name: String,
     pub(crate) environment: Environment, pub(crate) default_namespace: Option<String> }
 impl ClusterRef { pub(crate) fn of(summary: &ContextSummary) -> Self; } // clones path and name
 impl ClusterRegistry {
+    // `entry` and `entry_mut` land in step 5 (first user: "Set as default namespace"); step 3 matches through a private `entry_of(summary)`.
     pub(crate) fn entry(&self, cluster: &ClusterRef) -> Option<&ClusterEntry>;
     pub(crate) fn entry_mut(&mut self, cluster: &ClusterRef) -> &mut ClusterEntry; // appends when missing
     pub(crate) fn profile(&self, summary: &ContextSummary) -> ClusterProfile;
@@ -84,7 +85,7 @@ pub(crate) fn start_choice(requested: Option<&str>, last_used: Option<&ClusterRe
     contexts: &[&ContextSummary]) -> StartChoice;
 ```
 
-`RequestedMissing` → the first loaded kubeconfig's `resolve_context(Some(name))` error (as today). `CurrentContext` → its `resolve_context(None)`. A stale `last_used` is ignored silently. With `--kubeconfig X` and no `--context`, a `last_used` in X wins over X's `current-context` (AC 9).
+`RequestedMissing` → the first loaded kubeconfig's `resolve_context(Some(name))` error (as today). `CurrentContext` → its `resolve_context(None)`. A stale `last_used` is ignored silently. With `--kubeconfig X` and no `--context`, a `last_used` in X wins over X's `current-context`, and a `last_used` from any other file is ignored: `launch_last_used(last_used, explicit_files)` filters it before `start_choice` (AC 9).
 
 ## Session start and switch (`app_shell.rs`, steps 3 and 5)
 

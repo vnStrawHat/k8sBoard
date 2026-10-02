@@ -1335,8 +1335,13 @@ async fn run(args: &Args) -> io::Result<bool> {
         all_succeeded: true,
     };
 
-    let kubeconfig = match Kubeconfig::load(&args.kubeconfig) {
-        Ok(kubeconfig) => kubeconfig,
+    let kubeconfig = match Kubeconfig::load(std::slice::from_ref(&args.kubeconfig)) {
+        Ok(loaded) => {
+            for error in &loaded.skipped {
+                print_error_chain("skipped kubeconfig: ", error);
+            }
+            loaded.kubeconfig
+        }
         Err(error) => {
             print_error_chain("", &error);
             return Ok(false);
@@ -1682,7 +1687,9 @@ impl Probe {
     }
 
     fn print_kubeconfig(&mut self, kubeconfig: &Kubeconfig) -> io::Result<()> {
-        writeln!(self.out, "kubeconfig: {}", kubeconfig.path().display())?;
+        for source in kubeconfig.sources() {
+            writeln!(self.out, "kubeconfig: {}", source.display())?;
+        }
         let current = kubeconfig.current_context();
         for context in kubeconfig.contexts() {
             let marker = if current == Some(context.name.as_str()) {

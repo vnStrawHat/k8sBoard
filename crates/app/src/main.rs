@@ -9,6 +9,7 @@ mod batch_rows;
 mod certificate_expiry;
 mod cluster_capacity;
 mod cluster_metrics;
+mod cluster_registry;
 mod cluster_runtime;
 mod cluster_session;
 mod config_map_rows;
@@ -17,6 +18,7 @@ mod crd_rows;
 mod custom_kind;
 mod custom_rows;
 mod drawer;
+mod environment;
 mod event_rows;
 mod filter_bar;
 mod helm_release_view;
@@ -81,6 +83,8 @@ mod screenshot;
 mod secret_clipboard;
 mod secret_rows;
 mod secret_values;
+mod settings;
+mod settings_store;
 mod status_bar;
 mod status_tone;
 mod storage_rows;
@@ -106,7 +110,11 @@ use gpui_kit::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, si
 
 use crate::app_shell::AppShell;
 use crate::cluster_runtime::ClusterRuntime;
-use crate::launch_options::{LaunchOptions, LaunchRequest, ThemeChoice, USAGE};
+use crate::launch_options::{LaunchOptions, LaunchRequest, USAGE};
+use crate::settings::{AppSettings, ThemePreference};
+use crate::settings_store::{
+    CONFIG_DIR_ENV, LoadedSettings, WriteMode, config_dir, default_config_dir, load_settings,
+};
 
 gpui_kit::actions!(k8sboard, [FocusQuickFilter]);
 
@@ -122,7 +130,7 @@ fn main() -> ExitCode {
         .init();
 
     let options = match launch_options::parse_launch_options(std::env::args().skip(1)) {
-        Ok(LaunchRequest::Run(options)) => options,
+        Ok(LaunchRequest::Run(options)) => *options,
         Ok(LaunchRequest::Help) => {
             eprint!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -153,6 +161,8 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
         .enable_all()
         .build()?;
     let handle = runtime.handle().clone();
+    // A small local file, read before the first frame so the saved theme applies at once.
+    let loaded_settings = load_launch_settings(&options);
 
     #[cfg(feature = "screenshot")]
     let outcome = std::rc::Rc::new(std::cell::Cell::new(screenshot::ScreenshotOutcome::Failed));
@@ -163,7 +173,8 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            apply_theme(options.theme, cx);
+            AppSettings::install(loaded_settings, cx);
+            apply_theme(options.theme.unwrap_or(AppSettings::get(cx).theme), cx);
             cx.set_global(ClusterRuntime::new(handle));
             app_shell::bind_keys(cx);
             cx.on_window_closed(|cx, _| {
@@ -217,11 +228,28 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn apply_theme(choice: Option<ThemeChoice>, cx: &mut App) {
-    match choice {
-        Some(ThemeChoice::Light) => Theme::change(ThemeMode::Light, None, cx),
-        Some(ThemeChoice::Dark) => Theme::change(ThemeMode::Dark, None, cx),
-        None => Theme::sync_system_appearance(None, cx),
+fn load_launch_settings(options: &LaunchOptions) -> LoadedSettings {
+    let dir = config_dir(
+        options.config_dir.clone(),
+        std::env::var_os(CONFIG_DIR_ENV),
+        default_config_dir(),
+    );
+    let Some(dir) = dir else {
+        return LoadedSettings::without_config_dir();
+    };
+    let mut loaded = load_settings(&dir);
+    // A screenshot run reads the seeded file but never changes it, so shots stay repeatable.
+    if options.screenshot.is_some() {
+        loaded.writes = WriteMode::Disabled;
+    }
+    loaded
+}
+
+fn apply_theme(preference: ThemePreference, cx: &mut App) {
+    match preference {
+        ThemePreference::Light => Theme::change(ThemeMode::Light, None, cx),
+        ThemePreference::Dark => Theme::change(ThemeMode::Dark, None, cx),
+        ThemePreference::System => Theme::sync_system_appearance(None, cx),
     }
     // The kit highlights the selected row with a faint tint; the theme's selection colour
     // makes the open drawer's row easy to find in both modes.

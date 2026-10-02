@@ -1,12 +1,14 @@
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use cluster::NamespaceScope;
+use cluster::{Kubeconfig, KubeconfigError, NamespaceScope};
 
 use crate::app_shell::Screen;
 use crate::drawer::DrawerTab;
 use crate::namespace_picker::MAX_NAMESPACES;
 use crate::resource_kind::ResourceKind;
+use crate::settings::ThemePreference;
 
 pub(crate) const USAGE: &str = "\
 Usage: k8sboard [options]
@@ -18,7 +20,9 @@ Options:
   --filter <text>        quick filter of the start screen; label:k=v,k2!=v2 becomes label chips
   --select <name>       with a drawer screen, open the row named <name> or <namespace>/<name>
                          (default: the first row)
-  --theme light|dark     colour theme (default: follow the system)
+  --theme system|light|dark
+                         colour theme (default: the saved theme, else follow the system)
+  --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
   --screen overview|pods|nodes|issues|issues-drawer|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
@@ -258,12 +262,6 @@ impl LaunchScreen {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ThemeChoice {
-    Light,
-    Dark,
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LaunchOptions {
     pub(crate) kubeconfig: Option<PathBuf>,
@@ -273,14 +271,16 @@ pub(crate) struct LaunchOptions {
     pub(crate) filter: Option<String>,
     /// The row a drawer screen opens: `name` or `namespace/name`; the first row without it.
     pub(crate) select: Option<String>,
-    pub(crate) theme: Option<ThemeChoice>,
+    pub(crate) theme: Option<ThemePreference>,
+    /// `--config-dir`: where `settings.json` lives; the environment or the OS default without it.
+    pub(crate) config_dir: Option<PathBuf>,
     pub(crate) screen: LaunchScreen,
     pub(crate) screenshot: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum LaunchRequest {
-    Run(LaunchOptions),
+    Run(Box<LaunchOptions>),
     Help,
 }
 
@@ -297,6 +297,7 @@ pub(crate) fn parse_launch_options(
         filter: None,
         select: None,
         theme: None,
+        config_dir: None,
         screen: LaunchScreen::Pods,
         screenshot: None,
     };
@@ -315,6 +316,7 @@ pub(crate) fn parse_launch_options(
             "--filter" => options.filter = Some(value()?),
             "--select" => options.select = Some(value()?),
             "--theme" => options.theme = Some(parse_theme(&value()?)?),
+            "--config-dir" => options.config_dir = Some(PathBuf::from(value()?)),
             "--screen" => {
                 let text = value()?;
                 if let Some(custom) = parse_custom(&text) {
@@ -328,7 +330,7 @@ pub(crate) fn parse_launch_options(
             _ => return Err(format!("unknown flag '{flag}'")),
         }
     }
-    Ok(LaunchRequest::Run(options))
+    Ok(LaunchRequest::Run(Box::new(options)))
 }
 
 /// `custom:<crd-name>` with an optional `-drawer`, `-events`, or `-yaml` suffix, which is stripped
@@ -366,37 +368,101 @@ fn parse_namespaces(text: &str) -> Result<NamespaceScope, String> {
     }
 }
 
-fn parse_theme(text: &str) -> Result<ThemeChoice, String> {
+fn parse_theme(text: &str) -> Result<ThemePreference, String> {
     match text {
-        "light" => Ok(ThemeChoice::Light),
-        "dark" => Ok(ThemeChoice::Dark),
+        "system" => Ok(ThemePreference::System),
+        "light" => Ok(ThemePreference::Light),
+        "dark" => Ok(ThemePreference::Dark),
         _ => Err(format!("invalid value '{text}' for --theme")),
     }
 }
 
-/// `--kubeconfig`, else the first entry of `KUBECONFIG`, else `<home>/.kube/config`.
-/// `None` means no kubeconfig could be located at all.
-pub(crate) fn kubeconfig_path(
+/// The kubectl chain: `--kubeconfig`, else every non-empty `KUBECONFIG` entry, else
+/// `<home>/.kube/config`. Paths are made absolute; empty means no kubeconfig could be located.
+pub(crate) fn kubeconfig_chain(
     flag: Option<PathBuf>,
     kubeconfig_env: Option<OsString>,
     home: Option<PathBuf>,
-) -> Option<PathBuf> {
-    if flag.is_some() {
-        return flag;
-    }
-    let first_env_entry = kubeconfig_env
-        .as_deref()
-        .and_then(|value| non_empty_entries(value).next());
-    first_env_entry.or_else(|| home.map(|home| home.join(".kube").join("config")))
+) -> Vec<PathBuf> {
+    let chain: Vec<PathBuf> = match (flag, kubeconfig_env) {
+        (Some(flag), _) => vec![flag],
+        (None, Some(value)) => non_empty_entries(&value).collect(),
+        (None, None) => Vec::new(),
+    };
+    let chain = if chain.is_empty() {
+        home.map(|home| home.join(".kube").join("config"))
+            .into_iter()
+            .collect()
+    } else {
+        chain
+    };
+    chain.into_iter().map(absolute).collect()
 }
 
-/// Merging kubeconfigs is not supported, so the user is told when entries are ignored.
-pub(crate) fn has_ignored_kubeconfig_entries(kubeconfig_env: Option<&OsStr>) -> bool {
-    kubeconfig_env.is_some_and(|value| non_empty_entries(value).nth(1).is_some())
+/// The registry files to load on their own: absolute, in registry order, without chain members
+/// and without duplicates.
+pub(crate) fn standalone_files(registered: &[PathBuf], chain: &[PathBuf]) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for file in registered.iter().cloned().map(absolute) {
+        if !chain.contains(&file) && !files.contains(&file) {
+            files.push(file);
+        }
+    }
+    files
+}
+
+/// No I/O and no symlink resolution, so the path is a stable registry key.
+fn absolute(path: PathBuf) -> PathBuf {
+    std::path::absolute(&path).unwrap_or(path)
 }
 
 fn non_empty_entries(value: &OsStr) -> impl Iterator<Item = PathBuf> {
     std::env::split_paths(value).filter(|entry| !entry.as_os_str().is_empty())
+}
+
+/// The kubeconfigs that loaded (the launch chain first) and one notice per file that did not.
+pub(crate) struct LoadedKubeconfigs {
+    pub(crate) kubeconfigs: Vec<Arc<Kubeconfig>>,
+    pub(crate) notices: Vec<String>,
+}
+
+/// Loads the launch `chain` merged, then every `standalone` file on its own. Blocking file I/O.
+/// `Err` only when nothing loads.
+pub(crate) fn load_kubeconfigs(
+    chain: &[PathBuf],
+    standalone: &[PathBuf],
+) -> Result<LoadedKubeconfigs, KubeconfigError> {
+    let mut kubeconfigs = Vec::new();
+    let mut errors = Vec::new();
+    if !chain.is_empty() {
+        match Kubeconfig::load(chain) {
+            Ok(loaded) => {
+                kubeconfigs.push(Arc::new(loaded.kubeconfig));
+                errors.extend(loaded.skipped);
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    for file in standalone {
+        match Kubeconfig::load(std::slice::from_ref(file)) {
+            Ok(loaded) => kubeconfigs.push(Arc::new(loaded.kubeconfig)),
+            Err(error) => errors.push(error),
+        }
+    }
+    if kubeconfigs.is_empty() {
+        return Err(errors
+            .into_iter()
+            .next()
+            .unwrap_or(KubeconfigError::NoFiles));
+    }
+    let notices = errors
+        .iter()
+        .map(|error| format!("Skipped kubeconfig: {error}"))
+        .collect();
+    Ok(LoadedKubeconfigs {
+        kubeconfigs,
+        notices,
+    })
 }
 
 #[cfg(test)]

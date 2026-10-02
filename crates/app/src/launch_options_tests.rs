@@ -1,6 +1,7 @@
 use super::*;
 use crate::drawer::DrawerTab;
 use crate::resource_kind::ResourceKind;
+use crate::settings::ThemePreference;
 
 fn parse(args: &[&str]) -> Result<LaunchRequest, String> {
     parse_launch_options(args.iter().map(|arg| (*arg).to_owned()))
@@ -8,7 +9,7 @@ fn parse(args: &[&str]) -> Result<LaunchRequest, String> {
 
 fn run_options(args: &[&str]) -> LaunchOptions {
     match parse(args) {
-        Ok(LaunchRequest::Run(options)) => options,
+        Ok(LaunchRequest::Run(options)) => *options,
         other => panic!("expected run options, got {other:?}"),
     }
 }
@@ -28,6 +29,8 @@ fn parses_all_flags() {
         "team-a/api",
         "--theme",
         "dark",
+        "--config-dir",
+        "cfg",
         "--screen",
         "pod-containers",
         "--screenshot",
@@ -41,7 +44,8 @@ fn parses_all_flags() {
             namespace: Some(NamespaceScope::Named("team-a".to_owned())),
             filter: Some("label:app=api".to_owned()),
             select: Some("team-a/api".to_owned()),
-            theme: Some(ThemeChoice::Dark),
+            theme: Some(ThemePreference::Dark),
+            config_dir: Some(PathBuf::from("cfg")),
             screen: LaunchScreen::PodDrawer(DrawerTab::Containers),
             screenshot: Some(PathBuf::from("out.png")),
         }
@@ -89,39 +93,54 @@ fn join(entries: &[&str]) -> OsString {
     std::env::join_paths(entries).expect("joinable paths")
 }
 
+fn absolute(path: &str) -> PathBuf {
+    std::path::absolute(path).expect("absolute path")
+}
+
 #[test]
-fn kubeconfig_flag_wins_over_env_and_home() {
-    let path = kubeconfig_path(
+fn kubeconfig_chain_flag_wins() {
+    let chain = kubeconfig_chain(
         Some(PathBuf::from("flag.yml")),
         Some(join(&["env.yml"])),
         Some(PathBuf::from("home")),
     );
-    assert_eq!(path, Some(PathBuf::from("flag.yml")));
+    assert_eq!(chain, [absolute("flag.yml")]);
 }
 
 #[test]
-fn kubeconfig_env_uses_first_entry() {
-    let env = join(&["first.yml", "second.yml"]);
-    assert!(has_ignored_kubeconfig_entries(Some(env.as_os_str())));
-    let path = kubeconfig_path(None, Some(env), Some(PathBuf::from("home")));
-    assert_eq!(path, Some(PathBuf::from("first.yml")));
-    assert!(!has_ignored_kubeconfig_entries(Some(
-        join(&["only.yml"]).as_os_str()
-    )));
+fn kubeconfig_chain_lists_every_env_entry() {
+    let env = join(&["first.yml", "", "second.yml"]);
+    let chain = kubeconfig_chain(None, Some(env), Some(PathBuf::from("home")));
+    assert_eq!(chain, [absolute("first.yml"), absolute("second.yml")]);
 }
 
 #[test]
-fn kubeconfig_falls_back_to_home_dot_kube_config() {
+fn kubeconfig_chain_falls_back_to_home() {
     let home = PathBuf::from("home");
-    let path = kubeconfig_path(None, None, Some(home.clone()));
-    assert_eq!(path, Some(home.join(".kube").join("config")));
-    let from_empty_env = kubeconfig_path(None, Some(OsString::new()), Some(home.clone()));
-    assert_eq!(from_empty_env, Some(home.join(".kube").join("config")));
+    let expected = [absolute("home/.kube/config")];
+    assert_eq!(kubeconfig_chain(None, None, Some(home.clone())), expected);
+    let from_empty_env = kubeconfig_chain(None, Some(OsString::new()), Some(home));
+    assert_eq!(from_empty_env, expected);
 }
 
 #[test]
-fn kubeconfig_none_when_nothing_available() {
-    assert_eq!(kubeconfig_path(None, None, None), None);
+fn kubeconfig_chain_is_empty_when_nothing_is_available() {
+    assert!(kubeconfig_chain(None, None, None).is_empty());
+}
+
+#[test]
+fn standalone_files_skip_chain_members_and_duplicates() {
+    let chain = [absolute("chain.yml")];
+    let registered = [
+        PathBuf::from("chain.yml"),
+        PathBuf::from("extra.yml"),
+        PathBuf::from("extra.yml"),
+        PathBuf::from("other.yml"),
+    ];
+    assert_eq!(
+        standalone_files(&registered, &chain),
+        [absolute("extra.yml"), absolute("other.yml")]
+    );
 }
 
 #[test]
@@ -481,9 +500,82 @@ fn parses_analysis_screens() {
 }
 
 #[test]
+fn config_dir_flag_is_parsed() {
+    let options = run_options(&["--config-dir", ".tmp/config"]);
+    assert_eq!(options.config_dir, Some(PathBuf::from(".tmp/config")));
+    assert_eq!(run_options(&[]).config_dir, None);
+}
+
+#[test]
+fn config_dir_flag_needs_a_value() {
+    assert!(parse(&["--config-dir"]).is_err());
+}
+
+#[test]
+fn theme_accepts_system() {
+    for (text, expected) in [
+        ("system", ThemePreference::System),
+        ("light", ThemePreference::Light),
+        ("dark", ThemePreference::Dark),
+    ] {
+        assert_eq!(run_options(&["--theme", text]).theme, Some(expected));
+    }
+}
+
+#[test]
 fn screen_overview_parses() {
     let overview = run_options(&["--screen", "overview"]).screen;
     assert_eq!(overview, LaunchScreen::Overview);
     assert_eq!(overview.screen(), Screen::Overview);
     assert!(!overview.has_drawer());
+}
+
+#[test]
+fn theme_rejects_unknown() {
+    let error = parse(&["--theme", "sepia"]).expect_err("unknown theme");
+    assert!(error.contains("--theme"), "{error}");
+}
+
+fn temp_kubeconfig(dir: &std::path::Path, name: &str, context: &str) -> PathBuf {
+    let text = format!(
+        "apiVersion: v1\nkind: Config\nclusters:\n  - name: c\n    cluster: {{ server: 'https://127.0.0.1:1' }}\ncontexts:\n  - name: {context}\n    context: {{ cluster: c }}\n"
+    );
+    let path = dir.join(name);
+    std::fs::write(&path, text).expect("write kubeconfig fixture");
+    path
+}
+
+#[test]
+fn load_keeps_good_files_and_notes_the_skipped_ones() {
+    let dir = std::env::temp_dir().join(format!("k8sboard-0024-load-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let chain = [
+        temp_kubeconfig(&dir, "a.yaml", "one"),
+        dir.join("missing.yaml"),
+    ];
+    let extra = [
+        temp_kubeconfig(&dir, "b.yaml", "two"),
+        dir.join("gone.yaml"),
+    ];
+    let loaded = load_kubeconfigs(&chain, &extra).expect("some files load");
+    assert_eq!(loaded.kubeconfigs.len(), 2);
+    assert_eq!(loaded.notices.len(), 2);
+    assert!(
+        loaded
+            .notices
+            .iter()
+            .all(|notice| notice.starts_with("Skipped kubeconfig: "))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn load_fails_when_nothing_loads() {
+    let missing = [PathBuf::from("definitely-missing-kubeconfig.yaml")];
+    assert!(load_kubeconfigs(&missing, &[]).is_err());
+    assert!(matches!(
+        load_kubeconfigs(&[], &[]),
+        Err(KubeconfigError::NoFiles)
+    ));
 }

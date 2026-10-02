@@ -48,7 +48,7 @@ Status: amended after the advisor review (M1–M3, S1–S7, N1–N6), HEAD `95aa
 - [ ] 6. `settings.json` never holds kubeconfig content: the serialized keys are exactly the allow-list in [settings-store.md](settings-store.md). `grep -rnE "(trace|debug|info|warn|error)!.*[?%] *(settings|loaded|entry|registry)" crates/app/src` finds nothing (no `Debug`/`Display` capture of settings values in tracing).
 - [ ] 7. `readonly@Monitor` with no registry entry shows an **STG** badge and an amber title-bar top border; with a seeded entry `"environment": "production"` it shows **PROD** and the danger-colored top border.
 - [ ] 8. The 0003 color-literal grep stays clean: env colors come from theme tokens only.
-- [ ] 9. Without `--context`, the app reopens the last-used cluster when it is still loaded; with `--kubeconfig X` and no `--context`, a `last_used` in X beats X's `current-context`. `--context`, `--namespace`, `--theme` still override.
+- [ ] 9. Without `--context`, the app reopens the last-used cluster when it is still loaded; with `--kubeconfig X` and no `--context`, a `last_used` in X beats X's `current-context`, and a `last_used` from another (registry) file never overrides an explicit `--kubeconfig`. `--context`, `--namespace`, `--theme` still override.
 - [ ] 10. A sort or hidden column set on a screen is restored on the next run (seeded-file screenshot + writer unit test).
 - [ ] 11. "Set as default namespace" on a Namespaces row stores the namespace for the active cluster; the next start or switch opens it.
 - [ ] 12. Every agent run of the app passes `--config-dir .tmp/config` (or a sub-folder); debug builds default to `<workspace>/.tmp/config` anyway (decision 4).

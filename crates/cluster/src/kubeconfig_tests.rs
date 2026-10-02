@@ -6,7 +6,7 @@ const FIXTURE: &str = include_str!("../tests/fixtures/kubeconfig.yaml");
 
 fn from_yaml(yaml: &str) -> Kubeconfig {
     let document = kube::config::Kubeconfig::from_yaml(yaml).expect("test YAML parses");
-    Kubeconfig::from_document(Path::new("fixture.yaml"), document)
+    Kubeconfig::from_document(vec!["fixture.yaml".into()], document, &HashMap::new())
 }
 
 fn fixture() -> Kubeconfig {
@@ -24,7 +24,7 @@ fn names(kubeconfig: &Kubeconfig) -> Vec<&str> {
 fn with_current_context(value: &str) -> Kubeconfig {
     let mut document = kube::config::Kubeconfig::from_yaml(FIXTURE).expect("fixture parses");
     document.current_context = Some(value.to_owned());
-    Kubeconfig::from_document(Path::new("fixture.yaml"), document)
+    Kubeconfig::from_document(vec!["fixture.yaml".into()], document, &HashMap::new())
 }
 
 #[test]
@@ -42,6 +42,7 @@ fn context_summary_carries_cluster_user_and_namespace() {
             cluster: "alpha".to_owned(),
             user: Some("alpha-user".to_owned()),
             namespace: Some("team-a".to_owned()),
+            source: PathBuf::from("fixture.yaml"),
         }
     );
     assert_eq!(kubeconfig.contexts()[1].user.as_deref(), Some("beta-user"));
@@ -180,19 +181,6 @@ fn parse_error_does_not_quote_file_content() {
 }
 
 #[test]
-fn load_reports_missing_file_with_path() {
-    let error = Kubeconfig::load(Path::new("definitely-missing-kubeconfig.yaml"))
-        .expect_err("missing file");
-    assert!(matches!(error, KubeconfigError::Read { .. }), "{error:?}");
-    assert!(
-        error
-            .to_string()
-            .contains("definitely-missing-kubeconfig.yaml"),
-        "{error}"
-    );
-}
-
-#[test]
 fn has_proxy_url_detects_only_explicit_cluster_proxy() {
     let yaml = "\
 clusters:
@@ -205,4 +193,160 @@ clusters:
     assert!(kubeconfig.has_proxy_url("proxied"));
     assert!(!kubeconfig.has_proxy_url("direct"));
     assert!(!kubeconfig.has_proxy_url("missing"));
+}
+
+fn file_yaml(context: &str, cluster: &str, current: Option<&str>) -> String {
+    let current = current
+        .map(|name| format!("current-context: {name}\n"))
+        .unwrap_or_default();
+    format!(
+        "apiVersion: v1\nkind: Config\n{current}clusters:\n  - name: {cluster}\n    cluster: {{ server: 'https://127.0.0.1:1' }}\ncontexts:\n  - name: {context}\n    context: {{ cluster: {cluster} }}\n"
+    )
+}
+
+/// A fresh temp dir per test; the contents hold no credentials.
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("k8sboard-0024-kc-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    dir
+}
+
+fn write_file(dir: &Path, name: &str, text: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, text).expect("write fixture");
+    path
+}
+
+fn load_ok(paths: &[PathBuf]) -> LoadedKubeconfig {
+    Kubeconfig::load(paths).expect("at least one file loads")
+}
+
+#[test]
+fn load_merges_contexts_of_all_files_in_order() {
+    let dir = temp_dir("merge");
+    let a = write_file(&dir, "a.yaml", &file_yaml("one", "c1", None));
+    let b = write_file(&dir, "b.yaml", &file_yaml("two", "c2", None));
+    let loaded = load_ok(&[a.clone(), b.clone()]);
+    assert_eq!(names(&loaded.kubeconfig), ["one", "two"]);
+    assert_eq!(loaded.kubeconfig.sources(), [a, b]);
+    assert!(loaded.skipped.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn first_file_wins_for_duplicate_context_names() {
+    let dir = temp_dir("dup");
+    let a = write_file(&dir, "a.yaml", &file_yaml("same", "first", None));
+    let b = write_file(&dir, "b.yaml", &file_yaml("same", "second", None));
+    let loaded = load_ok(&[a.clone(), b]);
+    let contexts = loaded.kubeconfig.contexts();
+    assert_eq!(contexts.len(), 1);
+    assert_eq!(contexts[0].cluster, "first");
+    assert_eq!(contexts[0].source, a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn current_context_comes_from_the_first_file_that_sets_it() {
+    let dir = temp_dir("current");
+    let a = write_file(&dir, "a.yaml", &file_yaml("one", "c1", None));
+    let b = write_file(&dir, "b.yaml", &file_yaml("two", "c2", Some("two")));
+    let c = write_file(&dir, "c.yaml", &file_yaml("three", "c3", Some("three")));
+    let loaded = load_ok(&[a, b, c]);
+    assert_eq!(loaded.kubeconfig.current_context(), Some("two"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn context_source_is_the_defining_file() {
+    let dir = temp_dir("source");
+    let a = write_file(&dir, "a.yaml", &file_yaml("one", "c1", None));
+    let b = write_file(&dir, "b.yaml", &file_yaml("two", "c2", None));
+    let loaded = load_ok(&[a.clone(), b.clone()]);
+    let sources: Vec<&Path> = loaded
+        .kubeconfig
+        .contexts()
+        .iter()
+        .map(|context| context.source.as_path())
+        .collect();
+    assert_eq!(sources, [a.as_path(), b.as_path()]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn unreadable_file_is_skipped_and_reported() {
+    let dir = temp_dir("unreadable");
+    let a = write_file(&dir, "a.yaml", &file_yaml("one", "c1", None));
+    let missing = dir.join("missing.yaml");
+    let loaded = load_ok(&[a.clone(), missing]);
+    assert_eq!(loaded.kubeconfig.sources(), [a]);
+    assert!(matches!(
+        loaded.skipped.as_slice(),
+        [KubeconfigError::Read { .. }]
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn incompatible_file_is_skipped() {
+    let dir = temp_dir("incompatible");
+    let a = write_file(&dir, "a.yaml", &file_yaml("one", "c1", None));
+    let other = file_yaml("two", "c2", None).replace("kind: Config", "kind: Other");
+    let b = write_file(&dir, "b.yaml", &other);
+    let loaded = load_ok(&[a, b.clone()]);
+    assert_eq!(names(&loaded.kubeconfig), ["one"]);
+    assert!(
+        matches!(loaded.skipped.as_slice(), [KubeconfigError::Incompatible { path }] if *path == b),
+        "{:?}",
+        loaded.skipped
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn incompatible_file_keeps_earlier_files() {
+    let dir = temp_dir("keeps");
+    let a = write_file(&dir, "a.yaml", &file_yaml("one", "c1", None));
+    let other = file_yaml("two", "c2", None).replace("apiVersion: v1", "apiVersion: v2");
+    let b = write_file(&dir, "b.yaml", &other);
+    let c = write_file(&dir, "c.yaml", &file_yaml("three", "c3", None));
+    let loaded = load_ok(&[a, b, c]);
+    assert_eq!(names(&loaded.kubeconfig), ["one", "three"]);
+    assert_eq!(loaded.skipped.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn load_fails_when_no_file_loads() {
+    let missing = PathBuf::from("definitely-missing-kubeconfig.yaml");
+    let error = Kubeconfig::load(&[missing, PathBuf::from("other-missing.yaml")])
+        .expect_err("no file loads");
+    assert!(matches!(error, KubeconfigError::Read { .. }), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("definitely-missing-kubeconfig.yaml"),
+        "{error}"
+    );
+    assert!(matches!(
+        Kubeconfig::load(&[]),
+        Err(KubeconfigError::NoFiles)
+    ));
+}
+
+#[test]
+fn context_not_found_lists_every_source() {
+    let dir = temp_dir("not-found");
+    let a = write_file(&dir, "a.yaml", &file_yaml("one", "c1", None));
+    let b = write_file(&dir, "b.yaml", &file_yaml("two", "c2", None));
+    let loaded = load_ok(&[a, b]);
+    let message = loaded
+        .kubeconfig
+        .resolve_context(Some("nope"))
+        .expect_err("unknown")
+        .to_string();
+    assert!(message.contains("a.yaml, "), "{message}");
+    assert!(message.contains("b.yaml"), "{message}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

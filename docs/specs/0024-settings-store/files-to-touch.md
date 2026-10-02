@@ -31,7 +31,7 @@
 | 2 | `src/title_bar.rs` | notices button (settings notice only in step 2) |
 | 2 | `src/app_shell.rs`, `src/app_shell_tests.rs` | new field `_settings_observer: Subscription` = `cx.observe_global::<AppSettings>(..)`; tests `install` defaults with `WriteMode::Disabled` |
 | 3 | `src/environment.rs` (new) + `environment_tests.rs` | `Environment`, `badge`, `guess_environment`, `environment_color`, `environment_badge` |
-| 3 | `src/cluster_registry.rs` (new) + `cluster_registry_tests.rs` | `ClusterRegistry`, `ClusterRef`, `ClusterEntry`, `ClusterProfile`, `entry`, `entry_mut`, `profile`, `switcher_label`, `StartChoice`, `start_choice` |
+| 3 | `src/cluster_registry.rs` (new) + `cluster_registry_tests.rs` | `ClusterRegistry`, `ClusterRef`, `ClusterEntry`, `ClusterProfile`, `launch_last_used`, `profile`, `switcher_label`, `StartChoice`, `start_choice` |
 | 3 | `src/settings.rs` | `registry` field |
 | 3 | `src/launch_options.rs` (+ tests) | `kubeconfig_chain` and `standalone_files` replace `kubeconfig_path` and `has_ignored_kubeconfig_entries` |
 | 3 | `src/app_shell.rs` (+ tests) | load the chain + standalone files (`Vec<Arc<Kubeconfig>>`), `start_choice`, `active`, `switch_cluster`, `last_used` write, kubeconfig notices; delete `IGNORED_KUBECONFIG_NOTE`, `kubeconfig_error_message` and its test |
@@ -42,6 +42,7 @@
 | 4 | `src/pod_table.rs`, `src/node_table.rs`, `src/kind_table.rs` (+ tests) | apply startup prefs at view creation |
 | 4 | `src/app_shell.rs` | `persist_table_prefs` after `cycle_sort` and `toggle_column` |
 | 5 | `src/resource_actions.rs` (+ tests) | `kind_menu(.., default_namespace)`; "Set as default namespace" for Namespaces |
+| 5 | `src/cluster_registry.rs` (+ tests) | `entry`, `entry_mut` (appends when missing), test `entry_mut_appends_once` |
 | 5 | `src/app_shell.rs` | `toggle_default_namespace`; default namespace at start and in `switch_cluster` |
 
 ## Docs (after merge, by the orchestrator or architect)

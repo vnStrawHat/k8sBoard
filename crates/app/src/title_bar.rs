@@ -6,17 +6,29 @@ use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, TitleBar, h_flex,
 };
-use gpui_kit::{AnyElement, Context, Hsla, IntoElement, ParentElement as _, Styled as _, div};
+use gpui_kit::{
+    AnyElement, App, Context, Hsla, IntoElement, ParentElement as _, Styled as _, div, px,
+};
 
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::namespaces_label;
+use crate::environment::{environment_badge, environment_color};
 use crate::issue_board::IssueSummary;
 use crate::namespace_picker::{PickerAnchor, namespace_picker as picker};
 use crate::resource_actions::disabled_menu_item;
+use crate::settings::AppSettings;
 use crate::status_tone::tone_color;
 
 pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
+    // Always 3 px, so the layout does not shift when a session starts. GPUI has one border
+    // color per element, so the kit's 1 px bottom border takes the same color.
+    let border = match shell.active_profile(cx) {
+        Some(profile) => environment_color(profile.environment, cx),
+        None => cx.theme().title_bar_border,
+    };
     TitleBar::new()
+        .border_t(px(3.))
+        .border_color(border)
         .child(
             h_flex()
                 .gap_2()
@@ -29,6 +41,7 @@ pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoEl
             h_flex()
                 .gap_2()
                 .items_center()
+                .children(notices_button(shell, cx))
                 .child(read_only_badge())
                 .child(issues_button(shell, cx))
                 .child(settings_button()),
@@ -98,28 +111,34 @@ fn issues_tooltip(summary: IssueSummary, coverage_note: Option<String>) -> Strin
 }
 
 fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
-    let contexts = shell.context_names();
-    let active = shell
-        .session()
-        .map(|session| session.read(cx).context().to_owned());
-    let label = active.clone().unwrap_or_else(|| "No cluster".to_owned());
+    let items = shell.switcher_items(cx);
+    let trigger = match shell.active_profile(cx) {
+        Some(profile) => h_flex()
+            .gap_2()
+            .items_center()
+            .child(environment_badge(profile.environment, cx))
+            .child(profile.display_name)
+            .into_any_element(),
+        None => "No cluster".into_any_element(),
+    };
+    let is_disabled = items.is_empty();
     let shell_handle = cx.weak_entity();
     Button::new("cluster-switcher")
         .ghost()
         .small()
-        .label(label)
+        .child(trigger)
         .dropdown_caret(true)
-        .disabled(contexts.is_empty())
+        .disabled(is_disabled)
         .dropdown_menu(move |menu, _, _| {
-            let menu = contexts.iter().fold(menu, |menu, name| {
-                let target = name.clone();
+            let menu = items.iter().fold(menu, |menu, item| {
+                let target = item.cluster.clone();
                 let shell_handle = shell_handle.clone();
                 menu.item(
-                    PopupMenuItem::new(name.clone())
-                        .checked(active.as_deref() == Some(name.as_str()))
+                    PopupMenuItem::new(item.label.clone())
+                        .checked(item.is_active)
                         .on_click(move |_, _, cx| {
                             let _ = shell_handle
-                                .update(cx, |shell, cx| shell.switch_context(&target, cx));
+                                .update(cx, |shell, cx| shell.switch_cluster(&target, cx));
                         }),
                 )
             });
@@ -163,4 +182,35 @@ fn settings_button() -> impl IntoElement {
         .icon(Icon::new(IconName::Settings))
         .tooltip("Settings window comes later")
         .disabled(true)
+}
+
+/// One line per notice (a corrupt settings file, a skipped kubeconfig). The click dismisses them.
+fn notice_lines(shell: &AppShell, cx: &App) -> Vec<String> {
+    AppSettings::notice(cx)
+        .map(ToString::to_string)
+        .into_iter()
+        .chain(shell.notices().iter().cloned())
+        .collect()
+}
+
+/// The warning icon with the notices as its tooltip; absent while there is nothing to read.
+fn notices_button(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyElement> {
+    let lines = notice_lines(shell, cx);
+    if lines.is_empty() {
+        return None;
+    }
+    let warning = cx.theme().warning;
+    Some(
+        Button::new("notices")
+            .ghost()
+            .small()
+            .child(
+                div()
+                    .text_color(warning)
+                    .child(Icon::new(IconName::TriangleAlert)),
+            )
+            .tooltip(lines.join("\n"))
+            .on_click(cx.listener(|shell, _, _, cx| shell.dismiss_notices(cx)))
+            .into_any_element(),
+    )
 }

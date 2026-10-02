@@ -32,7 +32,7 @@ Removed: `load_reports_missing_file_with_path` (covered by `load_fails_when_no_f
 | File | Tests |
 |---|---|
 | `environment_tests.rs` | `guess_table` (every example in [environments.md](environments.md), one row each with a message), `riskiest_match_wins`, `tokens_ignore_substrings` (`latest`, `contest` → STG), `trailing_digits_are_trimmed`, `cluster_name_counts_when_context_is_unknown`, `uat_monitor_context_is_staging` (`readonly@Monitor` + `cluster.local`), `badge_text_per_environment`, `environment_order_is_risk` |
-| `cluster_registry_tests.rs` | `profile_of_unregistered_context_uses_name_and_guess`, `entry_overrides_name_and_environment`, `blank_display_name_falls_back_to_context`, `entry_matches_only_the_same_source`, `entry_mut_appends_once`, `start_choice_prefers_requested_in_load_order` (chain before registry file), `requested_missing_is_reported`, `start_choice_uses_last_used_from_the_same_source` (two same-named contexts, last-used picks the registry one), `last_used_beats_current_context_of_the_same_file`, `stale_last_used_is_ignored`, `switcher_label_adds_file_name_for_duplicate_names`, `entry_without_context_is_corrupt` (via `load_settings`) |
+| `cluster_registry_tests.rs` | `profile_of_unregistered_context_uses_name_and_guess`, `entry_overrides_name_and_environment`, `blank_display_name_falls_back_to_context`, `entry_matches_only_the_same_source`, `start_choice_prefers_requested_in_load_order` (chain before registry file), `requested_missing_is_reported`, `start_choice_uses_last_used_from_the_same_source` (two same-named contexts, last-used picks the registry one), `last_used_beats_current_context_of_the_same_file`, `explicit_kubeconfig_ignores_last_used_from_other_files`, `explicit_kubeconfig_ignores_last_used_from_other_files`, `stale_last_used_is_ignored`, `switcher_label_adds_file_name_for_duplicate_names`, `entry_without_context_is_corrupt` (via `load_settings`) |
 | `launch_options_tests.rs` | `kubeconfig_chain_flag_wins`, `kubeconfig_chain_lists_every_env_entry`, `kubeconfig_chain_falls_back_to_home`, `standalone_files_skip_chain_members_and_duplicates` |
 | `app_shell_tests.rs` | `last_used_is_written_on_live`, `last_used_is_not_written_on_failure` (decision 22, amended for 0026) |
 
@@ -42,7 +42,7 @@ Removed: `load_reports_missing_file_with_path` (covered by `load_fails_when_no_f
 
 ## Step 5
 
-`resource_actions` tests: `namespaces_menu_has_set_as_default`, `set_as_default_is_checked_for_the_default`, `other_kinds_have_no_set_as_default`; `app_shell` (pure helper): `start_namespace_prefers_flag_then_default`.
+`cluster_registry` test: `entry_mut_appends_once`. `resource_actions` tests: `namespaces_menu_has_set_as_default`, `set_as_default_is_checked_for_the_default`, `other_kinds_have_no_set_as_default`; `app_shell` (pure helper): `start_namespace_prefers_flag_then_default`.
 
 ## Live checks (coder-lite, read-only, UAT)
 

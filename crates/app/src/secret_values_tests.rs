@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use gpui_kit::{AppContext as _, TestAppContext};
 
 use super::*;
-use crate::launch_options::{LaunchScreen, ThemeChoice};
+use crate::launch_options::LaunchScreen;
+use crate::settings::ThemePreference;
 
 /// Values used by tests only; no real secret appears anywhere in this file.
 const FIXTURE_TEXT: &str = "fixture-text-0016";
@@ -154,7 +155,8 @@ fn options(screenshot: Option<&str>) -> LaunchOptions {
         namespace: None,
         filter: None,
         select: None,
-        theme: Some(ThemeChoice::Light),
+        theme: Some(ThemePreference::Light),
+        config_dir: None,
         screen: LaunchScreen::Kind(ResourceKind::Secrets),
         screenshot: screenshot.map(Into::into),
     }

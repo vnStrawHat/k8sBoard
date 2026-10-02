@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::path::Path;
+use std::path::PathBuf;
 
 use cluster::{
     AccessReport, ClusterConnection, ClusterError, ContextOrigin, EnvValues, HelmReleaseDetail,
@@ -13,8 +13,8 @@ const FIXTURE: &str = concat!(
 );
 
 fn fixture() -> Kubeconfig {
-    match Kubeconfig::load(Path::new(FIXTURE)) {
-        Ok(kubeconfig) => kubeconfig,
+    match Kubeconfig::load(&[PathBuf::from(FIXTURE)]) {
+        Ok(loaded) => loaded.kubeconfig,
         Err(error) => panic!("fixture kubeconfig must load: {error}"),
     }
 }

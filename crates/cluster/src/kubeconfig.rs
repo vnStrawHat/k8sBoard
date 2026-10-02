@@ -1,11 +1,12 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// A kubeconfig file loaded from an explicit path. Holds credentials.
-// Debug is manual: it prints the path and context names only.
+/// One or more kubeconfig files merged like kubectl. Holds credentials.
+// Debug is manual: it prints the sources and context names only.
 #[derive(Clone)]
 pub struct Kubeconfig {
-    path: PathBuf,
+    sources: Vec<PathBuf>,
     document: kube::config::Kubeconfig,
     contexts: Vec<ContextSummary>,
 }
@@ -19,6 +20,15 @@ pub struct ContextSummary {
     /// Kubeconfig user entry name.
     pub user: Option<String>,
     pub namespace: Option<String>,
+    /// The file that defined this context.
+    pub source: PathBuf,
+}
+
+/// The merged kubeconfig and the errors of the files that were skipped.
+#[derive(Debug)]
+pub struct LoadedKubeconfig {
+    pub kubeconfig: Kubeconfig,
+    pub skipped: Vec<KubeconfigError>,
 }
 
 /// Where a context name came from, for error messages.
@@ -48,20 +58,32 @@ pub enum KubeconfigError {
     // No source on purpose: the parser message can quote a line that holds a token.
     #[error("kubeconfig '{}' is not a valid kubeconfig YAML document", .path.display())]
     Parse { path: PathBuf },
+    #[error("kubeconfig '{}' has a different kind or apiVersion; skipped", .path.display())]
+    Incompatible { path: PathBuf },
+    #[error("no kubeconfig file was given")]
+    NoFiles,
     #[error("{origin} '{requested}' not found in kubeconfig '{}'; available contexts: {}",
-            .path.display(), context_list(.available))]
+            path_list(.paths), context_list(.available))]
     ContextNotFound {
-        path: PathBuf,
+        paths: Vec<PathBuf>,
         requested: String,
         origin: ContextOrigin,
         available: Vec<String>,
     },
     #[error("kubeconfig '{}' has no current-context and no context was requested; available contexts: {}",
-            .path.display(), context_list(.available))]
+            path_list(.paths), context_list(.available))]
     NoContextSelected {
-        path: PathBuf,
+        paths: Vec<PathBuf>,
         available: Vec<String>,
     },
+}
+
+fn path_list(paths: &[PathBuf]) -> String {
+    let names: Vec<String> = paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    names.join(", ")
 }
 
 fn context_list(names: &[String]) -> String {
@@ -72,15 +94,63 @@ fn context_list(names: &[String]) -> String {
 }
 
 impl Kubeconfig {
+    /// Loads `paths` in order and merges them like kubectl: the first file wins per named
+    /// entry and for `current-context`. A file that cannot be read, parsed, or merged is
+    /// skipped and reported; `Err` only when no file loads (the first error).
     /// Blocking file I/O: call it off the UI thread.
-    pub fn load(path: &Path) -> Result<Self, KubeconfigError> {
-        // `read_from` (not `from_yaml`) makes relative credential paths absolute.
-        let document =
-            kube::config::Kubeconfig::read_from(path).map_err(|error| load_error(path, error))?;
-        Ok(Self::from_document(path, document))
+    pub fn load(paths: &[PathBuf]) -> Result<LoadedKubeconfig, KubeconfigError> {
+        let mut merged: Option<kube::config::Kubeconfig> = None;
+        let mut sources = Vec::new();
+        let mut origins = HashMap::new();
+        let mut skipped = Vec::new();
+        for path in paths {
+            // `read_from` (not `from_yaml`) makes relative credential paths absolute.
+            let next = match kube::config::Kubeconfig::read_from(path) {
+                Ok(next) => next,
+                Err(error) => {
+                    skipped.push(load_error(path, error));
+                    continue;
+                }
+            };
+            if let Some(accumulated) = &merged
+                && is_incompatible(accumulated, &next)
+            {
+                // `merge` consumes the accumulator and drops it on `Err`, so the check that
+                // would make it fail runs first.
+                skipped.push(KubeconfigError::Incompatible { path: path.clone() });
+                continue;
+            }
+            for named in &next.contexts {
+                origins
+                    .entry(named.name.clone())
+                    .or_insert_with(|| path.clone());
+            }
+            let accumulated = match merged.take() {
+                None => next,
+                Some(accumulated) => accumulated
+                    .merge(next)
+                    .map_err(|_| KubeconfigError::Incompatible { path: path.clone() })?,
+            };
+            sources.push(path.clone());
+            merged = Some(accumulated);
+        }
+        match merged {
+            Some(document) => Ok(LoadedKubeconfig {
+                kubeconfig: Self::from_document(sources, document, &origins),
+                skipped,
+            }),
+            None => Err(skipped
+                .into_iter()
+                .next()
+                .unwrap_or(KubeconfigError::NoFiles)),
+        }
     }
 
-    fn from_document(path: &Path, document: kube::config::Kubeconfig) -> Self {
+    fn from_document(
+        sources: Vec<PathBuf>,
+        document: kube::config::Kubeconfig,
+        origins: &HashMap<String, PathBuf>,
+    ) -> Self {
         let mut contexts: Vec<ContextSummary> = Vec::new();
         for named in &document.contexts {
             let Some(context) = &named.context else {
@@ -90,22 +160,29 @@ impl Kubeconfig {
             if contexts.iter().any(|existing| existing.name == named.name) {
                 continue;
             }
+            let source = origins
+                .get(&named.name)
+                .or_else(|| sources.first())
+                .cloned()
+                .unwrap_or_default();
             contexts.push(ContextSummary {
                 name: named.name.clone(),
                 cluster: context.cluster.clone(),
                 user: context.user.clone(),
                 namespace: context.namespace.clone(),
+                source,
             });
         }
         Self {
-            path: path.to_path_buf(),
+            sources,
             document,
             contexts,
         }
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// The files that loaded, in merge order.
+    pub fn sources(&self) -> &[PathBuf] {
+        &self.sources
     }
 
     pub fn contexts(&self) -> &[ContextSummary] {
@@ -130,7 +207,7 @@ impl Kubeconfig {
                 Some(name) => (name, ContextOrigin::CurrentContext),
                 None => {
                     return Err(KubeconfigError::NoContextSelected {
-                        path: self.path.clone(),
+                        paths: self.sources.clone(),
                         available: self.context_names(),
                     });
                 }
@@ -140,7 +217,7 @@ impl Kubeconfig {
             .iter()
             .find(|context| context.name == name)
             .ok_or_else(|| KubeconfigError::ContextNotFound {
-                path: self.path.clone(),
+                paths: self.sources.clone(),
                 requested: name.to_owned(),
                 origin,
                 available: self.context_names(),
@@ -174,10 +251,17 @@ impl fmt::Debug for Kubeconfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Kubeconfig")
-            .field("path", &self.path)
+            .field("sources", &self.sources)
             .field("contexts", &self.context_names())
             .finish()
     }
+}
+
+fn is_incompatible(merged: &kube::config::Kubeconfig, next: &kube::config::Kubeconfig) -> bool {
+    let differs = |left: &Option<String>, right: &Option<String>| {
+        left.is_some() && right.is_some() && left != right
+    };
+    differs(&merged.kind, &next.kind) || differs(&merged.api_version, &next.api_version)
 }
 
 fn load_error(path: &Path, error: kube::config::KubeconfigError) -> KubeconfigError {

@@ -13,7 +13,10 @@ use gpui_kit::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
+use crate::cluster_registry::ClusterRef;
 use crate::launch_options::{LaunchRequest, parse_launch_options};
+use crate::settings::{AppSettings, Settings};
+use crate::settings_store::{LoadedSettings, WriteMode};
 
 /// Which of the shell's two focus targets holds the focus: the root, and the quick filter.
 type Focus = (bool, bool);
@@ -38,6 +41,15 @@ fn open_shell_with(
     cx.update(|cx| {
         gpui_kit::init(cx);
         bind_keys(cx);
+        // Writes stay off: a shell test never saves settings.
+        AppSettings::install(
+            LoadedSettings {
+                settings: Settings::default(),
+                writes: WriteMode::Disabled,
+                notice: None,
+            },
+            cx,
+        );
         let bounds = Bounds {
             origin: Point::default(),
             size: size(px(1320.), px(900.)),
@@ -48,7 +60,7 @@ fn open_shell_with(
                 ..Default::default()
             },
             cx,
-            |window, cx| cx.new(|cx| AppShell::new(options, window, cx)),
+            |window, cx| cx.new(|cx| AppShell::new(*options, window, cx)),
         )
         .expect("open the test window");
         (window.downcast::<Root>().expect("a Root window"), shell)
@@ -387,6 +399,29 @@ fn open_drawer_tab_on_another_row_ends_on_that_tab(cx: &mut TestAppContext) {
     });
 }
 
+fn context(name: &str) -> ContextSummary {
+    ContextSummary {
+        name: name.to_owned(),
+        cluster: "cluster".to_owned(),
+        user: None,
+        namespace: None,
+        source: PathBuf::from("test.yaml"),
+    }
+}
+
+fn last_used(cx: &mut TestAppContext) -> Option<ClusterRef> {
+    cx.update(|cx| AppSettings::get(cx).registry.last_used.clone())
+}
+
+fn report(shell: &Entity<AppShell>, is_live: bool, cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        shell.update(cx, |shell, cx| {
+            shell.active = Some(context("ctx"));
+            shell.record_last_used(is_live, cx);
+        });
+    });
+}
+
 #[gpui_kit::test]
 fn open_drawer_tab_on_the_selection_needs_no_reveal(cx: &mut TestAppContext) {
     let (_, shell) = open_shell(cx);
@@ -437,4 +472,32 @@ fn helm_values_keep_their_revision_through_a_reveal(cx: &mut TestAppContext) {
             Some((pending, ValuesLayout::Diff)) if *pending == key
         ));
     });
+}
+
+#[gpui_kit::test]
+fn last_used_is_written_on_live(cx: &mut TestAppContext) {
+    let (_window, shell) = open_shell(cx);
+    report(&shell, true, cx);
+    let expected = ClusterRef::of(&context("ctx"));
+    assert_eq!(last_used(cx), Some(expected));
+}
+
+#[gpui_kit::test]
+fn last_used_is_not_written_on_failure(cx: &mut TestAppContext) {
+    let (_window, shell) = open_shell(cx);
+    report(&shell, false, cx);
+    assert_eq!(last_used(cx), None);
+}
+
+#[gpui_kit::test]
+fn last_used_is_written_once_per_session(cx: &mut TestAppContext) {
+    let (_window, shell) = open_shell(cx);
+    report(&shell, true, cx);
+    cx.update(|cx| {
+        shell.update(cx, |shell, cx| {
+            shell.active = Some(context("other"));
+            shell.record_last_used(true, cx);
+        });
+    });
+    assert_eq!(last_used(cx), Some(ClusterRef::of(&context("ctx"))));
 }

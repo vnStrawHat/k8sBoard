@@ -18,6 +18,9 @@ use gpui_kit::{
 };
 
 use crate::FocusQuickFilter;
+use crate::cluster_registry::{
+    ClusterProfile, ClusterRef, StartChoice, launch_last_used, start_choice, switcher_label,
+};
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
 use crate::cluster_session::{
@@ -38,7 +41,8 @@ use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
 use crate::launch_options::{
-    LaunchOptions, LaunchScreen, has_ignored_kubeconfig_entries, kubeconfig_path,
+    LaunchOptions, LaunchScreen, LoadedKubeconfigs, kubeconfig_chain, load_kubeconfigs,
+    standalone_files,
 };
 use crate::log_dock::{DockMode, LogDock};
 use crate::log_target::{LogTarget, NoLogTarget, check_logs_access};
@@ -65,6 +69,7 @@ use crate::secret_values::{
     PendingAction, SecretAction, SecretCopied, SecretValuesView, ValueAccess, fetcher,
     pending_action, value_access, values_subject,
 };
+use crate::settings::AppSettings;
 use crate::status_bar::status_bar;
 use crate::table_filter::{
     FilterChip, FilterPreset, TableFilter, parse_label_queries, quick_filter_text,
@@ -92,9 +97,6 @@ mod app_shell_tests;
 /// The logical column of the Events table that holds the reason.
 const EVENT_REASON_COLUMN: usize = 1;
 
-const IGNORED_KUBECONFIG_NOTE: &str =
-    "Only the first KUBECONFIG entry is used; merging kubeconfigs is not supported";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Screen {
     /// What is broken, how much room is left, what changed; it lists no kind and opens no drawer.
@@ -118,8 +120,16 @@ impl Screen {
 
 enum KubeconfigState {
     Loading,
-    Loaded(Arc<Kubeconfig>),
+    /// The launch chain first (when it loaded), then each registry file.
+    Loaded(Vec<Arc<Kubeconfig>>),
     Failed(String),
+}
+
+/// One switcher row: a context of a loaded kubeconfig.
+pub(crate) struct SwitcherItem {
+    pub(crate) cluster: ClusterRef,
+    pub(crate) label: String,
+    pub(crate) is_active: bool,
 }
 
 /// A `--screen custom:<crd-name>` request that has not met its CRD list yet.
@@ -194,6 +204,8 @@ enum Retry {
 /// What the command line asked for, used only by the first session.
 struct RequestedStart {
     context: Option<String>,
+    /// With `--kubeconfig`: the files the user named, the only source of a `last_used`.
+    explicit_files: Option<Vec<PathBuf>>,
     namespace: Option<NamespaceScope>,
 }
 
@@ -203,6 +215,12 @@ pub(crate) struct AppShell {
     kubeconfig: KubeconfigState,
     /// Set when the kubeconfig loaded but names no usable context; there is no session then.
     context_error: Option<String>,
+    /// The context the session was started for, also while it is connecting or failed.
+    active: Option<ContextSummary>,
+    /// One line per kubeconfig file that was skipped; shown by the title-bar warning button.
+    notices: Vec<String>,
+    /// Whether the current session was already seen Live, so `last_used` is written once.
+    has_reported_live: bool,
     session: Option<Entity<ClusterSession>>,
     _session_observer: Option<Subscription>,
     screen: Screen,
@@ -262,6 +280,8 @@ pub(crate) struct AppShell {
     clipboard_clear: Option<ArmedClear>,
     /// Clears an armed copy when the app quits (best effort).
     _clipboard_quit: Subscription,
+    /// Re-renders the title bar when a setting or a settings notice changes.
+    _settings_observer: Subscription,
 }
 
 /// The key bindings of the shell. `!Input` keeps `/` typable in every input, the YAML editor
@@ -277,22 +297,22 @@ pub(crate) fn bind_keys(cx: &mut App) {
 impl AppShell {
     pub(crate) fn new(options: LaunchOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let secret_value_access = value_access(&options);
-        let kubeconfig_env = std::env::var_os("KUBECONFIG");
-        let has_ignored_entries = options.kubeconfig.is_none()
-            && has_ignored_kubeconfig_entries(kubeconfig_env.as_deref());
-        let kubeconfig = match kubeconfig_path(
+        let is_explicit = options.kubeconfig.is_some();
+        let chain = kubeconfig_chain(
             options.kubeconfig,
-            kubeconfig_env,
+            std::env::var_os("KUBECONFIG"),
             std::env::home_dir(),
-        ) {
-            Some(path) => {
-                Self::load_kubeconfig(path, has_ignored_entries, cx);
-                KubeconfigState::Loading
-            }
-            None => KubeconfigState::Failed(
+        );
+        let explicit_files = is_explicit.then(|| chain.clone());
+        let standalone = standalone_files(&AppSettings::get(cx).registry.kubeconfigs, &chain);
+        let kubeconfig = if chain.is_empty() && standalone.is_empty() {
+            KubeconfigState::Failed(
                 "no kubeconfig found: pass --kubeconfig, set KUBECONFIG, or create ~/.kube/config"
                     .to_owned(),
-            ),
+            )
+        } else {
+            Self::load_kubeconfigs(chain, standalone, cx);
+            KubeconfigState::Loading
         };
 
         let shell = cx.weak_entity();
@@ -362,6 +382,9 @@ impl AppShell {
         let mut shell = Self {
             kubeconfig,
             context_error: None,
+            active: None,
+            notices: Vec::new(),
+            has_reported_live: false,
             session: None,
             _session_observer: None,
             screen: options.screen.screen(),
@@ -398,6 +421,7 @@ impl AppShell {
             launch_failure: None,
             requested: RequestedStart {
                 context: options.context,
+                explicit_files,
                 namespace: options.namespace,
             },
             quick_filter,
@@ -409,6 +433,7 @@ impl AppShell {
             secret_value_access,
             clipboard_clear: None,
             _clipboard_quit: clipboard_quit,
+            _settings_observer: cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
         };
         if let Some(text) = launch_filter {
             shell.apply_launch_filter(&text, cx);
@@ -416,52 +441,48 @@ impl AppShell {
         shell
     }
 
-    /// Reading the file is blocking I/O, so it runs on the background executor, not on the
+    /// Reading the files is blocking I/O, so it runs on the background executor, not on the
     /// UI thread and not on tokio.
-    fn load_kubeconfig(path: PathBuf, has_ignored_entries: bool, cx: &mut Context<Self>) {
+    fn load_kubeconfigs(chain: Vec<PathBuf>, standalone: Vec<PathBuf>, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_executor()
-                .spawn(async move { Kubeconfig::load(&path) })
+                .spawn(async move { load_kubeconfigs(&chain, &standalone) })
                 .await;
-            let _ = this.update(cx, |shell, cx| {
-                shell.finish_kubeconfig_load(loaded, has_ignored_entries, cx)
-            });
+            let _ = this.update(cx, |shell, cx| shell.finish_kubeconfig_load(loaded, cx));
         })
         .detach();
     }
 
     fn finish_kubeconfig_load(
         &mut self,
-        loaded: Result<Kubeconfig, KubeconfigError>,
-        has_ignored_entries: bool,
+        loaded: Result<LoadedKubeconfigs, KubeconfigError>,
         cx: &mut Context<Self>,
     ) {
-        match loaded {
-            Ok(kubeconfig) => {
-                let kubeconfig = Arc::new(kubeconfig);
-                self.kubeconfig = KubeconfigState::Loaded(Arc::clone(&kubeconfig));
-                let requested = self.requested.context.take();
-                match kubeconfig.resolve_context(requested.as_deref()) {
-                    Ok(summary) => {
-                        let summary = summary.clone();
-                        let namespace = self.requested.namespace.take();
-                        self.start_session(kubeconfig, &summary, namespace, cx);
-                    }
-                    Err(error) => {
-                        self.context_error = Some(kubeconfig_error_message(
-                            error_text(&error),
-                            has_ignored_entries,
-                        ));
-                    }
-                }
-            }
+        let loaded = match loaded {
+            Ok(loaded) => loaded,
             Err(error) => {
-                self.kubeconfig = KubeconfigState::Failed(kubeconfig_error_message(
-                    error_text(&error),
-                    has_ignored_entries,
-                ));
+                self.kubeconfig = KubeconfigState::Failed(error_text(&error));
+                cx.notify();
+                return;
             }
+        };
+        self.notices = loaded.notices;
+        self.kubeconfig = KubeconfigState::Loaded(loaded.kubeconfigs.clone());
+        let requested = self.requested.context.take();
+        let explicit_files = self.requested.explicit_files.take();
+        let saved = AppSettings::get(cx).registry.last_used.as_ref();
+        let last_used = launch_last_used(saved, explicit_files.as_deref()).cloned();
+        match resolve_start(
+            &loaded.kubeconfigs,
+            requested.as_deref(),
+            last_used.as_ref(),
+        ) {
+            Ok((kubeconfig, summary)) => {
+                let namespace = self.requested.namespace.take();
+                self.start_session(kubeconfig, &summary, namespace, cx);
+            }
+            Err(error) => self.context_error = Some(error_text(&error)),
         }
         cx.notify();
     }
@@ -476,6 +497,8 @@ impl AppShell {
     ) {
         let kind = self.screen.kind();
         let is_switch = self.session.is_some();
+        self.active = Some(summary.clone());
+        self.has_reported_live = false;
         self.close_drawer(cx);
         self.log_dock.update(cx, |dock, cx| dock.close_all(cx));
         // The definitions seen so far move on, so a context switch reuses them (decision 16).
@@ -519,34 +542,69 @@ impl AppShell {
         cx.notify();
     }
 
+    /// Clears the notice behind the title-bar warning button.
+    pub(crate) fn dismiss_notices(&mut self, cx: &mut Context<Self>) {
+        self.notices.clear();
+        AppSettings::dismiss_notice(cx);
+    }
+
+    /// The skipped-kubeconfig lines for the warning button.
+    pub(crate) fn notices(&self) -> &[String] {
+        &self.notices
+    }
+
     pub(crate) fn session(&self) -> Option<&Entity<ClusterSession>> {
         self.session.as_ref()
     }
 
-    pub(crate) fn context_names(&self) -> Vec<String> {
-        match &self.kubeconfig {
-            KubeconfigState::Loaded(kubeconfig) => kubeconfig
-                .contexts()
-                .iter()
-                .map(|context| context.name.clone())
-                .collect(),
-            KubeconfigState::Loading | KubeconfigState::Failed(_) => Vec::new(),
-        }
+    /// The loaded contexts for the switcher, in load order.
+    pub(crate) fn switcher_items(&self, cx: &App) -> Vec<SwitcherItem> {
+        let KubeconfigState::Loaded(kubeconfigs) = &self.kubeconfig else {
+            return Vec::new();
+        };
+        let registry = &AppSettings::get(cx).registry;
+        let summaries: Vec<&ContextSummary> = kubeconfigs
+            .iter()
+            .flat_map(|kubeconfig| kubeconfig.contexts())
+            .collect();
+        summaries
+            .iter()
+            .map(|summary| {
+                let profile = registry.profile(summary);
+                let is_duplicate_name = summaries
+                    .iter()
+                    .any(|other| other.name == summary.name && other.source != summary.source);
+                let cluster = ClusterRef::of(summary);
+                let is_active = self
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| cluster.is_of(active));
+                SwitcherItem {
+                    label: switcher_label(&profile, summary, is_duplicate_name),
+                    is_active,
+                    cluster,
+                }
+            })
+            .collect()
     }
 
-    pub(crate) fn switch_context(&mut self, name: &str, cx: &mut Context<Self>) {
-        let KubeconfigState::Loaded(kubeconfig) = &self.kubeconfig else {
+    /// The active context's profile; `None` before a session starts.
+    pub(crate) fn active_profile(&self, cx: &App) -> Option<ClusterProfile> {
+        let active = self.active.as_ref()?;
+        Some(AppSettings::get(cx).registry.profile(active))
+    }
+
+    pub(crate) fn switch_cluster(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
+        let KubeconfigState::Loaded(kubeconfigs) = &self.kubeconfig else {
             return;
         };
-        let kubeconfig = Arc::clone(kubeconfig);
-        let Ok(summary) = kubeconfig.resolve_context(Some(name)) else {
+        let Some((kubeconfig, summary)) = find_cluster(kubeconfigs, cluster) else {
             return;
         };
-        let summary = summary.clone();
         let is_active = self
-            .session
+            .active
             .as_ref()
-            .is_some_and(|session| session.read(cx).context() == summary.name);
+            .is_some_and(|active| cluster.is_of(active));
         if is_active {
             return;
         }
@@ -1749,7 +1807,27 @@ impl AppShell {
         open_shell_reason(self.live(cx))
     }
 
+    /// Writes `last_used` the first time a session is Live, so a cluster that fails to connect
+    /// is not reopened at the next start.
+    fn record_last_used(&mut self, is_live: bool, cx: &mut Context<Self>) {
+        if !is_live || self.has_reported_live {
+            return;
+        }
+        self.has_reported_live = true;
+        let Some(active) = &self.active else {
+            return;
+        };
+        // Cloned before the update, so nothing borrowed from the shell crosses the `cx` borrow.
+        let cluster = ClusterRef::of(active);
+        AppSettings::update(cx, |settings| settings.registry.last_used = Some(cluster));
+    }
+
     fn on_session_changed(&mut self, cx: &mut Context<Self>) {
+        let is_live = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.read(cx).live().is_some());
+        self.record_last_used(is_live, cx);
         self.apply_pending_custom_launch(cx);
         self.follow_custom_kinds(cx);
         self.rebuild_visible_view(cx, |_| {});
@@ -2613,14 +2691,45 @@ fn focus_table<D: TableDelegate>(
     window.focus(&handle, cx);
 }
 
-/// A kubeconfig or context error, plus a note when more `KUBECONFIG` entries were ignored:
-/// the missing context may well be in one of them.
-fn kubeconfig_error_message(message: String, has_ignored_entries: bool) -> String {
-    if has_ignored_entries {
-        format!("{message}. {IGNORED_KUBECONFIG_NOTE}")
-    } else {
-        message
+/// The loaded kubeconfig that defines `cluster`, with its context.
+fn find_cluster(
+    kubeconfigs: &[Arc<Kubeconfig>],
+    cluster: &ClusterRef,
+) -> Option<(Arc<Kubeconfig>, ContextSummary)> {
+    kubeconfigs.iter().find_map(|kubeconfig| {
+        let summary = kubeconfig
+            .contexts()
+            .iter()
+            .find(|summary| cluster.is_of(summary))?;
+        Some((Arc::clone(kubeconfig), summary.clone()))
+    })
+}
+
+/// The kubeconfig and context to open first (`start_choice`). The error is the one of the first
+/// loaded kubeconfig: a missing requested context, or no current-context.
+fn resolve_start(
+    kubeconfigs: &[Arc<Kubeconfig>],
+    requested: Option<&str>,
+    last_used: Option<&ClusterRef>,
+) -> Result<(Arc<Kubeconfig>, ContextSummary), KubeconfigError> {
+    let contexts: Vec<&ContextSummary> = kubeconfigs
+        .iter()
+        .flat_map(|kubeconfig| kubeconfig.contexts())
+        .collect();
+    let choice = start_choice(requested, last_used, &contexts);
+    if let StartChoice::Cluster(cluster) = &choice
+        && let Some(found) = find_cluster(kubeconfigs, cluster)
+    {
+        return Ok(found);
     }
+    // `load_kubeconfigs` fails on an empty list, so there is a first one in practice.
+    let first = kubeconfigs.first().ok_or(KubeconfigError::NoFiles)?;
+    let wanted = match choice {
+        StartChoice::RequestedMissing => requested,
+        StartChoice::Cluster(_) | StartChoice::CurrentContext => None,
+    };
+    let summary = first.resolve_context(wanted)?.clone();
+    Ok((Arc::clone(first), summary))
 }
 
 /// The release row of the shown subject.
@@ -2686,14 +2795,5 @@ mod tests {
     fn toggled_event_filter_switches_between_all_and_warnings_only() {
         assert_eq!(toggled(EventFilter::All), EventFilter::WarningsOnly);
         assert_eq!(toggled(EventFilter::WarningsOnly), EventFilter::All);
-    }
-
-    #[test]
-    fn kubeconfig_error_message_adds_note_only_for_ignored_entries() {
-        assert_eq!(kubeconfig_error_message("boom".to_owned(), false), "boom");
-        assert_eq!(
-            kubeconfig_error_message("boom".to_owned(), true),
-            "boom. Only the first KUBECONFIG entry is used; merging kubeconfigs is not supported"
-        );
     }
 }

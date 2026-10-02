@@ -3872,11 +3872,13 @@ name = "k8sboard"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs 6.0.0",
  "futures",
  "gpui-kit",
  "jiff",
  "k8sboard-cluster",
  "regex",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
