@@ -33,7 +33,7 @@
 | 19 | WHY boxes for Deployments, DaemonSets, Jobs, Services only, and only when a cause is found | roadmap list; no box during a normal rollout |
 | 20 | Pod causes reuse 0008 `pod_diagnosis` with no events | one rule set; probe detail stays in the pod drawer |
 | 21 | StatefulSet claims come from each pod's PVC mounts plus the template's storage; no PVC watch | mounts name the real claims; PVC status is 0014 |
-| 22 | DaemonSet "Rollout by node" bars use the kit `Progress` (`value` 0–100, `color` = `tone_color`) | W7 section name; no new styling; theme tokens only |
+| 22 | DaemonSet "Rollout by node" bars are `DetailRow::Bar` rows on the kit `Progress` (`value` 0–100, `color` = `tone_color`); `Bar` carries a percent, text, and optional tone | W7 section name; theme tokens only; 0013–0015 reuse the same row for quotas, usage, and HPA metrics, so it is general from the start |
 | 23 | Job Attempts = the Job's pods, newest first, with the exit code; it replaces the Pods title | W7 Jobs; no new data |
 | 24 | Disabled **Roll back** button on older revisions, tooltip "Read-only mode" | same pattern as Forward (0005 decision 20) |
 | 25 | **Open URL**: `https` when a TLS entry covers the host (wildcards too), else `http`; plain paths only; wildcard hosts skipped; one item, or a submenu for several URLs (max 10); `cx.open_url` | local action, allowed; never another scheme |

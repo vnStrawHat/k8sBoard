@@ -8,7 +8,7 @@
 |---|---|
 | Deployments | subtitle gains `· rev {revision}` after the namespace (from `KindObject::Deployment`). WHY · Replicas · Selector · Containers · Ports · Conditions · **Revisions [Live]** · Pods · Labels |
 | StatefulSets | Replicas · Selector · Containers · Ports · Volume claim templates (+ **Retention** row) · **Pods by ordinal** · Labels |
-| DaemonSets | WHY · **Rollout by node** (renamed from Rollout; **Ready** and **Updated** `Progress` rows first, then the count fields) · **Not ready [Live]** · Node selector · Selector · Containers · Ports (` · host {n}`) · Pods · Labels |
+| DaemonSets | WHY · **Rollout by node** (renamed from Rollout; **Ready** and **Updated** `Bar` rows first, then the count fields) · **Not ready [Live]** · Node selector · Selector · Containers · Ports (` · host {n}`) · Pods · Labels |
 | ReplicaSets | Replicas (Owner is a **Link**) · Selector · **Template** (replaces Containers: `pod-template-hash` → the label value, mono, or "—"; then `Image` → image when there is one container, else `{container}` → image per container) · Pods · Labels |
 | Jobs | WHY · Status (Owner is a **Link**; **Active deadline** `{n}s`, **TTL after finish** `{n}s` rows) · Conditions · Containers · **Attempts** (pods) · Labels |
 | CronJobs | **Next runs [Live]** · Schedule · Runs · **Recent jobs [Live]** · Containers · Labels |
@@ -38,7 +38,7 @@ pub(crate) fn live_rows(content: LiveContent, row: &KindRow, live: &LiveCluster,
 - Image tag: the first container's image after the last `:` that follows the last `/`; else the whole image.
 - Revision order: numeric revision descending; a ReplicaSet without a revision sorts last. "current" = revision equal to the Deployment's.
 - Roll back button: `Button::new(("roll-back", ix)).label("Roll back").xsmall().ghost().disabled(true).tooltip("Read-only mode")`.
-- Progress row: label column, then `Progress::new(id).value(percent).color(tone_color(tone))` and `{done} / {total}`; tone `replica_tone(done, total)`.
+- DaemonSet bars: `Bar { label, percent: percent(done / total) (0 when total is 0), text: "{done} / {total}", tone: Some(replica_tone(done, total)) }`; renderer in [row-model.md](row-model.md).
 
 ## Pods section changes (`related_pods.rs`, step 3)
 

@@ -18,6 +18,23 @@
 
 Every fixture that builds these types gains the field (crate and app tests).
 
+## Selector (`selector.rs`, new; the only label matcher, reused by 0013–0015)
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Selector { requirements: Vec<Requirement> }   // empty selects everything
+enum Requirement { Equals(String, String), In(String, Vec<String>), NotIn(String, Vec<String>), Exists(String), DoesNotExist(String), Invalid }
+impl Selector {
+    pub(crate) fn of(selector: &LabelSelector) -> Self;   // matchLabels (key order), then expressions
+    pub fn of_labels(terms: &[String]) -> Self;           // `k=v` terms (Service selector); a term without `=` → Invalid
+    pub fn selects_everything(&self) -> bool;
+    pub fn matches(&self, labels: &[String]) -> bool;     // `k=v` terms in key order (`label_terms`)
+    pub fn terms(&self) -> Vec<String>;                   // kubectl syntax; Invalid prints `<invalid>`
+}
+```
+
+`matches`: each requirement finds its key with `binary_search_by(|t| key_of(t).cmp(key))` (`key_of` = text before the first `=`; label keys never contain `=`), then compares the value. `NotIn` and `DoesNotExist` hold for a missing key; `Invalid` (unknown operator) matches nothing. `workload::selector_terms(s)` becomes `Selector::of(s).terms()`.
+
 ## EndpointSlices (`endpoint_slice.rs`, discovery.k8s.io/v1, new)
 
 ```rust
@@ -96,7 +113,7 @@ impl ClusterConnection {
 
 ## `lib.rs`
 
-Export `CronSchedule`, `ScheduleError`, `EndpointPort`, `EndpointSliceSummary`, `EndpointSummary`, `ConfigMapValue`, `ConfigMapValues`, `ValuePreview`.
+Export `Selector`, `CronSchedule`, `ScheduleError`, `EndpointPort`, `EndpointSliceSummary`, `EndpointSummary`, `ConfigMapValue`, `ConfigMapValues`, `ValuePreview`.
 
 ## Probe (`examples/probe.rs`)
 

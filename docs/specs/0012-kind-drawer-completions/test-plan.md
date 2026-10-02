@@ -20,6 +20,7 @@
 | `config_map.rs` | `value_preview_kinds` (line, long line, JSON, multi-line text, binary), `values_sorted_by_key` |
 | `container_spec_tests.rs` | `projected_volume_names_config_maps` |
 | `access_review.rs` | `endpoint_slices_check_targets_discovery_group` |
+| `selector.rs` | `match_labels_and_expressions_all_hold`, `not_in_and_does_not_exist_hold_for_missing_key`, `empty_selector_selects_everything`, `unknown_operator_matches_nothing`, `terms_match_kubectl_syntax` (moved from `selector_terms_format_labels_and_expressions`), `of_labels_builds_equalities`, `matches_by_key_binary_search` (keys `a` and `a.b`, value with `=`) |
 
 ## Step 2 — row model, drawer subjects, Deployments, CronJobs
 
@@ -39,8 +40,9 @@
 
 | Module | Tests |
 |---|---|
-| `workload_diagnosis_tests.rs` | `deployment_stalled`, `deployment_replica_failure`, `deployment_not_ready_names_pod`, `deployment_rollout_without_unhealthy_pod_has_no_box`, `paused_deployment_has_no_box`, `daemon_set_node_missing`, `daemon_set_nodes_missing_plural`, `daemon_set_pod_not_ready`, `daemon_set_without_pod_on_nodes`, `daemon_set_misscheduled`, `job_backoff_limit_with_exit_code`, `job_deadline_exceeded`, `job_failed_other_reason`, `job_retrying`, `no_box_while_pods_load` |
-| `workload_rows_tests.rs` | `daemon_set_rollout_by_node_starts_with_progress_rows`, `daemon_set_port_shows_host_port`, `stateful_set_claims_show_retention`, `replica_set_template_shows_hash_and_image` |
+| `kind_diagnosis_tests.rs` | `deployment_stalled`, `deployment_replica_failure`, `deployment_not_ready_names_pod`, `deployment_rollout_without_unhealthy_pod_has_no_box`, `paused_deployment_has_no_box`, `daemon_set_node_missing`, `daemon_set_nodes_missing_plural`, `daemon_set_pod_not_ready`, `daemon_set_without_pod_on_nodes`, `daemon_set_misscheduled`, `job_backoff_limit_with_exit_code`, `job_deadline_exceeded`, `job_failed_other_reason`, `job_retrying`, `no_box_while_pods_load` |
+| `workload_rows_tests.rs` | `daemon_set_rollout_by_node_starts_with_bars`, `daemon_set_port_shows_host_port`, `stateful_set_claims_show_retention`, `replica_set_template_shows_hash_and_image` |
+| `kind_row.rs` | `percent_rounds_and_clamps` |
 | `related_pods.rs` | `pod_row_detail_per_owner`, `ordinal_detail_lists_claims_of_the_pod`, `attempts_newest_first_with_exit_code` |
 | `resource_actions_tests.rs` | `replica_set_menu_has_go_to_owner`, `go_to_owner_disabled_without_owner` |
 
@@ -48,9 +50,9 @@
 
 | Module | Tests |
 |---|---|
-| `kind_join_tests.rs` | `joined_column_indices_name_their_columns`, `service_endpoints_all_ready`, `service_endpoints_partial`, `service_matches_no_pods`, `selector_matches_by_key_lookup` (keys `a` and `a.b`), `external_name_has_no_endpoints`, `selector_less_service_without_slices_warns`, `slices_without_service_label_are_ignored`, `dual_stack_counts_once`, `terminating_excluded_from_total`, `denied_slices_keep_builder_status` |
-| `network_rows_tests.rs`, `workload_diagnosis_tests.rs` | `service_row_has_endpoints_placeholder`; `service_no_matching_pods`, `service_no_ready_endpoints` |
-| `live_sections_tests.rs`, `cluster_session_tests.rs` | `endpoint_rows_single_and_multi_port`; `services_start_endpoint_companion_unless_denied` |
+| `kind_join_tests.rs` | `joined_column_indices_name_their_columns`, `service_endpoints_all_ready`, `service_endpoints_partial`, `service_matches_no_pods`, `external_name_has_no_endpoints`, `selector_less_service_without_slices_warns`, `slices_without_service_label_are_ignored`, `dual_stack_counts_once`, `terminating_excluded_from_total`, `denied_slices_keep_builder_status` |
+| `network_rows_tests.rs`, `kind_diagnosis_tests.rs` | `service_row_has_endpoints_placeholder`; `service_no_matching_pods`, `service_no_ready_endpoints` |
+| `live_sections_tests.rs`, `cluster_session_tests.rs` | `endpoint_rows_single_and_multi_port`; `services_start_endpoint_companion_unless_denied`, `companion_plan_per_kind` |
 
 ## Step 4b — ConfigMaps, Namespaces, Ingresses
 

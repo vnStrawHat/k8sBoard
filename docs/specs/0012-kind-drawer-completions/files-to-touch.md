@@ -16,6 +16,7 @@ No other dependency in any step: `thiserror` and `futures` (`buffer_unordered`) 
 |---|---|---|
 | 1a | `src/cron_schedule.rs` (new) + `cron_schedule_tests.rs` | `CronSchedule`, `ScheduleError`, grammar, day rule, robfig `Next` port, `@every` |
 | 1a | `src/cron_job.rs`, `src/lib.rs`, `examples/probe.rs` | `timetable`; exports; next run on the `cronjobs` line |
+| 1b | `src/selector.rs` (new) + tests in module | `Selector` ([cluster-api.md](cluster-api.md)); `workload::selector_terms` delegates to it |
 | 1b | `src/endpoint_slice.rs` (new) + tests in module | summaries, `watch_endpoint_slices` |
 | 1b | `src/object_count.rs` (new) + tests in module | `count_objects`, `count_params`, pure `count_of(items, remaining, has_continue)` |
 | 1b | `src/resource_watch.rs` | `selected_summary_watch` |
@@ -41,18 +42,18 @@ No other dependency in any step: `thiserror` and `futures` (`buffer_unordered`) 
 | 2 | `src/cluster_session.rs` (+ tests) | `RelatedObjects`, `RelatedList`, `set_related_subject`, `related_of`; `OpenWatches` and `open_watch_count` (Several multiplicity, related; replaces the two-argument form and its test) |
 | 2 | `src/table_selection.rs`, `src/table_view.rs` (+ tests) | `ResourceKey::of_owner`; `TableView::reveal(item)` clears text, chips, preset when they hide `item` |
 | 2 | `src/app_shell.rs`, `src/screenshot.rs` | `follow_drawer_subjects` and `drawer_subject_task` (replace the events-only pair); settle; `reveal` calls `TableView::reveal` |
-| 3 | `src/workload_diagnosis.rs` (new) + `workload_diagnosis_tests.rs` | rules D, S, J |
-| 3 | `src/kind_row.rs` | `DetailRow::Progress`, `LiveContent::NotReadyPods`, `KindObject::{StatefulSet, DaemonSet, ReplicaSet, Job}` |
+| 3 | `src/kind_diagnosis.rs` (new) + `kind_diagnosis_tests.rs` | rules D, S, J |
+| 3 | `src/kind_row.rs` | `DetailRow::Bar`, `percent`, `LiveContent::NotReadyPods`, `KindObject::{StatefulSet, DaemonSet, ReplicaSet, Job}` |
 | 3 | `src/workload_rows.rs` (+ tests) | DaemonSet "Rollout by node", Not ready placeholder, host port suffix; StatefulSet Retention; ReplicaSet Template section |
 | 3 | `src/related_pods.rs` (+ tests), `src/node_drawer.rs` | `PodRowDetail::{StatusAndClaims, Attempt}`, `pod_row_detail` |
-| 3 | `src/kind_drawer.rs`, `src/live_sections.rs`, `src/resource_actions.rs` (+ tests) | WHY box, Progress row, NotReadyPods; ReplicaSet Go to owner |
-| 4a | `src/kind_join.rs` (new) + `kind_join_tests.rs` | `join_rows` (Services), `service_health`, `selector_matches`, pods index |
+| 3 | `src/kind_drawer.rs`, `src/live_sections.rs`, `src/resource_actions.rs` (+ tests) | WHY box, `Bar` renderer, NotReadyPods; ReplicaSet Go to owner |
+| 4a | `src/kind_join.rs` (new) + `kind_join_tests.rs` | `join_rows` (Services), `service_health` (matching through `cluster::Selector`), pods index |
 | 4a | `src/resource_kind.rs`, `src/network_rows.rs`, `src/kind_row.rs` | Endpoints column and placeholder; `KindObject::Service`, `LiveContent::Endpoints` |
-| 4a | `src/cluster_session.rs` (+ tests) | endpoint slices companion, `join_explorer`, `items_mut`, `OpenWatches.endpoint_slices` |
-| 4a | `src/workload_diagnosis.rs`, `src/live_sections.rs` | rules V1–V2; Endpoints rows |
+| 4a | `src/cluster_session.rs` (+ tests) | `Companion`, `CompanionLists::EndpointSlices`, `CompanionUpdate`, `companion_plan`, `companion()`, `join_explorer`, `items_mut`, `OpenWatches.companion` |
+| 4a | `src/kind_diagnosis.rs`, `src/live_sections.rs` | rules V1–V2; Endpoints rows |
 | 4b | `src/kind_join.rs` | `config_map_users`, `namespace_load`, their `join_rows` arms |
 | 4b | `src/resource_kind.rs`, `src/config_map_rows.rs`, `src/namespace_rows.rs`, `src/network_rows.rs` (+ tests) | ConfigMaps and Namespaces columns, placeholders, `Live` sections; Ingress backend Links, `ingress_urls` |
-| 4b | `src/kind_row.rs`, `src/kind_table.rs`, `src/kind_drawer.rs` | `KindCell::Quantity`; `KindObject::{Ingress, ConfigMap}`; `LiveContent::{UsedBy, ConfigMapData}` |
+| 4b | `src/kind_row.rs`, `src/kind_table.rs`, `src/kind_drawer.rs` | `KindCell::Quantity` (with `tone`); `KindObject::{Ingress, ConfigMap}`; `LiveContent::{UsedBy, ConfigMapData}` |
 | 4b | `src/related_objects.rs`, `src/cluster_session.rs`, `src/live_sections.rs`, `src/resource_actions.rs` | `ConfigMapValues` subject; UsedBy and ConfigMapData rows; Open URL item and submenu |
 | 5 | `src/cluster_session.rs` (+ tests), `src/navigation.rs`, `src/app_shell.rs` | `KindCounts`, run from `finish_access_review` and `show_screen`, `NavigationCounts.kinds` |
 

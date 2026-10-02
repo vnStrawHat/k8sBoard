@@ -1,6 +1,6 @@
 # 0012 · WHY boxes for kinds
 
-[Back to index](README.md) · Step 3 (Services in step 4a) · Module: `workload_diagnosis.rs` (new, pure) + `workload_diagnosis_tests.rs`; renderer in `kind_drawer.rs`
+[Back to index](README.md) · Step 3 (Services in step 4a) · Module: `kind_diagnosis.rs` (new, pure; named for every kind because 0013–0015 add non-workload rules) + `kind_diagnosis_tests.rs`; renderer in `kind_drawer.rs`
 
 ## API
 

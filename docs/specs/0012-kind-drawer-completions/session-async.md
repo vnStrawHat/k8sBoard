@@ -46,20 +46,30 @@ pub(crate) fn subject_change<S: PartialEq>(running: Option<&S>, next: Option<S>)
 - Each watch whose change is `Stop` or `Start` is stopped at once. If any change is `Start`, one task waits `DRAWER_SUBJECT_DELAY` and then starts every pending subject in one `update`; a newer selection replaces the task. `Keep` leaves that watch running.
 - Screenshot settle: `is_content_pending` waits for `drawer_subject_task` plus a `Loading` events or related list.
 
-## Endpoint slices companion (step 4a)
+## Explorer companion: endpoint slices (step 4a)
+
+General from the start, because 0014 and 0015 add companions (PVs, bindings) as new variants:
 
 ```rust
-pub(crate) struct KindList { /* … */ endpoint_slices: Option<EndpointSlices> }
-struct EndpointSlices { list: LiveList<EndpointSliceSummary>, _subscription: WatchSubscription }
-impl LiveCluster { pub(crate) fn endpoint_slices(&self) -> Option<&LiveList<EndpointSliceSummary>>; }
+pub(crate) struct KindList { /* … */ companion: Option<Companion> }
+struct Companion { lists: CompanionLists, _subscription: WatchSubscription }
+pub(crate) enum CompanionLists { EndpointSlices(LiveList<EndpointSliceSummary>) }  // 0014, 0015 add variants
+enum CompanionUpdate { EndpointSlices(WatchUpdate<EndpointSliceSummary>) }
+impl CompanionLists { fn apply(&mut self, update: CompanionUpdate); } // ignores a variant that does not match
+impl LiveCluster { pub(crate) fn companion(&self) -> Option<&CompanionLists>; }
+/// Pure: which companion an explorer kind starts, or why not.
+pub(crate) fn companion_plan(kind: ResourceKind, access: &AccessState) -> CompanionPlan;
+pub(crate) enum CompanionPlan { None, Start(CompanionKind), Denied(AccessCheck) }
+pub(crate) enum CompanionKind { EndpointSlices }
 ```
 
-- `KindList::start(Services, …)` also starts `watch_endpoint_slices(scope)`, unless the access report is `Known` and denies `ListEndpointSlices` (then `None`, and the drawer shows the reason). A scope change restarts both with the explorer.
+- `companion_plan(Services, ..)`: `Denied(ListEndpointSlices)` when the report is `Known` and denies it (no companion; the drawer shows the reason), else `Start(EndpointSlices)`; other kinds `None`.
+- `KindList::start` starts the planned companion with `watch_endpoint_slices(scope)` mapped to `CompanionUpdate`, one subscription per companion. A scope change restarts both with the explorer.
 - If access becomes `Known` and denied after the start, the next explorer restart drops the companion; the running watch shows its own 403 failure until then.
 
 ## Join triggers (step 4a)
 
-`LiveCluster::join_explorer(&mut self)` calls `kind_join::join_rows` on the explorer's `items_mut()` (new `LiveList::items_mut`, `Ready` only) after: an explorer snapshot, a pods snapshot or failure (Services, ConfigMaps, Namespaces; 4b adds the last two), or an endpoint slices snapshot or failure (Services). Pause stream (0009) applies only to Events, so frozen rows never need a join. One notify per update, as today.
+`LiveCluster::join_explorer(&mut self)` calls `kind_join::join_rows` on the explorer's `items_mut()` (new `LiveList::items_mut`, `Ready` only) after: an explorer snapshot, a pods snapshot or failure (Services, ConfigMaps, Namespaces; 4b adds the last two), or a companion snapshot or failure (Services). Pause stream (0009) applies only to Events, so frozen rows never need a join. One notify per update, as today.
 
 ## Sidebar counts (step 5)
 
@@ -76,8 +86,8 @@ impl ClusterSession { fn refresh_kind_counts(&mut self, cx: &mut Context<Self>);
 
 ```rust
 pub(crate) struct OpenWatches { pub(crate) namespaces: usize /* scope multiplicity N, All = 1 */,
-    pub(crate) explorer: usize /* 0; 1 for Namespaces; else N */, pub(crate) endpoint_slices: bool, pub(crate) object_events: bool, pub(crate) related: bool }
+    pub(crate) explorer: usize /* 0; 1 for Namespaces; else N */, pub(crate) companion: usize /* N for a namespaced companion, 1 for a cluster-scoped one, else 0 */, pub(crate) object_events: bool, pub(crate) related: bool }
 fn open_watch_count(watches: OpenWatches) -> usize; // replaces open_watch_count(explorer, object_events)
 ```
 
-`= 2 (namespaces list, nodes) + N (pods) + explorer + N·endpoint_slices + object_events + related` ≤ `3N + 4` (19 at N = 5). `LiveCluster::watch_count` (status bar) fills it from the session. Counts and YAML GETs are one-shot requests, not watches.
+`= 2 (namespaces list, nodes) + N (pods) + explorer + companion + object_events + related` ≤ `3N + 4` (19 at N = 5). `LiveCluster::watch_count` (status bar) fills it from the session. Counts and YAML GETs are one-shot requests, not watches.

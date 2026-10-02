@@ -17,8 +17,9 @@ pub(crate) enum KindObject {
 pub(crate) enum DetailRow { /* … */
     /// Content computed at paint time from `KindObject` and the session's live lists.
     Live(LiveContent),
-    /// A labelled bar: `done` of `total`, toned. Step 3.
-    Progress { label: SharedString, done: u32, total: u32, tone: StatusTone },
+    /// A labelled bar. `percent` is 0–100 (builders clamp with `percent`); `tone: None` uses the
+    /// kit default color. Step 3 (DaemonSets); 0013–0015 reuse it for quantities.
+    Bar { label: SharedString, percent: u8, text: SharedString, tone: Option<StatusTone> },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LiveContent {
@@ -29,13 +30,16 @@ pub(crate) enum LiveContent {
 pub(crate) enum KindCell { /* … */
     /// The next run, painted relative to now (cron-schedule.md). Step 2.
     NextRun(CronSchedule),
-    /// Right-aligned mono text that sorts by `value`: request sums. Step 4b.
-    Quantity { text: SharedString, value: u64 },
+    /// Right-aligned mono text that sorts by `value`: request sums. `tone` colors the text
+    /// (`None` here; 0013–0015 tone usage cells). Step 4b.
+    Quantity { text: SharedString, value: u64, tone: Option<StatusTone> },
 }
+/// Rounds a ratio to a bar percent, clamped to 0–100. Step 3.
+pub(crate) fn percent(ratio: f64) -> u8;
 ```
 
 - Builders clone their summary into `object` (`rows` stays `fn(&T) -> KindRow`). Variants land with their first reader (an unread variant field fails clippy): Deployment, CronJob in step 2; StatefulSet, DaemonSet, ReplicaSet, Job in step 3; Service in step 4a; Ingress, ConfigMap in step 4b. Until then those builders use `Plain`.
-- `kind_table.rs` `value`: `NextRun` → `Number(next second)` or `Absent`; `Quantity` → `Number(value)`. `cell_element`: `NextRun` as plain text `in 11m`; `Quantity` mono.
+- `kind_table.rs` `value`: `NextRun` → `Number(next second)` or `Absent`; `Quantity` → `Number(value)`. `cell_element`: `NextRun` as plain text `in 11m`; `Quantity` mono, colored by `tone_color` when it has a tone. The `Bar` renderer: label column, `Progress::new(id).value(percent)` (`.color(tone_color(t))` only with a tone), then `text` mono.
 - `kind_drawer.rs` `field_value` handles both like the table.
 - `ResourceKey::of_owner(namespace: &str, owner: &ControllerRef) -> Option<ResourceKey>` wraps `of_object` (step 2) for links and Go to owner.
 
@@ -55,7 +59,7 @@ Joined columns are built as `KindCell::Absent` and filled by the join. `kind_joi
 ```rust
 pub(crate) struct JoinInputs<'a> {
     pub(crate) pods: &'a LiveList<PodSummary>,
-    pub(crate) endpoint_slices: Option<&'a LiveList<EndpointSliceSummary>>,
+    pub(crate) companion: Option<&'a CompanionLists>,   // EndpointSlices for Services (session-async.md)
     pub(crate) scope: &'a NamespaceScope,
 }
 /// Rewrites the joined cells (and the Service status) of `rows`. Other kinds: no-op.
@@ -83,7 +87,7 @@ Each index is built once per join call, then each row is a lookup. Pods are inde
 | some ready | Warn "{r} of {n} endpoints ready" | Warn `{r} of {n}` |
 | slices not loaded or denied | builder status | `Absent` |
 
-Matching (`selector_matches`): only the pods of the service's namespace (one index lookup); each selector term `k=v` is found with `binary_search_by_key(&k, key_of)` over the pod's `labels`, which `label_terms` keeps in key order, then the value is compared. Counting: decision 7.
+Matching: only the pods of the service's namespace (one index lookup); `cluster::Selector::of_labels(&service.selector)` is built once per service, then `matches(&pod.labels)` per pod ([cluster-api.md](cluster-api.md) "Selector"; the one label matcher in the project). Counting: decision 7.
 
 ### ConfigMaps
 
@@ -91,4 +95,4 @@ Matching (`selector_matches`): only the pods of the service's namespace (one ind
 
 ### Namespaces
 
-`NamespaceLoad { pods: usize, cpu: CpuAmount, memory: ByteAmount }` (decision 28). Cells: `Text` count, `Quantity { Measure::Cpu.format(cores), nanocores }`, `Quantity { Measure::Bytes.format(bytes), bytes }`. A namespace outside `scope` (`Named`/`Several` not containing it) or pods not ready → three `Absent`.
+`NamespaceLoad { pods: usize, cpu: CpuAmount, memory: ByteAmount }` (decision 28). Cells: `Text` count, `Quantity { Measure::Cpu.format(cores), nanocores, None }`, `Quantity { Measure::Bytes.format(bytes), bytes, None }`. A namespace outside `scope` (`Named`/`Several` not containing it) or pods not ready → three `Absent`.

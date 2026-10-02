@@ -1,6 +1,6 @@
 # 0012 — Kind drawer completions (read-only)
 
-Status: amended after advisor review (HEAD `013ab1f`: 0009 steps 1–2 committed, step 3 in progress). Crates: `crates/cluster` (steps 1a–1b), `crates/app` (steps 2–5). Requires 0009 (`TableRow`, filters, `NamespaceScope::Several`, `PodSummary.labels`) and 0010 (`CpuAmount`, `ByteAmount`, `Measure`) merged; independent of 0011. Wireframes: W7 drawers and columns of the 12 live kinds. Applies C1, C6, C7, C11.
+Status: amended after advisor review (HEAD `013ab1f`), then at HEAD `81497ba` so 0013–0015 add no renames: `DetailRow::Bar`, `KindCell::Quantity.tone`, `kind_diagnosis.rs`, `cluster::Selector` (one label matcher), and `KindList.companion` are general from the start. Crates: `crates/cluster` (steps 1a–1b), `crates/app` (steps 2–5). Requires 0009 (`TableRow`, filters, `NamespaceScope::Several`, `PodSummary.labels`) and 0010 (`CpuAmount`, `ByteAmount`, `Measure`) merged; independent of 0011. Wireframes: W7 drawers and columns of the 12 live kinds. Applies C1, C6, C7, C11.
 
 ## Goal
 
@@ -15,9 +15,9 @@ Any mutation (Roll back, Trigger, Restart stay disabled); ControllerRevisions; P
 | Step | Scope | ACs |
 |---|---|---|
 | 1a | `crates/cluster`: `cron_schedule.rs`, `CronJobSummary.timetable`, jiff tz feature, probe next run | 1, 2, 3, 4 |
-| 1b | `crates/cluster`: other summary fields, `endpoint_slice.rs`, selected watches, `object_count.rs`, `ListEndpointSlices`, probe | 1, 2, 3, 5, 6 |
+| 1b | `crates/cluster`: other summary fields, `selector.rs`, `endpoint_slice.rs`, selected watches, `object_count.rs`, `ListEndpointSlices`, probe | 1, 2, 3, 5, 6 |
 | 2 | App row model (`KindObject`, live rows, `NextRun`), related watch (`follow_drawer_subjects`), Deployment Revisions, CronJob Next run and Recent jobs, owner links, reveal clears filter, `open_watch_count` | 1, 2, 3, 7, 8, 10 |
-| 3 | `workload_diagnosis.rs` WHY boxes; DaemonSet Rollout by node and Not ready; StatefulSet claims; Job Attempts; ReplicaSet Template and Go to owner | 1, 2, 7, 10 |
+| 3 | `kind_diagnosis.rs` WHY boxes; DaemonSet Rollout by node and Not ready; StatefulSet claims; Job Attempts; ReplicaSet Template and Go to owner | 1, 2, 7, 10 |
 | 4a | `kind_join.rs` and join triggers; Services: endpoint-slice companion, Endpoints column, status, list, WHY | 1, 2, 7, 8, 10 |
 | 4b | ConfigMaps Used by and value previews; Namespaces columns; Ingress Open URL and backend links | 1, 2, 5, 7, 9, 10 |
 | 5 | Sidebar counts (C11); full ui-verifier run | 1, 2, 8, 9, 10 |
@@ -27,7 +27,7 @@ Any mutation (Roll back, Trigger, Restart stay disabled); ControllerRevisions; P
 | File | Contents |
 |---|---|
 | [decisions.md](decisions.md) | numbered decisions with rationale, ceilings |
-| [cluster-api.md](cluster-api.md) | step 1b: new fields, endpoint slices, selected watches, counts, access check, probe |
+| [cluster-api.md](cluster-api.md) | step 1b: new fields, `Selector`, endpoint slices, selected watches, counts, access check, probe |
 | [cron-schedule.md](cron-schedule.md) | step 1a: grammar, day rule, robfig `Next` port, `@every`, time zones, display |
 | [row-model.md](row-model.md) | steps 2–4b: `KindObject`, `DetailRow::Live`, new cells and columns, joins |
 | [drawer-sections.md](drawer-sections.md) | steps 2–4b: per-kind section order and live content, links, Open URL |
