@@ -22,11 +22,15 @@ use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
 use crate::kind_row::{KindCell, KindRow};
 use crate::live_sections::next_run_text;
-use crate::resource_actions::{kind_menu, open_url_choice, open_url_menu_item};
+use crate::resource_actions::{
+    MenuExtras, kind_menu, open_url_choice, open_url_menu_item, secret_menu,
+};
 use crate::resource_kind::{Align, NAME_COLUMN, NameColumn, ResourceKind, kind_columns};
+use crate::secret_values::ValueAccess;
 use crate::status_tone::{StatusTone, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
 use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
+use crate::table_selection::ResourceKey;
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 
 /// The logical column of the Name column, for the kinds that show it.
@@ -386,6 +390,16 @@ impl TableDelegate for KindTableDelegate {
         };
         let open_url = (kind == ResourceKind::Ingresses)
             .then(|| open_url_menu_item(open_url_choice(&row), window, cx));
+        let secret = (kind == ResourceKind::Secrets)
+            .then(|| {
+                let access = self
+                    .shell
+                    .read_with(cx, |shell, _| shell.secret_value_access())
+                    .unwrap_or(ValueAccess::Blocked);
+                let key = ResourceKey::of_row(kind, &row);
+                secret_menu(&row, key, access, &self.shell, window, cx)
+            })
+            .flatten();
         let Some(live) = self.live(cx) else {
             return menu;
         };
@@ -396,7 +410,7 @@ impl TableDelegate for KindTableDelegate {
             &live.access,
             live.pods.items(),
             &self.shell,
-            open_url,
+            MenuExtras { open_url, secret },
         )
     }
 

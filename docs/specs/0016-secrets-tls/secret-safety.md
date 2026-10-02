@@ -50,6 +50,8 @@ kube-client 4.2 `Client::request` logs the whole body at `warn` when JSON decodi
 - `secrets-drawer` uses `--filter <first TLS secret name from the probe>` so the drawer shows the Certificate section.
 - Any visible value in a Data cell is a **high-severity defect**; report it without attaching the image to any other agent and delete the file from `.tmp/`.
 
-## Live checks of Reveal and Copy (coder, step 3)
+## Live checks of Reveal and Copy (manual, by the user)
+
+Agents never touch the real clipboard and never reveal a real value; this check is a manual step for the user (AC 7). Steps:
 
 On UAT with the first TLS secret: Reveal `tls.crt` (public); confirm it hides after 30 s and when the drawer closes. Copy `tls.crt`; `head -c 27 /dev/clipboard` (Git Bash) prints `-----BEGIN CERTIFICATE-----`; after 30 s it is empty; Win+V history does not list it. Copy, then copy other text within 30 s: the other text survives. Never reveal or copy `tls.key`, tokens, or Opaque values; no screenshots.

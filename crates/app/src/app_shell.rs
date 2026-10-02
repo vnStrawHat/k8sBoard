@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cluster::{
     ContextSummary, EventFilter, InvolvedObject, Kubeconfig, KubeconfigError, NamespaceScope,
+    SecretSummary,
 };
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::resizable::ResizableState;
@@ -26,6 +28,7 @@ use crate::drawer::{
     MonitorRange, MonitorScope, MonitorState, drawer_tabs,
 };
 use crate::filter_bar::ToolkitState;
+use crate::kind_row::KindObject;
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
 use crate::launch_options::{
@@ -47,6 +50,13 @@ use crate::screenshot::{FeedProgress, kubelet_progress};
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{SettleInput, TargetState, is_drawer_ready};
 use crate::screenshot::{pick_drawer_pod, pick_logs_pod, pick_selected};
+use crate::secret_clipboard::{
+    CLIPBOARD_CLEAR_DELAY, ClearStep, ClipboardMark, clear_if_unchanged, next_clear_step,
+};
+use crate::secret_values::{
+    PendingAction, SecretAction, SecretCopied, SecretValuesView, ValueAccess, fetcher,
+    pending_action, value_access, values_subject,
+};
 use crate::status_bar::status_bar;
 use crate::table_filter::{
     FilterChip, FilterPreset, TableFilter, parse_label_queries, quick_filter_text,
@@ -113,6 +123,21 @@ impl PendingSubjects {
     }
 }
 
+/// A copied value waiting for its clear: what was written, which attempt this is, and the timer.
+struct ArmedClear {
+    mark: ClipboardMark,
+    /// Counted from 0; a retry after an unreadable clipboard adds one.
+    attempt: u32,
+    _task: Task<()>,
+}
+
+/// Whether a failed clear may be tried again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Retry {
+    Allowed,
+    Never,
+}
+
 /// What the command line asked for, used only by the first session.
 struct RequestedStart {
     context: Option<String>,
@@ -159,6 +184,14 @@ pub(crate) struct AppShell {
     _focus_lost: Subscription,
     /// The picker popover: which trigger is open, and the draft.
     namespace_picker: NamespacePickerState,
+    /// Whether Reveal and Copy work: decided once from the launch options, and the only thing the
+    /// values view and the menus read (`value_access`).
+    secret_value_access: ValueAccess,
+    /// The clear of the last copied value. It lives here, not in the drawer, so it survives the
+    /// drawer closing and a context switch. A new copy replaces it.
+    clipboard_clear: Option<ArmedClear>,
+    /// Clears an armed copy when the app quits (best effort).
+    _clipboard_quit: Subscription,
 }
 
 /// The key bindings of the shell. `!Input` keeps `/` typable in every input, the YAML editor
@@ -173,6 +206,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 
 impl AppShell {
     pub(crate) fn new(options: LaunchOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let secret_value_access = value_access(&options);
         let kubeconfig_env = std::env::var_os("KUBECONFIG");
         let has_ignored_entries = options.kubeconfig.is_none()
             && has_ignored_kubeconfig_entries(kubeconfig_env.as_deref());
@@ -238,6 +272,10 @@ impl AppShell {
             window.focus(&target, cx);
         });
 
+        let clipboard_quit = cx.on_app_quit(|shell, cx| {
+            shell.clear_armed_clipboard(Retry::Never, cx);
+            std::future::ready(())
+        });
         let mut drawer = DrawerState::new();
         drawer.tab = options.screen.drawer_tab().unwrap_or(DrawerTab::Overview);
         // W4b shows the Containers tab expanded, and W4c the Monitor tab.
@@ -275,6 +313,9 @@ impl AppShell {
             _quick_filter_events: quick_filter_events,
             _focus_lost: focus_lost,
             namespace_picker: NamespacePickerState::default(),
+            secret_value_access,
+            clipboard_clear: None,
+            _clipboard_quit: clipboard_quit,
         };
         if let Some(text) = launch_filter {
             shell.apply_launch_filter(&text, cx);
@@ -545,6 +586,9 @@ impl AppShell {
 
     pub(crate) fn set_drawer_tab(&mut self, tab: DrawerTab, cx: &mut Context<Self>) {
         self.drawer.tab = tab;
+        if tab != DrawerTab::Overview {
+            self.drop_secret_values();
+        }
         cx.notify();
     }
 
@@ -703,6 +747,145 @@ impl AppShell {
         cx.notify();
     }
 
+    /// Whether Reveal and Copy work. The values view and the menus read only this.
+    pub(crate) fn secret_value_access(&self) -> ValueAccess {
+        self.secret_value_access
+    }
+
+    /// A menu's Reveal or Copy: opens the drawer of `key` on its Overview tab and hands the action
+    /// to the values view as soon as it exists (`sync_secret_values`).
+    pub(crate) fn run_secret_action(
+        &mut self,
+        key: ResourceKey,
+        action: SecretAction,
+        cx: &mut Context<Self>,
+    ) {
+        if self.secret_value_access == ValueAccess::Blocked {
+            return;
+        }
+        if self.selected.as_ref() != Some(&key) {
+            self.reveal(key.clone(), cx);
+        }
+        if self.selected.as_ref() != Some(&key) {
+            return;
+        }
+        self.drawer.tab = DrawerTab::Overview;
+        self.drawer.pending_secret_action = Some((key, action));
+        cx.notify();
+    }
+
+    /// Drops the values view (wiping every revealed value) and any action waiting for it.
+    fn drop_secret_values(&mut self) {
+        self.drawer.secret_values = None;
+        self.drawer.pending_secret_action = None;
+    }
+
+    /// Keeps `drawer.secret_values` for the shown Secret only: the view lives exactly while the
+    /// Overview tab of its drawer is shown. It runs inside `render`, so it only assigns and never
+    /// notifies, and it is the only place that creates the view.
+    fn sync_secret_values(&mut self, cx: &mut Context<Self>) {
+        let subject = values_subject(self.selected.as_ref(), self.drawer.tab);
+        let Some(subject) = subject else {
+            self.drop_secret_values();
+            return;
+        };
+        let existing = self
+            .drawer
+            .secret_values
+            .clone()
+            .filter(|view| view.read(cx).is_for(&subject));
+        // The common frame: the view exists, so only the key list is read (and copied only when
+        // it changed); the connection and names are cloned for a new view alone.
+        if let Some(view) = existing {
+            let keys = self
+                .live(cx)
+                .and_then(|live| secret_of(live, &subject).map(|secret| secret.keys.clone()));
+            let Some(keys) = keys else {
+                self.drop_secret_values();
+                return;
+            };
+            view.update(cx, |view, _| view.set_keys(&keys));
+        } else {
+            let found = self.live(cx).and_then(|live| {
+                let secret = secret_of(live, &subject)?;
+                Some((
+                    live.connection().clone(),
+                    secret.keys.clone(),
+                    secret.namespace.clone(),
+                    secret.name.clone(),
+                ))
+            });
+            let Some((connection, keys, namespace, name)) = found else {
+                self.drop_secret_values();
+                return;
+            };
+            let access = self.secret_value_access;
+            let fetch = fetcher(connection, namespace, name);
+            let view = cx.new(|_| SecretValuesView::new(fetch, subject.clone(), keys, access));
+            // The subscription ends with the view, which only this shell holds.
+            cx.subscribe(&view, |shell, _, event: &SecretCopied, cx| {
+                shell.arm_clipboard_clear(event.0.clone(), cx);
+            })
+            .detach();
+            self.drawer.secret_values = Some(view);
+        }
+        let Some((pending, _)) = &self.drawer.pending_secret_action else {
+            return;
+        };
+        let verdict = pending_action(pending, Some(&subject));
+        let Some((_, action)) = self.drawer.pending_secret_action.take() else {
+            return;
+        };
+        if verdict == PendingAction::Run
+            && let Some(view) = &self.drawer.secret_values
+        {
+            view.update(cx, |view, cx| view.run(action, cx));
+        }
+    }
+
+    /// Starts the 30 s clear of a copied value, replacing any armed one: the clipboard now holds
+    /// the new text, so the old mark no longer matters.
+    fn arm_clipboard_clear(&mut self, mark: ClipboardMark, cx: &mut Context<Self>) {
+        self.arm_clear_after(mark, CLIPBOARD_CLEAR_DELAY, 0, cx);
+    }
+
+    fn arm_clear_after(
+        &mut self,
+        mark: ClipboardMark,
+        delay: Duration,
+        attempt: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.clear_armed_clipboard(Retry::Allowed, cx)
+            });
+        });
+        self.clipboard_clear = Some(ArmedClear {
+            mark,
+            attempt,
+            _task: task,
+        });
+    }
+
+    /// Clears the clipboard when it still holds the armed copy; anything else is left alone. A
+    /// clipboard that cannot be read or emptied just now is tried again soon, a few times, because
+    /// the value may still be on it. At quit there is one attempt and no retry.
+    fn clear_armed_clipboard(&mut self, retry: Retry, cx: &mut Context<Self>) {
+        let Some(armed) = self.clipboard_clear.take() else {
+            return;
+        };
+        // Detached, not dropped: this may run inside the task itself.
+        armed._task.detach();
+        let outcome = clear_if_unchanged(&armed.mark, cx);
+        if retry == Retry::Allowed
+            && let ClearStep::RetryIn(delay) = next_clear_step(outcome, armed.attempt)
+        {
+            self.arm_clear_after(armed.mark, delay, armed.attempt + 1, cx);
+        }
+    }
+
     /// Keeps `drawer.yaml` for the shown subject only: the view lives exactly while the YAML tab of
     /// an open drawer is shown. It runs inside `render`, so it only assigns and never notifies, and
     /// it is the only place that creates a `YamlView`. Comparing by object alone is enough because
@@ -812,6 +995,7 @@ impl AppShell {
         }
         self.selected = key;
         self.drawer.selected_container = None;
+        self.drop_secret_values();
         // A part of one subject (a container, a pod) means nothing for the next.
         self.drawer.monitor.scope = MonitorScope::Total;
         self.follow_drawer_subjects(cx);
@@ -1605,6 +1789,7 @@ impl Render for AppShell {
         self.refresh_monitor_cache(cx);
         self.open_pending_logs(window, cx);
         self.sync_yaml_view(window, cx);
+        self.sync_secret_values(cx);
         self.sync_kubelet_demand(cx);
         self.sync_quick_filter(window, cx);
         let theme = cx.theme();
@@ -1696,6 +1881,20 @@ fn kubeconfig_error_message(message: String, has_ignored_entries: bool) -> Strin
         format!("{message}. {IGNORED_KUBECONFIG_NOTE}")
     } else {
         message
+    }
+}
+
+/// The Secret row of the shown subject.
+fn secret_of<'a>(live: &'a LiveCluster, subject: &ResourceKey) -> Option<&'a SecretSummary> {
+    let row = live
+        .kind_list(ResourceKind::Secrets)?
+        .list
+        .items()
+        .iter()
+        .find(|row| subject.is_row(ResourceKind::Secrets, row))?;
+    match &row.object {
+        KindObject::Secret(secret) => Some(secret),
+        _ => None,
     }
 }
 

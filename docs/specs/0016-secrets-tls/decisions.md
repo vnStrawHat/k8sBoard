@@ -66,3 +66,7 @@
 ## Cargo.lock (step 1)
 
 Six packages were added: `x509-cert` 0.3.0, `der` 0.8.2, `der_derive` 0.8.0, `spki` 0.8.0, `flagset` 0.4.7, and `base64ct` 1.8.3. `base64ct` is a weak optional dependency of `spki` (feature `base64`): Cargo records it in the lock file although it is never compiled here (`cargo tree -i base64ct` finds nothing; cargo issue #10801). Accepted by the security review.
+
+## AC 7 live check
+
+The live Reveal and Copy check (reveal hides after 30 s and on drawer close; Copy fills the clipboard, stays out of Win+V history, and is cleared after 30 s) is a **manual step for the user** ([secret-safety.md](secret-safety.md)). Agents never touch the real clipboard and never reveal a real UAT value: tests use fixtures and a fake `ClipboardPort`, and screenshot runs block Reveal and Copy.

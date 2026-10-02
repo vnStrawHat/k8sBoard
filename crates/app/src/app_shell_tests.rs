@@ -10,6 +10,8 @@ use gpui_kit::{
     WindowOptions, px, size,
 };
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use super::*;
 use crate::launch_options::{LaunchRequest, parse_launch_options};
 
@@ -19,8 +21,18 @@ type Focus = (bool, bool);
 const ROOT: Focus = (true, false);
 
 fn open_shell(cx: &mut TestAppContext) -> (WindowHandle<Root>, Entity<AppShell>) {
-    let args = ["--kubeconfig", "does-not-exist/kubeconfig.yml"].map(str::to_owned);
-    let Ok(LaunchRequest::Run(options)) = parse_launch_options(args.into_iter()) else {
+    open_shell_with(&[], cx)
+}
+
+fn open_shell_with(
+    extra: &[&str],
+    cx: &mut TestAppContext,
+) -> (WindowHandle<Root>, Entity<AppShell>) {
+    let args = ["--kubeconfig", "does-not-exist/kubeconfig.yml"]
+        .iter()
+        .chain(extra)
+        .map(|arg| (*arg).to_owned());
+    let Ok(LaunchRequest::Run(options)) = parse_launch_options(args) else {
         panic!("the launch flags are valid");
     };
     cx.update(|cx| {
@@ -107,4 +119,140 @@ fn focus_returns_to_the_shell_when_the_focused_input_leaves_the_tree(cx: &mut Te
         assert_eq!(focus_of(window, &shell, cx), ROOT);
         assert!(is_slash_available(window, cx));
     }
+}
+
+// ---- Secret values and the clipboard clear ----
+
+/// Marks of fixture text only: no test here reads or writes the system clipboard.
+fn fixture_mark(text: &str) -> ClipboardMark {
+    ClipboardMark::of(text)
+}
+
+#[gpui_kit::test]
+fn secret_value_access_follows_the_launch_options(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.secret_value_access()),
+        ValueAccess::Enabled
+    );
+    let (_, screenshot_shell) = open_shell_with(&["--screenshot", "out.png"], cx);
+    assert_eq!(
+        screenshot_shell.read_with(cx, |shell, _| shell.secret_value_access()),
+        ValueAccess::Blocked
+    );
+}
+
+#[gpui_kit::test]
+fn blocked_shell_ignores_a_secret_action(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell_with(&["--screenshot", "out.png"], cx);
+    let key = ResourceKey::Kind {
+        kind: ResourceKind::Secrets,
+        namespace: Some("shop".to_owned()),
+        name: "credentials".to_owned(),
+    };
+    shell.update(cx, |shell, cx| {
+        shell.run_secret_action(key, SecretAction::RevealAll, cx);
+    });
+    shell.read_with(cx, |shell, _| {
+        assert!(shell.drawer.pending_secret_action.is_none());
+        assert!(shell.selected.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn copy_arms_clipboard_clear_and_survives_drawer_close(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.arm_clipboard_clear(fixture_mark("fixture-one"), cx);
+    });
+    shell.update(cx, |shell, cx| shell.close_drawer(cx));
+    shell.read_with(cx, |shell, _| {
+        let armed = shell.clipboard_clear.as_ref().expect("a clear stays armed");
+        assert!(armed.mark.matches("fixture-one"));
+    });
+}
+
+#[gpui_kit::test]
+fn new_copy_replaces_armed_clear(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.arm_clipboard_clear(fixture_mark("fixture-one"), cx);
+        shell.arm_clipboard_clear(fixture_mark("fixture-two"), cx);
+    });
+    shell.read_with(cx, |shell, _| {
+        let armed = shell.clipboard_clear.as_ref().expect("a clear is armed");
+        assert!(armed.mark.matches("fixture-two"));
+        assert!(!armed.mark.matches("fixture-one"));
+    });
+}
+
+#[gpui_kit::test]
+fn changing_the_selection_drops_the_values_view_and_its_pending_action(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    let key = ResourceKey::Kind {
+        kind: ResourceKind::Secrets,
+        namespace: Some("shop".to_owned()),
+        name: "credentials".to_owned(),
+    };
+    shell.update(cx, |shell, cx| {
+        shell.drawer.pending_secret_action = Some((key.clone(), SecretAction::RevealAll));
+        shell.change_selection(Some(key), cx);
+    });
+    shell.read_with(cx, |shell, _| {
+        assert!(shell.drawer.pending_secret_action.is_none());
+        assert!(shell.drawer.secret_values.is_none());
+    });
+}
+
+/// A values view over a fetcher that counts its calls: no test here reads a real Secret.
+fn counting_view(calls: &Arc<AtomicUsize>, cx: &mut Context<AppShell>) -> Entity<SecretValuesView> {
+    let calls = Arc::clone(calls);
+    let fetch: crate::secret_values::FetchValues = Arc::new(move || {
+        calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(Vec::new()) })
+    });
+    let key = secret_key_fixture();
+    cx.new(|_| SecretValuesView::new(fetch, key, Vec::new(), ValueAccess::Enabled))
+}
+
+fn secret_key_fixture() -> ResourceKey {
+    ResourceKey::Kind {
+        kind: ResourceKind::Secrets,
+        namespace: Some("shop".to_owned()),
+        name: "credentials".to_owned(),
+    }
+}
+
+#[gpui_kit::test]
+fn leaving_the_overview_tab_drops_an_existing_values_view(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    let calls = Arc::new(AtomicUsize::new(0));
+    shell.update(cx, |shell, cx| {
+        shell.drawer.secret_values = Some(counting_view(&calls, cx));
+        // Staying on Overview keeps it.
+        shell.set_drawer_tab(DrawerTab::Overview, cx);
+        assert!(shell.drawer.secret_values.is_some());
+        shell.set_drawer_tab(DrawerTab::Yaml, cx);
+    });
+    shell.read_with(cx, |shell, _| assert!(shell.drawer.secret_values.is_none()));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[gpui_kit::test]
+fn changing_the_selection_drops_an_existing_values_view(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    let calls = Arc::new(AtomicUsize::new(0));
+    shell.update(cx, |shell, cx| {
+        shell.drawer.secret_values = Some(counting_view(&calls, cx));
+        shell.change_selection(Some(secret_key_fixture()), cx);
+    });
+    shell.read_with(cx, |shell, _| assert!(shell.drawer.secret_values.is_none()));
+    // The same key again is a no-op, so a second view survives it.
+    shell.update(cx, |shell, cx| {
+        shell.drawer.secret_values = Some(counting_view(&calls, cx));
+        shell.change_selection(Some(secret_key_fixture()), cx);
+    });
+    shell.read_with(cx, |shell, _| assert!(shell.drawer.secret_values.is_some()));
+    shell.update(cx, |shell, cx| shell.close_drawer(cx));
+    shell.read_with(cx, |shell, _| assert!(shell.drawer.secret_values.is_none()));
 }

@@ -23,6 +23,7 @@ use crate::history_rings::Resolution;
 use crate::monitor_data::MonitorData;
 use crate::object_events::events_title;
 use crate::resource_kind::ResourceKind;
+use crate::secret_values::{SecretAction, SecretValuesView};
 use crate::table_selection::ResourceKey;
 use crate::yaml_view::{YamlView, object_ref};
 
@@ -49,6 +50,11 @@ pub(crate) struct DrawerState {
     pub(crate) container_tab: ContainerTab,
     /// The YAML tab's view; `AppShell::sync_yaml_view` keeps it for the shown subject only.
     pub(crate) yaml: Option<Entity<YamlView>>,
+    /// The Data section of an open Secret drawer; `AppShell::sync_secret_values` keeps it for the
+    /// shown subject only, so dropping it wipes every revealed value.
+    pub(crate) secret_values: Option<Entity<SecretValuesView>>,
+    /// A menu's Reveal or Copy that waits for the view of its Secret to exist.
+    pub(crate) pending_secret_action: Option<(ResourceKey, SecretAction)>,
     /// The Monitor tab: range and Table view survive a change of subject, the scope does not.
     pub(crate) monitor: MonitorState,
 }
@@ -61,6 +67,8 @@ impl DrawerState {
             selected_container: None,
             container_tab: ContainerTab::Info,
             yaml: None,
+            secret_values: None,
+            pending_secret_action: None,
             monitor: MonitorState::new(),
         }
     }

@@ -1,4 +1,4 @@
-use cluster::{AccessCheck, NodeSummary, PodSummary};
+use cluster::{AccessCheck, NodeSummary, PodSummary, SecretKey};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
@@ -14,6 +14,7 @@ use crate::log_dock::LogDock;
 use crate::log_tab::LogTarget;
 use crate::network_rows::ingress_urls;
 use crate::resource_kind::ResourceKind;
+use crate::secret_values::{SecretAction, ValueAccess};
 use crate::table_selection::ResourceKey;
 
 const READ_ONLY_FEATURE_REASON: &str = "Not available in read-only mode";
@@ -226,9 +227,12 @@ pub(crate) fn kind_menu(
     access: &AccessState,
     pods: &[PodSummary],
     shell: &WeakEntity<AppShell>,
-    open_url: Option<PopupMenuItem>,
+    extras: MenuExtras,
 ) -> PopupMenu {
     let mut menu = menu;
+    if let Some(secret) = extras.secret {
+        menu = menu.item(secret.reveal).item(secret.copy).separator();
+    }
     if let Some(event) = &row.event {
         menu = menu
             .item(go_to_object_item(event, shell))
@@ -237,7 +241,7 @@ pub(crate) fn kind_menu(
             .separator();
     }
     menu = menu.item(view_yaml_item(ResourceKey::of_row(kind, row), shell));
-    if let Some(item) = open_url {
+    if let Some(item) = extras.open_url {
         menu = menu.item(item);
     }
     if has_go_to_target(kind) {
@@ -268,7 +272,7 @@ pub(crate) fn kind_menu(
         menu = menu.separator();
     }
     for label in change_actions {
-        menu = menu.item(disabled_menu_item(label, READ_ONLY_MODE_REASON.into()));
+        menu = menu.item(disabled_menu_item(*label, READ_ONLY_MODE_REASON.into()));
     }
     menu.separator()
         .item(copy_name_item(&row.name, access))
@@ -277,6 +281,151 @@ pub(crate) fn kind_menu(
             kind.delete_label(),
             READ_ONLY_MODE_REASON.into(),
         ))
+}
+
+/// Items that need the window or the app to be built, so the caller builds them before it borrows
+/// the session (a submenu needs the app mutably).
+#[derive(Default)]
+pub(crate) struct MenuExtras {
+    pub(crate) open_url: Option<PopupMenuItem>,
+    pub(crate) secret: Option<SecretMenu>,
+}
+
+/// The Reveal and Copy items of a Secret.
+pub(crate) struct SecretMenu {
+    reveal: PopupMenuItem,
+    copy: PopupMenuItem,
+}
+
+/// Why an item is disabled, or that it is not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MenuState {
+    Enabled,
+    Disabled(&'static str),
+}
+
+/// One entry of the Copy submenu. `key` is `None` for the "No data" placeholder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CopyEntry {
+    pub(crate) label: String,
+    pub(crate) key: Option<String>,
+    pub(crate) state: MenuState,
+}
+
+/// What a Secret's menu offers, decided from the keys and the one access field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SecretMenuModel {
+    pub(crate) reveal: MenuState,
+    pub(crate) copies: Vec<CopyEntry>,
+}
+
+const SECRET_BLOCKED_REASON: &str = "Disabled in screenshot runs";
+
+/// Reveal values (30s), then Copy value with one `Copy {key}` per key. Blocked access disables
+/// everything; a binary key cannot be copied; no keys leaves one disabled "No data".
+pub(crate) fn secret_menu_model(keys: &[SecretKey], access: ValueAccess) -> SecretMenuModel {
+    let is_blocked = access == ValueAccess::Blocked;
+    let blocked = MenuState::Disabled(SECRET_BLOCKED_REASON);
+    if keys.is_empty() {
+        return SecretMenuModel {
+            reveal: if is_blocked {
+                blocked
+            } else {
+                MenuState::Disabled("No data")
+            },
+            copies: vec![CopyEntry {
+                label: "No data".to_owned(),
+                key: None,
+                state: MenuState::Disabled(if is_blocked {
+                    SECRET_BLOCKED_REASON
+                } else {
+                    "No data"
+                }),
+            }],
+        };
+    }
+    SecretMenuModel {
+        reveal: if is_blocked {
+            blocked
+        } else {
+            MenuState::Enabled
+        },
+        copies: keys
+            .iter()
+            .map(|key| CopyEntry {
+                label: format!("Copy {}", key.name),
+                key: Some(key.name.clone()),
+                state: match (is_blocked, key.is_binary) {
+                    (true, _) => blocked,
+                    (false, true) => MenuState::Disabled("Binary value"),
+                    (false, false) => MenuState::Enabled,
+                },
+            })
+            .collect(),
+    }
+}
+
+/// The Reveal and Copy items of a Secrets row; `None` for any other row.
+pub(crate) fn secret_menu(
+    row: &KindRow,
+    key: ResourceKey,
+    access: ValueAccess,
+    shell: &WeakEntity<AppShell>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<SecretMenu> {
+    let KindObject::Secret(secret) = &row.object else {
+        return None;
+    };
+    let model = secret_menu_model(&secret.keys, access);
+    let reveal = match model.reveal {
+        MenuState::Enabled => secret_action_item(
+            "Reveal values (30s)".into(),
+            key.clone(),
+            SecretAction::RevealAll,
+            shell,
+        ),
+        MenuState::Disabled(reason) => disabled_menu_item("Reveal values (30s)", reason.into()),
+    };
+    let shell = shell.clone();
+    let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
+        model.copies.iter().fold(submenu, |submenu, entry| {
+            let item = match (&entry.state, &entry.key) {
+                (MenuState::Enabled, Some(name)) => secret_action_item(
+                    entry.label.clone().into(),
+                    key.clone(),
+                    SecretAction::Copy(name.clone()),
+                    &shell,
+                ),
+                (MenuState::Disabled(reason), _) => {
+                    disabled_menu_item(entry.label.clone(), (*reason).into())
+                }
+                (MenuState::Enabled, None) => {
+                    disabled_menu_item(entry.label.clone(), "No data".into())
+                }
+            };
+            submenu.item(item)
+        })
+    });
+    Some(SecretMenu {
+        reveal,
+        copy: PopupMenuItem::submenu("Copy value", submenu),
+    })
+}
+
+/// A Reveal or Copy item: it opens the drawer of `key` and runs `action` through the shell.
+fn secret_action_item(
+    label: SharedString,
+    key: ResourceKey,
+    action: SecretAction,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let shell = shell.clone();
+    PopupMenuItem::new(label).on_click(move |_, _, cx| {
+        let _ = shell.update(cx, |shell, cx| {
+            shell.run_secret_action(key.clone(), action.clone(), cx);
+        });
+    })
 }
 
 /// How many URLs the Open URL submenu lists.
@@ -523,9 +672,13 @@ fn action_item(action: ResourceAction, label: &'static str, access: &AccessState
 }
 
 /// A `PopupMenuItem` has no tooltip, so the reason sits under the label in smaller text.
-pub(crate) fn disabled_menu_item(label: &'static str, reason: SharedString) -> PopupMenuItem {
+pub(crate) fn disabled_menu_item(
+    label: impl Into<SharedString>,
+    reason: SharedString,
+) -> PopupMenuItem {
+    let label = label.into();
     PopupMenuItem::element(move |_, cx| {
-        v_flex().child(div().child(label)).child(
+        v_flex().child(div().child(label.clone())).child(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)

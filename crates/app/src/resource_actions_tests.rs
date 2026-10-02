@@ -547,3 +547,95 @@ fn pv_menu_go_to_claim() {
     );
     assert_eq!(volume_claim_target(&volume(None)), None);
 }
+
+// ---- Secret menu ----
+
+fn secret_key(name: &str, is_binary: bool) -> SecretKey {
+    SecretKey {
+        name: name.to_owned(),
+        size_bytes: 8,
+        is_binary,
+    }
+}
+
+#[test]
+fn secret_menu_order() {
+    let keys = [secret_key("password", false), secret_key("username", false)];
+    let model = secret_menu_model(&keys, ValueAccess::Enabled);
+    assert_eq!(model.reveal, MenuState::Enabled);
+    let labels: Vec<&str> = model
+        .copies
+        .iter()
+        .map(|entry| entry.label.as_str())
+        .collect();
+    // One Copy entry per key, in key order.
+    assert_eq!(labels, ["Copy password", "Copy username"]);
+    assert!(
+        model
+            .copies
+            .iter()
+            .all(|entry| entry.state == MenuState::Enabled)
+    );
+    assert_eq!(model.copies[1].key.as_deref(), Some("username"));
+}
+
+#[test]
+fn copy_submenu_disables_binary_keys() {
+    let keys = [secret_key("blob", true), secret_key("user", false)];
+    let model = secret_menu_model(&keys, ValueAccess::Enabled);
+    assert_eq!(model.copies[0].state, MenuState::Disabled("Binary value"));
+    assert_eq!(model.copies[1].state, MenuState::Enabled);
+}
+
+#[test]
+fn secret_without_keys_offers_no_data() {
+    let model = secret_menu_model(&[], ValueAccess::Enabled);
+    assert_eq!(model.reveal, MenuState::Disabled("No data"));
+    assert_eq!(
+        model.copies,
+        [CopyEntry {
+            label: "No data".to_owned(),
+            key: None,
+            state: MenuState::Disabled("No data")
+        }]
+    );
+}
+
+#[test]
+fn blocked_access_disables_every_secret_item() {
+    let keys = [secret_key("password", false), secret_key("blob", true)];
+    let model = secret_menu_model(&keys, ValueAccess::Blocked);
+    let blocked = MenuState::Disabled("Disabled in screenshot runs");
+    assert_eq!(model.reveal, blocked);
+    assert!(model.copies.iter().all(|entry| entry.state == blocked));
+    let empty = secret_menu_model(&[], ValueAccess::Blocked);
+    assert_eq!(empty.reveal, blocked);
+    assert_eq!(empty.copies[0].state, blocked);
+}
+
+/// The screenshot gate, end to end: launch options with a screenshot output give `Blocked`, and
+/// the menu built from that same value has no enabled Reveal or Copy.
+#[test]
+fn secret_menu_blocked_in_screenshot_runs() {
+    let options = crate::launch_options::LaunchOptions {
+        kubeconfig: None,
+        context: None,
+        namespace: None,
+        filter: None,
+        select: None,
+        theme: None,
+        screen: crate::launch_options::LaunchScreen::Kind(ResourceKind::Secrets),
+        screenshot: Some("secrets.png".into()),
+    };
+    let access = crate::secret_values::value_access(&options);
+    assert_eq!(access, ValueAccess::Blocked);
+    let keys = [secret_key("password", false)];
+    let model = secret_menu_model(&keys, access);
+    assert!(matches!(model.reveal, MenuState::Disabled(_)));
+    assert!(
+        model
+            .copies
+            .iter()
+            .all(|entry| matches!(entry.state, MenuState::Disabled(_)))
+    );
+}

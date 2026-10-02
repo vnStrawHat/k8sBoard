@@ -26,15 +26,17 @@ use crate::drawer::{
 };
 use crate::kind_diagnosis::{DiagnosisInputs, KindDiagnosis, kind_diagnosis};
 use crate::kind_join::{matching_pods, service_health_of};
-use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow};
+use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow, LiveContent};
 use crate::live_sections::{live_rows, next_run_text, owned_pods};
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
 use crate::resource_actions::{
-    OpenUrl, kind_menu, open_url_choice, open_url_menu_item, port_forward_reason,
+    MenuExtras, OpenUrl, kind_menu, open_url_choice, open_url_menu_item, port_forward_reason,
+    secret_menu,
 };
 use crate::resource_kind::ResourceKind;
+use crate::secret_values::{SecretValuesView, ValueAccess};
 use crate::status_tone::{StatusTone, tone_color, toned_text};
 use crate::table_selection::ResourceKey;
 
@@ -70,9 +72,14 @@ pub(crate) fn kind_drawer(
                 .into_any_element(),
         }),
         DrawerTab::Yaml => yaml_body(state),
-        DrawerTab::Overview | DrawerTab::Containers => {
-            DrawerBody::Scrolling(overview(kind, row, live, now, cx))
-        }
+        DrawerTab::Overview | DrawerTab::Containers => DrawerBody::Scrolling(overview(
+            kind,
+            row,
+            live,
+            state.secret_values.as_ref(),
+            now,
+            cx,
+        )),
     };
     let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
     drawer_frame(header, tab_bar, body, state.width(), cx).into_any_element()
@@ -170,6 +177,26 @@ fn kind_menu_button(
                     .map_or(OpenUrl::Unavailable, open_url_choice);
                 open_url_menu_item(choice, window, cx)
             });
+            let secret = (kind == ResourceKind::Secrets)
+                .then(|| {
+                    let row = session
+                        .read(cx)
+                        .live()
+                        .and_then(|live| live.kind_list(kind))
+                        .and_then(|explorer| {
+                            explorer
+                                .list
+                                .items()
+                                .iter()
+                                .find(|row| key.is_row(kind, row))
+                        })
+                        .cloned()?;
+                    let access = shell
+                        .read_with(cx, |shell, _| shell.secret_value_access())
+                        .unwrap_or(ValueAccess::Blocked);
+                    secret_menu(&row, key.clone(), access, &shell, window, cx)
+                })
+                .flatten();
             let Some(live) = session.read(cx).live() else {
                 return menu;
             };
@@ -188,7 +215,7 @@ fn kind_menu_button(
                     &live.access,
                     live.pods.items(),
                     &shell,
-                    open_url,
+                    MenuExtras { open_url, secret },
                 ),
                 None => menu,
             }
@@ -201,10 +228,11 @@ fn overview(
     kind: ResourceKind,
     row: &KindRow,
     live: &LiveCluster,
+    secret_values: Option<&Entity<SecretValuesView>>,
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> AnyElement {
-    let paint = DrawerPaint::new(kind, row, live, now);
+    let paint = DrawerPaint::new(kind, row, live, now).with_secret_values(secret_values);
     // Gives every element that needs an id one that is unique inside the drawer.
     let mut next_id = 0_usize;
     let mut column = v_flex();
@@ -312,6 +340,8 @@ pub(crate) struct DrawerPaint<'a> {
     live: &'a LiveCluster,
     forward_reason: SharedString,
     now: jiff::Timestamp,
+    /// The values view of the open Secret drawer, which draws the Data section.
+    secret_values: Option<&'a Entity<SecretValuesView>>,
 }
 
 impl<'a> DrawerPaint<'a> {
@@ -327,7 +357,15 @@ impl<'a> DrawerPaint<'a> {
             live,
             forward_reason: port_forward_reason(&live.access),
             now,
+            secret_values: None,
         }
+    }
+}
+
+impl<'a> DrawerPaint<'a> {
+    fn with_secret_values(mut self, view: Option<&'a Entity<SecretValuesView>>) -> Self {
+        self.secret_values = view;
+        self
     }
 }
 
@@ -359,6 +397,19 @@ fn detail_element(
             text,
             tone,
         } => bar_row(label, *percent, text, *tone, id, cx),
+        // The values view draws the Data section; one frame before it exists, or for another Secret,
+        // the masked rows without buttons stand in.
+        DetailRow::Live(LiveContent::SecretData)
+            if paint.secret_values.is_some_and(|view| {
+                view.read(cx)
+                    .is_for(&ResourceKey::of_row(paint.kind, paint.row))
+            }) =>
+        {
+            paint.secret_values.map_or_else(
+                || div().into_any_element(),
+                |view| view.clone().into_any_element(),
+            )
+        }
         DetailRow::Live(content) => v_flex()
             .children(live_rows(
                 *content, paint.kind, paint.row, paint.live, now, cx,
