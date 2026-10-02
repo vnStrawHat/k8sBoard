@@ -130,6 +130,34 @@ fn incomplete_note_text() {
 }
 
 #[test]
+fn you_gets_namespaces_only_and_others_also_all() {
+    let listed = vec!["a".to_owned(), "b".to_owned()];
+    assert_eq!(
+        permission_namespace_options(listed.clone(), Some("c"), true),
+        ["c", "a", "b"]
+    );
+    let others = permission_namespace_options(listed, Some("b"), false);
+    assert_eq!(others[0], ALL_NAMESPACES);
+    assert_eq!(others[1..], ["a", "b"]);
+}
+
+#[test]
+fn a_lone_star_group_is_hidden_under_a_star_resource() {
+    let row = |group: &str, resource: &str| crate::permission_table::PermissionRow {
+        group: group.to_owned(),
+        resource: resource.to_owned(),
+        cells: std::array::from_fn(|_| VerbCell::Empty),
+        other_verbs: Vec::new(),
+        named_other_verbs: Vec::new(),
+        is_everything: false,
+    };
+    assert!(!shows_group(&row("*", "*")));
+    assert!(!shows_group(&row("", "pods")));
+    assert!(shows_group(&row("apps", "*")));
+    assert!(shows_group(&row("*", "pods")));
+}
+
+#[test]
 fn you_namespaces_fall_back_to_scope() {
     let listed = ["a".to_owned(), "b".to_owned()];
     let scope = ["c".to_owned()];

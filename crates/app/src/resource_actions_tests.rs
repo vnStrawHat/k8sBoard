@@ -794,6 +794,13 @@ fn role_menus_start_with_who_can() {
 }
 
 #[test]
+fn network_policy_menu_starts_with_test_traffic() {
+    assert!(has_test_traffic(ResourceKind::NetworkPolicies));
+    assert!(!has_test_traffic(ResourceKind::Ingresses));
+    assert!(!has_test_traffic(ResourceKind::Services));
+}
+
+#[test]
 fn service_account_menu_starts_with_check_permissions() {
     assert!(has_check_permissions(ResourceKind::ServiceAccounts));
     assert!(!has_check_permissions(ResourceKind::Roles));

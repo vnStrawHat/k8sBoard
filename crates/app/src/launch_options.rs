@@ -22,7 +22,7 @@ Options:
   --screen pods|nodes|issues|issues-drawer|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
-           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions
+           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic
                          screen to open (default: pods)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
@@ -56,6 +56,9 @@ pub(crate) enum LaunchScreen {
     /// `--screen account-permissions`: the same dialog for the first service account shown (after
     /// `--filter`), or the one `--select` names.
     AccountPermissions,
+    /// `--screen test-traffic`: NetworkPolicies with the Test traffic dialog open on the defaults
+    /// of the first policy shown (after `--filter`), or the one `--select` names.
+    TestTraffic,
     /// `--screen <plural>`, e.g. `deployments`.
     Kind(ResourceKind),
     /// `--screen <plural>-drawer|<plural>-events|<plural>-yaml`: the kind's first row selected, on that tab.
@@ -87,6 +90,7 @@ impl LaunchScreen {
             Self::Issues | Self::IssuesDrawer => Screen::Issues,
             Self::Kind(kind) | Self::KindDrawer(kind, _) => Screen::Kind(kind),
             Self::WhoCan => Screen::Kind(ResourceKind::ClusterRoles),
+            Self::TestTraffic => Screen::Kind(ResourceKind::NetworkPolicies),
             Self::CheckPermissions | Self::AccountPermissions => {
                 Screen::Kind(ResourceKind::ServiceAccounts)
             }
@@ -178,7 +182,7 @@ impl LaunchScreen {
     pub(crate) fn opens_dialog(self) -> bool {
         matches!(
             self,
-            Self::WhoCan | Self::CheckPermissions | Self::AccountPermissions
+            Self::WhoCan | Self::CheckPermissions | Self::AccountPermissions | Self::TestTraffic
         )
     }
 
@@ -210,6 +214,7 @@ impl LaunchScreen {
             "who-can" => Some(Self::WhoCan),
             "check-permissions" => Some(Self::CheckPermissions),
             "account-permissions" => Some(Self::AccountPermissions),
+            "test-traffic" => Some(Self::TestTraffic),
             _ => {
                 if let Some(plural) = text.strip_suffix("-drawer") {
                     let kind = ResourceKind::from_plural(plural)?;

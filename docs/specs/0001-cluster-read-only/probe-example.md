@@ -3,7 +3,7 @@
 [Back to index](README.md)
 
 ```text
-cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds]
+cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name>] [--watch-seconds <n>] [--logs-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis]
 ```
 
 ## CLI
@@ -20,6 +20,7 @@ cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context 
 | `--secrets` | optional flag (spec 0016). After the pod and yaml sections, prints `secrets {n}: {type} {count} · …`, `tls certificates {parsed}/{tls} parsed, earliest leaf not-after {RFC 3339} ({ns}/{name})`, `first tls secret {ns}/{name}`, and one `secret values {ns}/{name}: {k} keys, {bytes} bytes` line from a single read of that secret. Never prints a value, a SAN, or a registry host. The `--watch-seconds` run also prints `secrets` and `tls secrets` watch lines, and `--counts` prints `count secrets`. |
 | `--helm` | optional flag (spec 0017). Prints `helm releases {n}: {status} {count} · …; payload decoded {d}/{n}`, `first helm release {ns}/{name} rev {r}`, `helm history {ns}/{name}: {k} revisions`, `helm detail {ns}/{name} rev {r}: values {l} lines ({h} hidden), computed {l} lines, manifest {d} documents {l} lines ({e} env values hidden), notes {n} lines, description {c} chars`, and `helm diff {ns}/{name} rev {p} → {r}: user {u} changes, computed {c} changes` (masked). Never prints a value, manifest text, notes, or description text. The `--watch-seconds` run also prints a `helm releases` watch line. |
 | `--crds` | optional flag (spec 0018). Prints `crds: {n} ({e} established)`, `crd {name} {version} {scope} columns {k} unsupported {u}` for the first 10 established CRDs, `unsupported {crd}: {column}` for every unsupported printer column, `printer columns: {k} in total, {u} unsupported`, then for the first 10 established CRDs `access list {plural}.{group}: allowed|denied` and `count {plural}.{group} {n|unknown}`. With `--watch-seconds` it adds `custom {plural}.{group}: {n} objects, {f} of {c} column values filled`, and with `--yaml` `yaml custom {crd}: {lines} lines, masked {yes|no}`, both for the first CRD with instances. Prints counts and CRD or column names only, never an object name or a value. |
+| `--analysis` | optional flag (spec 0023). After the access section, prints counts only, never names: `rbac: cluster roles listed|denied · cluster bindings listed|denied · roles all|{n} namespaces · role bindings all|{n} namespaces · roles {n} · cluster roles {n} · role bindings {n} · cluster role bindings {n}` (the `read_rbac` snapshot; the namespaces the probe lists are its fallback), `who can get secrets in {ns}: {n} grants ({m} only named)` (one grant per subject and binding), `rules review {ns}: {n} rules[, incomplete]` (SelfSubjectRulesReview), and `network policies {ns}: {n}`. `{ns}` is the first `--namespace`, else the context default. A failing call prints `failed (details on stderr)` and the probe goes on |
 | `--help` | prints usage |
 
 - Arguments are parsed by hand from `std::env::args()`, with no new dependency.

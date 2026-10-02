@@ -35,7 +35,7 @@ Give the future GPUI app one small, read-only entry point to a Kubernetes cluste
 - [ ] 2. Every test named in both test-plan files exists under that name and passes.
 - [ ] 3. `lib.rs` matches [files-to-touch.md](files-to-touch.md), and nothing else is `pub`.
 - [ ] 4. Read-only guard:
-  - A scoped grep of `crates/cluster/{src,examples}` for `\.(create|patch|replace|delete|delete_collection|exec|attach|portforward|evict|create_subresource|patch_status|replace_status)\(` finds only the SSAR `create`.
+  - A scoped grep of `crates/cluster/{src,examples}` for `\.(create|patch|replace|delete|delete_collection|exec|attach|portforward|evict|create_subresource|patch_status|replace_status)\(` finds only the SelfSubjectAccessReview `create` and, since 0023, the SelfSubjectRulesReview `create` (both `Api::<SelfSubject…Review>::all`, non-mutating review objects).
   - No `kube` or `k8s_openapi` type appears in a public signature.
   - `kube` features in `crates/cluster/Cargo.toml` and the root `Cargo.toml` do not include `ws`.
 - [ ] 5. `probe -- --kubeconfig monitor-uat-readonly.yml` (no `--context`) exits 1. Its stderr names `current-context 'readonly@cluster.local' not found` and lists `readonly@Monitor`.

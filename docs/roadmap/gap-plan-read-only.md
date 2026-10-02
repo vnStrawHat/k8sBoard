@@ -68,5 +68,5 @@ Graph model (ownerRef, selector, mounts, ingress → service), config checks sha
 - Deps: 0012–0016. Risk: High (no GPUI component; layout dependency C6).
 
 ### 0023 — RBAC and policy analysis
-"Who can…" (verb × resource → subjects, from bindings), "Check permissions" for a ServiceAccount, NetworkPolicy "Test traffic" (pod A → pod B evaluated locally).
+"Who can…" (verb × resource → subjects, from bindings), "Check permissions" for You (SelfSubjectRulesReview) or any subject (client-side), "Can do" in the ServiceAccount drawer, NetworkPolicy "Test traffic" (pod A → pod B evaluated locally).
 - Deps: 0013, 0015. Risk: Med (correctness claims; label results "computed from RBAC objects").

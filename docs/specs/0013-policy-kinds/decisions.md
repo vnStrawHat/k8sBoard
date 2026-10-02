@@ -29,7 +29,7 @@
 | 16 | Quota tone: ≥ 100 % Bad, ≥ 90 % Warn, else none (`quota_tone`); `hugepages-*` quantities are bytes | a quota blocks only at 100 %; W7 colors 92 % as warning; hugepages are byte quantities |
 | 17 | HPA "at max" = condition `ScalingLimited` true with reason `TooManyReplicas`; Bad in Replicas, Metrics, status, and the AT MAX box | the controller's own verdict that the metrics want more than `maxReplicas` (W7 note) |
 | 18 | NetworkPolicy peers become sentences in the app (`namespace ingress`, `pods app=worker in all namespaces`, `10.0.0.0/8 except 10.1.0.0/16`) | wording is app-side (0005 decision 3) |
-| 19 | Menus: W7 mutating items disabled "Read-only mode"; HPAs gain **Go to target**; Test traffic, Show in Topology, Edit YAML omitted. No list-level top buttons; the W7 drawer `meta` line is not rendered | 0005 decision 22; Test traffic and Topology are later specs; the subtitle stays 0005's |
+| 19 | Menus: W7 mutating items disabled "Read-only mode"; HPAs gain **Go to target**; Test traffic (shipped in 0023: top button and first menu item, 0023 decision 18), Show in Topology, Edit YAML omitted. No list-level top buttons except those 0023 adds (Test traffic on NetworkPolicies); the W7 drawer `meta` line is not rendered | 0005 decision 22; Test traffic and Topology are later specs; the subtitle stays 0005's |
 | 20 | Kubectl columns where W7 matches kubectl; Age is kept last on every kind | the `every_kind_ends_with_a_right_aligned_age_column` invariant |
 | 21 | Screenshot screens: `<plural>` and `<plural>-drawer` per kind plus `namespaces-drawer`; `--filter` picks a row with data; empty-state shots when UAT has none | 0005 decision 25; 0012 decision 29 |
 

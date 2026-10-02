@@ -30,7 +30,7 @@
 | 17 | Links: binding → role and service-account subjects; Role → its RoleBindings; ClusterRole → its bindings; ServiceAccount → bound roles and pods. Menus: bindings gain **Go to role** | W7 "two-way links"; `go_to_item` (0013) |
 | 18 | Column text follows W7: RoleBindings "Role" as `Role/x`; Bound roles as `role/x, clusterrole/y`; subjects as `sa {ns}/{name}`, `user {name}`, `group {name}` | the wireframe; one subject format everywhere |
 | 19 | Rules render as an aligned `Code` table (`apiGroups resources verbs`), at most 200 rules | W7 Roles drawer; long aggregated roles stay bounded |
-| 20 | Menus: no read-only actions besides Delete; no list-level top buttons except Hide system; the W7 `meta` line is not rendered | 0005 decision 22; "Who can…", "Check permissions" are 0023 |
+| 20 | Menus: no read-only actions besides Delete; no list-level top buttons except Hide system and those 0023 adds (Who can…, Check permissions); the W7 `meta` line is not rendered | 0005 decision 22; "Who can…", "Check permissions" are 0023 (shipped there: top buttons and first menu items, 0023 decision 18; "Can do" too) |
 | 21 | Screenshot screens: `<plural>` and `<plural>-drawer` for the five kinds; `--filter cluster-admin` for `clusterroles-drawer` and `clusterrolebindings-drawer`; `--filter default` for `serviceaccounts-drawer` | deterministic rows that exist on every cluster |
 
 ## Known ceilings

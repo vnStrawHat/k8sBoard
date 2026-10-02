@@ -260,6 +260,9 @@ impl AppShell {
             Screen::Kind(ResourceKind::ReplicaSets) => {
                 self.render_hide_inactive(toolkit, cx).into_iter().collect()
             }
+            Screen::Kind(ResourceKind::NetworkPolicies) => {
+                self.render_test_traffic(cx).into_iter().collect()
+            }
             Screen::Kind(ResourceKind::ServiceAccounts) => {
                 self.render_check_permissions(cx).into_iter().collect()
             }
@@ -327,6 +330,24 @@ impl AppShell {
                 .child(status)
                 .into_any_element(),
         )
+    }
+
+    /// Opens Test traffic on the defaults for the first pods.
+    fn render_test_traffic(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let button = Button::new("test-traffic")
+            .label("Test traffic")
+            .small()
+            .outline();
+        let button = if self.live(cx).is_some() {
+            button
+                .tooltip("Check whether NetworkPolicies allow a connection")
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    shell.open_traffic_test(None, false, window, cx);
+                }))
+        } else {
+            button.disabled(true).tooltip("Not connected")
+        };
+        Some(button.into_any_element())
     }
 
     /// Opens Check permissions for the account whose drawer is open, else for You.

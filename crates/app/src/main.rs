@@ -87,6 +87,7 @@ mod table_selection;
 mod table_sort;
 mod table_view;
 mod title_bar;
+mod traffic_test_view;
 mod usage_bar;
 mod usage_chart;
 mod usage_format;

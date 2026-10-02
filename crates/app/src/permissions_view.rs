@@ -118,12 +118,30 @@ pub(crate) struct PermissionsView {
     subject: Entity<InputState>,
     namespace: Entity<SelectState<Vec<String>>>,
     ask: Entity<InputState>,
+    /// The namespaces the Select lists, without the cluster-wide option.
+    listed: Vec<String>,
+    /// Whether the Select offers `All namespaces`: not for You, who is reviewed in one namespace.
+    has_cluster_wide_option: bool,
     checked: Option<Result<Checked, QueryError>>,
     table: RequestState<ShownTable>,
     question: Option<Result<AccessRequest, QueryError>>,
     answer: RequestState<Answer>,
     link_count: usize,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The Select options: `All namespaces` (cluster-wide grants) is for other subjects only, since
+/// You is reviewed in one namespace.
+fn permission_namespace_options(
+    listed: Vec<String>,
+    wanted: Option<&str>,
+    is_you: bool,
+) -> Vec<String> {
+    let mut names = namespace_options(listed, wanted);
+    if is_you {
+        names.remove(0);
+    }
+    names
 }
 
 /// The namespaces You can pick: the session's namespaces list, or the scope's own namespaces when
@@ -292,17 +310,27 @@ impl PermissionsView {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut listed = Vec::new();
+        let mut default_namespace = None;
         if let Some(live) = session.read(cx).live() {
+            default_namespace = Some(live.default_namespace().to_owned());
             let ready: Option<Vec<String>> = live
                 .namespaces
                 .ready_items()
                 .map(|items| items.iter().map(|item| item.name.clone()).collect());
             listed = you_namespaces(ready.as_deref(), live.scope.namespaces());
         }
-        let names = namespace_options(listed, namespace.as_deref());
-        let selected = namespace
+        let is_you = subject
             .as_deref()
-            .and_then(|namespace| names.iter().position(|name| name == namespace))
+            .is_none_or(|text| matches!(parse_subject(text), Ok(SubjectQuery::You)));
+        // You is reviewed in one namespace, the context default unless one was asked for.
+        let wanted = match is_you {
+            true => namespace.clone().or_else(|| default_namespace.clone()),
+            false => namespace.clone(),
+        };
+        let names = permission_namespace_options(listed.clone(), wanted.as_deref(), is_you);
+        let selected = wanted
+            .as_deref()
+            .and_then(|wanted| names.iter().position(|name| name == wanted))
             .unwrap_or(0);
         let namespace = cx.new(|cx| {
             SelectState::new(names, Some(IndexPath::default().row(selected)), window, cx)
@@ -320,11 +348,15 @@ impl PermissionsView {
             InputState::new(window, cx).placeholder("list pods, get secrets.apps, delete /metrics")
         });
         let subscriptions = vec![
-            cx.subscribe_in(&subject_input, window, |view, _, event, _, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    view.check(cx);
-                }
-            }),
+            cx.subscribe_in(
+                &subject_input,
+                window,
+                |view, _, event, window, cx| match event {
+                    InputEvent::PressEnter { .. } => view.check(cx),
+                    InputEvent::Change => view.sync_namespace_options(window, cx),
+                    _ => {}
+                },
+            ),
             cx.subscribe_in(&ask, window, |view, _, event, _, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
                     view.ask(cx);
@@ -338,6 +370,8 @@ impl PermissionsView {
             subject: subject_input,
             namespace,
             ask,
+            listed,
+            has_cluster_wide_option: !is_you,
             checked: None,
             table: RequestState::Idle,
             question: None,
@@ -376,6 +410,40 @@ impl PermissionsView {
                     })
                 })
                 .unwrap_or(false)
+    }
+
+    /// Rebuilds the namespace options when the subject switches between You and another subject.
+    /// The pick stays when the new list has it; You falls back to the context default.
+    fn sync_namespace_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let is_you = matches!(
+            parse_subject(&self.subject.read(cx).value()),
+            Ok(SubjectQuery::You)
+        );
+        if self.has_cluster_wide_option != is_you {
+            return;
+        }
+        self.has_cluster_wide_option = !is_you;
+        let picked = self.picked_namespace(cx);
+        let default = self.connection_default_namespace(cx);
+        let wanted = match is_you {
+            true => picked.or(default),
+            false => picked,
+        };
+        let names = permission_namespace_options(self.listed.clone(), wanted.as_deref(), is_you);
+        let row = wanted
+            .as_deref()
+            .and_then(|wanted| names.iter().position(|name| name == wanted))
+            .unwrap_or(0);
+        self.namespace.update(cx, |state, cx| {
+            state.set_items(names, window, cx);
+            state.set_selected_index(Some(IndexPath::default().row(row)), window, cx);
+        });
+    }
+
+    fn connection_default_namespace(&self, cx: &Context<Self>) -> Option<String> {
+        let session = self.session.upgrade()?;
+        let live = session.read(cx).live()?;
+        Some(live.default_namespace().to_owned())
     }
 
     fn picked_namespace(&self, cx: &Context<Self>) -> Option<String> {
@@ -771,14 +839,21 @@ impl PermissionsView {
                 .child(row.role_text.clone())
                 .into_any_element(),
         };
-        h_flex()
-            .gap_1()
-            .flex_wrap()
+        v_flex()
+            .gap_0p5()
             .text_sm()
-            .child(binding)
-            .child(self.muted("→", cx))
-            .child(role)
-            .child(self.muted(format!("· via {}", row.via), cx))
+            .child(
+                h_flex()
+                    .gap_1()
+                    .flex_wrap()
+                    .child(binding)
+                    .child(h_flex().gap_1().child(self.muted("→", cx)).child(role)),
+            )
+            .child(
+                div()
+                    .pl_4()
+                    .child(self.muted(format!("via {}", row.via), cx)),
+            )
             .into_any_element()
     }
 
@@ -812,7 +887,7 @@ impl PermissionsView {
                 .min_w_0()
                 .font_family(mono.clone())
                 .child(div().truncate().child(row.resource.clone()))
-                .when(!row.group.is_empty(), |resource| {
+                .when(shows_group(row), |resource| {
                     resource.child(
                         div()
                             .truncate()
@@ -868,6 +943,15 @@ impl PermissionsView {
             .overflow_y_scrollbar()
             .into_any_element()
     }
+}
+
+/// The muted `.group` under the resource. The core group has none, and a `*` resource in group
+/// `*` is already everything, so a lone `.*` would only add noise.
+fn shows_group(row: &crate::permission_table::PermissionRow) -> bool {
+    if row.group.is_empty() {
+        return false;
+    }
+    row.resource != "*" || row.group != "*"
 }
 
 /// `get pods in shop`: the request in words.

@@ -1,6 +1,6 @@
 # 0023 — RBAC and policy analysis (read-only)
 
-Status: amended after the advisor review (must-fix 1–2, should-fix 3–9, nice-to-haves 10–15), HEAD `56f360c`; architect defaults (the user asked not to stop for questions). Crates: `crates/cluster` (steps 1a, 1b), `crates/app` (steps 2–4). Requires 0013 (NetworkPolicy summaries), 0015 (RBAC summaries, `access_bindings.rs`), 0012 (`Selector`, `reveal`, `Live`) merged. Wireframes: W7 `k("Roles")`, `k("ClusterRoles")` (Who can…), `k("ServiceAccounts")` (Check permissions, Can do), `k("NetworkPolicies")` (Test traffic); W11 RBAC chip stays disabled (decision 16).
+Status: **implemented** (steps 1a–4; ACs below). Amended after the advisor review (must-fix 1–2, should-fix 3–9, nice-to-haves 10–15), HEAD `56f360c`; architect defaults (the user asked not to stop for questions). Crates: `crates/cluster` (steps 1a, 1b), `crates/app` (steps 2–4). Requires 0013 (NetworkPolicy summaries), 0015 (RBAC summaries, `access_bindings.rs`), 0012 (`Selector`, `reveal`, `Live`) merged. Wireframes: W7 `k("Roles")`, `k("ClusterRoles")` (Who can…), `k("ServiceAccounts")` (Check permissions, Can do), `k("NetworkPolicies")` (Test traffic); W11 RBAC chip stays disabled (decision 16).
 
 ## Goal
 
@@ -38,14 +38,14 @@ SubjectAccessReview for other subjects (needs `create subjectaccessreviews`, dec
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`, no new dependency, no `Cargo.lock` change.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. Read-only: the 0001 AC4 grep finds only the SSAR and SSRR `create` calls (both `Api::<SelfSubject…Review>::all`); every new request is `list`. No kube or k8s-openapi type in a public signature; the crate spawns no task.
-- [ ] 4. On UAT the probe `--analysis` prints the snapshot counts, coverage, an SSRR rule count, and a Who-can grant count; results in [decisions.md](decisions.md). The 0001 AC7 credential script reports 0.
-- [ ] 5. No network I/O on the GPUI thread: fetches run on `ClusterRuntime`, results arrive through `cx.spawn`; each dialog view is created once in `open_*` (the dialog builder only clones it, review); closing a dialog drops (aborts) its in-flight request.
-- [ ] 6. Every result panel shows its source line and caveats ([dialogs.md](dialogs.md)); evaluator results say "computed from RBAC objects" / "computed from NetworkPolicies"; every coverage gap shows its Warn line.
-- [ ] 7. On UAT: Who can `get secrets` lists subjects with binding links that reveal the binding; Check permissions (You) shows the SSRR table; a ServiceAccount drawer shows Can do; Test traffic gives a verdict for two pods.
-- [ ] 8. The 0003 AC4 color-literal grep is clean; the step's screenshots exist; the ui-verifier reports no high-severity defect.
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`, no new dependency, no `Cargo.lock` change.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
+- [x] 3. Read-only: the 0001 AC4 grep finds only the SSAR and SSRR `create` calls (both `Api::<SelfSubject…Review>::all`); every new request is `list`. No kube or k8s-openapi type in a public signature; the crate spawns no task.
+- [x] 4. On UAT the probe `--analysis` prints the snapshot counts, coverage, an SSRR rule count, and a Who-can grant count; results in [decisions.md](decisions.md). The 0001 AC7 credential script reports 0.
+- [x] 5. No network I/O on the GPUI thread: fetches run on `ClusterRuntime`, results arrive through `cx.spawn`; each dialog view is created once in `open_*` (the dialog builder only clones it, review); closing a dialog drops (aborts) its in-flight request.
+- [x] 6. Every result panel shows its source line and caveats ([dialogs.md](dialogs.md)); evaluator results say "computed from RBAC objects" / "computed from NetworkPolicies"; every coverage gap shows its Warn line.
+- [x] 7. On UAT: Who can `get secrets` lists subjects with binding links that reveal the binding; Check permissions (You) shows the SSRR table; a ServiceAccount drawer shows Can do; Test traffic gives a verdict for two pods.
+- [x] 8. The 0003 AC4 color-literal grep is clean; the step's screenshots exist (`.tmp/ui-shots/v49-*.png`, light and dark); the ui-verifier reports no high-severity defect. ui-verifier 2026-10-02 (v49v shots): no high-severity defect; Denied verdict, Labels/IP modes and failure states rely on unit tests.
 
 ## Open items
 

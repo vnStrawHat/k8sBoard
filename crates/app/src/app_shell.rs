@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use cluster::{
     ContextSummary, EventFilter, HelmReleaseSummary, InvolvedObject, Kubeconfig, KubeconfigError,
-    NamespaceScope, SecretSummary,
+    NamespaceScope, NetworkPolicySummary, SecretSummary,
 };
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::resizable::ResizableState;
@@ -75,6 +75,7 @@ use crate::table_selection::{
 use crate::table_sort::next_sort;
 use crate::table_view::{FilteredTable, RowCheck, TableView};
 use crate::title_bar::title_bar;
+use crate::traffic_test_view::{TrafficTestView, traffic_defaults};
 use crate::who_can_view::WhoCanView;
 use crate::yaml_view::{YamlView, yaml_subject};
 
@@ -231,6 +232,9 @@ pub(crate) struct AppShell {
     /// The open Check permissions dialog, which a screenshot waits on.
     #[cfg(feature = "screenshot")]
     permissions: Option<gpui_kit::WeakEntity<PermissionsView>>,
+    /// The open Test traffic dialog, which a screenshot waits on.
+    #[cfg(feature = "screenshot")]
+    traffic: Option<gpui_kit::WeakEntity<TrafficTestView>>,
     /// `--screen custom:<crd-name>`: waits for the CRD list, then opens the kind.
     pending_custom_launch: Option<CustomLaunch>,
     /// Why a `--screen custom:` request found no kind; a screenshot run fails with it.
@@ -382,6 +386,8 @@ impl AppShell {
             who_can: None,
             #[cfg(feature = "screenshot")]
             permissions: None,
+            #[cfg(feature = "screenshot")]
+            traffic: None,
             pending_custom_launch: match options.screen {
                 LaunchScreen::Custom { crd_name, tab } => Some(CustomLaunch { crd_name, tab }),
                 _ => None,
@@ -764,6 +770,36 @@ impl AppShell {
         });
     }
 
+    /// Opens the Test traffic dialog with the defaults for `policy` (the pod it selects as the
+    /// destination); without one, the first two pods.
+    pub(crate) fn open_traffic_test(
+        &mut self,
+        policy: Option<&NetworkPolicySummary>,
+        check_now: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let form = match session.read(cx).live() {
+            Some(live) => traffic_defaults(live.pods.items(), policy),
+            None => return,
+        };
+        let shell = cx.weak_entity();
+        let view = cx.new(|cx| TrafficTestView::new(shell, &session, form, check_now, window, cx));
+        #[cfg(feature = "screenshot")]
+        {
+            self.traffic = Some(view.downgrade());
+        }
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title("Test traffic")
+                .w(px(DIALOG_WIDTH))
+                .child(view.clone())
+        });
+    }
+
     /// The service account whose drawer is open, as `(subject text, namespace)`.
     pub(crate) fn drawer_account(&self) -> Option<(String, String)> {
         match &self.selected {
@@ -809,9 +845,47 @@ impl AppShell {
                 };
                 self.open_permissions(subject, namespace, true, window, cx);
             }
+            LaunchScreen::TestTraffic => {
+                let Some(policy) = self.launch_policy(cx) else {
+                    return;
+                };
+                self.open_traffic_test(policy.as_ref(), true, window, cx);
+            }
             _ => {}
         }
         self.pending_dialog_launch = None;
+    }
+
+    /// `--screen test-traffic`: the first policy the table shows (or the one `--select` names),
+    /// whose selected pod is the destination. The outer `None` means the pods or the policies
+    /// have not loaded yet; the inner `None` means there is no policy, so the defaults are plain.
+    fn launch_policy(&self, cx: &App) -> Option<Option<NetworkPolicySummary>> {
+        let live = self.live(cx)?;
+        if live.pods.is_loading() {
+            return None;
+        }
+        let rows = live
+            .kind_list(ResourceKind::NetworkPolicies)?
+            .list
+            .ready_items()?;
+        if rows.is_empty() {
+            return Some(None);
+        }
+        let item = match self.launch_select.as_deref() {
+            Some(select) => pick_selected(
+                select,
+                rows.iter()
+                    .map(|row| (row.namespace.as_deref(), row.name.as_str())),
+            ),
+            None => self.kind_table.read(cx).delegate().view()?.item_index(0),
+        };
+        let policy = item
+            .and_then(|item| rows.get(item))
+            .and_then(|row| match &row.object {
+                KindObject::NetworkPolicy(policy) => Some(policy.clone()),
+                _ => None,
+            });
+        Some(policy)
     }
 
     /// `--screen account-permissions`: the first service account the table shows (or the one
@@ -2119,6 +2193,10 @@ impl AppShell {
                 })
                 || self.permissions.as_ref().is_some_and(|view| {
                     view.read_with(cx, |view, cx| view.is_pending(cx))
+                        .unwrap_or(false)
+                })
+                || self.traffic.as_ref().is_some_and(|view| {
+                    view.read_with(cx, |view, _| view.is_pending())
                         .unwrap_or(false)
                 }),
             pod_metrics: self

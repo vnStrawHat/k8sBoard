@@ -508,8 +508,7 @@ impl WhoCanView {
             .text_sm()
             .child(self.muted("via", cx))
             .child(binding)
-            .child(self.muted("→", cx))
-            .child(role)
+            .child(h_flex().gap_1().child(self.muted("→", cx)).child(role))
             .child(self.muted(scope, cx))
             .into_any_element()
     }

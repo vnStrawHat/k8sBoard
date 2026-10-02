@@ -289,6 +289,9 @@ pub(crate) fn kind_menu(
     if has_check_permissions(kind) {
         menu = menu.item(check_permissions_item(row, shell));
     }
+    if has_test_traffic(kind) {
+        menu = menu.item(test_traffic_item(row, shell));
+    }
     if let Some(item) = workload_logs_item(row, access, shell) {
         menu = menu.item(item);
     }
@@ -758,6 +761,26 @@ fn copy_message_item(event: &EventDetail) -> PopupMenuItem {
 /// Roles and ClusterRoles offer Who can… as their first menu item.
 fn has_who_can(kind: ResourceKind) -> bool {
     matches!(kind, ResourceKind::Roles | ResourceKind::ClusterRoles)
+}
+
+/// NetworkPolicies offer Test traffic… as their first menu item.
+fn has_test_traffic(kind: ResourceKind) -> bool {
+    kind == ResourceKind::NetworkPolicies
+}
+
+/// Opens Test traffic… with the destination the policy selects, checked at once.
+fn test_traffic_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    let shell = shell.clone();
+    let policy = match &row.object {
+        KindObject::NetworkPolicy(policy) => Some(policy.clone()),
+        _ => None,
+    };
+    PopupMenuItem::new("Test traffic…").on_click(move |_, window, cx| {
+        let policy = policy.clone();
+        let _ = shell.update(cx, |shell, cx| {
+            shell.open_traffic_test(policy.as_ref(), true, window, cx);
+        });
+    })
 }
 
 /// Service accounts offer Check permissions as their first menu item.

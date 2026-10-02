@@ -465,6 +465,10 @@ fn parses_analysis_screens() {
     assert!(!screen.has_drawer() && !screen.has_log_dock());
     assert_eq!(screen.screen(), Screen::Kind(ResourceKind::ClusterRoles));
     assert!(!LaunchScreen::Pods.opens_dialog());
+    let screen = run_options(&["--screen", "test-traffic"]).screen;
+    assert_eq!(screen, LaunchScreen::TestTraffic);
+    assert!(screen.opens_dialog());
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::NetworkPolicies));
     for (text, expected) in [
         ("check-permissions", LaunchScreen::CheckPermissions),
         ("account-permissions", LaunchScreen::AccountPermissions),

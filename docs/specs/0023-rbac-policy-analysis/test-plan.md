@@ -34,7 +34,7 @@ Fixtures: a `snapshot()` builder with roles `view`-like and `cluster-admin`-like
 |---|---|
 | `access_query.rs` | `parses_subject_forms` (you, empty, sa, serviceaccount, system:serviceaccount, user, group), `invalid_subject_is_error` |
 | `permission_table.rs` | `expands_groups_times_resources`, `wildcard_verb_fills_all_cells_and_other`, `unknown_verbs_go_to_other_sorted`, `resource_names_make_names_cell`, `all_wins_over_names`, `everything_row_first`, `core_group_sorts_first`, `subresource_rows_separate`, `url_rules_merge_by_url`, `caps_at_300_rows`, `chip_text_lists_verbs_in_column_order`, `chip_all_verbs_and_all_resources`, `chip_named_suffix`, `chip_everything_is_warn`, `chips_cap_at_12_with_more` |
-| `permissions_view.rs` | `answer_you_allowed_and_denied_with_reason`, `answer_other_via_first_grant`, `answer_other_denied`, `incomplete_note_text` (with and without evaluation error), `you_namespaces_fall_back_to_scope` |
+| `permissions_view.rs` | `answer_you_allowed`, `answer_you_denied_with_reason`, `answer_you_denied_without_reason`, `answer_other_via_first_grant`, `answer_other_denied`, `incomplete_note_text` (with and without evaluation error), `you_namespaces_fall_back_to_scope` |
 | `live_sections_tests.rs` | `can_do_excludes_authenticated_only_grants`, `can_do_loading_and_failed_lines`, `can_do_coverage_warning` |
 | `access_rows_tests.rs` | `service_account_sections_put_can_do_after_cloud_identity` |
 | `resource_actions_tests.rs` | `service_account_menu_starts_with_check_permissions` |
@@ -43,7 +43,7 @@ Fixtures: a `snapshot()` builder with roles `view`-like and `cluster-admin`-like
 
 | Module | Tests |
 |---|---|
-| `traffic_test_view.rs` | `defaults_destination_selected_by_policy`, `defaults_without_policy_use_first_two_pods`, `defaults_port_first_main_container_port_or_80`, `labels_input_sorted_into_terms`, `invalid_ip_is_rejected`, `verdict_rows_per_direction_state`, `unknown_port_name_text`, `host_network_warning`, `missing_ip_warning`, `named_egress_port_warning` |
+| `traffic_test_view.rs` | `defaults_destination_selected_by_policy`, `defaults_without_policy_use_first_two_pods`, `defaults_port_first_main_container_port_or_80`, `labels_input_sorted_into_terms`, `invalid_ip_is_rejected`, `verdict_rows_per_direction_state`, `unknown_port_name_text`, `host_network_warning`, `missing_ip_warning`, `named_egress_port_warning`; extras: `defaults_source_falls_back_to_another_namespace`, `defaults_with_one_pod_have_no_source`, `defaults_without_pods_have_no_destination`, `empty_labels_input_is_no_labels`, `label_keys_and_values_are_trimmed`, `label_without_equals_is_rejected`, `label_with_empty_key_is_rejected`, `duplicate_label_keys_are_rejected`, `destination_ports_include_sidecar_ports`, `ip_is_read_in_canonical_form`, `port_input_reads_numbers`, `port_input_reads_names`, `port_input_rejects_empty_and_out_of_range`, `verdict_rows_for_a_direction_no_policy_limits`, `verdict_rows_for_an_external_source`, `unknown_namespace_warning`, `outcome_denies_without_an_ingress_rule_and_names_the_namespace`, `outcome_with_two_namespaces_and_a_port_name` |
 | `resource_actions_tests.rs` | `network_policy_menu_starts_with_test_traffic` |
 
 ## Live checks (coder-lite, UAT `readonly@Monitor`)
