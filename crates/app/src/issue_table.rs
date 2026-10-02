@@ -22,6 +22,7 @@ use crate::issue::{Issue, IssueAction};
 use crate::log_dock::LogDock;
 use crate::resource_actions::{disabled_menu_item, view_logs_item};
 use crate::resource_kind::{Align, KindColumn, column};
+use crate::settings::TablePrefs;
 use crate::status_tone::{StatusLabel, StatusTone, toned_text};
 use crate::table_filter::FilterPreset;
 use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
@@ -64,17 +65,26 @@ pub(crate) struct IssueTableDelegate {
 }
 
 impl IssueTableDelegate {
-    pub(crate) fn new(dock: WeakEntity<LogDock>, shell: WeakEntity<AppShell>) -> Self {
+    pub(crate) fn new(
+        dock: WeakEntity<LogDock>,
+        shell: WeakEntity<AppShell>,
+        saved: Option<&TablePrefs>,
+    ) -> Self {
+        let plan = ColumnPlan {
+            specs: ISSUE_COLUMNS.to_vec(),
+            flexible: CAUSE,
+            flexible_min: CAUSE_MIN_WIDTH,
+        };
+        let mut view = TableView::new(default_filter(Screen::Issues));
+        if let Some(saved) = saved {
+            view.apply_prefs(saved, &plan);
+        }
         Self {
             session: None,
             dock,
             shell,
-            layout: TableLayout::new(ColumnPlan {
-                specs: ISSUE_COLUMNS.to_vec(),
-                flexible: CAUSE,
-                flexible_min: CAUSE_MIN_WIDTH,
-            }),
-            view: TableView::new(default_filter(Screen::Issues)),
+            layout: TableLayout::new(plan),
+            view,
         }
     }
 

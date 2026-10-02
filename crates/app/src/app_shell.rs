@@ -339,7 +339,11 @@ impl AppShell {
         });
         let issue_table = cx.new(|cx| {
             configure(TableState::new(
-                IssueTableDelegate::new(log_dock.downgrade(), shell.clone()),
+                IssueTableDelegate::new(
+                    log_dock.downgrade(),
+                    shell.clone(),
+                    saved_tables.get(screen_key(Screen::Issues)),
+                ),
                 window,
                 cx,
             ))
@@ -2412,6 +2416,9 @@ impl AppShell {
         let prefs = match screen {
             Screen::Pods => table_prefs(&self.pod_table, cx),
             Screen::Nodes => table_prefs(&self.node_table, cx),
+            // Overview has no table.
+            Screen::Overview => None,
+            Screen::Issues => table_prefs(&self.issue_table, cx),
             Screen::Kind(_) => table_prefs(&self.kind_table, cx),
         };
         let Some(prefs) = prefs else {

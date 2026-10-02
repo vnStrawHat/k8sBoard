@@ -275,6 +275,7 @@ fn screen_key_per_screen() {
     use crate::resource_kind::ResourceKind;
     assert_eq!(screen_key(Screen::Pods), "pods");
     assert_eq!(screen_key(Screen::Nodes), "nodes");
+    assert_eq!(screen_key(Screen::Issues), "issues");
     assert_eq!(
         screen_key(Screen::Kind(ResourceKind::Deployments)),
         "deployments"
