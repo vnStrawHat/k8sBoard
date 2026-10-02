@@ -41,8 +41,8 @@ No runtime dependency change. kube features unchanged (no `ws`).
 | 2b | `src/keymap.rs` (0028, + tests) | `ToggleReadOnly` on `secondary-shift-r` (`WINDOW`); out of `RESERVED_KEYS`; sheet row; `enter` → `NoAction` in `WriteConfirm` and `WriteConfirm > Input` |
 | 2b | `src/title_bar.rs` | badge toggle, dashed env border, two states; multi-mode menu when 0027 is merged |
 | 3 | `src/audit_log.rs` (new) + `audit_log_tests.rs` | `AuditEntry`, `AuditObject`, `AuditField`, `AuditOutcome`, `lock_entry`, `append_audit`; `toggle_write_lock` appends lock lines; Safety page audit path and `Show in folder` |
-| 4 | `src/write_flow.rs` (new) + `write_flow_tests.rs` | `WriteIntent`, `start_write`, `commit_block`, `DryRunState`, `TypedMatch` |
-| 4 | `src/audit_log.rs` | `write_entry` |
+| 4 | `src/write_flow.rs` (new) + `write_flow_tests.rs` | `WriteIntent`, `GuardedIntent`, `GuardedKind`, `run_guarded` (the one core), `start_write` (wrapper), `commit_block`, `DryRunState`, `TypedMatch` |
+| 4 | `src/audit_log.rs` | `audit_entry` (takes `GuardedIntent`) |
 | 4 | `src/confirm_dialog.rs` | write variant: object row, changes, dry-run line, note, danger variant |
 | 4 | `src/resource_actions.rs`, `src/keyboard_navigation.rs` (0028) | Cordon / Uncordon item and key C → `start_write`; `Cordon` shipped |
 | 4 | `src/launch_options.rs` (+ tests), `src/screenshot.rs` | `--screen cordon-confirm`; settle waits for the dialog |

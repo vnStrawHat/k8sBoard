@@ -27,9 +27,11 @@ pub(crate) struct AuditEntry {                   // no Debug derive needed; hold
 }
 /// Step 3: a lock or unlock of the guard's cluster (no object, no fields, outcome "applied").
 pub(crate) fn lock_entry(guard: &ClusterGuard, lock: WriteLock) -> AuditEntry;
-/// Step 4: one commit. Cluster, context, user come from the guard of `intent.cluster` (never the primary).
-pub(crate) fn write_entry(intent: &WriteIntent, guard: &ClusterGuard, result: &Result<WriteOutcome, WriteError>,
-    note: Option<&str>) -> AuditEntry;
+/// Step 4: one guarded action (write commit or connect start). Cluster, context, user come from the
+/// guard of `intent.cluster` (never the primary). A write maps its `Result<WriteOutcome, WriteError>`
+/// to `outcome` and `error` as before; `fields` come from `changed_fields()` or the connect intent.
+pub(crate) fn audit_entry(intent: &GuardedIntent, guard: &ClusterGuard, outcome: AuditOutcome,
+    error: Option<String>, note: Option<&str>) -> AuditEntry;
 pub(crate) fn append_audit(dir: &Path, entry: &AuditEntry) -> io::Result<()>;   // blocking
 ```
 
@@ -39,7 +41,7 @@ Key allow-list (test `audit_keys_are_the_allow_list`): `at, cluster, context, us
 
 ## What is recorded
 
-- Commits, one line each, after the outcome is known (applied, failed, or unknown). Lock and unlock toggles, one line each (step 3, so the module has a production user before any write exists). Dry-runs are not recorded.
+- Commits, one line each, after the outcome is known (applied, failed, or unknown). Connect verbs: one line per session start. Lock and unlock toggles, one line each (step 3, so the module has a production user before any write exists). Dry-runs are not recorded.
 - `fields` come from `WriteRequest::changed_fields()`: paths always, values only when the operation marks them recordable.
 - **Secret rule (C1, C10)**: a pure `recordable_fields(kind_name, fields)` drops every `value` when the kind is `Secret`, regardless of the operation (enforced here, tested with the name; no Secret write exists yet). ConfigMap data values (0031) are recorded as paths only too, since they often hold credentials.
 - **Never** a request body, a YAML document, a diff text, a token, or a server message of a Secret target.

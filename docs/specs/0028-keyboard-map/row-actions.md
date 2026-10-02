@@ -6,7 +6,7 @@ Wireframe rule: "single-letter keys work only while a resource is selected and n
 
 ## One availability source
 
-`ResourceAction` (existing) gains five variants: `ViewYaml`, `EditYaml`, `Delete`, `RestartRollout`, and `Scale`. `gate()` returns `None` for all five. In `action_availability`, the no-gate `match` changes its `Enabled` arm from `ResourceAction::CopyName` to `ResourceAction::CopyName | ResourceAction::ViewYaml`. The other four fall into the existing `_ => disabled(READ_ONLY_MODE_REASON)` arm, as `Cordon` and `Drain` do. There is no `Attach` variant and no A key: 0036 adds both with the Attach menu item.
+`ResourceAction` (existing) gains five variants: `ViewYaml`, `EditYaml`, `Delete`, `RestartRollout`, and `Scale`. `gate()` returns `None` for all five. In `action_availability`, the no-gate `match` changes its `Enabled` arm from `ResourceAction::CopyName` to `ResourceAction::CopyName | ResourceAction::ViewYaml`. The other four fall into the existing `_ => disabled(READ_ONLY_MODE_REASON)` arm, as `Cordon` and `Drain` do. There is no `Attach` variant and no A key: a later item (no longer owned by 0036) adds both with the Attach menu item.
 
 ```rust
 pub(crate) enum KeyAvailability { Run, Disabled { reason: SharedString }, NotOffered }
@@ -49,4 +49,4 @@ pub(crate) struct KindAction { pub(crate) label: &'static str, pub(crate) action
 
 Kit `PopupMenuItem::action(Box<dyn Action>)` renders the bound key (`Kbd`) next to the item and, when the item also has `on_click`, still runs the click handler. Menus add `.action(...)` to: View logs (`ViewLogs`), Open shell / Open node shell (`OpenShell`), Port-forward (`PortForward`), View YAML (`ViewYaml`), Cordon (`Cordon`), Drain… (`Drain`), Copy name (`CopyName`), the `KindAction` items with an action, and the Delete item (`Delete`). Disabled items (`disabled_menu_item`, an element item) get the hint too. Items keep their `on_click`, so a right-clicked row (not the cursor) is still the item's target.
 
-Hints resolve through the menu's trigger focus path, which has no `PopupMenu` context, so `WORKSPACE` bindings are found. Labels stay as today. The wireframe "Edit YAML" item on every kind and the "Attach" item on pods are not added; their owners are 0031 and 0036.
+Hints resolve through the menu's trigger focus path, which has no `PopupMenu` context, so `WORKSPACE` bindings are found. Labels stay as today. The wireframe "Edit YAML" item on every kind and the "Attach" item on pods are not added; their owners are 0031 and a later item (Attach is no longer owned by 0036).

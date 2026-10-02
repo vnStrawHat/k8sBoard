@@ -23,7 +23,7 @@ Wireframes: the keyboard map grid (22 keys, section `#phim`), the anatomy notes 
 
 - User rebinding, and any settings key for it (decision 25).
 - Keys owned by other specs: Ctrl K and `:` (0029); Space (0027); Ctrl Shift R (0030). Ctrl Shift C and Ctrl 1–9 are 0026 behavior; 0028 only holds their bindings.
-- The A key and the Attach item (0036), and any enabled mutating action (0031–0036).
+- The A key and the Attach item (a later item, no longer owned by 0036), and any enabled mutating action (0031–0036).
 - Menu accelerators inside an open menu.
 - Region focus cycling.
 - A back key (0020 open item 3).

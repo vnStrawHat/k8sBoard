@@ -18,8 +18,16 @@
 ```rust
 pub(crate) struct WriteIntent { pub(crate) cluster: ClusterRef /* the row's cluster (guardrails.md) */, pub(crate) action: ResourceAction, pub(crate) label: SharedString,
     pub(crate) request: WriteRequest, pub(crate) risk: ActionRisk, pub(crate) expected_name: Option<String> }
+/// One guarded action. `Connect` is for streaming verbs (0036 exec, 0035 port-forward), which have no dry-run.
+pub(crate) struct GuardedIntent { pub(crate) cluster: ClusterRef, pub(crate) action: ResourceAction,
+    pub(crate) label: SharedString, pub(crate) risk: ActionRisk, pub(crate) expected_name: Option<String>,
+    pub(crate) kind: GuardedKind }
+pub(crate) enum GuardedKind { Write(WriteRequest), Connect(ConnectIntent /* 0036 */) }
 impl AppShell {
-    /// Gate → confirm step → dry-run → (dialog) → lock re-check → commit → audit → notice.
+    /// The one guarded core: gate → confirm step → dry-run (`Write` only) → (dialog) → lock re-check →
+    /// commit or connect → audit → notice. The dry-run is the only branch on `kind`.
+    pub(crate) fn run_guarded(&mut self, intent: GuardedIntent, trigger: Trigger, window: &mut Window, cx: &mut Context<Self>);
+    /// Thin wrapper: `run_guarded` with `GuardedKind::Write(intent.request)`.
     pub(crate) fn start_write(&mut self, intent: WriteIntent, trigger: Trigger, window: &mut Window, cx: &mut Context<Self>);
 }
 /// Pure: may the commit go now? Runs right before **every** commit, on the Dialog and the Run path.
@@ -28,6 +36,8 @@ pub(crate) fn commit_block(guard: Option<&ClusterGuard>, dry_run_generation: u64
 pub(crate) enum DryRunState { Running, Passed { elapsed: Duration }, Failed(SharedString), Rejected(SharedString), NotSupported }
 pub(crate) enum TypedMatch { NotNeeded, Matches, Differs }
 ```
+
+The steps below are `run_guarded`'s. For `Connect`, steps 3–4 skip the dry-run (`DryRunState::NotSupported`, dialog line `Dry-run not supported for this action`), and step 5 calls the intent's connect callback instead of `write` (0036 `start_connect` is the wrapper). Every other step, reason, and check is shared.
 
 1. `guard_for(&intent.cluster)` (the row's cluster, never the primary; guardrails.md); `action_availability` must be `Enabled` (a stale menu cannot bypass it). Remember `guard.generation` as the dry-run generation.
 2. `confirm_step(guard.confirm, risk, trigger, expected)`.

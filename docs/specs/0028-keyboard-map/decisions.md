@@ -37,7 +37,7 @@
 | 19 | A disabled key shows a notice with the reason; a key the subject does not offer is silent | users learn why S does nothing on UAT; L on a Service is simply not a thing |
 | 20 | `KindAction { label, action }` replaces the label list | no matching of menu strings |
 | 21 | Menus show key hints through `PopupMenuItem::action`; no menu item is added or renamed | one source of truth; added items belong to their owner specs |
-| 22 | Mutating keys are bound but always disabled in 0028. A is not bound: 0036 adds `Attach` together with its key | read-only rule; 0031–0036 enable them by flipping the gate |
+| 22 | Mutating keys are bound but always disabled in 0028. A is not bound: `Attach` and its key are a later item (no longer owned by 0036) | read-only rule; 0031–0036 enable them by flipping the gate |
 
 ## Sheet, dock, scope
 
