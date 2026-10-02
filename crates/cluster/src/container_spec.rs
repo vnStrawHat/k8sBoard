@@ -138,6 +138,8 @@ pub enum VolumeSource {
     Projected {
         /// The config map names of `projected.sources[].configMap`, in order.
         config_maps: Vec<String>,
+        /// The secret names of `projected.sources[].secret`, in order.
+        secrets: Vec<String>,
     },
     DownwardApi,
     /// Any other volume type, or a volume name missing from `spec.volumes`.
@@ -363,6 +365,13 @@ fn volume_source(volume: &Volume) -> VolumeSource {
                 .flatten()
                 .filter_map(|source| source.config_map.as_ref())
                 .map(|config_map| config_map.name.clone())
+                .collect(),
+            secrets: projected
+                .sources
+                .iter()
+                .flatten()
+                .filter_map(|source| source.secret.as_ref())
+                .map(|secret| secret.name.clone())
                 .collect(),
         }
     } else if volume.downward_api.is_some() {

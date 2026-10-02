@@ -308,6 +308,7 @@ mod tests {
             status_message: None,
             labels: Vec::new(),
             host_network: false,
+            image_pull_secrets: Vec::new(),
             containers: (0..container_count)
                 .map(|index| container(&format!("c{index}")))
                 .collect(),
@@ -559,6 +560,8 @@ mod tests {
         assert_eq!(pick_selected("web", items()), None);
         assert_eq!(pick_selected("c/api", items()), None);
         assert_eq!(pick_selected("a/ap", items()), None);
+        // A dash is not a slash: `a-api` names no row, so no drawer opens (the screen still settles).
+        assert_eq!(pick_selected("a-api", items()), None);
     }
 
     #[test]

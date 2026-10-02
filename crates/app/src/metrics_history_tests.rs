@@ -70,6 +70,7 @@ fn summary(namespace: &str, name: &str, controller: Option<(&str, &str)>) -> Pod
         status_message: None,
         labels: Vec::new(),
         host_network: false,
+        image_pull_secrets: Vec::new(),
         containers: Vec::new(),
     }
 }

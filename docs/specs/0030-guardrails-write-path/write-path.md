@@ -82,6 +82,7 @@ Enforcement:
    | `access_review.rs` | `review_one` (SSAR) | 0030 |
    | `object_write.rs` | the `match` that sends each allow-listed operation | 0030 |
    | `kubelet_stats.rs` | `kubelet_text` / `kubelet_lines` (read-only GETs of the 0011 kubelet path allow-list) | 0030 |
+   | `secret.rs` | `secret_values` (read-only GET decoded in-crate, 0016) | 0016 |
    | `pod_shell.rs` | `exec` | 0036 |
    | `port_forward.rs` | `portforward` | 0035 |
    | `debug_shell.rs` | `attach` | 0037 |

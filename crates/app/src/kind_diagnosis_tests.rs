@@ -126,6 +126,7 @@ fn pod(name: &str, node: Option<&str>) -> PodSummary {
         status_message: None,
         labels: Vec::new(),
         host_network: false,
+        image_pull_secrets: Vec::new(),
         containers: Vec::new(),
     }
 }
@@ -1604,4 +1605,119 @@ mod account {
             None
         );
     }
+}
+
+// ---- Secrets ----
+
+const DAY: i64 = 24 * 3600;
+
+fn tls_secret(details: SecretDetails) -> KindObject {
+    KindObject::Secret(cluster::SecretSummary {
+        namespace: "team-a".to_owned(),
+        name: "shop-tls".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        secret_type: "kubernetes.io/tls".to_owned(),
+        keys: Vec::new(),
+        details,
+        is_immutable: false,
+        is_owned: false,
+    })
+}
+
+fn leaf(not_before: i64, not_after: i64) -> SecretDetails {
+    SecretDetails::Certificate {
+        chain: vec![cluster::CertificateInfo {
+            subject: "CN=shop".to_owned(),
+            issuer: "CN=ca".to_owned(),
+            alt_names: Vec::new(),
+            not_before: at(not_before),
+            not_after: at(not_after),
+        }],
+    }
+}
+
+/// The box of a secret at `now` seconds, with no list loaded: the CERTIFICATE rules read only
+/// the secret.
+fn secret_box(object: KindObject, now: i64) -> Option<KindDiagnosis> {
+    kind_diagnosis(
+        &object,
+        &DiagnosisInputs {
+            pods: None,
+            nodes: &[],
+            service: None,
+            bindings: None,
+            now: at(now),
+        },
+    )
+}
+
+#[test]
+fn secret_certificate_expired_box() {
+    // 1970-04-11 is day 100; the certificate ended on day 97.
+    let diagnosis = secret_box(tls_secret(leaf(0, 97 * DAY)), 100 * DAY).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(diagnosis.title, "CERTIFICATE");
+    assert_eq!(diagnosis.text, "Expired Apr 8, 1970 (3d ago).");
+    assert_eq!(diagnosis.pod, None);
+}
+
+#[test]
+fn secret_certificate_expiring_box() {
+    let diagnosis = secret_box(tls_secret(leaf(0, 106 * DAY)), 100 * DAY).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(diagnosis.text, "Expires Apr 17, 1970 (in 6d).");
+}
+
+#[test]
+fn secret_certificate_not_yet_valid_box() {
+    let diagnosis = secret_box(tls_secret(leaf(110 * DAY, 400 * DAY)), 100 * DAY).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(diagnosis.text, "Not valid until Apr 21, 1970.");
+}
+
+#[test]
+fn secret_not_parsed_and_missing_boxes() {
+    let unparsed = tls_secret(SecretDetails::NoCertificate(
+        cluster::CertificateIssue::Unparsed,
+    ));
+    let diagnosis = secret_box(unparsed, 0).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(
+        diagnosis.text,
+        "tls.crt could not be parsed as an X.509 certificate."
+    );
+    let missing = tls_secret(SecretDetails::NoCertificate(
+        cluster::CertificateIssue::Missing,
+    ));
+    let diagnosis = secret_box(missing, 0).expect("a box");
+    assert_eq!(diagnosis.text, "The secret has no tls.crt.");
+}
+
+#[test]
+fn valid_certificate_has_no_box() {
+    assert_eq!(secret_box(tls_secret(leaf(0, 400 * DAY)), 100 * DAY), None);
+}
+
+#[test]
+fn expiry_box_follows_the_leaf_not_an_early_intermediate() {
+    let SecretDetails::Certificate { mut chain } = leaf(0, 400 * DAY) else {
+        panic!("a certificate");
+    };
+    chain.push(cluster::CertificateInfo {
+        subject: "CN=ca".to_owned(),
+        issuer: "CN=root".to_owned(),
+        alt_names: Vec::new(),
+        not_before: at(0),
+        not_after: at(101 * DAY),
+    });
+    let object = tls_secret(SecretDetails::Certificate { chain });
+    assert_eq!(secret_box(object, 100 * DAY), None);
+}
+
+#[test]
+fn opaque_secret_has_no_box() {
+    assert_eq!(secret_box(tls_secret(SecretDetails::None), 0), None);
+    let registries = SecretDetails::Registries(vec!["registry.example.test".to_owned()]);
+    assert_eq!(secret_box(tls_secret(registries), 0), None);
 }

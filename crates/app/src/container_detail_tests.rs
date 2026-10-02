@@ -361,6 +361,7 @@ fn mount_rows_text_and_targets() {
             "token",
             VolumeSource::Projected {
                 config_maps: Vec::new(),
+                secrets: Vec::new(),
             },
         ),
         mount("/labels", "labels", VolumeSource::DownwardApi),

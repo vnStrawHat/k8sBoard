@@ -16,6 +16,7 @@ use gpui_kit::{
 use crate::access_bindings::{BindingIndex, ready_binding_lists};
 use crate::age::format_age;
 use crate::app_shell::AppShell;
+use crate::certificate_expiry::expiry_label;
 use crate::cluster_session::{ClusterSession, CompanionLists, LiveCluster};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
@@ -137,7 +138,8 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::PersistentVolume(_)
         | KindObject::Role(_)
         | KindObject::Binding(_)
-        | KindObject::ServiceAccount(_) => None,
+        | KindObject::ServiceAccount(_)
+        | KindObject::Secret(_) => None,
     }
 }
 
@@ -202,13 +204,7 @@ fn overview(
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> AnyElement {
-    let paint = DrawerPaint {
-        kind,
-        row,
-        live,
-        forward_reason: port_forward_reason(&live.access),
-        now,
-    };
+    let paint = DrawerPaint::new(kind, row, live, now);
     // Gives every element that needs an id one that is unique inside the drawer.
     let mut next_id = 0_usize;
     let mut column = v_flex();
@@ -310,12 +306,43 @@ fn why_box(diagnosis: &KindDiagnosis, cx: &Context<AppShell>) -> AnyElement {
 }
 
 /// What painting a drawer row may read besides the row itself.
-struct DrawerPaint<'a> {
+pub(crate) struct DrawerPaint<'a> {
     kind: ResourceKind,
     row: &'a KindRow,
     live: &'a LiveCluster,
     forward_reason: SharedString,
     now: jiff::Timestamp,
+}
+
+impl<'a> DrawerPaint<'a> {
+    pub(crate) fn new(
+        kind: ResourceKind,
+        row: &'a KindRow,
+        live: &'a LiveCluster,
+        now: jiff::Timestamp,
+    ) -> Self {
+        Self {
+            kind,
+            row,
+            live,
+            forward_reason: port_forward_reason(&live.access),
+            now,
+        }
+    }
+}
+
+/// The elements of rows that a live section builds at paint time, drawn like the sections of the
+/// drawer. `id_base` keeps their element ids apart from the others in the drawer.
+pub(crate) fn live_detail_rows(
+    rows: &[DetailRow],
+    id_base: usize,
+    paint: &DrawerPaint,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    rows.iter()
+        .enumerate()
+        .map(|(offset, detail)| detail_element(detail, id_base + offset, paint, cx))
+        .collect()
 }
 
 fn detail_element(
@@ -473,6 +500,9 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
             }
             .into_any_element()
         }
+        KindCell::Expiry { not_after } => toned_text(expiry_label(*not_after, now), cx)
+            .truncate()
+            .into_any_element(),
         KindCell::Absent => absent_text(cx).into_any_element(),
         KindCell::NextRun(schedule) => match next_run_text(schedule, now) {
             Some(text) => div().truncate().child(text).into_any_element(),

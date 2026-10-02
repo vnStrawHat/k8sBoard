@@ -341,7 +341,14 @@ fn companion_plan_per_kind() {
         companion_plan(ResourceKind::Services, &allowed),
         CompanionPlan::Start(CompanionKind::EndpointSlices)
     );
-    // Only Services and StorageClasses join with a second list.
+    assert_eq!(
+        companion_plan(
+            ResourceKind::Secrets,
+            &denial_of_ingresses(AccessDecision::Allowed)
+        ),
+        CompanionPlan::Start(CompanionKind::Ingresses)
+    );
+    // Only Services, StorageClasses, and Secrets join with a second list.
     for kind in [
         ResourceKind::PersistentVolumes,
         ResourceKind::PersistentVolumeClaims,
@@ -854,4 +861,70 @@ fn bindings_companion_watch_count() {
         open_watch_count(watches(5, explorer, watches_of(true, 5), true, true)),
         2 + 5 + 1 + 6 + 2
     );
+}
+
+fn denial_of_ingresses(decision: AccessDecision) -> AccessState {
+    AccessState::Known(AccessReport {
+        reviews: vec![AccessReview {
+            check: AccessCheck::ListIngresses,
+            decision,
+        }],
+    })
+}
+
+#[test]
+fn secrets_start_the_ingresses_companion_unless_denied() {
+    assert_eq!(
+        companion_plan(
+            ResourceKind::Secrets,
+            &denial_of_ingresses(AccessDecision::Allowed)
+        ),
+        CompanionPlan::Start(CompanionKind::Ingresses)
+    );
+    assert_eq!(
+        companion_plan(
+            ResourceKind::Secrets,
+            &denial_of_ingresses(AccessDecision::Denied { reason: None })
+        ),
+        CompanionPlan::Denied(AccessCheck::ListIngresses)
+    );
+    assert_eq!(
+        companion_plan(ResourceKind::Secrets, &AccessState::Unknown),
+        CompanionPlan::Start(CompanionKind::Ingresses)
+    );
+}
+
+#[test]
+fn ingresses_companion_lists_start_loading_and_apply_snapshots() {
+    let mut lists = CompanionLists::loading_for(CompanionKind::Ingresses);
+    assert!(matches!(&lists, CompanionLists::Ingresses(list) if list.is_loading()));
+    lists.apply(CompanionUpdate::Ingresses(
+        WatchUpdate::Snapshot(Vec::new()),
+    ));
+    assert_eq!(lists.ingresses().and_then(LiveList::ready_count), Some(0));
+    // A stale update of another companion is ignored.
+    lists.apply(CompanionUpdate::EndpointSlices(WatchUpdate::Snapshot(
+        Vec::new(),
+    )));
+    assert!(lists.endpoint_slices().is_none());
+}
+
+#[test]
+fn open_watch_count_with_secret_companion() {
+    // One ingress watch per namespace beside the one secret watch per namespace: five namespaces
+    // reach the 3N + 4 bound exactly, and none exceeds it.
+    for namespaces in 1..=5 {
+        let companion = CompanionLists::loading_for(CompanionKind::Ingresses);
+        let explorer = explorer_watches(ResourceKind::Secrets, namespaces);
+        assert_eq!(explorer, namespaces);
+        let count = open_watch_count(watches(
+            namespaces,
+            explorer,
+            companion.watches(namespaces),
+            true,
+            true,
+        ));
+        assert_eq!(count, 2 + namespaces + namespaces + namespaces + 2);
+        assert!(count <= 3 * namespaces + 4);
+    }
 }

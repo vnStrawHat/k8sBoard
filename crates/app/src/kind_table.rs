@@ -16,6 +16,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
+use crate::certificate_expiry::expiry_label;
 use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
@@ -250,6 +251,7 @@ impl TableRow for KindTableRow<'_> {
             Some(KindCell::Quantity { value, .. }) => {
                 CellValue::Number(i64::try_from(*value).unwrap_or(i64::MAX))
             }
+            Some(KindCell::Expiry { not_after }) => CellValue::Number(not_after.as_second()),
             Some(KindCell::Absent) | None => CellValue::Absent,
         }
     }
@@ -550,6 +552,11 @@ fn cell_element(
                 Some(text) => base().child(text),
                 None => base().text_color(cx.theme().muted_foreground).child("—"),
             }
+        }
+        KindCell::Expiry { not_after } => {
+            // Read per cell: days left change while the screen is open.
+            let label = expiry_label(*not_after, jiff::Timestamp::now());
+            base().child(toned_text(label, cx))
         }
         KindCell::Age { at, tone } => {
             // Read per cell: a render has no shared clock, and a second of skew is invisible.
@@ -934,5 +941,26 @@ mod tests {
         assert_eq!(value(&never), None);
         assert_eq!(order(&far, &never), Ordering::Less);
         assert_eq!(order(&never, &soon), Ordering::Greater);
+    }
+
+    #[test]
+    fn expiry_cell_sorts_by_not_after() {
+        let expiry = |seconds: i64| {
+            row(vec![KindCell::Expiry {
+                not_after: jiff::Timestamp::from_second(seconds).expect("valid timestamp"),
+            }])
+        };
+        let number = |row: &KindRow| {
+            let row = KindTableRow {
+                row,
+                name_column: NameColumn::Flexible,
+            };
+            match row.value(1) {
+                CellValue::Number(number) => Some(number),
+                _ => None,
+            }
+        };
+        assert_eq!(number(&expiry(500)), Some(500));
+        assert!(number(&expiry(500)) < number(&expiry(900)));
     }
 }

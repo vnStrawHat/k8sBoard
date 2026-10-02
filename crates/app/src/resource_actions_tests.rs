@@ -191,6 +191,7 @@ fn pod_on(node: Option<&str>) -> PodSummary {
         status_message: None,
         labels: Vec::new(),
         host_network: false,
+        image_pull_secrets: Vec::new(),
     }
 }
 

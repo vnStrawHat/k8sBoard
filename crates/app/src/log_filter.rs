@@ -74,7 +74,7 @@ mod tests {
     }
 
     #[test]
-    fn rust_log_cannot_raise_the_kube_client_target() {
+    fn kube_client_body_warning_is_suppressed() {
         for env in [
             "kube_client=debug",
             "kube_client::client=trace",
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn other_targets_still_follow_rust_log() {
+    fn other_warnings_still_pass_the_filter() {
         let text = logged_with(pinned(EnvFilter::new("kube_client=warn")));
         assert!(text.contains("sibling-distinctive"), "{text}");
         let quiet = logged_with(pinned(EnvFilter::new("error")));

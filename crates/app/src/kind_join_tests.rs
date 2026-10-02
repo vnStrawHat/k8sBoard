@@ -1,8 +1,8 @@
 use cluster::{
     ContainerKind, ContainerProbes, ContainerResource, ContainerState, ContainerSummary,
     ControllerRef, EnvEntry, EnvFromEntry, EnvFromSource, EnvSource, MountEntry, NamespacePhase,
-    NamespaceScope, NamespaceSummary, PodStatus, ReadyCount, ServicePortSummary, StatusReason,
-    VolumeSource,
+    NamespaceScope, NamespaceSummary, PodStatus, ReadyCount, SecretDetails, ServicePortSummary,
+    StatusReason, VolumeSource,
 };
 
 use super::*;
@@ -46,6 +46,7 @@ fn pod(namespace: &str, name: &str, labels: &[&str]) -> PodSummary {
         status_message: None,
         labels: labels.iter().map(|term| (*term).to_owned()).collect(),
         host_network: false,
+        image_pull_secrets: Vec::new(),
         containers: Vec::new(),
     }
 }
@@ -164,6 +165,11 @@ fn joined_column_indices_name_their_columns() {
     assert_eq!(
         claim_columns.get(CLAIM_USED).map(|column| column.name),
         Some("Used")
+    );
+    let secret_columns = ResourceKind::Secrets.columns();
+    assert_eq!(
+        secret_columns.get(SECRET_USED_BY).map(|column| column.name),
+        Some("Used by")
     );
 }
 
@@ -606,6 +612,7 @@ fn config_map_users_from_env_env_from_volume_projected() {
             volume: "b".to_owned(),
             source: VolumeSource::Projected {
                 config_maps: vec!["kube-root-ca.crt".to_owned()],
+                secrets: Vec::new(),
             },
             is_read_only: true,
             sub_path: None,
@@ -1681,4 +1688,263 @@ fn cluster_admin_to_authenticated_marks_every_account() {
             tone_cell("clusterrole/cluster-admin", StatusTone::Warn)
         );
     }
+}
+
+// ---- Secrets ----
+
+const NO_PODS: &[PodSummary] = &[];
+const NO_INGRESSES: &[IngressSummary] = &[];
+
+fn secret_of(secret_type: &str, name: &str) -> cluster::SecretSummary {
+    cluster::SecretSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        secret_type: secret_type.to_owned(),
+        keys: Vec::new(),
+        details: SecretDetails::None,
+        is_immutable: false,
+        is_owned: false,
+    }
+}
+
+fn ingress_using(name: &str, secrets: &[Option<&str>]) -> IngressSummary {
+    IngressSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        class: None,
+        hosts: Vec::new(),
+        addresses: Vec::new(),
+        rules: Vec::new(),
+        default_backend: None,
+        default_service: None,
+        tls: secrets
+            .iter()
+            .map(|secret| cluster::IngressTls {
+                hosts: Vec::new(),
+                secret_name: secret.map(str::to_owned),
+            })
+            .collect(),
+    }
+}
+
+fn secret_pod(name: &str, container: ContainerSummary) -> PodSummary {
+    with_container(pod("team-a", name, &[]), container)
+}
+
+fn env_from_secret(name: &str) -> ContainerSummary {
+    let mut container = container(ContainerKind::Main);
+    container.env_from = vec![EnvFromEntry {
+        source: EnvFromSource::Secret {
+            name: name.to_owned(),
+        },
+        prefix: None,
+    }];
+    container
+}
+
+/// Every kind of reference a pod can hold to a secret named `db`.
+fn pod_using_secrets() -> PodSummary {
+    let mut main = container(ContainerKind::Main);
+    main.env = vec![EnvEntry {
+        name: "PASSWORD".to_owned(),
+        source: EnvSource::SecretKey {
+            name: "db".to_owned(),
+            key: "password".to_owned(),
+        },
+    }];
+    main.env_from = env_from_secret("db").env_from;
+    main.mounts = vec![
+        MountEntry {
+            path: "/etc/db".to_owned(),
+            volume: "db".to_owned(),
+            source: VolumeSource::Secret {
+                name: "db".to_owned(),
+            },
+            is_read_only: true,
+            sub_path: None,
+        },
+        MountEntry {
+            path: "/etc/bundle".to_owned(),
+            volume: "bundle".to_owned(),
+            source: VolumeSource::Projected {
+                config_maps: vec!["settings".to_owned()],
+                secrets: vec!["projected".to_owned()],
+            },
+            is_read_only: true,
+            sub_path: None,
+        },
+    ];
+    let mut pod = secret_pod("api-1", main);
+    pod.image_pull_secrets = vec!["registry".to_owned()];
+    pod
+}
+
+#[test]
+fn secret_users_by_env_env_from_volume_projected_pull() {
+    let users = secret_users(&[pod_using_secrets()], NO_INGRESSES);
+    let db = users_in_team_a(&users, "db");
+    assert_eq!(db.len(), 1);
+    assert_eq!(ways_of(&db[0]), ["env", "env from", "volume"]);
+    assert_eq!(db[0].owner, "pod/api-1");
+    assert_eq!(
+        ways_of(&users_in_team_a(&users, "projected")[0]),
+        ["volume"]
+    );
+    assert_eq!(
+        ways_of(&users_in_team_a(&users, "registry")[0]),
+        ["image pull"]
+    );
+    // A config map in a projected volume is not a secret.
+    assert!(users_in_team_a(&users, "settings").is_empty());
+}
+
+#[test]
+fn secret_users_ignore_empty_names() {
+    let mut main = container(ContainerKind::Main);
+    main.mounts = vec![MountEntry {
+        path: "/etc".to_owned(),
+        volume: "v".to_owned(),
+        source: VolumeSource::Secret {
+            name: String::new(),
+        },
+        is_read_only: true,
+        sub_path: None,
+    }];
+    let mut pod = secret_pod("api-1", main);
+    pod.image_pull_secrets = vec![String::new()];
+    assert!(secret_users(&[pod], NO_INGRESSES).is_empty());
+}
+
+#[test]
+fn secret_users_include_ingress_tls() {
+    let ingress = ingress_using("shop", &[Some("shop-tls"), None, Some("shop-tls")]);
+    let users = secret_users(NO_PODS, &[ingress]);
+    let tls = users_in_team_a(&users, "shop-tls");
+    assert_eq!(tls.len(), 1);
+    assert_eq!(tls[0].owner, "ingress/shop");
+    assert_eq!(ways_of(&tls[0]), ["tls"]);
+    assert_eq!(
+        tls[0].target,
+        ResourceKey::of_object("Ingress", Some("team-a"), "shop")
+    );
+}
+
+#[test]
+fn secret_users_list_the_token_account() {
+    let mut token = secret_of("kubernetes.io/service-account-token", "builder-token");
+    token.details = SecretDetails::ServiceAccountToken {
+        account: Some("builder".to_owned()),
+    };
+    let list = secret_user_list(&token, &SecretUsers::new());
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].owner, "serviceaccount/builder");
+    assert_eq!(ways_of(&list[0]), ["token"]);
+}
+
+#[test]
+fn secret_unused_only_when_eligible() {
+    let mut owned = secret_of("Opaque", "owned");
+    owned.is_owned = true;
+    let cases = [
+        (secret_of("Opaque", "a"), true),
+        (secret_of("kubernetes.io/basic-auth", "a"), true),
+        (secret_of("kubernetes.io/ssh-auth", "a"), true),
+        (secret_of("kubernetes.io/dockerconfigjson", "a"), true),
+        (secret_of("kubernetes.io/dockercfg", "a"), true),
+        (secret_of("kubernetes.io/tls", "a"), false),
+        (secret_of("helm.sh/release.v1", "a"), false),
+        (secret_of("kubernetes.io/service-account-token", "a"), false),
+        (owned, false),
+    ];
+    for (secret, expected) in cases {
+        assert_eq!(may_be_unused(&secret), expected, "{}", secret.secret_type);
+    }
+}
+
+/// The Secrets rows after a join; `pods` and `ingresses` are `None` while not loaded.
+fn joined_secrets(
+    secrets: &[cluster::SecretSummary],
+    pods: Option<Vec<PodSummary>>,
+    ingresses: Option<Vec<IngressSummary>>,
+) -> Vec<KindRow> {
+    let mut rows: Vec<KindRow> = secrets.iter().map(crate::secret_rows::secret_row).collect();
+    let pods = match pods {
+        Some(pods) => ready_list(pods),
+        None => LiveList::Loading,
+    };
+    let companion = ingresses.map(|ingresses| CompanionLists::Ingresses(ready_list(ingresses)));
+    let inputs = JoinInputs {
+        pods: &pods,
+        companion: companion.as_ref(),
+        kubelet: None,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(ResourceKind::Secrets, &mut rows, &inputs);
+    rows
+}
+
+fn unused_cell() -> KindCell {
+    KindCell::Toned(toned("unused", StatusTone::Done))
+}
+
+#[test]
+fn secret_used_by_absent_until_lists_ready() {
+    let secrets = [secret_of("Opaque", "orphan"), secret_of("Opaque", "db")];
+    let pods = vec![pod_using_secrets()];
+    // Pods not loaded: nothing at all, not even the ingress users.
+    let rows = joined_secrets(&secrets, None, Some(vec![ingress_using("shop", &[])]));
+    assert!(
+        rows.iter()
+            .all(|row| row.cells[SECRET_USED_BY] == KindCell::Absent)
+    );
+    // Ingresses not loaded: users show, but `unused` waits.
+    let rows = joined_secrets(&secrets, Some(pods.clone()), None);
+    assert_eq!(rows[0].cells[SECRET_USED_BY], KindCell::Absent);
+    assert_eq!(
+        rows[1].cells[SECRET_USED_BY],
+        KindCell::Mono("pod/api-1".into())
+    );
+    // Both loaded.
+    let rows = joined_secrets(&secrets, Some(pods), Some(Vec::new()));
+    assert_eq!(rows[0].cells[SECRET_USED_BY], unused_cell());
+}
+
+#[test]
+fn secret_used_by_cell_names_first_owner_and_count() {
+    let secrets = [secret_of("Opaque", "db")];
+    let second = secret_pod("web-1", env_from_secret("db"));
+    let rows = joined_secrets(
+        &secrets,
+        Some(vec![pod_using_secrets(), second]),
+        Some(Vec::new()),
+    );
+    assert_eq!(
+        rows[0].cells[SECRET_USED_BY],
+        KindCell::MonoWithMore {
+            text: "pod/api-1".into(),
+            more: 1
+        }
+    );
+}
+
+#[test]
+fn secret_in_use_by_an_ingress_is_not_unused() {
+    let secrets = [secret_of("Opaque", "shop-cert")];
+    let ingress = ingress_using("shop", &[Some("shop-cert")]);
+    let rows = joined_secrets(&secrets, Some(Vec::new()), Some(vec![ingress]));
+    assert_eq!(
+        rows[0].cells[SECRET_USED_BY],
+        KindCell::Mono("ingress/shop".into())
+    );
+}
+
+#[test]
+fn tls_secrets_are_never_unused() {
+    let secrets = [secret_of("kubernetes.io/tls", "shop-tls")];
+    let rows = joined_secrets(&secrets, Some(Vec::new()), Some(Vec::new()));
+    assert_eq!(rows[0].cells[SECRET_USED_BY], KindCell::Absent);
 }

@@ -675,6 +675,7 @@ fn labelled_pod(namespace: &str, name: &str, label: &str, is_ready: bool) -> Pod
         status_message: None,
         labels: vec![label.to_owned()],
         host_network: false,
+        image_pull_secrets: Vec::new(),
         containers: Vec::new(),
     }
 }
@@ -868,6 +869,7 @@ fn mounting_pod(namespace: &str, name: &str, claim: &str, paths: &[&str]) -> Pod
         status_message: None,
         labels: Vec::new(),
         host_network: false,
+        image_pull_secrets: Vec::new(),
         containers: paths
             .iter()
             .enumerate()
@@ -1174,6 +1176,7 @@ fn pod_running_as(namespace: &str, name: &str, account: Option<&str>) -> PodSumm
         status_message: None,
         labels: Vec::new(),
         host_network: false,
+        image_pull_secrets: Vec::new(),
         containers: Vec::new(),
     }
 }
@@ -1201,4 +1204,46 @@ fn service_account_pods_by_name() {
         .map(|pod| pod.name.as_str())
         .collect();
     assert_eq!(names, ["alpha", "zeta"]);
+}
+
+// ---- Secrets ----
+
+#[test]
+fn secret_used_by_note_when_unused() {
+    assert_eq!(unused_notes(IngressesState::Ready), [UNUSED_NOTE]);
+    assert_eq!(unused_notes(IngressesState::Loading), ["Loading…"]);
+    assert_eq!(
+        unused_notes(IngressesState::Denied),
+        [UNUSED_NOTE_PODS_ONLY, "Not permitted: list ingresses"]
+    );
+    assert_eq!(
+        unused_notes(IngressesState::Unavailable),
+        [UNUSED_NOTE_PODS_ONLY, "Ingresses are unavailable"]
+    );
+    assert!(UNUSED_NOTE.contains("Gateway API and Istio"));
+    assert!(UNUSED_NOTE_PODS_ONLY.starts_with("No pod in this namespace uses it."));
+}
+
+#[test]
+fn ingresses_state_follows_the_list_and_the_plan() {
+    let ready: LiveList<IngressSummary> = LiveList::Ready {
+        items: Vec::new(),
+        interruption: None,
+    };
+    let failed: LiveList<IngressSummary> = LiveList::Failed {
+        message: "boom".to_owned(),
+    };
+    let start = CompanionPlan::Start(crate::cluster_session::CompanionKind::Ingresses);
+    let denied = CompanionPlan::Denied(cluster::AccessCheck::ListIngresses);
+    assert_eq!(ingresses_state(Some(&ready), start), IngressesState::Ready);
+    assert_eq!(
+        ingresses_state(Some(&LiveList::Loading), start),
+        IngressesState::Loading
+    );
+    assert_eq!(ingresses_state(None, denied), IngressesState::Denied);
+    assert_eq!(
+        ingresses_state(Some(&failed), start),
+        IngressesState::Unavailable
+    );
+    assert_eq!(ingresses_state(None, start), IngressesState::Unavailable);
 }

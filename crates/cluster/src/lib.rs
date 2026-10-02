@@ -4,6 +4,7 @@
 mod access_review;
 mod autoscaler;
 mod cadvisor_text;
+mod certificate;
 mod config_map;
 mod connection;
 mod container_spec;
@@ -36,6 +37,7 @@ mod resource_quota;
 mod resource_watch;
 mod role;
 mod role_binding;
+mod secret;
 mod selector;
 mod service;
 mod service_account;
@@ -46,6 +48,7 @@ mod workload;
 pub use access_review::{AccessCheck, AccessDecision, AccessReport, AccessReview, NamespaceAccess};
 pub use autoscaler::{HorizontalPodAutoscalerSummary, HpaMetric, MetricSource, MetricValue};
 pub use cadvisor_text::{ContainerDiskIo, DiskIoCounters, DiskIoSample};
+pub use certificate::{CertificateInfo, CertificateIssue};
 pub use config_map::{
     ConfigMapKey, ConfigMapSummary, ConfigMapValue, ConfigMapValues, ValuePreview,
 };
@@ -96,6 +99,7 @@ pub use role::{RbacRule, RoleSummary};
 pub use role_binding::{
     BindingSummary, BroadGroup, RoleKind, RoleRef, Subject, SubjectKind, SubjectMatch,
 };
+pub use secret::{SecretDetails, SecretKey, SecretSummary, SecretValue};
 pub use selector::Selector;
 pub use service::{ServicePortSummary, ServiceSummary};
 pub use service_account::{CloudIdentity, CloudProvider, ServiceAccountSummary};

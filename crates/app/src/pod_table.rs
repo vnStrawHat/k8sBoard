@@ -428,6 +428,7 @@ mod tests {
             status_message: None,
             labels: vec!["app=api".to_owned()],
             host_network: false,
+            image_pull_secrets: Vec::new(),
         }
     }
 

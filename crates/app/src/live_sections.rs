@@ -6,10 +6,10 @@
 
 use cluster::{
     BindingSummary, ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule,
-    DeploymentSummary, EndpointSliceSummary, EventSummary, JobSummary, NodeSummary,
+    DeploymentSummary, EndpointSliceSummary, EventSummary, IngressSummary, JobSummary, NodeSummary,
     PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary,
-    PvcUsage, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, ServiceAccountSummary,
-    ServiceSummary, ValuePreview, VolumeSource,
+    PvcUsage, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, SecretSummary,
+    ServiceAccountSummary, ServiceSummary, ValuePreview, VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -34,10 +34,10 @@ use crate::cluster_session::{
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::drawer::{link_text, wide_detail_row};
 use crate::kind_diagnosis::{is_pod_not_ready, unready_node};
-use crate::kind_drawer::bar_row;
+use crate::kind_drawer::{DrawerPaint, bar_row, live_detail_rows};
 use crate::kind_join::{
-    EndpointState, UsedBy, config_map_users, endpoint_entries, endpoint_ports, service_slices,
-    users_of,
+    EndpointState, UsedBy, config_map_users, endpoint_entries, endpoint_ports, secret_user_list,
+    secret_users, service_slices, users_of,
 };
 use crate::kind_join::{UsageSample, claim_sample, is_shared_filesystem};
 use crate::kind_row::{DetailRow, KindObject, KindRow, LiveContent, owns_pod, percent};
@@ -45,6 +45,7 @@ use crate::object_events::event_subject;
 use crate::policy_rows::{fullest_item, quota_text};
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_kind::ResourceKind;
+use crate::secret_rows::{MASK, MaskedKeyRow, certificate_rows, secret_data_rows};
 use crate::status_tone::{StatusLabel, StatusTone, pod_status_label, readiness_text, toned_text};
 use crate::storage_rows::phase_label;
 use crate::table_selection::ResourceKey;
@@ -84,6 +85,14 @@ pub(crate) fn live_rows(
         (LiveContent::UsedBy, KindObject::ConfigMap(config_map)) => {
             used_by_rows(config_map, live, cx)
         }
+        (LiveContent::UsedBy, KindObject::Secret(secret)) => secret_used_by_rows(secret, live, cx),
+        (LiveContent::SecretData, KindObject::Secret(secret)) => masked_rows(secret, cx),
+        (LiveContent::Certificate, KindObject::Secret(secret)) => live_detail_rows(
+            &certificate_rows(&secret.details),
+            CERTIFICATE_ID_BASE,
+            &DrawerPaint::new(kind, row, live, now),
+            cx,
+        ),
         (LiveContent::SelectedPods, KindObject::PodDisruptionBudget(budget)) => {
             selected_pods_rows(budget, live, cx)
         }
@@ -901,6 +910,128 @@ fn used_by_element(ix: usize, used_by: &UsedBy, cx: &Context<AppShell>) -> AnyEl
                 .child(ways),
         )
         .into_any_element()
+}
+
+// ---- Secrets ----
+
+/// Element ids of the Certificate section's rows start here, clear of the drawer's own.
+const CERTIFICATE_ID_BASE: usize = 10_000;
+const UNUSED_NOTE: &str = "No pod or ingress in this namespace uses it. Workloads with no running pod, CronJob templates, Gateway API and Istio references, and readers through the API are not checked.";
+/// The first note when the ingresses could not be checked.
+const UNUSED_NOTE_PODS_ONLY: &str = "No pod in this namespace uses it. Workloads with no running pod, CronJob templates, Gateway API and Istio references, and readers through the API are not checked.";
+
+/// The masked keys of a Secret: name, the fixed mask, and the size. Used until the values view
+/// takes the section over, and never with a value.
+fn masked_rows(secret: &SecretSummary, cx: &Context<AppShell>) -> Vec<AnyElement> {
+    secret_data_rows(&secret.keys)
+        .iter()
+        .enumerate()
+        .map(|(ix, row)| masked_key_element(ix, row, cx))
+        .collect()
+}
+
+fn masked_key_element(ix: usize, row: &MaskedKeyRow, cx: &Context<AppShell>) -> AnyElement {
+    let theme = cx.theme();
+    let size = if row.is_binary {
+        format!("{} · binary", row.size)
+    } else {
+        row.size.clone()
+    };
+    h_flex()
+        .id(("secret-key", ix))
+        .gap_2()
+        .items_center()
+        .py_1()
+        .text_sm()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_family(theme.mono_font_family.clone())
+                .child(row.key.clone()),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground)
+                .font_family(theme.mono_font_family.clone())
+                .child(MASK),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground)
+                .child(size),
+        )
+        .into_any_element()
+}
+
+/// How far the Ingresses companion of the Secrets screen has got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IngressesState {
+    Loading,
+    Ready,
+    Denied,
+    Unavailable,
+}
+
+fn ingresses_state(list: Option<&LiveList<IngressSummary>>, plan: CompanionPlan) -> IngressesState {
+    match list {
+        Some(list) if list.ready_items().is_some() => IngressesState::Ready,
+        Some(list) if list.is_loading() => IngressesState::Loading,
+        _ if matches!(plan, CompanionPlan::Denied(_)) => IngressesState::Denied,
+        // Failed, or not started yet: the explorer starts it with the screen.
+        _ => IngressesState::Unavailable,
+    }
+}
+
+/// The notes of a Secret nobody uses, by what is known about the ingresses.
+fn unused_notes(ingresses: IngressesState) -> Vec<&'static str> {
+    match ingresses {
+        IngressesState::Loading => vec!["Loading…"],
+        IngressesState::Ready => vec![UNUSED_NOTE],
+        IngressesState::Denied => vec![UNUSED_NOTE_PODS_ONLY, "Not permitted: list ingresses"],
+        IngressesState::Unavailable => vec![UNUSED_NOTE_PODS_ONLY, "Ingresses are unavailable"],
+    }
+}
+
+fn secret_used_by_rows(
+    secret: &SecretSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    if live.pods.is_loading() {
+        return vec![note("Loading…", cx)];
+    }
+    let Some(pods) = live.pods.ready_items() else {
+        return vec![note("Pods are unavailable", cx)];
+    };
+    let list = live.companion().and_then(CompanionLists::ingresses);
+    // Only the pods and ingresses of the Secret's namespace can use it.
+    let users = secret_users(
+        pods.iter().filter(|pod| pod.namespace == secret.namespace),
+        list.and_then(LiveList::ready_items)
+            .into_iter()
+            .flatten()
+            .filter(|ingress| ingress.namespace == secret.namespace),
+    );
+    let users = secret_user_list(secret, &users);
+    if users.is_empty() {
+        let plan = companion_plan(ResourceKind::Secrets, &live.access);
+        return unused_notes(ingresses_state(list, plan))
+            .into_iter()
+            .map(|text| note(text, cx))
+            .collect();
+    }
+    let hidden = users.len().saturating_sub(MAX_LISTED_USERS);
+    users
+        .iter()
+        .take(MAX_LISTED_USERS)
+        .enumerate()
+        .map(|(ix, used_by)| used_by_element(ix, used_by, cx))
+        .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+        .collect()
 }
 
 // ---- Selected pods ----

@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::*;
 
-const ALL_KINDS: [ObjectKind; 25] = [
+const ALL_KINDS: [ObjectKind; 26] = [
     ObjectKind::Pod,
     ObjectKind::Node,
     ObjectKind::Namespace,
@@ -24,6 +24,7 @@ const ALL_KINDS: [ObjectKind; 25] = [
     ObjectKind::PersistentVolume,
     ObjectKind::StorageClass,
     ObjectKind::ServiceAccount,
+    ObjectKind::Secret,
     ObjectKind::Role,
     ObjectKind::ClusterRole,
     ObjectKind::RoleBinding,
@@ -86,6 +87,7 @@ fn object_kind_names_and_scopes() {
         (ObjectKind::PersistentVolume, "PersistentVolume", false),
         (ObjectKind::StorageClass, "StorageClass", false),
         (ObjectKind::ServiceAccount, "ServiceAccount", true),
+        (ObjectKind::Secret, "Secret", true),
         (ObjectKind::Role, "Role", true),
         (ObjectKind::ClusterRole, "ClusterRole", false),
         (ObjectKind::RoleBinding, "RoleBinding", true),
@@ -148,6 +150,7 @@ fn api_resources_match_kinds() {
             "storageclasses",
         ),
         (ObjectKind::ServiceAccount, "", "v1", "serviceaccounts"),
+        (ObjectKind::Secret, "", "v1", "secrets"),
         (ObjectKind::Role, RBAC, "v1", "roles"),
         (ObjectKind::ClusterRole, RBAC, "v1", "clusterroles"),
         (ObjectKind::RoleBinding, RBAC, "v1", "rolebindings"),
@@ -540,4 +543,29 @@ fn access_kinds_have_names_and_scope() {
         )
         .is_some()
     );
+}
+
+#[test]
+fn secret_kind_has_name_and_scope() {
+    assert_eq!(ObjectKind::Secret.name(), "Secret");
+    assert!(ObjectKind::Secret.is_namespaced());
+    assert_eq!(api_resource(ObjectKind::Secret).plural, "secrets");
+}
+
+#[test]
+fn secret_yaml_hides_data_values() {
+    let secret = k8s_openapi::api::core::v1::Secret {
+        data: Some(
+            [(
+                "password".to_owned(),
+                k8s_openapi::ByteString(b"data-distinctive".to_vec()),
+            )]
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let object = serde_json::to_value(&secret).expect("secret serializes");
+    let text = masked_text(object);
+    assert!(!text.contains("data-distinctive"));
+    assert!(text.contains("password: <hidden>"));
 }

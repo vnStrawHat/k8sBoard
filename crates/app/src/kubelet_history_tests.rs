@@ -65,6 +65,7 @@ fn pod_summary(namespace: &str, name: &str, host_network: bool) -> PodSummary {
         status_message: None,
         labels: Vec::new(),
         host_network,
+        image_pull_secrets: Vec::new(),
         containers: Vec::new(),
     }
 }

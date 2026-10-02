@@ -25,7 +25,7 @@ pub(crate) fn intermediate_expires_first(chain: &[CertificateInfo]) -> Option<ji
 | else | `Valid` | Ok `{format_age(now, not_after)} left` |
 
 - `KindCell::Expiry { not_after }` paints `expiry_label(not_after, now)` as a toned cell (table and drawer field); `kind_table.rs` `value` → `Number(not_after.as_second())`.
-- Dates in box texts: UTC `Oct 7, 2026` (`%b %-d, %Y`); fields: UTC `YYYY-MM-DD HH:MM`.
+- Dates in box texts: UTC `Oct 7, 2026` (`%b %-d, %Y`); fields: UTC `YYYY-MM-DD HH:MM UTC` (the suffix is part of the text).
 - The Secrets **table** shows no expiry tone (decision 19); until 0020/0021 an expiring certificate is visible only in its drawer box and in the Ingresses TLS column.
 
 ## Secret CERTIFICATE box (`kind_diagnosis.rs`, step 2)

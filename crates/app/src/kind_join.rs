@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use cluster::{
     ByteAmount, CpuAmount, EndpointPort, EndpointSliceSummary, EndpointSummary, EnvFromSource,
-    EnvSource, NamespaceScope, PodSummary, PvcUsage, Selector, ServiceSummary, VolumeSource,
+    EnvSource, IngressSummary, NamespaceScope, PodSummary, PvcUsage, SecretDetails, SecretSummary,
+    Selector, ServiceSummary, VolumeSource,
 };
 
 use crate::access_bindings::{
@@ -46,6 +47,8 @@ pub(crate) const CLUSTER_ROLE_BINDINGS: usize = 2;
 /// The indices of the Bound roles and Used by cells in a ServiceAccounts row.
 pub(crate) const ACCOUNT_BOUND_ROLES: usize = 0;
 pub(crate) const ACCOUNT_USED_BY: usize = 1;
+/// The index of the Used by cell in a Secrets row.
+pub(crate) const SECRET_USED_BY: usize = 2;
 
 const EXTERNAL_NAME: &str = "ExternalName";
 /// Slices of this address type name hosts, not pods; counting them would double a dual-stack
@@ -75,6 +78,7 @@ pub(crate) fn join_rows(kind: ResourceKind, rows: &mut [KindRow], inputs: &JoinI
         ResourceKind::Roles => join_roles(rows, inputs, ROLE_BINDINGS),
         ResourceKind::ClusterRoles => join_roles(rows, inputs, CLUSTER_ROLE_BINDINGS),
         ResourceKind::ServiceAccounts => join_service_accounts(rows, inputs),
+        ResourceKind::Secrets => join_secrets(rows, inputs),
         _ => {}
     }
 }
@@ -392,6 +396,9 @@ fn endpoints_verdict(service: &ServiceSummary, health: ServiceHealth) -> Option<
 const WAY_ENV: &str = "env";
 const WAY_ENV_FROM: &str = "env from";
 const WAY_VOLUME: &str = "volume";
+const WAY_IMAGE_PULL: &str = "image pull";
+const WAY_TLS: &str = "tls";
+const WAY_TOKEN: &str = "token";
 /// A Job the CronJob controller creates is named `{cronjob}-{scheduled minute}`, at least this many
 /// digits.
 const CRON_JOB_SUFFIX_DIGITS: usize = 8;
@@ -434,7 +441,7 @@ pub(crate) fn config_map_users<'a>(
                     VolumeSource::ConfigMap { name } => {
                         ways.entry(name).or_default().insert(WAY_VOLUME);
                     }
-                    VolumeSource::Projected { config_maps } => {
+                    VolumeSource::Projected { config_maps, .. } => {
                         for name in config_maps {
                             ways.entry(name).or_default().insert(WAY_VOLUME);
                         }
@@ -447,21 +454,32 @@ pub(crate) fn config_map_users<'a>(
             continue;
         }
         let (owner, target) = pod_owner(pod);
-        let in_namespace = users.entry(pod.namespace.clone()).or_default();
-        for (name, pod_ways) in ways {
-            let used_by = in_namespace
-                .entry(name.to_owned())
-                .or_default()
-                .entry(owner.clone())
-                .or_insert_with(|| UsedBy {
-                    owner: owner.clone(),
-                    target: target.clone(),
-                    ways: BTreeSet::new(),
-                });
-            used_by.ways.extend(pod_ways);
-        }
+        record_users(&mut users, &pod.namespace, &owner, target.as_ref(), ways);
     }
     users
+}
+
+/// Records that `owner` reaches each named object of `namespace` in the given ways.
+fn record_users<'a>(
+    users: &mut ConfigMapUsers,
+    namespace: &str,
+    owner: &str,
+    target: Option<&ResourceKey>,
+    ways: impl IntoIterator<Item = (&'a str, BTreeSet<&'static str>)>,
+) {
+    let in_namespace = users.entry(namespace.to_owned()).or_default();
+    for (name, owner_ways) in ways {
+        let used_by = in_namespace
+            .entry(name.to_owned())
+            .or_default()
+            .entry(owner.to_owned())
+            .or_insert_with(|| UsedBy {
+                owner: owner.to_owned(),
+                target: target.cloned(),
+                ways: BTreeSet::new(),
+            });
+        used_by.ways.extend(owner_ways);
+    }
 }
 
 /// The users of one config map, sorted by owner.
@@ -540,6 +558,154 @@ fn used_by_cell<'a>(mut users: impl Iterator<Item = &'a UsedBy>) -> KindCell {
             more,
         },
     }
+}
+
+// ---- Secrets ----
+
+/// Namespace, then secret name, then the users by owner text: the shape of `ConfigMapUsers`.
+pub(crate) type SecretUsers = ConfigMapUsers;
+
+/// The Secret types a workload can leave unused without anything else naming them. TLS secrets are
+/// left out on purpose: Gateway API, Istio, and cert-manager reference them without mounting.
+const UNUSED_CANDIDATE_TYPES: [&str; 5] = [
+    "Opaque",
+    "kubernetes.io/basic-auth",
+    "kubernetes.io/ssh-auth",
+    "kubernetes.io/dockerconfigjson",
+    "kubernetes.io/dockercfg",
+];
+
+/// Which secrets the pods and ingresses use: env, envFrom, volumes, projected sources, and image
+/// pull secrets of every container kind, and the `tls` secret of each ingress.
+pub(crate) fn secret_users<'a>(
+    pods: impl IntoIterator<Item = &'a PodSummary>,
+    ingresses: impl IntoIterator<Item = &'a IngressSummary>,
+) -> SecretUsers {
+    let mut users = SecretUsers::new();
+    for pod in pods {
+        let mut ways: HashMap<&str, BTreeSet<&'static str>> = HashMap::new();
+        let mut add = |name: &'a str, way: &'static str| {
+            if !name.is_empty() {
+                ways.entry(name).or_default().insert(way);
+            }
+        };
+        for container in &pod.containers {
+            for entry in &container.env {
+                if let EnvSource::SecretKey { name, .. } = &entry.source {
+                    add(name, WAY_ENV);
+                }
+            }
+            for entry in &container.env_from {
+                if let EnvFromSource::Secret { name } = &entry.source {
+                    add(name, WAY_ENV_FROM);
+                }
+            }
+            for mount in &container.mounts {
+                match &mount.source {
+                    VolumeSource::Secret { name } => add(name, WAY_VOLUME),
+                    VolumeSource::Projected { secrets, .. } => {
+                        for name in secrets {
+                            add(name, WAY_VOLUME);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for name in &pod.image_pull_secrets {
+            add(name, WAY_IMAGE_PULL);
+        }
+        if ways.is_empty() {
+            continue;
+        }
+        let (owner, target) = pod_owner(pod);
+        record_users(&mut users, &pod.namespace, &owner, target.as_ref(), ways);
+    }
+    for ingress in ingresses {
+        let names = ingress
+            .tls
+            .iter()
+            .filter_map(|tls| tls.secret_name.as_deref())
+            .filter(|name| !name.is_empty());
+        let target = ResourceKey::of_object("Ingress", Some(&ingress.namespace), &ingress.name);
+        let ways = names.map(|name| (name, BTreeSet::from([WAY_TLS])));
+        let owner = format!("ingress/{}", ingress.name);
+        record_users(
+            &mut users,
+            &ingress.namespace,
+            &owner,
+            target.as_ref(),
+            ways,
+        );
+    }
+    users
+}
+
+/// The users of `secret`, sorted by owner: the pods and ingresses of `users`, plus the account a
+/// service-account token belongs to.
+pub(crate) fn secret_user_list(secret: &SecretSummary, users: &SecretUsers) -> Vec<UsedBy> {
+    let mut list: Vec<UsedBy> = users_of(users, &secret.namespace, &secret.name)
+        .cloned()
+        .collect();
+    if let SecretDetails::ServiceAccountToken {
+        account: Some(account),
+    } = &secret.details
+    {
+        list.push(UsedBy {
+            owner: format!("serviceaccount/{account}"),
+            target: ResourceKey::of_object("ServiceAccount", Some(&secret.namespace), account),
+            ways: BTreeSet::from([WAY_TOKEN]),
+        });
+    }
+    list.sort_by(|left, right| left.owner.cmp(&right.owner));
+    list
+}
+
+/// Whether "unused" may be said of `secret` at all: only a type nothing else references, and
+/// never a secret another object owns.
+pub(crate) fn may_be_unused(secret: &SecretSummary) -> bool {
+    !secret.is_owned && UNUSED_CANDIDATE_TYPES.contains(&secret.secret_type.as_str())
+}
+
+/// The Used by cells of the Secrets rows. Nothing shows until the pods have loaded. `unused`
+/// also needs the ingresses: a secret an ingress names is in use.
+fn join_secrets(rows: &mut [KindRow], inputs: &JoinInputs) {
+    let ingresses = inputs
+        .companion
+        .and_then(CompanionLists::ingresses)
+        .and_then(LiveList::ready_items);
+    let users = inputs
+        .pods
+        .ready_items()
+        .map(|pods| secret_users(pods, ingresses.unwrap_or(&[])));
+    for row in rows {
+        let KindObject::Secret(secret) = &row.object else {
+            continue;
+        };
+        let cell = users.as_ref().map_or(KindCell::Absent, |users| {
+            secret_used_by_cell(secret, users, ingresses.is_some())
+        });
+        if let Some(slot) = row.cells.get_mut(SECRET_USED_BY) {
+            *slot = cell;
+        }
+    }
+}
+
+/// The first owner, plus ` +{n}`; `unused` for an eligible secret nobody uses once every list
+/// that could name a user has loaded.
+fn secret_used_by_cell(
+    secret: &SecretSummary,
+    users: &SecretUsers,
+    are_ingresses_loaded: bool,
+) -> KindCell {
+    let list = secret_user_list(secret, users);
+    if list.is_empty() && are_ingresses_loaded && may_be_unused(secret) {
+        return KindCell::Toned(StatusLabel {
+            text: "unused".into(),
+            tone: StatusTone::Done,
+        });
+    }
+    used_by_cell(list.iter())
 }
 
 // ---- Namespaces ----

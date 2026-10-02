@@ -14,7 +14,7 @@
 | 6 | Owned plaintext lives in `Zeroizing` (`SecretValue`, the GET body) | `zeroize` is already locked; [secret-safety.md](secret-safety.md) states the ceiling |
 | 7 | Reveal and Copy are gated by the **GET result**, not an SSAR: 403 → "Not permitted: get secrets" inline | same as the YAML tab (0007) |
 | 8 | A Reveal or Copy fetches all keys and drops the unrequested ones at once | the API has no per-key read |
-| 29 | `secret_values` builds the GET with `Request::get` and decodes `request_text` itself; never `Api::get` or `Client::request` (M1b) | kube-client 4.2 logs the whole body at `warn` on a decode failure; owning the text also lets us wipe it |
+| 29 | `secret_values` builds the GET with `Request::get` and decodes `request_text` itself; never `Api::get` or `Client::request` (M1b); its call site is a named exception in the 0030 clippy table (`secret.rs`, write-path.md) | kube-client 4.2 logs the whole body at `warn` on a decode failure; owning the text also lets us wipe it |
 | 30 | The app adds the fixed directive `kube_client::client=error` after the env filter (M1a) | the same log path serves every `Api::list` and watcher initial list, Secrets included; `RUST_LOG` must not reopen it |
 | 25 | Both secret watches use `ListSemantic::MostRecent` with `page_size(50)` from step 1 (M3) | the watch-cache list (`resourceVersion=0`) ignores `limit` and returns every Secret in scope in one body; paging caps transient plaintext and peak memory at 50 objects |
 | 26 | **Copy is private and auto-cleared** (M2): Windows write adds `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory=0`, `CanUploadToCloudClipboard=0` in the same clipboard session; the clipboard is cleared after 30 s if it still holds our value (keyed hash), on by default | coordinator decision; settles the C1 open question; [secret-clipboard.md](secret-clipboard.md); macOS/Linux managers stay a ceiling |
@@ -54,11 +54,15 @@
 - The TLS companion's field selector skips Opaque secrets holding `tls.crt`; an ingress naming one reads "no TLS secret" (Warn).
 - `MostRecent` lists are quorum reads from etcd: heavier on the API server than cache reads, once per screen open.
 
-## UAT probe (`--secrets`, filled by coder-lite in step 1)
+## UAT probe (`--secrets`, filled in step 1 by the coder)
 
 | Item | Result |
 |---|---|
-| `list secrets` / watch line | allowed (0005 probe) / TBD |
-| `get secrets` (`secret values` line) | TBD |
-| Secrets by type; TLS parsed / earliest leaf not-after | TBD |
-| First TLS secret (screenshot filter) | TBD (metadata only) |
+| `list secrets` / watch line | allowed (0005 probe) / `watch secrets: 1 snapshots, last 42 items, 0 failures`; `watch tls secrets`: last 8 items, 0 failures |
+| `get secrets` (`secret values` line) | allowed: `secret values argocd/argocd-tls: 2 keys, 8454 bytes` (counts only) |
+| Secrets by type; TLS parsed / earliest leaf not-after | 42 secrets: Opaque 33, kubernetes.io/tls 8, service-account-token 1; no docker or Helm types. TLS 8/8 parsed, earliest leaf not-after 2026-12-26T23:59:59Z (argocd/argocd-tls) |
+| First TLS secret (screenshot filter) | `argocd/argocd-tls` (metadata only) |
+
+## Cargo.lock (step 1)
+
+Six packages were added: `x509-cert` 0.3.0, `der` 0.8.2, `der_derive` 0.8.0, `spki` 0.8.0, `flagset` 0.4.7, and `base64ct` 1.8.3. `base64ct` is a weak optional dependency of `spki` (feature `base64`): Cargo records it in the lock file although it is never compiled here (`cargo tree -i base64ct` finds nothing; cargo issue #10801). Accepted by the security review.

@@ -4,10 +4,10 @@
 //! events watches together, and prints counts per kind. With `--metrics-seconds` it polls pod
 //! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--kubelet-seconds` it polls the kubelet stats of every Ready node through the node proxy (cAdvisor disk I/O for the first one) and prints counts per node per round. With `--counts` it prints one object-count line per kind (`limit=1` lists, nothing else is read). With `--yaml` it reads the masked
 //! YAML of the first pod and the first node and prints line counts and masking checks, never
-//! the YAML text. The access section doubles as the RBAC probe of the context.
+//! the YAML text. With `--secrets` it prints Secret counts by type and certificate parse counts, then reads one TLS secret and prints its key and byte counts, never a value. The access section doubles as the RBAC probe of the context.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets]
 //! ```
 
 use std::collections::BTreeMap;
@@ -22,13 +22,13 @@ use cluster::{
     ContainerState, ContainerSummary, CronJobSummary, EnvValues, EventFilter, Kubeconfig,
     KubeletTargets, LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceScope, NodeKubeletStats,
     NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary, ObjectKind, ObjectRef, PodMetrics,
-    PodStatus, PodSummary, StatusReason, Termination, WatchUpdate,
+    PodStatus, PodSummary, SecretDetails, SecretSummary, StatusReason, Termination, WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 use tokio::sync::watch;
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -43,6 +43,7 @@ struct Args {
     kubelet_seconds: Option<u64>,
     counts: bool,
     yaml: bool,
+    secrets: bool,
 }
 
 enum Parsed {
@@ -60,12 +61,14 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut kubelet_seconds = None;
     let mut counts = false;
     let mut yaml = false;
+    let mut secrets = false;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
         match flag.as_str() {
             "--help" => return Ok(Parsed::Help),
             "--counts" => counts = true,
             "--yaml" => yaml = true,
+            "--secrets" => secrets = true,
             "--kubeconfig" => kubeconfig = Some(PathBuf::from(value("--kubeconfig")?)),
             "--context" => context = Some(value("--context")?),
             "--namespace" => namespace = Some(value("--namespace")?),
@@ -104,6 +107,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         kubelet_seconds,
         counts,
         yaml,
+        secrets,
     }))
 }
 
@@ -204,7 +208,7 @@ fn next_run_note(cron_jobs: &[CronJobSummary]) -> Option<String> {
     Some(format!("next {}", next.strftime("%Y-%m-%d %H:%M:%S %Z")))
 }
 
-/// Runs all twenty-two watches together for `seconds` and prints one line per kind.
+/// Runs all the watches together for `seconds` and prints one line per kind.
 async fn watch_for(
     probe: &mut Probe,
     connection: &ClusterConnection,
@@ -262,6 +266,8 @@ async fn watch_for(
             "service accounts",
             connection.watch_service_accounts(scope.clone()),
         ),
+        tally_source("secrets", connection.watch_secrets(scope.clone())),
+        tally_source("tls secrets", connection.watch_tls_secrets(scope.clone())),
         tally_source("roles", connection.watch_roles(scope.clone())),
         tally_source("cluster roles", connection.watch_cluster_roles()),
         tally_source(
@@ -316,7 +322,7 @@ async fn watch_for(
 }
 
 /// The kinds `--counts` counts, in sidebar order, with the check that gates each.
-const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 25] = [
+const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 26] = [
     (ObjectKind::Pod, "pods", AccessCheck::ListPods),
     (ObjectKind::Node, "nodes", AccessCheck::ListNodes),
     (
@@ -394,6 +400,7 @@ const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 25] = [
         "serviceaccounts",
         AccessCheck::ListServiceAccounts,
     ),
+    (ObjectKind::Secret, "secrets", AccessCheck::ListSecrets),
     (ObjectKind::Role, "roles", AccessCheck::ListRoles),
     (
         ObjectKind::ClusterRole,
@@ -436,6 +443,99 @@ async fn counts_for(
         }
     }
     Ok(())
+}
+
+/// How long `--secrets` waits for the first Secrets snapshot.
+const SECRETS_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// `--secrets`: Secret counts by type, certificate parse counts, and the key count and byte
+/// total of one `secret_values` call. Prints counts, dates, and `{namespace}/{name}` only:
+/// never a value, a subject alternative name, or a registry host.
+async fn secrets_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    scope: NamespaceScope,
+) -> io::Result<()> {
+    probe.section("secrets")?;
+    let updates = connection.watch_secrets(scope);
+    tokio::pin!(updates);
+    let first = tokio::time::timeout(SECRETS_SNAPSHOT_TIMEOUT, updates.next()).await;
+    let secrets = match first {
+        Ok(Some(WatchUpdate::Snapshot(secrets))) => secrets,
+        Ok(Some(WatchUpdate::Failed(error))) => return probe.fail(&error),
+        Ok(None) | Err(_) => {
+            probe.all_succeeded = false;
+            return writeln!(
+                probe.out,
+                "  no secrets snapshot in {SECRETS_SNAPSHOT_TIMEOUT:?}"
+            );
+        }
+    };
+    writeln!(
+        probe.out,
+        "  secrets {}: {}",
+        secrets.len(),
+        type_counts(&secrets)
+    )?;
+    let tls: Vec<&SecretSummary> = secrets
+        .iter()
+        .filter(|secret| secret.secret_type == "kubernetes.io/tls")
+        .collect();
+    let leaves = tls.iter().filter_map(|secret| match &secret.details {
+        SecretDetails::Certificate { chain } => Some((chain.first()?.not_after, *secret)),
+        _ => None,
+    });
+    let parsed = leaves.clone().count();
+    write!(
+        probe.out,
+        "  tls certificates {parsed}/{} parsed",
+        tls.len()
+    )?;
+    if let Some((not_after, secret)) = leaves.min_by_key(|(not_after, _)| *not_after) {
+        write!(
+            probe.out,
+            ", earliest leaf not-after {not_after} ({}/{})",
+            secret.namespace, secret.name
+        )?;
+    }
+    writeln!(probe.out)?;
+    let Some(first_tls) = tls.first() else {
+        return writeln!(probe.out, "  first tls secret none");
+    };
+    let target = format!("{}/{}", first_tls.namespace, first_tls.name);
+    writeln!(probe.out, "  first tls secret {target}")?;
+    match connection
+        .secret_values(&first_tls.namespace, &first_tls.name)
+        .await
+    {
+        Ok(values) => {
+            let bytes: usize = values.iter().map(|value| value.size_bytes()).sum();
+            writeln!(
+                probe.out,
+                "  secret values {target}: {} keys, {bytes} bytes",
+                values.len()
+            )
+        }
+        Err(error) => {
+            writeln!(probe.out, "  secret values {target}")?;
+            probe.fail(&error)
+        }
+    }
+}
+
+/// `{type} {count} · …`, by count then name.
+fn type_counts(secrets: &[SecretSummary]) -> String {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for secret in secrets {
+        *counts.entry(secret.secret_type.as_str()).or_default() += 1;
+    }
+    let mut counts: Vec<_> = counts.into_iter().collect();
+    counts.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(right.0)));
+    let parts: Vec<String> = counts
+        .iter()
+        .map(|(secret_type, count)| format!("{secret_type} {count}"))
+        .collect();
+    parts.join(" \u{b7} ")
 }
 
 /// Counts of what one log stream produced. Never holds log text.
@@ -983,6 +1083,9 @@ async fn run(args: &Args) -> io::Result<bool> {
         }
     }
 
+    if args.secrets {
+        secrets_for(&mut probe, &connection, scope.clone()).await?;
+    }
     if let Some(seconds) = args.watch_seconds {
         watch_for(&mut probe, &connection, scope.clone(), seconds).await?;
     }

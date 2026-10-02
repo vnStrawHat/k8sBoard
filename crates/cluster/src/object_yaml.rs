@@ -8,7 +8,7 @@ use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
     ConfigMap, Event, Namespace, Node, PersistentVolume, PersistentVolumeClaim, Pod, ResourceQuota,
-    Service, ServiceAccount,
+    Secret, Service, ServiceAccount,
 };
 use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
@@ -59,6 +59,7 @@ pub enum ObjectKind {
     PersistentVolume,
     StorageClass,
     ServiceAccount,
+    Secret,
     Role,
     ClusterRole,
     RoleBinding,
@@ -90,6 +91,7 @@ impl ObjectKind {
             Self::PersistentVolume => "PersistentVolume",
             Self::StorageClass => "StorageClass",
             Self::ServiceAccount => "ServiceAccount",
+            Self::Secret => "Secret",
             Self::Role => "Role",
             Self::ClusterRole => "ClusterRole",
             Self::RoleBinding => "RoleBinding",
@@ -191,6 +193,7 @@ fn api_resource(kind: ObjectKind) -> ApiResource {
         ObjectKind::PersistentVolume => ApiResource::erase::<PersistentVolume>(&()),
         ObjectKind::StorageClass => ApiResource::erase::<StorageClass>(&()),
         ObjectKind::ServiceAccount => ApiResource::erase::<ServiceAccount>(&()),
+        ObjectKind::Secret => ApiResource::erase::<Secret>(&()),
         ObjectKind::Role => ApiResource::erase::<Role>(&()),
         ObjectKind::ClusterRole => ApiResource::erase::<ClusterRole>(&()),
         ObjectKind::RoleBinding => ApiResource::erase::<RoleBinding>(&()),

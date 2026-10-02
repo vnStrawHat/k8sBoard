@@ -24,6 +24,7 @@ fn pod(namespace: &str, name: &str) -> PodSummary {
         status_message: None,
         labels: Vec::new(),
         host_network: false,
+        image_pull_secrets: Vec::new(),
         containers: Vec::new(),
     }
 }

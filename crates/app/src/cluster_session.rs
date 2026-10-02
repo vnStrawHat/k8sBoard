@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 
 use cluster::{
     AccessCheck, AccessReport, BindingSummary, ClusterConnection, ClusterError, ConfigMapValues,
-    ContextSummary, EndpointSliceSummary, EventFilter, EventSummary, InvolvedObject, JobSummary,
-    Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary,
-    PersistentVolumeSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, ServerVersion,
-    WatchUpdate,
+    ContextSummary, EndpointSliceSummary, EventFilter, EventSummary, IngressSummary,
+    InvolvedObject, JobSummary, Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope,
+    NamespaceSummary, NodeSummary, PersistentVolumeSummary, PodSummary, ReplicaSetSummary,
+    ResourceQuotaSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
@@ -143,6 +143,8 @@ struct Companion {
 pub(crate) enum CompanionLists {
     EndpointSlices(LiveList<EndpointSliceSummary>),
     PersistentVolumes(LiveList<PersistentVolumeSummary>),
+    /// The Ingresses of the Secrets screen: the TLS users of a secret.
+    Ingresses(LiveList<IngressSummary>),
     /// `cluster_role_bindings` is `None` for a kind that does not need it (Roles). The companion
     /// only starts when the access report allows every list its kind needs.
     Bindings {
@@ -155,6 +157,7 @@ pub(crate) enum CompanionLists {
 enum CompanionUpdate {
     EndpointSlices(WatchUpdate<EndpointSliceSummary>),
     PersistentVolumes(WatchUpdate<PersistentVolumeSummary>),
+    Ingresses(WatchUpdate<IngressSummary>),
     RoleBindings(WatchUpdate<BindingSummary>),
     ClusterRoleBindings(WatchUpdate<BindingSummary>),
 }
@@ -164,6 +167,7 @@ enum CompanionUpdate {
 pub(crate) enum CompanionKind {
     EndpointSlices,
     PersistentVolumes,
+    Ingresses,
     Bindings { with_cluster_role_bindings: bool },
 }
 
@@ -190,6 +194,7 @@ pub(crate) fn companion_plan(kind: ResourceKind, access: &AccessState) -> Compan
             CompanionKind::PersistentVolumes,
             AccessCheck::ListPersistentVolumes,
         ),
+        ResourceKind::Secrets => (CompanionKind::Ingresses, AccessCheck::ListIngresses),
         _ => return CompanionPlan::None,
     };
     match access {
@@ -242,6 +247,7 @@ impl CompanionLists {
         match kind {
             CompanionKind::EndpointSlices => Self::EndpointSlices(LiveList::Loading),
             CompanionKind::PersistentVolumes => Self::PersistentVolumes(LiveList::Loading),
+            CompanionKind::Ingresses => Self::Ingresses(LiveList::Loading),
             CompanionKind::Bindings {
                 with_cluster_role_bindings,
             } => Self::Bindings {
@@ -260,6 +266,7 @@ impl CompanionLists {
             (Self::PersistentVolumes(list), CompanionUpdate::PersistentVolumes(update)) => {
                 list.apply(update);
             }
+            (Self::Ingresses(list), CompanionUpdate::Ingresses(update)) => list.apply(update),
             (Self::Bindings { role_bindings, .. }, CompanionUpdate::RoleBindings(update)) => {
                 role_bindings.apply(update);
             }
@@ -279,6 +286,7 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(list) => list.mark_stopped(),
             Self::PersistentVolumes(list) => list.mark_stopped(),
+            Self::Ingresses(list) => list.mark_stopped(),
             Self::Bindings {
                 role_bindings,
                 cluster_role_bindings,
@@ -295,7 +303,7 @@ impl CompanionLists {
     pub(crate) fn endpoint_slices(&self) -> Option<&LiveList<EndpointSliceSummary>> {
         match self {
             Self::EndpointSlices(list) => Some(list),
-            Self::PersistentVolumes(_) | Self::Bindings { .. } => None,
+            Self::PersistentVolumes(_) | Self::Ingresses(_) | Self::Bindings { .. } => None,
         }
     }
 
@@ -303,7 +311,15 @@ impl CompanionLists {
     pub(crate) fn persistent_volumes(&self) -> Option<&LiveList<PersistentVolumeSummary>> {
         match self {
             Self::PersistentVolumes(list) => Some(list),
-            Self::EndpointSlices(_) | Self::Bindings { .. } => None,
+            Self::EndpointSlices(_) | Self::Ingresses(_) | Self::Bindings { .. } => None,
+        }
+    }
+
+    /// The ingresses, when this companion lists them.
+    pub(crate) fn ingresses(&self) -> Option<&LiveList<IngressSummary>> {
+        match self {
+            Self::Ingresses(list) => Some(list),
+            Self::EndpointSlices(_) | Self::PersistentVolumes(_) | Self::Bindings { .. } => None,
         }
     }
 
@@ -313,6 +329,7 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(list) => list.is_loading(),
             Self::PersistentVolumes(list) => list.is_loading(),
+            Self::Ingresses(list) => list.is_loading(),
             Self::Bindings {
                 role_bindings,
                 cluster_role_bindings,
@@ -331,6 +348,7 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(_) => namespaces,
             Self::PersistentVolumes(_) => 1,
+            Self::Ingresses(_) => namespaces,
             Self::Bindings {
                 cluster_role_bindings,
                 ..
@@ -1602,6 +1620,10 @@ impl Companion {
             CompanionKind::PersistentVolumes => connection
                 .watch_persistent_volumes()
                 .map(CompanionUpdate::PersistentVolumes)
+                .boxed(),
+            CompanionKind::Ingresses => connection
+                .watch_ingresses(scope)
+                .map(CompanionUpdate::Ingresses)
                 .boxed(),
             CompanionKind::Bindings {
                 with_cluster_role_bindings,

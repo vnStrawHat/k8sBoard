@@ -581,3 +581,23 @@ fn host_network_follows_spec() {
     pod.spec = None;
     assert!(!pod_summary(&pod).host_network);
 }
+
+#[test]
+fn image_pull_secret_names_are_kept() {
+    use k8s_openapi::api::core::v1::LocalObjectReference;
+    let mut pod = pod_with_containers(Vec::new(), vec![container("main", None)]);
+    assert!(pod_summary(&pod).image_pull_secrets.is_empty());
+    if let Some(spec) = pod.spec.as_mut() {
+        spec.image_pull_secrets = Some(
+            ["registry-a", "", "registry-b"]
+                .map(|name| LocalObjectReference {
+                    name: name.to_owned(),
+                })
+                .to_vec(),
+        );
+    }
+    assert_eq!(
+        pod_summary(&pod).image_pull_secrets,
+        ["registry-a", "registry-b"]
+    );
+}

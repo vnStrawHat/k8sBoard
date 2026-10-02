@@ -496,7 +496,8 @@ fn mounts_resolve_volume_sources() {
             (
                 named("/token"),
                 VolumeSource::Projected {
-                    config_maps: Vec::new()
+                    config_maps: Vec::new(),
+                    secrets: Vec::new()
                 },
                 false,
                 None
@@ -524,7 +525,7 @@ fn image_digest_reads_after_last_at_or_bare_sha256() {
 }
 
 #[test]
-fn projected_volume_names_config_maps() {
+fn projected_volume_keeps_secret_names() {
     let projected = Volume {
         projected: Some(ProjectedVolumeSource {
             sources: Some(vec![
@@ -562,7 +563,8 @@ fn projected_volume_names_config_maps() {
     assert_eq!(
         entries[0].source,
         VolumeSource::Projected {
-            config_maps: vec!["kube-root-ca.crt".to_owned(), "extra".to_owned()]
+            config_maps: vec!["kube-root-ca.crt".to_owned(), "extra".to_owned()],
+            secrets: vec!["token-secret".to_owned()]
         }
     );
 }

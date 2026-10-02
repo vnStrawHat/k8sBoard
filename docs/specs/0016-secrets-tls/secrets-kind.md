@@ -51,7 +51,7 @@ pub(crate) enum KindCell { /* … */
 
 ### `Live(Certificate)`
 
-From `SecretDetails::Certificate { chain }`, leaf = `chain[0]`: Subject (Mono), Issuer (Mono), Alt names (`Chips`, at most 20, then `+{n}`), Not before (UTC `YYYY-MM-DD HH:MM`), Not after (`Expiry { leaf.not_after }`), Intermediate (Warn, only when `intermediate_expires_first`; [tls-expiry.md](tls-expiry.md)), Chain `{n} certificates` when `n > 1`. `NoCertificate(Missing)` → `Note("The secret has no tls.crt.")`; `NoCertificate(Unparsed)` → `Note("tls.crt could not be parsed as an X.509 certificate.")`.
+From `SecretDetails::Certificate { chain }`, leaf = `chain[0]`: Subject (Mono), Issuer (Mono), Alt names (`Chips`, at most 20, then `+{n}`), Not before (`YYYY-MM-DD HH:MM UTC`), Not after (`Expiry { leaf.not_after }`), Intermediate (Warn, only when `intermediate_expires_first`; [tls-expiry.md](tls-expiry.md)), Chain `{n} certificates` when `n > 1`. `NoCertificate(Missing)` → `Note("The secret has no tls.crt.")`; `NoCertificate(Unparsed)` → `Note("tls.crt could not be parsed as an X.509 certificate.")`.
 
 ## Used by (`kind_join.rs`, `live_sections.rs`)
 
@@ -62,7 +62,7 @@ pub(crate) fn may_be_unused(secret: &SecretSummary) -> bool;  // decision 16: Op
 
 - Ways (0012 `UsedBy.ways`): `env` (`EnvSource::SecretKey`), `env from` (`EnvFromSource::Secret`), `volume` (`VolumeSource::Secret`, `Projected.secrets`), `image pull` (`image_pull_secrets`), all container kinds; owners mapped as 0012 decision 9. Ingresses: owner `ingress/{name}`, way `tls`, target its Ingresses key, for every `tls[].secret_name`. Service-account token: owner `serviceaccount/{account}`, way `token`, added per row from `details`.
 - Cell (`SECRET_USED_BY`): first owner, plus ` +{n}`; no users and `may_be_unused` and both lists Ready → `Toned(Done, "unused")`; else `Absent`. Pods not Ready → `Absent`.
-- Section: one `Link` row per user (owner text → target, ways joined `, ` as value). No users: Ready → `Note("No pod or ingress in this namespace uses it. Workloads with no running pod, CronJob templates, Gateway API and Istio references, and readers through the API are not checked.")`; not Ready → `Note("Loading…")`; companion denied → that note plus "Not permitted: list ingresses".
+- Section: one `Link` row per user (owner text → target, ways joined `, ` as value). No users: Ready → `Note("No pod or ingress in this namespace uses it. Workloads with no running pod, CronJob templates, Gateway API and Istio references, and readers through the API are not checked.")`; not Ready → `Note("Loading…")`; companion denied → the same note starting "No pod in this namespace uses it." (ingresses were not checked) plus "Not permitted: list ingresses"; companion failed → that note plus "Ingresses are unavailable".
 - Triggers (0012 `join_explorer`): explorer, pods, and companion snapshots or failures while Secrets is shown.
 
 ## Ingresses companion (`cluster_session.rs`)

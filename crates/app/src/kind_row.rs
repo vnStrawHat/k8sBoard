@@ -6,7 +6,7 @@ use cluster::{
     DaemonSetSummary, DeploymentSummary, HorizontalPodAutoscalerSummary, IngressSummary,
     JobSummary, NetworkPolicySummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
     PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary,
-    ServiceAccountSummary, ServiceSummary, StatefulSetSummary,
+    SecretSummary, ServiceAccountSummary, ServiceSummary, StatefulSetSummary,
 };
 use gpui_kit::SharedString;
 
@@ -58,6 +58,8 @@ pub(crate) enum KindObject {
     /// A RoleBinding or a ClusterRoleBinding (`namespace: None`).
     Binding(BindingSummary),
     ServiceAccount(ServiceAccountSummary),
+    /// Key names and sizes only: a Secret row never holds a value.
+    Secret(SecretSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -82,6 +84,10 @@ pub(crate) enum LiveContent {
     RoleSubjects,
     BoundRoles,
     ServiceAccountPods,
+    /// The masked keys of a Secret, and the Reveal and Copy controls (`secret_values.rs`).
+    SecretData,
+    /// The certificate of a TLS Secret.
+    Certificate,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.
@@ -140,6 +146,10 @@ pub(crate) enum KindCell {
     Duration {
         started_at: Option<jiff::Timestamp>,
         finished_at: Option<jiff::Timestamp>,
+    },
+    /// The not-after of a certificate, painted as days left at paint time. Sorts by `not_after`.
+    Expiry {
+        not_after: jiff::Timestamp,
     },
 }
 
@@ -377,6 +387,7 @@ mod tests {
             status_message: None,
             labels: Vec::new(),
             host_network: false,
+            image_pull_secrets: Vec::new(),
             containers: Vec::new(),
         }
     }

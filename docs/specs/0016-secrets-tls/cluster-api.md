@@ -116,7 +116,7 @@ let mut secret: Secret = serde_json::from_str(&body).map_err(|_| unexpected("the
 ## Probe (`examples/probe.rs`)
 
 - `--watch-seconds`: lines `secrets` and `tls secrets` after the 0015 lines. `--counts`: `count secrets`.
-- New `--secrets` (after the access section), from the first `watch_secrets(scope)` snapshot (15 s timeout):
+- New `--secrets` (after the yaml section, before the watch section), from the first `watch_secrets(scope)` snapshot (15 s timeout):
   - `secrets {n}: {type} {count} · …` (types sorted by count, then name);
   - `tls certificates {parsed}/{tls} parsed, earliest leaf not-after {RFC 3339} ({ns}/{name})`;
   - `first tls secret {ns}/{name}` (the ui-verifier filter);

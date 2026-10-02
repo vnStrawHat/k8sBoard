@@ -55,6 +55,7 @@ fn pod(status: PodStatus, ready: u32, containers: Vec<ContainerSummary>) -> PodS
         status_message: None,
         labels: Vec::new(),
         host_network: false,
+        image_pull_secrets: Vec::new(),
         containers,
     }
 }

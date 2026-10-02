@@ -6,7 +6,7 @@ use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
     ConfigMap, Event, Namespace, Node, PersistentVolume, PersistentVolumeClaim, Pod, ResourceQuota,
-    Service, ServiceAccount,
+    Secret, Service, ServiceAccount,
 };
 use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
@@ -109,6 +109,10 @@ impl ClusterConnection {
             }
             ObjectKind::ServiceAccount => {
                 self.count_namespaced::<ServiceAccount>(scope, "counting service accounts")
+                    .await
+            }
+            ObjectKind::Secret => {
+                self.count_namespaced::<Secret>(scope, "counting secrets")
                     .await
             }
             ObjectKind::Role => self.count_namespaced::<Role>(scope, "counting roles").await,

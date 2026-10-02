@@ -48,6 +48,8 @@ pub struct PodSummary {
     pub labels: Vec<String>,
     /// The pod uses the node's network namespace; its network stats are the node's.
     pub host_network: bool,
+    /// `spec.imagePullSecrets[].name`; empty names are dropped.
+    pub image_pull_secrets: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,6 +219,12 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
             .as_ref()
             .and_then(|spec| spec.host_network)
             .unwrap_or(false),
+        image_pull_secrets: pod
+            .spec
+            .iter()
+            .flat_map(|spec| spec.image_pull_secrets.iter().flatten())
+            .filter_map(|reference| non_empty(Some(reference.name.as_str())))
+            .collect(),
     }
 }
 

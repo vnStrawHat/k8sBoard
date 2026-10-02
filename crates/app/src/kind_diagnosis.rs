@@ -5,18 +5,20 @@
 //! arbitrary text, so nothing here logs them.
 
 use cluster::{
-    BindingSummary, BlockCause, BroadGroup, ContainerKind, ContainerState, DaemonSetSummary,
-    DeploymentSummary, DisruptionState, HorizontalPodAutoscalerSummary, JobStatus, JobSummary,
-    NodeReadiness, NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
-    PodDisruptionBudgetSummary, PodStatus, PodSummary, ResourceQuotaSummary, RoleSummary,
-    ServiceAccountSummary, ServiceSummary, StatusReason, Subject, SubjectKind, Termination,
-    WorkloadCondition,
+    BindingSummary, BlockCause, BroadGroup, CertificateIssue, ContainerKind, ContainerState,
+    DaemonSetSummary, DeploymentSummary, DisruptionState, HorizontalPodAutoscalerSummary,
+    JobStatus, JobSummary, NodeReadiness, NodeSummary, PersistentVolumeClaimSummary,
+    PersistentVolumeSummary, PodDisruptionBudgetSummary, PodStatus, PodSummary,
+    ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary, ServiceAccountSummary,
+    ServiceSummary, StatusReason, Subject, SubjectKind, Termination, WorkloadCondition,
 };
 use jiff::Timestamp;
 
 use crate::access_bindings::{
     BindingIndex, BroadAdmin, broad_admin, is_cluster_admin, service_account_text,
 };
+use crate::age::format_age;
+use crate::certificate_expiry::{ExpiryState, date_text, expiry_state};
 use crate::kind_join::ServiceHealth;
 use crate::kind_row::KindObject;
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
@@ -75,6 +77,7 @@ pub(crate) fn kind_diagnosis(
         KindObject::Role(role) => role_diagnosis(role, inputs.bindings),
         KindObject::Binding(binding) => binding_diagnosis(binding),
         KindObject::ServiceAccount(account) => service_account_diagnosis(account, inputs.bindings),
+        KindObject::Secret(secret) => secret_diagnosis(secret, inputs.now),
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
@@ -805,6 +808,66 @@ fn service_diagnosis(service: &ServiceSummary, inputs: &DiagnosisInputs) -> Opti
         title: "NO READY ENDPOINTS".to_owned(),
         text,
         pod: unhealthy.map(|(pod, _)| ResourceKey::of_pod(pod)),
+    })
+}
+
+// ---- Secrets ----
+
+/// A certificate worth a box: the tone and the text, for a Secret and for the Ingresses that
+/// name it. `None` for a valid certificate and for a secret without one.
+pub(crate) fn certificate_verdict(
+    details: &SecretDetails,
+    now: Timestamp,
+) -> Option<(StatusTone, String)> {
+    match details {
+        SecretDetails::Certificate { chain } => {
+            let leaf = chain.first()?;
+            match expiry_state(leaf, now) {
+                ExpiryState::Expired => Some((
+                    StatusTone::Bad,
+                    format!(
+                        "Expired {} ({} ago).",
+                        date_text(leaf.not_after),
+                        format_age(Some(leaf.not_after), now)
+                    ),
+                )),
+                ExpiryState::ExpiringSoon => Some((
+                    StatusTone::Warn,
+                    format!(
+                        "Expires {} (in {}).",
+                        date_text(leaf.not_after),
+                        format_age(Some(now), leaf.not_after)
+                    ),
+                )),
+                ExpiryState::NotYetValid => Some((
+                    StatusTone::Warn,
+                    format!("Not valid until {}.", date_text(leaf.not_before)),
+                )),
+                ExpiryState::Valid => None,
+            }
+        }
+        SecretDetails::NoCertificate(CertificateIssue::Unparsed) => Some((
+            StatusTone::Warn,
+            "tls.crt could not be parsed as an X.509 certificate.".to_owned(),
+        )),
+        SecretDetails::NoCertificate(CertificateIssue::Missing) => {
+            Some((StatusTone::Warn, "The secret has no tls.crt.".to_owned()))
+        }
+        SecretDetails::None
+        | SecretDetails::Registries(_)
+        | SecretDetails::ServiceAccountToken { .. } => None,
+    }
+}
+
+/// CERTIFICATE: the leaf is expired, about to expire, not valid yet, or unusable. Reads only the
+/// secret, so it shows while the lists load.
+fn secret_diagnosis(secret: &SecretSummary, now: Timestamp) -> Option<KindDiagnosis> {
+    let (tone, text) = certificate_verdict(&secret.details, now)?;
+    Some(KindDiagnosis {
+        tone,
+        title: "CERTIFICATE".to_owned(),
+        text,
+        pod: None,
     })
 }
 

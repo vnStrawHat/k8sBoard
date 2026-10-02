@@ -19,6 +19,7 @@ use crate::network_rows::{ingress_row, service_row};
 use crate::policy_rows::{
     horizontal_pod_autoscaler_row, pod_disruption_budget_row, resource_quota_row,
 };
+use crate::secret_rows::secret_row;
 use crate::storage_rows::{persistent_volume_claim_row, persistent_volume_row, storage_class_row};
 use crate::workload_rows::{daemon_set_row, deployment_row, replica_set_row, stateful_set_row};
 
@@ -49,6 +50,7 @@ pub(crate) enum ResourceKind {
     RoleBindings,
     ClusterRoleBindings,
     ServiceAccounts,
+    Secrets,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -602,6 +604,27 @@ static SERVICE_ACCOUNTS: KindSpec = KindSpec {
     has_port_forward: false,
 };
 
+static SECRETS: KindSpec = KindSpec {
+    label: "Secrets",
+    object: ObjectKind::Secret,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "secret",
+    plural: "secrets",
+    badge: "Se",
+    is_namespaced: true,
+    access_check: AccessCheck::ListSecrets,
+    columns: &[
+        column("Type", 220., Align::Left),
+        column("Keys", 70., Align::Right),
+        column("Used by", 220., Align::Left),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &["Edit"],
+    delete_label: "Delete secret…",
+    has_port_forward: false,
+};
+
 /// The Name column of a kind that shows it, as wide as its minimum.
 pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left);
 
@@ -616,7 +639,7 @@ pub(crate) fn kind_columns(kind: ResourceKind) -> Vec<KindColumn> {
 }
 
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 23] = [
+    pub(crate) const ALL: [Self; 24] = [
         Self::Namespaces,
         Self::Events,
         Self::Deployments,
@@ -640,6 +663,7 @@ impl ResourceKind {
         Self::RoleBindings,
         Self::ClusterRoleBindings,
         Self::ServiceAccounts,
+        Self::Secrets,
     ];
 
     fn spec(self) -> &'static KindSpec {
@@ -667,6 +691,7 @@ impl ResourceKind {
             Self::RoleBindings => &ROLE_BINDINGS,
             Self::ClusterRoleBindings => &CLUSTER_ROLE_BINDINGS,
             Self::ServiceAccounts => &SERVICE_ACCOUNTS,
+            Self::Secrets => &SECRETS,
         }
     }
 
@@ -861,6 +886,10 @@ impl ResourceKind {
             Self::ServiceAccounts => connection
                 .watch_service_accounts(scope)
                 .map(|update| rows(update, service_account_row))
+                .boxed(),
+            Self::Secrets => connection
+                .watch_secrets(scope)
+                .map(|update| rows(update, secret_row))
                 .boxed(),
         }
     }
