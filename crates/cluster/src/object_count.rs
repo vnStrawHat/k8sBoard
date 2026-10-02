@@ -4,9 +4,13 @@ use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
-use k8s_openapi::api::core::v1::{ConfigMap, Event, Namespace, Node, Pod, ResourceQuota, Service};
+use k8s_openapi::api::core::v1::{
+    ConfigMap, Event, Namespace, Node, PersistentVolume, PersistentVolumeClaim, Pod, ResourceQuota,
+    Service,
+};
 use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
+use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::serde::de::DeserializeOwned;
 use kube::Api;
 use kube::api::ListParams;
@@ -86,6 +90,21 @@ impl ClusterConnection {
                     "counting pod disruption budgets",
                 )
                 .await
+            }
+            ObjectKind::PersistentVolumeClaim => {
+                self.count_namespaced::<PersistentVolumeClaim>(
+                    scope,
+                    "counting persistent volume claims",
+                )
+                .await
+            }
+            ObjectKind::PersistentVolume => {
+                self.count_cluster::<PersistentVolume>("counting persistent volumes")
+                    .await
+            }
+            ObjectKind::StorageClass => {
+                self.count_cluster::<StorageClass>("counting storage classes")
+                    .await
             }
         }
     }

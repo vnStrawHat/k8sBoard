@@ -1,14 +1,15 @@
-//! The WHY box of Deployments, DaemonSets, Jobs, Services, PodDisruptionBudgets, HPAs, and
-//! ResourceQuotas: what is wrong and, when the pods say so, why. Pure: the drawer reads the live
-//! lists and calls `kind_diagnosis`. Pod causes reuse
-//! `pod_diagnosis` without events, so probe-failure detail stays in the pod drawer. Condition and
-//! status messages are arbitrary text, so nothing here logs them.
+//! The WHY box of Deployments, DaemonSets, Jobs, Services, PodDisruptionBudgets, HPAs,
+//! ResourceQuotas, PVCs, and PVs: what is wrong and, when the pods say so, why. Pure: the drawer
+//! reads the live lists and calls `kind_diagnosis`. Pod causes reuse `pod_diagnosis` without
+//! events, so probe-failure detail stays in the pod drawer. Condition and status messages are
+//! arbitrary text, so nothing here logs them.
 
 use cluster::{
     BlockCause, ContainerKind, ContainerState, DaemonSetSummary, DeploymentSummary,
     DisruptionState, HorizontalPodAutoscalerSummary, JobStatus, JobSummary, NodeReadiness,
-    NodeSummary, PodDisruptionBudgetSummary, PodStatus, PodSummary, ResourceQuotaSummary,
-    ServiceSummary, StatusReason, Termination, WorkloadCondition,
+    NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary,
+    PodStatus, PodSummary, ResourceQuotaSummary, ServiceSummary, StatusReason, Termination,
+    WorkloadCondition,
 };
 use jiff::Timestamp;
 
@@ -63,6 +64,8 @@ pub(crate) fn kind_diagnosis(
         KindObject::PodDisruptionBudget(budget) => pod_disruption_budget_diagnosis(budget),
         KindObject::HorizontalPodAutoscaler(hpa) => horizontal_pod_autoscaler_diagnosis(hpa),
         KindObject::ResourceQuota(quota) => resource_quota_diagnosis(quota),
+        KindObject::PersistentVolumeClaim(claim) => claim_diagnosis(claim),
+        KindObject::PersistentVolume(volume) => volume_diagnosis(volume),
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
@@ -244,6 +247,74 @@ fn resource_quota_diagnosis(quota: &ResourceQuotaSummary) -> Option<KindDiagnosi
         ),
         pod: None,
     })
+}
+
+// ---- Storage ----
+
+/// VOLUME LOST: the volume a claim was bound to is gone. Reads only the claim.
+fn claim_diagnosis(claim: &PersistentVolumeClaimSummary) -> Option<KindDiagnosis> {
+    if claim.phase != "Lost" {
+        return None;
+    }
+    let gone = claim.volume.as_deref().map_or_else(
+        || "The bound volume no longer exists.".to_owned(),
+        |volume| format!("The bound volume {volume} no longer exists."),
+    );
+    Some(KindDiagnosis {
+        tone: StatusTone::Bad,
+        title: "VOLUME LOST".to_owned(),
+        text: format!("{gone} The data on it is gone or unreachable."),
+        pod: None,
+    })
+}
+
+/// RELEASED: the claim is gone but the volume is not; RECLAIM FAILED: the reclaim policy could not
+/// run. Reads only the volume.
+fn volume_diagnosis(volume: &PersistentVolumeSummary) -> Option<KindDiagnosis> {
+    match volume.phase.as_str() {
+        "Released" => Some(released_diagnosis(volume)),
+        "Failed" => Some(KindDiagnosis {
+            tone: StatusTone::Bad,
+            title: "RECLAIM FAILED".to_owned(),
+            text: reclaim_failure_text(volume),
+            pod: None,
+        }),
+        _ => None,
+    }
+}
+
+fn released_diagnosis(volume: &PersistentVolumeSummary) -> KindDiagnosis {
+    let claim = volume.claim.as_ref().map_or_else(
+        || "The claim".to_owned(),
+        |claim| format!("Claim {}/{}", claim.namespace, claim.name),
+    );
+    let text = if volume.reclaim_policy == "Retain" {
+        format!(
+            "{claim} was deleted. Reclaim policy Retain keeps the data on the volume. Delete the \
+             PV and its backing volume to free the space, or clear claimRef to bind it again."
+        )
+    } else {
+        format!(
+            "{claim} was deleted and reclaim policy is {}, but the volume still exists. Check the \
+             Events tab for reclaim errors.",
+            volume.reclaim_policy
+        )
+    };
+    KindDiagnosis {
+        tone: StatusTone::Warn,
+        title: "RELEASED".to_owned(),
+        text,
+        pod: None,
+    }
+}
+
+/// `{reason}: {message}`, either part may be missing.
+fn reclaim_failure_text(volume: &PersistentVolumeSummary) -> String {
+    match (&volume.reason, &volume.message) {
+        (Some(reason), Some(message)) => format!("{reason}: {message}"),
+        (Some(text), None) | (None, Some(text)) => text.clone(),
+        (None, None) => "The volume could not be reclaimed. Check the Events tab.".to_owned(),
+    }
 }
 
 // ---- Deployments ----

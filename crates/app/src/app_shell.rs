@@ -43,7 +43,7 @@ use crate::pod_table::PodTableDelegate;
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_kind::ResourceKind;
 #[cfg(feature = "screenshot")]
-use crate::screenshot::FeedProgress;
+use crate::screenshot::{FeedProgress, kubelet_progress};
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{SettleInput, TargetState, is_drawer_ready};
 use crate::screenshot::{pick_drawer_pod, pick_logs_pod, pick_selected};
@@ -750,6 +750,14 @@ impl AppShell {
                 name: name.clone(),
             }),
             ResourceKey::Node { name } => Some(KubeletSubject::Node(name.clone())),
+            ResourceKey::Kind {
+                kind: ResourceKind::PersistentVolumeClaims,
+                namespace: Some(namespace),
+                name,
+            } => Some(KubeletSubject::Claim {
+                namespace: namespace.clone(),
+                claim: name.clone(),
+            }),
             ResourceKey::Kind { kind, .. } if kind.has_monitor() => self
                 .live(cx)?
                 .kind_list(*kind)?
@@ -1324,9 +1332,14 @@ impl AppShell {
                 }),
             kubelet: self
                 .live(cx)
-                .map_or_else(FeedProgress::unavailable, |live| FeedProgress {
-                    status: live.metrics.kubelet.status.clone(),
-                    ticks: live.metrics.kubelet.history.tick_count(),
+                .map_or_else(FeedProgress::unavailable, |live| {
+                    kubelet_progress(
+                        live.metrics.kubelet.status.clone(),
+                        live.metrics.kubelet.history.tick_count(),
+                        // Targets follow the nodes list, so an unloaded list may still produce some.
+                        live.nodes.is_loading()
+                            || !live.metrics.kubelet.targets().summary_nodes.is_empty(),
+                    )
                 }),
         }
     }

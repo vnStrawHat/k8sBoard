@@ -6,8 +6,9 @@
 
 use cluster::{
     ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule, DeploymentSummary,
-    EndpointSliceSummary, EventSummary, JobSummary, NodeSummary, PodDisruptionBudgetSummary,
-    PodSummary, ReplicaSetSummary, ResourceQuotaSummary, ServiceSummary, ValuePreview,
+    EndpointSliceSummary, EventSummary, JobSummary, NodeSummary, PersistentVolumeClaimSummary,
+    PodDisruptionBudgetSummary, PodSummary, PvcUsage, ReplicaSetSummary, ResourceQuotaSummary,
+    ServiceSummary, ValuePreview, VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -20,6 +21,7 @@ use jiff::tz::TimeZone;
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::batch_rows::job_status_label;
+use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{
     CompanionLists, CompanionPlan, LiveCluster, LiveList, RelatedList, companion_plan,
     denied_related_check,
@@ -27,18 +29,20 @@ use crate::cluster_session::{
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::drawer::{link_text, wide_detail_row};
 use crate::kind_diagnosis::{is_pod_not_ready, unready_node};
+use crate::kind_drawer::bar_row;
 use crate::kind_join::{
     EndpointState, UsedBy, config_map_users, endpoint_entries, endpoint_ports, service_slices,
     users_of,
 };
-use crate::kind_row::{KindObject, KindRow, LiveContent, owns_pod};
+use crate::kind_join::{UsageSample, claim_sample, is_shared_filesystem};
+use crate::kind_row::{DetailRow, KindObject, KindRow, LiveContent, owns_pod, percent};
 use crate::object_events::event_subject;
 use crate::policy_rows::{fullest_item, quota_text};
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusLabel, StatusTone, pod_status_label, readiness_text, toned_text};
 use crate::table_selection::ResourceKey;
-use crate::usage_format::format_percent;
+use crate::usage_format::{Measure, format_percent, usage_tone};
 
 /// Bounds the render cost of a Deployment with very many ReplicaSets or a CronJob with many jobs.
 const MAX_LISTED_OBJECTS: usize = 10;
@@ -88,6 +92,12 @@ pub(crate) fn live_rows(
                 Some(subject) => blocked_creations_rows(&subject, &quota.name, live, now, cx),
                 None => Vec::new(),
             }
+        }
+        (LiveContent::ClaimUsage, KindObject::PersistentVolumeClaim(claim)) => {
+            claim_usage_content(claim, live, now, cx)
+        }
+        (LiveContent::MountedBy, KindObject::PersistentVolumeClaim(claim)) => {
+            mounted_by_rows(claim, live, cx)
         }
         // The Namespaces row holds no summary, so its name is the namespace.
         (LiveContent::NamespaceQuotas, _) => namespace_quota_rows(&row.name, live, cx),
@@ -982,6 +992,189 @@ fn selected_pod_element(ix: usize, entry: &SelectedPod, cx: &Context<AppShell>) 
                 cx,
             )
             .flex_shrink_0(),
+        )
+        .into_any_element()
+}
+
+// ---- Claim usage ----
+
+/// The Used and Inodes bars of a claim, then when the kubelet sampled them; or one note that
+/// says why there are none. Pure: `Bar` and `Note` rows are what the painter turns into elements.
+fn claim_usage_rows(
+    claim: &PersistentVolumeClaimSummary,
+    usage: Option<&PvcUsage>,
+    feed: &FeedStatus,
+    now: jiff::Timestamp,
+) -> Vec<DetailRow> {
+    let note = |text: String| vec![DetailRow::Note(text.into())];
+    if claim.volume_mode.as_deref() == Some("Block") {
+        return note("Block volumes report no usage".to_owned());
+    }
+    if claim.phase != "Bound" {
+        return note("No usage until the claim is bound".to_owned());
+    }
+    let Some((usage, sample)) = usage.and_then(|usage| Some((usage, claim_sample(usage)?))) else {
+        return note(match feed {
+            FeedStatus::Unavailable(reason) => format!("Usage unavailable: {reason}"),
+            _ => "No usage data yet: kubelet stats appear once a running pod mounts the claim"
+                .to_owned(),
+        });
+    };
+    let UsageSample {
+        used,
+        capacity,
+        ratio,
+    } = sample;
+    let is_shared = is_shared_filesystem(usage, claim.capacity.as_deref());
+    let mut rows = vec![DetailRow::Bar {
+        label: if is_shared { "Node filesystem" } else { "Used" }.into(),
+        percent: percent(ratio),
+        text: Measure::Bytes
+            .format_pair(used.bytes() as f64, capacity.bytes() as f64, " of ")
+            .into(),
+        tone: usage_tone(ratio),
+    }];
+    if let (Some(inodes_used), Some(inodes)) = (usage.inodes_used, usage.inodes)
+        && inodes > 0
+    {
+        let inode_ratio = inodes_used as f64 / inodes as f64;
+        rows.push(DetailRow::Bar {
+            label: "Inodes".into(),
+            percent: percent(inode_ratio),
+            text: format_percent(inode_ratio).into(),
+            tone: usage_tone(inode_ratio),
+        });
+    }
+    if is_shared {
+        rows.push(DetailRow::Note(
+            "Shared with the node: the claim has no quota of its own".into(),
+        ));
+    }
+    if let Some(sampled_at) = usage.sampled_at {
+        rows.push(DetailRow::Note(
+            format!("Sampled {} ago", format_age(Some(sampled_at), now)).into(),
+        ));
+    }
+    rows
+}
+
+fn claim_usage_content(
+    claim: &PersistentVolumeClaimSummary,
+    live: &LiveCluster,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let kubelet = &live.metrics.kubelet;
+    let usage = kubelet.history.pvc_usage(&claim.namespace, &claim.name);
+    claim_usage_rows(claim, usage, &kubelet.status, now)
+        .into_iter()
+        .enumerate()
+        .map(|(ix, row)| match row {
+            DetailRow::Bar {
+                label,
+                percent,
+                text,
+                tone,
+            } => bar_row(&label, percent, &text, tone, ix, cx),
+            DetailRow::Note(text) => note(&text, cx),
+            _ => div().into_any_element(),
+        })
+        .collect()
+}
+
+// ---- Mounted by ----
+
+/// How many pods a PVC drawer lists.
+const MAX_LISTED_MOUNTS: usize = 50;
+
+/// The pods of `namespace` that mount `claim` in any container, by name, one entry per pod with
+/// the first mount path. Block-mode claims are `volumeDevices`, which pod summaries do not keep.
+pub(crate) fn claim_pods<'a>(
+    namespace: &str,
+    claim: &str,
+    pods: &'a [PodSummary],
+) -> Vec<(&'a PodSummary, &'a str)> {
+    let mut mounting: Vec<(&PodSummary, &str)> = pods
+        .iter()
+        .filter(|pod| pod.namespace == namespace)
+        .filter_map(|pod| {
+            let mount = pod
+                .containers
+                .iter()
+                .flat_map(|container| &container.mounts)
+                .find(|mount| {
+                    matches!(&mount.source,
+                        VolumeSource::PersistentVolumeClaim { claim: name } if name == claim)
+                })?;
+            Some((pod, mount.path.as_str()))
+        })
+        .collect();
+    mounting.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+    mounting
+}
+
+fn mounted_by_rows(
+    claim: &PersistentVolumeClaimSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    if live.pods.is_loading() {
+        return vec![note("Loading pods…", cx)];
+    }
+    let Some(pods) = live.pods.ready_items() else {
+        return vec![note("Pods are unavailable", cx)];
+    };
+    let mounting = claim_pods(&claim.namespace, &claim.name, pods);
+    if mounting.is_empty() {
+        let is_block = claim.volume_mode.as_deref() == Some("Block");
+        return std::iter::once(note("Not mounted by any pod", cx))
+            .chain(is_block.then(|| note("Block volumes are not listed", cx)))
+            .collect();
+    }
+    let hidden = mounting.len().saturating_sub(MAX_LISTED_MOUNTS);
+    mounting
+        .iter()
+        .take(MAX_LISTED_MOUNTS)
+        .enumerate()
+        .map(|(ix, (pod, path))| mounting_pod_element(ix, pod, path, cx))
+        .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+        .collect()
+}
+
+fn mounting_pod_element(
+    ix: usize,
+    pod: &PodSummary,
+    path: &str,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let hover_bg = theme.muted;
+    let key = ResourceKey::of_pod(pod);
+    let node = pod.node_name.as_deref().unwrap_or("unscheduled");
+    h_flex()
+        .id(("mounted-by", ix))
+        .gap_2()
+        .items_center()
+        .py_1()
+        .rounded(theme.radius)
+        .text_sm()
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover_bg))
+        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_family(theme.mono_font_family.clone())
+                .child(pod.name.clone()),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(theme.muted_foreground)
+                .child(format!("on {node} · {path}")),
         )
         .into_any_element()
 }

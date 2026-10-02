@@ -17,13 +17,13 @@ fn modes_text(modes: &[String]) -> String;    // short names joined ","
 | Column | Width | Cell |
 |---|---|---|
 | Status | 110 | `Toned(phase_label)` |
-| Capacity | 90 r | `size_cell(capacity.or(requested))` |
+| Capacity | 90 r | `size_cell(capacity)`; an unbound claim shows `requested` muted (`Done` tone) |
 | Used | 80 r | joined: `Quantity { format_percent(ratio), permille, usage_tone(ratio) }`; no stats → `Absent` |
 | Access | 90 | `modes_text`, or `Absent` |
-| Class | 120 | `Text` or `Absent` |
+| Class | 150 | `Text` or `Absent` |
 | Age | 70 r | |
 
-Status: `phase_label`; for a Bound claim, condition `Resizing` true → Info "Resizing", else `FileSystemResizePending` true → Info "Resize pending; restart the pod" (decision 20). The join raises a Bound claim to Warn/Bad "{pct} used" when `usage_tone` gives a tone.
+Status: `phase_label`; for a Bound claim, condition `Resizing` true → Info "Resizing", else `FileSystemResizePending` true → Info "Resize pending"; the drawer Status row reads "Resize pending; restart the pod" (decision 20). In Conditions, a true `Resizing` or `FileSystemResizePending` reads Info. The join leaves the Used cell `Absent` and the status unchanged for a shared filesystem (see Known ceilings in decisions.md). Otherwise it raises a Bound claim to Warn/Bad "{pct} used" when `usage_tone` gives a tone.
 
 WHY **VOLUME LOST** (Bad), phase `Lost`: `The bound volume {volume} no longer exists. The data on it is gone or unreachable.`
 
@@ -40,7 +40,7 @@ WHY **VOLUME LOST** (Bad), phase `Lost`: `The bound volume {volume} no longer ex
 
 From `live.metrics.kubelet.history.pvc_usage(ns, name)`:
 
-- `Bar { "Used", percent(used/capacity), Measure::Bytes.format_pair(used, capacity, " of "), usage_tone }`;
+- `Bar { "Used", percent(used/capacity), Measure::Bytes.format_pair(used, capacity, " of "), usage_tone }`; for a shared filesystem (kubelet capacity larger than the claim) the label is "Node filesystem" and a note "Shared with the node: the claim has no quota of its own" follows the bars;
 - `Bar { "Inodes", percent(inodes_used/inodes), format_percent(..), usage_tone }` when both are known;
 - then a muted note `Sampled {age} ago`.
 
@@ -63,7 +63,7 @@ Pods of the namespace with any container mount whose source is `PersistentVolume
 | Reclaim | 90 | `Text(reclaim_policy)` |
 | Status | 110 | `Toned(phase_label)` |
 | Claim | 240 | `Qualified { prefix: namespace, text: name }`, or `Absent` |
-| Class | 120 | `Text` or `Absent` |
+| Class | 150 | `Text` or `Absent` |
 | Age | 70 r | |
 
 Status: `phase_label`.

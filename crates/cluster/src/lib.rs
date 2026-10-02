@@ -24,6 +24,8 @@ mod network_policy;
 mod node;
 mod object_count;
 mod object_yaml;
+mod persistent_volume;
+mod persistent_volume_claim;
 mod pod;
 mod pod_log;
 mod pod_status;
@@ -35,6 +37,7 @@ mod resource_watch;
 mod selector;
 mod service;
 mod stateful_set;
+mod storage_class;
 mod workload;
 
 pub use access_review::{AccessCheck, AccessDecision, AccessReport, AccessReview, NamespaceAccess};
@@ -71,6 +74,8 @@ pub use node::{
     NodeStatus, NodeSummary, NodeSystemInfo, NodeTaint,
 };
 pub use object_yaml::{EnvValues, ObjectKind, ObjectRef, ObjectYaml};
+pub use persistent_volume::{ClaimRef, PersistentVolumeSummary, VolumeBackend};
+pub use persistent_volume_claim::PersistentVolumeClaimSummary;
 pub use pod::{
     ContainerKind, ContainerState, ContainerSummary, PodCondition, PodSummary, ReadyCount,
     Termination,
@@ -87,4 +92,5 @@ pub use resource_watch::WatchUpdate;
 pub use selector::Selector;
 pub use service::{ServicePortSummary, ServiceSummary};
 pub use stateful_set::{ClaimTemplate, StatefulSetSummary};
+pub use storage_class::{StorageClassSummary, StorageParameter};
 pub use workload::{ContainerPort, ControllerRef, TemplateContainer, WorkloadCondition};

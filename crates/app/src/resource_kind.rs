@@ -16,6 +16,7 @@ use crate::network_rows::{ingress_row, service_row};
 use crate::policy_rows::{
     horizontal_pod_autoscaler_row, pod_disruption_budget_row, resource_quota_row,
 };
+use crate::storage_rows::{persistent_volume_claim_row, persistent_volume_row};
 use crate::workload_rows::{daemon_set_row, deployment_row, replica_set_row, stateful_set_row};
 
 /// One kind with an explorer screen. Per-kind variation is data (the tables below) plus one
@@ -37,6 +38,8 @@ pub(crate) enum ResourceKind {
     PodDisruptionBudgets,
     HorizontalPodAutoscalers,
     ResourceQuotas,
+    PersistentVolumeClaims,
+    PersistentVolumes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -418,6 +421,53 @@ static RESOURCE_QUOTAS: KindSpec = KindSpec {
     has_port_forward: false,
 };
 
+static PERSISTENT_VOLUME_CLAIMS: KindSpec = KindSpec {
+    label: "PVCs",
+    object: ObjectKind::PersistentVolumeClaim,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "persistentvolumeclaim",
+    plural: "persistentvolumeclaims",
+    badge: "Pc",
+    is_namespaced: true,
+    access_check: AccessCheck::ListPersistentVolumeClaims,
+    columns: &[
+        column("Status", 110., Align::Left),
+        column("Capacity", 90., Align::Right),
+        column("Used", 80., Align::Right),
+        column("Access", 90., Align::Left),
+        column("Class", 150., Align::Left),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &["Expand…"],
+    delete_label: "Delete PVC…",
+    has_port_forward: false,
+};
+
+static PERSISTENT_VOLUMES: KindSpec = KindSpec {
+    label: "PVs",
+    object: ObjectKind::PersistentVolume,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "persistentvolume",
+    plural: "persistentvolumes",
+    badge: "Pv",
+    is_namespaced: false,
+    access_check: AccessCheck::ListPersistentVolumes,
+    columns: &[
+        column("Capacity", 90., Align::Right),
+        column("Access", 90., Align::Left),
+        column("Reclaim", 90., Align::Left),
+        column("Status", 110., Align::Left),
+        column("Claim", 240., Align::Left),
+        column("Class", 150., Align::Left),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete PV…",
+    has_port_forward: false,
+};
+
 /// The Name column of a kind that shows it, as wide as its minimum.
 pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left);
 
@@ -432,7 +482,7 @@ pub(crate) fn kind_columns(kind: ResourceKind) -> Vec<KindColumn> {
 }
 
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 15] = [
+    pub(crate) const ALL: [Self; 17] = [
         Self::Namespaces,
         Self::Events,
         Self::Deployments,
@@ -448,6 +498,8 @@ impl ResourceKind {
         Self::PodDisruptionBudgets,
         Self::HorizontalPodAutoscalers,
         Self::ResourceQuotas,
+        Self::PersistentVolumeClaims,
+        Self::PersistentVolumes,
     ];
 
     fn spec(self) -> &'static KindSpec {
@@ -467,6 +519,8 @@ impl ResourceKind {
             Self::PodDisruptionBudgets => &POD_DISRUPTION_BUDGETS,
             Self::HorizontalPodAutoscalers => &HORIZONTAL_POD_AUTOSCALERS,
             Self::ResourceQuotas => &RESOURCE_QUOTAS,
+            Self::PersistentVolumeClaims => &PERSISTENT_VOLUME_CLAIMS,
+            Self::PersistentVolumes => &PERSISTENT_VOLUMES,
         }
     }
 
@@ -560,7 +614,7 @@ impl ResourceKind {
     }
 
     /// The only per-kind `match` over cluster calls: watch, then map to rows on tokio, so the
-    /// main thread only swaps a `Vec`. Namespaces are cluster-scoped and ignore `scope`. Only
+    /// main thread only swaps a `Vec`. Cluster-scoped kinds (Namespaces, PVs) ignore `scope`. Only
     /// Events reads `events`.
     pub(crate) fn watch_rows(
         self,
@@ -629,6 +683,14 @@ impl ResourceKind {
                 .watch_resource_quotas(scope)
                 .map(|update| rows(update, resource_quota_row))
                 .boxed(),
+            Self::PersistentVolumeClaims => connection
+                .watch_persistent_volume_claims(scope)
+                .map(|update| rows(update, persistent_volume_claim_row))
+                .boxed(),
+            Self::PersistentVolumes => connection
+                .watch_persistent_volumes()
+                .map(|update| rows(update, persistent_volume_row))
+                .boxed(),
         }
     }
 }
@@ -686,10 +748,15 @@ mod tests {
     }
 
     #[test]
-    fn only_namespaces_is_cluster_scoped() {
-        for kind in ResourceKind::ALL {
-            assert_eq!(kind.is_namespaced(), kind != ResourceKind::Namespaces);
-        }
+    fn cluster_scoped_kinds_are_listed() {
+        let cluster_scoped: Vec<ResourceKind> = ResourceKind::ALL
+            .into_iter()
+            .filter(|kind| !kind.is_namespaced())
+            .collect();
+        assert_eq!(
+            cluster_scoped,
+            [ResourceKind::Namespaces, ResourceKind::PersistentVolumes]
+        );
     }
 
     #[test]

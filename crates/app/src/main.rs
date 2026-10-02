@@ -51,6 +51,7 @@ mod row_selection;
 mod screenshot;
 mod status_bar;
 mod status_tone;
+mod storage_rows;
 mod table_filter;
 mod table_layout;
 mod table_selection;

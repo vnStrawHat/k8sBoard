@@ -380,3 +380,56 @@ fn denied_feed_is_unavailable_and_stopped_feed_failed() {
         FeedStatus::Failed("kubelet polling stopped unexpectedly".to_owned())
     );
 }
+
+#[test]
+fn claim_subject_nodes_are_mounting_pods_nodes() {
+    let mount = |claim: &str| cluster::MountEntry {
+        path: "/data".to_owned(),
+        volume: "data".to_owned(),
+        source: cluster::VolumeSource::PersistentVolumeClaim {
+            claim: claim.to_owned(),
+        },
+        is_read_only: false,
+        sub_path: None,
+    };
+    let mounting = |name: &str, node: &str, claim: &str, reason: StatusReason| {
+        let mut pod = pod(name, Some(node), reason);
+        pod.containers.push(cluster::ContainerSummary {
+            name: "main".to_owned(),
+            image: "img".to_owned(),
+            kind: cluster::ContainerKind::Main,
+            state: cluster::ContainerState::Running { started_at: None },
+            is_ready: true,
+            restart_count: 0,
+            last_termination: None,
+            image_digest: None,
+            pull_policy: None,
+            is_started: None,
+            ports: Vec::new(),
+            resources: Vec::new(),
+            probes: cluster::ContainerProbes::default(),
+            env: Vec::new(),
+            env_from: Vec::new(),
+            mounts: vec![mount(claim)],
+        });
+        pod
+    };
+    let pods = [
+        mounting("a", "node-b", "data", StatusReason::Running),
+        mounting("b", "node-b", "data", StatusReason::Running),
+        mounting("c", "node-a", "data", StatusReason::Running),
+        // A finished pod no longer holds the volume, and another claim is not the subject.
+        mounting("d", "node-c", "data", StatusReason::Completed),
+        mounting("e", "node-d", "other", StatusReason::Running),
+    ];
+    let subject = KubeletSubject::Claim {
+        namespace: "shop".to_owned(),
+        claim: "data".to_owned(),
+    };
+    let shares = subject_nodes(&subject, &pods);
+    let listed: Vec<(&str, usize)> = shares
+        .iter()
+        .map(|share| (share.node.as_str(), share.pods))
+        .collect();
+    assert_eq!(listed, [("node-b", 2), ("node-a", 1)]);
+}

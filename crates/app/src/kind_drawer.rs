@@ -130,7 +130,9 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::NetworkPolicy(_)
         | KindObject::PodDisruptionBudget(_)
         | KindObject::HorizontalPodAutoscaler(_)
-        | KindObject::ResourceQuota(_) => None,
+        | KindObject::ResourceQuota(_)
+        | KindObject::PersistentVolumeClaim(_)
+        | KindObject::PersistentVolume(_) => None,
     }
 }
 
@@ -172,7 +174,15 @@ fn kind_menu_button(
                     .find(|row| key.is_row(kind, row))
             });
             match current {
-                Some(row) => kind_menu(menu, kind, row, &live.access, &shell, open_url),
+                Some(row) => kind_menu(
+                    menu,
+                    kind,
+                    row,
+                    &live.access,
+                    live.pods.items(),
+                    &shell,
+                    open_url,
+                ),
                 None => menu,
             }
         })
@@ -345,7 +355,7 @@ fn detail_element(
 }
 
 /// A label, a bar toned by `tone` (the kit color without one), then the text in mono.
-fn bar_row(
+pub(crate) fn bar_row(
     label: &SharedString,
     percent: u8,
     text: &SharedString,

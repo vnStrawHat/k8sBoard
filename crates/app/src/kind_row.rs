@@ -4,8 +4,9 @@
 use cluster::{
     ConfigMapSummary, ControllerRef, CronJobSummary, CronSchedule, DaemonSetSummary,
     DeploymentSummary, HorizontalPodAutoscalerSummary, IngressSummary, JobSummary,
-    NetworkPolicySummary, PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary,
-    ResourceQuotaSummary, ServiceSummary, StatefulSetSummary,
+    NetworkPolicySummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
+    PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary,
+    ServiceSummary, StatefulSetSummary,
 };
 use gpui_kit::SharedString;
 
@@ -50,6 +51,8 @@ pub(crate) enum KindObject {
     HorizontalPodAutoscaler(HorizontalPodAutoscalerSummary),
     ResourceQuota(ResourceQuotaSummary),
     PodDisruptionBudget(PodDisruptionBudgetSummary),
+    PersistentVolumeClaim(PersistentVolumeClaimSummary),
+    PersistentVolume(PersistentVolumeSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -67,6 +70,8 @@ pub(crate) enum LiveContent {
     ScalingEvents,
     BlockedCreations,
     NamespaceQuotas,
+    ClaimUsage,
+    MountedBy,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.
@@ -230,6 +235,17 @@ impl KindRow {
 /// Label or selector terms as drawer chips.
 pub(crate) fn chips(terms: &[String]) -> Vec<SharedString> {
     terms.iter().cloned().map(SharedString::from).collect()
+}
+
+/// `RWO` for `ReadWriteOnce`; an unknown mode is returned as is.
+pub(crate) fn access_mode_short(mode: &str) -> &str {
+    match mode {
+        "ReadWriteOnce" => "RWO",
+        "ReadOnlyMany" => "ROX",
+        "ReadWriteMany" => "RWX",
+        "ReadWriteOncePod" => "RWOP",
+        other => other,
+    }
 }
 
 /// A ratio as a bar percent: rounded, and clamped to 0 to 100 (a NaN reads as 0).

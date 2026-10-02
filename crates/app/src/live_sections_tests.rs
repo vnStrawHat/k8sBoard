@@ -696,3 +696,229 @@ fn cut_text_adds_an_ellipsis_only_when_cut() {
     assert_eq!(cut_text("short", 10), "short");
     assert_eq!(cut_text("abcdef", 3), "abc…");
 }
+
+// ---- PersistentVolumeClaims ----
+
+fn mounting_pod(namespace: &str, name: &str, claim: &str, paths: &[&str]) -> PodSummary {
+    let mount = |path: &str| cluster::MountEntry {
+        path: path.to_owned(),
+        volume: "data".to_owned(),
+        source: VolumeSource::PersistentVolumeClaim {
+            claim: claim.to_owned(),
+        },
+        is_read_only: false,
+        sub_path: None,
+    };
+    let container = |index: usize, path: &str| cluster::ContainerSummary {
+        name: format!("c{index}"),
+        image: "img".to_owned(),
+        kind: cluster::ContainerKind::Main,
+        state: cluster::ContainerState::Running { started_at: None },
+        is_ready: true,
+        restart_count: 0,
+        last_termination: None,
+        image_digest: None,
+        pull_policy: None,
+        is_started: None,
+        ports: Vec::new(),
+        resources: Vec::new(),
+        probes: cluster::ContainerProbes::default(),
+        env: Vec::new(),
+        env_from: Vec::new(),
+        mounts: vec![mount(path)],
+    };
+    PodSummary {
+        namespace: namespace.to_owned(),
+        name: name.to_owned(),
+        status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
+        ready: cluster::ReadyCount { ready: 1, total: 1 },
+        restarts: 0,
+        node_name: Some("wk-01".to_owned()),
+        created_at: None,
+        pod_ip: None,
+        qos_class: None,
+        service_account: None,
+        controller: None,
+        conditions: Vec::new(),
+        status_message: None,
+        labels: Vec::new(),
+        host_network: false,
+        containers: paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| container(index, path))
+            .collect(),
+    }
+}
+
+fn bound_claim() -> PersistentVolumeClaimSummary {
+    PersistentVolumeClaimSummary {
+        namespace: "shop".to_owned(),
+        name: "data".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        phase: "Bound".to_owned(),
+        is_terminating: false,
+        volume: Some("pv-1".to_owned()),
+        capacity: Some("10Gi".to_owned()),
+        requested: None,
+        access_modes: Vec::new(),
+        storage_class: None,
+        volume_mode: None,
+        conditions: Vec::new(),
+    }
+}
+
+fn sample(used: u64, capacity: u64) -> PvcUsage {
+    PvcUsage {
+        namespace: "shop".to_owned(),
+        claim: "data".to_owned(),
+        sampled_at: Some(at("2026-01-01T00:00:00Z")),
+        used: Some(cluster::ByteAmount::from_bytes(used)),
+        capacity: Some(cluster::ByteAmount::from_bytes(capacity)),
+        available: None,
+        inodes_used: Some(50),
+        inodes: Some(200),
+    }
+}
+
+fn note_text(rows: &[DetailRow]) -> String {
+    match rows {
+        [DetailRow::Note(text)] => text.to_string(),
+        other => panic!("expected one note, got {other:?}"),
+    }
+}
+
+#[test]
+fn claim_pods_dedupes_and_sorts() {
+    let pods = [
+        mounting_pod("shop", "web-2", "data", &["/data"]),
+        // Two containers mount the claim: one entry, the first path.
+        mounting_pod("shop", "web-1", "data", &["/var/lib/data", "/backup"]),
+        mounting_pod("shop", "web-3", "other", &["/x"]),
+    ];
+    let mounting = claim_pods("shop", "data", &pods);
+    let listed: Vec<(&str, &str)> = mounting
+        .iter()
+        .map(|(pod, path)| (pod.name.as_str(), *path))
+        .collect();
+    assert_eq!(listed, [("web-1", "/var/lib/data"), ("web-2", "/data")]);
+}
+
+#[test]
+fn claim_pods_ignore_other_namespaces() {
+    let pods = [mounting_pod("other", "web-1", "data", &["/data"])];
+    assert!(claim_pods("shop", "data", &pods).is_empty());
+}
+
+#[test]
+fn claim_usage_bars_and_inodes() {
+    let now = at("2026-01-01T00:00:12Z");
+    let rows = claim_usage_rows(
+        &bound_claim(),
+        Some(&sample(8 * 1024 * 1024 * 1024, 10 * 1024 * 1024 * 1024)),
+        &FeedStatus::Live,
+        now,
+    );
+    assert_eq!(
+        rows,
+        [
+            DetailRow::Bar {
+                label: "Used".into(),
+                percent: 80,
+                text: "8 of 10Gi".into(),
+                tone: Some(StatusTone::Warn),
+            },
+            DetailRow::Bar {
+                label: "Inodes".into(),
+                percent: 25,
+                text: "25%".into(),
+                tone: None,
+            },
+            DetailRow::Note("Sampled 12s ago".into()),
+        ]
+    );
+}
+
+#[test]
+fn claim_usage_note_when_not_bound() {
+    let mut pending = bound_claim();
+    pending.phase = "Pending".to_owned();
+    let rows = claim_usage_rows(
+        &pending,
+        None,
+        &FeedStatus::Live,
+        at("2026-01-01T00:00:00Z"),
+    );
+    assert_eq!(note_text(&rows), "No usage until the claim is bound");
+}
+
+#[test]
+fn claim_usage_note_without_samples() {
+    let now = at("2026-01-01T00:00:00Z");
+    let waiting = claim_usage_rows(&bound_claim(), None, &FeedStatus::Waiting, now);
+    assert!(note_text(&waiting).starts_with("No usage data yet"));
+    let off = claim_usage_rows(
+        &bound_claim(),
+        None,
+        &FeedStatus::Unavailable("Not permitted: get nodes/proxy".to_owned()),
+        now,
+    );
+    assert_eq!(
+        note_text(&off),
+        "Usage unavailable: Not permitted: get nodes/proxy"
+    );
+}
+
+#[test]
+fn block_claim_reads_no_usage() {
+    let mut block = bound_claim();
+    block.volume_mode = Some("Block".to_owned());
+    let rows = claim_usage_rows(
+        &block,
+        Some(&sample(1, 2)),
+        &FeedStatus::Live,
+        at("2026-01-01T00:00:00Z"),
+    );
+    assert_eq!(note_text(&rows), "Block volumes report no usage");
+}
+
+#[test]
+fn shared_filesystem_claim_is_labelled_node_filesystem() {
+    // The claim asks for 10Gi, but the kubelet reports a 100Gi filesystem: the node's disk.
+    let gi = 1024 * 1024 * 1024;
+    let rows = claim_usage_rows(
+        &bound_claim(),
+        Some(&sample(40 * gi, 100 * gi)),
+        &FeedStatus::Live,
+        at("2026-01-01T00:00:12Z"),
+    );
+    assert_eq!(
+        rows[0],
+        DetailRow::Bar {
+            label: "Node filesystem".into(),
+            percent: 40,
+            text: "40 of 100Gi".into(),
+            tone: None,
+        }
+    );
+    assert!(rows.contains(&DetailRow::Note(
+        "Shared with the node: the claim has no quota of its own".into()
+    )));
+}
+
+#[test]
+fn own_filesystem_claim_has_no_node_note() {
+    let rows = claim_usage_rows(
+        &bound_claim(),
+        Some(&sample(1, 10 * 1024 * 1024 * 1024)),
+        &FeedStatus::Live,
+        at("2026-01-01T00:00:12Z"),
+    );
+    assert!(matches!(&rows[0], DetailRow::Bar { label, .. } if label.as_ref() == "Used"));
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, DetailRow::Note(text) if text.contains("Shared")))
+    );
+}

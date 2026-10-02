@@ -16,6 +16,7 @@ use crate::cluster_runtime::WatchSubscription;
 use crate::cluster_session::error_text;
 use crate::kind_row::{PodOwner, owns_pod};
 use crate::kubelet_history::KubeletHistory;
+use crate::live_sections::claim_pods;
 use crate::node_usage::takes_room;
 
 /// At most this many Ready nodes are always polled for their summary; above it only the nodes
@@ -27,9 +28,17 @@ pub(crate) const DISK_IO_NODE_LIMIT: usize = 3;
 /// What the open drawer wants the kubelets for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum KubeletSubject {
-    Pod { namespace: String, name: String },
+    Pod {
+        namespace: String,
+        name: String,
+    },
     Node(String),
     Workload(PodOwner),
+    /// The pods that mount a PVC, for its Usage bars.
+    Claim {
+        namespace: String,
+        claim: String,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -236,6 +245,12 @@ pub(crate) fn subject_nodes(subject: &KubeletSubject, pods: &[PodSummary]) -> Ve
         }
         KubeletSubject::Workload(owner) => {
             count_nodes(&mut counts, pods.iter().filter(|pod| owns_pod(owner, pod)));
+        }
+        KubeletSubject::Claim { namespace, claim } => {
+            let mounting = claim_pods(namespace, claim, pods)
+                .into_iter()
+                .map(|(pod, _)| pod);
+            count_nodes(&mut counts, mounting);
         }
     }
     let mut shares: Vec<NodeShare> = counts

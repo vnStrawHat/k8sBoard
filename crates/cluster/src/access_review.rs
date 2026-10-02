@@ -41,6 +41,9 @@ pub enum AccessCheck {
     ListHorizontalPodAutoscalers,
     ListResourceQuotas,
     ListPodDisruptionBudgets,
+    ListPersistentVolumeClaims,
+    ListPersistentVolumes,
+    ListStorageClasses,
 }
 
 /// The API resource a check asks about.
@@ -54,7 +57,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 26] = [
+    pub const ALL: [AccessCheck; 29] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::CreatePodExec,
@@ -81,6 +84,9 @@ impl AccessCheck {
         Self::ListHorizontalPodAutoscalers,
         Self::ListResourceQuotas,
         Self::ListPodDisruptionBudgets,
+        Self::ListPersistentVolumeClaims,
+        Self::ListPersistentVolumes,
+        Self::ListStorageClasses,
     ];
 
     fn target(self) -> CheckTarget {
@@ -121,6 +127,9 @@ impl AccessCheck {
             Self::ListPodDisruptionBudgets => {
                 ("list", "policy", "poddisruptionbudgets", None, true)
             }
+            Self::ListPersistentVolumeClaims => ("list", "", "persistentvolumeclaims", None, true),
+            Self::ListPersistentVolumes => ("list", "", "persistentvolumes", None, false),
+            Self::ListStorageClasses => ("list", "storage.k8s.io", "storageclasses", None, false),
         };
         CheckTarget {
             verb,
@@ -357,9 +366,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 26);
+        assert_eq!(AccessCheck::ALL.len(), 29);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 26);
+        assert_eq!(distinct.len(), 29);
     }
 
     #[test]
@@ -572,6 +581,9 @@ mod tests {
                 "list horizontalpodautoscalers",
                 "list resourcequotas",
                 "list poddisruptionbudgets",
+                "list persistentvolumeclaims",
+                "list persistentvolumes",
+                "list storageclasses",
             ]
         );
     }
@@ -606,6 +618,37 @@ mod tests {
     }
 
     #[test]
+    fn storage_checks_use_their_api_groups_and_scope() {
+        let expected = [
+            (
+                AccessCheck::ListPersistentVolumeClaims,
+                "",
+                "persistentvolumeclaims",
+                Some("team-a"),
+            ),
+            (
+                AccessCheck::ListPersistentVolumes,
+                "",
+                "persistentvolumes",
+                None,
+            ),
+            (
+                AccessCheck::ListStorageClasses,
+                "storage.k8s.io",
+                "storageclasses",
+                None,
+            ),
+        ];
+        for (check, group, resource, namespace) in expected {
+            let attributes = resource_attributes(check, Some("team-a"));
+            assert_eq!(attributes.group.as_deref(), Some(group), "{check}");
+            assert_eq!(attributes.resource.as_deref(), Some(resource), "{check}");
+            assert_eq!(attributes.verb.as_deref(), Some("list"), "{check}");
+            assert_eq!(attributes.namespace.as_deref(), namespace, "{check}");
+        }
+    }
+
+    #[test]
     fn endpoint_slices_check_targets_discovery_group() {
         let attributes = resource_attributes(AccessCheck::ListEndpointSlices, Some("team-a"));
         assert_eq!(attributes.group.as_deref(), Some("discovery.k8s.io"));
@@ -625,7 +668,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 26);
+        assert_eq!(AccessCheck::ALL.len(), 29);
     }
 
     #[test]

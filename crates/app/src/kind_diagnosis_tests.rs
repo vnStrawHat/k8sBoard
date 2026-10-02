@@ -1,6 +1,6 @@
 use cluster::{
-    ContainerProbes, ContainerSummary, DaemonSetSummary, DeploymentSummary, JobStatus, JobSummary,
-    NodeScheduling, NodeStatus, NodeSystemInfo, ReadyCount, Termination,
+    ClaimRef, ContainerProbes, ContainerSummary, DaemonSetSummary, DeploymentSummary, JobStatus,
+    JobSummary, NodeScheduling, NodeStatus, NodeSystemInfo, ReadyCount, Termination, VolumeBackend,
 };
 
 use super::*;
@@ -1038,4 +1038,174 @@ fn quota_status_and_box_name_the_same_item() {
         "{}",
         diagnosis.text
     );
+}
+
+fn storage_inputs() -> DiagnosisInputs<'static> {
+    DiagnosisInputs {
+        pods: None,
+        nodes: &[],
+        service: None,
+        now: at(1_000),
+    }
+}
+
+fn claim(phase: &str) -> PersistentVolumeClaimSummary {
+    PersistentVolumeClaimSummary {
+        namespace: "shop".to_owned(),
+        name: "data".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        phase: phase.to_owned(),
+        is_terminating: false,
+        volume: Some("pv-1".to_owned()),
+        capacity: None,
+        requested: None,
+        access_modes: Vec::new(),
+        storage_class: None,
+        volume_mode: None,
+        conditions: Vec::new(),
+    }
+}
+
+fn volume(phase: &str, reclaim_policy: &str) -> PersistentVolumeSummary {
+    PersistentVolumeSummary {
+        name: "pv-1".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        capacity: None,
+        access_modes: Vec::new(),
+        reclaim_policy: reclaim_policy.to_owned(),
+        phase: phase.to_owned(),
+        is_terminating: false,
+        claim: Some(ClaimRef {
+            namespace: "shop".to_owned(),
+            name: "data".to_owned(),
+        }),
+        storage_class: None,
+        volume_mode: None,
+        backend: VolumeBackend::Other { kind: "unknown" },
+        node_affinity: Vec::new(),
+        mount_options: Vec::new(),
+        reason: None,
+        message: None,
+    }
+}
+
+#[test]
+fn pvc_volume_lost() {
+    let diagnosis = kind_diagnosis(
+        &KindObject::PersistentVolumeClaim(claim("Lost")),
+        &storage_inputs(),
+    )
+    .expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(diagnosis.title, "VOLUME LOST");
+    assert_eq!(
+        diagnosis.text,
+        "The bound volume pv-1 no longer exists. The data on it is gone or unreachable."
+    );
+}
+
+#[test]
+fn pvc_volume_lost_without_a_volume_name() {
+    let mut lost = claim("Lost");
+    lost.volume = None;
+    let diagnosis =
+        kind_diagnosis(&KindObject::PersistentVolumeClaim(lost), &storage_inputs()).expect("a box");
+    assert_eq!(
+        diagnosis.text,
+        "The bound volume no longer exists. The data on it is gone or unreachable."
+    );
+}
+
+#[test]
+fn bound_pvc_has_no_box() {
+    let bound = kind_diagnosis(
+        &KindObject::PersistentVolumeClaim(claim("Bound")),
+        &storage_inputs(),
+    );
+    assert_eq!(bound, None);
+}
+
+#[test]
+fn pv_released_retain() {
+    let diagnosis = kind_diagnosis(
+        &KindObject::PersistentVolume(volume("Released", "Retain")),
+        &storage_inputs(),
+    )
+    .expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(diagnosis.title, "RELEASED");
+    assert!(
+        diagnosis
+            .text
+            .starts_with("Claim shop/data was deleted. Reclaim policy Retain keeps")
+    );
+    assert!(
+        diagnosis.text.contains("clear claimRef"),
+        "{}",
+        diagnosis.text
+    );
+}
+
+#[test]
+fn pv_released_delete() {
+    let diagnosis = kind_diagnosis(
+        &KindObject::PersistentVolume(volume("Released", "Delete")),
+        &storage_inputs(),
+    )
+    .expect("a box");
+    assert_eq!(
+        diagnosis.text,
+        "Claim shop/data was deleted and reclaim policy is Delete, but the volume still exists. \
+         Check the Events tab for reclaim errors."
+    );
+}
+
+#[test]
+fn pv_reclaim_failed() {
+    let mut failed = volume("Failed", "Delete");
+    failed.reason = Some("VolumeFailedDelete".to_owned());
+    failed.message = Some("disk is in use".to_owned());
+    let diagnosis = kind_diagnosis(
+        &KindObject::PersistentVolume(failed.clone()),
+        &storage_inputs(),
+    )
+    .expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(diagnosis.title, "RECLAIM FAILED");
+    assert_eq!(diagnosis.text, "VolumeFailedDelete: disk is in use");
+}
+
+#[test]
+fn pv_reclaim_failed_with_reason_only() {
+    let mut failed = volume("Failed", "Delete");
+    failed.reason = Some("VolumeFailedDelete".to_owned());
+    let diagnosis =
+        kind_diagnosis(&KindObject::PersistentVolume(failed), &storage_inputs()).expect("a box");
+    assert_eq!(diagnosis.text, "VolumeFailedDelete");
+}
+
+#[test]
+fn pv_reclaim_failed_without_detail() {
+    let diagnosis = kind_diagnosis(
+        &KindObject::PersistentVolume(volume("Failed", "Delete")),
+        &storage_inputs(),
+    )
+    .expect("a box");
+    assert_eq!(
+        diagnosis.text,
+        "The volume could not be reclaimed. Check the Events tab."
+    );
+}
+
+#[test]
+fn bound_pv_has_no_box() {
+    for phase in ["Bound", "Available", "Pending"] {
+        let diagnosis = kind_diagnosis(
+            &KindObject::PersistentVolume(volume(phase, "Retain")),
+            &storage_inputs(),
+        );
+        assert_eq!(diagnosis, None, "{phase}");
+    }
 }

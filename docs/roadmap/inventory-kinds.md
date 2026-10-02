@@ -38,8 +38,8 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Config | HPAs | Done (0013) | Done (metric bars, scaling events, AT MAX box: 0013) | — | Edit min/max 0032 |
 | Config | ResourceQuotas | Done (0013) | Done (usage bars, blocked creations: 0013) | — | New, Edit 0031 |
 | Config | PDBs | Done (0013) | Done (allowed disruptions, BLOCKS DRAIN, selected pods: 0013) | — | New 0031 |
-| Storage | PVCs | Missing | Missing | 0014; Used % and inodes: data ready (0011), UI 0014; Go to pod 0014 | Expand 0032 |
-| Storage | PVs | Missing | Missing | 0014 (Released cleanup hint) | — |
+| Storage | PVCs | Done (0014) | Done (Used %, Usage bars, Mounted by, Go to pod: 0014) | — | Expand 0032 |
+| Storage | PVs | Done (0014) | Done (source, node affinity, RELEASED box, Go to claim: 0014) | — | — |
 | Storage | StorageClasses | Missing | Missing | 0014 (default ★, PV count) | Set default 0032 |
 | Access Control | ServiceAccounts | Missing | Missing | 0015 (bound roles, used by, cloud identity, can-do); Check permissions 0023 | — |
 | Access Control | Roles | Missing | Missing | 0015 (rules table, bindings); Who can… 0023 | — |

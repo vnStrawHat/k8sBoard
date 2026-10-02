@@ -383,7 +383,15 @@ impl TableDelegate for KindTableDelegate {
         let Some(live) = self.live(cx) else {
             return menu;
         };
-        kind_menu(menu, kind, &row, &live.access, &self.shell, open_url)
+        kind_menu(
+            menu,
+            kind,
+            &row,
+            &live.access,
+            live.pods.items(),
+            &self.shell,
+            open_url,
+        )
     }
 
     fn render_empty(

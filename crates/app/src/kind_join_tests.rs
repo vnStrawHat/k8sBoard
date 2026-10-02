@@ -94,6 +94,7 @@ fn joined(
     let inputs = JoinInputs {
         pods: &pods,
         companion: companion.as_ref(),
+        kubelet: None,
         scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::Services, &mut rows, &inputs);
@@ -141,6 +142,11 @@ fn joined_column_indices_name_their_columns() {
             .get(NETWORK_POLICY_AFFECTS)
             .map(|column| column.name),
         Some("Affects")
+    );
+    let claim_columns = ResourceKind::PersistentVolumeClaims.columns();
+    assert_eq!(
+        claim_columns.get(CLAIM_USED).map(|column| column.name),
+        Some("Used")
     );
 }
 
@@ -373,12 +379,14 @@ fn rejoin_starts_from_the_builder_status() {
     let with_slices = JoinInputs {
         pods: &pods,
         companion: Some(&companion),
+        kubelet: None,
         scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::Services, &mut rows, &with_slices);
     let without = JoinInputs {
         pods: &pods,
         companion: None,
+        kubelet: None,
         scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::Services, &mut rows, &without);
@@ -393,6 +401,7 @@ fn unloaded_pods_do_not_claim_no_match() {
     let inputs = JoinInputs {
         pods: &pods,
         companion: None,
+        kubelet: None,
         scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::Services, &mut rows, &inputs);
@@ -407,6 +416,7 @@ fn other_kinds_are_not_joined() {
     let inputs = JoinInputs {
         pods: &pods,
         companion: None,
+        kubelet: None,
         scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::Deployments, &mut rows, &inputs);
@@ -663,6 +673,7 @@ fn join_config_maps_of(pods: &LiveList<PodSummary>, rows: &mut [KindRow]) {
     let inputs = JoinInputs {
         pods,
         companion: None,
+        kubelet: None,
         scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::ConfigMaps, rows, &inputs);
@@ -761,6 +772,7 @@ fn join_namespaces_of(scope: &NamespaceScope, pods: &LiveList<PodSummary>, rows:
     let inputs = JoinInputs {
         pods,
         companion: None,
+        kubelet: None,
         scope,
     };
     join_rows(ResourceKind::Namespaces, rows, &inputs);
@@ -867,6 +879,7 @@ fn joined_policy(policy: &cluster::NetworkPolicySummary, pods: &LiveList<PodSumm
     let inputs = JoinInputs {
         pods,
         companion: None,
+        kubelet: None,
         scope: &NamespaceScope::All,
     };
     join_rows(ResourceKind::NetworkPolicies, &mut rows, &inputs);
@@ -932,4 +945,199 @@ fn network_policy_without_pods_keeps_builder_status() {
     let row = joined_policy(&network_policy(&["app=web"]), &LiveList::Loading);
     assert_eq!(row.status, toned("Ingress", StatusTone::Ok));
     assert_eq!(affects_cell(&row), &KindCell::Absent);
+}
+
+// ---- PersistentVolumeClaims ----
+
+fn claim(phase: &str) -> cluster::PersistentVolumeClaimSummary {
+    cluster::PersistentVolumeClaimSummary {
+        namespace: "shop".to_owned(),
+        name: "data".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        phase: phase.to_owned(),
+        is_terminating: false,
+        volume: Some("pv-1".to_owned()),
+        capacity: Some("100".to_owned()),
+        requested: None,
+        access_modes: Vec::new(),
+        storage_class: None,
+        volume_mode: None,
+        conditions: Vec::new(),
+    }
+}
+
+fn history_with_usage(used: Option<u64>, capacity: Option<u64>) -> KubeletHistory {
+    let usage = PvcUsage {
+        namespace: "shop".to_owned(),
+        claim: "data".to_owned(),
+        sampled_at: None,
+        used: used.map(ByteAmount::from_bytes),
+        capacity: capacity.map(ByteAmount::from_bytes),
+        available: None,
+        inodes_used: None,
+        inodes: None,
+    };
+    let round = vec![cluster::NodeKubeletStats {
+        node: "node-a".to_owned(),
+        summary: Ok(cluster::KubeletSummary {
+            network: None,
+            pods: vec![cluster::PodKubeletStats {
+                namespace: "shop".to_owned(),
+                name: "web-1".to_owned(),
+                uid: "web-1".to_owned(),
+                network: None,
+                volumes: vec![usage],
+            }],
+        }),
+        disk_io: None,
+    }];
+    let mut history = KubeletHistory::default();
+    history.record(
+        jiff::Timestamp::from_second(15).expect("valid timestamp"),
+        &round,
+        &[],
+        &NamespaceScope::All,
+    );
+    history
+}
+
+fn joined_claim(phase: &str, history: Option<&KubeletHistory>) -> KindRow {
+    let mut rows = vec![crate::storage_rows::persistent_volume_claim_row(&claim(
+        phase,
+    ))];
+    let pods = LiveList::Loading;
+    let inputs = JoinInputs {
+        pods: &pods,
+        companion: None,
+        kubelet: history,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(ResourceKind::PersistentVolumeClaims, &mut rows, &inputs);
+    rows.remove(0)
+}
+
+fn used_cell(row: &KindRow) -> &KindCell {
+    row.cells.get(CLAIM_USED).expect("Used cell exists")
+}
+
+#[test]
+fn claim_used_percent_and_tone() {
+    let warn = joined_claim("Bound", Some(&history_with_usage(Some(83), Some(100))));
+    assert_eq!(
+        used_cell(&warn),
+        &KindCell::Quantity {
+            text: "83%".into(),
+            value: 830,
+            tone: Some(StatusTone::Warn),
+        }
+    );
+}
+
+#[test]
+fn claim_used_is_bad_from_ninety_percent() {
+    let bad = joined_claim("Bound", Some(&history_with_usage(Some(95), Some(100))));
+    assert_eq!(
+        used_cell(&bad),
+        &KindCell::Quantity {
+            text: "95%".into(),
+            value: 950,
+            tone: Some(StatusTone::Bad),
+        }
+    );
+}
+
+#[test]
+fn claim_used_below_warn_has_no_tone() {
+    let low = joined_claim("Bound", Some(&history_with_usage(Some(10), Some(100))));
+    assert_eq!(
+        used_cell(&low),
+        &KindCell::Quantity {
+            text: "10%".into(),
+            value: 100,
+            tone: None,
+        }
+    );
+    assert_eq!(low.status, toned("Bound", StatusTone::Ok));
+}
+
+#[test]
+fn shared_filesystem_claim_is_absent() {
+    // The claim asks for 100 bytes, but the kubelet reports a 1000-byte filesystem: the
+    // node's disk, which would read as a full claim.
+    let history = history_with_usage(Some(950), Some(1000));
+    let row = joined_claim("Bound", Some(&history));
+    assert_eq!(used_cell(&row), &KindCell::Absent);
+    assert_eq!(row.status, toned("Bound", StatusTone::Ok));
+}
+
+#[test]
+fn shared_filesystem_needs_a_larger_reported_capacity() {
+    let usage = |capacity| {
+        history_with_usage(Some(1), Some(capacity))
+            .pvc_usage("shop", "data")
+            .cloned()
+            .expect("sample")
+    };
+    assert!(is_shared_filesystem(&usage(1000), Some("100")));
+    assert!(!is_shared_filesystem(&usage(100), Some("100")));
+    assert!(!is_shared_filesystem(&usage(50), Some("100")));
+    // Without a readable claim capacity there is nothing to compare.
+    assert!(!is_shared_filesystem(&usage(1000), None));
+    assert!(!is_shared_filesystem(&usage(1000), Some("lots")));
+}
+
+#[test]
+fn claim_without_stats_is_absent() {
+    let without_feed = joined_claim("Bound", None);
+    assert_eq!(used_cell(&without_feed), &KindCell::Absent);
+    let empty = KubeletHistory::default();
+    assert_eq!(
+        used_cell(&joined_claim("Bound", Some(&empty))),
+        &KindCell::Absent
+    );
+    let no_used = history_with_usage(None, Some(100));
+    assert_eq!(
+        used_cell(&joined_claim("Bound", Some(&no_used))),
+        &KindCell::Absent
+    );
+}
+
+#[test]
+fn zero_capacity_is_absent() {
+    let history = history_with_usage(Some(0), Some(0));
+    assert_eq!(
+        used_cell(&joined_claim("Bound", Some(&history))),
+        &KindCell::Absent
+    );
+}
+
+#[test]
+fn full_claim_raises_status() {
+    let history = history_with_usage(Some(95), Some(100));
+    let row = joined_claim("Bound", Some(&history));
+    assert_eq!(row.status, toned("95% used", StatusTone::Bad));
+    // A claim that is not Bound keeps its phase.
+    let pending = joined_claim("Pending", Some(&history));
+    assert_eq!(pending.status, toned("Pending", StatusTone::Warn));
+}
+
+#[test]
+fn rejoin_without_stats_restores_the_builder_status() {
+    let full = history_with_usage(Some(95), Some(100));
+    let mut rows = vec![crate::storage_rows::persistent_volume_claim_row(&claim(
+        "Bound",
+    ))];
+    let pods = LiveList::Loading;
+    for history in [Some(&full), None] {
+        let inputs = JoinInputs {
+            pods: &pods,
+            companion: None,
+            kubelet: history,
+            scope: &NamespaceScope::All,
+        };
+        join_rows(ResourceKind::PersistentVolumeClaims, &mut rows, &inputs);
+    }
+    assert_eq!(rows[0].status, toned("Bound", StatusTone::Ok));
+    assert_eq!(used_cell(&rows[0]), &KindCell::Absent);
 }

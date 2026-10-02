@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::*;
 
-const ALL_KINDS: [ObjectKind; 17] = [
+const ALL_KINDS: [ObjectKind; 20] = [
     ObjectKind::Pod,
     ObjectKind::Node,
     ObjectKind::Namespace,
@@ -20,6 +20,9 @@ const ALL_KINDS: [ObjectKind; 17] = [
     ObjectKind::HorizontalPodAutoscaler,
     ObjectKind::ResourceQuota,
     ObjectKind::PodDisruptionBudget,
+    ObjectKind::PersistentVolumeClaim,
+    ObjectKind::PersistentVolume,
+    ObjectKind::StorageClass,
 ];
 
 fn masked(object: Value, env: EnvValues) -> ObjectYaml {
@@ -70,6 +73,13 @@ fn object_kind_names_and_scopes() {
         ),
         (ObjectKind::ResourceQuota, "ResourceQuota", true),
         (ObjectKind::PodDisruptionBudget, "PodDisruptionBudget", true),
+        (
+            ObjectKind::PersistentVolumeClaim,
+            "PersistentVolumeClaim",
+            true,
+        ),
+        (ObjectKind::PersistentVolume, "PersistentVolume", false),
+        (ObjectKind::StorageClass, "StorageClass", false),
     ];
     assert_eq!(table.len(), ALL_KINDS.len());
     for (kind, name, is_namespaced) in table {
@@ -112,6 +122,19 @@ fn api_resources_match_kinds() {
             "policy",
             "v1",
             "poddisruptionbudgets",
+        ),
+        (
+            ObjectKind::PersistentVolumeClaim,
+            "",
+            "v1",
+            "persistentvolumeclaims",
+        ),
+        (ObjectKind::PersistentVolume, "", "v1", "persistentvolumes"),
+        (
+            ObjectKind::StorageClass,
+            "storage.k8s.io",
+            "v1",
+            "storageclasses",
         ),
     ];
     assert_eq!(table.len(), ALL_KINDS.len());
@@ -383,11 +406,54 @@ fn no_header_without_hidden_values() {
 
 #[test]
 fn policy_kinds_have_names_and_scope() {
-    for kind in &ALL_KINDS[13..] {
+    for kind in &ALL_KINDS[13..17] {
         assert!(kind.is_namespaced(), "{}", kind.name());
     }
     assert_eq!(
         ObjectKind::PodDisruptionBudget.name(),
         "PodDisruptionBudget"
     );
+}
+
+#[test]
+fn storage_kinds_have_names_and_scope() {
+    assert!(ObjectKind::PersistentVolumeClaim.is_namespaced());
+    assert!(!ObjectKind::PersistentVolume.is_namespaced());
+    assert!(!ObjectKind::StorageClass.is_namespaced());
+    assert!(ObjectRef::new(ObjectKind::PersistentVolume, None, "pv".to_owned()).is_some());
+    assert!(
+        ObjectRef::new(
+            ObjectKind::StorageClass,
+            Some("shop".to_owned()),
+            "fast".to_owned()
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn storage_class_parameters_are_masked_in_yaml() {
+    let text = masked_text(json!({
+        "kind": "StorageClass",
+        "metadata": {"name": "gluster"},
+        "parameters": {
+            "restuserkey": "distinctive-key",
+            "type": "gp3",
+            "csi.storage.k8s.io/provisioner-secret-name": "creds",
+        },
+    }));
+    assert!(
+        text.starts_with("# k8sBoard hid 1 value as <hidden>.\n"),
+        "{text}"
+    );
+    assert!(!text.contains("distinctive-key"));
+    assert!(text.contains("restuserkey: <hidden>"));
+    assert!(text.contains("type: gp3"));
+    assert!(text.contains("provisioner-secret-name: creds"));
+}
+
+#[test]
+fn only_storage_classes_have_parameters_masked() {
+    let text = masked_text(json!({"kind": "Pod", "parameters": {"password": "visible"}}));
+    assert!(text.contains("password: visible"));
 }

@@ -600,3 +600,25 @@ fn denied_quota_subject_does_not_start() {
         None
     );
 }
+
+#[test]
+fn kubelet_round_rejoins_pvc_rows() {
+    for kind in ResourceKind::ALL {
+        assert_eq!(
+            rejoins_after_kubelet_round(kind),
+            kind == ResourceKind::PersistentVolumeClaims,
+            "{}",
+            kind.label()
+        );
+    }
+}
+
+#[test]
+fn scope_change_keeps_cluster_scoped_explorer() {
+    assert!(!restarts_on_scope_change(ResourceKind::Namespaces));
+    assert!(!restarts_on_scope_change(ResourceKind::PersistentVolumes));
+    assert!(restarts_on_scope_change(
+        ResourceKind::PersistentVolumeClaims
+    ));
+    assert!(restarts_on_scope_change(ResourceKind::Deployments));
+}

@@ -48,5 +48,5 @@ Filesystem usage charts for containers, `rootfs`/`logs` stats, node ephemeral-st
 ## Open items
 
 1. If the UAT probe shows cAdvisor bodies above ~5 MB per node, propose the kube `gzip` feature (adds decompression crates; needs user approval per C6).
-2. 0014 decides how the PVC view demands all nodes (likely a slower cadence); 0011 only exposes `pvc_usage`.
+2. 0014 decision 9: drawer demand only. The PVC table adds no demand; on clusters of at most 10 Ready nodes every node is polled anyway, and above that the Used column fills for claims on polled nodes only.
 3. Node-level disk I/O depends on cAdvisor's root (`id="/"`) series, which cgroup v2 hosts may omit; the probe records it.

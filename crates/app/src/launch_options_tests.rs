@@ -322,3 +322,12 @@ fn select_flag_is_parsed() {
         Err("missing value for --select".to_owned())
     );
 }
+
+#[test]
+fn pvc_screens_wait_for_kubelet_stats() {
+    let pvcs = ResourceKind::PersistentVolumeClaims;
+    assert!(LaunchScreen::Kind(pvcs).shows_kubelet_stats());
+    assert!(LaunchScreen::KindDrawer(pvcs, DrawerTab::Overview).shows_kubelet_stats());
+    assert!(!LaunchScreen::KindDrawer(pvcs, DrawerTab::Yaml).shows_kubelet_stats());
+    assert!(!LaunchScreen::Kind(ResourceKind::Deployments).shows_kubelet_stats());
+}

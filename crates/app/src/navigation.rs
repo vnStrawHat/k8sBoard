@@ -279,6 +279,8 @@ mod tests {
                 "HPAs",
                 "ResourceQuotas",
                 "PDBs",
+                "PVCs",
+                "PVs",
             ]
         );
     }

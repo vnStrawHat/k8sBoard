@@ -6,15 +6,20 @@
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
-use k8s_openapi::api::core::v1::{ConfigMap, Event, Namespace, Node, Pod, ResourceQuota, Service};
+use k8s_openapi::api::core::v1::{
+    ConfigMap, Event, Namespace, Node, PersistentVolume, PersistentVolumeClaim, Pod, ResourceQuota,
+    Service,
+};
 use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
+use k8s_openapi::api::storage::v1::StorageClass;
 use kube::Api;
 use kube::api::{ApiResource, DynamicObject};
 use serde_json::Value;
 use serde_saphyr::SerializerOptions;
 
 use crate::connection::{ClusterConnection, ClusterError};
+use crate::storage_class::is_secret_parameter;
 
 const ACTION: &str = "reading the object YAML";
 /// Fixed on purpose: the library error could quote the object's content.
@@ -49,6 +54,9 @@ pub enum ObjectKind {
     HorizontalPodAutoscaler,
     ResourceQuota,
     PodDisruptionBudget,
+    PersistentVolumeClaim,
+    PersistentVolume,
+    StorageClass,
 }
 
 impl ObjectKind {
@@ -72,11 +80,17 @@ impl ObjectKind {
             Self::HorizontalPodAutoscaler => "HorizontalPodAutoscaler",
             Self::ResourceQuota => "ResourceQuota",
             Self::PodDisruptionBudget => "PodDisruptionBudget",
+            Self::PersistentVolumeClaim => "PersistentVolumeClaim",
+            Self::PersistentVolume => "PersistentVolume",
+            Self::StorageClass => "StorageClass",
         }
     }
 
     pub fn is_namespaced(self) -> bool {
-        !matches!(self, Self::Node | Self::Namespace)
+        !matches!(
+            self,
+            Self::Node | Self::Namespace | Self::PersistentVolume | Self::StorageClass
+        )
     }
 }
 
@@ -157,6 +171,9 @@ fn api_resource(kind: ObjectKind) -> ApiResource {
         ObjectKind::HorizontalPodAutoscaler => ApiResource::erase::<HorizontalPodAutoscaler>(&()),
         ObjectKind::ResourceQuota => ApiResource::erase::<ResourceQuota>(&()),
         ObjectKind::PodDisruptionBudget => ApiResource::erase::<PodDisruptionBudget>(&()),
+        ObjectKind::PersistentVolumeClaim => ApiResource::erase::<PersistentVolumeClaim>(&()),
+        ObjectKind::PersistentVolume => ApiResource::erase::<PersistentVolume>(&()),
+        ObjectKind::StorageClass => ApiResource::erase::<StorageClass>(&()),
     }
 }
 
@@ -165,7 +182,9 @@ fn to_masked_yaml(mut object: Value, env: EnvValues) -> Result<ObjectYaml, &'sta
     if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
         metadata.remove("managedFields");
     }
-    let mut hidden = mask_manifest_annotations(&mut object, false) + mask_secret_data(&mut object);
+    let mut hidden = mask_manifest_annotations(&mut object, false)
+        + mask_secret_data(&mut object)
+        + mask_storage_class_parameters(&mut object);
     let mut hidden_env_values = 0;
     if env == EnvValues::Hidden
         && let Some(spec) = object.get_mut("spec")
@@ -221,6 +240,24 @@ fn hide_annotations(annotations: &mut Value) -> usize {
     for key in MASKED_ANNOTATIONS {
         if let Some(annotation) = map.get_mut(key) {
             *annotation = Value::from(HIDDEN);
+            hidden += 1;
+        }
+    }
+    hidden
+}
+
+/// Hides the values of a StorageClass's secret-like `parameters`, keyed on the response's `kind`.
+fn mask_storage_class_parameters(object: &mut Value) -> usize {
+    if object.get("kind").and_then(Value::as_str) != Some("StorageClass") {
+        return 0;
+    }
+    let Some(parameters) = object.get_mut("parameters").and_then(Value::as_object_mut) else {
+        return 0;
+    };
+    let mut hidden = 0;
+    for (key, value) in parameters {
+        if is_secret_parameter(key) {
+            *value = Value::from(HIDDEN);
             hidden += 1;
         }
     }

@@ -7,18 +7,20 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use cluster::{
     ByteAmount, CpuAmount, EndpointPort, EndpointSliceSummary, EndpointSummary, EnvFromSource,
-    EnvSource, NamespaceScope, PodSummary, Selector, ServiceSummary, VolumeSource,
+    EnvSource, NamespaceScope, PodSummary, PvcUsage, Selector, ServiceSummary, VolumeSource,
 };
 
 use crate::cluster_session::{CompanionLists, LiveList};
 use crate::kind_row::{KindCell, KindObject, KindRow, deployment_of_replica_set};
+use crate::kubelet_history::KubeletHistory;
 use crate::network_policy_rows::network_policy_status;
 use crate::network_rows::{is_address_pending, service_status};
 use crate::node_usage::{requests_of, takes_room};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusLabel, StatusTone};
+use crate::storage_rows::claim_status;
 use crate::table_selection::ResourceKey;
-use crate::usage_format::Measure;
+use crate::usage_format::{Measure, format_percent, usage_tone};
 
 /// The index of the Endpoints cell in a Services row (the Name column is not a cell).
 pub(crate) const SERVICE_ENDPOINTS: usize = 4;
@@ -30,6 +32,8 @@ pub(crate) const NAMESPACE_CPU: usize = 2;
 pub(crate) const NAMESPACE_MEMORY: usize = 3;
 /// The index of the Affects cell in a NetworkPolicies row.
 pub(crate) const NETWORK_POLICY_AFFECTS: usize = 2;
+/// The index of the Used cell in a PVCs row.
+pub(crate) const CLAIM_USED: usize = 2;
 
 const EXTERNAL_NAME: &str = "ExternalName";
 /// Slices of this address type name hosts, not pods; counting them would double a dual-stack
@@ -41,6 +45,8 @@ pub(crate) struct JoinInputs<'a> {
     pub(crate) pods: &'a LiveList<PodSummary>,
     /// EndpointSlices for the Services screen.
     pub(crate) companion: Option<&'a CompanionLists>,
+    /// The kubelet history for the PVCs screen; `None` without a metrics feed.
+    pub(crate) kubelet: Option<&'a KubeletHistory>,
     /// The pods list covers only this scope, so a Namespaces row outside it has no pod numbers.
     pub(crate) scope: &'a NamespaceScope,
 }
@@ -52,6 +58,7 @@ pub(crate) fn join_rows(kind: ResourceKind, rows: &mut [KindRow], inputs: &JoinI
         ResourceKind::ConfigMaps => join_config_maps(rows, inputs),
         ResourceKind::Namespaces => join_namespaces(rows, inputs),
         ResourceKind::NetworkPolicies => join_network_policies(rows, inputs),
+        ResourceKind::PersistentVolumeClaims => join_claims(rows, inputs),
         _ => {}
     }
 }
@@ -635,6 +642,78 @@ fn affects_state(count: usize) -> (StatusLabel, KindCell) {
         tone: None,
     };
     (status, cell)
+}
+
+// ---- PersistentVolumeClaims ----
+
+/// The used and capacity bytes of a kubelet sample and their ratio.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct UsageSample {
+    pub(crate) used: ByteAmount,
+    pub(crate) capacity: ByteAmount,
+    pub(crate) ratio: f64,
+}
+
+/// `None` without both numbers or with a zero capacity.
+pub(crate) fn claim_sample(usage: &PvcUsage) -> Option<UsageSample> {
+    let (used, capacity) = (usage.used?, usage.capacity?);
+    if capacity.bytes() == 0 {
+        return None;
+    }
+    Some(UsageSample {
+        used,
+        capacity,
+        ratio: used.bytes() as f64 / capacity.bytes() as f64,
+    })
+}
+
+/// Whether the kubelet reports a filesystem larger than the claim. A hostPath or local volume
+/// shares the node's disk, so the kubelet numbers describe the node, not the claim: a real
+/// volume reports at most its own size.
+pub(crate) fn is_shared_filesystem(usage: &PvcUsage, claim_capacity: Option<&str>) -> bool {
+    let (Some(reported), Some(claimed)) =
+        (usage.capacity, claim_capacity.and_then(ByteAmount::parse))
+    else {
+        return false;
+    };
+    reported > claimed
+}
+
+fn join_claims(rows: &mut [KindRow], inputs: &JoinInputs) {
+    for row in rows {
+        let KindObject::PersistentVolumeClaim(claim) = &row.object else {
+            continue;
+        };
+        // Each pass starts from the builder's status, so a claim that emptied again recovers it.
+        let mut status = claim_status(claim);
+        let usage = inputs
+            .kubelet
+            .and_then(|history| history.pvc_usage(&claim.namespace, &claim.name))
+            .filter(|usage| !is_shared_filesystem(usage, claim.capacity.as_deref()));
+        let cell = match usage.and_then(claim_sample) {
+            None => KindCell::Absent,
+            Some(UsageSample { ratio, .. }) => {
+                let tone = usage_tone(ratio);
+                let is_idle = claim.phase == "Bound" && status.tone == StatusTone::Ok;
+                if let (true, Some(tone)) = (is_idle, tone) {
+                    status = StatusLabel {
+                        text: format!("{} used", format_percent(ratio)).into(),
+                        tone,
+                    };
+                }
+                KindCell::Quantity {
+                    text: format_percent(ratio).into(),
+                    // Permille keeps 83.4 % apart from 83.0 % when sorting.
+                    value: (ratio * 1000.0).round() as u64,
+                    tone,
+                }
+            }
+        };
+        row.status = status;
+        if let Some(slot) = row.cells.get_mut(CLAIM_USED) {
+            *slot = cell;
+        }
+    }
 }
 
 #[cfg(test)]

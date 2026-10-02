@@ -117,6 +117,18 @@ impl FeedProgress {
     }
 }
 
+/// The kubelet feed's progress. With no node to poll (a large cluster without demand) no round
+/// ever comes, so the feed counts as settled.
+#[cfg(any(feature = "screenshot", test))]
+pub(crate) fn kubelet_progress(status: FeedStatus, ticks: u64, has_targets: bool) -> FeedProgress {
+    let status = if has_targets {
+        status
+    } else {
+        FeedStatus::Unavailable("no nodes to poll".to_owned())
+    };
+    FeedProgress { status, ticks }
+}
+
 /// A drawer screen is ready when its row is selected (or no row was found to select) and its
 /// events and YAML are no longer pending.
 #[cfg(any(feature = "screenshot", test))]
@@ -455,6 +467,14 @@ mod tests {
             ..feeds(0, 0)
         };
         assert!(is_screen_settled(pod, &denied));
+    }
+
+    #[test]
+    fn feed_without_targets_is_settled() {
+        let waiting = kubelet_progress(FeedStatus::Waiting, 0, false);
+        assert!(waiting.is_settled(4));
+        let with_targets = kubelet_progress(FeedStatus::Waiting, 0, true);
+        assert!(!with_targets.is_settled(4));
     }
 
     #[test]

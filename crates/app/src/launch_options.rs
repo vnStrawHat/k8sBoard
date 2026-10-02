@@ -115,11 +115,16 @@ impl LaunchScreen {
         )
     }
 
-    /// Whether the screen shows Network and Disk I/O, so a screenshot waits for kubelet rounds: the
+    /// Whether the screen shows Network and Disk I/O (or PVC usage), so a screenshot waits for kubelet rounds: the
     /// Monitor tabs. A feed that is unavailable settles at once.
     #[cfg(any(feature = "screenshot", test))]
     pub(crate) fn shows_kubelet_stats(self) -> bool {
-        self.drawer_tab() == Some(DrawerTab::Monitor)
+        match self {
+            // The Used column and the Usage bars of PVCs read the same feed.
+            Self::Kind(ResourceKind::PersistentVolumeClaims)
+            | Self::KindDrawer(ResourceKind::PersistentVolumeClaims, DrawerTab::Overview) => true,
+            _ => self.drawer_tab() == Some(DrawerTab::Monitor),
+        }
     }
 
     /// Whether the screen shows node usage.

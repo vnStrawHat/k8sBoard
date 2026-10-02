@@ -394,3 +394,115 @@ fn go_to_target_disabled_without_screen() {
         "No screen for Rollout"
     );
 }
+
+fn claim_row() -> KindRow {
+    crate::storage_rows::persistent_volume_claim_row(&cluster::PersistentVolumeClaimSummary {
+        namespace: "shop".to_owned(),
+        name: "data".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        phase: "Bound".to_owned(),
+        is_terminating: false,
+        volume: Some("pv-1".to_owned()),
+        capacity: None,
+        requested: None,
+        access_modes: Vec::new(),
+        storage_class: None,
+        volume_mode: None,
+        conditions: Vec::new(),
+    })
+}
+
+fn pod_mounting_claim(namespace: &str, name: &str, claim: &str) -> PodSummary {
+    let mut pod = pod_on(Some("wk-01"));
+    pod.namespace = namespace.to_owned();
+    pod.name = name.to_owned();
+    pod.containers.push(cluster::ContainerSummary {
+        name: "main".to_owned(),
+        image: "img".to_owned(),
+        kind: cluster::ContainerKind::Main,
+        state: cluster::ContainerState::Running { started_at: None },
+        is_ready: true,
+        restart_count: 0,
+        last_termination: None,
+        image_digest: None,
+        pull_policy: None,
+        is_started: None,
+        ports: Vec::new(),
+        resources: Vec::new(),
+        probes: cluster::ContainerProbes::default(),
+        env: Vec::new(),
+        env_from: Vec::new(),
+        mounts: vec![cluster::MountEntry {
+            path: "/data".to_owned(),
+            volume: "data".to_owned(),
+            source: cluster::VolumeSource::PersistentVolumeClaim {
+                claim: claim.to_owned(),
+            },
+            is_read_only: false,
+            sub_path: None,
+        }],
+    });
+    pod
+}
+
+#[test]
+fn pvc_menu_go_to_first_mounting_pod() {
+    let pods = [
+        pod_mounting_claim("shop", "web-2", "data"),
+        pod_mounting_claim("shop", "web-1", "data"),
+    ];
+    assert_eq!(
+        claim_pod_target(&claim_row(), &pods),
+        Some(ResourceKey::Pod {
+            namespace: "shop".to_owned(),
+            name: "web-1".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn pvc_go_to_pod_disabled_when_unmounted() {
+    let pods = [
+        pod_mounting_claim("shop", "web-1", "other"),
+        pod_mounting_claim("elsewhere", "web-2", "data"),
+    ];
+    assert_eq!(claim_pod_target(&claim_row(), &pods), None);
+    assert_eq!(claim_pod_target(&claim_row(), &[]), None);
+}
+
+#[test]
+fn pv_menu_go_to_claim() {
+    let volume = |claim: Option<(&str, &str)>| {
+        crate::storage_rows::persistent_volume_row(&cluster::PersistentVolumeSummary {
+            name: "pv-1".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            capacity: None,
+            access_modes: Vec::new(),
+            reclaim_policy: "Delete".to_owned(),
+            phase: "Bound".to_owned(),
+            is_terminating: false,
+            claim: claim.map(|(namespace, name)| cluster::ClaimRef {
+                namespace: namespace.to_owned(),
+                name: name.to_owned(),
+            }),
+            storage_class: None,
+            volume_mode: None,
+            backend: cluster::VolumeBackend::Other { kind: "unknown" },
+            node_affinity: Vec::new(),
+            mount_options: Vec::new(),
+            reason: None,
+            message: None,
+        })
+    };
+    assert_eq!(
+        volume_claim_target(&volume(Some(("shop", "data")))),
+        Some(ResourceKey::Kind {
+            kind: ResourceKind::PersistentVolumeClaims,
+            namespace: Some("shop".to_owned()),
+            name: "data".to_owned(),
+        })
+    );
+    assert_eq!(volume_claim_target(&volume(None)), None);
+}

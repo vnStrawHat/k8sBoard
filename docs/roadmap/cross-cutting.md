@@ -49,6 +49,7 @@
 | `get nodes/proxy` | allowed | verified by the 0011 probe (summary 39 to 175 KB per node, cAdvisor about 0.9 MB); node logs 0019 |
 | `list secrets` | allowed | real Secret values reachable: C1 must land before 0016/0017; Helm data readable if releases exist |
 | `create pods/exec`, `create pods/portforward` | denied | 0035–0037 render disabled; live checks need another cluster |
+| PVCs, PVs, StorageClasses | allowed (0014 probe: 29 PVCs, 57 PVs, 2 StorageClasses) | 0014 verifiable |
 | NetworkPolicies, HPAs, quotas, PDBs | allowed (0013 probe: 8 policies, 1 HPA, 0 quotas, 7 PDBs) | 0013 verifiable; quotas only by unit tests and the empty state |
 | storage, RBAC kinds, EndpointSlices, CRDs | EndpointSlices allowed (0012); the rest not probed yet | each spec adds `AccessCheck` variants and records results first |
 | Objects that may not exist on UAT (HPAs, PDBs, cert-manager, Helm releases, CRDs) | unknown | specs need fixture-based unit tests and empty-state screenshots |

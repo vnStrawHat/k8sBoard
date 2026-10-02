@@ -8,6 +8,7 @@ use gpui_kit::{
 use crate::app_shell::AppShell;
 use crate::cluster_session::{AccessState, LiveCluster};
 use crate::kind_row::{EventDetail, KindObject, KindRow};
+use crate::live_sections::claim_pods;
 use crate::log_dock::LogDock;
 use crate::log_tab::LogTarget;
 use crate::network_rows::ingress_urls;
@@ -222,6 +223,7 @@ pub(crate) fn kind_menu(
     kind: ResourceKind,
     row: &KindRow,
     access: &AccessState,
+    pods: &[PodSummary],
     shell: &WeakEntity<AppShell>,
     open_url: Option<PopupMenuItem>,
 ) -> PopupMenu {
@@ -242,6 +244,13 @@ pub(crate) fn kind_menu(
     }
     if has_go_to_owner(kind) {
         menu = menu.item(go_to_owner_item(row, shell));
+    }
+    match kind {
+        ResourceKind::PersistentVolumeClaims => {
+            menu = menu.item(go_to_pod_item(row, pods, shell));
+        }
+        ResourceKind::PersistentVolumes => menu = menu.item(go_to_claim_item(row, shell)),
+        _ => {}
     }
     if kind.has_port_forward() {
         menu = menu.item(action_item(
@@ -385,6 +394,48 @@ fn go_to_target_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuIt
         "Go to target",
         scale_target(row),
         no_target_screen_reason(row),
+        shell,
+    )
+}
+
+/// The first pod, by name, that mounts the claim of a PVCs row.
+fn claim_pod_target(row: &KindRow, pods: &[PodSummary]) -> Option<ResourceKey> {
+    let KindObject::PersistentVolumeClaim(claim) = &row.object else {
+        return None;
+    };
+    let (pod, _) = claim_pods(&claim.namespace, &claim.name, pods)
+        .into_iter()
+        .next()?;
+    Some(ResourceKey::of_pod(pod))
+}
+
+fn go_to_pod_item(
+    row: &KindRow,
+    pods: &[PodSummary],
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    go_to_item(
+        "Go to pod",
+        claim_pod_target(row, pods),
+        "Not mounted by any pod".into(),
+        shell,
+    )
+}
+
+/// The claim a PVs row is bound to.
+fn volume_claim_target(row: &KindRow) -> Option<ResourceKey> {
+    let KindObject::PersistentVolume(volume) = &row.object else {
+        return None;
+    };
+    let claim = volume.claim.as_ref()?;
+    ResourceKey::of_object("PersistentVolumeClaim", Some(&claim.namespace), &claim.name)
+}
+
+fn go_to_claim_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    go_to_item(
+        "Go to claim",
+        volume_claim_target(row),
+        "No claim".into(),
         shell,
     )
 }

@@ -768,12 +768,11 @@ impl ClusterSession {
         // Before the explorer restarts, so a companion plan never reads the report of the old
         // scope.
         live.access = review_access_again(&runtime, &live.connection, scope.clone(), cx);
-        // Namespaces are cluster-scoped, so their watch does not depend on the scope.
         if let Some(kind) = live
             .explorer
             .as_ref()
             .map(|explorer| explorer.kind)
-            .filter(|kind| kind.is_namespaced())
+            .filter(|kind| restarts_on_scope_change(*kind))
         {
             live.explorer = None;
             live.explorer = Some(KindList::start(
@@ -1155,6 +1154,7 @@ impl LiveCluster {
                 .companion
                 .as_ref()
                 .map(|companion| &companion.lists),
+            kubelet: Some(&self.metrics.kubelet.history),
             scope: &self.scope,
         };
         join_rows(explorer.kind, explorer.list.items_mut(), &inputs);
@@ -1393,6 +1393,17 @@ fn open_watch_count(watches: OpenWatches) -> usize {
         + watches.companion
         + usize::from(watches.object_events)
         + usize::from(watches.related)
+}
+
+/// A cluster-scoped explorer (Namespaces, PVs) does not depend on the scope, so a scope change
+/// leaves its watch running.
+fn restarts_on_scope_change(kind: ResourceKind) -> bool {
+    kind.is_namespaced()
+}
+
+/// PVC rows carry the Used cell of the kubelet history, which changes every round.
+fn rejoins_after_kubelet_round(kind: ResourceKind) -> bool {
+    kind == ResourceKind::PersistentVolumeClaims
 }
 
 /// Namespaces are cluster-scoped, so their explorer is one watch whatever the scope; every
@@ -1689,6 +1700,13 @@ fn subscribe_kubelet_stats(
                 live.metrics
                     .kubelet
                     .receive(update, live.pods.items(), &live.scope);
+                if live
+                    .explorer
+                    .as_ref()
+                    .is_some_and(|explorer| rejoins_after_kubelet_round(explorer.kind))
+                {
+                    live.join_explorer();
+                }
             }
         },
         |session, _| {
