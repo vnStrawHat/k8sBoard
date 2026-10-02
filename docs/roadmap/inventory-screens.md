@@ -8,7 +8,7 @@
 |---|---|---|---|
 | O1 | Header: cluster, version, region; "Last 15 min ▾"; Export report | Missing | 0021 (export: decision C9) |
 | O2 | Needs attention: rule engine (pod and container states, Warning events, node conditions, cert expiry, PDB blocks, stuck namespace), plain-language cause, one primary action per row | Missing | 0020 (engine), 0021 (panel) |
-| O3 | Capacity: three-layer bars (used, requested, allocatable) for CPU, Memory, Pods, Volumes | Missing | 0021 (needs 0010, 0011) |
+| O3 | Capacity: three-layer bars (used, requested, allocatable) for CPU, Memory, Pods, Volumes | Missing | 0021 (needs 0010; Volumes data ready from 0011) |
 | O4 | Node heatmap, NotReady outlined, click opens Nodes with the node selected | Missing | 0021 |
 | O5 | Recent changes timeline (revisions, managedFields, events), click opens a diff | Missing | 0021 (diff view: 0031) |
 | I1 | Issues screen (sidebar top item with a red count) | Missing | 0020 |
@@ -31,7 +31,7 @@
 | W4-12 | Probes with current result | Done | 0008 | — |
 | W4-13 | Env and mounts summary (sources: ConfigMap, Secret) | Done | 0008 (names and sources only, decision C1) | — |
 | W4c-1 | Monitor tab: CPU, Memory with request/limit lines, OOM markers | Done | 0010 | OOM marks from container status |
-| W4c-2 | Monitor: Network, Disk I/O (kubelet cAdvisor via API proxy) | Missing | — | 0011 |
+| W4c-2 | Monitor: Network, Disk I/O (kubelet cAdvisor via API proxy) | Done | 0011 | Network (receive/transmit) and Disk I/O (read/write) from the kubelet through the node proxy |
 | W4c-3 | Range 15m/1h/6h/24h, scope pod/container, Table view, source note | Partial | 0010 (15m to 24h, scope, Table view, source note) | Prometheus ranges: backlog |
 
 ## Nodes (W5) and Drain (W6)

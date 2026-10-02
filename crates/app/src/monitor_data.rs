@@ -13,7 +13,10 @@ use cluster::{
 use crate::drawer::{MonitorRange, MonitorScope};
 use crate::history_rings::{Resolution, Timelines};
 use crate::kind_row::{PodOwner, owns_pod};
+use crate::kubelet_history::{RateKind, RatePair, RateSeries};
+use crate::kubelet_metrics::KubeletFeed;
 use crate::metrics_history::{NodeUsageHistory, PodUsageHistory, UsageSeries};
+use crate::monitor_notices::{COLLECTING, kubelet_notice};
 use crate::node_usage::{node_allocatable, node_requests, takes_room};
 use crate::usage_chart::{ChartSeries, ReferenceKind, ReferenceLine, UsageChartModel};
 use crate::usage_format::Measure;
@@ -42,12 +45,16 @@ pub(crate) struct MonitorInput<'a> {
     pub(crate) pods: &'a [PodSummary],
     pub(crate) pod_history: &'a PodUsageHistory,
     pub(crate) node_history: &'a NodeUsageHistory,
+    pub(crate) kubelet: &'a KubeletFeed,
+    pub(crate) nodes: &'a [NodeSummary],
     pub(crate) is_all_namespaces: bool,
 }
 
 pub(crate) struct MonitorData {
-    /// CPU, then Memory.
+    /// CPU, then Memory; none before the metrics feed has a sample.
     pub(crate) charts: Vec<Rc<UsageChartModel>>,
+    /// Network, then Disk I/O.
+    pub(crate) kubelet_charts: Vec<Rc<UsageChartModel>>,
     /// Newest first.
     pub(crate) rows: Vec<MonitorRow>,
     pub(crate) choices: Vec<ScopeChoice>,
@@ -66,6 +73,10 @@ pub(crate) struct MonitorRow {
     pub(crate) offset: u64,
     pub(crate) cpu: Option<f64>,
     pub(crate) memory: Option<f64>,
+    /// Receive and transmit, from the kubelet tick nearest in time.
+    pub(crate) network: Option<RatePair<f64>>,
+    /// Read and write.
+    pub(crate) disk: Option<RatePair<f64>>,
     pub(crate) is_oom: bool,
 }
 
@@ -93,19 +104,34 @@ pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData {
     };
     let resolution = input.range.resolution();
     let (series, history_span, newest) = read_series(input, &scope, resolution);
-    let end = newest.or_else(|| series.points.last().map(|(at, _)| *at));
-    let Some(end) = end else {
-        return MonitorData {
-            charts: Vec::new(),
-            rows: Vec::new(),
-            choices,
-            stale_since: None,
-            span: history_span,
-            scope,
-        };
-    };
+    let kubelet = &input.kubelet.history;
+    // CPU and Memory end at the metrics feed's newest tick; the kubelet cards share that end so
+    // the four line up, and use their own newest tick when the metrics feed has none.
+    let metrics_end = newest.or_else(|| series.points.last().map(|(at, _)| *at));
+    let end = metrics_end
+        .or_else(|| kubelet.newest_tick())
+        .unwrap_or_else(jiff::Timestamp::now);
     let duration = input.range.duration();
     let start = end - jiff::SignedDuration::try_from(duration).unwrap_or_default();
+    let network = read_rates(input, &scope, RateKind::Network, resolution);
+    let disk = read_rates(input, &scope, RateKind::DiskIo, resolution);
+    let kubelet_charts = vec![
+        kubelet_chart(input, &scope, RateKind::Network, &network, (start, end)),
+        kubelet_chart(input, &scope, RateKind::DiskIo, &disk, (start, end)),
+    ];
+    let span = history_span.or_else(|| kubelet.span());
+    if metrics_end.is_none() {
+        let rows = rate_rows(&network, &disk, start, end);
+        return MonitorData {
+            charts: Vec::new(),
+            kubelet_charts,
+            rows,
+            choices,
+            stale_since: None,
+            span,
+            scope,
+        };
+    }
     let kept: Vec<(jiff::Timestamp, Option<ResourceUsage>)> = series
         .points
         .iter()
@@ -137,6 +163,7 @@ pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData {
             }],
             references: lines,
             markers: markers.clone(),
+            notice: None,
         })
     };
     let charts = vec![
@@ -163,6 +190,8 @@ pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData {
             offset: end.duration_since(*at).as_secs().max(0) as u64,
             cpu: usage.map(|usage| usage.cpu.cores()),
             memory: usage.map(|usage| usage.memory.bytes() as f64),
+            network: nearest_rate(&network, *at),
+            disk: nearest_rate(&disk, *at),
             is_oom: markers
                 .iter()
                 .any(|mark| mark.duration_since(*at).unsigned_abs() <= half_step),
@@ -170,14 +199,144 @@ pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData {
         .collect();
     MonitorData {
         charts,
+        kubelet_charts,
         rows,
         choices,
         stale_since: series
             .sampled_at
             .filter(|_| series.stalled_ticks >= STALE_AFTER_TICKS),
-        span: history_span,
+        span,
         scope,
     }
+}
+
+/// The kubelet rates of the subject and scope.
+fn read_rates(
+    input: &MonitorInput,
+    scope: &MonitorScope,
+    kind: RateKind,
+    resolution: Resolution,
+) -> RateSeries {
+    let history = &input.kubelet.history;
+    let part = match scope {
+        MonitorScope::Total => None,
+        MonitorScope::Part(name) => Some(name.as_str()),
+    };
+    match &input.subject {
+        MonitorSubject::Pod(pod) => {
+            history.pod_rates(kind, &pod.namespace, &pod.name, part, resolution)
+        }
+        MonitorSubject::Container { pod, container } => {
+            history.pod_rates(kind, &pod.namespace, &pod.name, Some(container), resolution)
+        }
+        MonitorSubject::Workload(owner) => history.owner_rates(kind, owner, part, resolution),
+        MonitorSubject::Node(node) => history.node_rates(kind, &node.name, resolution),
+    }
+}
+
+/// The rate of the kubelet tick nearest to `at`, within half a step; `None` beyond it.
+fn nearest_rate(series: &RateSeries, at: jiff::Timestamp) -> Option<RatePair<f64>> {
+    let points = &series.points;
+    let after = points.partition_point(|(time, _)| *time < at);
+    let distance = |index: usize| {
+        points
+            .get(index)
+            .map(|(time, _)| time.duration_since(at).unsigned_abs())
+    };
+    let nearest = match (after.checked_sub(1), distance(after)) {
+        (Some(before), Some(next)) => {
+            if distance(before)? <= next {
+                before
+            } else {
+                after
+            }
+        }
+        (Some(before), None) => before,
+        (None, Some(_)) => after,
+        (None, None) => return None,
+    };
+    if distance(nearest)? > series.step / 2 {
+        return None;
+    }
+    let rate = points.get(nearest)?.1?;
+    Some(RatePair {
+        first: rate.first as f64,
+        second: rate.second as f64,
+    })
+}
+
+/// The Table view rows when the metrics feed has no ticks: the kubelet timeline, newest first,
+/// with CPU and Memory blank.
+fn rate_rows(
+    network: &RateSeries,
+    disk: &RateSeries,
+    start: jiff::Timestamp,
+    end: jiff::Timestamp,
+) -> Vec<MonitorRow> {
+    network
+        .points
+        .iter()
+        .rev()
+        .filter(|(at, _)| *at >= start && *at <= end)
+        .map(|(at, _)| MonitorRow {
+            offset: end.duration_since(*at).as_secs().max(0) as u64,
+            cpu: None,
+            memory: None,
+            network: nearest_rate(network, *at),
+            disk: nearest_rate(disk, *at),
+            is_oom: false,
+        })
+        .collect()
+}
+
+/// One kubelet card: two rate series in the window, and why it may be empty.
+fn kubelet_chart(
+    input: &MonitorInput,
+    scope: &MonitorScope,
+    kind: RateKind,
+    rates: &RateSeries,
+    (start, end): (jiff::Timestamp, jiff::Timestamp),
+) -> Rc<UsageChartModel> {
+    let (id, title, names) = match kind {
+        RateKind::Network => ("monitor-network", "Network", ["receive", "transmit"]),
+        RateKind::DiskIo => ("monitor-disk", "Disk I/O", ["read", "write"]),
+    };
+    let points = |field: fn(&RatePair<u64>) -> u64| -> Vec<(jiff::Timestamp, Option<f64>)> {
+        rates
+            .points
+            .iter()
+            .filter(|(at, _)| *at >= start && *at <= end)
+            .map(|(at, rate)| (*at, rate.as_ref().map(|rate| field(rate) as f64)))
+            .collect()
+    };
+    let has_rate = rates
+        .points
+        .iter()
+        .any(|(at, rate)| *at >= start && *at <= end && rate.is_some());
+    // Nothing to draw and nothing else to say: the first rate is still to come.
+    let notice =
+        kubelet_notice(input, scope, kind).or_else(|| (!has_rate).then(|| COLLECTING.to_owned()));
+    Rc::new(UsageChartModel {
+        id: id.into(),
+        title: title.into(),
+        unit: Measure::Rate,
+        step: rates.step,
+        start,
+        end,
+        series: vec![
+            ChartSeries {
+                name: names[0].into(),
+                points: points(|rate| rate.first),
+            },
+            ChartSeries {
+                name: names[1].into(),
+                points: points(|rate| rate.second),
+            },
+        ],
+        references: Vec::new(),
+        markers: Vec::new(),
+        notice: notice.map(Into::into),
+    })
 }
 
 /// The series of the subject and scope, the history's span, and the newest tick.

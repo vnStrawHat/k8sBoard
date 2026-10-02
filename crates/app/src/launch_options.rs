@@ -113,6 +113,13 @@ impl LaunchScreen {
         )
     }
 
+    /// Whether the screen shows Network and Disk I/O, so a screenshot waits for kubelet rounds: the
+    /// Monitor tabs. A feed that is unavailable settles at once.
+    #[cfg(any(feature = "screenshot", test))]
+    pub(crate) fn shows_kubelet_stats(self) -> bool {
+        self.drawer_tab() == Some(DrawerTab::Monitor)
+    }
+
     /// Whether the screen shows node usage.
     #[cfg(any(feature = "screenshot", test))]
     pub(crate) fn shows_node_usage(self) -> bool {

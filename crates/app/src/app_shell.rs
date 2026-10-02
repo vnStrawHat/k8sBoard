@@ -512,13 +512,9 @@ impl AppShell {
     /// rebuilt only when the key changes (a new tick, range, scope, or subject), so a hover repaint
     /// or an unrelated notify reuses them.
     fn refresh_monitor_cache(&mut self, cx: &App) {
-        let is_tab = self.drawer.tab == DrawerTab::Monitor;
         let is_container_tab = self.drawer.tab == DrawerTab::Containers
             && self.drawer.container_tab == ContainerTab::Monitor;
-        let shows_monitor = self.selected.as_ref().is_some_and(|key| {
-            is_container_tab || (is_tab && drawer_tabs(key).contains(&DrawerTab::Monitor))
-        });
-        if !shows_monitor {
+        if !self.shows_monitor() {
             self.drawer.monitor.cache = None;
             return;
         }
@@ -536,6 +532,8 @@ impl AppShell {
             subject,
             container,
             ticks,
+            kubelet_ticks: live.metrics.kubelet.history.tick_count(),
+            kubelet_status: live.metrics.kubelet.status.clone(),
             scope: self.drawer.monitor.scope.clone(),
             range: self.drawer.monitor.range,
         };
@@ -560,6 +558,8 @@ impl AppShell {
             pods: live.pods.items(),
             pod_history: &live.metrics.pods.history,
             node_history: &live.metrics.nodes.history,
+            kubelet: &live.metrics.kubelet,
+            nodes: live.nodes.items(),
             is_all_namespaces: live.scope == NamespaceScope::All,
         });
         self.drawer.monitor.cache = Some(MonitorCache { key, data });
@@ -675,7 +675,8 @@ impl AppShell {
     }
 
     /// The subject of the open drawer, from its key alone; only a workload reads its row, for
-    /// the pods it owns. Disk I/O is never wanted before step 3.
+    /// the pods it owns. Disk I/O is wanted only while a Monitor tab shows: the drawer's own, or the
+    /// container Monitor sub-tab of a pod.
     fn kubelet_demand(&self, cx: &App) -> KubeletDemand {
         let subject = self.selected.as_ref().and_then(|key| match key {
             ResourceKey::Pod { namespace, name } => Some(KubeletSubject::Pod {
@@ -695,10 +696,24 @@ impl AppShell {
                 .map(KubeletSubject::Workload),
             ResourceKey::Kind { .. } => None,
         });
+        let wants_disk_io = subject.is_some() && self.shows_monitor();
         KubeletDemand {
             subject,
-            wants_disk_io: false,
+            wants_disk_io,
         }
+    }
+
+    /// Whether a Monitor tab of the open drawer is visible.
+    fn shows_monitor(&self) -> bool {
+        let Some(key) = &self.selected else {
+            return false;
+        };
+        let is_container_tab = self.drawer.tab == DrawerTab::Containers
+            && self.drawer.container_tab == ContainerTab::Monitor
+            && matches!(key, ResourceKey::Pod { .. });
+        let is_tab =
+            self.drawer.tab == DrawerTab::Monitor && drawer_tabs(key).contains(&DrawerTab::Monitor);
+        is_container_tab || is_tab
     }
 
     /// The YAML tab is shown and its first fetch has not finished. A failed fetch is settled.
@@ -1155,6 +1170,12 @@ impl AppShell {
                 .map_or_else(FeedProgress::unavailable, |live| FeedProgress {
                     status: live.metrics.nodes.status.clone(),
                     ticks: live.metrics.nodes.history.tick_count(),
+                }),
+            kubelet: self
+                .live(cx)
+                .map_or_else(FeedProgress::unavailable, |live| FeedProgress {
+                    status: live.metrics.kubelet.status.clone(),
+                    ticks: live.metrics.kubelet.history.tick_count(),
                 }),
         }
     }

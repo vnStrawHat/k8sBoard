@@ -82,3 +82,16 @@ CPU and Memory keep 0010's `end` (the metrics feed's newest tick). Network and D
 ## Disk demand (`app_shell.rs`)
 
 `sync_kubelet_demand` now sets `wants_disk_io` per [kubelet-session.md](kubelet-session.md); leaving the Monitor tab drops the disk targets at the next sync (a new targets value; the subscription stays).
+
+## As shipped (deviations from the text above)
+
+- `MonitorData` keeps `charts` (CPU, Memory; empty before the metrics feed has a tick) and a separate `kubelet_charts` (Network, Disk I/O); the tab decides per feed which to show.
+- The notice rules live in `monitor_notices.rs`. After them one more rule applies: a card with no rate in its window and no other notice reads `Collecting… rates need two samples` (the first disk rate needs two cAdvisor reads, and a disk node is first read a round after the tab opens).
+- `RateSeries` has `points` and `step` only (no `pod_count`), and `PodKubelet.node` was not added: no reader needs them.
+- Notice placement: with points in range a muted line under the card header; without any, centered over the plot, clear of the axis labels.
+- Screenshot settle: Monitor screens wait for 4 kubelet rounds (first rate of the disk node), so `SETTLE_TIMEOUT` is 60 s; a feed that is unavailable, failed, or interrupted settles at once.
+- Notice order follows the table above: coverage comes before the workload host-network count. A `Part(p)` scope on a host-network pod of a workload therefore reads `1 host-network pod not counted` (its node is also the one polled).
+- A pod or node whose disk node is not read yet gets no special notice: the card falls through to `Collecting…` once it has no rate. A workload `Part(p)` on a node outside `disk_io_nodes` reads `Covers pods on 0 of 1 nodes`.
+- Rate axes take tops of 1, 2, 4, or 10 times a power of ten, so the midline is whole in its unit (a 5 KB/s top would have read `3 KB/s` at the middle).
+- Second series colour: every chart token is a shade of blue, so series 1 (`transmit`, `write`) uses `chart_bullish` (green); series 0 stays `chart_1`.
+- The Table view shows `—`, not `not running`, for CPU and Memory while the metrics feed has no sample.

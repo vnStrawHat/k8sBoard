@@ -664,3 +664,197 @@ fn host_network_flag_is_found_for_the_second_pod_of_the_list() {
     assert!(newest_network(&history, "shop", "web-1").is_some());
     assert!(history.pods[&key("shop", "web-2")].network.is_none());
 }
+
+// ---- readers ----
+
+fn disk_round(step: i64, has_root: bool, containers: &[(&str, u64)]) -> NodeKubeletStats {
+    let counters = |seed: u64| DiskIoCounters {
+        sampled_at: Some(at(step * 15)),
+        read_bytes: step as u64 * 15 * seed,
+        write_bytes: step as u64 * 15 * seed * 3,
+    };
+    let sample = DiskIoSample {
+        node: has_root.then(|| counters(100)),
+        containers: containers
+            .iter()
+            .map(|(container, seed)| ContainerDiskIo {
+                namespace: "shop".to_owned(),
+                pod: "web-1".to_owned(),
+                container: (*container).to_owned(),
+                counters: counters(*seed),
+            })
+            .collect(),
+    };
+    let mut node = node_with("node-a", Vec::new());
+    node.disk_io = Some(Ok(sample));
+    node
+}
+
+fn rates(series: &RateSeries) -> Vec<Option<(u64, u64)>> {
+    series
+        .points
+        .iter()
+        .map(|(_, rate)| rate.map(|rate| (rate.first, rate.second)))
+        .collect()
+}
+
+#[test]
+fn pod_disk_total_sums_containers() {
+    let mut history = KubeletHistory::default();
+    for step in 1..=3 {
+        record_all(
+            &mut history,
+            step * 15,
+            &[disk_round(step, true, &[("app", 10), ("side", 5)])],
+        );
+    }
+    let total = history.pod_rates(RateKind::DiskIo, "shop", "web-1", None, Resolution::Fine);
+    assert_eq!(rates(&total), [None, Some((15, 45)), Some((15, 45))]);
+    let app = history.pod_rates(
+        RateKind::DiskIo,
+        "shop",
+        "web-1",
+        Some("app"),
+        Resolution::Fine,
+    );
+    assert_eq!(rates(&app), [None, Some((10, 30)), Some((10, 30))]);
+}
+
+#[test]
+fn has_disk_series_follows_container_entries() {
+    let mut history = KubeletHistory::default();
+    assert!(!history.has_disk_series("shop", "web-1", None));
+    for step in 1..=2 {
+        record_all(
+            &mut history,
+            step * 15,
+            &[disk_round(step, true, &[("app", 10), ("side", 5)])],
+        );
+    }
+    assert!(history.has_disk_series("shop", "web-1", None));
+    assert!(history.has_disk_series("shop", "web-1", Some("side")));
+    assert!(!history.has_disk_series("shop", "web-1", Some("other")));
+    assert!(!history.has_disk_series("shop", "web-2", None));
+}
+
+#[test]
+fn container_scope_network_is_the_pods() {
+    let mut history = KubeletHistory::default();
+    for step in 1..=3 {
+        record_all(
+            &mut history,
+            step * 15,
+            &steady_round("shop", "web-1", "u1", step),
+        );
+    }
+    let pod = history.pod_rates(RateKind::Network, "shop", "web-1", None, Resolution::Fine);
+    let container = history.pod_rates(
+        RateKind::Network,
+        "shop",
+        "web-1",
+        Some("app"),
+        Resolution::Fine,
+    );
+    assert_eq!(rates(&pod), rates(&container));
+    assert_eq!(rates(&pod).last(), Some(&Some((1_500, 750))));
+}
+
+fn owner() -> PodOwner {
+    PodOwner::Controller {
+        namespace: "shop".to_owned(),
+        kind: "StatefulSet",
+        name: "web".to_owned(),
+    }
+}
+
+fn owned_pod(name: &str, host_network: bool) -> PodSummary {
+    let mut summary = pod_summary("shop", name, host_network);
+    summary.controller = Some(ControllerRef {
+        kind: "StatefulSet".to_owned(),
+        name: "web".to_owned(),
+    });
+    summary
+}
+
+#[test]
+fn owner_network_skips_host_network_pods() {
+    let mut history = KubeletHistory::default();
+    let listed = [owned_pod("web-1", false), owned_pod("web-2", true)];
+    for step in 1..=3_i64 {
+        let pods = ["web-1", "web-2"].map(|name| {
+            pod_stats(
+                "shop",
+                name,
+                name,
+                counters(step * 15, step as u64 * 15_000, 0),
+            )
+        });
+        let round = [node_with("node-a", pods.to_vec())];
+        history.record(at(step * 15), &round, &listed, &NamespaceScope::All);
+    }
+    let owned = history.owner_rates(RateKind::Network, &owner(), None, Resolution::Fine);
+    // Only web-1 counts: the host-network pod has no network rings.
+    assert_eq!(rates(&owned).last(), Some(&Some((1_000, 0))));
+    let one = history.owner_rates(RateKind::Network, &owner(), Some("web-1"), Resolution::Fine);
+    assert_eq!(rates(&one), rates(&owned));
+    let other = history.owner_rates(RateKind::Network, &owner(), Some("web-2"), Resolution::Fine);
+    assert!(rates(&other).iter().all(Option::is_none));
+}
+
+#[test]
+fn owner_rates_skip_pods_of_other_workloads() {
+    let mut history = KubeletHistory::default();
+    let mut stranger = pod_summary("shop", "db-1", false);
+    stranger.controller = Some(ControllerRef {
+        kind: "StatefulSet".to_owned(),
+        name: "db".to_owned(),
+    });
+    let listed = [stranger, owned_pod("web-1", false)];
+    for step in 1..=3_i64 {
+        let pods = ["db-1", "web-1"].map(|name| {
+            pod_stats(
+                "shop",
+                name,
+                name,
+                counters(step * 15, step as u64 * 15_000, 0),
+            )
+        });
+        let round = [node_with("node-a", pods.to_vec())];
+        history.record(at(step * 15), &round, &listed, &NamespaceScope::All);
+    }
+    let owned = history.owner_rates(RateKind::Network, &owner(), None, Resolution::Fine);
+    assert_eq!(rates(&owned).last(), Some(&Some((1_000, 0))));
+}
+
+#[test]
+fn node_rates_read_the_nodes_own_rings() {
+    let mut history = KubeletHistory::default();
+    for step in 1..=3 {
+        record_all(&mut history, step * 15, &[disk_round(step, true, &[])]);
+    }
+    let disk = history.node_rates(RateKind::DiskIo, "node-a", Resolution::Fine);
+    assert_eq!(rates(&disk), [None, Some((100, 300)), Some((100, 300))]);
+    let missing = history.node_rates(RateKind::DiskIo, "node-z", Resolution::Fine);
+    assert_eq!(rates(&missing), [None, None, None]);
+    assert!(history.newest_tick().is_some());
+    assert!(history.span().is_some());
+}
+
+#[test]
+fn disk_io_state_follows_the_newest_sample() {
+    let mut history = KubeletHistory::default();
+    assert_eq!(history.disk_io_state("node-a"), DiskIoState::NotSampled);
+    record_all(&mut history, 15, &[disk_round(1, true, &[])]);
+    assert_eq!(
+        history.disk_io_state("node-a"),
+        DiskIoState::Sampled { has_root: true }
+    );
+    record_all(&mut history, 30, &[disk_round(2, false, &[])]);
+    assert_eq!(
+        history.disk_io_state("node-a"),
+        DiskIoState::Sampled { has_root: false }
+    );
+    // A round that does not read the disk leaves the node unsampled again.
+    record_all(&mut history, 45, &[node_with("node-a", Vec::new())]);
+    assert_eq!(history.disk_io_state("node-a"), DiskIoState::NotSampled);
+}

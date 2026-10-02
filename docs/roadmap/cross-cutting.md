@@ -46,7 +46,7 @@
 | list pods, nodes, namespaces, the 10 workload/network/config kinds, events | allowed | 0006–0012 fully verifiable |
 | `get pods/log` | allowed | 0019 verifiable |
 | `metrics.k8s.io/v1beta1` | available | 0010 verifiable |
-| `get nodes/proxy` | allowed | 0011 kubelet stats and node logs verifiable |
+| `get nodes/proxy` | allowed | verified by the 0011 probe (summary 39 to 175 KB per node, cAdvisor about 0.9 MB); node logs 0019 |
 | `list secrets` | allowed | real Secret values reachable: C1 must land before 0016/0017; Helm data readable if releases exist |
 | `create pods/exec`, `create pods/portforward` | denied | 0035–0037 render disabled; live checks need another cluster |
 | NetworkPolicies, HPAs, quotas, PDBs, storage, RBAC kinds, EndpointSlices, CRDs | not probed yet | each spec adds `AccessCheck` variants and records results first |

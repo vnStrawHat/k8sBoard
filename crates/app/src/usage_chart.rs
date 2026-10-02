@@ -15,6 +15,7 @@ use gpui_kit::{
     Point, SharedString, Styled as _, TextAlign, Window, div, point, px, quad, size,
 };
 
+use crate::drawer::truncated_text;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::usage_format::{Measure, format_offset};
 
@@ -32,9 +33,14 @@ const MAX_GAP_STEPS: f64 = 2.5;
 const Y_HEADROOM: f64 = 1.06;
 const MIN_CPU_MAX: f64 = 0.01;
 const MIN_BYTES_MAX: f64 = (1u64 << 20) as f64;
+/// 1 KB/s: a quiet line is not stretched to the top of the chart.
+const MIN_RATE_MAX: f64 = 1_000.;
 /// Decimal steps whose halves stay whole at every power of ten: 2.5 would put a `12.5m` midline
 /// that reads as `13m`.
 const NICE_STEPS: [f64; 4] = [1., 2., 5., 10.];
+/// Rates use 1, 2, 4, and 10 instead: the midline of a 5 KB/s top would read `3 KB/s` in whole
+/// units, while the halves of these are whole at every power of ten.
+const RATE_STEPS: [f64; 4] = [1., 2., 4., 10.];
 /// A reference label keeps this far left of the right edge, clear of the newest value's dot.
 const LABEL_INSET: f32 = 14.;
 
@@ -70,6 +76,8 @@ pub(crate) struct UsageChartModel {
     pub(crate) references: Vec<ReferenceLine>,
     /// OOM kills.
     pub(crate) markers: Vec<jiff::Timestamp>,
+    /// Why the chart has less than it should: `Collecting…`, a failed node, no disk series.
+    pub(crate) notice: Option<SharedString>,
 }
 
 /// The `Plot`. It holds the memoized model, so a hover repaint copies nothing.
@@ -83,10 +91,12 @@ pub(crate) struct UsageChart {
 /// The top of a y axis that holds `value`, at least the floor of the unit (10m for CPU, 1Mi for
 /// memory), chosen so that the midline is a round number too. CPU takes 1, 2, or 5 times a power
 /// of ten. Memory takes a power of two of its own binary unit, so 900Mi gives a 1Gi top and a
-/// 512Mi midline.
+/// 512Mi midline. A rate takes 1, 2, 4, or 10 times a power of ten, so its midline is whole in
+/// its unit.
 pub(crate) fn nice_max(value: f64, unit: Measure) -> f64 {
     match unit {
-        Measure::Cpu => nice_decimal(value.max(MIN_CPU_MAX)),
+        Measure::Cpu => nice_decimal(value.max(MIN_CPU_MAX), &NICE_STEPS),
+        Measure::Rate => nice_decimal(value.max(MIN_RATE_MAX), &RATE_STEPS),
         Measure::Bytes => {
             let value = value.max(MIN_BYTES_MAX);
             let mut base = 1.;
@@ -102,11 +112,12 @@ pub(crate) fn nice_max(value: f64, unit: Measure) -> f64 {
     }
 }
 
-fn nice_decimal(value: f64) -> f64 {
+fn nice_decimal(value: f64, steps: &[f64]) -> f64 {
     let power = 10f64.powf(value.log10().floor());
     let mantissa = value / power;
-    let step = NICE_STEPS
-        .into_iter()
+    let step = steps
+        .iter()
+        .copied()
         .find(|step| mantissa <= *step * (1. + 1e-9))
         .unwrap_or(10.);
     step * power
@@ -253,7 +264,9 @@ impl UsageChart {
         let theme = cx.theme();
         match index {
             0 => theme.chart_1,
-            _ => theme.chart_2,
+            // Every chart token is a shade of blue, so a second series takes the green one: two
+            // blues of any lightness read as one on one of the themes.
+            _ => theme.chart_bullish,
         }
     }
 
@@ -504,24 +517,70 @@ fn range_label(model: &UsageChartModel) -> String {
     format_offset(seconds)
 }
 
+/// Whether any series has a value inside the chart's window.
+fn has_points_in_range(model: &UsageChartModel) -> bool {
+    model.series.iter().any(|series| {
+        series
+            .points
+            .iter()
+            .any(|(at, value)| *at >= model.start && value.is_some())
+    })
+}
+
 // ---- card ----
 
-/// The chart in a bordered card, with its title and newest value above it.
+/// The chart in a bordered card, with its title above it and, on the right, its legend (two
+/// series) or its newest value (one). A notice reads under the header while there are points,
+/// and fills the empty plot when there are none.
 pub(crate) fn usage_chart_card(
     model: Rc<UsageChartModel>,
     height: Pixels,
     cx: &App,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    let newest = model.series.first().and_then(|series| {
-        let (_, value) = series.points.last()?;
-        Some(match value {
-            Some(value) => format!("now {}", model.unit.format(*value)),
-            None => "not running".to_owned(),
-        })
-    });
+    let muted = theme.muted_foreground;
     let has_oom = !model.markers.is_empty();
     let bad = tone_color(StatusTone::Bad, cx);
+    let right = if model.series.len() > 1 {
+        let swatches = model.series.iter().enumerate().map(|(index, series)| {
+            h_flex()
+                .gap_1()
+                .items_center()
+                .child(
+                    div()
+                        .size(px(DOT_SIZE))
+                        .rounded_full()
+                        .bg(UsageChart::series_color(index, cx)),
+                )
+                .child(series.name.clone())
+        });
+        Some(
+            h_flex()
+                .gap_2()
+                .text_xs()
+                .text_color(muted)
+                .children(swatches)
+                .into_any_element(),
+        )
+    } else {
+        model
+            .series
+            .first()
+            .and_then(|series| {
+                let (_, value) = series.points.last()?;
+                Some(match value {
+                    Some(value) => format!("now {}", model.unit.format(*value)),
+                    None => "not running".to_owned(),
+                })
+            })
+            .map(|text| {
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(text)
+                    .into_any_element()
+            })
+    };
     let header = h_flex()
         .items_center()
         .gap_2()
@@ -537,16 +596,37 @@ pub(crate) fn usage_chart_card(
                 .gap_1()
                 .items_center()
                 .text_xs()
-                .text_color(theme.muted_foreground)
+                .text_color(muted)
                 .child(div().size(px(DOT_SIZE)).rounded_full().bg(bad))
                 .child("OOMKilled")
         }))
-        .children(newest.map(|text| {
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(text)
-        }));
+        .children(right);
+    let has_points = has_points_in_range(&model);
+    let notice_line = model.notice.clone().filter(|_| has_points).map(|text| {
+        let id = SharedString::from(format!("{}-notice", model.id));
+        truncated_text(id, text).text_xs().text_color(muted)
+    });
+    let notice_overlay = model.notice.clone().filter(|_| !has_points).map(|text| {
+        div()
+            .absolute()
+            // Clear of the axis labels on the left.
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .left(px(GUTTER_LEFT))
+            .flex()
+            .items_center()
+            .justify_center()
+            .px_4()
+            .child(
+                div()
+                    .max_w_full()
+                    .text_xs()
+                    .text_color(muted)
+                    .text_center()
+                    .child(text),
+            )
+    });
     v_flex()
         .w_full()
         .gap_1()
@@ -555,7 +635,15 @@ pub(crate) fn usage_chart_card(
         .border_color(theme.border)
         .rounded(theme.radius)
         .child(header)
-        .child(div().w_full().h(height).child(UsageChart::new(model)))
+        .children(notice_line)
+        .child(
+            div()
+                .relative()
+                .w_full()
+                .h(height)
+                .child(UsageChart::new(model))
+                .children(notice_overlay),
+        )
 }
 
 #[cfg(test)]

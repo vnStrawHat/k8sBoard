@@ -82,6 +82,11 @@ impl KubeletFeed {
         &self.demand
     }
 
+    /// The nodes the poll reads now.
+    pub(crate) fn targets(&self) -> watch::Ref<'_, KubeletTargets> {
+        self.targets.borrow()
+    }
+
     /// The review has not finished: a running poll continues, a stopped feed shows `Checking`.
     pub(crate) fn wait(&mut self) {
         if self.subscription.is_none() {

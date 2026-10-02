@@ -386,6 +386,8 @@ pub(crate) fn container_usage_row(
         match measure {
             Measure::Cpu => CpuAmount::parse(text).map(CpuAmount::cores),
             Measure::Bytes => ByteAmount::parse(text).map(|bytes| bytes.bytes() as f64),
+            // A rate has no Kubernetes quantity; only cpu and memory reach here.
+            Measure::Rate => None,
         }
     };
     let request = quantity(&resource.request);

@@ -17,7 +17,13 @@ use {
 #[cfg(feature = "screenshot")]
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(feature = "screenshot")]
-const SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Kubelet rounds a Monitor screen waits for. A rate needs two samples of one series, and the disk
+/// node is first read in an early round that may fall less than a second after the previous
+/// scrape (cAdvisor housekeeping), where a rate is not taken; so the first disk rate usually comes
+/// with the fourth round. At 15 s a round that takes about 50 s, hence `SETTLE_TIMEOUT`.
+#[cfg(any(feature = "screenshot", test))]
+const MIN_KUBELET_TICKS: u64 = 4;
 /// Animations and the first frame after the screen setup need a moment before capture.
 #[cfg(feature = "screenshot")]
 const SETTLE_DELAY: Duration = Duration::from_millis(300);
@@ -65,6 +71,8 @@ pub(crate) struct SettleInput {
     pub(crate) pod_metrics: FeedProgress,
     /// The same for the nodes feed.
     pub(crate) node_metrics: FeedProgress,
+    /// The kubelet feed, which the Monitor screens wait for too.
+    pub(crate) kubelet: FeedProgress,
 }
 
 /// A metrics feed's status and how many ticks it has recorded.
@@ -119,6 +127,11 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
         TargetState::Loaded
             if screen.shows_node_usage()
                 && !input.node_metrics.is_settled(screen.min_metrics_ticks()) =>
+        {
+            false
+        }
+        TargetState::Loaded
+            if screen.shows_kubelet_stats() && !input.kubelet.is_settled(MIN_KUBELET_TICKS) =>
         {
             false
         }
@@ -283,6 +296,7 @@ mod tests {
             is_log_pending: false,
             pod_metrics: progress(FeedStatus::Live, 1),
             node_metrics: progress(FeedStatus::Live, 1),
+            kubelet: progress(FeedStatus::Live, 4),
         }
     }
 
@@ -424,6 +438,39 @@ mod tests {
             ..feeds(0, 0)
         };
         assert!(is_screen_settled(pod, &denied));
+    }
+
+    #[test]
+    fn monitor_screens_also_wait_for_kubelet_ticks() {
+        let kubelet = |status: FeedStatus, ticks: u64| SettleInput {
+            pod_metrics: progress(FeedStatus::Live, 5),
+            node_metrics: progress(FeedStatus::Live, 5),
+            kubelet: progress(status, ticks),
+            ..input(TargetState::Loaded, true)
+        };
+        let screens = [
+            LaunchScreen::PodDrawer(DrawerTab::Monitor),
+            LaunchScreen::NodeDrawer(DrawerTab::Monitor),
+            LaunchScreen::KindDrawer(ResourceKind::Deployments, DrawerTab::Monitor),
+        ];
+        for screen in screens {
+            assert!(!is_screen_settled(screen, &kubelet(FeedStatus::Waiting, 0)));
+            assert!(!is_screen_settled(screen, &kubelet(FeedStatus::Live, 3)));
+            assert!(is_screen_settled(screen, &kubelet(FeedStatus::Live, 4)));
+            // A feed that is denied, failed, or interrupted will not get better soon.
+            let down = FeedStatus::Unavailable("denied".to_owned());
+            assert!(is_screen_settled(screen, &kubelet(down, 0)));
+            let failed = FeedStatus::Failed("no".to_owned());
+            assert!(is_screen_settled(screen, &kubelet(failed, 0)));
+        }
+        // Screens without Network and Disk I/O do not wait for the kubelet.
+        let pods = LaunchScreen::Pods;
+        assert!(is_screen_settled(pods, &kubelet(FeedStatus::Waiting, 0)));
+        let containers = LaunchScreen::PodDrawer(DrawerTab::Containers);
+        assert!(is_screen_settled(
+            containers,
+            &kubelet(FeedStatus::Waiting, 0)
+        ));
     }
 
     #[test]

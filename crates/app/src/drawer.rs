@@ -17,6 +17,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
+use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::LiveList;
 use crate::history_rings::Resolution;
 use crate::monitor_data::MonitorData;
@@ -148,6 +149,9 @@ pub(crate) struct MonitorKey {
     pub(crate) container: Option<String>,
     /// The feed's `tick_count()`.
     pub(crate) ticks: u64,
+    /// The kubelet feed's `tick_count()` and status: its cards and notices follow them.
+    pub(crate) kubelet_ticks: u64,
+    pub(crate) kubelet_status: FeedStatus,
     pub(crate) scope: MonitorScope,
     pub(crate) range: MonitorRange,
 }

@@ -24,6 +24,7 @@ mod log_filter;
 mod log_tab;
 mod metrics_history;
 mod monitor_data;
+mod monitor_notices;
 mod monitor_tab;
 mod namespace_picker;
 mod namespace_rows;

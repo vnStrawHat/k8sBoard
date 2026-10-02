@@ -19,7 +19,7 @@ A per-session sampler polling `metrics.k8s.io` every 15 s into bounded ring buff
 - Deps: 0008. Risk: Med (chart component capability, C6; memory budget). UAT: `metrics.k8s.io/v1beta1` available.
 
 ### 0011 — Metrics II: kubelet stats
-Read `GET /api/v1/nodes/{node}/proxy/stats/summary` (fixed path allow-list) for Network rx/tx and Disk I/O read/write charts, PVC used bytes and inodes (for 0014), and per-node allocatable usage. One poll per node per 15 s only while a consumer is visible.
+Read `GET /api/v1/nodes/{node}/proxy/stats/summary` (fixed path allow-list) for Network rx/tx and Disk I/O read/write charts, PVC used bytes and inodes (for 0014), and per-node allocatable usage. One poll per node per 15 s: always on for up to 10 Ready nodes, else while a drawer needs the node; cAdvisor (Disk I/O) only while a Monitor tab shows (at most 3 nodes).
 - Deps: 0010. Risk: Med (nodes/proxy is powerful; must never build arbitrary proxy paths). UAT: `get nodes/proxy` allowed.
 
 ### 0012 — Kind drawer completions (0005 open items)

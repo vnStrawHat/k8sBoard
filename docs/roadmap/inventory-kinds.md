@@ -11,7 +11,7 @@
 | Copy name | Done for live kinds | 0005 |
 | Columns ▾, filter chips, sort | Missing | 0009 |
 | Edit YAML (E) / Delete … (red, last) | Missing (disabled) | 0031 / 0033 |
-| Monitor tab (◔ kinds: Pod, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, Node) | Partial | 0010 (CPU, Memory); Network and Disk I/O → 0011 |
+| Monitor tab (◔ kinds: Pod, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, Node) | Done | 0010 (CPU, Memory), 0011 (Network, Disk I/O) |
 
 ## Per kind
 
@@ -38,7 +38,7 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Config | HPAs | Missing | Missing | 0013 (metrics bars, scaling events from 0006) | Edit min/max 0032 |
 | Config | ResourceQuotas | Missing | Missing | 0013 (usage bars, blocked Pending pods) | New, Edit 0031 |
 | Config | PDBs | Missing | Missing | 0013 (allowed disruptions, BLOCKS DRAIN, selected pods) | New 0031 |
-| Storage | PVCs | Missing | Missing | 0014; Used % and inodes 0011; Go to pod 0014 | Expand 0032 |
+| Storage | PVCs | Missing | Missing | 0014; Used % and inodes: data ready (0011), UI 0014; Go to pod 0014 | Expand 0032 |
 | Storage | PVs | Missing | Missing | 0014 (Released cleanup hint) | — |
 | Storage | StorageClasses | Missing | Missing | 0014 (default ★, PV count) | Set default 0032 |
 | Access Control | ServiceAccounts | Missing | Missing | 0015 (bound roles, used by, cloud identity, can-do); Check permissions 0023 | — |

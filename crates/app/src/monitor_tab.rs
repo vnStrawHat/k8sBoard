@@ -1,5 +1,7 @@
 //! The Monitor tab body: toolbar, charts or Table view, and the source note, by feed status.
 
+use std::rc::Rc;
+
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonGroup};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -17,7 +19,7 @@ use crate::drawer::{DrawerState, MonitorRange, MonitorScope, MonitorState};
 use crate::history_rings::{COARSE_POINTS, Resolution, TICKS_PER_COARSE};
 use crate::monitor_data::{MonitorData, MonitorRow};
 use crate::status_tone::{StatusTone, tone_color};
-use crate::usage_chart::usage_chart_card;
+use crate::usage_chart::{UsageChartModel, usage_chart_card};
 use crate::usage_format::{Measure, format_offset};
 
 const CHART_HEIGHT: f32 = 110.;
@@ -28,13 +30,19 @@ const CHART_MIN_WIDTH: f32 = 280.;
 const MAX_TABLE_ROWS: usize = COARSE_POINTS + TICKS_PER_COARSE - 1;
 const SHORT_HISTORY_TIP: &str =
     "Showing data since k8sBoard connected; connect Prometheus for 30 days";
-const SOURCE_NOTE: &str = "CPU and memory: metrics-server, sampled by k8sBoard every 15s while the app is open; kept 24 hours.";
+const SOURCE_NOTE: &str = "CPU and memory: metrics-server, sampled by k8sBoard every 15s while the app is open. Network and disk I/O: kubelet stats summary and cAdvisor through the API server node proxy, sampled every 15s while needed. Kept 24 hours.";
+const METRICS_UNAVAILABLE_TITLE: &str = "Metrics unavailable";
+const KUBELET_UNAVAILABLE_TITLE: &str = "Network and disk I/O unavailable";
+/// A Table view column of a rate or of the time.
+const COLUMN_WIDTH: f32 = 78.;
 
 /// What the tab needs besides the cached data.
 pub(crate) struct MonitorView<'a> {
     pub(crate) state: &'a MonitorState,
     /// The feed of the subject: pods for pods and workloads, nodes for nodes.
     pub(crate) status: &'a FeedStatus,
+    /// The kubelet feed, for the Network and Disk I/O cards.
+    pub(crate) kubelet_status: &'a FeedStatus,
     /// The pods feed's note, such as `no access in web`.
     pub(crate) note: Option<&'a str>,
     /// The container sub-tab has no scope selector.
@@ -48,6 +56,7 @@ impl<'a> MonitorView<'a> {
         Self {
             state: &state.monitor,
             status: &live.metrics.pods.status,
+            kubelet_status: &live.metrics.kubelet.status,
             note: live.metrics.pods.note.as_deref(),
             has_scope: true,
             is_expanded: state.is_expanded,
@@ -67,6 +76,7 @@ impl<'a> MonitorView<'a> {
         Self {
             state: &state.monitor,
             status: &live.metrics.nodes.status,
+            kubelet_status: &live.metrics.kubelet.status,
             note: None,
             has_scope: true,
             is_expanded: state.is_expanded,
@@ -83,15 +93,33 @@ pub(crate) fn monitor_tab(view: &MonitorView<'_>, cx: &Context<AppShell>) -> Any
             .child(text)
             .into_any_element()
     };
-    match view.status {
-        FeedStatus::Unavailable(_) | FeedStatus::Failed(_) => return unavailable(view.status),
-        FeedStatus::Checking
-        | FeedStatus::Waiting
-        | FeedStatus::Live
-        | FeedStatus::Interrupted(_) => {}
+    let is_metrics_down = is_down(view.status);
+    let is_kubelet_down = is_down(view.kubelet_status);
+    if is_metrics_down && is_kubelet_down {
+        return v_flex()
+            .gap_3()
+            .child(unavailable(
+                "monitor-unavailable",
+                METRICS_UNAVAILABLE_TITLE,
+                view.status,
+            ))
+            .child(unavailable(
+                "monitor-kubelet-unavailable",
+                KUBELET_UNAVAILABLE_TITLE,
+                view.kubelet_status,
+            ))
+            .into_any_element();
     }
     let data = view.state.cache.as_ref().map(|cache| &cache.data);
-    let mut column = v_flex().gap_3().child(toolbar(view, data, cx));
+    let mut column = v_flex().gap_3();
+    if is_metrics_down {
+        column = column.child(unavailable(
+            "monitor-unavailable",
+            METRICS_UNAVAILABLE_TITLE,
+            view.status,
+        ));
+    }
+    column = column.child(toolbar(view, data, cx));
     if let Some(note) = view.note {
         column = column.child(
             div()
@@ -105,16 +133,41 @@ pub(crate) fn monitor_tab(view: &MonitorView<'_>, cx: &Context<AppShell>) -> Any
             format!("Last poll failed: {reason}. Showing older samples.").into(),
         ));
     }
-    let Some(data) = data.filter(|data| !data.charts.is_empty()) else {
+    let Some(data) = data else {
         return column
             .child(muted("Collecting the first sample…".into()))
             .into_any_element();
     };
-    column = if view.state.is_table {
-        column.child(table(&data.rows, cx))
+    // A feed that is down has no cards: its alert says why.
+    let usage_charts = if is_metrics_down {
+        &[][..]
     } else {
-        column.child(charts(data, view.is_expanded, cx))
+        &data.charts[..]
     };
+    let kubelet_charts = if is_kubelet_down {
+        &[][..]
+    } else {
+        &data.kubelet_charts[..]
+    };
+    if !is_metrics_down && usage_charts.is_empty() {
+        column = column.child(muted("Collecting the first sample…".into()));
+    }
+    column = if view.state.is_table {
+        column.child(table(&data.rows, !data.charts.is_empty(), cx))
+    } else {
+        column.child(charts(
+            usage_charts.iter().chain(kubelet_charts),
+            view.is_expanded,
+            cx,
+        ))
+    };
+    if is_kubelet_down {
+        column = column.child(unavailable(
+            "monitor-kubelet-unavailable",
+            KUBELET_UNAVAILABLE_TITLE,
+            view.kubelet_status,
+        ));
+    }
     column
         .child(
             div()
@@ -125,8 +178,13 @@ pub(crate) fn monitor_tab(view: &MonitorView<'_>, cx: &Context<AppShell>) -> Any
         .into_any_element()
 }
 
-/// A denied, missing, or broken metrics API replaces the whole tab. A failed poll keeps retrying.
-fn unavailable(status: &FeedStatus) -> AnyElement {
+/// A denied, missing, or broken feed. A failed poll keeps retrying.
+fn is_down(status: &FeedStatus) -> bool {
+    matches!(status, FeedStatus::Unavailable(_) | FeedStatus::Failed(_))
+}
+
+/// The alert of a feed that is down: it replaces that feed's cards.
+fn unavailable(id: &'static str, title: &'static str, status: &FeedStatus) -> AnyElement {
     let message = match status {
         FeedStatus::Failed(reason) => format!("{reason} Retrying."),
         FeedStatus::Unavailable(reason) => reason.clone(),
@@ -135,9 +193,7 @@ fn unavailable(status: &FeedStatus) -> AnyElement {
         | FeedStatus::Live
         | FeedStatus::Interrupted(_) => String::new(),
     };
-    Alert::warning("monitor-unavailable", message)
-        .title("Metrics unavailable")
-        .into_any_element()
+    Alert::warning(id, message).title(title).into_any_element()
 }
 
 fn toolbar(
@@ -256,13 +312,17 @@ fn status_text(
 }
 
 /// Two per row when the drawer is expanded, one otherwise.
-fn charts(data: &MonitorData, is_expanded: bool, cx: &Context<AppShell>) -> AnyElement {
+fn charts<'a>(
+    models: impl Iterator<Item = &'a Rc<UsageChartModel>>,
+    is_expanded: bool,
+    cx: &Context<AppShell>,
+) -> AnyElement {
     let height = px(if is_expanded {
         CHART_HEIGHT_EXPANDED
     } else {
         CHART_HEIGHT
     });
-    let cards = data.charts.iter().map(|model| {
+    let cards = models.map(|model| {
         let card = usage_chart_card(model.clone(), height, cx);
         if is_expanded {
             div()
@@ -285,29 +345,32 @@ fn charts(data: &MonitorData, is_expanded: bool, cx: &Context<AppShell>) -> AnyE
     }
 }
 
-/// The points of the range, newest first: how long ago, CPU, memory.
-fn table(rows: &[MonitorRow], cx: &Context<AppShell>) -> AnyElement {
+/// The points of the range, newest first: how long ago, CPU, memory, receive, transmit, read,
+/// write. `has_metrics` is whether the metrics feed has a sample at all.
+fn table(rows: &[MonitorRow], has_metrics: bool, cx: &Context<AppShell>) -> AnyElement {
     let theme = cx.theme();
     let mono = theme.mono_font_family.clone();
     let bad = tone_color(StatusTone::Bad, cx);
-    let cell = |text: String| div().w(px(96.)).child(text);
+    let muted = theme.muted_foreground;
+    let cell = |text: String| div().w(px(COLUMN_WIDTH)).child(text);
     let value = |value: Option<f64>, measure: Measure| match value {
-        Some(value) => div()
-            .w(px(96.))
-            .child(measure.format(value))
-            .into_any_element(),
-        None => div()
-            .w(px(96.))
-            .text_color(theme.muted_foreground)
-            .child("not running")
+        Some(value) => cell(measure.format(value)).into_any_element(),
+        // Without a metrics tick there is no CPU or Memory to be missing: it is just not read.
+        None if !has_metrics => cell("—".to_owned()).text_color(muted).into_any_element(),
+        None => cell("not running".to_owned())
+            .text_color(muted)
             .into_any_element(),
     };
-    let header = h_flex()
-        .gap_2()
-        .text_color(theme.muted_foreground)
-        .child(cell("Time".to_owned()))
-        .child(cell("CPU".to_owned()))
-        .child(cell("Memory".to_owned()));
+    let rate = |value: Option<f64>| match value {
+        Some(value) => cell(Measure::Rate.format(value)).into_any_element(),
+        None => cell("—".to_owned()).text_color(muted).into_any_element(),
+    };
+    let header = h_flex().gap_2().text_color(muted).children(
+        [
+            "Time", "CPU", "Memory", "Receive", "Transmit", "Read", "Write",
+        ]
+        .map(|title| cell(title.to_owned())),
+    );
     v_flex()
         .font_family(mono)
         .text_xs()
@@ -319,6 +382,10 @@ fn table(rows: &[MonitorRow], cx: &Context<AppShell>) -> AnyElement {
                 .child(cell(format_offset(row.offset)))
                 .child(value(row.cpu, Measure::Cpu))
                 .child(value(row.memory, Measure::Bytes))
+                .child(rate(row.network.map(|pair| pair.first)))
+                .child(rate(row.network.map(|pair| pair.second)))
+                .child(rate(row.disk.map(|pair| pair.first)))
+                .child(rate(row.disk.map(|pair| pair.second)))
                 .children(row.is_oom.then(|| div().text_color(bad).child("OOMKilled")))
         }))
         .into_any_element()

@@ -20,6 +20,8 @@ const BAD_RATIO: f64 = 0.9;
 pub(crate) enum Measure {
     Cpu,
     Bytes,
+    /// Bytes per second in decimal units, like the wireframe: `420 KB/s`, `1.3 MB/s`.
+    Rate,
 }
 
 /// A number and its unit, kept apart so a pair can show a shared unit once.
@@ -52,6 +54,7 @@ impl Measure {
         match self {
             Self::Cpu => cpu_parts(value),
             Self::Bytes => byte_parts(value),
+            Self::Rate => rate_parts(value),
         }
     }
 }
@@ -85,6 +88,33 @@ fn trim_decimal(value: f64) -> String {
         format!("{value:.0}")
     } else {
         format!("{value:.1}")
+    }
+}
+
+const RATE_UNITS: [&str; 4] = [" B/s", " KB/s", " MB/s", " GB/s"];
+
+/// Whole units below 1,000 KB/s, one decimal from there on, dropped when it is zero; a value that
+/// rounds up to 1,000 moves to the next unit (`1.0 MB/s`, not `1000 KB/s`).
+fn rate_parts(bytes_per_second: f64) -> Parts {
+    let mut scaled = bytes_per_second.max(0.);
+    let mut unit = 0;
+    loop {
+        let is_last = unit == RATE_UNITS.len() - 1;
+        let (number, rounded) = if unit < 2 {
+            let whole = scaled.round();
+            (format!("{whole:.0}"), whole)
+        } else {
+            let tenths = (scaled * 10.).round() / 10.;
+            (format!("{tenths:.1}"), tenths)
+        };
+        if rounded < 1000. || is_last {
+            return Parts {
+                number,
+                unit: RATE_UNITS[unit],
+            };
+        }
+        scaled /= 1000.;
+        unit += 1;
     }
 }
 
@@ -219,6 +249,20 @@ mod tests {
             Measure::Bytes.format_pair(498. * MI, 512. * MI, " of "),
             "498 of 512Mi"
         );
+    }
+
+    #[test]
+    fn format_rate_uses_decimal_units() {
+        let text = |bytes_per_second| Measure::Rate.format(bytes_per_second);
+        assert_eq!(text(0.), "0 B/s");
+        assert_eq!(text(512.), "512 B/s");
+        assert_eq!(text(420_000.), "420 KB/s");
+        assert_eq!(text(999_400.), "999 KB/s");
+        assert_eq!(text(999_600.), "1.0 MB/s");
+        assert_eq!(text(1_300_000.), "1.3 MB/s");
+        assert_eq!(text(12_400_000.), "12.4 MB/s");
+        assert_eq!(text(2_100_000_000.), "2.1 GB/s");
+        assert_eq!(text(-5.), "0 B/s");
     }
 
     #[test]

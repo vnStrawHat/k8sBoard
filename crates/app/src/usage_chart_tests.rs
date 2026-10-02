@@ -29,6 +29,7 @@ fn model(values: &[Option<f64>], references: &[f64], unit: Measure) -> UsageChar
             })
             .collect(),
         markers: Vec::new(),
+        notice: None,
     }
 }
 
@@ -158,4 +159,53 @@ fn reference_labels_stay_inside_the_chart() {
     for line in [0., 3., 6., 12., 13.] {
         assert!(reference_label_y(line) >= 0., "{line}");
     }
+}
+
+#[test]
+fn nice_max_floors_rates_at_one_kb() {
+    let rate = |value| nice_max(value, Measure::Rate);
+    assert_eq!(rate(0.), 1_000.);
+    assert_eq!(rate(120.), 1_000.);
+    assert_eq!(rate(1_000.), 1_000.);
+    assert_eq!(rate(1_001.), 2_000.);
+    assert_eq!(rate(3_000.), 4_000.);
+    assert_eq!(rate(420_000.), 1_000_000.);
+    assert_eq!(rate(1_300_000.), 2_000_000.);
+}
+
+#[test]
+fn rate_midlines_are_whole_in_their_unit() {
+    let mid = |value| Measure::Rate.format(nice_max(value, Measure::Rate) / 2.);
+    assert_eq!(mid(500.), "500 B/s");
+    assert_eq!(mid(3_000.), "2 KB/s");
+    // A 5 KB/s top would have put `3 KB/s` on the midline.
+    assert_eq!(mid(4_500.), "5 KB/s");
+    assert_eq!(mid(420_000.), "500 KB/s");
+    assert_eq!(mid(2_600_000.), "2.0 MB/s");
+    assert_eq!(mid(7_000_000.), "5.0 MB/s");
+    for exponent in 3..10 {
+        for mantissa in [1., 1.5, 2., 3., 4.5, 6., 9.] {
+            let top = nice_max(mantissa * 10f64.powi(exponent), Measure::Rate);
+            let half = top / 2.;
+            // The half of a top is 1, 2, 4, 5 or 0.5 times a power of ten: no rounding in its text.
+            let digits = format!("{half:e}");
+            let significand: f64 = digits
+                .split('e')
+                .next()
+                .and_then(|text| text.parse().ok())
+                .unwrap_or(0.);
+            assert!([1., 2., 4., 5.].contains(&significand), "{top} -> {half}");
+        }
+    }
+}
+
+#[test]
+fn points_in_range_ignore_gaps_and_old_points() {
+    let mut chart = model(&[None, None], &[], Measure::Rate);
+    assert!(!has_points_in_range(&chart));
+    chart.series[0].points = vec![(at(10), Some(5.))];
+    chart.start = at(20);
+    assert!(!has_points_in_range(&chart));
+    chart.start = at(0);
+    assert!(has_points_in_range(&chart));
 }

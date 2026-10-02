@@ -88,7 +88,7 @@ Step 2 always sends `wants_disk_io: false`.
 
 ## Screenshot settle (`screenshot.rs`, step 3)
 
-Monitor screens also wait for `is_metrics_settled(kubelet.status, kubelet.history.tick_count(), 2)` (two rounds give the first rate).
+Monitor screens also wait for `is_metrics_settled(kubelet.status, kubelet.history.tick_count(), 4)`: four rounds, because the disk node is first read in an early round that may fall under a second after the previous scrape (no rate then), so its first rate comes with the fourth round. `SETTLE_TIMEOUT` is 60 s for that.
 
 ## Logging
 

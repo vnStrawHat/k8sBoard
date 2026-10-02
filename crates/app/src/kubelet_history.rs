@@ -3,13 +3,17 @@
 //! bytes per second between two kubelet sample times; a reset or a replaced pod leaves a gap.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use cluster::{
     ControllerRef, DiskIoSample, NamespaceScope, NodeKubeletStats, PodKubeletStats, PodSummary,
     PvcUsage,
 };
 
-use crate::history_rings::{DROP_AFTER_TICKS, FINE_TICKS, Retention, RingPoint, Rings, Timelines};
+use crate::history_rings::{
+    DROP_AFTER_TICKS, FINE_TICKS, Resolution, Retention, RingPoint, Rings, Timelines,
+};
+use crate::kind_row::{PodOwner, owns};
 
 /// A smaller step between two samples is the same scrape, not a new one.
 const MIN_SAMPLE_GAP_MILLIS: i64 = 1_000;
@@ -19,6 +23,15 @@ const MIN_SAMPLE_GAP_MILLIS: i64 = 1_000;
 pub(crate) struct RatePair<T> {
     pub(crate) first: T,
     pub(crate) second: T,
+}
+
+impl From<RatePair<u32>> for RatePair<u64> {
+    fn from(rate: RatePair<u32>) -> Self {
+        Self {
+            first: u64::from(rate.first),
+            second: u64::from(rate.second),
+        }
+    }
 }
 
 impl RatePair<u64> {
@@ -174,9 +187,36 @@ impl<P: RingPoint> CounterRings<P> {
     }
 }
 
+/// What a node's newest cAdvisor read said.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DiskIoState {
+    /// Not read in the newest round: not a disk target, failed, or no round yet.
+    NotSampled,
+    /// Read; `has_root` is whether the root cgroup (`id="/"`) had a series.
+    Sampled { has_root: bool },
+}
+
+/// Which counter pair a series reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RateKind {
+    /// Receive and transmit.
+    Network,
+    /// Read and write.
+    DiskIo,
+}
+
+/// Rates cut to one resolution, ready for a chart or a table.
+pub(crate) struct RateSeries {
+    /// Oldest first; `None` where the series has no rate.
+    pub(crate) points: Vec<(jiff::Timestamp, Option<RatePair<u64>>)>,
+    /// The spacing of the points, for splitting a line at a gap.
+    pub(crate) step: Duration,
+}
+
 struct NodeKubelet {
     network: CounterRings<RatePair<u64>>,
     disk: CounterRings<RatePair<u64>>,
+    disk_io: DiskIoState,
     last_seen: u64,
 }
 
@@ -185,6 +225,7 @@ impl NodeKubelet {
         Self {
             network: CounterRings::new(),
             disk: CounterRings::new(),
+            disk_io: DiskIoState::NotSampled,
             last_seen: tick,
         }
     }
@@ -316,6 +357,7 @@ impl KubeletHistory {
 
     fn begin_tick(&mut self) {
         for node in self.nodes.values_mut() {
+            node.disk_io = DiskIoState::NotSampled;
             node.network.begin_tick();
             node.disk.begin_tick();
         }
@@ -441,12 +483,15 @@ impl KubeletHistory {
         sample: &DiskIoSample,
         scope: &NamespaceScope,
     ) {
+        let entry = self
+            .nodes
+            .entry(node.to_owned())
+            .or_insert_with(|| NodeKubelet::new(tick));
+        entry.last_seen = tick;
+        entry.disk_io = DiskIoState::Sampled {
+            has_root: sample.node.is_some(),
+        };
         if let Some(counters) = &sample.node {
-            let entry = self
-                .nodes
-                .entry(node.to_owned())
-                .or_insert_with(|| NodeKubelet::new(tick));
-            entry.last_seen = tick;
             let sampled_at = counters.sampled_at.unwrap_or(at);
             entry.disk.observe(
                 sampled_at,
@@ -519,6 +564,165 @@ impl KubeletHistory {
     /// The ticks ever recorded; it never decreases.
     pub(crate) fn tick_count(&self) -> u64 {
         self.tick_count
+    }
+
+    /// The newest disk read of `node`.
+    pub(crate) fn disk_io_state(&self, node: &str) -> DiskIoState {
+        self.nodes
+            .get(node)
+            .map_or(DiskIoState::NotSampled, |node| node.disk_io)
+    }
+
+    /// Whether the kubelet has reported a disk series for the pod's `container`, or for any
+    /// container of the pod.
+    pub(crate) fn has_disk_series(
+        &self,
+        namespace: &str,
+        pod: &str,
+        container: Option<&str>,
+    ) -> bool {
+        self.pod(namespace, pod).is_some_and(|pod| match container {
+            Some(container) => pod.containers.contains_key(container),
+            None => !pod.containers.is_empty(),
+        })
+    }
+
+    fn pod(&self, namespace: &str, name: &str) -> Option<&PodKubelet> {
+        // The lookup key is owned, which is fine for a read that happens once per redraw.
+        let key = PodKey {
+            namespace: namespace.to_owned(),
+            name: name.to_owned(),
+        };
+        self.pods.get(&key)
+    }
+
+    /// One pod. Network is the pod's own, whatever `container` says: its containers share the
+    /// network namespace. Disk I/O is the sum of its containers, or just `container`.
+    pub(crate) fn pod_rates(
+        &self,
+        kind: RateKind,
+        namespace: &str,
+        pod: &str,
+        container: Option<&str>,
+        resolution: Resolution,
+    ) -> RateSeries {
+        let mut sum = RateSum::new(&self.timelines, resolution);
+        if let Some(pod) = self.pod(namespace, pod) {
+            sum.add_pod(pod, kind, container);
+        }
+        sum.finish()
+    }
+
+    /// The pods `owner` owns by namespace and controller, summed, or just `pod` among them.
+    /// Host-network pods have no network rings, so they add nothing.
+    pub(crate) fn owner_rates(
+        &self,
+        kind: RateKind,
+        owner: &PodOwner,
+        pod: Option<&str>,
+        resolution: Resolution,
+    ) -> RateSeries {
+        let mut sum = RateSum::new(&self.timelines, resolution);
+        for (key, entry) in &self.pods {
+            let is_wanted = pod.is_none_or(|wanted| wanted == key.name);
+            if is_wanted && owns(owner, &key.namespace, entry.controller.as_ref()) {
+                sum.add_pod(entry, kind, None);
+            }
+        }
+        sum.finish()
+    }
+
+    pub(crate) fn node_rates(
+        &self,
+        kind: RateKind,
+        node: &str,
+        resolution: Resolution,
+    ) -> RateSeries {
+        let mut sum = RateSum::new(&self.timelines, resolution);
+        if let Some(node) = self.nodes.get(node) {
+            let series = match kind {
+                RateKind::Network => &node.network,
+                RateKind::DiskIo => &node.disk,
+            };
+            sum.add(series.rings.as_ref());
+        }
+        sum.finish()
+    }
+
+    /// The arrival time of the newest tick.
+    pub(crate) fn newest_tick(&self) -> Option<jiff::Timestamp> {
+        self.timelines.newest()
+    }
+
+    /// From the oldest kept point to the newest tick.
+    pub(crate) fn span(&self) -> Option<Duration> {
+        self.timelines.span()
+    }
+}
+
+/// Sums rate series point by point on the kubelet timeline.
+struct RateSum<'a> {
+    timelines: &'a Timelines,
+    resolution: Resolution,
+    values: Vec<Option<RatePair<u64>>>,
+}
+
+impl<'a> RateSum<'a> {
+    fn new(timelines: &'a Timelines, resolution: Resolution) -> Self {
+        Self {
+            timelines,
+            resolution,
+            values: timelines.blank(resolution),
+        }
+    }
+
+    /// Adds one series; `None` (no rings yet) adds nothing.
+    fn add<P: Copy + Into<RatePair<u64>>>(&mut self, rings: Option<&Rings<P>>) {
+        let Some(rings) = rings else {
+            return;
+        };
+        let points = self.timelines.values(rings, self.resolution);
+        for (total, point) in self.values.iter_mut().zip(points) {
+            let Some(point) = point else {
+                continue;
+            };
+            let rate: RatePair<u64> = point.into();
+            *total = Some(total.map_or(rate, |sum| RatePair {
+                first: sum.first.saturating_add(rate.first),
+                second: sum.second.saturating_add(rate.second),
+            }));
+        }
+    }
+
+    fn add_pod(&mut self, pod: &PodKubelet, kind: RateKind, container: Option<&str>) {
+        match kind {
+            RateKind::Network => {
+                self.add(
+                    pod.network
+                        .as_ref()
+                        .and_then(|network| network.rings.as_ref()),
+                );
+            }
+            RateKind::DiskIo => {
+                for (name, series) in &pod.containers {
+                    if container.is_none_or(|wanted| wanted == name) {
+                        self.add(series.disk.rings.as_ref());
+                    }
+                }
+            }
+        }
+    }
+
+    fn finish(self) -> RateSeries {
+        RateSeries {
+            points: self
+                .timelines
+                .times(self.resolution)
+                .into_iter()
+                .zip(self.values)
+                .collect(),
+            step: Timelines::step(self.resolution),
+        }
     }
 }
 
