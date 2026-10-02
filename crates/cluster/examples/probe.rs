@@ -4,10 +4,10 @@
 //! events watches together, and prints counts per kind. With `--metrics-seconds` it polls pod
 //! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--kubelet-seconds` it polls the kubelet stats of every Ready node through the node proxy (cAdvisor disk I/O for the first one) and prints counts per node per round. With `--counts` it prints one object-count line per kind (`limit=1` lists, nothing else is read). With `--yaml` it reads the masked
 //! YAML of the first pod and the first node and prints line counts and masking checks, never
-//! the YAML text. With `--secrets` it prints Secret counts by type and certificate parse counts, then reads one TLS secret and prints its key and byte counts, never a value. With `--helm` it prints Helm release counts by status, then reads the first release and prints line and document counts, never values, manifest text, notes, or descriptions. With `--crds` it prints CRD counts and printer-column support, then access, count, object watch, and YAML lines for the established CRDs (add `--watch-seconds` for the watch line and `--yaml` for the YAML line), never object names or values. The access section doubles as the RBAC probe of the context.
+//! the YAML text. With `--secrets` it prints Secret counts by type and certificate parse counts, then reads one TLS secret and prints its key and byte counts, never a value. With `--helm` it prints Helm release counts by status, then reads the first release and prints line and document counts, never values, manifest text, notes, or descriptions. With `--crds` it prints CRD counts and printer-column support, then access, count, object watch, and YAML lines for the established CRDs (add `--watch-seconds` for the watch line and `--yaml` for the YAML line), never object names or values. The access section doubles as the RBAC probe of the context. With `--analysis` it prints the RBAC snapshot counts and coverage, the caller's rules review count, and the Who-can grant count for `get secrets`, counts only.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis]
 //! ```
 
 use std::collections::BTreeMap;
@@ -18,19 +18,19 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use cluster::{
-    AccessCheck, AccessDecision, AccessReport, ClusterConnection, ClusterError, ColumnValue,
-    ContainerKind, ContainerState, ContainerSummary, CrdState, CrdSummary, CronJobSummary,
-    EnvValues, EventFilter, HelmReleaseSummary, HelmRevisionRef, Kubeconfig, KubeletTargets,
-    LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceScope, NodeKubeletStats, NodeMetrics,
-    NodeReadiness, NodeScheduling, NodeSummary, ObjectKind, ObjectRef, PodMetrics, PodStatus,
-    PodSummary, SecretDetails, SecretSummary, StatusReason, Termination, ValueVisibility,
-    WatchUpdate,
+    AccessCheck, AccessDecision, AccessReport, AccessRequest, ClusterConnection, ClusterError,
+    ColumnValue, ContainerKind, ContainerState, ContainerSummary, CrdState, CrdSummary,
+    CronJobSummary, EnvValues, EventFilter, GrantNames, HelmReleaseSummary, HelmRevisionRef,
+    Kubeconfig, KubeletTargets, LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceCoverage,
+    NamespaceScope, NodeKubeletStats, NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary,
+    ObjectKind, ObjectRef, PodMetrics, PodStatus, PodSummary, RequestTarget, ResourceRequest,
+    SecretDetails, SecretSummary, StatusReason, Termination, ValueVisibility, WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 use tokio::sync::watch;
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -48,6 +48,7 @@ struct Args {
     secrets: bool,
     helm: bool,
     crds: bool,
+    analysis: bool,
 }
 
 enum Parsed {
@@ -68,6 +69,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut secrets = false;
     let mut helm = false;
     let mut crds = false;
+    let mut analysis = false;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
         match flag.as_str() {
@@ -77,6 +79,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
             "--secrets" => secrets = true,
             "--helm" => helm = true,
             "--crds" => crds = true,
+            "--analysis" => analysis = true,
             "--kubeconfig" => kubeconfig = Some(PathBuf::from(value("--kubeconfig")?)),
             "--context" => context = Some(value("--context")?),
             "--namespace" => namespace = Some(value("--namespace")?),
@@ -118,6 +121,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         secrets,
         helm,
         crds,
+        analysis,
     }))
 }
 
@@ -1216,6 +1220,91 @@ async fn kubelet_for(
     Ok(())
 }
 
+/// Counts only, never names: the RBAC snapshot, the caller's own rules review, and the
+/// Who-can grant count for `get secrets`.
+async fn analysis_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    namespace: &str,
+) -> io::Result<()> {
+    probe.section("analysis")?;
+    let fallback: Vec<String> = match connection.list_namespaces().await {
+        Ok(namespaces) => namespaces.into_iter().map(|item| item.name).collect(),
+        Err(error) => {
+            probe.fail(&error)?;
+            Vec::new()
+        }
+    };
+    match connection.read_rbac(&fallback).await {
+        Ok(snapshot) => {
+            let coverage = &snapshot.coverage;
+            let listed = |is_listed: bool| if is_listed { "listed" } else { "denied" };
+            let scope = |coverage: &NamespaceCoverage| match coverage {
+                NamespaceCoverage::AllNamespaces => "all".to_owned(),
+                NamespaceCoverage::Namespaces(namespaces) => {
+                    format!("{} namespaces", namespaces.len())
+                }
+            };
+            writeln!(
+                probe.out,
+                "  rbac: cluster roles {} · cluster bindings {} · roles {} · role bindings {} · roles {} · cluster roles {} · role bindings {} · cluster role bindings {}",
+                listed(coverage.cluster_roles),
+                listed(coverage.cluster_bindings),
+                scope(&coverage.roles),
+                scope(&coverage.role_bindings),
+                snapshot.roles.len(),
+                snapshot.cluster_roles.len(),
+                snapshot.role_bindings.len(),
+                snapshot.cluster_role_bindings.len(),
+            )?;
+            let request = AccessRequest {
+                verb: "get".to_owned(),
+                target: RequestTarget::Resource(ResourceRequest {
+                    group: String::new(),
+                    resource: "secrets".to_owned(),
+                    subresource: None,
+                    name: None,
+                    namespace: Some(namespace.to_owned()),
+                }),
+            };
+            let grants = snapshot.who_can(&request);
+            let only_named = grants
+                .iter()
+                .filter(|grant| matches!(grant.names, GrantNames::Only(_)))
+                .count();
+            writeln!(
+                probe.out,
+                "  who can get secrets in {namespace}: {} grants ({only_named} only named)",
+                grants.len(),
+            )?;
+        }
+        Err(error) => probe.fail(&error)?,
+    }
+    match connection.review_rules(namespace).await {
+        Ok(review) => {
+            let incomplete = if review.is_incomplete {
+                ", incomplete"
+            } else {
+                ""
+            };
+            writeln!(
+                probe.out,
+                "  rules review {namespace}: {} rules{incomplete}",
+                review.rules.len(),
+            )?;
+        }
+        Err(error) => probe.fail(&error)?,
+    }
+    match connection.read_network_policies(namespace).await {
+        Ok(policies) => writeln!(
+            probe.out,
+            "  network policies {namespace}: {}",
+            policies.len(),
+        ),
+        Err(error) => probe.fail(&error),
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = match parse_args(std::env::args().skip(1)) {
@@ -1322,6 +1411,13 @@ async fn run(args: &Args) -> io::Result<bool> {
                 writeln!(probe.out, "  {:<26} denied", review.check)?;
             }
         }
+    }
+    if args.analysis {
+        let namespace = scope
+            .namespaces()
+            .first()
+            .map_or(connection.default_namespace(), String::as_str);
+        analysis_for(&mut probe, &connection, namespace).await?;
     }
     if args.counts {
         counts_for(&mut probe, &connection, &scope, access.as_ref()).await?;

@@ -41,7 +41,7 @@ SubjectAccessReview for other subjects (needs `create subjectaccessreviews`, dec
 - [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`, no new dependency, no `Cargo.lock` change.
 - [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
 - [ ] 3. Read-only: the 0001 AC4 grep finds only the SSAR and SSRR `create` calls (both `Api::<SelfSubject…Review>::all`); every new request is `list`. No kube or k8s-openapi type in a public signature; the crate spawns no task.
-- [ ] 4. On UAT the probe `--analysis` prints the snapshot counts, coverage, an SSRR rule count, and a Who-can subject count; results in [decisions.md](decisions.md). The 0001 AC7 credential script reports 0.
+- [ ] 4. On UAT the probe `--analysis` prints the snapshot counts, coverage, an SSRR rule count, and a Who-can grant count; results in [decisions.md](decisions.md). The 0001 AC7 credential script reports 0.
 - [ ] 5. No network I/O on the GPUI thread: fetches run on `ClusterRuntime`, results arrive through `cx.spawn`; each dialog view is created once in `open_*` (the dialog builder only clones it, review); closing a dialog drops (aborts) its in-flight request.
 - [ ] 6. Every result panel shows its source line and caveats ([dialogs.md](dialogs.md)); evaluator results say "computed from RBAC objects" / "computed from NetworkPolicies"; every coverage gap shows its Warn line.
 - [ ] 7. On UAT: Who can `get secrets` lists subjects with binding links that reveal the binding; Check permissions (You) shows the SSRR table; a ServiceAccount drawer shows Can do; Test traffic gives a verdict for two pods.

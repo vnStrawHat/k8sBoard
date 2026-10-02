@@ -101,5 +101,5 @@ impl ClusterConnection {
 
 `--analysis`: after the access table prints (counts only, no names):
 `rbac: cluster roles listed|denied · cluster bindings listed|denied · roles all|{n} namespaces · role bindings all|{n} namespaces · roles {n} · cluster roles {n} · role bindings {n} · cluster role bindings {n}`,
-`rules review {ns}: {n} rules{, incomplete}`, `who can get secrets in {ns}: {n} subjects ({m} only named)`,
+`rules review {ns}: {n} rules{, incomplete}`, `who can get secrets in {ns}: {n} grants ({m} only named)`,
 `network policies {ns}: {n}` (added in step 1b); `{ns}` = the first `--namespace` or the context default. The `read_rbac` fallback is the namespaces the probe already lists. Errors print `error: …` lines and continue. Update `USAGE` and 0001 `probe-example.md`.

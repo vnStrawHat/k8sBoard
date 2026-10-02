@@ -12,10 +12,10 @@ use crate::namespace::NamespaceScope;
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::label_terms;
 
-const SERVICE_ACCOUNTS_GROUP: &str = "system:serviceaccounts";
-const SERVICE_ACCOUNTS_GROUP_PREFIX: &str = "system:serviceaccounts:";
-const AUTHENTICATED_GROUP: &str = "system:authenticated";
-const UNAUTHENTICATED_GROUP: &str = "system:unauthenticated";
+pub(crate) const SERVICE_ACCOUNTS_GROUP: &str = "system:serviceaccounts";
+pub(crate) const SERVICE_ACCOUNTS_GROUP_PREFIX: &str = "system:serviceaccounts:";
+pub(crate) const AUTHENTICATED_GROUP: &str = "system:authenticated";
+pub(crate) const UNAUTHENTICATED_GROUP: &str = "system:unauthenticated";
 
 /// A RoleBinding (`namespace: Some`) or a ClusterRoleBinding (`namespace: None`).
 #[derive(Clone, Debug, PartialEq, Eq)]

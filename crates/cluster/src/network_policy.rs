@@ -2,8 +2,9 @@ use futures::Stream;
 use k8s_openapi::api::networking::v1::{
     NetworkPolicy, NetworkPolicyPeer, NetworkPolicyPort, NetworkPolicySpec,
 };
+use kube::Api;
 
-use crate::connection::ClusterConnection;
+use crate::connection::{ClusterConnection, ClusterError};
 use crate::namespace::NamespaceScope;
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::selector::Selector;
@@ -76,6 +77,18 @@ impl ClusterConnection {
             "watching network policies",
             network_policy_summary,
         )
+    }
+
+    /// Lists the network policies of one namespace, ordered by name.
+    pub async fn read_network_policies(
+        &self,
+        namespace: &str,
+    ) -> Result<Vec<NetworkPolicySummary>, ClusterError> {
+        let api = Api::<NetworkPolicy>::namespaced(self.client().clone(), namespace);
+        let policies = self.list_all(api, "listing network policies").await?;
+        let mut summaries: Vec<_> = policies.iter().map(network_policy_summary).collect();
+        summaries.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(summaries)
     }
 }
 

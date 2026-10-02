@@ -10,7 +10,7 @@
 | 2 | **You** = SelfSubjectRulesReview (one for the picked namespace) for the table and SSAR for "can I …?" | non-mutating review objects, allowed by the project rules; the API server's own answer, covering every authorizer |
 | 3 | Any other subject = **client-side RBAC evaluation**, never SubjectAccessReview | SAR needs `create subjectaccessreviews` (cluster-scoped, privileged) and impersonation is a privilege; both are out of a read-only app. The W7 note "SelfSubjectRulesReview" for an SA cannot work: SSRR answers only for the caller |
 | 4 | RBAC data is **one snapshot per session** (`RbacSnapshot`: four one-shot `list`s), fetched on first need, refreshed by a button; no new watches | analysis tools are occasional; a snapshot keeps every result consistent and the 3N + 4 watch budget unchanged |
-| 5 | **Partial coverage, never a failed snapshot**: a Forbidden ClusterRoles or ClusterRoleBindings list becomes an empty list plus a coverage flag; Roles and RoleBindings are listed cluster-wide, and a Forbidden answer falls back to one list per **known namespace** (the session's namespaces list, else the scope), each list tracked separately; every gap is a Warn line | a restricted account still gets the grants it can see; the scope `All` needs a real namespace list to fall back to; a narrower answer is labeled, not hidden |
+| 5 | **Partial coverage, never a failed snapshot**: a Forbidden ClusterRoles or ClusterRoleBindings list becomes an empty list plus a coverage flag; Roles and RoleBindings are listed cluster-wide, and a Forbidden answer falls back to one list per **known namespace** (the session's namespaces list, else the scope), each list tracked separately; every gap is a Warn line | a restricted account still gets the grants it can see; the scope `All` needs a real namespace list to fall back to; a narrower answer is labeled, not hidden; the per-namespace fallback lists run at most 8 at once, in fallback order |
 | 6 | Aggregated ClusterRoles use **rules as listed** | the aggregation controller already fills `rules`; re-aggregating would duplicate it |
 | 7 | Matching follows the authorizer: verb `*`, group `*`, resource `*`, `*/sub`, `resourceNames`, nonResourceURL `*` and trailing-`*` prefixes; RoleBindings apply only in their namespace and never to cluster-scoped or non-resource requests | the RBAC authorizer's `RuleAllows` and `appliesTo` |
 | 8 | A rule limited by `resourceNames` matched by a request **without a name** is a separate "only for named objects" grant, never "allowed" | the real authorizer denies list/create there; showing it still answers "who could touch this" |
@@ -32,6 +32,7 @@
 | 19 | Prefills: Role/ClusterRole menu → first resource rule (`{verb} {resource}[.{group}]`, role namespace or cluster-wide); SA top button → the open drawer's account, else You; policy menu → destination = first pod the policy selects | the obvious next question from each place |
 | 20 | Result links (binding, role, service account, pod) close the dialog and `reveal` the target | 0012 navigation; no second navigation path |
 | 21 | Screens: `who-can`, `check-permissions`, `account-permissions`, `test-traffic` | ui-verifier needs deterministic dialogs |
+| 22 | `decide` and `rules_of` do not model `system:masters` (it bypasses RBAC); `permissions_view` (step 3) **short-circuits**: an identity in that group (a `group system:masters` query) is always allowed, with the Who-can fixed-row wording, and shows no rules table | the evaluator only reads bindings; an empty result for that group would wrongly say denied |
 
 ## Known ceilings
 
@@ -45,7 +46,7 @@
 
 | Check | Result |
 |---|---|
-| `read_rbac` coverage (cluster roles, cluster bindings, roles, role bindings) and counts (1a) | |
-| `review_rules` (default namespace): rule count, `incomplete` (1a) | |
-| `who_can(get secrets, default)` subject count (1a) | |
-| `read_network_policies` count per probed namespace (1b) | |
+| `read_rbac` coverage (cluster roles, cluster bindings, roles, role bindings) and counts (1a) | all four listed (roles and role bindings `all`); roles 28, cluster roles 95, role bindings 31, cluster role bindings 82 |
+| `review_rules` (default namespace): rule count, `incomplete` (1a) | 7 rules, not incomplete |
+| `who_can(get secrets, default)` grant count, one per subject and binding (1a) | 22 grants (0 only named); kube-system 25 (1 only named) |
+| `read_network_policies` count per probed namespace (1b) | argocd 7, goauthentik 1, default 0, kube-system 0 (8 policies cluster-wide, matching the watch) |

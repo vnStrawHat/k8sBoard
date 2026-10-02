@@ -2,8 +2,9 @@ use std::fmt;
 
 use futures::future::try_join_all;
 use k8s_openapi::api::authorization::v1::{
-    ResourceAttributes, SelfSubjectAccessReview, SelfSubjectAccessReviewSpec,
-    SubjectAccessReviewStatus,
+    NonResourceAttributes, ResourceAttributes, SelfSubjectAccessReview,
+    SelfSubjectAccessReviewSpec, SelfSubjectRulesReview, SelfSubjectRulesReviewSpec,
+    SubjectAccessReviewStatus, SubjectRulesReviewStatus,
 };
 use kube::Api;
 use kube::api::PostParams;
@@ -12,6 +13,8 @@ use crate::connection::{ClusterConnection, ClusterError};
 use crate::custom_resource_definition::{CustomResourceType, ResourceScope};
 use crate::metrics_api::METRICS_GROUP;
 use crate::namespace::NamespaceScope;
+use crate::rbac_evaluation::{AccessRequest, RequestTarget, ResourceRequest};
+use crate::role::RbacRule;
 
 const RBAC_GROUP: &str = "rbac.authorization.k8s.io";
 
@@ -204,6 +207,17 @@ pub struct AccessReport {
     pub reviews: Vec<AccessReview>,
 }
 
+/// What the API server says the caller may do in one namespace (SelfSubjectRulesReview).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RulesReview {
+    /// Resource rules first, then non-resource rules; one rule per binding, duplicates kept.
+    pub rules: Vec<RbacRule>,
+    /// The authorizers could not list every rule, so the rules shown are granted but others
+    /// may exist.
+    pub is_incomplete: bool,
+    pub evaluation_error: Option<String>,
+}
+
 /// The decision of one check in one namespace; `None` is the cluster-wide review.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamespaceAccess {
@@ -313,9 +327,36 @@ impl ClusterConnection {
         namespace: Option<&str>,
     ) -> Result<AccessReview, ClusterError> {
         let decision = self
-            .review_attributes(resource_attributes(check, namespace))
+            .review_spec(resource_spec(resource_attributes(check, namespace)))
             .await?;
         Ok(AccessReview { check, decision })
+    }
+
+    /// Asks the API server (SelfSubjectRulesReview, non-mutating) which rules apply to the
+    /// caller in `namespace`.
+    pub async fn review_rules(&self, namespace: &str) -> Result<RulesReview, ClusterError> {
+        let api = Api::<SelfSubjectRulesReview>::all(self.client().clone());
+        let review = SelfSubjectRulesReview {
+            spec: SelfSubjectRulesReviewSpec {
+                namespace: Some(namespace.to_owned()),
+            },
+            ..Default::default()
+        };
+        let response = self
+            .run(
+                "reviewing rules",
+                api.create(&PostParams::default(), &review),
+            )
+            .await?;
+        Ok(rules_review(response.status))
+    }
+
+    /// Asks whether the caller may make `request` (SelfSubjectAccessReview, non-mutating).
+    pub async fn review_request(
+        &self,
+        request: &AccessRequest,
+    ) -> Result<AccessDecision, ClusterError> {
+        self.review_spec(request_spec(request)).await
     }
 
     /// Asks whether the user may `list` a custom resource. One cluster-wide review for `All` or a
@@ -332,22 +373,21 @@ impl ClusterConnection {
             ResourceScope::Namespaced => review_targets(scope),
         };
         let decisions = try_join_all(namespaces.into_iter().map(|namespace| {
-            self.review_attributes(custom_resource_attributes(resource, namespace))
+            self.review_spec(resource_spec(custom_resource_attributes(
+                resource, namespace,
+            )))
         }))
         .await?;
         Ok(first_denial(decisions))
     }
 
-    async fn review_attributes(
+    async fn review_spec(
         &self,
-        attributes: ResourceAttributes,
+        spec: SelfSubjectAccessReviewSpec,
     ) -> Result<AccessDecision, ClusterError> {
         let api = Api::<SelfSubjectAccessReview>::all(self.client().clone());
         let review = SelfSubjectAccessReview {
-            spec: SelfSubjectAccessReviewSpec {
-                resource_attributes: Some(attributes),
-                non_resource_attributes: None,
-            },
+            spec,
             ..Default::default()
         };
         let response = self
@@ -372,19 +412,40 @@ fn review_targets(scope: &NamespaceScope) -> Vec<Option<&str>> {
     }
 }
 
+/// The one builder of review attributes: checks, custom resources, and typed requests all
+/// go through it.
+fn attributes_of(verb: &str, resource: &ResourceRequest) -> ResourceAttributes {
+    ResourceAttributes {
+        group: Some(resource.group.clone()),
+        namespace: resource.namespace.clone(),
+        resource: Some(resource.resource.clone()),
+        subresource: resource.subresource.clone(),
+        name: resource.name.clone(),
+        verb: Some(verb.to_owned()),
+        ..Default::default()
+    }
+}
+
+fn resource_spec(attributes: ResourceAttributes) -> SelfSubjectAccessReviewSpec {
+    SelfSubjectAccessReviewSpec {
+        resource_attributes: Some(attributes),
+        non_resource_attributes: None,
+    }
+}
+
 /// `namespace` is ignored by cluster-scoped checks.
 fn resource_attributes(check: AccessCheck, namespace: Option<&str>) -> ResourceAttributes {
     let target = check.target();
-    ResourceAttributes {
-        group: Some(target.group.to_owned()),
+    let resource = ResourceRequest {
+        group: target.group.to_owned(),
+        resource: target.resource.to_owned(),
+        subresource: target.subresource.map(str::to_owned),
+        name: None,
         namespace: namespace
             .filter(|_| target.is_namespaced)
             .map(str::to_owned),
-        resource: Some(target.resource.to_owned()),
-        subresource: target.subresource.map(str::to_owned),
-        verb: Some(target.verb.to_owned()),
-        ..Default::default()
-    }
+    };
+    attributes_of(target.verb, &resource)
 }
 
 /// The `list` question for a custom resource; `namespace` is ignored for cluster-scoped ones.
@@ -392,14 +453,57 @@ fn custom_resource_attributes(
     resource: &CustomResourceType,
     namespace: Option<&str>,
 ) -> ResourceAttributes {
-    ResourceAttributes {
-        group: Some(resource.group.clone()),
+    let request = ResourceRequest {
+        group: resource.group.clone(),
+        resource: resource.plural.clone(),
+        subresource: None,
+        name: None,
         namespace: namespace
             .filter(|_| resource.scope == ResourceScope::Namespaced)
             .map(str::to_owned),
-        resource: Some(resource.plural.clone()),
-        verb: Some("list".to_owned()),
-        ..Default::default()
+    };
+    attributes_of("list", &request)
+}
+
+fn request_spec(request: &AccessRequest) -> SelfSubjectAccessReviewSpec {
+    match &request.target {
+        RequestTarget::Resource(resource) => resource_spec(attributes_of(&request.verb, resource)),
+        RequestTarget::NonResource { path } => SelfSubjectAccessReviewSpec {
+            resource_attributes: None,
+            non_resource_attributes: Some(NonResourceAttributes {
+                path: Some(path.clone()),
+                verb: Some(request.verb.clone()),
+            }),
+        },
+    }
+}
+
+fn rules_review(status: Option<SubjectRulesReviewStatus>) -> RulesReview {
+    let Some(status) = status else {
+        return RulesReview {
+            rules: Vec::new(),
+            is_incomplete: false,
+            evaluation_error: None,
+        };
+    };
+    let resource_rules = status.resource_rules.into_iter().map(|rule| RbacRule {
+        api_groups: rule.api_groups.unwrap_or_default(),
+        resources: rule.resources.unwrap_or_default(),
+        resource_names: rule.resource_names.unwrap_or_default(),
+        verbs: rule.verbs,
+        non_resource_urls: Vec::new(),
+    });
+    let non_resource_rules = status.non_resource_rules.into_iter().map(|rule| RbacRule {
+        api_groups: Vec::new(),
+        resources: Vec::new(),
+        resource_names: Vec::new(),
+        verbs: rule.verbs,
+        non_resource_urls: rule.non_resource_urls.unwrap_or_default(),
+    });
+    RulesReview {
+        rules: resource_rules.chain(non_resource_rules).collect(),
+        is_incomplete: status.incomplete,
+        evaluation_error: status.evaluation_error.filter(|error| !error.is_empty()),
     }
 }
 
@@ -428,6 +532,8 @@ fn access_decision(status: Option<SubjectAccessReviewStatus>) -> AccessDecision 
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+
+    use k8s_openapi::api::authorization::v1::{NonResourceRule, ResourceRule};
 
     use super::*;
 
@@ -891,5 +997,119 @@ mod tests {
             first_denial(vec![AccessDecision::Allowed]),
             AccessDecision::Allowed
         );
+    }
+
+    fn texts(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    fn rules_status(
+        resource_rules: Vec<ResourceRule>,
+        non_resource_rules: Vec<NonResourceRule>,
+    ) -> SubjectRulesReviewStatus {
+        SubjectRulesReviewStatus {
+            evaluation_error: None,
+            incomplete: false,
+            non_resource_rules,
+            resource_rules,
+        }
+    }
+
+    #[test]
+    fn rules_review_maps_resource_and_url_rules() {
+        let status = rules_status(
+            vec![ResourceRule {
+                api_groups: Some(texts(&["apps"])),
+                resource_names: Some(texts(&["web"])),
+                resources: Some(texts(&["deployments"])),
+                verbs: texts(&["get", "list"]),
+            }],
+            vec![NonResourceRule {
+                non_resource_urls: Some(texts(&["/healthz"])),
+                verbs: texts(&["get"]),
+            }],
+        );
+        let review = rules_review(Some(status));
+        let [resource, url] = review.rules.as_slice() else {
+            panic!("two rules");
+        };
+        assert_eq!(resource.api_groups, ["apps"]);
+        assert_eq!(resource.resources, ["deployments"]);
+        assert_eq!(resource.resource_names, ["web"]);
+        assert_eq!(resource.verbs, ["get", "list"]);
+        assert!(resource.non_resource_urls.is_empty());
+        assert_eq!(url.non_resource_urls, ["/healthz"]);
+        assert!(url.api_groups.is_empty() && url.resources.is_empty());
+        assert!(!review.is_incomplete);
+    }
+
+    #[test]
+    fn rules_review_incomplete_and_error() {
+        let mut status = rules_status(Vec::new(), Vec::new());
+        status.incomplete = true;
+        status.evaluation_error = Some("webhook down".to_owned());
+        let review = rules_review(Some(status));
+        assert!(review.is_incomplete);
+        assert_eq!(review.evaluation_error.as_deref(), Some("webhook down"));
+    }
+
+    #[test]
+    fn empty_evaluation_error_is_none() {
+        let mut status = rules_status(Vec::new(), Vec::new());
+        status.evaluation_error = Some(String::new());
+        assert_eq!(rules_review(Some(status)).evaluation_error, None);
+        assert_eq!(rules_review(None).evaluation_error, None);
+    }
+
+    fn request(target: RequestTarget) -> AccessRequest {
+        AccessRequest {
+            verb: "get".to_owned(),
+            target,
+        }
+    }
+
+    #[test]
+    fn request_attributes_for_resource() {
+        let spec = request_spec(&request(RequestTarget::Resource(ResourceRequest {
+            group: "apps".to_owned(),
+            resource: "deployments".to_owned(),
+            subresource: Some("scale".to_owned()),
+            name: Some("web".to_owned()),
+            namespace: Some("shop".to_owned()),
+        })));
+        assert_eq!(spec.non_resource_attributes, None);
+        let attributes = spec.resource_attributes.expect("resource attributes");
+        assert_eq!(attributes.group.as_deref(), Some("apps"));
+        assert_eq!(attributes.resource.as_deref(), Some("deployments"));
+        assert_eq!(attributes.subresource.as_deref(), Some("scale"));
+        assert_eq!(attributes.name.as_deref(), Some("web"));
+        assert_eq!(attributes.namespace.as_deref(), Some("shop"));
+        assert_eq!(attributes.verb.as_deref(), Some("get"));
+    }
+
+    #[test]
+    fn request_attributes_for_non_resource() {
+        let spec = request_spec(&request(RequestTarget::NonResource {
+            path: "/healthz".to_owned(),
+        }));
+        assert_eq!(spec.resource_attributes, None);
+        let attributes = spec.non_resource_attributes.expect("url attributes");
+        assert_eq!(attributes.path.as_deref(), Some("/healthz"));
+        assert_eq!(attributes.verb.as_deref(), Some("get"));
+    }
+
+    #[test]
+    fn check_attributes_unchanged() {
+        let log = resource_attributes(AccessCheck::GetPodLogs, Some("shop"));
+        assert_eq!(log.group.as_deref(), Some(""));
+        assert_eq!(log.namespace.as_deref(), Some("shop"));
+        assert_eq!(log.resource.as_deref(), Some("pods"));
+        assert_eq!(log.subresource.as_deref(), Some("log"));
+        assert_eq!(log.verb.as_deref(), Some("get"));
+        assert_eq!(log.name, None);
+        let nodes = resource_attributes(AccessCheck::ListNodes, Some("shop"));
+        assert_eq!(nodes.namespace, None);
+        assert_eq!(nodes.subresource, None);
+        assert_eq!(nodes.verb.as_deref(), Some("list"));
     }
 }

@@ -28,6 +28,7 @@ mod kubelet_stats;
 mod metrics_api;
 mod namespace;
 mod network_policy;
+mod network_policy_traffic;
 mod node;
 mod object_count;
 mod object_yaml;
@@ -37,6 +38,8 @@ mod pod;
 mod pod_log;
 mod pod_status;
 mod quantity;
+mod rbac_evaluation;
+mod rbac_snapshot;
 mod replica_set;
 mod resource_metrics;
 mod resource_quota;
@@ -51,7 +54,9 @@ mod stateful_set;
 mod storage_class;
 mod workload;
 
-pub use access_review::{AccessCheck, AccessDecision, AccessReport, AccessReview, NamespaceAccess};
+pub use access_review::{
+    AccessCheck, AccessDecision, AccessReport, AccessReview, NamespaceAccess, RulesReview,
+};
 pub use autoscaler::{HorizontalPodAutoscalerSummary, HpaMetric, MetricSource, MetricValue};
 pub use cadvisor_text::{ContainerDiskIo, DiskIoCounters, DiskIoSample};
 pub use certificate::{CertificateInfo, CertificateIssue};
@@ -92,6 +97,10 @@ pub use namespace::{NamespaceDeletionCondition, NamespacePhase, NamespaceScope, 
 pub use network_policy::{
     NetworkPolicySummary, PolicyDirection, PolicyPeer, PolicyPort, PolicyRule,
 };
+pub use network_policy_traffic::{
+    DirectionVerdict, PolicyInputs, RequestPort, RuleRef, TrafficDestination, TrafficEndpoint,
+    TrafficError, TrafficRequest, TrafficSource, TrafficVerdict, evaluate_traffic,
+};
 pub use node::{
     ConditionStatus, NodeAddress, NodeCondition, NodeReadiness, NodeResource, NodeScheduling,
     NodeStatus, NodeSummary, NodeSystemInfo, NodeTaint,
@@ -106,6 +115,10 @@ pub use pod::{
 pub use pod_log::{LogLine, LogRequest, LogSource, LogUpdate};
 pub use pod_status::{InitStatus, PodStatus, StatusReason};
 pub use quantity::{ByteAmount, CpuAmount, quantity_ratio};
+pub use rbac_evaluation::{
+    AccessRequest, EffectiveRule, Grant, GrantNames, Identity, RequestTarget, ResourceRequest,
+};
+pub use rbac_snapshot::{NamespaceCoverage, RbacCoverage, RbacSnapshot};
 pub use replica_set::ReplicaSetSummary;
 pub use resource_metrics::{
     ContainerMetrics, METRICS_INTERVAL, NodeMetrics, PodMetrics, ResourceUsage,
