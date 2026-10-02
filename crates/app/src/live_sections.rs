@@ -6,8 +6,8 @@
 
 use cluster::{
     ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule, DeploymentSummary,
-    EndpointSliceSummary, JobSummary, NodeSummary, PodSummary, ReplicaSetSummary, ServiceSummary,
-    ValuePreview,
+    EndpointSliceSummary, JobSummary, NodeSummary, PodDisruptionBudgetSummary, PodSummary,
+    ReplicaSetSummary, ServiceSummary, ValuePreview,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -68,6 +68,9 @@ pub(crate) fn live_rows(
         }
         (LiveContent::UsedBy, KindObject::ConfigMap(config_map)) => {
             used_by_rows(config_map, live, cx)
+        }
+        (LiveContent::SelectedPods, KindObject::PodDisruptionBudget(budget)) => {
+            selected_pods_rows(budget, live, cx)
         }
         (LiveContent::ConfigMapData, KindObject::ConfigMap(config_map)) => {
             config_map_data_rows(kind, row, config_map, live, cx)
@@ -832,6 +835,119 @@ fn used_by_element(ix: usize, used_by: &UsedBy, cx: &Context<AppShell>) -> AnyEl
                 .flex_shrink_0()
                 .text_color(theme.muted_foreground)
                 .child(ways),
+        )
+        .into_any_element()
+}
+
+// ---- Selected pods ----
+
+/// How many selected pods a PodDisruptionBudget drawer lists.
+const MAX_LISTED_SELECTED_PODS: usize = 50;
+
+/// A pod a budget selects, with its health as the PDB controller reads it (the Ready condition).
+#[derive(Debug, PartialEq, Eq)]
+struct SelectedPod<'a> {
+    pod: &'a PodSummary,
+    is_healthy: bool,
+}
+
+/// The pods of the budget's namespace that its selector matches, unhealthy first, then by name.
+/// A budget without a selector selects none.
+fn selected_pods<'a>(
+    budget: &PodDisruptionBudgetSummary,
+    pods: &'a [PodSummary],
+) -> Vec<SelectedPod<'a>> {
+    let Some(selector) = &budget.selector else {
+        return Vec::new();
+    };
+    let mut selected: Vec<SelectedPod<'a>> = pods
+        .iter()
+        .filter(|pod| pod.namespace == budget.namespace && selector.matches(&pod.labels))
+        .map(|pod| SelectedPod {
+            pod,
+            is_healthy: pod
+                .conditions
+                .iter()
+                .any(|condition| condition.name == "Ready" && condition.is_true),
+        })
+        .collect();
+    selected.sort_by(|a, b| {
+        a.is_healthy
+            .cmp(&b.is_healthy)
+            .then_with(|| a.pod.name.cmp(&b.pod.name))
+    });
+    selected
+}
+
+fn selected_pods_rows(
+    budget: &PodDisruptionBudgetSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    if live.pods.is_loading() {
+        return vec![note("Loading pods…", cx)];
+    }
+    let Some(pods) = live.pods.ready_items() else {
+        return vec![note("Pods are unavailable", cx)];
+    };
+    let selected = selected_pods(budget, pods);
+    if selected.is_empty() {
+        return vec![note("No pods match", cx)];
+    }
+    let healthy = selected.iter().filter(|entry| entry.is_healthy).count();
+    let hidden = selected.len().saturating_sub(MAX_LISTED_SELECTED_PODS);
+    let noun = if selected.len() == 1 { "pod" } else { "pods" };
+    std::iter::once(note(
+        &format!("{} {noun} · {healthy} healthy", selected.len()),
+        cx,
+    ))
+    .chain(
+        selected
+            .iter()
+            .take(MAX_LISTED_SELECTED_PODS)
+            .enumerate()
+            .map(|(ix, entry)| selected_pod_element(ix, entry, cx)),
+    )
+    .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+    .collect()
+}
+
+fn selected_pod_element(ix: usize, entry: &SelectedPod, cx: &Context<AppShell>) -> AnyElement {
+    let theme = cx.theme();
+    let hover_bg = theme.muted;
+    let key = ResourceKey::of_pod(entry.pod);
+    let (text, tone) = if entry.is_healthy {
+        ("healthy", StatusTone::Ok)
+    } else {
+        ("unhealthy", StatusTone::Bad)
+    };
+    h_flex()
+        .id(("selected-pod", ix))
+        .gap_2()
+        .items_center()
+        .py_1()
+        .rounded(theme.radius)
+        .text_sm()
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover_bg))
+        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_family(theme.mono_font_family.clone())
+                .child(entry.pod.name.clone()),
+        )
+        .child(
+            toned_text(
+                StatusLabel {
+                    text: text.into(),
+                    tone,
+                },
+                cx,
+            )
+            .flex_shrink_0(),
         )
         .into_any_element()
 }

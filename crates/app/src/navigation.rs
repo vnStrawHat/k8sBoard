@@ -158,6 +158,17 @@ fn kind_availability(
     }
 }
 
+/// Whether a group starts open: the open-by-default groups, and the group that holds the active
+/// screen so its entry is never hidden. The kit keeps the toggle state of a group after its first
+/// render, so this decides the state at launch only.
+fn is_section_open(section: &NavigationSection, active: Screen) -> bool {
+    section.is_open_by_default
+        || section
+            .items
+            .iter()
+            .any(|name| screen_of(name) == Some(active))
+}
+
 pub(crate) fn sidebar(
     active: Screen,
     counts: &NavigationCounts,
@@ -168,7 +179,7 @@ pub(crate) fn sidebar(
         SidebarMenu::new().children(TOP_ITEMS.map(|name| SidebarMenuItem::new(name).disable(true)));
     let sections = SidebarMenu::new().children(SECTIONS.iter().map(|section| {
         SidebarMenuItem::new(section.name)
-            .default_open(section.is_open_by_default)
+            .default_open(is_section_open(section, active))
             .click_to_toggle(true)
             .children(
                 section
@@ -263,9 +274,32 @@ mod tests {
                 "CronJobs",
                 "Services",
                 "Ingresses",
+                "NetworkPolicies",
                 "ConfigMaps",
+                "PDBs",
             ]
         );
+    }
+
+    #[test]
+    fn the_group_of_the_active_screen_starts_open() {
+        let is_open = |name: &str, active: Screen| {
+            let section = SECTIONS
+                .iter()
+                .find(|section| section.name == name)
+                .expect("section exists");
+            is_section_open(section, active)
+        };
+        let policies = Screen::Kind(ResourceKind::NetworkPolicies);
+        assert!(is_open("Network", policies));
+        assert!(!is_open("Config", policies));
+        assert!(is_open(
+            "Config",
+            Screen::Kind(ResourceKind::PodDisruptionBudgets)
+        ));
+        // The groups that open by default stay open, whatever is active.
+        assert!(is_open("Workloads", policies));
+        assert!(!is_open("Network", Screen::Pods));
     }
 
     #[test]

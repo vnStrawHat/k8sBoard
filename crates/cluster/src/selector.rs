@@ -47,6 +47,13 @@ impl Selector {
         }
     }
 
+    /// The selector with no requirements: it selects every pod or namespace.
+    pub fn everything() -> Self {
+        Self {
+            requirements: Vec::new(),
+        }
+    }
+
     /// A Service selector: `key=value` terms. A term without `=` never matches. `None` for no
     /// terms: a Service without a selector selects nothing (its endpoints are managed by hand),
     /// while an empty `Selector` would select every pod.

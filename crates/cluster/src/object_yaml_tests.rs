@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::*;
 
-const ALL_KINDS: [ObjectKind; 13] = [
+const ALL_KINDS: [ObjectKind; 17] = [
     ObjectKind::Pod,
     ObjectKind::Node,
     ObjectKind::Namespace,
@@ -16,6 +16,10 @@ const ALL_KINDS: [ObjectKind; 13] = [
     ObjectKind::Service,
     ObjectKind::Ingress,
     ObjectKind::ConfigMap,
+    ObjectKind::NetworkPolicy,
+    ObjectKind::HorizontalPodAutoscaler,
+    ObjectKind::ResourceQuota,
+    ObjectKind::PodDisruptionBudget,
 ];
 
 fn masked(object: Value, env: EnvValues) -> ObjectYaml {
@@ -58,6 +62,14 @@ fn object_kind_names_and_scopes() {
         (ObjectKind::Service, "Service", true),
         (ObjectKind::Ingress, "Ingress", true),
         (ObjectKind::ConfigMap, "ConfigMap", true),
+        (ObjectKind::NetworkPolicy, "NetworkPolicy", true),
+        (
+            ObjectKind::HorizontalPodAutoscaler,
+            "HorizontalPodAutoscaler",
+            true,
+        ),
+        (ObjectKind::ResourceQuota, "ResourceQuota", true),
+        (ObjectKind::PodDisruptionBudget, "PodDisruptionBudget", true),
     ];
     assert_eq!(table.len(), ALL_KINDS.len());
     for (kind, name, is_namespaced) in table {
@@ -82,6 +94,25 @@ fn api_resources_match_kinds() {
         (ObjectKind::Service, "", "v1", "services"),
         (ObjectKind::Ingress, "networking.k8s.io", "v1", "ingresses"),
         (ObjectKind::ConfigMap, "", "v1", "configmaps"),
+        (
+            ObjectKind::NetworkPolicy,
+            "networking.k8s.io",
+            "v1",
+            "networkpolicies",
+        ),
+        (
+            ObjectKind::HorizontalPodAutoscaler,
+            "autoscaling",
+            "v2",
+            "horizontalpodautoscalers",
+        ),
+        (ObjectKind::ResourceQuota, "", "v1", "resourcequotas"),
+        (
+            ObjectKind::PodDisruptionBudget,
+            "policy",
+            "v1",
+            "poddisruptionbudgets",
+        ),
     ];
     assert_eq!(table.len(), ALL_KINDS.len());
     for (kind, group, version, plural) in table {
@@ -348,4 +379,15 @@ fn no_header_without_hidden_values() {
     let text = masked_text(json!({"kind": "Pod", "metadata": {"name": "api-0"}}));
     assert!(!text.contains("k8sBoard hid"));
     assert!(text.starts_with("kind: Pod\n"));
+}
+
+#[test]
+fn policy_kinds_have_names_and_scope() {
+    for kind in &ALL_KINDS[13..] {
+        assert!(kind.is_namespaced(), "{}", kind.name());
+    }
+    assert_eq!(
+        ObjectKind::PodDisruptionBudget.name(),
+        "PodDisruptionBudget"
+    );
 }

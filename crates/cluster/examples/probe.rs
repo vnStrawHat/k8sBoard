@@ -1,6 +1,6 @@
 //! Read-only probe of one cluster context. Prints domain summaries only: never
 //! credentials, and never `Debug` output of kube types. With `--watch-seconds` it runs
-//! the pods, nodes, namespaces, nine workload, network, and config watches, the endpointslices watch, and two
+//! the pods, nodes, namespaces, nine workload, network, and config watches, the endpointslices watch, four policy watches (network policies, autoscalers, quotas, disruption budgets), and two
 //! events watches together, and prints counts per kind. With `--metrics-seconds` it polls pod
 //! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--kubelet-seconds` it polls the kubelet stats of every Ready node through the node proxy (cAdvisor disk I/O for the first one) and prints counts per node per round. With `--counts` it prints one object-count line per kind (`limit=1` lists, nothing else is read). With `--yaml` it reads the masked
 //! YAML of the first pod and the first node and prints line counts and masking checks, never
@@ -204,7 +204,7 @@ fn next_run_note(cron_jobs: &[CronJobSummary]) -> Option<String> {
     Some(format!("next {}", next.strftime("%Y-%m-%d %H:%M:%S %Z")))
 }
 
-/// Runs all fifteen watches together for `seconds` and prints one line per kind.
+/// Runs all nineteen watches together for `seconds` and prints one line per kind.
 async fn watch_for(
     probe: &mut Probe,
     connection: &ClusterConnection,
@@ -235,6 +235,22 @@ async fn watch_for(
         tally_source(
             "endpointslices",
             connection.watch_endpoint_slices(scope.clone()),
+        ),
+        tally_source(
+            "network policies",
+            connection.watch_network_policies(scope.clone()),
+        ),
+        tally_source(
+            "horizontal pod autoscalers",
+            connection.watch_horizontal_pod_autoscalers(scope.clone()),
+        ),
+        tally_source(
+            "resource quotas",
+            connection.watch_resource_quotas(scope.clone()),
+        ),
+        tally_source(
+            "pod disruption budgets",
+            connection.watch_pod_disruption_budgets(scope.clone()),
         ),
         tally_source(
             "events",
@@ -280,7 +296,7 @@ async fn watch_for(
 }
 
 /// The kinds `--counts` counts, in sidebar order, with the check that gates each.
-const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 13] = [
+const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 17] = [
     (ObjectKind::Pod, "pods", AccessCheck::ListPods),
     (ObjectKind::Node, "nodes", AccessCheck::ListNodes),
     (
@@ -317,6 +333,26 @@ const COUNT_KINDS: [(ObjectKind, &str, AccessCheck); 13] = [
         ObjectKind::ConfigMap,
         "configmaps",
         AccessCheck::ListConfigMaps,
+    ),
+    (
+        ObjectKind::NetworkPolicy,
+        "networkpolicies",
+        AccessCheck::ListNetworkPolicies,
+    ),
+    (
+        ObjectKind::HorizontalPodAutoscaler,
+        "horizontalpodautoscalers",
+        AccessCheck::ListHorizontalPodAutoscalers,
+    ),
+    (
+        ObjectKind::ResourceQuota,
+        "resourcequotas",
+        AccessCheck::ListResourceQuotas,
+    ),
+    (
+        ObjectKind::PodDisruptionBudget,
+        "poddisruptionbudgets",
+        AccessCheck::ListPodDisruptionBudgets,
     ),
 ];
 

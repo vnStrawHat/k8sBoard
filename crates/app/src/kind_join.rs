@@ -12,6 +12,7 @@ use cluster::{
 
 use crate::cluster_session::{CompanionLists, LiveList};
 use crate::kind_row::{KindCell, KindObject, KindRow, deployment_of_replica_set};
+use crate::network_policy_rows::network_policy_status;
 use crate::network_rows::{is_address_pending, service_status};
 use crate::node_usage::{requests_of, takes_room};
 use crate::resource_kind::ResourceKind;
@@ -27,6 +28,8 @@ pub(crate) const CONFIG_MAP_USED_BY: usize = 1;
 pub(crate) const NAMESPACE_PODS: usize = 1;
 pub(crate) const NAMESPACE_CPU: usize = 2;
 pub(crate) const NAMESPACE_MEMORY: usize = 3;
+/// The index of the Affects cell in a NetworkPolicies row.
+pub(crate) const NETWORK_POLICY_AFFECTS: usize = 2;
 
 const EXTERNAL_NAME: &str = "ExternalName";
 /// Slices of this address type name hosts, not pods; counting them would double a dual-stack
@@ -48,6 +51,7 @@ pub(crate) fn join_rows(kind: ResourceKind, rows: &mut [KindRow], inputs: &JoinI
         ResourceKind::Services => join_services(rows, inputs),
         ResourceKind::ConfigMaps => join_config_maps(rows, inputs),
         ResourceKind::Namespaces => join_namespaces(rows, inputs),
+        ResourceKind::NetworkPolicies => join_network_policies(rows, inputs),
         _ => {}
     }
 }
@@ -576,6 +580,61 @@ fn load_cells(load: NamespaceLoad) -> [KindCell; 3] {
             tone: None,
         },
     ]
+}
+
+// ---- NetworkPolicies ----
+
+fn join_network_policies(rows: &mut [KindRow], inputs: &JoinInputs) {
+    let pods = inputs.pods.ready_items().map(pods_by_namespace);
+    for row in rows {
+        let KindObject::NetworkPolicy(policy) = &row.object else {
+            continue;
+        };
+        // Until the pods load, the builder's status and an empty cell stand.
+        let affected = pods.as_ref().map(|pods| {
+            pods.get(policy.namespace.as_str())
+                .map_or(&[][..], Vec::as_slice)
+                .iter()
+                .filter(|pod| policy.pod_selector.matches(&pod.labels))
+                .count()
+        });
+        let (status, cell) = match affected {
+            None => (network_policy_status(policy), KindCell::Absent),
+            Some(count) => affects_state(count),
+        };
+        row.status = status;
+        if let Some(slot) = row.cells.get_mut(NETWORK_POLICY_AFFECTS) {
+            *slot = cell;
+        }
+    }
+}
+
+/// The status and the Affects cell of a policy that selects `count` pods.
+fn affects_state(count: usize) -> (StatusLabel, KindCell) {
+    let noun = if count == 1 { "pod" } else { "pods" };
+    let text = format!("{count} {noun}");
+    if count == 0 {
+        let status = StatusLabel {
+            text: "Selects no pods".into(),
+            tone: StatusTone::Warn,
+        };
+        let cell = KindCell::Quantity {
+            text: text.into(),
+            value: 0,
+            tone: Some(StatusTone::Warn),
+        };
+        return (status, cell);
+    }
+    let status = StatusLabel {
+        text: text.clone().into(),
+        tone: StatusTone::Ok,
+    };
+    let cell = KindCell::Quantity {
+        text: text.into(),
+        value: u64::try_from(count).unwrap_or(u64::MAX),
+        tone: None,
+    };
+    (status, cell)
 }
 
 #[cfg(test)]

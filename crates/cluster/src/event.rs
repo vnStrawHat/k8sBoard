@@ -103,6 +103,28 @@ impl ClusterConnection {
             event_limit(),
         )
     }
+
+    /// Watches the warning `FailedCreate` events of `namespace`: the controller events that
+    /// record a pod or other object rejected at admission, for example by a quota.
+    pub fn watch_failed_creates(
+        &self,
+        namespace: &str,
+    ) -> impl Stream<Item = WatchUpdate<EventSummary>> + Send + 'static {
+        let scope = NamespaceScope::Named(namespace.to_owned());
+        let config = watcher::Config::default().fields(failed_create_selector());
+        limited_summary_watch(
+            self,
+            self.scoped_apis(&scope),
+            config,
+            "watching failed creates",
+            event_summary,
+            event_limit(),
+        )
+    }
+}
+
+fn failed_create_selector() -> &'static str {
+    "type=Warning,reason=FailedCreate"
 }
 
 fn event_limit() -> StoreLimit<EventSummary> {

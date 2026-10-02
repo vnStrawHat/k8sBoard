@@ -722,3 +722,100 @@ fn service_no_ready_endpoints_waits_for_the_pods() {
     );
     assert_eq!(diagnosis, None);
 }
+
+// ---- PodDisruptionBudgets ----
+
+fn budget(expected: u32, healthy: u32, allowed: u32) -> PodDisruptionBudgetSummary {
+    PodDisruptionBudgetSummary {
+        namespace: "team-a".to_owned(),
+        name: "web".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        min_available: Some("2".to_owned()),
+        max_unavailable: None,
+        selector: None,
+        current_healthy: healthy,
+        desired_healthy: 2,
+        expected_pods: expected,
+        disruptions_allowed: allowed,
+        unhealthy_pod_eviction_policy: None,
+        conditions: Vec::new(),
+        is_status_stale: false,
+    }
+}
+
+/// The WHY box of a budget with no pods loaded: the rules read the budget only.
+fn budget_diagnosis(budget: PodDisruptionBudgetSummary) -> Option<KindDiagnosis> {
+    kind_diagnosis(
+        &KindObject::PodDisruptionBudget(budget),
+        &DiagnosisInputs {
+            pods: None,
+            nodes: &[],
+            service: None,
+            now: at(1_000),
+        },
+    )
+}
+
+#[test]
+fn pdb_blocks_drain_with_unhealthy_pods() {
+    let diagnosis = budget_diagnosis(budget(3, 2, 0)).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Bad);
+    assert_eq!(diagnosis.title, "BLOCKS DRAIN");
+    assert_eq!(
+        diagnosis.text,
+        "Only 2 of 3 pods are healthy and minAvailable is 2. Draining any node that runs these \
+         pods will wait."
+    );
+    assert_eq!(diagnosis.pod, None);
+}
+
+#[test]
+fn pdb_blocks_drain_without_room() {
+    let mut full = budget(3, 3, 0);
+    full.min_available = None;
+    full.max_unavailable = Some("0".to_owned());
+    let diagnosis = budget_diagnosis(full).expect("a box");
+    assert_eq!(
+        diagnosis.text,
+        "maxUnavailable is 0 and all 3 pods must stay up, so no pod can be evicted. Draining \
+         any node that runs these pods will wait until the budget changes."
+    );
+}
+
+#[test]
+fn pdb_allowed_has_no_box() {
+    assert_eq!(budget_diagnosis(budget(3, 3, 1)), None);
+}
+
+#[test]
+fn pdb_no_pods_has_no_box() {
+    assert_eq!(budget_diagnosis(budget(0, 0, 0)), None);
+}
+
+#[test]
+fn pdb_sync_failed_blocks_drain() {
+    let mut failed = budget(0, 0, 0);
+    failed.conditions = vec![condition(
+        "DisruptionAllowed",
+        false,
+        Some("SyncFailed"),
+        Some("found no controller ref"),
+    )];
+    let diagnosis = budget_diagnosis(failed).expect("a box");
+    assert_eq!(
+        diagnosis.text,
+        "The disruption controller cannot compute this budget (found no controller ref). \
+         Evictions of the selected pods are refused, so draining a node that runs them will wait."
+    );
+}
+
+#[test]
+fn pdb_blocks_drain_with_a_single_pod() {
+    let diagnosis = budget_diagnosis(budget(1, 1, 0)).expect("a box");
+    assert_eq!(
+        diagnosis.text,
+        "minAvailable is 2 and the only pod must stay up, so it cannot be evicted. Draining the \
+         node that runs this pod will wait until the budget changes."
+    );
+}

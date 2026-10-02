@@ -1183,7 +1183,10 @@ impl LiveCluster {
         };
         let joins_pods = matches!(
             explorer.kind,
-            ResourceKind::Services | ResourceKind::ConfigMaps | ResourceKind::Namespaces
+            ResourceKind::Services
+                | ResourceKind::ConfigMaps
+                | ResourceKind::Namespaces
+                | ResourceKind::NetworkPolicies
         );
         (joins_pods && self.pods.is_loading())
             || self.companion().is_some_and(CompanionLists::is_loading)

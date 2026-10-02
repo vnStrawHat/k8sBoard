@@ -4,9 +4,11 @@
 //! objects are masked before they are serialized, and only the masked text leaves the crate.
 
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
+use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
-use k8s_openapi::api::core::v1::{ConfigMap, Event, Namespace, Node, Pod, Service};
-use k8s_openapi::api::networking::v1::Ingress;
+use k8s_openapi::api::core::v1::{ConfigMap, Event, Namespace, Node, Pod, ResourceQuota, Service};
+use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
+use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use kube::Api;
 use kube::api::{ApiResource, DynamicObject};
 use serde_json::Value;
@@ -43,6 +45,10 @@ pub enum ObjectKind {
     Service,
     Ingress,
     ConfigMap,
+    NetworkPolicy,
+    HorizontalPodAutoscaler,
+    ResourceQuota,
+    PodDisruptionBudget,
 }
 
 impl ObjectKind {
@@ -62,6 +68,10 @@ impl ObjectKind {
             Self::Service => "Service",
             Self::Ingress => "Ingress",
             Self::ConfigMap => "ConfigMap",
+            Self::NetworkPolicy => "NetworkPolicy",
+            Self::HorizontalPodAutoscaler => "HorizontalPodAutoscaler",
+            Self::ResourceQuota => "ResourceQuota",
+            Self::PodDisruptionBudget => "PodDisruptionBudget",
         }
     }
 
@@ -143,6 +153,10 @@ fn api_resource(kind: ObjectKind) -> ApiResource {
         ObjectKind::Service => ApiResource::erase::<Service>(&()),
         ObjectKind::Ingress => ApiResource::erase::<Ingress>(&()),
         ObjectKind::ConfigMap => ApiResource::erase::<ConfigMap>(&()),
+        ObjectKind::NetworkPolicy => ApiResource::erase::<NetworkPolicy>(&()),
+        ObjectKind::HorizontalPodAutoscaler => ApiResource::erase::<HorizontalPodAutoscaler>(&()),
+        ObjectKind::ResourceQuota => ApiResource::erase::<ResourceQuota>(&()),
+        ObjectKind::PodDisruptionBudget => ApiResource::erase::<PodDisruptionBudget>(&()),
     }
 }
 

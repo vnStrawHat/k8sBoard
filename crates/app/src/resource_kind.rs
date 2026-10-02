@@ -11,7 +11,9 @@ use crate::config_map_rows::config_map_row;
 use crate::event_rows::event_rows;
 use crate::kind_row::KindRow;
 use crate::namespace_rows::namespace_row;
+use crate::network_policy_rows::network_policy_row;
 use crate::network_rows::{ingress_row, service_row};
+use crate::policy_rows::pod_disruption_budget_row;
 use crate::workload_rows::{daemon_set_row, deployment_row, replica_set_row, stateful_set_row};
 
 /// One kind with an explorer screen. Per-kind variation is data (the tables below) plus one
@@ -29,6 +31,8 @@ pub(crate) enum ResourceKind {
     Services,
     Ingresses,
     ConfigMaps,
+    NetworkPolicies,
+    PodDisruptionBudgets,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -325,6 +329,48 @@ static CONFIG_MAPS: KindSpec = KindSpec {
     has_port_forward: false,
 };
 
+static NETWORK_POLICIES: KindSpec = KindSpec {
+    label: "NetworkPolicies",
+    object: ObjectKind::NetworkPolicy,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "networkpolicy",
+    plural: "networkpolicies",
+    badge: "Np",
+    is_namespaced: true,
+    access_check: AccessCheck::ListNetworkPolicies,
+    columns: &[
+        column("Pod selector", 220., Align::Left),
+        column("Policy types", 130., Align::Left),
+        column("Affects", 90., Align::Right),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete policy…",
+    has_port_forward: false,
+};
+
+static POD_DISRUPTION_BUDGETS: KindSpec = KindSpec {
+    label: "PDBs",
+    object: ObjectKind::PodDisruptionBudget,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "poddisruptionbudget",
+    plural: "poddisruptionbudgets",
+    badge: "Pd",
+    is_namespaced: true,
+    access_check: AccessCheck::ListPodDisruptionBudgets,
+    columns: &[
+        column("Min available", 110., Align::Left),
+        column("Max unavailable", 135., Align::Left),
+        column("Allowed disruptions", 155., Align::Right),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete PDB…",
+    has_port_forward: false,
+};
+
 /// The Name column of a kind that shows it, as wide as its minimum.
 pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left);
 
@@ -339,7 +385,7 @@ pub(crate) fn kind_columns(kind: ResourceKind) -> Vec<KindColumn> {
 }
 
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::Namespaces,
         Self::Events,
         Self::Deployments,
@@ -351,6 +397,8 @@ impl ResourceKind {
         Self::Services,
         Self::Ingresses,
         Self::ConfigMaps,
+        Self::NetworkPolicies,
+        Self::PodDisruptionBudgets,
     ];
 
     fn spec(self) -> &'static KindSpec {
@@ -366,6 +414,8 @@ impl ResourceKind {
             Self::Services => &SERVICES,
             Self::Ingresses => &INGRESSES,
             Self::ConfigMaps => &CONFIG_MAPS,
+            Self::NetworkPolicies => &NETWORK_POLICIES,
+            Self::PodDisruptionBudgets => &POD_DISRUPTION_BUDGETS,
         }
     }
 
@@ -511,6 +561,14 @@ impl ResourceKind {
             Self::ConfigMaps => connection
                 .watch_config_maps(scope)
                 .map(|update| rows(update, config_map_row))
+                .boxed(),
+            Self::NetworkPolicies => connection
+                .watch_network_policies(scope)
+                .map(|update| rows(update, network_policy_row))
+                .boxed(),
+            Self::PodDisruptionBudgets => connection
+                .watch_pod_disruption_budgets(scope)
+                .map(|update| rows(update, pod_disruption_budget_row))
                 .boxed(),
         }
     }

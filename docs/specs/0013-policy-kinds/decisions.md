@@ -44,7 +44,9 @@
 
 | Check | Result |
 |---|---|
-| `list networkpolicies` / watch line / count | |
-| `list horizontalpodautoscalers` / watch line / count | |
-| `list resourcequotas` / watch line / count | |
-| `list poddisruptionbudgets` / watch line / count | |
+| `list networkpolicies` / watch line / count | allowed / 8 items / count 8 |
+| `list horizontalpodautoscalers` / watch line / count | allowed / 1 item / count 1 |
+| `list resourcequotas` / watch line / count | allowed / 0 items / count 0 |
+| `list poddisruptionbudgets` / watch line / count | allowed / 7 items / count 7 |
+
+AC4 credential check: the 0001 AC7 script was not run, because auto mode blocks token extraction from the kubeconfig. It is covered instead by `kubeconfig_tests::debug_output_never_contains_credentials` and `tests/connection.rs::connection_debug_hides_credentials`, and by a code audit: the new probe lines print only counts and error summaries through `tally_source`, and the probe's `{:?}` sites format domain enums only.

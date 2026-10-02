@@ -501,3 +501,81 @@ fn text_preview_of_one_line_is_singular() {
     };
     assert_eq!(preview_text(&preview), "text · 1 line · 300 B");
 }
+
+// ---- Selected pods ----
+
+fn selected_budget(selector: Option<&[&str]>) -> PodDisruptionBudgetSummary {
+    let selector = selector.map(|terms| {
+        let terms: Vec<String> = terms.iter().map(|term| (*term).to_owned()).collect();
+        // An empty term list is the selector that selects everything.
+        cluster::Selector::of_labels(&terms).unwrap_or_else(cluster::Selector::everything)
+    });
+    PodDisruptionBudgetSummary {
+        namespace: "team-a".to_owned(),
+        name: "web".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        min_available: Some("1".to_owned()),
+        max_unavailable: None,
+        selector,
+        current_healthy: 0,
+        desired_healthy: 1,
+        expected_pods: 0,
+        disruptions_allowed: 0,
+        unhealthy_pod_eviction_policy: None,
+        conditions: Vec::new(),
+        is_status_stale: false,
+    }
+}
+
+fn labelled_pod(namespace: &str, name: &str, label: &str, is_ready: bool) -> PodSummary {
+    PodSummary {
+        namespace: namespace.to_owned(),
+        name: name.to_owned(),
+        status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
+        ready: cluster::ReadyCount { ready: 1, total: 1 },
+        restarts: 0,
+        node_name: None,
+        created_at: None,
+        pod_ip: None,
+        qos_class: None,
+        service_account: None,
+        controller: None,
+        conditions: vec![cluster::PodCondition {
+            name: "Ready".to_owned(),
+            is_true: is_ready,
+            reason: None,
+            message: None,
+        }],
+        status_message: None,
+        labels: vec![label.to_owned()],
+        host_network: false,
+        containers: Vec::new(),
+    }
+}
+
+#[test]
+fn selected_pods_unhealthy_first() {
+    let pods = [
+        labelled_pod("team-a", "web-b", "app=web", true),
+        labelled_pod("team-a", "web-c", "app=web", false),
+        labelled_pod("team-a", "web-a", "app=web", true),
+        labelled_pod("team-a", "db-a", "app=db", false),
+        labelled_pod("team-b", "web-d", "app=web", false),
+    ];
+    let budget = selected_budget(Some(&["app=web"]));
+    let selected = selected_pods(&budget, &pods);
+    let order: Vec<(&str, bool)> = selected
+        .iter()
+        .map(|entry| (entry.pod.name.as_str(), entry.is_healthy))
+        .collect();
+    assert_eq!(order, [("web-c", false), ("web-a", true), ("web-b", true)]);
+}
+
+#[test]
+fn null_selector_selects_no_pods() {
+    let pods = [labelled_pod("team-a", "web-a", "app=web", true)];
+    assert!(selected_pods(&selected_budget(None), &pods).is_empty());
+    // An empty selector selects every pod of the namespace.
+    assert_eq!(selected_pods(&selected_budget(Some(&[])), &pods).len(), 1);
+}

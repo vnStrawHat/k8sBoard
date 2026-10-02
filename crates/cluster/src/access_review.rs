@@ -37,6 +37,10 @@ pub enum AccessCheck {
     ListPodMetrics,
     ListNodeMetrics,
     ListEndpointSlices,
+    ListNetworkPolicies,
+    ListHorizontalPodAutoscalers,
+    ListResourceQuotas,
+    ListPodDisruptionBudgets,
 }
 
 /// The API resource a check asks about.
@@ -50,7 +54,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 22] = [
+    pub const ALL: [AccessCheck; 26] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::CreatePodExec,
@@ -73,6 +77,10 @@ impl AccessCheck {
         Self::ListPodMetrics,
         Self::ListNodeMetrics,
         Self::ListEndpointSlices,
+        Self::ListNetworkPolicies,
+        Self::ListHorizontalPodAutoscalers,
+        Self::ListResourceQuotas,
+        Self::ListPodDisruptionBudgets,
     ];
 
     fn target(self) -> CheckTarget {
@@ -99,6 +107,20 @@ impl AccessCheck {
             Self::ListPodMetrics => ("list", METRICS_GROUP, "pods", None, true),
             Self::ListNodeMetrics => ("list", METRICS_GROUP, "nodes", None, false),
             Self::ListEndpointSlices => ("list", "discovery.k8s.io", "endpointslices", None, true),
+            Self::ListNetworkPolicies => {
+                ("list", "networking.k8s.io", "networkpolicies", None, true)
+            }
+            Self::ListHorizontalPodAutoscalers => (
+                "list",
+                "autoscaling",
+                "horizontalpodautoscalers",
+                None,
+                true,
+            ),
+            Self::ListResourceQuotas => ("list", "", "resourcequotas", None, true),
+            Self::ListPodDisruptionBudgets => {
+                ("list", "policy", "poddisruptionbudgets", None, true)
+            }
         };
         CheckTarget {
             verb,
@@ -189,7 +211,7 @@ impl ClusterConnection {
     /// any request error fails the whole call, so a report is never partial.
     ///
     /// For `Several` the cluster-scoped checks run once, then the namespaced checks run
-    /// one namespace at a time (18 x N + 4 requests); a check is allowed only when every
+    /// one namespace at a time (22 x N + 4 requests); a check is allowed only when every
     /// namespace allows it. That gates menus, it never filters data.
     pub async fn review_access(&self, scope: NamespaceScope) -> Result<AccessReport, ClusterError> {
         let NamespaceScope::Several(namespaces) = &scope else {
@@ -335,9 +357,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 22);
+        assert_eq!(AccessCheck::ALL.len(), 26);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 22);
+        assert_eq!(distinct.len(), 26);
     }
 
     #[test]
@@ -546,8 +568,41 @@ mod tests {
                 "list pods.metrics.k8s.io",
                 "list nodes.metrics.k8s.io",
                 "list endpointslices",
+                "list networkpolicies",
+                "list horizontalpodautoscalers",
+                "list resourcequotas",
+                "list poddisruptionbudgets",
             ]
         );
+    }
+
+    #[test]
+    fn policy_checks_use_their_api_groups() {
+        let expected = [
+            (
+                AccessCheck::ListNetworkPolicies,
+                "networking.k8s.io",
+                "networkpolicies",
+            ),
+            (
+                AccessCheck::ListHorizontalPodAutoscalers,
+                "autoscaling",
+                "horizontalpodautoscalers",
+            ),
+            (AccessCheck::ListResourceQuotas, "", "resourcequotas"),
+            (
+                AccessCheck::ListPodDisruptionBudgets,
+                "policy",
+                "poddisruptionbudgets",
+            ),
+        ];
+        for (check, group, resource) in expected {
+            let attributes = resource_attributes(check, Some("team-a"));
+            assert_eq!(attributes.group.as_deref(), Some(group), "{check}");
+            assert_eq!(attributes.resource.as_deref(), Some(resource), "{check}");
+            assert_eq!(attributes.verb.as_deref(), Some("list"), "{check}");
+            assert_eq!(attributes.namespace.as_deref(), Some("team-a"), "{check}");
+        }
     }
 
     #[test]
@@ -570,7 +625,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 22);
+        assert_eq!(AccessCheck::ALL.len(), 26);
     }
 
     #[test]

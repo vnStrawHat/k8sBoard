@@ -126,7 +126,9 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::Job(_)
         | KindObject::Service(_)
         | KindObject::Ingress(_)
-        | KindObject::ConfigMap(_) => None,
+        | KindObject::ConfigMap(_)
+        | KindObject::NetworkPolicy(_)
+        | KindObject::PodDisruptionBudget(_) => None,
     }
 }
 

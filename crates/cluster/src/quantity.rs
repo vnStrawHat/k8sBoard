@@ -76,6 +76,17 @@ impl ByteAmount {
     }
 }
 
+/// `numerator / denominator` of two quantities of any unit (`180Gi` / `192Gi`, `9k` / `1k`).
+/// `None` when either is malformed or the denominator is zero. The ratio is for comparing
+/// and drawing, so it is a float, not exact.
+pub fn quantity_ratio(numerator: &str, denominator: &str) -> Option<f64> {
+    let denominator = parse_quantity(denominator)?.to_f64();
+    if denominator == 0.0 {
+        return None;
+    }
+    Some(parse_quantity(numerator)?.to_f64() / denominator)
+}
+
 /// `mantissa x 10^exponent x binary`, exact.
 struct Quantity {
     mantissa: u128,
@@ -84,6 +95,10 @@ struct Quantity {
 }
 
 impl Quantity {
+    fn to_f64(&self) -> f64 {
+        (self.mantissa as f64) * (self.binary as f64) * 10f64.powi(self.exponent)
+    }
+
     /// The value in units of `10^unit_exponent`, rounded up, or `None` above `u64::MAX`.
     fn to_unit(&self, unit_exponent: i32) -> Option<u64> {
         let value = self.mantissa.checked_mul(self.binary)?;
@@ -266,6 +281,23 @@ mod tests {
         let digits = "9".repeat(39);
         assert_eq!(bytes(&digits), None);
         assert_eq!(bytes("1e999999999"), None);
+    }
+
+    #[test]
+    fn quantity_ratio_mixes_units() {
+        assert_eq!(quantity_ratio("9k", "1k"), Some(9.0));
+        assert_eq!(quantity_ratio("500m", "1"), Some(0.5));
+        let ratio = quantity_ratio("180Gi", "192Gi").unwrap_or_default();
+        assert!((ratio - 0.9375).abs() < 1e-9);
+        assert_eq!(quantity_ratio("1Gi", "512Mi"), Some(2.0));
+    }
+
+    #[test]
+    fn quantity_ratio_rejects_zero_and_junk() {
+        assert_eq!(quantity_ratio("1", "0"), None);
+        assert_eq!(quantity_ratio("1", "junk"), None);
+        assert_eq!(quantity_ratio("junk", "1"), None);
+        assert_eq!(quantity_ratio("0", "1"), Some(0.0));
     }
 
     #[test]

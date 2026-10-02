@@ -135,6 +135,13 @@ fn joined_column_indices_name_their_columns() {
         Some("Endpoints")
     );
     assert_eq!(service_row(&service(&[])).cells.len(), columns.len());
+    let policy_columns = ResourceKind::NetworkPolicies.columns();
+    assert_eq!(
+        policy_columns
+            .get(NETWORK_POLICY_AFFECTS)
+            .map(|column| column.name),
+        Some("Affects")
+    );
 }
 
 #[test]
@@ -838,4 +845,91 @@ fn cron_job_suffix_needs_eight_digits() {
     assert_eq!(cron_job_of_job("nightly-123"), None);
     assert_eq!(cron_job_of_job("nightly-2901234a"), None);
     assert_eq!(cron_job_of_job("-29012345"), None);
+}
+
+// ---- NetworkPolicies ----
+
+fn network_policy(selector: &[&str]) -> cluster::NetworkPolicySummary {
+    let terms: Vec<String> = selector.iter().map(|term| (*term).to_owned()).collect();
+    cluster::NetworkPolicySummary {
+        namespace: "team-a".to_owned(),
+        name: "web".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        pod_selector: Selector::of_labels(&terms).unwrap_or_else(Selector::everything),
+        ingress: cluster::PolicyDirection::Allowed(Vec::new()),
+        egress: cluster::PolicyDirection::NotIsolated,
+    }
+}
+
+fn joined_policy(policy: &cluster::NetworkPolicySummary, pods: &LiveList<PodSummary>) -> KindRow {
+    let mut rows = vec![crate::network_policy_rows::network_policy_row(policy)];
+    let inputs = JoinInputs {
+        pods,
+        companion: None,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(ResourceKind::NetworkPolicies, &mut rows, &inputs);
+    rows.remove(0)
+}
+
+fn affects_cell(row: &KindRow) -> &KindCell {
+    row.cells
+        .get(NETWORK_POLICY_AFFECTS)
+        .expect("Affects cell exists")
+}
+
+#[test]
+fn network_policy_affects_matching_pods_of_its_namespace() {
+    let pods = ready_list(vec![
+        pod("team-a", "web-1", &["app=web"]),
+        pod("team-a", "web-2", &["app=web"]),
+        pod("team-a", "db-1", &["app=db"]),
+        pod("team-b", "web-3", &["app=web"]),
+    ]);
+    let row = joined_policy(&network_policy(&["app=web"]), &pods);
+    assert_eq!(row.status, toned("2 pods", StatusTone::Ok));
+    assert_eq!(
+        affects_cell(&row),
+        &KindCell::Quantity {
+            text: "2 pods".into(),
+            value: 2,
+            tone: None,
+        }
+    );
+    let one = joined_policy(&network_policy(&["app=db"]), &pods);
+    assert_eq!(one.status, toned("1 pod", StatusTone::Ok));
+}
+
+#[test]
+fn network_policy_with_empty_selector_affects_all_pods_of_its_namespace() {
+    let pods = ready_list(vec![
+        pod("team-a", "web-1", &["app=web"]),
+        pod("team-a", "db-1", &["app=db"]),
+        pod("team-b", "web-3", &["app=web"]),
+    ]);
+    let all = joined_policy(&network_policy(&[]), &pods);
+    assert_eq!(all.status, toned("2 pods", StatusTone::Ok));
+}
+
+#[test]
+fn network_policy_selecting_no_pods_warns() {
+    let pods = ready_list(vec![pod("team-a", "db-1", &["app=db"])]);
+    let row = joined_policy(&network_policy(&["app=web"]), &pods);
+    assert_eq!(row.status, toned("Selects no pods", StatusTone::Warn));
+    assert_eq!(
+        affects_cell(&row),
+        &KindCell::Quantity {
+            text: "0 pods".into(),
+            value: 0,
+            tone: Some(StatusTone::Warn),
+        }
+    );
+}
+
+#[test]
+fn network_policy_without_pods_keeps_builder_status() {
+    let row = joined_policy(&network_policy(&["app=web"]), &LiveList::Loading);
+    assert_eq!(row.status, toned("Ingress", StatusTone::Ok));
+    assert_eq!(affects_cell(&row), &KindCell::Absent);
 }

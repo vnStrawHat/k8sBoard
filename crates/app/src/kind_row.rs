@@ -3,8 +3,8 @@
 
 use cluster::{
     ConfigMapSummary, ControllerRef, CronJobSummary, CronSchedule, DaemonSetSummary,
-    DeploymentSummary, IngressSummary, JobSummary, PodSummary, ReplicaSetSummary, ServiceSummary,
-    StatefulSetSummary,
+    DeploymentSummary, IngressSummary, JobSummary, NetworkPolicySummary,
+    PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary, ServiceSummary, StatefulSetSummary,
 };
 use gpui_kit::SharedString;
 
@@ -45,6 +45,8 @@ pub(crate) enum KindObject {
     Service(ServiceSummary),
     Ingress(IngressSummary),
     ConfigMap(ConfigMapSummary),
+    NetworkPolicy(NetworkPolicySummary),
+    PodDisruptionBudget(PodDisruptionBudgetSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -58,6 +60,7 @@ pub(crate) enum LiveContent {
     Endpoints,
     UsedBy,
     ConfigMapData,
+    SelectedPods,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.

@@ -1,12 +1,12 @@
-//! The WHY box of Deployments, DaemonSets, Jobs, and Services: what is wrong and, when the pods
+//! The WHY box of Deployments, DaemonSets, Jobs, Services, and PodDisruptionBudgets: what is wrong and, when the pods
 //! say so, why. Pure: the drawer reads the live lists and calls `kind_diagnosis`. Pod causes reuse
 //! `pod_diagnosis` without events, so probe-failure detail stays in the pod drawer. Condition and
 //! status messages are arbitrary text, so nothing here logs them.
 
 use cluster::{
-    ContainerKind, ContainerState, DaemonSetSummary, DeploymentSummary, JobStatus, JobSummary,
-    NodeReadiness, NodeSummary, PodStatus, PodSummary, ServiceSummary, StatusReason, Termination,
-    WorkloadCondition,
+    BlockCause, ContainerKind, ContainerState, DaemonSetSummary, DeploymentSummary,
+    DisruptionState, JobStatus, JobSummary, NodeReadiness, NodeSummary, PodDisruptionBudgetSummary,
+    PodStatus, PodSummary, ServiceSummary, StatusReason, Termination, WorkloadCondition,
 };
 use jiff::Timestamp;
 
@@ -55,12 +55,14 @@ pub(crate) fn kind_diagnosis(
         KindObject::DaemonSet(set) => daemon_set_diagnosis(set, inputs),
         KindObject::Job(job) => job_diagnosis(job, inputs),
         KindObject::Service(service) => service_diagnosis(service, inputs),
+        KindObject::PodDisruptionBudget(budget) => pod_disruption_budget_diagnosis(budget),
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
         | KindObject::ReplicaSet(_)
         | KindObject::Ingress(_)
-        | KindObject::ConfigMap(_) => None,
+        | KindObject::ConfigMap(_)
+        | KindObject::NetworkPolicy(_) => None,
     }
 }
 
@@ -98,6 +100,52 @@ fn reason_and_message(condition: &WorkloadCondition) -> Option<String> {
 
 fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
     if count == 1 { one } else { many }
+}
+
+// ---- PodDisruptionBudgets ----
+
+/// BLOCKS DRAIN: the budget refuses every eviction, so a node drain that reaches its pods waits.
+/// Reads only the budget, so it shows while the pods list loads.
+fn pod_disruption_budget_diagnosis(budget: &PodDisruptionBudgetSummary) -> Option<KindDiagnosis> {
+    let DisruptionState::Blocked(cause) = budget.disruption_state() else {
+        return None;
+    };
+    let limit = match (&budget.min_available, &budget.max_unavailable) {
+        (Some(value), _) => format!("minAvailable is {value}"),
+        (None, Some(value)) => format!("maxUnavailable is {value}"),
+        (None, None) => "the budget allows no disruption".to_owned(),
+    };
+    let text = match cause {
+        BlockCause::SyncFailed => {
+            let detail = find_condition(&budget.conditions, "DisruptionAllowed")
+                .and_then(|condition| condition.message.as_deref().or(condition.reason.as_deref()))
+                .unwrap_or("no detail");
+            format!(
+                "The disruption controller cannot compute this budget ({detail}). Evictions of \
+                 the selected pods are refused, so draining a node that runs them will wait."
+            )
+        }
+        BlockCause::UnhealthyPods => format!(
+            "Only {} of {} pods are healthy and {limit}. Draining any node that runs these pods \
+             will wait.",
+            budget.current_healthy, budget.expected_pods
+        ),
+        BlockCause::NoRoom if budget.expected_pods == 1 => format!(
+            "{limit} and the only pod must stay up, so it cannot be evicted. Draining the node \
+             that runs this pod will wait until the budget changes."
+        ),
+        BlockCause::NoRoom => format!(
+            "{limit} and all {} pods must stay up, so no pod can be evicted. Draining any node \
+             that runs these pods will wait until the budget changes.",
+            budget.expected_pods
+        ),
+    };
+    Some(KindDiagnosis {
+        tone: StatusTone::Bad,
+        title: "BLOCKS DRAIN".to_owned(),
+        text,
+        pod: None,
+    })
 }
 
 // ---- Deployments ----

@@ -2,6 +2,7 @@
 //! read-only access to Kubernetes clusters.
 
 mod access_review;
+mod autoscaler;
 mod cadvisor_text;
 mod config_map;
 mod connection;
@@ -10,6 +11,7 @@ mod cron_job;
 mod cron_schedule;
 mod daemon_set;
 mod deployment;
+mod disruption_budget;
 mod endpoint_slice;
 mod event;
 mod ingress;
@@ -18,6 +20,7 @@ mod kubeconfig;
 mod kubelet_stats;
 mod metrics_api;
 mod namespace;
+mod network_policy;
 mod node;
 mod object_count;
 mod object_yaml;
@@ -27,6 +30,7 @@ mod pod_status;
 mod quantity;
 mod replica_set;
 mod resource_metrics;
+mod resource_quota;
 mod resource_watch;
 mod selector;
 mod service;
@@ -34,6 +38,7 @@ mod stateful_set;
 mod workload;
 
 pub use access_review::{AccessCheck, AccessDecision, AccessReport, AccessReview, NamespaceAccess};
+pub use autoscaler::{HorizontalPodAutoscalerSummary, HpaMetric, MetricSource, MetricValue};
 pub use cadvisor_text::{ContainerDiskIo, DiskIoCounters, DiskIoSample};
 pub use config_map::{
     ConfigMapKey, ConfigMapSummary, ConfigMapValue, ConfigMapValues, ValuePreview,
@@ -47,6 +52,7 @@ pub use cron_job::CronJobSummary;
 pub use cron_schedule::{CronSchedule, ScheduleError};
 pub use daemon_set::DaemonSetSummary;
 pub use deployment::DeploymentSummary;
+pub use disruption_budget::{BlockCause, DisruptionState, PodDisruptionBudgetSummary};
 pub use endpoint_slice::{EndpointPort, EndpointSliceSummary, EndpointSummary};
 pub use event::{EVENT_LIMIT, EventFilter, EventSummary, EventType, InvolvedObject};
 pub use ingress::{IngressPath, IngressSummary, IngressTls};
@@ -57,6 +63,9 @@ pub use kubelet_stats::{
 };
 pub use metrics_api::MetricsApi;
 pub use namespace::{NamespacePhase, NamespaceScope, NamespaceSummary};
+pub use network_policy::{
+    NetworkPolicySummary, PolicyDirection, PolicyPeer, PolicyPort, PolicyRule,
+};
 pub use node::{
     ConditionStatus, NodeAddress, NodeCondition, NodeReadiness, NodeResource, NodeScheduling,
     NodeStatus, NodeSummary, NodeSystemInfo, NodeTaint,
@@ -68,11 +77,12 @@ pub use pod::{
 };
 pub use pod_log::{LogLine, LogRequest, LogSource, LogUpdate};
 pub use pod_status::{InitStatus, PodStatus, StatusReason};
-pub use quantity::{ByteAmount, CpuAmount};
+pub use quantity::{ByteAmount, CpuAmount, quantity_ratio};
 pub use replica_set::ReplicaSetSummary;
 pub use resource_metrics::{
     ContainerMetrics, METRICS_INTERVAL, NodeMetrics, PodMetrics, ResourceUsage,
 };
+pub use resource_quota::{QuotaItem, ResourceQuotaSummary};
 pub use resource_watch::WatchUpdate;
 pub use selector::Selector;
 pub use service::{ServicePortSummary, ServiceSummary};

@@ -2,9 +2,11 @@ use std::fmt::Debug;
 
 use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
+use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
-use k8s_openapi::api::core::v1::{ConfigMap, Event, Namespace, Node, Pod, Service};
-use k8s_openapi::api::networking::v1::Ingress;
+use k8s_openapi::api::core::v1::{ConfigMap, Event, Namespace, Node, Pod, ResourceQuota, Service};
+use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
+use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::serde::de::DeserializeOwned;
 use kube::Api;
 use kube::api::ListParams;
@@ -62,6 +64,28 @@ impl ClusterConnection {
             ObjectKind::ConfigMap => {
                 self.count_namespaced::<ConfigMap>(scope, "counting config maps")
                     .await
+            }
+            ObjectKind::NetworkPolicy => {
+                self.count_namespaced::<NetworkPolicy>(scope, "counting network policies")
+                    .await
+            }
+            ObjectKind::HorizontalPodAutoscaler => {
+                self.count_namespaced::<HorizontalPodAutoscaler>(
+                    scope,
+                    "counting horizontal pod autoscalers",
+                )
+                .await
+            }
+            ObjectKind::ResourceQuota => {
+                self.count_namespaced::<ResourceQuota>(scope, "counting resource quotas")
+                    .await
+            }
+            ObjectKind::PodDisruptionBudget => {
+                self.count_namespaced::<PodDisruptionBudget>(
+                    scope,
+                    "counting pod disruption budgets",
+                )
+                .await
             }
         }
     }

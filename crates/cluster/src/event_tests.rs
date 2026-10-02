@@ -301,3 +301,8 @@ fn event_summary_reads_the_container_from_the_field_path() {
     );
     assert_eq!(event_summary(&event(None)).container, None);
 }
+
+#[test]
+fn failed_create_selector_filters_warning_failed_create() {
+    assert_eq!(failed_create_selector(), "type=Warning,reason=FailedCreate");
+}

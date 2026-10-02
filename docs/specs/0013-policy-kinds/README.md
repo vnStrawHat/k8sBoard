@@ -40,7 +40,7 @@ NetworkPolicy **Test traffic** and Topology (0023, 0022); any edit, New, Delete 
 - [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. No `Cargo.lock` change.
 - [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
 - [ ] 3. No kube or k8s-openapi type in a public signature; the crate spawns no task; the 0001 read-only grep finds only the SSAR `create`; new requests are `list`/`watch` only. No summary keeps annotations.
-- [ ] 4. On UAT the probe prints 4 new watch lines, 4 new access lines, and 4 new count lines; results are in [decisions.md](decisions.md) "UAT probe". The AC7 credential script reports 0.
+- [ ] 4. On UAT the probe prints 4 new watch lines, 4 new access lines, and 4 new count lines; results are in [decisions.md](decisions.md) "UAT probe". The 0001 AC7 credential script was not run (auto mode blocks token extraction); `kubeconfig_tests::debug_output_never_contains_credentials`, `tests/connection.rs::connection_debug_hides_credentials`, and the probe code audit stand in for it (see decisions.md).
 - [ ] 5. On UAT each allowed kind shows live rows and a drawer with Overview, YAML, Events tabs; a denied kind is disabled with "Not permitted: list …".
 - [ ] 6. The 0003 AC4 color-literal grep is clean; bars use the kit `Progress` and `tone_color`.
 - [ ] 7. The step's screenshots exist (empty states where UAT has no objects); the ui-verifier reports no high-severity defect against W7.
