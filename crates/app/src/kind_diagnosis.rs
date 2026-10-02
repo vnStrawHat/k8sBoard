@@ -9,11 +9,14 @@ use cluster::{
     DeploymentSummary, DisruptionState, HorizontalPodAutoscalerSummary, JobStatus, JobSummary,
     NodeReadiness, NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
     PodDisruptionBudgetSummary, PodStatus, PodSummary, ResourceQuotaSummary, RoleSummary,
-    ServiceSummary, StatusReason, Subject, SubjectKind, Termination, WorkloadCondition,
+    ServiceAccountSummary, ServiceSummary, StatusReason, Subject, SubjectKind, Termination,
+    WorkloadCondition,
 };
 use jiff::Timestamp;
 
-use crate::access_bindings::{BindingIndex, BroadAdmin, broad_admin, service_account_text};
+use crate::access_bindings::{
+    BindingIndex, BroadAdmin, broad_admin, is_cluster_admin, service_account_text,
+};
 use crate::kind_join::ServiceHealth;
 use crate::kind_row::KindObject;
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
@@ -71,6 +74,7 @@ pub(crate) fn kind_diagnosis(
         KindObject::PersistentVolume(volume) => volume_diagnosis(volume),
         KindObject::Role(role) => role_diagnosis(role, inputs.bindings),
         KindObject::Binding(binding) => binding_diagnosis(binding),
+        KindObject::ServiceAccount(account) => service_account_diagnosis(account, inputs.bindings),
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
@@ -371,6 +375,40 @@ fn bound_to_text(bindings: &[&BindingSummary]) -> String {
     }
     text.push('.');
     text
+}
+
+/// CLUSTER ADMIN: a role the account holds, directly or through its groups, is cluster-admin. A
+/// ClusterRoleBinding is named before a RoleBinding because it reaches the whole cluster. Waits
+/// for the bindings, so it shows only once they are all loaded.
+fn service_account_diagnosis(
+    account: &ServiceAccountSummary,
+    bindings: Option<&BindingIndex>,
+) -> Option<KindDiagnosis> {
+    let roles = bindings?.roles_held(&account.namespace, &account.name);
+    let admin: Vec<_> = roles
+        .into_iter()
+        .filter(|bound| is_cluster_admin(&bound.role))
+        .collect();
+    let through = admin
+        .iter()
+        .find(|bound| bound.binding_namespace().is_none())
+        .or(admin.first())?;
+    let text = match through.binding_namespace() {
+        None => format!(
+            "This service account has full access to the cluster through {}.",
+            through.binding_text
+        ),
+        Some(namespace) => format!(
+            "This service account has full access to namespace {namespace} through {}.",
+            through.binding_text
+        ),
+    };
+    Some(KindDiagnosis {
+        tone: StatusTone::Warn,
+        title: "CLUSTER ADMIN".to_owned(),
+        text,
+        pod: None,
+    })
 }
 
 /// REVIEW: cluster-admin handed to a broad group or to service accounts. A group is checked first

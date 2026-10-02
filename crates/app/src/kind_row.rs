@@ -6,7 +6,7 @@ use cluster::{
     DaemonSetSummary, DeploymentSummary, HorizontalPodAutoscalerSummary, IngressSummary,
     JobSummary, NetworkPolicySummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
     PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary,
-    ServiceSummary, StatefulSetSummary,
+    ServiceAccountSummary, ServiceSummary, StatefulSetSummary,
 };
 use gpui_kit::SharedString;
 
@@ -57,6 +57,7 @@ pub(crate) enum KindObject {
     Role(RoleSummary),
     /// A RoleBinding or a ClusterRoleBinding (`namespace: None`).
     Binding(BindingSummary),
+    ServiceAccount(ServiceAccountSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -79,6 +80,8 @@ pub(crate) enum LiveContent {
     ClassVolumes,
     RoleBindings,
     RoleSubjects,
+    BoundRoles,
+    ServiceAccountPods,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.

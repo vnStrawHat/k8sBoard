@@ -1,7 +1,8 @@
-//! Row builders for the access-control kinds: Roles, ClusterRoles, RoleBindings, and
-//! ClusterRoleBindings. The Bindings cells of the role kinds are joined later (`kind_join`).
+//! Row builders for the access-control kinds: Roles, ClusterRoles, RoleBindings,
+//! ClusterRoleBindings, and ServiceAccounts. The joined cells (binding counts, Bound roles, Used
+//! by) are filled later (`kind_join`).
 
-use cluster::{BindingSummary, RbacRule, RoleSummary, Subject, SubjectKind};
+use cluster::{BindingSummary, RbacRule, RoleSummary, ServiceAccountSummary, Subject, SubjectKind};
 
 use crate::access_bindings::{
     BroadAdmin, broad_admin, role_key, service_account_text, subject_text,
@@ -267,6 +268,97 @@ pub(crate) fn role_binding_row(binding: &BindingSummary) -> KindRow {
 
 pub(crate) fn cluster_role_binding_row(binding: &BindingSummary) -> KindRow {
     binding_row(binding, role_cell(binding, binding.role.name.clone()))
+}
+
+// ---- ServiceAccounts ----
+
+fn automount_text(account: &ServiceAccountSummary) -> &'static str {
+    match account.automount_token {
+        Some(true) => "Yes",
+        Some(false) => "No",
+        None => "Default (yes)",
+    }
+}
+
+/// Secret references are names only: a Secret is never requested, so no link and no value.
+fn secrets_rows(account: &ServiceAccountSummary) -> Vec<DetailRow> {
+    let references = account
+        .secrets
+        .iter()
+        .map(|name| (name, "token reference"))
+        .chain(
+            account
+                .image_pull_secrets
+                .iter()
+                .map(|name| (name, "image pull secret")),
+        );
+    let mut rows: Vec<DetailRow> = references
+        .map(|(name, way)| DetailRow::field(name.clone(), KindCell::Text(way.into())))
+        .collect();
+    let has_references = !rows.is_empty();
+    if !has_references {
+        rows.push(DetailRow::Note("No secret references".into()));
+    }
+    rows.push(DetailRow::field(
+        "Automount token",
+        KindCell::Text(automount_text(account).into()),
+    ));
+    if has_references {
+        rows.push(DetailRow::Note("Secret contents are never read".into()));
+    }
+    rows
+}
+
+pub(crate) fn service_account_row(account: &ServiceAccountSummary) -> KindRow {
+    let mut sections = vec![DetailSection {
+        title: "Bound roles",
+        rows: vec![DetailRow::Live(LiveContent::BoundRoles)],
+    }];
+    if !account.cloud_identities.is_empty() {
+        sections.push(DetailSection {
+            title: "Cloud identity",
+            rows: account
+                .cloud_identities
+                .iter()
+                .map(|identity| {
+                    DetailRow::field(
+                        identity.provider.label(),
+                        KindCell::Mono(identity.value.clone().into()),
+                    )
+                })
+                .collect(),
+        });
+    }
+    sections.push(DetailSection {
+        title: "Used by",
+        rows: vec![DetailRow::Live(LiveContent::ServiceAccountPods)],
+    });
+    sections.push(DetailSection {
+        title: "Secrets",
+        rows: secrets_rows(account),
+    });
+    KindRow {
+        namespace: Some(account.namespace.clone()),
+        name: account.name.clone(),
+        created_at: account.created_at,
+        status: service_account_status(),
+        cells: vec![
+            // The Bindings companion join fills Bound roles, and the pods join fills Used by.
+            KindCell::Absent,
+            KindCell::Absent,
+            KindCell::age(account.created_at),
+        ],
+        sections,
+        event: None,
+        related_pods: None,
+        labels: chips(&account.labels),
+        object: KindObject::ServiceAccount(account.clone()),
+    }
+}
+
+/// The status before the joins.
+pub(crate) fn service_account_status() -> StatusLabel {
+    labeled("Service account", StatusTone::Ok)
 }
 
 // ---- Rules table ----

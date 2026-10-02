@@ -201,11 +201,11 @@ pub(crate) fn companion_plan(kind: ResourceKind, access: &AccessState) -> Compan
 }
 
 /// The lists the Bindings companion of `kind` needs: Roles need the role bindings; ClusterRoles
-/// (and ServiceAccounts) also the cluster role bindings. `None` for a kind without this companion.
+/// and ServiceAccounts also the cluster role bindings. `None` for a kind without this companion.
 fn bindings_checks(kind: ResourceKind) -> Option<&'static [AccessCheck]> {
     match kind {
         ResourceKind::Roles => Some(&[AccessCheck::ListRoleBindings]),
-        ResourceKind::ClusterRoles => Some(&[
+        ResourceKind::ClusterRoles | ResourceKind::ServiceAccounts => Some(&[
             AccessCheck::ListRoleBindings,
             AccessCheck::ListClusterRoleBindings,
         ]),
@@ -1357,6 +1357,7 @@ impl LiveCluster {
                 | ResourceKind::ConfigMaps
                 | ResourceKind::Namespaces
                 | ResourceKind::NetworkPolicies
+                | ResourceKind::ServiceAccounts
         );
         (joins_pods && self.pods.is_loading())
             || self.companion().is_some_and(CompanionLists::is_loading)

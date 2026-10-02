@@ -41,11 +41,11 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Storage | PVCs | Done (0014) | Done (Used %, Usage bars, Mounted by, Go to pod: 0014) | — | Expand 0032 |
 | Storage | PVs | Done (0014) | Done (source, node affinity, RELEASED box, Go to claim: 0014) | — | — |
 | Storage | StorageClasses | Done (0014) | Done (default ★, PV count, parameters with hidden values, volumes list: 0014) | — | Set default 0032 |
-| Access Control | ServiceAccounts | Missing | Missing | 0015 (bound roles, used by, cloud identity, can-do); Check permissions 0023 | — |
-| Access Control | Roles | Missing | Missing | 0015 (rules table, bindings); Who can… 0023 | — |
-| Access Control | ClusterRoles | Missing | Missing | 0015 (aggregated, VERY BROAD box, Hide system); Who can… 0023 | — |
-| Access Control | RoleBindings | Missing | Missing | 0015 (two-way links) | New 0031 |
-| Access Control | ClusterRoleBindings | Missing | Missing | 0015 (cluster-admin to SA flag, Hide system) | — |
+| Access Control | ServiceAccounts | Done (0015) | Done (bound roles, used by pods, cloud identity from three allowlisted annotations, secret names only, CLUSTER ADMIN box: 0015) | "Can do" and Check permissions 0023 | — |
+| Access Control | Roles | Done (0015) | Done (rules table, bindings, VERY BROAD box: 0015) | Who can… 0023 | — |
+| Access Control | ClusterRoles | Done (0015) | Done (aggregated, built-in, bound to, VERY BROAD box, Hide system: 0015) | Who can… 0023 | — |
+| Access Control | RoleBindings | Done (0015) | Done (role and service-account links, REVIEW box, Go to role: 0015) | — | New 0031 |
+| Access Control | ClusterRoleBindings | Done (0015) | Done (cluster-admin to everyone or service accounts flag, REVIEW box, Hide system: 0015) | — | — |
 | Helm | Releases | Missing | Missing | 0017 (history, values, manifest, values diff, UPGRADE FAILED box) | Roll back, Uninstall 0038 (deferred) |
 | Custom Resources | CRDs | Missing | Missing | 0018 (versions, printer columns, schema, Browse instances) | — |
 | Custom Resources | Certificates (any discovered CR) | Missing | Missing | 0018 (printer columns, schema drawer, status box) | Renew 0032 |

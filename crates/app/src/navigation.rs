@@ -282,6 +282,7 @@ mod tests {
                 "PVCs",
                 "PVs",
                 "StorageClasses",
+                "ServiceAccounts",
                 "Roles",
                 "ClusterRoles",
                 "RoleBindings",

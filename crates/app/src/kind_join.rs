@@ -10,7 +10,10 @@ use cluster::{
     EnvSource, NamespaceScope, PodSummary, PvcUsage, Selector, ServiceSummary, VolumeSource,
 };
 
-use crate::access_bindings::{BindingIndex, ready_binding_lists};
+use crate::access_bindings::{
+    BindingIndex, BoundRole, is_cluster_admin, pod_account, ready_binding_lists, role_text,
+};
+use crate::access_rows::service_account_status;
 use crate::cluster_session::{CompanionLists, LiveList};
 use crate::kind_row::{KindCell, KindObject, KindRow, deployment_of_replica_set};
 use crate::kubelet_history::KubeletHistory;
@@ -40,6 +43,9 @@ pub(crate) const CLASS_VOLUMES: usize = 5;
 /// The index of the Bindings cell in a Roles row and in a ClusterRoles row.
 pub(crate) const ROLE_BINDINGS: usize = 1;
 pub(crate) const CLUSTER_ROLE_BINDINGS: usize = 2;
+/// The indices of the Bound roles and Used by cells in a ServiceAccounts row.
+pub(crate) const ACCOUNT_BOUND_ROLES: usize = 0;
+pub(crate) const ACCOUNT_USED_BY: usize = 1;
 
 const EXTERNAL_NAME: &str = "ExternalName";
 /// Slices of this address type name hosts, not pods; counting them would double a dual-stack
@@ -68,6 +74,7 @@ pub(crate) fn join_rows(kind: ResourceKind, rows: &mut [KindRow], inputs: &JoinI
         ResourceKind::StorageClasses => join_classes(rows, inputs),
         ResourceKind::Roles => join_roles(rows, inputs, ROLE_BINDINGS),
         ResourceKind::ClusterRoles => join_roles(rows, inputs, CLUSTER_ROLE_BINDINGS),
+        ResourceKind::ServiceAccounts => join_service_accounts(rows, inputs),
         _ => {}
     }
 }
@@ -782,6 +789,114 @@ fn join_roles(rows: &mut [KindRow], inputs: &JoinInputs, column: usize) {
         if let Some(slot) = row.cells.get_mut(column) {
             *slot = cell;
         }
+    }
+}
+
+// ---- ServiceAccounts ----
+
+/// The pods per (namespace, service account) in one pass; a pod without an account runs as
+/// `default`.
+fn pods_by_account(pods: &[PodSummary]) -> HashMap<(&str, &str), usize> {
+    let mut counts: HashMap<(&str, &str), usize> = HashMap::new();
+    for pod in pods {
+        *counts
+            .entry((pod.namespace.as_str(), pod_account(pod)))
+            .or_default() += 1;
+    }
+    counts
+}
+
+/// The Bound roles and Used by cells, and the status, of each service account. Each part waits for
+/// its own list: roles for the Bindings companion, pods for the pods list.
+fn join_service_accounts(rows: &mut [KindRow], inputs: &JoinInputs) {
+    let index = ready_binding_lists(inputs.companion).map(|lists| BindingIndex::build(&lists));
+    let pods = inputs.pods.ready_items().map(pods_by_account);
+    for row in rows {
+        let KindObject::ServiceAccount(account) = &row.object else {
+            continue;
+        };
+        let roles = index
+            .as_ref()
+            .map(|index| index.roles_held(&account.namespace, &account.name));
+        let used_by = pods.as_ref().map(|pods| {
+            pods.get(&(account.namespace.as_str(), account.name.as_str()))
+                .copied()
+                .unwrap_or(0)
+        });
+        row.status = account_status(roles.as_deref(), used_by);
+        let cells = [
+            (ACCOUNT_BOUND_ROLES, bound_roles_cell(roles.as_deref())),
+            (ACCOUNT_USED_BY, used_by_pods_cell(used_by)),
+        ];
+        for (column, cell) in cells {
+            if let Some(slot) = row.cells.get_mut(column) {
+                *slot = cell;
+            }
+        }
+    }
+}
+
+fn is_bound_to_cluster_admin(roles: &[&BoundRole]) -> bool {
+    roles.iter().any(|bound| is_cluster_admin(&bound.role))
+}
+
+/// The status of a service account: full access first, then whether pods use it. Without the lists
+/// it stays at the builder status.
+fn account_status(roles: Option<&[&BoundRole]>, used_by: Option<usize>) -> StatusLabel {
+    if roles.is_some_and(is_bound_to_cluster_admin) {
+        return StatusLabel {
+            text: "Cluster admin".into(),
+            tone: StatusTone::Warn,
+        };
+    }
+    match used_by {
+        None => service_account_status(),
+        Some(0) => StatusLabel {
+            text: "No pods".into(),
+            tone: StatusTone::Done,
+        },
+        Some(count) => StatusLabel {
+            text: pods_text(count).into(),
+            tone: StatusTone::Ok,
+        },
+    }
+}
+
+fn pods_text(count: usize) -> String {
+    format!("{count} {}", if count == 1 { "pod" } else { "pods" })
+}
+
+/// The distinct roles joined with `, `; Warn when one is cluster-admin, a muted dash for none.
+fn bound_roles_cell(roles: Option<&[&BoundRole]>) -> KindCell {
+    let Some(roles) = roles else {
+        return KindCell::Absent;
+    };
+    let mut texts: Vec<String> = roles.iter().map(|bound| role_text(&bound.role)).collect();
+    texts.dedup();
+    if texts.is_empty() {
+        return KindCell::Toned(StatusLabel {
+            text: "—".into(),
+            tone: StatusTone::Done,
+        });
+    }
+    let text = texts.join(", ");
+    if is_bound_to_cluster_admin(roles) {
+        return KindCell::Toned(StatusLabel {
+            text: text.into(),
+            tone: StatusTone::Warn,
+        });
+    }
+    KindCell::Text(text.into())
+}
+
+fn used_by_pods_cell(used_by: Option<usize>) -> KindCell {
+    let Some(count) = used_by else {
+        return KindCell::Absent;
+    };
+    KindCell::Quantity {
+        text: pods_text(count).into(),
+        value: u64::try_from(count).unwrap_or(u64::MAX),
+        tone: None,
     }
 }
 

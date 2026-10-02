@@ -839,6 +839,14 @@ fn bindings_companion_watch_count() {
         open_watch_count(watches(5, explorer, watches_of(false, 5), true, true)),
         3 * 5 + 4
     );
+    // ServiceAccounts: N explorer watches, N + 1 binding watches, and the drawer events only (no
+    // related subject), which stays within the same bound.
+    let explorer = explorer_watches(ResourceKind::ServiceAccounts, 5);
+    assert_eq!(explorer, 5);
+    assert_eq!(
+        open_watch_count(watches(5, explorer, watches_of(true, 5), true, false)),
+        3 * 5 + 4
+    );
     // ClusterRoles are cluster-scoped: one explorer watch and N + 1 binding watches.
     let explorer = explorer_watches(ResourceKind::ClusterRoles, 5);
     assert_eq!(explorer, 1);

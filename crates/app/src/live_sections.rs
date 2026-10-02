@@ -8,8 +8,8 @@ use cluster::{
     BindingSummary, ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule,
     DeploymentSummary, EndpointSliceSummary, EventSummary, JobSummary, NodeSummary,
     PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary,
-    PvcUsage, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, ServiceSummary, ValuePreview,
-    VolumeSource,
+    PvcUsage, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, ServiceAccountSummary,
+    ServiceSummary, ValuePreview, VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -20,8 +20,8 @@ use gpui_kit::{
 use jiff::tz::TimeZone;
 
 use crate::access_bindings::{
-    BindingIndex, BindingsStatus, RoleSubject, binding_key, binding_text, bindings_status,
-    role_subjects, subject_text,
+    BindingIndex, BindingsStatus, BoundRole, RoleSubject, binding_key, binding_text,
+    bindings_status, pod_account, role_subjects, role_text, subject_text,
 };
 use crate::age::format_age;
 use crate::app_shell::AppShell;
@@ -110,6 +110,12 @@ pub(crate) fn live_rows(
         }
         (LiveContent::RoleSubjects, KindObject::Role(role)) => {
             role_subjects_rows(kind, role, live, cx)
+        }
+        (LiveContent::BoundRoles, KindObject::ServiceAccount(account)) => {
+            bound_roles_rows(kind, account, live, cx)
+        }
+        (LiveContent::ServiceAccountPods, KindObject::ServiceAccount(account)) => {
+            account_pods_rows(account, live, cx)
         }
         // A StorageClass row holds no summary either: its name is the class.
         (LiveContent::ClassVolumes, _) => class_volumes_rows(kind, &row.name, live, cx),
@@ -1643,11 +1649,16 @@ fn role_subjects_rows(
             .map(|(ix, subject)| role_subject_element(ix, subject, needs_review(role, subject), cx))
             .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
             .chain(std::iter::once(note(
-                &format!("Role bindings from {}", live.scope_label()),
+                &bindings_scope_note(&live.scope_label()),
                 cx,
             )))
             .collect()
     })
+}
+
+/// The reminder under a binding list: RoleBindings come from the session scope only.
+fn bindings_scope_note(scope: &str) -> String {
+    format!("Role bindings from {scope}")
 }
 
 /// A subject of a ClusterRole, with the binding that gives it the role as a link under it.
@@ -1694,6 +1705,133 @@ fn role_subject_element(
                 .child(div().min_w_0().child(link)),
         )
         .into_any_element()
+}
+
+// ---- Service accounts ----
+
+fn bound_roles_rows(
+    kind: ResourceKind,
+    account: &ServiceAccountSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    with_bindings(kind, live, cx, |index| {
+        let roles = index.roles_held(&account.namespace, &account.name);
+        if roles.is_empty() {
+            return vec![note("No roles bound", cx)];
+        }
+        let hidden = roles.len().saturating_sub(MAX_LISTED_BINDINGS);
+        roles
+            .iter()
+            .take(MAX_LISTED_BINDINGS)
+            .enumerate()
+            .map(|(ix, bound)| bound_role_element(ix, bound, cx))
+            .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+            .chain(std::iter::once(note(
+                &bindings_scope_note(&live.scope_label()),
+                cx,
+            )))
+            .collect()
+    })
+}
+
+/// ` · group system:serviceaccounts` after the binding, when the account is reached through a
+/// group.
+fn group_suffix(bound: &BoundRole) -> Option<String> {
+    bound
+        .group
+        .as_ref()
+        .map(|group| format!(" · group {group}"))
+}
+
+/// A role as a link to its drawer (plain text for a kind without a screen), with the binding that
+/// gives it under it.
+fn bound_role_element(ix: usize, bound: &BoundRole, cx: &Context<AppShell>) -> AnyElement {
+    let theme = cx.theme();
+    let text: gpui_kit::SharedString = role_text(&bound.role).into();
+    let role = match bound.role_key.clone() {
+        Some(target) => link_text(ix, &text, target, cx),
+        None => div()
+            .truncate()
+            .font_family(theme.mono_font_family.clone())
+            .child(text)
+            .into_any_element(),
+    };
+    // The role links use ids 0.., the binding links the ids after them.
+    let binding = link_text(
+        MAX_LISTED_BINDINGS + ix,
+        &bound.binding_text.clone().into(),
+        bound.binding.clone(),
+        cx,
+    );
+    v_flex()
+        .id(("bound-role", ix))
+        .py_1()
+        .text_sm()
+        .child(role)
+        .child(
+            h_flex()
+                .gap_1()
+                .text_color(theme.muted_foreground)
+                .child(div().flex_shrink_0().child("via"))
+                .child(div().min_w_0().child(binding))
+                .children(group_suffix(bound).map(|suffix| div().flex_shrink_0().child(suffix))),
+        )
+        .into_any_element()
+}
+
+/// The pods of the account namespace that run as the account, by name.
+fn account_pods<'a>(
+    account: &ServiceAccountSummary,
+    pods: &'a [PodSummary],
+) -> Vec<&'a PodSummary> {
+    let mut using: Vec<&PodSummary> = pods
+        .iter()
+        .filter(|pod| pod.namespace == account.namespace && pod_account(pod) == account.name)
+        .collect();
+    using.sort_by(|a, b| a.name.cmp(&b.name));
+    using
+}
+
+fn account_pods_rows(
+    account: &ServiceAccountSummary,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    if live.pods.is_loading() {
+        return vec![note("Loading pods…", cx)];
+    }
+    let Some(pods) = live.pods.ready_items() else {
+        return vec![note("Pods are unavailable", cx)];
+    };
+    let using = account_pods(account, pods);
+    if using.is_empty() {
+        return vec![note("Not used by any pod", cx)];
+    }
+    let hidden = using.len().saturating_sub(MAX_LISTED_BINDINGS);
+    using
+        .iter()
+        .take(MAX_LISTED_BINDINGS)
+        .enumerate()
+        .map(|(ix, pod)| {
+            let name: gpui_kit::SharedString = pod.name.clone().into();
+            h_flex()
+                .id(("account-pod", ix))
+                .gap_2()
+                .items_center()
+                .py_1()
+                .text_sm()
+                .child(div().flex_1().min_w_0().child(link_text(
+                    ix,
+                    &name,
+                    ResourceKey::of_pod(pod),
+                    cx,
+                )))
+                .child(toned_text(pod_status_label(pod), cx).flex_shrink_0())
+                .into_any_element()
+        })
+        .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+        .collect()
 }
 
 // ---- shared ----

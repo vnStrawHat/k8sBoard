@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 
 use cluster::{
-    AccessCheck, BindingSummary, BroadGroup, RoleKind, RoleRef, RoleSummary, Subject, SubjectKind,
+    AccessCheck, BindingSummary, BroadGroup, PodSummary, RoleKind, RoleRef, RoleSummary, Subject,
+    SubjectKind,
 };
 
 use crate::cluster_session::{AccessState, CompanionLists, LiveList, denied_binding_checks};
@@ -13,6 +14,13 @@ use crate::resource_kind::ResourceKind;
 use crate::table_selection::ResourceKey;
 
 const CLUSTER_ADMIN: &str = "cluster-admin";
+const SERVICE_ACCOUNTS_GROUP: &str = "system:serviceaccounts";
+const SERVICE_ACCOUNTS_GROUP_PREFIX: &str = "system:serviceaccounts:";
+
+/// `role/x`, `clusterrole/x`, or `{kind lowercased}/x` for a kind the API should not accept.
+pub(crate) fn role_text(role: &RoleRef) -> String {
+    format!("{}/{}", role.kind.to_string().to_lowercase(), role.name)
+}
 
 /// `sa {ns}/{name}`, `user {name}`, `group {name}`.
 pub(crate) fn subject_text(subject: &Subject) -> String {
@@ -171,30 +179,136 @@ pub(crate) fn ready_binding_lists(companion: Option<&CompanionLists>) -> Option<
     })
 }
 
-/// Roles joined with the bindings that name them. Built once per join call or paint.
+/// One role a service account holds, and the binding that gives it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BoundRole {
+    pub(crate) role: RoleRef,
+    /// `None` for a role kind k8sBoard has no screen for.
+    pub(crate) role_key: Option<ResourceKey>,
+    pub(crate) binding: ResourceKey,
+    pub(crate) binding_text: String,
+    /// The group the binding names, when the account is reached through one.
+    pub(crate) group: Option<String>,
+}
+
+impl BoundRole {
+    /// The binding namespace; `None` for a ClusterRoleBinding.
+    pub(crate) fn binding_namespace(&self) -> Option<&str> {
+        match &self.binding {
+            ResourceKey::Kind { namespace, .. } => namespace.as_deref(),
+            ResourceKey::Pod { .. } | ResourceKey::Node { .. } => None,
+        }
+    }
+}
+
+/// Roles joined with the bindings that name them, and service accounts with the roles they hold.
+/// Built once per join call or paint.
 pub(crate) struct BindingIndex<'a> {
     /// Keyed on the role name; the role scope is checked at lookup, since few bindings share a name.
     by_role_name: HashMap<&'a str, Vec<&'a BindingSummary>>,
+    /// Direct `ServiceAccount` subjects, by name, each with its namespace.
+    by_account: HashMap<&'a str, Vec<(&'a str, BoundRole)>>,
+    /// Bindings of `system:serviceaccounts` and `system:serviceaccounts:{ns}`, by group name.
+    by_group: HashMap<&'a str, Vec<BoundRole>>,
+    /// Bindings of `system:authenticated`: every account is authenticated.
+    everyone: Vec<BoundRole>,
 }
 
 impl<'a> BindingIndex<'a> {
-    /// One pass over both lists. Bindings that name a role kind without a screen are not indexed.
+    /// One pass over both lists. A role kind without a screen is left out of `bindings_of_role`
+    /// but still shows in an account Bound roles. The service-account rules are the cluster
+    /// crate `BindingSummary::binds_service_account`: a direct subject, or the two groups.
+    /// `system:authenticated` bindings are kept apart (`everyone_roles`): they reach every account
+    /// but only matter for cluster-admin (decision 5). `system:unauthenticated` binds no account.
     pub(crate) fn build(lists: &BindingLists<'a>) -> Self {
         let mut by_role_name: HashMap<&str, Vec<&BindingSummary>> = HashMap::new();
+        let mut by_account: HashMap<&str, Vec<(&str, BoundRole)>> = HashMap::new();
+        let mut by_group: HashMap<&str, Vec<BoundRole>> = HashMap::new();
+        let mut everyone: Vec<BoundRole> = Vec::new();
         for binding in lists
             .role_bindings
             .iter()
             .chain(lists.cluster_role_bindings)
         {
-            if matches!(binding.role.kind, RoleKind::Other(_)) {
-                continue;
+            if !matches!(binding.role.kind, RoleKind::Other(_)) {
+                by_role_name
+                    .entry(binding.role.name.as_str())
+                    .or_default()
+                    .push(binding);
             }
-            by_role_name
-                .entry(binding.role.name.as_str())
-                .or_default()
-                .push(binding);
+            for subject in &binding.subjects {
+                match (subject.kind, subject.broad_group()) {
+                    (SubjectKind::ServiceAccount, _) => {
+                        let Some(namespace) = subject.namespace.as_deref() else {
+                            continue;
+                        };
+                        by_account
+                            .entry(subject.name.as_str())
+                            .or_default()
+                            .push((namespace, bound_role(binding, None)));
+                    }
+                    (
+                        SubjectKind::Group,
+                        Some(
+                            BroadGroup::AllServiceAccounts
+                            | BroadGroup::NamespaceServiceAccounts(_),
+                        ),
+                    ) => by_group
+                        .entry(subject.name.as_str())
+                        .or_default()
+                        .push(bound_role(binding, Some(subject.name.clone()))),
+                    (SubjectKind::Group, Some(BroadGroup::Authenticated)) => {
+                        everyone.push(bound_role(binding, Some(subject.name.clone())));
+                    }
+                    _ => {}
+                }
+            }
         }
-        Self { by_role_name }
+        Self {
+            by_role_name,
+            by_account,
+            by_group,
+            everyone,
+        }
+    }
+
+    /// The roles `namespace/name` holds: direct bindings, then those of `system:serviceaccounts`
+    /// and `system:serviceaccounts:{namespace}`; each run sorted by role text, then binding.
+    pub(crate) fn bound_roles(&self, namespace: &str, name: &str) -> Vec<&BoundRole> {
+        let group = format!("{SERVICE_ACCOUNTS_GROUP_PREFIX}{namespace}");
+        let direct = self
+            .by_account
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter(|(account_namespace, _)| *account_namespace == namespace)
+            .map(|(_, bound)| bound);
+        let all = self.by_group.get(SERVICE_ACCOUNTS_GROUP);
+        let own = self.by_group.get(group.as_str());
+        let mut roles: Vec<&BoundRole> = direct
+            .chain(all.into_iter().flatten())
+            .chain(own.into_iter().flatten())
+            .collect();
+        roles.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
+        roles
+    }
+
+    /// The roles every authenticated caller holds through `system:authenticated`.
+    pub(crate) fn everyone_roles(&self) -> &[BoundRole] {
+        &self.everyone
+    }
+
+    /// What an account holds for the Bound roles list, the cell, and the boxes: `bound_roles`,
+    /// then the cluster-admin grants to `system:authenticated`. The stock `system:basic-user`
+    /// style grants to everyone are left out, or they would sit on every account.
+    pub(crate) fn roles_held(&self, namespace: &str, name: &str) -> Vec<&BoundRole> {
+        let mut roles = self.bound_roles(namespace, name);
+        roles.extend(
+            self.everyone_roles()
+                .iter()
+                .filter(|bound| is_cluster_admin(&bound.role)),
+        );
+        roles
     }
 
     /// The bindings that name `role`, in list order. A Role is named only by RoleBindings of its
@@ -212,6 +326,36 @@ impl<'a> BindingIndex<'a> {
             })
             .collect()
     }
+}
+
+fn bound_role(binding: &BindingSummary, group: Option<String>) -> BoundRole {
+    BoundRole {
+        role: binding.role.clone(),
+        role_key: role_key(binding),
+        binding: binding_key(binding),
+        binding_text: binding_text(binding),
+        group,
+    }
+}
+
+/// Direct first, then group; each by role kind, name, and binding.
+fn sort_key(bound: &BoundRole) -> (bool, u8, &str, &str) {
+    let kind_rank = match bound.role.kind {
+        RoleKind::ClusterRole => 0,
+        RoleKind::Role => 1,
+        RoleKind::Other(_) => 2,
+    };
+    (
+        bound.group.is_some(),
+        kind_rank,
+        bound.role.name.as_str(),
+        bound.binding_text.as_str(),
+    )
+}
+
+/// The service account a pod runs as; the API defaults it to `default`.
+pub(crate) fn pod_account(pod: &PodSummary) -> &str {
+    pod.service_account.as_deref().unwrap_or("default")
 }
 
 /// One subject of a ClusterRole drawer Bound to list, with the binding that gives it the role.

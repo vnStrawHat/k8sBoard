@@ -385,3 +385,234 @@ mod status {
         assert!(matches!(status, BindingsStatus::Loading));
     }
 }
+
+// ---- Service accounts ----
+
+fn index_of<'a>(
+    role_bindings: &'a [BindingSummary],
+    cluster: &'a [BindingSummary],
+) -> BindingIndex<'a> {
+    BindingIndex::build(&lists(role_bindings, cluster))
+}
+
+fn group(name: &str) -> Subject {
+    subject(SubjectKind::Group, None, name)
+}
+
+fn roles_of(index: &BindingIndex, namespace: &str, name: &str) -> Vec<(String, Option<String>)> {
+    index
+        .bound_roles(namespace, name)
+        .iter()
+        .map(|bound| (role_text(&bound.role), bound.group.clone()))
+        .collect()
+}
+
+#[test]
+fn role_text_formats() {
+    let role = |kind, name: &str| RoleRef {
+        kind,
+        name: name.to_owned(),
+    };
+    assert_eq!(role_text(&role(RoleKind::Role, "reader")), "role/reader");
+    assert_eq!(
+        role_text(&role(RoleKind::ClusterRole, "cluster-admin")),
+        "clusterrole/cluster-admin"
+    );
+    assert_eq!(
+        role_text(&role(RoleKind::Other("Weird".to_owned()), "x")),
+        "weird/x"
+    );
+}
+
+#[test]
+fn bound_roles_direct_and_group_sorted() {
+    let role_bindings = [
+        binding(
+            Some("shop"),
+            "b-read",
+            (RoleKind::Role, "reader"),
+            vec![account("shop", "api")],
+        ),
+        binding(
+            Some("shop"),
+            "b-ns-group",
+            (RoleKind::ClusterRole, "edit"),
+            vec![group("system:serviceaccounts:shop")],
+        ),
+    ];
+    let cluster = [
+        binding(
+            None,
+            "b-view",
+            (RoleKind::ClusterRole, "view"),
+            vec![account("shop", "api")],
+        ),
+        binding(
+            None,
+            "b-all",
+            (RoleKind::ClusterRole, "basic"),
+            vec![group("system:serviceaccounts")],
+        ),
+    ];
+    let index = index_of(&role_bindings, &cluster);
+    // Direct roles first (by role text), then those reached through a group.
+    assert_eq!(
+        roles_of(&index, "shop", "api"),
+        [
+            ("clusterrole/view".to_owned(), None),
+            ("role/reader".to_owned(), None),
+            (
+                "clusterrole/basic".to_owned(),
+                Some("system:serviceaccounts".to_owned())
+            ),
+            (
+                "clusterrole/edit".to_owned(),
+                Some("system:serviceaccounts:shop".to_owned())
+            ),
+        ]
+    );
+    let direct = &index.bound_roles("shop", "api")[0];
+    assert_eq!(direct.binding_namespace(), None);
+    assert_eq!(direct.binding_text, "clusterrolebinding/b-view");
+    assert_eq!(direct.binding_namespace(), None);
+    let local = index.bound_roles("shop", "api")[1];
+    assert_eq!(local.binding_namespace(), Some("shop"));
+    assert_eq!(
+        local.role_key,
+        Some(ResourceKey::Kind {
+            kind: ResourceKind::Roles,
+            namespace: Some("shop".to_owned()),
+            name: "reader".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn bound_roles_ignore_other_accounts() {
+    let cluster = [
+        binding(
+            None,
+            "b",
+            (RoleKind::ClusterRole, "view"),
+            vec![account("shop", "api")],
+        ),
+        binding(
+            None,
+            "everyone",
+            (RoleKind::ClusterRole, "basic"),
+            vec![
+                group("system:authenticated"),
+                group("system:serviceaccounts:db"),
+            ],
+        ),
+        // A cluster binding subject without a namespace never matches.
+        binding(
+            None,
+            "nameless",
+            (RoleKind::ClusterRole, "edit"),
+            vec![subject(SubjectKind::ServiceAccount, None, "worker")],
+        ),
+    ];
+    let index = index_of(&[], &cluster);
+    assert!(roles_of(&index, "shop", "worker").is_empty());
+    assert!(roles_of(&index, "other", "api").is_empty());
+    assert!(roles_of(&index, "shop", "unknown").is_empty());
+    // The roles of a kind without a screen still show, as text.
+    let weird = [binding(
+        None,
+        "w",
+        (RoleKind::Other("Weird".to_owned()), "x"),
+        vec![account("shop", "api")],
+    )];
+    let index = index_of(&[], &weird);
+    let bound = index.bound_roles("shop", "api");
+    assert_eq!(bound.len(), 1);
+    assert_eq!(bound[0].role_key, None);
+}
+
+#[test]
+fn index_built_once_serves_every_account() {
+    let cluster = [
+        binding(
+            None,
+            "a",
+            (RoleKind::ClusterRole, "view"),
+            vec![account("shop", "api")],
+        ),
+        binding(
+            None,
+            "b",
+            (RoleKind::ClusterRole, "edit"),
+            vec![account("shop", "web")],
+        ),
+        binding(
+            None,
+            "c",
+            (RoleKind::ClusterRole, "basic"),
+            vec![group("system:serviceaccounts:db")],
+        ),
+    ];
+    let index = index_of(&[], &cluster);
+    assert_eq!(roles_of(&index, "shop", "api").len(), 1);
+    assert_eq!(roles_of(&index, "shop", "web")[0].0, "clusterrole/edit");
+    assert_eq!(roles_of(&index, "db", "pg")[0].0, "clusterrole/basic");
+}
+
+#[test]
+fn index_agrees_with_the_cluster_crate_matching_rule() {
+    let cases = [
+        vec![account("shop", "api")],
+        vec![group("system:serviceaccounts")],
+        vec![group("system:serviceaccounts:shop")],
+        vec![group("system:serviceaccounts:other")],
+        vec![group("system:authenticated"), group("system:masters")],
+        vec![subject(SubjectKind::User, None, "api")],
+    ];
+    for subjects in cases {
+        let bindings = [binding(
+            None,
+            "b",
+            (RoleKind::ClusterRole, "view"),
+            subjects,
+        )];
+        let index = index_of(&[], &bindings);
+        let matched = bindings[0].binds_service_account("shop", "api");
+        let found = index.bound_roles("shop", "api");
+        assert_eq!(
+            matched.is_some(),
+            !found.is_empty(),
+            "{:?}",
+            bindings[0].subjects
+        );
+        if let Some(cluster::SubjectMatch::Group(name)) = matched {
+            assert_eq!(found[0].group.as_deref(), Some(name.as_str()));
+        }
+    }
+}
+
+#[test]
+fn authenticated_bindings_are_kept_apart() {
+    let cluster = [
+        binding(
+            None,
+            "basic-user",
+            (RoleKind::ClusterRole, "system:basic-user"),
+            vec![group("system:authenticated")],
+        ),
+        binding(
+            None,
+            "root",
+            (RoleKind::ClusterRole, "cluster-admin"),
+            vec![group("system:authenticated")],
+        ),
+    ];
+    let index = index_of(&[], &cluster);
+    // Not a binding of one account...
+    assert!(index.bound_roles("shop", "api").is_empty());
+    assert_eq!(index.everyone_roles().len(), 2);
+    // ...and only cluster-admin is held by every account, listed last as a group match.
+    let held = index.roles_held("shop", "api");
+    assert_eq!(held.len(), 1);
+    assert_eq!(role_text(&held[0].role), "clusterrole/cluster-admin");
+    assert_eq!(held[0].group.as_deref(), Some("system:authenticated"));
+}

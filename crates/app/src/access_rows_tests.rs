@@ -391,3 +391,138 @@ fn rules_table_cuts_long_cells() {
         lines[1]
     );
 }
+
+// ---- ServiceAccounts ----
+
+fn account(name: &str) -> cluster::ServiceAccountSummary {
+    cluster::ServiceAccountSummary {
+        namespace: "shop".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        secrets: Vec::new(),
+        image_pull_secrets: Vec::new(),
+        automount_token: None,
+        cloud_identities: Vec::new(),
+    }
+}
+
+fn titles(row: &KindRow) -> Vec<&'static str> {
+    row.sections.iter().map(|section| section.title).collect()
+}
+
+#[test]
+fn service_account_row_cells_match_column_count() {
+    let row = service_account_row(&account("api"));
+    assert_eq!(
+        row.cells.len(),
+        ResourceKind::ServiceAccounts.columns().len()
+    );
+    assert_eq!(row.namespace.as_deref(), Some("shop"));
+    // The joins fill Bound roles and Used by.
+    assert_eq!(row.cells[0], KindCell::Absent);
+    assert_eq!(row.cells[1], KindCell::Absent);
+    assert_eq!(row.status.text.as_ref(), "Service account");
+    assert_eq!(row.status.tone, StatusTone::Ok);
+}
+
+#[test]
+fn binding_service_account_subject_is_a_link() {
+    let row = role_binding_row(&binding(
+        Some("shop"),
+        (RoleKind::Role, "r"),
+        vec![
+            subject(SubjectKind::ServiceAccount, Some("shop"), "api"),
+            subject(SubjectKind::User, None, "ana"),
+        ],
+    ));
+    let subjects = row.section("Subjects").expect("subjects section");
+    assert_eq!(
+        subjects.rows[0],
+        DetailRow::StackedLink {
+            label: "ServiceAccount".into(),
+            text: "shop/api".into(),
+            target: ResourceKey::Kind {
+                kind: ResourceKind::ServiceAccounts,
+                namespace: Some("shop".to_owned()),
+                name: "api".to_owned(),
+            },
+        }
+    );
+    // Only a service account has a screen; a user stays text.
+    assert!(matches!(subjects.rows[1], DetailRow::Stacked { .. }));
+}
+
+#[test]
+fn service_account_secrets_section_names_only() {
+    let mut with_secrets = account("api");
+    with_secrets.secrets = vec!["api-token-x1".to_owned()];
+    with_secrets.image_pull_secrets = vec!["registry".to_owned()];
+    with_secrets.automount_token = Some(false);
+    let row = service_account_row(&with_secrets);
+    let secrets = row.section("Secrets").expect("secrets section");
+    assert_eq!(
+        secrets.rows,
+        [
+            DetailRow::field("api-token-x1", KindCell::Text("token reference".into())),
+            DetailRow::field("registry", KindCell::Text("image pull secret".into())),
+            DetailRow::field("Automount token", KindCell::Text("No".into())),
+            DetailRow::Note("Secret contents are never read".into()),
+        ]
+    );
+    let empty = service_account_row(&account("api"));
+    assert_eq!(
+        empty.section("Secrets").expect("secrets section").rows[0],
+        DetailRow::Note("No secret references".into())
+    );
+}
+
+#[test]
+fn cloud_identity_section_after_bound_roles() {
+    let mut irsa = account("api");
+    irsa.cloud_identities = vec![cluster::CloudIdentity {
+        provider: cluster::CloudProvider::Aws,
+        value: "arn:aws:iam::123456789012:role/api".to_owned(),
+    }];
+    let row = service_account_row(&irsa);
+    assert_eq!(
+        titles(&row),
+        ["Bound roles", "Cloud identity", "Used by", "Secrets"]
+    );
+    assert_eq!(
+        row.section("Cloud identity").expect("section").rows,
+        [DetailRow::field(
+            "IAM role",
+            KindCell::Mono("arn:aws:iam::123456789012:role/api".into())
+        )]
+    );
+}
+
+#[test]
+fn no_cloud_identity_section_when_empty() {
+    let row = service_account_row(&account("api"));
+    assert_eq!(titles(&row), ["Bound roles", "Used by", "Secrets"]);
+}
+
+#[test]
+fn automount_default_text() {
+    let text = |value: Option<bool>| {
+        let mut account = account("api");
+        account.automount_token = value;
+        let row = service_account_row(&account);
+        let secrets = row.section("Secrets").expect("section").rows.clone();
+        secrets
+            .into_iter()
+            .find_map(|detail| match detail {
+                DetailRow::Field {
+                    label,
+                    value: KindCell::Text(text),
+                } if label.as_ref() == "Automount token" => Some(text.to_string()),
+                _ => None,
+            })
+            .expect("automount row")
+    };
+    assert_eq!(text(None), "Default (yes)");
+    assert_eq!(text(Some(true)), "Yes");
+    assert_eq!(text(Some(false)), "No");
+}

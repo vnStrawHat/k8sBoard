@@ -1,6 +1,6 @@
 # 0015 — Access-control kinds: ServiceAccounts, Roles, ClusterRoles, RoleBindings, ClusterRoleBindings (read-only)
 
-Status: amended after advisor review (HEAD `81497ba`); architect defaults, the user asked not to stop for questions. Crates: `crates/cluster` (step 1), `crates/app` (steps 2–3). Requires the amended 0012 (`KindObject`, `Live`, joins, the general `KindList.companion`, `Selector`, `kind_diagnosis.rs`, counts, `reveal`), 0013 (`go_to_item`), and 0014 (`companion_plan` arms) merged. Wireframes: W7 `k("ServiceAccounts")`, `k("Roles")`, `k("ClusterRoles")`, `k("RoleBindings")`, `k("ClusterRoleBindings")`. Applies C1, C11.
+Status: **implemented** (steps 1 to 3); amended after advisor review (HEAD `81497ba`); architect defaults, the user asked not to stop for questions. Crates: `crates/cluster` (step 1), `crates/app` (steps 2–3). Requires the amended 0012 (`KindObject`, `Live`, joins, the general `KindList.companion`, `Selector`, `kind_diagnosis.rs`, counts, `reveal`), 0013 (`go_to_item`), and 0014 (`companion_plan` arms) merged. Wireframes: W7 `k("ServiceAccounts")`, `k("Roles")`, `k("ClusterRoles")`, `k("RoleBindings")`, `k("ClusterRoleBindings")`. Applies C1, C11.
 
 ## Goal
 
@@ -35,14 +35,14 @@ Five new explorer kinds on the 0005 explorer (one `KindSpec`, row builder, lazy 
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. No `Cargo.lock` change.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. No kube or k8s-openapi type in a public signature; the crate spawns no task; the 0001 read-only grep finds only the SSAR `create`. **Secret safety**: `ServiceAccountSummary` holds secret names only; no new code path requests a Secret; the only annotations read are the three cloud-identity keys (review plus `service_account_summary_keeps_names_only`, `cloud_identity_reads_only_allowlisted_keys`).
-- [ ] 4. On UAT the probe prints 5 new watch, access, and count lines; results are in [decisions.md](decisions.md) "UAT probe". The AC7 credential script reports 0.
-- [ ] 5. On UAT each allowed kind shows live rows and a drawer with Overview, YAML, Events tabs; a denied kind is disabled with "Not permitted: list …"; a denied binding list shows "—" cells and the reason in the drawer.
-- [ ] 6. On UAT: a RoleBinding's role link opens the role; the role's Bindings list links back; a ServiceAccount used by pods shows them and its bound roles.
-- [ ] 7. Watches per session stay at most `3N + 4` (`open_watch_count`: Bindings companion, N = 5 gives 19).
-- [ ] 8. The 0003 AC4 color-literal grep is clean; the step's screenshots exist; the ui-verifier reports no high-severity defect against W7.
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. No `Cargo.lock` change.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
+- [x] 3. No kube or k8s-openapi type in a public signature; the crate spawns no task; the 0001 read-only grep finds only the SSAR `create`. **Secret safety**: `ServiceAccountSummary` holds secret names only; no new code path requests a Secret; the only annotations read are the three cloud-identity keys (review plus `service_account_summary_keeps_names_only`, `cloud_identity_reads_only_allowlisted_keys`).
+- [ ] 4. On UAT the probe prints 5 new watch, access, and count lines; results are in [decisions.md](decisions.md) "UAT probe". The AC7 credential script reports 0. Not ticked: the AC7 credential script was not run; the substitute is in [decisions.md](decisions.md) "UAT probe".
+- [x] 5. On UAT each allowed kind shows live rows and a drawer with Overview, YAML, Events tabs; a denied kind is disabled with "Not permitted: list …"; a denied binding list shows "—" cells and the reason in the drawer.
+- [ ] 6. On UAT: a RoleBinding's role link opens the role; the role's Bindings list links back; a ServiceAccount used by pods shows them and its bound roles. Not ticked: the links are in the drawers (screenshots `v33-*`, `v35-*`) but the click-through was not run on UAT.
+- [x] 7. Watches per session stay at most `3N + 4` (`open_watch_count`: Bindings companion, N = 5 gives 19).
+- [x] 8. The 0003 AC4 color-literal grep is clean; the step's screenshots exist; the ui-verifier reports no high-severity defect against W7. The ui-verifier passed everything UAT can show. Four cases have no UAT data and are covered by unit tests only: CLUSTER ADMIN on a service account (no account is bound to cluster-admin), a cloud identity section, the VERY BROAD Bound to subject count with service accounts, and a REVIEW box.
 
 ## Open items
 

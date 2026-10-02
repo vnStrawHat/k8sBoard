@@ -136,7 +136,8 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::PersistentVolumeClaim(_)
         | KindObject::PersistentVolume(_)
         | KindObject::Role(_)
-        | KindObject::Binding(_) => None,
+        | KindObject::Binding(_)
+        | KindObject::ServiceAccount(_) => None,
     }
 }
 
@@ -255,11 +256,13 @@ fn row_diagnosis(row: &KindRow, live: &LiveCluster, now: jiff::Timestamp) -> Opt
         }
         _ => (owned_pods(row, live), None),
     };
-    // Only a ClusterRole that grants everything names its subjects; the index is built for it alone.
+    // Only a ClusterRole that grants everything and a service account read the bindings; the index
+    // is built for them alone.
     let lists = match &row.object {
         KindObject::Role(role) if role.namespace.is_none() && role.grants_everything() => {
             ready_binding_lists(live.companion())
         }
+        KindObject::ServiceAccount(_) => ready_binding_lists(live.companion()),
         _ => None,
     };
     let bindings = lists.as_ref().map(BindingIndex::build);

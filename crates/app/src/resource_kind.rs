@@ -6,7 +6,9 @@ use cluster::{
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 
-use crate::access_rows::{cluster_role_binding_row, cluster_role_row, role_binding_row, role_row};
+use crate::access_rows::{
+    cluster_role_binding_row, cluster_role_row, role_binding_row, role_row, service_account_row,
+};
 use crate::batch_rows::{cron_job_row, job_row};
 use crate::config_map_rows::config_map_row;
 use crate::event_rows::event_rows;
@@ -46,6 +48,7 @@ pub(crate) enum ResourceKind {
     ClusterRoles,
     RoleBindings,
     ClusterRoleBindings,
+    ServiceAccounts,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -579,6 +582,26 @@ static CLUSTER_ROLE_BINDINGS: KindSpec = KindSpec {
     has_port_forward: false,
 };
 
+static SERVICE_ACCOUNTS: KindSpec = KindSpec {
+    label: "ServiceAccounts",
+    object: ObjectKind::ServiceAccount,
+    name_column: NameColumn::Flexible,
+    has_labels: true,
+    singular: "serviceaccount",
+    plural: "serviceaccounts",
+    badge: "Sa",
+    is_namespaced: true,
+    access_check: AccessCheck::ListServiceAccounts,
+    columns: &[
+        column("Bound roles", 280., Align::Left),
+        column("Used by", 90., Align::Right),
+        AGE_COLUMN,
+    ],
+    read_only_actions: &[],
+    delete_label: "Delete service account…",
+    has_port_forward: false,
+};
+
 /// The Name column of a kind that shows it, as wide as its minimum.
 pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left);
 
@@ -593,7 +616,7 @@ pub(crate) fn kind_columns(kind: ResourceKind) -> Vec<KindColumn> {
 }
 
 impl ResourceKind {
-    pub(crate) const ALL: [Self; 22] = [
+    pub(crate) const ALL: [Self; 23] = [
         Self::Namespaces,
         Self::Events,
         Self::Deployments,
@@ -616,6 +639,7 @@ impl ResourceKind {
         Self::ClusterRoles,
         Self::RoleBindings,
         Self::ClusterRoleBindings,
+        Self::ServiceAccounts,
     ];
 
     fn spec(self) -> &'static KindSpec {
@@ -642,6 +666,7 @@ impl ResourceKind {
             Self::ClusterRoles => &CLUSTER_ROLES,
             Self::RoleBindings => &ROLE_BINDINGS,
             Self::ClusterRoleBindings => &CLUSTER_ROLE_BINDINGS,
+            Self::ServiceAccounts => &SERVICE_ACCOUNTS,
         }
     }
 
@@ -832,6 +857,10 @@ impl ResourceKind {
             Self::ClusterRoleBindings => connection
                 .watch_cluster_role_bindings()
                 .map(|update| rows(update, cluster_role_binding_row))
+                .boxed(),
+            Self::ServiceAccounts => connection
+                .watch_service_accounts(scope)
+                .map(|update| rows(update, service_account_row))
                 .boxed(),
         }
     }

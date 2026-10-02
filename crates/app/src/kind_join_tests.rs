@@ -1424,3 +1424,261 @@ fn roles_join_without_the_cluster_role_bindings_list() {
     );
     assert_eq!(rows[0].cells[ROLE_BINDINGS], count_cell(0, None));
 }
+
+// ---- ServiceAccounts ----
+
+fn account_of(namespace: &str, name: &str) -> cluster::ServiceAccountSummary {
+    cluster::ServiceAccountSummary {
+        namespace: namespace.to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        secrets: Vec::new(),
+        image_pull_secrets: Vec::new(),
+        automount_token: None,
+        cloud_identities: Vec::new(),
+    }
+}
+
+fn running_as(namespace: &str, name: &str, account: Option<&str>) -> PodSummary {
+    let mut pod = pod(namespace, name, &[]);
+    pod.service_account = account.map(str::to_owned);
+    pod
+}
+
+fn account_subject(namespace: &str, name: &str) -> cluster::Subject {
+    cluster::Subject {
+        kind: cluster::SubjectKind::ServiceAccount,
+        name: name.to_owned(),
+        namespace: Some(namespace.to_owned()),
+    }
+}
+
+fn group_subject(name: &str) -> cluster::Subject {
+    cluster::Subject {
+        kind: cluster::SubjectKind::Group,
+        name: name.to_owned(),
+        namespace: None,
+    }
+}
+
+fn binding_for(
+    namespace: Option<&str>,
+    name: &str,
+    role: (cluster::RoleKind, &str),
+    subjects: Vec<cluster::Subject>,
+) -> cluster::BindingSummary {
+    cluster::BindingSummary {
+        subjects,
+        ..binding_of(namespace, name, role)
+    }
+}
+
+/// The ServiceAccounts rows after a join; `None` leaves that list unloaded.
+fn joined_accounts(
+    accounts: &[cluster::ServiceAccountSummary],
+    pods: Option<Vec<PodSummary>>,
+    bindings: Option<(Vec<cluster::BindingSummary>, Vec<cluster::BindingSummary>)>,
+) -> Vec<KindRow> {
+    let mut rows: Vec<KindRow> = accounts
+        .iter()
+        .map(crate::access_rows::service_account_row)
+        .collect();
+    let pods = pods.map_or(LiveList::Loading, ready_list);
+    let companion = bindings.map(|(role_bindings, cluster_role_bindings)| {
+        bindings_companion(
+            ready_list(role_bindings),
+            Some(ready_list(cluster_role_bindings)),
+        )
+    });
+    let inputs = JoinInputs {
+        pods: &pods,
+        companion: companion.as_ref(),
+        kubelet: None,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(ResourceKind::ServiceAccounts, &mut rows, &inputs);
+    rows
+}
+
+fn text_cell(text: &str) -> KindCell {
+    KindCell::Text(text.to_owned().into())
+}
+
+fn tone_cell(text: &str, tone: StatusTone) -> KindCell {
+    KindCell::Toned(StatusLabel {
+        text: text.to_owned().into(),
+        tone,
+    })
+}
+
+#[test]
+fn service_account_joined_column_indices() {
+    let columns = ResourceKind::ServiceAccounts.columns();
+    assert_eq!(columns[ACCOUNT_BOUND_ROLES].name, "Bound roles");
+    assert_eq!(columns[ACCOUNT_USED_BY].name, "Used by");
+}
+
+#[test]
+fn service_account_bound_roles_cell() {
+    let bindings = (
+        vec![binding_for(
+            Some("shop"),
+            "read",
+            (cluster::RoleKind::Role, "reader"),
+            vec![account_subject("shop", "api")],
+        )],
+        vec![binding_for(
+            None,
+            "view-all",
+            (cluster::RoleKind::ClusterRole, "view"),
+            vec![account_subject("shop", "api")],
+        )],
+    );
+    let rows = joined_accounts(
+        &[account_of("shop", "api"), account_of("shop", "idle")],
+        None,
+        Some(bindings),
+    );
+    assert_eq!(
+        rows[0].cells[ACCOUNT_BOUND_ROLES],
+        text_cell("clusterrole/view, role/reader")
+    );
+    // An account nothing binds shows a muted dash, not a missing value.
+    assert_eq!(
+        rows[1].cells[ACCOUNT_BOUND_ROLES],
+        tone_cell("—", StatusTone::Done)
+    );
+    // Without the bindings the cell is absent and the status stays the builder one.
+    let rows = joined_accounts(&[account_of("shop", "api")], None, None);
+    assert_eq!(rows[0].cells[ACCOUNT_BOUND_ROLES], KindCell::Absent);
+    assert_eq!(rows[0].status.text.as_ref(), "Service account");
+}
+
+#[test]
+fn service_account_cluster_admin_warns() {
+    let bindings = (
+        Vec::new(),
+        vec![binding_for(
+            None,
+            "root",
+            (cluster::RoleKind::ClusterRole, "cluster-admin"),
+            vec![account_subject("shop", "api")],
+        )],
+    );
+    let rows = joined_accounts(&[account_of("shop", "api")], None, Some(bindings));
+    assert_eq!(
+        rows[0].cells[ACCOUNT_BOUND_ROLES],
+        tone_cell("clusterrole/cluster-admin", StatusTone::Warn)
+    );
+    assert_eq!(rows[0].status.text.as_ref(), "Cluster admin");
+    assert_eq!(rows[0].status.tone, StatusTone::Warn);
+}
+
+#[test]
+fn cluster_admin_through_service_accounts_group_warns() {
+    let bindings = (
+        Vec::new(),
+        vec![binding_for(
+            None,
+            "everyone",
+            (cluster::RoleKind::ClusterRole, "cluster-admin"),
+            vec![group_subject("system:serviceaccounts:shop")],
+        )],
+    );
+    let rows = joined_accounts(
+        &[account_of("shop", "api"), account_of("other", "api")],
+        None,
+        Some(bindings),
+    );
+    assert_eq!(rows[0].status.text.as_ref(), "Cluster admin");
+    // The group names one namespace.
+    assert_eq!(rows[1].status.text.as_ref(), "Service account");
+    assert_eq!(
+        rows[1].cells[ACCOUNT_BOUND_ROLES],
+        tone_cell("—", StatusTone::Done)
+    );
+}
+
+#[test]
+fn service_account_used_by_counts_pods() {
+    let pods = vec![
+        running_as("shop", "a-1", Some("api")),
+        running_as("shop", "a-2", Some("api")),
+        running_as("shop", "w-1", Some("worker")),
+        running_as("other", "a-3", Some("api")),
+    ];
+    let rows = joined_accounts(
+        &[
+            account_of("shop", "api"),
+            account_of("shop", "worker"),
+            account_of("shop", "idle"),
+        ],
+        Some(pods),
+        None,
+    );
+    let used = |count: u64, text: &str| KindCell::Quantity {
+        text: text.to_owned().into(),
+        value: count,
+        tone: None,
+    };
+    assert_eq!(rows[0].cells[ACCOUNT_USED_BY], used(2, "2 pods"));
+    assert_eq!(rows[1].cells[ACCOUNT_USED_BY], used(1, "1 pod"));
+    assert_eq!(rows[2].cells[ACCOUNT_USED_BY], used(0, "0 pods"));
+    assert_eq!(
+        (rows[0].status.text.as_ref(), rows[0].status.tone),
+        ("2 pods", StatusTone::Ok)
+    );
+    assert_eq!(
+        (rows[2].status.text.as_ref(), rows[2].status.tone),
+        ("No pods", StatusTone::Done)
+    );
+    // Without the pods the cell is absent.
+    let rows = joined_accounts(&[account_of("shop", "api")], None, None);
+    assert_eq!(rows[0].cells[ACCOUNT_USED_BY], KindCell::Absent);
+}
+
+#[test]
+fn pod_without_service_account_counts_for_default() {
+    let pods = vec![
+        running_as("shop", "bare", None),
+        running_as("shop", "named", Some("default")),
+        running_as("shop", "other", Some("api")),
+    ];
+    let rows = joined_accounts(&[account_of("shop", "default")], Some(pods), None);
+    assert_eq!(rows[0].status.text.as_ref(), "2 pods");
+}
+
+#[test]
+fn cluster_admin_to_authenticated_marks_every_account() {
+    let bindings = (
+        Vec::new(),
+        vec![
+            // The stock grants to everyone are not listed on each account.
+            binding_for(
+                None,
+                "basic-user",
+                (cluster::RoleKind::ClusterRole, "system:basic-user"),
+                vec![group_subject("system:authenticated")],
+            ),
+            binding_for(
+                None,
+                "open-door",
+                (cluster::RoleKind::ClusterRole, "cluster-admin"),
+                vec![group_subject("system:authenticated")],
+            ),
+        ],
+    );
+    let rows = joined_accounts(
+        &[account_of("shop", "api"), account_of("other", "web")],
+        None,
+        Some(bindings),
+    );
+    for row in &rows {
+        assert_eq!(row.status.text.as_ref(), "Cluster admin");
+        assert_eq!(
+            row.cells[ACCOUNT_BOUND_ROLES],
+            tone_cell("clusterrole/cluster-admin", StatusTone::Warn)
+        );
+    }
+}

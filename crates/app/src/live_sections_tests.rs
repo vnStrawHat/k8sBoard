@@ -1108,3 +1108,97 @@ fn class_volumes_text_skips_zero_parts() {
         "1 · 1 released"
     );
 }
+
+// ---- Service accounts ----
+
+fn bound(group: Option<&str>) -> BoundRole {
+    BoundRole {
+        role: cluster::RoleRef {
+            kind: cluster::RoleKind::ClusterRole,
+            name: "view".to_owned(),
+        },
+        role_key: None,
+        binding: ResourceKey::Kind {
+            kind: ResourceKind::ClusterRoleBindings,
+            namespace: None,
+            name: "view-all".to_owned(),
+        },
+        binding_text: "clusterrolebinding/view-all".to_owned(),
+        group: group.map(str::to_owned),
+    }
+}
+
+#[test]
+fn bound_roles_rows_via_binding_and_group() {
+    assert_eq!(group_suffix(&bound(None)), None);
+    assert_eq!(
+        group_suffix(&bound(Some("system:serviceaccounts:shop"))).as_deref(),
+        Some(" · group system:serviceaccounts:shop")
+    );
+    // The binding is a link to its own row.
+    assert_eq!(
+        bound(None).binding,
+        ResourceKey::Kind {
+            kind: ResourceKind::ClusterRoleBindings,
+            namespace: None,
+            name: "view-all".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn bound_roles_note_names_scope() {
+    assert_eq!(
+        bindings_scope_note("all namespaces"),
+        "Role bindings from all namespaces"
+    );
+    assert_eq!(bindings_scope_note("shop"), "Role bindings from shop");
+}
+
+fn pod_running_as(namespace: &str, name: &str, account: Option<&str>) -> PodSummary {
+    use cluster::{PodStatus, ReadyCount, StatusReason};
+
+    PodSummary {
+        namespace: namespace.to_owned(),
+        name: name.to_owned(),
+        status: PodStatus::Reason(StatusReason::Running),
+        ready: ReadyCount { ready: 1, total: 1 },
+        restarts: 0,
+        node_name: None,
+        created_at: None,
+        pod_ip: None,
+        qos_class: None,
+        service_account: account.map(str::to_owned),
+        controller: None,
+        conditions: Vec::new(),
+        status_message: None,
+        labels: Vec::new(),
+        host_network: false,
+        containers: Vec::new(),
+    }
+}
+
+#[test]
+fn service_account_pods_by_name() {
+    let account = ServiceAccountSummary {
+        namespace: "shop".to_owned(),
+        name: "default".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        secrets: Vec::new(),
+        image_pull_secrets: Vec::new(),
+        automount_token: None,
+        cloud_identities: Vec::new(),
+    };
+    let pods = [
+        pod_running_as("shop", "zeta", None),
+        pod_running_as("shop", "alpha", Some("default")),
+        pod_running_as("shop", "other", Some("api")),
+        pod_running_as("elsewhere", "beta", Some("default")),
+    ];
+    let names: Vec<&str> = account_pods(&account, &pods)
+        .iter()
+        .map(|pod| pod.name.as_str())
+        .collect();
+    assert_eq!(names, ["alpha", "zeta"]);
+}

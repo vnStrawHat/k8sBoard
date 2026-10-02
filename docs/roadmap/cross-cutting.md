@@ -51,5 +51,6 @@
 | `create pods/exec`, `create pods/portforward` | denied | 0035–0037 render disabled; live checks need another cluster |
 | PVCs, PVs, StorageClasses | allowed (0014 probe: 29 PVCs, 57 PVs, 2 StorageClasses) | 0014 verifiable |
 | NetworkPolicies, HPAs, quotas, PDBs | allowed (0013 probe: 8 policies, 1 HPA, 0 quotas, 7 PDBs) | 0013 verifiable; quotas only by unit tests and the empty state |
-| storage, RBAC kinds, EndpointSlices, CRDs | EndpointSlices allowed (0012); the rest not probed yet | each spec adds `AccessCheck` variants and records results first |
+| ServiceAccounts, Roles, ClusterRoles, RoleBindings, ClusterRoleBindings | allowed (0015 probe: 98 service accounts, 28 roles, 95 cluster roles, 31 role bindings, 82 cluster role bindings) | 0015 verifiable |
+| EndpointSlices, CRDs | EndpointSlices allowed (0012); CRDs not probed yet | each spec adds `AccessCheck` variants and records results first |
 | Objects that may not exist on UAT (HPAs, PDBs, cert-manager, Helm releases, CRDs) | unknown | specs need fixture-based unit tests and empty-state screenshots |

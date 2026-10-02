@@ -35,7 +35,7 @@ PVC status, capacity, Used % (from 0011, "—" without it), access, class, mount
 - Deps: 0011 (Used %), 0012. Risk: Low.
 
 ### 0015 — Access-control kinds
-ServiceAccounts, Roles, ClusterRoles, RoleBindings, ClusterRoleBindings: rules table, aggregation flag, two-way binding links, bound roles and "can do" computed locally from bindings, cloud identity annotations, cluster-admin warnings, Hide system.
+ServiceAccounts, Roles, ClusterRoles, RoleBindings, ClusterRoleBindings: rules table, aggregation flag, two-way binding links, bound roles computed locally from bindings, cloud identity from three allowlisted annotation keys, cluster-admin warnings, Hide system. The computed "can do" list moves to 0023 (0015 decision 12).
 - Deps: 0012 (used-by). Risk: Low (data), Med (rule aggregation correctness).
 
 ### 0016 — Secrets and TLS expiry

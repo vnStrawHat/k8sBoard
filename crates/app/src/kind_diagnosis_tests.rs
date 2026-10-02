@@ -1498,3 +1498,110 @@ mod access {
         );
     }
 }
+
+// ---- Service accounts ----
+
+mod account {
+    use cluster::{BindingSummary, RoleKind, RoleRef, ServiceAccountSummary, Subject, SubjectKind};
+
+    use super::*;
+    use crate::access_bindings::{BindingIndex, BindingLists};
+
+    fn account() -> ServiceAccountSummary {
+        ServiceAccountSummary {
+            namespace: "shop".to_owned(),
+            name: "api".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            secrets: Vec::new(),
+            image_pull_secrets: Vec::new(),
+            automount_token: None,
+            cloud_identities: Vec::new(),
+        }
+    }
+
+    fn admin_binding(namespace: Option<&str>, name: &str) -> BindingSummary {
+        BindingSummary {
+            namespace: namespace.map(str::to_owned),
+            name: name.to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            role: RoleRef {
+                kind: RoleKind::ClusterRole,
+                name: "cluster-admin".to_owned(),
+            },
+            subjects: vec![Subject {
+                kind: SubjectKind::ServiceAccount,
+                name: "api".to_owned(),
+                namespace: Some("shop".to_owned()),
+            }],
+        }
+    }
+
+    fn diagnose(
+        role_bindings: &[BindingSummary],
+        cluster_role_bindings: &[BindingSummary],
+    ) -> Option<KindDiagnosis> {
+        let index = BindingIndex::build(&BindingLists {
+            role_bindings,
+            cluster_role_bindings,
+        });
+        let inputs = DiagnosisInputs {
+            bindings: Some(&index),
+            ..storage_inputs()
+        };
+        kind_diagnosis(&KindObject::ServiceAccount(account()), &inputs)
+    }
+
+    #[test]
+    fn service_account_cluster_admin_through_cluster_binding() {
+        let diagnosis = diagnose(
+            &[admin_binding(Some("shop"), "local")],
+            &[admin_binding(None, "root")],
+        )
+        .expect("a box");
+        assert_eq!(diagnosis.tone, StatusTone::Warn);
+        assert_eq!(diagnosis.title, "CLUSTER ADMIN");
+        // The cluster-wide binding is named, not the namespace one.
+        assert_eq!(
+            diagnosis.text,
+            "This service account has full access to the cluster through clusterrolebinding/root."
+        );
+    }
+
+    #[test]
+    fn service_account_admin_of_namespace() {
+        let diagnosis = diagnose(&[admin_binding(Some("shop"), "local")], &[]).expect("a box");
+        assert_eq!(
+            diagnosis.text,
+            "This service account has full access to namespace shop through rolebinding/local."
+        );
+    }
+
+    #[test]
+    fn service_account_admin_through_authenticated() {
+        let mut open = admin_binding(None, "open-door");
+        open.subjects = vec![Subject {
+            kind: SubjectKind::Group,
+            name: "system:authenticated".to_owned(),
+            namespace: None,
+        }];
+        let diagnosis = diagnose(&[], &[open]).expect("a box");
+        assert_eq!(
+            diagnosis.text,
+            "This service account has full access to the cluster through clusterrolebinding/open-door."
+        );
+    }
+
+    #[test]
+    fn service_account_without_cluster_admin_has_no_box() {
+        let mut view = admin_binding(None, "view-all");
+        view.role.name = "view".to_owned();
+        assert_eq!(diagnose(&[], &[view]), None);
+        // The box waits for the bindings.
+        assert_eq!(
+            kind_diagnosis(&KindObject::ServiceAccount(account()), &storage_inputs()),
+            None
+        );
+    }
+}
