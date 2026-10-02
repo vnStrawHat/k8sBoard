@@ -115,9 +115,12 @@ impl ClusterConnection {
         match self.list_all(Api::<K>::all(client.clone()), action).await {
             Ok(items) => Ok((items, NamespaceCoverage::AllNamespaces)),
             Err(ClusterError::Forbidden { .. }) => {
-                let lists = stream::iter(fallback.iter().map(|namespace| async move {
-                    let api = Api::<K>::namespaced(client.clone(), namespace);
-                    (namespace.clone(), self.list_all(api, action).await)
+                // Owned namespaces: a closure over `&String` makes the future not `Send` for
+                // every lifetime once it runs on the runtime.
+                let lists = stream::iter(fallback.iter().cloned().map(|namespace| async move {
+                    let api = Api::<K>::namespaced(client.clone(), &namespace);
+                    let result = self.list_all(api, action).await;
+                    (namespace, result)
                 }))
                 .buffered(FALLBACK_CONCURRENCY)
                 .collect::<Vec<_>>()

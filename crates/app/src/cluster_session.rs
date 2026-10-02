@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,8 +9,8 @@ use cluster::{
     ConfigMapValues, ContextSummary, CrdSummary, CustomObjectFields, EndpointSliceSummary,
     EventFilter, EventSummary, HelmRevision, IngressSummary, InvolvedObject, JobSummary,
     Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary,
-    PersistentVolumeSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, SecretSummary,
-    ServerVersion, WatchUpdate,
+    PersistentVolumeSummary, PodSummary, RbacSnapshot, ReplicaSetSummary, ResourceQuotaSummary,
+    SecretSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
@@ -75,6 +76,8 @@ pub(crate) struct LiveCluster {
     /// Decided before the session is live, so it is never unknown.
     pub(crate) scope: NamespaceScope,
     pub(crate) access: AccessState,
+    /// The RBAC snapshot of the analysis tools, listed on first need.
+    pub(crate) rbac: RbacState,
     pub(crate) namespaces: LiveList<NamespaceSummary>,
     pub(crate) pods: LiveList<PodSummary>,
     pub(crate) nodes: LiveList<NodeSummary>,
@@ -101,6 +104,49 @@ pub(crate) struct LiveCluster {
     pub(crate) issue_feeds: IssueFeeds,
     connection: ClusterConnection,
     subscriptions: Subscriptions,
+}
+
+/// The RBAC snapshot behind Who can and Check permissions: one immutable listing per session,
+/// fetched when a tool first needs it and replaced by a refresh. It is no watch, so it is not
+/// counted in `open_watch_count`.
+pub(crate) enum RbacState {
+    Idle,
+    Loading {
+        _task: Task<()>,
+    },
+    Ready {
+        snapshot: Rc<RbacSnapshot>,
+        listed_at: jiff::Timestamp,
+    },
+    Failed(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RbacTrigger {
+    /// A tool opened and needs a snapshot.
+    Request,
+    /// The Refresh or Retry button.
+    Refresh,
+}
+
+impl RbacState {
+    /// The snapshot is for the old scope's fallback namespaces, so the next tool lists again.
+    fn reset_for_scope_change(&mut self) {
+        *self = Self::Idle;
+    }
+}
+
+/// A request lists from Idle or Failed; a refresh from Ready or Failed; neither interrupts a
+/// listing in flight.
+fn starts_fetch(state: &RbacState, trigger: RbacTrigger) -> bool {
+    match (state, trigger) {
+        (RbacState::Idle, RbacTrigger::Request) => true,
+        (RbacState::Ready { .. }, RbacTrigger::Refresh) => true,
+        (RbacState::Failed(_), _) => true,
+        (RbacState::Loading { .. }, _)
+        | (RbacState::Idle, RbacTrigger::Refresh)
+        | (RbacState::Ready { .. }, RbacTrigger::Request) => false,
+    }
 }
 
 /// Whether new snapshots reach a list. A paused list keeps its rows; only the newest snapshot
@@ -1247,7 +1293,61 @@ impl ClusterSession {
         );
         // The numbers are for the old scope; the review for the new one counts again.
         live.kind_counts = KindCounts::default();
+        // The fallback namespaces and so the coverage may differ in the new scope.
+        live.rbac.reset_for_scope_change();
         live.refresh_kubelet_targets();
+        cx.notify();
+    }
+
+    /// Lists the RBAC objects once for a tool that needs them (no-op while Ready or Loading).
+    pub(crate) fn request_rbac(&mut self, cx: &mut Context<Self>) {
+        self.fetch_rbac(RbacTrigger::Request, cx);
+    }
+
+    /// Lists again for the Refresh and Retry buttons (no-op while Loading or Idle).
+    pub(crate) fn refresh_rbac(&mut self, cx: &mut Context<Self>) {
+        self.fetch_rbac(RbacTrigger::Refresh, cx);
+    }
+
+    fn fetch_rbac(&mut self, trigger: RbacTrigger, cx: &mut Context<Self>) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        if !starts_fetch(&live.rbac, trigger) {
+            return;
+        }
+        // Roles and RoleBindings fall back to these when a cluster-wide list is forbidden.
+        let fallback: Vec<String> = match live.namespaces.ready_items() {
+            Some(namespaces) => namespaces.iter().map(|item| item.name.clone()).collect(),
+            None => live.scope.namespaces().to_vec(),
+        };
+        let connection = live.connection.clone();
+        let fetching = runtime.spawn(async move { connection.read_rbac(&fallback).await });
+        let task = cx.spawn(async move |this, cx| {
+            let result = fetching.await;
+            let _ = this.update(cx, |session, cx| session.finish_rbac(result, cx));
+        });
+        live.rbac = RbacState::Loading { _task: task };
+        cx.notify();
+    }
+
+    fn finish_rbac(
+        &mut self,
+        result: Result<Result<RbacSnapshot, ClusterError>, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        live.rbac = match result {
+            Ok(Ok(snapshot)) => RbacState::Ready {
+                snapshot: Rc::new(snapshot),
+                listed_at: jiff::Timestamp::now(),
+            },
+            Ok(Err(error)) => RbacState::Failed(error_text(&error)),
+            Err(_) => RbacState::Failed("the RBAC listing stopped unexpectedly".to_owned()),
+        };
         cx.notify();
     }
 
@@ -1976,6 +2076,7 @@ impl LiveCluster {
             server_version,
             scope,
             access,
+            rbac: RbacState::Idle,
             namespaces: LiveList::Loading,
             pods: LiveList::Loading,
             nodes: LiveList::Loading,

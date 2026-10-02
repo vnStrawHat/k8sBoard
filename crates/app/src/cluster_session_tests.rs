@@ -1,4 +1,5 @@
 use cluster::{AccessDecision, AccessReview};
+use gpui_kit::Task;
 
 use super::*;
 
@@ -1400,6 +1401,28 @@ fn hidden_board_does_not_notify_for_an_age_change() {
     }
 }
 
+fn empty_snapshot() -> RbacSnapshot {
+    RbacSnapshot {
+        roles: Vec::new(),
+        cluster_roles: Vec::new(),
+        role_bindings: Vec::new(),
+        cluster_role_bindings: Vec::new(),
+        coverage: cluster::RbacCoverage {
+            cluster_roles: true,
+            cluster_bindings: true,
+            roles: cluster::NamespaceCoverage::AllNamespaces,
+            role_bindings: cluster::NamespaceCoverage::AllNamespaces,
+        },
+    }
+}
+
+fn rbac_ready() -> RbacState {
+    RbacState::Ready {
+        snapshot: Rc::new(empty_snapshot()),
+        listed_at: jiff::Timestamp::UNIX_EPOCH,
+    }
+}
+
 #[test]
 fn condition_plan_opens_the_expected_number_of_watches() {
     use crate::issue_feeds::{FeedPlan, condition_plan};
@@ -1422,4 +1445,50 @@ fn condition_plan_opens_the_expected_number_of_watches() {
     // Above two, one cluster-wide watch per kind: N events + 8.
     assert_eq!(issue_watches(&["a", "b", "c"]), 3 + 8);
     assert_eq!(issue_watches(&["a", "b", "c", "d", "e"]), 5 + 8);
+}
+
+#[test]
+fn rbac_trigger_table() {
+    let loading = || RbacState::Loading {
+        _task: Task::ready(()),
+    };
+    let failed = || RbacState::Failed("no".to_owned());
+    let cases = [
+        (RbacState::Idle, RbacTrigger::Request, true),
+        (RbacState::Idle, RbacTrigger::Refresh, false),
+        (loading(), RbacTrigger::Request, false),
+        (loading(), RbacTrigger::Refresh, false),
+        (rbac_ready(), RbacTrigger::Request, false),
+        (rbac_ready(), RbacTrigger::Refresh, true),
+        (failed(), RbacTrigger::Request, true),
+        (failed(), RbacTrigger::Refresh, true),
+    ];
+    for (state, trigger, expected) in cases {
+        assert_eq!(starts_fetch(&state, trigger), expected, "{trigger:?}");
+    }
+}
+
+#[test]
+fn rbac_resets_on_scope_change() {
+    let mut state = rbac_ready();
+    state.reset_for_scope_change();
+    assert!(matches!(state, RbacState::Idle));
+}
+
+#[test]
+fn request_then_refresh_starts_a_listing_from_every_state_but_loading() {
+    let loading = RbacState::Loading {
+        _task: Task::ready(()),
+    };
+    assert!(!starts_fetch(&loading, RbacTrigger::Request));
+    assert!(!starts_fetch(&loading, RbacTrigger::Refresh));
+    for state in [
+        RbacState::Idle,
+        rbac_ready(),
+        RbacState::Failed("no".to_owned()),
+    ] {
+        let starts = starts_fetch(&state, RbacTrigger::Request)
+            || starts_fetch(&state, RbacTrigger::Refresh);
+        assert!(starts);
+    }
 }

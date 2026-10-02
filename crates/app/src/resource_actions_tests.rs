@@ -773,3 +773,36 @@ fn non_workload_kind_menu_has_no_view_logs() {
     let node = PodOwner::Node { name: "n1".into() };
     assert_eq!(workload_logs_entry(Some(&node), &known_denying(&[])), None);
 }
+
+fn role_with_rules(rules: Vec<cluster::RbacRule>) -> KindRow {
+    crate::access_rows::role_row(&cluster::RoleSummary {
+        namespace: Some("shop".to_owned()),
+        name: "reader".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        rules,
+        aggregation: Vec::new(),
+    })
+}
+
+#[test]
+fn role_menus_start_with_who_can() {
+    assert!(has_who_can(ResourceKind::Roles));
+    assert!(has_who_can(ResourceKind::ClusterRoles));
+    assert!(!has_who_can(ResourceKind::RoleBindings));
+    assert!(!has_who_can(ResourceKind::ServiceAccounts));
+}
+
+#[test]
+fn who_can_query_prefills_from_the_first_resource_rule() {
+    let row = role_with_rules(vec![cluster::RbacRule {
+        api_groups: vec!["apps".to_owned()],
+        resources: vec!["deployments".to_owned()],
+        resource_names: Vec::new(),
+        verbs: vec!["get".to_owned()],
+        non_resource_urls: Vec::new(),
+    }]);
+    assert_eq!(who_can_query(&row).as_deref(), Some("get deployments.apps"));
+    assert_eq!(who_can_query(&role_with_rules(Vec::new())), None);
+    assert_eq!(who_can_query(&claim_row()), None);
+}

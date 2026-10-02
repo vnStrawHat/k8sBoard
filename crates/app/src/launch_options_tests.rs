@@ -456,3 +456,13 @@ fn screen_issues_parses() {
     assert_eq!(drawer.screen(), Screen::Issues);
     assert!(drawer.has_drawer());
 }
+
+#[test]
+fn parses_analysis_screens() {
+    let screen = run_options(&["--screen", "who-can"]).screen;
+    assert_eq!(screen, LaunchScreen::WhoCan);
+    assert!(screen.opens_dialog());
+    assert!(!screen.has_drawer() && !screen.has_log_dock());
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::ClusterRoles));
+    assert!(!LaunchScreen::Pods.opens_dialog());
+}

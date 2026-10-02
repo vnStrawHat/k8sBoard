@@ -105,6 +105,8 @@ pub(crate) struct SettleInput {
     pub(crate) is_drawer_ready: bool,
     /// A logs screen whose tab is not open yet or still connecting.
     pub(crate) is_log_pending: bool,
+    /// A tool dialog whose answer has not arrived.
+    pub(crate) is_dialog_pending: bool,
     /// Where the pods metrics feed stands.
     pub(crate) pod_metrics: FeedProgress,
     /// The same for the nodes feed.
@@ -168,6 +170,7 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
         TargetState::Unavailable => true,
         TargetState::Loading => false,
         TargetState::Loaded if screen.has_log_dock() => !input.is_log_pending,
+        TargetState::Loaded if screen.opens_dialog() => !input.is_dialog_pending,
         TargetState::Loaded
             if screen.shows_pod_usage()
                 && !input.pod_metrics.is_settled(screen.min_metrics_ticks()) =>
@@ -354,6 +357,7 @@ mod tests {
             target,
             is_drawer_ready,
             is_log_pending: false,
+            is_dialog_pending: false,
             pod_metrics: progress(FeedStatus::Live, 1),
             node_metrics: progress(FeedStatus::Live, 1),
             kubelet: progress(FeedStatus::Live, 4),
@@ -402,6 +406,19 @@ mod tests {
             list_screen,
             &input(TargetState::Loading, false)
         ));
+    }
+
+    #[test]
+    fn dialog_screen_waits_for_its_answer() {
+        let mut pending = input(TargetState::Loaded, false);
+        pending.is_dialog_pending = true;
+        assert!(!is_screen_settled(LaunchScreen::WhoCan, &pending));
+        assert!(is_screen_settled(
+            LaunchScreen::WhoCan,
+            &input(TargetState::Loaded, false)
+        ));
+        // Other screens ignore a dialog.
+        assert!(is_screen_settled(LaunchScreen::Pods, &pending));
     }
 
     #[test]

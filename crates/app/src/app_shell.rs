@@ -10,11 +10,11 @@ use cluster::{
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, InteractiveElement as _,
     IntoElement, KeyBinding, ParentElement as _, Point, Render, SharedString, Styled as _,
-    Subscription, Task, Window,
+    Subscription, Task, Window, px,
 };
 
 use crate::FocusQuickFilter;
@@ -74,7 +74,11 @@ use crate::table_selection::{
 use crate::table_sort::next_sort;
 use crate::table_view::{FilteredTable, RowCheck, TableView};
 use crate::title_bar::title_bar;
+use crate::who_can_view::WhoCanView;
 use crate::yaml_view::{YamlView, yaml_subject};
+
+/// The width of the tool dialogs (Who can, Check permissions, Test traffic).
+const DIALOG_WIDTH: f32 = 760.;
 
 #[path = "workspace.rs"]
 mod workspace;
@@ -218,6 +222,11 @@ pub(crate) struct AppShell {
     pending_launch_screen: Option<LaunchScreen>,
     /// `--select`: the row that request opens instead of the first one.
     launch_select: Option<String>,
+    /// A `--screen` tool dialog that opens once the session is live.
+    pending_dialog_launch: Option<LaunchScreen>,
+    /// The open Who can dialog, which a screenshot waits on.
+    #[cfg(feature = "screenshot")]
+    who_can: Option<gpui_kit::WeakEntity<WhoCanView>>,
     /// `--screen custom:<crd-name>`: waits for the CRD list, then opens the kind.
     pending_custom_launch: Option<CustomLaunch>,
     /// Why a `--screen custom:` request found no kind; a screenshot run fails with it.
@@ -364,6 +373,9 @@ impl AppShell {
             .then_some(options.screen)
             .filter(|screen| !matches!(screen, LaunchScreen::Custom { .. })),
             launch_select,
+            pending_dialog_launch: options.screen.opens_dialog().then_some(options.screen),
+            #[cfg(feature = "screenshot")]
+            who_can: None,
             pending_custom_launch: match options.screen {
                 LaunchScreen::Custom { crd_name, tab } => Some(CustomLaunch { crd_name, tab }),
                 _ => None,
@@ -687,6 +699,51 @@ impl AppShell {
         if let Some(item) = found {
             self.rebuild_visible_view(cx, move |view| view.reveal(item));
         }
+    }
+
+    /// Opens the Who can… dialog. `namespace: None` asks about cluster-wide grants. The view is
+    /// created here once; the dialog builder only clones the handle on every frame.
+    pub(crate) fn open_who_can(
+        &mut self,
+        query: Option<String>,
+        namespace: Option<String>,
+        check_now: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let shell = cx.weak_entity();
+        let view =
+            cx.new(|cx| WhoCanView::new(shell, &session, query, namespace, check_now, window, cx));
+        #[cfg(feature = "screenshot")]
+        {
+            self.who_can = Some(view.downgrade());
+        }
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title("Who can…")
+                .w(px(DIALOG_WIDTH))
+                .child(view.clone())
+        });
+    }
+
+    /// The namespace the top-level tool buttons start in: the first one of the scope, else
+    /// cluster-wide.
+    pub(crate) fn tool_namespace(&self, cx: &App) -> Option<String> {
+        self.live(cx)?.scope.namespaces().first().cloned()
+    }
+
+    /// Opens the `--screen` dialog once the session is live. It runs from `render` because a
+    /// dialog needs a window.
+    fn open_pending_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_dialog_launch.is_none() || self.live(cx).is_none() {
+            return;
+        }
+        self.pending_dialog_launch = None;
+        let namespace = self.tool_namespace(cx);
+        self.open_who_can(Some("get secrets".to_owned()), namespace, true, window, cx);
     }
 
     fn retry(&mut self, cx: &mut Context<Self>) {
@@ -1944,6 +2001,11 @@ impl AppShell {
                 is_content_pending,
             ),
             is_log_pending,
+            is_dialog_pending: self.pending_dialog_launch.is_some()
+                || self.who_can.as_ref().is_some_and(|view| {
+                    view.read_with(cx, |view, cx| view.is_pending(cx))
+                        .unwrap_or(false)
+                }),
             pod_metrics: self
                 .live(cx)
                 .map_or_else(FeedProgress::unavailable, |live| FeedProgress {
@@ -2257,6 +2319,7 @@ impl Render for AppShell {
         self.fit_table_widths(window, cx);
         self.refresh_monitor_cache(cx);
         self.open_pending_logs(window, cx);
+        self.open_pending_dialog(window, cx);
         self.sync_yaml_view(window, cx);
         self.sync_helm_view(window, cx);
         self.sync_secret_values(cx);

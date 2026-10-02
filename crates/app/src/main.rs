@@ -1,6 +1,7 @@
 //! k8sBoard desktop application entry point.
 
 mod access_bindings;
+mod access_query;
 mod access_rows;
 mod age;
 mod app_shell;
@@ -87,6 +88,7 @@ mod title_bar;
 mod usage_bar;
 mod usage_chart;
 mod usage_format;
+mod who_can_view;
 mod workload_rows;
 mod yaml_view;
 

@@ -6,6 +6,7 @@ use gpui_kit::{
 };
 
 use crate::access_bindings::role_key;
+use crate::access_query::who_can_prefill;
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::{AccessState, LiveCluster};
 use crate::custom_kind::CustomKind;
@@ -282,6 +283,9 @@ pub(crate) fn kind_menu(
     extras: MenuExtras,
 ) -> PopupMenu {
     let mut menu = menu;
+    if has_who_can(kind) {
+        menu = menu.item(who_can_item(row, shell));
+    }
     if let Some(item) = workload_logs_item(row, access, shell) {
         menu = menu.item(item);
     }
@@ -745,6 +749,35 @@ fn copy_message_item(event: &EventDetail) -> PopupMenuItem {
     let message = event.message.clone();
     PopupMenuItem::new("Copy message").on_click(move |_, _, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string(message.to_string()));
+    })
+}
+
+/// Roles and ClusterRoles offer Who can… as their first menu item.
+fn has_who_can(kind: ResourceKind) -> bool {
+    matches!(kind, ResourceKind::Roles | ResourceKind::ClusterRoles)
+}
+
+/// The Who can… query a role row prefills: its first resource rule, if it has one.
+fn who_can_query(row: &KindRow) -> Option<String> {
+    match &row.object {
+        KindObject::Role(role) => who_can_prefill(&role.rules),
+        _ => None,
+    }
+}
+
+/// Opens Who can… on the role's own namespace (cluster-wide for a ClusterRole), prefilled and
+/// asked at once when the role has a rule to ask about.
+fn who_can_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    let shell = shell.clone();
+    let query = who_can_query(row);
+    let namespace = row.namespace.clone();
+    PopupMenuItem::new("Who can…").on_click(move |_, window, cx| {
+        let query = query.clone();
+        let namespace = namespace.clone();
+        let _ = shell.update(cx, |shell, cx| {
+            let check_now = query.is_some();
+            shell.open_who_can(query, namespace, check_now, window, cx);
+        });
     })
 }
 

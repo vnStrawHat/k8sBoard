@@ -260,7 +260,15 @@ impl AppShell {
             Screen::Kind(ResourceKind::ReplicaSets) => {
                 self.render_hide_inactive(toolkit, cx).into_iter().collect()
             }
-            Screen::Kind(ResourceKind::ClusterRoles | ResourceKind::ClusterRoleBindings) => {
+            Screen::Kind(ResourceKind::Roles) => self.render_who_can(cx).into_iter().collect(),
+            Screen::Kind(ResourceKind::ClusterRoles) => [
+                self.render_who_can(cx),
+                self.render_hide_system(toolkit, cx),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            Screen::Kind(ResourceKind::ClusterRoleBindings) => {
                 self.render_hide_system(toolkit, cx).into_iter().collect()
             }
             Screen::Kind(ResourceKind::Events) => {
@@ -316,6 +324,22 @@ impl AppShell {
                 .child(status)
                 .into_any_element(),
         )
+    }
+
+    /// Opens the Who can… dialog on the namespace the scope starts in.
+    fn render_who_can(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let button = Button::new("who-can").label("Who can…").small().outline();
+        let button = if self.live(cx).is_some() {
+            button
+                .tooltip("Find the subjects that can do something")
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    let namespace = shell.tool_namespace(cx);
+                    shell.open_who_can(None, namespace, false, window, cx);
+                }))
+        } else {
+            button.disabled(true).tooltip("Not connected")
+        };
+        Some(button.into_any_element())
     }
 
     /// ReplicaSets scaled to zero are hidden while it is on, which is the default.
