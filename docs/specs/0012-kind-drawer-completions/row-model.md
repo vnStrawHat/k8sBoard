@@ -64,7 +64,10 @@ pub(crate) struct JoinInputs<'a> {
 }
 /// Rewrites the joined cells (and the Service status) of `rows`. Other kinds: no-op.
 pub(crate) fn join_rows(kind: ResourceKind, rows: &mut [KindRow], inputs: &JoinInputs);
-pub(crate) fn service_health(service: &ServiceSummary, pods: &LiveList<PodSummary>, slices: Option<&LiveList<EndpointSliceSummary>>) -> ServiceHealth;
+/// Core (0022 reuses it): `pods` are loaded; pods of other namespaces are skipped; `slices: None` = not loaded or denied.
+pub(crate) fn service_health(service: &ServiceSummary, pods: &[PodSummary], slices: Option<&[EndpointSliceSummary]>) -> ServiceHealth;
+/// Thin wrapper for the explorer join: `ready_items()` of both lists; pods not Ready → `matching_pods: None`.
+pub(crate) fn service_health_of(service: &ServiceSummary, pods: &LiveList<PodSummary>, slices: Option<&LiveList<EndpointSliceSummary>>) -> ServiceHealth;
 pub(crate) fn config_map_users(pods: &[PodSummary]) -> ConfigMapUsers; // namespace → name → Vec<UsedBy>
 pub(crate) fn namespace_load(namespace: &str, pods: &[PodSummary]) -> NamespaceLoad;
 ```

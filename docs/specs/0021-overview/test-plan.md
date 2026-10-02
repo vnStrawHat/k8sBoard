@@ -37,7 +37,7 @@
 
 | Module | Tests |
 |---|---|
-| `file_export.rs` | the moved 0019 file-name tests, plus `export_file_name_uses_extension` |
+| `file_export.rs` | the moved 0019 file-name tests (expecting `-`), plus `export_file_name_uses_extension`, `export_file_name_replaces_path_unsafe_chars` (`readonly@Monitor:a/b` → `readonly-Monitor-a-b`) |
 | `overview_report.rs` | `report_lists_every_issue_not_only_six`, `report_has_coverage_note_when_partial`, `report_says_no_issues_when_empty`, `report_capacity_and_nodes_tables`, `report_changes_use_window_label`, `cell_escapes_pipes_and_newlines`, `report_has_no_server_or_user` |
 
 ## Live checks (coder-lite; UAT; `--context readonly@Monitor`; `--config-dir .tmp/…` once it exists)

@@ -9,12 +9,13 @@
 ```rust
 /// One export, from button click to result. Both the log dock and Overview use it.
 pub(crate) enum ExportState { Idle, Choosing, Saving, Saved { file_name: String }, Failed { message: String } }
-/// `{label}-{YYYYMMDD-HHMMSS}Z.{extension}`; every char outside `[A-Za-z0-9._-]` becomes `_`.
+/// `{label}-{YYYYMMDD-HHMMSS}Z.{extension}`. The one sanitizer for every exporter (0019, 0021, 0022): each char
+/// outside `[A-Za-z0-9._-]` (path-unsafe ones such as `/`, `\`, `:`, `@`, spaces) becomes `-`.
 pub(crate) fn export_file_name(label: &str, extension: &str, now: jiff::Timestamp) -> String;
 ```
 
 - `Saved` carries no line count (amended in 0019 [dock-polish.md](../0019-workload-logs/dock-polish.md)). Each exporter keeps its own detail text: the log tab keeps `exported_lines`, and Overview needs none.
-- `log_export.rs` keeps `start_export` and calls `export_file_name(label, "log", now)`; its tests move with the functions.
+- `log_export.rs` keeps `start_export` and calls `export_file_name(label, "log", now)`; its tests move with the functions. The moved 0019 test expects `-` now: `deploy/api` → `deploy-api-20240501-104758Z.log` (amended for 0022, which exports `topology-readonly-Monitor-{ns}-…png`).
 
 ## Content (pure)
 
