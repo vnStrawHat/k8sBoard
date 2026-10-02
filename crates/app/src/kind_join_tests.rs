@@ -93,6 +93,7 @@ fn joined(
     let pods = ready_list(pods);
     let companion = slices.map(|slices| CompanionLists::EndpointSlices(ready_list(slices)));
     let inputs = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion: companion.as_ref(),
         kubelet: None,
@@ -400,6 +401,7 @@ fn rejoin_starts_from_the_builder_status() {
         api_endpoints([true; 2]),
     )]));
     let with_slices = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion: Some(&companion),
         kubelet: None,
@@ -407,6 +409,7 @@ fn rejoin_starts_from_the_builder_status() {
     };
     join_rows(ResourceKind::Services, &mut rows, &with_slices);
     let without = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion: None,
         kubelet: None,
@@ -422,6 +425,7 @@ fn unloaded_pods_do_not_claim_no_match() {
     let mut rows = vec![service_row(&service(&["app=api"]))];
     let pods = LiveList::<PodSummary>::Loading;
     let inputs = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion: None,
         kubelet: None,
@@ -437,6 +441,7 @@ fn other_kinds_are_not_joined() {
     let before = rows.clone();
     let pods = ready_list(Vec::new());
     let inputs = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion: None,
         kubelet: None,
@@ -695,6 +700,7 @@ fn config_map_row_in(namespace: &str, name: &str) -> KindRow {
 
 fn join_config_maps_of(pods: &LiveList<PodSummary>, rows: &mut [KindRow]) {
     let inputs = JoinInputs {
+        custom_counts: None,
         pods,
         companion: None,
         kubelet: None,
@@ -789,11 +795,14 @@ fn namespace_row_named(name: &str) -> KindRow {
         phase: NamespacePhase::Active,
         labels: Vec::new(),
         created_at: None,
+        deleting_since: None,
+        deletion_conditions: Vec::new(),
     })
 }
 
 fn join_namespaces_of(scope: &NamespaceScope, pods: &LiveList<PodSummary>, rows: &mut [KindRow]) {
     let inputs = JoinInputs {
+        custom_counts: None,
         pods,
         companion: None,
         kubelet: None,
@@ -901,6 +910,7 @@ fn network_policy(selector: &[&str]) -> cluster::NetworkPolicySummary {
 fn joined_policy(policy: &cluster::NetworkPolicySummary, pods: &LiveList<PodSummary>) -> KindRow {
     let mut rows = vec![crate::network_policy_rows::network_policy_row(policy)];
     let inputs = JoinInputs {
+        custom_counts: None,
         pods,
         companion: None,
         kubelet: None,
@@ -1032,6 +1042,7 @@ fn joined_claim(phase: &str, history: Option<&KubeletHistory>) -> KindRow {
     ))];
     let pods = LiveList::Loading;
     let inputs = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion: None,
         kubelet: history,
@@ -1155,6 +1166,7 @@ fn rejoin_without_stats_restores_the_builder_status() {
     let pods = LiveList::Loading;
     for history in [Some(&full), None] {
         let inputs = JoinInputs {
+            custom_counts: None,
             pods: &pods,
             companion: None,
             kubelet: history,
@@ -1211,6 +1223,7 @@ fn joined_classes(names: &[&str], companion: Option<&CompanionLists>) -> Vec<Kin
         .collect();
     let pods = LiveList::Loading;
     let inputs = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion,
         kubelet: None,
@@ -1328,6 +1341,7 @@ fn joined_roles(
         .collect();
     let pods = LiveList::Loading;
     let inputs = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion,
         kubelet: None,
@@ -1499,6 +1513,7 @@ fn joined_accounts(
         )
     });
     let inputs = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion: companion.as_ref(),
         kubelet: None,
@@ -1878,6 +1893,7 @@ fn joined_secrets(
     };
     let companion = ingresses.map(|ingresses| CompanionLists::Ingresses(ready_list(ingresses)));
     let inputs = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion: companion.as_ref(),
         kubelet: None,
@@ -1975,6 +1991,7 @@ fn tls_cell_of(ingress: &IngressSummary, secrets: Option<Vec<cluster::SecretSumm
     let pods = ready_list(Vec::new());
     let companion = secrets.map(|secrets| CompanionLists::TlsSecrets(ready_list(secrets)));
     let inputs = JoinInputs {
+        custom_counts: None,
         pods: &pods,
         companion: companion.as_ref(),
         kubelet: None,
@@ -2054,4 +2071,90 @@ fn ingress_tls_unjoined_without_companion() {
 fn ingress_without_tls_keeps_an_absent_cell() {
     let ingress = ingress_using("shop", &[]);
     assert_eq!(tls_cell_of(&ingress, Some(Vec::new())), KindCell::Absent);
+}
+
+fn crd_row_named(name: &str) -> KindRow {
+    crate::crd_rows::crd_row(&cluster::CrdSummary {
+        name: name.to_owned(),
+        group: "x.io".to_owned(),
+        kind: "Widget".to_owned(),
+        plural: "widgets".to_owned(),
+        singular: "widget".to_owned(),
+        scope: cluster::ResourceScope::Namespaced,
+        versions: Vec::new(),
+        state: cluster::CrdState::Established,
+        created_at: None,
+    })
+}
+
+fn widget_kind_named(crd_name: &str) -> CustomKind {
+    let (plural, group) = crd_name.split_once('.').expect("a CRD name has a group");
+    let crd = cluster::CrdSummary {
+        name: crd_name.to_owned(),
+        group: group.to_owned(),
+        kind: "Widget".to_owned(),
+        plural: plural.to_owned(),
+        singular: "widget".to_owned(),
+        scope: cluster::ResourceScope::Namespaced,
+        versions: vec![cluster::CrdVersion {
+            name: "v1".to_owned(),
+            is_served: true,
+            is_storage: true,
+            is_deprecated: false,
+            deprecation_warning: None,
+            printer_columns: Vec::new(),
+            schema: cluster::SchemaOutline::default(),
+        }],
+        state: cluster::CrdState::Established,
+        created_at: None,
+    };
+    crate::custom_kind::custom_kinds(&[crd], &mut crate::custom_kind::CustomKindCache::default())[0]
+}
+
+fn join_crd_rows(rows: &mut [KindRow], counts: Option<&HashMap<CustomKind, u64>>) {
+    let pods = LiveList::Loading;
+    let inputs = JoinInputs {
+        custom_counts: counts,
+        pods: &pods,
+        companion: None,
+        kubelet: None,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(ResourceKind::Crds, rows, &inputs);
+}
+
+#[test]
+fn crd_instances_index_names_the_column() {
+    let columns = crate::resource_kind::kind_columns(ResourceKind::Crds);
+    // The Name column is not a cell.
+    assert_eq!(columns[CRD_INSTANCES + 1].name, "Instances");
+}
+
+#[test]
+fn crd_instances_fill_from_counts() {
+    let mut rows = vec![crd_row_named("widgets.x.io"), crd_row_named("gadgets.x.io")];
+    let counts = HashMap::from([(widget_kind_named("widgets.x.io"), 12)]);
+    join_crd_rows(&mut rows, Some(&counts));
+    assert_eq!(
+        rows[0].cells[CRD_INSTANCES],
+        KindCell::Quantity {
+            text: "12".into(),
+            value: 12,
+            tone: None
+        }
+    );
+    // A CRD without a count (not counted yet, failed, or denied) stays absent.
+    assert_eq!(rows[1].cells[CRD_INSTANCES], KindCell::Absent);
+}
+
+#[test]
+fn missing_counts_stay_absent() {
+    let mut rows = vec![crd_row_named("widgets.x.io")];
+    join_crd_rows(&mut rows, None);
+    assert_eq!(rows[0].cells[CRD_INSTANCES], KindCell::Absent);
+    // A rerun without counts clears an earlier join instead of keeping it.
+    let counts = HashMap::from([(widget_kind_named("widgets.x.io"), 3)]);
+    join_crd_rows(&mut rows, Some(&counts));
+    join_crd_rows(&mut rows, None);
+    assert_eq!(rows[0].cells[CRD_INSTANCES], KindCell::Absent);
 }

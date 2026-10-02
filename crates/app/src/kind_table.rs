@@ -24,7 +24,7 @@ use crate::filter_bar::filtered_empty_state;
 use crate::kind_row::{KindCell, KindRow};
 use crate::live_sections::next_run_text;
 use crate::resource_actions::{
-    MenuExtras, kind_menu, open_url_choice, open_url_menu_item, secret_menu,
+    MenuExtras, browse_instances_item, kind_menu, open_url_choice, open_url_menu_item, secret_menu,
 };
 use crate::resource_kind::{Align, NAME_COLUMN, NameColumn, ResourceKind, kind_columns};
 use crate::secret_values::ValueAccess;
@@ -412,7 +412,11 @@ impl TableDelegate for KindTableDelegate {
             &live.access,
             live.pods.items(),
             &self.shell,
-            MenuExtras { open_url, secret },
+            MenuExtras {
+                open_url,
+                secret,
+                browse: browse_instances_item(&row, live.crd_kinds(), &self.shell),
+            },
         )
     }
 

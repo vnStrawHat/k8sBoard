@@ -562,6 +562,9 @@ impl AppShell {
             session.update(cx, |session, cx| {
                 session.set_explorer_kind(screen.kind(), cx);
                 session.refresh_kind_counts(CountTrigger::Navigation, cx);
+                if screen == Screen::Kind(ResourceKind::Crds) {
+                    session.refresh_custom_counts(cx);
+                }
             });
         }
         self.kind_table.update(cx, |table, cx| {
@@ -1699,6 +1702,8 @@ impl AppShell {
                         TargetState::Unavailable
                     } else if is_loading
                         || self.pending_custom_launch.is_some()
+                        || (self.screen == Screen::Kind(ResourceKind::Crds)
+                            && live.is_counting_instances())
                         || live.kind_counts().is_running()
                         || (matches!(self.screen, Screen::Kind(_)) && live.is_join_loading())
                     {
@@ -2006,7 +2011,19 @@ impl AppShell {
             pods: live.and_then(|live| live.pods.ready_count()),
             nodes: live.and_then(|live| live.nodes.ready_count()),
             explorer: live.and_then(LiveCluster::explorer_count),
-            kinds: live.map_or_else(HashMap::new, |live| live.kind_counts().all(event_filter)),
+            kinds: live.map_or_else(HashMap::new, |live| {
+                let mut kinds = live.kind_counts().all(event_filter);
+                // Custom kinds show the cluster-wide instance count until their screen is shown.
+                kinds.extend(
+                    live.custom_counts
+                        .counts
+                        .iter()
+                        .filter_map(|(kind, count)| {
+                            Some((ResourceKind::Custom(*kind), usize::try_from(*count).ok()?))
+                        }),
+                );
+                kinds
+            }),
         }
     }
 }

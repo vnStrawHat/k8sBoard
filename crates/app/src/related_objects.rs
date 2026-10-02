@@ -1,6 +1,7 @@
 //! What a drawer needs beyond its own row: the objects related to it, watched while it is open.
 //! Pure: the session starts the watch from the subject.
 
+use crate::custom_kind::CustomKind;
 use crate::kind_row::{KindObject, KindRow};
 use crate::resource_kind::ResourceKind;
 
@@ -25,11 +26,25 @@ pub(crate) enum RelatedSubject {
     NamespaceQuotas { namespace: String },
     /// Every revision of one Helm release, from metadata only.
     HelmHistory { namespace: String, release: String },
+    /// The masked spec and status of one custom object.
+    CustomFields {
+        kind: CustomKind,
+        namespace: Option<String>,
+        name: String,
+    },
 }
 
 /// The related subject of a row. A kind without related content, and a Deployment without a
 /// selector (which would match every ReplicaSet), have none.
 pub(crate) fn related_subject(kind: ResourceKind, row: &KindRow) -> Option<RelatedSubject> {
+    if let ResourceKind::Custom(custom) = kind {
+        // A cluster-scoped object has no namespace.
+        return Some(RelatedSubject::CustomFields {
+            kind: custom,
+            namespace: row.namespace.clone(),
+            name: row.name.clone(),
+        });
+    }
     if kind == ResourceKind::Namespaces {
         return Some(RelatedSubject::NamespaceQuotas {
             namespace: row.name.clone(),
@@ -167,6 +182,8 @@ mod tests {
             created_at: None,
             labels: Vec::new(),
             phase: cluster::NamespacePhase::Active,
+            deleting_since: None,
+            deletion_conditions: Vec::new(),
         });
         assert_eq!(
             related_subject(ResourceKind::Namespaces, &namespace),
@@ -222,5 +239,88 @@ mod tests {
             })
         );
         assert_eq!(related_subject(ResourceKind::Secrets, &row), None);
+    }
+
+    fn custom_kind(scope: cluster::ResourceScope) -> crate::custom_kind::CustomKind {
+        let crd = cluster::CrdSummary {
+            name: "widgets.x.io".to_owned(),
+            group: "x.io".to_owned(),
+            kind: "Widget".to_owned(),
+            plural: "widgets".to_owned(),
+            singular: "widget".to_owned(),
+            scope,
+            versions: vec![cluster::CrdVersion {
+                name: "v1".to_owned(),
+                is_served: true,
+                is_storage: true,
+                is_deprecated: false,
+                deprecation_warning: None,
+                printer_columns: Vec::new(),
+                schema: cluster::SchemaOutline::default(),
+            }],
+            state: cluster::CrdState::Established,
+            created_at: None,
+        };
+        crate::custom_kind::custom_kinds(
+            &[crd],
+            &mut crate::custom_kind::CustomKindCache::default(),
+        )[0]
+    }
+
+    fn custom_row(
+        kind: crate::custom_kind::CustomKind,
+        namespace: Option<&str>,
+    ) -> crate::kind_row::KindRow {
+        crate::custom_rows::custom_object_row(
+            kind,
+            &cluster::CustomObjectSummary {
+                namespace: namespace.map(str::to_owned),
+                name: "w1".to_owned(),
+                created_at: None,
+                labels: Vec::new(),
+                columns: Vec::new(),
+                conditions: Vec::new(),
+                phase: None,
+            },
+        )
+    }
+
+    #[test]
+    fn custom_rows_have_a_fields_subject() {
+        let kind = custom_kind(cluster::ResourceScope::Namespaced);
+        let row = custom_row(kind, Some("shop"));
+        assert_eq!(
+            related_subject(ResourceKind::Custom(kind), &row),
+            Some(RelatedSubject::CustomFields {
+                kind,
+                namespace: Some("shop".to_owned()),
+                name: "w1".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn fields_subject_carries_namespace_for_namespaced_kinds() {
+        let namespaced = custom_kind(cluster::ResourceScope::Namespaced);
+        let cluster_scoped = custom_kind(cluster::ResourceScope::Cluster);
+        let subject = |kind, namespace| {
+            related_subject(ResourceKind::Custom(kind), &custom_row(kind, namespace))
+        };
+        let Some(RelatedSubject::CustomFields { namespace, .. }) = subject(namespaced, Some("a"))
+        else {
+            panic!("expected a fields subject");
+        };
+        assert_eq!(namespace.as_deref(), Some("a"));
+        // A cluster-scoped object has no namespace, and still gets a subject.
+        let Some(RelatedSubject::CustomFields { namespace, .. }) = subject(cluster_scoped, None)
+        else {
+            panic!("expected a fields subject");
+        };
+        assert_eq!(namespace, None);
+        // Two kinds with the same CRD but another scope are different subjects.
+        assert_ne!(
+            subject(namespaced, Some("a")),
+            subject(cluster_scoped, None)
+        );
     }
 }

@@ -57,6 +57,9 @@
 | 33 | Launch `--screen custom:<crd-name>[-drawer|-events|-yaml]`, resolved once the CRD list is ready | custom kinds are unknown at parse time |
 | 34 | Watch bound `3N + 5` (the CRD watch adds one) | 0012's bound plus one always-on watch |
 | 35 | **`BUILT_IN_COLUMNS`** (`custom_kind.rs`): `certificates.cert-manager.io` gains **Expires** (`date`, `.status.notAfter`) before Age; Warn within 14 days, Bad when expired (0016 `expiry_label` thresholds) | coordinator decision: follow W7's Expires column; cert-manager has no NotAfter printer column |
+| 37 | A string printer column whose name contains Status, Ready, Health, Sync, or Phase reads its value through a fixed table, ASCII case-insensitive and exact. Ok: Healthy, Synced, True, Ready, Running, Succeeded, Completed, Bound, Available. Bad: Degraded, Failed, Error, False, Missing. Warn: OutOfSync, Progressing, Pending, Unknown, Suspended, Terminating. Any other value has no tone | Argo CD and Strimzi states read at a glance (ui-verifier M1); an unfamiliar word is never painted as good or bad. The row status of a phase uses the same table (Info for other words) |
+| 38 | An object with no `status.phase` and no `Ready`/`Available` condition uses a top-level string `status.status` as its `phase` (ClickHouse style), masked and capped like the phase | the drawer subtitle agrees with a table that shows `Completed` (ui-verifier M2) |
+| 39 | Namespace deletion-condition messages are masked for URL userinfo (S4) before the 500-character cut; a Remaining resources section whose entries are all unparsed shows the "no remaining content" note, because the STUCK box already shows the message | a discovery failure can quote an aggregated API URL; no message twice (it also drops them during the first 5 minutes, before the box appears) |
 
 ## Ceilings
 
@@ -78,3 +81,5 @@
 | CRDs / Established | 72 / 72 (every CRD has a served version) |
 | Unsupported printer columns | 0 of 183 columns in 72 CRDs (names only; none to list) |
 | First CRD with instances: access, count, watch, yaml | `applications.argoproj.io`: access allowed, count 10, watch 10 objects with 31 of 40 column values filled, yaml 253 lines, masked yes. The first ten CRDs were all listable (10 allowed); counts 10, 0, 1, 1, 0, 0, 4, 0, 7, 0 |
+| Namespaces STUCK (step 5) | `coroot` was Terminating for 3 days with a `NamespaceDeletionDiscoveryFailure` condition (stale `external.metrics.k8s.io/v1beta1`): the Bad STUCK box and the Remaining resources note render live (`v43-namespaces-stuck-*.png`); no remaining resource or finalizer was reported, so those parse paths are fixture-tested |
+| Certificates (cert-manager) | not installed on UAT (72 CRDs, none of cert-manager): the worked example is covered by fixture tests, and Argo CD Applications exercise the same custom path live |

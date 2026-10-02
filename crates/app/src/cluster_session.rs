@@ -5,10 +5,11 @@ use std::time::{Duration, Instant};
 
 use cluster::{
     AccessCheck, AccessDecision, AccessReport, BindingSummary, ClusterConnection, ClusterError,
-    ConfigMapValues, ContextSummary, CrdSummary, EndpointSliceSummary, EventFilter, EventSummary,
-    HelmRevision, IngressSummary, InvolvedObject, JobSummary, Kubeconfig, KubeletTargets,
-    NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, PersistentVolumeSummary,
-    PodSummary, ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, WatchUpdate,
+    ConfigMapValues, ContextSummary, CrdSummary, CustomObjectFields, EndpointSliceSummary,
+    EventFilter, EventSummary, HelmRevision, IngressSummary, InvolvedObject, JobSummary,
+    Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary,
+    PersistentVolumeSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, SecretSummary,
+    ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
@@ -74,6 +75,8 @@ pub(crate) struct LiveCluster {
     /// Every custom resource definition, watched for the whole session once the access review does
     /// not deny it. `None` before that and when the review denies the list.
     pub(crate) crds: Option<CrdWatch>,
+    /// Cluster-wide instance counts of the custom kinds.
+    pub(crate) custom_counts: CustomCounts,
     /// The per-resource list review of each custom kind shown in this scope. Cleared on a scope
     /// change.
     pub(crate) custom_gates: HashMap<CustomKind, CustomGate>,
@@ -441,6 +444,8 @@ pub(crate) enum RelatedList {
     ResourceQuotas(LiveList<ResourceQuotaSummary>),
     /// Every revision of one Helm release, newest first. Labels and metadata only.
     HelmHistory(LiveList<HelmRevision>),
+    /// The masked, flattened spec and status of one custom object (0 or 1 item).
+    CustomFields(LiveList<CustomObjectFields>),
 }
 
 /// One related watch update, typed on tokio so one subscription serves every subject.
@@ -451,6 +456,7 @@ enum RelatedUpdate {
     Events(WatchUpdate<EventSummary>),
     ResourceQuotas(WatchUpdate<ResourceQuotaSummary>),
     HelmHistory(WatchUpdate<HelmRevision>),
+    CustomFields(WatchUpdate<CustomObjectFields>),
 }
 
 impl RelatedList {
@@ -462,6 +468,7 @@ impl RelatedList {
             RelatedSubject::QuotaRejections { .. } => Self::Events(LiveList::Loading),
             RelatedSubject::NamespaceQuotas { .. } => Self::ResourceQuotas(LiveList::Loading),
             RelatedSubject::HelmHistory { .. } => Self::HelmHistory(LiveList::Loading),
+            RelatedSubject::CustomFields { .. } => Self::CustomFields(LiveList::Loading),
         }
     }
 
@@ -478,6 +485,7 @@ impl RelatedList {
                 list.apply(update);
             }
             (Self::HelmHistory(list), RelatedUpdate::HelmHistory(update)) => list.apply(update),
+            (Self::CustomFields(list), RelatedUpdate::CustomFields(update)) => list.apply(update),
             // A stale update of another subject's kind.
             _ => {}
         }
@@ -491,6 +499,7 @@ impl RelatedList {
             Self::Events(list) => list.mark_stopped(),
             Self::ResourceQuotas(list) => list.mark_stopped(),
             Self::HelmHistory(list) => list.mark_stopped(),
+            Self::CustomFields(list) => list.mark_stopped(),
         }
     }
 
@@ -502,7 +511,8 @@ impl RelatedList {
             | Self::Jobs(_)
             | Self::ConfigMapValues(_)
             | Self::ResourceQuotas(_)
-            | Self::HelmHistory(_) => None,
+            | Self::HelmHistory(_)
+            | Self::CustomFields(_) => None,
         }
     }
 
@@ -514,7 +524,8 @@ impl RelatedList {
             | Self::Jobs(_)
             | Self::ConfigMapValues(_)
             | Self::Events(_)
-            | Self::HelmHistory(_) => None,
+            | Self::HelmHistory(_)
+            | Self::CustomFields(_) => None,
         }
     }
 
@@ -526,7 +537,16 @@ impl RelatedList {
             | Self::Jobs(_)
             | Self::ConfigMapValues(_)
             | Self::Events(_)
-            | Self::ResourceQuotas(_) => None,
+            | Self::ResourceQuotas(_)
+            | Self::CustomFields(_) => None,
+        }
+    }
+
+    /// The fields of a custom object, when this list holds them.
+    pub(crate) fn custom_fields(&self) -> Option<&LiveList<CustomObjectFields>> {
+        match self {
+            Self::CustomFields(list) => Some(list),
+            _ => None,
         }
     }
 
@@ -540,6 +560,7 @@ impl RelatedList {
             Self::Events(list) => list.is_loading(),
             Self::ResourceQuotas(list) => list.is_loading(),
             Self::HelmHistory(list) => list.is_loading(),
+            Self::CustomFields(list) => list.is_loading(),
         }
     }
 }
@@ -557,7 +578,9 @@ pub(crate) fn denied_related_check(
         RelatedSubject::ReplicaSets { .. }
         | RelatedSubject::Jobs { .. }
         | RelatedSubject::ConfigMapValues { .. }
-        | RelatedSubject::HelmHistory { .. } => return None,
+        | RelatedSubject::HelmHistory { .. }
+        // The explorer gate of the custom kind already allowed list and watch.
+        | RelatedSubject::CustomFields { .. } => return None,
     };
     match access {
         AccessState::Known(report) if !report.is_allowed(check) => Some(check),
@@ -597,6 +620,9 @@ impl AccessState {
 const KIND_COUNT_REFRESH: Duration = Duration::from_secs(30);
 /// Count requests in flight at once: a run is about a dozen tiny lists.
 const KIND_COUNT_CONCURRENCY: usize = 4;
+
+/// One custom kind's result of a count run.
+type CustomCount = (CustomKind, Result<Option<u64>, String>);
 
 /// One kind's result of a count run: the number, `None` when the server reported no remaining
 /// count, or the error text.
@@ -670,6 +696,61 @@ fn countable_kinds(access: &AccessState) -> Vec<ResourceKind> {
                     .access_check()
                     .is_some_and(|check| report.is_allowed(check))
         })
+        .collect()
+}
+
+/// How long the cluster-wide instance counts stay fresh before opening the CRDs screen counts
+/// again.
+const CUSTOM_COUNT_REFRESH: Duration = Duration::from_secs(30);
+
+/// The cluster-wide number of objects of each custom kind, from one `limit=1` list per CRD. They
+/// do not depend on the namespace scope, so a scope change keeps them.
+#[derive(Default)]
+pub(crate) struct CustomCounts {
+    pub(crate) counts: HashMap<CustomKind, u64>,
+    /// When the last run started, so a slow run never lets a second begin right behind it.
+    refreshed_at: Option<Instant>,
+    task: Option<Task<()>>,
+}
+
+impl CustomCounts {
+    /// Whether a run should start now: none ran yet, or the last one started 30 s ago.
+    fn wants_run(&self, now: Instant) -> bool {
+        self.refreshed_at
+            .is_none_or(|at| now.duration_since(at) >= CUSTOM_COUNT_REFRESH)
+    }
+}
+
+/// The counts after a run: a fresh number replaces the old one, a failed request keeps the previous
+/// number (stale beats blank), and a server that reports no remaining count leaves the kind
+/// without one. A kind the run did not ask about (now denied, or gone) is dropped.
+fn merge_custom_counts(
+    previous: &HashMap<CustomKind, u64>,
+    results: Vec<CustomCount>,
+) -> HashMap<CustomKind, u64> {
+    let mut counts = HashMap::new();
+    for (kind, count) in results {
+        let kept = match count {
+            Ok(count) => count,
+            Err(_) => previous.get(&kind).copied(),
+        };
+        if let Some(count) = kept {
+            counts.insert(kind, count);
+        }
+    }
+    counts
+}
+
+/// The kinds a custom count run asks about: every served kind whose list review did not deny it,
+/// so a denied kind never costs a request.
+fn countable_custom_kinds(
+    kinds: &[CustomKind],
+    gates: &HashMap<CustomKind, CustomGate>,
+) -> Vec<CustomKind> {
+    kinds
+        .iter()
+        .copied()
+        .filter(|kind| !matches!(gates.get(kind), Some(CustomGate::Denied { .. })))
         .collect()
 }
 
@@ -1046,7 +1127,10 @@ impl ClusterSession {
     /// Holds the explorer list still, or shows what arrived meanwhile. Only a loaded list can be
     /// paused. Every restart of the list (scope, kind, Warnings only) starts it live again.
     pub(crate) fn set_explorer_paused(&mut self, is_paused: bool, cx: &mut Context<Self>) {
-        let Some(explorer) = self.live_mut().and_then(|live| live.explorer.as_mut()) else {
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        let Some(explorer) = live.explorer.as_mut() else {
             return;
         };
         if is_paused {
@@ -1055,6 +1139,8 @@ impl ClusterSession {
             }
         } else {
             explorer.flow.resume(&mut explorer.list);
+            // The held snapshot was built without the joined cells.
+            live.join_explorer();
         }
         cx.notify();
     }
@@ -1190,6 +1276,65 @@ impl ClusterSession {
         live.kind_counts.task = Some(task);
     }
 
+    /// Counts the instances of every served custom kind whose list is not denied, cluster-wide,
+    /// for the CRDs Instances column and the sidebar. One tiny list per CRD, four at a time, on
+    /// the cluster runtime; the numbers arrive in one update.
+    pub(crate) fn refresh_custom_counts(&mut self, cx: &mut Context<Self>) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        let now = Instant::now();
+        let kinds = countable_custom_kinds(live.crd_kinds(), &live.custom_gates);
+        // The CRD list has not loaded yet: nothing to count, and the next update asks again.
+        if kinds.is_empty() || !live.custom_counts.wants_run(now) {
+            return;
+        }
+        let connection = live.connection.clone();
+        let counting = runtime.spawn(async move {
+            futures::stream::iter(kinds)
+                .map(|kind| {
+                    let connection = connection.clone();
+                    async move {
+                        let count = connection.count_custom_objects(kind.resource()).await;
+                        (kind, count.map_err(|error| error_text(&error)))
+                    }
+                })
+                .buffer_unordered(KIND_COUNT_CONCURRENCY)
+                .collect::<Vec<_>>()
+                .await
+        });
+        let task = cx.spawn(async move |this, cx| {
+            let result = counting.await;
+            let _ = this.update(cx, |session, cx| session.finish_custom_counts(result, cx));
+        });
+        live.custom_counts.refreshed_at = Some(now);
+        live.custom_counts.task = Some(task);
+    }
+
+    fn finish_custom_counts(
+        &mut self,
+        result: Result<Vec<CustomCount>, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        live.custom_counts.task = None;
+        // A task that stopped leaves the old numbers; the next visit after 30 s counts again.
+        let Ok(results) = result else {
+            return;
+        };
+        for (kind, count) in &results {
+            if let Err(message) = count {
+                tracing::warn!(crd = kind.crd_name(), %message, "counting instances failed");
+            }
+        }
+        live.custom_counts.counts = merge_custom_counts(&live.custom_counts.counts, results);
+        live.join_explorer();
+        cx.notify();
+    }
+
     fn finish_kind_counts(
         &mut self,
         result: Result<Vec<KindCount>, tokio::task::JoinError>,
@@ -1248,15 +1393,24 @@ impl ClusterSession {
     }
 
     /// Applies a CRD update and rebuilds the custom kinds, reusing every cached definition.
-    fn apply_crd_update(&mut self, update: CrdUpdate) {
+    fn apply_crd_update(&mut self, update: CrdUpdate, cx: &mut Context<Self>) {
         let kinds = match &update {
             CrdUpdate::Snapshot { crds, .. } => {
                 Some(custom_kinds(crds, &mut self.custom_kind_cache))
             }
             CrdUpdate::Failed(_) => None,
         };
-        if let Some(live) = self.live_mut() {
-            live.apply_crd_update(update, kinds);
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        live.apply_crd_update(update, kinds);
+        // The CRDs screen was waiting for the list to know what to count.
+        if live
+            .explorer
+            .as_ref()
+            .is_some_and(|explorer| explorer.kind == ResourceKind::Crds)
+        {
+            self.refresh_custom_counts(cx);
         }
     }
 
@@ -1406,6 +1560,11 @@ impl LiveCluster {
         Some((explorer.kind, explorer.list.ready_count()?))
     }
 
+    /// The served custom kinds of the CRD list; empty until it has loaded.
+    pub(crate) fn crd_kinds(&self) -> &[CustomKind] {
+        self.crds.as_ref().map_or(&[], |crds| &crds.kinds)
+    }
+
     /// Open watches: namespaces, pods, nodes, the explorer's and its companion, and the drawer's
     /// events and related objects when they are open.
     pub(crate) fn watch_count(&self) -> usize {
@@ -1447,6 +1606,7 @@ impl LiveCluster {
                 .map(|companion| &companion.lists),
             kubelet: Some(&self.metrics.kubelet.history),
             scope: &self.scope,
+            custom_counts: Some(&self.custom_counts.counts),
         };
         join_rows(explorer.kind, explorer.list.items_mut(), &inputs);
     }
@@ -1506,6 +1666,13 @@ impl LiveCluster {
             .as_ref()
             .filter(|related| related.subject == *subject)
             .map(|related| &related.list)
+    }
+
+    /// Whether an instance count run has not delivered its numbers. Only the screenshot hook
+    /// waits on it.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn is_counting_instances(&self) -> bool {
+        self.custom_counts.task.is_some()
     }
 
     /// Whether the related watch runs and has not delivered its first snapshot. Only the
@@ -1647,6 +1814,7 @@ impl LiveCluster {
             nodes: LiveList::Loading,
             metrics,
             crds: None,
+            custom_counts: CustomCounts::default(),
             custom_gates: HashMap::new(),
             explorer: None,
             object_events: None,
@@ -1733,6 +1901,7 @@ impl LiveCluster {
             return;
         };
         explorer.list = crd_explorer_list(self.crds.as_ref().map(|crds| &crds.list), &self.access);
+        self.join_explorer();
     }
 
     fn apply_crd_update(&mut self, update: CrdUpdate, kinds: Option<Vec<CustomKind>>) {
@@ -1747,6 +1916,8 @@ impl LiveCluster {
             .as_mut()
             .filter(|explorer| explorer.kind == ResourceKind::Crds);
         feed_crds(&mut crds.list, explorer, update);
+        // The new rows start without their Instances cells.
+        self.join_explorer();
     }
 
     fn stop_crd_watch(&mut self) {
@@ -1947,7 +2118,7 @@ impl CrdWatch {
         let subscription = runtime.subscribe(
             updates,
             cx,
-            |session: &mut ClusterSession, update, _| session.apply_crd_update(update),
+            |session: &mut ClusterSession, update, cx| session.apply_crd_update(update, cx),
             |session, _| {
                 if let Some(live) = session.live_mut() {
                     live.stop_crd_watch();
@@ -2241,6 +2412,18 @@ impl RelatedObjects {
                 .watch_helm_history(namespace, release)
                 .map(RelatedUpdate::HelmHistory)
                 .boxed(),
+            RelatedSubject::CustomFields {
+                kind,
+                namespace,
+                name,
+            } => match ResourceKind::Custom(*kind).object_ref(namespace.clone(), name.clone()) {
+                Some(object) => connection
+                    .watch_custom_object_fields(&object)
+                    .map(RelatedUpdate::CustomFields)
+                    .boxed(),
+                // A row always fits its kind's scope; an end of stream reads as a failed list.
+                None => futures::stream::empty().boxed(),
+            },
         };
         let applied = subject.clone();
         let closed = subject.clone();

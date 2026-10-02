@@ -4,10 +4,10 @@
 use cluster::{
     BindingSummary, ConfigMapSummary, ControllerRef, CrdSummary, CronJobSummary, CronSchedule,
     CustomObjectSummary, DaemonSetSummary, DeploymentSummary, HelmReleaseSummary,
-    HorizontalPodAutoscalerSummary, IngressSummary, JobSummary, NetworkPolicySummary,
-    PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary,
-    ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, SecretSummary, ServiceAccountSummary,
-    ServiceSummary, StatefulSetSummary,
+    HorizontalPodAutoscalerSummary, IngressSummary, JobSummary, NamespaceSummary,
+    NetworkPolicySummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
+    PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary,
+    SecretSummary, ServiceAccountSummary, ServiceSummary, StatefulSetSummary,
 };
 use gpui_kit::SharedString;
 
@@ -67,6 +67,8 @@ pub(crate) enum KindObject {
     Crd(CrdSummary),
     /// An object of a custom resource: metadata, masked column values, conditions, never a raw value.
     Custom(CustomObjectSummary),
+    /// A namespace: phase, labels, and the deletion conditions that explain a stuck deletion.
+    Namespace(NamespaceSummary),
 }
 
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
@@ -101,6 +103,12 @@ pub(crate) enum LiveContent {
     HelmValuesChange,
     /// Every revision of a Helm release, newest first, from the related history watch.
     HelmHistory,
+    /// The conditions of a custom object, from its summary.
+    CustomConditions,
+    /// The status fields of a custom object, from the related fields watch.
+    CustomStatus,
+    /// The spec fields of a custom object, from the related fields watch.
+    CustomSpec,
 }
 
 /// Events only: what the drawer header, subtitle, and menu need.

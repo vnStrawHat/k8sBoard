@@ -26,7 +26,7 @@
 | N3 | Counts per item | Done (0012) | live counts for Pods, Nodes, the visible kind; one-shot counts for the other kinds | — |
 | N4 | Error counts (red) | Missing | — | 0020 |
 | N5 | Top items Overview, Issues, Topology | Missing (disabled) | — | 0021, 0020, 0022 |
-| N6 | Custom Resources group auto-filled from CRDs (e.g. Certificates) | Missing | — | 0018 |
+| N6 | Custom Resources group auto-filled from CRDs (e.g. Certificates) | Done (grouped by API group) | — | 0018 |
 | N7 | Clicking a nav item un-zooms the dock | Done | 0004 | — |
 
 ## Workspace header and tables

@@ -49,7 +49,7 @@ pub(crate) fn condition_label(status_text: &str) -> Option<StatusLabel>;   // "T
 |---|---|
 | `Absent` | `Absent` |
 | `Hidden` | `Text("<hidden>")` |
-| `Text(t)` | rule `ConditionStatus` and `condition_label(t)` is `Some` → `Toned`; else `Text` (object values arrive as `Absent`, shown `—`) |
+| `Text(t)` | rule `ConditionStatus` and `condition_label(t)` is `Some` → `Toned`; else `Text` (decision 37: a string column named like a state reads the tone table) (object values arrive as `Absent`, shown `—`) |
 | `Integer(n)` | `n >= 0` → `Quantity { text, value: n, tone: None }`; else `Text` |
 | `Number(t)`, `Boolean(b)` | `Text` |
 | `Date(at)` | `Date { at, rule: Expiry }` for rule `Expiry`, else `Plain` |
@@ -68,7 +68,7 @@ Tabs Overview · YAML · Events (0007, 0006; `kind.object_ref`, `kind.object_kin
 
 | # | Section | Rows |
 |---|---|---|
-| — | **FROM STATUS** box (`kind_diagnosis` arm) | first match: Ready or Available False → Bad, its message (else `{type} is False: {reason}`); Ready Unknown → Warn, its message; a failing condition → Warn `{type}: {message or reason}`; else none |
+| — | **Status box** (`kind_diagnosis` arm; titles `NOT READY`, `UNAVAILABLE`, `READY UNKNOWN`, `{TYPE} FAILING`) | first match: Ready or Available False → Bad, its message (else `{type} is False: {reason}`); Ready Unknown → Warn, its message; a failing condition → Warn `{type}: {message or reason}`; else none |
 | 1 | **Conditions** (`Live(CustomConditions)`) | per condition: label type, `Toned("{status}" or "{status} · {reason}")`: Ready/Available True Ok, False Bad, Unknown Warn; other types failing → Bad, else Info; then `Note(message)` when set. None → `Note("No conditions reported.")` |
 | 2 | **Status** (`Live(CustomStatus)`) | the related fields list, `status` side |
 | 3 | **Spec** (`Live(CustomSpec)`) | the same, `spec` side |
@@ -99,7 +99,7 @@ CRD `certificates.cert-manager.io`, served `v1` (storage), Namespaced; printer c
 | Table | Name · Ready · Secret · Issuer · Status · **Expires** (built-in) · Age → `ingress/tls-shop-example` · Ok `True` · `tls-shop-example` · `letsencrypt-prod` · message · Warn `in 6d` · `300d` |
 | Expires tone | `notAfter` in 64 days → no tone; in 6 days → Warn; 2 days ago → Bad `2d` |
 | Row status | Warn `Issuing: Failed` |
-| Box | Warn FROM STATUS `Issuing: Last renewal attempt failed: ACME challenge returned 404` |
+| Box | Warn box `ISSUING FAILING`, text `Issuing: Last renewal attempt failed: ACME challenge returned 404` |
 | Conditions | Ready Ok `True`; Issuing Bad `False · Failed` + note |
 | Status | `notAfter`, `renewalTime`, `revision 5` |
 | Spec | `dnsNames`, `issuerRef.kind`, `issuerRef.name`, `secretName` → link to Secrets |

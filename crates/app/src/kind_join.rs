@@ -16,6 +16,7 @@ use crate::access_bindings::{
 };
 use crate::access_rows::service_account_status;
 use crate::cluster_session::{CompanionLists, LiveList};
+use crate::custom_kind::CustomKind;
 use crate::kind_row::{KindCell, KindObject, KindRow, deployment_of_replica_set};
 use crate::kubelet_history::KubeletHistory;
 use crate::network_policy_rows::network_policy_status;
@@ -41,6 +42,8 @@ pub(crate) const NETWORK_POLICY_AFFECTS: usize = 2;
 pub(crate) const CLAIM_USED: usize = 2;
 /// The index of the PVs cell in a StorageClasses row.
 pub(crate) const CLASS_VOLUMES: usize = 5;
+/// The index of the Instances cell in a CRDs row.
+pub(crate) const CRD_INSTANCES: usize = 3;
 /// The index of the Bindings cell in a Roles row and in a ClusterRoles row.
 pub(crate) const ROLE_BINDINGS: usize = 1;
 pub(crate) const CLUSTER_ROLE_BINDINGS: usize = 2;
@@ -66,6 +69,8 @@ pub(crate) struct JoinInputs<'a> {
     pub(crate) kubelet: Option<&'a KubeletHistory>,
     /// The pods list covers only this scope, so a Namespaces row outside it has no pod numbers.
     pub(crate) scope: &'a NamespaceScope,
+    /// The cluster-wide instance counts for the CRDs screen; `None` before the first run.
+    pub(crate) custom_counts: Option<&'a HashMap<CustomKind, u64>>,
 }
 
 /// Rewrites the joined cells (and the Service status) of `rows`. Other kinds: no-op.
@@ -77,6 +82,7 @@ pub(crate) fn join_rows(kind: ResourceKind, rows: &mut [KindRow], inputs: &JoinI
         ResourceKind::NetworkPolicies => join_network_policies(rows, inputs),
         ResourceKind::PersistentVolumeClaims => join_claims(rows, inputs),
         ResourceKind::StorageClasses => join_classes(rows, inputs),
+        ResourceKind::Crds => join_crds(rows, inputs),
         ResourceKind::Roles => join_roles(rows, inputs, ROLE_BINDINGS),
         ResourceKind::ClusterRoles => join_roles(rows, inputs, CLUSTER_ROLE_BINDINGS),
         ResourceKind::ServiceAccounts => join_service_accounts(rows, inputs),
@@ -1018,6 +1024,29 @@ fn join_classes(rows: &mut [KindRow], inputs: &JoinInputs) {
             }
         };
         if let Some(slot) = row.cells.get_mut(CLASS_VOLUMES) {
+            *slot = cell;
+        }
+    }
+}
+
+/// The Instances cell of each CRD: its cluster-wide count, `Absent` until counted or when the count
+/// failed or is denied.
+fn join_crds(rows: &mut [KindRow], inputs: &JoinInputs) {
+    let counts: HashMap<&str, u64> = inputs
+        .custom_counts
+        .into_iter()
+        .flatten()
+        .map(|(kind, count)| (kind.crd_name(), *count))
+        .collect();
+    for row in rows {
+        let cell = counts
+            .get(row.name.as_str())
+            .map_or(KindCell::Absent, |count| KindCell::Quantity {
+                text: count.to_string().into(),
+                value: *count,
+                tone: None,
+            });
+        if let Some(slot) = row.cells.get_mut(CRD_INSTANCES) {
             *slot = cell;
         }
     }

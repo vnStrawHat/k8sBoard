@@ -62,5 +62,5 @@
 
 - Sidebar: Custom Resources › CRDs plus collapsed API groups; the shown kind's group open; counts muted.
 - CRDs table columns and drawer sections; custom table printer columns, toned Ready cell, Expires tone (Certificates), Name qualified by namespace.
-- Drawer: FROM STATUS box tone, Conditions, Status, Spec, links; YAML tab with `<hidden>` where rules apply.
+- Drawer: status box title and tone, Conditions, Status, Spec, links; YAML tab with `<hidden>` where rules apply.
 - **Accepted deviations, not defects**: decision 20 (API-group submenus instead of a flat list), 27 (values, not schema descriptions), 30 (full CRD name plus Group column), the extra Certificates Status column, no meta lines, no Renew/Show remaining resources items, Remaining resources without object names.

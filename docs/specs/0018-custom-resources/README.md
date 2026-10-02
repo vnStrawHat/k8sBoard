@@ -1,12 +1,12 @@
 # 0018 — CRDs and generic custom resources (read-only)
 
-Status: amended after the advisor review (HEAD `156ceb9`, 0011 in progress). **Requires 0012, 0014, 0016 merged** (`KindObject`, `Live`, `kind_diagnosis.rs`, related subjects, `selected_summary_watch`, `kind_join.rs`, counts, `is_secret_parameter`, Secrets kind, `expiry_label`); 0017 not required. Crates: `crates/cluster` (1a, 1b, 5), `crates/app` (2a–5). Wireframes: sidebar **Custom Resources**, W7 `k("CRDs")`, `k("Certificates")`, `k("Namespaces")` STUCK box. Applies C1, C6 (no new dependency), C7, C11.
+Status: implemented (steps 1a to 5); UAT-probed, ui-verifier review pending. Amended after the advisor review (HEAD `156ceb9`, 0011 in progress). **Requires 0012, 0014, 0016 merged** (`KindObject`, `Live`, `kind_diagnosis.rs`, related subjects, `selected_summary_watch`, `kind_join.rs`, counts, `is_secret_parameter` (now `is_secret_key`), Secrets kind, `expiry_label`); 0017 not required. Crates: `crates/cluster` (1a, 1b, 5), `crates/app` (2a-5). Wireframes: sidebar **Custom Resources**, W7 `k("CRDs")`, `k("Certificates")`, `k("Namespaces")` STUCK box. Applies C1, C6 (no new dependency), C7, C11.
 
 ## Goal
 
 - **CRDs** kind: Name, Group, Version, Scope, Instances, Age; drawer Versions, Printer columns, Schema outline, Browse instances.
 - Every Established CRD is a sidebar item under Custom Resources › {API group}, at its preferred served version.
-- A generic **custom object** table from `additionalPrinterColumns` (JSONPath subset) plus a small built-in column table (Certificates **Expires**, toned like 0016 TLS expiry), and a drawer: FROM STATUS box, Conditions, Status and Spec fields (live), YAML (masked), Events. cert-manager Certificates is the worked example.
+- A generic **custom object** table from `additionalPrinterColumns` (JSONPath subset) plus a small built-in column table (Certificates **Expires**, toned like 0016 TLS expiry), and a drawer: status box, Conditions, Status and Spec fields (live), YAML (masked), Events. cert-manager Certificates is the worked example.
 - Namespaces: **STUCK** box and Remaining resources from deletion conditions.
 
 ## Non-goals
@@ -41,15 +41,15 @@ Any mutation (Renew, Delete, Edit stay disabled or absent); column overrides bey
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. No kube, k8s-openapi, or `serde_json` type in a public signature; the crate spawns no task; the app gains no kube dependency; the 0001 read-only grep finds only the SSAR `create`; new requests are `list`/`watch`/`get` only. `Cargo.lock` unchanged.
-- [ ] 4. On UAT the probe prints the CRD access line, `crds` count, per-CRD column support (1a), then access, count, watch, yaml lines (1b); results copied into [decisions.md](decisions.md).
-- [ ] 5. Safety ([custom-object-safety.md](custom-object-safety.md) checklist): no `tracing::` call with object content; summaries and fields hold only the listed data; masking tests pass; the probe prints counts only.
-- [ ] 6. On UAT (or an empty state when no CRD exists): CRDs lists every CRD; each Established CRD is a sidebar item under its group; opening one shows live rows with printer columns.
-- [ ] 7. Unsupported printer-column paths show `—`, never a wrong value; a CRD without printer columns shows Name and Age; `format: password` columns read `<hidden>`.
-- [ ] 8. Watches per session stay at most `3N + 5` (`open_watch_count` test). The 0003 AC4 color-literal grep is clean.
-- [ ] 9. The step's screenshots exist; the ui-verifier reports no high-severity defect against W7 (accepted deviations in [test-plan.md](test-plan.md)).
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline. Tests that need a live session (gate flow, CRD snapshot feed, launch resolution, Browse instances) are covered through pure helpers: `gate_outcome`, `explorer_action`, `feed_crds`, `resolve_custom_launch`, `browse_target`.
+- [x] 3. No kube, k8s-openapi, or `serde_json` type in a public signature; the crate spawns no task; the app gains no kube dependency; the 0001 read-only grep finds only the SSAR `create`; new requests are `list`/`watch`/`get` only. `Cargo.lock` unchanged.
+- [x] 4. On UAT the probe prints the CRD access line, `crds` count, per-CRD column support (1a), then access, count, watch, yaml lines (1b); results copied into [decisions.md](decisions.md).
+- [x] 5. Safety ([custom-object-safety.md](custom-object-safety.md) checklist): no `tracing::` call with object content; summaries and fields hold only the listed data; masking tests pass; the probe prints counts only.
+- [x] 6. On UAT (or an empty state when no CRD exists): CRDs lists every CRD; each Established CRD is a sidebar item under its group; opening one shows live rows with printer columns.
+- [x] 7. Unsupported printer-column paths show `—`, never a wrong value; a CRD without printer columns shows Name and Age; `format: password` columns read `<hidden>`.
+- [x] 8. Watches per session stay at most `3N + 5` (`open_watch_count` test). The 0003 AC4 color-literal grep is clean.
+- [x] 9. The step's screenshots exist; the ui-verifier reports no high-severity defect against W7 (accepted deviations in [test-plan.md](test-plan.md)). Screenshots `v42-*`, `v43-*`, and `v44-*` exist. The ui-verifier ran on 2026-10-02 (`v43v-*`) and found no high-severity defect. The typed date and Expires tone, the Ready, Available, and failing-condition status boxes, and the `secretName` link have no UAT data (cert-manager is not installed): they are unit-tested only.
 
 ## Open items
 

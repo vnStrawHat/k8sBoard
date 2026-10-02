@@ -1956,3 +1956,204 @@ fn deployed_release_has_no_box() {
         );
     }
 }
+
+fn object_condition(
+    name: &str,
+    status: ConditionStatus,
+    reason: Option<&str>,
+    message: Option<&str>,
+) -> cluster::ObjectCondition {
+    cluster::ObjectCondition {
+        name: name.to_owned(),
+        status,
+        reason: reason.map(str::to_owned),
+        message: message.map(str::to_owned),
+        changed_at: None,
+    }
+}
+
+fn custom_box(conditions: Vec<cluster::ObjectCondition>) -> Option<KindDiagnosis> {
+    custom_object_diagnosis(&CustomObjectSummary {
+        namespace: Some("ingress".to_owned()),
+        name: "tls-shop-example".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        columns: Vec::new(),
+        conditions,
+        phase: None,
+    })
+}
+
+#[test]
+fn custom_box_reports_ready_false() {
+    let with_message = custom_box(vec![object_condition(
+        "Ready",
+        ConditionStatus::False,
+        Some("Pending"),
+        Some("Issuing certificate as Secret does not exist"),
+    )])
+    .expect("a box");
+    assert_eq!(with_message.tone, StatusTone::Bad);
+    assert_eq!(with_message.title, "NOT READY");
+    assert_eq!(
+        with_message.text,
+        "Issuing certificate as Secret does not exist"
+    );
+    let without = custom_box(vec![object_condition(
+        "Ready",
+        ConditionStatus::False,
+        Some("Pending"),
+        None,
+    )])
+    .expect("a box");
+    assert_eq!(without.text, "Ready is False: Pending");
+    let bare = custom_box(vec![object_condition(
+        "Available",
+        ConditionStatus::False,
+        None,
+        None,
+    )])
+    .expect("a box");
+    assert_eq!(
+        (bare.title.as_str(), bare.text.as_str()),
+        ("UNAVAILABLE", "Available is False")
+    );
+    let unknown = custom_box(vec![object_condition(
+        "Ready",
+        ConditionStatus::Unknown,
+        None,
+        Some("waiting"),
+    )])
+    .expect("a box");
+    assert_eq!(
+        (unknown.tone, unknown.text.as_str()),
+        (StatusTone::Warn, "waiting")
+    );
+}
+
+#[test]
+fn custom_box_reports_failing_condition() {
+    let found = custom_box(vec![
+        object_condition("Ready", ConditionStatus::True, None, None),
+        object_condition(
+            "Issuing",
+            ConditionStatus::False,
+            Some("Failed"),
+            Some("Last renewal attempt failed: ACME challenge returned 404"),
+        ),
+    ])
+    .expect("a box");
+    assert_eq!(found.tone, StatusTone::Warn);
+    assert_eq!(found.title, "ISSUING FAILING");
+    assert_eq!(
+        found.text,
+        "Issuing: Last renewal attempt failed: ACME challenge returned 404"
+    );
+    // The reason stands in when there is no message.
+    let by_reason = custom_box(vec![object_condition(
+        "Synced",
+        ConditionStatus::False,
+        Some("ReconcileError"),
+        None,
+    )])
+    .expect("a box");
+    assert_eq!(by_reason.text, "Synced: ReconcileError");
+}
+
+#[test]
+fn custom_box_absent_when_healthy() {
+    assert_eq!(custom_box(Vec::new()), None);
+    assert_eq!(
+        custom_box(vec![
+            object_condition("Ready", ConditionStatus::True, None, None),
+            object_condition("Synced", ConditionStatus::True, Some("Synced"), None),
+        ]),
+        None
+    );
+    // Ready False wins over a failing condition.
+    let both = custom_box(vec![
+        object_condition("Failing", ConditionStatus::False, Some("Failed"), None),
+        object_condition("Ready", ConditionStatus::False, None, Some("not ready")),
+    ])
+    .expect("a box");
+    assert_eq!(both.tone, StatusTone::Bad);
+}
+
+fn stuck_namespace(
+    phase: cluster::NamespacePhase,
+    since: Option<i64>,
+    conditions: &[(&str, Option<&str>)],
+) -> cluster::NamespaceSummary {
+    cluster::NamespaceSummary {
+        name: "team-a".to_owned(),
+        phase,
+        labels: Vec::new(),
+        created_at: None,
+        deleting_since: since.map(at),
+        deletion_conditions: conditions
+            .iter()
+            .map(|(name, message)| cluster::NamespaceDeletionCondition {
+                name: (*name).to_owned(),
+                reason: None,
+                message: message.map(str::to_owned),
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn stuck_box_after_five_minutes() {
+    let namespace = stuck_namespace(
+        cluster::NamespacePhase::Terminating,
+        Some(1_000),
+        &[
+            (
+                "NamespaceContentRemaining",
+                Some("Some resources are remaining: pods. has 2 resource instances"),
+            ),
+            ("NamespaceFinalizersRemaining", Some("finalizers remain")),
+        ],
+    );
+    // Exactly five minutes is not yet stuck.
+    assert_eq!(namespace_diagnosis(&namespace, at(1_000 + 300)), None);
+    let found = namespace_diagnosis(&namespace, at(1_000 + 301)).expect("a box");
+    assert_eq!(found.title, "STUCK");
+    assert_eq!(found.tone, StatusTone::Warn);
+    assert_eq!(
+        found.text,
+        "Terminating for 5m. Some resources are remaining: pods. has 2 resource instances finalizers remain"
+    );
+}
+
+#[test]
+fn stuck_box_is_bad_with_failure_conditions() {
+    let namespace = stuck_namespace(
+        cluster::NamespacePhase::Terminating,
+        Some(0),
+        &[(
+            "NamespaceDeletionDiscoveryFailure",
+            Some("Discovery failed"),
+        )],
+    );
+    let found = namespace_diagnosis(&namespace, at(7_200)).expect("a box");
+    assert_eq!(found.tone, StatusTone::Bad);
+    assert_eq!(found.text, "Terminating for 2h. Discovery failed");
+    // No message at all still says why there is none.
+    let silent = stuck_namespace(cluster::NamespacePhase::Terminating, Some(0), &[]);
+    let found = namespace_diagnosis(&silent, at(7_200)).expect("a box");
+    assert_eq!(
+        found.text,
+        "Terminating for 2h. The namespace reports no reason."
+    );
+}
+
+#[test]
+fn no_box_while_recently_terminating() {
+    let recent = stuck_namespace(cluster::NamespacePhase::Terminating, Some(1_000), &[]);
+    assert_eq!(namespace_diagnosis(&recent, at(1_060)), None);
+    let active = stuck_namespace(cluster::NamespacePhase::Active, None, &[]);
+    assert_eq!(namespace_diagnosis(&active, at(100_000)), None);
+    // Terminating without a deletion time cannot be timed.
+    let untimed = stuck_namespace(cluster::NamespacePhase::Terminating, None, &[]);
+    assert_eq!(namespace_diagnosis(&untimed, at(100_000)), None);
+}

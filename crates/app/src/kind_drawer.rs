@@ -36,8 +36,8 @@ use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
 use crate::resource_actions::{
-    MenuExtras, OpenUrl, kind_menu, open_url_choice, open_url_menu_item, port_forward_reason,
-    secret_menu,
+    MenuExtras, OpenUrl, browse_instances_item, kind_menu, open_url_choice, open_url_menu_item,
+    port_forward_reason, secret_menu,
 };
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretValuesView, ValueAccess};
@@ -149,7 +149,8 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::Secret(_)
         | KindObject::HelmRelease(_)
         | KindObject::Crd(_)
-        | KindObject::Custom(_) => None,
+        | KindObject::Custom(_)
+        | KindObject::Namespace(_) => None,
     }
 }
 
@@ -218,7 +219,11 @@ fn kind_menu_button(
                     &live.access,
                     live.pods.items(),
                     &shell,
-                    MenuExtras { open_url, secret },
+                    MenuExtras {
+                        open_url,
+                        secret,
+                        browse: browse_instances_item(row, live.crd_kinds(), &shell),
+                    },
                 ),
                 None => menu,
             }

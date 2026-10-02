@@ -1309,3 +1309,55 @@ fn explorer_action_follows_the_review_of_the_shown_kind() {
         ExplorerAction::Leave
     );
 }
+
+#[test]
+fn custom_counts_refresh_after_30s() {
+    let mut counts = CustomCounts::default();
+    let start = Instant::now();
+    // Nothing ran yet.
+    assert!(counts.wants_run(start));
+    counts.refreshed_at = Some(start);
+    assert!(!counts.wants_run(start + Duration::from_secs(29)));
+    assert!(counts.wants_run(start + Duration::from_secs(30)));
+}
+
+#[test]
+fn failed_counts_keep_the_previous_number() {
+    let kept = widget_kind(true);
+    let dropped = widget_kind(false);
+    let previous = HashMap::from([(kept, 7), (dropped, 3)]);
+    let error = || Err("timed out".to_owned());
+    let merged = merge_custom_counts(&previous, vec![(kept, error())]);
+    // A failed request keeps its old number; a kind the run did not ask about is dropped.
+    assert_eq!(merged, HashMap::from([(kept, 7)]));
+    let fresh = merge_custom_counts(&previous, vec![(kept, Ok(Some(9)))]);
+    assert_eq!(fresh, HashMap::from([(kept, 9)]));
+    // No remaining count from the server leaves the kind without a number.
+    let unknown = merge_custom_counts(&previous, vec![(kept, Ok(None))]);
+    assert!(unknown.is_empty());
+    // A failure with nothing before it stays blank.
+    assert!(merge_custom_counts(&HashMap::new(), vec![(kept, error())]).is_empty());
+}
+
+#[test]
+fn denied_kinds_are_not_counted_for_instances() {
+    let allowed = widget_kind(true);
+    let denied = widget_kind(false);
+    let mut gates = HashMap::new();
+    gates.insert(
+        denied,
+        CustomGate::Denied {
+            reason: "no".to_owned(),
+        },
+    );
+    gates.insert(allowed, CustomGate::Allowed);
+    assert_eq!(
+        countable_custom_kinds(&[allowed, denied], &gates),
+        [allowed]
+    );
+    // A kind without a review yet is counted: the count needs a cluster-wide list anyway.
+    assert_eq!(
+        countable_custom_kinds(&[allowed, denied], &HashMap::new()),
+        [allowed, denied]
+    );
+}

@@ -20,7 +20,7 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Group | Kind | T | Dr | Read-only gaps → spec | Mutating actions → spec |
 |---|---|---|---|---|---|
 | Cluster | Nodes | Done | Partial | conditions, allocatable, system 0008; CPU/Mem 0010; View pods on node 0009 | shell 0037; cordon, drain, taints, labels 0034; delete 0033 |
-| Cluster | Namespaces | Partial | Partial | Pods, CPU req, Memory req columns Done (0012); STUCK box and remaining resources 0018; quota section Done (0013; LimitRange row open); "Set as default" 0024 | New 0031; delete 0033 |
+| Cluster | Namespaces | Partial | Partial | Pods, CPU req, Memory req columns Done (0012); STUCK box and remaining resources Done (0018; object names not listed); quota section Done (0013; LimitRange row open); "Set as default" 0024 | New 0031; delete 0033 |
 | Cluster | Events | Planned(0006) | Planned(0006) | Warnings only, Go to object, Copy message: 0006; Pause stream, Filter similar 0009 | — |
 | Workloads | Pods | Done | Partial | see [inventory-screens.md](inventory-screens.md) W4 rows | see W4 rows |
 | Workloads | Deployments | Done | Done (WHY box, Revisions: 0012) | View logs (all pods) 0019 | scale, restart, roll back, pause 0032; port-forward 0035 |
@@ -47,12 +47,12 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Access Control | RoleBindings | Done (0015) | Done (role and service-account links, REVIEW box, Go to role: 0015) | — | New 0031 |
 | Access Control | ClusterRoleBindings | Done (0015) | Done (cluster-admin to everyone or service accounts flag, REVIEW box, Hide system: 0015) | — | — |
 | Helm | Releases | Done (0017) | Done (history, values and diff masked with 30 s Reveal, manifest, notes, UPGRADE FAILED box: 0017) | — | Roll back, Uninstall 0038 (deferred) |
-| Custom Resources | CRDs | Missing | Missing | 0018 (versions, printer columns, schema, Browse instances) | — |
-| Custom Resources | Certificates (any discovered CR) | Missing | Missing | 0018 (printer columns, schema drawer, status box) | Renew 0032 |
+| Custom Resources | CRDs | Done | Done | Versions, printer columns, schema, Instances, Browse instances Done (0018) | — |
+| Custom Resources | Certificates (any discovered CR) | Done | Done | Done for read (0018): printer columns, Expires built-in, status box (NOT READY, UNAVAILABLE, READY UNKNOWN, or {TYPE} FAILING), Conditions, Status and Spec fields, Go to secret link, masked YAML | Renew 0032 |
 
 ## Notes
 
 - Live today (12): Nodes, Pods, Namespaces, Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, CronJobs, Services, Ingresses, ConfigMaps.
 - Column deviations already decided in 0005 [kind-columns.md](../specs/0005-kind-explorer/kind-columns.md) (kubectl order for Jobs, Last schedule for CronJobs) stay; the specs above only add the missing columns.
-- The Certificates sidebar item exists only when the cert-manager CRD is installed; 0018 makes every CRD an item (N6 in [inventory-shell.md](inventory-shell.md)).
+- The Certificates item exists only when the cert-manager CRD is installed; 0018 makes every Established CRD an item (N6 in [inventory-shell.md](inventory-shell.md)). cert-manager is not installed on UAT (72 CRDs, none of its), so Certificates is verified by fixture tests (the worked example) and the Argo CD Applications screens, which exercise the same generic path.
 - List-level buttons per kind (W7 note 1) follow their action's spec: read-only ones (Hide inactive, Hide system, Reveal all, Who can…, Browse instances, Open URL) ship with the kind; the rest ship with 0031–0035.

@@ -46,7 +46,7 @@ Fixtures are built in code with `serde_json::json!` (cert-manager, Argo CD, Stri
 | 2b | `src/launch_options.rs` (+ tests), `src/screenshot.rs` (+ tests) | `LaunchScreen::Custom`, resolution, settle, slugs |
 | 2b | `src/main.rs` | `mod custom_kind; mod custom_rows;` |
 | 3 | `src/kind_row.rs`, `src/live_sections.rs` (+ tests) | `LiveContent::{CustomConditions, CustomStatus, CustomSpec}`, field rows, `secretName` link |
-| 3 | `src/kind_diagnosis.rs` (+ tests) | FROM STATUS arm |
+| 3 | `src/kind_diagnosis.rs` (+ tests) | status box arm (`custom_object_diagnosis`) |
 | 3 | `src/related_objects.rs` (+ tests), `src/cluster_session.rs` | `RelatedSubject::CustomFields`, `RelatedList::CustomFields`, `RelatedUpdate::CustomFields` |
 | 3 | `src/resource_actions.rs` (+ tests) | Browse instances for CRD rows |
 | 4 | `src/cluster_session.rs` (+ tests), `src/kind_join.rs` (+ tests), `src/navigation.rs`, `src/app_shell.rs` | `CustomCounts`, `refresh_custom_counts`, `CRD_INSTANCES`, custom sidebar counts |

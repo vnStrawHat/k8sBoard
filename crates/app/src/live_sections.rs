@@ -32,6 +32,7 @@ use crate::cluster_session::{
     denied_related_check,
 };
 use crate::config_map_rows::{format_bytes, key_size_text};
+use crate::custom_rows::{FieldsSide, conditions_rows, field_list_rows};
 use crate::drawer::{link_text, wide_detail_row};
 use crate::helm_release_view::ValuesLayout;
 use crate::helm_rows::{HistoryModel, HistoryRow, history_model};
@@ -133,6 +134,30 @@ pub(crate) fn live_rows(
         (LiveContent::ServiceAccountPods, KindObject::ServiceAccount(account)) => {
             account_pods_rows(account, live, cx)
         }
+        (LiveContent::CustomConditions, KindObject::Custom(summary)) => live_detail_rows(
+            &conditions_rows(&summary.conditions),
+            CUSTOM_CONDITIONS_ID_BASE,
+            &DrawerPaint::new(kind, row, live, now),
+            cx,
+        ),
+        (LiveContent::CustomStatus, KindObject::Custom(_)) => custom_fields_section(
+            FieldsSide::Status,
+            CUSTOM_STATUS_ID_BASE,
+            kind,
+            row,
+            live,
+            now,
+            cx,
+        ),
+        (LiveContent::CustomSpec, KindObject::Custom(_)) => custom_fields_section(
+            FieldsSide::Spec,
+            CUSTOM_SPEC_ID_BASE,
+            kind,
+            row,
+            live,
+            now,
+            cx,
+        ),
         // A StorageClass row holds no summary either: its name is the class.
         (LiveContent::ClassVolumes, _) => class_volumes_rows(kind, &row.name, live, cx),
         // The Namespaces row holds no summary, so its name is the namespace.
@@ -223,7 +248,8 @@ fn revisions(
             | RelatedList::ConfigMapValues(_)
             | RelatedList::Events(_)
             | RelatedList::ResourceQuotas(_)
-            | RelatedList::HelmHistory(_),
+            | RelatedList::HelmHistory(_)
+            | RelatedList::CustomFields(_),
         )
         | None => None,
     };
@@ -460,7 +486,8 @@ fn recent_jobs_rows(
             | RelatedList::ConfigMapValues(_)
             | RelatedList::Events(_)
             | RelatedList::ResourceQuotas(_)
-            | RelatedList::HelmHistory(_),
+            | RelatedList::HelmHistory(_)
+            | RelatedList::CustomFields(_),
         )
         | None => None,
     };
@@ -834,7 +861,8 @@ fn config_map_data_rows(
             | RelatedList::Jobs(_)
             | RelatedList::Events(_)
             | RelatedList::ResourceQuotas(_)
-            | RelatedList::HelmHistory(_),
+            | RelatedList::HelmHistory(_)
+            | RelatedList::CustomFields(_),
         )
         | None => None,
     };
@@ -922,10 +950,33 @@ fn used_by_element(ix: usize, used_by: &UsedBy, cx: &Context<AppShell>) -> AnyEl
         .into_any_element()
 }
 
+// ---- Custom objects ----
+
+/// One side of a custom object, from the related fields watch of the open drawer.
+fn custom_fields_section(
+    side: FieldsSide,
+    id_base: usize,
+    kind: ResourceKind,
+    row: &KindRow,
+    live: &LiveCluster,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let list = related_subject(kind, row)
+        .and_then(|subject| live.related_of(&subject))
+        .and_then(RelatedList::custom_fields);
+    let rows = field_list_rows(list, side, row.namespace.as_deref());
+    live_detail_rows(&rows, id_base, &DrawerPaint::new(kind, row, live, now), cx)
+}
+
 // ---- Secrets ----
 
 /// Element ids of the Certificate section's rows start here, clear of the drawer's own.
 const CERTIFICATE_ID_BASE: usize = 10_000;
+/// The sections of a custom object; their element ids start here.
+const CUSTOM_CONDITIONS_ID_BASE: usize = 30_000;
+const CUSTOM_STATUS_ID_BASE: usize = 40_000;
+const CUSTOM_SPEC_ID_BASE: usize = 50_000;
 /// The TLS section of an Ingress; its element ids start here.
 const INGRESS_TLS_ID_BASE: usize = 20_000;
 const UNUSED_NOTE: &str = "No pod or ingress in this namespace uses it. Workloads with no running pod, CronJob templates, Gateway API and Istio references, and readers through the API are not checked.";

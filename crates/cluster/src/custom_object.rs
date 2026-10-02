@@ -51,7 +51,8 @@ pub struct CustomObjectSummary {
     pub columns: Vec<ColumnValue>,
     /// `status.conditions`, at most 10, in API order.
     pub conditions: Vec<ObjectCondition>,
-    /// `status.phase` when it is a string.
+    /// `status.phase` when it is a string, else a top-level string `status.status` (ClickHouse
+    /// style). Masked and capped like any text.
     pub phase: Option<String>,
 }
 
@@ -238,7 +239,7 @@ fn custom_object_summary(
             .collect(),
         conditions: status.map(conditions).unwrap_or_default(),
         phase: status
-            .and_then(|status| status.get("phase"))
+            .and_then(|status| status.get("phase").or_else(|| status.get("status")))
             .and_then(Value::as_str)
             .map(shown_text),
     }

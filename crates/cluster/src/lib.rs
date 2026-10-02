@@ -88,7 +88,7 @@ pub use kubelet_stats::{
     KubeletSummary, KubeletTargets, NetworkCounters, NodeKubeletStats, PodKubeletStats, PvcUsage,
 };
 pub use metrics_api::MetricsApi;
-pub use namespace::{NamespacePhase, NamespaceScope, NamespaceSummary};
+pub use namespace::{NamespaceDeletionCondition, NamespacePhase, NamespaceScope, NamespaceSummary};
 pub use network_policy::{
     NetworkPolicySummary, PolicyDirection, PolicyPeer, PolicyPort, PolicyRule,
 };

@@ -235,7 +235,7 @@ fn custom_groups(
             let is_open = kinds
                 .iter()
                 .any(|kind| Screen::Kind(ResourceKind::Custom(*kind)) == active);
-            SidebarMenuItem::new(group)
+            SidebarMenuItem::new(group_label(group))
                 .default_open(is_open)
                 .click_to_toggle(true)
                 .children(kinds.into_iter().map(|kind| {
@@ -254,6 +254,19 @@ fn ready_kinds<'a>(list: &LiveList<CrdSummary>, kinds: &'a [CustomKind]) -> &'a 
     } else {
         &[]
     }
+}
+
+/// Longest API group name the sidebar shows whole: more would run under the chevron.
+const MAX_GROUP_LABEL_CHARS: usize = 20;
+
+/// The group name, ending in an ellipsis when it is too long for the sidebar.
+fn group_label(group: &str) -> String {
+    if group.chars().count() <= MAX_GROUP_LABEL_CHARS {
+        return group.to_owned();
+    }
+    let mut label: String = group.chars().take(MAX_GROUP_LABEL_CHARS - 1).collect();
+    label.push('…');
+    label
 }
 
 /// The kinds grouped by API group, in the order given (sorted by group).
@@ -485,6 +498,17 @@ mod tests {
         assert!(ready_kinds(&LiveList::Loading, &kinds).is_empty());
         assert!(ready_kinds(&failed, &kinds).is_empty());
         assert_eq!(ready_kinds(&ready, &kinds).len(), 1);
+    }
+
+    #[test]
+    fn long_group_labels_end_in_an_ellipsis() {
+        assert_eq!(group_label("argoproj.io"), "argoproj.io");
+        let exact = "a".repeat(MAX_GROUP_LABEL_CHARS);
+        assert_eq!(group_label(&exact), exact);
+        let label = group_label("clickhouse.altinity.com");
+        assert_eq!(label.chars().count(), MAX_GROUP_LABEL_CHARS);
+        assert!(label.ends_with('…'), "{label}");
+        assert!(label.starts_with("clickhouse.altinity"));
     }
 
     #[test]

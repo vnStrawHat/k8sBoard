@@ -678,3 +678,52 @@ fn helm_release_menu_opens_values_and_manifest() {
     assert_eq!(HELM_VIEW_ITEMS[0].1, DrawerTab::Values);
     assert_eq!(HELM_VIEW_ITEMS[1].1, DrawerTab::Manifest);
 }
+
+fn served_widget(crd_name: &str) -> crate::custom_kind::CustomKind {
+    let (plural, group) = crd_name.split_once('.').expect("a CRD name has a group");
+    let crd = cluster::CrdSummary {
+        name: crd_name.to_owned(),
+        group: group.to_owned(),
+        kind: "Widget".to_owned(),
+        plural: plural.to_owned(),
+        singular: "widget".to_owned(),
+        scope: cluster::ResourceScope::Namespaced,
+        versions: vec![cluster::CrdVersion {
+            name: "v1".to_owned(),
+            is_served: true,
+            is_storage: true,
+            is_deprecated: false,
+            deprecation_warning: None,
+            printer_columns: Vec::new(),
+            schema: cluster::SchemaOutline::default(),
+        }],
+        state: cluster::CrdState::Established,
+        created_at: None,
+    };
+    crate::custom_kind::custom_kinds(&[crd], &mut crate::custom_kind::CustomKindCache::default())[0]
+}
+
+#[test]
+fn browse_instances_opens_the_custom_kind() {
+    let widgets = served_widget("widgets.x.io");
+    let gadgets = served_widget("gadgets.x.io");
+    assert_eq!(
+        browse_target("widgets.x.io", &[gadgets, widgets]),
+        Some(widgets)
+    );
+}
+
+#[test]
+fn browse_instances_disabled_without_a_kind() {
+    let gadgets = served_widget("gadgets.x.io");
+    assert_eq!(browse_target("widgets.x.io", &[gadgets]), None);
+    assert_eq!(browse_target("widgets.x.io", &[]), None);
+}
+
+#[test]
+fn custom_menus_have_no_read_only_actions() {
+    let kind = ResourceKind::Custom(served_widget("widgets.x.io"));
+    assert!(kind.read_only_actions().is_empty());
+    assert!(!kind.has_port_forward());
+    assert_eq!(kind.delete_label(), "Delete widget…");
+}

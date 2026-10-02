@@ -4,6 +4,7 @@ use futures::Stream;
 use k8s_openapi::api::core::v1::Namespace;
 use kube::Api;
 
+use crate::column_path::shown_text_within;
 use crate::connection::{ClusterConnection, ClusterError};
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::label_terms;
@@ -49,7 +50,31 @@ pub struct NamespaceSummary {
     /// `key=value` terms in key order.
     pub labels: Vec<String>,
     pub created_at: Option<jiff::Timestamp>,
+    /// `metadata.deletionTimestamp`.
+    pub deleting_since: Option<jiff::Timestamp>,
+    /// The deletion conditions with status True, in API order.
+    pub deletion_conditions: Vec<NamespaceDeletionCondition>,
 }
+
+/// One condition of the namespace controller that explains a deletion that has not finished.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceDeletionCondition {
+    pub name: String,
+    pub reason: Option<String>,
+    /// Cut at 500 characters.
+    pub message: Option<String>,
+}
+
+/// The condition types of the namespace controller that report deletion progress.
+const DELETION_CONDITIONS: [&str; 5] = [
+    "NamespaceDeletionDiscoveryFailure",
+    "NamespaceDeletionGroupVersionParsingFailure",
+    "NamespaceDeletionContentFailure",
+    "NamespaceContentRemaining",
+    "NamespaceFinalizersRemaining",
+];
+/// Longest condition message kept.
+const MAX_MESSAGE_CHARS: usize = 500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NamespacePhase {
@@ -101,7 +126,36 @@ pub(crate) fn namespace_summary(namespace: &Namespace) -> NamespaceSummary {
             .creation_timestamp
             .as_ref()
             .map(|time| time.0),
+        deleting_since: namespace
+            .metadata
+            .deletion_timestamp
+            .as_ref()
+            .map(|time| time.0),
+        deletion_conditions: deletion_conditions(namespace),
     }
+}
+
+fn deletion_conditions(namespace: &Namespace) -> Vec<NamespaceDeletionCondition> {
+    let conditions = namespace
+        .status
+        .as_ref()
+        .and_then(|status| status.conditions.as_ref());
+    conditions
+        .into_iter()
+        .flatten()
+        .filter(|condition| {
+            condition.status == "True" && DELETION_CONDITIONS.contains(&condition.type_.as_str())
+        })
+        .map(|condition| NamespaceDeletionCondition {
+            name: condition.type_.clone(),
+            reason: condition.reason.clone().filter(|reason| !reason.is_empty()),
+            message: condition
+                .message
+                .as_deref()
+                .filter(|message| !message.is_empty())
+                .map(|message| shown_text_within(message, MAX_MESSAGE_CHARS)),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -197,5 +251,107 @@ mod tests {
         let summary = namespace_summary(&namespace);
         assert_eq!(summary.name, "kube-system");
         assert_eq!(summary.created_at, Some(created));
+    }
+
+    fn namespace_with_conditions(
+        conditions: &[(&str, &str, Option<&str>, Option<&str>)],
+    ) -> Namespace {
+        use k8s_openapi::api::core::v1::NamespaceCondition;
+        Namespace {
+            status: Some(NamespaceStatus {
+                phase: Some("Terminating".to_owned()),
+                conditions: Some(
+                    conditions
+                        .iter()
+                        .map(|(type_, status, reason, message)| NamespaceCondition {
+                            type_: (*type_).to_owned(),
+                            status: (*status).to_owned(),
+                            reason: reason.map(str::to_owned),
+                            message: message.map(str::to_owned),
+                            last_transition_time: None,
+                        })
+                        .collect(),
+                ),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn deletion_conditions_keep_true_known_types() {
+        let summary = namespace_summary(&namespace_with_conditions(&[
+            (
+                "NamespaceContentRemaining",
+                "True",
+                Some("SomeResourcesRemain"),
+                Some("Some resources are remaining: pods. has 2 resource instances"),
+            ),
+            (
+                "NamespaceDeletionContentFailure",
+                "False",
+                None,
+                Some("fine"),
+            ),
+            ("SomethingElse", "True", None, Some("ignored")),
+            ("NamespaceFinalizersRemaining", "True", Some(""), Some("")),
+        ]));
+        let names: Vec<_> = summary
+            .deletion_conditions
+            .iter()
+            .map(|condition| condition.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["NamespaceContentRemaining", "NamespaceFinalizersRemaining"]
+        );
+        assert_eq!(
+            summary.deletion_conditions[0].reason.as_deref(),
+            Some("SomeResourcesRemain")
+        );
+        // Empty reason and message read as absent.
+        assert_eq!(summary.deletion_conditions[1].reason, None);
+        assert_eq!(summary.deletion_conditions[1].message, None);
+    }
+
+    #[test]
+    fn deleting_since_reads_deletion_timestamp() {
+        let at: jiff::Timestamp = "2026-10-01T10:00:00Z".parse().expect("timestamp");
+        let mut namespace = namespace_with_phase(Some("Terminating"));
+        assert_eq!(namespace_summary(&namespace).deleting_since, None);
+        namespace.metadata.deletion_timestamp = Some(Time(at));
+        assert_eq!(namespace_summary(&namespace).deleting_since, Some(at));
+    }
+
+    #[test]
+    fn deletion_messages_cut_at_500() {
+        let long = "m".repeat(800);
+        let summary = namespace_summary(&namespace_with_conditions(&[(
+            "NamespaceDeletionContentFailure",
+            "True",
+            None,
+            Some(&long),
+        )]));
+        let message = summary.deletion_conditions[0]
+            .message
+            .as_deref()
+            .expect("message");
+        assert_eq!(message.chars().count(), 500);
+        assert!(message.ends_with('…'));
+    }
+
+    #[test]
+    fn deletion_messages_hide_url_userinfo() {
+        let summary = namespace_summary(&namespace_with_conditions(&[(
+            "NamespaceDeletionDiscoveryFailure",
+            "True",
+            None,
+            Some("Discovery failed for https://u:distinctive-secret@host/apis"),
+        )]));
+        let message = summary.deletion_conditions[0]
+            .message
+            .as_deref()
+            .expect("message");
+        assert_eq!(message, "Discovery failed for https://<hidden>@host/apis");
+        assert!(!format!("{summary:?}").contains("distinctive"));
     }
 }

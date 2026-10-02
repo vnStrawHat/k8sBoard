@@ -108,6 +108,32 @@ fn summary_keeps_metadata_labels_and_phase() {
 }
 
 #[test]
+fn phase_falls_back_to_a_top_level_status_status() {
+    let mut value = certificate();
+    value["status"]["status"] = json!("Completed");
+    assert_eq!(
+        summary_of(value.clone(), &[]).phase.as_deref(),
+        Some("Completed")
+    );
+    // `status.phase` wins when both exist.
+    value["status"]["phase"] = json!("Running");
+    assert_eq!(summary_of(value, &[]).phase.as_deref(), Some("Running"));
+    // A nested object under `status.status` is not a state word.
+    let mut nested = certificate();
+    nested["status"]["status"] = json!({"phase": "x"});
+    assert_eq!(summary_of(nested, &[]).phase, None);
+}
+
+#[test]
+fn status_status_is_masked_like_any_text() {
+    let mut value = certificate();
+    value["status"]["status"] = json!(format!("redis://u:{SECRET_ONE}@host"));
+    let summary = summary_of(value, &[]);
+    assert!(!format!("{summary:?}").contains(SECRET_ONE));
+    assert_eq!(summary.phase.as_deref(), Some("redis://<hidden>@host"));
+}
+
+#[test]
 fn summary_has_one_value_per_column() {
     let summary = summary_of(certificate(), &certificate_columns());
     assert_eq!(

@@ -6,8 +6,9 @@ use gpui_kit::{
 };
 
 use crate::access_bindings::role_key;
-use crate::app_shell::AppShell;
+use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::{AccessState, LiveCluster};
+use crate::custom_kind::CustomKind;
 use crate::drawer::DrawerTab;
 use crate::kind_row::{EventDetail, KindObject, KindRow};
 use crate::live_sections::claim_pods;
@@ -248,6 +249,9 @@ pub(crate) fn kind_menu(
             .item(copy_message_item(event))
             .separator();
     }
+    if let Some(browse) = extras.browse {
+        menu = menu.item(browse);
+    }
     let key = ResourceKey::of_row(kind, row);
     // A key without an object reference (a Helm release) has no YAML tab.
     if kind == ResourceKind::HelmReleases {
@@ -300,12 +304,46 @@ pub(crate) fn kind_menu(
         ))
 }
 
+/// The custom kind a CRD row opens: the served kind with its name, `None` while the CRD is not
+/// Established or has no served version.
+pub(crate) fn browse_target(crd_name: &str, kinds: &[CustomKind]) -> Option<CustomKind> {
+    kinds
+        .iter()
+        .find(|kind| kind.crd_name() == crd_name)
+        .copied()
+}
+
+/// Browse instances of a CRD row: opens the custom kind, or says why it cannot.
+pub(crate) fn browse_instances_item(
+    row: &KindRow,
+    kinds: &[CustomKind],
+    shell: &WeakEntity<AppShell>,
+) -> Option<PopupMenuItem> {
+    const LABEL: &str = "Browse instances";
+    let KindObject::Crd(crd) = &row.object else {
+        return None;
+    };
+    let Some(kind) = browse_target(&crd.name, kinds) else {
+        return Some(disabled_menu_item(
+            LABEL,
+            "Not established or not served".into(),
+        ));
+    };
+    let shell = shell.clone();
+    Some(PopupMenuItem::new(LABEL).on_click(move |_, _, cx| {
+        let screen = Screen::Kind(ResourceKind::Custom(kind));
+        let _ = shell.update(cx, |shell, cx| shell.show_screen(screen, cx));
+    }))
+}
+
 /// Items that need the window or the app to be built, so the caller builds them before it borrows
 /// the session (a submenu needs the app mutably).
 #[derive(Default)]
 pub(crate) struct MenuExtras {
     pub(crate) open_url: Option<PopupMenuItem>,
     pub(crate) secret: Option<SecretMenu>,
+    /// A CRD row's Browse instances item.
+    pub(crate) browse: Option<PopupMenuItem>,
 }
 
 /// The Reveal and Copy items of a Secret.

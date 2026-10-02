@@ -5,11 +5,12 @@
 //! arbitrary text, so nothing here logs them.
 
 use cluster::{
-    BindingSummary, BlockCause, BroadGroup, CertificateIssue, ContainerKind, ContainerState,
-    DaemonSetSummary, DeploymentSummary, DisruptionState, HelmReleaseSummary, HelmStatus,
-    HorizontalPodAutoscalerSummary, IngressSummary, JobStatus, JobSummary, NodeReadiness,
-    NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary,
-    PodStatus, PodSummary, ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary,
+    BindingSummary, BlockCause, BroadGroup, CertificateIssue, ConditionStatus, ContainerKind,
+    ContainerState, CustomObjectSummary, DaemonSetSummary, DeploymentSummary, DisruptionState,
+    HelmReleaseSummary, HelmStatus, HorizontalPodAutoscalerSummary, IngressSummary, JobStatus,
+    JobSummary, NamespacePhase, NamespaceSummary, NodeReadiness, NodeSummary,
+    PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary, PodStatus,
+    PodSummary, ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary,
     ServiceAccountSummary, ServiceSummary, StatusReason, Subject, SubjectKind, Termination,
     WorkloadCondition,
 };
@@ -20,8 +21,10 @@ use crate::access_bindings::{
 };
 use crate::age::format_age;
 use crate::certificate_expiry::{ExpiryState, date_text, expiry_state};
+use crate::custom_rows::is_failing;
 use crate::kind_join::{ServiceHealth, tls_secret_names};
 use crate::kind_row::KindObject;
+use crate::namespace_rows::STUCK_AFTER;
 use crate::network_rows::find_secret;
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
 use crate::policy_rows::{
@@ -84,15 +87,108 @@ pub(crate) fn kind_diagnosis(
         KindObject::Secret(secret) => secret_diagnosis(secret, inputs.now),
         KindObject::Ingress(ingress) => ingress_diagnosis(ingress, inputs),
         KindObject::HelmRelease(release) => helm_release_diagnosis(release, inputs.now),
+        KindObject::Custom(summary) => custom_object_diagnosis(summary),
+        KindObject::Namespace(namespace) => namespace_diagnosis(namespace, inputs.now),
         KindObject::Plain
         | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
         | KindObject::ReplicaSet(_)
         | KindObject::ConfigMap(_)
         | KindObject::NetworkPolicy(_)
-        | KindObject::Crd(_)
-        | KindObject::Custom(_) => None,
+        | KindObject::Crd(_) => None,
     }
+}
+
+/// A namespace that has been Terminating for more than `STUCK_AFTER`: Bad when the controller
+/// reports a failure, else Warn. The text is the controller's own messages, which can name
+/// resource types and finalizers, never logged.
+fn namespace_diagnosis(namespace: &NamespaceSummary, now: Timestamp) -> Option<KindDiagnosis> {
+    if namespace.phase != NamespacePhase::Terminating {
+        return None;
+    }
+    let since = namespace.deleting_since?;
+    if now.duration_since(since) <= STUCK_AFTER {
+        return None;
+    }
+    let has_failure = namespace
+        .deletion_conditions
+        .iter()
+        .any(|condition| condition.name.ends_with("Failure"));
+    let messages: Vec<&str> = namespace
+        .deletion_conditions
+        .iter()
+        .filter_map(|condition| condition.message.as_deref())
+        .collect();
+    let reasons = if messages.is_empty() {
+        "The namespace reports no reason.".to_owned()
+    } else {
+        messages.join(" ")
+    };
+    Some(KindDiagnosis {
+        tone: if has_failure {
+            StatusTone::Bad
+        } else {
+            StatusTone::Warn
+        },
+        title: "STUCK".to_owned(),
+        text: format!(
+            "Terminating for {}. {reasons}",
+            format_age(Some(since), now)
+        ),
+        link: None,
+    })
+}
+
+/// A custom object: its own conditions, read at once. The first match wins: Ready or Available
+/// False is Bad, Ready Unknown is Warn, then a failing condition is Warn. The messages are the
+/// controller's text and can quote a field value, so they are shown here and never logged.
+fn custom_object_diagnosis(summary: &CustomObjectSummary) -> Option<KindDiagnosis> {
+    let find = |name: &str| {
+        summary
+            .conditions
+            .iter()
+            .find(|condition| condition.name == name)
+    };
+    for (name, title) in [("Ready", "NOT READY"), ("Available", "UNAVAILABLE")] {
+        let Some(condition) = find(name).filter(|c| c.status == ConditionStatus::False) else {
+            continue;
+        };
+        let text = match (&condition.message, &condition.reason) {
+            (Some(message), _) => message.clone(),
+            (None, Some(reason)) => format!("{name} is False: {reason}"),
+            (None, None) => format!("{name} is False"),
+        };
+        return Some(KindDiagnosis {
+            tone: StatusTone::Bad,
+            title: title.to_owned(),
+            text,
+            link: None,
+        });
+    }
+    if let Some(condition) = find("Ready").filter(|c| c.status == ConditionStatus::Unknown) {
+        let text = condition
+            .message
+            .clone()
+            .unwrap_or_else(|| "Ready is Unknown".to_owned());
+        return Some(KindDiagnosis {
+            tone: StatusTone::Warn,
+            title: "READY UNKNOWN".to_owned(),
+            text,
+            link: None,
+        });
+    }
+    let failing = summary.conditions.iter().find(|c| is_failing(c))?;
+    let detail = failing
+        .message
+        .as_deref()
+        .or(failing.reason.as_deref())
+        .unwrap_or_default();
+    Some(KindDiagnosis {
+        tone: StatusTone::Warn,
+        title: format!("{} FAILING", failing.name.to_uppercase()),
+        text: format!("{}: {detail}", failing.name),
+        link: None,
+    })
 }
 
 /// The first owned pod (snapshot order) that `pod_diagnosis` finds a cause for.
