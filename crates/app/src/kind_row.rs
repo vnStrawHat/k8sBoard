@@ -31,6 +31,8 @@ pub(crate) struct KindRow {
 pub(crate) struct EventDetail {
     /// `BackOff · api-7d9f8c-x2k4q`; the object name alone without a reason.
     pub(crate) title: SharedString,
+    /// The event reason; `None` when empty. Filter similar needs it.
+    pub(crate) reason: Option<SharedString>,
     /// `None` when k8sBoard has no screen for the object's kind.
     pub(crate) object: Option<ResourceKey>,
     /// `kubelet on ip-10-0-1-23`, for the subtitle.

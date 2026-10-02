@@ -87,7 +87,7 @@ fn node_menu_button(
                 return menu;
             };
             match live.nodes.items().iter().find(|node| key.is_node(node)) {
-                Some(node) => node_menu(menu, node, &live.access, &shell),
+                Some(node) => node_menu(menu, node, live, &shell),
                 None => menu,
             }
         })

@@ -38,6 +38,10 @@ impl TableRow for Row {
             _ => CellValue::Absent,
         }
     }
+
+    fn in_preset(&self, _: &FilterPreset) -> bool {
+        self.tone != StatusTone::Done
+    }
 }
 
 fn items() -> Vec<Row> {
@@ -145,4 +149,61 @@ fn rebuild_keeps_sort_on_a_hidden_column() {
     view.hidden.insert(1);
     view.rebuild(&items(), 2, now());
     assert_eq!(view.rows(), [0, 2, 1, 3]);
+}
+
+#[test]
+fn replica_sets_start_with_hide_inactive() {
+    use crate::app_shell::Screen;
+    use crate::resource_kind::ResourceKind;
+
+    let hide_inactive = default_filter(Screen::Kind(ResourceKind::ReplicaSets));
+    assert_eq!(hide_inactive.preset, Some(FilterPreset::HideInactive));
+    for screen in [
+        Screen::Pods,
+        Screen::Nodes,
+        Screen::Kind(ResourceKind::Events),
+        Screen::Kind(ResourceKind::Deployments),
+    ] {
+        assert_eq!(default_filter(screen), TableFilter::default(), "{screen:?}");
+    }
+    let view = TableView::new(hide_inactive);
+    assert!(view.is_filtering());
+}
+
+#[test]
+fn reset_filter_restores_the_default() {
+    let default = TableFilter {
+        preset: Some(FilterPreset::HideInactive),
+        ..Default::default()
+    };
+    let mut view = TableView::new(default.clone());
+    view.filter.text = "pod".to_owned();
+    view.filter.preset = None;
+    view.reset_filter();
+    assert_eq!(view.filter, default);
+}
+
+#[test]
+fn clear_filter_turns_the_default_preset_off() {
+    let mut view = TableView::new(TableFilter {
+        preset: Some(FilterPreset::HideInactive),
+        ..Default::default()
+    });
+    assert!(view.is_filtering());
+    view.clear_filter();
+    assert!(!view.is_filtering());
+}
+
+#[test]
+fn a_preset_hides_rows_in_the_rebuild() {
+    let mut view = TableView::new(TableFilter {
+        preset: Some(FilterPreset::HideInactive),
+        ..Default::default()
+    });
+    let mut rows = items();
+    rows.push(row("pod-done", "g=a", StatusTone::Done));
+    view.rebuild(&rows, 2, now());
+    // The test rows are inactive when their tone is Done.
+    assert_eq!(view.rows(), [0, 1, 2, 3]);
+    assert_eq!(view.total(), 5);
 }

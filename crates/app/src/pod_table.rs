@@ -10,21 +10,22 @@ use gpui_kit::{
 };
 
 use crate::age::format_age;
-use crate::app_shell::AppShell;
+use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::ClusterSession;
 use crate::filter_bar::filtered_empty_state;
 use crate::log_dock::LogDock;
 use crate::resource_actions::pod_menu;
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::status_tone::{StatusTone, pod_status_label, toned_text};
+use crate::table_filter::FilterPreset;
 use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
-use crate::table_view::{CellValue, FilteredTable, TableRow, TableView};
+use crate::table_view::{CellValue, FilteredTable, TableRow, TableView, default_filter};
 
 const NAME: usize = 0;
 const STATUS: usize = 1;
 const READY: usize = 2;
 const RESTARTS: usize = 3;
-const NODE: usize = 4;
+pub(crate) const NODE: usize = 4;
 const AGE: usize = 5;
 
 const NAME_MIN_WIDTH: Pixels = px(160.);
@@ -60,7 +61,7 @@ impl PodTableDelegate {
                 flexible: NAME,
                 flexible_min: NAME_MIN_WIDTH,
             }),
-            view: TableView::default(),
+            view: TableView::new(default_filter(Screen::Pods)),
         }
     }
 
@@ -135,6 +136,10 @@ impl TableRow for PodSummary {
             AGE => CellValue::Age(self.created_at),
             _ => CellValue::Absent,
         }
+    }
+
+    fn in_preset(&self, _: &FilterPreset) -> bool {
+        true
     }
 }
 

@@ -17,7 +17,7 @@ use gpui_kit::{
 use crate::FocusQuickFilter;
 #[cfg(feature = "screenshot")]
 use crate::cluster_session::SessionPhase;
-use crate::cluster_session::{ClusterSession, LiveCluster, error_text};
+use crate::cluster_session::{ClusterSession, FlowState, LiveCluster, error_text};
 use crate::drawer::{ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab};
 use crate::filter_bar::ToolkitState;
 use crate::kind_table::KindTableDelegate;
@@ -35,7 +35,9 @@ use crate::resource_kind::ResourceKind;
 use crate::screenshot::{SettleInput, TargetState, is_drawer_ready};
 use crate::screenshot::{pick_drawer_pod, pick_logs_pod};
 use crate::status_bar::status_bar;
-use crate::table_filter::{FilterChip, parse_label_queries, quick_filter_text};
+use crate::table_filter::{
+    FilterChip, FilterPreset, TableFilter, parse_label_queries, quick_filter_text,
+};
 use crate::table_selection::{ResourceKey, SelectionSync, list_row_index, selection_sync};
 use crate::table_sort::next_sort;
 use crate::table_view::{FilteredTable, TableView};
@@ -48,6 +50,9 @@ mod workspace;
 #[cfg(test)]
 #[path = "app_shell_tests.rs"]
 mod app_shell_tests;
+
+/// The logical column of the Events table that holds the reason.
+const EVENT_REASON_COLUMN: usize = 1;
 
 const IGNORED_KUBECONFIG_NOTE: &str =
     "Only the first KUBECONFIG entry is used; merging kubeconfigs is not supported";
@@ -954,6 +959,44 @@ impl AppShell {
         });
     }
 
+    /// Sets or clears the screen's own switch: a Nodes summary chip or Hide inactive.
+    pub(crate) fn set_preset(&mut self, preset: Option<FilterPreset>, cx: &mut Context<Self>) {
+        self.update_view(cx, move |view| view.filter.preset = preset);
+    }
+
+    /// "View pods on node": the Pods screen with only that node's pods. The other Pods filters
+    /// go, so every pod on the node shows.
+    pub(crate) fn view_pods_on_node(&mut self, node: &str, cx: &mut Context<Self>) {
+        self.show_screen(Screen::Pods, cx);
+        let filter = TableFilter::on_node(node);
+        self.update_view(cx, move |view| view.filter = filter);
+        // The input shows the filter text of its screen, which is empty now.
+        self.quick_filter_screen = None;
+    }
+
+    /// "Filter similar": the Events list keeps the events with this reason.
+    pub(crate) fn filter_similar(&mut self, reason: &str, cx: &mut Context<Self>) {
+        let reason = reason.to_owned();
+        self.update_view(cx, move |view| {
+            view.filter
+                .set_equals(EVENT_REASON_COLUMN, "Reason", &reason)
+        });
+    }
+
+    /// Holds the Events list still, or shows the events that arrived meanwhile.
+    pub(crate) fn toggle_explorer_paused(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        session.update(cx, |session, cx| {
+            let is_paused = matches!(
+                session.live().and_then(LiveCluster::explorer_flow),
+                Some(FlowState::Paused { .. })
+            );
+            session.set_explorer_paused(!is_paused, cx);
+        });
+    }
+
     /// Removes the text and the chips of the visible table, and empties the input.
     pub(crate) fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.update_view(cx, TableView::clear_filter);
@@ -988,16 +1031,16 @@ impl AppShell {
     fn clear_all_filters(&mut self, cx: &mut Context<Self>) {
         self.pod_table.update(cx, |table, _| {
             if let Some(view) = table.delegate_mut().view_mut() {
-                view.clear_filter();
+                view.reset_filter();
             }
         });
         self.node_table.update(cx, |table, _| {
             if let Some(view) = table.delegate_mut().view_mut() {
-                view.clear_filter();
+                view.reset_filter();
             }
         });
         self.kind_table
-            .update(cx, |table, _| table.delegate_mut().clear_filters());
+            .update(cx, |table, _| table.delegate_mut().reset_filters());
         self.quick_filter_screen = None;
         self.rebuild_visible_view(cx, |_| {});
     }
@@ -1049,7 +1092,11 @@ impl AppShell {
     pub(crate) fn toolkit_state(&self, cx: &App) -> Option<ToolkitState> {
         match self.screen {
             Screen::Pods => ToolkitState::of(self.pod_table.read(cx).delegate(), self.screen),
-            Screen::Nodes => ToolkitState::of(self.node_table.read(cx).delegate(), self.screen),
+            Screen::Nodes => {
+                let mut state = ToolkitState::of(self.node_table.read(cx).delegate(), self.screen)?;
+                state.node_counts = self.node_table.read(cx).delegate().counts().cloned();
+                Some(state)
+            }
             Screen::Kind(_) => ToolkitState::of(self.kind_table.read(cx).delegate(), self.screen),
         }
     }

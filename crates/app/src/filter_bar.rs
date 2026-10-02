@@ -7,15 +7,17 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, IntoElement, ParentElement as _, Styled as _, WeakEntity,
     div, px,
 };
 
 use crate::app_shell::{AppShell, Screen};
+use crate::node_summary::{NodeCounts, NodeGroup};
 use crate::resource_kind::ResourceKind;
-use crate::table_filter::FilterChip;
+use crate::status_tone::{StatusTone, tone_color};
+use crate::table_filter::{FilterChip, FilterPreset};
 use crate::table_view::{FilteredTable, TableView};
 
 const QUICK_FILTER_WIDTH: gpui_kit::Pixels = px(220.);
@@ -32,6 +34,9 @@ pub(crate) struct ToolkitState {
     pub(crate) shown: usize,
     pub(crate) total: usize,
     pub(crate) is_filtering: bool,
+    pub(crate) preset: Option<FilterPreset>,
+    /// Counts of all nodes, for the summary chips; Nodes only.
+    pub(crate) node_counts: Option<NodeCounts>,
 }
 
 impl ToolkitState {
@@ -54,6 +59,8 @@ impl ToolkitState {
             shown: view.rows().len(),
             total: view.total(),
             is_filtering: view.is_filtering(),
+            preset: view.filter.preset.clone(),
+            node_counts: None,
         })
     }
 }
@@ -63,6 +70,7 @@ fn chip_text(chip: &FilterChip, screen: Screen) -> String {
     match chip {
         FilterChip::Unhealthy if screen == Screen::Pods => "Status: not Running".to_owned(),
         FilterChip::Unhealthy => "Status: unhealthy".to_owned(),
+        FilterChip::Equals { title, value, .. } => format!("{title}: {value}"),
         FilterChip::Label(query) => query.text(),
     }
 }
@@ -90,6 +98,7 @@ pub(crate) fn filter_bar(
         .py_1()
         .border_b_1()
         .border_color(cx.theme().border)
+        .children(node_summary_chips(state, cx))
         .children(chips)
         .children(add_filter_button(state, cx))
         .child(
@@ -105,6 +114,84 @@ pub(crate) fn filter_bar(
                 .child(columns_button(state, cx)),
         )
         .into_any_element()
+}
+
+/// The Nodes summary: `All`, then one chip per group that has nodes. A click picks the group
+/// as the preset, and a click on the picked one clears it. Counts read every node, so the text
+/// filter never changes them.
+fn node_summary_chips(state: &ToolkitState, cx: &Context<AppShell>) -> Vec<AnyElement> {
+    let Some(counts) = &state.node_counts else {
+        return Vec::new();
+    };
+    // (group, text, tone); `None` is All.
+    let mut chips: Vec<(Option<NodeGroup>, String, Option<StatusTone>)> =
+        vec![(None, format!("All {}", counts.total), None)];
+    for (group, name, count, tone) in [
+        (NodeGroup::Ready, "Ready", counts.ready, StatusTone::Ok),
+        (
+            NodeGroup::NotReady,
+            "NotReady",
+            counts.not_ready,
+            StatusTone::Bad,
+        ),
+        (
+            NodeGroup::Cordoned,
+            "Cordoned",
+            counts.cordoned,
+            StatusTone::Warn,
+        ),
+    ] {
+        if count > 0 {
+            chips.push((Some(group), format!("{name} {count}"), Some(tone)));
+        }
+    }
+    for (version, count) in &counts.versions {
+        // Any version but the common one is skew.
+        let is_skewed = counts.common_version.as_ref() != Some(version);
+        chips.push((
+            Some(NodeGroup::Version(version.clone())),
+            format!("{version} × {count}"),
+            is_skewed.then_some(StatusTone::Warn),
+        ));
+    }
+    chips
+        .into_iter()
+        .map(|(group, text, tone)| {
+            let id = group_id(group.as_ref());
+            let target = group.map(FilterPreset::Nodes);
+            let is_selected = state.preset == target;
+            // Picking the active chip, or All, clears the preset.
+            let next = if is_selected { None } else { target };
+            // The picked chip is a filled pill; its text keeps the button's own colour.
+            let label = div().child(text);
+            let label = match tone {
+                Some(tone) if !is_selected => label.text_color(tone_color(tone, cx)),
+                _ => label,
+            };
+            let button = Button::new(id).small();
+            let button = if is_selected {
+                button.primary()
+            } else {
+                button.ghost()
+            };
+            button
+                .selected(is_selected)
+                .child(label)
+                .on_click(cx.listener(move |shell, _, _, cx| shell.set_preset(next.clone(), cx)))
+                .into_any_element()
+        })
+        .collect()
+}
+
+/// A stable element id for a chip: its group, never its position.
+fn group_id(group: Option<&NodeGroup>) -> gpui_kit::SharedString {
+    match group {
+        None => "node-group-all".into(),
+        Some(NodeGroup::Ready) => "node-group-ready".into(),
+        Some(NodeGroup::NotReady) => "node-group-not-ready".into(),
+        Some(NodeGroup::Cordoned) => "node-group-cordoned".into(),
+        Some(NodeGroup::Version(version)) => format!("node-group-version-{version}").into(),
+    }
 }
 
 /// `+ Filter`: the status toggle (Pods and the kinds) and `Label…`. Events have none: Warnings

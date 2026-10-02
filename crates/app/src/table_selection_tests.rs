@@ -2,6 +2,7 @@ use cluster::{NodeReadiness, NodeScheduling, NodeStatus, PodStatus, ReadyCount, 
 
 use super::*;
 use crate::status_tone::{StatusLabel, StatusTone};
+use crate::table_filter::FilterPreset;
 use crate::table_sort::{SortDirection, TableSort};
 use crate::table_view::{CellValue, TableRow};
 
@@ -65,6 +66,10 @@ impl TableRow for KindRow {
 
     fn value(&self, _: usize) -> CellValue<'_> {
         CellValue::Absent
+    }
+
+    fn in_preset(&self, _: &FilterPreset) -> bool {
+        true
     }
 }
 

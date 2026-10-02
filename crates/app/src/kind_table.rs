@@ -15,7 +15,7 @@ use gpui_kit::{
 };
 
 use crate::age::format_age;
-use crate::app_shell::AppShell;
+use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
@@ -23,8 +23,9 @@ use crate::kind_row::{KindCell, KindRow};
 use crate::resource_actions::kind_menu;
 use crate::resource_kind::{Align, NAME_COLUMN, NameColumn, ResourceKind, kind_columns};
 use crate::status_tone::{StatusTone, tone_color, toned_text};
+use crate::table_filter::FilterPreset;
 use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
-use crate::table_view::{CellValue, FilteredTable, TableRow, TableView};
+use crate::table_view::{CellValue, FilteredTable, TableRow, TableView, default_filter};
 
 /// The logical column of the Name column, for the kinds that show it.
 const NAME: usize = 0;
@@ -40,6 +41,11 @@ pub(crate) struct KindTableDelegate {
     views: HashMap<ResourceKind, TableView>,
     /// The row menu's "Go to object" reveals a row through the shell.
     shell: WeakEntity<AppShell>,
+}
+
+/// A kind's view starts with the filter its screen starts with.
+fn new_view(kind: ResourceKind) -> TableView {
+    TableView::new(default_filter(Screen::Kind(kind)))
 }
 
 /// The logical columns of `kind`, and which one takes the rest of the table.
@@ -79,7 +85,7 @@ impl KindTableDelegate {
     pub(crate) fn new(kind: Option<ResourceKind>, shell: WeakEntity<AppShell>) -> Self {
         let views = kind
             .into_iter()
-            .map(|kind| (kind, TableView::default()))
+            .map(|kind| (kind, new_view(kind)))
             .collect();
         Self {
             session: None,
@@ -102,16 +108,16 @@ impl KindTableDelegate {
         }
         self.kind = kind;
         if let Some(kind) = kind {
-            self.views.entry(kind).or_default();
+            self.views.entry(kind).or_insert_with(|| new_view(kind));
         }
         self.layout.replace_plan(kind_plan(kind), &self.hidden());
         true
     }
 
-    /// Removes the text and the chips of every kind (a context switch).
-    pub(crate) fn clear_filters(&mut self) {
+    /// Restores the default filter of every kind (a context switch).
+    pub(crate) fn reset_filters(&mut self) {
         for view in self.views.values_mut() {
-            view.clear_filter();
+            view.reset_filter();
         }
     }
 
@@ -210,6 +216,14 @@ impl TableRow for KindTableRow<'_> {
             Some(KindCell::Absent) | None => CellValue::Absent,
         }
     }
+
+    fn in_preset(&self, preset: &FilterPreset) -> bool {
+        match preset {
+            // A scaled-to-zero set is `Done`.
+            FilterPreset::HideInactive => self.row.status.tone != StatusTone::Done,
+            FilterPreset::Nodes(_) => true,
+        }
+    }
 }
 
 impl FilteredTable for KindTableDelegate {
@@ -235,7 +249,7 @@ impl FilteredTable for KindTableDelegate {
             .iter()
             .map(|row| KindTableRow { row, name_column })
             .collect();
-        let view = self.views.entry(kind).or_default();
+        let view = self.views.entry(kind).or_insert_with(|| new_view(kind));
         view.rebuild(&rows, self.layout.plan.specs.len(), jiff::Timestamp::now());
         self.layout.relayout(&view.hidden)
     }
@@ -564,7 +578,7 @@ mod tests {
             delegate.view().map(|view| view.filter.text.as_str()),
             Some("api")
         );
-        delegate.clear_filters();
+        delegate.reset_filters();
         assert!(delegate.view().is_some_and(|view| !view.is_filtering()));
     }
 
@@ -641,6 +655,37 @@ mod tests {
         assert!(matches!(row.value(6), CellValue::Age(Some(_))));
         assert!(matches!(row.value(7), CellValue::Span { .. }));
         assert!(matches!(row.value(8), CellValue::Absent));
+    }
+
+    #[test]
+    fn hide_inactive_drops_done_rows() {
+        let at = |tone| {
+            let mut row = row(vec![KindCell::Text("0".into())]);
+            row.status.tone = tone;
+            row
+        };
+        let in_preset = |row: &KindRow, preset: &FilterPreset| {
+            KindTableRow {
+                row,
+                name_column: NameColumn::Flexible,
+            }
+            .in_preset(preset)
+        };
+        for (tone, kept) in [
+            (StatusTone::Ok, true),
+            (StatusTone::Warn, true),
+            (StatusTone::Bad, true),
+            (StatusTone::Done, false),
+        ] {
+            assert_eq!(
+                in_preset(&at(tone), &FilterPreset::HideInactive),
+                kept,
+                "{tone:?}"
+            );
+        }
+        // A kind has no use for a Nodes group.
+        let group = FilterPreset::Nodes(crate::node_summary::NodeGroup::Ready);
+        assert!(in_preset(&at(StatusTone::Done), &group));
     }
 
     #[test]

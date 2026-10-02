@@ -62,10 +62,52 @@ pub(crate) struct LiveCluster {
     subscriptions: Subscriptions,
 }
 
+/// Whether new snapshots reach a list. A paused list keeps its rows; only the newest snapshot
+/// that arrived meanwhile is held.
+pub(crate) enum StreamFlow<T> {
+    Live,
+    Paused { held: Option<Vec<T>> },
+}
+
+impl<T> StreamFlow<T> {
+    /// A failure still reaches a paused list, so an interruption shows.
+    fn receive(&mut self, list: &mut LiveList<T>, update: WatchUpdate<T>) {
+        match (self, update) {
+            (Self::Paused { held }, WatchUpdate::Snapshot(items)) => *held = Some(items),
+            (_, update) => list.apply(update),
+        }
+    }
+
+    /// Holds `list` still from now on. Returns whether it started: only a loaded list can be held,
+    /// and a paused one already is.
+    fn pause(&mut self, list: &LiveList<T>) -> bool {
+        if list.ready_items().is_none() || matches!(self, Self::Paused { .. }) {
+            return false;
+        }
+        *self = Self::Paused { held: None };
+        true
+    }
+
+    /// Shows the held snapshot, if one arrived, and goes live.
+    fn resume(&mut self, list: &mut LiveList<T>) {
+        if let Self::Paused { held: Some(items) } = std::mem::replace(self, Self::Live) {
+            list.apply(WatchUpdate::Snapshot(items));
+        }
+    }
+}
+
+/// What the header of a pausable screen shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FlowState {
+    Live,
+    Paused { has_held: bool },
+}
+
 /// The visible explorer kind's list. Dropping it stops the watch.
 pub(crate) struct KindList {
     pub(crate) kind: ResourceKind,
     pub(crate) list: LiveList<KindRow>,
+    flow: StreamFlow<KindRow>,
     _subscription: WatchSubscription,
 }
 
@@ -451,6 +493,22 @@ impl ClusterSession {
         cx.notify();
     }
 
+    /// Holds the explorer list still, or shows what arrived meanwhile. Only a loaded list can be
+    /// paused. Every restart of the list (scope, kind, Warnings only) starts it live again.
+    pub(crate) fn set_explorer_paused(&mut self, is_paused: bool, cx: &mut Context<Self>) {
+        let Some(explorer) = self.live_mut().and_then(|live| live.explorer.as_mut()) else {
+            return;
+        };
+        if is_paused {
+            if !explorer.flow.pause(&explorer.list) {
+                return;
+            }
+        } else {
+            explorer.flow.resume(&mut explorer.list);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn event_filter(&self) -> EventFilter {
         self.event_filter
     }
@@ -586,6 +644,16 @@ impl LiveCluster {
         )
     }
 
+    /// Whether the explorer list is paused; `None` without an explorer.
+    pub(crate) fn explorer_flow(&self) -> Option<FlowState> {
+        Some(match &self.explorer.as_ref()?.flow {
+            StreamFlow::Live => FlowState::Live,
+            StreamFlow::Paused { held } => FlowState::Paused {
+                has_held: held.is_some(),
+            },
+        })
+    }
+
     /// The explorer list of `kind`, or `None` while another kind (or no kind) is shown.
     pub(crate) fn kind_list(&self, kind: ResourceKind) -> Option<&KindList> {
         self.explorer
@@ -689,6 +757,7 @@ impl KindList {
         Self {
             kind,
             list: LiveList::Loading,
+            flow: StreamFlow::Live,
             _subscription: subscribe_explorer(runtime, connection, kind, scope, events, cx),
         }
     }
@@ -708,7 +777,7 @@ fn subscribe_explorer(
         cx,
         move |session: &mut ClusterSession, update, _| {
             if let Some(explorer) = session.explorer_mut(kind) {
-                explorer.list.apply(update);
+                explorer.flow.receive(&mut explorer.list, update);
             }
         },
         move |session, _| {

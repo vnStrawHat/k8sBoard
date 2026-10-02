@@ -9,8 +9,10 @@ use gpui_kit::App;
 use gpui_kit::SharedString;
 use gpui_kit::component::table::TableDelegate;
 
+use crate::app_shell::Screen;
+use crate::resource_kind::ResourceKind;
 use crate::status_tone::StatusTone;
-use crate::table_filter::{FilterChip, TableFilter, matches};
+use crate::table_filter::{FilterChip, FilterPreset, TableFilter, matches};
 use crate::table_layout::ColumnPlan;
 use crate::table_sort::{TableSort, compare_values};
 
@@ -23,6 +25,9 @@ pub(crate) trait TableRow {
     fn labels(&self) -> impl Iterator<Item = &str>;
     fn tone(&self) -> StatusTone;
     fn value(&self, column: usize) -> CellValue<'_>;
+    /// Whether the row passes the screen's own switch. A switch the screen does not have
+    /// keeps every row.
+    fn in_preset(&self, preset: &FilterPreset) -> bool;
 }
 
 /// One cell as the filter and the sort read it.
@@ -68,12 +73,34 @@ pub(crate) struct TableView {
     pub(crate) sort: Option<TableSort>,
     /// Logical columns.
     pub(crate) hidden: BTreeSet<usize>,
+    /// What a context switch restores, and what Clear filters does not.
+    default_filter: TableFilter,
     /// Item indices in display order.
     rows: Vec<usize>,
     total: usize,
 }
 
+/// The filter a screen starts with: ReplicaSets hide the inactive ones (decision 26).
+pub(crate) fn default_filter(screen: Screen) -> TableFilter {
+    match screen {
+        Screen::Kind(ResourceKind::ReplicaSets) => TableFilter {
+            preset: Some(FilterPreset::HideInactive),
+            ..TableFilter::default()
+        },
+        Screen::Pods | Screen::Nodes | Screen::Kind(_) => TableFilter::default(),
+    }
+}
+
 impl TableView {
+    /// A view whose filter starts at `default_filter`.
+    pub(crate) fn new(default_filter: TableFilter) -> Self {
+        Self {
+            filter: default_filter.clone(),
+            default_filter,
+            ..Self::default()
+        }
+    }
+
     /// Keeps the items that pass the filter, then orders them. A sort computes each kept row's
     /// key once and is stable, so ties keep the source order.
     pub(crate) fn rebuild<T: TableRow>(
@@ -129,9 +156,14 @@ impl TableView {
         self.filter.is_active()
     }
 
-    /// Removes the text and the chips; the sort and the hidden columns stay.
+    /// Removes the text, the chips, and the preset; the sort and the hidden columns stay.
     pub(crate) fn clear_filter(&mut self) {
         self.filter = TableFilter::default();
+    }
+
+    /// Back to the default filter (a context switch).
+    pub(crate) fn reset_filter(&mut self) {
+        self.filter = self.default_filter.clone();
     }
 
     /// Adds the chips that are not already present.

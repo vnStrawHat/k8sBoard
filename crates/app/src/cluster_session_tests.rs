@@ -169,3 +169,88 @@ fn namespaces_label_lists_two_then_counts_the_rest() {
     assert_eq!(namespaces_label(&names(2)), "a, b");
     assert_eq!(namespaces_label(&names(5)), "a, b +3");
 }
+
+fn ready(items: Vec<u32>) -> LiveList<u32> {
+    LiveList::Ready {
+        items,
+        interruption: None,
+    }
+}
+
+fn paused() -> StreamFlow<u32> {
+    StreamFlow::Paused { held: None }
+}
+
+#[test]
+fn live_flow_applies_every_update() {
+    let mut list = ready(vec![1]);
+    StreamFlow::Live.receive(&mut list, WatchUpdate::Snapshot(vec![2]));
+    assert_eq!(ready_items(&list), Some((&[2][..], None)));
+}
+
+#[test]
+fn paused_flow_holds_newest_snapshot() {
+    let mut list = ready(vec![1]);
+    let mut flow = paused();
+    flow.receive(&mut list, WatchUpdate::Snapshot(vec![2]));
+    flow.receive(&mut list, WatchUpdate::Snapshot(vec![3]));
+    // The rows stand still; only the newest snapshot is kept.
+    assert_eq!(ready_items(&list), Some((&[1][..], None)));
+    assert!(matches!(&flow, StreamFlow::Paused { held: Some(held) } if *held == [3]));
+}
+
+#[test]
+fn paused_flow_applies_failures() {
+    let mut list = ready(vec![1]);
+    let mut flow = paused();
+    flow.receive(&mut list, failure());
+    let (items, interruption) = ready_items(&list).expect("a ready list");
+    assert_eq!(items, [1]);
+    assert!(interruption.is_some());
+    assert!(matches!(flow, StreamFlow::Paused { held: None }));
+}
+
+#[test]
+fn resume_applies_held_snapshot() {
+    let mut list = ready(vec![1]);
+    let mut flow = paused();
+    flow.receive(&mut list, WatchUpdate::Snapshot(vec![2]));
+    flow.resume(&mut list);
+    assert_eq!(ready_items(&list), Some((&[2][..], None)));
+    assert!(matches!(flow, StreamFlow::Live));
+}
+
+#[test]
+fn resume_without_a_held_snapshot_keeps_the_rows() {
+    let mut list = ready(vec![1]);
+    let mut flow = paused();
+    flow.resume(&mut list);
+    assert_eq!(ready_items(&list), Some((&[1][..], None)));
+    assert!(matches!(flow, StreamFlow::Live));
+}
+
+#[test]
+fn pause_is_a_no_op_unless_the_list_is_ready() {
+    for list in [
+        LiveList::<u32>::Loading,
+        LiveList::Failed {
+            message: "denied".to_owned(),
+        },
+    ] {
+        let mut flow = StreamFlow::Live;
+        assert!(!flow.pause(&list));
+        assert!(matches!(flow, StreamFlow::Live));
+    }
+    let mut flow = StreamFlow::Live;
+    assert!(flow.pause(&ready(vec![1])));
+    assert!(matches!(flow, StreamFlow::Paused { held: None }));
+}
+
+#[test]
+fn pausing_a_paused_list_keeps_its_held_snapshot() {
+    let mut list = ready(vec![1]);
+    let mut flow = paused();
+    flow.receive(&mut list, WatchUpdate::Snapshot(vec![2]));
+    assert!(!flow.pause(&list));
+    assert!(matches!(&flow, StreamFlow::Paused { held: Some(held) } if *held == [2]));
+}

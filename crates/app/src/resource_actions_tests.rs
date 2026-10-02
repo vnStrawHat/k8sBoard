@@ -172,3 +172,57 @@ fn kubectl_command_quotes_only_unsafe_parts() {
         "kubectl --context 'my ctx' -n shop describe pod 'it'\\''s'"
     );
 }
+
+fn pod_on(node: Option<&str>) -> PodSummary {
+    PodSummary {
+        namespace: "ns".to_owned(),
+        name: "pod".to_owned(),
+        status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
+        ready: cluster::ReadyCount { ready: 1, total: 1 },
+        restarts: 0,
+        node_name: node.map(str::to_owned),
+        created_at: None,
+        pod_ip: None,
+        qos_class: None,
+        service_account: None,
+        controller: None,
+        conditions: Vec::new(),
+        containers: Vec::new(),
+        status_message: None,
+        labels: Vec::new(),
+    }
+}
+
+#[test]
+fn view_pods_on_node_counts_pods_on_that_node() {
+    let pods = [
+        pod_on(Some("wk-01")),
+        pod_on(Some("wk-02")),
+        pod_on(Some("wk-01")),
+        pod_on(None),
+    ];
+    assert_eq!(pods_on_node(&pods, "wk-01"), 2);
+    assert_eq!(pods_on_node(&pods, "wk-02"), 1);
+    // An empty node still has the item, with a zero.
+    assert_eq!(pods_on_node(&pods, "wk-09"), 0);
+}
+
+fn event_with_reason(reason: Option<&str>) -> EventDetail {
+    EventDetail {
+        title: "t".into(),
+        reason: reason.map(SharedString::from),
+        object: None,
+        source: None,
+        message: "m".into(),
+    }
+}
+
+#[test]
+fn filter_similar_disabled_without_reason() {
+    assert_eq!(similar_reason(&event_with_reason(None)), None);
+    assert_eq!(similar_reason(&event_with_reason(Some(""))), None);
+    assert_eq!(
+        similar_reason(&event_with_reason(Some("BackOff"))).map(SharedString::as_ref),
+        Some("BackOff")
+    );
+}

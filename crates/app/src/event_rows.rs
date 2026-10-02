@@ -100,6 +100,7 @@ fn event_row(event: &EventSummary) -> KindRow {
         ],
         event: Some(EventDetail {
             title: title.into(),
+            reason: reason.map(SharedString::from),
             object: object_key,
             source,
             message,

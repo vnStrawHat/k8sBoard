@@ -8,7 +8,8 @@ use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::table::DataTable;
 use gpui_kit::component::{
-    ActiveTheme as _, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _, h_flex,
+    v_flex,
 };
 use gpui_kit::{
     AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Window, div,
@@ -18,16 +19,19 @@ use gpui_kit::{
 use cluster::{EVENT_LIMIT, EventFilter};
 
 use super::{AppShell, KubeconfigState, Screen};
-use crate::cluster_session::{LiveCluster, SessionPhase};
+use crate::cluster_session::{FlowState, LiveCluster, SessionPhase};
 use crate::drawer::ClickHandler;
 use crate::filter_bar::filter_bar;
 use crate::kind_drawer::kind_drawer;
 use crate::log_dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
 use crate::navigation::SIDEBAR_WIDTH;
 use crate::node_drawer::node_drawer;
+use crate::node_summary::role_counts;
 use crate::pod_drawer::pod_drawer;
 use crate::resource_kind::ResourceKind;
+use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
+use crate::table_view::FilteredTable as _;
 
 impl AppShell {
     /// The tables have fixed pixel columns, so one column is resized to fill the workspace
@@ -120,9 +124,8 @@ impl AppShell {
             Screen::Nodes => (
                 "Nodes",
                 live.and_then(|live| {
-                    live.nodes
-                        .ready_count()
-                        .map(|count| count_label(count, "node", "nodes"))
+                    let count = live.nodes.ready_count()?;
+                    Some(nodes_count_text(count, &role_counts(live.nodes.items())))
                 }),
             ),
             Screen::Kind(kind) => (
@@ -151,6 +154,14 @@ impl AppShell {
             }
             (_, count) => count,
         };
+        let count = count.map(|count| match live.and_then(LiveCluster::explorer_flow) {
+            Some(FlowState::Paused { has_held })
+                if self.screen == Screen::Kind(ResourceKind::Events) =>
+            {
+                paused_text(&count, has_held)
+            }
+            _ => count,
+        });
         h_flex()
             .flex_shrink_0()
             .gap_3()
@@ -166,7 +177,7 @@ impl AppShell {
                     .text_color(cx.theme().muted_foreground)
                     .child(count)
             }))
-            .children(self.render_warnings_only(cx))
+            .children(self.render_header_actions(cx))
     }
 
     /// The filter bar under the header, once the session is live.
@@ -176,28 +187,83 @@ impl AppShell {
         Some(filter_bar(&state, &self.quick_filter, cx))
     }
 
-    /// The Events screen's server-side filter toggle, right-aligned in the header.
+    /// The per-screen toggles, right-aligned in the header: Hide inactive on ReplicaSets, and
+    /// Warnings only with Pause stream on Events.
+    fn render_header_actions(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let buttons: Vec<AnyElement> = match self.screen {
+            Screen::Kind(ResourceKind::ReplicaSets) => {
+                self.render_hide_inactive(cx).into_iter().collect()
+            }
+            Screen::Kind(ResourceKind::Events) => {
+                [self.render_warnings_only(cx), self.render_pause_stream(cx)]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+            }
+            _ => return None,
+        };
+        Some(
+            h_flex()
+                .ml_auto()
+                .gap_2()
+                .children(buttons)
+                .into_any_element(),
+        )
+    }
+
+    /// ReplicaSets scaled to zero are hidden while it is on, which is the default.
+    fn render_hide_inactive(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let preset = self
+            .kind_table
+            .read(cx)
+            .delegate()
+            .view()?
+            .filter
+            .preset
+            .clone();
+        let is_on = preset == Some(FilterPreset::HideInactive);
+        let next = if is_on {
+            None
+        } else {
+            Some(FilterPreset::HideInactive)
+        };
+        Some(
+            toggle_button("hide-inactive", "Hide inactive", is_on)
+                .tooltip("Hide ReplicaSets scaled to zero")
+                .on_click(cx.listener(move |shell, _, _, cx| shell.set_preset(next.clone(), cx)))
+                .into_any_element(),
+        )
+    }
+
+    /// Holds the Events list still so rows stop moving; Resume shows what arrived meanwhile.
+    fn render_pause_stream(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let live = self.live(cx)?;
+        let flow = live.explorer_flow()?;
+        let is_paused = matches!(flow, FlowState::Paused { .. });
+        let label = if is_paused { "Resume" } else { "Pause stream" };
+        let button = toggle_button("pause-stream", label, is_paused);
+        // Only a loaded list can be held.
+        let can_pause = live
+            .kind_list(ResourceKind::Events)
+            .is_some_and(|explorer| explorer.list.ready_count().is_some());
+        let button = if can_pause {
+            button
+                .tooltip("Hold the list still; new events wait")
+                .on_click(cx.listener(|shell, _, _, cx| shell.toggle_explorer_paused(cx)))
+        } else {
+            button.disabled(true).tooltip("Nothing to pause yet")
+        };
+        Some(button.into_any_element())
+    }
+
+    /// The Events screen's server-side filter toggle.
     fn render_warnings_only(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        if self.screen != Screen::Kind(ResourceKind::Events) {
-            return None;
-        }
         let session = self.session.as_ref()?;
         let is_on = session.read(cx).event_filter() == EventFilter::WarningsOnly;
-        let button = Button::new("warnings-only")
-            .label("Warnings only")
-            .small()
-            .map(|button| {
-                if is_on {
-                    button.primary()
-                } else {
-                    button.outline()
-                }
-            })
-            .selected(is_on)
-            .toggled(is_on)
+        let button = toggle_button("warnings-only", "Warnings only", is_on)
             .tooltip("Show only Warning events")
             .on_click(cx.listener(|shell, _, _, cx| shell.toggle_warnings_only(cx)));
-        Some(div().ml_auto().child(button).into_any_element())
+        Some(button.into_any_element())
     }
 
     fn render_interruption_banner(&self, cx: &Context<Self>) -> Option<AnyElement> {
@@ -326,6 +392,40 @@ impl AppShell {
 /// `38 of 1,284 match`.
 fn match_count_label(shown: usize, total: usize) -> String {
     format!("{} of {} match", group_digits(shown), group_digits(total))
+}
+
+/// `4 nodes`, then up to three roles with their counts, such as `4 nodes · 1 control-plane`.
+fn nodes_count_text(count: usize, roles: &[(String, usize)]) -> String {
+    let mut text = count_label(count, "node", "nodes");
+    for (role, number) in roles.iter().take(3) {
+        text.push_str(&format!(" · {number} {role}"));
+    }
+    text
+}
+
+/// The count text of a paused list, with a note when new rows are waiting.
+fn paused_text(count: &str, has_held: bool) -> String {
+    if has_held {
+        format!("{count} · paused · new events waiting")
+    } else {
+        format!("{count} · paused")
+    }
+}
+
+/// A header toggle: primary when on, outline when off, like Warnings only.
+fn toggle_button(id: &'static str, label: &'static str, is_on: bool) -> Button {
+    Button::new(id)
+        .label(label)
+        .small()
+        .map(|button| {
+            if is_on {
+                button.primary()
+            } else {
+                button.outline()
+            }
+        })
+        .selected(is_on)
+        .toggled(is_on)
 }
 
 fn count_label(count: usize, singular: &str, plural: &str) -> String {

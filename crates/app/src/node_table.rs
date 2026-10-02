@@ -10,15 +10,17 @@ use gpui_kit::{
 };
 
 use crate::age::format_age;
-use crate::app_shell::AppShell;
+use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::ClusterSession;
 use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
+use crate::node_summary::{NodeCounts, node_counts, node_in_group};
 use crate::resource_actions::node_menu;
 use crate::resource_kind::{Align, KindColumn, column};
-use crate::status_tone::{StatusTone, node_status_label, toned_text};
+use crate::status_tone::{StatusTone, node_status_label, tone_color, toned_text};
+use crate::table_filter::FilterPreset;
 use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
-use crate::table_view::{CellValue, FilteredTable, TableRow, TableView};
+use crate::table_view::{CellValue, FilteredTable, TableRow, TableView, default_filter};
 
 const NAME: usize = 0;
 const STATUS: usize = 1;
@@ -50,6 +52,9 @@ pub(crate) struct NodeTableDelegate {
     shell: WeakEntity<AppShell>,
     layout: TableLayout,
     view: TableView,
+    /// Counts of all nodes, taken once per rebuild: the summary chips and the version skew read
+    /// them.
+    counts: Option<NodeCounts>,
 }
 
 impl NodeTableDelegate {
@@ -62,7 +67,8 @@ impl NodeTableDelegate {
                 flexible: TAINTS,
                 flexible_min: TAINTS_MIN_WIDTH,
             }),
-            view: TableView::default(),
+            view: TableView::new(default_filter(Screen::Nodes)),
+            counts: None,
         }
     }
 
@@ -70,6 +76,11 @@ impl NodeTableDelegate {
     /// changed, so the caller refreshes the table only then.
     pub(crate) fn fit_width(&mut self, table_width: Pixels) -> bool {
         self.layout.fit_width(table_width, &self.view.hidden)
+    }
+
+    /// The counts of the last rebuild; `None` before the first.
+    pub(crate) fn counts(&self) -> Option<&NodeCounts> {
+        self.counts.as_ref()
     }
 
     pub(crate) fn set_session(&mut self, session: Option<Entity<ClusterSession>>) {
@@ -133,6 +144,13 @@ impl TableRow for NodeSummary {
             _ => CellValue::Absent,
         }
     }
+
+    fn in_preset(&self, preset: &FilterPreset) -> bool {
+        match preset {
+            FilterPreset::Nodes(group) => node_in_group(self, group),
+            FilterPreset::HideInactive => true,
+        }
+    }
 }
 
 impl FilteredTable for NodeTableDelegate {
@@ -150,6 +168,7 @@ impl FilteredTable for NodeTableDelegate {
 
     fn rebuild_view(&mut self, cx: &App) -> bool {
         let nodes = self.nodes(cx);
+        self.counts = Some(node_counts(nodes));
         self.view
             .rebuild(nodes, NODE_COLUMNS.len(), jiff::Timestamp::now());
         self.layout.relayout(&self.view.hidden)
@@ -202,10 +221,19 @@ impl TableDelegate for NodeTableDelegate {
             STATUS => toned_text(node_status_label(node.status), cx).into_any_element(),
             ROLES => cell_text(&roles_cell(&node.roles), cx),
             TAINTS => taints_cell(&node.taints, mono, cx),
-            VERSION => div()
-                .font_family(mono)
-                .child(node.kubelet_version.clone())
-                .into_any_element(),
+            VERSION => {
+                let cell = div().font_family(mono).child(node.kubelet_version.clone());
+                let common = self
+                    .counts
+                    .as_ref()
+                    .and_then(|counts| counts.common_version.as_ref());
+                match common {
+                    Some(common) if *common != node.kubelet_version => cell
+                        .text_color(tone_color(StatusTone::Warn, cx))
+                        .into_any_element(),
+                    _ => cell.into_any_element(),
+                }
+            }
             INTERNAL_IP => match &node.internal_ip {
                 Some(ip) => div().font_family(mono).child(ip.clone()).into_any_element(),
                 None => cell_text(ABSENT, cx),
@@ -235,7 +263,7 @@ impl TableDelegate for NodeTableDelegate {
             return menu;
         };
         match self.node_at(row_ix, cx) {
-            Some(node) => node_menu(menu, node, &live.access, &self.shell),
+            Some(node) => node_menu(menu, node, live, &self.shell),
             None => menu,
         }
     }

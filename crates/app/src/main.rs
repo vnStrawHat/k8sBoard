@@ -21,6 +21,7 @@ mod namespace_rows;
 mod navigation;
 mod network_rows;
 mod node_drawer;
+mod node_summary;
 mod node_table;
 mod object_events;
 mod pod_diagnosis;

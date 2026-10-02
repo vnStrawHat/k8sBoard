@@ -169,20 +169,46 @@ fn view_logs_item(
 pub(crate) fn node_menu(
     menu: PopupMenu,
     node: &NodeSummary,
-    access: &AccessState,
+    live: &LiveCluster,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
+    let access = &live.access;
     menu.item(action_item(
         ResourceAction::OpenNodeShell,
         "Open node shell",
         access,
     ))
     .item(view_yaml_item(ResourceKey::of_node(node), shell))
+    .item(view_pods_on_node_item(node, live.pods.items(), shell))
     .separator()
     .item(action_item(ResourceAction::Cordon, "Cordon", access))
     .item(action_item(ResourceAction::Drain, "Drain…", access))
     .separator()
     .item(copy_name_item(&node.name, access))
+}
+
+/// Switches to Pods with only the pods of the node. Always enabled, even for an empty node.
+fn view_pods_on_node_item(
+    node: &NodeSummary,
+    pods: &[PodSummary],
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let name = node.name.clone();
+    let shell = shell.clone();
+    PopupMenuItem::new(format!(
+        "View pods on node · {}",
+        pods_on_node(pods, &node.name)
+    ))
+    .on_click(move |_, _, cx| {
+        let _ = shell.update(cx, |shell, cx| shell.view_pods_on_node(&name, cx));
+    })
+}
+
+/// How many of `pods` are scheduled on `node`.
+fn pods_on_node(pods: &[PodSummary], node: &str) -> usize {
+    pods.iter()
+        .filter(|pod| pod.node_name.as_deref() == Some(node))
+        .count()
 }
 
 /// The row context menu and the drawer ⋯ menu of an explorer kind. Every item except View YAML and
@@ -199,6 +225,7 @@ pub(crate) fn kind_menu(
     if let Some(event) = &row.event {
         menu = menu
             .item(go_to_object_item(event, shell))
+            .item(filter_similar_item(event, shell))
             .item(copy_message_item(event))
             .separator();
     }
@@ -236,6 +263,24 @@ fn go_to_object_item(event: &EventDetail, shell: &WeakEntity<AppShell>) -> Popup
     PopupMenuItem::new(LABEL).on_click(move |_, _, cx| {
         let _ = shell.update(cx, |shell, cx| shell.reveal(key.clone(), cx));
     })
+}
+
+/// Filters the Events list to the reason of this event; disabled when it has none.
+fn filter_similar_item(event: &EventDetail, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    const LABEL: &str = "Filter similar";
+    let Some(reason) = similar_reason(event) else {
+        return disabled_menu_item(LABEL, "This event has no reason".into());
+    };
+    let reason = reason.clone();
+    let shell = shell.clone();
+    PopupMenuItem::new(LABEL).on_click(move |_, _, cx| {
+        let _ = shell.update(cx, |shell, cx| shell.filter_similar(&reason, cx));
+    })
+}
+
+/// What Filter similar matches on: the reason, when the event has one.
+fn similar_reason(event: &EventDetail) -> Option<&SharedString> {
+    event.reason.as_ref().filter(|reason| !reason.is_empty())
 }
 
 fn copy_message_item(event: &EventDetail) -> PopupMenuItem {

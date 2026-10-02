@@ -10,6 +10,8 @@ struct Row {
     tone: StatusTone,
     node: &'static str,
     status: &'static str,
+    /// What the preset sees: Hide inactive drops a row that is not active.
+    is_active: bool,
 }
 
 impl Default for Row {
@@ -21,6 +23,7 @@ impl Default for Row {
             tone: StatusTone::Ok,
             node: "wk-03",
             status: "Running",
+            is_active: true,
         }
     }
 }
@@ -57,12 +60,17 @@ impl TableRow for Row {
             _ => CellValue::Absent,
         }
     }
+
+    fn in_preset(&self, _: &FilterPreset) -> bool {
+        self.is_active
+    }
 }
 
 fn text_filter(text: &str) -> TableFilter {
     TableFilter {
         text: text.to_owned(),
         chips: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -74,6 +82,7 @@ fn label_filter(query: &str) -> TableFilter {
             .into_iter()
             .map(FilterChip::Label)
             .collect(),
+        ..Default::default()
     }
 }
 
@@ -119,6 +128,7 @@ fn unhealthy_keeps_warn_bad_and_info() {
     let filter = TableFilter {
         text: String::new(),
         chips: vec![FilterChip::Unhealthy],
+        ..Default::default()
     };
     for (tone, kept) in [
         (StatusTone::Ok, false),
@@ -207,4 +217,84 @@ fn quick_filter_text_ignores_a_label_query_in_progress() {
     assert_eq!(quick_filter_text("  label:"), "");
     // Only the prefix makes it a query.
     assert_eq!(quick_filter_text("my-label:x"), "my-label:x");
+}
+
+fn equals(column: usize, value: &str) -> TableFilter {
+    TableFilter {
+        chips: vec![FilterChip::Equals {
+            column,
+            title: "Column",
+            value: value.to_owned().into(),
+        }],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn equals_compares_a_column_value() {
+    let row = Row::default();
+    assert!(passes(&row, &equals(0, "wk-03")));
+    assert!(!passes(&row, &equals(0, "wk-0")));
+    assert!(!passes(&row, &equals(0, "WK-03")));
+    // A qualified column compares its text, not the prefix.
+    assert!(passes(&row, &equals(2, "owner-name")));
+    assert!(!passes(&row, &equals(2, "owner-ns")));
+    // Numbers and absent columns never equal.
+    assert!(!passes(&row, &equals(3, "42")));
+    assert!(!passes(&row, &equals(9, "")));
+}
+
+#[test]
+fn view_pods_on_node_replaces_the_pod_filters() {
+    let filter = TableFilter::on_node("wk-03");
+    assert_eq!(
+        filter.chips,
+        [FilterChip::Equals {
+            column: POD_NODE_COLUMN,
+            title: "Node",
+            value: "wk-03".into(),
+        }]
+    );
+    assert!(filter.text.is_empty());
+    assert_eq!(filter.preset, None);
+}
+
+#[test]
+fn filter_similar_replaces_an_existing_reason_chip() {
+    let mut filter = label_filter("label:app=api");
+    filter.set_equals(1, "Reason", "BackOff");
+    filter.set_equals(0, "Type", "Warning");
+    filter.set_equals(1, "Reason", "Failed");
+    let reasons: Vec<_> = filter
+        .chips
+        .iter()
+        .filter_map(|chip| match chip {
+            FilterChip::Equals {
+                column: 1, value, ..
+            } => Some(value.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons, ["Failed"]);
+    // The label chip and the other column's chip stay.
+    assert_eq!(filter.chips.len(), 3);
+}
+
+#[test]
+fn preset_keeps_only_the_rows_it_accepts() {
+    let filter = TableFilter {
+        preset: Some(FilterPreset::HideInactive),
+        ..Default::default()
+    };
+    assert!(filter.is_active());
+    assert!(passes(&Row::default(), &filter));
+    let inactive = Row {
+        is_active: false,
+        ..Default::default()
+    };
+    assert!(!passes(&inactive, &filter));
+    // The preset combines with the chips by AND.
+    let mut with_chip = filter.clone();
+    with_chip.chips.push(FilterChip::Unhealthy);
+    assert!(!passes(&Row::default(), &with_chip));
 }

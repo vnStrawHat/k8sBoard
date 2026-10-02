@@ -1,6 +1,10 @@
 //! What a table filter keeps: quick text and chips, all of which must pass. Pure, so it is
 //! tested without a window.
 
+use gpui_kit::SharedString;
+
+use crate::node_summary::NodeGroup;
+use crate::pod_table::NODE as POD_NODE_COLUMN;
 use crate::status_tone::StatusTone;
 use crate::table_view::{CellValue, TableRow};
 
@@ -9,13 +13,29 @@ pub(crate) struct TableFilter {
     /// The quick filter text, as typed.
     pub(crate) text: String,
     pub(crate) chips: Vec<FilterChip>,
+    /// A screen's own switch, such as Hide inactive or a Nodes summary chip.
+    pub(crate) preset: Option<FilterPreset>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FilterChip {
     /// Tone Warn, Bad, or Info.
     Unhealthy,
+    /// The text of a column equals `value`: `Node: wk-03` on Pods, `Reason: BackOff` on Events.
+    Equals {
+        column: usize,
+        title: &'static str,
+        value: SharedString,
+    },
     Label(LabelQuery),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FilterPreset {
+    /// ReplicaSets scaled to zero are hidden.
+    HideInactive,
+    /// A Nodes summary chip.
+    Nodes(NodeGroup),
 }
 
 /// One kubectl-style label test, such as `app=api`.
@@ -35,7 +55,32 @@ pub(crate) enum LabelTest {
 impl TableFilter {
     /// Whether the filter can hide a row.
     pub(crate) fn is_active(&self) -> bool {
-        !self.text.trim().is_empty() || !self.chips.is_empty()
+        !self.text.trim().is_empty() || !self.chips.is_empty() || self.preset.is_some()
+    }
+
+    /// The Pods filter of "View pods on node": only the node chip, so every pod on the node
+    /// shows.
+    pub(crate) fn on_node(name: &str) -> Self {
+        Self {
+            chips: vec![FilterChip::Equals {
+                column: POD_NODE_COLUMN,
+                title: "Node",
+                value: name.to_owned().into(),
+            }],
+            ..Self::default()
+        }
+    }
+
+    /// Replaces the `Equals` chip of `column`, if any, with a new one; other chips stay.
+    pub(crate) fn set_equals(&mut self, column: usize, title: &'static str, value: &str) {
+        self.chips.retain(
+            |chip| !matches!(chip, FilterChip::Equals { column: other, .. } if *other == column),
+        );
+        self.chips.push(FilterChip::Equals {
+            column,
+            title,
+            value: value.to_owned().into(),
+        });
     }
 }
 
@@ -102,6 +147,10 @@ pub(crate) fn quick_filter_text(input: &str) -> &str {
 pub(crate) fn matches<T: TableRow>(row: &T, filter: &TableFilter, column_count: usize) -> bool {
     text_matches(row, filter.text.trim(), column_count)
         && filter.chips.iter().all(|chip| chip_matches(row, chip))
+        && filter
+            .preset
+            .as_ref()
+            .is_none_or(|preset| row.in_preset(preset))
 }
 
 fn chip_matches<T: TableRow>(row: &T, chip: &FilterChip) -> bool {
@@ -110,6 +159,11 @@ fn chip_matches<T: TableRow>(row: &T, chip: &FilterChip) -> bool {
             row.tone(),
             StatusTone::Warn | StatusTone::Bad | StatusTone::Info
         ),
+        FilterChip::Equals { column, value, .. } => match row.value(*column) {
+            CellValue::Text(text) => text == value.as_ref(),
+            CellValue::Qualified { text, .. } => text == value.as_ref(),
+            _ => false,
+        },
         FilterChip::Label(query) => query.passes(row.labels()),
     }
 }
