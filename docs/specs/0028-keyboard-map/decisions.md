@@ -6,7 +6,7 @@
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | Bind every wireframe key whose feature exists. Move Ctrl , and Ctrl O from 0025 into `keymap.rs`. Keys owned by later specs are listed in `RESERVED_KEYS` until their owner binds them: Ctrl Shift C and Ctrl 1–9 (0026), Space (0027), Ctrl K, `:`, Ctrl ⏎ (0029), Ctrl Shift R (0030), Ctrl S (0031) | a key that does nothing is worse than no key, and the owner spec knows the behavior; `keymap.rs` stays the one place that holds every binding |
+| 1 | Bind every wireframe key whose feature exists. Move Ctrl , and Ctrl O from 0025 into `keymap.rs`. Keys owned by later specs are listed in `RESERVED_KEYS` until their owner binds them: Space (0027), Ctrl K, `:`, Ctrl ⏎ (0029), Ctrl Shift R (0030), Ctrl S (0031). Ctrl Shift C and Ctrl 1–9 are bound by 0026 (accepted) and live in `keymap.rs` | a key that does nothing is worse than no key, and the owner spec knows the behavior; `keymap.rs` stays the one place that holds every binding (exception: 0026's switcher-local keys in `cluster_switcher.rs`, keymap.md) |
 | 2 | Unit actions only, from `gpui_kit::actions!` | the facade macro is unit-only; a data action's derive needs the `gpui` crate path; ~30 unit structs are plain |
 | 3 | Contexts are predicates over existing names (`AppShell`, kit `Input`, `PopupMenu`, `Popover`, `Dialog`, `DataTable`) plus three wrappers (`QuickFilter`, `Drawer`, `LogDock`) | no context per screen; the predicates read like the wireframe rule |
 | 4 | `/` moves to `WORKSPACE` (adds `!PopupMenu && !Popover && !Dialog`) | supersedes 0009 decision 13; one rule for all single keys |

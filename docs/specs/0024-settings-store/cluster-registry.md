@@ -46,7 +46,7 @@ pub(crate) struct ClusterRegistry {
     pub(crate) clusters: Vec<ClusterEntry>,      // order = registry order (0025 drag → Ctrl 1–9)
     pub(crate) last_used: Option<ClusterRef>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]  // no container default
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]  // no container default; Hash: map key (0026)
 pub(crate) struct ClusterRef { pub(crate) kubeconfig: PathBuf, pub(crate) context: String }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]  // no container default
 pub(crate) struct ClusterEntry {
@@ -89,7 +89,7 @@ pub(crate) fn start_choice(requested: Option<&str>, last_used: Option<&ClusterRe
 ## Session start and switch (`app_shell.rs`, steps 3 and 5)
 
 - `AppShell` keeps `active: Option<ContextSummary>`; `switch_context(&str)` becomes `switch_cluster(&ClusterRef)`, which finds the owning `Arc<Kubeconfig>` by `source` + name.
-- After `start_session`: build `let cluster = ClusterRef::of(summary);` first (it clones the context name and path, so no borrow of `self` or the kubeconfig crosses the `cx` borrow), then `AppSettings::update(cx, |s| s.registry.last_used = Some(cluster))`.
+- When the session first becomes Live (`on_session_changed` sees `SessionPhase::Live`; a `has_reported_live` flag reset per session): build `let cluster = ClusterRef::of(summary);` first (it clones the context name and path, so no borrow of `self` or the kubeconfig crosses the `cx` borrow), then `AppSettings::update(cx, |s| s.registry.last_used = Some(cluster))`. Never in `start_session` (decision 22).
 - Namespace at start: `--namespace` (first session only) > `profile.default_namespace` as `NamespaceScope::of_namespaces(vec![ns])` > today's default. `switch_cluster` uses the target's default namespace instead of `None`.
 - `AppShell::new`: `_settings_observer: Subscription = cx.observe_global::<AppSettings>(|_, cx| cx.notify())`.
 - The switcher lists every context of every loaded kubeconfig with `switcher_label`; checked = `ClusterRef::of(active)`.

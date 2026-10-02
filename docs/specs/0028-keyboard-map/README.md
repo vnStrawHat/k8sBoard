@@ -17,12 +17,12 @@ Wireframes: the keyboard map grid (22 keys, section `#phim`), the anatomy notes 
 - Single-letter row actions on the cursor row: L, Y, Ctrl C, S, F, C, D, E, R, ⇧S, Del. They use the same availability checks as the menus, and the menus show the keys.
 - Dock keys: Ctrl \`, Ctrl Shift M, Ctrl Tab, Ctrl W. Ctrl N opens the namespace picker.
 - A `?` shortcut sheet built from the live bindings, also shown as Settings › Keyboard Shortcuts.
-- Platform mapping (⌘ on macOS). Ctrl , and Ctrl O move here from 0025. The keys of 0026, 0027, 0029, 0030, and 0031 are reserved.
+- Platform mapping (⌘ on macOS). Ctrl , and Ctrl O move here from 0025. Ctrl Shift C and Ctrl 1–9 are bound by 0026 (held in `keymap.rs`). The keys of 0027, 0029, 0030, and 0031 are reserved.
 
 ## Non-goals
 
 - User rebinding, and any settings key for it (decision 25).
-- Keys owned by other specs: Ctrl K and `:` (0029); Ctrl Shift C and Ctrl 1–9 (0026); Space (0027); Ctrl Shift R (0030).
+- Keys owned by other specs: Ctrl K and `:` (0029); Space (0027); Ctrl Shift R (0030). Ctrl Shift C and Ctrl 1–9 are 0026 behavior; 0028 only holds their bindings.
 - The A key and the Attach item (0036), and any enabled mutating action (0031–0036).
 - Menu accelerators inside an open menu.
 - Region focus cycling.

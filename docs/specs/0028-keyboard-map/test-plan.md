@@ -10,19 +10,20 @@ Helper: `resolve(cx, "down", &["Root", "AppShell", "DataTable"]) -> Option<&'sta
 |---|---|---|
 | 3 | `letters_resolve_in_the_workspace` | `l` in `Root > AppShell` → `ViewLogs`; same with `DataTable` below |
 | 1 | `letters_do_nothing_in_text_inputs` | `?`, `/` under `Input` (step 2b adds `j`, `[`, `enter`; step 3 adds `l`) → no app action |
-| 1 | `single_keys_do_nothing_in_menus_popovers_and_dialogs` | `?`, `/` (later steps add `j`, `y`) under `PopupMenu`, `Popover`, `Dialog` → no app action |
+| 1 | `single_keys_do_nothing_in_menus_popovers_and_dialogs` | `?`, `/` (later steps add `j`, `y`) under `PopupMenu`, `Popover`, `Dialog` → no app action. Popover paths are `Root > AppShell > Popover` (the namespace picker), never one with `ClusterSwitcher` |
 | 2b | `table_arrows_outrank_the_kit_table` | `down`, `up`, `home`, `end`, `pageup`, `pagedown` under `DataTable` → app row actions first |
 | 2b | `table_escape_outranks_the_kit_table` | `escape` under `DataTable` → `Dismiss` |
 | 2b | `escape_leaves_the_quick_filter` | `escape` under `QuickFilter > Input` → `LeaveInput` (also `Drawer`, `LogDock`) |
-| 2b | `escape_stays_with_other_inputs` | `escape` under `Popover > Input` → the kit input's action |
+| 2b | `escape_stays_with_other_inputs` | `escape`, `up`, `down`, `enter` under `Root > AppShell > Popover > Input` (the namespace picker search; **no** `ClusterSwitcher` in the path) → the kit's actions, never an app action. Under `Popover > ClusterSwitcher > Input` these keys belong to 0026 (its `escape_in_switcher_filter_closes`, `arrows_move_highlight_in_filter`, `enter_in_filter_switches_to_highlight`) |
 | 1 | `chords_work_inside_text_inputs` | `secondary-n`, `secondary-w`, ``ctrl-` ``, `ctrl-tab` under `Input` → app actions |
 | 3 | `copy_name_is_not_bound_inside_inputs` | `secondary-c` under `Input` → the kit `Copy` |
 | 1 | `question_mark_matches_a_shifted_slash` | typed `/`+shift with `key_char "?"` → `ShowShortcuts`, never `FocusQuickFilter` |
 | 1 | `secondary_is_the_platform_modifier` | `Keystroke::parse("secondary-n")` has `platform` on macOS, `control` elsewhere (`cfg!` in the assertion, runs on every OS) |
 | 1 | `bindings_never_share_a_keystroke_in_one_context` | no two app bindings with equal parsed keystrokes (`KeyBinding::keystrokes()`, compared as `Keystroke`, so `secondary-n` and `ctrl-n` collide off macOS) and an equal predicate |
-| 1 | `bindings_avoid_reserved_keys` | each `RESERVED_KEYS` entry is parsed with `Keystroke::parse`; no app binding's keystroke equals one ([keymap.md](keymap.md) "Keys of other specs") |
+| 1 | `bindings_avoid_reserved_keys` | each `RESERVED_KEYS` entry is parsed with `Keystroke::parse`; no app binding's keystroke equals one ([keymap.md](keymap.md) "Keys of other specs"). `RESERVED_KEYS` holds `space`, `secondary-k`, `:`, `secondary-enter`, `secondary-shift-r`, `secondary-s`; not `secondary-shift-c` or `secondary-1`…`9` (bound by 0026) |
 | 1 | `every_sheet_row_has_a_binding` | each `shortcut_rows()` action has at least one binding |
-| 1 | `every_bound_action_is_on_the_sheet` | each app binding's action is on the sheet, except `LeaveInput` |
+| 1 | `every_bound_action_is_on_the_sheet` | each app binding's action is on the sheet, except `LeaveInput`, `SwitchToCluster2`…`9`, and the 0026 switcher-local actions |
+| 1 | `cluster_switcher_chords_resolve_everywhere` | when 0026 code exists: `secondary-shift-c` → `OpenClusterSwitcher`, `secondary-1` → `SwitchToCluster1` under `AppShell`, `AppShell > Input`, and `AppShell > Popover > ClusterSwitcher > Input` |
 | 1 | `settings_window_gets_no_shell_keys` | under `SettingsWindow` and `SettingsWindow > Input`: `j`, `?`, `/`, `enter`, `l`, `secondary-n`, `secondary-w` resolve to no app action; `escape` under `SettingsWindow > Input` and under `Dialog > Input` never resolves to `LeaveInput` |
 | 1 | `settings_keys_keep_their_0025_contexts` | `secondary-,` → `OpenSettings` with no context (also under `Dialog`); `secondary-o` → `ImportKubeconfig` only under `SettingsWindow` |
 

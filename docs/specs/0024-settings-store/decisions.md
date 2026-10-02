@@ -25,7 +25,7 @@
 | 19 | A cluster is identified by **(absolute kubeconfig path, context name)** (`ClusterRef`); `ContextSummary.source` is the file that defined the context. Same-named contexts from different sources all appear in the switcher, labeled with their file name | the same kubeadm context name appears in many files |
 | 20 | Entries hold only overrides. Unregistered contexts get defaults (name, guessed env); nothing is auto-registered | no settings churn from browsing; 0025 registers on edit |
 | 21 | Start cluster: `--context` (first match in load order: chain, then registry files) > `last_used` (exact `ClusterRef` still loaded) > `current-context` of the first loaded kubeconfig. With `--kubeconfig X` and no `--context`, a `last_used` in X beats X's `current-context` | the CLI keeps priority; a stale last-used falls back silently |
-| 22 | `last_used` is written after every successful `start_session` | "reopen where I was"; no write when unchanged (decision 12) |
+| 22 | `last_used` is written when the session first becomes **Live** (`AppShell::on_session_changed`), never in `start_session` (amended for 0026 decision 4) | "reopen where I was" without reopening a cluster that fails; no write when unchanged (decision 12) |
 | 23 | Four fixed environments, no custom ones | 0030 maps confirmation tiers to exactly these four |
 | 24 | Guessing: tokens of context and cluster names; **riskiest match wins** (PROD > STG > DEV > LOCAL); unknown → STG (C5) | a mixed name must never look safer than it is |
 | 25 | Env colors: PROD `danger`, STG `warning`, DEV `info`, LOCAL `muted_foreground`; badge text `background` | named theme tokens (project rule); mirrors the wireframe `--prod/--stg/--dev/--loc` hues |
