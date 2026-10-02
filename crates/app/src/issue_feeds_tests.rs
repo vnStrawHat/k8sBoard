@@ -1,6 +1,7 @@
 use cluster::{ClusterError, EventType, InvolvedObject};
 
 use super::*;
+use crate::cluster_session::scope_multiplicity;
 
 fn at(seconds: i64) -> jiff::Timestamp {
     jiff::Timestamp::from_second(seconds).expect("valid timestamp")
@@ -211,4 +212,295 @@ fn volume_usage_is_limited_when_fewer_nodes_are_polled() {
         volume_usage_state(&FeedStatus::Unavailable("denied".to_owned()), 0, 42),
         FeedState::Off("denied".to_owned())
     );
+}
+
+// ---- condition feeds ----
+
+use cluster::{AccessCheck, AccessDecision, AccessReport, AccessReview, DeploymentSummary};
+
+fn report_denying(denied: &[AccessCheck]) -> AccessState {
+    let reviews = AccessCheck::ALL
+        .into_iter()
+        .map(|check| AccessReview {
+            check,
+            decision: if denied.contains(&check) {
+                AccessDecision::Denied { reason: None }
+            } else {
+                AccessDecision::Allowed
+            },
+        })
+        .collect();
+    AccessState::Known(AccessReport { reviews })
+}
+
+fn scope_of(names: &[&str]) -> NamespaceScope {
+    NamespaceScope::of_namespaces(names.iter().map(|name| (*name).to_owned()))
+}
+
+fn plan_for(scope: &NamespaceScope, access: &AccessState) -> Vec<FeedPlan> {
+    condition_plan(scope, access)
+        .into_iter()
+        .map(|(_, plan)| plan)
+        .collect()
+}
+
+#[test]
+fn condition_plan_uses_scope_up_to_two_namespaces() {
+    let access = report_denying(&[]);
+    for scope in [NamespaceScope::All, scope_of(&["a"]), scope_of(&["a", "b"])] {
+        let plans = plan_for(&scope, &access);
+        assert_eq!(plans.len(), CONDITION_KINDS.len());
+        assert!(plans.iter().all(|plan| *plan
+            == FeedPlan::Start {
+                watch_scope: scope.clone()
+            }));
+    }
+}
+
+#[test]
+fn condition_plan_uses_all_scope_above_two() {
+    let access = report_denying(&[]);
+    let plans = plan_for(&scope_of(&["a", "b", "c"]), &access);
+    assert!(plans.iter().all(|plan| *plan
+        == FeedPlan::Start {
+            watch_scope: NamespaceScope::All
+        }));
+}
+
+#[test]
+fn condition_plan_waits_for_review() {
+    let checking = AccessState::Checking {
+        _task: gpui_kit::Task::ready(()),
+    };
+    assert!(
+        plan_for(&scope_of(&["a"]), &checking)
+            .iter()
+            .all(|plan| *plan == FeedPlan::Wait)
+    );
+    // A review that failed starts the feeds: each shows its own error.
+    let plans = plan_for(&scope_of(&["a"]), &AccessState::Unknown);
+    assert!(
+        plans
+            .iter()
+            .all(|plan| matches!(plan, FeedPlan::Start { .. }))
+    );
+}
+
+#[test]
+fn condition_plan_off_when_denied() {
+    let access = report_denying(&[AccessCheck::ListSecrets, AccessCheck::ListJobs]);
+    let plans: Vec<_> = condition_plan(&scope_of(&["a", "b"]), &access);
+    let plan_of = |kind| {
+        plans
+            .iter()
+            .find(|(listed, _)| *listed == kind)
+            .map(|(_, plan)| plan.clone())
+            .expect("planned")
+    };
+    // A denied TLS secret list is the secrets check.
+    assert_eq!(
+        plan_of(ResourceKind::Secrets),
+        FeedPlan::Off("not permitted: list secrets".to_owned())
+    );
+    assert_eq!(
+        plan_of(ResourceKind::Jobs),
+        FeedPlan::Off("not permitted: list jobs".to_owned())
+    );
+    assert!(matches!(
+        plan_of(ResourceKind::Deployments),
+        FeedPlan::Start { .. }
+    ));
+    // Above two namespaces the denial may be of one namespace only: the cluster-wide watch finds out.
+    let wide = condition_plan(&scope_of(&["a", "b", "c"]), &access);
+    assert!(
+        wide.iter()
+            .all(|(_, plan)| matches!(plan, FeedPlan::Start { .. }))
+    );
+}
+
+fn deployment_in(namespace: &str) -> DeploymentSummary {
+    DeploymentSummary {
+        namespace: namespace.to_owned(),
+        name: "api".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        desired: 1,
+        ready: 1,
+        up_to_date: 1,
+        available: 1,
+        strategy: String::new(),
+        max_surge: None,
+        max_unavailable: None,
+        progress_deadline_seconds: 600,
+        is_paused: false,
+        revision: None,
+        selector: Vec::new(),
+        containers: Vec::new(),
+        conditions: Vec::new(),
+    }
+}
+
+#[test]
+fn all_scope_feed_drops_rows_outside_scope() {
+    let snapshot = || {
+        WatchUpdate::Snapshot(vec![
+            deployment_in("a"),
+            deployment_in("z"),
+            deployment_in("b"),
+        ])
+    };
+    let wrapped = |keep: Option<Vec<String>>| {
+        let updates = futures::stream::iter([snapshot()]);
+        let stream = objects(
+            updates,
+            keep,
+            |item| &item.namespace,
+            KindObject::Deployment,
+        );
+        futures::executor::block_on(stream.collect::<Vec<_>>())
+    };
+    let namespaces = |updates: Vec<WatchUpdate<KindObject>>| -> Vec<String> {
+        match updates.into_iter().next() {
+            Some(WatchUpdate::Snapshot(items)) => items
+                .into_iter()
+                .filter_map(|item| match item {
+                    KindObject::Deployment(deployment) => Some(deployment.namespace),
+                    _ => None,
+                })
+                .collect(),
+            _ => panic!("a snapshot"),
+        }
+    };
+    assert_eq!(
+        namespaces(wrapped(Some(vec![
+            "a".to_owned(),
+            "b".to_owned(),
+            "c".to_owned()
+        ]))),
+        ["a", "b"]
+    );
+    assert_eq!(namespaces(wrapped(None)), ["a", "z", "b"]);
+}
+
+fn forbidden() -> WatchUpdate<KindObject> {
+    WatchUpdate::Failed(ClusterError::Forbidden {
+        context: "ctx".to_owned(),
+        action: "watching deployments",
+        message: "no".to_owned(),
+    })
+}
+
+#[test]
+fn forbidden_all_scope_feed_turns_off() {
+    let mut feed = ConditionFeed::idle(ResourceKind::Deployments, None);
+    feed.watch_scope = Some(NamespaceScope::All);
+    feed.apply(forbidden());
+    assert_eq!(
+        feed.state(),
+        FeedState::Off("not permitted cluster-wide".to_owned())
+    );
+    assert_eq!(feed.watches(), 0);
+    // A watch of the session's own namespaces keeps retrying, so its failure shows as a list's.
+    let mut narrow = ConditionFeed::idle(ResourceKind::Deployments, None);
+    narrow.watch_scope = Some(scope_of(&["a"]));
+    narrow.apply(forbidden());
+    assert!(
+        matches!(narrow.state(), FeedState::Off(reason) if reason != "not permitted cluster-wide")
+    );
+}
+
+#[test]
+fn rollouts_label_once_in_the_note() {
+    let off = |kind| {
+        (
+            IssueFeed::Kind(kind),
+            FeedState::Off("not permitted".to_owned()),
+        )
+    };
+    let coverage = Coverage {
+        feeds: vec![
+            off(ResourceKind::Deployments),
+            off(ResourceKind::DaemonSets),
+        ],
+    };
+    assert_eq!(
+        coverage.note().as_deref(),
+        Some("Not checked: rollouts (not permitted).")
+    );
+}
+
+// ---- the watch count ----
+
+use gpui_kit::{AppContext as _, TestAppContext};
+
+/// A view that owns subscriptions and does nothing with their updates.
+struct Probe;
+
+fn idle_subscription(runtime: &ClusterRuntime, cx: &mut Context<Probe>) -> WatchSubscription {
+    runtime.subscribe_silent(
+        futures::stream::pending::<()>(),
+        cx,
+        |_: &mut Probe, (), _| {},
+        |_, _| {},
+    )
+}
+
+/// Feeds as `restart_conditions` leaves them for `scope`: a running watch for every planned
+/// start, an idle entry for the rest.
+fn planned_feeds(
+    runtime: &ClusterRuntime,
+    scope: &NamespaceScope,
+    cx: &mut Context<Probe>,
+) -> IssueFeeds {
+    let conditions = condition_plan(scope, &AccessState::Unknown)
+        .into_iter()
+        .map(|(kind, plan)| match plan {
+            FeedPlan::Start { watch_scope } => ConditionFeed {
+                watch_scope: Some(watch_scope),
+                subscription: Some(idle_subscription(runtime, cx)),
+                ..ConditionFeed::idle(kind, None)
+            },
+            FeedPlan::Wait | FeedPlan::Off(_) => ConditionFeed::idle(kind, None),
+        })
+        .collect();
+    IssueFeeds {
+        events: WarningEvents::default(),
+        events_watch: Some(idle_subscription(runtime, cx)),
+        events_restart: None,
+        conditions,
+    }
+}
+
+#[gpui_kit::test]
+fn watch_count_follows_the_condition_plan(cx: &mut TestAppContext) {
+    let tokio = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let runtime = ClusterRuntime::new(tokio.handle().clone());
+    // (namespaces, expected): N events and 8 kinds over N namespaces up to two, else one
+    // cluster-wide watch per kind.
+    for (names, expected) in [(1, 9), (2, 18), (3, 11)] {
+        let scope = NamespaceScope::of_namespaces((0..names).map(|index| format!("n{index}")));
+        let multiplicity = scope_multiplicity(&scope);
+        let probe = cx.update(|cx| {
+            cx.new(|cx| {
+                let feeds = planned_feeds(&runtime, &scope, cx);
+                assert_eq!(feeds.watch_count(multiplicity), expected, "N = {names}");
+                Probe
+            })
+        });
+        drop(probe);
+    }
+    // A restart that waits for its delay runs no events watch.
+    let waiting = cx.update(|cx| {
+        cx.new(|cx| {
+            let mut feeds = planned_feeds(&runtime, &NamespaceScope::All, cx);
+            feeds.events_watch = None;
+            assert_eq!(feeds.watch_count(1), 8);
+            Probe
+        })
+    });
+    drop(waiting);
 }

@@ -33,6 +33,7 @@ use crate::filter_bar::ToolkitState;
 use crate::helm_release_view::{
     HelmReleaseView, HistoryState, ShowLatest, ValuesLayout, earlier_revision, helm_subject,
 };
+use crate::issue_table::IssueTableDelegate;
 use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
@@ -92,6 +93,8 @@ const IGNORED_KUBECONFIG_NOTE: &str =
 pub(crate) enum Screen {
     Pods,
     Nodes,
+    /// The problems the engine found; it lists no explorer kind and opens no drawer.
+    Issues,
     Kind(ResourceKind),
 }
 
@@ -100,7 +103,7 @@ impl Screen {
     pub(crate) fn kind(self) -> Option<ResourceKind> {
         match self {
             Self::Kind(kind) => Some(kind),
-            Self::Pods | Self::Nodes => None,
+            Self::Pods | Self::Nodes | Self::Issues => None,
         }
     }
 }
@@ -197,6 +200,7 @@ pub(crate) struct AppShell {
     screen: Screen,
     pod_table: Entity<TableState<PodTableDelegate>>,
     node_table: Entity<TableState<NodeTableDelegate>>,
+    issue_table: Entity<TableState<IssueTableDelegate>>,
     kind_table: Entity<TableState<KindTableDelegate>>,
     _table_subscriptions: Vec<Subscription>,
     /// The drawer is open exactly while this is set.
@@ -289,6 +293,13 @@ impl AppShell {
                 cx,
             ))
         });
+        let issue_table = cx.new(|cx| {
+            configure(TableState::new(
+                IssueTableDelegate::new(log_dock.downgrade(), shell.clone()),
+                window,
+                cx,
+            ))
+        });
         let initial_kind = options.screen.screen().kind();
         let kind_table = cx.new(|cx| {
             configure(TableState::new(
@@ -337,6 +348,7 @@ impl AppShell {
             screen: options.screen.screen(),
             pod_table,
             node_table,
+            issue_table,
             kind_table,
             _table_subscriptions: table_subscriptions,
             selected: None,
@@ -460,6 +472,10 @@ impl AppShell {
             table.delegate_mut().set_session(shared.clone());
             cx.notify();
         });
+        self.issue_table.update(cx, |table, cx| {
+            table.delegate_mut().set_session(shared.clone());
+            cx.notify();
+        });
         self.kind_table.update(cx, |table, cx| {
             table.delegate_mut().set_session(shared);
             cx.notify();
@@ -565,6 +581,7 @@ impl AppShell {
         if let Some(session) = &self.session {
             session.update(cx, |session, cx| {
                 session.set_explorer_kind(screen.kind(), cx);
+                session.set_issues_visible(screen == Screen::Issues);
                 session.refresh_kind_counts(CountTrigger::Navigation, cx);
                 if screen == Screen::Kind(ResourceKind::Crds) {
                     session.refresh_custom_counts(cx);
@@ -596,11 +613,50 @@ impl AppShell {
     /// the key, and `on_session_changed` resolves it after the first snapshot; a loaded list
     /// without the row drops it.
     pub(crate) fn reveal(&mut self, key: ResourceKey, cx: &mut Context<Self>) {
+        self.reveal_then(key, cx, |_, _| {});
+    }
+
+    /// `reveal`, then `then` once the selection stands. The selection is made after the
+    /// ClearSelection events that `show_screen` queues, which would erase a selection made now
+    /// before a still-loading list could confirm it; so a step that reads or builds on the
+    /// selection must run in the same deferred closure, not after this call returns.
+    pub(crate) fn reveal_then(
+        &mut self,
+        key: ResourceKey,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+    ) {
         self.show_screen(key.screen(), cx);
-        self.pending_reveal = Some(key.clone());
-        self.change_selection(Some(key), cx);
-        self.apply_pending_reveal(cx);
-        self.sync_selection(cx);
+        let shell = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.pending_reveal = Some(key.clone());
+                shell.change_selection(Some(key), cx);
+                shell.apply_pending_reveal(cx);
+                shell.sync_selection(cx);
+                then(shell, cx);
+            });
+        });
+    }
+
+    /// Runs `step` with `key` selected: at once when it already is, else after a reveal. A row
+    /// that vanished clears the selection again, and then `step` does not run.
+    fn when_selected(
+        &mut self,
+        key: ResourceKey,
+        cx: &mut Context<Self>,
+        step: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+    ) {
+        if self.selected.as_ref() == Some(&key) {
+            step(self, cx);
+            return;
+        }
+        let wanted = key.clone();
+        self.reveal_then(key, cx, move |shell, cx| {
+            if shell.selected.as_ref() == Some(&wanted) {
+                step(shell, cx);
+            }
+        });
     }
 
     /// Clears the filter of the revealed row's table when it hides the row, once the list has
@@ -646,6 +702,8 @@ impl AppShell {
         self.pod_table
             .update(cx, |table, cx| table.clear_selection(cx));
         self.node_table
+            .update(cx, |table, cx| table.clear_selection(cx));
+        self.issue_table
             .update(cx, |table, cx| table.clear_selection(cx));
         self.kind_table
             .update(cx, |table, cx| table.clear_selection(cx));
@@ -810,14 +868,10 @@ impl AppShell {
         tab: DrawerTab,
         cx: &mut Context<Self>,
     ) {
-        if self.selected.as_ref() != Some(&key) {
-            self.reveal(key.clone(), cx);
-        }
-        if self.selected.as_ref() != Some(&key) {
-            return;
-        }
-        self.drawer.tab = tab;
-        cx.notify();
+        self.when_selected(key, cx, move |shell, cx| {
+            shell.drawer.tab = tab;
+            cx.notify();
+        });
     }
 
     /// Opens the drawer of `key` on the Values tab for `revision`, in `layout`. The key is revealed
@@ -830,16 +884,14 @@ impl AppShell {
         layout: ValuesLayout,
         cx: &mut Context<Self>,
     ) {
-        if self.selected.as_ref() != Some(&key) {
-            self.reveal(key.clone(), cx);
-        }
-        if self.selected.as_ref() != Some(&key) {
-            return;
-        }
-        self.drawer.helm_revision = Some(revision);
-        self.drawer.tab = DrawerTab::Values;
-        self.drawer.pending_helm_layout = Some((key, layout));
-        cx.notify();
+        let subject = key.clone();
+        // After the selection: choosing a subject forgets the revision and the layout.
+        self.when_selected(key, cx, move |shell, cx| {
+            shell.drawer.helm_revision = Some(revision);
+            shell.drawer.tab = DrawerTab::Values;
+            shell.drawer.pending_helm_layout = Some((subject, layout));
+            cx.notify();
+        });
     }
 
     /// Whether Reveal and Copy work. The values view and the menus read only this.
@@ -858,15 +910,12 @@ impl AppShell {
         if self.secret_value_access == ValueAccess::Blocked {
             return;
         }
-        if self.selected.as_ref() != Some(&key) {
-            self.reveal(key.clone(), cx);
-        }
-        if self.selected.as_ref() != Some(&key) {
-            return;
-        }
-        self.drawer.tab = DrawerTab::Overview;
-        self.drawer.pending_secret_action = Some((key, action));
-        cx.notify();
+        let subject = key.clone();
+        self.when_selected(key, cx, move |shell, cx| {
+            shell.drawer.tab = DrawerTab::Overview;
+            shell.drawer.pending_secret_action = Some((subject, action));
+            cx.notify();
+        });
     }
 
     /// Drops the values view (wiping every revealed value) and any action waiting for it.
@@ -1321,6 +1370,21 @@ impl AppShell {
         }
     }
 
+    /// A click on the issue at table row `row` opens its object on its own screen, with its
+    /// drawer. Arrow keys only move the highlight of the Issues table: they would otherwise jump
+    /// to another screen at the first key press.
+    pub(crate) fn reveal_issue(&mut self, row: usize, cx: &mut Context<Self>) {
+        let target = self
+            .shown_item(&self.issue_table, row, cx)
+            .and_then(|item| {
+                let session = self.session.as_ref()?.read(cx);
+                session.issues().issues().get(item)?.target.clone()
+            });
+        if let Some(target) = target {
+            self.reveal(target, cx);
+        }
+    }
+
     fn on_kind_table_event(
         &mut self,
         table: &Entity<TableState<KindTableDelegate>>,
@@ -1586,6 +1650,25 @@ impl AppShell {
         }
     }
 
+    /// `--screen issues-drawer`: once the issues are known, opens the object of the first one.
+    fn reveal_first_issue(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.as_ref().map(|session| session.read(cx)) else {
+            return;
+        };
+        if session.live().is_none() || session.is_issues_pending() {
+            return;
+        }
+        let target = session
+            .issues()
+            .issues()
+            .iter()
+            .find_map(|issue| issue.target.clone());
+        self.pending_launch_screen = None;
+        if let Some(target) = target {
+            self.reveal(target, cx);
+        }
+    }
+
     /// Opens the drawer that `--screen` asked for, once its list has loaded. The logs screens
     /// wait for `open_pending_logs`, which needs a window. A filter that hides the first item
     /// opens no drawer.
@@ -1598,6 +1681,10 @@ impl AppShell {
         };
         if launch.checks_rows() {
             self.check_first_rows(launch, cx);
+            return;
+        }
+        if launch == LaunchScreen::IssuesDrawer {
+            self.reveal_first_issue(cx);
             return;
         }
         let Some(live) = self.live(cx) else {
@@ -1803,6 +1890,11 @@ impl AppShell {
                     let (is_loading, has_failed) = match self.screen {
                         Screen::Pods => (live.pods.is_loading(), live.pods.failure().is_some()),
                         Screen::Nodes => (live.nodes.is_loading(), live.nodes.failure().is_some()),
+                        // The table shows what the pods and nodes lists found; a failed one is a
+                        // gap the coverage names.
+                        Screen::Issues => {
+                            (live.pods.is_loading() || live.nodes.is_loading(), false)
+                        }
                         // A missing explorer is the moment between a switch and its first watch.
                         Screen::Kind(kind) => {
                             live.kind_list(kind).map_or((true, false), |explorer| {
@@ -1890,6 +1982,7 @@ impl AppShell {
         match self.screen {
             Screen::Pods => rebuild_table(&self.pod_table, change, cx),
             Screen::Nodes => rebuild_table(&self.node_table, change, cx),
+            Screen::Issues => rebuild_table(&self.issue_table, change, cx),
             Screen::Kind(_) => rebuild_table(&self.kind_table, change, cx),
         }
     }
@@ -1959,6 +2052,7 @@ impl AppShell {
         match self.screen {
             Screen::Pods => check_table(&self.pod_table, change, cx),
             Screen::Nodes => check_table(&self.node_table, change, cx),
+            Screen::Issues => check_table(&self.issue_table, change, cx),
             Screen::Kind(_) => check_table(&self.kind_table, change, cx),
         }
         cx.notify();
@@ -2044,6 +2138,11 @@ impl AppShell {
                 view.reset_filter();
             }
         });
+        self.issue_table.update(cx, |table, _| {
+            if let Some(view) = table.delegate_mut().view_mut() {
+                view.reset_filter();
+            }
+        });
         self.kind_table
             .update(cx, |table, _| table.delegate_mut().reset_filters());
         self.quick_filter_screen = None;
@@ -2102,11 +2201,12 @@ impl AppShell {
                 state.node_counts = self.node_table.read(cx).delegate().counts().cloned();
                 state
             }
+            Screen::Issues => ToolkitState::of(self.issue_table.read(cx).delegate(), self.screen)?,
             Screen::Kind(_) => ToolkitState::of(self.kind_table.read(cx).delegate(), self.screen)?,
         };
         // Nodes and Namespaces are cluster-scoped: the scope does not apply to them.
         let is_namespaced = match self.screen {
-            Screen::Pods => true,
+            Screen::Pods | Screen::Issues => true,
             Screen::Nodes => false,
             Screen::Kind(kind) => kind.is_namespaced(),
         };

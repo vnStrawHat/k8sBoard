@@ -51,7 +51,7 @@
 
 | Measure | Before 0020 | With 0020 |
 |---|---|---|
-| Idle RSS after 5 min, UAT, scope All | | |
-| Watches (status bar), scope All / 3 namespaces | | |
-| UAT Jobs count (probe `count` line, 0012) | | — |
-| `issue_evaluation_budget` (release, ms) | — | 0.95 (1,000 pods, 50 problems, 2,000 events; step 1a, no kind rules yet) |
+| Idle RSS after 5 min, UAT, scope All | not measured (needs a build of the commit before 0020) | 113.5 MB working set (release, `--screen issues`; 106 MB at 30 s, 113 MB at 2 min) |
+| Watches (status bar), scope All / 3 namespaces | — | 13 / 17 (Issues screen, no drawer; `open_watch_count`) |
+| UAT Jobs count (probe `count` line, 0012) | 5 (sidebar count) | — |
+| `issue_evaluation_budget` (release, ms) | — | 0.94 (1,000 pods with 50 problems, 2,000 events, 1,000 Deployments) |

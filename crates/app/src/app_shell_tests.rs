@@ -355,3 +355,86 @@ fn custom_launch_without_an_established_crd_fails_with_its_name() {
         Err("no Established CRD named widgets.x.io".to_owned())
     );
 }
+
+// ---- Reveal and the steps that build on the selection ----
+
+fn pod_key(name: &str) -> ResourceKey {
+    ResourceKey::Pod {
+        namespace: "shop".to_owned(),
+        name: name.to_owned(),
+    }
+}
+
+fn secret_key() -> ResourceKey {
+    ResourceKey::Kind {
+        kind: ResourceKind::Secrets,
+        namespace: Some("shop".to_owned()),
+        name: "credentials".to_owned(),
+    }
+}
+
+#[gpui_kit::test]
+fn open_drawer_tab_on_another_row_ends_on_that_tab(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.open_drawer_tab(pod_key("api-1"), DrawerTab::Yaml, cx);
+    });
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected, Some(pod_key("api-1")));
+        assert_eq!(shell.drawer.tab, DrawerTab::Yaml);
+    });
+}
+
+#[gpui_kit::test]
+fn open_drawer_tab_on_the_selection_needs_no_reveal(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.open_drawer_tab(pod_key("api-0"), DrawerTab::Events, cx);
+        // At once, before anything is deferred.
+        assert_eq!(shell.drawer.tab, DrawerTab::Events);
+    });
+}
+
+#[gpui_kit::test]
+fn secret_action_on_another_row_waits_for_the_selection(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        // Another tab shows, so only the action's step can bring the Overview back.
+        shell.drawer.tab = DrawerTab::Yaml;
+        shell.run_secret_action(secret_key(), SecretAction::RevealAll, cx);
+    });
+    cx.run_until_parked();
+    // The pending action itself is consumed or dropped by the next frame (there is no session
+    // to read the Secret from), so the tab and the selection are what stay.
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected, Some(secret_key()));
+        assert_eq!(shell.drawer.tab, DrawerTab::Overview);
+    });
+}
+
+#[gpui_kit::test]
+fn helm_values_keep_their_revision_through_a_reveal(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    let key = ResourceKey::Kind {
+        kind: ResourceKind::HelmReleases,
+        namespace: Some("shop".to_owned()),
+        name: "api".to_owned(),
+    };
+    shell.update(cx, |shell, cx| {
+        shell.open_helm_values(key.clone(), 3, ValuesLayout::Diff, cx);
+    });
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected, Some(key.clone()));
+        assert_eq!(shell.drawer.tab, DrawerTab::Values);
+        // Choosing the subject forgets a revision; the step sets it after.
+        assert_eq!(shell.drawer.helm_revision, Some(3));
+        assert!(matches!(
+            &shell.drawer.pending_helm_layout,
+            Some((pending, ValuesLayout::Diff)) if *pending == key
+        ));
+    });
+}

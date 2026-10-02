@@ -7,15 +7,18 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use cluster::{NodeSummary, PodSummary};
+use cluster::{NamespaceScope, NamespaceSummary, NodeSummary, PodSummary};
 use jiff::{SignedDuration, Timestamp};
 
 use crate::app_shell::Screen;
 use crate::issue::{Finding, Issue, IssueKey, IssueObject, IssueRule, IssueSeverity};
 use crate::issue_feeds::{Coverage, IssueFeed, WarningEvents};
+use crate::issue_kind_rules::condition_findings;
 use crate::issue_rules::{event_findings, node_finding, pod_finding, volume_findings};
+use crate::kind_row::KindObject;
 use crate::kubelet_history::KubeletHistory;
 use crate::metrics_history::{NodeUsageHistory, PodUsageHistory};
+use crate::resource_kind::ResourceKind;
 use crate::table_selection::ResourceKey;
 
 /// How often the session looks whether the board needs a run.
@@ -28,7 +31,13 @@ const TIME_REFRESH: SignedDuration = SignedDuration::from_secs(30);
 pub(crate) struct IssueInputs<'a> {
     pub(crate) pods: Option<&'a [PodSummary]>,
     pub(crate) nodes: Option<&'a [NodeSummary]>,
+    /// The picked namespaces; a stuck namespace outside them is not listed.
+    pub(crate) scope: &'a NamespaceScope,
+    pub(crate) namespaces: Option<&'a [NamespaceSummary]>,
     pub(crate) events: Option<&'a WarningEvents>,
+    /// The Ready condition feeds, as the 0012 summary objects; a feed that is not here has not
+    /// loaded.
+    pub(crate) objects: &'a [(ResourceKind, &'a [KindObject])],
     pub(crate) pod_usage: Option<&'a PodUsageHistory>,
     pub(crate) node_usage: Option<&'a NodeUsageHistory>,
     pub(crate) kubelet: Option<&'a KubeletHistory>,
@@ -52,6 +61,7 @@ pub(crate) fn evaluate(inputs: &IssueInputs) -> Vec<Finding> {
             .flatten()
             .filter_map(|node| node_finding(node, inputs)),
     );
+    findings.extend(condition_findings(inputs));
     findings.extend(volume_findings(inputs));
     findings.extend(event_findings(inputs));
     findings
@@ -179,6 +189,7 @@ fn has_same_shape(left: &[Issue], right: &[Issue]) -> bool {
                 && left.severity == right.severity
                 && left.reason == right.reason
                 && left.shown == right.shown
+                && left.subject == right.subject
                 && left.container == right.container
                 && left.count == right.count
                 && left.since == right.since
@@ -187,9 +198,16 @@ fn has_same_shape(left: &[Issue], right: &[Issue]) -> bool {
         })
 }
 
-/// Whether the feed `rule` reads has not loaded, so the run skipped the rule.
-fn is_feed_missing(rule: IssueRule, inputs: &IssueInputs) -> bool {
-    match rule {
+/// Whether a feed the rule of `key` reads has not loaded, so the run skipped the rule.
+fn is_feed_missing(key: &IssueKey, inputs: &IssueInputs) -> bool {
+    let has_objects = |kind: &str| {
+        let kind = ResourceKind::from_object_kind(kind);
+        inputs
+            .objects
+            .iter()
+            .any(|(listed, _)| Some(*listed) == kind)
+    };
+    match key.rule {
         IssueRule::PodImage
         | IssueRule::PodCrash
         | IssueRule::PodWaiting
@@ -208,6 +226,18 @@ fn is_feed_missing(rule: IssueRule, inputs: &IssueInputs) -> bool {
         | IssueRule::NodeCondition
         | IssueRule::NodeMemory
         | IssueRule::NodeCpu => inputs.nodes.is_none(),
+        IssueRule::NamespaceStuck => inputs.namespaces.is_none(),
+        // The object of the key names the kind of its feed.
+        IssueRule::KindRollout
+        | IssueRule::KindJob
+        | IssueRule::KindClaim
+        | IssueRule::KindAutoscaler
+        | IssueRule::KindDisruptionBudget
+        | IssueRule::KindQuota
+        | IssueRule::QuotaNearLimit
+        | IssueRule::CertExpired
+        | IssueRule::CertExpiring => !has_objects(&key.object.kind),
+        IssueRule::PvcPending => !has_objects(&key.object.kind) || inputs.events.is_none(),
         IssueRule::VolumeFull => inputs.kubelet.is_none(),
         IssueRule::EventFailedCreate | IssueRule::EventJobFailed | IssueRule::EventBurst => {
             inputs.events.is_none()
@@ -297,7 +327,7 @@ impl IssueBoard {
         // A feed that reloads (a scope change, a retry) skips its rules for a while; what they
         // saw before keeps its first-seen time, or every age would start again.
         for (key, seen) in &self.first_seen {
-            if is_feed_missing(key.rule, inputs) {
+            if is_feed_missing(key, inputs) {
                 first_seen.entry(key.clone()).or_insert(*seen);
             }
         }
@@ -327,6 +357,11 @@ impl IssueBoard {
         self.is_dirty = false;
         self.last_run = Some(now);
         change
+    }
+
+    /// Sorted by severity, then oldest first.
+    pub(crate) fn issues(&self) -> &[Issue] {
+        &self.issues
     }
 
     pub(crate) fn coverage(&self) -> &Coverage {
@@ -381,6 +416,7 @@ fn issue_of(group: Grouped, since: Timestamp) -> Issue {
         reason: finding.reason,
         cause: finding.cause,
         container: finding.container,
+        subject: finding.object,
         count,
         since,
         target: shown.target(),

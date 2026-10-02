@@ -19,7 +19,7 @@ Options:
   --select <name>       with a drawer screen, open the row named <name> or <namespace>/<name>
                          (default: the first row)
   --theme light|dark     colour theme (default: follow the system)
-  --screen pods|nodes|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
+  --screen pods|nodes|issues|issues-drawer|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]
@@ -34,6 +34,10 @@ Options:
 pub(crate) enum LaunchScreen {
     Pods,
     Nodes,
+    /// `--screen issues`.
+    Issues,
+    /// `--screen issues-drawer`: Issues, then the first issue revealed with its drawer.
+    IssuesDrawer,
     /// `--screen pod-drawer|pod-containers|pod-events|pod-yaml`: a pod drawer on that tab.
     PodDrawer(DrawerTab),
     /// `--screen node-drawer|node-events|node-yaml`.
@@ -73,6 +77,7 @@ impl LaunchScreen {
             // against the CRD list.
             Self::Custom { .. } => Screen::Kind(ResourceKind::Crds),
             Self::Nodes | Self::NodeDrawer(_) | Self::NodesSelected => Screen::Nodes,
+            Self::Issues | Self::IssuesDrawer => Screen::Issues,
             Self::Kind(kind) | Self::KindDrawer(kind, _) => Screen::Kind(kind),
         }
     }
@@ -84,6 +89,7 @@ impl LaunchScreen {
             Self::PodDrawer(_)
                 | Self::NodeDrawer(_)
                 | Self::KindDrawer(..)
+                | Self::IssuesDrawer
                 | Self::Custom { tab: Some(_), .. }
         )
     }
@@ -166,6 +172,8 @@ impl LaunchScreen {
         match text {
             "pods" => Some(Self::Pods),
             "nodes" => Some(Self::Nodes),
+            "issues" => Some(Self::Issues),
+            "issues-drawer" => Some(Self::IssuesDrawer),
             "pod-drawer" => Some(Self::PodDrawer(DrawerTab::Overview)),
             "pod-containers" => Some(Self::PodDrawer(DrawerTab::Containers)),
             "pod-events" => Some(Self::PodDrawer(DrawerTab::Events)),

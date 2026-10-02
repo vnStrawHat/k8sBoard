@@ -27,17 +27,17 @@ Names below are the tests as built. Four tests of the first plan needed a live c
 
 | Module | Tests |
 |---|---|
-| `issue_table.rs` | `issue_row_values_match_columns`, `object_cell_appends_container`, `count_cell_hides_one`, `quick_filter_matches_kind_and_cause` |
-| `navigation.rs` | `issues_item_opens_issues_screen` (update `enabled_items_are_pods_nodes_and_explorer_kinds`) |
-| `launch_options_tests.rs` | `screen_issues_parses` |
+| `issue_table.rs` | `issue_row_values_match_columns`, `a_cluster_object_has_no_namespace_cell`, `object_cell_appends_container`, `count_cell_hides_one`, `quick_filter_matches_kind_and_cause`, `view_logs_needs_the_subject_pod_in_the_list` |
+| `navigation.rs` | `issues_item_opens_issues_screen`, `enabled_items_are_issues_pods_nodes_and_explorer_kinds` (renamed) |
+| `launch_options_tests.rs` | `screen_issues_parses` (covers `issues-drawer`) |
 
 ## Step 2
 
 | Module | Tests |
 |---|---|
-| `issue_kind_rules.rs` | `rollout_stalled_is_critical`, `kind_rules_ignore_pod_derived_boxes` (D3/S1/S2 never fire with `pods: &[]`), `kind_graces` (table: DaemonSet S3/S4 and Job J4 → `ROLLOUT_GRACE`; D1, J1 → none), `job_backoff_limit_finding`, `hpa_at_max_is_capped_at_warning`, `pdb_blocks_drain_is_warning`, `quota_near_limit_names_first_item`, `at_quota_wins_over_near_limit`, `pvc_pending_needs_warning_event`, `pvc_pending_quiet_without_warning_feed`, `pvc_lost_is_critical`, `stuck_namespace_uses_kind_diagnosis`, `cert_expiring_uses_w3_wording`, `cert_expired_is_critical`, `unparsed_certificate_is_not_an_issue`, `title_becomes_sentence_case` |
-| `issue_board_tests.rs` | `pod_group_hides_rollout_stalled_of_same_deployment`, `rollout_stalled_without_pod_problems_shows` |
-| `issue_feeds_tests.rs` | `condition_plan_uses_scope_up_to_two_namespaces`, `condition_plan_uses_all_scope_above_two`, `condition_plan_waits_for_review`, `condition_plan_off_when_denied`, `all_scope_feed_drops_rows_outside_scope`, `forbidden_all_scope_feed_turns_off` |
+| `issue_kind_rules.rs` | `rollout_stalled_is_critical`, `kind_rules_ignore_pod_derived_boxes` (D3/S1/S2 never fire with `pods: &[]`), `kind_graces` (table: DaemonSet S3/S4 and Job J4 → `ROLLOUT_GRACE`; D1, J1 → none), `job_backoff_limit_finding`, `hpa_at_max_is_capped_at_warning`, `pdb_blocks_drain_is_warning`, `quota_near_limit_names_first_item`, `at_quota_wins_over_near_limit`, `pvc_pending_needs_warning_event`, `pvc_pending_quiet_without_warning_feed`, `pvc_lost_is_critical`, `failed_metrics_are_a_warning_too`, `stuck_namespace_uses_kind_diagnosis`, `cert_expiring_uses_w3_wording`, `cert_expired_is_critical`, `unparsed_certificate_is_not_an_issue`, `title_becomes_sentence_case` |
+| `issue_board_tests.rs` | `pod_group_hides_rollout_stalled_of_same_deployment`, `rollout_stalled_without_pod_problems_shows`, `first_seen_kept_while_a_condition_feed_reloads` |
+| `issue_feeds_tests.rs` | `condition_plan_uses_scope_up_to_two_namespaces`, `condition_plan_uses_all_scope_above_two`, `condition_plan_waits_for_review`, `condition_plan_off_when_denied`, `all_scope_feed_drops_rows_outside_scope`, `forbidden_all_scope_feed_turns_off`, `rollouts_label_once_in_the_note` |
 | `cluster_session_tests.rs` | `open_watch_count_with_condition_feeds` (N = 1, 2, 3) |
 
 ## Live checks (coder-lite, UAT `readonly@Monitor`)
@@ -54,3 +54,12 @@ Names below are the tests as built. Four tests of the first plan needed a live c
 - Sidebar: Issues item shows the toned total; Pods/Nodes/kinds show a toned issue count before the muted total; Overview and Topology disabled.
 - Issues screen (1b): header, coverage text, columns and widths as [issues-screen.md](issues-screen.md); Critical rows first; no hardcoded colors.
 - Clicking a pod issue opens Pods with its drawer and WHY box; a Secret issue opens the Secrets drawer (step 2).
+
+## After review
+
+| Module | Tests |
+|---|---|
+| `app_shell_tests.rs` | `open_drawer_tab_on_another_row_ends_on_that_tab`, `open_drawer_tab_on_the_selection_needs_no_reveal`, `secret_action_on_another_row_waits_for_the_selection`, `helm_values_keep_their_revision_through_a_reveal` |
+| `issue_kind_rules_tests.rs` | `stuck_namespace_outside_the_picked_namespaces_is_not_listed`, `failed_job_ages_from_the_moment_it_gave_up`, `cert_onsets_come_from_the_not_after_date`, `failed_job_is_dropped_when_a_newer_one_of_the_owner_completed`, `pdb_blocked_by_unhealthy_pods_waits_but_a_full_budget_does_not`, `a_namespace_deleting_for_a_minute_is_not_stuck_yet`, `an_active_namespace_is_never_stuck` |
+| `issue_feeds_tests.rs` | `watch_count_follows_the_condition_plan` (the production `IssueFeeds::watch_count`, N = 1, 2, 3) |
+| `issue_table_tests.rs` | `long_kinds_show_short_and_still_match_in_full` |

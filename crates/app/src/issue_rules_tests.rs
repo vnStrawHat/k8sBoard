@@ -29,7 +29,10 @@ fn inputs() -> IssueInputs<'static> {
     IssueInputs {
         pods: None,
         nodes: None,
+        scope: &NamespaceScope::All,
+        namespaces: None,
         events: None,
+        objects: &[],
         pod_usage: None,
         node_usage: None,
         kubelet: None,

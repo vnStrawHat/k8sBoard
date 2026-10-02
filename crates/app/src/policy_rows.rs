@@ -439,7 +439,7 @@ fn quota_measure(resource: &str) -> QuotaMeasure {
 }
 
 /// Used over hard; `None` before the quota controller reports usage, or for a limit of zero.
-fn quota_ratio(item: &QuotaItem) -> Option<f64> {
+pub(crate) fn quota_ratio(item: &QuotaItem) -> Option<f64> {
     quantity_ratio(item.used.as_deref()?, &item.hard)
 }
 
@@ -463,7 +463,7 @@ pub(crate) fn quota_text(item: &QuotaItem) -> String {
 }
 
 /// A quota blocks only at 100 %.
-fn quota_tone(ratio: f64) -> Option<StatusTone> {
+pub(crate) fn quota_tone(ratio: f64) -> Option<StatusTone> {
     if ratio >= 1.0 {
         Some(StatusTone::Bad)
     } else if ratio >= 0.9 {

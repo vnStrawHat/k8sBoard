@@ -7,7 +7,7 @@
 | File | Change |
 |---|---|
 | `src/pod.rs` (+ `pod_tests.rs`) | `PodCondition.changed_at: Option<jiff::Timestamp>` from `lastTransitionTime` (same doc as `NodeCondition.changed_at`) |
-| `src/event.rs` (+ `event_tests.rs`) | `truncate_message` (the source of every event, pod, node, and workload message) hides URL userinfo before the cut, as 0018 does for custom objects, so no issue cause can quote a credential; tests `message_hides_url_userinfo`, `node_condition_message_hides_url_userinfo`, `pod_condition_and_waiting_messages_hide_url_userinfo` |
+| `src/event.rs` (+ `event_tests.rs`) | `truncate_message` (the source of every event, pod, node, and workload message) hides URL userinfo before the cut, as 0018 does for custom objects. That is the only masking: an issue cause quotes the cleaned message otherwise as it is; tests `message_hides_url_userinfo`, `node_condition_message_hides_url_userinfo`, `pod_condition_and_waiting_messages_hide_url_userinfo` |
 | `src/container_spec.rs` (+ tests) | `ProbeSummary.initial_delay_seconds` (`initialDelaySeconds`, default 0): the startup grace adds it |
 
 ## `crates/app`
@@ -47,3 +47,14 @@ Step 1a starts on committed code plus 0011 (`KubeletHistory`). Step 2 needs 0012
 - `docs/roadmap/cross-cutting.md`: C13 → settled by 0020 decisions 1–11 with the measured numbers.
 - `docs/roadmap/README.md`: 0020 status.
 - [decisions.md](decisions.md) "Budget measurements" filled by coder-lite.
+
+## As built (steps 1b and 2)
+
+- `Issue.subject` is the object the rule fired on (the representative pod of a group); View logs reads it, because `shown` is the Deployment for a group.
+- `resource_actions::view_logs_item` is `pub(crate)` and takes the container hint; `quota_ratio`, `quota_tone`, and `scope_multiplicity` are `pub(crate)` for reuse.
+- Issues has no checkbox: a plain mouse click on a row reveals (`AppShell::reveal_issue`); the arrow keys only move the highlight, so they do not jump away. There is no Enter binding (the toolkit has none).
+- `AppShell::reveal` selects after the tables' `ClearSelection` events, which `show_screen` queues and which would otherwise erase the selection of a list that is still loading. Steps that build on the selection (`open_drawer_tab`, `open_helm_values`, `run_secret_action`) run inside the same deferred closure through `reveal_then`; `open_helm_values` sets the revision and layout after the selection, which forgets them.
+- `--screen issues-drawer` reveals the first issue (used for screenshots). Column widths: 80, 170, 110, 260, 120, fill (min 200), 64, 60. The Kind column shows `HPA`, `PDB`, `PVC` for the long policy kinds; the full name still matches the quick filter.
+- Ages: NamespaceStuck uses `deleting_since`, a failed Job `finished_at`, CertExpired the `not_after` date, CertExpiring `not_after` minus `EXPIRY_WARNING`. The other condition summaries carry no transition time, so their age is the first sighting.
+- A stuck namespace outside the picked namespaces is not listed. A failed Job is dropped when a newer Job of the same owner has completed. A PDB that blocks because its pods are unhealthy waits `ROLLOUT_GRACE`.
+- `ProbeSummary.initial_delay_seconds` is in the cluster crate (see above).

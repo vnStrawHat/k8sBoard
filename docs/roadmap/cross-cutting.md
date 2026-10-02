@@ -18,7 +18,7 @@
 | C10 | **Audit log** | Append-only JSON lines in the C2 dir: time, cluster, user identity, action, object, field paths changed, optional note. Values of Secret fields are never recorded; diffs are recorded as field paths plus non-secret values only | 0030 |
 | C11 | **Sidebar counts for every kind** | Counts only for kinds with a live watch (today's rule) plus a one-shot metadata list on group expand, refreshed on navigation; no always-on watches for counts | 0009; Done (0012) |
 | C12 | **Helm writes** | Native rollback (re-apply the previous manifest, write a new release Secret) is large and fragile; proposed: run the user's `helm` CLI with the same kubeconfig/context, shown as a command preview. User decision; 0038 deferred by the user (2026-10-02) | 0038 |
-| C13 | **Always-on watch budget** | Issues and Overview need pods, nodes, events, and a few kinds watched for the whole session. Budget: idle RAM < 150 MB (wireframe principle) on a ~1,000-pod cluster; measure before 0020 merges | 0020 |
+| C13 | **Always-on watch budget** | Settled by 0020 decisions 1–11: always-on core feeds plus eight condition feeds. Measured on UAT (scope All): idle RSS 113.5 MB after 5 min (budget 150 MB), 13 watches, `issue_evaluation_budget` 0.94 ms | 0020 (Done) |
 
 ## New dependencies (each approved in its spec)
 

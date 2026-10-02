@@ -7,13 +7,14 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::table::DataTable;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _, h_flex,
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, Context, InteractiveElement as _, IntoElement, ParentElement as _,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use cluster::{EVENT_LIMIT, EventFilter};
@@ -22,6 +23,7 @@ use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{FlowState, LiveCluster, SessionPhase};
 use crate::drawer::ClickHandler;
 use crate::filter_bar::{ToolkitState, filter_bar};
+use crate::issue_board::IssueSummary;
 use crate::kind_drawer::kind_drawer;
 use crate::log_dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
 use crate::navigation::SIDEBAR_WIDTH;
@@ -30,6 +32,7 @@ use crate::node_summary::role_counts;
 use crate::pod_drawer::pod_drawer;
 use crate::resource_kind::ResourceKind;
 use crate::row_selection::{bulk_actions, selection_bar};
+use crate::status_tone::{StatusTone, tone_color};
 use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
 
@@ -44,6 +47,11 @@ impl AppShell {
             }
         });
         self.node_table.update(cx, |table, cx| {
+            if table.delegate_mut().fit_width(table_width) {
+                table.refresh(cx);
+            }
+        });
+        self.issue_table.update(cx, |table, cx| {
             if table.delegate_mut().fit_width(table_width) {
                 table.refresh(cx);
             }
@@ -135,6 +143,11 @@ impl AppShell {
                     Some(nodes_count_text(count, &role_counts(live.nodes.items())))
                 }),
             ),
+            Screen::Issues => (
+                "Issues",
+                self.issue_summary(cx)
+                    .map(|summary| count_label(summary.total, "issue", "issues")),
+            ),
             Screen::Kind(kind) => (
                 kind.label(),
                 live.and_then(|live| {
@@ -202,6 +215,7 @@ impl AppShell {
         let (singular, plural) = match self.screen {
             Screen::Pods => ("pod", "pods"),
             Screen::Nodes => ("node", "nodes"),
+            Screen::Issues => ("issue", "issues"),
             Screen::Kind(kind) => (kind.singular(), kind.plural()),
         };
         let text = format!("{} selected", count_label(state.checked, singular, plural));
@@ -242,6 +256,7 @@ impl AppShell {
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
         let buttons: Vec<AnyElement> = match self.screen {
+            Screen::Issues => return self.render_issues_status(cx),
             Screen::Kind(ResourceKind::ReplicaSets) => {
                 self.render_hide_inactive(toolkit, cx).into_iter().collect()
             }
@@ -261,6 +276,44 @@ impl AppShell {
                 .ml_auto()
                 .gap_2()
                 .children(buttons)
+                .into_any_element(),
+        )
+    }
+
+    /// The numbers behind the title bar flag; `None` before pods and nodes have loaded.
+    fn issue_summary(&self, cx: &App) -> Option<IssueSummary> {
+        self.live(cx)?;
+        self.session.as_ref()?.read(cx).issues().summary()
+    }
+
+    /// Right of the Issues header: how the issues were found, and what could not be checked. A
+    /// gap shows as `Partial coverage` in Warn with the note as its tooltip; a feed that is only
+    /// limited by design shows muted, untoned.
+    fn render_issues_status(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        self.live(cx)?;
+        let board = self.session.as_ref()?.read(cx).issues();
+        let muted = cx.theme().muted_foreground;
+        let status = match board.coverage().note() {
+            Some(note) if board.coverage().is_partial() => div()
+                .id("issues-coverage")
+                .text_color(tone_color(StatusTone::Warn, cx))
+                .child("Partial coverage")
+                .tooltip(move |window, cx| Tooltip::new(note.clone()).build(window, cx)),
+            Some(note) => div()
+                .id("issues-coverage")
+                .text_color(muted)
+                .child("auto-detected · live")
+                .tooltip(move |window, cx| Tooltip::new(note.clone()).build(window, cx)),
+            None => div()
+                .id("issues-coverage")
+                .text_color(muted)
+                .child("auto-detected · live"),
+        };
+        Some(
+            h_flex()
+                .ml_auto()
+                .text_sm()
+                .child(status)
                 .into_any_element(),
         )
     }
@@ -341,6 +394,11 @@ impl AppShell {
         let message = match self.screen {
             Screen::Pods => live.pods.interruption(),
             Screen::Nodes => live.nodes.interruption(),
+            // The problem is in the lists the issues come from.
+            Screen::Issues => live
+                .pods
+                .interruption()
+                .or_else(|| live.nodes.interruption()),
             Screen::Kind(kind) => live.kind_list(kind)?.list.interruption(),
         }?;
         Some(
@@ -397,6 +455,8 @@ impl AppShell {
         let (title, failure) = match self.screen {
             Screen::Pods => ("Pods".to_owned(), live.pods.failure()),
             Screen::Nodes => ("Nodes".to_owned(), live.nodes.failure()),
+            // A list that failed is a gap in the coverage, not a failure of this screen.
+            Screen::Issues => ("Issues".to_owned(), None),
             Screen::Kind(kind) => (
                 kind.label().to_owned(),
                 live.kind_list(kind)
@@ -419,10 +479,43 @@ impl AppShell {
             Screen::Nodes => DataTable::new(&self.node_table)
                 .bordered(false)
                 .into_any_element(),
+            Screen::Issues => self.render_issues(cx),
             Screen::Kind(_) => DataTable::new(&self.kind_table)
                 .bordered(false)
                 .into_any_element(),
         }
+    }
+
+    /// The Issues table, or what stands in for it: a spinner until pods and nodes have loaded, and
+    /// a calm message when nothing was found.
+    fn render_issues(&self, cx: &Context<Self>) -> AnyElement {
+        let Some(summary) = self.issue_summary(cx) else {
+            return busy_view("Checking the cluster…", cx);
+        };
+        if summary.total > 0 {
+            return DataTable::new(&self.issue_table)
+                .bordered(false)
+                .into_any_element();
+        }
+        let note = self
+            .session
+            .as_ref()
+            .and_then(|session| session.read(cx).issues().coverage().note());
+        let text = if summary.is_partial {
+            "No issues found in what k8sBoard watches."
+        } else {
+            "No issues found."
+        };
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(text)
+            .children(note)
+            .into_any_element()
     }
 
     /// An overlay on the workspace only, so it never covers the title bar, the sidebar, or

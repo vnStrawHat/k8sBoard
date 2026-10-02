@@ -124,7 +124,7 @@ pub(crate) fn default_filter(screen: Screen) -> TableFilter {
                 ..TableFilter::default()
             }
         }
-        Screen::Pods | Screen::Nodes | Screen::Kind(_) => TableFilter::default(),
+        Screen::Pods | Screen::Nodes | Screen::Issues | Screen::Kind(_) => TableFilter::default(),
     }
 }
 

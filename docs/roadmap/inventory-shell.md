@@ -13,7 +13,7 @@
 | T5 | Namespace picker (wireframe shows several namespaces: `ns: payments, web`) | Partial | 0003 (one or all) | multi-namespace → 0009 |
 | T6 | Search box "Search resources or run a command… Ctrl K" | Missing | — | 0029 |
 | T7 | Read-only lock badge | Partial | 0003 (static) | per-cluster toggle, Ctrl Shift R → 0030 |
-| T8 | Issues button `⚑ 4` | Missing | — | 0020 |
+| T8 | Issues button `⚑ 4` | Done | 0020 | — |
 | T9 | Settings button ⚙ | Partial | 0003 (no action) | 0025 |
 | T10 | "Manage clusters…" item | Partial | 0003 (disabled) | 0025 |
 
@@ -24,8 +24,8 @@
 | N1 | Groups (Cluster … Custom Resources), collapse, active group open | Done | 0003, 0005 `navigation.rs` | — |
 | N2 | Items disabled with "Not permitted" from SSAR | Done | 0005 | extend per new kind |
 | N3 | Counts per item | Done (0012) | live counts for Pods, Nodes, the visible kind; one-shot counts for the other kinds | — |
-| N4 | Error counts (red) | Missing | — | 0020 |
-| N5 | Top items Overview, Issues, Topology | Missing (disabled) | — | 0021, 0020, 0022 |
+| N4 | Error counts (red) | Done | 0020 | — |
+| N5 | Top items Overview, Issues, Topology | Partial (Issues done in 0020; Overview and Topology disabled) | 0020 | 0021, 0022 |
 | N6 | Custom Resources group auto-filled from CRDs (e.g. Certificates) | Done (grouped by API group) | — | 0018 |
 | N7 | Clicking a nav item un-zooms the dock | Done | 0004 | — |
 

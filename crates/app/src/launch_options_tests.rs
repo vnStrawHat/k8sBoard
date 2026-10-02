@@ -443,3 +443,16 @@ fn parses_logs_workload_screen() {
     assert!(screen.has_log_dock());
     assert_eq!(screen.screen(), Screen::Pods);
 }
+
+#[test]
+fn screen_issues_parses() {
+    let list = run_options(&["--screen", "issues"]).screen;
+    assert_eq!(list, LaunchScreen::Issues);
+    assert_eq!(list.screen(), Screen::Issues);
+    assert!(!list.has_drawer());
+    // The drawer variant reveals the first issue, which opens its object's drawer.
+    let drawer = run_options(&["--screen", "issues-drawer"]).screen;
+    assert_eq!(drawer, LaunchScreen::IssuesDrawer);
+    assert_eq!(drawer.screen(), Screen::Issues);
+    assert!(drawer.has_drawer());
+}

@@ -23,9 +23,17 @@ impl IssueSeverity {
             Self::Warning => StatusTone::Warn,
         }
     }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Critical => "Critical",
+            Self::Warning => "Warning",
+        }
+    }
 }
 
-/// Rule ids, declared in evaluation order: pods, nodes, volume usage, events. `Ord` is the order
+/// Rule ids, declared in evaluation order: pods, nodes, namespaces, workload and policy kinds,
+/// certificates, volume usage, events. `Ord` is the order
 /// in which `dedupe` lets a rule claim an object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum IssueRule {
@@ -47,6 +55,17 @@ pub(crate) enum IssueRule {
     NodeCondition,
     NodeMemory,
     NodeCpu,
+    NamespaceStuck,
+    KindRollout,
+    KindJob,
+    KindClaim,
+    PvcPending,
+    KindAutoscaler,
+    KindDisruptionBudget,
+    KindQuota,
+    QuotaNearLimit,
+    CertExpired,
+    CertExpiring,
     VolumeFull,
     EventFailedCreate,
     EventJobFailed,
@@ -122,6 +141,9 @@ pub(crate) struct Issue {
     pub(crate) cause: String,
     /// The Object column: the pod, or the workload of a group of two or more pods.
     pub(crate) shown: IssueObject,
+    /// The object the rule fired on: `shown`, or the representative pod of a group. View logs
+    /// reads this pod.
+    pub(crate) subject: IssueObject,
     pub(crate) container: Option<String>,
     /// At least 1: the pods of a group.
     pub(crate) count: usize,

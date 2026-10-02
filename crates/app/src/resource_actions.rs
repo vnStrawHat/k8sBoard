@@ -106,7 +106,7 @@ pub(crate) fn pod_menu(
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
     let access = &live.access;
-    menu.item(view_logs_item(pod, live, dock))
+    menu.item(view_logs_item(pod, None, live, dock))
         .item(action_item(ResourceAction::OpenShell, "Open shell", access))
         .item(action_item(
             ResourceAction::PortForward,
@@ -151,27 +151,32 @@ fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
-/// Opens the pod in the log dock. Without containers there is nothing to read.
-fn view_logs_item(
+/// Opens the pod in the log dock, on `container` when the pod has one of that name. Without
+/// containers there is nothing to read.
+pub(crate) fn view_logs_item(
     pod: &PodSummary,
+    container: Option<&str>,
     live: &LiveCluster,
     dock: &WeakEntity<LogDock>,
 ) -> PopupMenuItem {
     const LABEL: &str = "View logs";
     match action_availability(ResourceAction::ViewLogs, &live.access) {
         ActionAvailability::Disabled { reason } => disabled_menu_item(LABEL, reason),
-        ActionAvailability::Enabled => match LogTarget::of_pod(pod) {
-            None => disabled_menu_item(LABEL, "The pod has no containers".into()),
-            Some(target) => {
-                let connection = live.connection().clone();
-                let dock = dock.clone();
-                PopupMenuItem::new(LABEL).on_click(move |_, window, cx| {
-                    let _ = dock.update(cx, |dock, cx| {
-                        dock.open(connection.clone(), target.clone(), window, cx)
-                    });
-                })
+        ActionAvailability::Enabled => {
+            let named = container.and_then(|name| LogTarget::of_container(pod, name));
+            match named.or_else(|| LogTarget::of_pod(pod)) {
+                None => disabled_menu_item(LABEL, "The pod has no containers".into()),
+                Some(target) => {
+                    let connection = live.connection().clone();
+                    let dock = dock.clone();
+                    PopupMenuItem::new(LABEL).on_click(move |_, window, cx| {
+                        let _ = dock.update(cx, |dock, cx| {
+                            dock.open(connection.clone(), target.clone(), window, cx)
+                        });
+                    })
+                }
             }
-        },
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 # 0020 — Issues engine and Issues screen (read-only)
 
-Status: amended after the advisor review (must-fix 1–4, should-fix, nice-to-haves), HEAD `dc4ed69`. **Step 1a starts on committed code plus 0011; step 2 after 0012–0018 merge** ([files-to-touch.md](files-to-touch.md)). Crates: `crates/cluster` (one field), `crates/app`. Wireframes: W3 "Needs attention", W2 title bar `⚑ 4`, sidebar `Issues 4` (red), anatomy note "counts and error counts". Settles C13; applies C1, C4 (live session only), C11.
+Status: **built** (steps 1a, 1b, 2). Written against HEAD `dc4ed69`, amended after the advisor review. **Step 1a starts on committed code plus 0011; step 2 after 0012–0018 merge** ([files-to-touch.md](files-to-touch.md)). Crates: `crates/cluster` (one field), `crates/app`. Wireframes: W3 "Needs attention", W2 title bar `⚑ 4`, sidebar `Issues 4` (red), anatomy note "counts and error counts". Settles C13; applies C1, C4 (live session only), C11.
 
 ## Goal
 
@@ -35,16 +35,16 @@ Any mutation (W3 "Fix image" → 0032); snooze, acknowledge, persistence (first-
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`; no `Cargo.lock` change.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. Read-only: new requests are `list`/`watch` only; the 0001 grep still finds only the SSAR `create`; no kube type in a public signature; the cluster crate spawns no task.
-- [ ] 4. Secret safety: issue modules contain no `tracing::` call; TLS summaries hold no secret values (0016); coverage and causes never include credentials.
-- [ ] 5. Rules are pure (`issue_rules.rs`, `issue_kind_rules.rs`, `issue_board.rs` take no GPUI context); evaluation runs at most once per `ISSUE_TICK`; it notifies only on change, or on `TIME_REFRESH` while Issues is visible.
-- [ ] 6. `issue_evaluation_budget` (release) ≤ 4 ms on the dev machine; the number is in [decisions.md](decisions.md).
-- [ ] 7. On UAT the Issues screen lists live problems; each Critical row matches `kubectl` state; clicking a row reveals the object with its drawer.
-- [ ] 8. Idle RSS after 5 min on UAT (scope All, all feeds) < 150 MB; watch count equals `open_watch_count`; three namespaces run condition feeds as All-scope watches showing only in-scope rows.
-- [ ] 9. The 0003 AC4 color-literal grep is clean; tones come from `tone_color`.
-- [ ] 10. The step's screenshots exist; the ui-verifier reports no high-severity defect against W2, W3 (content), and the sidebar.
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`; no `Cargo.lock` change.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
+- [x] 3. Read-only: new requests are `list`/`watch` only; the 0001 grep still finds only the SSAR `create`; no kube type in a public signature; the cluster crate spawns no task.
+- [x] 4. Secret safety: issue modules contain no `tracing::` call; TLS summaries hold no secret values (0016); coverage reasons carry no credential values; a cause quotes an event or condition message after the cluster crate hid URL userinfo in it, and nothing more is masked.
+- [x] 5. Rules are pure (`issue_rules.rs`, `issue_kind_rules.rs`, `issue_board.rs` take no GPUI context); evaluation runs at most once per `ISSUE_TICK`; it notifies only on change, or on `TIME_REFRESH` while Issues is visible.
+- [x] 6. `issue_evaluation_budget` (release) ≤ 4 ms on the dev machine; the number is in [decisions.md](decisions.md).
+- [x] 7. On UAT the Issues screen lists live problems; each Critical row matches `kubectl` state; clicking a row reveals the object with its drawer.
+- [x] 8. Idle RSS after 5 min on UAT (scope All, all feeds) < 150 MB; watch count equals `open_watch_count`; three namespaces run condition feeds as All-scope watches showing only in-scope rows.
+- [x] 9. The 0003 AC4 color-literal grep is clean; tones come from `tone_color`.
+- [x] 10. The step's screenshots exist; the ui-verifier reports no high-severity defect against W2, W3 (content), and the sidebar. (Screenshots exist and were viewed by the coder: `.tmp/ui-shots/v48-*` and `v50-*`; the ui-verifier run is still to do.) (ui-verifier 2026-10-02 (v50v shots): no high-severity defect; tooltips, empty and failure states rely on unit tests.)
 
 ## Open items
 

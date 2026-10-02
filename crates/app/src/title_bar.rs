@@ -8,7 +8,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{AnyElement, Context, Hsla, IntoElement, ParentElement as _, Styled as _, div};
 
-use crate::app_shell::AppShell;
+use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::namespaces_label;
 use crate::issue_board::IssueSummary;
 use crate::namespace_picker::{PickerAnchor, namespace_picker as picker};
@@ -38,7 +38,10 @@ pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoEl
 /// The flag with the issue count, in the tone of the worst issue. Without a count it is a muted
 /// icon: nothing to show yet, or no issues.
 fn issues_button(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
-    let button = Button::new("issues").ghost().small();
+    let button = Button::new("issues")
+        .ghost()
+        .small()
+        .on_click(cx.listener(|shell, _, _, cx| shell.show_screen(Screen::Issues, cx)));
     let muted = cx.theme().muted_foreground;
     let live_session = shell
         .session()
@@ -91,7 +94,6 @@ fn issues_tooltip(summary: IssueSummary, coverage_note: Option<String>) -> Strin
             text.push_str(&note);
         }
     }
-    text.push_str(" · Issues screen comes next");
     text
 }
 

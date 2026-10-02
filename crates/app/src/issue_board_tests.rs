@@ -168,7 +168,10 @@ fn inputs_at<'a>(pods: &'a [PodSummary], nodes: &'a [NodeSummary], now: i64) -> 
     IssueInputs {
         pods: Some(pods),
         nodes: Some(nodes),
+        scope: &NamespaceScope::All,
+        namespaces: None,
         events: None,
+        objects: &[],
         pod_usage: None,
         node_usage: None,
         kubelet: None,
@@ -724,7 +727,7 @@ fn count_for_screen_uses_reveal_target() {
     );
 }
 
-/// 1,000 pods with 50 problems and 2,000 events. Run with
+/// 1,000 pods with 50 problems, 2,000 events, and 1,000 Deployments. Run with
 /// `cargo test --release -p k8sboard issue_evaluation_budget -- --ignored`; it fails above the 4 ms
 /// budget of the spec and names the time then.
 #[test]
@@ -754,8 +757,23 @@ fn issue_evaluation_budget() {
         .collect();
     let feed = feed(events);
     let nodes = [node("node-a", NodeReadiness::Ready)];
+    // A thousand Deployments, one in fifty stalled.
+    let deployments: Vec<KindObject> = (0..1_000)
+        .map(|index| {
+            let KindObject::Deployment(mut deployment) = stalled_api() else {
+                unreachable!("stalled_api builds a Deployment");
+            };
+            deployment.name = format!("web-{index:04}");
+            if index % 50 != 0 {
+                deployment.conditions.clear();
+            }
+            KindObject::Deployment(deployment)
+        })
+        .collect();
+    let feeds = [(ResourceKind::Deployments, &deployments[..])];
     let run = IssueInputs {
         events: Some(&feed),
+        objects: &feeds,
         ..inputs_at(&pods, &nodes, NOW)
     };
     let mut board = IssueBoard::default();
@@ -768,4 +786,89 @@ fn issue_evaluation_budget() {
         "{} issues took {elapsed:?}",
         board.issues.len()
     );
+}
+
+// ---- condition feeds ----
+
+fn stalled_api() -> KindObject {
+    KindObject::Deployment(cluster::DeploymentSummary {
+        namespace: "shop".to_owned(),
+        name: "api".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        desired: 3,
+        ready: 1,
+        up_to_date: 1,
+        available: 1,
+        strategy: String::new(),
+        max_surge: None,
+        max_unavailable: None,
+        progress_deadline_seconds: 600,
+        is_paused: false,
+        revision: None,
+        selector: Vec::new(),
+        containers: Vec::new(),
+        conditions: vec![cluster::WorkloadCondition {
+            name: "Progressing".to_owned(),
+            is_true: false,
+            reason: Some("ProgressDeadlineExceeded".to_owned()),
+            message: None,
+        }],
+    })
+}
+
+#[test]
+fn pod_group_hides_rollout_stalled_of_same_deployment() {
+    let pods = [crashing_pod("api-7d9f8c-a", 600, 3)];
+    let objects = [stalled_api()];
+    let feeds = [(ResourceKind::Deployments, &objects[..])];
+    let issues = issues_of(&IssueInputs {
+        objects: &feeds,
+        ..inputs(&pods)
+    });
+    let [issue] = issues.as_slice() else {
+        panic!("one issue, got {issues:?}");
+    };
+    // The crash loop is the cause; the stalled rollout restates it for the same Deployment.
+    assert_eq!(issue.key.rule, IssueRule::PodCrash);
+}
+
+#[test]
+fn rollout_stalled_without_pod_problems_shows() {
+    let pods = [pod_of(
+        "shop",
+        "api-7d9f8c-a",
+        Some(("ReplicaSet", "api-7d9f8c")),
+    )];
+    let objects = [stalled_api()];
+    let feeds = [(ResourceKind::Deployments, &objects[..])];
+    let issues = issues_of(&IssueInputs {
+        objects: &feeds,
+        ..inputs(&pods)
+    });
+    let [issue] = issues.as_slice() else {
+        panic!("one issue, got {issues:?}");
+    };
+    assert_eq!(issue.key.rule, IssueRule::KindRollout);
+    assert_eq!(issue.severity, IssueSeverity::Critical);
+    assert_eq!(issue.reason, "Rollout stalled");
+    assert_eq!(issue.target, issue.shown.target());
+}
+
+#[test]
+fn first_seen_kept_while_a_condition_feed_reloads() {
+    let objects = [stalled_api()];
+    let feeds = [(ResourceKind::Deployments, &objects[..])];
+    let with_feed = |now| IssueInputs {
+        objects: &feeds,
+        ..inputs_at(&[], &[], now)
+    };
+    let mut board = IssueBoard::default();
+    refresh(&mut board, &with_feed(NOW));
+    assert_eq!(board.issues[0].since, at(NOW));
+    // The feed restarts after a scope change; the other lists are up.
+    refresh(&mut board, &inputs_at(&[], &[], NOW + 30));
+    assert!(board.issues.is_empty());
+    refresh(&mut board, &with_feed(NOW + 60));
+    assert_eq!(board.issues[0].since, at(NOW));
 }

@@ -1399,3 +1399,27 @@ fn hidden_board_does_not_notify_for_an_age_change() {
         assert!(refresh_repaints(IssueChange::TextOnly, reason, true));
     }
 }
+
+#[test]
+fn condition_plan_opens_the_expected_number_of_watches() {
+    use crate::issue_feeds::{FeedPlan, condition_plan};
+    let access = AccessState::Unknown;
+    let issue_watches = |names: &[&str]| {
+        let scope = NamespaceScope::of_namespaces(names.iter().map(|name| (*name).to_owned()));
+        let events = scope_multiplicity(&scope);
+        let conditions: usize = condition_plan(&scope, &access)
+            .into_iter()
+            .map(|(_, plan)| match plan {
+                FeedPlan::Start { watch_scope } => scope_multiplicity(&watch_scope),
+                FeedPlan::Wait | FeedPlan::Off(_) => 0,
+            })
+            .sum();
+        events + conditions
+    };
+    // N + 8N up to two namespaces: 9 and 18.
+    assert_eq!(issue_watches(&["a"]), 9);
+    assert_eq!(issue_watches(&["a", "b"]), 18);
+    // Above two, one cluster-wide watch per kind: N events + 8.
+    assert_eq!(issue_watches(&["a", "b", "c"]), 3 + 8);
+    assert_eq!(issue_watches(&["a", "b", "c", "d", "e"]), 5 + 8);
+}

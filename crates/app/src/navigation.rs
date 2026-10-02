@@ -102,6 +102,7 @@ fn screen_of(item: &str) -> Option<Screen> {
     match item {
         "Pods" => Some(Screen::Pods),
         "Nodes" => Some(Screen::Nodes),
+        ISSUES_ITEM => Some(Screen::Issues),
         _ => ResourceKind::from_label(item).map(Screen::Kind),
     }
 }
@@ -222,7 +223,7 @@ pub(crate) fn sidebar(
     live: Option<&LiveCluster>,
     cx: &Context<AppShell>,
 ) -> impl IntoElement {
-    let top = SidebarMenu::new().children(TOP_ITEMS.map(|name| top_item(name, counts)));
+    let top = SidebarMenu::new().children(TOP_ITEMS.map(|name| top_item(name, active, counts, cx)));
     let sections = SidebarMenu::new().children(SECTIONS.iter().map(|section| {
         SidebarMenuItem::new(section.name)
             .default_open(is_section_open(section, active))
@@ -242,22 +243,26 @@ pub(crate) fn sidebar(
         .child(sections)
 }
 
-/// An item above the groups. Issues shows its total, toned by the worst severity, while it is
-/// still disabled.
-fn top_item(name: &'static str, counts: &NavigationCounts) -> SidebarMenuItem {
-    let item = SidebarMenuItem::new(name).disable(true);
-    let (ISSUES_ITEM, Some((total, severity))) = (name, counts.issue_total) else {
-        return item;
+/// An item above the groups. Issues opens its screen and shows its total, toned by the worst
+/// severity; Overview and Topology are not built yet.
+fn top_item(
+    name: &'static str,
+    active: Screen,
+    counts: &NavigationCounts,
+    cx: &Context<AppShell>,
+) -> SidebarMenuItem {
+    let Some(screen) = screen_of(name) else {
+        return SidebarMenuItem::new(name).disable(true);
     };
-    item.suffix(move |_, cx| {
-        issue_badge(
-            name,
-            total,
-            severity,
-            "Issues screen comes in the next step".into(),
-            cx,
-        )
-    })
+    let item = SidebarMenuItem::new(name)
+        .active(screen == active)
+        .on_click(cx.listener(move |shell, _, _, cx| shell.show_screen(screen, cx)));
+    match counts.issue_total {
+        Some((total, severity)) if screen == Screen::Issues => {
+            item.suffix(move |_, cx| issue_badge(name, total, severity, issues_tooltip(total), cx))
+        }
+        _ => item,
+    }
 }
 
 /// The count of issues, in the tone of the worst one, with a tooltip.
@@ -388,6 +393,8 @@ fn screen_item(
     let count = match screen {
         Screen::Pods => counts.pods,
         Screen::Nodes => counts.nodes,
+        // The Issues item shows the issue total instead of a list count.
+        Screen::Issues => None,
         Screen::Kind(kind) => counts.of_kind(kind),
     };
     let issues = counts.issues_of(screen);
@@ -442,7 +449,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn enabled_items_are_pods_nodes_and_explorer_kinds() {
+    fn enabled_items_are_issues_pods_nodes_and_explorer_kinds() {
         let enabled: Vec<&str> = TOP_ITEMS
             .iter()
             .chain(SECTIONS.iter().flat_map(|section| section.items.iter()))
@@ -452,6 +459,7 @@ mod tests {
         assert_eq!(
             enabled,
             [
+                "Issues",
                 "Nodes",
                 "Namespaces",
                 "Events",
@@ -781,7 +789,10 @@ mod tests {
         let inputs = crate::issue_board::IssueInputs {
             pods: Some(pods),
             nodes: Some(&[]),
+            scope: &NamespaceScope::All,
+            namespaces: None,
             events: None,
+            objects: &[],
             pod_usage: None,
             node_usage: None,
             kubelet: None,
@@ -843,5 +854,14 @@ mod tests {
         // Nothing before the first run, and nothing at zero.
         assert_eq!(issue_counts(&IssueBoard::default()), (None, Vec::new()));
         assert_eq!(issue_counts(&board_of(&[])), (None, Vec::new()));
+    }
+
+    #[test]
+    fn issues_item_opens_issues_screen() {
+        assert_eq!(screen_of("Issues"), Some(Screen::Issues));
+        // Overview and Topology stay disabled until their specs land.
+        assert_eq!(screen_of("Overview"), None);
+        assert_eq!(screen_of("Topology"), None);
+        assert_eq!(Screen::Issues.kind(), None);
     }
 }

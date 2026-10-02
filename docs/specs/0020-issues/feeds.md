@@ -52,7 +52,7 @@ pub(crate) enum FeedPlan { Start { watch_scope: NamespaceScope }, Wait, Off(Stri
 
 ## Coverage note
 
-`None` when every feed is Live. Else, grouped by state, feed labels (`pods`, `warning events`, `rollouts` for Deployments+DaemonSets, `jobs`, `HPAs`, `PDBs`, `quotas`, `volume claims`, `certificates`, `metrics`, `volume usage`): `Not checked: certificates (not permitted cluster-wide). Loading: warning events.` Limited feeds add a muted sentence (`Volume usage: 10 of 42 nodes polled.`) that is not toned Warn. Reasons never contain secret data (`error_text` rules).
+`None` when every feed is Live. Else, grouped by state, feed labels (`pods`, `warning events`, `rollouts` for Deployments+DaemonSets, `jobs`, `HPAs`, `PDBs`, `quotas`, `volume claims`, `certificates`, `metrics`, `volume usage`): `Not checked: certificates (not permitted cluster-wide). Loading: warning events.` Limited feeds add a muted sentence (`Volume usage: 10 of 42 nodes polled.`) that is not toned Warn. Reasons are the watch error text (`error_text`) and the plain reasons of the plan; they carry no credential values of their own.
 
 ## Silent subscription (`cluster_runtime.rs`)
 

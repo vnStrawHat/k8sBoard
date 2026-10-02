@@ -20,7 +20,7 @@ pub(crate) fn bulk_actions(screen: Screen) -> &'static [&'static str] {
         Screen::Kind(ResourceKind::DaemonSets) => &["Restart"],
         Screen::Kind(ResourceKind::Jobs) => &["Re-run"],
         Screen::Kind(ResourceKind::CronJobs) => &["Trigger now", "Suspend"],
-        Screen::Pods | Screen::Kind(_) => &[],
+        Screen::Pods | Screen::Issues | Screen::Kind(_) => &[],
     }
 }
 

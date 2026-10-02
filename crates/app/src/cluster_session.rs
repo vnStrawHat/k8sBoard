@@ -25,7 +25,7 @@ use crate::event_rows::newest_first;
 use crate::issue_board::{ISSUE_TICK, IssueBoard, IssueChange, IssueInputs, RunReason};
 use crate::issue_feeds::{FeedState, IssueFeeds, core_coverage};
 use crate::kind_join::{JoinInputs, join_rows};
-use crate::kind_row::KindRow;
+use crate::kind_row::{KindObject, KindRow};
 use crate::kubelet_metrics::KubeletDemand;
 use crate::related_objects::RelatedSubject;
 use crate::resource_kind::ResourceKind;
@@ -997,9 +997,13 @@ impl ClusterSession {
         &self.issues
     }
 
-    /// Whether the board has not run on loaded lists yet, or a feed it reads still loads. Only the
-    /// screenshot hook waits on it, so the sidebar and title bar numbers are on screen.
-    #[cfg(feature = "screenshot")]
+    /// Whether the Issues screen is shown; set from `AppShell::show_screen`.
+    pub(crate) fn set_issues_visible(&mut self, is_visible: bool) {
+        self.is_issues_visible = is_visible;
+    }
+
+    /// Whether the board has not run on loaded lists yet, or a feed it reads still loads. A launch
+    /// that opens an issue and the screenshot hook wait on it.
     pub(crate) fn is_issues_pending(&self) -> bool {
         self.issues.summary().is_none()
             || self
@@ -1020,18 +1024,29 @@ impl ClusterSession {
         let SessionPhase::Live(live) = &self.phase else {
             return;
         };
-        let events = &live.issue_feeds.events;
+        let feeds = &live.issue_feeds;
+        let events = &feeds.events;
+        // Only a feed that has loaded is read; the coverage names the others.
+        let objects: Vec<(ResourceKind, &[KindObject])> = feeds
+            .conditions
+            .iter()
+            .filter(|feed| feed.state() == FeedState::Live)
+            .filter_map(|feed| Some((feed.kind, feed.list.ready_items()?)))
+            .collect();
         let inputs = IssueInputs {
             pods: live.pods.ready_items(),
             nodes: live.nodes.ready_items(),
+            scope: &live.scope,
+            namespaces: live.namespaces.ready_items(),
             events: (events.state() == FeedState::Live).then_some(events),
+            objects: &objects,
             pod_usage: Some(&live.metrics.pods.history),
             node_usage: Some(&live.metrics.nodes.history),
             kubelet: Some(&live.metrics.kubelet.history),
-            is_job_feed_live: false,
+            is_job_feed_live: objects.iter().any(|(kind, _)| *kind == ResourceKind::Jobs),
             now,
         };
-        let change = self.issues.refresh(&inputs, core_coverage(live, events));
+        let change = self.issues.refresh(&inputs, core_coverage(live, feeds));
         if refresh_repaints(change, reason, self.is_issues_visible) {
             cx.notify();
         }
@@ -1049,6 +1064,31 @@ impl ClusterSession {
         self.issues.mark_dirty();
         if let Some(live) = self.live_mut() {
             live.issue_feeds.events.mark_stopped();
+        }
+    }
+
+    /// A condition feed update: it only marks the board, which repaints when it finds a change.
+    pub(crate) fn apply_condition_update(
+        &mut self,
+        kind: ResourceKind,
+        update: WatchUpdate<KindObject>,
+    ) {
+        self.issues.mark_dirty();
+        if let Some(feed) = self
+            .live_mut()
+            .and_then(|live| live.issue_feeds.condition_mut(kind))
+        {
+            feed.apply(update);
+        }
+    }
+
+    pub(crate) fn stop_condition(&mut self, kind: ResourceKind) {
+        self.issues.mark_dirty();
+        if let Some(feed) = self
+            .live_mut()
+            .and_then(|live| live.issue_feeds.condition_mut(kind))
+        {
+            feed.mark_stopped();
         }
     }
 
@@ -1197,6 +1237,14 @@ impl ClusterSession {
         // The events watch scans etcd, so it waits for the scope to settle.
         live.issue_feeds.restart_events(cx);
         live.scope = scope;
+        // The review of the new scope is running, so the condition feeds wait for it.
+        live.issue_feeds.restart_conditions(
+            &runtime,
+            &live.connection,
+            &live.scope,
+            &live.access,
+            cx,
+        );
         // The numbers are for the old scope; the review for the new one counts again.
         live.kind_counts = KindCounts::default();
         live.refresh_kubelet_targets();
@@ -1484,6 +1532,14 @@ impl ClusterSession {
         let runtime = cx.global::<ClusterRuntime>().clone();
         live.access = AccessState::from_review(review);
         live.drop_denied_companion();
+        // The review decides which condition feeds may start.
+        live.issue_feeds.restart_conditions(
+            &runtime,
+            &live.connection,
+            &live.scope,
+            &live.access,
+            cx,
+        );
         live.start_crd_watch(&runtime, cx);
         // A denial that arrives after the CRDs screen opened fails its list.
         if live.crds.is_none() {
@@ -1687,11 +1743,7 @@ impl LiveCluster {
                 .map_or(0, |lists| lists.watches(namespaces)),
             object_events: self.object_events.is_some(),
             related: self.related.is_some(),
-            issue_feeds: if self.issue_feeds.is_watching_events() {
-                namespaces
-            } else {
-                0
-            },
+            issue_feeds: self.issue_feeds.watch_count(namespaces),
         })
     }
 
@@ -1884,11 +1936,13 @@ impl LiveCluster {
                 connection.watch_namespaces(),
                 cx,
                 |session: &mut ClusterSession, update, _| {
+                    session.issues.mark_dirty();
                     if let Some(live) = session.live_mut() {
                         live.namespaces.apply(update);
                     }
                 },
                 |session, _| {
+                    session.issues.mark_dirty();
                     if let Some(live) = session.live_mut() {
                         live.namespaces.mark_stopped();
                     }
@@ -1942,6 +1996,13 @@ impl LiveCluster {
         }
         live.start_crd_watch(&runtime, cx);
         live.seed_crd_explorer();
+        live.issue_feeds.restart_conditions(
+            &runtime,
+            &live.connection,
+            &live.scope,
+            &live.access,
+            cx,
+        );
         live
     }
 
@@ -2308,7 +2369,7 @@ fn explorer_watches(kind: ResourceKind, namespaces: usize) -> usize {
 }
 
 /// The number of namespaces a scope watches per namespaced kind; `All` is one watch.
-fn scope_multiplicity(scope: &NamespaceScope) -> usize {
+pub(crate) fn scope_multiplicity(scope: &NamespaceScope) -> usize {
     match scope {
         NamespaceScope::All | NamespaceScope::Named(_) => 1,
         NamespaceScope::Several(names) => names.len(),

@@ -6,14 +6,22 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Duration;
 
-use cluster::{EventFilter, EventSummary, NamespaceScope, NodeReadiness, WatchUpdate};
-use futures::StreamExt as _;
+use cluster::{
+    ClusterConnection, ClusterError, EventFilter, EventSummary, NamespaceScope, NodeReadiness,
+    WatchUpdate,
+};
+use futures::stream::BoxStream;
+use futures::{Stream, StreamExt as _};
 use gpui_kit::{Context, Task};
 
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
-use crate::cluster_session::{ClusterSession, LiveCluster, LiveList};
+use crate::cluster_session::{
+    AccessState, ClusterSession, LiveCluster, LiveList, scope_multiplicity,
+};
 use crate::issue::IssueObject;
+use crate::kind_row::KindObject;
+use crate::resource_kind::ResourceKind;
 
 /// How long a scope change waits before the Warning events watch restarts. The API server keeps no
 /// watch cache for events and cannot index them, so each start scans every event of the scope in
@@ -21,25 +29,39 @@ use crate::issue::IssueObject;
 const EVENTS_RESTART_DELAY: Duration = Duration::from_secs(1);
 
 /// A source of problems, as the coverage names it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum IssueFeed {
     Pods,
     Nodes,
+    Namespaces,
     WarningEvents,
     PodMetrics,
     NodeMetrics,
     VolumeUsage,
+    /// A condition feed: Deployments, DaemonSets, Jobs, HPAs, PDBs, quotas, claims, or the TLS
+    /// secrets (`Secrets`).
+    Kind(ResourceKind),
 }
 
 impl IssueFeed {
+    /// What the coverage note calls the feed. Deployments and DaemonSets are both `rollouts`.
     fn label(self) -> &'static str {
         match self {
             Self::Pods => "pods",
             Self::Nodes => "nodes",
+            Self::Namespaces => "namespaces",
             Self::WarningEvents => "warning events",
             Self::PodMetrics => "pod metrics",
             Self::NodeMetrics => "node metrics",
             Self::VolumeUsage => "volume usage",
+            Self::Kind(ResourceKind::Deployments | ResourceKind::DaemonSets) => "rollouts",
+            Self::Kind(ResourceKind::Jobs) => "jobs",
+            Self::Kind(ResourceKind::HorizontalPodAutoscalers) => "HPAs",
+            Self::Kind(ResourceKind::PodDisruptionBudgets) => "PDBs",
+            Self::Kind(ResourceKind::ResourceQuotas) => "quotas",
+            Self::Kind(ResourceKind::PersistentVolumeClaims) => "volume claims",
+            Self::Kind(ResourceKind::Secrets) => "certificates",
+            Self::Kind(kind) => kind.label(),
         }
     }
 }
@@ -80,23 +102,26 @@ impl Coverage {
     /// The header and tooltip text, or `None` when every feed is live.
     pub(crate) fn note(&self) -> Option<String> {
         let mut sentences = Vec::new();
-        let off: Vec<String> = self
-            .feeds
-            .iter()
-            .filter_map(|(feed, state)| match state {
-                FeedState::Off(reason) => Some(format!("{} ({reason})", feed.label())),
-                _ => None,
-            })
-            .collect();
+        // Two feeds can share a label (rollouts) and a reason; the note says it once.
+        let mut off: Vec<String> = Vec::new();
+        let mut loading: Vec<&str> = Vec::new();
+        for (feed, state) in &self.feeds {
+            match state {
+                FeedState::Off(reason) => {
+                    let text = format!("{} ({reason})", feed.label());
+                    if !off.contains(&text) {
+                        off.push(text);
+                    }
+                }
+                FeedState::Loading if !loading.contains(&feed.label()) => {
+                    loading.push(feed.label())
+                }
+                FeedState::Loading | FeedState::Live | FeedState::Limited(_) => {}
+            }
+        }
         if !off.is_empty() {
             sentences.push(format!("Not checked: {}.", off.join(", ")));
         }
-        let loading: Vec<&str> = self
-            .feeds
-            .iter()
-            .filter(|(_, state)| *state == FeedState::Loading)
-            .map(|(feed, _)| feed.label())
-            .collect();
         if !loading.is_empty() {
             sentences.push(format!("Loading: {}.", loading.join(", ")));
         }
@@ -156,7 +181,7 @@ pub(crate) fn volume_usage_state(
 }
 
 /// The feeds of a live cluster, read at one moment.
-pub(crate) fn core_coverage(live: &LiveCluster, events: &WarningEvents) -> Coverage {
+pub(crate) fn core_coverage(live: &LiveCluster, feeds: &IssueFeeds) -> Coverage {
     let ready_nodes = live
         .nodes
         .items()
@@ -164,11 +189,12 @@ pub(crate) fn core_coverage(live: &LiveCluster, events: &WarningEvents) -> Cover
         .filter(|node| node.status.readiness == NodeReadiness::Ready)
         .count();
     let polled_nodes = live.metrics.kubelet.targets().summary_nodes.len();
-    Coverage {
+    let mut coverage = Coverage {
         feeds: vec![
             (IssueFeed::Pods, list_state(&live.pods)),
             (IssueFeed::Nodes, list_state(&live.nodes)),
-            (IssueFeed::WarningEvents, events.state()),
+            (IssueFeed::Namespaces, list_state(&live.namespaces)),
+            (IssueFeed::WarningEvents, feeds.events.state()),
             (
                 IssueFeed::PodMetrics,
                 metrics_state(&live.metrics.pods.status),
@@ -182,7 +208,14 @@ pub(crate) fn core_coverage(live: &LiveCluster, events: &WarningEvents) -> Cover
                 volume_usage_state(&live.metrics.kubelet.status, polled_nodes, ready_nodes),
             ),
         ],
-    }
+    };
+    coverage.feeds.extend(
+        feeds
+            .conditions
+            .iter()
+            .map(|feed| (IssueFeed::Kind(feed.kind), feed.state())),
+    );
+    coverage
 }
 
 /// The order of the Warning feed: events of one object are adjacent.
@@ -272,6 +305,125 @@ impl WarningEvents {
     }
 }
 
+/// The kinds whose conditions the engine reads, always watched: Deployments, DaemonSets, Jobs,
+/// HPAs, PDBs, quotas, claims, and the TLS secrets (the Secrets watch lists TLS secrets only).
+const CONDITION_KINDS: [ResourceKind; 8] = [
+    ResourceKind::Deployments,
+    ResourceKind::DaemonSets,
+    ResourceKind::Jobs,
+    ResourceKind::HorizontalPodAutoscalers,
+    ResourceKind::PodDisruptionBudgets,
+    ResourceKind::ResourceQuotas,
+    ResourceKind::PersistentVolumeClaims,
+    ResourceKind::Secrets,
+];
+
+/// What one condition feed does for a scope.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FeedPlan {
+    /// Watch with `watch_scope`: the session scope up to two namespaces, else every namespace,
+    /// with the rows outside the session scope dropped on tokio.
+    Start {
+        watch_scope: NamespaceScope,
+    },
+    /// The access review is still running.
+    Wait,
+    Off(String),
+}
+
+/// Which condition feeds start for `scope`, and with what watch scope. Up to two namespaces each
+/// feed watches them; above that one cluster-wide watch per kind costs less than a watch per
+/// namespace (`4N + 12` watches instead of `12N + 4`). A review that is still running waits; a
+/// failed one starts the feed, which shows its own error. With at most two namespaces a known
+/// denial turns the feed off at once, so a 403 is not retried for the whole session.
+pub(crate) fn condition_plan(
+    scope: &NamespaceScope,
+    access: &AccessState,
+) -> Vec<(ResourceKind, FeedPlan)> {
+    let is_narrow = scope.namespaces().len() <= 2;
+    let watch_scope = if is_narrow {
+        scope.clone()
+    } else {
+        NamespaceScope::All
+    };
+    CONDITION_KINDS
+        .into_iter()
+        .map(|kind| {
+            let plan = match access {
+                AccessState::Checking { .. } => FeedPlan::Wait,
+                AccessState::Known(report) if is_narrow => {
+                    match kind
+                        .access_check()
+                        .filter(|check| !report.is_allowed(*check))
+                    {
+                        Some(check) => FeedPlan::Off(format!("not permitted: {check}")),
+                        None => FeedPlan::Start {
+                            watch_scope: watch_scope.clone(),
+                        },
+                    }
+                }
+                AccessState::Known(_) | AccessState::Unknown => FeedPlan::Start {
+                    watch_scope: watch_scope.clone(),
+                },
+            };
+            (kind, plan)
+        })
+        .collect()
+}
+
+/// One condition feed: the compact summaries of a kind, as `KindObject`s the WHY rules read.
+pub(crate) struct ConditionFeed {
+    pub(crate) kind: ResourceKind,
+    pub(crate) list: LiveList<KindObject>,
+    /// Why the feed does not run; set by the plan or by a 403 on a cluster-wide watch.
+    off: Option<String>,
+    /// The scope of the running watch; `None` while waiting or off.
+    watch_scope: Option<NamespaceScope>,
+    subscription: Option<WatchSubscription>,
+}
+
+impl ConditionFeed {
+    fn idle(kind: ResourceKind, off: Option<String>) -> Self {
+        Self {
+            kind,
+            list: LiveList::Loading,
+            off,
+            watch_scope: None,
+            subscription: None,
+        }
+    }
+
+    pub(crate) fn state(&self) -> FeedState {
+        match &self.off {
+            Some(reason) => FeedState::Off(reason.clone()),
+            None => list_state(&self.list),
+        }
+    }
+
+    /// The watches this feed runs now.
+    fn watches(&self) -> usize {
+        match (&self.subscription, &self.watch_scope) {
+            (Some(_), Some(scope)) => scope_multiplicity(scope),
+            _ => 0,
+        }
+    }
+
+    /// A 403 on a cluster-wide watch means no list right; the watch stops instead of retrying.
+    pub(crate) fn apply(&mut self, update: WatchUpdate<KindObject>) {
+        let is_forbidden = matches!(&update, WatchUpdate::Failed(ClusterError::Forbidden { .. }));
+        if is_forbidden && self.watch_scope == Some(NamespaceScope::All) {
+            self.off = Some("not permitted cluster-wide".to_owned());
+            self.subscription = None;
+            return;
+        }
+        self.list.apply(update);
+    }
+
+    pub(crate) fn mark_stopped(&mut self) {
+        self.list.mark_stopped();
+    }
+}
+
 /// The watches the issues need beyond the core lists; in `LiveCluster`. Dropping it stops them.
 pub(crate) struct IssueFeeds {
     pub(crate) events: WarningEvents,
@@ -279,13 +431,15 @@ pub(crate) struct IssueFeeds {
     events_watch: Option<WatchSubscription>,
     /// The delayed restart; replacing or dropping it cancels the wait.
     events_restart: Option<Task<()>>,
+    /// One per `CONDITION_KINDS`, in that order.
+    pub(crate) conditions: Vec<ConditionFeed>,
 }
 
 impl IssueFeeds {
-    /// Starts the Warning events watch at once.
+    /// Starts the Warning events watch at once. The condition feeds wait for `restart_conditions`.
     pub(crate) fn start(
         runtime: &ClusterRuntime,
-        live_connection: &cluster::ClusterConnection,
+        live_connection: &ClusterConnection,
         scope: NamespaceScope,
         cx: &mut Context<ClusterSession>,
     ) -> Self {
@@ -293,7 +447,60 @@ impl IssueFeeds {
             events: WarningEvents::default(),
             events_watch: Some(watch_warning_events(runtime, live_connection, scope, cx)),
             events_restart: None,
+            conditions: Vec::new(),
         }
+    }
+
+    /// Plans the condition feeds again for `scope` and `access`: every old watch stops, and the
+    /// new plan starts, waits, or turns off each kind. Runs when the access review finishes and
+    /// on a scope change, whose review is still running (so the feeds wait).
+    pub(crate) fn restart_conditions(
+        &mut self,
+        runtime: &ClusterRuntime,
+        connection: &ClusterConnection,
+        scope: &NamespaceScope,
+        access: &AccessState,
+        cx: &mut Context<ClusterSession>,
+    ) {
+        self.conditions = condition_plan(scope, access)
+            .into_iter()
+            .map(|(kind, plan)| match plan {
+                FeedPlan::Wait => ConditionFeed::idle(kind, None),
+                FeedPlan::Off(reason) => ConditionFeed::idle(kind, Some(reason)),
+                FeedPlan::Start { watch_scope } => {
+                    let subscription =
+                        watch_condition(runtime, connection, kind, &watch_scope, scope, cx);
+                    ConditionFeed {
+                        kind,
+                        list: LiveList::Loading,
+                        off: None,
+                        watch_scope: Some(watch_scope),
+                        subscription: Some(subscription),
+                    }
+                }
+            })
+            .collect();
+    }
+
+    /// The watches the engine runs: the Warning events and the condition feeds, each over the
+    /// namespaces of its scope (`namespaces` for the events).
+    pub(crate) fn watch_count(&self, namespaces: usize) -> usize {
+        let events = if self.is_watching_events() {
+            namespaces
+        } else {
+            0
+        };
+        events
+            + self
+                .conditions
+                .iter()
+                .map(ConditionFeed::watches)
+                .sum::<usize>()
+    }
+
+    /// The condition feed of `kind`.
+    pub(crate) fn condition_mut(&mut self, kind: ResourceKind) -> Option<&mut ConditionFeed> {
+        self.conditions.iter_mut().find(|feed| feed.kind == kind)
     }
 
     /// Whether the Warning events watch runs; false while a restart waits for its delay.
@@ -316,7 +523,7 @@ impl IssueFeeds {
     pub(crate) fn finish_restart(
         &mut self,
         runtime: &ClusterRuntime,
-        connection: &cluster::ClusterConnection,
+        connection: &ClusterConnection,
         scope: NamespaceScope,
         cx: &mut Context<ClusterSession>,
     ) {
@@ -325,9 +532,114 @@ impl IssueFeeds {
     }
 }
 
+/// Starts the watch of one condition kind. Wider than the session scope, it drops the rows
+/// outside it on tokio, before the snapshot reaches the main thread.
+fn watch_condition(
+    runtime: &ClusterRuntime,
+    connection: &ClusterConnection,
+    kind: ResourceKind,
+    watch_scope: &NamespaceScope,
+    session_scope: &NamespaceScope,
+    cx: &mut Context<ClusterSession>,
+) -> WatchSubscription {
+    let keep = (watch_scope != session_scope).then(|| session_scope.namespaces().to_vec());
+    let updates = condition_updates(connection, kind, watch_scope.clone(), keep);
+    runtime.subscribe_silent(
+        updates,
+        cx,
+        move |session: &mut ClusterSession, update, _| session.apply_condition_update(kind, update),
+        move |session, _| session.stop_condition(kind),
+    )
+}
+
+/// The summaries of `kind` as objects; `keep` limits them to those namespaces.
+fn condition_updates(
+    connection: &ClusterConnection,
+    kind: ResourceKind,
+    scope: NamespaceScope,
+    keep: Option<Vec<String>>,
+) -> BoxStream<'static, WatchUpdate<KindObject>> {
+    match kind {
+        ResourceKind::Deployments => objects(
+            connection.watch_deployments(scope),
+            keep,
+            |item| &item.namespace,
+            KindObject::Deployment,
+        ),
+        ResourceKind::DaemonSets => objects(
+            connection.watch_daemon_sets(scope),
+            keep,
+            |item| &item.namespace,
+            KindObject::DaemonSet,
+        ),
+        ResourceKind::Jobs => objects(
+            connection.watch_jobs(scope),
+            keep,
+            |item| &item.namespace,
+            KindObject::Job,
+        ),
+        ResourceKind::HorizontalPodAutoscalers => objects(
+            connection.watch_horizontal_pod_autoscalers(scope),
+            keep,
+            |item| &item.namespace,
+            KindObject::HorizontalPodAutoscaler,
+        ),
+        ResourceKind::PodDisruptionBudgets => objects(
+            connection.watch_pod_disruption_budgets(scope),
+            keep,
+            |item| &item.namespace,
+            KindObject::PodDisruptionBudget,
+        ),
+        ResourceKind::ResourceQuotas => objects(
+            connection.watch_resource_quotas(scope),
+            keep,
+            |item| &item.namespace,
+            KindObject::ResourceQuota,
+        ),
+        ResourceKind::PersistentVolumeClaims => objects(
+            connection.watch_persistent_volume_claims(scope),
+            keep,
+            |item| &item.namespace,
+            KindObject::PersistentVolumeClaim,
+        ),
+        ResourceKind::Secrets => objects(
+            connection.watch_tls_secrets(scope),
+            keep,
+            |item| &item.namespace,
+            KindObject::Secret,
+        ),
+        // Not a condition kind: an empty stream reads as a stopped feed.
+        _ => futures::stream::empty().boxed(),
+    }
+}
+
+/// Wraps each summary of a watch as an object, dropping those outside `keep`.
+fn objects<S: Send + 'static>(
+    updates: impl Stream<Item = WatchUpdate<S>> + Send + 'static,
+    keep: Option<Vec<String>>,
+    namespace_of: fn(&S) -> &str,
+    wrap: fn(S) -> KindObject,
+) -> BoxStream<'static, WatchUpdate<KindObject>> {
+    updates
+        .map(move |update| match update {
+            WatchUpdate::Snapshot(items) => WatchUpdate::Snapshot(
+                items
+                    .into_iter()
+                    .filter(|item| {
+                        keep.as_ref()
+                            .is_none_or(|names| names.iter().any(|name| name == namespace_of(item)))
+                    })
+                    .map(wrap)
+                    .collect(),
+            ),
+            WatchUpdate::Failed(error) => WatchUpdate::Failed(error),
+        })
+        .boxed()
+}
+
 fn watch_warning_events(
     runtime: &ClusterRuntime,
-    connection: &cluster::ClusterConnection,
+    connection: &ClusterConnection,
     scope: NamespaceScope,
     cx: &mut Context<ClusterSession>,
 ) -> WatchSubscription {
