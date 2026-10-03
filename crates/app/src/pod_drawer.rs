@@ -18,12 +18,12 @@ use crate::app_shell::AppShell;
 use crate::cluster_rows::RowContext;
 use crate::cluster_session::{ClusterSession, LiveCluster, LiveList};
 use crate::container_detail::{ContainerDetailInput, container_detail};
+use crate::dock::Dock;
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row,
     drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, link_text, menu_button,
     section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
 };
-use crate::log_dock::LogDock;
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
@@ -40,7 +40,7 @@ pub(crate) fn pod_drawer(
     state: &DrawerState,
     session: &Entity<ClusterSession>,
     row: &RowContext,
-    dock: &WeakEntity<LogDock>,
+    dock: &WeakEntity<Dock>,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let now = jiff::Timestamp::now();
@@ -112,7 +112,7 @@ fn pod_menu_button(
     pod: &PodSummary,
     session: &Entity<ClusterSession>,
     row: &RowContext,
-    dock: &WeakEntity<LogDock>,
+    dock: &WeakEntity<Dock>,
     shell: WeakEntity<AppShell>,
 ) -> AnyElement {
     // Weak: a rendered menu closure must not keep a session alive after a cluster switch.

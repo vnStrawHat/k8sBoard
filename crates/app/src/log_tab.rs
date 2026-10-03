@@ -22,11 +22,11 @@ use gpui_kit::{
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::cluster_session::{ClusterSession, error_text};
+use crate::dock::LogOrigin;
 use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::kind_row::PodOwner;
 use crate::line_matcher::{FilterMode, InvalidRegex, LineMatcher};
 use crate::log_buffer::{LineTime, LineView, LogBuffer, SourceId, SourcedLine};
-use crate::log_dock::LogOrigin;
 use crate::log_legend::{LegendChip, legend_row, pod_color};
 use crate::log_level::{LevelSet, LogLevel};
 use crate::log_rows::{RowPrefix, RowStyle, log_row};

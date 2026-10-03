@@ -23,13 +23,13 @@ use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_rows::RowContext;
 use crate::cluster_session::{AccessState, FlowState, LiveCluster, SessionPhase};
+use crate::dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
 use crate::drawer::ClickHandler;
 use crate::file_export::ExportState;
 use crate::filter_bar::{ToolkitState, filter_bar};
 use crate::issue_board::IssueSummary;
 use crate::issue_table::coverage_status;
 use crate::kind_drawer::kind_drawer;
-use crate::log_dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
 use crate::navigation::{SIDEBAR_WIDTH, sum_known};
 use crate::node_drawer::node_drawer;
 use crate::node_summary::role_counts;
@@ -78,15 +78,13 @@ impl AppShell {
             .min_w_0()
             .h_full()
             .bg(cx.theme().background);
-        let dock = self.log_dock.read(cx);
+        let dock = self.dock.read(cx);
         if !dock.has_tabs() {
             return region.child(self.render_upper(cx));
         }
         match dock.mode() {
-            DockMode::Zoomed => region.child(self.log_dock.clone()),
-            DockMode::Minimized => region
-                .child(self.render_upper(cx))
-                .child(self.log_dock.clone()),
+            DockMode::Zoomed => region.child(self.dock.clone()),
+            DockMode::Minimized => region.child(self.render_upper(cx)).child(self.dock.clone()),
             DockMode::Normal => {
                 let max_height = dock_max_height(self.dock_split.read(cx).container_size());
                 region.child(
@@ -98,7 +96,7 @@ impl AppShell {
                                 .size(DEFAULT_DOCK_HEIGHT)
                                 .flex_none()
                                 .size_range(MIN_DOCK_HEIGHT..max_height)
-                                .child(self.log_dock.clone()),
+                                .child(self.dock.clone()),
                         ),
                 )
             }
@@ -696,7 +694,7 @@ impl AppShell {
                         live,
                         board: session.read(cx).issues(),
                         window: self.overview.window,
-                        dock: &self.log_dock.downgrade(),
+                        dock: &self.dock.downgrade(),
                         row: &row,
                     },
                     cx,
@@ -765,7 +763,7 @@ impl AppShell {
                     &self.drawer,
                     session,
                     &row,
-                    &self.log_dock.downgrade(),
+                    &self.dock.downgrade(),
                     cx,
                 ))
             }

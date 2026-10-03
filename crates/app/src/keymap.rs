@@ -1,6 +1,6 @@
 //! The one key map of the app: every binding, the contexts that scope them, and the rows of the
 //! shortcut sheet. The handlers live next to the state they change (`app_shell`,
-//! `keyboard_navigation`, `log_dock`); this module only says which key runs which action.
+//! `keyboard_navigation`, `dock`); this module only says which key runs which action.
 
 use gpui_kit::{Action, App, KeyBinding};
 
@@ -58,7 +58,7 @@ const WORKSPACE: &str = "AppShell && !Input && !PopupMenu && !Popover && !Dialog
 /// Overrides of the keys the kit table binds itself (`up down home end pageup pagedown escape`).
 const TABLE: &str = "AppShell > DataTable";
 /// The text fields whose Escape returns the focus to the table.
-const FIELDS: [&str; 3] = ["QuickFilter > Input", "Drawer > Input", "LogDock > Input"];
+const FIELDS: [&str; 3] = ["QuickFilter > Input", "Drawer > Input", "Dock > Input"];
 /// Only the Settings window has this context, so Ctrl O imports there and nowhere else.
 const SETTINGS_WINDOW: &str = "SettingsWindow";
 /// The palette's query input. The palette is a dialog outside `AppShell`, so only its own keys

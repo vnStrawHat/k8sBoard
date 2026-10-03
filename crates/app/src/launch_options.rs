@@ -266,7 +266,7 @@ impl LaunchScreen {
     }
 
     /// Whether the log dock must be open on a pod.
-    pub(crate) fn has_log_dock(self) -> bool {
+    pub(crate) fn has_dock(self) -> bool {
         matches!(self, Self::LogsDock | Self::LogsZoomed | Self::LogsWorkload)
     }
 

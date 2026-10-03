@@ -743,7 +743,7 @@ fn same_pod_in_two_clusters_opens_two_tabs(cx: &mut TestAppContext) {
             let row = shell
                 .slot_row_context(&cluster, cx)
                 .expect("the cluster is viewed");
-            let dock = shell.log_dock.clone();
+            let dock = shell.dock.clone();
             dock.update(cx, |dock, cx| {
                 dock.open(LogOrigin::new(&row, connection), target(), window, cx)
             });
@@ -752,7 +752,7 @@ fn same_pod_in_two_clusters_opens_two_tabs(cx: &mut TestAppContext) {
     // One tab per cluster; the second open of `prod-a` focused its own tab.
     let count = fixture
         .shell
-        .read_with(cx, |shell, cx| shell.log_dock.read(cx).tab_count());
+        .read_with(cx, |shell, cx| shell.dock.read(cx).tab_count());
     assert_eq!(count, 2);
 }
 
@@ -778,7 +778,7 @@ fn released_slot_closes_its_log_tabs(cx: &mut TestAppContext) {
             let row = shell
                 .slot_row_context(&cluster, cx)
                 .expect("the cluster is viewed");
-            let dock = shell.log_dock.clone();
+            let dock = shell.dock.clone();
             dock.update(cx, |dock, cx| {
                 dock.open(LogOrigin::new(&row, connection), target, window, cx)
             });
@@ -786,7 +786,7 @@ fn released_slot_closes_its_log_tabs(cx: &mut TestAppContext) {
     }
     view(&fixture, &["prod-a", "dev-c"], cx);
     let remaining = fixture.shell.read_with(cx, |shell, cx| {
-        let dock = shell.log_dock.read(cx);
+        let dock = shell.dock.read(cx);
         (dock.tab_count(), dock.is_multi())
     });
     // `stg-b` left: its tab closed, `prod-a`'s stayed, and two clusters are still viewed.

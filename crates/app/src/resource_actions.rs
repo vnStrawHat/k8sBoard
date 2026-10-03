@@ -14,6 +14,7 @@ use crate::cluster_registry::ClusterRef;
 use crate::cluster_rows::RowContext;
 use crate::cluster_session::{AccessState, LiveCluster, scope_includes};
 use crate::custom_kind::CustomKind;
+use crate::dock::{Dock, LogOrigin};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
     CopyName, Cordon, Delete, Drain, EditYaml, OpenShell, PortForward, RestartRollout, Scale,
@@ -21,7 +22,6 @@ use crate::keymap::{
 };
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
 use crate::live_sections::claim_pods;
-use crate::log_dock::{LogDock, LogOrigin};
 use crate::log_target::{LogTarget, workload_label};
 use crate::network_rows::ingress_urls;
 use crate::resource_kind::ResourceKind;
@@ -312,7 +312,7 @@ pub(crate) fn pod_menu(
     live: &LiveCluster,
     guard: &ClusterGuard<'_>,
     row: &RowContext,
-    dock: &WeakEntity<LogDock>,
+    dock: &WeakEntity<Dock>,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
     let access = guard.access;
@@ -384,7 +384,7 @@ pub(crate) fn view_logs_item(
     container: Option<&str>,
     live: &LiveCluster,
     row: &RowContext,
-    dock: &WeakEntity<LogDock>,
+    dock: &WeakEntity<Dock>,
 ) -> PopupMenuItem {
     let label = action_label(ResourceAction::ViewLogs);
     match logs_launch(pod, container, &live.access) {

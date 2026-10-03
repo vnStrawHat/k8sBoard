@@ -12,8 +12,8 @@ use gpui_kit::{
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_rows::{Clustered, RowAddress, SlotSession, merge_slot_rows};
+use crate::dock::Dock;
 use crate::filter_bar::filtered_empty_state;
-use crate::log_dock::LogDock;
 use crate::metrics_history::PodUsageHistory;
 use crate::resource_actions::pod_menu;
 use crate::resource_kind::{Align, KindColumn, column};
@@ -58,7 +58,7 @@ pub(crate) struct PodTableDelegate {
     /// Every shown row is ticked: read by the header checkbox, computed with the rows (a rebuild or
     /// a tick) so a frame never merges the rows again.
     all_checked: bool,
-    log_dock: WeakEntity<LogDock>,
+    dock: WeakEntity<Dock>,
     /// The row menu's "View YAML" opens the drawer through the shell.
     shell: WeakEntity<AppShell>,
     layout: TableLayout,
@@ -82,7 +82,7 @@ fn pod_plan(is_multi: bool) -> ColumnPlan {
 
 impl PodTableDelegate {
     pub(crate) fn new(
-        log_dock: WeakEntity<LogDock>,
+        dock: WeakEntity<Dock>,
         shell: WeakEntity<AppShell>,
         saved: Option<&TablePrefs>,
     ) -> Self {
@@ -95,7 +95,7 @@ impl PodTableDelegate {
             sessions: Vec::new(),
             addresses: Vec::new(),
             all_checked: false,
-            log_dock,
+            dock,
             shell,
             layout: TableLayout::new(plan),
             view,
@@ -413,7 +413,7 @@ impl TableDelegate for PodTableDelegate {
             return menu;
         };
         let row = slot.row_context(cx);
-        pod_menu(menu, pod, live, &guard, &row, &self.log_dock, &self.shell)
+        pod_menu(menu, pod, live, &guard, &row, &self.dock, &self.shell)
     }
 
     fn render_empty(

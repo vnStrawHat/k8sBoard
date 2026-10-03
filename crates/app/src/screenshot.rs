@@ -217,7 +217,7 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
     match input.target {
         TargetState::Unavailable => true,
         TargetState::Loading => false,
-        TargetState::Loaded if screen.has_log_dock() => !input.is_log_pending,
+        TargetState::Loaded if screen.has_dock() => !input.is_log_pending,
         TargetState::Loaded if screen.opens_dialog() => !input.is_dialog_pending,
         TargetState::Loaded if screen == LaunchScreen::Switcher => !input.is_switcher_pending,
         TargetState::Loaded if screen == LaunchScreen::Overview && input.is_change_feed_pending => {

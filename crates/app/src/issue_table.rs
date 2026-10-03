@@ -15,12 +15,12 @@ use gpui_kit::{
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_rows::{RowAddress, SlotSession};
+use crate::dock::Dock;
 use crate::drawer::truncated_text;
 use crate::event_rows::message_line;
 use crate::filter_bar::filtered_empty_state;
 use crate::issue::{Issue, IssueAction};
 use crate::issue_feeds::Coverage;
-use crate::log_dock::LogDock;
 use crate::resource_actions::{disabled_menu_item, view_logs_item};
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::settings::TablePrefs;
@@ -59,7 +59,7 @@ pub(crate) struct IssueTableDelegate {
     /// The primary cluster: the issues of the other viewed clusters are not merged yet.
     session: Option<SlotSession>,
     /// The row menu's View logs opens a tab here.
-    dock: WeakEntity<LogDock>,
+    dock: WeakEntity<Dock>,
     /// A click reveals the object through the shell.
     shell: WeakEntity<AppShell>,
     layout: TableLayout,
@@ -68,7 +68,7 @@ pub(crate) struct IssueTableDelegate {
 
 impl IssueTableDelegate {
     pub(crate) fn new(
-        dock: WeakEntity<LogDock>,
+        dock: WeakEntity<Dock>,
         shell: WeakEntity<AppShell>,
         saved: Option<&TablePrefs>,
     ) -> Self {

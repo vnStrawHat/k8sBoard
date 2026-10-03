@@ -307,18 +307,18 @@ fn switch_closes_log_tabs(cx: &mut TestAppContext) {
         let row = shell
             .slot_row_context(&cluster, cx)
             .expect("the cluster is viewed");
-        let dock = shell.log_dock.clone();
+        let dock = shell.dock.clone();
         dock.update(cx, |dock, cx| {
             dock.open(LogOrigin::new(&row, connection), target, window, cx)
         });
     });
     fixture
         .shell
-        .read_with(cx, |shell, cx| assert!(shell.log_dock.read(cx).has_tabs()));
+        .read_with(cx, |shell, cx| assert!(shell.dock.read(cx).has_tabs()));
     fixture.switch("stg-b", cx);
     fixture
         .shell
-        .read_with(cx, |shell, cx| assert!(!shell.log_dock.read(cx).has_tabs()));
+        .read_with(cx, |shell, cx| assert!(!shell.dock.read(cx).has_tabs()));
 }
 
 #[gpui_kit::test]

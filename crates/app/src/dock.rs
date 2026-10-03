@@ -63,7 +63,7 @@ impl LogOrigin {
     }
 }
 
-pub(crate) struct LogDock {
+pub(crate) struct Dock {
     tabs: Vec<Entity<LogTab>>,
     /// `None` exactly when `tabs` is empty.
     active: Option<usize>,
@@ -74,7 +74,7 @@ pub(crate) struct LogDock {
     shell: WeakEntity<AppShell>,
 }
 
-impl LogDock {
+impl Dock {
     pub(crate) fn new(shell: WeakEntity<AppShell>) -> Self {
         Self {
             tabs: Vec::new(),
@@ -427,13 +427,13 @@ impl LogDock {
     }
 }
 
-impl Render for LogDock {
+impl Render for Dock {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_minimized = self.mode == DockMode::Minimized;
         let body = self.active_tab().filter(|_| !is_minimized);
         v_flex()
-            .key_context("LogDock")
+            .key_context("Dock")
             .flex_shrink_0()
             .w_full()
             // Minimized leaves just the tab bar, so the dock keeps its natural height.

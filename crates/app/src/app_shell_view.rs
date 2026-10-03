@@ -159,7 +159,7 @@ impl AppShell {
         {
             self.clear_selection(cx);
         }
-        self.log_dock
+        self.dock
             .update(cx, |dock, cx| dock.close_tabs_of(cluster, cx));
         if self.subject_cluster.as_ref() == Some(cluster) {
             self.subject_cluster = None;
@@ -271,7 +271,7 @@ impl AppShell {
         self.topology.update(cx, |view, cx| {
             view.set_session(primary.map(|slot| slot.session), cx)
         });
-        self.log_dock
+        self.dock
             .update(cx, |dock, cx| dock.set_multi(is_multi, cx));
         self.rebuild_visible_view(cx, |_| {});
         cx.notify();

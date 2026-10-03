@@ -13,6 +13,7 @@ use gpui_kit::{
 };
 
 use super::{AppShell, Screen, focus_table};
+use crate::dock::{DockMode, TabStep};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
     CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditYaml, LeaveInput, NextContainer,
@@ -21,7 +22,6 @@ use crate::keymap::{
     SelectPreviousPage, SelectPreviousRow, ToggleDock, ToggleDockZoom, ToggleReadOnly, ViewLogs,
     ViewYaml,
 };
-use crate::log_dock::{DockMode, TabStep};
 use crate::pod_drawer::{container_display_order, selected_container_index};
 use crate::resource_actions::{
     KeyAvailability, ResourceAction, action_label, key_availability, subject_action,
@@ -161,27 +161,23 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
             shell.toggle_lock_of_target(window, cx);
         }))
         .on_action(cx.listener(|shell, _: &ToggleDock, _, cx| {
-            shell
-                .log_dock
-                .update(cx, |dock, cx| dock.toggle_visibility(cx));
+            shell.dock.update(cx, |dock, cx| dock.toggle_visibility(cx));
         }))
         .on_action(cx.listener(|shell, _: &ToggleDockZoom, _, cx| {
-            shell.log_dock.update(cx, |dock, cx| dock.toggle_zoom(cx));
+            shell.dock.update(cx, |dock, cx| dock.toggle_zoom(cx));
         }))
         .on_action(cx.listener(|shell, _: &NextDockTab, _, cx| {
             shell
-                .log_dock
+                .dock
                 .update(cx, |dock, cx| dock.step_active_tab(TabStep::Next, cx));
         }))
         .on_action(cx.listener(|shell, _: &PreviousDockTab, _, cx| {
             shell
-                .log_dock
+                .dock
                 .update(cx, |dock, cx| dock.step_active_tab(TabStep::Previous, cx));
         }))
         .on_action(cx.listener(|shell, _: &CloseDockTab, _, cx| {
-            shell
-                .log_dock
-                .update(cx, |dock, cx| dock.close_active_tab(cx));
+            shell.dock.update(cx, |dock, cx| dock.close_active_tab(cx));
         }));
     let root = on_row_key::<ViewLogs>(root, ResourceAction::ViewLogs, cx);
     let root = on_row_key::<ViewYaml>(root, ResourceAction::ViewYaml, cx);
@@ -335,12 +331,12 @@ impl AppShell {
     /// Esc: undoes one step of the ladder.
     fn dismiss(&mut self, cx: &mut Context<Self>) {
         let state = DismissState {
-            is_dock_zoomed: self.log_dock.read(cx).mode() == DockMode::Zoomed,
+            is_dock_zoomed: self.dock.read(cx).mode() == DockMode::Zoomed,
             is_drawer_open: self.drawer.is_open,
             has_selection: self.selected.is_some(),
         };
         match dismiss_step(state) {
-            DismissStep::UnzoomDock => self.log_dock.update(cx, |dock, cx| dock.unzoom(cx)),
+            DismissStep::UnzoomDock => self.dock.update(cx, |dock, cx| dock.unzoom(cx)),
             DismissStep::CloseDrawer => self.close_drawer(cx),
             DismissStep::ClearSelection => self.clear_selection(cx),
             DismissStep::Propagate => cx.propagate(),

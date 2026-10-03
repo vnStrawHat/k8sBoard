@@ -138,7 +138,7 @@ fn table_escape_outranks_the_kit_table(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn escape_leaves_the_quick_filter(cx: &mut TestAppContext) {
     bind_all(cx);
-    for field in ["QuickFilter", "Drawer", "LogDock"] {
+    for field in ["QuickFilter", "Drawer", "Dock"] {
         assert_eq!(
             resolve("escape", &["Root", "AppShell", field, "Input"], cx),
             Some("k8sboard::LeaveInput"),

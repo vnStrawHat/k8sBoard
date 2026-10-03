@@ -40,6 +40,7 @@ use crate::cluster_switcher_rows::{
 use crate::cluster_view::{ClusterView, ViewSlot};
 use crate::command_palette::{ActiveCluster, PaletteContext, PaletteSnapshot, open_palette};
 use crate::custom_kind::{CustomKind, CustomKindCache};
+use crate::dock::{Dock, DockMode, LogOrigin};
 use crate::drawer::{
     ContainerTab, DRAWER_SUBJECT_DELAY, DrawerCluster, DrawerState, DrawerTab, MonitorCache,
     MonitorKey, MonitorRange, MonitorScope, MonitorState, drawer_tabs, shown_tab,
@@ -58,7 +59,6 @@ use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
 use crate::launch_options::{LaunchOptions, LaunchScreen};
-use crate::log_dock::{DockMode, LogDock, LogOrigin};
 use crate::log_target::{LogTarget, NoLogTarget, check_logs_access};
 use crate::monitor_data::{MonitorInput, MonitorSubject, monitor_data};
 use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
@@ -347,7 +347,7 @@ pub(crate) struct AppShell {
     pending_subjects: Option<PendingSubjects>,
     /// A reveal that waits for its list to load before it clears a filter hiding the row.
     pending_reveal: Option<ClusterObject>,
-    log_dock: Entity<LogDock>,
+    dock: Entity<Dock>,
     /// Keeps the dock height across zoom and minimize, which unmount the split.
     dock_split: Entity<ResizableState>,
     /// A `--screen` drawer or logs request that waits for its list to load.
@@ -408,13 +408,13 @@ impl AppShell {
             .then(|| catalog.read(cx).chain_files().to_vec());
 
         let shell = cx.weak_entity();
-        let log_dock = cx.new(|_| LogDock::new(shell.clone()));
+        let dock = cx.new(|_| Dock::new(shell.clone()));
         let dock_split = cx.new(|_| ResizableState::default());
         let saved_tables = AppSettings::get(cx).tables.clone();
         let pod_table = cx.new(|cx| {
             configure(TableState::new(
                 PodTableDelegate::new(
-                    log_dock.downgrade(),
+                    dock.downgrade(),
                     shell.clone(),
                     saved_tables.get(screen_key(Screen::Pods)),
                 ),
@@ -432,7 +432,7 @@ impl AppShell {
         let issue_table = cx.new(|cx| {
             configure(TableState::new(
                 IssueTableDelegate::new(
-                    log_dock.downgrade(),
+                    dock.downgrade(),
                     shell.clone(),
                     saved_tables.get(screen_key(Screen::Issues)),
                 ),
@@ -454,7 +454,7 @@ impl AppShell {
             cx.subscribe_in(&pod_table, window, Self::on_pod_table_event),
             cx.subscribe_in(&node_table, window, Self::on_node_table_event),
             cx.subscribe_in(&kind_table, window, Self::on_kind_table_event),
-            cx.observe(&log_dock, |_, _, cx| cx.notify()),
+            cx.observe(&dock, |_, _, cx| cx.notify()),
         ];
 
         let quick_filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter  /"));
@@ -527,11 +527,11 @@ impl AppShell {
             drawer,
             pending_subjects: None,
             pending_reveal: None,
-            log_dock,
+            dock,
             dock_split,
             // A custom launch resolves against the CRD list first, then sets this.
             pending_launch_screen: (options.screen.selects_row()
-                || options.screen.has_log_dock()
+                || options.screen.has_dock()
                 || options.screen.checks_rows())
             .then_some(options.screen)
             .filter(|screen| !matches!(screen, LaunchScreen::Custom { .. })),
@@ -720,7 +720,7 @@ impl AppShell {
         // A multi connect still waiting for its deferred call is stale from here on.
         self.view_request += 1;
         self.clear_selection(cx);
-        self.log_dock.update(cx, |dock, cx| {
+        self.dock.update(cx, |dock, cx| {
             dock.close_all(cx);
             dock.set_multi(false, cx);
         });
@@ -1369,7 +1369,7 @@ impl AppShell {
         });
         self.rebuild_visible_view(cx, |_| {});
         self.clear_selection(cx);
-        self.log_dock.update(cx, |dock, cx| dock.unzoom(cx));
+        self.dock.update(cx, |dock, cx| dock.unzoom(cx));
     }
 
     /// `reveal_object` for a bare key: the object in the cluster of the open drawer (a link inside
@@ -2797,7 +2797,7 @@ impl AppShell {
         let Some(row) = self.slot_row_context(cluster, cx) else {
             return;
         };
-        self.log_dock.update(cx, |dock, cx| {
+        self.dock.update(cx, |dock, cx| {
             dock.open(LogOrigin::new(&row, connection), target, window, cx)
         });
     }
@@ -3074,7 +3074,7 @@ impl AppShell {
     fn apply_pending_launch_screen(&mut self, cx: &mut Context<Self>) {
         let Some(launch) = self
             .pending_launch_screen
-            .filter(|launch| !launch.has_log_dock())
+            .filter(|launch| !launch.has_dock())
         else {
             return;
         };
@@ -3249,7 +3249,7 @@ impl AppShell {
     fn open_pending_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(launch) = self
             .pending_launch_screen
-            .filter(|launch| launch.has_log_dock())
+            .filter(|launch| launch.has_dock())
         else {
             return;
         };
@@ -3299,7 +3299,7 @@ impl AppShell {
         } else {
             DockMode::Normal
         };
-        self.log_dock.update(cx, |dock, cx| {
+        self.dock.update(cx, |dock, cx| {
             dock.open(LogOrigin::new(&row, connection), target, window, cx);
             dock.set_mode(mode, cx);
         });
@@ -3389,8 +3389,8 @@ impl AppShell {
         // A logs screen is pending until its tab exists and has opened its stream.
         let is_log_pending = self
             .pending_launch_screen
-            .is_some_and(LaunchScreen::has_log_dock)
-            || self.log_dock.read(cx).is_connecting(cx);
+            .is_some_and(LaunchScreen::has_dock)
+            || self.dock.read(cx).is_connecting(cx);
         SettleInput {
             target,
             is_catalog_loading: self.catalog.read(cx).is_loading(),
@@ -3536,7 +3536,7 @@ impl AppShell {
         let input = PaletteInput {
             screen: self.screen,
             cursor: self.selected.as_ref(),
-            has_dock_tabs: self.log_dock.read(cx).has_tabs(),
+            has_dock_tabs: self.dock.read(cx).has_tabs(),
             include_resources: wants_resources,
             sessions,
             clusters: &sections,

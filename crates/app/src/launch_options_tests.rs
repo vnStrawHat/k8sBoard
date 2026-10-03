@@ -166,7 +166,7 @@ fn parses_logs_screens() {
         LaunchScreen::LogsWorkload,
     ] {
         assert_eq!(screen.screen(), Screen::Pods);
-        assert!(screen.has_log_dock());
+        assert!(screen.has_dock());
         assert!(!screen.has_drawer());
     }
 }
@@ -226,7 +226,7 @@ fn drawer_screens_parse_with_their_tab() {
         assert_eq!(launch, expected, "{name}");
         assert_eq!(launch.screen(), screen, "{name}");
         assert!(launch.has_drawer(), "{name}");
-        assert!(!launch.has_log_dock(), "{name}");
+        assert!(!launch.has_dock(), "{name}");
     }
     assert_eq!(LaunchScreen::Pods.drawer_tab(), None);
     assert_eq!(
@@ -462,7 +462,7 @@ fn custom_names_with_dashes_keep_their_dashes() {
 fn parses_logs_workload_screen() {
     let screen = run_options(&["--screen", "logs-workload"]).screen;
     assert_eq!(screen, LaunchScreen::LogsWorkload);
-    assert!(screen.has_log_dock());
+    assert!(screen.has_dock());
     assert_eq!(screen.screen(), Screen::Pods);
 }
 
@@ -509,7 +509,7 @@ fn parses_analysis_screens() {
     let screen = run_options(&["--screen", "who-can"]).screen;
     assert_eq!(screen, LaunchScreen::WhoCan);
     assert!(screen.opens_dialog());
-    assert!(!screen.has_drawer() && !screen.has_log_dock());
+    assert!(!screen.has_drawer() && !screen.has_dock());
     assert_eq!(screen.screen(), Screen::Kind(ResourceKind::ClusterRoles));
     assert!(!LaunchScreen::Pods.opens_dialog());
     let screen = run_options(&["--screen", "test-traffic"]).screen;

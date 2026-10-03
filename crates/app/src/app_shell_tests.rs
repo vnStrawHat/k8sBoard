@@ -960,7 +960,7 @@ fn dock_keys_do_nothing_without_tabs(cx: &mut TestAppContext) {
         press(window, key, cx);
     }
     shell.read_with(cx, |shell, cx| {
-        let dock = shell.log_dock.read(cx);
+        let dock = shell.dock.read(cx);
         assert!(!dock.has_tabs());
         assert_eq!(dock.mode(), DockMode::Normal);
     });
@@ -1250,7 +1250,7 @@ fn a_disabled_command_never_runs(cx: &mut TestAppContext) {
     let (window, shell) = open_shell(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
     render(window, cx);
-    let mode_before = shell.read_with(cx, |shell, cx| shell.log_dock.read(cx).mode());
+    let mode_before = shell.read_with(cx, |shell, cx| shell.dock.read(cx).mode());
     press(window, "secondary-k", cx);
     // The dock has no tab, so this command is disabled with its reason.
     type_text(window, "> toggle the dock", cx);
@@ -1262,8 +1262,8 @@ fn a_disabled_command_never_runs(cx: &mut TestAppContext) {
     // The palette stays open and the dock handler never ran.
     assert!(has_dialog(window, cx));
     shell.read_with(cx, |shell, cx| {
-        assert!(!shell.log_dock.read(cx).has_tabs());
-        assert_eq!(shell.log_dock.read(cx).mode(), mode_before);
+        assert!(!shell.dock.read(cx).has_tabs());
+        assert_eq!(shell.dock.read(cx).mode(), mode_before);
     });
 }
 

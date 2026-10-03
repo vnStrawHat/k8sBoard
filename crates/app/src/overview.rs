@@ -29,13 +29,13 @@ use crate::cluster_capacity::{
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_rows::RowContext;
 use crate::cluster_session::{ChangeEvents, LiveCluster, LiveList};
+use crate::dock::{Dock, LogOrigin};
 use crate::event_rows::message_line;
 use crate::file_export::ExportState;
 use crate::issue::{Issue, IssueAction};
 use crate::issue_board::IssueBoard;
 use crate::issue_feeds::{FeedState, volume_usage_state};
 use crate::issue_table::{coverage_status, logs_pod, short_kind};
-use crate::log_dock::{LogDock, LogOrigin};
 use crate::node_heatmap::{heat_cells, node_heatmap};
 use crate::recent_changes::{CHANGE_ROWS, ChangeEntry, ChangeInputs, ChangeWindow, recent_changes};
 use crate::resource_actions::logs_launch;
@@ -208,7 +208,7 @@ pub(crate) struct OverviewData<'a> {
     pub(crate) live: &'a LiveCluster,
     pub(crate) board: &'a IssueBoard,
     pub(crate) window: ChangeWindow,
-    pub(crate) dock: &'a WeakEntity<LogDock>,
+    pub(crate) dock: &'a WeakEntity<Dock>,
     /// The cluster Overview draws: the primary one while several are viewed.
     pub(crate) row: &'a RowContext,
 }
