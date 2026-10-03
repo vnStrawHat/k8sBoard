@@ -2,6 +2,8 @@ use cluster::{AccessDecision, AccessReport, AccessReview};
 use gpui_kit::Task;
 
 use super::*;
+use crate::environment::Environment;
+use crate::write_guard::{ActionRisk, DialogConfirm, confirm_step, test_guard};
 
 fn checking() -> AccessState {
     AccessState::Checking {
@@ -36,6 +38,31 @@ fn reason(availability: ActionAvailability) -> String {
     }
 }
 
+/// A guard of an unlocked development cluster, which never stands in the way of a gate.
+fn unlocked(access: &AccessState) -> ClusterGuard<'_> {
+    test_guard(
+        access,
+        WriteLock::Unlocked,
+        "dev-1",
+        Environment::Development,
+    )
+}
+
+/// A mutating action whose spec has shipped, which no `ResourceAction` is before step 4.
+const SHIPPED_PATCH_NODES: ActionGate = ActionGate::Mutating {
+    check: AccessCheck::PatchNodes,
+    is_shipped: true,
+};
+
+fn availability_of_gate(
+    gate: &ActionGate,
+    access: &AccessState,
+    lock: WriteLock,
+) -> ActionAvailability {
+    let guard = test_guard(access, lock, "dev-1", Environment::Development);
+    gate_availability(gate, &guard)
+}
+
 #[test]
 fn copy_name_always_enabled() {
     for access in [
@@ -45,94 +72,223 @@ fn copy_name_always_enabled() {
         known_denying(&AccessCheck::ALL),
     ] {
         assert_eq!(
-            action_availability(ResourceAction::CopyName, &access),
+            action_availability(ResourceAction::CopyName, &unlocked(&access)),
             ActionAvailability::Enabled
         );
     }
 }
 
 #[test]
-fn cordon_and_drain_always_disabled_read_only_mode() {
-    for access in [checking(), unknown(), known_denying(&[])] {
-        for action in [ResourceAction::Cordon, ResourceAction::Drain] {
+fn gate_order_table() {
+    let unshipped = ActionGate::Mutating {
+        check: AccessCheck::PatchNodes,
+        is_shipped: false,
+    };
+    let allowed = known_denying(&[]);
+    let denied = known_denying(&[AccessCheck::PatchNodes]);
+    let (checking, unknown) = (checking(), unknown());
+    let cases = [
+        (
+            &unshipped,
+            &allowed,
+            WriteLock::Unlocked,
+            "Comes in a later version",
+        ),
+        (
+            &unshipped,
+            &checking,
+            WriteLock::Locked,
+            "Comes in a later version",
+        ),
+        (
+            &unshipped,
+            &denied,
+            WriteLock::Locked,
+            "Comes in a later version",
+        ),
+        (
+            &SHIPPED_PATCH_NODES,
+            &checking,
+            WriteLock::Locked,
+            "Checking permissions…",
+        ),
+        (
+            &SHIPPED_PATCH_NODES,
+            &unknown,
+            WriteLock::Locked,
+            "Permissions could not be checked",
+        ),
+        (
+            &SHIPPED_PATCH_NODES,
+            &denied,
+            WriteLock::Unlocked,
+            "Not permitted: patch nodes",
+        ),
+        (
+            &SHIPPED_PATCH_NODES,
+            &allowed,
+            WriteLock::Locked,
+            "dev-1 is read-only",
+        ),
+    ];
+    for (gate, access, lock, expected) in cases {
+        assert_eq!(
+            reason(availability_of_gate(gate, access, lock)),
+            expected,
+            "{lock:?}"
+        );
+    }
+    assert_eq!(
+        availability_of_gate(&SHIPPED_PATCH_NODES, &allowed, WriteLock::Unlocked),
+        ActionAvailability::Enabled
+    );
+}
+
+#[test]
+fn rbac_reason_wins_over_the_lock() {
+    let denied = known_denying(&[AccessCheck::PatchNodes]);
+    assert_eq!(
+        reason(availability_of_gate(
+            &SHIPPED_PATCH_NODES,
+            &denied,
+            WriteLock::Locked
+        )),
+        "Not permitted: patch nodes"
+    );
+}
+
+#[test]
+fn read_only_actions_ignore_the_lock() {
+    let allowed = known_denying(&[]);
+    let guard = test_guard(
+        &allowed,
+        WriteLock::Locked,
+        "prod-eu-1",
+        Environment::Production,
+    );
+    for action in [
+        ResourceAction::ViewLogs,
+        ResourceAction::ViewYaml,
+        ResourceAction::CopyName,
+    ] {
+        assert_eq!(
+            action_availability(action, &guard),
+            ActionAvailability::Enabled,
+            "{action:?}"
+        );
+    }
+}
+
+#[test]
+fn gate_and_confirm_use_the_rows_cluster() {
+    let allowed = known_denying(&[]);
+    let locked_dev = test_guard(
+        &allowed,
+        WriteLock::Locked,
+        "dev-1",
+        Environment::Development,
+    );
+    let open_prod = test_guard(
+        &allowed,
+        WriteLock::Unlocked,
+        "prod-eu-1",
+        Environment::Production,
+    );
+    // Whichever guard is asked first, each answers for its own cluster.
+    for (first, second) in [(&locked_dev, &open_prod), (&open_prod, &locked_dev)] {
+        let _ = gate_availability(&SHIPPED_PATCH_NODES, first);
+        let _ = gate_availability(&SHIPPED_PATCH_NODES, second);
+        assert_eq!(
+            reason(gate_availability(&SHIPPED_PATCH_NODES, &locked_dev)),
+            "dev-1 is read-only"
+        );
+        assert_eq!(
+            gate_availability(&SHIPPED_PATCH_NODES, &open_prod),
+            ActionAvailability::Enabled
+        );
+    }
+    assert_eq!(
+        confirm_step(
+            open_prod.profile.confirm,
+            ActionRisk::Change,
+            open_prod.display_name()
+        ),
+        DialogConfirm::TypeName {
+            expected: "prod-eu-1".to_owned()
+        }
+    );
+    assert_eq!(open_prod.profile.environment, Environment::Production);
+    assert_eq!(
+        confirm_step(
+            locked_dev.profile.confirm,
+            ActionRisk::Change,
+            locked_dev.display_name()
+        ),
+        DialogConfirm::Click
+    );
+}
+
+#[test]
+fn cordon_is_gated_on_patch_nodes_and_not_shipped_yet() {
+    assert!(matches!(
+        ResourceAction::Cordon.gate(),
+        ActionGate::Mutating {
+            check: AccessCheck::PatchNodes,
+            is_shipped: false
+        }
+    ));
+}
+
+#[test]
+fn unshipped_mutating_actions_say_a_later_version() {
+    for access in [
+        checking(),
+        unknown(),
+        known_denying(&[]),
+        known_denying(&AccessCheck::ALL),
+    ] {
+        for action in [
+            ResourceAction::OpenShell,
+            ResourceAction::PortForward,
+            ResourceAction::OpenNodeShell,
+            ResourceAction::Cordon,
+            ResourceAction::Drain,
+            ResourceAction::EditYaml,
+            ResourceAction::Delete,
+            ResourceAction::RestartRollout,
+            ResourceAction::Scale,
+        ] {
             assert_eq!(
-                reason(action_availability(action, &access)),
-                "Read-only mode"
+                reason(action_availability(action, &unlocked(&access))),
+                "Comes in a later version",
+                "{action:?}"
             );
         }
     }
 }
 
 #[test]
-fn gated_actions_disabled_while_checking() {
-    for action in [
-        ResourceAction::ViewLogs,
-        ResourceAction::OpenShell,
-        ResourceAction::PortForward,
-        ResourceAction::OpenNodeShell,
-    ] {
-        assert_eq!(
-            reason(action_availability(action, &checking())),
-            "Checking permissions…"
-        );
-        assert_eq!(
-            reason(action_availability(action, &unknown())),
-            "Permissions could not be checked"
-        );
-    }
-}
-
-#[test]
-fn shell_denied_reason_names_access_check() {
-    let access = known_denying(&[
-        AccessCheck::CreatePodExec,
-        AccessCheck::CreatePodPortForward,
-    ]);
-    assert_eq!(
-        reason(action_availability(ResourceAction::OpenShell, &access)),
-        "Not permitted: create pods/exec"
-    );
-    assert_eq!(
-        reason(action_availability(ResourceAction::PortForward, &access)),
-        "Not permitted: create pods/portforward"
-    );
-}
-
-#[test]
-fn shell_allowed_still_disabled_in_read_only_mode() {
-    let access = known_denying(&[]);
-    assert_eq!(
-        reason(action_availability(ResourceAction::OpenShell, &access)),
-        "Not available in read-only mode"
-    );
-    assert_eq!(
-        reason(action_availability(ResourceAction::PortForward, &access)),
-        "Not available in read-only mode"
-    );
-}
-
-#[test]
-fn node_shell_gated_by_create_pods_exec() {
+fn logs_disabled_while_the_permissions_are_not_known() {
     assert_eq!(
         reason(action_availability(
-            ResourceAction::OpenNodeShell,
-            &known_denying(&[AccessCheck::CreatePodExec])
+            ResourceAction::ViewLogs,
+            &unlocked(&checking())
         )),
-        "Not permitted: create pods/exec"
+        "Checking permissions…"
     );
     assert_eq!(
         reason(action_availability(
-            ResourceAction::OpenNodeShell,
-            &known_denying(&[AccessCheck::CreatePodPortForward])
+            ResourceAction::ViewLogs,
+            &unlocked(&unknown())
         )),
-        "Not available in read-only mode"
+        "Permissions could not be checked"
     );
 }
 
 #[test]
 fn logs_allowed_is_enabled() {
     assert_eq!(
-        action_availability(ResourceAction::ViewLogs, &known_denying(&[])),
+        action_availability(ResourceAction::ViewLogs, &unlocked(&known_denying(&[]))),
         ActionAvailability::Enabled
     );
 }
@@ -142,23 +298,21 @@ fn logs_denied_reason_names_access_check() {
     assert_eq!(
         reason(action_availability(
             ResourceAction::ViewLogs,
-            &known_denying(&[AccessCheck::GetPodLogs])
+            &unlocked(&known_denying(&[AccessCheck::GetPodLogs]))
         )),
         "Not permitted: get pods/log"
     );
 }
 
 #[test]
-fn forward_button_reason_follows_the_port_forward_gate() {
-    assert_eq!(
-        port_forward_reason(&known_denying(&[AccessCheck::CreatePodPortForward])),
-        "Not permitted: create pods/portforward"
-    );
-    assert_eq!(
-        port_forward_reason(&known_denying(&[])),
-        "Not available in read-only mode"
-    );
-    assert_eq!(port_forward_reason(&checking()), "Checking permissions…");
+fn forward_button_reason_says_the_feature_has_not_shipped() {
+    for access in [
+        known_denying(&[AccessCheck::CreatePodPortForward]),
+        known_denying(&[]),
+        checking(),
+    ] {
+        assert_eq!(port_forward_reason(&access), "Comes in a later version");
+    }
 }
 
 #[test]
@@ -986,7 +1140,7 @@ fn availability(
         action,
         subject,
         subject.is_pod(&pod).then_some(&pod),
-        access,
+        &unlocked(access),
     )
 }
 
@@ -1016,13 +1170,17 @@ fn key_availability_offers_logs_only_for_pods() {
 fn key_availability_explains_a_pod_without_containers() {
     let pod = pod_with(Vec::new());
     let access = known_denying(&[]);
-    let availability =
-        key_availability_of(ResourceAction::ViewLogs, &pod_key(), Some(&pod), &access);
+    let availability = key_availability_of(
+        ResourceAction::ViewLogs,
+        &pod_key(),
+        Some(&pod),
+        &unlocked(&access),
+    );
     assert_eq!(disabled_reason(availability), "The pod has no containers");
 }
 
 #[test]
-fn key_availability_disables_mutating_keys_with_the_read_only_reason() {
+fn key_availability_disables_unshipped_keys_with_the_later_version_reason() {
     let access = known_denying(&[]);
     let offered = [
         (ResourceAction::EditYaml, pod_key()),
@@ -1038,7 +1196,7 @@ fn key_availability_disables_mutating_keys_with_the_read_only_reason() {
     for (action, subject) in offered {
         assert_eq!(
             disabled_reason(availability(action, &subject, &access)),
-            "Read-only mode",
+            "Comes in a later version",
             "{action:?}"
         );
     }
@@ -1051,28 +1209,30 @@ fn key_availability_disables_mutating_keys_with_the_read_only_reason() {
 
 #[test]
 fn key_availability_uses_the_access_gate() {
-    let denied = known_denying(&[AccessCheck::CreatePodExec]);
+    let denied = known_denying(&[AccessCheck::GetPodLogs]);
     assert_eq!(
-        disabled_reason(availability(ResourceAction::OpenShell, &pod_key(), &denied)),
-        "Not permitted: create pods/exec"
+        disabled_reason(availability(ResourceAction::ViewLogs, &pod_key(), &denied)),
+        "Not permitted: get pods/log"
     );
     assert_eq!(
         disabled_reason(availability(
-            ResourceAction::OpenShell,
+            ResourceAction::ViewLogs,
             &pod_key(),
             &checking()
         )),
         "Checking permissions…"
     );
-    // A node shell is gated like a pod shell.
-    assert_eq!(
-        disabled_reason(availability(
-            ResourceAction::OpenShell,
-            &node_key(),
-            &denied
-        )),
-        "Not permitted: create pods/exec"
-    );
+}
+
+#[test]
+fn key_availability_of_a_shell_waits_for_its_spec_before_its_permission() {
+    let denied = known_denying(&[AccessCheck::CreatePodExec]);
+    for subject in [pod_key(), node_key()] {
+        assert_eq!(
+            disabled_reason(availability(ResourceAction::OpenShell, &subject, &denied)),
+            "Comes in a later version"
+        );
+    }
 }
 
 #[test]
@@ -1140,8 +1300,11 @@ fn the_shell_key_names_the_node_shell_on_a_node() {
 #[test]
 fn an_unavailable_key_says_what_and_why() {
     assert_eq!(
-        unavailable_text(action_label(ResourceAction::EditYaml), "Read-only mode"),
-        "Edit YAML is unavailable: Read-only mode"
+        unavailable_text(
+            action_label(ResourceAction::EditYaml),
+            "Comes in a later version"
+        ),
+        "Edit YAML is unavailable: Comes in a later version"
     );
 }
 

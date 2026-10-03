@@ -241,6 +241,7 @@ async fn scoped_apis_builds_one_api_per_namespace() {
         client: kube::Client::try_from(config).expect("client builds"),
         context: "ctx".to_owned(),
         default_namespace: "default".to_owned(),
+        write_policy: WritePolicy::Blocked,
     };
     let apis = |scope| connection.scoped_apis::<k8s_openapi::api::core::v1::Pod>(&scope);
     let described = |scope| {
@@ -275,6 +276,7 @@ async fn scoped_dynamic_apis_builds_one_api_per_namespace() {
         client: kube::Client::try_from(config).expect("client builds"),
         context: "ctx".to_owned(),
         default_namespace: "default".to_owned(),
+        write_policy: WritePolicy::Blocked,
     };
     let resource = ApiResource {
         group: "metrics.k8s.io".to_owned(),

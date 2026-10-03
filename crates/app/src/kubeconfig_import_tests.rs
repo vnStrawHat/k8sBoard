@@ -53,6 +53,7 @@ fn collisions_report_context_display_name_cluster_and_user() {
             display_name: Some("Shown".to_owned()),
             environment: None,
             read_only: None,
+            confirm: None,
             default_namespace: None,
         }],
         ..ClusterRegistry::default()

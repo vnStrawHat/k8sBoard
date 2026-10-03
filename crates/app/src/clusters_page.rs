@@ -39,6 +39,7 @@ use crate::environment::{Environment, environment_badge};
 use crate::resource_actions::disabled_menu_item;
 use crate::settings::AppSettings;
 use crate::settings_window::ImportKubeconfig;
+use crate::write_guard::ConfirmMode;
 
 #[path = "clusters_page_import.rs"]
 mod import;
@@ -582,10 +583,15 @@ impl ClustersPage {
                         }),
                 ))
                 .child(muted_text(
-                    "Default: on for Production. Applies when editing actions arrive (0030).",
+                    "Default: on for Production. Editing actions stay off while a cluster is read-only.",
                     cx,
                 ))
                 .into_any_element(),
+            cx,
+        );
+        let confirm_row = form_row(
+            "Confirm changes by",
+            centered(confirm_menu(row, entry.as_ref())),
             cx,
         );
         let can_remove = row.origin != RowOrigin::Chain;
@@ -608,7 +614,7 @@ impl ClustersPage {
                 ],
                 cx,
             ))
-            .child(section("Safety", [read_only_row], cx))
+            .child(section("Safety", [read_only_row, confirm_row], cx))
             .child(
                 v_flex()
                     .gap_2()
@@ -763,6 +769,60 @@ fn environment_menu(row: &ClusterRow, entry: Option<&ClusterEntry>) -> impl Into
                                 });
                             });
                         }),
+                )
+            })
+        })
+}
+
+/// The select text of a confirm mode, which the Auto entry repeats for the environment default.
+fn confirm_label(mode: ConfirmMode) -> &'static str {
+    match mode {
+        ConfirmMode::TypeName => "Typing the cluster name",
+        ConfirmMode::Click => "Clicking Confirm",
+    }
+}
+
+/// Stores the confirm mode of `cluster`; `None` is Auto and drops the key (`edit_entry` drops an
+/// entry left with no override).
+pub(crate) fn set_confirm(cluster: &ClusterRef, mode: Option<ConfirmMode>, cx: &mut App) {
+    AppSettings::update(cx, |settings| {
+        edit_entry(&mut settings.registry, cluster, |entry| {
+            entry.confirm = mode;
+        });
+    });
+}
+
+fn confirm_menu(row: &ClusterRow, entry: Option<&ClusterEntry>) -> impl IntoElement {
+    let current = entry.and_then(|entry| entry.confirm);
+    let auto = format!(
+        "Auto ({})",
+        confirm_label(ConfirmMode::for_environment(row.profile.environment))
+    );
+    let label = current.map_or_else(|| auto.clone(), |mode| confirm_label(mode).to_owned());
+    let cluster = row.cluster.clone();
+    Button::new("confirm-mode")
+        .small()
+        .outline()
+        .label(label)
+        .dropdown_caret(true)
+        .dropdown_menu(move |menu, _, _| {
+            let choices = [
+                (auto.clone(), None),
+                (
+                    confirm_label(ConfirmMode::TypeName).to_owned(),
+                    Some(ConfirmMode::TypeName),
+                ),
+                (
+                    confirm_label(ConfirmMode::Click).to_owned(),
+                    Some(ConfirmMode::Click),
+                ),
+            ];
+            choices.into_iter().fold(menu, |menu, (label, mode)| {
+                let cluster = cluster.clone();
+                menu.item(
+                    PopupMenuItem::new(label)
+                        .checked(mode == current)
+                        .on_click(move |_, _, cx| set_confirm(&cluster, mode, cx)),
                 )
             })
         })

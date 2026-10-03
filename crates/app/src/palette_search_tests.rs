@@ -8,9 +8,11 @@ use cluster::{
 use super::*;
 use crate::cluster_health::RowHealth;
 use crate::cluster_registry::ClusterRef;
+use crate::cluster_session::AccessState;
 use crate::environment::Environment;
 use crate::kind_row::KindObject;
 use crate::status_tone::StatusTone;
+use crate::write_guard::{WriteLock, test_guard};
 
 fn known_denying(denied: &[AccessCheck]) -> AccessState {
     let reviews = AccessCheck::ALL
@@ -132,10 +134,22 @@ fn cluster_row(context: &str, label: &str, shortcut: u8, is_active: bool) -> Swi
     }
 }
 
+/// An unlocked development guard over `access`. The report is leaked so that the guard can sit in
+/// `World` next to the lists it is used with; a test run is short and the report is small.
+fn guard_of(access: AccessState) -> ClusterGuard<'static> {
+    let access: &'static AccessState = Box::leak(Box::new(access));
+    test_guard(
+        access,
+        WriteLock::Unlocked,
+        "dev-1",
+        Environment::Development,
+    )
+}
+
 /// The loaded data a test borrows into a `PaletteInput`.
 struct World {
     scope: NamespaceScope,
-    access: AccessState,
+    guard: ClusterGuard<'static>,
     namespaces: Vec<NamespaceSummary>,
     pods: Vec<PodSummary>,
     nodes: Vec<NodeSummary>,
@@ -147,7 +161,7 @@ impl World {
     fn new() -> Self {
         Self {
             scope: NamespaceScope::All,
-            access: known_denying(&[]),
+            guard: guard_of(known_denying(&[])),
             namespaces: vec![namespace("shop"), namespace("kube-system")],
             pods: vec![pod("shop", "payments-api-0")],
             nodes: vec![node("node-1")],
@@ -164,7 +178,7 @@ impl World {
             include_resources: true,
             session: Some(PaletteSession {
                 scope: &self.scope,
-                access: &self.access,
+                guard: &self.guard,
                 namespaces: &self.namespaces,
                 pods: &self.pods,
                 nodes: &self.nodes,
@@ -294,7 +308,7 @@ fn kind_mode_disables_denied_kinds_with_the_sidebar_reason() {
     let check = ResourceKind::Deployments
         .access_check()
         .expect("a built-in kind has a list check");
-    world.access = known_denying(&[check]);
+    world.guard = guard_of(known_denying(&[check]));
     world.scope = NamespaceScope::Named("shop".to_owned());
     let found = search(&world.input(Screen::Pods, None), ":deploy");
     let deployments = &found.entries[0];
@@ -488,8 +502,14 @@ fn row_actions_follow_key_availability() {
             .unwrap_or_else(|| panic!("{label} is listed"))
     };
     assert_eq!(reason_of(action("View logs")), None);
-    assert_eq!(reason_of(action("Edit YAML")), Some("Read-only mode"));
-    assert_eq!(reason_of(action("Delete")), Some("Read-only mode"));
+    assert_eq!(
+        reason_of(action("Edit YAML")),
+        Some("Comes in a later version")
+    );
+    assert_eq!(
+        reason_of(action("Delete")),
+        Some("Comes in a later version")
+    );
     // A pod has no node-only action.
     assert!(
         !found

@@ -24,10 +24,11 @@ use crate::network_rows::ingress_urls;
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, ValueAccess};
 use crate::table_selection::ResourceKey;
+use crate::write_guard::{ClusterGuard, WriteLock};
 use crate::yaml_view::object_ref;
 
-const READ_ONLY_FEATURE_REASON: &str = "Not available in read-only mode";
-pub(crate) const READ_ONLY_MODE_REASON: &str = "Read-only mode";
+/// Why a mutating action is off while its spec has not shipped.
+pub(crate) const NOT_SHIPPED_REASON: &str = "Comes in a later version";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResourceAction {
@@ -63,37 +64,51 @@ pub(crate) enum KeyAvailability {
     NotOffered,
 }
 
-/// What an action needs: the permission it is gated on, and why it is still unavailable
-/// when that permission is granted. `None` means the permission is all the action needs.
-struct ActionGate {
-    check: AccessCheck,
-    read_only_reason: Option<&'static str>,
+/// What an action needs before the gate lets it run. A mutating action carries a permission
+/// check, so it cannot skip RBAC; one whose check is not defined yet is `Planned` and is never
+/// enabled.
+enum ActionGate {
+    /// Gated by permissions alone: the read-only lock does not apply. `None` needs no permission.
+    ReadOnly { check: Option<AccessCheck> },
+    /// Changes the cluster or opens a session on it: its spec must have shipped, its permission
+    /// must be granted, and the cluster must be unlocked.
+    Mutating {
+        check: AccessCheck,
+        is_shipped: bool,
+    },
+    /// A mutating action whose spec, and so whose permission check, has not been written yet.
+    Planned,
 }
 
 impl ResourceAction {
-    fn gate(self) -> Option<ActionGate> {
-        let (check, read_only_reason) = match self {
-            Self::ViewLogs => (AccessCheck::GetPodLogs, None),
-            Self::OpenShell => (AccessCheck::CreatePodExec, Some(READ_ONLY_FEATURE_REASON)),
-            Self::PortForward => (
-                AccessCheck::CreatePodPortForward,
-                Some(READ_ONLY_FEATURE_REASON),
-            ),
+    fn gate(self) -> ActionGate {
+        match self {
+            Self::ViewLogs => ActionGate::ReadOnly {
+                check: Some(AccessCheck::GetPodLogs),
+            },
+            Self::CopyName | Self::ViewYaml => ActionGate::ReadOnly { check: None },
+            Self::OpenShell => ActionGate::Mutating {
+                check: AccessCheck::CreatePodExec,
+                is_shipped: false,
+            },
+            Self::PortForward => ActionGate::Mutating {
+                check: AccessCheck::CreatePodPortForward,
+                is_shipped: false,
+            },
             // The node shell is a debug pod, so it needs the same right as a pod shell.
-            Self::OpenNodeShell => (AccessCheck::CreatePodExec, Some(READ_ONLY_FEATURE_REASON)),
-            Self::Cordon
-            | Self::Drain
-            | Self::CopyName
-            | Self::ViewYaml
-            | Self::EditYaml
-            | Self::Delete
-            | Self::RestartRollout
-            | Self::Scale => return None,
-        };
-        Some(ActionGate {
-            check,
-            read_only_reason,
-        })
+            Self::OpenNodeShell => ActionGate::Mutating {
+                check: AccessCheck::CreatePodExec,
+                is_shipped: false,
+            },
+            // Step 4 of spec 0030 ships Cordon.
+            Self::Cordon => ActionGate::Mutating {
+                check: AccessCheck::PatchNodes,
+                is_shipped: false,
+            },
+            Self::Drain | Self::EditYaml | Self::Delete | Self::RestartRollout | Self::Scale => {
+                ActionGate::Planned
+            }
+        }
     }
 
     /// The key action behind the action, which menus show as a hint. The node shell shares the
@@ -152,18 +167,19 @@ pub(crate) fn key_availability(
     action: ResourceAction,
     subject: &ResourceKey,
     live: &LiveCluster,
+    guard: &ClusterGuard<'_>,
 ) -> KeyAvailability {
     let pod = live.pods.items().iter().find(|pod| subject.is_pod(pod));
-    key_availability_of(action, subject, pod, &live.access)
+    key_availability_of(action, subject, pod, guard)
 }
 
 /// `key_availability` with what it reads from the live cluster passed in: the pod of a pod subject
-/// (`None` when its row is gone) and the access state.
+/// (`None` when its row is gone). `guard` is the guard of the subject's own cluster.
 pub(crate) fn key_availability_of(
     action: ResourceAction,
     subject: &ResourceKey,
     pod: Option<&PodSummary>,
-    access: &AccessState,
+    guard: &ClusterGuard<'_>,
 ) -> KeyAvailability {
     let is_offered = match action {
         ResourceAction::ViewLogs => matches!(subject, ResourceKey::Pod { .. }),
@@ -197,37 +213,69 @@ pub(crate) fn key_availability_of(
         let Some(pod) = pod else {
             return KeyAvailability::NotOffered;
         };
-        return match logs_launch(pod, None, access) {
+        return match logs_launch(pod, None, guard.access) {
             Ok(_) => KeyAvailability::Run,
             Err(reason) => KeyAvailability::Disabled { reason },
         };
     }
-    match action_availability(subject_action(action, subject), access) {
+    match action_availability(subject_action(action, subject), guard) {
         ActionAvailability::Enabled => KeyAvailability::Run,
         ActionAvailability::Disabled { reason } => KeyAvailability::Disabled { reason },
     }
 }
 
+/// The gate, in order: a mutating action whose spec has not shipped, then the permission state,
+/// then the denied permission, then the cluster's read-only lock. A read-only action skips the
+/// first and the last, so it needs no guard: see `availability_before_lock`. The first failing reason
+/// is the one shown. Menus, keys, and the palette all read this function.
 pub(crate) fn action_availability(
     action: ResourceAction,
-    access: &AccessState,
+    guard: &ClusterGuard<'_>,
 ) -> ActionAvailability {
-    let Some(gate) = action.gate() else {
-        return match action {
-            ResourceAction::CopyName | ResourceAction::ViewYaml => ActionAvailability::Enabled,
-            _ => disabled(READ_ONLY_MODE_REASON),
-        };
-    };
+    gate_availability(&action.gate(), guard)
+}
+
+fn gate_availability(gate: &ActionGate, guard: &ClusterGuard<'_>) -> ActionAvailability {
+    if let Some(reason) = before_lock_reason(gate, guard.access) {
+        return disabled(reason);
+    }
+    if matches!(gate, ActionGate::Mutating { .. }) && guard.lock == WriteLock::Locked {
+        return disabled(format!("{} is read-only", guard.display_name()));
+    }
+    ActionAvailability::Enabled
+}
+
+/// Everything of the gate but the lock. For an action that does not mutate (View logs, View
+/// YAML, Copy name) that is the whole gate, so they need no guard. The Forward and shell tooltips
+/// ask it too: they only explain why a feature that has not shipped is off.
+fn availability_before_lock(action: ResourceAction, access: &AccessState) -> ActionAvailability {
+    match before_lock_reason(&action.gate(), access) {
+        Some(reason) => disabled(reason),
+        None => ActionAvailability::Enabled,
+    }
+}
+
+/// Rows 2-4 of the gate: why the action is off before the lock is even asked.
+fn before_lock_reason(gate: &ActionGate, access: &AccessState) -> Option<SharedString> {
+    match gate {
+        ActionGate::Planned
+        | ActionGate::Mutating {
+            is_shipped: false, ..
+        } => Some(NOT_SHIPPED_REASON.into()),
+        // An action with no check is never held back by the permission state.
+        ActionGate::ReadOnly { check } => check.and_then(|check| permission_reason(check, access)),
+        ActionGate::Mutating { check, .. } => permission_reason(*check, access),
+    }
+}
+
+fn permission_reason(check: AccessCheck, access: &AccessState) -> Option<SharedString> {
     match access {
-        AccessState::Checking { .. } => disabled("Checking permissions…"),
-        AccessState::Unknown => disabled("Permissions could not be checked"),
-        AccessState::Known(report) if !report.is_allowed(gate.check) => {
-            disabled(format!("Not permitted: {}", gate.check))
+        AccessState::Checking { .. } => Some("Checking permissions…".into()),
+        AccessState::Unknown => Some("Permissions could not be checked".into()),
+        AccessState::Known(report) if !report.is_allowed(check) => {
+            Some(format!("Not permitted: {check}").into())
         }
-        AccessState::Known(_) => match gate.read_only_reason {
-            Some(reason) => disabled(reason),
-            None => ActionAvailability::Enabled,
-        },
+        AccessState::Known(_) => None,
     }
 }
 
@@ -242,14 +290,15 @@ pub(crate) fn pod_menu(
     menu: PopupMenu,
     pod: &PodSummary,
     live: &LiveCluster,
+    guard: &ClusterGuard<'_>,
     context: &str,
     dock: &WeakEntity<LogDock>,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
     let access = &live.access;
     menu.item(view_logs_item(pod, None, live, dock))
-        .item(action_item(ResourceAction::OpenShell, access))
-        .item(action_item(ResourceAction::PortForward, access))
+        .item(action_item(ResourceAction::OpenShell, guard))
+        .item(action_item(ResourceAction::PortForward, guard))
         .item(view_yaml_item(ResourceKey::of_pod(pod), shell))
         .separator()
         .item(copy_name_item(&pod.name, access))
@@ -297,7 +346,7 @@ pub(crate) fn logs_launch(
     access: &AccessState,
 ) -> Result<LogTarget, SharedString> {
     if let ActionAvailability::Disabled { reason } =
-        action_availability(ResourceAction::ViewLogs, access)
+        availability_before_lock(ResourceAction::ViewLogs, access)
     {
         return Err(reason);
     }
@@ -344,7 +393,10 @@ fn workload_logs_entry(
     } else {
         "View logs (all pods)"
     };
-    Some((label, action_availability(ResourceAction::ViewLogs, access)))
+    Some((
+        label,
+        availability_before_lock(ResourceAction::ViewLogs, access),
+    ))
 }
 
 /// Merges the logs of every pod of the workload into one dock tab.
@@ -372,17 +424,17 @@ pub(crate) fn node_menu(
     menu: PopupMenu,
     node: &NodeSummary,
     live: &LiveCluster,
+    guard: &ClusterGuard<'_>,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
-    let access = &live.access;
-    menu.item(action_item(ResourceAction::OpenNodeShell, access))
+    menu.item(action_item(ResourceAction::OpenNodeShell, guard))
         .item(view_yaml_item(ResourceKey::of_node(node), shell))
         .item(view_pods_on_node_item(node, live.pods.items(), shell))
         .separator()
-        .item(action_item(ResourceAction::Cordon, access))
-        .item(action_item(ResourceAction::Drain, access))
+        .item(action_item(ResourceAction::Cordon, guard))
+        .item(action_item(ResourceAction::Drain, guard))
         .separator()
-        .item(copy_name_item(&node.name, access))
+        .item(copy_name_item(&node.name, &live.access))
 }
 
 /// Switches to Pods with only the pods of the node. Always enabled, even for an empty node.
@@ -422,7 +474,7 @@ pub(crate) fn kind_menu(
     menu: PopupMenu,
     kind: ResourceKind,
     row: &KindRow,
-    access: &AccessState,
+    guard: &ClusterGuard<'_>,
     pods: &[PodSummary],
     shell: &WeakEntity<AppShell>,
     extras: MenuExtras,
@@ -437,7 +489,7 @@ pub(crate) fn kind_menu(
     if has_test_traffic(kind) {
         menu = menu.item(test_traffic_item(row, shell));
     }
-    if let Some(item) = workload_logs_item(row, access, shell) {
+    if let Some(item) = workload_logs_item(row, guard.access, shell) {
         menu = menu.item(item);
     }
     if let Some(secret) = extras.secret {
@@ -490,7 +542,7 @@ pub(crate) fn kind_menu(
         _ => {}
     }
     if kind.has_port_forward() {
-        menu = menu.item(action_item(ResourceAction::PortForward, access));
+        menu = menu.item(action_item(ResourceAction::PortForward, guard));
     }
     if let Some(is_default) =
         default_namespace_state(kind, &row.name, extras.default_namespace.as_deref())
@@ -502,17 +554,17 @@ pub(crate) fn kind_menu(
         menu = menu.separator();
     }
     for item in change_actions {
-        let entry = disabled_menu_item(item.label, READ_ONLY_MODE_REASON.into());
+        let entry = disabled_menu_item(item.label, NOT_SHIPPED_REASON.into());
         menu = menu.item(match item.action {
             Some(action) => entry.action(action.key_action()),
             None => entry,
         });
     }
     menu.separator()
-        .item(copy_name_item(&row.name, access))
+        .item(copy_name_item(&row.name, guard.access))
         .separator()
         .item(
-            disabled_menu_item(kind.delete_label(), READ_ONLY_MODE_REASON.into())
+            disabled_menu_item(kind.delete_label(), NOT_SHIPPED_REASON.into())
                 .action(ResourceAction::Delete.key_action()),
         )
 }
@@ -1079,41 +1131,42 @@ fn view_tab_item(
 /// there is nothing to read from.
 pub(crate) fn view_logs_reason(live: Option<&LiveCluster>) -> Option<SharedString> {
     let Some(live) = live else {
-        return Some(READ_ONLY_MODE_REASON.into());
+        return Some("Not connected".into());
     };
-    match action_availability(ResourceAction::ViewLogs, &live.access) {
+    match availability_before_lock(ResourceAction::ViewLogs, &live.access) {
         ActionAvailability::Disabled { reason } => Some(reason),
         ActionAvailability::Enabled => None,
     }
 }
 
-/// Why "Shell into selected" is disabled. A shell is never available in this version.
+/// Why "Shell into selected" is disabled. The tooltip needs no lock: a shell has not shipped, so it
+/// is off whatever the lock says.
 pub(crate) fn open_shell_reason(live: Option<&LiveCluster>) -> SharedString {
     let Some(live) = live else {
-        return READ_ONLY_MODE_REASON.into();
+        return NOT_SHIPPED_REASON.into();
     };
-    match action_availability(ResourceAction::OpenShell, &live.access) {
+    match availability_before_lock(ResourceAction::OpenShell, &live.access) {
         ActionAvailability::Disabled { reason } => reason,
-        ActionAvailability::Enabled => READ_ONLY_FEATURE_REASON.into(),
+        ActionAvailability::Enabled => NOT_SHIPPED_REASON.into(),
     }
 }
 
-/// The tooltip of a disabled Forward button. Port-forward is never enabled in this version.
+/// The tooltip of a disabled Forward button. Port-forward has not shipped, so the lock never decides.
 pub(crate) fn port_forward_reason(access: &AccessState) -> SharedString {
-    match action_availability(ResourceAction::PortForward, access) {
+    match availability_before_lock(ResourceAction::PortForward, access) {
         ActionAvailability::Disabled { reason } => reason,
-        ActionAvailability::Enabled => READ_ONLY_FEATURE_REASON.into(),
+        ActionAvailability::Enabled => NOT_SHIPPED_REASON.into(),
     }
 }
 
 /// Disabled items stay visible with their reason, so users learn what exists. The item shows the
 /// key of its action. Drain keeps its ellipsis because it opens a dialog.
-fn action_item(action: ResourceAction, access: &AccessState) -> PopupMenuItem {
+fn action_item(action: ResourceAction, guard: &ClusterGuard<'_>) -> PopupMenuItem {
     let label = match action {
         ResourceAction::Drain => "Drain…",
         _ => action_label(action),
     };
-    match action_availability(action, access) {
+    match action_availability(action, guard) {
         ActionAvailability::Enabled => PopupMenuItem::new(label),
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
     }
@@ -1139,7 +1192,7 @@ pub(crate) fn disabled_menu_item(
 
 fn copy_name_item(name: &str, access: &AccessState) -> PopupMenuItem {
     let label = action_label(ResourceAction::CopyName);
-    match action_availability(ResourceAction::CopyName, access) {
+    match availability_before_lock(ResourceAction::CopyName, access) {
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
         ActionAvailability::Enabled => {
             let name = name.to_owned();

@@ -66,6 +66,7 @@ fn entry(context: &str, source: &str) -> ClusterEntry {
         display_name: None,
         environment: None,
         read_only: None,
+        confirm: None,
         default_namespace: None,
     }
 }

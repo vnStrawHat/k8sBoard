@@ -15,7 +15,7 @@ use crate::app_shell::AppShell;
 use crate::cluster_session::ClusterSession;
 use crate::log_tab::{LogLayout, LogTab};
 use crate::log_target::{ContainerChoice, LogTarget, NoLogTarget};
-use crate::resource_actions::{READ_ONLY_MODE_REASON, disabled_menu_item};
+use crate::resource_actions::{NOT_SHIPPED_REASON, disabled_menu_item};
 use crate::status_tone::tone_color;
 
 pub(crate) const DEFAULT_DOCK_HEIGHT: Pixels = px(280.);
@@ -291,7 +291,7 @@ impl LogDock {
                 };
                 let shell_reason = match &entity {
                     Some(entity) => entity.read(cx).open_shell_unavailable_reason(cx),
-                    None => READ_ONLY_MODE_REASON.into(),
+                    None => NOT_SHIPPED_REASON.into(),
                 };
                 let logs_item = match target {
                     Ok(_) => {

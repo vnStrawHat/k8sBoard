@@ -43,7 +43,7 @@ Clippy check (coder-lite, once): a scratch `api.delete(..)` in a non-excepted cl
 
 ## Step 3 — audit (`audit_log_tests.rs`)
 
-`audit_keys_are_the_allow_list`, `lock_entry_names_the_guard_cluster`, `secret_kind_records_no_values` (pure `recordable_fields("Secret", ..)`), `config_map_records_paths_only`, `note_is_trimmed_and_capped`, `append_adds_one_line_per_entry`, `append_creates_owner_only_file` (`#[cfg(unix)]`, `mode & 0o077 == 0`), `lock_toggle_appends_a_line` (window test, temp config dir).
+`audit_keys_are_the_allow_list`, `lock_entry_names_the_guard_cluster`, `secret_kind_records_no_values` (pure `recordable_fields("Secret", ..)`), `config_map_records_paths_only`, `note_is_trimmed_and_capped`, `append_adds_one_line_per_entry`, `append_creates_owner_only_file` (`#[cfg(unix)]`, `mode & 0o077 == 0`), `lock_toggle_appends_a_line` (window test, temp config dir; it waits for `toggle_write_lock` of step 2b). Added: `outcomes_serialize_lowercase`, `a_lock_line_has_no_object_error_or_note_key`, `other_kinds_keep_their_values`, `append_fails_without_a_folder`, `the_log_is_audit_jsonl_in_the_settings_folder`.
 
 ## Step 4 — write flow
 
@@ -73,3 +73,9 @@ Write-capable cluster (R2): a later, user-run check with `K8SBOARD_ALLOW_WRITES=
 | `nodes`, clean dir | none | `Unlocked` badge, warning dashed border (STG) |
 
 Report color literals, clipped text, and a missing env border as defects. Known deviation: W10 names tiers "dev one click, staging Enter"; decision 9 replaced them.
+
+## Deferred and later
+
+- A shell-level test that `guard_for` picks the row's own cluster out of several sessions is due once 0027 lands (single mode has one session, so the pure test `gate_and_confirm_use_the_rows_cluster` is the only check today).
+- `ObjectKind::ALL`, `ObjectKind::resource()`, and `commit_outcome_carries_uid` are deferred to 0031 and 0033, which are their first users.
+- Added with the security review: `request_rejects_a_name_that_changes_the_path`, `a_non_utf8_answer_to_a_commit_is_outcome_unknown`, `a_secret_rbac_403_is_denied_and_holds_only_the_reason_and_fields`, `a_build_that_blocks_writes_ignores_the_opt_in`, `the_screenshot_build_blocks_writes`, `the_patch_nodes_review_posts_one_review_and_nothing_else`.

@@ -6,6 +6,8 @@ use k8s_openapi::api::authorization::v1::{
     SelfSubjectAccessReviewSpec, SelfSubjectRulesReview, SelfSubjectRulesReviewSpec,
     SubjectAccessReviewStatus, SubjectRulesReviewStatus,
 };
+use k8s_openapi::serde::Serialize;
+use k8s_openapi::serde::de::DeserializeOwned;
 use kube::Api;
 use kube::api::PostParams;
 
@@ -56,6 +58,8 @@ pub enum AccessCheck {
     ListRoleBindings,
     ListClusterRoleBindings,
     ListCustomResourceDefinitions,
+    /// Cordon and uncordon (0030): the one permission of the first write.
+    PatchNodes,
 }
 
 /// The API resource a check asks about.
@@ -69,7 +73,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 35] = [
+    pub const ALL: [AccessCheck; 36] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::CreatePodExec,
@@ -105,6 +109,7 @@ impl AccessCheck {
         Self::ListRoleBindings,
         Self::ListClusterRoleBindings,
         Self::ListCustomResourceDefinitions,
+        Self::PatchNodes,
     ];
 
     fn target(self) -> CheckTarget {
@@ -162,6 +167,7 @@ impl AccessCheck {
                 None,
                 false,
             ),
+            Self::PatchNodes => ("patch", "", "nodes", None, false),
         };
         CheckTarget {
             verb,
@@ -335,19 +341,13 @@ impl ClusterConnection {
     /// Asks the API server (SelfSubjectRulesReview, non-mutating) which rules apply to the
     /// caller in `namespace`.
     pub async fn review_rules(&self, namespace: &str) -> Result<RulesReview, ClusterError> {
-        let api = Api::<SelfSubjectRulesReview>::all(self.client().clone());
         let review = SelfSubjectRulesReview {
             spec: SelfSubjectRulesReviewSpec {
                 namespace: Some(namespace.to_owned()),
             },
             ..Default::default()
         };
-        let response = self
-            .run(
-                "reviewing rules",
-                api.create(&PostParams::default(), &review),
-            )
-            .await?;
+        let response = self.post_review("reviewing rules", review).await?;
         Ok(rules_review(response.status))
     }
 
@@ -385,20 +385,39 @@ impl ClusterConnection {
         &self,
         spec: SelfSubjectAccessReviewSpec,
     ) -> Result<AccessDecision, ClusterError> {
-        let api = Api::<SelfSubjectAccessReview>::all(self.client().clone());
         let review = SelfSubjectAccessReview {
             spec,
             ..Default::default()
         };
-        let response = self
-            .run(
-                "reviewing access",
-                api.create(&PostParams::default(), &review),
-            )
-            .await?;
+        let response = self.post_review("reviewing access", review).await?;
         Ok(access_decision(response.status))
     }
+
+    /// Posts one review object and returns the answered review. The reviews only ask the API server
+    /// what the caller may do; they change nothing, so they are the one `create` outside
+    /// `object_write.rs` (the SSAR row of the 0030 allow-list).
+    #[allow(clippy::disallowed_methods)]
+    async fn post_review<K: AccessReviewObject>(
+        &self,
+        action: &'static str,
+        review: K,
+    ) -> Result<K, ClusterError> {
+        let api = Api::<K>::all(self.client().clone());
+        self.run(action, api.create(&PostParams::default(), &review))
+            .await
+    }
 }
+
+/// The objects `post_review` may create. The trait is private and has two implementors, so no
+/// other kind can go through the one `create` that is allowed outside `object_write.rs`.
+trait AccessReviewObject:
+    kube::Resource<DynamicType = ()> + Clone + Serialize + DeserializeOwned + fmt::Debug
+{
+}
+
+impl AccessReviewObject for SelfSubjectAccessReview {}
+
+impl AccessReviewObject for SelfSubjectRulesReview {}
 
 /// The namespace of each review `scope` needs: `None` for the single cluster-wide review.
 fn review_targets(scope: &NamespaceScope) -> Vec<Option<&str>> {
@@ -552,9 +571,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 35);
+        assert_eq!(AccessCheck::ALL.len(), 36);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 35);
+        assert_eq!(distinct.len(), 36);
     }
 
     #[test]
@@ -610,6 +629,17 @@ mod tests {
         assert_eq!(attributes.namespace, None);
         assert_eq!(attributes.resource.as_deref(), Some("namespaces"));
         assert_eq!(attributes.verb.as_deref(), Some("list"));
+    }
+
+    #[test]
+    fn patch_nodes_check_is_cluster_scoped() {
+        let attributes = resource_attributes(AccessCheck::PatchNodes, Some("team-a"));
+        assert_eq!(attributes.verb.as_deref(), Some("patch"));
+        assert_eq!(attributes.group.as_deref(), Some(""));
+        assert_eq!(attributes.resource.as_deref(), Some("nodes"));
+        assert_eq!(attributes.subresource, None);
+        assert_eq!(attributes.namespace, None);
+        assert_eq!(AccessCheck::PatchNodes.to_string(), "patch nodes");
     }
 
     #[test]
@@ -776,6 +806,7 @@ mod tests {
                 "list rolebindings",
                 "list clusterrolebindings",
                 "list customresourcedefinitions",
+                "patch nodes",
             ]
         );
     }
@@ -898,7 +929,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 35);
+        assert_eq!(AccessCheck::ALL.len(), 36);
     }
 
     #[test]
@@ -1111,5 +1142,38 @@ mod tests {
         assert_eq!(nodes.namespace, None);
         assert_eq!(nodes.subresource, None);
         assert_eq!(nodes.verb.as_deref(), Some("list"));
+    }
+
+    #[tokio::test]
+    async fn the_patch_nodes_review_posts_one_review_and_nothing_else() {
+        use crate::fake_api::FakeApi;
+        use crate::object_write::WritePolicy;
+
+        let answer = r#"{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectAccessReview","metadata":{},"spec":{},"status":{"allowed":false,"reason":"no"}}"#;
+        // A blocked write policy must not stop a review: it only asks what the caller may do.
+        let (connection, api) =
+            FakeApi::connection(WritePolicy::Blocked, |_| (201, answer.to_owned()));
+        let review = connection
+            .review_one(AccessCheck::PatchNodes, None)
+            .await
+            .expect("the review is answered");
+        assert_eq!(review.check, AccessCheck::PatchNodes);
+        assert_eq!(
+            review.decision,
+            AccessDecision::Denied {
+                reason: Some("no".to_owned())
+            }
+        );
+        let requests = api.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(
+            requests[0].path,
+            "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews"
+        );
+        let body: serde_json::Value = serde_json::from_str(&requests[0].body).expect("JSON");
+        let attributes = &body["spec"]["resourceAttributes"];
+        assert_eq!(attributes["verb"], "patch");
+        assert_eq!(attributes["resource"], "nodes");
     }
 }

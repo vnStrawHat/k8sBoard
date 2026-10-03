@@ -427,14 +427,17 @@ impl TableDelegate for KindTableDelegate {
             .read_with(cx, |shell, cx| shell.default_namespace(cx))
             .ok()
             .flatten();
-        let Some(live) = self.live(cx) else {
+        let Some(session) = self.session.as_ref().map(|session| session.read(cx)) else {
+            return menu;
+        };
+        let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
             return menu;
         };
         kind_menu(
             menu,
             kind,
             &row,
-            &live.access,
+            &guard,
             live.pods.items(),
             &self.shell,
             MenuExtras {

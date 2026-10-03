@@ -13,7 +13,7 @@ use cluster::{
     ResourceQuotaSummary, SecretSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
-use gpui_kit::{Context, Task};
+use gpui_kit::{App, Context, Task};
 use tokio::sync::watch;
 
 use crate::cluster_metrics::{
@@ -31,17 +31,20 @@ use crate::kubelet_metrics::KubeletDemand;
 use crate::live_sections::CanDoCell;
 use crate::related_objects::RelatedSubject;
 use crate::resource_kind::ResourceKind;
+use crate::settings::AppSettings;
 use crate::table_selection::ResourceKey;
 use crate::topology_feeds::{
     FeedStart, SubjectChange, TopologyFeed, TopologyFeeds, TopologySubject, feed_plan,
     subject_change,
 };
+use crate::write_guard::{ClusterGuard, WriteLock};
 
 /// One connected kubeconfig context: the connection, its live lists, and the access report.
 /// Dropping the entity cancels every task and watch it owns.
 pub(crate) struct ClusterSession {
     inputs: ConnectInputs,
-    user: Option<String>,
+    /// The context this session connects to, so the write guard can name its cluster.
+    summary: ContextSummary,
     phase: SessionPhase,
     /// The kind screen being shown, kept across Connecting and retry so that `LiveCluster::start`
     /// can start its watch.
@@ -1096,7 +1099,7 @@ impl ClusterSession {
         let phase = Self::begin_connect(&inputs, cx);
         Self {
             inputs,
-            user: summary.user.clone(),
+            summary: summary.clone(),
             phase,
             explorer_kind,
             event_filter: EventFilter::All,
@@ -1338,7 +1341,22 @@ impl ClusterSession {
 
     /// The kubeconfig user entry name, not a credential.
     pub(crate) fn user(&self) -> Option<&str> {
-        self.user.as_deref()
+        self.summary.user.as_deref()
+    }
+
+    /// What the write gate and the confirm step read for this session's own cluster. `None` until
+    /// the session is live, because the permission report belongs to the live cluster.
+    pub(crate) fn guard(&self, cx: &App) -> Option<ClusterGuard<'_>> {
+        let live = self.live()?;
+        let profile = AppSettings::get(cx).registry.profile(&self.summary);
+        // The session keeps no lock of its own yet, so every session opens in its profile's state.
+        let lock = WriteLock::at_open(&profile);
+        Some(ClusterGuard::new(
+            &live.access,
+            lock,
+            profile,
+            self.summary.clone(),
+        ))
     }
 
     pub(crate) fn phase(&self) -> &SessionPhase {

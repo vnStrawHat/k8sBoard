@@ -360,11 +360,12 @@ impl TableDelegate for NodeTableDelegate {
         let Some(session) = &self.session else {
             return menu;
         };
-        let Some(live) = session.read(cx).live() else {
+        let session = session.read(cx);
+        let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
             return menu;
         };
         match self.node_at(row_ix, cx) {
-            Some(node) => node_menu(menu, node, live, &self.shell),
+            Some(node) => node_menu(menu, node, live, &guard, &self.shell),
             None => menu,
         }
     }

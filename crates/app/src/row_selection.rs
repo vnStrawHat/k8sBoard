@@ -7,7 +7,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _
 use gpui_kit::{AnyElement, App, IntoElement, ParentElement as _, Styled as _, WeakEntity};
 
 use crate::app_shell::{AppShell, Screen};
-use crate::resource_actions::READ_ONLY_MODE_REASON;
+use crate::resource_actions::NOT_SHIPPED_REASON;
 use crate::resource_kind::ResourceKind;
 
 /// The actions that act on the ticked rows, as the wireframes draw them. Every one is disabled
@@ -53,7 +53,7 @@ pub(crate) fn selection_bar(
                 .outline()
                 .label(*label)
                 .disabled(true)
-                .tooltip(READ_ONLY_MODE_REASON)
+                .tooltip(NOT_SHIPPED_REASON)
         }))
         .child(
             Button::new("clear-selection")

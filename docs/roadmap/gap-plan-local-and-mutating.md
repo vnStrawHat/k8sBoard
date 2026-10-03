@@ -35,6 +35,7 @@ C3: the user approved 0030–0037 once on 2026-10-02 (one approval for all mutat
 ### 0030 — Guardrails and write path
 Per-cluster read-only mode (default on for PROD), lock toggle and Ctrl Shift R, one action gate = lock ∧ SSAR (per verb/subresource) ∧ env tier, confirmation dialog for every action (prod: type the name; staging, dev, local: click Confirm; user 2026-10-02), server-side dry-run helper, local audit log with optional note (C8, C10), and an allow-list replacing the 0001 read-only grep.
 - Deps: 0024. Risk: Med (the contract every later spec relies on).
+- Spec: [0030-guardrails-write-path](../specs/0030-guardrails-write-path/README.md). Steps 1 (write path, clippy `disallowed-methods`), 2a (pure guard, gate, `confirm` setting, Safety page), and 3 (audit module) are implemented; 2b (session lock, badge, Ctrl Shift R) and 4 (write flow, Cordon) wait for 0027.
 
 ### 0031 — Edit YAML (W10)
 GPUI Kit Code Editor, diff vs cluster (default view), semantic change list, checks (dry-run, quota, rollout impact), Apply with conflict handling (C8), pre-apply snapshot for one-step rollback (incl. ConfigMaps), Revision history tab, "New" from templates (Namespace, ConfigMap, Quota, PDB, RoleBinding).

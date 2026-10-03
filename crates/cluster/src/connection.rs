@@ -10,6 +10,7 @@ use kube::config::KubeConfigOptions;
 
 use crate::kubeconfig::{Kubeconfig, KubeconfigError};
 use crate::namespace::NamespaceScope;
+use crate::object_write::{ALLOW_WRITES_VARIABLE, WritePolicy};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -17,13 +18,15 @@ const LIST_PAGE_SIZE: u32 = 500;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// A read-only connection to one cluster context. Clones share the HTTP client.
+/// A connection to one cluster context. Clones share the HTTP client. Reads are open; writes go
+/// only through `write` in `object_write.rs`.
 // Debug is manual: it prints the context only.
 #[derive(Clone)]
 pub struct ClusterConnection {
     client: kube::Client,
     context: String,
     default_namespace: String,
+    write_policy: WritePolicy,
 }
 
 /// Server version as reported by `GET /version`.
@@ -147,11 +150,34 @@ impl ClusterConnection {
         let default_namespace = config.default_namespace.clone();
         let client =
             kube::Client::try_from(config).map_err(|error| invalid_config(&name, error))?;
+        // Debug builds (every agent run) cannot write unless a human sets the variable, and the
+        // screenshot build cannot write at all.
+        let write_policy = WritePolicy::of_build(
+            cfg!(feature = "block-writes"),
+            cfg!(debug_assertions),
+            std::env::var(ALLOW_WRITES_VARIABLE).ok().as_deref(),
+        );
         Ok(Self {
             client,
             context: name,
             default_namespace,
+            write_policy,
         })
+    }
+
+    /// A connection over a fake transport, so tests never reach a cluster.
+    #[cfg(test)]
+    pub(crate) fn from_client(
+        client: kube::Client,
+        context: &str,
+        write_policy: WritePolicy,
+    ) -> Self {
+        Self {
+            client,
+            context: context.to_owned(),
+            default_namespace: "default".to_owned(),
+            write_policy,
+        }
     }
 
     pub fn context(&self) -> &str {
@@ -171,6 +197,10 @@ impl ClusterConnection {
             git_version: info.git_version,
             platform: info.platform,
         })
+    }
+
+    pub(crate) fn write_policy(&self) -> WritePolicy {
+        self.write_policy
     }
 
     pub(crate) fn client(&self) -> &kube::Client {

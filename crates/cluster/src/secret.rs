@@ -146,6 +146,8 @@ impl ClusterConnection {
     /// The JSON body of one Secret GET, wiped on drop. Callers decode it themselves because
     /// kube-client logs the whole body when a decode fails; `action` names the caller's work
     /// in errors. The body holds every value of the Secret.
+    // A read-only GET decoded in this crate (0016): the secret.rs row of the 0030 table.
+    #[allow(clippy::disallowed_methods)]
     pub(crate) async fn secret_text(
         &self,
         namespace: &str,

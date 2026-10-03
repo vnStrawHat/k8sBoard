@@ -15,6 +15,7 @@ use tokio::time::Instant;
 
 use crate::cadvisor_text::{DiskIoBuilder, DiskIoSample};
 use crate::connection::{ClusterConnection, ClusterError, REQUEST_TIMEOUT};
+use crate::dns_name::is_dns_subdomain;
 use crate::quantity::ByteAmount;
 use crate::resource_metrics::next_delay;
 use crate::resource_watch::WatchUpdate;
@@ -58,25 +59,11 @@ impl KubeletPath {
     }
 }
 
-/// DNS-1123 subdomain: 1-253 chars; dot-separated labels of 1-63 chars from `[a-z0-9-]`,
-/// each starting and ending alphanumeric. Load-bearing: kube does not percent-encode the
-/// node name, so `a/../x` or `a#b` would otherwise change the proxied path.
-fn is_node_name(name: &str) -> bool {
-    (1..=253).contains(&name.len()) && name.split('.').all(is_dns_label)
-}
-
-fn is_dns_label(label: &str) -> bool {
-    (1..=63).contains(&label.len())
-        && label
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && !label.starts_with('-')
-        && !label.ends_with('-')
-}
-
 impl ClusterConnection {
     /// `GET` of one kubelet path as text. `client.request` is not used: on a decode error
     /// it traces the whole body.
+    // Read-only GETs of the kubelet path allow-list (0011): the kubelet_stats.rs row of the 0030 table.
+    #[allow(clippy::disallowed_methods)]
     async fn kubelet_text(&self, node: &str, path: KubeletPath) -> Result<String, ClusterError> {
         self.check_node_name(node, path)?;
         let request = kube::core::Request::new(NODES_URL)
@@ -87,6 +74,8 @@ impl ClusterConnection {
     }
 
     /// `GET` of one kubelet path as a streamed body; callers pin it.
+    // Read-only GET of the kubelet path allow-list (0011): the kubelet_stats.rs row of the 0030 table.
+    #[allow(clippy::disallowed_methods)]
     async fn kubelet_lines(
         &self,
         node: &str,
@@ -101,7 +90,7 @@ impl ClusterConnection {
     }
 
     fn check_node_name(&self, node: &str, path: KubeletPath) -> Result<(), ClusterError> {
-        if is_node_name(node) {
+        if is_dns_subdomain(node) {
             Ok(())
         } else {
             Err(self.invalid_node_name(path))

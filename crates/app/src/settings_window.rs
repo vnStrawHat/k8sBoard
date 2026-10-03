@@ -17,10 +17,13 @@ use gpui_kit::{
     size,
 };
 
+use crate::audit_log::audit_path;
 use crate::cluster_catalog::CatalogHandle;
 use crate::clusters_page::{ClustersPage, add_cluster_button};
+use crate::environment::Environment;
 use crate::settings::{AppSettings, theme_choices, theme_from_label, theme_label};
 use crate::shortcut_sheet::shortcut_sheet;
+use crate::write_guard::{ActionRisk, ConfirmMode, DialogConfirm, confirm_step};
 
 gpui_kit::actions!(k8sboard, [OpenSettings, ManageClusters, ImportKubeconfig]);
 
@@ -32,10 +35,11 @@ const SIDEBAR_WIDTH: f32 = 200.;
 
 /// The pages in W2 nav order, keeping only those with content. A later spec inserts its page
 /// at its W2 position.
-const PAGES: [SettingsPage; 4] = [
+const PAGES: [SettingsPage; 5] = [
     SettingsPage::Clusters,
     SettingsPage::Appearance,
     SettingsPage::KeyboardShortcuts,
+    SettingsPage::Safety,
     SettingsPage::About,
 ];
 
@@ -44,6 +48,7 @@ pub(crate) enum SettingsPage {
     Clusters,
     Appearance,
     KeyboardShortcuts,
+    Safety,
     About,
 }
 
@@ -53,6 +58,7 @@ impl SettingsPage {
             Self::Clusters => "Clusters",
             Self::Appearance => "Appearance",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
+            Self::Safety => "Safety",
             Self::About => "About",
         }
     }
@@ -222,6 +228,7 @@ impl SettingsWindow {
                 SettingsPage::Clusters => clusters_page(&self.clusters, cx),
                 SettingsPage::Appearance => appearance_page(),
                 SettingsPage::KeyboardShortcuts => keyboard_shortcuts_page(),
+                SettingsPage::Safety => safety_page(),
                 SettingsPage::About => about_page(cx),
             })
             .collect()
@@ -303,6 +310,102 @@ fn keyboard_shortcuts_page() -> SettingPage {
         .group(SettingGroup::new().item(SettingItem::render(|_, _, cx| shortcut_sheet(cx))))
 }
 
+/// One row of the tier table: the environments that share a confirm tier, and what each risk asks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TierRow {
+    environments: String,
+    change: String,
+    destructive: String,
+}
+
+/// The two tiers, read from the same rules the dialog uses: the environments are grouped by
+/// `ConfirmMode::for_environment`, and each cell is what `confirm_step` asks.
+fn tier_rows() -> Vec<TierRow> {
+    [ConfirmMode::TypeName, ConfirmMode::Click]
+        .into_iter()
+        .map(|mode| {
+            let environments: Vec<&str> = [
+                Environment::Production,
+                Environment::Staging,
+                Environment::Development,
+                Environment::Local,
+            ]
+            .into_iter()
+            .filter(|environment| ConfirmMode::for_environment(*environment) == mode)
+            .map(Environment::name)
+            .collect();
+            TierRow {
+                environments: environments.join(", "),
+                change: tier_cell(mode, ActionRisk::Change),
+                destructive: tier_cell(mode, ActionRisk::Destructive),
+            }
+        })
+        .collect()
+}
+
+/// What the confirm dialog of `mode` asks for `risk`; a destructive action also gets a danger
+/// button.
+fn tier_cell(mode: ConfirmMode, risk: ActionRisk) -> String {
+    let how = match confirm_step(mode, risk, "the cluster name") {
+        DialogConfirm::TypeName { expected } => format!("Type {expected}"),
+        DialogConfirm::Click => "Click Confirm".to_owned(),
+    };
+    match risk {
+        ActionRisk::Change => how,
+        ActionRisk::Destructive => format!("{how}, danger button"),
+    }
+}
+
+fn safety_page() -> SettingPage {
+    let table = SettingGroup::new()
+        .title("Confirming changes")
+        .item(SettingItem::render(|_, _, cx| tier_table(cx)));
+    let audit = SettingGroup::new()
+        .title("Audit log")
+        .item(about_row("Audit file", audit_file));
+    SettingPage::new(SettingsPage::Safety.title())
+        .resettable(false)
+        .group(table)
+        .group(audit)
+}
+
+/// Every guarded action opens a confirm dialog; the tier only picks how it is confirmed. Each
+/// cluster can override its tier under Clusters.
+fn tier_table(cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let cell = |text: String| div().flex_1().min_w_0().text_sm().child(text);
+    let header = h_flex()
+        .w_full()
+        .gap_3()
+        .pb_1()
+        .border_b_1()
+        .border_color(theme.border)
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(cell("Environment".to_owned()))
+        .child(cell("Change".to_owned()))
+        .child(cell("Destructive".to_owned()));
+    v_flex()
+        .w_full()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("Every change opens a confirm dialog. How it is confirmed follows the environment, and each cluster can override it under Clusters."),
+        )
+        .child(header)
+        .children(tier_rows().into_iter().map(|row| {
+            h_flex()
+                .w_full()
+                .gap_3()
+                .child(cell(row.environments))
+                .child(cell(row.change))
+                .child(cell(row.destructive))
+        }))
+        .into_any_element()
+}
+
 fn about_page(cx: &App) -> SettingPage {
     let mut group = SettingGroup::new()
         .item(about_row("Version", |_, _| {
@@ -329,12 +432,37 @@ fn about_page(cx: &App) -> SettingPage {
 /// settings are not saved.
 fn settings_folder(_: &mut Window, cx: &mut App) -> AnyElement {
     let Some(dir) = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf) else {
-        return div()
-            .text_sm()
-            .text_color(cx.theme().muted_foreground)
-            .child("Not saved this session")
-            .into_any_element();
+        return muted_note("Not saved this session", cx);
     };
+    let shown = dir.display().to_string();
+    path_with_reveal("reveal-settings-folder", shown, dir, cx)
+}
+
+/// The audit file as monospace text with a button that reveals its folder. Without a settings
+/// folder no line is written.
+fn audit_file(_: &mut Window, cx: &mut App) -> AnyElement {
+    let Some(dir) = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf) else {
+        return muted_note("Not recorded: settings are not saved this session", cx);
+    };
+    let shown = audit_path(&dir).display().to_string();
+    path_with_reveal("reveal-audit-folder", shown, dir, cx)
+}
+
+fn muted_note(text: &'static str, cx: &App) -> AnyElement {
+    div()
+        .text_sm()
+        .text_color(cx.theme().muted_foreground)
+        .child(text)
+        .into_any_element()
+}
+
+/// `shown` in monospace, and a button that reveals `folder`.
+fn path_with_reveal(
+    id: &'static str,
+    shown: String,
+    folder: std::path::PathBuf,
+    cx: &App,
+) -> AnyElement {
     h_flex()
         .gap_2()
         .items_center()
@@ -342,15 +470,15 @@ fn settings_folder(_: &mut Window, cx: &mut App) -> AnyElement {
             div()
                 .text_sm()
                 .font_family(cx.theme().mono_font_family.clone())
-                .child(dir.display().to_string()),
+                .child(shown),
         )
         .child(
-            Button::new("reveal-settings-folder")
+            Button::new(id)
                 .ghost()
                 .small()
                 .icon(Icon::new(IconName::FolderOpen))
                 .label("Show in folder")
-                .on_click(move |_, _, cx| cx.reveal_path(&dir)),
+                .on_click(move |_, _, cx| cx.reveal_path(&folder)),
         )
         .into_any_element()
 }

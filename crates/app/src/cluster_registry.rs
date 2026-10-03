@@ -7,6 +7,7 @@ use cluster::{ContextSummary, NamespaceScope};
 use serde::{Deserialize, Serialize};
 
 use crate::environment::{Environment, guess_environment};
+use crate::write_guard::ConfirmMode;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -37,9 +38,12 @@ pub(crate) struct ClusterEntry {
     /// `None` is guessed from the names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) environment: Option<Environment>,
-    /// Stored now, read by the write guard of 0030.
+    /// The lock a session starts in (spec 0030); `None` is on for Production.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) read_only: Option<bool>,
+    /// How changes are confirmed; `None` follows the environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) confirm: Option<ConfirmMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) default_namespace: Option<String>,
 }
@@ -50,9 +54,10 @@ pub(crate) struct ClusterProfile {
     pub(crate) display_name: String,
     pub(crate) environment: Environment,
     pub(crate) default_namespace: Option<String>,
-    /// The stored switch, else on for Production. Read by the write guard of 0030; no screen
-    /// enforces it yet.
+    /// The stored switch, else on for Production: the lock a session opens in.
     pub(crate) read_only: bool,
+    /// The stored mode, else the environment's default.
+    pub(crate) confirm: ConfirmMode,
 }
 
 impl ClusterRef {
@@ -89,6 +94,7 @@ impl ClusterRegistry {
                 display_name: None,
                 environment: None,
                 read_only: None,
+                confirm: None,
                 default_namespace: None,
             });
             self.clusters.len() - 1
@@ -110,11 +116,15 @@ impl ClusterRegistry {
         let read_only = entry
             .and_then(|entry| entry.read_only)
             .unwrap_or(environment == Environment::Production);
+        let confirm = entry
+            .and_then(|entry| entry.confirm)
+            .unwrap_or_else(|| ConfirmMode::for_environment(environment));
         ClusterProfile {
             display_name,
             environment,
             default_namespace: entry.and_then(|entry| entry.default_namespace.clone()),
             read_only,
+            confirm,
         }
     }
 }

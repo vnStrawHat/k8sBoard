@@ -5,7 +5,7 @@
 ## File
 
 - `<config>/audit.jsonl` (`AppSettings::config_dir`, 0025), one JSON object per line, UTF-8, `\n`.
-- Append only: `OpenOptions::new().create(true).append(true)`, one `write_all` of the whole line, then `sync_data`. On Windows `append(true)` opens with `FILE_APPEND_DATA`, so each `WriteFile` lands at the current end of file; one process writes one line per call, so lines do not interleave, and a crash can leave at most a truncated last line (a reader skips a line that does not parse). Unix: created with mode `0o600` (it names clusters and objects). Windows: inherits the config folder ACL (0025 decision 9).
+- Append only: `OpenOptions::new().create(true).append(true)`, one `write_all` of the whole line, then `sync_data`. On Windows `append(true)` opens with `FILE_APPEND_DATA`, so each `WriteFile` lands at the current end of file; one process writes one line per call, so lines do not interleave, and a crash can leave at most a truncated last line (a reader skips a line that does not parse). Unix: created with mode `0o600` (it names clusters and objects); the mode applies only when the call creates the file, so a file that already exists keeps its mode. Windows: inherits the config folder ACL (0025 decision 9).
 - Writes off (`config_dir` is `None`: screenshot runs, newer settings version, no home) → no line; the confirm dialog shows the muted line `Not recorded: settings are not saved this session`.
 - No rotation in 0030 (about 300 bytes a line). Settings › Safety shows the path and `Show in folder`.
 

@@ -120,11 +120,12 @@ fn pod_menu_button(
             let Some(session) = session.upgrade() else {
                 return menu;
             };
-            let Some(live) = session.read(cx).live() else {
+            let session = session.read(cx);
+            let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
                 return menu;
             };
             match live.pods.items().iter().find(|pod| key.is_pod(pod)) {
-                Some(pod) => pod_menu(menu, pod, live, session.read(cx).context(), &dock, &shell),
+                Some(pod) => pod_menu(menu, pod, live, &guard, session.context(), &dock, &shell),
                 None => menu,
             }
         })

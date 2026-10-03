@@ -28,6 +28,10 @@ Status: draft, amended after the advisor review (M1–M5, S6–S12, N13–N18), 
 | 3 | `audit_log.rs` (pure; sends nothing); lock and unlock lines | 1, 2, 10 |
 | 4 | `write_flow.rs`, confirm dialog write variant, Cordon / Uncordon, `--screen cordon-confirm`; UAT denied path; ui-verifier. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 9–14 |
 
+Progress: steps 1, 2a, and 3 are implemented (branch `spec-0030`). Steps 2b and 4 touch `app_shell.rs` and the UI heavily and wait for 0027. Until they land, the audit module is marked with a `cfg_attr(not(test), expect(dead_code))` that the first production user turns into a compile error, and no action is shipped, so the lock never decides a reason yet.
+
+**Entry condition for step 2b:** before any action ships, the session stores `lock: WriteLock` and `generation: u64` (it holds neither today: `ClusterSession::guard` derives the lock from the profile, and `ClusterGuard` has no `generation`), and `commit_block` and the gate read them from the session through `ClusterGuard`.
+
 ## Files
 
 | File | Contents |
@@ -42,19 +46,19 @@ Status: draft, amended after the advisor review (M1–M5, S6–S12, N13–N18), 
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No `unsafe`. The only new `#[allow]`s are the three 0030 rows of the canonical `clippy::disallowed_methods` exception table (later specs add their own rows) in [write-path.md](write-path.md). `Cargo.lock` gains no package.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline. No test talks to a real cluster.
-- [ ] 3. A call to a disallowed kube method outside the canonical exception table fails clippy; the documentation grep lists only `access_review.rs` and `object_write.rs`; `app_has_no_kube_dependency` passes.
-- [ ] 4. A dry-run carries `dryRun=All` and `fieldManager=k8sboard`; a commit carries `fieldManager=k8sboard` and no `dryRun`; uncordon sends `false` (fake transport).
+- [ ] 1. (steps 1, 2a, 3 pass; 2b and 4 pending) The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No `unsafe`. The only new `#[allow]`s are the three 0030 rows of the canonical `clippy::disallowed_methods` exception table (later specs add their own rows) in [write-path.md](write-path.md). `Cargo.lock` gains no package.
+- [ ] 2. (steps 1, 2a, 3 done; the window tests of 2b and the write-flow tests of 4 pending) Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline. No test talks to a real cluster.
+- [x] 3. A call to a disallowed kube method outside the canonical exception table fails clippy; the documentation grep lists only `access_review.rs` and `object_write.rs`; `app_has_no_kube_dependency` passes.
+- [x] 4. A dry-run carries `dryRun=All` and `fieldManager=k8sboard`; a commit carries `fieldManager=k8sboard` and no `dryRun`; uncordon sends `false` (fake transport).
 - [ ] 5. A PROD cluster opens locked; others unlocked unless the entry's `read_only` says otherwise. Ctrl Shift R and a badge click toggle the session lock; unlocking asks the cluster's tier.
-- [ ] 6. Disabled reasons follow the gate order: not shipped → permission checking/unknown → `Not permitted: {check}` → `{cluster} is read-only`.
-- [ ] 7. `confirm` defaults: PROD `type-name`; STG, DEV, LOCAL (and unknown → STG) `click`; every tier opens a dialog (`non_prod_tiers_always_show_a_dialog`). Clusters › Safety edits it; `settings.json` stores the kebab-case value.
+- [x] 6. Disabled reasons follow the gate order: not shipped → permission checking/unknown → `Not permitted: {check}` → `{cluster} is read-only`.
+- [x] 7. `confirm` defaults: PROD `type-name`; STG, DEV, LOCAL (and unknown → STG) `click`; every tier opens a dialog (`non_prod_tiers_always_show_a_dialog`). Clusters › Safety edits it; `settings.json` stores the kebab-case value.
 - [ ] 8. The badge reads `Read-only` (lock) or `Unlocked` (open lock) with the env-colored dashed border; theme tokens only.
 - [ ] 9. `ClusterConnection::write` is called only from `checked_write` in `write_flow.rs`; `commit_block` runs before every commit on the dialog and Batch paths (lock, switched or reconnected session, dry-run state, typed name).
 - [ ] 10. Every commit and every lock toggle appends one audit line with the keys in [audit-log.md](audit-log.md); `OutcomeUnknown` records `unknown`; a Secret target records no values and a redacted error; no line holds a request body.
 - [ ] 11. A failed or webhook-rejected dry-run blocks the commit and names the reason; 409 shows a Retry; a commit error after sending says the outcome is unknown; Enter activates the focused confirm button, and a held or repeated Enter never confirms.
-- [ ] 12. Debug builds return `WritesBlocked` before building any request unless `K8SBOARD_ALLOW_WRITES=1` (zero recorded requests); agent runs never set it. UAT: Cordon is disabled with `Not permitted: patch nodes`; pressing C shows the notice; a trace shows only GETs and SSAR POSTs.
-- [ ] 13. The gate, lock, tier, typed name, dialog badge, and audit cluster always come from `WriteIntent.cluster` / the row's cluster, never the primary (`gate_and_confirm_use_the_rows_cluster`).
+- [ ] 12. (step 1 part done: `WritesBlocked` before any request; the UAT checks wait for step 4) Debug builds return `WritesBlocked` before building any request unless `K8SBOARD_ALLOW_WRITES=1` (zero recorded requests); agent runs never set it. UAT: Cordon is disabled with `Not permitted: patch nodes`; pressing C shows the notice; a trace shows only GETs and SSAR POSTs.
+- [ ] 13. (the gate and the confirm tier are tested for two guards; the dialog badge and audit cluster wait for step 4) The gate, lock, tier, typed name, dialog badge, and audit cluster always come from `WriteIntent.cluster` / the row's cluster, never the primary (`gate_and_confirm_use_the_rows_cluster`).
 - [ ] 14. ui-verifier: `--screen cordon-confirm` (PROD type-name tier, fixture state) and the badge in both states match W10/W1 with no high-severity defect.
 
 ## Open items

@@ -1,6 +1,6 @@
 [package]
 name = "k8sboard-cluster"
-description = "Kubeconfig loading, context selection, and read-only cluster access for k8sBoard"
+description = "Kubeconfig loading, context selection, and cluster access with one allow-listed write path for k8sBoard"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -27,8 +27,15 @@ zeroize.workspace = true
 flate2.workspace = true
 base64.workspace = true
 
+[features]
+# Set by the app's screenshot build: every connection refuses writes, whatever the environment says.
+block-writes = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+# The fake transport behind `fake_api`; both are already in Cargo.lock.
+tower = { version = "0.5", default-features = false, features = ["util"] }
+http = "1"
 
 [lints]
 workspace = true

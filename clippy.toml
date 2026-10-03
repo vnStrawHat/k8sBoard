@@ -1,2 +1,47 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+# The write path (spec 0030): a mutating or raw request goes only through `object_write.rs`. The named
+# exceptions are one `#[allow(clippy::disallowed_methods)]` each; the table is in
+# docs/specs/0030-guardrails-write-path/write-path.md.
+disallowed-methods = [
+    { path = "kube::Client::send", reason = "raw requests bypass the write path; see spec 0030" },
+    { path = "kube::Client::request", reason = "raw requests bypass the write path; see spec 0030" },
+    { path = "kube::Client::request_text", reason = "raw requests bypass the write path; see spec 0030" },
+    { path = "kube::Client::request_status", reason = "raw requests bypass the write path; see spec 0030" },
+    { path = "kube::Client::request_stream", reason = "raw requests bypass the write path; see spec 0030" },
+    { path = "kube::Api::create", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::patch", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::replace", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::delete", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::delete_collection", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::create_subresource", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::patch_subresource", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::replace_subresource", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::patch_status", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::replace_status", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::patch_scale", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::replace_scale", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::replace_ephemeral_containers", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::evict", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::patch_metadata", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::patch_ephemeral_containers", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::entry", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::api::entry::OccupiedEntry::commit", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::runtime::events::Recorder::publish", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::runtime::finalizer::finalizer", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::runtime::wait::delete::delete_and_finalize", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    # Behind a feature or a newer Kubernetes version (resize: 1.33, kubelet-debug: a kube feature);
+    # `allow-invalid` keeps the entries from warning until the path exists.
+    { path = "kube::Api::patch_resize", reason = "mutating call: use ClusterConnection::write (spec 0030)", allow-invalid = true },
+    { path = "kube::Api::replace_resize", reason = "mutating call: use ClusterConnection::write (spec 0030)", allow-invalid = true },
+    { path = "kube::Client::kubelet_node_exec", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
+    { path = "kube::Client::kubelet_node_attach", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
+    { path = "kube::Client::kubelet_node_portforward", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
+    { path = "kube::Client::request_events", reason = "raw requests bypass the write path; see spec 0030" },
+    # Behind kube's `ws` feature, which is off until 0035-0037; `allow-invalid` keeps the entry from warning meanwhile.
+    { path = "kube::Client::connect", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
+    { path = "kube::Api::exec", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
+    { path = "kube::Api::attach", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
+    { path = "kube::Api::portforward", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
+]

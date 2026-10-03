@@ -25,7 +25,7 @@ pub struct WriteRequest { target: ObjectRef, operation: WriteOperation }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum WritePolicy { Allowed, Blocked }
 
 impl WriteRequest {
-    pub fn new(target: ObjectRef, operation: WriteOperation) -> Option<Self>; // None: kind does not fit
+    pub fn new(target: ObjectRef, operation: WriteOperation) -> Option<Self>; // None: kind does not fit, or name/namespace is not a DNS-1123 subdomain
     pub fn target(&self) -> &ObjectRef;
     pub fn operation(&self) -> &WriteOperation;
     pub fn access_check(&self) -> AccessCheck;          // the app gate reads the same value
@@ -45,8 +45,9 @@ impl ClusterConnection {
 }
 ```
 
-- **Kill switch**: `ClusterConnection` gains `write_policy: WritePolicy`, set in `open` from `WritePolicy::resolve(cfg!(debug_assertions), std::env::var("K8SBOARD_ALLOW_WRITES").ok().as_deref())`. Debug builds (every agent, coder, ui-verifier run) cannot write unless a human sets the variable; agent runs never set it. Tests inject the policy instead of touching the environment.
-- Transport: `Api::<DynamicObject>` from `object_yaml::api_resource(kind)`, `PatchParams { dry_run, field_manager: Some(FIELD_MANAGER.into()), ..Default::default() }` (it also has `field_validation`), `Patch::Merge(json)`.
+- **Kill switch**: `ClusterConnection` gains `write_policy: WritePolicy`, set in `open` from `WritePolicy::resolve(cfg!(debug_assertions), std::env::var("K8SBOARD_ALLOW_WRITES").ok().as_deref())`. Debug builds (every agent, coder, ui-verifier run) cannot write unless a human sets the variable; agent runs never set it. The screenshot build turns on the cluster crate's `block-writes` feature, which forces `Blocked` whatever the variable says (`WritePolicy::of_build`). Tests inject the policy instead of touching the environment.
+- **Target connection (0027 review):** every mutating action takes its `ClusterConnection` and its `ClusterGuard` from the row's or cursor's cluster slot, never from an implicit "current session"; `write` and `guard_for` take the target explicitly.
+- Transport: `Api::<DynamicObject>` from `ClusterConnection::object_api(&ObjectRef)` (shared with `object_yaml`), `PatchParams { dry_run, field_manager: Some(FIELD_MANAGER.into()), ..Default::default() }` (it also has `field_validation`), `Patch::Merge(json)`.
 - **Uncordon sends `false`, not `null`**: the same body shape as cordon, so the dry-run, the confirm summary, and the audit show one explicit value. `unschedulable` is `omitempty`, so the stored Node is the same as after a `null` delete.
 - Timeout: a private `run_raw(action, future) -> Result<Result<T, kube::Error>, Elapsed>` around `tokio::time::timeout(REQUEST_TIMEOUT, ..)`, because `run` classifies errors before the `Status` can be read.
 - `AccessCheck::PatchNodes` = `("patch", "", "nodes", None, false)`; `ALL` grows by 1 (counts are relative: the code has 29 today, and other specs add theirs).
@@ -74,15 +75,19 @@ Deferred (user, 2026-10-02): 0038 Helm writes (`helm rollback`, `helm uninstall`
 
 Enforcement:
 
-1. **clippy `disallowed-methods`** in the root `clippy.toml`: `kube::Client::{send, request, request_text, request_status, request_stream, connect}` and the mutating `kube::Api` methods (`create`, `patch`, `replace`, `delete`, `delete_collection`, `create_subresource`, `patch_subresource`, `replace_subresource`, `patch_status`, `replace_status`, `patch_scale`, `replace_scale`, `replace_ephemeral_containers`, `evict`, `exec`, `attach`, `portforward`). Each entry has a `reason`. The coder confirms every path resolves (a scratch call per entry fires the lint; not committed).
+1. **clippy `disallowed-methods`** in the root `clippy.toml`, one entry with a `reason` per path. The coder re-proves every path with a scratch call that must fire the lint (not committed):
+   - `kube::Client::{send, request, request_text, request_status, request_stream, request_events}`.
+   - Mutating `kube::Api` methods: `create`, `patch`, `replace`, `delete`, `delete_collection`, `create_subresource`, `patch_subresource`, `replace_subresource`, `patch_status`, `replace_status`, `patch_scale`, `replace_scale`, `patch_metadata`, `replace_ephemeral_containers`, `patch_ephemeral_containers`, `evict`, and `entry` (its `OccupiedEntry::commit` creates or replaces inside kube; both are listed).
+   - `kube::runtime` helpers that write: `events::Recorder::publish`, `finalizer::finalizer`, `wait::delete::delete_and_finalize`.
+   - Paths that exist only behind a feature or a newer Kubernetes version carry `allow-invalid = true`, because clippy warns about an unreachable path without it: `Client::connect` and `Api::{exec, attach, portforward}` (kube's `ws` feature, enabled by 0035/0036), `Client::kubelet_node_{exec, attach, portforward}` (kube's `kubelet-debug` feature), and `Api::{patch_resize, replace_resize}` (Kubernetes 1.33).
 2. **Named exceptions: the canonical list** (single source; other specs point here). Each is one `#[allow(clippy::disallowed_methods)]` on the smallest item with a comment naming its row; no other allow:
 
    | File | Item | Spec |
    |---|---|---|
-   | `access_review.rs` | `review_one` (SSAR) | 0030 |
-   | `object_write.rs` | the `match` that sends each allow-listed operation | 0030 |
+   | `access_review.rs` | `post_review` (the SSAR and SSRR `create`, non-mutating) | 0030 |
+   | `object_write.rs` | `send`, the `match` that sends each allow-listed operation | 0030 |
    | `kubelet_stats.rs` | `kubelet_text` / `kubelet_lines` (read-only GETs of the 0011 kubelet path allow-list) | 0030 |
-   | `secret.rs` | `secret_values` (read-only GET decoded in-crate, 0016) | 0016 |
+   | `secret.rs` | `secret_text` (read-only GET decoded in-crate, 0016) | 0016 |
    | `pod_shell.rs` | `exec` | 0036 |
    | `port_forward.rs` | `portforward` | 0035 |
    | `debug_shell.rs` | `attach` | 0037 |
@@ -106,11 +111,11 @@ Enforcement:
 | `Invalid { message, fields }` | 422 (`details.causes[].field`); also any **other 403** (an admission plugin or webhook refusal, e.g. `PersistentVolumeClaimResize`), so it never reads "not permitted" | `the change is invalid: {message}` |
 | `TooManyRequests { message, retry_after }` | 429 on either mode (PDB eviction, API priority and fairness), and an eviction answered 201 with a `Failure` status of code 429 (0034); never `OutcomeUnknown` | `refused for now: {message}` |
 | `DryRunRejected { reason }` | 400 on a dry-run naming dry-run support | `an admission webhook does not support dry-run, so the change cannot be checked: {reason}` |
-| `OutcomeUnknown` | **Commit** only: timeout, `HyperError`, `Service`, response `SerdeError` (anything after the request may have left) | `no answer in time; the change may have been applied` |
+| `OutcomeUnknown` | **Commit** only: every error except `Api` (the server answered) and the build errors `BuildRequest` and `HttpError` (nothing was sent): timeout, `HyperError`, `Service`, `SerdeError`, `FromUtf8`, and the rest (anything after the request may have left) | `no answer in time; the change may have been applied` |
 | `Cluster(ClusterError)` | the rest, and every non-`Api` error of a `DryRun` | the `ClusterError` text |
 
 - A `Service` error can also be a pre-send auth failure; treating it as unknown is the safe side.
-- **Redaction** (Secret targets): one function runs on the **final** `WriteError` of any variant, keyed on the target kind name through a pure `redact_message(kind_name, ..)`: server message text becomes the status `reason` code plus field paths. No `ObjectKind::Secret` exists yet, so it changes nothing until 0016/0033 add one; the test uses the name `"Secret"`. The audit `error` field uses the redacted text.
+- **Redaction** (Secret targets): a status is classified on its raw text first, then `redact_error` runs on the **final** `WriteError` of any variant (every variant that carries server text is listed), keyed on the target kind name through a pure `redact_message(kind_name, ..)`: server message text becomes the status `reason` code plus field paths. No write targets a Secret yet, so the tests use the name `"Secret"`. The audit `error` field uses the redacted text.
 - `tracing`: context, operation name, kind, namespace, name, mode, status code, elapsed. Never a body.
 
 ## Conflicts (resourceVersion policy)

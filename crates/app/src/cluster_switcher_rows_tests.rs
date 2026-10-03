@@ -5,6 +5,7 @@ use super::*;
 use crate::cluster_form::{ClusterRow, RowOrigin};
 use crate::cluster_health::ProbeResult;
 use crate::cluster_registry::ClusterProfile;
+use crate::write_guard::ConfirmMode;
 
 fn cluster(context: &str) -> ClusterRef {
     ClusterRef {
@@ -21,6 +22,7 @@ fn row(context: &str, label: &str, environment: Environment) -> ClusterRow {
             environment,
             default_namespace: None,
             read_only: false,
+            confirm: ConfirmMode::Click,
         },
         label: label.to_owned(),
         meta: String::new(),

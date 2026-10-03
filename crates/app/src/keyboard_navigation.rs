@@ -405,10 +405,10 @@ impl AppShell {
         let Some(subject) = self.selected.clone() else {
             return;
         };
-        let Some(live) = self.live(cx) else {
+        let (Some(live), Some(guard)) = (self.live(cx), self.active_guard(cx)) else {
             return;
         };
-        match key_availability(action, &subject, live) {
+        match key_availability(action, &subject, live, &guard) {
             KeyAvailability::NotOffered => {}
             KeyAvailability::Disabled { reason } => {
                 let label = action_label(subject_action(action, &subject));

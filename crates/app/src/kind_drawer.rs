@@ -195,7 +195,8 @@ fn kind_menu_button(
                 .read_with(cx, |shell, cx| shell.default_namespace(cx))
                 .ok()
                 .flatten();
-            let Some(live) = session.read(cx).live() else {
+            let session = session.read(cx);
+            let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
                 return menu;
             };
             let current = live.row_of(&key);
@@ -204,7 +205,7 @@ fn kind_menu_button(
                     menu,
                     kind,
                     row,
-                    &live.access,
+                    &guard,
                     live.pods.items(),
                     &shell,
                     MenuExtras {

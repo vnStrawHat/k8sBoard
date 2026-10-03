@@ -24,6 +24,7 @@ fn entry(context: &str, source: &str) -> ClusterEntry {
         display_name: None,
         environment: None,
         read_only: None,
+        confirm: None,
         default_namespace: None,
     }
 }
@@ -45,6 +46,7 @@ fn profile_of_unregistered_context_uses_name_and_guess() {
             environment: Environment::Production,
             default_namespace: None,
             read_only: true,
+            confirm: ConfirmMode::TypeName,
         }
     );
 }
@@ -302,4 +304,46 @@ fn remember_scope_replaces_previous_value() {
         memory.get(&target),
         Some(&NamespaceScope::Named("web".to_owned()))
     );
+}
+
+#[test]
+fn confirm_defaults_follow_the_environment() {
+    let registry = ClusterRegistry::default();
+    assert_eq!(
+        registry.profile(&summary("prod-eu", "a.yaml")).confirm,
+        ConfirmMode::TypeName
+    );
+    assert_eq!(
+        registry.profile(&summary("dev-1", "a.yaml")).confirm,
+        ConfirmMode::Click
+    );
+}
+
+#[test]
+fn stored_confirm_overrides_the_environment_default() {
+    let mut typed = entry("dev-1", "a.yaml");
+    typed.confirm = Some(ConfirmMode::TypeName);
+    let profile = registry_with(typed).profile(&summary("dev-1", "a.yaml"));
+    assert_eq!(profile.confirm, ConfirmMode::TypeName);
+    let mut clicked = entry("prod-eu", "a.yaml");
+    clicked.confirm = Some(ConfirmMode::Click);
+    let profile = registry_with(clicked).profile(&summary("prod-eu", "a.yaml"));
+    assert_eq!(profile.confirm, ConfirmMode::Click);
+}
+
+#[test]
+fn confirm_round_trips() {
+    let mut typed = entry("dev-1", "a.yaml");
+    typed.confirm = Some(ConfirmMode::TypeName);
+    let registry = registry_with(typed);
+    let text = serde_json::to_string(&registry).expect("serializes");
+    assert!(text.contains(r#""confirm":"type-name""#), "{text}");
+    let back: ClusterRegistry = serde_json::from_str(&text).expect("parses");
+    assert_eq!(back, registry);
+}
+
+#[test]
+fn an_entry_without_confirm_omits_the_key() {
+    let text = serde_json::to_string(&registry_with(entry("dev-1", "a.yaml"))).expect("serializes");
+    assert!(!text.contains("confirm"), "{text}");
 }

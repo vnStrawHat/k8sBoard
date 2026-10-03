@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [features]
 # Dev-only: lets `--screenshot` render a window to a PNG. Never a default feature.
-screenshot = ["gpui-kit/test-support"]
+screenshot = ["gpui-kit/test-support", "k8sboard-cluster/block-writes"]
 
 [dependencies]
 gpui-kit.workspace = true

@@ -208,6 +208,7 @@ pub(crate) fn edit_entry(
             || entry.display_name.is_some()
             || entry.environment.is_some()
             || entry.read_only.is_some()
+            || entry.confirm.is_some()
             || entry.default_namespace.is_some()
     });
 }

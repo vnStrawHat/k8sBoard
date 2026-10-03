@@ -8,7 +8,7 @@ Rust desktop app for administering Kubernetes clusters.
 
 ## Crate layout
 
-- `crates/cluster` — package `k8sboard-cluster`, lib `cluster`: kubeconfig loading, context selection, read-only cluster access.
+- `crates/cluster` — package `k8sboard-cluster`, lib `cluster`: kubeconfig loading, context selection, cluster access; mutating calls only through `object_write.rs` (spec 0030).
 - `crates/app` — package/binary `k8sboard`: GPUI Kit application shell.
 
 Cargo virtual workspace at the root; shared versions, lints, and profiles live in the root `Cargo.toml`.

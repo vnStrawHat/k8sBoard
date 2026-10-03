@@ -103,6 +103,7 @@ use crate::topology_graph::{NodeId, TopologyKind};
 use crate::topology_view::TopologyView;
 use crate::traffic_test_view::{TrafficTestView, traffic_defaults};
 use crate::who_can_view::WhoCanView;
+use crate::write_guard::ClusterGuard;
 use crate::yaml_view::{YamlView, yaml_subject};
 
 /// The width of the tool dialogs (Who can, Check permissions, Test traffic).
@@ -1047,6 +1048,28 @@ impl AppShell {
     pub(crate) fn active_profile(&self, cx: &App) -> Option<ClusterProfile> {
         let active = self.active.as_ref()?;
         Some(AppSettings::get(cx).registry.profile(active))
+    }
+
+    /// The write-guard inputs of `cluster`: its own session's permissions, lock, and profile. `None`
+    /// when `cluster` is not the one viewed or its session is not live. A caller always names the
+    /// cluster of the row or action it acts on; no guardrail reads an implicit session.
+    pub(crate) fn guard_for<'a>(
+        &'a self,
+        cluster: &ClusterRef,
+        cx: &'a App,
+    ) -> Option<ClusterGuard<'a>> {
+        self.session
+            .as_ref()?
+            .read(cx)
+            .guard(cx)
+            .filter(|guard| guard.cluster == *cluster)
+    }
+
+    /// `guard_for` the cluster in view, for the callers whose rows carry no cluster yet. It must
+    /// become row-based when 0027 merges: a row's own cluster, never the view's.
+    pub(crate) fn active_guard<'a>(&'a self, cx: &'a App) -> Option<ClusterGuard<'a>> {
+        let cluster = ClusterRef::of(self.active.as_ref()?);
+        self.guard_for(&cluster, cx)
     }
 
     /// "Set as default namespace": stores `name` as the active cluster's default, or clears it
@@ -3024,17 +3047,20 @@ impl AppShell {
     pub(crate) fn palette_snapshot(&self, wants_resources: bool, cx: &App) -> PaletteSnapshot {
         let sections = self.all_switcher_sections(cx);
         let live = self.live(cx);
-        let session = live.map(|live| PaletteSession {
-            scope: &live.scope,
-            access: &live.access,
-            namespaces: live.namespaces.items(),
-            pods: live.pods.items(),
-            nodes: live.nodes.items(),
-            kind_rows: self
-                .screen
-                .kind()
-                .and_then(|kind| Some((kind, live.kind_list(kind)?.list.items()))),
-        });
+        let guard = self.active_guard(cx);
+        let session = live
+            .zip(guard.as_ref())
+            .map(|(live, guard)| PaletteSession {
+                scope: &live.scope,
+                guard,
+                namespaces: live.namespaces.items(),
+                pods: live.pods.items(),
+                nodes: live.nodes.items(),
+                kind_rows: self
+                    .screen
+                    .kind()
+                    .and_then(|kind| Some((kind, live.kind_list(kind)?.list.items()))),
+            });
         let input = PaletteInput {
             screen: self.screen,
             cursor: self.selected.as_ref(),

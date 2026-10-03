@@ -10,6 +10,7 @@ use crate::cluster_registry::{ClusterEntry, ClusterRef};
 use crate::environment::Environment;
 use crate::settings_store::settings_path;
 use crate::table_sort::SortDirection;
+use crate::write_guard::ConfirmMode;
 
 #[test]
 fn default_settings_have_the_current_version() {
@@ -38,6 +39,7 @@ fn full_settings() -> Settings {
                 display_name: Some("name".to_owned()),
                 environment: Some(Environment::Production),
                 read_only: Some(true),
+                confirm: Some(ConfirmMode::TypeName),
                 default_namespace: Some("ns".to_owned()),
             }],
             last_used: Some(cluster),
@@ -113,6 +115,7 @@ fn settings_keys_are_the_allow_list() {
         [
             "registry",
             "registry.clusters",
+            "registry.clusters.confirm",
             "registry.clusters.context",
             "registry.clusters.default_namespace",
             "registry.clusters.display_name",

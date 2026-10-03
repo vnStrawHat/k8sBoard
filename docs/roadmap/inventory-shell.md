@@ -84,9 +84,9 @@
 | S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (no drag order) | 0025 |
 | S3 | Add cluster: import file, watch folder, paste YAML | Partial (no watch folder) | 0025 |
 | S4 | Add cluster: scan AWS EKS, GKE, AKS | Missing | backlog |
-| S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Partial (Clusters, Appearance, About; Keyboard Shortcuts done in 0028) | 0025, 0028; the rest: 0030, 0036, 0019, backlog |
+| S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Partial (Clusters, Appearance, About; Keyboard Shortcuts done in 0028; Safety tier table and audit path in 0030 step 2a/3) | 0025, 0028, 0030; the rest: 0036, 0019, backlog |
 | M1 | Multi-cluster aggregated tables | Missing | 0027 |
-| G1 | Env tiers: prod typed name; staging, dev, local a confirm dialog with a click (user 2026-10-02; W10 text superseded) | Missing | 0030 |
-| G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Missing | 0030, 0031 |
+| G1 | Env tiers: prod typed name; staging, dev, local a confirm dialog with a click (user 2026-10-02; W10 text superseded) | Partial (tier rules, per-cluster `confirm` setting, Safety table; the dialog comes in 0030 step 4) | 0030 `write_guard.rs` |
+| G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Partial (the write path with dry-run, the gate with lock, the audit module; lock toggle in 0030 step 2b, diff in 0031) | 0030, 0031 |
 | G3 | Tokens: status tones OK/WARN/BAD/INFO/DONE | Done | 0003 `status_tone.rs` |
 | G4 | Env tokens PROD/STG/DEV/LOCAL as theme colors | Done | 0024 `environment_color` |

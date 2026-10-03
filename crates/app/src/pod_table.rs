@@ -344,7 +344,8 @@ impl TableDelegate for PodTableDelegate {
         let Some(session) = &self.session else {
             return menu;
         };
-        let Some(live) = session.read(cx).live() else {
+        let session = session.read(cx);
+        let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
             return menu;
         };
         match self.pod_at(row_ix, cx) {
@@ -352,7 +353,8 @@ impl TableDelegate for PodTableDelegate {
                 menu,
                 pod,
                 live,
-                session.read(cx).context(),
+                &guard,
+                session.context(),
                 &self.log_dock,
                 &self.shell,
             ),

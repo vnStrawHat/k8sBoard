@@ -10,7 +10,8 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext, WeakEntity, WindowOptions};
 
 use super::*;
-use crate::cluster_registry::ClusterRegistry;
+use crate::cluster_registry::{ClusterRef, ClusterRegistry};
+use crate::clusters_page::set_confirm;
 use crate::settings::{Settings, ThemePreference};
 use crate::settings_store::{LoadedSettings, WriteMode};
 
@@ -188,7 +189,13 @@ fn pages_follow_w2_order() {
     let titles: Vec<&str> = PAGES.iter().map(|page| page.title()).collect();
     assert_eq!(
         titles,
-        ["Clusters", "Appearance", "Keyboard Shortcuts", "About"]
+        [
+            "Clusters",
+            "Appearance",
+            "Keyboard Shortcuts",
+            "Safety",
+            "About"
+        ]
     );
 }
 
@@ -196,7 +203,7 @@ fn pages_follow_w2_order() {
 fn default_page_is_clusters() {
     assert_eq!(PAGES[0], SettingsPage::Clusters);
     assert_eq!(SettingsPage::Clusters.index(), 0);
-    assert_eq!(SettingsPage::About.index(), 3);
+    assert_eq!(SettingsPage::About.index(), 4);
 }
 
 #[gpui_kit::test]
@@ -331,4 +338,81 @@ fn the_clusters_footer_scrolls_into_view_in_a_short_window(cx: &mut TestAppConte
 fn open_settings_window_on(page: SettingsPage, cx: &mut TestAppContext) {
     cx.update(|cx| open_settings_window(page, SettingsSize::Standard, cx))
         .expect("the Settings window opens");
+}
+
+// ---- Safety page and the confirm select ----
+
+fn target_cluster() -> ClusterRef {
+    ClusterRef {
+        kubeconfig: PathBuf::from("a.yaml"),
+        context: "ctx".to_owned(),
+    }
+}
+
+fn stored_confirm(cx: &mut TestAppContext) -> Option<ConfirmMode> {
+    cx.update(|cx| {
+        AppSettings::get(cx)
+            .registry
+            .clusters
+            .iter()
+            .find(|entry| entry.cluster == target_cluster())
+            .and_then(|entry| entry.confirm)
+    })
+}
+
+#[gpui_kit::test]
+fn confirm_select_stores_the_mode(cx: &mut TestAppContext) {
+    install(None, &[], cx);
+    cx.update(|cx| set_confirm(&target_cluster(), Some(ConfirmMode::TypeName), cx));
+    assert_eq!(stored_confirm(cx), Some(ConfirmMode::TypeName));
+    cx.update(|cx| set_confirm(&target_cluster(), Some(ConfirmMode::Click), cx));
+    assert_eq!(stored_confirm(cx), Some(ConfirmMode::Click));
+}
+
+#[gpui_kit::test]
+fn confirm_auto_clears_the_value(cx: &mut TestAppContext) {
+    install(None, &[], cx);
+    cx.update(|cx| set_confirm(&target_cluster(), Some(ConfirmMode::TypeName), cx));
+    cx.update(|cx| set_confirm(&target_cluster(), None, cx));
+    assert_eq!(stored_confirm(cx), None);
+    // An entry left with no override is dropped again.
+    let entries = cx.update(|cx| AppSettings::get(cx).registry.clusters.len());
+    assert_eq!(entries, 0);
+}
+
+#[test]
+fn the_tier_table_groups_environments_by_tier() {
+    let rows = tier_rows();
+    assert_eq!(
+        rows,
+        [
+            TierRow {
+                environments: "Production".to_owned(),
+                change: "Type the cluster name".to_owned(),
+                destructive: "Type the cluster name, danger button".to_owned(),
+            },
+            TierRow {
+                environments: "Staging, Development, Local".to_owned(),
+                change: "Click Confirm".to_owned(),
+                destructive: "Click Confirm, danger button".to_owned(),
+            },
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn the_safety_page_renders(cx: &mut TestAppContext) {
+    install(None, &[], cx);
+    let (window, view) = cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| SettingsWindow::new(SettingsPage::Safety, window, cx))
+        })
+        .expect("open the test window")
+    });
+    render(window, cx);
+    render(window, cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.first_page),
+        SettingsPage::Safety
+    );
 }

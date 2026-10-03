@@ -1,5 +1,5 @@
 //! Cluster access for k8sBoard: kubeconfig loading, context selection, and
-//! read-only access to Kubernetes clusters.
+//! access to Kubernetes clusters. Every write goes through `object_write`.
 
 mod access_review;
 mod autoscaler;
@@ -16,8 +16,11 @@ mod custom_resource_definition;
 mod daemon_set;
 mod deployment;
 mod disruption_budget;
+mod dns_name;
 mod endpoint_slice;
 mod event;
+#[cfg(test)]
+mod fake_api;
 mod helm_release;
 mod helm_release_detail;
 mod helm_values_diff;
@@ -31,6 +34,7 @@ mod network_policy;
 mod network_policy_traffic;
 mod node;
 mod object_count;
+mod object_write;
 mod object_yaml;
 mod persistent_volume;
 mod persistent_volume_claim;
@@ -109,6 +113,10 @@ pub use network_policy_traffic::{
 pub use node::{
     ConditionStatus, NodeAddress, NodeCondition, NodeReadiness, NodeResource, NodeScheduling,
     NodeStatus, NodeSummary, NodeSystemInfo, NodeTaint,
+};
+pub use object_write::{
+    ChangedField, WriteEffect, WriteError, WriteMode, WriteOperation, WriteOutcome, WritePolicy,
+    WriteRequest,
 };
 pub use object_yaml::{EnvValues, ObjectKind, ObjectRef, ObjectYaml};
 pub use persistent_volume::{ClaimRef, PersistentVolumeSummary, VolumeBackend};

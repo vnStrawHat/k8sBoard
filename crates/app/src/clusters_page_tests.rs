@@ -563,3 +563,12 @@ fn paste_is_blocked_while_a_paste_is_saving(cx: &mut TestAppContext) {
     assert_eq!(cx.read(ClustersPage::paste_blocked_reason), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn confirm_labels_name_the_tiers() {
+    assert_eq!(
+        confirm_label(ConfirmMode::TypeName),
+        "Typing the cluster name"
+    );
+    assert_eq!(confirm_label(ConfirmMode::Click), "Clicking Confirm");
+}

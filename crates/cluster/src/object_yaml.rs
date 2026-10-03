@@ -156,6 +156,30 @@ impl ObjectRef {
         Self::of_target(ObjectTarget::Custom(resource), namespace, name)
     }
 
+    /// The built-in kind, `None` for a custom resource.
+    pub(crate) fn builtin_kind(&self) -> Option<ObjectKind> {
+        match &self.target {
+            ObjectTarget::Builtin(kind) => Some(*kind),
+            ObjectTarget::Custom(_) => None,
+        }
+    }
+
+    /// The Kubernetes `kind` of the object, for example `Node`.
+    pub(crate) fn kind_name(&self) -> &str {
+        match &self.target {
+            ObjectTarget::Builtin(kind) => kind.name(),
+            ObjectTarget::Custom(resource) => &resource.kind,
+        }
+    }
+
+    pub(crate) fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
     /// The resource, namespace, and name when this points at a custom object.
     pub(crate) fn as_custom(&self) -> Option<(&CustomResourceType, Option<&str>, &str)> {
         let ObjectTarget::Custom(resource) = &self.target else {
@@ -189,21 +213,26 @@ pub struct ObjectYaml {
 }
 
 impl ClusterConnection {
+    /// The API handle that addresses `object`: its own namespace, or the whole cluster.
+    pub(crate) fn object_api(&self, object: &ObjectRef) -> Api<DynamicObject> {
+        let resource = match &object.target {
+            ObjectTarget::Builtin(kind) => api_resource(*kind),
+            ObjectTarget::Custom(resource) => custom_api_resource(resource),
+        };
+        let client = self.client().clone();
+        match &object.namespace {
+            Some(namespace) => Api::namespaced_with(client, namespace, &resource),
+            None => Api::all_with(client, &resource),
+        }
+    }
+
     /// One GET of `object`, masked and serialized on the calling task.
     pub async fn object_yaml(
         &self,
         object: &ObjectRef,
         env: EnvValues,
     ) -> Result<ObjectYaml, ClusterError> {
-        let resource = match &object.target {
-            ObjectTarget::Builtin(kind) => api_resource(*kind),
-            ObjectTarget::Custom(resource) => custom_api_resource(resource),
-        };
-        let client = self.client().clone();
-        let api: Api<DynamicObject> = match &object.namespace {
-            Some(namespace) => Api::namespaced_with(client, namespace, &resource),
-            None => Api::all_with(client, &resource),
-        };
+        let api = self.object_api(object);
         let found = self.run(ACTION, api.get(&object.name)).await?;
         let unexpected = |message: &'static str| ClusterError::UnexpectedResponse {
             context: self.context().to_owned(),

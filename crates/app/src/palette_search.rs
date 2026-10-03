@@ -10,7 +10,6 @@ use cluster::{NamespaceScope, NamespaceSummary, NodeSummary, PodSummary};
 use gpui_kit::{Action, SharedString};
 
 use crate::app_shell::Screen;
-use crate::cluster_session::AccessState;
 use crate::cluster_switcher::SwitchToCluster1;
 use crate::cluster_switcher_rows::{SwitcherRow, SwitcherSection};
 use crate::fuzzy_score::fuzzy_score;
@@ -24,6 +23,7 @@ use crate::resource_kind::ResourceKind;
 use crate::settings_window::ImportKubeconfig;
 use crate::status_tone::{StatusLabel, node_status_label, pod_status_label};
 use crate::table_selection::ResourceKey;
+use crate::write_guard::ClusterGuard;
 
 const ACTIONS_CAP: usize = 20;
 const RESOURCES_CAP: usize = 50;
@@ -184,7 +184,8 @@ impl PaletteEntry {
 /// The loaded lists the palette may read. All slices are what the shell already holds.
 pub(crate) struct PaletteSession<'a> {
     pub(crate) scope: &'a NamespaceScope,
-    pub(crate) access: &'a AccessState,
+    /// The guard of the cluster the palette acts on; its access report gates every row.
+    pub(crate) guard: &'a ClusterGuard<'a>,
     pub(crate) namespaces: &'a [NamespaceSummary],
     pub(crate) pods: &'a [PodSummary],
     pub(crate) nodes: &'a [NodeSummary],
@@ -246,7 +247,7 @@ fn row_action_entries<'a>(
     let pod = subject.and_then(|subject| session.pods.iter().find(|pod| subject.is_pod(pod)));
     ROW_ACTIONS.into_iter().filter_map(move |action| {
         let subject = subject?;
-        let state = match key_availability_of(action, subject, pod, session.access) {
+        let state = match key_availability_of(action, subject, pod, session.guard) {
             KeyAvailability::NotOffered => return None,
             KeyAvailability::Run => EntryState::Enabled,
             KeyAvailability::Disabled { reason } => EntryState::Disabled { reason },
@@ -376,7 +377,7 @@ fn screen_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
         entry.is_current = screen == input.screen;
         if let Some(session) = &input.session
             && let KindAvailability::Denied { reason } =
-                kind_availability(kind, session.access, session.scope)
+                kind_availability(kind, session.guard.access, session.scope)
         {
             entry.state = EntryState::Disabled { reason };
         }

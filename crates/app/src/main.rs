@@ -5,6 +5,12 @@ mod access_query;
 mod access_rows;
 mod age;
 mod app_shell;
+// The lock toggle (step 2b) and the write flow (step 4) are the production users of the log.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "no lock toggle or write flow appends a line yet")
+)]
+mod audit_log;
 mod batch_rows;
 mod certificate_expiry;
 mod cluster_capacity;
@@ -125,6 +131,7 @@ mod usage_chart;
 mod usage_format;
 mod who_can_view;
 mod workload_rows;
+mod write_guard;
 mod yaml_view;
 
 use std::process::ExitCode;

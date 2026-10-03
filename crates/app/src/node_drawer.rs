@@ -103,11 +103,12 @@ fn node_menu_button(
             let Some(session) = session.upgrade() else {
                 return menu;
             };
-            let Some(live) = session.read(cx).live() else {
+            let session = session.read(cx);
+            let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
                 return menu;
             };
             match live.nodes.items().iter().find(|node| key.is_node(node)) {
-                Some(node) => node_menu(menu, node, live, &shell),
+                Some(node) => node_menu(menu, node, live, &guard, &shell),
                 None => menu,
             }
         })
