@@ -1574,6 +1574,11 @@ fn restart_hint_skips_cronjob_and_job_owners() {
 }
 
 #[test]
+fn restart_hint_skips_orphan_replica_set_owners() {
+    assert_eq!(hint_of(&[used_by("replicaset/api-7d9f8c", &["env"])]), None);
+}
+
+#[test]
 fn restart_hint_skips_bare_pod_owners() {
     assert_eq!(hint_of(&[used_by("pod/debug-1", &["env"])]), None);
 }

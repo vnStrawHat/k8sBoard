@@ -751,8 +751,9 @@ impl RelatedList {
 }
 
 /// Each list of the Namespace drawer's Quota section, gated by its own check. A check that is
-/// `Known` and denied closes its gate; `Checking`, `Unknown`, and allowed leave it open (the server
-/// answers). Pure.
+/// `Known` and denied closes its gate; `Unknown` and allowed leave it open (the server answers). While
+/// a review is `Checking`, the gates of the watch that `running` describes stay, so a re-review does
+/// not restart a stream that is about to be denied again. Pure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NamespaceListGates {
     pub(crate) quotas: bool,
@@ -771,14 +772,17 @@ impl NamespaceListGates {
     }
 }
 
-pub(crate) fn namespace_list_gates(access: &AccessState) -> NamespaceListGates {
-    let is_open = |check| match access {
-        AccessState::Known(report) => report.is_allowed(check),
-        AccessState::Checking { .. } | AccessState::Unknown => true,
-    };
-    NamespaceListGates {
-        quotas: is_open(AccessCheck::ListResourceQuotas),
-        limit_ranges: is_open(AccessCheck::ListLimitRanges),
+pub(crate) fn namespace_list_gates(
+    access: &AccessState,
+    running: NamespaceListGates,
+) -> NamespaceListGates {
+    match access {
+        AccessState::Checking { .. } => running,
+        AccessState::Unknown => NamespaceListGates::OPEN,
+        AccessState::Known(report) => NamespaceListGates {
+            quotas: report.is_allowed(AccessCheck::ListResourceQuotas),
+            limit_ranges: report.is_allowed(AccessCheck::ListLimitRanges),
+        },
     }
 }
 
@@ -812,7 +816,9 @@ fn related_watch_is_current(
 /// check of `denied_related_check`, or, for a Namespace drawer, both of its lists.
 pub(crate) fn is_related_denied(subject: &RelatedSubject, access: &AccessState) -> bool {
     match subject {
-        RelatedSubject::NamespaceQuotas { .. } => namespace_list_gates(access).is_closed(),
+        RelatedSubject::NamespaceQuotas { .. } => {
+            namespace_list_gates(access, NamespaceListGates::OPEN).is_closed()
+        }
         _ => denied_related_check(subject, access).is_some(),
     }
 }
@@ -1926,7 +1932,7 @@ impl ClusterSession {
         };
         // A Namespace drawer restarts when the permissions close or open one of its lists.
         let gates = match &subject {
-            Some(RelatedSubject::NamespaceQuotas { .. }) => namespace_list_gates(&live.access),
+            Some(RelatedSubject::NamespaceQuotas { .. }) => live.namespace_gates(),
             _ => NamespaceListGates::OPEN,
         };
         let running = live
@@ -2499,6 +2505,16 @@ impl LiveCluster {
     /// The subject of the running related watch.
     pub(crate) fn related_subject(&self) -> Option<&RelatedSubject> {
         self.related.as_ref().map(|related| &related.subject)
+    }
+
+    /// The gates of the Namespace drawer's lists now: the permissions decide, and while they are
+    /// being reviewed the running watch keeps its own.
+    pub(crate) fn namespace_gates(&self) -> NamespaceListGates {
+        let running = self
+            .related
+            .as_ref()
+            .map_or(NamespaceListGates::OPEN, |related| related.gates);
+        namespace_list_gates(&self.access, running)
     }
 
     /// The related list of `subject`, or `None` while another subject (or none) is watched.

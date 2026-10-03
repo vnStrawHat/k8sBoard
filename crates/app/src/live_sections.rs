@@ -33,7 +33,7 @@ use crate::batch_rows::job_status_label;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{
     CompanionLists, CompanionPlan, LiveCluster, LiveList, RbacState, RelatedList, companion_plan,
-    denied_related_check, namespace_list_gates,
+    denied_related_check,
 };
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::custom_rows::{FieldsSide, conditions_rows, field_list_rows};
@@ -431,7 +431,7 @@ fn revision_element(
                 .child(title),
         )
         // Fixed slots keep the columns aligned from row to row: the current row leaves the
-        // button slot empty, and the others leave the state slot empty.
+        // Roll back slot empty.
         .child(
             div()
                 .w(AGE_SLOT)
@@ -444,15 +444,33 @@ fn revision_element(
             div()
                 .w(STATE_SLOT)
                 .flex_shrink_0()
-                .children(revision.is_current.then(|| {
-                    toned_text(
-                        StatusLabel {
-                            text: "current".into(),
-                            tone: current_tone,
-                        },
-                        cx,
+                // The current row has the label and every other row the Diff button, so the
+                // two never meet in this slot.
+                .children(if revision.is_current {
+                    Some(
+                        toned_text(
+                            StatusLabel {
+                                text: "current".into(),
+                                tone: current_tone,
+                            },
+                            cx,
+                        )
+                        .into_any_element(),
                     )
-                })),
+                } else {
+                    diff.map(|request| {
+                        Button::new(("revision-diff", ix))
+                            .label("Diff")
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(move |shell, _, window, cx| {
+                                // The row behind the button reveals its ReplicaSet on a click.
+                                cx.stop_propagation();
+                                shell.open_revision_diff(request.clone(), window, cx);
+                            }))
+                            .into_any_element()
+                    })
+                }),
         )
         .child(
             div()
@@ -484,24 +502,6 @@ fn revision_element(
                             }))
                         }
                     }
-                })),
-        )
-        .child(
-            div()
-                .w(DIFF_BUTTON_SLOT)
-                .flex_shrink_0()
-                .flex()
-                .justify_end()
-                .children(diff.map(|request| {
-                    Button::new(("revision-diff", ix))
-                        .label("Diff")
-                        .xsmall()
-                        .ghost()
-                        .on_click(cx.listener(move |shell, _, window, cx| {
-                            // The row behind the button reveals its ReplicaSet on a click.
-                            cx.stop_propagation();
-                            shell.open_revision_diff(request.clone(), window, cx);
-                        }))
                 })),
         )
         .into_any_element()
@@ -1058,14 +1058,15 @@ const HINT_LISTED_OWNERS: usize = 3;
 
 /// The note under Used by when some user reads the ConfigMap through env: those values are read
 /// once at container start. CronJob and Job owners are left out (each run starts fresh), and so are
-/// bare `pod/{name}` owners (a pod without a controller is not restarted; it is replaced). Pure.
+/// bare `pod/{name}` owners (a pod without a controller is not restarted; it is replaced), and
+/// orphan `replicaset/{name}` owners (a ReplicaSet without a Deployment is not restarted either). Pure.
 fn restart_hint(users: &[&UsedBy]) -> Option<String> {
     let readers: Vec<&str> = users
         .iter()
         .filter(|used_by| used_by.ways.contains(WAY_ENV) || used_by.ways.contains(WAY_ENV_FROM))
         .map(|used_by| used_by.owner.as_str())
         .filter(|owner| {
-            !["cronjob/", "job/", "pod/"]
+            !["cronjob/", "job/", "pod/", "replicaset/"]
                 .iter()
                 .any(|prefix| owner.starts_with(prefix))
         })
@@ -1989,7 +1990,7 @@ fn namespace_quota_rows(
     let subject = RelatedSubject::NamespaceQuotas {
         namespace: namespace.to_owned(),
     };
-    let gates = namespace_list_gates(&live.access);
+    let gates = live.namespace_gates();
     let lists = live
         .related_of(&subject)
         .and_then(RelatedList::namespace_limits);

@@ -1854,7 +1854,7 @@ fn limit_range_update_reaches_its_list() {
 
 #[test]
 fn namespace_list_gates_each_follow_their_check() {
-    let gates = |access: &AccessState| namespace_list_gates(access);
+    let gates = |access: &AccessState| namespace_list_gates(access, NamespaceListGates::OPEN);
     let open = NamespaceListGates::OPEN;
     assert_eq!(gates(&access_with(AccessCheck::ListEvents)), open);
     assert_eq!(
@@ -1873,10 +1873,28 @@ fn namespace_list_gates_each_follow_their_check() {
     );
     // A report that is not known never closes a gate: the server answers.
     assert_eq!(gates(&AccessState::Unknown), open);
+}
+
+#[test]
+fn a_review_in_progress_keeps_the_running_gates() {
     let checking = AccessState::Checking {
         _task: Task::ready(()),
     };
-    assert_eq!(gates(&checking), open);
+    let limited = NamespaceListGates {
+        quotas: true,
+        limit_ranges: false,
+    };
+    // A re-review must not reopen a stream that was left out, or it would start twice.
+    assert_eq!(namespace_list_gates(&checking, limited), limited);
+    assert_eq!(
+        namespace_list_gates(&checking, NamespaceListGates::OPEN),
+        NamespaceListGates::OPEN
+    );
+    // Once the answer is known it decides again.
+    assert_eq!(
+        namespace_list_gates(&access_with(AccessCheck::ListEvents), limited),
+        NamespaceListGates::OPEN
+    );
 }
 
 #[test]
