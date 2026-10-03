@@ -531,10 +531,8 @@ fn row_actions_follow_key_availability() {
         // The pod's `update` check has not been asked in this world, so the gate still waits.
         Some("Checking permissions…")
     );
-    assert_eq!(
-        reason_of(action("Delete")),
-        Some("Comes in a later version")
-    );
+    // The lazy `delete pods` check has not been asked in this world either.
+    assert_eq!(reason_of(action("Delete")), Some("Checking permissions…"));
     // A pod has no node-only action.
     assert!(
         !found

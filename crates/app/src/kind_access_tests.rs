@@ -41,3 +41,19 @@ fn clear_forgets_every_answer() {
     map.clear();
     assert!(map.get(ObjectKind::Deployment).is_none());
 }
+
+#[test]
+fn kind_access_includes_delete() {
+    assert_eq!(
+        lazy_checks(ObjectKind::Deployment),
+        [
+            AccessCheck::Update(ObjectKind::Deployment),
+            AccessCheck::Delete(ObjectKind::Deployment)
+        ]
+    );
+    // Not editable: only the delete right is asked.
+    assert_eq!(
+        lazy_checks(ObjectKind::Node),
+        [AccessCheck::Delete(ObjectKind::Node)]
+    );
+}

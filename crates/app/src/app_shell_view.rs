@@ -244,10 +244,10 @@ impl AppShell {
             cx.new(|cx| ClusterSession::new(kubeconfig, &summary, namespace, kind, cache, cx));
         // The new session is still connecting; it keeps the choice for `LiveCluster::start`.
         let is_overview = self.screen == Screen::Overview && self.is_primary(cluster);
-        let edit_kind = self.screen.edit_kind();
+        let access_kind = self.screen.access_kind();
         session.update(cx, |session, cx| {
             session.set_overview_visible(is_overview, cx);
-            session.request_kind_access(edit_kind, cx);
+            session.request_kind_access(access_kind, cx);
         });
         let observed = cluster.clone();
         let observer = cx.observe(&session, move |shell, _, cx| {

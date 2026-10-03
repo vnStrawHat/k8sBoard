@@ -408,6 +408,36 @@ fn kind_access_runs_once_per_kind_and_scope(cx: &mut TestAppContext) {
     });
 }
 
+/// The access reviews that asked for `verb` on deployments.
+fn reviews_of(api: &FakeApi, verb: &str) -> usize {
+    api.requests()
+        .iter()
+        .filter(|request| {
+            request.path.ends_with("/selfsubjectaccessreviews")
+                && request.body.contains(&format!("\"verb\":\"{verb}\""))
+        })
+        .count()
+}
+
+#[gpui_kit::test]
+fn kind_access_includes_delete(cx: &mut TestAppContext) {
+    let t = edit_test("edit-review-delete", cx);
+    t.wait_for_update_answer(&t.t.stg, cx);
+    // One screen show asks both rights of the kind, once.
+    assert_eq!(reviews_of(&t.t.stg_api, "update"), 1);
+    assert_eq!(reviews_of(&t.t.stg_api, "delete"), 1);
+    let known = t.shell().read_with(cx, |shell, cx| {
+        let guard = shell.guard_for(&t.t.stg, cx).expect("a live guard");
+        match guard.kind_access.get(cluster::ObjectKind::Deployment) {
+            Some(KindAccess::Known(report)) => Some(report.is_allowed(
+                cluster::AccessCheck::Delete(cluster::ObjectKind::Deployment),
+            )),
+            _ => None,
+        }
+    });
+    assert_eq!(known, Some(true));
+}
+
 #[gpui_kit::test]
 fn row_keys_inert_while_editing(cx: &mut TestAppContext) {
     let t = edit_test("edit-inert", cx);

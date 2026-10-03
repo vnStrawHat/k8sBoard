@@ -20,6 +20,7 @@ pub struct RecordedRequest {
     /// The raw query string, empty when there is none.
     pub query: String,
     pub content_type: Option<String>,
+    pub accept: Option<String>,
     pub body: String,
 }
 
@@ -140,6 +141,11 @@ async fn record(request: Request<Body>) -> Result<RecordedRequest, BoxError> {
         content_type: parts
             .headers
             .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned),
+        accept: parts
+            .headers
+            .get("accept")
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned),
         body: String::from_utf8_lossy(&bytes).into_owned(),

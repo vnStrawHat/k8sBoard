@@ -870,3 +870,24 @@ fn screen_edit_yaml_diff_parses() {
     assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
     assert!(USAGE.contains("edit-yaml-diff"));
 }
+
+#[test]
+fn screen_delete_confirm_parses() {
+    let screen = run_options(&["--screen", "delete-confirm"]).screen;
+    assert_eq!(screen, LaunchScreen::DeleteConfirm);
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::Deployments));
+    // Drawn from fixed data once the shell renders, like a dialog screen, and selects no row.
+    assert!(screen.opens_dialog());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("delete-confirm"));
+}
+
+#[test]
+fn screen_delete_bulk_confirm_parses() {
+    let screen = run_options(&["--screen", "delete-bulk-confirm"]).screen;
+    assert_eq!(screen, LaunchScreen::DeleteBulkConfirm);
+    assert_eq!(screen.screen(), Screen::Pods);
+    assert!(screen.opens_dialog());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("delete-bulk-confirm"));
+}

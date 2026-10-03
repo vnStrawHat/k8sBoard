@@ -8,7 +8,9 @@ use std::borrow::Cow;
 use std::fmt;
 use std::time::{Duration, Instant};
 
-use kube::api::{DynamicObject, Patch, PatchParams, PostParams};
+use kube::api::{
+    DeleteParams, DynamicObject, Patch, PatchParams, PostParams, Preconditions, PropagationPolicy,
+};
 use kube::core::Status;
 use serde_json::{Value, json};
 use tokio::time::error::Elapsed;
@@ -68,6 +70,12 @@ pub enum WriteOperation {
     /// `PUT` of an edited object with its base `resourceVersion` and `uid`, placeholders restored
     /// from a fresh GET (0031).
     ReplaceObject(Box<ObjectEdit>),
+    /// `DELETE` pinned to `uid` (a recreated object of the same name is never deleted), with an
+    /// explicit propagation policy (0033).
+    DeleteObject {
+        uid: String,
+        propagation: DeletePropagation,
+    },
 }
 
 impl WriteOperation {
@@ -82,6 +90,7 @@ impl WriteOperation {
             Self::TriggerCronJob => "TriggerCronJob",
             Self::RerunJob => "RerunJob",
             Self::ReplaceObject(_) => "ReplaceObject",
+            Self::DeleteObject { .. } => "DeleteObject",
         }
     }
 }
@@ -89,6 +98,37 @@ impl WriteOperation {
 impl fmt::Debug for WriteOperation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.name())
+    }
+}
+
+/// What happens to the objects a deleted object owns (0033 decision 5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeletePropagation {
+    /// The owner goes at once; a garbage collector deletes the dependents afterwards.
+    #[default]
+    Background,
+    /// The owner stays until its dependents are gone.
+    Foreground,
+    /// The dependents keep running without an owner.
+    Orphan,
+}
+
+impl DeletePropagation {
+    /// The API policy name; also the audit value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Background => "Background",
+            Self::Foreground => "Foreground",
+            Self::Orphan => "Orphan",
+        }
+    }
+
+    fn policy(self) -> PropagationPolicy {
+        match self {
+            Self::Background => PropagationPolicy::Background,
+            Self::Foreground => PropagationPolicy::Foreground,
+            Self::Orphan => PropagationPolicy::Orphan,
+        }
     }
 }
 
@@ -128,6 +168,12 @@ pub enum WriteEffect {
     Created,
     /// A replace (Edit YAML): what changed, masked.
     Replaced(EditPreview),
+    /// A delete the server completed.
+    Deleted,
+    /// A delete the server accepted that waits for finalizers or a grace period.
+    DeletionPending {
+        finalizers: Vec<String>,
+    },
 }
 
 /// What a finished write reports. `created_name` and `uid` are `None` on a dry-run and when the
@@ -191,6 +237,10 @@ impl WriteRequest {
         // `replicas` is an int32: a larger number can only be a typo, and the server would refuse it.
         if matches!(operation, WriteOperation::ScaleWorkload { replicas } if replicas > MAX_REPLICAS)
         {
+            return None;
+        }
+        // Without a uid the delete could hit a recreated object of the same name.
+        if matches!(&operation, WriteOperation::DeleteObject { uid, .. } if uid.is_empty()) {
             return None;
         }
         let access_check = fitting_access_check(&target, &operation)?;
@@ -260,6 +310,12 @@ impl WriteRequest {
                     value: None,
                 })
                 .collect(),
+            WriteOperation::DeleteObject { propagation, .. } => {
+                vec![field(
+                    "deleteOptions.propagationPolicy",
+                    propagation.as_str().to_owned(),
+                )]
+            }
         }
     }
 
@@ -274,7 +330,8 @@ impl WriteRequest {
             | WriteOperation::SetCronJobSuspended { .. }
             | WriteOperation::TriggerCronJob
             | WriteOperation::RerunJob
-            | WriteOperation::ReplaceObject(_) => true,
+            | WriteOperation::ReplaceObject(_)
+            | WriteOperation::DeleteObject { .. } => true,
         }
     }
 }
@@ -313,6 +370,7 @@ fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Optio
         {
             AccessCheck::Update(kind)
         }
+        (WriteOperation::DeleteObject { .. }, kind) => AccessCheck::Delete(kind),
         _ => return None,
     })
 }
@@ -393,10 +451,27 @@ struct Answer {
 
 impl Answer {
     fn patched() -> Self {
+        Self::of(WriteEffect::Patched)
+    }
+
+    fn of(effect: WriteEffect) -> Self {
         Self {
-            effect: WriteEffect::Patched,
+            effect,
             created_name: None,
             uid: None,
+        }
+    }
+
+    /// `kept` is the object the server answered with while it waits (`Left` of kube's delete); a
+    /// plain status (`Right`) is `None`. Only finalizer names survive: a Secret's data must not
+    /// outlive this call.
+    fn deleted(kept: Option<DynamicObject>) -> Self {
+        let pending = kept.filter(|object| object.metadata.deletion_timestamp.is_some());
+        match pending {
+            Some(object) => Self::of(WriteEffect::DeletionPending {
+                finalizers: object.metadata.finalizers.unwrap_or_default(),
+            }),
+            None => Self::of(WriteEffect::Deleted),
         }
     }
 
@@ -432,7 +507,8 @@ struct Replacement {
 impl ClusterConnection {
     /// The only function that sends a mutating request. Returns `WritesBlocked` before building any
     /// request when the connection's policy is `Blocked`. Every request sets `fieldManager=k8sboard`
-    /// in both modes, and `DryRun` adds `dryRun=All`. The caller passes the connection of the
+    /// in both modes (a delete has no query and sends `dryRun` in its body), and `DryRun` adds
+    /// `dryRun=All`. The caller passes the connection of the
     /// target's own cluster; there is no implicit current session.
     pub async fn write(
         &self,
@@ -551,6 +627,20 @@ impl ClusterConnection {
                     created_name: None,
                     uid,
                 })
+            }
+            WriteOperation::DeleteObject { uid, propagation } => {
+                let params = DeleteParams {
+                    dry_run: mode == WriteMode::DryRun,
+                    grace_period_seconds: None,
+                    propagation_policy: Some(propagation.policy()),
+                    preconditions: Some(Preconditions {
+                        resource_version: None,
+                        uid: Some(uid.clone()),
+                    }),
+                };
+                let sent = run_raw(api.delete(name, &params)).await;
+                let response = self.settle(request, mode, sent)?;
+                Ok(Answer::deleted(response.left()))
             }
         }
     }
@@ -893,3 +983,7 @@ mod object_write_workload_tests;
 #[cfg(test)]
 #[path = "object_write_replace_tests.rs"]
 mod object_write_replace_tests;
+
+#[cfg(test)]
+#[path = "object_write_delete_tests.rs"]
+mod object_write_delete_tests;

@@ -1,6 +1,6 @@
 use cluster::{
-    AccessCheck, ContainerKind, ContainerState, ContainerSummary, NamespaceScope, NodeSummary,
-    ObjectKind, PodSummary, ReplicaSetSummary, SecretKey,
+    AccessCheck, ContainerKind, ContainerState, ContainerSummary, HELM_RELEASE_SECRET_TYPE,
+    NamespaceScope, NodeSummary, ObjectKind, PodSummary, ReplicaSetSummary, SecretKey,
 };
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
@@ -11,6 +11,7 @@ use gpui_kit::{
 
 use crate::access_bindings::role_key;
 use crate::access_query::who_can_prefill;
+use crate::app_shell::object_delete::HELM_RECORD_REASON;
 use crate::app_shell::shell_open::ShellOpen;
 use crate::app_shell::write_flow::cordon_label;
 use crate::app_shell::{AppShell, Screen};
@@ -53,7 +54,8 @@ pub(crate) enum ResourceAction {
     ViewYaml,
     /// Carries the kind of the row: only the editable kinds offer it (spec 0031).
     EditYaml(ObjectKind),
-    Delete,
+    /// Carries the kind of the row: every built-in kind but a Helm release is deleted (spec 0033).
+    Delete(ObjectKind),
     /// Carries the kind of the row: Deployments, StatefulSets, and DaemonSets restart.
     RestartRollout(ObjectKind),
     /// Carries the kind of the row: Deployments and StatefulSets scale.
@@ -217,7 +219,11 @@ impl ResourceAction {
                 checks: vec![AccessCheck::Update(kind)],
                 is_shipped: true,
             },
-            Self::Drain | Self::Delete => ActionGate::Planned,
+            Self::Delete(kind) => ActionGate::Mutating {
+                checks: vec![AccessCheck::Delete(kind)],
+                is_shipped: true,
+            },
+            Self::Drain => ActionGate::Planned,
         }
     }
 
@@ -233,7 +239,7 @@ impl ResourceAction {
             Self::CopyName => RowAction::CopyName,
             Self::ViewYaml => RowAction::ViewYaml,
             Self::EditYaml(_) => RowAction::EditYaml,
-            Self::Delete => RowAction::Delete,
+            Self::Delete(_) => RowAction::Delete,
             Self::RestartRollout(_) => RowAction::RestartRollout,
             Self::Scale(_) => RowAction::Scale,
             Self::PauseRollout => RowAction::PauseRollout,
@@ -273,7 +279,7 @@ impl RowAction {
 /// What an action can do to the cluster; the confirm dialog's button style follows it.
 pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
     match action {
-        ResourceAction::Delete | ResourceAction::Drain => ActionRisk::Destructive,
+        ResourceAction::Delete(_) | ResourceAction::Drain => ActionRisk::Destructive,
         ResourceAction::ViewLogs
         | ResourceAction::OpenShell
         | ResourceAction::PortForward
@@ -304,7 +310,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::CopyName => "Copy name",
         ResourceAction::ViewYaml => "View YAML",
         ResourceAction::EditYaml(_) => "Edit YAML",
-        ResourceAction::Delete => "Delete",
+        ResourceAction::Delete(_) => "Delete",
         ResourceAction::RestartRollout(_) => "Restart rollout",
         ResourceAction::Scale(_) => "Scale",
         ResourceAction::PauseRollout => "Pause rollout",
@@ -372,8 +378,27 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
             ResourceKey::Pod { .. } | ResourceKey::Node { .. } => None,
         },
         RowAction::CopyName => Some(ResourceAction::CopyName),
-        RowAction::Delete => Some(ResourceAction::Delete),
+        RowAction::Delete => delete_kind(subject).map(ResourceAction::Delete),
     }
+}
+
+/// The kind Delete removes on a row of `subject`. A Helm release row reads as a Secret by storage,
+/// so naming it a Secret would delete the wrong object; custom resources have no `ObjectKind`.
+/// Both stay off (spec 0033 decision 26).
+pub(crate) fn delete_kind(subject: &ResourceKey) -> Option<ObjectKind> {
+    match subject {
+        ResourceKey::Pod { .. } => Some(ObjectKind::Pod),
+        ResourceKey::Node { .. } => Some(ObjectKind::Node),
+        ResourceKey::Kind { kind, .. } => delete_kind_of(*kind),
+    }
+}
+
+/// `delete_kind` for the rows of an explorer kind.
+pub(crate) fn delete_kind_of(kind: ResourceKind) -> Option<ObjectKind> {
+    if kind == ResourceKind::HelmReleases {
+        return None;
+    }
+    kind.builtin_object()
 }
 
 /// What a key for `row` does on `subject`; menus and keys read the same gates.
@@ -466,8 +491,8 @@ fn before_lock_reason(
 /// Why the permissions do not allow the action: the state while they are not known, else the
 /// first check of `checks` that is not allowed. A denied verb with its sibling verb on the same
 /// resource in the list names both (`get and create pods/exec`), because the user needs both.
-/// An `Update(kind)` check is answered by the lazy review of its kind (`kind_access`, spec 0031);
-/// the other checks by the session's report.
+/// An `Update(kind)` or `Delete(kind)` check is answered by the lazy review of its kind
+/// (`kind_access`, specs 0031 and 0033); the other checks by the session's report.
 fn permission_reason(
     checks: &[AccessCheck],
     access: &AccessState,
@@ -476,7 +501,7 @@ fn permission_reason(
     let mut denied = None;
     for check in checks {
         let report = match check {
-            AccessCheck::Update(kind) => match kind_access.get(*kind) {
+            AccessCheck::Update(kind) | AccessCheck::Delete(kind) => match kind_access.get(*kind) {
                 None | Some(KindAccess::Checking { .. }) => {
                     return Some("Checking permissions…".into());
                 }
@@ -567,7 +592,13 @@ pub(crate) fn pod_menu(
         .item(view_yaml_item(row.object(ResourceKey::of_pod(pod)), shell))
         .separator()
         .item(copy_name_item(&pod.name, access))
-        .item(copy_kubectl_command_item(&row.context, pod));
+        .item(copy_kubectl_command_item(&row.context, pod))
+        .separator()
+        .item(delete_item(
+            DeleteLabel::of("Delete pod…", "pods"),
+            action_availability(ResourceAction::Delete(ObjectKind::Pod), guard),
+            shell,
+        ));
     with_cluster_filter(menu, row, shell)
 }
 
@@ -711,7 +742,13 @@ pub(crate) fn node_menu(
         .item(cordon_item(node, guard, row, shell))
         .item(action_item(ResourceAction::Drain, guard))
         .separator()
-        .item(copy_name_item(&node.name, access));
+        .item(copy_name_item(&node.name, access))
+        .separator()
+        .item(delete_item(
+            DeleteLabel::of("Delete node…", "nodes"),
+            action_availability(ResourceAction::Delete(ObjectKind::Node), guard),
+            shell,
+        ));
     with_cluster_filter(menu, row, shell)
 }
 
@@ -877,11 +914,86 @@ pub(crate) fn kind_menu(
         .separator()
         .item(copy_name_item(&row.name, access))
         .separator()
-        .item(
-            disabled_menu_item(kind.delete_label(), NOT_SHIPPED_REASON.into())
-                .action(RowAction::Delete.key_action()),
-        );
+        .item(kind_delete_item(kind, row, guard, shell));
     with_cluster_filter(menu, context, shell)
+}
+
+/// The Delete item of an explorer kind's menu. Helm releases and custom kinds keep it off with the
+/// not-shipped reason (decision 26), and a Secret that stores a Helm release says why it stays.
+fn kind_delete_item(
+    kind: ResourceKind,
+    row: &KindRow,
+    guard: &ClusterGuard<'_>,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let label = kind.delete_label();
+    let Some(object) = delete_kind_of(kind) else {
+        return disabled_menu_item(label, NOT_SHIPPED_REASON.into())
+            .action(RowAction::Delete.key_action());
+    };
+    let availability = match helm_record_reason(&row.object) {
+        Some(reason) => ActionAvailability::Disabled { reason },
+        None => action_availability(ResourceAction::Delete(object), guard),
+    };
+    delete_item(DeleteLabel::of(label, kind.plural()), availability, shell)
+}
+
+/// Why a Secret row cannot be deleted: it stores a Helm release.
+pub(crate) fn helm_record_reason(object: &KindObject) -> Option<SharedString> {
+    match object {
+        KindObject::Secret(secret) if secret.secret_type == HELM_RELEASE_SECRET_TYPE => {
+            Some(HELM_RECORD_REASON.into())
+        }
+        _ => None,
+    }
+}
+
+/// The two labels of a Delete item: for one object, and for a count of them (`Delete 12 pods…`).
+struct DeleteLabel {
+    single: &'static str,
+    plural: &'static str,
+}
+
+impl DeleteLabel {
+    fn of(single: &'static str, plural: &'static str) -> Self {
+        Self { single, plural }
+    }
+}
+
+/// The red last item of a row menu. It has no `on_click`: it dispatches the Del key action, which
+/// runs on the cursor row, or on the ticked set when the cursor row is one of several (spec 0033
+/// decision 27). So the label counts what Del would delete, read when the menu draws.
+fn delete_item(
+    label: DeleteLabel,
+    availability: ActionAvailability,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let shell = shell.clone();
+    let is_disabled = matches!(availability, ActionAvailability::Disabled { .. });
+    PopupMenuItem::element(move |_, cx| {
+        let count = shell
+            .read_with(cx, |shell, cx| shell.delete_scope_size(cx))
+            .unwrap_or(1);
+        let text = if count >= 2 {
+            format!("Delete {count} {}…", label.plural)
+        } else {
+            label.single.to_owned()
+        };
+        let theme = cx.theme();
+        match &availability {
+            ActionAvailability::Enabled => div().text_color(theme.danger).child(text),
+            ActionAvailability::Disabled { reason } => div().child(
+                v_flex().child(div().child(text)).child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(reason.clone()),
+                ),
+            ),
+        }
+    })
+    .disabled(is_disabled)
+    .action(RowAction::Delete.key_action())
 }
 
 /// While several clusters are viewed: `Filter by this cluster`, which keeps the rows of the

@@ -12,6 +12,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable as _,
@@ -21,7 +22,10 @@ use gpui_kit::{
 
 use crate::app_shell::AppShell;
 use crate::app_shell::batch_write::{
-    BatchCommit, BatchIntent, ItemProgress, dry_run_progress, summarize_dry_runs,
+    BatchCommit, BatchExtras, BatchIntent, ItemProgress, dry_run_progress, summarize_dry_runs,
+};
+use crate::app_shell::object_delete::{
+    delete_dry_run_progress, propagation_choices, with_propagation,
 };
 use crate::app_shell::write_flow::{
     CommitMode, ConnectIntent, DryRunState, TypedMatch, WriteIntent, WriteStep, checked_write,
@@ -84,7 +88,7 @@ impl DialogKind {
         match self {
             Self::Unlock { .. } | Self::Connect(_) => "the cluster name".to_owned(),
             Self::Write(intent) => intent.typed_hint(),
-            Self::Batch(_) => "the cluster name".to_owned(),
+            Self::Batch(batch) => batch.typed_hint(),
         }
     }
 
@@ -275,7 +279,11 @@ impl ConfirmDialog {
                 if let Ok(outcome) = &result {
                     elapsed += outcome.elapsed;
                 }
-                let progress = dry_run_progress(&result);
+                let progress = if batch.is_delete() {
+                    delete_dry_run_progress(&result)
+                } else {
+                    dry_run_progress(&result)
+                };
                 let _ = this.update(cx, |dialog, cx| dialog.set_item(index, progress, cx));
             }
             let _ = this.update(cx, |dialog, cx| {
@@ -322,6 +330,41 @@ impl ConfirmDialog {
         self.is_open
     }
 
+    /// How many items of a delete batch turned out to be gone already.
+    fn gone_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|state| **state == ItemProgress::Gone)
+            .count()
+    }
+
+    /// The propagation radio: a change rebuilds the items and checks them all again (decision 12).
+    /// Ignored while a commit runs, because the commit sends the items the user confirmed.
+    fn choose_propagation(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.is_committing {
+            return;
+        }
+        let DialogKind::Batch(batch) = &self.kind else {
+            return;
+        };
+        let BatchExtras::Delete(extras) = &batch.plan.extras else {
+            return;
+        };
+        let choices = propagation_choices(extras.kind, extras.targets.len() == 1);
+        let Some((propagation, ..)) = choices.into_iter().nth(index) else {
+            return;
+        };
+        if propagation == extras.propagation {
+            return;
+        }
+        let Some(rebuilt) = with_propagation(batch, propagation, jiff::Timestamp::now()) else {
+            return;
+        };
+        let rebuilt = Rc::new(rebuilt);
+        self.kind = DialogKind::Batch(Rc::clone(&rebuilt));
+        self.start_batch_dry_runs(rebuilt, cx);
+    }
+
     /// The tier now: the one the dialog opened with, or the live one of the cluster when the user
     /// made it stricter since (Settings), whichever asks for more.
     fn live_tier(&self, cx: &App) -> DialogConfirm {
@@ -360,6 +403,13 @@ impl ConfirmDialog {
             .and_then(|shell| shell.read(cx).guard_for(self.kind.cluster(), cx));
         let name = self.kind.cluster_name();
         let typed = self.typed_match(cx);
+        // Every object went away since the dialog opened: nothing is left to send.
+        if matches!(self.dry_run, Some(DryRunState::Passed { .. }))
+            && !self.items.is_empty()
+            && self.gone_count() == self.items.len()
+        {
+            return Some("Every object is already gone; nothing to delete".into());
+        }
         match &self.dry_run {
             Some(dry_run) => commit_block(
                 guard.as_ref(),
@@ -446,6 +496,11 @@ impl ConfirmDialog {
                     note: self
                         .is_note_shown
                         .then(|| self.note.read(cx).value().to_string()),
+                    gone: self
+                        .items
+                        .iter()
+                        .map(|state| *state == ItemProgress::Gone)
+                        .collect(),
                 };
                 let batch = Rc::clone(batch);
                 let dialog = cx.weak_entity();
@@ -498,10 +553,12 @@ impl ConfirmDialog {
             ItemProgress::Rejected(_) | ItemProgress::Failed(_) | ItemProgress::Unknown => {
                 theme.danger
             }
+            ItemProgress::Pending(_) => theme.warning,
             ItemProgress::Waiting
             | ItemProgress::Checking
             | ItemProgress::Applying
-            | ItemProgress::NotSent(_) => theme.muted_foreground,
+            | ItemProgress::NotSent(_)
+            | ItemProgress::Gone => theme.muted_foreground,
         };
         let rows = batch
             .plan
@@ -538,6 +595,18 @@ impl ConfirmDialog {
                 )
                 .child(div().text_xs().child(format!("skipped: {}", skip.reason)))
         });
+        let gone = match &batch.plan.extras {
+            BatchExtras::Delete(extras) if !extras.already_gone.is_empty() => {
+                let names: Vec<&str> = extras.already_gone.iter().map(AsRef::as_ref).collect();
+                Some(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(format!("already gone: {}", names.join(", "))),
+                )
+            }
+            BatchExtras::Delete(_) | BatchExtras::None => None,
+        };
         v_flex()
             .id("batch-items")
             .gap_1()
@@ -545,6 +614,7 @@ impl ConfirmDialog {
             .overflow_y_scroll()
             .children(rows)
             .children(skipped)
+            .children(gone)
             .into_any_element()
     }
 
@@ -685,10 +755,13 @@ impl ConfirmDialog {
                 )
             }
             DryRunState::Running => ("Server dry-run…".to_owned(), theme.muted_foreground),
-            DryRunState::Passed { .. } if is_batch => (
-                format!("Server dry-run passed for {total} of {total}"),
-                theme.success,
-            ),
+            DryRunState::Passed { .. } if is_batch => {
+                let passed = total - self.gone_count();
+                (
+                    format!("Server dry-run passed for {passed} of {total}"),
+                    theme.success,
+                )
+            }
             DryRunState::Passed { elapsed } => (
                 format!(
                     "Server dry-run passed · {} ms{}",
@@ -708,6 +781,42 @@ impl ConfirmDialog {
                 .text_sm()
                 .text_color(color)
                 .child(text)
+                .into_any_element(),
+        )
+    }
+
+    /// The Dependents choice of a delete of an owner kind (Deployment, Job, …), under the list.
+    fn render_propagation(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let DialogKind::Batch(batch) = &self.kind else {
+            return None;
+        };
+        let BatchExtras::Delete(extras) = &batch.plan.extras else {
+            return None;
+        };
+        if !extras.kind.owns_dependents() {
+            return None;
+        }
+        let muted = cx.theme().muted_foreground;
+        let choices = propagation_choices(extras.kind, extras.targets.len() == 1);
+        let selected = choices
+            .iter()
+            .position(|(propagation, ..)| *propagation == extras.propagation);
+        let group = RadioGroup::vertical("dependents")
+            .selected_index(selected)
+            .disabled(self.is_committing)
+            .on_change(cx.listener(|dialog, index: &usize, _, cx| {
+                dialog.choose_propagation(*index, cx);
+            }))
+            .children(choices.into_iter().map(|(_, label, consequence)| {
+                Radio::new(label)
+                    .label(label)
+                    .child(div().text_xs().text_color(muted).child(consequence))
+            }));
+        Some(
+            v_flex()
+                .gap_1()
+                .child(div().text_sm().text_color(muted).child("Dependents"))
+                .child(group)
                 .into_any_element(),
         )
     }
@@ -780,7 +889,7 @@ impl ConfirmDialog {
                 intent.risk == ActionRisk::Destructive,
             ),
             DialogKind::Batch(batch) => (
-                batch.confirm_label().into(),
+                batch.confirm_label(self.gone_count()).into(),
                 batch.risk == ActionRisk::Destructive,
             ),
         };
@@ -861,6 +970,7 @@ impl Render for ConfirmDialog {
             .gap_3()
             .children(self.render_object(cx))
             .children(self.render_changes(cx))
+            .children(self.render_propagation(cx))
             .children(unlock_note)
             .children(self.render_dry_run(cx))
             .children(self.render_typed(cx))
@@ -917,7 +1027,7 @@ impl ConfirmDialog {
     pub(crate) fn confirm_text(&self) -> Option<String> {
         match &self.kind {
             DialogKind::Write(intent) => Some(intent.button.to_string()),
-            DialogKind::Batch(batch) => Some(batch.confirm_label()),
+            DialogKind::Batch(batch) => Some(batch.confirm_label(self.gone_count())),
             DialogKind::Connect(intent) => Some(intent.button.to_string()),
             DialogKind::Unlock { .. } => None,
         }
@@ -943,5 +1053,9 @@ impl ConfirmDialog {
 
     pub(crate) fn press_retry(&mut self, cx: &mut Context<Self>) {
         self.retry(cx);
+    }
+
+    pub(crate) fn choose_propagation_for_test(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.choose_propagation(index, cx);
     }
 }

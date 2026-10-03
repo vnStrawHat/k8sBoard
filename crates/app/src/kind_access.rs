@@ -1,11 +1,21 @@
-//! The lazy write permission of one kind (spec 0031 decision 24): `update {resource}` is asked when
-//! a screen of the kind first shows, not at session start, so connecting costs no burst of write
-//! checks. Until the answer arrives the gate reads `Checking permissions…`.
+//! The lazy write permissions of one kind (spec 0031 decision 24, 0033 decision 25): `update
+//! {resource}` (when the kind is editable) and `delete {resource}` are asked when a screen of the
+//! kind first shows, not at session start, so connecting costs no burst of write checks. Until the
+//! answer arrives the gate reads `Checking permissions…`.
 
-use cluster::{AccessReport, ObjectKind};
+use cluster::{AccessCheck, AccessReport, ObjectKind};
 use gpui_kit::Task;
 
-/// What the session knows about `update` on one kind.
+/// The permissions one review of `kind` asks: `update` for an editable kind, and `delete` for all.
+pub(crate) fn lazy_checks(kind: ObjectKind) -> Vec<AccessCheck> {
+    let update = kind.is_editable().then_some(AccessCheck::Update(kind));
+    update
+        .into_iter()
+        .chain([AccessCheck::Delete(kind)])
+        .collect()
+}
+
+/// What the session knows about `update` and `delete` on one kind.
 pub(crate) enum KindAccess {
     /// Dropping the task cancels the review.
     Checking {

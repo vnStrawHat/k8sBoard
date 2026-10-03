@@ -272,9 +272,10 @@ fn an_item_intent_carries_the_batch_cluster_action_and_risk() {
         button: "Pause".into(),
         risk: ActionRisk::Change,
         warnings: vec!["a line".into()],
+        expected_name: None,
         plan,
     };
-    assert_eq!(batch.confirm_label(), "Pause 2");
+    assert_eq!(batch.confirm_label(0), "Pause 2");
     assert_eq!(batch.expected(), "stg-b");
     let item = batch.item_intent(&batch.plan.items[1]);
     assert_eq!(item.cluster, cluster);

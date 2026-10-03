@@ -81,8 +81,7 @@ use crate::port_forwards::{PortForwards, StartReport};
 use crate::recent_changes::ChangeWindow;
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_actions::{
-    KeyAvailability, ResourceAction, RowAction, edit_yaml_kind, key_availability, subject_action,
-    view_logs_reason,
+    KeyAvailability, RowAction, delete_kind, delete_kind_of, key_availability, view_logs_reason,
 };
 use crate::resource_kind::ResourceKind;
 #[cfg(feature = "screenshot")]
@@ -136,6 +135,8 @@ mod edit_yaml_flow;
 mod keyboard_navigation;
 #[path = "leaving_work.rs"]
 mod leaving_work;
+#[path = "object_delete.rs"]
+pub(crate) mod object_delete;
 #[path = "port_forward_dialogs.rs"]
 mod port_forward_dialogs;
 #[path = "port_forward_open.rs"]
@@ -173,6 +174,10 @@ mod app_shell_edit_tests;
 #[path = "app_shell_workload_tests.rs"]
 mod app_shell_workload_tests;
 
+#[cfg(test)]
+#[path = "app_shell_delete_tests.rs"]
+mod app_shell_delete_tests;
+
 /// The logical column of the Events table that holds the reason.
 const EVENT_REASON_COLUMN: usize = 1;
 
@@ -206,14 +211,14 @@ impl Screen {
         }
     }
 
-    /// The object kind a row of this screen edits with Edit YAML (spec 0031), if any.
-    pub(crate) fn edit_kind(self) -> Option<ObjectKind> {
+    /// The object kind a row of this screen edits and deletes (specs 0031 and 0033), if any: the
+    /// lazy `update` and `delete` permissions are asked for it when the screen shows.
+    pub(crate) fn access_kind(self) -> Option<ObjectKind> {
         match self {
             Self::Pods => Some(ObjectKind::Pod),
-            Self::Kind(kind) => edit_yaml_kind(kind),
-            Self::Overview | Self::Nodes | Self::Issues | Self::Topology | Self::PortForwarding => {
-                None
-            }
+            Self::Nodes => Some(ObjectKind::Node),
+            Self::Kind(kind) => delete_kind_of(kind),
+            Self::Overview | Self::Issues | Self::Topology | Self::PortForwarding => None,
         }
     }
 }
@@ -348,6 +353,9 @@ pub(crate) struct AppShell {
     /// The clusters with a confirmed batch still committing. A second batch on one of them waits:
     /// two would race over the same objects and interleave their audit lines.
     running_batches: HashSet<ClusterRef>,
+    /// The delete whose objects are being read before its dialog opens (spec 0033). While it runs,
+    /// a second Del (a held key repeats) starts nothing.
+    delete_start: Option<Task<()>>,
     /// The open Edit YAML view (spec 0031). It replaces the table and the drawer in the workspace;
     /// the cursor and the drawer flag are kept under it and come back when it closes.
     edit: Option<Entity<YamlEditView>>,
@@ -606,6 +614,7 @@ impl AppShell {
             write_notice: None,
             value_popover: None,
             running_batches: HashSet::new(),
+            delete_start: None,
             edit: None,
             #[cfg(test)]
             last_discard: None,
@@ -1500,7 +1509,7 @@ impl AppShell {
         for slot in self.view.sessions() {
             slot.session.update(cx, |session, cx| {
                 session.set_explorer_kind(screen.kind(), cx);
-                session.request_kind_access(screen.edit_kind(), cx);
+                session.request_kind_access(screen.access_kind(), cx);
                 session.set_issues_visible(slot.is_primary && screen == Screen::Issues);
                 session.set_overview_visible(slot.is_primary && screen == Screen::Overview, cx);
                 session.refresh_kind_counts(CountTrigger::Navigation, cx);
@@ -1820,6 +1829,15 @@ impl AppShell {
                 }
                 _ => {}
             }
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if matches!(
+            launch,
+            LaunchScreen::DeleteConfirm | LaunchScreen::DeleteBulkConfirm
+        ) {
+            self.open_delete_fixture(launch == LaunchScreen::DeleteBulkConfirm, window, cx);
             self.pending_dialog_launch = None;
             return;
         }
@@ -2555,7 +2573,7 @@ impl AppShell {
         let moves_cluster = self.selected.as_ref().map(|old| &old.cluster)
             != object.as_ref().map(|new| &new.cluster);
         self.selected = object;
-        self.request_edit_access(cx);
+        self.request_row_access(cx);
         self.close_value_popover(cx);
         // Without a row there is nothing to show.
         if self.selected.is_none() {
@@ -2577,15 +2595,15 @@ impl AppShell {
         true
     }
 
-    /// Asks the session of the cursor row for the `update` permission of the row's kind, so that
-    /// Edit YAML knows its answer by the time a menu, a key, or the palette needs it (a drawer opened
-    /// from Topology or Issues shows kinds no list screen asked for).
-    fn request_edit_access(&self, cx: &mut Context<Self>) {
+    /// Asks the session of the cursor row for the `update` and `delete` permissions of the row's
+    /// kind, so that Edit YAML and Delete know their answer by the time a menu, a key, or the
+    /// palette needs it (a drawer opened from Topology or Issues shows kinds no list screen asked
+    /// for).
+    fn request_row_access(&self, cx: &mut Context<Self>) {
         let Some(object) = &self.selected else {
             return;
         };
-        let Some(ResourceAction::EditYaml(kind)) = subject_action(RowAction::EditYaml, &object.key)
-        else {
+        let Some(kind) = delete_kind(&object.key) else {
             return;
         };
         if let Some(session) = self.slot_session(&object.cluster) {

@@ -1089,7 +1089,7 @@ fn bulk_buttons_follow_the_ticks_and_the_gate(cx: &mut TestAppContext) {
     t.with_ticked_deployments(&[0, 1], cx);
     let buttons = t.bulk_buttons(cx);
     let labels: Vec<&str> = buttons.iter().map(|button| button.label.as_ref()).collect();
-    assert_eq!(labels, ["Scale…", "Restart", "Roll back…"]);
+    assert_eq!(labels, ["Scale…", "Restart", "Roll back…", "Delete…"]);
     assert_eq!(
         Clusters::state_of(&buttons, "Scale…"),
         BulkState::Ready(ResourceAction::Scale(cluster::ObjectKind::Deployment))
@@ -1466,7 +1466,7 @@ fn the_suspend_button_reads_resume_when_every_ticked_cronjob_is_suspended(cx: &m
         .iter()
         .map(|button| button.label.to_string())
         .collect();
-    assert_eq!(labels, ["Trigger now", "Resume"]);
+    assert_eq!(labels, ["Trigger now", "Resume", "Delete…"]);
     // One running CronJob in the selection turns the label back.
     let running = cron_job("sweep", "Allow", 0);
     let rows = vec![cron_job_row(&suspended), cron_job_row(&running)];
@@ -1478,7 +1478,7 @@ fn the_suspend_button_reads_resume_when_every_ticked_cronjob_is_suspended(cx: &m
         .iter()
         .map(|button| button.label.to_string())
         .collect();
-    assert_eq!(labels, ["Trigger now", "Suspend"]);
+    assert_eq!(labels, ["Trigger now", "Suspend", "Delete…"]);
 }
 
 #[gpui_kit::test]

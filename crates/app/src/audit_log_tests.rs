@@ -334,3 +334,59 @@ fn audit_records_paths_only() {
     let json = serde_json::to_string(&entry).expect("a line");
     assert!(!json.contains("\"value\""), "{json}");
 }
+
+/// The audit entry a delete of `kind` named `name` would write for `item` of its batch.
+fn delete_entry(kind: cluster::ObjectKind, name: &str) -> AuditEntry {
+    use crate::app_shell::object_delete::{DeleteExtras, DeleteTarget, TargetFacts, delete_batch};
+    use cluster::{DeletePropagation, ObjectIdentity, ObjectRef};
+
+    let namespace = kind.is_namespaced().then(|| "team-a".to_owned());
+    let target = DeleteTarget {
+        object: ObjectRef::new(kind, namespace, name.to_owned()).expect("a valid object"),
+        identity: ObjectIdentity {
+            uid: "u-1".to_owned(),
+            finalizers: Vec::new(),
+            deletion_started: None,
+        },
+        facts: TargetFacts::Plain,
+    };
+    let cluster = crate::cluster_registry::ClusterRef {
+        kubeconfig: PathBuf::from("test.yaml"),
+        context: "stg-b".to_owned(),
+    };
+    let extras = DeleteExtras {
+        propagation: DeletePropagation::Foreground,
+        kind,
+        targets: vec![target],
+        already_gone: Vec::new(),
+    };
+    let batch = delete_batch(&cluster, "stg-b", extras, jiff::Timestamp::UNIX_EPOCH);
+    let intent = batch.item_intent(&batch.plan.items[0]);
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    audit_entry(&intent, &guard, AuditOutcome::Applied, None, None)
+}
+
+#[test]
+fn delete_records_propagation_only() {
+    let entry = delete_entry(cluster::ObjectKind::Deployment, "api");
+    assert_eq!(entry.action, "Delete");
+    assert_eq!(entry.fields.len(), 1);
+    assert_eq!(entry.fields[0].path, "deleteOptions.propagationPolicy");
+    assert_eq!(entry.fields[0].value.as_deref(), Some("Foreground"));
+    let json = serde_json::to_string(&entry).expect("a line");
+    // The uid is a pin for the request, not something the log keeps.
+    assert!(!json.contains("u-1"), "{json}");
+}
+
+#[test]
+fn delete_of_a_secret_or_config_map_keeps_the_path_and_drops_the_value() {
+    for (kind, name) in [
+        (cluster::ObjectKind::Secret, "db"),
+        (cluster::ObjectKind::ConfigMap, "settings"),
+    ] {
+        let entry = delete_entry(kind, name);
+        assert_eq!(entry.fields[0].path, "deleteOptions.propagationPolicy");
+        assert_eq!(entry.fields[0].value, None, "{kind:?}");
+    }
+}

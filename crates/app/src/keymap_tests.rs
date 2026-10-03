@@ -774,3 +774,28 @@ fn the_app_chords_work_inside_the_edit_yaml_view(cx: &mut TestAppContext) {
         Some("k8sboard::OpenPalette")
     );
 }
+
+#[gpui_kit::test]
+fn del_runs_the_delete_action_on_every_platform(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(resolve("delete", &SHELL, cx), Some("k8sboard::Delete"));
+    assert_eq!(resolve("delete", &TABLE_PATH, cx), Some("k8sboard::Delete"));
+}
+
+#[cfg(target_os = "macos")]
+#[gpui_kit::test]
+fn cmd_backspace_is_bound_on_macos(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("cmd-backspace", &SHELL, cx),
+        Some("k8sboard::Delete")
+    );
+    assert!(!is_app_action(resolve("cmd-backspace", &INPUT_PATH, cx)));
+}
+
+#[cfg(not(target_os = "macos"))]
+#[gpui_kit::test]
+fn cmd_backspace_is_not_bound_off_macos(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert!(!is_app_action(resolve("cmd-backspace", &SHELL, cx)));
+}

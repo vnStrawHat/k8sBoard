@@ -37,7 +37,7 @@ use crate::table_filter::FilterPreset;
 use crate::table_layout::{
     ColumnPlan, TableLayout, clickable_row, cluster_cell, header_cell, select_cell,
 };
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 
 /// The logical column of the Name column, for the kinds that show it.
@@ -259,6 +259,19 @@ impl KindTableDelegate {
                 let slot = self.sessions.get(usize::from(address.slot))?;
                 let row = slot_kind_rows(slot, kind, cx).get(address.item as usize)?;
                 Some((&slot.cluster, row))
+            })
+            .collect()
+    }
+
+    /// The ticked rows as objects of their clusters: what a bulk Delete covers.
+    pub(crate) fn checked_objects(&self, cx: &App) -> Vec<ClusterObject> {
+        let Some(kind) = self.kind else {
+            return Vec::new();
+        };
+        self.checked_rows(cx)
+            .into_iter()
+            .map(|(cluster, row)| {
+                ClusterObject::new(cluster.clone(), ResourceKey::of_row(kind, row))
             })
             .collect()
     }

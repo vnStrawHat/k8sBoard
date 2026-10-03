@@ -522,8 +522,8 @@ impl AppShell {
             ResourceAction::Drain => {}
             // Opens the editor on the cursor row, in its own cluster (spec 0031).
             ResourceAction::EditYaml(_) => self.open_edit(subject, window, cx),
-            // Unreachable while gated; the owning spec (0033) wires it.
-            ResourceAction::Delete => {}
+            // The cursor row, or the ticked set when it is one of several (spec 0033).
+            ResourceAction::Delete(_) => self.delete_at_cursor(&subject, window, cx),
             // Each builds its intent from the cursor row and opens the confirm dialog.
             ResourceAction::RestartRollout(_)
             | ResourceAction::PauseRollout

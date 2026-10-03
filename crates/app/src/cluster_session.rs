@@ -26,7 +26,7 @@ use crate::custom_kind::{CustomKind, CustomKindCache, custom_kinds};
 use crate::event_rows::newest_first;
 use crate::issue_board::{ISSUE_TICK, IssueBoard, IssueChange, IssueInputs, RunReason};
 use crate::issue_feeds::{FeedState, IssueFeeds, core_coverage};
-use crate::kind_access::{KindAccess, KindAccessMap};
+use crate::kind_access::{KindAccess, KindAccessMap, lazy_checks};
 use crate::kind_join::{JoinInputs, join_rows};
 use crate::kind_row::{KindObject, KindRow};
 use crate::kubelet_metrics::KubeletDemand;
@@ -64,7 +64,8 @@ pub(crate) struct ClusterSession {
     /// The kind screen being shown, kept across Connecting and retry so that `LiveCluster::start`
     /// can start its watch.
     explorer_kind: Option<ResourceKind>,
-    /// The kind whose `update` permission the shown screen needs (Edit YAML, spec 0031). Kept across
+    /// The kind whose `update` and `delete` permissions the shown screen needs (Edit YAML, Delete).
+    /// Kept across
     /// Connecting and retry like `explorer_kind`.
     access_kind: Option<ObjectKind>,
     /// Which events the Events screen asks the server for. Kept across Connecting and retry like
@@ -1522,16 +1523,16 @@ impl ClusterSession {
         cx.notify();
     }
 
-    /// Asks which kind the shown screen may be edited as; `None` when it edits nothing. The
-    /// `update` review runs once per kind and scope (spec 0031 decision 24) and is kept across a
-    /// reconnect, which asks again.
+    /// Asks which kind the shown screen acts on; `None` when it acts on none. The `update` and
+    /// `delete` review runs once per kind and scope (spec 0031 decision 24, 0033 decision 25) and is
+    /// kept across a reconnect, which asks again.
     pub(crate) fn request_kind_access(&mut self, kind: Option<ObjectKind>, cx: &mut Context<Self>) {
         self.access_kind = kind;
         self.review_kind_access(cx);
     }
 
     fn review_kind_access(&mut self, cx: &mut Context<Self>) {
-        let Some(kind) = self.access_kind.filter(|kind| kind.is_editable()) else {
+        let Some(kind) = self.access_kind else {
             return;
         };
         let runtime = cx.global::<ClusterRuntime>().clone();
@@ -1545,7 +1546,7 @@ impl ClusterSession {
         let scope = live.scope.clone();
         let reviewing = runtime.spawn(async move {
             connection
-                .review_access_for(&[AccessCheck::Update(kind)], scope)
+                .review_access_for(&lazy_checks(kind), scope)
                 .await
         });
         let task = cx.spawn(async move |this, cx| {
@@ -1578,8 +1579,8 @@ impl ClusterSession {
         // The answer is what a live check records; it names a kind and a bool, nothing more.
         tracing::debug!(
             kind = kind.name(),
-            is_allowed = matches!(&access, KindAccess::Known(report) if report.is_allowed(AccessCheck::Update(kind))),
-            "update permission of the kind"
+            is_delete_allowed = matches!(&access, KindAccess::Known(report) if report.is_allowed(AccessCheck::Delete(kind))),
+            "delete permission of the kind"
         );
         live.kind_access.set(kind, access);
         cx.notify();

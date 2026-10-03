@@ -81,6 +81,8 @@ pub enum AccessCheck {
     /// Edit YAML (0031): `update` on the kind's resource. Reviewed lazily per kind, so it is not in
     /// `ALL`.
     Update(ObjectKind),
+    /// Delete (0033): `delete` on the kind's resource. Lazy per kind, so not in `ALL`.
+    Delete(ObjectKind),
 }
 
 /// The API resource a check asks about.
@@ -210,6 +212,10 @@ impl AccessCheck {
             Self::Update(kind) => {
                 let (group, resource) = kind.resource();
                 ("update", group, resource, None, kind.is_namespaced())
+            }
+            Self::Delete(kind) => {
+                let (group, resource) = kind.resource();
+                ("delete", group, resource, None, kind.is_namespaced())
             }
         };
         CheckTarget {
@@ -1402,6 +1408,27 @@ mod tests {
         );
         assert_eq!(cluster_scoped.resource.as_deref(), Some("clusterroles"));
         assert_eq!(cluster_scoped.namespace, None);
+    }
+
+    #[test]
+    fn delete_check_text_and_group() {
+        let check = AccessCheck::Delete(ObjectKind::Deployment);
+        assert_eq!(check.to_string(), "delete deployments");
+        let attributes = resource_attributes(check, Some("shop"));
+        assert_eq!(attributes.verb.as_deref(), Some("delete"));
+        assert_eq!(attributes.group.as_deref(), Some("apps"));
+        assert_eq!(attributes.namespace.as_deref(), Some("shop"));
+        let cluster_scoped =
+            resource_attributes(AccessCheck::Delete(ObjectKind::Node), Some("shop"));
+        assert_eq!(cluster_scoped.namespace, None);
+    }
+
+    #[test]
+    fn lazy_checks_are_distinct_permissions() {
+        let update = AccessCheck::Update(ObjectKind::Pod);
+        let delete = AccessCheck::Delete(ObjectKind::Pod);
+        assert_ne!(update, delete);
+        assert!(!AccessCheck::ALL.contains(&delete));
     }
 
     fn allowing() -> (ClusterConnection, crate::fake_api::FakeApi) {

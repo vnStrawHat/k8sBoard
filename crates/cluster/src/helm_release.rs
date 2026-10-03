@@ -25,7 +25,7 @@ use crate::connection::ClusterConnection;
 use crate::namespace::NamespaceScope;
 use crate::resource_watch::{WatchUpdate, metadata_summary_watch, selected_summary_watch};
 
-pub(crate) const RELEASE_TYPE: &str = "helm.sh/release.v1";
+pub const RELEASE_TYPE: &str = "helm.sh/release.v1";
 pub(crate) const RELEASE_DATA_KEY: &str = "release";
 /// Largest decompressed release accepted: a gzip bomb guard.
 pub(crate) const RELEASE_SIZE_LIMIT: u64 = 64 * 1024 * 1024;

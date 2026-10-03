@@ -717,7 +717,7 @@ fn bulk_restart_names_the_count_and_the_kind() {
     assert_eq!(batch.label, "Restart 4 deployments");
     assert_eq!(batch.verb, "Restart");
     assert_eq!(batch.button, "Restart");
-    assert_eq!(batch.confirm_label(), "Restart 4");
+    assert_eq!(batch.confirm_label(0), "Restart 4");
     assert_eq!(batch.risk, ActionRisk::Change);
     assert_eq!(batch.cluster, test_cluster());
     assert_eq!(
@@ -780,7 +780,7 @@ fn bulk_rerun_and_trigger_name_their_words() {
     assert_eq!(trigger.label, "Run 2 cronjobs now");
     assert_eq!(trigger.verb, "Run");
     assert_eq!(trigger.button, "Trigger now");
-    assert_eq!(trigger.confirm_label(), "Run 2");
+    assert_eq!(trigger.confirm_label(0), "Run 2");
 }
 
 #[test]

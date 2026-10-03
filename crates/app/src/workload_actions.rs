@@ -761,6 +761,7 @@ fn build_batch(
         button: words.audit.into(),
         risk: shape.risk,
         warnings: shape.warnings,
+        expected_name: None,
         plan,
     }
 }

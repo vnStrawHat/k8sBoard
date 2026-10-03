@@ -29,7 +29,7 @@ All actions are unit structs from `gpui_kit::actions!(k8sboard, [...])` in `keym
 | R (W7 menu) | `r` | `RestartRollout` | WORKSPACE | restart the cursor row (0032, shipped) |
 | ⇧S (W7 menu) | `shift-s` | `Scale` | WORKSPACE | gated until the 0032 Scale popover |
 | — (menus, palette) | unbound | `PauseRollout`, `RollBack`, `SuspendCronJob`, `TriggerCronJob`, `RerunJob` | — | unit actions the W7 menus and the palette dispatch; no key in the wireframe, not on the sheet (0032) |
-| Del (W4 menu) | `delete` | `Delete` | WORKSPACE | gated; offered on every subject, beyond the wireframe (W4 pods only) |
+| Del (W4 menu) | `delete`; on macOS also `cmd-backspace` | `Delete` | WORKSPACE | the cursor row, or the ticked set when it is one of several; gated by the lazy `delete {resource}` check; offered on every subject but Helm releases and custom resources (0033, shipped) |
 | Ctrl N | `secondary-n` | `OpenNamespacePicker` | WINDOW | opens the title-bar namespace picker |
 | Ctrl \` | ``ctrl-` `` | `ToggleDock` | WINDOW | Normal/Zoomed → Minimized; Minimized → Normal |
 | Ctrl Shift M | `secondary-shift-m` | `ToggleDockZoom` | WINDOW | Zoomed → Normal; Normal/Minimized → Zoomed |
@@ -84,4 +84,4 @@ GPUI parses `secondary` as Cmd on macOS and Ctrl elsewhere; `ctrl` is literal ev
 - Linux: the Super key is never used. Windows: the Win key is never used.
 - Labels come from the kit `Kbd` element, which formats per OS (`Ctrl+N`, `⌘N`, `⌃\``); no label is hand-written.
 - `?` and `:` are shifted characters on US layouts. GPUI matches them through `key_char` on every OS, so the binding is the character itself, never `shift-/`.
-- macOS Delete: the ⌫ key is `backspace`; only `delete` (fn ⌫) is bound. 0033 decides on ⌘⌫ (open item 5).
+- macOS Delete: the ⌫ key is `backspace`; `delete` (fn ⌫) and ⌘⌫ (`cmd-backspace`) are bound to `Delete` (0033 decision 18; closes open item 5).

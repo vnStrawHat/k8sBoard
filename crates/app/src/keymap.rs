@@ -212,6 +212,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-c", TerminalCopy, Some(TERMINAL)),
         KeyBinding::new("cmd-v", TerminalPaste, Some(TERMINAL)),
         KeyBinding::new("cmd-f", TerminalFind, Some(TERMINAL)),
+        // A Mac keyboard has no forward Delete key (spec 0033 decision 18).
+        KeyBinding::new("cmd-backspace", Delete, Some(WORKSPACE)),
     ]);
     // Keys a shell uses: Tab and Shift Tab (the kit moves focus with them), Ctrl C (the kit copies
     // with it), and the chords Ctrl K, N, W, Shift R, and 1 to 9, which are app chords on Windows and

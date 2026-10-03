@@ -19,7 +19,7 @@
 |---|---|---|---|---|
 | W4-1 | Live table: Name, Status, Ready, Restarts, Node, Age | Done | 0003 | — |
 | W4-2 | Memory column (W4) | Done | 0010 | — |
-| W4-3 | Context menu = ⋯ menu, grouped, Delete last in red | Partial | View logs, Open shell (0036: gated on `get` and `create` on `pods/exec`, confirm dialog), Port-forward (0035: gated on `get` and `create` on `pods/portforward`, a submenu of the TCP ports), Copy name, Copy kubectl command (0008) | Edit YAML, Restart, Evict, Delete → 0031, 0033; Attach: a later item |
+| W4-3 | Context menu = ⋯ menu, grouped, Delete last in red | Partial | View logs, Open shell (0036: gated on `get` and `create` on `pods/exec`, confirm dialog), Port-forward (0035: gated on `get` and `create` on `pods/portforward`, a submenu of the TCP ports), Copy name, Copy kubectl command (0008) | Delete Done (0033, last, red); Edit YAML Done (0031); Restart pod, Evict → 0034; Attach: a later item |
 | W4-4 | Container submenu (MAIN/SIDECAR) for Logs, Shell, Port-forward; "Debug container…" | Partial | 0004 picks the container inside the log tab; 0019 adds the Logs sub-tab and the workload container picker; 0036 adds the Open shell submenu (running containers, init left out) | Logs and Port-forward submenus (0019 decision 30 skipped them); Debug container → 0037 |
 | W4-5 | Overview tab: Node, Pod IP, QoS, Controlled by, Conditions, container summary | Done | 0003, 0008 | — |
 | W4-6 | WHY box tied to a container with "Open container …" link | Done | 0008 | — |

@@ -79,6 +79,8 @@ pub(crate) enum BulkState {
 pub(crate) struct BulkButton {
     pub(crate) label: SharedString,
     pub(crate) state: BulkState,
+    /// Drawn as the danger button: Delete (spec 0033).
+    pub(crate) is_danger: bool,
 }
 
 /// `text` is the count, such as `2 nodes selected`. The bar floats over the table, so it uses
@@ -105,6 +107,11 @@ pub(crate) fn selection_bar(
         .children(buttons.into_iter().map(|button| {
             let id = button.label.clone();
             let base = Button::new(id).small().outline().label(button.label);
+            let base = if button.is_danger {
+                base.danger()
+            } else {
+                base
+            };
             match button.state {
                 BulkState::Ready(action) => {
                     let shell = shell.clone();

@@ -26,6 +26,8 @@ use crate::edit_placeholders::HIDDEN;
 use crate::storage_class::mask_mount_option;
 
 const ACTION: &str = "reading the object YAML";
+const IDENTITY_ACTION: &str = "reading the object before deleting it";
+const MISSING_UID: &str = "the object has no uid";
 /// Fixed on purpose: the library error could quote the object's content.
 const CONVERSION_FAILURE: &str = "the object could not be converted to YAML";
 
@@ -104,7 +106,7 @@ impl ObjectKind {
     /// The API group and the plural resource name, for example `("apps", "deployments")`; the
     /// core group is empty. A static table, so a permission check can name the resource without
     /// building an `ApiResource`.
-    pub(crate) fn resource(self) -> (&'static str, &'static str) {
+    pub fn resource(self) -> (&'static str, &'static str) {
         const RBAC: &str = "rbac.authorization.k8s.io";
         match self {
             Self::Pod => ("", "pods"),
@@ -194,6 +196,20 @@ impl ObjectKind {
             Self::ClusterRoleBinding => "ClusterRoleBinding",
             Self::CustomResourceDefinition => "CustomResourceDefinition",
         }
+    }
+
+    /// Whether the kind owns dependents that a delete's propagation policy decides about (0033
+    /// decision 12).
+    pub fn owns_dependents(self) -> bool {
+        matches!(
+            self,
+            Self::Deployment
+                | Self::StatefulSet
+                | Self::DaemonSet
+                | Self::ReplicaSet
+                | Self::Job
+                | Self::CronJob
+        )
     }
 
     pub fn is_namespaced(self) -> bool {
@@ -298,6 +314,14 @@ pub enum EnvValues {
     Shown,
 }
 
+/// Read when a delete starts: the uid the precondition pins, and why the delete may wait (0033).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectIdentity {
+    pub uid: String,
+    pub finalizers: Vec<String>,
+    pub deletion_started: Option<jiff::Timestamp>,
+}
+
 /// Masked YAML of one object. No `Debug`: the text must never reach a log.
 pub struct ObjectYaml {
     pub text: String,
@@ -344,6 +368,28 @@ impl ClusterConnection {
         let found = self.run(action, api.get(&object.name)).await?;
         serde_json::to_value(&found)
             .map_err(|_| self.unexpected_response(action, CONVERSION_FAILURE))
+    }
+
+    /// One metadata GET, read before a delete: only the uid, finalizers, and `deletionTimestamp`
+    /// are kept (a Secret's data is never fetched). A 404 is `ClusterError::Api { code: 404 }`.
+    pub async fn object_identity(
+        &self,
+        object: &ObjectRef,
+    ) -> Result<ObjectIdentity, ClusterError> {
+        let api = self.object_api(object);
+        let found = self
+            .run(IDENTITY_ACTION, api.get_metadata(&object.name))
+            .await?;
+        let metadata = found.metadata;
+        let uid = metadata
+            .uid
+            .filter(|uid| !uid.is_empty())
+            .ok_or_else(|| self.unexpected_response(IDENTITY_ACTION, MISSING_UID))?;
+        Ok(ObjectIdentity {
+            uid,
+            finalizers: metadata.finalizers.unwrap_or_default(),
+            deletion_started: metadata.deletion_timestamp.map(|time| time.0),
+        })
     }
 
     /// An answer that could not be used. `message` is fixed text: a library error could quote the

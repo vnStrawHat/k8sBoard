@@ -105,6 +105,7 @@ pub use endpoint_slice::{EndpointPort, EndpointSliceSummary, EndpointSummary};
 pub use event::{
     ChangeEventKind, EVENT_LIMIT, EventFilter, EventSummary, EventType, InvolvedObject,
 };
+pub use helm_release::RELEASE_TYPE as HELM_RELEASE_SECRET_TYPE;
 pub use helm_release::{HelmChart, HelmReleaseSummary, HelmRevision, HelmRevisionRef, HelmStatus};
 pub use helm_release_detail::{HelmReleaseDetail, HelmRevealed, HelmText};
 pub use helm_values_diff::{HelmValuesDiff, ValueChange, ValueVisibility};
@@ -132,10 +133,10 @@ pub use node::{
 };
 pub use object_edit::{EditBase, EditError, ObjectEdit, Rebased, format_yaml, rebase};
 pub use object_write::{
-    ChangedField, WriteEffect, WriteError, WriteMode, WriteOperation, WriteOutcome, WritePolicy,
-    WriteRequest,
+    ChangedField, DeletePropagation, WriteEffect, WriteError, WriteMode, WriteOperation,
+    WriteOutcome, WritePolicy, WriteRequest,
 };
-pub use object_yaml::{EnvValues, ObjectKind, ObjectRef, ObjectYaml};
+pub use object_yaml::{EnvValues, ObjectIdentity, ObjectKind, ObjectRef, ObjectYaml};
 pub use persistent_volume::{ClaimRef, PersistentVolumeSummary, VolumeBackend};
 pub use persistent_volume_claim::PersistentVolumeClaimSummary;
 pub use pod::{

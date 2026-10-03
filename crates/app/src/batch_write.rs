@@ -11,6 +11,7 @@ use std::time::Duration;
 use cluster::{ObjectKind, WriteError, WriteOutcome, WriteRequest};
 use gpui_kit::{AnyWindowHandle, App, AppContext as _, Context, SharedString, WeakEntity, Window};
 
+use super::object_delete::{DeleteExtras, delete_commit_progress, delete_notice};
 use super::write_flow::{
     CheckedWriteError, CommitMode, Confirmed, DryRunState, WriteIntent, WriteStep, checked_write,
     notify, notify_with, write_error_text,
@@ -35,7 +36,7 @@ use crate::write_guard::{ActionRisk, confirm_step};
 pub(crate) const MAX_BATCH_ITEMS: usize = 50;
 
 /// Why the bulk buttons are off while a confirmed batch still commits on their cluster.
-const BATCH_RUNNING_REASON: &str = "A batch is running";
+pub(crate) const BATCH_RUNNING_REASON: &str = "A batch is running";
 
 /// One object of a batch, with the request that changes it.
 #[derive(Clone)]
@@ -60,6 +61,17 @@ pub(crate) struct BatchPlan {
     pub(crate) cluster: ClusterRef,
     pub(crate) items: Vec<BatchItem>,
     pub(crate) skipped: Vec<SkippedItem>,
+    pub(crate) extras: BatchExtras,
+}
+
+/// What one action adds to the batch beyond a list of requests.
+#[derive(Clone)]
+pub(crate) enum BatchExtras {
+    /// Restart, Scale, and the other 0032 actions.
+    None,
+    /// Delete (0033): the propagation choice, the targets it rebuilds the items from, and the
+    /// objects that were gone before the dialog opened.
+    Delete(DeleteExtras),
 }
 
 /// A ticked row with the cluster it came from (0027).
@@ -101,6 +113,7 @@ pub(crate) fn batch_plan(
         cluster: first.cluster.clone(),
         items,
         skipped,
+        extras: BatchExtras::None,
     })
 }
 
@@ -120,18 +133,64 @@ pub(crate) struct BatchIntent {
     pub(crate) risk: ActionRisk,
     /// Non-blocking context lines of the dialog.
     pub(crate) warnings: Vec<SharedString>,
+    /// The text to type in the `TypeName` tier when the batch names one object (a single delete);
+    /// `None` types the cluster name, since a batch names no single object.
+    pub(crate) expected_name: Option<String>,
     pub(crate) plan: BatchPlan,
 }
 
 impl BatchIntent {
-    /// What the `TypeName` tier asks to type: the cluster, since a batch names no single object.
+    /// What the `TypeName` tier asks to type.
     pub(crate) fn expected(&self) -> &str {
-        &self.cluster_name
+        self.expected_name.as_deref().unwrap_or(&self.cluster_name)
     }
 
-    /// The confirm button: `Restart 4`.
-    pub(crate) fn confirm_label(&self) -> String {
-        format!("{} {}", self.verb, self.plan.items.len())
+    /// `the cluster name`, or `the pod name` for a batch that names its one object.
+    pub(crate) fn typed_hint(&self) -> String {
+        match (&self.expected_name, self.plan.items.first()) {
+            (Some(_), Some(item)) => format!(
+                "the {} name",
+                item.request.target().kind_name().to_ascii_lowercase()
+            ),
+            _ => "the cluster name".to_owned(),
+        }
+    }
+
+    /// The confirm button: `Restart 4`. A delete reads `Delete` for one object and `Delete 11 of
+    /// 12` otherwise, where `gone` items went away since the dialog opened.
+    pub(crate) fn confirm_label(&self, gone: usize) -> String {
+        let total = self.plan.items.len();
+        match (&self.plan.extras, total) {
+            (BatchExtras::Delete(_), 1) => self.verb.to_string(),
+            (BatchExtras::Delete(_), _) => {
+                format!("{} {} of {total}", self.verb, total.saturating_sub(gone))
+            }
+            (BatchExtras::None, _) => format!("{} {total}", self.verb),
+        }
+    }
+
+    pub(crate) fn is_delete(&self) -> bool {
+        matches!(self.plan.extras, BatchExtras::Delete(_))
+    }
+
+    /// What one commit's result means for its item.
+    fn commit_progress(
+        &self,
+        result: Result<WriteOutcome, CheckedWriteError>,
+        stopped: &mut Option<SharedString>,
+    ) -> ItemProgress {
+        match self.is_delete() {
+            true => delete_commit_progress(result, stopped),
+            false => commit_progress(result, stopped),
+        }
+    }
+
+    /// The notice after the last commit.
+    fn notice(&self, results: &[ItemProgress]) -> String {
+        match &self.plan.extras {
+            BatchExtras::Delete(_) => delete_notice(self, results),
+            BatchExtras::None => batch_notice(&self.verb, results),
+        }
     }
 
     /// The write of one item, as `checked_write` takes it: the batch's cluster, action, risk, and
@@ -145,7 +204,7 @@ impl BatchIntent {
             button: self.button.clone(),
             request: item.request.clone(),
             risk: self.risk,
-            expected_name: None,
+            expected_name: self.expected_name.clone(),
             warnings: self.warnings.clone(),
         }
     }
@@ -166,12 +225,26 @@ pub(crate) enum ItemProgress {
     /// A commit whose request may have left before it failed.
     Unknown,
     NotSent(SharedString),
+    /// A delete whose object was already gone, at the dry-run or at the commit: nothing to send,
+    /// and not a failure (0033 decision 20).
+    Gone,
+    /// A delete the server accepted that stays until finalizers or a grace period end; the names
+    /// are the finalizers, empty for a grace period.
+    Pending(Vec<String>),
 }
 
 impl ItemProgress {
+    /// Whether the item ended as the user wanted: done, accepted by the server, or already gone.
+    pub(crate) fn is_settled(&self) -> bool {
+        matches!(self, Self::Done | Self::Gone | Self::Pending(_))
+    }
+
     /// The state as the list of the dialog shows it.
     pub(crate) fn text(&self) -> String {
         match self {
+            Self::Gone => "already gone".to_owned(),
+            Self::Pending(finalizers) if finalizers.is_empty() => "terminating".to_owned(),
+            Self::Pending(finalizers) => format!("waiting for {}", finalizers.join(", ")),
             Self::Waiting => "waiting".to_owned(),
             Self::Checking => "…".to_owned(),
             Self::Passed => "passed".to_owned(),
@@ -344,6 +417,8 @@ impl AppShell {
             let mut stopped: Option<SharedString> = None;
             for (index, item) in batch.plan.items.iter().enumerate() {
                 let progress = match &stopped {
+                    // Gone at the dry-run: nothing to send, whatever happened to the rest.
+                    _ if commit.gone.get(index).copied().unwrap_or(false) => ItemProgress::Gone,
                     Some(reason) => ItemProgress::NotSent(reason.clone()),
                     None => {
                         let _ = dialog.update(cx, |dialog, cx| {
@@ -358,7 +433,13 @@ impl AppShell {
                             note: commit.note.clone(),
                         };
                         let result = checked_write(&shell, step, cx).await;
-                        commit_progress(result, &mut stopped)
+                        let progress = batch.commit_progress(result, &mut stopped);
+                        if progress.is_settled() && batch.is_delete() {
+                            let _ = shell.update(cx, |shell, cx| {
+                                shell.object_deleted(&cluster, item.request.target(), cx);
+                            });
+                        }
+                        progress
                     }
                 };
                 let _ = dialog.update(cx, |dialog, cx| {
@@ -371,8 +452,8 @@ impl AppShell {
                 shell.running_batches.remove(&cluster);
                 cx.notify();
             });
-            let notice = batch_notice(&batch.verb, &results);
-            let is_success = results.iter().all(|state| *state == ItemProgress::Done);
+            let notice = batch.notice(&results);
+            let is_success = results.iter().all(ItemProgress::is_settled);
             let _ = cx.update_window(handle, |_, window, cx| {
                 // Only our own dialog closes, and only while it is open: after Escape or Back the
                 // notice is all there is.
@@ -395,6 +476,13 @@ impl AppShell {
     /// the gate of the rows' cluster first, then what the batch would do with them. A screen whose
     /// bulk actions are not shipped (Nodes) shows its labels off.
     pub(crate) fn bulk_buttons(&self, cx: &App) -> Vec<BulkButton> {
+        let mut buttons = self.workload_bulk_buttons(cx);
+        buttons.extend(self.delete_bulk_button(cx));
+        buttons
+    }
+
+    /// The workload and node buttons of the screen (the Delete button comes after them).
+    fn workload_bulk_buttons(&self, cx: &App) -> Vec<BulkButton> {
         let actions = bulk_actions(self.screen);
         let Screen::Kind(_) = self.screen else {
             return actions
@@ -402,6 +490,7 @@ impl AppShell {
                 .map(|item| BulkButton {
                     label: item.label.into(),
                     state: BulkState::Off(NOT_SHIPPED_REASON.into()),
+                    is_danger: false,
                 })
                 .collect();
         };
@@ -435,6 +524,7 @@ impl AppShell {
                 BulkButton {
                     label: label.into(),
                     state,
+                    is_danger: false,
                 }
             })
             .collect()
@@ -542,6 +632,11 @@ impl AppShell {
             self.open_bulk_scale_popover(kind, window, cx);
             return;
         }
+        if let ResourceAction::Delete(_) = action {
+            let scope = self.checked_objects(cx);
+            self.start_delete(scope, window, cx);
+            return;
+        }
         match self.bulk_batch(action, None, cx) {
             Ok(intent) => self.start_batch(intent, window, cx),
             Err(reason) => notify(window, cx, unavailable_text(action_label(action), &reason)),
@@ -623,6 +718,8 @@ pub(crate) struct BatchCommit {
     pub(crate) proof: Confirmed,
     pub(crate) generation: u64,
     pub(crate) note: Option<String>,
+    /// Per item of the plan: gone at the dry-run, so the commit sends nothing for it.
+    pub(crate) gone: Vec<bool>,
 }
 
 #[cfg(test)]

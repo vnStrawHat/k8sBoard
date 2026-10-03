@@ -26,7 +26,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|edit-yaml-diff|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -129,6 +129,13 @@ pub(crate) enum LaunchScreen {
     /// dialog of Restart open in a fixed state (every dry-run passed). Screenshot builds only; it
     /// never reaches a cluster.
     RestartBulkConfirm,
+    /// `--screen delete-confirm`: Deployments with the Delete dialog of a fixed Deployment of a fixed
+    /// Production cluster open, drawn from fixed data (W10b). Screenshot builds only; it waits for no
+    /// cluster and can never send.
+    DeleteConfirm,
+    /// `--screen delete-bulk-confirm`: Pods with the Delete dialog of twelve fixed pods of a fixed
+    /// Staging cluster open. Screenshot builds only; it waits for no cluster and can never send.
+    DeleteBulkConfirm,
     /// `--screen edit-yaml-diff`: the Edit YAML view on its Diff tab, drawn from fixed data (W10). It
     /// waits for no cluster and can never send. Screenshot builds only.
     EditYamlDiff,
@@ -158,11 +165,12 @@ impl LaunchScreen {
         match self {
             Self::Overview | Self::Switcher => Screen::Overview,
             Self::CordonConfirm | Self::UnlockConfirm => Screen::Nodes,
-            Self::ShellConfirmFixture => Screen::Pods,
+            Self::ShellConfirmFixture | Self::DeleteBulkConfirm => Screen::Pods,
             Self::EditYamlDiff => Screen::Kind(ResourceKind::Deployments),
-            Self::ScalePopover | Self::ScaleConfirm | Self::RestartBulkConfirm => {
-                Screen::Kind(ResourceKind::Deployments)
-            }
+            Self::ScalePopover
+            | Self::ScaleConfirm
+            | Self::RestartBulkConfirm
+            | Self::DeleteConfirm => Screen::Kind(ResourceKind::Deployments),
             Self::PortForwards
             | Self::PortForwardsList
             | Self::PortForwardNewFixture
@@ -360,6 +368,8 @@ impl LaunchScreen {
                 | Self::ScalePopover
                 | Self::ScaleConfirm
                 | Self::RestartBulkConfirm
+                | Self::DeleteConfirm
+                | Self::DeleteBulkConfirm
                 | Self::EditYamlDiff
                 | Self::PortForwardNewFixture
                 | Self::PortForwardConfirmFixture
@@ -404,6 +414,8 @@ impl LaunchScreen {
             "scale-popover" => Some(Self::ScalePopover),
             "scale-confirm" => Some(Self::ScaleConfirm),
             "restart-bulk-confirm" => Some(Self::RestartBulkConfirm),
+            "delete-confirm" => Some(Self::DeleteConfirm),
+            "delete-bulk-confirm" => Some(Self::DeleteBulkConfirm),
             "edit-yaml-diff" => Some(Self::EditYamlDiff),
             "pods" => Some(Self::Pods),
             "pods-multi" => Some(Self::PodsMulti),

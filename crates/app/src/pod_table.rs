@@ -24,6 +24,7 @@ use crate::table_filter::FilterPreset;
 use crate::table_layout::{
     ColumnPlan, TableLayout, clickable_row, cluster_cell, header_cell, select_cell,
 };
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 use crate::usage_format::Measure;
 
@@ -134,6 +135,30 @@ impl PodTableDelegate {
     #[cfg(test)]
     pub(crate) fn all_checked(&self) -> bool {
         self.all_checked
+    }
+
+    /// The ticked pods in display order, each in its own cluster: what a bulk Delete covers.
+    pub(crate) fn checked_objects(&self, cx: &App) -> Vec<ClusterObject> {
+        if self.view.checked_count() == 0 {
+            return Vec::new();
+        }
+        let rows = self.slot_rows(cx);
+        let (merged, addresses) = merge_slot_rows(&self.sessions, &rows, POD_COLUMNS.len());
+        self.view
+            .checked_rows(&merged)
+            .into_iter()
+            .filter_map(|index| {
+                let address = addresses.get(index)?;
+                let slot = self.sessions.get(usize::from(address.slot))?;
+                let row = rows
+                    .get(usize::from(address.slot))?
+                    .get(address.item as usize)?;
+                Some(ClusterObject::new(
+                    slot.cluster.clone(),
+                    ResourceKey::of_pod(row.pod),
+                ))
+            })
+            .collect()
     }
 
     /// The logical index of the Cluster column while several clusters are viewed.

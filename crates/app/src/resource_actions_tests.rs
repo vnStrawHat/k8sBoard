@@ -278,11 +278,7 @@ fn unshipped_mutating_actions_say_a_later_version() {
         known_denying(&[]),
         known_denying(&AccessCheck::ALL),
     ] {
-        for action in [
-            ResourceAction::OpenNodeShell,
-            ResourceAction::Drain,
-            ResourceAction::Delete,
-        ] {
+        for action in [ResourceAction::OpenNodeShell, ResourceAction::Drain] {
             assert_eq!(
                 reason(action_availability(action, &unlocked(&access))),
                 "Comes in a later version",
@@ -1230,10 +1226,7 @@ fn key_availability_explains_a_pod_without_containers() {
 #[test]
 fn key_availability_disables_unshipped_keys_with_the_later_version_reason() {
     let access = known_denying(&[]);
-    let offered = [
-        (RowAction::Delete, pod_key()),
-        (RowAction::Drain, node_key()),
-    ];
+    let offered = [(RowAction::Drain, node_key())];
     for (action, subject) in offered {
         assert_eq!(
             disabled_reason(availability(action, &subject, &access)),
@@ -1366,7 +1359,7 @@ fn every_resource_action_has_a_row_action() {
         (ResourceAction::CopyName, pod_key()),
         (ResourceAction::ViewYaml, pod_key()),
         (ResourceAction::EditYaml(ObjectKind::Pod), pod_key()),
-        (ResourceAction::Delete, pod_key()),
+        (ResourceAction::Delete(ObjectKind::Pod), pod_key()),
         (
             ResourceAction::RestartRollout(ObjectKind::Deployment),
             kind_key(ResourceKind::Deployments),
@@ -2052,14 +2045,131 @@ fn edit_yaml_key_runs_the_resolved_action_when_the_gate_is_open() {
 }
 
 #[test]
-fn screens_name_the_kind_their_rows_edit() {
+fn screens_name_the_kind_their_rows_act_on() {
     use crate::app_shell::Screen;
-    assert_eq!(Screen::Pods.edit_kind(), Some(ObjectKind::Pod));
+    assert_eq!(Screen::Pods.access_kind(), Some(ObjectKind::Pod));
     assert_eq!(
-        Screen::Kind(ResourceKind::Services).edit_kind(),
+        Screen::Kind(ResourceKind::Services).access_kind(),
         Some(ObjectKind::Service)
     );
-    assert_eq!(Screen::Nodes.edit_kind(), None);
-    assert_eq!(Screen::Overview.edit_kind(), None);
-    assert_eq!(Screen::Kind(ResourceKind::HelmReleases).edit_kind(), None);
+    assert_eq!(Screen::Nodes.access_kind(), Some(ObjectKind::Node));
+    assert_eq!(Screen::Overview.access_kind(), None);
+    assert_eq!(Screen::Kind(ResourceKind::HelmReleases).access_kind(), None);
+}
+
+fn delete_report(kind: ObjectKind, is_allowed: bool) -> KindAccess {
+    let decision = if is_allowed {
+        AccessDecision::Allowed
+    } else {
+        AccessDecision::Denied { reason: None }
+    };
+    KindAccess::Known(AccessReport {
+        reviews: vec![AccessReview {
+            check: AccessCheck::Delete(kind),
+            decision,
+        }],
+    })
+}
+
+fn delete_gate(kind_access: &KindAccessMap, lock: WriteLock) -> ActionAvailability {
+    let access = known_denying(&[]);
+    let mut guard = test_guard(&access, lock, "dev-1", Environment::Development);
+    guard.kind_access = kind_access;
+    action_availability(ResourceAction::Delete(ObjectKind::Pod), &guard)
+}
+
+#[test]
+fn delete_gate_order() {
+    let mut map = KindAccessMap::new();
+    // The shipped action waits for the lazy answer of its kind.
+    assert_eq!(
+        reason(delete_gate(&map, WriteLock::Unlocked)),
+        "Checking permissions…"
+    );
+    map.set(ObjectKind::Pod, delete_report(ObjectKind::Pod, false));
+    assert_eq!(
+        reason(delete_gate(&map, WriteLock::Unlocked)),
+        "Not permitted: delete pods"
+    );
+    // The permission is named before the lock.
+    assert_eq!(
+        reason(delete_gate(&map, WriteLock::Locked)),
+        "Not permitted: delete pods"
+    );
+    map.set(ObjectKind::Pod, delete_report(ObjectKind::Pod, true));
+    assert_eq!(
+        reason(delete_gate(&map, WriteLock::Locked)),
+        "dev-1 is read-only"
+    );
+    assert_eq!(
+        delete_gate(&map, WriteLock::Unlocked),
+        ActionAvailability::Enabled
+    );
+}
+
+#[test]
+fn delete_is_destructive_and_mutating() {
+    assert_eq!(
+        action_risk(ResourceAction::Delete(ObjectKind::Pod)),
+        ActionRisk::Destructive
+    );
+    assert_eq!(
+        action_label(ResourceAction::Delete(ObjectKind::Pod)),
+        "Delete"
+    );
+}
+
+#[test]
+fn delete_is_offered_on_every_builtin_kind() {
+    for kind in ResourceKind::ALL {
+        let expected = match kind {
+            ResourceKind::HelmReleases => None,
+            kind => kind.builtin_object().map(ResourceAction::Delete),
+        };
+        assert_eq!(
+            subject_action(RowAction::Delete, &kind_key(kind)),
+            expected,
+            "{kind:?}"
+        );
+    }
+    assert_eq!(
+        subject_action(RowAction::Delete, &pod_key()),
+        Some(ResourceAction::Delete(ObjectKind::Pod))
+    );
+    assert_eq!(
+        subject_action(RowAction::Delete, &node_key()),
+        Some(ResourceAction::Delete(ObjectKind::Node))
+    );
+}
+
+#[test]
+fn delete_not_offered_on_helm_releases_or_custom_kinds() {
+    let release = kind_key(ResourceKind::HelmReleases);
+    assert_eq!(subject_action(RowAction::Delete, &release), None);
+    let access = known_denying(&[]);
+    assert_eq!(
+        availability(RowAction::Delete, &release, &access),
+        KeyAvailability::NotOffered
+    );
+    assert_eq!(delete_kind_of(ResourceKind::HelmReleases), None);
+}
+
+#[test]
+fn only_a_helm_release_secret_is_refused_as_a_record() {
+    use crate::kind_row::KindObject;
+    let secret =
+        |secret_type: &str| KindObject::Secret(crate::topology_fixtures::secret("db", secret_type));
+    assert!(helm_record_reason(&secret(cluster::HELM_RELEASE_SECRET_TYPE)).is_some());
+    assert!(helm_record_reason(&secret("Opaque")).is_none());
+    assert!(helm_record_reason(&KindObject::Plain).is_none());
+}
+
+#[test]
+fn delete_menu_hint_is_the_delete_key() {
+    use crate::keymap::Delete;
+    assert!(RowAction::Delete.key_action().partial_eq(&Delete));
+    assert_eq!(
+        ResourceAction::Delete(ObjectKind::Secret).row_action(),
+        RowAction::Delete
+    );
 }

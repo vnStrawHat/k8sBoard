@@ -70,6 +70,7 @@ pub(crate) fn bulk_actions(screen: Screen) -> &'static [&'static str];
 | every other screen | none (count and ✕ only) |
 
 - 0032–0034 enable them. No Copy names: it is not in the wireframe.
+- 0033 adds a `Delete…` danger button, last before ✕, on Pods, Nodes, and every kind screen (not Issues, whose rows are findings): it deletes the ticked rows through the same gate as the menu and Del.
 
 ## Launch screen
 
