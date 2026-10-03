@@ -18,6 +18,7 @@ use super::app_shell_write_tests::{
 };
 use super::batch_write::ItemProgress;
 use super::*;
+use crate::app_shell::write_flow::DryRunState;
 use crate::batch_rows::job_row;
 use crate::kind_access::KindAccess;
 use crate::kind_row::KindRow;
@@ -71,6 +72,8 @@ struct DeleteServer {
     vanished: Mutex<HashSet<String>>,
     /// Held by the first committed delete until the test releases it: the batch is mid-commit.
     gate: Mutex<Option<mpsc::Receiver<()>>>,
+    /// Held by the first identity read until the test releases it: the delete is still reading.
+    identity_gate: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
 impl DeleteServer {
@@ -85,6 +88,7 @@ impl DeleteServer {
             refused_dry_runs: Mutex::new(HashSet::new()),
             vanished: Mutex::new(HashSet::new()),
             gate: Mutex::new(None),
+            identity_gate: Mutex::new(None),
         })
     }
 
@@ -140,6 +144,9 @@ impl DeleteServer {
         let Some((resource, name)) = Self::object_of(path) else {
             return (404, NOT_FOUND.to_owned());
         };
+        if let Some(gate) = lock(&self.identity_gate).take() {
+            let _ = gate.recv_timeout(Duration::from_secs(10));
+        }
         if let Some(code) = *lock(&self.identity_status) {
             return status(code, "InternalError");
         }
@@ -1310,4 +1317,113 @@ fn a_lock_that_comes_on_mid_batch_stops_the_rest(cx: &mut TestAppContext) {
     // The second and third commits were blocked before they were sent, and are not recorded.
     assert_eq!(writes(&t.t.stg_api).len(), 4);
     assert_eq!(audit_lines(&dir).len(), 1);
+}
+
+#[gpui_kit::test]
+fn a_dialog_that_opens_during_the_reads_stops_the_delete(cx: &mut TestAppContext) {
+    let t = delete_test("delete-dialog-during-read", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    let (release, gate) = mpsc::channel();
+    *lock(&t.server.identity_gate) = Some(gate);
+    t.press_delete(cx);
+    t.t.wait_for("the read to start", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| shell.delete_start.is_some())
+    });
+    // Another dialog opens while the objects are being read: unlocking production.
+    t.t.toggle(&t.t.prod, cx);
+    cx.run_until_parked();
+    let before = t.notification_count(cx);
+    release.send(()).expect("the server waits for the release");
+    t.t.wait_for("the notice", cx, |cx| t.notification_count(cx) > before);
+    t.t.wait_for("the read to end", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| shell.delete_start.is_none())
+    });
+    assert!(
+        writes(&t.t.stg_api).is_empty(),
+        "no dry-run behind the other dialog"
+    );
+}
+
+#[gpui_kit::test]
+fn an_editor_that_opens_during_the_reads_stops_the_delete(cx: &mut TestAppContext) {
+    let t = delete_test("delete-editor-during-read", cx);
+    t.show_deployments(&["api"], cx);
+    t.t.cursor_on(&t.t.stg, ResourceKind::Deployments, "api", cx);
+    let (release, gate) = mpsc::channel();
+    *lock(&t.server.identity_gate) = Some(gate);
+    t.press_delete(cx);
+    t.t.wait_for("the read to start", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| shell.delete_start.is_some())
+    });
+    let subject = t
+        .shell()
+        .read_with(cx, |shell, _| shell.selected.clone())
+        .expect("the cursor is on a row");
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.shell()
+            .update(cx, |shell, cx| shell.open_edit(subject, window, cx));
+    });
+    release.send(()).expect("the server waits for the release");
+    t.t.wait_for("the read to end", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| shell.delete_start.is_none())
+    });
+    assert!(!t.t.has_dialog(cx));
+    assert!(writes(&t.t.stg_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn a_second_batch_cannot_start_committing_on_a_busy_cluster(cx: &mut TestAppContext) {
+    let t = delete_test("delete-commit-busy", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    t.open_dialog(cx);
+    // Another batch got to the cluster while this dialog waited.
+    let stg = t.t.stg.clone();
+    t.shell()
+        .update(cx, |shell, _| shell.running_batches.insert(stg));
+    t.t.confirm(cx);
+    cx.run_until_parked();
+    assert_eq!(writes(&t.t.stg_api).len(), 1, "only the dry-run was sent");
+    let state =
+        t.t.dialog(cx)
+            .read_with(cx, |dialog, _| dialog.dry_run_state());
+    assert!(
+        matches!(state, Some(DryRunState::Failed(ref text)) if text.contains("A batch is running")),
+        "{state:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_held_del_on_a_refused_delete_leaves_one_notice(cx: &mut TestAppContext) {
+    let t = delete_test("delete-notice-replaces", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    let stg = t.t.stg.clone();
+    t.shell()
+        .update(cx, |shell, _| shell.running_batches.insert(stg));
+    let before = t.notification_count(cx);
+    for _ in 0..4 {
+        t.press_delete(cx);
+    }
+    cx.run_until_parked();
+    assert_eq!(t.notification_count(cx), before + 1);
+}
+
+#[gpui_kit::test]
+fn the_reads_announce_themselves(cx: &mut TestAppContext) {
+    let t = delete_test("delete-reading-notice", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    let (release, gate) = mpsc::channel();
+    *lock(&t.server.identity_gate) = Some(gate);
+    let before = t.notification_count(cx);
+    t.press_delete(cx);
+    assert!(t.notification_count(cx) > before, "Reading 1 object…");
+    release.send(()).expect("the server waits for the release");
+    t.wait_for_dialog(cx);
 }

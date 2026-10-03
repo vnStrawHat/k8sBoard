@@ -231,7 +231,7 @@ impl WritePolicy {
 impl WriteRequest {
     /// `None` when the target kind does not fit the operation, or when its name or namespace is
     /// not a DNS-1123 subdomain: kube does not encode them, so any other text could change the
-    /// path the request goes to. The RBAC kinds of `ReplaceObject` may use `:` in a name, so they
+    /// path the request goes to. The RBAC kinds of `ReplaceObject` and `DeleteObject` may use `:` in a name, so they
     /// follow the path-segment rule instead.
     pub fn new(target: ObjectRef, operation: WriteOperation) -> Option<Self> {
         // `replicas` is an int32: a larger number can only be a typo, and the server would refuse it.
@@ -387,7 +387,9 @@ fn is_safe_path(target: &ObjectRef, operation: &WriteOperation) -> bool {
         )
     );
     let is_safe_name = match operation {
-        WriteOperation::ReplaceObject(_) if is_rbac => is_path_segment_name(target.name()),
+        WriteOperation::ReplaceObject(_) | WriteOperation::DeleteObject { .. } if is_rbac => {
+            is_path_segment_name(target.name())
+        }
         _ => is_dns_subdomain(target.name()),
     };
     let is_safe_replica_set = match operation {

@@ -374,3 +374,26 @@ fn owns_dependents_table() {
         assert_eq!(kind.owns_dependents(), expected, "{kind:?}");
     }
 }
+
+#[tokio::test]
+async fn rbac_names_with_a_colon_can_be_deleted() {
+    let role = ObjectRef::new(ObjectKind::ClusterRole, None, "system:foo".to_owned())
+        .expect("a cluster role has no namespace");
+    let request = delete_of(role, "u-1", DeletePropagation::Background)
+        .expect("RBAC names follow the path-segment rule");
+    let (connection, api) = answering(status_ok());
+    connection
+        .write(&request, WriteMode::DryRun)
+        .await
+        .expect("the dry-run is accepted");
+    assert_eq!(
+        api.requests()[0].path,
+        "/apis/rbac.authorization.k8s.io/v1/clusterroles/system:foo"
+    );
+    // Another kind keeps the DNS rule, and a path separator is never allowed.
+    let colon_pod = target(ObjectKind::Pod, "system:foo");
+    assert!(delete_of(colon_pod, "u-1", DeletePropagation::Background).is_none());
+    let slash =
+        ObjectRef::new(ObjectKind::ClusterRole, None, "a/b".to_owned()).expect("no namespace");
+    assert!(delete_of(slash, "u-1", DeletePropagation::Background).is_none());
+}

@@ -532,12 +532,18 @@ fn bulk_notice_counts() {
 fn gone_notices() {
     assert_eq!(
         gone_notice(&["payments/a".into()]),
-        "payments/a was already deleted"
+        "payments/a not found (already deleted or not served)"
     );
     assert_eq!(
         gone_notice(&["a".into(), "b".into(), "c".into()]),
-        "All 3 objects were already deleted"
+        "None of the 3 objects was found (already deleted or not served)"
     );
+}
+
+#[test]
+fn reading_notice_counts_the_objects() {
+    assert_eq!(reading_text(1), "Reading 1 object…");
+    assert_eq!(reading_text(12), "Reading 12 objects…");
 }
 
 #[test]

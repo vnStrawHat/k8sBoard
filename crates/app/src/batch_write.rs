@@ -410,6 +410,15 @@ impl AppShell {
         let handle: AnyWindowHandle = window.window_handle();
         let shell = cx.weak_entity();
         let cluster = batch.cluster.clone();
+        // Two commit loops on one cluster would race over the same objects and interleave their
+        // audit lines. The dialog is being updated by the caller, so it hears of the refusal later.
+        if self.running_batches.contains(&cluster) {
+            let reason = format!("{BATCH_RUNNING_REASON} on {}", batch.cluster_name);
+            cx.defer(move |cx| {
+                let _ = dialog.update(cx, |dialog, cx| dialog.commit_failed(reason, cx));
+            });
+            return;
+        }
         self.running_batches.insert(cluster.clone());
         cx.notify();
         cx.spawn(async move |_, cx| {

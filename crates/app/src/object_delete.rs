@@ -12,13 +12,14 @@ use cluster::{
     ObjectKind, ObjectRef, WriteEffect, WriteError, WriteOperation, WriteOutcome, WriteRequest,
 };
 use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::{App, Context, SharedString, Window};
 
 use super::AppShell;
 use super::batch_write::{
     BatchExtras, BatchIntent, BatchItem, BatchPlan, ItemProgress, MAX_BATCH_ITEMS, SkippedItem,
 };
-use super::write_flow::{CheckedWriteError, notify, write_error_text};
+use super::write_flow::{CheckedWriteError, write_error_text};
 use crate::age::format_age;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
@@ -583,6 +584,29 @@ struct DeletePlan {
     skipped: Vec<SkippedItem>,
 }
 
+/// Marks the notice of a refused or failed delete. One id, so a held Del replaces it instead of
+/// stacking one notice per key repeat.
+struct DeleteNotice;
+
+/// Marks the notice that the objects are being read.
+struct DeleteReadNotice;
+
+fn notify_delete(window: &mut Window, cx: &mut App, text: String) {
+    window.push_notification(Notification::warning(text).id::<DeleteNotice>(), cx);
+}
+
+fn notify_reading(window: &mut Window, cx: &mut App, text: String) {
+    window.push_notification(Notification::info(text).id::<DeleteReadNotice>(), cx);
+}
+
+/// `Reading api-x…`-style text for the notice: `Reading 1 object…`, `Reading 12 objects…`.
+fn reading_text(count: usize) -> String {
+    match count {
+        1 => "Reading 1 object…".to_owned(),
+        count => format!("Reading {count} objects…"),
+    }
+}
+
 /// An identity read: the uid, or why there is none.
 type IdentityRead = Result<ObjectIdentity, ClusterError>;
 
@@ -602,6 +626,9 @@ impl AppShell {
 
     /// The `Delete…` button of the selection bar, last before the clear button: the same gate as the
     /// menu and Del, read for the ticked rows. Screens whose rows are not objects (Issues) have none.
+    // ponytail: `checked_objects` merges every slot's rows on each frame while rows are ticked, so
+    // the cost is linear in the rows shown; cache the ticked objects per table version if a
+    // screen with tens of thousands of rows makes the selection bar slow.
     pub(crate) fn delete_bulk_button(&self, cx: &App) -> Option<BulkButton> {
         self.screen.access_kind()?;
         let state = match self.delete_gate(&self.checked_objects(cx), cx) {
@@ -617,6 +644,7 @@ impl AppShell {
 
     /// How many objects Del would delete now: the ticked set when the cursor row is among two or more
     /// ticked rows, else one. The menu item reads it for its label.
+    // ponytail: same per-draw merge as `delete_bulk_button`, paid only while a menu is open.
     pub(crate) fn delete_scope_size(&self, cx: &App) -> usize {
         let Some(subject) = &self.selected else {
             return 1;
@@ -635,7 +663,7 @@ impl AppShell {
             Ok(scope) => self.start_delete(scope, window, cx),
             Err(reason) => {
                 let label = action_label(ResourceAction::Delete(ObjectKind::Pod));
-                notify(window, cx, unavailable_text(label, &reason));
+                notify_delete(window, cx, unavailable_text(label, &reason));
             }
         }
     }
@@ -658,10 +686,12 @@ impl AppShell {
             Ok(plan) => plan,
             Err(reason) => {
                 let label = action_label(ResourceAction::Delete(ObjectKind::Pod));
-                notify(window, cx, unavailable_text(label, &reason));
+                notify_delete(window, cx, unavailable_text(label, &reason));
                 return;
             }
         };
+        // The reads take a moment on a busy cluster; say so, so the key does not look dead.
+        notify_reading(window, cx, reading_text(plan.objects.len()));
         let runtime = cx.global::<ClusterRuntime>().clone();
         let objects: Vec<ObjectRef> = plan
             .objects
@@ -776,6 +806,16 @@ impl AppShell {
             ..
         } = plan;
         let label = action_label(ResourceAction::Delete(kind));
+        // Another dialog or an editor opened while the objects were read (the reads take time):
+        // a second dialog on top of it could start a second batch on the cluster.
+        if self.is_editing() || window.has_active_dialog(cx) {
+            let text = unavailable_text(
+                label,
+                "another dialog or editor opened; nothing was deleted",
+            );
+            notify_delete(window, cx, text);
+            return;
+        }
         // The cluster may have reconnected or locked while the objects were read.
         let still_ready = self.guard_for(&cluster, cx).is_some_and(|guard| {
             guard.generation == generation
@@ -789,7 +829,7 @@ impl AppShell {
                 label,
                 &format!("{cluster_name} changed; nothing was deleted"),
             );
-            notify(window, cx, text);
+            notify_delete(window, cx, text);
             return;
         }
         let total = objects.len();
@@ -803,7 +843,7 @@ impl AppShell {
                 }),
                 Err(ClusterError::Api { code: 404, .. }) => already_gone.push(object_text(&object)),
                 Err(error) => {
-                    notify(window, cx, identity_failure(&object, &error));
+                    notify_delete(window, cx, identity_failure(&object, &error));
                     return;
                 }
             }
@@ -813,11 +853,11 @@ impl AppShell {
         if targets.len() + already_gone.len() < total {
             let text =
                 unavailable_text(label, "the objects could not be read; nothing was deleted");
-            notify(window, cx, text);
+            notify_delete(window, cx, text);
             return;
         }
         if targets.is_empty() {
-            notify(window, cx, gone_notice(&already_gone));
+            notify_delete(window, cx, gone_notice(&already_gone));
             return;
         }
         let extras = DeleteExtras {
@@ -881,11 +921,15 @@ fn identity_failure(object: &ObjectRef, error: &ClusterError) -> String {
     )
 }
 
-/// `api-x was already deleted`, or `All 3 objects were already deleted`.
+/// `api-x not found (already deleted or not served)`: a 404 cannot tell a deleted object from a
+/// kind the server does not serve.
 fn gone_notice(names: &[SharedString]) -> String {
     match names {
-        [name] => format!("{name} was already deleted"),
-        names => format!("All {} objects were already deleted", names.len()),
+        [name] => format!("{name} not found (already deleted or not served)"),
+        names => format!(
+            "None of the {} objects was found (already deleted or not served)",
+            names.len()
+        ),
     }
 }
 
