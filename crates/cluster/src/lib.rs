@@ -20,6 +20,8 @@ mod cron_schedule;
 mod custom_object;
 mod custom_resource_definition;
 mod daemon_set;
+mod debug_pod_bodies;
+mod debug_shell;
 mod deployment;
 mod disruption_budget;
 mod dns_name;
@@ -42,6 +44,7 @@ mod namespace;
 mod network_policy;
 mod network_policy_traffic;
 mod node;
+mod node_shell_leftovers;
 mod object_count;
 mod object_edit;
 mod object_write;
@@ -98,6 +101,11 @@ pub use custom_resource_definition::{
     SchemaField, SchemaOutline,
 };
 pub use daemon_set::DaemonSetSummary;
+pub use debug_pod_bodies::{
+    DEFAULT_DEBUG_IMAGE, debug_container_name, is_valid_debug_image, node_shell_pod_name,
+    random_suffix, run_id,
+};
+pub use debug_shell::{AttachPermit, AttachRequest, AttachWait};
 pub use deployment::DeploymentSummary;
 pub use disruption_budget::{BlockCause, DisruptionState, PodDisruptionBudgetSummary};
 pub use edit_preview::{EditCheck, EditPreview, FieldChange, FieldPath};
@@ -131,6 +139,7 @@ pub use node::{
     ConditionStatus, NodeAddress, NodeCondition, NodeReadiness, NodeResource, NodeScheduling,
     NodeStatus, NodeSummary, NodeSystemInfo, NodeTaint,
 };
+pub use node_shell_leftovers::{LeftoverPhase, NodeShellLeftover};
 pub use object_edit::{EditBase, EditError, ObjectEdit, Rebased, format_yaml, rebase};
 pub use object_write::{
     ChangedField, DeletePropagation, WriteEffect, WriteError, WriteMode, WriteOperation,

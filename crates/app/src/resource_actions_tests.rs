@@ -5,7 +5,7 @@ use gpui_kit::Task;
 
 use super::*;
 use crate::environment::Environment;
-use crate::write_guard::{ActionRisk, DialogConfirm, confirm_step, test_guard};
+use crate::write_guard::{ActionRisk, ConfirmMode, DialogConfirm, confirm_step, test_guard};
 
 fn checking() -> AccessState {
     AccessState::Checking {
@@ -278,13 +278,12 @@ fn unshipped_mutating_actions_say_a_later_version() {
         known_denying(&[]),
         known_denying(&AccessCheck::ALL),
     ] {
-        for action in [ResourceAction::OpenNodeShell, ResourceAction::Drain] {
-            assert_eq!(
-                reason(action_availability(action, &unlocked(&access))),
-                "Comes in a later version",
-                "{action:?}"
-            );
-        }
+        let action = ResourceAction::Drain;
+        assert_eq!(
+            reason(action_availability(action, &unlocked(&access))),
+            "Comes in a later version",
+            "{action:?}"
+        );
     }
 }
 
@@ -1255,15 +1254,16 @@ fn key_availability_uses_the_access_gate() {
 }
 
 #[test]
-fn key_availability_of_a_pod_shell_reads_both_exec_verbs_and_a_node_shell_waits() {
+fn key_availability_of_a_pod_shell_reads_both_exec_verbs_and_a_node_shell_its_own_checks() {
     let denied = known_denying(&[AccessCheck::CreatePodExec]);
     assert_eq!(
         disabled_reason(availability(RowAction::OpenShell, &pod_key(), &denied)),
         "Not permitted: get and create pods/exec"
     );
+    // A node shell needs create and delete on pods and the attach pair, not the exec verbs.
     assert_eq!(
-        disabled_reason(availability(RowAction::OpenShell, &node_key(), &denied)),
-        "Comes in a later version"
+        availability(RowAction::OpenShell, &node_key(), &denied),
+        KeyAvailability::Run(ResourceAction::OpenNodeShell)
     );
     assert_eq!(
         availability(RowAction::OpenShell, &pod_key(), &known_denying(&[])),
@@ -2171,5 +2171,316 @@ fn delete_menu_hint_is_the_delete_key() {
     assert_eq!(
         ResourceAction::Delete(ObjectKind::Secret).row_action(),
         RowAction::Delete
+    );
+}
+
+// ---- 0037: Debug container ----
+
+fn debug_gate(access: &AccessState) -> ActionAvailability {
+    action_availability(ResourceAction::DebugContainer, &unlocked(access))
+}
+
+#[test]
+fn debug_container_gate_table() {
+    assert_eq!(debug_gate(&known_denying(&[])), ActionAvailability::Enabled);
+    // Each missing check names itself; the attach pair names both verbs.
+    let cases = [
+        (
+            AccessCheck::PatchPodEphemeralContainers,
+            "Not permitted: patch pods/ephemeralcontainers",
+        ),
+        (AccessCheck::WatchPods, "Not permitted: watch pods"),
+        (
+            AccessCheck::GetPodAttach,
+            "Not permitted: get and create pods/attach",
+        ),
+        (
+            AccessCheck::CreatePodAttach,
+            "Not permitted: get and create pods/attach",
+        ),
+    ];
+    for (denied, text) in cases {
+        assert_eq!(reason(debug_gate(&known_denying(&[denied]))), text);
+    }
+    assert_eq!(reason(debug_gate(&checking())), "Checking permissions…");
+    assert_eq!(
+        reason(debug_gate(&unknown())),
+        "Permissions could not be checked"
+    );
+}
+
+#[test]
+fn debug_container_is_off_while_the_cluster_is_locked() {
+    let access = known_denying(&[]);
+    let locked = test_guard(
+        &access,
+        WriteLock::Locked,
+        "prod-1",
+        Environment::Production,
+    );
+    assert_eq!(
+        reason(action_availability(ResourceAction::DebugContainer, &locked)),
+        "prod-1 is read-only"
+    );
+}
+
+#[test]
+fn debug_container_is_a_change_that_the_tier_confirms() {
+    assert_eq!(
+        action_risk(ResourceAction::DebugContainer),
+        ActionRisk::Change
+    );
+    assert_eq!(
+        confirm_step(
+            ConfirmMode::Click,
+            action_risk(ResourceAction::DebugContainer),
+            "stg-1"
+        ),
+        DialogConfirm::Click
+    );
+}
+
+#[test]
+fn a_pod_without_a_running_container_cannot_take_a_debug_container() {
+    let running = pod_with(vec![container_of("app")]);
+    assert_eq!(debug_container_block(&running), None);
+    let mut waiting = container_of("app");
+    waiting.state = cluster::ContainerState::Waiting {
+        reason: None,
+        message: None,
+    };
+    let mut init = container_of("init");
+    init.kind = cluster::ContainerKind::Init;
+    let idle = pod_with(vec![waiting, init]);
+    assert_eq!(
+        debug_container_block(&idle).as_deref(),
+        Some("The pod has no running container")
+    );
+    assert!(debug_container_block(&pod_with(Vec::new())).is_some());
+}
+
+#[test]
+fn debug_targets_skip_init_and_stopped_containers() {
+    let mut init = container_of("init");
+    init.kind = cluster::ContainerKind::Init;
+    let mut sidecar = container_of("proxy");
+    sidecar.kind = cluster::ContainerKind::Sidecar;
+    let mut stopped = container_of("old");
+    stopped.state = cluster::ContainerState::Waiting {
+        reason: None,
+        message: None,
+    };
+    let pod = pod_with(vec![init, container_of("web"), sidecar, stopped]);
+    let names: Vec<_> = debug_targets(&pod)
+        .map(|container| container.name.as_str())
+        .collect();
+    assert_eq!(names, ["web", "proxy"]);
+}
+
+#[test]
+fn the_debug_menu_state_is_the_gate_then_the_pod() {
+    let access = known_denying(&[]);
+    let guard = unlocked(&access);
+    let running = pod_with(vec![container_of("app")]);
+    assert_eq!(debug_menu_state(&running, &guard), DebugMenuState::Ready);
+    assert_eq!(
+        debug_menu_state(&pod_with(Vec::new()), &guard),
+        DebugMenuState::Disabled("The pod has no running container".into())
+    );
+    // The gate says no first, whatever the pod is.
+    let denied = known_denying(&[AccessCheck::WatchPods]);
+    assert_eq!(
+        debug_menu_state(&running, &unlocked(&denied)),
+        DebugMenuState::Disabled("Not permitted: watch pods".into())
+    );
+}
+
+#[test]
+fn the_debug_container_key_resolves_for_pods_only() {
+    assert_eq!(
+        subject_action(RowAction::DebugContainer, &pod_key()),
+        Some(ResourceAction::DebugContainer)
+    );
+    assert_eq!(subject_action(RowAction::DebugContainer, &node_key()), None);
+    assert_eq!(
+        ResourceAction::DebugContainer.row_action(),
+        RowAction::DebugContainer
+    );
+    assert_eq!(
+        action_label(ResourceAction::DebugContainer),
+        "Debug container"
+    );
+}
+
+#[test]
+fn the_attach_pair_reads_as_one_right() {
+    let checks = [AccessCheck::GetPodAttach, AccessCheck::CreatePodAttach];
+    assert_eq!(
+        denied_text(AccessCheck::GetPodAttach, &checks),
+        "Not permitted: get and create pods/attach"
+    );
+    // A lone attach check (not paired in the action) names itself.
+    assert_eq!(
+        denied_text(AccessCheck::GetPodAttach, &[AccessCheck::GetPodAttach]),
+        "Not permitted: get pods/attach"
+    );
+}
+
+// ---- 0037: Open node shell ----
+
+fn node_shell_gate(access: &AccessState) -> ActionAvailability {
+    action_availability(ResourceAction::OpenNodeShell, &unlocked(access))
+}
+
+#[test]
+fn node_shell_gate_table() {
+    assert_eq!(
+        node_shell_gate(&known_denying(&[])),
+        ActionAvailability::Enabled
+    );
+    // The first missing check names itself; the attach pair names both verbs.
+    let cases = [
+        (AccessCheck::CreatePods, "Not permitted: create pods"),
+        (AccessCheck::DeletePods, "Not permitted: delete pods"),
+        (AccessCheck::WatchPods, "Not permitted: watch pods"),
+        (
+            AccessCheck::GetPodAttach,
+            "Not permitted: get and create pods/attach",
+        ),
+        (
+            AccessCheck::CreatePodAttach,
+            "Not permitted: get and create pods/attach",
+        ),
+    ];
+    for (denied, text) in cases {
+        assert_eq!(reason(node_shell_gate(&known_denying(&[denied]))), text);
+    }
+    // With several missing, the first of the action's own list is the reason.
+    let many = known_denying(&[AccessCheck::WatchPods, AccessCheck::CreatePods]);
+    assert_eq!(reason(node_shell_gate(&many)), "Not permitted: create pods");
+    assert_eq!(
+        reason(node_shell_gate(&checking())),
+        "Checking permissions…"
+    );
+}
+
+#[test]
+fn node_shell_off_for_the_cluster_says_so_after_the_permissions() {
+    let allowed = known_denying(&[]);
+    let mut guard = unlocked(&allowed);
+    guard.profile.allow_node_shell = false;
+    assert_eq!(
+        reason(action_availability(ResourceAction::OpenNodeShell, &guard)),
+        "Node shell is off for dev-1 (Settings › Clusters › Safety)"
+    );
+    // The permission reason still comes first: the setting is not blamed for a missing right.
+    let denied = known_denying(&[AccessCheck::CreatePods]);
+    let mut guard = unlocked(&denied);
+    guard.profile.allow_node_shell = false;
+    assert_eq!(
+        reason(action_availability(ResourceAction::OpenNodeShell, &guard)),
+        "Not permitted: create pods"
+    );
+}
+
+#[test]
+fn the_setting_is_read_before_the_lock() {
+    let allowed = known_denying(&[]);
+    let mut guard = test_guard(
+        &allowed,
+        WriteLock::Locked,
+        "prod-1",
+        Environment::Production,
+    );
+    guard.profile.allow_node_shell = false;
+    assert_eq!(
+        reason(action_availability(ResourceAction::OpenNodeShell, &guard)),
+        "Node shell is off for prod-1 (Settings › Clusters › Safety)"
+    );
+    guard.profile.allow_node_shell = true;
+    assert_eq!(
+        reason(action_availability(ResourceAction::OpenNodeShell, &guard)),
+        "prod-1 is read-only"
+    );
+}
+
+#[test]
+fn node_shell_is_a_privileged_action() {
+    assert_eq!(
+        action_risk(ResourceAction::OpenNodeShell),
+        ActionRisk::Privileged
+    );
+    // Even a click-tier development cluster types the node name.
+    assert_eq!(
+        confirm_step(
+            ConfirmMode::Click,
+            action_risk(ResourceAction::OpenNodeShell),
+            "wk-03"
+        ),
+        DialogConfirm::TypeName {
+            expected: "wk-03".to_owned()
+        }
+    );
+}
+
+fn node_with_os(operating_system: &str) -> NodeSummary {
+    NodeSummary {
+        name: "wk-03".to_owned(),
+        status: cluster::NodeStatus {
+            readiness: cluster::NodeReadiness::Ready,
+            scheduling: cluster::NodeScheduling::Enabled,
+        },
+        roles: Vec::new(),
+        taints: Vec::new(),
+        kubelet_version: "v1.29.5".to_owned(),
+        internal_ip: None,
+        created_at: None,
+        conditions: Vec::new(),
+        addresses: Vec::new(),
+        system: cluster::NodeSystemInfo {
+            operating_system: operating_system.to_owned(),
+            ..cluster::NodeSystemInfo::default()
+        },
+        resources: Vec::new(),
+        labels: Vec::new(),
+    }
+}
+
+#[test]
+fn a_windows_node_takes_no_node_shell() {
+    assert_eq!(node_shell_block(&node_with_os("linux")), None);
+    assert_eq!(
+        node_shell_block(&node_with_os("windows")).as_deref(),
+        Some("Node shell needs a Linux node")
+    );
+    assert_eq!(
+        node_shell_block(&node_with_os("")).as_deref(),
+        Some("Node shell needs a Linux node")
+    );
+}
+
+#[test]
+fn the_uat_answers_disable_both_debug_actions_with_their_reasons() {
+    // What the read-only UAT user is told (spec 0037 AC 12): every new check but `get pods/attach`
+    // is denied.
+    let uat = known_denying(&[
+        AccessCheck::CreatePods,
+        AccessCheck::DeletePods,
+        AccessCheck::PatchPodEphemeralContainers,
+        AccessCheck::CreatePodAttach,
+    ]);
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::DebugContainer,
+            &unlocked(&uat)
+        )),
+        "Not permitted: patch pods/ephemeralcontainers"
+    );
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::OpenNodeShell,
+            &unlocked(&uat)
+        )),
+        "Not permitted: create pods"
     );
 }

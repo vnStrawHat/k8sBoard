@@ -594,6 +594,22 @@ impl ClustersPage {
             centered(confirm_menu(row, entry.as_ref())),
             cx,
         );
+        let node_shell_cluster = row.cluster.clone();
+        let node_shell_row = form_row(
+            "Allow node shell",
+            v_flex()
+                .gap_1()
+                .child(centered(
+                    Switch::new("allow-node-shell")
+                        .checked(row.profile.allow_node_shell)
+                        .on_click(move |checked, _, cx| {
+                            set_allow_node_shell(&node_shell_cluster, Some(*checked), cx);
+                        }),
+                ))
+                .child(muted_text(NODE_SHELL_HINT, cx))
+                .into_any_element(),
+            cx,
+        );
         let can_remove = row.origin != RowOrigin::Chain;
         let remove_row = row.clone();
         v_flex()
@@ -614,7 +630,11 @@ impl ClustersPage {
                 ],
                 cx,
             ))
-            .child(section("Safety", [read_only_row, confirm_row], cx))
+            .child(section(
+                "Safety",
+                [read_only_row, confirm_row, node_shell_row],
+                cx,
+            ))
             .child(
                 v_flex()
                     .gap_2()
@@ -788,6 +808,19 @@ pub(crate) fn set_confirm(cluster: &ClusterRef, mode: Option<ConfirmMode>, cx: &
     AppSettings::update(cx, |settings| {
         edit_entry(&mut settings.registry, cluster, |entry| {
             entry.confirm = mode;
+        });
+    });
+}
+
+/// The hint under the Allow node shell switch (wireframe W2).
+const NODE_SHELL_HINT: &str =
+    "Creates a privileged debug pod on the node. Off by default for production.";
+
+/// Stores the Allow node shell switch of `cluster`; `None` follows the environment again.
+pub(crate) fn set_allow_node_shell(cluster: &ClusterRef, allowed: Option<bool>, cx: &mut App) {
+    AppSettings::update(cx, |settings| {
+        edit_entry(&mut settings.registry, cluster, |entry| {
+            entry.allow_node_shell = allowed;
         });
     });
 }

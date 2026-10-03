@@ -8,6 +8,9 @@ fn profile(environment: Environment, read_only: bool) -> ClusterProfile {
         default_namespace: None,
         read_only,
         confirm: ConfirmMode::for_environment(environment),
+        allow_node_shell: false,
+        debug_image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
+        node_shell_namespace: "kube-system".to_owned(),
     }
 }
 
@@ -141,4 +144,25 @@ fn the_screenshot_build_blocks_writes() {
         screenshot.contains("k8sboard-cluster/block-writes"),
         "{screenshot}"
     );
+}
+
+#[test]
+fn privileged_risk_always_types_the_name() {
+    let typed = DialogConfirm::TypeName {
+        expected: "wk-03".to_owned(),
+    };
+    for environment in [
+        Environment::Production,
+        Environment::Staging,
+        Environment::Development,
+        Environment::Local,
+    ] {
+        for mode in [ConfirmMode::TypeName, ConfirmMode::Click] {
+            assert_eq!(
+                confirm_step(mode, ActionRisk::Privileged, "wk-03"),
+                typed,
+                "{environment:?} {mode:?}"
+            );
+        }
+    }
 }

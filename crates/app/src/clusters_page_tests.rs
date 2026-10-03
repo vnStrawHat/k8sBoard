@@ -572,3 +572,40 @@ fn confirm_labels_name_the_tiers() {
     );
     assert_eq!(confirm_label(ConfirmMode::Click), "Clicking Confirm");
 }
+
+#[gpui_kit::test]
+fn safety_toggle_stores_allow_node_shell(cx: &mut TestAppContext) {
+    let (dir, window, page) = two_cluster_setup("node-shell", cx);
+    let target = page
+        .read_with(cx, |page, _| page.selected.clone())
+        .expect("a selected cluster");
+    let allowed = |cx: &mut TestAppContext| {
+        page.read_with(cx, |page, cx| {
+            page.rows(cx)
+                .into_iter()
+                .find(|row| row.cluster == target)
+                .map(|row| row.profile.allow_node_shell)
+        })
+    };
+    // prod-a is a Production guess: off until the switch says otherwise.
+    assert_eq!(allowed(cx), Some(false));
+    cx.update(|cx| set_allow_node_shell(&target, Some(true), cx));
+    render(window, cx);
+    assert_eq!(allowed(cx), Some(true));
+    let stored = cx.read(|cx| AppSettings::get(cx).registry.clusters.clone());
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].allow_node_shell, Some(true));
+    // Back to the environment's answer: the entry is dropped with its last override.
+    cx.update(|cx| set_allow_node_shell(&target, None, cx));
+    assert_eq!(allowed(cx), Some(false));
+    assert!(cx.read(|cx| AppSettings::get(cx).registry.clusters.is_empty()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_node_shell_hint_is_the_wireframe_text() {
+    assert_eq!(
+        NODE_SHELL_HINT,
+        "Creates a privileged debug pod on the node. Off by default for production."
+    );
+}

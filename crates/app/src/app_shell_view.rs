@@ -337,6 +337,8 @@ impl AppShell {
     /// The first Live of a slot: the primary becomes the `last_used` cluster and decides the scope
     /// of the whole view; any other slot takes the view scope when it differs (decision 12).
     pub(super) fn on_first_live(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
+        // Every viewed cluster, not only the primary: each looks for node shell pods of other runs.
+        self.sweep_leftovers(cluster, cx);
         let Some(live_scope) = self.slot_live(cluster, cx).map(|live| live.scope.clone()) else {
             return;
         };

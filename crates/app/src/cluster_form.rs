@@ -210,6 +210,9 @@ pub(crate) fn edit_entry(
             || entry.read_only.is_some()
             || entry.confirm.is_some()
             || entry.default_namespace.is_some()
+            || entry.allow_node_shell.is_some()
+            || entry.debug_image.is_some()
+            || entry.node_shell_namespace.is_some()
     });
 }
 

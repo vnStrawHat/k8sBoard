@@ -43,6 +43,7 @@ gpui_kit::actions!(
         Delete,
         // Unbound unless the wireframe gives them a key: menus and the palette dispatch them.
         PauseRollout,
+        DebugContainer,
         RollBack,
         SuspendCronJob,
         TriggerCronJob,

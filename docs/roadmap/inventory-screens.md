@@ -20,7 +20,7 @@
 | W4-1 | Live table: Name, Status, Ready, Restarts, Node, Age | Done | 0003 | — |
 | W4-2 | Memory column (W4) | Done | 0010 | — |
 | W4-3 | Context menu = ⋯ menu, grouped, Delete last in red | Partial | View logs, Open shell (0036: gated on `get` and `create` on `pods/exec`, confirm dialog), Port-forward (0035: gated on `get` and `create` on `pods/portforward`, a submenu of the TCP ports), Copy name, Copy kubectl command (0008) | Delete Done (0033, last, red); Edit YAML Done (0031); Restart pod, Evict → 0034; Attach: a later item |
-| W4-4 | Container submenu (MAIN/SIDECAR) for Logs, Shell, Port-forward; "Debug container…" | Partial | 0004 picks the container inside the log tab; 0019 adds the Logs sub-tab and the workload container picker; 0036 adds the Open shell submenu (running containers, init left out) | Logs and Port-forward submenus (0019 decision 30 skipped them); Debug container → 0037 |
+| W4-4 | Container submenu (MAIN/SIDECAR) for Logs, Shell, Port-forward; "Debug container…" | Partial | 0004 picks the container inside the log tab; 0019 adds the Logs sub-tab and the workload container picker; 0036 adds the Open shell submenu (running containers, init left out); Debug container… done: 0037 ends it with `Debug container…` (ephemeral container, options dialog, attached Shell tab) | Logs and Port-forward submenus (0019 decision 30 skipped them) |
 | W4-5 | Overview tab: Node, Pod IP, QoS, Controlled by, Conditions, container summary | Done | 0003, 0008 | — |
 | W4-6 | WHY box tied to a container with "Open container …" link | Done | 0008 | — |
 | W4-7 | Containers tab master-detail, lifecycle groups, expand ⤢ | Done (`[` `]` switching in 0028) | 0003, 0028 | — |
@@ -42,9 +42,9 @@
 | W5-2 | CPU and Memory bar columns | Done | 0010 | — |
 | W5-3 | Summary chips as filters, version-skew highlight, Columns ▾ | Missing | — | 0009 |
 | W5-4 | Node drawer: conditions, allocatable used, system info | Done | 0003, 0008, 0010 (allocatable used) | — |
-| W5-5 | Menu: node shell, Cordon, Drain…, Edit taints/labels, View pods on node, View YAML, Copy name | Partial | shell/cordon/drain disabled; Copy name | View pods on node → 0009; View YAML done (0007); rest → 0034, 0037 |
+| W5-5 | Menu: node shell, Cordon, Drain…, Edit taints/labels, View pods on node, View YAML, Copy name | Partial | Open node shell (0037: always types the node name, off by default for PROD), cordon (0030), View pods on node (0009), View YAML (0007), Copy name; drain disabled | Drain…, Edit taints/labels → 0034 |
 | W5-6 | Multi-select + selection bar (Cordon, Uncordon, Drain…) | Missing | — | 0009 (select), 0034 (actions) |
-| W5-7 | Dock tabs "node shell (debug pod)" and "logs · kubelet" | Missing | — | 0037; kubelet logs deferred (0019 decision 24) |
+| W5-7 | Dock tabs "node shell (debug pod)" and "logs · kubelet" | Partial | `›_ node shell · wk-03 (debug pod)` tab (0037) | `logs · kubelet` deferred (0019 decision 24) |
 | W6-1 | Drain dialog: 3 steps, kubectl-flag options with consequences, grace, timeout | Missing | — | 0034 |
 | W6-2 | Per-pod eviction preview from PDBs (blocked first) | Missing | — | 0034 (preview logic is read-only, built on 0013) |
 | W6-3 | Typed node-name confirm, "Cordon only", progress in dock, cancel | Missing | — | 0030, 0034 |

@@ -447,8 +447,10 @@ impl TableDelegate for PodTableDelegate {
             )
         };
         let (row, shell_menu, forward_menu) = prepared;
+        let shell_items = shell_menu.items(&row, &self.shell, window, cx);
         let items = PodMenuItems {
-            open_shell: shell_menu.item(&row, &self.shell, window, cx),
+            open_shell: shell_items.open_shell,
+            debug_container: shell_items.debug_container,
             port_forward: forward_menu.item(&self.shell, window, cx),
         };
         let Some((slot, pod)) = self.pod_at(row_ix, cx) else {

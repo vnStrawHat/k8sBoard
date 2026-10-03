@@ -13,6 +13,7 @@ use kube::api::PostParams;
 
 use crate::connection::{ClusterConnection, ClusterError};
 use crate::custom_resource_definition::{CustomResourceType, ResourceScope};
+use crate::debug_shell::AttachPermit;
 use crate::metrics_api::METRICS_GROUP;
 use crate::namespace::NamespaceScope;
 use crate::object_yaml::ObjectKind;
@@ -35,6 +36,14 @@ pub enum AccessCheck {
     /// Port-forward is authorized like exec: `get` before 1.35, plus `create` after.
     GetPodPortForward,
     CreatePodPortForward,
+    /// A debug shell attaches like a shell execs: `get` before 1.35, plus `create` after (0037).
+    GetPodAttach,
+    CreatePodAttach,
+    /// Node shell (0037): creates and deletes its own privileged pod.
+    CreatePods,
+    DeletePods,
+    /// Debug container (0037): `patch pods/ephemeralcontainers`.
+    PatchPodEphemeralContainers,
     ListSecrets,
     ListNodes,
     GetNodeProxy,
@@ -96,13 +105,18 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 45] = [
+    pub const ALL: [AccessCheck; 50] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::GetPodExec,
         Self::CreatePodExec,
         Self::GetPodPortForward,
         Self::CreatePodPortForward,
+        Self::GetPodAttach,
+        Self::CreatePodAttach,
+        Self::CreatePods,
+        Self::DeletePods,
+        Self::PatchPodEphemeralContainers,
         Self::ListSecrets,
         Self::ListNodes,
         Self::GetNodeProxy,
@@ -152,6 +166,13 @@ impl AccessCheck {
             Self::CreatePodExec => ("create", "", "pods", Some("exec"), true),
             Self::GetPodPortForward => ("get", "", "pods", Some("portforward"), true),
             Self::CreatePodPortForward => ("create", "", "pods", Some("portforward"), true),
+            Self::GetPodAttach => ("get", "", "pods", Some("attach"), true),
+            Self::CreatePodAttach => ("create", "", "pods", Some("attach"), true),
+            Self::CreatePods => ("create", "", "pods", None, true),
+            Self::DeletePods => ("delete", "", "pods", None, true),
+            Self::PatchPodEphemeralContainers => {
+                ("patch", "", "pods", Some("ephemeralcontainers"), true)
+            }
             Self::ListSecrets => ("list", "", "secrets", None, true),
             Self::ListNodes => ("list", "", "nodes", None, false),
             Self::GetNodeProxy => ("get", "", "nodes", Some("proxy"), false),
@@ -301,6 +322,14 @@ impl AccessReport {
         (self.is_allowed(AccessCheck::GetPodPortForward)
             && self.is_allowed(AccessCheck::CreatePodPortForward))
         .then(PortForwardPermit::granted)
+    }
+
+    /// The proof a debug shell may attach: `Some` only when both attach verbs are allowed. The only
+    /// non-test `AttachPermit`.
+    pub fn attach_permit(&self) -> Option<AttachPermit> {
+        (self.is_allowed(AccessCheck::GetPodAttach)
+            && self.is_allowed(AccessCheck::CreatePodAttach))
+        .then(AttachPermit::granted)
     }
 
     /// One review per entry of `checks` (the list that was reviewed), in that order: Allowed only
@@ -649,9 +678,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 45);
+        assert_eq!(AccessCheck::ALL.len(), 50);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 45);
+        assert_eq!(distinct.len(), 50);
     }
 
     #[test]
@@ -694,6 +723,55 @@ mod tests {
     #[test]
     fn get_port_forward_check_targets_the_subresource() {
         assert_get_check(AccessCheck::GetPodPortForward, "portforward");
+    }
+
+    #[test]
+    fn attach_checks_use_get_and_create() {
+        assert_get_check(AccessCheck::GetPodAttach, "attach");
+        let create = resource_attributes(AccessCheck::CreatePodAttach, Some("team-a"));
+        assert_eq!(create.verb.as_deref(), Some("create"));
+        assert_eq!(create.resource.as_deref(), Some("pods"));
+        assert_eq!(create.subresource.as_deref(), Some("attach"));
+    }
+
+    #[test]
+    fn ephemeral_check_targets_the_subresource() {
+        let attributes = resource_attributes(AccessCheck::PatchPodEphemeralContainers, Some("a"));
+        assert_eq!(attributes.verb.as_deref(), Some("patch"));
+        assert_eq!(attributes.resource.as_deref(), Some("pods"));
+        assert_eq!(
+            attributes.subresource.as_deref(),
+            Some("ephemeralcontainers")
+        );
+        assert_eq!(attributes.namespace.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn pod_create_and_delete_checks_have_no_subresource() {
+        for (check, verb) in [
+            (AccessCheck::CreatePods, "create"),
+            (AccessCheck::DeletePods, "delete"),
+        ] {
+            let attributes = resource_attributes(check, Some("kube-system"));
+            assert_eq!(attributes.verb.as_deref(), Some(verb), "{check}");
+            assert_eq!(attributes.resource.as_deref(), Some("pods"), "{check}");
+            assert_eq!(attributes.subresource, None, "{check}");
+        }
+    }
+
+    #[test]
+    fn attach_permit_needs_get_and_create() {
+        let both = [AccessCheck::GetPodAttach, AccessCheck::CreatePodAttach];
+        assert!(report_allowing(&both).attach_permit().is_some());
+        assert!(report_allowing(&both[..1]).attach_permit().is_none());
+        assert!(report_allowing(&both[1..]).attach_permit().is_none());
+        // Exec rights do not open an attach.
+        let exec = [AccessCheck::GetPodExec, AccessCheck::CreatePodExec];
+        assert!(report_allowing(&exec).attach_permit().is_none());
+        let missing = AccessReport {
+            reviews: Vec::new(),
+        };
+        assert!(missing.attach_permit().is_none());
     }
 
     fn report_allowing(allowed: &[AccessCheck]) -> AccessReport {
@@ -925,6 +1003,11 @@ mod tests {
                 "create pods/exec",
                 "get pods/portforward",
                 "create pods/portforward",
+                "get pods/attach",
+                "create pods/attach",
+                "create pods",
+                "delete pods",
+                "patch pods/ephemeralcontainers",
                 "list secrets",
                 "list nodes",
                 "get nodes/proxy",
@@ -1086,7 +1169,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 45);
+        assert_eq!(AccessCheck::ALL.len(), 50);
     }
 
     #[test]

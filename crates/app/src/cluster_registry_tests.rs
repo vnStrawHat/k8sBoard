@@ -26,6 +26,9 @@ fn entry(context: &str, source: &str) -> ClusterEntry {
         read_only: None,
         confirm: None,
         default_namespace: None,
+        allow_node_shell: None,
+        debug_image: None,
+        node_shell_namespace: None,
     }
 }
 
@@ -47,6 +50,9 @@ fn profile_of_unregistered_context_uses_name_and_guess() {
             default_namespace: None,
             read_only: true,
             confirm: ConfirmMode::TypeName,
+            allow_node_shell: false,
+            debug_image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
+            node_shell_namespace: "kube-system".to_owned(),
         }
     );
 }
@@ -346,4 +352,85 @@ fn confirm_round_trips() {
 fn an_entry_without_confirm_omits_the_key() {
     let text = serde_json::to_string(&registry_with(entry("dev-1", "a.yaml"))).expect("serializes");
     assert!(!text.contains("confirm"), "{text}");
+}
+
+fn allows_node_shell(
+    context: &str,
+    environment: Option<Environment>,
+    stored: Option<bool>,
+) -> bool {
+    let mut overrides = entry(context, "a.yaml");
+    overrides.environment = environment;
+    overrides.allow_node_shell = stored;
+    registry_with(overrides)
+        .profile(&summary(context, "a.yaml"))
+        .allow_node_shell
+}
+
+#[test]
+fn allow_node_shell_defaults_by_environment() {
+    // Production is off, set or guessed.
+    assert!(!allows_node_shell("prod-eu", None, None));
+    assert!(!allows_node_shell(
+        "anything",
+        Some(Environment::Production),
+        None
+    ));
+    // Development and Local are on, set or guessed.
+    assert!(allows_node_shell("dev-1", None, None));
+    assert!(allows_node_shell(
+        "anything",
+        Some(Environment::Development),
+        None
+    ));
+    assert!(allows_node_shell("kind-local", None, None));
+    assert!(allows_node_shell(
+        "anything",
+        Some(Environment::Local),
+        None
+    ));
+    // Staging is on only when the entry sets it; a guessed or unknown one is off.
+    assert!(allows_node_shell(
+        "anything",
+        Some(Environment::Staging),
+        None
+    ));
+    assert!(!allows_node_shell("stg-1", None, None));
+    assert!(!allows_node_shell("mystery", None, None));
+    assert!(
+        !ClusterRegistry::default()
+            .profile(&summary("mystery", "a.yaml"))
+            .allow_node_shell
+    );
+}
+
+#[test]
+fn an_explicit_allow_node_shell_wins() {
+    assert!(allows_node_shell("prod-eu", None, Some(true)));
+    assert!(!allows_node_shell("dev-1", None, Some(false)));
+    assert!(!allows_node_shell(
+        "anything",
+        Some(Environment::Local),
+        Some(false)
+    ));
+}
+
+#[test]
+fn debug_image_and_node_shell_namespace_default_and_override() {
+    let defaults = ClusterRegistry::default().profile(&summary("dev-1", "a.yaml"));
+    assert_eq!(defaults.debug_image, cluster::DEFAULT_DEBUG_IMAGE);
+    assert_eq!(defaults.node_shell_namespace, "kube-system");
+    let mut overrides = entry("dev-1", "a.yaml");
+    overrides.debug_image = Some(" registry.local/busybox:1 ".to_owned());
+    overrides.node_shell_namespace = Some("debug".to_owned());
+    let profile = registry_with(overrides).profile(&summary("dev-1", "a.yaml"));
+    assert_eq!(profile.debug_image, "registry.local/busybox:1");
+    assert_eq!(profile.node_shell_namespace, "debug");
+    // A blank value is no value.
+    let mut blank = entry("dev-1", "a.yaml");
+    blank.debug_image = Some("  ".to_owned());
+    blank.node_shell_namespace = Some(String::new());
+    let profile = registry_with(blank).profile(&summary("dev-1", "a.yaml"));
+    assert_eq!(profile.debug_image, cluster::DEFAULT_DEBUG_IMAGE);
+    assert_eq!(profile.node_shell_namespace, "kube-system");
 }

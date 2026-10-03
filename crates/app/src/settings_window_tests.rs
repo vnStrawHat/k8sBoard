@@ -390,11 +390,13 @@ fn the_tier_table_groups_environments_by_tier() {
                 environments: "Production".to_owned(),
                 change: "Type the cluster name".to_owned(),
                 destructive: "Type the cluster name, danger button".to_owned(),
+                privileged: "Type the node name, danger button".to_owned(),
             },
             TierRow {
                 environments: "Staging, Development, Local".to_owned(),
                 change: "Click Confirm".to_owned(),
                 destructive: "Click Confirm, danger button".to_owned(),
+                privileged: "Type the node name, danger button".to_owned(),
             },
         ]
     );

@@ -433,3 +433,172 @@ fn run_guarded_picks_the_port_forward_permit() {
     // No permit: the open call is never reached.
     assert!(forward.granted(&AccessState::Unknown).is_none());
 }
+
+// ---- 0037: create, then attach ----
+
+#[test]
+fn only_both_attach_verbs_give_a_permit() {
+    use cluster::AccessCheck;
+    let both = [AccessCheck::GetPodAttach, AccessCheck::CreatePodAttach];
+    assert!(attach_permit_of(&allowing_only(&both)).is_some());
+    assert!(attach_permit_of(&allowing_only(&both[..1])).is_none());
+    assert!(attach_permit_of(&allowing_only(&both[1..])).is_none());
+    assert!(attach_permit_of(&AccessState::Unknown).is_none());
+}
+
+fn debug_write_intent() -> Rc<WriteIntent> {
+    let target = ObjectRef::new(
+        ObjectKind::Pod,
+        Some("shop".to_owned()),
+        "multi-0".to_owned(),
+    )
+    .expect("a pod");
+    let request = WriteRequest::new(
+        target,
+        WriteOperation::AddDebugContainer {
+            name: "k8sboard-debug-x7k2q".to_owned(),
+            image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
+            target_container: "web".to_owned(),
+        },
+    )
+    .expect("a fitting request");
+    Rc::new(WriteIntent {
+        cluster: cluster(),
+        cluster_name: "stg-b".into(),
+        action: ResourceAction::DebugContainer,
+        label: "Add debug container to multi-0".into(),
+        button: "Add debug container".into(),
+        request,
+        risk: ActionRisk::Change,
+        expected_name: None,
+        warnings: Vec::new(),
+    })
+}
+
+fn connect_intent(open: ConnectOpen, expected_name: Option<String>) -> ConnectIntent {
+    ConnectIntent {
+        cluster: cluster(),
+        cluster_name: "stg-b".into(),
+        action: ResourceAction::DebugContainer,
+        label: "Add debug container to multi-0".into(),
+        button: "Add debug container".into(),
+        risk: ActionRisk::Change,
+        warnings: Vec::new(),
+        object: AuditObject {
+            kind: "Pod".to_owned(),
+            namespace: Some("shop".to_owned()),
+            name: "multi-0".to_owned(),
+        },
+        fields: Vec::new(),
+        expected_name,
+        open,
+    }
+}
+
+fn attach_open() -> ConnectOpen {
+    ConnectOpen::CreateThenAttach(CreateThenAttach {
+        create: debug_write_intent(),
+        open: Rc::new(|_, _, _, _, _, _| {}),
+    })
+}
+
+#[test]
+fn create_then_attach_picks_the_attach_permit() {
+    use cluster::AccessCheck;
+    let open = attach_open();
+    let attach_rights = allowing_only(&[AccessCheck::GetPodAttach, AccessCheck::CreatePodAttach]);
+    let exec_rights = allowing_only(&[AccessCheck::GetPodExec, AccessCheck::CreatePodExec]);
+    assert!(open.granted(&attach_rights).is_some());
+    // Exec rights never open an attach, so nothing is created.
+    assert!(open.granted(&exec_rights).is_none());
+    assert!(open.granted(&AccessState::Unknown).is_none());
+}
+
+#[test]
+fn a_start_that_writes_first_exposes_its_write() {
+    let writes = connect_intent(attach_open(), None);
+    let create = writes.create().expect("a write comes first");
+    assert_eq!(create.button, "Add debug container");
+    let plain = connect_intent(ConnectOpen::Exec(Rc::new(|_, _, _, _, _| {})), None);
+    assert!(plain.create().is_none());
+}
+
+#[test]
+fn a_node_shell_types_the_node_name_and_others_the_cluster_name() {
+    let node = connect_intent(attach_open(), Some("wk-03".to_owned()));
+    assert_eq!(node.expected(), "wk-03");
+    assert_eq!(node.typed_hint(), "the node name");
+    let debug = connect_intent(attach_open(), None);
+    assert_eq!(debug.expected(), "stg-b");
+    assert_eq!(debug.typed_hint(), "the cluster name");
+}
+
+fn cleanup_request(name: &str, uid: &str) -> Option<WriteRequest> {
+    let target = ObjectRef::new(
+        ObjectKind::Pod,
+        Some("kube-system".to_owned()),
+        name.to_owned(),
+    )?;
+    WriteRequest::new(
+        target,
+        WriteOperation::DeleteNodeShellPod {
+            uid: uid.to_owned(),
+        },
+    )
+}
+
+#[test]
+fn a_cleanup_is_built_only_from_a_node_shell_delete() {
+    use cluster::WritePolicy;
+    use cluster::fake_api::FakeApi;
+    // The fake client's worker is a tokio task, so it is built inside a runtime.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a tokio runtime");
+    let _guard = runtime.enter();
+    let (connection, _api) = FakeApi::connection(WritePolicy::Allowed, |_| (200, "{}".to_owned()));
+    let access = AccessState::Unknown;
+    let guard = guard(&access, WriteLock::Unlocked);
+    let delete = cleanup_request("k8sboard-node-shell-wk-03-x7k2q", "uid-1").expect("a delete");
+    assert!(NodeShellCleanup::new(connection.clone(), delete, CleanupAudit::of(&guard)).is_some());
+    // The write path itself refuses a delete of any other pod, so there is nothing to wrap.
+    assert!(cleanup_request("coredns-5d78c9869d-abcde", "uid-1").is_none());
+    // And any other operation is refused here.
+    let cordon = cordon_intent(&cluster(), "stg-b", "wk-03", &NodeScheduling::Enabled)
+        .expect("a cordon")
+        .request;
+    assert!(NodeShellCleanup::new(connection, cordon, CleanupAudit::of(&guard)).is_none());
+}
+
+#[test]
+fn the_cleanup_audit_line_names_the_delete_and_the_copied_cluster() {
+    use cluster::WritePolicy;
+    use cluster::fake_api::FakeApi;
+    // The fake client's worker is a tokio task, so it is built inside a runtime.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a tokio runtime");
+    let _guard = runtime.enter();
+    let (connection, _api) = FakeApi::connection(WritePolicy::Allowed, |_| (200, "{}".to_owned()));
+    let access = AccessState::Unknown;
+    let delete = cleanup_request("k8sboard-node-shell-wk-03-x7k2q", "uid-1").expect("a delete");
+    let cleanup = NodeShellCleanup::new(
+        connection,
+        delete,
+        CleanupAudit::of(&guard(&access, WriteLock::Unlocked)),
+    )
+    .expect("a cleanup");
+    let entry = cleanup.audit_entry(AuditOutcome::Abandoned, Some("quit".to_owned()));
+    let line = serde_json::to_value(&entry).expect("serializes");
+    assert_eq!(line["action"], "Delete node shell pod");
+    assert_eq!(line["cluster"], "stg-b");
+    assert_eq!(line["outcome"], "abandoned");
+    assert_eq!(line["object"]["kind"], "Pod");
+    assert_eq!(line["object"]["namespace"], "kube-system");
+    assert_eq!(line["object"]["name"], "k8sboard-node-shell-wk-03-x7k2q");
+    assert_eq!(line["fields"][0]["path"], "metadata.uid");
+    assert_eq!(cleanup.namespace(), "kube-system");
+    assert_eq!(cleanup.pod(), "k8sboard-node-shell-wk-03-x7k2q");
+}

@@ -767,7 +767,7 @@ fn row_action_icon(action: RowAction) -> IconName {
         RowAction::ViewLogs => IconName::FileText,
         RowAction::ViewYaml => IconName::Eye,
         RowAction::CopyName => IconName::Copy,
-        RowAction::OpenShell => IconName::SquareTerminal,
+        RowAction::OpenShell | RowAction::DebugContainer => IconName::SquareTerminal,
         RowAction::PortForward => IconName::Network,
         RowAction::Cordon => IconName::Ban,
         RowAction::Drain => IconName::ArrowDown,

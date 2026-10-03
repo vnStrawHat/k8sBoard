@@ -20,7 +20,7 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 
 | Group | Kind | T | Dr | Read-only gaps → spec | Mutating actions → spec |
 |---|---|---|---|---|---|
-| Cluster | Nodes | Done | Partial | conditions, allocatable, system 0008; CPU/Mem 0010; View pods on node 0009 | shell 0037; cordon, drain, taints, labels 0034; delete Done (0033) |
+| Cluster | Nodes | Done | Partial | conditions, allocatable, system 0008; CPU/Mem 0010; View pods on node 0009 | node shell 0037 (done); cordon 0030; drain, taints, labels 0034; delete Done (0033) |
 | Cluster | Namespaces | Partial | Partial | Pods, CPU req, Memory req columns Done (0012); STUCK box and remaining resources Done (0018; object names not listed); quota section Done (0013; LimitRange row open); "Set as default" Done (0024) | New 0031; delete Done (0033) |
 | Cluster | Events | Planned(0006) | Planned(0006) | Warnings only, Go to object, Copy message: 0006; Pause stream, Filter similar 0009 | — |
 | Workloads | Pods | Done | Partial | see [inventory-screens.md](inventory-screens.md) W4 rows | see W4 rows |

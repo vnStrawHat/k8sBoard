@@ -66,7 +66,8 @@ Each later spec adds one `#[serde(default)]` field to `Settings` (or to `Cluster
 | `topology.pins` | map `"{context}/{namespace}"` → map node id → `{x, y}` | 0022 (decision 23) | dragged positions; cap 2,000 pins per key |
 | `appearance.density` | `"compact"`(28) / `"comfortable"`(36) | later | row height (needs a table row-height audit) |
 | `dock.height` | `Option<f32>` px | 0019 or 0025 | remembered dock height, written on drag end |
-| `registry.clusters[].color`, `.metrics_source`, `.allow_node_shell`, `.confirm` | per W2 form | later / backlog / 0037 / 0030 | W2 Clusters fields; `confirm` is `"type-name"` or `"click"`, absent = environment default (0030) |
+| `registry.clusters[].color`, `.metrics_source`, `.confirm` | per W2 form | later / backlog / 0030 | W2 Clusters fields; `confirm` is `"type-name"` or `"click"`, absent = environment default (0030) |
+| `registry.clusters[].allow_node_shell`, `.debug_image`, `.node_shell_namespace` | `Option<bool>`, `Option<String>`, `Option<String>` | 0037 | `allow_node_shell` absent = on for Development and Local, on for Staging only when `environment` is set in the entry, else off; `debug_image` absent = the pinned busybox digest; `node_shell_namespace` absent = `kube-system`. The switch is the W2 Safety toggle; the other two are written after a successful start |
 | `port_forward.presets` | list | 0035 | saved forwards |
 
 Pin keys and any new map keys use context names, namespaces, and object names only.

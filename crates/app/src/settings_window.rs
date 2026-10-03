@@ -316,6 +316,8 @@ struct TierRow {
     environments: String,
     change: String,
     destructive: String,
+    /// The node shell: the same in every row.
+    privileged: String,
 }
 
 /// The two tiers, read from the same rules the dialog uses: the environments are grouped by
@@ -338,6 +340,7 @@ fn tier_rows() -> Vec<TierRow> {
                 environments: environments.join(", "),
                 change: tier_cell(mode, ActionRisk::Change),
                 destructive: tier_cell(mode, ActionRisk::Destructive),
+                privileged: tier_cell(mode, ActionRisk::Privileged),
             }
         })
         .collect()
@@ -346,13 +349,17 @@ fn tier_rows() -> Vec<TierRow> {
 /// What the confirm dialog of `mode` asks for `risk`; a destructive action also gets a danger
 /// button.
 fn tier_cell(mode: ConfirmMode, risk: ActionRisk) -> String {
-    let how = match confirm_step(mode, risk, "the cluster name") {
+    let expected = match risk {
+        ActionRisk::Privileged => "the node name",
+        ActionRisk::Change | ActionRisk::Destructive => "the cluster name",
+    };
+    let how = match confirm_step(mode, risk, expected) {
         DialogConfirm::TypeName { expected } => format!("Type {expected}"),
         DialogConfirm::Click => "Click Confirm".to_owned(),
     };
     match risk {
         ActionRisk::Change => how,
-        ActionRisk::Destructive => format!("{how}, danger button"),
+        ActionRisk::Destructive | ActionRisk::Privileged => format!("{how}, danger button"),
     }
 }
 
@@ -384,7 +391,8 @@ fn tier_table(cx: &App) -> AnyElement {
         .text_color(theme.muted_foreground)
         .child(cell("Environment".to_owned()))
         .child(cell("Change".to_owned()))
-        .child(cell("Destructive".to_owned()));
+        .child(cell("Destructive".to_owned()))
+        .child(cell("Node shell".to_owned()));
     v_flex()
         .w_full()
         .gap_2()
@@ -402,6 +410,7 @@ fn tier_table(cx: &App) -> AnyElement {
                 .child(cell(row.environments))
                 .child(cell(row.change))
                 .child(cell(row.destructive))
+                .child(cell(row.privileged))
         }))
         .into_any_element()
 }

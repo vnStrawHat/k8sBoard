@@ -137,8 +137,10 @@ fn pod_menu_button(
                     ForwardMenu::of(pod_subject(pod), &row.cluster, &guard),
                 )
             };
+            let shell_items = shell_menu.items(&row, &shell, window, cx);
             let items = PodMenuItems {
-                open_shell: shell_menu.item(&row, &shell, window, cx),
+                open_shell: shell_items.open_shell,
+                debug_container: shell_items.debug_container,
                 port_forward: forward_menu.item(&shell, window, cx),
             };
             let session = session.read(cx);

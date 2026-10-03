@@ -8,6 +8,8 @@ use std::borrow::Cow;
 use std::fmt;
 use std::time::{Duration, Instant};
 
+use k8s_openapi::api::core::v1::Pod;
+use kube::Api;
 use kube::api::{
     DeleteParams, DynamicObject, Patch, PatchParams, PostParams, Preconditions, PropagationPolicy,
 };
@@ -17,6 +19,10 @@ use tokio::time::error::Elapsed;
 
 use crate::access_review::AccessCheck;
 use crate::connection::{ClusterConnection, ClusterError, classify_error, run_raw};
+use crate::debug_pod_bodies::{
+    DEBUG_CONTAINER_PREFIX, NODE_SHELL_PREFIX, NodeShellPod, debug_container_patch,
+    is_container_name, is_label_value, is_valid_debug_image, node_shell_pod,
+};
 use crate::dns_name::{is_dns_subdomain, is_path_segment_name};
 use crate::edit_placeholders::{self, Restored};
 use crate::edit_preview::{EditPreview, build_preview};
@@ -43,6 +49,8 @@ const REJECTED_OBJECT: &str = "the server rejected the generated object";
 const REJECTED_TEMPLATE: &str = "the server rejected the template of that revision";
 /// A `replicas` field is an `int32` on the server.
 const MAX_REPLICAS: u32 = i32::MAX as u32;
+/// A uid is a UUID; the bound only keeps a garbage value out of the delete body.
+const MAX_UID_LENGTH: usize = 64;
 
 /// One allow-listed mutation. Adding a variant is the only way to add a write (C3).
 // Debug is manual: the variant name only.
@@ -76,6 +84,24 @@ pub enum WriteOperation {
         uid: String,
         propagation: DeletePropagation,
     },
+    /// Strategic merge patch of the `ephemeralcontainers` subresource: appends one debug container
+    /// that shares `target_container`'s process namespace (0037).
+    AddDebugContainer {
+        name: String,
+        image: String,
+        target_container: String,
+    },
+    /// Creates the privileged pod of a node shell on `node`; `instance` is the id of this app run
+    /// (0037). The target is the pod to create, named `k8sboard-node-shell-…`.
+    CreateNodeShellPod {
+        node: String,
+        image: String,
+        user: Option<String>,
+        instance: String,
+    },
+    /// Deletes a node shell pod this run (or a sweep) found, with a `uid` precondition and no grace
+    /// period. Commit only: it has no dry-run (0037).
+    DeleteNodeShellPod { uid: String },
 }
 
 impl WriteOperation {
@@ -91,6 +117,9 @@ impl WriteOperation {
             Self::RerunJob => "RerunJob",
             Self::ReplaceObject(_) => "ReplaceObject",
             Self::DeleteObject { .. } => "DeleteObject",
+            Self::AddDebugContainer { .. } => "AddDebugContainer",
+            Self::CreateNodeShellPod { .. } => "CreateNodeShellPod",
+            Self::DeleteNodeShellPod { .. } => "DeleteNodeShellPod",
         }
     }
 }
@@ -316,12 +345,40 @@ impl WriteRequest {
                     propagation.as_str().to_owned(),
                 )]
             }
+            WriteOperation::AddDebugContainer {
+                name,
+                image,
+                target_container,
+            } => vec![
+                field("spec.ephemeralContainers[].name", name.clone()),
+                field("spec.ephemeralContainers[].image", image.clone()),
+                field(
+                    "spec.ephemeralContainers[].targetContainerName",
+                    target_container.clone(),
+                ),
+            ],
+            WriteOperation::CreateNodeShellPod { node, image, .. } => vec![
+                field("spec.nodeName", node.clone()),
+                field("spec.hostPID", "true".to_owned()),
+                field(
+                    "spec.containers[0].securityContext.privileged",
+                    "true".to_owned(),
+                ),
+                field("spec.containers[0].image", image.clone()),
+            ],
+            WriteOperation::DeleteNodeShellPod { uid } => {
+                vec![field("metadata.uid", uid.clone())]
+            }
         }
     }
 
-    /// False only for operations the server cannot dry-run; true for every one of 0030-0032.
+    /// False only for operations the server cannot dry-run: the node shell delete is a commit
+    /// only (0030 decision 5), because its `uid` precondition already makes it exact.
     pub fn supports_dry_run(&self) -> bool {
         match self.operation {
+            WriteOperation::DeleteNodeShellPod { .. } => false,
+            WriteOperation::AddDebugContainer { .. }
+            | WriteOperation::CreateNodeShellPod { .. } => true,
             WriteOperation::SetNodeSchedulable { .. }
             | WriteOperation::ScaleWorkload { .. }
             | WriteOperation::RestartRollout { .. }
@@ -371,6 +428,11 @@ fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Optio
             AccessCheck::Update(kind)
         }
         (WriteOperation::DeleteObject { .. }, kind) => AccessCheck::Delete(kind),
+        (WriteOperation::AddDebugContainer { .. }, ObjectKind::Pod) => {
+            AccessCheck::PatchPodEphemeralContainers
+        }
+        (WriteOperation::CreateNodeShellPod { .. }, ObjectKind::Pod) => AccessCheck::CreatePods,
+        (WriteOperation::DeleteNodeShellPod { .. }, ObjectKind::Pod) => AccessCheck::DeletePods,
         _ => return None,
     })
 }
@@ -396,7 +458,48 @@ fn is_safe_path(target: &ObjectRef, operation: &WriteOperation) -> bool {
         WriteOperation::RollBackDeployment { replica_set, .. } => is_dns_subdomain(replica_set),
         _ => true,
     };
-    is_safe_name && is_safe_replica_set && target.namespace().is_none_or(is_dns_subdomain)
+    is_safe_name
+        && is_safe_replica_set
+        && target.namespace().is_none_or(is_dns_subdomain)
+        && is_fit_debug_operation(target, operation)
+}
+
+/// What the debug operations need beyond a pod target: the names that mark a k8sBoard object, so
+/// the privileged create and the delete bypass reach nothing else, and values the server accepts.
+fn is_fit_debug_operation(target: &ObjectRef, operation: &WriteOperation) -> bool {
+    let is_node_shell_pod = target.name().starts_with(NODE_SHELL_PREFIX);
+    match operation {
+        WriteOperation::AddDebugContainer {
+            name,
+            image,
+            target_container,
+        } => {
+            name.starts_with(DEBUG_CONTAINER_PREFIX)
+                && is_container_name(name)
+                && is_container_name(target_container)
+                && is_valid_debug_image(image)
+        }
+        WriteOperation::CreateNodeShellPod {
+            node,
+            image,
+            instance,
+            ..
+        } => {
+            is_node_shell_pod
+                && is_dns_subdomain(node)
+                && is_valid_debug_image(image)
+                && !instance.is_empty()
+                && is_label_value(instance)
+        }
+        WriteOperation::DeleteNodeShellPod { uid } => {
+            is_node_shell_pod
+                && (1..=MAX_UID_LENGTH).contains(&uid.len())
+                && uid
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        }
+        _ => true,
+    }
 }
 
 /// Whole seconds, UTC, like kubectl writes it.
@@ -519,6 +622,14 @@ impl ClusterConnection {
     ) -> Result<WriteOutcome, WriteError> {
         if self.write_policy() == WritePolicy::Blocked {
             return Err(WriteError::WritesBlocked);
+        }
+        // A delete that is exact by its precondition has no dry-run; asking for one would send the
+        // real delete.
+        if mode == WriteMode::DryRun && !request.supports_dry_run() {
+            return Err(WriteError::Invalid {
+                message: "this change has no dry-run".to_owned(),
+                fields: Vec::new(),
+            });
         }
         let started = Instant::now();
         let sent = self.send(request, mode).await;
@@ -644,7 +755,75 @@ impl ClusterConnection {
                 let response = self.settle(request, mode, sent)?;
                 Ok(Answer::deleted(response.left()))
             }
+            WriteOperation::AddDebugContainer {
+                name: container,
+                image,
+                target_container,
+            } => {
+                let pods = self.pod_api(&request.target, mode)?;
+                let body = debug_container_patch(container, image, target_container);
+                let sent = run_raw(pods.patch_ephemeral_containers(
+                    name,
+                    &params,
+                    &Patch::Strategic(&body),
+                ))
+                .await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::CreateNodeShellPod {
+                node,
+                image,
+                user,
+                instance,
+            } => {
+                let pods = self.pod_api(&request.target, mode)?;
+                let body = node_shell_pod(&NodeShellPod {
+                    namespace: request.target.namespace().unwrap_or_default(),
+                    name,
+                    node,
+                    image,
+                    user: user.as_deref(),
+                    instance,
+                });
+                let pod: Pod =
+                    serde_json::from_value(body).map_err(|_| self.unusable_object(mode))?;
+                let sent = run_raw(pods.create(&post_params(mode), &pod)).await;
+                let created = self.settle(request, mode, sent)?;
+                let is_commit = mode == WriteMode::Commit;
+                Ok(Answer {
+                    effect: WriteEffect::Created,
+                    created_name: created.metadata.name.clone().filter(|_| is_commit),
+                    uid: created.metadata.uid.clone().filter(|_| is_commit),
+                })
+            }
+            WriteOperation::DeleteNodeShellPod { uid } => {
+                let pods = self.pod_api(&request.target, mode)?;
+                let delete = DeleteParams {
+                    grace_period_seconds: Some(0),
+                    preconditions: Some(Preconditions {
+                        uid: Some(uid.clone()),
+                        resource_version: None,
+                    }),
+                    ..DeleteParams::default()
+                };
+                let sent = run_raw(pods.delete(name, &delete)).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer {
+                    effect: WriteEffect::Deleted,
+                    created_name: None,
+                    uid: None,
+                })
+            }
         }
+    }
+
+    /// The typed pod API of a pod target: the ephemeral container patch and the typed create need it.
+    fn pod_api(&self, target: &ObjectRef, mode: WriteMode) -> Result<Api<Pod>, WriteError> {
+        let namespace = target
+            .namespace()
+            .ok_or_else(|| self.unusable_object(mode))?;
+        Ok(Api::namespaced(self.client().clone(), namespace))
     }
 
     /// The outcome of one request: its object, or the `WriteError` the failure maps to.
@@ -974,18 +1153,26 @@ fn redact_message(kind_name: &str, message: &str, reason: &str, fields: &[String
     }
 }
 
+// The write tests drive `write` directly; the clippy ban on `ClusterConnection::write` is for the
+// app (spec 0030 AC 9), so each of these modules allows it.
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 #[path = "object_write_tests.rs"]
 mod object_write_tests;
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 #[path = "object_write_workload_tests.rs"]
 mod object_write_workload_tests;
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 #[path = "object_write_replace_tests.rs"]
 mod object_write_replace_tests;
 
 #[cfg(test)]
 #[path = "object_write_delete_tests.rs"]
 mod object_write_delete_tests;
+#[allow(clippy::disallowed_methods)]
+#[path = "object_write_debug_tests.rs"]
+mod object_write_debug_tests;

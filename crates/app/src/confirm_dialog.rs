@@ -28,8 +28,8 @@ use crate::app_shell::object_delete::{
     delete_dry_run_progress, propagation_choices, with_propagation,
 };
 use crate::app_shell::write_flow::{
-    CommitMode, ConnectIntent, DryRunState, TypedMatch, WriteIntent, WriteStep, checked_write,
-    commit_block, confirmed, dry_run_state_of, typed_match, unlock_block,
+    CommitMode, ConnectCommit, ConnectIntent, DryRunState, TypedMatch, WriteIntent, WriteStep,
+    checked_write, commit_block, confirmed, dry_run_state_of, typed_match, unlock_block,
 };
 use crate::cluster_registry::ClusterRef;
 use crate::environment::{Environment, environment_badge};
@@ -40,6 +40,11 @@ use crate::write_guard::{ActionRisk, DialogConfirm, confirm_step};
 const DIALOG_WIDTH: f32 = 480.;
 /// The object list of a batch scrolls past this height.
 const ITEMS_MAX_HEIGHT: f32 = 240.;
+
+/// Destructive and privileged actions confirm with the danger button.
+fn has_danger_button(risk: ActionRisk) -> bool {
+    matches!(risk, ActionRisk::Destructive | ActionRisk::Privileged)
+}
 
 /// What the dialog asks about.
 pub(crate) enum DialogKind {
@@ -86,9 +91,10 @@ impl DialogKind {
 
     fn typed_hint(&self) -> String {
         match self {
-            Self::Unlock { .. } | Self::Connect(_) => "the cluster name".to_owned(),
+            Self::Unlock { .. } => "the cluster name".to_owned(),
             Self::Write(intent) => intent.typed_hint(),
             Self::Batch(batch) => batch.typed_hint(),
+            Self::Connect(intent) => intent.typed_hint().to_owned(),
         }
     }
 
@@ -154,6 +160,10 @@ impl ConfirmDialog {
         let dry_run = match inputs.kind {
             DialogKind::Unlock { .. } => None,
             DialogKind::Write(_) | DialogKind::Batch(_) => Some(DryRunState::Running),
+            // A start that writes first checks the write; any other start has nothing to check.
+            DialogKind::Connect(ref intent) if intent.create().is_some() => {
+                Some(DryRunState::Running)
+            }
             DialogKind::Connect(_) => Some(DryRunState::NotSupported),
         };
         Self {
@@ -182,11 +192,20 @@ impl ConfirmDialog {
     /// ignores its confirm button and Enter, so it can never send anything.
     #[cfg(feature = "screenshot")]
     pub(crate) fn show_fixture(&mut self) {
+        self.show_fixture_after(Duration::from_millis(412));
+    }
+
+    /// `show_fixture` with the dry-run line reading `elapsed` (`--screen node-shell-confirm`).
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn show_fixture_after(&mut self, elapsed: Duration) {
         // A stream start has no dry-run to pass: its line stays as it is.
-        if matches!(self.kind, DialogKind::Write(_) | DialogKind::Batch(_)) {
-            self.dry_run = Some(DryRunState::Passed {
-                elapsed: Duration::from_millis(412),
-            });
+        let has_dry_run = match &self.kind {
+            DialogKind::Write(_) | DialogKind::Batch(_) => true,
+            DialogKind::Connect(intent) => intent.create().is_some(),
+            DialogKind::Unlock { .. } => false,
+        };
+        if has_dry_run {
+            self.dry_run = Some(DryRunState::Passed { elapsed });
         }
         // A batch shows every item as checked.
         self.items = vec![ItemProgress::Passed; self.items.len()];
@@ -233,7 +252,11 @@ impl ConfirmDialog {
                 self.start_batch_dry_runs(Rc::clone(batch), cx);
                 return;
             }
-            DialogKind::Unlock { .. } | DialogKind::Connect(_) => return,
+            DialogKind::Connect(connect) => match connect.create() {
+                Some(create) => create,
+                None => return,
+            },
+            DialogKind::Unlock { .. } => return,
         };
         let step = WriteStep {
             intent: Rc::clone(intent),
@@ -451,10 +474,31 @@ impl ConfirmDialog {
                 self.close(window, cx);
             }
             DialogKind::Connect(intent) => {
+                // A start that writes first needs its passed dry-run; any other has no check.
+                let proof = if intent.create().is_some() {
+                    let typed = self.typed_match(cx);
+                    let Some(proof) = self
+                        .dry_run
+                        .as_ref()
+                        .and_then(|dry_run| confirmed(dry_run, typed, generation))
+                    else {
+                        return;
+                    };
+                    Some(proof)
+                } else {
+                    None
+                };
+                let commit = ConnectCommit {
+                    generation,
+                    confirmed: proof,
+                    note: self
+                        .is_note_shown
+                        .then(|| self.note.read(cx).value().to_string()),
+                };
                 let intent = Rc::clone(intent);
                 self.is_committing = true;
                 shell.update(cx, |shell, cx| {
-                    shell.commit_connect(&intent, generation, window, cx);
+                    shell.commit_connect(&intent, commit, window, cx);
                 });
                 self.close(window, cx);
             }
@@ -882,15 +926,15 @@ impl ConfirmDialog {
             DialogKind::Unlock { .. } => (SharedString::from("Unlock"), false),
             DialogKind::Write(intent) => (
                 intent.button.clone(),
-                intent.risk == ActionRisk::Destructive,
+                has_danger_button(intent.risk),
             ),
             DialogKind::Connect(intent) => (
                 intent.button.clone(),
-                intent.risk == ActionRisk::Destructive,
+                has_danger_button(intent.risk),
             ),
             DialogKind::Batch(batch) => (
                 batch.confirm_label(self.gone_count()).into(),
-                batch.risk == ActionRisk::Destructive,
+                has_danger_button(batch.risk),
             ),
         };
         let primary = Button::new("write-confirm")

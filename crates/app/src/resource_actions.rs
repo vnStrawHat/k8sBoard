@@ -3,7 +3,7 @@ use cluster::{
     NamespaceScope, NodeSummary, ObjectKind, PodSummary, ReplicaSetSummary, SecretKey,
 };
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     Action, App, ClipboardItem, ParentElement as _, SharedString, Styled as _, WeakEntity, Window,
     div,
@@ -22,8 +22,9 @@ use crate::custom_kind::CustomKind;
 use crate::dock::{Dock, LogOrigin};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
-    CopyName, Cordon, Delete, Drain, EditYaml, OpenShell, PauseRollout, PortForward, RerunJob,
-    RestartRollout, RollBack, Scale, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
+    CopyName, Cordon, DebugContainer, Delete, Drain, EditYaml, OpenShell, PauseRollout,
+    PortForward, RerunJob, RestartRollout, RollBack, Scale, SuspendCronJob, TriggerCronJob,
+    ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
@@ -48,6 +49,8 @@ pub(crate) enum ResourceAction {
     OpenShell,
     PortForward,
     OpenNodeShell,
+    /// Adds an ephemeral container to a running pod and attaches a shell to it (spec 0037).
+    DebugContainer,
     Cordon,
     Drain,
     CopyName,
@@ -76,6 +79,8 @@ pub(crate) enum RowAction {
     CopyName,
     OpenShell,
     PortForward,
+    /// Has an unbound key action only: the menu item carries the container it acts on.
+    DebugContainer,
     Cordon,
     Drain,
     EditYaml,
@@ -174,10 +179,26 @@ impl ResourceAction {
                 ],
                 is_shipped: true,
             },
-            // The node shell is a debug pod, so it needs the same right as a pod shell.
+            // The node shell creates a privileged pod, attaches to it, and deletes it (spec 0037).
             Self::OpenNodeShell => ActionGate::Mutating {
-                checks: vec![AccessCheck::CreatePodExec],
-                is_shipped: false,
+                checks: vec![
+                    AccessCheck::CreatePods,
+                    AccessCheck::DeletePods,
+                    AccessCheck::WatchPods,
+                    AccessCheck::GetPodAttach,
+                    AccessCheck::CreatePodAttach,
+                ],
+                is_shipped: true,
+            },
+            // An ephemeral container is patched in, then attached to (spec 0037).
+            Self::DebugContainer => ActionGate::Mutating {
+                checks: vec![
+                    AccessCheck::PatchPodEphemeralContainers,
+                    AccessCheck::WatchPods,
+                    AccessCheck::GetPodAttach,
+                    AccessCheck::CreatePodAttach,
+                ],
+                is_shipped: true,
             },
             // Spec 0030: the first shipped mutating action.
             Self::Cordon => ActionGate::Mutating {
@@ -233,6 +254,7 @@ impl ResourceAction {
         match self {
             Self::ViewLogs => RowAction::ViewLogs,
             Self::OpenShell | Self::OpenNodeShell => RowAction::OpenShell,
+            Self::DebugContainer => RowAction::DebugContainer,
             Self::PortForward => RowAction::PortForward,
             Self::Cordon => RowAction::Cordon,
             Self::Drain => RowAction::Drain,
@@ -258,6 +280,7 @@ impl RowAction {
         match self {
             Self::ViewLogs => Box::new(ViewLogs),
             Self::OpenShell => Box::new(OpenShell),
+            Self::DebugContainer => Box::new(DebugContainer),
             Self::PortForward => Box::new(PortForward),
             Self::Cordon => Box::new(Cordon),
             Self::Drain => Box::new(Drain),
@@ -280,10 +303,12 @@ impl RowAction {
 pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
     match action {
         ResourceAction::Delete(_) | ResourceAction::Drain => ActionRisk::Destructive,
+        // A root shell on the node: the strongest tier, typed in every environment.
+        ResourceAction::OpenNodeShell => ActionRisk::Privileged,
         ResourceAction::ViewLogs
         | ResourceAction::OpenShell
         | ResourceAction::PortForward
-        | ResourceAction::OpenNodeShell
+        | ResourceAction::DebugContainer
         | ResourceAction::Cordon
         | ResourceAction::CopyName
         | ResourceAction::ViewYaml
@@ -305,6 +330,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::OpenShell => "Open shell",
         ResourceAction::PortForward => "Port-forward",
         ResourceAction::OpenNodeShell => "Open node shell",
+        ResourceAction::DebugContainer => "Debug container",
         ResourceAction::Cordon => "Cordon",
         ResourceAction::Drain => "Drain",
         ResourceAction::CopyName => "Copy name",
@@ -339,6 +365,9 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
             ResourceKey::Node { .. } => Some(ResourceAction::OpenNodeShell),
             ResourceKey::Kind { .. } => None,
         },
+        RowAction::DebugContainer => {
+            matches!(subject, ResourceKey::Pod { .. }).then_some(ResourceAction::DebugContainer)
+        }
         RowAction::PortForward => match subject {
             ResourceKey::Pod { .. } => true,
             ResourceKey::Node { .. } => false,
@@ -446,7 +475,55 @@ pub(crate) fn action_availability(
     action: ResourceAction,
     guard: &ClusterGuard<'_>,
 ) -> ActionAvailability {
+    if let Some(reason) = node_shell_setting_block(action, guard) {
+        return disabled(reason);
+    }
     gate_availability(&action.gate(), guard)
+}
+
+/// Why the node shell is off for the cluster's own setting (spec 0037 decision 15): after the
+/// shipped flag and the permissions, before the lock, so only a user who could open it is told that
+/// the setting is what stops them.
+fn node_shell_setting_block(
+    action: ResourceAction,
+    guard: &ClusterGuard<'_>,
+) -> Option<SharedString> {
+    if action != ResourceAction::OpenNodeShell || guard.profile.allow_node_shell {
+        return None;
+    }
+    before_lock_reason(&action.gate(), guard.access, guard.kind_access)
+        .is_none()
+        .then(|| {
+            format!(
+                "Node shell is off for {} (Settings › Clusters › Safety)",
+                guard.display_name()
+            )
+            .into()
+        })
+}
+
+/// Why this node cannot take a node shell, `None` when it can: the shell is `nsenter` and `sh` on a
+/// Linux host.
+pub(crate) fn node_shell_block(node: &NodeSummary) -> Option<SharedString> {
+    (!node.system.operating_system.eq_ignore_ascii_case("linux"))
+        .then(|| "Node shell needs a Linux node".into())
+}
+
+/// Why this pod cannot take a debug container, `None` when it can: the container shares the
+/// process namespace of a running one.
+pub(crate) fn debug_container_block(pod: &PodSummary) -> Option<SharedString> {
+    debug_targets(pod)
+        .next()
+        .is_none()
+        .then(|| "The pod has no running container".into())
+}
+
+/// The containers a debug container can share a process namespace with: the running ones, init
+/// containers excluded.
+pub(crate) fn debug_targets(pod: &PodSummary) -> impl Iterator<Item = &ContainerSummary> {
+    pod.containers
+        .iter()
+        .filter(|container| container.kind != ContainerKind::Init && is_running(container))
 }
 
 fn gate_availability(gate: &ActionGate, guard: &ClusterGuard<'_>) -> ActionAvailability {
@@ -527,7 +604,7 @@ fn permission_reason(
 
 /// The verb pairs that read as one right: a server before Kubernetes 1.35 asks for `get`, one after
 /// asks for both.
-const VERB_PAIRS: [(AccessCheck, AccessCheck, &str); 2] = [
+const VERB_PAIRS: [(AccessCheck, AccessCheck, &str); 3] = [
     (
         AccessCheck::GetPodExec,
         AccessCheck::CreatePodExec,
@@ -537,6 +614,11 @@ const VERB_PAIRS: [(AccessCheck, AccessCheck, &str); 2] = [
         AccessCheck::GetPodPortForward,
         AccessCheck::CreatePodPortForward,
         "pods/portforward",
+    ),
+    (
+        AccessCheck::GetPodAttach,
+        AccessCheck::CreatePodAttach,
+        "pods/attach",
     ),
 ];
 
@@ -566,6 +648,8 @@ pub(crate) struct PodMenuLinks<'a> {
 /// `ForwardMenu::item`) because a submenu needs the app.
 pub(crate) struct PodMenuItems {
     pub(crate) open_shell: PopupMenuItem,
+    /// `Debug container…` when the Open shell item has no submenu to hold it (spec 0037).
+    pub(crate) debug_container: Option<PopupMenuItem>,
     pub(crate) port_forward: PopupMenuItem,
 }
 
@@ -583,7 +667,12 @@ pub(crate) fn pod_menu(
     let access = guard.access;
     let menu = menu
         .item(view_logs_item(pod, None, live, row, dock))
-        .item(items.open_shell)
+        .item(items.open_shell);
+    let menu = match items.debug_container {
+        Some(debug_container) => menu.item(debug_container),
+        None => menu,
+    };
+    let menu = menu
         .item(items.port_forward)
         .item(action_item(
             ResourceAction::EditYaml(ObjectKind::Pod),
@@ -732,7 +821,7 @@ pub(crate) fn node_menu(
 ) -> PopupMenu {
     let access = guard.access;
     let menu = menu
-        .item(action_item(ResourceAction::OpenNodeShell, guard))
+        .item(open_node_shell_item(node, guard))
         .item(view_yaml_item(
             row.object(ResourceKey::of_node(node)),
             shell,
@@ -750,6 +839,24 @@ pub(crate) fn node_menu(
             shell,
         ));
     with_cluster_filter(menu, row, shell)
+}
+
+/// Open node shell, with the reason a node cannot take it (a Windows node) after the gate's own.
+/// It has no `on_click`: the menu dispatches the key action, which runs on the cursor row.
+fn open_node_shell_item(node: &NodeSummary, guard: &ClusterGuard<'_>) -> PopupMenuItem {
+    let label = action_label(ResourceAction::OpenNodeShell);
+    let availability = match action_availability(ResourceAction::OpenNodeShell, guard) {
+        ActionAvailability::Enabled => match node_shell_block(node) {
+            Some(reason) => ActionAvailability::Disabled { reason },
+            None => ActionAvailability::Enabled,
+        },
+        disabled => disabled,
+    };
+    match availability {
+        ActionAvailability::Enabled => PopupMenuItem::new(label),
+        ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
+    }
+    .action(ResourceAction::OpenNodeShell.row_action().key_action())
 }
 
 /// Switches to Pods with only the pods of the node. Always enabled, even for an empty node.
@@ -1722,40 +1829,80 @@ pub(crate) fn shell_menu_state(pod: &PodSummary, guard: &ClusterGuard<'_>) -> Sh
 
 const NOT_RUNNING_REASON: &str = "Container is not running";
 
+/// What the Debug container… item of a pod offers (spec 0037).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DebugMenuState {
+    Disabled(SharedString),
+    Ready,
+}
+
+/// The gate of the pod's own cluster, then the state of this pod. Pure.
+pub(crate) fn debug_menu_state(pod: &PodSummary, guard: &ClusterGuard<'_>) -> DebugMenuState {
+    if let ActionAvailability::Disabled { reason } =
+        action_availability(ResourceAction::DebugContainer, guard)
+    {
+        return DebugMenuState::Disabled(reason);
+    }
+    match debug_container_block(pod) {
+        Some(reason) => DebugMenuState::Disabled(reason),
+        None => DebugMenuState::Ready,
+    }
+}
+
 /// The Open shell item of a pod menu, with everything it needs owned: a submenu is built from the
 /// app, so a caller makes this before it borrows the session (like `secret_menu`).
 pub(crate) struct ShellMenu {
     state: ShellMenuState,
+    debug: DebugMenuState,
     namespace: String,
     pod: String,
     short_pod: String,
+}
+
+/// The shell items of a pod menu: Open shell, and `Debug container…` when Open shell has no
+/// submenu to hold it (a pod with one container, or no shell available).
+pub(crate) struct ShellItems {
+    pub(crate) open_shell: PopupMenuItem,
+    pub(crate) debug_container: Option<PopupMenuItem>,
 }
 
 impl ShellMenu {
     pub(crate) fn of(pod: &PodSummary, guard: &ClusterGuard<'_>) -> Self {
         Self {
             state: shell_menu_state(pod, guard),
+            debug: debug_menu_state(pod, guard),
             namespace: pod.namespace.clone(),
             pod: pod.name.clone(),
             short_pod: short_pod_name(pod),
         }
     }
 
-    /// Each entry opens its own container in the row's cluster, through the guarded flow.
-    pub(crate) fn item(
+    /// Each entry opens its own container in the row's cluster, through the guarded flow. The
+    /// submenu of a pod with several containers ends with `Debug container…` after a separator.
+    pub(crate) fn items(
         self,
         row: &RowContext,
         shell: &WeakEntity<AppShell>,
         window: &mut Window,
         cx: &mut App,
-    ) -> PopupMenuItem {
+    ) -> ShellItems {
         let label = action_label(ResourceAction::OpenShell);
         let Self {
             state,
+            debug,
             namespace,
             pod,
             short_pod,
         } = self;
+        let debug_item = debug_container_item(
+            debug,
+            DebugPod {
+                cluster: row.cluster.clone(),
+                namespace: namespace.clone(),
+                pod: pod.clone(),
+            },
+            shell,
+        );
         let open = {
             let (cluster, shell) = (row.cluster.clone(), shell.clone());
             move |container: String| -> StartShell {
@@ -1774,21 +1921,73 @@ impl ShellMenu {
             }
         };
         match state {
-            ShellMenuState::Disabled(reason) => {
-                disabled_menu_item(label, reason).action(RowAction::OpenShell.key_action())
-            }
+            ShellMenuState::Disabled(reason) => ShellItems {
+                open_shell: disabled_menu_item(label, reason)
+                    .action(RowAction::OpenShell.key_action()),
+                debug_container: Some(debug_item),
+            },
             ShellMenuState::One(container) => {
                 let start = open(container);
-                PopupMenuItem::new(label)
-                    .on_click(move |_, window, cx| start(window, cx))
-                    .action(RowAction::OpenShell.key_action())
+                ShellItems {
+                    open_shell: PopupMenuItem::new(label)
+                        .on_click(move |_, window, cx| start(window, cx))
+                        .action(RowAction::OpenShell.key_action()),
+                    debug_container: Some(debug_item),
+                }
             }
             ShellMenuState::Pick(choices) => {
                 let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
                     choice_items(submenu, &choices, &open)
+                        .separator()
+                        .item(debug_item)
                 });
-                PopupMenuItem::submenu(label, submenu)
+                ShellItems {
+                    open_shell: PopupMenuItem::submenu(label, submenu),
+                    debug_container: None,
+                }
             }
+        }
+    }
+}
+
+/// The pod a `Debug container…` item acts on, in the pod's own cluster.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DebugPod {
+    pub(crate) cluster: ClusterRef,
+    pub(crate) namespace: String,
+    pub(crate) pod: String,
+}
+
+/// The last item of the container submenu (W4 note 2): it opens the options dialog, where the
+/// container is picked. A disabled one keeps its reason under the label.
+fn debug_container_item(
+    state: DebugMenuState,
+    pod: DebugPod,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    const LABEL: &str = "Debug container…";
+    match state {
+        DebugMenuState::Disabled(reason) => disabled_menu_item(LABEL, reason),
+        DebugMenuState::Ready => {
+            let shell = shell.clone();
+            PopupMenuItem::element(move |_, cx| {
+                h_flex()
+                    .w_full()
+                    .gap_4()
+                    .justify_between()
+                    .child(LABEL)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("ephemeral"),
+                    )
+            })
+            .on_click(move |_, window, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.open_debug_options(pod.clone(), None, window, cx);
+                });
+            })
         }
     }
 }

@@ -269,9 +269,12 @@ fn a_failed_open_is_reported_once_and_ends_the_tab(cx: &mut TestAppContext) {
     );
     assert_eq!(
         *events.borrow(),
-        [ShellEvent::OpenFailed {
-            error: "writes are blocked".to_owned()
-        }]
+        [
+            ShellEvent::OpenFailed {
+                error: "writes are blocked".to_owned()
+            },
+            ShellEvent::Ended
+        ]
     );
     let state = fixture.tab.read_with(cx, |tab, _| tab.state().clone());
     assert!(matches!(state, ShellState::Ended(ShellEnd::Failed { .. })));
@@ -300,7 +303,8 @@ fn the_start_is_reported_once(cx: &mut TestAppContext) {
         }),
         cx,
     );
-    assert_eq!(*events.borrow(), [ShellEvent::Opened]);
+    // The break ends the session; it is no second start.
+    assert_eq!(*events.borrow(), [ShellEvent::Opened, ShellEvent::Ended]);
 }
 
 #[gpui_kit::test]
@@ -720,4 +724,195 @@ fn a_held_enter_does_not_confirm_the_multi_line_paste(cx: &mut TestAppContext) {
     send_event(&fixture, enter_event(false), cx);
     assert!(!has_dialog(&fixture, cx));
     assert_eq!(sent_bytes(&mut fixture), [b"a\rb".to_vec()]);
+}
+
+// ---- 0037: debug tabs ----
+
+const DEBUG_IMAGE: &str = "docker.io/library/busybox:1.36.1@sha256:abc";
+
+fn debug_kind() -> ShellKind {
+    ShellKind::Debug {
+        target_container: "api".to_owned(),
+        image: DEBUG_IMAGE.to_owned(),
+    }
+}
+
+fn node_kind() -> ShellKind {
+    ShellKind::NodeShell {
+        node: "wk-03".to_owned(),
+        image: DEBUG_IMAGE.to_owned(),
+    }
+}
+
+/// A tab of `kind` over the ephemeral container `k8sboard-debug-x7k2q`.
+fn open_debug_tab(kind: ShellKind, cx: &mut TestAppContext) -> Fixture {
+    let fixture = open_tab(900., 300., cx);
+    fixture.tab.update(cx, |tab, _| {
+        tab.target.container = "k8sboard-debug-x7k2q".to_owned();
+        tab.kind = kind;
+    });
+    fixture
+}
+
+fn is_drawn(fixture: &Fixture, id: &'static str, cx: &mut TestAppContext) -> bool {
+    use gpui_kit::test::TestWindowExt as _;
+    cx.update_window(fixture.window.into(), |_, window, _| {
+        window.try_find(id).is_some()
+    })
+    .expect("the window is open")
+}
+
+#[gpui_kit::test]
+fn debug_tab_label_and_hidden_picker(cx: &mut TestAppContext) {
+    let exec = open_tab(900., 300., cx);
+    render(&exec, cx);
+    render(&exec, cx);
+    assert_eq!(
+        exec.tab.read_with(cx, |tab, _| tab.label()),
+        "shell · m8n2p/api"
+    );
+    assert!(
+        is_drawn(&exec, "shell-picker", cx),
+        "an exec picks its shell"
+    );
+    let debug = open_debug_tab(debug_kind(), cx);
+    render(&debug, cx);
+    render(&debug, cx);
+    assert_eq!(
+        debug.tab.read_with(cx, |tab, _| tab.label()),
+        "debug · m8n2p/api"
+    );
+    assert!(
+        !is_drawn(&debug, "shell-picker", cx),
+        "a debug shell has no picker"
+    );
+    let node = open_debug_tab(node_kind(), cx);
+    render(&node, cx);
+    render(&node, cx);
+    assert_eq!(
+        node.tab.read_with(cx, |tab, _| tab.label()),
+        "node shell · wk-03 (debug pod)"
+    );
+    assert!(!is_drawn(&node, "shell-picker", cx));
+}
+
+#[gpui_kit::test]
+fn debug_tab_headers_name_the_container_the_image_and_the_context(cx: &mut TestAppContext) {
+    let debug = open_debug_tab(debug_kind(), cx);
+    assert_eq!(
+        debug.tab.read_with(cx, |tab, _| tab.header_text()),
+        format!("›_ debug k8sboard-debug-x7k2q → api · api-7d9f8c-m8n2p · {DEBUG_IMAGE} · stg-b")
+    );
+    let node = open_debug_tab(node_kind(), cx);
+    node.tab.update(cx, |tab, _| {
+        tab.target.namespace = "kube-system".to_owned();
+        tab.target.pod = "k8sboard-node-shell-wk-03-x7k2q".to_owned();
+    });
+    assert_eq!(
+        node.tab.read_with(cx, |tab, _| tab.header_text()),
+        format!(
+            "›_ node wk-03 · pod kube-system/k8sboard-node-shell-wk-03-x7k2q · {DEBUG_IMAGE} · stg-b"
+        )
+    );
+}
+
+#[gpui_kit::test]
+fn a_started_debug_tab_hints_at_the_prompt_and_an_exec_does_not(cx: &mut TestAppContext) {
+    let debug = open_debug_tab(debug_kind(), cx);
+    apply(&debug, ShellUpdate::Started, cx);
+    let text = screen_text(&debug, cx).join("\n");
+    assert!(
+        text.contains("If you don't see a prompt, press Enter."),
+        "{text}"
+    );
+    let exec = open_tab(900., 300., cx);
+    apply(&exec, ShellUpdate::Started, cx);
+    assert!(!screen_text(&exec, cx).join("\n").contains("press Enter"));
+}
+
+#[gpui_kit::test]
+fn waiting_reasons_reach_the_terminal_as_notes(cx: &mut TestAppContext) {
+    let debug = open_debug_tab(debug_kind(), cx);
+    apply(
+        &debug,
+        ShellUpdate::Waiting("ContainerCreating".to_owned()),
+        cx,
+    );
+    apply(&debug, ShellUpdate::Waiting("Pulling".to_owned()), cx);
+    let text = screen_text(&debug, cx).join("\n");
+    assert!(text.contains("Creating container…"), "{text}");
+    assert!(text.contains("Pulling image…"), "{text}");
+}
+
+#[test]
+fn waiting_words_read_as_plain_text() {
+    assert_eq!(waiting_text("ContainerCreating"), "Creating container…");
+    assert_eq!(waiting_text("PodInitializing"), "Starting…");
+    assert_eq!(waiting_text("Pulling"), "Pulling image…");
+    assert_eq!(waiting_text("Odd"), "Waiting: Odd");
+    assert_eq!(starting_text(&debug_kind()), "Starting debug container…");
+    assert_eq!(starting_text(&node_kind()), "Starting node shell pod…");
+}
+
+#[gpui_kit::test]
+fn no_shell_tab_offers_debug_container(cx: &mut TestAppContext) {
+    let fixture = open_tab(900., 300., cx);
+    render(&fixture, cx);
+    render(&fixture, cx);
+    assert!(!is_drawn(&fixture, "shell-debug-container", cx));
+    apply(
+        &fixture,
+        ShellUpdate::Exited(ShellExit {
+            code: None,
+            message: Some("OCI runtime exec failed: executable file not found in $PATH".into()),
+        }),
+        cx,
+    );
+    render(&fixture, cx);
+    render(&fixture, cx);
+    assert_eq!(
+        fixture.tab.read_with(cx, |tab, _| tab.state().clone()),
+        ShellState::Ended(ShellEnd::NoShell)
+    );
+    assert!(is_drawn(&fixture, "shell-debug-container", cx));
+    let text = screen_text(&fixture, cx).join("\n");
+    assert!(
+        text.contains("No shell in this container; try Debug container…"),
+        "{text}"
+    );
+}
+
+#[gpui_kit::test]
+fn the_end_of_a_session_is_reported_once_for_the_cleanup(cx: &mut TestAppContext) {
+    use std::cell::RefCell;
+    let fixture = open_debug_tab(node_kind(), cx);
+    let events = std::rc::Rc::new(RefCell::new(Vec::new()));
+    let log = std::rc::Rc::clone(&events);
+    let _subscription = cx.update(|cx| {
+        cx.subscribe(&fixture.tab, move |_, event: &ShellEvent, _| {
+            log.borrow_mut().push(event.clone());
+        })
+    });
+    fixture
+        .tab
+        .update(cx, |tab, _| tab.is_start_unreported = true);
+    apply(&fixture, ShellUpdate::Started, cx);
+    apply(
+        &fixture,
+        ShellUpdate::Exited(ShellExit {
+            code: Some(0),
+            message: None,
+        }),
+        cx,
+    );
+    assert_eq!(*events.borrow(), [ShellEvent::Opened, ShellEvent::Ended]);
+}
+
+#[gpui_kit::test]
+fn node_shell_tab_label_matches_w5(cx: &mut TestAppContext) {
+    let node = open_debug_tab(node_kind(), cx);
+    assert_eq!(
+        node.tab.read_with(cx, |tab, _| tab.label()),
+        "node shell · wk-03 (debug pod)"
+    );
 }

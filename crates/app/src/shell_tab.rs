@@ -9,10 +9,10 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use cluster::{
-    ClusterConnection, ExecPermit, GridSize, PodSummary, ShellCommand, ShellExit, ShellInput,
-    ShellRequest, ShellUpdate,
+    AttachPermit, AttachRequest, AttachWait, ClusterConnection, ExecPermit, GridSize, PodSummary,
+    ShellCommand, ShellExit, ShellInput, ShellRequest, ShellUpdate,
 };
-use futures::channel::mpsc::{UnboundedSender, unbounded};
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, Toggle};
 use gpui_kit::component::dialog::DialogButtonProps;
@@ -91,13 +91,48 @@ pub(crate) struct ShellGrant {
     pub(crate) command: ShellCommand,
 }
 
+/// What a shell tab runs (spec 0037). A debug shell attaches to a container k8sBoard created, so
+/// its tab has no shell picker and its Reconnect makes a new container, never reusing one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ShellKind {
+    /// An exec into an existing container.
+    Exec,
+    /// A debug container added to a running pod. `ShellTarget.container` is the ephemeral
+    /// container's own name; `target_container` is the one it shares a process namespace with.
+    Debug {
+        target_container: String,
+        image: String,
+    },
+    /// A privileged pod on `node`. `ShellTarget` names the pod and its namespace.
+    NodeShell { node: String, image: String },
+}
+
+impl ShellKind {
+    pub(crate) fn is_exec(&self) -> bool {
+        matches!(self, Self::Exec)
+    }
+
+    pub(crate) fn is_node_shell(&self) -> bool {
+        matches!(self, Self::NodeShell { .. })
+    }
+}
+
+/// What a debug session needs to start, taken from the target's own cluster after the commit. The
+/// permit is proof that both attach verbs were allowed; nothing else builds one.
+pub(crate) struct AttachGrant {
+    pub(crate) connection: ClusterConnection,
+    pub(crate) permit: AttachPermit,
+}
+
 /// What the shell records about the start of a session: one audit line per start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ShellEvent {
-    /// The exec connection came up.
+    /// The exec or attach connection came up.
     Opened,
     /// The session ended before it came up.
     OpenFailed { error: String },
+    /// The session ended, by exit, failure, or a closed stream. A node shell pod is deleted now.
+    Ended,
 }
 
 impl EventEmitter<ShellEvent> for ShellTab {}
@@ -111,6 +146,8 @@ struct Press {
 
 pub(crate) struct ShellTab {
     target: ShellTarget,
+    /// What the tab runs; an exec unless a debug start opened it.
+    kind: ShellKind,
     /// The switcher text of the cluster, for the banner and the title while several are viewed.
     cluster_label: String,
     command: ShellCommand,
@@ -151,6 +188,7 @@ impl ShellTab {
         let find_events = cx.subscribe_in(&find_input, window, Self::on_find_event);
         Self {
             target,
+            kind: ShellKind::Exec,
             cluster_label,
             command: ShellCommand::Auto,
             state: ShellState::Connecting,
@@ -171,6 +209,13 @@ impl ShellTab {
         }
     }
 
+    /// The tab of a debug start: the same terminal, with the kind that names it. The kind is set
+    /// before the first connect.
+    pub(crate) fn with_kind(mut self, kind: ShellKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
     /// Starts a session. A running one ends first. The only callers are the guarded open and
     /// Reconnect flows of the shell.
     pub(crate) fn connect(&mut self, grant: ShellGrant, cx: &mut Context<Self>) {
@@ -180,6 +225,43 @@ impl ShellTab {
             command,
         } = grant;
         self.command = command;
+        let banner = banner(&self.target, command, &self.cluster_label);
+        let (receiver, size) = self.begin_session(&banner);
+        let request = ShellRequest {
+            namespace: self.target.namespace.clone(),
+            pod: self.target.pod.clone(),
+            container: self.target.container.clone(),
+            shell: command,
+            size,
+        };
+        let updates = connection.pod_shell(permit, request, receiver);
+        self.subscribe_to(updates, cx);
+    }
+
+    /// Starts the attach of a debug tab, after the container or pod it attaches to was created. The
+    /// only callers are the guarded open flows of the shell.
+    pub(crate) fn connect_attach(&mut self, grant: AttachGrant, cx: &mut Context<Self>) {
+        let AttachGrant { connection, permit } = grant;
+        let banner = attach_banner(&self.target, &self.kind, &self.cluster_label);
+        let (receiver, size) = self.begin_session(&banner);
+        let wait = match self.kind {
+            ShellKind::NodeShell { .. } => AttachWait::NodeShellPod,
+            ShellKind::Debug { .. } | ShellKind::Exec => AttachWait::EphemeralContainer,
+        };
+        let request = AttachRequest {
+            namespace: self.target.namespace.clone(),
+            pod: self.target.pod.clone(),
+            container: self.target.container.clone(),
+            wait,
+            size,
+        };
+        let updates = connection.attach_shell(permit, request, receiver);
+        self.session.borrow_mut().note(starting_text(&self.kind));
+        self.subscribe_to(updates, cx);
+    }
+
+    /// The part of a start both kinds share: the state, the fresh input channel, and the banner.
+    fn begin_session(&mut self, banner: &str) -> (UnboundedReceiver<ShellInput>, GridSize) {
         self.state = ShellState::Connecting;
         self.is_start_unreported = true;
         let (input, receiver) = unbounded();
@@ -189,18 +271,18 @@ impl ShellTab {
             if self.starts > 0 {
                 session.note("──────── new session ────────");
             }
-            session.note(&banner(&self.target, command, &self.cluster_label));
+            session.note(banner);
             session.grid_size()
         };
         self.starts += 1;
-        let request = ShellRequest {
-            namespace: self.target.namespace.clone(),
-            pod: self.target.pod.clone(),
-            container: self.target.container.clone(),
-            shell: command,
-            size,
-        };
-        let updates = connection.pod_shell(permit, request, receiver);
+        (receiver, size)
+    }
+
+    fn subscribe_to(
+        &mut self,
+        updates: impl futures::Stream<Item = ShellUpdate> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
         let runtime = cx.global::<ClusterRuntime>().clone();
         // Replacing the subscription drops the old one, which ends the old session.
         self.connection = Some(runtime.subscribe(
@@ -216,8 +298,15 @@ impl ShellTab {
     /// program go back at once.
     pub(crate) fn apply(&mut self, update: ShellUpdate, cx: &mut Context<Self>) {
         match update {
+            // Only a debug start waits for its container; an exec never sends it.
+            ShellUpdate::Waiting(reason) => {
+                self.session.borrow_mut().note(&waiting_text(&reason));
+            }
             ShellUpdate::Started => {
                 self.state = ShellState::Live;
+                if !self.kind.is_exec() {
+                    self.session.borrow_mut().note(PROMPT_HINT);
+                }
                 if std::mem::take(&mut self.is_start_unreported) {
                     cx.emit(ShellEvent::Opened);
                 }
@@ -272,6 +361,7 @@ impl ShellTab {
         let text = end_note(&end, was_started);
         self.session.borrow_mut().note(&text);
         self.state = ShellState::Ended(end);
+        cx.emit(ShellEvent::Ended);
         cx.notify();
     }
 
@@ -487,7 +577,8 @@ impl ShellTab {
     }
 
     /// A new exec in this tab, through the guarded flow of the shell: its gate, lock, tier dialog,
-    /// and audit line. Deferred, because the flow updates this tab.
+    /// and audit line. Deferred, because the flow updates this tab. A debug tab never reuses its
+    /// container or pod: Reconnect opens the options dialog again, prefilled, for a new one.
     fn request_reconnect(
         &mut self,
         command: ShellCommand,
@@ -497,9 +588,59 @@ impl ShellTab {
         let (app, tab) = (self.app.clone(), cx.weak_entity());
         window.defer(cx, move |window, cx| {
             let _ = app.update(cx, |shell, cx| {
-                shell.reconnect_shell(&tab, command, window, cx);
+                if shell.is_debug_tab(&tab, cx) {
+                    shell.reopen_debug_options(&tab, window, cx);
+                } else {
+                    shell.reconnect_shell(&tab, command, window, cx);
+                }
             });
         });
+    }
+
+    /// The `Debug container…` button of an exec that found no shell in its container: it opens
+    /// the options dialog for that pod with the container prefilled.
+    fn render_debug_offer(&self, cx: &Context<Self>) -> Option<impl IntoElement> {
+        if self.state != ShellState::Ended(ShellEnd::NoShell) {
+            return None;
+        }
+        Some(
+            Button::new("shell-debug-container")
+                .small()
+                .label("Debug container…")
+                .tooltip("Add a debug container with a shell next to this one")
+                .on_click(cx.listener(|tab, _, window, cx| {
+                    let (app, tab) = (tab.app.clone(), cx.weak_entity());
+                    window.defer(cx, move |window, cx| {
+                        let _ = app.update(cx, |shell, cx| {
+                            shell.offer_debug_container(&tab, window, cx);
+                        });
+                    });
+                })),
+        )
+    }
+
+    /// The first line of the header: what runs and where.
+    fn header_text(&self) -> String {
+        let context = &self.target.cluster.context;
+        match &self.kind {
+            ShellKind::Exec => format!(
+                "›_ {} · {} · {}",
+                self.target.pod,
+                self.target.container,
+                self.shell_label()
+            ),
+            ShellKind::Debug {
+                target_container,
+                image,
+            } => format!(
+                "›_ debug {} → {target_container} · {} · {image} · {context}",
+                self.target.container, self.target.pod
+            ),
+            ShellKind::NodeShell { node, image } => format!(
+                "›_ node {node} · pod {}/{} · {image} · {context}",
+                self.target.namespace, self.target.pod
+            ),
+        }
     }
 
     fn on_find(&mut self, _: &TerminalFind, window: &mut Window, cx: &mut Context<Self>) {
@@ -613,6 +754,10 @@ impl ShellTab {
         self.command
     }
 
+    pub(crate) fn kind(&self) -> &ShellKind {
+        &self.kind
+    }
+
     #[cfg(any(test, feature = "screenshot"))]
     pub(crate) fn state(&self) -> &ShellState {
         &self.state
@@ -626,12 +771,20 @@ impl ShellTab {
         &self.cluster_label
     }
 
-    /// `shell · m8n2p/api`, the tab label: the pod by the suffix rule of the Logs tab.
+    /// `shell · m8n2p/api`, the tab label: the pod by the suffix rule of the Logs tab. A debug
+    /// container reads `debug · m8n2p/api` (the container it shares), a node shell
+    /// `node shell · wk-03 (debug pod)`.
     pub(crate) fn label(&self) -> String {
-        format!(
-            "shell · {}/{}",
-            self.target.short_pod, self.target.container
-        )
+        match &self.kind {
+            ShellKind::Exec => format!(
+                "shell · {}/{}",
+                self.target.short_pod, self.target.container
+            ),
+            ShellKind::Debug {
+                target_container, ..
+            } => format!("debug · {}/{target_container}", self.target.short_pod),
+            ShellKind::NodeShell { node, .. } => format!("node shell · {node} (debug pod)"),
+        }
     }
 
     /// The dot of the tab: dim once the session has ended.
@@ -668,14 +821,10 @@ impl ShellTab {
                     .truncate()
                     .font_family(theme.mono_font_family.clone())
                     .text_xs()
-                    .child(format!(
-                        "›_ {} · {} · {}",
-                        self.target.pod,
-                        self.target.container,
-                        self.shell_label()
-                    )),
+                    .child(self.header_text()),
             )
-            .child(self.render_shell_picker(cx))
+            .children(self.kind.is_exec().then(|| self.render_shell_picker(cx)))
+            .children(self.render_debug_offer(cx))
             .children(self.is_find_open.then(|| self.render_find(cx)))
             .child(
                 Toggle::new("shell-find")
@@ -787,6 +936,42 @@ fn banner(target: &ShellTarget, command: ShellCommand, cluster_label: &str) -> S
     )
 }
 
+/// The first line of a debug tab's terminal: what it attaches to and where.
+fn attach_banner(target: &ShellTarget, kind: &ShellKind, cluster_label: &str) -> String {
+    match kind {
+        ShellKind::NodeShell { node, .. } => format!(
+            "# node shell {node}: attach -n {} {} -c {} ({cluster_label})",
+            target.namespace, target.pod, target.container
+        ),
+        ShellKind::Debug { .. } | ShellKind::Exec => format!(
+            "# debug: attach -n {} {} -c {} ({cluster_label})",
+            target.namespace, target.pod, target.container
+        ),
+    }
+}
+
+/// What a debug tab says while its container is created and started.
+fn starting_text(kind: &ShellKind) -> &'static str {
+    match kind {
+        ShellKind::NodeShell { .. } => "Starting node shell pod…",
+        ShellKind::Debug { .. } | ShellKind::Exec => "Starting debug container…",
+    }
+}
+
+/// The dim line for a waiting reason the pod reports. Anything unknown is shown as the word itself:
+/// the reason is a fixed CamelCase word (`cluster::debug_shell` drops the server's messages).
+fn waiting_text(reason: &str) -> String {
+    match reason {
+        "ContainerCreating" => "Creating container…".to_owned(),
+        "PodInitializing" => "Starting…".to_owned(),
+        "Pulling" | "ErrImagePull" | "ImagePullBackOff" => "Pulling image…".to_owned(),
+        other => format!("Waiting: {other}"),
+    }
+}
+
+/// Shown once the attach is up: a shell that printed no prompt yet looks stuck.
+const PROMPT_HINT: &str = "If you don't see a prompt, press Enter.";
+
 fn exit_end(exit: &ShellExit) -> ShellEnd {
     match (&exit.code, &exit.message) {
         (_, Some(message)) if message.contains(NO_EXECUTABLE) => ShellEnd::NoShell,
@@ -805,7 +990,7 @@ fn end_note(end: &ShellEnd, was_started: bool) -> String {
         ShellEnd::Exited { code: None } => "[process exited]".to_owned(),
         ShellEnd::Failed { reason } if was_started => format!("[connection lost: {reason}]"),
         ShellEnd::Failed { reason } => format!("[could not open the shell: {reason}]"),
-        ShellEnd::NoShell => "No shell in this container; try Debug container… (0037)".to_owned(),
+        ShellEnd::NoShell => "No shell in this container; try Debug container…".to_owned(),
     }
 }
 

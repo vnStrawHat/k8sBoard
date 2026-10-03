@@ -220,7 +220,7 @@ pub(crate) fn clean_note(note: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
-fn timestamp_now() -> String {
+pub(crate) fn timestamp_now() -> String {
     let now = jiff::Timestamp::now();
     // Whole seconds keep the lines short and stable to read.
     jiff::Timestamp::from_second(now.as_second())

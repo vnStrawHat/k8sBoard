@@ -28,6 +28,7 @@ mod container_detail;
 mod crd_rows;
 mod custom_kind;
 mod custom_rows;
+mod debug_dialogs;
 mod dock;
 mod drawer;
 mod environment;
@@ -270,6 +271,19 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
                     return;
                 }
             };
+            // A close waits while a node shell pod still has to be deleted (spec 0037).
+            // Weak: the callback lives as long as the window, and a strong handle would outlive the app.
+            let closing = shell.downgrade();
+            let hooked = window.update(cx, |_, window, cx| {
+                window.on_window_should_close(cx, move |_, cx| {
+                    closing
+                        .update(cx, |shell, cx| shell.main_window_may_close(cx))
+                        .unwrap_or(true)
+                });
+            });
+            if hooked.is_err() {
+                tracing::warn!("could not hook the close of the main window");
+            }
             settings_window::quit_when_main_window_closes(window.window_id(), |cx| cx.quit(), cx);
             // A settings screen shows the Settings window next to the main one; a screenshot
             // captures the Settings window.

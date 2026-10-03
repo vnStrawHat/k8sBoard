@@ -20,7 +20,7 @@ use crate::cluster_session::ClusterSession;
 use crate::log_tab::{LogLayout, LogTab, tab_title};
 use crate::log_target::{ContainerChoice, LogTarget, NoLogTarget};
 use crate::resource_actions::{RowAction, disabled_menu_item};
-use crate::shell_tab::{ShellGrant, ShellTab, ShellTarget};
+use crate::shell_tab::{AttachGrant, ShellGrant, ShellKind, ShellTab, ShellTarget};
 use crate::status_tone::{StatusTone, tone_color};
 
 pub(crate) const DEFAULT_DOCK_HEIGHT: Pixels = px(280.);
@@ -216,6 +216,32 @@ impl Dock {
         Some(tab)
     }
 
+    /// Opens the tab of a debug start (a debug container or a node shell pod) and attaches it, on
+    /// the connection of the target's own cluster, with the proof that both attach verbs are
+    /// allowed. Like `open_shell` it adds a new tab each time, counts toward the cap, and answers
+    /// `None` past it.
+    pub(crate) fn open_attach(
+        &mut self,
+        target: ShellTarget,
+        kind: ShellKind,
+        cluster_label: String,
+        grant: AttachGrant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<ShellTab>> {
+        if !self.has_room_for_shell(cx) {
+            window.push_notification(Notification::warning(shell_cap_text()), cx);
+            return None;
+        }
+        let app = self.shell.clone();
+        let tab =
+            cx.new(|cx| ShellTab::new(target, cluster_label, app, window, cx).with_kind(kind));
+        tab.update(cx, |tab, cx| tab.connect_attach(grant, cx));
+        self.tabs.push(DockTab::Shell(tab.clone()));
+        self.activate(self.tabs.len() - 1, cx);
+        Some(tab)
+    }
+
     /// `--screen shell-fixture`: a shell tab that never connects, fed `transcript`.
     #[cfg(feature = "screenshot")]
     pub(crate) fn open_shell_fixture(
@@ -247,10 +273,24 @@ impl Dock {
         })
     }
 
-    /// How many open shell tabs belong to `clusters`: what releasing them would end.
+    /// How many open shell tabs belong to `clusters`: what releasing them would end. A node shell
+    /// counts apart (`node_shell_count_of`), because closing it also deletes its pod.
     pub(crate) fn shell_count_of(&self, clusters: &[ClusterRef], cx: &App) -> usize {
         self.shell_tabs(cx)
-            .filter(|tab| clusters.contains(tab.read(cx).cluster()))
+            .filter(|tab| {
+                let tab = tab.read(cx);
+                clusters.contains(tab.cluster()) && !tab.kind().is_node_shell()
+            })
+            .count()
+    }
+
+    /// How many open node shells belong to `clusters`.
+    pub(crate) fn node_shell_count_of(&self, clusters: &[ClusterRef], cx: &App) -> usize {
+        self.shell_tabs(cx)
+            .filter(|tab| {
+                let tab = tab.read(cx);
+                clusters.contains(tab.cluster()) && tab.kind().is_node_shell()
+            })
             .count()
     }
 

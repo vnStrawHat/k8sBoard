@@ -105,6 +105,7 @@ fn forward_intent(
         warnings: Vec::new(),
         object,
         fields,
+        expected_name: None,
         open: ConnectOpen::PortForward(open),
     }
 }

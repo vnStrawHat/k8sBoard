@@ -47,11 +47,14 @@ impl ConfirmMode {
     }
 }
 
-/// What an action can do to the cluster; only the dialog's button style follows from it.
+/// What an action can do to the cluster; the dialog's button style follows from it, and a
+/// privileged action also fixes how it is confirmed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActionRisk {
     Change,
     Destructive,
+    /// Opens a root shell on a node (0037): the strongest tier, whatever the cluster's own.
+    Privileged,
 }
 
 /// How the confirm dialog is confirmed.
@@ -66,6 +69,11 @@ pub(crate) enum DialogConfirm {
 /// object.
 pub(crate) fn confirm_step(mode: ConfirmMode, risk: ActionRisk, expected: &str) -> DialogConfirm {
     match risk {
+        // A privileged action types the name of what it opens on, in every environment: a cluster
+        // set to click, or a development cluster, still asks.
+        ActionRisk::Privileged => DialogConfirm::TypeName {
+            expected: expected.to_owned(),
+        },
         ActionRisk::Change | ActionRisk::Destructive => match mode {
             ConfirmMode::TypeName => DialogConfirm::TypeName {
                 expected: expected.to_owned(),
@@ -131,6 +139,9 @@ pub(crate) fn test_guard<'a>(
         default_namespace: None,
         read_only: lock == WriteLock::Locked,
         confirm: ConfirmMode::for_environment(environment),
+        allow_node_shell: true,
+        debug_image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
+        node_shell_namespace: "kube-system".to_owned(),
     };
     let summary = ContextSummary {
         name: name.to_owned(),

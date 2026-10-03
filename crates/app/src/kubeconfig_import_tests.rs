@@ -55,6 +55,9 @@ fn collisions_report_context_display_name_cluster_and_user() {
             read_only: None,
             confirm: None,
             default_namespace: None,
+            allow_node_shell: None,
+            debug_image: None,
+            node_shell_namespace: None,
         }],
         ..ClusterRegistry::default()
     };

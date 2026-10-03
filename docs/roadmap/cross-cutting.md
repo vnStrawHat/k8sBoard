@@ -49,7 +49,7 @@
 | `metrics.k8s.io/v1beta1` | available | 0010 verifiable |
 | `get nodes/proxy` | allowed | verified by the 0011 probe (summary 39 to 175 KB per node, cAdvisor about 0.9 MB); node logs 0019 |
 | `list secrets` | allowed | real Secret values reachable: C1 landed with 0016 (0016 probe: 42 secrets, 8 TLS all parsed, earliest leaf not-after 2026-12-26); Helm data readable if releases exist; 0017 probe: 0 Helm releases on UAT (no `helm.sh/release.v1` Secret), so Releases is verified by fixture tests and the empty state |
-| `create pods/exec`, `create pods/portforward` | denied | 0035–0037 render disabled; live checks need another cluster |
+| `create pods/exec`, `create pods/portforward`, `create pods`, `delete pods`, `patch pods/ephemeralcontainers`, `create pods/attach` | denied (`get pods/attach` allowed; recorded by the 0037 live check) | 0035–0037 render disabled; live checks need another cluster |
 | PVCs, PVs, StorageClasses | allowed (0014 probe: 29 PVCs, 57 PVs, 2 StorageClasses) | 0014 verifiable |
 | NetworkPolicies, HPAs, quotas, PDBs | allowed (0013 probe: 8 policies, 1 HPA, 0 quotas, 7 PDBs) | 0013 verifiable; quotas only by unit tests and the empty state |
 | ServiceAccounts, Roles, ClusterRoles, RoleBindings, ClusterRoleBindings | allowed (0015 probe: 98 service accounts, 28 roles, 95 cluster roles, 31 role bindings, 82 cluster role bindings) | 0015 verifiable |

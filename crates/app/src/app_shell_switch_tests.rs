@@ -2,7 +2,7 @@
 //! points at a closed local port, so every connect fails fast and nothing leaves the machine.
 //! Sessions connect on a real tokio runtime that the fixture keeps alive for the whole test.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use gpui_kit::base::Root;
@@ -18,6 +18,8 @@ use cluster::ClusterConnection;
 
 use crate::cluster_runtime::ClusterRuntime;
 use crate::settings_window::{ManageClusters, OpenSettings};
+
+static FIXTURE_SERIAL: AtomicU64 = AtomicU64::new(0);
 
 pub(super) const FIXTURE_YAML: &str = "apiVersion: v1\nkind: Config\nclusters:\n  - name: c\n    cluster: { server: 'https://127.0.0.1:1' }\ncontexts:\n  - name: prod-a\n    context: { cluster: c }\n  - name: stg-b\n    context: { cluster: c }\n  - name: dev-c\n    context: { cluster: c }\n";
 
@@ -67,7 +69,13 @@ pub(super) fn open_switch_fixture_over(
     // The tokio threads wake gpui tasks, which the deterministic scheduler forbids by default.
     cx.executor().allow_parking();
     cx.update(|cx| cx.set_global(ClusterRuntime::new(handle)));
-    let dir = std::env::temp_dir().join(format!("k8sboard-0026-{name}-{}", std::process::id()));
+    // Tests of different files share names ("gate", "release"), and tests run in parallel in one
+    // process, so the folder is unique per fixture: a shared one lets a test delete another's file.
+    let serial = FIXTURE_SERIAL.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "k8sboard-0026-{name}-{}-{serial}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the temp dir");
     let path = dir.join("kubeconfig.yaml");

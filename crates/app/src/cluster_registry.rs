@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use cluster::{ContextSummary, NamespaceScope};
+use cluster::{ContextSummary, DEFAULT_DEBUG_IMAGE, NamespaceScope};
 use serde::{Deserialize, Serialize};
 
 use crate::environment::{Environment, guess_environment};
@@ -46,7 +46,21 @@ pub(crate) struct ClusterEntry {
     pub(crate) confirm: Option<ConfirmMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) default_namespace: Option<String>,
+    /// Whether the node shell is offered (spec 0037); `None` follows the environment: on for
+    /// Development and Local, on for Staging only when the environment is set here, off otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) allow_node_shell: Option<bool>,
+    /// The image of debug containers and node shell pods; `None` is the pinned busybox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) debug_image: Option<String>,
+    /// Where the node shell pod is created; `None` is `kube-system`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) node_shell_namespace: Option<String>,
 }
+
+/// The namespace of a node shell pod unless the entry names another: usually exempt from Pod
+/// Security enforcement, and where admins expect system pods.
+pub(crate) const DEFAULT_NODE_SHELL_NAMESPACE: &str = "kube-system";
 
 /// What the views show for a context: the entry's overrides over the defaults.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,6 +72,11 @@ pub(crate) struct ClusterProfile {
     pub(crate) read_only: bool,
     /// The stored mode, else the environment's default.
     pub(crate) confirm: ConfirmMode,
+    /// The stored switch, else the environment's default: off for Production and for an
+    /// environment that was only guessed to be Staging.
+    pub(crate) allow_node_shell: bool,
+    pub(crate) debug_image: String,
+    pub(crate) node_shell_namespace: String,
 }
 
 impl ClusterRef {
@@ -96,6 +115,9 @@ impl ClusterRegistry {
                 read_only: None,
                 confirm: None,
                 default_namespace: None,
+                allow_node_shell: None,
+                debug_image: None,
+                node_shell_namespace: None,
             });
             self.clusters.len() - 1
         });
@@ -119,12 +141,34 @@ impl ClusterRegistry {
         let confirm = entry
             .and_then(|entry| entry.confirm)
             .unwrap_or_else(|| ConfirmMode::for_environment(environment));
+        // A guess must never switch a privileged pod on: Staging is also what an unknown name
+        // falls back to, so it counts only when the entry says it.
+        let allow_node_shell =
+            entry
+                .and_then(|entry| entry.allow_node_shell)
+                .unwrap_or(match environment {
+                    Environment::Development | Environment::Local => true,
+                    Environment::Staging => entry.is_some_and(|entry| entry.environment.is_some()),
+                    Environment::Production => false,
+                });
+        let stored_text = |text: Option<&String>| {
+            text.map(|text| text.trim())
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+        };
         ClusterProfile {
             display_name,
             environment,
             default_namespace: entry.and_then(|entry| entry.default_namespace.clone()),
             read_only,
             confirm,
+            allow_node_shell,
+            debug_image: stored_text(entry.and_then(|entry| entry.debug_image.as_ref()))
+                .unwrap_or_else(|| DEFAULT_DEBUG_IMAGE.to_owned()),
+            node_shell_namespace: stored_text(
+                entry.and_then(|entry| entry.node_shell_namespace.as_ref()),
+            )
+            .unwrap_or_else(|| DEFAULT_NODE_SHELL_NAMESPACE.to_owned()),
         }
     }
 }

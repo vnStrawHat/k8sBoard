@@ -25,8 +25,8 @@ use crate::keymap::{
 use crate::live_sections::loaded_replica_sets;
 use crate::pod_drawer::{container_display_order, selected_container_index};
 use crate::resource_actions::{
-    KeyAvailability, ResourceAction, RowAction, action_label, key_availability, subject_action,
-    unavailable_text,
+    DebugPod, KeyAvailability, ResourceAction, RowAction, action_label, key_availability,
+    subject_action, unavailable_text,
 };
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::workload_actions::{row_block, state_label};
@@ -507,8 +507,24 @@ impl AppShell {
             ResourceAction::CopyName => {}
             // The default container of the cursor pod, in the cursor's own cluster (spec 0036).
             ResourceAction::OpenShell => self.open_default_shell(&subject, window, cx),
-            // Unreachable while gated; the owning spec (0037) wires it.
-            ResourceAction::OpenNodeShell => {}
+            // The node shell options dialog of the cursor node, in the cursor's own cluster (spec 0037).
+            ResourceAction::OpenNodeShell => {
+                if let ResourceKey::Node { name } = &subject.key {
+                    self.open_node_shell_options(&subject.cluster, name, window, cx);
+                }
+            }
+            // Its key is unbound; the menu item carries the pod, so this only runs from a caller that
+            // resolved the action for the cursor pod.
+            ResourceAction::DebugContainer => {
+                if let ResourceKey::Pod { namespace, name } = &subject.key {
+                    let pod = DebugPod {
+                        cluster: subject.cluster.clone(),
+                        namespace: namespace.clone(),
+                        pod: name.clone(),
+                    };
+                    self.open_debug_options(pod, None, window, cx);
+                }
+            }
             // One TCP port starts at once; several or none open New forward (spec 0035). On the
             // subject's own cluster, never the primary.
             ResourceAction::PortForward => self.run_port_forward_key(&subject, window, cx),

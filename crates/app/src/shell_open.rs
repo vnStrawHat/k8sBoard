@@ -22,7 +22,7 @@ use crate::cluster_registry::ClusterRef;
 use crate::dock::shell_cap_text;
 use crate::resource_actions::{ResourceAction, action_label, action_risk, default_shell_container};
 use crate::settings::AppSettings;
-use crate::shell_tab::{ShellEvent, ShellGrant, ShellTab, ShellTarget, short_pod_name};
+use crate::shell_tab::{ShellEvent, ShellGrant, ShellKind, ShellTab, ShellTarget, short_pod_name};
 use crate::table_selection::{ClusterObject, ResourceKey};
 
 /// The container to open a shell in, and the cluster of its pod.
@@ -76,6 +76,51 @@ fn shell_audit(target: &ShellTarget, command: ShellCommand) -> (AuditObject, Vec
             },
         ],
     )
+}
+
+/// What the audit line of a session start names, by what the tab runs: the action, the pod, and the
+/// parameters. A debug start records the image and, for a node shell, the privilege; never bytes.
+fn start_audit(
+    tab: &ShellTab,
+    command: ShellCommand,
+) -> (&'static str, AuditObject, Vec<AuditField>) {
+    let target = tab.target();
+    let field = |path: &str, value: &str| AuditField {
+        path: path.to_owned(),
+        value: Some(value.to_owned()),
+    };
+    let pod = || AuditObject {
+        kind: "Pod".to_owned(),
+        namespace: Some(target.namespace.clone()),
+        name: target.pod.clone(),
+    };
+    match tab.kind() {
+        ShellKind::Exec => {
+            let (object, fields) = shell_audit(target, command);
+            (AUDIT_ACTION, object, fields)
+        }
+        ShellKind::Debug {
+            target_container,
+            image,
+        } => (
+            "Open debug shell",
+            pod(),
+            vec![
+                field("container", &target.container),
+                field("target_container", target_container),
+                field("image", image),
+            ],
+        ),
+        ShellKind::NodeShell { node, image } => (
+            "Open node shell",
+            pod(),
+            vec![
+                field("node", node),
+                field("image", image),
+                field("privileged", "true"),
+            ],
+        ),
+    }
 }
 
 impl AppShell {
@@ -226,30 +271,38 @@ impl AppShell {
 
     /// Writes the audit line of every session start of `tab`: applied when the exec connection
     /// came up, failed with the error when it did not.
-    fn watch_shell(&mut self, tab: &Entity<ShellTab>, cx: &mut Context<Self>) {
+    pub(super) fn watch_shell(&mut self, tab: &Entity<ShellTab>, cx: &mut Context<Self>) {
         cx.subscribe(tab, |shell, tab, event: &ShellEvent, cx| {
             shell.audit_shell_start(&tab, event, cx);
+            // A node shell pod is deleted with its session, whichever way it ended.
+            if *event == ShellEvent::Ended {
+                shell.cleanup_tab(tab.entity_id(), cx);
+            }
         })
         .detach();
         let id = tab.entity_id();
-        cx.observe_release(tab, move |shell, _, cx| shell.abandon_shell_start(id, cx))
-            .detach();
+        cx.observe_release(tab, move |shell, _, cx| {
+            shell.abandon_shell_start(id, cx);
+            // The tab was closed, or released with its cluster or the whole view.
+            shell.cleanup_tab(id, cx);
+        })
+        .detach();
     }
 
     /// A session of `tab` is starting with `command`: remembers the line to write if it never
     /// reports. A start still pending in the same tab is replaced, and its line is written now.
-    fn begin_shell_start(
+    pub(super) fn begin_shell_start(
         &mut self,
         tab: &Entity<ShellTab>,
         command: ShellCommand,
         cx: &mut Context<Self>,
     ) {
         let target = tab.read(cx).target().clone();
-        let (object, fields) = shell_audit(&target, command);
+        let (action, object, fields) = start_audit(tab.read(cx), command);
         let Some(entry) = self.guard_for(&target.cluster, cx).map(|guard| {
             let error = Some(ABANDONED_TEXT.to_owned());
             connect_entry(
-                AUDIT_ACTION,
+                action,
                 object,
                 fields,
                 &guard,
@@ -303,20 +356,22 @@ impl AppShell {
         event: &ShellEvent,
         cx: &mut Context<Self>,
     ) {
-        // It reported, so it is no longer pending.
-        self.shell_starts.pending.remove(&tab.entity_id());
-        let (target, command) = {
-            let tab = tab.read(cx);
-            (tab.target().clone(), tab.command())
-        };
         let (outcome, error) = match event {
             ShellEvent::Opened => (AuditOutcome::Applied, None),
             ShellEvent::OpenFailed { error } => (AuditOutcome::Failed, Some(error.clone())),
+            // The end of a session is not a start: nothing reports twice.
+            ShellEvent::Ended => return,
         };
-        let (object, fields) = shell_audit(&target, command);
+        // It reported, so it is no longer pending.
+        self.shell_starts.pending.remove(&tab.entity_id());
+        let (target, action, object, fields) = {
+            let tab = tab.read(cx);
+            let (action, object, fields) = start_audit(tab, tab.command());
+            (tab.target().clone(), action, object, fields)
+        };
         let Some(entry) = self
             .guard_for(&target.cluster, cx)
-            .map(|guard| connect_entry(AUDIT_ACTION, object, fields, &guard, outcome, error))
+            .map(|guard| connect_entry(action, object, fields, &guard, outcome, error))
         else {
             return;
         };
@@ -383,6 +438,7 @@ fn shell_intent(
         warnings: Vec::new(),
         object,
         fields,
+        expected_name: None,
         open: ConnectOpen::Exec(open),
     }
 }

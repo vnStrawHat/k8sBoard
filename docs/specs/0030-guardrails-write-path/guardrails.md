@@ -44,7 +44,7 @@ pub(crate) fn action_availability(action: ResourceAction, guard: &ClusterGuard) 
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ConfirmMode { TypeName, Click }   // "type-name", "click"
 impl ConfirmMode { pub(crate) fn for_environment(environment: Environment) -> Self; } // Production → TypeName, else Click
-pub(crate) enum ActionRisk { Change, Destructive }   // declared per ResourceAction; 0037 adds Privileged
+pub(crate) enum ActionRisk { Change, Destructive, Privileged }   // declared per ResourceAction; Privileged is 0037 (node shell)
 pub(crate) enum DialogConfirm { Click, TypeName { expected: String } }
 /// Every guarded action opens the confirm dialog; this only picks how it is confirmed.
 pub(crate) fn confirm_step(mode: ConfirmMode, risk: ActionRisk, expected: &str) -> DialogConfirm;
@@ -54,10 +54,11 @@ pub(crate) fn confirm_step(mode: ConfirmMode, risk: ActionRisk, expected: &str) 
 |---|---|---|
 | `TypeName` (PROD) | dialog, type the name | dialog, type the name, danger button |
 | `Click` (STG, DEV, LOCAL; unknown → STG) | dialog, click the focused confirm button | dialog, click the focused danger button |
+| any tier | `Privileged` (node shell, 0037): dialog, type the **node name**, danger button, whatever the cluster tier is | |
 
 - (user, 2026-10-02, decision 9) **Every guarded action opens a dialog**, for every tier, risk, and trigger (pointer, key, palette). The Enter, one-click-without-dialog, and None tiers are removed; `Trigger` and `ConfirmStep::Run` went with them, since they only chose between those tiers.
 - Enter inside the dialog activates the focused confirm button; held or repeated Enter is ignored (decision 28, write-flow.md).
-- `Change` and `Destructive` confirm the same way (the risk only picks the danger button); `confirm_step` still matches on `risk` exhaustively, so 0037's `Privileged` arm is one more arm.
+- `Change` and `Destructive` confirm the same way (the risk only picks the danger button). `Privileged` (0037, as built) is its own arm of the exhaustive `confirm_step` match: `TypeName { expected }` for every mode, with the node name as `expected`, and the danger button.
 - `expected`: the cluster display name (W10, W2 "Typing the cluster name") unless the action names its object (W6 drain types the node name; the feature passes it). Match: exact after trimming surrounding spaces; case-sensitive.
 - Cordon / Uncordon is `Change`.
 

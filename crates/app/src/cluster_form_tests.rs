@@ -68,6 +68,9 @@ fn entry(context: &str, source: &str) -> ClusterEntry {
         read_only: None,
         confirm: None,
         default_namespace: None,
+        allow_node_shell: None,
+        debug_image: None,
+        node_shell_namespace: None,
     }
 }
 
@@ -393,4 +396,28 @@ fn remove_matches_the_path_text_not_the_exact_buffer() {
     assert_eq!(registry.kubeconfigs, [PathBuf::from("b.yaml")]);
     assert!(registry.clusters.is_empty());
     assert_eq!(registry.last_used, None);
+}
+
+#[test]
+fn edit_entry_keeps_an_entry_that_only_sets_the_node_shell() {
+    let mut registry = ClusterRegistry::default();
+    let target = cluster("one", "a.yaml");
+    edit_entry(&mut registry, &target, |entry| {
+        entry.allow_node_shell = Some(true);
+    });
+    assert_eq!(registry.clusters.len(), 1);
+    edit_entry(&mut registry, &target, |entry| {
+        entry.allow_node_shell = None;
+        entry.debug_image = Some("registry.local/busybox:1".to_owned());
+    });
+    assert_eq!(registry.clusters.len(), 1);
+    edit_entry(&mut registry, &target, |entry| {
+        entry.debug_image = None;
+        entry.node_shell_namespace = Some("debug".to_owned());
+    });
+    assert_eq!(registry.clusters.len(), 1);
+    edit_entry(&mut registry, &target, |entry| {
+        entry.node_shell_namespace = None
+    });
+    assert!(registry.clusters.is_empty());
 }

@@ -418,6 +418,10 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
     if screen.settings_screen().is_some() {
         return !input.is_catalog_loading;
     }
+    // A dialog drawn from fixed data waits for no cluster, only for its own opening.
+    if screen.is_dialog_fixture() {
+        return !input.is_dialog_pending;
+    }
     match input.target {
         TargetState::Unavailable => true,
         TargetState::Loading => false,
@@ -641,6 +645,31 @@ mod tests {
             pod_metrics: progress(FeedStatus::Live, 1),
             node_metrics: progress(FeedStatus::Live, 1),
             kubelet: progress(FeedStatus::Live, 4),
+        }
+    }
+
+    #[test]
+    fn a_fixed_dialog_is_settled_without_a_cluster() {
+        for screen in [
+            LaunchScreen::NodeShellConfirm,
+            LaunchScreen::ShellConfirmFixture,
+        ] {
+            for target in [
+                TargetState::Loading,
+                TargetState::Unavailable,
+                TargetState::Loaded,
+            ] {
+                assert!(
+                    is_screen_settled(screen, &input(target, false)),
+                    "{screen:?}"
+                );
+            }
+            // Until its dialog has opened.
+            let pending = SettleInput {
+                is_dialog_pending: true,
+                ..input(TargetState::Loading, false)
+            };
+            assert!(!is_screen_settled(screen, &pending), "{screen:?}");
         }
     }
 

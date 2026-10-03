@@ -26,11 +26,16 @@ pub(crate) struct LeavingWork {
     pub(crate) batches: usize,
     /// The open Edit YAML text that was not applied, as `Deployment/payments/api`: it is thrown away.
     pub(crate) unsaved_edit: Option<String>,
+    /// Open node shells: each pod is deleted with its tab.
+    pub(crate) node_shells: usize,
 }
 
 impl LeavingWork {
     pub(crate) fn is_empty(&self) -> bool {
-        self.shells == 0 && self.batches == 0 && self.unsaved_edit.is_none()
+        self.shells == 0
+            && self.batches == 0
+            && self.node_shells == 0
+            && self.unsaved_edit.is_none()
     }
 
     /// One line per kind of work: `2 shells will close`.
@@ -53,6 +58,13 @@ impl LeavingWork {
         if let Some(subject) = &self.unsaved_edit {
             lines.push(format!("Unsaved changes to {subject}"));
         }
+        match self.node_shells {
+            0 => {}
+            1 => lines.push("1 node shell will close; its pod is deleted".to_owned()),
+            count => lines.push(format!(
+                "{count} node shells will close; their pods are deleted"
+            )),
+        }
         lines
     }
 }
@@ -65,6 +77,7 @@ impl AppShell {
     pub(super) fn leaving_work(&self, leaving: &[ClusterRef], cx: &gpui_kit::App) -> LeavingWork {
         LeavingWork {
             shells: self.dock.read(cx).shell_count_of(leaving, cx),
+            node_shells: self.dock.read(cx).node_shell_count_of(leaving, cx),
             batches: leaving
                 .iter()
                 .filter(|cluster| self.running_batches.contains(cluster))
@@ -191,6 +204,23 @@ mod tests {
         assert_eq!(
             work.lines(),
             ["Unsaved changes to Deployment/team-a/api".to_owned()]
+        );
+    }
+
+    #[test]
+    fn node_shells_say_their_pods_are_deleted() {
+        let node_shells = |node_shells| LeavingWork {
+            node_shells,
+            ..LeavingWork::default()
+        };
+        assert!(!node_shells(1).is_empty());
+        assert_eq!(
+            node_shells(1).lines(),
+            ["1 node shell will close; its pod is deleted".to_owned()]
+        );
+        assert_eq!(
+            node_shells(3).lines(),
+            ["3 node shells will close; their pods are deleted".to_owned()]
         );
     }
 }

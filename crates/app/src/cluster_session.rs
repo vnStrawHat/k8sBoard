@@ -772,6 +772,16 @@ impl AccessState {
                     create_pods_portforward = report.is_allowed(AccessCheck::CreatePodPortForward),
                     "port-forward permissions of the session"
                 );
+                // And the five checks of the debug container and the node shell (spec 0037).
+                tracing::debug!(
+                    create_pods = report.is_allowed(AccessCheck::CreatePods),
+                    delete_pods = report.is_allowed(AccessCheck::DeletePods),
+                    patch_ephemeralcontainers =
+                        report.is_allowed(AccessCheck::PatchPodEphemeralContainers),
+                    get_pods_attach = report.is_allowed(AccessCheck::GetPodAttach),
+                    create_pods_attach = report.is_allowed(AccessCheck::CreatePodAttach),
+                    "debug shell permissions of the session"
+                );
                 Self::Known(report)
             }
             Err(message) => {

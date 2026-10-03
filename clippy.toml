@@ -53,4 +53,8 @@ disallowed-methods = [
     { path = "kube::Api::exec", reason = "connect verbs live in their named files only; see spec 0030" },
     { path = "kube::Api::attach", reason = "connect verbs live in their named files only; see spec 0030" },
     { path = "kube::Api::portforward", reason = "connect verbs live in their named files only; see spec 0030" },
+    # The write path itself (spec 0030 AC 9): the app sends a write from `checked_write`, and the node
+    # shell cleanup (spec 0037) from `run_cleanup`, each with one named allow. The cluster crate's own
+    # write tests allow it on their module.
+    { path = "cluster::ClusterConnection::write", reason = "writes are sent by checked_write (spec 0030) and run_cleanup (spec 0037) only" },
 ]

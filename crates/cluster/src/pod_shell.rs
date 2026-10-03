@@ -29,7 +29,7 @@ use crate::reason_text::reason_text;
 
 const SHELL_ACTION: &str = "opening a shell";
 /// The most one `Output` carries: one read of the process's stdout pipe.
-const READ_BYTES: usize = 64 * 1024;
+pub(crate) const READ_BYTES: usize = 64 * 1024;
 /// Input waits here while the pipe to the process is full; past it the input stream is not
 /// polled, so a stream of keystrokes cannot grow the backlog without bound. The bound is soft: an
 /// item is taken whole, so one large paste (a single `Bytes`) can take the backlog past it by its
@@ -37,7 +37,7 @@ const READ_BYTES: usize = 64 * 1024;
 const STDIN_BACKLOG_BYTES: usize = 256 * 1024;
 /// Resolved at run time through the container's `PATH`. The private OSC 7770 names the pick for
 /// the tab header.
-const AUTO_SCRIPT: &str = r#"for s in bash ash sh; do if command -v "$s" >/dev/null 2>&1; then printf '\033]7770;%s\007' "$s"; exec "$s"; fi; done"#;
+pub(crate) const AUTO_SCRIPT: &str = r#"for s in bash ash sh; do if command -v "$s" >/dev/null 2>&1; then printf '\033]7770;%s\007' "$s"; exec "$s"; fi; done"#;
 
 /// The size of the terminal in cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +88,9 @@ impl fmt::Debug for ShellInput {
 /// What the shell sends back.
 // Debug is manual: byte counts only, never the bytes (C1).
 pub enum ShellUpdate {
+    /// A debug container or node shell pod is starting (0037): the fixed reason word of its waiting
+    /// state, sent each time it changes, before `Started`. An exec never sends it.
+    Waiting(String),
     /// The exec connection is up. Sent once, before any output.
     Started,
     /// One read of the terminal output, at most 64 KiB.
@@ -101,6 +104,7 @@ pub enum ShellUpdate {
 impl fmt::Debug for ShellUpdate {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Waiting(reason) => formatter.debug_tuple("Waiting").field(reason).finish(),
             Self::Started => formatter.write_str("Started"),
             Self::Output(bytes) => formatter
                 .debug_tuple("Output")
@@ -185,7 +189,7 @@ async fn open_session(
         &params,
     ))
     .await;
-    let mut process = match opened {
+    let process = match opened {
         Ok(Ok(process)) => process,
         Ok(Err(error)) => return Err(exec_error(connection.context(), error)),
         Err(_elapsed) => {
@@ -203,6 +207,22 @@ async fn open_session(
         elapsed = ?started.elapsed(),
         "shell opened"
     );
+    drive_process(
+        process,
+        connection.context().to_owned(),
+        request.size,
+        input,
+    )
+}
+
+/// Takes the terminal pipes of an opened exec or attach process and drives them. `size` goes first,
+/// through the same path as every later resize. Shared with `debug_shell`.
+pub(crate) fn drive_process(
+    mut process: AttachedProcess,
+    context: String,
+    size: GridSize,
+    input: impl Stream<Item = ShellInput> + Send + Unpin + 'static,
+) -> Result<impl Stream<Item = ShellUpdate> + Send + 'static, ClusterError> {
     let (Some(stdout), Some(stdin), Some(resize), Some(status)) = (
         process.stdout(),
         process.stdin(),
@@ -210,7 +230,7 @@ async fn open_session(
         process.take_status(),
     ) else {
         return Err(ClusterError::Rendered {
-            message: "the exec connection has no terminal pipes".to_owned(),
+            message: "the connection has no terminal pipes".to_owned(),
         });
     };
     let io = ProcessIo {
@@ -219,13 +239,12 @@ async fn open_session(
         resize,
         status,
     };
-    // The first size goes through the same path as every later one.
-    let first_size = stream::iter([ShellInput::Resize(request.size)]);
+    let first_size = stream::iter([ShellInput::Resize(size)]);
     Ok(drive(
         process,
         io,
         first_size.chain(input),
-        connection.context().to_owned(),
+        context.to_owned(),
     ))
 }
 
@@ -249,45 +268,67 @@ fn argv(shell: ShellCommand) -> Vec<&'static str> {
     }
 }
 
+/// What a refused upgrade is called: the action the error names and the verb the text names.
+#[derive(Clone, Copy)]
+pub(crate) struct UpgradeVerb {
+    pub(crate) action: &'static str,
+    pub(crate) verb: &'static str,
+}
+
+const EXEC: UpgradeVerb = UpgradeVerb {
+    action: SHELL_ACTION,
+    verb: "exec",
+};
+
 /// A refused upgrade carries no `Status` body, so the text is fixed.
-fn upgrade_error(code: u16, context: &str) -> ClusterError {
+fn upgrade_error(code: u16, context: &str, upgrade: UpgradeVerb) -> ClusterError {
     let context = context.to_owned();
+    let UpgradeVerb { action, verb } = upgrade;
     match code {
         401 => ClusterError::Unauthorized {
             context,
-            action: SHELL_ACTION,
-            message: "the server refused the exec connection (HTTP 401)".to_owned(),
+            action,
+            message: format!("the server refused the {verb} connection (HTTP 401)"),
         },
         403 => ClusterError::Forbidden {
             context,
-            action: SHELL_ACTION,
-            message: "the server refused the exec connection (HTTP 403); a shell needs get and \
-                      create on pods/exec"
-                .to_owned(),
+            action,
+            message: format!(
+                "the server refused the {verb} connection (HTTP 403); a shell needs get and \
+                 create on pods/{verb}"
+            ),
         },
         404 => ClusterError::Api {
             context,
-            action: SHELL_ACTION,
+            action,
             code,
             message: "pod or container not found".to_owned(),
         },
         code => ClusterError::Api {
             context,
-            action: SHELL_ACTION,
+            action,
             code,
-            message: format!("the exec connection was refused (HTTP {code})"),
+            message: format!("the {verb} connection was refused (HTTP {code})"),
         },
     }
 }
 
 /// `classify_error` would turn an upgrade refusal into `UnexpectedResponse`, so it is read first.
-fn exec_error(context: &str, error: kube::Error) -> ClusterError {
+pub(crate) fn connect_error(
+    context: &str,
+    upgrade: UpgradeVerb,
+    error: kube::Error,
+) -> ClusterError {
     match error {
         kube::Error::UpgradeConnection(UpgradeConnectionError::ProtocolSwitch(code)) => {
-            upgrade_error(code.as_u16(), context)
+            upgrade_error(code.as_u16(), context, upgrade)
         }
-        other => classify_error(context, SHELL_ACTION, other),
+        other => classify_error(context, upgrade.action, other),
     }
+}
+
+fn exec_error(context: &str, error: kube::Error) -> ClusterError {
+    connect_error(context, EXEC, error)
 }
 
 /// Reads the final `Status` of the exec stream. A missing status means the connection ended

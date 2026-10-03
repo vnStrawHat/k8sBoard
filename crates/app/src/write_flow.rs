@@ -10,8 +10,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cluster::{
-    ClusterConnection, ClusterError, ExecPermit, NodeScheduling, ObjectKind, ObjectRef,
-    PortForwardPermit, WriteError, WriteMode, WriteOperation, WriteOutcome, WriteRequest,
+    AttachPermit, ClusterConnection, ClusterError, ExecPermit, NodeScheduling, ObjectKind,
+    ObjectRef, PortForwardPermit, WriteError, WriteMode, WriteOperation, WriteOutcome,
+    WriteRequest,
 };
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
@@ -23,7 +24,7 @@ use gpui_kit::{
 use super::AppShell;
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, audit_entry,
-    created_name_field,
+    created_name_field, timestamp_now,
 };
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
@@ -103,6 +104,9 @@ pub(crate) struct ConnectIntent {
     /// stream bytes.
     pub(crate) object: AuditObject,
     pub(crate) fields: Vec<AuditField>,
+    /// The text the `TypeName` tier asks for when the start names its object (a node shell types
+    /// the node name); `None` types the cluster display name.
+    pub(crate) expected_name: Option<String>,
     /// Runs after the confirm, with the proof from the cluster's own report and its connection,
     /// both read at that moment.
     pub(crate) open: ConnectOpen,
@@ -112,7 +116,29 @@ pub(crate) struct ConnectIntent {
 pub(crate) enum ConnectOpen {
     Exec(Rc<ExecOpen>),
     PortForward(Rc<PortForwardOpen>),
+    /// Creates or changes an object first (a debug container, a node shell pod), then attaches to
+    /// it (spec 0037).
+    CreateThenAttach(CreateThenAttach),
 }
+
+/// A start that writes before it attaches. The write is a `WriteIntent` in every respect: the
+/// dialog shows its dry-run and changed fields, `checked_write` sends and audits it. The attach
+/// permit is taken before that commit, so a user who cannot attach creates nothing.
+pub(crate) struct CreateThenAttach {
+    pub(crate) create: Rc<WriteIntent>,
+    /// Runs after the commit succeeded, with the permit, the cluster's connection, and what the
+    /// server reported (the created pod's name and uid).
+    pub(crate) open: Rc<AttachOpen>,
+}
+
+pub(crate) type AttachOpen = dyn Fn(
+    &mut AppShell,
+    AttachPermit,
+    ClusterConnection,
+    WriteOutcome,
+    &mut Window,
+    &mut Context<AppShell>,
+);
 
 pub(crate) type ExecOpen =
     dyn Fn(&mut AppShell, ExecPermit, ClusterConnection, &mut Window, &mut Context<AppShell>);
@@ -129,6 +155,7 @@ pub(crate) type PortForwardOpen = dyn Fn(
 enum GrantedOpen {
     Exec(Rc<ExecOpen>, ExecPermit),
     PortForward(Rc<PortForwardOpen>, PortForwardPermit),
+    CreateThenAttach(Rc<WriteIntent>, Rc<AttachOpen>, AttachPermit),
 }
 
 impl ConnectOpen {
@@ -141,8 +168,21 @@ impl ConnectOpen {
                 Rc::clone(open),
                 port_forward_permit_of(access)?,
             )),
+            Self::CreateThenAttach(start) => Some(GrantedOpen::CreateThenAttach(
+                Rc::clone(&start.create),
+                Rc::clone(&start.open),
+                attach_permit_of(access)?,
+            )),
         }
     }
+}
+
+/// What the dialog hands to the commit: the generation it opened on, and for a start that writes
+/// first, the proof that its dry-run passed and the audit note.
+pub(crate) struct ConnectCommit {
+    pub(crate) generation: u64,
+    pub(crate) confirmed: Option<Confirmed>,
+    pub(crate) note: Option<String>,
 }
 
 impl GrantedOpen {
@@ -150,20 +190,51 @@ impl GrantedOpen {
         self,
         shell: &mut AppShell,
         connection: ClusterConnection,
+        commit: ConnectCommit,
         window: &mut Window,
         cx: &mut Context<AppShell>,
     ) {
         match self {
             Self::Exec(open, permit) => open(shell, permit, connection, window, cx),
             Self::PortForward(open, permit) => open(shell, permit, connection, window, cx),
+            Self::CreateThenAttach(create, open, permit) => {
+                // The dialog never confirms a write without its passed dry-run.
+                let Some(confirmed) = commit.confirmed else {
+                    return;
+                };
+                let step = WriteStep {
+                    intent: create,
+                    generation: commit.generation,
+                    mode: CommitMode::Commit { confirmed },
+                    note: commit.note,
+                };
+                shell.commit_then_attach(step, open, permit, connection, window, cx);
+            }
         }
     }
 }
 
 impl ConnectIntent {
-    /// What the `TypeName` tier asks to type: the cluster name.
+    /// What the `TypeName` tier asks to type: the node name for a node shell, else the cluster
+    /// name.
     pub(crate) fn expected(&self) -> &str {
-        &self.cluster_name
+        self.expected_name.as_deref().unwrap_or(&self.cluster_name)
+    }
+
+    /// `the node name`, or `the cluster name`.
+    pub(crate) fn typed_hint(&self) -> &'static str {
+        match self.expected_name {
+            Some(_) => "the node name",
+            None => "the cluster name",
+        }
+    }
+
+    /// The write a start makes before it attaches, if it makes one.
+    pub(crate) fn create(&self) -> Option<&Rc<WriteIntent>> {
+        match &self.open {
+            ConnectOpen::CreateThenAttach(start) => Some(&start.create),
+            ConnectOpen::Exec(_) | ConnectOpen::PortForward(_) => None,
+        }
     }
 }
 
@@ -385,6 +456,8 @@ pub(crate) async fn checked_write(
         CommitMode::Commit { .. } => (WriteMode::Commit, true),
     };
     let request = step.intent.request.clone();
+    // The first of the two senders of a write (the other is `run_cleanup`; spec 0030 AC 9).
+    #[allow(clippy::disallowed_methods)]
     let sent = runtime
         .spawn(async move { connection.write(&request, mode).await })
         .await;
@@ -981,6 +1054,14 @@ fn port_forward_permit_of(access: &AccessState) -> Option<PortForwardPermit> {
     }
 }
 
+/// The proof that a debug shell may attach: both attach verbs allowed.
+fn attach_permit_of(access: &AccessState) -> Option<AttachPermit> {
+    match access {
+        AccessState::Known(report) => report.attach_permit(),
+        AccessState::Checking { .. } | AccessState::Unknown => None,
+    }
+}
+
 impl AppShell {
     /// The guarded start of a stream (spec 0036): the gate of the intent's own cluster, then the
     /// confirm dialog of its tier. Nothing opens without the dialog, for every tier and trigger.
@@ -1008,6 +1089,7 @@ impl AppShell {
                 guard.profile.environment,
             )
         };
+        let has_dry_run = intent.create().is_some();
         let inputs = DialogInputs {
             shell: cx.weak_entity(),
             kind: DialogKind::Connect(Rc::new(intent)),
@@ -1016,6 +1098,10 @@ impl AppShell {
             generation,
         };
         let dialog = cx.new(|cx| ConfirmDialog::new(inputs, window, cx));
+        // A start that writes first checks the write on the server before the user can confirm.
+        if has_dry_run {
+            dialog.update(cx, |dialog, cx| dialog.start_dry_run(cx));
+        }
         #[cfg(test)]
         {
             self.last_dialog = Some(dialog.downgrade());
@@ -1023,16 +1109,18 @@ impl AppShell {
         ConfirmDialog::open(&dialog, window, cx);
     }
 
-    /// The confirmed start of a dialog. The guard and the connection are read again from the
-    /// intent's own cluster: if it was locked, reconnected, or lost a permission since the dialog
-    /// opened, nothing opens and nothing is audited.
+    /// The confirmed start of a dialog. The guard, the permit, and the connection are read again
+    /// from the intent's own cluster: if it was locked, reconnected, or lost a permission since the
+    /// dialog opened, nothing opens, nothing is created, and nothing is audited. A start that
+    /// writes first has its permit in hand before the commit goes out.
     pub(crate) fn commit_connect(
         &mut self,
         intent: &ConnectIntent,
-        generation: u64,
+        commit: ConnectCommit,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let generation = commit.generation;
         let prepared = {
             let guard = self.guard_for(&intent.cluster, cx);
             match live_block(guard.as_ref(), &intent.cluster_name, generation) {
@@ -1055,10 +1143,202 @@ impl AppShell {
             }
         };
         match prepared {
-            Ok((granted, connection)) => granted.run(self, connection, window, cx),
+            Ok((granted, connection)) => granted.run(self, connection, commit, window, cx),
             Err(reason) => notify(window, cx, format!("{}: {reason}", intent.label)),
         }
     }
+
+    /// The commit of a start that writes first, then the attach: the write is `checked_write`'s
+    /// (lock and connection re-checked, audit line), and `open` runs only if it succeeded. A failed
+    /// write opens nothing and says why.
+    fn commit_then_attach(
+        &mut self,
+        step: WriteStep,
+        open: Rc<AttachOpen>,
+        permit: AttachPermit,
+        connection: ClusterConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let handle: AnyWindowHandle = window.window_handle();
+        let shell = cx.weak_entity();
+        let create = Rc::clone(&step.intent);
+        cx.spawn(
+            async move |_, cx| match checked_write(&shell, step, cx).await {
+                Ok(outcome) => {
+                    let _ = cx.update_window(handle, |_, window, cx| {
+                        let _ = shell.update(cx, |shell, cx| {
+                            open(shell, permit, connection, outcome, window, cx);
+                        });
+                    });
+                }
+                Err(error) => {
+                    let notice = failure_notice(&create.label, &error);
+                    let _ = cx.update_window(handle, |_, window, cx| notify(window, cx, notice));
+                }
+            },
+        )
+        .detach();
+    }
+}
+
+/// Deletes one node shell pod of this run (or one a sweep found): the cleanup of spec 0037. It has
+/// no gate, lock, tier, or dialog, because removing a k8sBoard privileged pod must work after a
+/// lock, a cluster switch, and inside the shutdown window. What keeps that safe is the type: it is
+/// built only from a `DeleteNodeShellPod` request, which the write path accepts only for a pod
+/// named `k8sboard-node-shell-…` and sends with the pod's uid as a precondition.
+pub(crate) struct NodeShellCleanup {
+    /// The connection of the pod's own cluster, held since the start: the delete outlives the slot.
+    connection: ClusterConnection,
+    request: WriteRequest,
+    /// The cluster, context, and user, copied at the start for the audit line.
+    audit: CleanupAudit,
+}
+
+/// The cluster, context, and user of a cleanup, copied when the pod is made.
+#[derive(Clone)]
+pub(crate) struct CleanupAudit {
+    cluster: String,
+    context: String,
+    user: Option<String>,
+}
+
+/// What a cleanup delete came to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CleanupOutcome {
+    /// Deleted, or already gone (a 404 counts as done).
+    Done,
+    /// Debug builds block writes: nothing was sent, so nothing is audited.
+    Blocked,
+    /// Not deleted; the text names why.
+    Failed(String),
+}
+
+impl CleanupAudit {
+    pub(crate) fn of(guard: &ClusterGuard<'_>) -> Self {
+        Self {
+            cluster: guard.display_name().to_owned(),
+            context: guard.summary.name.clone(),
+            user: guard.summary.user.clone(),
+        }
+    }
+}
+
+impl NodeShellCleanup {
+    /// `None` unless `request` is a `DeleteNodeShellPod`: no other write can take this path.
+    pub(crate) fn new(
+        connection: ClusterConnection,
+        request: WriteRequest,
+        audit: CleanupAudit,
+    ) -> Option<Self> {
+        if !matches!(
+            request.operation(),
+            WriteOperation::DeleteNodeShellPod { .. }
+        ) {
+            return None;
+        }
+        Some(Self {
+            connection,
+            request,
+            audit,
+        })
+    }
+
+    pub(crate) fn namespace(&self) -> &str {
+        self.request.target().namespace().unwrap_or_default()
+    }
+
+    pub(crate) fn pod(&self) -> &str {
+        self.request.target().name()
+    }
+
+    /// The audit line of the delete. `Abandoned` is the one written for a delete that never
+    /// reported (the app quit first).
+    pub(crate) fn audit_entry(&self, outcome: AuditOutcome, error: Option<String>) -> AuditEntry {
+        let target = self.request.target();
+        AuditEntry {
+            at: timestamp_now(),
+            cluster: self.audit.cluster.clone(),
+            context: self.audit.context.clone(),
+            user: self.audit.user.clone(),
+            action: CLEANUP_ACTION.to_owned(),
+            object: Some(AuditObject {
+                kind: target.kind_name().to_owned(),
+                namespace: target.namespace().map(str::to_owned),
+                name: target.name().to_owned(),
+            }),
+            fields: self
+                .request
+                .changed_fields()
+                .into_iter()
+                .map(|field| AuditField {
+                    path: field.path.into_owned(),
+                    value: field.value,
+                })
+                .collect(),
+            outcome,
+            error,
+            note: None,
+        }
+    }
+}
+
+const CLEANUP_ACTION: &str = "Delete node shell pod";
+
+/// The second sender of a write (the first is `checked_write`): a commit-only delete of a node
+/// shell pod, then its audit line. It runs entirely on the tokio runtime, so it also works from the
+/// quit hook, where the main thread only waits. The audit line is appended here, not by the caller,
+/// so no end of a session can skip it.
+pub(crate) async fn run_cleanup(
+    cleanup: NodeShellCleanup,
+    runtime: &ClusterRuntime,
+    config_dir: Option<PathBuf>,
+) -> CleanupOutcome {
+    let sent = runtime
+        .spawn(async move { delete_and_audit(&cleanup, config_dir.as_deref()).await })
+        .await;
+    sent.unwrap_or_else(|_| CleanupOutcome::Failed("the delete task stopped".to_owned()))
+}
+
+async fn delete_and_audit(
+    cleanup: &NodeShellCleanup,
+    config_dir: Option<&std::path::Path>,
+) -> CleanupOutcome {
+    // The one write outside `checked_write` (spec 0030 AC 9, spec 0037): a delete of this
+    // application's own node shell pod under a uid precondition. See `NodeShellCleanup`.
+    #[allow(clippy::disallowed_methods)]
+    let result = cleanup
+        .connection
+        .write(&cleanup.request, WriteMode::Commit)
+        .await;
+    let (outcome, audit) = match result {
+        Ok(_) | Err(WriteError::NotFound) => (CleanupOutcome::Done, Some(AuditOutcome::Applied)),
+        Err(WriteError::WritesBlocked) => (CleanupOutcome::Blocked, None),
+        Err(WriteError::Conflict { .. }) => (
+            // Another pod took the name since: it is not ours to delete.
+            CleanupOutcome::Failed("another pod now has that name".to_owned()),
+            Some(AuditOutcome::Failed),
+        ),
+        Err(WriteError::OutcomeUnknown) => (
+            CleanupOutcome::Failed(WriteError::OutcomeUnknown.to_string()),
+            Some(AuditOutcome::Unknown),
+        ),
+        Err(error) => (
+            CleanupOutcome::Failed(write_error_text(&error)),
+            Some(AuditOutcome::Failed),
+        ),
+    };
+    if let (Some(audit), Some(dir)) = (audit, config_dir) {
+        let error = match &outcome {
+            CleanupOutcome::Failed(text) => Some(text.clone()),
+            CleanupOutcome::Done | CleanupOutcome::Blocked => None,
+        };
+        // One short append; the runtime thread may wait for it.
+        if let Err(error) = append_audit(dir, &cleanup.audit_entry(audit, error)) {
+            tracing::warn!(kind = ?error.kind(), "could not append to the audit log");
+        }
+    }
+    outcome
 }
 
 #[cfg(feature = "screenshot")]

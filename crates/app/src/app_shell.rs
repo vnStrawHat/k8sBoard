@@ -129,6 +129,8 @@ pub(crate) mod batch_write;
 
 #[path = "app_shell_view.rs"]
 mod app_shell_view;
+#[path = "debug_open.rs"]
+mod debug_open;
 #[path = "edit_yaml_flow.rs"]
 mod edit_yaml_flow;
 #[path = "keyboard_navigation.rs"]
@@ -137,6 +139,12 @@ mod keyboard_navigation;
 mod leaving_work;
 #[path = "object_delete.rs"]
 pub(crate) mod object_delete;
+#[path = "node_shell_cleanup.rs"]
+mod node_shell_cleanup;
+#[path = "node_shell_open.rs"]
+mod node_shell_open;
+#[path = "node_shell_sweep.rs"]
+mod node_shell_sweep;
 #[path = "port_forward_dialogs.rs"]
 mod port_forward_dialogs;
 #[path = "port_forward_open.rs"]
@@ -372,6 +380,14 @@ pub(crate) struct AppShell {
     window: gpui_kit::AnyWindowHandle,
     /// Shell starts that have not reported yet (spec 0036).
     shell_starts: shell_open::ShellStarts,
+    /// The cleanups of the open node shells and the deletes in flight (spec 0037).
+    node_shell_runs: node_shell_cleanup::NodeShellRuns,
+    /// The id of this app run, on every node shell pod it creates: the leftover sweep of another
+    /// run tells its pods from ours by it.
+    run_id: String,
+    /// The leftover notices shown, for the tests that drive the sweep.
+    #[cfg(test)]
+    sweep_notices: Vec<(ClusterRef, usize)>,
     /// The port forwards of every cluster (spec 0035). They outlive a switch and a released slot.
     port_forwards: Entity<PortForwards>,
     /// Forward starts that have not reported yet.
@@ -624,6 +640,10 @@ impl AppShell {
             last_leaving: None,
             window: window.window_handle(),
             shell_starts: shell_open::ShellStarts::default(),
+            node_shell_runs: node_shell_cleanup::NodeShellRuns::default(),
+            run_id: cluster::run_id(),
+            #[cfg(test)]
+            sweep_notices: Vec::new(),
             port_forwards,
             forward_starts: port_forward_open::ForwardStarts::default(),
             forward_filter,
@@ -1811,6 +1831,21 @@ impl AppShell {
             return;
         };
         // A fixture dialog is drawn from fixed data, so it does not wait for a cluster.
+        #[cfg(feature = "screenshot")]
+        if matches!(
+            launch,
+            LaunchScreen::NodeShellOptions | LaunchScreen::DebugContainerOptions
+        ) {
+            self.open_options_fixture(launch, window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::NodeShellConfirm {
+            self.open_node_shell_confirm_fixture(window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
         #[cfg(feature = "screenshot")]
         if launch == LaunchScreen::ShellConfirmFixture {
             self.open_shell_confirm_fixture(window, cx);

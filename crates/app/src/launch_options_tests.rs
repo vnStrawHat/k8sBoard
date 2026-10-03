@@ -891,3 +891,40 @@ fn screen_delete_bulk_confirm_parses() {
     assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
     assert!(USAGE.contains("delete-bulk-confirm"));
 }
+
+#[test]
+fn the_node_shell_confirm_screen_is_a_fixed_dialog_over_nodes() {
+    let parsed = run_options(&["--screen", "node-shell-confirm"]).screen;
+    assert_eq!(parsed, LaunchScreen::NodeShellConfirm);
+    assert_eq!(parsed.screen(), Screen::Nodes);
+    assert!(parsed.opens_dialog());
+    assert!(parsed.is_dialog_fixture());
+    assert!(!parsed.has_dock());
+    // It is drawn from fixed data, so it waits for no node metrics either.
+    assert!(!parsed.shows_node_usage());
+    assert!(USAGE.contains("node-shell-confirm"));
+}
+
+#[test]
+fn the_options_fixtures_are_dialogs_over_pods_and_nodes() {
+    for (name, screen, list) in [
+        (
+            "node-shell-options",
+            LaunchScreen::NodeShellOptions,
+            Screen::Nodes,
+        ),
+        (
+            "debug-container-options",
+            LaunchScreen::DebugContainerOptions,
+            Screen::Pods,
+        ),
+    ] {
+        let parsed = run_options(&["--screen", name]).screen;
+        assert_eq!(parsed, screen);
+        assert_eq!(parsed.screen(), list);
+        assert!(parsed.opens_dialog());
+        assert!(parsed.is_dialog_fixture());
+        assert!(!parsed.has_dock());
+        assert!(USAGE.contains(name), "{name}");
+    }
+}

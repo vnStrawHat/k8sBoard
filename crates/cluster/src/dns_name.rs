@@ -20,7 +20,7 @@ pub(crate) fn is_path_segment_name(name: &str) -> bool {
             .all(|ch| ch.is_ascii_graphic() && !matches!(ch, '/' | '\\' | '%' | '?' | '#'))
 }
 
-fn is_dns_label(label: &str) -> bool {
+pub(crate) fn is_dns_label(label: &str) -> bool {
     (1..=63).contains(&label.len())
         && label
             .bytes()

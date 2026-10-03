@@ -65,8 +65,8 @@ kube `ws` feature on; local listeners; Forward buttons (pods, services, workload
 - Deps: 0030, 0028. Risk: High (largest custom UI; untestable on UAT: exec denied).
 
 ### 0037 — Node shell and debug containers
-Privileged debug pod (hostPID, nsenter PID 1) like `kubectl debug node/`, deleted when the tab closes, per-cluster "Allow node shell" (off for prod), ephemeral "Debug container…".
-- Deps: 0036, 0025. Risk: High (privileged pod creation; orphan cleanup).
+Done (steps 1 to 3). Privileged debug pod (hostPID, nsenter PID 1) like `kubectl debug node/`, deleted on every end of its session (tab close, shell exit, failure, switch, window close, quit best effort) with a leftover sweep at session start, per-cluster "Allow node shell" (W2 Safety; off for prod and for a guessed Staging), ephemeral "Debug container…" with an options dialog. The node name is typed in every environment. Allowed-path checks wait for a disposable cluster (R2); UAT denies `create pods`, `delete pods`, `patch pods/ephemeralcontainers`, and `create pods/attach`.
+- Deps: 0036, 0025. Risk: High (privileged pod creation; orphan cleanup). W2 Safety is complete with the node shell toggle.
 
 ### 0038 — Helm write actions
 **Deferred by the user (2026-10-02); not scheduled.** Roll back and Uninstall releases; decision C12 (native vs `helm` CLI). No other spec depends on it.
