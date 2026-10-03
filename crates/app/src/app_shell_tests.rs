@@ -510,6 +510,8 @@ fn saved_pods(cx: &mut TestAppContext) -> Option<crate::settings::TablePrefs> {
 fn cycle_sort_persists_the_sort_by_column_name(cx: &mut TestAppContext) {
     let (_window, shell) = open_shell(cx);
     assert_eq!(saved_pods(cx), None);
+    // The shell starts on Overview, which has no table.
+    cx.update(|cx| shell.update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx)));
     // Logical column 3 of the Pods table is Restarts.
     cx.update(|cx| shell.update(cx, |shell, cx| shell.cycle_sort(3, cx)));
     let sort = saved_pods(cx).and_then(|prefs| prefs.sort);
@@ -525,6 +527,7 @@ fn cycle_sort_persists_the_sort_by_column_name(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn toggle_column_persists_hidden_columns_by_name(cx: &mut TestAppContext) {
     let (_window, shell) = open_shell(cx);
+    cx.update(|cx| shell.update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx)));
     // Logical column 6 of the Pods table is Node; CPU is hidden by default.
     cx.update(|cx| shell.update(cx, |shell, cx| shell.toggle_column(6, cx)));
     let hidden = saved_pods(cx).map(|prefs| prefs.hidden);
@@ -584,4 +587,10 @@ fn toggle_default_namespace_clears_it_when_already_set(cx: &mut TestAppContext) 
     toggle_default(&shell, cx);
     toggle_default(&shell, cx);
     assert_eq!(saved_default(cx), None);
+}
+
+#[gpui_kit::test]
+fn the_shell_starts_on_overview_without_screen_flag(cx: &mut TestAppContext) {
+    let (_window, shell) = open_shell(cx);
+    shell.read_with(cx, |shell, _| assert_eq!(shell.screen, Screen::Overview));
 }
