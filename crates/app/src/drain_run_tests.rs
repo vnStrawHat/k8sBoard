@@ -476,7 +476,9 @@ fn node_end_writes_one_summary_line() {
             refused: 0,
             failed: 0,
             skipped: 1,
+            unknown: 0,
             outcome: SummaryOutcome::Drained,
+            reason: None,
         }]
     );
     assert!(run.take_summaries().is_empty());
@@ -623,4 +625,55 @@ fn the_status_line_reports_stuck_and_stopped_runs() {
     let (mut done, _) = run_over(&[]);
     done.on_node_done(NodeOutcome::Drained);
     assert_eq!(done.status_text(secs(1)), "Drained");
+}
+
+#[test]
+fn only_a_commit_is_in_flight_until_its_answer() {
+    let (mut run, _) = run_over(&["api-1"]);
+    assert_eq!(run.in_flight(), None);
+    let dry_run = NextStep::DryRun(key("api-1"));
+    run.begin_write(&dry_run);
+    assert_eq!(run.in_flight(), None, "a dry-run changes nothing");
+    let evict = NextStep::Evict(key("api-1"));
+    run.begin_write(&evict);
+    assert_eq!(run.in_flight(), Some(&evict));
+    run.on_write(&evict, ok(), secs(1));
+    assert_eq!(run.in_flight(), None);
+    let cordon = NextStep::Cordon("wk-04".to_owned());
+    run.begin_write(&cordon);
+    assert_eq!(run.in_flight(), Some(&cordon));
+    // A blocked write clears it too: nothing was sent.
+    run.on_write(&cordon, blocked("locked"), secs(2));
+    assert_eq!(run.in_flight(), None);
+}
+
+#[test]
+fn a_stopped_summary_counts_the_eviction_in_the_air_as_unknown() {
+    let (mut run, _) = run_over(&["api-1", "api-2"]);
+    run.on_write(&NextStep::Evict(key("api-1")), ok(), secs(0));
+    let in_the_air = NextStep::Evict(key("api-2"));
+    run.begin_write(&in_the_air);
+    run.stop("k8sBoard is closing");
+    let lines = run.take_summaries();
+    assert_eq!(lines.len(), 1);
+    assert_eq!((lines[0].evicted, lines[0].unknown), (1, 1));
+    assert_eq!(lines[0].outcome, SummaryOutcome::Stopped);
+}
+
+#[test]
+fn a_stuck_summary_carries_the_reason() {
+    let (mut run, _) = run_over(&["api-1"]);
+    run.on_write(&NextStep::Evict(key("api-1")), refused(None), secs(0));
+    run.on_node_done(NodeOutcome::Stuck {
+        reason: "Timed out after 5m: 1 pod left".into(),
+    });
+    let lines = run.take_summaries();
+    assert_eq!(
+        lines[0].reason.as_ref().map(|text| text.as_ref()),
+        Some("Timed out after 5m: 1 pod left")
+    );
+    // A drained node has none.
+    let (mut done, _) = run_over(&[]);
+    done.on_node_done(NodeOutcome::Drained);
+    assert_eq!(done.take_summaries()[0].reason, None);
 }

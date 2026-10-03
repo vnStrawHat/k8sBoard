@@ -962,6 +962,10 @@ impl AppShell {
                 notify(window, cx, text);
                 return;
             }
+            if let Some(reason) = self.drain_conflict(&intent.cluster, intent.action, cx) {
+                notify(window, cx, unavailable_text(&intent.button, &reason));
+                return;
+            }
             (
                 guard.generation,
                 confirm_step(guard.profile.confirm, intent.risk, intent.expected()),
@@ -1033,7 +1037,13 @@ fn finish_commit(
         && !matches!(intent.action, ResourceAction::EditYaml(_))
         && let Some(text) = retryable_text(error)
         && dialog
-            .update(cx, |dialog, cx| dialog.commit_failed(text.clone(), cx))
+            .update(cx, |dialog, cx| {
+                let is_conflict = matches!(
+                    error,
+                    CheckedWriteError::Write(WriteError::Conflict { .. })
+                );
+                dialog.commit_failed(text.clone(), is_conflict, cx)
+            })
             .unwrap_or(false)
     {
         return;

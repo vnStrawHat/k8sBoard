@@ -175,11 +175,16 @@ pub(crate) fn taint_intent(
     if taints == edit.taints {
         return Err(NO_CHANGES.into());
     }
-    // A taint that is new (by key and effect) with `NoExecute` evicts pods at once.
-    let original: HashSet<_> = edit.taints.iter().map(taint_identity).collect();
-    let adds_no_execute = taints
-        .iter()
-        .any(|taint| taint.effect == NO_EXECUTE && !original.contains(&taint_identity(taint)));
+    // A `NoExecute` taint that is new (by key and effect), or whose value changed, evicts the pods
+    // that tolerated the old one at once.
+    let adds_no_execute = taints.iter().any(|taint| {
+        taint.effect == NO_EXECUTE
+            && edit
+                .taints
+                .iter()
+                .find(|original| taint_identity(original) == taint_identity(taint))
+                .is_none_or(|original| original.value != taint.value)
+    });
     let request = WriteRequest::new(
         node_target(node)?,
         WriteOperation::SetNodeTaints {

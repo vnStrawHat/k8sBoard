@@ -31,7 +31,9 @@ use gpui_kit::{
 };
 
 use super::AppShell;
-use super::batch_write::{ItemProgress, MAX_BATCH_ITEMS, batch_notice, commit_progress};
+use super::batch_write::{
+    BATCH_RUNNING_REASON, ItemProgress, MAX_BATCH_ITEMS, batch_notice, commit_progress,
+};
 use super::drain_driver::DrainStart;
 use super::write_flow::{
     CommitMode, Confirmed, DryRunState, TypedMatch, WriteIntent, WriteStep, checked_write,
@@ -1227,6 +1229,11 @@ impl AppShell {
                 notify(window, cx, unavailable_text(label, &reason));
                 return;
             }
+            if self.running_batches.contains(cluster) {
+                let reason = format!("{BATCH_RUNNING_REASON} on {}", guard.display_name());
+                notify(window, cx, unavailable_text(label, &reason));
+                return;
+            }
             if nodes.is_empty() || nodes.len() > MAX_BATCH_ITEMS {
                 let reason = format!("select between 1 and {MAX_BATCH_ITEMS} nodes");
                 notify(window, cx, unavailable_text(label, &reason));
@@ -1339,19 +1346,18 @@ impl AppShell {
     /// The Drain… button of the Nodes selection bar and the D key resolve here: the ticked nodes,
     /// in the order the table shows them.
     pub(super) fn start_drain_of_ticked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The same rules as the bar: one cluster, at most 50 nodes, all still listed. Ticks of
+        // another cluster are never dropped silently.
         let ticked = self.checked_objects(cx);
-        let Some(first) = ticked.first() else {
-            return;
+        let (cluster, nodes) = match self.ticked_nodes(&ticked, cx) {
+            Ok(found) => found,
+            Err(reason) => {
+                let label = action_label(ResourceAction::Drain);
+                notify(window, cx, unavailable_text(label, &reason));
+                return;
+            }
         };
-        let cluster = first.cluster.clone();
-        let names: Vec<String> = ticked
-            .iter()
-            .filter(|object| object.cluster == cluster)
-            .filter_map(|object| match &object.key {
-                crate::table_selection::ResourceKey::Node { name } => Some(name.clone()),
-                _ => None,
-            })
-            .collect();
+        let names: Vec<String> = nodes.into_iter().map(|node| node.name).collect();
         self.start_drain(&cluster, &names, window, cx);
     }
 }

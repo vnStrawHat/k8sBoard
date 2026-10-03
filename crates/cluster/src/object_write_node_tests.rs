@@ -291,9 +291,13 @@ async fn evict_201_with_a_429_failure_status_is_too_many_requests() {
 }
 
 #[tokio::test]
-async fn evict_201_with_a_codeless_failure_is_an_error() {
+async fn evict_201_with_a_codeless_failure_is_an_unknown_outcome_on_commit() {
     let body = json!({"kind": "Status", "apiVersion": "v1", "status": "Failure"}).to_string();
-    let error = evict_error(WriteMode::Commit, 201, body).await;
+    // The server said 2xx but not whether it evicted: a repeat is safe (the uid precondition).
+    let error = evict_error(WriteMode::Commit, 201, body.clone()).await;
+    assert!(matches!(error, WriteError::OutcomeUnknown), "{error:?}");
+    // A dry-run changes nothing, so it is an unusable answer.
+    let error = evict_error(WriteMode::DryRun, 201, body).await;
     assert!(matches!(error, WriteError::Cluster(_)), "{error:?}");
 }
 

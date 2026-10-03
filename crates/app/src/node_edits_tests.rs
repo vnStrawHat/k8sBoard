@@ -169,7 +169,7 @@ fn adding_no_execute_is_destructive() {
 }
 
 #[test]
-fn changing_the_value_of_an_existing_no_execute_taint_is_a_change() {
+fn changing_the_value_of_an_existing_no_execute_taint_is_destructive() {
     let edit = edit_with(vec![taint("maintenance", Some("a"), "NoExecute")], &[]);
     let cluster = cluster();
     let intent = taint_intent(
@@ -177,6 +177,25 @@ fn changing_the_value_of_an_existing_no_execute_taint_is_a_change() {
         "wk-04",
         &edit,
         &[row("maintenance", "b", "NoExecute")],
+    )
+    .expect("a valid edit");
+    // The pods that tolerated the old value are evicted at once.
+    assert_eq!(intent.risk, ActionRisk::Destructive);
+    assert_eq!(intent.warnings.len(), 1);
+}
+
+#[test]
+fn a_no_execute_taint_kept_as_it_is_does_not_make_the_edit_destructive() {
+    let edit = edit_with(vec![taint("maintenance", Some("a"), "NoExecute")], &[]);
+    let cluster = cluster();
+    let intent = taint_intent(
+        &scope(&cluster),
+        "wk-04",
+        &edit,
+        &[
+            row("maintenance", "a", "NoExecute"),
+            row("gpu", "", "NoSchedule"),
+        ],
     )
     .expect("a valid edit");
     assert_eq!(intent.risk, ActionRisk::Change);

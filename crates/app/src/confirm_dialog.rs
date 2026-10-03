@@ -8,6 +8,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use cluster::WriteError;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
@@ -30,8 +31,9 @@ use crate::app_shell::object_delete::{
     delete_dry_run_progress, propagation_choices, with_propagation,
 };
 use crate::app_shell::write_flow::{
-    CommitMode, ConnectCommit, ConnectIntent, DryRunState, TypedMatch, WriteIntent, WriteStep,
-    checked_write, commit_block, confirmed, dry_run_state_of, typed_match, unlock_block,
+    CheckedWriteError, CommitMode, ConnectCommit, ConnectIntent, DryRunState, TypedMatch,
+    WriteIntent, WriteStep, checked_write, commit_block, confirmed, dry_run_state_of, typed_match,
+    unlock_block,
 };
 use crate::cluster_registry::ClusterRef;
 use crate::environment::{Environment, environment_badge};
@@ -134,6 +136,8 @@ pub(crate) struct ConfirmDialog {
     note: Entity<InputState>,
     is_note_shown: bool,
     is_committing: bool,
+    /// The last failed check or commit was a 409: Retry of a taint edit then reads the node again.
+    is_conflict: bool,
     /// False once the dialog is closed, by any button, Escape, or the overlay.
     is_open: bool,
     needs_focus: bool,
@@ -180,6 +184,7 @@ impl ConfirmDialog {
             note,
             is_note_shown: false,
             is_committing: false,
+            is_conflict: false,
             is_open: true,
             needs_focus: true,
             focus_handle: cx.focus_handle(),
@@ -271,7 +276,12 @@ impl ConfirmDialog {
         // Dropping the dialog drops the task: closing it ends the dry-run.
         self.dry_run_task = Some(cx.spawn(async move |this, cx| {
             let result = checked_write(&shell, step, cx).await;
+            let is_conflict = matches!(
+                &result,
+                Err(CheckedWriteError::Write(WriteError::Conflict { .. }))
+            );
             let _ = this.update(cx, |dialog, cx| {
+                dialog.is_conflict = is_conflict;
                 dialog.dry_run = Some(dry_run_state_of(result));
                 cx.notify();
             });
@@ -335,11 +345,17 @@ impl ConfirmDialog {
     /// A commit failed in a way the user can retry. The text replaces the dry-run line as a failed
     /// check, so the confirm button stays off until Retry has checked again. `false` when the
     /// dialog is already closed.
-    pub(crate) fn commit_failed(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn commit_failed(
+        &mut self,
+        text: String,
+        is_conflict: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.is_open {
             return false;
         }
         self.is_committing = false;
+        self.is_conflict = is_conflict;
         self.dry_run = Some(DryRunState::Failed(text.into()));
         cx.notify();
         true
@@ -585,15 +601,20 @@ impl ConfirmDialog {
         }
     }
 
-    /// Retry runs the dry-run again. The taint editor is the exception: its change carries the
-    /// `resourceVersion` it was read at, which cannot pass a second time, so Retry reads the node
-    /// again and reopens the editor fresh (the old rows could resurrect a removed taint).
+    /// Retry runs the dry-run again. The taint editor after a 409 is the exception: its change
+    /// carries the `resourceVersion` it was read at, which cannot pass a second time, so Retry
+    /// reads the node again and reopens the editor fresh (the old rows could resurrect a removed
+    /// taint). Any other failure keeps the user's rows and checks again.
     fn retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let reopen = match &self.kind {
-            DialogKind::Write(intent) if intent.action == ResourceAction::EditTaints => Some((
-                intent.cluster.clone(),
-                intent.request.target().name().to_owned(),
-            )),
+            DialogKind::Write(intent)
+                if intent.action == ResourceAction::EditTaints && self.is_conflict =>
+            {
+                Some((
+                    intent.cluster.clone(),
+                    intent.request.target().name().to_owned(),
+                ))
+            }
             _ => None,
         };
         let (Some((cluster, node)), Some(shell)) = (reopen, self.shell.upgrade()) else {

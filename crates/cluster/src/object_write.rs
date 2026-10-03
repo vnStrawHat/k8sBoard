@@ -1166,7 +1166,12 @@ impl ClusterConnection {
         status: Status,
     ) -> WriteError {
         if status.code == 0 {
-            return self.unusable_response(mode, UNUSABLE_EVICTION_ANSWER);
+            // The server answered 2xx but did not say whether it evicted: a commit may have landed,
+            // and a repeat is safe because the eviction carries the uid precondition.
+            return match mode {
+                WriteMode::Commit => WriteError::OutcomeUnknown,
+                WriteMode::DryRun => self.unusable_response(mode, UNUSABLE_EVICTION_ANSWER),
+            };
         }
         error_from_status(self.context(), mode, request.target.kind_name(), status)
     }

@@ -139,6 +139,9 @@ pub(crate) struct DrainRun {
     checked: HashSet<String>,
     /// The end notification was handed out.
     is_notified: bool,
+    /// The commit (a cordon or an eviction) whose request was sent and has not answered yet: if
+    /// the app quits now, its outcome is unknown.
+    in_flight: Option<NextStep>,
 }
 
 /// One line of the audit summary of a node.
@@ -149,7 +152,11 @@ pub(crate) struct NodeSummary {
     pub(crate) refused: usize,
     pub(crate) failed: usize,
     pub(crate) skipped: usize,
+    /// Evictions sent and not answered when the run ended (a quit): they may have landed.
+    pub(crate) unknown: usize,
     pub(crate) outcome: SummaryOutcome,
+    /// Why a stuck node is stuck.
+    pub(crate) reason: Option<SharedString>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,6 +193,7 @@ impl DrainRun {
             generation: input.generation,
             checked: input.checked,
             is_notified: false,
+            in_flight: None,
         }
     }
 
@@ -315,6 +323,18 @@ impl DrainRun {
         NextStep::Sleep(wake.saturating_sub(now).max(Duration::from_millis(1)))
     }
 
+    /// The driver is about to send `step`. Only a commit is kept: a dry-run changes nothing, so it
+    /// has no outcome to lose.
+    pub(crate) fn begin_write(&mut self, step: &NextStep) {
+        self.in_flight =
+            matches!(step, NextStep::Cordon(_) | NextStep::Evict(_)).then(|| step.clone());
+    }
+
+    /// The commit sent and not answered yet.
+    pub(crate) fn in_flight(&self) -> Option<&NextStep> {
+        self.in_flight.as_ref()
+    }
+
     /// The result of the request `sent` (a `Cordon`, `DryRun`, or `Evict`). A result that arrives
     /// after Cancel is applied too: the request had already left.
     pub(crate) fn on_write(
@@ -323,6 +343,7 @@ impl DrainRun {
         result: Result<WriteOutcome, CheckedWriteError>,
         now: Duration,
     ) {
+        self.in_flight = None;
         // A blocked write (lock, session switch, reconnect) stops the whole run.
         if let Err(CheckedWriteError::Blocked(text)) = &result {
             self.stop(format!("{text}; drain stopped"));
@@ -488,6 +509,7 @@ impl DrainRun {
     /// never reached has no line.
     pub(crate) fn take_summaries(&mut self) -> Vec<NodeSummary> {
         let run_end = self.end.clone();
+        let in_flight = self.in_flight.clone();
         let current = self.current;
         let mut lines = Vec::new();
         for (index, node) in self.nodes.iter_mut().enumerate() {
@@ -503,13 +525,25 @@ impl DrainRun {
                 (None, _) => continue,
             };
             node.is_summarized = true;
+            let unknown = match &in_flight {
+                Some(NextStep::Evict(key)) if index == current => {
+                    usize::from(node.pods.iter().any(|pod| pod.key == *key))
+                }
+                _ => 0,
+            };
+            let reason = match &node.end {
+                Some(NodeEnd::Stuck(reason)) => Some(reason.clone()),
+                _ => None,
+            };
             lines.push(NodeSummary {
                 node: node.name.clone(),
                 evicted: node.pods.iter().filter(|pod| pod.was_evicted).count(),
                 refused: node.count(|progress| matches!(progress, PodProgress::Refused { .. })),
                 failed: node.count(|progress| matches!(progress, PodProgress::Failed(_))),
                 skipped: node.count(|progress| matches!(progress, PodProgress::Skipped(_))),
+                unknown,
                 outcome,
+                reason,
             });
         }
         lines

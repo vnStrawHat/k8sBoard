@@ -94,6 +94,17 @@ impl DrainTab {
         &self.identity
     }
 
+    /// The audit line of the commit in the air, for a quit: its outcome is unknown.
+    pub(crate) fn in_flight_entry(&self) -> Option<crate::audit_log::AuditEntry> {
+        let step = self.run.in_flight()?;
+        crate::audit_log::drain_in_flight_entry(
+            &self.identity,
+            step,
+            self.run.options().grace,
+            self.note(),
+        )
+    }
+
     pub(crate) fn note(&self) -> Option<&str> {
         self.note.as_deref()
     }

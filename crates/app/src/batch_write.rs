@@ -460,6 +460,10 @@ impl AppShell {
                 notify(window, cx, unavailable_text(&intent.verb, &reason));
                 return;
             }
+            if let Some(reason) = self.drain_conflict(&intent.cluster, intent.action, cx) {
+                notify(window, cx, unavailable_text(&intent.verb, &reason));
+                return;
+            }
             (
                 guard.generation,
                 confirm_step(guard.profile.confirm, intent.risk, intent.expected()),
@@ -509,7 +513,7 @@ impl AppShell {
         if self.running_batches.contains(&cluster) {
             let reason = format!("{BATCH_RUNNING_REASON} on {}", batch.cluster_name);
             cx.defer(move |cx| {
-                let _ = dialog.update(cx, |dialog, cx| dialog.commit_failed(reason, cx));
+                let _ = dialog.update(cx, |dialog, cx| dialog.commit_failed(reason, false, cx));
             });
             return;
         }

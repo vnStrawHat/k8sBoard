@@ -17,6 +17,7 @@ use gpui_kit::{
 };
 
 use super::AppShell;
+use super::batch_write::BATCH_RUNNING_REASON;
 use super::write_flow::{
     CheckedWriteError, CommitMode, Confirmed, WriteStep, append_in_background, checked_write,
     notify, notify_with,
@@ -29,7 +30,7 @@ use crate::drain_run::{DrainRun, NextStep, NodeSummary, RunInput};
 use crate::drain_tab::{DrainTab, DrainTabInputs};
 use crate::drain_writes::{DrainScope, cordon_write, evict_write};
 use crate::node_edits::{CordonMode, NodeScope, TickedNode, cordon_batch};
-use crate::resource_actions::unavailable_text;
+use crate::resource_actions::{ResourceAction, unavailable_text};
 use crate::settings::AppSettings;
 
 /// The longest the driver sleeps at once, so the countdown of the tab moves and a Cancel is seen.
@@ -54,6 +55,29 @@ impl AppShell {
     /// Whether a drain runs on `cluster` now: one at a time, so two runs never fight over a node.
     pub(crate) fn has_running_drain(&self, cluster: &ClusterRef, cx: &gpui_kit::App) -> bool {
         self.dock.read(cx).has_running_drain(cluster, cx)
+    }
+
+    /// Why `action` may not start on `cluster` now, `None` when it may: a cordon, an uncordon, or a
+    /// taint edit while a drain runs there would put pods back (or keep them away) behind the run's
+    /// back, and the run would still report the node drained.
+    pub(crate) fn drain_conflict(
+        &self,
+        cluster: &ClusterRef,
+        action: ResourceAction,
+        cx: &gpui_kit::App,
+    ) -> Option<String> {
+        let is_node_change = matches!(
+            action,
+            ResourceAction::Cordon | ResourceAction::Uncordon | ResourceAction::EditTaints
+        );
+        if !is_node_change || !self.has_running_drain(cluster, cx) {
+            return None;
+        }
+        let name = self.guard_for(cluster, cx).map_or_else(
+            || cluster.context.clone(),
+            |guard| guard.display_name().to_owned(),
+        );
+        Some(format!("A drain is running on {name}"))
     }
 
     /// Starts the run of a confirmed drain: opens its tab and sends the first request. The dialog
@@ -86,6 +110,11 @@ impl AppShell {
             let name = guard.display_name().to_owned();
             if self.has_running_drain(&cluster, cx) {
                 notify(window, cx, format!("A drain is already running on {name}"));
+                return;
+            }
+            // A batch commits one object at a time on this cluster; the run would interleave with it.
+            if self.running_batches.contains(&cluster) {
+                notify(window, cx, format!("{BATCH_RUNNING_REASON} on {name}"));
                 return;
             }
             (
@@ -158,7 +187,10 @@ impl AppShell {
         let running = self.dock.read(cx).running_drains_of(&all, cx);
         let dir = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf);
         for (tab, _) in running {
-            let (entries, _) = stop_tab(&tab, "k8sBoard is closing", cx);
+            // Read before the stop: the summary counts the request in the air as unknown.
+            let in_flight = tab.read(cx).in_flight_entry();
+            let (mut entries, _) = stop_tab(&tab, "k8sBoard is closing", cx);
+            entries.extend(in_flight);
             let Some(dir) = &dir else {
                 continue;
             };
@@ -402,6 +434,12 @@ async fn drive(
                 }) else {
                     return;
                 };
+                if tab
+                    .update(cx, |tab, _| tab.run_mut().begin_write(&step))
+                    .is_err()
+                {
+                    return;
+                }
                 let result = send(shell, &step, sending, cx).await;
                 let updated = tab.update(cx, |tab, cx| {
                     let now = tab.now();

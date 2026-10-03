@@ -535,6 +535,10 @@ impl AppShell {
                 notify(window, cx, unavailable_text(label, &reason));
                 return;
             }
+            if let Some(reason) = self.drain_conflict(cluster, kind.action(), cx) {
+                notify(window, cx, unavailable_text(label, &reason));
+                return;
+            }
             if !live
                 .nodes
                 .items()
@@ -615,7 +619,7 @@ impl AppShell {
     }
 
     /// The ticked nodes as their own cluster reports them: `Err` is why the bulk buttons are off.
-    fn ticked_nodes(
+    pub(super) fn ticked_nodes(
         &self,
         ticked: &[ClusterObject],
         cx: &App,
@@ -695,6 +699,13 @@ impl AppShell {
         };
         if let ActionAvailability::Disabled { reason } = action_availability(action, &guard) {
             return BulkState::Off(reason);
+        }
+        if let Some(reason) = self.drain_conflict(&cluster, action, cx) {
+            return BulkState::Off(reason.into());
+        }
+        // A drain would interleave its commits with the running batch of the cluster.
+        if action == ResourceAction::Drain && self.running_batches.contains(&cluster) {
+            return BulkState::Off(BATCH_RUNNING_REASON.into());
         }
         let mode = match action {
             ResourceAction::Cordon => CordonMode::Cordon,

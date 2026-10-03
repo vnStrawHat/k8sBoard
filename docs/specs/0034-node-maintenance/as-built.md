@@ -1,6 +1,6 @@
 # 0034 · As built (steps 1, 2, 3a, 3b)
 
-[Back to index](README.md). Where the code differs from the text of the other files, and why. Main had no `run_guarded`, `GuardedIntent`, or `BatchFailure` when this landed (0030, 0032, 0033 "As built"), so the spec's names map as follows.
+[Back to index](README.md). Where the code differs from the text of the other files, and why. Main had no `run_guarded` or `GuardedIntent` when this landed (0030, 0032, 0033 "As built"), so the spec's names map as follows.
 
 | Spec | Code |
 |---|---|
@@ -41,6 +41,13 @@
 - Leaving: `LeavingWork.drains` lists `A drain on {cluster} will stop; its nodes stay cordoned`; a confirmed release stops the run (`stop_drains_of`, before the tab is removed) and writes the lines; a window close asks the same way (`main_window_may_close`) and, once confirmed, stops every run and writes the lines at once; `cleanup_for_quit` stops them without asking. The end notification is handed out once (`take_end_notice`).
 - One drain per cluster (`Dock::has_running_drain`): the dialog, the key, and the bar button refuse a second. The Uncordon button of a finished tab opens the bulk Uncordon batch over the nodes the run cordoned.
 - Screen `drain-progress` (the dock zoomed on a frozen-clock tab: 12 of 23 gone, three being deleted, one refused three times).
+
+## Review fixes
+
+- **One writer per cluster.** `drain_conflict` refuses Cordon, Uncordon, and Edit taints (the C key, the menu, the bar, the editor) with `A drain is running on {cluster}`, in `start_write`, `start_batch`, the editor, and the bar buttons. A drain is refused while `running_batches` holds the cluster (`start_drain`, `start_drain_run`, the bar button).
+- **Quit mid-eviction.** `DrainRun` records the commit in the air (`begin_write`, cleared by `on_write`). A confirmed close writes it as an `unknown` line (`drain_in_flight_entry`) and the stopped summary counts it in an `unknown` field (only when above zero).
+- **The bar's Drain** goes through `ticked_nodes`: ticks of two clusters read `Select rows of one cluster` instead of dropping one.
+- A 2xx eviction answer with neither `Success` nor a code is `OutcomeUnknown` on commit. Taint Retry reopens the editor only after a 409. A stuck summary line carries the reason in `error`. Changing the value of a `NoExecute` taint is `Destructive`.
 
 ## Deviations
 

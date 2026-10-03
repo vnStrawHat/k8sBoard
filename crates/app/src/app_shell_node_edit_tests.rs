@@ -549,3 +549,36 @@ fn bulk_cordon_on_a_locked_cluster_is_off(cx: &mut TestAppContext) {
         BulkState::Off("prod-a is read-only".into())
     );
 }
+
+#[gpui_kit::test]
+fn taint_retry_after_another_error_checks_again_and_keeps_the_rows(cx: &mut TestAppContext) {
+    let t = node_test("node-edit-server-error", cx);
+    t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.add_row(&editor, ("gpu", "true", "NoSchedule"), cx);
+    let body = json!({
+        "kind": "Status", "apiVersion": "v1", "status": "Failure",
+        "message": "etcd is busy", "reason": "InternalError", "code": 500,
+    });
+    *t.patch.lock().expect("the answer") = (500, body.to_string());
+    t.review(&editor, cx);
+    t.t.wait_for_dry_run(cx);
+    let dialog = t.t.dialog(cx);
+    assert!(matches!(
+        dialog.read_with(cx, |dialog, _| dialog.dry_run_state()),
+        Some(DryRunState::Failed(_))
+    ));
+    // Not a 409: Retry runs the same check again and does not read the node or reopen the editor.
+    t.t.fixture.with_window(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.press_retry(window, cx));
+    });
+    t.t.wait_for("the second dry-run", cx, |_| {
+        writes(&t.t.stg_api).len() == 2
+    });
+    assert_eq!(reads_of(&t.t.stg_api, "/api/v1/nodes/node-b"), 1);
+    let body_of_both: Vec<Value> = writes(&t.t.stg_api).iter().map(body_of).collect();
+    assert_eq!(
+        body_of_both[0], body_of_both[1],
+        "the same rows are checked again"
+    );
+}

@@ -16,6 +16,7 @@ use super::app_shell_write_tests::{Clusters, audit_lines, go_live_answering, vie
 use super::drain_dialog::DrainDialog;
 use super::write_flow::DryRunState;
 use super::*;
+use crate::app_shell::node_editor::NodeEditKind;
 use crate::drain_plan::{Budget, DrainOption, PodCheck, PodVerdict, PreviewLine};
 use crate::drain_tab::DrainTab;
 use crate::environment::Environment;
@@ -28,6 +29,8 @@ const PDB_REFUSAL: &str = "The disruption budget api-pdb needs 2 healthy pods an
 /// What the fake server of a cluster answers.
 #[derive(Default)]
 struct DrainServer {
+    /// A committed eviction waits for this to be released, once.
+    eviction_gate: Gate,
     pods: Vec<Value>,
     budgets: Vec<Value>,
     /// Pod names the eviction answers 429 for.
@@ -92,7 +95,17 @@ fn budget_json(name: &str, expected: u32, allowed: u32) -> Value {
 fn server(
     state: Arc<Mutex<DrainServer>>,
 ) -> impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + 'static {
+    let gate = Arc::clone(&state.lock().expect("the server state").eviction_gate);
     move |request| {
+        let is_commit_eviction = request.method == "POST"
+            && request.path.ends_with("/eviction")
+            && !request.has_query("dryRun", "All");
+        if is_commit_eviction {
+            let held = gate.lock().expect("the gate").take();
+            if let Some(held) = held {
+                let _ = held.recv_timeout(Duration::from_secs(10));
+            }
+        }
         let mut state = state.lock().expect("the server state");
         let is_list = request.method == "GET" && !request.query.contains("watch=");
         if is_list && request.path == "/api/v1/pods" && request.query.contains("fieldSelector") {
@@ -174,9 +187,13 @@ fn summary(name: &str, scheduling: NodeScheduling) -> NodeSummary {
     }
 }
 
+type Gate = Arc<Mutex<Option<std::sync::mpsc::Receiver<()>>>>;
+
 struct DrainTest {
     t: Clusters,
     prod_state: Arc<Mutex<DrainServer>>,
+    /// Holds the next committed eviction of the staging server.
+    stg_gate: Gate,
 }
 
 fn drain_test(
@@ -189,6 +206,7 @@ fn drain_test(
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
     let mut stg_server = DrainServer::default();
     setup(&mut stg_server);
+    let stg_gate = Arc::clone(&stg_server.eviction_gate);
     let stg_state = Arc::new(Mutex::new(stg_server));
     let prod_state = Arc::new(Mutex::new(DrainServer::default()));
     let prod_api = go_live_answering(
@@ -213,6 +231,7 @@ fn drain_test(
             stg,
         },
         prod_state,
+        stg_gate,
     }
 }
 
@@ -1275,4 +1294,191 @@ fn closing_a_finished_drain_removes_its_tab(cx: &mut TestAppContext) {
         .shell
         .update(cx, |shell, cx| shell.close_drain_tab(&tab, cx));
     assert_eq!(t.dock_tabs(cx), 0);
+}
+
+// ---- Fixes after review ----
+
+#[gpui_kit::test]
+fn cordon_uncordon_and_taint_edits_are_refused_while_a_drain_runs(cx: &mut TestAppContext) {
+    let t = drain_test("drain-conflict", refusing_api_2, cx);
+    let tab = t.start(cx);
+    t.t.wait_for("the refusal", cx, |cx| {
+        tab.read_with(cx, |tab, _| tab.run().pod_rows(Duration::ZERO).len() == 3)
+    });
+    t.set_nodes(&t.t.prod, Vec::new(), cx);
+    t.set_nodes(
+        &t.t.stg,
+        vec![
+            summary("node-b", NodeScheduling::Enabled),
+            summary("node-c", NodeScheduling::Disabled),
+        ],
+        cx,
+    );
+    let stg = t.t.stg.clone();
+    // The C key and the menu: no confirm dialog.
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.t.fixture.shell.update(cx, |shell, cx| {
+            shell.start_cordon(&stg, "node-b", None, window, cx);
+            shell.start_cordon(&stg, "node-c", None, window, cx);
+        });
+    });
+    assert!(!t.t.has_dialog(cx), "no cordon or uncordon dialog");
+    // The taint editor does not open; the label editor, which cannot undo the drain, does.
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.t.fixture.shell.update(cx, |shell, cx| {
+            shell.open_node_editor(NodeEditKind::Taints, &stg, "node-b", None, window, cx);
+        });
+    });
+    assert!(
+        t.t.fixture
+            .shell
+            .read_with(cx, |shell, _| shell.last_node_editor.clone())
+            .is_none()
+    );
+    // The bulk buttons say why.
+    t.tick(&[0], cx);
+    let states = t.t.fixture.shell.read_with(cx, |shell, cx| {
+        shell
+            .bulk_buttons(cx)
+            .into_iter()
+            .map(|button| (button.label.to_string(), button.state))
+            .collect::<Vec<_>>()
+    });
+    for label in ["Cordon", "Uncordon"] {
+        let state = states
+            .iter()
+            .find(|(name, _)| name == label)
+            .map(|(_, s)| s.clone());
+        assert_eq!(
+            state,
+            Some(crate::row_selection::BulkState::Off(
+                "A drain is running on stg-b".into()
+            )),
+            "{label}"
+        );
+    }
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.t.fixture.shell.update(cx, |shell, cx| {
+            shell.run_bulk(
+                crate::resource_actions::ResourceAction::Uncordon,
+                window,
+                cx,
+            );
+        });
+    });
+    assert!(!t.t.has_dialog(cx), "no bulk dialog");
+    // Nothing but the drain's own requests reached the server: no uncordon patch.
+    assert!(
+        writes(&t.t.stg_api)
+            .iter()
+            .all(|request| { !(request.method == "PATCH" && request.body.contains("false")) })
+    );
+    // After Cancel the node actions work again.
+    tab.update(cx, |tab, cx| tab.cancel(cx));
+    t.wait_for_end(&tab, cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.t.fixture.shell.update(cx, |shell, cx| {
+            shell.start_cordon(&stg, "node-b", None, window, cx);
+        });
+    });
+    assert!(t.t.has_dialog(cx));
+}
+
+#[gpui_kit::test]
+fn a_drain_is_refused_while_a_batch_runs_on_the_cluster(cx: &mut TestAppContext) {
+    let t = drain_test("drain-batch", three_pods, cx);
+    let stg = t.t.stg.clone();
+    t.t.fixture.shell.update(cx, |shell, _| {
+        shell.running_batches.insert(stg.clone());
+    });
+    // The dialog does not open.
+    t.open(&stg, &["node-b"], cx);
+    assert!(t.dialog(cx).is_none());
+    assert!(pod_lists(&t.t.stg_api).is_empty());
+    // The bar button says why.
+    t.set_nodes(&t.t.prod, Vec::new(), cx);
+    t.tick(&[0], cx);
+    assert_eq!(
+        t.drain_button(cx),
+        crate::row_selection::BulkState::Off("A batch is running".into())
+    );
+    // A dialog opened before the batch cannot start its run either.
+    t.t.fixture.shell.update(cx, |shell, _| {
+        shell.running_batches.remove(&stg);
+    });
+    let dialog = t.open_and_settle(&stg, &["node-b"], cx);
+    t.t.fixture.shell.update(cx, |shell, _| {
+        shell.running_batches.insert(stg.clone());
+    });
+    t.press_drain(&dialog, cx);
+    cx.run_until_parked();
+    assert!(t.tab(cx).is_none(), "no run while a batch commits");
+    assert!(
+        writes(&t.t.stg_api)
+            .iter()
+            .all(|request| request.has_query("dryRun", "All"))
+    );
+}
+
+#[gpui_kit::test]
+fn the_bar_drain_refuses_ticks_of_two_clusters_instead_of_dropping_one(cx: &mut TestAppContext) {
+    let t = drain_test("drain-two-clusters", three_pods, cx);
+    t.set_nodes(&t.t.prod, vec![summary("p1", NodeScheduling::Enabled)], cx);
+    t.set_nodes(&t.t.stg, vec![summary("n1", NodeScheduling::Enabled)], cx);
+    t.tick(&[0, 1], cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.t.fixture.shell.update(cx, |shell, cx| {
+            shell.run_bulk(crate::resource_actions::ResourceAction::Drain, window, cx);
+        });
+    });
+    assert!(t.dialog(cx).is_none(), "no dialog for half of the ticks");
+    assert!(pod_lists(&t.t.stg_api).is_empty() && pod_lists(&t.t.prod_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn quitting_mid_eviction_writes_an_unknown_line_and_counts_it(cx: &mut TestAppContext) {
+    let t = drain_test("drain-quit-in-flight", three_pods, cx);
+    let dir = t.t.enable_audit_folder("drain-quit-in-flight", cx);
+    let (release, gate) = std::sync::mpsc::channel();
+    *t.stg_gate.lock().expect("the gate") = Some(gate);
+    let tab = t.start(cx);
+    // The first committed eviction is held at the server: it is in the air.
+    t.t.wait_for("a request in the air", cx, |cx| {
+        tab.read_with(cx, |tab, _| {
+            matches!(
+                tab.run().in_flight(),
+                Some(crate::drain_run::NextStep::Evict(_))
+            )
+        })
+    });
+    let may_close =
+        t.t.fixture
+            .shell
+            .update(cx, |shell, cx| shell.main_window_may_close(cx));
+    assert!(!may_close);
+    cx.run_until_parked();
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_action(
+            Box::new(gpui_kit::component::dialog::Confirm { secondary: false }),
+            cx,
+        );
+    });
+    let lines = audit_lines(&dir);
+    let unknown: Vec<_> = lines
+        .iter()
+        .filter(|line| line["action"] == "Evict" && line["outcome"] == "unknown")
+        .collect();
+    assert_eq!(unknown.len(), 1, "{lines:?}");
+    assert_eq!(unknown[0]["object"]["kind"], "Pod");
+    let summary = lines
+        .iter()
+        .find(|line| line["action"] == "Drain")
+        .expect("the stopped summary");
+    assert_eq!(summary["outcome"], "stopped");
+    assert!(
+        summary["fields"]
+            .as_array()
+            .is_some_and(|fields| fields.contains(&json!({"path": "unknown", "value": "1"})))
+    );
+    let _ = release.send(());
 }

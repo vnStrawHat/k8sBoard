@@ -398,7 +398,9 @@ fn summary(outcome: SummaryOutcome) -> NodeSummary {
         refused: 2,
         failed: 0,
         skipped: 6,
+        unknown: 0,
         outcome,
+        reason: None,
     }
 }
 
@@ -458,4 +460,90 @@ fn every_drain_outcome_has_its_own_word() {
         assert_eq!(value["outcome"], word);
         assert!(value.get("note").is_none());
     }
+}
+
+#[test]
+fn a_stuck_summary_records_why_in_the_error() {
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let identity = AuditIdentity::of(&guard);
+    let stuck = NodeSummary {
+        reason: Some("Timed out after 5m: 2 pods left".into()),
+        ..summary(SummaryOutcome::Stuck)
+    };
+    let value = serde_json::to_value(drain_summary_entry(&identity, &stuck, None)).expect("JSON");
+    assert_eq!(value["error"], "Timed out after 5m: 2 pods left");
+    let drained = serde_json::to_value(drain_summary_entry(
+        &identity,
+        &summary(SummaryOutcome::Drained),
+        None,
+    ))
+    .expect("JSON");
+    assert!(drained.get("error").is_none());
+}
+
+#[test]
+fn the_unknown_count_is_a_field_only_when_there_is_one() {
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let identity = AuditIdentity::of(&guard);
+    let value = |unknown| {
+        let line = NodeSummary {
+            unknown,
+            ..summary(SummaryOutcome::Stopped)
+        };
+        serde_json::to_value(drain_summary_entry(&identity, &line, None)).expect("JSON")
+    };
+    assert_eq!(value(0)["fields"].as_array().map(Vec::len), Some(4));
+    let with = value(1);
+    assert_eq!(
+        with["fields"][4],
+        serde_json::json!({"path": "unknown", "value": "1"})
+    );
+}
+
+#[test]
+fn a_commit_in_the_air_at_quit_is_an_unknown_line() {
+    use crate::drain_plan::PodKey;
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let identity = AuditIdentity::of(&guard);
+    let evict = NextStep::Evict(PodKey {
+        namespace: "payments".to_owned(),
+        name: "api-1".to_owned(),
+        uid: "u-1".to_owned(),
+    });
+    let entry = drain_in_flight_entry(&identity, &evict, GracePeriod::Seconds(30), Some("note"))
+        .expect("a line");
+    let value = serde_json::to_value(entry).expect("JSON");
+    assert_eq!(value["action"], "Evict");
+    assert_eq!(value["outcome"], "unknown");
+    assert_eq!(value["object"]["kind"], "Pod");
+    assert_eq!(value["object"]["namespace"], "payments");
+    assert_eq!(
+        value["fields"][0],
+        serde_json::json!({"path": "pods/eviction", "value": "grace 30s"})
+    );
+    assert_eq!(value["note"], "note");
+    assert!(
+        value["error"]
+            .as_str()
+            .is_some_and(|text| text.contains("in flight"))
+    );
+    let cordon = drain_in_flight_entry(
+        &identity,
+        &NextStep::Cordon("wk-04".to_owned()),
+        GracePeriod::PodDefault,
+        None,
+    )
+    .expect("a line");
+    let value = serde_json::to_value(cordon).expect("JSON");
+    assert_eq!(
+        (value["action"].as_str(), value["object"]["name"].as_str()),
+        (Some("Cordon"), Some("wk-04"))
+    );
+    // A read or a dry-run has nothing to record.
+    assert!(
+        drain_in_flight_entry(&identity, &NextStep::Poll, GracePeriod::PodDefault, None).is_none()
+    );
 }

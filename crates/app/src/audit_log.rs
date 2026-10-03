@@ -7,10 +7,11 @@ use std::fs::OpenOptions;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
+use cluster::GracePeriod;
 use serde::Serialize;
 
 use crate::app_shell::write_flow::WriteIntent;
-use crate::drain_run::{NodeSummary, SummaryOutcome};
+use crate::drain_run::{NextStep, NodeSummary, SummaryOutcome};
 use crate::resource_actions::{ResourceAction, action_label};
 use crate::write_guard::{ClusterGuard, WriteLock};
 
@@ -229,21 +230,79 @@ pub(crate) fn drain_summary_entry(
             namespace: None,
             name: summary.node.clone(),
         }),
-        fields: vec![
-            count("evicted", summary.evicted),
-            count("refused", summary.refused),
-            count("failed", summary.failed),
-            count("skipped", summary.skipped),
-        ],
+        fields: [
+            Some(count("evicted", summary.evicted)),
+            Some(count("refused", summary.refused)),
+            Some(count("failed", summary.failed)),
+            Some(count("skipped", summary.skipped)),
+            // Only a run that ended with a request in the air has an unknown count.
+            (summary.unknown > 0).then(|| count("unknown", summary.unknown)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
         outcome: match summary.outcome {
             SummaryOutcome::Drained => AuditOutcome::Drained,
             SummaryOutcome::Stuck => AuditOutcome::Stuck,
             SummaryOutcome::Cancelled => AuditOutcome::Cancelled,
             SummaryOutcome::Stopped => AuditOutcome::Stopped,
         },
-        error: None,
+        error: summary.reason.as_ref().map(ToString::to_string),
         note: note.and_then(clean_note),
     }
+}
+
+/// The line of a commit whose request was in the air when the app quit: its outcome is unknown,
+/// because `checked_write` can no longer write the line when the answer comes. `None` for a step
+/// that is not a commit.
+pub(crate) fn drain_in_flight_entry(
+    identity: &AuditIdentity,
+    step: &NextStep,
+    grace: GracePeriod,
+    note: Option<&str>,
+) -> Option<AuditEntry> {
+    let (action, object, fields) = match step {
+        NextStep::Evict(key) => (
+            "Evict",
+            AuditObject {
+                kind: "Pod".to_owned(),
+                namespace: Some(key.namespace.clone()),
+                name: key.name.clone(),
+            },
+            AuditField {
+                path: "pods/eviction".to_owned(),
+                value: Some(match grace {
+                    GracePeriod::PodDefault => "grace pod default".to_owned(),
+                    GracePeriod::Seconds(seconds) => format!("grace {seconds}s"),
+                }),
+            },
+        ),
+        NextStep::Cordon(node) => (
+            "Cordon",
+            AuditObject {
+                kind: "Node".to_owned(),
+                namespace: None,
+                name: node.clone(),
+            },
+            AuditField {
+                path: "spec.unschedulable".to_owned(),
+                value: Some("true".to_owned()),
+            },
+        ),
+        _ => return None,
+    };
+    Some(AuditEntry {
+        at: timestamp_now(),
+        cluster: identity.cluster.clone(),
+        context: identity.context.clone(),
+        user: identity.user.clone(),
+        action: action.to_owned(),
+        object: Some(object),
+        fields: vec![fields],
+        outcome: AuditOutcome::Unknown,
+        error: Some("the app closed while the request was in flight".to_owned()),
+        note: note.and_then(clean_note),
+    })
 }
 
 /// The name the server gave an object a commit created (Trigger now, Re-run), which the request
