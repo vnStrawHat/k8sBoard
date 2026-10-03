@@ -559,7 +559,7 @@ fn mutating_row_actions_are_never_enabled() {
         };
         let is_read_only = matches!(
             action,
-            ResourceAction::ViewLogs | ResourceAction::ViewYaml | ResourceAction::CopyName
+            RowAction::ViewLogs | RowAction::ViewYaml | RowAction::CopyName
         );
         assert_eq!(entry.is_enabled(), is_read_only, "{action:?}");
     }
@@ -602,7 +602,7 @@ fn every_offered_row_action_maps() {
             offered += 1;
             // The key action is the same unit action the key binds, by name.
             let expected = match action {
-                ResourceAction::OpenShell | ResourceAction::OpenNodeShell => "k8sboard::OpenShell",
+                RowAction::OpenShell => "k8sboard::OpenShell",
                 other => &format!("k8sboard::{other:?}"),
             };
             assert_eq!(action.key_action().name(), expected);

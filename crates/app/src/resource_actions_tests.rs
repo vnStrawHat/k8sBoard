@@ -1162,14 +1162,10 @@ fn pod_with(containers: Vec<cluster::ContainerSummary>) -> PodSummary {
     }
 }
 
-fn availability(
-    action: ResourceAction,
-    subject: &ResourceKey,
-    access: &AccessState,
-) -> KeyAvailability {
+fn availability(row: RowAction, subject: &ResourceKey, access: &AccessState) -> KeyAvailability {
     let pod = pod_with(vec![container_of("app")]);
     key_availability_of(
-        action,
+        row,
         subject,
         subject.is_pod(&pod).then_some(&pod),
         &unlocked(access),
@@ -1187,12 +1183,12 @@ fn disabled_reason(availability: KeyAvailability) -> String {
 fn key_availability_offers_logs_only_for_pods() {
     let access = known_denying(&[]);
     assert_eq!(
-        availability(ResourceAction::ViewLogs, &pod_key(), &access),
-        KeyAvailability::Run
+        availability(RowAction::ViewLogs, &pod_key(), &access),
+        KeyAvailability::Run(ResourceAction::ViewLogs)
     );
     for subject in [node_key(), kind_key(ResourceKind::Services)] {
         assert_eq!(
-            availability(ResourceAction::ViewLogs, &subject, &access),
+            availability(RowAction::ViewLogs, &subject, &access),
             KeyAvailability::NotOffered
         );
     }
@@ -1203,7 +1199,7 @@ fn key_availability_explains_a_pod_without_containers() {
     let pod = pod_with(Vec::new());
     let access = known_denying(&[]);
     let availability = key_availability_of(
-        ResourceAction::ViewLogs,
+        RowAction::ViewLogs,
         &pod_key(),
         Some(&pod),
         &unlocked(&access),
@@ -1215,14 +1211,14 @@ fn key_availability_explains_a_pod_without_containers() {
 fn key_availability_disables_unshipped_keys_with_the_later_version_reason() {
     let access = known_denying(&[]);
     let offered = [
-        (ResourceAction::EditYaml, pod_key()),
-        (ResourceAction::Delete, pod_key()),
-        (ResourceAction::Drain, node_key()),
+        (RowAction::EditYaml, pod_key()),
+        (RowAction::Delete, pod_key()),
+        (RowAction::Drain, node_key()),
         (
-            ResourceAction::RestartRollout,
+            RowAction::RestartRollout,
             kind_key(ResourceKind::Deployments),
         ),
-        (ResourceAction::Scale, kind_key(ResourceKind::Deployments)),
+        (RowAction::Scale, kind_key(ResourceKind::Deployments)),
     ];
     for (action, subject) in offered {
         assert_eq!(
@@ -1233,7 +1229,7 @@ fn key_availability_disables_unshipped_keys_with_the_later_version_reason() {
     }
     // Where a subject has no such action, the key is silent.
     assert_eq!(
-        availability(ResourceAction::Cordon, &pod_key(), &access),
+        availability(RowAction::Cordon, &pod_key(), &access),
         KeyAvailability::NotOffered
     );
 }
@@ -1242,15 +1238,11 @@ fn key_availability_disables_unshipped_keys_with_the_later_version_reason() {
 fn key_availability_uses_the_access_gate() {
     let denied = known_denying(&[AccessCheck::GetPodLogs]);
     assert_eq!(
-        disabled_reason(availability(ResourceAction::ViewLogs, &pod_key(), &denied)),
+        disabled_reason(availability(RowAction::ViewLogs, &pod_key(), &denied)),
         "Not permitted: get pods/log"
     );
     assert_eq!(
-        disabled_reason(availability(
-            ResourceAction::ViewLogs,
-            &pod_key(),
-            &checking()
-        )),
+        disabled_reason(availability(RowAction::ViewLogs, &pod_key(), &checking())),
         "Checking permissions…"
     );
 }
@@ -1260,7 +1252,7 @@ fn key_availability_of_a_shell_waits_for_its_spec_before_its_permission() {
     let denied = known_denying(&[AccessCheck::CreatePodExec]);
     for subject in [pod_key(), node_key()] {
         assert_eq!(
-            disabled_reason(availability(ResourceAction::OpenShell, &subject, &denied)),
+            disabled_reason(availability(RowAction::OpenShell, &subject, &denied)),
             "Comes in a later version"
         );
     }
@@ -1269,34 +1261,28 @@ fn key_availability_of_a_shell_waits_for_its_spec_before_its_permission() {
 #[test]
 fn key_availability_offers_restart_and_scale_from_kind_actions() {
     let access = known_denying(&[]);
-    let offers = |kind: ResourceKind, action: ResourceAction| {
+    let offers = |kind: ResourceKind, action: RowAction| {
         availability(action, &kind_key(kind), &access) != KeyAvailability::NotOffered
     };
-    assert!(offers(
-        ResourceKind::Deployments,
-        ResourceAction::RestartRollout
-    ));
-    assert!(offers(ResourceKind::Deployments, ResourceAction::Scale));
-    assert!(offers(
-        ResourceKind::DaemonSets,
-        ResourceAction::RestartRollout
-    ));
-    assert!(!offers(ResourceKind::DaemonSets, ResourceAction::Scale));
-    assert!(!offers(
-        ResourceKind::Services,
-        ResourceAction::RestartRollout
-    ));
-    assert!(!offers(ResourceKind::Services, ResourceAction::Scale));
+    assert!(offers(ResourceKind::Deployments, RowAction::RestartRollout));
+    assert!(offers(ResourceKind::Deployments, RowAction::Scale));
+    assert!(offers(ResourceKind::DaemonSets, RowAction::RestartRollout));
+    assert!(!offers(ResourceKind::DaemonSets, RowAction::Scale));
+    assert!(!offers(ResourceKind::Services, RowAction::RestartRollout));
+    assert!(!offers(ResourceKind::Services, RowAction::Scale));
 }
 
 #[test]
 fn view_yaml_and_copy_name_always_run() {
     for access in [checking(), unknown(), known_denying(&AccessCheck::ALL)] {
         for subject in [pod_key(), node_key(), kind_key(ResourceKind::ConfigMaps)] {
-            for action in [ResourceAction::ViewYaml, ResourceAction::CopyName] {
+            for (row, resolved) in [
+                (RowAction::ViewYaml, ResourceAction::ViewYaml),
+                (RowAction::CopyName, ResourceAction::CopyName),
+            ] {
                 assert_eq!(
-                    availability(action, &subject, &access),
-                    KeyAvailability::Run
+                    availability(row, &subject, &access),
+                    KeyAvailability::Run(resolved)
                 );
             }
         }
@@ -1308,7 +1294,7 @@ fn a_helm_release_has_no_yaml_key() {
     // Its YAML would show the release Secret, which holds values.
     assert_eq!(
         availability(
-            ResourceAction::ViewYaml,
+            RowAction::ViewYaml,
             &kind_key(ResourceKind::HelmReleases),
             &known_denying(&[])
         ),
@@ -1317,15 +1303,53 @@ fn a_helm_release_has_no_yaml_key() {
 }
 
 #[test]
-fn the_shell_key_names_the_node_shell_on_a_node() {
+fn subject_action_resolves_the_carried_kind() {
+    // `Scale` carries no kind yet, so the kind table decides only whether it is offered.
     assert_eq!(
-        subject_action(ResourceAction::OpenShell, &node_key()),
-        ResourceAction::OpenNodeShell
+        subject_action(RowAction::Scale, &kind_key(ResourceKind::Deployments)),
+        Some(ResourceAction::Scale)
     );
     assert_eq!(
-        subject_action(ResourceAction::OpenShell, &pod_key()),
-        ResourceAction::OpenShell
+        subject_action(RowAction::Scale, &kind_key(ResourceKind::DaemonSets)),
+        None
     );
+    assert_eq!(
+        subject_action(RowAction::OpenShell, &node_key()),
+        Some(ResourceAction::OpenNodeShell)
+    );
+    assert_eq!(
+        subject_action(RowAction::OpenShell, &pod_key()),
+        Some(ResourceAction::OpenShell)
+    );
+    assert_eq!(subject_action(RowAction::ViewLogs, &node_key()), None);
+}
+
+#[test]
+fn every_resource_action_has_a_row_action() {
+    let subjects = [
+        (ResourceAction::ViewLogs, pod_key()),
+        (ResourceAction::OpenShell, pod_key()),
+        (ResourceAction::PortForward, pod_key()),
+        (ResourceAction::OpenNodeShell, node_key()),
+        (ResourceAction::Cordon, node_key()),
+        (ResourceAction::Drain, node_key()),
+        (ResourceAction::CopyName, pod_key()),
+        (ResourceAction::ViewYaml, pod_key()),
+        (ResourceAction::EditYaml, pod_key()),
+        (ResourceAction::Delete, pod_key()),
+        (
+            ResourceAction::RestartRollout,
+            kind_key(ResourceKind::Deployments),
+        ),
+        (ResourceAction::Scale, kind_key(ResourceKind::Deployments)),
+    ];
+    for (action, subject) in subjects {
+        assert_eq!(
+            subject_action(action.row_action(), &subject),
+            Some(action),
+            "{action:?}"
+        );
+    }
 }
 
 #[test]
@@ -1342,10 +1366,11 @@ fn an_unavailable_key_says_what_and_why() {
 #[test]
 fn menu_hints_name_the_key_action() {
     use crate::keymap::{OpenShell, ViewLogs};
-    assert!(ResourceAction::ViewLogs.key_action().partial_eq(&ViewLogs));
+    assert!(RowAction::ViewLogs.key_action().partial_eq(&ViewLogs));
     // The node shell shares the pod shell key.
     assert!(
         ResourceAction::OpenNodeShell
+            .row_action()
             .key_action()
             .partial_eq(&OpenShell)
     );

@@ -996,7 +996,7 @@ fn the_palette_lists_the_loaded_pods_and_the_row_actions_of_the_cursor(cx: &mut 
     assert!(snapshot.entries.iter().any(|entry| matches!(
         entry.target,
         crate::palette_search::PaletteTarget::RowAction(
-            crate::resource_actions::ResourceAction::ViewLogs
+            crate::resource_actions::RowAction::ViewLogs
         )
     )));
     // A query that cannot list resources builds none of them.

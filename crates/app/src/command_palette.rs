@@ -31,7 +31,7 @@ use crate::palette_search::{
     EntryState, PaletteEntry, PaletteGroup, PaletteTarget, empty_text, lists_resources,
     parse_query, ranked,
 };
-use crate::resource_actions::ResourceAction;
+use crate::resource_actions::RowAction;
 use crate::settings_window::OpenSettings;
 use crate::shortcut_sheet::row_keys;
 use crate::status_tone::{StatusLabel, StatusTone, tone_color, toned_text};
@@ -589,19 +589,19 @@ fn row_icon(target: &PaletteTarget) -> RowIcon {
     }
 }
 
-fn row_action_icon(action: ResourceAction) -> IconName {
+fn row_action_icon(action: RowAction) -> IconName {
     match action {
-        ResourceAction::ViewLogs => IconName::FileText,
-        ResourceAction::ViewYaml => IconName::Eye,
-        ResourceAction::CopyName => IconName::Copy,
-        ResourceAction::OpenShell | ResourceAction::OpenNodeShell => IconName::SquareTerminal,
-        ResourceAction::PortForward => IconName::Network,
-        ResourceAction::Cordon => IconName::Ban,
-        ResourceAction::Drain => IconName::ArrowDown,
-        ResourceAction::EditYaml => IconName::Replace,
-        ResourceAction::RestartRollout => IconName::RotateCw,
-        ResourceAction::Scale => IconName::ChevronsUpDown,
-        ResourceAction::Delete => IconName::Delete,
+        RowAction::ViewLogs => IconName::FileText,
+        RowAction::ViewYaml => IconName::Eye,
+        RowAction::CopyName => IconName::Copy,
+        RowAction::OpenShell => IconName::SquareTerminal,
+        RowAction::PortForward => IconName::Network,
+        RowAction::Cordon => IconName::Ban,
+        RowAction::Drain => IconName::ArrowDown,
+        RowAction::EditYaml => IconName::Replace,
+        RowAction::RestartRollout => IconName::RotateCw,
+        RowAction::Scale => IconName::ChevronsUpDown,
+        RowAction::Delete => IconName::Delete,
     }
 }
 

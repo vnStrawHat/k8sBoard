@@ -24,7 +24,7 @@ use crate::keymap::{
 };
 use crate::pod_drawer::{container_display_order, selected_container_index};
 use crate::resource_actions::{
-    KeyAvailability, ResourceAction, action_label, key_availability, subject_action,
+    KeyAvailability, ResourceAction, RowAction, action_label, key_availability, subject_action,
     unavailable_text,
 };
 use crate::table_selection::{ClusterObject, ResourceKey};
@@ -179,16 +179,16 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
         .on_action(cx.listener(|shell, _: &CloseDockTab, _, cx| {
             shell.dock.update(cx, |dock, cx| dock.close_active_tab(cx));
         }));
-    let root = on_row_key::<ViewLogs>(root, ResourceAction::ViewLogs, cx);
-    let root = on_row_key::<ViewYaml>(root, ResourceAction::ViewYaml, cx);
-    let root = on_row_key::<OpenShell>(root, ResourceAction::OpenShell, cx);
-    let root = on_row_key::<PortForward>(root, ResourceAction::PortForward, cx);
-    let root = on_row_key::<Cordon>(root, ResourceAction::Cordon, cx);
-    let root = on_row_key::<Drain>(root, ResourceAction::Drain, cx);
-    let root = on_row_key::<EditYaml>(root, ResourceAction::EditYaml, cx);
-    let root = on_row_key::<RestartRollout>(root, ResourceAction::RestartRollout, cx);
-    let root = on_row_key::<Scale>(root, ResourceAction::Scale, cx);
-    on_row_key::<Delete>(root, ResourceAction::Delete, cx)
+    let root = on_row_key::<ViewLogs>(root, RowAction::ViewLogs, cx);
+    let root = on_row_key::<ViewYaml>(root, RowAction::ViewYaml, cx);
+    let root = on_row_key::<OpenShell>(root, RowAction::OpenShell, cx);
+    let root = on_row_key::<PortForward>(root, RowAction::PortForward, cx);
+    let root = on_row_key::<Cordon>(root, RowAction::Cordon, cx);
+    let root = on_row_key::<Drain>(root, RowAction::Drain, cx);
+    let root = on_row_key::<EditYaml>(root, RowAction::EditYaml, cx);
+    let root = on_row_key::<RestartRollout>(root, RowAction::RestartRollout, cx);
+    let root = on_row_key::<Scale>(root, RowAction::Scale, cx);
+    on_row_key::<Delete>(root, RowAction::Delete, cx)
 }
 
 fn on_step<A: Action>(root: Div, step: RowStep, cx: &Context<AppShell>) -> Div {
@@ -197,7 +197,7 @@ fn on_step<A: Action>(root: Div, step: RowStep, cx: &Context<AppShell>) -> Div {
     }))
 }
 
-fn on_row_key<A: Action>(root: Div, action: ResourceAction, cx: &Context<AppShell>) -> Div {
+fn on_row_key<A: Action>(root: Div, action: RowAction, cx: &Context<AppShell>) -> Div {
     root.on_action(cx.listener(move |shell, _: &A, window, cx| {
         shell.run_row_key(action, window, cx);
     }))
@@ -405,7 +405,7 @@ impl AppShell {
 
     /// A single-letter row action on the cursor row, drawer open or closed. A key the subject
     /// does not offer does nothing; an offered but unavailable one says why.
-    fn run_row_key(&mut self, action: ResourceAction, window: &mut Window, cx: &mut Context<Self>) {
+    fn run_row_key(&mut self, row: RowAction, window: &mut Window, cx: &mut Context<Self>) {
         let Some(subject) = self.selected.clone() else {
             return;
         };
@@ -415,14 +415,18 @@ impl AppShell {
         ) else {
             return;
         };
-        match key_availability(action, &subject.key, live, &guard) {
+        match key_availability(row, &subject.key, live, &guard) {
             KeyAvailability::NotOffered => {}
             KeyAvailability::Disabled { reason } => {
-                let label = action_label(subject_action(action, &subject.key));
+                // A disabled key is an offered one, so the subject resolves it.
+                let Some(action) = subject_action(row, &subject.key) else {
+                    return;
+                };
+                let label = action_label(action);
                 let text = unavailable_text(label, &reason);
                 window.push_notification(Notification::warning(text).id::<RowKeyNotice>(), cx);
             }
-            KeyAvailability::Run => self.run_available_row_key(action, subject, window, cx),
+            KeyAvailability::Run(action) => self.run_available_row_key(action, subject, window, cx),
         }
     }
 

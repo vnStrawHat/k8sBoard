@@ -18,7 +18,7 @@ use crate::keymap::{OpenKindPalette, OpenPalette, ShortcutGroup, shortcut_rows};
 use crate::kind_row::KindRow;
 use crate::navigation::{KindAvailability, kind_availability};
 use crate::resource_actions::{
-    KeyAvailability, ResourceAction, action_label, key_availability_of, subject_action,
+    KeyAvailability, RowAction, action_label, key_availability_of, subject_action,
 };
 use crate::resource_kind::ResourceKind;
 use crate::settings_window::ImportKubeconfig;
@@ -122,7 +122,7 @@ pub(crate) enum PaletteTarget {
     /// A 0028 action, dispatched on the shell.
     Command(Box<dyn Action>),
     /// A row action on the cursor row, dispatched as the action of its key.
-    RowAction(ResourceAction),
+    RowAction(RowAction),
     Screen(Screen),
     /// An object of one viewed cluster, which the shell reveals in that cluster.
     Resource(ClusterObject),
@@ -227,18 +227,18 @@ impl<'a> PaletteInput<'a> {
 }
 
 /// The row actions in the order of the shortcut sheet.
-const ROW_ACTIONS: [ResourceAction; 11] = [
-    ResourceAction::ViewLogs,
-    ResourceAction::ViewYaml,
-    ResourceAction::CopyName,
-    ResourceAction::OpenShell,
-    ResourceAction::PortForward,
-    ResourceAction::Cordon,
-    ResourceAction::Drain,
-    ResourceAction::EditYaml,
-    ResourceAction::RestartRollout,
-    ResourceAction::Scale,
-    ResourceAction::Delete,
+const ROW_ACTIONS: [RowAction; 11] = [
+    RowAction::ViewLogs,
+    RowAction::ViewYaml,
+    RowAction::CopyName,
+    RowAction::OpenShell,
+    RowAction::PortForward,
+    RowAction::Cordon,
+    RowAction::Drain,
+    RowAction::EditYaml,
+    RowAction::RestartRollout,
+    RowAction::Scale,
+    RowAction::Delete,
 ];
 
 /// Everything the palette may show, in source order, from in-memory state only.
@@ -269,18 +269,18 @@ fn row_action_entries<'a>(input: &'a PaletteInput<'_>) -> impl Iterator<Item = P
     let pod = cursor
         .zip(session)
         .and_then(|(cursor, session)| session.pods.iter().find(|pod| cursor.key.is_pod(pod)));
-    ROW_ACTIONS.into_iter().filter_map(move |action| {
+    ROW_ACTIONS.into_iter().filter_map(move |row| {
         let subject = &cursor?.key;
         let session = session?;
-        let state = match key_availability_of(action, subject, pod, session.guard) {
+        let state = match key_availability_of(row, subject, pod, session.guard) {
             KeyAvailability::NotOffered => return None,
-            KeyAvailability::Run => EntryState::Enabled,
+            KeyAvailability::Run(_) => EntryState::Enabled,
             KeyAvailability::Disabled { reason } => EntryState::Disabled { reason },
         };
         let mut entry = PaletteEntry::new(
             PaletteGroup::Actions,
-            action_label(subject_action(action, subject)),
-            PaletteTarget::RowAction(action),
+            action_label(subject_action(row, subject)?),
+            PaletteTarget::RowAction(row),
         );
         entry.detail = Some(with_cluster(subject_text(subject), session).into());
         entry.state = state;
