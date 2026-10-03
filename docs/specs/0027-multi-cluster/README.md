@@ -60,7 +60,7 @@ User decision (wireframe intro and W1): single or multi cluster is chosen **only
 1. Only one test cluster exists (UAT); multi mode is verified with UAT plus unreachable fixtures. A second reachable cluster (kind/k3d, risks R2) is needed for full live checks.
 2. The viewed set is not restored after restart (decision 14).
 3. The cap of 5 is a guess until [budget.md](budget.md) has numbers from a second real cluster.
-4. Overview, Issues, and Topology must follow "Screens that land later" when their specs are implemented.
-5. Overview, Issues, and Topology exist now but draw the primary cluster only in multi mode, with a muted `Showing {label} only` line; merging them follows "Screens that land later".
-6. Decision 21 (Topology as a dropdown of the viewed slots, default primary) is not built: Topology draws the primary cluster, and "Show in Topology" is disabled for rows of other clusters (`Topology draws only the primary cluster ({label})`).
+4. Overview, Issues, and Topology must follow "Screens that land later" when their specs are implemented. Spec: [0045 Multi-cluster screens](../0045-multi-cluster-screens/README.md).
+5. Overview, Issues, and Topology exist now but draw the primary cluster only in multi mode, with a muted `Showing {label} only` line; merging them follows "Screens that land later". Specified in [0045](../0045-multi-cluster-screens/README.md) steps 1–2.
+6. Decision 21 (Topology as a dropdown of the viewed slots, default primary) is not built: Topology draws the primary cluster, and "Show in Topology" is disabled for rows of other clusters (`Topology draws only the primary cluster ({label})`). Specified in [0045](../0045-multi-cluster-screens/README.md) step 3.
 7. The Cluster column is 170 px wide as specified (it shrinks to 110 px, after the flexible column, when the table is narrower, so it stays in view), so a long label such as `readonly@Monitor` is cut with an ellipsis.

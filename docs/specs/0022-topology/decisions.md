@@ -75,3 +75,20 @@ The first run showed that a namespace with many apps stacked its bands in one th
 | Item | Value |
 |---|---|
 | `topology_budget` release timing (target ≤ 8 ms) | 3.1 ms for 340 nodes (40 Services, 100 Deployments, 100 ReplicaSets, 3,000 pods grouped into 100 sets), `build_topology` + `layout`; the debug gate run takes 15.7 ms (budget 80 ms) |
+
+## RBAC layer (steps 4a, 4b; amendment of 2026-10-03)
+
+Architect defaults for [rbac-layer.md](rbac-layer.md). Read-only: only `list`/`watch` through `ResourceKind::watch_rows`.
+
+| # | Decision | Rationale |
+|---|---|---|
+| 42 | The `RBAC` chip becomes a normal kind chip, **off by default** (`KindFilter::DEFAULT`); on, it adds 4 feeds (open count ≤ 14) | W11 shows it ghosted next to the default chips; the layer costs watches only when asked for |
+| 43 | Drawn: accounts a pod of the namespace runs as (config-ref rule, decision 8), bindings that name such an account **directly**, and the roles those bindings refer to | the question is "what can this app do"; unused accounts and bindings would bury the graph |
+| 44 | Group subjects (`system:serviceaccounts`, `…:{ns}`, `system:authenticated`) are **not drawn**; the account caption counts them (`+{n} via groups`) | they reach every account and would draw an edge from each |
+| 45 | **No ClusterRoles feed**: a ClusterRole node is `Plain`, never checked; its click reveals it on the ClusterRoles screen | about 90 cluster-wide rows for one rare check (a missing ClusterRole) |
+| 46 | One relation `Access` for workload → account → binding → role; legend `access` | one legend entry; the kind colors already tell the hops apart |
+| 47 | `Placement::AccessRow` under the config row; a binding wants its account's slot + 1, a role its binding's slot + 1, wrapping like the config row | reads left to right like the chain; no new column, so band width and Fit stay |
+| 48 | Three checks: missing ServiceAccount (Bad), RoleBinding to a missing Role (Warn), account with cluster-admin (Warn) | W7 flags cluster-admin accounts; a missing account blocks new pods |
+| 49 | Hue and edge color `cyan_light`, dash (2, 3) | the last free token; red and yellow stay the tones (0022b) |
+| 50 | ClusterRoleBindings are listed **cluster-wide** while the chip is on, and count in `RAW_LIMIT` | cluster-admin is mostly granted by them |
+| 51 | A node click whose row is not in the feeds reveals the object on its screen instead of opening the drawer over the graph | `row_of` cannot find it, so the drawer would stay empty |

@@ -58,7 +58,7 @@ Releasing the subject's slot closes the drawer; releasing a slot closes its log 
 | some Connecting | others' rows; muted line `Connecting to {label}…` |
 | a list denied in a slot | no rows from it; muted note `Not permitted in {label}: list {plural}` |
 
-## Screens that land later (contract)
+## Screens that land later (contract; specified in [0045](../0045-multi-cluster-screens/README.md))
 
 | Screen | Multi mode rule |
 |---|---|

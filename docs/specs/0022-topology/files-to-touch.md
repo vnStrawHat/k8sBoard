@@ -1,6 +1,6 @@
 # 0022 · Files to touch
 
-[Back to index](README.md). **S** is the step. Each step passes the gate on its own, and every new item has a production user in its step. `crates/cluster` is not touched.
+[Back to index](README.md). **S** is the step. Each step passes the gate on its own, and every new item has a production user in its step. `crates/cluster` is not touched (steps 4a, 4b included).
 
 ## Prerequisites (merged first)
 
@@ -38,6 +38,15 @@
 | 3 | root `Cargo.toml`, `crates/app/Cargo.toml`, `Cargo.lock` | the `resvg` edge (export.md) |
 | 3 | `src/topology_export.rs` (new, tests in module) | `SvgStyle`, `svg_style`, `hex`, `topology_svg`, `fit_chars`, `ExportError`, `Png`, `render_png`, `export_scale`, the save flow |
 | 3 | `src/topology_view.rs`, `src/main.rs` | `Export PNG` button, `export` state, `export_scale` text, error `Alert`; `mod topology_export;` |
+| 4a | `src/topology_graph.rs` (+ tests) | `TopologyKind::{ServiceAccount, RoleBinding, ClusterRoleBinding, Role, ClusterRole}` (placement, badge, filter, `resource_kind`), `Relation::Access`, `KindFilter::Rbac` + `DEFAULT`, `TopologyFilter::initial` (was `everything`), account refs in `pod_refs`, the `BindingIndex` join, captions |
+| 4a | `src/topology_checks.rs` (+ tests) | `CheckRule::{MissingServiceAccount, MissingRole, ClusterAdminAccount}`, chip labels, coverage of the RBAC feeds |
+| 4a | `src/topology_layout.rs` (+ tests) | `Placement::AccessRow`, the slot + 1 rule, wrap, `previous` seeding |
+| 4a | `src/topology_canvas.rs` | `relation_stroke(Access)` (dash 2, 3); the access row's bottom → top edge anchor |
+| 4a | `src/topology_colors.rs` (+ tests), `src/topology_export.rs` (+ tests) | `KindHue::Access` → `cyan_light`, `relation_color(Access)`, the SVG dash (exhaustive matches, so they land with the variants) |
+| 4b | `src/topology_feeds.rs` (+ tests) | `TOPOLOGY_FEED_KINDS` + ServiceAccounts, RoleBindings, Roles, ClusterRoleBindings |
+| 4b | `src/cluster_session.rs` (+ tests) | `topology_feed` for cluster-scoped ClusterRoleBindings (`watch_rows` ignores the namespace); watch count |
+| 4b | `src/topology_view.rs` (+ tests), `src/app_shell.rs` | RBAC chip from `KindFilter::ALL` (the disabled button goes), `LEGEND` fourth entry (canvas and SVG legend); a click on a row `row_of` cannot find reveals it |
+| 4b | `src/launch_options.rs` (+ tests), `src/screenshot.rs` (+ tests) | `--screen topology-rbac` (RBAC chip on); settle when the RBAC feeds have loaded or are Off |
 
 ## Docs (updated by the coder in the step that completes the row)
 
@@ -49,3 +58,4 @@
 - `docs/roadmap/cross-cutting.md`: the C6 row "Topology layout" → hand-written (0022); add a `resvg` row (step 3).
 - `docs/roadmap/README.md`: the Overview/Issues/Topology status row. `gap-plan-read-only.md` 0022 links this folder.
 - [decisions.md](decisions.md) "Measurements": the release `topology_budget` time (step 1).
+- Step 4b: `docs/roadmap/inventory-screens.md` W11 RBAC row → Done; `wireframe-gap-audit.md` gap 8 → Done; [0022b colors.md](../0022b-topology-visuals/colors.md) rows for `Access` (done in this revision).

@@ -2,6 +2,8 @@
 
 Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nice-to-haves 14–23), HEAD `62b9731`. Crate: `crates/app` only (no cluster-crate change); small amendments to 0012 (`service_health` core) and 0021 (`export_file_name` sanitizing). Wireframe: W11 (pins 1–5), sidebar top item Topology, "Show in Topology" in the W7 Service and Ingress menus. Applies C1, C6, C9, C11; settles the C6 row "Topology layout". Prerequisites are in [files-to-touch.md](files-to-touch.md).
 
+**Amendment 2026-10-03 (steps 4a, 4b, not built): RBAC layer**, [rbac-layer.md](rbac-layer.md), audit gap 8, against main `a50264c`. **Read-only: no new mutating calls**; four more `list`/`watch` feeds while the RBAC chip is on.
+
 ## Goal
 
 - A **namespace-scoped resource graph** built from live lists. Nodes: Ingress, Service, Deployment, StatefulSet, DaemonSet, ReplicaSet, Pod, ConfigMap, Secret (name only), PVC, HPA. Edges come from owner refs, selectors, ingress backends, volume, env and pull-secret refs, and HPA targets.
@@ -9,10 +11,11 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 - **Hand-written layered layout**: kind columns, a config row under each band, barycenter ordering. It is deterministic, and new pods appear in place (W11 pin 3).
 - A **canvas** with wheel zoom, pan, Fit, node drag with remembered positions, a minimap, and a legend. Large pod sets collapse into one node. A click opens the drawer over the graph.
 - **Filters**: kind chips (which also start and stop their watches), Problems only, and Group by (app by default). **Export PNG** (or SVG) goes through the save dialog (C9).
+- **RBAC layer** (steps 4a, 4b): the RBAC chip draws workload → ServiceAccount → binding → role, with three access checks (W11 chip, W7 access kinds).
 
 ## Non-goals
 
-- Traffic mode (backlog; segment disabled), the RBAC chip (disabled), multi-namespace graphs, and any mutation.
+- Traffic mode (backlog; segment disabled), multi-namespace graphs, and any mutation. RBAC: User and Group subjects as nodes, ClusterRole rules (rbac-layer.md).
 - Jobs, CronJobs, NetworkPolicies, PDBs, EndpointSlices, and custom resources (0018) as nodes.
 - Persisting positions (0024), edge routing around nodes, Collapse pods. Zoom buttons and animation: see 0022b.
 
@@ -23,6 +26,8 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 | 1 | `Screen::Topology`, sidebar item, namespace choice, `TopologyFeeds`, `row_of`, graph, checks, layout with `previous`, canvas (wheel zoom, pan, Fit), select → drawer, double-click → reveal, too-large states, `--screen topology`, screenshot | 1–9 |
 | 2 | Node drag and pins, Reset positions, minimap, legend, kind chips, Problems only, checks dropdown, Group by, pod-group expand, Show in Topology | 1–3, 5–10 |
 | 3 | Export PNG/SVG (`resvg` edge, `topology_export.rs`), full ui-verifier run | 1–3, 11, 12 |
+| 4a | RBAC graph, pure: five `TopologyKind`s, `Relation::Access`, `KindFilter::Rbac`/`DEFAULT`, `BindingIndex` join, three `CheckRule`s, `Placement::AccessRow`, `KindHue::Access` and the export arms | 1–3, 13–15 |
+| 4b | RBAC feeds and chip (`TOPOLOGY_FEED_KINDS` +4), the `access` legend entry, click-to-reveal for feed-less rows, `--screen topology-rbac`, ui-verifier | 1–3, 16–18 |
 
 ## Files
 
@@ -35,6 +40,7 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 | [canvas.md](canvas.md) | element tree, painting, viewport math, interactions, minimap, legend, LOD |
 | [screen-and-session.md](screen-and-session.md) | screen wiring, toolbar, namespace, feeds and watch budget, async, drawer, Show in Topology |
 | [export.md](export.md) | step 3: SVG builder, resvg rasterizing, save flow |
+| [rbac-layer.md](rbac-layer.md) | steps 4a, 4b: RBAC nodes, edges, chip, feeds, checks, layout, colors |
 | [files-to-touch.md](files-to-touch.md) | prerequisites, modules per step, Cargo change, doc updates |
 | [test-plan.md](test-plan.md) | unit tests per step, live checks, ui-verifier checklist |
 
@@ -52,6 +58,12 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 - [ ] 10. On UAT, a pod set above `POD_GROUP_LIMIT` shows one group node, and a click expands it. Adding a pod (rollout) leaves the siblings in place. No UAT namespace has a set that large, so group nodes are covered by the unit tests only.
 - [x] 11. Export writes only after the dialog confirms. The `.png` output is a valid PNG of the whole graph, and a `.svg` path gets SVG text. Paths are never traced.
 - [ ] 12. Screenshots `topology` and `topology-problems` exist (light and dark, `.tmp/ui-shots/v58-topology-*.png`). The ui-verifier reports no high-severity defect against W11. The ui-verifier has not run yet.
+- [ ] 13. (4a, W11 chip, W7 ServiceAccounts) With RBAC on, each account a namespace pod runs as is drawn once, linked from its top visible workload, then to every binding that names it directly, then to that binding's role; group-only grants appear only as the `+{n} via groups` caption.
+- [ ] 14. (4a, W11 pin 2, W7 ClusterRoleBindings) The three access checks (missing ServiceAccount Bad, binding to a missing Role Warn, account with cluster-admin Warn) appear in the checks chip with the texts of rbac-layer.md; ClusterRole refs are never checked.
+- [ ] 15. (4a, W11 pin 3) The access row reads account → binding → role left to right under each band; with `previous`, adding a pod moves no RBAC card; `topology_budget` still passes with RBAC rows added.
+- [ ] 16. (4b, W11 toolbar) RBAC is a working chip, off by default; turning it on raises the watch count by exactly the started RBAC feeds (≤ 4; a denied list is Off and draws `not checked`), off lowers it back; `open_count()` ≤ 14.
+- [ ] 17. (4b) A click on an account, binding, or Role opens the drawer over the graph in the drawn cluster, and row keys act on it; a ClusterRole click reveals it on the ClusterRoles screen. Read-only: no new request kind; colors from tokens (`cyan_light`), legend and export show `access`.
+- [ ] 18. (4b) Screenshot `topology-rbac` (light, dark) has no high-severity defect against W11.
 
 ## Open items
 
@@ -60,3 +72,4 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 3. Edges that span columns can cross nodes. Add dummy-node routing only if graphs prove unreadable.
 4. Positions are memory-only until the 0024 settings store exists.
 5. `row_of` covers the drawer, menu, and YAML sites only (decision 26). Over Topology, the Monitor tab and related lists (Deployment revisions) of a kind drawer show their empty text.
+6. RBAC layer: bindings to User and Group subjects, ClusterRole contents, and SA token Secrets are not drawn (rbac-layer.md "Not in this layer").

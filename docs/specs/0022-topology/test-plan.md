@@ -33,6 +33,24 @@
 |---|---|
 | `topology_export.rs` | `svg_has_a_node_per_graph_node`, `svg_escapes_names`, `svg_dash_per_relation`, `svg_uses_style_colors`, `hex_formats_rrggbb`, `svg_title_names_namespace`, `fit_chars_cuts_with_ellipsis`, `render_png_writes_png_signature` (a text-free SVG; checks `\x89PNG`), `export_scale_caps_longest_side_at_4096`, `svg_path_extension_is_case_insensitive`, `export_error_messages_name_the_cause` |
 
+## Steps 4a, 4b — RBAC layer ([rbac-layer.md](rbac-layer.md))
+
+Fixtures: namespace `shop` with Deployment `api` (pods run as `api`), pod `cron-x` without owner (runs as `default`), ServiceAccounts `api`, `default`; RoleBinding `api-reader` (`sa/api` → Role `reader`), RoleBinding `ghost` (→ missing Role `gone`), ClusterRoleBinding `ci-admin` (`sa/shop/api` → ClusterRole `cluster-admin`), ClusterRoleBinding `all-sa` (group `system:serviceaccounts` → ClusterRole `view`).
+
+| Step | Module | Tests |
+|---|---|---|
+| 4a | `topology_graph_tests.rs` | `rbac_off_draws_no_access_nodes`, `account_aggregates_to_top_workload`, `standalone_pod_keeps_its_account_edge`, `direct_bindings_and_their_roles_are_drawn`, `group_bindings_only_count_in_caption`, `unused_accounts_and_bindings_are_hidden`, `cluster_role_node_is_plain_and_unchecked`, `access_edges_use_the_access_relation`, `rbac_rows_count_toward_raw_limit` |
+| 4a | `topology_checks_tests.rs` | `missing_service_account_is_bad`, `binding_to_missing_role_is_warn`, `cluster_admin_account_is_warn_on_the_binding`, `off_rbac_feed_skips_access_checks`, `access_chip_labels_singular_and_plural` |
+| 4a | `topology_layout_tests.rs` | `access_row_sits_under_the_config_row`, `binding_and_role_take_the_next_slots`, `access_row_wraps_after_the_last_slot`, `new_pod_moves_no_access_card`, `topology_budget` (extended: + 40 accounts, 80 bindings, 40 roles) |
+| 4b | `topology_feeds.rs` tests | `rbac_chip_starts_four_feeds`, `default_chips_leave_rbac_off`, `denied_rbac_feed_is_off`, `open_count_is_at_most_fourteen` |
+| 4b | `cluster_session_tests.rs` | `open_watch_count_includes_topology` (extended: RBAC on +4, one denied +3) |
+| 4a | `topology_colors.rs` tests | `kind_hues_avoid_the_tone_tokens` (extended: `Access`), `access_relation_is_cyan_light` |
+| 4a, 4b | `topology_export.rs` tests | `svg_dash_per_relation` (extended: `access`, 4a), `legend_has_four_entries` (4b) |
+| 4b | `topology_view_tests.rs` | `rbac_chip_is_enabled_and_toggles`, `click_on_feedless_row_reveals_instead_of_drawer` |
+| 4b | `launch_options.rs` tests, `screenshot.rs` tests | `screen_topology_rbac_parses`, `topology_rbac_waits_for_rbac_feeds` |
+
+Live (coder-lite, UAT, read-only): `--screen topology-rbac --namespace <ns>`; the RBAC nodes match the probe's list of ServiceAccounts and RoleBindings of `<ns>` (counts only); the watch count rises by the RBAC feeds that the access review allows. ui-verifier: `topology-rbac` light and dark: chip on, `access` legend entry, access row under the bands.
+
 ## Live checks (coder-lite, UAT `readonly@Monitor`, read-only)
 
 1. `k8sboard --context readonly@Monitor --namespace <ns> --screen topology`, with a namespace that has Deployments and Services.

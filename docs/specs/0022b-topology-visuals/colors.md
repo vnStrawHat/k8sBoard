@@ -31,6 +31,7 @@ impl CanvasColors { pub(crate) fn kind(&self, hue: KindHue) -> Hsla; pub(crate) 
 | ConfigMap | `ConfigMap` | `green` |
 | Secret | `Secret` | `green_light` |
 | PVC | `Claim` | `magenta_light` |
+| ServiceAccount, RoleBinding, ClusterRoleBinding, Role, ClusterRole ([0022 RBAC layer](../0022-topology/rbac-layer.md)) | `Access` | `cyan_light` |
 
 - `kind_text` = `readable_chart_color(kind color)` (`status_tone.rs`; it already pulls a fill hue toward the foreground for text).
 - `CanvasColors::of(cx)` resolves every token once per frame. It holds `kinds: [Hsla; 7]`, `kind_texts: [Hsla; 7]`, the relation colors, and the existing fields.
@@ -42,9 +43,10 @@ impl CanvasColors { pub(crate) fn kind(&self, hue: KindHue) -> Hsla; pub(crate) 
 | Owns | `blue` | `EDGE_REST_ALPHA` 0.8 |
 | RoutesTo | `cyan` | 0.8 |
 | Mounts | `green` | 0.8 |
+| Access ([0022 RBAC layer](../0022-topology/rbac-layer.md)) | `cyan_light` | 0.8 |
 | Into a ghost | `tone_color` of its check (unchanged) | 1.0 |
 
-`relation_stroke`: 1.5 px for all three; routes dash (7, 4), mounts dash (4, 3), owns solid. The legend swatches are drawn with the same stroke code and the relation color.
+`relation_stroke`: 1.5 px for every relation; routes dash (7, 4), mounts dash (4, 3), access dash (2, 3), owns solid. The legend swatches are drawn with the same stroke code and the relation color.
 
 ## Cards (`node_card`, at `Text` detail)
 
