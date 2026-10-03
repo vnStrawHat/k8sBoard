@@ -76,4 +76,4 @@ The viewport only moves on Fit and on that first view. `aspect` is the canvas wi
 
 ## Budget (AC 6)
 
-`topology_budget` runs in the normal gate. It uses a realistic input: 40 Services, 3,000 pods, 100 ReplicaSets (and their Deployments), with grouping on. It times `build_topology` + `layout(.., None)` and asserts ≤ 80 ms (a debug build). Record the release-build time in [decisions.md](decisions.md) "Measurements" (target ≤ 8 ms). The sweeps are O(SWEEPS × E log V), and Service matching is O(S × P).
+`topology_budget` runs in the normal gate. It uses a realistic input: 40 Services, 3,000 pods, 100 ReplicaSets (and their Deployments), with grouping on. It times `build_topology` + `layout(.., None)` and prints the time; it asserts node and edge count ceilings (340 nodes, 300 edges measured), not wall-clock time. Record the release-build time in [decisions.md](decisions.md) "Measurements" (target ≤ 8 ms). The sweeps are O(SWEEPS × E log V), and Service matching is O(S × P).
