@@ -6,6 +6,7 @@
 //! `finish_unlock`), which re-checks the gate and the lock of the cluster the dialog names.
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -15,10 +16,13 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable as _,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
-    Styled as _, Subscription, Task, WeakEntity, Window, div, px,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window, div, px,
 };
 
 use crate::app_shell::AppShell;
+use crate::app_shell::batch_write::{
+    BatchCommit, BatchIntent, ItemProgress, dry_run_progress, summarize_dry_runs,
+};
 use crate::app_shell::write_flow::{
     CommitMode, ConnectIntent, DryRunState, TypedMatch, WriteIntent, WriteStep, checked_write,
     commit_block, confirmed, dry_run_state_of, typed_match, unlock_block,
@@ -29,6 +33,8 @@ use crate::settings::AppSettings;
 use crate::write_guard::{ActionRisk, DialogConfirm, confirm_step};
 
 const DIALOG_WIDTH: f32 = 480.;
+/// The object list of a batch scrolls past this height.
+const ITEMS_MAX_HEIGHT: f32 = 240.;
 
 /// What the dialog asks about.
 pub(crate) enum DialogKind {
@@ -40,6 +46,8 @@ pub(crate) enum DialogKind {
     Write(Rc<WriteIntent>),
     /// Start a stream (a shell): no object change, no dry-run.
     Connect(Rc<ConnectIntent>),
+    /// Several objects of one cluster, listed in the dialog and changed one at a time.
+    Batch(Rc<BatchIntent>),
 }
 
 impl DialogKind {
@@ -48,6 +56,7 @@ impl DialogKind {
             Self::Unlock { cluster, .. } => cluster,
             Self::Write(intent) => &intent.cluster,
             Self::Connect(intent) => &intent.cluster,
+            Self::Batch(intent) => &intent.cluster,
         }
     }
 
@@ -56,6 +65,7 @@ impl DialogKind {
             Self::Unlock { cluster_name, .. } => cluster_name,
             Self::Write(intent) => &intent.cluster_name,
             Self::Connect(intent) => &intent.cluster_name,
+            Self::Batch(intent) => &intent.cluster_name,
         }
     }
 
@@ -65,6 +75,7 @@ impl DialogKind {
             Self::Unlock { cluster_name, .. } => cluster_name,
             Self::Write(intent) => intent.expected(),
             Self::Connect(intent) => intent.expected(),
+            Self::Batch(intent) => intent.expected(),
         }
     }
 
@@ -72,6 +83,7 @@ impl DialogKind {
         match self {
             Self::Unlock { .. } | Self::Connect(_) => "the cluster name".to_owned(),
             Self::Write(intent) => intent.typed_hint(),
+            Self::Batch(_) => "the cluster name".to_owned(),
         }
     }
 
@@ -80,6 +92,7 @@ impl DialogKind {
             Self::Unlock { .. } => ActionRisk::Change,
             Self::Write(intent) => intent.risk,
             Self::Connect(intent) => intent.risk,
+            Self::Batch(intent) => intent.risk,
         }
     }
 }
@@ -102,6 +115,8 @@ pub(crate) struct ConfirmDialog {
     generation: u64,
     /// `None` for an unlock, which has nothing to check.
     dry_run: Option<DryRunState>,
+    /// Where each item of a batch stands, in the order of its plan; empty for any other dialog.
+    items: Vec<ItemProgress>,
     typed: Entity<InputState>,
     note: Entity<InputState>,
     is_note_shown: bool,
@@ -127,9 +142,13 @@ impl ConfirmDialog {
                 cx.notify();
             }
         });
+        let items = match &inputs.kind {
+            DialogKind::Batch(batch) => vec![ItemProgress::Waiting; batch.plan.items.len()],
+            DialogKind::Unlock { .. } | DialogKind::Write(_) | DialogKind::Connect(_) => Vec::new(),
+        };
         let dry_run = match inputs.kind {
             DialogKind::Unlock { .. } => None,
-            DialogKind::Write(_) => Some(DryRunState::Running),
+            DialogKind::Write(_) | DialogKind::Batch(_) => Some(DryRunState::Running),
             DialogKind::Connect(_) => Some(DryRunState::NotSupported),
         };
         Self {
@@ -139,6 +158,7 @@ impl ConfirmDialog {
             environment: inputs.environment,
             generation: inputs.generation,
             dry_run,
+            items,
             typed,
             note,
             is_note_shown: false,
@@ -158,11 +178,13 @@ impl ConfirmDialog {
     #[cfg(feature = "screenshot")]
     pub(crate) fn show_fixture(&mut self) {
         // A stream start has no dry-run to pass: its line stays as it is.
-        if matches!(self.kind, DialogKind::Write(_)) {
+        if matches!(self.kind, DialogKind::Write(_) | DialogKind::Batch(_)) {
             self.dry_run = Some(DryRunState::Passed {
-                elapsed: std::time::Duration::from_millis(412),
+                elapsed: Duration::from_millis(412),
             });
         }
+        // A batch shows every item as checked.
+        self.items = vec![ItemProgress::Passed; self.items.len()];
         self.is_fixture = true;
     }
 
@@ -186,19 +208,27 @@ impl ConfirmDialog {
             DialogKind::Unlock { .. } => format!("Unlock {name} for changes?"),
             DialogKind::Write(intent) => format!("{} on {name}?", intent.label),
             DialogKind::Connect(intent) => format!("{} on {name}?", intent.label),
+            DialogKind::Batch(intent) => format!("{} on {name}?", intent.label),
         };
         h_flex()
             .gap_2()
             .items_center()
             .child(environment_badge(self.environment, cx))
-            .child(text)
+            // The label names the object, which can be long: it wraps instead of running out of the
+            // dialog.
+            .child(div().flex_1().min_w_0().child(text))
             .into_any_element()
     }
 
     /// Runs the server-side dry-run of the change; its result replaces the dry-run line.
     pub(crate) fn start_dry_run(&mut self, cx: &mut Context<Self>) {
-        let DialogKind::Write(intent) = &self.kind else {
-            return;
+        let intent = match &self.kind {
+            DialogKind::Write(intent) => intent,
+            DialogKind::Batch(batch) => {
+                self.start_batch_dry_runs(Rc::clone(batch), cx);
+                return;
+            }
+            DialogKind::Unlock { .. } | DialogKind::Connect(_) => return,
         };
         let step = WriteStep {
             intent: Rc::clone(intent),
@@ -217,6 +247,55 @@ impl ConfirmDialog {
             });
         }));
         cx.notify();
+    }
+
+    /// The dry-runs of a batch, one item at a time in list order, none audited. The dry-run line
+    /// stays `Running` until the last one answered and says `Failed` if any did not pass: a partial
+    /// apply would be a surprise.
+    fn start_batch_dry_runs(&mut self, batch: Rc<BatchIntent>, cx: &mut Context<Self>) {
+        let shell = self.shell.clone();
+        let generation = self.generation;
+        self.dry_run = Some(DryRunState::Running);
+        self.items = vec![ItemProgress::Waiting; batch.plan.items.len()];
+        // Dropping the dialog drops the task: closing it ends the checks.
+        self.dry_run_task = Some(cx.spawn(async move |this, cx| {
+            let mut elapsed = Duration::ZERO;
+            for (index, item) in batch.plan.items.iter().enumerate() {
+                let _ = this.update(cx, |dialog, cx| {
+                    dialog.set_item(index, ItemProgress::Checking, cx);
+                });
+                let step = WriteStep {
+                    intent: Rc::new(batch.item_intent(item)),
+                    generation,
+                    mode: CommitMode::DryRun,
+                    note: None,
+                };
+                let result = checked_write(&shell, step, cx).await;
+                if let Ok(outcome) = &result {
+                    elapsed += outcome.elapsed;
+                }
+                let progress = dry_run_progress(&result);
+                let _ = this.update(cx, |dialog, cx| dialog.set_item(index, progress, cx));
+            }
+            let _ = this.update(cx, |dialog, cx| {
+                dialog.dry_run = Some(summarize_dry_runs(&dialog.items, elapsed));
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// The state of item `index` of a batch, from its dry-run to its commit.
+    pub(crate) fn set_item(
+        &mut self,
+        index: usize,
+        progress: ItemProgress,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(slot) = self.items.get_mut(index) {
+            *slot = progress;
+            cx.notify();
+        }
     }
 
     /// A commit failed in a way the user can retry. The text replaces the dry-run line as a failed
@@ -351,6 +430,30 @@ impl ConfirmDialog {
                 shell.update(cx, |shell, cx| shell.commit_write(dialog, step, window, cx));
                 cx.notify();
             }
+            DialogKind::Batch(batch) => {
+                let typed = self.typed_match(cx);
+                let Some(proof) = self
+                    .dry_run
+                    .as_ref()
+                    .and_then(|dry_run| confirmed(dry_run, typed, generation))
+                else {
+                    return;
+                };
+                let commit = BatchCommit {
+                    proof,
+                    generation,
+                    note: self
+                        .is_note_shown
+                        .then(|| self.note.read(cx).value().to_string()),
+                };
+                let batch = Rc::clone(batch);
+                let dialog = cx.weak_entity();
+                self.is_committing = true;
+                shell.update(cx, |shell, cx| {
+                    shell.commit_batch(dialog, batch, commit, window, cx);
+                });
+                cx.notify();
+            }
         }
     }
 
@@ -384,12 +487,74 @@ impl ConfirmDialog {
         matches!(self.dry_run, Some(DryRunState::Failed(_)))
     }
 
+    /// The objects of a batch, one line each with its state, and under them the ones the batch
+    /// leaves alone with their reasons. Scrolls past a few lines.
+    fn render_items(&self, batch: &BatchIntent, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let mono = theme.mono_font_family.clone();
+        let tone = |progress: &ItemProgress| match progress {
+            ItemProgress::Passed | ItemProgress::Done => theme.success,
+            ItemProgress::Rejected(_) | ItemProgress::Failed(_) | ItemProgress::Unknown => {
+                theme.danger
+            }
+            ItemProgress::Waiting
+            | ItemProgress::Checking
+            | ItemProgress::Applying
+            | ItemProgress::NotSent(_) => theme.muted_foreground,
+        };
+        let rows = batch
+            .plan
+            .items
+            .iter()
+            .zip(&self.items)
+            .map(|(item, progress)| {
+                h_flex()
+                    .gap_2()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_family(mono.clone())
+                            .child(item.object.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(tone(progress))
+                            .child(progress.text()),
+                    )
+            });
+        let skipped = batch.plan.skipped.iter().map(|skip| {
+            h_flex()
+                .gap_2()
+                .justify_between()
+                .text_color(theme.muted_foreground)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_family(mono.clone())
+                        .child(skip.object.clone()),
+                )
+                .child(div().text_xs().child(format!("skipped: {}", skip.reason)))
+        });
+        v_flex()
+            .id("batch-items")
+            .gap_1()
+            .max_h(px(ITEMS_MAX_HEIGHT))
+            .overflow_y_scroll()
+            .children(rows)
+            .children(skipped)
+            .into_any_element()
+    }
+
     fn render_object(&self, cx: &App) -> Option<AnyElement> {
         if let DialogKind::Connect(intent) = &self.kind {
             return Some(Self::render_connect_object(intent, cx));
         }
-        let DialogKind::Write(intent) = &self.kind else {
-            return None;
+        let intent = match &self.kind {
+            DialogKind::Write(intent) => intent,
+            DialogKind::Batch(batch) => return Some(self.render_items(batch, cx)),
+            DialogKind::Unlock { .. } | DialogKind::Connect(_) => return None,
         };
         let theme = cx.theme();
         let target = intent.request.target();
@@ -403,6 +568,7 @@ impl ConfirmDialog {
             h_flex()
                 .gap_2()
                 .items_center()
+                .flex_wrap()
                 .child(div().text_sm().child(target.kind_name().to_owned()))
                 .child(
                     div()
@@ -460,19 +626,22 @@ impl ConfirmDialog {
             });
             return Some(v_flex().gap_1().children(lines).children(warnings));
         }
-        let DialogKind::Write(intent) = &self.kind else {
-            return None;
+        // A batch changes the same field of every item, so it is shown once.
+        let (request, warnings) = match &self.kind {
+            DialogKind::Write(intent) => (&intent.request, &intent.warnings),
+            DialogKind::Batch(batch) => (&batch.plan.items.first()?.request, &batch.warnings),
+            DialogKind::Unlock { .. } | DialogKind::Connect(_) => return None,
         };
         let theme = cx.theme();
         let mono = theme.mono_font_family.clone();
-        let lines = intent.request.changed_fields().into_iter().map(|field| {
+        let lines = request.changed_fields().into_iter().map(|field| {
             let text = match field.value {
                 Some(value) => format!("{} → {value}", field.path),
                 None => field.path.into_owned(),
             };
             div().text_sm().font_family(mono.clone()).child(text)
         });
-        let warnings = intent.warnings.iter().map(|warning| {
+        let warnings = warnings.iter().map(|warning| {
             div()
                 .text_sm()
                 .text_color(theme.warning)
@@ -483,12 +652,31 @@ impl ConfirmDialog {
 
     fn render_dry_run(&self, cx: &App) -> Option<AnyElement> {
         let theme = cx.theme();
+        let total = self.items.len();
+        let is_batch = matches!(self.kind, DialogKind::Batch(_));
         let (text, color): (String, _) = match self.dry_run.as_ref()? {
             DryRunState::NotSupported => (
                 "Dry-run not supported for this action".to_owned(),
                 theme.muted_foreground,
             ),
+            DryRunState::Running if is_batch => {
+                let checked = self
+                    .items
+                    .iter()
+                    .filter(|state| {
+                        !matches!(state, ItemProgress::Waiting | ItemProgress::Checking)
+                    })
+                    .count();
+                (
+                    format!("Server dry-run… {checked} of {total}"),
+                    theme.muted_foreground,
+                )
+            }
             DryRunState::Running => ("Server dry-run…".to_owned(), theme.muted_foreground),
+            DryRunState::Passed { .. } if is_batch => (
+                format!("Server dry-run passed for {total} of {total}"),
+                theme.success,
+            ),
             DryRunState::Passed { elapsed } => (
                 format!("Server dry-run passed · {} ms", elapsed.as_millis()),
                 theme.success,
@@ -540,7 +728,7 @@ impl ConfirmDialog {
 
     /// The note field once the checkbox is ticked, and where the line goes when it is not saved.
     fn render_note_input(&self, cx: &App) -> Option<AnyElement> {
-        if !matches!(self.kind, DialogKind::Write(_)) {
+        if matches!(self.kind, DialogKind::Unlock { .. }) {
             return None;
         }
         let muted = cx.theme().muted_foreground;
@@ -575,6 +763,10 @@ impl ConfirmDialog {
                 intent.button.clone(),
                 intent.risk == ActionRisk::Destructive,
             ),
+            DialogKind::Batch(batch) => (
+                batch.confirm_label().into(),
+                batch.risk == ActionRisk::Destructive,
+            ),
         };
         let primary = Button::new("write-confirm")
             .label(label)
@@ -598,7 +790,7 @@ impl ConfirmDialog {
                 .outline()
                 .on_click(cx.listener(|dialog, _, _, cx| dialog.retry(cx)))
         });
-        let note = matches!(self.kind, DialogKind::Write(_)).then(|| {
+        let note = (!matches!(self.kind, DialogKind::Unlock { .. })).then(|| {
             Checkbox::new("write-note")
                 .label("Add a note to the audit log")
                 .checked(self.is_note_shown)
@@ -685,7 +877,33 @@ impl ConfirmDialog {
         match &self.kind {
             DialogKind::Write(intent) => intent.warnings.clone(),
             DialogKind::Connect(intent) => intent.warnings.clone(),
+            DialogKind::Batch(batch) => batch.warnings.clone(),
             DialogKind::Unlock { .. } => Vec::new(),
+        }
+    }
+
+    /// What the change is called in the title of the dialog.
+    pub(crate) fn label(&self) -> Option<SharedString> {
+        match &self.kind {
+            DialogKind::Write(intent) => Some(intent.label.clone()),
+            DialogKind::Batch(batch) => Some(batch.label.clone()),
+            DialogKind::Connect(intent) => Some(intent.label.clone().into()),
+            DialogKind::Unlock { .. } => None,
+        }
+    }
+
+    /// Where each item of a batch stands.
+    pub(crate) fn item_states(&self) -> Vec<ItemProgress> {
+        self.items.clone()
+    }
+
+    /// The text of the confirm button.
+    pub(crate) fn confirm_text(&self) -> Option<String> {
+        match &self.kind {
+            DialogKind::Write(intent) => Some(intent.button.to_string()),
+            DialogKind::Batch(batch) => Some(batch.confirm_label()),
+            DialogKind::Connect(intent) => Some(intent.button.to_string()),
+            DialogKind::Unlock { .. } => None,
         }
     }
 

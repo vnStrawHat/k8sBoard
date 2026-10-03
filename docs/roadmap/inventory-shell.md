@@ -37,8 +37,8 @@
 | H2 | Filter chips (Namespace, Status, label query, "+ Filter") and `/` filter | Missing | — | 0009 |
 | H3 | Columns ▾ (toggle columns), sort | Done | 0009 `table_view.rs`; saved per screen by 0024 | — |
 | H4 | Summary chips as filters (Nodes: Ready, NotReady, Cordoned, version skew) | Missing | — | 0009 |
-| H5 | List-level buttons (Scale, Trigger now, Reveal all, Hide inactive, Hide system, …) | Missing | — | read-only ones 0009/0015/0016; mutating 0032 |
-| H6 | Row checkboxes, multi-select, floating selection bar | Missing | — | selection 0009; bulk actions 0032–0034 |
+| H5 | List-level buttons (Scale, Trigger now, Reveal all, Hide inactive, Hide system, …) | Missing | — | read-only ones 0009/0015/0016; mutating 0032 (workload buttons Done; object ones 0032b) |
+| H6 | Row checkboxes, multi-select, floating selection bar | Missing | — | selection 0009; workload bulk actions Done (0032); delete 0033, nodes 0034 |
 | H7 | Virtualized table, themed status tones, muted namespace prefix | Done | 0003, 0005 | — |
 | H8 | Cluster column in multi-cluster mode | Done (Pods, Nodes, every kind screen) | 0027 `cluster_rows.rs`, `table_layout.rs` | Issues has none: it draws the primary cluster |
 | H9 | Row density 28 / 36 px | Missing | — | 0025 (Appearance) |

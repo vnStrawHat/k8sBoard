@@ -48,7 +48,7 @@ fn node(name: &str, scheduling: NodeScheduling) -> NodeSummary {
 }
 
 /// A report that allows every check.
-fn allowed() -> AccessState {
+pub(super) fn allowed() -> AccessState {
     let reviews = AccessCheck::ALL
         .into_iter()
         .map(|check| AccessReview {
@@ -61,7 +61,7 @@ fn allowed() -> AccessState {
 
 /// The writes a fake server received. A live session also sends GETs (its watches) and the POSTs of
 /// the access reviews, which change nothing.
-fn writes(api: &FakeApi) -> Vec<RecordedRequest> {
+pub(super) fn writes(api: &FakeApi) -> Vec<RecordedRequest> {
     api.requests()
         .into_iter()
         .filter(|request| {
@@ -70,15 +70,15 @@ fn writes(api: &FakeApi) -> Vec<RecordedRequest> {
         .collect()
 }
 
-struct Clusters {
-    fixture: SwitchFixture,
-    prod_api: FakeApi,
-    stg_api: FakeApi,
-    prod: ClusterRef,
-    stg: ClusterRef,
+pub(super) struct Clusters {
+    pub(super) fixture: SwitchFixture,
+    pub(super) prod_api: FakeApi,
+    pub(super) stg_api: FakeApi,
+    pub(super) prod: ClusterRef,
+    pub(super) stg: ClusterRef,
 }
 
-fn slot_session(
+pub(super) fn slot_session(
     fixture: &SwitchFixture,
     cluster: &ClusterRef,
     cx: &mut TestAppContext,
@@ -89,7 +89,7 @@ fn slot_session(
         .expect("a viewed slot")
 }
 
-fn view(fixture: &SwitchFixture, contexts: &[&str], cx: &mut TestAppContext) {
+pub(super) fn view(fixture: &SwitchFixture, contexts: &[&str], cx: &mut TestAppContext) {
     let wanted: Vec<ClusterRef> = contexts
         .iter()
         .map(|context| fixture.cluster(context, cx))
@@ -121,7 +121,7 @@ fn accept_patches(request: &RecordedRequest) -> (u16, String) {
 }
 
 /// `go_live_fake` over a server that answers with `respond`.
-fn go_live_answering(
+pub(super) fn go_live_answering(
     fixture: &SwitchFixture,
     cluster: &ClusterRef,
     node_name: &str,
@@ -144,7 +144,7 @@ fn go_live_answering(
     api
 }
 
-fn two_clusters(name: &str, cx: &mut TestAppContext) -> Clusters {
+pub(super) fn two_clusters(name: &str, cx: &mut TestAppContext) -> Clusters {
     let fixture = open_switch_fixture(name, cx);
     view(&fixture, &["prod-a", "stg-b"], cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
@@ -165,17 +165,17 @@ fn two_clusters(name: &str, cx: &mut TestAppContext) -> Clusters {
 }
 
 impl Clusters {
-    fn lock_of(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> WriteLock {
+    pub(super) fn lock_of(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> WriteLock {
         slot_session(&self.fixture, cluster, cx).read_with(cx, |session, _| session.lock())
     }
 
-    fn set_lock(&self, cluster: &ClusterRef, lock: WriteLock, cx: &mut TestAppContext) {
+    pub(super) fn set_lock(&self, cluster: &ClusterRef, lock: WriteLock, cx: &mut TestAppContext) {
         let session = slot_session(&self.fixture, cluster, cx);
         session.update(cx, |session, cx| session.set_lock(lock, cx));
         cx.run_until_parked();
     }
 
-    fn generation_of(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> u64 {
+    pub(super) fn generation_of(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> u64 {
         self.fixture.shell.read_with(cx, |shell, cx| {
             shell
                 .guard_for(cluster, cx)
@@ -184,7 +184,7 @@ impl Clusters {
         })
     }
 
-    fn cordon(&self, cluster: &ClusterRef, node_name: &str, cx: &mut TestAppContext) {
+    pub(super) fn cordon(&self, cluster: &ClusterRef, node_name: &str, cx: &mut TestAppContext) {
         self.fixture.with_window(cx, |window, cx| {
             self.fixture.shell.update(cx, |shell, cx| {
                 shell.start_cordon(cluster, node_name, None, window, cx)
@@ -192,7 +192,7 @@ impl Clusters {
         });
     }
 
-    fn dialog(&self, cx: &mut TestAppContext) -> Entity<ConfirmDialog> {
+    pub(super) fn dialog(&self, cx: &mut TestAppContext) -> Entity<ConfirmDialog> {
         self.fixture
             .shell
             .read_with(cx, |shell, _| shell.last_dialog.clone())
@@ -200,14 +200,14 @@ impl Clusters {
             .expect("a confirm dialog is open")
     }
 
-    fn has_dialog(&self, cx: &mut TestAppContext) -> bool {
+    pub(super) fn has_dialog(&self, cx: &mut TestAppContext) -> bool {
         self.fixture
             .shell
             .read_with(cx, |shell, _| shell.last_dialog.clone())
             .is_some_and(|dialog| dialog.upgrade().is_some())
     }
 
-    fn wait_for(
+    pub(super) fn wait_for(
         &self,
         what: &str,
         cx: &mut TestAppContext,
@@ -223,7 +223,7 @@ impl Clusters {
         panic!("timed out waiting for {what}");
     }
 
-    fn wait_for_dry_run(&self, cx: &mut TestAppContext) {
+    pub(super) fn wait_for_dry_run(&self, cx: &mut TestAppContext) {
         self.wait_for("the dry-run", cx, |cx| {
             let dialog = self.dialog(cx);
             !matches!(
@@ -233,28 +233,28 @@ impl Clusters {
         });
     }
 
-    fn confirm(&self, cx: &mut TestAppContext) {
+    pub(super) fn confirm(&self, cx: &mut TestAppContext) {
         let dialog = self.dialog(cx);
         self.fixture.with_window(cx, |window, cx| {
             dialog.update(cx, |dialog, cx| dialog.press_confirm(window, cx));
         });
     }
 
-    fn type_name(&self, text: &str, cx: &mut TestAppContext) {
+    pub(super) fn type_name(&self, text: &str, cx: &mut TestAppContext) {
         let dialog = self.dialog(cx);
         self.fixture.with_window(cx, |window, cx| {
             dialog.update(cx, |dialog, cx| dialog.type_text(text, window, cx));
         });
     }
 
-    fn block(&self, cx: &mut TestAppContext) -> Option<String> {
+    pub(super) fn block(&self, cx: &mut TestAppContext) -> Option<String> {
         let dialog = self.dialog(cx);
         dialog.read_with(cx, |dialog, cx| {
             dialog.block_reason(cx).map(|reason| reason.to_string())
         })
     }
 
-    fn toggle(&self, cluster: &ClusterRef, cx: &mut TestAppContext) {
+    pub(super) fn toggle(&self, cluster: &ClusterRef, cx: &mut TestAppContext) {
         self.fixture.with_window(cx, |window, cx| {
             self.fixture
                 .shell
@@ -263,7 +263,7 @@ impl Clusters {
     }
 
     /// Settings that save into `dir`, so the audit log has a folder.
-    fn enable_audit_folder(&self, name: &str, cx: &mut TestAppContext) -> PathBuf {
+    pub(super) fn enable_audit_folder(&self, name: &str, cx: &mut TestAppContext) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("k8sboard-0030-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the temp dir");
@@ -281,7 +281,7 @@ impl Clusters {
     }
 }
 
-fn audit_lines(dir: &std::path::Path) -> Vec<serde_json::Value> {
+pub(super) fn audit_lines(dir: &std::path::Path) -> Vec<serde_json::Value> {
     std::fs::read_to_string(crate::audit_log::audit_path(dir))
         .unwrap_or_default()
         .lines()

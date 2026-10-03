@@ -1,0 +1,300 @@
+use std::path::PathBuf;
+
+use cluster::{ObjectKind, ObjectRef, WriteOperation, WriteOutcome};
+
+use super::*;
+use crate::workload_actions::workload_actions_tests::{deployment, test_cluster};
+
+fn other_cluster() -> ClusterRef {
+    ClusterRef {
+        kubeconfig: PathBuf::from("/home/me/.kube/config"),
+        context: "prod-ctx".to_owned(),
+    }
+}
+
+fn objects(count: usize) -> Vec<KindObject> {
+    (0..count)
+        .map(|index| KindObject::Deployment(deployment(&format!("api-{index}"))))
+        .collect()
+}
+
+/// Every row becomes a pause item: the plan, not the action, is under test.
+fn item_of(row: &CheckedRow<'_>) -> Result<BatchItem, SkippedItem> {
+    let KindObject::Deployment(deployment) = row.object else {
+        return Err(SkippedItem {
+            object: "?".into(),
+            reason: "not a deployment".into(),
+        });
+    };
+    let target = ObjectRef::new(
+        ObjectKind::Deployment,
+        Some(deployment.namespace.clone()),
+        deployment.name.clone(),
+    )
+    .expect("a valid name");
+    let request = WriteRequest::new(target, WriteOperation::SetRolloutPaused { paused: true })
+        .expect("a deployment can pause");
+    Ok(BatchItem {
+        object: format!("{}/{}", deployment.namespace, deployment.name).into(),
+        label: format!("Pause rollout of deployment {}", deployment.name).into(),
+        request,
+    })
+}
+
+fn rows<'a>(cluster: &'a ClusterRef, objects: &'a [KindObject]) -> Vec<CheckedRow<'a>> {
+    objects
+        .iter()
+        .map(|object| CheckedRow { cluster, object })
+        .collect()
+}
+
+#[test]
+fn batch_requires_one_cluster() {
+    let (stg, prod) = (test_cluster(), other_cluster());
+    let objects = objects(2);
+    let mixed = vec![
+        CheckedRow {
+            cluster: &stg,
+            object: &objects[0],
+        },
+        CheckedRow {
+            cluster: &prod,
+            object: &objects[1],
+        },
+    ];
+    assert_eq!(
+        batch_plan(&mixed, item_of).err().as_deref(),
+        Some("Select rows of one cluster")
+    );
+}
+
+#[test]
+fn batch_caps_at_fifty() {
+    let cluster = test_cluster();
+    let at_cap = objects(MAX_BATCH_ITEMS);
+    let plan = batch_plan(&rows(&cluster, &at_cap), item_of).expect("fifty is allowed");
+    assert_eq!(plan.items.len(), 50);
+    assert_eq!(plan.cluster, cluster);
+    let over = objects(MAX_BATCH_ITEMS + 1);
+    assert_eq!(
+        batch_plan(&rows(&cluster, &over), item_of).err().as_deref(),
+        Some("Select at most 50 rows")
+    );
+}
+
+#[test]
+fn an_empty_selection_has_no_plan() {
+    assert_eq!(
+        batch_plan(&[], item_of).err().as_deref(),
+        Some("Select rows first")
+    );
+}
+
+#[test]
+fn skipped_rows_are_listed_not_sent() {
+    let cluster = test_cluster();
+    let objects = objects(3);
+    let checked = rows(&cluster, &objects);
+    // The middle row is refused (a paused rollout, say): it is a line of the dialog, not a request.
+    let plan = batch_plan(&checked, |row| {
+        let item = item_of(row)?;
+        if item.object.ends_with("api-1") {
+            return Err(SkippedItem {
+                object: item.object,
+                reason: "Resume the rollout first".into(),
+            });
+        }
+        Ok(item)
+    })
+    .expect("two items remain");
+    let names: Vec<&str> = plan.items.iter().map(|item| item.object.as_ref()).collect();
+    assert_eq!(names, ["team-a/api-0", "team-a/api-2"]);
+    assert_eq!(plan.skipped.len(), 1);
+    assert_eq!(plan.skipped[0].reason, "Resume the rollout first");
+}
+
+#[test]
+fn every_row_skipped_gives_the_first_reason() {
+    let cluster = test_cluster();
+    let objects = objects(2);
+    let reasons = ["already suspended", "something else"];
+    let counter = std::cell::Cell::new(0);
+    let plan = batch_plan(&rows(&cluster, &objects), |row| {
+        let index = counter.replace(counter.get() + 1);
+        let item = item_of(row)?;
+        Err(SkippedItem {
+            object: item.object,
+            reason: reasons[index].into(),
+        })
+    });
+    assert_eq!(plan.err().as_deref(), Some("already suspended"));
+}
+
+fn rejected(text: &str) -> ItemProgress {
+    ItemProgress::Rejected(text.to_owned().into())
+}
+
+#[test]
+fn the_dry_run_line_needs_every_item_to_pass() {
+    let elapsed = Duration::from_millis(412);
+    let passed = ItemProgress::Passed;
+    assert_eq!(
+        summarize_dry_runs(&[passed.clone(), passed.clone(), passed.clone()], elapsed),
+        DryRunState::Passed { elapsed }
+    );
+    // One failure keeps Apply off and names the first reason.
+    let states = [
+        passed.clone(),
+        rejected("Forbidden"),
+        passed.clone(),
+        rejected("later"),
+    ];
+    assert_eq!(
+        summarize_dry_runs(&states, elapsed),
+        DryRunState::Failed("Dry-run failed for 2 of 4: Forbidden".into())
+    );
+    // Items still waiting or checking keep the line running, even after a failure.
+    assert_eq!(
+        summarize_dry_runs(&[rejected("Forbidden"), ItemProgress::Checking], elapsed),
+        DryRunState::Running
+    );
+    assert_eq!(
+        summarize_dry_runs(&[passed, ItemProgress::Waiting], elapsed),
+        DryRunState::Running
+    );
+}
+
+#[test]
+fn a_dry_run_that_stopped_says_why() {
+    let blocked: Result<WriteOutcome, CheckedWriteError> =
+        Err(CheckedWriteError::Blocked("stg-b is no longer open".into()));
+    assert_eq!(
+        dry_run_progress(&blocked),
+        ItemProgress::Rejected("stg-b is no longer open".into())
+    );
+    let denied: Result<WriteOutcome, CheckedWriteError> =
+        Err(CheckedWriteError::Write(WriteError::WritesBlocked));
+    assert!(matches!(
+        dry_run_progress(&denied),
+        ItemProgress::Rejected(_)
+    ));
+}
+
+fn done() -> Result<WriteOutcome, CheckedWriteError> {
+    Ok(WriteOutcome {
+        mode: cluster::WriteMode::Commit,
+        elapsed: Duration::ZERO,
+        effect: cluster::WriteEffect::Patched,
+        created_name: None,
+        uid: None,
+    })
+}
+
+#[test]
+fn batch_continues_after_a_failed_commit() {
+    let mut stopped = None;
+    let first = commit_progress(done(), &mut stopped);
+    let second = commit_progress(
+        Err(CheckedWriteError::Write(WriteError::OutcomeUnknown)),
+        &mut stopped,
+    );
+    assert_eq!(first, ItemProgress::Done);
+    assert_eq!(second, ItemProgress::Unknown);
+    assert_eq!(stopped, None);
+    let failed = commit_progress(
+        Err(CheckedWriteError::Write(WriteError::WritesBlocked)),
+        &mut stopped,
+    );
+    assert!(matches!(failed, ItemProgress::Failed(_)));
+    // A failure is the object's: the next item is still free to go.
+    assert_eq!(stopped, None);
+}
+
+#[test]
+fn batch_stops_when_blocked() {
+    let mut stopped = None;
+    let blocked = commit_progress(
+        Err(CheckedWriteError::Blocked(
+            "stg-b was locked; nothing was changed".into(),
+        )),
+        &mut stopped,
+    );
+    assert_eq!(
+        blocked,
+        ItemProgress::NotSent("stg-b was locked; nothing was changed".into())
+    );
+    // The rest read the same reason: the loop sends nothing more.
+    assert_eq!(
+        stopped.as_deref(),
+        Some("stg-b was locked; nothing was changed")
+    );
+}
+
+#[test]
+fn the_notice_counts_what_went_through() {
+    let done = ItemProgress::Done;
+    assert_eq!(
+        batch_notice(
+            "Restart",
+            &[done.clone(), done.clone(), done.clone(), done.clone()]
+        ),
+        "Restart: 4 done"
+    );
+    let failed = ItemProgress::Failed("Forbidden".into());
+    assert_eq!(
+        batch_notice(
+            "Restart",
+            &[done.clone(), failed, done.clone(), done.clone()]
+        ),
+        "Restart: 3 done, 1 failed (Forbidden)"
+    );
+    let not_sent = ItemProgress::NotSent("stg-b was locked; nothing was changed".into());
+    assert_eq!(
+        batch_notice(
+            "Scale",
+            &[done, ItemProgress::Unknown, not_sent.clone(), not_sent]
+        ),
+        "Scale: 1 done, 1 unknown, 2 not sent (stg-b was locked; nothing was changed)"
+    );
+}
+
+#[test]
+fn an_item_intent_carries_the_batch_cluster_action_and_risk() {
+    let cluster = test_cluster();
+    let objects = objects(2);
+    let plan = batch_plan(&rows(&cluster, &objects), item_of).expect("a plan");
+    let batch = BatchIntent {
+        cluster: cluster.clone(),
+        cluster_name: "stg-b".into(),
+        action: ResourceAction::PauseRollout,
+        label: "Pause 2 deployments".into(),
+        verb: "Pause".into(),
+        button: "Pause".into(),
+        risk: ActionRisk::Change,
+        warnings: vec!["a line".into()],
+        plan,
+    };
+    assert_eq!(batch.confirm_label(), "Pause 2");
+    assert_eq!(batch.expected(), "stg-b");
+    let item = batch.item_intent(&batch.plan.items[1]);
+    assert_eq!(item.cluster, cluster);
+    assert_eq!(item.action, ResourceAction::PauseRollout);
+    assert_eq!(item.label, "Pause rollout of deployment api-1");
+    assert_eq!(item.button, "Pause");
+    assert_eq!(item.request.target().name(), "api-1");
+    assert_eq!(item.warnings.len(), 1);
+}
+
+#[test]
+fn item_states_read_as_the_list_shows_them() {
+    assert_eq!(ItemProgress::Waiting.text(), "waiting");
+    assert_eq!(ItemProgress::Checking.text(), "…");
+    assert_eq!(ItemProgress::Passed.text(), "passed");
+    assert_eq!(ItemProgress::Applying.text(), "applying…");
+    assert_eq!(ItemProgress::Done.text(), "done");
+    assert_eq!(ItemProgress::Unknown.text(), "outcome unknown");
+    assert_eq!(
+        ItemProgress::NotSent("an earlier step failed".into()).text(),
+        "Not sent: an earlier step failed"
+    );
+}

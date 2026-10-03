@@ -38,7 +38,7 @@ use crate::overview::{
 };
 use crate::pod_drawer::pod_drawer;
 use crate::resource_kind::ResourceKind;
-use crate::row_selection::{bulk_actions, selection_bar};
+use crate::row_selection::selection_bar;
 use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
 use crate::usage_format::group_digits;
@@ -122,6 +122,7 @@ impl AppShell {
             .children(self.render_interruption_banner(cx))
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
             .children(self.render_selection_bar(toolkit, cx))
+            .children(self.render_value_popover(toolkit))
             .children(self.render_drawer(cx))
     }
 
@@ -246,7 +247,7 @@ impl AppShell {
             Screen::Kind(kind) => (kind.singular(), kind.plural()),
         };
         let text = format!("{} selected", count_label(state.checked, singular, plural));
-        let bar = selection_bar(text, bulk_actions(self.screen), &cx.weak_entity(), cx);
+        let bar = selection_bar(text, self.bulk_buttons(cx), &cx.weak_entity(), cx);
         let right = if self.drawer_subject().is_some() {
             self.drawer.width()
         } else {
@@ -261,6 +262,34 @@ impl AppShell {
                 .flex()
                 .justify_center()
                 .child(bar)
+                .into_any_element(),
+        )
+    }
+
+    /// The value popover, over the bottom of the table and above the selection bar while rows are
+    /// ticked. It sits left of an open drawer, like the bar.
+    fn render_value_popover(&self, state: Option<&ToolkitState>) -> Option<AnyElement> {
+        let popover = self.value_popover()?.clone();
+        let bar_height = if state.is_some_and(|state| state.checked > 0) {
+            px(64.)
+        } else {
+            px(0.)
+        };
+        let right = if self.drawer_subject().is_some() {
+            self.drawer.width()
+        } else {
+            px(0.)
+        };
+        Some(
+            div()
+                .absolute()
+                .bottom_4()
+                .mb(bar_height)
+                .left_0()
+                .right(right)
+                .flex()
+                .justify_center()
+                .child(popover)
                 .into_any_element(),
         )
     }

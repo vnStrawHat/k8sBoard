@@ -333,6 +333,18 @@ fn a_stream_start_has_no_dry_run_to_wait_for_but_still_checks_lock_and_name() {
 }
 
 #[test]
+fn a_create_names_what_it_made_in_the_notice() {
+    assert_eq!(
+        success_notice("Run cronjob reconcile now", Some("reconcile-manual-x7k2p")),
+        "Run cronjob reconcile now: created reconcile-manual-x7k2p"
+    );
+    assert_eq!(
+        success_notice("Cordon node wk-04", None),
+        "Cordon node wk-04: done"
+    );
+}
+
+#[test]
 fn confirmed_accepts_a_start_with_no_dry_run_once_the_name_matches() {
     let not_supported = DryRunState::NotSupported;
     assert!(confirmed(&not_supported, TypedMatch::NotNeeded, 3).is_some());
@@ -364,4 +376,11 @@ fn only_both_exec_verbs_give_a_permit() {
     assert!(exec_permit_of(&report(&[AccessCheck::GetPodExec])).is_none());
     assert!(exec_permit_of(&report(&[AccessCheck::CreatePodExec])).is_none());
     assert!(exec_permit_of(&AccessState::Unknown).is_none());
+}
+
+#[test]
+fn the_audit_records_the_name_the_server_picked() {
+    let field = created_name_field("reconcile-manual-x7k2p");
+    assert_eq!(field.path, "metadata.name");
+    assert_eq!(field.value.as_deref(), Some("reconcile-manual-x7k2p"));
 }

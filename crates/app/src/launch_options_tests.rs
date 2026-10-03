@@ -765,3 +765,53 @@ fn the_shell_fixture_screens_open_pods_with_a_dock() {
         );
     }
 }
+
+#[test]
+fn the_scale_screens_open_on_the_first_deployment() {
+    for (name, screen) in [
+        ("scale-popover", LaunchScreen::ScalePopover),
+        ("scale-confirm", LaunchScreen::ScaleConfirm),
+    ] {
+        let parsed = run_options(&["--screen", name]).screen;
+        assert_eq!(parsed, screen);
+        assert_eq!(parsed.screen(), Screen::Kind(ResourceKind::Deployments));
+        // The cursor row is picked first, then the popover or the dialog opens on it.
+        assert!(parsed.selects_row());
+        assert!(parsed.opens_dialog());
+        assert_eq!(parsed.row_kind(), Some(ResourceKind::Deployments));
+        // No drawer: the screen shows the list with the cursor on a row.
+        assert!(!parsed.has_drawer());
+    }
+    assert_eq!(
+        LaunchScreen::KindDrawer(ResourceKind::Jobs, DrawerTab::Overview).row_kind(),
+        Some(ResourceKind::Jobs)
+    );
+    assert_eq!(LaunchScreen::Nodes.row_kind(), None);
+}
+
+#[test]
+fn restart_bulk_confirm_ticks_four_deployments_then_opens_the_dialog() {
+    let screen = run_options(&["--screen", "restart-bulk-confirm"]).screen;
+    assert_eq!(screen, LaunchScreen::RestartBulkConfirm);
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::Deployments));
+    assert!(screen.checks_rows());
+    assert_eq!(screen.checked_count(), 4);
+    assert!(screen.opens_dialog());
+    // The other tick screens keep their two rows.
+    assert_eq!(LaunchScreen::PodsSelected.checked_count(), 2);
+}
+
+#[test]
+fn a_menu_screen_opens_the_drawer_menu_of_the_first_row() {
+    let screen = run_options(&["--screen", "cronjobs-menu"]).screen;
+    assert_eq!(screen, LaunchScreen::KindMenu(ResourceKind::CronJobs));
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::CronJobs));
+    assert!(screen.opens_menu());
+    // A menu hangs off the drawer, so the first row is selected and its drawer is open.
+    assert!(screen.has_drawer() && screen.selects_row());
+    assert_eq!(screen.drawer_tab(), Some(DrawerTab::Overview));
+    assert_eq!(screen.row_kind(), Some(ResourceKind::CronJobs));
+    // The other screens open no menu, and a name that is no kind is no screen.
+    assert!(!LaunchScreen::Kind(ResourceKind::CronJobs).opens_menu());
+    assert!(parse(&["--screen", "nothings-menu"]).is_err());
+}

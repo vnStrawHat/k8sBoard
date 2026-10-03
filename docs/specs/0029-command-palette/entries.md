@@ -60,10 +60,10 @@ The kit items carry **no** `.action(..)`: the kit would dispatch from the dialog
 
 ```rust
 /// The 0028 unit action bound to a row action's key; exhaustive, so a new variant must name one.
-impl ResourceAction { pub(crate) fn key_action(self) -> Box<dyn Action>; }
+impl RowAction { pub(crate) fn key_action(self) -> Box<dyn Action>; }   // 0032 moved it from ResourceAction
 ```
 
-- `ResourceAction::key_action()` lives in `resource_actions.rs`, an exhaustive `match`; no `keymap::action_for` is added. Today every variant maps: `ViewLogs`, `ViewYaml`, `CopyName`, `PortForward`, `Cordon`, `Drain`, `EditYaml`, `RestartRollout`, `Scale`, `Delete` → their same-named actions.
+- `RowAction::key_action()` (0032 moved it from `ResourceAction`) lives in `resource_actions.rs`, an exhaustive `match`; no `keymap::action_for` is added. Every variant maps to its same-named action: the 0028 ones plus `PauseRollout`, `RollBack`, `SuspendCronJob`, `TriggerCronJob`, `RerunJob`. The entry label follows the row's state (`Resume rollout`), and a row the state blocks (a paused Deployment's Restart) is a disabled entry with its reason.
 - `OpenShell` **and** `OpenNodeShell` → `OpenShell` (the S key); the 0028 handler picks pod or node from the cursor subject.
 - A later variant without a key must add one to `key_action` first (compiler-enforced). Test `every_offered_row_action_maps`, in `palette_search_tests.rs`.
 

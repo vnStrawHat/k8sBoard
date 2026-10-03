@@ -469,3 +469,27 @@ fn applied_prefs_replace_the_defaults() {
 fn prefs_of_an_untouched_view_are_empty() {
     assert_eq!(TableView::default().prefs(&plan()), TablePrefs::default());
 }
+
+#[test]
+fn checked_rows_follow_the_ticks() {
+    let rows = items();
+    let mut view = sorted_by(0, SortDirection::Ascending);
+    view.rebuild(&rows, 2, now());
+    assert!(view.checked_rows(&rows).is_empty());
+    view.toggle_checked(&rows[0]);
+    view.toggle_checked(&rows[2]);
+    // The indices are items, in the order the table shows them.
+    let shown: Vec<&str> = view
+        .checked_rows(&rows)
+        .into_iter()
+        .map(|index| rows[index].name)
+        .collect();
+    assert_eq!(shown, ["pod-1", "pod-10"]);
+    // A filter that hides a ticked row takes it out of the list, as it takes it out of the ticks.
+    view.filter.text = "g=b".to_owned();
+    view.rebuild(&rows, 2, now());
+    assert_eq!(view.checked_rows(&rows).len(), 2);
+    view.filter.text = "g=a".to_owned();
+    view.rebuild(&rows, 2, now());
+    assert!(view.checked_rows(&rows).is_empty());
+}

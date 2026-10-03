@@ -104,14 +104,14 @@ pub(crate) struct KindAction {
 }
 
 impl KindAction {
-    const fn named(label: &'static str) -> Self {
+    pub(crate) const fn named(label: &'static str) -> Self {
         Self {
             label,
             action: None,
         }
     }
 
-    const fn keyed(label: &'static str, action: ResourceAction) -> Self {
+    pub(crate) const fn keyed(label: &'static str, action: ResourceAction) -> Self {
         Self {
             label,
             action: Some(action),
@@ -218,10 +218,13 @@ static DEPLOYMENTS: KindSpec = KindSpec {
         AGE_COLUMN,
     ],
     read_only_actions: &[
-        KindAction::keyed("Scale…", ResourceAction::Scale),
-        KindAction::keyed("Restart rollout", ResourceAction::RestartRollout),
-        KindAction::named("Roll back…"),
-        KindAction::named("Pause rollout"),
+        KindAction::keyed("Scale…", ResourceAction::Scale(ObjectKind::Deployment)),
+        KindAction::keyed(
+            "Restart rollout",
+            ResourceAction::RestartRollout(ObjectKind::Deployment),
+        ),
+        KindAction::keyed("Roll back…", ResourceAction::RollBack),
+        KindAction::keyed("Pause rollout", ResourceAction::PauseRollout),
     ],
     delete_label: "Delete deployment…",
     has_port_forward: true,
@@ -246,8 +249,11 @@ static STATEFUL_SETS: KindSpec = KindSpec {
         AGE_COLUMN,
     ],
     read_only_actions: &[
-        KindAction::keyed("Scale…", ResourceAction::Scale),
-        KindAction::keyed("Restart rollout", ResourceAction::RestartRollout),
+        KindAction::keyed("Scale…", ResourceAction::Scale(ObjectKind::StatefulSet)),
+        KindAction::keyed(
+            "Restart rollout",
+            ResourceAction::RestartRollout(ObjectKind::StatefulSet),
+        ),
     ],
     delete_label: "Delete statefulset…",
     has_port_forward: true,
@@ -276,7 +282,7 @@ static DAEMON_SETS: KindSpec = KindSpec {
     ],
     read_only_actions: &[KindAction::keyed(
         "Restart rollout",
-        ResourceAction::RestartRollout,
+        ResourceAction::RestartRollout(ObjectKind::DaemonSet),
     )],
     delete_label: "Delete daemonset…",
     has_port_forward: false,
@@ -325,7 +331,7 @@ static JOBS: KindSpec = KindSpec {
         column("Duration", 90., Align::Right),
         AGE_COLUMN,
     ],
-    read_only_actions: &[KindAction::named("Re-run job")],
+    read_only_actions: &[KindAction::keyed("Re-run job", ResourceAction::RerunJob)],
     delete_label: "Delete job…",
     has_port_forward: false,
 };
@@ -351,8 +357,8 @@ static CRON_JOBS: KindSpec = KindSpec {
         AGE_COLUMN,
     ],
     read_only_actions: &[
-        KindAction::named("Trigger now"),
-        KindAction::named("Suspend"),
+        KindAction::keyed("Trigger now", ResourceAction::TriggerCronJob),
+        KindAction::keyed("Suspend", ResourceAction::SuspendCronJob),
     ],
     delete_label: "Delete cronjob…",
     has_port_forward: false,
@@ -1350,19 +1356,24 @@ mod tests {
         };
         assert_eq!(
             action_of(ResourceKind::Deployments, "Scale…"),
-            Some(Some(ResourceAction::Scale))
+            Some(Some(ResourceAction::Scale(ObjectKind::Deployment)))
         );
         assert_eq!(
             action_of(ResourceKind::Deployments, "Restart rollout"),
-            Some(Some(ResourceAction::RestartRollout))
+            Some(Some(ResourceAction::RestartRollout(ObjectKind::Deployment)))
         );
         assert_eq!(
             action_of(ResourceKind::ConfigMaps, "Edit"),
             Some(Some(ResourceAction::EditYaml))
         );
-        // The wireframe gives these no key.
+        // Roll back has a unit action of its own, with no default key.
         assert_eq!(
             action_of(ResourceKind::Deployments, "Roll back…"),
+            Some(Some(ResourceAction::RollBack))
+        );
+        // The wireframe gives a Helm release no key and 0032 does not ship it.
+        assert_eq!(
+            action_of(ResourceKind::HelmReleases, "Roll back…"),
             Some(None)
         );
     }

@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
@@ -15,8 +16,8 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     Action, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, WeakEntity,
-    Window, div, prelude::FluentBuilder as _, px,
+    IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription,
+    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::{AppShell, Screen};
@@ -24,8 +25,8 @@ use crate::cluster_health::RowHealth;
 use crate::cluster_switcher::{OpenClusterSwitcher, health_color, health_text};
 use crate::environment::{Environment, environment_badge};
 use crate::keymap::{
-    CloseDockTab, NextDockTab, OpenNamespacePicker, PalettePreview, PreviousDockTab, ShowShortcuts,
-    ToggleDock, ToggleDockZoom,
+    CloseDockTab, LeavePaletteArgument, NextDockTab, OpenNamespacePicker, PalettePreview,
+    PreviousDockTab, ScaleCursorRow, ShowShortcuts, ToggleDock, ToggleDockZoom,
 };
 use crate::palette_search::{
     EntryState, PaletteEntry, PaletteGroup, PaletteTarget, empty_text, lists_resources,
@@ -36,6 +37,7 @@ use crate::settings_window::OpenSettings;
 use crate::shortcut_sheet::row_keys;
 use crate::status_tone::{StatusLabel, StatusTone, tone_color, toned_text};
 use crate::table_selection::{ClusterObject, ResourceKey};
+use crate::workload_actions::parse_replicas;
 
 const PALETTE_WIDTH: f32 = 640.;
 const PALETTE_TOP_MARGIN: f32 = 56.;
@@ -90,7 +92,19 @@ pub(crate) struct CommandPalette {
     reselect: Option<ClusterObject>,
     /// Opened by `:` and still showing just that: the first Esc (or Backspace) closes at once.
     is_seed_untouched: bool,
+    /// The replicas field that `Ctrl Enter` on Scale turns the query into.
+    argument: Option<ReplicasArgument>,
     _shell_observer: Subscription,
+}
+
+/// The inline field of an entry that takes a number: the replicas of Scale (W9 note, `Ctrl Enter`).
+struct ReplicasArgument {
+    /// `Replicas for deployment/payments-api (now 3)`.
+    prompt: SharedString,
+    input: Entity<InputState>,
+    /// The last Enter found no whole number; typing clears it.
+    has_error: bool,
+    _subscription: Subscription,
 }
 
 /// Opens the dialog with `initial` typed (`""` or `":"`) and focuses the query input. `snapshot`
@@ -147,6 +161,7 @@ impl CommandPalette {
             is_stale: false,
             reselect: None,
             is_seed_untouched: initial == ":",
+            argument: None,
             _shell_observer: shell_observer,
         };
         palette.rank(snapshot);
@@ -279,6 +294,9 @@ impl CommandPalette {
         match target {
             PaletteTarget::Command(action) => dispatch(&*action, window, cx),
             PaletteTarget::RowAction(action) => dispatch(&*action.key_action(), window, cx),
+            PaletteTarget::RollBack(object, revision) => self.update_shell(cx, |shell, cx| {
+                shell.start_roll_back(&object, &revision, window, cx);
+            }),
             PaletteTarget::Screen(screen) => self.update_shell(cx, |shell, cx| {
                 shell.show_screen(screen, cx);
             }),
@@ -292,6 +310,85 @@ impl CommandPalette {
                 self.update_shell(cx, |shell, cx| shell.switch_cluster(&row.cluster, cx));
             }
         }
+    }
+
+    /// `Ctrl Enter` on an enabled Scale entry: the query becomes a replicas field for the cursor row.
+    /// On any other entry, or a disabled one, nothing happens: the list stays as it is.
+    fn ask_replicas(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.argument.is_some() {
+            return;
+        }
+        let Some(path) = self.state.read(cx).selected_index() else {
+            return;
+        };
+        let Some(entry) = self.entry_at(path) else {
+            return;
+        };
+        let is_scale = matches!(entry.target, PaletteTarget::RowAction(RowAction::Scale));
+        if !(is_scale && entry.is_enabled()) {
+            return;
+        }
+        let Some(prompt) = self
+            .shell
+            .upgrade()
+            .and_then(|shell| shell.read(cx).scale_prompt(cx))
+        else {
+            return;
+        };
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Replicas")
+                .validate(|text, _| text.bytes().all(|byte| byte.is_ascii_digit()))
+        });
+        let subscription =
+            cx.subscribe_in(
+                &input,
+                window,
+                |palette, _, event, window, cx| match event {
+                    InputEvent::PressEnter { .. } => palette.submit_replicas(window, cx),
+                    InputEvent::Change => palette.clear_argument_error(cx),
+                    _ => {}
+                },
+            );
+        input.update(cx, |input, cx| input.focus(window, cx));
+        self.argument = Some(ReplicasArgument {
+            prompt: format!("Replicas for {prompt}").into(),
+            input,
+            has_error: false,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    fn clear_argument_error(&mut self, cx: &mut Context<Self>) {
+        if let Some(argument) = self.argument.as_mut().filter(|argument| argument.has_error) {
+            argument.has_error = false;
+            cx.notify();
+        }
+    }
+
+    /// Enter in the replicas field: a whole number closes the palette and starts the scale (the
+    /// confirm dialog follows); anything else says what is expected.
+    fn submit_replicas(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(argument) = self.argument.as_mut() else {
+            return;
+        };
+        let Some(replicas) = parse_replicas(&argument.input.read(cx).value()) else {
+            argument.has_error = true;
+            cx.notify();
+            return;
+        };
+        window.close_dialog(cx);
+        self.update_shell(cx, |shell, cx| shell.scale_cursor_row(replicas, window, cx));
+    }
+
+    /// Esc in the replicas field: back to the list, with the query as it was.
+    fn leave_argument(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.argument.take().is_none() {
+            return;
+        }
+        self.state.update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
     }
 
     fn update_shell(&self, cx: &mut App, run: impl FnOnce(&mut AppShell, &mut Context<AppShell>)) {
@@ -308,10 +405,7 @@ impl Render for CommandPalette {
         let palette = cx.weak_entity();
         let mode = parse_query(&self.query).mode;
         let empty = empty_text(mode, self.context.has_session, self.context.screen);
-        let header = HeaderChips {
-            cluster: self.context.cluster.clone(),
-            scope: self.context.scope_label.clone(),
-        };
+        let header = HeaderChips::of(&self.context);
         let more = self.more;
         let mut command = Command::new(&self.state)
             .filterable(false)
@@ -351,9 +445,18 @@ impl Render for CommandPalette {
             let items = members.into_iter().map(command_item);
             command = command.group(CommandGroup::new().label(heading).items(items));
         }
+        let argument = self.render_argument(cx);
         v_flex()
             .on_action(cx.listener(|palette, _: &PalettePreview, _, cx| palette.preview(cx)))
-            .child(command)
+            .on_action(cx.listener(|palette, _: &ScaleCursorRow, window, cx| {
+                palette.ask_replicas(window, cx);
+            }))
+            .on_action(
+                cx.listener(|palette, _: &LeavePaletteArgument, window, cx| {
+                    palette.leave_argument(window, cx);
+                }),
+            )
+            .child(argument.unwrap_or_else(|| command.into_any_element()))
     }
 }
 
@@ -384,6 +487,13 @@ struct HeaderChips {
 }
 
 impl HeaderChips {
+    fn of(context: &PaletteContext) -> Self {
+        Self {
+            cluster: context.cluster.clone(),
+            scope: context.scope_label.clone(),
+        }
+    }
+
     fn render(&self, cx: &App) -> impl IntoElement + use<> {
         let cluster = match &self.cluster {
             Some(cluster) => h_flex()
@@ -409,6 +519,68 @@ impl HeaderChips {
                     .clone()
                     .map(|scope| Tag::secondary().small().child(scope)),
             )
+    }
+}
+
+impl CommandPalette {
+    /// Enter in the replicas field, as a fresh key press: the kit Dialog confirms on the same key
+    /// and would close the palette before the number is read, so the key is bound to nothing here
+    /// (`keymap.rs`) and handled once, like the confirm dialog does. A held Enter does nothing.
+    fn on_argument_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = &event.keystroke;
+        if key.key != "enter" || key.modifiers.modified() {
+            return;
+        }
+        window.prevent_default();
+        cx.stop_propagation();
+        if !event.is_held {
+            self.submit_replicas(window, cx);
+        }
+    }
+
+    /// The palette body while the field is open: the header, the prompt, the field, and a hint.
+    /// `None` while the list shows.
+    fn render_argument(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
+        let argument = self.argument.as_ref()?;
+        let header = HeaderChips::of(&self.context);
+        let theme = cx.theme();
+        let error = argument.has_error.then(|| {
+            div()
+                .text_sm()
+                .text_color(theme.danger)
+                .child("Enter a whole number")
+        });
+        let body = v_flex()
+            .key_context("PaletteArgument")
+            .on_key_down(cx.listener(Self::on_argument_key))
+            .w_full()
+            .child(header.render(cx))
+            .child(
+                v_flex()
+                    .gap_2()
+                    .px_3()
+                    .pb_3()
+                    .child(div().text_sm().child(argument.prompt.clone()))
+                    .child(Input::new(&argument.input))
+                    .children(error),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(div().ml_auto().child("⏎ scale · Esc back to the list")),
+            );
+        Some(body.into_any_element())
     }
 }
 
@@ -480,6 +652,8 @@ impl RowContent {
         let key_action = match &entry.target {
             PaletteTarget::Command(action) => Some(action.boxed_clone()),
             PaletteTarget::RowAction(action) => Some(action.key_action()),
+            // The revision is in the label, and the hint of Roll back… is its menu item, not this.
+            PaletteTarget::RollBack(..) => None,
             PaletteTarget::Screen(_)
             | PaletteTarget::Resource(_)
             | PaletteTarget::Namespace(_)
@@ -571,6 +745,7 @@ fn row_icon(target: &PaletteTarget) -> RowIcon {
     match target {
         PaletteTarget::Command(action) => RowIcon::Glyph(command_icon(&**action)),
         PaletteTarget::RowAction(action) => RowIcon::Glyph(row_action_icon(*action)),
+        PaletteTarget::RollBack(..) => RowIcon::Glyph(row_action_icon(RowAction::RollBack)),
         PaletteTarget::Screen(screen) => text(screen_badge(*screen)),
         PaletteTarget::Resource(ClusterObject {
             key: ResourceKey::Pod { .. },
@@ -602,6 +777,11 @@ fn row_action_icon(action: RowAction) -> IconName {
         RowAction::RestartRollout => IconName::RotateCw,
         RowAction::Scale => IconName::ChevronsUpDown,
         RowAction::Delete => IconName::Delete,
+        RowAction::PauseRollout => IconName::Pause,
+        RowAction::RollBack => IconName::Undo2,
+        RowAction::SuspendCronJob => IconName::Timer,
+        RowAction::TriggerCronJob => IconName::Play,
+        RowAction::RerunJob => IconName::Repeat,
     }
 }
 

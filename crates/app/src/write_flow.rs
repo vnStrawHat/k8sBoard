@@ -16,22 +16,31 @@ use cluster::{
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, AsyncApp, Context, SharedString, WeakEntity, Window,
+    AnyWindowHandle, App, AppContext as _, AsyncApp, Context, Entity, SharedString, WeakEntity,
+    Window,
 };
 
 use super::AppShell;
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, audit_entry,
+    created_name_field,
 };
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::AccessState;
 use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
+use crate::kind_row::KindObject;
 use crate::resource_actions::{
     ActionAvailability, ResourceAction, action_availability, action_label, action_risk,
     unavailable_text,
 };
 use crate::settings::AppSettings;
+use crate::table_selection::ClusterObject;
+use crate::value_popover::ValuePopover;
+use crate::workload_actions::{
+    PAUSED_REASON, RevisionTarget, ScaleTarget, WorkloadScope, roll_back_intent, row_block,
+    scale_intent, state_label, workload_intent,
+};
 use crate::write_guard::{ActionRisk, ClusterGuard, DialogConfirm, WriteLock, confirm_step};
 
 /// One guarded change, as the action builds it. `cluster` is the row's or cursor's cluster: the
@@ -342,6 +351,11 @@ pub(crate) async fn checked_write(
     if is_commit && let Some(outcome) = audit_outcome(&result) {
         entry.outcome = outcome;
         entry.error = result.as_ref().err().map(ToString::to_string);
+        if let Ok(done) = &result
+            && let Some(name) = &done.created_name
+        {
+            entry.fields.push(created_name_field(name));
+        }
         append_in_background(shell, config_dir, entry, cx).await;
     }
     result.map_err(CheckedWriteError::Write)
@@ -413,6 +427,14 @@ pub(crate) fn failure_notice(label: &str, error: &CheckedWriteError) -> String {
             "{label}: the outcome is unknown; the change may have been applied. Refresh to check."
         ),
         CheckedWriteError::Write(error) => format!("{label} failed: {}", write_error_text(error)),
+    }
+}
+
+/// The notice of a commit that went through: a create names what it made.
+fn success_notice(label: &str, created: Option<&str>) -> String {
+    match created {
+        Some(name) => format!("{label}: created {name}"),
+        None => format!("{label}: done"),
     }
 }
 
@@ -520,6 +542,218 @@ impl AppShell {
         }
     }
 
+    /// A workload action on the cursor row `subject`: Restart, Pause or Resume, Suspend or Resume,
+    /// Trigger now, Re-run. The row is read from the subject's own cluster, so the intent names the
+    /// object and the state as they are now; `row_block` is checked again here because a menu or a
+    /// key may be a moment old.
+    pub(crate) fn start_workload_action(
+        &mut self,
+        action: ResourceAction,
+        subject: &ClusterObject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = action_label(action);
+        let intent = {
+            let (Some(guard), Some(live)) = (
+                self.guard_for(&subject.cluster, cx),
+                self.slot_live(&subject.cluster, cx),
+            ) else {
+                return;
+            };
+            let Some(row) = live.row_of(&subject.key) else {
+                let text = unavailable_text(label, "the object is no longer listed");
+                notify(window, cx, text);
+                return;
+            };
+            if let Some(reason) = row_block(action, &row.object, None) {
+                let label = state_label(action, label, &row.object);
+                notify(window, cx, unavailable_text(label, &reason));
+                return;
+            }
+            let scope = WorkloadScope {
+                cluster: &subject.cluster,
+                cluster_name: guard.display_name(),
+            };
+            workload_intent(action, &scope, &row.object, jiff::Timestamp::now())
+        };
+        match intent {
+            Some(intent) => self.start_write(intent, window, cx),
+            None => notify(
+                window,
+                cx,
+                unavailable_text(label, "the object name is not valid"),
+            ),
+        }
+    }
+
+    /// Roll back of the Deployment `subject` to `target`: a button of its drawer's Revisions, or the
+    /// palette entry. The Deployment is read again from its own cluster, so a rollout paused since
+    /// the button was drawn is refused here, and the dialog names what is there now.
+    pub(crate) fn start_roll_back(
+        &mut self,
+        subject: &ClusterObject,
+        target: &RevisionTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = action_label(ResourceAction::RollBack);
+        let intent = {
+            let (Some(guard), Some(live)) = (
+                self.guard_for(&subject.cluster, cx),
+                self.slot_live(&subject.cluster, cx),
+            ) else {
+                return;
+            };
+            let Some(KindObject::Deployment(deployment)) =
+                live.row_of(&subject.key).map(|row| &row.object)
+            else {
+                let text = unavailable_text(label, "the deployment is no longer listed");
+                notify(window, cx, text);
+                return;
+            };
+            if deployment.is_paused {
+                notify(window, cx, unavailable_text(label, PAUSED_REASON));
+                return;
+            }
+            let scope = WorkloadScope {
+                cluster: &subject.cluster,
+                cluster_name: guard.display_name(),
+            };
+            roll_back_intent(&scope, deployment, target)
+        };
+        match intent {
+            Some(intent) => self.start_write(intent, window, cx),
+            None => notify(
+                window,
+                cx,
+                unavailable_text(label, "the object name is not valid"),
+            ),
+        }
+    }
+
+    /// The row under `subject` as a Scale target. The HPA is read from the Issues feed only when that
+    /// list is already loaded: no list starts for a hint.
+    fn scale_target_of(&self, subject: &ClusterObject, cx: &App) -> Option<ScaleTarget> {
+        let live = self.slot_live(&subject.cluster, cx)?;
+        let row = live.row_of(&subject.key)?;
+        ScaleTarget::of(&row.object, live.loaded_hpas())
+    }
+
+    /// Scale on the cursor row: the one popover that the menu, the key, and the palette share.
+    pub(crate) fn open_scale_popover(
+        &mut self,
+        subject: &ClusterObject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.scale_target_of(subject, cx) else {
+            let text = unavailable_text(
+                action_label(ResourceAction::Scale(ObjectKind::Deployment)),
+                "the object is no longer listed",
+            );
+            notify(window, cx, text);
+            return;
+        };
+        let (shell, subject) = (cx.weak_entity(), subject.clone());
+        let popover = cx.new(|cx| ValuePopover::scale_one(shell, subject, target, window, cx));
+        self.set_value_popover(popover, cx);
+    }
+
+    pub(crate) fn set_value_popover(
+        &mut self,
+        popover: Entity<ValuePopover>,
+        cx: &mut Context<Self>,
+    ) {
+        self.value_popover = Some(popover);
+        cx.notify();
+    }
+
+    pub(crate) fn close_value_popover(&mut self, cx: &mut Context<Self>) {
+        if self.value_popover.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn value_popover(&self) -> Option<&Entity<ValuePopover>> {
+        self.value_popover.as_ref()
+    }
+
+    /// Scale of the popover: the popover closes, and the change goes to the confirm dialog.
+    pub(crate) fn submit_scale(
+        &mut self,
+        subject: &ClusterObject,
+        target: &ScaleTarget,
+        replicas: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_value_popover(cx);
+        self.start_scale(subject, target, replicas, window, cx);
+    }
+
+    /// The Scale argument of the palette: the same change for the cursor row, from its own state now.
+    pub(crate) fn scale_cursor_row(
+        &mut self,
+        replicas: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(subject) = self.selected.clone() else {
+            return;
+        };
+        let Some(target) = self.scale_target_of(&subject, cx) else {
+            return;
+        };
+        self.start_scale(&subject, &target, replicas, window, cx);
+    }
+
+    /// What the palette says about the cursor row while it asks for replicas: `deployment/api (now
+    /// 3)`. `None` when the cursor row cannot scale.
+    pub(crate) fn scale_prompt(&self, cx: &App) -> Option<String> {
+        let subject = self.selected.as_ref()?;
+        let target = self.scale_target_of(subject, cx)?;
+        Some(format!(
+            "{} (now {})",
+            target.subject_text(),
+            target.desired
+        ))
+    }
+
+    /// The intent of scaling `subject` to `replicas`, on the row's own cluster. The row is read again
+    /// so the label and the warnings name what is there now, not what the form was opened on.
+    fn start_scale(
+        &mut self,
+        subject: &ClusterObject,
+        opened_on: &ScaleTarget,
+        replicas: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = action_label(ResourceAction::Scale(opened_on.kind));
+        let target = self
+            .scale_target_of(subject, cx)
+            .unwrap_or_else(|| opened_on.clone());
+        let intent = {
+            let Some(guard) = self.guard_for(&subject.cluster, cx) else {
+                return;
+            };
+            let scope = WorkloadScope {
+                cluster: &subject.cluster,
+                cluster_name: guard.display_name(),
+            };
+            scale_intent(&scope, &target, replicas)
+        };
+        match intent {
+            Some(intent) => self.start_write(intent, window, cx),
+            None => notify(
+                window,
+                cx,
+                unavailable_text(label, "the object name or the count is not valid"),
+            ),
+        }
+    }
+
     /// The one entry of a guarded change: the gate, then the confirm dialog with the dry-run
     /// already running. Nothing is sent without the dialog, for every tier, risk, and trigger.
     pub(crate) fn start_write(
@@ -595,6 +829,10 @@ fn finish_commit(
     cx: &mut AsyncApp,
 ) {
     let label = intent.label.to_string();
+    let created = result
+        .as_ref()
+        .ok()
+        .and_then(|outcome| outcome.created_name.clone());
     let result = result.map(|_| ());
     if let Err(error) = &result
         && let Some(text) = retryable_text(error)
@@ -605,7 +843,7 @@ fn finish_commit(
         return;
     }
     let notice = match &result {
-        Ok(()) => format!("{label}: done"),
+        Ok(()) => success_notice(&label, created.as_deref()),
         Err(error) => failure_notice(&label, error),
     };
     let _ = cx.update_window(window, |_, window, cx| {
@@ -620,11 +858,11 @@ fn finish_commit(
     });
 }
 
-fn notify(window: &mut Window, cx: &mut App, text: String) {
+pub(super) fn notify(window: &mut Window, cx: &mut App, text: String) {
     notify_with(window, cx, text, false);
 }
 
-fn notify_with(window: &mut Window, cx: &mut App, text: String, is_success: bool) {
+pub(super) fn notify_with(window: &mut Window, cx: &mut App, text: String, is_success: bool) {
     let notification = if is_success {
         Notification::success(text)
     } else {
@@ -744,17 +982,65 @@ impl AppShell {
             return true;
         };
         session.update(cx, |session, cx| session.set_lock(WriteLock::Unlocked, cx));
-        let inputs = {
+        let intent = {
             let Some(guard) = self.guard_for(cluster, cx) else {
                 return false;
             };
-            let Some(intent) = cordon_intent(
+            cordon_intent(
                 cluster,
                 guard.display_name(),
                 &node.name,
                 &node.status.scheduling,
-            ) else {
-                return true;
+            )
+        };
+        match intent {
+            Some(intent) => self.show_fixture_dialog(intent, window, cx),
+            None => true,
+        }
+    }
+
+    /// `--screen scale-confirm`: the Scale dialog of the cursor row, to the count two above the
+    /// current one, in a fixed state over an unlocked session. `false` while the row is not listed.
+    pub(super) fn open_scale_fixture(
+        &mut self,
+        subject: &ClusterObject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let (Some(session), Some(target)) = (
+            self.slot_session(&subject.cluster).cloned(),
+            self.scale_target_of(subject, cx),
+        ) else {
+            return false;
+        };
+        session.update(cx, |session, cx| session.set_lock(WriteLock::Unlocked, cx));
+        let intent = {
+            let Some(guard) = self.guard_for(&subject.cluster, cx) else {
+                return false;
+            };
+            let scope = WorkloadScope {
+                cluster: &subject.cluster,
+                cluster_name: guard.display_name(),
+            };
+            scale_intent(&scope, &target, target.desired + 2)
+        };
+        match intent {
+            Some(intent) => self.show_fixture_dialog(intent, window, cx),
+            None => true,
+        }
+    }
+
+    /// Opens the dialog of `intent` with the dry-run passed and the buttons dead, over the guard of
+    /// the intent's own cluster. `false` when that cluster has no guard yet.
+    fn show_fixture_dialog(
+        &mut self,
+        intent: WriteIntent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let inputs = {
+            let Some(guard) = self.guard_for(&intent.cluster, cx) else {
+                return false;
             };
             let confirm = confirm_step(guard.profile.confirm, intent.risk, intent.expected());
             DialogInputs {

@@ -156,6 +156,15 @@ pub(crate) fn connect_entry(
     }
 }
 
+/// The name the server gave an object a commit created (Trigger now, Re-run), which the request
+/// could not name: the log records it beside the `generateName` of the request.
+pub(crate) fn created_name_field(name: &str) -> AuditField {
+    AuditField {
+        path: "metadata.name".to_owned(),
+        value: Some(name.to_owned()),
+    }
+}
+
 /// Appends `entry` as one line. Blocking: callers run it off the main thread.
 ///
 /// The whole line goes out in one `write_all` on an append-only handle, so lines do not

@@ -2402,6 +2402,16 @@ impl LiveCluster {
         row_in(key, *kind, self.kind_list(*kind), self.topology())
     }
 
+    /// The HPAs this session already holds (the Issues feed that watches them), empty while that
+    /// list is loading, denied, or off: the Scale warning uses them and starts no list for it.
+    pub(crate) fn loaded_hpas(&self) -> &[KindObject] {
+        self.issue_feeds
+            .conditions
+            .iter()
+            .find(|feed| feed.kind == ResourceKind::HorizontalPodAutoscalers)
+            .map_or(&[][..], |feed| feed.list.items())
+    }
+
     /// The explorer list of `kind`, or `None` while another kind (or no kind) is shown.
     pub(crate) fn kind_list(&self, kind: ResourceKind) -> Option<&KindList> {
         self.explorer

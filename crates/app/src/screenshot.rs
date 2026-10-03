@@ -13,6 +13,7 @@ use crate::launch_options::LaunchScreen;
 use {
     crate::app_shell::AppShell,
     gpui_kit::component::WindowExt as _,
+    gpui_kit::test::TestWindowExt as _,
     std::{cell::Cell, path::PathBuf, rc::Rc, time::Duration},
 };
 
@@ -364,6 +365,14 @@ async fn capture_when_settled(
         waited += POLL_INTERVAL;
     }
     cx.background_executor().timer(SETTLE_DELAY).await;
+    if request.screen.opens_menu() {
+        // The ⋯ menu of the drawer opens as a click opens it, so the capture shows its items.
+        window.update(cx, |_, window, cx| {
+            window.refresh();
+            window.click("drawer-menu", cx);
+        })?;
+        cx.background_executor().timer(SETTLE_DELAY).await;
+    }
     window.update(cx, |_, window, _| window.refresh())?;
     cx.background_executor().timer(POLL_INTERVAL).await;
 
@@ -373,9 +382,13 @@ async fn capture_when_settled(
     }
     image.save(&request.path)?;
     // An open popover leaves its input focused, and the blink timer of a focused input is a handle the
-    // leak check of this build reports at exit. Closing the switcher moves the focus back first, and
-    // so does closing the dialogs: the command palette leaves its query input focused.
-    shell.update(cx, |shell, cx| shell.close_cluster_switcher(cx));
+    // leak check of this build reports at exit. Closing the switcher and the value popover moves the
+    // focus back first, and so does closing the dialogs: the command palette leaves its query input
+    // focused.
+    shell.update(cx, |shell, cx| {
+        shell.close_cluster_switcher(cx);
+        shell.close_value_popover(cx);
+    });
     window.update(cx, |_, window, cx| window.close_all_dialogs(cx))?;
     window.update(cx, |_, window, _| window.refresh())?;
     cx.background_executor().timer(SETTLE_DELAY).await;

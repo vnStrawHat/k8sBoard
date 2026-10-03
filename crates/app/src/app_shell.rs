@@ -59,6 +59,7 @@ use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
 use crate::launch_options::{LaunchOptions, LaunchScreen};
+use crate::live_sections::loaded_replica_sets;
 use crate::log_target::{LogTarget, NoLogTarget, check_logs_access};
 use crate::monitor_data::{MonitorInput, MonitorSubject, monitor_data};
 use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
@@ -107,6 +108,7 @@ use crate::title_bar::{scope_label, title_bar};
 use crate::topology_graph::{NodeId, TopologyKind};
 use crate::topology_view::TopologyView;
 use crate::traffic_test_view::{TrafficTestView, traffic_defaults};
+use crate::value_popover::ValuePopover;
 use crate::who_can_view::WhoCanView;
 use crate::write_guard::ClusterGuard;
 use crate::yaml_view::{YamlView, yaml_subject};
@@ -116,6 +118,9 @@ const DIALOG_WIDTH: f32 = 760.;
 
 #[path = "workspace.rs"]
 pub(crate) mod workspace;
+
+#[path = "batch_write.rs"]
+pub(crate) mod batch_write;
 
 #[path = "app_shell_view.rs"]
 mod app_shell_view;
@@ -145,6 +150,10 @@ mod app_shell_multi_tests;
 #[cfg(test)]
 #[path = "app_shell_write_tests.rs"]
 mod app_shell_write_tests;
+
+#[cfg(test)]
+#[path = "app_shell_workload_tests.rs"]
+mod app_shell_workload_tests;
 
 /// The logical column of the Events table that holds the reason.
 const EVENT_REASON_COLUMN: usize = 1;
@@ -297,6 +306,9 @@ pub(crate) struct AppShell {
     switch_notice: Option<String>,
     /// Why the last audit line could not be written; shown by the title-bar warning button.
     write_notice: Option<String>,
+    /// The open value popover (Scale), floating over the bottom of the workspace. It belongs to the
+    /// row under the cursor and closes when the cursor leaves it.
+    value_popover: Option<Entity<ValuePopover>>,
     /// The confirm dialog opened last, for the tests that drive it.
     #[cfg(test)]
     last_dialog: Option<gpui_kit::WeakEntity<crate::confirm_dialog::ConfirmDialog>>,
@@ -506,6 +518,7 @@ impl AppShell {
             kind_cache: CustomKindCache::default(),
             switch_notice: None,
             write_notice: None,
+            value_popover: None,
             #[cfg(test)]
             last_dialog: None,
             #[cfg(test)]
@@ -1365,6 +1378,7 @@ impl AppShell {
     /// a kind switch, and is dropped when leaving to Pods or Nodes.
     pub(crate) fn show_screen(&mut self, screen: Screen, cx: &mut Context<Self>) {
         self.screen = screen;
+        self.close_value_popover(cx);
         self.drawer.tab = DrawerTab::Overview;
         self.drawer.container_tab = ContainerTab::Info;
         self.drawer.monitor = MonitorState::new();
@@ -1705,6 +1719,30 @@ impl AppShell {
                 self.open_traffic_test(&cluster, policy.as_ref(), true, window, cx);
             }
             LaunchScreen::Shortcuts => open_shortcut_sheet(window, cx),
+            // The cursor row comes from the launch row pick; until then the screen keeps waiting.
+            LaunchScreen::ScalePopover => {
+                let Some(subject) = self.selected.clone() else {
+                    return;
+                };
+                self.open_scale_popover(&subject, window, cx);
+            }
+            // The ticks come from the launch row pick; until then the screen keeps waiting.
+            #[cfg(feature = "screenshot")]
+            LaunchScreen::RestartBulkConfirm => {
+                if self.pending_launch_screen.is_some() {
+                    return;
+                }
+                self.open_restart_bulk_fixture(window, cx);
+            }
+            #[cfg(feature = "screenshot")]
+            LaunchScreen::ScaleConfirm => {
+                let Some(subject) = self.selected.clone() else {
+                    return;
+                };
+                if !self.open_scale_fixture(&subject, window, cx) {
+                    return;
+                }
+            }
             #[cfg(feature = "screenshot")]
             LaunchScreen::UnlockConfirm => self.begin_unlock(&cluster, window, cx),
             #[cfg(feature = "screenshot")]
@@ -2375,6 +2413,7 @@ impl AppShell {
         let moves_cluster = self.selected.as_ref().map(|old| &old.cluster)
             != object.as_ref().map(|new| &new.cluster);
         self.selected = object;
+        self.close_value_popover(cx);
         // Without a row there is nothing to show.
         if self.selected.is_none() {
             self.drawer.is_open = false;
@@ -3154,7 +3193,13 @@ impl AppShell {
                 };
                 (live.nodes.is_loading(), item)
             }
-            LaunchScreen::KindDrawer(kind, _) => {
+            LaunchScreen::KindDrawer(..)
+            | LaunchScreen::KindMenu(_)
+            | LaunchScreen::ScalePopover
+            | LaunchScreen::ScaleConfirm => {
+                let Some(kind) = launch.row_kind() else {
+                    return;
+                };
                 let explorer = live.kind_list(kind);
                 let rows = explorer.map_or(&[][..], |explorer| explorer.list.items());
                 let item = match select {
@@ -3212,7 +3257,13 @@ impl AppShell {
                 self.select_table_row(&table, row, cx);
                 self.open_launch_drawer(launch, cx);
             }
-            LaunchScreen::KindDrawer(kind, _) => {
+            LaunchScreen::KindDrawer(..)
+            | LaunchScreen::KindMenu(_)
+            | LaunchScreen::ScalePopover
+            | LaunchScreen::ScaleConfirm => {
+                let Some(kind) = launch.row_kind() else {
+                    return;
+                };
                 let Some(row) = self
                     .primary_cluster()
                     .and_then(|primary| self.row_of_item(&self.kind_table, &primary, item, cx))
@@ -3265,16 +3316,22 @@ impl AppShell {
         };
         let is_loading = match launch {
             LaunchScreen::NodesSelected => live.nodes.is_loading(),
+            LaunchScreen::RestartBulkConfirm => live
+                .kind_list(ResourceKind::Deployments)
+                .is_none_or(|explorer| explorer.list.is_loading()),
             _ => live.pods.is_loading(),
         };
         if is_loading {
             return;
         }
         self.pending_launch_screen = None;
-        for row in 0..2 {
+        for row in 0..launch.checked_count() {
             match launch {
                 LaunchScreen::NodesSelected => {
                     check_table(&self.node_table, RowCheck::Toggle(row), cx)
+                }
+                LaunchScreen::RestartBulkConfirm => {
+                    check_table(&self.kind_table, RowCheck::Toggle(row), cx)
                 }
                 _ => check_table(&self.pod_table, RowCheck::Toggle(row), cx),
             }
@@ -3568,6 +3625,7 @@ impl AppShell {
         // The popovers share the window with the dialog: a popover left open would keep its input
         // and its keys.
         self.close_cluster_switcher(cx);
+        self.close_value_popover(cx);
         self.namespace_picker.dismiss();
         let wants_resources = lists_resources(&parse_query(initial));
         let snapshot = self.palette_snapshot(wants_resources, cx);
@@ -3639,6 +3697,25 @@ impl AppShell {
                         .screen
                         .kind()
                         .and_then(|kind| Some((kind, live.kind_list(kind)?.list.items()))),
+                    // Only the cursor Deployment has revisions to offer, and only once its drawer
+                    // has loaded them.
+                    replica_sets: self
+                        .selected
+                        .as_ref()
+                        .filter(|cursor| cursor.cluster == slot.cluster)
+                        .and_then(|cursor| match &cursor.key {
+                            ResourceKey::Kind {
+                                kind: ResourceKind::Deployments,
+                                ..
+                            } => loaded_replica_sets(
+                                ResourceKind::Deployments,
+                                live.row_of(&cursor.key)?,
+                                live,
+                            ),
+                            ResourceKey::Pod { .. }
+                            | ResourceKey::Node { .. }
+                            | ResourceKey::Kind { .. } => None,
+                        }),
                 })
             })
             .collect();

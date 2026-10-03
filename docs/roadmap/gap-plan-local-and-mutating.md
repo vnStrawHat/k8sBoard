@@ -45,6 +45,7 @@ GPUI Kit Code Editor, diff vs cluster (default view), semantic change list, chec
 ### 0032 — Workload and object actions
 Scale, Restart rollout, Pause/Resume, Roll back to revision, CronJob Trigger now and Suspend, Job Re-run, HPA min/max, StorageClass set default, PVC Expand, Certificate Renew; list-level buttons on selected rows; palette actions enabled.
 - Deps: 0030, 0009, 0012. Risk: Med.
+- Spec: [0032-workload-actions](../specs/0032-workload-actions/README.md). **Done for workloads** (Scale, Restart, Pause/Resume, Roll back, CronJob Suspend/Resume, Trigger now, Job Re-run; menus, keys, popover, palette, drawer buttons, selection-bar batches). The object actions (HPA min/max, PVC Expand, StorageClass default) move to 0032b; Certificate Renew to 0018.
 
 ### 0033 — Delete and pod lifecycle
 Delete for every kind (typed confirm on prod, red, last), Restart pod (delete and recreate), Evict (Eviction API), bulk delete from the selection bar.

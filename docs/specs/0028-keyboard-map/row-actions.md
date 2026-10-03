@@ -28,6 +28,12 @@ pub(crate) fn key_availability(action: ResourceAction, subject: &ResourceKey, li
 
 Not offered → silent (no notice), for example L on a Service. `key_availability` reuses `action_availability(action, &live.access)` for the gate, so menus, keys, and later specs agree.
 
+## Updated by 0032 (workload actions)
+
+- The key layer names a kind-less `RowAction` (the keys, menu hints, and palette); `ResourceAction` is what a subject resolves it to. `Scale(ObjectKind)` and `RestartRollout(ObjectKind)` carry the row's kind, so the gate reads that kind's permission; `PauseRollout`, `RollBack`, `SuspendCronJob`, `TriggerCronJob`, and `RerunJob` are new, each with a unit key action (unbound).
+- `subject_action(row, subject)` resolves through the kind table: the `KindAction` whose action maps to `row`. Every W7 workload `KindAction` is now `keyed` with its action; Helm `Roll back…` stays `named`.
+- A menu item of a kind row has no `on_click`: the kit dispatches its key action through the trigger focus, and a right click has moved the cursor to that row, so the menu, the key, and the palette end in one arm of `run_available_row_key`. `row_block` (a paused Deployment does not restart) is checked after the gate, in the menu, the palette entry, and the arm.
+
 ## Feedback for a disabled key
 
 `Disabled { reason }` → `window.push_notification(Notification::warning(text).id::<RowKeyNotice>(), cx)` (`gpui_kit::component::WindowExt`), `text = "{label} is unavailable: {reason}"`, e.g. "Edit YAML is unavailable: Read-only mode". One id, so repeated presses replace the notice instead of stacking. `RowKeyNotice` is a private marker struct. Labels come from one `fn action_label(ResourceAction) -> &'static str` shared with the menus.

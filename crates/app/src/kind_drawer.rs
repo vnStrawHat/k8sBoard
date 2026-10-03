@@ -33,13 +33,15 @@ use crate::helm_rows::VALUES_CHANGE_TITLE;
 use crate::kind_diagnosis::{DiagnosisInputs, KindDiagnosis, kind_diagnosis};
 use crate::kind_join::{matching_pods, service_health_of};
 use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow, LiveContent};
-use crate::live_sections::{helm_history_rows, live_rows, next_run_text, owned_pods};
+use crate::live_sections::{
+    RollBackGate, helm_history_rows, live_rows, loaded_replica_sets, next_run_text, owned_pods,
+};
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
 use crate::resource_actions::{
-    MenuCluster, MenuExtras, OpenUrl, browse_instances_item, kind_menu, open_url_choice,
-    open_url_menu_item, port_forward_reason, secret_menu,
+    MenuCluster, MenuExtras, OpenUrl, ResourceAction, action_availability, browse_instances_item,
+    kind_menu, open_url_choice, open_url_menu_item, port_forward_reason, secret_menu,
 };
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretValuesView, ValueAccess};
@@ -82,7 +84,30 @@ pub(crate) fn kind_drawer(
         DrawerTab::Yaml => yaml_body(state),
         DrawerTab::Values | DrawerTab::Manifest | DrawerTab::Notes => helm_body(state),
         DrawerTab::Overview | DrawerTab::Containers => {
-            DrawerBody::Scrolling(overview(kind, row, live, state, &context.cluster, now, cx))
+            // The Roll back buttons are gated by the cluster of the drawer's own subject.
+            let roll_back = session.read(cx).guard(cx).map(|guard| RollBackGate {
+                subject: ClusterObject::new(context.cluster.clone(), key.clone()),
+                availability: action_availability(ResourceAction::RollBack, &guard),
+            });
+            let paint = DrawerPaint::new(kind, row, live, now)
+                .in_cluster(&context.cluster)
+                .with_roll_back(roll_back)
+                .with_secret_values(state.secret_values.as_ref())
+                .with_helm(state.helm.as_ref(), state.helm_revision);
+            let Overview {
+                sections,
+                revisions_at,
+            } = overview(&paint, cx);
+            // Roll back… asked to see the Revisions, once: the scroll handle moves the box on the
+            // paint this frame ends with.
+            let wants_revisions = state.reveal_revisions.take();
+            if let (true, Some(at)) = (wants_revisions, revisions_at) {
+                state.scroll.scroll_to_top_of_item(at);
+            }
+            DrawerBody::Sections {
+                sections,
+                scroll: state.scroll.clone(),
+            }
         }
     };
     let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
@@ -224,6 +249,7 @@ fn kind_menu_button(
                         guard: &guard,
                         pods: live.pods.items(),
                         context: &context,
+                        replica_sets: loaded_replica_sets(kind, row, live),
                     },
                     &shell,
                     MenuExtras {
@@ -241,47 +267,51 @@ fn kind_menu_button(
 }
 
 /// The row's sections in order, then the related pods, then the labels.
-fn overview(
-    kind: ResourceKind,
-    row: &KindRow,
-    live: &LiveCluster,
-    state: &DrawerState,
-    cluster: &ClusterRef,
-    now: jiff::Timestamp,
-    cx: &Context<AppShell>,
-) -> AnyElement {
-    let paint = DrawerPaint::new(kind, row, live, now)
-        .in_cluster(cluster)
-        .with_secret_values(state.secret_values.as_ref())
-        .with_helm(state.helm.as_ref(), state.helm_revision);
+fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
+    let (kind, row, live, now) = (paint.kind, paint.row, paint.live, paint.now);
     // Gives every element that needs an id one that is unique inside the drawer.
     let mut next_id = 0_usize;
-    let mut column = v_flex();
+    let mut sections: Vec<AnyElement> = Vec::new();
+    let mut revisions_at = None;
     if let Some(diagnosis) = row_diagnosis(row, live, now) {
-        column = column.child(why_box(&diagnosis, cx));
+        sections.push(why_box(&diagnosis, cx));
     }
     for section in &row.sections {
+        if section.title == REVISIONS_TITLE {
+            revisions_at = Some(sections.len());
+        }
         // The values view draws its own heading, which names the revision.
         if section.title != VALUES_CHANGE_TITLE {
-            column = column.child(section_title(section.title, cx));
+            sections.push(section_title(section.title, cx).into_any_element());
         }
         if section.rows.is_empty() {
-            column = column.child(absent_text(cx));
+            sections.push(absent_text(cx).into_any_element());
         }
         for detail in &section.rows {
             next_id += 1;
-            column = column.child(detail_element(detail, next_id, &paint, cx));
+            sections.push(detail_element(detail, next_id, paint, cx));
         }
     }
     if let Some(owner) = &row.related_pods {
-        column = column.child(pods_section(owner, &row.object, live, cx));
+        sections.push(pods_section(owner, &row.object, live, cx));
     }
     if kind.has_labels() {
-        column = column
-            .child(section_title("Labels", cx))
-            .child(chips(&row.labels, cx));
+        sections.push(section_title("Labels", cx).into_any_element());
+        sections.push(chips(&row.labels, cx));
     }
-    column.into_any_element()
+    Overview {
+        sections,
+        revisions_at,
+    }
+}
+
+/// The title of the Deployment section that lists the revisions with their Roll back buttons.
+const REVISIONS_TITLE: &str = "Revisions";
+
+/// The overview of a row as the drawer's sections, and where the Revisions start among them.
+struct Overview {
+    sections: Vec<AnyElement>,
+    revisions_at: Option<usize>,
 }
 
 /// The WHY box of the row, read from its object, its owned pods (a Service's matching pods), and
@@ -381,6 +411,8 @@ pub(crate) struct DrawerPaint<'a> {
     helm_revision: Option<u32>,
     /// The cluster of the drawer: the views above belong to one cluster's object.
     cluster: Option<&'a ClusterRef>,
+    /// The gate of the Roll back buttons of a Deployment's revisions.
+    roll_back: Option<RollBackGate>,
 }
 
 impl<'a> DrawerPaint<'a> {
@@ -400,6 +432,7 @@ impl<'a> DrawerPaint<'a> {
             helm: None,
             helm_revision: None,
             cluster: None,
+            roll_back: None,
         }
     }
 }
@@ -407,6 +440,11 @@ impl<'a> DrawerPaint<'a> {
 impl<'a> DrawerPaint<'a> {
     fn in_cluster(mut self, cluster: &'a ClusterRef) -> Self {
         self.cluster = Some(cluster);
+        self
+    }
+
+    fn with_roll_back(mut self, gate: Option<RollBackGate>) -> Self {
+        self.roll_back = gate;
         self
     }
 
@@ -483,7 +521,13 @@ fn detail_element(
             .into_any_element(),
         DetailRow::Live(content) => v_flex()
             .children(live_rows(
-                *content, paint.kind, paint.row, paint.live, now, cx,
+                *content,
+                paint.kind,
+                paint.row,
+                paint.live,
+                now,
+                paint.roll_back.as_ref(),
+                cx,
             ))
             .into_any_element(),
         DetailRow::Field { label, value } => {

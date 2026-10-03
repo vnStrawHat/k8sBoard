@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use cluster::{
     AccessCheck, AccessDecision, AccessReport, AccessReview, ContainerKind, ContainerState,
-    NamespacePhase, NodeReadiness, NodeScheduling, NodeStatus, PodStatus, StatusReason,
+    NamespacePhase, NodeReadiness, NodeScheduling, NodeStatus, PodStatus, ReplicaSetSummary,
+    StatusReason,
 };
 
 use super::*;
@@ -157,6 +158,7 @@ struct World {
     pods: Vec<PodSummary>,
     nodes: Vec<NodeSummary>,
     kind_rows: Option<(ResourceKind, Vec<KindRow>)>,
+    replica_sets: Option<Vec<ReplicaSetSummary>>,
     sections: Vec<SwitcherSection>,
 }
 
@@ -169,6 +171,7 @@ impl World {
             pods: vec![pod("shop", "payments-api-0")],
             nodes: vec![node("node-1")],
             kind_rows: None,
+            replica_sets: None,
             sections: Vec::new(),
         }
     }
@@ -192,6 +195,7 @@ impl World {
                     .kind_rows
                     .as_ref()
                     .map(|(kind, rows)| (*kind, rows.as_slice())),
+                replica_sets: self.replica_sets.as_deref(),
             }],
             clusters: &self.sections,
         }
@@ -550,18 +554,24 @@ fn no_cursor_offers_no_row_actions() {
 }
 
 #[test]
-fn mutating_row_actions_are_never_enabled() {
+fn unshipped_row_actions_are_never_enabled() {
     let world = World::new();
     let key = deployment_key("payments-api");
     for entry in palette_entries(&world.input(Screen::Pods, Some(&key))) {
         let PaletteTarget::RowAction(action) = entry.target else {
             continue;
         };
-        let is_read_only = matches!(
+        // The read-only actions, and the workload actions whose spec has shipped.
+        let is_available = matches!(
             action,
-            RowAction::ViewLogs | RowAction::ViewYaml | RowAction::CopyName
+            RowAction::ViewLogs
+                | RowAction::ViewYaml
+                | RowAction::CopyName
+                | RowAction::RestartRollout
+                | RowAction::PauseRollout
+                | RowAction::Scale
         );
-        assert_eq!(entry.is_enabled(), is_read_only, "{action:?}");
+        assert_eq!(entry.is_enabled(), is_available, "{action:?}");
     }
 }
 
@@ -765,5 +775,46 @@ fn only_text_in_all_mode_lists_resources() {
     assert!(!lists_resources(&parse_query("")));
     for raw in [":pay", "@pay", "#pay", "> pay"] {
         assert!(!lists_resources(&parse_query(raw)), "{raw}");
+    }
+}
+
+/// A Deployments list with one row, paused or not, in the world of a test.
+fn world_with_deployment(is_paused: bool) -> World {
+    let mut summary = crate::workload_actions::workload_actions_tests::deployment("payments-api");
+    summary.namespace = "shop".to_owned();
+    summary.is_paused = is_paused;
+    let mut world = World::new();
+    world.kind_rows = Some((
+        ResourceKind::Deployments,
+        vec![crate::workload_rows::deployment_row(&summary)],
+    ));
+    world
+}
+
+#[test]
+fn a_paused_deployment_offers_resume_and_blocks_restart() {
+    let world = world_with_deployment(true);
+    let key = deployment_key("payments-api");
+    let all = palette_entries(&world.input(Screen::Kind(ResourceKind::Deployments), Some(&key)));
+    let entry = |label: &str| all.iter().find(|entry| entry.label.as_ref() == label);
+    let restart = entry("Restart rollout").expect("Restart rollout is listed");
+    assert_eq!(reason_of(restart), Some("Resume the rollout first"));
+    // The pause entry reads as the way out, and it is enabled.
+    let resume = entry("Resume rollout").expect("Resume rollout is listed");
+    assert_eq!(reason_of(resume), None);
+    assert!(entry("Pause rollout").is_none());
+}
+
+#[test]
+fn a_running_deployment_offers_pause_and_restart() {
+    let world = world_with_deployment(false);
+    let key = deployment_key("payments-api");
+    let all = palette_entries(&world.input(Screen::Kind(ResourceKind::Deployments), Some(&key)));
+    for label in ["Restart rollout", "Pause rollout"] {
+        let entry = all
+            .iter()
+            .find(|entry| entry.label.as_ref() == label)
+            .unwrap_or_else(|| panic!("{label} is listed"));
+        assert_eq!(reason_of(entry), None, "{label}");
     }
 }

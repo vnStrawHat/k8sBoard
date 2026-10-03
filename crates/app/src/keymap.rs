@@ -41,6 +41,16 @@ gpui_kit::actions!(
         RestartRollout,
         Scale,
         Delete,
+        // Unbound unless the wireframe gives them a key: menus and the palette dispatch them.
+        PauseRollout,
+        RollBack,
+        SuspendCronJob,
+        TriggerCronJob,
+        RerunJob,
+        // The value popover and the palette argument (0032): Escape steps back one level.
+        CancelValuePopover,
+        ScaleCursorRow,
+        LeavePaletteArgument,
         OpenNamespacePicker,
         ToggleDock,
         ToggleDockZoom,
@@ -76,6 +86,12 @@ const TERMINAL_FIND_INPUT: &str = "ShellFind > Input";
 /// The content of the confirm dialog, and the text field inside it.
 const WRITE_CONFIRM: &str = "WriteConfirm";
 const WRITE_CONFIRM_INPUT: &str = "WriteConfirm > Input";
+/// The Scale popover, and the text field inside it.
+const VALUE_POPOVER: &str = "ValuePopover";
+const VALUE_POPOVER_INPUT: &str = "ValuePopover > Input";
+/// The palette's inline argument (the replicas of Scale), and the text field inside it.
+const PALETTE_ARGUMENT: &str = "PaletteArgument";
+const PALETTE_ARGUMENT_INPUT: &str = "PaletteArgument > Input";
 
 /// Registers every binding of the app except the switcher popover's own keys
 /// (`cluster_switcher::bind_keys`). It runs after `gpui_kit::init`, so at equal depth these win
@@ -142,6 +158,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         // The palette: Tab previews the highlighted resource, which the kit would otherwise use to
         // move focus out of the query.
         KeyBinding::new("tab", PalettePreview, Some(PALETTE_INPUT)),
+        // Ctrl Enter on a Scale entry turns the query into a replicas field (0032).
+        KeyBinding::new("secondary-enter", ScaleCursorRow, Some(PALETTE_INPUT)),
     ]);
     // The confirm dialog handles Enter itself (a held Enter must never confirm), so the kit's Enter
     // bindings of the dialog and of its text field are switched off inside it.
@@ -149,6 +167,18 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", gpui_kit::NoAction, Some(FRESH_ENTER)),
         KeyBinding::new("enter", gpui_kit::NoAction, Some(WRITE_CONFIRM)),
         KeyBinding::new("enter", gpui_kit::NoAction, Some(WRITE_CONFIRM_INPUT)),
+    ]);
+    // Escape in the popover and in the palette argument steps back one level, text field included:
+    // the kit binds Escape inside its own `Input`, which would otherwise win.
+    cx.bind_keys([
+        KeyBinding::new("escape", CancelValuePopover, Some(VALUE_POPOVER)),
+        KeyBinding::new("escape", CancelValuePopover, Some(VALUE_POPOVER_INPUT)),
+        KeyBinding::new("escape", LeavePaletteArgument, Some(PALETTE_ARGUMENT)),
+        KeyBinding::new("escape", LeavePaletteArgument, Some(PALETTE_ARGUMENT_INPUT)),
+        // The palette argument handles Enter itself, once: the kit Dialog's Enter would close the
+        // palette in the same key press, before the number is read.
+        KeyBinding::new("enter", gpui_kit::NoAction, Some(PALETTE_ARGUMENT)),
+        KeyBinding::new("enter", gpui_kit::NoAction, Some(PALETTE_ARGUMENT_INPUT)),
     ]);
     cx.bind_keys(
         FIELDS

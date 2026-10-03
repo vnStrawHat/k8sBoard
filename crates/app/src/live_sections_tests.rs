@@ -1422,3 +1422,107 @@ fn can_do_coverage_warning() {
         ["ClusterRoleBindings were not listed; only namespace grants are shown."]
     );
 }
+
+// ---- Roll back buttons ----
+
+fn gate(availability: ActionAvailability) -> RollBackGate {
+    let cluster = crate::cluster_registry::ClusterRef {
+        kubeconfig: std::path::PathBuf::from("test.yaml"),
+        context: "stg-b".to_owned(),
+    };
+    RollBackGate {
+        subject: ClusterObject::new(
+            cluster,
+            ResourceKey::Kind {
+                kind: ResourceKind::Deployments,
+                namespace: Some("team-a".to_owned()),
+                name: "api".to_owned(),
+            },
+        ),
+        availability,
+    }
+}
+
+fn button_of(
+    deployment: &DeploymentSummary,
+    sets: &[ReplicaSetSummary],
+    wanted: &str,
+    gate: Option<&RollBackGate>,
+) -> RollBackButton {
+    let revisions = revision_rows(deployment, sets);
+    let revision = revisions
+        .iter()
+        .find(|revision| revision.replica_set.name == wanted)
+        .expect("the revision is listed");
+    roll_back_button(deployment, revision, gate)
+}
+
+fn disabled_reason(button: RollBackButton) -> String {
+    match button {
+        RollBackButton::Disabled(reason) => reason.to_string(),
+        RollBackButton::Enabled(..) => panic!("expected a disabled button"),
+    }
+}
+
+#[test]
+fn revision_roll_back_button_follows_the_gate() {
+    let sets = [
+        replica_set("api-new", Some("38"), owner("Deployment", "api")),
+        replica_set("api-old", Some("37"), owner("Deployment", "api")),
+        replica_set("api-unnumbered", None, owner("Deployment", "api")),
+    ];
+    let running = deployment(Some("38"));
+    let open = gate(ActionAvailability::Enabled);
+    match button_of(&running, &sets, "api-old", Some(&open)) {
+        RollBackButton::Enabled(subject, target) => {
+            assert_eq!(subject, open.subject);
+            assert_eq!(target.replica_set, "api-old");
+            assert_eq!(target.revision, 37);
+            assert_eq!(target.tag.as_deref(), Some("1.4.2"));
+        }
+        RollBackButton::Disabled(reason) => panic!("disabled: {reason}"),
+    }
+    // The gate of the drawer's cluster speaks first: a denied right, a locked cluster.
+    for reason in ["Not permitted: patch deployments", "stg-b is read-only"] {
+        let closed = gate(ActionAvailability::Disabled {
+            reason: reason.into(),
+        });
+        assert_eq!(
+            disabled_reason(button_of(&running, &sets, "api-old", Some(&closed))),
+            reason
+        );
+    }
+    // Without a gate (the session has no guard yet) there is nothing to run on.
+    assert_eq!(
+        disabled_reason(button_of(&running, &sets, "api-old", None)),
+        "Not connected"
+    );
+    // A ReplicaSet with no revision number cannot be named.
+    assert_eq!(
+        disabled_reason(button_of(&running, &sets, "api-unnumbered", Some(&open))),
+        "This ReplicaSet has no revision number"
+    );
+    // A paused rollout refuses a roll back, as kubectl does.
+    let mut paused = running.clone();
+    paused.is_paused = true;
+    assert_eq!(
+        disabled_reason(button_of(&paused, &sets, "api-old", Some(&open))),
+        "Resume the rollout first"
+    );
+}
+
+#[test]
+fn no_button_on_the_current_revision() {
+    let sets = [
+        replica_set("api-new", Some("38"), owner("Deployment", "api")),
+        replica_set("api-old", Some("37"), owner("Deployment", "api")),
+    ];
+    let revisions = revision_rows(&deployment(Some("38")), &sets);
+    // `revision_element` draws the button only on the rows that are not current.
+    let with_button: Vec<&str> = revisions
+        .iter()
+        .filter(|revision| !revision.is_current)
+        .map(|revision| revision.replica_set.name.as_str())
+        .collect();
+    assert_eq!(with_button, ["api-old"]);
+}

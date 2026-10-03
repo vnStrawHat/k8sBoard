@@ -284,8 +284,6 @@ fn unshipped_mutating_actions_say_a_later_version() {
             ResourceAction::Drain,
             ResourceAction::EditYaml,
             ResourceAction::Delete,
-            ResourceAction::RestartRollout,
-            ResourceAction::Scale,
         ] {
             assert_eq!(
                 reason(action_availability(action, &unlocked(&access))),
@@ -1213,11 +1211,6 @@ fn key_availability_disables_unshipped_keys_with_the_later_version_reason() {
         (RowAction::EditYaml, pod_key()),
         (RowAction::Delete, pod_key()),
         (RowAction::Drain, node_key()),
-        (
-            RowAction::RestartRollout,
-            kind_key(ResourceKind::Deployments),
-        ),
-        (RowAction::Scale, kind_key(ResourceKind::Deployments)),
     ];
     for (action, subject) in offered {
         assert_eq!(
@@ -1309,10 +1302,20 @@ fn a_helm_release_has_no_yaml_key() {
 
 #[test]
 fn subject_action_resolves_the_carried_kind() {
-    // `Scale` carries no kind yet, so the kind table decides only whether it is offered.
     assert_eq!(
         subject_action(RowAction::Scale, &kind_key(ResourceKind::Deployments)),
-        Some(ResourceAction::Scale)
+        Some(ResourceAction::Scale(ObjectKind::Deployment))
+    );
+    assert_eq!(
+        subject_action(RowAction::Scale, &kind_key(ResourceKind::StatefulSets)),
+        Some(ResourceAction::Scale(ObjectKind::StatefulSet))
+    );
+    assert_eq!(
+        subject_action(
+            RowAction::RestartRollout,
+            &kind_key(ResourceKind::DaemonSets)
+        ),
+        Some(ResourceAction::RestartRollout(ObjectKind::DaemonSet))
     );
     assert_eq!(
         subject_action(RowAction::Scale, &kind_key(ResourceKind::DaemonSets)),
@@ -1343,10 +1346,30 @@ fn every_resource_action_has_a_row_action() {
         (ResourceAction::EditYaml, pod_key()),
         (ResourceAction::Delete, pod_key()),
         (
-            ResourceAction::RestartRollout,
+            ResourceAction::RestartRollout(ObjectKind::Deployment),
             kind_key(ResourceKind::Deployments),
         ),
-        (ResourceAction::Scale, kind_key(ResourceKind::Deployments)),
+        (
+            ResourceAction::Scale(ObjectKind::Deployment),
+            kind_key(ResourceKind::Deployments),
+        ),
+        (
+            ResourceAction::PauseRollout,
+            kind_key(ResourceKind::Deployments),
+        ),
+        (
+            ResourceAction::RollBack,
+            kind_key(ResourceKind::Deployments),
+        ),
+        (
+            ResourceAction::SuspendCronJob,
+            kind_key(ResourceKind::CronJobs),
+        ),
+        (
+            ResourceAction::TriggerCronJob,
+            kind_key(ResourceKind::CronJobs),
+        ),
+        (ResourceAction::RerunJob, kind_key(ResourceKind::Jobs)),
     ];
     for (action, subject) in subjects {
         assert_eq!(
@@ -1436,6 +1459,39 @@ fn open_shell_needs_get_and_create() {
     assert_eq!(
         reason(at(&allowed, WriteLock::Locked)),
         "dev-1 is read-only"
+    );
+}
+
+// ---- Workload actions (0032) ----
+
+#[test]
+fn gate_reads_the_carried_kind() {
+    let denied_sets = known_denying(&[AccessCheck::PatchStatefulSets]);
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::RestartRollout(ObjectKind::StatefulSet),
+            &unlocked(&denied_sets)
+        )),
+        "Not permitted: patch statefulsets"
+    );
+    // The same denial does not touch the other kinds.
+    for kind in [ObjectKind::Deployment, ObjectKind::DaemonSet] {
+        assert_eq!(
+            action_availability(
+                ResourceAction::RestartRollout(kind),
+                &unlocked(&denied_sets)
+            ),
+            ActionAvailability::Enabled,
+            "{kind:?}"
+        );
+    }
+    // A kind that does not restart has no check, so it is never enabled.
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::RestartRollout(ObjectKind::Service),
+            &unlocked(&known_denying(&[]))
+        )),
+        "Comes in a later version"
     );
 }
 
@@ -1605,6 +1661,167 @@ fn the_shell_menu_reads_the_gate_of_the_pods_own_cluster() {
 }
 
 #[test]
+fn scale_gate_reads_the_carried_kind() {
+    let denied = known_denying(&[AccessCheck::PatchStatefulSetScale]);
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::Scale(ObjectKind::StatefulSet),
+            &unlocked(&denied)
+        )),
+        "Not permitted: patch statefulsets/scale"
+    );
+    assert_eq!(
+        action_availability(
+            ResourceAction::Scale(ObjectKind::Deployment),
+            &unlocked(&denied)
+        ),
+        ActionAvailability::Enabled
+    );
+    let denied = known_denying(&[AccessCheck::PatchDeploymentScale]);
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::Scale(ObjectKind::Deployment),
+            &unlocked(&denied)
+        )),
+        "Not permitted: patch deployments/scale"
+    );
+    // A kind that does not scale is never enabled.
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::Scale(ObjectKind::DaemonSet),
+            &unlocked(&known_denying(&[]))
+        )),
+        "Comes in a later version"
+    );
+}
+
+#[test]
+fn every_shipped_workload_action_has_its_own_check() {
+    let cases = [
+        (
+            ResourceAction::RestartRollout(ObjectKind::Deployment),
+            AccessCheck::PatchDeployments,
+        ),
+        (
+            ResourceAction::RestartRollout(ObjectKind::DaemonSet),
+            AccessCheck::PatchDaemonSets,
+        ),
+        (ResourceAction::PauseRollout, AccessCheck::PatchDeployments),
+        (ResourceAction::RollBack, AccessCheck::PatchDeployments),
+        (ResourceAction::SuspendCronJob, AccessCheck::PatchCronJobs),
+        (ResourceAction::TriggerCronJob, AccessCheck::CreateJobs),
+        (ResourceAction::RerunJob, AccessCheck::CreateJobs),
+    ];
+    for (action, check) in cases {
+        let denied = known_denying(&[check]);
+        assert_eq!(
+            reason(action_availability(action, &unlocked(&denied))),
+            format!("Not permitted: {check}"),
+            "{action:?}"
+        );
+        assert_eq!(
+            action_availability(action, &unlocked(&known_denying(&[]))),
+            ActionAvailability::Enabled,
+            "{action:?}"
+        );
+    }
+}
+
+fn paused_deployment() -> KindObject {
+    let mut deployment = crate::workload_actions::workload_actions_tests::deployment("api");
+    deployment.is_paused = true;
+    KindObject::Deployment(deployment)
+}
+
+#[test]
+fn gate_order_then_row_block() {
+    let allowed = known_denying(&[]);
+    let restart = ResourceAction::RestartRollout(ObjectKind::Deployment);
+    let paused = paused_deployment();
+    let guard_at = |access, lock| test_guard(access, lock, "dev-1", Environment::Development);
+    // Locked wins over paused: the lock is what the user can change first.
+    assert_eq!(
+        reason(row_availability(
+            restart,
+            &guard_at(&allowed, WriteLock::Locked),
+            &paused,
+            None
+        )),
+        "dev-1 is read-only"
+    );
+    assert_eq!(
+        reason(row_availability(
+            restart,
+            &guard_at(&allowed, WriteLock::Unlocked),
+            &paused,
+            None
+        )),
+        "Resume the rollout first"
+    );
+    let denied = known_denying(&[AccessCheck::PatchDeployments]);
+    assert_eq!(
+        reason(row_availability(
+            restart,
+            &guard_at(&denied, WriteLock::Unlocked),
+            &paused,
+            None
+        )),
+        "Not permitted: patch deployments"
+    );
+    let running = KindObject::Deployment(
+        crate::workload_actions::workload_actions_tests::deployment("api"),
+    );
+    assert_eq!(
+        row_availability(
+            restart,
+            &guard_at(&allowed, WriteLock::Unlocked),
+            &running,
+            None
+        ),
+        ActionAvailability::Enabled
+    );
+}
+
+#[test]
+fn actions_not_offered_for_other_kinds() {
+    let access = known_denying(&[]);
+    let offers = |kind: ResourceKind, action: RowAction| {
+        availability(action, &kind_key(kind), &access) != KeyAvailability::NotOffered
+    };
+    assert!(offers(ResourceKind::Deployments, RowAction::PauseRollout));
+    assert!(offers(ResourceKind::Deployments, RowAction::RollBack));
+    assert!(!offers(ResourceKind::StatefulSets, RowAction::PauseRollout));
+    assert!(!offers(ResourceKind::StatefulSets, RowAction::RollBack));
+    assert!(offers(ResourceKind::CronJobs, RowAction::TriggerCronJob));
+    assert!(offers(ResourceKind::CronJobs, RowAction::SuspendCronJob));
+    assert!(!offers(ResourceKind::Jobs, RowAction::TriggerCronJob));
+    assert!(offers(ResourceKind::Jobs, RowAction::RerunJob));
+    assert!(!offers(ResourceKind::CronJobs, RowAction::RerunJob));
+    // Pods and nodes carry no workload action at all.
+    for subject in [pod_key(), node_key()] {
+        for row in [RowAction::RestartRollout, RowAction::RerunJob] {
+            assert_eq!(
+                availability(row, &subject, &access),
+                KeyAvailability::NotOffered
+            );
+        }
+    }
+}
+
+#[test]
+fn restart_runs_on_a_deployment_row_once_unlocked() {
+    let access = known_denying(&[]);
+    assert_eq!(
+        availability(
+            RowAction::RestartRollout,
+            &kind_key(ResourceKind::Deployments),
+            &access
+        ),
+        KeyAvailability::Run(ResourceAction::RestartRollout(ObjectKind::Deployment))
+    );
+}
+
+#[test]
 fn s_opens_the_first_running_main_container_else_the_first_running_one() {
     let pod = pod_with(vec![
         container("proxy", ContainerKind::Sidecar, true),
@@ -1628,4 +1845,26 @@ fn s_opens_the_first_running_main_container_else_the_first_running_one() {
     assert!(default_shell_container(&none_running).is_none());
     let init_only = pod_with(vec![container("init", ContainerKind::Init, true)]);
     assert!(default_shell_container(&init_only).is_none());
+}
+
+#[test]
+fn every_new_row_action_has_a_unit_key_action() {
+    use crate::keymap::{PauseRollout, RerunJob, RollBack, SuspendCronJob, TriggerCronJob};
+    assert!(
+        RowAction::PauseRollout
+            .key_action()
+            .partial_eq(&PauseRollout)
+    );
+    assert!(RowAction::RollBack.key_action().partial_eq(&RollBack));
+    assert!(
+        RowAction::SuspendCronJob
+            .key_action()
+            .partial_eq(&SuspendCronJob)
+    );
+    assert!(
+        RowAction::TriggerCronJob
+            .key_action()
+            .partial_eq(&TriggerCronJob)
+    );
+    assert!(RowAction::RerunJob.key_action().partial_eq(&RerunJob));
 }

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -11,7 +12,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, Div, ElementId, Entity, InteractiveElement as _,
-    IntoElement, ParentElement as _, Pixels, SharedString, Stateful,
+    IntoElement, ParentElement as _, Pixels, ScrollHandle, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
@@ -71,6 +72,11 @@ pub(crate) struct DrawerState {
     /// The cluster of the subject while several clusters are viewed; `None` in single mode.
     /// `AppShell::sync_drawer_cluster` keeps it.
     pub(crate) cluster: Option<DrawerCluster>,
+    /// The scroll position of the body of an overview drawer, so a menu can move it.
+    pub(crate) scroll: ScrollHandle,
+    /// Roll back… asked for the Revisions section: the next paint of the drawer scrolls to it and
+    /// clears the flag. A `Cell` because painting reads the state and never writes it.
+    pub(crate) reveal_revisions: Cell<bool>,
 }
 
 /// The badge and the label that name the cluster of a drawer in multi mode.
@@ -96,6 +102,8 @@ impl DrawerState {
             pending_helm_layout: None,
             monitor: MonitorState::new(),
             cluster: None,
+            scroll: ScrollHandle::new(),
+            reveal_revisions: Cell::new(false),
         }
     }
 
@@ -387,6 +395,12 @@ pub(crate) enum DrawerBody {
     Scrolling(AnyElement),
     /// Fills the rest with no padding; the content (the code editor) scrolls itself.
     Filling(AnyElement),
+    /// Scrolled like `Scrolling`, but the sections are the direct children of the scrolled box, so
+    /// `scroll` can bring one of them to the top (Roll back… shows the Revisions).
+    Sections {
+        sections: Vec<AnyElement>,
+        scroll: ScrollHandle,
+    },
 }
 
 /// The shared frame: header, subtitle, optional tab bar, and the body. It is a
@@ -429,6 +443,15 @@ pub(crate) fn drawer_frame(
                 .flex_1()
                 .min_h_0()
                 .child(body)
+                .into_any_element(),
+            DrawerBody::Sections { sections, scroll } => v_flex()
+                .id("drawer-body")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&scroll)
+                .p_4()
+                .children(sections)
                 .into_any_element(),
         })
 }

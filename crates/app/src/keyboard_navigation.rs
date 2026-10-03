@@ -17,17 +17,19 @@ use crate::dock::{DockMode, TabStep};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
     CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditYaml, LeaveInput, NextContainer,
-    NextDockTab, OpenDrawer, OpenShell, PortForward, PreviousContainer, PreviousDockTab,
-    RestartRollout, Scale, SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow,
-    SelectPreviousPage, SelectPreviousRow, ToggleDock, ToggleDockZoom, ToggleReadOnly, ViewLogs,
-    ViewYaml,
+    NextDockTab, OpenDrawer, OpenShell, PauseRollout, PortForward, PreviousContainer,
+    PreviousDockTab, RerunJob, RestartRollout, RollBack, Scale, SelectFirstRow, SelectLastRow,
+    SelectNextPage, SelectNextRow, SelectPreviousPage, SelectPreviousRow, SuspendCronJob,
+    ToggleDock, ToggleDockZoom, ToggleReadOnly, TriggerCronJob, ViewLogs, ViewYaml,
 };
+use crate::live_sections::loaded_replica_sets;
 use crate::pod_drawer::{container_display_order, selected_container_index};
 use crate::resource_actions::{
     KeyAvailability, ResourceAction, RowAction, action_label, key_availability, subject_action,
     unavailable_text,
 };
 use crate::table_selection::{ClusterObject, ResourceKey};
+use crate::workload_actions::{row_block, state_label};
 
 /// How a row-move key changes the cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,6 +190,11 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_row_key::<EditYaml>(root, RowAction::EditYaml, cx);
     let root = on_row_key::<RestartRollout>(root, RowAction::RestartRollout, cx);
     let root = on_row_key::<Scale>(root, RowAction::Scale, cx);
+    let root = on_row_key::<PauseRollout>(root, RowAction::PauseRollout, cx);
+    let root = on_row_key::<RollBack>(root, RowAction::RollBack, cx);
+    let root = on_row_key::<SuspendCronJob>(root, RowAction::SuspendCronJob, cx);
+    let root = on_row_key::<TriggerCronJob>(root, RowAction::TriggerCronJob, cx);
+    let root = on_row_key::<RerunJob>(root, RowAction::RerunJob, cx);
     on_row_key::<Delete>(root, RowAction::Delete, cx)
 }
 
@@ -403,6 +410,34 @@ impl AppShell {
         cx.write_to_clipboard(ClipboardItem::new_string(name));
     }
 
+    /// Roll back…: the drawer of the cursor row on its Overview, scrolled to the Revisions, where
+    /// the Roll back buttons are. The scroll happens on the next paint of the drawer. A row the
+    /// state blocks (paused, revisions not loaded, no older one) says why instead: a disabled menu
+    /// item dispatches this too.
+    fn show_revisions(
+        &mut self,
+        subject: &ClusterObject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let blocked = self.slot_live(&subject.cluster, cx).and_then(|live| {
+            let ResourceKey::Kind { kind, .. } = &subject.key else {
+                return None;
+            };
+            let row = live.row_of(&subject.key)?;
+            let replica_sets = loaded_replica_sets(*kind, row, live);
+            row_block(ResourceAction::RollBack, &row.object, replica_sets)
+        });
+        if let Some(reason) = blocked {
+            let text = unavailable_text(action_label(ResourceAction::RollBack), &reason);
+            window.push_notification(Notification::warning(text).id::<RowKeyNotice>(), cx);
+            return;
+        }
+        self.drawer.tab = DrawerTab::Overview;
+        self.drawer.reveal_revisions.set(true);
+        self.set_drawer_open(true, cx);
+    }
+
     /// A single-letter row action on the cursor row, drawer open or closed. A key the subject
     /// does not offer does nothing; an offered but unavailable one says why.
     pub(crate) fn run_row_key(
@@ -427,7 +462,11 @@ impl AppShell {
                 let Some(action) = subject_action(row, &subject.key) else {
                     return;
                 };
-                let label = action_label(action);
+                let label = live
+                    .row_of(&subject.key)
+                    .map_or(action_label(action), |row| {
+                        state_label(action, action_label(action), &row.object)
+                    });
                 let text = unavailable_text(label, &reason);
                 window.push_notification(Notification::warning(text).id::<RowKeyNotice>(), cx);
             }
@@ -435,9 +474,9 @@ impl AppShell {
         }
     }
 
-    /// What an available key does. Cordon and the pod shell are the mutating actions that have
-    /// shipped: every other mutating action stays disabled, so their arms are unreachable until the
-    /// owning spec wires them. The match is exhaustive so a new action cannot be forgotten.
+    /// What an available key does. A mutating action that has not shipped stays disabled, so its arm is
+    /// unreachable until the owning spec wires it. The match is exhaustive so a new action cannot be
+    /// forgotten.
     fn run_available_row_key(
         &mut self,
         action: ResourceAction,
@@ -466,8 +505,15 @@ impl AppShell {
             ResourceAction::Drain => {}
             // Unreachable while gated; the owning spec (0031–0036) wires it.
             ResourceAction::EditYaml | ResourceAction::Delete => {}
-            // Unreachable while gated; the owning spec (0031–0036) wires it.
-            ResourceAction::RestartRollout | ResourceAction::Scale => {}
+            // Each builds its intent from the cursor row and opens the confirm dialog.
+            ResourceAction::RestartRollout(_)
+            | ResourceAction::PauseRollout
+            | ResourceAction::SuspendCronJob
+            | ResourceAction::TriggerCronJob
+            | ResourceAction::RerunJob => self.start_workload_action(action, &subject, window, cx),
+            ResourceAction::Scale(_) => self.open_scale_popover(&subject, window, cx),
+            // The buttons are in the drawer, so Roll back… takes the user to the revisions.
+            ResourceAction::RollBack => self.show_revisions(&subject, window, cx),
         }
     }
 }

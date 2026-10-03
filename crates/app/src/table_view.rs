@@ -350,6 +350,15 @@ impl TableView {
         self.anchor = None;
     }
 
+    /// The items that are shown and ticked, in display order: what a bulk action changes.
+    pub(crate) fn checked_rows<T: TableRow>(&self, items: &[T]) -> Vec<usize> {
+        self.rows
+            .iter()
+            .copied()
+            .filter(|&index| self.is_checked(&items[index]))
+            .collect()
+    }
+
     /// The item indices to show, in order.
     pub(crate) fn rows(&self) -> &[usize] {
         &self.rows

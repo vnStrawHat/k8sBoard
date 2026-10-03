@@ -1,0 +1,887 @@
+use std::path::PathBuf;
+
+use cluster::{
+    CronJobSummary, CronSchedule, DaemonSetSummary, DeploymentSummary, JobStatus, JobSummary,
+    ReplicaSetSummary, StatefulSetSummary, WriteOperation,
+};
+
+use super::*;
+use crate::app_shell::batch_write::CheckedRow;
+use crate::write_guard::ActionRisk;
+
+pub(crate) fn test_cluster() -> ClusterRef {
+    ClusterRef {
+        kubeconfig: PathBuf::from("/home/me/.kube/config"),
+        context: "stg-ctx".to_owned(),
+    }
+}
+
+pub(crate) fn deployment(name: &str) -> DeploymentSummary {
+    DeploymentSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        desired: 3,
+        ready: 2,
+        up_to_date: 3,
+        available: 2,
+        strategy: "RollingUpdate".to_owned(),
+        max_surge: None,
+        max_unavailable: None,
+        progress_deadline_seconds: 600,
+        is_paused: false,
+        revision: Some("7".to_owned()),
+        selector: vec!["app=api".to_owned()],
+        containers: Vec::new(),
+        conditions: Vec::new(),
+    }
+}
+
+pub(crate) fn stateful_set(name: &str, update_strategy: &str) -> StatefulSetSummary {
+    StatefulSetSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        desired: 3,
+        ready: 3,
+        current: 3,
+        updated: 3,
+        service_name: None,
+        update_strategy: update_strategy.to_owned(),
+        pod_management_policy: "OrderedReady".to_owned(),
+        selector: Vec::new(),
+        containers: Vec::new(),
+        claim_templates: Vec::new(),
+        claim_retention: None,
+    }
+}
+
+fn daemon_set(name: &str, update_strategy: &str) -> DaemonSetSummary {
+    DaemonSetSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        desired: 4,
+        current: 4,
+        ready: 4,
+        up_to_date: 4,
+        available: 4,
+        misscheduled: 0,
+        node_selector: Vec::new(),
+        update_strategy: update_strategy.to_owned(),
+        selector: Vec::new(),
+        containers: Vec::new(),
+    }
+}
+
+pub(crate) fn cron_job(name: &str, policy: &str, active: usize) -> CronJobSummary {
+    CronJobSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        schedule: "*/5 * * * *".to_owned(),
+        time_zone: None,
+        timetable: CronSchedule::parse("*/5 * * * *", None),
+        is_suspended: false,
+        concurrency_policy: policy.to_owned(),
+        starting_deadline_seconds: None,
+        successful_history_limit: None,
+        failed_history_limit: None,
+        active_jobs: (0..active).map(|index| format!("{name}-{index}")).collect(),
+        last_schedule_at: None,
+        last_success_at: None,
+        containers: Vec::new(),
+    }
+}
+
+pub(crate) fn job(name: &str) -> JobSummary {
+    JobSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        status: JobStatus::Complete,
+        completions: Some(1),
+        parallelism: Some(1),
+        succeeded: 1,
+        failed: 0,
+        active: 0,
+        backoff_limit: None,
+        active_deadline_seconds: None,
+        ttl_seconds_after_finished: None,
+        started_at: None,
+        finished_at: None,
+        owner: None,
+        conditions: Vec::new(),
+        containers: Vec::new(),
+    }
+}
+
+fn now() -> jiff::Timestamp {
+    jiff::Timestamp::from_second(1_790_000_000).expect("a valid timestamp")
+}
+
+/// The intent of `action` on `object` in the test cluster.
+fn intent(action: ResourceAction, object: &KindObject) -> WriteIntent {
+    let cluster = test_cluster();
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    workload_intent(action, &scope, object, now()).expect("an intent")
+}
+
+fn restart_of(kind: ObjectKind) -> ResourceAction {
+    ResourceAction::RestartRollout(kind)
+}
+
+fn warnings(intent: &WriteIntent) -> Vec<&str> {
+    intent.warnings.iter().map(AsRef::as_ref).collect()
+}
+
+#[test]
+fn restart_names_the_object_and_changes_one_field() {
+    let object = KindObject::StatefulSet(stateful_set("kafka", "RollingUpdate"));
+    let intent = intent(restart_of(ObjectKind::StatefulSet), &object);
+    assert_eq!(intent.label, "Restart rollout of statefulset kafka");
+    assert_eq!(intent.button, "Restart");
+    assert_eq!(intent.risk, ActionRisk::Change);
+    assert_eq!(intent.cluster, test_cluster());
+    assert_eq!(intent.cluster_name, "stg-b");
+    assert_eq!(intent.request.target().name(), "kafka");
+    assert_eq!(intent.request.target().namespace(), Some("team-a"));
+    assert!(intent.warnings.is_empty());
+}
+
+#[test]
+fn restart_timestamp_is_whole_seconds() {
+    let object = KindObject::Deployment(deployment("api"));
+    let cluster = test_cluster();
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    // A fraction of a second must not reach the request: the dry-run and the commit share it.
+    let fractional = jiff::Timestamp::new(1_790_000_000, 999_000_000).expect("a timestamp");
+    let intent = workload_intent(
+        restart_of(ObjectKind::Deployment),
+        &scope,
+        &object,
+        fractional,
+    )
+    .expect("an intent");
+    let WriteOperation::RestartRollout { restarted_at } = intent.request.operation() else {
+        panic!("a restart operation");
+    };
+    assert_eq!(restarted_at.subsec_nanosecond(), 0);
+    assert_eq!(restarted_at.as_second(), 1_790_000_000);
+}
+
+#[test]
+fn on_delete_warning_for_restart() {
+    for (object, kind) in [
+        (
+            KindObject::StatefulSet(stateful_set("kafka", "OnDelete")),
+            ObjectKind::StatefulSet,
+        ),
+        (
+            KindObject::DaemonSet(daemon_set("agent", "OnDelete")),
+            ObjectKind::DaemonSet,
+        ),
+    ] {
+        let intent = intent(restart_of(kind), &object);
+        assert_eq!(
+            warnings(&intent),
+            ["Update strategy OnDelete: pods restart only when deleted"]
+        );
+    }
+    let rolling = KindObject::DaemonSet(daemon_set("agent", "RollingUpdate"));
+    assert!(
+        intent(restart_of(ObjectKind::DaemonSet), &rolling)
+            .warnings
+            .is_empty()
+    );
+}
+
+#[test]
+fn pause_and_resume_follow_the_state_of_the_row() {
+    let mut paused = deployment("api");
+    let running = KindObject::Deployment(paused.clone());
+    let pause = intent(ResourceAction::PauseRollout, &running);
+    assert_eq!(pause.label, "Pause rollout of deployment api");
+    assert_eq!(pause.button, "Pause");
+    assert_eq!(
+        pause.request.operation(),
+        &WriteOperation::SetRolloutPaused { paused: true }
+    );
+    paused.is_paused = true;
+    let resume = intent(
+        ResourceAction::PauseRollout,
+        &KindObject::Deployment(paused),
+    );
+    assert_eq!(resume.label, "Resume rollout of deployment api");
+    assert_eq!(resume.button, "Resume");
+    assert_eq!(
+        resume.request.operation(),
+        &WriteOperation::SetRolloutPaused { paused: false }
+    );
+}
+
+#[test]
+fn suspend_and_resume_follow_the_state_of_the_row() {
+    let mut cron = cron_job("reconcile", "Allow", 0);
+    let suspend = intent(
+        ResourceAction::SuspendCronJob,
+        &KindObject::CronJob(cron.clone()),
+    );
+    assert_eq!(suspend.label, "Suspend cronjob reconcile");
+    assert_eq!(
+        suspend.request.operation(),
+        &WriteOperation::SetCronJobSuspended { suspended: true }
+    );
+    cron.is_suspended = true;
+    let resume = intent(ResourceAction::SuspendCronJob, &KindObject::CronJob(cron));
+    assert_eq!(resume.label, "Resume cronjob reconcile");
+    assert_eq!(resume.button, "Resume");
+    assert_eq!(
+        resume.request.operation(),
+        &WriteOperation::SetCronJobSuspended { suspended: false }
+    );
+}
+
+#[test]
+fn trigger_warnings_follow_policy_and_active_jobs() {
+    const RUNNING: &str = "1 job(s) of this CronJob are running; this run starts anyway";
+    const FORBID: &str =
+        "While this run is active, scheduled runs are skipped (concurrency Forbid)";
+    const REPLACE: &str =
+        "A scheduled run replaces this job if it is still running (concurrency Replace)";
+    let cases: [(&str, usize, Vec<&str>); 6] = [
+        ("Allow", 0, vec![]),
+        ("Allow", 1, vec![RUNNING]),
+        ("Forbid", 0, vec![FORBID]),
+        ("Forbid", 1, vec![RUNNING, FORBID]),
+        ("Replace", 0, vec![REPLACE]),
+        ("Replace", 1, vec![RUNNING, REPLACE]),
+    ];
+    for (policy, active, expected) in cases {
+        let object = KindObject::CronJob(cron_job("reconcile", policy, active));
+        let intent = intent(ResourceAction::TriggerCronJob, &object);
+        assert_eq!(warnings(&intent), expected, "{policy} with {active} active");
+    }
+}
+
+#[test]
+fn trigger_and_rerun_create_a_job() {
+    let trigger = intent(
+        ResourceAction::TriggerCronJob,
+        &KindObject::CronJob(cron_job("reconcile", "Allow", 0)),
+    );
+    assert_eq!(trigger.label, "Run cronjob reconcile now");
+    assert_eq!(trigger.button, "Trigger now");
+    assert_eq!(trigger.request.operation(), &WriteOperation::TriggerCronJob);
+    let rerun = intent(
+        ResourceAction::RerunJob,
+        &KindObject::Job(job("etl-nightly-29312400")),
+    );
+    assert_eq!(rerun.label, "Re-run job etl-nightly-29312400");
+    assert_eq!(rerun.button, "Re-run");
+    assert_eq!(rerun.request.operation(), &WriteOperation::RerunJob);
+}
+
+#[test]
+fn an_action_for_another_kind_has_no_intent() {
+    let cluster = test_cluster();
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    let cron = KindObject::CronJob(cron_job("reconcile", "Allow", 0));
+    // A CronJob does not restart, and a Deployment does not re-run.
+    assert!(workload_intent(restart_of(ObjectKind::Deployment), &scope, &cron, now()).is_none());
+    let deployment = KindObject::Deployment(deployment("api"));
+    assert!(workload_intent(ResourceAction::RerunJob, &scope, &deployment, now()).is_none());
+    assert!(workload_intent(ResourceAction::Cordon, &scope, &deployment, now()).is_none());
+}
+
+#[test]
+fn a_name_that_cannot_form_a_path_has_no_intent() {
+    let cluster = test_cluster();
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    let object = KindObject::Deployment(deployment("../secrets"));
+    assert!(workload_intent(restart_of(ObjectKind::Deployment), &scope, &object, now()).is_none());
+}
+
+#[test]
+fn row_block_refuses_a_paused_restart_only() {
+    let mut paused = deployment("api");
+    paused.is_paused = true;
+    let restart = restart_of(ObjectKind::Deployment);
+    assert_eq!(
+        row_block(restart, &KindObject::Deployment(paused.clone()), None).as_deref(),
+        Some("Resume the rollout first")
+    );
+    assert!(row_block(restart, &KindObject::Deployment(deployment("api")), None).is_none());
+    // Resuming a paused rollout is the way out, so it is never blocked.
+    assert!(
+        row_block(
+            ResourceAction::PauseRollout,
+            &KindObject::Deployment(paused),
+            None
+        )
+        .is_none()
+    );
+    let set = KindObject::StatefulSet(stateful_set("kafka", "RollingUpdate"));
+    assert!(row_block(restart_of(ObjectKind::StatefulSet), &set, None).is_none());
+}
+
+#[test]
+fn state_labels_flip_the_verb() {
+    let mut paused = deployment("api");
+    let running = KindObject::Deployment(paused.clone());
+    assert_eq!(
+        state_label(ResourceAction::PauseRollout, "Pause rollout", &running),
+        "Pause rollout"
+    );
+    paused.is_paused = true;
+    assert_eq!(
+        state_label(
+            ResourceAction::PauseRollout,
+            "Pause rollout",
+            &KindObject::Deployment(paused)
+        ),
+        "Resume rollout"
+    );
+    let mut cron = cron_job("reconcile", "Allow", 0);
+    cron.is_suspended = true;
+    assert_eq!(
+        state_label(
+            ResourceAction::SuspendCronJob,
+            "Suspend",
+            &KindObject::CronJob(cron)
+        ),
+        "Resume"
+    );
+    assert_eq!(
+        state_label(
+            ResourceAction::TriggerCronJob,
+            "Trigger now",
+            &KindObject::CronJob(cron_job("reconcile", "Allow", 0))
+        ),
+        "Trigger now"
+    );
+}
+
+// ---- Scale ----
+
+fn hpa(name: &str, target_kind: &str, target_name: &str) -> KindObject {
+    KindObject::HorizontalPodAutoscaler(cluster::HorizontalPodAutoscalerSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        target: cluster::ControllerRef {
+            kind: target_kind.to_owned(),
+            name: target_name.to_owned(),
+        },
+        min_replicas: 2,
+        max_replicas: 8,
+        current_replicas: 3,
+        desired_replicas: 3,
+        metrics: Vec::new(),
+        conditions: Vec::new(),
+        last_scaled_at: None,
+    })
+}
+
+fn deployment_target(hpas: &[KindObject]) -> ScaleTarget {
+    ScaleTarget::of(&KindObject::Deployment(deployment("api")), hpas).expect("a scale target")
+}
+
+fn scale_to(target: &ScaleTarget, replicas: u32) -> WriteIntent {
+    let cluster = test_cluster();
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    scale_intent(&scope, target, replicas).expect("an intent")
+}
+
+#[test]
+fn scale_names_the_change_and_changes_one_field() {
+    let intent = scale_to(&deployment_target(&[]), 5);
+    assert_eq!(intent.label, "Scale deployment api from 3 to 5");
+    assert_eq!(intent.button, "Scale");
+    assert_eq!(intent.risk, ActionRisk::Change);
+    assert_eq!(
+        intent.request.operation(),
+        &WriteOperation::ScaleWorkload { replicas: 5 }
+    );
+    assert!(intent.warnings.is_empty());
+    let sets = ScaleTarget::of(
+        &KindObject::StatefulSet(stateful_set("kafka", "OnDelete")),
+        &[],
+    )
+    .expect("a stateful set scales");
+    assert_eq!(
+        scale_to(&sets, 4).label,
+        "Scale statefulset kafka from 3 to 4"
+    );
+}
+
+#[test]
+fn scale_to_zero_is_destructive() {
+    let target = deployment_target(&[]);
+    assert_eq!(scale_to(&target, 0).risk, ActionRisk::Destructive);
+    assert_eq!(scale_to(&target, 1).risk, ActionRisk::Change);
+}
+
+#[test]
+fn scale_down_warns() {
+    let target = deployment_target(&[]);
+    assert_eq!(
+        warnings(&scale_to(&target, 1)),
+        ["Scaling down from 3 to 1"]
+    );
+    assert_eq!(
+        warnings(&scale_to(&target, 0)),
+        ["Scaling down from 3 to 0"]
+    );
+    // Scaling up, or to the same number, says nothing.
+    assert!(scale_to(&target, 4).warnings.is_empty());
+    assert!(scale_to(&target, 3).warnings.is_empty());
+}
+
+#[test]
+fn hpa_warning_only_when_targeting_and_loaded() {
+    let targeting = hpa("api-hpa", "Deployment", "api");
+    let target = deployment_target(std::slice::from_ref(&targeting));
+    assert_eq!(
+        warnings(&scale_to(&target, 5)),
+        ["HPA api-hpa manages replicas (2–8); it will override this"]
+    );
+    // The warning follows the scale-down line.
+    assert_eq!(
+        warnings(&scale_to(&target, 1)),
+        [
+            "Scaling down from 3 to 1",
+            "HPA api-hpa manages replicas (2–8); it will override this"
+        ]
+    );
+    // An HPA of another workload or another kind is not this workload's.
+    for other in [
+        hpa("web-hpa", "Deployment", "web"),
+        hpa("api-hpa", "StatefulSet", "api"),
+    ] {
+        assert!(deployment_target(&[other]).hpa.is_none());
+    }
+    // The list is not loaded yet: no warning, and nothing starts to load it.
+    assert!(deployment_target(&[]).hpa.is_none());
+}
+
+#[test]
+fn only_deployments_and_stateful_sets_scale() {
+    assert!(
+        ScaleTarget::of(
+            &KindObject::DaemonSet(daemon_set("agent", "RollingUpdate")),
+            &[]
+        )
+        .is_none()
+    );
+    assert!(ScaleTarget::of(&KindObject::Job(job("etl")), &[]).is_none());
+    let target = deployment_target(&[]);
+    assert_eq!(target.subject_text(), "deployment/api");
+    assert_eq!(target.state_text(), "Now 3 desired · 2 ready");
+}
+
+#[test]
+fn replicas_must_be_a_new_whole_number() {
+    assert_eq!(replicas_input("5", 3), ReplicasInput::Set(5));
+    assert_eq!(replicas_input(" 5 ", 3), ReplicasInput::Set(5));
+    assert_eq!(replicas_input("0", 3), ReplicasInput::Set(0));
+    assert_eq!(replicas_input("3", 3), ReplicasInput::Unchanged);
+    for text in ["", " ", "-1", "+2", "2.5", "1e3", "abc", "99999999999"] {
+        assert_eq!(replicas_input(text, 3), ReplicasInput::Invalid, "{text:?}");
+    }
+    // The API takes an int32: the largest count is accepted, one more is not.
+    assert_eq!(parse_replicas("2147483647"), Some(2_147_483_647));
+    assert_eq!(parse_replicas("2147483648"), None);
+}
+
+#[test]
+fn the_dialog_names_the_row_cluster_for_a_scale() {
+    let intent = scale_to(&deployment_target(&[]), 5);
+    assert_eq!(intent.cluster, test_cluster());
+    assert_eq!(intent.cluster_name, "stg-b");
+    assert_eq!(intent.request.target().namespace(), Some("team-a"));
+}
+
+// ---- Roll back ----
+
+pub(crate) fn replica_set(
+    name: &str,
+    revision: Option<&str>,
+    owner: Option<&str>,
+    image: &str,
+) -> ReplicaSetSummary {
+    ReplicaSetSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        desired: 3,
+        current: 3,
+        ready: 3,
+        owner: owner.map(|owner| cluster::ControllerRef {
+            kind: "Deployment".to_owned(),
+            name: owner.to_owned(),
+        }),
+        revision: revision.map(str::to_owned),
+        selector: Vec::new(),
+        containers: vec![cluster::TemplateContainer {
+            name: "web".to_owned(),
+            image: image.to_owned(),
+            ports: Vec::new(),
+        }],
+    }
+}
+
+/// `api` runs revision 7; 6 and 5 are older, 8 is newer than the Deployment knows (a stale row).
+fn revisions() -> Vec<ReplicaSetSummary> {
+    vec![
+        replica_set("api-7d", Some("7"), Some("api"), "api:2.14.0"),
+        replica_set("api-6c1e2a", Some("6"), Some("api"), "api:2.13.4"),
+        replica_set("api-5b", Some("5"), Some("api"), "api:2.12.0"),
+        replica_set("api-8f", Some("8"), Some("api"), "api:2.15.0"),
+    ]
+}
+
+#[test]
+fn previous_revision_is_the_highest_below_current() {
+    let target = previous_revision(&deployment("api"), &revisions()).expect("a previous revision");
+    assert_eq!(
+        target,
+        RevisionTarget {
+            replica_set: "api-6c1e2a".to_owned(),
+            revision: 6,
+            tag: Some("2.13.4".to_owned()),
+        }
+    );
+    assert_eq!(target.text(), "rev 6 (2.13.4)");
+}
+
+#[test]
+fn a_foreign_or_unnumbered_replica_set_is_never_the_previous_revision() {
+    let sets = vec![
+        // Another Deployment's, a name that merely starts alike, and one without a number.
+        replica_set("api-6-other", Some("6"), Some("api-canary"), "api:1"),
+        replica_set("api-6-orphan", Some("6"), None, "api:1"),
+        replica_set("api-x", None, Some("api"), "api:1"),
+        replica_set("api-nan", Some("six"), Some("api"), "api:1"),
+    ];
+    assert_eq!(previous_revision(&deployment("api"), &sets), None);
+    // A Deployment that does not know its own revision has nothing to compare with.
+    let mut unknown = deployment("api");
+    unknown.revision = None;
+    assert_eq!(previous_revision(&unknown, &revisions()), None);
+}
+
+#[test]
+fn an_image_without_a_tag_names_the_revision_alone() {
+    let sets = vec![replica_set("api-6", Some("6"), Some("api"), "")];
+    let target = previous_revision(&deployment("api"), &sets).expect("a revision");
+    assert_eq!(target.tag, None);
+    assert_eq!(target.text(), "rev 6");
+}
+
+#[test]
+fn roll_back_waits_for_loaded_revisions_and_reads_the_deployment_state() {
+    let sets = revisions();
+    let running = deployment("api");
+    assert_eq!(roll_back_choice(&running, None), RollBackChoice::NotLoaded);
+    assert!(matches!(
+        roll_back_choice(&running, Some(&sets)),
+        RollBackChoice::To(_)
+    ));
+    assert_eq!(
+        roll_back_choice(&running, Some(&sets[..1])),
+        RollBackChoice::NoEarlier
+    );
+    let mut paused = deployment("api");
+    paused.is_paused = true;
+    // Paused wins over everything else, loaded or not.
+    assert_eq!(roll_back_choice(&paused, None), RollBackChoice::Paused);
+    assert_eq!(
+        roll_back_choice(&paused, Some(&sets)),
+        RollBackChoice::Paused
+    );
+}
+
+#[test]
+fn roll_back_row_block_reasons() {
+    let sets = revisions();
+    let block = |deployment: DeploymentSummary, sets: Option<&[ReplicaSetSummary]>| {
+        row_block(
+            ResourceAction::RollBack,
+            &KindObject::Deployment(deployment),
+            sets,
+        )
+        .map(|reason| reason.to_string())
+    };
+    assert_eq!(block(deployment("api"), Some(&sets)), None);
+    assert_eq!(
+        block(deployment("api"), None).as_deref(),
+        Some("Open the deployment to load its revisions")
+    );
+    assert_eq!(
+        block(deployment("api"), Some(&sets[..1])).as_deref(),
+        Some("No earlier revision")
+    );
+    let mut paused = deployment("api");
+    paused.is_paused = true;
+    assert_eq!(
+        block(paused, Some(&sets)).as_deref(),
+        Some("Resume the rollout first")
+    );
+}
+
+#[test]
+fn roll_back_intent_names_the_revision() {
+    let cluster = test_cluster();
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    let target = previous_revision(&deployment("api"), &revisions()).expect("a revision");
+    let intent = roll_back_intent(&scope, &deployment("api"), &target).expect("an intent");
+    assert_eq!(intent.label, "Roll back deployment api to rev 6 (2.13.4)");
+    assert_eq!(intent.button, "Roll back");
+    assert_eq!(intent.risk, ActionRisk::Change);
+    assert_eq!(
+        intent.request.operation(),
+        &WriteOperation::RollBackDeployment {
+            replica_set: "api-6c1e2a".to_owned(),
+            revision: 6,
+        }
+    );
+    // The dialog shows names and numbers only, never the template.
+    let fields = intent.request.changed_fields();
+    assert_eq!(fields[0].value.as_deref(), Some("rev 6 (api-6c1e2a)"));
+}
+
+// ---- Bulk ----
+
+fn bulk_objects_for(objects: &[KindObject]) -> Vec<CheckedRow<'_>> {
+    // One cluster for every row: a batch never spans two.
+    let cluster: &'static ClusterRef = Box::leak(Box::new(test_cluster()));
+    objects
+        .iter()
+        .map(|object| CheckedRow { cluster, object })
+        .collect()
+}
+
+fn bulk(action: ResourceAction, objects: &[KindObject]) -> Result<BatchIntent, SharedString> {
+    let rows = bulk_objects_for(objects);
+    let inputs = BulkInputs {
+        cluster_name: "stg-b",
+        rows: &rows,
+        now: now(),
+        hpas: &[],
+    };
+    bulk_intent(action, &inputs)
+}
+
+fn item_names(batch: &BatchIntent) -> Vec<&str> {
+    batch
+        .plan
+        .items
+        .iter()
+        .map(|item| item.object.as_ref())
+        .collect()
+}
+
+#[test]
+fn bulk_restart_names_the_count_and_the_kind() {
+    let objects: Vec<KindObject> = ["api", "web", "worker", "cron"]
+        .into_iter()
+        .map(|name| KindObject::Deployment(deployment(name)))
+        .collect();
+    let batch = bulk(restart_of(ObjectKind::Deployment), &objects).expect("a batch");
+    assert_eq!(batch.label, "Restart 4 deployments");
+    assert_eq!(batch.verb, "Restart");
+    assert_eq!(batch.button, "Restart");
+    assert_eq!(batch.confirm_label(), "Restart 4");
+    assert_eq!(batch.risk, ActionRisk::Change);
+    assert_eq!(batch.cluster, test_cluster());
+    assert_eq!(
+        item_names(&batch),
+        ["team-a/api", "team-a/web", "team-a/worker", "team-a/cron"]
+    );
+    // Each item is the same request the single action sends, so its dry-run and audit line match.
+    assert_eq!(
+        batch.plan.items[0].label,
+        "Restart rollout of deployment api"
+    );
+    let WriteOperation::RestartRollout { restarted_at } = batch.plan.items[2].request.operation()
+    else {
+        panic!("a restart");
+    };
+    assert_eq!(restarted_at.as_second(), 1_790_000_000);
+}
+
+#[test]
+fn batch_skips_rows_with_a_row_block() {
+    let mut paused = deployment("web");
+    paused.is_paused = true;
+    let objects = vec![
+        KindObject::Deployment(deployment("api")),
+        KindObject::Deployment(paused),
+    ];
+    let batch = bulk(restart_of(ObjectKind::Deployment), &objects).expect("a batch");
+    assert_eq!(item_names(&batch), ["team-a/api"]);
+    assert_eq!(batch.plan.skipped.len(), 1);
+    assert_eq!(batch.plan.skipped[0].object, "team-a/web");
+    assert_eq!(batch.plan.skipped[0].reason, "Resume the rollout first");
+    assert_eq!(batch.label, "Restart 1 deployments");
+}
+
+#[test]
+fn bulk_restart_says_on_delete_once() {
+    let objects = vec![
+        KindObject::StatefulSet(stateful_set("kafka", "OnDelete")),
+        KindObject::StatefulSet(stateful_set("redis", "OnDelete")),
+        KindObject::StatefulSet(stateful_set("pg", "RollingUpdate")),
+    ];
+    let batch = bulk(restart_of(ObjectKind::StatefulSet), &objects).expect("a batch");
+    assert_eq!(
+        batch.warnings,
+        ["2 use update strategy OnDelete: their pods restart only when deleted"]
+    );
+}
+
+#[test]
+fn bulk_rerun_and_trigger_name_their_words() {
+    let jobs = vec![KindObject::Job(job("etl-1")), KindObject::Job(job("etl-2"))];
+    let rerun = bulk(ResourceAction::RerunJob, &jobs).expect("a batch");
+    assert_eq!(rerun.label, "Re-run 2 jobs");
+    assert_eq!(rerun.button, "Re-run");
+    let crons = vec![
+        KindObject::CronJob(cron_job("a", "Allow", 0)),
+        KindObject::CronJob(cron_job("b", "Allow", 0)),
+    ];
+    let trigger = bulk(ResourceAction::TriggerCronJob, &crons).expect("a batch");
+    assert_eq!(trigger.label, "Run 2 cronjobs now");
+    assert_eq!(trigger.verb, "Run");
+    assert_eq!(trigger.button, "Trigger now");
+    assert_eq!(trigger.confirm_label(), "Run 2");
+}
+
+#[test]
+fn bulk_suspend_label_reads_resume_when_all_suspended() {
+    let mut first = cron_job("a", "Allow", 0);
+    first.is_suspended = true;
+    let mut second = cron_job("b", "Allow", 0);
+    second.is_suspended = true;
+    let all = vec![KindObject::CronJob(first), KindObject::CronJob(second)];
+    assert!(all_suspended(&bulk_objects_for(&all)));
+    let resume = bulk(ResourceAction::SuspendCronJob, &all).expect("a batch");
+    assert_eq!(resume.label, "Resume 2 cronjobs");
+    assert_eq!(resume.button, "Resume");
+    for item in &resume.plan.items {
+        assert_eq!(
+            item.request.operation(),
+            &WriteOperation::SetCronJobSuspended { suspended: false }
+        );
+    }
+    // A mix suspends the running ones and lists the suspended ones as skipped.
+    let mut done = cron_job("c", "Allow", 0);
+    done.is_suspended = true;
+    let mix = vec![
+        KindObject::CronJob(cron_job("d", "Allow", 0)),
+        KindObject::CronJob(done),
+    ];
+    assert!(!all_suspended(&bulk_objects_for(&mix)));
+    let suspend = bulk(ResourceAction::SuspendCronJob, &mix).expect("a batch");
+    assert_eq!(suspend.label, "Suspend 1 cronjobs");
+    assert_eq!(item_names(&suspend), ["team-a/d"]);
+    assert_eq!(suspend.plan.skipped[0].reason, "already suspended");
+}
+
+#[test]
+fn bulk_scale_sets_one_count_and_skips_rows_that_have_it() {
+    let mut four = deployment("web");
+    four.desired = 4;
+    let objects = vec![
+        KindObject::Deployment(deployment("api")),
+        KindObject::Deployment(four),
+    ];
+    let rows = bulk_objects_for(&objects);
+    let inputs = BulkInputs {
+        cluster_name: "stg-b",
+        rows: &rows,
+        now: now(),
+        hpas: &[],
+    };
+    let batch = bulk_scale_intent(&inputs, 4, ObjectKind::Deployment).expect("a batch");
+    assert_eq!(batch.label, "Scale 1 deployments to 4");
+    assert_eq!(item_names(&batch), ["team-a/api"]);
+    assert_eq!(batch.plan.skipped[0].reason, "already 4");
+    assert_eq!(batch.risk, ActionRisk::Change);
+    assert!(batch.warnings.is_empty());
+    // Zero takes workloads down, so it is the destructive tier, with a scale-down line.
+    let zero = bulk_scale_intent(&inputs, 0, ObjectKind::Deployment).expect("a batch");
+    assert_eq!(zero.risk, ActionRisk::Destructive);
+    assert_eq!(zero.warnings, ["Scaling down 2 of 2"]);
+    // Every row at the count already: nothing to do, and the button says why.
+    let same = vec![KindObject::Deployment(deployment("api"))];
+    let rows = bulk_objects_for(&same);
+    let inputs = BulkInputs {
+        cluster_name: "stg-b",
+        rows: &rows,
+        now: now(),
+        hpas: &[],
+    };
+    assert_eq!(
+        bulk_scale_intent(&inputs, 3, ObjectKind::Deployment)
+            .err()
+            .as_deref(),
+        Some("already 3")
+    );
+}
+
+#[test]
+fn bulk_scale_warns_about_hpa_managed_rows() {
+    let objects = vec![
+        KindObject::Deployment(deployment("api")),
+        KindObject::Deployment(deployment("web")),
+    ];
+    let hpas = vec![hpa("api-hpa", "Deployment", "api")];
+    let rows = bulk_objects_for(&objects);
+    let inputs = BulkInputs {
+        cluster_name: "stg-b",
+        rows: &rows,
+        now: now(),
+        hpas: &hpas,
+    };
+    let batch = bulk_scale_intent(&inputs, 5, ObjectKind::Deployment).expect("a batch");
+    assert_eq!(
+        batch.warnings,
+        ["1 of them are managed by an HPA, which will override this"]
+    );
+}
+
+#[test]
+fn bulk_refuses_an_action_with_no_bulk_form() {
+    let objects = vec![KindObject::Deployment(deployment("api"))];
+    assert_eq!(
+        bulk(ResourceAction::RollBack, &objects).err().as_deref(),
+        Some("Not a bulk action")
+    );
+}

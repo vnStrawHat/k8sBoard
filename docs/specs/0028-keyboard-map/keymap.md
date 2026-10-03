@@ -26,8 +26,9 @@ All actions are unit structs from `gpui_kit::actions!(k8sboard, [...])` in `keym
 | C | `c` | `Cordon` | WORKSPACE | gated (nodes) |
 | D | `d` | `Drain` | WORKSPACE | gated (nodes) |
 | E | `e` | `EditYaml` | WORKSPACE | gated |
-| R (W7 menu) | `r` | `RestartRollout` | WORKSPACE | gated |
-| ⇧S (W7 menu) | `shift-s` | `Scale` | WORKSPACE | gated |
+| R (W7 menu) | `r` | `RestartRollout` | WORKSPACE | restart the cursor row (0032, shipped) |
+| ⇧S (W7 menu) | `shift-s` | `Scale` | WORKSPACE | gated until the 0032 Scale popover |
+| — (menus, palette) | unbound | `PauseRollout`, `RollBack`, `SuspendCronJob`, `TriggerCronJob`, `RerunJob` | — | unit actions the W7 menus and the palette dispatch; no key in the wireframe, not on the sheet (0032) |
 | Del (W4 menu) | `delete` | `Delete` | WORKSPACE | gated; offered on every subject, beyond the wireframe (W4 pods only) |
 | Ctrl N | `secondary-n` | `OpenNamespacePicker` | WINDOW | opens the title-bar namespace picker |
 | Ctrl \` | ``ctrl-` `` | `ToggleDock` | WINDOW | Normal/Zoomed → Minimized; Minimized → Normal |
@@ -56,7 +57,7 @@ Dock actions do nothing when the dock has no tabs. Letters are lowercase in bind
 | Space (W1) | `space` | tick a cluster | `ClusterSwitcher` only | 0027 | bound by 0027 (`cluster_switcher::bind_keys`); left `RESERVED_KEYS`. No binding in WORKSPACE. The kit `Popover` binds `space` → `Confirm` (gpui-base 0.7 `popover.rs:21`), so 0027 binds `space` → `ToggleClusterTick` on `ClusterSwitcher` and `ClusterSwitcher > Input` ([0027 switcher-multi.md](../0027-multi-cluster/switcher-multi.md)); the switcher filter then takes no spaces |
 | Ctrl K | `secondary-k` | `OpenPalette` | WINDOW | 0029 | bound (0029); left `RESERVED_KEYS` |
 | `:` | `:` | `OpenKindPalette` (palette opened with `:` typed) | WORKSPACE | 0029 | bound (0029); left `RESERVED_KEYS` |
-| Ctrl ⏎ (W9) | `secondary-enter` | palette secondary action | palette context only | 0032 | reserved; 0029 decision 18 moved the owner to 0032 |
+| Ctrl ⏎ (W9) | `secondary-enter` | `ScaleCursorRow`: turns the query into a replicas field on an enabled Scale entry | `Command > Input` only | 0032 | bound (0032 step 2a-ii); left `RESERVED_KEYS`. Escape in that field (`PaletteArgument`) steps back to the list |
 | Ctrl Shift R | `secondary-shift-r` | `ToggleReadOnly` | WINDOW | 0030 | bound in 0030 step 2b; it toggles the lock of the cursor cluster, else the primary |
 | Ctrl S (W10) | `secondary-s` | Apply | editor context only | 0031 | |
 

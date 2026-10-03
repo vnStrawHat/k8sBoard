@@ -1,6 +1,6 @@
 use cluster::{
     AccessCheck, ContainerKind, ContainerState, ContainerSummary, NamespaceScope, NodeSummary,
-    PodSummary, SecretKey,
+    ObjectKind, PodSummary, ReplicaSetSummary, SecretKey,
 };
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
@@ -21,8 +21,8 @@ use crate::custom_kind::CustomKind;
 use crate::dock::{Dock, LogOrigin};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
-    CopyName, Cordon, Delete, Drain, EditYaml, OpenShell, PortForward, RestartRollout, Scale,
-    ViewLogs, ViewYaml,
+    CopyName, Cordon, Delete, Drain, EditYaml, OpenShell, PauseRollout, PortForward, RerunJob,
+    RestartRollout, RollBack, Scale, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
 use crate::live_sections::claim_pods;
@@ -33,6 +33,7 @@ use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, ValueAccess};
 use crate::shell_tab::short_pod_name;
 use crate::table_selection::{ClusterObject, ResourceKey};
+use crate::workload_actions::{row_block, state_label};
 use crate::write_guard::{ActionRisk, ClusterGuard, WriteLock};
 use crate::yaml_view::object_ref;
 
@@ -51,8 +52,15 @@ pub(crate) enum ResourceAction {
     ViewYaml,
     EditYaml,
     Delete,
-    RestartRollout,
-    Scale,
+    /// Carries the kind of the row: Deployments, StatefulSets, and DaemonSets restart.
+    RestartRollout(ObjectKind),
+    /// Carries the kind of the row: Deployments and StatefulSets scale.
+    Scale(ObjectKind),
+    PauseRollout,
+    RollBack,
+    SuspendCronJob,
+    TriggerCronJob,
+    RerunJob,
 }
 
 /// A row action as a key, a menu hint, or the palette names it, before the subject is known:
@@ -70,6 +78,11 @@ pub(crate) enum RowAction {
     RestartRollout,
     Scale,
     Delete,
+    PauseRollout,
+    RollBack,
+    SuspendCronJob,
+    TriggerCronJob,
+    RerunJob,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,6 +119,26 @@ enum ActionGate {
     Planned,
 }
 
+/// The permission a restart of `kind` needs; `None` for a kind that does not restart.
+fn restart_check(kind: ObjectKind) -> Option<AccessCheck> {
+    match kind {
+        ObjectKind::Deployment => Some(AccessCheck::PatchDeployments),
+        ObjectKind::StatefulSet => Some(AccessCheck::PatchStatefulSets),
+        ObjectKind::DaemonSet => Some(AccessCheck::PatchDaemonSets),
+        _ => None,
+    }
+}
+
+/// The permission a scale of `kind` needs (the `scale` subresource); `None` for a kind that does
+/// not scale.
+fn scale_check(kind: ObjectKind) -> Option<AccessCheck> {
+    match kind {
+        ObjectKind::Deployment => Some(AccessCheck::PatchDeploymentScale),
+        ObjectKind::StatefulSet => Some(AccessCheck::PatchStatefulSetScale),
+        _ => None,
+    }
+}
+
 impl ResourceAction {
     fn gate(self) -> ActionGate {
         match self {
@@ -133,9 +166,38 @@ impl ResourceAction {
                 checks: vec![AccessCheck::PatchNodes],
                 is_shipped: true,
             },
-            Self::Drain | Self::EditYaml | Self::Delete | Self::RestartRollout | Self::Scale => {
-                ActionGate::Planned
-            }
+            // The check follows the carried kind; a kind with no such action has no check.
+            Self::RestartRollout(kind) => match restart_check(kind) {
+                Some(check) => ActionGate::Mutating {
+                    checks: vec![check],
+                    is_shipped: true,
+                },
+                None => ActionGate::Planned,
+            },
+            Self::PauseRollout => ActionGate::Mutating {
+                checks: vec![AccessCheck::PatchDeployments],
+                is_shipped: true,
+            },
+            Self::SuspendCronJob => ActionGate::Mutating {
+                checks: vec![AccessCheck::PatchCronJobs],
+                is_shipped: true,
+            },
+            Self::TriggerCronJob | Self::RerunJob => ActionGate::Mutating {
+                checks: vec![AccessCheck::CreateJobs],
+                is_shipped: true,
+            },
+            Self::Scale(kind) => match scale_check(kind) {
+                Some(check) => ActionGate::Mutating {
+                    checks: vec![check],
+                    is_shipped: true,
+                },
+                None => ActionGate::Planned,
+            },
+            Self::RollBack => ActionGate::Mutating {
+                checks: vec![AccessCheck::PatchDeployments],
+                is_shipped: true,
+            },
+            Self::Drain | Self::EditYaml | Self::Delete => ActionGate::Planned,
         }
     }
 
@@ -152,8 +214,13 @@ impl ResourceAction {
             Self::ViewYaml => RowAction::ViewYaml,
             Self::EditYaml => RowAction::EditYaml,
             Self::Delete => RowAction::Delete,
-            Self::RestartRollout => RowAction::RestartRollout,
-            Self::Scale => RowAction::Scale,
+            Self::RestartRollout(_) => RowAction::RestartRollout,
+            Self::Scale(_) => RowAction::Scale,
+            Self::PauseRollout => RowAction::PauseRollout,
+            Self::RollBack => RowAction::RollBack,
+            Self::SuspendCronJob => RowAction::SuspendCronJob,
+            Self::TriggerCronJob => RowAction::TriggerCronJob,
+            Self::RerunJob => RowAction::RerunJob,
         }
     }
 }
@@ -174,6 +241,11 @@ impl RowAction {
             Self::Delete => Box::new(Delete),
             Self::RestartRollout => Box::new(RestartRollout),
             Self::Scale => Box::new(Scale),
+            Self::PauseRollout => Box::new(PauseRollout),
+            Self::RollBack => Box::new(RollBack),
+            Self::SuspendCronJob => Box::new(SuspendCronJob),
+            Self::TriggerCronJob => Box::new(TriggerCronJob),
+            Self::RerunJob => Box::new(RerunJob),
         }
     }
 }
@@ -190,8 +262,13 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::CopyName
         | ResourceAction::ViewYaml
         | ResourceAction::EditYaml
-        | ResourceAction::RestartRollout
-        | ResourceAction::Scale => ActionRisk::Change,
+        | ResourceAction::RestartRollout(_)
+        | ResourceAction::Scale(_)
+        | ResourceAction::PauseRollout
+        | ResourceAction::RollBack
+        | ResourceAction::SuspendCronJob
+        | ResourceAction::TriggerCronJob
+        | ResourceAction::RerunJob => ActionRisk::Change,
     }
 }
 
@@ -208,8 +285,13 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::ViewYaml => "View YAML",
         ResourceAction::EditYaml => "Edit YAML",
         ResourceAction::Delete => "Delete",
-        ResourceAction::RestartRollout => "Restart rollout",
-        ResourceAction::Scale => "Scale",
+        ResourceAction::RestartRollout(_) => "Restart rollout",
+        ResourceAction::Scale(_) => "Scale",
+        ResourceAction::PauseRollout => "Pause rollout",
+        ResourceAction::RollBack => "Roll back",
+        ResourceAction::SuspendCronJob => "Suspend",
+        ResourceAction::TriggerCronJob => "Trigger now",
+        ResourceAction::RerunJob => "Re-run job",
     }
 }
 
@@ -250,7 +332,13 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
             .is_some()
             .then_some(ResourceAction::EditYaml),
         // The kind table is the one source of which workload kinds offer the action.
-        RowAction::RestartRollout | RowAction::Scale => match subject {
+        RowAction::RestartRollout
+        | RowAction::Scale
+        | RowAction::PauseRollout
+        | RowAction::RollBack
+        | RowAction::SuspendCronJob
+        | RowAction::TriggerCronJob
+        | RowAction::RerunJob => match subject {
             ResourceKey::Kind { kind, .. } => kind
                 .read_only_actions()
                 .iter()
@@ -602,11 +690,14 @@ pub(crate) struct MenuCluster<'a> {
     pub(crate) guard: &'a ClusterGuard<'a>,
     pub(crate) pods: &'a [PodSummary],
     pub(crate) context: &'a RowContext,
+    /// The ReplicaSets of the row, once its drawer has loaded them (`loaded_replica_sets`): Roll
+    /// back stays off without them.
+    pub(crate) replica_sets: Option<&'a [ReplicaSetSummary]>,
 }
 
-/// The row context menu and the drawer ⋯ menu of an explorer kind. Every item except View YAML and
-/// Copy name (and, for events, Go to object and Copy message) is disabled, because this version
-/// is read-only.
+/// The row context menu and the drawer ⋯ menu of an explorer kind. The change items of a kind go
+/// through `row_action_item`: gated, then offered only when this row can take them; the ones whose
+/// spec has not shipped stay disabled.
 pub(crate) fn kind_menu(
     menu: PopupMenu,
     kind: ResourceKind,
@@ -619,6 +710,7 @@ pub(crate) fn kind_menu(
         guard,
         pods,
         context,
+        replica_sets,
     } = *cluster;
     let access = guard.access;
     let mut menu = menu;
@@ -709,10 +801,9 @@ pub(crate) fn kind_menu(
         menu = menu.separator();
     }
     for item in change_actions {
-        let entry = disabled_menu_item(item.label, NOT_SHIPPED_REASON.into());
         menu = menu.item(match item.action {
-            Some(action) => entry.action(action.row_action().key_action()),
-            None => entry,
+            Some(action) => row_action_item(item.label, action, guard, &row.object, replica_sets),
+            None => disabled_menu_item(item.label, NOT_SHIPPED_REASON.into()),
         });
     }
     let menu = menu
@@ -1621,6 +1712,41 @@ fn action_item(action: ResourceAction, guard: &ClusterGuard<'_>) -> PopupMenuIte
         _ => action_label(action),
     };
     match action_availability(action, guard) {
+        ActionAvailability::Enabled => PopupMenuItem::new(label),
+        ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
+    }
+    .action(action.row_action().key_action())
+}
+
+/// The gate first, then the state of this row: the lock and the permissions win over a paused
+/// rollout, because the gate reason is the one the user can act on first.
+fn row_availability(
+    action: ResourceAction,
+    guard: &ClusterGuard<'_>,
+    object: &KindObject,
+    replica_sets: Option<&[ReplicaSetSummary]>,
+) -> ActionAvailability {
+    match action_availability(action, guard) {
+        ActionAvailability::Enabled => match row_block(action, object, replica_sets) {
+            Some(reason) => ActionAvailability::Disabled { reason },
+            None => ActionAvailability::Enabled,
+        },
+        disabled => disabled,
+    }
+}
+
+/// The item of an action of a kind row: the gate decides first, then the state of this row. It has no
+/// `on_click`: the menu dispatches the key action, which runs on the cursor row (a right click moved
+/// it), so the menu, the key, and the palette share one arm.
+fn row_action_item(
+    label: &'static str,
+    action: ResourceAction,
+    guard: &ClusterGuard<'_>,
+    object: &KindObject,
+    replica_sets: Option<&[ReplicaSetSummary]>,
+) -> PopupMenuItem {
+    let label = state_label(action, label, object);
+    match row_availability(action, guard, object, replica_sets) {
         ActionAvailability::Enabled => PopupMenuItem::new(label),
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
     }

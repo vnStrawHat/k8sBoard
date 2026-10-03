@@ -6,7 +6,7 @@
 
 use std::cmp::Reverse;
 
-use cluster::{NamespaceScope, NamespaceSummary, NodeSummary, PodSummary};
+use cluster::{NamespaceScope, NamespaceSummary, NodeSummary, PodSummary, ReplicaSetSummary};
 use gpui_kit::{Action, SharedString};
 
 use crate::app_shell::Screen;
@@ -15,7 +15,7 @@ use crate::cluster_switcher::SwitchToCluster1;
 use crate::cluster_switcher_rows::{SwitcherRow, SwitcherSection};
 use crate::fuzzy_score::fuzzy_score;
 use crate::keymap::{OpenKindPalette, OpenPalette, ShortcutGroup, shortcut_rows};
-use crate::kind_row::KindRow;
+use crate::kind_row::{KindObject, KindRow};
 use crate::navigation::{KindAvailability, kind_availability};
 use crate::resource_actions::{
     KeyAvailability, RowAction, action_label, key_availability_of, subject_action,
@@ -24,6 +24,9 @@ use crate::resource_kind::ResourceKind;
 use crate::settings_window::ImportKubeconfig;
 use crate::status_tone::{StatusLabel, node_status_label, pod_status_label};
 use crate::table_selection::{ClusterObject, ResourceKey};
+use crate::workload_actions::{
+    NOT_LOADED_REASON, RevisionTarget, RollBackChoice, roll_back_choice, row_block, state_label,
+};
 use crate::write_guard::ClusterGuard;
 
 const ACTIONS_CAP: usize = 20;
@@ -123,6 +126,9 @@ pub(crate) enum PaletteTarget {
     Command(Box<dyn Action>),
     /// A row action on the cursor row, dispatched as the action of its key.
     RowAction(RowAction),
+    /// Roll back of the cursor Deployment to the revision the entry names, which the shell runs
+    /// through its confirm dialog. It carries the revision, so it is not a plain row action.
+    RollBack(ClusterObject, RevisionTarget),
     Screen(Screen),
     /// An object of one viewed cluster, which the shell reveals in that cluster.
     Resource(ClusterObject),
@@ -137,6 +143,7 @@ impl Clone for PaletteTarget {
         match self {
             Self::Command(action) => Self::Command(action.boxed_clone()),
             Self::RowAction(action) => Self::RowAction(*action),
+            Self::RollBack(object, revision) => Self::RollBack(object.clone(), revision.clone()),
             Self::Screen(screen) => Self::Screen(*screen),
             Self::Resource(key) => Self::Resource(key.clone()),
             Self::Namespace(scope) => Self::Namespace(scope.clone()),
@@ -200,6 +207,9 @@ pub(crate) struct PaletteSession<'a> {
     pub(crate) nodes: &'a [NodeSummary],
     /// The rows of the visible explorer kind; `None` on every other screen.
     pub(crate) kind_rows: Option<(ResourceKind, &'a [KindRow])>,
+    /// The ReplicaSets of the cursor Deployment, once its drawer has loaded them: the palette
+    /// offers `Roll back to rev {n}` only from these, and starts no list for it.
+    pub(crate) replica_sets: Option<&'a [ReplicaSetSummary]>,
 }
 
 /// Everything the palette may show, borrowed from the shell. No session means no resources, no
@@ -227,7 +237,7 @@ impl<'a> PaletteInput<'a> {
 }
 
 /// The row actions in the order of the shortcut sheet.
-const ROW_ACTIONS: [RowAction; 11] = [
+const ROW_ACTIONS: [RowAction; 16] = [
     RowAction::ViewLogs,
     RowAction::ViewYaml,
     RowAction::CopyName,
@@ -239,6 +249,11 @@ const ROW_ACTIONS: [RowAction; 11] = [
     RowAction::RestartRollout,
     RowAction::Scale,
     RowAction::Delete,
+    RowAction::PauseRollout,
+    RowAction::RollBack,
+    RowAction::SuspendCronJob,
+    RowAction::TriggerCronJob,
+    RowAction::RerunJob,
 ];
 
 /// Everything the palette may show, in source order, from in-memory state only.
@@ -269,19 +284,49 @@ fn row_action_entries<'a>(input: &'a PaletteInput<'_>) -> impl Iterator<Item = P
     let pod = cursor
         .zip(session)
         .and_then(|(cursor, session)| session.pods.iter().find(|pod| cursor.key.is_pod(pod)));
+    // The row of the cursor, when its kind list is the one loaded: its state flips a label and can
+    // block an action (a paused Deployment does not restart).
+    let object = cursor.zip(session).and_then(|(cursor, session)| {
+        let (kind, rows) = session.kind_rows?;
+        rows.iter()
+            .find(|row| ResourceKey::of_row(kind, row) == cursor.key)
+            .map(|row| &row.object)
+    });
     ROW_ACTIONS.into_iter().filter_map(move |row| {
         let subject = &cursor?.key;
         let session = session?;
+        let action = subject_action(row, subject)?;
         let state = match key_availability_of(row, subject, pod, session.guard) {
             KeyAvailability::NotOffered => return None,
-            KeyAvailability::Run(_) => EntryState::Enabled,
+            KeyAvailability::Run(_) => {
+                let block = match object {
+                    Some(object) => row_block(action, object, session.replica_sets),
+                    // A cursor row the loaded list does not hold has no revisions loaded either.
+                    None if row == RowAction::RollBack => Some(NOT_LOADED_REASON.into()),
+                    None => None,
+                };
+                match block {
+                    Some(reason) => EntryState::Disabled { reason },
+                    None => EntryState::Enabled,
+                }
+            }
             KeyAvailability::Disabled { reason } => EntryState::Disabled { reason },
         };
-        let mut entry = PaletteEntry::new(
-            PaletteGroup::Actions,
-            action_label(subject_action(row, subject)?),
-            PaletteTarget::RowAction(row),
-        );
+        let mut label: SharedString = match object {
+            Some(object) => state_label(action, action_label(action), object).into(),
+            None => action_label(action).into(),
+        };
+        let mut target = PaletteTarget::RowAction(row);
+        // Roll back names the revision it goes to, and runs it: only from revisions that are loaded.
+        if let (Some(KindObject::Deployment(deployment)), RowAction::RollBack, EntryState::Enabled) =
+            (object, row, &state)
+            && let RollBackChoice::To(revision) =
+                roll_back_choice(deployment, session.replica_sets)
+        {
+            label = format!("Roll back to rev {}", revision.revision).into();
+            target = PaletteTarget::RollBack(cursor?.clone(), revision);
+        }
+        let mut entry = PaletteEntry::new(PaletteGroup::Actions, label, target);
         entry.detail = Some(with_cluster(subject_text(subject), session).into());
         entry.state = state;
         Some(entry)

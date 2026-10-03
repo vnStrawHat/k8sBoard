@@ -17,12 +17,13 @@ use gpui_kit::{
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
 use crate::certificate_expiry::expiry_label;
+use crate::cluster_registry::ClusterRef;
 use crate::cluster_rows::{Clustered, RowAddress, SlotSession, merge_slot_rows};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
 use crate::kind_row::{KindCell, KindRow};
-use crate::live_sections::next_run_text;
+use crate::live_sections::{loaded_replica_sets, next_run_text};
 use crate::resource_actions::{
     MenuCluster, MenuExtras, browse_instances_item, kind_menu, open_url_choice, open_url_menu_item,
     secret_menu,
@@ -233,6 +234,32 @@ impl KindTableDelegate {
         let slot = self.sessions.get(slot_index)?;
         let row = slot_kind_rows(slot, self.kind?, cx).get(address.item as usize)?;
         Some((slot_index, slot, row))
+    }
+
+    /// The ticked rows of the shown kind in display order, each with the cluster it came from. A
+    /// bulk action reads them when it is built, never from a copy kept earlier.
+    pub(crate) fn checked_rows<'a>(&'a self, cx: &'a App) -> Vec<(&'a ClusterRef, &'a KindRow)> {
+        let Some(kind) = self.kind else {
+            return Vec::new();
+        };
+        let Some(view) = self
+            .views
+            .get(&kind)
+            .filter(|view| view.checked_count() > 0)
+        else {
+            return Vec::new();
+        };
+        let rows = self.slot_rows(cx);
+        let (merged, addresses) = merge_slot_rows(&self.sessions, &rows, self.merge_column());
+        view.checked_rows(&merged)
+            .into_iter()
+            .filter_map(|index| {
+                let address = addresses.get(index)?;
+                let slot = self.sessions.get(usize::from(address.slot))?;
+                let row = slot_kind_rows(slot, kind, cx).get(address.item as usize)?;
+                Some((&slot.cluster, row))
+            })
+            .collect()
     }
 
     /// Whether the row at table row `row_ix` is ticked.
@@ -535,6 +562,7 @@ impl TableDelegate for KindTableDelegate {
                 guard: &guard,
                 pods: live.pods.items(),
                 context: &row_context,
+                replica_sets: loaded_replica_sets(kind, &row, live),
             },
             &self.shell,
             MenuExtras {

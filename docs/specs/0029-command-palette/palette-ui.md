@@ -53,7 +53,7 @@ Each `CommandItem` uses `.label(label)` and `.child(..)` (custom content, so the
 | Tab | `tab` | `PalettePreview` | `Command > Input` | move the table cursor to the highlighted resource (above) |
 
 - Both actions are declared in `keymap.rs`, handled on the `AppShell` root (they need the shell entity and window). `secondary-k` and `:` leave `RESERVED_KEYS`; `shortcut_rows()` gains General rows "Command palette" and "Jump to a resource kind".
-- Ctrl ⏎ (`secondary-enter`) stays reserved, now for 0032 (decision 18).
+- Ctrl ⏎ (`secondary-enter`) is bound by 0032 in `Command > Input`: on an enabled Scale entry it turns the query into a replicas field (`Replicas for deployment/api (now 3)`), Enter with a whole number starts the scale, Esc returns to the list; a plain Enter on Scale opens the Scale popover.
 - While the palette is open, focus is in its `Input` inside a `Dialog` outside `AppShell`, so no 0028 key reaches the table behind it (0028 rules 1, 2).
 - Ctrl K while open does nothing (chords do not reach `AppShell`); Esc closes.
 

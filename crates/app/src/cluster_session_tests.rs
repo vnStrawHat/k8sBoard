@@ -1592,6 +1592,41 @@ impl ClusterSession {
         cx.notify();
     }
 
+    /// A seam for the shell tests: the ReplicaSets the open drawer's related watch holds, as if it
+    /// had sent this snapshot. Nothing happens while the drawer watches another kind of subject.
+    pub(crate) fn set_replica_sets_for_test(
+        &mut self,
+        replica_sets: Vec<ReplicaSetSummary>,
+        cx: &mut Context<Self>,
+    ) {
+        let related = self.live_mut().and_then(|live| live.related.as_mut());
+        if let Some(related) = related {
+            related.list = RelatedList::ReplicaSets(LiveList::Ready {
+                items: replica_sets,
+                interruption: None,
+            });
+        }
+        cx.notify();
+    }
+
+    /// The explorer list of `kind` becomes this loaded snapshot, as if its watch had sent it; the
+    /// fake server of a test lists nothing itself. Nothing happens while another kind is shown.
+    pub(crate) fn set_kind_rows_for_test(
+        &mut self,
+        kind: ResourceKind,
+        rows: Vec<KindRow>,
+        cx: &mut Context<Self>,
+    ) {
+        let explorer = self
+            .live_mut()
+            .and_then(|live| live.explorer.as_mut())
+            .filter(|explorer| explorer.kind == kind);
+        if let Some(explorer) = explorer {
+            explorer.list.apply(WatchUpdate::Snapshot(rows));
+        }
+        cx.notify();
+    }
+
     /// The explorer list of the shown kind becomes a loaded, empty list, so it can be paused.
     pub(crate) fn seed_explorer(&mut self, cx: &mut Context<Self>) {
         if let Some(explorer) = self.live_mut().and_then(|live| live.explorer.as_mut()) {

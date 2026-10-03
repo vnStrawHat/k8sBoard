@@ -11,7 +11,7 @@ use crate::cluster_switcher::{
 
 /// Keys that a later spec binds. No binding of this spec may take one; the owner removes the key
 /// from this list in the change that binds it.
-const RESERVED_KEYS: [&str; 2] = ["secondary-enter", "secondary-s"];
+const RESERVED_KEYS: [&str; 1] = ["secondary-s"];
 
 fn bind_all(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -272,10 +272,13 @@ fn every_sheet_row_has_a_binding(cx: &mut TestAppContext) {
 fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
     bind_all(cx);
     let rows = shortcut_rows();
-    let without_row: [&dyn Action; 16] = [
+    let without_row: [&dyn Action; 19] = [
         &LeaveInput,
         &CloseTerminalFind,
         &PalettePreview,
+        &ScaleCursorRow,
+        &CancelValuePopover,
+        &LeavePaletteArgument,
         &SwitchToCluster2,
         &SwitchToCluster3,
         &SwitchToCluster4,
@@ -566,6 +569,28 @@ fn terminal_copy_and_paste_chords_resolve(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn ctrl_enter_is_bound_in_the_palette_query_only(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let palette = ["Root", "Dialog", "Command", "Input"];
+    assert_eq!(
+        resolve("secondary-enter", &palette, cx),
+        Some("k8sboard::ScaleCursorRow")
+    );
+    // The shell, its text fields, and the other dialogs keep the key to themselves.
+    for path in [
+        &SHELL[..],
+        &TABLE_PATH[..],
+        &INPUT_PATH[..],
+        &["Root", "Dialog"],
+    ] {
+        assert!(
+            !is_app_action(resolve("secondary-enter", path, cx)),
+            "{path:?}"
+        );
+    }
+}
+
+#[gpui_kit::test]
 fn terminal_copy_outranks_the_cluster_switcher_only_inside_the_terminal(cx: &mut TestAppContext) {
     bind_all(cx);
     if cfg!(target_os = "macos") {
@@ -642,6 +667,32 @@ fn the_terminal_context_is_the_only_one_with_shell_chords(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn escape_steps_back_inside_the_popover_and_the_palette_argument(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let cases: [(&[&str], &str); 4] = [
+        (
+            &["Root", "AppShell", "ValuePopover"],
+            "k8sboard::CancelValuePopover",
+        ),
+        (
+            &["Root", "AppShell", "ValuePopover", "Input"],
+            "k8sboard::CancelValuePopover",
+        ),
+        (
+            &["Root", "Dialog", "PaletteArgument"],
+            "k8sboard::LeavePaletteArgument",
+        ),
+        (
+            &["Root", "Dialog", "PaletteArgument", "Input"],
+            "k8sboard::LeavePaletteArgument",
+        ),
+    ];
+    for (path, expected) in cases {
+        assert_eq!(resolve("escape", path, cx), Some(expected), "{path:?}");
+    }
+}
+
+#[gpui_kit::test]
 fn the_read_only_toggle_is_not_an_app_chord_inside_the_terminal(cx: &mut TestAppContext) {
     bind_all(cx);
     if cfg!(target_os = "macos") {
@@ -664,4 +715,19 @@ fn enter_is_suppressed_in_the_fresh_enter_content(cx: &mut TestAppContext) {
         resolve("enter", &["Root", "Dialog", "FreshEnter"], cx),
         None
     );
+}
+
+#[gpui_kit::test]
+fn enter_is_suppressed_in_the_palette_argument(cx: &mut TestAppContext) {
+    bind_all(cx);
+    // The kit Dialog confirms on Enter and would close the palette before the number is read.
+    let paths: [&[&str]; 2] = [
+        &["Root", "Dialog", "PaletteArgument"],
+        &["Root", "Dialog", "PaletteArgument", "Input"],
+    ];
+    for path in paths {
+        assert_eq!(resolve("enter", path, cx), None, "{path:?}");
+    }
+    // The palette's own query keeps the kit's Enter.
+    assert!(resolve("enter", &["Root", "Dialog", "Command", "Input"], cx).is_some());
 }

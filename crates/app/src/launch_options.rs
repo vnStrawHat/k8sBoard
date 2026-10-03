@@ -26,7 +26,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|shell-find-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|shell-find-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -106,6 +106,17 @@ pub(crate) enum LaunchScreen {
     CordonConfirm,
     /// `--screen unlock-confirm`: Nodes with the dialog that unlocks the primary cluster open.
     UnlockConfirm,
+    /// `--screen scale-popover`: Deployments with the cursor on the first row and its Scale popover
+    /// open.
+    ScalePopover,
+    /// `--screen scale-confirm`: the same cursor row with the Scale dialog open in a fixed state (the
+    /// dry-run passed in 412 ms, the count two above the current one). Screenshot builds only; it
+    /// never reaches a cluster.
+    ScaleConfirm,
+    /// `--screen restart-bulk-confirm`: Deployments with the first four rows ticked and the batch
+    /// dialog of Restart open in a fixed state (every dry-run passed). Screenshot builds only; it
+    /// never reaches a cluster.
+    RestartBulkConfirm,
     /// `--screen settings|settings-appearance|settings-shortcuts`: the main window opens as usual,
     /// then the Settings window on that page, which is what the screenshot captures.
     Settings(SettingsPage, SettingsSize),
@@ -113,6 +124,9 @@ pub(crate) enum LaunchScreen {
     Kind(ResourceKind),
     /// `--screen <plural>-drawer|<plural>-events|<plural>-yaml`: the kind's first row selected, on that tab.
     KindDrawer(ResourceKind, DrawerTab),
+    /// `--screen <plural>-menu`: the kind's first row selected with its drawer open and the ⋯ menu of
+    /// the drawer open on top (screenshot builds click it).
+    KindMenu(ResourceKind),
     /// `--screen custom:<crd-name>[-drawer|-events|-yaml]`: a custom kind, known only once the CRD
     /// list has loaded. The shell resolves it to `Kind` or `KindDrawer`, and the first row is
     /// selected when a tab is given.
@@ -130,6 +144,9 @@ impl LaunchScreen {
             Self::Overview | Self::Switcher => Screen::Overview,
             Self::CordonConfirm | Self::UnlockConfirm => Screen::Nodes,
             Self::ShellConfirmFixture => Screen::Pods,
+            Self::ScalePopover | Self::ScaleConfirm | Self::RestartBulkConfirm => {
+                Screen::Kind(ResourceKind::Deployments)
+            }
             Self::Pods
             | Self::PodsMulti
             | Self::PodDrawer(_)
@@ -151,7 +168,9 @@ impl LaunchScreen {
             Self::Issues | Self::IssuesDrawer => Screen::Issues,
             Self::Settings(..) => Screen::Overview,
             Self::Topology | Self::TopologyProblems | Self::TopologySelected => Screen::Topology,
-            Self::Kind(kind) | Self::KindDrawer(kind, _) => Screen::Kind(kind),
+            Self::Kind(kind) | Self::KindDrawer(kind, _) | Self::KindMenu(kind) => {
+                Screen::Kind(kind)
+            }
             Self::WhoCan => Screen::Kind(ResourceKind::ClusterRoles),
             Self::TestTraffic => Screen::Kind(ResourceKind::NetworkPolicies),
             Self::CheckPermissions | Self::AccountPermissions => {
@@ -168,6 +187,12 @@ impl LaunchScreen {
         }
     }
 
+    /// Whether a screenshot opens the ⋯ menu of the drawer before it captures.
+    #[cfg(any(feature = "screenshot", test))]
+    pub(crate) fn opens_menu(self) -> bool {
+        matches!(self, Self::KindMenu(_))
+    }
+
     /// Whether a row must be selected so the drawer is open.
     pub(crate) fn has_drawer(self) -> bool {
         matches!(
@@ -175,6 +200,7 @@ impl LaunchScreen {
             Self::PodDrawer(_)
                 | Self::NodeDrawer(_)
                 | Self::KindDrawer(..)
+                | Self::KindMenu(_)
                 | Self::IssuesDrawer
                 | Self::Custom { tab: Some(_), .. }
         )
@@ -182,13 +208,28 @@ impl LaunchScreen {
 
     /// Whether a row must be selected: the drawer screens, and the one that shows only the cursor.
     pub(crate) fn selects_row(self) -> bool {
-        self.has_drawer() || self == Self::PodsCursor
+        self.has_drawer()
+            || matches!(
+                self,
+                Self::PodsCursor | Self::ScalePopover | Self::ScaleConfirm
+            )
+    }
+
+    /// The kind whose first row the request puts the cursor on, when it names one: the drawer
+    /// screens and the Scale screens.
+    pub(crate) fn row_kind(self) -> Option<ResourceKind> {
+        match self {
+            Self::KindDrawer(kind, _) | Self::KindMenu(kind) => Some(kind),
+            Self::ScalePopover | Self::ScaleConfirm => Some(ResourceKind::Deployments),
+            _ => None,
+        }
     }
 
     /// The drawer tab this request opens on; `None` for screens without a drawer.
     pub(crate) fn drawer_tab(self) -> Option<DrawerTab> {
         match self {
             Self::PodDrawer(tab) | Self::NodeDrawer(tab) | Self::KindDrawer(_, tab) => Some(tab),
+            Self::KindMenu(_) => Some(DrawerTab::Overview),
             Self::Custom { tab, .. } => tab,
             _ => None,
         }
@@ -216,7 +257,19 @@ impl LaunchScreen {
 
     /// Whether the first rows must be ticked once the list has loaded.
     pub(crate) fn checks_rows(self) -> bool {
-        matches!(self, Self::PodsSelected | Self::NodesSelected)
+        matches!(
+            self,
+            Self::PodsSelected | Self::NodesSelected | Self::RestartBulkConfirm
+        )
+    }
+
+    /// How many of the first rows `checks_rows` ticks.
+    pub(crate) fn checked_count(self) -> usize {
+        if self == Self::RestartBulkConfirm {
+            4
+        } else {
+            2
+        }
     }
 
     /// Whether the screen shows the Topology graph, so a screenshot waits for its feeds and build.
@@ -283,6 +336,9 @@ impl LaunchScreen {
                 | Self::CordonConfirm
                 | Self::UnlockConfirm
                 | Self::ShellConfirmFixture
+                | Self::ScalePopover
+                | Self::ScaleConfirm
+                | Self::RestartBulkConfirm
         )
     }
 
@@ -307,6 +363,9 @@ impl LaunchScreen {
             "switcher" => Some(Self::Switcher),
             "cordon-confirm" => Some(Self::CordonConfirm),
             "unlock-confirm" => Some(Self::UnlockConfirm),
+            "scale-popover" => Some(Self::ScalePopover),
+            "scale-confirm" => Some(Self::ScaleConfirm),
+            "restart-bulk-confirm" => Some(Self::RestartBulkConfirm),
             "pods" => Some(Self::Pods),
             "pods-multi" => Some(Self::PodsMulti),
             "nodes" => Some(Self::Nodes),
@@ -356,6 +415,9 @@ impl LaunchScreen {
                 SettingsSize::Tall,
             )),
             _ => {
+                if let Some(plural) = text.strip_suffix("-menu") {
+                    return ResourceKind::from_plural(plural).map(Self::KindMenu);
+                }
                 if let Some(plural) = text.strip_suffix("-drawer") {
                     let kind = ResourceKind::from_plural(plural)?;
                     return Some(Self::KindDrawer(kind, DrawerTab::Overview));

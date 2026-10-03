@@ -53,15 +53,17 @@ use crate::object_events::event_subject;
 use crate::permission_table::{CanDoChips, can_do_chips, permission_table};
 use crate::policy_rows::{fullest_item, quota_text};
 use crate::related_objects::{RelatedSubject, related_subject};
+use crate::resource_actions::ActionAvailability;
 use crate::resource_kind::ResourceKind;
 use crate::secret_rows::{MASK, MaskedKeyRow, certificate_rows, secret_data_rows};
 use crate::status_tone::{
     StatusLabel, StatusTone, pod_status_label, readiness_text, tone_color, toned_text,
 };
 use crate::storage_rows::phase_label;
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::usage_format::{Measure, format_percent, usage_tone};
 use crate::who_can_view::coverage_notes;
+use crate::workload_actions::{PAUSED_REASON, RevisionTarget, image_tag};
 
 /// Bounds the render cost of a Deployment with very many ReplicaSets or a CronJob with many jobs.
 const MAX_LISTED_OBJECTS: usize = 10;
@@ -81,11 +83,12 @@ pub(crate) fn live_rows(
     row: &KindRow,
     live: &LiveCluster,
     now: jiff::Timestamp,
+    roll_back: Option<&RollBackGate>,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
     match (content, &row.object) {
         (LiveContent::Revisions, KindObject::Deployment(deployment)) => {
-            revisions(kind, row, deployment, live, now, cx)
+            revisions(kind, row, deployment, live, now, roll_back, cx)
         }
         (LiveContent::NextRuns, KindObject::CronJob(cron_job)) => next_runs(cron_job, now, cx),
         (LiveContent::RecentJobs, KindObject::CronJob(cron_job)) => {
@@ -229,28 +232,23 @@ fn revision_rows<'a>(
     revisions
 }
 
-/// The tag of an image reference: the text after the last `:` that follows the last `/`, else
-/// the whole reference (a registry port such as `registry:5000/api` is not a tag).
-fn image_tag(image: &str) -> &str {
-    let name_start = image.rfind('/').map_or(0, |slash| slash + 1);
-    match image[name_start..].rfind(':') {
-        Some(colon) => &image[name_start + colon + 1..],
-        None => image,
-    }
+/// What the Roll back buttons of a drawer need: the Deployment they act on, in its own cluster,
+/// and whether the gate of that cluster lets Roll back run. The drawer reads it from the session
+/// of its subject, never the primary.
+pub(crate) struct RollBackGate {
+    pub(crate) subject: ClusterObject,
+    pub(crate) availability: ActionAvailability,
 }
 
-fn revisions(
+/// The ReplicaSet list the drawer watches for this row, as it stands: `None` while the drawer
+/// watches another object or none.
+fn replica_set_list<'a>(
     kind: ResourceKind,
     row: &KindRow,
-    deployment: &DeploymentSummary,
-    live: &LiveCluster,
-    now: jiff::Timestamp,
-    cx: &Context<AppShell>,
-) -> Vec<AnyElement> {
-    let Some(subject) = related_subject(kind, row) else {
-        return vec![note("No ReplicaSets", cx)];
-    };
-    let list = match live.related_of(&subject) {
+    live: &'a LiveCluster,
+) -> Option<&'a LiveList<ReplicaSetSummary>> {
+    let subject = related_subject(kind, row)?;
+    match live.related_of(&subject) {
         Some(RelatedList::ReplicaSets(list)) => Some(list),
         Some(
             RelatedList::Jobs(_)
@@ -261,7 +259,32 @@ fn revisions(
             | RelatedList::CustomFields(_),
         )
         | None => None,
-    };
+    }
+}
+
+/// The ReplicaSets of a Deployment row once its drawer has loaded them; `None` before that, which
+/// is what keeps Roll back off without starting a list for it.
+pub(crate) fn loaded_replica_sets<'a>(
+    kind: ResourceKind,
+    row: &KindRow,
+    live: &'a LiveCluster,
+) -> Option<&'a [ReplicaSetSummary]> {
+    replica_set_list(kind, row, live)?.ready_items()
+}
+
+fn revisions(
+    kind: ResourceKind,
+    row: &KindRow,
+    deployment: &DeploymentSummary,
+    live: &LiveCluster,
+    now: jiff::Timestamp,
+    roll_back: Option<&RollBackGate>,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    if related_subject(kind, row).is_none() {
+        return vec![note("No ReplicaSets", cx)];
+    }
+    let list = replica_set_list(kind, row, live);
     match list {
         None | Some(LiveList::Loading) => vec![note("Loading revisions…", cx)],
         Some(LiveList::Failed { message }) => {
@@ -280,17 +303,64 @@ fn revisions(
                 .iter()
                 .take(MAX_LISTED_OBJECTS)
                 .enumerate()
-                .map(|(ix, revision)| revision_element(ix, revision, now, cx))
+                .map(|(ix, revision)| {
+                    let button = roll_back_button(deployment, revision, roll_back);
+                    revision_element(ix, revision, now, button, cx)
+                })
                 .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
                 .collect()
         }
     }
 }
 
+/// What the Roll back button of one revision does.
+#[derive(Debug, PartialEq, Eq)]
+enum RollBackButton {
+    /// Rolls the Deployment back to this revision, after the confirm dialog.
+    Enabled(ClusterObject, RevisionTarget),
+    Disabled(SharedString),
+}
+
+/// The gate of the drawer's cluster decides first (permission, lock), then the Deployment's own
+/// state, then whether the ReplicaSet can be named by a revision number.
+fn roll_back_button(
+    deployment: &DeploymentSummary,
+    revision: &Revision,
+    gate: Option<&RollBackGate>,
+) -> RollBackButton {
+    let Some(gate) = gate else {
+        return RollBackButton::Disabled("Not connected".into());
+    };
+    if let ActionAvailability::Disabled { reason } = &gate.availability {
+        return RollBackButton::Disabled(reason.clone());
+    }
+    if deployment.is_paused {
+        return RollBackButton::Disabled(PAUSED_REASON.into());
+    }
+    let Some(number) = revision.number else {
+        return RollBackButton::Disabled("This ReplicaSet has no revision number".into());
+    };
+    let set = revision.replica_set;
+    RollBackButton::Enabled(
+        gate.subject.clone(),
+        RevisionTarget {
+            replica_set: set.name.clone(),
+            revision: number,
+            tag: set
+                .containers
+                .first()
+                .map(|container| image_tag(&container.image))
+                .filter(|tag| !tag.is_empty())
+                .map(str::to_owned),
+        },
+    )
+}
+
 fn revision_element(
     ix: usize,
     revision: &Revision,
     now: jiff::Timestamp,
+    button: RollBackButton,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -376,12 +446,22 @@ fn revision_element(
                 .flex()
                 .justify_end()
                 .children((!revision.is_current).then(|| {
-                    Button::new(("roll-back", ix))
+                    let roll_back = Button::new(("roll-back", ix))
                         .label("Roll back")
                         .xsmall()
-                        .ghost()
-                        .disabled(true)
-                        .tooltip("Read-only mode")
+                        .ghost();
+                    match button {
+                        RollBackButton::Disabled(reason) => {
+                            roll_back.disabled(true).tooltip(reason)
+                        }
+                        RollBackButton::Enabled(subject, target) => {
+                            roll_back.on_click(cx.listener(move |shell, _, window, cx| {
+                                // The row behind the button reveals its ReplicaSet on a click.
+                                cx.stop_propagation();
+                                shell.start_roll_back(&subject, &target, window, cx);
+                            }))
+                        }
+                    }
                 })),
         )
         .into_any_element()
