@@ -25,7 +25,6 @@ All fields bind `AppSettings::get` / `AppSettings::update` (0025 rule). Dropdown
 | Group · item | Control | Text |
 |---|---|---|
 | Files · Export folder | `SettingItem::render`: mono path (or `Home folder` muted) + ghost `Choose…` (`prompt_for_paths`, directories only, one) + ghost `Use home folder` (shown when set; stores `None`) | description `Where Export dialogs start. Updated after each export.` |
-| Secrets · Clear copied secrets after | dropdown `15 seconds`, `30 seconds`, `1 minute`, `2 minutes` | `Only clears the clipboard when it still holds the copied value.` |
 | Issues · Watch TLS Secrets for expiry | switch | `Lists and watches Secrets of type kubernetes.io/tls; this shows in API audit logs. Applies when the cluster is opened again.` (0020 decision 11) |
 
 - Export folder write after a save: `start_export_with` sends `path.parent()` with `AppSettings::update` in its `finish` step (only after `Saved`, never on cancel or failure). The picker writes the same key.
@@ -41,7 +40,9 @@ All fields bind `AppSettings::get` / `AppSettings::update` (0025 rule). Dropdown
 impl RowDensity { pub(crate) fn row_height(self) -> f32 } // Compact 28., Comfortable 36.
 ```
 
-- Cell padding stays the kit default for `Size::Size` (4 px top and bottom), so a 28 px row leaves 20 px of content: the ui-verifier pass checks status pills, usage bars, and the selection checkbox at 28 px (0024 "row-height audit"). The default moves from today's kit 32 px to 28 px (Tokens: compact is the default "for power users").
+- **Live**: `workspace.rs` has no settings observer today; it gains `_settings_observer: cx.observe_global::<AppSettings>(|_, cx| cx.notify())` so the tables re-render on a change.
+- `with_size` sets the kit's `table_row_height` for the **header row too** (kit `state.rs` uses the same size for the header), so the header is 28 / 36 px as well; accepted (Tokens show one row height).
+- **Default Compact 28 px** (coordinator decision 2026-10-03, Tokens "default for power users"; today the kit's 32 px). Cell padding stays the kit default for `Size::Size` (4 px top and bottom), leaving 20 px of content. The default is **conditional on the ui-verifier 28 px check** of status pills, usage bars, and the selection checkbox: anything that clips is fixed in its cell renderer, never by changing the default (0024 "row-height audit").
 - Lists that are not `DataTable` (dock, drawer sections, switcher) are out of scope.
 
 ## Logs (step 2)
@@ -63,7 +64,7 @@ Group "New log tabs", description `Each tab can still change these from its tool
 | Group · item | Control | Options |
 |---|---|---|
 | Shell · Default shell | dropdown | `Auto (bash, ash, sh)`, `bash`, `sh` (the 0036 picker set) |
-| Terminal · Scrollback | dropdown | `1,000`, `5,000`, `10,000`, `20,000` lines |
+| Terminal · Scrollback | dropdown | `1,000`, `5,000`, `10,000` lines (cap and memory: [settings-model.md](settings-model.md)) |
 | Terminal · Font size | dropdown | `Theme default`, `12`, `13`, `14`, `16`, `18` px |
 
 - Default shell: the three `ShellCommand::Auto` literals in `shell_open.rs::start_shell` and `ShellTab::new`'s initial `command` read `terminal.default_shell`. The intent, confirm dialog, and audit line already name the command (0036), so a fixed `bash` shows there. Node shell and debug containers (0037) keep their own command.
@@ -73,4 +74,4 @@ Group "New log tabs", description `Each tab can still change these from its tool
 
 ## Not on these pages (lean on purpose)
 
-Log buffer size, late-join tail, Previous by default, cursor style, copy on select, bell, paste confirmation (a safety check, never a toggle), font family, "reopen last cluster", language, updates, telemetry. Each is speculative or a safety rule; add it when a user asks.
+Secret clipboard clear time (fixed 30 s, 0016 decision 26), log buffer size, late-join tail, Previous by default, cursor style, copy on select, bell, paste confirmation (a safety check, never a toggle), font family, "reopen last cluster", language, updates, telemetry. Each is speculative or a safety rule; add it when a user asks.
