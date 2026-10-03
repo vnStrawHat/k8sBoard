@@ -1,6 +1,6 @@
 # 0028 — Keyboard map
 
-Status: draft, amended after advisor review. HEAD `9d5af01`. Lands after 0025 and moves 0025's two key bindings. Crate: `crates/app` only. Local only: no cluster call is added and no file is written.
+Status: implemented (steps 1–4). Open checks: AC 7 trace, 9, 10, 12, 13 need a live UAT run or ui-verifier. Amended after advisor review. HEAD `9d5af01`. Lands after 0025 and moves 0025's two key bindings. Crate: `crates/app` only. Local only: no cluster call is added and no file is written.
 
 Wireframes: the keyboard map grid (22 keys, section `#phim`), the anatomy notes on the Drawer and the Dock, the W4/W5/W7 menu `kbd` hints, W4b note 2 (`[` `]`), the W8/W8b notes, and the W2 nav item "Keyboard Shortcuts". Roadmap: inventory P2, D6, W4-7.
 
@@ -52,20 +52,20 @@ Wireframes: the keyboard map grid (22 keys, section `#phim`), the anatomy notes 
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. `Cargo.lock` is unchanged.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline. No test opens a real window.
-- [ ] 3. Every binding in [keymap.md](keymap.md) exists with that string and context, and all bindings live in `keymap.rs`. No still-reserved key is bound (compared as parsed keystrokes).
-- [ ] 4. Single keys never act while a text field, menu, popover, or dialog has focus. Chords act anywhere in the shell tree (tests).
-- [ ] 5. J/K/↑/↓ move the cursor and wrap at the ends; Home/End/PgUp/PgDn clamp. None of them opens the drawer. ⏎ opens it, and with it open, the moves retarget it.
-- [ ] 6. Esc closes a zoomed dock, else an open drawer (the row is kept), else clears the cursor. Esc in the `/` filter, the dock filter, or the YAML view returns focus to the table.
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. `Cargo.lock` is unchanged.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline. No test opens a real window.
+- [x] 3. Every binding in [keymap.md](keymap.md) exists with that string and context, and all bindings live in `keymap.rs`. No still-reserved key is bound (compared as parsed keystrokes).
+- [x] 4. Single keys never act while a text field, menu, popover, or dialog has focus. Chords act anywhere in the shell tree (tests).
+- [x] 5. J/K/↑/↓ move the cursor and wrap at the ends; Home/End/PgUp/PgDn clamp. None of them opens the drawer. ⏎ opens it, and with it open, the moves retarget it.
+- [x] 6. Esc closes a zoomed dock, else an open drawer (the row is kept), else clears the cursor. Esc in the `/` filter, the dock filter, or the YAML view returns focus to the table.
 - [ ] 7. A closed drawer runs no object-events watch, related watch, YAML GET, kubelet demand, or pending debounce (tests plus a trace while pressing J).
-- [ ] 8. `?` opens the sheet with keys from the keymap, formatted per OS by `Kbd`, and Esc closes it. Settings › Keyboard Shortcuts shows the same grid at W2 position 4.
+- [x] 8. `?` opens the sheet with keys from the keymap, formatted per OS by `Kbd`, and Esc closes it. Settings › Keyboard Shortcuts shows the same grid at W2 position 4.
 - [ ] 9. On UAT, S, F, E, Del, R, ⇧S, C, and D show "… is unavailable: <reason>". L opens a pod log tab, and Y opens the YAML tab. Ctrl C copies the name, or the selected text when there is any. There is no mutating API call (0001 grep clean).
 - [ ] 10. Ctrl \`, Ctrl Shift M, Ctrl Tab, Ctrl Shift Tab, and Ctrl W act on the dock and do nothing without tabs. Ctrl N opens the title-bar namespace picker. Ctrl , and Ctrl O behave as in 0025.
-- [ ] 11. Bindings use `secondary`, except Ctrl \` and Ctrl Tab (literal `ctrl`). No binding uses the Win or Super key.
+- [x] 11. Bindings use `secondary`, except Ctrl \` and Ctrl Tab (literal `ctrl`). No binding uses the Win or Super key.
 - [ ] 12. Pod, node, and kind menus show the key next to: View logs, Open shell, Port-forward, View YAML, Cordon, Drain…, Copy name, Scale…, Restart rollout, Edit, and Delete.
 - [ ] 13. ui-verifier: `--screen shortcuts` and `--screen pods-cursor` match the wireframe grid and W4, with no high-severity defect. Decision 14 is a known deviation.
-- [ ] 14. A row click opens the drawer, even on the already-selected row. A snapshot reorder never reopens a closed drawer. The existing `--screen *-drawer` shots are unchanged.
+- [x] 14. A row click opens the drawer, even on the already-selected row. A snapshot reorder never reopens a closed drawer. The existing `--screen *-drawer` shots are unchanged.
 
 ## Open items
 

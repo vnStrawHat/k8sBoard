@@ -6,7 +6,7 @@
 
 | Item | Status | Spec |
 |---|---|---|
-| YAML tab and "View YAML" | Done (0007); the Y key → 0028 | 0007, 0028 |
+| YAML tab and "View YAML" | Done (0007); the Y key done in 0028 | 0007, 0028 |
 | Events tab | Planned(0006): a tab on Pods, a section on Node and kind drawers | 0006; becomes a tab in 0007 |
 | Copy name | Done for live kinds | 0005 |
 | Columns ▾, filter chips, sort | Done (0009); sort and hidden columns are saved per screen (0024) | 0009, 0024 |

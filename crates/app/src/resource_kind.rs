@@ -22,6 +22,7 @@ use crate::network_rows::{ingress_row, service_row};
 use crate::policy_rows::{
     horizontal_pod_autoscaler_row, pod_disruption_budget_row, resource_quota_row,
 };
+use crate::resource_actions::ResourceAction;
 use crate::secret_rows::secret_row;
 use crate::storage_rows::{persistent_volume_claim_row, persistent_volume_row, storage_class_row};
 use crate::workload_rows::{daemon_set_row, deployment_row, replica_set_row, stateful_set_row};
@@ -94,6 +95,30 @@ pub(crate) const fn column(name: &'static str, width: f32, align: Align) -> Kind
 
 const AGE_COLUMN: KindColumn = column("Age", 70., Align::Right);
 
+/// One mutating menu item of a kind that is shown disabled. `action` is the key action behind
+/// it, when the wireframe gives it a key; the menu shows that key as a hint.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct KindAction {
+    pub(crate) label: &'static str,
+    pub(crate) action: Option<ResourceAction>,
+}
+
+impl KindAction {
+    const fn named(label: &'static str) -> Self {
+        Self {
+            label,
+            action: None,
+        }
+    }
+
+    const fn keyed(label: &'static str, action: ResourceAction) -> Self {
+        Self {
+            label,
+            action: Some(action),
+        }
+    }
+}
+
 /// Everything that differs between kinds except the watch. A new kind adds one `static` here,
 /// one arm in `spec`, and one arm in `watch_rows`.
 pub(crate) struct KindSpec {
@@ -107,7 +132,7 @@ pub(crate) struct KindSpec {
     pub(crate) is_namespaced: bool,
     pub(crate) api: KindApi,
     pub(crate) columns: &'static [KindColumn],
-    pub(crate) read_only_actions: &'static [&'static str],
+    pub(crate) read_only_actions: &'static [KindAction],
     pub(crate) delete_label: &'static str,
     pub(crate) has_port_forward: bool,
 }
@@ -192,7 +217,12 @@ static DEPLOYMENTS: KindSpec = KindSpec {
         column("Strategy", 130., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Scale…", "Restart rollout", "Roll back…", "Pause rollout"],
+    read_only_actions: &[
+        KindAction::keyed("Scale…", ResourceAction::Scale),
+        KindAction::keyed("Restart rollout", ResourceAction::RestartRollout),
+        KindAction::named("Roll back…"),
+        KindAction::named("Pause rollout"),
+    ],
     delete_label: "Delete deployment…",
     has_port_forward: true,
 };
@@ -215,7 +245,10 @@ static STATEFUL_SETS: KindSpec = KindSpec {
         column("Update strategy", 140., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Scale…", "Restart rollout"],
+    read_only_actions: &[
+        KindAction::keyed("Scale…", ResourceAction::Scale),
+        KindAction::keyed("Restart rollout", ResourceAction::RestartRollout),
+    ],
     delete_label: "Delete statefulset…",
     has_port_forward: true,
 };
@@ -241,7 +274,10 @@ static DAEMON_SETS: KindSpec = KindSpec {
         column("Node selector", 200., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Restart rollout"],
+    read_only_actions: &[KindAction::keyed(
+        "Restart rollout",
+        ResourceAction::RestartRollout,
+    )],
     delete_label: "Delete daemonset…",
     has_port_forward: false,
 };
@@ -289,7 +325,7 @@ static JOBS: KindSpec = KindSpec {
         column("Duration", 90., Align::Right),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Re-run job"],
+    read_only_actions: &[KindAction::named("Re-run job")],
     delete_label: "Delete job…",
     has_port_forward: false,
 };
@@ -314,7 +350,10 @@ static CRON_JOBS: KindSpec = KindSpec {
         column("Next run", 100., Align::Right),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Trigger now", "Suspend"],
+    read_only_actions: &[
+        KindAction::named("Trigger now"),
+        KindAction::named("Suspend"),
+    ],
     delete_label: "Delete cronjob…",
     has_port_forward: false,
 };
@@ -385,7 +424,7 @@ static CONFIG_MAPS: KindSpec = KindSpec {
         column("Used by", 220., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Edit"],
+    read_only_actions: &[KindAction::keyed("Edit", ResourceAction::EditYaml)],
     delete_label: "Delete configmap…",
     has_port_forward: false,
 };
@@ -455,7 +494,7 @@ static HORIZONTAL_POD_AUTOSCALERS: KindSpec = KindSpec {
         column("Metrics", 200., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Edit min / max…"],
+    read_only_actions: &[KindAction::named("Edit min / max…")],
     delete_label: "Delete HPA…",
     has_port_forward: false,
 };
@@ -478,7 +517,7 @@ static RESOURCE_QUOTAS: KindSpec = KindSpec {
         column("Pods", 100., Align::Right),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Edit"],
+    read_only_actions: &[KindAction::named("Edit")],
     delete_label: "Delete quota…",
     has_port_forward: false,
 };
@@ -503,7 +542,7 @@ static PERSISTENT_VOLUME_CLAIMS: KindSpec = KindSpec {
         column("Class", 150., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Expand…"],
+    read_only_actions: &[KindAction::named("Expand…")],
     delete_label: "Delete PVC…",
     has_port_forward: false,
 };
@@ -555,7 +594,7 @@ static STORAGE_CLASSES: KindSpec = KindSpec {
         column("PVs", 70., Align::Right),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Set as default"],
+    read_only_actions: &[KindAction::named("Set as default")],
     delete_label: "Delete storage class…",
     has_port_forward: false,
 };
@@ -689,7 +728,7 @@ static SECRETS: KindSpec = KindSpec {
         column("Used by", 220., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &["Edit"],
+    read_only_actions: &[KindAction::named("Edit")],
     delete_label: "Delete secret…",
     has_port_forward: false,
 };
@@ -714,7 +753,7 @@ static HELM_RELEASES: KindSpec = KindSpec {
         column("Status", 130., Align::Left),
         column("Updated", 100., Align::Right),
     ],
-    read_only_actions: &["Roll back…"],
+    read_only_actions: &[KindAction::named("Roll back…")],
     delete_label: "Uninstall release…",
     has_port_forward: false,
 };
@@ -856,7 +895,7 @@ impl ResourceKind {
     }
 
     /// The mutating menu items that are shown disabled.
-    pub(crate) fn read_only_actions(self) -> &'static [&'static str] {
+    pub(crate) fn read_only_actions(self) -> &'static [KindAction] {
         self.spec().read_only_actions
     }
 
@@ -1253,6 +1292,33 @@ mod tests {
         assert!(!ResourceKind::Namespaces.has_port_forward());
         assert_eq!(ResourceKind::Deployments.read_only_actions().len(), 4);
         assert!(ResourceKind::Namespaces.read_only_actions().is_empty());
+    }
+
+    #[test]
+    fn kind_actions_name_their_key_action() {
+        let action_of = |kind: ResourceKind, label: &str| {
+            kind.read_only_actions()
+                .iter()
+                .find(|item| item.label == label)
+                .map(|item| item.action)
+        };
+        assert_eq!(
+            action_of(ResourceKind::Deployments, "Scale…"),
+            Some(Some(ResourceAction::Scale))
+        );
+        assert_eq!(
+            action_of(ResourceKind::Deployments, "Restart rollout"),
+            Some(Some(ResourceAction::RestartRollout))
+        );
+        assert_eq!(
+            action_of(ResourceKind::ConfigMaps, "Edit"),
+            Some(Some(ResourceAction::EditYaml))
+        );
+        // The wireframe gives these no key.
+        assert_eq!(
+            action_of(ResourceKind::Deployments, "Roll back…"),
+            Some(None)
+        );
     }
 
     #[test]

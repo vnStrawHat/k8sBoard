@@ -58,3 +58,4 @@ Revision history tab, pre-apply snapshot and rollback (W10 note 5), "New" from t
 2. 0030 open item 5 applies to the lazy checks too: with scope All, namespace-only `update` rights show as denied.
 3. Deferred W10 parts (non-goals) need their own spec. Snapshots of Secrets and ConfigMaps need a C1 decision first.
 4. Closed: C8, decision 1 (replace vs SSA) decided by the user on 2026-10-02 (option 1: `PUT` with base `resourceVersion`, no SSA, no Force).
+5. 0028 binds `e` (`EditYaml`) and offers it on every object that has an `object_ref`, while only the ConfigMaps menu shows the key hint (the kinds list `Edit` there). Decide whether the other kinds get an "Edit YAML" menu item with the hint when this spec enables the action.

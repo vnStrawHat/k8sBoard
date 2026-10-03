@@ -1,0 +1,396 @@
+//! Key resolution without a window: the keymap is filled by `gpui_kit::init` and the app's
+//! `bind_keys`, then asked what a key does under a context stack, as GPUI asks it when a key is
+//! pressed.
+
+use gpui_kit::{AsKeystroke as _, KeyContext, Keystroke, Modifiers, TestAppContext};
+
+use super::*;
+use crate::cluster_switcher::{
+    CloseClusterSwitcher, SwitcherConfirm, SwitcherNext, SwitcherPrevious,
+};
+
+/// Keys that a later spec binds. No binding of this spec may take one; the owner removes the key
+/// from this list in the change that binds it.
+const RESERVED_KEYS: [&str; 6] = [
+    "space",
+    "secondary-k",
+    ":",
+    "secondary-enter",
+    "secondary-shift-r",
+    "secondary-s",
+];
+
+fn bind_all(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        bind_keys(cx);
+        crate::cluster_switcher::bind_keys(cx);
+    });
+}
+
+fn stack(contexts: &[&str]) -> Vec<KeyContext> {
+    contexts
+        .iter()
+        .map(|context| KeyContext::parse(context).expect("a valid context"))
+        .collect()
+}
+
+/// The name of the action the first matching binding runs, as GPUI would dispatch it.
+fn resolve_typed(
+    typed: &Keystroke,
+    contexts: &[&str],
+    cx: &mut TestAppContext,
+) -> Option<&'static str> {
+    let contexts = stack(contexts);
+    cx.update(|cx| {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let (bindings, _) = keymap.bindings_for_input(std::slice::from_ref(typed), &contexts);
+        bindings.first().map(|binding| binding.action().name())
+    })
+}
+
+fn resolve(key: &str, contexts: &[&str], cx: &mut TestAppContext) -> Option<&'static str> {
+    let typed = Keystroke::parse(key).expect("a valid keystroke");
+    resolve_typed(&typed, contexts, cx)
+}
+
+fn is_app_action(name: Option<&str>) -> bool {
+    name.is_some_and(|name| name.starts_with("k8sboard::"))
+}
+
+/// The app's own bindings, not the kit's.
+fn app_bindings(cx: &mut TestAppContext) -> Vec<KeyBinding> {
+    cx.update(|cx| {
+        cx.key_bindings()
+            .borrow()
+            .bindings()
+            .filter(|binding| binding.action().name().starts_with("k8sboard::"))
+            .cloned()
+            .collect()
+    })
+}
+
+const SHELL: [&str; 2] = ["Root", "AppShell"];
+const TABLE_PATH: [&str; 3] = ["Root", "AppShell", "DataTable"];
+const INPUT_PATH: [&str; 3] = ["Root", "AppShell", "Input"];
+
+#[gpui_kit::test]
+fn letters_resolve_in_the_workspace(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(resolve("l", &SHELL, cx), Some("k8sboard::ViewLogs"));
+    assert_eq!(resolve("l", &TABLE_PATH, cx), Some("k8sboard::ViewLogs"));
+    assert_eq!(resolve("y", &SHELL, cx), Some("k8sboard::ViewYaml"));
+    assert_eq!(resolve("shift-s", &SHELL, cx), Some("k8sboard::Scale"));
+    assert_eq!(resolve("s", &SHELL, cx), Some("k8sboard::OpenShell"));
+    assert_eq!(resolve("delete", &SHELL, cx), Some("k8sboard::Delete"));
+}
+
+#[gpui_kit::test]
+fn letters_do_nothing_in_text_inputs(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for key in [
+        "?", "/", "j", "k", "[", "]", "enter", "l", "y", "s", "e", "delete",
+    ] {
+        let name = resolve(key, &INPUT_PATH, cx);
+        assert!(!is_app_action(name), "{key} resolved to {name:?}");
+    }
+}
+
+#[gpui_kit::test]
+fn single_keys_do_nothing_in_menus_popovers_and_dialogs(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let paths: [&[&str]; 4] = [
+        &["Root", "AppShell", "PopupMenu"],
+        &["Root", "AppShell", "Popover"],
+        &["Root", "AppShell", "DataTable", "PopupMenu"],
+        &["Root", "Dialog"],
+    ];
+    for path in paths {
+        for key in ["?", "/", "j", "y", "l", "[", "enter", "escape"] {
+            let name = resolve(key, path, cx);
+            assert!(!is_app_action(name), "{key} under {path:?}: {name:?}");
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn table_arrows_outrank_the_kit_table(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for (key, action) in [
+        ("down", "SelectNextRow"),
+        ("up", "SelectPreviousRow"),
+        ("home", "SelectFirstRow"),
+        ("end", "SelectLastRow"),
+        ("pageup", "SelectPreviousPage"),
+        ("pagedown", "SelectNextPage"),
+    ] {
+        assert_eq!(
+            resolve(key, &TABLE_PATH, cx),
+            Some(format!("k8sboard::{action}").as_str()),
+            "{key}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn table_escape_outranks_the_kit_table(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("escape", &TABLE_PATH, cx),
+        Some("k8sboard::Dismiss")
+    );
+}
+
+#[gpui_kit::test]
+fn escape_leaves_the_quick_filter(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for field in ["QuickFilter", "Drawer", "LogDock"] {
+        assert_eq!(
+            resolve("escape", &["Root", "AppShell", field, "Input"], cx),
+            Some("k8sboard::LeaveInput"),
+            "{field}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn escape_stays_with_other_inputs(cx: &mut TestAppContext) {
+    bind_all(cx);
+    // The namespace picker search: a popover without the cluster switcher in its path.
+    let path = ["Root", "AppShell", "Popover", "Input"];
+    for key in ["escape", "up", "down", "enter"] {
+        let name = resolve(key, &path, cx);
+        assert!(!is_app_action(name), "{key}: {name:?}");
+    }
+}
+
+#[gpui_kit::test]
+fn chords_work_inside_text_inputs(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for (key, action) in [
+        ("secondary-n", "OpenNamespacePicker"),
+        ("secondary-w", "CloseDockTab"),
+        ("ctrl-`", "ToggleDock"),
+        ("ctrl-tab", "NextDockTab"),
+        ("ctrl-shift-tab", "PreviousDockTab"),
+        ("secondary-shift-m", "ToggleDockZoom"),
+    ] {
+        assert_eq!(
+            resolve(key, &INPUT_PATH, cx),
+            Some(format!("k8sboard::{action}").as_str()),
+            "{key}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn copy_name_is_not_bound_inside_inputs(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("secondary-c", &SHELL, cx),
+        Some("k8sboard::CopyName")
+    );
+    let name = resolve("secondary-c", &INPUT_PATH, cx);
+    assert!(!is_app_action(name), "{name:?}");
+    assert!(name.is_some(), "the kit copies inside an input");
+}
+
+#[gpui_kit::test]
+fn question_mark_matches_a_shifted_slash(cx: &mut TestAppContext) {
+    bind_all(cx);
+    // A US keyboard sends the key `/` with shift and the character `?`.
+    let shifted = Keystroke {
+        modifiers: Modifiers::shift(),
+        key: "/".to_owned(),
+        key_char: Some("?".to_owned()),
+    };
+    assert_eq!(
+        resolve_typed(&shifted, &SHELL, cx),
+        Some("k8sboard::ShowShortcuts")
+    );
+    assert_eq!(resolve("/", &SHELL, cx), Some("k8sboard::FocusQuickFilter"));
+}
+
+#[test]
+fn secondary_is_the_platform_modifier() {
+    let keystroke = Keystroke::parse("secondary-n").expect("a valid keystroke");
+    assert_eq!(keystroke.modifiers.platform, cfg!(target_os = "macos"));
+    assert_eq!(keystroke.modifiers.control, !cfg!(target_os = "macos"));
+}
+
+#[gpui_kit::test]
+fn bindings_never_share_a_keystroke_in_one_context(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let bindings = app_bindings(cx);
+    for (index, binding) in bindings.iter().enumerate() {
+        for other in &bindings[index + 1..] {
+            let same_keys = binding
+                .keystrokes()
+                .iter()
+                .map(|key| key.as_keystroke())
+                .eq(other.keystrokes().iter().map(|key| key.as_keystroke()));
+            let same_context = binding.predicate() == other.predicate();
+            assert!(
+                !(same_keys && same_context),
+                "{} and {} share {:?}",
+                binding.action().name(),
+                other.action().name(),
+                binding.keystrokes()
+            );
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn bindings_avoid_reserved_keys(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let reserved: Vec<Keystroke> = RESERVED_KEYS
+        .iter()
+        .map(|key| Keystroke::parse(key).expect("a valid reserved key"))
+        .collect();
+    for binding in app_bindings(cx) {
+        for key in binding.keystrokes() {
+            assert!(
+                !reserved.contains(key.as_keystroke()),
+                "{} takes a reserved key",
+                binding.action().name()
+            );
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn every_sheet_row_has_a_binding(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let bound = app_bindings(cx);
+    for row in shortcut_rows() {
+        assert!(
+            bound
+                .iter()
+                .any(|binding| binding.action().partial_eq(&*row.action)),
+            "{} has no binding",
+            row.label
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let rows = shortcut_rows();
+    let without_row: [&dyn Action; 13] = [
+        &LeaveInput,
+        &SwitchToCluster2,
+        &SwitchToCluster3,
+        &SwitchToCluster4,
+        &SwitchToCluster5,
+        &SwitchToCluster6,
+        &SwitchToCluster7,
+        &SwitchToCluster8,
+        &SwitchToCluster9,
+        &SwitcherNext,
+        &SwitcherPrevious,
+        &SwitcherConfirm,
+        &CloseClusterSwitcher,
+    ];
+    for binding in app_bindings(cx) {
+        let action = binding.action();
+        let is_listed = rows.iter().any(|row| action.partial_eq(&*row.action));
+        let is_exempt = without_row.iter().any(|exempt| action.partial_eq(*exempt));
+        assert!(
+            is_listed || is_exempt,
+            "{} is not on the sheet",
+            action.name()
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn cluster_switcher_chords_resolve_everywhere(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let paths: [&[&str]; 3] = [
+        &["Root", "AppShell"],
+        &["Root", "AppShell", "Input"],
+        &["Root", "AppShell", "Popover", "ClusterSwitcher", "Input"],
+    ];
+    for path in paths {
+        assert_eq!(
+            resolve("secondary-shift-c", path, cx),
+            Some("k8sboard::OpenClusterSwitcher"),
+            "{path:?}"
+        );
+        assert_eq!(
+            resolve("secondary-1", path, cx),
+            Some("k8sboard::SwitchToCluster1"),
+            "{path:?}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn settings_window_gets_no_shell_keys(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let paths: [&[&str]; 2] = [
+        &["Root", "SettingsWindow"],
+        &["Root", "SettingsWindow", "Input"],
+    ];
+    for path in paths {
+        for key in ["j", "?", "/", "enter", "l", "secondary-n", "secondary-w"] {
+            let name = resolve(key, path, cx);
+            assert!(!is_app_action(name), "{key} under {path:?}: {name:?}");
+        }
+    }
+    for path in [
+        &["Root", "SettingsWindow", "Input"][..],
+        &["Root", "Dialog", "Input"][..],
+    ] {
+        assert_ne!(
+            resolve("escape", path, cx),
+            Some("k8sboard::LeaveInput"),
+            "{path:?}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn settings_keys_keep_their_0025_contexts(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for path in [
+        &["Root", "SettingsWindow"][..],
+        &["Root", "AppShell"][..],
+        &["Root", "Dialog"][..],
+    ] {
+        assert_eq!(
+            resolve("secondary-,", path, cx),
+            Some("k8sboard::OpenSettings"),
+            "{path:?}"
+        );
+    }
+    assert_eq!(
+        resolve("secondary-o", &["Root", "SettingsWindow"], cx),
+        Some("k8sboard::ImportKubeconfig")
+    );
+    assert_ne!(
+        resolve("secondary-o", &SHELL, cx),
+        Some("k8sboard::ImportKubeconfig")
+    );
+}
+
+#[gpui_kit::test]
+fn no_binding_uses_the_windows_or_super_key(cx: &mut TestAppContext) {
+    bind_all(cx);
+    // `secondary` is Cmd on macOS, so only there may a binding carry the platform modifier.
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    for binding in app_bindings(cx) {
+        for key in binding.keystrokes() {
+            assert!(
+                !key.as_keystroke().modifiers.platform,
+                "{}",
+                binding.action().name()
+            );
+        }
+    }
+}

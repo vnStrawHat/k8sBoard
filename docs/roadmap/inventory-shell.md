@@ -52,7 +52,7 @@
 | D3 | Tab bar Overview / Monitor / YAML / Events | Done | Overview, Containers (pods), Monitor (0010), YAML, Events | — |
 | D4 | WHY / alert box per kind | Missing | — | pods 0008; kinds 0012–0018 |
 | D5 | `→` links to related objects (node, owner, target) | Partial | related pods 0005 | 0008, 0012 |
-| D6 | ↑↓ moves rows while open, Esc or table click closes | Partial | mouse only | 0028 |
+| D6 | ↑↓ moves rows while open, Esc or table click closes | Done (0028): Esc closes; a row click switches the subject (decision 14) | `keyboard_navigation.rs` | — |
 
 ## Dock (W8, W8b)
 
@@ -79,12 +79,12 @@
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
 | P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Missing | 0029 |
-| P2 | Keyboard map (22 bindings) and `?` cheat sheet | Partial (Ctrl Shift C and Ctrl 1–9 in 0026) | 0028 |
+| P2 | Keyboard map (22 bindings) and `?` cheat sheet | Done (0028); `:` and Ctrl K → 0029, mutating letters stay gated until 0031–0036 | `keymap.rs`, `shortcut_sheet.rs` |
 | S1 | Settings window (W2) as a separate OS window, single instance | Done | 0025 |
 | S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (no drag order) | 0025 |
 | S3 | Add cluster: import file, watch folder, paste YAML | Partial (no watch folder) | 0025 |
 | S4 | Add cluster: scan AWS EKS, GKE, AKS | Missing | backlog |
-| S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Partial (Clusters, Appearance, About) | 0025; the rest: 0028, 0030, 0036, 0019, backlog |
+| S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Partial (Clusters, Appearance, About; Keyboard Shortcuts done in 0028) | 0025, 0028; the rest: 0030, 0036, 0019, backlog |
 | M1 | Multi-cluster aggregated tables | Missing | 0027 |
 | G1 | Env tiers: prod typed name; staging, dev, local a confirm dialog with a click (user 2026-10-02; W10 text superseded) | Missing | 0030 |
 | G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Missing | 0030, 0031 |

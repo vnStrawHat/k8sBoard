@@ -13,11 +13,10 @@ use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Point, Render,
-    SharedString, Styled as _, Subscription, Task, Window, px,
+    InteractiveElement as _, IntoElement, ParentElement as _, Point, Render, SharedString,
+    Styled as _, Subscription, Task, Window, px,
 };
 
-use crate::FocusQuickFilter;
 use crate::cluster_catalog::{CatalogHandle, ClusterCatalog};
 use crate::cluster_health::{ProbeCandidate, ProbeResult, ProbeTarget, RowHealth, probe_stream};
 use crate::cluster_registry::{
@@ -49,6 +48,7 @@ use crate::helm_release_view::{
     HelmReleaseView, HistoryState, ShowLatest, ValuesLayout, earlier_revision, helm_subject,
 };
 use crate::issue_table::IssueTableDelegate;
+use crate::keymap::{FocusQuickFilter, OpenNamespacePicker, ShowShortcuts};
 use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
@@ -82,12 +82,13 @@ use crate::secret_values::{
     pending_action, value_access, values_subject,
 };
 use crate::settings::{AppSettings, TablePrefs, screen_key};
+use crate::shortcut_sheet::open_shortcut_sheet;
 use crate::status_bar::status_bar;
 use crate::table_filter::{
     FilterChip, FilterPreset, TableFilter, parse_label_queries, quick_filter_text,
 };
 use crate::table_selection::{
-    ResourceKey, SelectionSync, list_item_index, list_row_index, selection_sync,
+    ResourceKey, SelectionSync, list_item_index, list_row_index, selection_sync, take_row_echo,
 };
 use crate::table_sort::next_sort;
 use crate::table_view::{FilteredTable, RowCheck, TableView};
@@ -103,6 +104,9 @@ const DIALOG_WIDTH: f32 = 760.;
 
 #[path = "workspace.rs"]
 pub(crate) mod workspace;
+
+#[path = "keyboard_navigation.rs"]
+mod keyboard_navigation;
 
 #[cfg(test)]
 #[path = "app_shell_tests.rs"]
@@ -267,8 +271,12 @@ pub(crate) struct AppShell {
     /// The Topology screen: its graph, canvas, and toolbar.
     topology: Entity<TopologyView>,
     _table_subscriptions: Vec<Subscription>,
-    /// The drawer is open exactly while this is set.
+    /// The row cursor. The drawer shows this row while `drawer.is_open`; a closed drawer leaves
+    /// the cursor where it is.
     selected: Option<ResourceKey>,
+    /// The row the shell itself just selected. Its `SelectRow` echo moves the cursor but never
+    /// opens the drawer, which only a click does (`take_row_echo`).
+    row_echo: Option<usize>,
     drawer: DrawerState,
     /// The debounced start of the drawer watches (object events, related objects) that is waiting
     /// for the selection to rest. Replacing or dropping it cancels it.
@@ -322,24 +330,6 @@ pub(crate) struct AppShell {
     _clipboard_quit: Subscription,
     /// Re-renders the title bar when a setting or a settings notice changes.
     _settings_observer: Subscription,
-}
-
-/// The key bindings of the shell. `!Input` keeps `/` typable in every input, the YAML editor
-/// included. The switcher chords carry no `!Input`: they work in text fields too.
-pub(crate) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("/", FocusQuickFilter, Some("AppShell && !Input")),
-        KeyBinding::new("secondary-shift-c", OpenClusterSwitcher, Some("AppShell")),
-        KeyBinding::new("secondary-1", SwitchToCluster1, Some("AppShell")),
-        KeyBinding::new("secondary-2", SwitchToCluster2, Some("AppShell")),
-        KeyBinding::new("secondary-3", SwitchToCluster3, Some("AppShell")),
-        KeyBinding::new("secondary-4", SwitchToCluster4, Some("AppShell")),
-        KeyBinding::new("secondary-5", SwitchToCluster5, Some("AppShell")),
-        KeyBinding::new("secondary-6", SwitchToCluster6, Some("AppShell")),
-        KeyBinding::new("secondary-7", SwitchToCluster7, Some("AppShell")),
-        KeyBinding::new("secondary-8", SwitchToCluster8, Some("AppShell")),
-        KeyBinding::new("secondary-9", SwitchToCluster9, Some("AppShell")),
-    ]);
 }
 
 impl AppShell {
@@ -460,13 +450,14 @@ impl AppShell {
             topology,
             _table_subscriptions: table_subscriptions,
             selected: None,
+            row_echo: None,
             drawer,
             pending_subjects: None,
             pending_reveal: None,
             log_dock,
             dock_split,
             // A custom launch resolves against the CRD list first, then sets this.
-            pending_launch_screen: (options.screen.has_drawer()
+            pending_launch_screen: (options.screen.selects_row()
                 || options.screen.has_log_dock()
                 || options.screen.checks_rows())
             .then_some(options.screen)
@@ -630,7 +621,7 @@ impl AppShell {
     /// Releases the session and everything that belongs to the cluster it served. The custom kind
     /// definitions seen so far wait in `kind_cache` for the next session.
     fn tear_down_session(&mut self, cx: &mut Context<Self>) {
-        self.close_drawer(cx);
+        self.clear_selection(cx);
         self.log_dock.update(cx, |dock, cx| {
             dock.close_all(cx);
             dock.set_session(None);
@@ -1071,6 +1062,10 @@ impl AppShell {
 
     /// Opens the picker from `anchor`, with the current scope ticked.
     pub(crate) fn open_namespace_picker(&mut self, anchor: PickerAnchor, cx: &mut Context<Self>) {
+        // Ctrl N while it is open must not throw away the draft.
+        if self.namespace_picker.anchor == Some(anchor) {
+            return;
+        }
         let Some(scope) = self.live(cx).map(|live| live.scope.clone()) else {
             return;
         };
@@ -1104,7 +1099,7 @@ impl AppShell {
         let Some(session) = self.session.clone() else {
             return;
         };
-        self.close_drawer(cx);
+        self.clear_selection(cx);
         session.update(cx, |session, cx| session.set_scope(scope, cx));
     }
 
@@ -1145,7 +1140,7 @@ impl AppShell {
             }
         });
         self.rebuild_visible_view(cx, |_| {});
-        self.close_drawer(cx);
+        self.clear_selection(cx);
         self.log_dock.update(cx, |dock, cx| dock.unzoom(cx));
     }
 
@@ -1173,6 +1168,7 @@ impl AppShell {
             let _ = shell.update(cx, |shell, cx| {
                 shell.pending_reveal = Some(key.clone());
                 shell.change_selection(Some(key), cx);
+                shell.set_drawer_open(true, cx);
                 shell.apply_pending_reveal(cx);
                 shell.sync_selection(cx);
                 then(shell, cx);
@@ -1210,6 +1206,7 @@ impl AppShell {
         step: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
     ) {
         if self.selected.as_ref() == Some(&key) {
+            self.set_drawer_open(true, cx);
             step(self, cx);
             return;
         }
@@ -1340,7 +1337,7 @@ impl AppShell {
 
     /// The service account whose drawer is open, as `(subject text, namespace)`.
     pub(crate) fn drawer_account(&self) -> Option<(String, String)> {
-        match &self.selected {
+        match self.drawer_subject() {
             Some(ResourceKey::Kind {
                 kind: ResourceKind::ServiceAccounts,
                 namespace: Some(namespace),
@@ -1399,6 +1396,7 @@ impl AppShell {
                 };
                 self.open_traffic_test(policy.as_ref(), true, window, cx);
             }
+            LaunchScreen::Shortcuts => open_shortcut_sheet(window, cx),
             _ => {}
         }
         self.pending_dialog_launch = None;
@@ -1468,7 +1466,29 @@ impl AppShell {
 
     // ---- drawer ----
 
+    /// The object the drawer shows: the cursor row while the drawer is open.
+    pub(crate) fn drawer_subject(&self) -> Option<&ResourceKey> {
+        self.selected.as_ref().filter(|_| self.drawer.is_open)
+    }
+
+    /// Opens or closes the drawer on the cursor row; opening without a cursor does nothing. A
+    /// closing drawer stops its watches and its pending debounce, and wipes revealed Secret values.
+    fn set_drawer_open(&mut self, is_open: bool, cx: &mut Context<Self>) {
+        self.drawer.is_open = is_open && self.selected.is_some();
+        if !self.drawer.is_open {
+            self.drop_secret_values();
+        }
+        self.follow_drawer_subjects(cx);
+        cx.notify();
+    }
+
+    /// Closes the drawer (the ✕ button, Esc); the row stays highlighted.
     pub(crate) fn close_drawer(&mut self, cx: &mut Context<Self>) {
+        self.set_drawer_open(false, cx);
+    }
+
+    /// Drops the row cursor of every table, which closes the drawer too.
+    pub(crate) fn clear_selection(&mut self, cx: &mut Context<Self>) {
         self.change_selection(None, cx);
         self.pod_table
             .update(cx, |table, cx| table.clear_selection(cx));
@@ -1525,7 +1545,7 @@ impl AppShell {
             self.drawer.monitor.cache = None;
             return;
         }
-        let (Some(subject), Some(live)) = (self.selected.clone(), self.live(cx)) else {
+        let (Some(subject), Some(live)) = (self.drawer_subject().cloned(), self.live(cx)) else {
             return;
         };
         let container = self.monitor_container(&subject, live, is_container_tab);
@@ -1699,7 +1719,7 @@ impl AppShell {
     /// Overview tab of its drawer is shown. It runs inside `render`, so it only assigns and never
     /// notifies, and it is the only place that creates the view.
     fn sync_secret_values(&mut self, cx: &mut Context<Self>) {
-        let subject = values_subject(self.selected.as_ref(), self.drawer.tab);
+        let subject = values_subject(self.drawer_subject(), self.drawer.tab);
         let Some(subject) = subject else {
             self.drop_secret_values();
             return;
@@ -1806,7 +1826,7 @@ impl AppShell {
     /// it is the only place that creates a `YamlView`. Comparing by object alone is enough because
     /// every context or namespace switch closes the drawer first.
     fn sync_yaml_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(subject) = yaml_subject(self.selected.as_ref(), self.drawer.tab) else {
+        let Some(subject) = yaml_subject(self.drawer_subject(), self.drawer.tab) else {
             self.drawer.yaml = None;
             return;
         };
@@ -1827,7 +1847,7 @@ impl AppShell {
     /// and never notifies, and it is the only place that creates the view. A changed revision
     /// (a History button, or a new latest one) drops the old view, which wipes its texts.
     fn sync_helm_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let found = self.selected.clone().and_then(|key| {
+        let found = self.drawer_subject().cloned().and_then(|key| {
             let tab = shown_tab(drawer_tabs(&key), self.drawer.tab);
             let live = self.live(cx)?;
             let summary = helm_release_of(live, &key)?;
@@ -1905,7 +1925,7 @@ impl AppShell {
     /// the pods it owns. Disk I/O is wanted only while a Monitor tab shows: the drawer's own, or the
     /// container Monitor sub-tab of a pod.
     fn kubelet_demand(&self, cx: &App) -> KubeletDemand {
-        let subject = self.selected.as_ref().and_then(|key| match key {
+        let subject = self.drawer_subject().and_then(|key| match key {
             ResourceKey::Pod { namespace, name } => Some(KubeletSubject::Pod {
                 namespace: namespace.clone(),
                 name: name.clone(),
@@ -1940,7 +1960,7 @@ impl AppShell {
 
     /// Whether a Monitor tab of the open drawer is visible.
     fn shows_monitor(&self) -> bool {
-        let Some(key) = &self.selected else {
+        let Some(key) = self.drawer_subject() else {
             return false;
         };
         let is_container_tab = self.drawer.tab == DrawerTab::Containers
@@ -1963,7 +1983,7 @@ impl AppShell {
     /// The YAML tab is shown and its first fetch has not finished. A failed fetch is settled.
     #[cfg(feature = "screenshot")]
     fn is_yaml_loading(&self, cx: &App) -> bool {
-        yaml_subject(self.selected.as_ref(), self.drawer.tab).is_some()
+        yaml_subject(self.drawer_subject(), self.drawer.tab).is_some()
             && self
                 .drawer
                 .yaml
@@ -1981,6 +2001,10 @@ impl AppShell {
             return false;
         }
         self.selected = key;
+        // Without a row there is nothing to show.
+        if self.selected.is_none() {
+            self.drawer.is_open = false;
+        }
         self.drawer.selected_container = None;
         self.drop_secret_values();
         // A revision belongs to one release.
@@ -2019,7 +2043,7 @@ impl AppShell {
     /// only now tells what to watch; an unchanged pending start keeps its timer.
     fn follow_drawer_subjects(&mut self, cx: &mut Context<Self>) {
         self.request_rbac_for_account(cx);
-        let next_events = self.selected.as_ref().and_then(event_subject);
+        let next_events = self.drawer_subject().and_then(event_subject);
         let next_related = self.selected_related_subject(cx);
         let (running_events, running_related) = self.live(cx).map_or((None, None), |live| {
             (
@@ -2074,10 +2098,10 @@ impl AppShell {
     /// What the selected row needs watched besides its events; `None` while its list has not
     /// loaded the row.
     fn selected_related_subject(&self, cx: &App) -> Option<RelatedSubject> {
-        let ResourceKey::Kind { kind, .. } = self.selected.as_ref()? else {
+        let key = self.drawer_subject()?;
+        let ResourceKey::Kind { kind, .. } = key else {
             return None;
         };
-        let key = self.selected.as_ref()?;
         let live = self.live(cx)?;
         let row = live
             .kind_list(*kind)?
@@ -2190,6 +2214,37 @@ impl AppShell {
         });
     }
 
+    /// A `SelectRow` moved the cursor to `key`. A click (not the echo of a move the shell made
+    /// itself) also opens the drawer and focuses the table, even on the row that is already
+    /// selected. An echo never takes the focus: a snapshot that re-selects the row must not pull
+    /// it out of the filter.
+    fn on_row_selected<D: TableDelegate>(
+        &mut self,
+        key: Option<ResourceKey>,
+        is_echo: bool,
+        table: &Entity<TableState<D>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.change_selection(key, cx);
+        if is_echo {
+            return;
+        }
+        self.set_drawer_open(true, cx);
+        focus_table(table, window, cx);
+    }
+
+    /// Selects `row` on behalf of the shell: the cursor moves, the drawer stays as it is.
+    fn select_table_row<D: TableDelegate>(
+        &mut self,
+        table: &Entity<TableState<D>>,
+        row: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.row_echo = Some(row);
+        table.update(cx, |table, cx| table.set_selected_row(row, cx));
+    }
+
     fn on_pod_table_event(
         &mut self,
         table: &Entity<TableState<PodTableDelegate>>,
@@ -2199,13 +2254,12 @@ impl AppShell {
     ) {
         match event {
             TableEvent::SelectRow(row) => {
+                let is_echo = take_row_echo(&mut self.row_echo, *row);
                 let key = self
                     .shown_item(table, *row, cx)
                     .and_then(|item| self.live(cx)?.pods.items().get(item))
                     .map(ResourceKey::of_pod);
-                if self.change_selection(key, cx) {
-                    focus_table(table, window, cx);
-                }
+                self.on_row_selected(key, is_echo, table, window, cx);
             }
             TableEvent::ClearSelection => {
                 self.change_selection(None, cx);
@@ -2223,13 +2277,12 @@ impl AppShell {
     ) {
         match event {
             TableEvent::SelectRow(row) => {
+                let is_echo = take_row_echo(&mut self.row_echo, *row);
                 let key = self
                     .shown_item(table, *row, cx)
                     .and_then(|item| self.live(cx)?.nodes.items().get(item))
                     .map(ResourceKey::of_node);
-                if self.change_selection(key, cx) {
-                    focus_table(table, window, cx);
-                }
+                self.on_row_selected(key, is_echo, table, window, cx);
             }
             TableEvent::ClearSelection => {
                 self.change_selection(None, cx);
@@ -2262,14 +2315,13 @@ impl AppShell {
     ) {
         match event {
             TableEvent::SelectRow(row) => {
+                let is_echo = take_row_echo(&mut self.row_echo, *row);
                 let key = self.screen.kind().and_then(|kind| {
                     let explorer = self.live(cx)?.kind_list(kind)?;
                     let item = self.shown_item(table, *row, cx)?;
                     Some(ResourceKey::of_row(kind, explorer.list.items().get(item)?))
                 });
-                if self.change_selection(key, cx) {
-                    focus_table(table, window, cx);
-                }
+                self.on_row_selected(key, is_echo, table, window, cx);
             }
             TableEvent::ClearSelection => {
                 self.change_selection(None, cx);
@@ -2351,7 +2403,7 @@ impl AppShell {
         if view_logs_reason(Some(live)).is_some() {
             return;
         }
-        let Some(key) = &self.selected else {
+        let Some(key) = self.drawer_subject() else {
             return;
         };
         let Some(pod) = live.pods.items().iter().find(|pod| key.is_pod(pod)) else {
@@ -2532,9 +2584,7 @@ impl AppShell {
         match selection_sync(table_row, found) {
             SelectionSync::Keep => {}
             // Never reached with an unchanged index: `set_selected_row` scrolls and re-emits.
-            SelectionSync::Move(row) => {
-                table.update(cx, |table, cx| table.set_selected_row(row, cx))
-            }
+            SelectionSync::Move(row) => self.select_table_row(table, row, cx),
             SelectionSync::Clear => {
                 self.change_selection(None, cx);
                 table.update(cx, |table, cx| table.clear_selection(cx));
@@ -2618,6 +2668,10 @@ impl AppShell {
                         pods.iter()
                             .map(|pod| (Some(pod.namespace.as_str()), pod.name.as_str())),
                     ),
+                    // The cursor screen shows the first row the table does.
+                    None if launch == LaunchScreen::PodsCursor => {
+                        self.shown_item(&self.pod_table, 0, cx)
+                    }
                     None => pick_drawer_pod(pods),
                 };
                 (live.pods.is_loading(), item)
@@ -2640,8 +2694,9 @@ impl AppShell {
                     .and_then(|live| live.nodes.items().get(item))
                     .map(ResourceKey::of_node);
                 self.change_selection(key, cx);
-                self.node_table
-                    .update(cx, |table, cx| table.set_selected_row(row, cx));
+                let table = self.node_table.clone();
+                self.select_table_row(&table, row, cx);
+                self.open_launch_drawer(launch, cx);
             }
             LaunchScreen::KindDrawer(kind, _) => {
                 let Some(row) = self.row_of_item(&self.kind_table, item, cx) else {
@@ -2652,8 +2707,9 @@ impl AppShell {
                     .and_then(|live| live.kind_list(kind)?.list.items().get(item))
                     .map(|row| ResourceKey::of_row(kind, row));
                 self.change_selection(key, cx);
-                self.kind_table
-                    .update(cx, |table, cx| table.set_selected_row(row, cx));
+                let table = self.kind_table.clone();
+                self.select_table_row(&table, row, cx);
+                self.open_launch_drawer(launch, cx);
             }
             _ => {
                 let Some(row) = self.row_of_item(&self.pod_table, item, cx) else {
@@ -2664,9 +2720,18 @@ impl AppShell {
                     .and_then(|live| live.pods.items().get(item))
                     .map(ResourceKey::of_pod);
                 self.change_selection(key, cx);
-                self.pod_table
-                    .update(cx, |table, cx| table.set_selected_row(row, cx));
+                let table = self.pod_table.clone();
+                self.select_table_row(&table, row, cx);
+                self.open_launch_drawer(launch, cx);
             }
+        }
+    }
+
+    /// The drawer screens open the drawer on the row the launch selected; `pods-cursor` leaves it
+    /// closed.
+    fn open_launch_drawer(&mut self, launch: LaunchScreen, cx: &mut Context<Self>) {
+        if launch.has_drawer() {
+            self.set_drawer_open(true, cx);
         }
     }
 
@@ -2841,7 +2906,7 @@ impl AppShell {
             is_catalog_loading: self.catalog.read(cx).is_loading(),
             // An empty list opens no drawer, but the launch request is resolved then, so it settles.
             is_drawer_ready: is_drawer_ready(
-                self.selected.is_some(),
+                self.drawer_subject().is_some(),
                 self.pending_launch_screen.is_some(),
                 is_content_pending,
             ),
@@ -3116,6 +3181,9 @@ impl AppShell {
             InputEvent::PressEnter { .. } => {
                 let text = input.read(cx).value();
                 let Some(queries) = parse_label_queries(&text) else {
+                    // Plain text already filters as it is typed: Enter hands the keyboard back to
+                    // the table. A `label:` text keeps its chip behavior.
+                    self.focus_visible_table(window, cx);
                     return;
                 };
                 let chips = queries.into_iter().map(FilterChip::Label).collect();
@@ -3230,7 +3298,14 @@ impl Render for AppShell {
             }))
             .on_action(cx.listener(|shell, _: &OpenClusterSwitcher, window, cx| {
                 shell.toggle_cluster_switcher(window, cx);
+            }))
+            .on_action(cx.listener(|_, _: &ShowShortcuts, window, cx| {
+                open_shortcut_sheet(window, cx);
+            }))
+            .on_action(cx.listener(|shell, _: &OpenNamespacePicker, _, cx| {
+                shell.open_namespace_picker(PickerAnchor::TitleBar, cx);
             }));
+        let root = keyboard_navigation::register_key_handlers(root, cx);
         let root = on_switch_to::<SwitchToCluster1>(root, 1, cx);
         let root = on_switch_to::<SwitchToCluster2>(root, 2, cx);
         let root = on_switch_to::<SwitchToCluster3>(root, 3, cx);

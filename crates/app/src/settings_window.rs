@@ -12,14 +12,15 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, FocusHandle,
-    Focusable, Global, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
-    Render, Styled as _, Subscription, WeakEntity, Window, WindowBounds, WindowId, WindowOptions,
-    div, px, size,
+    Focusable, Global, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    Styled as _, Subscription, WeakEntity, Window, WindowBounds, WindowId, WindowOptions, div, px,
+    size,
 };
 
 use crate::cluster_catalog::CatalogHandle;
 use crate::clusters_page::{ClustersPage, add_cluster_button};
 use crate::settings::{AppSettings, theme_choices, theme_from_label, theme_label};
+use crate::shortcut_sheet::shortcut_sheet;
 
 gpui_kit::actions!(k8sboard, [OpenSettings, ManageClusters, ImportKubeconfig]);
 
@@ -31,9 +32,10 @@ const SIDEBAR_WIDTH: f32 = 200.;
 
 /// The pages in W2 nav order, keeping only those with content. A later spec inserts its page
 /// at its W2 position.
-const PAGES: [SettingsPage; 3] = [
+const PAGES: [SettingsPage; 4] = [
     SettingsPage::Clusters,
     SettingsPage::Appearance,
+    SettingsPage::KeyboardShortcuts,
     SettingsPage::About,
 ];
 
@@ -41,6 +43,7 @@ const PAGES: [SettingsPage; 3] = [
 pub(crate) enum SettingsPage {
     Clusters,
     Appearance,
+    KeyboardShortcuts,
     About,
 }
 
@@ -49,6 +52,7 @@ impl SettingsPage {
         match self {
             Self::Clusters => "Clusters",
             Self::Appearance => "Appearance",
+            Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About",
         }
     }
@@ -87,16 +91,6 @@ struct OpenWindow {
 }
 
 impl Global for SettingsWindowHandle {}
-
-/// `Ctrl ,` (`Cmd ,` on macOS) opens Settings from either window, and `Ctrl O` imports a
-/// kubeconfig file in the Settings window. Until the keyboard map spec owns every binding, this
-/// module binds its own.
-pub(crate) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("secondary-,", OpenSettings, None),
-        KeyBinding::new("secondary-o", ImportKubeconfig, Some("SettingsWindow")),
-    ]);
-}
 
 /// Activates the Settings window (its page stays), or opens it on `page`. `None` when it could
 /// not open.
@@ -227,6 +221,7 @@ impl SettingsWindow {
             .map(|page| match page {
                 SettingsPage::Clusters => clusters_page(&self.clusters, cx),
                 SettingsPage::Appearance => appearance_page(),
+                SettingsPage::KeyboardShortcuts => keyboard_shortcuts_page(),
                 SettingsPage::About => about_page(cx),
             })
             .collect()
@@ -299,6 +294,13 @@ fn appearance_page() -> SettingPage {
                 SettingItem::new("Theme", theme).description("Applies to every window at once."),
             ),
         )
+}
+
+/// The same grid as the `?` sheet, read-only: the keymap is fixed, so there is nothing to edit.
+fn keyboard_shortcuts_page() -> SettingPage {
+    SettingPage::new(SettingsPage::KeyboardShortcuts.title())
+        .resettable(false)
+        .group(SettingGroup::new().item(SettingItem::render(|_, _, cx| shortcut_sheet(cx))))
 }
 
 fn about_page(cx: &App) -> SettingPage {

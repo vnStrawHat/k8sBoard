@@ -47,7 +47,7 @@ pub(super) fn open_shell_on(
     };
     cx.update(|cx| {
         gpui_kit::init(cx);
-        bind_keys(cx);
+        crate::keymap::bind_keys(cx);
         crate::cluster_switcher::bind_keys(cx);
         // Writes stay off: a shell test never saves settings.
         AppSettings::install(
@@ -751,4 +751,313 @@ fn topology_launch_screen_starts_on_topology(cx: &mut TestAppContext) {
     let (window, shell) = open_shell_with(&["--screen", "topology"], cx);
     render(window, cx);
     shell.read_with(cx, |shell, _| assert_eq!(shell.screen, Screen::Topology));
+}
+
+// ---- The key map ----
+
+fn press(window: WindowHandle<Root>, key: &str, cx: &mut TestAppContext) {
+    cx.update_window(window.into(), |_, window, cx| window.press(key, cx))
+        .expect("the window is open");
+    cx.run_until_parked();
+}
+
+fn has_dialog(window: WindowHandle<Root>, cx: &mut TestAppContext) -> bool {
+    cx.update_window(window.into(), |_, window, cx| window.has_active_dialog(cx))
+        .expect("the window is open")
+}
+
+#[gpui_kit::test]
+fn question_mark_opens_the_shortcut_sheet(cx: &mut TestAppContext) {
+    let (window, _) = open_shell(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    render(window, cx);
+    assert!(!has_dialog(window, cx));
+    press(window, "?", cx);
+    assert!(has_dialog(window, cx));
+}
+
+#[gpui_kit::test]
+fn escape_closes_the_shortcut_sheet(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    render(window, cx);
+    press(window, "?", cx);
+    press(window, "escape", cx);
+    render(window, cx);
+    assert!(!has_dialog(window, cx));
+    assert_eq!(focus_of(window, &shell, cx), ROOT);
+}
+
+#[gpui_kit::test]
+fn the_shell_handles_every_key_action_of_its_tree(cx: &mut TestAppContext) {
+    let (window, _) = open_shell(cx);
+    render(window, cx);
+    // Ctrl , is handled by the app (no window), and Ctrl O belongs to the Settings window.
+    let elsewhere: [&dyn gpui_kit::Action; 2] = [
+        &crate::settings_window::OpenSettings,
+        &crate::settings_window::ImportKubeconfig,
+    ];
+    for row in crate::keymap::shortcut_rows() {
+        if elsewhere.iter().any(|other| other.partial_eq(&*row.action)) {
+            continue;
+        }
+        let is_available = cx
+            .update_window(window.into(), |_, window, cx| {
+                window.is_action_available(&*row.action, cx)
+            })
+            .expect("the window is open");
+        assert!(is_available, "{} has no handler", row.label);
+    }
+}
+
+#[gpui_kit::test]
+fn closed_drawer_has_no_subject(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+        assert_eq!(shell.drawer_subject(), None);
+        shell.drawer.is_open = true;
+        assert_eq!(shell.drawer_subject(), Some(&pod_key("api-0")));
+    });
+}
+
+#[gpui_kit::test]
+fn closing_drawer_drops_pending_subjects(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.drawer.is_open = true;
+        shell.follow_drawer_subjects(cx);
+        assert!(shell.pending_subjects.is_some());
+        shell.close_drawer(cx);
+        assert!(shell.pending_subjects.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn closing_the_drawer_keeps_the_row(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.set_drawer_open(true, cx);
+        assert!(shell.drawer.is_open);
+        shell.close_drawer(cx);
+        assert!(!shell.drawer.is_open);
+        assert_eq!(shell.selected, Some(pod_key("api-0")));
+    });
+}
+
+#[gpui_kit::test]
+fn the_drawer_does_not_open_without_a_row(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_drawer_open(true, cx);
+        assert!(!shell.drawer.is_open);
+    });
+}
+
+#[gpui_kit::test]
+fn clearing_the_selection_closes_the_drawer(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.drawer.is_open = true;
+        shell.change_selection(None, cx);
+        assert!(!shell.drawer.is_open);
+    });
+}
+
+#[gpui_kit::test]
+fn a_click_opens_the_drawer_even_on_the_selected_row(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell_with(&["--screen", "pods"], cx);
+    render(window, cx);
+    cx.update_window(window.into(), |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            let table = shell.pod_table.clone();
+            shell.change_selection(Some(pod_key("api-0")), cx);
+            assert!(!shell.drawer.is_open);
+            shell.on_row_selected(Some(pod_key("api-0")), false, &table, window, cx);
+            assert!(shell.drawer.is_open);
+        });
+    })
+    .expect("the window is open");
+}
+
+#[gpui_kit::test]
+fn the_echo_of_a_shell_move_never_opens_the_drawer(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell_with(&["--screen", "pods"], cx);
+    render(window, cx);
+    cx.update_window(window.into(), |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            let table = shell.pod_table.clone();
+            shell.on_row_selected(Some(pod_key("api-1")), true, &table, window, cx);
+            assert_eq!(shell.selected, Some(pod_key("api-1")));
+            assert!(!shell.drawer.is_open);
+        });
+    })
+    .expect("the window is open");
+}
+
+#[gpui_kit::test]
+fn a_shell_move_leaves_no_echo_behind(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell_with(&["--screen", "pods"], cx);
+    render(window, cx);
+    shell.update(cx, |shell, cx| {
+        let table = shell.pod_table.clone();
+        shell.select_table_row(&table, 0, cx);
+        assert_eq!(shell.row_echo, Some(0));
+    });
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.row_echo, None);
+        assert!(!shell.drawer.is_open);
+    });
+}
+
+#[gpui_kit::test]
+fn enter_opens_the_drawer_on_the_cursor_row(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell_with(&["--screen", "pods"], cx);
+    render(window, cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+    });
+    press(window, "enter", cx);
+    shell.read_with(cx, |shell, _| {
+        assert!(shell.drawer.is_open);
+        assert_eq!(shell.selected, Some(pod_key("api-0")));
+    });
+}
+
+#[gpui_kit::test]
+fn escape_closes_the_drawer_then_clears_the_cursor(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell_with(&["--screen", "pods"], cx);
+    render(window, cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.set_drawer_open(true, cx);
+    });
+    press(window, "escape", cx);
+    shell.read_with(cx, |shell, _| {
+        assert!(!shell.drawer.is_open);
+        assert_eq!(shell.selected, Some(pod_key("api-0")));
+    });
+    press(window, "escape", cx);
+    shell.read_with(cx, |shell, _| assert_eq!(shell.selected, None));
+}
+
+#[gpui_kit::test]
+fn copy_name_copies_the_cursor_row_name(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    render(window, cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+    });
+    // The test platform has its own clipboard: the system clipboard is untouched.
+    press(window, "secondary-c", cx);
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("api-0"));
+}
+
+#[gpui_kit::test]
+fn row_keys_do_nothing_without_a_live_cluster(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    render(window, cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+    });
+    for key in ["l", "y", "s", "e", "delete", "shift-s"] {
+        press(window, key, cx);
+    }
+    shell.read_with(cx, |shell, _| assert!(!shell.drawer.is_open));
+    assert_eq!(
+        cx.update_window(window.into(), |_, window, cx| window
+            .notifications(cx)
+            .len())
+            .expect("the window is open"),
+        0
+    );
+}
+
+#[gpui_kit::test]
+fn dock_keys_do_nothing_without_tabs(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    render(window, cx);
+    for key in [
+        "ctrl-`",
+        "ctrl-tab",
+        "ctrl-shift-tab",
+        "secondary-w",
+        "secondary-shift-m",
+    ] {
+        press(window, key, cx);
+    }
+    shell.read_with(cx, |shell, cx| {
+        let dock = shell.log_dock.read(cx);
+        assert!(!dock.has_tabs());
+        assert_eq!(dock.mode(), DockMode::Normal);
+    });
+}
+
+#[gpui_kit::test]
+fn enter_in_the_quick_filter_hands_the_keyboard_back(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    render(window, cx);
+    press_slash(window, cx);
+    render(window, cx);
+    // No session draws no filter bar, so the input leaves the tree and the root restores focus;
+    // what matters is that Enter on plain text does not stay in a dead field.
+    shell.update(cx, |shell, cx| {
+        let input = shell.quick_filter.clone();
+        input.update(cx, |_, cx| {
+            cx.emit(InputEvent::PressEnter {
+                secondary: false,
+                shift: false,
+            })
+        });
+    });
+    cx.run_until_parked();
+    render(window, cx);
+    assert_eq!(focus_of(window, &shell, cx), ROOT);
+}
+
+#[gpui_kit::test]
+fn enter_on_a_focused_button_stays_with_the_button(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell_with(&["--screen", "pods"], cx);
+    render(window, cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod_key("api-0")), cx);
+    });
+    // Tab moves the focus from the shell root to a title-bar button.
+    press(window, "tab", cx);
+    assert_ne!(focus_of(window, &shell, cx), ROOT);
+    press(window, "enter", cx);
+    shell.read_with(cx, |shell, _| assert!(!shell.drawer.is_open));
+}
+
+#[gpui_kit::test]
+fn closing_the_drawer_drops_revealed_secret_values(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    let calls = Arc::new(AtomicUsize::new(0));
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(secret_key_fixture()), cx);
+        shell.set_drawer_open(true, cx);
+        shell.drawer.secret_values = Some(counting_view(&calls, cx));
+        shell.drawer.pending_secret_action = Some((secret_key_fixture(), SecretAction::RevealAll));
+        shell.close_drawer(cx);
+        assert!(shell.drawer.secret_values.is_none());
+        assert!(shell.drawer.pending_secret_action.is_none());
+        // The row stays: only the drawer closed.
+        assert_eq!(shell.selected, Some(secret_key_fixture()));
+    });
+}
+
+#[gpui_kit::test]
+fn enter_on_issues_without_a_cursor_does_nothing(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell_with(&["--screen", "issues"], cx);
+    render(window, cx);
+    press(window, "enter", cx);
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected, None);
+        assert!(!shell.drawer.is_open);
+    });
 }

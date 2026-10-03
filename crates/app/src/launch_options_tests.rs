@@ -640,3 +640,36 @@ fn window_width_out_of_range_is_an_error() {
     }
     assert!(parse(&["--window-width"]).is_err());
 }
+
+#[test]
+fn parses_shortcuts_and_pods_cursor_screens() {
+    let sheet = run_options(&["--screen", "shortcuts"]).screen;
+    assert_eq!(sheet, LaunchScreen::Shortcuts);
+    assert_eq!(sheet.screen(), Screen::Pods);
+    // The sheet is a dialog over the list: no row is selected.
+    assert!(sheet.opens_dialog());
+    assert!(!sheet.selects_row());
+
+    let cursor = run_options(&["--screen", "pods-cursor"]).screen;
+    assert_eq!(cursor, LaunchScreen::PodsCursor);
+    assert_eq!(cursor.screen(), Screen::Pods);
+    // It selects a row but opens no drawer.
+    assert!(cursor.selects_row());
+    assert!(!cursor.has_drawer());
+    assert!(!cursor.opens_dialog());
+}
+
+#[test]
+fn the_usage_lists_the_key_map_screens() {
+    assert!(USAGE.contains("shortcuts"));
+    assert!(USAGE.contains("pods-cursor"));
+}
+
+#[test]
+fn screen_settings_shortcuts_parses() {
+    let screen = run_options(&["--screen", "settings-shortcuts"]).screen;
+    assert_eq!(
+        screen,
+        LaunchScreen::Settings(SettingsPage::KeyboardShortcuts, SettingsSize::Tall)
+    );
+}

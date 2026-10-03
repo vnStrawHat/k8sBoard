@@ -646,10 +646,12 @@ fn secret_menu_blocked_in_screenshot_runs() {
 fn helm_release_menu_disables_rollback_and_uninstall() {
     // The menu shows the disabled items from the kind's data, and View YAML only for a key with an
     // object reference, which a release has not.
-    assert_eq!(
-        ResourceKind::HelmReleases.read_only_actions(),
-        ["Roll back…"]
-    );
+    let labels: Vec<&str> = ResourceKind::HelmReleases
+        .read_only_actions()
+        .iter()
+        .map(|item| item.label)
+        .collect();
+    assert_eq!(labels, ["Roll back…"]);
     assert_eq!(
         ResourceKind::HelmReleases.delete_label(),
         "Uninstall release…"
@@ -904,5 +906,252 @@ fn show_in_topology_disabled_outside_scope() {
             Some(&NamespaceScope::All)
         ),
         TopologyMenu::Enabled
+    );
+}
+
+// ---- Row keys ----
+
+fn pod_key() -> ResourceKey {
+    ResourceKey::Pod {
+        namespace: "shop".to_owned(),
+        name: "api-0".to_owned(),
+    }
+}
+
+fn node_key() -> ResourceKey {
+    ResourceKey::Node {
+        name: "node-1".to_owned(),
+    }
+}
+
+fn kind_key(kind: ResourceKind) -> ResourceKey {
+    ResourceKey::Kind {
+        kind,
+        namespace: Some("shop".to_owned()),
+        name: "api".to_owned(),
+    }
+}
+
+fn container_of(name: &str) -> cluster::ContainerSummary {
+    cluster::ContainerSummary {
+        name: name.to_owned(),
+        image: "img".to_owned(),
+        kind: cluster::ContainerKind::Main,
+        state: cluster::ContainerState::Running { started_at: None },
+        is_ready: true,
+        restart_count: 0,
+        last_termination: None,
+        image_digest: None,
+        pull_policy: None,
+        is_started: None,
+        ports: Vec::new(),
+        resources: Vec::new(),
+        probes: cluster::ContainerProbes::default(),
+        env: Vec::new(),
+        env_from: Vec::new(),
+        mounts: Vec::new(),
+    }
+}
+
+fn pod_with(containers: Vec<cluster::ContainerSummary>) -> PodSummary {
+    PodSummary {
+        namespace: "shop".to_owned(),
+        name: "api-0".to_owned(),
+        status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
+        ready: cluster::ReadyCount { ready: 1, total: 1 },
+        restarts: 0,
+        node_name: None,
+        created_at: None,
+        pod_ip: None,
+        qos_class: None,
+        service_account: None,
+        controller: None,
+        conditions: Vec::new(),
+        status_message: None,
+        labels: Vec::new(),
+        host_network: false,
+        image_pull_secrets: Vec::new(),
+        containers,
+    }
+}
+
+fn availability(
+    action: ResourceAction,
+    subject: &ResourceKey,
+    access: &AccessState,
+) -> KeyAvailability {
+    let pod = pod_with(vec![container_of("app")]);
+    key_availability_of(
+        action,
+        subject,
+        subject.is_pod(&pod).then_some(&pod),
+        access,
+    )
+}
+
+fn disabled_reason(availability: KeyAvailability) -> String {
+    match availability {
+        KeyAvailability::Disabled { reason } => reason.to_string(),
+        other => panic!("expected a disabled key, got {other:?}"),
+    }
+}
+
+#[test]
+fn key_availability_offers_logs_only_for_pods() {
+    let access = known_denying(&[]);
+    assert_eq!(
+        availability(ResourceAction::ViewLogs, &pod_key(), &access),
+        KeyAvailability::Run
+    );
+    for subject in [node_key(), kind_key(ResourceKind::Services)] {
+        assert_eq!(
+            availability(ResourceAction::ViewLogs, &subject, &access),
+            KeyAvailability::NotOffered
+        );
+    }
+}
+
+#[test]
+fn key_availability_explains_a_pod_without_containers() {
+    let pod = pod_with(Vec::new());
+    let access = known_denying(&[]);
+    let availability =
+        key_availability_of(ResourceAction::ViewLogs, &pod_key(), Some(&pod), &access);
+    assert_eq!(disabled_reason(availability), "The pod has no containers");
+}
+
+#[test]
+fn key_availability_disables_mutating_keys_with_the_read_only_reason() {
+    let access = known_denying(&[]);
+    let offered = [
+        (ResourceAction::EditYaml, pod_key()),
+        (ResourceAction::Delete, pod_key()),
+        (ResourceAction::Cordon, node_key()),
+        (ResourceAction::Drain, node_key()),
+        (
+            ResourceAction::RestartRollout,
+            kind_key(ResourceKind::Deployments),
+        ),
+        (ResourceAction::Scale, kind_key(ResourceKind::Deployments)),
+    ];
+    for (action, subject) in offered {
+        assert_eq!(
+            disabled_reason(availability(action, &subject, &access)),
+            "Read-only mode",
+            "{action:?}"
+        );
+    }
+    // Where a subject has no such action, the key is silent.
+    assert_eq!(
+        availability(ResourceAction::Cordon, &pod_key(), &access),
+        KeyAvailability::NotOffered
+    );
+}
+
+#[test]
+fn key_availability_uses_the_access_gate() {
+    let denied = known_denying(&[AccessCheck::CreatePodExec]);
+    assert_eq!(
+        disabled_reason(availability(ResourceAction::OpenShell, &pod_key(), &denied)),
+        "Not permitted: create pods/exec"
+    );
+    assert_eq!(
+        disabled_reason(availability(
+            ResourceAction::OpenShell,
+            &pod_key(),
+            &checking()
+        )),
+        "Checking permissions…"
+    );
+    // A node shell is gated like a pod shell.
+    assert_eq!(
+        disabled_reason(availability(
+            ResourceAction::OpenShell,
+            &node_key(),
+            &denied
+        )),
+        "Not permitted: create pods/exec"
+    );
+}
+
+#[test]
+fn key_availability_offers_restart_and_scale_from_kind_actions() {
+    let access = known_denying(&[]);
+    let offers = |kind: ResourceKind, action: ResourceAction| {
+        availability(action, &kind_key(kind), &access) != KeyAvailability::NotOffered
+    };
+    assert!(offers(
+        ResourceKind::Deployments,
+        ResourceAction::RestartRollout
+    ));
+    assert!(offers(ResourceKind::Deployments, ResourceAction::Scale));
+    assert!(offers(
+        ResourceKind::DaemonSets,
+        ResourceAction::RestartRollout
+    ));
+    assert!(!offers(ResourceKind::DaemonSets, ResourceAction::Scale));
+    assert!(!offers(
+        ResourceKind::Services,
+        ResourceAction::RestartRollout
+    ));
+    assert!(!offers(ResourceKind::Services, ResourceAction::Scale));
+}
+
+#[test]
+fn view_yaml_and_copy_name_always_run() {
+    for access in [checking(), unknown(), known_denying(&AccessCheck::ALL)] {
+        for subject in [pod_key(), node_key(), kind_key(ResourceKind::ConfigMaps)] {
+            for action in [ResourceAction::ViewYaml, ResourceAction::CopyName] {
+                assert_eq!(
+                    availability(action, &subject, &access),
+                    KeyAvailability::Run
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_helm_release_has_no_yaml_key() {
+    // Its YAML would show the release Secret, which holds values.
+    assert_eq!(
+        availability(
+            ResourceAction::ViewYaml,
+            &kind_key(ResourceKind::HelmReleases),
+            &known_denying(&[])
+        ),
+        KeyAvailability::NotOffered
+    );
+}
+
+#[test]
+fn the_shell_key_names_the_node_shell_on_a_node() {
+    assert_eq!(
+        subject_action(ResourceAction::OpenShell, &node_key()),
+        ResourceAction::OpenNodeShell
+    );
+    assert_eq!(
+        subject_action(ResourceAction::OpenShell, &pod_key()),
+        ResourceAction::OpenShell
+    );
+}
+
+#[test]
+fn an_unavailable_key_says_what_and_why() {
+    assert_eq!(
+        unavailable_text(action_label(ResourceAction::EditYaml), "Read-only mode"),
+        "Edit YAML is unavailable: Read-only mode"
+    );
+}
+
+#[test]
+fn menu_hints_name_the_key_action() {
+    use crate::keymap::{OpenShell, ViewLogs};
+    assert!(ResourceAction::ViewLogs.key_action().partial_eq(&ViewLogs));
+    // The node shell shares the pod shell key.
+    assert!(
+        ResourceAction::OpenNodeShell
+            .key_action()
+            .partial_eq(&OpenShell)
     );
 }

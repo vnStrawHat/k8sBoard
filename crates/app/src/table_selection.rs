@@ -153,6 +153,13 @@ pub(crate) fn selection_sync(table_row: Option<usize>, found: Option<usize>) -> 
     }
 }
 
+/// Whether a `SelectRow` for `row` is the echo of the shell's own move (`echo` holds the row the
+/// shell just selected). It moves the cursor but never opens the drawer. Consumes the mark, so a
+/// click on any row after it counts as a click.
+pub(crate) fn take_row_echo(echo: &mut Option<usize>, row: usize) -> bool {
+    echo.take() == Some(row)
+}
+
 #[cfg(test)]
 #[path = "table_selection_tests.rs"]
 mod table_selection_tests;

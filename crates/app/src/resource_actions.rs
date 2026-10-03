@@ -2,7 +2,8 @@ use cluster::{AccessCheck, NamespaceScope, NodeSummary, PodSummary, SecretKey};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
-    App, ClipboardItem, ParentElement as _, SharedString, Styled as _, WeakEntity, Window, div,
+    Action, App, ClipboardItem, ParentElement as _, SharedString, Styled as _, WeakEntity, Window,
+    div,
 };
 
 use crate::access_bindings::role_key;
@@ -11,6 +12,10 @@ use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::{AccessState, LiveCluster, scope_includes};
 use crate::custom_kind::CustomKind;
 use crate::drawer::DrawerTab;
+use crate::keymap::{
+    CopyName, Cordon, Delete, Drain, EditYaml, OpenShell, PortForward, RestartRollout, Scale,
+    ViewLogs, ViewYaml,
+};
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
 use crate::live_sections::claim_pods;
 use crate::log_dock::LogDock;
@@ -33,12 +38,29 @@ pub(crate) enum ResourceAction {
     Cordon,
     Drain,
     CopyName,
+    ViewYaml,
+    EditYaml,
+    Delete,
+    RestartRollout,
+    Scale,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ActionAvailability {
     Enabled,
     Disabled { reason: SharedString },
+}
+
+/// What a row key does on the cursor row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum KeyAvailability {
+    Run,
+    /// The key is offered but unavailable; the shell shows the reason.
+    Disabled {
+        reason: SharedString,
+    },
+    /// The subject has no such action (L on a Service): the key does nothing, silently.
+    NotOffered,
 }
 
 /// What an action needs: the permission it is gated on, and why it is still unavailable
@@ -59,12 +81,130 @@ impl ResourceAction {
             ),
             // The node shell is a debug pod, so it needs the same right as a pod shell.
             Self::OpenNodeShell => (AccessCheck::CreatePodExec, Some(READ_ONLY_FEATURE_REASON)),
-            Self::Cordon | Self::Drain | Self::CopyName => return None,
+            Self::Cordon
+            | Self::Drain
+            | Self::CopyName
+            | Self::ViewYaml
+            | Self::EditYaml
+            | Self::Delete
+            | Self::RestartRollout
+            | Self::Scale => return None,
         };
         Some(ActionGate {
             check,
             read_only_reason,
         })
+    }
+
+    /// The key action behind the action, which menus show as a hint. The node shell shares the
+    /// key of the pod shell.
+    pub(crate) fn key_action(self) -> Box<dyn Action> {
+        match self {
+            Self::ViewLogs => Box::new(ViewLogs),
+            Self::OpenShell | Self::OpenNodeShell => Box::new(OpenShell),
+            Self::PortForward => Box::new(PortForward),
+            Self::Cordon => Box::new(Cordon),
+            Self::Drain => Box::new(Drain),
+            Self::CopyName => Box::new(CopyName),
+            Self::ViewYaml => Box::new(ViewYaml),
+            Self::EditYaml => Box::new(EditYaml),
+            Self::Delete => Box::new(Delete),
+            Self::RestartRollout => Box::new(RestartRollout),
+            Self::Scale => Box::new(Scale),
+        }
+    }
+}
+
+/// The menu and notice text of an action; one source for both.
+pub(crate) fn action_label(action: ResourceAction) -> &'static str {
+    match action {
+        ResourceAction::ViewLogs => "View logs",
+        ResourceAction::OpenShell => "Open shell",
+        ResourceAction::PortForward => "Port-forward",
+        ResourceAction::OpenNodeShell => "Open node shell",
+        ResourceAction::Cordon => "Cordon",
+        ResourceAction::Drain => "Drain",
+        ResourceAction::CopyName => "Copy name",
+        ResourceAction::ViewYaml => "View YAML",
+        ResourceAction::EditYaml => "Edit YAML",
+        ResourceAction::Delete => "Delete",
+        ResourceAction::RestartRollout => "Restart rollout",
+        ResourceAction::Scale => "Scale",
+    }
+}
+
+/// The notice of an offered key that is unavailable, such as "Edit YAML is unavailable: Read-only
+/// mode".
+pub(crate) fn unavailable_text(label: &str, reason: &str) -> String {
+    format!("{label} is unavailable: {reason}")
+}
+
+/// The action a key runs on `subject`: S opens the node shell on a node.
+pub(crate) fn subject_action(action: ResourceAction, subject: &ResourceKey) -> ResourceAction {
+    match (action, subject) {
+        (ResourceAction::OpenShell, ResourceKey::Node { .. }) => ResourceAction::OpenNodeShell,
+        _ => action,
+    }
+}
+
+/// What a key for `action` does on `subject`; menus and keys read the same gates.
+pub(crate) fn key_availability(
+    action: ResourceAction,
+    subject: &ResourceKey,
+    live: &LiveCluster,
+) -> KeyAvailability {
+    let pod = live.pods.items().iter().find(|pod| subject.is_pod(pod));
+    key_availability_of(action, subject, pod, &live.access)
+}
+
+/// `key_availability` with what it reads from the live cluster passed in: the pod of a pod subject
+/// (`None` when its row is gone) and the access state.
+fn key_availability_of(
+    action: ResourceAction,
+    subject: &ResourceKey,
+    pod: Option<&PodSummary>,
+    access: &AccessState,
+) -> KeyAvailability {
+    let is_offered = match action {
+        ResourceAction::ViewLogs => matches!(subject, ResourceKey::Pod { .. }),
+        ResourceAction::OpenShell => {
+            matches!(subject, ResourceKey::Pod { .. } | ResourceKey::Node { .. })
+        }
+        ResourceAction::PortForward => match subject {
+            ResourceKey::Pod { .. } => true,
+            ResourceKey::Node { .. } => false,
+            ResourceKey::Kind { kind, .. } => kind.has_port_forward(),
+        },
+        ResourceAction::Cordon | ResourceAction::Drain => {
+            matches!(subject, ResourceKey::Node { .. })
+        }
+        ResourceAction::ViewYaml | ResourceAction::EditYaml => object_ref(subject).is_some(),
+        ResourceAction::RestartRollout | ResourceAction::Scale => match subject {
+            ResourceKey::Kind { kind, .. } => kind
+                .read_only_actions()
+                .iter()
+                .any(|item| item.action == Some(action)),
+            ResourceKey::Pod { .. } | ResourceKey::Node { .. } => false,
+        },
+        ResourceAction::CopyName | ResourceAction::Delete => true,
+        // Only `subject_action` produces it, after this check.
+        ResourceAction::OpenNodeShell => false,
+    };
+    if !is_offered {
+        return KeyAvailability::NotOffered;
+    }
+    if action == ResourceAction::ViewLogs {
+        let Some(pod) = pod else {
+            return KeyAvailability::NotOffered;
+        };
+        return match logs_launch(pod, None, access) {
+            Ok(_) => KeyAvailability::Run,
+            Err(reason) => KeyAvailability::Disabled { reason },
+        };
+    }
+    match action_availability(subject_action(action, subject), access) {
+        ActionAvailability::Enabled => KeyAvailability::Run,
+        ActionAvailability::Disabled { reason } => KeyAvailability::Disabled { reason },
     }
 }
 
@@ -74,7 +214,7 @@ pub(crate) fn action_availability(
 ) -> ActionAvailability {
     let Some(gate) = action.gate() else {
         return match action {
-            ResourceAction::CopyName => ActionAvailability::Enabled,
+            ResourceAction::CopyName | ResourceAction::ViewYaml => ActionAvailability::Enabled,
             _ => disabled(READ_ONLY_MODE_REASON),
         };
     };
@@ -108,12 +248,8 @@ pub(crate) fn pod_menu(
 ) -> PopupMenu {
     let access = &live.access;
     menu.item(view_logs_item(pod, None, live, dock))
-        .item(action_item(ResourceAction::OpenShell, "Open shell", access))
-        .item(action_item(
-            ResourceAction::PortForward,
-            "Port-forward",
-            access,
-        ))
+        .item(action_item(ResourceAction::OpenShell, access))
+        .item(action_item(ResourceAction::PortForward, access))
         .item(view_yaml_item(ResourceKey::of_pod(pod), shell))
         .separator()
         .item(copy_name_item(&pod.name, access))
@@ -178,19 +314,20 @@ pub(crate) fn view_logs_item(
     live: &LiveCluster,
     dock: &WeakEntity<LogDock>,
 ) -> PopupMenuItem {
-    const LABEL: &str = "View logs";
+    let label = action_label(ResourceAction::ViewLogs);
     match logs_launch(pod, container, &live.access) {
-        Err(reason) => disabled_menu_item(LABEL, reason),
+        Err(reason) => disabled_menu_item(label, reason),
         Ok(target) => {
             let connection = live.connection().clone();
             let dock = dock.clone();
-            PopupMenuItem::new(LABEL).on_click(move |_, window, cx| {
+            PopupMenuItem::new(label).on_click(move |_, window, cx| {
                 let _ = dock.update(cx, |dock, cx| {
                     dock.open(connection.clone(), target.clone(), window, cx)
                 });
             })
         }
     }
+    .action(ResourceAction::ViewLogs.key_action())
 }
 
 /// The label and availability of the logs item of a workload row; `None` for a row that has
@@ -238,18 +375,14 @@ pub(crate) fn node_menu(
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
     let access = &live.access;
-    menu.item(action_item(
-        ResourceAction::OpenNodeShell,
-        "Open node shell",
-        access,
-    ))
-    .item(view_yaml_item(ResourceKey::of_node(node), shell))
-    .item(view_pods_on_node_item(node, live.pods.items(), shell))
-    .separator()
-    .item(action_item(ResourceAction::Cordon, "Cordon", access))
-    .item(action_item(ResourceAction::Drain, "Drain…", access))
-    .separator()
-    .item(copy_name_item(&node.name, access))
+    menu.item(action_item(ResourceAction::OpenNodeShell, access))
+        .item(view_yaml_item(ResourceKey::of_node(node), shell))
+        .item(view_pods_on_node_item(node, live.pods.items(), shell))
+        .separator()
+        .item(action_item(ResourceAction::Cordon, access))
+        .item(action_item(ResourceAction::Drain, access))
+        .separator()
+        .item(copy_name_item(&node.name, access))
 }
 
 /// Switches to Pods with only the pods of the node. Always enabled, even for an empty node.
@@ -357,11 +490,7 @@ pub(crate) fn kind_menu(
         _ => {}
     }
     if kind.has_port_forward() {
-        menu = menu.item(action_item(
-            ResourceAction::PortForward,
-            "Port-forward",
-            access,
-        ));
+        menu = menu.item(action_item(ResourceAction::PortForward, access));
     }
     if let Some(is_default) =
         default_namespace_state(kind, &row.name, extras.default_namespace.as_deref())
@@ -372,16 +501,20 @@ pub(crate) fn kind_menu(
     if !change_actions.is_empty() {
         menu = menu.separator();
     }
-    for label in change_actions {
-        menu = menu.item(disabled_menu_item(*label, READ_ONLY_MODE_REASON.into()));
+    for item in change_actions {
+        let entry = disabled_menu_item(item.label, READ_ONLY_MODE_REASON.into());
+        menu = menu.item(match item.action {
+            Some(action) => entry.action(action.key_action()),
+            None => entry,
+        });
     }
     menu.separator()
         .item(copy_name_item(&row.name, access))
         .separator()
-        .item(disabled_menu_item(
-            kind.delete_label(),
-            READ_ONLY_MODE_REASON.into(),
-        ))
+        .item(
+            disabled_menu_item(kind.delete_label(), READ_ONLY_MODE_REASON.into())
+                .action(ResourceAction::Delete.key_action()),
+        )
 }
 
 /// Whether the menu of a kind offers Show in Topology.
@@ -919,7 +1052,13 @@ fn who_can_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
 
 /// Opens the drawer of `key` on its YAML tab. Always enabled: a missing right shows inline there.
 fn view_yaml_item(key: ResourceKey, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
-    view_tab_item("View YAML", key, DrawerTab::Yaml, shell)
+    view_tab_item(
+        action_label(ResourceAction::ViewYaml),
+        key,
+        DrawerTab::Yaml,
+        shell,
+    )
+    .action(ResourceAction::ViewYaml.key_action())
 }
 
 /// Opens the drawer of `key` on `tab`; the same item serves View YAML, View values, and View
@@ -967,12 +1106,18 @@ pub(crate) fn port_forward_reason(access: &AccessState) -> SharedString {
     }
 }
 
-/// Disabled items stay visible with their reason, so users learn what exists.
-fn action_item(action: ResourceAction, label: &'static str, access: &AccessState) -> PopupMenuItem {
+/// Disabled items stay visible with their reason, so users learn what exists. The item shows the
+/// key of its action. Drain keeps its ellipsis because it opens a dialog.
+fn action_item(action: ResourceAction, access: &AccessState) -> PopupMenuItem {
+    let label = match action {
+        ResourceAction::Drain => "Drain…",
+        _ => action_label(action),
+    };
     match action_availability(action, access) {
         ActionAvailability::Enabled => PopupMenuItem::new(label),
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
     }
+    .action(action.key_action())
 }
 
 /// A `PopupMenuItem` has no tooltip, so the reason sits under the label in smaller text.
@@ -993,15 +1138,17 @@ pub(crate) fn disabled_menu_item(
 }
 
 fn copy_name_item(name: &str, access: &AccessState) -> PopupMenuItem {
+    let label = action_label(ResourceAction::CopyName);
     match action_availability(ResourceAction::CopyName, access) {
-        ActionAvailability::Disabled { reason } => disabled_menu_item("Copy name", reason),
+        ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
         ActionAvailability::Enabled => {
             let name = name.to_owned();
-            PopupMenuItem::new("Copy name").on_click(move |_, _, cx| {
+            PopupMenuItem::new(label).on_click(move |_, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(name.clone()));
             })
         }
     }
+    .action(ResourceAction::CopyName.key_action())
 }
 
 #[cfg(test)]

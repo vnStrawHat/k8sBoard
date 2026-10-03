@@ -10,8 +10,8 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Entity, IntoElement, ParentElement as _, Styled as _, WeakEntity,
-    div, px,
+    AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    Styled as _, WeakEntity, div, px,
 };
 
 use crate::app_shell::{AppShell, Screen};
@@ -118,6 +118,7 @@ pub(crate) fn filter_bar(
                 .items_center()
                 .child(
                     div()
+                        .key_context("QuickFilter")
                         .w(QUICK_FILTER_WIDTH)
                         .child(Input::new(quick_filter).small().cleanable(true)),
                 )

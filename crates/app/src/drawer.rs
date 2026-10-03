@@ -38,11 +38,13 @@ const LABEL_WIDTH: Pixels = px(104.);
 /// truncates with a tooltip, or uses `DetailRow::Stacked`.
 pub(crate) const WIDE_LABEL_WIDTH: Pixels = px(136.);
 
-/// The drawer is open exactly while a row is selected, so this holds only what the user
-/// changes inside an open drawer. The tab and the expanded flag survive a change of
-/// subject on the same screen; `show_screen` resets the tab to Overview. The selected container
-/// does not survive a change of subject.
+/// What the user changes inside an open drawer, plus whether it is open. The tab and the
+/// expanded flag survive a change of subject on the same screen; `show_screen` resets the tab to
+/// Overview. The selected container does not survive a change of subject.
 pub(crate) struct DrawerState {
+    /// Whether the drawer is shown. The row cursor (`AppShell::selected`) can rest on a row while
+    /// the drawer is closed; the flag implies a selection.
+    pub(crate) is_open: bool,
     pub(crate) tab: DrawerTab,
     pub(crate) is_expanded: bool,
     pub(crate) selected_container: Option<String>,
@@ -70,6 +72,7 @@ pub(crate) struct DrawerState {
 impl DrawerState {
     pub(crate) fn new() -> Self {
         Self {
+            is_open: false,
             tab: DrawerTab::Overview,
             is_expanded: false,
             selected_container: None,
@@ -383,6 +386,7 @@ pub(crate) fn drawer_frame(
 ) -> impl IntoElement {
     let theme = cx.theme();
     v_flex()
+        .key_context("Drawer")
         .absolute()
         .top_0()
         .right_0()

@@ -37,6 +37,7 @@ mod issue_feeds;
 mod issue_kind_rules;
 mod issue_rules;
 mod issue_table;
+mod keymap;
 mod kind_diagnosis;
 mod kind_drawer;
 mod kind_join;
@@ -95,6 +96,7 @@ mod secret_values;
 mod settings;
 mod settings_store;
 mod settings_window;
+mod shortcut_sheet;
 mod status_bar;
 mod status_tone;
 mod storage_rows;
@@ -139,8 +141,6 @@ use crate::settings_store::{
 use crate::settings_window::{
     ManageClusters, OpenSettings, SettingsPage, SettingsSize, manage_clusters, open_settings_window,
 };
-
-gpui_kit::actions!(k8sboard, [FocusQuickFilter]);
 
 const WINDOW_WIDTH: f32 = 1320.;
 const WINDOW_HEIGHT: f32 = 900.;
@@ -209,9 +209,8 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
                 std::env::home_dir(),
             );
             CatalogHandle::install(chain, cx);
-            app_shell::bind_keys(cx);
+            keymap::bind_keys(cx);
             cluster_switcher::bind_keys(cx);
-            settings_window::bind_keys(cx);
             cx.on_action(|_: &OpenSettings, cx| {
                 open_settings_window(SettingsPage::Clusters, SettingsSize::Standard, cx);
             });

@@ -23,7 +23,7 @@
 | W4-4 | Container submenu (MAIN/SIDECAR) for Logs, Shell, Port-forward; "Debug container…" | Partial | 0004 picks the container inside the log tab; 0019 adds the Logs sub-tab and the workload container picker | menu submenu (0019 decision 30 skipped it); Debug container → 0037 |
 | W4-5 | Overview tab: Node, Pod IP, QoS, Controlled by, Conditions, container summary | Done | 0003, 0008 | — |
 | W4-6 | WHY box tied to a container with "Open container …" link | Done | 0008 | — |
-| W4-7 | Containers tab master-detail, lifecycle groups, expand ⤢ | Done | 0003 | `[` `]` switching → 0028 |
+| W4-7 | Containers tab master-detail, lifecycle groups, expand ⤢ | Done (`[` `]` switching in 0028) | 0003, 0028 | — |
 | W4-8 | Container detail: State, Last state, Restarts, Image | Done | 0003, 0008 | — |
 | W4-9 | Container sub-tabs Info / Env / Mounts / Logs / Monitor | Done | 0008 (Info, Env, Mounts), 0010 (Monitor), 0019 (Logs) | — |
 | W4-10 | Ports with Forward button / live "● localhost:19090 · Stop" | Partial | 0008 (disabled button) | live → 0035 |

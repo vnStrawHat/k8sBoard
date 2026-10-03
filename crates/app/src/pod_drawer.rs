@@ -488,21 +488,39 @@ fn containers_tab(
     }
 }
 
+/// The groups of the Containers list, in the order they are shown.
+const CONTAINER_GROUPS: [ContainerKind; 3] = [
+    ContainerKind::Init,
+    ContainerKind::Sidecar,
+    ContainerKind::Main,
+];
+
+/// The indices of `containers` in the order the Containers list shows them: Init, Sidecar, then
+/// Main, in spec order inside each group. `[` and `]` step through the same order.
+pub(crate) fn container_display_order(containers: &[ContainerSummary]) -> Vec<usize> {
+    CONTAINER_GROUPS
+        .into_iter()
+        .flat_map(|kind| {
+            containers
+                .iter()
+                .enumerate()
+                .filter(move |(_, container)| container.kind == kind)
+                .map(|(index, _)| index)
+        })
+        .collect()
+}
+
 fn container_list(
     containers: &[ContainerSummary],
     selected: usize,
     cx: &Context<AppShell>,
 ) -> AnyElement {
-    let groups = [
-        ContainerKind::Init,
-        ContainerKind::Sidecar,
-        ContainerKind::Main,
-    ];
+    let order = container_display_order(containers);
     v_flex()
-        .children(groups.into_iter().filter_map(|kind| {
-            let members: Vec<(usize, &ContainerSummary)> = containers
+        .children(CONTAINER_GROUPS.into_iter().filter_map(|kind| {
+            let members: Vec<(usize, &ContainerSummary)> = order
                 .iter()
-                .enumerate()
+                .map(|&index| (index, &containers[index]))
                 .filter(|(_, container)| container.kind == kind)
                 .collect();
             if members.is_empty() {

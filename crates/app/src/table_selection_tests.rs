@@ -411,3 +411,15 @@ fn list_item_index_ignores_the_filter_and_waits_while_loading() {
         Some(None)
     );
 }
+
+#[test]
+fn take_row_echo_consumes_only_its_row() {
+    let mut echo = Some(3);
+    assert!(take_row_echo(&mut echo, 3));
+    assert_eq!(echo, None);
+    let mut echo = Some(3);
+    assert!(!take_row_echo(&mut echo, 4));
+    assert_eq!(echo, None);
+    let mut echo = None;
+    assert!(!take_row_echo(&mut echo, 3));
+}

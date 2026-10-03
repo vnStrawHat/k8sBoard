@@ -189,20 +189,35 @@ impl LogDock {
         cx.notify();
     }
 
-    fn toggle_zoom(&mut self, cx: &mut Context<Self>) {
-        let mode = match self.mode {
-            DockMode::Zoomed => DockMode::Normal,
-            DockMode::Normal | DockMode::Minimized => DockMode::Zoomed,
-        };
-        self.set_mode(mode, cx);
+    /// Zooms the dock in, or back to its split. Nothing happens without tabs: the dock is not drawn.
+    pub(crate) fn toggle_zoom(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        self.set_mode(toggled_zoom(self.mode), cx);
     }
 
-    fn toggle_minimize(&mut self, cx: &mut Context<Self>) {
-        let mode = match self.mode {
-            DockMode::Minimized => DockMode::Normal,
-            DockMode::Normal | DockMode::Zoomed => DockMode::Minimized,
+    /// Minimizes the dock to its tab bar, or restores it. Nothing happens without tabs.
+    pub(crate) fn toggle_visibility(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        self.set_mode(toggled_visibility(self.mode), cx);
+    }
+
+    /// Activates the next or previous tab, wrapping. A minimized dock is restored, like a click.
+    pub(crate) fn step_active_tab(&mut self, step: TabStep, cx: &mut Context<Self>) {
+        let Some(active) = self.active else {
+            return;
         };
-        self.set_mode(mode, cx);
+        self.activate(step_tab(active, self.tabs.len(), step), cx);
+    }
+
+    /// Closes the active tab.
+    pub(crate) fn close_active_tab(&mut self, cx: &mut Context<Self>) {
+        if let Some(active) = self.active {
+            self.close_tab(active, cx);
+        }
     }
 
     fn render_tab_bar(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -246,7 +261,7 @@ impl LogDock {
                         IconName::ChevronDown
                     }))
                     .tooltip(if is_minimized { "Restore" } else { "Minimize" })
-                    .on_click(cx.listener(|dock, _, _, cx| dock.toggle_minimize(cx))),
+                    .on_click(cx.listener(|dock, _, _, cx| dock.toggle_visibility(cx))),
             )
             .child(div().w_1())
     }
@@ -369,6 +384,7 @@ impl Render for LogDock {
         let is_minimized = self.mode == DockMode::Minimized;
         let body = self.active_tab().filter(|_| !is_minimized);
         v_flex()
+            .key_context("LogDock")
             .flex_shrink_0()
             .w_full()
             // Minimized leaves just the tab bar, so the dock keeps its natural height.
@@ -402,6 +418,37 @@ impl Render for DraggedTab {
             .font_family(theme.mono_font_family.clone())
             .text_xs()
             .child(self.label.clone())
+    }
+}
+
+/// The mode after the minimize key: a visible dock (split or zoomed) minimizes, a minimized one
+/// returns to its split.
+pub(crate) fn toggled_visibility(mode: DockMode) -> DockMode {
+    match mode {
+        DockMode::Minimized => DockMode::Normal,
+        DockMode::Normal | DockMode::Zoomed => DockMode::Minimized,
+    }
+}
+
+/// The mode after the zoom key: a zoomed dock returns to its split, any other zooms.
+pub(crate) fn toggled_zoom(mode: DockMode) -> DockMode {
+    match mode {
+        DockMode::Zoomed => DockMode::Normal,
+        DockMode::Normal | DockMode::Minimized => DockMode::Zoomed,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TabStep {
+    Next,
+    Previous,
+}
+
+/// The tab a tab key activates, wrapping at both ends. `len` is at least 1.
+pub(crate) fn step_tab(active: usize, len: usize, step: TabStep) -> usize {
+    match step {
+        TabStep::Next => (active + 1) % len,
+        TabStep::Previous => (active + len - 1) % len,
     }
 }
 
@@ -509,5 +556,27 @@ mod tests {
     #[test]
     fn closing_last_tab_leaves_no_active() {
         assert_eq!(active_after_close(0, 0, 0), None);
+    }
+
+    #[test]
+    fn toggled_visibility_minimizes_then_restores() {
+        assert_eq!(toggled_visibility(DockMode::Normal), DockMode::Minimized);
+        assert_eq!(toggled_visibility(DockMode::Minimized), DockMode::Normal);
+        assert_eq!(toggled_visibility(DockMode::Zoomed), DockMode::Minimized);
+    }
+
+    #[test]
+    fn toggled_zoom_zooms_then_restores() {
+        assert_eq!(toggled_zoom(DockMode::Normal), DockMode::Zoomed);
+        assert_eq!(toggled_zoom(DockMode::Minimized), DockMode::Zoomed);
+        assert_eq!(toggled_zoom(DockMode::Zoomed), DockMode::Normal);
+    }
+
+    #[test]
+    fn step_tab_wraps_both_ways() {
+        assert_eq!(step_tab(0, 3, TabStep::Previous), 2);
+        assert_eq!(step_tab(2, 3, TabStep::Next), 0);
+        assert_eq!(step_tab(1, 3, TabStep::Next), 2);
+        assert_eq!(step_tab(0, 1, TabStep::Next), 0);
     }
 }

@@ -31,7 +31,7 @@ fn install(config_dir: Option<&Path>, chain: &[PathBuf], cx: &mut TestAppContext
         gpui_kit::init(cx);
         // The dialog entrance animation would need frames to settle.
         cx.set_reduce_motion(true);
-        bind_keys(cx);
+        crate::keymap::bind_keys(cx);
         AppSettings::install(
             LoadedSettings {
                 settings: Settings {
@@ -186,14 +186,17 @@ fn closing_main_window_quits(cx: &mut TestAppContext) {
 #[test]
 fn pages_follow_w2_order() {
     let titles: Vec<&str> = PAGES.iter().map(|page| page.title()).collect();
-    assert_eq!(titles, ["Clusters", "Appearance", "About"]);
+    assert_eq!(
+        titles,
+        ["Clusters", "Appearance", "Keyboard Shortcuts", "About"]
+    );
 }
 
 #[test]
 fn default_page_is_clusters() {
     assert_eq!(PAGES[0], SettingsPage::Clusters);
     assert_eq!(SettingsPage::Clusters.index(), 0);
-    assert_eq!(SettingsPage::About.index(), 2);
+    assert_eq!(SettingsPage::About.index(), 3);
 }
 
 #[gpui_kit::test]

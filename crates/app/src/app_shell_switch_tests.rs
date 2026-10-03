@@ -739,7 +739,6 @@ fn kbd_hint_of_a_row_resolves_in_app_shell_context(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn kbd_hint_of_the_footer_resolves_in_app_shell_context(cx: &mut TestAppContext) {
-    cx.update(crate::settings_window::bind_keys);
     let fixture = open_switch_fixture("kbd-footer", cx);
     fixture.open_switcher(cx);
     let has_hint = fixture.with_window(cx, |window, _| {

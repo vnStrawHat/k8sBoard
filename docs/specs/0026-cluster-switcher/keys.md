@@ -25,7 +25,7 @@
 | 0028 state | Where 0026 binds | Reserved list |
 |---|---|---|
 | merged (committed spec; code may lag) | `keymap.rs`, in its `WINDOW` group; actions declared there | remove `secondary-shift-c` and `secondary-1`…`9` from `RESERVED_KEYS`; keep `space`; add sheet rows "Open cluster switcher" and "Switch to cluster 1–9" |
-| code not merged | `app_shell::bind_keys` with context `"AppShell"`; actions in `cluster_switcher.rs` | 0028, when it lands, moves these bindings into `keymap.rs` and drops them from its reserved table |
+| code not merged (history: 0028 has since moved the bindings into `keymap.rs`) | `app_shell::bind_keys` with context `"AppShell"`; actions in `cluster_switcher.rs` | 0028, when it lands, moves these bindings into `keymap.rs` and drops them from its reserved table |
 
 In both cases the in-popover keys stay in `cluster_switcher.rs` (`bind_keys`): they belong to the switcher's own context.
 

@@ -177,3 +177,17 @@ fn container_usage_row_keeps_the_text_without_usage_or_for_other_resources() {
     let storage = resource("ephemeral-storage", Some("1Gi"), None);
     assert_eq!(container_usage_row(&storage, Some(usage(1, 1))), None);
 }
+
+#[test]
+fn container_display_order_groups_init_sidecar_main() {
+    let containers = [
+        container("main-a", ContainerKind::Main, running(), true),
+        container("side", ContainerKind::Sidecar, running(), true),
+        container("init", ContainerKind::Init, running(), true),
+        container("main-b", ContainerKind::Main, running(), true),
+        container("init-b", ContainerKind::Init, running(), true),
+    ];
+    // Init, Sidecar, Main; spec order inside each group.
+    assert_eq!(container_display_order(&containers), [2, 4, 1, 0, 3]);
+    assert!(container_display_order(&[]).is_empty());
+}

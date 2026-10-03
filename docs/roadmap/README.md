@@ -26,7 +26,7 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 
 | Area | Status | Covered by | Next spec |
 |---|---|---|---|
-| Shell frame, tables, overlay drawer, status bar | Partial | 0003 | 0009, 0028 |
+| Shell frame, tables, overlay drawer, status bar | Partial | 0003, 0028 | 0009 |
 | Pods (W4/W4b) | Partial | 0003, 0004, 0007, 0008 | 0010 |
 | Nodes (W5) | Partial | 0003, 0008 | 0010, 0034 |
 | Logs dock (W8/W8b) | Partial (workload tabs, filters, histogram, Export, "+ ▾", reorder done in 0019) | 0004, 0019 | Pop out, kubelet logs, Follow toggle, SYS marker lines |
@@ -37,7 +37,7 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 | RBAC and policy analysis: Who can…, Check permissions, Can do, Test traffic | Done | 0023 | — |
 | Overview (W3), Issues, Topology (W11) | Done (Issues in 0020; Overview in 0021, the default landing screen; Topology in 0022) | 0020, 0021, 0022 | — |
 | Settings (W2), multi-cluster (W1), env colors | Partial (settings store, cluster registry, env badge and border, saved sort and columns, default namespace done in 0024; Settings window with Clusters, Appearance, About done in 0025; cluster switcher with health probes and Ctrl 1–9 done in 0026) | 0024, 0025, 0026 | multi-cluster 0027 |
-| Keyboard map, command palette (W9) | Missing | — | 0028, 0029 |
+| Keyboard map, command palette (W9) | Partial (keyboard map done in 0028; command palette → 0029) | 0028 | 0029 |
 | Every mutation: YAML edit (W10), drain (W6), shell, port-forward, delete | Missing | — | 0030–0037 (0038 Helm writes deferred) |
 
 ## Spec order (summary)

@@ -205,7 +205,7 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
         {
             false
         }
-        TargetState::Loaded => !screen.has_drawer() || input.is_drawer_ready,
+        TargetState::Loaded => !screen.selects_row() || input.is_drawer_ready,
     }
 }
 

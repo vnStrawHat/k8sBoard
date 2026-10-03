@@ -23,10 +23,10 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|pods|nodes|issues|issues-drawer|topology|topology-problems|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
+  --screen overview|switcher|pods|nodes|issues|issues-drawer|topology|topology-problems|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|shortcuts|pods-cursor|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
-           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance
+           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
                          screen to open (default: overview)
   --window-width <px>    window width, 800 to 3840 (default: 1320)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
@@ -60,6 +60,10 @@ pub(crate) enum LaunchScreen {
     /// `--screen pods-selected|nodes-selected`: the first two rows are ticked.
     PodsSelected,
     NodesSelected,
+    /// `--screen shortcuts`: Pods with the `?` shortcut sheet open.
+    Shortcuts,
+    /// `--screen pods-cursor`: Pods with the first row selected and the drawer closed.
+    PodsCursor,
     /// `--screen who-can`: ClusterRoles with the Who can dialog open on `get secrets`.
     WhoCan,
     /// `--screen check-permissions`: ServiceAccounts with the Check permissions dialog open for You.
@@ -73,8 +77,8 @@ pub(crate) enum LaunchScreen {
     /// `--screen switcher`: Overview with the cluster switcher popover open once the session is live
     /// and the probes of the other clusters have answered.
     Switcher,
-    /// `--screen settings|settings-appearance`: the main window opens as usual, then the Settings
-    /// window on that page, which is what the screenshot captures.
+    /// `--screen settings|settings-appearance|settings-shortcuts`: the main window opens as usual,
+    /// then the Settings window on that page, which is what the screenshot captures.
     Settings(SettingsPage, SettingsSize),
     /// `--screen <plural>`, e.g. `deployments`.
     Kind(ResourceKind),
@@ -100,7 +104,9 @@ impl LaunchScreen {
             | Self::LogsDock
             | Self::LogsZoomed
             | Self::LogsWorkload
-            | Self::PodsSelected => Screen::Pods,
+            | Self::PodsSelected
+            | Self::Shortcuts
+            | Self::PodsCursor => Screen::Pods,
             // The sidebar group of Custom Resources starts open; the shell then resolves the kind
             // against the CRD list.
             Self::Custom { .. } => Screen::Kind(ResourceKind::Crds),
@@ -135,6 +141,11 @@ impl LaunchScreen {
                 | Self::IssuesDrawer
                 | Self::Custom { tab: Some(_), .. }
         )
+    }
+
+    /// Whether a row must be selected: the drawer screens, and the one that shows only the cursor.
+    pub(crate) fn selects_row(self) -> bool {
+        self.has_drawer() || self == Self::PodsCursor
     }
 
     /// The drawer tab this request opens on; `None` for screens without a drawer.
@@ -184,6 +195,8 @@ impl LaunchScreen {
             self,
             Self::Pods
                 | Self::PodsSelected
+                | Self::Shortcuts
+                | Self::PodsCursor
                 | Self::PodDrawer(DrawerTab::Containers | DrawerTab::Monitor)
                 | Self::KindDrawer(_, DrawerTab::Monitor)
         )
@@ -219,7 +232,11 @@ impl LaunchScreen {
     pub(crate) fn opens_dialog(self) -> bool {
         matches!(
             self,
-            Self::WhoCan | Self::CheckPermissions | Self::AccountPermissions | Self::TestTraffic
+            Self::WhoCan
+                | Self::CheckPermissions
+                | Self::AccountPermissions
+                | Self::TestTraffic
+                | Self::Shortcuts
         )
     }
 
@@ -252,6 +269,8 @@ impl LaunchScreen {
             "logs-workload" => Some(Self::LogsWorkload),
             "pods-selected" => Some(Self::PodsSelected),
             "nodes-selected" => Some(Self::NodesSelected),
+            "shortcuts" => Some(Self::Shortcuts),
+            "pods-cursor" => Some(Self::PodsCursor),
             "who-can" => Some(Self::WhoCan),
             "check-permissions" => Some(Self::CheckPermissions),
             "account-permissions" => Some(Self::AccountPermissions),
@@ -265,6 +284,10 @@ impl LaunchScreen {
             "settings-appearance" => Some(Self::Settings(
                 SettingsPage::Appearance,
                 SettingsSize::Standard,
+            )),
+            "settings-shortcuts" => Some(Self::Settings(
+                SettingsPage::KeyboardShortcuts,
+                SettingsSize::Tall,
             )),
             _ => {
                 if let Some(plural) = text.strip_suffix("-drawer") {

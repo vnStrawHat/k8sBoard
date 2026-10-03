@@ -239,7 +239,7 @@ impl AppShell {
         };
         let text = format!("{} selected", count_label(state.checked, singular, plural));
         let bar = selection_bar(text, bulk_actions(self.screen), &cx.weak_entity(), cx);
-        let right = if self.selected.is_some() {
+        let right = if self.drawer_subject().is_some() {
             self.drawer.width()
         } else {
             px(0.)
@@ -728,7 +728,7 @@ impl AppShell {
     /// An overlay on the workspace only, so it never covers the title bar, the sidebar, or
     /// the status bar. `None` when nothing is selected or the subject is not in the list.
     fn render_drawer(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let key = self.selected.as_ref()?;
+        let key = self.drawer_subject()?;
         let session = self.session.as_ref()?;
         let live = session.read(cx).live()?;
         match key {

@@ -21,7 +21,7 @@ Checkbox selection with "View N clusters" (apply once), several live sessions at
 - Deps: 0026, 0009. Risk: High (session and memory model, C4; every table and drawer keyed by cluster).
 
 ### 0028 — Keyboard map
-Focus model (single letters only with a selected row and no text input), J/K, ⏎, Esc, ↑↓ with drawer open, `[` `]`, `/`, `:`, Ctrl N, Ctrl `, Ctrl Shift M, Ctrl Tab, Ctrl W, Ctrl ,, `?` cheat sheet; mutating letters (S, F, C, D, E) routed to gated actions; Settings › Keyboard Shortcuts (read-only list).
+Done: focus model (single keys never act in text fields, menus, popovers, or dialogs), J/K, ⏎, Esc ladder, ↑↓ with the drawer open, `[` `]`, `/`, `?` sheet, Ctrl N, Ctrl `, Ctrl Shift M, Ctrl Tab, Ctrl W; Ctrl , and Ctrl O moved from 0025; Settings › Keyboard Shortcuts (read-only list). `:` is deferred to 0029. Letters S, F, C, D, E, R, ⇧S, Del are gated (no A key); only L, Y, and Ctrl C run.
 - Deps: 0025 (page). Risk: Med (GPUI key contexts and kit focus).
 
 ### 0029 — Command palette (W9)
