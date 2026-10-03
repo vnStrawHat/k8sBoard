@@ -37,7 +37,7 @@ pub(crate) fn ranked(entries: Vec<PaletteEntry>, query: &PaletteQuery<'_>) -> Ve
 | Go to | clusters: 0026 `cluster_switcher_rows` (`switcher_sections`; fields from `search_text`), env badge, health line, `Kbd` of 0026's `SwitchToClusterN` | `Clusters` mode only | `Enabled`; the active cluster is marked |
 
 - `@` reuses 0026 and binds nothing of its own: the palette never binds `secondary-shift-c` or `secondary-1`…`9` (0026 owns them). Confirm runs 0026 `switch_cluster`.
-- 0027 (draft): `@` is a **single** switch through 0026. Viewing several clusters (ticks) stays in the switcher via `view_clusters`; W9 shows only single "Go to" rows, so the palette offers no multi-select.
+- `@` is a **single** switch through 0026; k8sBoard views one cluster at a time (0046, user decision 2026-10-03), so there is no multi-select.
 
 - No session (kubeconfig missing, connecting): only the commands and the screens are listed; Resources and namespaces show the group's empty text "Cluster not connected".
 - The Resources group says, under its heading when the text matches nothing, "Searched: Pods, Nodes{, visible kind}. Type :kind to open another kind." (decision 9).
