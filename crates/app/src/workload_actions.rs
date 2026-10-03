@@ -2,6 +2,8 @@
 //! (label, button, risk, warnings, request) and the reasons a row cannot take an action now.
 //! Pure: it reads a row's summary and builds a `WriteIntent`; the shell sends nothing from here.
 
+use std::cell::Cell;
+
 use cluster::{
     DeploymentSummary, ObjectKind, ObjectRef, ReplicaSetSummary, WriteOperation, WriteRequest,
 };
@@ -661,6 +663,8 @@ pub(crate) fn bulk_scale_intent(
 ) -> Result<BatchIntent, SharedString> {
     let action = ResourceAction::Scale(kind);
     let words = bulk_words(action, false).ok_or_else(|| SharedString::from("Not a bulk action"))?;
+    // Counted for the rows that became items, so the warnings agree with the dialog's list.
+    let (shrinking, managed) = (Cell::new(0_usize), Cell::new(0_usize));
     let plan = batch_plan(inputs.rows, |row| {
         let scope = WorkloadScope {
             cluster: row.cluster,
@@ -673,25 +677,24 @@ pub(crate) fn bulk_scale_intent(
         }
         let intent = scale_intent(&scope, &target, replicas)
             .ok_or_else(|| skipped(row.object, "the object name is not valid"))?;
+        if replicas < target.desired {
+            shrinking.set(shrinking.get() + 1);
+        }
+        if target.hpa.is_some() {
+            managed.set(managed.get() + 1);
+        }
         Ok(batch_item(intent, row.object))
     })?;
-    // The rows the batch changes, read the same way the items were built.
-    let changed: Vec<ScaleTarget> = inputs
-        .rows
-        .iter()
-        .filter_map(|row| ScaleTarget::of(row.object, inputs.hpas))
-        .filter(|target| target.desired != replicas)
-        .collect();
     let mut warnings: Vec<SharedString> = Vec::new();
-    let shrinking = changed.iter().filter(|t| replicas < t.desired).count();
-    if shrinking > 0 {
-        warnings.push(format!("Scaling down {shrinking} of {}", changed.len()).into());
+    if shrinking.get() > 0 {
+        warnings.push(format!("Scaling down {} of {}", shrinking.get(), plan.items.len()).into());
     }
-    let managed = changed.iter().filter(|t| t.hpa.is_some()).count();
-    if managed > 0 {
-        warnings.push(
-            format!("{managed} of them are managed by an HPA, which will override this").into(),
+    if managed.get() > 0 {
+        let text = format!(
+            "{} of them are managed by an HPA, which will override this",
+            managed.get()
         );
+        warnings.push(text.into());
     }
     Ok(build_batch(
         action,

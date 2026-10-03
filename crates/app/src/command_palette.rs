@@ -24,6 +24,7 @@ use crate::app_shell::{AppShell, Screen};
 use crate::cluster_health::RowHealth;
 use crate::cluster_switcher::{OpenClusterSwitcher, health_color, health_text};
 use crate::environment::{Environment, environment_badge};
+use crate::fresh_enter::{confirms, is_enter};
 use crate::keymap::{
     CloseDockTab, LeavePaletteArgument, NextDockTab, OpenNamespacePicker, PalettePreview,
     PreviousDockTab, ScaleCursorRow, ShowShortcuts, ToggleDock, ToggleDockZoom,
@@ -340,16 +341,12 @@ impl CommandPalette {
                 .placeholder("Replicas")
                 .validate(|text, _| text.bytes().all(|byte| byte.is_ascii_digit()))
         });
-        let subscription =
-            cx.subscribe_in(
-                &input,
-                window,
-                |palette, _, event, window, cx| match event {
-                    InputEvent::PressEnter { .. } => palette.submit_replicas(window, cx),
-                    InputEvent::Change => palette.clear_argument_error(cx),
-                    _ => {}
-                },
-            );
+        // Enter is not read here: the key-down handler takes the fresh press (`on_argument_key`).
+        let subscription = cx.subscribe_in(&input, window, |palette, _, event, _, cx| {
+            if let InputEvent::Change = event {
+                palette.clear_argument_error(cx);
+            }
+        });
         input.update(cx, |input, cx| input.focus(window, cx));
         self.argument = Some(ReplicasArgument {
             prompt: format!("Replicas for {prompt}").into(),
@@ -370,11 +367,13 @@ impl CommandPalette {
     /// Enter in the replicas field: a whole number closes the palette and starts the scale (the
     /// confirm dialog follows); anything else says what is expected.
     fn submit_replicas(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(argument) = self.argument.as_mut() else {
+        // Taking the argument makes a second Enter a no-op: the first one already closed the palette.
+        let Some(mut argument) = self.argument.take() else {
             return;
         };
         let Some(replicas) = parse_replicas(&argument.input.read(cx).value()) else {
             argument.has_error = true;
+            self.argument = Some(argument);
             cx.notify();
             return;
         };
@@ -532,13 +531,12 @@ impl CommandPalette {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let key = &event.keystroke;
-        if key.key != "enter" || key.modifiers.modified() {
+        if !is_enter(event) {
             return;
         }
         window.prevent_default();
         cx.stop_propagation();
-        if !event.is_held {
+        if confirms(event) {
             self.submit_replicas(window, cx);
         }
     }

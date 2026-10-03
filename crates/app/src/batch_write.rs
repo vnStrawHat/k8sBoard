@@ -34,6 +34,9 @@ use crate::write_guard::{ActionRisk, confirm_step};
 /// The most objects one batch changes: more would be a long run of requests behind one click.
 pub(crate) const MAX_BATCH_ITEMS: usize = 50;
 
+/// Why the bulk buttons are off while a confirmed batch still commits on their cluster.
+const BATCH_RUNNING_REASON: &str = "A batch is running";
+
 /// One object of a batch, with the request that changes it.
 #[derive(Clone)]
 pub(crate) struct BatchItem {
@@ -296,6 +299,14 @@ impl AppShell {
                 guard.profile.environment,
             )
         };
+        if self.running_batches.contains(&intent.cluster) {
+            notify(
+                window,
+                cx,
+                format!("{BATCH_RUNNING_REASON} on {}", intent.cluster_name),
+            );
+            return;
+        }
         let inputs = DialogInputs {
             shell: cx.weak_entity(),
             kind: DialogKind::Batch(Rc::new(intent)),
@@ -325,6 +336,9 @@ impl AppShell {
     ) {
         let handle: AnyWindowHandle = window.window_handle();
         let shell = cx.weak_entity();
+        let cluster = batch.cluster.clone();
+        self.running_batches.insert(cluster.clone());
+        cx.notify();
         cx.spawn(async move |_, cx| {
             let mut results = vec![ItemProgress::Waiting; batch.plan.items.len()];
             let mut stopped: Option<SharedString> = None;
@@ -352,6 +366,11 @@ impl AppShell {
                 });
                 results[index] = progress;
             }
+            // Cleared on every way out: success, a failed item, and a blocked rest.
+            let _ = shell.update(cx, |shell, cx| {
+                shell.running_batches.remove(&cluster);
+                cx.notify();
+            });
             let notice = batch_notice(&batch.verb, &results);
             let is_success = results.iter().all(|state| *state == ItemProgress::Done);
             let _ = cx.update_window(handle, |_, window, cx| {
@@ -447,11 +466,14 @@ impl AppShell {
         if let ActionAvailability::Disabled { reason } = action_availability(action, &guard) {
             return BulkState::Off(reason);
         }
+        if self.running_batches.contains(first.cluster) {
+            return off(BATCH_RUNNING_REASON);
+        }
         // Scale asks for its count in a popover, so the batch exists only once it is typed.
         if matches!(action, ResourceAction::Scale(_)) {
             return BulkState::Ready(action);
         }
-        match self.bulk_batch(action, None, cx) {
+        match self.bulk_batch_of(checked, action, None, cx) {
             Ok(_) => BulkState::Ready(action),
             Err(reason) => BulkState::Off(reason),
         }
@@ -472,6 +494,18 @@ impl AppShell {
                 object: &row.object,
             })
             .collect();
+        self.bulk_batch_of(&checked, action, replicas, cx)
+    }
+
+    /// The batch over `checked`, which the caller read once: the selection bar builds it for every
+    /// button of a frame.
+    fn bulk_batch_of(
+        &self,
+        checked: &[CheckedRow<'_>],
+        action: ResourceAction,
+        replicas: Option<u32>,
+        cx: &App,
+    ) -> Result<BatchIntent, SharedString> {
         let first = checked
             .first()
             .ok_or_else(|| SharedString::from("Select rows first"))?;
@@ -483,7 +517,7 @@ impl AppShell {
             .ok_or_else(|| SharedString::from("Not connected"))?;
         let inputs = BulkInputs {
             cluster_name: guard.display_name(),
-            rows: &checked,
+            rows: checked,
             now: jiff::Timestamp::now(),
             hpas: live.loaded_hpas(),
         };

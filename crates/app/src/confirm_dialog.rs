@@ -887,7 +887,7 @@ impl ConfirmDialog {
         match &self.kind {
             DialogKind::Write(intent) => Some(intent.label.clone()),
             DialogKind::Batch(batch) => Some(batch.label.clone()),
-            DialogKind::Connect(intent) => Some(intent.label.clone().into()),
+            DialogKind::Connect(intent) => Some(intent.label.clone()),
             DialogKind::Unlock { .. } => None,
         }
     }

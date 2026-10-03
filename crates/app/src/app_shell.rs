@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -309,6 +310,9 @@ pub(crate) struct AppShell {
     /// The open value popover (Scale), floating over the bottom of the workspace. It belongs to the
     /// row under the cursor and closes when the cursor leaves it.
     value_popover: Option<Entity<ValuePopover>>,
+    /// The clusters with a confirmed batch still committing. A second batch on one of them waits:
+    /// two would race over the same objects and interleave their audit lines.
+    running_batches: HashSet<ClusterRef>,
     /// The confirm dialog opened last, for the tests that drive it.
     #[cfg(test)]
     last_dialog: Option<gpui_kit::WeakEntity<crate::confirm_dialog::ConfirmDialog>>,
@@ -519,6 +523,7 @@ impl AppShell {
             switch_notice: None,
             write_notice: None,
             value_popover: None,
+            running_batches: HashSet::new(),
             #[cfg(test)]
             last_dialog: None,
             #[cfg(test)]

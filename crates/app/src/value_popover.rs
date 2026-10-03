@@ -123,13 +123,27 @@ impl ValuePopover {
         }
     }
 
+    /// The row of a one-row popover as it is now, so the unchanged check and the "Now" line follow
+    /// a rollout or an HPA that changed the count while the form was open. The row the form opened
+    /// on stands in when it is no longer listed; the submit refuses that case with a notice.
+    fn current_target(&self, cx: &App) -> Option<ScaleTarget> {
+        let ValueTargets::One { object, target } = &self.targets else {
+            return None;
+        };
+        let current = self
+            .shell
+            .upgrade()
+            .and_then(|shell| shell.read(cx).scale_target_of(object, cx));
+        Some(current.unwrap_or_else(|| (**target).clone()))
+    }
+
     /// What the Scale button would do with the text now. Several rows have no common count to
     /// compare with, so only an empty or invalid text turns the button off there.
     fn choice(&self, cx: &App) -> ReplicasInput {
         let text = self.typed(cx);
-        match &self.targets {
-            ValueTargets::One { target, .. } => replicas_input(&text, target.desired),
-            ValueTargets::Ticked { .. } => match parse_replicas(&text) {
+        match self.current_target(cx) {
+            Some(target) => replicas_input(&text, target.desired),
+            None => match parse_replicas(&text) {
                 Some(replicas) => ReplicasInput::Set(replicas),
                 None => ReplicasInput::Invalid,
             },
@@ -147,9 +161,12 @@ impl ValuePopover {
     }
 
     /// The muted line under the field.
-    fn state_text(&self) -> String {
+    fn state_text(&self, cx: &App) -> String {
         match &self.targets {
-            ValueTargets::One { target, .. } => target.state_text(),
+            ValueTargets::One { .. } => self
+                .current_target(cx)
+                .map(|target| target.state_text())
+                .unwrap_or_default(),
             ValueTargets::Ticked { count, .. } => format!("One count for the {count} ticked rows"),
         }
     }
@@ -179,10 +196,8 @@ impl ValuePopover {
     /// The warnings of the typed number, shown while it is typed. A batch shows its own in the
     /// dialog, which knows each row.
     fn warnings(&self, cx: &App) -> Vec<SharedString> {
-        match (&self.targets, self.choice(cx)) {
-            (ValueTargets::One { target, .. }, ReplicasInput::Set(replicas)) => {
-                scale_warnings(target, replicas)
-            }
+        match (self.current_target(cx), self.choice(cx)) {
+            (Some(target), ReplicasInput::Set(replicas)) => scale_warnings(&target, replicas),
             _ => Vec::new(),
         }
     }
@@ -193,7 +208,7 @@ impl Render for ValuePopover {
         let theme = cx.theme();
         let (muted, warning) = (theme.muted_foreground, theme.warning);
         let title = self.title();
-        let state = self.state_text();
+        let state = self.state_text(cx);
         let can_submit = matches!(self.choice(cx), ReplicasInput::Set(_));
         let ValueForm::Replicas { input } = &self.form;
         v_flex()
@@ -259,6 +274,10 @@ impl ValuePopover {
 
     pub(crate) fn press_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.submit(window, cx);
+    }
+
+    pub(crate) fn state_line(&self, cx: &App) -> String {
+        self.state_text(cx)
     }
 
     pub(crate) fn warning_lines(&self, cx: &App) -> Vec<SharedString> {

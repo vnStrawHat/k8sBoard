@@ -22,11 +22,13 @@ use crate::fresh_enter::FreshEnter;
 pub(crate) struct LeavingWork {
     /// Open shell tabs: each session ends and a new shell starts empty.
     pub(crate) shells: usize,
+    /// Clusters with a batch still committing: it stops at the next item and the rest read `Not sent`.
+    pub(crate) batches: usize,
 }
 
 impl LeavingWork {
     pub(crate) fn is_empty(&self) -> bool {
-        self.shells == 0
+        self.shells == 0 && self.batches == 0
     }
 
     /// One line per kind of work: `2 shells will close`.
@@ -36,6 +38,15 @@ impl LeavingWork {
             0 => {}
             1 => lines.push("1 shell will close".to_owned()),
             count => lines.push(format!("{count} shells will close")),
+        }
+        match self.batches {
+            0 => {}
+            1 => {
+                lines.push("1 running batch will stop; its remaining items are not sent".to_owned())
+            }
+            count => lines.push(format!(
+                "{count} running batches will stop; their remaining items are not sent"
+            )),
         }
         lines
     }
@@ -49,6 +60,10 @@ impl AppShell {
     pub(super) fn leaving_work(&self, leaving: &[ClusterRef], cx: &gpui_kit::App) -> LeavingWork {
         LeavingWork {
             shells: self.dock.read(cx).shell_count_of(leaving, cx),
+            batches: leaving
+                .iter()
+                .filter(|cluster| self.running_batches.contains(cluster))
+                .count(),
         }
     }
 
@@ -126,12 +141,37 @@ mod tests {
     #[test]
     fn shells_are_counted_in_singular_and_plural() {
         assert_eq!(
-            LeavingWork { shells: 1 }.lines(),
+            LeavingWork {
+                shells: 1,
+                ..LeavingWork::default()
+            }
+            .lines(),
             ["1 shell will close".to_owned()]
         );
         assert_eq!(
-            LeavingWork { shells: 2 }.lines(),
+            LeavingWork {
+                shells: 2,
+                ..LeavingWork::default()
+            }
+            .lines(),
             ["2 shells will close".to_owned()]
+        );
+    }
+
+    #[test]
+    fn running_batches_are_counted_in_singular_and_plural() {
+        let batches = |batches| LeavingWork {
+            batches,
+            ..LeavingWork::default()
+        };
+        assert!(!batches(1).is_empty());
+        assert_eq!(
+            batches(1).lines(),
+            ["1 running batch will stop; its remaining items are not sent".to_owned()]
+        );
+        assert_eq!(
+            batches(2).lines(),
+            ["2 running batches will stop; their remaining items are not sent".to_owned()]
         );
     }
 }

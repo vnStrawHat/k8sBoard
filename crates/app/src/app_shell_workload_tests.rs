@@ -542,6 +542,35 @@ fn scale_button_disabled_until_a_new_whole_number(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_popover_follows_the_count_the_row_has_now(cx: &mut TestAppContext) {
+    let t = workload_clusters("scale-count-moved", cx);
+    t.on_stg_deployment(cx);
+    t.press("shift-s", cx);
+    let popover = t.popover(cx).expect("the popover is open");
+    assert_eq!(
+        popover.read_with(cx, |popover, cx| popover.state_line(cx)),
+        "Now 3 desired · 2 ready"
+    );
+    // The list moved on to 5 while the form was open: 5 is no change now, 3 is.
+    let mut moved = deployment("api");
+    moved.desired = 5;
+    t.show_kind(
+        ResourceKind::Deployments,
+        deployments(false),
+        vec![deployment_row(&moved)],
+        cx,
+    );
+    assert_eq!(
+        popover.read_with(cx, |popover, cx| popover.state_line(cx)),
+        "Now 5 desired · 2 ready"
+    );
+    t.type_in_popover(&popover, "5", cx);
+    assert!(!popover.read_with(cx, |popover, cx| popover.can_submit(cx)));
+    t.type_in_popover(&popover, "3", cx);
+    assert!(popover.read_with(cx, |popover, cx| popover.can_submit(cx)));
+}
+
+#[gpui_kit::test]
 fn the_popover_warns_while_the_number_is_typed(cx: &mut TestAppContext) {
     let t = workload_clusters("scale-warn", cx);
     t.on_stg_deployment(cx);
@@ -641,6 +670,39 @@ fn drawer_has_no_replicas_input(cx: &mut TestAppContext) {
     assert!(t.popover(cx).is_none());
 }
 
+impl Clusters {
+    fn notification_count(&self, cx: &mut TestAppContext) -> usize {
+        self.fixture
+            .with_window(cx, |window, cx| window.notifications(cx).len())
+    }
+}
+
+#[gpui_kit::test]
+fn a_scale_for_a_row_that_left_the_list_is_refused_with_a_notice(cx: &mut TestAppContext) {
+    let t = workload_clusters("scale-row-gone", cx);
+    t.on_stg_deployment(cx);
+    let subject = t
+        .fixture
+        .shell
+        .read_with(cx, |shell, _| shell.selected.clone())
+        .expect("the cursor is on a row");
+    let target =
+        crate::workload_actions::ScaleTarget::of(&KindObject::Deployment(deployment("api")), &[])
+            .expect("a Deployment can scale");
+    // The row is deleted while the form is open.
+    t.show_kind(ResourceKind::Deployments, Vec::new(), Vec::new(), cx);
+    let before = t.notification_count(cx);
+    t.fixture.with_window(cx, |window, cx| {
+        t.fixture.shell.update(cx, |shell, cx| {
+            shell.submit_scale(&subject, &target, 5, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(t.notification_count(cx), before + 1);
+    assert!(!t.has_dialog(cx));
+    assert!(writes(&t.stg_api).is_empty());
+}
+
 #[gpui_kit::test]
 fn palette_ctrl_enter_argument_mode(cx: &mut TestAppContext) {
     let t = workload_clusters("scale-argument", cx);
@@ -678,6 +740,26 @@ fn palette_rejects_non_numbers(cx: &mut TestAppContext) {
     t.press("enter", cx);
     cx.run_until_parked();
     assert_eq!(t.dialog_label(cx), "Scale deployment api from 3 to 2");
+}
+
+#[gpui_kit::test]
+fn only_a_plain_enter_submits_the_palette_argument(cx: &mut TestAppContext) {
+    let t = workload_clusters("scale-argument-modified-enter", cx);
+    t.on_stg_deployment(cx);
+    t.open_palette("> scale", cx);
+    t.press("secondary-enter", cx);
+    t.fixture.draw_twice(cx);
+    t.type_into_focus("5", cx);
+    // The kit Input turns these into its Enter event; neither may start the scale.
+    for key in ["shift-enter", "secondary-enter"] {
+        t.press(key, cx);
+        cx.run_until_parked();
+        assert!(!t.has_dialog(cx), "{key}");
+        assert!(writes(&t.stg_api).is_empty(), "{key}");
+    }
+    t.press("enter", cx);
+    cx.run_until_parked();
+    assert_eq!(t.dialog_label(cx), "Scale deployment api from 3 to 5");
 }
 
 #[gpui_kit::test]
@@ -1088,6 +1170,85 @@ fn more_than_fifty_ticks_turn_every_button_off(cx: &mut TestAppContext) {
             "{label}"
         );
     }
+}
+
+fn restart_deployments() -> ResourceAction {
+    ResourceAction::RestartRollout(cluster::ObjectKind::Deployment)
+}
+
+impl Clusters {
+    fn is_batch_running(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> bool {
+        self.fixture
+            .shell
+            .read_with(cx, |shell, _| shell.running_batches.contains(cluster))
+    }
+
+    /// Starts a second batch from the keys' own entry while the first one commits.
+    fn run_bulk_now(&self, action: ResourceAction, cx: &mut TestAppContext) {
+        self.fixture.with_window(cx, |window, cx| {
+            self.fixture
+                .shell
+                .update(cx, |shell, cx| shell.run_bulk(action, window, cx));
+        });
+        cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+fn a_running_batch_turns_the_bulk_buttons_off_and_refuses_a_second_batch(cx: &mut TestAppContext) {
+    let t = workload_clusters("bulk-in-flight", cx);
+    t.with_ticked_deployments(&[0, 1, 2, 3], cx);
+    t.press_bulk("Restart", cx);
+    t.wait_for_dry_run(cx);
+    assert!(!t.is_batch_running(&t.stg, cx));
+    t.confirm(cx);
+    // The flag is set the moment the commit starts, before any answer came back.
+    assert!(t.is_batch_running(&t.stg, cx));
+    let buttons = t.bulk_buttons(cx);
+    for label in ["Scale…", "Restart"] {
+        assert_eq!(
+            Clusters::state_of(&buttons, label),
+            BulkState::Off("A batch is running".into()),
+            "{label}"
+        );
+    }
+    // A stale button or a key cannot start another one on the same objects.
+    t.run_bulk_now(restart_deployments(), cx);
+    t.wait_for("the batch to end", cx, |cx| !t.is_batch_running(&t.stg, cx));
+    // Four dry-runs and four commits: the refused second batch sent nothing.
+    assert_eq!(writes(&t.stg_api).len(), 8);
+    assert_eq!(
+        Clusters::state_of(&t.bulk_buttons(cx), "Restart"),
+        BulkState::Ready(restart_deployments())
+    );
+}
+
+#[gpui_kit::test]
+fn a_failed_item_still_ends_the_running_batch(cx: &mut TestAppContext) {
+    let t = workload_clusters_answering("bulk-in-flight-failed", web_commit_refused, cx);
+    t.with_ticked_deployments(&[0, 1, 2, 3], cx);
+    t.press_bulk("Restart", cx);
+    t.wait_for_dry_run(cx);
+    t.confirm(cx);
+    assert!(t.is_batch_running(&t.stg, cx));
+    t.wait_for("the batch to end", cx, |cx| !t.is_batch_running(&t.stg, cx));
+    assert_eq!(
+        Clusters::state_of(&t.bulk_buttons(cx), "Restart"),
+        BulkState::Ready(restart_deployments())
+    );
+}
+
+#[gpui_kit::test]
+fn a_batch_in_another_cluster_does_not_block_this_one(cx: &mut TestAppContext) {
+    let t = workload_clusters("bulk-in-flight-other", cx);
+    t.with_ticked_deployments(&[0, 1], cx);
+    t.fixture
+        .shell
+        .update(cx, |shell, _| shell.running_batches.insert(t.prod.clone()));
+    assert_eq!(
+        Clusters::state_of(&t.bulk_buttons(cx), "Restart"),
+        BulkState::Ready(restart_deployments())
+    );
 }
 
 #[gpui_kit::test]

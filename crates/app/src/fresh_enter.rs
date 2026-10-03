@@ -56,12 +56,12 @@ impl FreshEnter {
 }
 
 /// An unmodified Enter, held or not.
-fn is_enter(event: &KeyDownEvent) -> bool {
+pub(crate) fn is_enter(event: &KeyDownEvent) -> bool {
     event.keystroke.key == "enter" && !event.keystroke.modifiers.modified()
 }
 
 /// Whether the press confirms: a fresh Enter. A repeat of a held one never does.
-fn confirms(event: &KeyDownEvent) -> bool {
+pub(crate) fn confirms(event: &KeyDownEvent) -> bool {
     is_enter(event) && !event.is_held
 }
 

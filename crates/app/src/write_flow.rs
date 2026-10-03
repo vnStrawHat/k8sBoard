@@ -559,6 +559,11 @@ impl AppShell {
                 self.guard_for(&subject.cluster, cx),
                 self.slot_live(&subject.cluster, cx),
             ) else {
+                notify(
+                    window,
+                    cx,
+                    unavailable_text(label, "the cluster is not open"),
+                );
                 return;
             };
             let Some(row) = live.row_of(&subject.key) else {
@@ -603,6 +608,11 @@ impl AppShell {
                 self.guard_for(&subject.cluster, cx),
                 self.slot_live(&subject.cluster, cx),
             ) else {
+                notify(
+                    window,
+                    cx,
+                    unavailable_text(label, "the cluster is not open"),
+                );
                 return;
             };
             let Some(KindObject::Deployment(deployment)) =
@@ -634,7 +644,7 @@ impl AppShell {
 
     /// The row under `subject` as a Scale target. The HPA is read from the Issues feed only when that
     /// list is already loaded: no list starts for a hint.
-    fn scale_target_of(&self, subject: &ClusterObject, cx: &App) -> Option<ScaleTarget> {
+    pub(crate) fn scale_target_of(&self, subject: &ClusterObject, cx: &App) -> Option<ScaleTarget> {
         let live = self.slot_live(&subject.cluster, cx)?;
         let row = live.row_of(&subject.key)?;
         ScaleTarget::of(&row.object, live.loaded_hpas())
@@ -703,6 +713,12 @@ impl AppShell {
             return;
         };
         let Some(target) = self.scale_target_of(&subject, cx) else {
+            let label = action_label(ResourceAction::Scale(ObjectKind::Deployment));
+            notify(
+                window,
+                cx,
+                unavailable_text(label, "the object is no longer listed"),
+            );
             return;
         };
         self.start_scale(&subject, &target, replicas, window, cx);
@@ -731,11 +747,23 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) {
         let label = action_label(ResourceAction::Scale(opened_on.kind));
-        let target = self
-            .scale_target_of(subject, cx)
-            .unwrap_or_else(|| opened_on.clone());
+        // A row that left the list since the form opened is refused: the form's own copy of it is
+        // old, and the change would name an object that may be gone.
+        let Some(target) = self.scale_target_of(subject, cx) else {
+            notify(
+                window,
+                cx,
+                unavailable_text(label, "the object is no longer listed"),
+            );
+            return;
+        };
         let intent = {
             let Some(guard) = self.guard_for(&subject.cluster, cx) else {
+                notify(
+                    window,
+                    cx,
+                    unavailable_text(label, "the cluster is not open"),
+                );
                 return;
             };
             let scope = WorkloadScope {

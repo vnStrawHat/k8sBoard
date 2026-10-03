@@ -815,6 +815,25 @@ fn bulk_suspend_label_reads_resume_when_all_suspended() {
 }
 
 #[test]
+fn bulk_scale_down_line_counts_the_items_of_the_batch() {
+    // A row whose name cannot be sent is skipped, so it is in neither number of the line.
+    let objects = vec![
+        KindObject::Deployment(deployment("api")),
+        KindObject::Deployment(deployment("")),
+    ];
+    let rows = bulk_objects_for(&objects);
+    let inputs = BulkInputs {
+        cluster_name: "stg-b",
+        rows: &rows,
+        now: now(),
+        hpas: &[],
+    };
+    let batch = bulk_scale_intent(&inputs, 1, ObjectKind::Deployment).expect("a batch");
+    assert_eq!(item_names(&batch), ["team-a/api"]);
+    assert_eq!(batch.warnings, ["Scaling down 1 of 1"]);
+}
+
+#[test]
 fn bulk_scale_sets_one_count_and_skips_rows_that_have_it() {
     let mut four = deployment("web");
     four.desired = 4;
