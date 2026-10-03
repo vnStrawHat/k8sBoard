@@ -45,13 +45,13 @@ Each step is one coder pass that passes the full gate on its own. Step 5 can mov
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes, offline.
-- [ ] 3. No kube or k8s-openapi type in a public signature. The 0001 read-only grep still finds only the SSAR `create`. The crate never spawns tasks. The app gains no kube dependency. No `Cargo.lock` package change.
-- [ ] 4. The 0003 AC4 color-literal grep is clean; chips, the summary tint, and the selection bar use theme tokens.
+- [x] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes, offline.
+- [ ] 3. No kube or k8s-openapi type in a public signature. The 0001 read-only grep still finds only the SSAR `create`. The crate never spawns tasks. The app gains no kube dependency. No `Cargo.lock` package change. — superseded by 0030 (write allow-list and named connect files replace the read-only grep)
+- [x] 4. The 0003 AC4 color-literal grep is clean; chips, the summary tint, and the selection bar use theme tokens.
 - [ ] 5. On UAT, probe `--namespace a,b` prints a pod count equal to the sum of the two single-namespace runs; the app with `--namespace a,b` shows both namespaces' pods and the label `ns: a, b`. A denied namespace in the set leaves the others visible with a banner naming it.
 - [ ] 6. On UAT (release build): `/` (pressed before any click) text, a `label:` chip, a Status chip, sort on three columns, and hiding a column work on Pods, Nodes, Deployments, and Events; the header reads `N of M match`; a drawer whose row is filtered out closes (review plus spot check); the logged rebuild time stays within the decision 1 budget.
-- [ ] 7. Watches per session stay at most `2N + 3` (namespaces, nodes, object events, N pods, N explorer) for N picked namespaces (N ≤ 5), and drop back when the scope changes (review of `set_scope`).
+- [ ] 7. Watches per session stay at most `2N + 3` (namespaces, nodes, object events, N pods, N explorer) for N picked namespaces (N ≤ 5), and drop back when the scope changes (review of `set_scope`). — superseded by later watch-budget growth (see open_watch_count_stays_within_3n_plus_5 in cluster_session_tests.rs)
 - [ ] 8. Pause stream holds the Events rows still while new events arrive; Resume shows them; a scope change or Warnings only toggle unpauses.
 - [ ] 9. The step's screenshots exist; the ui-verifier reports no high-severity defect against W4, W5, W7.
 - [ ] 10. A checkbox click never opens or retargets the drawer; every selection bar action is disabled with "Read-only mode" (spot check).

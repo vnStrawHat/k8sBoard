@@ -28,13 +28,13 @@ Give the app live, read-only data for pods, nodes, and namespaces, with one watc
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes (`fmt`, `clippy -D warnings`, `test --workspace`) with no new `#[allow]`.
-- [ ] 2. Every test named in [test-plan.md](test-plan.md) exists under that name and passes. None of them touches a network.
+- [x] 1. The quality gate passes (`fmt`, `clippy -D warnings`, `test --workspace`) with no new `#[allow]`.
+- [x] 2. Every test named in [test-plan.md](test-plan.md) exists under that name and passes. None of them touches a network.
 - [ ] 3. `lib.rs` matches [files-to-touch.md](files-to-touch.md). No `kube`, `k8s_openapi`, or `kube::runtime` type appears in a public signature.
-- [ ] 4. The read-only guard from 0001 AC4 still holds, extended to the new files, and `kube` features still exclude `ws`.
-- [ ] 5. The crate never calls `tokio::spawn`, `spawn_blocking`, or `block_on` (scoped grep of `crates/cluster/src`).
+- [ ] 4. The read-only guard from 0001 AC4 still holds, extended to the new files, and `kube` features still exclude `ws`. — superseded by 0030 (write allow-list) and 0036 (kube now built with ws)
+- [x] 5. The crate never calls `tokio::spawn`, `spawn_blocking`, or `block_on` (scoped grep of `crates/cluster/src`).
 - [ ] 6. Live check (coder-lite): `probe -- --kubeconfig monitor-uat-readonly.yml --context readonly@Monitor --watch-seconds 5` prints one line per kind. Expected: pods about 104, nodes 4, namespaces 20. No credential appears (0001 AC7 script).
-- [ ] 7. `crates/app` is unchanged.
+- [x] 7. `crates/app` is unchanged.
 
 ## Decisions
 

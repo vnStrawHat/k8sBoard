@@ -35,16 +35,16 @@ Editing, diff, dry-run, and Apply (W10, 0031); a managedFields toggle (0031); re
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
 - [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes, offline.
-- [ ] 3. No kube, k8s-openapi, or serde type in a public signature; the app gains no kube or serde dependency. The 0001 read-only grep still finds only the SSAR `create`. The crate never spawns tasks.
-- [ ] 4. Secret safety: `object_yaml.rs` and `yaml_view.rs` contain no `tracing::` call; `ObjectYaml` has no `Debug`; serializer errors carry a fixed message; no file is written. Masking tests prove distinctive Secret, manifest-annotation, and env values are absent from the text.
+- [ ] 3. No kube, k8s-openapi, or serde type in a public signature; the app gains no kube or serde dependency. The 0001 read-only grep still finds only the SSAR `create`. The crate never spawns tasks. — superseded by 0030 (write allow-list and named connect files replace the read-only grep)
+- [x] 4. Secret safety: `object_yaml.rs` and `yaml_view.rs` contain no `tracing::` call; `ObjectYaml` has no `Debug`; serializer errors carry a fixed message; no file is written. Masking tests prove distinctive Secret, manifest-annotation, and env values are absent from the text.
 - [ ] 5. Step 1 adds no `[[package]]` to `Cargo.lock`. Probe `--yaml` on UAT prints two `yaml` lines with `managedFields absent` and no `VISIBLE`; the 0001 AC7 credential script reports 0.
 - [ ] 6. Node and kind drawers have tabs and ⤢; their Events show only in the Events tab; `show_screen` resets the tab to Overview (review).
-- [ ] 6a. Step 3 adds exactly five `[[package]]` entries to `Cargo.lock`: four tree-sitter crates (`tree-sitter`, `tree-sitter-yaml`, `tree-sitter-json`, `tree-sitter-language`; all compile C through `cc`) and the transitive `streaming-iterator`.
+- [x] 6a. Step 3 adds exactly five `[[package]]` entries to `Cargo.lock`: four tree-sitter crates (`tree-sitter`, `tree-sitter-yaml`, `tree-sitter-json`, `tree-sitter-language`; all compile C through `cc`) and the transitive `streaming-iterator`.
 - [ ] 7. The two `sync_yaml_view` invariants in [yaml-view.md](yaml-view.md) hold (review). On UAT, the YAML tab of a pod, a node, a deployment, and an event loads, refreshes, and copies; env literals read `<hidden>` until Env values is on. At most one YAML request is in flight, the first waits 250 ms, and the view is dropped when the tab is left.
 - [ ] 8. The step's screenshots exist; the ui-verifier reports no high-severity defect against W4/W7 drawers.
-- [ ] 9. The 0003 AC4 color-literal grep is clean.
+- [x] 9. The 0003 AC4 color-literal grep is clean.
 
 ## Open items
 

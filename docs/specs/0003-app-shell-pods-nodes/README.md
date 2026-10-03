@@ -43,10 +43,10 @@ Replace the hello window with the k8sBoard shell:
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes. `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings` also passes. No new `#[allow]`.
+- [x] 1. The quality gate passes. `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings` also passes. No new `#[allow]`.
 - [ ] 2. Every test in [test-plan.md](test-plan.md) exists under that name and passes.
-- [ ] 3. `crates/app/Cargo.toml` has no `kube` or `k8s-openapi` dependency. `screenshot` is not in `default`. The 0001 read-only grep still finds only the SSAR `create`.
-- [ ] 4. `crates/app/src` has no hex, `rgb(`, or `hsla(` color literals. All colors come from `cx.theme()` (scoped grep).
+- [ ] 3. `crates/app/Cargo.toml` has no `kube` or `k8s-openapi` dependency. `screenshot` is not in `default`. The 0001 read-only grep still finds only the SSAR `create`. — superseded by 0030 (write allow-list and named connect files replace the read-only grep)
+- [x] 4. `crates/app/src` has no hex, `rgb(`, or `hsla(` color literals. All colors come from `cx.theme()` (scoped grep).
 - [ ] 5. `cargo run -p k8sboard -- --kubeconfig monitor-uat-readonly.yml --context readonly@Monitor` starts on all namespaces (UAT allows list pods) and shows live pods (about 104) and nodes (4). Namespace and context switching work with no main-thread stall.
 - [ ] 6. Without `--context`, the app opens with an error state that names the invalid current-context, and the switcher lists `readonly@Monitor`.
 - [ ] 7. Screenshot hook: all five screens produce valid PNGs in light and dark ([screenshot-hook.md](screenshot-hook.md)). The ui-verifier reports no high-severity defects against W4/W4b/W5.

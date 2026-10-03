@@ -57,7 +57,7 @@ Excluded: 0034 (13, in build) and 0038 (10, deferred).
 | Needs a ui-verifier run | 18 | 0015 AC 6; 0021 AC 7, 8, 11; 0022 AC 12; 0022b AC 9, 10; 0025 AC 4, 7; 0028 AC 9, 10, 12, 13; 0030 AC 14; 0031 AC 12; 0035 AC 12; 0036 AC 11; 0037 AC 13 |
 | Needs a live UAT rerun by coder-lite | 6 | credential script: 0014 AC 4, 0015 AC 4, 0016 AC 5; request trace: 0025 AC 9, 0028 AC 7, 0029 AC 6 |
 | Real gap | 0 | every gap in section 1 is a spec non-goal or open item, not an AC |
-| Bookkeeping | 116 | 0001–0013 (115): merged but never ticked; 0029 AC 2 (tests exist under other names, deviation 4) |
+| Bookkeeping | 72 | 0001–0013: 38 of 125 ACs ticked, 16 marked superseded (0030, 0036, watch-budget growth); 71 left open because they need a UAT run, screenshots, ui-verifier, or renamed tests are unmatched; 0029 AC 2 stays open, name mapping added |
 
 Superseded early ACs (mark, do not tick): 0002 AC 4 and 0004 AC 3 (`kube` without `ws`; 0035/0036 enabled it), 0001 AC 4 (read-only grep; now the 0030 allow-list), 0001 AC 8 and 0002 AC 7 ("`crates/app` unchanged", point in time).
 

@@ -36,10 +36,10 @@ Filesystem usage charts for containers, `rootfs`/`logs` stats, node ephemeral-st
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. `Cargo.lock` changes only by the `serde` line under `k8sboard-cluster` (no new package or feature).
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. `Cargo.lock` changes only by the `serde` line under `k8sboard-cluster` (no new package or feature).
 - [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. Read-only: requests are SSAR `create` plus GETs. Every `proxy/` path literal in `crates/cluster/src` sits in `KubeletPath`; no path is built from user input; node names pass `is_node_name` first. No kube type in a public signature; the crate spawns no task.
-- [ ] 4. On UAT, `probe --kubelet-seconds 40` prints ≥ 2 rounds with node, pod, PVC counts and one disk I/O line; byte sizes come from the app's debug trace; results are copied into [decisions.md](decisions.md) "UAT probe".
+- [ ] 3. Read-only: requests are SSAR `create` plus GETs. Every `proxy/` path literal in `crates/cluster/src` sits in `KubeletPath`; no path is built from user input; node names pass `is_node_name` first. No kube type in a public signature; the crate spawns no task. — superseded by 0030 (write allow-list and named connect files replace the read-only grep)
+- [x] 4. On UAT, `probe --kubelet-seconds 40` prints ≥ 2 rounds with node, pod, PVC counts and one disk I/O line; byte sizes come from the app's debug trace; results are copied into [decisions.md](decisions.md) "UAT probe".
 - [ ] 5. Memory and demand bounds proven by tests: rings ≤ 240/288, unseen series freed, scope change drops other namespaces, targets ≤ 10 summary and ≤ 3 disk nodes, one subscription per session, empty targets make no request, early rounds only for added nodes.
 - [ ] 6. A PVC mount row of a pod on UAT (if any PVC exists) shows `{used} of {capacity} used ({pct})`; without stats it is unchanged.
 - [ ] 7. Screenshots `pod-monitor`, `node-monitor`, `deployments-monitor` show four cards (CPU, Memory, Network, Disk I/O), two-series legends, rates in `KB/s`/`MB/s`, and the source note; ui-verifier reports no high-severity defect against W4c and W7.

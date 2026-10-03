@@ -48,15 +48,15 @@ Each step is one coder pass and must pass the full quality gate on its own. Noth
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
 - [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes, offline.
-- [ ] 3. No kube or k8s-openapi type in a public signature. The 0001 read-only grep finds only the SSAR `create`. The crate never spawns tasks. The app has no kube dependency.
-- [ ] 4. `ConfigMapSummary` and `TemplateContainer` retain no value text. Verified by type review plus `config_map_summary_drops_values` and `template_containers_keep_only_name_image_and_ports`.
+- [ ] 3. No kube or k8s-openapi type in a public signature. The 0001 read-only grep finds only the SSAR `create`. The crate never spawns tasks. The app has no kube dependency. — superseded by 0030 (write allow-list and named connect files replace the read-only grep)
+- [x] 4. `ConfigMapSummary` and `TemplateContainer` retain no value text. Verified by type review plus `config_map_summary_drops_values` and `template_containers_keep_only_name_image_and_ports`.
 - [ ] 5. The probe `--watch-seconds 5` prints 12 watch lines and 19 access lines. coder-lite records UAT allow/deny per kind. The AC7 credential script reports 0.
 - [ ] 6. On UAT, each allowed kind of the step shows live rows and a drawer. Denied kinds are disabled with "Not permitted: list …". Forward buttons are disabled with the port-forward reason.
 - [ ] 7. At most one explorer watch runs. Leaving a kind screen drops it (review of `set_explorer_kind`).
 - [ ] 8. All 0005 screenshots exist, and the ui-verifier reports no high-severity defect against W7.
-- [ ] 9. The 0003 AC4 color-literal grep is clean.
+- [x] 9. The 0003 AC4 color-literal grep is clean.
 
 ## Open items
 

@@ -42,10 +42,10 @@ Network, Disk I/O, PVC usage, kubelet stats (0011); Prometheus and history beyon
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
 - [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes, offline.
-- [ ] 3. No new dependency; `git diff Cargo.lock` is empty. No kube or k8s-openapi type in a public signature. The 0001 read-only grep still finds only the SSAR `create`; the new requests are `list` only. The crate spawns no task.
-- [ ] 4. The 0003 AC4 color-literal grep is clean; bars and charts use theme tokens and `tone_color` only.
+- [ ] 3. No new dependency; `git diff Cargo.lock` is empty. No kube or k8s-openapi type in a public signature. The 0001 read-only grep still finds only the SSAR `create`; the new requests are `list` only. The crate spawns no task. — superseded by 0030 (write allow-list and named connect files replace the read-only grep)
+- [x] 4. The 0003 AC4 color-literal grep is clean; bars and charts use theme tokens and `tone_color` only.
 - [ ] 5. On UAT, `probe --metrics-seconds 40` prints at least two pod and two node samples; the pod-metrics count is within 3 of the listed pods that are running; the access report shows `list pods.metrics.k8s.io` and `list nodes.metrics.k8s.io` allowed.
 - [ ] 6. On UAT, Pods show Memory for running pods and "—" for completed ones; Nodes show CPU and Memory bars; values of three spot-checked pods match the probe's same-tick output after formatting.
 - [ ] 7. On UAT, the `pod-monitor`, `node-monitor`, and `deployments-monitor` screenshots show a CPU and a Memory line (≥ 2 ticks), request/limit lines where the spec sets them, four enabled range buttons (the short one muted), and the scope selector; scope switching and Table view are covered by `monitor_data` tests plus a manual spot check.

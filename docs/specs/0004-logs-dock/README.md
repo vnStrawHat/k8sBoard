@@ -47,17 +47,17 @@ Stream one pod container's logs into a bottom dock. Users open it from the pod r
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
 - [ ] 2. Every test in [test-plan.md](test-plan.md) exists under that name and passes. None of them touches a network.
-- [ ] 3. The read-only guard from 0001 AC4 still holds and also covers the new files. `kube` features still exclude `ws`. No `kube` or `k8s_openapi` type appears in a public signature. The crate never spawns tasks.
-- [ ] 4. No `tracing` call in `pod_log.rs` or `crates/app/src/log_*.rs` receives line text or chunk bytes (reviewed, plus a scoped grep).
+- [ ] 3. The read-only guard from 0001 AC4 still holds and also covers the new files. `kube` features still exclude `ws`. No `kube` or `k8s_openapi` type appears in a public signature. The crate never spawns tasks. — superseded by 0030 (write allow-list) and 0036 (kube now built with ws)
+- [x] 4. No `tracing` call in `pod_log.rs` or `crates/app/src/log_*.rs` receives line text or chunk bytes (reviewed, plus a scoped grep).
 - [ ] 5. Probe: `--logs-seconds 5` against UAT prints `started`, more than 0 lines, and 0 failures. The 0001 AC7 credential script reports 0 for every count.
 - [ ] 6. App on UAT:
   - "View logs" is enabled and streams lines;
   - Previous and the container picker restart the stream;
   - Shell and Port-forward are still disabled.
 - [ ] 7. The `logs-dock` and `logs-zoomed` screenshots exist in light and dark, and the ui-verifier reports no high-severity defect against W8/W8b.
-- [ ] 8. The 0003 AC4 color-literal grep is still clean.
+- [x] 8. The 0003 AC4 color-literal grep is still clean.
 
 ## Open items
 

@@ -45,7 +45,7 @@ New list or watch calls for search (decision 9); pairs for kinds that are not lo
 ## Acceptance criteria
 
 - [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. `Cargo.lock` unchanged.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline; none opens a real window. Partly met: see deviations 4 and 5.
+- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline; none opens a real window. Partly met: see deviations 4 and 5. Test-name mapping (old name -> actual): `tab_moves_the_cursor_only_for_a_visible_row` -> `tab_moves_the_cursor_without_opening_the_drawer` and siblings (`app_shell_switch_tests.rs`); `palette_entity_is_created_once` -> `the_palette_survives_renders_with_its_query_and_focus`.
 - [x] 3. `:po` and `:deploy` rank Pods and Deployments first; `rest pay` matches `Restart rollout` on a `payments-api` cursor row.
 - [x] 4. Ctrl K opens the palette from the table, the root, and text fields, with the query input focused; `:` only outside text fields; the title-bar box opens it on click. Esc clears the query, then closes; on an untouched `:` the first Esc closes; focus returns where it was.
 - [x] 5. A command entry runs the same 0028 handler as its key (same notice for a disabled one, same dock effect).

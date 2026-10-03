@@ -38,15 +38,15 @@ Any mutation (Roll back, Trigger, Restart stay disabled); ControllerRevisions; P
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
 - [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. No kube or k8s-openapi type in a public signature; the crate spawns no task; the app gains no kube dependency. The 0001 read-only grep still finds only the SSAR `create`; new requests are `list`/`watch` only.
-- [ ] 4. `Cargo.lock` gains exactly one package, `jiff-tzdb` (jiff feature `tzdb-bundle-always`); no cron crate.
+- [ ] 3. No kube or k8s-openapi type in a public signature; the crate spawns no task; the app gains no kube dependency. The 0001 read-only grep still finds only the SSAR `create`; new requests are `list`/`watch` only. — superseded by 0030 (write allow-list and named connect files replace the read-only grep)
+- [x] 4. `Cargo.lock` gains exactly one package, `jiff-tzdb` (jiff feature `tzdb-bundle-always`); no cron crate.
 - [ ] 5. Secret safety: ConfigMap value previews exist only in the related watch of the open drawer, are cut at 120 chars, and `config_map.rs`, `config_map_rows.rs`, `live_sections.rs` contain no `tracing::` call. List summaries stay value-free.
-- [ ] 6. On UAT, the probe prints `list endpointslices` allowed or denied, an `endpointslices` watch line, and 13 `count` lines (every `ObjectKind`); results are copied into [decisions.md](decisions.md) "UAT probe".
+- [x] 6. On UAT, the probe prints `list endpointslices` allowed or denied, an `endpointslices` watch line, and 13 `count` lines (every `ObjectKind`); results are copied into [decisions.md](decisions.md) "UAT probe".
 - [ ] 7. On UAT: a Deployment drawer lists revisions newest first with the current one marked; a CronJob shows Next run and three next runs; a DaemonSet shows two bars; a Service shows endpoints with ready state; a ConfigMap shows Used by and value previews; Namespaces show Pods and request columns when the scope is All.
-- [ ] 8. Watches per session stay at most `3N + 4` for N picked namespaces (`open_watch_count` test plus review of `set_explorer_kind`, `set_related_subject`).
-- [ ] 9. The 0003 AC4 color-literal grep is clean; bars use the kit `Progress` and `tone_color`.
+- [ ] 8. Watches per session stay at most `3N + 4` for N picked namespaces (`open_watch_count` test plus review of `set_explorer_kind`, `set_related_subject`). — superseded by later watch-budget growth (see open_watch_count_stays_within_3n_plus_5 in cluster_session_tests.rs)
+- [x] 9. The 0003 AC4 color-literal grep is clean; bars use the kit `Progress` and `tone_color`.
 - [ ] 10. The step's screenshots exist; the ui-verifier reports no high-severity defect against W7.
 
 ## Open items

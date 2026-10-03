@@ -31,10 +31,10 @@ Give the future GPUI app one small, read-only entry point to a Kubernetes cluste
 
 ## Acceptance criteria
 
-- [ ] 1. `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` pass, with no new `#[allow]`.
+- [x] 1. `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` pass, with no new `#[allow]`.
 - [ ] 2. Every test named in both test-plan files exists under that name and passes.
 - [ ] 3. `lib.rs` matches [files-to-touch.md](files-to-touch.md), and nothing else is `pub`.
-- [ ] 4. Read-only guard:
+- [ ] 4. Read-only guard: — superseded by spec 0030 (mutating calls are allowed through the object_write.rs allow-list)
   - The only calls of a mutating or raw `kube` method are the ones named in the 0030 exception table ([write-path.md](../0030-guardrails-write-path/write-path.md)): clippy `disallowed-methods` (root `clippy.toml`) fails on any other. The SelfSubjectAccessReview and SelfSubjectRulesReview `create` (non-mutating review objects, `Api::<SelfSubject…Review>::all`) are the `access_review.rs` row. The old scoped grep of `crates/cluster/{src,examples}` stays as documentation: it lists `access_review.rs` and `object_write.rs` (and one `store.delete` of the 0002 reflector store, which is not a `kube` call).
   - No `kube` or `k8s_openapi` type appears in a public signature.
   - `kube` features in `crates/cluster/Cargo.toml` and the root `Cargo.toml` do not include `ws`.
@@ -45,7 +45,7 @@ Give the future GPUI app one small, read-only entry point to a Kubernetes cluste
 
   coder-lite reports the access matrix and the metrics state verbatim.
 - [ ] 7. No credential values in the probe's stdout or stderr. A script checks this with `grep -F -c`, loading the values into variables without printing them, and reports counts only. Every count must be 0.
-- [ ] 8. `crates/app` is unchanged, and the workspace builds.
+- [x] 8. `crates/app` is unchanged, and the workspace builds.
 
 ## Decisions (resolved)
 
