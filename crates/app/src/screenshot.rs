@@ -738,6 +738,7 @@ mod tests {
             LaunchScreen::NodeShellConfirm,
             LaunchScreen::NodeShellConfirmStaging,
             LaunchScreen::NodeTaintsEditor,
+            LaunchScreen::NodeTaintsEditorInvalid,
             LaunchScreen::NodeLabelsEditor,
             LaunchScreen::DrainDialog,
             LaunchScreen::LeftoverSweepFixture,
@@ -768,6 +769,7 @@ mod tests {
             LaunchScreen::NodeShellTabFixture,
             LaunchScreen::DebugShellTabFixture,
             LaunchScreen::DrainProgress,
+            LaunchScreen::DrainProgressStuck,
         ] {
             for target in [TargetState::Loading, TargetState::Unavailable] {
                 assert!(

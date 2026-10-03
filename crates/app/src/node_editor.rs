@@ -13,6 +13,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::select::{Select, SelectState};
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IndexPath, Sizable as _};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::{
@@ -29,8 +30,8 @@ use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::keymap::FORWARD_FORM;
 use crate::node_edits::{
-    CordonMode, LabelRow, NodeScope, TaintRow, TickedNode, cordon_batch, label_intent, label_rows,
-    taint_intent, taint_rows,
+    CordonMode, LabelRow, NO_EXECUTE_WARNING, NodeScope, TaintRow, TickedNode, cordon_batch,
+    label_intent, label_rows, taint_intent, taint_rows,
 };
 use crate::resource_actions::{
     ActionAvailability, NOT_SHIPPED_REASON, ResourceAction, action_availability, action_label,
@@ -168,6 +169,27 @@ fn with_note(line: gpui_kit::Div, note: Option<&'static str>, muted: gpui_kit::H
         .gap_0p5()
         .child(line)
         .children(note.map(|text| div().text_xs().text_color(muted).child(text)))
+        .into_any_element()
+}
+
+/// The key of a locked taint: a cell cut with an ellipsis, with the full key in a tooltip.
+fn locked_key(index: usize, key: SharedString, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let full = key.clone();
+    div()
+        .id(("node-edit-locked-key", index))
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .px_2()
+        .py_1()
+        .text_sm()
+        .rounded_md()
+        .border_1()
+        .border_color(theme.border)
+        .text_color(theme.muted_foreground)
+        .child(key)
+        .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
         .into_any_element()
 }
 
@@ -361,31 +383,49 @@ impl NodeEditor {
         };
         let list =
             match rows {
-                Rows::Taints(inputs) => {
-                    inputs
-                        .iter()
-                        .enumerate()
-                        .map(|(index, row)| {
-                            with_note(
-                                h_flex()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(div().flex_1().child(
-                                        Input::new(&row.key).small().disabled(row.is_read_only),
-                                    ))
-                                    .child(div().flex_1().child(
-                                        Input::new(&row.value).small().disabled(row.is_read_only),
-                                    ))
-                                    .child(div().w(px(150.)).child(
-                                        Select::new(&row.effect).small().disabled(row.is_read_only),
-                                    ))
-                                    .child(remove(index, row.is_read_only, cx)),
-                                row.is_read_only.then_some(MANAGED_BY_KUBERNETES),
-                                muted,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                }
+                Rows::Taints(inputs) => inputs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, row)| {
+                        let key_cell = if row.is_read_only {
+                            locked_key(index, row.key.read(cx).value().clone(), cx)
+                        } else {
+                            div()
+                                .flex_1()
+                                .child(Input::new(&row.key).small())
+                                .into_any_element()
+                        };
+                        let has_no_execute = !row.is_read_only
+                            && row
+                                .effect
+                                .read(cx)
+                                .selected_index(cx)
+                                .and_then(|index| EFFECT_CHOICES.get(index.row))
+                                .is_some_and(|effect| *effect == "NoExecute");
+                        let (note, note_color) = if row.is_read_only {
+                            (Some(MANAGED_BY_KUBERNETES), muted)
+                        } else if has_no_execute {
+                            (Some(NO_EXECUTE_WARNING), cx.theme().warning)
+                        } else {
+                            (None, muted)
+                        };
+                        with_note(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(key_cell)
+                                .child(div().flex_1().child(
+                                    Input::new(&row.value).small().disabled(row.is_read_only),
+                                ))
+                                .child(div().w(px(150.)).child(
+                                    Select::new(&row.effect).small().disabled(row.is_read_only),
+                                ))
+                                .child(remove(index, row.is_read_only, cx)),
+                            note,
+                            note_color,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
                 Rows::Labels(inputs) => {
                     inputs
                         .iter()
@@ -760,6 +800,7 @@ impl AppShell {
     pub(super) fn open_node_editor_fixture(
         &mut self,
         kind: NodeEditKind,
+        extra_taints: &[(&str, &str, &str)],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -820,12 +861,52 @@ impl AppShell {
             state: ready(kind, edit, window, cx),
             _load: None,
         });
+        for (key, value, effect) in extra_taints {
+            editor.update(cx, |editor, cx| {
+                editor.add_fixture_taint(key, value, effect, window, cx);
+            });
+        }
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
                 .title(title.clone())
                 .w(px(DIALOG_WIDTH))
                 .child(editor.clone())
         });
+    }
+}
+
+#[cfg(feature = "screenshot")]
+impl NodeEditor {
+    /// Appends a taint row with the given text, as if typed.
+    fn add_fixture_taint(
+        &mut self,
+        key: &str,
+        value: &str,
+        effect: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.add_row(window, cx);
+        let EditorState::Ready {
+            rows: Rows::Taints(rows),
+            ..
+        } = &self.state
+        else {
+            return;
+        };
+        let Some(row) = rows.last() else {
+            return;
+        };
+        row.key
+            .update(cx, |input, cx| input.set_value(key.to_owned(), window, cx));
+        row.value.update(cx, |input, cx| {
+            input.set_value(value.to_owned(), window, cx)
+        });
+        if let Some(index) = EFFECT_CHOICES.iter().position(|choice| *choice == effect) {
+            row.effect.update(cx, |select, cx| {
+                select.set_selected_index(Some(IndexPath::default().row(index)), window, cx);
+            });
+        }
     }
 }
 

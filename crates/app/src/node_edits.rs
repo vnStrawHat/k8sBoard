@@ -31,7 +31,7 @@ const KUBELET_LABEL_PREFIXES: [&str; 4] = [
 ];
 const EFFECTS: [&str; 3] = ["NoSchedule", "PreferNoSchedule", "NoExecute"];
 const NO_EXECUTE: &str = "NoExecute";
-const NO_EXECUTE_WARNING: &str = "NoExecute evicts pods that do not tolerate it";
+pub(crate) const NO_EXECUTE_WARNING: &str = "NoExecute evicts pods that do not tolerate it";
 const NO_CHANGES: &str = "No changes";
 
 /// A taint the editor must keep and never let the user change.

@@ -1898,14 +1898,25 @@ impl AppShell {
         #[cfg(feature = "screenshot")]
         if matches!(
             launch,
-            LaunchScreen::NodeTaintsEditor | LaunchScreen::NodeLabelsEditor
+            LaunchScreen::NodeTaintsEditor
+                | LaunchScreen::NodeTaintsEditorInvalid
+                | LaunchScreen::NodeLabelsEditor
         ) {
-            let kind = if launch == LaunchScreen::NodeTaintsEditor {
+            let kind = if launch != LaunchScreen::NodeLabelsEditor {
                 node_editor::NodeEditKind::Taints
             } else {
                 node_editor::NodeEditKind::Labels
             };
-            self.open_node_editor_fixture(kind, window, cx);
+            let extra_taints: &[(&str, &str, &str)] =
+                if launch == LaunchScreen::NodeTaintsEditorInvalid {
+                    &[
+                        ("bad key!", "x", "NoSchedule"),
+                        ("maintenance", "", "NoExecute"),
+                    ]
+                } else {
+                    &[]
+                };
+            self.open_node_editor_fixture(kind, extra_taints, window, cx);
             self.pending_dialog_launch = None;
             return;
         }
@@ -3672,8 +3683,11 @@ impl AppShell {
             return;
         };
         #[cfg(feature = "screenshot")]
-        if launch == LaunchScreen::DrainProgress {
-            self.open_drain_progress_fixture(window, cx);
+        if matches!(
+            launch,
+            LaunchScreen::DrainProgress | LaunchScreen::DrainProgressStuck
+        ) {
+            self.open_drain_progress_fixture(launch, window, cx);
             return;
         }
         #[cfg(feature = "screenshot")]

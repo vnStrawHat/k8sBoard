@@ -27,7 +27,7 @@ Options:
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
   --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
-           node-taints-editor|node-labels-editor|drain-dialog|drain-progress|
+           node-taints-editor|node-taints-editor-invalid|node-labels-editor|drain-dialog|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -97,12 +97,17 @@ pub(crate) enum LaunchScreen {
     /// Nodes list. Screenshot builds only; they need no cluster and send nothing.
     NodeTaintsEditor,
     NodeLabelsEditor,
+    /// `--screen node-taints-editor-invalid`: the taints editor with one invalid key and one
+    /// NoExecute row added, so the validation message and the warning show. Offline like the rest.
+    NodeTaintsEditorInvalid,
     /// `--screen drain-dialog`: the W6 drain dialog over fixed pods of a fixed Production cluster.
     /// Screenshot builds only; it needs no cluster and can never send.
     DrainDialog,
     /// `--screen drain-progress`: the dock zoomed on the tab of a fixed drain of one node. Screenshot
     /// builds only; it needs no cluster and starts no run.
     DrainProgress,
+    /// `--screen drain-progress-stuck`: the same tab after the node ended Stuck, with its reason.
+    DrainProgressStuck,
     /// `--screen leftover-sweep-fixture`: the leftover review dialog over fixed rows.
     LeftoverSweepFixture,
     /// `--screen node-shell-tab-fixture` and `debug-shell-tab-fixture`: the dock zoomed on a node
@@ -208,6 +213,7 @@ impl LaunchScreen {
             | Self::NodeShellConfirm
             | Self::NodeShellConfirmStaging
             | Self::NodeTaintsEditor
+            | Self::NodeTaintsEditorInvalid
             | Self::NodeLabelsEditor
             | Self::DrainDialog
             | Self::NodeShellOptions => Screen::Nodes,
@@ -215,7 +221,7 @@ impl LaunchScreen {
             | Self::LeftoverSweepFixture
             | Self::NodeShellTabFixture
             | Self::DebugShellTabFixture => Screen::Pods,
-            Self::DrainProgress => Screen::Nodes,
+            Self::DrainProgress | Self::DrainProgressStuck => Screen::Nodes,
             Self::ShellConfirmFixture | Self::DeleteBulkConfirm => Screen::Pods,
             Self::EditYamlDiff => Screen::Kind(ResourceKind::Deployments),
             Self::HpaRangePopover => Screen::Kind(ResourceKind::HorizontalPodAutoscalers),
@@ -424,6 +430,7 @@ impl LaunchScreen {
                 | Self::DebugContainerOptions
                 | Self::NodeShellConfirmStaging
                 | Self::NodeTaintsEditor
+                | Self::NodeTaintsEditorInvalid
                 | Self::NodeLabelsEditor
                 | Self::DrainDialog
                 | Self::LeftoverSweepFixture
@@ -453,6 +460,7 @@ impl LaunchScreen {
                 | Self::DebugContainerOptions
                 | Self::NodeShellConfirmStaging
                 | Self::NodeTaintsEditor
+                | Self::NodeTaintsEditorInvalid
                 | Self::NodeLabelsEditor
                 | Self::DrainDialog
                 | Self::LeftoverSweepFixture
@@ -465,7 +473,10 @@ impl LaunchScreen {
     pub(crate) fn is_dock_fixture(self) -> bool {
         matches!(
             self,
-            Self::NodeShellTabFixture | Self::DebugShellTabFixture | Self::DrainProgress
+            Self::NodeShellTabFixture
+                | Self::DebugShellTabFixture
+                | Self::DrainProgress
+                | Self::DrainProgressStuck
         )
     }
 
@@ -497,6 +508,7 @@ impl LaunchScreen {
                 | Self::NodeShellTabFixture
                 | Self::DebugShellTabFixture
                 | Self::DrainProgress
+                | Self::DrainProgressStuck
         )
     }
 
@@ -546,8 +558,10 @@ impl LaunchScreen {
             "node-shell-confirm-staging" => Some(Self::NodeShellConfirmStaging),
             "node-taints-editor" => Some(Self::NodeTaintsEditor),
             "node-labels-editor" => Some(Self::NodeLabelsEditor),
+            "node-taints-editor-invalid" => Some(Self::NodeTaintsEditorInvalid),
             "drain-dialog" => Some(Self::DrainDialog),
             "drain-progress" => Some(Self::DrainProgress),
+            "drain-progress-stuck" => Some(Self::DrainProgressStuck),
             "leftover-sweep-fixture" => Some(Self::LeftoverSweepFixture),
             "node-shell-tab-fixture" => Some(Self::NodeShellTabFixture),
             "debug-shell-tab-fixture" => Some(Self::DebugShellTabFixture),

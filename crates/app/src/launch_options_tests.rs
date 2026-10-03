@@ -958,6 +958,10 @@ fn the_node_editor_fixtures_are_offline_dialogs_over_nodes() {
     for (name, screen) in [
         ("node-taints-editor", LaunchScreen::NodeTaintsEditor),
         ("node-labels-editor", LaunchScreen::NodeLabelsEditor),
+        (
+            "node-taints-editor-invalid",
+            LaunchScreen::NodeTaintsEditorInvalid,
+        ),
         ("drain-dialog", LaunchScreen::DrainDialog),
     ] {
         let parsed = run_options(&["--screen", name]).screen;
@@ -1039,4 +1043,16 @@ fn screen_default_class_confirm_parses() {
     assert!(screen.opens_dialog());
     assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
     assert!(USAGE.contains("default-class-confirm"));
+}
+
+#[test]
+fn the_stuck_drain_screen_is_an_offline_dock_over_nodes() {
+    let parsed = run_options(&["--screen", "drain-progress-stuck"]).screen;
+    assert_eq!(parsed, LaunchScreen::DrainProgressStuck);
+    assert_eq!(parsed.screen(), Screen::Nodes);
+    assert!(parsed.has_dock());
+    assert!(parsed.is_dock_fixture());
+    assert!(!parsed.opens_dialog());
+    assert!(!parsed.shows_node_usage());
+    assert!(USAGE.contains("drain-progress-stuck"));
 }

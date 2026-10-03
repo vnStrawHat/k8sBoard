@@ -274,12 +274,18 @@ impl AppShell {
 /// its budget, drawn from fixed data. It starts no driver and sends nothing.
 #[cfg(feature = "screenshot")]
 impl AppShell {
-    pub(super) fn open_drain_progress_fixture(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_drain_progress_fixture(
+        &mut self,
+        launch: crate::launch_options::LaunchScreen,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         use cluster::{ControllerRef, DrainPod, WriteEffect, WriteMode, WriteOutcome};
 
         use crate::app_shell::write_flow::{DryRunState, TypedMatch, confirmed};
         use crate::dock::DockMode;
         use crate::drain_plan::PodKey;
+        use crate::drain_run::NodeOutcome;
 
         self.pending_launch_screen = None;
         let secs = Duration::from_secs;
@@ -350,6 +356,11 @@ impl AppShell {
                 retry_after: None,
             }));
             run.on_write(&NextStep::Evict(refused.clone()), refusal, secs(at));
+        }
+        if launch == crate::launch_options::LaunchScreen::DrainProgressStuck {
+            run.on_node_done(NodeOutcome::Stuck {
+                reason: "Timed out after 20 min: 11 pods left".into(),
+            });
         }
         let shell = cx.weak_entity();
         let tab = cx.new(|_| {

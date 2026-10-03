@@ -58,8 +58,10 @@ use crate::status_tone::{StatusTone, tone_color};
 use crate::write_guard::{ActionRisk, DialogConfirm, confirm_step};
 
 const DIALOG_WIDTH: f32 = 600.;
-const PREVIEW_MAX_HEIGHT: f32 = 150.;
-/// The result column of the preview wraps past this width.
+/// Every preview row is this tall, so the scroll area cuts between rows, never through one.
+const PREVIEW_ROW_HEIGHT: f32 = 24.;
+const PREVIEW_VISIBLE_ROWS: f32 = 8.;
+/// The result column of the preview is cut with an ellipsis past this width.
 const RESULT_MAX_WIDTH: f32 = 300.;
 /// The body above the buttons scrolls past this height, so a small window still reaches them.
 const BODY_MAX_HEIGHT: f32 = 660.;
@@ -905,10 +907,13 @@ impl DrainDialog {
         let theme = cx.theme();
         let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
         let mut rows: Vec<AnyElement> = Vec::new();
+        // Outside the scroll area, so what the drain leaves alone is always in sight.
+        let mut skipped: Vec<AnyElement> = Vec::new();
         for node in &self.nodes {
             match &node.pods {
                 PodsLoad::Loading => rows.push(
                     div()
+                        .h(px(PREVIEW_ROW_HEIGHT))
                         .text_xs()
                         .text_color(muted)
                         .child(format!("{}: Loading pods…", node.name))
@@ -916,6 +921,7 @@ impl DrainDialog {
                 ),
                 PodsLoad::Failed(text) => rows.push(
                     div()
+                        .h(px(PREVIEW_ROW_HEIGHT))
                         .text_xs()
                         .text_color(tone_color(StatusTone::Bad, cx))
                         .child(text.clone())
@@ -925,8 +931,10 @@ impl DrainDialog {
             }
         }
         for line in preview_lines(&self.plans, |uid| self.drain_check(uid)) {
-            rows.push(match line {
+            let is_skipped = matches!(line, PreviewLine::Skipped { .. });
+            let row = match line {
                 PreviewLine::Node(node) => div()
+                    .h(px(PREVIEW_ROW_HEIGHT))
                     .pt_1()
                     .text_xs()
                     .font_semibold()
@@ -938,8 +946,9 @@ impl DrainDialog {
                     result,
                     tone,
                 } => h_flex()
+                    .h(px(PREVIEW_ROW_HEIGHT))
                     .gap_2()
-                    .items_start()
+                    .items_center()
                     .justify_between()
                     .child(
                         h_flex()
@@ -955,11 +964,14 @@ impl DrainDialog {
                             .max_w(px(RESULT_MAX_WIDTH))
                             .text_xs()
                             .text_right()
+                            .truncate()
                             .text_color(tone_color(tone, cx))
                             .child(result),
                     )
                     .into_any_element(),
                 PreviewLine::Skipped { text } => h_flex()
+                    .h(px(PREVIEW_ROW_HEIGHT))
+                    .items_center()
                     .gap_2()
                     .justify_between()
                     .child(
@@ -970,7 +982,12 @@ impl DrainDialog {
                             .child(text),
                     )
                     .into_any_element(),
-            });
+            };
+            if is_skipped {
+                skipped.push(row);
+            } else {
+                rows.push(row);
+            }
         }
         v_flex()
             .gap_1()
@@ -985,11 +1002,12 @@ impl DrainDialog {
             .child(
                 v_flex()
                     .id("drain-preview")
-                    .gap_1()
-                    .max_h(px(PREVIEW_MAX_HEIGHT))
+                    .max_h(px(PREVIEW_ROW_HEIGHT * PREVIEW_VISIBLE_ROWS))
                     .overflow_y_scroll()
-                    .children(rows),
+                    // Rows keep their height, or the flex column squeezes them under the cap.
+                    .children(rows.into_iter().map(|row| div().flex_none().child(row))),
             )
+            .children(skipped)
             .into_any_element()
     }
 
