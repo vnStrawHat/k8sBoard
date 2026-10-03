@@ -8,23 +8,33 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use gpui_kit::SharedString;
 
 use crate::topology_graph::{GroupBy, NodeId, Relation, TopologyGraph, TopologyNode};
+use crate::topology_route::{EdgeRoute, route_edges};
 
-pub(crate) const NODE_WIDTH: f32 = 170.;
-pub(crate) const NODE_HEIGHT: f32 = 54.;
-pub(crate) const COLUMN_PITCH: f32 = 210.;
-pub(crate) const ROW_PITCH: f32 = 70.;
-const CONFIG_GAP: f32 = 50.;
-const BAND_GAP: f32 = 40.;
-const BAND_PAD: f32 = 12.;
-const BAND_TITLE: f32 = 22.;
+/// A card is at least this wide, and as wide as its longest name needs up to `MAX_NODE_WIDTH`.
+pub(crate) const MIN_NODE_WIDTH: f32 = 200.;
+const MAX_NODE_WIDTH: f32 = 280.;
+pub(crate) const NODE_HEIGHT: f32 = 60.;
+/// The gap between two columns of cards, where the edges run.
+const GUTTER: f32 = 50.;
+/// What a card holds besides its name: the accent bar, the chip, and the padding.
+const CARD_CHROME: f32 = 63.;
+/// The width of one character of a name (13 px in the UI font), which sets the card width.
+const NAME_CHAR_WIDTH: f32 = 7.2;
+/// The column pitch of a graph whose names are short.
+#[cfg(test)]
+pub(crate) const COLUMN_PITCH: f32 = MIN_NODE_WIDTH + GUTTER;
+pub(crate) const ROW_PITCH: f32 = 80.;
+const CONFIG_GAP: f32 = 56.;
+const BAND_GAP: f32 = 44.;
+const BAND_PAD: f32 = 16.;
+/// The strip of a band that holds its title pill.
+const BAND_TITLE: f32 = 32.;
 const MARGIN: f32 = 24.;
 /// Barycenter passes over the columns, alternating down and up.
 const SWEEPS: usize = 4;
-/// The kind columns: Ingress and HPA, then Service and the workloads, ReplicaSets, and pods. The
-/// config row wraps after this many slots.
+/// The kind columns: Ingress and HPA, then Service and the workloads, ReplicaSets, and pods. A
+/// column no node of the graph uses is dropped before the bands are laid out.
 const COLUMNS: usize = 4;
-/// The width of every band: its four columns and its padding, so bands line up in a band-column.
-const BAND_WIDTH: f32 = 2. * BAND_PAD + (COLUMNS - 1) as f32 * COLUMN_PITCH + NODE_WIDTH;
 /// A graph is never spread over more band-columns than this.
 const MAX_BAND_COLUMNS: usize = 8;
 const UNGROUPED: &str = "Ungrouped";
@@ -58,10 +68,10 @@ impl GraphRect {
         }
     }
 
-    fn node(x: f32, y: f32) -> Self {
+    fn node(x: f32, y: f32, width: f32) -> Self {
         Self {
             origin: GraphPoint { x, y },
-            width: NODE_WIDTH,
+            width,
             height: NODE_HEIGHT,
         }
     }
@@ -103,9 +113,72 @@ struct SlotOrder {
     offset: f32,
 }
 
+/// The measures of one layout: how wide a card is and which kind columns the graph uses.
+struct Metrics {
+    node_width: f32,
+    /// The kind columns (`Placement::Column`) some node uses, in order: a column's place here is
+    /// its place on the canvas.
+    used_columns: Vec<u8>,
+}
+
+impl Metrics {
+    fn of(graph: &TopologyGraph) -> Self {
+        let longest = graph
+            .nodes
+            .iter()
+            .map(|node| node.name.chars().count())
+            .max()
+            .unwrap_or(0);
+        let mut used_columns: Vec<u8> = graph
+            .nodes
+            .iter()
+            .filter_map(|node| match slot_of(node) {
+                Slot::Column(column) => Some(column),
+                Slot::ConfigRow => None,
+            })
+            .collect();
+        used_columns.sort_unstable();
+        used_columns.dedup();
+        Self {
+            node_width: (CARD_CHROME + longest as f32 * NAME_CHAR_WIDTH)
+                .clamp(MIN_NODE_WIDTH, MAX_NODE_WIDTH)
+                .ceil(),
+            used_columns,
+        }
+    }
+
+    /// How many columns a band has; a graph of config nodes alone still has one slot.
+    fn column_count(&self) -> usize {
+        self.used_columns.len().max(1)
+    }
+
+    /// The place of a kind column among the used ones.
+    fn place_of(&self, column: u8) -> usize {
+        self.used_columns
+            .iter()
+            .position(|used| *used == column)
+            .unwrap_or(0)
+    }
+
+    fn pitch(&self) -> f32 {
+        self.node_width + GUTTER
+    }
+
+    /// The width of every band: its columns and its padding, so bands line up in a band-column.
+    fn band_width(&self) -> f32 {
+        2. * BAND_PAD + (self.column_count() - 1) as f32 * self.pitch() + self.node_width
+    }
+
+    fn column_x(&self, pad: f32, place: usize) -> f32 {
+        pad + place as f32 * self.pitch()
+    }
+}
+
 pub(crate) struct TopologyLayout {
     /// One per node of the graph, in node order.
     pub(crate) rects: Vec<GraphRect>,
+    /// One per edge of the graph, in edge order: the way it runs between its cards.
+    pub(crate) routes: Vec<EdgeRoute>,
     pub(crate) bands: Vec<Band>,
     /// Everything, plus the margin.
     pub(crate) extent: GraphRect,
@@ -189,12 +262,22 @@ pub(crate) fn layout(
 ) -> TopologyLayout {
     let seed = previous.map(Seed::of);
     let neighbours = neighbours(graph);
-    let mut rects = vec![GraphRect::node(0., 0.); graph.nodes.len()];
+    let metrics = Metrics::of(graph);
+    let mut rects = vec![GraphRect::node(0., 0., metrics.node_width); graph.nodes.len()];
     let plans = plan_bands(graph, group_by);
     // Every band is placed at the origin first: its height decides the band-column it goes to.
     let mut placed: Vec<PlacedBand> = plans
         .iter()
-        .map(|plan| place_band(graph, plan, &neighbours, seed.as_ref(), &mut rects))
+        .map(|plan| {
+            place_band(
+                graph,
+                plan,
+                &neighbours,
+                seed.as_ref(),
+                &metrics,
+                &mut rects,
+            )
+        })
         .collect();
     let heights: Vec<f32> = placed.iter().map(|band| band.rect.height).collect();
     let remembered: Vec<Option<usize>> = plans
@@ -206,7 +289,7 @@ pub(crate) fn layout(
         .collect();
     let columns = match &seed {
         Some(seed) => assign_columns(&heights, &remembered, seed.band_columns),
-        None => best_columns(&heights, aspect),
+        None => best_columns(&heights, aspect, metrics.band_width()),
     };
     let band_columns = columns.iter().max().map_or(1, |last| last + 1);
     let mut bottoms = vec![MARGIN; band_columns];
@@ -214,7 +297,7 @@ pub(crate) fn layout(
     let mut order = Vec::new();
     let mut node_columns = HashMap::new();
     for ((plan, band), column) in plans.into_iter().zip(&mut placed).zip(columns) {
-        let dx = MARGIN + column as f32 * (BAND_WIDTH + BAND_GAP);
+        let dx = MARGIN + column as f32 * (metrics.band_width() + BAND_GAP);
         let dy = bottoms[column];
         bottoms[column] = dy + band.rect.height + BAND_GAP;
         for &index in &plan.nodes {
@@ -235,8 +318,11 @@ pub(crate) fn layout(
         }
     }
     let extent = extent_of(&rects, &bands);
+    let frames: Vec<GraphRect> = bands.iter().map(|band| band.rect).collect();
+    let routes = route_edges(graph, &rects, &frames);
     TopologyLayout {
         rects,
+        routes,
         bands,
         extent,
         order,
@@ -285,7 +371,7 @@ fn shortest(bottoms: &[f32]) -> usize {
 
 /// The flow whose extent has the aspect closest to `aspect`, trying one band-column up to
 /// `MAX_BAND_COLUMNS` (the fewer columns on a tie).
-fn best_columns(heights: &[f32], aspect: f32) -> Vec<usize> {
+fn best_columns(heights: &[f32], aspect: f32, band_width: f32) -> Vec<usize> {
     let remembered = vec![None; heights.len()];
     let mut best: Option<(f32, Vec<usize>)> = None;
     for count in 1..=heights.len().clamp(1, MAX_BAND_COLUMNS) {
@@ -296,7 +382,7 @@ fn best_columns(heights: &[f32], aspect: f32) -> Vec<usize> {
             bottoms[*column] += height + BAND_GAP;
         }
         let tallest = bottoms.iter().copied().fold(0., f32::max) - BAND_GAP;
-        let width = used as f32 * BAND_WIDTH + (used - 1) as f32 * BAND_GAP;
+        let width = used as f32 * band_width + (used - 1) as f32 * BAND_GAP;
         let miss = ((width / tallest.max(1.)) / aspect.max(0.01)).ln().abs();
         if best.as_ref().is_none_or(|(known, _)| miss < *known) {
             best = Some((miss, columns));
@@ -429,13 +515,14 @@ fn place_band(
     plan: &BandPlan,
     neighbours: &[Vec<usize>],
     seed: Option<&Seed>,
+    metrics: &Metrics,
     rects: &mut [GraphRect],
 ) -> PlacedBand {
-    let mut columns: Vec<Vec<usize>> = vec![Vec::new(); COLUMNS];
+    let mut columns: Vec<Vec<usize>> = vec![Vec::new(); metrics.column_count()];
     let mut config = Vec::new();
     for &index in &plan.nodes {
         match slot_of(&graph.nodes[index]) {
-            Slot::Column(column) => columns[usize::from(column)].push(index),
+            Slot::Column(column) => columns[metrics.place_of(column)].push(index),
             Slot::ConfigRow => config.push(index),
         }
     }
@@ -458,10 +545,10 @@ fn place_band(
             continue;
         }
         let offset = column_offset(graph, nodes, seed, tallest);
-        let x = column_x(pad, column);
+        let x = metrics.column_x(pad, column);
         for (row, &index) in nodes.iter().enumerate() {
             let y = body_top + offset + row as f32 * ROW_PITCH;
-            rects[index] = GraphRect::node(x, y);
+            rects[index] = GraphRect::node(x, y, metrics.node_width);
             columns_bottom = columns_bottom.max(rects[index].bottom());
         }
         order.push(SlotOrder {
@@ -476,18 +563,14 @@ fn place_band(
         } else {
             columns_bottom + CONFIG_GAP
         };
-        let placed = place_config_row(graph, &config, seed, pad, config_top, rects);
+        let placed = place_config_row(graph, &config, seed, metrics, pad, config_top, rects);
         bottom = bottom.max(config_top + (placed.rows - 1) as f32 * ROW_PITCH + NODE_HEIGHT);
         order.push(placed.order);
     }
     PlacedBand {
-        rect: GraphRect::spanning(0., 0., BAND_WIDTH, bottom + pad),
+        rect: GraphRect::spanning(0., 0., metrics.band_width(), bottom + pad),
         order,
     }
-}
-
-fn column_x(pad: f32, column: usize) -> f32 {
-    pad + column as f32 * COLUMN_PITCH
 }
 
 fn ids_of(graph: &TopologyGraph, nodes: &[usize]) -> Vec<NodeId> {
@@ -542,9 +625,9 @@ fn sweep_columns(graph: &TopologyGraph, columns: &mut [Vec<usize>], neighbours: 
     for sweep in 0..SWEEPS {
         let is_down = sweep % 2 == 0;
         let visit: Vec<usize> = if is_down {
-            (1..COLUMNS).collect()
+            (1..columns.len()).collect()
         } else {
-            (0..COLUMNS - 1).rev().collect()
+            (0..columns.len().saturating_sub(1)).rev().collect()
         };
         for column in visit {
             let key = |index: usize| -> f32 {
@@ -592,6 +675,7 @@ fn place_config_row(
     graph: &TopologyGraph,
     config: &[usize],
     seed: Option<&Seed>,
+    metrics: &Metrics,
     pad: f32,
     top: f32,
     rects: &mut [GraphRect],
@@ -605,7 +689,7 @@ fn place_config_row(
         }
     }
     let column_of_source = |index: usize| match slot_of(&graph.nodes[index]) {
-        Slot::Column(column) => usize::from(column),
+        Slot::Column(column) => metrics.place_of(column),
         Slot::ConfigRow => 0,
     };
     let wanted = |index: usize| {
@@ -636,9 +720,13 @@ fn place_config_row(
     });
     let mut taken: BTreeSet<(usize, usize)> = BTreeSet::new();
     for &index in &ordered {
-        let (row, slot) = free_position(&taken, wanted(index));
+        let (row, slot) = free_position(&taken, wanted(index), metrics.column_count());
         taken.insert((row, slot));
-        rects[index] = GraphRect::node(column_x(pad, slot), top + row as f32 * ROW_PITCH);
+        rects[index] = GraphRect::node(
+            metrics.column_x(pad, slot),
+            top + row as f32 * ROW_PITCH,
+            metrics.node_width,
+        );
     }
     PlacedConfigRow {
         order: SlotOrder {
@@ -650,11 +738,11 @@ fn place_config_row(
 }
 
 /// The first free `(row, slot)` from `wanted` in row 0, going right and then down.
-fn free_position(taken: &BTreeSet<(usize, usize)>, wanted: usize) -> (usize, usize) {
-    let (mut row, mut slot) = (0, wanted.min(COLUMNS - 1));
+fn free_position(taken: &BTreeSet<(usize, usize)>, wanted: usize, slots: usize) -> (usize, usize) {
+    let (mut row, mut slot) = (0, wanted.min(slots - 1));
     while taken.contains(&(row, slot)) {
         slot += 1;
-        if slot == COLUMNS {
+        if slot == slots {
             row += 1;
             slot = 0;
         }

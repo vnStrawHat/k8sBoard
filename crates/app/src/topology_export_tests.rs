@@ -9,13 +9,19 @@ fn style() -> SvgStyle {
     SvgStyle {
         background: "#010203".to_owned(),
         border: "#040506".to_owned(),
+        card: "#040507".to_owned(),
         text: "#070809".to_owned(),
         muted: "#0a0b0c".to_owned(),
-        badge: "#0d0e0f".to_owned(),
-        accent: "#101112".to_owned(),
+        band: "#0d0e0f".to_owned(),
+        band_alpha: 0.6,
         warn: "#131415".to_owned(),
         bad: "#161718".to_owned(),
         font_family: "Test Mono".to_owned(),
+        ui_font_family: "Test Sans".to_owned(),
+        card_fills: [0, 1, 2, 3, 4, 5, 6].map(|n| format!("#d0000{n}")),
+        kinds: [0, 1, 2, 3, 4, 5, 6].map(|n| format!("#a0000{n}")),
+        kind_texts: [0, 1, 2, 3, 4, 5, 6].map(|n| format!("#c0000{n}")),
+        relations: [0, 1, 2].map(|n| format!("#b0000{n}")),
     }
 }
 
@@ -50,6 +56,13 @@ fn svg_escapes_names() {
     assert!(!svg.contains("a&b<c>"));
 }
 
+/// The `<path>` elements of the edges: the ones that carry an arrow.
+fn edge_paths(svg: &str) -> Vec<&str> {
+    svg.lines()
+        .filter(|line| line.contains("marker-end"))
+        .collect()
+}
+
 #[test]
 fn svg_dash_per_relation() {
     let owns = Fixture::default()
@@ -57,18 +70,31 @@ fn svg_dash_per_relation() {
         .with_replica_set("api-1", Some("api"), 1, 1);
     let (_, svg) = svg_of(&owns, "t");
     assert!(svg.contains("<path d=\"M"));
-    assert!(!svg.contains("stroke-dasharray"));
+    // The legend and the bands are dashed, the edges that own are not.
+    let edges = edge_paths(&svg);
+    assert!(!edges.is_empty());
+    assert!(edges.iter().all(|path| !path.contains("stroke-dasharray")));
     let routes = Fixture::default()
         .with_service("web", &["app=web"])
         .with_pod(pod("web-1", &["app=web"], None));
-    assert!(svg_of(&routes, "t").1.contains("stroke-dasharray=\"5 4\""));
+    let routes_svg = svg_of(&routes, "t").1;
+    assert!(
+        edge_paths(&routes_svg)
+            .iter()
+            .any(|path| path.contains("stroke-dasharray=\"7 4\""))
+    );
     let mounts = Fixture::default()
         .with_config_map("settings")
         .with_pod(pod_with(
             pod("tool", &[], None),
             &[Ref::EnvConfigMap("settings")],
         ));
-    assert!(svg_of(&mounts, "t").1.contains("stroke-dasharray=\"2 3\""));
+    let mounts_svg = svg_of(&mounts, "t").1;
+    assert!(
+        edge_paths(&mounts_svg)
+            .iter()
+            .any(|path| path.contains("stroke-dasharray=\"4 3\""))
+    );
 }
 
 #[test]
@@ -83,13 +109,128 @@ fn svg_uses_style_colors() {
     for color in [
         &style.background,
         &style.text,
-        &style.accent,
+        &style.relations[1],
         &style.bad,
         &style.muted,
     ] {
         assert!(svg.contains(color.as_str()), "{color}");
     }
     assert!(svg.contains("font-family=\"Test Mono, monospace\""));
+}
+
+/// A graph with all three relations: owns (Deployment to ReplicaSet), routes (Service to pod),
+/// and mounts (pod to ConfigMap).
+fn all_relations() -> Fixture {
+    Fixture::default()
+        .with_deployment("api", 1, 1)
+        .with_replica_set("api-1", Some("api"), 1, 1)
+        .with_service("web", &["app=web"])
+        .with_config_map("settings")
+        .with_pods([
+            pod("web-1", &["app=web"], None),
+            pod_with(pod("tool", &[], None), &[Ref::EnvConfigMap("settings")]),
+        ])
+}
+
+#[test]
+fn svg_badge_columns_use_kind_colors() {
+    let (_, svg) = svg_of(&all_relations(), "t");
+    let style = style();
+    for hue in [
+        KindHue::Service,
+        KindHue::Workload,
+        KindHue::Pod,
+        KindHue::ConfigMap,
+    ] {
+        // The solid chip and the accent bar are the kind color, the text on the chip contrasts,
+        // and the card surface is the kind-tinted one.
+        let chip = format!("rx=\"7\" fill=\"{}\"", style.kind(hue));
+        assert!(svg.contains(&chip), "{chip}");
+        assert!(svg.contains(&format!("fill=\"{}\">", style.kind_text(hue))));
+        assert!(svg.contains(&format!("fill=\"{}\" stroke=", style.card_fill(hue))));
+    }
+}
+
+#[test]
+fn svg_edges_use_relation_colors_at_rest_opacity() {
+    let (_, svg) = svg_of(&all_relations(), "t");
+    let style = style();
+    for relation in RELATIONS {
+        let stroke = format!(
+            "stroke=\"{}\" stroke-opacity=\"{EDGE_REST_ALPHA}\"",
+            style.relation(relation)
+        );
+        assert!(svg.contains(&stroke), "{stroke}");
+    }
+}
+
+#[test]
+fn svg_edge_into_a_ghost_keeps_its_tone() {
+    let fixture = Fixture::default().with_ingress(ingress("shop", &[("/", "gone")], None, None));
+    let (_, svg) = svg_of(&fixture, "t");
+    let style = style();
+    assert!(svg.contains(&format!("stroke=\"{}\" stroke-opacity=\"1\"", style.bad)));
+}
+
+#[test]
+fn svg_has_a_marker_for_every_edge_color() {
+    let (_, svg) = svg_of(&all_relations(), "t");
+    for name in ["owns", "routes", "mounts", "warn", "bad"] {
+        assert!(
+            svg.contains(&format!("<marker id=\"arrow-{name}\"")),
+            "{name}"
+        );
+    }
+    // The marker is the arrow of the screen, and every edge points at one of them.
+    let arrow = format!(
+        "d=\"M0,0 L{ARROW_LENGTH},{ARROW_HALF_WIDTH} L0,{} z\"",
+        2. * ARROW_HALF_WIDTH
+    );
+    assert!(svg.contains(&arrow), "{arrow}");
+    for name in ["owns", "routes", "mounts"] {
+        assert!(
+            svg.contains(&format!("marker-end=\"url(#arrow-{name})\"")),
+            "{name}"
+        );
+    }
+    assert!(!svg.contains("arrow-muted") && !svg.contains("arrow-accent"));
+}
+
+#[test]
+fn svg_handles_sit_on_edge_ends() {
+    let (graph, svg) = svg_of(&all_relations(), "t");
+    let style = style();
+    assert_eq!(
+        svg.matches("<circle ").count(),
+        graph.edges.len() * 2,
+        "two handles per edge"
+    );
+    assert!(svg.contains(&format!(
+        "r=\"3\" fill=\"{}\" stroke=\"{}\" stroke-width=\"1\"",
+        style.kind(KindHue::Service),
+        style.background
+    )));
+}
+
+#[test]
+fn svg_bands_are_filled() {
+    let fixture = Fixture::default()
+        .with_service("web", &["app=web"])
+        .with_pod(pod("web-1", &["app=web"], None));
+    let graph = fixture.graph();
+    let arranged = layout(&graph, GroupBy::App, 1., &Default::default(), None);
+    assert!(arranged.bands.iter().any(|band| band.title.is_some()));
+    let svg = topology_svg(&graph, &arranged, "t", &style());
+    let style = style();
+    assert!(svg.contains(&format!(
+        "fill=\"{}\" fill-opacity=\"0.6\" stroke=\"{}\" stroke-dasharray=\"4 3\"",
+        style.band, style.border
+    )));
+    // The title sits in a pill of the card surface.
+    assert!(svg.contains(&format!(
+        "fill=\"{}\" stroke=\"{}\"/>",
+        style.card, style.border
+    )));
 }
 
 #[test]
@@ -113,8 +254,10 @@ fn svg_title_names_namespace() {
 
 #[test]
 fn fit_chars_cuts_with_ellipsis() {
-    assert_eq!(fit_chars(100., 10.), 16);
-    assert_eq!(fit_chars(0., 10.), 0);
+    assert_eq!(fit_chars(100., 10., MONO_EM_WIDTH), 16);
+    assert_eq!(fit_chars(0., 10., MONO_EM_WIDTH), 0);
+    // A proportional font fits more characters in the same width.
+    assert!(fit_chars(100., 10., UI_EM_WIDTH) > fit_chars(100., 10., MONO_EM_WIDTH));
     assert_eq!(fitted("short", 10), "short");
     assert_eq!(fitted("abcdefghij", 5), "abcd\u{2026}");
     assert_eq!(fitted("abcde", 5), "abcde");

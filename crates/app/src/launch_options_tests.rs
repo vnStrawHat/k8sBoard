@@ -484,6 +484,14 @@ fn screen_topology_problems_parses() {
 }
 
 #[test]
+fn screen_topology_selected_parses() {
+    let list = run_options(&["--screen", "topology-selected"]).screen;
+    assert_eq!(list, LaunchScreen::TopologySelected);
+    assert_eq!(list.screen(), Screen::Topology);
+    assert!(list.shows_topology());
+}
+
+#[test]
 fn screen_issues_parses() {
     let list = run_options(&["--screen", "issues"]).screen;
     assert_eq!(list, LaunchScreen::Issues);

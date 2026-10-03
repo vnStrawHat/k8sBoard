@@ -250,6 +250,21 @@ pub(crate) struct TopologyGraph {
     pub(crate) resources: usize,
 }
 
+impl TopologyGraph {
+    /// The tone of the check of a ghost node, which an edge into it takes; `None` for any other
+    /// node or a ghost without a check.
+    pub(crate) fn ghost_tone(&self, node: usize) -> Option<StatusTone> {
+        let node = &self.nodes[node];
+        if node.look != NodeLook::Ghost {
+            return None;
+        }
+        self.checks
+            .iter()
+            .find(|check| check.node == node.id)
+            .map(|check| check.tone)
+    }
+}
+
 pub(crate) enum TopologyBuild {
     Graph(TopologyGraph),
     TooLarge(TooLarge),

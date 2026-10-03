@@ -1,105 +1,83 @@
-//! The Topology canvas (W11): the viewport math, the edge curves, and the painting. One GPUI
-//! `canvas` paints the dots, bands, edges, and arrows and registers the window mouse handlers;
-//! the node cards are kit-styled divs that only the visible nodes get (decision 24).
+//! The Topology canvas (W11): the edge strokes and the painting. One GPUI `canvas` paints the dots,
+//! bands, edges, and arrows and registers the window mouse handlers; the node cards are in
+//! `topology_card.rs`, and a second canvas over them paints the handle dots.
 
 use std::rc::Rc;
+use std::time::Duration;
 
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    App, BorderStyle, Bounds, DispatchPhase, Div, Hitbox, HitboxBehavior, Hsla,
-    InteractiveElement as _, IntoElement, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement as _, PathBuilder, Point, ScrollWheelEvent, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, canvas, div, fill, point, px,
-    quad, size, transparent_black,
+    App, BorderStyle, Bounds, DispatchPhase, Hitbox, HitboxBehavior, Hsla, IntoElement,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Point, ScrollWheelEvent, Styled as _, WeakEntity,
+    Window, canvas, fill, point, px, quad, size, transparent_black,
 };
 
-use crate::status_tone::{StatusTone, tone_color};
-use crate::topology_graph::{NodeLook, Relation, TopologyGraph, TopologyNode};
-use crate::topology_layout::{
-    GraphPoint, GraphRect, NODE_HEIGHT, NODE_WIDTH, Placement, TopologyLayout,
-};
+use crate::status_tone::StatusTone;
+use crate::topology_card::{CardDetail, MIN_BADGE_ZOOM, card_detail};
+use crate::topology_colors::{CanvasColors, edge_color, kind_hue};
+use crate::topology_graph::{Relation, TopologyEdge, TopologyGraph};
+use crate::topology_layout::{GraphPoint, GraphRect, TopologyLayout};
+use crate::topology_route::EdgeRoute;
+use crate::topology_stroke::{Dash, feather, fill_convex, stroke_dashed, stroke_line, trim_end};
 use crate::topology_view::TopologyView;
-use crate::topology_viewport::{
-    MIN_TEXT_ZOOM, MINIMAP_HEIGHT, MINIMAP_WIDTH, Viewport, minimap_transform,
-};
+use crate::topology_viewport::{MIN_TEXT_ZOOM, Viewport, minimap_transform, snap};
 
-const ARROW_SIZE: f32 = 8.;
-/// Backward edges leave the nodes this far below the lower one.
-const BACKWARD_DROP: f32 = 40.;
-const DOT_SPACING: f32 = 16.;
+/// The arrow of an edge: its length along the edge and half its base, in graph units, and how far
+/// its tip stops short of the handle on the card.
+pub(crate) const ARROW_LENGTH: f32 = 12.;
+pub(crate) const ARROW_HALF_WIDTH: f32 = 5.5;
+pub(crate) const ARROW_TIP_GAP: f32 = 1.;
+/// An edge is never thinner than this on screen (logical px): with analytic coverage a 0.75 px
+/// line reads as a lighter line, not a broken one.
+const MIN_EDGE_WIDTH: f32 = 0.75;
+/// The dot grid: the gap in graph units (React Flow `gap`) and the dot's fixed screen size.
+const DOT_SPACING: f32 = 20.;
+const DOT_SIZE: f32 = 1.5;
 /// Dots closer than this (in px) are skipped.
-const MIN_DOT_SPACING: f32 = 8.;
-/// Below `MIN_TEXT_ZOOM` a card shows its badge only, and below this a plain box.
-const MIN_BADGE_ZOOM: f32 = 0.3;
+const MIN_DOT_SPACING: f32 = 12.;
+/// The extra width of the edges of the focused node.
+const FOCUS_EXTRA_WIDTH: f32 = 1.;
+/// The alpha of an edge that does not touch the focused node.
+const EDGE_DIM_ALPHA: f32 = 0.1;
+/// The handle dots where edges attach, in graph units (React Flow: 6 px), and their floor on screen.
+pub(crate) const HANDLE_SIZE: f32 = 6.;
+const MIN_HANDLE_DIAMETER: f32 = 6.;
+/// The animated flow moves 20 graph units a second (React Flow's `dashdraw`). An edge keeps its own
+/// dash; a solid one flows in long dashes, which stay apart from the routes and mounts dashes.
+const FLOW_SPEED: f32 = 20.;
+const OWNS_FLOW_DASH: (f32, f32) = (16., 4.);
+/// The band title pill, in graph units: its offset into the band, its height, and its padding.
+pub(crate) const TITLE_PILL_LEFT: f32 = 12.;
+pub(crate) const TITLE_PILL_TOP: f32 = 7.;
+pub(crate) const TITLE_PILL_HEIGHT: f32 = 20.;
+pub(crate) const TITLE_PILL_PADDING: f32 = 9.;
+pub(crate) const TITLE_SIZE: f32 = 11.5;
+/// The corner radius of a minimap node.
+const MINIMAP_NODE_RADIUS: f32 = 1.;
+/// The share of the background over the part of the minimap outside the viewport.
+const MINIMAP_MASK_ALPHA: f32 = 0.55;
+/// The legend swatch: a short edge with its arrow, drawn by the stroke code of the edges.
+pub(crate) const SWATCH_WIDTH: f32 = 38.;
+pub(crate) const SWATCH_HEIGHT: f32 = 14.;
 
-/// A cubic Bezier in graph units.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct EdgeCurve {
-    pub(crate) start: GraphPoint,
-    pub(crate) ctrl1: GraphPoint,
-    pub(crate) ctrl2: GraphPoint,
-    pub(crate) end: GraphPoint,
-}
-
-/// Mounts run from the bottom of the source to the top of the config node; other edges run from the
-/// right side of the source to the left side of the target; an edge that does not move right goes
-/// under the nodes.
-pub(crate) fn edge_curve(from: GraphRect, to: GraphRect, relation: Relation) -> EdgeCurve {
-    let at = |x: f32, y: f32| GraphPoint { x, y };
-    if relation == Relation::Mounts {
-        let start = at(from.center().x, from.bottom());
-        let end = at(to.center().x, to.origin.y);
-        let half = (end.y - start.y) / 2.;
-        return EdgeCurve {
-            start,
-            ctrl1: at(start.x, start.y + half),
-            ctrl2: at(end.x, end.y - half),
-            end,
-        };
-    }
-    if to.origin.x > from.origin.x {
-        let start = at(from.right(), from.center().y);
-        let end = at(to.origin.x, to.center().y);
-        let half = (end.x - start.x) / 2.;
-        return EdgeCurve {
-            start,
-            ctrl1: at(start.x + half, start.y),
-            ctrl2: at(end.x - half, end.y),
-            end,
-        };
-    }
-    let start = at(from.center().x, from.bottom());
-    let end = at(to.center().x, to.bottom());
-    let low = start.y.max(end.y) + BACKWARD_DROP;
-    EdgeCurve {
-        start,
-        ctrl1: at(start.x, low),
-        ctrl2: at(end.x, low),
-        end,
-    }
-}
-
-/// The triangle of an arrow at the end of `curve`: the tip on the target and two base corners
-/// `size` behind it.
-pub(crate) fn arrow_head(curve: &EdgeCurve, size: f32) -> [GraphPoint; 3] {
-    let mut direction = (curve.end.x - curve.ctrl2.x, curve.end.y - curve.ctrl2.y);
-    if direction == (0., 0.) {
-        direction = (curve.end.x - curve.start.x, curve.end.y - curve.start.y);
-    }
-    let length = direction.0.hypot(direction.1).max(f32::EPSILON);
-    let (dx, dy) = (direction.0 / length, direction.1 / length);
-    let base = (curve.end.x - dx * size, curve.end.y - dy * size);
-    let half = size / 2.;
+/// The triangle of an arrow at the end of `route`: the tip `ARROW_TIP_GAP` before the end, and two
+/// base corners `length` behind the tip, `half_width` to each side.
+pub(crate) fn arrow_head(route: &EdgeRoute, length: f32, half_width: f32) -> [GraphPoint; 3] {
+    let (dx, dy) = route.end_direction();
+    let end = route.end();
+    let tip = GraphPoint {
+        x: end.x - dx * ARROW_TIP_GAP,
+        y: end.y - dy * ARROW_TIP_GAP,
+    };
+    let base = (tip.x - dx * length, tip.y - dy * length);
     [
-        curve.end,
+        tip,
         GraphPoint {
-            x: base.0 - dy * half,
-            y: base.1 + dx * half,
+            x: base.0 - dy * half_width,
+            y: base.1 + dx * half_width,
         },
         GraphPoint {
-            x: base.0 + dy * half,
-            y: base.1 - dx * half,
+            x: base.0 + dy * half_width,
+            y: base.1 - dx * half_width,
         },
     ]
 }
@@ -115,59 +93,98 @@ pub(crate) struct Stroke {
 pub(crate) fn relation_stroke(relation: Relation) -> Stroke {
     match relation {
         Relation::Owns => Stroke {
-            width: 1.4,
+            width: 1.5,
             dash: None,
         },
         Relation::RoutesTo => Stroke {
-            width: 1.6,
-            dash: Some((5., 4.)),
+            width: 1.5,
+            dash: Some((7., 4.)),
         },
         Relation::Mounts => Stroke {
-            width: 1.2,
-            dash: Some((2., 3.)),
+            width: 1.5,
+            dash: Some((4., 3.)),
         },
     }
 }
 
-/// The extra width of the edges of the selected node.
-const SELECTED_EDGE_EXTRA: f32 = 0.6;
-
-/// The theme colors the painting needs, resolved once per frame.
-#[derive(Clone, Copy)]
-pub(crate) struct CanvasColors {
-    pub(crate) border: Hsla,
-    pub(crate) muted_foreground: Hsla,
-    pub(crate) ring: Hsla,
-    pub(crate) warn: Hsla,
-    pub(crate) bad: Hsla,
+/// The dash of an edge that flows: its own, or long dashes for a solid edge.
+fn flow_dash(relation: Relation) -> (f32, f32) {
+    relation_stroke(relation).dash.unwrap_or(OWNS_FLOW_DASH)
 }
 
-impl CanvasColors {
-    pub(crate) fn of(cx: &App) -> Self {
-        let theme = cx.theme();
-        Self {
-            border: theme.border,
-            muted_foreground: theme.muted_foreground,
-            ring: theme.ring,
-            warn: tone_color(StatusTone::Warn, cx),
-            bad: tone_color(StatusTone::Bad, cx),
-        }
-    }
+/// How an edge stands out from the focused node (the hovered one, else the selected one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Emphasis {
+    /// No focus: every edge at its rest look.
+    Rest,
+    /// The edge touches the focused node.
+    Focused,
+    Dimmed,
+}
 
-    pub(crate) fn tone(&self, tone: StatusTone) -> Hsla {
-        match tone {
-            StatusTone::Bad => self.bad,
-            StatusTone::Warn => self.warn,
-            StatusTone::Ok | StatusTone::Info | StatusTone::Done => self.muted_foreground,
-        }
+pub(crate) fn edge_emphasis(edge: &TopologyEdge, focus: Option<usize>) -> Emphasis {
+    match focus {
+        None => Emphasis::Rest,
+        Some(node) if node == edge.from || node == edge.to => Emphasis::Focused,
+        Some(_) => Emphasis::Dimmed,
     }
+}
 
-    fn edge(&self, relation: Relation) -> Hsla {
-        match relation {
-            Relation::RoutesTo => self.ring,
-            Relation::Owns | Relation::Mounts => self.muted_foreground,
-        }
+/// `color` as `emphasis` draws it: full strength when focused, faint when dimmed.
+fn emphasized(color: Hsla, emphasis: Emphasis) -> Hsla {
+    match emphasis {
+        Emphasis::Rest => color,
+        Emphasis::Focused => Hsla { a: 1., ..color },
+        Emphasis::Dimmed => Hsla {
+            a: EDGE_DIM_ALPHA,
+            ..color
+        },
     }
+}
+
+/// Whether an edge flows: it touches the selected node and is focused (hover alone animates
+/// nothing), at a zoom where the cards show their text.
+fn is_animated(
+    edge: &TopologyEdge,
+    focus: Option<usize>,
+    selected: Option<usize>,
+    zoom: f32,
+) -> bool {
+    let touches_selected = selected.is_some_and(|node| node == edge.from || node == edge.to);
+    touches_selected && edge_emphasis(edge, focus) == Emphasis::Focused && zoom >= MIN_TEXT_ZOOM
+}
+
+/// How far the flow dashes have moved after `elapsed`, in screen px, wrapped at the dash `period`
+/// (graph units).
+fn flow_phase(elapsed: Duration, period: f32, zoom: f32) -> f32 {
+    let moved = (elapsed.as_secs_f64() * f64::from(FLOW_SPEED)) % f64::from(period);
+    moved as f32 * zoom
+}
+
+/// Whether the canvas needs frames: only while an edge flows, and not when the user reduces
+/// motion or the window is in the background. Idle Topology never repaints on its own.
+pub(crate) fn needs_flow_frame(
+    animated: usize,
+    is_motion_reduced: bool,
+    is_window_active: bool,
+) -> bool {
+    animated > 0 && !is_motion_reduced && is_window_active
+}
+
+/// Where an edge attaches to its two cards: the dots the handle layer draws and the export puts
+/// its circles.
+pub(crate) fn handle_points(route: &EdgeRoute) -> [GraphPoint; 2] {
+    [route.start(), route.end()]
+}
+
+/// The handle dot on screen: 6 px at zoom 1, never below `MIN_HANDLE_DIAMETER`.
+fn handle_diameter(zoom: f32) -> f32 {
+    (HANDLE_SIZE * zoom).max(MIN_HANDLE_DIAMETER)
+}
+
+/// Handles show only where the cards show their text.
+fn shows_handles(zoom: f32) -> bool {
+    card_detail(zoom) == Some(CardDetail::Text)
 }
 
 /// What the canvas layer paints and which handlers it registers.
@@ -175,8 +192,12 @@ pub(crate) struct CanvasPaint {
     pub(crate) graph: Rc<TopologyGraph>,
     pub(crate) layout: Rc<TopologyLayout>,
     pub(crate) viewport: Viewport,
-    /// The node whose edges are drawn in the accent color.
+    /// The node whose edges stand out: the hovered one, else the selected one.
+    pub(crate) focus: Option<usize>,
+    /// The selected node: its edges flow.
     pub(crate) selected: Option<usize>,
+    /// The time since the view was created, which moves the flow dashes.
+    pub(crate) elapsed: Duration,
     pub(crate) colors: CanvasColors,
     pub(crate) view: WeakEntity<TopologyView>,
     /// A drag runs, so the move and up handlers are registered this frame.
@@ -184,13 +205,37 @@ pub(crate) struct CanvasPaint {
 }
 
 /// The paint layer under the cards. It registers the wheel handler always and the move and up
-/// handlers while a drag runs, and tells the view its size, which Fit and focus need.
+/// handlers while a drag runs, and tells the view its size, which Fit and focus need, and whether
+/// an edge flows, which decides whether the view keeps a frame timer.
 pub(crate) fn graph_canvas(paint: CanvasPaint) -> impl IntoElement {
     canvas(
         |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
         move |bounds, hitbox, window, cx| {
-            paint_graph(&paint, bounds, window);
+            let is_motion_reduced = cx.reduce_motion();
+            let animated = paint_graph(&paint, bounds, window, is_motion_reduced);
+            let wants_frames =
+                needs_flow_frame(animated, is_motion_reduced, window.is_window_active());
+            let _ = paint
+                .view
+                .update(cx, |view, cx| view.sync_flow(wants_frames, cx));
             register_handlers(&paint, bounds, hitbox, window, cx);
+        },
+    )
+    .absolute()
+    .size_full()
+}
+
+/// The handle dots over the cards. It has no hitbox, so the mouse goes to what is under it.
+pub(crate) fn handle_canvas(
+    graph: Rc<TopologyGraph>,
+    layout: Rc<TopologyLayout>,
+    viewport: Viewport,
+    colors: CanvasColors,
+) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            paint_handles(&graph, &layout, viewport, &colors, bounds, window);
         },
     )
     .absolute()
@@ -239,33 +284,30 @@ fn register_handlers(
     });
 }
 
-fn screen_point(
-    viewport: Viewport,
+/// Dots, bands, edges, then arrows, back to front. Returns how many edges flow.
+fn paint_graph(
+    paint: &CanvasPaint,
     bounds: Bounds<gpui_kit::Pixels>,
-    at: GraphPoint,
-) -> Point<gpui_kit::Pixels> {
-    let (x, y) = viewport.to_screen(at);
-    point(bounds.origin.x + px(x), bounds.origin.y + px(y))
-}
-
-/// Dots, bands, edges, then arrows, back to front.
-fn paint_graph(paint: &CanvasPaint, bounds: Bounds<gpui_kit::Pixels>, window: &mut Window) {
+    window: &mut Window,
+    is_motion_reduced: bool,
+) -> usize {
     paint_dots(paint, bounds, window);
     paint_bands(paint, bounds, window);
-    paint_edges(paint, bounds, window);
+    paint_edges(paint, bounds, window, is_motion_reduced)
 }
 
 fn paint_dots(paint: &CanvasPaint, bounds: Bounds<gpui_kit::Pixels>, window: &mut Window) {
     let viewport = paint.viewport;
-    let spacing = DOT_SPACING * viewport.zoom();
-    if spacing < MIN_DOT_SPACING {
+    if dot_spacing(viewport.zoom()).is_none() {
         return;
     }
+    let scale_factor = window.scale_factor();
     let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let first = viewport.to_graph(0., 0.);
     let start_x = (first.x / DOT_SPACING).ceil() * DOT_SPACING;
     let start_y = (first.y / DOT_SPACING).ceil() * DOT_SPACING;
-    let dot = size(px(1.), px(1.));
+    let dot = size(px(DOT_SIZE), px(DOT_SIZE));
+    let (left, top) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
     let mut y = start_y;
     loop {
         let (_, screen_y) = viewport.to_screen(GraphPoint { x: 0., y });
@@ -278,111 +320,203 @@ fn paint_dots(paint: &CanvasPaint, bounds: Bounds<gpui_kit::Pixels>, window: &mu
             if screen_x > width {
                 break;
             }
+            // Centered on the grid point, then snapped, so every dot has the same coverage.
             let origin = point(
-                bounds.origin.x + px(screen_x),
-                bounds.origin.y + px(screen_y),
+                px(snap(left + screen_x - DOT_SIZE / 2., scale_factor)),
+                px(snap(top + screen_y - DOT_SIZE / 2., scale_factor)),
             );
-            window.paint_quad(fill(Bounds { origin, size: dot }, paint.colors.border));
+            window.paint_quad(quad(
+                Bounds { origin, size: dot },
+                px(DOT_SIZE / 2.),
+                paint.colors.ring,
+                px(0.),
+                transparent_black(),
+                BorderStyle::Solid,
+            ));
             x += DOT_SPACING;
         }
         y += DOT_SPACING;
     }
 }
 
+/// The dot gap on screen at `zoom`, or `None` when the dots would be too dense to draw.
+fn dot_spacing(zoom: f32) -> Option<f32> {
+    let spacing = DOT_SPACING * zoom;
+    (spacing >= MIN_DOT_SPACING).then_some(spacing)
+}
+
+/// A band frame on device pixels, so its dashed border is crisp.
 fn paint_bands(paint: &CanvasPaint, bounds: Bounds<gpui_kit::Pixels>, window: &mut Window) {
-    let zoom = paint.viewport.zoom();
+    let viewport = paint.viewport;
+    let zoom = viewport.zoom();
+    let scale_factor = window.scale_factor();
+    let (left, top) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
     for band in paint
         .layout
         .bands
         .iter()
         .filter(|band| band.title.is_some())
     {
-        let origin = screen_point(paint.viewport, bounds, band.rect.origin);
-        let band_size = size(px(band.rect.width * zoom), px(band.rect.height * zoom));
+        let (x, y) = viewport.to_screen(band.rect.origin);
+        let (x0, y0) = (snap(left + x, scale_factor), snap(top + y, scale_factor));
+        let x1 = snap(left + x + band.rect.width * zoom, scale_factor);
+        let y1 = snap(top + y + band.rect.height * zoom, scale_factor);
         window.paint_quad(quad(
             Bounds {
-                origin,
-                size: band_size,
+                origin: point(px(x0), px(y0)),
+                size: size(px(x1 - x0), px(y1 - y0)),
             },
             px(10. * zoom),
-            transparent_black(),
+            paint.colors.muted.opacity(paint.colors.band_alpha),
             px(1.),
-            paint.colors.border,
+            paint.colors.card_border,
             BorderStyle::Dashed,
         ));
     }
 }
 
-fn paint_edges(paint: &CanvasPaint, bounds: Bounds<gpui_kit::Pixels>, window: &mut Window) {
+/// The width of an edge on screen, in logical px.
+fn edge_width(graph_width: f32, zoom: f32) -> f32 {
+    (graph_width * zoom).max(MIN_EDGE_WIDTH)
+}
+
+/// The dash of an edge on screen. Below `MIN_TEXT_ZOOM` the pieces would be a few px long, so the
+/// edge is solid.
+fn edge_dash(dash: Option<(f32, f32)>, zoom: f32) -> Option<Dash> {
+    let (on, off) = dash?;
+    (zoom >= MIN_TEXT_ZOOM).then_some(Dash {
+        on: on * zoom,
+        off: off * zoom,
+        phase: 0.,
+    })
+}
+
+/// Paints the edges and their arrows. Returns how many of them flow.
+fn paint_edges(
+    paint: &CanvasPaint,
+    bounds: Bounds<gpui_kit::Pixels>,
+    window: &mut Window,
+    is_motion_reduced: bool,
+) -> usize {
     let viewport = paint.viewport;
     let zoom = viewport.zoom();
     let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-    for edge in &paint.graph.edges {
-        let (from, to) = (paint.layout.rects[edge.from], paint.layout.rects[edge.to]);
-        let curve = edge_curve(from, to, edge.relation);
-        if !touches(viewport, curve_bounds(&curve), width, height) {
+    let feather = feather(window.scale_factor());
+    let has_arrows = zoom >= MIN_BADGE_ZOOM;
+    let (left, top) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+    let at = |p: GraphPoint| {
+        let (x, y) = viewport.to_screen(p);
+        point(left + x, top + y)
+    };
+    let mut animated = 0;
+    for (index, edge) in paint.graph.edges.iter().enumerate() {
+        let route = &paint.layout.routes[index];
+        if !touches(viewport, route.bounds(), width, height) {
             continue;
         }
-        let is_selected = paint
-            .selected
-            .is_some_and(|node| node == edge.from || node == edge.to);
+        let emphasis = edge_emphasis(edge, paint.focus);
+        let is_flowing = is_animated(edge, paint.focus, paint.selected, zoom);
         let stroke = relation_stroke(edge.relation);
-        let line_width = stroke.width + if is_selected { SELECTED_EDGE_EXTRA } else { 0. };
-        let color = edge_color(paint, edge.to, edge.relation, is_selected);
-        let at = |p: GraphPoint| screen_point(viewport, bounds, p);
-        let mut builder = PathBuilder::stroke(px(line_width * zoom.max(0.5)));
-        if let Some((on, off)) = stroke.dash {
-            builder = builder.dash_array(&[px(on * zoom), px(off * zoom)]);
+        let extra = if emphasis == Emphasis::Focused {
+            FOCUS_EXTRA_WIDTH
+        } else {
+            0.
+        };
+        let base = edge_color(
+            &paint.colors,
+            edge.relation,
+            paint.graph.ghost_tone(edge.to),
+        );
+        let color = emphasized(base, emphasis);
+        // The arrow stays solid at rest, so the direction reads at a glance.
+        let arrow_color = emphasized(Hsla { a: 1., ..base }, emphasis);
+        let mut points: Vec<Point<f32>> = route.points.iter().map(|p| at(*p)).collect();
+        // The stroke stops at the arrow base, so a translucent edge does not double up under it.
+        if has_arrows {
+            trim_end(&mut points, (ARROW_LENGTH + ARROW_TIP_GAP) * zoom);
         }
-        builder.move_to(at(curve.start));
-        builder.cubic_bezier_to(at(curve.end), at(curve.ctrl1), at(curve.ctrl2));
-        if let Ok(path) = builder.build() {
+        let line_width = edge_width(stroke.width + extra, zoom);
+        let dash = if is_flowing {
+            animated += 1;
+            let (on, off) = flow_dash(edge.relation);
+            // Reduced motion shows the flow dashes, standing still.
+            let phase = if is_motion_reduced {
+                0.
+            } else {
+                flow_phase(paint.elapsed, on + off, zoom)
+            };
+            Some(Dash {
+                on: on * zoom,
+                off: off * zoom,
+                phase,
+            })
+        } else {
+            edge_dash(stroke.dash, zoom)
+        };
+        let path = match dash {
+            Some(dash) => stroke_dashed(&points, dash, line_width, feather),
+            None => stroke_line(&points, line_width, feather),
+        };
+        if let Some(path) = path {
             window.paint_path(path, color);
         }
-        let [tip, left, right] = arrow_head(&curve, ARROW_SIZE);
-        let mut arrow = PathBuilder::fill();
-        arrow.move_to(at(tip));
-        arrow.line_to(at(left));
-        arrow.line_to(at(right));
-        arrow.close();
-        if let Ok(path) = arrow.build() {
-            window.paint_path(path, color);
+        if !has_arrows {
+            continue;
+        }
+        let head = arrow_head(route, ARROW_LENGTH, ARROW_HALF_WIDTH).map(at);
+        if let Some(path) = fill_convex(&head, feather) {
+            window.paint_path(path, arrow_color);
         }
     }
+    animated
 }
 
-/// An edge into a ghost takes the tone of its check; the edges of the selected node are accented.
-fn edge_color(paint: &CanvasPaint, target: usize, relation: Relation, is_selected: bool) -> Hsla {
-    let node = &paint.graph.nodes[target];
-    let ghost_tone = (node.look == NodeLook::Ghost)
-        .then(|| {
-            paint
-                .graph
-                .checks
-                .iter()
-                .find(|check| check.node == node.id)
-                .map(|check| check.tone)
-        })
-        .flatten();
-    match ghost_tone {
-        Some(tone) => paint.colors.tone(tone),
-        None if is_selected => paint.colors.ring,
-        None => paint.colors.edge(relation),
+/// A round dot, in the color of its node, on both ends of every visible edge.
+fn paint_handles(
+    graph: &TopologyGraph,
+    layout: &TopologyLayout,
+    viewport: Viewport,
+    colors: &CanvasColors,
+    bounds: Bounds<gpui_kit::Pixels>,
+    window: &mut Window,
+) {
+    let zoom = viewport.zoom();
+    if !shows_handles(zoom) {
+        return;
     }
-}
-
-/// The box of the four points of a curve, which holds the whole curve: `(left, top, right, bottom)`.
-fn curve_bounds(curve: &EdgeCurve) -> (f32, f32, f32, f32) {
-    let points = [curve.start, curve.ctrl1, curve.ctrl2, curve.end];
-    let low =
-        |value: fn(&GraphPoint) -> f32| points.iter().map(value).fold(f32::INFINITY, f32::min);
-    let high =
-        |value: fn(&GraphPoint) -> f32| points.iter().map(value).fold(f32::NEG_INFINITY, f32::max);
-    (low(|p| p.x), low(|p| p.y), high(|p| p.x), high(|p| p.y))
+    let scale_factor = window.scale_factor();
+    let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let (left, top) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+    let diameter = handle_diameter(zoom);
+    for (index, edge) in graph.edges.iter().enumerate() {
+        let route = &layout.routes[index];
+        if !touches(viewport, route.bounds(), width, height) {
+            continue;
+        }
+        let [start, end] = handle_points(route);
+        for (at, node) in [(start, edge.from), (end, edge.to)] {
+            let (x, y) = viewport.to_screen(at);
+            let origin = point(
+                px(snap(left + x - diameter / 2., scale_factor)),
+                px(snap(top + y - diameter / 2., scale_factor)),
+            );
+            window.paint_quad(quad(
+                Bounds {
+                    origin,
+                    size: size(px(diameter), px(diameter)),
+                },
+                px(diameter / 2.),
+                colors.kind(kind_hue(graph.nodes[node].kind)),
+                px(1.),
+                colors.background,
+                BorderStyle::Solid,
+            ));
+        }
+    }
 }
 
 /// Whether a graph-space box touches a canvas of `width` by `height` at this viewport. The edges
-/// are culled by the box of their curve: a long edge crosses the canvas without an end in it.
+/// are culled by the box of their route: a long edge crosses the canvas without an end in it.
 fn touches(viewport: Viewport, bounds: (f32, f32, f32, f32), width: f32, height: f32) -> bool {
     let (left, top) = viewport.to_screen(GraphPoint {
         x: bounds.0,
@@ -395,178 +529,50 @@ fn touches(viewport: Viewport, bounds: (f32, f32, f32, f32), width: f32, height:
     right >= 0. && bottom >= 0. && left <= width && top <= height
 }
 
-/// What the card of a node shows besides the node itself.
-pub(crate) struct CardState {
-    pub(crate) is_selected: bool,
-    /// A ghost or unchecked node that was clicked: highlighted, nothing opens.
-    pub(crate) is_highlighted: bool,
-    /// The check text of a ghost, for its tooltip.
-    pub(crate) tooltip: Option<SharedString>,
+/// A legend swatch: a short edge of the relation with its arrow, drawn like the real ones.
+pub(crate) fn legend_swatch(relation: Relation, colors: CanvasColors) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| paint_swatch(relation, &colors, bounds, window),
+    )
+    .w(px(SWATCH_WIDTH))
+    .h(px(SWATCH_HEIGHT))
 }
 
-/// The card of one node (W11 `.nd`), at its screen position.
-pub(crate) fn node_card(
-    index: usize,
-    node: &TopologyNode,
-    rect: GraphRect,
-    viewport: Viewport,
-    state: &CardState,
-    cx: &App,
-) -> Stateful<Div> {
-    let theme = cx.theme();
-    let zoom = viewport.zoom();
-    let (x, y) = viewport.to_screen(rect.origin);
-    let (border_width, border_color) = card_border(node, state, cx);
-    let mut card = div()
-        .id(("topology-node", index))
-        .absolute()
-        .left(px(x))
-        .top(px(y))
-        .w(px(NODE_WIDTH * zoom))
-        .h(px(NODE_HEIGHT * zoom))
-        .rounded(px(8. * zoom))
-        .border(px(border_width))
-        .border_color(border_color)
-        .overflow_hidden()
-        .cursor_pointer();
-    // Every card is opaque, so an edge never shows through its text; the dimmer looks fade only
-    // what is drawn on it.
-    card = card.bg(if state.is_highlighted {
-        theme.muted
-    } else {
-        theme.background
-    });
-    if node.look != NodeLook::Plain {
-        card = card.border_dashed();
-    }
-    if let Some(tooltip) = state.tooltip.clone() {
-        card = card.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx));
-    }
-    let Some(detail) = card_detail(zoom) else {
-        return card;
+fn paint_swatch(
+    relation: Relation,
+    colors: &CanvasColors,
+    bounds: Bounds<gpui_kit::Pixels>,
+    window: &mut Window,
+) {
+    let feather = feather(window.scale_factor());
+    let (left, top) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+    let y = top + SWATCH_HEIGHT / 2.;
+    let route = EdgeRoute {
+        points: vec![
+            GraphPoint { x: left, y },
+            GraphPoint {
+                x: left + SWATCH_WIDTH,
+                y,
+            },
+        ],
     };
-    let opacity = match node.look {
-        NodeLook::Unchecked => 0.7,
-        NodeLook::Plain if node.kind.placement() == Placement::ConfigRow => 0.85,
-        NodeLook::Plain | NodeLook::Ghost => 1.,
+    let at = |p: GraphPoint| point(p.x, p.y);
+    let mut points: Vec<Point<f32>> = route.points.iter().map(|p| at(*p)).collect();
+    trim_end(&mut points, ARROW_LENGTH + ARROW_TIP_GAP);
+    let stroke = relation_stroke(relation);
+    let color = edge_color(colors, relation, None);
+    let path = match edge_dash(stroke.dash, 1.) {
+        Some(dash) => stroke_dashed(&points, dash, stroke.width, feather),
+        None => stroke_line(&points, stroke.width, feather),
     };
-    card.child(card_body(node, zoom, detail, cx).opacity(opacity))
-}
-
-/// The level of detail of a zoom: the text from `MIN_TEXT_ZOOM`, the badge alone from
-/// `MIN_BADGE_ZOOM`, and below that nothing but the box.
-fn card_detail(zoom: f32) -> Option<CardDetail> {
-    if zoom >= MIN_TEXT_ZOOM {
-        Some(CardDetail::Text)
-    } else if zoom >= MIN_BADGE_ZOOM {
-        Some(CardDetail::BadgeOnly)
-    } else {
-        None
+    if let Some(path) = path {
+        window.paint_path(path, color);
     }
-}
-
-/// How much of a card is drawn: the level of detail of its zoom.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CardDetail {
-    Text,
-    /// Below `MIN_TEXT_ZOOM`: only the kind badge, large enough to read.
-    BadgeOnly,
-}
-
-/// The border width and color of a card: selection wins, then Bad, then Warn.
-fn card_border(node: &TopologyNode, state: &CardState, cx: &App) -> (f32, Hsla) {
-    let theme = cx.theme();
-    if state.is_selected {
-        return (2., theme.ring);
+    let head = arrow_head(&route, ARROW_LENGTH, ARROW_HALF_WIDTH).map(at);
+    if let Some(path) = fill_convex(&head, feather) {
+        window.paint_path(path, Hsla { a: 1., ..color });
     }
-    match node.look {
-        NodeLook::Ghost => (
-            1.5,
-            node.tone
-                .map_or(theme.muted_foreground, |tone| tone_color(tone, cx)),
-        ),
-        NodeLook::Unchecked => (1., theme.muted_foreground),
-        NodeLook::Plain => match node.tone {
-            Some(StatusTone::Bad) => (2., tone_color(StatusTone::Bad, cx)),
-            Some(StatusTone::Warn) => (1., tone_color(StatusTone::Warn, cx)),
-            _ => (1., theme.border),
-        },
-    }
-}
-
-fn card_body(node: &TopologyNode, zoom: f32, detail: CardDetail, cx: &App) -> Div {
-    let theme = cx.theme();
-    let mono = theme.mono_font_family.clone();
-    if detail == CardDetail::BadgeOnly {
-        return badge_only_body(node, zoom, cx);
-    }
-    let has_badge = node.look == NodeLook::Plain;
-    let caption_color = match node.tone {
-        Some(tone @ (StatusTone::Bad | StatusTone::Warn)) => tone_color(tone, cx),
-        _ => theme.muted_foreground,
-    };
-    let lines = v_flex()
-        .flex_1()
-        .min_w_0()
-        .justify_center()
-        .px(px(8. * zoom))
-        .font_family(mono.clone())
-        .child(
-            div()
-                .text_size(px(9. * zoom))
-                .text_color(caption_color)
-                .whitespace_nowrap()
-                .overflow_hidden()
-                .text_ellipsis()
-                .child(node.caption.to_uppercase()),
-        )
-        .child(
-            div()
-                .text_size(px(10.8 * zoom))
-                .whitespace_nowrap()
-                .overflow_hidden()
-                .text_ellipsis()
-                .child(node.name.clone()),
-        );
-    let badge = has_badge.then(|| {
-        div()
-            .flex_shrink_0()
-            .w(px(24. * zoom))
-            .h_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(theme.muted)
-            .font_family(mono)
-            .text_size(px(9. * zoom))
-            .text_color(theme.muted_foreground)
-            .child(node.kind.badge())
-    });
-    h_flex().size_full().children(badge).child(lines)
-}
-
-/// The card of a zoomed-out graph: the badge alone fills it, in the tone of the node.
-fn badge_only_body(node: &TopologyNode, zoom: f32, cx: &App) -> Div {
-    let theme = cx.theme();
-    let color = match node.tone {
-        Some(tone @ (StatusTone::Bad | StatusTone::Warn)) => tone_color(tone, cx),
-        _ => theme.muted_foreground,
-    };
-    let label = if node.look == NodeLook::Plain {
-        node.kind.badge()
-    } else {
-        "?"
-    };
-    div()
-        .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.muted)
-        .font_family(theme.mono_font_family.clone())
-        .text_size(px(NODE_HEIGHT * zoom * 0.45))
-        .text_color(color)
-        .child(label)
 }
 
 /// The minimap (W11 `.mini`): every node as a small rect and the viewport as an outline.
@@ -576,6 +582,8 @@ pub(crate) struct MinimapPaint {
     pub(crate) viewport: Viewport,
     /// The size of the main canvas, so the viewport outline matches what it shows.
     pub(crate) canvas: (f32, f32),
+    /// The size the minimap is drawn at: smaller while the drawer is open.
+    pub(crate) size: (f32, f32),
     pub(crate) colors: CanvasColors,
     pub(crate) view: WeakEntity<TopologyView>,
     pub(crate) is_dragging: bool,
@@ -593,7 +601,7 @@ pub(crate) fn minimap_canvas(paint: MinimapPaint) -> impl IntoElement {
 }
 
 fn paint_minimap(paint: &MinimapPaint, bounds: Bounds<gpui_kit::Pixels>, window: &mut Window) {
-    let transform = minimap_transform(paint.layout.extent, MINIMAP_WIDTH, MINIMAP_HEIGHT);
+    let transform = minimap_transform(paint.layout.extent, paint.size.0, paint.size.1);
     let at = |x: f32, y: f32| point(bounds.origin.x + px(x), bounds.origin.y + px(y));
     for (index, node) in paint.graph.nodes.iter().enumerate() {
         let rect = paint.layout.rects[index];
@@ -604,26 +612,44 @@ fn paint_minimap(paint: &MinimapPaint, bounds: Bounds<gpui_kit::Pixels>, window:
         );
         let color = match node.tone {
             Some(tone @ (StatusTone::Bad | StatusTone::Warn)) => paint.colors.tone(tone),
-            _ => paint.colors.muted_foreground,
+            _ => paint.colors.kind(kind_hue(node.kind)),
         };
-        window.paint_quad(fill(
+        window.paint_quad(quad(
             Bounds {
                 origin: at(x, y),
                 size: node_size,
             },
+            px(MINIMAP_NODE_RADIUS),
             color,
+            px(0.),
+            transparent_black(),
+            BorderStyle::Solid,
         ));
     }
     let zoom = paint.viewport.zoom();
     let (x, y) = transform.to_minimap(paint.viewport.origin);
-    let view_size = size(
-        px(paint.canvas.0 / zoom * transform.scale()),
-        px(paint.canvas.1 / zoom * transform.scale()),
-    );
+    let view = GraphRect {
+        origin: GraphPoint { x, y },
+        width: paint.canvas.0 / zoom * transform.scale(),
+        height: paint.canvas.1 / zoom * transform.scale(),
+    };
+    let mask = paint.colors.background.opacity(MINIMAP_MASK_ALPHA);
+    for part in minimap_mask(view, paint.size.0, paint.size.1) {
+        if part.width <= 0. || part.height <= 0. {
+            continue;
+        }
+        window.paint_quad(fill(
+            Bounds {
+                origin: at(part.origin.x, part.origin.y),
+                size: size(px(part.width), px(part.height)),
+            },
+            mask,
+        ));
+    }
     window.paint_quad(quad(
         Bounds {
             origin: at(x, y),
-            size: view_size,
+            size: size(px(view.width), px(view.height)),
         },
         px(0.),
         transparent_black(),
@@ -633,6 +659,26 @@ fn paint_minimap(paint: &MinimapPaint, bounds: Bounds<gpui_kit::Pixels>, window:
     ));
 }
 
+/// The four rects of a `width` by `height` minimap that lie outside `view`, which is clamped to
+/// the minimap first: top, bottom, left, right. Together with the viewport they cover the whole.
+fn minimap_mask(view: GraphRect, width: f32, height: f32) -> [GraphRect; 4] {
+    let left = view.origin.x.clamp(0., width);
+    let right = view.right().clamp(0., width);
+    let top = view.origin.y.clamp(0., height);
+    let bottom = view.bottom().clamp(0., height);
+    let rect = |x: f32, y: f32, w: f32, h: f32| GraphRect {
+        origin: GraphPoint { x, y },
+        width: w,
+        height: h,
+    };
+    [
+        rect(0., 0., width, top),
+        rect(0., bottom, width, height - bottom),
+        rect(0., top, left, bottom - top),
+        rect(right, top, width - right, bottom - top),
+    ]
+}
+
 fn register_minimap_handlers(
     paint: &MinimapPaint,
     bounds: Bounds<gpui_kit::Pixels>,
@@ -640,7 +686,7 @@ fn register_minimap_handlers(
     window: &mut Window,
     _cx: &mut App,
 ) {
-    let transform = minimap_transform(paint.layout.extent, MINIMAP_WIDTH, MINIMAP_HEIGHT);
+    let transform = minimap_transform(paint.layout.extent, paint.size.0, paint.size.1);
     let view = paint.view.clone();
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
         if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
@@ -681,122 +727,13 @@ fn register_minimap_handlers(
     });
 }
 
-/// The kinds of the legend, and what each stroke means.
-pub(crate) const LEGEND: [(Relation, &str, &str); 3] = [
-    (Relation::Owns, "\u{2500}\u{2500}", "owns"),
-    (Relation::RoutesTo, "\u{254c}\u{254c}", "routes to"),
-    (Relation::Mounts, "\u{2508}\u{2508}", "mounts"),
+/// The relations of the legend, and what each stroke means.
+pub(crate) const LEGEND: [(Relation, &str); 3] = [
+    (Relation::Owns, "owns"),
+    (Relation::RoutesTo, "routes to"),
+    (Relation::Mounts, "mounts"),
 ];
 
-/// The legend glyph color of a relation, as the edges are drawn.
-pub(crate) fn legend_color(relation: Relation, colors: &CanvasColors) -> Hsla {
-    colors.edge(relation)
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rect(x: f32, y: f32) -> GraphRect {
-        GraphRect {
-            origin: GraphPoint { x, y },
-            width: NODE_WIDTH,
-            height: NODE_HEIGHT,
-        }
-    }
-
-    fn close(a: f32, b: f32) -> bool {
-        (a - b).abs() < 0.01
-    }
-
-    #[test]
-    fn forward_edge_runs_right_to_left_side() {
-        let (from, to) = (rect(24., 24.), rect(234., 94.));
-        let curve = edge_curve(from, to, Relation::Owns);
-        assert_eq!(
-            curve.start,
-            GraphPoint {
-                x: from.right(),
-                y: from.center().y
-            }
-        );
-        assert_eq!(
-            curve.end,
-            GraphPoint {
-                x: to.origin.x,
-                y: to.center().y
-            }
-        );
-        assert!(close(curve.ctrl1.y, curve.start.y) && close(curve.ctrl2.y, curve.end.y));
-    }
-
-    #[test]
-    fn mounts_edge_runs_bottom_to_top() {
-        let (from, to) = (rect(24., 24.), rect(234., 200.));
-        let curve = edge_curve(from, to, Relation::Mounts);
-        assert_eq!(
-            curve.start,
-            GraphPoint {
-                x: from.center().x,
-                y: from.bottom()
-            }
-        );
-        assert_eq!(
-            curve.end,
-            GraphPoint {
-                x: to.center().x,
-                y: to.origin.y
-            }
-        );
-        assert!(close(curve.ctrl1.x, curve.start.x) && close(curve.ctrl2.x, curve.end.x));
-    }
-
-    #[test]
-    fn backward_edge_runs_under_nodes() {
-        let (from, to) = (rect(444., 24.), rect(234., 94.));
-        let curve = edge_curve(from, to, Relation::RoutesTo);
-        let lowest = from.bottom().max(to.bottom());
-        assert!(close(curve.ctrl1.y, lowest + BACKWARD_DROP));
-        assert!(close(curve.ctrl2.y, lowest + BACKWARD_DROP));
-        assert_eq!(curve.start.y, from.bottom());
-    }
-
-    #[test]
-    fn arrow_head_points_at_target() {
-        let curve = edge_curve(rect(24., 24.), rect(234., 94.), Relation::Owns);
-        let [tip, left, right] = arrow_head(&curve, ARROW_SIZE);
-        assert_eq!(tip, curve.end);
-        // The base lies on the source side of the tip, and the corners are symmetric.
-        assert!(left.x < tip.x && right.x < tip.x);
-        assert!(close(left.y + right.y, 2. * curve.end.y));
-    }
-
-    #[test]
-    fn the_level_of_detail_steps_down_with_the_zoom() {
-        assert_eq!(card_detail(1.), Some(CardDetail::Text));
-        assert_eq!(card_detail(MIN_TEXT_ZOOM), Some(CardDetail::Text));
-        assert_eq!(
-            card_detail(MIN_TEXT_ZOOM - 0.01),
-            Some(CardDetail::BadgeOnly)
-        );
-        assert_eq!(card_detail(MIN_BADGE_ZOOM), Some(CardDetail::BadgeOnly));
-        assert_eq!(card_detail(MIN_BADGE_ZOOM - 0.01), None);
-    }
-
-    #[test]
-    fn a_curve_is_inside_the_box_of_its_four_points() {
-        let curve = edge_curve(rect(444., 24.), rect(234., 94.), Relation::RoutesTo);
-        let (left, top, right, bottom) = curve_bounds(&curve);
-        for point in [curve.start, curve.ctrl1, curve.ctrl2, curve.end] {
-            assert!(point.x >= left && point.x <= right);
-            assert!(point.y >= top && point.y <= bottom);
-        }
-    }
-
-    #[test]
-    fn relation_strokes_follow_the_legend() {
-        assert_eq!(relation_stroke(Relation::Owns).dash, None);
-        assert_eq!(relation_stroke(Relation::RoutesTo).dash, Some((5., 4.)));
-        assert_eq!(relation_stroke(Relation::Mounts).dash, Some((2., 3.)));
-    }
-}
+#[path = "topology_canvas_tests.rs"]
+mod topology_canvas_tests;

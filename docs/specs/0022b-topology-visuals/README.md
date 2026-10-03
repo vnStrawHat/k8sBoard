@@ -20,7 +20,7 @@ Status: draft. Follows 0022 (merged, `0350adb`). Crate: `crates/app` only, with 
 | Step | Scope | ACs |
 |---|---|---|
 | 1 | `topology_stroke.rs`, feathered edges and arrows, width floor, LOD dashes, snapped round dot grid | 1–5 |
-| 2 | `topology_palette.rs`, kind hues, badge tint, kind selection, LOD boxes, minimap colors and mask, band fill | 1–3, 6 |
+| 2 | `topology_colors.rs`, kind hues, badge tint, kind selection, LOD boxes, minimap colors and mask, band fill | 1–3, 6 |
 | 3 | Hover emphasis and dimming, handle dots, the controls panel, `--screen topology-selected` | 1–3, 7 |
 | 4 | Animated flow on the selected node's edges, frame guard, reduced motion | 1–3, 8 |
 | 5 | Export parity | 1–3, 9 |
@@ -31,7 +31,8 @@ Status: draft. Follows 0022 (merged, `0350adb`). Crate: `crates/app` only, with 
 |---|---|
 | [root-cause.md](root-cause.md) | how the edges paint, why they are jagged (with source lines), the fix, rejected options |
 | [stroke.md](stroke.md) | step 1: the stroke API, geometry rules, edge painting, dot grid, cost |
-| [palette.md](palette.md) | step 2: tokens, kind and relation tables, cards, LOD, minimap, bands |
+| [routing.md](routing.md) | polish round: routes that avoid cards, dropped columns, card widths, first view, legend |
+| [colors.md](colors.md) | step 2: tokens, kind and relation tables, cards, LOD, minimap, bands |
 | [interaction.md](interaction.md) | steps 3–4: emphasis, handles, controls, animated flow and its repaint rule |
 | [export.md](export.md) | step 5: the SVG/PNG mapping |
 | [decisions.md](decisions.md) | React Flow reference with sources, numbered decisions, measurements |
@@ -40,14 +41,14 @@ Status: draft. Follows 0022 (merged, `0350adb`). Crate: `crates/app` only, with 
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`, and no `Cargo.toml`/`Cargo.lock` change.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. The 0003 AC4 color-literal grep is clean, and every color comes from `CanvasColors`/`tone_color`. The topology modules make no `tracing::` call and hold names only. No new Kubernetes request.
-- [ ] 4. `ribbon_alpha_ramps_over_one_device_pixel` passes: analytic coverage spans one device px at scale 1, 1.5, and 2.
-- [ ] 5. ui-verifier edge pixel census on `monitoring`: v61 ≤ 3 intermediate colors; after ≥ 8, light and dark. Numbers are recorded in decisions.md. `edge_stroke_budget` ≤ 30 ms debug, with the release time recorded.
-- [ ] 6. Before/after screenshots (`topology`, `topology-problems`, light and dark) show the kind colors of palette.md, readable badge text, and unchanged tone borders and ghosts.
-- [ ] 7. `topology-selected` (light, dark) shows the kind border and shadow, focused versus dimmed edges, handles, and the panel. +/− zoom around the centre, and Fit fits.
-- [ ] 8. Idle Topology requests no animation frames (`needs_flow_frame` tests). With a node selected, the frame time on `monitoring` (release, drawer open) is recorded; if it is over 8 ms, the 30 fps fallback ships.
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`, and no `Cargo.toml`/`Cargo.lock` change.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
+- [x] 3. The 0003 AC4 color-literal grep is clean, and every color comes from `CanvasColors`/`tone_color`. The topology modules make no `tracing::` call and hold names only. No new Kubernetes request.
+- [x] 4. `ribbon_alpha_ramps_over_one_device_pixel` passes: analytic coverage spans one device px at scale 1, 1.5, and 2.
+- [x] 5. ui-verifier edge pixel census on `monitoring`: v61 ≤ 3 intermediate colors; after ≥ 8, light and dark. Numbers are recorded in decisions.md. `edge_stroke_budget` asserts a vertex ceiling (not a wall-clock time); the release time is recorded.
+- [x] 6. Before/after screenshots (`topology`, `topology-problems`, light and dark) show the kind colors of colors.md, readable badge text, and unchanged tone borders and ghosts.
+- [x] 7. `topology-selected` (light, dark) shows the kind border and shadow, focused versus dimmed edges, handles, and the panel. +/− zoom around the centre, and Fit fits.
+- [x] 8. Idle Topology runs no frame timer (`needs_flow_frame` and `a_flow_timer_runs_only_while_edges_flow`). With a node selected the flow repaints at 30 fps (a 33 ms timer; the display-rate frame request was dropped), and the view restarts the timer when the window is activated again.
 - [ ] 9. The PNG of `monitoring` matches the screen's rest colors. Export tests pass, and secret safety is unchanged.
 - [ ] 10. The ui-verifier reports no high-severity defect against W11 in either theme.
 

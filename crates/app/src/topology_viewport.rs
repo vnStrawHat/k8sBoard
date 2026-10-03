@@ -14,10 +14,19 @@ const MAX_ZOOM_STEP: i32 = 7;
 const MIN_FIT_STEP: i32 = -25;
 /// Pixel-precise scroll deltas add up to one step per this many pixels.
 const PIXELS_PER_ZOOM_STEP: f32 = 50.;
+/// The + and - buttons zoom this many wheel steps (x1.21, close to React Flow's 1.2).
+pub(crate) const ZOOM_BUTTON_STEPS: i32 = 2;
 /// A press that moves less than this is a click.
 const DRAG_SLOP: f32 = 4.;
-/// Cards draw their text lines from this zoom on (and the first view never goes below it).
+/// Cards draw their text lines from this zoom on: the 12.5 px name is then about 7 px.
 pub(crate) const MIN_TEXT_ZOOM: f32 = 0.55;
+/// The first view of a graph never goes below this zoom: the name is then about 10 px.
+const FIRST_VIEW_ZOOM: f32 = 0.8;
+/// A graph of at most this many nodes opens whole at any zoom that still shows the card text.
+const SMALL_GRAPH_NODES: usize = 20;
+/// The left strip the zoom panel covers (its width, its offset, and a gutter): the first view and
+/// Fit keep the graph out of it.
+pub(crate) const CONTROLS_INSET: f32 = 60.;
 pub(crate) const MINIMAP_WIDTH: f32 = 150.;
 pub(crate) const MINIMAP_HEIGHT: f32 = 92.;
 /// The bottom strip the minimap and legend cover: Fit and the first view keep the graph above it.
@@ -93,17 +102,46 @@ impl Viewport {
     }
 
     /// The view a graph opens with: Fit when the whole graph is readable at that zoom, else the
-    /// readable zoom (`MIN_TEXT_ZOOM`) anchored at the top-left of the extent. The minimap gives
+    /// readable zoom (`FIRST_VIEW_ZOOM`) anchored at the top-left of the extent. The minimap gives
     /// the overview of what is out of view.
-    pub(crate) fn first_view(extent: GraphRect, width: f32, height: f32) -> Self {
+    pub(crate) fn first_view(
+        extent: GraphRect,
+        width: f32,
+        height: f32,
+        node_count: usize,
+    ) -> Self {
         let readable = readable_step();
-        if fit_step(extent, width, height) >= readable {
+        let fit = fit_step(extent, width, height);
+        let is_small = node_count <= SMALL_GRAPH_NODES && WHEEL_STEP.powi(fit) >= MIN_TEXT_ZOOM;
+        if fit >= readable || is_small {
             return Self::fit(extent, width, height);
         }
         Self {
             origin: extent.origin,
             zoom_step: readable,
         }
+    }
+
+    /// Pans just enough for `rect` to lie `margin` px inside an area of `width` by `height`, or
+    /// into its middle when it does not fit. The area is the part of the canvas nothing covers.
+    pub(crate) fn reveal(self, rect: GraphRect, width: f32, height: f32, margin: f32) -> Self {
+        let zoom = self.zoom();
+        let (x, y) = self.to_screen(rect.origin);
+        let shift = |position: f32, extent: f32, area: f32| {
+            if extent + 2. * margin > area {
+                area / 2. - (position + extent / 2.)
+            } else if position < margin {
+                margin - position
+            } else if position + extent > area - margin {
+                area - margin - (position + extent)
+            } else {
+                0.
+            }
+        };
+        self.pan(
+            shift(x, rect.width * zoom, width),
+            shift(y, rect.height * zoom, height),
+        )
     }
 
     /// Puts `target` in the middle of a canvas of `width` by `height`.
@@ -139,10 +177,10 @@ fn fit_step(extent: GraphRect, width: f32, height: f32) -> i32 {
         .unwrap_or(MIN_FIT_STEP)
 }
 
-/// The smallest grid step whose zoom still draws the text of a card.
+/// The smallest grid step whose zoom reads comfortably: the one a first view starts at.
 fn readable_step() -> i32 {
     (MIN_FIT_STEP..=MAX_ZOOM_STEP)
-        .find(|step| WHEEL_STEP.powi(*step) >= MIN_TEXT_ZOOM)
+        .find(|step| WHEEL_STEP.powi(*step) >= FIRST_VIEW_ZOOM)
         .unwrap_or(0)
 }
 
@@ -161,6 +199,11 @@ pub(crate) fn wheel_steps(delta: ScrollDelta, carry: &mut f32) -> i32 {
 /// Whether a press that moved by `(dx, dy)` is a drag and not a click.
 pub(crate) fn is_drag(dx: f32, dy: f32) -> bool {
     dx.hypot(dy) >= DRAG_SLOP
+}
+
+/// `value` (logical px) on the nearest device pixel.
+pub(crate) fn snap(value: f32, scale_factor: f32) -> f32 {
+    (value * scale_factor).round() / scale_factor
 }
 
 /// The indices of the nodes whose card shows in a canvas of `width` by `height`.
@@ -311,7 +354,7 @@ mod tests {
     fn first_view_fits_a_graph_that_is_readable_whole() {
         let small = extent(600., 300.);
         assert_eq!(
-            Viewport::first_view(small, 1000., 700.),
+            Viewport::first_view(small, 1000., 700., 100),
             Viewport::fit(small, 1000., 700.)
         );
     }
@@ -323,9 +366,9 @@ mod tests {
             width: 3_000.,
             height: 4_000.,
         };
-        let view = Viewport::first_view(large, 1000., 700.);
-        assert!(view.zoom() >= MIN_TEXT_ZOOM);
-        assert!(view.zoom() < MIN_TEXT_ZOOM * WHEEL_STEP);
+        let view = Viewport::first_view(large, 1000., 700., 100);
+        assert!(view.zoom() >= FIRST_VIEW_ZOOM);
+        assert!(view.zoom() < FIRST_VIEW_ZOOM * WHEEL_STEP);
         assert_eq!(view.origin, large.origin);
         // The fit of the same graph is far smaller.
         assert!(Viewport::fit(large, 1000., 700.).zoom() < MIN_TEXT_ZOOM);
@@ -393,5 +436,76 @@ mod tests {
         let pixels = |y: f32| ScrollDelta::Pixels(point(px(0.), px(y)));
         assert_eq!(wheel_steps(pixels(30.), &mut carry), 0);
         assert_eq!(wheel_steps(pixels(30.), &mut carry), 1);
+    }
+
+    #[test]
+    fn button_zoom_keeps_the_view_center() {
+        let viewport = Viewport::default().pan(-120., -80.);
+        let (width, height) = (1000., 600.);
+        let center = viewport.to_graph(width / 2., height / 2.);
+        for steps in [ZOOM_BUTTON_STEPS, -ZOOM_BUTTON_STEPS] {
+            let zoomed = viewport.zoom_at(width / 2., height / 2., steps);
+            let kept = zoomed.to_graph(width / 2., height / 2.);
+            assert!(close(kept.x, center.x) && close(kept.y, center.y));
+            assert!(!close(zoomed.zoom(), viewport.zoom()));
+        }
+    }
+
+    #[test]
+    fn button_zoom_is_clamped_like_the_wheel() {
+        let mut viewport = Viewport::default();
+        for _ in 0..20 {
+            viewport = viewport.zoom_at(500., 300., ZOOM_BUTTON_STEPS);
+        }
+        let most = WHEEL_STEP.powi(MAX_ZOOM_STEP);
+        assert!(close(viewport.zoom(), most));
+        for _ in 0..40 {
+            viewport = viewport.zoom_at(500., 300., -ZOOM_BUTTON_STEPS);
+        }
+        assert!(close(viewport.zoom(), WHEEL_STEP.powi(MIN_ZOOM_STEP)));
+    }
+
+    #[test]
+    fn a_small_graph_opens_whole_while_its_text_shows() {
+        // Fit would be 0.7: below the first-view zoom, above the text zoom.
+        let wide = extent(1_400., 900.);
+        let fit = Viewport::fit(wide, 1000., 700.);
+        assert!(fit.zoom() < FIRST_VIEW_ZOOM && fit.zoom() >= MIN_TEXT_ZOOM);
+        assert_eq!(Viewport::first_view(wide, 1000., 700., 20), fit);
+        // A larger graph keeps the readable zoom, anchored top-left.
+        let big = Viewport::first_view(wide, 1000., 700., 21);
+        assert!(big.zoom() >= FIRST_VIEW_ZOOM);
+        assert_eq!(big.origin, wide.origin);
+        // A small graph that would fit below the text zoom is not shown whole.
+        let huge = extent(4_000., 3_000.);
+        assert!(Viewport::first_view(huge, 1000., 700., 5).zoom() >= FIRST_VIEW_ZOOM);
+    }
+
+    #[test]
+    fn reveal_pans_a_hidden_card_into_the_free_area() {
+        let card = GraphRect {
+            origin: GraphPoint { x: 900., y: 300. },
+            width: 200.,
+            height: 60.,
+        };
+        let view = Viewport::default();
+        // Under the drawer: the free area is 600 px wide.
+        let moved = view.reveal(card, 600., 700., 20.);
+        let (x, _) = moved.to_screen(card.origin);
+        assert!(close(x + card.width * moved.zoom(), 600. - 20.));
+        // Already inside: nothing moves.
+        assert_eq!(view.reveal(card, 1_400., 700., 20.), view);
+        // A card that cannot fit is centered.
+        let centered = view.reveal(card, 150., 700., 20.);
+        let (x, _) = centered.to_screen(card.origin);
+        assert!(close(x + card.width / 2., 75.));
+    }
+
+    #[test]
+    fn snap_rounds_to_device_pixels() {
+        assert!(close(snap(10.4, 1.), 10.));
+        assert!(close(snap(10.4, 2.), 10.5));
+        assert!(close(snap(10.4, 1.5), 10. + 2. / 3.));
+        assert!(close(snap(-0.3, 1.), 0.));
     }
 }

@@ -9,10 +9,10 @@
 | 1 | `topology_stroke.rs` (new), `topology_stroke_tests.rs` (new) | `Dash`, `feather`, `flatten_cubic`, `trim_end`, `dash_runs`, `stroke_path`, `fill_convex` (stroke.md) |
 | 1 | `topology_canvas.rs` | `paint_edges` uses the stroke module (no more `PathBuilder`); `MIN_EDGE_WIDTH`; solid below `MIN_TEXT_ZOOM`; `ARROW_LENGTH`, `ARROW_HALF_WIDTH`, and `arrow_head(curve, length, half_width)`; dot grid (`DOT_SPACING` 20, `DOT_SIZE`, `MIN_DOT_SPACING` 12, `ring`, snapped); `snap` |
 | 1 | `main.rs` | `mod topology_stroke;` |
-| 2 | `topology_palette.rs` (new) | `CanvasColors` (moved from `topology_canvas.rs`, extended), `KindHue`, `kind_hue`, relation colors, `EDGE_REST_ALPHA`, `KIND_TINT`, `KIND_BOX_TINT` |
+| 2 | `topology_colors.rs` (new) | `CanvasColors` (moved from `topology_canvas.rs`, extended), `KindHue`, `kind_hue`, relation colors, `EDGE_REST_ALPHA`, `KIND_TINT`, `KIND_BOX_TINT` |
 | 2 | `topology_canvas.rs` | `node_card` takes `scale_factor` (snap), tints the badge column, kind selection border + `shadow_md`, box-tint LOD; `paint_minimap` uses kind colors and draws the mask; band fill; legend colors come from the palette |
-| 2 | `topology_view.rs` | `render_canvas(.., window)` passes `window.scale_factor()`; imports from `topology_palette` |
-| 2 | `main.rs` | `mod topology_palette;` |
+| 2 | `topology_view.rs` | `render_canvas(.., window)` passes `window.scale_factor()`; imports from `topology_colors` |
+| 2 | `main.rs` | `mod topology_colors;` |
 | 3 | `topology_canvas.rs` | `Emphasis`, `edge_emphasis`, `focus` in `CanvasPaint`, alphas and widths; `handle_points`, `handle_canvas`; `CardState.is_hovered` (kind border + `shadow_sm`) |
 | 3 | `topology_view.rs` | `hovered: Option<NodeId>`, card `on_hover`, clears (namespace, rebuild, Escape); controls panel (`Plus`, `Minus`, `Maximize`), `zoom_by_button` |
 | 3 | `topology_viewport.rs` | `ZOOM_BUTTON_STEPS`; a button zoom uses `zoom_at` at the view centre (a helper only if the test needs one) |
@@ -21,13 +21,13 @@
 | 4 | `topology_view.rs` | `created: Instant` (the flow clock); passes the elapsed time into `CanvasPaint` |
 | 5 | `topology_export.rs`, `topology_export_tests.rs` | `svg_style` from `CanvasColors`; `kinds`, `kind_texts`, `relations`, `band`; markers per color; handles; band fill; badge tint |
 
-`topology_graph.rs` and `topology_layout.rs` do not change. Graph and layout stay pure, and their tests and budget are untouched.
+Polish round: `topology_route.rs` (+ tests) is new (routes per layout), `topology_card.rs` (+ tests) takes the card code out of `topology_canvas.rs`, whose tests move to `topology_canvas_tests.rs`; `topology_layout.rs` drops empty columns, sizes the cards by their names, and computes the routes; `topology_graph.rs` gets `ghost_tone`; `topology_viewport.rs` gets `snap`, `reveal`, and the first-view rules. The split of `topology_view.rs` waits for 0027.
 
 ## Docs (updated by the coder in the step that completes the row)
 
 - `docs/specs/0022-topology/canvas.md`:
   - "Painting": the edge rows point to 0022b stroke.md; the dot grid row is updated (step 1).
-  - Colors and cards point to 0022b palette.md (step 2).
+  - Colors and cards point to 0022b colors.md (step 2).
   - "Interaction": add hover, the panel, and the flow (steps 3–4).
 - `docs/specs/0022-topology/decisions.md`: decisions 25, 30, and 31 get "replaced by 0022b" notes (steps 2–3).
 - `docs/specs/0022-topology/README.md` non-goals: "zoom buttons … animation" → "see 0022b" (step 3).

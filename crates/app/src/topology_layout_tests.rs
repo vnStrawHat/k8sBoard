@@ -107,11 +107,11 @@ fn config_node_aligns_under_first_source() {
         ))
         .graph();
     let layout = components(&graph);
-    // The pod's refs aggregate to the Deployment, which sits in column 1.
+    // The pod's refs aggregate to the Deployment, which sits in the first used column.
     let at = |kind, name: &str| rect(&graph, &layout, &object(kind, name)).origin.x;
-    assert_eq!(at(TopologyKind::ConfigMap, "settings"), column_x(1));
+    assert_eq!(at(TopologyKind::ConfigMap, "settings"), column_x(0));
     // The Secret finds that slot taken and takes the next one.
-    assert_eq!(at(TopologyKind::Secret, "token"), column_x(2));
+    assert_eq!(at(TopologyKind::Secret, "token"), column_x(1));
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn config_row_collision_moves_right() {
                 .x
         })
         .collect();
-    assert_eq!(xs, [column_x(1), column_x(2), column_x(3)]);
+    assert_eq!(xs, [column_x(0), column_x(1), column_x(2)]);
 }
 
 #[test]
@@ -162,11 +162,12 @@ fn missing_ghost_takes_its_kind_placement() {
         name: "nope".to_owned(),
     };
     let pod_rect = rect(&graph, &layout, &object(TopologyKind::Pod, "tool"));
+    // The unused column 2 is dropped: ingress, Service ghost, and pod take the first three.
     assert_eq!(rect(&graph, &layout, &service_ghost).origin.x, column_x(1));
     // The config ghost sits in the config row, under the pod that refers to it.
     let config = rect(&graph, &layout, &config_ghost);
     assert!(config.origin.y >= pod_rect.bottom() + CONFIG_GAP);
-    assert_eq!(config.origin.x, column_x(3));
+    assert_eq!(config.origin.x, column_x(2));
 }
 
 #[test]
@@ -607,9 +608,9 @@ fn config_row_wraps_after_the_last_slot() {
         .iter()
         .map(|name| rect(&graph, &layout, &object(TopologyKind::ConfigMap, name)))
         .collect();
-    // Wanted slot 1: slots 1 to 3 of the first row, then slots 0 to 2 of the next.
+    // Wanted slot 0 of three used columns: slots 0 to 2 of the first row, then of the next.
     let xs: Vec<f32> = rects.iter().map(|rect| rect.origin.x).collect();
-    let expected = [1, 2, 3, 0, 1, 2].map(|slot| MARGIN + slot as f32 * COLUMN_PITCH);
+    let expected = [0, 1, 2, 0, 1, 2].map(|slot| MARGIN + slot as f32 * COLUMN_PITCH);
     assert_eq!(xs, expected);
     assert_eq!(rects[3].origin.y - rects[0].origin.y, ROW_PITCH);
     // No two cards overlap.
@@ -620,4 +621,68 @@ fn config_row_wraps_after_the_last_slot() {
     }
     let band = &layout.bands[0];
     assert!(rects.iter().all(|rect| rect.bottom() <= band.rect.bottom()));
+}
+
+#[test]
+fn a_column_no_node_uses_is_dropped() {
+    // Only Deployments: one column, so a band is one card wide.
+    let graph = Fixture::default()
+        .with_deployment("api", 1, 1)
+        .with_deployment("web", 1, 1)
+        .graph();
+    let layout = components(&graph);
+    let band = &layout.bands[0];
+    assert!(layout.rects.iter().all(|rect| rect.origin.x == MARGIN));
+    assert_eq!(band.rect.width, 2. * BAND_PAD + MIN_NODE_WIDTH);
+    // With all four kinds in use the band is four columns wide.
+    let full = Fixture::default()
+        .with_ingress(ingress("shop", &[("/", "web")], None, None))
+        .with_service("web", &["app=web"])
+        .with_replica_set("web-1", None, 1, 1)
+        .with_pod(pod("web-1-0", &["app=web"], Some(("ReplicaSet", "web-1"))))
+        .graph();
+    let wide = components(&full);
+    let expected = 2. * BAND_PAD + 3. * COLUMN_PITCH + MIN_NODE_WIDTH;
+    assert!(wide.bands[0].rect.width <= expected);
+}
+
+#[test]
+fn the_columns_that_are_used_keep_their_order() {
+    // Ingress (column 0) and pods (column 3): the pod column comes right after the ingress one.
+    let graph = Fixture::default()
+        .with_ingress(ingress("shop", &[("/", "web")], None, None))
+        .with_pod(pod("tool", &[], None))
+        .graph();
+    let layout = components(&graph);
+    let ingress_x = rect(&graph, &layout, &object(TopologyKind::Ingress, "shop"))
+        .origin
+        .x;
+    let pod_x = rect(&graph, &layout, &object(TopologyKind::Pod, "tool"))
+        .origin
+        .x;
+    assert!(pod_x > ingress_x);
+}
+
+#[test]
+fn the_card_width_follows_the_longest_name_up_to_a_cap() {
+    let width_of = |name: &str| {
+        let graph = Fixture::default().with_deployment(name, 1, 1).graph();
+        components(&graph).rects[0].width
+    };
+    assert_eq!(width_of("api"), MIN_NODE_WIDTH);
+    let medium = width_of("a-deployment-with-a-longer-name");
+    assert!(medium > MIN_NODE_WIDTH && medium <= MAX_NODE_WIDTH);
+    assert_eq!(width_of(&"x".repeat(80)), MAX_NODE_WIDTH);
+    // Every card of a graph has the same width, and the pitch follows it.
+    let graph = Fixture::default()
+        .with_deployment("api", 1, 1)
+        .with_service("a-service-with-a-quite-long-name", &[])
+        .graph();
+    let layout = components(&graph);
+    assert!(
+        layout
+            .rects
+            .iter()
+            .all(|rect| rect.width == layout.rects[0].width)
+    );
 }

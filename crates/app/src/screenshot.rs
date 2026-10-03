@@ -647,7 +647,11 @@ mod tests {
             is_topology_pending: true,
             ..input(TargetState::Loaded, true)
         };
-        for screen in [LaunchScreen::Topology, LaunchScreen::TopologyProblems] {
+        for screen in [
+            LaunchScreen::Topology,
+            LaunchScreen::TopologyProblems,
+            LaunchScreen::TopologySelected,
+        ] {
             assert!(!is_screen_settled(screen, &pending));
             assert!(is_screen_settled(screen, &input(TargetState::Loaded, true)));
         }

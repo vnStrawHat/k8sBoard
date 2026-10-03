@@ -56,10 +56,10 @@ pub(crate) fn minimap_transform(extent: GraphRect, width: f32, height: f32) -> M
 
 | Layer | How | Color |
 |---|---|---|
-| Dot grid | `paint_quad` 1 px dots every `16 × zoom` px; skipped below 8 px spacing | `theme.border` |
+| Dot grid | round `paint_quad` dots, gap 20, snapped to device px (0022b [stroke.md](../0022b-topology-visuals/stroke.md)) | `ring` |
 | App bands | `paint_quad` rounded rect, 1 px `BorderStyle::Dashed`; the title is a card-layer text div | `border`; title `muted_foreground` |
-| Edges | `PathBuilder::stroke(px(w × zoom.max(0.5)))`, `.dash_array(..)`, `move_to` + `cubic_bezier_to`, `paint_path` | table below |
-| Arrows | filled triangle `PathBuilder::fill()` | the edge color |
+| Edges | feathered ribbons from `topology_stroke.rs` (0022b [stroke.md](../0022b-topology-visuals/stroke.md)), along routes that never cross another card ([routing.md](../0022b-topology-visuals/routing.md)); not `PathBuilder` or one bezier | relation color (0022b [colors.md](../0022b-topology-visuals/colors.md)) |
+| Arrows | `fill_convex`, feathered | the edge color |
 
 | Relation | Width | Dash | Color |
 |---|---|---|---|
@@ -67,11 +67,11 @@ pub(crate) fn minimap_transform(extent: GraphRect, width: f32, height: f32) -> M
 | RoutesTo | 1.6 | `[5, 4]` | `ring` |
 | Mounts | 1.2 | `[2, 3]` | `muted_foreground` |
 
-An edge into a ghost uses `tone_color` of its check. The selected node's edges use `ring` with `+0.6` width.
+The Color column is replaced by 0022b (relation colors at 0.75 alpha). An edge into a ghost uses `tone_color` of its check. The focused node's edges are full strength with `+0.6` width, the others fade (0022b [interaction.md](../0022b-topology-visuals/interaction.md)).
 
 ## Node cards (divs; W11 `.nd`)
 
-- Size `NODE_WIDTH × NODE_HEIGHT × zoom`, radius `8 × zoom`, `background`, 1 px `border`.
+- Size `NODE_WIDTH × NODE_HEIGHT × zoom`, radius `8 × zoom`, `background`, 1 px `border`. The badge column is tinted by node kind, and hover and selection use the kind color and a shadow: see 0022b [colors.md](../0022b-topology-visuals/colors.md).
 - A grid holds a 24 px badge column (the `badge()` text, mono, `muted` fill) and two lines:
   - caption: mono 9 px uppercase, `muted_foreground`, toned when Bad/Warn;
   - name: mono 10.8 px, `text_ellipsis`.
@@ -97,6 +97,9 @@ An edge into a ghost uses `tone_color` of its check. The selected node's edges u
 | double click (`click_count == 2`) | object card | `AppShell::reveal(key)` (leaves Topology) |
 | click (no drag) | empty space | `select_on_topology(None)` |
 | press / drag | minimap | `center_on(minimap → graph point)` |
+| hover | object card | its edges stand out, the others fade (0022b) |
+| click | + / − / Fit panel | zoom around the center, or Fit (0022b) |
+| (selected node) | its edges | animated flow, still under reduced motion (0022b step 4) |
 
 `enum Drag { None, Pan { last: Point<Pixels> }, Node { index, grab: GraphPoint, moved: bool } }` lives in `TopologyView`. Card `on_mouse_down` stops propagation so the canvas does not also pan, and calls `cx.notify()` so the next paint registers the move and up handlers.
 

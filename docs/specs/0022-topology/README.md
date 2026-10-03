@@ -14,7 +14,7 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 
 - Traffic mode (backlog; segment disabled), the RBAC chip (disabled), multi-namespace graphs, and any mutation.
 - Jobs, CronJobs, NetworkPolicies, PDBs, EndpointSlices, and custom resources (0018) as nodes.
-- Persisting positions (0024), edge routing around nodes, zoom buttons, Collapse pods, and animation.
+- Persisting positions (0024), edge routing around nodes, Collapse pods. Zoom buttons and animation: see 0022b.
 
 ## Implementation steps
 

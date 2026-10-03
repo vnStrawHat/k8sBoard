@@ -34,7 +34,7 @@ If `t` is the **signed distance in logical px to the stroke edge** (positive ins
 
 - **Stroke ribbon.** Flatten the cubic, offset each point by ±(`half + feather`) along the averaged normal, and emit two triangles per side and segment with `st = (0, half − offset)`. `feather = 0.5 / scale_factor`. The centre gets `t = half`, the outer edge `t = −feather`. See [stroke.md](stroke.md).
 - **Filled arrow.** The inset polygon is solid (`st = (0, 1)`). A ring between inset and outset gets `t = ±feather`.
-- **Other renderers.** Metal and WGSL treat `s ≡ 0` as solid, so a feather band would draw opaque. There `feather = 0`: the same geometry as a plain stroke, with MSAA as today. The choice is one `cfg!(windows)` constant, and tests run both values on every OS (decision 3).
+- **Other renderers.** Metal and WGSL treat `s ≡ 0` as solid, so a feather band would draw opaque. There `feather = 0`: the same geometry as a plain stroke, with MSAA as today. The choice is one constant, `PATH_COVERAGE` (`PathCoverage::SignedDistance` on Windows, `MsaaOnly` elsewhere), and tests run both values on every OS (decision 3).
 
 ## Rejected options
 
@@ -46,3 +46,10 @@ If `t` is the **signed distance in logical px to the stroke edge** (positive ins
 | Pixel-snapping the bezier | does not help diagonals |
 
 Small extra fixes: dot-grid dots and card origins snap to device pixels (`(v × scale).round() / scale`). Dashes become solid below `MIN_TEXT_ZOOM`.
+
+## Pin and fallback
+
+The fix depends on how gpui-pre-windows 0.3.7 evaluates `path_rasterization_fragment` (the inverted curve branch of root cause 2). `the_renderer_version_the_coverage_relies_on_is_pinned` reads `Cargo.lock` and fails with "re-check shaders.hlsl path_rasterization_fragment; if the branch is fixed set PathCoverage to MsaaOnly" as soon as that version changes.
+
+- **Still inverted:** update the pin in the test.
+- **Fixed:** change one line, `const PATH_COVERAGE` in `topology_stroke.rs`, to `PathCoverage::MsaaOnly`. `feather_for` then returns 0, every ribbon is a plain solid stroke (`t = 1`), and the renderer's own MSAA and curve coverage apply.

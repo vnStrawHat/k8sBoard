@@ -40,13 +40,13 @@
 | 22 | `layout(.., previous)` **seeds the order from the previous layout** and appends new nodes, without sweeps. Only a namespace change, a Group by change, or Reset positions lays out from scratch | W11 pin 3: "pods appear in place" |
 | 23 | Dragged positions are **pins**, kept in memory per (context, namespace) | W11 pin 4; persistence waits for 0024 |
 | 24 | **Hybrid rendering**: one gpui `canvas` paints the dots, bands, edges, and arrows, and registers the window-level mouse handlers. Cards are kit-styled divs culled to the viewport. The minimap is its own `canvas` | GPUI does card hit testing and text. The kit `Plot` has no mouse input |
-| 25 | Wheel zoom is **quantized** to `WHEEL_STEP^k` (0.2–2.0) around the cursor. Empty drag pans, card drag pins, click selects, double-click reveals. There are no zoom buttons | predictable steps; Fit and the wheel are enough (YAGNI) |
+| 25 | Wheel zoom is **quantized** to `WHEEL_STEP^k` (0.2–2.0) around the cursor. Empty drag pans, card drag pins, click selects, double-click reveals. There are no zoom buttons (replaced by 0022b decision 9: a +/−/Fit panel) | predictable steps; Fit and the wheel are enough (YAGNI) |
 | 26 | A click opens **the same drawer over Topology** via `LiveCluster::row_of` (explorer, then topology feeds). `row_of` replaces only the drawer, menu, and YAML lookups | W11 pin 4. Monitor and related lists stay explorer-only (README open item 5) |
 | 27 | Group by: **App by default** (`app.kubernetes.io/name`, `app`, `k8s-app`). It falls back to Components when no pod in the namespace has one of those labels. A user's choice sticks for the session | W11 shows "Group by: app"; the fallback avoids one big "Ungrouped" band |
 | 28 | Kind chips are Ingress, Service, Workload, and Config. RBAC is a disabled chip and Traffic a disabled segment | W11 toolbar |
 | 29 | The rebuild happens at most every `TOPOLOGY_TICK` (500 ms), and only when dirty; one notify. The view holds `Rc<TopologyGraph>` and `Rc<TopologyLayout>` | batching rule. Paint closures and export clone an `Rc`, not the graph |
-| 30 | Colors: `background`, `border`, `foreground`, `muted_foreground`, `muted`, `ring` (accent), `tone_color` | theme tokens only |
-| 31 | The legend is mono glyph text (`──`, `╌╌`, `┈┈`) colored like the edges | three tiny canvases are not needed |
+| 30 | Colors: `background`, `border`, `foreground`, `muted_foreground`, `muted`, `ring` (accent), `tone_color` (replaced by 0022b colors.md: kind and relation colors) | theme tokens only |
+| 31 | The legend is mono glyph text (`──`, `╌╌`, `┈┈`) colored like the edges (relation colors since 0022b) | three tiny canvases are not needed |
 
 ## Export and actions
 

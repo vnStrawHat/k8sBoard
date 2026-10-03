@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cluster::{NamespaceScope, NamespaceSummary, PodSummary};
 use gpui_kit::component::alert::Alert;
@@ -12,26 +12,29 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, IconName, Selectable as _, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::{
     AnyElement, App, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Point, Render,
-    ScrollDelta, SharedString, Styled as _, Subscription, Task, WeakEntity, Window, div,
-    prelude::FluentBuilder as _, px,
+    ScrollDelta, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::AppShell;
 use crate::app_shell::workspace::toggle_button;
 use crate::cluster_session::{ClusterSession, LiveCluster, scope_includes};
+use crate::drawer::DRAWER_WIDTH;
 use crate::file_export::{ExportState, export_file_name, start_export_with};
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ResourceKey;
 use crate::topology_canvas::{
-    CanvasColors, CanvasPaint, CardState, LEGEND, MinimapPaint, graph_canvas, legend_color,
-    minimap_canvas, node_card,
+    CanvasPaint, LEGEND, MinimapPaint, TITLE_PILL_HEIGHT, TITLE_PILL_LEFT, TITLE_PILL_PADDING,
+    TITLE_PILL_TOP, TITLE_SIZE, graph_canvas, handle_canvas, legend_swatch, minimap_canvas,
 };
+use crate::topology_card::{CardFrame, CardState, node_card};
 use crate::topology_checks::{ConfigCheck, checks_chip, topology_coverage};
+use crate::topology_colors::CanvasColors;
 use crate::topology_export::{TopologyExport, export_scale, svg_style, topology_svg, write_export};
 use crate::topology_feeds::TopologySubject;
 use crate::topology_graph::{
@@ -43,8 +46,8 @@ use crate::topology_layout::{
     GraphPoint, GraphStructure, TopologyLayout, layout as lay_out, structure,
 };
 use crate::topology_viewport::{
-    MIN_TEXT_ZOOM, MINIMAP_HEIGHT, MINIMAP_WIDTH, OVERLAY_GUTTER, Viewport, is_drag, visible_nodes,
-    wheel_steps,
+    CONTROLS_INSET, MIN_TEXT_ZOOM, MINIMAP_HEIGHT, MINIMAP_WIDTH, OVERLAY_GUTTER, Viewport,
+    ZOOM_BUTTON_STEPS, is_drag, visible_nodes, wheel_steps,
 };
 
 /// The rebuild runs at most this often, and only when something changed.
@@ -55,6 +58,17 @@ const CHECKS_MENU_LIMIT: usize = 50;
 const DEFAULT_CANVAS: (f32, f32) = (1200., 700.);
 /// The font size of a band title in a zoomed-out view, in pixels.
 const LOW_ZOOM_TITLE_SIZE: f32 = 11.;
+/// The flow of the selected edges repaints at about 30 fps: a repaint of the whole window every
+/// display frame is not worth a moving dash.
+const FLOW_FRAME: Duration = Duration::from_millis(33);
+/// A selected card is kept this far from the edge of the area the drawer leaves free.
+const REVEAL_MARGIN: f32 = 24.;
+/// The share of its size the minimap keeps while the drawer is open.
+const COMPACT_MINIMAP_SCALE: f32 = 0.5;
+/// The font size of the legend text, in pixels.
+const LEGEND_TEXT_SIZE: f32 = 11.;
+/// The height of that title's pill, in pixels.
+const LOW_ZOOM_TITLE_HEIGHT: f32 = 18.;
 /// The height of the namespace list the dropdown shows before it scrolls.
 const NAMESPACE_MENU_HEIGHT: f32 = 320.;
 
@@ -100,6 +114,10 @@ pub(crate) struct TopologyView {
     highlighted: Option<NodeId>,
     /// A node to center and select after the next build that has it (Show in Topology, a check).
     pending_focus: Option<NodeId>,
+    /// `--screen topology-selected`: select the first Deployment once a graph has one.
+    wants_first_deployment: bool,
+    /// The card under the pointer: its edges stand out, the others fade.
+    hovered: Option<NodeId>,
     drag: Drag,
     is_dirty: bool,
     is_visible: bool,
@@ -107,11 +125,17 @@ pub(crate) struct TopologyView {
     canvas_size: Option<(f32, f32)>,
     wheel_carry: f32,
     focus_handle: FocusHandle,
+    /// The flow animation counts from here.
+    created: Instant,
     export: ExportState,
     /// The scale the last PNG was rendered at.
     export_scale: Option<f32>,
     _export: Option<Task<()>>,
     _tick: Option<Task<()>>,
+    /// The frame timer of the flow animation: it exists only while an edge flows.
+    flow_timer: Option<Task<()>>,
+    /// Repaints when the window is activated again, which restarts a stopped flow.
+    _activation: Option<Subscription>,
     _observe: Option<Subscription>,
 }
 
@@ -131,16 +155,21 @@ impl TopologyView {
             fit_waits_for_size: false,
             highlighted: None,
             pending_focus: None,
+            wants_first_deployment: false,
+            hovered: None,
             drag: Drag::None,
             is_dirty: true,
             is_visible: false,
             canvas_size: None,
             wheel_carry: 0.,
             focus_handle: cx.focus_handle(),
+            created: Instant::now(),
             export: ExportState::Idle,
             export_scale: None,
             _export: None,
             _tick: None,
+            flow_timer: None,
+            _activation: None,
             _observe: None,
         }
     }
@@ -232,6 +261,11 @@ impl TopologyView {
         self.build.is_some()
     }
 
+    /// `--screen topology-selected`: the first Deployment of the first graph is selected.
+    pub(crate) fn select_first_deployment_once(&mut self, is_wanted: bool) {
+        self.wants_first_deployment = is_wanted;
+    }
+
     /// `--screen topology-problems`.
     pub(crate) fn set_problems_only(&mut self, is_on: bool, cx: &mut Context<Self>) {
         self.filter.problems_only = is_on;
@@ -313,6 +347,7 @@ impl TopologyView {
         self.namespace = namespace;
         self.expanded.clear();
         self.pending_focus = None;
+        self.hovered = None;
         self.clear_graph();
         self.clear_selection(cx);
         cx.notify();
@@ -412,6 +447,13 @@ impl TopologyView {
         if selection_is_gone {
             self.clear_selection(cx);
         }
+        if self.wants_first_deployment
+            && let Some(Ok(graph)) = &self.build
+            && let Some(id) = first_deployment(graph)
+        {
+            self.wants_first_deployment = false;
+            self.pending_focus = Some(id);
+        }
         is_changed |= self.apply_pending_focus(cx);
         if is_changed {
             cx.notify();
@@ -444,6 +486,14 @@ impl TopologyView {
         };
         self.needs_fit |= is_fresh;
         self.layout = Some((shape, group_by, layout));
+        // A node that left the graph cannot be under the pointer.
+        if self
+            .hovered
+            .as_ref()
+            .is_some_and(|id| !graph.nodes.iter().any(|node| node.id == *id))
+        {
+            self.hovered = None;
+        }
         self.build = Some(Ok(Rc::new(graph)));
         self.apply_fit();
         true
@@ -460,7 +510,14 @@ impl TopologyView {
             return;
         };
         let (width, height) = self.view_area();
-        self.viewport = Viewport::first_view(layout.extent, width, height);
+        let node_count = match &self.build {
+            Some(Ok(graph)) => graph.nodes.len(),
+            _ => 0,
+        };
+        // The graph starts to the right of the zoom panel.
+        self.viewport =
+            Viewport::first_view(layout.extent, width - CONTROLS_INSET, height, node_count)
+                .pan(CONTROLS_INSET, 0.);
         self.needs_fit = false;
         self.fit_waits_for_size = self.canvas_size.is_none();
     }
@@ -479,7 +536,15 @@ impl TopologyView {
         let (width, height) = self.canvas_size.unwrap_or(DEFAULT_CANVAS);
         let center = layout.rects[index].center();
         let key = graph.nodes[index].key.clone();
-        self.viewport = self.viewport.center_on(center, width, height);
+        // A node with an object opens the drawer, which covers the right of the canvas.
+        let free_width = if key.is_some() {
+            width - f32::from(DRAWER_WIDTH)
+        } else {
+            width
+        };
+        self.viewport = self
+            .viewport
+            .center_on(center, free_width.max(width / 2.), height);
         self.pending_focus = None;
         self.highlighted = (key.is_none()).then_some(id);
         self.with_shell(cx, |shell, cx| shell.select_on_topology(key, cx));
@@ -512,7 +577,8 @@ impl TopologyView {
     pub(crate) fn fit(&mut self, cx: &mut Context<Self>) {
         if let Some((_, _, layout)) = &self.layout {
             let (width, height) = self.view_area();
-            self.viewport = Viewport::fit(layout.extent, width, height);
+            self.viewport = Viewport::fit(layout.extent, width - CONTROLS_INSET, height)
+                .pan(CONTROLS_INSET, 0.);
         }
         self.needs_fit = false;
         cx.notify();
@@ -584,7 +650,28 @@ impl TopologyView {
             self.needs_fit = true;
         }
         self.apply_fit();
+        self.reveal_selected(cx);
         cx.notify();
+    }
+
+    /// The first view is made again once the canvas size is known, which may hide the selected
+    /// node behind the drawer: bring it into the free part.
+    fn reveal_selected(&mut self, cx: &App) {
+        let Some(key) = self.selected(cx) else {
+            return;
+        };
+        let Some(Ok(graph)) = &self.build else {
+            return;
+        };
+        let Some(id) = graph
+            .nodes
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&key))
+            .map(|node| node.id.clone())
+        else {
+            return;
+        };
+        self.reveal_node(&id);
     }
 
     pub(crate) fn zoom_by_wheel(
@@ -600,6 +687,39 @@ impl TopologyView {
         }
         self.viewport = self.viewport.zoom_at(x, y, steps);
         cx.notify();
+    }
+
+    /// The + and - buttons: zoom around the center of the canvas.
+    fn zoom_by_button(&mut self, steps: i32, cx: &mut Context<Self>) {
+        let (width, height) = self.canvas_size.unwrap_or(DEFAULT_CANVAS);
+        self.viewport = self.viewport.zoom_at(width / 2., height / 2., steps);
+        cx.notify();
+    }
+
+    /// The pointer entered or left the card of `id`. It repaints only when the hovered card
+    /// changes. During a drag the cards move under the pointer, so the change is recorded but not
+    /// painted: `finish_drag` repaints once.
+    fn set_hover(&mut self, id: NodeId, is_hovered: bool, cx: &mut Context<Self>) {
+        if is_hovered {
+            if self.hovered.as_ref() == Some(&id) {
+                return;
+            }
+            self.hovered = Some(id);
+        } else if self.hovered.as_ref() == Some(&id) {
+            // A leave that follows the enter of the next card finds a different one: ignored.
+            self.hovered = None;
+        } else {
+            return;
+        }
+        if matches!(self.drag, Drag::None) {
+            cx.notify();
+        }
+    }
+
+    fn clear_hover(&mut self, cx: &mut Context<Self>) {
+        if self.hovered.take().is_some() {
+            cx.notify();
+        }
     }
 
     fn press_canvas(
@@ -731,10 +851,46 @@ impl TopologyView {
             }
             Some(key) => {
                 self.highlighted = None;
+                self.reveal_node(id);
                 self.with_shell(cx, |shell, cx| shell.select_on_topology(Some(key), cx));
             }
             None => self.highlighted = Some(id.clone()),
         }
+    }
+
+    /// Pans the node into the part of the canvas the drawer leaves free, if it is not in it.
+    fn reveal_node(&mut self, id: &NodeId) {
+        let (Some(Ok(graph)), Some((_, _, layout))) = (&self.build, &self.layout) else {
+            return;
+        };
+        let Some(index) = graph.nodes.iter().position(|node| node.id == *id) else {
+            return;
+        };
+        let (width, height) = self.view_area();
+        let free_width = (width - f32::from(DRAWER_WIDTH)).max(width / 2.);
+        self.viewport =
+            self.viewport
+                .reveal(layout.rects[index], free_width, height, REVEAL_MARGIN);
+    }
+
+    /// Starts or stops the frame timer of the flow animation, as the canvas paints: the timer
+    /// runs only while an edge flows.
+    pub(crate) fn sync_flow(&mut self, wants_frames: bool, cx: &mut Context<Self>) {
+        if !wants_frames {
+            self.flow_timer = None;
+            return;
+        }
+        if self.flow_timer.is_some() {
+            return;
+        }
+        self.flow_timer = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(FLOW_FRAME).await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+            }
+        }));
     }
 
     pub(crate) fn minimap_press(&mut self, at: GraphPoint, cx: &mut Context<Self>) {
@@ -1024,7 +1180,7 @@ impl TopologyView {
         )
     }
 
-    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_body(&self, scale_factor: f32, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let centered = |text: SharedString| {
             v_flex()
@@ -1063,11 +1219,16 @@ impl TopologyView {
                 };
                 centered(text.into())
             }
-            Some(Ok(graph)) => self.render_canvas(Rc::clone(graph), cx),
+            Some(Ok(graph)) => self.render_canvas(Rc::clone(graph), scale_factor, cx),
         }
     }
 
-    fn render_canvas(&self, graph: Rc<TopologyGraph>, cx: &mut Context<Self>) -> AnyElement {
+    fn render_canvas(
+        &self,
+        graph: Rc<TopologyGraph>,
+        scale_factor: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some((_, _, layout)) = &self.layout else {
             return div().into_any_element();
         };
@@ -1084,18 +1245,40 @@ impl TopologyView {
         });
         let (width, height) = self.canvas_size.unwrap_or(DEFAULT_CANVAS);
         let viewport = self.viewport;
+        let visible = visible_nodes(&layout, viewport, width, height);
+        // A card the pointer left while it was scrolled out of view is not hovered any more.
+        let hovered = self
+            .hovered
+            .as_ref()
+            .and_then(|id| graph.nodes.iter().position(|node| node.id == *id))
+            .filter(|index| visible.contains(index));
+        // The drawer covers the right of the canvas: the minimap and the legend move left of it,
+        // and the minimap shrinks so it covers fewer cards.
+        let drawer = if selected_key.is_some() {
+            f32::from(DRAWER_WIDTH)
+        } else {
+            0.
+        };
+        let minimap_size = minimap_size(drawer > 0.);
+        let frame = CardFrame {
+            viewport: self.viewport,
+            scale_factor,
+            colors,
+        };
         let paint = CanvasPaint {
             graph: Rc::clone(&graph),
             layout: Rc::clone(&layout),
             viewport,
+            focus: hovered.or(selected),
             selected,
+            elapsed: self.created.elapsed(),
             colors,
             view: cx.weak_entity(),
             is_dragging: !matches!(self.drag, Drag::None | Drag::Minimap),
         };
-        let cards: Vec<AnyElement> = visible_nodes(&layout, viewport, width, height)
+        let cards: Vec<AnyElement> = visible
             .into_iter()
-            .map(|index| self.card(index, &graph, &layout, selected, cx))
+            .map(|index| self.card(index, &graph, &layout, &frame, selected, cx))
             .collect();
         let titles: Vec<AnyElement> = layout
             .bands
@@ -1104,27 +1287,32 @@ impl TopologyView {
                 let title = band.title.clone()?;
                 let (x, y) = viewport.to_screen(band.rect.origin);
                 let zoom = viewport.zoom();
-                let title = div()
+                let pill = div()
                     .absolute()
+                    .flex()
+                    .items_center()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(colors.card_border)
+                    .bg(colors.card)
+                    .text_color(colors.foreground)
                     .font_family(cx.theme().mono_font_family.clone())
                     .whitespace_nowrap()
                     .child(title);
                 // Zoomed out, the title keeps a readable size on the band edge, over the cards.
                 Some(if zoom >= MIN_TEXT_ZOOM {
-                    title
-                        .left(px(x + 10. * zoom))
-                        .top(px(y + 4. * zoom))
-                        .text_size(px(10. * zoom))
-                        .text_color(colors.muted_foreground)
+                    pill.left(px(x + TITLE_PILL_LEFT * zoom))
+                        .top(px(y + TITLE_PILL_TOP * zoom))
+                        .h(px(TITLE_PILL_HEIGHT * zoom))
+                        .px(px(TITLE_PILL_PADDING * zoom))
+                        .text_size(px(TITLE_SIZE * zoom))
                         .into_any_element()
                 } else {
-                    title
-                        .left(px(x + 4.))
-                        .top(px(y - 6.))
-                        .px_1()
-                        .bg(background)
+                    pill.left(px(x + 4.))
+                        .top(px(y - 9.))
+                        .h(px(LOW_ZOOM_TITLE_HEIGHT))
+                        .px_2()
                         .text_size(px(LOW_ZOOM_TITLE_SIZE))
-                        .text_color(colors.muted_foreground)
                         .into_any_element()
                 })
             })
@@ -1148,6 +1336,7 @@ impl TopologyView {
                     .track_focus(&self.focus_handle)
                     .on_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
                         if event.keystroke.key == "escape" {
+                            view.clear_hover(cx);
                             view.close_drawer(cx);
                         }
                     }))
@@ -1166,8 +1355,15 @@ impl TopologyView {
                     .child(graph_canvas(paint))
                     .children(titles)
                     .children(cards)
-                    .child(self.render_legend(colors, cx))
-                    .child(self.render_minimap(&graph, &layout, colors, cx)),
+                    .child(handle_canvas(
+                        Rc::clone(&graph),
+                        Rc::clone(&layout),
+                        viewport,
+                        colors,
+                    ))
+                    .child(self.render_controls(cx))
+                    .child(self.render_legend(colors, minimap_size.0 + drawer, cx))
+                    .child(self.render_minimap(&graph, &layout, colors, minimap_size, drawer, cx)),
             )
             .into_any_element()
     }
@@ -1177,10 +1373,13 @@ impl TopologyView {
         index: usize,
         graph: &TopologyGraph,
         layout: &TopologyLayout,
+        frame: &CardFrame,
         selected: Option<usize>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let node = &graph.nodes[index];
+        // A ghost says what its check found; every other card says its full name, which the card
+        // may have cut.
         let tooltip = (node.look == NodeLook::Ghost)
             .then(|| {
                 graph
@@ -1189,13 +1388,19 @@ impl TopologyView {
                     .find(|check| check.node == node.id)
                     .map(|check| SharedString::from(check.text.clone()))
             })
-            .flatten();
+            .flatten()
+            .unwrap_or_else(|| node.name.clone());
         let state = CardState {
             is_selected: selected == Some(index),
+            is_hovered: self.hovered.as_ref() == Some(&node.id),
             is_highlighted: self.highlighted.as_ref() == Some(&node.id),
             tooltip,
         };
-        node_card(index, node, layout.rects[index], self.viewport, &state, cx)
+        let id = node.id.clone();
+        node_card(index, node, layout.rects[index], frame, &state, cx)
+            .on_hover(cx.listener(move |view, is_hovered: &bool, _, cx| {
+                view.set_hover(id.clone(), *is_hovered, cx);
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, window, cx| {
@@ -1206,36 +1411,72 @@ impl TopologyView {
             .into_any_element()
     }
 
-    fn render_legend(&self, colors: CanvasColors, cx: &App) -> Div {
+    /// The zoom panel at the bottom left: zoom in, zoom out, and Fit (React Flow `Controls`).
+    fn render_controls(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
-        let mono = theme.mono_font_family.clone();
-        let entries = LEGEND.map(|(relation, glyph, text)| {
-            h_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .text_color(legend_color(relation, &colors))
-                        .child(glyph),
-                )
-                .child(div().text_color(theme.muted_foreground).child(text))
-        });
+        let button = |id: &'static str, icon: IconName, tip: &'static str| {
+            Button::new(id).ghost().xsmall().icon(icon).tooltip(tip)
+        };
         div()
             .absolute()
             .bottom_3()
-            .right(px(MINIMAP_WIDTH + 28.))
+            .left_3()
+            // A press on the panel must not start a pan of the canvas under it.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                h_flex()
-                    .gap_3()
-                    .px_2()
-                    .py_1()
+                v_flex()
+                    .p_0p5()
                     .rounded(px(6.))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.background)
-                    .font_family(mono)
-                    .text_size(px(10.))
-                    .children(entries),
+                    .shadow_sm()
+                    .child(
+                        button("topology-zoom-in", IconName::Plus, "Zoom in").on_click(
+                            cx.listener(|view, _, _, cx| {
+                                view.zoom_by_button(ZOOM_BUTTON_STEPS, cx);
+                            }),
+                        ),
+                    )
+                    .child(
+                        button("topology-zoom-out", IconName::Minus, "Zoom out").on_click(
+                            cx.listener(|view, _, _, cx| {
+                                view.zoom_by_button(-ZOOM_BUTTON_STEPS, cx);
+                            }),
+                        ),
+                    )
+                    .child(
+                        button("topology-fit", IconName::Maximize, "Fit")
+                            .on_click(cx.listener(|view, _, _, cx| view.fit(cx))),
+                    ),
             )
+    }
+
+    /// The legend, in the strip at the bottom that Fit keeps clear: a swatch drawn like a real
+    /// edge, and its meaning, for each relation.
+    fn render_legend(&self, colors: CanvasColors, inset: f32, cx: &App) -> Div {
+        let theme = cx.theme();
+        let mono = theme.mono_font_family.clone();
+        let entries = LEGEND.map(|(relation, text)| {
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(legend_swatch(relation, colors))
+                .child(div().text_color(theme.muted_foreground).child(text))
+        });
+        div().absolute().bottom_3().right(px(inset + 28.)).child(
+            h_flex()
+                .gap_4()
+                .px_3()
+                .py_1p5()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(colors.card_border)
+                .bg(theme.background)
+                .font_family(mono)
+                .text_size(px(LEGEND_TEXT_SIZE))
+                .children(entries),
+        )
     }
 
     fn render_minimap(
@@ -1243,6 +1484,8 @@ impl TopologyView {
         graph: &Rc<TopologyGraph>,
         layout: &Rc<TopologyLayout>,
         colors: CanvasColors,
+        size: (f32, f32),
+        drawer: f32,
         cx: &mut Context<Self>,
     ) -> Div {
         let theme = cx.theme();
@@ -1251,6 +1494,7 @@ impl TopologyView {
             layout: Rc::clone(layout),
             viewport: self.viewport,
             canvas: self.canvas_size.unwrap_or(DEFAULT_CANVAS),
+            size,
             colors,
             view: cx.weak_entity(),
             is_dragging: matches!(self.drag, Drag::Minimap),
@@ -1258,9 +1502,9 @@ impl TopologyView {
         div()
             .absolute()
             .bottom_3()
-            .right_3()
-            .w(px(MINIMAP_WIDTH))
-            .h(px(MINIMAP_HEIGHT))
+            .right(px(12. + drawer))
+            .w(px(size.0))
+            .h(px(size.1))
             .rounded(px(6.))
             .border_1()
             .border_color(theme.border)
@@ -1271,14 +1515,33 @@ impl TopologyView {
 }
 
 impl Render for TopologyView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let scale_factor = window.scale_factor();
+        if self._activation.is_none() {
+            self._activation = Some(cx.observe_window_activation(window, |_, _, cx| cx.notify()));
+        }
         v_flex()
             .size_full()
             .child(self.render_toolbar(cx))
             .children(self.render_note(cx))
             .children(self.render_export_error())
-            .child(v_flex().flex_1().min_h_0().child(self.render_body(cx)))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.render_body(scale_factor, cx)),
+            )
     }
+}
+
+/// The size of the minimap: full, or `COMPACT_MINIMAP_SCALE` of it while the drawer is open.
+fn minimap_size(is_drawer_open: bool) -> (f32, f32) {
+    let scale = if is_drawer_open {
+        COMPACT_MINIMAP_SCALE
+    } else {
+        1.
+    };
+    (MINIMAP_WIDTH * scale, MINIMAP_HEIGHT * scale)
 }
 
 /// `Saved to {file}`, plus `exported at {pct}%` when a PNG was cut below full size. An SVG has no
@@ -1292,6 +1555,15 @@ fn saved_detail(file_name: &str, scale: Option<f32>) -> String {
         ),
         None => format!("Saved to {file_name}"),
     }
+}
+
+/// The first Deployment node with an object behind it, in graph order.
+fn first_deployment(graph: &TopologyGraph) -> Option<NodeId> {
+    graph
+        .nodes
+        .iter()
+        .find(|node| node.kind == TopologyKind::Deployment && node.key.is_some())
+        .map(|node| node.id.clone())
 }
 
 /// Whether the object of an open drawer, if it is in `namespace`, is gone from a list that has
@@ -1405,122 +1677,5 @@ fn too_large_text(too_large: TooLarge, namespace: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::topology_fixtures::Fixture;
-
-    fn named(name: &str) -> NamespaceScope {
-        NamespaceScope::Named(name.to_owned())
-    }
-
-    #[test]
-    fn default_namespace_follows_the_scope() {
-        assert_eq!(default_namespace(&named("shop")), Some("shop".to_owned()));
-        let several = NamespaceScope::Several(vec!["a".to_owned(), "b".to_owned()]);
-        assert_eq!(default_namespace(&several), Some("a".to_owned()));
-        assert_eq!(default_namespace(&NamespaceScope::All), None);
-    }
-
-    #[test]
-    fn a_namespace_that_left_the_scope_resets_to_the_default() {
-        assert_eq!(
-            resolve_namespace(Some("shop"), &named("blog")),
-            Some("blog".to_owned())
-        );
-        assert_eq!(
-            resolve_namespace(Some("shop"), &NamespaceScope::All),
-            Some("shop".to_owned())
-        );
-        assert_eq!(resolve_namespace(None, &NamespaceScope::All), None);
-    }
-
-    #[test]
-    fn namespace_choices_list_the_scope_or_every_namespace() {
-        assert_eq!(namespace_choices(&named("shop"), None), ["shop"]);
-        let summary = |name: &str| NamespaceSummary {
-            name: name.to_owned(),
-            phase: cluster::NamespacePhase::Active,
-            created_at: None,
-            labels: Vec::new(),
-            deleting_since: None,
-            deletion_conditions: Vec::new(),
-        };
-        let loaded = [summary("zeta"), summary("alpha")];
-        assert_eq!(
-            namespace_choices(&NamespaceScope::All, Some(&loaded)),
-            ["alpha", "zeta"]
-        );
-        assert!(namespace_choices(&NamespaceScope::All, None).is_empty());
-    }
-
-    #[test]
-    fn a_cut_png_says_its_percentage() {
-        assert_eq!(saved_detail("a.png", None), "Saved to a.png");
-        assert_eq!(saved_detail("a.png", Some(1.)), "Saved to a.png");
-        assert_eq!(
-            saved_detail("a.png", Some(0.5)),
-            "Saved to a.png \u{b7} exported at 50%"
-        );
-        // An SVG is not scaled.
-        assert_eq!(saved_detail("a.SVG", Some(0.5)), "Saved to a.SVG");
-    }
-
-    #[test]
-    fn the_header_says_loading_too_large_or_the_count() {
-        assert_eq!(count_text("shop", None), "ns: shop \u{b7} loading\u{2026}");
-        assert_eq!(
-            count_text("shop", Some(&Err(TooLarge::Nodes(900)))),
-            "ns: shop \u{b7} too large"
-        );
-        let graph = Fixture::default().with_deployment("api", 1, 1).graph();
-        assert_eq!(
-            count_text("shop", Some(&Ok(Rc::new(graph)))),
-            "ns: shop \u{b7} 1 resources"
-        );
-    }
-
-    fn service_key(name: &str) -> ResourceKey {
-        ResourceKey::Kind {
-            kind: crate::resource_kind::ResourceKind::Services,
-            namespace: Some("shop".to_owned()),
-            name: name.to_owned(),
-        }
-    }
-
-    #[test]
-    fn a_selection_is_gone_only_from_a_feed_that_has_loaded() {
-        let fixture = Fixture::default().with_service("web", &[]);
-        let pods: Vec<PodSummary> = Vec::new();
-        fixture.with_rows(|rows| {
-            assert!(!is_selection_gone(&service_key("web"), "shop", &pods, rows));
-            assert!(is_selection_gone(&service_key("api"), "shop", &pods, rows));
-            // Another namespace is not this graph's business.
-            assert!(!is_selection_gone(&service_key("api"), "blog", &pods, rows));
-        });
-    }
-
-    #[test]
-    fn a_selection_waits_for_a_feed_that_is_not_ready() {
-        let fixture = Fixture::default().loading(TopologyKind::Service);
-        fixture.with_rows(|rows| {
-            assert!(!is_selection_gone(&service_key("web"), "shop", &[], rows));
-        });
-    }
-
-    #[test]
-    fn a_pod_is_gone_when_the_loaded_pods_lack_it() {
-        let pods = vec![crate::topology_fixtures::pod("web-1", &[], None)];
-        let key = |name: &str| ResourceKey::Pod {
-            namespace: "shop".to_owned(),
-            name: name.to_owned(),
-        };
-        assert!(!is_selection_gone(&key("web-1"), "shop", &pods, &[]));
-        assert!(is_selection_gone(&key("web-2"), "shop", &pods, &[]));
-    }
-
-    #[test]
-    fn too_large_states_name_their_limit() {
-        assert!(too_large_text(TooLarge::Objects(6_000), "shop").contains("5000"));
-        assert!(too_large_text(TooLarge::Nodes(900), "shop").contains("500"));
-    }
-}
+#[path = "topology_view_tests.rs"]
+mod topology_view_tests;
