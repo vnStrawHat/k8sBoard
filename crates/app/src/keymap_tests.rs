@@ -11,10 +11,8 @@ use crate::cluster_switcher::{
 
 /// Keys that a later spec binds. No binding of this spec may take one; the owner removes the key
 /// from this list in the change that binds it.
-const RESERVED_KEYS: [&str; 6] = [
+const RESERVED_KEYS: [&str; 4] = [
     "space",
-    "secondary-k",
-    ":",
     "secondary-enter",
     "secondary-shift-r",
     "secondary-s",
@@ -279,8 +277,9 @@ fn every_sheet_row_has_a_binding(cx: &mut TestAppContext) {
 fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
     bind_all(cx);
     let rows = shortcut_rows();
-    let without_row: [&dyn Action; 13] = [
+    let without_row: [&dyn Action; 14] = [
         &LeaveInput,
+        &PalettePreview,
         &SwitchToCluster2,
         &SwitchToCluster3,
         &SwitchToCluster4,
@@ -392,5 +391,60 @@ fn no_binding_uses_the_windows_or_super_key(cx: &mut TestAppContext) {
                 binding.action().name()
             );
         }
+    }
+}
+
+#[gpui_kit::test]
+fn ctrl_k_opens_the_palette_inside_text_fields(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for path in [&SHELL[..], &INPUT_PATH[..], &TABLE_PATH[..]] {
+        assert_eq!(
+            resolve("secondary-k", path, cx),
+            Some("k8sboard::OpenPalette"),
+            "{path:?}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn colon_opens_kind_mode_outside_text_fields_only(cx: &mut TestAppContext) {
+    bind_all(cx);
+    // A US keyboard sends the key `;` with shift and the character `:`.
+    let colon = Keystroke {
+        modifiers: Modifiers::shift(),
+        key: ";".to_owned(),
+        key_char: Some(":".to_owned()),
+    };
+    for path in [&SHELL[..], &TABLE_PATH[..]] {
+        assert_eq!(
+            resolve_typed(&colon, path, cx),
+            Some("k8sboard::OpenKindPalette"),
+            "{path:?}"
+        );
+    }
+    let name = resolve_typed(&colon, &INPUT_PATH, cx);
+    assert!(!is_app_action(name), "{name:?}");
+}
+
+#[gpui_kit::test]
+fn tab_previews_only_inside_the_palette_query(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let palette = ["Root", "Dialog", "Command", "Input"];
+    assert_eq!(
+        resolve("tab", &palette, cx),
+        Some("k8sboard::PalettePreview")
+    );
+    assert!(!is_app_action(resolve("tab", &SHELL, cx)));
+    assert!(!is_app_action(resolve("tab", &INPUT_PATH, cx)));
+}
+
+#[gpui_kit::test]
+fn palette_keys_leave_the_shell_keys_alone_inside_the_dialog(cx: &mut TestAppContext) {
+    bind_all(cx);
+    // The palette is a dialog outside `AppShell`: no single key reaches the table behind it.
+    let palette = ["Root", "Dialog", "Command", "Input"];
+    for key in ["j", "k", "l", "y", "enter", "?", "/"] {
+        let name = resolve(key, &palette, cx);
+        assert!(!is_app_action(name), "{key}: {name:?}");
     }
 }

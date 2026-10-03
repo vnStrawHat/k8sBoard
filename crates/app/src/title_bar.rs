@@ -1,6 +1,7 @@
 use cluster::NamespaceScope;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, TitleBar, h_flex,
@@ -14,9 +15,11 @@ use crate::cluster_session::namespaces_label;
 use crate::cluster_switcher::cluster_switcher as switcher_popover;
 use crate::environment::{environment_badge, environment_color};
 use crate::issue_board::IssueSummary;
+use crate::keymap::OpenPalette;
 use crate::namespace_picker::{PickerAnchor, namespace_picker as picker};
 use crate::settings::AppSettings;
 use crate::settings_window::OpenSettings;
+use crate::shortcut_sheet::row_keys;
 use crate::status_tone::tone_color;
 
 pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
@@ -37,6 +40,7 @@ pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoEl
                 .child(cluster_switcher(shell, cx))
                 .child(namespace_picker(shell, cx)),
         )
+        .child(search_box(cx))
         .child(
             h_flex()
                 .gap_2()
@@ -128,16 +132,52 @@ fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
     switcher_popover(trigger, shell, cx)
 }
 
+/// The search box of the middle slot (inventory T6): a click opens the command palette. It
+/// shrinks before the groups on either side do.
+fn search_box(cx: &Context<AppShell>) -> AnyElement {
+    let key = row_keys(&OpenPalette, cx).into_iter().next();
+    Button::new("palette-search")
+        .ghost()
+        .small()
+        .flex_1()
+        .min_w_0()
+        .max_w(px(280.))
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_center()
+                .text_color(cx.theme().muted_foreground)
+                .child(Icon::new(IconName::Search).size_4())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_left()
+                        .child("Search resources or run a command…"),
+                )
+                .children(key.map(Kbd::new)),
+        )
+        .on_click(cx.listener(|shell, _, window, cx| shell.open_palette("", window, cx)))
+        .into_any_element()
+}
+
+/// `ns: all`, `ns: kube-system`, or the shortened list of several: the title-bar label of a scope.
+pub(crate) fn scope_label(scope: &NamespaceScope) -> String {
+    match scope {
+        NamespaceScope::All => "ns: all".to_owned(),
+        NamespaceScope::Named(namespace) => format!("ns: {namespace}"),
+        NamespaceScope::Several(names) => format!("ns: {}", namespaces_label(names)),
+    }
+}
+
 fn namespace_picker(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
     let trigger = Button::new("namespace-picker").ghost().small();
     let Some(live) = shell.session().and_then(|session| session.read(cx).live()) else {
         return trigger.label("ns: —").disabled(true).into_any_element();
     };
-    let label = match &live.scope {
-        NamespaceScope::All => "ns: all".to_owned(),
-        NamespaceScope::Named(namespace) => format!("ns: {namespace}"),
-        NamespaceScope::Several(names) => format!("ns: {}", namespaces_label(names)),
-    };
+    let label = scope_label(&live.scope);
     let trigger = trigger.label(label).dropdown_caret(true);
     picker(PickerAnchor::TitleBar, trigger, shell, cx)
 }

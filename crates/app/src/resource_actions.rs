@@ -159,7 +159,7 @@ pub(crate) fn key_availability(
 
 /// `key_availability` with what it reads from the live cluster passed in: the pod of a pod subject
 /// (`None` when its row is gone) and the access state.
-fn key_availability_of(
+pub(crate) fn key_availability_of(
     action: ResourceAction,
     subject: &ResourceKey,
     pod: Option<&PodSummary>,

@@ -28,6 +28,7 @@ Options:
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
                          screen to open (default: overview)
+  --palette <text>       open the command palette with <text> typed (for example :po or > rest)
   --window-width <px>    window width, 800 to 3840 (default: 1320)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
@@ -342,6 +343,8 @@ pub(crate) struct LaunchOptions {
     /// `--window-width`: the window width in pixels, within `WINDOW_WIDTH_RANGE`; the default
     /// width without it.
     pub(crate) window_width: Option<u16>,
+    /// `--palette`: the command palette opens with this text typed, once the session is live.
+    pub(crate) palette: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -367,6 +370,7 @@ pub(crate) fn parse_launch_options(
         screen: LaunchScreen::Overview,
         screenshot: None,
         window_width: None,
+        palette: None,
     };
     while let Some(flag) = args.next() {
         if flag == "--help" {
@@ -395,6 +399,7 @@ pub(crate) fn parse_launch_options(
             }
             "--screenshot" => options.screenshot = Some(PathBuf::from(value()?)),
             "--window-width" => options.window_width = Some(parse_window_width(&value()?)?),
+            "--palette" => options.palette = Some(value()?),
             _ => return Err(format!("unknown flag '{flag}'")),
         }
     }

@@ -14,6 +14,9 @@ gpui_kit::actions!(
     k8sboard,
     [
         ShowShortcuts,
+        OpenPalette,
+        OpenKindPalette,
+        PalettePreview,
         FocusQuickFilter,
         SelectNextRow,
         SelectPreviousRow,
@@ -57,6 +60,9 @@ const TABLE: &str = "AppShell > DataTable";
 const FIELDS: [&str; 3] = ["QuickFilter > Input", "Drawer > Input", "LogDock > Input"];
 /// Only the Settings window has this context, so Ctrl O imports there and nowhere else.
 const SETTINGS_WINDOW: &str = "SettingsWindow";
+/// The palette's query input. The palette is a dialog outside `AppShell`, so only its own keys
+/// apply there.
+const PALETTE_INPUT: &str = "Command > Input";
 
 /// Registers every binding of the app except the switcher popover's own keys
 /// (`cluster_switcher::bind_keys`). It runs after `gpui_kit::init`, so at equal depth these win
@@ -64,6 +70,7 @@ const SETTINGS_WINDOW: &str = "SettingsWindow";
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         // Chords.
+        KeyBinding::new("secondary-k", OpenPalette, Some(WINDOW)),
         KeyBinding::new("secondary-n", OpenNamespacePicker, Some(WINDOW)),
         KeyBinding::new("ctrl-`", ToggleDock, Some(WINDOW)),
         KeyBinding::new("secondary-shift-m", ToggleDockZoom, Some(WINDOW)),
@@ -85,6 +92,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-o", ImportKubeconfig, Some(SETTINGS_WINDOW)),
         // Single keys.
         KeyBinding::new("?", ShowShortcuts, Some(WORKSPACE)),
+        KeyBinding::new(":", OpenKindPalette, Some(WORKSPACE)),
         KeyBinding::new("/", FocusQuickFilter, Some(WORKSPACE)),
         KeyBinding::new("j", SelectNextRow, Some(WORKSPACE)),
         KeyBinding::new("k", SelectPreviousRow, Some(WORKSPACE)),
@@ -117,6 +125,9 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("pageup", SelectPreviousPage, Some(TABLE)),
         KeyBinding::new("pagedown", SelectNextPage, Some(TABLE)),
         KeyBinding::new("escape", Dismiss, Some(TABLE)),
+        // The palette: Tab previews the highlighted resource, which the kit would otherwise use to
+        // move focus out of the query.
+        KeyBinding::new("tab", PalettePreview, Some(PALETTE_INPUT)),
     ]);
     cx.bind_keys(
         FIELDS
@@ -176,6 +187,8 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
     use ShortcutGroup::{Dock, Drawer, General, SelectedResource, Tables};
     vec![
         row(General, "Show all shortcuts", ShowShortcuts),
+        row(General, "Command palette", OpenPalette),
+        row(General, "Jump to a resource kind", OpenKindPalette),
         row(General, "Choose namespace", OpenNamespacePicker),
         row(General, "Open cluster switcher", OpenClusterSwitcher),
         row(General, "Switch to cluster 1–9", SwitchToCluster1),

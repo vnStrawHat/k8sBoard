@@ -964,6 +964,40 @@ impl ResourceKind {
         )
     }
 
+    /// The kubectl short names the command palette accepts after `:`, besides the plural and
+    /// singular. Exhaustive, so a new kind has to name its own; a custom kind has none.
+    pub(crate) fn short_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Namespaces => &["ns"],
+            Self::Events => &["ev"],
+            Self::Deployments => &["deploy"],
+            Self::StatefulSets => &["sts"],
+            Self::DaemonSets => &["ds"],
+            Self::ReplicaSets => &["rs"],
+            Self::Jobs => &["job"],
+            Self::CronJobs => &["cj"],
+            Self::Services => &["svc"],
+            Self::Ingresses => &["ing"],
+            Self::ConfigMaps => &["cm"],
+            Self::NetworkPolicies => &["netpol"],
+            Self::PodDisruptionBudgets => &["pdb"],
+            Self::HorizontalPodAutoscalers => &["hpa"],
+            Self::ResourceQuotas => &["quota"],
+            Self::PersistentVolumeClaims => &["pvc"],
+            Self::PersistentVolumes => &["pv"],
+            Self::StorageClasses => &["sc"],
+            Self::Roles => &["role"],
+            Self::ClusterRoles => &["cr"],
+            Self::RoleBindings => &["rb"],
+            Self::ClusterRoleBindings => &["crb"],
+            Self::ServiceAccounts => &["sa"],
+            Self::Secrets => &["secret"],
+            Self::HelmReleases => &["helm"],
+            Self::Crds => &["crd"],
+            Self::Custom(_) => &[],
+        }
+    }
+
     pub(crate) fn from_object_kind(text: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -1149,6 +1183,18 @@ mod tests {
             assert_eq!(ResourceKind::from_label(kind.label()), Some(kind));
         }
         assert_eq!(ResourceKind::from_label("Pods"), None);
+    }
+
+    #[test]
+    fn short_names_cover_every_kind() {
+        let mut seen = std::collections::HashSet::new();
+        for kind in ResourceKind::ALL {
+            let names = kind.short_names();
+            assert!(!names.is_empty(), "{kind:?} has no short name");
+            for name in names {
+                assert!(seen.insert(*name), "{name} repeats");
+            }
+        }
     }
 
     #[test]

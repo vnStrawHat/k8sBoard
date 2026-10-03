@@ -11,7 +11,7 @@
 | T3 | Multi-select clusters, "View N clusters", `prod-eu-1 +1` label | Missing | — | 0027 |
 | T4 | Environment badge and env-colored top border (riskiest env) | Partial (single cluster) | 0024 `environment.rs`, `title_bar.rs` | riskiest env of several clusters 0027 |
 | T5 | Namespace picker (wireframe shows several namespaces: `ns: payments, web`) | Partial | 0003 (one or all) | multi-namespace → 0009 |
-| T6 | Search box "Search resources or run a command… Ctrl K" | Missing | — | 0029 |
+| T6 | Search box "Search resources or run a command… Ctrl K" | Done | 0029 (`title_bar.rs` middle slot; click opens the palette) | — |
 | T7 | Read-only lock badge | Partial | 0003 (static) | per-cluster toggle, Ctrl Shift R → 0030 |
 | T8 | Issues button `⚑ 4` | Done | 0020 | — |
 | T9 | Settings button ⚙ | Done | 0025 (opens the Settings window, Ctrl ,) | — |
@@ -78,8 +78,8 @@
 
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
-| P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Missing | 0029 |
-| P2 | Keyboard map (22 bindings) and `?` cheat sheet | Done (0028); `:` and Ctrl K → 0029, mutating letters stay gated until 0031–0036 | `keymap.rs`, `shortcut_sheet.rs` |
+| P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Done (0029: own scorer, loaded lists only, row actions on the cursor row, `@` single switch, Tab moves the cursor only; no action × search-hit pairs, no Ctrl ⏎ (0032), no carried namespace, no match highlighting) | `command_palette.rs`, `palette_search.rs`, `fuzzy_score.rs` |
+| P2 | Keyboard map (22 bindings) and `?` cheat sheet | Done (0028; `:` and Ctrl K bound by 0029), mutating letters stay gated until 0031–0036 | `keymap.rs`, `shortcut_sheet.rs` |
 | S1 | Settings window (W2) as a separate OS window, single instance | Done | 0025 |
 | S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (no drag order) | 0025 |
 | S3 | Add cluster: import file, watch folder, paste YAML | Partial (no watch folder) | 0025 |

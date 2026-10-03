@@ -1116,3 +1116,193 @@ fn row_keys_do_nothing_on_topology(cx: &mut TestAppContext) {
         assert!(!shell.drawer.is_open);
     });
 }
+
+// ---- Command palette ----
+
+/// The text of the focused input, or `None` when no input holds the focus.
+fn focused_text(window: WindowHandle<Root>, cx: &mut TestAppContext) -> Option<String> {
+    cx.update_window(window.into(), |_, window, cx| {
+        window
+            .focused_input(cx)
+            .map(|input| input.value(cx).to_string())
+    })
+    .expect("the window is open")
+}
+
+fn type_text(window: WindowHandle<Root>, text: &str, cx: &mut TestAppContext) {
+    cx.update_window(window.into(), |_, window, cx| window.input(text, cx))
+        .expect("the window is open");
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn ctrl_k_opens_the_palette_dialog(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    render(window, cx);
+    assert!(!has_dialog(window, cx));
+    press(window, "secondary-k", cx);
+    assert!(has_dialog(window, cx));
+    // The query input holds the focus, and it is empty.
+    assert_eq!(focused_text(window, cx).as_deref(), Some(""));
+    // The shell behind the scrim still has its own focus handle, which commands dispatch on.
+    shell.read_with(cx, |shell, _| assert_eq!(shell.screen, Screen::Overview));
+}
+
+#[gpui_kit::test]
+fn colon_opens_the_palette_seeded_with_a_colon(cx: &mut TestAppContext) {
+    let (window, _) = open_shell(cx);
+    render(window, cx);
+    press(window, ":", cx);
+    assert!(has_dialog(window, cx));
+    assert_eq!(focused_text(window, cx).as_deref(), Some(":"));
+}
+
+#[gpui_kit::test]
+fn escape_on_the_seeded_colon_closes(cx: &mut TestAppContext) {
+    let (window, _) = open_shell(cx);
+    render(window, cx);
+    press(window, ":", cx);
+    press(window, "escape", cx);
+    assert!(!has_dialog(window, cx));
+    // After typing, the kit rule stands: Esc clears the query first.
+    press(window, ":", cx);
+    type_text(window, "p", cx);
+    assert_eq!(focused_text(window, cx).as_deref(), Some(":p"));
+    press(window, "escape", cx);
+    assert!(has_dialog(window, cx));
+    assert_eq!(focused_text(window, cx).as_deref(), Some(""));
+}
+
+#[gpui_kit::test]
+fn escape_clears_the_query_then_closes(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    render(window, cx);
+    press(window, "secondary-k", cx);
+    type_text(window, "x", cx);
+    assert_eq!(focused_text(window, cx).as_deref(), Some("x"));
+    press(window, "escape", cx);
+    assert!(has_dialog(window, cx));
+    assert_eq!(focused_text(window, cx).as_deref(), Some(""));
+    press(window, "escape", cx);
+    assert!(!has_dialog(window, cx));
+    // The focus returns to where it was: the shell root.
+    assert_eq!(focus_of(window, &shell, cx), ROOT);
+}
+
+#[gpui_kit::test]
+fn the_palette_survives_renders_with_its_query_and_focus(cx: &mut TestAppContext) {
+    let (window, _) = open_shell(cx);
+    render(window, cx);
+    press(window, "secondary-k", cx);
+    type_text(window, "x", cx);
+    // A new entity per render would lose the typed text and the focus.
+    for _ in 0..3 {
+        render(window, cx);
+    }
+    assert_eq!(focused_text(window, cx).as_deref(), Some("x"));
+}
+
+#[gpui_kit::test]
+fn single_keys_do_not_reach_the_shell_behind_the_palette(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    render(window, cx);
+    press(window, "secondary-k", cx);
+    // `j` is typed into the query; it must not move a cursor, and `?` must not open the sheet.
+    type_text(window, "j", cx);
+    assert_eq!(focused_text(window, cx).as_deref(), Some("j"));
+    shell.read_with(cx, |shell, _| assert_eq!(shell.selected, None));
+}
+
+#[gpui_kit::test]
+fn the_palette_snapshot_of_a_shell_without_a_session_lists_commands_and_screens(
+    cx: &mut TestAppContext,
+) {
+    let (window, shell) = open_shell(cx);
+    render(window, cx);
+    let snapshot = shell.read_with(cx, |shell, cx| shell.palette_snapshot(true, cx));
+    assert!(!snapshot.context.has_session);
+    assert!(snapshot.context.scope_label.is_none());
+    assert!(snapshot.entries.iter().all(|entry| matches!(
+        entry.target,
+        crate::palette_search::PaletteTarget::Command(_)
+            | crate::palette_search::PaletteTarget::Screen(_)
+    )));
+}
+
+#[gpui_kit::test]
+fn tab_previews_nothing_without_a_session(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    render(window, cx);
+    let key = ResourceKey::Pod {
+        namespace: "shop".to_owned(),
+        name: "api-0".to_owned(),
+    };
+    shell.update(cx, |shell, cx| {
+        assert!(!shell.can_preview_row(&key, cx));
+        shell.preview_resource(&key, cx);
+        assert_eq!(shell.selected, None);
+        assert!(!shell.drawer.is_open);
+    });
+}
+
+#[gpui_kit::test]
+fn confirming_a_kind_opens_its_screen_and_closes_the_palette(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    render(window, cx);
+    press(window, ":", cx);
+    type_text(window, "po", cx);
+    press(window, "enter", cx);
+    assert!(!has_dialog(window, cx));
+    shell.read_with(cx, |shell, _| assert_eq!(shell.screen, Screen::Pods));
+}
+
+#[gpui_kit::test]
+fn confirming_a_command_runs_the_handler_of_its_key(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    render(window, cx);
+    press(window, "secondary-k", cx);
+    type_text(window, "cluster switcher", cx);
+    press(window, "enter", cx);
+    assert!(!has_dialog(window, cx));
+    // The same handler as Ctrl Shift C: the switcher popover opens.
+    shell.read_with(cx, |shell, _| assert!(shell.switcher().is_open()));
+}
+
+#[gpui_kit::test]
+fn a_disabled_command_never_runs(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    render(window, cx);
+    let mode_before = shell.read_with(cx, |shell, cx| shell.log_dock.read(cx).mode());
+    press(window, "secondary-k", cx);
+    // The dock has no tab, so this command is disabled with its reason.
+    type_text(window, "> toggle the dock", cx);
+    assert_eq!(
+        focused_text(window, cx).as_deref(),
+        Some("> toggle the dock")
+    );
+    press(window, "enter", cx);
+    // The palette stays open and the dock handler never ran.
+    assert!(has_dialog(window, cx));
+    shell.read_with(cx, |shell, cx| {
+        assert!(!shell.log_dock.read(cx).has_tabs());
+        assert_eq!(shell.log_dock.read(cx).mode(), mode_before);
+    });
+}
+
+#[gpui_kit::test]
+fn the_title_bar_search_box_opens_the_palette(cx: &mut TestAppContext) {
+    let (window, _) = open_shell(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    render(window, cx);
+    assert!(!has_dialog(window, cx));
+    cx.update_window(window.into(), |_, window, cx| {
+        window.click("palette-search", cx)
+    })
+    .expect("the window is open");
+    cx.run_until_parked();
+    assert!(has_dialog(window, cx));
+    assert_eq!(focused_text(window, cx).as_deref(), Some(""));
+}

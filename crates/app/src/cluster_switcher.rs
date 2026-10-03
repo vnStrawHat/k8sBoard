@@ -498,7 +498,7 @@ fn footer(content: &SwitcherContent, window: &Window, cx: &App) -> AnyElement {
 }
 
 /// `Live · 38 ms`, `Unreachable`, and so on (decision 12 of the spec).
-fn health_text(health: RowHealth) -> String {
+pub(crate) fn health_text(health: RowHealth) -> String {
     match health {
         RowHealth::Live(latency) => format!("Live · {} ms", latency_millis(latency)),
         RowHealth::Reachable(latency) => format!("Reachable · {} ms", latency_millis(latency)),
@@ -510,7 +510,7 @@ fn health_text(health: RowHealth) -> String {
     }
 }
 
-fn health_color(health: RowHealth, cx: &App) -> gpui_kit::Hsla {
+pub(crate) fn health_color(health: RowHealth, cx: &App) -> gpui_kit::Hsla {
     match health {
         RowHealth::Live(_) | RowHealth::Reachable(_) => tone_color(StatusTone::Ok, cx),
         RowHealth::Connecting | RowHealth::Interrupted | RowHealth::Checking => {

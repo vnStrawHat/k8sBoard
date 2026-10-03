@@ -48,7 +48,7 @@ The palette closes first (`window.close_dialog(cx)`; the kit restores the previo
 
 | Target | Runs |
 |---|---|
-| `Command(action)`, `RowAction(a)` | `shell_focus.dispatch_action(&*action, window, cx)` on the `AppShell` root `FocusHandle` (gpui-pre `window.rs:628`): the same 0028 handler as the key, so the cursor, gates, and notices apply unchanged. `RowAction(a)` dispatches `keymap::action_for(a)` (below) |
+| `Command(action)`, `RowAction(a)` | `shell_focus.dispatch_action(&*action, window, cx)` on the `AppShell` root `FocusHandle` (gpui-pre `window.rs:628`): the same 0028 handler as the key, so the cursor, gates, and notices apply unchanged. `RowAction(a)` dispatches `a.key_action()` (below) |
 | `Screen(s)` | `shell.show_screen(s, cx)` |
 | `Resource(key)` | `shell.reveal(key, cx)` (0028: opens the drawer; clears a filter that hides the row) |
 | `Namespace(scope)` | `shell.set_namespace(scope, cx)` |
@@ -56,16 +56,16 @@ The palette closes first (`window.close_dialog(cx)`; the kit restores the previo
 
 The kit items carry **no** `.action(..)`: the kit would dispatch from the dialog's focus path, which is outside `AppShell` and reaches no handler (decision 11).
 
-## Row action → key action (`keymap.rs`)
+## Row action → key action (`resource_actions.rs`)
 
 ```rust
-/// The 0028 unit action bound to a row action's key; `None` for a row action without a key.
-pub(crate) fn action_for(action: ResourceAction) -> Option<Box<dyn Action>>;
+/// The 0028 unit action bound to a row action's key; exhaustive, so a new variant must name one.
+impl ResourceAction { pub(crate) fn key_action(self) -> Box<dyn Action>; }
 ```
 
-- Lives in `keymap.rs` next to the 0028 `actions!` list, an exhaustive `match`. Today every variant maps: `ViewLogs`, `ViewYaml`, `CopyName`, `PortForward`, `Cordon`, `Drain`, `EditYaml`, `RestartRollout`, `Scale`, `Delete` → their same-named actions.
+- `ResourceAction::key_action()` lives in `resource_actions.rs`, an exhaustive `match`; no `keymap::action_for` is added. Today every variant maps: `ViewLogs`, `ViewYaml`, `CopyName`, `PortForward`, `Cordon`, `Drain`, `EditYaml`, `RestartRollout`, `Scale`, `Delete` → their same-named actions.
 - `OpenShell` **and** `OpenNodeShell` → `OpenShell` (the S key); the 0028 handler picks pod or node from the cursor subject.
-- A row action with no `action_for` is not offered in the palette (later variants without a key, for example 0032 Roll back, add one first). Test `every_offered_row_action_maps`.
+- A later variant without a key must add one to `key_action` first (compiler-enforced). Test `every_offered_row_action_maps`, in `palette_search_tests.rs`.
 
 ## Mutating actions (W9 note 3)
 

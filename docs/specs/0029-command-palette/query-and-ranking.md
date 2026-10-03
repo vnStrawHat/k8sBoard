@@ -50,6 +50,7 @@ pub(crate) fn fuzzy_score(needle: &str, haystack: &str) -> Option<u32>;
   4. index 0 counts as a word start **once** (no extra bonus for being both). Saturating arithmetic.
 - `// ponytail: greedy alignment, not optimal (no DP); switch to a Smith-Waterman pass or nucleo if users report misses.`
 - Chars compare with `eq_ignore_ascii_case`; non-ASCII chars compare exactly (Kubernetes names are ASCII).
+- A token matches only if it is a contiguous run of the field, or its first matched character is a word start: `rest` is a subsequence of `previous dock tab` but is not listed (`fuzzy_score_rejects_scattered_mid_word_hits`). ASCII text is compared by bytes without allocation.
 
 ## Entry score
 

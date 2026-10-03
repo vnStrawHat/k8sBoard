@@ -12,6 +12,7 @@ use crate::launch_options::LaunchScreen;
 #[cfg(feature = "screenshot")]
 use {
     crate::app_shell::AppShell,
+    gpui_kit::component::WindowExt as _,
     std::{cell::Cell, path::PathBuf, rc::Rc, time::Duration},
 };
 
@@ -297,8 +298,10 @@ async fn capture_when_settled(
     }
     image.save(&request.path)?;
     // An open popover leaves its input focused, and the blink timer of a focused input is a handle the
-    // leak check of this build reports at exit. Closing the switcher moves the focus back first.
+    // leak check of this build reports at exit. Closing the switcher moves the focus back first, and
+    // so does closing the dialogs: the command palette leaves its query input focused.
     shell.update(cx, |shell, cx| shell.close_cluster_switcher(cx));
+    window.update(cx, |_, window, cx| window.close_all_dialogs(cx))?;
     window.update(cx, |_, window, _| window.refresh())?;
     cx.background_executor().timer(SETTLE_DELAY).await;
     if is_settled {

@@ -33,7 +33,7 @@
 | 3 | `resource_entries_carry_name_and_status_only` | a ConfigMap row with cell text `secret-ish` and a label: query `secret-ish` → no match. Positive control: a row named `api-config` matches `api-conf`, and its label and detail are exactly `api-config` and `{namespace}/api-config`; `status` is the `StatusLabel` |
 | 3 | `row_actions_follow_key_availability` | cursor pod: View logs enabled, Edit YAML disabled "Read-only mode"; no cursor → no row actions |
 | 3 | `row_action_detail_names_the_cursor_object` | `deployment/payments-api` |
-| 3 | `every_offered_row_action_maps` (`keymap_tests.rs`) | each `ResourceAction` that `key_availability` can offer has `action_for` = `Some`; `OpenShell` and `OpenNodeShell` → `OpenShell` (by `name()`) |
+| 3 | `every_offered_row_action_maps` (`palette_search_tests.rs`) | each `ResourceAction` that `key_availability` can offer maps through `key_action` to its same-named action; `OpenShell` and `OpenNodeShell` → `OpenShell` (by `name()`) |
 | 3 | `cluster_mode_lists_switcher_rows_in_order` | 0026 rows, active marked |
 | 3 | `caps_cut_each_group_and_count_the_rest` | 60 matching pods → 50 kept, "+10 more" |
 | 3 | `ranking_is_stable_for_equal_scores` | source order kept |

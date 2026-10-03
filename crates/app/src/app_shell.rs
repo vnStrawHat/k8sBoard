@@ -37,6 +37,7 @@ use crate::cluster_switcher_rows::{
     HighlightStep, SwitcherSection, SwitcherSegment, connected_count, move_highlight, nth_cluster,
     row_count, switcher_sections, visible_sections,
 };
+use crate::command_palette::{ActiveCluster, PaletteContext, PaletteSnapshot, open_palette};
 use crate::custom_kind::{CustomKind, CustomKindCache};
 use crate::drawer::{
     ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab, MonitorCache, MonitorKey,
@@ -48,7 +49,9 @@ use crate::helm_release_view::{
     HelmReleaseView, HistoryState, ShowLatest, ValuesLayout, earlier_revision, helm_subject,
 };
 use crate::issue_table::IssueTableDelegate;
-use crate::keymap::{FocusQuickFilter, OpenNamespacePicker, ShowShortcuts};
+use crate::keymap::{
+    FocusQuickFilter, OpenKindPalette, OpenNamespacePicker, OpenPalette, ShowShortcuts,
+};
 use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
@@ -62,6 +65,9 @@ use crate::node_table::NodeTableDelegate;
 use crate::object_events::{SubjectChange, event_subject, subject_change};
 use crate::overview::OverviewState;
 use crate::overview_report::live_report;
+use crate::palette_search::{
+    PaletteInput, PaletteSession, lists_resources, palette_entries, parse_query,
+};
 use crate::permissions_view::PermissionsView;
 use crate::pod_drawer::selected_container_index;
 use crate::pod_table::PodTableDelegate;
@@ -92,7 +98,7 @@ use crate::table_selection::{
 };
 use crate::table_sort::next_sort;
 use crate::table_view::{FilteredTable, RowCheck, TableView};
-use crate::title_bar::title_bar;
+use crate::title_bar::{scope_label, title_bar};
 use crate::topology_graph::{NodeId, TopologyKind};
 use crate::topology_view::TopologyView;
 use crate::traffic_test_view::{TrafficTestView, traffic_defaults};
@@ -253,6 +259,8 @@ pub(crate) struct AppShell {
     _switcher_filter_events: Subscription,
     /// `--screen switcher`: the popover opens once the session is live.
     pending_switcher_launch: bool,
+    /// `--palette`: the query the palette opens with once the session is live.
+    pending_palette_launch: Option<String>,
     /// Test hook: whether the old session was gone each time a deferred connect started.
     #[cfg(test)]
     old_session: Option<gpui_kit::WeakEntity<ClusterSession>>,
@@ -434,6 +442,7 @@ impl AppShell {
             switcher: ClusterSwitcherState::new(switcher_filter),
             _switcher_filter_events: switcher_filter_events,
             pending_switcher_launch: options.screen == LaunchScreen::Switcher,
+            pending_palette_launch: options.palette.clone(),
             #[cfg(test)]
             old_session: None,
             #[cfg(test)]
@@ -2922,6 +2931,7 @@ impl AppShell {
                     .is_some_and(|session| session.read(cx).is_topology_pending())
                     || !self.topology.read(cx).has_build()),
             is_dialog_pending: self.pending_dialog_launch.is_some()
+                || self.pending_palette_launch.is_some()
                 || self.who_can.as_ref().is_some_and(|view| {
                     view.read_with(cx, |view, cx| view.is_pending(cx))
                         .unwrap_or(false)
@@ -2957,6 +2967,153 @@ impl AppShell {
                             || !live.metrics.kubelet.targets().summary_nodes.is_empty(),
                     )
                 }),
+        }
+    }
+
+    // ---- command palette ----
+
+    /// Opens the palette with `initial` typed. The snapshot is taken here because the palette
+    /// cannot read the shell while this handler holds it.
+    pub(crate) fn open_palette(
+        &mut self,
+        initial: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The popovers share the window with the dialog: a popover left open would keep its input
+        // and its keys.
+        self.close_cluster_switcher(cx);
+        self.namespace_picker.dismiss();
+        let wants_resources = lists_resources(&parse_query(initial));
+        let snapshot = self.palette_snapshot(wants_resources, cx);
+        let focus = self.focus_handle.clone();
+        open_palette(initial, &cx.entity(), snapshot, focus, window, cx);
+    }
+
+    /// `--palette`: opens once the session is live, the launch row is selected, and the list the
+    /// screen shows has loaded. It runs from `render` because a dialog needs a window.
+    fn open_pending_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_palette_launch.is_none()
+            || self.pending_launch_screen.is_some()
+            || self.is_shown_list_loading(cx)
+        {
+            return;
+        }
+        let Some(query) = self.pending_palette_launch.take() else {
+            return;
+        };
+        self.open_palette(&query, window, cx);
+    }
+
+    /// Whether there is no session yet or the list of the open screen has not loaded.
+    fn is_shown_list_loading(&self, cx: &App) -> bool {
+        let Some(live) = self.live(cx) else {
+            return true;
+        };
+        match self.screen {
+            Screen::Pods => live.pods.is_loading(),
+            Screen::Nodes => live.nodes.is_loading(),
+            Screen::Kind(kind) => live
+                .kind_list(kind)
+                .is_none_or(|explorer| explorer.list.is_loading()),
+            Screen::Overview | Screen::Issues | Screen::Topology => false,
+        }
+    }
+
+    /// What the palette lists now, read from memory only: no list, watch, or request starts here.
+    pub(crate) fn palette_snapshot(&self, wants_resources: bool, cx: &App) -> PaletteSnapshot {
+        let sections = self.all_switcher_sections(cx);
+        let live = self.live(cx);
+        let session = live.map(|live| PaletteSession {
+            scope: &live.scope,
+            access: &live.access,
+            namespaces: live.namespaces.items(),
+            pods: live.pods.items(),
+            nodes: live.nodes.items(),
+            kind_rows: self
+                .screen
+                .kind()
+                .and_then(|kind| Some((kind, live.kind_list(kind)?.list.items()))),
+        });
+        let input = PaletteInput {
+            screen: self.screen,
+            cursor: self.selected.as_ref(),
+            has_dock_tabs: self.log_dock.read(cx).has_tabs(),
+            include_resources: wants_resources,
+            session,
+            clusters: &sections,
+        };
+        PaletteSnapshot {
+            entries: palette_entries(&input),
+            context: PaletteContext {
+                screen: self.screen,
+                has_session: live.is_some(),
+                cluster: self.active_profile(cx).map(|profile| ActiveCluster {
+                    environment: profile.environment,
+                    name: profile.display_name.into(),
+                }),
+                scope_label: live.map(|live| scope_label(&live.scope).into()),
+            },
+        }
+    }
+
+    /// The table row that shows `key` on the open screen; `None` for another screen, a row the
+    /// list lacks, or a row the filter hides.
+    fn shown_row_of(&self, key: &ResourceKey, cx: &App) -> Option<usize> {
+        if key.screen() != self.screen {
+            return None;
+        }
+        let live = self.live(cx)?;
+        match key {
+            ResourceKey::Pod { .. } => {
+                let item = live.pods.items().iter().position(|pod| key.is_pod(pod))?;
+                self.row_of_item(&self.pod_table, item, cx)
+            }
+            ResourceKey::Node { .. } => {
+                let item = live
+                    .nodes
+                    .items()
+                    .iter()
+                    .position(|node| key.is_node(node))?;
+                self.row_of_item(&self.node_table, item, cx)
+            }
+            ResourceKey::Kind { kind, .. } => {
+                let rows = live.kind_list(*kind)?.list.items();
+                let item = rows.iter().position(|row| key.is_row(*kind, row))?;
+                self.row_of_item(&self.kind_table, item, cx)
+            }
+        }
+    }
+
+    /// Whether the Tab preview applies to `key`: it is a row of the open screen's filtered table,
+    /// and no drawer is open (an open drawer would follow the cursor and open on the new row).
+    pub(crate) fn can_preview_row(&self, key: &ResourceKey, cx: &App) -> bool {
+        !self.drawer.is_open && self.shown_row_of(key, cx).is_some()
+    }
+
+    /// Tab in the palette: the table cursor moves to `key`. The screen does not change and
+    /// nothing starts; with a drawer open nothing happens at all.
+    pub(crate) fn preview_resource(&mut self, key: &ResourceKey, cx: &mut Context<Self>) {
+        if !self.can_preview_row(key, cx) {
+            return;
+        }
+        let Some(row) = self.shown_row_of(key, cx) else {
+            return;
+        };
+        self.change_selection(Some(key.clone()), cx);
+        match key {
+            ResourceKey::Pod { .. } => {
+                let table = self.pod_table.clone();
+                self.select_table_row(&table, row, cx);
+            }
+            ResourceKey::Node { .. } => {
+                let table = self.node_table.clone();
+                self.select_table_row(&table, row, cx);
+            }
+            ResourceKey::Kind { .. } => {
+                let table = self.kind_table.clone();
+                self.select_table_row(&table, row, cx);
+            }
         }
     }
 
@@ -3283,6 +3440,7 @@ impl Render for AppShell {
         self.sync_kubelet_demand(cx);
         self.sync_quick_filter(window, cx);
         self.open_pending_switcher(window, cx);
+        self.open_pending_palette(window, cx);
         let theme = cx.theme();
         let counts = self.navigation_counts(cx);
         let session = self.session.as_ref().map(|session| session.read(cx));
@@ -3302,6 +3460,12 @@ impl Render for AppShell {
             }))
             .on_action(cx.listener(|shell, _: &OpenNamespacePicker, _, cx| {
                 shell.open_namespace_picker(PickerAnchor::TitleBar, cx);
+            }))
+            .on_action(cx.listener(|shell, _: &OpenPalette, window, cx| {
+                shell.open_palette("", window, cx);
+            }))
+            .on_action(cx.listener(|shell, _: &OpenKindPalette, window, cx| {
+                shell.open_palette(":", window, cx);
             }));
         let root = keyboard_navigation::register_key_handlers(root, cx);
         let root = on_switch_to::<SwitchToCluster1>(root, 1, cx);

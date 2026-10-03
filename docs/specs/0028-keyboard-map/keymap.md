@@ -54,9 +54,9 @@ Dock actions do nothing when the dock has no tabs. Letters are lowercase in bind
 | Wireframe key | Binding string | Action | Context | Bound by | Notes |
 |---|---|---|---|---|---|
 | Space (W1) | `space` | tick a cluster | `ClusterSwitcher` only | 0027 | reserved; no binding in WORKSPACE either. The kit `Popover` binds `space` → `Confirm` (gpui-base 0.7 `popover.rs:21`), so 0027 binds `space` → `ToggleClusterTick` on `ClusterSwitcher` and `ClusterSwitcher > Input` ([0027 switcher-multi.md](../0027-multi-cluster/switcher-multi.md)); the switcher filter then takes no spaces |
-| Ctrl K | `secondary-k` | `OpenPalette` | WINDOW | 0029 | |
-| `:` | `:` | palette opened with `:` typed | WORKSPACE | 0029 | |
-| Ctrl ⏎ (W9) | `secondary-enter` | palette secondary action | palette context only | 0029 | |
+| Ctrl K | `secondary-k` | `OpenPalette` | WINDOW | 0029 | bound (0029); left `RESERVED_KEYS` |
+| `:` | `:` | `OpenKindPalette` (palette opened with `:` typed) | WORKSPACE | 0029 | bound (0029); left `RESERVED_KEYS` |
+| Ctrl ⏎ (W9) | `secondary-enter` | palette secondary action | palette context only | 0032 | reserved; 0029 decision 18 moved the owner to 0032 |
 | Ctrl Shift R | `secondary-shift-r` | `ToggleReadOnly` | WINDOW | 0030 | |
 | Ctrl S (W10) | `secondary-s` | Apply | editor context only | 0031 | |
 

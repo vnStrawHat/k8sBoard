@@ -35,7 +35,7 @@
 | PNG export | `resvg` 0.46 (`text`, `system-fonts`), the version `gpui-pre` already builds, so `Cargo.lock` only lists it under `k8sboard` (0022, done) | 0022 |
 | Config dirs and format | `dirs` 6 (already locked) + `serde_json`; JSON `settings.json` | 0024 (done) |
 | Folder watching | a file-watcher crate or polling | 0025 |
-| Fuzzy matching | `nucleo` (named in the stack table) | 0029 |
+| Fuzzy matching | own greedy scorer `fuzzy_score.rs`, no dependency (0029 decision 1) | 0029 |
 | WebSocket exec and port-forward | kube `ws` feature | 0035, 0036 |
 | Terminal engine | `oneterm-vt`, git dependency pinned to a commit, `default-features = false` (already a commented line in the root `Cargo.toml`) | 0036 |
 | Optional YAML LSP | `yaml-language-server` is an external Node process; proposed: skip LSP, use the kit editor's highlighting plus server dry-run validation | 0031 |

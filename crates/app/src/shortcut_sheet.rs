@@ -89,7 +89,7 @@ fn sheet_row(row: &ShortcutRow, cx: &App) -> impl IntoElement {
 
 /// The first keystroke of each binding of `action`, without repeats, in registration order. The
 /// same key bound in two contexts shows once.
-fn row_keys(action: &dyn Action, cx: &App) -> Vec<Keystroke> {
+pub(crate) fn row_keys(action: &dyn Action, cx: &App) -> Vec<Keystroke> {
     let keymap = cx.key_bindings();
     let keymap = keymap.borrow();
     let mut keys: Vec<Keystroke> = Vec::new();

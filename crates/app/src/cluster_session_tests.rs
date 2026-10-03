@@ -1549,6 +1549,15 @@ impl ClusterSession {
         };
         self.finish_connect(Ok(Ok(connected)), cx);
     }
+
+    /// A seam for the shell tests: the pod list a live session shows, as if its watch had sent
+    /// this snapshot.
+    pub(crate) fn set_pods_for_test(&mut self, pods: Vec<PodSummary>, cx: &mut Context<Self>) {
+        if let Some(live) = self.live_mut() {
+            live.pods.apply(WatchUpdate::Snapshot(pods));
+        }
+        cx.notify();
+    }
 }
 
 fn subject_with(namespace: &str, kinds: &[KindFilter]) -> TopologySubject {

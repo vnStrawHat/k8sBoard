@@ -22,8 +22,8 @@ No change. `Command`, `CommandState`, `CommandGroup`, `CommandItem`, `Dialog`, `
 | 2b | `src/app_shell.rs` | `is_row_visible(&ResourceKey)` (read-only accessor); `change_selection` reachable as `pub(crate)` (0028) |
 | 2b | `src/navigation.rs` | `kind_availability` and `KindAvailability` become `pub(crate)` |
 | 2b | `src/title_bar.rs` | search box in a middle slot (inventory T6) |
-| 3 | `src/palette_search.rs` | resource entries from pods, nodes, the visible explorer kind; row actions via `key_availability`, `action_label`, and `action_for`; cluster rows from 0026 `cluster_switcher_rows`; caps |
-| 3 | `src/keymap.rs` (+ tests) | `action_for(ResourceAction)`; test `every_offered_row_action_maps` |
+| 3 | `src/palette_search.rs` | resource entries from pods, nodes, the visible explorer kind; row actions via `key_availability`, `action_label`, and `key_action`; cluster rows from 0026 `cluster_switcher_rows`; caps |
+| 3 | `src/palette_search_tests.rs` | test `every_offered_row_action_maps` (uses the existing `ResourceAction::key_action`) |
 | 3 | `src/command_palette.rs` | status and reason pills, `Kbd` hints, Resources hint text |
 | 4 | `src/launch_options.rs` (+ tests) | `--palette <query>`; `USAGE` |
 | 4 | `src/app_shell.rs` | open the palette for `--palette` once the first list has loaded (like `open_pending_logs`) |

@@ -168,14 +168,14 @@ impl NavigationCounts {
 
 /// Whether a kind item can be opened.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum KindAvailability {
+pub(crate) enum KindAvailability {
     Enabled,
     Denied { reason: SharedString },
 }
 
 /// A kind is disabled only when the access review is known and denies listing it. While the
 /// review runs or has failed the item stays enabled; the list's error state explains a 403.
-fn kind_availability(
+pub(crate) fn kind_availability(
     kind: ResourceKind,
     access: &AccessState,
     scope: &NamespaceScope,

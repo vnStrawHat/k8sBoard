@@ -832,3 +832,129 @@ fn retry_on_a_running_row_starts_no_second_probe(cx: &mut TestAppContext) {
         .read_with(cx, |shell, _| shell.switcher.probe_count());
     assert_eq!(before, after);
 }
+
+// ---- Command palette over a live list ----
+
+fn palette_pod(name: &str) -> cluster::PodSummary {
+    cluster::PodSummary {
+        namespace: "shop".to_owned(),
+        name: name.to_owned(),
+        status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
+        ready: cluster::ReadyCount { ready: 1, total: 1 },
+        restarts: 0,
+        node_name: None,
+        created_at: None,
+        pod_ip: None,
+        qos_class: None,
+        service_account: None,
+        controller: None,
+        conditions: Vec::new(),
+        status_message: None,
+        labels: Vec::new(),
+        host_network: false,
+        image_pull_secrets: Vec::new(),
+        containers: Vec::new(),
+    }
+}
+
+fn palette_pod_key(name: &str) -> ResourceKey {
+    ResourceKey::Pod {
+        namespace: "shop".to_owned(),
+        name: name.to_owned(),
+    }
+}
+
+/// A live fixture on Pods with two pods loaded.
+fn pods_fixture(name: &str, cx: &mut TestAppContext) -> SwitchFixture {
+    let fixture = open_switch_fixture(name, cx);
+    fixture.go_live(NamespaceScope::All, cx);
+    let session = fixture.session(cx);
+    session.update(cx, |session, cx| {
+        session.set_pods_for_test(vec![palette_pod("api-0"), palette_pod("web-0")], cx);
+    });
+    fixture
+        .shell
+        .update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx));
+    cx.run_until_parked();
+    fixture.draw_twice(cx);
+    fixture
+}
+
+#[gpui_kit::test]
+fn tab_moves_the_cursor_without_opening_the_drawer(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("tab-preview", cx);
+    let key = palette_pod_key("web-0");
+    fixture.shell.update(cx, |shell, cx| {
+        assert!(shell.can_preview_row(&key, cx));
+        shell.preview_resource(&key, cx);
+    });
+    cx.run_until_parked();
+    fixture.shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected.as_ref(), Some(&key));
+        assert!(!shell.drawer.is_open);
+        assert_eq!(shell.screen, Screen::Pods);
+    });
+}
+
+#[gpui_kit::test]
+fn tab_ignores_a_resource_of_another_screen(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("tab-other-screen", cx);
+    let node = ResourceKey::Node {
+        name: "node-1".to_owned(),
+    };
+    fixture.shell.update(cx, |shell, cx| {
+        assert!(!shell.can_preview_row(&node, cx));
+        shell.preview_resource(&node, cx);
+        assert_eq!(shell.selected, None);
+        assert_eq!(shell.screen, Screen::Pods);
+    });
+}
+
+#[gpui_kit::test]
+fn tab_does_nothing_while_a_drawer_is_open(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("tab-drawer", cx);
+    let open = palette_pod_key("api-0");
+    let other = palette_pod_key("web-0");
+    fixture.shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(open.clone()), cx);
+        shell.set_drawer_open(true, cx);
+        assert!(!shell.can_preview_row(&other, cx));
+        shell.preview_resource(&other, cx);
+        assert_eq!(shell.selected.as_ref(), Some(&open));
+        assert!(shell.drawer.is_open);
+    });
+}
+
+#[gpui_kit::test]
+fn the_palette_lists_the_loaded_pods_and_the_row_actions_of_the_cursor(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("palette-live", cx);
+    let key = palette_pod_key("api-0");
+    fixture.shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(key.clone()), cx);
+    });
+    let snapshot = fixture
+        .shell
+        .read_with(cx, |shell, cx| shell.palette_snapshot(true, cx));
+    assert!(snapshot.context.has_session);
+    let has_pod = |name: &str| {
+        snapshot.entries.iter().any(|entry| {
+            matches!(&entry.target, crate::palette_search::PaletteTarget::Resource(found)
+                if *found == palette_pod_key(name))
+        })
+    };
+    assert!(has_pod("api-0") && has_pod("web-0"));
+    assert!(snapshot.entries.iter().any(|entry| matches!(
+        entry.target,
+        crate::palette_search::PaletteTarget::RowAction(
+            crate::resource_actions::ResourceAction::ViewLogs
+        )
+    )));
+    // A query that cannot list resources builds none of them.
+    let snapshot = fixture
+        .shell
+        .read_with(cx, |shell, cx| shell.palette_snapshot(false, cx));
+    assert!(!snapshot.entries.iter().any(|entry| matches!(
+        entry.target,
+        crate::palette_search::PaletteTarget::Resource(_)
+    )));
+}

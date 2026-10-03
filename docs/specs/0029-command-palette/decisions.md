@@ -37,4 +37,4 @@
 | 19 | `@` rows reuse 0026 `cluster_switcher_rows` (`switcher_sections`, `search_text`) and `switch_cluster`; the palette binds none of the 0026 keys (`secondary-shift-c`, `secondary-1`…`9`); `@` is a single switch (0027 multi-view stays in the switcher via `view_clusters`); Go to a cluster does not carry the namespace across | W9 shows single Go to rows; "same namespace payments" conflicts with 0026 decision 3 (scope remembered per cluster); open item 3 |
 | 20 | `--palette <query>` launch flag | ui-verifier cannot type; one flag reproduces W9 |
 | 21 | Opened by `:`, the first Esc (or Backspace) on the untouched seed closes the palette (tracked through `on_query`) | k9s habit: `:` then Esc returns to the table in one key |
-| 22 | Row actions dispatch `keymap::action_for(ResourceAction)`; both shell variants map to `OpenShell` | one key handler per action; the palette cannot drift from the keys |
+| 22 | Row actions dispatch `ResourceAction::key_action()` (0028, `resource_actions.rs`); both shell variants map to `OpenShell` | one key handler per action; the palette cannot drift from the keys |

@@ -49,6 +49,7 @@ fn parses_all_flags() {
             screen: LaunchScreen::PodDrawer(DrawerTab::Containers),
             screenshot: Some(PathBuf::from("out.png")),
             window_width: None,
+            palette: None,
         }
     );
 }
@@ -672,4 +673,25 @@ fn screen_settings_shortcuts_parses() {
         screen,
         LaunchScreen::Settings(SettingsPage::KeyboardShortcuts, SettingsSize::Tall)
     );
+}
+
+#[test]
+fn palette_is_off_without_the_flag() {
+    assert_eq!(run_options(&[]).palette, None);
+}
+
+#[test]
+fn palette_flag_takes_the_query_text() {
+    let options = run_options(&["--screen", "deployments-drawer", "--palette", "> rest pay"]);
+    assert_eq!(options.palette.as_deref(), Some("> rest pay"));
+}
+
+#[test]
+fn palette_flag_needs_a_value() {
+    assert!(parse(&["--palette"]).is_err());
+}
+
+#[test]
+fn the_usage_lists_the_palette_flag() {
+    assert!(USAGE.contains("--palette"));
 }
