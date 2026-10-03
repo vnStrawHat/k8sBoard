@@ -101,6 +101,7 @@ pub(crate) fn kind_diagnosis(
         | KindObject::ReplicaSet(_)
         | KindObject::ConfigMap(_)
         | KindObject::NetworkPolicy(_)
+        | KindObject::StorageClass(_)
         | KindObject::Crd(_) => None,
     }
 }

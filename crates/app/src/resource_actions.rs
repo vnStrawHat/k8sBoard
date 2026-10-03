@@ -22,9 +22,9 @@ use crate::custom_kind::CustomKind;
 use crate::dock::{Dock, LogOrigin};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
-    CopyName, Cordon, DebugContainer, Delete, Drain, EditYaml, OpenShell, PauseRollout,
-    PortForward, RerunJob, RestartRollout, RollBack, Scale, SuspendCronJob, TriggerCronJob,
-    ViewLogs, ViewYaml,
+    CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditYaml, ExpandClaim,
+    OpenShell, PauseRollout, PortForward, RerunJob, RestartRollout, RollBack, Scale,
+    SetDefaultStorageClass, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
@@ -68,6 +68,12 @@ pub(crate) enum ResourceAction {
     SuspendCronJob,
     TriggerCronJob,
     RerunJob,
+    /// Sets the min and max replicas of an HPA (spec 0032b).
+    EditHpaRange,
+    /// Grows the storage request of a PVC; it cannot shrink again (spec 0032b).
+    ExpandClaim,
+    /// Makes a StorageClass the default and unsets the old default (spec 0032b).
+    SetDefaultStorageClass,
 }
 
 /// A row action as a key, a menu hint, or the palette names it, before the subject is known:
@@ -92,6 +98,9 @@ pub(crate) enum RowAction {
     SuspendCronJob,
     TriggerCronJob,
     RerunJob,
+    EditHpaRange,
+    ExpandClaim,
+    SetDefaultStorageClass,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -244,6 +253,18 @@ impl ResourceAction {
                 checks: vec![AccessCheck::Delete(kind)],
                 is_shipped: true,
             },
+            Self::EditHpaRange => ActionGate::Mutating {
+                checks: vec![AccessCheck::PatchHorizontalPodAutoscalers],
+                is_shipped: true,
+            },
+            Self::ExpandClaim => ActionGate::Mutating {
+                checks: vec![AccessCheck::PatchPersistentVolumeClaims],
+                is_shipped: true,
+            },
+            Self::SetDefaultStorageClass => ActionGate::Mutating {
+                checks: vec![AccessCheck::PatchStorageClasses],
+                is_shipped: true,
+            },
             Self::Drain => ActionGate::Planned,
         }
     }
@@ -269,6 +290,9 @@ impl ResourceAction {
             Self::SuspendCronJob => RowAction::SuspendCronJob,
             Self::TriggerCronJob => RowAction::TriggerCronJob,
             Self::RerunJob => RowAction::RerunJob,
+            Self::EditHpaRange => RowAction::EditHpaRange,
+            Self::ExpandClaim => RowAction::ExpandClaim,
+            Self::SetDefaultStorageClass => RowAction::SetDefaultStorageClass,
         }
     }
 }
@@ -295,6 +319,9 @@ impl RowAction {
             Self::SuspendCronJob => Box::new(SuspendCronJob),
             Self::TriggerCronJob => Box::new(TriggerCronJob),
             Self::RerunJob => Box::new(RerunJob),
+            Self::EditHpaRange => Box::new(EditHpaRange),
+            Self::ExpandClaim => Box::new(ExpandClaim),
+            Self::SetDefaultStorageClass => Box::new(SetDefaultStorageClass),
         }
     }
 }
@@ -319,7 +346,10 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::RollBack
         | ResourceAction::SuspendCronJob
         | ResourceAction::TriggerCronJob
-        | ResourceAction::RerunJob => ActionRisk::Change,
+        | ResourceAction::RerunJob
+        | ResourceAction::EditHpaRange
+        | ResourceAction::ExpandClaim
+        | ResourceAction::SetDefaultStorageClass => ActionRisk::Change,
     }
 }
 
@@ -344,6 +374,9 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::SuspendCronJob => "Suspend",
         ResourceAction::TriggerCronJob => "Trigger now",
         ResourceAction::RerunJob => "Re-run job",
+        ResourceAction::EditHpaRange => "Edit min / max",
+        ResourceAction::ExpandClaim => "Expand",
+        ResourceAction::SetDefaultStorageClass => "Set as default",
     }
 }
 
@@ -399,7 +432,10 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         | RowAction::RollBack
         | RowAction::SuspendCronJob
         | RowAction::TriggerCronJob
-        | RowAction::RerunJob => match subject {
+        | RowAction::RerunJob
+        | RowAction::EditHpaRange
+        | RowAction::ExpandClaim
+        | RowAction::SetDefaultStorageClass => match subject {
             ResourceKey::Kind { kind, .. } => kind
                 .read_only_actions()
                 .iter()

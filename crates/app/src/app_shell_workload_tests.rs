@@ -122,11 +122,11 @@ impl Clusters {
         cx.run_until_parked();
     }
 
-    fn press(&self, keys: &str, cx: &mut TestAppContext) {
+    pub(super) fn press(&self, keys: &str, cx: &mut TestAppContext) {
         self.fixture.press(keys, cx);
     }
 
-    fn dialog_label(&self, cx: &mut TestAppContext) -> String {
+    pub(super) fn dialog_label(&self, cx: &mut TestAppContext) -> String {
         let dialog = self.dialog(cx);
         dialog
             .read_with(cx, |dialog, _| dialog.label())
@@ -418,7 +418,7 @@ fn menu_item_dispatches_the_key_on_the_right_clicked_row(cx: &mut TestAppContext
 // ---- Scale: the popover and the palette ----
 
 impl Clusters {
-    fn popover(&self, cx: &mut TestAppContext) -> Option<Entity<ValuePopover>> {
+    pub(super) fn popover(&self, cx: &mut TestAppContext) -> Option<Entity<ValuePopover>> {
         self.fixture
             .shell
             .read_with(cx, |shell, _| shell.value_popover().cloned())
@@ -451,7 +451,12 @@ impl Clusters {
             .with_window(cx, |window, cx| window.input(text, cx));
     }
 
-    fn type_in_popover(&self, popover: &Entity<ValuePopover>, text: &str, cx: &mut TestAppContext) {
+    pub(super) fn type_in_popover(
+        &self,
+        popover: &Entity<ValuePopover>,
+        text: &str,
+        cx: &mut TestAppContext,
+    ) {
         self.fixture.with_window(cx, |window, cx| {
             popover.update(cx, |popover, cx| popover.type_text(text, window, cx));
         });
@@ -671,7 +676,7 @@ fn drawer_has_no_replicas_input(cx: &mut TestAppContext) {
 }
 
 impl Clusters {
-    fn notification_count(&self, cx: &mut TestAppContext) -> usize {
+    pub(super) fn notification_count(&self, cx: &mut TestAppContext) -> usize {
         self.fixture
             .with_window(cx, |window, cx| window.notifications(cx).len())
     }
@@ -1046,7 +1051,7 @@ impl Clusters {
         self.tick(rows, cx);
     }
 
-    fn tick(&self, rows: &[usize], cx: &mut TestAppContext) {
+    pub(super) fn tick(&self, rows: &[usize], cx: &mut TestAppContext) {
         for &row in rows {
             self.fixture.shell.update(cx, |shell, cx| {
                 shell.check_rows(RowCheck::Toggle(row), cx);
@@ -1056,25 +1061,25 @@ impl Clusters {
         self.fixture.draw_twice(cx);
     }
 
-    fn bulk_buttons(&self, cx: &mut TestAppContext) -> Vec<BulkButton> {
+    pub(super) fn bulk_buttons(&self, cx: &mut TestAppContext) -> Vec<BulkButton> {
         self.fixture
             .shell
             .read_with(cx, |shell, cx| shell.bulk_buttons(cx))
     }
 
     /// Presses the bulk button named `label`.
-    fn press_bulk(&self, label: &'static str, cx: &mut TestAppContext) {
+    pub(super) fn press_bulk(&self, label: &'static str, cx: &mut TestAppContext) {
         self.fixture
             .with_window(cx, |window, cx| window.click(label, cx));
         cx.run_until_parked();
     }
 
-    fn items(&self, cx: &mut TestAppContext) -> Vec<ItemProgress> {
+    pub(super) fn items(&self, cx: &mut TestAppContext) -> Vec<ItemProgress> {
         self.dialog(cx)
             .read_with(cx, |dialog, _| dialog.item_states())
     }
 
-    fn state_of(buttons: &[BulkButton], label: &str) -> BulkState {
+    pub(super) fn state_of(buttons: &[BulkButton], label: &str) -> BulkState {
         buttons
             .iter()
             .find(|button| button.label.as_ref() == label)

@@ -7,7 +7,7 @@ use cluster::{
     HorizontalPodAutoscalerSummary, IngressSummary, JobSummary, NamespaceSummary,
     NetworkPolicySummary, PersistentVolumeClaimSummary, PersistentVolumeSummary,
     PodDisruptionBudgetSummary, PodSummary, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary,
-    SecretSummary, ServiceAccountSummary, ServiceSummary, StatefulSetSummary,
+    SecretSummary, ServiceAccountSummary, ServiceSummary, StatefulSetSummary, StorageClassSummary,
 };
 use gpui_kit::SharedString;
 
@@ -55,6 +55,8 @@ pub(crate) enum KindObject {
     PodDisruptionBudget(PodDisruptionBudgetSummary),
     PersistentVolumeClaim(PersistentVolumeClaimSummary),
     PersistentVolume(PersistentVolumeSummary),
+    /// A storage class: its default flag and whether it expands, for the edits of spec 0032b.
+    StorageClass(StorageClassSummary),
     /// A Role or a ClusterRole (`namespace: None`).
     Role(RoleSummary),
     /// A RoleBinding or a ClusterRoleBinding (`namespace: None`).

@@ -237,7 +237,7 @@ impl<'a> PaletteInput<'a> {
 }
 
 /// The row actions in the order of the shortcut sheet.
-const ROW_ACTIONS: [RowAction; 16] = [
+const ROW_ACTIONS: [RowAction; 19] = [
     RowAction::ViewLogs,
     RowAction::ViewYaml,
     RowAction::CopyName,
@@ -254,6 +254,9 @@ const ROW_ACTIONS: [RowAction; 16] = [
     RowAction::SuspendCronJob,
     RowAction::TriggerCronJob,
     RowAction::RerunJob,
+    RowAction::EditHpaRange,
+    RowAction::ExpandClaim,
+    RowAction::SetDefaultStorageClass,
 ];
 
 /// Everything the palette may show, in source order, from in-memory state only.

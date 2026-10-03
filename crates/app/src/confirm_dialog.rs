@@ -22,7 +22,8 @@ use gpui_kit::{
 
 use crate::app_shell::AppShell;
 use crate::app_shell::batch_write::{
-    BatchCommit, BatchExtras, BatchIntent, ItemProgress, dry_run_progress, summarize_dry_runs,
+    BatchCommit, BatchExtras, BatchFailure, BatchIntent, ItemProgress, dry_run_progress,
+    summarize_dry_runs,
 };
 use crate::app_shell::object_delete::{
     delete_dry_run_progress, propagation_choices, with_propagation,
@@ -655,7 +656,7 @@ impl ConfirmDialog {
                         .child(format!("already gone: {}", names.join(", "))),
                 )
             }
-            BatchExtras::Delete(_) | BatchExtras::None => None,
+            BatchExtras::Delete(_) | BatchExtras::None | BatchExtras::DefaultClass(_) => None,
         };
         v_flex()
             .id("batch-items")
@@ -747,21 +748,33 @@ impl ConfirmDialog {
             });
             return Some(v_flex().gap_1().children(lines).children(warnings));
         }
-        // A batch changes the same field of every item, so it is shown once.
-        let (request, warnings) = match &self.kind {
-            DialogKind::Write(intent) => (&intent.request, &intent.warnings),
-            DialogKind::Batch(batch) => (&batch.plan.items.first()?.request, &batch.warnings),
+        // A batch changes the same field of every item, so it is shown once. An ordered plan
+        // (Set default) changes different fields per item, so every item's are shown.
+        let (requests, warnings) = match &self.kind {
+            DialogKind::Write(intent) => (vec![&intent.request], &intent.warnings),
+            DialogKind::Batch(batch) if batch.plan.on_failure == BatchFailure::Stop => (
+                batch.plan.items.iter().map(|item| &item.request).collect(),
+                &batch.warnings,
+            ),
+            DialogKind::Batch(batch) => (vec![&batch.plan.items.first()?.request], &batch.warnings),
             DialogKind::Unlock { .. } | DialogKind::Connect(_) => return None,
         };
         let theme = cx.theme();
         let mono = theme.mono_font_family.clone();
-        let lines = request.changed_fields().into_iter().map(|field| {
-            let text = match field.value {
-                Some(value) => format!("{} → {value}", field.path),
-                None => field.path.into_owned(),
-            };
-            div().text_sm().font_family(mono.clone()).child(text)
-        });
+        // The value of a path is `None` when it is not recorded, or in an ordered plan when the
+        // key is removed (the beta default annotation).
+        let is_ordered = matches!(&self.kind, DialogKind::Batch(batch) if batch.plan.on_failure == BatchFailure::Stop);
+        let lines = requests
+            .into_iter()
+            .flat_map(|request| request.changed_fields())
+            .map(|field| {
+                let text = match field.value {
+                    Some(value) => format!("{} → {value}", field.path),
+                    None if is_ordered => format!("{} → removed", field.path),
+                    None => field.path.into_owned(),
+                };
+                div().text_sm().font_family(mono.clone()).child(text)
+            });
         let warnings = warnings.iter().map(|warning| {
             div()
                 .text_sm()

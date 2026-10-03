@@ -971,3 +971,42 @@ fn the_debug_tab_fixtures_are_offline_dock_screens() {
         assert!(USAGE.contains(name), "{name}");
     }
 }
+
+#[test]
+fn screen_hpa_range_popover_parses() {
+    let screen = run_options(&["--screen", "hpa-range-popover"]).screen;
+    assert_eq!(screen, LaunchScreen::HpaRangePopover);
+    assert_eq!(
+        screen.screen(),
+        Screen::Kind(ResourceKind::HorizontalPodAutoscalers)
+    );
+    // Drawn from fixed data once the shell renders, and selects no row.
+    assert!(screen.opens_dialog());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("hpa-range-popover"));
+}
+
+#[test]
+fn screen_expand_confirm_parses() {
+    let screen = run_options(&["--screen", "expand-confirm"]).screen;
+    assert_eq!(screen, LaunchScreen::ExpandConfirm);
+    assert_eq!(
+        screen.screen(),
+        Screen::Kind(ResourceKind::PersistentVolumeClaims)
+    );
+    // Drawn from fixed data once the shell renders, and selects no row.
+    assert!(screen.opens_dialog());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("expand-confirm"));
+}
+
+#[test]
+fn screen_default_class_confirm_parses() {
+    let screen = run_options(&["--screen", "default-class-confirm"]).screen;
+    assert_eq!(screen, LaunchScreen::DefaultClassConfirm);
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::StorageClasses));
+    // Drawn from fixed data once the shell renders, and selects no row.
+    assert!(screen.opens_dialog());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("default-class-confirm"));
+}

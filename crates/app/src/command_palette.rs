@@ -780,6 +780,9 @@ fn row_action_icon(action: RowAction) -> IconName {
         RowAction::SuspendCronJob => IconName::Timer,
         RowAction::TriggerCronJob => IconName::Play,
         RowAction::RerunJob => IconName::Repeat,
+        RowAction::EditHpaRange => IconName::ChevronsUpDown,
+        RowAction::ExpandClaim => IconName::HardDrive,
+        RowAction::SetDefaultStorageClass => IconName::Star,
     }
 }
 

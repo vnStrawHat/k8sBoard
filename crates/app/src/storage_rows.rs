@@ -443,7 +443,7 @@ pub(crate) fn storage_class_row(class: &StorageClassSummary) -> KindRow {
         event: None,
         related_pods: None,
         labels: chips(&class.labels),
-        object: KindObject::Plain,
+        object: KindObject::StorageClass(class.clone()),
     }
 }
 

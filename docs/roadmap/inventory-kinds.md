@@ -36,12 +36,12 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Network | Port Forwarding (local page) | Done (0035) | Done (0035) | — | Start, Stop, Retry, presets, Change local port: 0035 |
 | Config | ConfigMaps | Done (0012) | Done (Used by, value previews: 0012) | — | Edit, New, Compare with previous 0031 |
 | Config | Secrets | Done (0016) | Done (masked Data, per-key Reveal and Reveal all for 30 s, Copy without reveal with private clipboard and 30 s clear, certificate section, CERTIFICATE box, Used by, unused flag: 0016) | — | Edit 0031 |
-| Config | HPAs | Done (0013) | Done (metric bars, scaling events, AT MAX box: 0013) | — | Edit min/max 0032 |
+| Config | HPAs | Done (0013) | Done (metric bars, scaling events, AT MAX box: 0013) | — | Edit min/max Done (0032b) |
 | Config | ResourceQuotas | Done (0013) | Done (usage bars, blocked creations: 0013) | — | New, Edit 0031 |
 | Config | PDBs | Done (0013) | Done (allowed disruptions, BLOCKS DRAIN, selected pods: 0013) | — | New 0031 |
-| Storage | PVCs | Done (0014) | Done (Used %, Usage bars, Mounted by, Go to pod: 0014) | — | Expand 0032 |
+| Storage | PVCs | Done (0014) | Done (Used %, Usage bars, Mounted by, Go to pod: 0014) | — | Expand Done (0032b) |
 | Storage | PVs | Done (0014) | Done (source, node affinity, RELEASED box, Go to claim: 0014) | — | — |
-| Storage | StorageClasses | Done (0014) | Done (default ★, PV count, parameters with hidden values, volumes list: 0014) | — | Set default 0032 |
+| Storage | StorageClasses | Done (0014) | Done (default ★, PV count, parameters with hidden values, volumes list: 0014) | — | Set default Done (0032b) |
 | Access Control | ServiceAccounts | Done (0015) | Done (bound roles, used by pods, cloud identity from three allowlisted annotations, secret names only, CLUSTER ADMIN box: 0015) | Done ("Can do", Check permissions: 0023) | — |
 | Access Control | Roles | Done (0015) | Done (rules table, bindings, VERY BROAD box: 0015) | Done (Who can…: 0023) | — |
 | Access Control | ClusterRoles | Done (0015) | Done (aggregated, built-in, bound to, VERY BROAD box, Hide system: 0015) | Done (Who can…: 0023) | — |
@@ -49,7 +49,7 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Access Control | ClusterRoleBindings | Done (0015) | Done (cluster-admin to everyone or service accounts flag, REVIEW box, Hide system: 0015) | — | — |
 | Helm | Releases | Done (0017) | Done (history, values and diff masked with 30 s Reveal, manifest, notes, UPGRADE FAILED box: 0017) | — | Roll back, Uninstall 0038 (deferred) |
 | Custom Resources | CRDs | Done | Done | Versions, printer columns, schema, Instances, Browse instances Done (0018) | — |
-| Custom Resources | Certificates (any discovered CR) | Done | Done | Done for read (0018): printer columns, Expires built-in, status box (NOT READY, UNAVAILABLE, READY UNKNOWN, or {TYPE} FAILING), Conditions, Status and Spec fields, Go to secret link, masked YAML | Renew 0032 |
+| Custom Resources | Certificates (any discovered CR) | Done | Done | Done for read (0018): printer columns, Expires built-in, status box (NOT READY, UNAVAILABLE, READY UNKNOWN, or {TYPE} FAILING), Conditions, Status and Spec fields, Go to secret link, masked YAML | Renew 0018 (open item 5) |
 
 ## Notes
 

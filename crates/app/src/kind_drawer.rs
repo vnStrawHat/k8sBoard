@@ -186,6 +186,7 @@ fn revision_text(row: &KindRow) -> Option<String> {
         | KindObject::HelmRelease(_)
         | KindObject::Crd(_)
         | KindObject::Custom(_)
+        | KindObject::StorageClass(_)
         | KindObject::Namespace(_) => None,
     }
 }

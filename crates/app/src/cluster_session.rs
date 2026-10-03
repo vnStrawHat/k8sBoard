@@ -11,7 +11,7 @@ use cluster::{
     EndpointSliceSummary, EventFilter, EventSummary, HelmRevision, IngressSummary, InvolvedObject,
     JobSummary, Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary,
     NodeSummary, ObjectKind, PersistentVolumeSummary, PodSummary, RbacSnapshot, ReplicaSetSummary,
-    ResourceQuotaSummary, SecretSummary, ServerVersion, WatchUpdate,
+    ResourceQuotaSummary, SecretSummary, ServerVersion, StorageClassSummary, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{App, Context, Task};
@@ -2502,6 +2502,21 @@ impl LiveCluster {
             .iter()
             .find(|feed| feed.kind == ResourceKind::HorizontalPodAutoscalers)
             .map_or(&[][..], |feed| feed.list.items())
+    }
+
+    /// The storage classes the explorer holds, empty unless it shows the StorageClasses screen and
+    /// its first snapshot arrived: an Expand checks the claim's class against them when they are
+    /// there and starts no list for the hint (spec 0032b decision 10).
+    pub(crate) fn loaded_storage_classes(&self) -> Vec<&StorageClassSummary> {
+        self.kind_list(ResourceKind::StorageClasses)
+            .and_then(|explorer| explorer.list.ready_items())
+            .into_iter()
+            .flatten()
+            .filter_map(|row| match &row.object {
+                KindObject::StorageClass(class) => Some(class),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The explorer list of `kind`, or `None` while another kind (or no kind) is shown.

@@ -87,6 +87,10 @@ pub enum AccessCheck {
     PatchCronJobs,
     /// Trigger now and Re-run create a Job (0032).
     CreateJobs,
+    /// HPA min / max, PVC Expand, and Set as default storage class (0032b).
+    PatchHorizontalPodAutoscalers,
+    PatchPersistentVolumeClaims,
+    PatchStorageClasses,
     /// Edit YAML (0031): `update` on the kind's resource. Reviewed lazily per kind, so it is not in
     /// `ALL`.
     Update(ObjectKind),
@@ -105,7 +109,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 50] = [
+    pub const ALL: [AccessCheck; 53] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::GetPodExec,
@@ -156,6 +160,9 @@ impl AccessCheck {
         Self::PatchDaemonSets,
         Self::PatchCronJobs,
         Self::CreateJobs,
+        Self::PatchHorizontalPodAutoscalers,
+        Self::PatchPersistentVolumeClaims,
+        Self::PatchStorageClasses,
     ];
 
     fn target(self) -> CheckTarget {
@@ -230,6 +237,17 @@ impl AccessCheck {
             Self::PatchDaemonSets => ("patch", "apps", "daemonsets", None, true),
             Self::PatchCronJobs => ("patch", "batch", "cronjobs", None, true),
             Self::CreateJobs => ("create", "batch", "jobs", None, true),
+            Self::PatchHorizontalPodAutoscalers => (
+                "patch",
+                "autoscaling",
+                "horizontalpodautoscalers",
+                None,
+                true,
+            ),
+            Self::PatchPersistentVolumeClaims => {
+                ("patch", "", "persistentvolumeclaims", None, true)
+            }
+            Self::PatchStorageClasses => ("patch", "storage.k8s.io", "storageclasses", None, false),
             Self::Update(kind) => {
                 let (group, resource) = kind.resource();
                 ("update", group, resource, None, kind.is_namespaced())
@@ -678,9 +696,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 50);
+        assert_eq!(AccessCheck::ALL.len(), 53);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 50);
+        assert_eq!(distinct.len(), 53);
     }
 
     #[test]
@@ -1047,6 +1065,9 @@ mod tests {
                 "patch daemonsets",
                 "patch cronjobs",
                 "create jobs",
+                "patch horizontalpodautoscalers",
+                "patch persistentvolumeclaims",
+                "patch storageclasses",
             ]
         );
     }
@@ -1169,7 +1190,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 50);
+        assert_eq!(AccessCheck::ALL.len(), 53);
     }
 
     #[test]
@@ -1463,6 +1484,20 @@ mod tests {
                 None,
             ),
             (AccessCheck::CreateJobs, "create", "batch", "jobs", None),
+            (
+                AccessCheck::PatchHorizontalPodAutoscalers,
+                "patch",
+                "autoscaling",
+                "horizontalpodautoscalers",
+                None,
+            ),
+            (
+                AccessCheck::PatchPersistentVolumeClaims,
+                "patch",
+                "",
+                "persistentvolumeclaims",
+                None,
+            ),
         ];
         for (check, verb, group, resource, subresource) in table {
             let attributes = resource_attributes(check, Some("shop"));
@@ -1504,6 +1539,23 @@ mod tests {
         let cluster_scoped =
             resource_attributes(AccessCheck::Delete(ObjectKind::Node), Some("shop"));
         assert_eq!(cluster_scoped.namespace, None);
+    }
+
+    #[test]
+    fn resource_edit_checks_are_static_and_storage_classes_cluster_scoped() {
+        let classes = AccessCheck::PatchStorageClasses;
+        let attributes = resource_attributes(classes, Some("shop"));
+        assert_eq!(attributes.namespace, None);
+        assert_eq!(attributes.group.as_deref(), Some("storage.k8s.io"));
+        assert_eq!(attributes.resource.as_deref(), Some("storageclasses"));
+        for check in [
+            AccessCheck::PatchHorizontalPodAutoscalers,
+            AccessCheck::PatchPersistentVolumeClaims,
+            classes,
+        ] {
+            assert!(AccessCheck::ALL.contains(&check), "{check}");
+            assert_eq!(check.to_string().split(' ').next(), Some("patch"));
+        }
     }
 
     #[test]

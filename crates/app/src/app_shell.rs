@@ -151,6 +151,8 @@ mod port_forward_dialogs;
 mod port_forward_open;
 #[path = "port_forward_page.rs"]
 mod port_forward_page;
+#[path = "resource_edit_flow.rs"]
+mod resource_edit_flow;
 #[path = "shell_open.rs"]
 pub(crate) mod shell_open;
 #[path = "write_flow.rs"]
@@ -185,6 +187,10 @@ mod app_shell_workload_tests;
 #[cfg(test)]
 #[path = "app_shell_delete_tests.rs"]
 mod app_shell_delete_tests;
+
+#[cfg(test)]
+#[path = "app_shell_resource_edit_tests.rs"]
+mod app_shell_resource_edit_tests;
 
 /// The logical column of the Events table that holds the reason.
 const EVENT_REASON_COLUMN: usize = 1;
@@ -1887,6 +1893,24 @@ impl AppShell {
             LaunchScreen::DeleteConfirm | LaunchScreen::DeleteBulkConfirm
         ) {
             self.open_delete_fixture(launch == LaunchScreen::DeleteBulkConfirm, window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::DefaultClassConfirm {
+            self.open_default_class_fixture(window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::ExpandConfirm {
+            self.open_expand_fixture(window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::HpaRangePopover {
+            self.open_hpa_range_fixture(window, cx);
             self.pending_dialog_launch = None;
             return;
         }

@@ -16,6 +16,7 @@ use crate::app_shell::write_flow::WriteIntent;
 use crate::cluster_registry::ClusterRef;
 use crate::kind_row::KindObject;
 use crate::resource_actions::{ResourceAction, action_risk};
+use crate::resource_edits::{claim_block, class_block};
 use crate::write_guard::ActionRisk;
 
 /// Why a paused Deployment cannot restart or roll back: kubectl refuses both.
@@ -217,6 +218,12 @@ pub(crate) fn row_block(
             if deployment.is_paused =>
         {
             Some(PAUSED_REASON.into())
+        }
+        (ResourceAction::ExpandClaim, KindObject::PersistentVolumeClaim(claim)) => {
+            claim_block(claim, &[])
+        }
+        (ResourceAction::SetDefaultStorageClass, KindObject::StorageClass(class)) => {
+            class_block(class)
         }
         (ResourceAction::RollBack, KindObject::Deployment(deployment)) => {
             match roll_back_choice(deployment, replica_sets) {

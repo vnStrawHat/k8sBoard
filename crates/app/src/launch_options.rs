@@ -26,7 +26,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -156,6 +156,17 @@ pub(crate) enum LaunchScreen {
     /// `--screen edit-yaml-diff`: the Edit YAML view on its Diff tab, drawn from fixed data (W10). It
     /// waits for no cluster and can never send. Screenshot builds only.
     EditYamlDiff,
+    /// `--screen hpa-range-popover`: HPAs with the Edit min / max popover of a fixed HPA open, drawn
+    /// from fixed data (0032b). Screenshot builds only; it waits for no cluster and can never send.
+    HpaRangePopover,
+    /// `--screen expand-confirm`: PVCs with the Expand dialog of a fixed claim (100Gi to 150Gi) of a
+    /// fixed Production cluster open, drawn from fixed data (0032b). Screenshot builds only; it waits
+    /// for no cluster and can never send.
+    ExpandConfirm,
+    /// `--screen default-class-confirm`: StorageClasses with the Set default dialog of two fixed
+    /// classes of a fixed Staging cluster open, drawn from fixed data (0032b). Screenshot builds
+    /// only; it waits for no cluster and can never send.
+    DefaultClassConfirm,
     /// `--screen settings|settings-appearance|settings-shortcuts`: the main window opens as usual,
     /// then the Settings window on that page, which is what the screenshot captures.
     Settings(SettingsPage, SettingsSize),
@@ -192,6 +203,9 @@ impl LaunchScreen {
             | Self::DebugShellTabFixture => Screen::Pods,
             Self::ShellConfirmFixture | Self::DeleteBulkConfirm => Screen::Pods,
             Self::EditYamlDiff => Screen::Kind(ResourceKind::Deployments),
+            Self::HpaRangePopover => Screen::Kind(ResourceKind::HorizontalPodAutoscalers),
+            Self::ExpandConfirm => Screen::Kind(ResourceKind::PersistentVolumeClaims),
+            Self::DefaultClassConfirm => Screen::Kind(ResourceKind::StorageClasses),
             Self::ScalePopover
             | Self::ScaleConfirm
             | Self::RestartBulkConfirm
@@ -401,6 +415,9 @@ impl LaunchScreen {
                 | Self::DeleteConfirm
                 | Self::DeleteBulkConfirm
                 | Self::EditYamlDiff
+                | Self::HpaRangePopover
+                | Self::ExpandConfirm
+                | Self::DefaultClassConfirm
                 | Self::PortForwardNewFixture
                 | Self::PortForwardConfirmFixture
                 | Self::PortForwardRemoveFixture
@@ -470,6 +487,9 @@ impl LaunchScreen {
             "delete-confirm" => Some(Self::DeleteConfirm),
             "delete-bulk-confirm" => Some(Self::DeleteBulkConfirm),
             "edit-yaml-diff" => Some(Self::EditYamlDiff),
+            "hpa-range-popover" => Some(Self::HpaRangePopover),
+            "expand-confirm" => Some(Self::ExpandConfirm),
+            "default-class-confirm" => Some(Self::DefaultClassConfirm),
             "pods" => Some(Self::Pods),
             "pods-multi" => Some(Self::PodsMulti),
             "nodes" => Some(Self::Nodes),

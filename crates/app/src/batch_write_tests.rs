@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use cluster::{ObjectKind, ObjectRef, WriteOperation, WriteOutcome};
+use cluster::{ObjectKind, ObjectRef, WriteError, WriteOperation, WriteOutcome};
 
 use super::*;
 use crate::workload_actions::workload_actions_tests::{deployment, test_cluster};
@@ -297,5 +297,123 @@ fn item_states_read_as_the_list_shows_them() {
     assert_eq!(
         ItemProgress::NotSent("an earlier step failed".into()).text(),
         "Not sent: an earlier step failed"
+    );
+}
+
+// ---- BatchFailure (spec 0032b) ----
+
+fn ordered_batch() -> BatchIntent {
+    let cluster = test_cluster();
+    let objects = objects(2);
+    let mut plan = batch_plan(&rows(&cluster, &objects), item_of).expect("a plan");
+    plan.on_failure = BatchFailure::Stop;
+    BatchIntent {
+        cluster,
+        cluster_name: "stg-b".into(),
+        action: ResourceAction::PauseRollout,
+        label: "Make gp3 the default storage class".into(),
+        verb: "Set default".into(),
+        button: "Set default".into(),
+        risk: ActionRisk::Change,
+        warnings: Vec::new(),
+        expected_name: None,
+        plan,
+    }
+}
+
+fn refused() -> Result<WriteOutcome, CheckedWriteError> {
+    Err(CheckedWriteError::Write(WriteError::Invalid {
+        message: "boom".to_owned(),
+        fields: Vec::new(),
+    }))
+}
+
+#[test]
+fn a_plan_that_continues_lets_the_next_item_go_after_a_failure() {
+    let mut batch = ordered_batch();
+    batch.plan.on_failure = BatchFailure::Continue;
+    let mut stopped = None;
+    let progress = batch.commit_progress(refused(), &mut stopped);
+    assert!(matches!(progress, ItemProgress::Failed(_)));
+    assert_eq!(stopped, None);
+}
+
+#[test]
+fn an_ordered_plan_stops_after_a_failed_item() {
+    let batch = ordered_batch();
+    let mut stopped = None;
+    let progress = batch.commit_progress(refused(), &mut stopped);
+    assert!(matches!(progress, ItemProgress::Failed(_)));
+    assert_eq!(stopped.as_deref(), Some("an earlier step failed"));
+}
+
+#[test]
+fn an_ordered_plan_stops_after_an_unknown_outcome() {
+    let batch = ordered_batch();
+    let mut stopped = None;
+    let result = Err(CheckedWriteError::Write(WriteError::OutcomeUnknown));
+    assert_eq!(
+        batch.commit_progress(result, &mut stopped),
+        ItemProgress::Unknown
+    );
+    assert_eq!(stopped.as_deref(), Some("an earlier step failed"));
+}
+
+#[test]
+fn a_blocked_item_keeps_its_own_reason_in_an_ordered_plan() {
+    let batch = ordered_batch();
+    let mut stopped = None;
+    let result = Err(CheckedWriteError::Blocked("stg-b was locked".into()));
+    batch.commit_progress(result, &mut stopped);
+    assert_eq!(stopped.as_deref(), Some("stg-b was locked"));
+}
+
+#[test]
+fn a_stopped_plan_says_how_far_it_got_and_why() {
+    let results = [
+        ItemProgress::Failed("the change is invalid: boom".into()),
+        ItemProgress::NotSent("an earlier step failed".into()),
+    ];
+    assert_eq!(
+        stop_notice("Make gp3 the default storage class", &results).as_deref(),
+        Some(
+            "Make gp3 the default storage class: stopped after 0 of 2: the change is invalid: boom"
+        )
+    );
+    let partial = [ItemProgress::Done, ItemProgress::Failed("boom".into())];
+    assert_eq!(
+        stop_notice("Make gp3 the default storage class", &partial).as_deref(),
+        Some("Make gp3 the default storage class: stopped after 1 of 2: boom")
+    );
+    let unknown = [ItemProgress::Done, ItemProgress::Unknown];
+    assert_eq!(
+        stop_notice("Label", &unknown).as_deref(),
+        Some(
+            "Label: stopped after 1 of 2: the outcome is unknown; the change may have been applied"
+        )
+    );
+}
+
+#[test]
+fn a_plan_that_went_through_has_no_stop_notice() {
+    let results = [ItemProgress::Done, ItemProgress::Done];
+    assert_eq!(stop_notice("Label", &results), None);
+    let batch = ordered_batch();
+    assert_eq!(batch.notice(&results), "Set default: 2 done");
+    assert!(batch.retry_subject(&results).is_none());
+}
+
+#[test]
+fn only_a_plan_that_continues_uses_the_counting_notice() {
+    let results = [ItemProgress::Done, ItemProgress::Failed("boom".into())];
+    let mut batch = ordered_batch();
+    assert_eq!(
+        batch.notice(&results),
+        "Make gp3 the default storage class: stopped after 1 of 2: boom"
+    );
+    batch.plan.on_failure = BatchFailure::Continue;
+    assert_eq!(
+        batch.notice(&results),
+        "Set default: 1 done, 1 failed (boom)"
     );
 }

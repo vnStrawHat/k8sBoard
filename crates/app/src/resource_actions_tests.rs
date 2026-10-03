@@ -1385,6 +1385,18 @@ fn every_resource_action_has_a_row_action() {
             kind_key(ResourceKind::CronJobs),
         ),
         (ResourceAction::RerunJob, kind_key(ResourceKind::Jobs)),
+        (
+            ResourceAction::EditHpaRange,
+            kind_key(ResourceKind::HorizontalPodAutoscalers),
+        ),
+        (
+            ResourceAction::ExpandClaim,
+            kind_key(ResourceKind::PersistentVolumeClaims),
+        ),
+        (
+            ResourceAction::SetDefaultStorageClass,
+            kind_key(ResourceKind::StorageClasses),
+        ),
     ];
     for (action, subject) in subjects {
         assert_eq!(
@@ -1726,6 +1738,18 @@ fn every_shipped_workload_action_has_its_own_check() {
         (ResourceAction::SuspendCronJob, AccessCheck::PatchCronJobs),
         (ResourceAction::TriggerCronJob, AccessCheck::CreateJobs),
         (ResourceAction::RerunJob, AccessCheck::CreateJobs),
+        (
+            ResourceAction::EditHpaRange,
+            AccessCheck::PatchHorizontalPodAutoscalers,
+        ),
+        (
+            ResourceAction::ExpandClaim,
+            AccessCheck::PatchPersistentVolumeClaims,
+        ),
+        (
+            ResourceAction::SetDefaultStorageClass,
+            AccessCheck::PatchStorageClasses,
+        ),
     ];
     for (action, check) in cases {
         let denied = known_denying(&[check]);
@@ -1812,6 +1836,19 @@ fn actions_not_offered_for_other_kinds() {
     assert!(!offers(ResourceKind::Jobs, RowAction::TriggerCronJob));
     assert!(offers(ResourceKind::Jobs, RowAction::RerunJob));
     assert!(!offers(ResourceKind::CronJobs, RowAction::RerunJob));
+    assert!(offers(
+        ResourceKind::HorizontalPodAutoscalers,
+        RowAction::EditHpaRange
+    ));
+    assert!(!offers(ResourceKind::Deployments, RowAction::EditHpaRange));
+    assert!(offers(
+        ResourceKind::PersistentVolumeClaims,
+        RowAction::ExpandClaim
+    ));
+    assert!(!offers(
+        ResourceKind::HorizontalPodAutoscalers,
+        RowAction::ExpandClaim
+    ));
     // Pods and nodes carry no workload action at all.
     for subject in [pod_key(), node_key()] {
         for row in [RowAction::RestartRollout, RowAction::RerunJob] {
@@ -1882,6 +1919,21 @@ fn every_new_row_action_has_a_unit_key_action() {
             .partial_eq(&TriggerCronJob)
     );
     assert!(RowAction::RerunJob.key_action().partial_eq(&RerunJob));
+    assert!(
+        RowAction::EditHpaRange
+            .key_action()
+            .partial_eq(&crate::keymap::EditHpaRange)
+    );
+    assert!(
+        RowAction::ExpandClaim
+            .key_action()
+            .partial_eq(&crate::keymap::ExpandClaim)
+    );
+    assert!(
+        RowAction::SetDefaultStorageClass
+            .key_action()
+            .partial_eq(&crate::keymap::SetDefaultStorageClass)
+    );
 }
 
 // ---- Edit YAML (spec 0031) ----
@@ -2482,5 +2534,146 @@ fn the_uat_answers_disable_both_debug_actions_with_their_reasons() {
             &unlocked(&uat)
         )),
         "Not permitted: create pods"
+    );
+}
+
+// ---- Resource edits (spec 0032b) ----
+
+#[test]
+fn expand_row_block_table() {
+    use crate::resource_edits::resource_edits_tests::claim;
+    let expand = |claim: cluster::PersistentVolumeClaimSummary| {
+        crate::workload_actions::row_block(
+            ResourceAction::ExpandClaim,
+            &KindObject::PersistentVolumeClaim(claim),
+            None,
+        )
+        .map(|reason| reason.to_string())
+    };
+    assert_eq!(expand(claim("data", "100Gi", "100Gi")), None);
+    let mut pending = claim("data", "100Gi", "100Gi");
+    pending.phase = "Pending".to_owned();
+    assert_eq!(
+        expand(pending).as_deref(),
+        Some("Only a bound claim can be expanded")
+    );
+    let mut terminating = claim("data", "100Gi", "100Gi");
+    terminating.is_terminating = true;
+    assert_eq!(
+        expand(terminating).as_deref(),
+        Some("The claim is being deleted")
+    );
+    // Another kind of row is never blocked by the claim rules.
+    assert_eq!(
+        crate::workload_actions::row_block(ResourceAction::ExpandClaim, &KindObject::Plain, None),
+        None
+    );
+}
+
+#[test]
+fn expand_item_is_gated_then_blocked_by_the_row() {
+    use crate::resource_edits::resource_edits_tests::claim;
+    let allowed = known_denying(&[]);
+    let mut pending = claim("data", "100Gi", "100Gi");
+    pending.phase = "Pending".to_owned();
+    let pending = KindObject::PersistentVolumeClaim(pending);
+    let bound = KindObject::PersistentVolumeClaim(claim("data", "100Gi", "100Gi"));
+    let guard_at = |access, lock| test_guard(access, lock, "dev-1", Environment::Development);
+    assert_eq!(
+        row_availability(
+            ResourceAction::ExpandClaim,
+            &guard_at(&allowed, WriteLock::Unlocked),
+            &bound,
+            None
+        ),
+        ActionAvailability::Enabled
+    );
+    assert_eq!(
+        reason(row_availability(
+            ResourceAction::ExpandClaim,
+            &guard_at(&allowed, WriteLock::Unlocked),
+            &pending,
+            None
+        )),
+        "Only a bound claim can be expanded"
+    );
+    // The lock wins over the state of the row.
+    assert_eq!(
+        reason(row_availability(
+            ResourceAction::ExpandClaim,
+            &guard_at(&allowed, WriteLock::Locked),
+            &pending,
+            None
+        )),
+        "dev-1 is read-only"
+    );
+    let denied = known_denying(&[AccessCheck::PatchPersistentVolumeClaims]);
+    assert_eq!(
+        reason(row_availability(
+            ResourceAction::ExpandClaim,
+            &guard_at(&denied, WriteLock::Unlocked),
+            &bound,
+            None
+        )),
+        "Not permitted: patch persistentvolumeclaims"
+    );
+}
+
+#[test]
+fn set_default_row_block_table() {
+    use crate::resource_edits::resource_edits_tests::class;
+    let block = |class: cluster::StorageClassSummary| {
+        crate::workload_actions::row_block(
+            ResourceAction::SetDefaultStorageClass,
+            &KindObject::StorageClass(class),
+            None,
+        )
+        .map(|reason| reason.to_string())
+    };
+    assert_eq!(block(class("gp3", false, true)), None);
+    assert_eq!(
+        block(class("io2", true, true)).as_deref(),
+        Some("Already the default")
+    );
+    // A class that does not expand can still be the default.
+    assert_eq!(block(class("st1", false, false)), None);
+}
+
+#[test]
+fn set_default_item_is_gated_then_blocked_by_the_row() {
+    use crate::resource_edits::resource_edits_tests::class;
+    let allowed = known_denying(&[]);
+    let default = KindObject::StorageClass(class("io2", true, true));
+    let other = KindObject::StorageClass(class("gp3", false, true));
+    let guard_at = |access, lock| test_guard(access, lock, "dev-1", Environment::Development);
+    let item = |guard: &ClusterGuard<'_>, object: &KindObject| {
+        reason(row_availability(
+            ResourceAction::SetDefaultStorageClass,
+            guard,
+            object,
+            None,
+        ))
+    };
+    assert_eq!(
+        row_availability(
+            ResourceAction::SetDefaultStorageClass,
+            &guard_at(&allowed, WriteLock::Unlocked),
+            &other,
+            None
+        ),
+        ActionAvailability::Enabled
+    );
+    assert_eq!(
+        item(&guard_at(&allowed, WriteLock::Unlocked), &default),
+        "Already the default"
+    );
+    assert_eq!(
+        item(&guard_at(&allowed, WriteLock::Locked), &default),
+        "dev-1 is read-only"
+    );
+    let denied = known_denying(&[AccessCheck::PatchStorageClasses]);
+    assert_eq!(
+        item(&guard_at(&denied, WriteLock::Unlocked), &other),
+        "Not permitted: patch storageclasses"
     );
 }

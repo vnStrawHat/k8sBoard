@@ -47,5 +47,5 @@ Expand, Set default, Delete, Clean up (0032/0033; menu items disabled); VolumeSn
 ## Open items
 
 1. PVC Pending reasons (WaitForFirstConsumer, ProvisioningFailed) show only in the Events tab; a WHY box needs object events in `DiagnosisInputs`.
-2. Two default StorageClasses (new claims get the newest) are not flagged.
+2. Two default StorageClasses (new claims get the newest) are not flagged in the list. Set as default (0032b) resolves the state it creates: it unsets the other defaults, and a partial run names the class in use.
 3. Large clusters (> 10 Ready nodes) show Used only for claims on polled nodes; a slow all-node cadence would fill the column (0011 open item 2).

@@ -9,6 +9,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cluster::{ObjectKind, WriteError, WriteOutcome, WriteRequest};
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::{AnyWindowHandle, App, AppContext as _, Context, SharedString, WeakEntity, Window};
 
 use super::object_delete::{DeleteExtras, delete_commit_progress, delete_notice};
@@ -24,7 +28,10 @@ use crate::resource_actions::{
     ActionAvailability, NOT_SHIPPED_REASON, ResourceAction, action_availability, action_label,
     unavailable_text,
 };
+use crate::resource_edits::DefaultClassExtras;
+use crate::resource_edits::{bulk_default_class_intent, bulk_expand_intent, bulk_hpa_range_intent};
 use crate::row_selection::{BulkButton, BulkState, ROLL_BACK_BULK_REASON, bulk_actions};
+use crate::table_selection::ClusterObject;
 use crate::table_view::{FilteredTable as _, TableView};
 use crate::value_popover::ValuePopover;
 use crate::workload_actions::{BulkInputs, all_suspended, bulk_intent, bulk_scale_intent};
@@ -62,6 +69,18 @@ pub(crate) struct BatchPlan {
     pub(crate) items: Vec<BatchItem>,
     pub(crate) skipped: Vec<SkippedItem>,
     pub(crate) extras: BatchExtras,
+    pub(crate) on_failure: BatchFailure,
+}
+
+/// What a failed commit does to the rest of the batch. A `Blocked` result (lock, session switch,
+/// reconnect) always stops the rest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BatchFailure {
+    /// Independent objects: the next item still goes (0032, 0033).
+    Continue,
+    /// An ordered plan where a later step depends on an earlier one: nothing more is sent after a
+    /// failure (0032b Set default).
+    Stop,
 }
 
 /// What one action adds to the batch beyond a list of requests.
@@ -72,6 +91,22 @@ pub(crate) enum BatchExtras {
     /// Delete (0033): the propagation choice, the targets it rebuilds the items from, and the
     /// objects that were gone before the dialog opened.
     Delete(DeleteExtras),
+    /// Set default storage class (0032b): which class becomes the default, and the text of the state
+    /// a partial run leaves behind.
+    DefaultClass(DefaultClassExtras),
+}
+
+/// What a popover asked for before a bulk batch can be built.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BulkValue {
+    /// The action needs no value.
+    Nothing,
+    /// Scale: the replicas.
+    Replicas(u32),
+    /// Edit limits: the HPA range.
+    Range { min: u32, max: u32 },
+    /// Expand: the storage quantity.
+    Storage(String),
 }
 
 /// A ticked row with the cluster it came from (0027).
@@ -114,6 +149,7 @@ pub(crate) fn batch_plan(
         items,
         skipped,
         extras: BatchExtras::None,
+        on_failure: BatchFailure::Continue,
     })
 }
 
@@ -165,7 +201,9 @@ impl BatchIntent {
             (BatchExtras::Delete(_), _) => {
                 format!("{} {} of {total}", self.verb, total.saturating_sub(gone))
             }
-            (BatchExtras::None, _) => format!("{} {total}", self.verb),
+            (BatchExtras::None | BatchExtras::DefaultClass(_), _) => {
+                format!("{} {total}", self.verb)
+            }
         }
     }
 
@@ -179,17 +217,53 @@ impl BatchIntent {
         result: Result<WriteOutcome, CheckedWriteError>,
         stopped: &mut Option<SharedString>,
     ) -> ItemProgress {
-        match self.is_delete() {
+        let progress = match self.is_delete() {
             true => delete_commit_progress(result, stopped),
             false => commit_progress(result, stopped),
+        };
+        // An ordered plan sends nothing after a step that did not go through.
+        if self.plan.on_failure == BatchFailure::Stop
+            && stopped.is_none()
+            && matches!(progress, ItemProgress::Failed(_) | ItemProgress::Unknown)
+        {
+            *stopped = Some(EARLIER_STEP_FAILED.into());
         }
+        progress
     }
 
     /// The notice after the last commit.
     fn notice(&self, results: &[ItemProgress]) -> String {
+        if matches!(self.plan.extras, BatchExtras::Delete(_)) {
+            return delete_notice(self, results);
+        }
+        match self.stop_notice(results) {
+            Some(text) => text,
+            None => batch_notice(&self.verb, results),
+        }
+    }
+
+    /// The notice of an ordered plan that stopped: how far it got, why, and the state it left
+    /// behind. `None` for a plan that continues, or one that went through.
+    fn stop_notice(&self, results: &[ItemProgress]) -> Option<String> {
+        if self.plan.on_failure != BatchFailure::Stop {
+            return None;
+        }
+        let mut text = stop_notice(&self.label, results)?;
+        if let BatchExtras::DefaultClass(extras) = &self.plan.extras
+            && let Some(state) = extras.state_left(results)
+        {
+            text.push_str(". ");
+            text.push_str(&state);
+        }
+        Some(text)
+    }
+
+    /// What the Retry of a stopped plan runs again: the object the action started from.
+    fn retry_subject(&self, results: &[ItemProgress]) -> Option<ClusterObject> {
+        self.stop_notice(results)?;
         match &self.plan.extras {
-            BatchExtras::Delete(_) => delete_notice(self, results),
-            BatchExtras::None => batch_notice(&self.verb, results),
+            BatchExtras::DefaultClass(extras) => Some(extras.subject(&self.cluster)),
+            BatchExtras::Delete(_) | BatchExtras::None => None,
         }
     }
 
@@ -314,6 +388,26 @@ pub(crate) fn commit_progress(
             ItemProgress::Failed(write_error_text(&error).into())
         }
     }
+}
+
+/// What the items after a failed step of an ordered plan read.
+const EARLIER_STEP_FAILED: &str = "an earlier step failed";
+
+/// `Make gp3 the default storage class: stopped after 0 of 2: {error}`, or `None` when every item
+/// went through. The error is the first one that did not.
+pub(crate) fn stop_notice(label: &str, results: &[ItemProgress]) -> Option<String> {
+    let error = results.iter().find_map(|state| match state {
+        ItemProgress::Failed(reason) | ItemProgress::NotSent(reason) => Some(reason.to_string()),
+        ItemProgress::Unknown => {
+            Some("the outcome is unknown; the change may have been applied".to_owned())
+        }
+        _ => None,
+    })?;
+    let settled = results.iter().filter(|state| state.is_settled()).count();
+    Some(format!(
+        "{label}: stopped after {settled} of {}: {error}",
+        results.len()
+    ))
 }
 
 /// The notice after the last commit: `Restart: 4 done`, or the counts that did not go through with
@@ -463,6 +557,9 @@ impl AppShell {
             });
             let notice = batch.notice(&results);
             let is_success = results.iter().all(ItemProgress::is_settled);
+            let retry = batch
+                .retry_subject(&results)
+                .map(|subject| (subject, batch.action));
             let _ = cx.update_window(handle, |_, window, cx| {
                 // Only our own dialog closes, and only while it is open: after Escape or Back the
                 // notice is all there is.
@@ -471,7 +568,12 @@ impl AppShell {
                         dialog.close(window, cx);
                     }
                 });
-                notify_with(window, cx, notice, is_success);
+                match retry {
+                    Some((subject, action)) => {
+                        notify_with_retry(window, cx, notice, shell, subject, action);
+                    }
+                    None => notify_with(window, cx, notice, is_success),
+                }
             });
         })
         .detach();
@@ -568,21 +670,24 @@ impl AppShell {
         if self.running_batches.contains(first.cluster) {
             return off(BATCH_RUNNING_REASON);
         }
-        // Scale asks for its count in a popover, so the batch exists only once it is typed.
-        if matches!(action, ResourceAction::Scale(_)) {
+        // These ask for their value in a popover, so the batch exists only once it is typed.
+        if matches!(
+            action,
+            ResourceAction::Scale(_) | ResourceAction::EditHpaRange | ResourceAction::ExpandClaim
+        ) {
             return BulkState::Ready(action);
         }
-        match self.bulk_batch_of(checked, action, None, cx) {
+        match self.bulk_batch_of(checked, action, BulkValue::Nothing, cx) {
             Ok(_) => BulkState::Ready(action),
             Err(reason) => BulkState::Off(reason),
         }
     }
 
-    /// The batch of `action` over the ticked rows as they are now. `replicas` is the Scale count.
-    fn bulk_batch(
+    /// The batch of `action` over the ticked rows as they are now. `value` is what a popover asked for.
+    pub(super) fn bulk_batch(
         &self,
         action: ResourceAction,
-        replicas: Option<u32>,
+        value: BulkValue,
         cx: &App,
     ) -> Result<BatchIntent, SharedString> {
         let ticked = self.kind_table.read(cx).delegate().checked_rows(cx);
@@ -593,7 +698,7 @@ impl AppShell {
                 object: &row.object,
             })
             .collect();
-        self.bulk_batch_of(&checked, action, replicas, cx)
+        self.bulk_batch_of(&checked, action, value, cx)
     }
 
     /// The batch over `checked`, which the caller read once: the selection bar builds it for every
@@ -602,7 +707,7 @@ impl AppShell {
         &self,
         checked: &[CheckedRow<'_>],
         action: ResourceAction,
-        replicas: Option<u32>,
+        value: BulkValue,
         cx: &App,
     ) -> Result<BatchIntent, SharedString> {
         let first = checked
@@ -620,11 +725,24 @@ impl AppShell {
             now: jiff::Timestamp::now(),
             hpas: live.loaded_hpas(),
         };
-        match (action, replicas) {
-            (ResourceAction::Scale(kind), Some(replicas)) => {
+        match (action, value) {
+            (ResourceAction::Scale(kind), BulkValue::Replicas(replicas)) => {
                 bulk_scale_intent(&inputs, replicas, kind)
             }
-            (ResourceAction::Scale(_), None) => Err("Enter the replicas first".into()),
+            (ResourceAction::Scale(_), BulkValue::Nothing) => {
+                Err("Enter the replicas first".into())
+            }
+            (ResourceAction::EditHpaRange, BulkValue::Range { min, max }) => {
+                bulk_hpa_range_intent(&inputs, min, max)
+            }
+            (ResourceAction::EditHpaRange, _) => Err("Enter the min and max first".into()),
+            (ResourceAction::ExpandClaim, BulkValue::Storage(storage)) => {
+                bulk_expand_intent(&inputs, &storage, &live.loaded_storage_classes())
+            }
+            (ResourceAction::ExpandClaim, _) => Err("Enter the size first".into()),
+            (ResourceAction::SetDefaultStorageClass, _) => {
+                bulk_default_class_intent(&inputs, &live.loaded_storage_classes())
+            }
             _ => bulk_intent(action, &inputs),
         }
     }
@@ -641,12 +759,20 @@ impl AppShell {
             self.open_bulk_scale_popover(kind, window, cx);
             return;
         }
+        if action == ResourceAction::EditHpaRange {
+            self.open_bulk_hpa_range_popover(window, cx);
+            return;
+        }
+        if action == ResourceAction::ExpandClaim {
+            self.open_bulk_expand_popover(window, cx);
+            return;
+        }
         if let ResourceAction::Delete(_) = action {
             let scope = self.checked_objects(cx);
             self.start_delete(scope, window, cx);
             return;
         }
-        match self.bulk_batch(action, None, cx) {
+        match self.bulk_batch(action, BulkValue::Nothing, cx) {
             Ok(intent) => self.start_batch(intent, window, cx),
             Err(reason) => notify(window, cx, unavailable_text(action_label(action), &reason)),
         }
@@ -674,7 +800,11 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) {
         self.close_value_popover(cx);
-        match self.bulk_batch(ResourceAction::Scale(kind), Some(replicas), cx) {
+        match self.bulk_batch(
+            ResourceAction::Scale(kind),
+            BulkValue::Replicas(replicas),
+            cx,
+        ) {
             Ok(intent) => self.start_batch(intent, window, cx),
             Err(reason) => notify(
                 window,
@@ -697,7 +827,7 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) {
         let action = ResourceAction::RestartRollout(ObjectKind::Deployment);
-        let Ok(intent) = self.bulk_batch(action, None, cx) else {
+        let Ok(intent) = self.bulk_batch(action, BulkValue::Nothing, cx) else {
             return;
         };
         if let Some(session) = self.slot_session(&intent.cluster).cloned() {
@@ -719,6 +849,32 @@ impl AppShell {
         dialog.update(cx, |dialog, _| dialog.show_fixture());
         ConfirmDialog::open(&dialog, window, cx);
     }
+}
+
+/// A warning notice with a Retry button: it dismisses the notice and starts `action` again on
+/// `subject`, which re-plans from the data of that moment.
+fn notify_with_retry(
+    window: &mut Window,
+    cx: &mut App,
+    text: String,
+    shell: WeakEntity<AppShell>,
+    subject: ClusterObject,
+    action: ResourceAction,
+) {
+    let notification = Notification::warning(text).action(move |_, _, cx| {
+        let (shell, subject) = (shell.clone(), subject.clone());
+        Button::new("batch-retry")
+            .label("Retry")
+            .small()
+            .outline()
+            .on_click(cx.listener(move |notification, _, window, cx| {
+                notification.dismiss(window, cx);
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.retry_batch(action, &subject, window, cx);
+                });
+            }))
+    });
+    window.push_notification(notification, cx);
 }
 
 /// What a batch commit carries from the dialog: the proof that the confirm step was satisfied for

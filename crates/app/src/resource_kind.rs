@@ -500,7 +500,10 @@ static HORIZONTAL_POD_AUTOSCALERS: KindSpec = KindSpec {
         column("Metrics", 200., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &[KindAction::named("Edit min / max…")],
+    read_only_actions: &[KindAction::keyed(
+        "Edit min / max…",
+        ResourceAction::EditHpaRange,
+    )],
     delete_label: "Delete HPA…",
     has_port_forward: false,
 };
@@ -548,7 +551,7 @@ static PERSISTENT_VOLUME_CLAIMS: KindSpec = KindSpec {
         column("Class", 150., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &[KindAction::named("Expand…")],
+    read_only_actions: &[KindAction::keyed("Expand…", ResourceAction::ExpandClaim)],
     delete_label: "Delete PVC…",
     has_port_forward: false,
 };
@@ -600,7 +603,10 @@ static STORAGE_CLASSES: KindSpec = KindSpec {
         column("PVs", 70., Align::Right),
         AGE_COLUMN,
     ],
-    read_only_actions: &[KindAction::named("Set as default")],
+    read_only_actions: &[KindAction::keyed(
+        "Set as default",
+        ResourceAction::SetDefaultStorageClass,
+    )],
     delete_label: "Delete storage class…",
     has_port_forward: false,
 };

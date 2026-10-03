@@ -41,6 +41,15 @@ const DAEMON_SET_ACTIONS: [KindAction; 1] = [KindAction::keyed(
     ResourceAction::RestartRollout(ObjectKind::DaemonSet),
 )];
 const JOB_ACTIONS: [KindAction; 1] = [KindAction::keyed("Re-run", ResourceAction::RerunJob)];
+const HPA_ACTIONS: [KindAction; 1] = [KindAction::keyed(
+    "Edit limits",
+    ResourceAction::EditHpaRange,
+)];
+const CLAIM_ACTIONS: [KindAction; 1] = [KindAction::keyed("Expand", ResourceAction::ExpandClaim)];
+const CLASS_ACTIONS: [KindAction; 1] = [KindAction::keyed(
+    "Set default",
+    ResourceAction::SetDefaultStorageClass,
+)];
 const CRON_JOB_ACTIONS: [KindAction; 2] = [
     KindAction::keyed("Trigger now", ResourceAction::TriggerCronJob),
     KindAction::keyed("Suspend", ResourceAction::SuspendCronJob),
@@ -56,6 +65,9 @@ pub(crate) fn bulk_actions(screen: Screen) -> &'static [KindAction] {
         Screen::Kind(ResourceKind::DaemonSets) => &DAEMON_SET_ACTIONS,
         Screen::Kind(ResourceKind::Jobs) => &JOB_ACTIONS,
         Screen::Kind(ResourceKind::CronJobs) => &CRON_JOB_ACTIONS,
+        Screen::Kind(ResourceKind::HorizontalPodAutoscalers) => &HPA_ACTIONS,
+        Screen::Kind(ResourceKind::PersistentVolumeClaims) => &CLAIM_ACTIONS,
+        Screen::Kind(ResourceKind::StorageClasses) => &CLASS_ACTIONS,
         Screen::Overview
         | Screen::Pods
         | Screen::Issues

@@ -46,7 +46,7 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 |---|---|---|
 | Read-only | 0007 YAML view · 0008 Pod/Node details · 0009 Table toolkit · 0010 Metrics I · 0011 Metrics II (kubelet) · 0012 Kind drawer completions · 0013 Policy kinds · 0014 Storage kinds · 0015 Access-control kinds · 0016 Secrets · 0017 Helm (read) · 0018 CRDs and custom resources · 0019 Workload logs · 0020 Issues (done) · 0021 Overview · 0022 Topology (done) · 0023 RBAC and policy analysis | live-verifiable on UAT |
 | Local only | 0024 Settings store and environments · 0025 Settings window · 0026 Cluster switcher · 0027 Multi-cluster views · 0028 Keyboard map · 0029 Command palette | no cluster writes; app writes its own config files |
-| Mutating | 0030 Guardrails and write path · 0031 Edit YAML · 0032 Workload actions · 0033 Delete and pod lifecycle · 0034 Node maintenance · 0035 Port-forward · 0036 Terminal and pod shell · 0037 Node shell and debug containers · 0038 Helm write actions (deferred by the user, 2026-10-02; not scheduled) | C3 approved once for 0030–0037 (user, 2026-10-02); RBAC-gated (SSAR); disabled on UAT |
+| Mutating | 0030 Guardrails and write path · 0031 Edit YAML · 0032 Workload actions · 0032b Resource edits (HPA limits, PVC Expand, default StorageClass) · 0033 Delete and pod lifecycle · 0034 Node maintenance · 0035 Port-forward · 0036 Terminal and pod shell · 0037 Node shell and debug containers · 0038 Helm write actions (deferred by the user, 2026-10-02; not scheduled) | C3 approved once for 0030–0037 (user, 2026-10-02); RBAC-gated (SSAR); disabled on UAT |
 
 ## Open items
 

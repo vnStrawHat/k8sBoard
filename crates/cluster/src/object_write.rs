@@ -28,6 +28,7 @@ use crate::edit_placeholders::{self, Restored};
 use crate::edit_preview::{EditPreview, build_preview};
 use crate::object_edit::{ObjectEdit, is_helm_release};
 use crate::object_yaml::{ObjectKind, ObjectRef};
+use crate::quantity::ByteAmount;
 use crate::workload_write_bodies::{
     RERUN_BASE_CHARS, RERUN_SUFFIX, RollBackRefusal, TRIGGER_BASE_CHARS, TRIGGER_SUFFIX,
     generate_name, rerun_job_body, rollback_operations, trigger_job_body,
@@ -51,6 +52,10 @@ const REJECTED_TEMPLATE: &str = "the server rejected the template of that revisi
 const MAX_REPLICAS: u32 = i32::MAX as u32;
 /// A uid is a UUID; the bound only keeps a garbage value out of the delete body.
 const MAX_UID_LENGTH: usize = 64;
+/// The annotation that marks a StorageClass as the default one, and its beta spelling: 0014 reads
+/// either key, so an unset clears both.
+const DEFAULT_CLASS_ANNOTATION: &str = "storageclass.kubernetes.io/is-default-class";
+const DEFAULT_CLASS_BETA_ANNOTATION: &str = "storageclass.beta.kubernetes.io/is-default-class";
 
 /// One allow-listed mutation. Adding a variant is the only way to add a write (C3).
 // Debug is manual: the variant name only.
@@ -102,6 +107,14 @@ pub enum WriteOperation {
     /// Deletes a node shell pod this run (or a sweep) found, with a `uid` precondition and no grace
     /// period. Commit only: it has no dry-run (0037).
     DeleteNodeShellPod { uid: String },
+    /// Merge patch `{"spec":{"minReplicas":min,"maxReplicas":max}}` on a HorizontalPodAutoscaler
+    /// (0032b).
+    SetHpaReplicaRange { min: u32, max: u32 },
+    /// Merge patch of a PersistentVolumeClaim's storage request (0032b). `storage` is a
+    /// Kubernetes quantity, stored trimmed and sent as typed.
+    ExpandClaim { storage: String },
+    /// Merge patch of a StorageClass's default-class annotation (0032b).
+    SetDefaultStorageClass { is_default: bool },
 }
 
 impl WriteOperation {
@@ -120,6 +133,9 @@ impl WriteOperation {
             Self::AddDebugContainer { .. } => "AddDebugContainer",
             Self::CreateNodeShellPod { .. } => "CreateNodeShellPod",
             Self::DeleteNodeShellPod { .. } => "DeleteNodeShellPod",
+            Self::SetHpaReplicaRange { .. } => "SetHpaReplicaRange",
+            Self::ExpandClaim { .. } => "ExpandClaim",
+            Self::SetDefaultStorageClass { .. } => "SetDefaultStorageClass",
         }
     }
 }
@@ -272,6 +288,7 @@ impl WriteRequest {
         if matches!(&operation, WriteOperation::DeleteObject { uid, .. } if uid.is_empty()) {
             return None;
         }
+        let operation = checked_operation(operation)?;
         let access_check = fitting_access_check(&target, &operation)?;
         is_safe_path(&target, &operation).then_some(Self {
             target,
@@ -369,6 +386,30 @@ impl WriteRequest {
             WriteOperation::DeleteNodeShellPod { uid } => {
                 vec![field("metadata.uid", uid.clone())]
             }
+            WriteOperation::SetHpaReplicaRange { min, max } => vec![
+                field("spec.minReplicas", min.to_string()),
+                field("spec.maxReplicas", max.to_string()),
+            ],
+            WriteOperation::ExpandClaim { storage } => {
+                vec![field("spec.resources.requests.storage", storage.clone())]
+            }
+            WriteOperation::SetDefaultStorageClass { is_default: true } => vec![field(
+                "metadata.annotations[storageclass.kubernetes.io/is-default-class]",
+                "true".to_owned(),
+            )],
+            // The beta key is removed, not set, so it has no value.
+            WriteOperation::SetDefaultStorageClass { is_default: false } => vec![
+                field(
+                    "metadata.annotations[storageclass.kubernetes.io/is-default-class]",
+                    "false".to_owned(),
+                ),
+                ChangedField {
+                    path: Cow::Borrowed(
+                        "metadata.annotations[storageclass.beta.kubernetes.io/is-default-class]",
+                    ),
+                    value: None,
+                },
+            ],
         }
     }
 
@@ -388,8 +429,33 @@ impl WriteRequest {
             | WriteOperation::TriggerCronJob
             | WriteOperation::RerunJob
             | WriteOperation::ReplaceObject(_)
-            | WriteOperation::DeleteObject { .. } => true,
+            | WriteOperation::DeleteObject { .. }
+            | WriteOperation::SetHpaReplicaRange { .. }
+            | WriteOperation::ExpandClaim { .. }
+            | WriteOperation::SetDefaultStorageClass { .. } => true,
         }
+    }
+}
+
+/// The operation with its values validated: `None` for a request the API server would refuse
+/// (0032b decision 2). An expand's quantity is stored trimmed.
+fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
+    match operation {
+        // `minReplicas: 0` needs an alpha feature gate and the API rejects `min > max`; both
+        // fields are int32.
+        WriteOperation::SetHpaReplicaRange { min, max }
+            if min == 0 || min > max || max > MAX_REPLICAS =>
+        {
+            None
+        }
+        WriteOperation::ExpandClaim { storage } => {
+            let storage = storage.trim();
+            let amount = ByteAmount::parse(storage)?;
+            (amount.bytes() > 0).then(|| WriteOperation::ExpandClaim {
+                storage: storage.to_owned(),
+            })
+        }
+        other => Some(other),
     }
 }
 
@@ -433,6 +499,15 @@ fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Optio
         }
         (WriteOperation::CreateNodeShellPod { .. }, ObjectKind::Pod) => AccessCheck::CreatePods,
         (WriteOperation::DeleteNodeShellPod { .. }, ObjectKind::Pod) => AccessCheck::DeletePods,
+        (WriteOperation::SetHpaReplicaRange { .. }, ObjectKind::HorizontalPodAutoscaler) => {
+            AccessCheck::PatchHorizontalPodAutoscalers
+        }
+        (WriteOperation::ExpandClaim { .. }, ObjectKind::PersistentVolumeClaim) => {
+            AccessCheck::PatchPersistentVolumeClaims
+        }
+        (WriteOperation::SetDefaultStorageClass { .. }, ObjectKind::StorageClass) => {
+            AccessCheck::PatchStorageClasses
+        }
         _ => return None,
     })
 }
@@ -815,6 +890,31 @@ impl ClusterConnection {
                     uid: None,
                 })
             }
+            WriteOperation::SetHpaReplicaRange { min, max } => {
+                let body = json!({ "spec": { "minReplicas": min, "maxReplicas": max } });
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::ExpandClaim { storage } => {
+                let body =
+                    json!({ "spec": { "resources": { "requests": { "storage": storage } } } });
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::SetDefaultStorageClass { is_default } => {
+                // An unset removes the beta key (`null` in a merge patch), which 0014 also reads.
+                let annotations = if *is_default {
+                    json!({ DEFAULT_CLASS_ANNOTATION: "true" })
+                } else {
+                    json!({ DEFAULT_CLASS_ANNOTATION: "false", DEFAULT_CLASS_BETA_ANNOTATION: null })
+                };
+                let body = json!({ "metadata": { "annotations": annotations } });
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
         }
     }
 
@@ -1179,3 +1279,8 @@ mod object_write_delete_tests;
 #[allow(clippy::disallowed_methods)]
 #[path = "object_write_debug_tests.rs"]
 mod object_write_debug_tests;
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+#[path = "object_write_resource_edit_tests.rs"]
+mod object_write_resource_edit_tests;

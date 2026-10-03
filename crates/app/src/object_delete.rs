@@ -17,7 +17,8 @@ use gpui_kit::{App, Context, SharedString, Window};
 
 use super::AppShell;
 use super::batch_write::{
-    BatchExtras, BatchIntent, BatchItem, BatchPlan, ItemProgress, MAX_BATCH_ITEMS, SkippedItem,
+    BatchExtras, BatchFailure, BatchIntent, BatchItem, BatchPlan, ItemProgress, MAX_BATCH_ITEMS,
+    SkippedItem,
 };
 use super::write_flow::{CheckedWriteError, write_error_text};
 use crate::age::format_age;
@@ -204,6 +205,7 @@ pub(crate) fn delete_batch(
             items,
             skipped: Vec::new(),
             extras: BatchExtras::Delete(extras),
+            on_failure: BatchFailure::Continue,
         },
     }
 }

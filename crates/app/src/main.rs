@@ -99,6 +99,7 @@ mod recent_changes;
 mod related_objects;
 mod related_pods;
 mod resource_actions;
+mod resource_edits;
 mod resource_kind;
 mod row_selection;
 mod screenshot;

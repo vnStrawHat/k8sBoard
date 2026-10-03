@@ -12,15 +12,17 @@ use gpui_kit::{
     Window,
 };
 
+use super::resource_edit_flow::RowCheck;
 use super::{AppShell, Screen, focus_table};
 use crate::dock::{DockMode, TabStep};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
-    CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditYaml, LeaveInput, NextContainer,
-    NextDockTab, OpenDrawer, OpenShell, PauseRollout, PortForward, PreviousContainer,
-    PreviousDockTab, RerunJob, RestartRollout, RollBack, Scale, SelectFirstRow, SelectLastRow,
-    SelectNextPage, SelectNextRow, SelectPreviousPage, SelectPreviousRow, SuspendCronJob,
-    ToggleDock, ToggleDockZoom, ToggleReadOnly, TriggerCronJob, ViewLogs, ViewYaml,
+    CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditYaml, ExpandClaim,
+    LeaveInput, NextContainer, NextDockTab, OpenDrawer, OpenShell, PauseRollout, PortForward,
+    PreviousContainer, PreviousDockTab, RerunJob, RestartRollout, RollBack, Scale, SelectFirstRow,
+    SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage, SelectPreviousRow,
+    SetDefaultStorageClass, SuspendCronJob, ToggleDock, ToggleDockZoom, ToggleReadOnly,
+    TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::live_sections::loaded_replica_sets;
 use crate::pod_drawer::{container_display_order, selected_container_index};
@@ -195,6 +197,9 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_row_key::<SuspendCronJob>(root, RowAction::SuspendCronJob, cx);
     let root = on_row_key::<TriggerCronJob>(root, RowAction::TriggerCronJob, cx);
     let root = on_row_key::<RerunJob>(root, RowAction::RerunJob, cx);
+    let root = on_row_key::<EditHpaRange>(root, RowAction::EditHpaRange, cx);
+    let root = on_row_key::<ExpandClaim>(root, RowAction::ExpandClaim, cx);
+    let root = on_row_key::<SetDefaultStorageClass>(root, RowAction::SetDefaultStorageClass, cx);
     on_row_key::<Delete>(root, RowAction::Delete, cx)
 }
 
@@ -547,6 +552,11 @@ impl AppShell {
             | ResourceAction::TriggerCronJob
             | ResourceAction::RerunJob => self.start_workload_action(action, &subject, window, cx),
             ResourceAction::Scale(_) => self.open_scale_popover(&subject, window, cx),
+            ResourceAction::EditHpaRange => self.open_hpa_range_popover(&subject, window, cx),
+            ResourceAction::ExpandClaim => self.open_expand_popover(&subject, window, cx),
+            ResourceAction::SetDefaultStorageClass => {
+                self.start_set_default(&subject, RowCheck::Enforced, window, cx);
+            }
             // The buttons are in the drawer, so Roll back… takes the user to the revisions.
             ResourceAction::RollBack => self.show_revisions(&subject, window, cx),
         }
