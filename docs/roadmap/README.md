@@ -1,6 +1,6 @@
 # k8sBoard roadmap — everything in the wireframes
 
-Baseline: HEAD `e80ed80` (specs 0001–0005 implemented; 0006 Events in design). Source of truth: `docs/k8sboard-wireframes.html` v0.6 (W1–W11, keyboard map, tokens, stack table).
+Baseline: main `735f658` (specs 0001–0037 merged except 0034, in build; 0038 deferred). What is still missing: [wireframe-gap-audit.md](wireframe-gap-audit.md). Source of truth: `docs/k8sboard-wireframes.html` v0.6 (W1–W11, keyboard map, tokens, stack table).
 
 ## How to use
 
@@ -8,7 +8,7 @@ Baseline: HEAD `e80ed80` (specs 0001–0005 implemented; 0006 Events in design).
 - The **gap plan** files define the future specs 0007–0038 in delivery order. The architect turns each one into a `docs/specs/NNNN-title/` folder.
 - Settle the [cross-cutting decisions](cross-cutting.md) before the spec that needs them (each row names its first consumer).
 
-Status words: **Done** (matches the wireframe), **Partial** (built, but parts are missing), **Planned(0006)**, **Missing**.
+Status words: **Done** (matches the wireframe), **Partial** (built, but parts are missing), **Planned(NNNN)**, **Missing**.
 
 ## Files
 
@@ -21,24 +21,25 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 | [gap-plan-local-and-mutating.md](gap-plan-local-and-mutating.md) | specs 0024–0029 (local only), 0030–0038 (mutating), and the backlog |
 | [cross-cutting.md](cross-cutting.md) | decisions to settle first, new dependencies, UAT data availability |
 | [risks.md](risks.md) | top risks and mitigations |
+| [wireframe-gap-audit.md](wireframe-gap-audit.md) | audit at `735f658`: what is still missing, open ACs by reason, recommended next specs |
 
-## Status by area (at `e80ed80`)
+## Status by area (at `735f658`)
 
 | Area | Status | Covered by | Next spec |
 |---|---|---|---|
-| Shell frame, tables, overlay drawer, status bar | Partial | 0003, 0028 | 0009 |
-| Pods (W4/W4b) | Partial | 0003, 0004, 0007, 0008 | 0010 |
-| Nodes (W5) | Partial | 0003, 0008 | 0010, 0034 |
+| Shell frame, tables, overlay drawer, status bar | Done (filter chips, Columns ▾, sort, selection bar in 0009); row density missing | 0003, 0009, 0028 | audit 0043 |
+| Pods (W4/W4b) | Partial (Attach, Restart pod, Evict, container ⋯ menu missing) | 0003, 0004, 0007, 0008, 0010, 0035, 0036, 0037 | audit 0039, 0040 |
+| Nodes (W5) | Partial (drain, taints, labels, bulk node actions in build) | 0003, 0008, 0009, 0010, 0030, 0037 | 0034 |
 | Logs dock (W8/W8b) | Partial (workload tabs, filters, histogram, Export, "+ ▾", reorder done in 0019) | 0004, 0019 | Pop out, kubelet logs, Follow toggle, SYS marker lines |
-| Kind Explorer (W7): 28 of 29 kinds live | Partial (drawer completions of the live kinds done in 0012; policy kinds done in 0013; storage kinds done in 0014; access-control kinds done in 0015; Secrets and Ingress TLS done in 0016; Helm Releases done in 0017; CRDs, custom resources, and stuck namespaces done in 0018) | 0003, 0005, 0012, 0013, 0014, 0015, 0016, 0017, 0018 | — |
-| Events screen and drawer events | Planned(0006) | 0006 | — |
+| Kind Explorer (W7): 29 of 29 kinds live, plus Port Forwarding (0035) | Partial (New templates, Secret value edits, Certificate Renew, revision diff missing; see the audit) (drawer completions of the live kinds done in 0012; policy kinds done in 0013; storage kinds done in 0014; access-control kinds done in 0015; Secrets and Ingress TLS done in 0016; Helm Releases done in 0017; CRDs, custom resources, and stuck namespaces done in 0018) | 0003, 0005, 0012, 0013, 0014, 0015, 0016, 0017, 0018 | — |
+| Events screen and drawer events | Done (Pause stream, Filter similar in 0009) | 0006, 0007, 0009 | — |
 | Drawer YAML tab (W4c) | Done | 0007 | — |
 | Drawer Monitor tab (W4c) | Done | 0010, 0011 | |
 | RBAC and policy analysis: Who can…, Check permissions, Can do, Test traffic | Done | 0023 | — |
 | Overview (W3), Issues, Topology (W11) | Done (Issues in 0020; Overview in 0021, the default landing screen; Topology in 0022) | 0020, 0021, 0022 | — |
 | Settings (W2), multi-cluster (W1), env colors | Partial (settings store, cluster registry, env badge and border, saved sort and columns, default namespace done in 0024; Settings window with Clusters, Appearance, About done in 0025; cluster switcher with health probes and Ctrl 1–9 done in 0026; several clusters at once with the Cluster column done in 0027, Overview, Issues, and Topology still draw the primary cluster) | 0024, 0025, 0026, 0027 | merged Overview, Issues, Topology |
-| Keyboard map, command palette (W9) | Done (keyboard map in 0028; command palette in 0029, with the deviations listed in inventory-shell P1) | 0028, 0029 | Ctrl ⏎ → 0032 |
-| Every mutation: YAML edit (W10), drain (W6), shell, port-forward, delete | Missing | — | 0030–0037 (0038 Helm writes deferred) |
+| Keyboard map, command palette (W9) | Done (keyboard map in 0028; command palette in 0029, with the deviations listed in inventory-shell P1) | 0028, 0029, 0032 (Ctrl ⏎) | audit: 0029 step 2 |
+| Every mutation: YAML edit (W10), drain (W6), shell, port-forward, delete | Partial (0030–0033, 0035–0037 built; W10 history and snapshots, New, pod lifecycle missing) | 0030–0033, 0035–0037 | 0034 (in build); audit 0040–0042 (0038 Helm writes deferred) |
 
 ## Spec order (summary)
 

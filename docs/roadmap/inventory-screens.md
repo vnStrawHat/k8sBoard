@@ -10,7 +10,7 @@
 | O2 | Needs attention: rule engine (pod and container states, Warning events, node conditions, cert expiry (data source: 0016 `watch_tls_secrets`), PDB blocks, stuck namespace), plain-language cause, one primary action per row | Done (engine in 0020, panel in 0021 step 3) | 0021 |
 | O3 | Capacity: three-layer bars (used, requested, allocatable) for CPU, Memory, Pods, Volumes | Done (0021 step 1) | 0021 |
 | O4 | Node heatmap, NotReady outlined, click opens Nodes with the node selected | Done (0021 step 1) | 0021 |
-| O5 | Recent changes timeline (revisions, managedFields, events), click opens a diff | Partial (events and state rows, window 15 min or 1 h; managedFields and diff view → 0031) | 0021 |
+| O5 | Recent changes timeline (revisions, managedFields, events), click opens a diff | Partial (events and state rows, window 15 min or 1 h; managedFields "who" and the diff view are 0031 non-goals → audit 0041) | 0021 |
 | I1 | Issues screen (sidebar top item with a red count) | Done (0020) | — |
 
 ## Pods (W4, W4b, W4c)
@@ -19,7 +19,7 @@
 |---|---|---|---|---|
 | W4-1 | Live table: Name, Status, Ready, Restarts, Node, Age | Done | 0003 | — |
 | W4-2 | Memory column (W4) | Done | 0010 | — |
-| W4-3 | Context menu = ⋯ menu, grouped, Delete last in red | Partial | View logs, Open shell (0036: gated on `get` and `create` on `pods/exec`, confirm dialog), Port-forward (0035: gated on `get` and `create` on `pods/portforward`, a submenu of the TCP ports), Copy name, Copy kubectl command (0008) | Delete Done (0033, last, red); Edit YAML Done (0031); Restart pod, Evict → 0034; Attach: a later item |
+| W4-3 | Context menu = ⋯ menu, grouped, Delete last in red | Partial | View logs, Open shell (0036: gated on `get` and `create` on `pods/exec`, confirm dialog), Port-forward (0035: gated on `get` and `create` on `pods/portforward`, a submenu of the TCP ports), Copy name, Copy kubectl command (0008) | Delete Done (0033, last, red); Edit YAML Done (0031); Restart pod, Evict, Attach: missing, in no spec (0034 evicts only inside drain) → audit 0040 |
 | W4-4 | Container submenu (MAIN/SIDECAR) for Logs, Shell, Port-forward; "Debug container…" | Partial | 0004 picks the container inside the log tab; 0019 adds the Logs sub-tab and the workload container picker; 0036 adds the Open shell submenu (running containers, init left out); Debug container… done: 0037 ends it with `Debug container…` (ephemeral container, options dialog, attached Shell tab) | Logs and Port-forward submenus (0019 decision 30 skipped them) |
 | W4-5 | Overview tab: Node, Pod IP, QoS, Controlled by, Conditions, container summary | Done | 0003, 0008 | — |
 | W4-6 | WHY box tied to a container with "Open container …" link | Done | 0008 | — |
@@ -40,10 +40,10 @@
 |---|---|---|---|---|
 | W5-1 | Table: Name, Status (Ready · SchedulingDisabled), Roles, Taints (+N, tooltip), Version, Internal IP, Age | Done | 0003 | — |
 | W5-2 | CPU and Memory bar columns | Done | 0010 | — |
-| W5-3 | Summary chips as filters, version-skew highlight, Columns ▾ | Missing | — | 0009 |
+| W5-3 | Summary chips as filters, version-skew highlight, Columns ▾ | Done | 0009 `filter_bar.rs`, `node_summary.rs` | — |
 | W5-4 | Node drawer: conditions, allocatable used, system info | Done | 0003, 0008, 0010 (allocatable used) | — |
 | W5-5 | Menu: node shell, Cordon, Drain…, Edit taints/labels, View pods on node, View YAML, Copy name | Partial | Open node shell (0037: always types the node name, off by default for PROD), cordon (0030), View pods on node (0009), View YAML (0007), Copy name; drain disabled | Drain…, Edit taints/labels → 0034 |
-| W5-6 | Multi-select + selection bar (Cordon, Uncordon, Drain…) | Missing | — | 0009 (select), 0034 (actions) |
+| W5-6 | Multi-select + selection bar (Cordon, Uncordon, Drain…) | Partial (selection and bar built; actions disabled) | 0009 `row_selection.rs` | 0034 (in build) |
 | W5-7 | Dock tabs "node shell (debug pod)" and "logs · kubelet" | Partial | `›_ node shell · wk-03 (debug pod)` tab (0037) | `logs · kubelet` deferred (0019 decision 24) |
 | W6-1 | Drain dialog: 3 steps, kubectl-flag options with consequences, grace, timeout | Missing | — | 0034 |
 | W6-2 | Per-pod eviction preview from PDBs (blocked first) | Missing | — | 0034 (preview logic is read-only, built on 0013) |

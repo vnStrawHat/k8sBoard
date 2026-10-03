@@ -10,7 +10,7 @@
 | T2 | Cluster switcher (every context of every loaded kubeconfig, env badge) | Done | 0003, 0024, 0026 (popover with filter, env groups, health, Retry, Ctrl Shift C, Ctrl 1–9); several live clusters 0027 | — |
 | T3 | Multi-select clusters, "View N clusters", `prod-eu-1 +1` label | Done | 0027 `cluster_switcher.rs` (ticks, Space, footer, Enter), `cluster_view.rs`, `title_bar.rs` | — |
 | T4 | Environment badge and env-colored top border (riskiest env) | Done | 0024 `environment.rs`, `title_bar.rs`; riskiest of several clusters 0027 | — |
-| T5 | Namespace picker (wireframe shows several namespaces: `ns: payments, web`) | Partial | 0003 (one or all) | multi-namespace → 0009 |
+| T5 | Namespace picker (wireframe shows several namespaces: `ns: payments, web`) | Done | 0003, 0009 (`NamespaceScope::Several`, `title_bar.rs` `ns: a, b`) | — |
 | T6 | Search box "Search resources or run a command… Ctrl K" | Done | 0029 (`title_bar.rs` middle slot; click opens the palette) | — |
 | T7 | Read-only lock badge | Done | 0030 `title_bar.rs` (per-session lock, dashed env border, Ctrl Shift R on the cursor cluster) | — |
 | T8 | Issues button `⚑ 4` | Done | 0020 | — |
@@ -33,15 +33,15 @@
 
 | ID | Item | Status | Covered by | Gap → spec |
 |---|---|---|---|---|
-| H1 | Title, kind icon, count | Done | 0003, 0005 | "38 of 1,284 match" → 0009 |
-| H2 | Filter chips (Namespace, Status, label query, "+ Filter") and `/` filter | Missing | — | 0009 |
+| H1 | Title, kind icon, count | Done | 0003, 0005, 0009 ("N of M match", `workspace.rs`) | — |
+| H2 | Filter chips (Namespace, Status, label query, "+ Filter") and `/` filter | Done | 0009 `filter_bar.rs`, `table_filter.rs` | — |
 | H3 | Columns ▾ (toggle columns), sort | Done | 0009 `table_view.rs`; saved per screen by 0024 | — |
-| H4 | Summary chips as filters (Nodes: Ready, NotReady, Cordoned, version skew) | Missing | — | 0009 |
-| H5 | List-level buttons (Scale, Trigger now, Reveal all, Hide inactive, Hide system, …) | Missing | — | read-only ones 0009/0015/0016; mutating 0032 (workload buttons Done) and 0032b (HPA Edit limits, PVC Expand, StorageClass Set default: Done) |
-| H6 | Row checkboxes, multi-select, floating selection bar | Missing | — | selection 0009; workload bulk actions Done (0032); HPA, PVC, and StorageClass bulk actions Done (0032b); bulk `Delete…` Done (0033); nodes 0034 |
+| H4 | Summary chips as filters (Nodes: Ready, NotReady, Cordoned, version skew) | Done | 0009 `filter_bar.rs`, `node_summary.rs` | — |
+| H5 | List-level buttons (Scale, Trigger now, Reveal all, Hide inactive, Hide system, …) | Done (bulk ones in the selection bar; New and node Edit labels missing, see the audit) | 0009, 0015, 0016, 0032, 0032b | read-only ones 0009/0015/0016; mutating 0032 (workload buttons Done) and 0032b (HPA Edit limits, PVC Expand, StorageClass Set default: Done) |
+| H6 | Row checkboxes, multi-select, floating selection bar | Done (node actions in build) | 0009 `row_selection.rs`, `table_selection.rs` | selection 0009; workload bulk actions Done (0032); HPA, PVC, and StorageClass bulk actions Done (0032b); bulk `Delete…` Done (0033); nodes 0034 |
 | H7 | Virtualized table, themed status tones, muted namespace prefix | Done | 0003, 0005 | — |
 | H8 | Cluster column in multi-cluster mode | Done (Pods, Nodes, every kind screen) | 0027 `cluster_rows.rs`, `table_layout.rs` | Issues has none: it draws the primary cluster |
-| H9 | Row density 28 / 36 px | Missing | — | 0025 (Appearance) |
+| H9 | Row density 28 / 36 px | Missing | — | 0025 did not ship it; audit 0043 (Appearance) |
 
 ## Drawer frame
 
@@ -50,8 +50,8 @@
 | D1 | Overlay drawer, table keeps width, shadow | Done | 0003 | — |
 | D2 | Header ⋯ ⤢ ✕; ⋯ equals the row context menu | Done | 0003, 0005, 0010 | — |
 | D3 | Tab bar Overview / Monitor / YAML / Events | Done | Overview, Containers (pods), Monitor (0010), YAML, Events | — |
-| D4 | WHY / alert box per kind | Missing | — | pods 0008; kinds 0012–0018 |
-| D5 | `→` links to related objects (node, owner, target) | Partial | related pods 0005 | 0008, 0012 |
+| D4 | WHY / alert box per kind | Done | pods 0008 `pod_diagnosis.rs`; kinds 0012–0018 `kind_diagnosis.rs` | — |
+| D5 | `→` links to related objects (node, owner, target) | Done | related pods 0005; node and owner links 0008; Go to owner, target, claim, role 0012–0015 | — |
 | D6 | ↑↓ moves rows while open, Esc or table click closes | Done (0028): Esc closes; a row click switches the subject (decision 14) | `keyboard_navigation.rs` | — |
 
 ## Dock (W8, W8b)
@@ -78,8 +78,8 @@
 
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
-| P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Done (0029: own scorer, loaded lists only, row actions on the cursor row, `@` single switch, Tab moves the cursor only; no action × search-hit pairs, no Ctrl ⏎ (0032), no carried namespace, no match highlighting) | `command_palette.rs`, `palette_search.rs`, `fuzzy_score.rs` |
-| P2 | Keyboard map (22 bindings) and `?` cheat sheet | Done (0028; `:` and Ctrl K bound by 0029), mutating letters stay gated until 0031–0036 | `keymap.rs`, `shortcut_sheet.rs` |
+| P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Done (0029: own scorer, loaded lists only, row actions on the cursor row, `@` single switch, Tab moves the cursor only; Ctrl ⏎ Scale argument added by 0032; no action × search-hit pairs, no carried namespace, no match highlighting: audit, 0029 step 2) | `command_palette.rs`, `palette_search.rs`, `fuzzy_score.rs` |
+| P2 | Keyboard map (22 bindings) and `?` cheat sheet | Done (0028; `:` and Ctrl K bound by 0029), mutating letters run since 0031–0037 except D (0034, in build); the menu's A (Attach) is unbound (audit 0040) | `keymap.rs`, `shortcut_sheet.rs` |
 | S1 | Settings window (W2) as a separate OS window, single instance | Done | 0025 |
 | S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (no drag order) | 0025 |
 | S3 | Add cluster: import file, watch folder, paste YAML | Partial (no watch folder) | 0025 |
