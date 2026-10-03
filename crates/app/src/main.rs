@@ -104,6 +104,16 @@ mod table_selection;
 mod table_sort;
 mod table_view;
 mod title_bar;
+mod topology_canvas;
+mod topology_checks;
+mod topology_export;
+mod topology_feeds;
+#[cfg(test)]
+mod topology_fixtures;
+mod topology_graph;
+mod topology_layout;
+mod topology_view;
+mod topology_viewport;
 mod traffic_test_view;
 mod usage_bar;
 mod usage_chart;

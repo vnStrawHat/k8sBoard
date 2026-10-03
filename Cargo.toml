@@ -33,6 +33,8 @@ flate2 = "1"
 base64 = "0.22"
 # 1.13.x is already locked through tracing-subscriber env-filter.
 regex = "1"
+# Rasterizes the Topology SVG export; the same version gpui-pre already builds (no new package).
+resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts"] }
 # oneterm-vt = { git = "https://github.com/vnStrawHat/OneTerm", rev = "<pin a commit sha>", default-features = false }  # terminal engine for pod/node shell; replaces alacritty_terminal
 
 [workspace.lints.rust]

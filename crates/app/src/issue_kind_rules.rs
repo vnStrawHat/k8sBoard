@@ -24,7 +24,7 @@ use crate::usage_format::format_percent;
 /// A DaemonSet or a failing Job attempt is a normal part of a rollout for this long.
 const ROLLOUT_GRACE: SignedDuration = SignedDuration::from_mins(5);
 /// A claim waits this long for its volume before a Warning event makes it an issue.
-const PVC_PENDING_GRACE: SignedDuration = SignedDuration::from_mins(5);
+pub(crate) const PVC_PENDING_GRACE: SignedDuration = SignedDuration::from_mins(5);
 
 /// Characters of an event message a claim cause quotes.
 const CAUSE_MESSAGE_CHARS: usize = 200;

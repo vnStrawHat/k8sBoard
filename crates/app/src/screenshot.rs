@@ -113,6 +113,8 @@ pub(crate) struct SettleInput {
     pub(crate) is_switcher_pending: bool,
     /// Overview: the change feeds have not delivered their first snapshot.
     pub(crate) is_change_feed_pending: bool,
+    /// Topology: a feed that runs has not delivered its first snapshot, or the graph is not built.
+    pub(crate) is_topology_pending: bool,
     /// Where the pods metrics feed stands.
     pub(crate) pod_metrics: FeedProgress,
     /// The same for the nodes feed.
@@ -185,6 +187,7 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
         TargetState::Loaded if screen == LaunchScreen::Overview && input.is_change_feed_pending => {
             false
         }
+        TargetState::Loaded if screen.shows_topology() && input.is_topology_pending => false,
         TargetState::Loaded
             if screen.shows_pod_usage()
                 && !input.pod_metrics.is_settled(screen.min_metrics_ticks()) =>
@@ -380,6 +383,7 @@ mod tests {
             is_dialog_pending: false,
             is_switcher_pending: false,
             is_change_feed_pending: false,
+            is_topology_pending: false,
             pod_metrics: progress(FeedStatus::Live, 1),
             node_metrics: progress(FeedStatus::Live, 1),
             kubelet: progress(FeedStatus::Live, 4),
@@ -597,6 +601,20 @@ mod tests {
             LaunchScreen::Overview,
             &input(TargetState::Loaded, true)
         ));
+    }
+
+    #[test]
+    fn topology_waits_for_feeds_and_build() {
+        let pending = SettleInput {
+            is_topology_pending: true,
+            ..input(TargetState::Loaded, true)
+        };
+        for screen in [LaunchScreen::Topology, LaunchScreen::TopologyProblems] {
+            assert!(!is_screen_settled(screen, &pending));
+            assert!(is_screen_settled(screen, &input(TargetState::Loaded, true)));
+        }
+        // Other screens do not read the feeds.
+        assert!(is_screen_settled(LaunchScreen::Pods, &pending));
     }
 
     #[test]

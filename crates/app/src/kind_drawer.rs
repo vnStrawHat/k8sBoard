@@ -174,14 +174,7 @@ fn kind_menu_button(
                 let choice = session
                     .read(cx)
                     .live()
-                    .and_then(|live| live.kind_list(kind))
-                    .and_then(|explorer| {
-                        explorer
-                            .list
-                            .items()
-                            .iter()
-                            .find(|row| key.is_row(kind, row))
-                    })
+                    .and_then(|live| live.row_of(&key))
                     .map_or(OpenUrl::Unavailable, open_url_choice);
                 open_url_menu_item(choice, window, cx)
             });
@@ -190,14 +183,7 @@ fn kind_menu_button(
                     let row = session
                         .read(cx)
                         .live()
-                        .and_then(|live| live.kind_list(kind))
-                        .and_then(|explorer| {
-                            explorer
-                                .list
-                                .items()
-                                .iter()
-                                .find(|row| key.is_row(kind, row))
-                        })
+                        .and_then(|live| live.row_of(&key))
                         .cloned()?;
                     let access = shell
                         .read_with(cx, |shell, _| shell.secret_value_access())
@@ -212,13 +198,7 @@ fn kind_menu_button(
             let Some(live) = session.read(cx).live() else {
                 return menu;
             };
-            let current = live.kind_list(kind).and_then(|explorer| {
-                explorer
-                    .list
-                    .items()
-                    .iter()
-                    .find(|row| key.is_row(kind, row))
-            });
+            let current = live.row_of(&key);
             match current {
                 Some(row) => kind_menu(
                     menu,
@@ -232,6 +212,7 @@ fn kind_menu_button(
                         secret,
                         browse: browse_instances_item(row, live.crd_kinds(), &shell),
                         default_namespace,
+                        scope: Some(live.scope.clone()),
                     },
                 ),
                 None => menu,

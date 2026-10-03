@@ -29,8 +29,8 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Workloads | ReplicaSets | Done | Done (Hide inactive 0009; Go to owner 0012) | logs 0019 | — (scale locked by owner) |
 | Workloads | Jobs | Done | Done (attempts, BACKOFF LIMIT box: 0012) | logs 0019 | Re-run 0032 |
 | Workloads | CronJobs | Done (0012) | Done (next runs, recent jobs: 0012) | logs of last job 0019 | Trigger now, Suspend 0032 |
-| Network | Services | Done (0012) | Done (Endpoints, "matches no pods": 0012) | Show in Topology 0022 | port-forward 0035 |
-| Network | Ingresses | Done (0016) | Done (TLS column with expiry replaces Ports, TLS section with Secret links and leaf facts, CERTIFICATE box: 0016; Open URL and backend links: 0012) | Show in Topology 0022 | — |
+| Network | Services | Done (0012) | Done (Endpoints, "matches no pods": 0012) | Show in Topology: Done (0022) | port-forward 0035 |
+| Network | Ingresses | Done (0016) | Done (TLS column with expiry replaces Ports, TLS section with Secret links and leaf facts, CERTIFICATE box: 0016; Open URL and backend links: 0012) | Show in Topology: Done (0022) | — |
 | Network | NetworkPolicies | Done (0013) | Done (rules as sentences, Affects: 0013) | Done (Test traffic: 0023) | — |
 | Network | Port Forwarding (local page) | Missing | Missing | — | 0035 |
 | Config | ConfigMaps | Done (0012) | Done (Used by, value previews: 0012) | — | Edit, New, Compare with previous 0031 |

@@ -53,7 +53,7 @@ pub(crate) struct TopologyInputs<'a> {
     pub(crate) nodes: &'a [NodeSummary],                 // kind_diagnosis input
     pub(crate) filter: &'a TopologyFilter, pub(crate) expanded: &'a BTreeSet<NodeId>, pub(crate) now: Timestamp,
 }
-pub(crate) enum FeedRows<'a> { Ready(&'a [KindRow]), Loading, Off }   // a chip-disabled kind is Off
+pub(crate) enum FeedRows<'a> { Ready(&'a [KindRow]), Loading, Failed, Off }   // Failed: the watch failed before its first snapshot; Off: denied; a chip-disabled kind has no entry
 pub(crate) struct TopologyFilter { pub(crate) kinds: BTreeSet<KindFilter>, pub(crate) problems_only: bool,
     pub(crate) group_by: Option<GroupBy> /* None = automatic, decision 27 */ }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

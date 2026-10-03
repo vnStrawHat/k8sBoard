@@ -40,18 +40,18 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. Read-only: new requests are `list`/`watch` through the existing `ResourceKind::watch_rows` only. The 0001 grep still finds only the SSAR `create`. No change to `crates/cluster`.
-- [ ] 4. Steps 1–2 change neither `Cargo.toml` nor `Cargo.lock`.
-- [ ] 5. Watches: with Topology hidden, the status-bar count is unchanged. While it is visible, the count grows by `TopologyFeeds::open_count()` (≤ 10; only the kinds of the enabled chips). Covered by an `open_watch_count` test.
-- [ ] 6. Graph, checks, and layout are pure (no GPUI context), deterministic, and tested. `topology_budget` runs in the normal (debug) gate: 40 Services × 3,000 pods × 100 ReplicaSets, build + layout ≤ 80 ms. The release timing is recorded in [decisions.md](decisions.md) (target ≤ 8 ms).
-- [ ] 7. The 0003 AC4 color-literal grep is clean. Every color comes from the theme or `tone_color`.
-- [ ] 8. Secret safety: topology modules have no `tracing::` call. Secret nodes carry names only; the graph, SVG, and PNG never hold a value.
-- [ ] 9. On UAT (`readonly@Monitor`), for one namespace: ReplicaSet → Pod edges match `kubectl get rs,pods`, and each Service's pod edges match `kubectl get pods -n <ns> -l <selector> --context readonly@Monitor`. A click opens the drawer; a double-click reveals the row.
-- [ ] 10. On UAT, a pod set above `POD_GROUP_LIMIT` shows one group node, and a click expands it. Adding a pod (rollout) leaves the siblings in place.
-- [ ] 11. Export writes only after the dialog confirms. The `.png` output is a valid PNG of the whole graph, and a `.svg` path gets SVG text. Paths are never traced.
-- [ ] 12. Screenshots `topology` and `topology-problems` exist. The ui-verifier reports no high-severity defect against W11.
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
+- [x] 3. Read-only: new requests are `list`/`watch` through the existing `ResourceKind::watch_rows` only. The 0001 grep still finds only the SSAR `create`. No change to `crates/cluster`.
+- [x] 4. Steps 1–2 change neither `Cargo.toml` nor `Cargo.lock`. (Built in one pass, the only change is step 3's `resvg` edge: one line in each `Cargo.toml` and exactly `"resvg 0.46.0",` in `Cargo.lock`.)
+- [x] 5. Watches: with Topology hidden, the status-bar count is unchanged. While it is visible, the count grows by `TopologyFeeds::open_count()` (≤ 10; only the kinds of the enabled chips). Covered by an `open_watch_count` test.
+- [x] 6. Graph, checks, and layout are pure (no GPUI context), deterministic, and tested. `topology_budget` runs in the normal (debug) gate: 40 Services × 3,000 pods × 100 ReplicaSets, build + layout ≤ 80 ms. The release timing is recorded in [decisions.md](decisions.md) (target ≤ 8 ms).
+- [x] 7. The 0003 AC4 color-literal grep is clean. Every color comes from the theme or `tone_color`.
+- [x] 8. Secret safety: topology modules have no `tracing::` call. Secret nodes carry names only; the graph, SVG, and PNG never hold a value.
+- [ ] 9. On UAT (`readonly@Monitor`), for one namespace: ReplicaSet → Pod edges match `kubectl get rs,pods`, and each Service's pod edges match `kubectl get pods -n <ns> -l <selector> --context readonly@Monitor`. A click opens the drawer; a double-click reveals the row. Partly checked: `kubectl` is not installed here, so the `keda` namespace (3 Deployments, 3 ReplicaSets, 3 pods, 3 Services, 1 Secret) was checked against the probe listing, and the screenshot shows one ReplicaSet to one pod and each Service to its pod. The click, drawer, and double-click were not driven.
+- [ ] 10. On UAT, a pod set above `POD_GROUP_LIMIT` shows one group node, and a click expands it. Adding a pod (rollout) leaves the siblings in place. No UAT namespace has a set that large, so group nodes are covered by the unit tests only.
+- [x] 11. Export writes only after the dialog confirms. The `.png` output is a valid PNG of the whole graph, and a `.svg` path gets SVG text. Paths are never traced.
+- [ ] 12. Screenshots `topology` and `topology-problems` exist (light and dark, `.tmp/ui-shots/v58-topology-*.png`). The ui-verifier reports no high-severity defect against W11. The ui-verifier has not run yet.
 
 ## Open items
 

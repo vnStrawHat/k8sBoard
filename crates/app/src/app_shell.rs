@@ -92,6 +92,8 @@ use crate::table_selection::{
 use crate::table_sort::next_sort;
 use crate::table_view::{FilteredTable, RowCheck, TableView};
 use crate::title_bar::title_bar;
+use crate::topology_graph::{NodeId, TopologyKind};
+use crate::topology_view::TopologyView;
 use crate::traffic_test_view::{TrafficTestView, traffic_defaults};
 use crate::who_can_view::WhoCanView;
 use crate::yaml_view::{YamlView, yaml_subject};
@@ -100,7 +102,7 @@ use crate::yaml_view::{YamlView, yaml_subject};
 const DIALOG_WIDTH: f32 = 760.;
 
 #[path = "workspace.rs"]
-mod workspace;
+pub(crate) mod workspace;
 
 #[cfg(test)]
 #[path = "app_shell_tests.rs"]
@@ -121,6 +123,9 @@ pub(crate) enum Screen {
     Nodes,
     /// The problems the engine found; it lists no explorer kind and opens no drawer.
     Issues,
+    /// The resource graph of one namespace; it lists no explorer kind and opens its drawers over the
+    /// graph.
+    Topology,
     Kind(ResourceKind),
 }
 
@@ -129,7 +134,7 @@ impl Screen {
     pub(crate) fn kind(self) -> Option<ResourceKind> {
         match self {
             Self::Kind(kind) => Some(kind),
-            Self::Overview | Self::Pods | Self::Nodes | Self::Issues => None,
+            Self::Overview | Self::Pods | Self::Nodes | Self::Issues | Self::Topology => None,
         }
     }
 }
@@ -259,6 +264,8 @@ pub(crate) struct AppShell {
     node_table: Entity<TableState<NodeTableDelegate>>,
     issue_table: Entity<TableState<IssueTableDelegate>>,
     kind_table: Entity<TableState<KindTableDelegate>>,
+    /// The Topology screen: its graph, canvas, and toolbar.
+    topology: Entity<TopologyView>,
     _table_subscriptions: Vec<Subscription>,
     /// The drawer is open exactly while this is set.
     selected: Option<ResourceKey>,
@@ -379,6 +386,7 @@ impl AppShell {
                 cx,
             ))
         });
+        let topology = cx.new(|cx| TopologyView::new(shell.clone(), cx));
         let initial_kind = options.screen.screen().kind();
         let kind_table = cx.new(|cx| {
             configure(TableState::new(
@@ -449,6 +457,7 @@ impl AppShell {
             node_table,
             issue_table,
             kind_table,
+            topology,
             _table_subscriptions: table_subscriptions,
             selected: None,
             drawer,
@@ -493,6 +502,12 @@ impl AppShell {
             _clipboard_quit: clipboard_quit,
             _settings_observer: cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
         };
+        let is_topology = shell.screen == Screen::Topology;
+        let wants_problems = options.screen == LaunchScreen::TopologyProblems;
+        shell.topology.update(cx, |view, cx| {
+            view.set_problems_only(wants_problems, cx);
+            view.set_visible(is_topology, cx);
+        });
         if let Some(text) = launch_filter {
             shell.apply_launch_filter(&text, cx);
         }
@@ -708,6 +723,8 @@ impl AppShell {
             table.delegate_mut().set_session(shared.clone());
             cx.notify();
         });
+        self.topology
+            .update(cx, |view, cx| view.set_session(shared.clone(), cx));
         self.kind_table.update(cx, |table, cx| {
             table.delegate_mut().set_session(shared);
             cx.notify();
@@ -1105,6 +1122,9 @@ impl AppShell {
                 }
             });
         }
+        self.topology.update(cx, |view, cx| {
+            view.set_visible(screen == Screen::Topology, cx)
+        });
         self.kind_table.update(cx, |table, cx| {
             let is_switch = table.delegate_mut().set_kind(screen.kind());
             if is_switch {
@@ -1154,6 +1174,27 @@ impl AppShell {
                 then(shell, cx);
             });
         });
+    }
+
+    /// The object whose drawer is open.
+    pub(crate) fn selected(&self) -> Option<&ResourceKey> {
+        self.selected.as_ref()
+    }
+
+    /// A click on a Topology node: the drawer opens (or closes with `None`) over the graph.
+    pub(crate) fn select_on_topology(&mut self, key: Option<ResourceKey>, cx: &mut Context<Self>) {
+        self.change_selection(key, cx);
+    }
+
+    /// Show in Topology: the graph of the object's namespace, centered on the object. `None` for
+    /// an object that is not a Service or Ingress, or has no namespace.
+    pub(crate) fn show_in_topology(&mut self, key: &ResourceKey, cx: &mut Context<Self>) {
+        let Some((namespace, id)) = topology_target(key) else {
+            return;
+        };
+        self.topology
+            .update(cx, |view, cx| view.show_object(&namespace, id, cx));
+        self.show_screen(Screen::Topology, cx);
     }
 
     /// Runs `step` with `key` selected: at once when it already is, else after a reveal. A row
@@ -2427,6 +2468,10 @@ impl AppShell {
     /// reordered, added, or removed rows, or a filter hid it. A loading list proves nothing; a
     /// failed one has no rows.
     fn sync_selection(&mut self, cx: &mut Context<Self>) {
+        // The graph has no table that could hold or lose the selection.
+        if self.screen == Screen::Topology {
+            return;
+        }
         let Some(key) = self.selected.clone() else {
             return;
         };
@@ -2738,6 +2783,8 @@ impl AppShell {
                                 || live.namespaces.is_loading(),
                             false,
                         ),
+                        // The graph is built from the pods and the feeds; a feed that failed draws as a gap.
+                        Screen::Topology => (live.pods.is_loading(), false),
                         Screen::Pods => (live.pods.is_loading(), live.pods.failure().is_some()),
                         Screen::Nodes => (live.nodes.is_loading(), live.nodes.failure().is_some()),
                         // The table shows what the pods and nodes lists found; a failed one is a
@@ -2801,6 +2848,12 @@ impl AppShell {
                 .session
                 .as_ref()
                 .is_some_and(|session| session.read(cx).is_change_feed_pending()),
+            is_topology_pending: self.screen == Screen::Topology
+                && (self
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.read(cx).is_topology_pending())
+                    || !self.topology.read(cx).has_build()),
             is_dialog_pending: self.pending_dialog_launch.is_some()
                 || self.who_can.as_ref().is_some_and(|view| {
                     view.read_with(cx, |view, cx| view.is_pending(cx))
@@ -2852,8 +2905,8 @@ impl AppShell {
         match self.screen {
             Screen::Pods => rebuild_table(&self.pod_table, change, cx),
             Screen::Nodes => rebuild_table(&self.node_table, change, cx),
-            // Overview has no table.
-            Screen::Overview => {}
+            // Overview and Topology have no table.
+            Screen::Overview | Screen::Topology => {}
             Screen::Issues => rebuild_table(&self.issue_table, change, cx),
             Screen::Kind(_) => rebuild_table(&self.kind_table, change, cx),
         }
@@ -2909,8 +2962,8 @@ impl AppShell {
         let prefs = match screen {
             Screen::Pods => table_prefs(&self.pod_table, cx),
             Screen::Nodes => table_prefs(&self.node_table, cx),
-            // Overview has no table.
-            Screen::Overview => None,
+            // Overview and Topology have no table.
+            Screen::Overview | Screen::Topology => None,
             Screen::Issues => table_prefs(&self.issue_table, cx),
             Screen::Kind(_) => table_prefs(&self.kind_table, cx),
         };
@@ -2946,7 +2999,7 @@ impl AppShell {
         match self.screen {
             Screen::Pods => check_table(&self.pod_table, change, cx),
             Screen::Nodes => check_table(&self.node_table, change, cx),
-            Screen::Overview => {}
+            Screen::Overview | Screen::Topology => {}
             Screen::Issues => check_table(&self.issue_table, change, cx),
             Screen::Kind(_) => check_table(&self.kind_table, change, cx),
         }
@@ -3090,7 +3143,7 @@ impl AppShell {
     /// What the filter bar and the screen header read; `None` before the table has a view.
     pub(crate) fn toolkit_state(&self, cx: &App) -> Option<ToolkitState> {
         let mut state = match self.screen {
-            Screen::Overview => return None,
+            Screen::Overview | Screen::Topology => return None,
             Screen::Pods => ToolkitState::of(self.pod_table.read(cx).delegate(), self.screen)?,
             Screen::Nodes => {
                 let mut state = ToolkitState::of(self.node_table.read(cx).delegate(), self.screen)?;
@@ -3103,7 +3156,7 @@ impl AppShell {
         // Nodes and Namespaces are cluster-scoped: the scope does not apply to them.
         let is_namespaced = match self.screen {
             Screen::Pods | Screen::Issues => true,
-            Screen::Overview | Screen::Nodes => false,
+            Screen::Overview | Screen::Topology | Screen::Nodes => false,
             Screen::Kind(kind) => kind.is_namespaced(),
         };
         if is_namespaced {
@@ -3265,6 +3318,27 @@ fn focus_table<D: TableDelegate>(
 ) {
     let handle = table.read(cx).focus_handle(cx);
     window.focus(&handle, cx);
+}
+
+/// The namespace and graph node of an object Show in Topology can focus: a Service or an Ingress.
+fn topology_target(key: &ResourceKey) -> Option<(String, NodeId)> {
+    let ResourceKey::Kind {
+        kind,
+        namespace: Some(namespace),
+        name,
+    } = key
+    else {
+        return None;
+    };
+    let kind = TopologyKind::of_resource_kind(*kind)
+        .filter(|kind| matches!(kind, TopologyKind::Service | TopologyKind::Ingress))?;
+    Some((
+        namespace.clone(),
+        NodeId::Object {
+            kind,
+            name: name.clone(),
+        },
+    ))
 }
 
 /// The loaded kubeconfig that defines `cluster`, with its context.

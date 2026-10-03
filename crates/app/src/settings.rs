@@ -123,6 +123,7 @@ pub(crate) fn screen_key(screen: Screen) -> &'static str {
         Screen::Nodes => "nodes",
         Screen::Overview => "overview",
         Screen::Issues => "issues",
+        Screen::Topology => "topology",
         // A custom plural has no group, so it could equal a built-in key; the CRD name never does.
         Screen::Kind(ResourceKind::Custom(kind)) => kind.crd_name(),
         Screen::Kind(kind) => kind.plural(),

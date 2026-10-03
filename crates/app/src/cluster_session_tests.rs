@@ -1,6 +1,9 @@
 use cluster::{AccessDecision, AccessReview};
 use gpui_kit::Task;
 
+use crate::topology_feeds::TOPOLOGY_FEED_KINDS;
+use crate::topology_graph::KindFilter;
+
 use super::*;
 
 fn failure() -> WatchUpdate<u32> {
@@ -273,6 +276,7 @@ fn watches(
         related,
         issue_feeds: 0,
         change_events: 0,
+        topology: 0,
     }
 }
 
@@ -1545,4 +1549,157 @@ impl ClusterSession {
         };
         self.finish_connect(Ok(Ok(connected)), cx);
     }
+}
+
+fn subject_with(namespace: &str, kinds: &[KindFilter]) -> TopologySubject {
+    TopologySubject {
+        namespace: namespace.to_owned(),
+        kinds: kinds.iter().copied().collect(),
+    }
+}
+
+/// Topology feeds that run for `kinds`, and an Off feed for each of `denied`.
+fn topology_feeds_of(kinds: &[ResourceKind], denied: &[ResourceKind]) -> TopologyFeeds {
+    let running = kinds
+        .iter()
+        .map(|kind| TopologyFeed::watching(*kind, LiveList::Loading));
+    let off = denied
+        .iter()
+        .map(|kind| TopologyFeed::off(*kind, "not permitted".to_owned()));
+    TopologyFeeds {
+        subject: subject_with("shop", &KindFilter::ALL),
+        feeds: running.chain(off).collect(),
+    }
+}
+
+#[test]
+fn open_watch_count_includes_topology() {
+    let with = |feeds: Option<&TopologyFeeds>| {
+        open_watch_count(OpenWatches {
+            topology: feeds.map_or(0, TopologyFeeds::open_count),
+            ..watches(1, 0, 0, false, false)
+        })
+    };
+    let base = open_watch_count(watches(1, 0, 0, false, false));
+    // Hidden: no feeds, nothing added.
+    assert_eq!(with(None), base);
+    // Visible: all ten kinds run.
+    let all = topology_feeds_of(&TOPOLOGY_FEED_KINDS, &[]);
+    assert_eq!(with(Some(&all)), base + 10);
+    // One kind denied: its Off feed counts 0.
+    let denied = topology_feeds_of(&TOPOLOGY_FEED_KINDS[..9], &[ResourceKind::Secrets]);
+    assert_eq!(with(Some(&denied)), base + 9);
+    // Config chip off: ConfigMaps, Secrets, and PVCs have no feed: seven run.
+    let without_config = subject_with(
+        "shop",
+        &[
+            KindFilter::Ingress,
+            KindFilter::Service,
+            KindFilter::Workload,
+        ],
+    );
+    let kinds = without_config.wanted_kinds();
+    assert_eq!(kinds.len(), 7);
+    assert_eq!(with(Some(&topology_feeds_of(&kinds, &[]))), base + 7);
+}
+
+#[test]
+fn row_of_prefers_explorer_then_topology() {
+    use crate::network_rows::service_row;
+    use crate::topology_fixtures::service;
+
+    fn named(name: &str, selector: &str) -> KindRow {
+        let mut row = service_row(&service(name, &[selector]));
+        // The selector tells the two copies of one row apart.
+        row.labels = vec![selector.to_owned().into()];
+        row
+    }
+    let ready = |rows: Vec<KindRow>| LiveList::Ready {
+        items: rows,
+        interruption: None,
+    };
+    let explorer = KindList::unsubscribed(
+        ResourceKind::Services,
+        ready(vec![named("web", "from=explorer")]),
+    );
+    let mut feeds = topology_feeds_of(&[], &[]);
+    feeds.feeds.push(TopologyFeed::watching(
+        ResourceKind::Services,
+        ready(vec![
+            named("web", "from=topology"),
+            named("api", "from=topology"),
+        ]),
+    ));
+    let key = |name: &str| ResourceKey::Kind {
+        kind: ResourceKind::Services,
+        namespace: Some("shop".to_owned()),
+        name: name.to_owned(),
+    };
+    let source = |row: Option<&KindRow>| row.map(|row| row.labels[0].to_string());
+    let found = |name: &str, explorer: Option<&KindList>, topology: Option<&TopologyFeeds>| {
+        source(row_in(
+            &key(name),
+            ResourceKind::Services,
+            explorer,
+            topology,
+        ))
+    };
+    // The explorer wins where it has the row; the feeds fill in the rest.
+    assert_eq!(
+        found("web", Some(&explorer), Some(&feeds)).as_deref(),
+        Some("from=explorer")
+    );
+    assert_eq!(
+        found("api", Some(&explorer), Some(&feeds)).as_deref(),
+        Some("from=topology")
+    );
+    // Over Topology there is no explorer.
+    assert_eq!(
+        found("web", None, Some(&feeds)).as_deref(),
+        Some("from=topology")
+    );
+    assert_eq!(found("gone", Some(&explorer), Some(&feeds)), None);
+    assert_eq!(found("web", None, None), None);
+}
+
+#[test]
+fn same_topology_subject_is_noop() {
+    let running = subject_with("shop", &KindFilter::ALL);
+    assert_eq!(
+        subject_change(Some(&running), Some(&running.clone())),
+        SubjectChange::Keep
+    );
+    assert_eq!(subject_change(None, None), SubjectChange::Keep);
+}
+
+#[test]
+fn subject_change_keeps_unchanged_feeds() {
+    let all = subject_with("shop", &KindFilter::ALL);
+    let without_config = subject_with(
+        "shop",
+        &[
+            KindFilter::Ingress,
+            KindFilter::Service,
+            KindFilter::Workload,
+        ],
+    );
+    let SubjectChange::Adjust { stop, start } = subject_change(Some(&all), Some(&without_config))
+    else {
+        panic!("a chip change adjusts the feeds");
+    };
+    assert_eq!(stop.len(), 3);
+    assert!(start.is_empty());
+    let back = subject_change(Some(&without_config), Some(&all));
+    assert!(matches!(
+        back,
+        SubjectChange::Adjust { stop, start } if stop.is_empty() && start.len() == 3
+    ));
+}
+
+#[test]
+fn topology_scope_includes_every_namespace_of_all() {
+    let several = NamespaceScope::Several(vec!["a".to_owned(), "b".to_owned()]);
+    assert!(scope_includes(&several, "a"));
+    assert!(!scope_includes(&several, "c"));
+    assert!(scope_includes(&NamespaceScope::All, "anything"));
 }

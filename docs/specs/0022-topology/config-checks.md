@@ -53,7 +53,7 @@ Pods are toned only by `pod_status_label` and add no check (decision 16).
 
 ## Coverage note
 
-`topology_coverage(rows) -> Option<String>`. It is `None` when every enabled feed is Ready. Otherwise it reads, for example, `Not checked: secrets (not permitted). Loading: services.` Chip-disabled kinds are not listed. The note shows as a muted line under the toolbar.
+`topology_coverage(rows) -> Option<String>`. It is `None` when every enabled feed is Ready. Otherwise it reads, for example, `Not checked: secrets (not permitted), services (watch failed). Loading: ingresses.` Chip-disabled kinds are not listed. The note shows as a muted line under the toolbar.
 
 ## Checks chip and dropdown (step 2)
 

@@ -34,7 +34,8 @@ impl Viewport {
     pub(crate) fn to_graph(&self, x: f32, y: f32) -> GraphPoint;
     pub(crate) fn zoom_at(self, x: f32, y: f32, steps: i32) -> Self;       // keeps (x, y) fixed; clamps the step range
     pub(crate) fn pan(self, dx: f32, dy: f32) -> Self;
-    pub(crate) fn fit(extent: GraphRect, width: f32, height: f32) -> Self; // largest grid zoom ≤ min(fit, 1.0), centered
+    pub(crate) fn fit(extent: GraphRect, width: f32, height: f32) -> Self; // largest grid zoom ≤ min(fit, 1.0), down to step −25, centered
+    pub(crate) fn first_view(extent: GraphRect, width: f32, height: f32) -> Self; // Fit if readable, else MIN_TEXT_ZOOM at the extent top-left
     pub(crate) fn center_on(self, p: GraphPoint, width: f32, height: f32) -> Self;
 }
 pub(crate) fn visible_nodes(layout: &TopologyLayout, view: Viewport, width: f32, height: f32) -> Vec<usize>;
@@ -44,6 +45,8 @@ pub(crate) fn minimap_transform(extent: GraphRect, width: f32, height: f32) -> M
 ```
 
 - Zoom is **quantized** (decision 25). `zoom = WHEEL_STEP^zoom_step`, with `WHEEL_STEP` = 1.1 and the step range `[−17, 7]` (≈ 0.2–1.95). One wheel notch is ±1 step. Pixel-precise deltas accumulate 50 px per step.
+- **Fit and the first view** (decision 38). Fit may go below the wheel floor, down to step −25 (about 0.09), so it shows everything. The wheel never pushes a view that Fit put below its floor back up. The automatic first view of a graph is `max(fit, MIN_TEXT_ZOOM)`: the whole graph when it is readable at that zoom, else step −6 (about 0.56) anchored at the top-left of the extent; the minimap shows the rest. Both use the canvas minus the **overlay strip** (`OVERLAY_GUTTER`, the minimap height plus 16 px), so the minimap and legend do not cover what Fit shows. Before the first paint the canvas size is a default (1200 × 700), and the first view is made again once the real size is known.
+- **Canvas size**: the canvas layer reports its size to the view at every paint (an assignment, no notify unless it changed), because Fit, the first view, and focus need it. This is the one thing stored from a frame.
 - **Edge curve**:
   - Mounts: from the source's bottom center to the target's top center, with vertical controls at `dy / 2`. This is the config row (layout.md step 5).
   - Other forward edges (`to.x > from.x`): from the source's right middle to the target's left middle, with horizontal controls at `dx / 2` (W11 `C` curves).
@@ -78,7 +81,7 @@ An edge into a ghost uses `tone_color` of its check. The selected node's edges u
   - `Ghost`: dashed 1.5 px border in its check tone, transparent, no badge, tooltip = check text.
   - `Unchecked`: dashed 1 px `muted_foreground` border at 0.7 opacity, caption `{Kind} · not checked`.
   - Config kinds: 0.85 opacity (W11).
-- **LOD**: below zoom 0.55, text lines are not rendered; below 0.3, no badge either.
+- **LOD** (decision 39): from zoom 0.55 the text lines show. From 0.3 to 0.55 the card shows its badge alone, large enough to read and in the node tone. Below 0.3 it is a plain box. Every card is opaque (the dimmer looks fade only their content), so an edge never shows through its text; edges are painted under the cards. A band title keeps a fixed 11 px size on the band edge below 0.55.
 - `id` = `("topology-node", node index)`. Only `visible_nodes` are built.
 
 ## Interaction

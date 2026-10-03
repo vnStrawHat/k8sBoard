@@ -20,6 +20,7 @@
 | 1 | `src/topology_graph.rs` (new) + `topology_graph_tests.rs` | `TopologyKind`, `KindFilter`, `NodeId`, `NodeLook`, `TopologyNode`, `Relation`, `TopologyEdge`, `TopologyGraph`, `TopologyBuild`, `TooLarge`, `TopologyInputs`, `FeedRows`, `TopologyFilter`, `GroupBy`, `build_topology`, `resolve_group_by`, `RAW_LIMIT`, `POD_GROUP_LIMIT`, `NODE_LIMIT` |
 | 1 | `src/topology_checks.rs` (new, tests in module) | `CheckRule` (+ `chip_label`), `ConfigCheck`, `graph_checks`, `topology_coverage` |
 | 1 | `src/topology_layout.rs` (new) + `topology_layout_tests.rs` | `GraphPoint`, `GraphRect`, `Placement`, `Band`, `TopologyLayout`, `layout` (with `previous`), `GraphStructure`, `structure`, sizes |
+| 1 | `src/topology_viewport.rs` (new, tests in module) | `Viewport` (quantized; Fit down to step −25, `first_view`), `wheel_steps`, `is_drag`, `visible_nodes`, `minimap_transform`, `OVERLAY_GUTTER` (moved out of the canvas) |
 | 1 | `src/topology_canvas.rs` (new, tests in module) | `Viewport` (quantized), `visible_nodes`, `edge_curve`, `arrow_head`, edge paint, window handlers registered in paint, node card element |
 | 1 | `src/topology_feeds.rs` (new, tests in module) | `TOPOLOGY_FEED_KINDS`, `TopologySubject`, `TopologyFeeds`, `TopologyFeed`, `feed_plan`, `open_count`, `rows` |
 | 1 | `src/topology_view.rs` (new) | `TopologyView` entity: state (`Rc` graph and layout), header count, toolbar (segment, namespace dropdown, coverage), click, double-click, pan, wheel, tick, observe, Fit, empty and too-large states |

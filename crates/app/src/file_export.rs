@@ -2,6 +2,8 @@
 //! name offered in the save dialog. Each export writes only after the dialog returned a path (C9),
 //! and nothing here traces a path or a file name.
 
+use std::path::Path;
+
 use gpui_kit::{AppContext as _, Context, Task};
 
 /// One export, from button click to result. The log dock and Overview both use it.
@@ -65,6 +67,25 @@ pub(crate) fn start_export<V: 'static, A: 'static>(
     finish: impl FnOnce(&mut V, A) + 'static,
     cx: &mut Context<V>,
 ) -> Task<()> {
+    start_export_with(name, noun, snapshot, write_text, set_state, finish, cx)
+}
+
+fn write_text(path: &Path, text: String) -> std::io::Result<()> {
+    std::fs::write(path, text)
+}
+
+/// `start_export` for a payload that is not text: `write` turns what `snapshot` returned into the
+/// file, on the background executor, once the path is known (an image export picks its format from
+/// the extension and renders there). A failure of `write` reads like an I/O error.
+pub(crate) fn start_export_with<V: 'static, A: 'static, T: Send + 'static>(
+    name: String,
+    noun: &'static str,
+    snapshot: impl FnOnce(&mut V, &mut Context<V>) -> Result<(T, A), String> + 'static,
+    write: fn(&Path, T) -> std::io::Result<()>,
+    set_state: fn(&mut V, ExportState, &mut Context<V>),
+    finish: impl FnOnce(&mut V, A) + 'static,
+    cx: &mut Context<V>,
+) -> Task<()> {
     let directory = std::env::home_dir().unwrap_or_default();
     let chosen = cx.prompt_for_new_path(&directory, Some(&name));
     cx.spawn(async move |view, cx| {
@@ -96,11 +117,11 @@ pub(crate) fn start_export<V: 'static, A: 'static>(
         }) else {
             return;
         };
-        let Ok((text, extra)) = taken else {
+        let Ok((payload, extra)) = taken else {
             return;
         };
         let written = cx
-            .background_spawn(async move { std::fs::write(&path, text).map(|()| path) })
+            .background_spawn(async move { write(&path, payload).map(|()| path) })
             .await;
         let state = match written {
             Ok(path) => ExportState::Saved {

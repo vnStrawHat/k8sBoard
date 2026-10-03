@@ -2158,3 +2158,28 @@ fn missing_counts_stay_absent() {
     join_crd_rows(&mut rows, None);
     assert_eq!(rows[0].cells[CRD_INSTANCES], KindCell::Absent);
 }
+
+#[test]
+fn service_health_core_matches_list_wrapper() {
+    // The slice core is what Topology calls; the wrapper reads the session's lists. On loaded
+    // lists they must agree, for a Service that selects pods and for one that selects none.
+    let pods = vec![
+        pod("team-a", "api-1", &["app=api"]),
+        pod("team-a", "api-2", &["app=api"]),
+        pod("team-a", "db-1", &["app=db"]),
+        pod("team-b", "api-3", &["app=api"]),
+    ];
+    let slices = vec![slice(
+        Some("api"),
+        "IPv4",
+        vec![endpoint("10.0.0.1", Some("api-1"), true)],
+    )];
+    let pods_list = ready_list(pods.clone());
+    let slices_list = ready_list(slices.clone());
+    for selector in [&["app=api"][..], &["app=none"], &[]] {
+        let service = service(selector);
+        let core = service_health(&service, &pods, Some(&slices));
+        let wrapped = service_health_of(&service, &pods_list, Some(&slices_list));
+        assert_eq!(core, wrapped, "{selector:?}");
+    }
+}

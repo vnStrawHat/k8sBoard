@@ -63,11 +63,11 @@
 
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
-| W11-1 | Resources mode graph: ownerRef, selector, mounts, ingress → service | Missing | 0022 |
-| W11-2 | Config checks: Service with no pods, Ingress to a missing Service, unbound PVC, missing Secret | Missing | 0022 (shares rules with 0020) |
-| W11-3 | Layered layout, canvas, zoom/pan, remembered positions, minimap, Fit | Missing | 0022 |
-| W11-4 | Group by, kind toggles, live node status, select opens the drawer | Missing | 0022 |
-| W11-5 | Export PNG | Missing | 0022 (decision C9) |
+| W11-1 | Resources mode graph: ownerRef, selector, mounts, ingress → service | Done (0022; optional refs are flagged as missing) | 0022 |
+| W11-2 | Config checks: Service with no pods, Ingress to a missing Service, unbound PVC, missing Secret | Done (0022; optional refs are flagged as missing) | 0022 (shares rules with 0020) |
+| W11-3 | Layered layout, canvas, zoom/pan, remembered positions, minimap, Fit | Done (0022; positions are kept in memory only) | 0022 |
+| W11-4 | Group by, kind toggles, live node status, select opens the drawer | Done (0022) | 0022 |
+| W11-5 | Export PNG | Done (0022; a .svg path gets the SVG) | 0022 (decision C9) |
 | W11-6 | Traffic mode (service mesh or eBPF) | Missing | backlog |
 
 ## Port Forwarding page (W7 "Port Forwarding")

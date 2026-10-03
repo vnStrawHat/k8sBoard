@@ -25,7 +25,7 @@
 | N2 | Items disabled with "Not permitted" from SSAR | Done | 0005 | extend per new kind |
 | N3 | Counts per item | Done (0012) | live counts for Pods, Nodes, the visible kind; one-shot counts for the other kinds | — |
 | N4 | Error counts (red) | Done | 0020 | — |
-| N5 | Top items Overview, Issues, Topology | Partial (Issues in 0020, Overview in 0021 and the default landing; Topology disabled) | 0020 | 0021, 0022 |
+| N5 | Top items Overview, Issues, Topology | Done (Issues in 0020, Overview in 0021 and the default landing, Topology in 0022) | 0020, 0021, 0022 | — |
 | N6 | Custom Resources group auto-filled from CRDs (e.g. Certificates) | Done (grouped by API group) | — | 0018 |
 | N7 | Clicking a nav item un-zooms the dock | Done | 0004 | — |
 

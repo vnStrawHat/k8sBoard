@@ -23,7 +23,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|pods|nodes|issues|issues-drawer|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
+  --screen overview|switcher|pods|nodes|issues|issues-drawer|topology|topology-problems|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance
@@ -45,6 +45,10 @@ pub(crate) enum LaunchScreen {
     Issues,
     /// `--screen issues-drawer`: Issues, then the first issue revealed with its drawer.
     IssuesDrawer,
+    /// `--screen topology`.
+    Topology,
+    /// `--screen topology-problems`: the same screen with Problems only on.
+    TopologyProblems,
     /// `--screen pod-drawer|pod-containers|pod-events|pod-yaml`: a pod drawer on that tab.
     PodDrawer(DrawerTab),
     /// `--screen node-drawer|node-events|node-yaml`.
@@ -103,6 +107,7 @@ impl LaunchScreen {
             Self::Nodes | Self::NodeDrawer(_) | Self::NodesSelected => Screen::Nodes,
             Self::Issues | Self::IssuesDrawer => Screen::Issues,
             Self::Settings(..) => Screen::Overview,
+            Self::Topology | Self::TopologyProblems => Screen::Topology,
             Self::Kind(kind) | Self::KindDrawer(kind, _) => Screen::Kind(kind),
             Self::WhoCan => Screen::Kind(ResourceKind::ClusterRoles),
             Self::TestTraffic => Screen::Kind(ResourceKind::NetworkPolicies),
@@ -166,6 +171,12 @@ impl LaunchScreen {
         matches!(self, Self::PodsSelected | Self::NodesSelected)
     }
 
+    /// Whether the screen shows the Topology graph, so a screenshot waits for its feeds and build.
+    #[cfg(any(feature = "screenshot", test))]
+    pub(crate) fn shows_topology(self) -> bool {
+        matches!(self, Self::Topology | Self::TopologyProblems)
+    }
+
     /// Whether the screen shows pod usage, so a screenshot waits for a metrics tick.
     #[cfg(any(feature = "screenshot", test))]
     pub(crate) fn shows_pod_usage(self) -> bool {
@@ -225,6 +236,8 @@ impl LaunchScreen {
             "nodes" => Some(Self::Nodes),
             "issues" => Some(Self::Issues),
             "issues-drawer" => Some(Self::IssuesDrawer),
+            "topology" => Some(Self::Topology),
+            "topology-problems" => Some(Self::TopologyProblems),
             "pod-drawer" => Some(Self::PodDrawer(DrawerTab::Overview)),
             "pod-containers" => Some(Self::PodDrawer(DrawerTab::Containers)),
             "pod-events" => Some(Self::PodDrawer(DrawerTab::Events)),

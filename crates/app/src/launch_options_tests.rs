@@ -78,7 +78,7 @@ fn missing_value_is_error() {
 
 #[test]
 fn invalid_screen_or_theme_is_error() {
-    assert!(parse(&["--screen", "topology"]).is_err());
+    assert!(parse(&["--screen", "traffic"]).is_err());
     assert!(parse(&["--theme", "sepia"]).is_err());
 }
 
@@ -462,6 +462,23 @@ fn parses_logs_workload_screen() {
     assert_eq!(screen, LaunchScreen::LogsWorkload);
     assert!(screen.has_log_dock());
     assert_eq!(screen.screen(), Screen::Pods);
+}
+
+#[test]
+fn screen_topology_parses() {
+    let list = run_options(&["--screen", "topology"]).screen;
+    assert_eq!(list, LaunchScreen::Topology);
+    assert_eq!(list.screen(), Screen::Topology);
+    assert!(!list.has_drawer());
+    assert!(list.shows_topology());
+}
+
+#[test]
+fn screen_topology_problems_parses() {
+    let list = run_options(&["--screen", "topology-problems"]).screen;
+    assert_eq!(list, LaunchScreen::TopologyProblems);
+    assert_eq!(list.screen(), Screen::Topology);
+    assert!(list.shows_topology());
 }
 
 #[test]

@@ -31,7 +31,8 @@
 | Helm decoding | `flate2` 1 + `base64` 0.22 + `serde-saphyr` `deserialize` for manifests (0017, done; all were already locked, so `Cargo.lock` only lists them under `k8sboard-cluster`) | 0017 |
 | Diff | `similar` (named in the stack table); 0017 uses a path diff of the values, so `similar` waits for 0031 | 0031 |
 | Regex log filter | `regex` | 0019 |
-| Topology layout | hand-written Sugiyama vs a layout crate | 0022 |
+| Topology layout | hand-written (0022 decision 20): kind columns, bands, and barycenter sweeps; no layout crate (done) | 0022 |
+| PNG export | `resvg` 0.46 (`text`, `system-fonts`), the version `gpui-pre` already builds, so `Cargo.lock` only lists it under `k8sboard` (0022, done) | 0022 |
 | Config dirs and format | `dirs` 6 (already locked) + `serde_json`; JSON `settings.json` | 0024 (done) |
 | Folder watching | a file-watcher crate or polling | 0025 |
 | Fuzzy matching | `nucleo` (named in the stack table) | 0029 |

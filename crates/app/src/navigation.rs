@@ -21,8 +21,9 @@ use crate::status_tone::tone_color;
 pub(crate) const SIDEBAR_WIDTH: Pixels = px(220.);
 
 /// The items above the groups.
-const TOP_ITEMS: [&str; 3] = ["Overview", ISSUES_ITEM, "Topology"];
+const TOP_ITEMS: [&str; 3] = ["Overview", ISSUES_ITEM, TOPOLOGY_ITEM];
 const ISSUES_ITEM: &str = "Issues";
+const TOPOLOGY_ITEM: &str = "Topology";
 
 /// The section whose items are followed by one submenu per API group of the custom kinds.
 const CUSTOM_RESOURCES: &str = "Custom Resources";
@@ -104,6 +105,7 @@ fn screen_of(item: &str) -> Option<Screen> {
         "Nodes" => Some(Screen::Nodes),
         "Overview" => Some(Screen::Overview),
         ISSUES_ITEM => Some(Screen::Issues),
+        TOPOLOGY_ITEM => Some(Screen::Topology),
         _ => ResourceKind::from_label(item).map(Screen::Kind),
     }
 }
@@ -394,8 +396,8 @@ fn screen_item(
     let count = match screen {
         Screen::Pods => counts.pods,
         Screen::Nodes => counts.nodes,
-        // Overview and Issues show no list count; Issues shows the issue total instead.
-        Screen::Overview | Screen::Issues => None,
+        // Overview, Issues, and Topology show no list count; Issues shows the issue total instead.
+        Screen::Overview | Screen::Issues | Screen::Topology => None,
         Screen::Kind(kind) => counts.of_kind(kind),
     };
     let issues = counts.issues_of(screen);
@@ -450,7 +452,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn enabled_items_are_overview_issues_pods_nodes_and_explorer_kinds() {
+    fn enabled_items_are_overview_issues_topology_pods_nodes_and_explorer_kinds() {
         let enabled: Vec<&str> = TOP_ITEMS
             .iter()
             .chain(SECTIONS.iter().flat_map(|section| section.items.iter()))
@@ -462,6 +464,7 @@ mod tests {
             [
                 "Overview",
                 "Issues",
+                "Topology",
                 "Nodes",
                 "Namespaces",
                 "Events",
@@ -863,8 +866,8 @@ mod tests {
         assert_eq!(screen_of("Issues"), Some(Screen::Issues));
         assert_eq!(screen_of("Overview"), Some(Screen::Overview));
         assert_eq!(Screen::Overview.kind(), None);
-        // Topology stays disabled until its spec lands.
-        assert_eq!(screen_of("Topology"), None);
+        assert_eq!(screen_of("Topology"), Some(Screen::Topology));
+        assert_eq!(Screen::Topology.kind(), None);
         assert_eq!(Screen::Issues.kind(), None);
     }
 }

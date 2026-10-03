@@ -697,3 +697,58 @@ fn read_only_switch_leaves_title_bar_badge(cx: &mut TestAppContext) {
     assert_eq!(after.environment, before.environment);
     remove_fixture(&summary);
 }
+
+// ---- Topology ----
+
+fn service_key(namespace: &str, name: &str) -> ResourceKey {
+    ResourceKey::Kind {
+        kind: ResourceKind::Services,
+        namespace: Some(namespace.to_owned()),
+        name: name.to_owned(),
+    }
+}
+
+#[gpui_kit::test]
+fn show_in_topology_draws_the_namespace_of_the_object(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    // The shell calls the view inside its own update, so the view must not update the shell back
+    // in the same turn.
+    shell.update(cx, |shell, cx| {
+        shell.show_in_topology(&service_key("shop", "web"), cx);
+    });
+    render(window, cx);
+    shell.read_with(cx, |shell, cx| {
+        assert_eq!(shell.screen, Screen::Topology);
+        let count = shell.topology.read(cx).header_count();
+        assert_eq!(count.as_deref(), Some("ns: shop \u{b7} loading\u{2026}"));
+    });
+}
+
+#[gpui_kit::test]
+fn show_in_topology_ignores_other_kinds(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    let key = ResourceKey::Kind {
+        kind: ResourceKind::Deployments,
+        namespace: Some("shop".to_owned()),
+        name: "api".to_owned(),
+    };
+    shell.update(cx, |shell, cx| shell.show_in_topology(&key, cx));
+    shell.read_with(cx, |shell, _| assert_ne!(shell.screen, Screen::Topology));
+}
+
+#[gpui_kit::test]
+fn topology_can_be_shown_and_left(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    for screen in [Screen::Topology, Screen::Pods, Screen::Topology] {
+        shell.update(cx, |shell, cx| shell.show_screen(screen, cx));
+        render(window, cx);
+        shell.read_with(cx, |shell, _| assert_eq!(shell.screen, screen));
+    }
+}
+
+#[gpui_kit::test]
+fn topology_launch_screen_starts_on_topology(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell_with(&["--screen", "topology"], cx);
+    render(window, cx);
+    shell.read_with(cx, |shell, _| assert_eq!(shell.screen, Screen::Topology));
+}

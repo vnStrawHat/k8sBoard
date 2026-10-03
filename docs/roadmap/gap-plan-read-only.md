@@ -63,7 +63,7 @@ Pure rule engine over watch snapshots (pod and container states, Warning events,
 Needs attention (top issues), Capacity three-layer bars, node heatmap with click-through, Recent changes timeline (events + revisions; managedFields later), "Last 15 min ▾", Export report (C9).
 - Deps: 0010, 0011, 0020. Risk: Med.
 
-### 0022 — Topology, Resources mode (W11)
+### 0022 — Topology, Resources mode (W11) ([spec](../specs/0022-topology/README.md))
 Graph model (ownerRef, selector, mounts, ingress → service), config checks shared with 0020, layered (Sugiyama) layout, canvas edges and nodes, zoom/pan, drag with remembered positions, minimap, Fit, group by, kind toggles, select → drawer, live status, "Show in Topology" from Services/Ingresses, Export PNG (C9).
 - Deps: 0012–0016. Risk: High (no GPUI component; layout dependency C6).
 

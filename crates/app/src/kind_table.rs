@@ -442,6 +442,7 @@ impl TableDelegate for KindTableDelegate {
                 secret,
                 browse: browse_instances_item(&row, live.crd_kinds(), &self.shell),
                 default_namespace,
+                scope: Some(live.scope.clone()),
             },
         )
     }

@@ -15,10 +15,12 @@ pub(crate) struct Band { pub(crate) title: Option<SharedString> /* App */, pub(c
 pub(crate) struct TopologyLayout {
     pub(crate) rects: Vec<GraphRect>,                 // index = node index in the graph
     pub(crate) bands: Vec<Band>, pub(crate) extent: GraphRect,
-    order: Vec<(usize /* band */, Slot, Vec<NodeId>)>, // the seed for the next layout
+    order: Vec<SlotOrder>,                     // per slot: ids top to bottom and the column offset
+    node_columns: HashMap<NodeId, usize>, band_columns: usize, // the band-columns, kept by the next layout
 }
-pub(crate) fn layout(graph: &TopologyGraph, group_by: GroupBy, pins: &HashMap<NodeId, GraphPoint>,
-    previous: Option<&TopologyLayout>) -> TopologyLayout;
+/// `aspect` is the width over the height of the canvas (without the overlay strip).
+pub(crate) fn layout(graph: &TopologyGraph, group_by: GroupBy, aspect: f32,
+    pins: &HashMap<NodeId, GraphPoint>, previous: Option<&TopologyLayout>) -> TopologyLayout;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GraphStructure { pub(crate) nodes: Vec<NodeId>, pub(crate) edges: Vec<(NodeId, NodeId, Relation)> }
 pub(crate) fn structure(graph: &TopologyGraph) -> GraphStructure;
@@ -43,9 +45,9 @@ pub(crate) fn structure(graph: &TopologyGraph) -> GraphStructure;
    - `previous` is `None`: sort by `(kind, NodeId)`, then run the sweeps (step 3).
    - `previous` is `Some`: take the previous order of each slot, drop the ids that are gone, and **append new ids at the end** in `(kind, NodeId)` order. Skip the sweeps. Siblings never move when a pod is added (W11 pin 3).
 3. **Barycenter sweeps** (`SWEEPS` = 4, alternating, only without `previous`). The down sweep visits columns 1→3. Each node's key is the mean index of its neighbours in columns with a **smaller index** (to its left). The up sweep visits columns 2→0 and uses neighbours in columns with a **larger index** (to its right). Config-row nodes are ordered by the mean x slot of their sources. A node without such neighbours keeps its own index as its key. The sort is stable, and ties fall back to `NodeId`.
-4. **Columns.** Inside a band, the nodes of a column stack at `ROW_PITCH`. A shorter column is centered: `offset = (max − count) × ROW_PITCH / 2`.
-5. **Config row** at `y = band column bottom + CONFIG_GAP`. Each config node wants the slot `x` of the column of its first source (in source order). If that slot is taken, it takes the next free slot to the right (slots step by `COLUMN_PITCH` and may go past column 3). A node without a source starts at slot 0. This follows W11 (ConfigMap under the Deployment, Secret one column right).
-6. **Bands** stack top to bottom with `BAND_GAP`. App bands add `BAND_TITLE` above and a band rect padded by `BAND_PAD`.
+4. **Columns.** Inside a band, the nodes of a column stack at `ROW_PITCH`. A shorter column is centered: `offset = (max − count) × ROW_PITCH / 2`. **With `previous`, a column that was there keeps its previous offset** (kept per column in `SlotOrder`), so the cards already drawn do not move when a pod is added. A band grows only when the new pod reaches below its tallest column.
+5. **Config row** at `y = band column bottom + CONFIG_GAP`. Each config node wants the slot `x` of the column of its first source (in source order). If that slot is taken, it takes the next free slot to the right; **past the last slot (`COLUMNS` = 4) the row wraps** onto a new row `ROW_PITCH` lower, from slot 0. A node without a source starts at slot 0. This follows W11 (ConfigMap under the Deployment, Secret one column right).
+6. **Bands** have one width (`BAND_WIDTH`: four columns and the padding), and App bands add `BAND_TITLE` above and a rect padded by `BAND_PAD`. They are **packed into band-columns**: from scratch, for each count of band-columns from 1 to `MAX_BAND_COLUMNS` (8) the bands flow in band order, each into the shortest column so far (the first on a tie), and the count whose extent has the aspect closest to `aspect` wins (fewer on a tie). Inside a band-column bands stack with `BAND_GAP`. With `previous`, a band goes back to the band-column of its first node that was there, and a new band to the shortest column; the count of columns is kept.
 7. **Pins**: a pinned id takes its pinned origin. Nothing moves out of its way.
 8. **Extent** = the union of rects and bands, plus `MARGIN`.
 
@@ -56,10 +58,10 @@ pub(crate) fn structure(graph: &TopologyGraph) -> GraphStructure;
 | Change since the last layout | Call |
 |---|---|
 | `structure` and `group_by` equal | keep the layout; only tones and captions change |
-| structure differs, same namespace and `group_by` | `layout(graph, group_by, pins, Some(&previous))` |
-| first layout, a new namespace, a `group_by` change, or Reset positions | `layout(graph, group_by, pins, None)` + Fit |
+| structure differs, same namespace and `group_by` | `layout(graph, group_by, aspect, pins, Some(&previous))` |
+| first layout, a new namespace, a `group_by` change, or Reset positions | `layout(graph, group_by, aspect, pins, None)` + the first view (canvas.md) |
 
-The viewport only moves on Fit.
+The viewport only moves on Fit and on that first view. `aspect` is the canvas width over its height without the overlay strip; the first build before the first paint uses the default canvas size.
 
 ## Sizes (W11 measurements)
 

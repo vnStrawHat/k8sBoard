@@ -58,8 +58,20 @@
 | 35 | File names come from 0021's `export_file_name`, which replaces path-unsafe characters (`@`, `:`, `/`, …) with `-` | one sanitizer for every exporter |
 | 36 | **Show in Topology** goes in the Service and Ingress menus. It is disabled with a reason outside the scope | gap plan 0022 |
 
+## Large namespaces (changed after the first UAT run)
+
+The first run showed that a namespace with many apps stacked its bands in one thin column: Fit landed at 0.2 and every card was blank. These rows replace what decisions 22, 24, and 25 said about the stack and the zoom floor.
+
+| # | Decision | Rationale |
+|---|---|---|
+| 37 | **Bands are packed into band-columns.** From scratch they flow into the count of columns whose extent best matches the canvas aspect; an incremental layout keeps each band in its column, and each column its offset. The config row wraps after 4 slots | the graph keeps the canvas shape, so Fit does not shrink it to a sliver; pin 3 still holds |
+| 38 | **Fit goes down to step −25; the first view is `max(fit, 0.55)`** anchored at the extent top-left. Fit and the first view leave the overlay strip free | Fit really shows everything; the first view is readable, and the minimap gives the overview |
+| 39 | **Level of detail has three steps:** text from 0.55, the badge alone from 0.3, a plain box below. Cards are opaque; band titles keep a fixed size when zoomed out | no blank cards at Fit, no line through card text |
+| 40 | **Problems only keeps decision 17:** the problems and their direct neighbours. The chip turns amber while it is on | the neighbours are the context; the amber chip says the graph is filtered |
+| 41 | **A failed feed is `Failed`, not `Loading`:** `Not checked: services (watch failed).` `(not permitted)` is printed only for a denied feed | a watch that keeps failing must not read as loading forever |
+
 ## Measurements (filled by the coder)
 
 | Item | Value |
 |---|---|
-| `topology_budget` release timing (target ≤ 8 ms) | TBD |
+| `topology_budget` release timing (target ≤ 8 ms) | 3.1 ms for 340 nodes (40 Services, 100 Deployments, 100 ReplicaSets, 3,000 pods grouped into 100 sets), `build_topology` + `layout`; the debug gate run takes 15.7 ms (budget 80 ms) |

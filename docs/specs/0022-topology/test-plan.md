@@ -48,3 +48,13 @@
 - Columns run left to right: Ingress/HPA, Service/workloads, ReplicaSets, Pods. Config sits in a row under its workload. Bad cards have a red border; ghosts a dashed red one; unchecked a dashed muted one.
 - Edge styles match the glyph legend. The minimap is bottom right, with the legend to its left. The dot grid shows at 100 %.
 - A click opens the drawer over the graph; Esc closes it. Screenshots: `topology`, `topology-problems`. Light and dark themes are both readable.
+
+## Large-namespace changes (decisions 37–41)
+
+| Module | Tests |
+|---|---|
+| `topology_viewport.rs` | `fit_goes_below_the_wheel_floor_to_show_everything`, `the_wheel_does_not_push_a_fitted_view_back_up`, `first_view_fits_a_graph_that_is_readable_whole`, `first_view_of_a_large_graph_is_readable_and_anchored_top_left` (the viewport and minimap tests of `topology_canvas.rs` moved here) |
+| `topology_layout_tests.rs` | `bands_flow_into_band_columns_to_match_a_wide_canvas`, `band_columns_do_not_overlap`, `band_packing_is_deterministic`, `adding_a_pod_moves_no_other_card`, `a_new_band_joins_the_shortest_column_and_keeps_the_others`, `config_row_wraps_after_the_last_slot` |
+| `topology_canvas.rs` | `the_level_of_detail_steps_down_with_the_zoom`, `a_curve_is_inside_the_box_of_its_four_points` |
+| `topology_checks_tests.rs`, `topology_feeds.rs` | `coverage_says_watch_failed_only_for_a_failed_feed`, `a_failed_feed_draws_its_targets_unchecked`, `a_feed_that_failed_reads_as_failed_not_loading` |
+| `topology_graph_tests.rs`, `topology_view.rs` | `equal_inputs_build_equal_graphs`, `the_header_says_loading_too_large_or_the_count`, `a_selection_is_gone_only_from_a_feed_that_has_loaded`, `a_selection_waits_for_a_feed_that_is_not_ready`, `a_pod_is_gone_when_the_loaded_pods_lack_it` |

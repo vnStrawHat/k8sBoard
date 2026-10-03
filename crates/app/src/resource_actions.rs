@@ -1,4 +1,4 @@
-use cluster::{AccessCheck, NodeSummary, PodSummary, SecretKey};
+use cluster::{AccessCheck, NamespaceScope, NodeSummary, PodSummary, SecretKey};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
@@ -8,7 +8,7 @@ use gpui_kit::{
 use crate::access_bindings::role_key;
 use crate::access_query::who_can_prefill;
 use crate::app_shell::{AppShell, Screen};
-use crate::cluster_session::{AccessState, LiveCluster};
+use crate::cluster_session::{AccessState, LiveCluster, scope_includes};
 use crate::custom_kind::CustomKind;
 use crate::drawer::DrawerTab;
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
@@ -328,10 +328,17 @@ pub(crate) fn kind_menu(
         }
     }
     if object_ref(&key).is_some() {
-        menu = menu.item(view_yaml_item(key, shell));
+        menu = menu.item(view_yaml_item(key.clone(), shell));
     }
     if let Some(item) = extras.open_url {
         menu = menu.item(item);
+    }
+    match topology_menu(kind, row.namespace.as_deref(), extras.scope.as_ref()) {
+        TopologyMenu::Hidden => {}
+        TopologyMenu::Enabled => menu = menu.item(show_in_topology_item(key.clone(), shell)),
+        TopologyMenu::Disabled(reason) => {
+            menu = menu.item(disabled_menu_item("Show in Topology", reason.into()));
+        }
     }
     if has_go_to_target(kind) {
         menu = menu.item(go_to_target_item(row, shell));
@@ -375,6 +382,41 @@ pub(crate) fn kind_menu(
             kind.delete_label(),
             READ_ONLY_MODE_REASON.into(),
         ))
+}
+
+/// Whether the menu of a kind offers Show in Topology.
+#[derive(Debug, PartialEq, Eq)]
+enum TopologyMenu {
+    /// Only Services and Ingresses have the item.
+    Hidden,
+    Enabled,
+    /// The namespace is outside the session's scope, so Topology could not draw it.
+    Disabled(String),
+}
+
+fn topology_menu(
+    kind: ResourceKind,
+    namespace: Option<&str>,
+    scope: Option<&NamespaceScope>,
+) -> TopologyMenu {
+    if !matches!(kind, ResourceKind::Services | ResourceKind::Ingresses) {
+        return TopologyMenu::Hidden;
+    }
+    let (Some(namespace), Some(scope)) = (namespace, scope) else {
+        return TopologyMenu::Hidden;
+    };
+    if scope_includes(scope, namespace) {
+        TopologyMenu::Enabled
+    } else {
+        TopologyMenu::Disabled(format!("Namespace {namespace} is outside the scope"))
+    }
+}
+
+fn show_in_topology_item(key: ResourceKey, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    let shell = shell.clone();
+    PopupMenuItem::new("Show in Topology").on_click(move |_, _, cx| {
+        let _ = shell.update(cx, |shell, cx| shell.show_in_topology(&key, cx));
+    })
 }
 
 /// Whether the Namespaces menu offers "Set as default namespace" for `row_name`, and if so
@@ -445,6 +487,8 @@ pub(crate) struct MenuExtras {
     pub(crate) browse: Option<PopupMenuItem>,
     /// The active cluster's default namespace, for the Namespaces menu.
     pub(crate) default_namespace: Option<String>,
+    /// The scope of the session, for Show in Topology.
+    pub(crate) scope: Option<NamespaceScope>,
 }
 
 /// The Reveal and Copy items of a Secret.

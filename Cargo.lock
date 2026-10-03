@@ -3878,6 +3878,7 @@ dependencies = [
  "jiff",
  "k8sboard-cluster",
  "regex",
+ "resvg 0.46.0",
  "serde",
  "serde_json",
  "tokio",

@@ -31,6 +31,11 @@ use crate::kubelet_metrics::KubeletDemand;
 use crate::live_sections::CanDoCell;
 use crate::related_objects::RelatedSubject;
 use crate::resource_kind::ResourceKind;
+use crate::table_selection::ResourceKey;
+use crate::topology_feeds::{
+    FeedStart, SubjectChange, TopologyFeed, TopologyFeeds, TopologySubject, feed_plan,
+    subject_change,
+};
 
 /// One connected kubeconfig context: the connection, its live lists, and the access report.
 /// Dropping the entity cancels every task and watch it owns.
@@ -54,6 +59,9 @@ pub(crate) struct ClusterSession {
     /// The Overview screen is shown, so its change feeds run. Kept across Connecting and retry like
     /// `explorer_kind`.
     is_overview_visible: bool,
+    /// What Topology draws while it is shown: its feeds run for this subject. Kept across Connecting
+    /// and retry like `explorer_kind`.
+    topology_subject: Option<TopologySubject>,
     _issue_tick: Task<()>,
 }
 
@@ -112,6 +120,8 @@ pub(crate) struct LiveCluster {
     pub(crate) issue_feeds: IssueFeeds,
     /// The Overview's change feeds: `Some` exactly while Overview is visible (`Denied` included).
     pub(crate) change_events: Option<ChangeEvents>,
+    /// The watches behind the Topology graph: `Some` exactly while Topology is shown.
+    topology: Option<TopologyFeeds>,
     connection: ClusterConnection,
     subscriptions: Subscriptions,
 }
@@ -1094,6 +1104,7 @@ impl ClusterSession {
             issues: IssueBoard::default(),
             is_issues_visible: false,
             is_overview_visible: false,
+            topology_subject: None,
             _issue_tick: Self::start_issue_tick(cx),
         }
     }
@@ -1142,6 +1153,56 @@ impl ClusterSession {
         cx.notify();
     }
 
+    /// The subject the Topology feeds were last pointed at.
+    pub(crate) fn topology_subject(&self) -> Option<&TopologySubject> {
+        self.topology_subject.as_ref()
+    }
+
+    /// Points the Topology feeds at `subject`, or drops them with `None`. The same subject is a
+    /// no-op; another namespace restarts every feed; other kind chips start and stop only their
+    /// own. A session that is not live only remembers the choice; `LiveCluster::start` reads it.
+    pub(crate) fn set_topology_subject(
+        &mut self,
+        subject: Option<TopologySubject>,
+        cx: &mut Context<Self>,
+    ) {
+        self.topology_subject = subject.clone();
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        let running = live.topology.as_ref().map(|feeds| &feeds.subject);
+        match subject_change(running, subject.as_ref()) {
+            SubjectChange::Keep => return,
+            SubjectChange::Stop => live.topology = None,
+            SubjectChange::Restart => {
+                // The old feeds drop first, so two namespaces never overlap.
+                live.topology = None;
+                live.topology = subject.map(|subject| live.start_topology(subject, &runtime, cx));
+            }
+            SubjectChange::Adjust { stop, start } => {
+                if let Some(feeds) = live.topology.as_mut() {
+                    feeds.remove(&stop);
+                    if let Some(subject) = subject {
+                        feeds.subject = subject;
+                    }
+                }
+                let namespace = live
+                    .topology
+                    .as_ref()
+                    .map(|feeds| feeds.subject.namespace.clone())
+                    .unwrap_or_default();
+                for kind in start {
+                    let feed = live.topology_feed(kind, &namespace, &runtime, cx);
+                    if let Some(feeds) = live.topology.as_mut() {
+                        feeds.feeds.push(feed);
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
     /// Whether a change feed that runs has not delivered its first snapshot; a screenshot of
     /// Overview waits on it.
     #[cfg(feature = "screenshot")]
@@ -1154,6 +1215,15 @@ impl ClusterSession {
             Some(ChangeEvents::Live { rollouts, rescales, .. })
                 if rollouts.is_loading() || rescales.is_loading()
         )
+    }
+
+    /// Whether a Topology feed that runs has not delivered its first snapshot; a screenshot of
+    /// Topology waits on it.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn is_topology_pending(&self) -> bool {
+        self.live()
+            .and_then(|live| live.topology.as_ref())
+            .is_some_and(TopologyFeeds::has_pending)
     }
 
     /// Whether the board has not run on loaded lists yet, or a feed it reads still loads. A launch
@@ -1302,6 +1372,11 @@ impl ClusterSession {
         }
     }
 
+    /// The Topology feed of `kind`, while it exists.
+    fn topology_feed_mut(&mut self, kind: ResourceKind) -> Option<&mut TopologyFeed> {
+        self.live_mut()?.topology.as_mut()?.feed_mut(kind)
+    }
+
     fn object_events_mut(&mut self, subject: &InvolvedObject) -> Option<&mut ObjectEvents> {
         self.live_mut()?
             .object_events
@@ -1357,6 +1432,7 @@ impl ClusterSession {
                 self.explorer_kind,
                 self.event_filter,
                 self.is_overview_visible,
+                self.topology_subject.clone(),
                 cx,
             ))),
             Ok(Err(error)) => SessionPhase::Failed {
@@ -1417,11 +1493,22 @@ impl ClusterSession {
         if live.change_events.take().is_some() {
             live.start_change_events(&runtime, cx);
         }
+        // Topology draws one namespace of the scope; one that left it has nothing to draw.
+        let leaves_scope = live
+            .topology
+            .as_ref()
+            .is_some_and(|feeds| !scope_includes(&live.scope, &feeds.subject.namespace));
+        if leaves_scope {
+            live.topology = None;
+        }
         // The numbers are for the old scope; the review for the new one counts again.
         live.kind_counts = KindCounts::default();
         // The fallback namespaces and so the coverage may differ in the new scope.
         live.rbac.reset_for_scope_change();
         live.refresh_kubelet_targets();
+        if leaves_scope {
+            self.topology_subject = None;
+        }
         cx.notify();
     }
 
@@ -1759,6 +1846,7 @@ impl ClusterSession {
         live.access = AccessState::from_review(review);
         live.drop_denied_companion();
         live.plan_change_events(&runtime, cx);
+        live.replan_topology(&runtime, cx);
         // The review decides which condition feeds may start.
         live.issue_feeds.restart_conditions(
             &runtime,
@@ -1933,6 +2021,80 @@ impl LiveCluster {
         }
     }
 
+    /// Starts the feeds of `subject`, each unless a known review denies its list.
+    fn start_topology(
+        &self,
+        subject: TopologySubject,
+        runtime: &ClusterRuntime,
+        cx: &mut Context<ClusterSession>,
+    ) -> TopologyFeeds {
+        let feeds = subject
+            .wanted_kinds()
+            .into_iter()
+            .map(|kind| self.topology_feed(kind, &subject.namespace, runtime, cx))
+            .collect();
+        TopologyFeeds { subject, feeds }
+    }
+
+    /// The feed of `kind` in `namespace`: a watch, or off when a known review denies the list.
+    fn topology_feed(
+        &self,
+        kind: ResourceKind,
+        namespace: &str,
+        runtime: &ClusterRuntime,
+        cx: &mut Context<ClusterSession>,
+    ) -> TopologyFeed {
+        if let FeedStart::Off(reason) = feed_plan(kind, &self.access) {
+            return TopologyFeed::off(kind, reason);
+        }
+        let scope = NamespaceScope::Named(namespace.to_owned());
+        let Some(updates) = kind.watch_rows(&self.connection, scope, EventFilter::default()) else {
+            return TopologyFeed::off(kind, "not available".to_owned());
+        };
+        let subscription = runtime.subscribe(
+            updates,
+            cx,
+            move |session: &mut ClusterSession, update, _| {
+                if let Some(feed) = session.topology_feed_mut(kind) {
+                    feed.list.apply(update);
+                }
+            },
+            move |session, _| {
+                if let Some(feed) = session.topology_feed_mut(kind) {
+                    feed.list.mark_stopped();
+                }
+            },
+        );
+        TopologyFeed::started(kind, subscription)
+    }
+
+    /// A review that finished turns an Off feed on when it allows the list and a running feed off
+    /// when it denies it, so a 403 never retries.
+    fn replan_topology(&mut self, runtime: &ClusterRuntime, cx: &mut Context<ClusterSession>) {
+        let Some(feeds) = self.topology.as_ref() else {
+            return;
+        };
+        let namespace = feeds.subject.namespace.clone();
+        let changed: Vec<ResourceKind> = feeds
+            .feeds
+            .iter()
+            .filter(|feed| {
+                feed.is_open() != matches!(feed_plan(feed.kind, &self.access), FeedStart::Start)
+            })
+            .map(|feed| feed.kind)
+            .collect();
+        for kind in changed {
+            let feed = self.topology_feed(kind, &namespace, runtime, cx);
+            if let Some(slot) = self
+                .topology
+                .as_mut()
+                .and_then(|feeds| feeds.feed_mut(kind))
+            {
+                *slot = feed;
+            }
+        }
+    }
+
     /// Moves the kubelet targets with the nodes and pods lists.
     fn refresh_kubelet_targets(&self) {
         self.metrics
@@ -1998,6 +2160,7 @@ impl LiveCluster {
                 Some(ChangeEvents::Live { .. }) => CHANGE_EVENT_KINDS.len() * namespaces,
                 Some(ChangeEvents::Denied) | None => 0,
             },
+            topology: self.topology.as_ref().map_or(0, TopologyFeeds::open_count),
         })
     }
 
@@ -2165,6 +2328,20 @@ impl LiveCluster {
         })
     }
 
+    /// The Topology feeds, while Topology is shown.
+    pub(crate) fn topology(&self) -> Option<&TopologyFeeds> {
+        self.topology.as_ref()
+    }
+
+    /// The kind row of `key`: the explorer list first, then the Topology feeds. Only the drawer, the
+    /// kind menu, and the YAML lookups read it, so over Topology they find their row.
+    pub(crate) fn row_of(&self, key: &ResourceKey) -> Option<&KindRow> {
+        let ResourceKey::Kind { kind, .. } = key else {
+            return None;
+        };
+        row_in(key, *kind, self.kind_list(*kind), self.topology())
+    }
+
     /// The explorer list of `kind`, or `None` while another kind (or no kind) is shown.
     pub(crate) fn kind_list(&self, kind: ResourceKind) -> Option<&KindList> {
         self.explorer
@@ -2177,6 +2354,7 @@ impl LiveCluster {
         explorer_kind: Option<ResourceKind>,
         event_filter: EventFilter,
         is_overview_visible: bool,
+        topology_subject: Option<TopologySubject>,
         cx: &mut Context<ClusterSession>,
     ) -> Self {
         let runtime = cx.global::<ClusterRuntime>().clone();
@@ -2248,6 +2426,7 @@ impl LiveCluster {
             kind_counts: KindCounts::default(),
             issue_feeds,
             change_events: None,
+            topology: None,
             connection,
             subscriptions,
         };
@@ -2266,6 +2445,7 @@ impl LiveCluster {
         if is_overview_visible {
             live.start_change_events(&runtime, cx);
         }
+        live.topology = topology_subject.map(|subject| live.start_topology(subject, &runtime, cx));
         live
     }
 
@@ -2370,6 +2550,29 @@ impl LiveCluster {
             explorer.list.mark_stopped();
         }
     }
+}
+
+/// The row of the Kind `key`: in the explorer list when it shows that kind, else in a Topology feed.
+fn row_in<'a>(
+    key: &ResourceKey,
+    kind: ResourceKind,
+    explorer: Option<&'a KindList>,
+    topology: Option<&'a TopologyFeeds>,
+) -> Option<&'a KindRow> {
+    let in_explorer = explorer.and_then(|explorer| {
+        explorer
+            .list
+            .items()
+            .iter()
+            .find(|row| key.is_row(kind, row))
+    });
+    in_explorer.or_else(|| topology?.row(kind, |row| key.is_row(kind, row)))
+}
+
+/// Whether `namespace` is one of the scope's namespaces; `All` includes every one.
+pub(crate) fn scope_includes(scope: &NamespaceScope, namespace: &str) -> bool {
+    let picked = scope.namespaces();
+    picked.is_empty() || picked.iter().any(|name| name == namespace)
 }
 
 /// The CRDs table list for the state of the CRD watch.
@@ -2589,6 +2792,8 @@ struct OpenWatches {
     issue_feeds: usize,
     /// Overview's change feeds: two watches per namespace while they run.
     change_events: usize,
+    /// Topology's feeds: one watch each, all named, while Topology is shown; Off feeds count 0.
+    topology: usize,
 }
 
 /// The namespaces list and the nodes are always watched, pods once per namespace of the scope,
@@ -2605,6 +2810,7 @@ fn open_watch_count(watches: OpenWatches) -> usize {
         + usize::from(watches.related)
         + watches.issue_feeds
         + watches.change_events
+        + watches.topology
 }
 
 /// Whether a refresh that ran for `reason` repaints the app. A new, gone, or changed issue always

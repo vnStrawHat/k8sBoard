@@ -869,3 +869,40 @@ fn logs_launch_needs_containers() {
     };
     assert_eq!(reason, "The pod has no containers");
 }
+
+#[test]
+fn show_in_topology_is_offered_for_services_and_ingresses_in_scope() {
+    let scope = NamespaceScope::Named("shop".to_owned());
+    for kind in [ResourceKind::Services, ResourceKind::Ingresses] {
+        assert_eq!(
+            topology_menu(kind, Some("shop"), Some(&scope)),
+            TopologyMenu::Enabled
+        );
+    }
+    assert_eq!(
+        topology_menu(ResourceKind::Deployments, Some("shop"), Some(&scope)),
+        TopologyMenu::Hidden
+    );
+    assert_eq!(
+        topology_menu(ResourceKind::Services, Some("shop"), None),
+        TopologyMenu::Hidden
+    );
+}
+
+#[test]
+fn show_in_topology_disabled_outside_scope() {
+    let scope = NamespaceScope::Named("blog".to_owned());
+    assert_eq!(
+        topology_menu(ResourceKind::Services, Some("shop"), Some(&scope)),
+        TopologyMenu::Disabled("Namespace shop is outside the scope".to_owned())
+    );
+    // All namespaces include every one.
+    assert_eq!(
+        topology_menu(
+            ResourceKind::Services,
+            Some("shop"),
+            Some(&NamespaceScope::All)
+        ),
+        TopologyMenu::Enabled
+    );
+}

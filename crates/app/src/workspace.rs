@@ -165,6 +165,7 @@ impl AppShell {
                 self.issue_summary(cx)
                     .map(|summary| count_label(summary.total, "issue", "issues")),
             ),
+            Screen::Topology => ("Topology", self.topology.read(cx).header_count()),
             Screen::Kind(kind) => (
                 kind.label(),
                 live.and_then(|live| {
@@ -230,7 +231,7 @@ impl AppShell {
             return None;
         }
         let (singular, plural) = match self.screen {
-            Screen::Overview => return None,
+            Screen::Overview | Screen::Topology => return None,
             Screen::Pods => ("pod", "pods"),
             Screen::Nodes => ("node", "nodes"),
             Screen::Issues => ("issue", "issues"),
@@ -287,6 +288,43 @@ impl AppShell {
             .collect()
     }
 
+    /// The Topology header, right-aligned: the saved file name, Fit, and Export PNG. Both buttons
+    /// need a graph; Export PNG is also disabled while an export runs.
+    fn topology_header_buttons(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+        let topology = self.topology.read(cx);
+        let has_graph = topology.has_graph();
+        let saved = topology.export_detail().map(|detail| {
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(detail)
+                .into_any_element()
+        });
+        let fit = Button::new("topology-fit")
+            .ghost()
+            .small()
+            .label("Fit")
+            .tooltip("Fit the whole graph in view")
+            .disabled(!has_graph)
+            .on_click(cx.listener(|shell, _, _, cx| {
+                shell.topology.update(cx, |view, cx| view.fit(cx));
+            }));
+        let export = Button::new("topology-export")
+            .ghost()
+            .small()
+            .icon(Icon::new(IconName::Download))
+            .label("Export PNG")
+            .tooltip("Save the graph as a PNG or SVG file…")
+            .disabled(!has_graph || topology.export_state().is_busy())
+            .on_click(cx.listener(|shell, _, _, cx| {
+                shell.topology.update(cx, |view, cx| view.export(cx));
+            }));
+        saved
+            .into_iter()
+            .chain([fit.into_any_element(), export.into_any_element()])
+            .collect()
+    }
+
     /// Under the Overview header: why the last export failed.
     fn render_overview_export_error(&self) -> Option<AnyElement> {
         let ExportState::Failed { message } = &self.overview.export else {
@@ -333,6 +371,7 @@ impl AppShell {
     ) -> Option<AnyElement> {
         let buttons: Vec<AnyElement> = match self.screen {
             Screen::Overview => self.overview_header_buttons(cx),
+            Screen::Topology => self.topology_header_buttons(cx),
             Screen::Issues => return self.render_issues_status(cx),
             Screen::Kind(ResourceKind::ReplicaSets) => {
                 self.render_hide_inactive(toolkit, cx).into_iter().collect()
@@ -533,6 +572,8 @@ impl AppShell {
                 .pods
                 .interruption()
                 .or_else(|| live.nodes.interruption()),
+            // The graph is drawn from the pods and the feeds of the namespace.
+            Screen::Topology => live.pods.interruption(),
             Screen::Kind(kind) => live.kind_list(kind)?.list.interruption(),
         }?;
         Some(
@@ -607,6 +648,8 @@ impl AppShell {
             Screen::Nodes => ("Nodes".to_owned(), live.nodes.failure()),
             // A list that failed is a gap in the coverage, not a failure of this screen.
             Screen::Issues => ("Issues".to_owned(), None),
+            // The graph needs the pods; a feed that failed is a gap the coverage note names.
+            Screen::Topology => ("Pods".to_owned(), live.pods.failure()),
             Screen::Kind(kind) => (
                 kind.label().to_owned(),
                 live.kind_list(kind)
@@ -643,6 +686,7 @@ impl AppShell {
                 .bordered(false)
                 .into_any_element(),
             Screen::Issues => self.render_issues(cx),
+            Screen::Topology => self.topology.clone().into_any_element(),
             Screen::Kind(_) => DataTable::new(&self.kind_table)
                 .bordered(false)
                 .into_any_element(),
@@ -703,12 +747,8 @@ impl AppShell {
                 Some(node_drawer(node, &self.drawer, session, cx))
             }
             ResourceKey::Kind { kind, .. } => {
-                let row = live
-                    .kind_list(*kind)?
-                    .list
-                    .items()
-                    .iter()
-                    .find(|row| key.is_row(*kind, row))?;
+                // Over Topology the row comes from its feeds, not the explorer.
+                let row = live.row_of(key)?;
                 Some(kind_drawer(*kind, row, &self.drawer, live, session, cx))
             }
         }
@@ -739,7 +779,7 @@ fn paused_text(count: &str, has_held: bool) -> String {
 }
 
 /// A header toggle: primary when on, outline when off, like Warnings only.
-fn toggle_button(id: &'static str, label: &'static str, is_on: bool) -> Button {
+pub(crate) fn toggle_button(id: &'static str, label: &'static str, is_on: bool) -> Button {
     Button::new(id)
         .label(label)
         .small()

@@ -40,6 +40,12 @@ const JOB_DEADLINE_EXCEEDED: &str = "DeadlineExceeded";
 /// The API default of a Job's `backoffLimit`.
 const DEFAULT_BACKOFF_LIMIT: u32 = 6;
 
+/// The start of the CERTIFICATE box text about a TLS secret that the list does not hold; Topology
+/// draws a missing secret itself, so it skips this box.
+pub(crate) const NO_TLS_SECRET: &str = "No TLS secret";
+/// The title of every certificate box.
+pub(crate) const CERTIFICATE_TITLE: &str = "CERTIFICATE";
+
 /// The text of a WHY box.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KindDiagnosis {
@@ -1032,7 +1038,7 @@ fn secret_diagnosis(secret: &SecretSummary, now: Timestamp) -> Option<KindDiagno
     let (tone, text) = certificate_verdict(&secret.details, now)?;
     Some(KindDiagnosis {
         tone,
-        title: "CERTIFICATE".to_owned(),
+        title: CERTIFICATE_TITLE.to_owned(),
         text,
         link: None,
     })
@@ -1051,7 +1057,7 @@ fn ingress_diagnosis(ingress: &IngressSummary, inputs: &DiagnosisInputs) -> Opti
             None => (
                 1,
                 StatusTone::Warn,
-                format!("No TLS secret {name} in {}.", ingress.namespace),
+                format!("{NO_TLS_SECRET} {name} in {}.", ingress.namespace),
             ),
             Some(secret) => {
                 // A valid certificate says nothing; the other names still count.
@@ -1074,7 +1080,7 @@ fn ingress_diagnosis(ingress: &IngressSummary, inputs: &DiagnosisInputs) -> Opti
         }
         let diagnosis = KindDiagnosis {
             tone,
-            title: "CERTIFICATE".to_owned(),
+            title: CERTIFICATE_TITLE.to_owned(),
             text,
             link: ResourceKey::of_object("Secret", Some(&ingress.namespace), name),
         };
