@@ -253,6 +253,10 @@ impl YamlEditView {
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language("yaml")
+                // Wrapping measures a whole line to break it; a single line of a few MiB (a paste) hangs
+                // the window under load. The 2 MiB cap is checked on Apply, so the editor scrolls
+                // sideways instead.
+                .soft_wrap(false)
                 .line_number(true)
         });
         let subscription =
