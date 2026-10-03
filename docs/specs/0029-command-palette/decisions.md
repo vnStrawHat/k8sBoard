@@ -20,10 +20,10 @@
 |---|---|---|
 | 8 | Entries come only from memory: `LiveCluster` lists, the cursor, 0026 switcher rows, `shortcut_rows()` | the palette must stay instant and add no API load |
 | 9 | **No new list call**: Resources searches only the loaded lists (pods, nodes, the visible kind); other kinds are reached with `:kind`, which is ordinary navigation and starts that kind's existing explorer watch | a one-shot list per keystroke or per open would multiply API calls on large clusters; the hint under Resources says what was searched |
-| 10 | Row actions target the **cursor row** only; the wireframe's action × search-hit pairs (`Restart rollout · deployment/payments-api` found by name) are not built | requested scope; to act on another object, Go to it first (it becomes the cursor), then `>` |
+| 10 | **Superseded by 23 (step 5).** Row actions target the **cursor row** only; the wireframe's action × search-hit pairs (`Restart rollout · deployment/payments-api` found by name) are not built | requested scope; to act on another object, Go to it first (it becomes the cursor), then `>` |
 | 11 | Commands run by `FocusHandle::dispatch_action` on the `AppShell` root after the dialog closes; kit items carry no `.action` | the dialog lives outside `AppShell`, so the kit's own dispatch from the palette's focus reaches no shell handler; dispatching on the shell keeps one handler per command (0028) |
 | 12 | Entries hold kind, namespace, name, and `StatusLabel` only; queries are never traced or stored | C1 and the "never log secrets" rule; a Secret's name is not secret, its values never reach a summary |
-| 13 | Mutating actions are listed, disabled, with the 0028 reason; "needs confirm" appears only once an action is enabled by 0030+ | W9 note 3; read-only rule |
+| 13 | (Its "later" clause is settled by 28, step 5.) Mutating actions are listed, disabled, with the 0028 reason; "needs confirm" appears only once an action is enabled by 0030+ | W9 note 3; read-only rule |
 | 14 | Disabled screens show the sidebar reason (`kind_availability` made `pub(crate)`) | one source for "Not permitted" texts |
 
 ## UI
@@ -34,7 +34,22 @@
 | 16 | A new `CommandPalette` entity per open, observing the shell | live statuses (W9 note 4) without a global; nothing stale survives a close |
 | 17 | "Tab preview" in its cheap, safe form only: Tab moves the table cursor to the highlighted resource when it is a visible row of the current screen (0028 `change_selection`, no drawer, no screen switch, no watch); the footer shows it only then | W9 names it without showing the preview; this form adds no API load and cannot surprise |
 | 18 | Ctrl ⏎ is not bound; its reservation moves to 0032 | in W9 it appears only on Scale, a 0032 action with an input; no read-only entry has a secondary action |
-| 19 | `@` rows reuse 0026 `cluster_switcher_rows` (`switcher_sections`, `search_text`) and `switch_cluster`; the palette binds none of the 0026 keys (`secondary-shift-c`, `secondary-1`…`9`); `@` is a single switch (0027 multi-view stays in the switcher via `view_clusters`); Go to a cluster does not carry the namespace across | W9 shows single Go to rows; "same namespace payments" conflicts with 0026 decision 3 (scope remembered per cluster); open item 3 |
+| 19 | `@` rows reuse 0026 `cluster_switcher_rows` (`switcher_sections`, `search_text`) and `switch_cluster`; the palette binds none of the 0026 keys (`secondary-shift-c`, `secondary-1`…`9`); `@` is a single switch (0027 multi-view stays in the switcher via `view_clusters`); Go to a cluster does not carry the namespace across (**superseded by 31, step 5**) | W9 shows single Go to rows; "same namespace payments" conflicts with 0026 decision 3 (scope remembered per cluster); open item 3 |
 | 20 | `--palette <query>` launch flag | ui-verifier cannot type; one flag reproduces W9 |
 | 21 | Opened by `:`, the first Esc (or Backspace) on the untouched seed closes the palette (tracked through `on_query`) | k9s habit: `:` then Esc returns to the table in one key |
 | 22 | Row actions dispatch `ResourceAction::key_action()` (0028, `resource_actions.rs`); both shell variants map to `OpenShell` | one key handler per action; the palette cannot drift from the keys |
+
+## Step 5 (local-only: no new Kubernetes calls)
+
+| # | Decision | Rationale |
+|---|---|---|
+| 23 | Action × resource pairs for search hits; supersedes decision 10. The cursor row's actions stay as they are | W9 note 1: `> rest pay` finds the action and the object together |
+| 24 | A pair needs two or more tokens: one matches the action label, a **different** one the object | `> rest` alone would pair Restart with every Deployment; one token matching both (`restic-backup`) is noise |
+| 25 | Objects come only from the loaded lists (decision 9), the top 50 by a pre-score; Ctrl ⏎ stays on the cursor Scale entry | keeps the 4 ms budget (≤ 50 × 19 candidates) and adds no API load |
+| 26 | No pair for Roll back | revisions load only for the cursor Deployment's drawer; the cursor entry `Roll back to rev N` covers W9 |
+| 27 | Running a pair = reveal the object (`when_selected`), then, deferred, the key's own handler (`run_row_key`, or `copy_cursor_name` for Copy name) | one handler per action (decision 22); the gate is read again at run time; the confirm dialog, popover, or editor is the key's; the palette never builds an intent or writes |
+| 28 | `needs confirm` = the action's gate is `Mutating`; shown on enabled entries only; supersedes the "later" clause of decision 13 | W9 note 3; every `Mutating` action reaches a 0030 confirm (dialog, popover, editor diff, or connect tier) |
+| 29 | A pair's detail adds ` · {namespace}` when the object is namespaced and the scope is not a single namespace | two `api` Deployments in two namespaces must read differently; W9's `ns: all` example shows one |
+| 30 | Underline the matched characters of label and detail; ranges are computed at render for shown rows only, with `color: None` | W9 `<u>`; ranking stays allocation-free; no color literal |
+| 31 | `@` carries a `Named` or `Several` scope to a cluster that is not viewed; for that switch it wins over the 0026 memory and the saved default (like `--namespace`); supersedes the last clause of decision 19 | W9 "same namespace payments"; explicit in the row text, so it cannot surprise; Ctrl 1–9 and the switcher keep 0026 decision 3 |
+| 32 | No existence check of the carried namespace | local-only; a missing namespace shows empty lists, like a saved default namespace that does not exist |

@@ -38,3 +38,23 @@ No change. `Command`, `CommandState`, `CommandGroup`, `CommandItem`, `Dialog`, `
 | `docs/roadmap/gap-plan-local-and-mutating.md` | the 0029 entry: Tab preview in its cheap form (cursor only), Ctrl ⏎ to 0032, no new dependency |
 | `docs/roadmap/README.md` | status row "Keyboard map, command palette" → Done (with notes) |
 | `docs/specs/0028-keyboard-map/keymap.md` | reserved table: Ctrl K and `:` bound by 0029; Ctrl ⏎ owner 0032 (orchestrator applies if 0028 is merged) |
+
+## Step 5 (local-only; `crates/cluster` untouched, `Cargo.lock` unchanged)
+
+| S | File | Change |
+|---|---|---|
+| 5a | `src/fuzzy_score.rs` | `fuzzy_ranges` sharing the alignment walk with `fuzzy_score`; tests |
+| 5a | `src/palette_search.rs` (+ tests) | `match_ranges` |
+| 5a | `src/command_palette.rs` | `command_item(entry, query_text)`; `RowContent` label and detail ranges; `StyledText` underline |
+| 5b | `src/palette_search.rs` (+ tests) | `PaletteTarget::Cluster(row, scope)`; carry rule and detail in `cluster_entries` |
+| 5b | `src/app_shell.rs` | `switch_cluster_in_scope`; `switch_cluster` delegates; `switch_to` doc |
+| 5b | `src/command_palette.rs` | confirm, `Clone`, and row arms for the new field |
+| 5b | `src/app_shell_switch_tests.rs`, `src/app_shell_multi_tests.rs` | new tests; existing `Cluster(row)` matches gain the field |
+| 5c | `src/resource_actions.rs` | `needs_confirm` and its test |
+| 5c | `src/palette_search.rs` (+ tests) | `ObjectAction`, `needs_confirm` field, `pair_text`, `lists_pairs`, `pair_entries` |
+| 5c | `src/app_shell.rs` | `palette_snapshot(query, cx)` |
+| 5c | `src/keyboard_navigation.rs` | `run_row_action_on` |
+| 5c | `src/command_palette.rs` | `needs confirm` pill; `ObjectAction` confirm, icon, and key hint arms; `refresh` passes the query |
+| 5c | `src/app_shell_workload_tests.rs`, `src/app_shell_tests.rs` | dispatch tests |
+
+Docs (step 5c): `docs/roadmap/wireframe-gap-audit.md` W9 rows → built; `docs/roadmap/inventory-shell.md` P1 deviations of decisions 10 and 19 removed; this README's AC 11–17 and an "as built" note.

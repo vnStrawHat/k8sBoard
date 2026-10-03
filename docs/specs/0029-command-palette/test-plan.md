@@ -61,3 +61,29 @@
 - Manual, release build: Ctrl K from the table and from the `/` filter; `:po` ⏎, `:deploy` ⏎; a pod name ⏎ opens its drawer; `#kube-system` ⏎ scopes; `>` on a selected pod lists View logs (runs) and Edit YAML (disabled, reason); mutating entries never confirm.
 - Trace check (AC 6, sanity only; the proof is structural): `RUST_LOG=cluster=debug`, open the palette and type on Pods → no new `sending request` line. Confirming an entry may log requests (ordinary navigation).
 - ui-verifier: `--screen deployments --select <name> --palette "> rest pay"` and `--screen pods --palette ":"` against W9. Known deviations: decisions 10, 19.
+
+## Step 5 (local-only; offline, no window but the headless shell)
+
+| S | Test | File | Checks |
+|---|---|---|---|
+| 5a | `fuzzy_ranges_follow_the_scored_alignment` | `fuzzy_score.rs` | `rest` in `Restart rollout` → `[0..4]`; `rr` → `[0..1, 8..9]`; `xyz` → `None` |
+| 5a | `fuzzy_ranges_use_the_run_when_only_the_run_is_plausible` | `fuzzy_score.rs` | `ab` in `xaxbxab` → `[5..7]` |
+| 5a | `fuzzy_ranges_are_char_boundaries` | `fuzzy_score.rs` | `é` in `café` → `[3..5]` |
+| 5a | `match_ranges_merge_every_token` | `palette_search_tests.rs` | `pay api` on `payments-api` → `[0..3, 9..12]`; `""` → `[]` |
+| 5b | `cluster_rows_carry_a_named_scope_to_clusters_not_viewed` | `palette_search_tests.rs` | scope `payments`: detail `same namespace payments`, target scope `Named("payments")`; `Several` → `same namespaces …` |
+| 5b | `cluster_rows_carry_nothing_for_all_or_a_viewed_cluster` | `palette_search_tests.rs` | scope `All` → `None`, no detail; `is_active` row → `None` |
+| 5b | `palette_switch_starts_the_target_in_the_carried_scope` | `app_shell_switch_tests.rs` | B remembered `default`; from A in `payments`, `switch_cluster_in_scope(B, Some(payments))` → B's live scope `payments` |
+| 5b | `palette_switch_with_open_shells_asks_then_carries_the_scope` | `app_shell_switch_tests.rs` | `last_leaving` set; Continue → scope `payments` |
+| 5c | `pairs_need_one_token_on_the_action_and_another_on_the_object` | `palette_search_tests.rs` | `rest pay` → `Restart rollout` · `deployment/payments-api`; `rest` → none; `rest` with a `restic-backup` row → none |
+| 5c | `pairs_skip_the_cursor_object_and_roll_back` | `palette_search_tests.rs` | cursor `payments-api`: no pair for it; `roll pay` → no Roll back pair |
+| 5c | `pairs_come_from_the_loaded_lists_only` | `palette_search_tests.rs` | `kind_rows: None` → no Deployment pair; a pod pair still listed |
+| 5c | `pairs_keep_the_top_fifty_objects` | `palette_search_tests.rs` | 60 matching pods, `logs pod` → pairs from 50 objects |
+| 5c | `pair_state_follows_the_gate_of_its_cluster` | `palette_search_tests.rs` | denied report → `Not permitted: patch deployments`; paused row → Restart disabled (`row_block`); two sessions, each its own guard |
+| 5c | `pair_detail_names_the_namespace_unless_scoped_to_one` | `palette_search_tests.rs` | scope `All` → `deployment/api · payments`; `Named` → `deployment/api` |
+| 5c | `needs_confirm_marks_enabled_mutating_entries_only` | `palette_search_tests.rs` | allowed report: Restart pair and cursor Restart set it; View logs, View YAML, Copy name do not; a disabled entry does not |
+| 5c | `needs_confirm_matches_the_mutating_gate` | `resource_actions.rs` tests | for every `ResourceAction` (and kinds that resolve), `needs_confirm` ⇔ gate is `Mutating` |
+| 5c | `palette_pair_reveals_then_opens_the_restart_dialog` | `app_shell_workload_tests.rs` | cursor on another row; `run_row_action_on(payments-api, RestartRollout)` → `selected` = it, drawer open, `last_dialog` set, no PATCH recorded |
+| 5c | `palette_pair_on_a_vanished_row_runs_nothing` | `app_shell_workload_tests.rs` | row removed before the deferred step → no dialog |
+| 5c | `palette_pair_copy_name_copies_the_hit` | `app_shell_tests.rs` | clipboard holds the hit's name |
+
+Live and ui-verifier (step 5c): trace check while typing `> rest <name>` on Deployments → no new `sending request`; on UAT every mutating pair is disabled with its `Not permitted: …` reason. ui-verifier shots of AC 17.

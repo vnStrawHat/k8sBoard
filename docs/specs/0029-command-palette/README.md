@@ -1,6 +1,6 @@
 # 0029 — Command palette (W9)
 
-Status: implemented (deviations at the end), amended after the advisor review, HEAD `0350adb`. Lands after 0028 (keys, actions, `shortcut_rows`, `key_availability`) and 0026 (cluster rows, `switch_cluster`). Crate: `crates/app` only. Read-only and local: no cluster write, no new list or watch, no file written. Wireframe: W9 and its notes 1–5, the title-bar search box (inventory T6), the keyboard map (Ctrl K, `:`).
+Status: steps 1–4 implemented (deviations at the end), amended after the advisor review, HEAD `0350adb`. **Step 5 (5a–5c): draft 2026-10-03 against main `a50264c`, local-only: no new Kubernetes calls** (wireframe-gap-audit gap 7). Lands after 0028 (keys, actions, `shortcut_rows`, `key_availability`) and 0026 (cluster rows, `switch_cluster`); step 5 after 0030–0033 and 0032b (shipped gates and confirm flows). Crate: `crates/app` only. The palette never writes: a mutating entry opens the same gated flow as its key. Wireframe: W9 and its notes 1–5, the title-bar search box (inventory T6), the keyboard map (Ctrl K, `:`).
 
 ## Goal
 
@@ -10,10 +10,11 @@ Status: implemented (deviations at the end), amended after the advisor review, H
 - Groups Actions, Resources, Go to, with live status pills, key hints, a scope header (cluster env badge, `ns:`), and a syntax footer.
 - Actions run the same 0028 unit actions on the shell; row actions target the cursor row; disabled and mutating actions show their reason.
 - Resources: objects of the already loaded lists only; selecting one reveals it and opens its drawer.
+- Step 5: action × resource results (`> rest pay` → `Restart rollout · deployment/payments-api`) that reveal the hit and run its key's gated flow; a `needs confirm` pill; underlined matched characters; `@` keeps a named namespace scope.
 
 ## Non-goals
 
-New list or watch calls for search (decision 9); action × search-hit pairs (decision 10); a Tab preview that opens a drawer or switches screens (decision 17); Ctrl ⏎ (0032); multi-cluster ticks from `@` (0027 switcher); any enabled mutating action or confirmation dialog (0030+); query history or saved commands; matched-character highlighting; several namespaces at once from `#`; multi-cluster search (0027).
+New list or watch calls for search (decision 9); pairs for kinds that are not loaded, for Roll back, or with Ctrl ⏎ (decisions 25, 26); a Tab preview that opens a drawer or switches screens (decision 17); multi-cluster ticks from `@` (0027 switcher); a confirmation dialog of the palette's own (the 0030 dialogs are reused); query history or saved commands; several namespaces at once from `#`; multi-cluster search (0027); carrying the namespace from Ctrl 1–9 or the switcher.
 
 ## Implementation steps
 
@@ -24,6 +25,9 @@ New list or watch calls for search (decision 9); action × search-hit pairs (dec
 | 2b | Command, screen, and namespace sources, header, footer, title-bar box, dispatch, Tab preview | 1, 2, 5, 8 |
 | 3 | Resources from loaded lists, row actions with reasons, `@` clusters, caps | 1, 2, 6, 7, 9 |
 | 4 | `--palette <query>`, roadmap docs, ui-verifier run | 1, 2, 10 |
+| 5a | Highlight: `fuzzy_ranges`, `match_ranges`, underlined label and detail | 1, 2, 11, 15 |
+| 5b | `@` namespace carry: `PaletteTarget::Cluster(row, scope)`, `switch_cluster_in_scope` | 1, 2, 11, 16 |
+| 5c | Action × resource pairs, `needs confirm` pill, `run_row_action_on`, docs, ui-verifier | 1, 2, 11–14, 17 |
 
 ## Files
 
@@ -32,8 +36,10 @@ New list or watch calls for search (decision 9); action × search-hit pairs (dec
 | [query-and-ranking.md](query-and-ranking.md) | modes, kind aliases, `fuzzy_score`, entry score, order, caps, budget |
 | [entries.md](entries.md) | entry model, sources per group, running an entry, mutating actions, C1 and no-new-list rules |
 | [palette-ui.md](palette-ui.md) | Dialog + Command host, rows, header, footer, keys, title-bar box, focus, launch flag |
-| [decisions.md](decisions.md) | numbered decisions |
-| [files-to-touch.md] | files per step, docs to update |
+| [step5-results.md](step5-results.md) | step 5c: pairs, `needs confirm`, running a pair through the key's flow |
+| [step5-highlight-scope.md](step5-highlight-scope.md) | steps 5a, 5b: matched-character ranges, `@` namespace carry |
+| [decisions.md](decisions.md) | numbered decisions (23–32 for step 5) |
+| [files-to-touch.md](files-to-touch.md) | files per step, docs to update |
 | [test-plan.md](test-plan.md) | scorer, entries, keys, headless dispatch, live and ui-verifier checks |
 
 ## Acceptance criteria
@@ -49,13 +55,23 @@ New list or watch calls for search (decision 9); action × search-hit pairs (dec
 - [x] 9. Mutating row actions appear disabled with their 0028 reason and can never be confirmed; `@` rows show env badge, health, and the Ctrl 1–9 hint.
 - [x] 10. (checked by the coder from screenshots `.tmp/ui-shots/v65-palette-*`; the ui-verifier run is still to do) ui-verifier: `--palette "> rest pay"` on Deployments and `--palette ":"` on Pods match W9 apart from decisions 10, 19; the 0003 color-literal grep is clean.
 
+Step 5 (local-only: no new Kubernetes calls):
+
+- [ ] 11. Steps 5a–5c meet AC 1 and AC 2 for their tests ([test-plan.md](test-plan.md) step 5). `crates/cluster` has no diff; typing starts no list, watch, or request: `pair_entries` is pure over `PaletteInput` like `palette_entries` (W9 note 1; decision 9).
+- [ ] 12. `> rest pay` lists `Restart rollout · deployment/payments-api` when `payments-api` is a loaded Deployments row and not the cursor; `> rest` alone lists no pair; the cursor object gets no duplicate; Roll back has no pair (W9 Actions rows, note 1; decisions 24–26).
+- [ ] 13. Confirming an enabled pair reveals the object (its screen, the row, the drawer over the workspace, v0.6) and then runs the handler of its key on it: Restart rollout opens the 0030 confirm dialog with the cluster's tier, and nothing is sent before Confirm. A disabled pair shows the gate reason of its own cluster (`Not permitted: patch deployments`) and cannot be confirmed (W9 note 3; decision 27).
+- [ ] 14. Every enabled entry whose action is mutating (cursor row or pair) shows the `needs confirm` pill in the warning tone; View logs, View YAML, and Copy name never do (W9 note 3; decision 28).
+- [ ] 15. Matched characters of the label and the detail are underlined in every group (`> rest pay`: `Rest` of `Restart rollout`, `pay` of `deployment/payments-api`); ranges are built for shown rows only; the underline takes the text color (0003 grep clean) (W9 rows; decision 30).
+- [ ] 16. With scope `payments`, `@` rows of clusters that are not viewed read `same namespace payments`, and confirming one starts that cluster in `payments` over its remembered scope (after the `leaving_work` dialog when shells are open). With All namespaces, or for a viewed cluster, there is no note and 0026 behavior holds; Ctrl 1–9 and the switcher are unchanged (W9 Go to row; decisions 31, 32).
+- [ ] 17. ui-verifier: `--screen deployments --palette "> rest <name prefix>"` without a cursor row, and `--namespace <ns> --palette "@"`, against W9: the pair row with underlines and its UAT reason pill, the `same namespace …` note. The `needs confirm` pill is proven by tests only (UAT is read-only).
+
 ## Open items
 
 1. Settled: Tab preview is the cheap form only (decision 17). A richer preview (drawer behind the scrim) would need watches; revisit on user request.
-2. Action × search-hit pairs (W9 `Restart rollout · deployment/payments-api` while that object is not the cursor) need a target picker per action; revisit with 0032 when actions are enabled.
-3. W9 "Go to prod-us-1 · same namespace payments": carrying the namespace across clusters conflicts with 0026's per-cluster memory. Decide in 0027 or a follow-up.
+2. Settled by step 5 (decisions 23–28): action × search-hit pairs.
+3. Settled by step 5 (decision 31): `@` carries a named scope. (user) Confirm the default; the alternative is to keep 0026's per-cluster memory everywhere.
 4. Searching kinds that are not loaded (for example all Deployments while on Pods) would need list calls; decision 9 refuses it. Revisit with the 0020 always-on watches (C13): any list those keep loaded is searchable for free through `PaletteInput`.
-5. Matched-character highlighting (W9 underlines) is skipped; the kit `CommandItem::child` allows it later with `StyledText` highlights.
+5. Settled by step 5 (decision 30): matched-character underlines.
 
 ## Implementation notes and deviations
 
