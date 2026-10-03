@@ -1,0 +1,893 @@
+//! The taint and label editors of a node (spec 0034 step 2) and the bulk Cordon and Uncordon of
+//! the Nodes selection bar. The editor reads the node fresh from its own cluster, collects rows,
+//! and hands the result to the guarded flow (`start_write`), which shows the confirm dialog with
+//! the tier, the server dry-run, and the audit line. Nothing here sends a change.
+//!
+//! A child of `app_shell`, like `node_shell_open`: every step names the cluster of the node and
+//! takes its guard, connection, and tier from that cluster's own slot, never from the primary.
+
+use cluster::{ClusterConnection, ClusterError, NodeEdit};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::select::{Select, SelectState};
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IndexPath, Sizable as _};
+use gpui_kit::component::{h_flex, v_flex};
+use gpui_kit::{
+    AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Task,
+    WeakEntity, Window, div, px,
+};
+
+use super::AppShell;
+use super::Screen;
+use super::batch_write::{BATCH_RUNNING_REASON, MAX_BATCH_ITEMS};
+use super::write_flow::{WriteIntent, notify};
+use crate::cluster_registry::ClusterRef;
+use crate::cluster_runtime::ClusterRuntime;
+use crate::keymap::FORWARD_FORM;
+use crate::node_edits::{
+    CordonMode, LabelRow, NodeScope, TaintRow, TickedNode, cordon_batch, label_intent, label_rows,
+    taint_intent, taint_rows,
+};
+use crate::resource_actions::{
+    ActionAvailability, NOT_SHIPPED_REASON, ResourceAction, action_availability, action_label,
+    unavailable_text,
+};
+use crate::row_selection::{BulkButton, BulkState, bulk_actions};
+use crate::table_selection::{ClusterObject, ResourceKey};
+
+const DIALOG_WIDTH: f32 = 560.;
+const ROWS_MAX_HEIGHT: f32 = 320.;
+const EFFECT_CHOICES: [&str; 3] = ["NoSchedule", "PreferNoSchedule", "NoExecute"];
+const MANAGED_BY_KUBERNETES: &str = "Managed by Kubernetes";
+const SET_BY_KUBELET: &str = "Set by the kubelet";
+/// The line the editor opens with after a conflict.
+pub(crate) const CHANGED_NOTICE: &str =
+    "The node changed; review the current taints and edit again";
+
+/// Which list the editor changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NodeEditKind {
+    Taints,
+    Labels,
+}
+
+impl NodeEditKind {
+    pub(crate) fn action(self) -> ResourceAction {
+        match self {
+            Self::Taints => ResourceAction::EditTaints,
+            Self::Labels => ResourceAction::EditLabels,
+        }
+    }
+
+    fn title(self, node: &str) -> String {
+        match self {
+            Self::Taints => format!("Edit taints of node {node}"),
+            Self::Labels => format!("Edit labels of node {node}"),
+        }
+    }
+}
+
+struct TaintInputs {
+    key: Entity<InputState>,
+    value: Entity<InputState>,
+    effect: Entity<SelectState<Vec<String>>>,
+    time_added: Option<jiff::Timestamp>,
+    is_read_only: bool,
+}
+
+struct LabelInputs {
+    key: Entity<InputState>,
+    value: Entity<InputState>,
+    is_read_only: bool,
+}
+
+enum Rows {
+    Taints(Vec<TaintInputs>),
+    Labels(Vec<LabelInputs>),
+}
+
+enum EditorState {
+    Loading,
+    Failed(SharedString),
+    Ready { edit: NodeEdit, rows: Rows },
+}
+
+/// The body of the editor dialog.
+pub(crate) struct NodeEditor {
+    shell: WeakEntity<AppShell>,
+    cluster: ClusterRef,
+    cluster_name: SharedString,
+    node: String,
+    kind: NodeEditKind,
+    notice: Option<SharedString>,
+    state: EditorState,
+    _load: Option<Task<()>>,
+}
+
+fn text_input(
+    value: &str,
+    placeholder: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<InputState> {
+    cx.new(|cx| {
+        let mut input = InputState::new(window, cx).placeholder(placeholder);
+        input.set_value(value.to_owned(), window, cx);
+        input
+    })
+}
+
+fn effect_select(
+    effect: &str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<SelectState<Vec<String>>> {
+    let choices: Vec<String> = EFFECT_CHOICES
+        .iter()
+        .map(|text| (*text).to_owned())
+        .collect();
+    let selected = EFFECT_CHOICES
+        .iter()
+        .position(|choice| *choice == effect)
+        .unwrap_or(0);
+    cx.new(|cx| {
+        SelectState::new(
+            choices,
+            Some(IndexPath::default().row(selected)),
+            window,
+            cx,
+        )
+    })
+}
+
+fn taint_inputs(row: &TaintRow, window: &mut Window, cx: &mut App) -> TaintInputs {
+    TaintInputs {
+        key: text_input(&row.key, "key", window, cx),
+        value: text_input(&row.value, "value (optional)", window, cx),
+        effect: effect_select(&row.effect, window, cx),
+        time_added: row.time_added,
+        is_read_only: row.is_read_only(),
+    }
+}
+
+fn label_inputs(row: &LabelRow, window: &mut Window, cx: &mut App) -> LabelInputs {
+    LabelInputs {
+        key: text_input(&row.key, "key", window, cx),
+        value: text_input(&row.value, "value", window, cx),
+        is_read_only: row.is_read_only(),
+    }
+}
+
+/// A row line with the reason it is read-only under it, so the inputs of every row keep one width.
+fn with_note(line: gpui_kit::Div, note: Option<&'static str>, muted: gpui_kit::Hsla) -> AnyElement {
+    v_flex()
+        .gap_0p5()
+        .child(line)
+        .children(note.map(|text| div().text_xs().text_color(muted).child(text)))
+        .into_any_element()
+}
+
+/// The editor state for a node as it was read: one row per taint or label.
+fn ready(kind: NodeEditKind, edit: NodeEdit, window: &mut Window, cx: &mut App) -> EditorState {
+    let rows = match kind {
+        NodeEditKind::Taints => Rows::Taints(
+            taint_rows(&edit)
+                .iter()
+                .map(|row| taint_inputs(row, window, cx))
+                .collect(),
+        ),
+        NodeEditKind::Labels => Rows::Labels(
+            label_rows(&edit)
+                .iter()
+                .map(|row| label_inputs(row, window, cx))
+                .collect(),
+        ),
+    };
+    EditorState::Ready { edit, rows }
+}
+
+impl NodeEditor {
+    fn new(
+        shell: WeakEntity<AppShell>,
+        target: EditorTarget,
+        notice: Option<SharedString>,
+        connection: ClusterConnection,
+        runtime: ClusterRuntime,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let EditorTarget {
+            cluster,
+            cluster_name,
+            node,
+            kind,
+        } = target;
+        let name = node.clone();
+        let load = cx.spawn_in(window, async move |this, cx| {
+            let read = runtime
+                .spawn(async move { connection.node_for_edit(&name).await })
+                .await;
+            let _ = this.update_in(cx, |editor, window, cx| editor.loaded(read, window, cx));
+        });
+        Self {
+            shell,
+            cluster,
+            cluster_name,
+            node,
+            kind,
+            notice,
+            state: EditorState::Loading,
+            _load: Some(load),
+        }
+    }
+
+    fn loaded(
+        &mut self,
+        read: Result<Result<NodeEdit, ClusterError>, tokio::task::JoinError>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.state = match read {
+            Ok(Ok(edit)) => ready(self.kind, edit, window, cx),
+            Ok(Err(error)) => {
+                EditorState::Failed(format!("Could not read node {}: {error}", self.node).into())
+            }
+            Err(_) => EditorState::Failed("The request task stopped".into()),
+        };
+        cx.notify();
+    }
+
+    fn read_taints(inputs: &[TaintInputs], cx: &App) -> Vec<TaintRow> {
+        inputs
+            .iter()
+            .map(|row| TaintRow {
+                key: row.key.read(cx).value().to_string(),
+                value: row.value.read(cx).value().to_string(),
+                effect: row
+                    .effect
+                    .read(cx)
+                    .selected_index(cx)
+                    .and_then(|index| EFFECT_CHOICES.get(index.row))
+                    .map_or_else(String::new, |effect| (*effect).to_owned()),
+                time_added: row.time_added,
+            })
+            .collect()
+    }
+
+    fn read_labels(inputs: &[LabelInputs], cx: &App) -> Vec<LabelRow> {
+        inputs
+            .iter()
+            .map(|row| LabelRow {
+                key: row.key.read(cx).value().to_string(),
+                value: row.value.read(cx).value().to_string(),
+            })
+            .collect()
+    }
+
+    /// The change the rows describe now, or why there is none. `No changes` keeps Review off.
+    fn intent(&self, cx: &App) -> Result<WriteIntent, SharedString> {
+        let EditorState::Ready { edit, rows } = &self.state else {
+            return Err("Loading node…".into());
+        };
+        let scope = NodeScope {
+            cluster: &self.cluster,
+            cluster_name: &self.cluster_name,
+        };
+        match rows {
+            Rows::Taints(inputs) => {
+                taint_intent(&scope, &self.node, edit, &Self::read_taints(inputs, cx))
+            }
+            Rows::Labels(inputs) => {
+                label_intent(&scope, &self.node, edit, &Self::read_labels(inputs, cx))
+            }
+        }
+    }
+
+    fn add_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let EditorState::Ready { rows, .. } = &mut self.state else {
+            return;
+        };
+        match rows {
+            Rows::Taints(inputs) => {
+                let row = TaintRow {
+                    key: String::new(),
+                    value: String::new(),
+                    effect: EFFECT_CHOICES[0].to_owned(),
+                    time_added: None,
+                };
+                inputs.push(taint_inputs(&row, window, cx));
+            }
+            Rows::Labels(inputs) => {
+                let row = LabelRow {
+                    key: String::new(),
+                    value: String::new(),
+                };
+                inputs.push(label_inputs(&row, window, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    fn remove_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        let EditorState::Ready { rows, .. } = &mut self.state else {
+            return;
+        };
+        match rows {
+            Rows::Taints(inputs) if inputs.get(index).is_some_and(|row| !row.is_read_only) => {
+                inputs.remove(index);
+            }
+            Rows::Labels(inputs) if inputs.get(index).is_some_and(|row| !row.is_read_only) => {
+                inputs.remove(index);
+            }
+            Rows::Taints(_) | Rows::Labels(_) => return,
+        }
+        cx.notify();
+    }
+
+    /// Review…: closes the editor and starts the guarded flow, whose dialog follows. Nothing is
+    /// sent from here.
+    fn review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Ok(intent) = self.intent(cx) else {
+            return;
+        };
+        let shell = self.shell.clone();
+        window.close_dialog(cx);
+        // After the close: the flow opens the confirm dialog, which the close must not pop.
+        window.defer(cx, move |window, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.start_write(intent, window, cx));
+        });
+    }
+
+    fn render_rows(&self, cx: &mut Context<Self>) -> AnyElement {
+        let EditorState::Ready { rows, .. } = &self.state else {
+            return div().into_any_element();
+        };
+        let muted = cx.theme().muted_foreground;
+        let remove = |index: usize, is_read_only: bool, cx: &mut Context<Self>| {
+            if is_read_only {
+                return div().w_6().into_any_element();
+            }
+            Button::new(("node-edit-remove", index))
+                .ghost()
+                .xsmall()
+                .icon(Icon::new(IconName::X))
+                .tooltip("Remove")
+                .on_click(cx.listener(move |editor, _, _, cx| editor.remove_row(index, cx)))
+                .into_any_element()
+        };
+        let list =
+            match rows {
+                Rows::Taints(inputs) => {
+                    inputs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, row)| {
+                            with_note(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(div().flex_1().child(
+                                        Input::new(&row.key).small().disabled(row.is_read_only),
+                                    ))
+                                    .child(div().flex_1().child(
+                                        Input::new(&row.value).small().disabled(row.is_read_only),
+                                    ))
+                                    .child(div().w(px(150.)).child(
+                                        Select::new(&row.effect).small().disabled(row.is_read_only),
+                                    ))
+                                    .child(remove(index, row.is_read_only, cx)),
+                                row.is_read_only.then_some(MANAGED_BY_KUBERNETES),
+                                muted,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }
+                Rows::Labels(inputs) => {
+                    inputs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, row)| {
+                            with_note(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(div().flex_1().child(
+                                        Input::new(&row.key).small().disabled(row.is_read_only),
+                                    ))
+                                    .child(div().flex_1().child(
+                                        Input::new(&row.value).small().disabled(row.is_read_only),
+                                    ))
+                                    .child(remove(index, row.is_read_only, cx)),
+                                row.is_read_only.then_some(SET_BY_KUBELET),
+                                muted,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }
+            };
+        v_flex()
+            .id("node-edit-rows")
+            .gap_1()
+            .max_h(px(ROWS_MAX_HEIGHT))
+            .overflow_y_scroll()
+            .children(list)
+            .into_any_element()
+    }
+
+    fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let intent = self.intent(cx);
+        let is_ready = matches!(self.state, EditorState::Ready { .. });
+        let review = Button::new("node-edit-review")
+            .label("Review…")
+            .small()
+            .primary()
+            .disabled(intent.is_err())
+            .on_click(cx.listener(|editor, _, window, cx| editor.review(window, cx)));
+        let review = match &intent {
+            Err(reason) if is_ready => review.tooltip(reason.clone()),
+            _ => review,
+        };
+        h_flex()
+            .w_full()
+            .gap_2()
+            .justify_end()
+            .child(
+                Button::new("node-edit-cancel")
+                    .label("Cancel")
+                    .small()
+                    .outline()
+                    .on_click(|_, window, cx| window.close_dialog(cx)),
+            )
+            .child(review)
+            .into_any_element()
+    }
+}
+
+impl Render for NodeEditor {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (muted, warning, danger) = (theme.muted_foreground, theme.warning, theme.danger);
+        let body: AnyElement = match &self.state {
+            EditorState::Loading => h_flex()
+                .gap_2()
+                .items_center()
+                .child(Spinner::new())
+                .child(div().text_sm().text_color(muted).child("Loading node…"))
+                .into_any_element(),
+            EditorState::Failed(text) => div()
+                .text_sm()
+                .text_color(danger)
+                .child(text.clone())
+                .into_any_element(),
+            EditorState::Ready { .. } => {
+                let add = Button::new("node-edit-add")
+                    .label("+ Add")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|editor, _, window, cx| editor.add_row(window, cx)));
+                let problem = match self.intent(cx) {
+                    Err(reason) if reason.as_ref() != "No changes" => Some(reason),
+                    _ => None,
+                };
+                v_flex()
+                    .gap_2()
+                    .child(self.render_rows(cx))
+                    .child(h_flex().child(add))
+                    .children(problem.map(|text| div().text_sm().text_color(danger).child(text)))
+                    .into_any_element()
+            }
+        };
+        v_flex()
+            .key_context(FORWARD_FORM)
+            .w_full()
+            .gap_3()
+            .children(
+                self.notice
+                    .clone()
+                    .map(|text| div().text_sm().text_color(warning).child(text)),
+            )
+            .child(body)
+            .child(self.render_footer(cx))
+    }
+}
+
+/// What an editor is opened on: the node and the cluster it belongs to.
+struct EditorTarget {
+    cluster: ClusterRef,
+    cluster_name: SharedString,
+    node: String,
+    kind: NodeEditKind,
+}
+
+impl AppShell {
+    /// Opens the taint or label editor of `node` of `cluster`, the row's or cursor's own cluster.
+    /// The gate is checked here again (a stale menu or a key pressed in a gap cannot bypass it),
+    /// and the node is read from that cluster's own connection when the dialog opens. `notice` is
+    /// the line a reopened editor starts with.
+    pub(crate) fn open_node_editor(
+        &mut self,
+        kind: NodeEditKind,
+        cluster: &ClusterRef,
+        node: &str,
+        notice: Option<SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = action_label(kind.action());
+        let (target, connection) = {
+            let (Some(guard), Some(live)) =
+                (self.guard_for(cluster, cx), self.slot_live(cluster, cx))
+            else {
+                notify(
+                    window,
+                    cx,
+                    unavailable_text(label, "the cluster is not open"),
+                );
+                return;
+            };
+            if let ActionAvailability::Disabled { reason } =
+                action_availability(kind.action(), &guard)
+            {
+                notify(window, cx, unavailable_text(label, &reason));
+                return;
+            }
+            if !live
+                .nodes
+                .items()
+                .iter()
+                .any(|summary| summary.name == node)
+            {
+                notify(
+                    window,
+                    cx,
+                    unavailable_text(label, "the node is no longer listed"),
+                );
+                return;
+            }
+            let target = EditorTarget {
+                cluster: cluster.clone(),
+                cluster_name: guard.display_name().to_owned().into(),
+                node: node.to_owned(),
+                kind,
+            };
+            (target, live.connection().clone())
+        };
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let (shell, title) = (cx.weak_entity(), kind.title(node));
+        let editor =
+            cx.new(|cx| NodeEditor::new(shell, target, notice, connection, runtime, window, cx));
+        #[cfg(test)]
+        {
+            self.last_node_editor = Some(editor.downgrade());
+        }
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title(title.clone())
+                .w(px(DIALOG_WIDTH))
+                .child(editor.clone())
+        });
+    }
+
+    /// The Edit labels button of the Nodes header: it acts on the one ticked node.
+    pub(super) fn node_header_buttons(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+        let button = || {
+            Button::new("node-edit-labels")
+                .label("Edit labels")
+                .small()
+                .outline()
+        };
+        let (cluster, name) = match self.edit_labels_target(cx) {
+            Ok(target) => target,
+            Err(reason) => return vec![button().disabled(true).tooltip(reason).into_any_element()],
+        };
+        vec![
+            button()
+                .tooltip("Edit the labels of the ticked node")
+                .on_click(cx.listener(move |shell, _, window, cx| {
+                    shell.open_node_editor(NodeEditKind::Labels, &cluster, &name, None, window, cx);
+                }))
+                .into_any_element(),
+        ]
+    }
+
+    /// The node the header's Edit labels acts on: the one ticked node of its own cluster, or why
+    /// the button is off.
+    pub(super) fn edit_labels_target(
+        &self,
+        cx: &App,
+    ) -> Result<(ClusterRef, String), SharedString> {
+        let ticked = self.checked_objects(cx);
+        let [only] = ticked.as_slice() else {
+            return Err("Tick one node".into());
+        };
+        let ResourceKey::Node { name } = &only.key else {
+            return Err("Tick one node".into());
+        };
+        let guard = self.guard_for(&only.cluster, cx).ok_or("Not connected")?;
+        match action_availability(ResourceAction::EditLabels, &guard) {
+            ActionAvailability::Disabled { reason } => Err(reason),
+            ActionAvailability::Enabled => Ok((only.cluster.clone(), name.clone())),
+        }
+    }
+
+    /// The ticked nodes as their own cluster reports them: `Err` is why the bulk buttons are off.
+    fn ticked_nodes(
+        &self,
+        ticked: &[ClusterObject],
+        cx: &App,
+    ) -> Result<(ClusterRef, Vec<TickedNode>), SharedString> {
+        let first = ticked.first().ok_or("Select rows first")?;
+        if ticked.len() > MAX_BATCH_ITEMS {
+            return Err(format!("Select at most {MAX_BATCH_ITEMS} rows").into());
+        }
+        if ticked.iter().any(|object| object.cluster != first.cluster) {
+            return Err("Select rows of one cluster".into());
+        }
+        let live = self.slot_live(&first.cluster, cx).ok_or("Not connected")?;
+        let nodes: Vec<TickedNode> = ticked
+            .iter()
+            .filter_map(|object| {
+                let ResourceKey::Node { name } = &object.key else {
+                    return None;
+                };
+                let summary = live.nodes.items().iter().find(|node| node.name == *name)?;
+                Some(TickedNode {
+                    name: name.clone(),
+                    scheduling: summary.status.scheduling,
+                })
+            })
+            .collect();
+        if nodes.is_empty() {
+            return Err("The selected nodes are no longer listed".into());
+        }
+        Ok((first.cluster.clone(), nodes))
+    }
+
+    /// The bulk batch of Cordon or Uncordon over the ticked nodes now.
+    fn node_cordon_batch(
+        &self,
+        mode: CordonMode,
+        cx: &App,
+    ) -> Result<crate::app_shell::batch_write::BatchIntent, SharedString> {
+        let ticked = self.checked_objects(cx);
+        let (cluster, nodes) = self.ticked_nodes(&ticked, cx)?;
+        let guard = self.guard_for(&cluster, cx).ok_or("Not connected")?;
+        let scope = NodeScope {
+            cluster: &cluster,
+            cluster_name: guard.display_name(),
+        };
+        cordon_batch(&scope, mode, &nodes)
+    }
+
+    /// The bulk buttons of the Nodes screen, each decided for the ticked nodes now: the gate of
+    /// the nodes' cluster first, then what the action would do with them.
+    pub(super) fn node_bulk_buttons(&self, cx: &App) -> Vec<BulkButton> {
+        let ticked = self.checked_objects(cx);
+        bulk_actions(Screen::Nodes)
+            .iter()
+            .map(|item| BulkButton {
+                label: item.label.into(),
+                state: match item.action {
+                    Some(action) => self.node_bulk_state(action, &ticked, cx),
+                    None => BulkState::Off(NOT_SHIPPED_REASON.into()),
+                },
+                is_danger: false,
+            })
+            .collect()
+    }
+
+    fn node_bulk_state(
+        &self,
+        action: ResourceAction,
+        ticked: &[ClusterObject],
+        cx: &App,
+    ) -> BulkState {
+        let (cluster, _) = match self.ticked_nodes(ticked, cx) {
+            Ok(found) => found,
+            Err(reason) => return BulkState::Off(reason),
+        };
+        let Some(guard) = self.guard_for(&cluster, cx) else {
+            return BulkState::Off("Not connected".into());
+        };
+        if let ActionAvailability::Disabled { reason } = action_availability(action, &guard) {
+            return BulkState::Off(reason);
+        }
+        let mode = match action {
+            ResourceAction::Cordon => CordonMode::Cordon,
+            ResourceAction::Uncordon => CordonMode::Uncordon,
+            // Drain has its own dialog; the gate and the one drain per cluster decide its button.
+            _ => {
+                if self.has_running_drain(&cluster, cx) {
+                    return BulkState::Off(
+                        format!("A drain is already running on {}", guard.display_name()).into(),
+                    );
+                }
+                return BulkState::Ready(action);
+            }
+        };
+        if self.running_batches.contains(&cluster) {
+            return BulkState::Off(BATCH_RUNNING_REASON.into());
+        }
+        match self.node_cordon_batch(mode, cx) {
+            Ok(_) => BulkState::Ready(action),
+            Err(reason) => BulkState::Off(reason),
+        }
+    }
+
+    /// A bulk button of the Nodes selection bar: Cordon and Uncordon build their batch from the
+    /// nodes ticked now and open the list dialog; Drain opens its own dialog.
+    pub(super) fn run_node_bulk(
+        &mut self,
+        action: ResourceAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mode = match action {
+            ResourceAction::Cordon => CordonMode::Cordon,
+            ResourceAction::Uncordon => CordonMode::Uncordon,
+            _ => {
+                self.start_drain_of_ticked(window, cx);
+                return;
+            }
+        };
+        match self.node_cordon_batch(mode, cx) {
+            Ok(intent) => self.start_batch(intent, window, cx),
+            Err(reason) => notify(window, cx, unavailable_text(action_label(action), &reason)),
+        }
+    }
+}
+
+/// `--screen node-taints-editor` and `node-labels-editor`: the editors over a fixed node, with no
+/// cluster behind them. Review… opens the confirm dialog like the real one, but the fixture's
+/// cluster is not open, so nothing can be sent.
+#[cfg(feature = "screenshot")]
+impl AppShell {
+    pub(super) fn open_node_editor_fixture(
+        &mut self,
+        kind: NodeEditKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use std::collections::BTreeMap;
+
+        use cluster::NodeTaint;
+
+        const NODE: &str = "wk-04";
+        let taint = |key: &str, value: Option<&str>, effect: &str, added: Option<&str>| NodeTaint {
+            key: key.to_owned(),
+            value: value.map(str::to_owned),
+            effect: effect.to_owned(),
+            time_added: added.and_then(|text| text.parse().ok()),
+        };
+        let labels: BTreeMap<String, String> = [
+            ("kubernetes.io/hostname", NODE),
+            ("kubernetes.io/os", "linux"),
+            ("node-role.kubernetes.io/worker", ""),
+            ("team", "infra"),
+            ("topology.kubernetes.io/zone", "eu-west-1b"),
+            ("workload", "ingress"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+        let edit = NodeEdit {
+            taints: vec![
+                taint("dedicated", Some("ingress"), "NoSchedule", None),
+                taint("gpu", None, "PreferNoSchedule", None),
+                taint(
+                    "node.kubernetes.io/unschedulable",
+                    None,
+                    "NoSchedule",
+                    Some("2026-10-02T08:00:00Z"),
+                ),
+            ],
+            labels,
+            resource_version: "9912".to_owned(),
+        };
+        let target = EditorTarget {
+            cluster: ClusterRef {
+                kubeconfig: std::path::PathBuf::from("fixture.yaml"),
+                context: "prod-eu-1".to_owned(),
+            },
+            cluster_name: "prod-eu-1".into(),
+            node: NODE.to_owned(),
+            kind,
+        };
+        let shell = cx.weak_entity();
+        let title = kind.title(NODE);
+        let editor = cx.new(|cx| NodeEditor {
+            shell,
+            cluster: target.cluster,
+            cluster_name: target.cluster_name,
+            node: target.node,
+            kind,
+            notice: None,
+            state: ready(kind, edit, window, cx),
+            _load: None,
+        });
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title(title.clone())
+                .w(px(DIALOG_WIDTH))
+                .child(editor.clone())
+        });
+    }
+}
+
+/// What the shell tests read from an open editor.
+#[cfg(test)]
+impl NodeEditor {
+    pub(crate) fn is_loaded(&self) -> bool {
+        matches!(self.state, EditorState::Ready { .. })
+    }
+
+    pub(crate) fn failure(&self) -> Option<SharedString> {
+        match &self.state {
+            EditorState::Failed(text) => Some(text.clone()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn notice(&self) -> Option<SharedString> {
+        self.notice.clone()
+    }
+
+    pub(crate) fn row_count(&self) -> usize {
+        match &self.state {
+            EditorState::Ready {
+                rows: Rows::Taints(rows),
+                ..
+            } => rows.len(),
+            EditorState::Ready {
+                rows: Rows::Labels(rows),
+                ..
+            } => rows.len(),
+            _ => 0,
+        }
+    }
+
+    /// Appends a row with the given text; a taint row gets `effect`.
+    pub(crate) fn add_row_with(
+        &mut self,
+        key: &str,
+        value: &str,
+        effect: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.add_row(window, cx);
+        let EditorState::Ready { rows, .. } = &self.state else {
+            return;
+        };
+        let (key_input, value_input, select) = match rows {
+            Rows::Taints(rows) => rows
+                .last()
+                .map(|row| (&row.key, &row.value, Some(&row.effect))),
+            Rows::Labels(rows) => rows.last().map(|row| (&row.key, &row.value, None)),
+        }
+        .expect("a row was added");
+        key_input.update(cx, |input, cx| input.set_value(key.to_owned(), window, cx));
+        value_input.update(cx, |input, cx| {
+            input.set_value(value.to_owned(), window, cx)
+        });
+        if let Some(select) = select
+            && let Some(index) = EFFECT_CHOICES.iter().position(|choice| *choice == effect)
+        {
+            select.update(cx, |select, cx| {
+                select.set_selected_index(Some(IndexPath::default().row(index)), window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn press_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.review(window, cx);
+    }
+
+    pub(crate) fn current_intent(&self, cx: &App) -> Result<WriteIntent, SharedString> {
+        self.intent(cx)
+    }
+}

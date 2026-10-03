@@ -22,9 +22,9 @@ use crate::custom_kind::CustomKind;
 use crate::dock::{Dock, LogOrigin};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
-    CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditYaml, ExpandClaim,
-    OpenShell, PauseRollout, PortForward, RerunJob, RestartRollout, RollBack, Scale,
-    SetDefaultStorageClass, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
+    CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels, EditTaints,
+    EditYaml, ExpandClaim, OpenShell, PauseRollout, PortForward, RerunJob, RestartRollout,
+    RollBack, Scale, SetDefaultStorageClass, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
@@ -52,7 +52,13 @@ pub(crate) enum ResourceAction {
     /// Adds an ephemeral container to a running pod and attaches a shell to it (spec 0037).
     DebugContainer,
     Cordon,
+    /// Only the bulk Uncordon button uses it; the single-node key and menu item are `Cordon`,
+    /// whose label follows the node's state (spec 0034).
+    Uncordon,
     Drain,
+    /// Edit taints… and Edit labels… of one node (spec 0034).
+    EditTaints,
+    EditLabels,
     CopyName,
     ViewYaml,
     /// Carries the kind of the row: only the editable kinds offer it (spec 0031).
@@ -89,6 +95,9 @@ pub(crate) enum RowAction {
     DebugContainer,
     Cordon,
     Drain,
+    /// Have unbound unit actions only: the node menu and the palette dispatch them (spec 0034).
+    EditTaints,
+    EditLabels,
     EditYaml,
     RestartRollout,
     Scale,
@@ -210,10 +219,12 @@ impl ResourceAction {
                 is_shipped: true,
             },
             // Spec 0030: the first shipped mutating action.
-            Self::Cordon => ActionGate::Mutating {
-                checks: vec![AccessCheck::PatchNodes],
-                is_shipped: true,
-            },
+            Self::Cordon | Self::Uncordon | Self::EditTaints | Self::EditLabels => {
+                ActionGate::Mutating {
+                    checks: vec![AccessCheck::PatchNodes],
+                    is_shipped: true,
+                }
+            }
             // The check follows the carried kind; a kind with no such action has no check.
             Self::RestartRollout(kind) => match restart_check(kind) {
                 Some(check) => ActionGate::Mutating {
@@ -265,7 +276,11 @@ impl ResourceAction {
                 checks: vec![AccessCheck::PatchStorageClasses],
                 is_shipped: true,
             },
-            Self::Drain => ActionGate::Planned,
+            // A drain evicts pods (spec 0034). It cordons first, so the cordon right is needed too.
+            Self::Drain => ActionGate::Mutating {
+                checks: vec![AccessCheck::CreatePodEviction, AccessCheck::PatchNodes],
+                is_shipped: true,
+            },
         }
     }
 
@@ -277,8 +292,10 @@ impl ResourceAction {
             Self::OpenShell | Self::OpenNodeShell => RowAction::OpenShell,
             Self::DebugContainer => RowAction::DebugContainer,
             Self::PortForward => RowAction::PortForward,
-            Self::Cordon => RowAction::Cordon,
+            Self::Cordon | Self::Uncordon => RowAction::Cordon,
             Self::Drain => RowAction::Drain,
+            Self::EditTaints => RowAction::EditTaints,
+            Self::EditLabels => RowAction::EditLabels,
             Self::CopyName => RowAction::CopyName,
             Self::ViewYaml => RowAction::ViewYaml,
             Self::EditYaml(_) => RowAction::EditYaml,
@@ -308,6 +325,8 @@ impl RowAction {
             Self::PortForward => Box::new(PortForward),
             Self::Cordon => Box::new(Cordon),
             Self::Drain => Box::new(Drain),
+            Self::EditTaints => Box::new(EditTaints),
+            Self::EditLabels => Box::new(EditLabels),
             Self::CopyName => Box::new(CopyName),
             Self::ViewYaml => Box::new(ViewYaml),
             Self::EditYaml => Box::new(EditYaml),
@@ -337,6 +356,9 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::PortForward
         | ResourceAction::DebugContainer
         | ResourceAction::Cordon
+        | ResourceAction::Uncordon
+        | ResourceAction::EditTaints
+        | ResourceAction::EditLabels
         | ResourceAction::CopyName
         | ResourceAction::ViewYaml
         | ResourceAction::EditYaml(_)
@@ -362,7 +384,10 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::OpenNodeShell => "Open node shell",
         ResourceAction::DebugContainer => "Debug container",
         ResourceAction::Cordon => "Cordon",
+        ResourceAction::Uncordon => "Uncordon",
         ResourceAction::Drain => "Drain",
+        ResourceAction::EditTaints => "Edit taints",
+        ResourceAction::EditLabels => "Edit labels",
         ResourceAction::CopyName => "Copy name",
         ResourceAction::ViewYaml => "View YAML",
         ResourceAction::EditYaml(_) => "Edit YAML",
@@ -412,6 +437,12 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         }
         RowAction::Drain => {
             matches!(subject, ResourceKey::Node { .. }).then_some(ResourceAction::Drain)
+        }
+        RowAction::EditTaints => {
+            matches!(subject, ResourceKey::Node { .. }).then_some(ResourceAction::EditTaints)
+        }
+        RowAction::EditLabels => {
+            matches!(subject, ResourceKey::Node { .. }).then_some(ResourceAction::EditLabels)
         }
         RowAction::ViewYaml => object_ref(subject)
             .is_some()
@@ -858,14 +889,16 @@ pub(crate) fn node_menu(
     let access = guard.access;
     let menu = menu
         .item(open_node_shell_item(node, guard))
+        .item(cordon_item(node, guard, row, shell))
+        .item(action_item(ResourceAction::Drain, guard))
+        .separator()
+        .item(action_item(ResourceAction::EditTaints, guard))
+        .item(action_item(ResourceAction::EditLabels, guard))
+        .item(view_pods_on_node_item(node, live.pods.items(), row, shell))
         .item(view_yaml_item(
             row.object(ResourceKey::of_node(node)),
             shell,
         ))
-        .item(view_pods_on_node_item(node, live.pods.items(), row, shell))
-        .separator()
-        .item(cordon_item(node, guard, row, shell))
-        .item(action_item(ResourceAction::Drain, guard))
         .separator()
         .item(copy_name_item(&node.name, access))
         .separator()
@@ -2113,10 +2146,12 @@ fn cordon_item(
 }
 
 /// Disabled items stay visible with their reason, so users learn what exists. The item shows the
-/// key of its action. Drain keeps its ellipsis because it opens a dialog.
+/// key of its action. Drain and the node editors keep their ellipsis because they open a dialog.
 fn action_item(action: ResourceAction, guard: &ClusterGuard<'_>) -> PopupMenuItem {
     let label = match action {
         ResourceAction::Drain => "Drain…",
+        ResourceAction::EditTaints => "Edit taints…",
+        ResourceAction::EditLabels => "Edit labels…",
         _ => action_label(action),
     };
     match action_availability(action, guard) {

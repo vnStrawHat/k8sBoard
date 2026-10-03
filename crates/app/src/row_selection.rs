@@ -17,9 +17,9 @@ use crate::resource_kind::{KindAction, ResourceKind};
 pub(crate) const ROLL_BACK_BULK_REASON: &str = "Roll back one deployment at a time";
 
 const NODE_ACTIONS: [KindAction; 3] = [
-    KindAction::named("Cordon"),
-    KindAction::named("Uncordon"),
-    KindAction::named("Drain…"),
+    KindAction::keyed("Cordon", ResourceAction::Cordon),
+    KindAction::keyed("Uncordon", ResourceAction::Uncordon),
+    KindAction::keyed("Drain…", ResourceAction::Drain),
 ];
 const DEPLOYMENT_ACTIONS: [KindAction; 3] = [
     KindAction::keyed("Scale…", ResourceAction::Scale(ObjectKind::Deployment)),
@@ -56,7 +56,7 @@ const CRON_JOB_ACTIONS: [KindAction; 2] = [
 ];
 
 /// The actions that act on the ticked rows, as the wireframes draw them. The workload ones go
-/// through `batch_write`; the Nodes ones stay off until 0034.
+/// through `batch_write`; the Nodes ones are built by `node_editor` (spec 0034).
 pub(crate) fn bulk_actions(screen: Screen) -> &'static [KindAction] {
     match screen {
         Screen::Nodes => &NODE_ACTIONS,

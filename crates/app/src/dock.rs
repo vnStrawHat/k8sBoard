@@ -6,7 +6,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
@@ -17,6 +17,7 @@ use crate::app_shell::AppShell;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_rows::RowContext;
 use crate::cluster_session::ClusterSession;
+use crate::drain_tab::DrainTab;
 use crate::log_tab::{LogLayout, LogTab, tab_title};
 use crate::log_target::{ContainerChoice, LogTarget, NoLogTarget};
 use crate::resource_actions::{RowAction, disabled_menu_item};
@@ -69,10 +70,12 @@ impl LogOrigin {
     }
 }
 
-/// One tab of the dock: a log view or a shell. Never side by side: the dock shows one at a time.
+/// One tab of the dock: a log view, a shell, or a drain. Never side by side: the dock shows one at
+/// a time.
 pub(crate) enum DockTab {
     Logs(Entity<LogTab>),
     Shell(Entity<ShellTab>),
+    Drain(Entity<DrainTab>),
 }
 
 impl DockTab {
@@ -81,6 +84,15 @@ impl DockTab {
         match self {
             Self::Logs(tab) => tab.read(cx).cluster(),
             Self::Shell(tab) => tab.read(cx).cluster(),
+            Self::Drain(tab) => tab.read(cx).cluster(),
+        }
+    }
+
+    /// A running drain stays: closing its tab would hide a live run (`Cancel the drain first`).
+    fn is_pinned(&self, cx: &App) -> bool {
+        match self {
+            Self::Drain(tab) => tab.read(cx).is_running(),
+            Self::Logs(_) | Self::Shell(_) => false,
         }
     }
 
@@ -94,6 +106,10 @@ impl DockTab {
                 tab.read(cx).label(),
                 tab.read(cx).cluster_label().to_owned(),
             ),
+            Self::Drain(tab) => (
+                tab.read(cx).label(),
+                tab.read(cx).cluster_label().to_owned(),
+            ),
         };
         tab_title(&label, &cluster_label, is_multi)
     }
@@ -102,6 +118,7 @@ impl DockTab {
         match self {
             Self::Logs(tab) => tab.read(cx).tone(),
             Self::Shell(tab) => tab.read(cx).tone(),
+            Self::Drain(tab) => tab.read(cx).tone(),
         }
     }
 
@@ -109,6 +126,7 @@ impl DockTab {
         match self {
             Self::Logs(_) => IconName::FileText,
             Self::Shell(_) => IconName::SquareTerminal,
+            Self::Drain(_) => IconName::ArrowDown,
         }
     }
 
@@ -116,6 +134,7 @@ impl DockTab {
         match self {
             Self::Logs(tab) => tab.clone().into_any_element(),
             Self::Shell(tab) => tab.clone().into_any_element(),
+            Self::Drain(tab) => tab.clone().into_any_element(),
         }
     }
 }
@@ -261,6 +280,54 @@ impl Dock {
         tab
     }
 
+    /// Adds the tab of a drain and activates it; Minimized becomes Normal.
+    pub(crate) fn open_drain(&mut self, tab: Entity<DrainTab>, cx: &mut Context<Self>) {
+        self.tabs.push(DockTab::Drain(tab));
+        self.activate(self.tabs.len() - 1, cx);
+    }
+
+    /// The drain tabs, in tab order.
+    pub(crate) fn drain_tabs(&self) -> impl Iterator<Item = &Entity<DrainTab>> {
+        self.tabs.iter().filter_map(|tab| match tab {
+            DockTab::Drain(tab) => Some(tab),
+            DockTab::Logs(_) | DockTab::Shell(_) => None,
+        })
+    }
+
+    /// The running drains of `clusters`, each with the cluster's display name: what leaving them
+    /// would stop.
+    pub(crate) fn running_drains_of(
+        &self,
+        clusters: &[ClusterRef],
+        cx: &App,
+    ) -> Vec<(Entity<DrainTab>, SharedString)> {
+        self.drain_tabs()
+            .filter_map(|tab| {
+                let state = tab.read(cx);
+                (state.is_running() && clusters.contains(state.cluster()))
+                    .then(|| (tab.clone(), state.cluster_name().clone()))
+            })
+            .collect()
+    }
+
+    /// Whether the dock holds a running drain of `cluster`: one per cluster at a time.
+    pub(crate) fn has_running_drain(&self, cluster: &ClusterRef, cx: &App) -> bool {
+        !self
+            .running_drains_of(std::slice::from_ref(cluster), cx)
+            .is_empty()
+    }
+
+    /// Removes the tab of a finished drain. A running one stays.
+    pub(crate) fn close_drain(&mut self, tab: &Entity<DrainTab>, cx: &mut Context<Self>) {
+        let index = self
+            .tabs
+            .iter()
+            .position(|open| matches!(open, DockTab::Drain(drain) if drain == tab));
+        if let Some(index) = index {
+            self.close_tab(index, cx);
+        }
+    }
+
     /// Whether another shell tab fits under the cap.
     pub(crate) fn has_room_for_shell(&self, cx: &App) -> bool {
         self.shell_tabs(cx).count() < MAX_SHELL_TABS
@@ -270,7 +337,7 @@ impl Dock {
     fn shell_tabs<'a>(&'a self, _: &'a App) -> impl Iterator<Item = &'a Entity<ShellTab>> {
         self.tabs.iter().filter_map(|tab| match tab {
             DockTab::Shell(tab) => Some(tab),
-            DockTab::Logs(_) => None,
+            DockTab::Logs(_) | DockTab::Drain(_) => None,
         })
     }
 
@@ -295,7 +362,17 @@ impl Dock {
             .count()
     }
 
+    /// The user closes a tab: a running drain refuses (`Cancel the drain first`).
     pub(crate) fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.tabs.get(index).is_some_and(|tab| tab.is_pinned(cx)) {
+            return;
+        }
+        self.remove_tab(index, cx);
+    }
+
+    /// Takes the tab out whatever it is doing: for the release of its cluster, whose session the
+    /// tab cannot outlive.
+    fn remove_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
             return;
         }
@@ -323,7 +400,7 @@ impl Dock {
         let mut index = 0;
         while index < self.tabs.len() {
             if self.tabs[index].cluster(cx) == cluster {
-                self.close_tab(index, cx);
+                self.remove_tab(index, cx);
             } else {
                 index += 1;
             }
@@ -382,7 +459,7 @@ impl Dock {
             .iter()
             .filter_map(|tab| match tab {
                 DockTab::Shell(tab) => Some(tab.clone()),
-                DockTab::Logs(_) => None,
+                DockTab::Logs(_) | DockTab::Drain(_) => None,
             })
             .collect()
     }
@@ -400,7 +477,7 @@ impl Dock {
             Some(DockTab::Shell(tab)) => {
                 *tab.read(cx).state() == crate::shell_tab::ShellState::Connecting
             }
-            None => false,
+            Some(DockTab::Drain(_)) | None => false,
         }
     }
 
@@ -604,7 +681,12 @@ impl Dock {
                     .ghost()
                     .xsmall()
                     .icon(Icon::new(IconName::X))
-                    .tooltip("Close")
+                    .disabled(tab.is_pinned(cx))
+                    .tooltip(if tab.is_pinned(cx) {
+                        "Cancel the drain first"
+                    } else {
+                        "Close"
+                    })
                     .on_click(cx.listener(move |dock, _, _, cx| dock.close_tab(index, cx))),
             )
     }

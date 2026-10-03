@@ -390,3 +390,72 @@ fn delete_of_a_secret_or_config_map_keeps_the_path_and_drops_the_value() {
         assert_eq!(entry.fields[0].value, None, "{kind:?}");
     }
 }
+
+fn summary(outcome: SummaryOutcome) -> NodeSummary {
+    NodeSummary {
+        node: "wk-04".to_owned(),
+        evicted: 21,
+        refused: 2,
+        failed: 0,
+        skipped: 6,
+        outcome,
+    }
+}
+
+#[test]
+fn a_drain_summary_is_one_line_of_counts_and_an_outcome() {
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let identity = AuditIdentity::of(&guard);
+    let entry = drain_summary_entry(
+        &identity,
+        &summary(SummaryOutcome::Stuck),
+        Some("night shift"),
+    );
+    let value = serde_json::to_value(&entry).expect("serializes");
+    assert_eq!(value["action"], "Drain");
+    assert_eq!(value["cluster"], "stg-b");
+    assert_eq!(value["object"]["kind"], "Node");
+    assert_eq!(value["object"]["name"], "wk-04");
+    assert!(value["object"].get("namespace").is_none());
+    assert_eq!(value["outcome"], "stuck");
+    assert_eq!(value["note"], "night shift");
+    let fields: Vec<(String, String)> = value["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|field| {
+            (
+                field["path"].as_str().unwrap_or_default().to_owned(),
+                field["value"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("evicted".to_owned(), "21".to_owned()),
+            ("refused".to_owned(), "2".to_owned()),
+            ("failed".to_owned(), "0".to_owned()),
+            ("skipped".to_owned(), "6".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn every_drain_outcome_has_its_own_word() {
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let identity = AuditIdentity::of(&guard);
+    for (outcome, word) in [
+        (SummaryOutcome::Drained, "drained"),
+        (SummaryOutcome::Stuck, "stuck"),
+        (SummaryOutcome::Cancelled, "cancelled"),
+        (SummaryOutcome::Stopped, "stopped"),
+    ] {
+        let entry = drain_summary_entry(&identity, &summary(outcome), None);
+        let value = serde_json::to_value(&entry).expect("serializes");
+        assert_eq!(value["outcome"], word);
+        assert!(value.get("note").is_none());
+    }
+}

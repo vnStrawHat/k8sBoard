@@ -44,6 +44,8 @@ gpui_kit::actions!(
         // Unbound unless the wireframe gives them a key: menus and the palette dispatch them.
         PauseRollout,
         DebugContainer,
+        EditTaints,
+        EditLabels,
         RollBack,
         SuspendCronJob,
         TriggerCronJob,

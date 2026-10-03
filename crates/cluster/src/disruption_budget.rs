@@ -1,7 +1,8 @@
 use futures::Stream;
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
+use kube::Api;
 
-use crate::connection::ClusterConnection;
+use crate::connection::{ClusterConnection, ClusterError};
 use crate::namespace::NamespaceScope;
 use crate::pod_status::non_negative;
 use crate::resource_watch::{WatchUpdate, summary_watch};
@@ -76,6 +77,20 @@ impl PodDisruptionBudgetSummary {
 }
 
 impl ClusterConnection {
+    /// Lists every pod disruption budget of the cluster, one-shot, ordered by (namespace, name).
+    /// The drain preview reads it instead of the session watches, which can be namespace-scoped.
+    pub async fn list_pod_disruption_budgets(
+        &self,
+    ) -> Result<Vec<PodDisruptionBudgetSummary>, ClusterError> {
+        let api = Api::<PodDisruptionBudget>::all(self.client().clone());
+        let budgets = self.list_all(api, "listing pod disruption budgets").await?;
+        let mut summaries: Vec<_> = budgets.iter().map(pod_disruption_budget_summary).collect();
+        summaries.sort_by(|left, right| {
+            (&left.namespace, &left.name).cmp(&(&right.namespace, &right.name))
+        });
+        Ok(summaries)
+    }
+
     /// Watches pod disruption budgets (`policy/v1`) in `scope`. Yields batched snapshots
     /// ordered by (namespace, name).
     pub fn watch_pod_disruption_budgets(
@@ -276,5 +291,37 @@ mod tests {
         assert!(!with_generations(Some(3), Some(3)));
         assert!(!with_generations(Some(3), None));
         assert!(!with_generations(None, Some(2)));
+    }
+
+    #[tokio::test]
+    async fn list_reads_every_namespace_sorted() {
+        use crate::fake_api::FakeApi;
+        use crate::object_write::WritePolicy;
+
+        let item = |namespace: &str, name: &str| {
+            serde_json::json!({
+                "metadata": {"name": name, "namespace": namespace},
+                "spec": {"minAvailable": 1},
+            })
+        };
+        let body = serde_json::json!({
+            "apiVersion": "policy/v1", "kind": "PodDisruptionBudgetList", "metadata": {},
+            "items": [item("web", "b"), item("api", "z"), item("api", "a")],
+        })
+        .to_string();
+        let (connection, api) =
+            FakeApi::connection(WritePolicy::Blocked, move |_| (200, body.clone()));
+        let budgets = connection
+            .list_pod_disruption_budgets()
+            .await
+            .expect("the list goes through");
+        let names: Vec<_> = budgets
+            .iter()
+            .map(|budget| (budget.namespace.as_str(), budget.name.as_str()))
+            .collect();
+        assert_eq!(names, [("api", "a"), ("api", "z"), ("web", "b")]);
+        let requests = api.requests();
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/apis/policy/v1/poddisruptionbudgets");
     }
 }

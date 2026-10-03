@@ -131,12 +131,18 @@ pub(crate) mod batch_write;
 mod app_shell_view;
 #[path = "debug_open.rs"]
 mod debug_open;
+#[path = "drain_dialog.rs"]
+pub(crate) mod drain_dialog;
+#[path = "drain_driver.rs"]
+pub(crate) mod drain_driver;
 #[path = "edit_yaml_flow.rs"]
 mod edit_yaml_flow;
 #[path = "keyboard_navigation.rs"]
 mod keyboard_navigation;
 #[path = "leaving_work.rs"]
 mod leaving_work;
+#[path = "node_editor.rs"]
+pub(crate) mod node_editor;
 #[path = "node_shell_cleanup.rs"]
 mod node_shell_cleanup;
 #[path = "node_shell_open.rs"]
@@ -189,8 +195,16 @@ mod app_shell_workload_tests;
 mod app_shell_delete_tests;
 
 #[cfg(test)]
+#[path = "app_shell_node_edit_tests.rs"]
+mod app_shell_node_edit_tests;
+
+#[cfg(test)]
 #[path = "app_shell_resource_edit_tests.rs"]
 mod app_shell_resource_edit_tests;
+
+#[cfg(test)]
+#[path = "app_shell_drain_tests.rs"]
+mod app_shell_drain_tests;
 
 /// The logical column of the Events table that holds the reason.
 const EVENT_REASON_COLUMN: usize = 1;
@@ -367,6 +381,8 @@ pub(crate) struct AppShell {
     /// The clusters with a confirmed batch still committing. A second batch on one of them waits:
     /// two would race over the same objects and interleave their audit lines.
     running_batches: HashSet<ClusterRef>,
+    /// The user confirmed leaving with a drain running: the close goes on without asking again.
+    is_quit_confirmed: bool,
     /// The delete whose objects are being read before its dialog opens (spec 0033). While it runs,
     /// a second Del (a held key repeats) starts nothing.
     delete_start: Option<Task<()>>,
@@ -382,6 +398,15 @@ pub(crate) struct AppShell {
     /// The lines of the "work will close" dialog asked last, for the tests that drive it.
     #[cfg(test)]
     last_leaving: Option<Vec<String>>,
+    /// The node editor opened last, for the tests that drive it.
+    #[cfg(test)]
+    last_node_editor: Option<gpui_kit::WeakEntity<node_editor::NodeEditor>>,
+    /// The drain dialog opened last, for the tests that drive it.
+    #[cfg(test)]
+    last_drain_dialog: Option<gpui_kit::WeakEntity<drain_dialog::DrainDialog>>,
+    /// The drain tab opened last, for the tests that drive it.
+    #[cfg(test)]
+    last_drain_tab: Option<gpui_kit::WeakEntity<crate::drain_tab::DrainTab>>,
     /// The window of the shell: a dialog that starts outside an event handler opens in it.
     window: gpui_kit::AnyWindowHandle,
     /// Shell starts that have not reported yet (spec 0036).
@@ -644,6 +669,13 @@ impl AppShell {
             last_dialog: None,
             #[cfg(test)]
             last_leaving: None,
+            #[cfg(test)]
+            last_node_editor: None,
+            #[cfg(test)]
+            last_drain_dialog: None,
+            #[cfg(test)]
+            last_drain_tab: None,
+            is_quit_confirmed: false,
             window: window.window_handle(),
             shell_starts: shell_open::ShellStarts::default(),
             node_shell_runs: node_shell_cleanup::NodeShellRuns::default(),
@@ -899,8 +931,11 @@ impl AppShell {
     /// kind definitions seen so far wait in `kind_cache` for the next session. What the user had
     /// (the scope of each cluster, whether it answered) is kept first.
     fn release_all(&mut self, cx: &mut Context<Self>) {
-        // Every session goes, so the edit of one of them cannot be applied any more.
+        // Every session goes, so the edit of one of them cannot be applied any more, and no drain
+        // can go on.
         self.edit = None;
+        let viewed = self.view.clusters();
+        self.stop_drains_of(&viewed, cx);
         // A multi connect still waiting for its deferred call is stale from here on.
         self.view_request += 1;
         self.clear_selection(cx);
@@ -1857,6 +1892,26 @@ impl AppShell {
                 crate::environment::Environment::Staging
             };
             self.open_node_shell_confirm_fixture(environment, window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if matches!(
+            launch,
+            LaunchScreen::NodeTaintsEditor | LaunchScreen::NodeLabelsEditor
+        ) {
+            let kind = if launch == LaunchScreen::NodeTaintsEditor {
+                node_editor::NodeEditKind::Taints
+            } else {
+                node_editor::NodeEditKind::Labels
+            };
+            self.open_node_editor_fixture(kind, window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::DrainDialog {
+            self.open_drain_fixture(window, cx);
             self.pending_dialog_launch = None;
             return;
         }
@@ -3616,6 +3671,11 @@ impl AppShell {
         else {
             return;
         };
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::DrainProgress {
+            self.open_drain_progress_fixture(window, cx);
+            return;
+        }
         #[cfg(feature = "screenshot")]
         if matches!(
             launch,

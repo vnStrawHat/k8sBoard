@@ -271,8 +271,25 @@ impl ClusterConnection {
     where
         K: Clone + DeserializeOwned + fmt::Debug,
     {
+        self.list_all_where(api, action, None).await
+    }
+
+    /// Like `list_all`, keeping only the objects the `field_selector` matches (server side).
+    pub(crate) async fn list_all_where<K>(
+        &self,
+        api: Api<K>,
+        action: &'static str,
+        field_selector: Option<&str>,
+    ) -> Result<Vec<K>, ClusterError>
+    where
+        K: Clone + DeserializeOwned + fmt::Debug,
+    {
         let api = &api;
         collect_pages(|params| async move {
+            let params = match field_selector {
+                Some(selector) => params.fields(selector),
+                None => params,
+            };
             let list = self.run(action, api.list(&params)).await?;
             Ok(Page {
                 items: list.items,

@@ -588,6 +588,7 @@ mod tests {
             key: key.to_owned(),
             value: None,
             effect: effect.to_owned(),
+            time_added: None,
         }
     }
 

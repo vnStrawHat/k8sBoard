@@ -771,6 +771,7 @@ fn row_action_icon(action: RowAction) -> IconName {
         RowAction::PortForward => IconName::Network,
         RowAction::Cordon => IconName::Ban,
         RowAction::Drain => IconName::ArrowDown,
+        RowAction::EditTaints | RowAction::EditLabels => IconName::Replace,
         RowAction::EditYaml => IconName::Replace,
         RowAction::RestartRollout => IconName::RotateCw,
         RowAction::Scale => IconName::ChevronsUpDown,

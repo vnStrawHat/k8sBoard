@@ -56,6 +56,8 @@ Terms join with `, `.
 
 Status: `Allowed(n)` → Ok "{n} disruptions allowed" ("1 disruption allowed"); `Blocked(SyncFailed)` → Bad "Budget not computed"; other `Blocked` → Bad "0 disruptions allowed"; `NoPods` → Done "Selects no pods".
 
+The same `disruption_state()` also drives the per-pod preview of the drain dialog (0034 `drain_plan.rs`).
+
 Sections:
 
 | Section | Rows |

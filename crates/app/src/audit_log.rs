@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::app_shell::write_flow::WriteIntent;
+use crate::drain_run::{NodeSummary, SummaryOutcome};
 use crate::resource_actions::{ResourceAction, action_label};
 use crate::write_guard::{ClusterGuard, WriteLock};
 
@@ -67,6 +68,14 @@ pub(crate) enum AuditOutcome {
     /// A session start that was closed or replaced before it reported: its request may have
     /// reached the server.
     Abandoned,
+    /// The summary line of a node that was drained (spec 0034).
+    Drained,
+    /// The summary line of a node the drain could not finish: a timeout or a pod that failed.
+    Stuck,
+    /// The summary line of the node a cancelled drain was working on.
+    Cancelled,
+    /// The summary line of the node a stopped drain (a lock, a switch, a quit) was working on.
+    Stopped,
 }
 
 /// The log file inside the settings folder `dir`.
@@ -163,6 +172,77 @@ pub(crate) fn connect_entry(
         outcome,
         error,
         note: None,
+    }
+}
+
+/// The cluster, context, and user of a run that writes lines after its session may be gone (a
+/// drain). Copied from the guard when the run starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuditIdentity {
+    cluster: String,
+    context: String,
+    user: Option<String>,
+}
+
+impl AuditIdentity {
+    pub(crate) fn of(guard: &ClusterGuard<'_>) -> Self {
+        Self {
+            cluster: guard.display_name().to_owned(),
+            context: guard.summary.name.clone(),
+            user: guard.summary.user.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "screenshot")]
+impl AuditIdentity {
+    /// The identity of a fixture cluster, for the screens drawn from fixed data.
+    pub(crate) fn fixture(cluster: &str) -> Self {
+        Self {
+            cluster: cluster.to_owned(),
+            context: cluster.to_owned(),
+            user: None,
+        }
+    }
+}
+
+/// The one summary line of a drained node (spec 0034 decision 39): action `Drain`, the node, the
+/// counts as field values, and how the node ended. Written besides the line of every cordon and
+/// eviction commit, which `checked_write` writes.
+pub(crate) fn drain_summary_entry(
+    identity: &AuditIdentity,
+    summary: &NodeSummary,
+    note: Option<&str>,
+) -> AuditEntry {
+    let count = |path: &str, value: usize| AuditField {
+        path: path.to_owned(),
+        value: Some(value.to_string()),
+    };
+    AuditEntry {
+        at: timestamp_now(),
+        cluster: identity.cluster.clone(),
+        context: identity.context.clone(),
+        user: identity.user.clone(),
+        action: "Drain".to_owned(),
+        object: Some(AuditObject {
+            kind: "Node".to_owned(),
+            namespace: None,
+            name: summary.node.clone(),
+        }),
+        fields: vec![
+            count("evicted", summary.evicted),
+            count("refused", summary.refused),
+            count("failed", summary.failed),
+            count("skipped", summary.skipped),
+        ],
+        outcome: match summary.outcome {
+            SummaryOutcome::Drained => AuditOutcome::Drained,
+            SummaryOutcome::Stuck => AuditOutcome::Stuck,
+            SummaryOutcome::Cancelled => AuditOutcome::Cancelled,
+            SummaryOutcome::Stopped => AuditOutcome::Stopped,
+        },
+        error: None,
+        note: note.and_then(clean_note),
     }
 }
 

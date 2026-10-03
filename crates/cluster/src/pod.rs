@@ -6,12 +6,14 @@ use k8s_openapi::api::core::v1::{
     Container, ContainerState as ApiContainerState, ContainerStateTerminated,
     ContainerStatus as ApiContainerStatus, Pod, Volume,
 };
+use kube::Api;
 
 use crate::connection::{ClusterConnection, ClusterError};
 use crate::container_spec::{
     ContainerProbes, ContainerResource, EnvEntry, EnvFromEntry, MountEntry, container_probes,
     container_resources, env_entries, env_from_entries, image_digest, mount_entries,
 };
+use crate::dns_name::is_dns_subdomain;
 use crate::event::optional_message;
 use crate::namespace::NamespaceScope;
 use crate::pod_status::{PodStatus, StatusReason, is_sidecar, non_negative, pod_display};
@@ -19,6 +21,9 @@ use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::{
     ContainerPort, ControllerRef, container_ports, controller_ref, label_terms, non_empty,
 };
+
+/// Set on the mirror pod the kubelet creates for a static pod.
+const MIRROR_ANNOTATION: &str = "kubernetes.io/config.mirror";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PodSummary {
@@ -50,6 +55,28 @@ pub struct PodSummary {
     pub host_network: bool,
     /// `spec.imagePullSecrets[].name`; empty names are dropped.
     pub image_pull_secrets: Vec<String>,
+}
+
+/// What a drain needs to know about one pod on a node (0034). Only these fields are read: no env
+/// and no annotation beyond the mirror marker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrainPod {
+    pub namespace: String,
+    pub name: String,
+    /// Pins the eviction to this pod: a replacement of the same name has another uid.
+    pub uid: String,
+    /// `key=value` terms in key order, for the PDB selectors.
+    pub labels: Vec<String>,
+    pub controller: Option<ControllerRef>,
+    /// A static pod's mirror (`kubernetes.io/config.mirror`): the kubelet owns it.
+    pub is_mirror: bool,
+    pub has_empty_dir: bool,
+    /// Phase `Succeeded` or `Failed`.
+    pub is_finished: bool,
+    /// Phase `Pending`: the eviction API skips the budget check for it.
+    pub is_pending: bool,
+    /// `metadata.deletionTimestamp` is set.
+    pub is_terminating: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,6 +194,24 @@ impl ClusterConnection {
         Ok(summaries)
     }
 
+    /// Pods on `node` in every namespace (a one-shot list by field selector, paged), ordered by
+    /// (namespace, name). Read-only.
+    pub async fn drain_pods(&self, node: &str) -> Result<Vec<DrainPod>, ClusterError> {
+        const ACTION: &str = "listing the pods of a node";
+        // The name goes into a selector; kube does not escape it.
+        if !is_dns_subdomain(node) {
+            return Err(self.unexpected_response(ACTION, "the node name is not valid"));
+        }
+        let api = Api::<Pod>::all(self.client().clone());
+        let selector = format!("spec.nodeName={node}");
+        let pods = self.list_all_where(api, ACTION, Some(&selector)).await?;
+        let mut pods: Vec<DrainPod> = pods.iter().map(drain_pod).collect();
+        pods.sort_by(|left, right| {
+            (&left.namespace, &left.name).cmp(&(&right.namespace, &right.name))
+        });
+        Ok(pods)
+    }
+
     /// Watches pods in `scope`. Yields batched snapshots ordered by (namespace, name).
     pub fn watch_pods(
         &self,
@@ -228,6 +273,33 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
             .flat_map(|spec| spec.image_pull_secrets.iter().flatten())
             .filter_map(|reference| non_empty(Some(reference.name.as_str())))
             .collect(),
+    }
+}
+
+pub(crate) fn drain_pod(pod: &Pod) -> DrainPod {
+    let phase = pod
+        .status
+        .as_ref()
+        .and_then(|status| status.phase.as_deref());
+    DrainPod {
+        namespace: pod.metadata.namespace.clone().unwrap_or_default(),
+        name: pod.metadata.name.clone().unwrap_or_default(),
+        uid: pod.metadata.uid.clone().unwrap_or_default(),
+        labels: label_terms(&pod.metadata),
+        controller: controller_ref(&pod.metadata),
+        is_mirror: pod
+            .metadata
+            .annotations
+            .as_ref()
+            .is_some_and(|annotations| annotations.contains_key(MIRROR_ANNOTATION)),
+        has_empty_dir: pod
+            .spec
+            .iter()
+            .flat_map(|spec| spec.volumes.iter().flatten())
+            .any(|volume| volume.empty_dir.is_some()),
+        is_finished: matches!(phase, Some("Succeeded" | "Failed")),
+        is_pending: phase == Some("Pending"),
+        is_terminating: pod.metadata.deletion_timestamp.is_some(),
     }
 }
 
@@ -346,3 +418,7 @@ fn status_reason(reason: Option<&str>) -> Option<StatusReason> {
 #[cfg(test)]
 #[path = "pod_tests.rs"]
 mod pod_tests;
+
+#[cfg(test)]
+#[path = "pod_drain_tests.rs"]
+mod pod_drain_tests;

@@ -26,6 +26,11 @@ use crate::debug_pod_bodies::{
 use crate::dns_name::{is_dns_subdomain, is_path_segment_name};
 use crate::edit_placeholders::{self, Restored};
 use crate::edit_preview::{EditPreview, build_preview};
+use crate::node::NodeTaint;
+use crate::node_maintenance_bodies::{
+    GracePeriod, LabelChange, are_valid_label_changes, are_valid_taints, eviction_body,
+    is_valid_uid, labels_patch, taints_patch,
+};
 use crate::object_edit::{ObjectEdit, is_helm_release};
 use crate::object_yaml::{ObjectKind, ObjectRef};
 use crate::quantity::ByteAmount;
@@ -56,6 +61,7 @@ const MAX_UID_LENGTH: usize = 64;
 /// either key, so an unset clears both.
 const DEFAULT_CLASS_ANNOTATION: &str = "storageclass.kubernetes.io/is-default-class";
 const DEFAULT_CLASS_BETA_ANNOTATION: &str = "storageclass.beta.kubernetes.io/is-default-class";
+const UNUSABLE_EVICTION_ANSWER: &str = "the eviction answer was not a success";
 
 /// One allow-listed mutation. Adding a variant is the only way to add a write (C3).
 // Debug is manual: the variant name only.
@@ -115,6 +121,17 @@ pub enum WriteOperation {
     ExpandClaim { storage: String },
     /// Merge patch of a StorageClass's default-class annotation (0032b).
     SetDefaultStorageClass { is_default: bool },
+    /// `POST` of a `policy/v1` Eviction to a pod, pinned to `uid` so a recreated pod of the same
+    /// name is never evicted. The API server checks the pod's PodDisruptionBudget (0034).
+    EvictPod { uid: String, grace: GracePeriod },
+    /// Merge patch of `spec.taints` (the whole list) guarded by `resource_version`, so a change
+    /// made meanwhile is a 409 instead of a lost update (0034).
+    SetNodeTaints {
+        taints: Vec<NodeTaint>,
+        resource_version: String,
+    },
+    /// Per-key merge patch of `metadata.labels` (0034).
+    SetNodeLabels { changes: Vec<LabelChange> },
 }
 
 impl WriteOperation {
@@ -136,6 +153,9 @@ impl WriteOperation {
             Self::SetHpaReplicaRange { .. } => "SetHpaReplicaRange",
             Self::ExpandClaim { .. } => "ExpandClaim",
             Self::SetDefaultStorageClass { .. } => "SetDefaultStorageClass",
+            Self::EvictPod { .. } => "EvictPod",
+            Self::SetNodeTaints { .. } => "SetNodeTaints",
+            Self::SetNodeLabels { .. } => "SetNodeLabels",
         }
     }
 }
@@ -410,6 +430,36 @@ impl WriteRequest {
                     value: None,
                 },
             ],
+            WriteOperation::EvictPod { grace, .. } => vec![field(
+                "pods/eviction",
+                match grace {
+                    GracePeriod::PodDefault => "grace pod default".to_owned(),
+                    GracePeriod::Seconds(seconds) => format!("grace {seconds}s"),
+                },
+            )],
+            WriteOperation::SetNodeTaints { taints, .. } => vec![field(
+                "spec.taints",
+                if taints.is_empty() {
+                    "none".to_owned()
+                } else {
+                    taints
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                },
+            )],
+            WriteOperation::SetNodeLabels { changes } => vec![field(
+                "metadata.labels",
+                changes
+                    .iter()
+                    .map(|change| match &change.value {
+                        Some(value) => format!("{}={value}", change.key),
+                        None => format!("-{}", change.key),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )],
         }
     }
 
@@ -432,7 +482,10 @@ impl WriteRequest {
             | WriteOperation::DeleteObject { .. }
             | WriteOperation::SetHpaReplicaRange { .. }
             | WriteOperation::ExpandClaim { .. }
-            | WriteOperation::SetDefaultStorageClass { .. } => true,
+            | WriteOperation::SetDefaultStorageClass { .. }
+            | WriteOperation::EvictPod { .. }
+            | WriteOperation::SetNodeTaints { .. }
+            | WriteOperation::SetNodeLabels { .. } => true,
         }
     }
 }
@@ -455,6 +508,12 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
                 storage: storage.to_owned(),
             })
         }
+        WriteOperation::EvictPod { ref uid, .. } if !is_valid_uid(uid) => None,
+        WriteOperation::SetNodeTaints {
+            ref taints,
+            ref resource_version,
+        } if resource_version.is_empty() || !are_valid_taints(taints) => None,
+        WriteOperation::SetNodeLabels { ref changes } if !are_valid_label_changes(changes) => None,
         // Listed one by one, not as `other`: a new operation does not compile until it gets a
         // validation decision here.
         operation @ (WriteOperation::SetNodeSchedulable { .. }
@@ -471,7 +530,10 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
         | WriteOperation::CreateNodeShellPod { .. }
         | WriteOperation::DeleteNodeShellPod { .. }
         | WriteOperation::SetHpaReplicaRange { .. }
-        | WriteOperation::SetDefaultStorageClass { .. }) => Some(operation),
+        | WriteOperation::SetDefaultStorageClass { .. }
+        | WriteOperation::EvictPod { .. }
+        | WriteOperation::SetNodeTaints { .. }
+        | WriteOperation::SetNodeLabels { .. }) => Some(operation),
     }
 }
 
@@ -479,7 +541,13 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
 fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Option<AccessCheck> {
     let kind = target.builtin_kind()?;
     Some(match (operation, kind) {
-        (WriteOperation::SetNodeSchedulable { .. }, ObjectKind::Node) => AccessCheck::PatchNodes,
+        (
+            WriteOperation::SetNodeSchedulable { .. }
+            | WriteOperation::SetNodeTaints { .. }
+            | WriteOperation::SetNodeLabels { .. },
+            ObjectKind::Node,
+        ) => AccessCheck::PatchNodes,
+        (WriteOperation::EvictPod { .. }, ObjectKind::Pod) => AccessCheck::CreatePodEviction,
         (WriteOperation::ScaleWorkload { .. }, ObjectKind::Deployment) => {
             AccessCheck::PatchDeploymentScale
         }
@@ -888,6 +956,40 @@ impl ClusterConnection {
                     uid: created.metadata.uid.clone().filter(|_| is_commit),
                 })
             }
+            WriteOperation::EvictPod { uid, grace } => {
+                let pods = self.pod_api(&request.target, mode)?;
+                let namespace = request.target.namespace().unwrap_or_default();
+                let body = eviction_body(namespace, name, uid, *grace);
+                let sent = run_raw(pods.create_subresource::<Value, Status>(
+                    "eviction",
+                    name,
+                    &post_params(mode),
+                    &body,
+                ))
+                .await;
+                let status = self.settle(request, mode, sent)?;
+                // The API server can answer HTTP 201 with a `Failure` body (a pod matched by two
+                // budgets), so the body's own status is checked.
+                if !status.is_success() {
+                    return Err(self.eviction_failure(request, mode, status));
+                }
+                Ok(Answer::of(WriteEffect::Created))
+            }
+            WriteOperation::SetNodeTaints {
+                taints,
+                resource_version,
+            } => {
+                let body = taints_patch(taints, resource_version);
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::SetNodeLabels { changes } => {
+                let body = labels_patch(changes);
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
             WriteOperation::DeleteNodeShellPod { uid } => {
                 let pods = self.pod_api(&request.target, mode)?;
                 let delete = DeleteParams {
@@ -1055,6 +1157,20 @@ impl ClusterConnection {
         })
     }
 
+    /// An eviction answered with a body that is not a `Success`: sorted from the body's own code
+    /// and message like an HTTP error of that code.
+    fn eviction_failure(
+        &self,
+        request: &WriteRequest,
+        mode: WriteMode,
+        status: Status,
+    ) -> WriteError {
+        if status.code == 0 {
+            return self.unusable_response(mode, UNUSABLE_EVICTION_ANSWER);
+        }
+        error_from_status(self.context(), mode, request.target.kind_name(), status)
+    }
+
     /// An answer or an object that cannot be used for the change; nothing was sent.
     fn unusable_object(&self, mode: WriteMode) -> WriteError {
         self.unusable_response(mode, UNUSABLE_OBJECT)
@@ -1175,7 +1291,7 @@ fn map_status(context: &str, mode: WriteMode, status: Status) -> WriteError {
             managers: Vec::new(),
         },
         429 => WriteError::TooManyRequests {
-            message,
+            message: first_cause_message(&status).unwrap_or(message),
             retry_after: status
                 .details
                 .as_ref()
@@ -1192,6 +1308,16 @@ fn map_status(context: &str, mode: WriteMode, status: Status) -> WriteError {
             kube::Error::Api(Box::new(status)),
         )),
     }
+}
+
+/// The first non-empty `details.causes[].message`: for a refused eviction it names the budget.
+fn first_cause_message(status: &Status) -> Option<String> {
+    status
+        .details
+        .iter()
+        .flat_map(|details| &details.causes)
+        .map(|cause| cause.message.clone())
+        .find(|message| !message.is_empty())
 }
 
 /// The field paths of the causes, `details.causes[].field`.
@@ -1295,6 +1421,11 @@ mod object_write_delete_tests;
 #[allow(clippy::disallowed_methods)]
 #[path = "object_write_debug_tests.rs"]
 mod object_write_debug_tests;
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+#[path = "object_write_node_tests.rs"]
+mod object_write_node_tests;
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]

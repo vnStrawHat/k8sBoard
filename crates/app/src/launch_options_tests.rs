@@ -954,6 +954,36 @@ fn the_staging_confirm_and_the_sweep_are_offline_dialogs() {
 }
 
 #[test]
+fn the_node_editor_fixtures_are_offline_dialogs_over_nodes() {
+    for (name, screen) in [
+        ("node-taints-editor", LaunchScreen::NodeTaintsEditor),
+        ("node-labels-editor", LaunchScreen::NodeLabelsEditor),
+        ("drain-dialog", LaunchScreen::DrainDialog),
+    ] {
+        let parsed = run_options(&["--screen", name]).screen;
+        assert_eq!(parsed, screen);
+        assert_eq!(parsed.screen(), Screen::Nodes);
+        assert!(parsed.opens_dialog());
+        assert!(parsed.is_dialog_fixture());
+        assert!(!parsed.has_dock());
+        assert!(!parsed.shows_node_usage());
+        assert!(USAGE.contains(name), "{name}");
+    }
+}
+
+#[test]
+fn the_drain_progress_screen_is_an_offline_dock_over_nodes() {
+    let parsed = run_options(&["--screen", "drain-progress"]).screen;
+    assert_eq!(parsed, LaunchScreen::DrainProgress);
+    assert_eq!(parsed.screen(), Screen::Nodes);
+    assert!(parsed.has_dock());
+    assert!(parsed.is_dock_fixture());
+    assert!(!parsed.opens_dialog());
+    assert!(!parsed.shows_node_usage());
+    assert!(USAGE.contains("drain-progress"));
+}
+
+#[test]
 fn the_debug_tab_fixtures_are_offline_dock_screens() {
     for (name, screen) in [
         ("node-shell-tab-fixture", LaunchScreen::NodeShellTabFixture),

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use futures::Stream;
@@ -7,6 +7,7 @@ use kube::Api;
 
 use crate::connection::{ClusterConnection, ClusterError};
 use crate::container_spec::quantity_pairs;
+use crate::dns_name::is_dns_subdomain;
 use crate::event::optional_message;
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::{label_terms, non_empty};
@@ -109,6 +110,18 @@ pub struct NodeTaint {
     pub value: Option<String>,
     /// `NoSchedule`, `PreferNoSchedule`, or `NoExecute`.
     pub effect: String,
+    /// When the taint was added; set by the node lifecycle controller for `NoExecute` taints and
+    /// kept when a taint edit sends the list back.
+    pub time_added: Option<jiff::Timestamp>,
+}
+
+/// What the node editors need, fresh from the server (0034): the summaries do not carry
+/// `resourceVersion`, which changes with every status update.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeEdit {
+    pub taints: Vec<NodeTaint>,
+    pub labels: BTreeMap<String, String>,
+    pub resource_version: String,
 }
 
 impl fmt::Display for NodeTaint {
@@ -130,6 +143,19 @@ impl ClusterConnection {
         let mut summaries: Vec<_> = nodes.iter().map(node_summary).collect();
         summaries.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(summaries)
+    }
+
+    /// Reads one node for the taint and label editors (a single GET).
+    pub async fn node_for_edit(&self, name: &str) -> Result<NodeEdit, ClusterError> {
+        const ACTION: &str = "reading a node for editing";
+        // kube does not encode a name in the path.
+        if !is_dns_subdomain(name) {
+            return Err(self.unexpected_response(ACTION, "the node name is not valid"));
+        }
+        let api = Api::<Node>::all(self.client().clone());
+        let node = self.run(ACTION, api.get(name)).await?;
+        node_edit(&node)
+            .ok_or_else(|| self.unexpected_response(ACTION, "the node has no resourceVersion"))
     }
 
     /// Watches all nodes. Yields batched snapshots ordered by name.
@@ -285,7 +311,26 @@ fn node_taint(taint: &Taint) -> NodeTaint {
         key: taint.key.clone(),
         value: taint.value.clone(),
         effect: taint.effect.clone(),
+        time_added: taint.time_added.as_ref().map(|time| time.0),
     }
+}
+
+fn node_edit(node: &Node) -> Option<NodeEdit> {
+    let resource_version = node
+        .metadata
+        .resource_version
+        .clone()
+        .filter(|version| !version.is_empty())?;
+    Some(NodeEdit {
+        taints: node
+            .spec
+            .iter()
+            .flat_map(|spec| spec.taints.iter().flatten())
+            .map(node_taint)
+            .collect(),
+        labels: node.metadata.labels.clone().unwrap_or_default(),
+        resource_version,
+    })
 }
 
 #[cfg(test)]

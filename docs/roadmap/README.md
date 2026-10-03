@@ -29,7 +29,7 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 |---|---|---|---|
 | Shell frame, tables, overlay drawer, status bar | Done (filter chips, Columns ▾, sort, selection bar in 0009); row density missing | 0003, 0009, 0028 | audit 0043 |
 | Pods (W4/W4b) | Partial (Attach, Restart pod, Evict, container ⋯ menu missing) | 0003, 0004, 0007, 0008, 0010, 0035, 0036, 0037 | audit 0039, 0040 |
-| Nodes (W5) | Partial (drain, taints, labels, bulk node actions in build) | 0003, 0008, 0009, 0010, 0030, 0037 | 0034 |
+| Nodes (W5) | Partial (maintenance done in 0034) | 0003, 0008, 0009, 0010, 0030, 0034, 0037 | — |
 | Logs dock (W8/W8b) | Partial (workload tabs, filters, histogram, Export, "+ ▾", reorder done in 0019) | 0004, 0019 | Pop out, kubelet logs, Follow toggle, SYS marker lines |
 | Kind Explorer (W7): 29 of 29 kinds live, plus Port Forwarding (0035) | Partial (New templates, Secret value edits, Certificate Renew, revision diff missing; see the audit) (drawer completions of the live kinds done in 0012; policy kinds done in 0013; storage kinds done in 0014; access-control kinds done in 0015; Secrets and Ingress TLS done in 0016; Helm Releases done in 0017; CRDs, custom resources, and stuck namespaces done in 0018) | 0003, 0005, 0012, 0013, 0014, 0015, 0016, 0017, 0018 | — |
 | Events screen and drawer events | Done (Pause stream, Filter similar in 0009) | 0006, 0007, 0009 | — |

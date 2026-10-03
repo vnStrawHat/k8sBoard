@@ -424,6 +424,7 @@ impl AppShell {
             Screen::Topology => self.topology_header_buttons(cx),
             Screen::PortForwarding => self.port_forward_header_buttons(cx),
             Screen::Issues => return self.render_issues_status(cx),
+            Screen::Nodes => self.node_header_buttons(cx),
             Screen::Kind(ResourceKind::ReplicaSets) => {
                 self.render_hide_inactive(toolkit, cx).into_iter().collect()
             }

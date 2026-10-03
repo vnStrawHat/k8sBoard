@@ -44,6 +44,7 @@ mod namespace;
 mod network_policy;
 mod network_policy_traffic;
 mod node;
+mod node_maintenance_bodies;
 mod node_shell_leftovers;
 mod object_count;
 mod object_edit;
@@ -136,9 +137,10 @@ pub use network_policy_traffic::{
     TrafficError, TrafficRequest, TrafficSource, TrafficVerdict, evaluate_traffic,
 };
 pub use node::{
-    ConditionStatus, NodeAddress, NodeCondition, NodeReadiness, NodeResource, NodeScheduling,
-    NodeStatus, NodeSummary, NodeSystemInfo, NodeTaint,
+    ConditionStatus, NodeAddress, NodeCondition, NodeEdit, NodeReadiness, NodeResource,
+    NodeScheduling, NodeStatus, NodeSummary, NodeSystemInfo, NodeTaint,
 };
+pub use node_maintenance_bodies::{GracePeriod, LabelChange};
 pub use node_shell_leftovers::{LeftoverPhase, NodeShellLeftover};
 pub use object_edit::{EditBase, EditError, ObjectEdit, Rebased, format_yaml, rebase};
 pub use object_write::{
@@ -149,8 +151,8 @@ pub use object_yaml::{EnvValues, ObjectIdentity, ObjectKind, ObjectRef, ObjectYa
 pub use persistent_volume::{ClaimRef, PersistentVolumeSummary, VolumeBackend};
 pub use persistent_volume_claim::PersistentVolumeClaimSummary;
 pub use pod::{
-    ContainerKind, ContainerState, ContainerSummary, PodCondition, PodSummary, ReadyCount,
-    Termination,
+    ContainerKind, ContainerState, ContainerSummary, DrainPod, PodCondition, PodSummary,
+    ReadyCount, Termination,
 };
 pub use pod_log::{LogLine, LogRequest, LogSource, LogUpdate};
 pub use pod_shell::{

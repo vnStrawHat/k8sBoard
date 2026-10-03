@@ -1,6 +1,6 @@
 # 0034 — Node maintenance
 
-Status: draft, amended after the advisor review (M2, M3, S2–S6, nice-to-haves); **refreshed 2026-10-03 against main `2c7dc08`**. Builds strictly on 0030 as amended (decisions 30–36: `checked_write`, `CommitMode::Commit { confirmed }`, `GuardedIntent.warnings`, `WriteEffect`, `TooManyRequests` (merged), 429 audit rule) and on 0032 (`GuardedKind::Batch`, `RowAction`, one entry point). 0030 step 4 ships single-node Cordon/Uncordon (the C arm); this spec does not redo it. Roadmap: gap plan 0034; C3, C8, C10; R2. Wireframes: W5 (node menu, selection bar, Edit labels), W6 (drain dialog), keyboard map (C, D).
+Status: **built, steps 1, 2, 3a, 3b** (see [as-built.md](as-built.md)); amended after the advisor review (M2, M3, S2–S6, nice-to-haves); **refreshed 2026-10-03 against main `2c7dc08`**. Builds strictly on 0030 as amended (decisions 30–36: `checked_write`, `CommitMode::Commit { confirmed }`, `GuardedIntent.warnings`, `WriteEffect`, `TooManyRequests` (merged), 429 audit rule) and on 0032 (`GuardedKind::Batch`, `RowAction`, one entry point). 0030 step 4 ships single-node Cordon/Uncordon (the C arm); this spec does not redo it. Roadmap: gap plan 0034; C3, C8, C10; R2. Wireframes: W5 (node menu, selection bar, Edit labels), W6 (drain dialog), keyboard map (C, D).
 
 **Prerequisites.** Merged: 0009, 0013, 0027, 0028, 0030 steps 1/2a/3. Step 1 (crate) any time after 0032 step 1 (shared `object_write.rs` seam). Step 2: 0030 steps 2b + 4 (in flight), 0032 2a-i + 2b. Step 3b: 0036 step 3a (`Dock`, `DockTab`; no longer optional: the rename lands early in lane W2). Lane W2, last spec.
 
@@ -37,22 +37,23 @@ Status: draft, amended after the advisor review (M2, M3, S2–S6, nice-to-haves)
 | [drain-run.md](drain-run.md) | cordon-all, eviction loop, backoff, wait, per-node timeout, cancel, multi-node, audit, dock tab, async |
 | [files-to-touch.md](files-to-touch.md) | files per step, doc updates |
 | [test-plan.md](test-plan.md) | fake transport (429, 201 Failure), pure state-machine tests, window tests, UAT denied path, ui-verifier |
+| [as-built.md](as-built.md) | where the code differs from the text, behavior notes, deviations, tests |
 
 ## Acceptance criteria
 
-- [ ] 1. Quality gate passes, plus the screenshot-feature clippy; no new `#[allow]`; `Cargo.lock` gains no package.
-- [ ] 2. Every test in [test-plan.md](test-plan.md) exists and passes offline; no test talks to a cluster.
-- [ ] 3. Eviction is `POST …/pods/{name}/eviction` with a `policy/v1` body, `deleteOptions.preconditions.uid`, optional `gracePeriodSeconds`; the response is decoded as `Status` and a non-`Success` body is an error; `kube::Api::evict` is not used.
-- [ ] 4. 429 maps to 0030 `TooManyRequests` on dry-run and commit; `retry_after` is `None` for "needs N healthy pods" and 10 s for "still being processed".
-- [ ] 5. Bulk cordon is a 0032 `Batch`: nodes already in the target state are skipped; every dry-run must pass.
-- [ ] 6. Taint edits send the full list with `metadata.resourceVersion` and keep `timeAdded`; system taints and kubelet labels are read-only; adding `NoExecute` is `Destructive`; a 409 Retry reopens the editor fresh.
-- [ ] 7. The drain dialog previews every pod with its verdict (finished before DaemonSet; pending skips PDBs); blocked first; a passing dry-run shows `Dry-run accepted`; a missing option disables Drain with a reason.
-- [ ] 8. Drain always opens the dialog; Destructive; PROD types the node name (one node) or the cluster name (several); every request goes through `checked_write`.
-- [ ] 9. Evictions retry on 429 with `min(30 s, max(retryAfter, 5 s·2^(n−1)))` until the per-node timeout (`node_started`).
-- [ ] 10. Cancel sends no new request, keeps nodes cordoned, never undoes an eviction, and records in-flight results.
-- [ ] 11. Multi-node: cordon all first, drain in order, stop at the first stuck node; one audit summary line per node reached; 429 refusals unaudited.
-- [ ] 12. UAT (debug build): Drain, bulk Cordon, Edit taints/labels disabled with `Not permitted: …`; C and D show the notice; trace shows only GETs and SSAR POSTs.
-- [ ] 13. ui-verifier: `--screen drain-dialog` matches W6 and `--screen drain-progress` shows the dock tab, no high-severity defect.
+- [x] 1. Quality gate passes, plus the screenshot-feature clippy; no new `#[allow]`; `Cargo.lock` gains no package.
+- [x] 2. Every test in [test-plan.md](test-plan.md) exists and passes offline; no test talks to a cluster. Two have no window test and are covered otherwise: `skip_pdbs_is_disabled_with_reason` (the screenshot) and `node_menu_items_dispatch_their_keys` (the items carry the key action; the key tests cover the arms).
+- [x] 3. Eviction is `POST …/pods/{name}/eviction` with a `policy/v1` body, `deleteOptions.preconditions.uid`, optional `gracePeriodSeconds`; the response is decoded as `Status` and a non-`Success` body is an error; `kube::Api::evict` is not used.
+- [x] 4. 429 maps to 0030 `TooManyRequests` on dry-run and commit; `retry_after` is `None` for "needs N healthy pods" and 10 s for "still being processed".
+- [x] 5. Bulk cordon is a 0032 `Batch`: nodes already in the target state are skipped; every dry-run must pass.
+- [x] 6. Taint edits send the full list with `metadata.resourceVersion` and keep `timeAdded`; system taints and kubelet labels are read-only; adding `NoExecute` is `Destructive`; a 409 Retry reopens the editor fresh.
+- [x] 7. The drain dialog previews every pod with its verdict (finished before DaemonSet; pending skips PDBs); blocked first; a passing dry-run shows `Dry-run accepted`; a missing option disables Drain with a reason.
+- [x] 8. Drain always opens the dialog; Destructive; PROD types the node name (one node) or the cluster name (several); every request goes through `checked_write`.
+- [x] 9. Evictions retry on 429 with `min(30 s, max(retryAfter, 5 s·2^(n−1)))` until the per-node timeout (`node_started`).
+- [x] 10. Cancel sends no new request, keeps nodes cordoned, never undoes an eviction, and records in-flight results.
+- [x] 11. Multi-node: cordon all first, drain in order, stop at the first stuck node; one audit summary line per node reached; 429 refusals unaudited.
+- [x] 12. UAT (debug build): Drain, bulk Cordon, Edit taints/labels disabled with `Not permitted: …`; C and D show the notice; trace shows only GETs and SSAR POSTs.
+- [x] 13. `--screen drain-dialog` matches W6 and `--screen drain-progress` shows the dock tab, no high-severity defect (screenshots `v87-*`, read by the coder; the ui-verifier pass is still to run).
 
 ## Open items
 

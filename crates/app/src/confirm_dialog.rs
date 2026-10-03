@@ -25,6 +25,7 @@ use crate::app_shell::batch_write::{
     BatchCommit, BatchExtras, BatchFailure, BatchIntent, ItemProgress, dry_run_progress,
     summarize_dry_runs,
 };
+use crate::app_shell::node_editor::{CHANGED_NOTICE, NodeEditKind};
 use crate::app_shell::object_delete::{
     delete_dry_run_progress, propagation_choices, with_propagation,
 };
@@ -584,8 +585,34 @@ impl ConfirmDialog {
         }
     }
 
-    fn retry(&mut self, cx: &mut Context<Self>) {
-        self.start_dry_run(cx);
+    /// Retry runs the dry-run again. The taint editor is the exception: its change carries the
+    /// `resourceVersion` it was read at, which cannot pass a second time, so Retry reads the node
+    /// again and reopens the editor fresh (the old rows could resurrect a removed taint).
+    fn retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let reopen = match &self.kind {
+            DialogKind::Write(intent) if intent.action == ResourceAction::EditTaints => Some((
+                intent.cluster.clone(),
+                intent.request.target().name().to_owned(),
+            )),
+            _ => None,
+        };
+        let (Some((cluster, node)), Some(shell)) = (reopen, self.shell.upgrade()) else {
+            self.start_dry_run(cx);
+            return;
+        };
+        self.close(window, cx);
+        window.defer(cx, move |window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.open_node_editor(
+                    NodeEditKind::Taints,
+                    &cluster,
+                    &node,
+                    Some(CHANGED_NOTICE.into()),
+                    window,
+                    cx,
+                );
+            });
+        });
     }
 
     /// A check that failed can be run again (a refusal for now, a transient error); a webhook that
@@ -970,7 +997,7 @@ impl ConfirmDialog {
                 .label("Retry")
                 .small()
                 .outline()
-                .on_click(cx.listener(|dialog, _, _, cx| dialog.retry(cx)))
+                .on_click(cx.listener(|dialog, _, window, cx| dialog.retry(window, cx)))
         });
         let note = (!matches!(self.kind, DialogKind::Unlock { .. })).then(|| {
             Checkbox::new("write-note")
@@ -1116,8 +1143,8 @@ impl ConfirmDialog {
         self.confirm(window, cx);
     }
 
-    pub(crate) fn press_retry(&mut self, cx: &mut Context<Self>) {
-        self.retry(cx);
+    pub(crate) fn press_retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.retry(window, cx);
     }
 
     pub(crate) fn choose_propagation_for_test(&mut self, index: usize, cx: &mut Context<Self>) {

@@ -14,6 +14,7 @@ use futures::future::join_all;
 use gpui_kit::{AppContext as _, Context, EntityId, Subscription, Task, Window};
 
 use super::AppShell;
+use super::leaving_work::LeavingWork;
 use super::write_flow::{CleanupOutcome, NodeShellCleanup, notify, run_cleanup};
 use crate::audit_log::{AuditEntry, AuditOutcome, append_audit};
 use crate::cluster_runtime::ClusterRuntime;
@@ -151,6 +152,34 @@ impl AppShell {
     /// for its delete. Otherwise it starts every delete, says so, and returns `false`; the window
     /// closes itself when the last one reports (each bounded by the request timeout).
     pub(crate) fn main_window_may_close(&mut self, cx: &mut Context<Self>) -> bool {
+        // A running drain is asked about first (spec 0034): leaving stops it, and its nodes stay
+        // cordoned. The answer starts the close again, which then does not ask a second time.
+        if !self.is_quit_confirmed {
+            let drains = self.running_drain_names_of(&self.view.clusters(), cx);
+            if !drains.is_empty() {
+                let work = LeavingWork {
+                    drains,
+                    ..LeavingWork::default()
+                };
+                self.confirm_leaving(
+                    work,
+                    |shell, cx| {
+                        shell.is_quit_confirmed = true;
+                        shell.stop_all_drains_now(cx);
+                        if shell.main_window_may_close(cx) {
+                            let handle = shell.window;
+                            cx.defer(move |cx| {
+                                let _ = cx.update_window(handle, |_, window, _| {
+                                    window.remove_window();
+                                });
+                            });
+                        }
+                    },
+                    cx,
+                );
+                return false;
+            }
+        }
         if self.node_shell_runs.is_idle() {
             return true;
         }
@@ -178,6 +207,7 @@ impl AppShell {
     /// are written synchronously, because the process may end before a delete reports, and a delete
     /// that does report appends its own line after.
     fn cleanup_for_quit(&mut self, cx: &mut Context<Self>) -> impl Future<Output = ()> + use<> {
+        self.stop_all_drains_now(cx);
         let waiting: Vec<_> = self.node_shell_runs.cleanups.drain().collect();
         for (_, cleanup) in waiting {
             self.begin_cleanup(cleanup, cx);

@@ -737,6 +737,9 @@ mod tests {
         for screen in [
             LaunchScreen::NodeShellConfirm,
             LaunchScreen::NodeShellConfirmStaging,
+            LaunchScreen::NodeTaintsEditor,
+            LaunchScreen::NodeLabelsEditor,
+            LaunchScreen::DrainDialog,
             LaunchScreen::LeftoverSweepFixture,
             LaunchScreen::ShellConfirmFixture,
         ] {
@@ -764,6 +767,7 @@ mod tests {
         for screen in [
             LaunchScreen::NodeShellTabFixture,
             LaunchScreen::DebugShellTabFixture,
+            LaunchScreen::DrainProgress,
         ] {
             for target in [TargetState::Loading, TargetState::Unavailable] {
                 assert!(

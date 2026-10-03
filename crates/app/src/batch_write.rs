@@ -602,7 +602,10 @@ impl AppShell {
     /// the gate of the rows' cluster first, then what the batch would do with them. A screen whose
     /// bulk actions are not shipped (Nodes) shows its labels off.
     pub(crate) fn bulk_buttons(&self, cx: &App) -> Vec<BulkButton> {
-        let mut buttons = self.workload_bulk_buttons(cx);
+        let mut buttons = match self.screen {
+            Screen::Nodes => self.node_bulk_buttons(cx),
+            _ => self.workload_bulk_buttons(cx),
+        };
         buttons.extend(self.delete_bulk_button(cx));
         buttons
     }
@@ -785,6 +788,10 @@ impl AppShell {
         if let ResourceAction::Delete(_) = action {
             let scope = self.checked_objects(cx);
             self.start_delete(scope, window, cx);
+            return;
+        }
+        if self.screen == Screen::Nodes {
+            self.run_node_bulk(action, window, cx);
             return;
         }
         match self.bulk_batch(action, BulkValue::Nothing, cx) {

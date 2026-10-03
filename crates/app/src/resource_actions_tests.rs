@@ -271,6 +271,75 @@ fn cordon_follows_the_gate_order() {
 }
 
 #[test]
+fn node_edits_and_uncordon_share_the_cordon_gate() {
+    let denied = known_denying(&[AccessCheck::PatchNodes]);
+    let allowed = known_denying(&[]);
+    for action in [
+        ResourceAction::Uncordon,
+        ResourceAction::EditTaints,
+        ResourceAction::EditLabels,
+    ] {
+        assert!(matches!(
+            action.gate(),
+            ActionGate::Mutating { checks, is_shipped: true } if checks == [AccessCheck::PatchNodes]
+        ));
+        assert_eq!(
+            reason(action_availability(action, &unlocked(&denied))),
+            "Not permitted: patch nodes",
+            "{action:?}"
+        );
+        assert_eq!(
+            reason(action_availability(
+                action,
+                &test_guard(
+                    &allowed,
+                    WriteLock::Locked,
+                    "dev-1",
+                    Environment::Development
+                )
+            )),
+            "dev-1 is read-only",
+            "{action:?}"
+        );
+        assert_eq!(
+            action_availability(action, &unlocked(&allowed)),
+            ActionAvailability::Enabled,
+            "{action:?}"
+        );
+    }
+}
+
+#[test]
+fn node_editors_are_offered_on_nodes_only_and_uncordon_has_no_key() {
+    assert_eq!(
+        subject_action(RowAction::EditTaints, &node_key()),
+        Some(ResourceAction::EditTaints)
+    );
+    assert_eq!(
+        subject_action(RowAction::EditLabels, &node_key()),
+        Some(ResourceAction::EditLabels)
+    );
+    assert_eq!(subject_action(RowAction::EditTaints, &pod_key()), None);
+    assert_eq!(subject_action(RowAction::EditLabels, &pod_key()), None);
+    // The C key resolves to Cordon, whose label follows the node; Uncordon is the bulk button's.
+    assert_eq!(
+        subject_action(RowAction::Cordon, &node_key()),
+        Some(ResourceAction::Cordon)
+    );
+    assert_eq!(ResourceAction::Uncordon.row_action(), RowAction::Cordon);
+}
+
+#[test]
+fn node_edits_are_changes_and_labelled_for_the_menu() {
+    assert_eq!(action_risk(ResourceAction::EditTaints), ActionRisk::Change);
+    assert_eq!(action_risk(ResourceAction::EditLabels), ActionRisk::Change);
+    assert_eq!(action_risk(ResourceAction::Uncordon), ActionRisk::Change);
+    assert_eq!(action_label(ResourceAction::EditTaints), "Edit taints");
+    assert_eq!(action_label(ResourceAction::EditLabels), "Edit labels");
+    assert_eq!(action_label(ResourceAction::Uncordon), "Uncordon");
+}
+
+#[test]
 fn unshipped_mutating_actions_say_a_later_version() {
     for access in [
         checking(),
@@ -278,13 +347,47 @@ fn unshipped_mutating_actions_say_a_later_version() {
         known_denying(&[]),
         known_denying(&AccessCheck::ALL),
     ] {
-        let action = ResourceAction::Drain;
+        // A kind that has no such action yet has no permission check either.
+        let action = ResourceAction::Scale(ObjectKind::Pod);
         assert_eq!(
             reason(action_availability(action, &unlocked(&access))),
             "Comes in a later version",
             "{action:?}"
         );
     }
+}
+
+#[test]
+fn drain_needs_eviction_and_cordon_rights_in_that_order() {
+    assert!(matches!(
+        ResourceAction::Drain.gate(),
+        ActionGate::Mutating { checks, is_shipped: true }
+            if checks == [AccessCheck::CreatePodEviction, AccessCheck::PatchNodes]
+    ));
+    let at = |denied: &[AccessCheck]| {
+        reason(action_availability(
+            ResourceAction::Drain,
+            &unlocked(&known_denying(denied)),
+        ))
+    };
+    assert_eq!(at(&AccessCheck::ALL), "Not permitted: create pods/eviction");
+    assert_eq!(at(&[AccessCheck::PatchNodes]), "Not permitted: patch nodes");
+    assert_eq!(
+        action_availability(ResourceAction::Drain, &unlocked(&known_denying(&[]))),
+        ActionAvailability::Enabled
+    );
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::Drain,
+            &test_guard(
+                &known_denying(&[]),
+                WriteLock::Locked,
+                "dev-1",
+                Environment::Development
+            )
+        )),
+        "dev-1 is read-only"
+    );
 }
 
 #[test]
@@ -1223,16 +1326,31 @@ fn key_availability_explains_a_pod_without_containers() {
 }
 
 #[test]
-fn key_availability_disables_unshipped_keys_with_the_later_version_reason() {
+fn key_availability_of_the_node_keys_follows_the_gate() {
     let access = known_denying(&[]);
-    let offered = [(RowAction::Drain, node_key())];
-    for (action, subject) in offered {
+    for action in [
+        RowAction::Drain,
+        RowAction::EditTaints,
+        RowAction::EditLabels,
+    ] {
+        assert!(
+            matches!(
+                availability(action, &node_key(), &access),
+                KeyAvailability::Run(_)
+            ),
+            "{action:?}"
+        );
         assert_eq!(
-            disabled_reason(availability(action, &subject, &access)),
-            "Comes in a later version",
+            availability(action, &pod_key(), &access),
+            KeyAvailability::NotOffered,
             "{action:?}"
         );
     }
+    let denied = known_denying(&[AccessCheck::CreatePodEviction]);
+    assert_eq!(
+        disabled_reason(availability(RowAction::Drain, &node_key(), &denied)),
+        "Not permitted: create pods/eviction"
+    );
     // Where a subject has no such action, the key is silent.
     assert_eq!(
         availability(RowAction::Cordon, &pod_key(), &access),
@@ -1356,6 +1474,8 @@ fn every_resource_action_has_a_row_action() {
         (ResourceAction::OpenNodeShell, node_key()),
         (ResourceAction::Cordon, node_key()),
         (ResourceAction::Drain, node_key()),
+        (ResourceAction::EditTaints, node_key()),
+        (ResourceAction::EditLabels, node_key()),
         (ResourceAction::CopyName, pod_key()),
         (ResourceAction::ViewYaml, pod_key()),
         (ResourceAction::EditYaml(ObjectKind::Pod), pod_key()),

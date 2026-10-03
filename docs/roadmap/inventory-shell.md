@@ -37,8 +37,8 @@
 | H2 | Filter chips (Namespace, Status, label query, "+ Filter") and `/` filter | Done | 0009 `filter_bar.rs`, `table_filter.rs` | — |
 | H3 | Columns ▾ (toggle columns), sort | Done | 0009 `table_view.rs`; saved per screen by 0024 | — |
 | H4 | Summary chips as filters (Nodes: Ready, NotReady, Cordoned, version skew) | Done | 0009 `filter_bar.rs`, `node_summary.rs` | — |
-| H5 | List-level buttons (Scale, Trigger now, Reveal all, Hide inactive, Hide system, …) | Done (bulk ones in the selection bar; New and node Edit labels missing, see the audit) | 0009, 0015, 0016, 0032, 0032b | read-only ones 0009/0015/0016; mutating 0032 (workload buttons Done) and 0032b (HPA Edit limits, PVC Expand, StorageClass Set default: Done) |
-| H6 | Row checkboxes, multi-select, floating selection bar | Done (node actions in build) | 0009 `row_selection.rs`, `table_selection.rs` | selection 0009; workload bulk actions Done (0032); HPA, PVC, and StorageClass bulk actions Done (0032b); bulk `Delete…` Done (0033); nodes 0034 |
+| H5 | List-level buttons (Scale, Trigger now, Reveal all, Hide inactive, Hide system, …) | Done (bulk ones in the selection bar; New missing, see the audit) | 0009, 0015, 0016, 0032, 0032b | read-only ones 0009/0015/0016; mutating 0032 (workload buttons Done) and 0032b (HPA Edit limits, PVC Expand, StorageClass Set default: Done) |
+| H6 | Row checkboxes, multi-select, floating selection bar | Done | 0009 `row_selection.rs`, `table_selection.rs` | selection 0009; workload bulk actions Done (0032); HPA, PVC, and StorageClass bulk actions Done (0032b); bulk `Delete…` Done (0033); nodes Done (0034) |
 | H7 | Virtualized table, themed status tones, muted namespace prefix | Done | 0003, 0005 | — |
 | H8 | Cluster column in multi-cluster mode | Done (Pods, Nodes, every kind screen) | 0027 `cluster_rows.rs`, `table_layout.rs` | Issues has none: it draws the primary cluster |
 | H9 | Row density 28 / 36 px | Missing | — | 0025 did not ship it; audit 0043 (Appearance) |
@@ -64,7 +64,7 @@
 | K4 | Workload log tabs (`deploy/…`), pod colors, container picker chips | Done | 0019 | — |
 | K5 | "+ ▾" new tab, drag to reorder, dashed max line, double-click reset, remembered height | Partial | 0019 ("+ ▾", drag to reorder) | dashed max line and double-click reset (0004 non-goals); height persistence: reserved key `dock.height` (0019 or 0025) |
 | K6 | Shell tabs (W8b shell pane) | Done | 0036 `shell_tab.rs`, `terminal_*.rs`, `shell_open.rs`; the allowed path awaits a write-capable cluster (risks R2) | — |
-| K7 | Drain progress tab (W6 note 5) | Missing | — | 0034 |
+| K7 | Drain progress tab (W6 note 5) | Done | 0034 (`DockTab::Drain`, Cancel, Uncordon, Close) | — |
 
 ## Status bar
 
@@ -79,7 +79,7 @@
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
 | P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Done (0029: own scorer, loaded lists only, row actions on the cursor row, `@` single switch, Tab moves the cursor only; Ctrl ⏎ Scale argument added by 0032; no action × search-hit pairs, no carried namespace, no match highlighting: audit, 0029 step 2) | `command_palette.rs`, `palette_search.rs`, `fuzzy_score.rs` |
-| P2 | Keyboard map (22 bindings) and `?` cheat sheet | Done (0028; `:` and Ctrl K bound by 0029), mutating letters run since 0031–0037 except D (0034, in build); the menu's A (Attach) is unbound (audit 0040) | `keymap.rs`, `shortcut_sheet.rs` |
+| P2 | Keyboard map (22 bindings) and `?` cheat sheet | Done (0028; `:` and Ctrl K bound by 0029), mutating letters run since 0031–0037; the menu's A (Attach) is unbound (audit 0040) | `keymap.rs`, `shortcut_sheet.rs` |
 | S1 | Settings window (W2) as a separate OS window, single instance | Done | 0025 |
 | S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (no drag order) | 0025 |
 | S3 | Add cluster: import file, watch folder, paste YAML | Partial (no watch folder) | 0025 |

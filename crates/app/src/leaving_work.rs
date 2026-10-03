@@ -28,6 +28,8 @@ pub(crate) struct LeavingWork {
     pub(crate) unsaved_edit: Option<String>,
     /// Open node shells: each pod is deleted with its tab.
     pub(crate) node_shells: usize,
+    /// The clusters (by display name) with a drain running: it stops, and its nodes stay cordoned.
+    pub(crate) drains: Vec<SharedString>,
 }
 
 impl LeavingWork {
@@ -35,6 +37,7 @@ impl LeavingWork {
         self.shells == 0
             && self.batches == 0
             && self.node_shells == 0
+            && self.drains.is_empty()
             && self.unsaved_edit.is_none()
     }
 
@@ -65,6 +68,11 @@ impl LeavingWork {
                 "{count} node shells will close; their pods are deleted"
             )),
         }
+        for cluster in &self.drains {
+            lines.push(format!(
+                "A drain on {cluster} will stop; its nodes stay cordoned"
+            ));
+        }
         lines
     }
 }
@@ -78,6 +86,7 @@ impl AppShell {
         LeavingWork {
             shells: self.dock.read(cx).shell_count_of(leaving, cx),
             node_shells: self.dock.read(cx).node_shell_count_of(leaving, cx),
+            drains: self.running_drain_names_of(leaving, cx),
             batches: leaving
                 .iter()
                 .filter(|cluster| self.running_batches.contains(cluster))

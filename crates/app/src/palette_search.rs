@@ -237,7 +237,7 @@ impl<'a> PaletteInput<'a> {
 }
 
 /// The row actions in the order of the shortcut sheet.
-const ROW_ACTIONS: [RowAction; 19] = [
+const ROW_ACTIONS: [RowAction; 21] = [
     RowAction::ViewLogs,
     RowAction::ViewYaml,
     RowAction::CopyName,
@@ -245,6 +245,8 @@ const ROW_ACTIONS: [RowAction; 19] = [
     RowAction::PortForward,
     RowAction::Cordon,
     RowAction::Drain,
+    RowAction::EditTaints,
+    RowAction::EditLabels,
     RowAction::EditYaml,
     RowAction::RestartRollout,
     RowAction::Scale,

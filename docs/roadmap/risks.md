@@ -18,4 +18,4 @@
 | `nodes/proxy` grants more than stats (kubelet APIs) | Fixed allow-list of GET paths (`/stats/summary`, `/logs/…`) in the cluster crate; read-only grep extended |
 | Persistence outside the project folder conflicts with agent rules | `--config-dir` override is mandatory in every agent run (C2) |
 | Unknown environment of UAT context hides prod-style guardrails | C5 default STG for unknown; Settings lets the user set it |
-| Drain is long-running and partially failing | Dock progress tab, cancel, stop on first stuck node, resumable state shown (0034) |
+| Drain is long-running and partially failing | Dock progress tab, cancel, stop on first stuck node, a per-node timeout, one summary audit line per node (0034, built); no resume after a restart: the nodes stay cordoned and the next drain starts fresh |

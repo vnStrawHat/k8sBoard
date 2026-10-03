@@ -52,8 +52,19 @@ fn bulk_actions_follow_the_wireframe_with_their_actions() {
         action_of(Screen::Kind(ResourceKind::CronJobs), "Suspend"),
         Some(ResourceAction::SuspendCronJob)
     );
-    // The Nodes buttons belong to 0034: they carry no action yet.
-    assert_eq!(action_of(Screen::Nodes, "Cordon"), None);
+    // The Nodes buttons are spec 0034's.
+    assert_eq!(
+        action_of(Screen::Nodes, "Cordon"),
+        Some(ResourceAction::Cordon)
+    );
+    assert_eq!(
+        action_of(Screen::Nodes, "Uncordon"),
+        Some(ResourceAction::Uncordon)
+    );
+    assert_eq!(
+        action_of(Screen::Nodes, "Drain…"),
+        Some(ResourceAction::Drain)
+    );
 }
 
 #[test]

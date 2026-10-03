@@ -52,6 +52,7 @@ fn taint(key: &str, value: Option<&str>, effect: &str) -> NodeTaint {
         key: key.to_owned(),
         value: value.map(str::to_owned),
         effect: effect.to_owned(),
+        time_added: None,
     }
 }
 
@@ -448,4 +449,80 @@ fn node_condition_message_hides_url_userinfo() {
         message.as_deref(),
         Some("pull from https://<hidden>@registry.example.com/v2 failed")
     );
+}
+
+mod edit {
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::fake_api::FakeApi;
+    use crate::object_write::WritePolicy;
+
+    fn node_json() -> Value {
+        json!({
+            "apiVersion": "v1", "kind": "Node",
+            "metadata": {
+                "name": "wk-04", "resourceVersion": "9912",
+                "labels": {"kubernetes.io/hostname": "wk-04", "team": "infra"},
+            },
+            "spec": {"taints": [
+                {"key": "dedicated", "value": "ingress", "effect": "NoSchedule"},
+                {
+                    "key": "node.kubernetes.io/unreachable", "effect": "NoExecute",
+                    "timeAdded": "2026-10-02T08:00:00Z",
+                },
+            ]},
+        })
+    }
+
+    #[test]
+    fn taint_keeps_time_added() {
+        let node: Node = serde_json::from_value(node_json()).expect("a node");
+        let taints = node_summary(&node).taints;
+        assert_eq!(taints[0].time_added, None);
+        assert_eq!(
+            taints[1].time_added,
+            Some("2026-10-02T08:00:00Z".parse().expect("a timestamp"))
+        );
+    }
+
+    #[tokio::test]
+    async fn node_for_edit_reads_taints_labels_and_version() {
+        let (connection, api) =
+            FakeApi::connection(WritePolicy::Blocked, |_| (200, node_json().to_string()));
+        let edit = connection.node_for_edit("wk-04").await.expect("the node");
+        assert_eq!(edit.resource_version, "9912");
+        assert_eq!(edit.taints.len(), 2);
+        assert_eq!(edit.labels.get("team").map(String::as_str), Some("infra"));
+        let requests = api.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/api/v1/nodes/wk-04");
+    }
+
+    #[tokio::test]
+    async fn node_without_a_resource_version_is_refused() {
+        let body = json!({"apiVersion": "v1", "kind": "Node", "metadata": {"name": "wk-04"}});
+        let (connection, _api) =
+            FakeApi::connection(WritePolicy::Blocked, move |_| (200, body.to_string()));
+        let error = connection
+            .node_for_edit("wk-04")
+            .await
+            .expect_err("no version");
+        assert!(
+            matches!(error, ClusterError::UnexpectedResponse { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_for_edit_refuses_an_unsafe_name_without_a_request() {
+        let (connection, api) =
+            FakeApi::connection(WritePolicy::Blocked, |_| (200, node_json().to_string()));
+        connection
+            .node_for_edit("a/../b")
+            .await
+            .expect_err("an unsafe name");
+        assert!(api.requests().is_empty());
+    }
 }

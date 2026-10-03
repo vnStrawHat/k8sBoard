@@ -662,8 +662,8 @@ fn a_conflict_keeps_the_dialog_with_a_retry_that_checks_again(cx: &mut TestAppCo
         "no second commit without a fresh dry-run"
     );
     // Retry runs the dry-run again, which lifts the block.
-    t.fixture.with_window(cx, |_, cx| {
-        dialog.update(cx, |dialog, cx| dialog.press_retry(cx))
+    t.fixture.with_window(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.press_retry(window, cx))
     });
     t.wait_for("the second dry-run", cx, |_| writes(&t.stg_api).len() == 3);
     assert!(writes(&t.stg_api)[2].has_query("dryRun", "All"));

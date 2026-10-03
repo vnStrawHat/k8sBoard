@@ -12,17 +12,18 @@ use gpui_kit::{
     Window,
 };
 
+use super::node_editor::NodeEditKind;
 use super::resource_edit_flow::RowCheck;
 use super::{AppShell, Screen, focus_table};
 use crate::dock::{DockMode, TabStep};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
-    CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditYaml, ExpandClaim,
-    LeaveInput, NextContainer, NextDockTab, OpenDrawer, OpenShell, PauseRollout, PortForward,
-    PreviousContainer, PreviousDockTab, RerunJob, RestartRollout, RollBack, Scale, SelectFirstRow,
-    SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage, SelectPreviousRow,
-    SetDefaultStorageClass, SuspendCronJob, ToggleDock, ToggleDockZoom, ToggleReadOnly,
-    TriggerCronJob, ViewLogs, ViewYaml,
+    CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels, EditTaints,
+    EditYaml, ExpandClaim, LeaveInput, NextContainer, NextDockTab, OpenDrawer, OpenShell,
+    PauseRollout, PortForward, PreviousContainer, PreviousDockTab, RerunJob, RestartRollout,
+    RollBack, Scale, SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow,
+    SelectPreviousPage, SelectPreviousRow, SetDefaultStorageClass, SuspendCronJob, ToggleDock,
+    ToggleDockZoom, ToggleReadOnly, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::live_sections::loaded_replica_sets;
 use crate::pod_drawer::{container_display_order, selected_container_index};
@@ -189,6 +190,8 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_row_key::<PortForward>(root, RowAction::PortForward, cx);
     let root = on_row_key::<Cordon>(root, RowAction::Cordon, cx);
     let root = on_row_key::<Drain>(root, RowAction::Drain, cx);
+    let root = on_row_key::<EditTaints>(root, RowAction::EditTaints, cx);
+    let root = on_row_key::<EditLabels>(root, RowAction::EditLabels, cx);
     let root = on_row_key::<EditYaml>(root, RowAction::EditYaml, cx);
     let root = on_row_key::<RestartRollout>(root, RowAction::RestartRollout, cx);
     let root = on_row_key::<Scale>(root, RowAction::Scale, cx);
@@ -539,8 +542,25 @@ impl AppShell {
                     self.start_cordon(&subject.cluster, name, None, window, cx);
                 }
             }
-            // Unreachable while gated; the owning spec (0034) wires it.
-            ResourceAction::Drain => {}
+            // Always the dialog, on the cursor node's own cluster; nothing runs from the key.
+            ResourceAction::Drain => {
+                if let ResourceKey::Node { name } = &subject.key {
+                    self.start_drain(&subject.cluster, std::slice::from_ref(name), window, cx);
+                }
+            }
+            // Only the bulk Uncordon button uses it; the key resolves a node to `Cordon`.
+            ResourceAction::Uncordon => {}
+            // The editors of the cursor node, in the cursor's own cluster (spec 0034).
+            ResourceAction::EditTaints | ResourceAction::EditLabels => {
+                if let ResourceKey::Node { name } = &subject.key {
+                    let kind = if action == ResourceAction::EditTaints {
+                        NodeEditKind::Taints
+                    } else {
+                        NodeEditKind::Labels
+                    };
+                    self.open_node_editor(kind, &subject.cluster, name, None, window, cx);
+                }
+            }
             // Opens the editor on the cursor row, in its own cluster (spec 0031).
             ResourceAction::EditYaml(_) => self.open_edit(subject, window, cx),
             // The cursor row, or the ticked set when it is one of several (spec 0033).

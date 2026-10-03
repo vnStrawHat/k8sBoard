@@ -604,7 +604,7 @@ pub(crate) fn retryable_text(error: &CheckedWriteError) -> Option<String> {
 
 /// The intent of Cordon, or Uncordon when the node is already cordoned: the label follows the
 /// node's scheduling. Cordon is a `Change` and types the cluster name.
-fn cordon_intent(
+pub(crate) fn cordon_intent(
     cluster: &ClusterRef,
     cluster_name: &str,
     node: &str,

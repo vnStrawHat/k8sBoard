@@ -42,12 +42,12 @@
 | W5-2 | CPU and Memory bar columns | Done | 0010 | — |
 | W5-3 | Summary chips as filters, version-skew highlight, Columns ▾ | Done | 0009 `filter_bar.rs`, `node_summary.rs` | — |
 | W5-4 | Node drawer: conditions, allocatable used, system info | Done | 0003, 0008, 0010 (allocatable used) | — |
-| W5-5 | Menu: node shell, Cordon, Drain…, Edit taints/labels, View pods on node, View YAML, Copy name | Partial | Open node shell (0037: always types the node name, off by default for PROD), cordon (0030), View pods on node (0009), View YAML (0007), Copy name; drain disabled | Drain…, Edit taints/labels → 0034 |
-| W5-6 | Multi-select + selection bar (Cordon, Uncordon, Drain…) | Partial (selection and bar built; actions disabled) | 0009 `row_selection.rs` | 0034 (in build) |
+| W5-5 | Menu: node shell, Cordon, Drain…, Edit taints/labels, View pods on node, View YAML, Copy name | Partial | Open node shell (0037: always types the node name, off by default for PROD), cordon (0030), Drain… and Edit taints/labels (0034, gated on `create pods/eviction` and `patch nodes`), View pods on node (0009), View YAML (0007), Copy name | — |
+| W5-6 | Multi-select + selection bar (Cordon, Uncordon, Drain…) | Done | bulk Cordon/Uncordon as a 0032 batch, `Drain…` over the ticked nodes, header `Edit labels` for one node (0034) | — |
 | W5-7 | Dock tabs "node shell (debug pod)" and "logs · kubelet" | Partial | `›_ node shell · wk-03 (debug pod)` tab (0037) | `logs · kubelet` deferred (0019 decision 24) |
-| W6-1 | Drain dialog: 3 steps, kubectl-flag options with consequences, grace, timeout | Missing | — | 0034 |
-| W6-2 | Per-pod eviction preview from PDBs (blocked first) | Missing | — | 0034 (preview logic is read-only, built on 0013) |
-| W6-3 | Typed node-name confirm, "Cordon only", progress in dock, cancel | Missing | — | 0030, 0034 |
+| W6-1 | Drain dialog: 3 steps, kubectl-flag options with consequences, grace, timeout | Done | 0034 (`--screen drain-dialog`); Skip PodDisruptionBudgets disabled until a delete operation exists (0033) | — |
+| W6-2 | Per-pod eviction preview from PDBs (blocked first) | Done | 0034 (built on 0013's `disruption_state`, with the server dry-run answers) | — |
+| W6-3 | Typed node-name confirm, "Cordon only", progress in dock, cancel | Done | 0030, 0034 (`--screen drain-progress`) | — |
 
 ## Edit YAML (W10)
 

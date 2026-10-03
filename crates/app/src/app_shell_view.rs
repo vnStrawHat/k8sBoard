@@ -169,6 +169,8 @@ impl AppShell {
     /// subject is there. The returned slot is dropped by the caller once the delegates let go.
     fn release_slot(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) -> Option<ViewSlot> {
         self.close_edit_of(cluster, cx);
+        // A drain cannot outlive the session it runs on: it stops, with its summary lines.
+        self.stop_drains_of(std::slice::from_ref(cluster), cx);
         if self
             .selected
             .as_ref()

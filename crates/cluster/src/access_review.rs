@@ -91,6 +91,8 @@ pub enum AccessCheck {
     PatchHorizontalPodAutoscalers,
     PatchPersistentVolumeClaims,
     PatchStorageClasses,
+    /// Drain (0034): `create pods/eviction`, namespaced.
+    CreatePodEviction,
     /// Edit YAML (0031): `update` on the kind's resource. Reviewed lazily per kind, so it is not in
     /// `ALL`.
     Update(ObjectKind),
@@ -109,7 +111,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 53] = [
+    pub const ALL: [AccessCheck; 54] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::GetPodExec,
@@ -163,6 +165,7 @@ impl AccessCheck {
         Self::PatchHorizontalPodAutoscalers,
         Self::PatchPersistentVolumeClaims,
         Self::PatchStorageClasses,
+        Self::CreatePodEviction,
     ];
 
     fn target(self) -> CheckTarget {
@@ -248,6 +251,7 @@ impl AccessCheck {
                 ("patch", "", "persistentvolumeclaims", None, true)
             }
             Self::PatchStorageClasses => ("patch", "storage.k8s.io", "storageclasses", None, false),
+            Self::CreatePodEviction => ("create", "", "pods", Some("eviction"), true),
             Self::Update(kind) => {
                 let (group, resource) = kind.resource();
                 ("update", group, resource, None, kind.is_namespaced())
@@ -696,9 +700,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 53);
+        assert_eq!(AccessCheck::ALL.len(), 54);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 53);
+        assert_eq!(distinct.len(), 54);
     }
 
     #[test]
@@ -1068,7 +1072,22 @@ mod tests {
                 "patch horizontalpodautoscalers",
                 "patch persistentvolumeclaims",
                 "patch storageclasses",
+                "create pods/eviction",
             ]
+        );
+    }
+
+    #[test]
+    fn eviction_check_targets_the_subresource() {
+        let attributes = resource_attributes(AccessCheck::CreatePodEviction, Some("payments"));
+        assert_eq!(attributes.verb.as_deref(), Some("create"));
+        assert_eq!(attributes.group.as_deref(), Some(""));
+        assert_eq!(attributes.resource.as_deref(), Some("pods"));
+        assert_eq!(attributes.subresource.as_deref(), Some("eviction"));
+        assert_eq!(attributes.namespace.as_deref(), Some("payments"));
+        assert_eq!(
+            AccessCheck::CreatePodEviction.to_string(),
+            "create pods/eviction"
         );
     }
 
@@ -1190,7 +1209,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 53);
+        assert_eq!(AccessCheck::ALL.len(), 54);
     }
 
     #[test]
