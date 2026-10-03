@@ -22,6 +22,8 @@ mod daemon_set;
 mod deployment;
 mod disruption_budget;
 mod dns_name;
+mod edit_placeholders;
+mod edit_preview;
 mod endpoint_slice;
 mod event;
 #[cfg(any(test, feature = "test-support"))]
@@ -40,6 +42,7 @@ mod network_policy;
 mod network_policy_traffic;
 mod node;
 mod object_count;
+mod object_edit;
 mod object_write;
 mod object_yaml;
 mod persistent_volume;
@@ -63,6 +66,7 @@ mod service_account;
 mod stateful_set;
 mod storage_class;
 mod workload;
+mod workload_write_bodies;
 
 pub use access_review::{
     AccessCheck, AccessDecision, AccessReport, AccessReview, NamespaceAccess, RulesReview,
@@ -91,6 +95,7 @@ pub use custom_resource_definition::{
 pub use daemon_set::DaemonSetSummary;
 pub use deployment::DeploymentSummary;
 pub use disruption_budget::{BlockCause, DisruptionState, PodDisruptionBudgetSummary};
+pub use edit_preview::{EditCheck, EditPreview, FieldChange, FieldPath};
 pub use endpoint_slice::{EndpointPort, EndpointSliceSummary, EndpointSummary};
 pub use event::{
     ChangeEventKind, EVENT_LIMIT, EventFilter, EventSummary, EventType, InvolvedObject,
@@ -120,6 +125,7 @@ pub use node::{
     ConditionStatus, NodeAddress, NodeCondition, NodeReadiness, NodeResource, NodeScheduling,
     NodeStatus, NodeSummary, NodeSystemInfo, NodeTaint,
 };
+pub use object_edit::{EditBase, EditError, ObjectEdit};
 pub use object_write::{
     ChangedField, WriteEffect, WriteError, WriteMode, WriteOperation, WriteOutcome, WritePolicy,
     WriteRequest,

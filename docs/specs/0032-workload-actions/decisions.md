@@ -30,7 +30,7 @@
 | 24 | Batch Roll back stays disabled | each Deployment needs its own revision choice |
 | 25 | `BatchExtras` carries per-action dialog extras; 0032 uses `None`; 0033 adds `Delete` (NotFound = already gone), which may rebuild items and rerun dry-runs | one bulk mechanism instead of a per-action kind |
 | 26 | (user) The roadmap's object actions moved to 0032b; Certificate Renew moved to 0018 | W7 shows only labels for them; Renew is a cert-manager CR action |
-| 27 | 422 on Roll back is `Conflict` (a failed `test` op means the Deployment was replaced) (S7) | the user needs "reload", not "invalid" |
+| 27 | 422 on Roll back is `Conflict` (a failed `test` op means the Deployment was replaced) (S7) **only when the status `reason` is not `Invalid`**; a 422 with reason `Invalid` is `Invalid { message: fixed text, fields }` (changed 2026-10-03 by the orchestrator, security review S2) | the user needs "reload", not "invalid", but a template the server finds invalid is not a replaced Deployment; no server text reaches the UI either way |
 | 28 | 422 on Trigger now and Re-run shows field paths only | the server text can quote env literals of the template |
 | 29 | Implementation is split into 2a-i (gate, simple actions, `checked_write` use), 2a-ii (Scale popover, palette), 2a-iii (Roll back), 2b (Batch) (S5) | each step reviewable and gated on its own |
 | 30 | (refresh 2026-10-03) The 0028 key layer, the menu hints, and the palette name a kind-less `RowAction`; `subject_action(row, subject) -> Option<ResourceAction>` resolves the carried kind (actions-ui.md) | a kind-carrying `ResourceAction` has no value before the subject is known; no placeholder kind, one exhaustive map per layer |

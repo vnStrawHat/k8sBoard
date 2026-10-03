@@ -107,7 +107,7 @@ pub(crate) fn audit_entry(
         .changed_fields()
         .into_iter()
         .map(|field| AuditField {
-            path: field.path.to_owned(),
+            path: field.path.into_owned(),
             value: field.value,
         })
         .collect();

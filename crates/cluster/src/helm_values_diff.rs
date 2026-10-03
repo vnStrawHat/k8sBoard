@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use crate::edit_placeholders::HIDDEN;
 use crate::helm_release_detail::HelmText;
-use crate::object_yaml::HIDDEN;
 
 // ponytail: fixed caps; add paging or a per-subtree summary if users hit them.
 pub(crate) const DIFF_LIMIT: usize = 500;

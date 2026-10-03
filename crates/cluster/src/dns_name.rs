@@ -7,6 +7,19 @@ pub(crate) fn is_dns_subdomain(name: &str) -> bool {
     (1..=253).contains(&name.len()) && name.split('.').all(is_dns_label)
 }
 
+/// A name that is one path segment, for the RBAC kinds, whose names use `:` (`system:aggregate-to-admin`):
+/// 1-253 printable ASCII characters (no space, control, or non-ASCII character), not `.` or `..`, and
+/// none of `/ \ % ? #`. kube does not percent-encode a name, so the characters that change the path
+/// are refused, and ASCII only keeps look-alike characters out of an object name.
+pub(crate) fn is_path_segment_name(name: &str) -> bool {
+    (1..=253).contains(&name.len())
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_graphic() && !matches!(ch, '/' | '\\' | '%' | '?' | '#'))
+}
+
 fn is_dns_label(label: &str) -> bool {
     (1..=63).contains(&label.len())
         && label

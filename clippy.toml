@@ -26,6 +26,15 @@ disallowed-methods = [
     { path = "kube::Api::evict", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
     { path = "kube::Api::patch_metadata", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
     { path = "kube::Api::patch_ephemeral_containers", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    # Helpers that patch inside kube: `restart` writes `kube.kubernetes.io/restartedAt`, not the kubectl
+    # annotation (use `RestartRollout`); `cordon` and `uncordon` bypass `SetNodeSchedulable`.
+    { path = "kube::Api::restart", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::cordon", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::uncordon", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    # Two more helpers that write inside kube: a token request mints a ServiceAccount token, an approval
+    # approves a CertificateSigningRequest.
+    { path = "kube::Api::create_token_request", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
+    { path = "kube::Api::patch_approval", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
     { path = "kube::Api::entry", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
     { path = "kube::api::entry::OccupiedEntry::commit", reason = "mutating call: use ClusterConnection::write (spec 0030)" },
     { path = "kube::runtime::events::Recorder::publish", reason = "mutating call: use ClusterConnection::write (spec 0030)" },

@@ -18,10 +18,11 @@ use crate::connection::{ClusterConnection, ClusterError};
 use crate::custom_resource_definition::{
     ColumnType, CustomResourceType, PrinterColumn, ResourceScope, custom_api_resource,
 };
+use crate::edit_placeholders::HIDDEN;
 use crate::namespace::NamespaceScope;
 use crate::node::ConditionStatus;
 use crate::object_yaml::{
-    HIDDEN, ObjectRef, is_secret_kind, mask_custom_object, mask_manifest_annotations,
+    ObjectRef, is_secret_kind, mask_custom_object, mask_manifest_annotations,
 };
 use crate::resource_watch::{WatchUpdate, selected_summary_watch};
 use crate::workload::label_terms;

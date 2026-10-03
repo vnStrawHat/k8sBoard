@@ -41,16 +41,16 @@ Status: draft, amended after the advisor review (M1–M3, S1–S9, nice-to-haves
 
 ## Acceptance criteria
 
-- [ ] 1. Quality gate passes, plus the screenshot-feature clippy. No new `#[allow]`; `Cargo.lock` gains no package.
-- [ ] 2. Every test named in [test-plan.md](test-plan.md) exists and passes offline; no test talks to a cluster.
-- [ ] 3. `allow_list_matches_the_operations` pins method, path, query, content type, and body of every new operation; Trigger now has `controller: true` and no `blockOwnerDeletion`.
-- [ ] 4. `ClusterConnection::write` is called only from `checked_write`; clippy forbids `kube::Api::{restart, cordon, uncordon}`.
+- [ ] 1. (step 1: the gate passes, `Cargo.lock` gains no package, no new `#[allow]`; 2a-i onward pending) Quality gate passes, plus the screenshot-feature clippy. No new `#[allow]`; `Cargo.lock` gains no package.
+- [ ] 2. (step 1 done; steps 2a-i to 2b pending) Every test named in [test-plan.md](test-plan.md) exists and passes offline; no test talks to a cluster.
+- [x] 3. `allow_list_matches_the_operations` pins method, path, query, content type, and body of every new operation; Trigger now has `controller: true` and no `blockOwnerDeletion`.
+- [ ] 4. (clippy half done: `Api::{restart, cordon, uncordon}` are denied, each proven in a scratch crate; `checked_write` waits for 2a-i) `ClusterConnection::write` is called only from `checked_write`; clippy forbids `kube::Api::{restart, cordon, uncordon}`.
 - [ ] 5. Each action is gated by its own `AccessCheck` for the row's kind through the two-argument `action_availability`, on the row's own slot (never the primary); then `row_block` (paused, revisions, current template). Menu, key, and palette run the same `run_available_row_key` arm.
-- [ ] 6. Restart sets `kubectl.kubernetes.io/restartedAt` (whole-second UTC); dry-run and commit bodies are byte-identical.
+- [x] 6. Restart sets `kubectl.kubernetes.io/restartedAt` (whole-second UTC); dry-run and commit bodies are byte-identical.
 - [ ] 7. Scale to 0 is `Destructive`, the rest `Change`; creates report `created_name` in the notice and audit.
 - [ ] 8. Menu `Scale…`, ⇧S, palette ⏎ and the bulk button open the one Scale popover; `Ctrl ⏎` gives the palette argument; there is no drawer input.
 - [ ] 9. Batch: one cluster, ≤ 50, always a dialog, every dry-run must pass, sequential commits through `checked_write`, stop on `Blocked`, one audit line per commit.
-- [ ] 10. Audit values never contain a template, env, or Job spec; 422 on creates shows field paths only; 422 on Roll back is `Conflict`.
+- [ ] 10. (crate half done: creates keep field paths, Roll back 422 is `Conflict`; the audit half waits for 2a-i) Audit values never contain a template, env, or Job spec; 422 on creates shows field paths only; 422 on Roll back is `Conflict`.
 - [ ] 11. UAT (debug build, no `K8SBOARD_ALLOW_WRITES`): every 0032 item disabled with `Not permitted: {check}`; R and ⇧S show the notice; trace has only GETs and SSAR POSTs.
 - [ ] 12. ui-verifier: `--screen scale-popover`, `--screen scale-confirm`, `--screen restart-bulk-confirm` match W7/W10, no high-severity defect.
 

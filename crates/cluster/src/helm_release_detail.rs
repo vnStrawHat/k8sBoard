@@ -13,14 +13,15 @@ use serde_saphyr::budget::Budget;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::connection::{ClusterConnection, ClusterError};
+use crate::edit_placeholders::HIDDEN;
 use crate::helm_release::{
     ChartMetadata, HelmChart, HelmRevisionRef, PayloadIssue, RELEASE_DATA_KEY, RELEASE_TYPE,
     release_json,
 };
 use crate::helm_values_diff::{HelmValuesDiff, ValueVisibility, values_diff};
 use crate::object_yaml::{
-    EnvValues, HIDDEN, mask_env_values, mask_manifest_annotations, mask_secret_data,
-    with_hidden_header, yaml_text,
+    EnvValues, mask_env_values, mask_manifest_annotations, mask_secret_data, with_hidden_header,
+    yaml_text,
 };
 
 const DETAIL_ACTION: &str = "reading a helm release";

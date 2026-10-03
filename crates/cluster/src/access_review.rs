@@ -15,6 +15,7 @@ use crate::connection::{ClusterConnection, ClusterError};
 use crate::custom_resource_definition::{CustomResourceType, ResourceScope};
 use crate::metrics_api::METRICS_GROUP;
 use crate::namespace::NamespaceScope;
+use crate::object_yaml::ObjectKind;
 use crate::rbac_evaluation::{AccessRequest, RequestTarget, ResourceRequest};
 use crate::role::RbacRule;
 
@@ -60,6 +61,19 @@ pub enum AccessCheck {
     ListCustomResourceDefinitions,
     /// Cordon and uncordon (0030): the one permission of the first write.
     PatchNodes,
+    /// Scale a Deployment (0032): `patch deployments/scale`.
+    PatchDeploymentScale,
+    PatchStatefulSetScale,
+    /// Restart, pause, resume, and roll back a Deployment (0032).
+    PatchDeployments,
+    PatchStatefulSets,
+    PatchDaemonSets,
+    PatchCronJobs,
+    /// Trigger now and Re-run create a Job (0032).
+    CreateJobs,
+    /// Edit YAML (0031): `update` on the kind's resource. Reviewed lazily per kind, so it is not in
+    /// `ALL`.
+    Update(ObjectKind),
 }
 
 /// The API resource a check asks about.
@@ -73,7 +87,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 36] = [
+    pub const ALL: [AccessCheck; 43] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::CreatePodExec,
@@ -110,6 +124,13 @@ impl AccessCheck {
         Self::ListClusterRoleBindings,
         Self::ListCustomResourceDefinitions,
         Self::PatchNodes,
+        Self::PatchDeploymentScale,
+        Self::PatchStatefulSetScale,
+        Self::PatchDeployments,
+        Self::PatchStatefulSets,
+        Self::PatchDaemonSets,
+        Self::PatchCronJobs,
+        Self::CreateJobs,
     ];
 
     fn target(self) -> CheckTarget {
@@ -168,6 +189,17 @@ impl AccessCheck {
                 false,
             ),
             Self::PatchNodes => ("patch", "", "nodes", None, false),
+            Self::PatchDeploymentScale => ("patch", "apps", "deployments", Some("scale"), true),
+            Self::PatchStatefulSetScale => ("patch", "apps", "statefulsets", Some("scale"), true),
+            Self::PatchDeployments => ("patch", "apps", "deployments", None, true),
+            Self::PatchStatefulSets => ("patch", "apps", "statefulsets", None, true),
+            Self::PatchDaemonSets => ("patch", "apps", "daemonsets", None, true),
+            Self::PatchCronJobs => ("patch", "batch", "cronjobs", None, true),
+            Self::CreateJobs => ("create", "batch", "jobs", None, true),
+            Self::Update(kind) => {
+                let (group, resource) = kind.resource();
+                ("update", group, resource, None, kind.is_namespaced())
+            }
         };
         CheckTarget {
             verb,
@@ -207,7 +239,8 @@ pub struct AccessReview {
     pub decision: AccessDecision,
 }
 
-/// One review per `AccessCheck::ALL` entry, in that order.
+/// One review per reviewed check, in the order they were asked (`AccessCheck::ALL` for
+/// `review_access`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessReport {
     pub reviews: Vec<AccessReview>,
@@ -238,11 +271,13 @@ impl AccessReport {
             .any(|review| review.check == check && review.decision == AccessDecision::Allowed)
     }
 
-    /// One review per check, in `AccessCheck::ALL` order: Allowed only if allowed in every
-    /// report that contains it; else the first denial.
-    pub(crate) fn all_of(reports: Vec<AccessReport>) -> AccessReport {
-        let reviews = AccessCheck::ALL
-            .into_iter()
+    /// One review per entry of `checks` (the list that was reviewed), in that order: Allowed only
+    /// if allowed in every report that contains it; else the first denial. A check no report
+    /// contains is left out.
+    pub(crate) fn all_of(checks: &[AccessCheck], reports: Vec<AccessReport>) -> AccessReport {
+        let reviews = checks
+            .iter()
+            .copied()
             .filter_map(|check| {
                 let mut decisions = reports
                     .iter()
@@ -272,13 +307,24 @@ impl ClusterConnection {
     /// one namespace at a time (22 x N + 4 requests); a check is allowed only when every
     /// namespace allows it. That gates menus, it never filters data.
     pub async fn review_access(&self, scope: NamespaceScope) -> Result<AccessReport, ClusterError> {
+        self.review_access_for(&AccessCheck::ALL, scope).await
+    }
+
+    /// `review_access` over a given list, with the same scope rules: the lazy per-kind checks
+    /// (`Update`, 0031) go through here.
+    pub async fn review_access_for(
+        &self,
+        checks: &[AccessCheck],
+        scope: NamespaceScope,
+    ) -> Result<AccessReport, ClusterError> {
         let NamespaceScope::Several(namespaces) = &scope else {
             let namespace = scope.namespaces().first().map(String::as_str);
-            let reviews = self.review_checks(&AccessCheck::ALL, namespace).await?;
+            let reviews = self.review_checks(checks, namespace).await?;
             return Ok(AccessReport { reviews });
         };
-        let (namespaced, cluster_scoped): (Vec<_>, Vec<_>) = AccessCheck::ALL
-            .into_iter()
+        let (namespaced, cluster_scoped): (Vec<_>, Vec<_>) = checks
+            .iter()
+            .copied()
             .partition(|check| check.target().is_namespaced);
         let mut reports = vec![AccessReport {
             reviews: self.review_checks(&cluster_scoped, None).await?,
@@ -288,7 +334,7 @@ impl ClusterConnection {
                 reviews: self.review_checks(&namespaced, Some(namespace)).await?,
             });
         }
-        Ok(AccessReport::all_of(reports))
+        Ok(AccessReport::all_of(checks, reports))
     }
 
     /// One review of `check` per namespace of `scope` (one cluster-wide review for `All`), with
@@ -571,9 +617,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 36);
+        assert_eq!(AccessCheck::ALL.len(), 43);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 36);
+        assert_eq!(distinct.len(), 43);
     }
 
     #[test]
@@ -754,7 +800,7 @@ mod tests {
                 review(AccessCheck::ListSecrets, Some("second")),
             ],
         };
-        let report = AccessReport::all_of(vec![cluster_scoped, first, second]);
+        let report = AccessReport::all_of(&AccessCheck::ALL, vec![cluster_scoped, first, second]);
         assert_eq!(
             report.reviews,
             [
@@ -807,6 +853,13 @@ mod tests {
                 "list clusterrolebindings",
                 "list customresourcedefinitions",
                 "patch nodes",
+                "patch deployments/scale",
+                "patch statefulsets/scale",
+                "patch deployments",
+                "patch statefulsets",
+                "patch daemonsets",
+                "patch cronjobs",
+                "create jobs",
             ]
         );
     }
@@ -929,7 +982,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 36);
+        assert_eq!(AccessCheck::ALL.len(), 43);
     }
 
     #[test]
@@ -1175,5 +1228,123 @@ mod tests {
         let attributes = &body["spec"]["resourceAttributes"];
         assert_eq!(attributes["verb"], "patch");
         assert_eq!(attributes["resource"], "nodes");
+    }
+
+    #[test]
+    fn workload_write_checks_are_namespaced() {
+        let table = [
+            (
+                AccessCheck::PatchDeploymentScale,
+                "patch",
+                "apps",
+                "deployments",
+                Some("scale"),
+            ),
+            (
+                AccessCheck::PatchStatefulSetScale,
+                "patch",
+                "apps",
+                "statefulsets",
+                Some("scale"),
+            ),
+            (
+                AccessCheck::PatchDeployments,
+                "patch",
+                "apps",
+                "deployments",
+                None,
+            ),
+            (
+                AccessCheck::PatchStatefulSets,
+                "patch",
+                "apps",
+                "statefulsets",
+                None,
+            ),
+            (
+                AccessCheck::PatchDaemonSets,
+                "patch",
+                "apps",
+                "daemonsets",
+                None,
+            ),
+            (
+                AccessCheck::PatchCronJobs,
+                "patch",
+                "batch",
+                "cronjobs",
+                None,
+            ),
+            (AccessCheck::CreateJobs, "create", "batch", "jobs", None),
+        ];
+        for (check, verb, group, resource, subresource) in table {
+            let attributes = resource_attributes(check, Some("shop"));
+            assert_eq!(attributes.namespace.as_deref(), Some("shop"), "{check}");
+            assert_eq!(attributes.verb.as_deref(), Some(verb), "{check}");
+            assert_eq!(attributes.group.as_deref(), Some(group), "{check}");
+            assert_eq!(attributes.resource.as_deref(), Some(resource), "{check}");
+            assert_eq!(attributes.subresource.as_deref(), subresource, "{check}");
+        }
+    }
+
+    #[test]
+    fn update_check_is_lazy_not_in_all() {
+        let check = AccessCheck::Update(ObjectKind::Deployment);
+        assert!(!AccessCheck::ALL.contains(&check));
+        assert_eq!(check.to_string(), "update deployments");
+        let namespaced = resource_attributes(check, Some("shop"));
+        assert_eq!(namespaced.verb.as_deref(), Some("update"));
+        assert_eq!(namespaced.group.as_deref(), Some("apps"));
+        assert_eq!(namespaced.namespace.as_deref(), Some("shop"));
+        let cluster_scoped =
+            resource_attributes(AccessCheck::Update(ObjectKind::ClusterRole), Some("shop"));
+        assert_eq!(
+            cluster_scoped.group.as_deref(),
+            Some("rbac.authorization.k8s.io")
+        );
+        assert_eq!(cluster_scoped.resource.as_deref(), Some("clusterroles"));
+        assert_eq!(cluster_scoped.namespace, None);
+    }
+
+    fn allowing() -> (ClusterConnection, crate::fake_api::FakeApi) {
+        use crate::fake_api::FakeApi;
+        use crate::object_write::WritePolicy;
+
+        let answer = r#"{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectAccessReview","metadata":{},"spec":{},"status":{"allowed":true}}"#;
+        FakeApi::connection(WritePolicy::Blocked, |_| (201, answer.to_owned()))
+    }
+
+    #[tokio::test]
+    async fn review_access_for_reviews_the_given_list() {
+        let (connection, api) = allowing();
+        let checks = [
+            AccessCheck::Update(ObjectKind::Deployment),
+            AccessCheck::Update(ObjectKind::ConfigMap),
+        ];
+        let report = connection
+            .review_access_for(&checks, NamespaceScope::All)
+            .await
+            .expect("the reviews are answered");
+        assert_eq!(report.reviews.len(), 2);
+        assert!(report.is_allowed(checks[0]));
+        assert!(report.is_allowed(checks[1]));
+        assert_eq!(api.requests().len(), 2);
+    }
+
+    /// Regression: `all_of` used to iterate `AccessCheck::ALL`, so a `Several` scope dropped every
+    /// check that is not in it.
+    #[tokio::test]
+    async fn lazy_checks_survive_several_scope() {
+        let (connection, api) = allowing();
+        let check = AccessCheck::Update(ObjectKind::Deployment);
+        let scope = NamespaceScope::of_namespaces(["a".to_owned(), "b".to_owned()]);
+        let report = connection
+            .review_access_for(&[check], scope)
+            .await
+            .expect("the reviews are answered");
+        assert!(report.is_allowed(check), "{report:?}");
+        assert_eq!(report.reviews.len(), 1);
+        // One namespaced check, asked once per namespace.
+        assert_eq!(api.requests().len(), 2);
     }
 }

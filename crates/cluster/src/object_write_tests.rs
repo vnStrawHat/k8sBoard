@@ -329,7 +329,7 @@ fn changed_fields_name_paths_and_values() {
     assert_eq!(
         cordon,
         [ChangedField {
-            path: "spec.unschedulable",
+            path: "spec.unschedulable".into(),
             value: Some("true".to_owned()),
         }]
     );

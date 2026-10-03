@@ -4,7 +4,7 @@
 
 ## Step 0: `object_yaml.rs` refactor (no behavior change)
 
-Today `object_yaml()` does the GET inline (`self.run(ACTION, api.get(..))`), and the private `mask_to_yaml(object, env, extra)` strips `managedFields`, masks, sorts (`sort_all_objects`), serializes with `yaml_text`, and prefixes `with_hidden_header`. Step 0 splits it; `yaml_text`, `with_hidden_header`, and `HIDDEN` stay where they are.
+Today `object_yaml()` does the GET inline (`self.run(ACTION, api.get(..))`), and the private `mask_to_yaml(object, env, extra)` strips `managedFields`, masks, sorts (`sort_all_objects`), serializes with `yaml_text`, and prefixes `with_hidden_header`. Step 0 splits it; `yaml_text` and `with_hidden_header` stay where they are; `HIDDEN` moves to `edit_placeholders.rs` in step 1 (with the diff-marker constants).
 
 ```rust
 pub(crate) struct MaskCount { pub(crate) hidden: usize, pub(crate) hidden_env_values: usize }

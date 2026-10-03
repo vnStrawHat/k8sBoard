@@ -8,7 +8,7 @@
 pub enum WriteOperation {
     // SetNodeSchedulable (0030) …
     /// PUT of an edited object with its base resourceVersion and uid; placeholders restored from a fresh GET.
-    ReplaceObject(ObjectEdit),
+    ReplaceObject(Box<ObjectEdit>),   // boxed: clippy::large_enum_variant (an edit is ~330 bytes, the other variants ~32)
 }
 pub enum WriteEffect { Patched /* 0030 */, Replaced(EditPreview) }   // EditPreview: Clone + PartialEq + Eq, manual Debug
 ```

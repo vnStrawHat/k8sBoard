@@ -402,7 +402,7 @@ impl ConfirmDialog {
         let lines = intent.request.changed_fields().into_iter().map(|field| {
             let text = match field.value {
                 Some(value) => format!("{} → {value}", field.path),
-                None => field.path.to_owned(),
+                None => field.path.into_owned(),
             };
             div().text_sm().font_family(mono.clone()).child(text)
         });

@@ -22,12 +22,12 @@ use serde_saphyr::SerializerOptions;
 
 use crate::connection::{ClusterConnection, ClusterError};
 use crate::custom_resource_definition::{CustomResourceType, ResourceScope, custom_api_resource};
+use crate::edit_placeholders::HIDDEN;
 use crate::storage_class::mask_mount_option;
 
 const ACTION: &str = "reading the object YAML";
 /// Fixed on purpose: the library error could quote the object's content.
 const CONVERSION_FAILURE: &str = "the object could not be converted to YAML";
-pub(crate) const HIDDEN: &str = "<hidden>";
 
 /// Annotations that embed a whole applied manifest, so they can carry Secret data and env literals.
 const MASKED_ANNOTATIONS: [&str; 3] = [
@@ -70,6 +70,99 @@ pub enum ObjectKind {
 }
 
 impl ObjectKind {
+    /// Every kind, in declaration order.
+    pub const ALL: [ObjectKind; 27] = [
+        Self::Pod,
+        Self::Node,
+        Self::Namespace,
+        Self::Event,
+        Self::Deployment,
+        Self::StatefulSet,
+        Self::DaemonSet,
+        Self::ReplicaSet,
+        Self::Job,
+        Self::CronJob,
+        Self::Service,
+        Self::Ingress,
+        Self::ConfigMap,
+        Self::NetworkPolicy,
+        Self::HorizontalPodAutoscaler,
+        Self::ResourceQuota,
+        Self::PodDisruptionBudget,
+        Self::PersistentVolumeClaim,
+        Self::PersistentVolume,
+        Self::StorageClass,
+        Self::ServiceAccount,
+        Self::Secret,
+        Self::Role,
+        Self::ClusterRole,
+        Self::RoleBinding,
+        Self::ClusterRoleBinding,
+        Self::CustomResourceDefinition,
+    ];
+
+    /// The API group and the plural resource name, for example `("apps", "deployments")`; the
+    /// core group is empty. A static table, so a permission check can name the resource without
+    /// building an `ApiResource`.
+    pub(crate) fn resource(self) -> (&'static str, &'static str) {
+        const RBAC: &str = "rbac.authorization.k8s.io";
+        match self {
+            Self::Pod => ("", "pods"),
+            Self::Node => ("", "nodes"),
+            Self::Namespace => ("", "namespaces"),
+            Self::Event => ("", "events"),
+            Self::Deployment => ("apps", "deployments"),
+            Self::StatefulSet => ("apps", "statefulsets"),
+            Self::DaemonSet => ("apps", "daemonsets"),
+            Self::ReplicaSet => ("apps", "replicasets"),
+            Self::Job => ("batch", "jobs"),
+            Self::CronJob => ("batch", "cronjobs"),
+            Self::Service => ("", "services"),
+            Self::Ingress => ("networking.k8s.io", "ingresses"),
+            Self::ConfigMap => ("", "configmaps"),
+            Self::NetworkPolicy => ("networking.k8s.io", "networkpolicies"),
+            Self::HorizontalPodAutoscaler => ("autoscaling", "horizontalpodautoscalers"),
+            Self::ResourceQuota => ("", "resourcequotas"),
+            Self::PodDisruptionBudget => ("policy", "poddisruptionbudgets"),
+            Self::PersistentVolumeClaim => ("", "persistentvolumeclaims"),
+            Self::PersistentVolume => ("", "persistentvolumes"),
+            Self::StorageClass => ("storage.k8s.io", "storageclasses"),
+            Self::ServiceAccount => ("", "serviceaccounts"),
+            Self::Secret => ("", "secrets"),
+            Self::Role => (RBAC, "roles"),
+            Self::ClusterRole => (RBAC, "clusterroles"),
+            Self::RoleBinding => (RBAC, "rolebindings"),
+            Self::ClusterRoleBinding => (RBAC, "clusterrolebindings"),
+            Self::CustomResourceDefinition => ("apiextensions.k8s.io", "customresourcedefinitions"),
+        }
+    }
+
+    /// Whether Edit YAML is offered for the kind (0031 decision 25): the kinds the wireframes give
+    /// an edit item. Custom resources have no `ObjectKind`, and Helm releases read as `Secret`
+    /// objects but are never edited through this path.
+    pub fn is_editable(self) -> bool {
+        matches!(
+            self,
+            Self::Pod
+                | Self::Deployment
+                | Self::StatefulSet
+                | Self::DaemonSet
+                | Self::CronJob
+                | Self::Service
+                | Self::Ingress
+                | Self::NetworkPolicy
+                | Self::ConfigMap
+                | Self::HorizontalPodAutoscaler
+                | Self::ResourceQuota
+                | Self::PodDisruptionBudget
+                | Self::Secret
+                | Self::Role
+                | Self::ClusterRole
+                | Self::RoleBinding
+                | Self::ClusterRoleBinding
+        )
+    }
+
     /// The Kubernetes `kind`, for example `Deployment`.
     pub fn name(self) -> &'static str {
         match self {
@@ -232,19 +325,39 @@ impl ClusterConnection {
         object: &ObjectRef,
         env: EnvValues,
     ) -> Result<ObjectYaml, ClusterError> {
-        let api = self.object_api(object);
-        let found = self.run(ACTION, api.get(&object.name)).await?;
-        let unexpected = |message: &'static str| ClusterError::UnexpectedResponse {
-            context: self.context().to_owned(),
-            action: ACTION,
-            source: message.into(),
-        };
-        let value = serde_json::to_value(&found).map_err(|_| unexpected(CONVERSION_FAILURE))?;
+        let value = self.get_object(object, ACTION).await?;
         let masked = match object.target {
             ObjectTarget::Builtin(_) => to_masked_yaml(value, env),
             ObjectTarget::Custom(_) => to_masked_custom_yaml(value, env),
         };
-        masked.map_err(unexpected)
+        masked.map_err(|message| self.unexpected_response(ACTION, message))
+    }
+
+    /// One GET of `object` as raw JSON. The value can hold secrets: callers mask it before it
+    /// leaves the crate and never log it.
+    pub(crate) async fn get_object(
+        &self,
+        object: &ObjectRef,
+        action: &'static str,
+    ) -> Result<Value, ClusterError> {
+        let api = self.object_api(object);
+        let found = self.run(action, api.get(&object.name)).await?;
+        serde_json::to_value(&found)
+            .map_err(|_| self.unexpected_response(action, CONVERSION_FAILURE))
+    }
+
+    /// An answer that could not be used. `message` is fixed text: a library error could quote the
+    /// object's content.
+    pub(crate) fn unexpected_response(
+        &self,
+        action: &'static str,
+        message: &'static str,
+    ) -> ClusterError {
+        ClusterError::UnexpectedResponse {
+            context: self.context().to_owned(),
+            action,
+            source: message.into(),
+        }
     }
 }
 
@@ -297,19 +410,27 @@ fn to_masked_custom_yaml(object: Value, env: EnvValues) -> Result<ObjectYaml, &'
     })
 }
 
-/// `extra` runs after the built-in rules and before the keys are sorted; it returns its count.
-fn mask_to_yaml(
-    mut object: Value,
+/// What `mask_object` hid.
+pub(crate) struct MaskCount {
+    pub(crate) hidden: usize,
+    /// Env literals among `hidden` (0 when `EnvValues::Shown`).
+    pub(crate) hidden_env_values: usize,
+}
+
+/// Strips `managedFields`, applies every mask rule, and sorts the keys like kubectl. `extra` runs
+/// after the built-in rules and before the keys are sorted; it returns its count (custom objects).
+pub(crate) fn mask_object(
+    object: &mut Value,
     env: EnvValues,
     extra: impl FnOnce(&mut Value) -> usize,
-) -> Result<ObjectYaml, &'static str> {
+) -> MaskCount {
     if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
         metadata.remove("managedFields");
     }
-    let mut hidden = mask_manifest_annotations(&mut object, false)
-        + mask_secret_data(&mut object)
-        + mask_storage_class_parameters(&mut object)
-        + mask_credential_mount_options(&mut object);
+    let mut hidden = mask_manifest_annotations(object, false)
+        + mask_secret_data(object)
+        + mask_storage_class_parameters(object)
+        + mask_credential_mount_options(object);
     let mut hidden_env_values = 0;
     if env == EnvValues::Hidden
         && let Some(spec) = object.get_mut("spec")
@@ -317,12 +438,35 @@ fn mask_to_yaml(
         hidden_env_values = mask_env_values(spec);
     }
     hidden += hidden_env_values;
-    hidden += extra(&mut object);
+    hidden += extra(object);
     object.sort_all_objects();
-    let body = yaml_text(&object)?;
-    Ok(ObjectYaml {
-        text: with_hidden_header(body, hidden),
+    MaskCount {
+        hidden,
         hidden_env_values,
+    }
+}
+
+/// The 0007 path: `mask_object`, serialized, with the hidden-count header.
+fn mask_to_yaml(
+    mut object: Value,
+    env: EnvValues,
+    extra: impl FnOnce(&mut Value) -> usize,
+) -> Result<ObjectYaml, &'static str> {
+    let count = mask_object(&mut object, env, extra);
+    let body = to_yaml_text(&object, None)?;
+    Ok(ObjectYaml {
+        text: with_hidden_header(body, count.hidden),
+        hidden_env_values: count.hidden_env_values,
+    })
+}
+
+/// `yaml_text` plus an optional comment header (the edit header); `None` is no header. The
+/// error is a fixed message.
+pub(crate) fn to_yaml_text(object: &Value, header: Option<&str>) -> Result<String, &'static str> {
+    let body = yaml_text(object)?;
+    Ok(match header {
+        Some(header) => format!("{header}\n{body}"),
+        None => body,
     })
 }
 

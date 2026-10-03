@@ -800,3 +800,304 @@ fn env_style_pairs_hide_secret_named_values_in_custom_yaml() {
         "{text}"
     );
 }
+
+/// Fixtures of the 0007 output. Each expected text was captured before `mask_to_yaml` was split
+/// into `mask_object` and `to_yaml_text` (spec 0031 step 0), so a refactor cannot change a byte.
+fn golden_fixtures() -> Vec<(&'static str, String)> {
+    let deployment = json!({
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": "api",
+            "namespace": "shop",
+            "managedFields": [{"manager": "kubectl"}],
+            "annotations": {
+                "kubectl.kubernetes.io/last-applied-configuration": "{\"spec\":1}",
+                "team": "payments",
+            },
+        },
+        "spec": {
+            "replicas": 3,
+            "template": {"spec": {"containers": [{
+                "name": "api",
+                "image": "api:1.2.3",
+                "env": [
+                    {"name": "DB_PASSWORD", "value": "s3cr3t-env"},
+                    {"name": "NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+                ],
+            }]}},
+        },
+    });
+    let secret = json!({
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": "db", "namespace": "shop"},
+        "type": "Opaque",
+        "data": {"password": "c2VjcmV0", "user": "YWRtaW4="},
+        "stringData": {"token": "plain-token"},
+    });
+    let storage_class = json!({
+        "apiVersion": "storage.k8s.io/v1",
+        "kind": "StorageClass",
+        "metadata": {"name": "fast"},
+        "provisioner": "example.com/fs",
+        "parameters": {"adminPassword": "pw-1", "type": "ssd", "secretName": "creds"},
+        "mountOptions": ["password=hunter2", "ro"],
+    });
+    let config_map = json!({
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": "settings", "namespace": "shop", "labels": {"b": "2", "a": "1"}},
+        "data": {
+            "yes": "yes",
+            "float": "1.0",
+            "mode": "0755",
+            "nothing": "null",
+            "tilde": "~",
+            "exp": "1e3",
+            "script": "line one\nline two\n",
+            "strip": "no newline",
+        },
+    });
+    let custom = json!({
+        "apiVersion": "example.com/v1",
+        "kind": "Widget",
+        "metadata": {"name": "w", "namespace": "shop"},
+        "spec": {"apiToken": "tok-1", "url": "https://user:pw@host/path", "size": 3},
+        "status": {"phase": "Ready"},
+    });
+    vec![
+        (
+            "deployment_hidden",
+            masked(deployment.clone(), EnvValues::Hidden).text,
+        ),
+        (
+            "deployment_shown",
+            masked(deployment, EnvValues::Shown).text,
+        ),
+        ("secret", masked_text(secret)),
+        ("storage_class", masked_text(storage_class)),
+        ("config_map", masked_text(config_map)),
+        (
+            "custom",
+            to_masked_custom_yaml(custom, EnvValues::Hidden)
+                .expect("fixture serializes")
+                .text,
+        ),
+    ]
+}
+
+#[test]
+fn masked_yaml_output_is_unchanged() {
+    let expected = golden_texts();
+    let actual = golden_fixtures();
+    assert_eq!(actual.len(), expected.len());
+    for ((name, text), (expected_name, expected_text)) in actual.iter().zip(expected) {
+        assert_eq!(*name, expected_name);
+        assert_eq!(text, expected_text, "{name}");
+    }
+}
+
+fn golden_texts() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "deployment_hidden",
+            r#"# k8sBoard hid 2 values as <hidden>.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: <hidden>
+    team: payments
+  name: api
+  namespace: shop
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - env:
+        - name: DB_PASSWORD
+          value: <hidden>
+        - name: NODE
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        image: api:1.2.3
+        name: api
+"#,
+        ),
+        (
+            "deployment_shown",
+            r#"# k8sBoard hid 1 value as <hidden>.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: <hidden>
+    team: payments
+  name: api
+  namespace: shop
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - env:
+        - name: DB_PASSWORD
+          value: s3cr3t-env
+        - name: NODE
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        image: api:1.2.3
+        name: api
+"#,
+        ),
+        (
+            "secret",
+            r#"# k8sBoard hid 3 values as <hidden>.
+apiVersion: v1
+data:
+  password: <hidden>
+  user: <hidden>
+kind: Secret
+metadata:
+  name: db
+  namespace: shop
+stringData:
+  token: <hidden>
+type: Opaque
+"#,
+        ),
+        (
+            "storage_class",
+            r#"# k8sBoard hid 2 values as <hidden>.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast
+mountOptions:
+- password=<hidden>
+- ro
+parameters:
+  adminPassword: <hidden>
+  secretName: creds
+  type: ssd
+provisioner: example.com/fs
+"#,
+        ),
+        (
+            "config_map",
+            r#"apiVersion: v1
+data:
+  exp: "1e3"
+  float: "1.0"
+  mode: "0755"
+  nothing: "null"
+  script: |
+    line one
+    line two
+  strip: no newline
+  tilde: "~"
+  "yes": "yes"
+kind: ConfigMap
+metadata:
+  labels:
+    a: "1"
+    b: "2"
+  name: settings
+  namespace: shop
+"#,
+        ),
+        (
+            "custom",
+            r#"# k8sBoard hid 2 values as <hidden>.
+apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: w
+  namespace: shop
+spec:
+  apiToken: <hidden>
+  size: 3
+  url: https://<hidden>@host/path
+status:
+  phase: Ready
+"#,
+        ),
+    ]
+}
+
+#[test]
+fn all_lists_every_kind_in_declaration_order() {
+    assert_eq!(ObjectKind::ALL.len(), ALL_KINDS.len() + 1);
+    assert_eq!(&ObjectKind::ALL[..ALL_KINDS.len()], &ALL_KINDS);
+    assert_eq!(
+        ObjectKind::ALL.last(),
+        Some(&ObjectKind::CustomResourceDefinition)
+    );
+}
+
+#[test]
+fn object_kind_resource_matches_the_api_resource() {
+    for kind in ObjectKind::ALL {
+        let (group, plural) = kind.resource();
+        let resource = api_resource(kind);
+        assert_eq!(resource.group, group, "{}", kind.name());
+        assert_eq!(resource.plural, plural, "{}", kind.name());
+    }
+}
+
+#[test]
+fn only_the_editable_kinds_offer_edit_yaml() {
+    let editable: Vec<&str> = ObjectKind::ALL
+        .into_iter()
+        .filter(|kind| kind.is_editable())
+        .map(ObjectKind::name)
+        .collect();
+    assert_eq!(
+        editable,
+        [
+            "Pod",
+            "Deployment",
+            "StatefulSet",
+            "DaemonSet",
+            "CronJob",
+            "Service",
+            "Ingress",
+            "ConfigMap",
+            "NetworkPolicy",
+            "HorizontalPodAutoscaler",
+            "ResourceQuota",
+            "PodDisruptionBudget",
+            "Secret",
+            "Role",
+            "ClusterRole",
+            "RoleBinding",
+            "ClusterRoleBinding",
+        ]
+    );
+}
+
+#[test]
+fn mask_object_counts_what_it_hides_and_sorts_keys() {
+    let mut object = pod_with_env();
+    let count = mask_object(&mut object, EnvValues::Hidden, |_| 0);
+    assert_eq!((count.hidden, count.hidden_env_values), (1, 1));
+    let mut shown = pod_with_env();
+    let count = mask_object(&mut shown, EnvValues::Shown, |_| 0);
+    assert_eq!((count.hidden, count.hidden_env_values), (0, 0));
+    let keys: Vec<&String> = object.as_object().expect("an object").keys().collect();
+    assert_eq!(keys, ["apiVersion", "kind", "metadata", "spec"]);
+}
+
+#[test]
+fn to_yaml_text_adds_only_the_given_header() {
+    let value = json!({"a": 1});
+    assert_eq!(to_yaml_text(&value, None).expect("serializes"), "a: 1\n");
+    assert_eq!(
+        to_yaml_text(&value, Some("# header")).expect("serializes"),
+        "# header\na: 1\n"
+    );
+}

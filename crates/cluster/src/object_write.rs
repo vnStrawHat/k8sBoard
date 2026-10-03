@@ -4,24 +4,43 @@
 //!
 //! Nothing here logs or keeps a request body or a field value.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::time::{Duration, Instant};
 
-use kube::api::{DynamicObject, Patch, PatchParams};
+use kube::api::{DynamicObject, Patch, PatchParams, PostParams};
 use kube::core::Status;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::time::error::Elapsed;
 
 use crate::access_review::AccessCheck;
 use crate::connection::{ClusterConnection, ClusterError, REQUEST_TIMEOUT, classify_error};
-use crate::dns_name::is_dns_subdomain;
+use crate::dns_name::{is_dns_subdomain, is_path_segment_name};
+use crate::edit_placeholders::{self, Restored};
+use crate::edit_preview::{EditPreview, build_preview};
+use crate::object_edit::{ObjectEdit, is_helm_release};
 use crate::object_yaml::{ObjectKind, ObjectRef};
+use crate::workload_write_bodies::{
+    RERUN_BASE_CHARS, RERUN_SUFFIX, RollBackRefusal, TRIGGER_BASE_CHARS, TRIGGER_SUFFIX,
+    generate_name, rerun_job_body, rollback_operations, trigger_job_body,
+};
 
 /// The server-side field manager of every write k8sBoard sends.
 const FIELD_MANAGER: &str = "k8sboard";
 /// Debug builds send no write unless this variable is `1`; agent runs never set it.
 pub(crate) const ALLOW_WRITES_VARIABLE: &str = "K8SBOARD_ALLOW_WRITES";
 const KIND_SECRET: &str = "Secret";
+/// What an operation reads before it sends, so the request can carry the current object's data.
+const READ_ACTION: &str = "reading the object before the change";
+/// The annotation `kubectl rollout restart` sets (kube's own `Api::restart` writes another one).
+const RESTARTED_AT: &str = "kubectl.kubernetes.io/restartedAt";
+/// Fixed text: a library error could quote the object's content.
+const UNUSABLE_OBJECT: &str = "the object could not be used for this change";
+const STALE_TEMPLATE: &str = "the deployment was replaced since it was read";
+const REJECTED_OBJECT: &str = "the server rejected the generated object";
+const REJECTED_TEMPLATE: &str = "the server rejected the template of that revision";
+/// A `replicas` field is an `int32` on the server.
+const MAX_REPLICAS: u32 = i32::MAX as u32;
 
 /// One allow-listed mutation. Adding a variant is the only way to add a write (C3).
 // Debug is manual: the variant name only.
@@ -29,13 +48,47 @@ const KIND_SECRET: &str = "Secret";
 pub enum WriteOperation {
     /// JSON merge patch `{"spec":{"unschedulable": !schedulable}}` on a Node (cordon or uncordon).
     SetNodeSchedulable { schedulable: bool },
+    /// Merge patch of the `scale` subresource of a Deployment or StatefulSet (0032).
+    ScaleWorkload { replicas: u32 },
+    /// Merge patch of the pod template's `kubectl.kubernetes.io/restartedAt` annotation on a
+    /// Deployment, StatefulSet, or DaemonSet (0032). Rounded to whole seconds on the wire, so a
+    /// dry-run and its commit send the same body.
+    RestartRollout { restarted_at: jiff::Timestamp },
+    /// Merge patch `{"spec":{"paused": b}}` on a Deployment (0032).
+    SetRolloutPaused { paused: bool },
+    /// JSON Patch that replaces a Deployment's pod template with one of its ReplicaSets
+    /// (`kubectl rollout undo --to-revision`, 0032).
+    RollBackDeployment { replica_set: String, revision: u64 },
+    /// Merge patch `{"spec":{"suspend": b}}` on a CronJob (0032).
+    SetCronJobSuspended { suspended: bool },
+    /// Creates a Job from a CronJob's template (`kubectl create job --from`, 0032).
+    TriggerCronJob,
+    /// Creates a standalone copy of a Job (0032).
+    RerunJob,
+    /// `PUT` of an edited object with its base `resourceVersion` and `uid`, placeholders restored
+    /// from a fresh GET (0031).
+    ReplaceObject(Box<ObjectEdit>),
+}
+
+impl WriteOperation {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::SetNodeSchedulable { .. } => "SetNodeSchedulable",
+            Self::ScaleWorkload { .. } => "ScaleWorkload",
+            Self::RestartRollout { .. } => "RestartRollout",
+            Self::SetRolloutPaused { .. } => "SetRolloutPaused",
+            Self::RollBackDeployment { .. } => "RollBackDeployment",
+            Self::SetCronJobSuspended { .. } => "SetCronJobSuspended",
+            Self::TriggerCronJob => "TriggerCronJob",
+            Self::RerunJob => "RerunJob",
+            Self::ReplaceObject(_) => "ReplaceObject",
+        }
+    }
 }
 
 impl fmt::Debug for WriteOperation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SetNodeSchedulable { .. } => formatter.write_str("SetNodeSchedulable"),
-        }
+        formatter.write_str(self.name())
     }
 }
 
@@ -45,6 +98,7 @@ impl fmt::Debug for WriteOperation {
 pub struct WriteRequest {
     target: ObjectRef,
     operation: WriteOperation,
+    access_check: AccessCheck,
 }
 
 impl fmt::Debug for WriteRequest {
@@ -70,6 +124,10 @@ pub enum WriteMode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WriteEffect {
     Patched,
+    /// A create (Trigger now, Re-run); a commit reports `WriteOutcome.created_name`.
+    Created,
+    /// A replace (Edit YAML): what changed, masked.
+    Replaced(EditPreview),
 }
 
 /// What a finished write reports. `created_name` and `uid` are `None` on a dry-run and when the
@@ -87,7 +145,7 @@ pub struct WriteOutcome {
 /// is not recorded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChangedField {
-    pub path: &'static str,
+    pub path: Cow<'static, str>,
     pub value: Option<String>,
 }
 
@@ -127,16 +185,20 @@ impl WritePolicy {
 impl WriteRequest {
     /// `None` when the target kind does not fit the operation, or when its name or namespace is
     /// not a DNS-1123 subdomain: kube does not encode them, so any other text could change the
-    /// path the request goes to.
+    /// path the request goes to. The RBAC kinds of `ReplaceObject` may use `:` in a name, so they
+    /// follow the path-segment rule instead.
     pub fn new(target: ObjectRef, operation: WriteOperation) -> Option<Self> {
-        let is_fitting = match operation {
-            WriteOperation::SetNodeSchedulable { .. } => {
-                target.builtin_kind() == Some(ObjectKind::Node)
-            }
-        };
-        let is_safe_path =
-            is_dns_subdomain(target.name()) && target.namespace().is_none_or(is_dns_subdomain);
-        (is_fitting && is_safe_path).then_some(Self { target, operation })
+        // `replicas` is an int32: a larger number can only be a typo, and the server would refuse it.
+        if matches!(operation, WriteOperation::ScaleWorkload { replicas } if replicas > MAX_REPLICAS)
+        {
+            return None;
+        }
+        let access_check = fitting_access_check(&target, &operation)?;
+        is_safe_path(&target, &operation).then_some(Self {
+            target,
+            operation,
+            access_check,
+        })
     }
 
     pub fn target(&self) -> &ObjectRef {
@@ -149,26 +211,137 @@ impl WriteRequest {
 
     /// The permission the operation needs; the app gate reads the same value.
     pub fn access_check(&self) -> AccessCheck {
-        match self.operation {
-            WriteOperation::SetNodeSchedulable { .. } => AccessCheck::PatchNodes,
-        }
+        self.access_check
     }
 
     pub fn changed_fields(&self) -> Vec<ChangedField> {
-        match self.operation {
-            WriteOperation::SetNodeSchedulable { schedulable } => vec![ChangedField {
-                path: "spec.unschedulable",
-                value: Some((!schedulable).to_string()),
-            }],
+        let field = |path: &'static str, value: String| ChangedField {
+            path: Cow::Borrowed(path),
+            value: Some(value),
+        };
+        match &self.operation {
+            WriteOperation::SetNodeSchedulable { schedulable } => {
+                vec![field("spec.unschedulable", (!schedulable).to_string())]
+            }
+            WriteOperation::ScaleWorkload { replicas } => {
+                vec![field("spec.replicas", replicas.to_string())]
+            }
+            WriteOperation::RestartRollout { restarted_at } => vec![field(
+                "spec.template.metadata.annotations[kubectl.kubernetes.io/restartedAt]",
+                restart_stamp(restarted_at),
+            )],
+            WriteOperation::SetRolloutPaused { paused } => {
+                vec![field("spec.paused", paused.to_string())]
+            }
+            WriteOperation::RollBackDeployment {
+                replica_set,
+                revision,
+            } => vec![field(
+                "spec.template",
+                format!("rev {revision} ({replica_set})"),
+            )],
+            WriteOperation::SetCronJobSuspended { suspended } => {
+                vec![field("spec.suspend", suspended.to_string())]
+            }
+            WriteOperation::TriggerCronJob => vec![field(
+                "metadata.generateName",
+                generate_name(self.target.name(), TRIGGER_BASE_CHARS, TRIGGER_SUFFIX),
+            )],
+            WriteOperation::RerunJob => vec![field(
+                "metadata.generateName",
+                generate_name(self.target.name(), RERUN_BASE_CHARS, RERUN_SUFFIX),
+            )],
+            // Paths only: an edit's values can hold credentials.
+            WriteOperation::ReplaceObject(edit) => edit
+                .changed_paths()
+                .iter()
+                .map(|path| ChangedField {
+                    path: Cow::Owned(path.to_string()),
+                    value: None,
+                })
+                .collect(),
         }
     }
 
-    /// False only for operations the server cannot dry-run; true for every one of 0030.
+    /// False only for operations the server cannot dry-run; true for every one of 0030-0032.
     pub fn supports_dry_run(&self) -> bool {
         match self.operation {
-            WriteOperation::SetNodeSchedulable { .. } => true,
+            WriteOperation::SetNodeSchedulable { .. }
+            | WriteOperation::ScaleWorkload { .. }
+            | WriteOperation::RestartRollout { .. }
+            | WriteOperation::SetRolloutPaused { .. }
+            | WriteOperation::RollBackDeployment { .. }
+            | WriteOperation::SetCronJobSuspended { .. }
+            | WriteOperation::TriggerCronJob
+            | WriteOperation::RerunJob
+            | WriteOperation::ReplaceObject(_) => true,
         }
     }
+}
+
+/// The permission `operation` needs on `target`, or `None` when the kind does not fit.
+fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Option<AccessCheck> {
+    let kind = target.builtin_kind()?;
+    Some(match (operation, kind) {
+        (WriteOperation::SetNodeSchedulable { .. }, ObjectKind::Node) => AccessCheck::PatchNodes,
+        (WriteOperation::ScaleWorkload { .. }, ObjectKind::Deployment) => {
+            AccessCheck::PatchDeploymentScale
+        }
+        (WriteOperation::ScaleWorkload { .. }, ObjectKind::StatefulSet) => {
+            AccessCheck::PatchStatefulSetScale
+        }
+        (WriteOperation::RestartRollout { .. }, ObjectKind::Deployment) => {
+            AccessCheck::PatchDeployments
+        }
+        (WriteOperation::RestartRollout { .. }, ObjectKind::StatefulSet) => {
+            AccessCheck::PatchStatefulSets
+        }
+        (WriteOperation::RestartRollout { .. }, ObjectKind::DaemonSet) => {
+            AccessCheck::PatchDaemonSets
+        }
+        (
+            WriteOperation::SetRolloutPaused { .. } | WriteOperation::RollBackDeployment { .. },
+            ObjectKind::Deployment,
+        ) => AccessCheck::PatchDeployments,
+        (WriteOperation::SetCronJobSuspended { .. }, ObjectKind::CronJob) => {
+            AccessCheck::PatchCronJobs
+        }
+        (WriteOperation::TriggerCronJob, ObjectKind::CronJob)
+        | (WriteOperation::RerunJob, ObjectKind::Job) => AccessCheck::CreateJobs,
+        (WriteOperation::ReplaceObject(edit), kind)
+            if edit.target() == target && kind.is_editable() =>
+        {
+            AccessCheck::Update(kind)
+        }
+        _ => return None,
+    })
+}
+
+/// Whether every name that ends up in the request path is safe to put there.
+fn is_safe_path(target: &ObjectRef, operation: &WriteOperation) -> bool {
+    let is_rbac = matches!(
+        target.builtin_kind(),
+        Some(
+            ObjectKind::Role
+                | ObjectKind::ClusterRole
+                | ObjectKind::RoleBinding
+                | ObjectKind::ClusterRoleBinding
+        )
+    );
+    let is_safe_name = match operation {
+        WriteOperation::ReplaceObject(_) if is_rbac => is_path_segment_name(target.name()),
+        _ => is_dns_subdomain(target.name()),
+    };
+    let is_safe_replica_set = match operation {
+        WriteOperation::RollBackDeployment { replica_set, .. } => is_dns_subdomain(replica_set),
+        _ => true,
+    };
+    is_safe_name && is_safe_replica_set && target.namespace().is_none_or(is_dns_subdomain)
+}
+
+/// Whole seconds, UTC, like kubectl writes it.
+fn restart_stamp(timestamp: &jiff::Timestamp) -> String {
+    timestamp.strftime("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 /// A failed write, sorted by what the user can do about it.
@@ -210,11 +383,57 @@ pub enum WriteError {
     Cluster(#[from] ClusterError),
 }
 
+/// What `send` learned from the server; `write` shapes it into a `WriteOutcome`. Each operation
+/// builds its own effect, so no operation reports another one's.
+struct Answer {
+    effect: WriteEffect,
+    created_name: Option<String>,
+    uid: Option<String>,
+}
+
+impl Answer {
+    fn patched() -> Self {
+        Self {
+            effect: WriteEffect::Patched,
+            created_name: None,
+            uid: None,
+        }
+    }
+
+    /// A commit reports the name the server picked; a dry-run reports none.
+    fn created(object: &DynamicObject, mode: WriteMode) -> Self {
+        let created_name = match mode {
+            WriteMode::Commit => object.metadata.name.clone(),
+            WriteMode::DryRun => None,
+        };
+        Self {
+            effect: WriteEffect::Created,
+            created_name,
+            uid: committed_uid(object, mode),
+        }
+    }
+}
+
+/// A commit reports the uid of the object the server created or replaced; a dry-run reports none.
+fn committed_uid(object: &DynamicObject, mode: WriteMode) -> Option<String> {
+    match mode {
+        WriteMode::Commit => object.metadata.uid.clone(),
+        WriteMode::DryRun => None,
+    }
+}
+
+/// What a replace sends, and the fresh object it was built from.
+struct Replacement {
+    body: DynamicObject,
+    fresh: Value,
+    restored: Restored,
+}
+
 impl ClusterConnection {
     /// The only function that sends a mutating request. Returns `WritesBlocked` before building any
-    /// request when the connection's policy is `Blocked`. A patch sets `fieldManager=k8sboard` in
-    /// both modes, and `DryRun` adds `dryRun=All`. The caller passes the connection of the target's
-    /// own cluster; there is no implicit current session.
+    /// request when the connection's policy is `Blocked`. Every request sets `fieldManager=k8sboard`
+    /// in both modes, and `DryRun` adds `dryRun=All`. The caller passes the connection of the
+    /// target's own cluster; there is no implicit current session.
     pub async fn write(
         &self,
         request: &WriteRequest,
@@ -234,38 +453,228 @@ impl ClusterConnection {
             name = request.target.name(),
             ?mode,
             ?elapsed,
-            is_ok = matches!(sent, Ok(Ok(_))),
+            is_ok = sent.is_ok(),
             "write finished"
         );
+        let answer = sent?;
+        Ok(WriteOutcome {
+            mode,
+            elapsed,
+            effect: answer.effect,
+            created_name: answer.created_name,
+            uid: answer.uid,
+        })
+    }
+
+    /// Sends the request of one allow-listed operation: one arm per `WriteOperation`, the
+    /// object_write.rs row of the 0030 exception table. An operation that needs the object's data
+    /// reads it first through `self.run` (a failed read is a `Cluster` error: nothing was sent).
+    #[allow(clippy::disallowed_methods)]
+    async fn send(&self, request: &WriteRequest, mode: WriteMode) -> Result<Answer, WriteError> {
+        let api = self.object_api(&request.target);
+        let name = request.target.name();
+        let params = patch_params(mode);
+        match &request.operation {
+            WriteOperation::SetNodeSchedulable { schedulable } => {
+                let body = json!({ "spec": { "unschedulable": !schedulable } });
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::ScaleWorkload { replicas } => {
+                let body = json!({ "spec": { "replicas": replicas } });
+                let sent = run_raw(api.patch_scale(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::RestartRollout { restarted_at } => {
+                let annotations = json!({ RESTARTED_AT: restart_stamp(restarted_at) });
+                let body = json!({
+                    "spec": { "template": { "metadata": { "annotations": annotations } } }
+                });
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::SetRolloutPaused { paused } => {
+                let body = json!({ "spec": { "paused": paused } });
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::RollBackDeployment {
+                replica_set,
+                revision,
+            } => {
+                let operations = self
+                    .roll_back_operations(&request.target, replica_set, *revision, mode)
+                    .await?;
+                // JSON Patch, not a merge patch: a merge patch would keep map keys the old
+                // revision's template lacks.
+                let operations =
+                    serde_json::from_value(operations).map_err(|_| self.unusable_object(mode))?;
+                let patch = Patch::<()>::Json(operations);
+                let sent = run_raw(api.patch(name, &params, &patch)).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::SetCronJobSuspended { suspended } => {
+                let body = json!({ "spec": { "suspend": suspended } });
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::TriggerCronJob => {
+                let (jobs, job) = self.trigger_job(&request.target, mode).await?;
+                let sent = run_raw(self.object_api(&jobs).create(&post_params(mode), &job)).await;
+                let created = self.settle(request, mode, sent)?;
+                Ok(Answer::created(&created, mode))
+            }
+            WriteOperation::RerunJob => {
+                let job = self.rerun_job(&request.target, mode).await?;
+                let sent = run_raw(api.create(&post_params(mode), &job)).await;
+                let created = self.settle(request, mode, sent)?;
+                Ok(Answer::created(&created, mode))
+            }
+            WriteOperation::ReplaceObject(edit) => {
+                let replacement = self.replacement(edit, mode).await?;
+                let sent = run_raw(api.replace(name, &post_params(mode), &replacement.body)).await;
+                let response = self.settle(request, mode, sent)?;
+                let uid = committed_uid(&response, mode);
+                let response =
+                    serde_json::to_value(&response).map_err(|_| self.unusable_object(mode))?;
+                let preview =
+                    build_preview(edit, replacement.fresh, response, &replacement.restored)
+                        .map_err(|message| self.unusable_response(mode, message))?;
+                Ok(Answer {
+                    effect: WriteEffect::Replaced(preview),
+                    created_name: None,
+                    uid,
+                })
+            }
+        }
+    }
+
+    /// The outcome of one request: its object, or the `WriteError` the failure maps to.
+    fn settle<T>(
+        &self,
+        request: &WriteRequest,
+        mode: WriteMode,
+        sent: Result<Result<T, kube::Error>, Elapsed>,
+    ) -> Result<T, WriteError> {
         match sent {
-            Ok(Ok(_object)) => Ok(WriteOutcome {
-                mode,
-                elapsed,
-                effect: WriteEffect::Patched,
-                created_name: None,
-                uid: None,
-            }),
+            Ok(Ok(object)) => Ok(object),
             Ok(Err(error)) => Err(self.write_error(request, mode, error)),
             Err(_elapsed) => Err(self.timed_out(mode)),
         }
     }
 
-    /// Sends the request of one allow-listed operation: one arm per `WriteOperation`, the
-    /// object_write.rs row of the 0030 exception table.
-    #[allow(clippy::disallowed_methods)]
-    async fn send(
+    /// The JSON Patch of a Roll back (`kubectl rollout undo --to-revision` parity): reads the
+    /// Deployment and the ReplicaSet, and refuses a ReplicaSet that is not this Deployment's, not
+    /// that revision, or the same template as now. The template stays inside this call.
+    async fn roll_back_operations(
         &self,
-        request: &WriteRequest,
+        target: &ObjectRef,
+        replica_set: &str,
+        revision: u64,
         mode: WriteMode,
-    ) -> Result<Result<DynamicObject, kube::Error>, Elapsed> {
-        let api = self.object_api(&request.target);
-        let params = patch_params(mode);
-        match &request.operation {
-            WriteOperation::SetNodeSchedulable { schedulable } => {
-                let body = json!({ "spec": { "unschedulable": !schedulable } });
-                run_raw(api.patch(request.target.name(), &params, &Patch::Merge(&body))).await
-            }
+    ) -> Result<Value, WriteError> {
+        let deployment = self.get_object(target, READ_ACTION).await?;
+        let replica_set = ObjectRef::new(
+            ObjectKind::ReplicaSet,
+            target.namespace().map(str::to_owned),
+            replica_set.to_owned(),
+        )
+        .ok_or_else(|| self.unusable_object(mode))?;
+        let replica_set = self.get_object(&replica_set, READ_ACTION).await?;
+        match rollback_operations(&deployment, &replica_set, revision) {
+            Ok(operations) => Ok(operations),
+            Err(RollBackRefusal::Unreadable) => Err(self.unusable_object(mode)),
+            Err(RollBackRefusal::ForeignReplicaSet) => Err(WriteError::NotFound),
+            Err(RollBackRefusal::SameTemplate) => Err(WriteError::Invalid {
+                message: format!("revision {revision} has the same template as the current one"),
+                fields: Vec::new(),
+            }),
         }
+    }
+
+    /// The Job to create from a CronJob, and where to create it.
+    async fn trigger_job(
+        &self,
+        target: &ObjectRef,
+        mode: WriteMode,
+    ) -> Result<(ObjectRef, DynamicObject), WriteError> {
+        let cron_job = self.get_object(target, READ_ACTION).await?;
+        let jobs = ObjectRef::new(
+            ObjectKind::Job,
+            target.namespace().map(str::to_owned),
+            target.name().to_owned(),
+        );
+        let job = trigger_job_body(&cron_job, target.namespace(), target.name())
+            .and_then(|body| serde_json::from_value(body).ok());
+        match (jobs, job) {
+            (Some(jobs), Some(job)) => Ok((jobs, job)),
+            _ => Err(self.unusable_object(mode)),
+        }
+    }
+
+    /// The Job to create as a copy of `target`.
+    async fn rerun_job(
+        &self,
+        target: &ObjectRef,
+        mode: WriteMode,
+    ) -> Result<DynamicObject, WriteError> {
+        let job = self.get_object(target, READ_ACTION).await?;
+        rerun_job_body(&job, target.namespace(), target.name())
+            .and_then(|body| serde_json::from_value(body).ok())
+            .ok_or_else(|| self.unusable_object(mode))
+    }
+
+    /// The body of an Edit YAML replace (0031 write path): a fresh GET, the base
+    /// `resourceVersion` check, the placeholders restored from it, and the base identity stamped.
+    async fn replacement(
+        &self,
+        edit: &ObjectEdit,
+        mode: WriteMode,
+    ) -> Result<Replacement, WriteError> {
+        let fresh = self.get_object(edit.target(), READ_ACTION).await?;
+        // A Helm release record is edited through 0038 only, whatever the editor was opened on.
+        if is_helm_release(&fresh) {
+            return Err(self.unusable_object(mode));
+        }
+        let fresh_version = fresh
+            .pointer("/metadata/resourceVersion")
+            .and_then(Value::as_str)
+            .ok_or_else(|| self.unusable_object(mode))?;
+        let base_version = edit.base_resource_version();
+        if fresh_version != base_version {
+            return Err(stale_object(base_version, fresh_version));
+        }
+        let mut body = edit.edited().clone();
+        // Cannot fail after the version check (0031 decision 7); the same answer if it does.
+        let restored = edit_placeholders::restore(&mut body, &fresh)
+            .map_err(|_unmatched| stale_object(base_version, fresh_version))?;
+        let metadata = body
+            .get_mut("metadata")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| self.unusable_object(mode))?;
+        metadata.insert("resourceVersion".to_owned(), Value::from(base_version));
+        metadata.insert("uid".to_owned(), Value::from(edit.base_uid()));
+        let body = serde_json::from_value(body).map_err(|_| self.unusable_object(mode))?;
+        Ok(Replacement {
+            body,
+            fresh,
+            restored,
+        })
+    }
+
+    /// An answer or an object that cannot be used for the change; nothing was sent.
+    fn unusable_object(&self, mode: WriteMode) -> WriteError {
+        self.unusable_response(mode, UNUSABLE_OBJECT)
+    }
+
+    fn unusable_response(&self, mode: WriteMode, message: &'static str) -> WriteError {
+        WriteError::Cluster(self.unexpected_response(action_of(mode), message))
     }
 
     fn timed_out(&self, mode: WriteMode) -> WriteError {
@@ -286,6 +695,11 @@ impl ClusterConnection {
     ) -> WriteError {
         match error {
             kube::Error::Api(status) => {
+                if status.code == 422
+                    && let Some(error) = unprocessable(&request.operation, &status)
+                {
+                    return error;
+                }
                 error_from_status(self.context(), mode, request.target.kind_name(), *status)
             }
             // These fail while the request is built, before anything is sent.
@@ -300,12 +714,55 @@ impl ClusterConnection {
     }
 }
 
+/// `PUT` answered the object changed while the editor was open.
+fn stale_object(base_version: &str, fresh_version: &str) -> WriteError {
+    WriteError::Conflict {
+        message: format!(
+            "the object changed since it was opened (resourceVersion {base_version} \u{2192} {fresh_version})"
+        ),
+        managers: Vec::new(),
+    }
+}
+
+/// The operations whose 422 does not read as a plain `Invalid`: a failed `test` op of a Roll back
+/// means the Deployment was replaced, and the server text of a generated Job can quote template
+/// values such as env literals, so only its field paths are kept.
+fn unprocessable(operation: &WriteOperation, status: &Status) -> Option<WriteError> {
+    match operation {
+        // A failed `test` op reads like another 422 reason; a template the server finds invalid
+        // is `Invalid`, with field paths only (the text could quote env literals).
+        WriteOperation::RollBackDeployment { .. } if status.reason != "Invalid" => {
+            Some(WriteError::Conflict {
+                message: STALE_TEMPLATE.to_owned(),
+                managers: Vec::new(),
+            })
+        }
+        WriteOperation::RollBackDeployment { .. } => Some(WriteError::Invalid {
+            message: REJECTED_TEMPLATE.to_owned(),
+            fields: cause_fields(status),
+        }),
+        WriteOperation::TriggerCronJob | WriteOperation::RerunJob => Some(WriteError::Invalid {
+            message: REJECTED_OBJECT.to_owned(),
+            fields: cause_fields(status),
+        }),
+        _ => None,
+    }
+}
+
 /// `fieldManager=k8sboard` in both modes; `DryRun` adds `dryRun=All`.
 fn patch_params(mode: WriteMode) -> PatchParams {
     PatchParams {
         dry_run: mode == WriteMode::DryRun,
         field_manager: Some(FIELD_MANAGER.to_owned()),
         ..PatchParams::default()
+    }
+}
+
+/// The same query for the creates and the replace: `fieldManager=k8sboard`, plus `dryRun=All`.
+fn post_params(mode: WriteMode) -> PostParams {
+    PostParams {
+        dry_run: mode == WriteMode::DryRun,
+        field_manager: Some(FIELD_MANAGER.to_owned()),
     }
 }
 
@@ -436,3 +893,11 @@ fn redact_message(kind_name: &str, message: &str, reason: &str, fields: &[String
 #[cfg(test)]
 #[path = "object_write_tests.rs"]
 mod object_write_tests;
+
+#[cfg(test)]
+#[path = "object_write_workload_tests.rs"]
+mod object_write_workload_tests;
+
+#[cfg(test)]
+#[path = "object_write_replace_tests.rs"]
+mod object_write_replace_tests;

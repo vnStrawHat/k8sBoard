@@ -41,20 +41,20 @@ Steps 0–2 touch only `crates/cluster` and can run while 0030 steps 2b/4 are in
 
 ## Acceptance criteria
 
-- [ ] 1. Quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. `Cargo.lock` gains exactly `similar` (step 3).
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists and passes offline. No test talks to a real cluster.
-- [ ] 3. No recorded request body contains `<hidden>`, `<hidden, changed>`, `<hidden, moved>`, or the header comment. An unmatched placeholder blocks locally and names its path.
-- [ ] 4. Changes to Secret `data` / `stringData` are refused locally. A Secret `PUT` carries the server's data unchanged.
-- [ ] 5. Request shape: `PUT {path}/{name}?dryRun=All&fieldManager=k8sboard` (a commit has no `dryRun`). JSON body: the edited object with the **base** `resourceVersion` and base `uid`, and no `status`, `managedFields`, or other server-owned metadata.
+- [ ] 1. (steps 0-2: the gate and both clippy runs pass, no new `#[allow]`; `similar` and its `Cargo.lock` entry wait for step 3) Quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. `Cargo.lock` gains exactly `similar` (step 3).
+- [ ] 2. (steps 0-2 done; steps 3-4 pending) Every test of the step in [test-plan.md](test-plan.md) exists and passes offline. No test talks to a real cluster.
+- [x] 3. No recorded request body contains `<hidden>`, `<hidden, changed>`, `<hidden, moved>`, or the header comment. An unmatched placeholder blocks locally and names its path.
+- [x] 4. Changes to Secret `data` / `stringData` are refused locally. A Secret `PUT` carries the server's data unchanged.
+- [x] 5. Request shape: `PUT {path}/{name}?dryRun=All&fieldManager=k8sboard` (a commit has no `dryRun`). JSON body: the edited object with the **base** `resourceVersion` and base `uid`, and no `status`, `managedFields`, or other server-owned metadata.
 - [ ] 6. The Diff tab shows the dry-run result against the current object, both masked the same way, built with no header. Changed masked values read `<hidden, changed>`, position-matched ones `<hidden, moved>`. Unchanged runs fold.
 - [ ] 7. A 409 shows the banner. "Reload and keep my changes" re-applies the user's changed paths to the new object, keeps a concurrent change to another list item, and lists unreachable paths and server-side changes.
-- [ ] 8. 422 field paths are listed verbatim; Secret messages are redacted (0030 `redact_error`).
+- [ ] 8. (crate half done: `server_422_lists_fields_verbatim`, `secret_errors_are_redacted`; the side panel waits for step 4) 422 field paths are listed verbatim; Secret messages are redacted (0030 `redact_error`).
 - [ ] 9. Edit YAML is offered only on editable kinds, enabled only when shipped, the lazy `update {resource}` check allows it, and the row's cluster is unlocked. Menus, E, and the palette agree (one entry: the `EditYaml` arm of `run_available_row_key`). Tier, typed name, connection, and audit come from the subject's `ClusterObject.cluster`, never the primary.
 - [ ] 10. Leaving with changes asks before discarding, including a cluster switch or a slot release of the edited cluster. Ctrl S while a dry-run is running does nothing.
 - [ ] 11. One audit line per commit: action `Edit YAML`, changed **paths only**. `EditPreview` never reaches the audit or a notification.
 - [ ] 12. UAT (debug build): Edit YAML is disabled with `Not permitted: update {resource}` (or the probe's real answer). A trace shows only GETs and SSAR POSTs. The ui-verifier finds no high-severity defect in `edit-yaml-diff` (W10).
-- [ ] 13. No `tracing::` call in `object_edit.rs`, `edit_placeholders.rs`, `edit_preview.rs`, or `yaml_edit.rs`. `EditBase`, `ObjectEdit`, and `EditPreview` have only a manual `Debug` (counts). No raw object leaves the crate.
-- [ ] 14. Step 0: `masked_yaml_output_is_unchanged` passes on the 0007 fixtures, and every 0007 test passes unmodified.
+- [ ] 13. (crate half done; `yaml_edit.rs` waits for step 3) No `tracing::` call in `object_edit.rs`, `edit_placeholders.rs`, `edit_preview.rs`, or `yaml_edit.rs`. `EditBase`, `ObjectEdit`, and `EditPreview` have only a manual `Debug` (counts). No raw object leaves the crate.
+- [x] 14. Step 0: `masked_yaml_output_is_unchanged` passes on the 0007 fixtures, and every 0007 test passes unmodified.
 
 ## Open items
 

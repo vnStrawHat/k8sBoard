@@ -65,7 +65,7 @@ All checks are namespaced. `ALL` grows by 7 (36 on main). Display: `patch deploy
 2. The ReplicaSet's controller owner reference must carry the Deployment's `uid`, and its `deployment.kubernetes.io/revision` must equal `revision`; otherwise `NotFound` and **no PATCH**.
 3. Template = the ReplicaSet `spec.template` with `metadata.labels["pod-template-hash"]` removed. Equal to the Deployment's current template (hash removed from both) → `Invalid { message: "revision {n} has the same template as the current one", fields: [] }`, no PATCH (so the dry-run disables Apply).
 4. Body: `[{"op":"test","path":"/metadata/uid","value":"<deployment uid>"},{"op":"replace","path":"/spec/template","value":<template>}]`.
-5. **422 on this PATCH is a failed `test` op** (the Deployment was replaced): `Conflict { message: "the deployment was replaced since it was read", managers: [] }`.
+5. **422 on this PATCH with a status `reason` other than `Invalid` is a failed `test` op** (the Deployment was replaced): `Conflict { message: "the deployment was replaced since it was read", managers: [] }`.
 
 JSON Patch, not merge patch: a merge patch would keep map keys the old revision lacks. The template (env literals) lives only inside the request build; it is never traced, returned, or audited.
 
@@ -92,4 +92,4 @@ GET the Job, then POST a Job with `generateName` `<job, first 51 chars>-rerun-`,
 0030 mapping, plus:
 
 - A GET inside an operation goes through `self.run` (a classified `ClusterError`) and returns `WriteError::Cluster` directly, never through the merged `write_error`, which turns every non-`Api` commit error into `OutcomeUnknown`: nothing was sent.
-- **422 on Trigger now and Re-run** → `Invalid { message: "the server rejected the generated object", fields }`: field paths only; the server message is dropped (it can quote template values such as env literals). **422 on Roll back** → the fixed-text `Conflict` of step 5, so no server text reaches the UI there either.
+- **422 on Trigger now and Re-run** → `Invalid { message: "the server rejected the generated object", fields }`: field paths only; the server message is dropped (it can quote template values such as env literals). **422 on Roll back** → the fixed-text `Conflict` of step 5 when the status `reason` is not `Invalid`, otherwise `Invalid { message: "the server rejected the template of that revision", fields }` (field paths only; changed 2026-10-03 by the orchestrator), so no server text reaches the UI there either.

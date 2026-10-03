@@ -21,7 +21,7 @@ pub struct WriteRequest { target: ObjectRef, operation: WriteOperation }
     pub effect: WriteEffect, pub created_name: Option<String>, pub uid: Option<String> }
 /// What the server did. 0030 `Patched`; 0032 `Created`; 0031 adds `Replaced`; 0033 `Deleted`, `DeletionPending`.
 #[derive(Clone, Debug, PartialEq, Eq)] pub enum WriteEffect { Patched, Created }
-#[derive(Clone, Debug)] pub struct ChangedField { pub path: &'static str, pub value: Option<String> } // None = not recorded
+#[derive(Clone, Debug)] pub struct ChangedField { pub path: Cow<'static, str>, pub value: Option<String> } // None = not recorded
 #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum WritePolicy { Allowed, Blocked }
 
 impl WriteRequest {
@@ -61,7 +61,7 @@ impl ClusterConnection {
 |---|---|---|---|---|---|
 | SSAR (exists) | POST | `/apis/authorization.k8s.io/v1/selfsubjectaccessreviews` | review | n/a (non-mutating) | 0001 |
 | `SetNodeSchedulable` | PATCH (merge) | `/api/v1/nodes/{name}` | `{"spec":{"unschedulable":b}}` | yes | 0030 |
-| `ReplaceObject` | GET, then PUT | `{path}/{name}?dryRun=All&fieldManager=k8sboard` (commit: no `dryRun`) | the edited object with the base `resourceVersion` and `uid`; no `status` or other server metadata | yes | 0031 |
+| `ReplaceObject` | GET, then PUT | `{path}/{name}?dryRun=All&fieldManager=k8sboard` (commit: no `dryRun`) | the edited object with the base `resourceVersion` and `uid`; no `status` or other server metadata | yes | 0031 (name rule: the DNS-1123 rule above, except the four RBAC kinds, which accept a path-segment name, 0031 decision 27) |
 | `DeleteObject` | DELETE | `{path}/{name}`, no query | `{"propagationPolicy":…,"preconditions":{"uid":…}}` plus `"dryRun":["All"]` on a dry-run; no `fieldManager` | yes (body) | 0033 |
 | `ScaleWorkload`, `RestartRollout`, `SetRolloutPaused`, `RollBackDeployment`, `SetCronJobSuspended`, `TriggerCronJob`, `RerunJob` | PATCH (merge; JSON Patch for Roll back), GET + POST for creates | 0032 write-operations.md | 0032 write-operations.md | yes | 0032 |
 | `EvictPod`, `SetNodeTaints`, `SetNodeLabels` | POST (eviction), PATCH (merge) | 0034 write-operations.md | 0034 write-operations.md | yes | 0034 |
@@ -77,7 +77,7 @@ Enforcement:
 
 1. **clippy `disallowed-methods`** in the root `clippy.toml`, one entry with a `reason` per path. The coder re-proves every path with a scratch call that must fire the lint (not committed):
    - `kube::Client::{send, request, request_text, request_status, request_stream, request_events}`.
-   - Mutating `kube::Api` methods: `create`, `patch`, `replace`, `delete`, `delete_collection`, `create_subresource`, `patch_subresource`, `replace_subresource`, `patch_status`, `replace_status`, `patch_scale`, `replace_scale`, `patch_metadata`, `replace_ephemeral_containers`, `patch_ephemeral_containers`, `evict`, and `entry` (its `OccupiedEntry::commit` creates or replaces inside kube; both are listed).
+   - Mutating `kube::Api` methods: `create`, `patch`, `replace`, `delete`, `delete_collection`, `create_subresource`, `patch_subresource`, `replace_subresource`, `patch_status`, `replace_status`, `patch_scale`, `replace_scale`, `patch_metadata`, `replace_ephemeral_containers`, `patch_ephemeral_containers`, `evict`, and `entry` (its `OccupiedEntry::commit` creates or replaces inside kube; both are listed). The kube helpers that patch inside kube are listed too: `restart` (wrong annotation, see `RestartRollout`), `cordon`, and `uncordon` (they bypass `SetNodeSchedulable`). Two more helpers write inside kube: `create_token_request` (it mints a ServiceAccount token) and `patch_approval` (it approves a CertificateSigningRequest).
    - `kube::runtime` helpers that write: `events::Recorder::publish`, `finalizer::finalizer`, `wait::delete::delete_and_finalize`.
    - Paths that exist only behind a feature or a newer Kubernetes version carry `allow-invalid = true`, because clippy warns about an unreachable path without it: `Client::connect` and `Api::{exec, attach, portforward}` (kube's `ws` feature, enabled by 0035/0036), `Client::kubelet_node_{exec, attach, portforward}` (kube's `kubelet-debug` feature), and `Api::{patch_resize, replace_resize}` (Kubernetes 1.33).
 2. **Named exceptions: the canonical list** (single source; other specs point here). Each is one `#[allow(clippy::disallowed_methods)]` on the smallest item with a comment naming its row; no other allow:

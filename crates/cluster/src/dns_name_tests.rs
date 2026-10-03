@@ -31,3 +31,30 @@ fn names_follow_dns_subdomain_rules() {
     assert_eq!(longest.len(), 253);
     assert!(is_dns_subdomain(&longest));
 }
+
+#[test]
+fn path_segment_names_allow_rbac_colons_only() {
+    for name in ["system:aggregate-to-admin", "A", "a_b", "a.b", ".a"] {
+        assert!(is_path_segment_name(name), "{name}");
+    }
+    let too_long = "a".repeat(254);
+    for name in [
+        "",
+        ".",
+        "..",
+        "a/b",
+        "a%2F",
+        "a?b",
+        "a#b",
+        "a b",
+        "a\\b",
+        "\u{e9}",
+        "a\u{202e}b",
+        "a\tb",
+        "a\nb",
+        too_long.as_str(),
+    ] {
+        assert!(!is_path_segment_name(name), "{name:?}");
+    }
+    assert!(is_path_segment_name(&"a".repeat(253)));
+}
