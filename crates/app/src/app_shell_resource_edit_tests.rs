@@ -1304,3 +1304,65 @@ fn the_class_list_is_loaded_only_on_the_storage_classes_screen(cx: &mut TestAppC
     t.show_kind(PVC_KIND, rows(), rows(), cx);
     assert!(names(&t, cx).is_empty());
 }
+
+// ---- Review fixes ----
+
+#[gpui_kit::test]
+fn the_end_note_warns_when_a_default_was_made_meanwhile(cx: &mut TestAppContext) {
+    let t = edit_clusters("default-meanwhile", cx);
+    on_stg_classes(&t, cx);
+    let (gp3, io2) = (class("gp3", false, true), class("io2", true, true));
+    let cluster = t.stg.clone();
+    let scope = crate::workload_actions::WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    let batch =
+        crate::resource_edits::default_class_intent(&scope, &gp3, &[&gp3, &io2]).expect("a plan");
+    let results = vec![ItemProgress::Done; batch.plan.items.len()];
+    let note = |t: &Clusters, cx: &mut TestAppContext| {
+        t.fixture.shell.read_with(cx, |shell, cx| {
+            shell.many_defaults_note(&batch, &results, cx)
+        })
+    };
+    // The list still shows the old state (the watch has not caught up): one default after the run.
+    assert_eq!(note(&t, cx), None);
+    // st1 became the default while the dialog was open.
+    let rows = class_rows(&[
+        ("gp3", false, NEWER),
+        ("io2", true, OLDER),
+        ("st1", true, OLDER),
+    ]);
+    t.show_kind(CLASS_KIND, Vec::new(), rows, cx);
+    assert_eq!(
+        note(&t, cx).as_deref(),
+        Some(
+            "More than one storage class is marked default now (gp3, st1); the cluster uses the newest"
+        )
+    );
+}
+
+#[gpui_kit::test]
+fn a_retry_off_the_storage_classes_screen_says_why_and_opens_nothing(cx: &mut TestAppContext) {
+    let t = edit_clusters("default-retry-off-screen", cx);
+    let rows = || claim_rows(&[("data-kafka-0", "100Gi", "100Gi")]);
+    t.show_kind(PVC_KIND, rows(), rows(), cx);
+    let subject = ClusterObject::new(
+        t.stg.clone(),
+        ResourceKey::Kind {
+            kind: CLASS_KIND,
+            namespace: None,
+            name: "gp3".to_owned(),
+        },
+    );
+    let before = t.notification_count(cx);
+    t.fixture.with_window(cx, |window, cx| {
+        t.fixture.shell.update(cx, |shell, cx| {
+            shell.retry_batch(ResourceAction::SetDefaultStorageClass, &subject, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(!t.has_dialog(cx));
+    assert_eq!(t.notification_count(cx), before + 1);
+    assert!(writes(&t.stg_api).is_empty());
+}

@@ -404,3 +404,40 @@ async fn debug_build_blocks_the_new_operations() {
     }
     assert!(api.requests().is_empty());
 }
+
+#[test]
+fn operations_without_a_value_rule_pass_the_check_unchanged() {
+    let operations = [
+        WriteOperation::SetNodeSchedulable { schedulable: true },
+        WriteOperation::ScaleWorkload { replicas: 3 },
+        WriteOperation::SetRolloutPaused { paused: true },
+        WriteOperation::SetCronJobSuspended { suspended: false },
+        WriteOperation::TriggerCronJob,
+        WriteOperation::RerunJob,
+        WriteOperation::DeleteNodeShellPod {
+            uid: "u".to_owned(),
+        },
+        WriteOperation::SetHpaReplicaRange { min: 1, max: 4 },
+        WriteOperation::SetDefaultStorageClass { is_default: true },
+    ];
+    for operation in operations {
+        assert_eq!(
+            checked_operation(operation.clone()),
+            Some(operation.clone()),
+            "{operation:?}"
+        );
+    }
+    // The ones with a value rule still refuse a bad value and trim a good one.
+    assert_eq!(
+        checked_operation(WriteOperation::SetHpaReplicaRange { min: 0, max: 4 }),
+        None
+    );
+    assert_eq!(
+        checked_operation(WriteOperation::ExpandClaim {
+            storage: " 1Gi ".to_owned()
+        }),
+        Some(WriteOperation::ExpandClaim {
+            storage: "1Gi".to_owned()
+        })
+    );
+}

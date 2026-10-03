@@ -557,6 +557,21 @@ impl AppShell {
             });
             let notice = batch.notice(&results);
             let is_success = results.iter().all(ItemProgress::is_settled);
+            // The plan was frozen when the dialog opened: a class made the default meanwhile is
+            // still one, so a clean run is not a plain success then.
+            let many_defaults = match is_success {
+                true => shell
+                    .update(cx, |shell, cx| {
+                        shell.many_defaults_note(&batch, &results, cx)
+                    })
+                    .ok()
+                    .flatten(),
+                false => None,
+            };
+            let (notice, is_success) = match many_defaults {
+                Some(warning) => (format!("{notice}. {warning}"), false),
+                None => (notice, is_success),
+            };
             let retry = batch
                 .retry_subject(&results)
                 .map(|subject| (subject, batch.action));

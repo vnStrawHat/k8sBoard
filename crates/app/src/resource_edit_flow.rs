@@ -8,13 +8,13 @@ use cluster::{HorizontalPodAutoscalerSummary, PersistentVolumeClaimSummary};
 use gpui_kit::{App, AppContext as _, Context, SharedString, Window};
 
 use super::AppShell;
-use super::batch_write::BulkValue;
+use super::batch_write::{BatchExtras, BatchIntent, BulkValue, ItemProgress};
 use super::write_flow::notify;
 use crate::kind_row::KindObject;
 use crate::resource_actions::{ResourceAction, action_label, unavailable_text};
 use crate::resource_edits::{
-    StorageInput, claim_block, claim_floor, class_block, default_class_intent, expand_intent,
-    hpa_range_intent, storage_input,
+    StorageInput, claim_block, claim_floor, class_block, default_class_intent, defaults_after,
+    expand_intent, hpa_range_intent, many_defaults_warning, storage_input,
 };
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::value_popover::ValuePopover;
@@ -183,6 +183,9 @@ impl AppShell {
 
     /// Why `claim` cannot be expanded now: its state, and its class when the StorageClasses list is
     /// loaded in the claim's cluster.
+    // ponytail: the class list is loaded only on the StorageClasses screen, never beside PVC rows,
+    // so this class check rarely fires; the dry-run (the admission refusal) is the backstop. Add a
+    // one-shot class GET if it must be exact.
     fn claim_refusal(
         &self,
         subject: &ClusterObject,
@@ -304,8 +307,13 @@ impl AppShell {
             };
             let classes = live.loaded_storage_classes();
             let Some(target) = classes.iter().copied().find(|class| class.name == *name) else {
-                let text = unavailable_text(label, "the object is no longer listed");
-                notify(window, cx, text);
+                // The plan reads the list on screen: off the StorageClasses screen there is none.
+                let reason = if classes.is_empty() {
+                    "Open StorageClasses first"
+                } else {
+                    "the object is no longer listed"
+                };
+                notify(window, cx, unavailable_text(label, reason));
                 return;
             };
             // A Retry bypasses this: the target is the default by then, and the unsets remain.
@@ -329,6 +337,23 @@ impl AppShell {
                 unavailable_text(label, "there is nothing to change"),
             ),
         }
+    }
+
+    /// What a Set default adds to its end notice when it went through but more than one class is
+    /// marked default: the plan was frozen when the dialog opened, so a class made the default
+    /// meanwhile is still one. `None` for any other batch, or when no class list is loaded.
+    pub(super) fn many_defaults_note(
+        &self,
+        batch: &BatchIntent,
+        results: &[ItemProgress],
+        cx: &App,
+    ) -> Option<String> {
+        if !matches!(batch.plan.extras, BatchExtras::DefaultClass(_)) {
+            return None;
+        }
+        let live = self.slot_live(&batch.cluster, cx)?;
+        let defaults = defaults_after(batch, results, &live.loaded_storage_classes());
+        many_defaults_warning(&defaults)
     }
 
     /// The Retry of a stopped batch: the same action on the same object, planned again from the

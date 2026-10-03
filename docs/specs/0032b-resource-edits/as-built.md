@@ -39,3 +39,11 @@
 - AC 3 is met by one test per operation (`hpa_range_patches_both_fields`, `expand_patches_the_storage_request`, `set_default_true_sets_the_ga_annotation`, `set_default_false_clears_the_beta_annotation`) that pins method, path, query, content type, and body, instead of extending `allow_list_matches_the_operations`.
 - AC 2: a few tests are named differently from the plan (`expand_warnings_follow_the_claim_state`, `a_partial_default_change_offers_retry_that_replans_only_the_unsets` covers both Retry cases, `a_lock_that_comes_on_after_the_first_item_stops_the_rest`); every case of the plan has a test.
 - AC 10: the screens were captured in light and dark (`v86-hpa-range-popover-*`, `v86-expand-confirm-*`, `v86-default-class-confirm-*`) and read by the coder; no ui-verifier agent run was made.
+
+## Review fixes
+
+- `checked_operation` lists every `WriteOperation` instead of a catch-all, so a new operation (0034) does not compile until it gets a validation decision.
+- The state a stopped Set default leaves behind names the first unset that did not go through (`DefaultClassExtras.two_defaults` has one text per unset), not always the first class.
+- When a Set default ends clean, the shell re-reads the loaded StorageClasses list with the batch's own changes laid over it (`defaults_after`). If more than one class is marked default (one was made the default while the dialog was open), the end notice is a warning, not `2 done`. Without a loaded list there is nothing to check.
+- A Retry off the StorageClasses screen says `Open StorageClasses first`.
+- **Not done: uid pin on Expand.** Adding `metadata.uid` to the merge body would make the server refuse a replaced claim, but no vendored source or doc in `.cargo-home` states how the server answers a uid mismatch on a merge patch, and `PersistentVolumeClaimSummary` has no uid. Skipped; the dry-run and the re-read of the row at submit are the only guards against a claim replaced under the same name.

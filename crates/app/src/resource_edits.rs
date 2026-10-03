@@ -359,6 +359,8 @@ pub(crate) fn expand_intent(
 
 /// The batch of one size over the ticked claims. A claim the state refuses, or that has that size
 /// or more already, becomes a skipped line. `Err` is the reason the batch cannot open.
+// ponytail: `classes` is empty in practice (the list loads only on the StorageClasses screen), so the
+// dry-run is the backstop for a class without expansion; see `claim_refusal`.
 pub(crate) fn bulk_expand_intent(
     inputs: &BulkInputs<'_>,
     storage: &str,
@@ -437,8 +439,8 @@ pub(crate) struct DefaultClassExtras {
     pub(crate) target: String,
     /// Whether the plan sets the target. A Retry does not: the target is the default already.
     sets_target: bool,
-    /// The text of two classes marked default, for the first class the plan unsets.
-    two_defaults: Option<String>,
+    /// The text of two classes marked default, for each class the plan unsets, in item order.
+    two_defaults: Vec<String>,
 }
 
 impl DefaultClassExtras {
@@ -453,15 +455,16 @@ impl DefaultClassExtras {
     }
 
     /// The state a stopped run left behind, when it is two classes marked default: the target is
-    /// the default by then (the set went through, or the plan had none), and an unset did not.
+    /// the default by then (the set went through, or the plan had none), and the first unset that
+    /// did not go through names the class that still is.
     pub(crate) fn state_left(&self, results: &[ItemProgress]) -> Option<String> {
-        let is_target_default =
-            !self.sets_target || results.first().is_some_and(ItemProgress::is_settled);
-        if is_target_default {
-            self.two_defaults.clone()
-        } else {
-            None
+        let first_unset = usize::from(self.sets_target);
+        if self.sets_target && !results.first().is_some_and(ItemProgress::is_settled) {
+            return None;
         }
+        let unsets = results.get(first_unset..)?;
+        let index = unsets.iter().position(|state| !state.is_settled())?;
+        self.two_defaults.get(index).cloned()
     }
 }
 
@@ -548,13 +551,12 @@ pub(crate) fn default_class_intent(
         warnings.push(format!("{} stops being the default", old.name).into());
     }
     // A target that is the default already has a partial run behind it: say which one is in use.
-    let two_defaults = others.first().map(|old| two_defaults_text(target, old));
+    let two_defaults: Vec<String> = others
+        .iter()
+        .map(|old| two_defaults_text(target, old))
+        .collect();
     if target.is_default {
-        warnings.extend(
-            others
-                .iter()
-                .map(|old| SharedString::from(two_defaults_text(target, old))),
-        );
+        warnings.extend(two_defaults.iter().cloned().map(SharedString::from));
     }
     let action = ResourceAction::SetDefaultStorageClass;
     Some(BatchIntent {
@@ -578,6 +580,50 @@ pub(crate) fn default_class_intent(
             }),
             on_failure: BatchFailure::Stop,
         },
+    })
+}
+
+/// The classes marked default once a Set default batch ended, in name order: the list as it is on
+/// screen, with what the batch did laid over it. The overlay keeps a watch that has not caught up
+/// from showing the old state, while a class that someone else made the default meanwhile (the
+/// plan was frozen when the dialog opened) stays in the answer. Empty when no list is loaded.
+pub(crate) fn defaults_after(
+    batch: &BatchIntent,
+    results: &[ItemProgress],
+    classes: &[&StorageClassSummary],
+) -> Vec<String> {
+    if classes.is_empty() {
+        return Vec::new();
+    }
+    let mut defaults: Vec<String> = classes
+        .iter()
+        .filter(|class| class.is_default)
+        .map(|class| class.name.clone())
+        .collect();
+    for (item, result) in batch.plan.items.iter().zip(results) {
+        let WriteOperation::SetDefaultStorageClass { is_default } = item.request.operation() else {
+            continue;
+        };
+        if !result.is_settled() {
+            continue;
+        }
+        let name = item.request.target().name();
+        defaults.retain(|known| known != name);
+        if *is_default {
+            defaults.push(name.to_owned());
+        }
+    }
+    defaults.sort();
+    defaults
+}
+
+/// The end note of a Set default that left more than one class marked default, else `None`.
+pub(crate) fn many_defaults_warning(defaults: &[String]) -> Option<String> {
+    (defaults.len() > 1).then(|| {
+        format!(
+            "More than one storage class is marked default now ({}); the cluster uses the newest",
+            defaults.join(", ")
+        )
     })
 }
 

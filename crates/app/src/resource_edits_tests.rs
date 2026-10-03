@@ -787,3 +787,98 @@ fn bulk_set_default_needs_exactly_one_class() {
     let one = bulk_default(&[KindObject::StorageClass(gp3.clone())], &[&gp3, &io2]);
     assert!(one.is_ok_and(|batch| batch.plan.items.len() == 2));
 }
+
+// ---- Review fixes ----
+
+fn extras_of(batch: &BatchIntent) -> &DefaultClassExtras {
+    let BatchExtras::DefaultClass(extras) = &batch.plan.extras else {
+        panic!("a default-class plan");
+    };
+    extras
+}
+
+#[test]
+fn the_state_left_names_the_unset_that_did_not_go_through() {
+    // a and b are both default: the plan is [set gp3, unset a, unset b].
+    let gp3 = class("gp3", false, true);
+    let (a, b) = (class("a", true, true), class("b", true, true));
+    let batch = default_plan(&gp3, &[&gp3, &a, &b]).expect("a plan");
+    let extras = extras_of(&batch);
+    let failed = || ItemProgress::Failed("boom".into());
+    let not_sent = || ItemProgress::NotSent("an earlier step failed".into());
+    // a's unset went through and b's did not: the state names b, not a.
+    let results = [ItemProgress::Done, ItemProgress::Done, failed()];
+    let text = extras.state_left(&results).expect("two defaults");
+    assert!(text.starts_with("Both gp3 and b "), "{text}");
+    assert!(text.ends_with("until b is unset"), "{text}");
+    // a's unset failed and b's was never sent: a.
+    let results = [ItemProgress::Done, failed(), not_sent()];
+    let text = extras.state_left(&results).expect("two defaults");
+    assert!(text.starts_with("Both gp3 and a "), "{text}");
+    // Everything went through: nothing is left behind.
+    assert_eq!(extras.state_left(&vec![ItemProgress::Done; 3]), None);
+}
+
+#[test]
+fn the_state_left_of_a_retry_counts_from_its_first_unset() {
+    let gp3 = class("gp3", true, true);
+    let (a, b) = (class("a", true, true), class("b", true, true));
+    let batch = default_plan(&gp3, &[&gp3, &a, &b]).expect("a plan");
+    // The set is omitted: the items are [unset a, unset b].
+    let results = [ItemProgress::Done, ItemProgress::Failed("boom".into())];
+    let text = extras_of(&batch)
+        .state_left(&results)
+        .expect("two defaults");
+    assert!(text.starts_with("Both gp3 and b "), "{text}");
+}
+
+fn done_plan(
+    gp3: &StorageClassSummary,
+    olds: &[&StorageClassSummary],
+) -> (BatchIntent, Vec<ItemProgress>) {
+    let mut classes = vec![gp3];
+    classes.extend(olds);
+    let batch = default_plan(gp3, &classes).expect("a plan");
+    let results = vec![ItemProgress::Done; batch.plan.items.len()];
+    (batch, results)
+}
+
+#[test]
+fn a_default_made_meanwhile_is_still_a_default_after_the_run() {
+    let (gp3, io2) = (class("gp3", false, true), class("io2", true, true));
+    let (batch, results) = done_plan(&gp3, &[&io2]);
+    // The list as the watch shows it after the commits: the plan's own changes are laid over it,
+    // so a list that has not caught up still reads one default.
+    let stale = [&gp3, &io2];
+    assert_eq!(defaults_after(&batch, &results, &stale), ["gp3"]);
+    assert_eq!(many_defaults_warning(&["gp3".to_owned()]), None);
+    // Someone made st1 the default after the plan was drawn.
+    let st1 = class("st1", true, true);
+    let with_st1 = [&gp3, &io2, &st1];
+    let defaults = defaults_after(&batch, &results, &with_st1);
+    assert_eq!(defaults, ["gp3", "st1"]);
+    assert_eq!(
+        many_defaults_warning(&defaults).as_deref(),
+        Some(
+            "More than one storage class is marked default now (gp3, st1); the cluster uses the newest"
+        )
+    );
+}
+
+#[test]
+fn a_step_that_did_not_go_through_leaves_the_list_as_it_is() {
+    let (gp3, io2) = (class("gp3", false, true), class("io2", true, true));
+    let (batch, _) = done_plan(&gp3, &[&io2]);
+    let results = [ItemProgress::Done, ItemProgress::Failed("boom".into())];
+    assert_eq!(
+        defaults_after(&batch, &results, &[&gp3, &io2]),
+        ["gp3", "io2"]
+    );
+}
+
+#[test]
+fn no_loaded_list_means_no_defaults_to_report() {
+    let (gp3, io2) = (class("gp3", false, true), class("io2", true, true));
+    let (batch, results) = done_plan(&gp3, &[&io2]);
+    assert!(defaults_after(&batch, &results, &[]).is_empty());
+}

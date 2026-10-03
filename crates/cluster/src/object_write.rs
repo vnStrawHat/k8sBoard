@@ -455,7 +455,23 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
                 storage: storage.to_owned(),
             })
         }
-        other => Some(other),
+        // Listed one by one, not as `other`: a new operation does not compile until it gets a
+        // validation decision here.
+        operation @ (WriteOperation::SetNodeSchedulable { .. }
+        | WriteOperation::ScaleWorkload { .. }
+        | WriteOperation::RestartRollout { .. }
+        | WriteOperation::SetRolloutPaused { .. }
+        | WriteOperation::RollBackDeployment { .. }
+        | WriteOperation::SetCronJobSuspended { .. }
+        | WriteOperation::TriggerCronJob
+        | WriteOperation::RerunJob
+        | WriteOperation::ReplaceObject(_)
+        | WriteOperation::DeleteObject { .. }
+        | WriteOperation::AddDebugContainer { .. }
+        | WriteOperation::CreateNodeShellPod { .. }
+        | WriteOperation::DeleteNodeShellPod { .. }
+        | WriteOperation::SetHpaReplicaRange { .. }
+        | WriteOperation::SetDefaultStorageClass { .. }) => Some(operation),
     }
 }
 
