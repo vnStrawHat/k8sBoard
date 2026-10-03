@@ -1,4 +1,7 @@
-use cluster::{AccessCheck, NamespaceScope, NodeSummary, PodSummary, SecretKey};
+use cluster::{
+    AccessCheck, ContainerKind, ContainerState, ContainerSummary, NamespaceScope, NodeSummary,
+    PodSummary, SecretKey,
+};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
@@ -8,6 +11,7 @@ use gpui_kit::{
 
 use crate::access_bindings::role_key;
 use crate::access_query::who_can_prefill;
+use crate::app_shell::shell_open::ShellOpen;
 use crate::app_shell::write_flow::cordon_label;
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_registry::ClusterRef;
@@ -24,6 +28,7 @@ use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
 use crate::live_sections::claim_pods;
 use crate::log_target::{LogTarget, workload_label};
 use crate::network_rows::ingress_urls;
+use crate::pod_drawer::kind_tag_text;
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, ValueAccess};
 use crate::table_selection::{ClusterObject, ResourceKey};
@@ -92,7 +97,8 @@ enum ActionGate {
     /// Changes the cluster or opens a session on it: its spec must have shipped, its permission
     /// must be granted, and the cluster must be unlocked.
     Mutating {
-        check: AccessCheck,
+        /// Every permission the action needs; the first one that is not allowed is the reason.
+        checks: Vec<AccessCheck>,
         is_shipped: bool,
     },
     /// A mutating action whose spec, and so whose permission check, has not been written yet.
@@ -106,22 +112,24 @@ impl ResourceAction {
                 check: Some(AccessCheck::GetPodLogs),
             },
             Self::CopyName | Self::ViewYaml => ActionGate::ReadOnly { check: None },
+            // A WebSocket exec is authorized as `get` before Kubernetes 1.35 and as `create` too from
+            // 1.35 (spec 0036), so a shell needs both.
             Self::OpenShell => ActionGate::Mutating {
-                check: AccessCheck::CreatePodExec,
-                is_shipped: false,
+                checks: vec![AccessCheck::GetPodExec, AccessCheck::CreatePodExec],
+                is_shipped: true,
             },
             Self::PortForward => ActionGate::Mutating {
-                check: AccessCheck::CreatePodPortForward,
+                checks: vec![AccessCheck::CreatePodPortForward],
                 is_shipped: false,
             },
             // The node shell is a debug pod, so it needs the same right as a pod shell.
             Self::OpenNodeShell => ActionGate::Mutating {
-                check: AccessCheck::CreatePodExec,
+                checks: vec![AccessCheck::CreatePodExec],
                 is_shipped: false,
             },
-            // The first shipped mutating action (spec 0030).
+            // Spec 0030: the first shipped mutating action.
             Self::Cordon => ActionGate::Mutating {
-                check: AccessCheck::PatchNodes,
+                checks: vec![AccessCheck::PatchNodes],
                 is_shipped: true,
             },
             Self::Drain | Self::EditYaml | Self::Delete | Self::RestartRollout | Self::Scale => {
@@ -329,19 +337,49 @@ fn before_lock_reason(gate: &ActionGate, access: &AccessState) -> Option<SharedS
             is_shipped: false, ..
         } => Some(NOT_SHIPPED_REASON.into()),
         // An action with no check is never held back by the permission state.
-        ActionGate::ReadOnly { check } => check.and_then(|check| permission_reason(check, access)),
-        ActionGate::Mutating { check, .. } => permission_reason(*check, access),
+        ActionGate::ReadOnly { check } => {
+            check.and_then(|check| permission_reason(&[check], access))
+        }
+        ActionGate::Mutating { checks, .. } => permission_reason(checks, access),
     }
 }
 
-fn permission_reason(check: AccessCheck, access: &AccessState) -> Option<SharedString> {
+/// Why the permissions do not allow the action: the state while they are not known, else the
+/// first check of `checks` that is not allowed. A denied verb with its sibling verb on the same
+/// resource in the list names both (`get and create pods/exec`), because the user needs both.
+fn permission_reason(checks: &[AccessCheck], access: &AccessState) -> Option<SharedString> {
     match access {
         AccessState::Checking { .. } => Some("Checking permissions…".into()),
         AccessState::Unknown => Some("Permissions could not be checked".into()),
-        AccessState::Known(report) if !report.is_allowed(check) => {
-            Some(format!("Not permitted: {check}").into())
+        AccessState::Known(report) => {
+            let denied = checks.iter().find(|check| !report.is_allowed(**check))?;
+            Some(denied_text(*denied, checks).into())
         }
-        AccessState::Known(_) => None,
+    }
+}
+
+/// The verb pairs that read as one right: a server before Kubernetes 1.35 asks for `get`, one after
+/// asks for both.
+const VERB_PAIRS: [(AccessCheck, AccessCheck, &str); 2] = [
+    (
+        AccessCheck::GetPodExec,
+        AccessCheck::CreatePodExec,
+        "pods/exec",
+    ),
+    (
+        AccessCheck::GetPodPortForward,
+        AccessCheck::CreatePodPortForward,
+        "pods/portforward",
+    ),
+];
+
+fn denied_text(denied: AccessCheck, checks: &[AccessCheck]) -> String {
+    let pair = VERB_PAIRS.iter().find(|(get, create, _)| {
+        (denied == *get || denied == *create) && checks.contains(get) && checks.contains(create)
+    });
+    match pair {
+        Some((_, _, resource)) => format!("Not permitted: get and create {resource}"),
+        None => format!("Not permitted: {denied}"),
     }
 }
 
@@ -351,20 +389,28 @@ fn disabled(reason: impl Into<SharedString>) -> ActionAvailability {
     }
 }
 
-/// Shared by the row context menu and the drawer header menu, so both always agree.
+/// The handles the items of a pod menu act through.
+pub(crate) struct PodMenuLinks<'a> {
+    pub(crate) dock: &'a WeakEntity<Dock>,
+    pub(crate) shell: &'a WeakEntity<AppShell>,
+}
+
+/// Shared by the row context menu and the drawer header menu, so both always agree. `open_shell`
+/// is built by the caller (`ShellMenu::item`) because a submenu needs the app.
 pub(crate) fn pod_menu(
     menu: PopupMenu,
     pod: &PodSummary,
     live: &LiveCluster,
     guard: &ClusterGuard<'_>,
     row: &RowContext,
-    dock: &WeakEntity<Dock>,
-    shell: &WeakEntity<AppShell>,
+    links: &PodMenuLinks<'_>,
+    open_shell: PopupMenuItem,
 ) -> PopupMenu {
+    let PodMenuLinks { dock, shell } = *links;
     let access = guard.access;
     let menu = menu
         .item(view_logs_item(pod, None, live, row, dock))
-        .item(action_item(ResourceAction::OpenShell, guard))
+        .item(open_shell)
         .item(action_item(ResourceAction::PortForward, guard))
         .item(view_yaml_item(row.object(ResourceKey::of_pod(pod)), shell))
         .separator()
@@ -1332,16 +1378,200 @@ pub(crate) fn view_logs_reason(live: Option<&LiveCluster>) -> Option<SharedStrin
     }
 }
 
-/// Why "Shell into selected" is disabled. The tooltip needs no lock: a shell has not shipped, so it
-/// is off whatever the lock says.
-pub(crate) fn open_shell_reason(live: Option<&LiveCluster>) -> SharedString {
-    let Some(live) = live else {
-        return NOT_SHIPPED_REASON.into();
-    };
-    match availability_before_lock(ResourceAction::OpenShell, &live.access) {
-        ActionAvailability::Disabled { reason } => reason,
-        ActionAvailability::Enabled => NOT_SHIPPED_REASON.into(),
+/// Whether a container can take a shell now.
+fn is_running(container: &ContainerSummary) -> bool {
+    matches!(container.state, ContainerState::Running { .. })
+}
+
+/// The container S opens: the first running main container, else the first running one. Init
+/// containers are never offered.
+pub(crate) fn default_shell_container(pod: &PodSummary) -> Option<&ContainerSummary> {
+    let mut running = pod
+        .containers
+        .iter()
+        .filter(|container| container.kind != ContainerKind::Init && is_running(container));
+    let first = running.next()?;
+    if first.kind == ContainerKind::Main {
+        return Some(first);
     }
+    Some(
+        running
+            .find(|container| container.kind == ContainerKind::Main)
+            .unwrap_or(first),
+    )
+}
+
+/// One container of the Open shell submenu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ShellChoice {
+    pub(crate) name: String,
+    /// `MAIN` or `SIDECAR`.
+    pub(crate) tag: &'static str,
+    pub(crate) is_running: bool,
+}
+
+/// What the Open shell item of a pod offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ShellMenuState {
+    Disabled(SharedString),
+    /// A pod with one container opens it directly.
+    One(String),
+    /// Several containers: a submenu, a container that is not running disabled.
+    Pick(Vec<ShellChoice>),
+}
+
+/// The Open shell item of a pod, decided from the gate of the pod's own cluster and its containers.
+/// Pure.
+pub(crate) fn shell_menu_state(pod: &PodSummary, guard: &ClusterGuard<'_>) -> ShellMenuState {
+    if let ActionAvailability::Disabled { reason } =
+        action_availability(ResourceAction::OpenShell, guard)
+    {
+        return ShellMenuState::Disabled(reason);
+    }
+    let choices: Vec<ShellChoice> = pod
+        .containers
+        .iter()
+        .filter(|container| container.kind != ContainerKind::Init)
+        .map(|container| ShellChoice {
+            name: container.name.clone(),
+            tag: kind_tag_text(container.kind),
+            is_running: is_running(container),
+        })
+        .collect();
+    match choices.as_slice() {
+        [] => ShellMenuState::Disabled("The pod has no containers".into()),
+        [only] if only.is_running => ShellMenuState::One(only.name.clone()),
+        [_] => ShellMenuState::Disabled(NOT_RUNNING_REASON.into()),
+        _ if choices.iter().any(|choice| choice.is_running) => ShellMenuState::Pick(choices),
+        _ => ShellMenuState::Disabled("No running container".into()),
+    }
+}
+
+const NOT_RUNNING_REASON: &str = "Container is not running";
+
+/// The Open shell item of a pod menu, with everything it needs owned: a submenu is built from the
+/// app, so a caller makes this before it borrows the session (like `secret_menu`).
+pub(crate) struct ShellMenu {
+    state: ShellMenuState,
+    namespace: String,
+    pod: String,
+}
+
+impl ShellMenu {
+    pub(crate) fn of(pod: &PodSummary, guard: &ClusterGuard<'_>) -> Self {
+        Self {
+            state: shell_menu_state(pod, guard),
+            namespace: pod.namespace.clone(),
+            pod: pod.name.clone(),
+        }
+    }
+
+    /// Each entry opens its own container in the row's cluster, through the guarded flow.
+    pub(crate) fn item(
+        self,
+        row: &RowContext,
+        shell: &WeakEntity<AppShell>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> PopupMenuItem {
+        let label = action_label(ResourceAction::OpenShell);
+        let Self {
+            state,
+            namespace,
+            pod,
+        } = self;
+        let open = {
+            let (cluster, shell) = (row.cluster.clone(), shell.clone());
+            move |container: String| -> StartShell {
+                let open = ShellOpen {
+                    cluster: cluster.clone(),
+                    namespace: namespace.clone(),
+                    pod: pod.clone(),
+                    container,
+                };
+                let shell = shell.clone();
+                Box::new(move |window: &mut Window, cx: &mut App| {
+                    let open = open.clone();
+                    let _ = shell.update(cx, |shell, cx| shell.start_shell(open, window, cx));
+                })
+            }
+        };
+        match state {
+            ShellMenuState::Disabled(reason) => {
+                disabled_menu_item(label, reason).action(RowAction::OpenShell.key_action())
+            }
+            ShellMenuState::One(container) => {
+                let start = open(container);
+                PopupMenuItem::new(label)
+                    .on_click(move |_, window, cx| start(window, cx))
+                    .action(RowAction::OpenShell.key_action())
+            }
+            ShellMenuState::Pick(choices) => {
+                let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
+                    choice_items(submenu, &choices, &open)
+                });
+                PopupMenuItem::submenu(label, submenu)
+            }
+        }
+    }
+}
+
+/// The call an entry of the submenu makes when it is clicked.
+type StartShell = Box<dyn Fn(&mut Window, &mut App)>;
+
+/// One entry per container of the submenu: a running one opens a shell, one that is not running is
+/// shown disabled with its reason.
+fn choice_items(
+    menu: PopupMenu,
+    choices: &[ShellChoice],
+    open: &dyn Fn(String) -> StartShell,
+) -> PopupMenu {
+    choices.iter().fold(menu, |menu, choice| {
+        let text = format!("{} · {}", choice.name, choice.tag);
+        if !choice.is_running {
+            return menu.item(disabled_menu_item(text, NOT_RUNNING_REASON.into()));
+        }
+        let start = open(choice.name.clone());
+        menu.item(PopupMenuItem::new(text).on_click(move |_, window, cx| start(window, cx)))
+    })
+}
+
+/// `--screen shell-picker-fixture`: the container list of the Open shell submenu, in a dialog, since a
+/// submenu cannot be held open by a command line. Nothing in it opens a shell.
+#[cfg(feature = "screenshot")]
+pub(crate) fn open_shell_picker_fixture(window: &mut Window, cx: &mut App) {
+    use gpui_kit::component::WindowExt as _;
+    let choices = vec![
+        ShellChoice {
+            name: "api".to_owned(),
+            tag: "MAIN",
+            is_running: true,
+        },
+        ShellChoice {
+            name: "worker".to_owned(),
+            tag: "MAIN",
+            is_running: true,
+        },
+        ShellChoice {
+            name: "istio-proxy".to_owned(),
+            tag: "SIDECAR",
+            is_running: true,
+        },
+        ShellChoice {
+            name: "migrate".to_owned(),
+            tag: "SIDECAR",
+            is_running: false,
+        },
+    ];
+    let menu = PopupMenu::build(window, cx, move |menu, _, _| {
+        choice_items(menu, &choices, &|_| Box::new(|_, _| {}))
+    });
+    window.open_dialog(cx, move |dialog, _, _| {
+        dialog
+            .title("Open shell ▸")
+            .w(gpui_kit::px(340.))
+            .child(menu.clone())
+    });
 }
 
 /// The tooltip of a disabled Forward button. Port-forward has not shipped, so the lock never decides.

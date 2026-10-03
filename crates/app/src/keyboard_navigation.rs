@@ -405,7 +405,12 @@ impl AppShell {
 
     /// A single-letter row action on the cursor row, drawer open or closed. A key the subject
     /// does not offer does nothing; an offered but unavailable one says why.
-    fn run_row_key(&mut self, row: RowAction, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn run_row_key(
+        &mut self,
+        row: RowAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(subject) = self.selected.clone() else {
             return;
         };
@@ -430,9 +435,9 @@ impl AppShell {
         }
     }
 
-    /// What an available key does. Cordon is the only mutating action that has shipped: every other
-    /// mutating action stays disabled, so their arms are unreachable until the owning spec wires
-    /// them. The match is exhaustive so a new action cannot be forgotten.
+    /// What an available key does. Cordon and the pod shell are the mutating actions that have
+    /// shipped: every other mutating action stays disabled, so their arms are unreachable until the
+    /// owning spec wires them. The match is exhaustive so a new action cannot be forgotten.
     fn run_available_row_key(
         &mut self,
         action: ResourceAction,
@@ -445,8 +450,10 @@ impl AppShell {
             ResourceAction::ViewYaml => self.open_drawer_tab(subject, DrawerTab::Yaml, cx),
             // Copy name never reaches here: `copy_cursor_name` handles it before the gate.
             ResourceAction::CopyName => {}
-            // Unreachable while gated; the owning spec (0031–0036) wires it.
-            ResourceAction::OpenShell | ResourceAction::OpenNodeShell => {}
+            // The default container of the cursor pod, in the cursor's own cluster (spec 0036).
+            ResourceAction::OpenShell => self.open_default_shell(&subject, window, cx),
+            // Unreachable while gated; the owning spec (0037) wires it.
+            ResourceAction::OpenNodeShell => {}
             // Unreachable while gated; the owning spec (0031–0036) wires it.
             ResourceAction::PortForward => {}
             // Always on the subject's own cluster, never the primary.

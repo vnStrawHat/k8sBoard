@@ -27,7 +27,23 @@ impl AppShell {
             self.switch_cluster(only, cx);
             return;
         }
-        self.apply_view(wanted, None, cx);
+        let leaving: Vec<ClusterRef> = self
+            .view
+            .clusters()
+            .into_iter()
+            .filter(|cluster| !wanted.contains(cluster))
+            .collect();
+        let work = self.leaving_work(&leaving, cx);
+        if work.is_empty() {
+            self.apply_view(wanted, None, cx);
+            return;
+        }
+        let wanted = wanted.to_vec();
+        self.confirm_leaving(
+            work,
+            move |shell, cx| shell.apply_view(&wanted, None, cx),
+            cx,
+        );
     }
 
     pub(super) fn apply_view(
@@ -391,6 +407,15 @@ impl AppShell {
         if remaining.is_empty() {
             return;
         }
-        self.apply_view(&remaining, None, cx);
+        let work = self.leaving_work(std::slice::from_ref(cluster), cx);
+        if work.is_empty() {
+            self.apply_view(&remaining, None, cx);
+            return;
+        }
+        self.confirm_leaving(
+            work,
+            move |shell, cx| shell.apply_view(&remaining, None, cx),
+            cx,
+        );
     }
 }

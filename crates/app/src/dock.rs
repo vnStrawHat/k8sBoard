@@ -2,13 +2,15 @@
 
 use cluster::ClusterConnection;
 use gpui_kit::assets::IconName;
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, Window,
-    div, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::AppShell;
@@ -17,14 +19,18 @@ use crate::cluster_rows::RowContext;
 use crate::cluster_session::ClusterSession;
 use crate::log_tab::{LogLayout, LogTab, tab_title};
 use crate::log_target::{ContainerChoice, LogTarget, NoLogTarget};
-use crate::resource_actions::{NOT_SHIPPED_REASON, disabled_menu_item};
-use crate::status_tone::tone_color;
+use crate::resource_actions::{RowAction, disabled_menu_item};
+use crate::shell_tab::{ShellGrant, ShellTab, ShellTarget};
+use crate::status_tone::{StatusTone, tone_color};
 
 pub(crate) const DEFAULT_DOCK_HEIGHT: Pixels = px(280.);
 pub(crate) const MIN_DOCK_HEIGHT: Pixels = px(120.);
 const MAX_DOCK_FRACTION: f32 = 0.6;
 const TAB_BAR_HEIGHT: Pixels = px(34.);
 const TAB_LABEL_MAX_WIDTH: Pixels = px(260.);
+/// How many shell tabs the dock holds: each keeps a terminal with its scrollback (about 8 MB at
+/// 200 columns), so the cap bounds the memory.
+pub(crate) const MAX_SHELL_TABS: usize = 8;
 
 /// 60% of the measured workspace, never below the minimum (so the range stays valid);
 /// `Pixels::MAX` before the first layout, when the container is still zero.
@@ -63,8 +69,59 @@ impl LogOrigin {
     }
 }
 
+/// One tab of the dock: a log view or a shell. Never side by side: the dock shows one at a time.
+pub(crate) enum DockTab {
+    Logs(Entity<LogTab>),
+    Shell(Entity<ShellTab>),
+}
+
+impl DockTab {
+    /// The cluster the tab reads from or runs in: a release of that cluster closes the tab.
+    pub(crate) fn cluster<'a>(&'a self, cx: &'a App) -> &'a ClusterRef {
+        match self {
+            Self::Logs(tab) => tab.read(cx).cluster(),
+            Self::Shell(tab) => tab.read(cx).cluster(),
+        }
+    }
+
+    fn title(&self, is_multi: bool, cx: &App) -> String {
+        let (label, cluster_label) = match self {
+            Self::Logs(tab) => (
+                tab.read(cx).label(),
+                tab.read(cx).cluster_label().to_owned(),
+            ),
+            Self::Shell(tab) => (
+                tab.read(cx).label(),
+                tab.read(cx).cluster_label().to_owned(),
+            ),
+        };
+        tab_title(&label, &cluster_label, is_multi)
+    }
+
+    fn tone(&self, cx: &App) -> StatusTone {
+        match self {
+            Self::Logs(tab) => tab.read(cx).tone(),
+            Self::Shell(tab) => tab.read(cx).tone(),
+        }
+    }
+
+    fn icon(&self) -> IconName {
+        match self {
+            Self::Logs(_) => IconName::FileText,
+            Self::Shell(_) => IconName::SquareTerminal,
+        }
+    }
+
+    fn view(&self) -> AnyElement {
+        match self {
+            Self::Logs(tab) => tab.clone().into_any_element(),
+            Self::Shell(tab) => tab.clone().into_any_element(),
+        }
+    }
+}
+
 pub(crate) struct Dock {
-    tabs: Vec<Entity<LogTab>>,
+    tabs: Vec<DockTab>,
     /// `None` exactly when `tabs` is empty.
     active: Option<usize>,
     mode: DockMode,
@@ -105,19 +162,19 @@ impl Dock {
         let Some(session) = origin.session.upgrade() else {
             return;
         };
-        let existing = self
-            .tabs
-            .iter()
-            .position(|tab| tab.read(cx).is_for(&origin.cluster, &target));
+        let existing = self.tabs.iter().position(|tab| {
+            matches!(tab, DockTab::Logs(tab) if tab.read(cx).is_for(&origin.cluster, &target))
+        });
         let index = match existing {
             Some(index) => {
                 // A menu reopen must not undo the container the user picked in the tab, so only
                 // an explicit container switches it.
                 if let LogTarget::Pod(pod) = &target
                     && pod.choice == ContainerChoice::Explicit
+                    && let DockTab::Logs(tab) = &self.tabs[index]
                 {
                     let container = pod.initial_container.clone();
-                    self.tabs[index].update(cx, |tab, cx| tab.pick_container(container, cx));
+                    tab.update(cx, |tab, cx| tab.pick_container(container, cx));
                 }
                 index
             }
@@ -125,7 +182,7 @@ impl Dock {
                 let tab = cx.new(|cx| LogTab::new(origin, target, &session, window, cx));
                 let layout = self.layout();
                 tab.update(cx, |tab, cx| tab.set_layout(layout, cx));
-                self.tabs.push(tab);
+                self.tabs.push(DockTab::Logs(tab));
                 self.tabs.len() - 1
             }
         };
@@ -134,6 +191,67 @@ impl Dock {
             self.mode = DockMode::Normal;
         }
         cx.notify();
+    }
+
+    /// Opens a shell tab on `connection`, the connection of the target's own cluster, with the
+    /// proof that both exec verbs are allowed. A new tab every time (two shells into one container
+    /// are normal), activated; Minimized becomes Normal. `None`, with a notice, past the cap.
+    pub(crate) fn open_shell(
+        &mut self,
+        target: ShellTarget,
+        cluster_label: String,
+        grant: ShellGrant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<ShellTab>> {
+        if !self.has_room_for_shell(cx) {
+            window.push_notification(Notification::warning(shell_cap_text()), cx);
+            return None;
+        }
+        let app = self.shell.clone();
+        let tab = cx.new(|cx| ShellTab::new(target, cluster_label, app, window, cx));
+        tab.update(cx, |tab, cx| tab.connect(grant, cx));
+        self.tabs.push(DockTab::Shell(tab.clone()));
+        self.activate(self.tabs.len() - 1, cx);
+        Some(tab)
+    }
+
+    /// `--screen shell-fixture`: a shell tab that never connects, fed `transcript`.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn open_shell_fixture(
+        &mut self,
+        target: ShellTarget,
+        cluster_label: String,
+        transcript: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ShellTab> {
+        let app = self.shell.clone();
+        let tab = cx.new(|cx| ShellTab::new(target, cluster_label, app, window, cx));
+        tab.update(cx, |tab, cx| tab.show_fixture(transcript, cx));
+        self.tabs.push(DockTab::Shell(tab.clone()));
+        self.activate(self.tabs.len() - 1, cx);
+        tab
+    }
+
+    /// Whether another shell tab fits under the cap.
+    pub(crate) fn has_room_for_shell(&self, cx: &App) -> bool {
+        self.shell_tabs(cx).count() < MAX_SHELL_TABS
+    }
+
+    /// The shell tabs, for the checks that count them.
+    fn shell_tabs<'a>(&'a self, _: &'a App) -> impl Iterator<Item = &'a Entity<ShellTab>> {
+        self.tabs.iter().filter_map(|tab| match tab {
+            DockTab::Shell(tab) => Some(tab),
+            DockTab::Logs(_) => None,
+        })
+    }
+
+    /// How many open shell tabs belong to `clusters`: what releasing them would end.
+    pub(crate) fn shell_count_of(&self, clusters: &[ClusterRef], cx: &App) -> usize {
+        self.shell_tabs(cx)
+            .filter(|tab| clusters.contains(tab.read(cx).cluster()))
+            .count()
     }
 
     pub(crate) fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -163,7 +281,7 @@ impl Dock {
     pub(crate) fn close_tabs_of(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
         let mut index = 0;
         while index < self.tabs.len() {
-            if self.tabs[index].read(cx).cluster() == cluster {
+            if self.tabs[index].cluster(cx) == cluster {
                 self.close_tab(index, cx);
             } else {
                 index += 1;
@@ -182,7 +300,9 @@ impl Dock {
         self.mode = mode;
         let layout = self.layout();
         for tab in &self.tabs {
-            tab.update(cx, |tab, cx| tab.set_layout(layout, cx));
+            if let DockTab::Logs(tab) = tab {
+                tab.update(cx, |tab, cx| tab.set_layout(layout, cx));
+            }
         }
         cx.notify();
     }
@@ -214,6 +334,18 @@ impl Dock {
         self.tabs.len()
     }
 
+    /// The open shell tabs, in tab order.
+    #[cfg(test)]
+    pub(crate) fn shell_tab_entities(&self) -> Vec<Entity<ShellTab>> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| match tab {
+                DockTab::Shell(tab) => Some(tab.clone()),
+                DockTab::Logs(_) => None,
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub(crate) fn is_multi(&self) -> bool {
         self.is_multi
@@ -222,11 +354,16 @@ impl Dock {
     /// Whether the active tab is still waiting for its stream to open.
     #[cfg(feature = "screenshot")]
     pub(crate) fn is_connecting(&self, cx: &gpui_kit::App) -> bool {
-        self.active_tab()
-            .is_some_and(|tab| tab.read(cx).is_connecting())
+        match self.active_tab() {
+            Some(DockTab::Logs(tab)) => tab.read(cx).is_connecting(),
+            Some(DockTab::Shell(tab)) => {
+                *tab.read(cx).state() == crate::shell_tab::ShellState::Connecting
+            }
+            None => false,
+        }
     }
 
-    fn active_tab(&self) -> Option<&Entity<LogTab>> {
+    fn active_tab(&self) -> Option<&DockTab> {
         self.tabs.get(self.active?)
     }
 
@@ -284,7 +421,7 @@ impl Dock {
                 self.tabs
                     .iter()
                     .enumerate()
-                    .map(|(index, entity)| self.render_tab(index, entity, cx)),
+                    .map(|(index, tab)| self.render_tab(index, tab, cx)),
             )
             .child(self.render_new_tab_button())
             .child(div().flex_1())
@@ -315,8 +452,7 @@ impl Dock {
             .child(div().w_1())
     }
 
-    /// "+ ▾": a new tab for the selection. The shell slot is visible but never enabled in this
-    /// version, so there is no placeholder tab.
+    /// "+ ▾": a new tab for the selection, a log view or a shell.
     fn render_new_tab_button(&self) -> impl IntoElement {
         let shell = self.shell.clone();
         Button::new("log-dock-new")
@@ -339,8 +475,8 @@ impl Dock {
                     None => Err(NoLogTarget::NotConnected),
                 };
                 let shell_reason = match &entity {
-                    Some(entity) => entity.read(cx).open_shell_unavailable_reason(cx),
-                    None => NOT_SHIPPED_REASON.into(),
+                    Some(entity) => entity.read(cx).selected_shell_reason(cx),
+                    None => Some("Not connected".into()),
                 };
                 let logs_item = match target {
                     Ok(_) => {
@@ -355,19 +491,25 @@ impl Dock {
                         disabled_menu_item("Logs of selected", reason.to_string().into())
                     }
                 };
-                menu.item(logs_item)
-                    .item(disabled_menu_item("Shell into selected", shell_reason))
+                // The same arm as the S key and the palette: the cursor row, in its own cluster.
+                let shell_item = match shell_reason {
+                    None => {
+                        let shell = shell.clone();
+                        PopupMenuItem::new("Shell into selected").on_click(move |_, window, cx| {
+                            let _ = shell.update(cx, |shell, cx| {
+                                shell.run_row_key(RowAction::OpenShell, window, cx);
+                            });
+                        })
+                    }
+                    Some(reason) => disabled_menu_item("Shell into selected", reason),
+                };
+                menu.item(logs_item).item(shell_item)
             })
     }
 
-    fn render_tab(
-        &self,
-        index: usize,
-        entity: &Entity<LogTab>,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+    fn render_tab(&self, index: usize, tab: &DockTab, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let tab = entity.read(cx);
+        let title = tab.title(self.is_multi, cx);
         let is_active = self.active == Some(index);
         h_flex()
             .h_full()
@@ -382,7 +524,7 @@ impl Dock {
             .on_drag(
                 DraggedTab {
                     index,
-                    label: tab_title(&tab.label(), tab.cluster_label(), self.is_multi).into(),
+                    label: title.clone().into(),
                 },
                 |dragged, _, _, cx| cx.new(|_| dragged.clone()),
             )
@@ -398,13 +540,13 @@ impl Dock {
                     .min_w_0()
                     .cursor_pointer()
                     .on_click(cx.listener(move |dock, _, _, cx| dock.activate(index, cx)))
-                    .child(Icon::new(IconName::FileText).size_3())
+                    .child(Icon::new(tab.icon()).size_3())
                     .child(
                         div()
                             .flex_shrink_0()
                             .size_2()
                             .rounded_full()
-                            .bg(tone_color(tab.tone(), cx)),
+                            .bg(tone_color(tab.tone(cx), cx)),
                     )
                     .child(
                         div()
@@ -413,7 +555,7 @@ impl Dock {
                             .font_family(theme.mono_font_family.clone())
                             .text_xs()
                             .when(!is_active, |this| this.text_color(theme.muted_foreground))
-                            .child(tab_title(&tab.label(), tab.cluster_label(), self.is_multi)),
+                            .child(title),
                     ),
             )
             .child(
@@ -443,7 +585,7 @@ impl Render for Dock {
             .border_color(theme.border)
             .when(self.mode == DockMode::Normal, |this| this.shadow_md())
             .child(self.render_tab_bar(cx))
-            .children(body.map(|tab| div().flex_1().min_h_0().child(tab.clone())))
+            .children(body.map(|tab| div().flex_1().min_h_0().child(tab.view())))
     }
 }
 
@@ -468,6 +610,11 @@ impl Render for DraggedTab {
             .text_xs()
             .child(self.label.clone())
     }
+}
+
+/// The notice of a ninth shell tab.
+pub(crate) fn shell_cap_text() -> String {
+    format!("Close a shell tab first ({MAX_SHELL_TABS} open)")
 }
 
 /// The mode after the minimize key: a visible dock (split or zoomed) minimizes, a minimized one

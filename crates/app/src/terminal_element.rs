@@ -2,7 +2,7 @@
 //! queues one resize per change, and paints the snapshot of a `TerminalSession`. Fonts and colors
 //! come from the kit theme; nothing here names a color.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -14,6 +14,7 @@ use gpui_kit::{
     SharedString, Size, StrikethroughStyle, Styled as _, TextAlign, TextRun, UnderlineStyle,
     Window, canvas, fill, outline, point, px, size,
 };
+use oneterm_vt::search::SearchMatch;
 use oneterm_vt::{
     Attrs, CellWidth, Color, CursorShape, Palette, Rgb, RowId, SelectionRange, SnapshotContent,
     SnapshotRow, SnapshotState, Style,
@@ -33,6 +34,28 @@ const BAR_CURSOR_THICKNESS: f32 = 2.;
 /// The smallest grid the engine is given: one row, and two columns so a wide glyph fits.
 const MIN_COLS: u16 = 2;
 const MIN_ROWS: u16 = 1;
+/// A Find match is washed with the warning color; the current one is stronger.
+const FIND_MATCH_ALPHA: f32 = 0.4;
+const FIND_CURRENT_ALPHA: f32 = 0.75;
+
+/// Where the grid sits in the window and how big a cell is, as the last frame measured them. The
+/// element writes it and the owner reads it to turn a pointer position into a cell.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TerminalMetrics {
+    pub(crate) origin: Point<Pixels>,
+    pub(crate) cell: Size<Pixels>,
+}
+
+pub(crate) type SharedMetrics = Rc<Cell<Option<TerminalMetrics>>>;
+
+/// A pointer position as fractional rows and columns of the grid; a position above or left of the
+/// grid counts as its first row or column.
+pub(crate) fn cell_at(metrics: TerminalMetrics, position: Point<Pixels>) -> (f32, f32) {
+    let offset = position - metrics.origin;
+    let row = (offset.y / metrics.cell.height).max(0.);
+    let col = (offset.x / metrics.cell.width).max(0.);
+    (row, col)
+}
 
 /// What one frame measured before painting.
 pub(crate) struct Frame {
@@ -40,6 +63,7 @@ pub(crate) struct Frame {
     font: Font,
     font_size: Pixels,
     selection: Hsla,
+    find: Hsla,
 }
 
 /// The terminal for `session`, filling its parent. Each frame sizes the grid to the bounds and,
@@ -48,10 +72,11 @@ pub(crate) struct Frame {
 pub(crate) fn terminal_element(
     session: Rc<RefCell<TerminalSession>>,
     input: UnboundedSender<ShellInput>,
+    metrics: SharedMetrics,
 ) -> impl IntoElement {
     let paint_session = Rc::clone(&session);
     canvas(
-        move |bounds, window, cx| measure(&session, &input, bounds, window, cx),
+        move |bounds, window, cx| measure(&session, &input, &metrics, bounds, window, cx),
         move |bounds, frame, window, cx| paint(&paint_session, bounds, &frame, window, cx),
     )
     .size_full()
@@ -60,6 +85,7 @@ pub(crate) fn terminal_element(
 fn measure(
     session: &RefCell<TerminalSession>,
     input: &UnboundedSender<ShellInput>,
+    metrics: &Cell<Option<TerminalMetrics>>,
     bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
@@ -72,13 +98,19 @@ fn measure(
     let font_size = theme.mono_font_size;
     let palette = terminal_palette(theme);
     let selection = theme.selection;
+    let find = theme.warning;
     let cell = cell_size(window, &font, font_size);
+    metrics.set(Some(TerminalMetrics {
+        origin: bounds.origin,
+        cell,
+    }));
 
     let frame = Frame {
         cell,
         font,
         font_size,
         selection,
+        find,
     };
     // The owner never holds the session across a frame; if it does, the frame is skipped
     // rather than panicking in the middle of a paint.
@@ -138,6 +170,9 @@ fn paint(
     };
     let palette = *session.palette();
     let cursor_shape = session.cursor_shape();
+    // Copied first: the snapshot below borrows the session mutably until the last paint.
+    let matches = session.find_matches().to_vec();
+    let current_match = session.current_find_match();
     let snapshot = session.snapshot(Instant::now());
 
     window.paint_quad(fill(bounds, hsla_of(palette.background)));
@@ -148,6 +183,14 @@ fn paint(
         paint_row_text(row, origin, frame, &palette, window, cx);
     }
     paint_selection(snapshot, bounds.origin, frame, window);
+    paint_find_matches(
+        &matches,
+        current_match,
+        snapshot,
+        bounds.origin,
+        frame,
+        window,
+    );
     paint_cursor(
         snapshot,
         cursor_shape,
@@ -355,6 +398,56 @@ fn paint_selection(
         let extent = size(cell.width * f32::from(columns), cell.height);
         window.paint_quad(fill(Bounds::new(start, extent), frame.selection));
     }
+}
+
+fn paint_find_matches(
+    matches: &[SearchMatch],
+    current: Option<SearchMatch>,
+    snapshot: &SnapshotState,
+    origin: Point<Pixels>,
+    frame: &Frame,
+    window: &mut Window,
+) {
+    let cell = frame.cell;
+    for found in matches {
+        let Some(span) = match_span(*found, snapshot.viewport_top(), snapshot.size()) else {
+            continue;
+        };
+        let alpha = if current == Some(*found) {
+            FIND_CURRENT_ALPHA
+        } else {
+            FIND_MATCH_ALPHA
+        };
+        let start = origin
+            + point(
+                cell.width * f32::from(span.start_col),
+                cell.height * f32::from(span.row),
+            );
+        let columns = span.end_col - span.start_col;
+        let extent = size(cell.width * f32::from(columns), cell.height);
+        window.paint_quad(fill(Bounds::new(start, extent), frame.find.opacity(alpha)));
+    }
+}
+
+/// The cells of a Find match when it is on screen. A match is one row long.
+pub(crate) fn match_span(
+    found: SearchMatch,
+    top: RowId,
+    size: oneterm_vt::Size,
+) -> Option<SelectionSpan> {
+    let row = i64::try_from(found.row.0).unwrap_or(i64::MAX) - top_id(top);
+    if !(0..i64::from(size.rows)).contains(&row) {
+        return None;
+    }
+    let start_col = u16::try_from(found.start_col).unwrap_or(u16::MAX);
+    let end_col = u16::try_from(found.end_col)
+        .unwrap_or(u16::MAX)
+        .min(size.cols);
+    (start_col < end_col).then_some(SelectionSpan {
+        row: u16::try_from(row).unwrap_or(u16::MAX),
+        start_col,
+        end_col,
+    })
 }
 
 /// One highlighted run of cells on a viewport row; `end_col` is exclusive.

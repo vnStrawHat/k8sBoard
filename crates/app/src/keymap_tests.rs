@@ -272,8 +272,9 @@ fn every_sheet_row_has_a_binding(cx: &mut TestAppContext) {
 fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
     bind_all(cx);
     let rows = shortcut_rows();
-    let without_row: [&dyn Action; 15] = [
+    let without_row: [&dyn Action; 16] = [
         &LeaveInput,
+        &CloseTerminalFind,
         &PalettePreview,
         &SwitchToCluster2,
         &SwitchToCluster3,
@@ -480,4 +481,163 @@ fn enter_is_suppressed_in_write_confirm(cx: &mut TestAppContext) {
     }
     // Other dialogs keep the kit's Enter.
     assert!(resolve("enter", &["Root", "Dialog"], cx).is_some());
+}
+
+const TERMINAL_PATH: [&str; 4] = ["Root", "AppShell", "Dock", "Terminal"];
+
+#[gpui_kit::test]
+fn single_keys_do_nothing_in_the_terminal(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for key in [
+        "j", "k", "y", "l", "s", "?", "/", ":", "enter", "escape", "delete", "[", "shift-s",
+    ] {
+        let name = resolve(key, &TERMINAL_PATH, cx);
+        assert!(!is_app_action(name), "{key} resolved to {name:?}");
+    }
+    // The same keys still work in the workspace around the dock.
+    assert_eq!(
+        resolve("j", &["Root", "AppShell", "Dock"], cx),
+        Some("k8sboard::SelectNextRow")
+    );
+}
+
+#[gpui_kit::test]
+fn shell_keys_reach_the_program_on_windows_and_linux(cx: &mut TestAppContext) {
+    bind_all(cx);
+    if cfg!(target_os = "macos") {
+        // Every app chord there uses Cmd, which a shell never receives.
+        return;
+    }
+    // `NoAction` unbinds the key under the terminal: it resolves to nothing, so the key reaches
+    // the terminal's key handler and the program, and not the chord of the same key.
+    for key in [
+        "ctrl-k",
+        "ctrl-n",
+        "ctrl-w",
+        "ctrl-c",
+        "tab",
+        "shift-tab",
+        "ctrl-1",
+        "ctrl-5",
+        "ctrl-9",
+    ] {
+        assert_eq!(resolve(key, &TERMINAL_PATH, cx), None, "{key}");
+    }
+    // Outside the terminal they keep their meaning.
+    assert_eq!(
+        resolve("ctrl-k", &["Root", "AppShell", "Dock"], cx),
+        Some("k8sboard::OpenPalette")
+    );
+    assert_eq!(
+        resolve("ctrl-w", &["Root", "AppShell", "Dock"], cx),
+        Some("k8sboard::CloseDockTab")
+    );
+    assert_eq!(
+        resolve("ctrl-2", &["Root", "AppShell", "Dock"], cx),
+        Some("k8sboard::SwitchToCluster2")
+    );
+}
+
+#[gpui_kit::test]
+fn terminal_copy_and_paste_chords_resolve(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("ctrl-shift-c", &TERMINAL_PATH, cx),
+        Some("k8sboard::TerminalCopy")
+    );
+    assert_eq!(
+        resolve("ctrl-shift-v", &TERMINAL_PATH, cx),
+        Some("k8sboard::TerminalPaste")
+    );
+    assert_eq!(
+        resolve("ctrl-shift-f", &TERMINAL_PATH, cx),
+        Some("k8sboard::TerminalFind")
+    );
+    if cfg!(target_os = "macos") {
+        assert_eq!(
+            resolve("cmd-v", &TERMINAL_PATH, cx),
+            Some("k8sboard::TerminalPaste")
+        );
+        assert_eq!(
+            resolve("cmd-c", &TERMINAL_PATH, cx),
+            Some("k8sboard::TerminalCopy")
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn terminal_copy_outranks_the_cluster_switcher_only_inside_the_terminal(cx: &mut TestAppContext) {
+    bind_all(cx);
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    assert_eq!(
+        resolve("ctrl-shift-c", &["Root", "AppShell", "Dock"], cx),
+        Some("k8sboard::OpenClusterSwitcher")
+    );
+    assert_eq!(
+        resolve("ctrl-shift-c", &TERMINAL_PATH, cx),
+        Some("k8sboard::TerminalCopy")
+    );
+}
+
+#[gpui_kit::test]
+fn dock_chords_still_work_in_the_terminal(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for (key, action) in [
+        ("ctrl-`", "ToggleDock"),
+        ("ctrl-tab", "NextDockTab"),
+        ("ctrl-shift-tab", "PreviousDockTab"),
+        ("secondary-shift-m", "ToggleDockZoom"),
+        ("secondary-shift-r", "ToggleReadOnly"),
+    ] {
+        assert_eq!(
+            resolve(key, &TERMINAL_PATH, cx),
+            Some(format!("k8sboard::{action}").as_str()),
+            "{key}"
+        );
+    }
+    assert_eq!(
+        resolve("secondary-,", &TERMINAL_PATH, cx),
+        Some("k8sboard::OpenSettings")
+    );
+}
+
+#[gpui_kit::test]
+fn escape_in_find_closes_find_not_leave_input(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve(
+            "escape",
+            &["Root", "AppShell", "Dock", "ShellFind", "Input"],
+            cx
+        ),
+        Some("k8sboard::CloseTerminalFind")
+    );
+    // Any other field of the dock keeps the 0028 leave-input Escape.
+    assert_eq!(
+        resolve("escape", &["Root", "AppShell", "Dock", "Input"], cx),
+        Some("k8sboard::LeaveInput")
+    );
+}
+
+#[gpui_kit::test]
+fn the_terminal_context_is_the_only_one_with_shell_chords(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for key in ["ctrl-shift-c", "ctrl-shift-v", "ctrl-shift-f"] {
+        for path in [&SHELL[..], &INPUT_PATH[..], &TABLE_PATH[..]] {
+            let name = resolve(key, path, cx);
+            assert!(
+                !matches!(
+                    name,
+                    Some(
+                        "k8sboard::TerminalCopy"
+                            | "k8sboard::TerminalPaste"
+                            | "k8sboard::TerminalFind"
+                    )
+                ),
+                "{key} under {path:?}: {name:?}"
+            );
+        }
+    }
 }

@@ -26,7 +26,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -67,6 +67,18 @@ pub(crate) enum LaunchScreen {
     LogsZoomed,
     /// `--screen logs-workload`: the dock zoomed on the workload that owns the logs pod.
     LogsWorkload,
+    /// `--screen shell-fixture`: Pods with the dock zoomed on a shell tab fed a fixed transcript
+    /// (the W8b pane). Screenshot builds only; it never opens a session.
+    ShellFixture,
+    /// `--screen shell-dock-fixture`: the dock at its split with a Logs tab and the shell tab.
+    ShellDockFixture,
+    /// `--screen shell-paste-fixture`: the shell tab with the multi-line paste dialog open.
+    ShellPasteFixture,
+    /// `--screen shell-picker-fixture`: the container list of the Open shell submenu.
+    ShellPickerFixture,
+    /// `--screen shell-confirm-fixture`: Pods with the Open shell confirm dialog open on a fixed
+    /// pod; its confirm button and Enter do nothing.
+    ShellConfirmFixture,
     /// `--screen pods-selected|nodes-selected`: the first two rows are ticked.
     PodsSelected,
     NodesSelected,
@@ -115,12 +127,17 @@ impl LaunchScreen {
         match self {
             Self::Overview | Self::Switcher => Screen::Overview,
             Self::CordonConfirm | Self::UnlockConfirm => Screen::Nodes,
+            Self::ShellConfirmFixture => Screen::Pods,
             Self::Pods
             | Self::PodsMulti
             | Self::PodDrawer(_)
             | Self::LogsDock
             | Self::LogsZoomed
             | Self::LogsWorkload
+            | Self::ShellFixture
+            | Self::ShellDockFixture
+            | Self::ShellPasteFixture
+            | Self::ShellPickerFixture
             | Self::PodsSelected
             | Self::Shortcuts
             | Self::PodsCursor => Screen::Pods,
@@ -262,12 +279,22 @@ impl LaunchScreen {
                 | Self::Shortcuts
                 | Self::CordonConfirm
                 | Self::UnlockConfirm
+                | Self::ShellConfirmFixture
         )
     }
 
     /// Whether the log dock must be open on a pod.
     pub(crate) fn has_dock(self) -> bool {
-        matches!(self, Self::LogsDock | Self::LogsZoomed | Self::LogsWorkload)
+        matches!(
+            self,
+            Self::LogsDock
+                | Self::LogsZoomed
+                | Self::LogsWorkload
+                | Self::ShellFixture
+                | Self::ShellDockFixture
+                | Self::ShellPasteFixture
+                | Self::ShellPickerFixture
+        )
     }
 
     fn parse(text: &str) -> Option<Self> {
@@ -296,6 +323,11 @@ impl LaunchScreen {
             "logs-dock" => Some(Self::LogsDock),
             "logs-zoomed" => Some(Self::LogsZoomed),
             "logs-workload" => Some(Self::LogsWorkload),
+            "shell-fixture" => Some(Self::ShellFixture),
+            "shell-dock-fixture" => Some(Self::ShellDockFixture),
+            "shell-paste-fixture" => Some(Self::ShellPasteFixture),
+            "shell-picker-fixture" => Some(Self::ShellPickerFixture),
+            "shell-confirm-fixture" => Some(Self::ShellConfirmFixture),
             "pods-selected" => Some(Self::PodsSelected),
             "nodes-selected" => Some(Self::NodesSelected),
             "shortcuts" => Some(Self::Shortcuts),

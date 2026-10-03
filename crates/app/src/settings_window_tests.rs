@@ -416,3 +416,11 @@ fn the_safety_page_renders(cx: &mut TestAppContext) {
         SettingsPage::Safety
     );
 }
+
+#[test]
+fn the_about_page_carries_the_terminal_engine_notice() {
+    // The Apache License asks a redistributor to keep the notice of what it links.
+    assert!(ONETERM_NOTICE.contains("oneterm-vt"));
+    assert!(ONETERM_NOTICE.contains("Apache-2.0"));
+    assert!(ONETERM_NOTICE.contains("The OneTerm authors"));
+}

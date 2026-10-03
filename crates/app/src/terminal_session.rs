@@ -14,9 +14,12 @@ use std::time::Instant;
 use cluster::GridSize;
 use gpui_kit::Rgba;
 use gpui_kit::component::ThemeColor;
+use oneterm_vt::input::{KeyMods, KeySpec};
+use oneterm_vt::search::{GridText, SearchMatch, SearchOptions, SearchPattern, search_grid_text};
 use oneterm_vt::{
-    ColorKey, Config, CursorShape, EventBatch, OscRoute, OscRoutes, Palette, ParamSpans,
-    ResizePolicy, Rgb, Size, SnapshotState, StringTerm, Terminal, VtEvent,
+    ColorKey, Config, CursorShape, EventBatch, ModeSnapshot, OscRoute, OscRoutes, Palette,
+    ParamSpans, ResizePolicy, Rgb, SelectionKind, Size, SnapshotState, StringTerm, Terminal,
+    VtEvent,
 };
 
 /// The rows of history one terminal keeps.
@@ -71,6 +74,14 @@ pub(crate) struct TerminalSession {
     outbox: Vec<u8>,
     shell: ResolvedShell,
     cell_pixels: (u16, u16),
+    find: FindState,
+}
+
+/// The matches of the last Find query, newest first, and the one the user is on.
+#[derive(Default)]
+struct FindState {
+    matches: Vec<SearchMatch>,
+    current: Option<usize>,
 }
 
 impl TerminalSession {
@@ -94,6 +105,7 @@ impl TerminalSession {
             outbox: Vec::new(),
             shell: ResolvedShell::Auto,
             cell_pixels: (0, 0),
+            find: FindState::default(),
         }
     }
 
@@ -153,6 +165,15 @@ impl TerminalSession {
         self.palette = palette;
     }
 
+    /// The size the engine is at now, which is what a new exec starts with.
+    pub(crate) fn grid_size(&self) -> GridSize {
+        let size = self.term.size();
+        GridSize {
+            cols: size.cols,
+            rows: size.rows,
+        }
+    }
+
     pub(crate) fn shell(&self) -> ResolvedShell {
         self.shell
     }
@@ -171,6 +192,126 @@ impl TerminalSession {
             self.cell_pixels = (width, height);
             self.term.set_cell_pixels(width, height);
         }
+    }
+
+    /// The modes a program set: bracketed paste, mouse reporting, alternate screen.
+    pub(crate) fn modes(&self) -> ModeSnapshot {
+        self.term.mode_snapshot()
+    }
+
+    /// The bytes a key sends, in the modes the program set. `None` for a chord with no encoding.
+    pub(crate) fn encode_key(&self, key: &KeySpec, mods: KeyMods) -> Option<Vec<u8>> {
+        self.term.encode_key(key, mods)
+    }
+
+    /// Scrolls the view by `lines`; a negative count goes towards history.
+    pub(crate) fn scroll_lines(&mut self, lines: i32) {
+        self.term.grid_mut().screen_mut().scroll_viewport(lines);
+    }
+
+    /// Returns the view to the live screen, where new output lands.
+    pub(crate) fn scroll_to_bottom(&mut self) {
+        self.term.grid_mut().screen_mut().scroll_to_bottom();
+    }
+
+    /// Starts a selection at a pointer position given in fractional cells of the view.
+    pub(crate) fn begin_selection(&mut self, row: f32, col: f32, kind: SelectionKind) {
+        let (pos, side) = self.term.hit_test(row, col);
+        self.term.selection_start(pos, side, kind);
+    }
+
+    /// Moves the far end of the selection to the pointer.
+    pub(crate) fn extend_selection(&mut self, row: f32, col: f32) {
+        let (pos, side) = self.term.hit_test(row, col);
+        self.term.selection_update(pos, side);
+    }
+
+    pub(crate) fn clear_selection(&mut self) {
+        self.term.selection_clear();
+    }
+
+    /// The selected text, `None` when nothing is selected. Shell output can hold secrets, so the
+    /// caller hands it to the private clipboard write and keeps no copy.
+    pub(crate) fn selected_text(&self) -> Option<String> {
+        self.term.selection_text().filter(|text| !text.is_empty())
+    }
+
+    /// Searches the whole grid, history included, for `query` ignoring ASCII case. The newest match
+    /// becomes current and is scrolled into view. An empty query clears the highlights. Returns the
+    /// match count.
+    pub(crate) fn find(&mut self, query: &str) -> usize {
+        self.find = FindState::default();
+        if query.is_empty() {
+            return 0;
+        }
+        let text = GridText::from_terminal(&self.term);
+        let mut matches = search_grid_text(
+            &text,
+            SearchPattern::Literal(query),
+            SearchOptions::default(),
+        );
+        // The engine lists oldest first; the user starts from the bottom of the screen.
+        matches.reverse();
+        self.find.current = (!matches.is_empty()).then_some(0);
+        self.find.matches = matches;
+        self.reveal_current_match();
+        self.find.matches.len()
+    }
+
+    /// Moves to the next older match, wrapping to the newest.
+    pub(crate) fn find_next(&mut self) {
+        self.step_match(true);
+    }
+
+    /// Moves to the next newer match, wrapping to the oldest.
+    pub(crate) fn find_previous(&mut self) {
+        self.step_match(false);
+    }
+
+    pub(crate) fn clear_find(&mut self) {
+        self.find = FindState::default();
+    }
+
+    /// `(position, total)`, the position counted from 1 over the matches newest first.
+    pub(crate) fn find_status(&self) -> Option<(usize, usize)> {
+        Some((self.find.current? + 1, self.find.matches.len()))
+    }
+
+    pub(crate) fn find_matches(&self) -> &[SearchMatch] {
+        &self.find.matches
+    }
+
+    pub(crate) fn current_find_match(&self) -> Option<SearchMatch> {
+        self.find.matches.get(self.find.current?).copied()
+    }
+
+    fn step_match(&mut self, is_older: bool) {
+        let total = self.find.matches.len();
+        let Some(current) = self.find.current else {
+            return;
+        };
+        self.find.current = Some(if is_older {
+            (current + 1) % total
+        } else {
+            (current + total - 1) % total
+        });
+        self.reveal_current_match();
+    }
+
+    /// Scrolls so the current match is on screen, near the middle when it was not.
+    fn reveal_current_match(&mut self) {
+        let Some(found) = self.current_find_match() else {
+            return;
+        };
+        let view = self.term.viewport();
+        let row = i64::try_from(found.row.0).unwrap_or(i64::MAX);
+        let top = i64::try_from(view.top.0).unwrap_or(i64::MAX);
+        if (top..top + i64::from(view.rows)).contains(&row) {
+            return;
+        }
+        let wanted_top = row - i64::from(view.rows / 2);
+        let delta = (wanted_top - top).clamp(i64::from(i32::MIN), i64::from(i32::MAX));
+        self.scroll_lines(i32::try_from(delta).unwrap_or(0));
     }
 
     fn apply_events(&mut self) {

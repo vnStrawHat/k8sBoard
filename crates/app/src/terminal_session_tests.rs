@@ -1,5 +1,5 @@
 use gpui_kit::component::ThemeColor;
-use oneterm_vt::{Attrs, CellWidth, Color, SnapshotContent, SnapshotRow};
+use oneterm_vt::{Attrs, CellWidth, Color, SelectionKind, SnapshotContent, SnapshotRow};
 
 use super::*;
 
@@ -295,4 +295,130 @@ fn terminal_palette_uses_theme_tokens_only() {
         // The cube and the greys are the engine's defaults.
         assert_eq!(palette.indexed[16..], Palette::new().indexed[16..]);
     }
+}
+
+// ---- find, selection, and scrolling (step 3b) ----
+
+/// Ten lines of which three hold `api`, on a screen of five rows, so the oldest match scrolls
+/// out of view.
+fn session_with_three_api_lines() -> TerminalSession {
+    let mut text = String::new();
+    for line in [
+        "api one",
+        "x",
+        "x",
+        "x",
+        "x",
+        "x",
+        "api two",
+        "x",
+        "x",
+        "api three",
+    ] {
+        text.push_str(line);
+        text.push_str("\r\n");
+    }
+    fed(text.as_bytes())
+}
+
+#[test]
+fn find_reports_match_count_and_order() {
+    let mut session = session_with_three_api_lines();
+    assert_eq!(session.find("API"), 3, "ASCII case is ignored");
+    // The newest match is the first one the user is on.
+    assert_eq!(session.find_status(), Some((1, 3)));
+    let rows: Vec<u64> = session.find_matches().iter().map(|m| m.row.0).collect();
+    assert!(
+        rows[0] > rows[1] && rows[1] > rows[2],
+        "newest first: {rows:?}"
+    );
+    session.find_next();
+    assert_eq!(session.find_status(), Some((2, 3)));
+    session.find_next();
+    session.find_next();
+    assert_eq!(
+        session.find_status(),
+        Some((1, 3)),
+        "next wraps to the newest"
+    );
+    session.find_previous();
+    assert_eq!(
+        session.find_status(),
+        Some((3, 3)),
+        "previous wraps to the oldest"
+    );
+}
+
+#[test]
+fn find_scrolls_the_current_match_into_view() {
+    let mut session = session_with_three_api_lines();
+    session.find("api");
+    let oldest_is_visible = |session: &mut TerminalSession| {
+        let top = session.snapshot(now()).viewport_top();
+        let found = session.current_find_match().expect("a current match");
+        let rows = i64::from(SIZE.rows);
+        let row = i64::try_from(found.row.0).unwrap() - i64::try_from(top.0).unwrap();
+        (0..rows).contains(&row)
+    };
+    assert!(oldest_is_visible(&mut session), "the newest match is shown");
+    session.find_next();
+    session.find_next();
+    assert_eq!(session.find_status(), Some((3, 3)));
+    assert!(
+        oldest_is_visible(&mut session),
+        "the oldest match scrolled into view"
+    );
+}
+
+#[test]
+fn an_empty_or_unmatched_query_leaves_no_matches() {
+    let mut session = session_with_three_api_lines();
+    assert_eq!(session.find("nothing here"), 0);
+    assert_eq!(session.find_status(), None);
+    session.find("api");
+    assert_eq!(session.find(""), 0);
+    assert!(session.find_matches().is_empty());
+    session.find("api");
+    session.clear_find();
+    assert_eq!(session.find_status(), None);
+}
+
+#[test]
+fn a_selection_reads_back_the_text_under_it() {
+    let mut session = fed(b"hello world\r\nsecond line");
+    assert_eq!(session.selected_text(), None);
+    session.begin_selection(0., 0., SelectionKind::Simple);
+    session.extend_selection(0., 4.5);
+    assert_eq!(session.selected_text().as_deref(), Some("hello"));
+    session.clear_selection();
+    assert_eq!(session.selected_text(), None);
+    // A double click selects the word, a triple click the line.
+    session.begin_selection(0., 7., SelectionKind::Semantic);
+    assert_eq!(session.selected_text().as_deref(), Some("world"));
+    session.begin_selection(1., 2., SelectionKind::Lines);
+    // A line selection keeps its line end.
+    assert_eq!(session.selected_text().as_deref(), Some("second line\n"));
+}
+
+#[test]
+fn scrolling_shows_history_and_any_key_returns_to_the_bottom() {
+    let mut text = String::new();
+    for n in 0..30 {
+        text.push_str(&format!("line {n}\r\n"));
+    }
+    let mut session = fed(text.as_bytes());
+    let bottom = screen_text(&mut session);
+    session.scroll_lines(-3);
+    let scrolled = screen_text(&mut session);
+    assert_ne!(bottom, scrolled, "the view moved into history");
+    session.scroll_to_bottom();
+    assert_eq!(screen_text(&mut session), bottom);
+}
+
+#[test]
+fn modes_report_bracketed_paste() {
+    let mut session = fed(b"");
+    assert!(!session.modes().bracketed_paste);
+    session.feed(b"\x1b[?2004h", now());
+    assert!(session.modes().bracketed_paste);
 }

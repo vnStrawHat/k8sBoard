@@ -406,12 +406,24 @@ fn tier_table(cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+/// The notice of the terminal engine, which the Apache License asks the app to carry (its NOTICE
+/// file, shortened to what applies to the part of it that is linked).
+const ONETERM_NOTICE: &str = "oneterm-vt, the terminal engine of the shell tab. Copyright 2026 The OneTerm authors (https://github.com/vnStrawHat/OneTerm), Apache-2.0. Its column reflow follows the algorithm of avt (https://github.com/asciinema/avt), Apache-2.0.";
+
 fn about_page(cx: &App) -> SettingPage {
     let mut group = SettingGroup::new()
         .item(about_row("Version", |_, _| {
             format!("k8sBoard {}", env!("CARGO_PKG_VERSION")).into_any_element()
         }))
         .item(about_row("License", |_, _| "Apache-2.0".into_any_element()))
+        .item(about_row("Third-party software", |_, cx| {
+            div()
+                .max_w(px(420.))
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(ONETERM_NOTICE)
+                .into_any_element()
+        }))
         .item(about_row("Settings folder", settings_folder));
     if let Some(notice) = AppSettings::notice(cx) {
         let text = notice.to_string();

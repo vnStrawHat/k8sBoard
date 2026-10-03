@@ -60,7 +60,7 @@ kube `ws` feature on; local listeners; Forward buttons (pods, services, workload
 - Deps: 0030, 0024. Risk: High (sockets, reconnect, port conflicts). UAT denies `create pods/portforward`.
 
 ### 0036 — Terminal and pod shell
-`oneterm-vt` pinned git dependency (`default-features = false`), terminal element (grid, input, selection, copy, Find), Shell dock tabs (W8b), shell picker, Clear, Reconnect, sessions kept across navigation, Settings › Terminal & Shell. Attach is a later item, no longer owned by 0036.
+`oneterm-vt` pinned git dependency (`default-features = false`), terminal element (grid, input, selection, copy, Find), Shell dock tabs (W8b), shell picker, Clear, Reconnect, sessions kept across navigation. Attach is a later item, no longer owned by 0036; Settings › Terminal & Shell moved out of 0036 (W2 draws no content for it). Built: guarded open (one confirm dialog, audit line per start), the multi-check gate, the "{N} shells will close" release confirm.
 - Deps: 0030, 0028. Risk: High (largest custom UI; untestable on UAT: exec denied).
 
 ### 0037 — Node shell and debug containers

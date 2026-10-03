@@ -36,8 +36,8 @@
 | Config dirs and format | `dirs` 6 (already locked) + `serde_json`; JSON `settings.json` | 0024 (done) |
 | Folder watching | a file-watcher crate or polling | 0025 |
 | Fuzzy matching | own greedy scorer `fuzzy_score.rs`, no dependency (0029 decision 1) | 0029 |
-| WebSocket exec and port-forward | kube `ws` feature | 0035, 0036 |
-| Terminal engine | `oneterm-vt`, git dependency pinned to a commit, `default-features = false` (already a commented line in the root `Cargo.toml`) | 0036 |
+| WebSocket exec and port-forward | kube `ws` feature, enabled in `crates/cluster` only (0036 uses it for exec; 0035 reuses it) | 0035, 0036 |
+| Terminal engine | `oneterm-vt`, git dependency pinned to rev `e2f9c24b…`, `default-features = false` (recorded in the root `Cargo.toml`); credited on the About page | 0036 (done) |
 | Optional YAML LSP | `yaml-language-server` is an external Node process; proposed: skip LSP, use the kit editor's highlighting plus server dry-run validation | 0031 |
 
 ## UAT data availability (probe at `e80ed80`, `readonly@Monitor`, v1.29.5)

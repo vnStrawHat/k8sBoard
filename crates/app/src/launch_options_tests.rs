@@ -740,3 +740,27 @@ fn the_write_dialog_screens_open_on_nodes() {
         assert!(parsed.shows_node_usage());
     }
 }
+
+#[test]
+fn the_shell_fixture_screens_open_pods_with_a_dock() {
+    for (name, screen) in [
+        ("shell-fixture", LaunchScreen::ShellFixture),
+        ("shell-dock-fixture", LaunchScreen::ShellDockFixture),
+        ("shell-paste-fixture", LaunchScreen::ShellPasteFixture),
+        ("shell-picker-fixture", LaunchScreen::ShellPickerFixture),
+        ("shell-confirm-fixture", LaunchScreen::ShellConfirmFixture),
+    ] {
+        let parsed = run_options(&["--screen", name]).screen;
+        assert_eq!(parsed, screen);
+        assert_eq!(parsed.screen(), Screen::Pods);
+        assert_eq!(
+            parsed.has_dock(),
+            screen != LaunchScreen::ShellConfirmFixture,
+            "{name}: the confirm screen is a dialog, not a dock"
+        );
+        assert_eq!(
+            parsed.opens_dialog(),
+            screen == LaunchScreen::ShellConfirmFixture
+        );
+    }
+}

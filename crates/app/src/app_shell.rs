@@ -77,7 +77,7 @@ use crate::pod_drawer::selected_container_index;
 use crate::pod_table::PodTableDelegate;
 use crate::recent_changes::ChangeWindow;
 use crate::related_objects::{RelatedSubject, related_subject};
-use crate::resource_actions::{open_shell_reason, view_logs_reason};
+use crate::resource_actions::{KeyAvailability, RowAction, key_availability, view_logs_reason};
 use crate::resource_kind::ResourceKind;
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{FeedProgress, kubelet_progress, slowest_feed};
@@ -121,6 +121,10 @@ pub(crate) mod workspace;
 mod app_shell_view;
 #[path = "keyboard_navigation.rs"]
 mod keyboard_navigation;
+#[path = "leaving_work.rs"]
+mod leaving_work;
+#[path = "shell_open.rs"]
+pub(crate) mod shell_open;
 #[path = "write_flow.rs"]
 pub(crate) mod write_flow;
 #[path = "write_lock.rs"]
@@ -296,6 +300,11 @@ pub(crate) struct AppShell {
     /// The confirm dialog opened last, for the tests that drive it.
     #[cfg(test)]
     last_dialog: Option<gpui_kit::WeakEntity<crate::confirm_dialog::ConfirmDialog>>,
+    /// The lines of the "work will close" dialog asked last, for the tests that drive it.
+    #[cfg(test)]
+    last_leaving: Option<Vec<String>>,
+    /// The window of the shell: a dialog that starts outside an event handler opens in it.
+    window: gpui_kit::AnyWindowHandle,
     /// The title-bar switcher popover.
     switcher: ClusterSwitcherState,
     _switcher_filter_events: Subscription,
@@ -497,6 +506,9 @@ impl AppShell {
             write_notice: None,
             #[cfg(test)]
             last_dialog: None,
+            #[cfg(test)]
+            last_leaving: None,
+            window: window.window_handle(),
             switcher: ClusterSwitcherState::new(switcher_filter),
             _switcher_filter_events: switcher_filter_events,
             pending_switcher_launch: options.screen == LaunchScreen::Switcher,
@@ -647,7 +659,24 @@ impl AppShell {
     /// Switches to `target` alone: every viewed session is released first. Nothing happens when it
     /// already is the only viewed cluster. Every single-cluster start goes through here.
     pub(crate) fn switch_cluster(&mut self, target: &ClusterRef, cx: &mut Context<Self>) {
-        self.switch_to(target, None, cx);
+        // Every other viewed cluster leaves; a switch to the only viewed one changes nothing.
+        let leaving: Vec<ClusterRef> = self
+            .view
+            .clusters()
+            .into_iter()
+            .filter(|cluster| cluster != target)
+            .collect();
+        let work = self.leaving_work(&leaving, cx);
+        if work.is_empty() {
+            self.switch_to(target, None, cx);
+            return;
+        }
+        let target = target.clone();
+        self.confirm_leaving(
+            work,
+            move |shell, cx| shell.switch_to(&target, None, cx),
+            cx,
+        );
     }
 
     /// `requested` is the `--namespace` scope of the first start; it wins over the remembered and
@@ -1668,6 +1697,10 @@ impl AppShell {
             LaunchScreen::Shortcuts => open_shortcut_sheet(window, cx),
             #[cfg(feature = "screenshot")]
             LaunchScreen::UnlockConfirm => self.begin_unlock(&cluster, window, cx),
+            #[cfg(feature = "screenshot")]
+            LaunchScreen::ShellConfirmFixture => {
+                self.open_shell_confirm_fixture(&cluster, window, cx)
+            }
             #[cfg(feature = "screenshot")]
             LaunchScreen::CordonConfirm => {
                 let is_open = self.open_cordon_fixture(&cluster, window, cx);
@@ -2873,9 +2906,23 @@ impl AppShell {
         self.open_log_tab(&cluster, target, window, cx);
     }
 
-    /// Why "Shell into selected" is disabled.
-    pub(crate) fn open_shell_unavailable_reason(&self, cx: &App) -> SharedString {
-        open_shell_reason(self.subject_live(cx))
+    /// Why "Shell into selected" is disabled, `None` when S would open a shell: the same answer
+    /// the key reads, for the cursor row in its own cluster.
+    pub(crate) fn selected_shell_reason(&self, cx: &App) -> Option<SharedString> {
+        let Some(subject) = &self.selected else {
+            return Some("Select a pod first".into());
+        };
+        let (Some(live), Some(guard)) = (
+            self.slot_live(&subject.cluster, cx),
+            self.guard_for(&subject.cluster, cx),
+        ) else {
+            return Some("Not connected".into());
+        };
+        match key_availability(RowAction::OpenShell, &subject.key, live, &guard) {
+            KeyAvailability::Run(_) => None,
+            KeyAvailability::Disabled { reason } => Some(reason),
+            KeyAvailability::NotOffered => Some("Select a pod first".into()),
+        }
     }
 
     /// A session of the viewed set changed. Its first Live writes `last_used` (the primary only,
@@ -3253,6 +3300,16 @@ impl AppShell {
         else {
             return;
         };
+        #[cfg(feature = "screenshot")]
+        if matches!(
+            launch,
+            LaunchScreen::ShellFixture
+                | LaunchScreen::ShellPasteFixture
+                | LaunchScreen::ShellPickerFixture
+        ) {
+            self.open_shell_fixture(launch, window, cx);
+            return;
+        }
         let Some(live) = self.live(cx) else {
             return;
         };
@@ -3294,15 +3351,73 @@ impl AppShell {
         else {
             return;
         };
-        let mode = if launch != LaunchScreen::LogsDock {
-            DockMode::Zoomed
-        } else {
+        let mode = if matches!(
+            launch,
+            LaunchScreen::LogsDock | LaunchScreen::ShellDockFixture
+        ) {
             DockMode::Normal
+        } else {
+            DockMode::Zoomed
         };
         self.dock.update(cx, |dock, cx| {
             dock.open(LogOrigin::new(&row, connection), target, window, cx);
             dock.set_mode(mode, cx);
         });
+        // The dock screenshot shows both kinds of tab, with the shell active.
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::ShellDockFixture {
+            self.open_shell_fixture(launch, window, cx);
+        }
+    }
+
+    /// The `--screen shell-*-fixture` screens: a shell tab on the primary cluster that never
+    /// connects, fed the transcript of the W8b pane. The dock is zoomed unless the screen shows
+    /// the split. It waits until the session is live.
+    #[cfg(feature = "screenshot")]
+    fn open_shell_fixture(
+        &mut self,
+        launch: LaunchScreen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(cluster) = self.primary_cluster() else {
+            return;
+        };
+        let Some(label) = self
+            .view
+            .slot_of(&cluster)
+            .map(|index| self.view.slots()[index].label.clone())
+        else {
+            return;
+        };
+        if self.live(cx).is_none() {
+            return;
+        }
+        self.pending_launch_screen = None;
+        let target = crate::shell_tab::ShellTarget {
+            cluster,
+            namespace: "payments".to_owned(),
+            pod: "api-7d9f8c-m8n2p".to_owned(),
+            container: "api".to_owned(),
+        };
+        let dock = self.dock.clone();
+        let transcript = crate::screenshot::SHELL_FIXTURE_TRANSCRIPT;
+        let tab = dock.update(cx, |dock, cx| {
+            let tab = dock.open_shell_fixture(target, label, transcript, window, cx);
+            if launch != LaunchScreen::ShellDockFixture {
+                dock.set_mode(DockMode::Zoomed, cx);
+            }
+            tab
+        });
+        match launch {
+            LaunchScreen::ShellPasteFixture => {
+                tab.update(cx, |tab, cx| tab.show_paste_fixture(window, cx));
+            }
+            LaunchScreen::ShellPickerFixture => {
+                crate::resource_actions::open_shell_picker_fixture(window, cx);
+            }
+            _ => {}
+        }
     }
 
     /// The failure of a `--screen custom:` request, which a screenshot run reports instead of

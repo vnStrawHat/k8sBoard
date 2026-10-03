@@ -5,6 +5,7 @@ use gpui_kit::{
     AppContext as _, Bounds, Context, Entity, ParentElement as _, Point, Render, TestAppContext,
     WindowBounds, WindowHandle, WindowOptions, div, px,
 };
+use oneterm_vt::search::SearchMatch;
 use oneterm_vt::{Pos, Size as VtSize};
 
 use super::*;
@@ -103,6 +104,7 @@ impl Render for Probe {
         div().size_full().child(terminal_element(
             Rc::clone(&self.session),
             self.input.clone(),
+            SharedMetrics::default(),
         ))
     }
 }
@@ -238,4 +240,50 @@ fn a_session_held_by_its_owner_skips_the_frame(cx: &mut TestAppContext) {
     // The next frame, with the session free again, resizes as usual.
     render(&fixture, cx);
     assert_eq!(queued_resizes(&mut fixture), measured);
+}
+
+fn found(row: u64, start: usize, end: usize) -> SearchMatch {
+    SearchMatch {
+        row: RowId(row),
+        start_col: start,
+        end_col: end,
+    }
+}
+
+#[test]
+fn a_find_match_on_screen_has_its_cells_and_one_off_screen_has_none() {
+    assert_eq!(
+        match_span(found(102, 3, 6), RowId(100), VIEW),
+        Some(span(2, 3, 6))
+    );
+    assert_eq!(
+        match_span(found(99, 3, 6), RowId(100), VIEW),
+        None,
+        "above the view"
+    );
+    assert_eq!(
+        match_span(found(104, 3, 6), RowId(100), VIEW),
+        None,
+        "below the view"
+    );
+}
+
+#[test]
+fn a_find_match_past_the_last_column_is_clipped() {
+    assert_eq!(
+        match_span(found(100, 8, 14), RowId(100), VIEW),
+        Some(span(0, 8, 10))
+    );
+    assert_eq!(match_span(found(100, 10, 12), RowId(100), VIEW), None);
+}
+
+#[test]
+fn a_pointer_maps_to_fractional_cells_and_clamps_above_the_grid() {
+    let metrics = TerminalMetrics {
+        origin: point(px(10.), px(20.)),
+        cell: size(px(8.), px(16.)),
+    };
+    assert_eq!(cell_at(metrics, point(px(26.), px(52.))), (2., 2.));
+    assert_eq!(cell_at(metrics, point(px(14.), px(28.))), (0.5, 0.5));
+    assert_eq!(cell_at(metrics, point(px(0.), px(0.))), (0., 0.));
 }

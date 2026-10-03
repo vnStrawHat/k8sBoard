@@ -752,7 +752,15 @@ pub(crate) enum AccessState {
 impl AccessState {
     fn from_review(review: Result<AccessReport, String>) -> Self {
         match review {
-            Ok(report) => Self::Known(report),
+            Ok(report) => {
+                // Both exec verbs decide the shell gate; the answers are what a live check records.
+                tracing::debug!(
+                    get_pods_exec = report.is_allowed(AccessCheck::GetPodExec),
+                    create_pods_exec = report.is_allowed(AccessCheck::CreatePodExec),
+                    "exec permissions of the session"
+                );
+                Self::Known(report)
+            }
             Err(message) => {
                 tracing::warn!(%message, "access review failed");
                 Self::Unknown

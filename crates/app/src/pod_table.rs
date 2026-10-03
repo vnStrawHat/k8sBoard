@@ -15,7 +15,7 @@ use crate::cluster_rows::{Clustered, RowAddress, SlotSession, merge_slot_rows};
 use crate::dock::Dock;
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::PodUsageHistory;
-use crate::resource_actions::pod_menu;
+use crate::resource_actions::{PodMenuLinks, ShellMenu, pod_menu};
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, pod_status_label, toned_text};
@@ -402,9 +402,22 @@ impl TableDelegate for PodTableDelegate {
         &mut self,
         row_ix: usize,
         menu: PopupMenu,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
+        // The shell submenu is built from the app, so it is made before the session is borrowed.
+        let prepared = {
+            let Some((slot, pod)) = self.pod_at(row_ix, cx) else {
+                return menu;
+            };
+            let session = slot.session.read(cx);
+            let (Some(_), Some(guard)) = (session.live(), session.guard(cx)) else {
+                return menu;
+            };
+            (slot.row_context(cx), ShellMenu::of(pod, &guard))
+        };
+        let (row, shell_menu) = prepared;
+        let open_shell = shell_menu.item(&row, &self.shell, window, cx);
         let Some((slot, pod)) = self.pod_at(row_ix, cx) else {
             return menu;
         };
@@ -412,8 +425,18 @@ impl TableDelegate for PodTableDelegate {
         let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
             return menu;
         };
-        let row = slot.row_context(cx);
-        pod_menu(menu, pod, live, &guard, &row, &self.dock, &self.shell)
+        pod_menu(
+            menu,
+            pod,
+            live,
+            &guard,
+            &row,
+            &PodMenuLinks {
+                dock: &self.dock,
+                shell: &self.shell,
+            },
+            open_shell,
+        )
     }
 
     fn render_empty(

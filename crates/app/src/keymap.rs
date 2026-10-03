@@ -47,6 +47,10 @@ gpui_kit::actions!(
         PreviousDockTab,
         CloseDockTab,
         ToggleReadOnly,
+        TerminalCopy,
+        TerminalPaste,
+        TerminalFind,
+        CloseTerminalFind,
     ]
 );
 
@@ -54,7 +58,7 @@ gpui_kit::actions!(
 const WINDOW: &str = "AppShell";
 /// Single keys: they never act in a text field, menu, popover, or dialog. Dialogs sit outside
 /// `AppShell`, so `!Dialog` is redundant; it is kept so the predicate states the rule.
-const WORKSPACE: &str = "AppShell && !Input && !PopupMenu && !Popover && !Dialog";
+const WORKSPACE: &str = "AppShell && !Input && !PopupMenu && !Popover && !Dialog && !Terminal";
 /// Overrides of the keys the kit table binds itself (`up down home end pageup pagedown escape`).
 const TABLE: &str = "AppShell > DataTable";
 /// The text fields whose Escape returns the focus to the table.
@@ -64,6 +68,10 @@ const SETTINGS_WINDOW: &str = "SettingsWindow";
 /// The palette's query input. The palette is a dialog outside `AppShell`, so only its own keys
 /// apply there.
 const PALETTE_INPUT: &str = "Command > Input";
+/// The terminal of a shell tab: a program owns every key here that no app chord claims.
+const TERMINAL: &str = "Terminal";
+/// The Find field of a shell tab.
+const TERMINAL_FIND_INPUT: &str = "ShellFind > Input";
 /// The content of the confirm dialog, and the text field inside it.
 const WRITE_CONFIRM: &str = "WriteConfirm";
 const WRITE_CONFIRM_INPUT: &str = "WriteConfirm > Input";
@@ -145,6 +153,45 @@ pub(crate) fn bind_keys(cx: &mut App) {
             .into_iter()
             .map(|context| KeyBinding::new("escape", LeaveInput, Some(context))),
     );
+    // The terminal (spec 0036). These come last: Esc in the Find field has the depth of `Dock >
+    // Input`, so it wins only by being registered after it.
+    cx.bind_keys([
+        KeyBinding::new("ctrl-shift-c", TerminalCopy, Some(TERMINAL)),
+        KeyBinding::new("ctrl-shift-v", TerminalPaste, Some(TERMINAL)),
+        KeyBinding::new("ctrl-shift-f", TerminalFind, Some(TERMINAL)),
+        KeyBinding::new("escape", CloseTerminalFind, Some(TERMINAL_FIND_INPUT)),
+    ]);
+    // On macOS the platform key is Cmd, which a shell never receives.
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([
+        KeyBinding::new("cmd-c", TerminalCopy, Some(TERMINAL)),
+        KeyBinding::new("cmd-v", TerminalPaste, Some(TERMINAL)),
+        KeyBinding::new("cmd-f", TerminalFind, Some(TERMINAL)),
+    ]);
+    // Keys a shell uses: Tab and Shift Tab (the kit moves focus with them), Ctrl C (the kit copies
+    // with it), and the chords Ctrl K, N, W, and 1 to 9, which are app chords on Windows and Linux.
+    // `NoAction` lets the key reach the terminal's key handler. macOS app chords use Cmd, which a
+    // shell never receives, so they keep their meaning.
+    cx.bind_keys(
+        [
+            "tab",
+            "shift-tab",
+            "ctrl-c",
+            "ctrl-k",
+            "ctrl-n",
+            "ctrl-w",
+            "ctrl-1",
+            "ctrl-2",
+            "ctrl-3",
+            "ctrl-4",
+            "ctrl-5",
+            "ctrl-6",
+            "ctrl-7",
+            "ctrl-8",
+            "ctrl-9",
+        ]
+        .map(|key| KeyBinding::new(key, gpui_kit::NoAction, Some(TERMINAL))),
+    );
 }
 
 /// The sections of the shortcut sheet, in the order they are drawn.
@@ -155,15 +202,17 @@ pub(crate) enum ShortcutGroup {
     Drawer,
     SelectedResource,
     Dock,
+    Terminal,
 }
 
 impl ShortcutGroup {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::General,
         Self::Tables,
         Self::Drawer,
         Self::SelectedResource,
         Self::Dock,
+        Self::Terminal,
     ];
 
     pub(crate) fn title(self) -> &'static str {
@@ -173,6 +222,7 @@ impl ShortcutGroup {
             Self::Drawer => "Drawer",
             Self::SelectedResource => "Selected resource",
             Self::Dock => "Dock",
+            Self::Terminal => "Terminal",
         }
     }
 }
@@ -195,7 +245,7 @@ fn row(group: ShortcutGroup, label: &'static str, action: impl Action) -> Shortc
 /// Every row of the sheet in wireframe order. `LeaveInput`, `SwitchToCluster2`…`9` (covered by the
 /// 1–9 row) and the switcher popover's own keys have no row.
 pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
-    use ShortcutGroup::{Dock, Drawer, General, SelectedResource, Tables};
+    use ShortcutGroup::{Dock, Drawer, General, SelectedResource, Tables, Terminal};
     vec![
         row(General, "Show all shortcuts", ShowShortcuts),
         row(General, "Command palette", OpenPalette),
@@ -241,6 +291,9 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         row(Dock, "Next dock tab", NextDockTab),
         row(Dock, "Previous dock tab", PreviousDockTab),
         row(Dock, "Close the dock tab", CloseDockTab),
+        row(Terminal, "Copy the selection (shell tab)", TerminalCopy),
+        row(Terminal, "Paste (shell tab)", TerminalPaste),
+        row(Terminal, "Find in the terminal (shell tab)", TerminalFind),
     ]
 }
 

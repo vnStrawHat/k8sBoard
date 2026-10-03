@@ -10,8 +10,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cluster::{
-    ClusterConnection, ClusterError, NodeScheduling, ObjectKind, ObjectRef, WriteError, WriteMode,
-    WriteOperation, WriteOutcome, WriteRequest,
+    ClusterConnection, ClusterError, ExecPermit, NodeScheduling, ObjectKind, ObjectRef, WriteError,
+    WriteMode, WriteOperation, WriteOutcome, WriteRequest,
 };
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
@@ -20,9 +20,12 @@ use gpui_kit::{
 };
 
 use super::AppShell;
-use crate::audit_log::{AuditEntry, AuditOutcome, append_audit, audit_entry};
+use crate::audit_log::{
+    AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, audit_entry,
+};
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
+use crate::cluster_session::AccessState;
 use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
 use crate::resource_actions::{
     ActionAvailability, ResourceAction, action_availability, action_label, action_risk,
@@ -70,9 +73,48 @@ impl WriteIntent {
     }
 }
 
+/// One guarded session start (spec 0036 exec; port-forward and node shells reuse it): an action
+/// that opens a stream instead of changing an object. It has no dry-run, so the dialog says so, and
+/// the audit line is written when the stream reports whether it came up.
+pub(crate) struct ConnectIntent {
+    /// The row's or cursor's cluster: the gate, the tier, the permit, the connection, and the
+    /// audit line all come from it.
+    pub(crate) cluster: ClusterRef,
+    /// The cluster display name at the time the action started.
+    pub(crate) cluster_name: SharedString,
+    pub(crate) action: ResourceAction,
+    /// What the dialog title and notices call it: `Open shell`.
+    pub(crate) label: SharedString,
+    /// The text of the confirm button.
+    pub(crate) button: SharedString,
+    pub(crate) risk: ActionRisk,
+    /// Non-blocking context lines of the dialog.
+    pub(crate) warnings: Vec<SharedString>,
+    /// What the dialog names and the audit line records: the target and its parameters. Never
+    /// stream bytes.
+    pub(crate) object: AuditObject,
+    pub(crate) fields: Vec<AuditField>,
+    /// Runs after the confirm, with the proof from the cluster's own report and its connection,
+    /// both read at that moment.
+    pub(crate) open: Rc<ConnectOpen>,
+}
+
+/// The call that opens the stream of a `ConnectIntent`.
+pub(crate) type ConnectOpen =
+    dyn Fn(&mut AppShell, ExecPermit, ClusterConnection, &mut Window, &mut Context<AppShell>);
+
+impl ConnectIntent {
+    /// What the `TypeName` tier asks to type: the cluster name.
+    pub(crate) fn expected(&self) -> &str {
+        &self.cluster_name
+    }
+}
+
 /// The server-side check of a change, as the dialog shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DryRunState {
+    /// A stream start has nothing to check on the server.
+    NotSupported,
     Running,
     Passed {
         elapsed: Duration,
@@ -139,6 +181,7 @@ pub(crate) fn commit_block(
         return Some(reason);
     }
     match dry_run {
+        DryRunState::NotSupported | DryRunState::Passed { .. } => {}
         DryRunState::Running => return Some("Waiting for the dry-run…".into()),
         DryRunState::Failed(text) => return Some(text.clone()),
         DryRunState::Rejected(reason) => {
@@ -149,7 +192,6 @@ pub(crate) fn commit_block(
                 .into(),
             );
         }
-        DryRunState::Passed { .. } => {}
     }
     (typed == TypedMatch::Differs).then(|| format!("Type {expected} to confirm").into())
 }
@@ -181,7 +223,10 @@ pub(crate) fn confirmed(
     typed: TypedMatch,
     dry_run_generation: u64,
 ) -> Option<Confirmed> {
-    let is_passed = matches!(dry_run, DryRunState::Passed { .. });
+    let is_passed = matches!(
+        dry_run,
+        DryRunState::Passed { .. } | DryRunState::NotSupported
+    );
     (is_passed && typed != TypedMatch::Differs).then_some(Confirmed { dry_run_generation })
 }
 
@@ -586,6 +631,95 @@ fn notify_with(window: &mut Window, cx: &mut App, text: String, is_success: bool
         Notification::warning(text)
     };
     window.push_notification(notification, cx);
+}
+
+/// The proof that a shell may open, from the report of the cluster the action started on: both
+/// exec verbs allowed. `None` while the permissions are checking, unknown, or denied.
+fn exec_permit_of(access: &AccessState) -> Option<ExecPermit> {
+    match access {
+        AccessState::Known(report) => report.exec_permit(),
+        AccessState::Checking { .. } | AccessState::Unknown => None,
+    }
+}
+
+impl AppShell {
+    /// The guarded start of a stream (spec 0036): the gate of the intent's own cluster, then the
+    /// confirm dialog of its tier. Nothing opens without the dialog, for every tier and trigger.
+    pub(crate) fn start_connect(
+        &mut self,
+        intent: ConnectIntent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (generation, confirm, environment) = {
+            let Some(guard) = self.guard_for(&intent.cluster, cx) else {
+                notify(window, cx, format!("{} is not open", intent.cluster_name));
+                return;
+            };
+            // A stale menu or a key pressed in a gap cannot bypass the gate.
+            if let ActionAvailability::Disabled { reason } =
+                action_availability(intent.action, &guard)
+            {
+                notify(window, cx, unavailable_text(&intent.button, &reason));
+                return;
+            }
+            (
+                guard.generation,
+                confirm_step(guard.profile.confirm, intent.risk, intent.expected()),
+                guard.profile.environment,
+            )
+        };
+        let inputs = DialogInputs {
+            shell: cx.weak_entity(),
+            kind: DialogKind::Connect(Rc::new(intent)),
+            confirm,
+            environment,
+            generation,
+        };
+        let dialog = cx.new(|cx| ConfirmDialog::new(inputs, window, cx));
+        #[cfg(test)]
+        {
+            self.last_dialog = Some(dialog.downgrade());
+        }
+        ConfirmDialog::open(&dialog, window, cx);
+    }
+
+    /// The confirmed start of a dialog. The guard and the connection are read again from the
+    /// intent's own cluster: if it was locked, reconnected, or lost a permission since the dialog
+    /// opened, nothing opens and nothing is audited.
+    pub(crate) fn commit_connect(
+        &mut self,
+        intent: &ConnectIntent,
+        generation: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prepared = {
+            let guard = self.guard_for(&intent.cluster, cx);
+            match live_block(guard.as_ref(), &intent.cluster_name, generation) {
+                Some(reason) => Err(reason),
+                None => {
+                    let permit = guard
+                        .as_ref()
+                        .and_then(|guard| exec_permit_of(guard.access));
+                    match (permit, self.slot_connection(&intent.cluster, cx)) {
+                        (Some(permit), Some(connection)) => Ok((permit, connection)),
+                        _ => Err(guard
+                            .as_ref()
+                            .map(|guard| match action_availability(intent.action, guard) {
+                                ActionAvailability::Disabled { reason } => reason,
+                                ActionAvailability::Enabled => "Not permitted".into(),
+                            })
+                            .unwrap_or_else(|| "The permissions could not be read".into())),
+                    }
+                }
+            }
+        };
+        match prepared {
+            Ok((permit, connection)) => (intent.open)(self, permit, connection, window, cx),
+            Err(reason) => notify(window, cx, format!("{}: {reason}", intent.label)),
+        }
+    }
 }
 
 #[cfg(feature = "screenshot")]

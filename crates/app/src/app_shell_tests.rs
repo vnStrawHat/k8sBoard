@@ -760,10 +760,14 @@ fn escape_closes_the_shortcut_sheet(cx: &mut TestAppContext) {
 fn the_shell_handles_every_key_action_of_its_tree(cx: &mut TestAppContext) {
     let (window, _) = open_shell(cx);
     render(window, cx);
-    // Ctrl , is handled by the app (no window), and Ctrl O belongs to the Settings window.
-    let elsewhere: [&dyn gpui_kit::Action; 2] = [
+    // Ctrl , is handled by the app (no window), Ctrl O belongs to the Settings window, and the
+    // terminal chords belong to a focused shell tab (`shell_tab_tests` dispatches each of them).
+    let elsewhere: [&dyn gpui_kit::Action; 5] = [
         &crate::settings_window::OpenSettings,
         &crate::settings_window::ImportKubeconfig,
+        &crate::keymap::TerminalCopy,
+        &crate::keymap::TerminalPaste,
+        &crate::keymap::TerminalFind,
     ];
     for row in crate::keymap::shortcut_rows() {
         if elsewhere.iter().any(|other| other.partial_eq(&*row.action)) {

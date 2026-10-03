@@ -1,4 +1,6 @@
-use cluster::{AccessDecision, AccessReport, AccessReview};
+use cluster::{
+    AccessDecision, AccessReport, AccessReview, ContainerKind, ContainerState, ContainerSummary,
+};
 use gpui_kit::Task;
 
 use super::*;
@@ -49,10 +51,11 @@ fn unlocked(access: &AccessState) -> ClusterGuard<'_> {
 }
 
 /// A mutating action whose spec has shipped, which no `ResourceAction` is before step 4.
-const SHIPPED_PATCH_NODES: ActionGate = ActionGate::Mutating {
-    check: AccessCheck::PatchNodes,
-    is_shipped: true,
-};
+static SHIPPED_PATCH_NODES: std::sync::LazyLock<ActionGate> =
+    std::sync::LazyLock::new(|| ActionGate::Mutating {
+        checks: vec![AccessCheck::PatchNodes],
+        is_shipped: true,
+    });
 
 fn availability_of_gate(
     gate: &ActionGate,
@@ -81,7 +84,7 @@ fn copy_name_always_enabled() {
 #[test]
 fn gate_order_table() {
     let unshipped = ActionGate::Mutating {
-        check: AccessCheck::PatchNodes,
+        checks: vec![AccessCheck::PatchNodes],
         is_shipped: false,
     };
     let allowed = known_denying(&[]);
@@ -232,10 +235,7 @@ fn gate_and_confirm_use_the_rows_cluster() {
 fn cordon_is_gated_on_patch_nodes_and_is_the_first_shipped_action() {
     assert!(matches!(
         ResourceAction::Cordon.gate(),
-        ActionGate::Mutating {
-            check: AccessCheck::PatchNodes,
-            is_shipped: true
-        }
+        ActionGate::Mutating { checks, is_shipped: true } if checks == [AccessCheck::PatchNodes]
     ));
 }
 
@@ -279,7 +279,6 @@ fn unshipped_mutating_actions_say_a_later_version() {
         known_denying(&AccessCheck::ALL),
     ] {
         for action in [
-            ResourceAction::OpenShell,
             ResourceAction::PortForward,
             ResourceAction::OpenNodeShell,
             ResourceAction::Drain,
@@ -1248,14 +1247,20 @@ fn key_availability_uses_the_access_gate() {
 }
 
 #[test]
-fn key_availability_of_a_shell_waits_for_its_spec_before_its_permission() {
+fn key_availability_of_a_pod_shell_reads_both_exec_verbs_and_a_node_shell_waits() {
     let denied = known_denying(&[AccessCheck::CreatePodExec]);
-    for subject in [pod_key(), node_key()] {
-        assert_eq!(
-            disabled_reason(availability(RowAction::OpenShell, &subject, &denied)),
-            "Comes in a later version"
-        );
-    }
+    assert_eq!(
+        disabled_reason(availability(RowAction::OpenShell, &pod_key(), &denied)),
+        "Not permitted: get and create pods/exec"
+    );
+    assert_eq!(
+        disabled_reason(availability(RowAction::OpenShell, &node_key(), &denied)),
+        "Comes in a later version"
+    );
+    assert_eq!(
+        availability(RowAction::OpenShell, &pod_key(), &known_denying(&[])),
+        KeyAvailability::Run(ResourceAction::OpenShell)
+    );
 }
 
 #[test]
@@ -1389,4 +1394,238 @@ fn show_in_topology_is_disabled_for_a_row_of_another_cluster() {
         ),
         TopologyMenu::Disabled("Topology draws only the primary cluster (prod-eu)".to_owned())
     );
+}
+
+// ---- Open shell: the multi-check gate and the container model (spec 0036) ----
+
+#[test]
+fn open_shell_needs_get_and_create() {
+    let allowed = known_denying(&[]);
+    let no_create = known_denying(&[AccessCheck::CreatePodExec]);
+    let no_get = known_denying(&[AccessCheck::GetPodExec]);
+    let (checking, unknown) = (checking(), unknown());
+    let at = |access: &AccessState, lock| {
+        let guard = test_guard(access, lock, "dev-1", Environment::Development);
+        action_availability(ResourceAction::OpenShell, &guard)
+    };
+    assert_eq!(
+        at(&allowed, WriteLock::Unlocked),
+        ActionAvailability::Enabled
+    );
+    // Either verb denied reads the same: the user needs both.
+    for denied in [&no_create, &no_get] {
+        assert_eq!(
+            reason(at(denied, WriteLock::Unlocked)),
+            "Not permitted: get and create pods/exec"
+        );
+    }
+    // Fail closed while the answer is not known.
+    assert_eq!(
+        reason(at(&checking, WriteLock::Unlocked)),
+        "Checking permissions…"
+    );
+    assert_eq!(
+        reason(at(&unknown, WriteLock::Unlocked)),
+        "Permissions could not be checked"
+    );
+    // The order: checking, then not permitted, then read-only.
+    assert_eq!(
+        reason(at(&no_get, WriteLock::Locked)),
+        "Not permitted: get and create pods/exec"
+    );
+    assert_eq!(
+        reason(at(&allowed, WriteLock::Locked)),
+        "dev-1 is read-only"
+    );
+}
+
+#[test]
+fn multi_check_gate_names_the_first_denied_check() {
+    let gate = ActionGate::Mutating {
+        checks: vec![AccessCheck::PatchNodes, AccessCheck::PatchDeployments],
+        is_shipped: true,
+    };
+    let both_denied = known_denying(&[AccessCheck::PatchNodes, AccessCheck::PatchDeployments]);
+    let second_denied = known_denying(&[AccessCheck::PatchDeployments]);
+    assert_eq!(
+        reason(availability_of_gate(
+            &gate,
+            &both_denied,
+            WriteLock::Unlocked
+        )),
+        "Not permitted: patch nodes"
+    );
+    assert_eq!(
+        reason(availability_of_gate(
+            &gate,
+            &second_denied,
+            WriteLock::Unlocked
+        )),
+        "Not permitted: patch deployments"
+    );
+    assert_eq!(
+        availability_of_gate(&gate, &known_denying(&[]), WriteLock::Unlocked),
+        ActionAvailability::Enabled
+    );
+    // A one-item list reads as the single check did.
+    assert_eq!(
+        reason(availability_of_gate(
+            &SHIPPED_PATCH_NODES,
+            &known_denying(&[AccessCheck::PatchNodes]),
+            WriteLock::Unlocked
+        )),
+        "Not permitted: patch nodes"
+    );
+}
+
+#[test]
+fn a_verb_pair_is_named_only_when_both_verbs_are_asked() {
+    let alone = ActionGate::Mutating {
+        checks: vec![AccessCheck::CreatePodExec],
+        is_shipped: true,
+    };
+    assert_eq!(
+        reason(availability_of_gate(
+            &alone,
+            &known_denying(&[AccessCheck::CreatePodExec]),
+            WriteLock::Unlocked
+        )),
+        "Not permitted: create pods/exec"
+    );
+    let port_forward = ActionGate::Mutating {
+        checks: vec![
+            AccessCheck::GetPodPortForward,
+            AccessCheck::CreatePodPortForward,
+        ],
+        is_shipped: true,
+    };
+    assert_eq!(
+        reason(availability_of_gate(
+            &port_forward,
+            &known_denying(&[AccessCheck::GetPodPortForward]),
+            WriteLock::Unlocked
+        )),
+        "Not permitted: get and create pods/portforward"
+    );
+}
+
+fn container(name: &str, kind: ContainerKind, is_running: bool) -> ContainerSummary {
+    let mut container = container_of(name);
+    container.kind = kind;
+    if !is_running {
+        container.state = ContainerState::Waiting {
+            reason: None,
+            message: None,
+        };
+    }
+    container
+}
+
+fn shell_state(containers: Vec<ContainerSummary>) -> ShellMenuState {
+    let access = known_denying(&[]);
+    shell_menu_state(&pod_with(containers), &unlocked(&access))
+}
+
+#[test]
+fn a_pod_with_one_running_container_opens_it_directly() {
+    let state = shell_state(vec![container("app", ContainerKind::Main, true)]);
+    assert_eq!(state, ShellMenuState::One("app".to_owned()));
+}
+
+#[test]
+fn container_picker_lists_running_main_and_sidecars() {
+    let state = shell_state(vec![
+        container("init-db", ContainerKind::Init, false),
+        container("app", ContainerKind::Main, true),
+        container("proxy", ContainerKind::Sidecar, true),
+        container("batch", ContainerKind::Sidecar, false),
+    ]);
+    let ShellMenuState::Pick(choices) = state else {
+        panic!("several containers must pick");
+    };
+    // Init containers are left out; one that is not running is listed but disabled.
+    let names: Vec<(&str, &str, bool)> = choices
+        .iter()
+        .map(|choice| (choice.name.as_str(), choice.tag, choice.is_running))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("app", "MAIN", true),
+            ("proxy", "SIDECAR", true),
+            ("batch", "SIDECAR", false)
+        ]
+    );
+}
+
+#[test]
+fn a_container_that_is_not_running_cannot_take_a_shell() {
+    assert_eq!(
+        shell_state(vec![container("app", ContainerKind::Main, false)]),
+        ShellMenuState::Disabled("Container is not running".into())
+    );
+    assert_eq!(
+        shell_state(vec![
+            container("app", ContainerKind::Main, false),
+            container("proxy", ContainerKind::Sidecar, false)
+        ]),
+        ShellMenuState::Disabled("No running container".into())
+    );
+    assert_eq!(
+        shell_state(vec![container("init", ContainerKind::Init, true)]),
+        ShellMenuState::Disabled("The pod has no containers".into())
+    );
+}
+
+#[test]
+fn the_shell_menu_reads_the_gate_of_the_pods_own_cluster() {
+    let denied = known_denying(&[AccessCheck::GetPodExec]);
+    let state = shell_menu_state(
+        &pod_with(vec![container("app", ContainerKind::Main, true)]),
+        &unlocked(&denied),
+    );
+    assert_eq!(
+        state,
+        ShellMenuState::Disabled("Not permitted: get and create pods/exec".into())
+    );
+    let allowed = known_denying(&[]);
+    let locked = test_guard(
+        &allowed,
+        WriteLock::Locked,
+        "prod-1",
+        Environment::Production,
+    );
+    assert_eq!(
+        shell_menu_state(
+            &pod_with(vec![container("app", ContainerKind::Main, true)]),
+            &locked
+        ),
+        ShellMenuState::Disabled("prod-1 is read-only".into())
+    );
+}
+
+#[test]
+fn s_opens_the_first_running_main_container_else_the_first_running_one() {
+    let pod = pod_with(vec![
+        container("proxy", ContainerKind::Sidecar, true),
+        container("init", ContainerKind::Init, true),
+        container("app", ContainerKind::Main, true),
+        container("worker", ContainerKind::Main, true),
+    ]);
+    assert_eq!(
+        default_shell_container(&pod).map(|c| c.name.as_str()),
+        Some("app")
+    );
+    let sidecars_only = pod_with(vec![
+        container("down", ContainerKind::Main, false),
+        container("proxy", ContainerKind::Sidecar, true),
+    ]);
+    assert_eq!(
+        default_shell_container(&sidecars_only).map(|c| c.name.as_str()),
+        Some("proxy")
+    );
+    let none_running = pod_with(vec![container("app", ContainerKind::Main, false)]);
+    assert!(default_shell_container(&none_running).is_none());
+    let init_only = pod_with(vec![container("init", ContainerKind::Init, true)]);
+    assert!(default_shell_container(&init_only).is_none());
 }

@@ -63,7 +63,7 @@
 | K3 | Regex, level toggles, JSON, density histogram, Export, Pop out | Partial | 0019 (regex, level chips, JSON, histogram, Export via the save dialog) | Pop out (decision 25) |
 | K4 | Workload log tabs (`deploy/…`), pod colors, container picker chips | Done | 0019 | — |
 | K5 | "+ ▾" new tab, drag to reorder, dashed max line, double-click reset, remembered height | Partial | 0019 ("+ ▾", drag to reorder) | dashed max line and double-click reset (0004 non-goals); height persistence: reserved key `dock.height` (0019 or 0025) |
-| K6 | Shell tabs (W8b shell pane) | Missing | — | 0036 |
+| K6 | Shell tabs (W8b shell pane) | Done | 0036 `shell_tab.rs`, `terminal_*.rs`, `shell_open.rs`; the allowed path awaits a write-capable cluster (risks R2) | — |
 | K7 | Drain progress tab (W6 note 5) | Missing | — | 0034 |
 
 ## Status bar
@@ -84,7 +84,7 @@
 | S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (no drag order) | 0025 |
 | S3 | Add cluster: import file, watch folder, paste YAML | Partial (no watch folder) | 0025 |
 | S4 | Add cluster: scan AWS EKS, GKE, AKS | Missing | backlog |
-| S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Partial (Clusters, Appearance, About; Keyboard Shortcuts done in 0028; Safety tier table and audit path in 0030 step 2a/3) | 0025, 0028, 0030; the rest: 0036, 0019, backlog |
+| S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Partial (Clusters, Appearance, About; Keyboard Shortcuts done in 0028; Safety tier table and audit path in 0030 step 2a/3; About lists `oneterm-vt` in 0036) | 0025, 0028, 0030; the rest: Terminal & Shell (moved out of 0036), 0019, backlog |
 | M1 | Multi-cluster aggregated tables | Partial (Pods, Nodes, every kind screen) | 0027; Overview, Issues, Topology draw the primary cluster only until 0020–0022 follow "Screens that land later" |
 | G1 | Env tiers: prod typed name; staging, dev, local a confirm dialog with a click (user 2026-10-02; W10 text superseded) | Done | 0030 `write_guard.rs`, `confirm_dialog.rs` |
 | G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Partial (done in 0030: PROD opens read-only, lock toggle, server dry-run before every write, audit log; the diff comes in 0031) | 0030, 0031 |

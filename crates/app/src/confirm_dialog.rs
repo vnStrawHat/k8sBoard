@@ -20,8 +20,8 @@ use gpui_kit::{
 
 use crate::app_shell::AppShell;
 use crate::app_shell::write_flow::{
-    CommitMode, DryRunState, TypedMatch, WriteIntent, WriteStep, checked_write, commit_block,
-    confirmed, dry_run_state_of, typed_match, unlock_block,
+    CommitMode, ConnectIntent, DryRunState, TypedMatch, WriteIntent, WriteStep, checked_write,
+    commit_block, confirmed, dry_run_state_of, typed_match, unlock_block,
 };
 use crate::cluster_registry::ClusterRef;
 use crate::environment::{Environment, environment_badge};
@@ -38,6 +38,8 @@ pub(crate) enum DialogKind {
         cluster_name: SharedString,
     },
     Write(Rc<WriteIntent>),
+    /// Start a stream (a shell): no object change, no dry-run.
+    Connect(Rc<ConnectIntent>),
 }
 
 impl DialogKind {
@@ -45,6 +47,7 @@ impl DialogKind {
         match self {
             Self::Unlock { cluster, .. } => cluster,
             Self::Write(intent) => &intent.cluster,
+            Self::Connect(intent) => &intent.cluster,
         }
     }
 
@@ -52,6 +55,7 @@ impl DialogKind {
         match self {
             Self::Unlock { cluster_name, .. } => cluster_name,
             Self::Write(intent) => &intent.cluster_name,
+            Self::Connect(intent) => &intent.cluster_name,
         }
     }
 
@@ -60,12 +64,13 @@ impl DialogKind {
         match self {
             Self::Unlock { cluster_name, .. } => cluster_name,
             Self::Write(intent) => intent.expected(),
+            Self::Connect(intent) => intent.expected(),
         }
     }
 
     fn typed_hint(&self) -> String {
         match self {
-            Self::Unlock { .. } => "the cluster name".to_owned(),
+            Self::Unlock { .. } | Self::Connect(_) => "the cluster name".to_owned(),
             Self::Write(intent) => intent.typed_hint(),
         }
     }
@@ -74,6 +79,7 @@ impl DialogKind {
         match self {
             Self::Unlock { .. } => ActionRisk::Change,
             Self::Write(intent) => intent.risk,
+            Self::Connect(intent) => intent.risk,
         }
     }
 }
@@ -124,6 +130,7 @@ impl ConfirmDialog {
         let dry_run = match inputs.kind {
             DialogKind::Unlock { .. } => None,
             DialogKind::Write(_) => Some(DryRunState::Running),
+            DialogKind::Connect(_) => Some(DryRunState::NotSupported),
         };
         Self {
             shell: inputs.shell,
@@ -150,9 +157,12 @@ impl ConfirmDialog {
     /// ignores its confirm button and Enter, so it can never send anything.
     #[cfg(feature = "screenshot")]
     pub(crate) fn show_fixture(&mut self) {
-        self.dry_run = Some(DryRunState::Passed {
-            elapsed: std::time::Duration::from_millis(412),
-        });
+        // A stream start has no dry-run to pass: its line stays as it is.
+        if matches!(self.kind, DialogKind::Write(_)) {
+            self.dry_run = Some(DryRunState::Passed {
+                elapsed: std::time::Duration::from_millis(412),
+            });
+        }
         self.is_fixture = true;
     }
 
@@ -175,6 +185,7 @@ impl ConfirmDialog {
         let text = match &self.kind {
             DialogKind::Unlock { .. } => format!("Unlock {name} for changes?"),
             DialogKind::Write(intent) => format!("{} on {name}?", intent.label),
+            DialogKind::Connect(intent) => format!("{} on {name}?", intent.label),
         };
         h_flex()
             .gap_2()
@@ -304,6 +315,14 @@ impl ConfirmDialog {
                 });
                 self.close(window, cx);
             }
+            DialogKind::Connect(intent) => {
+                let intent = Rc::clone(intent);
+                self.is_committing = true;
+                shell.update(cx, |shell, cx| {
+                    shell.commit_connect(&intent, generation, window, cx);
+                });
+                self.close(window, cx);
+            }
             DialogKind::Write(intent) => {
                 let typed = self.typed_match(cx);
                 let Some(proof) = self
@@ -361,6 +380,9 @@ impl ConfirmDialog {
     }
 
     fn render_object(&self, cx: &App) -> Option<AnyElement> {
+        if let DialogKind::Connect(intent) = &self.kind {
+            return Some(Self::render_connect_object(intent, cx));
+        }
         let DialogKind::Write(intent) = &self.kind else {
             return None;
         };
@@ -393,7 +415,46 @@ impl ConfirmDialog {
         )
     }
 
+    /// The target of a stream start: its kind and name.
+    fn render_connect_object(intent: &ConnectIntent, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let object = &intent.object;
+        let name = match &object.namespace {
+            Some(namespace) => format!("{namespace}/{}", object.name),
+            None => object.name.clone(),
+        };
+        h_flex()
+            .gap_2()
+            .items_center()
+            .child(div().text_sm().child(object.kind.clone()))
+            .child(
+                div()
+                    .text_sm()
+                    .font_family(theme.mono_font_family.clone())
+                    .child(name),
+            )
+            .into_any_element()
+    }
+
     fn render_changes(&self, cx: &App) -> Option<Div> {
+        if let DialogKind::Connect(intent) = &self.kind {
+            let theme = cx.theme();
+            let mono = theme.mono_font_family.clone();
+            let lines = intent.fields.iter().map(|field| {
+                let text = match &field.value {
+                    Some(value) => format!("{} → {value}", field.path),
+                    None => field.path.clone(),
+                };
+                div().text_sm().font_family(mono.clone()).child(text)
+            });
+            let warnings = intent.warnings.iter().map(|warning| {
+                div()
+                    .text_sm()
+                    .text_color(theme.warning)
+                    .child(warning.clone())
+            });
+            return Some(v_flex().gap_1().children(lines).children(warnings));
+        }
         let DialogKind::Write(intent) = &self.kind else {
             return None;
         };
@@ -418,6 +479,10 @@ impl ConfirmDialog {
     fn render_dry_run(&self, cx: &App) -> Option<AnyElement> {
         let theme = cx.theme();
         let (text, color): (String, _) = match self.dry_run.as_ref()? {
+            DryRunState::NotSupported => (
+                "Dry-run not supported for this action".to_owned(),
+                theme.muted_foreground,
+            ),
             DryRunState::Running => ("Server dry-run…".to_owned(), theme.muted_foreground),
             DryRunState::Passed { elapsed } => (
                 format!("Server dry-run passed · {} ms", elapsed.as_millis()),
@@ -498,6 +563,10 @@ impl ConfirmDialog {
         let (label, is_danger) = match &self.kind {
             DialogKind::Unlock { .. } => (SharedString::from("Unlock"), false),
             DialogKind::Write(intent) => (
+                intent.button.clone(),
+                intent.risk == ActionRisk::Destructive,
+            ),
+            DialogKind::Connect(intent) => (
                 intent.button.clone(),
                 intent.risk == ActionRisk::Destructive,
             ),
@@ -610,6 +679,7 @@ impl ConfirmDialog {
     pub(crate) fn warning_lines(&self) -> Vec<SharedString> {
         match &self.kind {
             DialogKind::Write(intent) => intent.warnings.clone(),
+            DialogKind::Connect(intent) => intent.warnings.clone(),
             DialogKind::Unlock { .. } => Vec::new(),
         }
     }

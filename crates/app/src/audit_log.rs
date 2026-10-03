@@ -129,6 +129,30 @@ pub(crate) fn audit_entry(
     }
 }
 
+/// One session start (an exec): the cluster, context, and user come from the guard of the target's
+/// own cluster. `fields` name the parameters (container, command), never stream bytes.
+pub(crate) fn connect_entry(
+    action: &str,
+    object: AuditObject,
+    fields: Vec<AuditField>,
+    guard: &ClusterGuard<'_>,
+    outcome: AuditOutcome,
+    error: Option<String>,
+) -> AuditEntry {
+    AuditEntry {
+        at: timestamp_now(),
+        cluster: guard.display_name().to_owned(),
+        context: guard.summary.name.clone(),
+        user: guard.summary.user.clone(),
+        action: action.to_owned(),
+        object: Some(object),
+        fields,
+        outcome,
+        error,
+        note: None,
+    }
+}
+
 /// Appends `entry` as one line. Blocking: callers run it off the main thread.
 ///
 /// The whole line goes out in one `write_all` on an append-only handle, so lines do not

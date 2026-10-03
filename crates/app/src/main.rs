@@ -103,6 +103,7 @@ mod secret_values;
 mod settings;
 mod settings_store;
 mod settings_window;
+mod shell_tab;
 mod shortcut_sheet;
 mod status_bar;
 mod status_tone;
@@ -112,17 +113,8 @@ mod table_layout;
 mod table_selection;
 mod table_sort;
 mod table_view;
-// The shell tab (0036 step 3a) is the production user of the terminal; until it lands nothing
-// builds one.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no shell tab builds a terminal element yet")
-)]
 mod terminal_element;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no shell tab builds a terminal session yet")
-)]
+mod terminal_input;
 mod terminal_session;
 mod title_bar;
 mod topology_canvas;

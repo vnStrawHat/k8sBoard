@@ -27,7 +27,9 @@ use crate::drawer::{
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
-use crate::resource_actions::{pod_menu, port_forward_reason, view_logs_reason};
+use crate::resource_actions::{
+    PodMenuLinks, ShellMenu, pod_menu, port_forward_reason, view_logs_reason,
+};
 use crate::status_tone::{StatusTone, container_state_label, pod_status_label, toned_text};
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::UsageBar;
@@ -121,16 +123,34 @@ fn pod_menu_button(
     let dock = dock.clone();
     let key = ResourceKey::of_pod(pod);
     menu_button()
-        .dropdown_menu(move |menu, _, cx| {
+        .dropdown_menu(move |menu, window, cx| {
             let Some(session) = session.upgrade() else {
                 return menu;
             };
+            // The shell submenu is built from the app, so it is made before the session is borrowed.
+            let shell_menu = {
+                let session = session.read(cx);
+                let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
+                    return menu;
+                };
+                let Some(pod) = live.pods.items().iter().find(|pod| key.is_pod(pod)) else {
+                    return menu;
+                };
+                ShellMenu::of(pod, &guard)
+            };
+            let open_shell = shell_menu.item(&row, &shell, window, cx);
             let session = session.read(cx);
             let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
                 return menu;
             };
             match live.pods.items().iter().find(|pod| key.is_pod(pod)) {
-                Some(pod) => pod_menu(menu, pod, live, &guard, &row, &dock, &shell),
+                Some(pod) => {
+                    let links = PodMenuLinks {
+                        dock: &dock,
+                        shell: &shell,
+                    };
+                    pod_menu(menu, pod, live, &guard, &row, &links, open_shell)
+                }
                 None => menu,
             }
         })

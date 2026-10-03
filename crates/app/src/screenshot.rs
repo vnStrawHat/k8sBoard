@@ -148,6 +148,23 @@ impl FeedProgress {
     }
 }
 
+/// What `--screen shell-fixture` shows in the shell tab: the transcript of the W8b pane. The
+/// private OSC 7770 names the shell, as the `Auto` script does.
+#[cfg(feature = "screenshot")]
+pub(crate) const SHELL_FIXTURE_TRANSCRIPT: &str = concat!(
+    "\x1b]7770;sh\x07",
+    "\x1b[32m/app $\x1b[0m env | grep LEDGER\r\n",
+    "LEDGER_URL=http://ledger-svc.payments:8080\r\n",
+    "LEDGER_TIMEOUT_MS=5000\r\n",
+    "\x1b[32m/app $\x1b[0m wget -qO- ledger-svc:8080/healthz\r\n",
+    "{\"status\":\"degraded\",\"db\":\"slow\"}\r\n",
+    "\x1b[32m/app $\x1b[0m cat /proc/meminfo | head -3\r\n",
+    "MemTotal:       65011720 kB\r\n",
+    "MemFree:         9127444 kB\r\n",
+    "MemAvailable:   21504112 kB\r\n",
+    "\x1b[32m/app $\x1b[0m ",
+);
+
 /// The data of several viewed clusters as one state: any cluster still loading holds the screen,
 /// and the target is unavailable only when every cluster is (a failed cluster is a banner next to
 /// the rows of the others, which is the target to capture).

@@ -307,3 +307,61 @@ fn blocked_is_never_audited() {
     };
     assert_eq!(audit_outcome(&Err(refused)), None);
 }
+
+#[test]
+fn a_stream_start_has_no_dry_run_to_wait_for_but_still_checks_lock_and_name() {
+    let access = AccessState::Unknown;
+    let open = guard(&access, WriteLock::Unlocked);
+    let locked = guard(&access, WriteLock::Locked);
+    let not_supported = DryRunState::NotSupported;
+    assert_eq!(
+        block(Some(&open), 0, &not_supported, TypedMatch::NotNeeded),
+        None
+    );
+    assert_eq!(
+        block(Some(&locked), 0, &not_supported, TypedMatch::NotNeeded).as_deref(),
+        Some("stg-b was locked; nothing was changed")
+    );
+    assert_eq!(
+        block(Some(&open), 0, &not_supported, TypedMatch::Differs).as_deref(),
+        Some("Type stg-b to confirm")
+    );
+    assert_eq!(
+        block(None, 0, &not_supported, TypedMatch::NotNeeded).as_deref(),
+        Some("stg-b is no longer open; nothing was changed")
+    );
+}
+
+#[test]
+fn confirmed_accepts_a_start_with_no_dry_run_once_the_name_matches() {
+    let not_supported = DryRunState::NotSupported;
+    assert!(confirmed(&not_supported, TypedMatch::NotNeeded, 3).is_some());
+    assert!(confirmed(&not_supported, TypedMatch::Matches, 3).is_some());
+    assert!(confirmed(&not_supported, TypedMatch::Differs, 3).is_none());
+    // A change that is still being checked, or failed its check, is not confirmed.
+    assert!(confirmed(&DryRunState::Running, TypedMatch::NotNeeded, 3).is_none());
+}
+
+#[test]
+fn only_both_exec_verbs_give_a_permit() {
+    use cluster::{AccessCheck, AccessDecision, AccessReport, AccessReview};
+    let report = |denied: &[AccessCheck]| {
+        AccessState::Known(AccessReport {
+            reviews: AccessCheck::ALL
+                .into_iter()
+                .map(|check| AccessReview {
+                    check,
+                    decision: if denied.contains(&check) {
+                        AccessDecision::Denied { reason: None }
+                    } else {
+                        AccessDecision::Allowed
+                    },
+                })
+                .collect(),
+        })
+    };
+    assert!(exec_permit_of(&report(&[])).is_some());
+    assert!(exec_permit_of(&report(&[AccessCheck::GetPodExec])).is_none());
+    assert!(exec_permit_of(&report(&[AccessCheck::CreatePodExec])).is_none());
+    assert!(exec_permit_of(&AccessState::Unknown).is_none());
+}
