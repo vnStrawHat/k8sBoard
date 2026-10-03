@@ -156,7 +156,7 @@ pub enum ForwardError {
     WritesBlocked,
     #[error("Port {0} in use")]
     PortInUse(u16),
-    #[error("Port {0} is reserved by the system")]
+    #[error("Port {0} is reserved or needs more rights")]
     PortReserved(u16),
     #[error("cannot listen on the local port: {0}")]
     Bind(String),

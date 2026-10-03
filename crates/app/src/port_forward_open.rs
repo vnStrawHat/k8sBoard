@@ -109,6 +109,17 @@ fn forward_intent(
     }
 }
 
+/// Writes the typed local port of `spec` into the preset of the same target in the settings.
+fn store_preset_port(cluster: &ClusterRef, spec: &ForwardSpec, cx: &mut App) {
+    AppSettings::update(cx, |settings| {
+        for preset in &mut settings.port_forward.presets {
+            if preset.cluster == *cluster && preset.spec.is_same_target(spec) {
+                preset.spec.local_port = spec.local_port;
+            }
+        }
+    });
+}
+
 fn warn(window: &mut Window, cx: &mut App, text: String) {
     window.push_notification(Notification::warning(text), cx);
 }
@@ -243,9 +254,12 @@ impl AppShell {
         let (control_sender, control_receiver) = mpsc::unbounded();
         let updates = connection.port_forward(permit, spec.request(), control_receiver);
         let runtime = cx.global::<ClusterRuntime>().clone();
+        // ponytail: a restart drops the old stream, then starts the new one; the old listener closes
+        // when the runtime next polls the aborted pump, so an Exact port can still read "in use"
+        // for a moment (Retry clears it). Await the old pump here if that ever shows up in practice.
         let id = self.port_forwards.update(cx, |forwards, cx| {
             let id = forwards.begin(origin, spec.clone(), existing, jiff::Timestamp::now());
-            let subscription = runtime.subscribe(
+            let subscription = runtime.subscribe_silent(
                 updates,
                 cx,
                 move |forwards, update, cx| forwards.on_update(id, update, cx),
@@ -255,6 +269,14 @@ impl AppShell {
             id
         });
         self.forward_starts.pending.insert(id, abandoned);
+        let is_preset = self
+            .port_forwards
+            .read(cx)
+            .get(id)
+            .is_some_and(|forward| forward.is_preset);
+        if is_preset && matches!(spec.local_port, LocalPortSpec::Exact(_)) {
+            store_preset_port(cluster, spec, cx);
+        }
         self.watch_forward_quit(cx);
         cx.notify();
     }
@@ -303,29 +325,20 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((cluster, mut spec, is_running, is_preset)) =
+        let Some((cluster, mut spec, is_running)) =
             self.port_forwards.read(cx).get(id).map(|forward| {
                 (
                     forward.cluster.clone(),
                     forward.spec.clone(),
                     forward.state.is_running(),
-                    forward.is_preset,
                 )
             })
         else {
             return;
         };
-        let old = spec.clone();
         spec.local_port = LocalPortSpec::Exact(port);
-        if is_preset {
-            AppSettings::update(cx, |settings| {
-                for preset in &mut settings.port_forward.presets {
-                    if preset.cluster == cluster && preset.spec.is_same_target(&old) {
-                        preset.spec.local_port = LocalPortSpec::Exact(port);
-                    }
-                }
-            });
-        }
+        // A running forward restarts through the guarded start; its preset follows the confirmed
+        // start (`open_forward`), never the click.
         if is_running {
             self.start_forward(&cluster, spec, Some(id), window, cx);
             return;
@@ -334,10 +347,14 @@ impl AppShell {
             warn(window, cx, text);
             return;
         }
-        self.port_forwards.update(cx, |forwards, cx| {
-            forwards.set_spec(id, spec);
+        let is_preset = self.port_forwards.update(cx, |forwards, cx| {
+            forwards.set_spec(id, spec.clone());
             cx.notify();
+            forwards.get(id).is_some_and(|forward| forward.is_preset)
         });
+        if is_preset {
+            store_preset_port(&cluster, &spec, cx);
+        }
     }
 
     /// Save as preset: the settings keep the forward under `port_forward.presets`.

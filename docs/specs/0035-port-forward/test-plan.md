@@ -14,7 +14,7 @@
 | `connections_from_both_listeners_share_the_set` | one accept on each → `open_connections == 2` |
 | `exact_port_in_use_ends_with_port_in_use` | pre-bound port + `Exact` → `Ended(PortInUse(p))` |
 | `bind_permission_denied_is_treated_as_in_use` | `Auto(p)` + `PermissionDenied` on `p` (bind seam) → `p+1` |
-| `exact_reserved_port_ends_port_reserved` | `Exact(p)` + `PermissionDenied` → `Ended(PortReserved(p))`, text `Port p is reserved by the system` |
+| `exact_reserved_port_ends_port_reserved` | `Exact(p)` + `PermissionDenied` → `Ended(PortReserved(p))`, text `Port p is reserved or needs more rights` |
 | `auto_port_moves_to_the_next_free_port` | pre-bound `p` + `Auto(p)` → `p+1` |
 | `candidate_ports_then_os_assigned` | `p..=p+20`, then `0` |
 | `default_local_port_table` | 5432 → 15432; 8080 → 18080; 60000 → 60000 |

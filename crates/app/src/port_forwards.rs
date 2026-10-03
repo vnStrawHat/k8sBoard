@@ -207,7 +207,9 @@ impl ForwardFailure {
     fn text(&self) -> SharedString {
         match self {
             Self::PortInUse(port) => format!("Port {port} in use").into(),
-            Self::PortReserved(port) => format!("Port {port} is reserved by the system").into(),
+            Self::PortReserved(port) => {
+                format!("Port {port} is reserved or needs more rights").into()
+            }
             Self::NotPermitted => "Not permitted".into(),
             Self::TargetLost => "Target lost".into(),
             Self::Other(text) => text.clone(),
@@ -338,6 +340,18 @@ pub(crate) fn byte_count_text(bytes: u64) -> String {
 pub(crate) struct ForwardPreset {
     pub(crate) cluster: ClusterRef,
     pub(crate) spec: ForwardSpec,
+}
+
+impl ForwardPreset {
+    /// Names that can be object names and a port that can be bound. The settings file is edited by
+    /// hand, and the transport puts the names into a request path unescaped.
+    fn is_valid(&self) -> bool {
+        let spec = &self.spec;
+        is_dns_subdomain(&spec.namespace)
+            && is_dns_subdomain(&spec.target.name)
+            && spec.remote_port != 0
+            && spec.local_port != LocalPortSpec::Exact(0)
+    }
 }
 
 /// What the start of a forward reported first: the target resolved and the port is bound, or the
@@ -557,15 +571,20 @@ impl PortForwards {
         (was_starting && is_up).then_some(StartOutcome::Up)
     }
 
-    /// `apply` for the subscription: reports the start to the shell and repaints.
+    /// `apply` for the subscription: reports the start to the shell and repaints. A traffic sample
+    /// repaints only while its drawer is open, because it changes nothing else on screen.
     pub(crate) fn on_update(
         &mut self,
         id: ForwardId,
         update: ForwardUpdate,
         cx: &mut Context<Self>,
     ) {
+        let is_traffic = matches!(update, ForwardUpdate::Traffic(_));
         if let Some(outcome) = self.apply(id, update, jiff::Timestamp::now()) {
             cx.emit(StartReport { id, outcome });
+        }
+        if !is_traffic || self.selected == Some(id) {
+            cx.notify();
         }
     }
 
@@ -593,6 +612,7 @@ impl PortForwards {
                 outcome: StartOutcome::Failed("the forward stopped".to_owned()),
             });
         }
+        cx.notify();
     }
 
     /// Stops the forward: the listener closes and every socket is aborted. A preset row stays as
@@ -692,24 +712,34 @@ impl PortForwards {
 
     /// Replaces the `Stopped` preset rows with `presets` (the settings changed elsewhere, or the
     /// app just started). Running rows are untouched, and a preset a running row already shows is
-    /// not listed twice. `describe` names the cluster of a preset.
+    /// not listed twice. `describe` names the cluster of a preset; a stopped row takes it again
+    /// (the catalog may have loaded since) and the preset's spec (its port may have been edited).
+    /// A preset that is not valid is dropped: the transport puts its names into a request path.
     pub(crate) fn load_presets(
         &mut self,
         presets: &[ForwardPreset],
         describe: impl Fn(&ClusterRef) -> (SharedString, Environment),
     ) {
-        let is_listed = |forward: &Forward| {
-            presets.iter().any(|preset| {
+        let presets: Vec<&ForwardPreset> =
+            presets.iter().filter(|preset| preset.is_valid()).collect();
+        let listed = |forward: &Forward| {
+            presets.iter().copied().find(|preset| {
                 preset.cluster == forward.cluster && preset.spec.is_same_target(&forward.spec)
             })
         };
         // A stopped row of a preset that is gone goes away; the others keep their place and
         // their open drawer.
         self.forwards.retain(|forward| {
-            !(forward.is_preset && forward.state == ForwardState::Stopped) || is_listed(forward)
+            !(forward.is_preset && forward.state == ForwardState::Stopped)
+                || listed(forward).is_some()
         });
         for forward in &mut self.forwards {
-            forward.is_preset = is_listed(forward);
+            let preset = listed(forward);
+            forward.is_preset = preset.is_some();
+            if let Some(preset) = preset.filter(|_| forward.state == ForwardState::Stopped) {
+                (forward.cluster_label, forward.environment) = describe(&preset.cluster);
+                forward.spec = preset.spec.clone();
+            }
         }
         for preset in presets {
             let is_shown = self.forwards.iter().any(|forward| {

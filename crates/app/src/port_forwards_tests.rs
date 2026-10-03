@@ -232,7 +232,7 @@ fn status_text_matches_the_wireframe() {
     );
     label(
         ForwardState::Failed(ForwardFailure::PortReserved(3000)),
-        "Port 3000 is reserved by the system",
+        "Port 3000 is reserved or needs more rights",
         StatusTone::Bad,
     );
     label(
@@ -727,4 +727,111 @@ fn target_text_names_namespace_short_kind_and_name() {
     let spec = spec(TargetKind::Deployment, "web", 80, LocalPortSpec::Auto);
     assert_eq!(spec.target_text(), "payments/deploy/web");
     assert_eq!(spec.short_target_text(), "deploy/web");
+}
+
+#[test]
+fn a_stopped_preset_row_takes_the_label_environment_and_port_of_the_settings_again() {
+    let mut forwards = PortForwards::new();
+    let preset = |port| ForwardPreset {
+        cluster: cluster("prod-a"),
+        spec: spec(
+            TargetKind::Service,
+            "kafka",
+            9092,
+            LocalPortSpec::Exact(port),
+        ),
+    };
+    // Loaded before the catalog: a fallback label and a Staging badge.
+    forwards.load_presets(&[preset(9092)], |cluster| {
+        (cluster.context.clone().into(), Environment::Staging)
+    });
+    // The catalog loaded, and the port was edited in Settings.
+    forwards.load_presets(&[preset(19092)], |_| {
+        ("prod-eu-1".into(), Environment::Production)
+    });
+    let row = &forwards.forwards()[0];
+    assert_eq!(forwards.forwards().len(), 1);
+    assert_eq!(row.cluster_label.as_ref(), "prod-eu-1");
+    assert_eq!(row.environment, Environment::Production);
+    assert_eq!(row.spec.local_port, LocalPortSpec::Exact(19092));
+}
+
+#[test]
+fn a_running_row_keeps_its_spec_when_the_settings_change() {
+    let mut forwards = PortForwards::new();
+    let id = starting(&mut forwards);
+    let preset = ForwardPreset {
+        cluster: cluster("prod-a"),
+        spec: spec(
+            TargetKind::Pod,
+            "postgres-0",
+            5432,
+            LocalPortSpec::Exact(25432),
+        ),
+    };
+    forwards.load_presets(&[preset], |_| ("other".into(), Environment::Production));
+    let row = forwards.get(id).expect("the row exists");
+    assert_eq!(row.spec.local_port, LocalPortSpec::Auto);
+    assert_eq!(row.environment, Environment::Staging);
+}
+
+#[test]
+fn presets_with_unsafe_names_or_no_port_are_dropped() {
+    let preset = |namespace: &str, name: &str, remote: u16, local: LocalPortSpec| ForwardPreset {
+        cluster: cluster("prod-a"),
+        spec: ForwardSpec {
+            namespace: namespace.to_owned(),
+            target: TargetSpec::pod(name),
+            remote_port: remote,
+            local_port: local,
+        },
+    };
+    let presets = [
+        preset("shop", "api-0", 80, LocalPortSpec::Exact(8080)),
+        preset("shop/../kube-system", "api-0", 80, LocalPortSpec::Auto),
+        preset("shop", "../x", 80, LocalPortSpec::Auto),
+        preset("shop", "api-1", 0, LocalPortSpec::Auto),
+        preset("shop", "api-2", 80, LocalPortSpec::Exact(0)),
+        preset("", "api-3", 80, LocalPortSpec::Auto),
+    ];
+    let mut forwards = PortForwards::new();
+    forwards.load_presets(&presets, |cluster| {
+        (cluster.context.clone().into(), Environment::Staging)
+    });
+    let names: Vec<&str> = forwards
+        .forwards()
+        .iter()
+        .map(|row| row.spec.target.name.as_str())
+        .collect();
+    assert_eq!(names, ["api-0"]);
+}
+
+#[gpui_kit::test]
+fn a_traffic_sample_repaints_only_its_open_drawer(cx: &mut gpui_kit::TestAppContext) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let forwards = cx.update(|cx| gpui_kit::AppContext::new(cx, |_| PortForwards::new()));
+    let id = forwards.update(cx, |forwards, _| starting(forwards));
+    let repaints = Rc::new(Cell::new(0_u32));
+    let counter = Rc::clone(&repaints);
+    cx.update(|cx| {
+        cx.observe(&forwards, move |_, _| counter.set(counter.get() + 1))
+            .detach();
+    });
+    let sample = || {
+        ForwardUpdate::Traffic(ForwardTraffic {
+            open_connections: 1,
+            received: 5,
+            sent: 5,
+        })
+    };
+    forwards.update(cx, |forwards, cx| forwards.on_update(id, sample(), cx));
+    assert_eq!(repaints.get(), 0, "no drawer is open for this forward");
+    // Anything else about the forward does repaint.
+    forwards.update(cx, |forwards, cx| forwards.on_update(id, resolved(), cx));
+    assert_eq!(repaints.get(), 1);
+    forwards.update(cx, |forwards, _| forwards.select(Some(id)));
+    forwards.update(cx, |forwards, cx| forwards.on_update(id, sample(), cx));
+    assert_eq!(repaints.get(), 2, "its open drawer shows the counters");
 }

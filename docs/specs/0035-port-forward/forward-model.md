@@ -24,7 +24,7 @@ pub(crate) enum ForwardFailure { PortInUse(u16), PortReserved(u16), NotPermitted
 
 - `apply(&mut self, id, ForwardUpdate)` (pure state transition, unit-tested): `Listening` → `local`; `Resolved` → `Active`, `pod`; `Event(Reconnecting{n})` → `Reconnecting{n}`; `Event(Reconnected)` → `Active`; `Event(Paused)` → `Paused`; `Event(Resumed)` → `Active`; `Traffic` → counters; `Ended(e)` → `Failed(..)`, `run = None`. Each event appends a line with the local time.
 - Stop: `run = None` (drops the subscription: listener closed, sockets aborted), state `Stopped`; a non-preset stopped row is removed; a preset row stays `Stopped · preset`.
-- Status text (W7): `Starting…`, `Active`, `Reconnecting {n}/5`, `Paused · read-only`, `Port {n} in use`, `Port {n} is reserved by the system`, `Not permitted`, `Target lost`, `{text}`, `Stopped · preset`. Tokens: success, warning, danger, muted.
+- Status text (W7): `Starting…`, `Active`, `Reconnecting {n}/5`, `Paused · read-only`, `Port {n} in use`, `Port {n} is reserved or needs more rights`, `Not permitted`, `Target lost`, `{text}`, `Stopped · preset`. Tokens: success, warning, danger, muted.
 - `active_count()` feeds the status bar and the sidebar.
 
 ## Guarded start (reuses 0036 `ConnectIntent`, generalized)

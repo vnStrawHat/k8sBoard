@@ -544,7 +544,19 @@ impl AppShell {
             cx.subscribe(&port_forwards, |shell, _, report: &StartReport, cx| {
                 shell.audit_forward_start(report, cx);
             }),
-            cx.observe(&port_forwards, |_, _, cx| cx.notify()),
+            // The shell repaints when the count of running forwards changes (sidebar, status bar),
+            // while the page or a drawer is open, but not for every sample of an idle forward.
+            {
+                let mut last_count = 0;
+                cx.observe(&port_forwards, move |shell, forwards, cx| {
+                    let count = forwards.read(cx).running_count();
+                    let is_shown = shell.screen == Screen::PortForwarding || shell.drawer.is_open;
+                    if is_shown || count != last_count {
+                        cx.notify();
+                    }
+                    last_count = count;
+                })
+            },
             cx.subscribe_in(
                 &forward_filter,
                 window,

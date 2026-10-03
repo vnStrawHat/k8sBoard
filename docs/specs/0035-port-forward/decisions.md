@@ -33,7 +33,7 @@
 | # | Decision | Rationale |
 |---|---|---|
 | 17 | Default local port = `10000 + remote` when `remote ≤ 55535`, else `remote`; `Auto` tries it then the next 20, then an OS-assigned port | matches the wireframe (5432 → 15432, 8080 → 18080, 9090 → 19090); avoids privileged ports |
-| 18 | A port the user typed (dialog, preset) is `Exact`: `AddrInUse` → `Port N in use`, Windows `PermissionDenied` (WSAEACCES, an excluded port range) → `PortReserved` `Port N is reserved by the system`, both with Retry, never moved silently. `Auto` treats both errors as busy and tries the next port | the user expects that address; Hyper-V and WinNAT reserve port ranges |
+| 18 | A port the user typed (dialog, preset) is `Exact`: `AddrInUse` → `Port N in use`, Windows `PermissionDenied` (WSAEACCES, an excluded port range) → `PortReserved` `Port N is reserved or needs more rights`, both with Retry, never moved silently. `Auto` treats both errors as busy and tries the next port | the user expects that address; Hyper-V and WinNAT reserve port ranges |
 | 19 | Conflicts across our own forwards are refused before binding (`Port N is used by another forward`) | clearer than an OS error |
 
 ## App and lifecycle

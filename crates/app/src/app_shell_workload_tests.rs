@@ -404,8 +404,8 @@ fn menu_item_dispatches_the_key_on_the_right_clicked_row(cx: &mut TestAppContext
         shell.selected.as_ref().map(|o| o.cluster.clone())
     });
     assert_eq!(selected.as_ref(), Some(&t.stg));
-    // The clickable items before Restart rollout: the workload logs, View YAML, and Scale….
-    for key in ["down", "down", "down", "down", "enter"] {
+    // The clickable items before Restart rollout: the workload logs, View YAML, Port-forward, Scale….
+    for key in ["down", "down", "down", "down", "down", "enter"] {
         t.press(key, cx);
         cx.run_until_parked();
     }
@@ -490,8 +490,8 @@ fn menu_scale_opens_the_popover_for_the_clicked_row(cx: &mut TestAppContext) {
     cx.run_until_parked();
     t.fixture.draw_twice(cx);
     cx.run_until_parked();
-    // The clickable items before Scale…: the workload logs and View YAML.
-    for key in ["down", "down", "down", "enter"] {
+    // The clickable items before Scale…: the workload logs, View YAML, and Port-forward.
+    for key in ["down", "down", "down", "down", "enter"] {
         t.press(key, cx);
         cx.run_until_parked();
     }
@@ -1496,7 +1496,7 @@ fn menu_shift_s_and_palette_open_the_same_popover(cx: &mut TestAppContext) {
     t.press("enter", cx);
     opened.push(t.popover(cx).is_some());
     t.press("escape", cx);
-    // The menu: the workload logs, View YAML, then Scale….
+    // The menu: the workload logs, View YAML, Port-forward, then Scale….
     t.fixture
         .shell
         .update(cx, |shell, cx| shell.close_drawer(cx));
@@ -1505,7 +1505,7 @@ fn menu_shift_s_and_palette_open_the_same_popover(cx: &mut TestAppContext) {
         .with_window(cx, |window, cx| window.right_click(("row", 1usize), cx));
     cx.run_until_parked();
     t.fixture.draw_twice(cx);
-    for key in ["down", "down", "down", "enter"] {
+    for key in ["down", "down", "down", "down", "enter"] {
         t.press(key, cx);
         cx.run_until_parked();
     }

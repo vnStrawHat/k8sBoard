@@ -4,8 +4,7 @@
 //! Remove preset… is a click-only confirm: a held Enter never removes anything.
 
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
-use gpui_kit::component::dialog::DialogButtonProps;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::select::{Select, SelectState};
 use gpui_kit::component::{ActiveTheme as _, IndexPath, Sizable as _, h_flex, v_flex};
@@ -18,7 +17,7 @@ use gpui_kit::{
 use super::AppShell;
 use crate::cluster_registry::ClusterRef;
 use crate::environment::{Environment, environment_badge};
-use crate::fresh_enter::FreshEnter;
+use crate::fresh_enter::{FreshEnter, confirms, is_enter};
 use crate::keymap::FORWARD_FORM;
 use crate::port_forwards::{
     ForwardId, ForwardSpec, LocalPortSpec, TargetSpec, is_dns_subdomain, parse_port, parse_target,
@@ -102,17 +101,16 @@ pub(crate) fn validate_local_port(text: &str) -> Result<u16, &'static str> {
     parse_port(text).ok_or(PORT_ERROR)
 }
 
-/// Whether a key press submits a form: a fresh, unmodified Enter. A repeat of a held one (the Enter
-/// that opened the dialog from a key) never does.
-fn submits(event: &KeyDownEvent) -> bool {
-    event.keystroke.key == "enter" && !event.keystroke.modifiers.modified() && !event.is_held
-}
-
 /// The viewed cluster a form can start in.
 struct FormCluster {
     cluster: ClusterRef,
     label: String,
     environment: Environment,
+}
+
+/// The entry at the Select's selected row.
+fn cluster_at(clusters: &[FormCluster], selected: Option<IndexPath>) -> Option<&FormCluster> {
+    clusters.get(selected?.row)
 }
 
 /// The body of the New forward dialog.
@@ -128,9 +126,9 @@ struct NewForwardForm {
 }
 
 impl NewForwardForm {
+    /// The cluster the Select shows, by its index: two clusters may share a label.
     fn chosen_cluster(&self, cx: &gpui_kit::App) -> Option<&FormCluster> {
-        let label = self.cluster.read(cx).selected_value()?;
-        self.clusters.iter().find(|entry| entry.label == *label)
+        cluster_at(&self.clusters, self.cluster.read(cx).selected_index(cx))
     }
 
     /// Forward: validates, then closes and starts through the guarded flow of the chosen cluster.
@@ -166,13 +164,12 @@ impl NewForwardForm {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let key = &event.keystroke;
-        if key.key != "enter" || key.modifiers.modified() {
+        if !is_enter(event) {
             return;
         }
         window.prevent_default();
         cx.stop_propagation();
-        if submits(event) {
+        if confirms(event) {
             self.submit(window, cx);
         }
     }
@@ -295,13 +292,12 @@ impl LocalPortForm {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let key = &event.keystroke;
-        if key.key != "enter" || key.modifiers.modified() {
+        if !is_enter(event) {
             return;
         }
         window.prevent_default();
         cx.stop_propagation();
-        if submits(event) {
+        if confirms(event) {
             self.submit(window, cx);
         }
     }
@@ -450,28 +446,52 @@ impl AppShell {
             return;
         };
         let shell = cx.weak_entity();
-        // Enter never removes: the kit binding is off and the fresh Enter does nothing.
+        // Enter never removes: the kit binding is off and the fresh Enter does nothing. The buttons
+        // are the ones of the confirm dialogs, so Remove reads as the red, enabled button it is.
         let body = cx.new(|cx| {
-            let text = text.clone();
-            FreshEnter::new(move |_| text.clone().into_any_element(), |_, _| {}, cx)
+            FreshEnter::new(
+                move |_| {
+                    let shell = shell.clone();
+                    v_flex()
+                        .w_full()
+                        .gap_3()
+                        .child(text.clone())
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .justify_end()
+                                .child(
+                                    Button::new("preset-cancel")
+                                        .label("Cancel")
+                                        .small()
+                                        .outline()
+                                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                                )
+                                .child(
+                                    Button::new("preset-remove")
+                                        .label("Remove")
+                                        .small()
+                                        .danger()
+                                        .on_click(move |_, window, cx| {
+                                            let _ = shell.update(cx, |shell, cx| {
+                                                shell.remove_forward_preset(id, cx);
+                                            });
+                                            window.close_dialog(cx);
+                                        }),
+                                ),
+                        )
+                        .into_any_element()
+                },
+                |_, _| {},
+                cx,
+            )
         });
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let shell = shell.clone();
-            alert
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
                 .title("Remove preset")
+                .w(px(DIALOG_WIDTH))
                 .child(body.clone())
-                .confirm()
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text("Remove")
-                        .ok_variant(ButtonVariant::Danger)
-                        .cancel_text("Cancel")
-                        .show_cancel(true),
-                )
-                .on_ok(move |_, _, cx| {
-                    let _ = shell.update(cx, |shell, cx| shell.remove_forward_preset(id, cx));
-                    true
-                })
         });
     }
 }

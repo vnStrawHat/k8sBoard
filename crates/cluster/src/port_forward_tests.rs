@@ -449,7 +449,10 @@ async fn exact_reserved_port_ends_port_reserved() {
         panic!("a reserved exact port cannot bind");
     };
     assert!(matches!(error, ForwardError::PortReserved(20_000)));
-    assert_eq!(error.to_string(), "Port 20000 is reserved by the system");
+    assert_eq!(
+        error.to_string(),
+        "Port 20000 is reserved or needs more rights"
+    );
 }
 
 #[tokio::test]

@@ -61,9 +61,7 @@ pub(crate) fn bulk_actions(screen: Screen) -> &'static [KindAction] {
         | Screen::Issues
         | Screen::Topology
         | Screen::PortForwarding
-        | Screen::Kind(_) => {
-            &[]
-        }
+        | Screen::Kind(_) => &[],
     }
 }
 

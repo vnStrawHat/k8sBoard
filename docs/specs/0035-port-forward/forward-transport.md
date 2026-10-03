@@ -42,7 +42,7 @@ impl ClusterConnection {
 pub fn default_local_port(remote: u16) -> u16; // decision 17
 ```
 
-`ForwardError` (`thiserror`): `WritesBlocked`, `PortInUse(u16)`, `PortReserved(u16)` (`Port {n} is reserved by the system`), `Bind(String)`, `NotPermitted`, `Unauthorized`, `TargetNotFound`, `NoReadyPod`, `PortNotDeclared(String)` (named `targetPort` missing in the pod), `UnsupportedService` (no selector, ExternalName), `TargetLost`, `Cluster(ClusterError)`. `Display` texts are fixed (they name objects, never bytes).
+`ForwardError` (`thiserror`): `WritesBlocked`, `PortInUse(u16)`, `PortReserved(u16)` (`Port {n} is reserved or needs more rights`), `Bind(String)`, `NotPermitted`, `Unauthorized`, `TargetNotFound`, `NoReadyPod`, `PortNotDeclared(String)` (named `targetPort` missing in the pod), `UnsupportedService` (no selector, ExternalName), `TargetLost`, `Cluster(ClusterError)`. `Display` texts are fixed (they name objects, never bytes).
 
 ## RBAC (decision 7)
 

@@ -1198,7 +1198,19 @@ fn the_dialogs_open_over_the_viewed_clusters(cx: &mut TestAppContext) {
         });
     });
     assert!(forwards.has_dialog(cx));
+    // Only a click on Remove removes: the confirm action (Enter) does nothing.
     forwards.press_dialog(Confirm { secondary: false }, cx);
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| AppSettings::get(cx).port_forward.presets.len()),
+        1
+    );
+    forwards.press_dialog(Cancel, cx);
+    assert!(!forwards.has_dialog(cx));
+    forwards
+        .fixture
+        .shell
+        .update(cx, |shell, cx| shell.remove_forward_preset(id, cx));
     cx.run_until_parked();
     let left = cx.update(|cx| AppSettings::get(cx).port_forward.presets.len());
     assert_eq!(left, 0);
@@ -1231,4 +1243,49 @@ fn stopping_a_forward_closes_its_listener(cx: &mut TestAppContext) {
         .update(cx, |shell, cx| shell.stop_forward(id, cx));
     // Dropping the stream closes the listener; quitting the app drops it the same way.
     forwards.wait_for("the listener to close", cx, |_, _| !accepts());
+}
+
+#[gpui_kit::test]
+fn change_local_port_of_a_running_preset_is_saved_only_after_the_confirmed_start(
+    cx: &mut TestAppContext,
+) {
+    let forwards = two_clusters("preset-late", Answers::Pod, cx);
+    let mut settings = Settings::default();
+    settings.port_forward.presets.push(ForwardPreset {
+        cluster: forwards.stg.clone(),
+        spec: pod_spec("api-0", 8080, LocalPortSpec::Exact(free_port())),
+    });
+    let dir = forwards.install_settings("preset-late", settings, cx);
+    let before = cx.update(|cx| AppSettings::get(cx).port_forward.presets[0].spec.local_port);
+    let (id, ..) = forwards.only_row(cx);
+    forwards.fixture.with_window(cx, |window, cx| {
+        forwards.fixture.shell.update(cx, |shell, cx| {
+            shell.start_forward_again(id, window, cx);
+        });
+    });
+    forwards.confirm(cx);
+    forwards.wait_for_state(ForwardState::Active, cx);
+    let port = free_port();
+    forwards.fixture.with_window(cx, |window, cx| {
+        forwards.fixture.shell.update(cx, |shell, cx| {
+            shell.change_local_port(id, port, window, cx);
+        });
+    });
+    // The dialog is open, and a click on Back leaves the settings as they were.
+    assert!(forwards.has_dialog(cx));
+    let now = cx.update(|cx| AppSettings::get(cx).port_forward.presets[0].spec.local_port);
+    assert_eq!(now, before, "nothing is saved before the confirm");
+    forwards.press_dialog(Cancel, cx);
+    let after_cancel = cx.update(|cx| AppSettings::get(cx).port_forward.presets[0].spec.local_port);
+    assert_eq!(after_cancel, before);
+    // A confirmed restart saves the new port.
+    forwards.fixture.with_window(cx, |window, cx| {
+        forwards.fixture.shell.update(cx, |shell, cx| {
+            shell.change_local_port(id, port, window, cx);
+        });
+    });
+    forwards.confirm(cx);
+    let saved = cx.update(|cx| AppSettings::get(cx).port_forward.presets[0].spec.local_port);
+    assert_eq!(saved, LocalPortSpec::Exact(port));
+    let _ = std::fs::remove_dir_all(&dir);
 }
