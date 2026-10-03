@@ -114,8 +114,8 @@ fn a_pod_is_gone_when_the_loaded_pods_lack_it() {
 
 #[test]
 fn too_large_states_name_their_limit() {
-    assert!(too_large_text(TooLarge::Objects(6_000), "shop").contains("5000"));
-    assert!(too_large_text(TooLarge::Nodes(900), "shop").contains("500"));
+    assert!(too_large_text(TooLarge::Objects(6_000), "shop", false).contains("5000"));
+    assert!(too_large_text(TooLarge::Nodes(900), "shop", false).contains("500"));
 }
 
 #[test]
@@ -285,4 +285,22 @@ fn click_on_feedless_row_reveals_instead_of_drawer() {
         CardClick::Reveal(service)
     );
     assert_eq!(card_click(None, true, 1), CardClick::Highlight);
+}
+
+#[test]
+fn too_large_with_rbac_on_says_so() {
+    let with = too_large_text(TooLarge::Nodes(900), "shop", true);
+    assert!(
+        with.ends_with(
+            "Too many nodes with the RBAC layer on; turn RBAC off or pick a smaller namespace."
+        ),
+        "{with}"
+    );
+    assert!(with.contains("900") && with.contains("500"));
+    // Without the layer, the hint stays the kind chips and Problems only.
+    let without = too_large_text(TooLarge::Nodes(900), "shop", false);
+    assert!(!without.contains("RBAC"));
+    assert!(without.contains("Problems only"));
+    // The object limit has its own text, whatever the chip.
+    assert!(!too_large_text(TooLarge::Objects(6_000), "shop", true).contains("RBAC"));
 }

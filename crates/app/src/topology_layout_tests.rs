@@ -421,49 +421,57 @@ fn pinned_node_keeps_its_origin() {
     assert_eq!(rect(&graph, &pinned, &other), rect(&graph, &free, &other));
 }
 
-#[test]
-fn topology_budget() {
-    // 40 Services, 100 ReplicaSets (and their Deployments), 3,000 pods: 30 per ReplicaSet; the RBAC
-    // layer adds 40 accounts, 80 bindings (two per account), and 40 Roles.
-    let mut fixture = Fixture::default().with_rbac();
-    for n in 0..40 {
-        let account = format!("sa-{n:02}");
-        let role_name = format!("role-{n:02}");
-        fixture = fixture
-            .with_service_account(service_account(&account))
-            .with_role(role(&role_name, 2));
-        for copy in 0..2 {
-            fixture = fixture.with_role_binding(binding(
-                Some(NAMESPACE),
-                &format!("bind-{n:02}-{copy}"),
-                (RoleKind::Role, &role_name),
-                vec![account_subject(&account)],
-            ));
+/// `services` Services and `deployments` Deployments with a ReplicaSet each and 30 pods per set
+/// (grouped into one node per set). With `accounts`, the RBAC chip is on, each pod runs as one of
+/// that many accounts, and each account has two RoleBindings to its own Role.
+fn budget_fixture(services: usize, deployments: usize, accounts: Option<usize>) -> Fixture {
+    let mut fixture = Fixture::default();
+    if let Some(count) = accounts {
+        fixture = fixture.with_rbac();
+        for n in 0..count {
+            let account = format!("sa-{n:02}");
+            let role_name = format!("role-{n:02}");
+            fixture = fixture
+                .with_service_account(service_account(&account))
+                .with_role(role(&role_name, 2));
+            for copy in 0..2 {
+                fixture = fixture.with_role_binding(binding(
+                    Some(NAMESPACE),
+                    &format!("bind-{n:02}-{copy}"),
+                    (RoleKind::Role, &role_name),
+                    vec![account_subject(&account)],
+                ));
+            }
         }
     }
-    for n in 0..40 {
+    for n in 0..services {
         fixture = fixture.with_service(&format!("svc-{n:02}"), &[&format!("app=svc-{n:02}")]);
     }
     let mut pods = Vec::new();
-    for n in 0..100 {
+    for n in 0..deployments {
         let deployment_name = format!("dep-{n:03}");
         let set = format!("{deployment_name}-7d9f");
         fixture = fixture
             .with_deployment_summary(deployment(&deployment_name, 30, 30))
             .with_replica_set(&set, Some(&deployment_name), 30, 30);
-        let app = format!("app=svc-{:02}", n % 40);
+        let app = format!("app=svc-{:02}", n % services);
         for p in 0..30 {
-            pods.push(pod_as(
-                pod(
-                    &format!("{set}-{p:02}"),
-                    &[&app],
-                    Some(("ReplicaSet", &set)),
-                ),
-                &format!("sa-{:02}", n % 40),
-            ));
+            let pod = pod(
+                &format!("{set}-{p:02}"),
+                &[&app],
+                Some(("ReplicaSet", &set)),
+            );
+            pods.push(match accounts {
+                Some(count) => pod_as(pod, &format!("sa-{:02}", n % count)),
+                None => pod,
+            });
         }
     }
-    fixture = fixture.with_pods(pods);
+    fixture.with_pods(pods)
+}
+
+/// Builds and lays `fixture` out, prints the time, and returns the node and edge counts.
+fn measure_budget(name: &str, fixture: &Fixture) -> (usize, usize) {
     let started = Instant::now();
     let TopologyBuild::Graph(graph) = fixture.build() else {
         panic!("the realistic input is within the limits");
@@ -471,16 +479,35 @@ fn topology_budget() {
     let built = layout(&graph, GroupBy::App, WIDE, &no_pins(), None);
     let elapsed = started.elapsed();
     eprintln!(
-        "topology_budget: {elapsed:?} for {} nodes, {} edges",
+        "{name}: {elapsed:?} for {} nodes, {} edges",
         graph.nodes.len(),
         graph.edges.len()
     );
-    // The time is only printed: the work counts are the deterministic ceiling (measured without the
-    // layer: 340 nodes, 300 edges; the layer adds 160 nodes and 260 edges), so a busy machine cannot
-    // fail the test.
     assert_eq!(built.rects.len(), graph.nodes.len());
-    assert!(graph.nodes.len() <= 500, "{} nodes", graph.nodes.len());
-    assert!(graph.edges.len() <= 600, "{} edges", graph.edges.len());
+    (graph.nodes.len(), graph.edges.len())
+}
+
+#[test]
+fn topology_budget() {
+    // 40 Services, 100 ReplicaSets (and their Deployments), 3,000 pods: 30 per ReplicaSet. The time
+    // is only printed: the work counts are the deterministic ceiling (measured: 340 nodes, 300
+    // edges), so a busy machine cannot fail the test.
+    let (nodes, edges) = measure_budget("topology_budget", &budget_fixture(40, 100, None));
+    assert!(nodes <= 400, "{nodes} nodes");
+    assert!(edges <= 400, "{edges} edges");
+}
+
+#[test]
+fn topology_budget_with_rbac() {
+    // 10 Services, 50 Deployments, 1,500 pods, and the RBAC layer: 30 accounts, 60 RoleBindings
+    // (two per account), and 30 Roles. Well below `NODE_LIMIT`; the ceilings are the measured
+    // counts plus a margin.
+    let (nodes, edges) = measure_budget(
+        "topology_budget_with_rbac",
+        &budget_fixture(10, 50, Some(30)),
+    );
+    assert!(nodes <= 300, "{nodes} nodes");
+    assert!(edges <= 360, "{edges} edges");
 }
 
 #[test]

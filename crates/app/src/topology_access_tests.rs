@@ -144,3 +144,41 @@ fn a_direct_cluster_admin_grant_names_the_binding_node() {
     assert_eq!(grant.group, None);
     assert!(cluster_admin_grant(&index, NAMESPACE, &account, "other").is_none());
 }
+
+fn grant_through(kind: TopologyKind, row: crate::kind_row::KindRow) -> ClusterAdminGrant {
+    let bindings = AccessBindings::collect([(kind, &row)].into_iter(), NAMESPACE);
+    let index = BindingIndex::build(&bindings.lists());
+    let account = NodeId::Object {
+        kind: TopologyKind::ServiceAccount,
+        name: "api".to_owned(),
+    };
+    cluster_admin_grant(&index, NAMESPACE, &account, "api").expect("a grant")
+}
+
+#[test]
+fn a_role_binding_grant_carries_its_namespace() {
+    let local = binding(
+        Some(NAMESPACE),
+        "local-admin",
+        (RoleKind::ClusterRole, "cluster-admin"),
+        vec![account_subject("api")],
+    );
+    let grant = grant_through(TopologyKind::RoleBinding, role_binding_row(&local));
+    assert_eq!(grant.binding_namespace.as_deref(), Some(NAMESPACE));
+    assert_eq!(grant.binding_text, "rolebinding/local-admin");
+}
+
+#[test]
+fn a_cluster_role_binding_grant_is_cluster_wide() {
+    let wide = binding(
+        None,
+        "ci-admin",
+        (RoleKind::ClusterRole, "cluster-admin"),
+        vec![account_subject("api")],
+    );
+    let grant = grant_through(
+        TopologyKind::ClusterRoleBinding,
+        cluster_role_binding_row(&wide),
+    );
+    assert_eq!(grant.binding_namespace, None);
+}

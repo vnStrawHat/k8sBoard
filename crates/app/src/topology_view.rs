@@ -1223,7 +1223,14 @@ impl TopologyView {
                         .child(format!("Loading the topology of {namespace}\u{2026}")),
                 )
                 .into_any_element(),
-            Some(Err(too_large)) => centered(too_large_text(*too_large, &namespace).into()),
+            Some(Err(too_large)) => centered(
+                too_large_text(
+                    *too_large,
+                    &namespace,
+                    self.filter.kinds.contains(&KindFilter::Rbac),
+                )
+                .into(),
+            ),
             Some(Ok(graph)) if graph.nodes.is_empty() => {
                 let text = if self.filter.problems_only {
                     format!("No problems in {namespace}.")
@@ -1698,8 +1705,13 @@ fn namespace_choices(
     }
 }
 
-fn too_large_text(too_large: TooLarge, namespace: &str) -> String {
+/// The too-large state. With the RBAC chip on, a graph over the node limit says so: the layer adds
+/// accounts, bindings, and roles, and turning it off is the quickest way back.
+fn too_large_text(too_large: TooLarge, namespace: &str, is_rbac_on: bool) -> String {
     match too_large {
+        TooLarge::Nodes(count) if is_rbac_on => format!(
+            "{namespace} would show {count} nodes; Topology draws at most {NODE_LIMIT}. Too many nodes with the RBAC layer on; turn RBAC off or pick a smaller namespace."
+        ),
         TooLarge::Objects(count) => format!(
             "{namespace} holds {count} objects; Topology draws at most {RAW_LIMIT}. Pick a smaller namespace."
         ),

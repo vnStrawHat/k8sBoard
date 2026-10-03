@@ -28,7 +28,8 @@ pub(crate) fn names_namespace_account(binding: &BindingSummary, namespace: &str)
 
 /// Cloned bindings for `BindingIndex::build`: the feeds hold `KindRow`s, and the index borrows
 /// plain summaries. The copy is bounded by `RAW_LIMIT`, because only the cluster-wide bindings that
-/// name an account of the namespace are kept.
+/// name an account of the namespace are kept. `counted_rows` in `topology_graph.rs` counts exactly
+/// the rows this keeps, by the same `names_namespace_account` rule: change them together.
 #[derive(Default)]
 pub(crate) struct AccessBindings {
     role_bindings: Vec<BindingSummary>,
@@ -72,8 +73,11 @@ pub(crate) struct ClusterAdminGrant {
     pub(crate) account_name: String,
     /// The binding node when the account is a direct subject of it; `None` for a group grant.
     pub(crate) binding: Option<NodeId>,
-    /// `clusterrolebinding/x`.
+    /// `clusterrolebinding/x` or `rolebinding/x`.
     pub(crate) binding_text: String,
+    /// The namespace a RoleBinding limits the grant to; `None` for a ClusterRoleBinding, whose
+    /// grant is cluster wide.
+    pub(crate) binding_namespace: Option<String>,
     /// The group the binding names, for a grant the account holds through one.
     pub(crate) group: Option<String>,
 }
@@ -99,6 +103,7 @@ pub(crate) fn cluster_admin_grant(
         account_name: name.to_owned(),
         binding,
         binding_text: bound.binding_text.clone(),
+        binding_namespace: bound.binding_namespace().map(str::to_owned),
         group: bound.group.clone(),
     })
 }

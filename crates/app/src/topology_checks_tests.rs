@@ -522,6 +522,55 @@ fn off_rbac_feed_skips_access_checks() {
     assert!(!rules.contains(&CheckRule::MissingRole));
     // The cluster-admin grant needs the binding feeds only.
     assert!(rules.contains(&CheckRule::ClusterAdminAccount));
+    // Their targets are drawn as not checked, and no ghost stands in for a missing Role.
+    for name in ["reader", "gone"] {
+        assert_eq!(
+            look_of(&graph, TopologyKind::Role, name),
+            Some(NodeLook::Unchecked),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        look_of(&graph, TopologyKind::ServiceAccount, "api"),
+        Some(NodeLook::Unchecked)
+    );
+    assert!(
+        graph
+            .nodes
+            .iter()
+            .all(|node| node.look != NodeLook::Ghost || node.kind != TopologyKind::Role)
+    );
+}
+
+#[test]
+fn loading_rbac_feeds_skip_access_checks_and_draw_unchecked() {
+    let graph = shop_access()
+        .loading(TopologyKind::ServiceAccount)
+        .loading(TopologyKind::Role)
+        .graph();
+    let rules = rules(&graph);
+    assert!(!rules.contains(&CheckRule::MissingServiceAccount));
+    assert!(!rules.contains(&CheckRule::MissingRole));
+    assert_eq!(
+        look_of(&graph, TopologyKind::ServiceAccount, "api"),
+        Some(NodeLook::Unchecked)
+    );
+    assert_eq!(
+        look_of(&graph, TopologyKind::Role, "gone"),
+        Some(NodeLook::Unchecked)
+    );
+}
+
+fn look_of(
+    graph: &crate::topology_graph::TopologyGraph,
+    kind: TopologyKind,
+    name: &str,
+) -> Option<NodeLook> {
+    graph
+        .nodes
+        .iter()
+        .find(|node| node.kind == kind && node.name == name)
+        .map(|node| node.look)
 }
 
 #[test]
@@ -589,4 +638,34 @@ fn access_nodes_get_no_object_diagnosis() {
             .iter()
             .all(|check| check.rule != CheckRule::ObjectDiagnosis)
     );
+}
+
+#[test]
+fn cluster_admin_through_a_role_binding_is_limited_to_its_namespace() {
+    let graph = Fixture::default()
+        .with_rbac()
+        .with_pod(pod_as(pod("p", &[], None), "api"))
+        .with_service_account(service_account("api"))
+        .with_role_binding(binding(
+            Some(NAMESPACE),
+            "local-admin",
+            (RoleKind::ClusterRole, "cluster-admin"),
+            vec![account_subject("api")],
+        ))
+        .graph();
+    let check = check_of(&graph, CheckRule::ClusterAdminAccount);
+    assert_eq!(check.tone, StatusTone::Warn);
+    assert_eq!(check.node, object(TopologyKind::RoleBinding, "local-admin"));
+    assert_eq!(
+        check.text,
+        "ServiceAccount api has cluster-admin in namespace shop through rolebinding/local-admin."
+    );
+}
+
+#[test]
+fn cluster_admin_through_a_cluster_role_binding_stays_cluster_wide() {
+    let graph = shop_access().graph();
+    let check = check_of(&graph, CheckRule::ClusterAdminAccount);
+    assert!(!check.text.contains("in namespace"), "{}", check.text);
+    assert!(check.text.contains("through clusterrolebinding/ci-admin"));
 }

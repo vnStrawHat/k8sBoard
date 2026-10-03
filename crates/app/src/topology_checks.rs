@@ -356,6 +356,13 @@ fn grant_check(grant: &ClusterAdminGrant) -> ConfigCheck {
         .group
         .as_ref()
         .map_or_else(String::new, |group| format!(" (group {group})"));
+    // A RoleBinding to cluster-admin is still serious, but its reach is the namespace.
+    let scope = grant
+        .binding_namespace
+        .as_ref()
+        .map_or_else(String::new, |namespace| {
+            format!(" in namespace {namespace}")
+        });
     ConfigCheck {
         rule: CheckRule::ClusterAdminAccount,
         node: grant
@@ -364,7 +371,7 @@ fn grant_check(grant: &ClusterAdminGrant) -> ConfigCheck {
             .unwrap_or_else(|| grant.account.clone()),
         tone: StatusTone::Warn,
         text: format!(
-            "ServiceAccount {} has cluster-admin through {}{group}.",
+            "ServiceAccount {} has cluster-admin{scope} through {}{group}.",
             grant.account_name, grant.binding_text
         ),
     }

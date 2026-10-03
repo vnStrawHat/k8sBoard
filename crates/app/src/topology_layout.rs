@@ -783,19 +783,24 @@ fn place_access_row(
         Slot::Column(column) => Some(metrics.place_of(column)),
         Slot::ConfigRow | Slot::AccessRow => None,
     };
-    let mean = |index: usize| {
-        let places: Vec<usize> = sources
-            .get(&index)
-            .into_iter()
-            .flatten()
-            .filter_map(|&source| column_place(source))
-            .collect();
-        if places.is_empty() {
-            0.
-        } else {
-            places.iter().sum::<usize>() as f32 / places.len() as f32
-        }
-    };
+    // The mean column of the workload sources, once per node: the sort compares it many times.
+    let means: HashMap<usize, f32> = access
+        .iter()
+        .map(|&index| {
+            let places: Vec<usize> = sources
+                .get(&index)
+                .into_iter()
+                .flatten()
+                .filter_map(|&source| column_place(source))
+                .collect();
+            let mean = if places.is_empty() {
+                0.
+            } else {
+                places.iter().sum::<usize>() as f32 / places.len() as f32
+            };
+            (index, mean)
+        })
+        .collect();
     let mut ordered = access.to_vec();
     ordered.sort_by(|&a, &b| {
         let rank = |index: usize| {
@@ -806,7 +811,7 @@ fn place_access_row(
         rank(a)
             .cmp(&rank(b))
             .then_with(|| tier(a).cmp(&tier(b)))
-            .then_with(|| mean(a).total_cmp(&mean(b)))
+            .then_with(|| means[&a].total_cmp(&means[&b]))
             .then_with(|| graph.nodes[a].id.cmp(&graph.nodes[b].id))
     });
     let mut taken: BTreeSet<(usize, usize)> = BTreeSet::new();
