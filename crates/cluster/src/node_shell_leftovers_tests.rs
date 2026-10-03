@@ -200,6 +200,32 @@ async fn a_forbidden_list_is_an_error_not_an_empty_answer() {
     assert!(matches!(error, ClusterError::Forbidden { .. }), "{error:?}");
 }
 
+#[tokio::test]
+async fn a_forbidden_namespace_is_skipped_and_the_others_are_still_listed() {
+    let pod = pod_json(
+        "k8sboard-node-shell-wk-03-aaaaa",
+        "team-a",
+        "other",
+        "Running",
+    );
+    let (connection, _api) = FakeApi::connection(WritePolicy::Allowed, move |request| {
+        if request.path.contains("/kube-system/") {
+            let status = json!({"kind": "Status", "apiVersion": "v1", "status": "Failure",
+                "code": 403, "reason": "Forbidden", "message": "pods is forbidden"});
+            (403, status.to_string())
+        } else {
+            (200, list_of(std::slice::from_ref(&pod)))
+        }
+    });
+    let scope = NamespaceScope::of_namespaces(["kube-system".to_owned(), "team-a".to_owned()]);
+    let found = connection
+        .node_shell_leftovers(&scope, "this-run")
+        .await
+        .expect("one namespace could be listed");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].namespace, "team-a");
+}
+
 #[test]
 fn a_phase_word_maps_to_its_state() {
     assert_eq!(LeftoverPhase::of(Some("Pending")), LeftoverPhase::Pending);

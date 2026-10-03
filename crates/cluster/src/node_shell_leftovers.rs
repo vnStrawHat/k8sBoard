@@ -99,7 +99,8 @@ fn leftover_of(pod: &Pod, instance: &str) -> Option<NodeShellLeftover> {
 
 impl ClusterConnection {
     /// action: "listing leftover node shell pods". Read-only: one list per namespace of `scope`,
-    /// any phase, every run but `instance`. Sorted by namespace, then name.
+    /// any phase, every run but `instance`. Sorted by namespace, then name. A
+    /// forbidden namespace is skipped; the error returns only when no namespace could be listed.
     pub async fn node_shell_leftovers(
         &self,
         scope: &NamespaceScope,
@@ -114,13 +115,28 @@ impl ClusterConnection {
             .labels(&selector(instance))
             .limit(PAGE_SIZE);
         let mut found = Vec::new();
+        let mut denied = None;
+        let mut listed_any = false;
         for (_, api) in self.scoped_apis::<Pod>(scope) {
-            let list = self.run(ACTION, api.list(&params)).await?;
+            // A namespace the user may not list (for example the default `kube-system`) must not
+            // hide the leftovers of the namespaces they may.
+            let list = match self.run(ACTION, api.list(&params)).await {
+                Ok(list) => list,
+                Err(error @ ClusterError::Forbidden { .. }) => {
+                    denied.get_or_insert(error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            listed_any = true;
             found.extend(
                 list.items
                     .iter()
                     .filter_map(|pod| leftover_of(pod, instance)),
             );
+        }
+        if let (false, Some(error)) = (listed_any, denied) {
+            return Err(error);
         }
         found.sort_by(|a, b| (&a.namespace, &a.name).cmp(&(&b.namespace, &b.name)));
         Ok(found)
