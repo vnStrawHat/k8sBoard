@@ -8,7 +8,7 @@
 - **Step 1.** `navigation.rs`: `screen_of("Overview")` → `Screen::Overview`; the item has no count suffix. Topology stays disabled; Issues follows 0020.
 - **Step 1.** `launch_options.rs`: `--screen overview` → `LaunchScreen::Overview` (`screen()` = Overview, no drawer).
 - **Step 2.** `show_screen` also calls `session.set_overview_visible(screen == Screen::Overview)` ([recent-changes.md](recent-changes.md)).
-- **Step 3.** `overview` becomes the default screen and `USAGE` says `default: overview`. Add `--window-width <px>` (800–3840, else a usage error) → `LaunchOptions.window_width: Option<f32>`; `main.rs` uses it instead of `WINDOW_WIDTH`.
+- **Step 3.** `overview` becomes the default screen and `USAGE` says `default: overview`. Add `--window-width <px>` (800–3840, else a usage error) → `LaunchOptions.window_width: Option<u16>` (a `u16` keeps `LaunchOptions` under clippy's large-variant limit and is `Eq`); `main.rs` uses it instead of `WINDOW_WIDTH`.
 - **`screenshot.rs` settle rule.**
   - Step 1: pods, nodes, and namespaces are not Loading; node metrics settled (`shows_node_usage`, 1 tick); kubelet settled (`shows_kubelet_stats`).
   - Step 2 adds: the change feed is not Loading.

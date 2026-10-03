@@ -39,18 +39,18 @@ Any mutation (W3 "Fix image" → 0032); diff on change click (W10 → 0031); man
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`; no `Cargo.toml`/`Cargo.lock` change.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. Read-only: the only new requests are the two change-events `list`/`watch` (step 2). The 0001 grep still finds only the SSAR `create`. No kube type appears in a public signature, and the cluster crate spawns no task.
-- [ ] 4. The 0003 AC4 color-literal grep is clean; bars and cells use theme tokens and `tone_color` only.
-- [ ] 5. No new always-on watch: with Overview hidden, the status-bar watch count equals the 0020 count. While Overview is visible it adds `2 × scope_multiplicity` (step 2 onward).
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`; no `Cargo.toml`/`Cargo.lock` change.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
+- [x] 3. Read-only: the only new requests are the two change-events `list`/`watch` (step 2). The 0001 grep still finds only the SSAR `create`. No kube type appears in a public signature, and the cluster crate spawns no task.
+- [x] 4. The 0003 AC4 color-literal grep is clean; bars and cells use theme tokens and `tone_color` only.
+- [x] 5. No new always-on watch: with Overview hidden, the status-bar watch count equals the 0020 count. While Overview is visible it adds `2 × scope_multiplicity` (step 2 onward).
 - [x] 6. On UAT, CPU and Memory allocatable equal the sums from `kubectl --context readonly@Monitor get nodes` allocatable (read-only `get`). Used matches the Nodes screen bars of the same tick, within rounding. Checked with the probe (`allocatable totals`: 82.0 cores, 101.25 GiB, 440 pods), which equals the panel.
 - [ ] 7. On UAT, the heatmap has one cell per node. A click reveals that node with its drawer. A NotReady node, if any, is outlined.
 - [ ] 8. On UAT, Needs attention equals the first 6 rows of the Issues screen. View logs opens the dock on the issue's pod; a row click reveals the target.
-- [ ] 9. On UAT, Recent changes lists the window's `ScalingReplicaSet` events (spot-check against `kubectl get events --field-selector reason=ScalingReplicaSet`), and the footnote shows.
-- [ ] 10. The app starts on Overview without `--screen`; `--screen pods` still starts on Pods.
+- [x] 9. On UAT, Recent changes lists the window's `ScalingReplicaSet` events (spot-check against `kubectl get events --field-selector reason=ScalingReplicaSet`), and the footnote shows. UAT had no ScalingReplicaSet event in the 15 min window, so the empty text and the footnote were checked.
+- [x] 10. The app starts on Overview without `--screen`; `--screen pods` still starts on Pods.
 - [ ] 11. Screenshots `overview` (1320 px, four panels) and `overview-narrow` (`--window-width 1000`, one column) exist. The ui-verifier reports no high-severity defect against W3.
-- [ ] 12. Export writes only after the dialog confirms. The report lists every issue, coverage, capacity, nodes, and the window's changes. Paths are never traced.
+- [x] 12. Export writes only after the dialog confirms. The report lists every issue, coverage, capacity, nodes, and the window's changes. Paths are never traced.
 
 ## Open items
 

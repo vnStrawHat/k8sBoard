@@ -159,6 +159,7 @@ fn options(screenshot: Option<&str>) -> LaunchOptions {
         config_dir: None,
         screen: LaunchScreen::Kind(ResourceKind::Secrets),
         screenshot: screenshot.map(Into::into),
+        window_width: None,
     }
 }
 

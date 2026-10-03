@@ -82,7 +82,9 @@ pub use daemon_set::DaemonSetSummary;
 pub use deployment::DeploymentSummary;
 pub use disruption_budget::{BlockCause, DisruptionState, PodDisruptionBudgetSummary};
 pub use endpoint_slice::{EndpointPort, EndpointSliceSummary, EndpointSummary};
-pub use event::{EVENT_LIMIT, EventFilter, EventSummary, EventType, InvolvedObject};
+pub use event::{
+    ChangeEventKind, EVENT_LIMIT, EventFilter, EventSummary, EventType, InvolvedObject,
+};
 pub use helm_release::{HelmChart, HelmReleaseSummary, HelmRevision, HelmRevisionRef, HelmStatus};
 pub use helm_release_detail::{HelmReleaseDetail, HelmRevealed, HelmText};
 pub use helm_values_diff::{HelmValuesDiff, ValueChange, ValueVisibility};

@@ -6,12 +6,12 @@
 
 | Module | Tests |
 |---|---|
-| `cluster_capacity.rs` | `cpu_and_memory_sum_used_requested_allocatable`, `requests_are_none_without_all_scope_pods`, `finished_pods_do_not_request`, `used_notes_unsampled_nodes`, `used_is_none_without_node_feed`, `pods_row_counts_pods_that_take_room`, `pods_row_note_without_all_scope`, `volumes_sum_claims_with_capacity`, `volumes_omitted_without_claims`, `volumes_note_limited_polling`, `zero_allocatable_omits_row`, `cpu_label_prints_unit_once`, `label_drops_req_without_requests`, `pods_label_groups_digits`, `volumes_label_shares_unit`, `compute_rows_name_their_ceilings`, `capacity_budget` (release-only timing: 1,000 pods × 50 nodes ≤ 2 ms; `#[cfg(not(debug_assertions))]`) |
+| `cluster_capacity.rs` | `cpu_and_memory_sum_used_requested_allocatable`, `requests_are_none_without_all_scope_pods`, `finished_pods_do_not_request`, `used_notes_unsampled_nodes`, `used_is_none_without_node_feed`, `pods_row_counts_pods_that_take_room`, `pods_row_note_without_all_scope`, `volumes_sum_claims_with_capacity`, `volumes_omitted_without_claims`, `volumes_note_limited_polling`, `zero_allocatable_omits_row`, `cpu_label_prints_unit_once`, `label_drops_req_without_requests`, `pods_label_groups_digits`, `volumes_label_shares_unit`, `compute_rows_name_their_ceilings`, `pods_on_unlisted_nodes_do_not_count`, `volumes_skip_shared_filesystem_claims`, `volumes_row_without_feed_shows_dash_and_reason`, `pods_loading_shows_dash_without_scope_note` |
 | `usage_format.rs` | `format_shared_prints_unit_once`, `format_shared_keeps_units_that_differ`, `format_shared_never_shares_millicores` |
 | `usage_bar.rs` | `capacity_bar_clamps_layers`, `capacity_bar_without_usage_has_no_used_layer` |
 | `node_heatmap.rs` | `cells_keep_node_list_order`, `intensity_is_clamped_cpu_ratio`, `not_ready_and_unknown_have_no_intensity`, `missing_sample_has_no_intensity`, `tooltip_names_cpu_memory_status`, `tooltip_marks_cordoned_node` |
 | `overview.rs` | `headline_has_context_version_region`, `region_single_value`, `region_counts_several`, `region_absent_without_labels`, `stats_count_ready_nodes`, `stats_count_running_and_not_ready_pods`, `stats_parts_are_none_while_loading` |
-| `navigation.rs` | `enabled_items_are_pods_nodes_and_explorer_kinds` updated (Overview first) |
+| `navigation.rs` | `enabled_items_are_overview_issues_pods_nodes_and_explorer_kinds` (Overview first) |
 | `launch_options.rs` | `screen_overview_parses` |
 | `screenshot.rs` | `overview_waits_for_node_metrics_and_kubelet` |
 

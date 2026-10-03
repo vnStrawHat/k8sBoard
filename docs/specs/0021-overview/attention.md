@@ -55,7 +55,7 @@ fn attention_action(issue: &Issue) -> Option<AttentionAction>;
 
 ```rust
 /// Availability and target of View logs for one pod; the menu item and the Overview button both call it.
-pub(crate) fn logs_launch(pod: &PodSummary, live: &LiveCluster) -> Result<(ClusterConnection, LogTarget), SharedString>;
+pub(crate) fn logs_launch(pod: &PodSummary, container: Option<&str>, access: &AccessState) -> Result<LogTarget, SharedString>;
 ```
 
   `view_logs_item` then wraps it; the button calls `dock.update(cx, |dock, cx| dock.open(connection, target, window, cx))`. The container hint (`IssueAction::ViewLogs { container }`) is passed the same way the 0020 menu passes it.

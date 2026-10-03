@@ -2,19 +2,19 @@
 
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::table::DataTable;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _, h_flex,
-    v_flex,
+    ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, StyledExt as _,
+    h_flex, v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, InteractiveElement as _, IntoElement, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use cluster::{EVENT_LIMIT, EventFilter};
@@ -22,18 +22,21 @@ use cluster::{EVENT_LIMIT, EventFilter};
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{FlowState, LiveCluster, SessionPhase};
 use crate::drawer::ClickHandler;
+use crate::file_export::ExportState;
 use crate::filter_bar::{ToolkitState, filter_bar};
 use crate::issue_board::IssueSummary;
+use crate::issue_table::coverage_status;
 use crate::kind_drawer::kind_drawer;
 use crate::log_dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
 use crate::navigation::SIDEBAR_WIDTH;
 use crate::node_drawer::node_drawer;
 use crate::node_summary::role_counts;
-use crate::overview::{headline_text, overview_body, stats_line};
+use crate::overview::{
+    OverviewData, change_window_button, headline_text, overview_body, stats_line,
+};
 use crate::pod_drawer::pod_drawer;
 use crate::resource_kind::ResourceKind;
 use crate::row_selection::{bulk_actions, selection_bar};
-use crate::status_tone::{StatusTone, tone_color};
 use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
 use crate::usage_format::group_digits;
@@ -114,6 +117,7 @@ impl AppShell {
             .child(self.render_header(toolkit, cx))
             .children(self.render_filter_bar(toolkit, cx))
             .children(self.render_overview_stats(cx))
+            .children(self.render_overview_export_error())
             .children(self.render_interruption_banner(cx))
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
             .children(self.render_selection_bar(toolkit, cx))
@@ -252,6 +256,55 @@ impl AppShell {
         )
     }
 
+    /// The Overview header, right-aligned: the saved file name, the range, and Export report. The
+    /// range needs a live session; Export report is disabled without one and while an export runs.
+    fn overview_header_buttons(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+        let is_live = self.live(cx).is_some();
+        let export = &self.overview.export;
+        let saved = match export {
+            ExportState::Saved { file_name } => Some(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("Saved to {file_name}"))
+                    .into_any_element(),
+            ),
+            _ => None,
+        };
+        let range = is_live.then(|| change_window_button(self.overview.window, cx));
+        let button = Button::new("export-report")
+            .ghost()
+            .small()
+            .icon(Icon::new(IconName::Download))
+            .label("Export report")
+            .tooltip("Save the Overview as a Markdown file…")
+            .disabled(!is_live || export.is_busy())
+            .on_click(cx.listener(|shell, _, _, cx| shell.export_overview_report(cx)));
+        saved
+            .into_iter()
+            .chain(range)
+            .chain([button.into_any_element()])
+            .collect()
+    }
+
+    /// Under the Overview header: why the last export failed.
+    fn render_overview_export_error(&self) -> Option<AnyElement> {
+        let ExportState::Failed { message } = &self.overview.export else {
+            return None;
+        };
+        if self.screen != Screen::Overview {
+            return None;
+        }
+        Some(
+            div()
+                .flex_shrink_0()
+                .px_4()
+                .py_1()
+                .child(Alert::error("overview-export-error", message.clone()))
+                .into_any_element(),
+        )
+    }
+
     /// The counts under the Overview header.
     fn render_overview_stats(&self, cx: &Context<Self>) -> Option<AnyElement> {
         if self.screen != Screen::Overview {
@@ -279,6 +332,7 @@ impl AppShell {
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
         let buttons: Vec<AnyElement> = match self.screen {
+            Screen::Overview => self.overview_header_buttons(cx),
             Screen::Issues => return self.render_issues_status(cx),
             Screen::Kind(ResourceKind::ReplicaSets) => {
                 self.render_hide_inactive(toolkit, cx).into_iter().collect()
@@ -329,28 +383,11 @@ impl AppShell {
     fn render_issues_status(&self, cx: &Context<Self>) -> Option<AnyElement> {
         self.live(cx)?;
         let board = self.session.as_ref()?.read(cx).issues();
-        let muted = cx.theme().muted_foreground;
-        let status = match board.coverage().note() {
-            Some(note) if board.coverage().is_partial() => div()
-                .id("issues-coverage")
-                .text_color(tone_color(StatusTone::Warn, cx))
-                .child("Partial coverage")
-                .tooltip(move |window, cx| Tooltip::new(note.clone()).build(window, cx)),
-            Some(note) => div()
-                .id("issues-coverage")
-                .text_color(muted)
-                .child("auto-detected · live")
-                .tooltip(move |window, cx| Tooltip::new(note.clone()).build(window, cx)),
-            None => div()
-                .id("issues-coverage")
-                .text_color(muted)
-                .child("auto-detected · live"),
-        };
         Some(
             h_flex()
                 .ml_auto()
                 .text_sm()
-                .child(status)
+                .child(coverage_status(board.coverage(), cx))
                 .into_any_element(),
         )
     }
@@ -572,7 +609,18 @@ impl AppShell {
             );
         }
         match self.screen {
-            Screen::Overview => overview_body(live, cx),
+            Screen::Overview => match self.session.as_ref() {
+                Some(session) => overview_body(
+                    &OverviewData {
+                        live,
+                        board: session.read(cx).issues(),
+                        window: self.overview.window,
+                        dock: &self.log_dock.downgrade(),
+                    },
+                    cx,
+                ),
+                None => div().into_any_element(),
+            },
             Screen::Pods => DataTable::new(&self.pod_table)
                 .bordered(false)
                 .into_any_element(),

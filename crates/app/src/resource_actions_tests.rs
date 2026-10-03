@@ -627,6 +627,7 @@ fn secret_menu_blocked_in_screenshot_runs() {
         config_dir: None,
         screen: crate::launch_options::LaunchScreen::Kind(ResourceKind::Secrets),
         screenshot: Some("secrets.png".into()),
+        window_width: None,
     };
     let access = crate::secret_values::value_access(&options);
     assert_eq!(access, ValueAccess::Blocked);
@@ -847,4 +848,24 @@ fn other_kinds_have_no_set_as_default() {
     for kind in [ResourceKind::Deployments, ResourceKind::Services] {
         assert_eq!(default_namespace_state(kind, "x", None), None);
     }
+}
+
+#[test]
+fn logs_launch_denied_without_log_access() {
+    let pod = pod_mounting_claim("shop", "web-1", "data");
+    let denied = known_denying(&[AccessCheck::GetPodLogs]);
+    let Err(reason) = logs_launch(&pod, None, &denied) else {
+        panic!("logs must be denied");
+    };
+    assert!(reason.contains("get pods/log"), "{reason}");
+    assert!(logs_launch(&pod, None, &known_denying(&[])).is_ok());
+}
+
+#[test]
+fn logs_launch_needs_containers() {
+    let pod = pod_on(Some("wk-01"));
+    let Err(reason) = logs_launch(&pod, None, &known_denying(&[])) else {
+        panic!("a pod without containers has nothing to read");
+    };
+    assert_eq!(reason, "The pod has no containers");
 }

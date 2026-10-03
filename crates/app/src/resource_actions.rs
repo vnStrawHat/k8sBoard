@@ -152,8 +152,26 @@ fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
-/// Opens the pod in the log dock, on `container` when the pod has one of that name. Without
-/// containers there is nothing to read.
+/// What View logs opens for `pod`, on `container` when the pod has one of that name: the log
+/// target, or why it is unavailable (no log access, or no container to read). The menu item and the
+/// Overview button both call it.
+pub(crate) fn logs_launch(
+    pod: &PodSummary,
+    container: Option<&str>,
+    access: &AccessState,
+) -> Result<LogTarget, SharedString> {
+    if let ActionAvailability::Disabled { reason } =
+        action_availability(ResourceAction::ViewLogs, access)
+    {
+        return Err(reason);
+    }
+    let named = container.and_then(|name| LogTarget::of_container(pod, name));
+    named
+        .or_else(|| LogTarget::of_pod(pod))
+        .ok_or_else(|| "The pod has no containers".into())
+}
+
+/// Opens the pod in the log dock; see `logs_launch`.
 pub(crate) fn view_logs_item(
     pod: &PodSummary,
     container: Option<&str>,
@@ -161,22 +179,16 @@ pub(crate) fn view_logs_item(
     dock: &WeakEntity<LogDock>,
 ) -> PopupMenuItem {
     const LABEL: &str = "View logs";
-    match action_availability(ResourceAction::ViewLogs, &live.access) {
-        ActionAvailability::Disabled { reason } => disabled_menu_item(LABEL, reason),
-        ActionAvailability::Enabled => {
-            let named = container.and_then(|name| LogTarget::of_container(pod, name));
-            match named.or_else(|| LogTarget::of_pod(pod)) {
-                None => disabled_menu_item(LABEL, "The pod has no containers".into()),
-                Some(target) => {
-                    let connection = live.connection().clone();
-                    let dock = dock.clone();
-                    PopupMenuItem::new(LABEL).on_click(move |_, window, cx| {
-                        let _ = dock.update(cx, |dock, cx| {
-                            dock.open(connection.clone(), target.clone(), window, cx)
-                        });
-                    })
-                }
-            }
+    match logs_launch(pod, container, &live.access) {
+        Err(reason) => disabled_menu_item(LABEL, reason),
+        Ok(target) => {
+            let connection = live.connection().clone();
+            let dock = dock.clone();
+            PopupMenuItem::new(LABEL).on_click(move |_, window, cx| {
+                let _ = dock.update(cx, |dock, cx| {
+                    dock.open(connection.clone(), target.clone(), window, cx)
+                });
+            })
         }
     }
 }

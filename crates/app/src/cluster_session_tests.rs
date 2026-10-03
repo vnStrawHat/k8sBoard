@@ -272,6 +272,7 @@ fn watches(
         object_events,
         related,
         issue_feeds: 0,
+        change_events: 0,
     }
 }
 
@@ -1491,4 +1492,33 @@ fn request_then_refresh_starts_a_listing_from_every_state_but_loading() {
             || starts_fetch(&state, RbacTrigger::Refresh);
         assert!(starts);
     }
+}
+
+#[test]
+fn open_watch_count_includes_change_events() {
+    let with_changes = |namespaces: usize, change_events: usize| OpenWatches {
+        change_events,
+        ..watches(namespaces, 0, 0, false, false)
+    };
+    // Hidden Overview adds nothing; All adds the two watches; two namespaces add four.
+    assert_eq!(open_watch_count(with_changes(1, 0)), 3);
+    assert_eq!(open_watch_count(with_changes(1, 2)), 3 + 2);
+    assert_eq!(open_watch_count(with_changes(2, 4)), 4 + 4);
+}
+
+#[test]
+fn change_feed_denied_by_known_review() {
+    assert!(is_change_feed_denied(&access_with(AccessCheck::ListEvents)));
+    assert!(!is_change_feed_denied(&access_with(
+        AccessCheck::ListPodMetrics
+    )));
+}
+
+#[test]
+fn change_feed_starts_while_checking_or_unknown() {
+    assert!(!is_change_feed_denied(&AccessState::Unknown));
+    let checking = AccessState::Checking {
+        _task: Task::ready(()),
+    };
+    assert!(!is_change_feed_denied(&checking));
 }

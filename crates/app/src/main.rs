@@ -20,6 +20,7 @@ mod custom_rows;
 mod drawer;
 mod environment;
 mod event_rows;
+mod file_export;
 mod filter_bar;
 mod helm_release_view;
 mod helm_rows;
@@ -42,7 +43,6 @@ mod line_matcher;
 mod live_sections;
 mod log_buffer;
 mod log_dock;
-mod log_export;
 mod log_filter;
 mod log_json;
 mod log_legend;
@@ -68,12 +68,14 @@ mod node_table;
 mod node_usage;
 mod object_events;
 mod overview;
+mod overview_report;
 mod permission_table;
 mod permissions_view;
 mod pod_diagnosis;
 mod pod_drawer;
 mod pod_table;
 mod policy_rows;
+mod recent_changes;
 mod related_objects;
 mod related_pods;
 mod resource_actions;
@@ -193,10 +195,11 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
                         path,
                         screen: options.screen,
                     });
+            let window_width = options.window_width.map_or(WINDOW_WIDTH, f32::from);
             let window_options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)),
+                    size(px(window_width), px(WINDOW_HEIGHT)),
                     cx,
                 ))),
                 ..TitleBar::window_options()

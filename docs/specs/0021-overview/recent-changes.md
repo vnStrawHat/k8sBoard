@@ -87,7 +87,7 @@ pub(crate) struct ChangeInputs<'a> {
     pub(crate) window: ChangeWindow,
     pub(crate) now: jiff::Timestamp,
 }
-/// Every change with `at` in `(now − span, now]`, newest first; ties are broken by object.
+/// Every change newer than `now − span` (a time slightly ahead of `now` counts: clocks differ), newest first; ties are broken by object.
 pub(crate) fn recent_changes(inputs: &ChangeInputs) -> Vec<ChangeEntry>;
 pub(crate) const CHANGE_ROWS: usize = 8;
 ```

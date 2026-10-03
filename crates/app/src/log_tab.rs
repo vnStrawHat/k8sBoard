@@ -21,10 +21,10 @@ use gpui_kit::{
 
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::cluster_session::{ClusterSession, error_text};
+use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::kind_row::PodOwner;
 use crate::line_matcher::{FilterMode, InvalidRegex, LineMatcher};
 use crate::log_buffer::{LineTime, LineView, LogBuffer, SourceId, SourcedLine};
-use crate::log_export::{ExportState, export_file_name, start_export};
 use crate::log_legend::{LegendChip, legend_row, pod_color};
 use crate::log_level::{LevelSet, LogLevel};
 use crate::log_rows::{RowPrefix, RowStyle, log_row};
@@ -693,9 +693,16 @@ impl LogTab {
             LogSubject::Pod { target, container } => format!("{}-{container}", target.pod),
             LogSubject::Workload(workload) => workload.target.label.clone(),
         };
-        let name = export_file_name(&label, jiff::Timestamp::now());
+        let name = export_file_name(&label, "log", jiff::Timestamp::now());
         self.export_state = ExportState::Choosing;
-        self._export = Some(start_export(name, cx));
+        self._export = Some(start_export(
+            name,
+            "logs",
+            |tab: &mut Self, _| Ok(tab.export_snapshot()),
+            Self::set_export_state,
+            Self::set_exported_lines,
+            cx,
+        ));
         cx.notify();
     }
 

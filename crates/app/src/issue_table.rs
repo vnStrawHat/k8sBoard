@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
     App, ClipboardItem, Context, Div, Entity, InteractiveElement as _, IntoElement,
@@ -19,11 +20,12 @@ use crate::drawer::truncated_text;
 use crate::event_rows::message_line;
 use crate::filter_bar::filtered_empty_state;
 use crate::issue::{Issue, IssueAction};
+use crate::issue_feeds::Coverage;
 use crate::log_dock::LogDock;
 use crate::resource_actions::{disabled_menu_item, view_logs_item};
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::settings::TablePrefs;
-use crate::status_tone::{StatusLabel, StatusTone, toned_text};
+use crate::status_tone::{StatusLabel, StatusTone, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
 use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
@@ -398,7 +400,7 @@ fn absent_right(cx: &App) -> gpui_kit::AnyElement {
 
 /// The kind as the Kind column shows it: the long names of the policy kinds shortened to what
 /// people say (`HPA`, `PDB`, `PVC`).
-fn short_kind(kind: &str) -> &str {
+pub(crate) fn short_kind(kind: &str) -> &str {
     match kind {
         "HorizontalPodAutoscaler" => "HPA",
         "PodDisruptionBudget" => "PDB",
@@ -425,7 +427,10 @@ fn open_item(issue: &Issue, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
 
 /// The pod View logs reads: the issue's subject, when the action asks for logs and the pod is
 /// still in the list.
-fn logs_pod<'a>(issue: &Issue, pods: &'a [cluster::PodSummary]) -> Option<&'a cluster::PodSummary> {
+pub(crate) fn logs_pod<'a>(
+    issue: &Issue,
+    pods: &'a [cluster::PodSummary],
+) -> Option<&'a cluster::PodSummary> {
     if !matches!(issue.action, IssueAction::ViewLogs { .. }) || issue.subject.kind != "Pod" {
         return None;
     }
@@ -439,6 +444,25 @@ fn copy_name_item(issue: &Issue) -> PopupMenuItem {
     PopupMenuItem::new("Copy object name").on_click(move |_, _, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string(name.clone()));
     })
+}
+
+/// How the issues were found, and what could not be checked, right of the Issues and Needs
+/// attention headers. A gap shows as `Partial coverage` in Warn with the note as its tooltip; a
+/// feed that is only limited by design shows muted, untoned.
+pub(crate) fn coverage_status(coverage: &Coverage, cx: &App) -> Stateful<Div> {
+    let muted = cx.theme().muted_foreground;
+    let status = div().id("issues-coverage");
+    match coverage.note() {
+        Some(note) if coverage.is_partial() => status
+            .text_color(tone_color(StatusTone::Warn, cx))
+            .child("Partial coverage")
+            .tooltip(move |window, cx| Tooltip::new(note.clone()).build(window, cx)),
+        Some(note) => status
+            .text_color(muted)
+            .child("auto-detected · live")
+            .tooltip(move |window, cx| Tooltip::new(note.clone()).build(window, cx)),
+        None => status.text_color(muted).child("auto-detected · live"),
+    }
 }
 
 #[cfg(test)]

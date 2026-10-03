@@ -3,29 +3,44 @@
 
 use std::collections::BTreeSet;
 
+use jiff::tz::TimeZone;
+
 use cluster::{
-    NamespaceScope, NamespaceSummary, NodeReadiness, NodeSummary, PodStatus, PodSummary,
-    ServerVersion, StatusReason,
+    EventSummary, NamespaceScope, NamespaceSummary, NodeReadiness, NodeSummary, PodStatus,
+    PodSummary, ServerVersion, StatusReason,
 };
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
 use gpui_kit::{
     AnyElement, App, Context, Div, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Task, WeakEntity, div,
     prelude::FluentBuilder as _, px,
 };
 
-use crate::app_shell::AppShell;
+use crate::app_shell::{AppShell, Screen};
 use crate::cluster_capacity::{
     CapacityInputs, CapacityRow, FromPods, VolumeFeed, cluster_capacity, volume_totals,
 };
 use crate::cluster_metrics::FeedStatus;
-use crate::cluster_session::{LiveCluster, LiveList};
+use crate::cluster_session::{ChangeEvents, LiveCluster, LiveList};
+use crate::event_rows::message_line;
+use crate::file_export::ExportState;
+use crate::issue::{Issue, IssueAction};
+use crate::issue_board::IssueBoard;
 use crate::issue_feeds::{FeedState, volume_usage_state};
+use crate::issue_table::{coverage_status, logs_pod, short_kind};
+use crate::log_dock::LogDock;
 use crate::node_heatmap::{heat_cells, node_heatmap};
+use crate::recent_changes::{CHANGE_ROWS, ChangeEntry, ChangeInputs, ChangeWindow, recent_changes};
+use crate::resource_actions::logs_launch;
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusTone, tone_color};
+use crate::table_selection::ResourceKey;
 use crate::usage_bar::{CapacityBar, capacity_bar};
 use crate::usage_format::group_digits;
 
@@ -108,9 +123,17 @@ fn cluster_stats(
     }
 }
 
-/// The muted line under the header (user-requested, not in W3): `41 / 42 nodes ready · 1,284 /
-/// 1,310 pods running · 37 namespaces`. A node count below the total is toned Bad.
-pub(crate) fn stats_line(live: &LiveCluster, cx: &App) -> impl IntoElement {
+/// The three parts of the stats line, as text: `41 / 42 nodes ready`, `1,284 / 1,310 pods
+/// running`, and `37 namespaces`. A part whose list is not Ready shows `—`.
+struct StatsText {
+    nodes: String,
+    pods: String,
+    namespaces: String,
+    /// Some node is not Ready, so the nodes part is toned.
+    has_unready_nodes: bool,
+}
+
+fn stats_parts(live: &LiveCluster) -> StatsText {
     let stats = cluster_stats(
         live.nodes.ready_items(),
         live.pods.ready_items(),
@@ -128,14 +151,38 @@ pub(crate) fn stats_line(live: &LiveCluster, cx: &App) -> impl IntoElement {
             },
         )
     };
-    let nodes_tone = stats
-        .nodes
-        .filter(|counted| counted.ready < counted.total)
-        .map(|_| tone_color(StatusTone::Bad, cx));
     let pods_scope = match &live.scope {
         NamespaceScope::All => String::new(),
         _ => format!(" in {}", live.scope_label()),
     };
+    StatsText {
+        nodes: format!("{} nodes ready", figure(stats.nodes)),
+        pods: format!("{} pods running{pods_scope}", figure(stats.pods)),
+        namespaces: format!(
+            "{} namespaces",
+            stats
+                .namespaces
+                .map_or_else(|| "—".to_owned(), group_digits)
+        ),
+        has_unready_nodes: stats
+            .nodes
+            .is_some_and(|counted| counted.ready < counted.total),
+    }
+}
+
+/// The stats line as one string, for the report.
+pub(crate) fn stats_text(live: &LiveCluster) -> String {
+    let parts = stats_parts(live);
+    format!("{} · {} · {}", parts.nodes, parts.pods, parts.namespaces)
+}
+
+/// The muted line under the header (user-requested, not in W3). A node count below the total is
+/// toned Bad.
+pub(crate) fn stats_line(live: &LiveCluster, cx: &App) -> impl IntoElement {
+    let parts = stats_parts(live);
+    let nodes_tone = parts
+        .has_unready_nodes
+        .then(|| tone_color(StatusTone::Bad, cx));
     h_flex()
         .flex_shrink_0()
         .flex_wrap()
@@ -147,34 +194,47 @@ pub(crate) fn stats_line(live: &LiveCluster, cx: &App) -> impl IntoElement {
         .child(
             div()
                 .when_some(nodes_tone, |this, color| this.text_color(color))
-                .child(format!("{} nodes ready", figure(stats.nodes))),
+                .child(parts.nodes),
         )
         .child("·")
-        .child(format!("{} pods running{pods_scope}", figure(stats.pods)))
+        .child(parts.pods)
         .child("·")
-        .child(format!(
-            "{} namespaces",
-            stats
-                .namespaces
-                .map_or_else(|| "—".to_owned(), group_digits)
-        ))
+        .child(parts.namespaces)
 }
 
-/// The scrolling body: Capacity in row 1 and Nodes in row 2 (the other panels follow in later
-/// steps).
-pub(crate) fn overview_body(live: &LiveCluster, cx: &Context<AppShell>) -> AnyElement {
+/// What the panels read besides the clock.
+pub(crate) struct OverviewData<'a> {
+    pub(crate) live: &'a LiveCluster,
+    pub(crate) board: &'a IssueBoard,
+    pub(crate) window: ChangeWindow,
+    pub(crate) dock: &'a WeakEntity<LogDock>,
+}
+
+/// The scrolling body: Needs attention and Capacity in row 1; Nodes and Recent changes in row 2.
+pub(crate) fn overview_body(data: &OverviewData, cx: &Context<AppShell>) -> AnyElement {
+    let (live, window) = (data.live, data.window);
     v_flex()
         .id("overview")
         .size_full()
         .overflow_y_scroll()
         .p_4()
         .gap_3()
-        .child(panel_row([capacity_panel(live, cx)
-            .flex_basis(px(NARROW_PANEL))
-            .into_any_element()]))
-        .child(panel_row([nodes_panel(live, cx)
-            .flex_basis(px(WIDE_PANEL))
-            .into_any_element()]))
+        .child(panel_row([
+            needs_attention_panel(data, cx)
+                .flex_basis(px(WIDE_PANEL))
+                .into_any_element(),
+            capacity_panel(live, cx)
+                .flex_basis(px(NARROW_PANEL))
+                .into_any_element(),
+        ]))
+        .child(panel_row([
+            nodes_panel(live, cx)
+                .flex_basis(px(WIDE_PANEL))
+                .into_any_element(),
+            recent_changes_panel(live, window, cx)
+                .flex_basis(px(NARROW_PANEL))
+                .into_any_element(),
+        ]))
         .into_any_element()
 }
 
@@ -243,7 +303,7 @@ fn pending_body(list: &LiveList<NodeSummary>, cx: &App) -> Option<AnyElement> {
     }
 }
 
-fn is_polling(status: &FeedStatus) -> bool {
+pub(crate) fn is_polling(status: &FeedStatus) -> bool {
     matches!(status, FeedStatus::Live | FeedStatus::Interrupted(_))
 }
 
@@ -290,7 +350,7 @@ fn capacity_legend(has_requested: bool, cx: &App) -> AnyElement {
 
 /// The rows from the live snapshots. Requests and pod counts need the pods list of every
 /// namespace, so a narrower scope drops them, and a list that has not loaded shows `—`.
-fn capacity_model(live: &LiveCluster) -> Vec<CapacityRow> {
+pub(crate) fn capacity_model(live: &LiveCluster) -> Vec<CapacityRow> {
     let nodes = live.nodes.items();
     let node_feed = &live.metrics.nodes;
     let kubelet = &live.metrics.kubelet;
@@ -437,11 +497,467 @@ fn nodes_panel(live: &LiveCluster, cx: &Context<AppShell>) -> Stateful<Div> {
     )
 }
 
+// ---- Recent changes ----
+
+/// What the Overview screen keeps between renders.
+#[derive(Default)]
+pub(crate) struct OverviewState {
+    pub(crate) window: ChangeWindow,
+    pub(crate) export: ExportState,
+    /// The running export; dropping it abandons the export.
+    pub(crate) _export: Option<Task<()>>,
+}
+
+/// `Last 15 min ▾`: the range of Recent changes only; capacity and issues are "now".
+pub(crate) fn change_window_button(window: ChangeWindow, cx: &Context<AppShell>) -> AnyElement {
+    let shell = cx.weak_entity();
+    Button::new("change-window")
+        .ghost()
+        .small()
+        .label(window.label())
+        .dropdown_caret(true)
+        .tooltip("Time window of Recent changes")
+        .dropdown_menu(move |menu, _, _| {
+            ChangeWindow::ALL.into_iter().fold(menu, |menu, option| {
+                let shell = shell.clone();
+                menu.item(
+                    PopupMenuItem::new(option.label())
+                        .checked(option == window)
+                        .on_click(move |_, _, cx| {
+                            let _ =
+                                shell.update(cx, |shell, cx| shell.set_change_window(option, cx));
+                        }),
+                )
+            })
+        })
+        .into_any_element()
+}
+
+fn recent_changes_panel(
+    live: &LiveCluster,
+    window: ChangeWindow,
+    cx: &Context<AppShell>,
+) -> Stateful<Div> {
+    let view_all = div()
+        .id("changes-view-all")
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .cursor_pointer()
+        .child("View all →")
+        .on_click(cx.listener(|shell, _, _, cx| shell.view_all_events(cx)))
+        .into_any_element();
+    let body = changes_body(live, window, cx);
+    panel("changes", "Recent changes", None, Some(view_all), body, cx)
+}
+
+/// What the change feeds have to show; the panel and the report read it alike.
+pub(crate) enum ChangeFeed<'a> {
+    Ready {
+        rollouts: &'a [EventSummary],
+        rescales: &'a [EventSummary],
+    },
+    /// A feed has not delivered its first snapshot, or has not started yet.
+    Loading,
+    /// A feed failed or is denied: the text that stands in for the changes.
+    Unavailable(String),
+}
+
+pub(crate) fn change_feed(live: &LiveCluster) -> ChangeFeed<'_> {
+    let (rollouts, rescales) = match &live.change_events {
+        Some(ChangeEvents::Live {
+            rollouts, rescales, ..
+        }) => (rollouts, rescales),
+        Some(ChangeEvents::Denied) => {
+            return ChangeFeed::Unavailable("Not permitted: list events".to_owned());
+        }
+        // The feeds start the moment Overview is shown.
+        None => return ChangeFeed::Loading,
+    };
+    if let Some(message) = rollouts.failure().or_else(|| rescales.failure()) {
+        return ChangeFeed::Unavailable(format!("Changes unavailable · {message}"));
+    }
+    match (rollouts.ready_items(), rescales.ready_items()) {
+        (Some(rollouts), Some(rescales)) => ChangeFeed::Ready { rollouts, rescales },
+        _ => ChangeFeed::Loading,
+    }
+}
+
+fn changes_body(live: &LiveCluster, window: ChangeWindow, cx: &Context<AppShell>) -> AnyElement {
+    let (rollouts, rescales) = match change_feed(live) {
+        ChangeFeed::Ready { rollouts, rescales } => (rollouts, rescales),
+        ChangeFeed::Loading => return loading_text("Loading changes…", cx),
+        ChangeFeed::Unavailable(text) => return state_text(text, cx),
+    };
+    let entries = recent_changes(&ChangeInputs {
+        rollouts: Some(rollouts),
+        rescales: Some(rescales),
+        nodes: live.nodes.ready_items(),
+        namespaces: live.namespaces.ready_items(),
+        window,
+        now: jiff::Timestamp::now(),
+    });
+    let theme = cx.theme();
+    let zone = TimeZone::system();
+    let shown = entries.len().min(CHANGE_ROWS);
+    let rows = entries
+        .iter()
+        .take(CHANGE_ROWS)
+        .enumerate()
+        .map(|(index, entry)| change_row(index, entry, index + 1 == shown, &zone, cx));
+    let empty = entries.is_empty().then(|| {
+        let span = window.label().trim_start_matches("Last ");
+        state_text(format!("No tracked changes seen in the last {span}."), cx)
+    });
+    v_flex()
+        .children(rows)
+        .children(empty)
+        .child(
+            div()
+                .px_3()
+                .py_2()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(CHANGES_FOOTNOTE),
+        )
+        .into_any_element()
+}
+
+pub(crate) const CHANGES_FOOTNOTE: &str =
+    "Deployment rollouts, HPA rescales, nodes, namespaces · events kept ~1 h by the API server";
+
+fn change_row(
+    index: usize,
+    entry: &ChangeEntry,
+    is_last: bool,
+    zone: &TimeZone,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let mono = theme.mono_font_family.clone();
+    let time = entry
+        .at
+        .to_zoned(zone.clone())
+        .strftime("%H:%M")
+        .to_string();
+    let count = (entry.count > 1).then(|| format!(" ×{}", entry.count));
+    let tooltip = SharedString::from(format!(
+        "{} {} {}",
+        entry.kind.label(),
+        entry.object,
+        entry.text
+    ));
+    let row = h_flex()
+        .id(SharedString::from(format!("change-{index}")))
+        .gap_2()
+        .px_3()
+        .py(px(6.))
+        .text_xs()
+        .when(!is_last, |this| {
+            this.border_b_1().border_color(theme.border)
+        })
+        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .child(
+            div()
+                .w(px(44.))
+                .flex_none()
+                .font_family(mono.clone())
+                .text_color(theme.muted_foreground)
+                .child(time),
+        )
+        .child(
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(entry.kind.label())
+                .child(div().font_family(mono.clone()).child(entry.object.clone()))
+                .child(format!("{}{}", entry.text, count.unwrap_or_default())),
+        )
+        .children(entry.actor.clone().map(|actor| {
+            div()
+                .flex_none()
+                .font_family(mono)
+                .text_color(theme.muted_foreground)
+                .child(actor)
+        }));
+    match entry.target.clone() {
+        Some(key) => row
+            .cursor_pointer()
+            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+            .into_any_element(),
+        None => row.into_any_element(),
+    }
+}
+
+fn state_text(text: String, cx: &App) -> AnyElement {
+    div().p_3().child(muted_text(text, cx)).into_any_element()
+}
+
+fn loading_text(text: &'static str, cx: &App) -> AnyElement {
+    h_flex()
+        .p_3()
+        .gap_2()
+        .child(Spinner::new())
+        .child(muted_text(text, cx))
+        .into_any_element()
+}
+
+// ---- Needs attention ----
+
+/// The issues the panel lists; the Issues screen has the rest.
+const ATTENTION_ROWS: usize = 6;
+/// The issue pill column, as in W3.
+const PILL_WIDTH: f32 = 118.;
+/// The least width of the object and cause column of an attention row.
+const WHAT_MIN_WIDTH: f32 = 200.;
+
+/// `payments / api-7d9f8c-x2k4q · container api`, plus ` · {count} pods` for a group; a cluster
+/// object has no `ns / ` part.
+pub(crate) fn object_line(issue: &Issue) -> String {
+    let mut line = match &issue.shown.namespace {
+        Some(namespace) => format!("{namespace} / {}", issue.shown.name),
+        None => issue.shown.name.clone(),
+    };
+    if let Some(container) = &issue.container {
+        line.push_str(&format!(" · container {container}"));
+    }
+    if issue.count > 1 {
+        line.push_str(&format!(" · {} pods", issue.count));
+    }
+    line
+}
+
+/// The first issues of the board, in board order.
+fn attention_issues(issues: &[Issue]) -> &[Issue] {
+    &issues[..issues.len().min(ATTENTION_ROWS)]
+}
+
+/// What a row's button does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AttentionAction {
+    ViewLogs,
+    Open { label: String },
+}
+
+/// View logs for a logs issue; `See why` for a pod (its drawer shows WHY); `Open {Kind}` for any
+/// other object that has a screen, with the long policy kinds shortened as the Issues table does
+/// (`Open HPA`); nothing without a target. All are read-only.
+fn attention_action(issue: &Issue) -> Option<AttentionAction> {
+    if matches!(issue.action, IssueAction::ViewLogs { .. }) {
+        return Some(AttentionAction::ViewLogs);
+    }
+    let label = match issue.target.as_ref()? {
+        ResourceKey::Pod { .. } => "See why".to_owned(),
+        ResourceKey::Node { .. } | ResourceKey::Kind { .. } => {
+            format!("Open {}", short_kind(&issue.shown.kind))
+        }
+    };
+    Some(AttentionAction::Open { label })
+}
+
+fn needs_attention_panel(data: &OverviewData, cx: &Context<AppShell>) -> Stateful<Div> {
+    let board = data.board;
+    let Some(summary) = board.summary() else {
+        return panel(
+            "attention",
+            "Needs attention",
+            None,
+            None,
+            loading_text("Checking the cluster…", cx),
+            cx,
+        );
+    };
+    let count = div()
+        .text_xs()
+        .px_1()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(tone_color(summary.worst().tone(), cx))
+        .text_color(tone_color(summary.worst().tone(), cx))
+        .child(group_digits(summary.total))
+        .into_any_element();
+    let status = div()
+        .text_xs()
+        .child(coverage_status(board.coverage(), cx))
+        .into_any_element();
+    let body = if summary.total == 0 {
+        let text = if summary.is_partial {
+            "No issues found in what k8sBoard watches."
+        } else {
+            "No issues found."
+        };
+        v_flex()
+            .p_3()
+            .gap_1()
+            .child(muted_text(text, cx))
+            .children(board.coverage().note().map(|note| muted_text(note, cx)))
+            .into_any_element()
+    } else {
+        attention_rows(data, summary.total, cx)
+    };
+    panel(
+        "attention",
+        "Needs attention",
+        Some(count),
+        Some(status),
+        body,
+        cx,
+    )
+}
+
+fn attention_rows(data: &OverviewData, total: usize, cx: &Context<AppShell>) -> AnyElement {
+    let issues = attention_issues(data.board.issues());
+    let rows = issues
+        .iter()
+        .enumerate()
+        .map(|(index, issue)| attention_row(data, index, issue, index + 1 == issues.len(), cx));
+    let view_all = (total > ATTENTION_ROWS).then(|| {
+        div()
+            .id("attention-view-all")
+            .px_3()
+            .py_2()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .cursor_pointer()
+            .child(format!("View all {} issues →", group_digits(total)))
+            .on_click(cx.listener(|shell, _, _, cx| shell.show_screen(Screen::Issues, cx)))
+    });
+    v_flex()
+        .children(rows)
+        .children(view_all)
+        .into_any_element()
+}
+
+fn attention_row(
+    data: &OverviewData,
+    index: usize,
+    issue: &Issue,
+    is_last: bool,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let theme = cx.theme();
+    let tone = tone_color(issue.severity.tone(), cx);
+    // The pill is as wide as its label, at least the W3 column, so a long reason is never cut.
+    let pill = div().min_w(px(PILL_WIDTH)).flex_none().child(
+        div()
+            .text_xs()
+            .px_2()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(tone)
+            .text_color(tone)
+            .whitespace_nowrap()
+            .child(issue.reason.clone()),
+    );
+    let cause = SharedString::from(message_line(&issue.cause));
+    let tooltip_cause = cause.clone();
+    // The object and the cause keep a minimum width, so a long button label never squeezes them.
+    let what = v_flex()
+        .flex_1()
+        .min_w(px(WHAT_MIN_WIDTH))
+        .child(
+            div()
+                .text_xs()
+                .font_family(theme.mono_font_family.clone())
+                .truncate()
+                .child(object_line(issue)),
+        )
+        .child(
+            div()
+                .id(SharedString::from(format!("issue-cause-{index}")))
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .truncate()
+                .child(cause)
+                .tooltip(move |window, cx| Tooltip::new(tooltip_cause.clone()).build(window, cx)),
+        );
+    let target_text = match &issue.target {
+        Some(_) => format!(
+            "{} {}",
+            issue.shown.kind,
+            issue.shown.namespace.as_ref().map_or_else(
+                || issue.shown.name.clone(),
+                |ns| format!("{ns}/{}", issue.shown.name)
+            )
+        ),
+        None => format!(
+            "{} {} · No screen for {}",
+            issue.shown.kind, issue.shown.name, issue.shown.kind
+        ),
+    };
+    let row = h_flex()
+        .id(SharedString::from(format!("issue-{index}")))
+        .gap_2()
+        .px_3()
+        .py_2()
+        .when(!is_last, |this| {
+            this.border_b_1().border_color(theme.border)
+        })
+        .tooltip(move |window, cx| Tooltip::new(target_text.clone()).build(window, cx))
+        .child(pill)
+        .child(what)
+        .children(attention_button(data, index, issue, cx));
+    match issue.target.clone() {
+        Some(key) => row
+            .cursor_pointer()
+            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+            .into_any_element(),
+        None => row.into_any_element(),
+    }
+}
+
+/// The row's one read-only action. A click stops propagation so the row's reveal does not also fire.
+fn attention_button(
+    data: &OverviewData,
+    index: usize,
+    issue: &Issue,
+    cx: &Context<AppShell>,
+) -> Option<AnyElement> {
+    let action = attention_action(issue)?;
+    let id = SharedString::from(format!("issue-action-{index}"));
+    let button = Button::new(id).ghost().small().flex_none();
+    let element = match action {
+        AttentionAction::Open { label } => {
+            let key = issue.target.clone()?;
+            button
+                .label(label)
+                .on_click(cx.listener(move |shell, _, _, cx| {
+                    cx.stop_propagation();
+                    shell.reveal(key.clone(), cx);
+                }))
+        }
+        AttentionAction::ViewLogs => {
+            let launch = match logs_pod(issue, data.live.pods.items()) {
+                Some(pod) => logs_launch(pod, issue.container.as_deref(), &data.live.access),
+                None => Err("The pod is gone".into()),
+            };
+            match launch {
+                Err(reason) => button.label("View logs").disabled(true).tooltip(reason),
+                Ok(target) => {
+                    let connection = data.live.connection().clone();
+                    let dock = data.dock.clone();
+                    button.label("View logs").on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        let _ = dock.update(cx, |dock, cx| {
+                            dock.open(connection.clone(), target.clone(), window, cx);
+                        });
+                    })
+                }
+            }
+        }
+    };
+    Some(element.into_any_element())
+}
+
 #[cfg(test)]
 mod tests {
     use cluster::{
         NodeResource, NodeScheduling, NodeStatus, NodeSystemInfo, PodStatus, ReadyCount,
     };
+
+    use crate::issue::{IssueKey, IssueObject, IssueRule, IssueSeverity};
 
     use super::*;
 
@@ -570,5 +1086,112 @@ mod tests {
                 namespaces: None
             }
         );
+    }
+
+    fn issue(shown: IssueObject, target: Option<ResourceKey>, action: IssueAction) -> Issue {
+        Issue {
+            key: IssueKey {
+                rule: IssueRule::PodCrash,
+                object: shown.clone(),
+            },
+            severity: IssueSeverity::Critical,
+            reason: "CrashLoopBackOff".into(),
+            cause: "The container exits on start.".to_owned(),
+            subject: shown.clone(),
+            shown,
+            container: None,
+            count: 1,
+            since: jiff::Timestamp::UNIX_EPOCH,
+            target,
+            action,
+        }
+    }
+
+    fn pod_issue() -> Issue {
+        let pod = IssueObject::pod("payments", "api-7d9f8c-x2k4q");
+        let target = pod.target();
+        issue(pod, target, IssueAction::Open)
+    }
+
+    #[test]
+    fn object_line_names_namespace_pod_container() {
+        let mut crashed = pod_issue();
+        crashed.container = Some("api".to_owned());
+        assert_eq!(
+            object_line(&crashed),
+            "payments / api-7d9f8c-x2k4q · container api"
+        );
+    }
+
+    #[test]
+    fn object_line_counts_grouped_pods() {
+        let mut group = pod_issue();
+        group.count = 3;
+        assert_eq!(object_line(&group), "payments / api-7d9f8c-x2k4q · 3 pods");
+    }
+
+    #[test]
+    fn object_line_cluster_object_has_no_namespace() {
+        let node = IssueObject::node("worker-02");
+        let issue = issue(node, None, IssueAction::Open);
+        assert_eq!(object_line(&issue), "worker-02");
+    }
+
+    #[test]
+    fn view_logs_action_for_crash() {
+        let mut crash = pod_issue();
+        crash.action = IssueAction::ViewLogs { container: None };
+        assert_eq!(attention_action(&crash), Some(AttentionAction::ViewLogs));
+    }
+
+    #[test]
+    fn pod_target_reads_see_why() {
+        assert_eq!(
+            attention_action(&pod_issue()),
+            Some(AttentionAction::Open {
+                label: "See why".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn secret_target_reads_open_secret() {
+        let secret = IssueObject::new("Secret", Some("payments"), "api-tls");
+        let target = secret.target();
+        assert!(target.is_some());
+        let issue = issue(secret, target, IssueAction::Open);
+        assert_eq!(
+            attention_action(&issue),
+            Some(AttentionAction::Open {
+                label: "Open Secret".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn policy_kinds_read_short_in_the_open_label() {
+        let hpa = IssueObject::new("HorizontalPodAutoscaler", Some("payments"), "api");
+        let target = hpa.target();
+        assert!(target.is_some());
+        let issue = issue(hpa, target, IssueAction::Open);
+        assert_eq!(
+            attention_action(&issue),
+            Some(AttentionAction::Open {
+                label: "Open HPA".to_owned()
+            })
+        );
+    }
+    #[test]
+    fn no_target_has_no_action() {
+        let widget = IssueObject::new("Widget", Some("payments"), "w");
+        let issue = issue(widget, None, IssueAction::Open);
+        assert_eq!(attention_action(&issue), None);
+    }
+
+    #[test]
+    fn attention_shows_at_most_six() {
+        let issues: Vec<Issue> = (0..9).map(|_| pod_issue()).collect();
+        assert_eq!(attention_issues(&issues).len(), ATTENTION_ROWS);
+        assert_eq!(attention_issues(&issues[..2]).len(), 2);
     }
 }

@@ -32,6 +32,7 @@ use crate::drawer::{
     ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab, MonitorCache, MonitorKey,
     MonitorRange, MonitorScope, MonitorState, drawer_tabs, shown_tab,
 };
+use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::filter_bar::ToolkitState;
 use crate::helm_release_view::{
     HelmReleaseView, HistoryState, ShowLatest, ValuesLayout, earlier_revision, helm_subject,
@@ -51,9 +52,12 @@ use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
 use crate::navigation::{NavigationCounts, issue_counts, sidebar};
 use crate::node_table::NodeTableDelegate;
 use crate::object_events::{SubjectChange, event_subject, subject_change};
+use crate::overview::OverviewState;
+use crate::overview_report::live_report;
 use crate::permissions_view::PermissionsView;
 use crate::pod_drawer::selected_container_index;
 use crate::pod_table::PodTableDelegate;
+use crate::recent_changes::ChangeWindow;
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_actions::{open_shell_reason, view_logs_reason};
 use crate::resource_kind::ResourceKind;
@@ -270,6 +274,8 @@ pub(crate) struct AppShell {
     _quick_filter_events: Subscription,
     /// Puts the focus back inside the key context when the focused element disappears.
     _focus_lost: Subscription,
+    /// What Overview keeps between renders: the range of Recent changes.
+    overview: OverviewState,
     /// The picker popover: which trigger is open, and the draft.
     namespace_picker: NamespacePickerState,
     /// Whether Reveal and Copy work: decided once from the launch options, and the only thing the
@@ -440,6 +446,7 @@ impl AppShell {
             _focus_lost: focus_lost,
             namespace_picker: NamespacePickerState::default(),
             secret_value_access,
+            overview: OverviewState::default(),
             clipboard_clear: None,
             _clipboard_quit: clipboard_quit,
             _settings_observer: cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
@@ -523,6 +530,11 @@ impl AppShell {
         let namespace = start_namespace(namespace, default_namespace.as_deref());
         let session =
             cx.new(|cx| ClusterSession::new(kubeconfig, summary, namespace, kind, cache, cx));
+        // The new session is still connecting; it keeps the choice for `LiveCluster::start`.
+        let is_overview = self.screen == Screen::Overview;
+        session.update(cx, |session, cx| {
+            session.set_overview_visible(is_overview, cx)
+        });
         self._session_observer = Some(cx.observe(&session, |shell, _, cx| {
             shell.on_session_changed(cx);
         }));
@@ -701,6 +713,7 @@ impl AppShell {
             session.update(cx, |session, cx| {
                 session.set_explorer_kind(screen.kind(), cx);
                 session.set_issues_visible(screen == Screen::Issues);
+                session.set_overview_visible(screen == Screen::Overview, cx);
                 session.refresh_kind_counts(CountTrigger::Navigation, cx);
                 if screen == Screen::Kind(ResourceKind::Crds) {
                     session.refresh_custom_counts(cx);
@@ -1648,6 +1661,84 @@ impl AppShell {
         }
     }
 
+    /// `Export report`: opens the save dialog, then builds the report from the snapshots of that
+    /// moment and writes it to the chosen path. Nothing is written unless the user confirms a path
+    /// (C9), and no path or file name is traced.
+    pub(crate) fn export_overview_report(&mut self, cx: &mut Context<Self>) {
+        if self.overview.export.is_busy() {
+            return;
+        }
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        if session.read(cx).live().is_none() {
+            return;
+        }
+        // The report must describe the cluster the file name says, so a context switch while the
+        // dialog is open cancels it.
+        let session_id = session.entity_id();
+        let label = format!("overview-{}", session.read(cx).context());
+        let name = export_file_name(&label, "md", jiff::Timestamp::now());
+        self.overview.export = ExportState::Choosing;
+        self.overview._export = Some(start_export(
+            name,
+            "report",
+            move |shell: &mut Self, cx| {
+                if shell.session.as_ref().map(|session| session.entity_id()) != Some(session_id) {
+                    return Err("the cluster changed while the dialog was open".to_owned());
+                }
+                shell
+                    .overview_report_text(cx)
+                    .map(|report| (report, ()))
+                    .ok_or_else(|| {
+                        "Could not save the report: the cluster is not connected".to_owned()
+                    })
+            },
+            Self::set_overview_export,
+            |_, ()| {},
+            cx,
+        ));
+        cx.notify();
+    }
+
+    fn set_overview_export(&mut self, state: ExportState, cx: &mut Context<Self>) {
+        self.overview.export = state;
+        cx.notify();
+    }
+
+    /// The report of the live snapshots now; `None` when the session is not live.
+    fn overview_report_text(&self, cx: &App) -> Option<String> {
+        let session = self.session.as_ref()?.read(cx);
+        let live = session.live()?;
+        Some(live_report(
+            live,
+            session.issues(),
+            session.context(),
+            self.overview.window,
+            jiff::Timestamp::now(),
+        ))
+    }
+
+    /// The range of Recent changes; the panel reads it at the next render.
+    pub(crate) fn set_change_window(&mut self, window: ChangeWindow, cx: &mut Context<Self>) {
+        if self.overview.window == window {
+            return;
+        }
+        self.overview.window = window;
+        cx.notify();
+    }
+
+    /// `View all →` of Recent changes: the Events screen with every event, since changes are Normal
+    /// events that a Warnings-only list would hide.
+    pub(crate) fn view_all_events(&mut self, cx: &mut Context<Self>) {
+        if let Some(session) = &self.session {
+            session.update(cx, |session, cx| {
+                session.set_event_filter(EventFilter::All, cx)
+            });
+        }
+        self.show_screen(Screen::Kind(ResourceKind::Events), cx);
+    }
+
     /// Switches the Events screen between all events and warnings only. The drawer stays;
     /// `sync_selection` closes it when its row is filtered out.
     pub(crate) fn toggle_warnings_only(&mut self, cx: &mut Context<Self>) {
@@ -2308,6 +2399,10 @@ impl AppShell {
                 is_content_pending,
             ),
             is_log_pending,
+            is_change_feed_pending: self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.read(cx).is_change_feed_pending()),
             is_dialog_pending: self.pending_dialog_launch.is_some()
                 || self.who_can.as_ref().is_some_and(|view| {
                     view.read_with(cx, |view, cx| view.is_pending(cx))

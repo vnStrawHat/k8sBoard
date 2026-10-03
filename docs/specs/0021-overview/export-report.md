@@ -15,16 +15,18 @@ pub(crate) fn export_file_name(label: &str, extension: &str, now: jiff::Timestam
 ```
 
 - `Saved` carries no line count (amended in 0019 [dock-polish.md](../0019-workload-logs/dock-polish.md)). Each exporter keeps its own detail text: the log tab keeps `exported_lines`, and Overview needs none.
-- `log_export.rs` keeps `start_export` and calls `export_file_name(label, "log", now)`; its tests move with the functions. The moved 0019 test expects `-` now: `deploy/api` → `deploy-api-20240501-104758Z.log` (amended for 0022, which exports `topology-readonly-Monitor-{ns}-…png`).
+- `log_export.rs` is gone: one generic `start_export(name, noun, snapshot, set_state, finish, cx)` in `file_export.rs` serves every exporter (the log tab, Overview, and 0022 as the third). The dialog opens first; `snapshot` runs after the user confirmed a path and returns the text to write or a failure message. `export_file_name` cuts the label at 150 chars. The moved 0019 test expects `-` now: `deploy/api` → `deploy-api-20240501-104758Z.log` (amended for 0022, which exports `topology-readonly-Monitor-{ns}-…png`).
 
 ## Content (pure)
 
 ```rust
 pub(crate) struct ReportInputs<'a> {
     pub(crate) headline: &'a str, pub(crate) stats: &'a str,
+    pub(crate) checked: bool, // the issue board has run; false prints `Not checked yet.`
     pub(crate) issues: &'a [Issue], pub(crate) coverage_note: Option<String>,
     pub(crate) capacity: &'a [CapacityRow], pub(crate) cells: &'a [HeatCell],
-    pub(crate) changes: &'a [ChangeEntry], pub(crate) window: ChangeWindow,
+    pub(crate) changes: &'a [ChangeEntry], pub(crate) changes_note: Option<String>, // why there is no table: loading, failed, denied
+    pub(crate) window: ChangeWindow,
     pub(crate) now: jiff::Timestamp,
 }
 /// Markdown: the title and generated time (RFC 3339), then the four W3 sections as tables.
@@ -50,4 +52,5 @@ pub(crate) fn overview_report(inputs: &ReportInputs) -> String;
   - `Saved` shows muted `Saved to {file_name}` next to the button.
   - `Failed` shows an error `Alert` under the header: `Could not save the report: {error_text}`.
   - Both clear on the next export.
+- **Same cluster.** The snapshot closure compares the session captured at the click with the current one; a context switch while the dialog is open fails with `the cluster changed while the dialog was open`.
 - **Cancel.** Cancel → `Idle`; nothing is written. Paths and file names are never traced (0019 decision 31).

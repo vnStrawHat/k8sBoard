@@ -27,7 +27,8 @@ Options:
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic
-                         screen to open (default: pods)
+                         screen to open (default: overview)
+  --window-width <px>    window width, 800 to 3840 (default: 1320)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
 ";
@@ -276,6 +277,9 @@ pub(crate) struct LaunchOptions {
     pub(crate) config_dir: Option<PathBuf>,
     pub(crate) screen: LaunchScreen,
     pub(crate) screenshot: Option<PathBuf>,
+    /// `--window-width`: the window width in pixels, within `WINDOW_WIDTH_RANGE`; the default
+    /// width without it.
+    pub(crate) window_width: Option<u16>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -298,8 +302,9 @@ pub(crate) fn parse_launch_options(
         select: None,
         theme: None,
         config_dir: None,
-        screen: LaunchScreen::Pods,
+        screen: LaunchScreen::Overview,
         screenshot: None,
+        window_width: None,
     };
     while let Some(flag) = args.next() {
         if flag == "--help" {
@@ -327,6 +332,7 @@ pub(crate) fn parse_launch_options(
                     .ok_or_else(|| format!("invalid value '{text}' for --screen"))?;
             }
             "--screenshot" => options.screenshot = Some(PathBuf::from(value()?)),
+            "--window-width" => options.window_width = Some(parse_window_width(&value()?)?),
             _ => return Err(format!("unknown flag '{flag}'")),
         }
     }
@@ -349,6 +355,20 @@ fn parse_custom(text: &str) -> Option<LaunchScreen> {
         crd_name: name.to_owned().leak(),
         tab,
     })
+}
+
+/// The window widths the layout is designed for; the narrow end shows one column.
+const WINDOW_WIDTH_RANGE: std::ops::RangeInclusive<u16> = 800..=3840;
+
+fn parse_window_width(text: &str) -> Result<u16, String> {
+    match text.parse::<u16>() {
+        Ok(width) if WINDOW_WIDTH_RANGE.contains(&width) => Ok(width),
+        _ => Err(format!(
+            "invalid value '{text}' for --window-width: use {} to {} pixels",
+            WINDOW_WIDTH_RANGE.start(),
+            WINDOW_WIDTH_RANGE.end()
+        )),
+    }
 }
 
 /// `a` or `a,b,c`: the namespaces to show. Empty parts are ignored.

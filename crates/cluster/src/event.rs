@@ -27,6 +27,15 @@ pub enum EventType {
     Warning,
 }
 
+/// The controller events Overview shows as changes, each selected by the server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeEventKind {
+    /// A Deployment scaled one of its ReplicaSets.
+    Rollout,
+    /// A HorizontalPodAutoscaler rescaled its target.
+    Rescale,
+}
+
 /// Which events a watch asks the server for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EventFilter {
@@ -73,8 +82,26 @@ impl ClusterConnection {
         scope: NamespaceScope,
         filter: EventFilter,
     ) -> impl Stream<Item = WatchUpdate<EventSummary>> + Send + 'static {
+        self.watch_selected_events(scope, event_field_selector(filter))
+    }
+
+    /// Events of one change kind in `scope`; keeps the `EVENT_LIMIT` most recent, like
+    /// `watch_events`. The server selects the rows, so only the events Overview shows are sent.
+    pub fn watch_change_events(
+        &self,
+        scope: NamespaceScope,
+        kind: ChangeEventKind,
+    ) -> impl Stream<Item = WatchUpdate<EventSummary>> + Send + 'static {
+        self.watch_selected_events(scope, Some(change_event_selector(kind)))
+    }
+
+    fn watch_selected_events(
+        &self,
+        scope: NamespaceScope,
+        selector: Option<&'static str>,
+    ) -> impl Stream<Item = WatchUpdate<EventSummary>> + Send + 'static {
         let mut config = watcher::Config::default();
-        if let Some(selector) = event_field_selector(filter) {
+        if let Some(selector) = selector {
             config = config.fields(selector);
         }
         limited_summary_watch(
@@ -132,6 +159,15 @@ fn event_limit() -> StoreLimit<EventSummary> {
     StoreLimit {
         max_items: EVENT_LIMIT,
         recency: |event| event.last_seen,
+    }
+}
+
+fn change_event_selector(kind: ChangeEventKind) -> &'static str {
+    match kind {
+        ChangeEventKind::Rollout => "involvedObject.kind=Deployment,reason=ScalingReplicaSet",
+        ChangeEventKind::Rescale => {
+            "involvedObject.kind=HorizontalPodAutoscaler,reason=SuccessfulRescale"
+        }
     }
 }
 

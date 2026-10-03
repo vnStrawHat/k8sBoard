@@ -107,6 +107,8 @@ pub(crate) struct SettleInput {
     pub(crate) is_log_pending: bool,
     /// A tool dialog whose answer has not arrived.
     pub(crate) is_dialog_pending: bool,
+    /// Overview: the change feeds have not delivered their first snapshot.
+    pub(crate) is_change_feed_pending: bool,
     /// Where the pods metrics feed stands.
     pub(crate) pod_metrics: FeedProgress,
     /// The same for the nodes feed.
@@ -171,6 +173,9 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
         TargetState::Loading => false,
         TargetState::Loaded if screen.has_log_dock() => !input.is_log_pending,
         TargetState::Loaded if screen.opens_dialog() => !input.is_dialog_pending,
+        TargetState::Loaded if screen == LaunchScreen::Overview && input.is_change_feed_pending => {
+            false
+        }
         TargetState::Loaded
             if screen.shows_pod_usage()
                 && !input.pod_metrics.is_settled(screen.min_metrics_ticks()) =>
@@ -358,6 +363,7 @@ mod tests {
             is_drawer_ready,
             is_log_pending: false,
             is_dialog_pending: false,
+            is_change_feed_pending: false,
             pod_metrics: progress(FeedStatus::Live, 1),
             node_metrics: progress(FeedStatus::Live, 1),
             kubelet: progress(FeedStatus::Live, 4),
@@ -515,6 +521,35 @@ mod tests {
             ..feeds(0, 0)
         };
         assert!(is_screen_settled(pod, &denied));
+    }
+
+    #[test]
+    fn overview_waits_for_issue_summary() {
+        // The issue board still running is part of `TargetState::Loading` (`settle_input` reads
+        // `is_issues_pending`), so Needs attention is never captured as its spinner.
+        assert!(!is_screen_settled(
+            LaunchScreen::Overview,
+            &input(TargetState::Loading, true)
+        ));
+        assert!(is_screen_settled(
+            LaunchScreen::Overview,
+            &input(TargetState::Loaded, true)
+        ));
+    }
+
+    #[test]
+    fn overview_waits_for_change_feed() {
+        let pending = SettleInput {
+            is_change_feed_pending: true,
+            ..input(TargetState::Loaded, true)
+        };
+        assert!(!is_screen_settled(LaunchScreen::Overview, &pending));
+        // Other screens do not read the change feed.
+        assert!(is_screen_settled(LaunchScreen::Pods, &pending));
+        assert!(is_screen_settled(
+            LaunchScreen::Overview,
+            &input(TargetState::Loaded, true)
+        ));
     }
 
     #[test]

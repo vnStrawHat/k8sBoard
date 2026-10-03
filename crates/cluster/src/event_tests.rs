@@ -316,3 +316,24 @@ fn message_hides_url_userinfo() {
     );
     assert!(!masked.contains("s3cret"));
 }
+
+#[test]
+fn change_event_selectors_name_kind_and_reason() {
+    assert_eq!(
+        change_event_selector(ChangeEventKind::Rollout),
+        "involvedObject.kind=Deployment,reason=ScalingReplicaSet"
+    );
+    assert_eq!(
+        change_event_selector(ChangeEventKind::Rescale),
+        "involvedObject.kind=HorizontalPodAutoscaler,reason=SuccessfulRescale"
+    );
+}
+
+#[test]
+fn watch_events_selector_unchanged() {
+    assert_eq!(event_field_selector(EventFilter::All), None);
+    assert_eq!(
+        event_field_selector(EventFilter::WarningsOnly),
+        Some("type=Warning")
+    );
+}

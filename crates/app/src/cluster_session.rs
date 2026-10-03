@@ -5,12 +5,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cluster::{
-    AccessCheck, AccessDecision, AccessReport, BindingSummary, ClusterConnection, ClusterError,
-    ConfigMapValues, ContextSummary, CrdSummary, CustomObjectFields, EndpointSliceSummary,
-    EventFilter, EventSummary, HelmRevision, IngressSummary, InvolvedObject, JobSummary,
-    Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary,
-    PersistentVolumeSummary, PodSummary, RbacSnapshot, ReplicaSetSummary, ResourceQuotaSummary,
-    SecretSummary, ServerVersion, WatchUpdate,
+    AccessCheck, AccessDecision, AccessReport, BindingSummary, ChangeEventKind, ClusterConnection,
+    ClusterError, ConfigMapValues, ContextSummary, CrdSummary, CustomObjectFields,
+    EndpointSliceSummary, EventFilter, EventSummary, HelmRevision, IngressSummary, InvolvedObject,
+    JobSummary, Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary,
+    NodeSummary, PersistentVolumeSummary, PodSummary, RbacSnapshot, ReplicaSetSummary,
+    ResourceQuotaSummary, SecretSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
@@ -51,6 +51,9 @@ pub(crate) struct ClusterSession {
     issues: IssueBoard,
     /// The Issues screen is shown, so a time-only refresh repaints it (the ages move).
     is_issues_visible: bool,
+    /// The Overview screen is shown, so its change feeds run. Kept across Connecting and retry like
+    /// `explorer_kind`.
+    is_overview_visible: bool,
     _issue_tick: Task<()>,
 }
 
@@ -105,6 +108,8 @@ pub(crate) struct LiveCluster {
     kind_counts: KindCounts,
     /// The watches only the Issues engine reads, running for the whole session.
     pub(crate) issue_feeds: IssueFeeds,
+    /// The Overview's change feeds: `Some` exactly while Overview is visible (`Denied` included).
+    pub(crate) change_events: Option<ChangeEvents>,
     connection: ClusterConnection,
     subscriptions: Subscriptions,
 }
@@ -474,6 +479,58 @@ impl CompanionLists {
                 cluster_role_bindings,
                 ..
             } => namespaces + usize::from(cluster_role_bindings.is_some()),
+        }
+    }
+}
+
+/// The change feeds of Overview, one watch per kind and namespace. Dropping it stops both.
+pub(crate) enum ChangeEvents {
+    Live {
+        rollouts: LiveList<EventSummary>,
+        rescales: LiveList<EventSummary>,
+        _subscriptions: [WatchSubscription; 2],
+    },
+    /// A known access report denies listing events, so nothing was started (no retry loop on a 403).
+    Denied,
+}
+
+/// The kinds of change events, in the order of `ChangeEvents::Live`'s subscriptions.
+const CHANGE_EVENT_KINDS: [ChangeEventKind; 2] =
+    [ChangeEventKind::Rollout, ChangeEventKind::Rescale];
+
+/// A `Known` report that denies `ListEvents` for this scope. `Checking` and `Unknown` start the
+/// watches: the server answers for itself.
+fn is_change_feed_denied(access: &AccessState) -> bool {
+    matches!(access, AccessState::Known(report) if !report.is_allowed(AccessCheck::ListEvents))
+}
+
+impl ChangeEvents {
+    fn start(
+        runtime: &ClusterRuntime,
+        connection: &ClusterConnection,
+        scope: &NamespaceScope,
+        cx: &mut Context<ClusterSession>,
+    ) -> Self {
+        let subscribe = |kind: ChangeEventKind, cx: &mut Context<ClusterSession>| {
+            runtime.subscribe(
+                connection.watch_change_events(scope.clone(), kind),
+                cx,
+                move |session: &mut ClusterSession, update, _| {
+                    if let Some(list) = session.change_list_mut(kind) {
+                        list.apply(update);
+                    }
+                },
+                move |session, _| {
+                    if let Some(list) = session.change_list_mut(kind) {
+                        list.mark_stopped();
+                    }
+                },
+            )
+        };
+        Self::Live {
+            rollouts: LiveList::Loading,
+            rescales: LiveList::Loading,
+            _subscriptions: CHANGE_EVENT_KINDS.map(|kind| subscribe(kind, cx)),
         }
     }
 }
@@ -1022,6 +1079,7 @@ impl ClusterSession {
             custom_kind_cache,
             issues: IssueBoard::default(),
             is_issues_visible: false,
+            is_overview_visible: false,
             _issue_tick: Self::start_issue_tick(cx),
         }
     }
@@ -1049,6 +1107,39 @@ impl ClusterSession {
     /// Whether the Issues screen is shown; set from `AppShell::show_screen`.
     pub(crate) fn set_issues_visible(&mut self, is_visible: bool) {
         self.is_issues_visible = is_visible;
+    }
+
+    /// Starts the change feeds while Overview is shown and stops them when it is left. A session
+    /// that is not live only remembers the choice; `LiveCluster::start` reads it.
+    pub(crate) fn set_overview_visible(&mut self, is_visible: bool, cx: &mut Context<Self>) {
+        self.is_overview_visible = is_visible;
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        if is_visible == live.change_events.is_some() {
+            return;
+        }
+        // A visible Overview starts the feeds; leaving drops both subscriptions.
+        live.change_events = None;
+        if is_visible {
+            live.start_change_events(&runtime, cx);
+        }
+        cx.notify();
+    }
+
+    /// Whether a change feed that runs has not delivered its first snapshot; a screenshot of
+    /// Overview waits on it.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn is_change_feed_pending(&self) -> bool {
+        let Some(live) = self.live() else {
+            return false;
+        };
+        matches!(
+            &live.change_events,
+            Some(ChangeEvents::Live { rollouts, rescales, .. })
+                if rollouts.is_loading() || rescales.is_loading()
+        )
     }
 
     /// Whether the board has not run on loaded lists yet, or a feed it reads still loads. A launch
@@ -1184,6 +1275,19 @@ impl ClusterSession {
             .filter(|explorer| explorer.kind == kind)
     }
 
+    /// The list of one change feed, while it runs.
+    fn change_list_mut(&mut self, kind: ChangeEventKind) -> Option<&mut LiveList<EventSummary>> {
+        match self.live_mut()?.change_events.as_mut()? {
+            ChangeEvents::Live {
+                rollouts, rescales, ..
+            } => Some(match kind {
+                ChangeEventKind::Rollout => rollouts,
+                ChangeEventKind::Rescale => rescales,
+            }),
+            ChangeEvents::Denied => None,
+        }
+    }
+
     fn object_events_mut(&mut self, subject: &InvolvedObject) -> Option<&mut ObjectEvents> {
         self.live_mut()?
             .object_events
@@ -1238,6 +1342,7 @@ impl ClusterSession {
                 connected,
                 self.explorer_kind,
                 self.event_filter,
+                self.is_overview_visible,
                 cx,
             ))),
             Ok(Err(error)) => SessionPhase::Failed {
@@ -1294,6 +1399,10 @@ impl ClusterSession {
             &live.access,
             cx,
         );
+        // The feeds are for the old namespaces; the new ones start again while Overview is shown.
+        if live.change_events.take().is_some() {
+            live.start_change_events(&runtime, cx);
+        }
         // The numbers are for the old scope; the review for the new one counts again.
         live.kind_counts = KindCounts::default();
         // The fallback namespaces and so the coverage may differ in the new scope.
@@ -1635,6 +1744,7 @@ impl ClusterSession {
         let runtime = cx.global::<ClusterRuntime>().clone();
         live.access = AccessState::from_review(review);
         live.drop_denied_companion();
+        live.plan_change_events(&runtime, cx);
         // The review decides which condition feeds may start.
         live.issue_feeds.restart_conditions(
             &runtime,
@@ -1786,6 +1896,29 @@ impl ClusterSession {
 }
 
 impl LiveCluster {
+    /// Starts the change feeds unless a known review denies listing events.
+    fn start_change_events(&mut self, runtime: &ClusterRuntime, cx: &mut Context<ClusterSession>) {
+        self.change_events = Some(if is_change_feed_denied(&self.access) {
+            ChangeEvents::Denied
+        } else {
+            ChangeEvents::start(runtime, &self.connection, &self.scope, cx)
+        });
+    }
+
+    /// A review that finished moves a running feed to `Denied` and a denied one to running.
+    fn plan_change_events(&mut self, runtime: &ClusterRuntime, cx: &mut Context<ClusterSession>) {
+        let is_denied = is_change_feed_denied(&self.access);
+        let needs_new_plan = match &self.change_events {
+            Some(ChangeEvents::Live { .. }) => is_denied,
+            Some(ChangeEvents::Denied) => !is_denied,
+            None => false,
+        };
+        if needs_new_plan {
+            self.change_events = None;
+            self.start_change_events(runtime, cx);
+        }
+    }
+
     /// Moves the kubelet targets with the nodes and pods lists.
     fn refresh_kubelet_targets(&self) {
         self.metrics
@@ -1829,8 +1962,8 @@ impl LiveCluster {
     }
 
     /// Open watches: namespaces, pods, nodes, the Warning events of the Issues engine, the
-    /// explorer's and its companion, and the drawer's events and related objects when they are
-    /// open.
+    /// explorer's and its companion, the drawer's events and related objects when they are open,
+    /// and the change-event watches while Overview is visible.
     pub(crate) fn watch_count(&self) -> usize {
         let namespaces = scope_multiplicity(&self.scope);
         open_watch_count(OpenWatches {
@@ -1847,6 +1980,10 @@ impl LiveCluster {
             object_events: self.object_events.is_some(),
             related: self.related.is_some(),
             issue_feeds: self.issue_feeds.watch_count(namespaces),
+            change_events: match self.change_events {
+                Some(ChangeEvents::Live { .. }) => CHANGE_EVENT_KINDS.len() * namespaces,
+                Some(ChangeEvents::Denied) | None => 0,
+            },
         })
     }
 
@@ -2025,6 +2162,7 @@ impl LiveCluster {
         connected: Connected,
         explorer_kind: Option<ResourceKind>,
         event_filter: EventFilter,
+        is_overview_visible: bool,
         cx: &mut Context<ClusterSession>,
     ) -> Self {
         let runtime = cx.global::<ClusterRuntime>().clone();
@@ -2093,6 +2231,7 @@ impl LiveCluster {
             related: None,
             kind_counts: KindCounts::default(),
             issue_feeds,
+            change_events: None,
             connection,
             subscriptions,
         };
@@ -2108,6 +2247,9 @@ impl LiveCluster {
             &live.access,
             cx,
         );
+        if is_overview_visible {
+            live.start_change_events(&runtime, cx);
+        }
         live
     }
 
@@ -2429,12 +2571,15 @@ struct OpenWatches {
     /// The Issues engine's watches: one Warning events watch per namespace; 0 while a scope
     /// change waits to restart it.
     issue_feeds: usize,
+    /// Overview's change feeds: two watches per namespace while they run.
+    change_events: usize,
 }
 
 /// The namespaces list and the nodes are always watched, pods once per namespace of the scope,
 /// then the explorer's watches and its companion's, one each for the drawer's events and
-/// related objects, and the Warning events of the Issues engine, one per namespace. The total
-/// stays within `4N + 5` for N picked namespaces.
+/// related objects, and the Warning events of the Issues engine, one per namespace, plus two
+/// change-event watches per namespace while Overview is visible. The total stays within
+/// `6N + 5` for N picked namespaces.
 fn open_watch_count(watches: OpenWatches) -> usize {
     2 + watches.namespaces
         + usize::from(watches.crds)
@@ -2443,6 +2588,7 @@ fn open_watch_count(watches: OpenWatches) -> usize {
         + usize::from(watches.object_events)
         + usize::from(watches.related)
         + watches.issue_feeds
+        + watches.change_events
 }
 
 /// Whether a refresh that ran for `reason` repaints the app. A new, gone, or changed issue always

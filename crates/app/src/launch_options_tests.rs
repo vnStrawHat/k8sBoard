@@ -48,6 +48,7 @@ fn parses_all_flags() {
             config_dir: Some(PathBuf::from("cfg")),
             screen: LaunchScreen::PodDrawer(DrawerTab::Containers),
             screenshot: Some(PathBuf::from("out.png")),
+            window_width: None,
         }
     );
 }
@@ -55,7 +56,7 @@ fn parses_all_flags() {
 #[test]
 fn defaults_without_flags() {
     let options = run_options(&[]);
-    assert_eq!(options.screen, LaunchScreen::Pods);
+    assert_eq!(options.window_width, None);
     assert_eq!(options.theme, None);
     assert_eq!(options.screenshot, None);
     assert_eq!(options.kubeconfig, None);
@@ -578,4 +579,43 @@ fn load_fails_when_nothing_loads() {
         load_kubeconfigs(&[], &[]),
         Err(KubeconfigError::NoFiles)
     ));
+}
+
+#[test]
+fn default_screen_is_overview() {
+    let options = run_options(&[]);
+    assert_eq!(options.screen, LaunchScreen::Overview);
+    assert_eq!(options.screen.screen(), Screen::Overview);
+}
+
+#[test]
+fn screen_pods_still_parses() {
+    let options = run_options(&["--screen", "pods"]);
+    assert_eq!(options.screen, LaunchScreen::Pods);
+    assert_eq!(options.screen.screen(), Screen::Pods);
+}
+
+#[test]
+fn window_width_parses() {
+    assert_eq!(
+        run_options(&["--window-width", "1000"]).window_width,
+        Some(1000)
+    );
+    assert_eq!(
+        run_options(&["--window-width", "800"]).window_width,
+        Some(800)
+    );
+    assert_eq!(
+        run_options(&["--window-width", "3840"]).window_width,
+        Some(3840)
+    );
+}
+
+#[test]
+fn window_width_out_of_range_is_an_error() {
+    for text in ["799", "3841", "wide", "-1", ""] {
+        let error = parse(&["--window-width", text]).expect_err("must fail");
+        assert!(error.contains("--window-width"), "{error}");
+    }
+    assert!(parse(&["--window-width"]).is_err());
 }
