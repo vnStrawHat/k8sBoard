@@ -8,20 +8,20 @@
 |---|---|---|
 | 1 | `settings.rs` (+ `settings_tests.rs`) | `DockSettings { height }`, `Settings.dock`, allow-list entry `dock.height` |
 | 1 | `dock.rs` | `initial_dock_height`, `saved_dock_height`, `max_line_offset`; inline tests |
-| 1 | `workspace.rs` | `dock_handle_appearance` (kit line, double-click hit area, dashed max line); panel initial size from settings |
+| 1 | `workspace.rs` | `dock_handle_appearance` (kit line, double-click hit area, dashed max line); panel initial size from settings, capped by the viewport; `render_workspace` takes the window |
 | 1 | `app_shell.rs` (+ `app_shell_tests.rs`) | `_dock_split_events` subscription, `save_dock_height`; window tests |
 | 2 | `log_buffer.rs` (+ `log_buffer_tests.rs`) | `LineKind`; marker rules in `push`, `level_of`, `LineView::shows` |
-| 2 | `log_workload.rs` | `restart_marker`, `membership_markers`, `rising_restarts`; tests |
-| 2 | `log_tab.rs` | `restart_seen`, `has_synced`, pod-tab session observer, `note_restarts`, markers in `sync_members`, markers through staging; volume input skips markers |
+| 2 | `log_workload.rs` | `restart_marker`, `rising_restarts`; tests |
+| 2 | `log_tab.rs` (+ `log_tab_tests.rs`, new) | `restart_seen`, pod-tab session observer, `note_restarts` over every streamed pair, markers through staging; volume input skips markers; fake-API window test |
 | 2 | `log_rows.rs` | `SYS` tag and muted text for markers |
 | 3 | `log_buffer.rs` | `TimeWindow`, `LineView.window`, `volume_lines` |
-| 3 | `log_volume.rs` | `brush_window`, `window_span`, shade, chip, mouse handlers, bounds `canvas`; tests |
-| 3 | `log_tab.rs` (+ `log_tab_tests.rs`, new) | brush drag state, bounds cell, `current_volume` from `volume_lines`, clear on `restart_stream`; fake-API window tests |
+| 3 | `log_volume.rs` | `brush_window`, `window_span`, brush fraction clamp, shade, chip, mouse-down handler, bounds `canvas` with window-level move and up listeners while dragging; tests |
+| 3 | `log_tab.rs` (+ `log_tab_tests.rs`) | brush drag state, bounds cell, `current_volume` from `volume_lines`, clear on `restart_stream`; fake-API window tests |
 | 4 | `log_window.rs` (new), `main.rs` | `LogWindow`, `open_log_window`; `mod log_window;` |
-| 4 | `dock.rs` (+ `dock_tests.rs`, new) | `PoppedTab`, `popped`, `take_tab`, `pop_out`, `on_log_tab_event`, `open` activation, `close_all` / `close_tabs_of` closing windows; fake-API window tests (the inline `mod tests` keeps the pure ones) |
+| 4 | `dock.rs` (+ `dock_tests.rs`, new) | `PoppedTab`, `popped`, `take_tab`, `pop_out`, `on_log_tab_event`, `open` activation, `close_all` closing every pop-out window; fake-API window tests (the inline `mod tests` keeps the pure ones) |
 | 4 | `log_tab.rs` | `LogTabEvent`, Pop out button, `move_to_window`, `is_popped_out` |
 | 4 | `shell_tab_tests.rs`, `app_shell_tests.rs` | no Pop out on shells; `leaving_work` unchanged |
-| 4 | `launch_options.rs` (+ tests), `screenshot.rs` | `LaunchScreen::LogsPopout`, `USAGE`, capture of the pop-out window |
+| 4 | `launch_options.rs` (+ tests), `screenshot.rs` | `LaunchScreen::LogsPopout`, `USAGE`, capture of the pop-out window, then close it before `cx.quit()` |
 
 ## Docs (step 4)
 

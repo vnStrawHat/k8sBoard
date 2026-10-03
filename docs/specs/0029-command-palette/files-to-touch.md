@@ -44,14 +44,14 @@ No change. `Command`, `CommandState`, `CommandGroup`, `CommandItem`, `Dialog`, `
 | S | File | Change |
 |---|---|---|
 | 5a | `src/fuzzy_score.rs` | `fuzzy_ranges` sharing the alignment walk with `fuzzy_score`; tests |
-| 5a | `src/palette_search.rs` (+ tests) | `match_ranges` |
-| 5a | `src/command_palette.rs` | `command_item(entry, query_text)`; `RowContent` label and detail ranges; `StyledText` underline |
-| 5b | `src/palette_search.rs` (+ tests) | `PaletteTarget::Cluster(row, scope)`; carry rule and detail in `cluster_entries` |
+| 5a | `src/palette_search.rs` (+ tests) | `entry_match_ranges`, `EntryRanges` |
+| 5a | `src/command_palette.rs` | `command_item(entry, query_text)`; `RowContent::of(entry, ranges)`; `StyledText` underline |
+| 5b | `src/palette_search.rs` (+ tests) | `PaletteTarget::Cluster(row, scope)`; single-`Named` carry rule and detail in `cluster_entries` |
 | 5b | `src/app_shell.rs` | `switch_cluster_in_scope`; `switch_cluster` delegates; `switch_to` doc |
 | 5b | `src/command_palette.rs` | confirm, `Clone`, and row arms for the new field |
-| 5b | `src/app_shell_switch_tests.rs`, `src/app_shell_multi_tests.rs` | new tests; existing `Cluster(row)` matches gain the field |
-| 5c | `src/resource_actions.rs` | `needs_confirm` and its test |
-| 5c | `src/palette_search.rs` (+ tests) | `ObjectAction`, `needs_confirm` field, `pair_text`, `lists_pairs`, `pair_entries` |
+| 5b | `src/app_shell_switch_tests.rs` | new tests; existing `Cluster(row)` matches in tests gain the field |
+| 5c | `src/resource_actions.rs` | `needs_confirm`, `is_planned`, and their tests |
+| 5c | `src/palette_search.rs` (+ tests) | `ObjectAction`, `needs_confirm` and `score` fields, `pair_text`, `lists_pairs`, `pair_entries` (no Roll back, Delete, or unshipped actions); `All`-mode resource scores stored once and reused by `ranked` |
 | 5c | `src/app_shell.rs` | `palette_snapshot(query, cx)` |
 | 5c | `src/keyboard_navigation.rs` | `run_row_action_on` |
 | 5c | `src/command_palette.rs` | `needs confirm` pill; `ObjectAction` confirm, icon, and key hint arms; `refresh` passes the query |

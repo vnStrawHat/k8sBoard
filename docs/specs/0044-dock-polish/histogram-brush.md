@@ -5,7 +5,7 @@
 ## Behavior
 
 - Full layout only, where the histogram is drawn (zoomed dock, pop-out window).
-- Press on the chart, drag, release: the buckets under the drag become the window `[first bucket start, last bucket end)`. Only lines whose timestamp falls in it show; lines without a timestamp hide while a window is set (decision 13).
+- Press on the chart, drag, release (decision 12: W8b draws the window but not its effect, so filtering is an interpretation): the buckets under the drag become the window `[first bucket start, last bucket end)`. Only lines whose timestamp falls in it show; lines without a timestamp hide while a window is set (decision 13).
 - The bars keep every bucket: the histogram ignores the window. The window is shaded over its buckets with `theme.selection` (the log match highlight token).
 - Caption, after `Lines per 5s`: a chip `10:47:58 – 10:48:06` (UTC, the `bucket_label` format of the bucket width) and ✕ (ghost xsmall `IconName::X`, tooltip `Show all lines`).
 - Cleared by ✕, by a release without movement, and by `restart_stream` (Reconnect, container switch, Previous).
@@ -35,7 +35,8 @@ pub(crate) fn window_span(volume: &Volume, window: TimeWindow) -> Option<(f32, f
 
 ## Interaction (`log_volume.rs`, `log_tab.rs`)
 
-- `volume_chart` also takes the window, the live drag, and the handlers from the tab. The chart cell gets `.id("log-volume-brush")`, `on_mouse_down(Left)`, `on_mouse_move`, `on_mouse_up(Left)`, and a `canvas` child that stores its bounds at prepaint in an `Rc<Cell<Option<Bounds<Pixels>>>>` held by `LogTab` (the kit `BarChart` has no hit test).
+- `volume_chart` also takes the window, the live drag, and the handlers from the tab. The chart cell gets `.id("log-volume-brush")` and `on_mouse_down(Left)` (starts `brush`), plus a `canvas` child that stores its bounds at prepaint in an `Rc<Cell<Option<Bounds<Pixels>>>>` held by `LogTab` (the kit `BarChart` has no hit test). While `brush` is `Some`, the canvas paint registers window-level listeners (`window.on_mouse_event`, as the kit resizable group does) for `MouseMoveEvent` (updates `current`) and `MouseUpEvent` (ends the drag), so a pointer that leaves the chart keeps dragging and a release anywhere ends it.
+- Fractions are `((x - bounds.left()) / bounds.width()).clamp(0., 1.)`; a zero-width chart starts no drag.
 - `LogTab` keeps `brush: Option<BrushDrag { anchor: f32, current: f32 }>` while dragging; the drag is shaded live with the same token.
 - Release: `brush_window` → `LineView.window` → `refresh_view` (the scroller resets to the visible count, as a filter change does). A release without movement clears the window.
 - The kit tooltips on the bars stay.
