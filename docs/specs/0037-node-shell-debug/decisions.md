@@ -43,3 +43,13 @@
 | 25 | Image text: non-empty, no whitespace, ≤ 255 chars; stored per cluster after a successful start (`debug_image`) | air-gapped mirrors; no registry parsing |
 | 26 | Kill switch: the 0030 `WritePolicy` blocks every create, patch, and delete in debug builds; the attach never runs without a created object | C3 approved by the user on 2026-10-02 (one approval for all mutating specs); the kill switch still guards every first call |
 | 27 | Both options dialogs say `Closing the tab ends the shell and everything started from it.` | `stdinOnce` ends the shell; its children get a hangup |
+
+## Baseline (refresh 2026-10-03, main `2c7dc08`)
+
+| # | Decision | Rationale |
+|---|---|---|
+| 28 | `OpenNodeShell` (on main `Mutating { CreatePodExec, is_shipped: false }`, a placeholder) and the new `DebugContainer` use 0036's multi-check gate; the `allow_node_shell` setting is read from `guard.profile` inside the gate (after RBAC, before the lock); subject rules (Windows node from the merged `NodeSummary.system.operating_system`, no running container) are a `row_block` after the gate | `action_availability` stays two-argument; the profile is already in the merged `ClusterGuard` |
+| 29 | Entries: S on a node, the node menu item, and the palette reach the `OpenNodeShell` arm of `run_available_row_key` (empty on main; `subject_action` already maps S on a node to it), which opens the options dialog for the cursor node. `Debug container…` sits in the container submenu and keeps an `on_click` with the row's `RowContext` (its argument is the container); its `RowAction` gets an unbound unit action | one entry per action (0032 decision 31) |
+| 30 | `ActionRisk::Privileged` is one more arm of the merged `confirm_step` match (`Change \| Destructive` today) | decision 14; exhaustive match |
+| 31 | The leftover sweep runs from the 0027 per-slot hook `on_first_live(cluster)` (`app_shell_view.rs`), on that slot's connection | every viewed cluster, not only the primary |
+| 32 | Node shell tabs add a `leaving_work` line (`{n} node shells will close; their pods are deleted`); `release_all` / `release_slot` close the tabs (`close_all` / `close_tabs_of`), and each tab's release handler runs `run_cleanup` on its held connection | the release cannot wait; the held connection outlives the session (like 0035 forwards) |

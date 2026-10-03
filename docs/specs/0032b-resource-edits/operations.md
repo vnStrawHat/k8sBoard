@@ -42,7 +42,7 @@ All three are JSON merge patches with `fieldManager=k8sboard` (dry-run adds `dry
 | `ExpandClaim` | `PatchPersistentVolumeClaims` | `patch "" persistentvolumeclaims`, namespaced | yes | Change (irreversible; the warning `A volume cannot shrink; this cannot be undone` carries it, as 0032 decision 13 does for scale-down) | `spec.resources.requests.storage` = `"150Gi"` |
 | `SetDefaultStorageClass` | `PatchStorageClasses` | `patch storage.k8s.io storageclasses`, cluster-scoped | yes | Change | `metadata.annotations[storageclass.kubernetes.io/is-default-class]` = `"true"`/`"false"`; on unset also `metadata.annotations[storageclass.beta.kubernetes.io/is-default-class]` with value `None` (removed) |
 
-`ALL` grows by 3. Display: `patch horizontalpodautoscalers`, `patch persistentvolumeclaims`, `patch storageclasses`.
+`ALL` grows by 3 (after 0032's 7). Display: `patch horizontalpodautoscalers`, `patch persistentvolumeclaims`, `patch storageclasses`.
 
 ## Errors (0030 mapping, plus)
 

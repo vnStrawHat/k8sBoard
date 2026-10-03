@@ -27,7 +27,7 @@ Sidebar item count = running forwards (W7 sidebar `3`); hidden when 0.
 
 ## Forward buttons (W4b note 4, W7 Services)
 
-- `drawer::port_row` gets a state: `Offer { on_click }`, `Live { local, on_stop }`, `Disabled { reason }`. Live renders `● localhost:{n} · Stop` in the success token (W4b), click stops that forward.
+- On main `drawer::port_row(text, id, reason, cx)` renders an always-disabled Forward button whose tooltip is `resource_actions::port_forward_reason(access)` (callers `pod_drawer.rs`, `kind_drawer.rs`). It gets a state instead: `Offer { on_click }`, `Live { local, on_stop }`, `Disabled { reason }`; `port_forward_reason` is removed, the reason comes from `action_availability(PortForward, guard)` of the drawer subject's slot (`drawer_subject()`, never the primary). Live renders `● localhost:{n} · Stop` in the success token (W4b), click stops that forward.
 - Live match = same cluster, namespace, target, and remote port as a running forward (`PortForwards::running_for`).
 - Pod container ports (W4b, 0008 `container_detail.rs`) → `ForwardTarget::Pod`, remote = container port. Service ports (W7 drawer) → `Service`, remote = the Service port. UDP ports → `Disabled("UDP ports cannot be forwarded")`. ExternalName or selector-less Services → `Disabled("Forward a pod: this Service selects no pods")`.
 - Enabled click → `start_forward(spec with LocalPort::Auto)`.
@@ -39,10 +39,10 @@ Sidebar item count = running forwards (W7 sidebar `3`); hidden when 0.
 | Pod row / drawer ⋯ (W4) | `Port-forward ▸`: one item per declared TCP container port, `{container} · {name} {port}/TCP` with MAIN/SIDECAR tag (W4 note 2); a single port starts directly; none declared → `Port-forward…` opens New forward prefilled with the pod |
 | Deployment / StatefulSet ⋯ (W7) | `Port-forward ▸`: template container ports → `Deployment` / `StatefulSet` target |
 | Service ⋯ (W7) | `Port-forward ▸`: Service ports → `Service` target |
-| F (0028 `PortForward`) | cursor row: one port → start; several or none → New forward dialog prefilled |
-| Palette `>` Port-forward (0029) | same as F |
+| F (0028 `PortForward`) | the `PortForward` arm of `run_available_row_key`, on the cursor row and its slot: one port → start; several or none → New forward dialog prefilled |
+| Palette `>` Port-forward (0029) | dispatches the F key action: the same arm |
 
-All read `action_availability(PortForward, guard)` (0030 order: shipped → checking → `Not permitted: get and create pods/portforward` → `{cluster} is read-only`). `port_forward_reason` and `READ_ONLY_FEATURE_REASON` go away.
+All read `action_availability(PortForward, guard)` with the guard of the row's own slot (0030 order: shipped → checking → `Not permitted: get and create pods/portforward` → `{cluster} is read-only`; the pair text comes from 0036's multi-check gate). On main pods and `has_port_forward` kinds show `action_item(PortForward, guard)`; the submenus replace it. Submenu items carry an argument (the port), so they keep an `on_click` that captures the `RowContext` (cluster + weak session) of the row; the plain item without a port dispatches F. `port_forward_reason` goes away (`READ_ONLY_FEATURE_REASON` is already gone).
 
 ## Dialogs (kit `Dialog`, width 420)
 

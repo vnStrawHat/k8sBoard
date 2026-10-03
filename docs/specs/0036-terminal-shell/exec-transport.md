@@ -58,12 +58,12 @@ API servers before 1.35 authorize a WebSocket exec as verb **`get`** on `pods/ex
 
 | 0030 piece | 0036 use |
 |---|---|
-| `action_availability(ResourceAction::OpenShell, &ClusterGuard)` | `ActionGate` with both checks above, `mutates: true`, shipped in step 4. Order: `Checking permissions…` → `Not permitted: get and create pods/exec` → `{cluster} is read-only` |
-| `guard_for(&cluster)` | the target pod's own cluster (0027 contract) |
-| `confirm_step(guard.confirm, ActionRisk::Change, guard.display_name)` | always a dialog: PROD types the cluster name; STG, DEV, LOCAL click Confirm |
+| `action_availability(ResourceAction::OpenShell, &ClusterGuard)` | the multi-check gate below, shipped in step 4. Order: `Checking permissions…` → `Not permitted: get and create pods/exec` → `{cluster} is read-only` |
+| `guard_for(&cluster)` | the target pod's own slot (0027): the cursor's `ClusterObject.cluster` for S, menus, and the palette; the tab's `ShellTarget.cluster` for Reconnect. Never `live(cx)` / `session()` (the primary) |
+| `confirm_step(guard.profile.confirm, ActionRisk::Change, guard.display_name())` (merged signature) | always a dialog: PROD types the cluster name; STG, DEV, LOCAL click Confirm |
 | `run_guarded(GuardedIntent { kind: Connect(..) })` (0030 write-flow.md) | no dry-run (`NotSupported`); after the lock re-check, the connect callback opens the tab |
 | `audit_entry(&GuardedIntent, ..)` | one line per session start: action `Open shell`, object `{ Pod, ns, name }`, fields `container`, `command`; outcome `applied` when `Started` arrives, `failed` with the error otherwise; never stream bytes |
-| allow-list (write-path.md rule 4) | row `pods/exec`, `GET` + WebSocket upgrade, `/api/v1/namespaces/{ns}/pods/{pod}/exec`, dry-run no, 0036; the grep expects `access_review.rs`, `object_write.rs`, `pod_shell.rs` |
+| allow-list (write-path.md rule 4) | row `pods/exec` and the `pod_shell.rs` clippy exception are already in the 0030 table; the merged `clippy.toml` lists `Api::exec` and `Client::connect` with `allow-invalid` until the `ws` feature makes them real paths. The grep expects `access_review.rs`, `object_write.rs`, `kubelet_stats.rs`, `secret.rs`, `pod_shell.rs` |
 
 ```rust
 pub(crate) struct ConnectIntent { pub(crate) object: AuditObject, pub(crate) fields: Vec<AuditField>,
@@ -72,6 +72,8 @@ impl AppShell { // thin wrapper, like start_write
     pub(crate) fn start_connect(&mut self, intent: GuardedIntent, window: &mut Window, cx: &mut Context<Self>);
 }
 ```
+
+**Multi-check gate (step 4; 0035 and 0037 reuse it).** On main `ActionGate::Mutating { check: AccessCheck, is_shipped }` holds one check (`OpenShell` → `CreatePodExec`, unshipped). It becomes `Mutating { checks: Vec<AccessCheck>, is_shipped }` (one-check actions pass a one-item list; `gate()` builds it per call, so the carried-kind checks of 0031–0033 fit). `permission_reason` returns the first check that is not allowed; when that check has a sibling in the list with the same resource and subresource and the other verb (`get`/`create`), the text names both: `Not permitted: get and create pods/exec`.
 
 - `run_guarded` takes the `ExecPermit` from the guard's `AccessReport` right before `open`; no permit → the gate reason, nothing opens. 0035 decides how its own permit enters `Connect` (it may generalize `open`).
 - Locking a cluster does not end shells already open; Reconnect runs `start_connect` again and is blocked while locked. On a `Live` tab, Reconnect asks no question of its own: the 0030 tier dialog always opens (0030 decision 9; [shell-tab.md](shell-tab.md)).

@@ -46,7 +46,7 @@ pub(crate) struct ConnectIntent { pub(crate) object: AuditObject, pub(crate) fie
 1. `guard_for(&cluster)`; `None` → notice `Open {cluster} to start this forward`.
 2. Own-port check (decision 19) for `Exact` ports.
 3. `start_connect(GuardedIntent { cluster, action: PortForward, label: "Port-forward {target}:{port}", risk: Change, expected_name: None, kind: Connect(ConnectIntent { object, fields: [remote_port, local_port], open: PortForward(..) }) })`.
-4. `open`: insert or reuse the row (`Starting`), `connection = slot_live(&cluster).connection().clone()` (0027), `ClusterRuntime::subscribe(connection.port_forward(permit, request, control_rx), cx, apply, on_closed)` on the `PortForwards` entity.
+4. `open`: insert or reuse the row (`Starting`), `connection = slot_live(&cluster)?.connection().clone()` (0027; `slot_live` is private in `app_shell.rs` on main, so the same `pub(crate)` accessor 0030 step 4 needs for `checked_write`), `ClusterRuntime::subscribe(connection.port_forward(permit, request, control_rx), cx, apply, on_closed)` on the `PortForwards` entity.
 
 Restart = Stop + `start_forward(existing)`; Retry and Start (preset) = `start_forward(existing)`. The 20-forward cap is checked in step 2 (`Stop a forward first (20 running)`).
 
@@ -54,8 +54,8 @@ Restart = Stop + `start_forward(existing)`; Retry and Start (preset) = `start_fo
 
 | Event | Effect |
 |---|---|
-| Cluster switch (0026) or 0027 slot released | nothing: forwards keep running on their own connection clone; their rows keep the cluster label (0026 decision 1 amended; 0036 shells close instead) |
-| Lock toggled on (viewed cluster) | `PortForwards` observes the session lock and sends `Refuse` to that cluster's running forwards: new local connections are closed, open ones continue, rows show `Paused · read-only`; unlock sends `Accept`. Start/Restart/Retry show `{cluster} is read-only`. A cluster that leaves the view keeps its last control |
+| Cluster switch (0026 `release_all`) or 0027 slot released (`release_slot`) | nothing: forwards keep running on their own connection clone; their rows keep the cluster label (0026 decision 1 amended; 0036 shells close instead). Neither path touches `PortForwards`, and forwards add no `leaving_work` line |
+| Lock toggled on (viewed cluster) | `PortForwards` observes each slot session's `lock` (0030 step 2b, in flight; the merged `ClusterSession::guard` still derives the lock from the profile) and sends `Refuse` to that cluster's running forwards: new local connections are closed, open ones continue, rows show `Paused · read-only`; unlock sends `Accept`. Start/Restart/Retry show `{cluster} is read-only`. A cluster that leaves the view keeps its last control |
 | Kubeconfig credentials rotate | handled by the kube client of the held connection |
 | App quit | `PortForwards` dropped with `AppShell`; runtime shutdown aborts the tasks (existing 2 s timeout) |
 | Pod deleted | transport reconnect (forward-transport.md step 7) |

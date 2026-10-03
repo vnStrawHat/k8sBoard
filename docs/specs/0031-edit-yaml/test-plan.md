@@ -1,6 +1,6 @@
 # 0031 · Test plan
 
-[Back to index](README.md). All tests run offline on fixtures and the 0030 `FakeApi` transport. **No test, probe, or agent run sends a mutating verb (dry-run included) to any cluster.** Agent runs never set `K8SBOARD_ALLOW_WRITES`. Fixture values are distinctive strings (`s3cr3t-env`, `c2VjcmV0`), so tests can assert they are absent.
+[Back to index](README.md). Refreshed 2026-10-03 (main `2c7dc08`): the session `kind_access` tests moved from step 1 to step 3 (the app half of the lazy checks waits for 0030 2b). All tests run offline on fixtures and the 0030 `FakeApi` transport. **No test, probe, or agent run sends a mutating verb (dry-run included) to any cluster.** Agent runs never set `K8SBOARD_ALLOW_WRITES`. Fixture values are distinctive strings (`s3cr3t-env`, `c2VjcmV0`), so tests can assert they are absent.
 
 ## Step 0
 
@@ -20,8 +20,9 @@
 | `placeholder_survives_reordering` | containers and uniquely named env entries reordered → `Ok` |
 | `duplicate_env_names_match_by_index` | two `env` items named `X`: matched by index; paths read `env[0]`, `env[1]` |
 | `unchanged_text_is_no_changes`, `changed_paths_use_names_and_quoted_keys` | |
-| `update_check_is_lazy_not_in_all`, `review_checks_reviews_the_given_list` (`FakeApi`) | `Update(Deployment)` → `update deployments`; one SSAR per given check |
-| `kind_access_runs_once_per_kind_and_scope` (`cluster_session_tests.rs`) | second screen show → no new review; scope change → cleared |
+| `update_check_is_lazy_not_in_all`, `review_access_for_reviews_the_given_list` (`FakeApi`) | `Update(Deployment)` → `update deployments`; one SSAR per given check |
+| `lazy_checks_survive_several_scope` (`FakeApi`) | scope `Several([a, b])`: `all_of` keeps `Update(Deployment)` (regression: it filtered on `ALL`) |
+| `object_kind_resource_matches_the_api_resource` | `resource()` equals `api_resource(kind)` group and plural for every `ObjectKind::ALL` entry |
 | `edit_base_reads_one_object` (`FakeApi`) | one `GET` |
 
 ## Step 2 (`FakeApi`)
@@ -42,10 +43,12 @@
 | `preview_lists_field_changes`, `changes_are_capped` | |
 | `preview_checks` | Rollout (Deployment, StatefulSet `OnDelete`), `StaleLastApplied` when the annotation exists, none for a plain ConfigMap |
 | `request_rejects_a_foreign_edit`, `replace_access_check_is_update`, `manual_debug_shows_names_only` | |
+| `rbac_names_use_the_path_segment_rule` | `system:aggregate-to-admin` ClusterRole → `Some`; `a/b`, `..`, `a%2F`, `a?b` → `None`; a Deployment named `a:b` → `None` (DNS rule) |
+| `failed_fresh_read_is_never_outcome_unknown` | GET 500 on a commit → `Cluster(..)`, zero `PUT` |
 
 ## Step 3 (app, no server write)
 
-`diff_rows_fold_unchanged_runs`, `diff_rows_number_both_sides`, `edit_yaml_is_not_shipped_in_step_3` (gate → `Comes in a later version`), `editor_marks_dirty_on_change`, `env_toggle_disabled_while_dirty`, `apply_while_clean_does_nothing`, `ctrl_s_runs_local_checks_only`, `local_error_stays_on_editor_tab`, `format_sorts_keys_and_keeps_header`, `navigation_with_changes_asks_to_discard`, `cluster_switch_with_changes_asks_to_discard`, `ctrl_s_is_bound_in_yaml_edit`, `screen_edit_yaml_diff_parses`. Window tests use fixtures; there is no connection call and no recorded `PUT`.
+`kind_access_runs_once_per_kind_and_scope` (`cluster_session_tests.rs`: second screen show → no new review; scope change → cleared), `lazy_gate_reads_kind_access` (missing → `Checking permissions…`; denied → `Not permitted: update deployments`), `edit_yaml_offered_only_on_editable_kinds` (Node, Helm release, custom kind → `NotOffered`), `menus_e_and_palette_share_the_arm` (menu item and palette dispatch the E key action), `row_keys_inert_while_editing`, `release_of_the_edited_cluster_asks_first` (switch, view change, Remove from view → one `leaving_work` dialog; Stay keeps the slot), `diff_rows_fold_unchanged_runs`, `diff_rows_number_both_sides`, `edit_yaml_is_not_shipped_in_step_3` (gate → `Comes in a later version`), `editor_marks_dirty_on_change`, `env_toggle_disabled_while_dirty`, `apply_while_clean_does_nothing`, `ctrl_s_runs_local_checks_only`, `local_error_stays_on_editor_tab`, `format_sorts_keys_and_keeps_header`, `navigation_with_changes_asks_to_discard`, `cluster_switch_with_changes_asks_to_discard`, `ctrl_s_is_bound_in_yaml_edit`, `screen_edit_yaml_diff_parses`. Window tests use fixtures; there is no connection call and no recorded `PUT`.
 
 ## Step 4
 
@@ -62,7 +65,7 @@
 | `rebase_lists_server_changes` | `server_changed` = the server's paths; the side panel shows them |
 | `audit_records_paths_only` (`audit_log_tests.rs`) | `Edit YAML`, no `value` keys |
 | `preview_never_reaches_audit_or_notice` | no preview text in the audit line or the notification |
-| `commit_rechecks_the_row_cluster` | 0030 pattern |
+| `commit_rechecks_the_row_cluster` | 0030 pattern: a cursor in slot B → guard, tier, connection, and audit of B, never the primary |
 
 ## Live check (coder-lite, UAT, read-only, denied path only; debug build, step 4)
 

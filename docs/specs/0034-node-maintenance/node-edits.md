@@ -11,7 +11,7 @@
 
 ## Menu (W5 order)
 
-`Open node shell` (S) · `Cordon`/`Uncordon` (C) · `Drain…` (D) · separator · `Edit taints…` · `Edit labels…` · `View pods on node` · `View YAML` (Y) · separator · `Copy name`.
+`Open node shell` (S) · `Cordon`/`Uncordon` (C) · `Drain…` (D) · separator · `Edit taints…` · `Edit labels…` · `View pods on node` · `View YAML` (Y) · separator · `Copy name`; the 0027 `Filter by this cluster` tail stays (multi mode). On main `node_menu` reads: Open node shell, View YAML, View pods on node, separator, Cordon, Drain, separator, Copy name. Mutating items are `action_item`s without `on_click`; their arms in `run_available_row_key` open the dialogs for the cursor node (0032 decision 31).
 
 | Item | `ResourceAction` | Gate (`ObjectKind::Node`) |
 |---|---|---|

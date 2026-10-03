@@ -6,17 +6,17 @@
 
 | Entry | Targets (`delete_scope`) |
 |---|---|
-| Row and ⋯ menus: last item, danger, Del hint, `kind.delete_label()`; on a checked row with ≥ 2 checked: `Delete {n} {plural}…` | the row, or the checked set |
+| Row and ⋯ menus (`pod_menu`, `node_menu` gain it; `kind_menu` replaces its disabled item): last item, danger, Del hint, `kind.delete_label()`; on a checked row with ≥ 2 checked: `Delete {n} {plural}…`. No `on_click`: the item dispatches the Del key action, which runs on the cursor, and a right click has moved the cursor to that row (0027) | the cursor row, or the checked set |
 | Del, and ⌘⌫ on macOS (`cmd-backspace` → `Delete` in `WORKSPACE`, `#[cfg(target_os = "macos")]` binding list) | the cursor row, or the checked set when the cursor row is checked and ≥ 2 are checked |
 | Selection bar (0009/0032): `Delete…` danger button, last before ✕, every screen (step 3) | the checked set |
-| Palette (0029) `> Delete…` | the palette subject |
+| Palette (0029) `> Delete…` | the cursor row (the palette dispatches the Del key action; a disabled entry never runs) |
 
 ```rust
 /// Pure. Which objects a delete covers (decision 21). `Err` is the disabled reason (0032 `bulk_intent` texts).
 pub(crate) fn delete_scope(subject: &ClusterObject, checked: &[ClusterObject]) -> Result<Vec<ClusterObject>, SharedString>;
 ```
 
-Errors reuse the 0032 texts: `Select rows of one cluster`, `Select at most 50 rows`. Gate: `action_availability(Delete, guard_for(cluster))` with the lazy `AccessCheck::Delete(kind)`, `mutates: true`, `ActionRisk::Destructive`. It is shipped in step 2 for single deletes; the bulk entries come in step 3. A disabled entry shows its reason; Del shows the 0028 notice.
+Errors reuse the 0032 texts: `Select rows of one cluster`, `Select at most 50 rows`. Gate: `action_availability(Delete(kind), guard)` with `guard = guard_for(&subject.cluster)` (the cursor's slot, never the primary), the lazy `AccessCheck::Delete(kind)` (read from `ClusterGuard.kind_access`, 0031), `ActionGate::Mutating`, `ActionRisk::Destructive`. All four entries end in the `Delete(_)` arm of `run_available_row_key` (decision 27); the selection bar calls `start_delete` with the checked set after the same gate. It is shipped in step 2 for single deletes; the bulk entries come in step 3. A disabled entry shows its reason; Del shows the 0028 notice. `checked` comes from 0032's `checked_rows`, mapped to `ClusterObject`s of the screen's slots.
 
 ## Building the batch
 
@@ -30,7 +30,7 @@ fn delete_warnings(kind: ObjectKind, targets: &[DeleteTarget], live: &LiveCluste
 ```
 
 1. Gate first: a disabled gate sends no request.
-2. `object_identity` for each target, **sequentially** on the runtime. 404 → `already_gone`. Any other error stops: `Could not read {name} to pin its uid ({error}); nothing was deleted` (decision 3).
+2. `object_identity` for each target, **sequentially** on the runtime, on the connection of the scope's one cluster (`slot_live(&cluster)?.connection()`; 0030 open item 7). 404 → `already_gone`. Any other error stops: `Could not read {name} to pin its uid ({error}); nothing was deleted` (decision 3).
 3. Every target gone → notice `{name} was already deleted` / `All {n} objects were already deleted`. Otherwise `run_guarded(GuardedIntent { action: Delete, label, risk: Destructive, expected_name, kind: GuardedKind::Batch(BatchPlan { items, skipped: vec![], extras: BatchExtras::Delete { propagation: Background, already_gone, warnings }, on_failure: BatchFailure::Continue }), warnings, on_commit: None })`.
    - `label`: `Delete pod` (single) or `Delete 12 pods`.
    - `expected_name`: `Some(object name)` for a single delete, `None` (the cluster name) for bulk (decision 10).

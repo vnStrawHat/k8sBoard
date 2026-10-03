@@ -1,6 +1,8 @@
 # 0034 — Node maintenance
 
-Status: draft, amended after the advisor review (M2, M3, S2–S6, nice-to-haves). Builds strictly on 0030 as amended (decisions 30–36: `checked_write`, `CommitMode::Commit { confirmed }`, `GuardedIntent.warnings`, `WriteEffect`, `TooManyRequests`, 429 audit rule) and on 0032 (`GuardedKind::Batch`). 0030 already ships single-node Cordon/Uncordon; this spec does not redo it. Prerequisites merged: 0030, 0032, 0013, 0009, 0028; 0036 optional (dock tabs). Roadmap: gap plan 0034; C3, C8, C10; R2. Wireframes: W5 (node menu, selection bar, Edit labels), W6 (drain dialog), keyboard map (C, D).
+Status: draft, amended after the advisor review (M2, M3, S2–S6, nice-to-haves); **refreshed 2026-10-03 against main `2c7dc08`**. Builds strictly on 0030 as amended (decisions 30–36: `checked_write`, `CommitMode::Commit { confirmed }`, `GuardedIntent.warnings`, `WriteEffect`, `TooManyRequests` (merged), 429 audit rule) and on 0032 (`GuardedKind::Batch`, `RowAction`, one entry point). 0030 step 4 ships single-node Cordon/Uncordon (the C arm); this spec does not redo it. Roadmap: gap plan 0034; C3, C8, C10; R2. Wireframes: W5 (node menu, selection bar, Edit labels), W6 (drain dialog), keyboard map (C, D).
+
+**Prerequisites.** Merged: 0009, 0013, 0027, 0028, 0030 steps 1/2a/3. Step 1 (crate) any time after 0032 step 1 (shared `object_write.rs` seam). Step 2: 0030 steps 2b + 4 (in flight), 0032 2a-i + 2b. Step 3b: 0036 step 3a (`Dock`, `DockTab`; no longer optional: the rename lands early in lane W2). Lane W2, last spec.
 
 **User approval (C3):** Approved by the user on 2026-10-02 (one approval for all mutating specs). Step 1 sends nothing (fake transport); steps 2, 3a, and 3b add real commits (bulk cordon, taints, labels; drain-dialog cordon; evictions). Debug builds still block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only.
 

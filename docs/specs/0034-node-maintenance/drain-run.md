@@ -1,6 +1,6 @@
 # 0034 · Drain run, retries, cancel, progress tab
 
-[Back to index](README.md) · Step 3b · Modules: `drain_run.rs` (new: pure state machine + driver) + `drain_run_tests.rs`, `drain_tab.rs` (new), dock (`dock.rs` from 0036, or `log_dock.rs`). Decisions 25–36, 39–41. Wireframe: W6 note 5, W5 note 4.
+[Back to index](README.md) · Step 3b · Modules: `drain_run.rs` (new: pure state machine + driver) + `drain_run_tests.rs`, `drain_tab.rs` (new), `dock.rs` (0036 step 3a), `app_shell.rs` / `app_shell_view.rs` (`leaving_work` line), `audit_log.rs`. Decisions 25–36, 39–41, 45. Wireframe: W6 note 5, W5 note 4.
 
 ## Phases
 
@@ -65,13 +65,13 @@ A `DryRun` step: success or 429 → the dry-run is recorded and the pod stays `P
 - Every node cordoned in phase 1 **stays cordoned**; nothing is uncordoned automatically.
 - Pending and refused pods stay on their node; later nodes are not drained.
 - The tab shows `Cancelled · {k} of {n} evicted on wk-04 · cordoned: wk-04, wk-05` and an `Uncordon {m} nodes` button (a 0032 `Batch` with its own dialog).
-- Lock or session change mid-run behaves like Cancel, with the reason in the title. App exit ends the run the same way (open item 3).
+- Lock or session change mid-run behaves like Cancel, with the reason in the title (the next `checked_write` returns `Blocked`). A switch or slot release asks first through `leaving_work`, then stops the run and closes the tab (decision 45). App exit ends the run the same way (open item 3).
 
 ## Audit
 
 - Every cordon and accepted or failed eviction commit writes its own line through `checked_write` (0030), with the dialog note.
 - **Not audited** (0030 decision 36): a commit refused with 429 (each retry would add a line; nothing changed), a `Blocked` result, dry-runs, polls.
-- **One summary line per node** when the node ends (S4, decision 39): action `Drain`, object the Node, fields `evicted`, `refused`, `failed`, `skipped` (counts as values), outcome `drained`, `stuck`, `cancelled`, or `stopped`, the dialog note. Written by the driver with 0030 `append_audit` (an `AuditEntry` built by a `drain_summary_entry` helper in `audit_log.rs`), after the last commit of that node. Nodes never reached write no line.
+- **One summary line per node** when the node ends (S4, decision 39): action `Drain`, object the Node, fields `evicted`, `refused`, `failed`, `skipped` (counts as values), outcome `drained`, `stuck`, `cancelled`, or `stopped`, the dialog note. Written by the driver with the merged `append_audit` (an `AuditEntry` built by a `drain_summary_entry` helper in `audit_log.rs`; `AuditOutcome` gains `Drained`, `Stuck`, `Cancelled`, `Stopped` beside the merged `Applied`, `Failed`, `Unknown`), after the last commit of that node. Nodes never reached write no line.
 
 ## Driver (async)
 
@@ -96,7 +96,7 @@ loop {
 
 ## Progress tab (dock)
 
-- `DockTab::Drain(Entity<DrainTab>)` (0036 `Dock`; if 0036 is not merged, this spec does its `LogDock → Dock` rename step first). Title `Drain wk-04` / `Drain 3 nodes`; one running drain per cluster.
+- `DockTab::Drain(Entity<DrainTab>)` (0036 `Dock`), with `cluster()` so the merged `close_tabs_of(cluster)` closes it when its slot is released (decision 45). Title `Drain wk-04` / `Drain 3 nodes`; one running drain per cluster.
 - Header: node list with state (`Waiting`, `Cordoning`, `Evicting 12/23`, `Drained`, `Stuck`, `Cancelled`); kit `Progress` (gone / to evict) for the current node; `Timeout in 3:12`.
 - Rows per pod: `{ns}/{name}` mono + state text: `Waiting`, `Evicting…`, `Refused by PDB: {message} · retry in 8 s (attempt 3)`, `Terminating`, `Gone`, `Failed: {error}`, `Skipped: {reason}`. Bad and warn rows first.
 - Buttons: `Cancel` (danger outline) while running; after the end `Uncordon {m} nodes` and `Close`. The tab's ✕ and Ctrl W are disabled while running (`Cancel the drain first`).

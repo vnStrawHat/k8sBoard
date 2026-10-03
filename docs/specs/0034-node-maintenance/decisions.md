@@ -6,7 +6,7 @@
 |---|---|---|
 | 1 | Eviction is `create_subresource("eviction")` with our own `policy/v1` body; `kube::Api::evict` is not used (stays disallowed) | kube 4.2 serializes `delete_options` in snake case, so grace and the uid precondition would be ignored; `Evict` is implemented only for typed `Pod` |
 | 2 | Every eviction carries `deleteOptions.preconditions.uid` | StatefulSet pods reuse names; a retry must never evict the replacement (0030 decision 14) |
-| 3 | 429 is a new `WriteError::TooManyRequests { message, retry_after }`, on dry-run and commit | the PDB answer is an expected wait, not a failure and never an unknown outcome |
+| 3 | 429 is `WriteError::TooManyRequests { message, retry_after }` (merged in 0030 step 1), on dry-run and commit. 0034 changes its `message` to the first `causes[].message`, else the status message (main uses the status message only) | the PDB answer is an expected wait, not a failure and never an unknown outcome; the cause names the budget |
 | 4 | Taint edits are a merge patch of the full list with `metadata.resourceVersion` | `spec.taints` has no merge key; the list is replaced, so a concurrent change must be a 409, not a silent loss |
 | 5 | `NodeTaint` keeps `timeAdded` and the editor sends it back unchanged | the node lifecycle controller times `NoExecute` evictions from it |
 | 6 | Label edits are a per-key merge patch without `resourceVersion` | keys are independent; only changed keys are sent |
@@ -47,3 +47,5 @@
 | 41 | The eviction response is decoded as `Status`; a non-`Success` body is an error from its code and message (M2) | the API can answer HTTP 201 with a `Failure` body (two PDBs) |
 | 42 | Taint 409 Retry reopens the editor fresh with a notice | re-applying stale rows could resurrect a removed taint |
 | 43 | Step 3 splits into 3a (plan, dialog, dry-runs, Cordon only) and 3b (run, evictions, tab) (S5) | the eviction commit path is reviewed and approved on its own |
+| 44 | (refresh 2026-10-03) `Drain` (`ActionGate::Planned` on main), `EditTaints`, `EditLabels` become `Mutating`; each has a `RowAction` (D is bound; the two editors get unbound unit actions) and one `run_available_row_key` arm; menu items have no `on_click` (0032 decisions 30–31) | menus, keys, palette agree; the D arm is where 0028 left it |
+| 45 | (refresh) A switch or slot release of the drain's cluster (0027 `release_all` / `release_slot`, which close that cluster's dock tabs) stops the run like Cancel: `leaving_work` (0031/0036) lists `A drain on {cluster} will stop`; on confirm the run ends `stopped` (per-node summary lines), the tab closes with the slot, and the notification `Drain stopped: {cluster} is no longer open` stays | the tab cannot outlive its session; a silent stop would hide cordoned nodes |

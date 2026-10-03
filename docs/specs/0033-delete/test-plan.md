@@ -32,13 +32,16 @@
 | `uncontrolled_pod_warns`, `finalizer_lines`, `dependents_text_per_owner_kind` | |
 | `pod_pending_without_finalizers_reads_grace_period` | `{label}: terminating (grace period)`; a Deployment → `terminating` |
 | `delete_gate_order` | shipped → `Checking permissions…` (lazy) → `Not permitted: delete pods` → `{cluster} is read-only` |
+| `delete_not_offered_on_helm_releases_or_custom_kinds` | `subject_action(Delete, ..)` is `None`; the menu item stays `Comes in a later version`; no identity read |
+| `menu_palette_and_del_share_the_arm` | right click on row 3 of slot B, menu Delete → scope is row 3 of B; palette entry → same arm |
+| `delete_uses_the_cursor_slot` | 0027 fixture: cursor in cluster B → identity read, guard, tier, and audit of B, never the primary |
 | `delete_always_opens_a_dialog` | both tiers, single and bulk |
 | `single_type_name_expects_the_object_name` | TypeName → `expected_name` = `api-x` |
 | `identity_404_shows_already_deleted`, `identity_error_stops_before_the_dialog` | no `run_guarded`; zero `DELETE` |
 | `single_delete_is_a_one_item_batch` | `GuardedKind::Batch` with one item, `BatchExtras::Delete` |
 | `propagation_change_rebuilds_items_and_reruns` (window) | Orphan → `Running`; new items carry `Orphan` |
 | `held_enter_does_not_delete`, `uid_conflict_notice` | |
-| `delete_records_propagation_only` (`audit_log_tests.rs`) | key allow-list; Secret target: redacted error, no value |
+| `delete_records_propagation_only` (`audit_log_tests.rs`) | key allow-list; Secret or ConfigMap target: path kept, value dropped by `recordable_fields`, redacted error |
 | `del_key_runs_start_delete`, `cmd_backspace_is_bound_on_macos` (`keymap_tests.rs`, `cfg(target_os = "macos")` on the expectation only) | |
 | `screen_delete_confirm_parses` | |
 

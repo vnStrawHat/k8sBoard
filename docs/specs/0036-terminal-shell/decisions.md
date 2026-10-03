@@ -55,3 +55,11 @@
 | 30 | In the terminal, Ctrl Shift C is copy, not the cluster switcher | the terminal convention wins where the user types |
 | 31 | Ctrl K, N, W, C, Tab go to the program on Windows and Linux; Ctrl W closes a tab only outside the terminal; Esc never un-zooms from the terminal (Ctrl Shift M does) | core shell keys and vim |
 | 32 | Out of scope: Attach (moves out of 0036 to a later item), node shell and debug containers (0037), Settings › Terminal & Shell | W2 draws no Terminal & Shell content |
+
+## Baseline (refresh 2026-10-03, main `2c7dc08`)
+
+| # | Decision | Rationale |
+|---|---|---|
+| 35 | `ActionGate::Mutating` holds a list of checks; the first denied one is the reason, and a `get`/`create` pair on one subresource reads `get and create {resource}/{sub}` (exec-transport.md) | 0035 and 0037 need two to five checks per action; one rule for all |
+| 36 | One entry for the plain open: the `OpenShell` arm of `run_available_row_key` (S, palette, dock "Shell into selected"); the container submenu keeps `on_click` with the row's `RowContext` | 0028 left the arm to this spec; an argument cannot travel through a key action |
+| 37 | The "{N} shells will close" confirm is one `leaving_work` dialog asked by `switch_cluster`, `view_clusters`, and `remove_from_view` before `release_all` / `release_slot` run; it lists only the leaving clusters' shells (0031 adds unsaved edits, 0034 a running drain, 0037 node shells) | the 0027 releases cannot wait for a dialog once started; one dialog instead of one per feature |

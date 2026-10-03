@@ -1,6 +1,6 @@
 # 0032 · Batch: the one bulk mechanism
 
-[Back to index](README.md) · Step 2b · Modules: `write_flow.rs` (+ tests), `confirm_dialog.rs`, `row_selection.rs`, `value_popover.rs`. Decisions 19–25. Owned by 0032; used by 0033 (bulk delete, `BatchExtras::Delete`) and 0034 (bulk cordon). Builds on 0030 `run_guarded` and `checked_write` (0030 write-flow.md, decisions 30–36).
+[Back to index](README.md) · Step 2b · Modules: `write_flow.rs` (+ tests), `confirm_dialog.rs`, `row_selection.rs`, `table_view.rs`, `value_popover.rs`. Decisions 19–25. Owned by 0032; used by 0033 (bulk delete, `BatchExtras::Delete`), 0032b, and 0034 (bulk cordon). Builds on 0030 `run_guarded` and `checked_write` (0030 write-flow.md, decisions 30–36; step 4 in flight: `GuardedKind` lands there without `Batch`, which this step adds).
 
 ## Types
 
@@ -19,7 +19,9 @@ pub(crate) enum BatchExtras {
     Delete { propagation: DeletePropagation, already_gone: Vec<SharedString>, warnings: Vec<SharedString> },
 }
 pub(crate) const MAX_BATCH_ITEMS: usize = 50;
-/// A ticked row with its own cluster (0027 `ClusterObject`) and its `KindObject` or `NodeSummary`.
+/// A ticked row with its own cluster (0027 `ClusterObject`) and its `KindObject` or `NodeSummary`. The ticks live in
+/// `table_view.rs` (`checked: HashSet<RowName>`, private, `RowName { cluster, namespace, name }`); step 2b adds
+/// `checked_rows<T: TableRow>(&self, items: &[T]) -> Vec<usize>` so a delegate maps them to its slot items.
 pub(crate) struct CheckedRow<'a> { pub(crate) cluster: &'a ClusterRef, pub(crate) object: CheckedObject<'a> }
 /// Builds the `GuardedIntent { kind: Batch(plan), .. }` with `on_failure: Continue`; `Err` is the button's disabled reason.
 pub(crate) fn batch_intent(rows: &[CheckedRow], action: ResourceAction, label: SharedString, risk: ActionRisk,
@@ -59,7 +61,7 @@ pub(crate) fn batch_intent(rows: &[CheckedRow], action: ResourceAction, label: S
 
 ## Selection bar (`row_selection.rs`)
 
-`bulk_actions(screen)` returns `KindAction`s; each button is gated like the menu item (gate of the ticked rows' cluster, then `batch_intent`). Disabled → tooltip with the reason.
+On main `bulk_actions(screen) -> &'static [&'static str]` returns labels that render disabled (`NOT_SHIPPED_REASON`). Step 2b returns `KindAction`s; each button is gated like the menu item (the gate of the ticked rows' cluster through `guard_for`, then `batch_intent`). Disabled → tooltip with the reason. 0033 (`Delete…`) and 0034 (Nodes) extend the same table.
 
 | Screen | Buttons → item per row |
 |---|---|

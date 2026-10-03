@@ -14,6 +14,7 @@
 | `evict_429_still_processing_carries_ten_seconds` | cause `The disruption budget api-pdb is still being processed by the server.`, `retryAfterSeconds: 10` → `retry_after: Some(10 s)`; a 429 without causes falls back to the status message |
 | `evict_429_on_dry_run_is_too_many_requests` | same on `DryRun`, never `Cluster(..)` |
 | `commit_429_is_never_outcome_unknown` | 429 on `Commit` → `TooManyRequests` |
+| `too_many_requests_message_is_the_first_cause` | `map_status` change: a 429 with causes → the first cause message for every operation (the merged mapping used the status message) |
 | `evict_uid_conflict_is_conflict` | 409 → `Conflict` |
 | **`evict_201_with_failure_status_is_an_error`** | HTTP 201 with body `{"kind":"Status","status":"Failure","code":500,"message":"This pod has more than one PodDisruptionBudget…"}` → `Cluster(..)` with that text; a 201 `Failure` with code 429 → `TooManyRequests` |
 | `evict_success_reports_created` | 201 `Success` → `effect: Created`, `created_name: None` |
@@ -68,7 +69,7 @@
 | `refusals_are_not_audited` | no audit line for a `TooManyRequests` commit (`checked_write` test, temp config dir) |
 | **`node_end_writes_one_summary_line`** | drained, stuck, cancelled, stopped → one `Drain` line each with `evicted`/`refused`/`failed`/`skipped` counts; a node never reached writes none |
 
-Window tests: `drain_dialog_requires_the_node_name_on_prod`, `drain_of_several_nodes_types_the_cluster_name`, `held_enter_does_not_drain`, `skip_pdbs_is_disabled_with_reason`, `cordon_only_sends_no_eviction`, `drain_tab_cannot_close_while_running`, `second_drain_on_the_cluster_is_disabled`, `d_key_opens_the_dialog`, `drain_button_disabled_until_step_3b` (3a), `cordon_only_commits_through_checked_write`.
+Window tests: `drain_uses_the_cursor_slot` (0027 fixture: node of cluster B → guard, connection, tier, and audit of B), `slot_release_stops_the_drain` (`leaving_work` line, then run `stopped`, one summary line per reached node, tab closed, notification kept), `node_menu_items_dispatch_their_keys` (right-clicked node → the D arm runs on it), `drain_dialog_requires_the_node_name_on_prod`, `drain_of_several_nodes_types_the_cluster_name`, `held_enter_does_not_drain`, `skip_pdbs_is_disabled_with_reason`, `cordon_only_sends_no_eviction`, `drain_tab_cannot_close_while_running`, `second_drain_on_the_cluster_is_disabled`, `d_key_opens_the_dialog`, `drain_button_disabled_until_step_3b` (3a), `cordon_only_commits_through_checked_write`.
 
 ## Live checks (coder-lite, UAT, read-only, denied path only; debug build)
 

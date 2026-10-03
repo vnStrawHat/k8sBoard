@@ -23,7 +23,7 @@
 | `creates_report_the_created_name` | response `metadata.name` → `effect: Created`, `created_name: Some(..)` |
 | `rerun_strips_controller_fields` | no `spec.selector`, no `manualSelector`, none of the four controller labels, no owner refs, `spec.suspend: false`; base ≤ 51 |
 | `create_422_keeps_field_paths_only` | 422 with causes on Trigger/Re-run → `Invalid { fields }`, message is the fixed text (no server text) |
-| `read_failure_before_send_is_never_outcome_unknown` | GET 500 on a Commit of Trigger → `Cluster(..)`, zero POST |
+| `read_failure_before_send_is_never_outcome_unknown` | GET 500 on a Commit of Trigger, Re-run, and Roll back → `Cluster(..)`, zero POST/PATCH (the merged `write_error` would say `OutcomeUnknown`) |
 | `access_check_matches_each_operation` | kind × operation → check; SSAR attributes |
 | `changed_fields_hold_names_and_numbers_only` | Roll back `rev 37 (api-6c1e2a)`; creates show `generateName` text; no template text |
 | `manual_debug_shows_names_only` (extended) | no timestamp, replicas, template, or body in `{:?}` |
@@ -33,11 +33,13 @@
 
 ## Step 2a-i
 
+`RowAction` commit (no behavior change; the 0028/0029 tests pass unchanged apart from types): `subject_action_resolves_the_carried_kind` (`Scale` on a Deployment row → `Scale(Deployment)`, on a DaemonSet → `None`, `OpenShell` on a node → `OpenNodeShell`), `every_resource_action_has_a_row_action`, `every_offered_row_action_maps` (0029, on `RowAction`).
+
 `resource_actions_tests.rs`: `gate_reads_the_carried_kind` (`Scale(StatefulSet)` → `Not permitted: patch statefulsets/scale`), `action_availability_stays_two_argument` (compile-level: existing callers unchanged), `gate_order_then_row_block` (Locked wins over paused), `row_block_table`, `state_labels_follow_the_row`, `actions_not_offered_for_other_kinds`, `gate_and_confirm_use_the_rows_cluster` (extended).
 
 `workload_actions_tests.rs`: `scale_to_zero_is_destructive`, `scale_down_warns`, `hpa_warning_only_when_targeting_and_loaded`, `on_delete_warning_for_restart`, `trigger_warnings_follow_policy_and_active_jobs` (Allow, Forbid, Replace × 0/1 active; exact S9 texts), `restart_timestamp_is_whole_seconds`, `previous_revision_is_the_highest_below_current`, `intents_carry_warnings_in_guarded_intent`.
 
-Window tests: `r_restarts_the_cursor_row` (dialog opens; key trigger), `trigger_notice_names_the_created_job`.
+Window tests: `r_restarts_the_cursor_row` (dialog opens; key trigger), `menu_item_dispatches_the_key_on_the_right_clicked_row` (right click on row 3 of slot B, `Restart rollout` → the dialog names row 3 and cluster B), `palette_runs_the_same_arm`, `trigger_notice_names_the_created_job`.
 
 ## Step 2a-ii
 
@@ -49,7 +51,7 @@ Window tests: `r_restarts_the_cursor_row` (dialog opens; key trigger), `trigger_
 
 ## Step 2b — Batch (`write_flow_tests.rs`, `row_selection` tests)
 
-`batch_requires_one_cluster`, `batch_caps_at_fifty`, `batch_skips_rows_with_a_row_block`, **`batch_apply_needs_every_dry_run_to_pass`**, `batch_dry_runs_are_sequential_and_unaudited`, `batch_continues_after_a_failed_commit`, `batch_stops_when_blocked` (lock between items → rest `Not sent`), `batch_audits_each_commit` (temp config dir, N lines), `batch_list_honours_expected_name`, `bulk_suspend_label_reads_resume_when_all_suspended`, `bulk_actions_follow_the_wireframe`, `bulk_roll_back_is_disabled_with_reason`.
+`checked_rows_follow_the_ticks` (`table_view` tests), `batch_requires_one_cluster`, `batch_caps_at_fifty`, `batch_skips_rows_with_a_row_block`, **`batch_apply_needs_every_dry_run_to_pass`**, `batch_dry_runs_are_sequential_and_unaudited`, `batch_continues_after_a_failed_commit`, `batch_stops_when_blocked` (lock between items → rest `Not sent`), `batch_audits_each_commit` (temp config dir, N lines), `batch_list_honours_expected_name`, `bulk_suspend_label_reads_resume_when_all_suspended`, `bulk_actions_follow_the_wireframe`, `bulk_roll_back_is_disabled_with_reason`.
 
 ## Live checks (coder-lite, UAT, read-only, denied path only; debug build)
 

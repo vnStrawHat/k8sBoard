@@ -52,7 +52,8 @@
 | 3a | `header_shows_auto_until_started` | `Auto`, then `bash` after the OSC 7770 fixture |
 | 3b | `typing_sends_encoded_bytes` | `press("l")`, `press("ctrl-c")` → `l`, `0x03` |
 | 3b | `ended_session_ignores_input` | after `Exited`, `press("a")` sends nothing |
-| 4 | `switch_with_open_shells_asks_first` | two Shell tabs + `switch_cluster` → dialog "2 shells will close"; Esc keeps both tabs |
+| 4 | `switch_with_open_shells_asks_first` | two Shell tabs + `switch_cluster` → one `leaving_work` dialog "2 shells will close"; Esc keeps both tabs |
+| 4 | `slot_release_closes_only_its_shells` | 0027 fixture, shells in A and B, `remove_from_view(B)` → dialog "1 shell will close"; confirm → B's tab closed by `close_tabs_of`, A's runs |
 
 ## Keys (`keymap_tests.rs`, extended)
 
@@ -69,6 +70,9 @@
 | Test | Checks |
 |---|---|
 | `open_shell_needs_get_and_create` | both allowed → Enabled; one denied → `Not permitted: get and create pods/exec`; checking or unknown → disabled |
+| `multi_check_gate_names_the_first_denied_check` | `[CreatePods, DeletePods]` with delete denied → `Not permitted: delete pods`; one-item lists read as on main |
+| `open_shell_uses_the_cursor_slot` | 0027 fixture: cursor pod in cluster B → guard, permit, connection, tier, and audit of B, never the primary |
+| `s_menu_dock_and_palette_share_the_arm` | S, palette, and dock "Shell into selected" reach the `OpenShell` arm; the submenu item opens its own container |
 | `open_shell_follows_the_0030_gate` | locked → `{cluster} is read-only`; `confirm_step` gets `Change` |
 | `start_connect_never_opens_when_blocked` | locked at confirm time, dialog cancelled, or no permit → `open` not called, no audit line |
 | `start_connect_audits_one_line_without_bytes` | 0030 `AuditEntry` keys; fields `container`, `command` only |

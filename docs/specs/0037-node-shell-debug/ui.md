@@ -9,10 +9,10 @@
 | Pod row / drawer ⋯ "Open shell ▸" submenu (W4 note 2) | last item after a separator: `Debug container…` with muted `ephemeral` | `DebugContainer` |
 | 0036 Shell tab ended with `NoShell` | header button `Debug container…` | same, prefilled with that container |
 | Node row / drawer ⋯ (W5) | `Open node shell` (S) | `OpenNodeShell` |
-| S on a node row (0028), palette `>` Open node shell (0029) | same | same |
+| S on a node row (0028), palette `>` Open node shell (0029) | the `OpenNodeShell` arm of `run_available_row_key` for the cursor node (its own slot) | same |
 | Session goes Live with leftovers of other instances | notice `{n} leftover node shell pods` · `Review…` | sweep dialog ([session-flow.md](session-flow.md)) |
 
-`ResourceAction::DebugContainer` is new; `OpenNodeShell` exists (today gated on `CreatePodExec`, replaced). Both `mutates: true`, shipped in steps 2 and 3.
+`ResourceAction::DebugContainer` is new (with a `RowAction` and an unbound unit action); `OpenNodeShell` exists (on main `Mutating { CreatePodExec, is_shipped: false }`, replaced). Both use 0036's multi-check `Mutating` gate, shipped in steps 2 and 3 (decisions 28–29).
 
 ## Gate rows (0030 `action_availability`, order kept)
 
@@ -54,7 +54,7 @@ Continue → `run_guarded(GuardedIntent { cluster, action, label, risk, expected
 | Debug container | `Add debug container to {pod}` | `Change` | `None` (cluster name when TypeName) |
 | Node shell | `Open node shell on {node}` | `Privileged` | `Some(node)` |
 
-`confirm_step` (0030, extended): `Privileged` → `DialogConfirm::TypeName { expected }` for every mode; the dialog primary button uses the danger variant. The 0030 confirm dialog shows the dry-run line and `changed_fields` (e.g. `spec.hostPID → true`, `…privileged → true`). After a successful start, `debug_image` and `node_shell_namespace` are written to the cluster's registry entry when they differ from the stored value.
+`confirm_step` (merged in 0030 step 2a, extended): `Privileged` → `DialogConfirm::TypeName { expected }` for every mode; the dialog primary button uses the danger variant. The 0030 confirm dialog shows the dry-run line and `changed_fields` (e.g. `spec.hostPID → true`, `…privileged → true`). After a successful start, `debug_image` and `node_shell_namespace` are written to the cluster's registry entry when they differ from the stored value.
 
 ## Settings (0024 keys, 0025 W2 Clusters › Safety)
 

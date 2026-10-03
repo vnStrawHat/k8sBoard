@@ -1,6 +1,6 @@
 # 0032b · Files to touch
 
-[Back to index](README.md). **S** is the step. Each step passes the gate on its own; every new item has a production user in its step. Prerequisites: 0030 (with decisions 30–36), 0032, 0013, 0014 merged. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs). No Cargo or clippy change.
+[Back to index](README.md). **S** is the step. Each step passes the gate on its own; every new item has a production user in its step. Baseline main `2c7dc08`. Prerequisites: 0030 steps 2b + 4 and 0032 merged (step 1: only 0032 step 1); 0013, 0014 are on main. Steps 3 and 4 add the `ExpandClaim` / `SetDefaultStorageClass` arms the same way as step 2. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs). No Cargo or clippy change.
 
 ## `crates/cluster` (step 1)
 
@@ -16,7 +16,7 @@ The operations are `pub` through `WriteOperation`, so step 1 has no dead code be
 | S | File | Change |
 |---|---|---|
 | 2 | `src/value_popover.rs` (0032, + tests) | `ValueForm::ReplicaRange { min, max }`; validation texts |
-| 2 | `src/resource_actions.rs` (+ tests) | `EditHpaRange` (gate `PatchHorizontalPodAutoscalers`) |
+| 2 | `src/resource_actions.rs` (+ tests), `src/keymap.rs`, `src/keyboard_navigation.rs` | `EditHpaRange` (gate `PatchHorizontalPodAutoscalers`), its `RowAction`, unbound unit action, and arm (opens the popover on the cursor row) |
 | 2 | `src/resource_edits.rs` (new) + `resource_edits_tests.rs` | `hpa_range_intent`, warnings |
 | 2 | `src/resource_kind.rs`, `src/row_selection.rs` (+ tests) | `KindAction.action` for `Edit min / max…`; HPAs selection-bar `Edit limits` |
 | 3 | `src/value_popover.rs`, `src/resource_edits.rs`, `src/resource_actions.rs` | `ValueForm::Storage { input }` (trimmed); `expand_intent`; `ExpandClaim` gate and `row_block` |

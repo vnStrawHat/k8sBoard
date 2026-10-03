@@ -1,18 +1,25 @@
 # 0031 · Cluster crate: the edit model
 
-[Back to index](README.md) · Steps 0–1 (rebase: step 4; `format_yaml`: step 3) · Modules: `object_yaml.rs`, `object_edit.rs` (new) + `object_edit_tests.rs`, `edit_placeholders.rs` (new) + `edit_placeholders_tests.rs`, `access_review.rs`, `lib.rs`; app `cluster_session.rs`. Decisions 5–8, 12–13, 17, 21, 24–25.
+[Back to index](README.md) · Steps 0–1 (rebase: step 4; `format_yaml`: step 3; session `kind_access`: step 3) · Modules: `object_yaml.rs`, `object_edit.rs` (new) + `object_edit_tests.rs`, `edit_placeholders.rs` (new) + `edit_placeholders_tests.rs`, `access_review.rs`, `lib.rs`; app `cluster_session.rs`, `write_guard.rs`, `resource_actions.rs` (step 3). Decisions 5–8, 12–13, 17, 21, 24–25, 27–28.
 
 ## Step 0: `object_yaml.rs` refactor (no behavior change)
 
+Today `object_yaml()` does the GET inline (`self.run(ACTION, api.get(..))`), and the private `mask_to_yaml(object, env, extra)` strips `managedFields`, masks, sorts (`sort_all_objects`), serializes with `yaml_text`, and prefixes `with_hidden_header`. Step 0 splits it; `yaml_text`, `with_hidden_header`, and `HIDDEN` stay where they are.
+
 ```rust
-pub(crate) fn mask_object(object: &mut Value, env: EnvValues) -> MaskCount;       // today's rules
-pub(crate) fn to_yaml_text(object: &Value, header: Option<&str>) -> Result<String, &'static str>; // sort + serialize
+pub(crate) struct MaskCount { pub(crate) hidden: usize, pub(crate) hidden_env_values: usize }
+/// Today's rules, `extra` included (custom objects); also strips `managedFields` and sorts the keys.
+pub(crate) fn mask_object(object: &mut Value, env: EnvValues, extra: impl FnOnce(&mut Value) -> usize) -> MaskCount;
+/// `yaml_text` (merged) plus an optional comment header (the edit header); `None` = no header.
+pub(crate) fn to_yaml_text(object: &Value, header: Option<&str>) -> Result<String, &'static str>;
 impl ClusterConnection {
     pub(crate) async fn get_object(&self, object: &ObjectRef, action: &'static str) -> Result<Value, ClusterError>;
 }
 ```
 
-`to_masked_yaml` = `mask_object` + `to_yaml_text` with the 0007 hid-count header. Golden test `masked_yaml_output_is_unchanged`: every 0007 fixture's text is byte-equal to a copy captured before the split (committed with step 0). `ObjectKind::{ALL, resource}` come from 0030 (0032 architect's amendment).
+`mask_to_yaml` = `mask_object` + `yaml_text` + `with_hidden_header` (the 0007 path, unchanged). The edit paths use `to_yaml_text`. Golden test `masked_yaml_output_is_unchanged`: every 0007 fixture's text is byte-equal to a copy captured before the split (committed with step 0).
+
+`ObjectKind::{ALL, resource, is_editable}` are new in step 1 (not on main): `ALL` every variant in declaration order; `resource(self) -> (&'static str /* group */, &'static str /* plural */)`, a static table checked against `api_resource(kind)` by a test; `is_editable` per decision 25.
 
 ## Step 1 API (`object_edit.rs`)
 
@@ -88,6 +95,8 @@ pub fn rebase(old: &EditBase, text: &str, new: &EditBase) -> Result<Rebased, Edi
 
 ## Lazy write checks (decision 24)
 
-- `AccessCheck::Update(ObjectKind)` → `("update", resource().group, resource().plural, None, kind.is_namespaced())`, shown `update deployments`. **Not** in `ALL`.
-- Crate: `ClusterConnection::review_checks(&self, checks: &[AccessCheck], scope: NamespaceScope) -> Result<AccessReport, ClusterError>`. This is today's `review_access` body over a given list; `review_access` calls it with `ALL`.
-- Session (app, `cluster_session.rs`): `kind_access: HashMap<ObjectKind, KindAccess>` with `KindAccess = Checking | Known(AccessReport) | Unknown`. `request_kind_access(kind)` runs once per kind and scope when a screen of that kind is first shown (or when a menu, key, or palette entry needs it). It reviews `Update(kind)` for editable kinds; 0033 appends `Delete(kind)` to the same request. A scope change clears the map. `AccessState` lookup for a lazy check reads this map; `Checking` → `Checking permissions…`.
+- `AccessCheck::Update(ObjectKind)` → `("update", resource().0, resource().1, None, kind.is_namespaced())`, shown `update deployments`. **Not** in `ALL` (36 entries on main; other specs add theirs). `AccessCheck` stays `Copy + Eq` (`ObjectKind` is).
+- Crate (step 1): `pub async fn review_access_for(&self, checks: &[AccessCheck], scope: NamespaceScope) -> Result<AccessReport, ClusterError>` holds today's `review_access` body over a given list (the private `review_checks(checks, namespace)` stays the per-namespace helper); `review_access(scope)` calls it with `ALL`.
+- **Fix with it**: `AccessReport::all_of` iterates `AccessCheck::ALL`, so for a `Several` scope it would drop every lazy check. It takes the reviewed list instead (`all_of(checks, reports)`). Test `lazy_checks_survive_several_scope`.
+- Session (app, step 3, after 0030 2b also edits `ClusterSession`): `kind_access: HashMap<ObjectKind, KindAccess>` with `KindAccess = Checking { _task } | Known(AccessReport) | Unknown`. `request_kind_access(kind)` runs once per kind and scope when a screen of that kind is first shown (or when a menu, key, or palette entry needs it); it reviews `Update(kind)` for editable kinds; 0033 appends `Delete(kind)` to the same request. A scope change clears the map.
+- Gate (app, step 3): `ClusterGuard` (merged: `cluster`, `access`, `lock`, `profile`, `summary`) gains `kind_access: &'a HashMap<ObjectKind, KindAccess>`, filled by `ClusterSession::guard`. `resource_actions::permission_reason` reads it for `Update(_)` / `Delete(_)`: missing or `Checking` → `Checking permissions…`, `Unknown` → `Permissions could not be checked`, denied → `Not permitted: update deployments`.

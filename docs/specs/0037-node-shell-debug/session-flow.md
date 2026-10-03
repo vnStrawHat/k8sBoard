@@ -50,12 +50,12 @@ The tab subscribes `connection.attach_shell(permit, request, input)` like 0036's
 
 ## Cleanup (node shell; decisions 12–13)
 
-`write_flow::run_cleanup(cleanup, cx)`: **commit only** (no dry-run; 0030 decision 5 lists it) of `DeleteNodeShellPod` on the held connection; **no** gate, lock, tier, or dialog; one audit line (`Delete node shell pod`). `NodeShellCleanup` is built only from this run's created pod or from a sweep row (a listed pod carrying the k8sBoard node-shell labels, with its uid), so the bypass covers nothing else. At most once per tab (`Option::take`).
+`write_flow::run_cleanup(cleanup, cx)` (the second named caller of `ClusterConnection::write` beside `checked_write`; README open item 9): **commit only** (no dry-run; 0030 decision 5 lists it) of `DeleteNodeShellPod` on the held connection; **no** gate, lock, tier, or dialog; one audit line (`Delete node shell pod`). `NodeShellCleanup` is built only from this run's created pod or from a sweep row (a listed pod carrying the k8sBoard node-shell labels, with its uid), so the bypass covers nothing else. At most once per tab (`Option::take`).
 
 | Event | Cleanup |
 |---|---|
 | Shell exits (`Exited`), attach fails after the create, wait fails | at once |
-| Tab closed (×, Ctrl W), dock `close_all` (0026 switch, 0027 slot release) | at once (the tab's release handler) |
+| Tab closed (×, Ctrl W), dock `close_all` (0026 switch, `release_all`) or `close_tabs_of` (0027 `release_slot`), both after the `leaving_work` confirm | at once (the tab's release handler, on its held connection) |
 | **Main window close** (`Window::on_window_should_close`) | returns `false` while deletes are pending, shows `Removing node shell pods…`, closes the window when they finish (each bounded by `REQUEST_TIMEOUT`, 30 s); no GPUI timeout applies here |
 | App quit by another path (`on_app_quit`) | best effort within GPUI's 200 ms `SHUTDOWN_TIMEOUT` (gpui `app.rs:78`, shared by all quit futures); `stdinOnce` exit and the sweep cover the rest |
 
@@ -73,6 +73,6 @@ The ephemeral container needs no delete: dropping the attach closes stdin and `s
 ## Leftover sweep (decision 18)
 
 - Every app run has a random `instance` id (`random_suffix` × 2); node shell pods carry `k8sboard.io/instance: {id}`.
-- When a session goes Live and `list pods` is allowed: one read-only list over the session scope with selector `app.kubernetes.io/managed-by=k8sboard,k8sboard.io/purpose=node-shell,k8sboard.io/instance!={id}`, **any phase**.
+- When a slot first goes Live (0027 `on_first_live(cluster)`) and `list pods` is allowed there: one read-only list over the session scope with selector `app.kubernetes.io/managed-by=k8sboard,k8sboard.io/purpose=node-shell,k8sboard.io/instance!={id}`, **any phase**.
 - `n > 0` → a notice `{n} leftover node shell pods` with `Review…`: a dialog lists `{ns}/{name}`, node, phase, age, with the warning `Running pods may belong to another k8sBoard window or user.`; checkboxes default on for finished pods, off for running ones; `Delete selected` is the click confirmation.
 - Deletes go through `run_cleanup` (one audit line each), only when the cluster is unlocked and `delete pods` is allowed; otherwise the button shows the gate reason. Never automatic.

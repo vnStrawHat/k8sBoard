@@ -4,9 +4,9 @@
 
 ## Opening
 
-- Triggers: menu `Drain…`, key D (cursor node), selection bar `Drain…` (ticked nodes, the 0032 `batch_intent` selection rules: one cluster, ≤ 50). Every trigger opens the dialog; nothing runs from a key.
+- Triggers: menu `Drain…`, key D, and the palette all end in the `Drain` arm of `run_available_row_key` (cursor node, its own slot); selection bar `Drain…` (ticked nodes, the 0032 `batch_intent` selection rules: one cluster, ≤ 50). Every trigger opens the dialog; nothing runs from a key.
 - Gate: `action_availability(Drain, guard)` (`CreatePodEviction`), then the shell check: a drain running on this cluster → `A drain is already running on {cluster}`.
-- Loading, on the runtime: `drain_pods(node)` per node and one `list_pod_disruption_budgets()`; rows show `Loading pods…`. A failure shows `Could not list pods on {node}: {error}` and Drain stays disabled.
+- Loading, on the runtime, on `slot_live(&cluster)?.connection()` (never the primary): `drain_pods(node)` per node and one `list_pod_disruption_budgets()`; rows show `Loading pods…`. A failure shows `Could not list pods on {node}: {error}` and Drain stays disabled.
 
 ## Plan (pure)
 
@@ -81,7 +81,7 @@ Row: `Grace period` select `Pod default` · `10 s` · `30 s` · `60 s` · `120 s
 - Per-pod result: success keeps the local text, except that it **downgrades** a local `Blocked` or `Waits` guess to `Dry-run accepted` (ok tone: the server would evict it now); `TooManyRequests` → `Blocked by PDB: {message}` (server truth); any other error → `Failed: {error}` (bad).
 - Aggregate for `commit_block`: `Running` until all finished; `Failed` when a cordon dry-run failed or an eviction dry-run failed with anything but 429; else `Passed`. A 429 is an expected wait, not a failure.
 - Dry-run line: `Server dry-run: cordon passed · 21 of 23 evictions accepted, 2 refused by PDB`.
-- Confirm: risk `Destructive`; tier from `confirm_step` (0030). `expected` = the node name for one node (W6, 0030 decision 10), the cluster display name for several. Enter rules of 0030 (held Enter never confirms). Confirming builds 0030 `confirmed(&aggregate, typed, generation)`; `None` keeps both buttons disabled.
+- Confirm: risk `Destructive`; tier from the merged `confirm_step(guard.profile.confirm, ActionRisk::Destructive, expected)`. `expected` = the node name for one node (W6, 0030 decision 10), the cluster display name for several. Enter rules of 0030 (held Enter never confirms). Confirming builds 0030 `confirmed(&aggregate, typed, generation)`; `None` keeps both buttons disabled.
 - `Cordon only` (gated `PatchNodes`): needs the same `Confirmed`; commits `SetNodeSchedulable { false }` per uncordoned node through `checked_write(WriteStep { intent: <cordon GuardedIntent>, mode: Commit { confirmed }, .. })`, then closes. No eviction is sent.
 - `Drain …`: closes the dialog and starts the run (drain-run.md) with the plan, options, generation, the `Confirmed`, and the note. In step 3a the button is shown disabled with `Comes in a later version`; step 3b enables it.
 - The drain dialog is a W6 front end, not a `GuardedKind`: it reuses `confirm_step`, `TypedMatch`, `confirmed()`, the 0030 Enter rules, and sends every request through `checked_write`, so lock, generation, and audit stay in one place.

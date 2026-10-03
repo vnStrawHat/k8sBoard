@@ -4,7 +4,7 @@
 
 ## Actions
 
-`ResourceAction` gains `EditHpaRange`, `ExpandClaim`, `SetDefaultStorageClass` (single-kind, no carried kind; two-argument `action_availability`, 0030 decision 35). `KindAction.action` is set for the W7 items `Edit min / max…`, `Expand…`, `Set as default`.
+`ResourceAction` gains `EditHpaRange`, `ExpandClaim`, `SetDefaultStorageClass` (single-kind, no carried kind; two-argument `action_availability`, 0030 decision 35), each with its `RowAction` and an unbound unit key action (0032 decision 30). `KindAction.action` is set for the W7 items `Edit min / max…`, `Expand…`, `Set as default` (on main they are `KindAction::named`, rendered disabled `Comes in a later version`). The items are `row_action_item`s without `on_click`; their `run_available_row_key` arms open the popover or build the intent for the cursor row (0032 decision 31), so the palette lists them too.
 
 | Action | `row_block` reason (after the gate) |
 |---|---|

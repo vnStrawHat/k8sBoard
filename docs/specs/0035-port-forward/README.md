@@ -1,6 +1,6 @@
 # 0035 — Port-forward and the Port Forwarding page
 
-Status: draft, HEAD `1c859ae`. **Mutating (connect verb). C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still refuse a forward unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. Lands after 0030 (gate, tiers, audit, `run_guarded`, kill switch), 0036 (kube `ws`, `ConnectIntent`, `start_connect`), 0024 (presets key), 0026/0027 (switch, slots). Wireframes: W4b note 4 (Forward next to each port), W7 "Port Forwarding" (page, drawer), W7 Services/Deployments/StatefulSets "Port-forward ▸", status bar `⇄ N port-forwards`, keyboard F.
+Status: draft; **refreshed 2026-10-03 against main `2c7dc08`**. **Mutating (connect verb). C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still refuse a forward unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. Prerequisites: merged 0024, 0026, 0027, 0028, 0029, 0030 steps 1/2a/3 (kill switch `WritePolicy`); step 1 needs 0036 step 1 (kube `ws`); step 3a needs 0030 steps 2b + 4 (in flight: `run_guarded`, session `lock`) and 0036 step 4 (`ConnectIntent`, `start_connect`, multi-check gate, `RowAction`). Lane W2, after 0036. Wireframes: W4b note 4 (Forward next to each port), W7 "Port Forwarding" (page, drawer), W7 Services/Deployments/StatefulSets "Port-forward ▸", status bar `⇄ N port-forwards`, keyboard F.
 
 ## Goal
 
@@ -21,7 +21,7 @@ UDP; binding any non-loopback address (never `0.0.0.0` or `::`); forwarding seve
 |---|---|---|
 | 1 | Cluster crate: `GetPodPortForward`, `PortForwardPermit`, `port_forward.rs` (resolve, listener, per-connection socket, counters, reconnect, upgrade errors); fake tests | 1–4, 6 |
 | 2 | App: `port_forwards.rs` entity (pure state, presets, port choice), `Screen::PortForwarding` page and drawer with fixture rows, status bar; `--screen port-forwards` | 1, 2, 7, 8, 11 |
-| 3a | Guarded start: `ConnectOpen::PortForward` in `run_guarded`, `start_forward`, Stop/Restart/Retry/Start, Forward buttons (W4b, Services), audit, lock pause; UAT denied path. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 9, 10, 13 |
+| 3a | Guarded start: `ConnectOpen::PortForward` in `run_guarded`, `start_forward`, Stop/Restart/Retry/Start, Forward buttons (W4b, Services; `drawer::port_row` states replace `port_forward_reason`), the `PortForward` arm of `run_available_row_key`, audit, lock pause; UAT denied path. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 9, 10, 13 |
 | 3b | Menus (`Port-forward ▸`), F, palette, New forward, Change local port…, Remove preset… dialogs | 1, 2, 9 |
 
 ## Files
@@ -44,7 +44,7 @@ UDP; binding any non-loopback address (never `0.0.0.0` or `::`); forwarding seve
 - [ ] 6. A pod that disappears triggers at most 5 re-resolve attempts (1, 5, 15, 30, 60 s); success → Active with a "reconnected" event; exhaustion → `Target lost`.
 - [ ] 7. A busy fixed local port shows `Port N in use`, a Windows-reserved one (`PermissionDenied`) `Port N is reserved by the system`, both with Retry; an auto port moves to the next free one in both cases.
 - [ ] 8. Forwards survive a cluster switch and a 0027 slot release; quitting the app closes every listener.
-- [ ] 9. Every start, restart, retry, and preset start runs the target cluster's 0030 gate and tier and appends one audit line (no traffic data, no per-connection lines).
+- [ ] 9. Every start, restart, retry, and preset start runs the target cluster's 0030 gate and tier (`guard_for(&forward.cluster)`, never the primary) and appends one audit line (no traffic data, no per-connection lines).
 - [ ] 10. On UAT the SSAR answers for `get` and `create pods/portforward` are recorded; Forward buttons, menus, F, and the page Start show `Not permitted: get and create pods/portforward`; **no portforward request is ever sent** (trace).
 - [ ] 11. Colors come from theme tokens only (0003 grep clean).
 - [ ] 12. ui-verifier: `--screen port-forwards` (fixture rows, drawer open) matches W7 Port Forwarding with no high-severity defect.

@@ -41,3 +41,13 @@
 | 23 | Commits are sequential through `checked_write`; `Blocked` stops the loop; a per-object error goes on. **Progress in the dialog is best-effort**; the loop survives the dialog closing, and the final notification is the source of truth | 0030 decision 16, 0032 sequence |
 | 24 | One audit line per object with `deleteOptions.propagationPolicy`; the note is shared | C10 |
 | 25 | (decided) RBAC: `AccessCheck::Delete(kind)` is **lazy per kind** (0031 decision 24): reviewed when a screen of the kind is first shown, cached in the session report | no session-start burst; the dry-run stays the precise check |
+
+## Baseline (refresh 2026-10-03, main `2c7dc08`)
+
+| # | Decision | Rationale |
+|---|---|---|
+| 26 | `ResourceAction::Delete(ObjectKind)` carries its kind (0030 decision 35). `subject_action(RowAction::Delete, subject)`: Pod → `Delete(Pod)`, Node → `Delete(Node)`, `Kind { kind }` → `kind.builtin_object()`, **except `HelmReleases` (its spec reads `Secret`) and custom kinds → `None`**. Their menu item stays `disabled_menu_item(kind.delete_label(), NOT_SHIPPED_REASON)` | a release row's name is not a Secret name; deleting "the Secret" would hit the wrong object or none; `Uninstall` is 0038 |
+| 27 | One entry: the `Delete(_)` arm of `run_available_row_key` calls `start_delete(delete_scope(subject, checked))`. Menu items are `row_action_item`s without `on_click`, labelled `kind.delete_label()` (or `Delete {n} {plural}…` on a checked row); a right click has moved the cursor to that row (0027) | menus, Del, ⌘⌫, and the palette cannot diverge (0032 decision 31) |
+| 28 | `WriteRequest::new` keeps the merged DNS-1123 rule, with 0031 decision 27 for the RBAC kinds | the name is a path segment that kube does not encode |
+| 29 | The audit `fields` value of `deleteOptions.propagationPolicy` is dropped for Secret and ConfigMap targets by the merged `recordable_fields` (`PATH_ONLY_KINDS`); the path stays | neither kind owns dependents, so the value is always `Background`; no special case in `audit_log.rs` |
+| 30 | A slot release or switch during a bulk delete needs no extra hook: the next item's `checked_write` re-resolves `guard_for` and returns `Blocked` (`{cluster} is no longer open; nothing was changed`), which stops the loop | 0030 `commit_block` already covers it |

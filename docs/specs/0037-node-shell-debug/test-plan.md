@@ -45,9 +45,11 @@
 
 | Test | Checks |
 |---|---|
-| `node_shell_gate_table` | missing checks, setting off (`Node shell is off for …`), Windows node, locked |
+| `node_shell_gate_table` | missing checks (first denied; attach pair text), setting off (`Node shell is off for …`, read from `guard.profile`), Windows node (`system.operating_system`), locked |
+| `s_on_a_node_menu_and_palette_share_the_arm` | S, the node menu item, and the palette reach the `OpenNodeShell` arm for the cursor node |
 | `node_shell_tab_label_matches_w5` | `›_ node shell · wk-03 (debug pod)` |
-| `cleanup_on_exit_close_switch_and_failure` | each event → one delete with the pod uid |
+| `cleanup_on_exit_close_switch_and_failure` | exit, tab close, switch (`release_all`), slot release (`release_slot`, 0027), start failure → one delete each with the pod uid, on the held connection, after the `leaving_work` confirm where one applies |
+| `sweep_runs_on_each_slots_first_live` | two viewed clusters → one leftover list per slot (`on_first_live`), each on its own connection |
 | `cleanup_404_counts_as_done` | no error notice |
 | `window_close_waits_for_pending_deletes` | `on_window_should_close` returns false while a delete is pending, then closes after it finishes |
 | `quit_hook_is_best_effort` | `on_app_quit` starts pending deletes; nothing waits past GPUI's timeout |

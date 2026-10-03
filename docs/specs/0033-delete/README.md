@@ -1,6 +1,8 @@
 # 0033 — Delete
 
-Status: draft, amended after the advisor review (M1, S1–S5, N1–N3), HEAD `1c859ae`. **Mutating.** Step 1 sends no write. **Steps 2 and 3 send real deletes. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. Requires: 0030 with the 0032 architect's amendments (`GuardedIntent.warnings`, `WriteOutcome.effect` / `WriteEffect`, `ObjectKind::{ALL, resource}`, the delete exception to the field manager); 0032's `checked_write` and `GuardedKind::Batch(BatchPlan)`; 0031 step 1 (lazy per-kind write checks); 0028 (Del); 0009 (row checks, selection bar). Secrets wait for 0016; 0027 is optional. Roadmap: gap plan 0033 (delete part); C1, C3, C8, C10; R1, R2.
+Status: draft, amended after the advisor review (M1, S1–S5, N1–N3); **refreshed 2026-10-03 against main `2c7dc08`**. **Mutating.** Step 1 sends no write. **Steps 2 and 3 send real deletes. C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. Roadmap: gap plan 0033 (delete part); C1, C3, C8, C10; R1, R2.
+
+**Prerequisites.** Merged: 0009 (ticks, selection bar), 0016, 0027, 0028 (Del offered on every subject), 0030 steps 1/2a/3. Before step 1: 0031 steps 0–1 (`get_object`, `ObjectKind::{ALL, resource}`, lazy `Update(kind)`, `review_access_for`). Before step 2: 0030 steps 2b + 4 (in flight: `run_guarded`, `checked_write`, `GuardedIntent.warnings`, `confirm_dialog.rs`), 0031 step 3 (session `kind_access`, `ClusterGuard.kind_access`), 0032 2a-i (`RowAction`) and 2b (`GuardedKind::Batch`, `checked_rows`). Lane W1, after 0031.
 
 ## Goal
 
@@ -15,7 +17,7 @@ Status: draft, amended after the advisor review (M1, S1–S5, N1–N3), HEAD `1c
 
 ## Non-goals
 
-Restart pod (0032 or a follow-up), Evict (0034), force delete or a grace-period choice, removing finalizers, `deletecollection`, delete by selector, undo, optimistic row removal, and cross-cluster bulk.
+Restart pod (0032 or a follow-up), Evict (0034), force delete or a grace-period choice, removing finalizers, `deletecollection`, delete by selector, undo, optimistic row removal, cross-cluster bulk, custom resources (0018: no `ObjectKind`), and Helm releases (`Uninstall release…` is 0038, deferred).
 
 ## Implementation steps
 
@@ -40,7 +42,7 @@ Restart pod (0032 or a follow-up), Evict (0034), force delete or a grace-period 
 - [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists and passes offline. No test talks to a real cluster.
 - [ ] 3. Request shape: `DELETE {path}/{name}`, no query, JSON body `{"propagationPolicy":…,"preconditions":{"uid":…}}` (+ `"dryRun":["All"]`). No `fieldManager` and no `resourceVersion` precondition (0030 decision 14). The `propagationPolicy` string equals `DeletePropagation::as_str`.
 - [ ] 4. A uid mismatch (409) reads `A new object with this name exists; nothing was deleted`. `WriteRequest::new` refuses an empty uid. A refused identity read stops before the dialog.
-- [ ] 5. Delete is enabled only when shipped, the lazy `delete {resource}` check allows it, and the row's cluster is unlocked. Menus, Del/⌘⌫, the palette, and the selection bar agree.
+- [ ] 5. Delete is enabled only when shipped, the lazy `delete {resource}` check allows it, and the row's own cluster (`ClusterObject.cluster`, never the primary) is unlocked. Menus, Del/⌘⌫, and the palette run the one `Delete(_)` arm of `run_available_row_key`; the selection bar reads the same gate. Helm release and custom-kind rows keep their item disabled (`Comes in a later version`) and Del does nothing there.
 - [ ] 6. Every delete opens the dialog. On TypeName tiers, a single delete types the object name and a bulk delete the cluster name. On `Click` tiers the focused danger primary confirms by click or Enter; a held Enter never confirms.
 - [ ] 7. Owner kinds show the propagation radio. Changing it rebuilds the batch items and reruns the dry-run. Other kinds send `Background`.
 - [ ] 8. Finalizer hints before and after the commit. A pod reads `{label}: terminating (grace period)`.
@@ -54,3 +56,5 @@ Restart pod (0032 or a follow-up), Evict (0034), force delete or a grace-period 
 1. R2: no write-capable cluster. Commits are proven only by fake-transport tests.
 2. 0030 open item 5 applies to the lazy checks: with scope All, namespace-only `delete` rights show as denied.
 3. Roles that grant `delete` without `get` cannot delete through k8sBoard (no uid to pin). This is on purpose (decision 3).
+4. Helm release rows: their kind spec reads `ObjectKind::Secret`, so a naive `Delete(builtin_object())` would target a Secret with the release's name. `subject_action(Delete, ..)` excludes `HelmReleases` and custom kinds explicitly (decision 26); `Uninstall release…` waits for 0038.
+5. RBAC names with `:` follow 0031 decision 27 (path-segment rule for the four RBAC kinds), pending the user's answer to 0031 open item 6.

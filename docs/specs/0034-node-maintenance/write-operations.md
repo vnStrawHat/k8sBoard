@@ -47,7 +47,7 @@ Query: `fieldManager=k8sboard`; dry-run adds `dryRun=All`. The eviction REST han
 
 | Status (HTTP or body `code`) | Mapping |
 |---|---|
-| 429 | 0030 `TooManyRequests { message, retry_after }` on both modes (never `OutcomeUnknown`: the server refused). `message` = first `causes[].message`, else the status message; `retry_after` = `details.retryAfterSeconds` when > 0, else `None` |
+| 429 | the merged `TooManyRequests { message, retry_after }` on both modes (never `OutcomeUnknown`: the server refused). `retry_after` = `details.retryAfterSeconds` when > 0, else `None` (as merged). **Changed by 0034**: `message` = first `causes[].message`, else the status message (main: the status message), in `map_status` for every operation |
 | 409 on `EvictPod` | `Conflict` (0030): the uid precondition failed, so the pod with that uid is gone |
 | 409 on `SetNodeTaints` | `Conflict`: the node changed since it was read; Retry reopens the editor fresh (node-edits.md) |
 | 404 | `NotFound` |

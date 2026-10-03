@@ -18,7 +18,7 @@
 | 12 | Restart and Roll back of a paused Deployment are disabled | kubectl refuses both |
 | 13 | Risk: Scale to 0 is `Destructive`; everything else `Change`; scaling down adds a warning | zero takes a workload down; a smaller drop deserves a visible line, not a harder confirm |
 | 14 | No drawer replicas input (S1); one Scale popover serves the menu, ⇧S, the palette fallback, and the bulk button | W7 note 4: no action buttons in the drawer; one input surface |
-| 15 | Palette inline argument on `Ctrl ⏎`; plain ⏎ on Scale falls back to the popover; `secondary-enter` bound in `CommandPalette` only | W9 shows `Ctrl ⏎` on Scale; 0029 decision 18 reserved it |
+| 15 | Palette inline argument on `Ctrl ⏎`; plain ⏎ on Scale falls back to the popover; `secondary-enter` bound in `Command > Input` (the merged palette context) only | W9 shows `Ctrl ⏎` on Scale; 0029 decision 18 reserved it |
 | 16 | Palette `Roll back to rev {n}` only from loaded revisions | 0029 data rule: no new list calls |
 | 17 | Warnings use 0030 `GuardedIntent.warnings`: HPA, scale-down, OnDelete, CronJob concurrency (S9 texts) | non-blocking context the dry-run cannot give |
 | 18 | The HPA warning uses the HPA list only when already loaded | no new watch for a hint (open item 2) |
@@ -33,3 +33,5 @@
 | 27 | 422 on Roll back is `Conflict` (a failed `test` op means the Deployment was replaced) (S7) | the user needs "reload", not "invalid" |
 | 28 | 422 on Trigger now and Re-run shows field paths only | the server text can quote env literals of the template |
 | 29 | Implementation is split into 2a-i (gate, simple actions, `checked_write` use), 2a-ii (Scale popover, palette), 2a-iii (Roll back), 2b (Batch) (S5) | each step reviewable and gated on its own |
+| 30 | (refresh 2026-10-03) The 0028 key layer, the menu hints, and the palette name a kind-less `RowAction`; `subject_action(row, subject) -> Option<ResourceAction>` resolves the carried kind (actions-ui.md) | a kind-carrying `ResourceAction` has no value before the subject is known; no placeholder kind, one exhaustive map per layer |
+| 31 | (refresh 2026-10-03) One entry per action: its arm of `run_available_row_key`. Menu items without an argument have no `on_click`; they dispatch the key action, which runs on the cursor (a right click moves it, 0027) | menus, keys, and palette agree by construction; 0028 left one arm per owning spec |

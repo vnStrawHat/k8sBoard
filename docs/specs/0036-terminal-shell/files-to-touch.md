@@ -1,6 +1,6 @@
 # 0036 · Files to touch
 
-[Back to index](README.md). **S** is the step; each passes the gate on its own. Builds on 0028 (keymap, actions, `key_availability`), 0016 (`secret_clipboard`), 0030 (gate, confirm, audit, allow-list), and 0026 (switch teardown).
+[Back to index](README.md). **S** is the step; each passes the gate on its own. Baseline main `2c7dc08`: 0016 (`secret_clipboard`), 0026/0027 (`release_all`, `release_slot`, `close_tabs_of`), 0028 (`keymap.rs`, `key_availability_of`), 0030 steps 1/2a/3 (`WritePolicy`, `ActionGate`, `audit_log.rs`). Step 3a after 0030 steps 2b + 4; step 4 after 0032 2a-i.
 
 ## Cargo (needs user approval)
 
@@ -30,12 +30,13 @@
 | 2 | `src/main.rs` | `mod terminal_session; mod terminal_element;` (step 3a: `log_dock` → `dock`, `shell_tab`; step 3b: `terminal_input`) |
 | 3b | `src/terminal_input.rs` (new) | `key_to_vt`, paste encoding, mouse and wheel handling; tests in module |
 | 3a | `src/shell_tab.rs` (new) + `shell_tab_tests.rs` | `ShellTarget` (`cluster: ClusterRef`), `ShellState`, `ShellEnd`, `ShellTab` view, header, Clear, Reconnect, session wiring, headless render; step 3b adds Find, the paste dialog, copy |
-| 3a | `src/log_dock.rs` → `src/dock.rs` (rename alone in its own mechanical commit first) | `Dock`, `DockTab`, `open_shell`, the 8-tab cap, key context `"Dock"`; every `LogDock` user renamed (`app_shell.rs`, `workspace.rs`, `resource_actions.rs`, `pod_table.rs`, `pod_drawer.rs`, `screenshot.rs`, tests) |
-| 3b | `src/keymap.rs` (+ `keymap_tests.rs`) | registered after every 0028 binding; `TerminalCopy`, `TerminalPaste`, `TerminalFind`, `CloseTerminalFind`; the `Terminal` bindings and `NoAction`s; `WORKSPACE` gains `!Terminal`; `LogDock > Input` → `Dock > Input`; sheet rows for copy, paste, Find |
+| 3a | `src/log_dock.rs` → `src/dock.rs` (rename alone in its own mechanical commit first, merged at once) | `Dock`, `DockTab` (+ `cluster()`), `open_shell`, the 8-tab cap, key context `"Dock"`; every `LogDock` / `log_dock` user renamed: `app_shell.rs`, `app_shell_view.rs`, `workspace.rs`, `resource_actions.rs`, `keyboard_navigation.rs`, `keymap.rs`, `pod_table.rs`, `pod_drawer.rs`, `issue_table.rs`, `overview.rs`, `log_tab.rs`, `launch_options.rs`, `screenshot.rs`, `main.rs`, and the tests (`app_shell*_tests.rs`, `keymap_tests.rs`, `launch_options_tests.rs`) |
+| 3b | `src/keymap.rs` (+ `keymap_tests.rs`) | registered after every 0028 binding (and after the `FIELDS` loop); `TerminalCopy`, `TerminalPaste`, `TerminalFind`, `CloseTerminalFind`; the `Terminal` bindings and `NoAction`s; `WORKSPACE` gains `!Terminal`; `LogDock > Input` → `Dock > Input`; sheet rows for copy, paste, Find |
 | 4 | `src/write_flow.rs` (0030) | `ConnectIntent`; `start_connect` as a thin wrapper over 0030 `run_guarded` (`GuardedKind::Connect`) |
 | 4 | `crates/cluster` allow-list (0030 `write-path.md` table and grep) | the `pods/exec` row; `pod_shell.rs` in the expected file list |
-| 4 | `src/resource_actions.rs` (+ tests) | `OpenShell` gate on `GetPodExec` and `CreatePodExec`, `mutates: true`, shipped; the "Open shell ▸" container submenu; `default_shell_container` |
-| 4 | `src/app_shell.rs` | the `OpenShell` handler opens a Shell tab through `start_connect`; `switch_cluster` asks "{N} shells will close" when `dock.shell_tab_count() > 0`, then `close_all` |
+| 4 | `src/resource_actions.rs` (+ tests) | `ActionGate::Mutating { checks: Vec<AccessCheck>, .. }` and the pair reason; `OpenShell` gate on `GetPodExec` and `CreatePodExec`, shipped; the "Open shell ▸" container submenu (`on_click` with `RowContext`); `default_shell_container`; remove `open_shell_reason` |
+| 4 | `src/keyboard_navigation.rs` (0028) | the `OpenShell` arm → `start_connect` for the cursor pod's default container (the `OpenNodeShell` arm stays empty for 0037) |
+| 4 | `src/app_shell.rs`, `src/app_shell_view.rs` | `leaving_work` + `ReleaseCheck` at `switch_cluster` / `view_clusters` / `remove_from_view` (unless 0031 step 3 already added it: then one more line); dock "Shell into selected" dispatches S |
 | 4 | `src/screenshot.rs`, `src/launch_options.rs` (+ tests) | `--screen shell-fixture` (W8b transcript const, `screenshot` feature only) |
 | 4 | the 0025 About page (`settings_window.rs`) | list `oneterm-vt` (Apache-2.0) with its NOTICE text; see open item 6 |
 
@@ -49,3 +50,9 @@
 | `docs/roadmap/gap-plan-local-and-mutating.md` | the 0036 entry: Attach ownership moves out of 0036 to a later item; Settings › Terminal & Shell moved out |
 | `docs/specs/0028-keyboard-map/` | orchestrator note (orchestrator applies): `WORKSPACE` gains `!Terminal`; `LogDock` context renamed `Dock`; the A key and Attach are no longer owned by 0036 (a later item) |
 | `docs/specs/0030-guardrails-write-path/` | done in this amendment: `run_guarded`, `GuardedIntent`, `GuardedKind`, `audit_entry` |
+
+## Parallel work (lane W2, first: 0036 → 0035 → 0037 → 0034)
+
+- Steps 1–2 now, beside the in-flight 0030 2b/4: `pod_shell.rs`, `terminal_session.rs`, `terminal_element.rs` are new; only `access_review.rs`, `lib.rs`, Cargo files, and `main.rs` are shared (append-only).
+- Step 3a's rename touches ~20 app files: merge it alone and early, before lane W1 starts 0032 2a-ii, so W1 rebases once.
+- Shared with lane W1 later, append-only: `resource_actions.rs`, `keyboard_navigation.rs` (own arm), `keymap.rs`, `write_flow.rs` (`Connect` branch), `app_shell.rs` (`leaving_work`), `launch_options.rs`, `screenshot.rs`.

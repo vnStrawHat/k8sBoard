@@ -1,13 +1,13 @@
 # 0031 · App: the editor view and flows
 
-[Back to index](README.md) · Step 3 (view, local checks, Format; no server write) and step 4 (shipped, preview, apply, conflicts, 422) · Modules: `yaml_edit.rs` (new) + `yaml_edit_tests.rs`, `yaml_diff.rs` (new, pure), `write_flow.rs`, `confirm_dialog.rs`, `resource_actions.rs`, `app_shell.rs`, `workspace.rs`, `keymap.rs`, `launch_options.rs`, `screenshot.rs`. Decisions 9, 14–22, 26. Wireframe W10.
+[Back to index](README.md) · Step 3 (entry, view, local checks, Format; no server write) and step 4 (shipped, preview, apply, conflicts, 422) · Modules: `yaml_edit.rs` (new) + `yaml_edit_tests.rs`, `yaml_diff.rs` (new, pure), `write_flow.rs` and `confirm_dialog.rs` (0030 step 4), `resource_actions.rs`, `resource_kind.rs`, `keyboard_navigation.rs`, `app_shell.rs`, `app_shell_view.rs`, `workspace.rs`, `keymap.rs`, `launch_options.rs`, `screenshot.rs`. Decisions 9, 14–22, 26, 28–30. Wireframe W10.
 
 ## Entity
 
 ```rust
 /// The open edit, in `AppShell.edit`; it replaces the table and drawer in the workspace.
 pub(crate) struct YamlEditView {
-    target: ClusterObject,            // row's cluster + key (0027); the connection is resolved per request via guard_for
+    target: ClusterObject,            // the cursor's cluster + key (0027); guard and connection resolved per request from this slot
     object: ObjectRef,
     base: Option<EditBase>,           // None while loading
     editor: Entity<EditorState>,      // language "yaml", line numbers, search, editable
@@ -54,7 +54,7 @@ Runs on `cx.background_executor()`. Both inputs are masked and have no header.
 
 | Trigger | Step | Behavior |
 |---|---|---|
-| Open: menu `Edit YAML`, `Edit` `KindAction`, E, palette | 3 wired, 4 enabled | `AppShell::open_edit(ClusterObject)`: `action_availability(EditYaml, guard)` must be `Enabled`; it reads `Comes in a later version` until step 4. Another dirty edit → discard prompt first. Then `edit_base(object, Hidden)`, `set_value`, focus |
+| Open: menu `Edit YAML`, ConfigMaps `Edit`, E, palette | 3 wired, 4 enabled | all four dispatch the E key action; `run_row_key` gates on the cursor slot (`key_availability`), then the `EditYaml(_)` arm of `run_available_row_key` calls `AppShell::open_edit(subject: ClusterObject)`. Until step 4 the gate reads `Comes in a later version`. Another dirty edit → discard prompt first. Then `edit_base(object, Hidden)` on `slot_live(&subject.cluster)?.connection()`, `set_value`, focus |
 | Env values / Format | 3 | env refetch only while clean; `format_yaml` → `set_value` or `Syntax` in the footer |
 | Ctrl S / `Apply…`, preview missing or stale | 3: local only; 4: + server | `ObjectEdit::new`: `Err` → `Failed(Local)`, stay on the tab. Step 3 ends here with `Local checks passed`. Step 4: `WriteRequest::new`, `preview_write` → `Running`, tab = Diff |
 | Ctrl S / `Apply…` while `Running` | 3–4 | nothing (decision 15) |
@@ -64,24 +64,32 @@ Runs on `cx.background_executor()`. Both inputs are masked and have no header.
 | `on_commit(Err(Conflict))` / `Invalid` | 4 | the dialog is closed; banner / side panel. Other errors: 0030 notification, the editor stays |
 | `Reload and keep my changes` | 4 | `edit_base` again; `rebase(old, text, new)` → `set_value(rebased.text)`, `base = new`, `server_changed`, banner `unreachable` lines; rerun the preview |
 | `Discard my changes` / `Reload` | 4 | `edit_base` again → `set_value(base.text())` |
-| Cancel or navigating away (screen, reveal, palette Go to, namespace or cluster switch) | 3 | when dirty: `Discard changes to {name}?` with `Discard` (danger) / `Keep editing` |
+| Cancel or navigating away (screen, reveal, palette Go to, namespace change) | 3 | when dirty: `Discard changes to {name}?` with `Discard` (danger) / `Keep editing` |
+| Switch, view change, or `Remove from view` that releases the edited cluster | 3 | `leaving_work` (below) lists `Unsaved changes to {kind}/{name}`; confirm discards and releases; the slot release closes the editor |
 
 ## Write-flow additions (0031, step 4)
 
 ```rust
-/// Dry-run only: gate (EditYaml enabled), then 0032 `checked_write` with `CommitMode::DryRun` (no audit).
+/// Dry-run only: gate (EditYaml enabled), then 0030 `checked_write` with `CommitMode::DryRun` (no audit).
 pub(crate) fn preview_write(&self, cluster: &ClusterRef, request: WriteRequest, cx: &mut Context<AppShell>)
-    -> Task<Result<WriteOutcome, WriteError>>;
+    -> Task<Result<WriteOutcome, CheckedWriteError>>;
 pub(crate) struct GuardedIntent { /* 0030 + warnings */ pub(crate) on_commit: Option<CommitCallback> }
-pub(crate) type CommitCallback = Box<dyn FnOnce(&Result<WriteOutcome, WriteError>, &mut Window, &mut App)>;
+pub(crate) type CommitCallback = Box<dyn FnOnce(&Result<WriteOutcome, CheckedWriteError>, &mut Window, &mut App)>;
 ```
 
 - `on_commit` runs after the audit append. When it is set, the dialog closes after the commit whatever the outcome (no 0030 `Retry`: a stale `resourceVersion` cannot pass).
 - The dialog dry-run line for `ReplaceObject` adds `· unchanged since you opened it`. The object row reads `{namespace}/{name} · {n} fields changed`; change lines show paths only.
-- `ClusterConnection::write` stays reachable only through `checked_write` (0032).
+- `ClusterConnection::write` stays reachable only through `checked_write` (0030 decision 30). Signatures follow the merged 0030 step 4 code; where it differs from 0030 write-flow.md, follow the code and note the deviation.
 
-## Keys, menus, screenshot
+## Entry, cursor, and release (0027/0028 baseline)
 
-- `keymap.rs`: `secondary-s` → `ApplyEdit` in `YamlEdit` (step 3). 0028 single-letter keys stay inactive in the editor.
-- `ResourceAction::EditYaml`: gate `Update(kind)` (lazy), `mutates: true`, **shipped in step 4**. Pod menu `Edit YAML` (E) after Port-forward (W4); kind menus `Edit YAML` on editable kinds without an `Edit` `KindAction`.
+- `ResourceAction::EditYaml(ObjectKind)`: gate `Mutating { check: Update(kind) }` (lazy), **shipped in step 4**. Keys and palette name `RowAction::EditYaml`, resolved by `subject_action` from the subject's kind: Pod → `EditYaml(Pod)`; Node → not offered (non-goal); `Kind { kind }` via `kind.builtin_object()` when `is_editable`; Helm releases (their spec reads `Secret`) and custom kinds → not offered.
+- Menus: `action_item(EditYaml(kind), guard)` with the E hint and **no `on_click`** (decision 29). Pod menu `Edit YAML` after Port-forward (W4); every editable kind menu `Edit YAML`, except ConfigMaps, whose W7 `Edit` `KindAction` becomes `KindAction::keyed("Edit", EditYaml(ConfigMap))`.
+- The editor keeps `AppShell.selected` (the cursor) and the drawer flag; `workspace.rs` renders the editor in their place and restores them on close. While `AppShell.edit` is `Some`, `run_row_key` returns early: no row key acts on the hidden cursor.
+- `leaving_work(leaving: &[ClusterRef], cx) -> Vec<SharedString>` (one function, owned by whichever of 0031 step 3 / 0036 step 4 lands first; the other adds its line): `switch_cluster`, `view_clusters`, and `remove_from_view` compute the clusters a call would release and, when the list is non-empty, show one kit `Dialog` (`Leave {cluster}?`, lines, `Leave` / `Stay`) before calling `release_all` / `release_slot`. Confirm re-enters with `ReleaseCheck::Confirmed`.
+- `release_slot` / `release_all` close the editor of a released cluster (like `log_dock.close_tabs_of`).
+
+## Keys, screenshot
+
+- `keymap.rs`: `secondary-s` → `ApplyEdit` in context `YamlEdit` (step 3); `keymap_tests.rs` drops `secondary-s` from `RESERVED_KEYS`; one sheet row. The code editor is an `Input`, so 0028 `WORKSPACE` single keys stay inactive there.
 - `--screen edit-yaml-diff` (step 3, screenshot feature): `YamlEditView::fixture(..)` with W10's diff (`spec.replicas` 3 → 5, `…limits.memory` 512Mi → 1Gi), `Rollout { RollingUpdate }`, `Passed { 412 ms }`, no base (Apply disabled), no connection call.

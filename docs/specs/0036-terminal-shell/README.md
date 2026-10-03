@@ -1,6 +1,6 @@
 # 0036 — Terminal and pod shell
 
-Status: draft, HEAD `1c859ae`. **Mutating (project rule on exec). C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still refuse exec unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. The new dependencies (C6, [dependencies.md](dependencies.md)) are a separate approval. Lands after 0028, 0016 (private clipboard), 0030 (guarded core, tiers, audit, allow-list), and 0026. Crates: `crates/cluster` (exec transport), `crates/app` (terminal, dock). Wireframes: W8 and W8b (Logs and Shell tabs, never side by side, ≤ 60 % height, zoom), W4 menu "Open shell ▸" and note 2, W4b note 3, keyboard map S.
+Status: draft; **refreshed 2026-10-03 against main `2c7dc08`**. **Mutating (project rule on exec). C3: Approved by the user on 2026-10-02 (one approval for all mutating specs).** Debug builds still refuse exec unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. The new dependencies (C6, [dependencies.md](dependencies.md)) are a separate approval. Prerequisites: merged 0016, 0026, 0027, 0028, 0029, 0030 steps 1/2a/3 (`WritePolicy`, `ActionGate`, `ClusterGuard`, `audit_log.rs`). Steps 1–2 run now (crate and new files only); step 3a after 0030 steps 2b + 4 merge (they edit `app_shell.rs`, `keymap.rs`); step 4 also needs 0032 2a-i (`RowAction`). Lane W2, first spec. Crates: `crates/cluster` (exec transport), `crates/app` (terminal, dock). Wireframes: W8 and W8b (Logs and Shell tabs, never side by side, ≤ 60 % height, zoom), W4 menu "Open shell ▸" and note 2, W4b note 3, keyboard map S.
 
 ## Goal
 
@@ -19,9 +19,9 @@ Node shell and debug containers (0037); Attach (ownership moves out of 0036 to a
 |---|---|---|
 | 1 | Cluster crate: kube `ws`, `pod_shell` stream, `drive`, `argv`, `shell_exit`, `upgrade_error`, `ExecPermit`, `GetPodExec`; fake-stream tests | 1, 2, 3, 4, 13 |
 | 2 | `oneterm-vt` dependency, `TerminalSession`, palette, `TerminalElement`, `grid_size`; byte-fixture tests | 1, 2, 4, 5 |
-| 3a | `LogDock` → `Dock` rename as its own mechanical commit; then `DockTab`, `ShellTab` wiring, headless render | 1, 4, 8 |
+| 3a | `LogDock` → `Dock` rename as its own mechanical commit, **merged to main at once** (about 20 files; 0034 and 0037 build on `Dock`); then `DockTab` (with `cluster()` for the merged `close_tabs_of`), `ShellTab` wiring, headless render | 1, 4, 8 |
 | 3b | Input, paste sanitiser and multi-line dialog, selection, copy, Find; `Terminal` key context and the 0028 changes | 1, 4, 6, 7 |
-| 4 | 0030 guarded core, container picker, S and menus, Reconnect, lifecycle and switch confirm, `--screen shell-fixture`, docs, live denied-path check | 1, 3, 9–12 |
+| 4 | 0030 guarded core, multi-check gate (`ActionGate::Mutating { checks }`), the `OpenShell` arm, container picker, menus, dock "Shell into selected", Reconnect, lifecycle and the `leaving_work` release confirm, `--screen shell-fixture`, docs, live denied-path check | 1, 3, 9–12 |
 
 ## Files
 
@@ -44,14 +44,14 @@ Node shell and debug containers (0037); Attach (ownership moves out of 0036 to a
 - [ ] 7. C1: copy uses the 0016 private write (no auto-clear); paste drops C0 (except tab, CR, LF) and C1 controls and asks before a multi-line non-bracketed paste; OSC 52 and DECRQCRA are ignored; `ShellInput` and `ShellUpdate` have a manual `Debug` that prints byte counts only; no session byte is logged, traced, or stored.
 - [ ] 8. Resizing the dock or window sends one resize per change; the remote sees the new size (`stty size`, allowed-path check).
 - [ ] 9. On UAT (1.29.5), both SSAR answers for `get` and `create` on `pods/exec` are recorded; the gate is disabled unless both allow; S, the submenu, and the palette show `Not permitted: get and create pods/exec` when either is denied; **no exec request is ever sent** (trace).
-- [ ] 10. Closing a tab ends its session; switching cluster with open shells asks "{N} shells will close" first, then ends them; screen navigation keeps them.
+- [ ] 10. Closing a tab ends its session. A switch, view change, or `Remove from view` that releases clusters with open shells asks "{N} shells will close" first (`leaving_work`, before `release_all` / `release_slot`), then ends only those shells; screen navigation keeps them.
 - [ ] 11. ui-verifier: `--screen shell-fixture` matches the W8b shell pane (header `pod · container · shell`, controls, transcript) with no high-severity defect.
 - [ ] 12. One allowed-path run on a write-capable cluster before release, including the bulk-output timing ([test-plan.md](test-plan.md) last section).
 - [ ] 13. `pod_shell` requires an `ExecPermit`; its only non-test constructor is `AccessReport::exec_permit` (both exec verbs allowed); upgrade refusals 401, 403, 404 map to typed errors with fixed text.
 
 ## Open items
 
-1. 0030 is committed as a draft spec; this amendment adds its `run_guarded` / `GuardedIntent` / `audit_entry` changes. Step 4 waits for 0030's code to merge.
+1. 0030 steps 1/2a/3 are merged; `run_guarded`, `GuardedIntent`, `GuardedKind::Connect`, and `audit_entry` come with 0030 step 4 (in flight). Step 4 follows the merged signatures; where they differ from 0030 write-flow.md, follow the code and note the deviation.
 2. No write-capable test cluster (risks R2): the allowed path is only fake-tested until one exists.
 3. Decided (user): no 30 s auto-clear for terminal copies (decision 20); "{N} shells will close" confirm on cluster switch (decision 26); multi-line paste dialog in every environment, skipped in bracketed mode (decision 18).
 4. The 0025 About page has no third-party licence list yet; `oneterm-vt` (Apache-2.0, NOTICE) must be credited somewhere before release.

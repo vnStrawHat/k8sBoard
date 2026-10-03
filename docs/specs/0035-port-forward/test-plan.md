@@ -58,6 +58,8 @@ Window tests (`app_shell_tests.rs`): `status_bar_shows_running_count_and_opens_t
 | `f_key_with_several_ports_opens_new_forward` | dialog prefilled with the cursor pod |
 | `forward_uses_the_rows_cluster` | 0027 fixture: drawer of cluster B → guard B, never the primary |
 | `twenty_first_forward_is_refused` | notice, no start |
+| `f_key_menu_and_palette_share_the_arm` | menu item without a port, F, and the palette entry all reach the `PortForward` arm for the cursor row |
+| `release_adds_no_leaving_work_line` | a slot release with running forwards asks nothing for them; the rows stay `Active` |
 
 ## Live checks (coder-lite, UAT, denied path only, debug build)
 

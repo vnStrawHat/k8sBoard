@@ -1,6 +1,6 @@
 # 0033 · Cluster crate: delete
 
-[Back to index](README.md) · Step 1 · Modules: `object_write.rs` (+ `object_write_tests.rs`), `object_yaml.rs` (+ tests), `access_review.rs`, `lib.rs`. Decisions 1–8, 16, 25. Builds strictly on 0030 [write-path.md](../0030-guardrails-write-path/write-path.md).
+[Back to index](README.md) · Step 1 · Modules: `object_write.rs` (+ `object_write_tests.rs`), `object_yaml.rs` (+ tests), `access_review.rs`, `lib.rs`. Decisions 1–8, 16, 25, 28. Builds on the merged 0030 `object_write.rs` ([write-path.md](../0030-guardrails-write-path/write-path.md)) and on 0031 steps 0–1 (`get_object`, `ObjectKind::{ALL, resource}`, `review_access_for`, `AccessReport::all_of` over the reviewed list).
 
 ## Verified APIs (kube 4.2)
 
@@ -35,7 +35,7 @@ impl ClusterConnection {
 impl ObjectKind { pub fn owns_dependents(self) -> bool; } // Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob
 ```
 
-- `WriteEffect` and `WriteOutcome.effect` are defined in 0030 (the 0032 architect's amendment); 0033 adds only its two variants.
+- `WriteEffect` (`Patched` on main; `Created` from 0032, `Replaced` from 0031) and `WriteOutcome.effect` are merged; 0033 adds only its two variants through the per-operation effect seam (0031/0032 step 1).
 - **Delete without a GET is never sent** (decision 3): the app always calls `object_identity` first, and the request needs its uid. The precondition is `uid` only; there is no `resourceVersion` precondition (0030 decision 14).
 - `object_identity` lives in `object_yaml.rs` next to `get_object` (single-object reads). A missing `uid` → `UnexpectedResponse` with a fixed text. Annotations and labels of the metadata are dropped unread.
 
@@ -43,8 +43,8 @@ impl ObjectKind { pub fn owns_dependents(self) -> bool; } // Deployment, Statefu
 
 | Item | Rule |
 |---|---|
-| `new(target, DeleteObject { uid, .. })` | `None` when `uid` is empty; any `ObjectKind` (decision 16) |
-| `access_check()` | `AccessCheck::Delete(target.kind())` |
+| `new(target, DeleteObject { uid, .. })` | `None` when `uid` is empty, when the target is a custom resource (`builtin_kind()` is `None`), or when the name fails the merged DNS rule (0031 decision 27 for the RBAC kinds); otherwise any `ObjectKind` (decision 16) |
+| `access_check()` | `AccessCheck::Delete(kind)` (`kind` = `target.builtin_kind()`, always `Some` after `new`) |
 | `changed_fields()` | `[ChangedField { path: "deleteOptions.propagationPolicy", value: Some(propagation.as_str()) }]`. The value is recordable: it is not object data |
 | `supports_dry_run()` | true |
 | Manual `Debug` | `DeleteObject` / `WriteRequest { operation: DeleteObject, kind: Pod, namespace: Some("payments"), name: "api-x" }`; no uid |
@@ -53,7 +53,7 @@ impl ObjectKind { pub fn owns_dependents(self) -> bool; } // Deployment, Statefu
 
 1. Policy check (0030): `Blocked` → `WritesBlocked`, zero requests.
 2. `DeleteParams { dry_run: mode == DryRun, grace_period_seconds: None, propagation_policy: Some(map(propagation)), preconditions: Some(Preconditions { uid: Some(uid), resource_version: None }) }`.
-3. `Api::<DynamicObject>::delete(name, &params)` in the excepted `match`, inside `run_raw`.
+3. `Api::<DynamicObject>::delete(name, &params)` as a new arm of the excepted `send` match, inside `run_raw` (no new allow).
 4. `Left(object)`: `metadata.deletion_timestamp` is set → `DeletionPending { finalizers: metadata.finalizers }`, else `Deleted`. `Right(_)` → `Deleted`. The object (for a Secret, with its data) is dropped at once; only finalizer names are kept.
 
 ## Allow-list row (added to the 0030 table)
@@ -75,4 +75,4 @@ No new clippy exception (`Api::delete` is in the excepted `match`; `get_metadata
 
 ## RBAC (`access_review.rs`)
 
-`AccessCheck::Delete(ObjectKind)` → `("delete", resource().group, resource().plural, None, kind.is_namespaced())`, shown as `delete pods`. It is **lazy** (decision 25) and not in `ALL`. 0031's session `request_kind_access(kind)` reviews `[Update(kind) if editable, Delete(kind)]` through `review_checks` when a screen of the kind is first shown. Tests: `delete_check_text_and_group`, `kind_access_includes_delete` (app), `lazy_checks_are_distinct_permissions`.
+`AccessCheck::Delete(ObjectKind)` → `("delete", resource().0, resource().1, None, kind.is_namespaced())`, shown as `delete pods`. It is **lazy** (decision 25) and not in `ALL`. 0031's session `request_kind_access(kind)` reviews `[Update(kind) if editable, Delete(kind)]` through `review_access_for` when a screen of the kind is first shown. Tests: `delete_check_text_and_group`, `kind_access_includes_delete` (app), `lazy_checks_are_distinct_permissions`.

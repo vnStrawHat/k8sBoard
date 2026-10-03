@@ -1,6 +1,6 @@
 # 0032 · Write operations (cluster crate)
 
-[Back to index](README.md) · Step 1 · Modules: `object_write.rs` (+ `object_write_tests.rs`), `access_review.rs`, `lib.rs`, root `Cargo.toml`, `clippy.toml`. Decisions 1–9, 27–29. Contract: 0030 write-path.md as amended (`WriteOutcome { effect, created_name }`, `WriteEffect`, no SSA).
+[Back to index](README.md) · Step 1 · Modules: `object_write.rs` (+ `object_write_tests.rs`), `access_review.rs`, `lib.rs`, root `Cargo.toml`, `clippy.toml`. Decisions 1–9, 27–29. Contract: the merged 0030 `object_write.rs` (main `2c7dc08`): `WriteOutcome { mode, elapsed, effect, created_name, uid }`, `WriteEffect::Patched`, the private `send` match (the one named allow), `run_raw`, `error_from_status` → `redact_error`, `is_dns_subdomain` in `WriteRequest::new`, `FakeApi`. On main `write` sets `effect: Patched` for every answer; this step makes `send` return what `write` needs to build the effect per operation (0031 needs the same seam; whichever lands first adds it).
 
 ## Verified APIs (kube 4.2, `.cargo-home/registry`)
 
@@ -57,7 +57,7 @@ Paths are namespaced: `/apis/{group}/v1/namespaces/{ns}/{resource}/{name}`. Ever
 | Trigger now | `CreateJobs` | `create batch jobs` | yes | Change | `metadata.generateName` = `"reconcile-manual-"`; audit adds `metadata.name` (0030 amendment) |
 | Re-run | `CreateJobs` | `create batch jobs` | yes | Change | `metadata.generateName` = `"etl-nightly-29312400-rerun-"`; same |
 
-All checks are namespaced. `ALL` grows by 7. Display: `patch deployments/scale`, `create jobs`.
+All checks are namespaced. `ALL` grows by 7 (36 on main). Display: `patch deployments/scale`, `create jobs`.
 
 ## Roll back (kubectl `rollout undo --to-revision` parity)
 
@@ -91,5 +91,5 @@ GET the Job, then POST a Job with `generateName` `<job, first 51 chars>-rerun-`,
 
 0030 mapping, plus:
 
-- A GET failure inside an operation maps like a dry-run error (`Cluster(..)`, never `OutcomeUnknown`: nothing was sent).
+- A GET inside an operation goes through `self.run` (a classified `ClusterError`) and returns `WriteError::Cluster` directly, never through the merged `write_error`, which turns every non-`Api` commit error into `OutcomeUnknown`: nothing was sent.
 - **422 on Trigger now and Re-run** → `Invalid { message: "the server rejected the generated object", fields }`: field paths only; the server message is dropped (it can quote template values such as env literals). **422 on Roll back** → the fixed-text `Conflict` of step 5, so no server text reaches the UI there either.
