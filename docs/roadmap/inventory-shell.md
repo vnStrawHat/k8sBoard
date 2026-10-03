@@ -7,7 +7,7 @@
 | ID | Item | Status | Covered by | Gap → spec |
 |---|---|---|---|---|
 | T1 | Custom GPUI title bar, logo, window controls | Done | 0003 `title_bar.rs` | — |
-| T2 | Cluster switcher (single cluster, every context of every loaded kubeconfig, env badge) | Partial | 0003, 0024 | env groups, health, Ctrl 1–9, filter, Retry → 0026 |
+| T2 | Cluster switcher (single cluster, every context of every loaded kubeconfig, env badge) | Done (single cluster) | 0003, 0024, 0026 (popover with filter, env groups, health, Retry, Ctrl Shift C, Ctrl 1–9) | several live clusters → 0027 |
 | T3 | Multi-select clusters, "View N clusters", `prod-eu-1 +1` label | Missing | — | 0027 |
 | T4 | Environment badge and env-colored top border (riskiest env) | Partial (single cluster) | 0024 `environment.rs`, `title_bar.rs` | riskiest env of several clusters 0027 |
 | T5 | Namespace picker (wireframe shows several namespaces: `ns: payments, web`) | Partial | 0003 (one or all) | multi-namespace → 0009 |
@@ -71,7 +71,7 @@
 | ID | Item | Status | Covered by | Gap → spec |
 |---|---|---|---|---|
 | B1 | Watch state, identity, app version | Done | 0003 `status_bar.rs` | — |
-| B2 | API latency ("API 38 ms"; today shows the version) | Partial | 0003 | 0026 |
+| B2 | API latency ("API 38 ms") | Done | 0026 | — |
 | B3 | "⇄ N port-forwards", click opens the page | Missing | — | 0035 |
 
 ## Palette, keyboard, Settings, multi-cluster, guardrails, tokens
@@ -79,7 +79,7 @@
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
 | P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Missing | 0029 |
-| P2 | Keyboard map (22 bindings) and `?` cheat sheet | Missing | 0028 |
+| P2 | Keyboard map (22 bindings) and `?` cheat sheet | Partial (Ctrl Shift C and Ctrl 1–9 in 0026) | 0028 |
 | S1 | Settings window (W2) as a separate OS window, single instance | Done | 0025 |
 | S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (no drag order) | 0025 |
 | S3 | Add cluster: import file, watch folder, paste YAML | Partial (no watch folder) | 0025 |

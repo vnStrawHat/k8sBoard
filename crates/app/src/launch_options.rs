@@ -23,7 +23,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|pods|nodes|issues|issues-drawer|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
+  --screen overview|switcher|pods|nodes|issues|issues-drawer|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance
@@ -66,6 +66,9 @@ pub(crate) enum LaunchScreen {
     /// `--screen test-traffic`: NetworkPolicies with the Test traffic dialog open on the defaults
     /// of the first policy shown (after `--filter`), or the one `--select` names.
     TestTraffic,
+    /// `--screen switcher`: Overview with the cluster switcher popover open once the session is live
+    /// and the probes of the other clusters have answered.
+    Switcher,
     /// `--screen settings|settings-appearance`: the main window opens as usual, then the Settings
     /// window on that page, which is what the screenshot captures.
     Settings(SettingsPage, SettingsSize),
@@ -87,7 +90,7 @@ impl LaunchScreen {
     /// The list screen this request opens on.
     pub(crate) fn screen(self) -> Screen {
         match self {
-            Self::Overview => Screen::Overview,
+            Self::Overview | Self::Switcher => Screen::Overview,
             Self::Pods
             | Self::PodDrawer(_)
             | Self::LogsDock
@@ -217,6 +220,7 @@ impl LaunchScreen {
     fn parse(text: &str) -> Option<Self> {
         match text {
             "overview" => Some(Self::Overview),
+            "switcher" => Some(Self::Switcher),
             "pods" => Some(Self::Pods),
             "nodes" => Some(Self::Nodes),
             "issues" => Some(Self::Issues),

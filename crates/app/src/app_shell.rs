@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cluster::{
     ContextSummary, EventFilter, HelmReleaseSummary, InvolvedObject, Kubeconfig, KubeconfigError,
@@ -12,23 +12,33 @@ use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, InteractiveElement as _,
-    IntoElement, KeyBinding, ParentElement as _, Point, Render, SharedString, Styled as _,
-    Subscription, Task, Window, px,
+    App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable as _,
+    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Point, Render,
+    SharedString, Styled as _, Subscription, Task, Window, px,
 };
 
 use crate::FocusQuickFilter;
 use crate::cluster_catalog::{CatalogHandle, ClusterCatalog};
+use crate::cluster_health::{ProbeCandidate, ProbeResult, ProbeTarget, RowHealth, probe_stream};
 use crate::cluster_registry::{
-    ClusterProfile, ClusterRef, StartChoice, launch_last_used, start_choice, switcher_label,
+    ClusterProfile, ClusterRef, ScopeMemory, StartChoice, launch_last_used, remember_scope,
+    start_choice, start_scope,
 };
-#[cfg(feature = "screenshot")]
-use crate::cluster_session::SessionPhase;
+use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{
     ClusterSession, CountTrigger, FlowState, LiveCluster, LiveList, RbacState, RelatedList,
-    denied_related_check, error_text,
+    SessionPhase, denied_related_check, error_text,
 };
-use crate::custom_kind::CustomKind;
+use crate::cluster_switcher::{
+    ClusterSwitcherState, OpenClusterSwitcher, SwitchToCluster1, SwitchToCluster2,
+    SwitchToCluster3, SwitchToCluster4, SwitchToCluster5, SwitchToCluster6, SwitchToCluster7,
+    SwitchToCluster8, SwitchToCluster9, SwitcherContent, SwitcherList,
+};
+use crate::cluster_switcher_rows::{
+    HighlightStep, SwitcherSection, SwitcherSegment, connected_count, move_highlight, nth_cluster,
+    row_count, switcher_sections, visible_sections,
+};
+use crate::custom_kind::{CustomKind, CustomKindCache};
 use crate::drawer::{
     ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab, MonitorCache, MonitorKey,
     MonitorRange, MonitorScope, MonitorState, drawer_tabs, shown_tab,
@@ -96,6 +106,10 @@ mod workspace;
 #[path = "app_shell_tests.rs"]
 mod app_shell_tests;
 
+#[cfg(test)]
+#[path = "app_shell_switch_tests.rs"]
+mod app_shell_switch_tests;
+
 /// The logical column of the Events table that holds the reason.
 const EVENT_REASON_COLUMN: usize = 1;
 
@@ -125,13 +139,6 @@ enum KubeconfigState {
     Loading,
     Loaded,
     Failed(String),
-}
-
-/// One switcher row: a context of a loaded kubeconfig.
-pub(crate) struct SwitcherItem {
-    pub(crate) cluster: ClusterRef,
-    pub(crate) label: String,
-    pub(crate) is_active: bool,
 }
 
 /// A `--screen custom:<crd-name>` request that has not met its CRD list yet.
@@ -223,6 +230,28 @@ pub(crate) struct AppShell {
     active: Option<ContextSummary>,
     /// Whether the current session was already seen Live, so `last_used` is written once.
     has_reported_live: bool,
+    /// The cluster the user came from (the one before the last switch), for "Back to".
+    previous: Option<ClusterRef>,
+    /// The namespace scope of every cluster left during this run.
+    scope_memory: ScopeMemory,
+    /// The custom kind definitions of the last session, kept until the next one connects, so a
+    /// switch that is replaced before its connect runs does not lose them.
+    kind_cache: CustomKindCache,
+    /// Why the last switch did nothing; shown by the title-bar warning button.
+    switch_notice: Option<String>,
+    /// The title-bar switcher popover.
+    switcher: ClusterSwitcherState,
+    _switcher_filter_events: Subscription,
+    /// `--screen switcher`: the popover opens once the session is live.
+    pending_switcher_launch: bool,
+    /// Test hook: whether the old session was gone each time a deferred connect started.
+    #[cfg(test)]
+    old_session: Option<gpui_kit::WeakEntity<ClusterSession>>,
+    #[cfg(test)]
+    old_session_gone_at_connect: Vec<bool>,
+    /// Test hook: the start scope of every session that was created.
+    #[cfg(test)]
+    connected_scopes: Vec<Option<NamespaceScope>>,
     session: Option<Entity<ClusterSession>>,
     _session_observer: Option<Subscription>,
     screen: Screen,
@@ -289,13 +318,21 @@ pub(crate) struct AppShell {
 }
 
 /// The key bindings of the shell. `!Input` keeps `/` typable in every input, the YAML editor
-/// included.
+/// included. The switcher chords carry no `!Input`: they work in text fields too.
 pub(crate) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new(
-        "/",
-        FocusQuickFilter,
-        Some("AppShell && !Input"),
-    )]);
+    cx.bind_keys([
+        KeyBinding::new("/", FocusQuickFilter, Some("AppShell && !Input")),
+        KeyBinding::new("secondary-shift-c", OpenClusterSwitcher, Some("AppShell")),
+        KeyBinding::new("secondary-1", SwitchToCluster1, Some("AppShell")),
+        KeyBinding::new("secondary-2", SwitchToCluster2, Some("AppShell")),
+        KeyBinding::new("secondary-3", SwitchToCluster3, Some("AppShell")),
+        KeyBinding::new("secondary-4", SwitchToCluster4, Some("AppShell")),
+        KeyBinding::new("secondary-5", SwitchToCluster5, Some("AppShell")),
+        KeyBinding::new("secondary-6", SwitchToCluster6, Some("AppShell")),
+        KeyBinding::new("secondary-7", SwitchToCluster7, Some("AppShell")),
+        KeyBinding::new("secondary-8", SwitchToCluster8, Some("AppShell")),
+        KeyBinding::new("secondary-9", SwitchToCluster9, Some("AppShell")),
+    ]);
 }
 
 impl AppShell {
@@ -361,6 +398,10 @@ impl AppShell {
         let quick_filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter  /"));
         let quick_filter_events =
             cx.subscribe_in(&quick_filter, window, Self::on_quick_filter_event);
+        let switcher_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter clusters…"));
+        let switcher_filter_events =
+            cx.subscribe_in(&switcher_filter, window, Self::on_switcher_filter_event);
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
         // A focused input or editor that leaves the tree (a drawer closing, a screen change)
@@ -388,6 +429,19 @@ impl AppShell {
             context_error: None,
             active: None,
             has_reported_live: false,
+            previous: None,
+            scope_memory: ScopeMemory::new(),
+            kind_cache: CustomKindCache::default(),
+            switch_notice: None,
+            switcher: ClusterSwitcherState::new(switcher_filter),
+            _switcher_filter_events: switcher_filter_events,
+            pending_switcher_launch: options.screen == LaunchScreen::Switcher,
+            #[cfg(test)]
+            old_session: None,
+            #[cfg(test)]
+            old_session_gone_at_connect: Vec::new(),
+            #[cfg(test)]
+            connected_scopes: Vec::new(),
             session: None,
             _session_observer: None,
             screen: options.screen.screen(),
@@ -451,7 +505,8 @@ impl AppShell {
     /// (the switcher reads the catalog).
     fn on_catalog_changed(&mut self, cx: &mut Context<Self>) {
         cx.notify();
-        let is_waiting_to_start = self.session.is_none() && self.context_error.is_none();
+        // `active` is set by the first start even while its connect is still deferred.
+        let is_waiting_to_start = self.active.is_none() && self.context_error.is_none();
         if !is_waiting_to_start {
             return;
         }
@@ -470,41 +525,168 @@ impl AppShell {
         let saved = AppSettings::get(cx).registry.last_used.as_ref();
         let last_used = launch_last_used(saved, explicit_files.as_deref()).cloned();
         match resolve_start(&kubeconfigs, requested.as_deref(), last_used.as_ref()) {
-            Ok((kubeconfig, summary)) => {
+            Ok((_, summary)) => {
                 let namespace = self.requested.namespace.take();
-                self.start_session(kubeconfig, &summary, namespace, cx);
+                self.switch_to(&ClusterRef::of(&summary), namespace, cx);
             }
             Err(error) => self.context_error = Some(error_text(&error)),
         }
     }
 
-    /// Replaces the session. Dropping the old one cancels every task and watch it owns.
-    fn start_session(
+    /// Switches the only session to `target`. Nothing happens when it already is the active
+    /// target. Every session start goes through here.
+    pub(crate) fn switch_cluster(&mut self, target: &ClusterRef, cx: &mut Context<Self>) {
+        self.switch_to(target, None, cx);
+    }
+
+    /// `requested` is the `--namespace` scope of the first start; it wins over the remembered and
+    /// the saved default scope.
+    fn switch_to(
         &mut self,
-        kubeconfig: Arc<Kubeconfig>,
-        summary: &ContextSummary,
+        target: &ClusterRef,
+        requested: Option<NamespaceScope>,
+        cx: &mut Context<Self>,
+    ) {
+        let kubeconfigs: Vec<Arc<Kubeconfig>> =
+            self.catalog.read(cx).kubeconfigs().cloned().collect();
+        let Some((_, summary)) = find_cluster(&kubeconfigs, target) else {
+            self.switch_notice = Some(format!(
+                "'{}' is no longer in its kubeconfig",
+                target.context
+            ));
+            cx.notify();
+            return;
+        };
+        let is_active = self
+            .active
+            .as_ref()
+            .is_some_and(|active| target.is_of(active));
+        if is_active {
+            return;
+        }
+        self.switch_notice = None;
+        self.context_error = None;
+        let profile = AppSettings::get(cx).registry.profile(&summary);
+        let namespace = requested.or_else(|| start_scope(&self.scope_memory, target, &profile));
+        // The first start has nothing to release and keeps the launch filter and screen request.
+        let Some(current) = self.active.as_ref().map(ClusterRef::of) else {
+            self.active = Some(summary);
+            self.connect_active(target.clone(), namespace, cx);
+            return;
+        };
+        self.record_leaving_session(&current, cx);
+        self.tear_down_session(cx);
+        self.previous = Some(current);
+        self.active = Some(summary);
+        cx.notify();
+        // Break before make: the deferred call runs after the old session entity was released,
+        // so no two watch sets exist at once.
+        let (shell, target) = (cx.weak_entity(), target.clone());
+        cx.defer(move |cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.connect_active(target, namespace, cx);
+            });
+        });
+    }
+
+    /// Keeps what the leaving session of `current` tells: the scope the user had, so coming back
+    /// lands there, and whether the cluster answered, so its switcher row is right at once.
+    fn record_leaving_session(&mut self, current: &ClusterRef, cx: &App) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let result = match session.read(cx).phase() {
+            SessionPhase::Live(live) => {
+                remember_scope(&mut self.scope_memory, current.clone(), live.scope.clone());
+                ProbeResult::Reachable {
+                    latency: live.api_latency,
+                }
+            }
+            SessionPhase::Failed { message } => ProbeResult::Unreachable {
+                reason: message.clone(),
+            },
+            SessionPhase::Connecting { .. } => return,
+        };
+        self.switcher
+            .health_mut()
+            .record(current.clone(), result, Instant::now());
+    }
+
+    /// Releases the session and everything that belongs to the cluster it served. The custom kind
+    /// definitions seen so far wait in `kind_cache` for the next session.
+    fn tear_down_session(&mut self, cx: &mut Context<Self>) {
+        self.close_drawer(cx);
+        self.log_dock.update(cx, |dock, cx| {
+            dock.close_all(cx);
+            dock.set_session(None);
+        });
+        if let Some(session) = &self.session {
+            self.kind_cache = session.update(cx, |session, _| session.take_custom_kind_cache());
+        }
+        #[cfg(test)]
+        {
+            self.old_session = self.session.as_ref().map(Entity::downgrade);
+        }
+        self.pod_table
+            .update(cx, |table, _| table.delegate_mut().set_session(None));
+        self.node_table
+            .update(cx, |table, _| table.delegate_mut().set_session(None));
+        self.issue_table
+            .update(cx, |table, _| table.delegate_mut().set_session(None));
+        self.kind_table
+            .update(cx, |table, _| table.delegate_mut().set_session(None));
+        self._session_observer = None;
+        self.session = None;
+        self.has_reported_live = false;
+        // A filter, a pending reveal, or a picker draft written for one cluster would surprise in
+        // another. The screen, the dock height, and the column prefs stay.
+        self.clear_all_filters(cx);
+        self.namespace_picker = NamespacePickerState::default();
+        self.pending_launch_screen = None;
+        self.pending_reveal = None;
+        self.pending_custom_launch = None;
+        self.pending_dialog_launch = None;
+    }
+
+    /// Creates the session of the active target. It runs after `tear_down_session` released the
+    /// old one.
+    fn connect_active(
+        &mut self,
+        target: ClusterRef,
         namespace: Option<NamespaceScope>,
         cx: &mut Context<Self>,
     ) {
-        let kind = self.screen.kind();
-        let is_switch = self.session.is_some();
-        self.active = Some(summary.clone());
-        self.has_reported_live = false;
-        self.close_drawer(cx);
-        self.log_dock.update(cx, |dock, cx| dock.close_all(cx));
-        // The definitions seen so far move on, so a context switch reuses them (decision 16).
-        let cache = self
-            .session
+        // A switch that came in between wins; its own deferred connect follows.
+        if !self
+            .active
             .as_ref()
-            .map(|session| session.update(cx, |session, _| session.take_custom_kind_cache()))
-            .unwrap_or_default();
-        let default_namespace = AppSettings::get(cx)
-            .registry
-            .profile(summary)
-            .default_namespace;
-        let namespace = start_namespace(namespace, default_namespace.as_deref());
+            .is_some_and(|active| target.is_of(active))
+        {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(old) = &self.old_session {
+            self.old_session_gone_at_connect
+                .push(old.upgrade().is_none());
+        }
+        let kubeconfigs: Vec<Arc<Kubeconfig>> =
+            self.catalog.read(cx).kubeconfigs().cloned().collect();
+        let Some((kubeconfig, summary)) = find_cluster(&kubeconfigs, &target) else {
+            // The catalog reloaded between the switch and this call.
+            self.active = None;
+            self.context_error = Some(format!(
+                "'{}' is no longer in its kubeconfig",
+                target.context
+            ));
+            cx.notify();
+            return;
+        };
+        let kind = self.screen.kind();
+        #[cfg(test)]
+        self.connected_scopes.push(namespace.clone());
+        let cache = std::mem::take(&mut self.kind_cache);
         let session =
-            cx.new(|cx| ClusterSession::new(kubeconfig, summary, namespace, kind, cache, cx));
+            cx.new(|cx| ClusterSession::new(kubeconfig, &summary, namespace, kind, cache, cx));
         // The new session is still connecting; it keeps the choice for `LiveCluster::start`.
         let is_overview = self.screen == Screen::Overview;
         session.update(cx, |session, cx| {
@@ -534,26 +716,290 @@ impl AppShell {
         self.log_dock
             .update(cx, |dock, _| dock.set_session(Some(weak_session)));
         self.session = Some(session);
-        // A filter set for one cluster would surprise in another. The first session keeps the
-        // filter of `--filter`.
-        if is_switch {
-            self.clear_all_filters(cx);
-            self.namespace_picker = NamespacePickerState::default();
-        }
         cx.notify();
+    }
+
+    /// "Back to {previous}" after a failed switch.
+    pub(crate) fn back_to_previous(&mut self, cx: &mut Context<Self>) {
+        if let Some(previous) = self.previous.clone() {
+            self.switch_cluster(&previous, cx);
+        }
+    }
+
+    /// The text the switcher shows for `cluster`; `None` once it left every loaded kubeconfig.
+    pub(crate) fn cluster_label(&self, cluster: &ClusterRef, cx: &App) -> Option<String> {
+        self.catalog
+            .read(cx)
+            .groups(cx)
+            .into_iter()
+            .flat_map(|group| group.rows)
+            .find(|row| row.cluster == *cluster)
+            .map(|row| row.label)
+    }
+
+    /// The active cluster's switcher text, for the failure and busy views.
+    pub(crate) fn active_label(&self, cx: &App) -> Option<String> {
+        self.cluster_label(&ClusterRef::of(self.active.as_ref()?), cx)
+    }
+
+    /// The label of the cluster "Back to" returns to, when it still resolves.
+    pub(crate) fn previous_label(&self, cx: &App) -> Option<String> {
+        self.cluster_label(self.previous.as_ref()?, cx)
+    }
+
+    // ---- cluster switcher ----
+
+    pub(crate) fn switcher(&self) -> &ClusterSwitcherState {
+        &self.switcher
+    }
+
+    /// The health of the active row, which comes from its session and never from a probe.
+    fn active_health(&self, cx: &App) -> Option<(ClusterRef, RowHealth)> {
+        let cluster = ClusterRef::of(self.active.as_ref()?);
+        let health = match self.session.as_ref()?.read(cx).phase() {
+            SessionPhase::Connecting { .. } => RowHealth::Connecting,
+            SessionPhase::Failed { .. } => RowHealth::Unreachable,
+            SessionPhase::Live(live) if live.has_problem() => RowHealth::Interrupted,
+            SessionPhase::Live(live) => RowHealth::Live(live.api_latency),
+        };
+        Some((cluster, health))
+    }
+
+    /// Every row of the switcher, unfiltered: the `Ctrl n` numbers read this list.
+    fn all_switcher_sections(&self, cx: &App) -> Vec<SwitcherSection> {
+        let groups = self.catalog.read(cx).groups(cx);
+        let active = self.active_health(cx);
+        switcher_sections(
+            &groups,
+            self.switcher.health(),
+            active.as_ref().map(|(cluster, health)| (cluster, *health)),
+        )
+    }
+
+    /// The first row of the filtered list, where the highlight starts.
+    fn first_visible_cluster(&self, cx: &App) -> Option<ClusterRef> {
+        let filter = self.switcher.filter().read(cx).value();
+        let visible = visible_sections(
+            &self.all_switcher_sections(cx),
+            &filter,
+            self.switcher.segment(),
+        );
+        move_highlight(&visible, None, HighlightStep::Next)
+    }
+
+    /// What the popover shows now; the content closure of the popover owns it.
+    pub(crate) fn switcher_content(
+        &self,
+        shell: gpui_kit::WeakEntity<Self>,
+        cx: &App,
+    ) -> SwitcherContent {
+        let all = self.all_switcher_sections(cx);
+        let filter_text = self.switcher.filter().read(cx).value().to_string();
+        let list = match (all.is_empty(), self.catalog.read(cx).is_loading()) {
+            (false, _) => SwitcherList::Clusters,
+            (true, true) => SwitcherList::LoadingCatalog,
+            (true, false) => SwitcherList::NoClusters,
+        };
+        SwitcherContent {
+            list,
+            sections: visible_sections(&all, &filter_text, self.switcher.segment()),
+            all_count: row_count(&all),
+            connected_count: connected_count(&all),
+            segment: self.switcher.segment(),
+            highlight: self.switcher.highlight().cloned(),
+            filter: self.switcher.filter().clone(),
+            filter_text,
+            shell,
+        }
+    }
+
+    /// Opens the popover: clears the filter and probes the clusters whose health is stale. The
+    /// kit focuses the filter itself while the popover opens.
+    pub(crate) fn open_cluster_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.switcher.is_open() {
+            return;
+        }
+        self.switcher.open();
+        self.switcher
+            .filter()
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        let first = self.first_visible_cluster(cx);
+        self.switcher.set_highlight(first);
+        let due = self
+            .switcher
+            .health()
+            .due(&self.probe_candidates(cx), Instant::now());
+        self.start_probes(&due, cx);
+        cx.notify();
+    }
+
+    /// Closes the popover and aborts the probes that still run.
+    pub(crate) fn close_cluster_switcher(&mut self, cx: &mut Context<Self>) {
+        if !self.switcher.is_open() {
+            return;
+        }
+        self.switcher.close();
+        cx.notify();
+    }
+
+    fn toggle_cluster_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.switcher.is_open() {
+            self.close_cluster_switcher(cx);
+        } else {
+            self.open_cluster_switcher(window, cx);
+        }
+    }
+
+    /// Typing in the filter moves the highlight to the first row that still matches.
+    fn on_switcher_filter_event(
+        &mut self,
+        _: &Entity<InputState>,
+        event: &InputEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, InputEvent::Change) {
+            let first = self.first_visible_cluster(cx);
+            self.switcher.set_highlight(first);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn set_switcher_segment(
+        &mut self,
+        segment: SwitcherSegment,
+        cx: &mut Context<Self>,
+    ) {
+        self.switcher.set_segment(segment);
+        let first = self.first_visible_cluster(cx);
+        self.switcher.set_highlight(first);
+        cx.notify();
+    }
+
+    pub(crate) fn move_switcher_highlight(&mut self, step: HighlightStep, cx: &mut Context<Self>) {
+        let filter = self.switcher.filter().read(cx).value();
+        let visible = visible_sections(
+            &self.all_switcher_sections(cx),
+            &filter,
+            self.switcher.segment(),
+        );
+        let next = move_highlight(&visible, self.switcher.highlight(), step);
+        self.switcher.set_highlight(next);
+        cx.notify();
+    }
+
+    /// Enter: switches to the highlighted row.
+    pub(crate) fn confirm_switcher_highlight(&mut self, cx: &mut Context<Self>) {
+        if let Some(target) = self.switcher.highlight().cloned() {
+            self.switch_from_switcher(&target, cx);
+        }
+    }
+
+    /// A row click, Enter, or `Ctrl n`: closes the popover, then switches.
+    pub(crate) fn switch_from_switcher(&mut self, target: &ClusterRef, cx: &mut Context<Self>) {
+        self.close_cluster_switcher(cx);
+        self.switch_cluster(target, cx);
+    }
+
+    /// `Ctrl n`: row `shortcut` of the unfiltered list; nothing when there is no such row.
+    fn switch_to_nth_cluster(&mut self, shortcut: u8, cx: &mut Context<Self>) {
+        let sections = self.all_switcher_sections(cx);
+        let Some(target) = nth_cluster(&sections, shortcut).cloned() else {
+            return;
+        };
+        self.switch_from_switcher(&target, cx);
+    }
+
+    /// Retry or Check on a row. The active row retries its session; any other row is probed,
+    /// whatever its auth kind, because the user asked.
+    pub(crate) fn probe_cluster(&mut self, target: &ClusterRef, cx: &mut Context<Self>) {
+        let is_active = self
+            .active
+            .as_ref()
+            .is_some_and(|active| target.is_of(active));
+        if is_active {
+            self.retry(cx);
+            return;
+        }
+        if self.switcher.health().is_running(target) {
+            return;
+        }
+        self.start_probes(std::slice::from_ref(target), cx);
+    }
+
+    fn probe_candidates(&self, cx: &App) -> Vec<ProbeCandidate> {
+        let active = self.active.as_ref();
+        self.catalog
+            .read(cx)
+            .kubeconfigs()
+            .flat_map(|kubeconfig| {
+                kubeconfig.contexts().iter().map(move |summary| {
+                    let cluster = ClusterRef::of(summary);
+                    ProbeCandidate {
+                        is_active: active.is_some_and(|active| cluster.is_of(active)),
+                        auth: kubeconfig.connection_info(summary).auth,
+                        cluster,
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Probes `clusters` on the tokio runtime. The subscription lives in the switcher state, so
+    /// closing the popover aborts what has not answered.
+    fn start_probes(&mut self, clusters: &[ClusterRef], cx: &mut Context<Self>) {
+        let kubeconfigs: Vec<Arc<Kubeconfig>> =
+            self.catalog.read(cx).kubeconfigs().cloned().collect();
+        let targets: Vec<ProbeTarget> = clusters
+            .iter()
+            .filter_map(|cluster| {
+                let (kubeconfig, summary) = find_cluster(&kubeconfigs, cluster)?;
+                Some(ProbeTarget {
+                    cluster: cluster.clone(),
+                    kubeconfig,
+                    context: summary.name,
+                })
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        let started: Vec<ClusterRef> = targets
+            .iter()
+            .map(|target| target.cluster.clone())
+            .collect();
+        self.switcher.health_mut().mark_running(&started);
+        let subscription = cx.global::<ClusterRuntime>().clone().subscribe(
+            probe_stream(targets),
+            cx,
+            |shell: &mut Self, (cluster, result), _| {
+                shell
+                    .switcher
+                    .health_mut()
+                    .record(cluster, result, Instant::now());
+            },
+            |_, _| {},
+        );
+        self.switcher.track_probe(subscription);
     }
 
     /// Clears the notice behind the title-bar warning button.
     pub(crate) fn dismiss_notices(&mut self, cx: &mut Context<Self>) {
+        self.switch_notice = None;
         self.catalog
             .update(cx, |catalog, cx| catalog.clear_notices(cx));
         AppSettings::dismiss_notice(cx);
     }
 
-    /// The skipped-kubeconfig lines for the warning button.
+    /// The skipped-kubeconfig lines and the last switch notice, for the warning button.
     pub(crate) fn notices(&self, cx: &App) -> Vec<String> {
         let catalog = self.catalog.read(cx);
-        catalog.notices().iter().map(ToString::to_string).collect()
+        catalog
+            .notices()
+            .iter()
+            .map(ToString::to_string)
+            .chain(self.switch_notice.clone())
+            .collect()
     }
 
     fn kubeconfig_state(&self, cx: &App) -> KubeconfigState {
@@ -569,36 +1015,6 @@ impl AppShell {
 
     pub(crate) fn session(&self) -> Option<&Entity<ClusterSession>> {
         self.session.as_ref()
-    }
-
-    /// The loaded contexts for the switcher, in load order.
-    pub(crate) fn switcher_items(&self, cx: &App) -> Vec<SwitcherItem> {
-        let registry = &AppSettings::get(cx).registry;
-        let summaries: Vec<&ContextSummary> = self
-            .catalog
-            .read(cx)
-            .kubeconfigs()
-            .flat_map(|kubeconfig| kubeconfig.contexts())
-            .collect();
-        summaries
-            .iter()
-            .map(|summary| {
-                let profile = registry.profile(summary);
-                let is_duplicate_name = summaries
-                    .iter()
-                    .any(|other| other.name == summary.name && other.source != summary.source);
-                let cluster = ClusterRef::of(summary);
-                let is_active = self
-                    .active
-                    .as_ref()
-                    .is_some_and(|active| cluster.is_of(active));
-                SwitcherItem {
-                    label: switcher_label(&profile, summary, is_duplicate_name),
-                    is_active,
-                    cluster,
-                }
-            })
-            .collect()
     }
 
     /// The active cluster's saved default namespace, for the Namespaces menu.
@@ -626,23 +1042,6 @@ impl AppShell {
             let is_default = entry.default_namespace.as_deref() == Some(name.as_str());
             entry.default_namespace = (!is_default).then_some(name);
         });
-    }
-
-    pub(crate) fn switch_cluster(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
-        let kubeconfigs: Vec<Arc<Kubeconfig>> =
-            self.catalog.read(cx).kubeconfigs().cloned().collect();
-        let Some((kubeconfig, summary)) = find_cluster(&kubeconfigs, cluster) else {
-            return;
-        };
-        let is_active = self
-            .active
-            .as_ref()
-            .is_some_and(|active| cluster.is_of(active));
-        if is_active {
-            return;
-        }
-        self.context_error = None;
-        self.start_session(kubeconfig, &summary, None, cx);
     }
 
     pub(crate) fn namespace_picker(&self) -> &NamespacePickerState {
@@ -910,6 +1309,16 @@ impl AppShell {
     /// cluster-wide.
     pub(crate) fn tool_namespace(&self, cx: &App) -> Option<String> {
         self.live(cx)?.scope.namespaces().first().cloned()
+    }
+
+    /// `--screen switcher`: opens the popover once the session is live. It runs from `render`
+    /// because opening needs a window.
+    fn open_pending_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pending_switcher_launch || self.live(cx).is_none() {
+            return;
+        }
+        self.pending_switcher_launch = false;
+        self.open_cluster_switcher(window, cx);
     }
 
     /// Opens the `--screen` dialog once the session is live. It runs from `render` because a
@@ -2386,6 +2795,8 @@ impl AppShell {
                 is_content_pending,
             ),
             is_log_pending,
+            is_switcher_pending: self.pending_switcher_launch
+                || self.switcher.health().is_probing(),
             is_change_feed_pending: self
                 .session
                 .as_ref()
@@ -2748,18 +3159,31 @@ impl Render for AppShell {
         self.sync_secret_values(cx);
         self.sync_kubelet_demand(cx);
         self.sync_quick_filter(window, cx);
+        self.open_pending_switcher(window, cx);
         let theme = cx.theme();
         let counts = self.navigation_counts(cx);
         let session = self.session.as_ref().map(|session| session.read(cx));
         let is_kubeconfig_loading = self.catalog.read(cx).is_loading();
-        v_flex()
+        let root = v_flex()
             .size_full()
             .track_focus(&self.focus_handle)
             .key_context("AppShell")
             .on_action(cx.listener(|shell, _: &FocusQuickFilter, window, cx| {
                 shell.focus_quick_filter(window, cx);
             }))
-            .bg(theme.background)
+            .on_action(cx.listener(|shell, _: &OpenClusterSwitcher, window, cx| {
+                shell.toggle_cluster_switcher(window, cx);
+            }));
+        let root = on_switch_to::<SwitchToCluster1>(root, 1, cx);
+        let root = on_switch_to::<SwitchToCluster2>(root, 2, cx);
+        let root = on_switch_to::<SwitchToCluster3>(root, 3, cx);
+        let root = on_switch_to::<SwitchToCluster4>(root, 4, cx);
+        let root = on_switch_to::<SwitchToCluster5>(root, 5, cx);
+        let root = on_switch_to::<SwitchToCluster6>(root, 6, cx);
+        let root = on_switch_to::<SwitchToCluster7>(root, 7, cx);
+        let root = on_switch_to::<SwitchToCluster8>(root, 8, cx);
+        let root = on_switch_to::<SwitchToCluster9>(root, 9, cx);
+        root.bg(theme.background)
             .text_color(theme.foreground)
             .child(title_bar(self, cx))
             .child(
@@ -2771,6 +3195,13 @@ impl Render for AppShell {
             )
             .child(status_bar(session, is_kubeconfig_loading, cx))
     }
+}
+
+/// `Ctrl n`: switches to row `shortcut` of the switcher list.
+fn on_switch_to<A: gpui_kit::Action>(root: Div, shortcut: u8, cx: &Context<AppShell>) -> Div {
+    root.on_action(cx.listener(move |shell, _: &A, _, cx| {
+        shell.switch_to_nth_cluster(shortcut, cx);
+    }))
 }
 
 /// The sort and hidden columns of the view of `table`, by column name.
@@ -2834,18 +3265,6 @@ fn focus_table<D: TableDelegate>(
 ) {
     let handle = table.read(cx).focus_handle(cx);
     window.focus(&handle, cx);
-}
-
-/// The namespace a session starts in: `--namespace` (first session only), else the cluster's
-/// saved default, else `None` for the session's own default.
-fn start_namespace(
-    requested: Option<NamespaceScope>,
-    default_namespace: Option<&str>,
-) -> Option<NamespaceScope> {
-    requested.or_else(|| {
-        let name = default_namespace?;
-        Some(NamespaceScope::of_namespaces(vec![name.to_owned()]))
-    })
 }
 
 /// The loaded kubeconfig that defines `cluster`, with its context.

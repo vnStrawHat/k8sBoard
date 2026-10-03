@@ -552,11 +552,15 @@ impl AppShell {
         match self.kubeconfig_state(cx) {
             KubeconfigState::Loading => return busy_view("Loading kubeconfig…", cx),
             KubeconfigState::Failed(message) => {
-                return error_view("Cannot load the kubeconfig", &message, None, None, cx);
+                return error_view("Cannot load the kubeconfig", &message, None, None, None, cx);
             }
             KubeconfigState::Loaded => {}
         }
         let Some(session) = &self.session else {
+            // Between the release of the old session and the deferred connect of the new one.
+            if let Some(label) = self.active_label(cx) {
+                return busy_view(&format!("Connecting to {label}…"), cx);
+            }
             let message = self
                 .context_error
                 .as_deref()
@@ -566,23 +570,33 @@ impl AppShell {
                 message,
                 Some("Pick a context from the cluster menu."),
                 None,
+                self.back_action(cx),
                 cx,
             );
         };
         let session = session.read(cx);
+        let label = self
+            .active_label(cx)
+            .unwrap_or_else(|| session.context().to_owned());
         match session.phase() {
-            SessionPhase::Connecting { .. } => {
-                busy_view(&format!("Connecting to {}…", session.context()), cx)
-            }
+            SessionPhase::Connecting { .. } => busy_view(&format!("Connecting to {label}…"), cx),
             SessionPhase::Failed { message } => error_view(
-                &format!("Cannot connect to {}", session.context()),
+                &format!("Cannot connect to {label}"),
                 message,
                 None,
                 Some(Rc::new(cx.listener(|shell, _, _, cx| shell.retry(cx)))),
+                self.back_action(cx),
                 cx,
             ),
             SessionPhase::Live(live) => self.render_list(live, cx),
         }
+    }
+
+    /// "Back to {previous}", offered only while the previous cluster still resolves.
+    fn back_action(&self, cx: &Context<Self>) -> Option<(String, ClickHandler)> {
+        let previous = self.previous_label(cx)?;
+        let back: ClickHandler = Rc::new(cx.listener(|shell, _, _, cx| shell.back_to_previous(cx)));
+        Some((format!("Back to {previous}"), back))
     }
 
     fn render_list(&self, live: &LiveCluster, cx: &Context<Self>) -> AnyElement {
@@ -604,6 +618,7 @@ impl AppShell {
                 &format!("{title} are unavailable"),
                 message,
                 Some("Retrying automatically."),
+                None,
                 None,
                 cx,
             );
@@ -763,12 +778,13 @@ fn busy_view(text: &str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// An error alert, with optional follow-up help and a Retry button.
+/// An error alert, with optional follow-up help, a Retry button, and a second button (Back to …).
 fn error_view(
     title: &str,
     message: &str,
     hint: Option<&'static str>,
     retry: Option<ClickHandler>,
+    back: Option<(String, ClickHandler)>,
     cx: &App,
 ) -> AnyElement {
     v_flex()
@@ -787,6 +803,14 @@ fn error_view(
                     .label("Retry")
                     .small()
                     .on_click(move |event, window, cx| on_retry(event, window, cx)),
+            )
+        })
+        .when_some(back, |this, (label, on_back)| {
+            this.child(
+                Button::new("back")
+                    .label(label)
+                    .small()
+                    .on_click(move |event, window, cx| on_back(event, window, cx)),
             )
         })
         .into_any_element()

@@ -35,7 +35,7 @@ fn open_shell_with(
     open_shell_on("does-not-exist/kubeconfig.yml", extra, cx)
 }
 
-fn open_shell_on(
+pub(super) fn open_shell_on(
     kubeconfig: &str,
     extra: &[&str],
     cx: &mut TestAppContext,
@@ -48,6 +48,7 @@ fn open_shell_on(
     cx.update(|cx| {
         gpui_kit::init(cx);
         bind_keys(cx);
+        crate::cluster_switcher::bind_keys(cx);
         // Writes stay off: a shell test never saves settings.
         AppSettings::install(
             LoadedSettings {
@@ -76,7 +77,7 @@ fn open_shell_on(
     })
 }
 
-fn render(window: WindowHandle<Root>, cx: &mut TestAppContext) {
+pub(super) fn render(window: WindowHandle<Root>, cx: &mut TestAppContext) {
     cx.update_window(window.into(), |_, window, cx| window.render_frame(cx))
         .expect("the window is open");
     cx.run_until_parked();
@@ -543,28 +544,6 @@ fn toggle_column_persists_hidden_columns_by_name(cx: &mut TestAppContext) {
     assert_eq!(hidden, Some(vec!["CPU".to_owned(), "Node".to_owned()]));
 }
 
-#[test]
-fn start_namespace_prefers_the_flag() {
-    let flag = NamespaceScope::Named("flag-ns".to_owned());
-    assert_eq!(
-        start_namespace(Some(flag.clone()), Some("saved")),
-        Some(flag)
-    );
-}
-
-#[test]
-fn start_namespace_falls_back_to_the_saved_default() {
-    assert_eq!(
-        start_namespace(None, Some("saved")),
-        Some(NamespaceScope::Named("saved".to_owned()))
-    );
-}
-
-#[test]
-fn start_namespace_is_none_without_flag_or_default() {
-    assert_eq!(start_namespace(None, None), None);
-}
-
 fn toggle_default(shell: &Entity<AppShell>, cx: &mut TestAppContext) {
     cx.update(|cx| {
         shell.update(cx, |shell, cx| {
@@ -646,9 +625,10 @@ fn switcher_labels(shell: &Entity<AppShell>, cx: &mut TestAppContext) -> Vec<Str
     cx.update(|cx| {
         shell
             .read(cx)
-            .switcher_items(cx)
+            .all_switcher_sections(cx)
             .into_iter()
-            .map(|item| item.label)
+            .flat_map(|section| section.rows)
+            .map(|row| row.label)
             .collect()
     })
 }

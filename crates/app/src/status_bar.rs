@@ -1,8 +1,10 @@
+use std::time::Duration;
+
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{App, Hsla, IntoElement, ParentElement as _, Styled as _, div};
 
-use crate::cluster_session::{ClusterSession, SessionPhase};
+use crate::cluster_session::{ClusterSession, SessionPhase, latency_millis};
 
 /// What the first status bar slot says about the live updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,7 +57,7 @@ pub(crate) fn status_bar(
     };
     let version = session
         .and_then(ClusterSession::live)
-        .map(|live| format!("API {}", live.server_version.git_version));
+        .map(|live| api_text(&live.server_version.git_version, live.api_latency));
     let user = session
         .and_then(ClusterSession::user)
         .map(|user| format!("user: {user}"));
@@ -69,10 +71,37 @@ pub(crate) fn status_bar(
     bar.right(format!("k8sBoard {}", env!("CARGO_PKG_VERSION")))
 }
 
+/// `API v1.29.5 · 38 ms`: the server version and the round trip of its request.
+fn api_text(git_version: &str, latency: Duration) -> String {
+    format!("API {git_version} · {} ms", latency_millis(latency))
+}
+
 fn watch_slot(text: String, dot: Option<Hsla>) -> impl IntoElement {
     h_flex()
         .gap_1()
         .items_center()
         .children(dot.map(|color| div().size_2().rounded_full().bg(color)))
         .child(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_bar_shows_version_and_latency() {
+        assert_eq!(
+            api_text("v1.29.5", Duration::from_millis(38)),
+            "API v1.29.5 · 38 ms"
+        );
+    }
+
+    #[test]
+    fn latency_below_one_ms_shows_one() {
+        assert_eq!(
+            api_text("v1.29.5", Duration::from_micros(400)),
+            "API v1.29.5 · 1 ms"
+        );
+        assert_eq!(latency_millis(Duration::ZERO), 1);
+    }
 }

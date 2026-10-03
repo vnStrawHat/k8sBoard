@@ -50,12 +50,12 @@ pub(crate) fn move_highlight(visible: &[SwitcherSection], current: Option<&Clust
 |---|---|---|
 | Header | filter `Input` (small, search icon prefix); segment `All {n}` / `Connected {m}` (counts over the unfiltered rows) | `Input`, two ghost `Button`s with `.selected()` |
 | Section header | `{title}` left, `{count}` right, muted, small | `div` |
-| Row | env badge (0024 `environment_badge`), mono label (flex, ellipsis), health line, right: `Kbd` for `Ctrl n` or a Retry/Check small button | `Kbd::binding_for_action(&SwitchToClusterN, Some("AppShell"), window)` (kbd.rs:58) |
+| Row | env badge (0024 `environment_badge`), mono label (flex, ellipsis), health line, right: a Retry or Check small button (Unreachable, Not checked) and the `Kbd` for `Ctrl n`, together | `Kbd::binding_for_action(&SwitchToClusterN, Some("AppShell"), window)` (kbd.rs:58) |
 | Current mark | the active row: `theme.accent` background and `Icon::new(IconName::Check)` before the badge (W1 `.dd-i.on.cur`; `icons/check.svg` is in the kit default set) | `Icon` |
 | Highlight | keyboard highlight: `theme.list_hover` background | — |
-| Footer | `Manage clusters…` left, muted `opens Settings` + `Kbd::binding_for_action(&OpenSettings, Some("AppShell"), window)` right; click closes the popover and dispatches `OpenSettings` (0025) | `Kbd` |
+| Footer | `Manage clusters…` left, muted `opens Settings` + `Kbd::binding_for_action(&OpenSettings, Some("AppShell"), window)` right; click closes the popover and dispatches `ManageClusters` (0025: it switches an already open Settings window to the Clusters page; the hint stays on `OpenSettings`) | `Kbd` |
 
-Health colors: Live/Reachable → `tone_color(Ok)`; Interrupted/Checking/Connecting → `Info`; Unreachable and Not checked → muted (W1 `.st.mute`). An Unreachable row (including the active Failed one) shows Retry instead of its `Kbd` (W1 minikube row).
+Health colors: Live/Reachable → `tone_color(Ok)`; Interrupted/Checking/Connecting → `Info`; Unreachable and Not checked → muted (W1 `.st.mute`). An Unreachable row (including the active Failed one) is dimmed (opacity 0.55 on the row body, not on Retry) and shows Retry next to its `Kbd` (W1 minikube row). The segment sits inline right of the filter; the chosen one is filled (`primary`).
 
 ## Interaction
 

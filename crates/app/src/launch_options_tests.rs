@@ -532,6 +532,15 @@ fn screen_overview_parses() {
 }
 
 #[test]
+fn screen_switcher_parses_and_opens_overview() {
+    let switcher = run_options(&["--screen", "switcher"]).screen;
+    assert_eq!(switcher, LaunchScreen::Switcher);
+    assert_eq!(switcher.screen(), Screen::Overview);
+    assert!(!switcher.has_drawer());
+    assert!(switcher.settings_screen().is_none());
+}
+
+#[test]
 fn theme_rejects_unknown() {
     let error = parse(&["--theme", "sepia"]).expect_err("unknown theme");
     assert!(error.contains("--theme"), "{error}");

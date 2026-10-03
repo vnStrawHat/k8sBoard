@@ -77,6 +77,8 @@ pub(crate) enum SessionPhase {
 
 pub(crate) struct LiveCluster {
     pub(crate) server_version: ServerVersion,
+    /// How long the version request took during the connect; the status bar and the switcher show it.
+    pub(crate) api_latency: Duration,
     /// Decided before the session is live, so it is never unknown.
     pub(crate) scope: NamespaceScope,
     pub(crate) access: AccessState,
@@ -973,6 +975,13 @@ impl<T> LiveList<T> {
     }
 }
 
+/// Whole milliseconds for display, at least 1 so a fast answer never reads `0 ms`.
+pub(crate) fn latency_millis(latency: Duration) -> u64 {
+    u64::try_from(latency.as_millis())
+        .unwrap_or(u64::MAX)
+        .max(1)
+}
+
 /// A `Display` text plus the first line of the cause, without anything secret: the
 /// cluster crate keeps credentials out of its error text.
 pub(crate) fn error_text(error: &(dyn Error + 'static)) -> String {
@@ -1016,6 +1025,8 @@ fn initial_scope(
 struct Connected {
     connection: ClusterConnection,
     server_version: ServerVersion,
+    /// The round trip of the version request only, not the client setup.
+    api_latency: Duration,
     scope: NamespaceScope,
     access: Result<AccessReport, String>,
 }
@@ -1026,7 +1037,9 @@ async fn connect_cluster(
     requested_namespace: Option<NamespaceScope>,
 ) -> Result<Connected, ClusterError> {
     let connection = ClusterConnection::open(&kubeconfig, &context).await?;
+    let version_started = Instant::now();
     let server_version = connection.server_version().await?;
+    let api_latency = version_started.elapsed();
 
     let all_namespaces_review = match requested_namespace {
         Some(_) => None,
@@ -1050,6 +1063,7 @@ async fn connect_cluster(
     Ok(Connected {
         connection,
         server_version,
+        api_latency,
         scope,
         access,
     })
@@ -2169,6 +2183,7 @@ impl LiveCluster {
         let Connected {
             connection,
             server_version,
+            api_latency,
             scope,
             access,
         } = connected;
@@ -2215,6 +2230,7 @@ impl LiveCluster {
         let issue_feeds = IssueFeeds::start(&runtime, &connection, scope.clone(), cx);
         let mut live = Self {
             server_version,
+            api_latency,
             scope,
             access,
             rbac: RbacState::Idle,

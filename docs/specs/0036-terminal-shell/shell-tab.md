@@ -57,7 +57,8 @@ All of them read `action_availability(OpenShell, guard)` and then call `start_co
 | `tab`, `shift-tab`, `ctrl-c`, `ctrl-k`, `ctrl-n`, `ctrl-w` | `NoAction` | `Terminal` | suppress the kit Root focus cycling and copy, and the 0028/0029 chords Ctrl K, N, W on Windows and Linux, so the key reaches `on_key_down` and the program (completion, kill-line, history, word delete) |
 
 - 0028 `WORKSPACE` gains `&& !Terminal`: single keys never act on the table while a shell has focus.
-- `WINDOW` chords that no shell uses stay app chords inside the terminal: Ctrl \`, Ctrl Tab, Ctrl Shift Tab, Ctrl Shift M, Ctrl ,, Ctrl 1–9. On macOS every `secondary` chord is ⌘, which shells never receive, so ⌘K, ⌘N, ⌘W keep their app meaning.
+- `WINDOW` chords that no shell uses stay app chords inside the terminal: Ctrl \`, Ctrl Tab, Ctrl Shift Tab, Ctrl Shift M, Ctrl ,. On macOS every `secondary` chord is ⌘, which shells never receive, so ⌘K, ⌘N, ⌘W keep their app meaning.
 - Ctrl W closes the active dock tab only while focus is outside the terminal (inside, `ctrl-w` is `NoAction` and reaches the program; on macOS ⌘W still closes the tab).
 - Esc always goes to the program (vim) and never un-zooms the dock while the terminal has focus; Ctrl Shift M still toggles zoom. Leaving the terminal by keyboard: Ctrl \` minimizes the dock (focus returns to the shell root).
 - `ctrl-shift-c` in the terminal outranks 0026's switcher chord (`secondary-shift-c` on Windows and Linux): the switcher is reachable from the terminal by the title bar only (decision 30).
+- 0026 binds `secondary-1…9` (`SwitchToCluster1…9`) and `secondary-shift-c` in the shell root context. Inside a Terminal, `ctrl-shift-c` is `TerminalCopy` (above), and `ctrl-1…9` must be bound or consumed in the `Terminal` context (`NoAction`, like Ctrl K), so Ctrl n inside a pod shell reaches the program and does not switch clusters. On macOS ⌘1…9 stay app chords (shells never receive ⌘).

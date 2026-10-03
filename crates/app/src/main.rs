@@ -10,10 +10,13 @@ mod certificate_expiry;
 mod cluster_capacity;
 mod cluster_catalog;
 mod cluster_form;
+mod cluster_health;
 mod cluster_metrics;
 mod cluster_registry;
 mod cluster_runtime;
 mod cluster_session;
+mod cluster_switcher;
+mod cluster_switcher_rows;
 mod clusters_page;
 mod config_map_rows;
 mod container_detail;
@@ -197,6 +200,7 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
             );
             CatalogHandle::install(chain, cx);
             app_shell::bind_keys(cx);
+            cluster_switcher::bind_keys(cx);
             settings_window::bind_keys(cx);
             cx.on_action(|_: &OpenSettings, cx| {
                 open_settings_window(SettingsPage::Clusters, SettingsSize::Standard, cx);

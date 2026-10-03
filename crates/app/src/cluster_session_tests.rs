@@ -1522,3 +1522,27 @@ fn change_feed_starts_while_checking_or_unknown() {
     };
     assert!(!is_change_feed_denied(&checking));
 }
+
+impl ClusterSession {
+    /// A seam for the shell tests: the session goes live over `connection` without the round
+    /// trip, so a headless window can show a live session offline. The pending connect is
+    /// replaced (and so aborted) with the phase.
+    pub(crate) fn go_live_for_test(
+        &mut self,
+        connection: ClusterConnection,
+        scope: NamespaceScope,
+        cx: &mut Context<Self>,
+    ) {
+        let connected = Connected {
+            connection,
+            server_version: ServerVersion {
+                git_version: "v1.29.5".to_owned(),
+                platform: "linux/amd64".to_owned(),
+            },
+            api_latency: Duration::from_millis(7),
+            scope,
+            access: Err("no cluster in a test".to_owned()),
+        };
+        self.finish_connect(Ok(Ok(connected)), cx);
+    }
+}

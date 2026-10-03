@@ -1,7 +1,6 @@
 use cluster::NamespaceScope;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, TitleBar, h_flex,
@@ -12,11 +11,12 @@ use gpui_kit::{
 
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::namespaces_label;
+use crate::cluster_switcher::cluster_switcher as switcher_popover;
 use crate::environment::{environment_badge, environment_color};
 use crate::issue_board::IssueSummary;
 use crate::namespace_picker::{PickerAnchor, namespace_picker as picker};
 use crate::settings::AppSettings;
-use crate::settings_window::{ManageClusters, OpenSettings};
+use crate::settings_window::OpenSettings;
 use crate::status_tone::tone_color;
 
 pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
@@ -111,7 +111,6 @@ fn issues_tooltip(summary: IssueSummary, coverage_note: Option<String>) -> Strin
 }
 
 fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
-    let items = shell.switcher_items(cx);
     let trigger = match shell.active_profile(cx) {
         Some(profile) => h_flex()
             .gap_2()
@@ -121,31 +120,12 @@ fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
             .into_any_element(),
         None => "No cluster".into_any_element(),
     };
-    let is_disabled = items.is_empty();
-    let shell_handle = cx.weak_entity();
-    Button::new("cluster-switcher")
+    let trigger = Button::new("cluster-switcher")
         .ghost()
         .small()
         .child(trigger)
-        .dropdown_caret(true)
-        .disabled(is_disabled)
-        .dropdown_menu(move |menu, _, _| {
-            let menu = items.iter().fold(menu, |menu, item| {
-                let target = item.cluster.clone();
-                let shell_handle = shell_handle.clone();
-                menu.item(
-                    PopupMenuItem::new(item.label.clone())
-                        .checked(item.is_active)
-                        .on_click(move |_, _, cx| {
-                            let _ = shell_handle
-                                .update(cx, |shell, cx| shell.switch_cluster(&target, cx));
-                        }),
-                )
-            });
-            menu.separator()
-                .item(PopupMenuItem::new("Manage clusters…").action(Box::new(ManageClusters)))
-        })
-        .into_any_element()
+        .dropdown_caret(true);
+    switcher_popover(trigger, shell, cx)
 }
 
 fn namespace_picker(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {

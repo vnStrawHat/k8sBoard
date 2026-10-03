@@ -1,8 +1,9 @@
 //! The cluster registry: per-context overrides, the extra kubeconfig files, and the last-used //! cluster. Paths and names only, never credentials. Also picks the cluster to open at start.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-use cluster::ContextSummary;
+use cluster::{ContextSummary, NamespaceScope};
 use serde::{Deserialize, Serialize};
 
 use crate::environment::{Environment, guess_environment};
@@ -130,6 +131,26 @@ pub(crate) fn switcher_label(
         Some(file_name) if is_duplicate_name => format!("{} · {file_name}", profile.display_name),
         _ => profile.display_name.clone(),
     }
+}
+
+/// The namespace scope each cluster had when the user left it, for this app run only.
+pub(crate) type ScopeMemory = HashMap<ClusterRef, NamespaceScope>;
+
+pub(crate) fn remember_scope(memory: &mut ScopeMemory, cluster: ClusterRef, scope: NamespaceScope) {
+    memory.insert(cluster, scope);
+}
+
+/// Where a session for `target` starts: the scope remembered for it, else the saved default
+/// namespace, else `None` for the session's own default.
+pub(crate) fn start_scope(
+    memory: &ScopeMemory,
+    target: &ClusterRef,
+    profile: &ClusterProfile,
+) -> Option<NamespaceScope> {
+    memory.get(target).cloned().or_else(|| {
+        let name = profile.default_namespace.as_ref()?;
+        Some(NamespaceScope::of_namespaces([name.clone()]))
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

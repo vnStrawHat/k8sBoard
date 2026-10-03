@@ -40,18 +40,18 @@ Status: amended after the advisor review (M1–M5, S1–S8, N1–N5), HEAD `9d5a
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. `Cargo.lock` unchanged.
-- [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
-- [ ] 3. After a switch and `run_until_parked` (two draws), the old session's weak handle cannot upgrade, and that is already true when the deferred connect of the new session starts (asserted inside `connect_active` in a test hook).
-- [ ] 4. Switching A → B → A restores A's namespace scope; a new cluster opens on its 0024 default namespace, else today's default (`start_scope` tests).
-- [ ] 5. `last_used` changes only when a session becomes Live; a failed connect shows "Cannot connect to {label}" with Retry, and "Back to {previous label}" when `previous` resolves.
-- [ ] 6. The popover shows W1's parts: filter input, All/Connected segment with counts, env groups with counts, badges, current mark, health line, `Ctrl n` hints for the first nine rows, footer link to Settings.
-- [ ] 7. Typing filters by label, context, env badge, and file name (case-insensitive); the filter has focus on open; closing restores the previous focus.
-- [ ] 8. `Ctrl Shift C` toggles the switcher; `Ctrl n` switches to row n of the unfiltered list from anywhere in the main window, text fields included; ↓↑, Enter, Esc work in the filter and on a row.
-- [ ] 9. 0028's reserved-key list no longer has `secondary-shift-c` or `secondary-1…9`; `space` stays reserved for 0027.
-- [ ] 10. Opening the switcher probes only in-process-auth clusters, at most 4 at a time, 5 s each, cached 60 s; closing aborts probes and those rows are probed again on the next open.
-- [ ] 11. On UAT the switcher shows `readonly@Monitor` as current with `Live · {n} ms`; the probe code calls only `open` + `server_version` (`GET /version`); the 0001 read-only grep is unchanged.
-- [ ] 12. Screenshot `switcher` (light, dark): no high-severity defect against W1 (ignoring 0027 parts).
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`. `Cargo.lock` unchanged.
+- [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline.
+- [x] 3. After a switch and `run_until_parked` (two draws), the old session's weak handle cannot upgrade, and that is already true when the deferred connect of the new session starts (asserted inside `connect_active` in a test hook).
+- [x] 4. Switching A → B → A restores A's namespace scope; a new cluster opens on its 0024 default namespace, else today's default (`start_scope` tests).
+- [x] 5. `last_used` changes only when a session becomes Live; a failed connect shows "Cannot connect to {label}" with Retry, and "Back to {previous label}" when `previous` resolves.
+- [x] 6. The popover shows W1's parts: filter input, All/Connected segment with counts, env groups with counts, badges, current mark, health line, `Ctrl n` hints for the first nine rows, footer link to Settings.
+- [x] 7. Typing filters by label, context, env badge, and file name (case-insensitive); the filter has focus on open; closing restores the previous focus.
+- [x] 8. `Ctrl Shift C` toggles the switcher; `Ctrl n` switches to row n of the unfiltered list from anywhere in the main window, text fields included; ↓↑, Enter, Esc work in the filter and on a row.
+- [ ] 9. 0028's reserved-key list no longer has `secondary-shift-c` or `secondary-1…9`; `space` stays reserved for 0027. (0028 code and its `keymap.md` are not merged; the orchestrator follow-up in files-to-touch.md. No switcher binding uses `space`: test `space_stays_unbound`.)
+- [x] 10. Opening the switcher probes only in-process-auth clusters, at most 4 at a time, 5 s each, cached 60 s; closing aborts probes and those rows are probed again on the next open.
+- [x] 11. On UAT the switcher shows `readonly@Monitor` as current with `Live · {n} ms`; the probe code calls only `open` + `server_version` (`GET /version`); the 0001 read-only grep is unchanged.
+- [x] 12. Screenshot `switcher` (light, dark): no high-severity defect against W1 (ignoring 0027 parts).
 
 ## Open items
 

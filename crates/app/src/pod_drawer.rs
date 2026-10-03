@@ -111,11 +111,15 @@ fn pod_menu_button(
     dock: &WeakEntity<LogDock>,
     shell: WeakEntity<AppShell>,
 ) -> AnyElement {
-    let session = session.clone();
+    // Weak: a rendered menu closure must not keep a session alive after a cluster switch.
+    let session = session.downgrade();
     let dock = dock.clone();
     let key = ResourceKey::of_pod(pod);
     menu_button()
         .dropdown_menu(move |menu, _, cx| {
+            let Some(session) = session.upgrade() else {
+                return menu;
+            };
             let Some(live) = session.read(cx).live() else {
                 return menu;
             };

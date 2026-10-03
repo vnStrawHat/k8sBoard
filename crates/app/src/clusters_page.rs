@@ -29,8 +29,8 @@ use crate::app_shell::find_cluster;
 use crate::cluster_catalog::{CatalogNotice, ClusterCatalog, PasteStatus};
 use crate::cluster_form::{
     ClusterGroup, ClusterRow, FieldError, RowOrigin, TEST_CONNECTION_TIMEOUT, TestState,
-    cluster_groups, count_text, edit_entry, remove_dialog_text, reset_entry, resolve_selection,
-    test_connection, validate_display_name, validate_namespace,
+    count_text, edit_entry, remove_dialog_text, reset_entry, resolve_selection, test_connection,
+    validate_display_name, validate_namespace,
 };
 use crate::cluster_registry::{ClusterEntry, ClusterRef};
 use crate::cluster_runtime::ClusterRuntime;
@@ -116,17 +116,7 @@ impl ClustersPage {
     }
 
     fn groups(&self, cx: &App) -> Vec<ClusterGroup> {
-        let catalog = self.catalog.read(cx);
-        let kubeconfigs: Vec<&Kubeconfig> = catalog
-            .kubeconfigs()
-            .map(|kubeconfig| kubeconfig.as_ref())
-            .collect();
-        cluster_groups(
-            &kubeconfigs,
-            &AppSettings::get(cx).registry,
-            |path| catalog.is_chain_source(path),
-            AppSettings::config_dir(cx),
-        )
+        self.catalog.read(cx).groups(cx)
     }
 
     fn rows(&self, cx: &App) -> Vec<ClusterRow> {

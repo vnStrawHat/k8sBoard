@@ -36,7 +36,7 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 | Drawer Monitor tab (W4c) | Done | 0010, 0011 | |
 | RBAC and policy analysis: Who can…, Check permissions, Can do, Test traffic | Done | 0023 | — |
 | Overview (W3), Issues, Topology (W11) | Partial (Issues in 0020; Overview in 0021, the default landing screen; Topology → 0022) | 0020, 0021 | 0022 |
-| Settings (W2), multi-cluster (W1), env colors | Partial (settings store, cluster registry, env badge and border, saved sort and columns, default namespace done in 0024; Settings window with Clusters, Appearance, About done in 0025) | 0024 | switcher 0026, multi-cluster 0027 |
+| Settings (W2), multi-cluster (W1), env colors | Partial (settings store, cluster registry, env badge and border, saved sort and columns, default namespace done in 0024; Settings window with Clusters, Appearance, About done in 0025; cluster switcher with health probes and Ctrl 1–9 done in 0026) | 0024, 0025, 0026 | multi-cluster 0027 |
 | Keyboard map, command palette (W9) | Missing | — | 0028, 0029 |
 | Every mutation: YAML edit (W10), drain (W6), shell, port-forward, delete | Missing | — | 0030–0037 (0038 Helm writes deferred) |
 

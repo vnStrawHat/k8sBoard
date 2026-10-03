@@ -42,7 +42,7 @@
 | `highlight_resets_to_first_visible_on_edit` | |
 | `open_focuses_the_filter` (headless) | after open and one draw, the filter's focus handle is focused (kit `track_focus`) |
 | `close_restores_previous_focus` (headless) | focus in the `/` filter before open → back there after Esc |
-| `footer_dispatches_open_settings` (headless) | |
+| `footer_dispatches_manage_clusters` (headless) | |
 
 ## Step 3 — keys (headless)
 

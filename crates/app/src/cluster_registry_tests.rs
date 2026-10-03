@@ -230,3 +230,76 @@ fn entry_mut_appends_once() {
     registry.entry_mut(&cluster("ctx", "b.yaml"));
     assert_eq!(registry.clusters.len(), 2);
 }
+
+fn profile_with_default(default_namespace: Option<&str>) -> ClusterProfile {
+    let mut entry = entry("ctx", "a.yaml");
+    entry.default_namespace = default_namespace.map(str::to_owned);
+    registry_with(entry).profile(&summary("ctx", "a.yaml"))
+}
+
+#[test]
+fn start_scope_prefers_memory() {
+    let target = cluster("ctx", "a.yaml");
+    let mut memory = ScopeMemory::new();
+    remember_scope(
+        &mut memory,
+        target.clone(),
+        NamespaceScope::Named("kube-system".to_owned()),
+    );
+    assert_eq!(
+        start_scope(&memory, &target, &profile_with_default(Some("shop"))),
+        Some(NamespaceScope::Named("kube-system".to_owned()))
+    );
+}
+
+#[test]
+fn start_scope_uses_default_namespace() {
+    let target = cluster("ctx", "a.yaml");
+    assert_eq!(
+        start_scope(
+            &ScopeMemory::new(),
+            &target,
+            &profile_with_default(Some("shop"))
+        ),
+        Some(NamespaceScope::Named("shop".to_owned()))
+    );
+}
+
+#[test]
+fn start_scope_is_none_without_memory_or_default() {
+    let target = cluster("ctx", "a.yaml");
+    assert_eq!(
+        start_scope(&ScopeMemory::new(), &target, &profile_with_default(None)),
+        None
+    );
+}
+
+#[test]
+fn start_scope_ignores_the_memory_of_another_cluster() {
+    let mut memory = ScopeMemory::new();
+    remember_scope(&mut memory, cluster("ctx", "b.yaml"), NamespaceScope::All);
+    assert_eq!(
+        start_scope(
+            &memory,
+            &cluster("ctx", "a.yaml"),
+            &profile_with_default(None)
+        ),
+        None
+    );
+}
+
+#[test]
+fn remember_scope_replaces_previous_value() {
+    let target = cluster("ctx", "a.yaml");
+    let mut memory = ScopeMemory::new();
+    remember_scope(&mut memory, target.clone(), NamespaceScope::All);
+    remember_scope(
+        &mut memory,
+        target.clone(),
+        NamespaceScope::Named("web".to_owned()),
+    );
+    assert_eq!(
+        memory.get(&target),
+        Some(&NamespaceScope::Named("web".to_owned()))
+    );
+}

@@ -9,7 +9,7 @@ use cluster::{Kubeconfig, KubeconfigError};
 use gpui_kit::{App, AppContext as _, ClipboardItem, Context, Entity, Global, Subscription};
 use zeroize::Zeroizing;
 
-use crate::cluster_form::{file_name_text, remove_kubeconfig};
+use crate::cluster_form::{ClusterGroup, cluster_groups, file_name_text, remove_kubeconfig};
 use crate::cluster_session::error_text;
 use crate::kubeconfig_import::{
     PASTED_DIR, is_app_owned, is_pasted_file_name, write_pasted_kubeconfig,
@@ -159,6 +159,20 @@ impl ClusterCatalog {
             CatalogPart::Loaded(kubeconfig) => Some(kubeconfig),
             CatalogPart::Loading | CatalogPart::Failed(_) => None,
         })
+    }
+
+    /// The loaded clusters grouped by environment, as Settings and the switcher list them.
+    pub(crate) fn groups(&self, cx: &App) -> Vec<ClusterGroup> {
+        let kubeconfigs: Vec<&Kubeconfig> = self
+            .kubeconfigs()
+            .map(|kubeconfig| kubeconfig.as_ref())
+            .collect();
+        cluster_groups(
+            &kubeconfigs,
+            &AppSettings::get(cx).registry,
+            |path| self.is_chain_source(path),
+            AppSettings::config_dir(cx),
+        )
     }
 
     pub(crate) fn is_loading(&self) -> bool {

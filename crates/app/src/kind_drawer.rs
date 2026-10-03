@@ -162,10 +162,14 @@ fn kind_menu_button(
     session: &Entity<ClusterSession>,
     shell: WeakEntity<AppShell>,
 ) -> AnyElement {
-    let session = session.clone();
+    // Weak: a rendered menu closure must not keep a session alive after a cluster switch.
+    let session = session.downgrade();
     let key = ResourceKey::of_row(kind, row);
     menu_button()
         .dropdown_menu(move |menu, window, cx| {
+            let Some(session) = session.upgrade() else {
+                return menu;
+            };
             let open_url = (kind == ResourceKind::Ingresses).then(|| {
                 let choice = session
                     .read(cx)

@@ -109,6 +109,8 @@ pub(crate) struct SettleInput {
     pub(crate) is_log_pending: bool,
     /// A tool dialog whose answer has not arrived.
     pub(crate) is_dialog_pending: bool,
+    /// `--screen switcher`: the popover is not open yet, or a probe has not answered.
+    pub(crate) is_switcher_pending: bool,
     /// Overview: the change feeds have not delivered their first snapshot.
     pub(crate) is_change_feed_pending: bool,
     /// Where the pods metrics feed stands.
@@ -179,6 +181,7 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
         TargetState::Loading => false,
         TargetState::Loaded if screen.has_log_dock() => !input.is_log_pending,
         TargetState::Loaded if screen.opens_dialog() => !input.is_dialog_pending,
+        TargetState::Loaded if screen == LaunchScreen::Switcher => !input.is_switcher_pending,
         TargetState::Loaded if screen == LaunchScreen::Overview && input.is_change_feed_pending => {
             false
         }
@@ -290,6 +293,11 @@ async fn capture_when_settled(
         std::fs::create_dir_all(parent)?;
     }
     image.save(&request.path)?;
+    // An open popover leaves its input focused, and the blink timer of a focused input is a handle the
+    // leak check of this build reports at exit. Closing the switcher moves the focus back first.
+    shell.update(cx, |shell, cx| shell.close_cluster_switcher(cx));
+    window.update(cx, |_, window, _| window.refresh())?;
+    cx.background_executor().timer(SETTLE_DELAY).await;
     if is_settled {
         eprintln!(
             "screenshot saved: {} ({}x{})",
@@ -370,6 +378,7 @@ mod tests {
             is_drawer_ready,
             is_log_pending: false,
             is_dialog_pending: false,
+            is_switcher_pending: false,
             is_change_feed_pending: false,
             pod_metrics: progress(FeedStatus::Live, 1),
             node_metrics: progress(FeedStatus::Live, 1),
@@ -435,6 +444,21 @@ mod tests {
             list_screen,
             &input(TargetState::Loading, false)
         ));
+    }
+
+    #[test]
+    fn switcher_screen_waits_for_the_popover_and_its_probes() {
+        let pending = SettleInput {
+            is_switcher_pending: true,
+            ..input(TargetState::Loaded, false)
+        };
+        assert!(!is_screen_settled(LaunchScreen::Switcher, &pending));
+        assert!(is_screen_settled(
+            LaunchScreen::Switcher,
+            &input(TargetState::Loaded, false)
+        ));
+        // Other screens ignore the switcher.
+        assert!(is_screen_settled(LaunchScreen::Pods, &pending));
     }
 
     #[test]

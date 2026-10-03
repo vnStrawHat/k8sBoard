@@ -37,6 +37,10 @@ No change: `KeyBinding`, actions, `Kbd`, `Dialog`, `Notification`, `PopupMenuIte
 | 4 | `src/launch_options.rs` (+ tests) | `--screen shortcuts`, `--screen pods-cursor`; `USAGE` |
 | 4 | `src/app_shell.rs` | open the sheet / leave the drawer closed for those screens, once the list has loaded |
 
+## From 0026 (cluster switcher)
+
+- 0026 binds its 11 chords in `app_shell::bind_keys` with context `AppShell` because this code did not exist yet: `secondary-shift-c` (`OpenClusterSwitcher`) and `secondary-1`…`9` (`SwitchToCluster1`…`9`). When its keymap code lands, 0028 moves them into `keymap.rs` (the `WINDOW` group), drops them from `RESERVED_KEYS`, and adds the sheet rows "Open cluster switcher" and "Switch to cluster 1–9". `space` stays reserved for 0027. The in-popover keys (`down`, `up`, `enter`, `escape` in `ClusterSwitcher` and `ClusterSwitcher > Input`) stay in `cluster_switcher::bind_keys`.
+
 ## Docs (with the step that ships them)
 
 | S | File | Change |
