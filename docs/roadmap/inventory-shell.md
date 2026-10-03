@@ -7,9 +7,9 @@
 | ID | Item | Status | Covered by | Gap → spec |
 |---|---|---|---|---|
 | T1 | Custom GPUI title bar, logo, window controls | Done | 0003 `title_bar.rs` | — |
-| T2 | Cluster switcher (single cluster, every context of every loaded kubeconfig, env badge) | Done (single cluster) | 0003, 0024, 0026 (popover with filter, env groups, health, Retry, Ctrl Shift C, Ctrl 1–9) | several live clusters → 0027 |
-| T3 | Multi-select clusters, "View N clusters", `prod-eu-1 +1` label | Missing | — | 0027 |
-| T4 | Environment badge and env-colored top border (riskiest env) | Partial (single cluster) | 0024 `environment.rs`, `title_bar.rs` | riskiest env of several clusters 0027 |
+| T2 | Cluster switcher (every context of every loaded kubeconfig, env badge) | Done | 0003, 0024, 0026 (popover with filter, env groups, health, Retry, Ctrl Shift C, Ctrl 1–9); several live clusters 0027 | — |
+| T3 | Multi-select clusters, "View N clusters", `prod-eu-1 +1` label | Done | 0027 `cluster_switcher.rs` (ticks, Space, footer, Enter), `cluster_view.rs`, `title_bar.rs` | — |
+| T4 | Environment badge and env-colored top border (riskiest env) | Done | 0024 `environment.rs`, `title_bar.rs`; riskiest of several clusters 0027 | — |
 | T5 | Namespace picker (wireframe shows several namespaces: `ns: payments, web`) | Partial | 0003 (one or all) | multi-namespace → 0009 |
 | T6 | Search box "Search resources or run a command… Ctrl K" | Done | 0029 (`title_bar.rs` middle slot; click opens the palette) | — |
 | T7 | Read-only lock badge | Partial | 0003 (static) | per-cluster toggle, Ctrl Shift R → 0030 |
@@ -40,7 +40,7 @@
 | H5 | List-level buttons (Scale, Trigger now, Reveal all, Hide inactive, Hide system, …) | Missing | — | read-only ones 0009/0015/0016; mutating 0032 |
 | H6 | Row checkboxes, multi-select, floating selection bar | Missing | — | selection 0009; bulk actions 0032–0034 |
 | H7 | Virtualized table, themed status tones, muted namespace prefix | Done | 0003, 0005 | — |
-| H8 | Cluster column in multi-cluster mode | Missing | — | 0027 |
+| H8 | Cluster column in multi-cluster mode | Done (Pods, Nodes, every kind screen) | 0027 `cluster_rows.rs`, `table_layout.rs` | Issues has none: it draws the primary cluster |
 | H9 | Row density 28 / 36 px | Missing | — | 0025 (Appearance) |
 
 ## Drawer frame
@@ -85,7 +85,7 @@
 | S3 | Add cluster: import file, watch folder, paste YAML | Partial (no watch folder) | 0025 |
 | S4 | Add cluster: scan AWS EKS, GKE, AKS | Missing | backlog |
 | S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Partial (Clusters, Appearance, About; Keyboard Shortcuts done in 0028; Safety tier table and audit path in 0030 step 2a/3) | 0025, 0028, 0030; the rest: 0036, 0019, backlog |
-| M1 | Multi-cluster aggregated tables | Missing | 0027 |
+| M1 | Multi-cluster aggregated tables | Partial (Pods, Nodes, every kind screen) | 0027; Overview, Issues, Topology draw the primary cluster only until 0020–0022 follow "Screens that land later" |
 | G1 | Env tiers: prod typed name; staging, dev, local a confirm dialog with a click (user 2026-10-02; W10 text superseded) | Partial (tier rules, per-cluster `confirm` setting, Safety table; the dialog comes in 0030 step 4) | 0030 `write_guard.rs` |
 | G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Partial (the write path with dry-run, the gate with lock, the audit module; lock toggle in 0030 step 2b, diff in 0031) | 0030, 0031 |
 | G3 | Tokens: status tones OK/WARN/BAD/INFO/DONE | Done | 0003 `status_tone.rs` |

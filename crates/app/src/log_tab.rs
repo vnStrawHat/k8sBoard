@@ -19,12 +19,14 @@ use gpui_kit::{
     WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
+use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::cluster_session::{ClusterSession, error_text};
 use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::kind_row::PodOwner;
 use crate::line_matcher::{FilterMode, InvalidRegex, LineMatcher};
 use crate::log_buffer::{LineTime, LineView, LogBuffer, SourceId, SourcedLine};
+use crate::log_dock::LogOrigin;
 use crate::log_legend::{LegendChip, legend_row, pod_color};
 use crate::log_level::{LevelSet, LogLevel};
 use crate::log_rows::{RowPrefix, RowStyle, log_row};
@@ -203,6 +205,10 @@ struct WorkloadSubject {
 }
 
 pub(crate) struct LogTab {
+    /// The cluster the streams read from.
+    cluster: ClusterRef,
+    /// The switcher text of that cluster, for the title while several clusters are viewed.
+    cluster_label: String,
     connection: ClusterConnection,
     subject: LogSubject,
     instance: LogInstance,
@@ -234,7 +240,7 @@ pub(crate) struct LogTab {
 
 impl LogTab {
     pub(crate) fn new(
-        connection: ClusterConnection,
+        origin: LogOrigin,
         target: LogTarget,
         session: &Entity<ClusterSession>,
         window: &mut Window,
@@ -260,7 +266,9 @@ impl LogTab {
             }),
         };
         let mut tab = Self {
-            connection,
+            cluster: origin.cluster,
+            cluster_label: origin.label,
+            connection: origin.connection,
             subject,
             instance: LogInstance::Current,
             shows_timestamps: true,
@@ -287,7 +295,11 @@ impl LogTab {
         tab
     }
 
-    pub(crate) fn is_for(&self, target: &LogTarget) -> bool {
+    /// The same pod or workload of the same cluster: the same names exist in several clusters.
+    pub(crate) fn is_for(&self, cluster: &ClusterRef, target: &LogTarget) -> bool {
+        if self.cluster != *cluster {
+            return false;
+        }
         match (&self.subject, target) {
             (LogSubject::Pod { target: mine, .. }, LogTarget::Pod(other)) => mine.is_same(other),
             (LogSubject::Workload(mine), LogTarget::Workload(other)) => mine.target.is_same(other),
@@ -295,7 +307,15 @@ impl LogTab {
         }
     }
 
-    /// The tab title: `{pod}/{container}`, or the workload label.
+    pub(crate) fn cluster(&self) -> &ClusterRef {
+        &self.cluster
+    }
+
+    pub(crate) fn cluster_label(&self) -> &str {
+        &self.cluster_label
+    }
+
+    /// The tab label: `{pod}/{container}`, or the workload label.
     pub(crate) fn label(&self) -> String {
         match &self.subject {
             LogSubject::Pod { target, container } => format!("{}/{container}", target.pod),
@@ -1375,6 +1395,15 @@ fn count_text(visible: usize, total: usize, has_filter: bool, has_dropped: bool)
     text
 }
 
+/// The title of a dock tab: its label, and ` · {cluster}` while several clusters are viewed.
+pub(crate) fn tab_title(label: &str, cluster_label: &str, is_multi: bool) -> String {
+    if is_multi {
+        format!("{label} · {cluster_label}")
+    } else {
+        label.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use cluster::{
@@ -1384,6 +1413,19 @@ mod tests {
 
     use super::*;
     use crate::kind_row::JOB_KIND;
+
+    #[test]
+    fn log_tab_title_has_cluster_in_multi() {
+        assert_eq!(
+            tab_title("api-7/app", "prod-eu", true),
+            "api-7/app · prod-eu"
+        );
+    }
+
+    #[test]
+    fn log_tab_title_is_the_label_in_single() {
+        assert_eq!(tab_title("api-7/app", "prod-eu", false), "api-7/app");
+    }
 
     fn tone_of(list: &[LogStreamState]) -> StatusTone {
         workload_tone(list.iter())

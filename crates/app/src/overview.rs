@@ -27,6 +27,7 @@ use crate::cluster_capacity::{
     CapacityInputs, CapacityRow, FromPods, VolumeFeed, cluster_capacity, volume_totals,
 };
 use crate::cluster_metrics::FeedStatus;
+use crate::cluster_rows::RowContext;
 use crate::cluster_session::{ChangeEvents, LiveCluster, LiveList};
 use crate::event_rows::message_line;
 use crate::file_export::ExportState;
@@ -34,7 +35,7 @@ use crate::issue::{Issue, IssueAction};
 use crate::issue_board::IssueBoard;
 use crate::issue_feeds::{FeedState, volume_usage_state};
 use crate::issue_table::{coverage_status, logs_pod, short_kind};
-use crate::log_dock::LogDock;
+use crate::log_dock::{LogDock, LogOrigin};
 use crate::node_heatmap::{heat_cells, node_heatmap};
 use crate::recent_changes::{CHANGE_ROWS, ChangeEntry, ChangeInputs, ChangeWindow, recent_changes};
 use crate::resource_actions::logs_launch;
@@ -208,6 +209,8 @@ pub(crate) struct OverviewData<'a> {
     pub(crate) board: &'a IssueBoard,
     pub(crate) window: ChangeWindow,
     pub(crate) dock: &'a WeakEntity<LogDock>,
+    /// The cluster Overview draws: the primary one while several are viewed.
+    pub(crate) row: &'a RowContext,
 }
 
 /// The scrolling body: Needs attention and Capacity in row 1; Nodes and Recent changes in row 2.
@@ -685,7 +688,7 @@ fn change_row(
     match entry.target.clone() {
         Some(key) => row
             .cursor_pointer()
-            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal_in_primary(key.clone(), cx)))
             .into_any_element(),
         None => row.into_any_element(),
     }
@@ -902,7 +905,7 @@ fn attention_row(
     match issue.target.clone() {
         Some(key) => row
             .cursor_pointer()
-            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal_in_primary(key.clone(), cx)))
             .into_any_element(),
         None => row.into_any_element(),
     }
@@ -925,7 +928,7 @@ fn attention_button(
                 .label(label)
                 .on_click(cx.listener(move |shell, _, _, cx| {
                     cx.stop_propagation();
-                    shell.reveal(key.clone(), cx);
+                    shell.reveal_in_primary(key.clone(), cx);
                 }))
         }
         AttentionAction::ViewLogs => {
@@ -937,11 +940,12 @@ fn attention_button(
                 Err(reason) => button.label("View logs").disabled(true).tooltip(reason),
                 Ok(target) => {
                     let connection = data.live.connection().clone();
-                    let dock = data.dock.clone();
+                    let (dock, row) = (data.dock.clone(), data.row.clone());
                     button.label("View logs").on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         let _ = dock.update(cx, |dock, cx| {
-                            dock.open(connection.clone(), target.clone(), window, cx);
+                            let origin = LogOrigin::new(&row, connection.clone());
+                            dock.open(origin, target.clone(), window, cx);
                         });
                     })
                 }

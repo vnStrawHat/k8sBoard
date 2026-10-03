@@ -76,6 +76,6 @@ Report color literals, clipped text, and a missing env border as defects. Known 
 
 ## Deferred and later
 
-- A shell-level test that `guard_for` picks the row's own cluster out of several sessions is due once 0027 lands (single mode has one session, so the pure test `gate_and_confirm_use_the_rows_cluster` is the only check today).
+- `guard_for` looks up the slot session of the named cluster (0027). Shell-level tests `gate_and_confirm_use_the_rows_cluster_with_a_production_primary` and `..._with_a_staging_primary` (`app_shell_multi_tests.rs`) check that each viewed cluster answers with its own lock and confirm tier whichever one is primary, and that an unviewed cluster has no guard. The menus, the row keys and the palette build the guard from the row's or cursor's slot session; `active_guard` is gone.
 - `ObjectKind::ALL`, `ObjectKind::resource()`, and `commit_outcome_carries_uid` are deferred to 0031 and 0033, which are their first users.
 - Added with the security review: `request_rejects_a_name_that_changes_the_path`, `a_non_utf8_answer_to_a_commit_is_outcome_unknown`, `a_secret_rbac_403_is_denied_and_holds_only_the_reason_and_fields`, `a_build_that_blocks_writes_ignores_the_opt_in`, `the_screenshot_build_blocks_writes`, `the_patch_nodes_review_posts_one_review_and_nothing_else`.

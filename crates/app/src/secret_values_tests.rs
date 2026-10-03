@@ -153,6 +153,7 @@ fn options(screenshot: Option<&str>) -> LaunchOptions {
         kubeconfig: None,
         context: None,
         namespace: None,
+        view: Vec::new(),
         filter: None,
         select: None,
         theme: Some(ThemePreference::Light),
@@ -196,7 +197,30 @@ fn counting_view(access: ValueAccess, calls: &Arc<AtomicUsize>) -> SecretValuesV
         calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Ok(values()) })
     });
-    SecretValuesView::new(fetch, secret_key(), vec![key("alpha"), key("beta")], access)
+    SecretValuesView::new(
+        fetch,
+        secret_object("ctx"),
+        vec![key("alpha"), key("beta")],
+        access,
+    )
+}
+
+/// The fixture Secret in the cluster whose context is `context`.
+fn secret_object(context: &str) -> ClusterObject {
+    let cluster = crate::cluster_registry::ClusterRef {
+        kubeconfig: std::path::PathBuf::from("kube.yaml"),
+        context: context.to_owned(),
+    };
+    ClusterObject::new(cluster, secret_key())
+}
+
+#[test]
+fn values_view_belongs_to_one_cluster() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let view = counting_view(ValueAccess::Enabled, &calls);
+    assert!(view.is_for(&secret_object("ctx")));
+    // The same namespace and name in another cluster is another Secret.
+    assert!(!view.is_for(&secret_object("other")));
 }
 
 #[gpui_kit::test]
@@ -237,13 +261,14 @@ fn set_keys_drops_values_of_removed_keys() {
 fn view_is_for_its_secret_only() {
     let calls = Arc::new(AtomicUsize::new(0));
     let view = counting_view(ValueAccess::Enabled, &calls);
-    assert!(view.is_for(&secret_key()));
+    assert!(view.is_for(&secret_object("ctx")));
     let other = ResourceKey::Kind {
         kind: ResourceKind::Secrets,
         namespace: Some("shop".to_owned()),
         name: "other".to_owned(),
     };
-    assert!(!view.is_for(&other));
+    let cluster = secret_object("ctx").cluster;
+    assert!(!view.is_for(&ClusterObject::new(cluster, other)));
 }
 
 #[test]

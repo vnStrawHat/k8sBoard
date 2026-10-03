@@ -40,7 +40,7 @@ Shown only when `ticks_differ(ticked, viewed)`. `{n} selected` (bold) left; righ
 
 Collision with the kit: the kit `Popover` binds `space` → `Confirm` in context `Popover` (gpui-base 0.7 `popover.rs:21`). `ClusterSwitcher` and `ClusterSwitcher > Input` both match deeper than `Popover`, so depth decides and the 0027 binding runs; the handler never propagates, so the kit `Confirm` (which would close the popover) never runs and the filter never receives a space (decision 9).
 
-0028 follow-up: `RESERVED_KEYS` drops `space`; `keymap.md` Space row moves to "Bound by 0027"; no sheet row (switcher-local, like the 0026 popover keys).
+0028 follow-up (done): `RESERVED_KEYS` dropped `space`; `keymap.md` Space row moves to "Bound by 0027"; no sheet row (switcher-local, like the 0026 popover keys).
 
 ## Applying
 

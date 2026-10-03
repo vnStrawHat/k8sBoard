@@ -35,7 +35,7 @@ use crate::resource_actions::ResourceAction;
 use crate::settings_window::OpenSettings;
 use crate::shortcut_sheet::row_keys;
 use crate::status_tone::{StatusLabel, StatusTone, tone_color, toned_text};
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{ClusterObject, ResourceKey};
 
 const PALETTE_WIDTH: f32 = 640.;
 const PALETTE_TOP_MARGIN: f32 = 56.;
@@ -87,7 +87,7 @@ pub(crate) struct CommandPalette {
     is_stale: bool,
     /// The resource to highlight once the next ranking has placed it (after a Tab preview moved
     /// the cursor, the row actions of the new cursor row join the list above it).
-    reselect: Option<ResourceKey>,
+    reselect: Option<ClusterObject>,
     /// Opened by `:` and still showing just that: the first Esc (or Backspace) closes at once.
     is_seed_untouched: bool,
     _shell_observer: Subscription,
@@ -227,10 +227,10 @@ impl CommandPalette {
     }
 
     /// The resource under the kit's highlight.
-    fn highlighted_resource(&self, cx: &App) -> Option<&ResourceKey> {
+    fn highlighted_resource(&self, cx: &App) -> Option<&ClusterObject> {
         let path = self.state.read(cx).selected_index()?;
         match &self.entry_at(path)?.target {
-            PaletteTarget::Resource(key) => Some(key),
+            PaletteTarget::Resource(object) => Some(object),
             _ => None,
         }
     }
@@ -238,7 +238,7 @@ impl CommandPalette {
     /// Whether Tab would move the table cursor: the highlighted entry is a row of the screen that
     /// is open, the filter shows it, and no drawer is open. `selected` is the kit's highlight.
     fn can_preview(&self, selected: Option<IndexPath>, cx: &App) -> bool {
-        let Some(PaletteTarget::Resource(key)) = selected
+        let Some(PaletteTarget::Resource(object)) = selected
             .and_then(|path| self.entry_at(path))
             .map(|entry| &entry.target)
         else {
@@ -246,20 +246,20 @@ impl CommandPalette {
         };
         self.shell
             .upgrade()
-            .is_some_and(|shell| shell.read(cx).can_preview_row(key, cx))
+            .is_some_and(|shell| shell.read(cx).can_preview_row(object, cx))
     }
 
     /// Tab: moves the table cursor behind the scrim to the highlighted resource, without opening
     /// its drawer, switching screen, or starting a watch. Anywhere else it does nothing.
     fn preview(&mut self, cx: &mut Context<Self>) {
-        let Some(key) = self.highlighted_resource(cx).cloned() else {
+        let Some(object) = self.highlighted_resource(cx).cloned() else {
             return;
         };
         let Some(shell) = self.shell.upgrade() else {
             return;
         };
-        shell.update(cx, |shell, cx| shell.preview_resource(&key, cx));
-        self.reselect = Some(key);
+        shell.update(cx, |shell, cx| shell.preview_resource(&object, cx));
+        self.reselect = Some(object);
         self.is_stale = true;
         cx.notify();
     }
@@ -282,8 +282,8 @@ impl CommandPalette {
             PaletteTarget::Screen(screen) => self.update_shell(cx, |shell, cx| {
                 shell.show_screen(screen, cx);
             }),
-            PaletteTarget::Resource(key) => {
-                self.update_shell(cx, |shell, cx| shell.reveal(key, cx))
+            PaletteTarget::Resource(object) => {
+                self.update_shell(cx, |shell, cx| shell.reveal_object(object, cx))
             }
             PaletteTarget::Namespace(scope) => {
                 self.update_shell(cx, |shell, cx| shell.set_namespace(scope, cx));
@@ -361,10 +361,10 @@ impl CommandPalette {
     /// Highlights the entry a Tab preview asked for once the ranking has placed it. The kit has not
     /// installed this render's list yet, so the highlight is set after the frame.
     fn schedule_reselect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(key) = self.reselect.take() else {
+        let Some(object) = self.reselect.take() else {
             return;
         };
-        let wanted = |entry: &PaletteEntry| matches!(&entry.target, PaletteTarget::Resource(other) if *other == key);
+        let wanted = |entry: &PaletteEntry| matches!(&entry.target, PaletteTarget::Resource(other) if *other == object);
         let Some(path) = self.path_of(wanted) else {
             return;
         };
@@ -572,9 +572,18 @@ fn row_icon(target: &PaletteTarget) -> RowIcon {
         PaletteTarget::Command(action) => RowIcon::Glyph(command_icon(&**action)),
         PaletteTarget::RowAction(action) => RowIcon::Glyph(row_action_icon(*action)),
         PaletteTarget::Screen(screen) => text(screen_badge(*screen)),
-        PaletteTarget::Resource(ResourceKey::Pod { .. }) => text("Po"),
-        PaletteTarget::Resource(ResourceKey::Node { .. }) => text("No"),
-        PaletteTarget::Resource(ResourceKey::Kind { kind, .. }) => text(kind.badge()),
+        PaletteTarget::Resource(ClusterObject {
+            key: ResourceKey::Pod { .. },
+            ..
+        }) => text("Po"),
+        PaletteTarget::Resource(ClusterObject {
+            key: ResourceKey::Node { .. },
+            ..
+        }) => text("No"),
+        PaletteTarget::Resource(ClusterObject {
+            key: ResourceKey::Kind { kind, .. },
+            ..
+        }) => text(kind.badge()),
         PaletteTarget::Namespace(_) => text("#"),
         PaletteTarget::Cluster(_) => text("@"),
     }

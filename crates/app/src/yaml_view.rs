@@ -18,6 +18,7 @@ use gpui_kit::{
 };
 
 use crate::age::format_age;
+use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
 use crate::drawer::{DRAWER_SUBJECT_DELAY, DrawerTab, drawer_tabs, shown_tab};
@@ -27,6 +28,8 @@ use crate::table_selection::ResourceKey;
 /// The YAML tab of the open drawer. Dropping it aborts the request and frees the text.
 pub(crate) struct YamlView {
     connection: ClusterConnection,
+    /// The cluster that holds the object: the same name exists in several clusters.
+    cluster: ClusterRef,
     object: ObjectRef,
     /// What the editor shows. A new subject starts at `Hidden`.
     env: EnvValues,
@@ -60,6 +63,7 @@ impl YamlView {
     /// there would re-render forever. The first notify comes from the fetch task.
     pub(crate) fn new(
         connection: ClusterConnection,
+        cluster: ClusterRef,
         object: ObjectRef,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -71,6 +75,7 @@ impl YamlView {
         });
         let mut view = Self {
             connection,
+            cluster,
             object,
             env: EnvValues::Hidden,
             editor,
@@ -82,8 +87,8 @@ impl YamlView {
         view
     }
 
-    pub(crate) fn is_for(&self, object: &ObjectRef) -> bool {
-        self.object == *object
+    pub(crate) fn is_for(&self, cluster: &ClusterRef, object: &ObjectRef) -> bool {
+        self.cluster == *cluster && self.object == *object
     }
 
     /// The first fetch is still in flight, so there is nothing to show yet.

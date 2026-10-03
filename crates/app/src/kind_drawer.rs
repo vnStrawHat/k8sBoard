@@ -18,6 +18,8 @@ use crate::access_bindings::{BindingIndex, ready_binding_lists};
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::certificate_expiry::expiry_label;
+use crate::cluster_registry::ClusterRef;
+use crate::cluster_rows::RowContext;
 use crate::cluster_session::{ClusterSession, CompanionLists, LiveCluster};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
@@ -36,13 +38,13 @@ use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
 use crate::resource_actions::{
-    MenuExtras, OpenUrl, browse_instances_item, kind_menu, open_url_choice, open_url_menu_item,
-    port_forward_reason, secret_menu,
+    MenuCluster, MenuExtras, OpenUrl, browse_instances_item, kind_menu, open_url_choice,
+    open_url_menu_item, port_forward_reason, secret_menu,
 };
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretValuesView, ValueAccess};
 use crate::status_tone::{StatusTone, tone_color, toned_text};
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{ClusterObject, ResourceKey};
 
 pub(crate) fn kind_drawer(
     kind: ResourceKind,
@@ -50,6 +52,7 @@ pub(crate) fn kind_drawer(
     state: &DrawerState,
     live: &LiveCluster,
     session: &Entity<ClusterSession>,
+    context: &RowContext,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let now = jiff::Timestamp::now();
@@ -57,7 +60,8 @@ pub(crate) fn kind_drawer(
         kind_badge: kind.badge(),
         name: header_name(row),
         subtitle: subtitle(row, now, cx),
-        menu: kind_menu_button(kind, row, session, cx.weak_entity()),
+        cluster: state.cluster.clone(),
+        menu: kind_menu_button(kind, row, session, context, cx.weak_entity()),
         expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
@@ -78,7 +82,7 @@ pub(crate) fn kind_drawer(
         DrawerTab::Yaml => yaml_body(state),
         DrawerTab::Values | DrawerTab::Manifest | DrawerTab::Notes => helm_body(state),
         DrawerTab::Overview | DrawerTab::Containers => {
-            DrawerBody::Scrolling(overview(kind, row, live, state, now, cx))
+            DrawerBody::Scrolling(overview(kind, row, live, state, &context.cluster, now, cx))
         }
     };
     let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
@@ -160,10 +164,12 @@ fn kind_menu_button(
     kind: ResourceKind,
     row: &KindRow,
     session: &Entity<ClusterSession>,
+    context: &RowContext,
     shell: WeakEntity<AppShell>,
 ) -> AnyElement {
     // Weak: a rendered menu closure must not keep a session alive after a cluster switch.
     let session = session.downgrade();
+    let context = context.clone();
     let key = ResourceKey::of_row(kind, row);
     menu_button()
         .dropdown_menu(move |menu, window, cx| {
@@ -188,11 +194,20 @@ fn kind_menu_button(
                     let access = shell
                         .read_with(cx, |shell, _| shell.secret_value_access())
                         .unwrap_or(ValueAccess::Blocked);
-                    secret_menu(&row, key.clone(), access, &shell, window, cx)
+                    secret_menu(
+                        &row,
+                        context.object(key.clone()),
+                        access,
+                        &shell,
+                        window,
+                        cx,
+                    )
                 })
                 .flatten();
             let default_namespace = shell
-                .read_with(cx, |shell, cx| shell.default_namespace(cx))
+                .read_with(cx, |shell, cx| {
+                    shell.default_namespace(&context.cluster, cx)
+                })
                 .ok()
                 .flatten();
             let session = session.read(cx);
@@ -205,8 +220,11 @@ fn kind_menu_button(
                     menu,
                     kind,
                     row,
-                    &guard,
-                    live.pods.items(),
+                    &MenuCluster {
+                        guard: &guard,
+                        pods: live.pods.items(),
+                        context: &context,
+                    },
                     &shell,
                     MenuExtras {
                         open_url,
@@ -228,10 +246,12 @@ fn overview(
     row: &KindRow,
     live: &LiveCluster,
     state: &DrawerState,
+    cluster: &ClusterRef,
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let paint = DrawerPaint::new(kind, row, live, now)
+        .in_cluster(cluster)
         .with_secret_values(state.secret_values.as_ref())
         .with_helm(state.helm.as_ref(), state.helm_revision);
     // Gives every element that needs an id one that is unique inside the drawer.
@@ -359,6 +379,8 @@ pub(crate) struct DrawerPaint<'a> {
     helm: Option<&'a Entity<HelmReleaseView>>,
     /// The revision a History button chose, for the `shown` mark.
     helm_revision: Option<u32>,
+    /// The cluster of the drawer: the views above belong to one cluster's object.
+    cluster: Option<&'a ClusterRef>,
 }
 
 impl<'a> DrawerPaint<'a> {
@@ -377,11 +399,17 @@ impl<'a> DrawerPaint<'a> {
             secret_values: None,
             helm: None,
             helm_revision: None,
+            cluster: None,
         }
     }
 }
 
 impl<'a> DrawerPaint<'a> {
+    fn in_cluster(mut self, cluster: &'a ClusterRef) -> Self {
+        self.cluster = Some(cluster);
+        self
+    }
+
     fn with_secret_values(mut self, view: Option<&'a Entity<SecretValuesView>>) -> Self {
         self.secret_values = view;
         self
@@ -430,8 +458,11 @@ fn detail_element(
         // the masked rows without buttons stand in.
         DetailRow::Live(LiveContent::SecretData)
             if paint.secret_values.is_some_and(|view| {
-                view.read(cx)
-                    .is_for(&ResourceKey::of_row(paint.kind, paint.row))
+                paint.cluster.is_some_and(|cluster| {
+                    let key = ResourceKey::of_row(paint.kind, paint.row);
+                    view.read(cx)
+                        .is_for(&ClusterObject::new(cluster.clone(), key))
+                })
             }) =>
         {
             paint.secret_values.map_or_else(
@@ -509,7 +540,12 @@ fn helm_values_change(paint: &DrawerPaint, cx: &Context<AppShell>) -> AnyElement
         release: release.name.clone(),
         revision: release.revision,
     };
-    if let Some(view) = paint.helm.filter(|view| view.read(cx).is_for(&revision)) {
+    let helm = paint.helm.filter(|view| {
+        paint
+            .cluster
+            .is_some_and(|cluster| view.read(cx).is_for(cluster, &revision))
+    });
+    if let Some(view) = helm {
         return view.clone().into_any_element();
     }
     v_flex()

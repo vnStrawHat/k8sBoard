@@ -14,6 +14,8 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
+use crate::cluster_rows::CLUSTER_COLUMN;
+use crate::environment::{Environment, environment_badge};
 use crate::resource_kind::{Align, KindColumn};
 use crate::table_sort::{SortDirection, TableSort};
 
@@ -30,6 +32,18 @@ pub(crate) struct ColumnPlan {
     /// The logical column that takes the spare width and can never be hidden.
     pub(crate) flexible: usize,
     pub(crate) flexible_min: Pixels,
+    /// The logical column that exists only while several clusters are viewed (the Cluster
+    /// column). Saved prefs never name it.
+    pub(crate) session_column: Option<usize>,
+}
+
+impl ColumnPlan {
+    /// The plan with the Cluster column appended last, so the other logical indices stay.
+    pub(crate) fn with_cluster_column(mut self) -> Self {
+        self.session_column = Some(self.specs.len());
+        self.specs.push(CLUSTER_COLUMN);
+        self
+    }
 }
 
 /// A plan and the columns it currently lays out at the last known table width.
@@ -78,6 +92,7 @@ fn layout_plan(plan: &ColumnPlan, table_width: Pixels, hidden: &BTreeSet<usize>)
         &plan.specs,
         plan.flexible,
         plan.flexible_min,
+        plan.session_column,
         table_width,
         hidden,
     )
@@ -112,13 +127,25 @@ impl TableColumns {
     }
 }
 
+/// The least the `session` column (Cluster) shrinks to when the table is too narrow for it.
+const SESSION_COLUMN_MIN_WIDTH: f32 = 110.;
+
+/// The least the flexible column shrinks to, below its minimum, to keep the session column in view.
+const SESSION_FLEXIBLE_FLOOR: f32 = 40.;
+
 /// The visible columns of a table `table_width` wide, after the checkbox column. The `flexible` column takes the width
 /// the others leave over, never less than `flexible_min`, and is shown even when hidden. The
 /// columns are fixed pixel widths, so this runs again whenever the window size changes.
+///
+/// The `session` column exists only while several clusters are viewed, and it is what tells the
+/// rows apart. When the table is too narrow for the flexible minimum and the session column, the
+/// flexible column shrinks first, then the session column, so the session column stays in view
+/// instead of past the right edge.
 pub(crate) fn layout_columns(
     specs: &[KindColumn],
     flexible: usize,
     flexible_min: Pixels,
+    session: Option<usize>,
     table_width: Pixels,
     hidden: &BTreeSet<usize>,
 ) -> TableColumns {
@@ -134,6 +161,26 @@ pub(crate) fn layout_columns(
         .sum();
     let flexible_width =
         (table_width - TABLE_GUTTER - SELECT_WIDTH - px(fixed_width)).max(flexible_min);
+    // The widths of the flexible and the session column when the session column must give way.
+    let squeezed = session
+        .filter(|index| *index != flexible && !hidden.contains(index))
+        .and_then(|index| specs.get(index))
+        .filter(|spec| {
+            table_width
+                - TABLE_GUTTER
+                - SELECT_WIDTH
+                - px(fixed_width - spec.width)
+                - px(spec.width)
+                < flexible_min
+        })
+        .map(|spec| {
+            let left = table_width - TABLE_GUTTER - SELECT_WIDTH - px(fixed_width - spec.width);
+            let session_width = (left - px(SESSION_FLEXIBLE_FLOOR))
+                .max(px(SESSION_COLUMN_MIN_WIDTH))
+                .min(px(spec.width));
+            let flexible_width = (left - session_width).max(px(SESSION_FLEXIBLE_FLOOR));
+            (flexible_width, session_width)
+        });
     let select = Column::new("select", "")
         .width(SELECT_WIDTH)
         .resizable(false);
@@ -145,10 +192,13 @@ pub(crate) fn layout_columns(
                 Align::Left => column,
                 Align::Right => column.text_right(),
             };
-            if *index == flexible {
-                column.width(flexible_width).min_width(flexible_min)
-            } else {
-                column.width(px(spec.width))
+            match squeezed {
+                Some((flexible_width, _)) if *index == flexible => column
+                    .width(flexible_width)
+                    .min_width(px(SESSION_FLEXIBLE_FLOOR)),
+                Some((_, session_width)) if Some(*index) == session => column.width(session_width),
+                _ if *index == flexible => column.width(flexible_width).min_width(flexible_min),
+                _ => column.width(px(spec.width)),
             }
         })
         .collect::<Vec<_>>();
@@ -193,6 +243,23 @@ pub(crate) fn header_cell(
         },
         cx,
     )
+}
+
+/// The Cluster column's cell: the environment badge and the switcher text in mono.
+pub(crate) fn cluster_cell(environment: Environment, label: &str, cx: &App) -> AnyElement {
+    h_flex()
+        .w_full()
+        .gap_2()
+        .items_center()
+        .child(environment_badge(environment, cx))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_family(cx.theme().mono_font_family.clone())
+                .child(label.to_owned()),
+        )
+        .into_any_element()
 }
 
 /// The cell around a checkbox. Text sits a little below the middle of a cell (font metrics), so

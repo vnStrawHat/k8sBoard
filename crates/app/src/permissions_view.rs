@@ -23,12 +23,11 @@ use gpui_kit::{
 
 use crate::access_bindings::{binding_key, binding_text, role_key, role_text, subject_text};
 use crate::access_query::{QueryError, SubjectQuery, parse_request, parse_subject};
-use crate::app_shell::AppShell;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{ClusterSession, RbacState, error_text};
 use crate::permission_table::{PermissionTable, TABLE_VERBS, VerbCell, permission_table};
 use crate::status_tone::{StatusTone, tone_color};
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{DialogOrigin, ResourceKey};
 use crate::who_can_view::{
     ALL_NAMESPACES, RBAC_CAVEATS, clock_text, coverage_notes, namespace_options,
 };
@@ -114,7 +113,7 @@ struct Checked {
 
 pub(crate) struct PermissionsView {
     session: WeakEntity<ClusterSession>,
-    shell: WeakEntity<AppShell>,
+    origin: DialogOrigin,
     subject: Entity<InputState>,
     namespace: Entity<SelectState<Vec<String>>>,
     ask: Entity<InputState>,
@@ -301,7 +300,7 @@ impl PermissionsView {
     /// `subject`: the text to prefill (`None` is You); `namespace`: the preselected one.
     /// `check_now` and `ask` run at once.
     pub(crate) fn new(
-        shell: WeakEntity<AppShell>,
+        origin: DialogOrigin,
         session: &Entity<ClusterSession>,
         subject: Option<String>,
         namespace: Option<String>,
@@ -366,7 +365,7 @@ impl PermissionsView {
         ];
         let mut view = Self {
             session: session.downgrade(),
-            shell,
+            origin,
             subject: subject_input,
             namespace,
             ask,
@@ -664,7 +663,7 @@ impl PermissionsView {
 
     fn reveal(&mut self, key: ResourceKey, window: &mut Window, cx: &mut Context<Self>) {
         window.close_dialog(cx);
-        let _ = self.shell.update(cx, |shell, cx| shell.reveal(key, cx));
+        self.origin.reveal(key, cx);
     }
 
     fn link(&mut self, text: &str, key: ResourceKey, cx: &mut Context<Self>) -> AnyElement {

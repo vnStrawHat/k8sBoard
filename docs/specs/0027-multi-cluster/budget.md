@@ -43,8 +43,14 @@ Not added: no extra watch for the Cluster column, no cross-cluster cache, no pol
 
 ## Results
 
-(to be filled by step 4)
+Measured 2026-10-03 on the UAT cluster (Kubernetes v1.29.5, 104 pods) with a debug build of the screenshot binary, the Pods screen, the drawer closed, two minutes idle, `--config-dir` under `.tmp/`. RSS is the Windows working set of the process. No second reachable cluster exists, so the cost of a reachable extra slot is not measured and the cap of 5 stays a guess (open item 3).
 
 | Run | Pods | Slots | RSS | Watches | Merged rebuild |
 |---|---|---|---|---|---|
-| | | | | | |
+| Single UAT session (`--screen pods`) | 104 | 1 | 136.5 MB | 13 (status bar `Watching 13 resource types`) | n/a |
+| UAT + unreachable fixture (`--screen pods-multi --view`) | 104 | 2 (1 failed) | 137.3 MB (+0.8 MB, under the 2 MB target) | 13 + 0: the failed slot runs no watch and no poll | n/a |
+| Synthetic 5 × 1,000 rows, sorted (`merge_rows` + `TableView::rebuild`, unit run, debug build) | 5,000 | 5 | n/a | n/a | 12.2 ms (debug; under 16 ms, so release is too) |
+
+Counts the tests assert (`closed_drawer_watch_count_matches_a_single_session`, `open_drawer_adds_watches_to_its_slot_only`): with the drawer closed, every viewed slot has the watch count of a single session on the same screen (Overview's two change feeds run on the primary only); an open drawer adds its watches (object events, related, kubelet demand) to the subject's slot only, and the other slot stays at the closed-drawer count.
+
+Measurement steps 4 and 5 are covered by `apply_keeps_the_staying_session` (the staying session keeps its id) and `apply_releases_before_connecting` (a released session is gone before the next connect runs).

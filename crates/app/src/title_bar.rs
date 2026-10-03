@@ -13,7 +13,7 @@ use gpui_kit::{
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::namespaces_label;
 use crate::cluster_switcher::cluster_switcher as switcher_popover;
-use crate::environment::{environment_badge, environment_color};
+use crate::environment::{Environment, environment_badge, environment_color};
 use crate::issue_board::IssueSummary;
 use crate::keymap::OpenPalette;
 use crate::namespace_picker::{PickerAnchor, namespace_picker as picker};
@@ -25,8 +25,8 @@ use crate::status_tone::tone_color;
 pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
     // Always 3 px, so the layout does not shift when a session starts. GPUI has one border
     // color per element, so the kit's 1 px bottom border takes the same color.
-    let border = match shell.active_profile(cx) {
-        Some(profile) => environment_color(profile.environment, cx),
+    let border = match border_environment(shell, cx) {
+        Some(environment) => environment_color(environment, cx),
         None => cx.theme().title_bar_border,
     };
     TitleBar::new()
@@ -114,14 +114,66 @@ fn issues_tooltip(summary: IssueSummary, coverage_note: Option<String>) -> Strin
     text
 }
 
+/// The environment of the top border: the riskiest of the viewed clusters while several are viewed
+/// (0024 decision 26), else the one cluster's own.
+fn border_environment(shell: &AppShell, cx: &App) -> Option<Environment> {
+    if shell.view().is_multi() {
+        return shell.view().riskiest();
+    }
+    shell.active_profile(cx).map(|profile| profile.environment)
+}
+
+/// What the cluster trigger shows: the primary label, and `+{n−1}` for the other viewed clusters.
+#[derive(Debug, PartialEq, Eq)]
+struct TriggerText {
+    label: String,
+    plus: Option<String>,
+    /// `Viewing: {label}, {label}, …`, while several clusters are viewed.
+    tooltip: Option<String>,
+}
+
+/// `labels` are the viewed clusters in display order; `primary_label` is the primary's.
+fn trigger_text(primary_label: &str, labels: &[&str]) -> TriggerText {
+    let is_multi = labels.len() >= 2;
+    TriggerText {
+        label: primary_label.to_owned(),
+        plus: is_multi.then(|| format!("+{}", labels.len() - 1)),
+        tooltip: is_multi.then(|| format!("Viewing: {}", labels.join(", "))),
+    }
+}
+
 fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
+    let view = shell.view();
+    let mut tooltip = None;
     let trigger = match shell.active_profile(cx) {
-        Some(profile) => h_flex()
-            .gap_2()
-            .items_center()
-            .child(environment_badge(profile.environment, cx))
-            .child(profile.display_name)
-            .into_any_element(),
+        Some(profile) => {
+            let labels: Vec<&str> = view
+                .slots()
+                .iter()
+                .map(|slot| slot.label.as_str())
+                .collect();
+            // The primary decides the badge and the label of several clusters; one cluster keeps
+            // its display name.
+            let primary = view.primary().filter(|_| view.is_multi());
+            let (environment, label) = match primary {
+                Some(slot) => (slot.profile.environment, slot.label.as_str()),
+                None => (profile.environment, profile.display_name.as_str()),
+            };
+            let text = trigger_text(label, &labels);
+            tooltip = text.tooltip;
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(environment_badge(environment, cx))
+                .child(text.label)
+                .children(text.plus.map(|plus| {
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(plus)
+                }))
+                .into_any_element()
+        }
         None => "No cluster".into_any_element(),
     };
     let trigger = Button::new("cluster-switcher")
@@ -129,6 +181,10 @@ fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
         .small()
         .child(trigger)
         .dropdown_caret(true);
+    let trigger = match tooltip {
+        Some(tooltip) => trigger.tooltip(tooltip),
+        None => trigger,
+    };
     switcher_popover(trigger, shell, cx)
 }
 
@@ -174,7 +230,7 @@ pub(crate) fn scope_label(scope: &NamespaceScope) -> String {
 
 fn namespace_picker(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
     let trigger = Button::new("namespace-picker").ghost().small();
-    let Some(live) = shell.session().and_then(|session| session.read(cx).live()) else {
+    let Some(live) = shell.scope_live(cx) else {
         return trigger.label("ns: —").disabled(true).into_any_element();
     };
     let label = scope_label(&live.scope);
@@ -231,4 +287,31 @@ fn notices_button(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyElement
             .on_click(cx.listener(|shell, _, _, cx| shell.dismiss_notices(cx)))
             .into_any_element(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trigger_shows_plus_n_and_primary_label() {
+        let text = trigger_text("prod-eu", &["dev-a", "prod-eu", "stg-b"]);
+        assert_eq!(text.label, "prod-eu");
+        assert_eq!(text.plus.as_deref(), Some("+2"));
+    }
+
+    #[test]
+    fn trigger_tooltip_lists_the_viewed_clusters() {
+        let text = trigger_text("prod-eu", &["dev-a", "prod-eu", "stg-b"]);
+        assert_eq!(
+            text.tooltip.as_deref(),
+            Some("Viewing: dev-a, prod-eu, stg-b")
+        );
+    }
+
+    #[test]
+    fn trigger_has_no_plus_or_tooltip_for_one_cluster() {
+        let one = trigger_text("prod-eu", &["prod-eu"]);
+        assert_eq!((one.plus, one.tooltip), (None, None));
+    }
 }

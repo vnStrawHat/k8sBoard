@@ -17,6 +17,7 @@
 |---|---|---|
 | 1 | `src/cluster_view.rs` (new) + `cluster_view_tests.rs` | `MAX_VIEWED_CLUSTERS`, `ViewSlot` (`has_reported_live`), `ClusterView`, `ViewPlan`, `plan_view` (primary rule), `TooManyClusters` |
 | 1 | `src/cluster_session.rs` | `#[cfg(test)]` `live_fixture`, `seed_pods` (view-model.md "Test seams") |
+| 1 | `src/app_shell_view.rs` (new, `#[path]` child of `app_shell.rs`, like `workspace.rs`) | the view lifecycle: `apply_view`, `scope_for_view`, `release_slot`, `connect_slots`, `new_slot`, `sync_view_sessions`, `refresh_slot_labels`, `display_order`, `on_first_live`, `reapply_view_scope`, `remove_from_view`, `retry_cluster` |
 | 1 | `src/app_shell.rs` (+ tests) | `session` → `view`; `view_clusters`; `slot_live`; fan-out table; scope re-apply on a slot's first Live; `last_used` for the primary only; filters reset only on a new primary |
 | 1 | `src/pod_table.rs`, `src/node_table.rs`, `src/kind_table.rs` | `set_session` → `set_sessions` (primary rows only until step 3a) |
 | 1 | `src/title_bar.rs`, `src/status_bar.rs` (+ tests), `src/namespace_picker.rs` (+ tests) | `+N`, tooltip, riskiest border; multi status line; union with per-slot loading lines |
@@ -35,7 +36,7 @@
 
 ## Follow-ups for the orchestrator (specs not owned here)
 
-- **0028**: drop `space` from `RESERVED_KEYS` when 0027 code lands; Space row → "Bound by 0027" (switcher-local, no sheet row).
+- **0028**: `space` left `RESERVED_KEYS` and the keymap.md Space row says "bound by 0027" (switcher-local, no sheet row). Done.
 - **0029**: the `@` cluster scope may tick several clusters only by calling `view_clusters`; otherwise it switches one (0026).
 - **0020, 0021, 0022, 0035** (when implemented): follow [aggregated-views.md](aggregated-views.md) "Screens that land later".
 - **0030**: the action gate takes `ClusterObject.cluster` of the row, never the primary.

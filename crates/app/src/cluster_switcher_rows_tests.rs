@@ -59,7 +59,15 @@ fn sections(
     health: &HealthBoard,
     active: Option<(&ClusterRef, RowHealth)>,
 ) -> Vec<SwitcherSection> {
-    switcher_sections(&three_groups(), health, active)
+    let viewed: Vec<ViewedCluster> = active
+        .into_iter()
+        .map(|(cluster, health)| ViewedCluster {
+            cluster: cluster.clone(),
+            health,
+            is_primary: true,
+        })
+        .collect();
+    switcher_sections(&three_groups(), health, &viewed, &[])
 }
 
 fn labels(sections: &[SwitcherSection]) -> Vec<&str> {
@@ -90,7 +98,7 @@ fn shortcuts_number_the_first_nine_rows() {
             )
         })
         .collect();
-    let sections = switcher_sections(&[group("Staging", rows)], &HealthBoard::default(), None);
+    let sections = switcher_sections(&[group("Staging", rows)], &HealthBoard::default(), &[], &[]);
     let shortcuts: Vec<_> = sections[0].rows.iter().map(|row| row.shortcut).collect();
     let expected: Vec<_> = (1..=9).map(Some).chain([None]).collect();
     assert_eq!(shortcuts, expected);
@@ -261,4 +269,96 @@ fn highlight_resets_to_first_visible_on_edit() {
         move_highlight(&visible, None, HighlightStep::Next),
         Some(cluster("uat-ctx"))
     );
+}
+
+// ---- Ticks (0027) ----
+
+#[test]
+fn toggle_tick_adds_and_removes() {
+    let mut ticked = Vec::new();
+    assert_eq!(toggle_tick(&mut ticked, &cluster("uat-ctx")), Ok(()));
+    assert_eq!(toggle_tick(&mut ticked, &cluster("stg-ctx")), Ok(()));
+    assert_eq!(ticked, [cluster("uat-ctx"), cluster("stg-ctx")]);
+    assert_eq!(toggle_tick(&mut ticked, &cluster("uat-ctx")), Ok(()));
+    assert_eq!(ticked, [cluster("stg-ctx")]);
+}
+
+#[test]
+fn toggle_tick_refuses_a_sixth() {
+    let mut ticked: Vec<ClusterRef> = (0..5).map(|index| cluster(&format!("c{index}"))).collect();
+    let result = toggle_tick(&mut ticked, &cluster("c5"));
+    assert_eq!(result, Err(TooManyClusters));
+    assert_eq!(ticked.len(), 5);
+    assert_eq!(
+        TooManyClusters.to_string(),
+        "View at most 5 clusters at once."
+    );
+    // Unticking one of the five always works, and frees a place.
+    assert_eq!(toggle_tick(&mut ticked, &cluster("c0")), Ok(()));
+    assert_eq!(toggle_tick(&mut ticked, &cluster("c5")), Ok(()));
+}
+
+#[test]
+fn ticks_differ_as_sets() {
+    let (a, b, c) = (cluster("a"), cluster("b"), cluster("c"));
+    assert!(!ticks_differ(
+        &[a.clone(), b.clone()],
+        &[b.clone(), a.clone()]
+    ));
+    assert!(ticks_differ(
+        std::slice::from_ref(&a),
+        &[a.clone(), b.clone()]
+    ));
+    assert!(ticks_differ(&[a.clone(), c], &[a.clone(), b]));
+    assert!(!ticks_differ(&[], &[]));
+}
+
+#[test]
+fn query_ignores_whitespace() {
+    assert_eq!(normalize_query(" Prod  EU\t1 "), "prodeu1");
+    let rows = vec![row("eu-ctx", "prod eu 1", Environment::Production)];
+    let sections = switcher_sections(
+        &[group("Production", rows)],
+        &HealthBoard::default(),
+        &[],
+        &[],
+    );
+    for query in ["prod eu", "prodeu", "PROD  EU 1", "eu1"] {
+        let visible = visible_sections(&sections, query, SwitcherSegment::All);
+        assert_eq!(row_count(&visible), 1, "{query}");
+    }
+    // A query never matches across two parts of the row.
+    let visible = visible_sections(&sections, "1eu-ctx", SwitcherSegment::All);
+    assert_eq!(row_count(&visible), 0);
+}
+
+#[test]
+fn ticked_and_primary_rows_are_marked() {
+    let (eu, uat) = (cluster("eu-ctx"), cluster("uat-ctx"));
+    let viewed = [
+        ViewedCluster {
+            cluster: eu.clone(),
+            health: RowHealth::Live(Duration::from_millis(5)),
+            is_primary: true,
+        },
+        ViewedCluster {
+            cluster: uat.clone(),
+            health: RowHealth::Connecting,
+            is_primary: false,
+        },
+    ];
+    let sections = switcher_sections(
+        &three_groups(),
+        &HealthBoard::default(),
+        &viewed,
+        std::slice::from_ref(&uat),
+    );
+    let rows: Vec<_> = sections.iter().flat_map(|section| &section.rows).collect();
+    let flags = |context: &str| {
+        let row = rows.iter().find(|row| row.cluster.context == context);
+        row.map(|row| (row.is_active, row.is_primary, row.is_ticked))
+    };
+    assert_eq!(flags("eu-ctx"), Some((true, true, false)));
+    assert_eq!(flags("uat-ctx"), Some((true, false, true)));
+    assert_eq!(flags("stg-ctx"), Some((false, false, false)));
 }

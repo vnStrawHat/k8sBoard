@@ -10,6 +10,7 @@ use cluster::{NamespaceScope, NamespaceSummary, NodeSummary, PodSummary};
 use gpui_kit::{Action, SharedString};
 
 use crate::app_shell::Screen;
+use crate::cluster_registry::ClusterRef;
 use crate::cluster_switcher::SwitchToCluster1;
 use crate::cluster_switcher_rows::{SwitcherRow, SwitcherSection};
 use crate::fuzzy_score::fuzzy_score;
@@ -22,7 +23,7 @@ use crate::resource_actions::{
 use crate::resource_kind::ResourceKind;
 use crate::settings_window::ImportKubeconfig;
 use crate::status_tone::{StatusLabel, node_status_label, pod_status_label};
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::write_guard::ClusterGuard;
 
 const ACTIONS_CAP: usize = 20;
@@ -123,7 +124,8 @@ pub(crate) enum PaletteTarget {
     /// A row action on the cursor row, dispatched as the action of its key.
     RowAction(ResourceAction),
     Screen(Screen),
-    Resource(ResourceKey),
+    /// An object of one viewed cluster, which the shell reveals in that cluster.
+    Resource(ClusterObject),
     Namespace(NamespaceScope),
     /// A row of the cluster switcher: the cluster, its environment, health, and `Ctrl n` number.
     Cluster(SwitcherRow),
@@ -181,8 +183,15 @@ impl PaletteEntry {
     }
 }
 
-/// The loaded lists the palette may read. All slices are what the shell already holds.
+/// The loaded lists of one viewed cluster the palette may read. All slices are what the shell
+/// already holds.
 pub(crate) struct PaletteSession<'a> {
+    pub(crate) cluster: ClusterRef,
+    /// The cluster's switcher text, set only while several clusters are viewed: it tells equal
+    /// names apart and is matched by the query.
+    pub(crate) label: Option<SharedString>,
+    /// The cluster the namespace scope and the kind availability are read from.
+    pub(crate) is_primary: bool,
     pub(crate) scope: &'a NamespaceScope,
     /// The guard of the cluster the palette acts on; its access report gates every row.
     pub(crate) guard: &'a ClusterGuard<'a>,
@@ -197,13 +206,24 @@ pub(crate) struct PaletteSession<'a> {
 /// namespaces, and no row actions.
 pub(crate) struct PaletteInput<'a> {
     pub(crate) screen: Screen,
-    pub(crate) cursor: Option<&'a ResourceKey>,
+    pub(crate) cursor: Option<&'a ClusterObject>,
     pub(crate) has_dock_tabs: bool,
     /// Whether to build the resource entries at all: only a query in `All` mode with text lists
     /// them, and thousands of pods are not worth building for any other query.
     pub(crate) include_resources: bool,
-    pub(crate) session: Option<PaletteSession<'a>>,
+    /// Every viewed cluster that is live, in display order.
+    pub(crate) sessions: Vec<PaletteSession<'a>>,
     pub(crate) clusters: &'a [SwitcherSection],
+}
+
+impl<'a> PaletteInput<'a> {
+    /// The session the scope and the kind availability come from: the primary one, else the first.
+    fn scope_session(&self) -> Option<&PaletteSession<'a>> {
+        self.sessions
+            .iter()
+            .find(|session| session.is_primary)
+            .or_else(|| self.sessions.first())
+    }
 }
 
 /// The row actions in the order of the shortcut sheet.
@@ -224,29 +244,34 @@ const ROW_ACTIONS: [ResourceAction; 11] = [
 /// Everything the palette may show, in source order, from in-memory state only.
 pub(crate) fn palette_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
     let mut entries = Vec::new();
-    if let Some(session) = &input.session {
-        entries.extend(row_action_entries(input, session));
-    }
+    entries.extend(row_action_entries(input));
     entries.extend(command_entries(input));
-    if let Some(session) = input.session.as_ref().filter(|_| input.include_resources) {
-        entries.extend(resource_entries(session));
+    if input.include_resources {
+        entries.extend(input.sessions.iter().flat_map(resource_entries));
     }
     entries.extend(screen_entries(input));
-    if let Some(session) = &input.session {
+    if let Some(session) = input.scope_session() {
         entries.extend(namespace_entries(session));
     }
     entries.extend(cluster_entries(input));
     entries
 }
 
-fn row_action_entries<'a>(
-    input: &'a PaletteInput<'_>,
-    session: &'a PaletteSession<'_>,
-) -> impl Iterator<Item = PaletteEntry> + 'a {
-    let subject = input.cursor;
-    let pod = subject.and_then(|subject| session.pods.iter().find(|pod| subject.is_pod(pod)));
+/// The row actions of the cursor row, gated by the cluster that row belongs to.
+fn row_action_entries<'a>(input: &'a PaletteInput<'_>) -> impl Iterator<Item = PaletteEntry> + 'a {
+    let cursor = input.cursor;
+    let session = cursor.and_then(|cursor| {
+        input
+            .sessions
+            .iter()
+            .find(|session| session.cluster == cursor.cluster)
+    });
+    let pod = cursor
+        .zip(session)
+        .and_then(|(cursor, session)| session.pods.iter().find(|pod| cursor.key.is_pod(pod)));
     ROW_ACTIONS.into_iter().filter_map(move |action| {
-        let subject = subject?;
+        let subject = &cursor?.key;
+        let session = session?;
         let state = match key_availability_of(action, subject, pod, session.guard) {
             KeyAvailability::NotOffered => return None,
             KeyAvailability::Run => EntryState::Enabled,
@@ -257,7 +282,7 @@ fn row_action_entries<'a>(
             action_label(subject_action(action, subject)),
             PaletteTarget::RowAction(action),
         );
-        entry.detail = Some(subject_text(subject).into());
+        entry.detail = Some(with_cluster(subject_text(subject), session).into());
         entry.state = state;
         Some(entry)
     })
@@ -303,27 +328,38 @@ fn command_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
         .collect()
 }
 
-/// The visible explorer kind, pods, and nodes: names and status only.
+/// `text`, and the cluster label after it while several clusters are viewed.
+fn with_cluster(text: String, session: &PaletteSession<'_>) -> String {
+    match &session.label {
+        Some(label) => format!("{text} · {label}"),
+        None => text,
+    }
+}
+
+/// The visible explorer kind, pods, and nodes of one cluster: names and status only.
 fn resource_entries<'a>(
     session: &'a PaletteSession<'_>,
 ) -> impl Iterator<Item = PaletteEntry> + 'a {
-    let pods = session.pods.iter().map(|pod| {
+    let object = |key| PaletteTarget::Resource(ClusterObject::new(session.cluster.clone(), key));
+    let pods = session.pods.iter().map(move |pod| {
         let mut entry = PaletteEntry::new(
             PaletteGroup::Resources,
             pod.name.clone(),
-            PaletteTarget::Resource(ResourceKey::of_pod(pod)),
+            object(ResourceKey::of_pod(pod)),
         );
-        entry.detail = Some(format!("{}/{}", pod.namespace, pod.name).into());
+        entry.detail =
+            Some(with_cluster(format!("{}/{}", pod.namespace, pod.name), session).into());
         entry.keywords = vec!["pod".into(), "pods".into()];
         entry.status = Some(pod_status_label(pod));
         entry
     });
-    let nodes = session.nodes.iter().map(|node| {
+    let nodes = session.nodes.iter().map(move |node| {
         let mut entry = PaletteEntry::new(
             PaletteGroup::Resources,
             node.name.clone(),
-            PaletteTarget::Resource(ResourceKey::of_node(node)),
+            object(ResourceKey::of_node(node)),
         );
+        entry.detail = session.label.clone();
         entry.keywords = vec!["node".into(), "nodes".into()];
         entry.status = Some(node_status_label(node.status));
         entry
@@ -332,16 +368,18 @@ fn resource_entries<'a>(
         .kind_rows
         .into_iter()
         .flat_map(|(kind, rows)| rows.iter().map(move |row| (kind, row)))
-        .map(|(kind, row)| {
+        .map(move |(kind, row)| {
             let mut entry = PaletteEntry::new(
                 PaletteGroup::Resources,
                 row.name.clone(),
-                PaletteTarget::Resource(ResourceKey::of_row(kind, row)),
+                object(ResourceKey::of_row(kind, row)),
             );
-            entry.detail = row
-                .namespace
-                .as_ref()
-                .map(|namespace| format!("{namespace}/{}", row.name).into());
+            entry.detail = match &row.namespace {
+                Some(namespace) => {
+                    Some(with_cluster(format!("{namespace}/{}", row.name), session).into())
+                }
+                None => session.label.clone(),
+            };
             entry.keywords = vec![kind.singular().into(), kind.plural().into()];
             entry.status = Some(row.status.clone());
             entry
@@ -375,7 +413,7 @@ fn screen_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
             .map(SharedString::from)
             .collect();
         entry.is_current = screen == input.screen;
-        if let Some(session) = &input.session
+        if let Some(session) = input.scope_session()
             && let KindAvailability::Denied { reason } =
                 kind_availability(kind, session.guard.access, session.scope)
         {

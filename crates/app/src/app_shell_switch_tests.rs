@@ -13,20 +13,20 @@ use gpui_kit::{TestAppContext, WindowHandle};
 use super::app_shell_tests::{open_shell_on, render};
 use super::*;
 use crate::cluster_session::SessionPhase;
-use crate::cluster_switcher::SwitcherConfirm;
+use crate::cluster_switcher::{SwitcherConfirm, ToggleClusterTick};
 use cluster::ClusterConnection;
 
 use crate::cluster_runtime::ClusterRuntime;
 use crate::settings_window::{ManageClusters, OpenSettings};
 
-const FIXTURE_YAML: &str = "apiVersion: v1\nkind: Config\nclusters:\n  - name: c\n    cluster: { server: 'https://127.0.0.1:1' }\ncontexts:\n  - name: prod-a\n    context: { cluster: c }\n  - name: stg-b\n    context: { cluster: c }\n  - name: dev-c\n    context: { cluster: c }\n";
+pub(super) const FIXTURE_YAML: &str = "apiVersion: v1\nkind: Config\nclusters:\n  - name: c\n    cluster: { server: 'https://127.0.0.1:1' }\ncontexts:\n  - name: prod-a\n    context: { cluster: c }\n  - name: stg-b\n    context: { cluster: c }\n  - name: dev-c\n    context: { cluster: c }\n";
 
-struct SwitchFixture {
+pub(super) struct SwitchFixture {
     /// Alive for the whole test: the sessions connect on it.
-    runtime: tokio::runtime::Runtime,
-    window: WindowHandle<Root>,
-    shell: Entity<AppShell>,
-    path: PathBuf,
+    pub(super) runtime: tokio::runtime::Runtime,
+    pub(super) window: WindowHandle<Root>,
+    pub(super) shell: Entity<AppShell>,
+    pub(super) path: PathBuf,
 }
 
 impl Drop for SwitchFixture {
@@ -38,12 +38,26 @@ impl Drop for SwitchFixture {
 }
 
 /// A shell on `prod-a` of a kubeconfig with three contexts (`prod-a`, `stg-b`, `dev-c`).
-fn open_switch_fixture(name: &str, cx: &mut TestAppContext) -> SwitchFixture {
+pub(super) fn open_switch_fixture(name: &str, cx: &mut TestAppContext) -> SwitchFixture {
     open_switch_fixture_with(name, &[], cx)
 }
 
 /// The same, with more launch flags.
-fn open_switch_fixture_with(name: &str, extra: &[&str], cx: &mut TestAppContext) -> SwitchFixture {
+pub(super) fn open_switch_fixture_with(
+    name: &str,
+    extra: &[&str],
+    cx: &mut TestAppContext,
+) -> SwitchFixture {
+    open_switch_fixture_over(name, FIXTURE_YAML, extra, cx)
+}
+
+/// The same over another kubeconfig text; a `--context` in `extra` overrides `prod-a`.
+pub(super) fn open_switch_fixture_over(
+    name: &str,
+    yaml: &str,
+    extra: &[&str],
+    cx: &mut TestAppContext,
+) -> SwitchFixture {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -57,7 +71,7 @@ fn open_switch_fixture_with(name: &str, extra: &[&str], cx: &mut TestAppContext)
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the temp dir");
     let path = dir.join("kubeconfig.yaml");
-    std::fs::write(&path, FIXTURE_YAML).expect("write the fixture");
+    std::fs::write(&path, yaml).expect("write the fixture");
     let flags: Vec<&str> = ["--context", "prod-a"]
         .into_iter()
         .chain(extra.iter().copied())
@@ -73,7 +87,7 @@ fn open_switch_fixture_with(name: &str, extra: &[&str], cx: &mut TestAppContext)
 }
 
 impl SwitchFixture {
-    fn cluster(&self, context: &str, cx: &mut TestAppContext) -> ClusterRef {
+    pub(super) fn cluster(&self, context: &str, cx: &mut TestAppContext) -> ClusterRef {
         cx.update(|cx| {
             self.shell
                 .read(cx)
@@ -86,22 +100,21 @@ impl SwitchFixture {
         .expect("the fixture has that context")
     }
 
-    fn session(&self, cx: &mut TestAppContext) -> Entity<ClusterSession> {
+    pub(super) fn session(&self, cx: &mut TestAppContext) -> Entity<ClusterSession> {
         self.shell
-            .read_with(cx, |shell, _| shell.session.clone())
+            .read_with(cx, |shell, _| shell.session().cloned())
             .expect("a session")
     }
 
-    fn active_context(&self, cx: &mut TestAppContext) -> Option<String> {
+    pub(super) fn active_context(&self, cx: &mut TestAppContext) -> Option<String> {
         self.shell.read_with(cx, |shell, cx| {
             shell
-                .session
-                .as_ref()
+                .session()
                 .map(|session| session.read(cx).context().to_owned())
         })
     }
 
-    fn switch(&self, context: &str, cx: &mut TestAppContext) {
+    pub(super) fn switch(&self, context: &str, cx: &mut TestAppContext) {
         let target = self.cluster(context, cx);
         self.shell
             .update(cx, |shell, cx| shell.switch_cluster(&target, cx));
@@ -109,7 +122,7 @@ impl SwitchFixture {
 
     /// Makes the active session live over a client that never connects, as if the connect had
     /// answered; its scope is `scope`.
-    fn go_live(&self, scope: NamespaceScope, cx: &mut TestAppContext) {
+    pub(super) fn go_live(&self, scope: NamespaceScope, cx: &mut TestAppContext) {
         let context = self.active_context(cx).expect("a session");
         let kubeconfig = Kubeconfig::parse(FIXTURE_YAML, &self.path).expect("the fixture parses");
         let connection = self
@@ -124,16 +137,16 @@ impl SwitchFixture {
     }
 
     /// Whether the element with `id` is in the last drawn frame (kit controls register themselves).
-    fn is_drawn(&self, id: &'static str, cx: &mut TestAppContext) -> bool {
+    pub(super) fn is_drawn(&self, id: &'static str, cx: &mut TestAppContext) -> bool {
         self.with_window(cx, |window, _| window.try_find(id).is_some())
     }
 
-    fn draw_twice(&self, cx: &mut TestAppContext) {
+    pub(super) fn draw_twice(&self, cx: &mut TestAppContext) {
         render(self.window, cx);
         render(self.window, cx);
     }
 
-    fn wait_until(
+    pub(super) fn wait_until(
         &self,
         what: &str,
         cx: &mut TestAppContext,
@@ -149,15 +162,15 @@ impl SwitchFixture {
         panic!("timed out waiting for {what}");
     }
 
-    fn wait_until_failed(&self, cx: &mut TestAppContext) {
+    pub(super) fn wait_until_failed(&self, cx: &mut TestAppContext) {
         self.wait_until("the connect to fail", cx, |shell, cx| {
-            shell.session.as_ref().is_some_and(|session| {
+            shell.session().is_some_and(|session| {
                 matches!(session.read(cx).phase(), SessionPhase::Failed { .. })
             })
         });
     }
 
-    fn with_window<R>(
+    pub(super) fn with_window<R>(
         &self,
         cx: &mut TestAppContext,
         run: impl FnOnce(&mut Window, &mut App) -> R,
@@ -169,11 +182,11 @@ impl SwitchFixture {
         result
     }
 
-    fn press(&self, keys: &str, cx: &mut TestAppContext) {
+    pub(super) fn press(&self, keys: &str, cx: &mut TestAppContext) {
         self.with_window(cx, |window, cx| window.press(keys, cx));
     }
 
-    fn open_switcher(&self, cx: &mut TestAppContext) {
+    pub(super) fn open_switcher(&self, cx: &mut TestAppContext) {
         self.with_window(cx, |window, cx| {
             self.shell
                 .update(cx, |shell, cx| shell.open_cluster_switcher(window, cx));
@@ -181,12 +194,12 @@ impl SwitchFixture {
         render(self.window, cx);
     }
 
-    fn is_switcher_open(&self, cx: &mut TestAppContext) -> bool {
+    pub(super) fn is_switcher_open(&self, cx: &mut TestAppContext) -> bool {
         self.shell
             .read_with(cx, |shell, _| shell.switcher.is_open())
     }
 
-    fn highlight(&self, cx: &mut TestAppContext) -> Option<String> {
+    pub(super) fn highlight(&self, cx: &mut TestAppContext) -> Option<String> {
         self.shell.read_with(cx, |shell, _| {
             shell
                 .switcher
@@ -197,7 +210,7 @@ impl SwitchFixture {
 }
 
 /// `Ctrl` (`Cmd` on macOS) plus `keys`: the `secondary` modifier the bindings use.
-fn chord(keys: &str) -> String {
+pub(super) fn chord(keys: &str) -> String {
     let modifier = if cfg!(target_os = "macos") {
         "cmd"
     } else {
@@ -264,8 +277,9 @@ fn switch_closes_the_drawer(cx: &mut TestAppContext) {
         namespace: None,
         name: "default".to_owned(),
     };
+    let cluster = fixture.cluster("prod-a", cx);
     fixture.shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(key), cx);
+        shell.change_selection(Some(ClusterObject::new(cluster, key)), cx);
         assert!(shell.selected.is_some());
     });
     fixture.switch("stg-b", cx);
@@ -287,9 +301,16 @@ fn switch_closes_log_tabs(cx: &mut TestAppContext) {
         name: "web".to_owned(),
     })
     .expect("a deployment has a log target");
+    let cluster = fixture.cluster("prod-a", cx);
     fixture.with_window(cx, |window, cx| {
-        let dock = fixture.shell.read(cx).log_dock.clone();
-        dock.update(cx, |dock, cx| dock.open(connection, target, window, cx));
+        let shell = fixture.shell.read(cx);
+        let row = shell
+            .slot_row_context(&cluster, cx)
+            .expect("the cluster is viewed");
+        let dock = shell.log_dock.clone();
+        dock.update(cx, |dock, cx| {
+            dock.open(LogOrigin::new(&row, connection), target, window, cx)
+        });
     });
     fixture
         .shell
@@ -303,16 +324,20 @@ fn switch_closes_log_tabs(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn switch_drops_the_launch_requests_of_the_old_cluster(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture("launch-requests", cx);
+    let cluster = fixture.cluster("prod-a", cx);
     fixture.shell.update(cx, |shell, _| {
         shell.pending_custom_launch = Some(CustomLaunch {
             crd_name: "widgets.example.com",
             tab: None,
         });
         shell.pending_dialog_launch = Some(LaunchScreen::WhoCan);
-        shell.pending_reveal = Some(ResourceKey::Pod {
-            namespace: "shop".to_owned(),
-            name: "web".to_owned(),
-        });
+        shell.pending_reveal = Some(ClusterObject::new(
+            cluster,
+            ResourceKey::Pod {
+                namespace: "shop".to_owned(),
+                name: "web".to_owned(),
+            },
+        ));
     });
     fixture.switch("stg-b", cx);
     fixture.shell.read_with(cx, |shell, _| {
@@ -715,15 +740,22 @@ fn arrows_move_highlight_in_filter(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn space_stays_unbound(cx: &mut TestAppContext) {
+fn space_ticks_a_row_and_never_confirms(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture("space", cx);
-    let bound_to_switcher = cx.update(|cx| {
+    let (ticks, confirms) = cx.update(|cx| {
         let space = [gpui_kit::Keystroke::parse("space").expect("a valid keystroke")];
-        cx.all_bindings_for_input(&space)
-            .iter()
-            .any(|binding| binding.action().partial_eq(&SwitcherConfirm))
+        let bindings = cx.all_bindings_for_input(&space);
+        (
+            bindings
+                .iter()
+                .any(|binding| binding.action().partial_eq(&ToggleClusterTick)),
+            bindings
+                .iter()
+                .any(|binding| binding.action().partial_eq(&SwitcherConfirm)),
+        )
     });
-    assert!(!bound_to_switcher);
+    assert!(ticks);
+    assert!(!confirms);
     drop(fixture);
 }
 
@@ -805,7 +837,7 @@ fn retry_on_active_failed_row_retries_the_session(cx: &mut TestAppContext) {
         .shell
         .update(cx, |shell, cx| shell.probe_cluster(&active, cx));
     let is_connecting = fixture.shell.read_with(cx, |shell, cx| {
-        shell.session.as_ref().is_some_and(|session| {
+        shell.session().is_some_and(|session| {
             matches!(session.read(cx).phase(), SessionPhase::Connecting { .. })
         })
     });
@@ -864,6 +896,19 @@ fn palette_pod_key(name: &str) -> ResourceKey {
     }
 }
 
+/// The pod `name` of the fixture's primary cluster, as the palette and the cursor name it.
+fn palette_pod_object(
+    fixture: &SwitchFixture,
+    name: &str,
+    cx: &mut TestAppContext,
+) -> ClusterObject {
+    let cluster = fixture
+        .shell
+        .read_with(cx, |shell, _| shell.primary_cluster())
+        .expect("the fixture has a primary cluster");
+    ClusterObject::new(cluster, palette_pod_key(name))
+}
+
 /// A live fixture on Pods with two pods loaded.
 fn pods_fixture(name: &str, cx: &mut TestAppContext) -> SwitchFixture {
     let fixture = open_switch_fixture(name, cx);
@@ -883,7 +928,7 @@ fn pods_fixture(name: &str, cx: &mut TestAppContext) -> SwitchFixture {
 #[gpui_kit::test]
 fn tab_moves_the_cursor_without_opening_the_drawer(cx: &mut TestAppContext) {
     let fixture = pods_fixture("tab-preview", cx);
-    let key = palette_pod_key("web-0");
+    let key = palette_pod_object(&fixture, "web-0", cx);
     fixture.shell.update(cx, |shell, cx| {
         assert!(shell.can_preview_row(&key, cx));
         shell.preview_resource(&key, cx);
@@ -899,9 +944,13 @@ fn tab_moves_the_cursor_without_opening_the_drawer(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn tab_ignores_a_resource_of_another_screen(cx: &mut TestAppContext) {
     let fixture = pods_fixture("tab-other-screen", cx);
-    let node = ResourceKey::Node {
-        name: "node-1".to_owned(),
-    };
+    let cluster = fixture.cluster("prod-a", cx);
+    let node = ClusterObject::new(
+        cluster,
+        ResourceKey::Node {
+            name: "node-1".to_owned(),
+        },
+    );
     fixture.shell.update(cx, |shell, cx| {
         assert!(!shell.can_preview_row(&node, cx));
         shell.preview_resource(&node, cx);
@@ -913,8 +962,8 @@ fn tab_ignores_a_resource_of_another_screen(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn tab_does_nothing_while_a_drawer_is_open(cx: &mut TestAppContext) {
     let fixture = pods_fixture("tab-drawer", cx);
-    let open = palette_pod_key("api-0");
-    let other = palette_pod_key("web-0");
+    let open = palette_pod_object(&fixture, "api-0", cx);
+    let other = palette_pod_object(&fixture, "web-0", cx);
     fixture.shell.update(cx, |shell, cx| {
         shell.change_selection(Some(open.clone()), cx);
         shell.set_drawer_open(true, cx);
@@ -928,7 +977,8 @@ fn tab_does_nothing_while_a_drawer_is_open(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_palette_lists_the_loaded_pods_and_the_row_actions_of_the_cursor(cx: &mut TestAppContext) {
     let fixture = pods_fixture("palette-live", cx);
-    let key = palette_pod_key("api-0");
+    let key = palette_pod_object(&fixture, "api-0", cx);
+    let web = palette_pod_object(&fixture, "web-0", cx);
     fixture.shell.update(cx, |shell, cx| {
         shell.change_selection(Some(key.clone()), cx);
     });
@@ -936,13 +986,13 @@ fn the_palette_lists_the_loaded_pods_and_the_row_actions_of_the_cursor(cx: &mut 
         .shell
         .read_with(cx, |shell, cx| shell.palette_snapshot(true, cx));
     assert!(snapshot.context.has_session);
-    let has_pod = |name: &str| {
+    let has_pod = |wanted: &ClusterObject| {
         snapshot.entries.iter().any(|entry| {
             matches!(&entry.target, crate::palette_search::PaletteTarget::Resource(found)
-                if *found == palette_pod_key(name))
+                if found == wanted)
         })
     };
-    assert!(has_pod("api-0") && has_pod("web-0"));
+    assert!(has_pod(&key) && has_pod(&web));
     assert!(snapshot.entries.iter().any(|entry| matches!(
         entry.target,
         crate::palette_search::PaletteTarget::RowAction(

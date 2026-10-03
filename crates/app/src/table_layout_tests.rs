@@ -26,7 +26,7 @@ fn names(layout: &TableColumns) -> Vec<&str> {
 
 #[test]
 fn layout_columns_skips_hidden_and_maps_logical() {
-    let layout = layout_columns(&specs(), 0, px(160.), px(1100.), &hidden(&[1, 3]));
+    let layout = layout_columns(&specs(), 0, px(160.), None, px(1100.), &hidden(&[1, 3]));
     assert_eq!(names(&layout), ["Name", "Restarts"]);
     // The checkbox column comes first and has no logical column.
     assert!(layout.is_select(0));
@@ -39,13 +39,13 @@ fn layout_columns_skips_hidden_and_maps_logical() {
 
 #[test]
 fn layout_columns_never_hides_the_flexible_column() {
-    let layout = layout_columns(&specs(), 0, px(160.), px(1100.), &hidden(&[0, 1]));
+    let layout = layout_columns(&specs(), 0, px(160.), None, px(1100.), &hidden(&[0, 1]));
     assert_eq!(names(&layout), ["Name", "Restarts", "Age"]);
 }
 
 #[test]
 fn layout_columns_gives_spare_width_to_flexible() {
-    let layout = layout_columns(&specs(), 0, px(160.), px(1100.), &BTreeSet::new());
+    let layout = layout_columns(&specs(), 0, px(160.), None, px(1100.), &BTreeSet::new());
     let widths: Vec<_> = layout.columns.iter().map(|column| column.width).collect();
     assert_eq!(
         widths,
@@ -58,7 +58,7 @@ fn layout_columns_gives_spare_width_to_flexible() {
         ]
     );
     // A hidden column hands its width to the flexible one.
-    let narrower = layout_columns(&specs(), 0, px(160.), px(1100.), &hidden(&[1]));
+    let narrower = layout_columns(&specs(), 0, px(160.), None, px(1100.), &hidden(&[1]));
     assert_eq!(
         narrower.columns.get(1).map(|column| column.width),
         Some(px(1100. - 28. - 32. - 150.))
@@ -67,7 +67,7 @@ fn layout_columns_gives_spare_width_to_flexible() {
 
 #[test]
 fn layout_columns_never_drops_below_the_minimum() {
-    let layout = layout_columns(&specs(), 0, px(160.), px(300.), &BTreeSet::new());
+    let layout = layout_columns(&specs(), 0, px(160.), None, px(300.), &BTreeSet::new());
     assert_eq!(
         layout.columns.get(1).map(|column| column.width),
         Some(px(160.))
@@ -80,6 +80,7 @@ fn table_layout_reports_only_real_changes() {
         specs: specs(),
         flexible: 0,
         flexible_min: px(160.),
+        session_column: None,
     };
     let mut layout = TableLayout::new(plan);
     assert!(layout.fit_width(px(1100.), &BTreeSet::new()));
@@ -164,7 +165,8 @@ mod checkbox_clicks {
                 },
                 cx,
                 |window, cx| {
-                    let columns = layout_columns(&specs(), 0, px(160.), px(640.), &BTreeSet::new());
+                    let columns =
+                        layout_columns(&specs(), 0, px(160.), None, px(640.), &BTreeSet::new());
                     cx.new(|cx| Host {
                         table: cx.new(|cx| {
                             TableState::new(Rows { columns }, window, cx).row_selectable(true)
@@ -201,4 +203,82 @@ mod checkbox_clicks {
         let selected = selected_row_after(cx, |window, cx| window.click(("select", 1usize), cx));
         assert_eq!(selected, None);
     }
+}
+
+// ---- The session column (Cluster) stays in view ----
+
+/// `specs()` plus a 170 px Cluster column at logical index 4.
+fn specs_with_cluster() -> Vec<KindColumn> {
+    let mut specs = specs();
+    specs.push(column("Cluster", 170., Align::Left));
+    specs
+}
+
+fn width_of(layout: &TableColumns, name: &str) -> Option<Pixels> {
+    layout
+        .columns
+        .iter()
+        .find(|column| column.name.as_ref() == name)
+        .map(|column| column.width)
+}
+
+#[test]
+fn session_column_keeps_its_width_in_a_wide_table() {
+    let layout = layout_columns(
+        &specs_with_cluster(),
+        0,
+        px(160.),
+        Some(4),
+        px(1100.),
+        &BTreeSet::new(),
+    );
+    assert_eq!(width_of(&layout, "Cluster"), Some(px(170.)));
+    assert_eq!(
+        width_of(&layout, "Name"),
+        Some(px(1100. - 28. - 32. - 490.))
+    );
+}
+
+#[test]
+fn narrow_table_shrinks_the_flexible_column_before_the_session_column() {
+    // 260 px are left for Name and Cluster: the Name minimum (160) and 170 do not fit.
+    let layout = layout_columns(
+        &specs_with_cluster(),
+        0,
+        px(160.),
+        Some(4),
+        px(640.),
+        &BTreeSet::new(),
+    );
+    assert_eq!(width_of(&layout, "Cluster"), Some(px(170.)));
+    assert_eq!(width_of(&layout, "Name"), Some(px(90.)));
+}
+
+#[test]
+fn narrower_table_shrinks_the_session_column_to_its_minimum() {
+    let layout = layout_columns(
+        &specs_with_cluster(),
+        0,
+        px(160.),
+        Some(4),
+        px(400.),
+        &BTreeSet::new(),
+    );
+    assert_eq!(width_of(&layout, "Cluster"), Some(px(110.)));
+    // The table scrolls from here on: the flexible column never goes below its floor.
+    assert_eq!(width_of(&layout, "Name"), Some(px(40.)));
+}
+
+#[test]
+fn a_hidden_session_column_leaves_the_layout_alone() {
+    let layout = layout_columns(
+        &specs_with_cluster(),
+        0,
+        px(160.),
+        Some(4),
+        px(640.),
+        &hidden(&[4]),
+    );
+    assert_eq!(width_of(&layout, "Cluster"), None);
+    assert_eq!(width_of(&layout, "Name"), Some(px(640. - 28. - 32. - 320.)));
 }

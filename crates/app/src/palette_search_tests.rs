@@ -12,6 +12,7 @@ use crate::cluster_session::AccessState;
 use crate::environment::Environment;
 use crate::kind_row::KindObject;
 use crate::status_tone::StatusTone;
+use crate::table_selection::ClusterObject;
 use crate::write_guard::{WriteLock, test_guard};
 
 fn known_denying(denied: &[AccessCheck]) -> AccessState {
@@ -130,6 +131,8 @@ fn cluster_row(context: &str, label: &str, shortcut: u8, is_active: bool) -> Swi
         failure: None,
         shortcut: Some(shortcut),
         is_active,
+        is_primary: is_active,
+        is_ticked: false,
         search_text: format!("{label}\n{context}\nstg\nconfig").to_lowercase(),
     }
 }
@@ -170,13 +173,16 @@ impl World {
         }
     }
 
-    fn input<'a>(&'a self, screen: Screen, cursor: Option<&'a ResourceKey>) -> PaletteInput<'a> {
+    fn input<'a>(&'a self, screen: Screen, cursor: Option<&'a ClusterObject>) -> PaletteInput<'a> {
         PaletteInput {
             screen,
             cursor,
             has_dock_tabs: false,
             include_resources: true,
-            session: Some(PaletteSession {
+            sessions: vec![PaletteSession {
+                cluster: test_cluster(),
+                label: None,
+                is_primary: true,
                 scope: &self.scope,
                 guard: &self.guard,
                 namespaces: &self.namespaces,
@@ -186,7 +192,7 @@ impl World {
                     .kind_rows
                     .as_ref()
                     .map(|(kind, rows)| (*kind, rows.as_slice())),
-            }),
+            }],
             clusters: &self.sections,
         }
     }
@@ -211,19 +217,30 @@ fn reason_of(entry: &PaletteEntry) -> Option<&str> {
     }
 }
 
-fn pod_key(name: &str) -> ResourceKey {
-    ResourceKey::Pod {
-        namespace: "shop".to_owned(),
-        name: name.to_owned(),
+fn test_cluster() -> ClusterRef {
+    ClusterRef {
+        kubeconfig: PathBuf::from("/home/me/.kube/config"),
+        context: "uat-ctx".to_owned(),
     }
 }
 
-fn deployment_key(name: &str) -> ResourceKey {
-    ResourceKey::Kind {
+fn in_test_cluster(key: ResourceKey) -> ClusterObject {
+    ClusterObject::new(test_cluster(), key)
+}
+
+fn pod_key(name: &str) -> ClusterObject {
+    in_test_cluster(ResourceKey::Pod {
+        namespace: "shop".to_owned(),
+        name: name.to_owned(),
+    })
+}
+
+fn deployment_key(name: &str) -> ClusterObject {
+    in_test_cluster(ResourceKey::Kind {
         kind: ResourceKind::Deployments,
         namespace: Some("shop".to_owned()),
         name: name.to_owned(),
-    }
+    })
 }
 
 #[test]
@@ -393,7 +410,7 @@ fn no_session_lists_commands_and_screens_only() {
     let world = World::new();
     let cursor = pod_key("payments-api-0");
     let mut input = world.input(Screen::Pods, Some(&cursor));
-    input.session = None;
+    input.sessions.clear();
     let all = palette_entries(&input);
     assert!(all.iter().all(|entry| matches!(
         entry.target,
@@ -430,7 +447,10 @@ fn resources_search_pods_nodes_and_the_visible_kind_only() {
     let found = search(&input, "node-1");
     assert!(found.entries.iter().any(|entry| matches!(
         entry.target,
-        PaletteTarget::Resource(ResourceKey::Node { .. })
+        PaletteTarget::Resource(ClusterObject {
+            key: ResourceKey::Node { .. },
+            ..
+        })
     )));
     // Without an explorer kind on screen only pods and nodes are searched.
     world.kind_rows = None;
@@ -568,9 +588,9 @@ fn every_offered_row_action_maps() {
     let world = World::new();
     let subjects = [
         pod_key("payments-api-0"),
-        ResourceKey::Node {
+        in_test_cluster(ResourceKey::Node {
             name: "node-1".to_owned(),
-        },
+        }),
         deployment_key("payments-api"),
     ];
     let mut offered = 0;
@@ -594,9 +614,9 @@ fn every_offered_row_action_maps() {
 #[test]
 fn a_node_cursor_offers_the_node_shell_under_its_own_label() {
     let world = World::new();
-    let key = ResourceKey::Node {
+    let key = in_test_cluster(ResourceKey::Node {
         name: "node-1".to_owned(),
-    };
+    });
     let all = palette_entries(&world.input(Screen::Nodes, Some(&key)));
     assert!(
         all.iter()

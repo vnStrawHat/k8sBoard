@@ -17,6 +17,7 @@ use crate::issue::IssueSeverity;
 use crate::issue_board::IssueBoard;
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::tone_color;
+use crate::usage_format::group_digits;
 
 pub(crate) const SIDEBAR_WIDTH: Pixels = px(220.);
 
@@ -122,6 +123,17 @@ pub(crate) struct NavigationCounts {
     pub(crate) issue_total: Option<IssueCount>,
     /// The issues whose row a screen lists, for the screens that have any.
     pub(crate) issue_counts: Vec<ScreenIssues>,
+    /// What each viewed cluster knows, for the tooltips of the sums; empty for one cluster.
+    pub(crate) slots: Vec<SlotCounts>,
+}
+
+/// The numbers one viewed cluster knows.
+pub(crate) struct SlotCounts {
+    pub(crate) label: String,
+    pub(crate) pods: Option<usize>,
+    pub(crate) nodes: Option<usize>,
+    pub(crate) explorer: Option<(ResourceKind, usize)>,
+    pub(crate) kinds: HashMap<ResourceKind, usize>,
 }
 /// How many issues, and the worst severity among them.
 type IssueCount = (usize, IssueSeverity);
@@ -147,7 +159,68 @@ pub(crate) fn issue_counts(board: &IssueBoard) -> (Option<IssueCount>, Vec<Scree
     (total, counts)
 }
 
+/// The sum of the numbers the viewed clusters know; `None` while none knows one.
+pub(crate) fn sum_known(counts: impl Iterator<Item = Option<usize>>) -> Option<usize> {
+    counts
+        .flatten()
+        .reduce(|total, count| total.saturating_add(count))
+}
+
+/// The live count of the visible kind over the viewed clusters that list it.
+pub(crate) fn sum_explorer(
+    counts: impl Iterator<Item = (ResourceKind, usize)>,
+) -> Option<(ResourceKind, usize)> {
+    counts.reduce(|(kind, total), (other, count)| {
+        if kind == other {
+            (kind, total.saturating_add(count))
+        } else {
+            (kind, total)
+        }
+    })
+}
+
+/// The counted numbers of kinds, added up over the viewed clusters; a kind that one cluster counted
+/// keeps its number.
+pub(crate) fn sum_kinds(
+    maps: impl Iterator<Item = HashMap<ResourceKind, usize>>,
+) -> HashMap<ResourceKind, usize> {
+    let mut total: HashMap<ResourceKind, usize> = HashMap::new();
+    for map in maps {
+        for (kind, count) in map {
+            let sum = total.entry(kind).or_insert(0);
+            *sum = sum.saturating_add(count);
+        }
+    }
+    total
+}
+
+/// `prod-eu 1,200` and `stg-b 31` on lines of their own: what each cluster contributes to a sum.
+/// `None` unless two clusters know their number.
+fn slot_tooltip(entries: impl Iterator<Item = (String, Option<usize>)>) -> Option<SharedString> {
+    let known: Vec<String> = entries
+        .filter_map(|(label, count)| Some(format!("{label}: {}", group_digits(count?))))
+        .collect();
+    (known.len() >= 2).then(|| known.join("\n").into())
+}
+
 impl NavigationCounts {
+    /// The tooltip of the number next to `screen`: what each viewed cluster contributes.
+    fn slot_tooltip_of(&self, screen: Screen) -> Option<SharedString> {
+        slot_tooltip(self.slots.iter().map(|slot| {
+            let count = match screen {
+                Screen::Pods => slot.pods,
+                Screen::Nodes => slot.nodes,
+                Screen::Overview | Screen::Issues | Screen::Topology => None,
+                Screen::Kind(kind) => slot
+                    .explorer
+                    .filter(|(listed, _)| *listed == kind)
+                    .map(|(_, count)| count)
+                    .or_else(|| slot.kinds.get(&kind).copied()),
+            };
+            (slot.label.clone(), count)
+        }))
+    }
+
     /// The issues of `screen` with the worst severity among them.
     fn issues_of(&self, screen: Screen) -> Option<IssueCount> {
         self.issue_counts
@@ -401,21 +474,29 @@ fn screen_item(
         Screen::Kind(kind) => counts.of_kind(kind),
     };
     let issues = counts.issues_of(screen);
+    let tooltip = counts.slot_tooltip_of(screen);
     SidebarMenuItem::new(name)
         .active(screen == active)
         .on_click(cx.listener(move |shell, _, _, cx| shell.show_screen(screen, cx)))
         .suffix(move |_, cx| {
+            let number = div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .children(count.map(|count| count.to_string()));
+            // Several clusters: the sum says where it comes from.
+            let number = match tooltip.clone() {
+                Some(tooltip) => number
+                    .id(SharedString::from(format!("count-{name}")))
+                    .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                    .into_any_element(),
+                None => number.into_any_element(),
+            };
             h_flex()
                 .gap_1()
                 .children(issues.map(|(issues, severity)| {
                     issue_badge(name, issues, severity, issues_tooltip(issues), cx)
                 }))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .children(count.map(|count| count.to_string())),
-                )
+                .child(number)
         })
 }
 
@@ -728,6 +809,71 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_count_sums_known_slots() {
+        // Two clusters know their pods; a third has not counted yet.
+        assert_eq!(
+            sum_known([Some(1_200), None, Some(31)].into_iter()),
+            Some(1_231)
+        );
+    }
+
+    #[test]
+    fn sidebar_sum_is_unknown_while_no_slot_knows() {
+        assert_eq!(sum_known([None, None].into_iter()), None);
+        assert_eq!(sum_known(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn sidebar_kind_counts_add_up_over_slots() {
+        let services = ResourceKind::Services;
+        let counted = |count| HashMap::from([(services, count)]);
+        assert_eq!(
+            sum_kinds([counted(70), counted(5), HashMap::new()].into_iter()).get(&services),
+            Some(&75)
+        );
+    }
+
+    #[test]
+    fn sidebar_visible_kind_sums_the_live_lists_of_the_slots_that_show_it() {
+        let services = ResourceKind::Services;
+        assert_eq!(
+            sum_explorer([(services, 71), (services, 4)].into_iter()),
+            Some((services, 75))
+        );
+        assert_eq!(sum_explorer(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn sidebar_tooltip_names_what_each_cluster_contributes() {
+        let slot = |label: &str, pods: Option<usize>| SlotCounts {
+            label: label.to_owned(),
+            pods,
+            nodes: None,
+            explorer: None,
+            kinds: HashMap::new(),
+        };
+        let counts = NavigationCounts {
+            pods: Some(1_231),
+            nodes: None,
+            explorer: None,
+            kinds: HashMap::new(),
+            issue_total: None,
+            issue_counts: Vec::new(),
+            slots: vec![
+                slot("prod-eu", Some(1_200)),
+                slot("stg-b", Some(31)),
+                slot("dev-c", None),
+            ],
+        };
+        assert_eq!(
+            counts.slot_tooltip_of(Screen::Pods).as_deref(),
+            Some("prod-eu: 1,200\nstg-b: 31")
+        );
+        // Nothing to break down when fewer than two clusters know the number.
+        assert_eq!(counts.slot_tooltip_of(Screen::Nodes), None);
+    }
+
+    #[test]
     fn live_count_wins_over_counted() {
         let counts = NavigationCounts {
             pods: None,
@@ -739,6 +885,7 @@ mod tests {
             ]),
             issue_total: None,
             issue_counts: Vec::new(),
+            slots: Vec::new(),
         };
         // The visible kind shows its live list; the others show what was counted.
         assert_eq!(counts.of_kind(ResourceKind::Services), Some(71));
@@ -844,6 +991,7 @@ mod tests {
             kinds: HashMap::new(),
             issue_total: total,
             issue_counts: counts,
+            slots: Vec::new(),
         };
         assert_eq!(
             navigation.issues_of(Screen::Pods),

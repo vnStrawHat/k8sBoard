@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use cluster::NamespaceScope;
 
 use crate::app_shell::Screen;
+use crate::cluster_view::MAX_VIEWED_CLUSTERS;
 use crate::drawer::DrawerTab;
 use crate::namespace_picker::MAX_NAMESPACES;
 use crate::resource_kind::ResourceKind;
@@ -16,6 +17,8 @@ Usage: k8sboard [options]
 Options:
   --kubeconfig <path>    kubeconfig file (default: first KUBECONFIG entry, else ~/.kube/config)
   --context <name>       context to open (default: the kubeconfig current-context)
+  --view <a[,b]>         contexts to view together, at most 5; the first in the switcher order is the
+                         primary; wins over --context (default: the one cluster of --context)
   --namespace <a[,b]>    namespaces to show, at most 5 (default: all namespaces if allowed)
   --filter <text>        quick filter of the start screen; label:k=v,k2!=v2 becomes label chips
   --select <name>       with a drawer screen, open the row named <name> or <namespace>/<name>
@@ -23,7 +26,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|pods|nodes|issues|issues-drawer|topology|topology-problems|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|shortcuts|pods-cursor|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -41,6 +44,9 @@ pub(crate) enum LaunchScreen {
     /// `--screen overview`.
     Overview,
     Pods,
+    /// `--screen pods-multi`: Pods over the clusters `--view` names; the screenshot waits for every
+    /// slot to be Live with a loaded list, or Failed.
+    PodsMulti,
     Nodes,
     /// `--screen issues`.
     Issues,
@@ -101,6 +107,7 @@ impl LaunchScreen {
         match self {
             Self::Overview | Self::Switcher => Screen::Overview,
             Self::Pods
+            | Self::PodsMulti
             | Self::PodDrawer(_)
             | Self::LogsDock
             | Self::LogsZoomed
@@ -195,6 +202,7 @@ impl LaunchScreen {
         matches!(
             self,
             Self::Pods
+                | Self::PodsMulti
                 | Self::PodsSelected
                 | Self::Shortcuts
                 | Self::PodsCursor
@@ -251,6 +259,7 @@ impl LaunchScreen {
             "overview" => Some(Self::Overview),
             "switcher" => Some(Self::Switcher),
             "pods" => Some(Self::Pods),
+            "pods-multi" => Some(Self::PodsMulti),
             "nodes" => Some(Self::Nodes),
             "issues" => Some(Self::Issues),
             "issues-drawer" => Some(Self::IssuesDrawer),
@@ -331,6 +340,9 @@ pub(crate) struct LaunchOptions {
     pub(crate) kubeconfig: Option<PathBuf>,
     pub(crate) context: Option<String>,
     pub(crate) namespace: Option<NamespaceScope>,
+    /// `--view`: the contexts to view together, at most `MAX_VIEWED_CLUSTERS`; empty views the one
+    /// cluster the start rules pick.
+    pub(crate) view: Vec<String>,
     /// The start screen's quick filter text; a `label:` text becomes chips.
     pub(crate) filter: Option<String>,
     /// The row a drawer screen opens: `name` or `namespace/name`; the first row without it.
@@ -363,6 +375,7 @@ pub(crate) fn parse_launch_options(
         kubeconfig: None,
         context: None,
         namespace: None,
+        view: Vec::new(),
         filter: None,
         select: None,
         theme: None,
@@ -384,6 +397,7 @@ pub(crate) fn parse_launch_options(
             "--kubeconfig" => options.kubeconfig = Some(PathBuf::from(value()?)),
             "--context" => options.context = Some(value()?),
             "--namespace" => options.namespace = Some(parse_namespaces(&value()?)?),
+            "--view" => options.view = parse_view(&value()?)?,
             "--filter" => options.filter = Some(value()?),
             "--select" => options.select = Some(value()?),
             "--theme" => options.theme = Some(parse_theme(&value()?)?),
@@ -435,6 +449,27 @@ fn parse_window_width(text: &str) -> Result<u16, String> {
             WINDOW_WIDTH_RANGE.start(),
             WINDOW_WIDTH_RANGE.end()
         )),
+    }
+}
+
+/// `a` or `a,b`: the contexts to view together. Empty parts are ignored.
+fn parse_view(text: &str) -> Result<Vec<String>, String> {
+    let mut contexts: Vec<String> = Vec::new();
+    for context in text
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        if !contexts.iter().any(|known| known == context) {
+            contexts.push(context.to_owned());
+        }
+    }
+    match contexts.len() {
+        0 => Err("--view needs at least one context".to_owned()),
+        count if count > MAX_VIEWED_CLUSTERS => {
+            Err(format!("at most {MAX_VIEWED_CLUSTERS} contexts for --view"))
+        }
+        _ => Ok(contexts),
     }
 }
 

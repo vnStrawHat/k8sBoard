@@ -24,14 +24,13 @@ use gpui_kit::{
     Subscription, WeakEntity, Window, div, px,
 };
 
-use crate::app_shell::AppShell;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{ClusterSession, error_text};
 use crate::network_policy_rows::{peer_text, ports_text};
 use crate::permissions_view::RequestState;
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusTone, tone_color};
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{DialogOrigin, ResourceKey};
 use crate::who_can_view::clock_text;
 
 /// The policies of each listed namespace, as `(namespace, policies)`.
@@ -483,7 +482,7 @@ enum SourceMode {
 
 pub(crate) struct TrafficTestView {
     session: WeakEntity<ClusterSession>,
-    shell: WeakEntity<AppShell>,
+    origin: DialogOrigin,
     mode: SourceMode,
     source_pod: Entity<SelectState<Vec<String>>>,
     labels_namespace: Entity<SelectState<Vec<String>>>,
@@ -506,7 +505,7 @@ fn pod_name(key: &ResourceKey) -> Option<String> {
 
 impl TrafficTestView {
     pub(crate) fn new(
-        shell: WeakEntity<AppShell>,
+        origin: DialogOrigin,
         session: &Entity<ClusterSession>,
         form: TrafficForm,
         check_now: bool,
@@ -582,7 +581,7 @@ impl TrafficTestView {
             .collect();
         let mut view = Self {
             session: session.downgrade(),
-            shell,
+            origin,
             mode: SourceMode::Pod,
             source_pod,
             labels_namespace,
@@ -751,7 +750,7 @@ impl TrafficTestView {
 
     fn reveal(&mut self, key: ResourceKey, window: &mut Window, cx: &mut Context<Self>) {
         window.close_dialog(cx);
-        let _ = self.shell.update(cx, |shell, cx| shell.reveal(key, cx));
+        self.origin.reveal(key, cx);
     }
 
     fn link(&mut self, text: &str, key: ResourceKey, cx: &mut Context<Self>) -> AnyElement {

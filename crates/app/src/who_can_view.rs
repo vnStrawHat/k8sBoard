@@ -20,11 +20,10 @@ use gpui_kit::{
 
 use crate::access_bindings::{binding_key, binding_text, role_key, role_text, subject_text};
 use crate::access_query::{ParsedRequest, QueryError, QueryHint, parse_request};
-use crate::app_shell::AppShell;
 use crate::cluster_session::{ClusterSession, RbacState};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusTone, tone_color};
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{DialogOrigin, ResourceKey};
 
 pub(crate) const ALL_NAMESPACES: &str = "All namespaces (cluster-wide grants)";
 const MAX_LISTED_NAMES: usize = 5;
@@ -266,7 +265,7 @@ struct Asked {
 
 pub(crate) struct WhoCanView {
     session: WeakEntity<ClusterSession>,
-    shell: WeakEntity<AppShell>,
+    origin: DialogOrigin,
     query: Entity<InputState>,
     namespace: Entity<SelectState<Vec<String>>>,
     question: Option<Result<Asked, QueryError>>,
@@ -278,7 +277,7 @@ impl WhoCanView {
     /// `namespace`: the preselected one; `None` is cluster-wide. `query` is typed in and, when
     /// `check_now`, asked at once.
     pub(crate) fn new(
-        shell: WeakEntity<AppShell>,
+        origin: DialogOrigin,
         session: &Entity<ClusterSession>,
         query: Option<String>,
         namespace: Option<String>,
@@ -320,7 +319,7 @@ impl WhoCanView {
         ];
         let mut view = Self {
             session: session.downgrade(),
-            shell,
+            origin,
             query: input,
             namespace,
             question: None,
@@ -422,7 +421,7 @@ impl WhoCanView {
     /// Closes the dialog and shows the target on its own screen.
     fn reveal(&mut self, key: ResourceKey, window: &mut Window, cx: &mut Context<Self>) {
         window.close_dialog(cx);
-        let _ = self.shell.update(cx, |shell, cx| shell.reveal(key, cx));
+        self.origin.reveal(key, cx);
     }
 
     fn link(&mut self, text: &str, key: ResourceKey, cx: &mut Context<Self>) -> AnyElement {

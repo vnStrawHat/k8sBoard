@@ -6,17 +6,12 @@ use gpui_kit::{AsKeystroke as _, KeyContext, Keystroke, Modifiers, TestAppContex
 
 use super::*;
 use crate::cluster_switcher::{
-    CloseClusterSwitcher, SwitcherConfirm, SwitcherNext, SwitcherPrevious,
+    CloseClusterSwitcher, SwitcherConfirm, SwitcherNext, SwitcherPrevious, ToggleClusterTick,
 };
 
 /// Keys that a later spec binds. No binding of this spec may take one; the owner removes the key
 /// from this list in the change that binds it.
-const RESERVED_KEYS: [&str; 4] = [
-    "space",
-    "secondary-enter",
-    "secondary-shift-r",
-    "secondary-s",
-];
+const RESERVED_KEYS: [&str; 3] = ["secondary-enter", "secondary-shift-r", "secondary-s"];
 
 fn bind_all(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -277,7 +272,7 @@ fn every_sheet_row_has_a_binding(cx: &mut TestAppContext) {
 fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
     bind_all(cx);
     let rows = shortcut_rows();
-    let without_row: [&dyn Action; 14] = [
+    let without_row: [&dyn Action; 15] = [
         &LeaveInput,
         &PalettePreview,
         &SwitchToCluster2,
@@ -291,6 +286,7 @@ fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
         &SwitcherNext,
         &SwitcherPrevious,
         &SwitcherConfirm,
+        &ToggleClusterTick,
         &CloseClusterSwitcher,
     ];
     for binding in app_bindings(cx) {

@@ -12,8 +12,10 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
+use crate::cluster_registry::ClusterRef;
+use crate::cluster_rows::RowContext;
 use crate::cluster_session::ClusterSession;
-use crate::log_tab::{LogLayout, LogTab};
+use crate::log_tab::{LogLayout, LogTab, tab_title};
 use crate::log_target::{ContainerChoice, LogTarget, NoLogTarget};
 use crate::resource_actions::{NOT_SHIPPED_REASON, disabled_menu_item};
 use crate::status_tone::tone_color;
@@ -40,13 +42,34 @@ pub(crate) enum DockMode {
     Zoomed,
 }
 
+/// The cluster a log tab reads from: its connection, and the session its workload tabs follow.
+pub(crate) struct LogOrigin {
+    pub(crate) cluster: ClusterRef,
+    /// The switcher text of the cluster, for the tab title while several clusters are viewed.
+    pub(crate) label: String,
+    /// Weak: workload tabs observe the session, but a tab never keeps it alive.
+    pub(crate) session: WeakEntity<ClusterSession>,
+    pub(crate) connection: ClusterConnection,
+}
+
+impl LogOrigin {
+    pub(crate) fn new(row: &RowContext, connection: ClusterConnection) -> Self {
+        Self {
+            cluster: row.cluster.clone(),
+            label: row.label.clone(),
+            session: row.session.clone(),
+            connection,
+        }
+    }
+}
+
 pub(crate) struct LogDock {
     tabs: Vec<Entity<LogTab>>,
     /// `None` exactly when `tabs` is empty.
     active: Option<usize>,
     mode: DockMode,
-    /// Weak: workload tabs observe the session, but a tab never keeps it alive.
-    session: Option<WeakEntity<ClusterSession>>,
+    /// Several clusters are viewed, so tab titles name their cluster.
+    is_multi: bool,
     /// The "+ ▾" menu reads the selection and opens tabs through the shell.
     shell: WeakEntity<AppShell>,
 }
@@ -57,31 +80,35 @@ impl LogDock {
             tabs: Vec::new(),
             active: None,
             mode: DockMode::Normal,
-            session: None,
+            is_multi: false,
             shell,
         }
     }
 
-    pub(crate) fn set_session(&mut self, session: Option<WeakEntity<ClusterSession>>) {
-        self.session = session;
+    /// Whether the titles of the tabs name their cluster.
+    pub(crate) fn set_multi(&mut self, is_multi: bool, cx: &mut Context<Self>) {
+        if self.is_multi != is_multi {
+            self.is_multi = is_multi;
+            cx.notify();
+        }
     }
 
-    /// Activates the target's tab if one exists, else adds one. Minimized becomes Normal.
-    /// Nothing opens without a session.
+    /// Activates the target's tab of that cluster if one exists, else adds one. Minimized becomes
+    /// Normal. Nothing opens once the session of the origin is gone.
     pub(crate) fn open(
         &mut self,
-        connection: ClusterConnection,
+        origin: LogOrigin,
         target: LogTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(session) = self.session.as_ref().and_then(WeakEntity::upgrade) else {
+        let Some(session) = origin.session.upgrade() else {
             return;
         };
         let existing = self
             .tabs
             .iter()
-            .position(|tab| tab.read(cx).is_for(&target));
+            .position(|tab| tab.read(cx).is_for(&origin.cluster, &target));
         let index = match existing {
             Some(index) => {
                 // A menu reopen must not undo the container the user picked in the tab, so only
@@ -95,7 +122,7 @@ impl LogDock {
                 index
             }
             None => {
-                let tab = cx.new(|cx| LogTab::new(connection, target, &session, window, cx));
+                let tab = cx.new(|cx| LogTab::new(origin, target, &session, window, cx));
                 let layout = self.layout();
                 tab.update(cx, |tab, cx| tab.set_layout(layout, cx));
                 self.tabs.push(tab);
@@ -130,6 +157,18 @@ impl LogDock {
         self.active = None;
         self.mode = DockMode::Normal;
         cx.notify();
+    }
+
+    /// A released cluster: its streams go with it, the other clusters' tabs stay.
+    pub(crate) fn close_tabs_of(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
+        let mut index = 0;
+        while index < self.tabs.len() {
+            if self.tabs[index].read(cx).cluster() == cluster {
+                self.close_tab(index, cx);
+            } else {
+                index += 1;
+            }
+        }
     }
 
     /// A navigation click returns the dock to its split; the tabs stay.
@@ -168,6 +207,16 @@ impl LogDock {
 
     pub(crate) fn has_tabs(&self) -> bool {
         !self.tabs.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tab_count(&self) -> usize {
+        self.tabs.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_multi(&self) -> bool {
+        self.is_multi
     }
 
     /// Whether the active tab is still waiting for its stream to open.
@@ -333,7 +382,7 @@ impl LogDock {
             .on_drag(
                 DraggedTab {
                     index,
-                    label: tab.label().into(),
+                    label: tab_title(&tab.label(), tab.cluster_label(), self.is_multi).into(),
                 },
                 |dragged, _, _, cx| cx.new(|_| dragged.clone()),
             )
@@ -364,7 +413,7 @@ impl LogDock {
                             .font_family(theme.mono_font_family.clone())
                             .text_xs()
                             .when(!is_active, |this| this.text_color(theme.muted_foreground))
-                            .child(tab.label()),
+                            .child(tab_title(&tab.label(), tab.cluster_label(), self.is_multi)),
                     ),
             )
             .child(

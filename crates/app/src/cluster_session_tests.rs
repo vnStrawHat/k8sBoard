@@ -13,6 +13,13 @@ fn failure() -> WatchUpdate<u32> {
     })
 }
 
+fn failure_of_pods<T>() -> WatchUpdate<T> {
+    WatchUpdate::Failed(ClusterError::TimedOut {
+        context: "ctx".to_owned(),
+        action: "watching pods",
+    })
+}
+
 fn ready_items(list: &LiveList<u32>) -> Option<(&[u32], Option<&str>)> {
     match list {
         LiveList::Ready {
@@ -1555,6 +1562,23 @@ impl ClusterSession {
     pub(crate) fn set_pods_for_test(&mut self, pods: Vec<PodSummary>, cx: &mut Context<Self>) {
         if let Some(live) = self.live_mut() {
             live.pods.apply(WatchUpdate::Snapshot(pods));
+        }
+        cx.notify();
+    }
+
+    /// The pods watch fails after its snapshot, as a dropped connection would: the list keeps its
+    /// rows and the session reports a problem.
+    pub(crate) fn interrupt_pods(&mut self, cx: &mut Context<Self>) {
+        if let Some(live) = self.live_mut() {
+            live.pods.apply(failure_of_pods());
+        }
+        cx.notify();
+    }
+
+    /// The explorer list of the shown kind becomes a loaded, empty list, so it can be paused.
+    pub(crate) fn seed_explorer(&mut self, cx: &mut Context<Self>) {
+        if let Some(explorer) = self.live_mut().and_then(|live| live.explorer.as_mut()) {
+            explorer.list.apply(WatchUpdate::Snapshot(Vec::new()));
         }
         cx.notify();
     }

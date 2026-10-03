@@ -6,12 +6,14 @@
 
 ```rust
 pub(crate) const CLUSTER_COLUMN: KindColumn = column("Cluster", 170., Align::Left);
-pub(crate) struct Clustered<'a, T> { pub(crate) slot: usize, pub(crate) label: &'a str /* switcher_label */,
-    pub(crate) environment: Environment, pub(crate) item: &'a T }
+pub(crate) struct Clustered<'a, T> { pub(crate) cluster: &'a ClusterRef, pub(crate) label: &'a str /* switcher_label */,
+    pub(crate) column: usize /* logical index of the Cluster column */, pub(crate) item: &'a T }
 impl<T: TableRow> TableRow for Clustered<'_, T> { /* delegates; value(cluster_column) = Text(label) */ }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RowAddress { pub(crate) slot: u16, pub(crate) item: u32 }
-pub(crate) fn merge_rows<'a, T>(slots: &[(&'a str, Environment, &'a [T])]) -> (Vec<Clustered<'a, T>>, Vec<RowAddress>);
+/// One slot's rows; the slot index is the position in `slots`, and the badge is drawn by the delegate.
+pub(crate) struct SlotRows<'a, T> { pub(crate) cluster: &'a ClusterRef, pub(crate) label: &'a str, pub(crate) items: &'a [T] }
+pub(crate) fn merge_rows<'a, T>(slots: &[SlotRows<'a, T>], column: usize) -> (Vec<Clustered<'a, T>>, Vec<RowAddress>);
 ```
 
 Delegates hold `sessions: Vec<Entity<ClusterSession>>` (`set_sessions`); `rebuild_view` builds the merged vector, calls `TableView::rebuild(&merged, ..)`, keeps `addresses`. Render maps `item_index` → `RowAddress`. Single mode is the same code with one slot.
@@ -29,7 +31,7 @@ Delegates hold `sessions: Vec<Entity<ClusterSession>>` (`set_sessions`); `rebuil
 pub(crate) struct ClusterObject { pub(crate) cluster: ClusterRef, pub(crate) key: ResourceKey }
 ```
 
-`AppShell.selected`, `pending_reveal`, `PendingSubjects`, checked keys, and `RowName` use `ClusterObject`. Row menus capture `WeakEntity<ClusterSession>` + `ClusterRef` when built (decision 25). Sidebar counts: sum over slots that know the count, tooltip per slot.
+`AppShell.selected`, `pending_reveal`, `PendingSubjects`, checked keys, and `RowName` use `ClusterObject`. Since 0028, `selected` is the row cursor (`Option<ClusterObject>`) and `drawer_subject()` returns it only while `drawer.is_open`; every drawer-path read and the bare-key context (`context_cluster`, `in_context`) use `drawer_subject()`, so a closed drawer never steers a reveal. Row keys act on the cursor, in the cursor's own slot. The palette lists the resources of every live slot (`ClusterObject` targets, the cluster label after the detail in multi mode), and Enter reveals the entry in its own cluster. Row menus capture `WeakEntity<ClusterSession>` + `ClusterRef` when built (decision 25). Sidebar counts: sum over slots that know the count, tooltip per slot.
 
 ## Wrong-cluster sites (step 4; each has a test)
 

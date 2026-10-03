@@ -30,16 +30,23 @@ pub(crate) struct NodeCounts {
     pub(crate) common_version: Option<String>,
 }
 
-pub(crate) fn node_counts(nodes: &[NodeSummary]) -> NodeCounts {
+/// `nodes` is iterated once per count, so it must be cheap to clone (a slice, or an iterator over
+/// slices).
+pub(crate) fn node_counts<'a>(
+    nodes: impl IntoIterator<Item = &'a NodeSummary> + Clone,
+) -> NodeCounts {
     let count = |group: &NodeGroup| {
         nodes
-            .iter()
+            .clone()
+            .into_iter()
             .filter(|node| node_in_group(node, group))
             .count()
     };
     let mut by_version: BTreeMap<&str, usize> = BTreeMap::new();
-    for node in nodes {
+    let mut total = 0;
+    for node in nodes.clone() {
         *by_version.entry(&node.kubelet_version).or_default() += 1;
+        total += 1;
     }
     let mut versions: Vec<(String, usize)> = by_version
         .into_iter()
@@ -47,7 +54,7 @@ pub(crate) fn node_counts(nodes: &[NodeSummary]) -> NodeCounts {
         .collect();
     versions.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| natural_cmp(&b.0, &a.0)));
     NodeCounts {
-        total: nodes.len(),
+        total,
         ready: count(&NodeGroup::Ready),
         not_ready: count(&NodeGroup::NotReady),
         cordoned: count(&NodeGroup::Cordoned),

@@ -152,6 +152,10 @@ impl TopologyView {
         session: Option<Entity<ClusterSession>>,
         cx: &mut Context<Self>,
     ) {
+        // The same session again (a viewed set that changed around it) keeps the graph.
+        if self.session.as_ref().map(Entity::entity_id) == session.as_ref().map(Entity::entity_id) {
+            return;
+        }
         self._observe = session
             .as_ref()
             .map(|session| cx.observe(session, |view, _, cx| view.on_session_changed(cx)));
@@ -248,7 +252,9 @@ impl TopologyView {
     /// The object of the open drawer, which is what the graph highlights.
     fn selected(&self, cx: &App) -> Option<ResourceKey> {
         self.shell
-            .read_with(cx, |shell, _| shell.drawer_subject().cloned())
+            .read_with(cx, |shell, _| {
+                shell.drawer_subject().map(|object| object.key.clone())
+            })
             .ok()
             .flatten()
     }
@@ -721,7 +727,7 @@ impl TopologyView {
         }
         match key {
             Some(key) if click_count >= 2 => {
-                self.with_shell(cx, |shell, cx| shell.reveal(key, cx));
+                self.with_shell(cx, |shell, cx| shell.reveal_in_primary(key, cx));
             }
             Some(key) => {
                 self.highlighted = None;

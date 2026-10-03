@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,6 +22,7 @@ use crate::cluster_registry::{
     ClusterProfile, ClusterRef, ScopeMemory, StartChoice, launch_last_used, remember_scope,
     start_choice, start_scope,
 };
+use crate::cluster_rows::{RowAddress, RowContext, merged_index};
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{
     ClusterSession, CountTrigger, FlowState, LiveCluster, LiveList, RbacState, RelatedList,
@@ -34,19 +34,21 @@ use crate::cluster_switcher::{
     SwitchToCluster8, SwitchToCluster9, SwitcherContent, SwitcherList,
 };
 use crate::cluster_switcher_rows::{
-    HighlightStep, SwitcherSection, SwitcherSegment, connected_count, move_highlight, nth_cluster,
-    row_count, switcher_sections, visible_sections,
+    HighlightStep, SwitcherSection, SwitcherSegment, ViewedCluster, connected_count,
+    move_highlight, nth_cluster, row_count, switcher_sections, ticks_differ, visible_sections,
 };
+use crate::cluster_view::{ClusterView, ViewSlot};
 use crate::command_palette::{ActiveCluster, PaletteContext, PaletteSnapshot, open_palette};
 use crate::custom_kind::{CustomKind, CustomKindCache};
 use crate::drawer::{
-    ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab, MonitorCache, MonitorKey,
-    MonitorRange, MonitorScope, MonitorState, drawer_tabs, shown_tab,
+    ContainerTab, DRAWER_SUBJECT_DELAY, DrawerCluster, DrawerState, DrawerTab, MonitorCache,
+    MonitorKey, MonitorRange, MonitorScope, MonitorState, drawer_tabs, shown_tab,
 };
 use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::filter_bar::ToolkitState;
 use crate::helm_release_view::{
-    HelmReleaseView, HistoryState, ShowLatest, ValuesLayout, earlier_revision, helm_subject,
+    HelmReleaseView, HelmSource, HistoryState, ShowLatest, ValuesLayout, earlier_revision,
+    helm_subject,
 };
 use crate::issue_table::IssueTableDelegate;
 use crate::keymap::{
@@ -56,11 +58,13 @@ use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
 use crate::launch_options::{LaunchOptions, LaunchScreen};
-use crate::log_dock::{DockMode, LogDock};
+use crate::log_dock::{DockMode, LogDock, LogOrigin};
 use crate::log_target::{LogTarget, NoLogTarget, check_logs_access};
 use crate::monitor_data::{MonitorInput, MonitorSubject, monitor_data};
 use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
-use crate::navigation::{NavigationCounts, issue_counts, sidebar};
+use crate::navigation::{
+    NavigationCounts, SlotCounts, issue_counts, sidebar, sum_explorer, sum_kinds, sum_known,
+};
 use crate::node_table::NodeTableDelegate;
 use crate::object_events::{SubjectChange, event_subject, subject_change};
 use crate::overview::OverviewState;
@@ -76,9 +80,9 @@ use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_actions::{open_shell_reason, view_logs_reason};
 use crate::resource_kind::ResourceKind;
 #[cfg(feature = "screenshot")]
-use crate::screenshot::{FeedProgress, kubelet_progress};
+use crate::screenshot::{FeedProgress, kubelet_progress, slowest_feed};
 #[cfg(feature = "screenshot")]
-use crate::screenshot::{SettleInput, TargetState, is_drawer_ready};
+use crate::screenshot::{SettleInput, TargetState, combine_targets, is_drawer_ready};
 use crate::screenshot::{controller_owner_of, pick_drawer_pod, pick_logs_pod, pick_selected};
 use crate::secret_clipboard::{
     CLIPBOARD_CLEAR_DELAY, ClearStep, ClipboardMark, clear_if_unchanged, next_clear_step,
@@ -94,7 +98,8 @@ use crate::table_filter::{
     FilterChip, FilterPreset, TableFilter, parse_label_queries, quick_filter_text,
 };
 use crate::table_selection::{
-    ResourceKey, SelectionSync, list_item_index, list_row_index, selection_sync, take_row_echo,
+    ClusterObject, DialogOrigin, ResourceKey, SelectionSync, list_item_index, list_row_index,
+    selection_sync, take_row_echo,
 };
 use crate::table_sort::next_sort;
 use crate::table_view::{FilteredTable, RowCheck, TableView};
@@ -112,6 +117,8 @@ const DIALOG_WIDTH: f32 = 760.;
 #[path = "workspace.rs"]
 pub(crate) mod workspace;
 
+#[path = "app_shell_view.rs"]
+mod app_shell_view;
 #[path = "keyboard_navigation.rs"]
 mod keyboard_navigation;
 
@@ -122,6 +129,10 @@ mod app_shell_tests;
 #[cfg(test)]
 #[path = "app_shell_switch_tests.rs"]
 mod app_shell_switch_tests;
+
+#[cfg(test)]
+#[path = "app_shell_multi_tests.rs"]
+mod app_shell_multi_tests;
 
 /// The logical column of the Events table that holds the reason.
 const EVENT_REASON_COLUMN: usize = 1;
@@ -155,6 +166,16 @@ enum KubeconfigState {
     Loading,
     Loaded,
     Failed(String),
+}
+
+/// What a deferred multi-cluster connect found when it ran.
+#[cfg(test)]
+struct ViewConnectCheck {
+    /// Every session released by the apply was gone.
+    released_gone: bool,
+    /// Sessions that were viewed at that moment, and clusters about to connect.
+    slots: usize,
+    connects: usize,
 }
 
 /// A `--screen custom:<crd-name>` request that has not met its CRD list yet.
@@ -193,9 +214,12 @@ pub(crate) fn remapped_screen(screen: Screen, kinds: &[CustomKind]) -> Option<Sc
     }))
 }
 
-/// The drawer watches that start once the selection has rested. Dropping it cancels the timer.
+/// The drawer watches that start once the selection has rested, in the cluster of the subject.
+/// Dropping it cancels the timer.
 #[derive(Default)]
 struct PendingSubjects {
+    /// The cluster whose session starts the watches.
+    cluster: Option<ClusterRef>,
     events: Option<InvolvedObject>,
     related: Option<RelatedSubject>,
     task: Option<Task<()>>,
@@ -206,8 +230,11 @@ impl PendingSubjects {
         self.events.is_none() && self.related.is_none()
     }
 
+    /// The same watches in the same cluster: the same names exist in several clusters.
     fn has_same_subjects(&self, other: &Self) -> bool {
-        self.events == other.events && self.related == other.related
+        self.cluster == other.cluster
+            && self.events == other.events
+            && self.related == other.related
     }
 }
 
@@ -229,6 +256,8 @@ enum Retry {
 /// What the command line asked for, used only by the first session.
 struct RequestedStart {
     context: Option<String>,
+    /// `--view`: the contexts to view together at the start.
+    view: Vec<String>,
     /// With `--kubeconfig`: the files the user named, the only source of a `last_used`.
     explicit_files: Option<Vec<PathBuf>>,
     namespace: Option<NamespaceScope>,
@@ -242,10 +271,9 @@ pub(crate) struct AppShell {
     _catalog_observer: Subscription,
     /// Set when the kubeconfig loaded but names no usable context; there is no session then.
     context_error: Option<String>,
-    /// The context the session was started for, also while it is connecting or failed.
+    /// The context of the primary cluster, also while its session is connecting or failed, and
+    /// between the release of the old sessions and the deferred connect of the new ones.
     active: Option<ContextSummary>,
-    /// Whether the current session was already seen Live, so `last_used` is written once.
-    has_reported_live: bool,
     /// The cluster the user came from (the one before the last switch), for "Back to".
     previous: Option<ClusterRef>,
     /// The namespace scope of every cluster left during this run.
@@ -270,8 +298,19 @@ pub(crate) struct AppShell {
     /// Test hook: the start scope of every session that was created.
     #[cfg(test)]
     connected_scopes: Vec<Option<NamespaceScope>>,
-    session: Option<Entity<ClusterSession>>,
-    _session_observer: Option<Subscription>,
+    /// Test hook: what a deferred multi-cluster connect found each time it ran.
+    #[cfg(test)]
+    view_connects: Vec<ViewConnectCheck>,
+    /// Test hook: the sessions the multi-cluster apply released.
+    #[cfg(test)]
+    released_sessions: Vec<gpui_kit::WeakEntity<ClusterSession>>,
+    /// The viewed clusters, one live session each. Empty before the first start and between a
+    /// release and its deferred connect.
+    view: ClusterView,
+    /// The namespace scope of every viewed cluster; `None` until the primary knows its own.
+    view_scope: Option<NamespaceScope>,
+    /// Counts the applies, so a deferred connect of a replaced request does nothing.
+    view_request: u64,
     screen: Screen,
     pod_table: Entity<TableState<PodTableDelegate>>,
     node_table: Entity<TableState<NodeTableDelegate>>,
@@ -280,18 +319,21 @@ pub(crate) struct AppShell {
     /// The Topology screen: its graph, canvas, and toolbar.
     topology: Entity<TopologyView>,
     _table_subscriptions: Vec<Subscription>,
-    /// The row cursor. The drawer shows this row while `drawer.is_open`; a closed drawer leaves
-    /// the cursor where it is.
-    selected: Option<ResourceKey>,
-    /// The row the shell itself just selected. Its `SelectRow` echo moves the cursor but never
-    /// opens the drawer, which only a click does (`take_row_echo`).
+    /// The row cursor: the row of the table that is highlighted, in the cluster it came from.
+    /// The drawer shows it while `drawer.is_open`; closing the drawer keeps it.
+    selected: Option<ClusterObject>,
+    /// The table row the shell itself just selected. Its `SelectRow` echo moves the cursor but
+    /// never opens the drawer, which only a click does (`take_row_echo`).
     row_echo: Option<usize>,
+    /// The cluster whose session runs the drawer watches (object events, related objects), so a
+    /// change of subject across clusters stops the old watches and starts the new ones.
+    subject_cluster: Option<ClusterRef>,
     drawer: DrawerState,
     /// The debounced start of the drawer watches (object events, related objects) that is waiting
     /// for the selection to rest. Replacing or dropping it cancels it.
     pending_subjects: Option<PendingSubjects>,
     /// A reveal that waits for its list to load before it clears a filter hiding the row.
-    pending_reveal: Option<ResourceKey>,
+    pending_reveal: Option<ClusterObject>,
     log_dock: Entity<LogDock>,
     /// Keeps the dock height across zoom and minimize, which unmount the split.
     dock_split: Entity<ResizableState>,
@@ -435,7 +477,6 @@ impl AppShell {
             _catalog_observer: catalog_observer,
             context_error: None,
             active: None,
-            has_reported_live: false,
             previous: None,
             scope_memory: ScopeMemory::new(),
             kind_cache: CustomKindCache::default(),
@@ -450,8 +491,13 @@ impl AppShell {
             old_session_gone_at_connect: Vec::new(),
             #[cfg(test)]
             connected_scopes: Vec::new(),
-            session: None,
-            _session_observer: None,
+            #[cfg(test)]
+            view_connects: Vec::new(),
+            #[cfg(test)]
+            released_sessions: Vec::new(),
+            view: ClusterView::default(),
+            view_scope: None,
+            view_request: 0,
             screen: options.screen.screen(),
             pod_table,
             node_table,
@@ -461,6 +507,7 @@ impl AppShell {
             _table_subscriptions: table_subscriptions,
             selected: None,
             row_echo: None,
+            subject_cluster: None,
             drawer,
             pending_subjects: None,
             pending_reveal: None,
@@ -488,6 +535,7 @@ impl AppShell {
             launch_failure: None,
             requested: RequestedStart {
                 context: options.context,
+                view: options.view,
                 explicit_files,
                 namespace: options.namespace,
             },
@@ -501,7 +549,13 @@ impl AppShell {
             overview: OverviewState::default(),
             clipboard_clear: None,
             _clipboard_quit: clipboard_quit,
-            _settings_observer: cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
+            _settings_observer: cx.observe_global::<AppSettings>(|shell, cx| {
+                // A renamed or re-colored cluster shows at once in the Cluster column.
+                if shell.refresh_slot_labels(cx) {
+                    shell.sync_view_sessions(cx);
+                }
+                cx.notify();
+            }),
         };
         let is_topology = shell.screen == Screen::Topology;
         let wants_problems = options.screen == LaunchScreen::TopologyProblems;
@@ -518,9 +572,12 @@ impl AppShell {
     }
 
     /// Starts the first session once the catalog has loaded; later catalog changes only re-render
-    /// (the switcher reads the catalog).
+    /// (the switcher reads the catalog) and refresh the labels of the viewed clusters.
     fn on_catalog_changed(&mut self, cx: &mut Context<Self>) {
         cx.notify();
+        if self.refresh_slot_labels(cx) {
+            self.sync_view_sessions(cx);
+        }
         // `active` is set by the first start even while its connect is still deferred.
         let is_waiting_to_start = self.active.is_none() && self.context_error.is_none();
         if !is_waiting_to_start {
@@ -538,19 +595,35 @@ impl AppShell {
         }
         let requested = self.requested.context.take();
         let explicit_files = self.requested.explicit_files.take();
+        let namespace = self.requested.namespace.take();
+        let (viewed, unknown) = named_clusters(&kubeconfigs, &self.requested.view);
+        self.requested.view.clear();
+        if let Some(name) = unknown.first() {
+            self.switch_notice = Some(format!(
+                "'{name}' is not a context of the loaded kubeconfigs"
+            ));
+        }
+        // `--view` names several clusters: they start together, and the start rules below (the
+        // requested context, `last_used`) play no part: `--view` wins over `--context`.
+        if viewed.len() >= 2 {
+            self.apply_view(&viewed, namespace, cx);
+            return;
+        }
         let saved = AppSettings::get(cx).registry.last_used.as_ref();
         let last_used = launch_last_used(saved, explicit_files.as_deref()).cloned();
+        // `--view` wins over `--context`, also for a single context.
+        let requested = viewed
+            .first()
+            .map(|cluster| cluster.context.clone())
+            .or(requested);
         match resolve_start(&kubeconfigs, requested.as_deref(), last_used.as_ref()) {
-            Ok((_, summary)) => {
-                let namespace = self.requested.namespace.take();
-                self.switch_to(&ClusterRef::of(&summary), namespace, cx);
-            }
+            Ok((_, summary)) => self.switch_to(&ClusterRef::of(&summary), namespace, cx),
             Err(error) => self.context_error = Some(error_text(&error)),
         }
     }
 
-    /// Switches the only session to `target`. Nothing happens when it already is the active
-    /// target. Every session start goes through here.
+    /// Switches to `target` alone: every viewed session is released first. Nothing happens when it
+    /// already is the only viewed cluster. Every single-cluster start goes through here.
     pub(crate) fn switch_cluster(&mut self, target: &ClusterRef, cx: &mut Context<Self>) {
         self.switch_to(target, None, cx);
     }
@@ -577,25 +650,38 @@ impl AppShell {
             .active
             .as_ref()
             .is_some_and(|active| target.is_of(active));
-        if is_active {
+        // Several viewed clusters, whatever the target: leaving the multi view is a switch.
+        if is_active && !self.view.is_multi() {
             return;
         }
         self.switch_notice = None;
         self.context_error = None;
+        // A name click on a cluster that is already viewed keeps its session; the others leave.
+        if self.view.is_multi() && self.view.slot_of(target).is_some() {
+            let current = self.active.as_ref().map(ClusterRef::of);
+            if let Some(current) = current.filter(|current| current != target) {
+                self.previous = Some(current);
+            }
+            self.apply_view(std::slice::from_ref(target), None, cx);
+            return;
+        }
         let profile = AppSettings::get(cx).registry.profile(&summary);
-        let namespace = requested.or_else(|| start_scope(&self.scope_memory, target, &profile));
         // The first start has nothing to release and keeps the launch filter and screen request.
         let Some(current) = self.active.as_ref().map(ClusterRef::of) else {
+            let namespace = requested.or_else(|| start_scope(&self.scope_memory, target, &profile));
             self.active = Some(summary);
             self.connect_active(target.clone(), namespace, cx);
             return;
         };
-        self.record_leaving_session(&current, cx);
-        self.tear_down_session(cx);
-        self.previous = Some(current);
+        // The release writes the scopes the user had, so the memory is read after it.
+        self.release_all(cx);
+        let namespace = requested.or_else(|| start_scope(&self.scope_memory, target, &profile));
+        if current != *target {
+            self.previous = Some(current);
+        }
         self.active = Some(summary);
         cx.notify();
-        // Break before make: the deferred call runs after the old session entity was released,
+        // Break before make: the deferred call runs after the old session entities were released,
         // so no two watch sets exist at once.
         let (shell, target) = (cx.weak_entity(), target.clone());
         cx.defer(move |cx| {
@@ -605,59 +691,42 @@ impl AppShell {
         });
     }
 
-    /// Keeps what the leaving session of `current` tells: the scope the user had, so coming back
-    /// lands there, and whether the cluster answered, so its switcher row is right at once.
-    fn record_leaving_session(&mut self, current: &ClusterRef, cx: &App) {
-        let Some(session) = self.session.as_ref() else {
-            return;
-        };
-        let result = match session.read(cx).phase() {
-            SessionPhase::Live(live) => {
-                remember_scope(&mut self.scope_memory, current.clone(), live.scope.clone());
-                ProbeResult::Reachable {
-                    latency: live.api_latency,
-                }
-            }
-            SessionPhase::Failed { message } => ProbeResult::Unreachable {
-                reason: message.clone(),
-            },
-            SessionPhase::Connecting { .. } => return,
-        };
-        self.switcher
-            .health_mut()
-            .record(current.clone(), result, Instant::now());
-    }
-
-    /// Releases the session and everything that belongs to the cluster it served. The custom kind
-    /// definitions seen so far wait in `kind_cache` for the next session.
-    fn tear_down_session(&mut self, cx: &mut Context<Self>) {
+    /// Releases every session and everything that belongs to the clusters they served. The custom
+    /// kind definitions seen so far wait in `kind_cache` for the next session. What the user had
+    /// (the scope of each cluster, whether it answered) is kept first.
+    fn release_all(&mut self, cx: &mut Context<Self>) {
+        // A multi connect still waiting for its deferred call is stale from here on.
+        self.view_request += 1;
         self.clear_selection(cx);
         self.log_dock.update(cx, |dock, cx| {
             dock.close_all(cx);
-            dock.set_session(None);
+            dock.set_multi(false, cx);
         });
-        if let Some(session) = &self.session {
-            self.kind_cache = session.update(cx, |session, _| session.take_custom_kind_cache());
+        if let Some(primary) = self.view.primary() {
+            self.kind_cache = primary
+                .session
+                .update(cx, |session, _| session.take_custom_kind_cache());
         }
         #[cfg(test)]
         {
-            self.old_session = self.session.as_ref().map(Entity::downgrade);
+            self.old_session = self.view.primary().map(|slot| slot.session.downgrade());
+            self.released_sessions = self
+                .view
+                .slots()
+                .iter()
+                .map(|slot| slot.session.downgrade())
+                .collect();
         }
-        self.pod_table
-            .update(cx, |table, _| table.delegate_mut().set_session(None));
-        self.node_table
-            .update(cx, |table, _| table.delegate_mut().set_session(None));
-        self.issue_table
-            .update(cx, |table, _| table.delegate_mut().set_session(None));
-        self.kind_table
-            .update(cx, |table, _| table.delegate_mut().set_session(None));
-        // The graph, its feeds, and the pins of the old cluster go with the session; the view also
-        // holds the session, which must be released before the next one connects.
-        self.topology
-            .update(cx, |view, cx| view.set_session(None, cx));
-        self._session_observer = None;
-        self.session = None;
-        self.has_reported_live = false;
+        for slot in self.view.slots() {
+            record_leaving(slot, &mut self.scope_memory, &mut self.switcher, cx);
+        }
+        // The delegates and the graph hold the sessions too: they must let go before the entities
+        // can be released, and before the next session connects.
+        let released = self.view.take_all();
+        self.sync_view_sessions(cx);
+        drop(released);
+        self.view_scope = None;
+        self.subject_cluster = None;
         // A filter, a pending reveal, or a picker draft written for one cluster would surprise in
         // another. The screen, the dock height, and the column prefs stay.
         self.clear_all_filters(cx);
@@ -668,8 +737,8 @@ impl AppShell {
         self.pending_dialog_launch = None;
     }
 
-    /// Creates the session of the active target. It runs after `tear_down_session` released the
-    /// old one.
+    /// Creates the only session, for the active target. It runs after `release_all` released the
+    /// old ones.
     fn connect_active(
         &mut self,
         target: ClusterRef,
@@ -689,11 +758,14 @@ impl AppShell {
             self.old_session_gone_at_connect
                 .push(old.upgrade().is_none());
         }
-        let kubeconfigs: Vec<Arc<Kubeconfig>> =
-            self.catalog.read(cx).kubeconfigs().cloned().collect();
-        let Some((kubeconfig, summary)) = find_cluster(&kubeconfigs, &target) else {
+        #[cfg(test)]
+        self.connected_scopes.push(namespace.clone());
+        self.view_scope = namespace.clone();
+        self.view.set_primary(Some(target.clone()));
+        let Some(slot) = self.new_slot(&target, namespace, cx) else {
             // The catalog reloaded between the switch and this call.
             self.active = None;
+            self.view.set_primary(None);
             self.context_error = Some(format!(
                 "'{}' is no longer in its kubeconfig",
                 target.context
@@ -701,44 +773,8 @@ impl AppShell {
             cx.notify();
             return;
         };
-        let kind = self.screen.kind();
-        #[cfg(test)]
-        self.connected_scopes.push(namespace.clone());
-        let cache = std::mem::take(&mut self.kind_cache);
-        let session =
-            cx.new(|cx| ClusterSession::new(kubeconfig, &summary, namespace, kind, cache, cx));
-        // The new session is still connecting; it keeps the choice for `LiveCluster::start`.
-        let is_overview = self.screen == Screen::Overview;
-        session.update(cx, |session, cx| {
-            session.set_overview_visible(is_overview, cx)
-        });
-        self._session_observer = Some(cx.observe(&session, |shell, _, cx| {
-            shell.on_session_changed(cx);
-        }));
-        let shared = Some(session.clone());
-        self.pod_table.update(cx, |table, cx| {
-            table.delegate_mut().set_session(shared.clone());
-            cx.notify();
-        });
-        self.node_table.update(cx, |table, cx| {
-            table.delegate_mut().set_session(shared.clone());
-            cx.notify();
-        });
-        self.issue_table.update(cx, |table, cx| {
-            table.delegate_mut().set_session(shared.clone());
-            cx.notify();
-        });
-        self.topology
-            .update(cx, |view, cx| view.set_session(shared.clone(), cx));
-        self.kind_table.update(cx, |table, cx| {
-            table.delegate_mut().set_session(shared);
-            cx.notify();
-        });
-        let weak_session = session.downgrade();
-        self.log_dock
-            .update(cx, |dock, _| dock.set_session(Some(weak_session)));
-        self.session = Some(session);
-        cx.notify();
+        self.view.insert(slot, std::slice::from_ref(&target));
+        self.sync_view_sessions(cx);
     }
 
     /// "Back to {previous}" after a failed switch.
@@ -775,26 +811,35 @@ impl AppShell {
         &self.switcher
     }
 
-    /// The health of the active row, which comes from its session and never from a probe.
-    fn active_health(&self, cx: &App) -> Option<(ClusterRef, RowHealth)> {
-        let cluster = ClusterRef::of(self.active.as_ref()?);
-        let health = match self.session.as_ref()?.read(cx).phase() {
-            SessionPhase::Connecting { .. } => RowHealth::Connecting,
-            SessionPhase::Failed { .. } => RowHealth::Unreachable,
-            SessionPhase::Live(live) if live.has_problem() => RowHealth::Interrupted,
-            SessionPhase::Live(live) => RowHealth::Live(live.api_latency),
-        };
-        Some((cluster, health))
+    /// The health of every viewed row, which comes from its session and never from a probe.
+    fn viewed_health(&self, cx: &App) -> Vec<ViewedCluster> {
+        self.view
+            .slots()
+            .iter()
+            .map(|slot| {
+                let health = match slot.session.read(cx).phase() {
+                    SessionPhase::Connecting { .. } => RowHealth::Connecting,
+                    SessionPhase::Failed { .. } => RowHealth::Unreachable,
+                    SessionPhase::Live(live) if live.has_problem() => RowHealth::Interrupted,
+                    SessionPhase::Live(live) => RowHealth::Live(live.api_latency),
+                };
+                ViewedCluster {
+                    cluster: slot.cluster.clone(),
+                    health,
+                    is_primary: self.is_primary(&slot.cluster),
+                }
+            })
+            .collect()
     }
 
     /// Every row of the switcher, unfiltered: the `Ctrl n` numbers read this list.
     fn all_switcher_sections(&self, cx: &App) -> Vec<SwitcherSection> {
         let groups = self.catalog.read(cx).groups(cx);
-        let active = self.active_health(cx);
         switcher_sections(
             &groups,
             self.switcher.health(),
-            active.as_ref().map(|(cluster, health)| (cluster, *health)),
+            &self.viewed_health(cx),
+            self.switcher.ticked(),
         )
     }
 
@@ -829,6 +874,9 @@ impl AppShell {
             connected_count: connected_count(&all),
             segment: self.switcher.segment(),
             highlight: self.switcher.highlight().cloned(),
+            has_pending_ticks: self.has_pending_ticks(),
+            ticked_count: self.switcher.ticked().len(),
+            tick_notice: self.switcher.tick_notice().cloned(),
             filter: self.switcher.filter().clone(),
             filter_text,
             shell,
@@ -842,6 +890,8 @@ impl AppShell {
             return;
         }
         self.switcher.open();
+        // The draft starts as the viewed set: nothing to apply until the user ticks.
+        self.switcher.set_ticked(self.view.clusters());
         self.switcher
             .filter()
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -910,11 +960,50 @@ impl AppShell {
         cx.notify();
     }
 
-    /// Enter: switches to the highlighted row.
+    /// Whether applying the ticks would change what is viewed.
+    fn has_pending_ticks(&self) -> bool {
+        ticks_differ(self.switcher.ticked(), &self.view.clusters())
+    }
+
+    /// Enter: applies the ticks when they differ from the viewed set, else switches to the
+    /// highlighted row.
     pub(crate) fn confirm_switcher_highlight(&mut self, cx: &mut Context<Self>) {
+        if self.has_pending_ticks() && !self.switcher.ticked().is_empty() {
+            self.apply_switcher_ticks(cx);
+            return;
+        }
         if let Some(target) = self.switcher.highlight().cloned() {
             self.switch_from_switcher(&target, cx);
         }
+    }
+
+    /// A row's checkbox: ticks or unticks it. Nothing connects until the ticks are applied.
+    pub(crate) fn toggle_cluster_tick(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
+        self.switcher.toggle_tick(cluster);
+        cx.notify();
+    }
+
+    /// Space: ticks or unticks the highlighted row.
+    pub(crate) fn toggle_highlight_tick(&mut self, cx: &mut Context<Self>) {
+        if let Some(cluster) = self.switcher.highlight().cloned() {
+            self.toggle_cluster_tick(&cluster, cx);
+        }
+    }
+
+    /// The footer's Clear: no row is ticked.
+    pub(crate) fn clear_switcher_ticks(&mut self, cx: &mut Context<Self>) {
+        self.switcher.set_ticked(Vec::new());
+        cx.notify();
+    }
+
+    /// `View {n} clusters`: closes the popover and views the ticked clusters.
+    pub(crate) fn apply_switcher_ticks(&mut self, cx: &mut Context<Self>) {
+        let ticked = self.switcher.ticked().to_vec();
+        if ticked.is_empty() {
+            return;
+        }
+        self.close_cluster_switcher(cx);
+        self.view_clusters(&ticked, cx);
     }
 
     /// A row click, Enter, or `Ctrl n`: closes the popover, then switches.
@@ -932,15 +1021,11 @@ impl AppShell {
         self.switch_from_switcher(&target, cx);
     }
 
-    /// Retry or Check on a row. The active row retries its session; any other row is probed,
+    /// Retry or Check on a row. A viewed row retries its session; any other row is probed,
     /// whatever its auth kind, because the user asked.
     pub(crate) fn probe_cluster(&mut self, target: &ClusterRef, cx: &mut Context<Self>) {
-        let is_active = self
-            .active
-            .as_ref()
-            .is_some_and(|active| target.is_of(active));
-        if is_active {
-            self.retry(cx);
+        if let Some(session) = self.slot_session(target).cloned() {
+            session.update(cx, |session, cx| session.retry(cx));
             return;
         }
         if self.switcher.health().is_running(target) {
@@ -950,7 +1035,8 @@ impl AppShell {
     }
 
     fn probe_candidates(&self, cx: &App) -> Vec<ProbeCandidate> {
-        let active = self.active.as_ref();
+        let viewed = self.view.clusters();
+        let viewed = &viewed;
         self.catalog
             .read(cx)
             .kubeconfigs()
@@ -958,7 +1044,7 @@ impl AppShell {
                 kubeconfig.contexts().iter().map(move |summary| {
                     let cluster = ClusterRef::of(summary);
                     ProbeCandidate {
-                        is_active: active.is_some_and(|active| cluster.is_of(active)),
+                        is_active: viewed.contains(&cluster),
                         auth: kubeconfig.connection_info(summary).auth,
                         cluster,
                     }
@@ -1035,51 +1121,120 @@ impl AppShell {
         }
     }
 
+    /// The primary cluster's session: what Overview, Issues, and Topology read.
     pub(crate) fn session(&self) -> Option<&Entity<ClusterSession>> {
-        self.session.as_ref()
+        self.view.primary().map(|slot| &slot.session)
     }
 
-    /// The active cluster's saved default namespace, for the Namespaces menu.
-    pub(crate) fn default_namespace(&self, cx: &App) -> Option<String> {
-        self.active_profile(cx)?.default_namespace
+    /// The viewed clusters, with their sessions.
+    pub(crate) fn view(&self) -> &ClusterView {
+        &self.view
     }
 
-    /// The active context's profile; `None` before a session starts.
+    /// Whether `cluster` is the primary one, also before its slot exists.
+    fn is_primary(&self, cluster: &ClusterRef) -> bool {
+        self.view.primary_cluster() == Some(cluster)
+    }
+
+    /// The session of the viewed cluster `cluster`.
+    fn slot_session(&self, cluster: &ClusterRef) -> Option<&Entity<ClusterSession>> {
+        let index = self.view.slot_of(cluster)?;
+        Some(&self.view.slots()[index].session)
+    }
+
+    /// The live data of the viewed cluster `cluster`; a drawer, YAML, logs, or Monitor read always
+    /// goes through the cluster of its subject, never the primary.
+    fn slot_live<'a>(&self, cluster: &ClusterRef, cx: &'a App) -> Option<&'a LiveCluster> {
+        self.slot_session(cluster)?.read(cx).live()
+    }
+
+    /// The live data that tells the namespace scope of the view: the primary cluster's, else the
+    /// first live one when the primary has not answered (the scope is the same everywhere).
+    pub(crate) fn scope_live<'a>(&self, cx: &'a App) -> Option<&'a LiveCluster> {
+        self.live(cx).or_else(|| {
+            self.view
+                .slots()
+                .iter()
+                .find_map(|slot| slot.session.read(cx).live())
+        })
+    }
+
+    /// The live data of the cluster that holds the object of the open drawer.
+    fn subject_live<'a>(&self, cx: &'a App) -> Option<&'a LiveCluster> {
+        self.slot_live(&self.drawer_subject()?.cluster, cx)
+    }
+
+    /// The cluster a bare key means: the one of the open drawer (a link inside it stays in that
+    /// cluster), else the primary.
+    fn context_cluster(&self) -> Option<ClusterRef> {
+        match self.drawer_subject() {
+            Some(object) => Some(object.cluster.clone()),
+            None => self.view.primary_cluster().cloned(),
+        }
+    }
+
+    /// `key` in the cluster `context_cluster` names.
+    fn in_context(&self, key: ResourceKey) -> Option<ClusterObject> {
+        Some(ClusterObject::new(self.context_cluster()?, key))
+    }
+
+    /// What a row menu keeps of the cluster of the open drawer.
+    fn slot_row_context(&self, cluster: &ClusterRef, cx: &App) -> Option<RowContext> {
+        let slot = &self.view.slots()[self.view.slot_of(cluster)?];
+        Some(RowContext {
+            cluster: slot.cluster.clone(),
+            label: slot.label.clone(),
+            context: slot.session.read(cx).context().to_owned(),
+            is_primary: self.is_primary(&slot.cluster),
+            primary_label: self
+                .view
+                .primary()
+                .map(|primary| primary.label.clone())
+                .unwrap_or_default(),
+            is_multi: self.view.is_multi(),
+            session: slot.session.downgrade(),
+        })
+    }
+
+    /// The saved default namespace of `cluster`, for the Namespaces menu.
+    pub(crate) fn default_namespace(&self, cluster: &ClusterRef, cx: &App) -> Option<String> {
+        let slot = &self.view.slots()[self.view.slot_of(cluster)?];
+        AppSettings::get(cx)
+            .registry
+            .profile(&slot.summary)
+            .default_namespace
+    }
+
+    /// The primary context's profile; `None` before a session starts.
     pub(crate) fn active_profile(&self, cx: &App) -> Option<ClusterProfile> {
         let active = self.active.as_ref()?;
         Some(AppSettings::get(cx).registry.profile(active))
     }
 
-    /// The write-guard inputs of `cluster`: its own session's permissions, lock, and profile. `None`
-    /// when `cluster` is not the one viewed or its session is not live. A caller always names the
-    /// cluster of the row or action it acts on; no guardrail reads an implicit session.
+    /// The write-guard inputs of `cluster`: the permissions, lock, and profile of its own slot's
+    /// session. `None` when `cluster` is not viewed or its session is not live. A caller always names
+    /// the cluster of the row or action it acts on, so no guardrail reads the primary by default.
     pub(crate) fn guard_for<'a>(
         &'a self,
         cluster: &ClusterRef,
         cx: &'a App,
     ) -> Option<ClusterGuard<'a>> {
-        self.session
-            .as_ref()?
+        self.slot_session(cluster)?
             .read(cx)
             .guard(cx)
             .filter(|guard| guard.cluster == *cluster)
     }
 
-    /// `guard_for` the cluster in view, for the callers whose rows carry no cluster yet. It must
-    /// become row-based when 0027 merges: a row's own cluster, never the view's.
-    pub(crate) fn active_guard<'a>(&'a self, cx: &'a App) -> Option<ClusterGuard<'a>> {
-        let cluster = ClusterRef::of(self.active.as_ref()?);
-        self.guard_for(&cluster, cx)
-    }
-
-    /// "Set as default namespace": stores `name` as the active cluster's default, or clears it
-    /// when it already is. Local only: the scope of the running session does not change; the
-    /// default applies at the next start or switch.
-    pub(crate) fn toggle_default_namespace(&mut self, name: &str, cx: &mut Context<Self>) {
-        let Some(active) = &self.active else {
-            return;
-        };
-        let cluster = ClusterRef::of(active);
+    /// "Set as default namespace": stores `name` as the default of `cluster`, or clears it when it
+    /// already is. Local only: the scope of the running session does not change; the default
+    /// applies at the next start or switch.
+    pub(crate) fn toggle_default_namespace(
+        &mut self,
+        cluster: &ClusterRef,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let cluster = cluster.clone();
         let name = name.to_owned();
         AppSettings::update(cx, |settings| {
             let entry = settings.registry.entry_mut(&cluster);
@@ -1094,11 +1249,7 @@ impl AppShell {
 
     /// Opens the picker from `anchor`, with the current scope ticked.
     pub(crate) fn open_namespace_picker(&mut self, anchor: PickerAnchor, cx: &mut Context<Self>) {
-        // Ctrl N while it is open must not throw away the draft.
-        if self.namespace_picker.anchor == Some(anchor) {
-            return;
-        }
-        let Some(scope) = self.live(cx).map(|live| live.scope.clone()) else {
+        let Some(scope) = self.scope_live(cx).map(|live| live.scope.clone()) else {
             return;
         };
         self.namespace_picker.open(anchor, &scope);
@@ -1127,12 +1278,25 @@ impl AppShell {
         self.set_namespace(scope, cx);
     }
 
+    /// Sets the scope of every viewed cluster (decision 12).
     pub(crate) fn set_namespace(&mut self, scope: NamespaceScope, cx: &mut Context<Self>) {
-        let Some(session) = self.session.clone() else {
+        if self.view.slots().is_empty() {
             return;
-        };
+        }
         self.clear_selection(cx);
-        session.update(cx, |session, cx| session.set_scope(scope, cx));
+        self.view_scope = Some(scope.clone());
+        for session in self.sessions(cx) {
+            session.update(cx, |session, cx| session.set_scope(scope.clone(), cx));
+        }
+    }
+
+    /// The session of every slot, in slot order.
+    fn sessions(&self, _: &App) -> Vec<Entity<ClusterSession>> {
+        self.view
+            .slots()
+            .iter()
+            .map(|slot| slot.session.clone())
+            .collect()
     }
 
     /// Opens `screen`. The explorer watch follows it: it starts for a kind screen, is replaced on
@@ -1142,11 +1306,13 @@ impl AppShell {
         self.drawer.tab = DrawerTab::Overview;
         self.drawer.container_tab = ContainerTab::Info;
         self.drawer.monitor = MonitorState::new();
-        if let Some(session) = &self.session {
-            session.update(cx, |session, cx| {
+        // Every slot follows the explorer kind and the counts; only the primary draws Overview
+        // and Issues, so only its extra feeds run.
+        for slot in self.view.sessions() {
+            slot.session.update(cx, |session, cx| {
                 session.set_explorer_kind(screen.kind(), cx);
-                session.set_issues_visible(screen == Screen::Issues);
-                session.set_overview_visible(screen == Screen::Overview, cx);
+                session.set_issues_visible(slot.is_primary && screen == Screen::Issues);
+                session.set_overview_visible(slot.is_primary && screen == Screen::Overview, cx);
                 session.refresh_kind_counts(CountTrigger::Navigation, cx);
                 if screen == Screen::Kind(ResourceKind::Crds) {
                     session.refresh_custom_counts(cx);
@@ -1176,12 +1342,27 @@ impl AppShell {
         self.log_dock.update(cx, |dock, cx| dock.unzoom(cx));
     }
 
-    /// Opens the key's screen with its row selected, replacing the drawer. A filter that hides
-    /// the row is cleared, or the drawer would close at once. A list that is still loading keeps
-    /// the key, and `on_session_changed` resolves it after the first snapshot; a loaded list
-    /// without the row drops it.
+    /// `reveal_object` for a bare key: the object in the cluster of the open drawer (a link inside
+    /// a drawer stays in its cluster), else in the primary one.
     pub(crate) fn reveal(&mut self, key: ResourceKey, cx: &mut Context<Self>) {
-        self.reveal_then(key, cx, |_, _| {});
+        if let Some(object) = self.in_context(key) {
+            self.reveal_object(object, cx);
+        }
+    }
+
+    /// Reveals `key` in the primary cluster, which Overview, Issues, and Topology draw.
+    pub(crate) fn reveal_in_primary(&mut self, key: ResourceKey, cx: &mut Context<Self>) {
+        if let Some(object) = self.primary_object(Some(key)) {
+            self.reveal_object(object, cx);
+        }
+    }
+
+    /// Opens the object's screen with its row selected, replacing the drawer. A filter that hides
+    /// the row is cleared, or the drawer would close at once. A list that is still loading keeps
+    /// the object, and `on_slot_changed` resolves it after the first snapshot; a loaded list
+    /// without the row drops it.
+    pub(crate) fn reveal_object(&mut self, object: ClusterObject, cx: &mut Context<Self>) {
+        self.reveal_then(object, cx, |_, _| {});
     }
 
     /// `reveal`, then `then` once the selection stands. The selection is made after the
@@ -1190,16 +1371,16 @@ impl AppShell {
     /// selection must run in the same deferred closure, not after this call returns.
     pub(crate) fn reveal_then(
         &mut self,
-        key: ResourceKey,
+        object: ClusterObject,
         cx: &mut Context<Self>,
         then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
     ) {
-        self.show_screen(key.screen(), cx);
+        self.show_screen(object.key.screen(), cx);
         let shell = cx.weak_entity();
         cx.defer(move |cx| {
             let _ = shell.update(cx, |shell, cx| {
-                shell.pending_reveal = Some(key.clone());
-                shell.change_selection(Some(key), cx);
+                shell.pending_reveal = Some(object.clone());
+                shell.change_selection(Some(object), cx);
                 shell.set_drawer_open(true, cx);
                 shell.apply_pending_reveal(cx);
                 shell.sync_selection(cx);
@@ -1208,11 +1389,18 @@ impl AppShell {
         });
     }
 
-    /// A click on a Topology node: the drawer opens (or closes with `None`) over the graph. A
-    /// click is a pointer selection, so it opens the drawer, like a table row click.
+    /// The primary cluster; Topology, Overview, and Issues draw it alone.
+    pub(crate) fn primary_cluster(&self) -> Option<ClusterRef> {
+        self.view.primary_cluster().cloned()
+    }
+
+    /// A click on a Topology node: the drawer opens (or closes with `None`) over the graph, in the
+    /// cluster the graph draws. A click is a pointer selection, so it opens the drawer, like a
+    /// table row click.
     pub(crate) fn select_on_topology(&mut self, key: Option<ResourceKey>, cx: &mut Context<Self>) {
-        let is_selected = key.is_some();
-        self.change_selection(key, cx);
+        let object = self.primary_object(key);
+        let is_selected = object.is_some();
+        self.change_selection(object, cx);
         self.set_drawer_open(is_selected, cx);
     }
 
@@ -1231,17 +1419,17 @@ impl AppShell {
     /// that vanished clears the selection again, and then `step` does not run.
     fn when_selected(
         &mut self,
-        key: ResourceKey,
+        object: ClusterObject,
         cx: &mut Context<Self>,
         step: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
     ) {
-        if self.selected.as_ref() == Some(&key) {
+        if self.selected.as_ref() == Some(&object) {
             self.set_drawer_open(true, cx);
             step(self, cx);
             return;
         }
-        let wanted = key.clone();
-        self.reveal_then(key, cx, move |shell, cx| {
+        let wanted = object.clone();
+        self.reveal_then(object, cx, move |shell, cx| {
             if shell.selected.as_ref() == Some(&wanted) {
                 step(shell, cx);
             }
@@ -1251,17 +1439,18 @@ impl AppShell {
     /// Clears the filter of the revealed row's table when it hides the row, once the list has
     /// loaded. Waits while the list loads; forgets a reveal the selection has moved away from.
     fn apply_pending_reveal(&mut self, cx: &mut Context<Self>) {
-        let Some(key) = self.pending_reveal.clone() else {
+        let Some(object) = self.pending_reveal.clone() else {
             return;
         };
-        if self.selected.as_ref() != Some(&key) {
+        if self.selected.as_ref() != Some(&object) {
             self.pending_reveal = None;
             return;
         }
-        let Some(live) = self.live(cx) else {
+        let key = &object.key;
+        let Some(live) = self.slot_live(&object.cluster, cx) else {
             return;
         };
-        let found = match &key {
+        let found = match key {
             ResourceKey::Pod { .. } => list_item_index(&live.pods, |pod| key.is_pod(pod)),
             ResourceKey::Node { .. } => list_item_index(&live.nodes, |node| key.is_node(node)),
             ResourceKey::Kind { kind, .. } => live
@@ -1273,8 +1462,12 @@ impl AppShell {
             return;
         };
         self.pending_reveal = None;
-        if let Some(item) = found {
-            self.rebuild_visible_view(cx, move |view| view.reveal(item));
+        let Some(slot) = self.view.slot_of(&object.cluster) else {
+            return;
+        };
+        let merged = found.and_then(|item| merged_index(self.table_addresses(key, cx), slot, item));
+        if let Some(merged) = merged {
+            self.rebuild_visible_view(cx, move |view| view.reveal(merged));
         }
     }
 
@@ -1282,18 +1475,22 @@ impl AppShell {
     /// created here once; the dialog builder only clones the handle on every frame.
     pub(crate) fn open_who_can(
         &mut self,
+        cluster: &ClusterRef,
         query: Option<String>,
         namespace: Option<String>,
         check_now: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(session) = self.session.clone() else {
+        let Some(session) = self.slot_session(cluster).cloned() else {
             return;
         };
-        let shell = cx.weak_entity();
+        let origin = DialogOrigin {
+            shell: cx.weak_entity(),
+            cluster: cluster.clone(),
+        };
         let view =
-            cx.new(|cx| WhoCanView::new(shell, &session, query, namespace, check_now, window, cx));
+            cx.new(|cx| WhoCanView::new(origin, &session, query, namespace, check_now, window, cx));
         #[cfg(feature = "screenshot")]
         {
             self.who_can = Some(view.downgrade());
@@ -1310,18 +1507,22 @@ impl AppShell {
     /// `namespace: None` is cluster-wide grants for a subject other than You.
     pub(crate) fn open_permissions(
         &mut self,
+        cluster: &ClusterRef,
         subject: Option<String>,
         namespace: Option<String>,
         check_now: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(session) = self.session.clone() else {
+        let Some(session) = self.slot_session(cluster).cloned() else {
             return;
         };
-        let shell = cx.weak_entity();
+        let origin = DialogOrigin {
+            shell: cx.weak_entity(),
+            cluster: cluster.clone(),
+        };
         let view = cx.new(|cx| {
-            PermissionsView::new(shell, &session, subject, namespace, check_now, window, cx)
+            PermissionsView::new(origin, &session, subject, namespace, check_now, window, cx)
         });
         #[cfg(feature = "screenshot")]
         {
@@ -1339,20 +1540,24 @@ impl AppShell {
     /// destination); without one, the first two pods.
     pub(crate) fn open_traffic_test(
         &mut self,
+        cluster: &ClusterRef,
         policy: Option<&NetworkPolicySummary>,
         check_now: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(session) = self.session.clone() else {
+        let Some(session) = self.slot_session(cluster).cloned() else {
             return;
         };
         let form = match session.read(cx).live() {
             Some(live) => traffic_defaults(live.pods.items(), policy),
             None => return,
         };
-        let shell = cx.weak_entity();
-        let view = cx.new(|cx| TrafficTestView::new(shell, &session, form, check_now, window, cx));
+        let origin = DialogOrigin {
+            shell: cx.weak_entity(),
+            cluster: cluster.clone(),
+        };
+        let view = cx.new(|cx| TrafficTestView::new(origin, &session, form, check_now, window, cx));
         #[cfg(feature = "screenshot")]
         {
             self.traffic = Some(view.downgrade());
@@ -1367,7 +1572,7 @@ impl AppShell {
 
     /// The service account whose drawer is open, as `(subject text, namespace)`.
     pub(crate) fn drawer_account(&self) -> Option<(String, String)> {
-        match self.drawer_subject() {
+        match self.drawer_subject().map(|object| &object.key) {
             Some(ResourceKey::Kind {
                 kind: ResourceKind::ServiceAccounts,
                 namespace: Some(namespace),
@@ -1386,7 +1591,7 @@ impl AppShell {
     /// `--screen switcher`: opens the popover once the session is live. It runs from `render`
     /// because opening needs a window.
     fn open_pending_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.pending_switcher_launch || self.live(cx).is_none() {
+        if !self.pending_switcher_launch || self.scope_live(cx).is_none() {
             return;
         }
         self.pending_switcher_launch = false;
@@ -1403,12 +1608,16 @@ impl AppShell {
             return;
         }
         let namespace = self.tool_namespace(cx);
+        let Some(cluster) = self.primary_cluster() else {
+            return;
+        };
         match launch {
             LaunchScreen::WhoCan => {
-                self.open_who_can(Some("get secrets".to_owned()), namespace, true, window, cx);
+                let query = Some("get secrets".to_owned());
+                self.open_who_can(&cluster, query, namespace, true, window, cx);
             }
             LaunchScreen::CheckPermissions => {
-                self.open_permissions(None, namespace, true, window, cx);
+                self.open_permissions(&cluster, None, namespace, true, window, cx);
             }
             LaunchScreen::AccountPermissions => {
                 let Some(account) = self.launch_account(cx) else {
@@ -1418,13 +1627,13 @@ impl AppShell {
                     Some((subject, namespace)) => (Some(subject), Some(namespace)),
                     None => (None, namespace),
                 };
-                self.open_permissions(subject, namespace, true, window, cx);
+                self.open_permissions(&cluster, subject, namespace, true, window, cx);
             }
             LaunchScreen::TestTraffic => {
                 let Some(policy) = self.launch_policy(cx) else {
                     return;
                 };
-                self.open_traffic_test(policy.as_ref(), true, window, cx);
+                self.open_traffic_test(&cluster, policy.as_ref(), true, window, cx);
             }
             LaunchScreen::Shortcuts => open_shortcut_sheet(window, cx),
             _ => {}
@@ -1488,8 +1697,9 @@ impl AppShell {
         Some(account)
     }
 
+    /// Connects every failed slot again; the others are not touched.
     fn retry(&mut self, cx: &mut Context<Self>) {
-        if let Some(session) = &self.session {
+        for session in self.sessions(cx) {
             session.update(cx, |session, cx| session.retry(cx));
         }
     }
@@ -1497,7 +1707,7 @@ impl AppShell {
     // ---- drawer ----
 
     /// The object the drawer shows: the cursor row while the drawer is open.
-    pub(crate) fn drawer_subject(&self) -> Option<&ResourceKey> {
+    pub(crate) fn drawer_subject(&self) -> Option<&ClusterObject> {
         self.selected.as_ref().filter(|_| self.drawer.is_open)
     }
 
@@ -1564,6 +1774,21 @@ impl AppShell {
         cx.notify();
     }
 
+    /// Keeps `drawer.cluster` for the subject while several clusters are viewed. It runs inside
+    /// `render`, so it only assigns and never notifies.
+    fn sync_drawer_cluster(&mut self) {
+        self.drawer.cluster = self
+            .drawer_subject()
+            .filter(|_| self.view.is_multi())
+            .and_then(|object| {
+                let slot = &self.view.slots()[self.view.slot_of(&object.cluster)?];
+                Some(DrawerCluster {
+                    environment: slot.profile.environment,
+                    label: slot.label.clone().into(),
+                })
+            });
+    }
+
     /// Keeps `drawer.monitor.cache` for what the open drawer shows, and frees it while no Monitor
     /// is shown. It runs inside `render`, so it only assigns and never notifies. The series are
     /// rebuilt only when the key changes (a new tick, range, scope, or subject), so a hover repaint
@@ -1575,11 +1800,12 @@ impl AppShell {
             self.drawer.monitor.cache = None;
             return;
         }
-        let (Some(subject), Some(live)) = (self.drawer_subject().cloned(), self.live(cx)) else {
+        let (Some(subject), Some(live)) = (self.drawer_subject().cloned(), self.subject_live(cx))
+        else {
             return;
         };
-        let container = self.monitor_container(&subject, live, is_container_tab);
-        let ticks = match subject {
+        let container = self.monitor_container(&subject.key, live, is_container_tab);
+        let ticks = match subject.key {
             ResourceKey::Node { .. } => live.metrics.nodes.history.tick_count(),
             ResourceKey::Pod { .. } | ResourceKey::Kind { .. } => {
                 live.metrics.pods.history.tick_count()
@@ -1604,7 +1830,7 @@ impl AppShell {
             return;
         }
         let Some(monitor_subject) =
-            Self::monitor_subject(&key.subject, key.container.as_deref(), live)
+            Self::monitor_subject(&key.subject.key, key.container.as_deref(), live)
         else {
             return;
         };
@@ -1681,15 +1907,15 @@ impl AppShell {
         self.select_container(name, cx);
     }
 
-    /// Opens the drawer of `key` on `tab`. When the key is not the selection it is revealed first; a
+    /// Opens the drawer of `object` on `tab`. When it is not the selection it is revealed first; a
     /// vanished row clears the selection again, and then no drawer opens on that tab.
     pub(crate) fn open_drawer_tab(
         &mut self,
-        key: ResourceKey,
+        object: ClusterObject,
         tab: DrawerTab,
         cx: &mut Context<Self>,
     ) {
-        self.when_selected(key, cx, move |shell, cx| {
+        self.when_selected(object, cx, move |shell, cx| {
             shell.drawer.tab = tab;
             cx.notify();
         });
@@ -1705,9 +1931,13 @@ impl AppShell {
         layout: ValuesLayout,
         cx: &mut Context<Self>,
     ) {
-        let subject = key.clone();
+        // The release link of a drawer: its cluster is the drawer's.
+        let Some(object) = self.in_context(key.clone()) else {
+            return;
+        };
+        let subject = key;
         // After the selection: choosing a subject forgets the revision and the layout.
-        self.when_selected(key, cx, move |shell, cx| {
+        self.when_selected(object, cx, move |shell, cx| {
             shell.drawer.helm_revision = Some(revision);
             shell.drawer.tab = DrawerTab::Values;
             shell.drawer.pending_helm_layout = Some((subject, layout));
@@ -1724,15 +1954,15 @@ impl AppShell {
     /// to the values view as soon as it exists (`sync_secret_values`).
     pub(crate) fn run_secret_action(
         &mut self,
-        key: ResourceKey,
+        object: ClusterObject,
         action: SecretAction,
         cx: &mut Context<Self>,
     ) {
         if self.secret_value_access == ValueAccess::Blocked {
             return;
         }
-        let subject = key.clone();
-        self.when_selected(key, cx, move |shell, cx| {
+        let subject = object.key.clone();
+        self.when_selected(object, cx, move |shell, cx| {
             shell.drawer.tab = DrawerTab::Overview;
             shell.drawer.pending_secret_action = Some((subject, action));
             cx.notify();
@@ -1749,21 +1979,28 @@ impl AppShell {
     /// Overview tab of its drawer is shown. It runs inside `render`, so it only assigns and never
     /// notifies, and it is the only place that creates the view.
     fn sync_secret_values(&mut self, cx: &mut Context<Self>) {
-        let subject = values_subject(self.drawer_subject(), self.drawer.tab);
-        let Some(subject) = subject else {
+        let subject = values_subject(
+            self.drawer_subject().map(|object| &object.key),
+            self.drawer.tab,
+        );
+        let (Some(subject), Some(cluster)) = (
+            subject,
+            self.drawer_subject().map(|object| object.cluster.clone()),
+        ) else {
             self.drop_secret_values();
             return;
         };
+        let object = ClusterObject::new(cluster, subject.clone());
         let existing = self
             .drawer
             .secret_values
             .clone()
-            .filter(|view| view.read(cx).is_for(&subject));
+            .filter(|view| view.read(cx).is_for(&object));
         // The common frame: the view exists, so only the key list is read (and copied only when
         // it changed); the connection and names are cloned for a new view alone.
         if let Some(view) = existing {
             let keys = self
-                .live(cx)
+                .subject_live(cx)
                 .and_then(|live| secret_of(live, &subject).map(|secret| secret.keys.clone()));
             let Some(keys) = keys else {
                 self.drop_secret_values();
@@ -1771,7 +2008,7 @@ impl AppShell {
             };
             view.update(cx, |view, _| view.set_keys(&keys));
         } else {
-            let found = self.live(cx).and_then(|live| {
+            let found = self.subject_live(cx).and_then(|live| {
                 let secret = secret_of(live, &subject)?;
                 Some((
                     live.connection().clone(),
@@ -1786,7 +2023,7 @@ impl AppShell {
             };
             let access = self.secret_value_access;
             let fetch = fetcher(connection, namespace, name);
-            let view = cx.new(|_| SecretValuesView::new(fetch, subject.clone(), keys, access));
+            let view = cx.new(|_| SecretValuesView::new(fetch, object, keys, access));
             // The subscription ends with the view, which only this shell holds.
             cx.subscribe(&view, |shell, _, event: &SecretCopied, cx| {
                 shell.arm_clipboard_clear(event.0.clone(), cx);
@@ -1853,23 +2090,32 @@ impl AppShell {
 
     /// Keeps `drawer.yaml` for the shown subject only: the view lives exactly while the YAML tab of
     /// an open drawer is shown. It runs inside `render`, so it only assigns and never notifies, and
-    /// it is the only place that creates a `YamlView`. Comparing by object alone is enough because
-    /// every context or namespace switch closes the drawer first.
+    /// it is the only place that creates a `YamlView`. The view is compared by cluster and object:
+    /// the same name exists in several clusters, and the connection is the cluster's own.
     fn sync_yaml_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(subject) = yaml_subject(self.drawer_subject(), self.drawer.tab) else {
+        let Some(object) = self.drawer_subject().cloned() else {
+            self.drawer.yaml = None;
+            return;
+        };
+        let Some(subject) = yaml_subject(Some(&object.key), self.drawer.tab) else {
             self.drawer.yaml = None;
             return;
         };
         if let Some(view) = &self.drawer.yaml
-            && view.read(cx).is_for(&subject)
+            && view.read(cx).is_for(&object.cluster, &subject)
         {
             return;
         }
-        let Some(connection) = self.live(cx).map(|live| live.connection().clone()) else {
+        let Some(connection) = self
+            .slot_live(&object.cluster, cx)
+            .map(|live| live.connection().clone())
+        else {
             self.drawer.yaml = None;
             return;
         };
-        self.drawer.yaml = Some(cx.new(|cx| YamlView::new(connection, subject, window, cx)));
+        let cluster = object.cluster;
+        self.drawer.yaml =
+            Some(cx.new(|cx| YamlView::new(connection, cluster, subject, window, cx)));
     }
 
     /// Keeps `drawer.helm` for the shown release revision only: the view lives exactly while a
@@ -1877,21 +2123,21 @@ impl AppShell {
     /// and never notifies, and it is the only place that creates the view. A changed revision
     /// (a History button, or a new latest one) drops the old view, which wipes its texts.
     fn sync_helm_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let found = self.drawer_subject().cloned().and_then(|key| {
+        let found = self.drawer_subject().cloned().and_then(|object| {
+            let cluster = object.cluster;
+            let key = object.key;
             let tab = shown_tab(drawer_tabs(&key), self.drawer.tab);
-            let live = self.live(cx)?;
+            let live = self.slot_live(&cluster, cx)?;
             let summary = helm_release_of(live, &key)?;
             let subject = helm_subject(Some(&key), tab, Some(summary), self.drawer.helm_revision)?;
             let history = helm_history_of(live, &key, subject.0.revision);
-            Some((
-                key.clone(),
-                subject,
-                summary.revision,
-                live.connection().clone(),
-                history,
-            ))
+            let source = HelmSource {
+                cluster,
+                connection: live.connection().clone(),
+            };
+            Some((key.clone(), subject, summary.revision, source, history))
         });
-        let Some((key, (revision, tab), latest, connection, history)) = found else {
+        let Some((key, (revision, tab), latest, source, history)) = found else {
             self.drawer.helm = None;
             return;
         };
@@ -1899,13 +2145,13 @@ impl AppShell {
             .drawer
             .helm
             .clone()
-            .filter(|view| view.read(cx).is_for(&revision));
+            .filter(|view| view.read(cx).is_for(&source.cluster, &revision));
         let view = match existing {
             Some(view) => view,
             None => {
                 let access = self.secret_value_access;
                 let view = cx.new(|cx| {
-                    HelmReleaseView::new(connection, revision, latest, access, tab, window, cx)
+                    HelmReleaseView::new(source, revision, latest, access, tab, window, cx)
                 });
                 // The subscriptions end with the view, which only this shell holds.
                 cx.subscribe(&view, |shell, _, _: &ShowLatest, cx| {
@@ -1938,16 +2184,24 @@ impl AppShell {
     /// Tells the session which kubelets the open drawer wants. It runs inside `render`, so it
     /// only assigns and never notifies; the session is touched only when the demand changed.
     fn sync_kubelet_demand(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = self.session.clone() else {
-            return;
-        };
+        let subject_cluster = self.drawer_subject().map(|object| object.cluster.clone());
         let demand = self.kubelet_demand(cx);
-        let is_current = session
-            .read(cx)
-            .live()
-            .is_none_or(|live| *live.metrics.kubelet.demand() == demand);
-        if !is_current {
-            session.update(cx, |session, _| session.set_kubelet_demand(demand));
+        // The demand belongs to the cluster of the subject; every other slot polls nothing extra.
+        for slot in self.view.sessions() {
+            let wanted = if subject_cluster.as_ref() == Some(&slot.cluster) {
+                demand.clone()
+            } else {
+                KubeletDemand::default()
+            };
+            let is_current = slot
+                .session
+                .read(cx)
+                .live()
+                .is_none_or(|live| *live.metrics.kubelet.demand() == wanted);
+            if !is_current {
+                slot.session
+                    .update(cx, |session, _| session.set_kubelet_demand(wanted));
+            }
         }
     }
 
@@ -1955,32 +2209,36 @@ impl AppShell {
     /// the pods it owns. Disk I/O is wanted only while a Monitor tab shows: the drawer's own, or the
     /// container Monitor sub-tab of a pod.
     fn kubelet_demand(&self, cx: &App) -> KubeletDemand {
-        let subject = self.drawer_subject().and_then(|key| match key {
-            ResourceKey::Pod { namespace, name } => Some(KubeletSubject::Pod {
-                namespace: namespace.clone(),
-                name: name.clone(),
-            }),
-            ResourceKey::Node { name } => Some(KubeletSubject::Node(name.clone())),
-            ResourceKey::Kind {
-                kind: ResourceKind::PersistentVolumeClaims,
-                namespace: Some(namespace),
-                name,
-            } => Some(KubeletSubject::Claim {
-                namespace: namespace.clone(),
-                claim: name.clone(),
-            }),
-            ResourceKey::Kind { kind, .. } if kind.has_monitor() => self
-                .live(cx)?
-                .kind_list(*kind)?
-                .list
-                .items()
-                .iter()
-                .find(|row| key.is_row(*kind, row))?
-                .related_pods
-                .clone()
-                .map(KubeletSubject::Workload),
-            ResourceKey::Kind { .. } => None,
-        });
+        let subject = self
+            .selected
+            .as_ref()
+            .map(|object| &object.key)
+            .and_then(|key| match key {
+                ResourceKey::Pod { namespace, name } => Some(KubeletSubject::Pod {
+                    namespace: namespace.clone(),
+                    name: name.clone(),
+                }),
+                ResourceKey::Node { name } => Some(KubeletSubject::Node(name.clone())),
+                ResourceKey::Kind {
+                    kind: ResourceKind::PersistentVolumeClaims,
+                    namespace: Some(namespace),
+                    name,
+                } => Some(KubeletSubject::Claim {
+                    namespace: namespace.clone(),
+                    claim: name.clone(),
+                }),
+                ResourceKey::Kind { kind, .. } if kind.has_monitor() => self
+                    .subject_live(cx)?
+                    .kind_list(*kind)?
+                    .list
+                    .items()
+                    .iter()
+                    .find(|row| key.is_row(*kind, row))?
+                    .related_pods
+                    .clone()
+                    .map(KubeletSubject::Workload),
+                ResourceKey::Kind { .. } => None,
+            });
         let wants_disk_io = subject.is_some() && self.shows_monitor();
         KubeletDemand {
             subject,
@@ -1990,7 +2248,7 @@ impl AppShell {
 
     /// Whether a Monitor tab of the open drawer is visible.
     fn shows_monitor(&self) -> bool {
-        let Some(key) = self.drawer_subject() else {
+        let Some(key) = self.drawer_subject().map(|object| &object.key) else {
             return false;
         };
         let is_container_tab = self.drawer.tab == DrawerTab::Containers
@@ -2013,7 +2271,11 @@ impl AppShell {
     /// The YAML tab is shown and its first fetch has not finished. A failed fetch is settled.
     #[cfg(feature = "screenshot")]
     fn is_yaml_loading(&self, cx: &App) -> bool {
-        yaml_subject(self.drawer_subject(), self.drawer.tab).is_some()
+        yaml_subject(
+            self.drawer_subject().map(|object| &object.key),
+            self.drawer.tab,
+        )
+        .is_some()
             && self
                 .drawer
                 .yaml
@@ -2026,14 +2288,22 @@ impl AppShell {
     /// Returns whether the subject changed. The same key again is a no-op: it is the
     /// `SelectRow` that a programmatic re-selection emits, and a snapshot must not reset the
     /// drawer. A new subject keeps the tab and width but forgets the selected container.
-    fn change_selection(&mut self, key: Option<ResourceKey>, cx: &mut Context<Self>) -> bool {
-        if key == self.selected {
+    fn change_selection(&mut self, object: Option<ClusterObject>, cx: &mut Context<Self>) -> bool {
+        if object == self.selected {
             return false;
         }
-        self.selected = key;
+        // A view of one cluster's object must not outlive a move to another cluster's object of
+        // the same name.
+        let moves_cluster = self.selected.as_ref().map(|old| &old.cluster)
+            != object.as_ref().map(|new| &new.cluster);
+        self.selected = object;
         // Without a row there is nothing to show.
         if self.selected.is_none() {
             self.drawer.is_open = false;
+        }
+        if moves_cluster {
+            self.drawer.yaml = None;
+            self.drawer.helm = None;
         }
         self.drawer.selected_container = None;
         self.drop_secret_values();
@@ -2053,7 +2323,12 @@ impl AppShell {
         if self.drawer_account().is_none() {
             return;
         }
-        let Some(session) = self.session.clone() else {
+        let Some(session) = self
+            .selected
+            .as_ref()
+            .and_then(|object| self.slot_session(&object.cluster))
+            .cloned()
+        else {
             return;
         };
         let is_idle = session
@@ -2065,36 +2340,56 @@ impl AppShell {
         }
     }
 
-    /// Points the drawer's watches (object events, related objects) at the selected object.
-    /// Stopping is immediate. A start waits for the selection to rest, so arrowing through rows
-    /// sends no request per row: one timer starts every pending subject together, and a newer
-    /// selection replaces it. A watch whose subject does not change keeps running. It also runs
-    /// when the session changes, because a row that was not loaded at selection time (a reveal)
-    /// only now tells what to watch; an unchanged pending start keeps its timer.
+    /// Points the drawer's watches (object events, related objects) at the selected object, in the
+    /// session of its cluster. Stopping is immediate, also for the watches of the cluster the
+    /// subject left. A start waits for the selection to rest, so arrowing through rows sends no
+    /// request per row: one timer starts every pending subject together, and a newer selection
+    /// replaces it. A watch whose subject does not change keeps running. It also runs when a
+    /// session changes, because a row that was not loaded at selection time (a reveal) only now
+    /// tells what to watch; an unchanged pending start keeps its timer.
     fn follow_drawer_subjects(&mut self, cx: &mut Context<Self>) {
         self.request_rbac_for_account(cx);
-        let next_events = self.drawer_subject().and_then(event_subject);
+        let next_cluster = self.drawer_subject().map(|object| object.cluster.clone());
+        if self.subject_cluster != next_cluster {
+            if let Some(old) = self.subject_cluster.take() {
+                self.set_event_subject(&old, None, cx);
+                self.set_related_subject(&old, None, cx);
+            }
+            self.pending_subjects = None;
+            self.subject_cluster.clone_from(&next_cluster);
+        }
+        let Some(cluster) = next_cluster else {
+            self.pending_subjects = None;
+            return;
+        };
+        let next_events = self
+            .drawer_subject()
+            .and_then(|object| event_subject(&object.key));
         let next_related = self.selected_related_subject(cx);
-        let (running_events, running_related) = self.live(cx).map_or((None, None), |live| {
-            (
-                live.event_subject().cloned(),
-                live.related_subject().cloned(),
-            )
-        });
-        let mut pending = PendingSubjects::default();
+        let (running_events, running_related) =
+            self.subject_live(cx).map_or((None, None), |live| {
+                (
+                    live.event_subject().cloned(),
+                    live.related_subject().cloned(),
+                )
+            });
+        let mut pending = PendingSubjects {
+            cluster: Some(cluster.clone()),
+            ..PendingSubjects::default()
+        };
         match subject_change(running_events.as_ref(), next_events) {
             SubjectChange::Keep => {}
-            SubjectChange::Stop => self.set_event_subject(None, cx),
+            SubjectChange::Stop => self.set_event_subject(&cluster, None, cx),
             SubjectChange::Start(subject) => {
-                self.set_event_subject(None, cx);
+                self.set_event_subject(&cluster, None, cx);
                 pending.events = Some(subject);
             }
         }
         match subject_change(running_related.as_ref(), next_related) {
             SubjectChange::Keep => {}
-            SubjectChange::Stop => self.set_related_subject(None, cx),
+            SubjectChange::Stop => self.set_related_subject(&cluster, None, cx),
             SubjectChange::Start(subject) => {
-                self.set_related_subject(None, cx);
+                self.set_related_subject(&cluster, None, cx);
                 pending.related = Some(subject);
             }
         }
@@ -2115,10 +2410,10 @@ impl AppShell {
             let _ = this.update(cx, |shell, cx| {
                 shell.pending_subjects = None;
                 if events.is_some() {
-                    shell.set_event_subject(events, cx);
+                    shell.set_event_subject(&cluster, events, cx);
                 }
                 if related.is_some() {
-                    shell.set_related_subject(related, cx);
+                    shell.set_related_subject(&cluster, related, cx);
                 }
             });
         }));
@@ -2128,11 +2423,11 @@ impl AppShell {
     /// What the selected row needs watched besides its events; `None` while its list has not
     /// loaded the row.
     fn selected_related_subject(&self, cx: &App) -> Option<RelatedSubject> {
-        let key = self.drawer_subject()?;
+        let key = &self.drawer_subject()?.key;
         let ResourceKey::Kind { kind, .. } = key else {
             return None;
         };
-        let live = self.live(cx)?;
+        let live = self.subject_live(cx)?;
         let row = live
             .kind_list(*kind)?
             .list
@@ -2143,14 +2438,24 @@ impl AppShell {
             .filter(|subject| denied_related_check(subject, &live.access).is_none())
     }
 
-    fn set_related_subject(&mut self, subject: Option<RelatedSubject>, cx: &mut Context<Self>) {
-        if let Some(session) = &self.session {
+    fn set_related_subject(
+        &mut self,
+        cluster: &ClusterRef,
+        subject: Option<RelatedSubject>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(session) = self.slot_session(cluster).cloned() {
             session.update(cx, |session, cx| session.set_related_subject(subject, cx));
         }
     }
 
-    fn set_event_subject(&mut self, subject: Option<InvolvedObject>, cx: &mut Context<Self>) {
-        if let Some(session) = &self.session {
+    fn set_event_subject(
+        &mut self,
+        cluster: &ClusterRef,
+        subject: Option<InvolvedObject>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(session) = self.slot_session(cluster).cloned() {
             session.update(cx, |session, cx| session.set_event_subject(subject, cx));
         }
     }
@@ -2162,7 +2467,7 @@ impl AppShell {
         if self.overview.export.is_busy() {
             return;
         }
-        let Some(session) = self.session.as_ref() else {
+        let Some(session) = self.session() else {
             return;
         };
         if session.read(cx).live().is_none() {
@@ -2178,7 +2483,7 @@ impl AppShell {
             name,
             "report",
             move |shell: &mut Self, cx| {
-                if shell.session.as_ref().map(|session| session.entity_id()) != Some(session_id) {
+                if shell.session().map(|session| session.entity_id()) != Some(session_id) {
                     return Err("the cluster changed while the dialog was open".to_owned());
                 }
                 shell
@@ -2202,7 +2507,7 @@ impl AppShell {
 
     /// The report of the live snapshots now; `None` when the session is not live.
     fn overview_report_text(&self, cx: &App) -> Option<String> {
-        let session = self.session.as_ref()?.read(cx);
+        let session = self.session()?.read(cx);
         let live = session.live()?;
         Some(live_report(
             live,
@@ -2225,43 +2530,59 @@ impl AppShell {
     /// `View all →` of Recent changes: the Events screen with every event, since changes are Normal
     /// events that a Warnings-only list would hide.
     pub(crate) fn view_all_events(&mut self, cx: &mut Context<Self>) {
-        if let Some(session) = &self.session {
-            session.update(cx, |session, cx| {
-                session.set_event_filter(EventFilter::All, cx)
-            });
-        }
+        self.set_event_filter(EventFilter::All, cx);
         self.show_screen(Screen::Kind(ResourceKind::Events), cx);
+    }
+
+    /// Every viewed cluster lists the same events: the filter reaches all the sessions.
+    fn set_event_filter(&mut self, filter: EventFilter, cx: &mut Context<Self>) {
+        for session in self.sessions(cx) {
+            session.update(cx, |session, cx| session.set_event_filter(filter, cx));
+        }
     }
 
     /// Switches the Events screen between all events and warnings only. The drawer stays;
     /// `sync_selection` closes it when its row is filtered out.
     pub(crate) fn toggle_warnings_only(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = &self.session else {
+        let Some(session) = self.session() else {
             return;
         };
-        session.update(cx, |session, cx| {
-            session.set_event_filter(toggled(session.event_filter()), cx);
-        });
+        let next = toggled(session.read(cx).event_filter());
+        self.set_event_filter(next, cx);
     }
 
-    /// A `SelectRow` moved the cursor to `key`. A click (not the echo of a move the shell made
+    /// A `SelectRow` moved the cursor to `object`. A click (not the echo of a move the shell made
     /// itself) also opens the drawer and focuses the table, even on the row that is already
     /// selected. An echo never takes the focus: a snapshot that re-selects the row must not pull
     /// it out of the filter.
     fn on_row_selected<D: TableDelegate>(
         &mut self,
-        key: Option<ResourceKey>,
+        object: Option<ClusterObject>,
         is_echo: bool,
         table: &Entity<TableState<D>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.change_selection(key, cx);
+        self.change_selection(object, cx);
         if is_echo {
             return;
         }
         self.set_drawer_open(true, cx);
         focus_table(table, window, cx);
+    }
+
+    /// A right click moves the cursor to its row before the menu opens. The key actions of a menu
+    /// item run on the cursor (a kit menu dispatches them when a disabled item is confirmed from
+    /// the keyboard), so without this they would act on an earlier row, possibly of another cluster.
+    fn move_cursor_to_clicked_row<D: TableDelegate>(
+        &mut self,
+        table: &Entity<TableState<D>>,
+        row: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if table.read(cx).selected_row() != Some(row) {
+            self.select_table_row(table, row, cx);
+        }
     }
 
     /// Selects `row` on behalf of the shell: the cursor moves, the drawer stays as it is.
@@ -2285,11 +2606,13 @@ impl AppShell {
         match event {
             TableEvent::SelectRow(row) => {
                 let is_echo = take_row_echo(&mut self.row_echo, *row);
-                let key = self
-                    .shown_item(table, *row, cx)
-                    .and_then(|item| self.live(cx)?.pods.items().get(item))
-                    .map(ResourceKey::of_pod);
-                self.on_row_selected(key, is_echo, table, window, cx);
+                let object = self.row_object(table, *row, cx, |live, item| {
+                    live.pods.items().get(item).map(ResourceKey::of_pod)
+                });
+                self.on_row_selected(object, is_echo, table, window, cx);
+            }
+            TableEvent::RightClickedRow(Some(row)) => {
+                self.move_cursor_to_clicked_row(table, *row, cx)
             }
             TableEvent::ClearSelection => {
                 self.change_selection(None, cx);
@@ -2308,11 +2631,13 @@ impl AppShell {
         match event {
             TableEvent::SelectRow(row) => {
                 let is_echo = take_row_echo(&mut self.row_echo, *row);
-                let key = self
-                    .shown_item(table, *row, cx)
-                    .and_then(|item| self.live(cx)?.nodes.items().get(item))
-                    .map(ResourceKey::of_node);
-                self.on_row_selected(key, is_echo, table, window, cx);
+                let object = self.row_object(table, *row, cx, |live, item| {
+                    live.nodes.items().get(item).map(ResourceKey::of_node)
+                });
+                self.on_row_selected(object, is_echo, table, window, cx);
+            }
+            TableEvent::RightClickedRow(Some(row)) => {
+                self.move_cursor_to_clicked_row(table, *row, cx)
             }
             TableEvent::ClearSelection => {
                 self.change_selection(None, cx);
@@ -2328,11 +2653,11 @@ impl AppShell {
         let target = self
             .shown_item(&self.issue_table, row, cx)
             .and_then(|item| {
-                let session = self.session.as_ref()?.read(cx);
+                let session = self.session()?.read(cx);
                 session.issues().issues().get(item)?.target.clone()
             });
         if let Some(target) = target {
-            self.reveal(target, cx);
+            self.reveal_in_primary(target, cx);
         }
     }
 
@@ -2346,12 +2671,16 @@ impl AppShell {
         match event {
             TableEvent::SelectRow(row) => {
                 let is_echo = take_row_echo(&mut self.row_echo, *row);
-                let key = self.screen.kind().and_then(|kind| {
-                    let explorer = self.live(cx)?.kind_list(kind)?;
-                    let item = self.shown_item(table, *row, cx)?;
+                let kind = self.screen.kind();
+                let object = self.row_object(table, *row, cx, |live, item| {
+                    let kind = kind?;
+                    let explorer = live.kind_list(kind)?;
                     Some(ResourceKey::of_row(kind, explorer.list.items().get(item)?))
                 });
-                self.on_row_selected(key, is_echo, table, window, cx);
+                self.on_row_selected(object, is_echo, table, window, cx);
+            }
+            TableEvent::RightClickedRow(Some(row)) => {
+                self.move_cursor_to_clicked_row(table, *row, cx)
             }
             TableEvent::ClearSelection => {
                 self.change_selection(None, cx);
@@ -2360,14 +2689,49 @@ impl AppShell {
         }
     }
 
+    /// The live data of the primary cluster.
     fn live<'a>(&self, cx: &'a App) -> Option<&'a LiveCluster> {
-        self.session.as_ref()?.read(cx).live()
+        self.session()?.read(cx).live()
+    }
+
+    /// The object shown at table row `row` of `table`, in the cluster that row came from.
+    /// `key_of` names the object from the live data of that cluster and the row's item index in
+    /// its own list.
+    fn row_object<D: FilteredTable>(
+        &self,
+        table: &Entity<TableState<D>>,
+        row: usize,
+        cx: &App,
+        key_of: impl FnOnce(&LiveCluster, usize) -> Option<ResourceKey>,
+    ) -> Option<ClusterObject> {
+        let delegate = table.read(cx).delegate();
+        let merged = delegate.view()?.item_index(row)?;
+        let address = delegate.addresses().get(merged)?;
+        let slot = self.view.slots().get(usize::from(address.slot))?;
+        let live = slot.session.read(cx).live()?;
+        let key = key_of(live, address.item as usize)?;
+        Some(ClusterObject::new(slot.cluster.clone(), key))
+    }
+
+    /// `key` in the primary cluster, which Overview, Issues, and Topology draw.
+    fn primary_object(&self, key: Option<ResourceKey>) -> Option<ClusterObject> {
+        Some(ClusterObject::new(self.primary_cluster()?, key?))
+    }
+
+    /// Where the items of the table that lists `key` came from, as of its last rebuild.
+    fn table_addresses<'a>(&self, key: &ResourceKey, cx: &'a App) -> &'a [RowAddress] {
+        match key {
+            ResourceKey::Pod { .. } => self.pod_table.read(cx).delegate().addresses(),
+            ResourceKey::Node { .. } => self.node_table.read(cx).delegate().addresses(),
+            ResourceKey::Kind { .. } => self.kind_table.read(cx).delegate().addresses(),
+        }
     }
 
     /// Opens the logs of every pod of a workload in the dock. Nothing opens without a live
     /// session or for a node.
     pub(crate) fn open_workload_logs(
         &mut self,
+        cluster: &ClusterRef,
         owner: PodOwner,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -2375,19 +2739,41 @@ impl AppShell {
         let Some(target) = LogTarget::of_workload(owner) else {
             return;
         };
-        let Some(live) = self.live(cx) else {
+        self.open_log_tab(cluster, target, window, cx);
+    }
+
+    /// Opens `target` in the dock, reading from `cluster`. Nothing opens for a cluster that is not
+    /// live.
+    fn open_log_tab(
+        &mut self,
+        cluster: &ClusterRef,
+        target: LogTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(live) = self.slot_live(cluster, cx) else {
             return;
         };
         let connection = live.connection().clone();
-        self.log_dock
-            .update(cx, |dock, cx| dock.open(connection, target, window, cx));
+        let Some(row) = self.slot_row_context(cluster, cx) else {
+            return;
+        };
+        self.log_dock.update(cx, |dock, cx| {
+            dock.open(LogOrigin::new(&row, connection), target, window, cx)
+        });
     }
 
     /// What "Logs of selected" would open: the selected pod, or the workload of the selected row.
     pub(crate) fn selected_log_target(&self, cx: &App) -> Result<LogTarget, NoLogTarget> {
-        let live = self.live(cx).ok_or(NoLogTarget::NotConnected)?;
+        // The cursor row: its keys work with the drawer closed.
+        let live = self
+            .selected
+            .as_ref()
+            .and_then(|object| self.slot_live(&object.cluster, cx))
+            .or_else(|| self.live(cx))
+            .ok_or(NoLogTarget::NotConnected)?;
         check_logs_access(view_logs_reason(Some(live)))?;
-        let key = self.selected.as_ref().ok_or(NoLogTarget::NotLoggable)?;
+        let key = &self.selected.as_ref().ok_or(NoLogTarget::NotLoggable)?.key;
         let target = match key {
             ResourceKey::Pod { .. } => live
                 .pods
@@ -2416,26 +2802,25 @@ impl AppShell {
         let Ok(target) = self.selected_log_target(cx) else {
             return;
         };
-        let Some(live) = self.live(cx) else {
+        let Some(cluster) = self.selected.as_ref().map(|object| object.cluster.clone()) else {
             return;
         };
-        let connection = live.connection().clone();
-        self.log_dock
-            .update(cx, |dock, cx| dock.open(connection, target, window, cx));
+        self.open_log_tab(&cluster, target, window, cx);
     }
 
     /// The Logs sub-tab of a container: opens or focuses the dock tab on the container shown
     /// in the drawer. Nothing happens while the logs are not permitted.
     pub(crate) fn open_container_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(live) = self.live(cx) else {
+        let Some(live) = self.subject_live(cx) else {
             return;
         };
         if view_logs_reason(Some(live)).is_some() {
             return;
         }
-        let Some(key) = self.drawer_subject() else {
+        let Some(object) = self.drawer_subject() else {
             return;
         };
+        let key = &object.key;
         let Some(pod) = live.pods.items().iter().find(|pod| key.is_pod(pod)) else {
             return;
         };
@@ -2445,37 +2830,27 @@ impl AppShell {
         let Some(target) = LogTarget::of_container(pod, &pod.containers[index].name) else {
             return;
         };
-        let connection = live.connection().clone();
-        self.log_dock
-            .update(cx, |dock, cx| dock.open(connection, target, window, cx));
+        let cluster = object.cluster.clone();
+        self.open_log_tab(&cluster, target, window, cx);
     }
 
     /// Why "Shell into selected" is disabled.
     pub(crate) fn open_shell_unavailable_reason(&self, cx: &App) -> SharedString {
-        open_shell_reason(self.live(cx))
+        open_shell_reason(self.subject_live(cx))
     }
 
-    /// Writes `last_used` the first time a session is Live, so a cluster that fails to connect
-    /// is not reopened at the next start.
-    fn record_last_used(&mut self, is_live: bool, cx: &mut Context<Self>) {
-        if !is_live || self.has_reported_live {
-            return;
-        }
-        self.has_reported_live = true;
-        let Some(active) = &self.active else {
+    /// A session of the viewed set changed. Its first Live writes `last_used` (the primary only,
+    /// so a cluster that fails to connect is not reopened at the next start) and settles the
+    /// scope; everything that shows rows or the drawer is then brought up to date.
+    fn on_slot_changed(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
+        let Some(index) = self.view.slot_of(cluster) else {
             return;
         };
-        // Cloned before the update, so nothing borrowed from the shell crosses the `cx` borrow.
-        let cluster = ClusterRef::of(active);
-        AppSettings::update(cx, |settings| settings.registry.last_used = Some(cluster));
-    }
-
-    fn on_session_changed(&mut self, cx: &mut Context<Self>) {
-        let is_live = self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.read(cx).live().is_some());
-        self.record_last_used(is_live, cx);
+        let is_live = self.view.slots()[index].session.read(cx).live().is_some();
+        if is_live && !self.view.slots()[index].has_reported_live {
+            self.view.slots_mut()[index].has_reported_live = true;
+            self.on_first_live(cluster, cx);
+        }
         self.apply_pending_custom_launch(cx);
         self.follow_custom_kinds(cx);
         self.rebuild_visible_view(cx, |_| {});
@@ -2558,28 +2933,39 @@ impl AppShell {
         if self.screen == Screen::Topology {
             return;
         }
-        let Some(key) = self.selected.clone() else {
+        let Some(object) = self.selected.clone() else {
             return;
         };
-        let Some(live) = self.live(cx) else {
+        let (Some(slot), Some(live)) = (
+            self.view.slot_of(&object.cluster),
+            self.slot_live(&object.cluster, cx),
+        ) else {
             return;
         };
-        match &key {
+        let key = &object.key;
+        match key {
             ResourceKey::Pod { .. } => {
-                let Some(view) = self.pod_table.read(cx).delegate().view() else {
+                let delegate = self.pod_table.read(cx).delegate();
+                let Some(view) = delegate.view() else {
                     return;
                 };
-                let Some(found) = list_row_index(&live.pods, view, |pod| key.is_pod(pod)) else {
+                let addresses = delegate.addresses();
+                let Some(found) =
+                    list_row_index(&live.pods, view, addresses, slot, |pod| key.is_pod(pod))
+                else {
                     return;
                 };
                 let table = self.pod_table.clone();
                 self.apply_selection_sync(&table, found, cx);
             }
             ResourceKey::Node { .. } => {
-                let Some(view) = self.node_table.read(cx).delegate().view() else {
+                let delegate = self.node_table.read(cx).delegate();
+                let Some(view) = delegate.view() else {
                     return;
                 };
-                let Some(found) = list_row_index(&live.nodes, view, |node| key.is_node(node))
+                let addresses = delegate.addresses();
+                let Some(found) =
+                    list_row_index(&live.nodes, view, addresses, slot, |node| key.is_node(node))
                 else {
                     return;
                 };
@@ -2590,12 +2976,14 @@ impl AppShell {
                 let Some(explorer) = live.kind_list(*kind) else {
                     return;
                 };
-                let Some(view) = self.kind_table.read(cx).delegate().view() else {
+                let delegate = self.kind_table.read(cx).delegate();
+                let Some(view) = delegate.view() else {
                     return;
                 };
-                let Some(found) =
-                    list_row_index(&explorer.list, view, |row| key.is_row(*kind, row))
-                else {
+                let addresses = delegate.addresses();
+                let Some(found) = list_row_index(&explorer.list, view, addresses, slot, |row| {
+                    key.is_row(*kind, row)
+                }) else {
                     return;
                 };
                 let table = self.kind_table.clone();
@@ -2624,7 +3012,7 @@ impl AppShell {
 
     /// `--screen issues-drawer`: once the issues are known, opens the object of the first one.
     fn reveal_first_issue(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = self.session.as_ref().map(|session| session.read(cx)) else {
+        let Some(session) = self.session().map(|session| session.read(cx)) else {
             return;
         };
         if session.live().is_none() || session.is_issues_pending() {
@@ -2637,7 +3025,7 @@ impl AppShell {
             .find_map(|issue| issue.target.clone());
         self.pending_launch_screen = None;
         if let Some(target) = target {
-            self.reveal(target, cx);
+            self.reveal_in_primary(target, cx);
         }
     }
 
@@ -2716,40 +3104,52 @@ impl AppShell {
         };
         match launch {
             LaunchScreen::NodeDrawer(_) => {
-                let Some(row) = self.row_of_item(&self.node_table, item, cx) else {
+                let Some(row) = self
+                    .primary_cluster()
+                    .and_then(|primary| self.row_of_item(&self.node_table, &primary, item, cx))
+                else {
                     return;
                 };
                 let key = self
                     .live(cx)
                     .and_then(|live| live.nodes.items().get(item))
                     .map(ResourceKey::of_node);
-                self.change_selection(key, cx);
+                let object = self.primary_object(key);
+                self.change_selection(object, cx);
                 let table = self.node_table.clone();
                 self.select_table_row(&table, row, cx);
                 self.open_launch_drawer(launch, cx);
             }
             LaunchScreen::KindDrawer(kind, _) => {
-                let Some(row) = self.row_of_item(&self.kind_table, item, cx) else {
+                let Some(row) = self
+                    .primary_cluster()
+                    .and_then(|primary| self.row_of_item(&self.kind_table, &primary, item, cx))
+                else {
                     return;
                 };
                 let key = self
                     .live(cx)
                     .and_then(|live| live.kind_list(kind)?.list.items().get(item))
                     .map(|row| ResourceKey::of_row(kind, row));
-                self.change_selection(key, cx);
+                let object = self.primary_object(key);
+                self.change_selection(object, cx);
                 let table = self.kind_table.clone();
                 self.select_table_row(&table, row, cx);
                 self.open_launch_drawer(launch, cx);
             }
             _ => {
-                let Some(row) = self.row_of_item(&self.pod_table, item, cx) else {
+                let Some(row) = self
+                    .primary_cluster()
+                    .and_then(|primary| self.row_of_item(&self.pod_table, &primary, item, cx))
+                else {
                     return;
                 };
                 let key = self
                     .live(cx)
                     .and_then(|live| live.pods.items().get(item))
                     .map(ResourceKey::of_pod);
-                self.change_selection(key, cx);
+                let object = self.primary_object(key);
+                self.change_selection(object, cx);
                 let table = self.pod_table.clone();
                 self.select_table_row(&table, row, cx);
                 self.open_launch_drawer(launch, cx);
@@ -2789,14 +3189,19 @@ impl AppShell {
         }
     }
 
-    /// The row of `table` that shows `item`; `None` while a filter hides it.
+    /// The row of `table` that shows `item` of the list of `cluster`; `None` while a filter hides
+    /// it.
     fn row_of_item<D: FilteredTable>(
         &self,
         table: &Entity<TableState<D>>,
+        cluster: &ClusterRef,
         item: usize,
         cx: &App,
     ) -> Option<usize> {
-        table.read(cx).delegate().view()?.row_of(item)
+        let delegate = table.read(cx).delegate();
+        let slot = self.view.slot_of(cluster)?;
+        let merged = merged_index(delegate.addresses(), slot, item)?;
+        delegate.view()?.row_of(merged)
     }
 
     /// Opens the log dock that `--screen` asked for, once the pod list has loaded. It runs
@@ -2844,13 +3249,19 @@ impl AppShell {
         let Some((connection, target)) = opened else {
             return;
         };
+        let Some(row) = self
+            .primary_cluster()
+            .and_then(|cluster| self.slot_row_context(&cluster, cx))
+        else {
+            return;
+        };
         let mode = if launch != LaunchScreen::LogsDock {
             DockMode::Zoomed
         } else {
             DockMode::Normal
         };
         self.log_dock.update(cx, |dock, cx| {
-            dock.open(connection, target, window, cx);
+            dock.open(LogOrigin::new(&row, connection), target, window, cx);
             dock.set_mode(mode, cx);
         });
     }
@@ -2862,67 +3273,77 @@ impl AppShell {
         self.launch_failure.as_deref()
     }
 
+    /// How far the data of one viewed cluster is, for the screen shown.
+    #[cfg(feature = "screenshot")]
+    fn slot_target(&self, session: &ClusterSession, _: &App) -> TargetState {
+        let live = match session.phase() {
+            SessionPhase::Connecting { .. } => return TargetState::Loading,
+            SessionPhase::Failed { .. } => return TargetState::Unavailable,
+            SessionPhase::Live(live) => live,
+        };
+        let (is_loading, has_failed) = match self.screen {
+            // The panels read these three lists; a failed one is a state the panel shows.
+            Screen::Overview => (
+                live.pods.is_loading() || live.nodes.is_loading() || live.namespaces.is_loading(),
+                false,
+            ),
+            // The graph is built from the pods and the feeds; a feed that failed draws as a gap.
+            Screen::Topology => (live.pods.is_loading(), false),
+            Screen::Pods => (live.pods.is_loading(), live.pods.failure().is_some()),
+            Screen::Nodes => (live.nodes.is_loading(), live.nodes.failure().is_some()),
+            // The table shows what the pods and nodes lists found; a failed one is a gap the
+            // coverage names.
+            Screen::Issues => (live.pods.is_loading() || live.nodes.is_loading(), false),
+            // A missing explorer is the moment between a switch and its first watch.
+            Screen::Kind(kind) => live.kind_list(kind).map_or((true, false), |explorer| {
+                (
+                    explorer.list.is_loading(),
+                    explorer.list.failure().is_some(),
+                )
+            }),
+        };
+        // A failed list shows an error screen, which is the target to capture.
+        if has_failed {
+            TargetState::Unavailable
+        } else if is_loading
+            || self.pending_custom_launch.is_some()
+            || (self.screen == Screen::Kind(ResourceKind::Crds) && live.is_counting_instances())
+            || live.kind_counts().is_running()
+            || session.is_issues_pending()
+            || (matches!(self.screen, Screen::Kind(_)) && live.is_join_loading())
+        {
+            TargetState::Loading
+        } else {
+            TargetState::Loaded
+        }
+    }
+
     /// What the screenshot hook inspects to know when the screen shows its target.
     #[cfg(feature = "screenshot")]
     pub(crate) fn settle_input(&self, cx: &App) -> SettleInput {
-        let target = match (self.kubeconfig_state(cx), &self.session) {
-            (KubeconfigState::Loading, _) => TargetState::Loading,
-            (KubeconfigState::Failed(_), _) | (KubeconfigState::Loaded, None) => {
-                TargetState::Unavailable
-            }
-            (KubeconfigState::Loaded, Some(session)) => match session.read(cx).phase() {
-                SessionPhase::Connecting { .. } => TargetState::Loading,
-                SessionPhase::Failed { .. } => TargetState::Unavailable,
-                SessionPhase::Live(live) => {
-                    let (is_loading, has_failed) = match self.screen {
-                        // The panels read these three lists; a failed one is a state the panel shows.
-                        Screen::Overview => (
-                            live.pods.is_loading()
-                                || live.nodes.is_loading()
-                                || live.namespaces.is_loading(),
-                            false,
-                        ),
-                        // The graph is built from the pods and the feeds; a feed that failed draws as a gap.
-                        Screen::Topology => (live.pods.is_loading(), false),
-                        Screen::Pods => (live.pods.is_loading(), live.pods.failure().is_some()),
-                        Screen::Nodes => (live.nodes.is_loading(), live.nodes.failure().is_some()),
-                        // The table shows what the pods and nodes lists found; a failed one is a
-                        // gap the coverage names.
-                        Screen::Issues => {
-                            (live.pods.is_loading() || live.nodes.is_loading(), false)
-                        }
-                        // A missing explorer is the moment between a switch and its first watch.
-                        Screen::Kind(kind) => {
-                            live.kind_list(kind).map_or((true, false), |explorer| {
-                                (
-                                    explorer.list.is_loading(),
-                                    explorer.list.failure().is_some(),
-                                )
-                            })
-                        }
-                    };
-                    // A failed list shows an error screen, which is the target to capture.
-                    if has_failed {
-                        TargetState::Unavailable
-                    } else if is_loading
-                        || self.pending_custom_launch.is_some()
-                        || (self.screen == Screen::Kind(ResourceKind::Crds)
-                            && live.is_counting_instances())
-                        || live.kind_counts().is_running()
-                        || session.read(cx).is_issues_pending()
-                        || (matches!(self.screen, Screen::Kind(_)) && live.is_join_loading())
-                    {
-                        TargetState::Loading
-                    } else {
-                        TargetState::Loaded
-                    }
+        let target = match self.kubeconfig_state(cx) {
+            KubeconfigState::Loading => TargetState::Loading,
+            KubeconfigState::Failed(_) => TargetState::Unavailable,
+            // Between the release of the old sessions and the deferred connect of the new ones, a
+            // started cluster has no slot yet.
+            KubeconfigState::Loaded if self.view.slots().is_empty() => {
+                if self.active.is_some() {
+                    TargetState::Loading
+                } else {
+                    TargetState::Unavailable
                 }
-            },
+            }
+            KubeconfigState::Loaded => combine_targets(
+                self.view
+                    .slots()
+                    .iter()
+                    .map(|slot| self.slot_target(slot.session.read(cx), cx)),
+            ),
         };
         // A drawer waits for the debounce, then for its events, related objects, and YAML.
         let is_content_pending = self.pending_subjects.is_some()
             || self
-                .live(cx)
+                .subject_live(cx)
                 .is_some_and(|live| live.is_object_events_loading() || live.is_related_loading())
             || self.is_yaml_loading(cx)
             || self.is_helm_loading(cx);
@@ -2944,13 +3365,11 @@ impl AppShell {
             is_switcher_pending: self.pending_switcher_launch
                 || self.switcher.health().is_probing(),
             is_change_feed_pending: self
-                .session
-                .as_ref()
+                .session()
                 .is_some_and(|session| session.read(cx).is_change_feed_pending()),
             is_topology_pending: self.screen == Screen::Topology
                 && (self
-                    .session
-                    .as_ref()
+                    .session()
                     .is_some_and(|session| session.read(cx).is_topology_pending())
                     || !self.topology.read(cx).has_build()),
             is_dialog_pending: self.pending_dialog_launch.is_some()
@@ -2967,29 +3386,24 @@ impl AppShell {
                     view.read_with(cx, |view, _| view.is_pending())
                         .unwrap_or(false)
                 }),
-            pod_metrics: self
-                .live(cx)
-                .map_or_else(FeedProgress::unavailable, |live| FeedProgress {
-                    status: live.metrics.pods.status.clone(),
-                    ticks: live.metrics.pods.history.tick_count(),
-                }),
-            node_metrics: self
-                .live(cx)
-                .map_or_else(FeedProgress::unavailable, |live| FeedProgress {
-                    status: live.metrics.nodes.status.clone(),
-                    ticks: live.metrics.nodes.history.tick_count(),
-                }),
-            kubelet: self
-                .live(cx)
-                .map_or_else(FeedProgress::unavailable, |live| {
-                    kubelet_progress(
-                        live.metrics.kubelet.status.clone(),
-                        live.metrics.kubelet.history.tick_count(),
-                        // Targets follow the nodes list, so an unloaded list may still produce some.
-                        live.nodes.is_loading()
-                            || !live.metrics.kubelet.targets().summary_nodes.is_empty(),
-                    )
-                }),
+            // Every live slot has its own feeds; the screen waits for the slowest.
+            pod_metrics: self.slowest_feed(cx, |live| FeedProgress {
+                status: live.metrics.pods.status.clone(),
+                ticks: live.metrics.pods.history.tick_count(),
+            }),
+            node_metrics: self.slowest_feed(cx, |live| FeedProgress {
+                status: live.metrics.nodes.status.clone(),
+                ticks: live.metrics.nodes.history.tick_count(),
+            }),
+            kubelet: self.slowest_feed(cx, |live| {
+                kubelet_progress(
+                    live.metrics.kubelet.status.clone(),
+                    live.metrics.kubelet.history.tick_count(),
+                    // Targets follow the nodes list, so an unloaded list may still produce some.
+                    live.nodes.is_loading()
+                        || !live.metrics.kubelet.targets().summary_nodes.is_empty(),
+                )
+            }),
         }
     }
 
@@ -3046,27 +3460,46 @@ impl AppShell {
     /// What the palette lists now, read from memory only: no list, watch, or request starts here.
     pub(crate) fn palette_snapshot(&self, wants_resources: bool, cx: &App) -> PaletteSnapshot {
         let sections = self.all_switcher_sections(cx);
-        let live = self.live(cx);
-        let guard = self.active_guard(cx);
-        let session = live
-            .zip(guard.as_ref())
-            .map(|(live, guard)| PaletteSession {
-                scope: &live.scope,
-                guard,
-                namespaces: live.namespaces.items(),
-                pods: live.pods.items(),
-                nodes: live.nodes.items(),
-                kind_rows: self
-                    .screen
-                    .kind()
-                    .and_then(|kind| Some((kind, live.kind_list(kind)?.list.items()))),
-            });
+        let live = self.scope_live(cx);
+        let primary = self.primary_cluster();
+        // Every slot gates its own rows by its own guard, built before the sessions borrow it.
+        let guards: Vec<_> = self
+            .view
+            .slots()
+            .iter()
+            .map(|slot| slot.session.read(cx).guard(cx))
+            .collect();
+        let sessions = self
+            .view
+            .slots()
+            .iter()
+            .zip(&guards)
+            .filter_map(|(slot, guard)| {
+                let guard = guard.as_ref()?;
+                let live = slot.session.read(cx).live()?;
+                Some(PaletteSession {
+                    cluster: slot.cluster.clone(),
+                    // The label tells the clusters apart, so it only appears when there are several.
+                    label: self.view.is_multi().then(|| slot.label.clone().into()),
+                    is_primary: primary.as_ref() == Some(&slot.cluster),
+                    scope: &live.scope,
+                    guard,
+                    namespaces: live.namespaces.items(),
+                    pods: live.pods.items(),
+                    nodes: live.nodes.items(),
+                    kind_rows: self
+                        .screen
+                        .kind()
+                        .and_then(|kind| Some((kind, live.kind_list(kind)?.list.items()))),
+                })
+            })
+            .collect();
         let input = PaletteInput {
             screen: self.screen,
             cursor: self.selected.as_ref(),
             has_dock_tabs: self.log_dock.read(cx).has_tabs(),
             include_resources: wants_resources,
-            session,
+            sessions,
             clusters: &sections,
         };
         PaletteSnapshot {
@@ -3083,17 +3516,19 @@ impl AppShell {
         }
     }
 
-    /// The table row that shows `key` on the open screen; `None` for another screen, a row the
-    /// list lacks, or a row the filter hides.
-    fn shown_row_of(&self, key: &ResourceKey, cx: &App) -> Option<usize> {
+    /// The table row that shows `object` on the open screen; `None` for another screen, a row
+    /// its cluster's list lacks, or a row the filter hides.
+    fn shown_row_of(&self, object: &ClusterObject, cx: &App) -> Option<usize> {
+        let key = &object.key;
         if key.screen() != self.screen {
             return None;
         }
-        let live = self.live(cx)?;
+        let cluster = &object.cluster;
+        let live = self.slot_live(cluster, cx)?;
         match key {
             ResourceKey::Pod { .. } => {
                 let item = live.pods.items().iter().position(|pod| key.is_pod(pod))?;
-                self.row_of_item(&self.pod_table, item, cx)
+                self.row_of_item(&self.pod_table, cluster, item, cx)
             }
             ResourceKey::Node { .. } => {
                 let item = live
@@ -3101,33 +3536,34 @@ impl AppShell {
                     .items()
                     .iter()
                     .position(|node| key.is_node(node))?;
-                self.row_of_item(&self.node_table, item, cx)
+                self.row_of_item(&self.node_table, cluster, item, cx)
             }
             ResourceKey::Kind { kind, .. } => {
                 let rows = live.kind_list(*kind)?.list.items();
                 let item = rows.iter().position(|row| key.is_row(*kind, row))?;
-                self.row_of_item(&self.kind_table, item, cx)
+                self.row_of_item(&self.kind_table, cluster, item, cx)
             }
         }
     }
 
-    /// Whether the Tab preview applies to `key`: it is a row of the open screen's filtered table,
-    /// and no drawer is open (an open drawer would follow the cursor and open on the new row).
-    pub(crate) fn can_preview_row(&self, key: &ResourceKey, cx: &App) -> bool {
-        !self.drawer.is_open && self.shown_row_of(key, cx).is_some()
+    /// Whether the Tab preview applies to `object`: it is a row of the open screen's filtered
+    /// table, and no drawer is open (an open drawer would follow the cursor and open on the new
+    /// row).
+    pub(crate) fn can_preview_row(&self, object: &ClusterObject, cx: &App) -> bool {
+        !self.drawer.is_open && self.shown_row_of(object, cx).is_some()
     }
 
-    /// Tab in the palette: the table cursor moves to `key`. The screen does not change and
+    /// Tab in the palette: the table cursor moves to `object`. The screen does not change and
     /// nothing starts; with a drawer open nothing happens at all.
-    pub(crate) fn preview_resource(&mut self, key: &ResourceKey, cx: &mut Context<Self>) {
-        if !self.can_preview_row(key, cx) {
+    pub(crate) fn preview_resource(&mut self, object: &ClusterObject, cx: &mut Context<Self>) {
+        if !self.can_preview_row(object, cx) {
             return;
         }
-        let Some(row) = self.shown_row_of(key, cx) else {
+        let Some(row) = self.shown_row_of(object, cx) else {
             return;
         };
-        self.change_selection(Some(key.clone()), cx);
-        match key {
+        self.change_selection(Some(object.clone()), cx);
+        match &object.key {
             ResourceKey::Pod { .. } => {
                 let table = self.pod_table.clone();
                 self.select_table_row(&table, row, cx);
@@ -3141,6 +3577,22 @@ impl AppShell {
                 self.select_table_row(&table, row, cx);
             }
         }
+    }
+
+    /// The feed that settles last among the live slots, or an unavailable one without any.
+    #[cfg(feature = "screenshot")]
+    fn slowest_feed(
+        &self,
+        cx: &App,
+        feed_of: impl Fn(&LiveCluster) -> FeedProgress,
+    ) -> FeedProgress {
+        slowest_feed(
+            self.view
+                .slots()
+                .iter()
+                .filter_map(|slot| slot.session.read(cx).live())
+                .map(feed_of),
+        )
     }
 
     // ---- table toolkit ----
@@ -3263,12 +3715,45 @@ impl AppShell {
 
     /// "View pods on node": the Pods screen with only that node's pods. The other Pods filters
     /// go, so every pod on the node shows.
-    pub(crate) fn view_pods_on_node(&mut self, node: &str, cx: &mut Context<Self>) {
+    pub(crate) fn view_pods_on_node(
+        &mut self,
+        cluster: &ClusterRef,
+        node: &str,
+        cx: &mut Context<Self>,
+    ) {
         self.show_screen(Screen::Pods, cx);
-        let filter = TableFilter::on_node(node);
+        let mut filter = TableFilter::on_node(node);
+        // The same node name can exist in several clusters.
+        let cluster_chip = self
+            .pod_table
+            .read(cx)
+            .delegate()
+            .cluster_column()
+            .zip(self.view.slot_of(cluster))
+            .map(|(column, slot)| (column, self.view.slots()[slot].label.clone()));
+        if let Some((column, label)) = cluster_chip {
+            filter.set_equals(column, "Cluster", &label);
+        }
         self.update_view(cx, move |view| view.filter = filter);
         // The input shows the filter text of its screen, which is empty now.
         self.quick_filter_screen = None;
+    }
+
+    /// "Filter by this cluster": the visible table keeps the rows of the cluster named `label`.
+    pub(crate) fn filter_by_cluster(&mut self, label: &str, cx: &mut Context<Self>) {
+        let column = match self.screen {
+            Screen::Pods => self.pod_table.read(cx).delegate().cluster_column(),
+            Screen::Nodes => self.node_table.read(cx).delegate().cluster_column(),
+            Screen::Kind(_) => self.kind_table.read(cx).delegate().cluster_column(),
+            Screen::Overview | Screen::Issues | Screen::Topology => None,
+        };
+        let Some(column) = column else {
+            return;
+        };
+        let label = label.to_owned();
+        self.update_view(cx, move |view| {
+            view.filter.set_equals(column, "Cluster", &label)
+        });
     }
 
     /// "Filter similar": the Events list keeps the events with this reason.
@@ -3282,16 +3767,19 @@ impl AppShell {
 
     /// Holds the Events list still, or shows the events that arrived meanwhile.
     pub(crate) fn toggle_explorer_paused(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = self.session.clone() else {
+        let Some(primary) = self.session() else {
             return;
         };
-        session.update(cx, |session, cx| {
-            let is_paused = matches!(
-                session.live().and_then(LiveCluster::explorer_flow),
-                Some(FlowState::Paused { .. })
-            );
-            session.set_explorer_paused(!is_paused, cx);
-        });
+        let is_paused = matches!(
+            primary.read(cx).live().and_then(LiveCluster::explorer_flow),
+            Some(FlowState::Paused { .. })
+        );
+        // Every viewed cluster holds its Events list, or none does.
+        for session in self.sessions(cx) {
+            session.update(cx, |session, cx| {
+                session.set_explorer_paused(!is_paused, cx)
+            });
+        }
     }
 
     /// Removes the text and the chips of the visible table, and empties the input.
@@ -3413,43 +3901,70 @@ impl AppShell {
             Screen::Kind(kind) => kind.is_namespaced(),
         };
         if is_namespaced {
-            state.scope = self.live(cx).map(|live| live.scope.clone());
+            state.scope = self.scope_live(cx).map(|live| live.scope.clone());
         }
         Some(state)
     }
 
     // ---- rendering ----
 
+    /// The sidebar numbers: the sum over the viewed clusters that know the number. The issue
+    /// numbers are the primary cluster's.
     fn navigation_counts(&self, cx: &App) -> NavigationCounts {
-        let live = self.live(cx);
         let event_filter = self
-            .session
-            .as_ref()
+            .session()
             .map_or(EventFilter::All, |session| session.read(cx).event_filter());
         // A session that is not live keeps its last board, which says nothing about the cluster.
-        let (issue_total, issue_counts) = match (live, self.session.as_ref()) {
+        let (issue_total, issue_counts) = match (self.live(cx), self.session()) {
             (Some(_), Some(session)) => issue_counts(session.read(cx).issues()),
             _ => (None, Vec::new()),
+        };
+        let lives: Vec<&LiveCluster> = self
+            .view
+            .slots()
+            .iter()
+            .filter_map(|slot| slot.session.read(cx).live())
+            .collect();
+        let kinds_of = |live: &LiveCluster| {
+            let mut kinds = live.kind_counts().all(event_filter);
+            // Custom kinds show the cluster-wide instance count until their screen is shown.
+            kinds.extend(
+                live.custom_counts
+                    .counts
+                    .iter()
+                    .filter_map(|(kind, count)| {
+                        Some((ResourceKind::Custom(*kind), usize::try_from(*count).ok()?))
+                    }),
+            );
+            kinds
+        };
+        // The breakdown behind the sums only matters while several clusters are viewed.
+        let slots = if self.view.is_multi() {
+            self.view
+                .slots()
+                .iter()
+                .filter_map(|slot| {
+                    let live = slot.session.read(cx).live()?;
+                    Some(SlotCounts {
+                        label: slot.label.clone(),
+                        pods: live.pods.ready_count(),
+                        nodes: live.nodes.ready_count(),
+                        explorer: live.explorer_count(),
+                        kinds: kinds_of(live),
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
         };
         NavigationCounts {
             issue_total,
             issue_counts,
-            pods: live.and_then(|live| live.pods.ready_count()),
-            nodes: live.and_then(|live| live.nodes.ready_count()),
-            explorer: live.and_then(LiveCluster::explorer_count),
-            kinds: live.map_or_else(HashMap::new, |live| {
-                let mut kinds = live.kind_counts().all(event_filter);
-                // Custom kinds show the cluster-wide instance count until their screen is shown.
-                kinds.extend(
-                    live.custom_counts
-                        .counts
-                        .iter()
-                        .filter_map(|(kind, count)| {
-                            Some((ResourceKind::Custom(*kind), usize::try_from(*count).ok()?))
-                        }),
-                );
-                kinds
-            }),
+            pods: sum_known(lives.iter().map(|live| live.pods.ready_count())),
+            nodes: sum_known(lives.iter().map(|live| live.nodes.ready_count())),
+            explorer: sum_explorer(lives.iter().filter_map(|live| live.explorer_count())),
+            kinds: sum_kinds(lives.iter().map(|live| kinds_of(live))),
+            slots,
         }
     }
 }
@@ -3457,6 +3972,7 @@ impl AppShell {
 impl Render for AppShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.fit_table_widths(window, cx);
+        self.sync_drawer_cluster();
         self.refresh_monitor_cache(cx);
         self.open_pending_logs(window, cx);
         self.open_pending_dialog(window, cx);
@@ -3469,7 +3985,6 @@ impl Render for AppShell {
         self.open_pending_palette(window, cx);
         let theme = cx.theme();
         let counts = self.navigation_counts(cx);
-        let session = self.session.as_ref().map(|session| session.read(cx));
         let is_kubeconfig_loading = self.catalog.read(cx).is_loading();
         let root = v_flex()
             .size_full()
@@ -3513,7 +4028,7 @@ impl Render for AppShell {
                     .child(sidebar(self.screen, &counts, self.live(cx), cx))
                     .child(self.render_workspace(cx)),
             )
-            .child(status_bar(session, is_kubeconfig_loading, cx))
+            .child(status_bar(self, is_kubeconfig_loading, cx))
     }
 }
 
@@ -3606,6 +4121,52 @@ fn topology_target(key: &ResourceKey) -> Option<(String, NodeId)> {
             name: name.clone(),
         },
     ))
+}
+
+/// What the user had in a viewed cluster, kept when it leaves the view: the scope, so coming back
+/// lands there, and whether the cluster answered, so its switcher row is right at once.
+fn record_leaving(
+    slot: &ViewSlot,
+    scope_memory: &mut ScopeMemory,
+    switcher: &mut ClusterSwitcherState,
+    cx: &App,
+) {
+    let result = match slot.session.read(cx).phase() {
+        SessionPhase::Live(live) => {
+            remember_scope(scope_memory, slot.cluster.clone(), live.scope.clone());
+            ProbeResult::Reachable {
+                latency: live.api_latency,
+            }
+        }
+        SessionPhase::Failed { message } => ProbeResult::Unreachable {
+            reason: message.clone(),
+        },
+        SessionPhase::Connecting { .. } => return,
+    };
+    switcher
+        .health_mut()
+        .record(slot.cluster.clone(), result, Instant::now());
+}
+
+/// The clusters the contexts `names` mean, by the first loaded kubeconfig that defines each, and
+/// the names no kubeconfig defines.
+fn named_clusters(
+    kubeconfigs: &[Arc<Kubeconfig>],
+    names: &[String],
+) -> (Vec<ClusterRef>, Vec<String>) {
+    let mut found = Vec::new();
+    let mut unknown = Vec::new();
+    for name in names {
+        let summary = kubeconfigs
+            .iter()
+            .flat_map(|kubeconfig| kubeconfig.contexts())
+            .find(|summary| summary.name == *name);
+        match summary {
+            Some(summary) => found.push(ClusterRef::of(summary)),
+            None => unknown.push(name.clone()),
+        }
+    }
+    (found, unknown)
 }
 
 /// The loaded kubeconfig that defines `cluster`, with its context.

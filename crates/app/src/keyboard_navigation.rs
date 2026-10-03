@@ -26,7 +26,7 @@ use crate::resource_actions::{
     KeyAvailability, ResourceAction, action_label, key_availability, subject_action,
     unavailable_text,
 };
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{ClusterObject, ResourceKey};
 
 /// How a row-move key changes the cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -346,7 +346,7 @@ impl AppShell {
     /// Esc in a text field: the focus goes to the table the screen shows, or to the shell root
     /// while no table is drawn. The field keeps its text.
     pub(super) fn focus_visible_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.live(cx).is_none() {
+        if self.scope_live(cx).is_none() {
             window.focus(&self.focus_handle, cx);
             return;
         }
@@ -362,10 +362,14 @@ impl AppShell {
     /// `[` and `]`: selects the previous or next container of the open pod drawer and shows the
     /// Containers tab.
     fn step_container_at_cursor(&mut self, step: ContainerStep, cx: &mut Context<Self>) {
-        let Some(key @ ResourceKey::Pod { .. }) = self.drawer_subject().cloned() else {
+        let Some(subject) = self.drawer_subject().cloned() else {
             return;
         };
-        let Some(live) = self.live(cx) else {
+        let key = &subject.key;
+        if !matches!(key, ResourceKey::Pod { .. }) {
+            return;
+        }
+        let Some(live) = self.slot_live(&subject.cluster, cx) else {
             return;
         };
         let Some(pod) = live.pods.items().iter().find(|pod| key.is_pod(pod)) else {
@@ -391,7 +395,7 @@ impl AppShell {
             cx.propagate();
             return;
         }
-        let name = match subject {
+        let name = match &subject.key {
             ResourceKey::Pod { name, .. }
             | ResourceKey::Node { name }
             | ResourceKey::Kind { name, .. } => name.clone(),
@@ -405,13 +409,16 @@ impl AppShell {
         let Some(subject) = self.selected.clone() else {
             return;
         };
-        let (Some(live), Some(guard)) = (self.live(cx), self.active_guard(cx)) else {
+        let (Some(live), Some(guard)) = (
+            self.slot_live(&subject.cluster, cx),
+            self.guard_for(&subject.cluster, cx),
+        ) else {
             return;
         };
-        match key_availability(action, &subject, live, &guard) {
+        match key_availability(action, &subject.key, live, &guard) {
             KeyAvailability::NotOffered => {}
             KeyAvailability::Disabled { reason } => {
-                let label = action_label(subject_action(action, &subject));
+                let label = action_label(subject_action(action, &subject.key));
                 let text = unavailable_text(label, &reason);
                 window.push_notification(Notification::warning(text).id::<RowKeyNotice>(), cx);
             }
@@ -425,7 +432,7 @@ impl AppShell {
     fn run_available_row_key(
         &mut self,
         action: ResourceAction,
-        subject: ResourceKey,
+        subject: ClusterObject,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

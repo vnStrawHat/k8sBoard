@@ -46,7 +46,7 @@
 
 ## Step 3 — keys (headless)
 
-`ctrl_shift_c_toggles`, `ctrl_digit_switches_from_inside_quick_filter`, `ctrl_digit_beyond_rows_does_nothing`, `enter_in_filter_switches_to_highlight`, `enter_on_row_switches` (focus on a row button, context `ClusterSwitcher`), `escape_in_switcher_filter_closes` (path `Popover > ClusterSwitcher > Input`), `arrows_move_highlight_in_filter`, `space_stays_unbound` (0028 `RESERVED_KEYS` updated when its code exists), `kbd_hint_resolves_in_app_shell_context`.
+`ctrl_shift_c_toggles`, `ctrl_digit_switches_from_inside_quick_filter`, `ctrl_digit_beyond_rows_does_nothing`, `enter_in_filter_switches_to_highlight`, `enter_on_row_switches` (focus on a row button, context `ClusterSwitcher`), `escape_in_switcher_filter_closes` (path `Popover > ClusterSwitcher > Input`), `arrows_move_highlight_in_filter`, `space_ticks_a_row_and_never_confirms` (0027 bound `space`; `RESERVED_KEYS` dropped it), `kbd_hint_resolves_in_app_shell_context`.
 
 ## Step 4 — `cluster_health_tests.rs`
 

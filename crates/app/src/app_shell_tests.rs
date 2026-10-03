@@ -12,6 +12,7 @@ use gpui_kit::{
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use super::app_shell_switch_tests::{open_switch_fixture, open_switch_fixture_with};
 use super::*;
 use crate::cluster_catalog::CatalogHandle;
 use crate::cluster_registry::ClusterRef;
@@ -173,7 +174,7 @@ fn blocked_shell_ignores_a_secret_action(cx: &mut TestAppContext) {
         name: "credentials".to_owned(),
     };
     shell.update(cx, |shell, cx| {
-        shell.run_secret_action(key, SecretAction::RevealAll, cx);
+        shell.run_secret_action(object(key), SecretAction::RevealAll, cx);
     });
     shell.read_with(cx, |shell, _| {
         assert!(shell.drawer.pending_secret_action.is_none());
@@ -218,7 +219,7 @@ fn changing_the_selection_drops_the_values_view_and_its_pending_action(cx: &mut 
     };
     shell.update(cx, |shell, cx| {
         shell.drawer.pending_secret_action = Some((key.clone(), SecretAction::RevealAll));
-        shell.change_selection(Some(key), cx);
+        shell.change_selection(Some(object(key)), cx);
     });
     shell.read_with(cx, |shell, _| {
         assert!(shell.drawer.pending_secret_action.is_none());
@@ -233,8 +234,8 @@ fn counting_view(calls: &Arc<AtomicUsize>, cx: &mut Context<AppShell>) -> Entity
         calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Ok(Vec::new()) })
     });
-    let key = secret_key_fixture();
-    cx.new(|_| SecretValuesView::new(fetch, key, Vec::new(), ValueAccess::Enabled))
+    let object = object(secret_key_fixture());
+    cx.new(|_| SecretValuesView::new(fetch, object, Vec::new(), ValueAccess::Enabled))
 }
 
 fn secret_key_fixture() -> ResourceKey {
@@ -266,13 +267,13 @@ fn changing_the_selection_drops_an_existing_values_view(cx: &mut TestAppContext)
     let calls = Arc::new(AtomicUsize::new(0));
     shell.update(cx, |shell, cx| {
         shell.drawer.secret_values = Some(counting_view(&calls, cx));
-        shell.change_selection(Some(secret_key_fixture()), cx);
+        shell.change_selection(Some(object(secret_key_fixture())), cx);
     });
     shell.read_with(cx, |shell, _| assert!(shell.drawer.secret_values.is_none()));
     // The same key again is a no-op, so a second view survives it.
     shell.update(cx, |shell, cx| {
         shell.drawer.secret_values = Some(counting_view(&calls, cx));
-        shell.change_selection(Some(secret_key_fixture()), cx);
+        shell.change_selection(Some(object(secret_key_fixture())), cx);
     });
     shell.read_with(cx, |shell, _| assert!(shell.drawer.secret_values.is_some()));
     shell.update(cx, |shell, cx| shell.close_drawer(cx));
@@ -387,6 +388,11 @@ fn pod_key(name: &str) -> ResourceKey {
     }
 }
 
+/// `key` in a cluster of its own: these shells have no session, so the cluster is only a name.
+fn object(key: ResourceKey) -> ClusterObject {
+    ClusterObject::new(ClusterRef::of(&context("ctx")), key)
+}
+
 fn secret_key() -> ResourceKey {
     ResourceKey::Kind {
         kind: ResourceKind::Secrets,
@@ -399,12 +405,12 @@ fn secret_key() -> ResourceKey {
 fn open_drawer_tab_on_another_row_ends_on_that_tab(cx: &mut TestAppContext) {
     let (_, shell) = open_shell(cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
-        shell.open_drawer_tab(pod_key("api-1"), DrawerTab::Yaml, cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
+        shell.open_drawer_tab(object(pod_key("api-1")), DrawerTab::Yaml, cx);
     });
     cx.run_until_parked();
     shell.read_with(cx, |shell, _| {
-        assert_eq!(shell.selected, Some(pod_key("api-1")));
+        assert_eq!(shell.selected, Some(object(pod_key("api-1"))));
         assert_eq!(shell.drawer.tab, DrawerTab::Yaml);
     });
 }
@@ -419,25 +425,12 @@ fn context(name: &str) -> ContextSummary {
     }
 }
 
-fn last_used(cx: &mut TestAppContext) -> Option<ClusterRef> {
-    cx.update(|cx| AppSettings::get(cx).registry.last_used.clone())
-}
-
-fn report(shell: &Entity<AppShell>, is_live: bool, cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        shell.update(cx, |shell, cx| {
-            shell.active = Some(context("ctx"));
-            shell.record_last_used(is_live, cx);
-        });
-    });
-}
-
 #[gpui_kit::test]
 fn open_drawer_tab_on_the_selection_needs_no_reveal(cx: &mut TestAppContext) {
     let (_, shell) = open_shell(cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
-        shell.open_drawer_tab(pod_key("api-0"), DrawerTab::Events, cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
+        shell.open_drawer_tab(object(pod_key("api-0")), DrawerTab::Events, cx);
         // At once, before anything is deferred.
         assert_eq!(shell.drawer.tab, DrawerTab::Events);
     });
@@ -449,13 +442,13 @@ fn secret_action_on_another_row_waits_for_the_selection(cx: &mut TestAppContext)
     shell.update(cx, |shell, cx| {
         // Another tab shows, so only the action's step can bring the Overview back.
         shell.drawer.tab = DrawerTab::Yaml;
-        shell.run_secret_action(secret_key(), SecretAction::RevealAll, cx);
+        shell.run_secret_action(object(secret_key()), SecretAction::RevealAll, cx);
     });
     cx.run_until_parked();
     // The pending action itself is consumed or dropped by the next frame (there is no session
     // to read the Secret from), so the tab and the selection are what stay.
     shell.read_with(cx, |shell, _| {
-        assert_eq!(shell.selected, Some(secret_key()));
+        assert_eq!(shell.selected, Some(object(secret_key())));
         assert_eq!(shell.drawer.tab, DrawerTab::Overview);
     });
 }
@@ -469,11 +462,14 @@ fn helm_values_keep_their_revision_through_a_reveal(cx: &mut TestAppContext) {
         name: "api".to_owned(),
     };
     shell.update(cx, |shell, cx| {
+        // A release link inside an open drawer: the drawer's cluster is the release's.
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
+        shell.set_drawer_open(true, cx);
         shell.open_helm_values(key.clone(), 3, ValuesLayout::Diff, cx);
     });
     cx.run_until_parked();
     shell.read_with(cx, |shell, _| {
-        assert_eq!(shell.selected, Some(key.clone()));
+        assert_eq!(shell.selected, Some(object(key.clone())));
         assert_eq!(shell.drawer.tab, DrawerTab::Values);
         // Choosing the subject forgets a revision; the step sets it after.
         assert_eq!(shell.drawer.helm_revision, Some(3));
@@ -482,34 +478,6 @@ fn helm_values_keep_their_revision_through_a_reveal(cx: &mut TestAppContext) {
             Some((pending, ValuesLayout::Diff)) if *pending == key
         ));
     });
-}
-
-#[gpui_kit::test]
-fn last_used_is_written_on_live(cx: &mut TestAppContext) {
-    let (_window, shell) = open_shell(cx);
-    report(&shell, true, cx);
-    let expected = ClusterRef::of(&context("ctx"));
-    assert_eq!(last_used(cx), Some(expected));
-}
-
-#[gpui_kit::test]
-fn last_used_is_not_written_on_failure(cx: &mut TestAppContext) {
-    let (_window, shell) = open_shell(cx);
-    report(&shell, false, cx);
-    assert_eq!(last_used(cx), None);
-}
-
-#[gpui_kit::test]
-fn last_used_is_written_once_per_session(cx: &mut TestAppContext) {
-    let (_window, shell) = open_shell(cx);
-    report(&shell, true, cx);
-    cx.update(|cx| {
-        shell.update(cx, |shell, cx| {
-            shell.active = Some(context("other"));
-            shell.record_last_used(true, cx);
-        });
-    });
-    assert_eq!(last_used(cx), Some(ClusterRef::of(&context("ctx"))));
 }
 
 fn saved_pods(cx: &mut TestAppContext) -> Option<crate::settings::TablePrefs> {
@@ -548,7 +516,7 @@ fn toggle_default(shell: &Entity<AppShell>, cx: &mut TestAppContext) {
     cx.update(|cx| {
         shell.update(cx, |shell, cx| {
             shell.active = Some(context("ctx"));
-            shell.toggle_default_namespace("monitoring", cx);
+            shell.toggle_default_namespace(&ClusterRef::of(&context("ctx")), "monitoring", cx);
         });
     });
 }
@@ -814,10 +782,10 @@ fn the_shell_handles_every_key_action_of_its_tree(cx: &mut TestAppContext) {
 fn closed_drawer_has_no_subject(cx: &mut TestAppContext) {
     let (_, shell) = open_shell(cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
         assert_eq!(shell.drawer_subject(), None);
         shell.drawer.is_open = true;
-        assert_eq!(shell.drawer_subject(), Some(&pod_key("api-0")));
+        assert_eq!(shell.drawer_subject(), Some(&object(pod_key("api-0"))));
     });
 }
 
@@ -825,7 +793,7 @@ fn closed_drawer_has_no_subject(cx: &mut TestAppContext) {
 fn closing_drawer_drops_pending_subjects(cx: &mut TestAppContext) {
     let (_, shell) = open_shell(cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
         shell.drawer.is_open = true;
         shell.follow_drawer_subjects(cx);
         assert!(shell.pending_subjects.is_some());
@@ -838,12 +806,12 @@ fn closing_drawer_drops_pending_subjects(cx: &mut TestAppContext) {
 fn closing_the_drawer_keeps_the_row(cx: &mut TestAppContext) {
     let (_, shell) = open_shell(cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
         shell.set_drawer_open(true, cx);
         assert!(shell.drawer.is_open);
         shell.close_drawer(cx);
         assert!(!shell.drawer.is_open);
-        assert_eq!(shell.selected, Some(pod_key("api-0")));
+        assert_eq!(shell.selected, Some(object(pod_key("api-0"))));
     });
 }
 
@@ -860,7 +828,7 @@ fn the_drawer_does_not_open_without_a_row(cx: &mut TestAppContext) {
 fn clearing_the_selection_closes_the_drawer(cx: &mut TestAppContext) {
     let (_, shell) = open_shell(cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
         shell.drawer.is_open = true;
         shell.change_selection(None, cx);
         assert!(!shell.drawer.is_open);
@@ -874,9 +842,9 @@ fn a_click_opens_the_drawer_even_on_the_selected_row(cx: &mut TestAppContext) {
     cx.update_window(window.into(), |_, window, cx| {
         shell.update(cx, |shell, cx| {
             let table = shell.pod_table.clone();
-            shell.change_selection(Some(pod_key("api-0")), cx);
+            shell.change_selection(Some(object(pod_key("api-0"))), cx);
             assert!(!shell.drawer.is_open);
-            shell.on_row_selected(Some(pod_key("api-0")), false, &table, window, cx);
+            shell.on_row_selected(Some(object(pod_key("api-0"))), false, &table, window, cx);
             assert!(shell.drawer.is_open);
         });
     })
@@ -890,8 +858,8 @@ fn the_echo_of_a_shell_move_never_opens_the_drawer(cx: &mut TestAppContext) {
     cx.update_window(window.into(), |_, window, cx| {
         shell.update(cx, |shell, cx| {
             let table = shell.pod_table.clone();
-            shell.on_row_selected(Some(pod_key("api-1")), true, &table, window, cx);
-            assert_eq!(shell.selected, Some(pod_key("api-1")));
+            shell.on_row_selected(Some(object(pod_key("api-1"))), true, &table, window, cx);
+            assert_eq!(shell.selected, Some(object(pod_key("api-1"))));
             assert!(!shell.drawer.is_open);
         });
     })
@@ -919,12 +887,12 @@ fn enter_opens_the_drawer_on_the_cursor_row(cx: &mut TestAppContext) {
     let (window, shell) = open_shell_with(&["--screen", "pods"], cx);
     render(window, cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
     });
     press(window, "enter", cx);
     shell.read_with(cx, |shell, _| {
         assert!(shell.drawer.is_open);
-        assert_eq!(shell.selected, Some(pod_key("api-0")));
+        assert_eq!(shell.selected, Some(object(pod_key("api-0"))));
     });
 }
 
@@ -933,13 +901,13 @@ fn escape_closes_the_drawer_then_clears_the_cursor(cx: &mut TestAppContext) {
     let (window, shell) = open_shell_with(&["--screen", "pods"], cx);
     render(window, cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
         shell.set_drawer_open(true, cx);
     });
     press(window, "escape", cx);
     shell.read_with(cx, |shell, _| {
         assert!(!shell.drawer.is_open);
-        assert_eq!(shell.selected, Some(pod_key("api-0")));
+        assert_eq!(shell.selected, Some(object(pod_key("api-0"))));
     });
     press(window, "escape", cx);
     shell.read_with(cx, |shell, _| assert_eq!(shell.selected, None));
@@ -950,7 +918,7 @@ fn copy_name_copies_the_cursor_row_name(cx: &mut TestAppContext) {
     let (window, shell) = open_shell(cx);
     render(window, cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
     });
     // The test platform has its own clipboard: the system clipboard is untouched.
     press(window, "secondary-c", cx);
@@ -963,7 +931,7 @@ fn row_keys_do_nothing_without_a_live_cluster(cx: &mut TestAppContext) {
     let (window, shell) = open_shell(cx);
     render(window, cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
     });
     for key in ["l", "y", "s", "e", "delete", "shift-s"] {
         press(window, key, cx);
@@ -1025,7 +993,7 @@ fn enter_on_a_focused_button_stays_with_the_button(cx: &mut TestAppContext) {
     let (window, shell) = open_shell_with(&["--screen", "pods"], cx);
     render(window, cx);
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(pod_key("api-0")), cx);
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
     });
     // Tab moves the focus from the shell root to a title-bar button.
     press(window, "tab", cx);
@@ -1039,7 +1007,7 @@ fn closing_the_drawer_drops_revealed_secret_values(cx: &mut TestAppContext) {
     let (_, shell) = open_shell(cx);
     let calls = Arc::new(AtomicUsize::new(0));
     shell.update(cx, |shell, cx| {
-        shell.change_selection(Some(secret_key_fixture()), cx);
+        shell.change_selection(Some(object(secret_key_fixture())), cx);
         shell.set_drawer_open(true, cx);
         shell.drawer.secret_values = Some(counting_view(&calls, cx));
         shell.drawer.pending_secret_action = Some((secret_key_fixture(), SecretAction::RevealAll));
@@ -1047,7 +1015,7 @@ fn closing_the_drawer_drops_revealed_secret_values(cx: &mut TestAppContext) {
         assert!(shell.drawer.secret_values.is_none());
         assert!(shell.drawer.pending_secret_action.is_none());
         // The row stays: only the drawer closed.
-        assert_eq!(shell.selected, Some(secret_key_fixture()));
+        assert_eq!(shell.selected, Some(object(secret_key_fixture())));
     });
 }
 
@@ -1066,12 +1034,14 @@ fn enter_on_issues_without_a_cursor_does_nothing(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_topology_click_opens_the_drawer(cx: &mut TestAppContext) {
-    let (_, shell) = open_shell(cx);
+    // The graph draws the primary cluster, so the click needs a shell that has one.
+    let fixture = open_switch_fixture("topology-click", cx);
+    let shell = fixture.shell.clone();
     let key = service_key("shop", "web");
     shell.update(cx, |shell, cx| {
         shell.select_on_topology(Some(key.clone()), cx);
         assert!(shell.drawer.is_open);
-        assert_eq!(shell.drawer_subject(), Some(&key));
+        assert_eq!(shell.drawer_subject().map(|object| &object.key), Some(&key));
         // A click on the empty canvas closes it and drops the row.
         shell.select_on_topology(None, cx);
         assert!(!shell.drawer.is_open);
@@ -1081,7 +1051,8 @@ fn a_topology_click_opens_the_drawer(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_namespace_change_on_topology_clears_the_selection(cx: &mut TestAppContext) {
-    let (window, shell) = open_shell(cx);
+    let fixture = open_switch_fixture("topology-namespace", cx);
+    let (window, shell) = (fixture.window, fixture.shell.clone());
     let (namespace, id) = topology_target(&service_key("blog", "web")).expect("a Service");
     shell.update(cx, |shell, cx| {
         shell.select_on_topology(Some(service_key("shop", "web")), cx);
@@ -1102,7 +1073,8 @@ fn a_namespace_change_on_topology_clears_the_selection(cx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn row_keys_do_nothing_on_topology(cx: &mut TestAppContext) {
-    let (window, shell) = open_shell_with(&["--screen", "topology"], cx);
+    let fixture = open_switch_fixture_with("topology-keys", &["--screen", "topology"], cx);
+    let (window, shell) = (fixture.window, fixture.shell.clone());
     render(window, cx);
     shell.update(cx, |shell, cx| {
         shell.select_on_topology(Some(service_key("shop", "web")), cx);
@@ -1112,7 +1084,10 @@ fn row_keys_do_nothing_on_topology(cx: &mut TestAppContext) {
     press(window, "j", cx);
     press(window, "enter", cx);
     shell.read_with(cx, |shell, _| {
-        assert_eq!(shell.selected, Some(service_key("shop", "web")));
+        assert_eq!(
+            shell.selected.as_ref().map(|object| &object.key),
+            Some(&service_key("shop", "web"))
+        );
         assert!(!shell.drawer.is_open);
     });
 }
@@ -1233,10 +1208,10 @@ fn the_palette_snapshot_of_a_shell_without_a_session_lists_commands_and_screens(
 fn tab_previews_nothing_without_a_session(cx: &mut TestAppContext) {
     let (window, shell) = open_shell(cx);
     render(window, cx);
-    let key = ResourceKey::Pod {
+    let key = object(ResourceKey::Pod {
         namespace: "shop".to_owned(),
         name: "api-0".to_owned(),
-    };
+    });
     shell.update(cx, |shell, cx| {
         assert!(!shell.can_preview_row(&key, cx));
         shell.preview_resource(&key, cx);

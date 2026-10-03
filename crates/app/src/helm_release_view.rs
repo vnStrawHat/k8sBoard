@@ -28,6 +28,7 @@ use gpui_kit::{
 };
 use zeroize::Zeroizing;
 
+use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
 use crate::drawer::{DRAWER_SUBJECT_DELAY, DrawerTab, section_title};
@@ -353,6 +354,8 @@ enum FetchStart {
 /// Helm content of one revision. Dropping it aborts requests and wipes every text.
 pub(crate) struct HelmReleaseView {
     connection: ClusterConnection,
+    /// The cluster of the release: the same release name exists in several clusters.
+    cluster: ClusterRef,
     revision: HelmRevisionRef,
     latest_revision: u32,
     access: ValueAccess,
@@ -379,12 +382,18 @@ pub(crate) struct HelmReleaseView {
 impl EventEmitter<ShowLatest> for HelmReleaseView {}
 impl EventEmitter<SecretCopied> for HelmReleaseView {}
 
+/// Where a release view reads from: the cluster and its connection.
+pub(crate) struct HelmSource {
+    pub(crate) cluster: ClusterRef,
+    pub(crate) connection: ClusterConnection,
+}
+
 impl HelmReleaseView {
     /// Never notifies: it runs inside `AppShell::render`, and a notify there would re-render
     /// forever. The first fetch waits `DRAWER_SUBJECT_DELAY`, so arrowing through rows sends no
     /// request.
     pub(crate) fn new(
-        connection: ClusterConnection,
+        source: HelmSource,
         revision: HelmRevisionRef,
         latest_revision: u32,
         access: ValueAccess,
@@ -398,7 +407,8 @@ impl HelmReleaseView {
                 .line_number(true)
         });
         let mut view = Self {
-            connection,
+            connection: source.connection,
+            cluster: source.cluster,
             revision,
             latest_revision,
             access,
@@ -420,8 +430,8 @@ impl HelmReleaseView {
         view
     }
 
-    pub(crate) fn is_for(&self, revision: &HelmRevisionRef) -> bool {
-        self.revision == *revision
+    pub(crate) fn is_for(&self, cluster: &ClusterRef, revision: &HelmRevisionRef) -> bool {
+        self.cluster == *cluster && self.revision == *revision
     }
 
     /// The release's latest revision, for the header's Latest button; never notifies.

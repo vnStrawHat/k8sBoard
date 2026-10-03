@@ -19,13 +19,14 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::LiveList;
+use crate::environment::{Environment, environment_badge};
 use crate::helm_release_view::{HelmReleaseView, ValuesLayout};
 use crate::history_rings::Resolution;
 use crate::monitor_data::MonitorData;
 use crate::object_events::events_title;
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, SecretValuesView};
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::yaml_view::{YamlView, object_ref};
 
 /// How long a drawer subject must rest before its background fetch starts (the object events
@@ -67,6 +68,16 @@ pub(crate) struct DrawerState {
     pub(crate) pending_helm_layout: Option<(ResourceKey, ValuesLayout)>,
     /// The Monitor tab: range and Table view survive a change of subject, the scope does not.
     pub(crate) monitor: MonitorState,
+    /// The cluster of the subject while several clusters are viewed; `None` in single mode.
+    /// `AppShell::sync_drawer_cluster` keeps it.
+    pub(crate) cluster: Option<DrawerCluster>,
+}
+
+/// The badge and the label that name the cluster of a drawer in multi mode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DrawerCluster {
+    pub(crate) environment: Environment,
+    pub(crate) label: SharedString,
 }
 
 impl DrawerState {
@@ -84,6 +95,7 @@ impl DrawerState {
             helm_revision: None,
             pending_helm_layout: None,
             monitor: MonitorState::new(),
+            cluster: None,
         }
     }
 
@@ -167,7 +179,8 @@ pub(crate) enum MonitorScope {
 /// repaint or an unrelated notify never rebuilds the series.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MonitorKey {
-    pub(crate) subject: ResourceKey,
+    /// The object and its cluster: the same name exists in several clusters.
+    pub(crate) subject: ClusterObject,
     pub(crate) container: Option<String>,
     /// The feed's `tick_count()`.
     pub(crate) ticks: u64,
@@ -360,6 +373,8 @@ pub(crate) struct DrawerHeader {
     pub(crate) kind_badge: &'static str,
     pub(crate) name: SharedString,
     pub(crate) subtitle: AnyElement,
+    /// The cluster of the subject, in multi mode.
+    pub(crate) cluster: Option<DrawerCluster>,
     /// The ⋯ button with its dropdown menu.
     pub(crate) menu: AnyElement,
     pub(crate) expand: ExpandToggle,
@@ -472,6 +487,22 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                 ),
         )
         .child(header.subtitle)
+        .children(header.cluster.map(|cluster| cluster_line(cluster, cx)))
+}
+
+/// The environment badge and the switcher text of the subject's cluster.
+fn cluster_line(cluster: DrawerCluster, cx: &App) -> impl IntoElement {
+    h_flex()
+        .gap_2()
+        .items_center()
+        .text_xs()
+        .child(environment_badge(cluster.environment, cx))
+        .child(
+            truncated_text("drawer-cluster", cluster.label)
+                .min_w_0()
+                .text_color(cx.theme().muted_foreground)
+                .font_family(cx.theme().mono_font_family.clone()),
+        )
 }
 
 /// The ⋯ button; the caller attaches the dropdown menu to it.

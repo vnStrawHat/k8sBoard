@@ -15,6 +15,7 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
+use crate::cluster_rows::RowContext;
 use crate::cluster_session::{ClusterSession, LiveCluster, LiveList};
 use crate::container_detail::{ContainerDetailInput, container_detail};
 use crate::drawer::{
@@ -38,6 +39,7 @@ pub(crate) fn pod_drawer(
     pod: &PodSummary,
     state: &DrawerState,
     session: &Entity<ClusterSession>,
+    row: &RowContext,
     dock: &WeakEntity<LogDock>,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -46,7 +48,8 @@ pub(crate) fn pod_drawer(
         kind_badge: "Po",
         name: pod.name.clone().into(),
         subtitle: subtitle(pod, now, cx),
-        menu: pod_menu_button(pod, session, dock, cx.weak_entity()),
+        cluster: state.cluster.clone(),
+        menu: pod_menu_button(pod, session, row, dock, cx.weak_entity()),
         expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
@@ -108,11 +111,13 @@ fn subtitle_detail(pod: &PodSummary, now: jiff::Timestamp) -> String {
 fn pod_menu_button(
     pod: &PodSummary,
     session: &Entity<ClusterSession>,
+    row: &RowContext,
     dock: &WeakEntity<LogDock>,
     shell: WeakEntity<AppShell>,
 ) -> AnyElement {
     // Weak: a rendered menu closure must not keep a session alive after a cluster switch.
     let session = session.downgrade();
+    let row = row.clone();
     let dock = dock.clone();
     let key = ResourceKey::of_pod(pod);
     menu_button()
@@ -125,7 +130,7 @@ fn pod_menu_button(
                 return menu;
             };
             match live.pods.items().iter().find(|pod| key.is_pod(pod)) {
-                Some(pod) => pod_menu(menu, pod, live, &guard, session.context(), &dock, &shell),
+                Some(pod) => pod_menu(menu, pod, live, &guard, &row, &dock, &shell),
                 None => menu,
             }
         })

@@ -21,8 +21,9 @@ impl ClusterView {
 pub(crate) struct ViewPlan { pub(crate) keep: Vec<ClusterRef>, pub(crate) release: Vec<ClusterRef>,
     pub(crate) connect: Vec<ClusterRef>, pub(crate) primary: ClusterRef }
 /// Pure. `current_primary` stays primary when it is in `wanted`; else the first in display order.
+/// `Ok(None)`: nothing viewable was wanted (every wanted cluster is outside `display_order`).
 pub(crate) fn plan_view(current: &[ClusterRef], current_primary: Option<&ClusterRef>,
-    wanted: &[ClusterRef], display_order: &[ClusterRef]) -> Result<ViewPlan, TooManyClusters>;
+    wanted: &[ClusterRef], display_order: &[ClusterRef]) -> Result<Option<ViewPlan>, TooManyClusters>;
 ```
 
 `AppShell.session` (0026) becomes `view: ClusterView`. `active` (0026) is `view.primary()`; `previous` keeps 0026 meaning and is set only by single switches. `AppShell::slot_live(&self, cluster: &ClusterRef, cx) -> Option<&LiveCluster>` reads one slot; `live(cx)` (today) becomes the primary's and is not used on drawer paths (aggregated-views.md).
@@ -36,7 +37,7 @@ impl AppShell {
 }
 ```
 
-1. `plan_view` (Err → switcher notice). Targets missing from the catalog are dropped with the 0026 decision 20 notice.
+1. `plan_view` (Err → switcher notice; `None` → nothing to do). Targets missing from the catalog are dropped with the 0026 decision 20 notice.
 2. Remember: each Live slot → `remember_scope` (0026).
 3. Release: for each released slot, close its log tabs; close the drawer if its subject is in that slot; remove the slot (the entity is released).
 4. Reorder kept slots to display order; set `primary`; tables `set_sessions(view.sessions())`; `cx.notify()`.
@@ -59,7 +60,7 @@ impl AppShell {
 ## Namespace scope
 
 - `set_namespace(scope)` fans out (table above); `view_scope` is updated.
-- Picker list: the union of `live.namespaces` names over Live slots whose namespace list is ready, sorted; one muted line per other slot: `Loading namespaces of {label}…` (or `Not permitted in {label}` when denied). Optional: a muted `{n}/{m} clusters` after names missing in some slots.
+- Picker list: the union of `live.namespaces` names over Live slots whose namespace list is ready, sorted; one muted line per other slot: `Loading namespaces of {label}…` (or `Not permitted in {label}` when denied). The optional muted `{n}/{m} clusters` after names missing in some slots is not built.
 - `MAX_NAMESPACES` (5) still applies.
 
 ## Title bar

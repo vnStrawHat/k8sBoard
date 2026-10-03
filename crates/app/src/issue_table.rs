@@ -8,14 +8,13 @@ use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
-    App, ClipboardItem, Context, Div, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, Stateful, StatefulInteractiveElement as _, Styled as _, WeakEntity,
-    Window, div, px,
+    App, ClipboardItem, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _,
+    Pixels, Stateful, StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div, px,
 };
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
-use crate::cluster_session::ClusterSession;
+use crate::cluster_rows::{RowAddress, SlotSession};
 use crate::drawer::truncated_text;
 use crate::event_rows::message_line;
 use crate::filter_bar::filtered_empty_state;
@@ -57,7 +56,8 @@ const ISSUE_COLUMNS: [KindColumn; 8] = [
 ];
 
 pub(crate) struct IssueTableDelegate {
-    session: Option<Entity<ClusterSession>>,
+    /// The primary cluster: the issues of the other viewed clusters are not merged yet.
+    session: Option<SlotSession>,
     /// The row menu's View logs opens a tab here.
     dock: WeakEntity<LogDock>,
     /// A click reveals the object through the shell.
@@ -76,6 +76,7 @@ impl IssueTableDelegate {
             specs: ISSUE_COLUMNS.to_vec(),
             flexible: CAUSE,
             flexible_min: CAUSE_MIN_WIDTH,
+            session_column: None,
         };
         let mut view = TableView::new(default_filter(Screen::Issues));
         if let Some(saved) = saved {
@@ -96,16 +97,16 @@ impl IssueTableDelegate {
         self.layout.fit_width(table_width, &self.view.hidden)
     }
 
-    pub(crate) fn set_session(&mut self, session: Option<Entity<ClusterSession>>) {
+    pub(crate) fn set_session(&mut self, session: Option<SlotSession>) {
         self.session = session;
     }
 
     /// The issues in board order, so item indices index the board; none without a live session.
     fn issues<'a>(&self, cx: &'a App) -> &'a [Issue] {
-        let Some(session) = &self.session else {
+        let Some(slot) = &self.session else {
             return &[];
         };
-        let session = session.read(cx);
+        let session = slot.session.read(cx);
         if session.live().is_none() {
             return &[];
         }
@@ -168,6 +169,11 @@ impl TableRow for Issue {
 }
 
 impl FilteredTable for IssueTableDelegate {
+    /// The issues are the primary cluster's alone, so a view item is the board's own index.
+    fn addresses(&self) -> &[RowAddress] {
+        &[]
+    }
+
     fn view(&self) -> Option<&TableView> {
         Some(&self.view)
     }
@@ -310,17 +316,18 @@ impl TableDelegate for IssueTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        let (Some(session), Some(issue)) = (&self.session, self.issue_at(row_ix, cx)) else {
+        let (Some(slot), Some(issue)) = (&self.session, self.issue_at(row_ix, cx)) else {
             return menu;
         };
-        let Some(live) = session.read(cx).live() else {
+        let Some(live) = slot.session.read(cx).live() else {
             return menu;
         };
+        let row = slot.row_context(cx);
         let menu = menu.item(open_item(issue, &self.shell));
         let menu = match logs_pod(issue, live.pods.items()) {
             Some(pod) => {
                 let container = issue.container.as_deref();
-                menu.item(view_logs_item(pod, container, live, &self.dock))
+                menu.item(view_logs_item(pod, container, live, &row, &self.dock))
             }
             None => menu,
         };
@@ -421,7 +428,7 @@ fn open_item(issue: &Issue, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
     };
     let shell = shell.clone();
     PopupMenuItem::new(label).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.reveal(target.clone(), cx));
+        let _ = shell.update(cx, |shell, cx| shell.reveal_in_primary(target.clone(), cx));
     })
 }
 

@@ -5,13 +5,13 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::{
-    AnyElement, App, Context, Div, Entity, HighlightStyle, IntoElement, ParentElement as _, Pixels,
+    AnyElement, App, Context, Div, HighlightStyle, IntoElement, ParentElement as _, Pixels,
     SharedString, Stateful, Styled as _, StyledText, WeakEntity, Window, div, px,
 };
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
-use crate::cluster_session::ClusterSession;
+use crate::cluster_rows::{Clustered, RowAddress, SlotSession, merge_slot_rows};
 use crate::filter_bar::filtered_empty_state;
 use crate::log_dock::LogDock;
 use crate::metrics_history::PodUsageHistory;
@@ -20,7 +20,9 @@ use crate::resource_kind::{Align, KindColumn, column};
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, pod_status_label, toned_text};
 use crate::table_filter::FilterPreset;
-use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
+use crate::table_layout::{
+    ColumnPlan, TableLayout, clickable_row, cluster_cell, header_cell, select_cell,
+};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 use crate::usage_format::Measure;
 
@@ -47,14 +49,35 @@ const POD_COLUMNS: [KindColumn; 8] = [
     column("Age", 70., Align::Right),
 ];
 
-/// Rows come straight from the session, so the table never owns a copy of the pods.
+/// Rows come straight from the sessions, so the table never owns a copy of the pods.
 pub(crate) struct PodTableDelegate {
-    session: Option<Entity<ClusterSession>>,
+    /// One per viewed cluster, in slot order; empty before the first session.
+    sessions: Vec<SlotSession>,
+    /// Where each merged item came from, as of the last rebuild.
+    addresses: Vec<RowAddress>,
+    /// Every shown row is ticked: read by the header checkbox, computed with the rows (a rebuild or
+    /// a tick) so a frame never merges the rows again.
+    all_checked: bool,
     log_dock: WeakEntity<LogDock>,
     /// The row menu's "View YAML" opens the drawer through the shell.
     shell: WeakEntity<AppShell>,
     layout: TableLayout,
     view: TableView,
+}
+
+/// The logical columns; several viewed clusters add the Cluster column.
+fn pod_plan(is_multi: bool) -> ColumnPlan {
+    let plan = ColumnPlan {
+        specs: POD_COLUMNS.to_vec(),
+        flexible: NAME,
+        flexible_min: NAME_MIN_WIDTH,
+        session_column: None,
+    };
+    if is_multi {
+        plan.with_cluster_column()
+    } else {
+        plan
+    }
 }
 
 impl PodTableDelegate {
@@ -63,17 +86,15 @@ impl PodTableDelegate {
         shell: WeakEntity<AppShell>,
         saved: Option<&TablePrefs>,
     ) -> Self {
-        let plan = ColumnPlan {
-            specs: POD_COLUMNS.to_vec(),
-            flexible: NAME,
-            flexible_min: NAME_MIN_WIDTH,
-        };
+        let plan = pod_plan(false);
         let mut view = pods_view();
         if let Some(saved) = saved {
             view.apply_prefs(saved, &plan);
         }
         Self {
-            session: None,
+            sessions: Vec::new(),
+            addresses: Vec::new(),
+            all_checked: false,
             log_dock,
             shell,
             layout: TableLayout::new(plan),
@@ -87,41 +108,63 @@ impl PodTableDelegate {
         self.layout.fit_width(table_width, &self.view.hidden)
     }
 
-    pub(crate) fn set_session(&mut self, session: Option<Entity<ClusterSession>>) {
-        self.session = session;
+    /// The sessions the rows come from, one per viewed cluster. Two or more add the Cluster
+    /// column; leaving that mode forgets what the user did to it. The caller refreshes the table.
+    pub(crate) fn set_sessions(&mut self, sessions: Vec<SlotSession>) {
+        let was_multi = self.is_multi();
+        self.sessions = sessions;
+        self.addresses.clear();
+        let is_multi = self.is_multi();
+        if was_multi == is_multi {
+            return;
+        }
+        if let Some(column) = self.layout.plan.session_column {
+            self.view.drop_column(column);
+        }
+        self.layout
+            .replace_plan(pod_plan(is_multi), &self.view.hidden);
     }
 
-    fn pods<'a>(&self, cx: &'a App) -> &'a [PodSummary] {
-        let Some(session) = &self.session else {
-            return &[];
-        };
-        session
-            .read(cx)
-            .live()
-            .map_or(&[], |live| live.pods.items())
+    fn is_multi(&self) -> bool {
+        self.sessions.len() >= 2
     }
 
-    /// The pods with their newest usage, in session order, so item indices still index the
-    /// session list.
-    fn rows<'a>(&self, cx: &'a App) -> Vec<PodRow<'a>> {
-        let history = self.history(cx);
-        pod_rows(self.pods(cx), history)
+    /// Whether every shown row is ticked, as of the last rebuild or tick.
+    #[cfg(test)]
+    pub(crate) fn all_checked(&self) -> bool {
+        self.all_checked
     }
 
-    fn history<'a>(&self, cx: &'a App) -> Option<&'a PodUsageHistory> {
-        let live = self.session.as_ref()?.read(cx).live()?;
-        Some(&live.metrics.pods.history)
+    /// The logical index of the Cluster column while several clusters are viewed.
+    pub(crate) fn cluster_column(&self) -> Option<usize> {
+        self.layout.plan.session_column
     }
 
-    /// The pod shown at table row `row_ix`.
-    fn pod_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<&'a PodSummary> {
-        self.pods(cx).get(self.view.item_index(row_ix)?)
+    /// The pods of every slot with their newest usage, in session order, so item indices still
+    /// index the session lists.
+    fn slot_rows<'a>(&self, cx: &'a App) -> Vec<Vec<PodRow<'a>>> {
+        self.sessions
+            .iter()
+            .map(|slot| {
+                let live = slot.session.read(cx).live();
+                let pods = live.map_or(&[][..], |live| live.pods.items());
+                pod_rows(pods, live.map(|live| &live.metrics.pods.history))
+            })
+            .collect()
+    }
+
+    /// The pod shown at table row `row_ix`, and the slot it belongs to.
+    fn pod_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<(&SlotSession, &'a PodSummary)> {
+        let address = self.addresses.get(self.view.item_index(row_ix)?)?;
+        let slot = self.sessions.get(usize::from(address.slot))?;
+        let live = slot.session.read(cx).live()?;
+        Some((slot, live.pods.items().get(address.item as usize)?))
     }
 
     fn scope_label(&self, cx: &App) -> String {
-        self.session
-            .as_ref()
-            .and_then(|session| session.read(cx).live())
+        self.sessions
+            .iter()
+            .find_map(|slot| slot.session.read(cx).live())
             .map_or_else(String::new, |live| live.scope_label())
     }
 }
@@ -220,15 +263,27 @@ impl FilteredTable for PodTableDelegate {
     }
 
     fn check_rows(&mut self, change: RowCheck, cx: &App) {
-        let rows = self.rows(cx);
-        self.view.apply_check(&rows, change);
+        let rows = self.slot_rows(cx);
+        let (merged, _) = merge_slot_rows(&self.sessions, &rows, POD_COLUMNS.len());
+        self.view.apply_check(&merged, change);
+        self.all_checked = self.view.all_checked(&merged);
     }
 
     fn rebuild_view(&mut self, cx: &App) -> bool {
-        let rows = self.rows(cx);
-        self.view
-            .rebuild(&rows, POD_COLUMNS.len(), jiff::Timestamp::now());
+        let rows = self.slot_rows(cx);
+        let (merged, addresses) = merge_slot_rows(&self.sessions, &rows, POD_COLUMNS.len());
+        self.view.rebuild(
+            &merged,
+            self.layout.plan.specs.len(),
+            jiff::Timestamp::now(),
+        );
+        self.all_checked = self.view.all_checked(&merged);
+        self.addresses = addresses;
         self.layout.relayout(&self.view.hidden)
+    }
+
+    fn addresses(&self) -> &[RowAddress] {
+        &self.addresses
     }
 }
 
@@ -256,8 +311,7 @@ impl TableDelegate for PodTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let all_checked =
-            self.layout.columns.is_select(col_ix) && self.view.all_checked(&self.rows(cx));
+        let all_checked = self.layout.columns.is_select(col_ix) && self.all_checked;
         header_cell(
             &self.layout,
             self.view.sort,
@@ -285,17 +339,26 @@ impl TableDelegate for PodTableDelegate {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         if self.layout.columns.is_select(col_ix) {
-            let is_checked = self
-                .pod_at(row_ix, cx)
-                .is_some_and(|pod| self.view.is_checked(&PodRow { pod, usage: None }));
+            let is_checked = self.pod_at(row_ix, cx).is_some_and(|(slot, pod)| {
+                let row = PodRow { pod, usage: None };
+                self.view.is_checked(&Clustered {
+                    cluster: &slot.cluster,
+                    label: &slot.label,
+                    column: POD_COLUMNS.len(),
+                    item: &row,
+                })
+            });
             return select_cell(row_ix, is_checked, &self.shell);
         }
-        let (Some(pod), Some(logical)) =
+        let (Some((slot, pod)), Some(logical)) =
             (self.pod_at(row_ix, cx), self.layout.columns.logical(col_ix))
         else {
             return div().into_any_element();
         };
         let mono = cx.theme().mono_font_family.clone();
+        if self.layout.plan.session_column == Some(logical) {
+            return cluster_cell(slot.environment, &slot.label, cx);
+        }
         match logical {
             NAME => name_cell(pod, mono, cx),
             STATUS => toned_text(pod_status_label(pod), cx).into_any_element(),
@@ -310,9 +373,10 @@ impl TableDelegate for PodTableDelegate {
                 .child(pod.restarts.to_string())
                 .into_any_element(),
             CPU | MEMORY => {
-                let usage = self
-                    .history(cx)
-                    .and_then(|history| history.latest(&pod.namespace, &pod.name));
+                let usage =
+                    slot.session.read(cx).live().and_then(|live| {
+                        live.metrics.pods.history.latest(&pod.namespace, &pod.name)
+                    });
                 let text = usage.map(|usage| match logical {
                     CPU => Measure::Cpu.format(usage.cpu.cores()),
                     _ => Measure::Bytes.format(usage.memory.bytes() as f64),
@@ -341,25 +405,15 @@ impl TableDelegate for PodTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        let Some(session) = &self.session else {
+        let Some((slot, pod)) = self.pod_at(row_ix, cx) else {
             return menu;
         };
-        let session = session.read(cx);
+        let session = slot.session.read(cx);
         let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
             return menu;
         };
-        match self.pod_at(row_ix, cx) {
-            Some(pod) => pod_menu(
-                menu,
-                pod,
-                live,
-                &guard,
-                session.context(),
-                &self.log_dock,
-                &self.shell,
-            ),
-            None => menu,
-        }
+        let row = slot.row_context(cx);
+        pod_menu(menu, pod, live, &guard, &row, &self.log_dock, &self.shell)
     }
 
     fn render_empty(
@@ -371,11 +425,14 @@ impl TableDelegate for PodTableDelegate {
         filtered_empty_state(&self.view, empty, "pods", &self.shell, cx)
     }
 
+    /// Loading while every slot that is live still waits for its first list.
     fn loading(&self, cx: &App) -> bool {
-        self.session
-            .as_ref()
-            .and_then(|session| session.read(cx).live())
-            .is_some_and(|live| live.pods.is_loading())
+        let mut live = self
+            .sessions
+            .iter()
+            .filter_map(|slot| slot.session.read(cx).live())
+            .peekable();
+        live.peek().is_some() && live.all(|live| live.pods.is_loading())
     }
 }
 

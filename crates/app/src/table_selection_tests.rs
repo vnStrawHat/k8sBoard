@@ -160,7 +160,7 @@ fn list_row_index_finds_key_after_reorder() {
         None,
     );
     assert_eq!(
-        list_row_index(&list, &view, |item| key.is_pod(item)),
+        row_index(&list, &view, |item| key.is_pod(item)),
         Some(Some(1))
     );
     let by_name_descending = Some(TableSort {
@@ -172,19 +172,19 @@ fn list_row_index_finds_key_after_reorder() {
         by_name_descending,
     );
     assert_eq!(
-        list_row_index(&list, &view, |item| key.is_pod(item)),
+        row_index(&list, &view, |item| key.is_pod(item)),
         Some(Some(1))
     );
     let key = ResourceKey::of_pod(&pod("a", "web"));
     assert_eq!(
-        list_row_index(&list, &view, |item| key.is_pod(item)),
+        row_index(&list, &view, |item| key.is_pod(item)),
         Some(Some(2))
     );
 
     let node_key = ResourceKey::of_node(&node("n2"));
     let (nodes, node_view) = ready_with_view(vec![node("n1"), node("n2")], None);
     assert_eq!(
-        list_row_index(&nodes, &node_view, |item| node_key.is_node(item)),
+        row_index(&nodes, &node_view, |item| node_key.is_node(item)),
         Some(Some(1))
     );
 }
@@ -193,10 +193,7 @@ fn list_row_index_finds_key_after_reorder() {
 fn list_row_index_none_when_key_vanished() {
     let key = ResourceKey::of_pod(&pod("a", "gone"));
     let (list, view) = ready_with_view(vec![pod("a", "web"), pod("b", "gone")], None);
-    assert_eq!(
-        list_row_index(&list, &view, |item| key.is_pod(item)),
-        Some(None)
-    );
+    assert_eq!(row_index(&list, &view, |item| key.is_pod(item)), Some(None));
     assert!(!key.is_node(&node("gone")));
 }
 
@@ -212,10 +209,7 @@ fn list_row_index_searches_the_view() {
         interruption: None,
     };
     // The filter hides the subject, so its drawer must close.
-    assert_eq!(
-        list_row_index(&list, &view, |item| key.is_pod(item)),
-        Some(None)
-    );
+    assert_eq!(row_index(&list, &view, |item| key.is_pod(item)), Some(None));
 }
 
 #[test]
@@ -286,7 +280,7 @@ fn pending_reveal_key_resolves_through_selection_sync() {
         vec![kind_row(Some("ns"), "web"), kind_row(Some("ns"), "api")],
         None,
     );
-    let found = list_row_index(&list, &view, |row| {
+    let found = row_index(&list, &view, |row| {
         key.is_row(ResourceKind::Deployments, row)
     })
     .flatten();
@@ -294,7 +288,7 @@ fn pending_reveal_key_resolves_through_selection_sync() {
     assert_eq!(selection_sync(None, found), SelectionSync::Move(1));
 
     let (list, view) = ready_with_view(vec![kind_row(Some("ns"), "web")], None);
-    let missing = list_row_index(&list, &view, |row| {
+    let missing = row_index(&list, &view, |row| {
         key.is_row(ResourceKind::Deployments, row)
     })
     .flatten();
@@ -308,12 +302,12 @@ fn list_row_index_waits_while_loading_and_drops_a_failed_list() {
 
     let no_view = TableView::default();
     let loading = LiveList::<KindRow>::Loading;
-    assert_eq!(list_row_index(&loading, &no_view, is_key), None);
+    assert_eq!(row_index(&loading, &no_view, is_key), None);
 
     let failed = LiveList::<KindRow>::Failed {
         message: "denied".to_owned(),
     };
-    assert_eq!(list_row_index(&failed, &no_view, is_key), Some(None));
+    assert_eq!(row_index(&failed, &no_view, is_key), Some(None));
 
     let ready = LiveList::Ready {
         items: vec![kind_row(Some("ns"), "web"), kind_row(Some("ns"), "api")],
@@ -321,7 +315,7 @@ fn list_row_index_waits_while_loading_and_drops_a_failed_list() {
     };
     let mut view = TableView::default();
     view.rebuild(ready.items(), 6, jiff::Timestamp::UNIX_EPOCH);
-    assert_eq!(list_row_index(&ready, &view, is_key), Some(Some(1)));
+    assert_eq!(row_index(&ready, &view, is_key), Some(Some(1)));
 }
 
 #[test]
@@ -422,4 +416,19 @@ fn take_row_echo_consumes_only_its_row() {
     assert_eq!(echo, None);
     let mut echo = None;
     assert!(!take_row_echo(&mut echo, 3));
+}
+
+/// The rows of one slot whose merged indices are the list's own item indices.
+fn row_index<T>(
+    list: &LiveList<T>,
+    view: &TableView,
+    is_selected: impl Fn(&T) -> bool,
+) -> Option<Option<usize>> {
+    let addresses: Vec<RowAddress> = (0..list.items().len())
+        .map(|item| RowAddress {
+            slot: 0,
+            item: item as u32,
+        })
+        .collect();
+    list_row_index(list, view, &addresses, 0, is_selected)
 }

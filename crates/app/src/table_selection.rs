@@ -1,6 +1,9 @@
 use cluster::{ControllerRef, NodeSummary, PodSummary};
+use gpui_kit::{App, WeakEntity};
 
-use crate::app_shell::Screen;
+use crate::app_shell::{AppShell, Screen};
+use crate::cluster_registry::ClusterRef;
+use crate::cluster_rows::RowAddress;
 use crate::cluster_session::LiveList;
 use crate::kind_row::KindRow;
 use crate::resource_kind::ResourceKind;
@@ -8,7 +11,7 @@ use crate::table_view::TableView;
 
 /// The identity of a selected row. Rows move when a snapshot reorders them, so the
 /// selection is a key and the row index is looked up again after every update.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ResourceKey {
     Pod {
         namespace: String,
@@ -100,6 +103,37 @@ impl ResourceKey {
     }
 }
 
+/// An object and the cluster it lives in. The same namespace and name exist in several clusters,
+/// so the selection, the drawer, and the pending subjects carry both.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ClusterObject {
+    pub(crate) cluster: ClusterRef,
+    pub(crate) key: ResourceKey,
+}
+
+impl ClusterObject {
+    pub(crate) fn new(cluster: ClusterRef, key: ResourceKey) -> Self {
+        Self { cluster, key }
+    }
+}
+
+/// The shell and the cluster a tool dialog (Who can, Check permissions, Test traffic) works on. The
+/// objects its links name live in that cluster, which is not always the drawer's or the primary.
+pub(crate) struct DialogOrigin {
+    pub(crate) shell: WeakEntity<AppShell>,
+    pub(crate) cluster: ClusterRef,
+}
+
+impl DialogOrigin {
+    /// Opens the object `key` of the dialog's cluster on its screen, with its drawer.
+    pub(crate) fn reveal(&self, key: ResourceKey, cx: &mut App) {
+        let object = ClusterObject::new(self.cluster.clone(), key);
+        let _ = self
+            .shell
+            .update(cx, |shell, cx| shell.reveal_object(object, cx));
+    }
+}
+
 /// The index of the item `is_target` picks in `list`, whatever the filter shows. `None` while
 /// the list is loading; otherwise `Some(found)`, with `Some(None)` for a failed list or a missing
 /// item. A reveal uses it to make a filtered-out target visible.
@@ -113,24 +147,28 @@ pub(crate) fn list_item_index<T>(
     Some(list.items().iter().position(is_target))
 }
 
-/// The table row of the selected item in `list`, searched in the rows `view` shows. `None`
+/// The table row of the selected item in `list`, the list of slot `slot`, searched in the rows
+/// `view` shows. `addresses` maps the merged items of the view to slots and list items. `None`
 /// while the list is loading, so the selection waits for the first snapshot; otherwise
 /// `Some(found)`. A failed list has no rows, and a filter can hide the item, so the selection
 /// is dropped like a missing row (a denied kind reached through a reveal).
 pub(crate) fn list_row_index<T>(
     list: &LiveList<T>,
     view: &TableView,
+    addresses: &[RowAddress],
+    slot: usize,
     is_selected: impl Fn(&T) -> bool,
 ) -> Option<Option<usize>> {
     if list.is_loading() {
         return None;
     }
     let items = list.items();
-    Some(
-        view.rows()
-            .iter()
-            .position(|&item| items.get(item).is_some_and(&is_selected)),
-    )
+    Some(view.rows().iter().position(|&merged| {
+        addresses.get(merged).is_some_and(|address| {
+            usize::from(address.slot) == slot
+                && items.get(address.item as usize).is_some_and(&is_selected)
+        })
+    }))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

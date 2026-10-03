@@ -5,13 +5,13 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Div, Entity, IntoElement, ParentElement as _, Pixels, Stateful,
-    Styled as _, WeakEntity, Window, div, px,
+    AnyElement, App, Context, Div, IntoElement, ParentElement as _, Pixels, Stateful, Styled as _,
+    WeakEntity, Window, div, px,
 };
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
-use crate::cluster_session::ClusterSession;
+use crate::cluster_rows::{Clustered, RowAddress, SlotSession, merge_slot_rows};
 use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::NodeUsageHistory;
@@ -22,7 +22,9 @@ use crate::resource_kind::{Align, KindColumn, column};
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, node_status_label, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
-use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
+use crate::table_layout::{
+    ColumnPlan, TableLayout, clickable_row, cluster_cell, header_cell, select_cell,
+};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 use crate::usage_bar::{UsageBar, usage_bar};
 use crate::usage_format::{format_percent, usage_tone};
@@ -57,33 +59,55 @@ const NODE_COLUMNS: [KindColumn; 9] = [
 ];
 
 pub(crate) struct NodeTableDelegate {
-    session: Option<Entity<ClusterSession>>,
+    /// One per viewed cluster, in slot order; empty before the first session.
+    sessions: Vec<SlotSession>,
+    /// Where each merged item came from, as of the last rebuild.
+    addresses: Vec<RowAddress>,
+    /// Every shown row is ticked: read by the header checkbox, computed with the rows (a rebuild or
+    /// a tick) so a frame never merges the rows again.
+    all_checked: bool,
     /// The row menu's "View YAML" opens the drawer through the shell.
     shell: WeakEntity<AppShell>,
     layout: TableLayout,
     view: TableView,
-    /// Counts of all nodes, taken once per rebuild: the summary chips and the version skew read
-    /// them.
+    /// Counts of the nodes of every viewed cluster, taken once per rebuild: the summary chips
+    /// read them.
     counts: Option<NodeCounts>,
+    /// The version most nodes of each slot run, so a cluster is never skewed against another one.
+    common_versions: Vec<Option<String>>,
+}
+
+/// The logical columns; several viewed clusters add the Cluster column.
+fn node_plan(is_multi: bool) -> ColumnPlan {
+    let plan = ColumnPlan {
+        specs: NODE_COLUMNS.to_vec(),
+        flexible: TAINTS,
+        flexible_min: TAINTS_MIN_WIDTH,
+        session_column: None,
+    };
+    if is_multi {
+        plan.with_cluster_column()
+    } else {
+        plan
+    }
 }
 
 impl NodeTableDelegate {
     pub(crate) fn new(shell: WeakEntity<AppShell>, saved: Option<&TablePrefs>) -> Self {
-        let plan = ColumnPlan {
-            specs: NODE_COLUMNS.to_vec(),
-            flexible: TAINTS,
-            flexible_min: TAINTS_MIN_WIDTH,
-        };
+        let plan = node_plan(false);
         let mut view = TableView::new(default_filter(Screen::Nodes));
         if let Some(saved) = saved {
             view.apply_prefs(saved, &plan);
         }
         Self {
-            session: None,
+            sessions: Vec::new(),
+            addresses: Vec::new(),
+            all_checked: false,
             shell,
             layout: TableLayout::new(plan),
             view,
             counts: None,
+            common_versions: Vec::new(),
         }
     }
 
@@ -98,42 +122,78 @@ impl NodeTableDelegate {
         self.counts.as_ref()
     }
 
-    pub(crate) fn set_session(&mut self, session: Option<Entity<ClusterSession>>) {
-        self.session = session;
+    /// The sessions the rows come from, one per viewed cluster. Two or more add the Cluster
+    /// column; leaving that mode forgets what the user did to it. The caller refreshes the table.
+    pub(crate) fn set_sessions(&mut self, sessions: Vec<SlotSession>) {
+        let was_multi = self.is_multi();
+        self.sessions = sessions;
+        self.addresses.clear();
+        let is_multi = self.is_multi();
+        if was_multi == is_multi {
+            return;
+        }
+        if let Some(column) = self.layout.plan.session_column {
+            self.view.drop_column(column);
+        }
+        self.layout
+            .replace_plan(node_plan(is_multi), &self.view.hidden);
     }
 
-    fn nodes<'a>(&self, cx: &'a App) -> &'a [NodeSummary] {
-        let Some(session) = &self.session else {
-            return &[];
-        };
-        session
+    fn is_multi(&self) -> bool {
+        self.sessions.len() >= 2
+    }
+
+    /// The logical index of the Cluster column while several clusters are viewed.
+    pub(crate) fn cluster_column(&self) -> Option<usize> {
+        self.layout.plan.session_column
+    }
+
+    /// The nodes of every slot with their usage as a share of allocatable, in session order, so
+    /// item indices still index the session lists.
+    fn slot_rows<'a>(&self, cx: &'a App) -> Vec<Vec<NodeRow<'a>>> {
+        self.sessions
+            .iter()
+            .map(|slot| {
+                let history = slot
+                    .session
+                    .read(cx)
+                    .live()
+                    .map(|live| &live.metrics.nodes.history);
+                node_rows(slot_nodes(slot, cx), history)
+            })
+            .collect()
+    }
+
+    fn usage_of(&self, slot: &SlotSession, node: &NodeSummary, cx: &App) -> NodeUsage {
+        let latest = slot
+            .session
             .read(cx)
             .live()
-            .map_or(&[], |live| live.nodes.items())
-    }
-
-    /// The nodes with their usage as a share of allocatable, in session order, so item indices
-    /// still index the session list.
-    fn rows<'a>(&self, cx: &'a App) -> Vec<NodeRow<'a>> {
-        let history = self.session.as_ref().and_then(|session| {
-            let live = session.read(cx).live()?;
-            Some(&live.metrics.nodes.history)
-        });
-        node_rows(self.nodes(cx), history)
-    }
-
-    fn usage_of(&self, node: &NodeSummary, cx: &App) -> NodeUsage {
-        let latest = self.session.as_ref().and_then(|session| {
-            let live = session.read(cx).live()?;
-            live.metrics.nodes.history.latest(&node.name)
-        });
+            .and_then(|live| live.metrics.nodes.history.latest(&node.name));
         node_usage(node, latest)
     }
 
-    /// The node shown at table row `row_ix`.
-    fn node_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<&'a NodeSummary> {
-        self.nodes(cx).get(self.view.item_index(row_ix)?)
+    /// The node shown at table row `row_ix`, with its slot and the slot's index.
+    fn node_at<'a>(
+        &self,
+        row_ix: usize,
+        cx: &'a App,
+    ) -> Option<(usize, &SlotSession, &'a NodeSummary)> {
+        let address = self.addresses.get(self.view.item_index(row_ix)?)?;
+        let slot_index = usize::from(address.slot);
+        let slot = self.sessions.get(slot_index)?;
+        let live = slot.session.read(cx).live()?;
+        let node = live.nodes.items().get(address.item as usize)?;
+        Some((slot_index, slot, node))
     }
+}
+
+/// The nodes of one slot; none while its session is not live.
+fn slot_nodes<'a>(slot: &SlotSession, cx: &'a App) -> &'a [NodeSummary] {
+    slot.session
+        .read(cx)
+        .live()
+        .map_or(&[], |live| live.nodes.items())
 }
 
 /// A node with its usage as a share of its allocatable resources.
@@ -226,17 +286,42 @@ impl FilteredTable for NodeTableDelegate {
     }
 
     fn check_rows(&mut self, change: RowCheck, cx: &App) {
-        let rows = self.rows(cx);
-        self.view.apply_check(&rows, change);
+        let rows = self.slot_rows(cx);
+        let (merged, _) = merge_slot_rows(&self.sessions, &rows, NODE_COLUMNS.len());
+        self.view.apply_check(&merged, change);
+        self.all_checked = self.view.all_checked(&merged);
     }
 
     fn rebuild_view(&mut self, cx: &App) -> bool {
-        let nodes = self.nodes(cx);
-        self.counts = Some(node_counts(nodes));
-        let rows = self.rows(cx);
-        self.view
-            .rebuild(&rows, NODE_COLUMNS.len(), jiff::Timestamp::now());
+        let per_slot: Vec<NodeCounts> = self
+            .sessions
+            .iter()
+            .map(|slot| node_counts(slot_nodes(slot, cx)))
+            .collect();
+        // The chips count the nodes of every viewed cluster; a node is skewed only against the
+        // version its own cluster mostly runs.
+        self.counts = Some(match per_slot.as_slice() {
+            [only] => only.clone(),
+            _ => node_counts(self.sessions.iter().flat_map(|slot| slot_nodes(slot, cx))),
+        });
+        self.common_versions = per_slot
+            .into_iter()
+            .map(|counts| counts.common_version)
+            .collect();
+        let rows = self.slot_rows(cx);
+        let (merged, addresses) = merge_slot_rows(&self.sessions, &rows, NODE_COLUMNS.len());
+        self.view.rebuild(
+            &merged,
+            self.layout.plan.specs.len(),
+            jiff::Timestamp::now(),
+        );
+        self.all_checked = self.view.all_checked(&merged);
+        self.addresses = addresses;
         self.layout.relayout(&self.view.hidden)
+    }
+
+    fn addresses(&self) -> &[RowAddress] {
+        &self.addresses
     }
 }
 
@@ -264,8 +349,7 @@ impl TableDelegate for NodeTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let all_checked =
-            self.layout.columns.is_select(col_ix) && self.view.all_checked(&self.rows(cx));
+        let all_checked = self.layout.columns.is_select(col_ix) && self.all_checked;
         header_cell(
             &self.layout,
             self.view.sort,
@@ -293,21 +377,30 @@ impl TableDelegate for NodeTableDelegate {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         if self.layout.columns.is_select(col_ix) {
-            let is_checked = self.node_at(row_ix, cx).is_some_and(|node| {
-                self.view.is_checked(&NodeRow {
+            let is_checked = self.node_at(row_ix, cx).is_some_and(|(_, slot, node)| {
+                let row = NodeRow {
                     node,
                     usage: NodeUsage::default(),
+                };
+                self.view.is_checked(&Clustered {
+                    cluster: &slot.cluster,
+                    label: &slot.label,
+                    column: NODE_COLUMNS.len(),
+                    item: &row,
                 })
             });
             return select_cell(row_ix, is_checked, &self.shell);
         }
-        let (Some(node), Some(logical)) = (
+        let (Some((slot_index, slot, node)), Some(logical)) = (
             self.node_at(row_ix, cx),
             self.layout.columns.logical(col_ix),
         ) else {
             return div().into_any_element();
         };
         let mono = cx.theme().mono_font_family.clone();
+        if self.layout.plan.session_column == Some(logical) {
+            return cluster_cell(slot.environment, &slot.label, cx);
+        }
         match logical {
             NAME => truncated_text("name", node.name.clone()).into_any_element(),
             STATUS => toned_text(node_status_label(node.status), cx).into_any_element(),
@@ -316,9 +409,9 @@ impl TableDelegate for NodeTableDelegate {
             VERSION => {
                 let cell = div().font_family(mono).child(node.kubelet_version.clone());
                 let common = self
-                    .counts
-                    .as_ref()
-                    .and_then(|counts| counts.common_version.as_ref());
+                    .common_versions
+                    .get(slot_index)
+                    .and_then(Option::as_ref);
                 match common {
                     Some(common) if *common != node.kubelet_version => cell
                         .text_color(tone_color(StatusTone::Warn, cx))
@@ -331,7 +424,7 @@ impl TableDelegate for NodeTableDelegate {
                 None => cell_text(ABSENT, cx),
             },
             CPU | MEMORY => {
-                let usage = self.usage_of(node, cx);
+                let usage = self.usage_of(slot, node, cx);
                 let ratio = if logical == CPU {
                     usage.cpu
                 } else {
@@ -357,17 +450,15 @@ impl TableDelegate for NodeTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        let Some(session) = &self.session else {
+        let Some((_, slot, node)) = self.node_at(row_ix, cx) else {
             return menu;
         };
-        let session = session.read(cx);
+        let session = slot.session.read(cx);
         let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
             return menu;
         };
-        match self.node_at(row_ix, cx) {
-            Some(node) => node_menu(menu, node, live, &guard, &self.shell),
-            None => menu,
-        }
+        let row = slot.row_context(cx);
+        node_menu(menu, node, live, &guard, &row, &self.shell)
     }
 
     fn render_empty(
@@ -378,11 +469,14 @@ impl TableDelegate for NodeTableDelegate {
         filtered_empty_state(&self.view, "No nodes".to_owned(), "nodes", &self.shell, cx)
     }
 
+    /// Loading while every slot that is live still waits for its first list.
     fn loading(&self, cx: &App) -> bool {
-        self.session
-            .as_ref()
-            .and_then(|session| session.read(cx).live())
-            .is_some_and(|live| live.nodes.is_loading())
+        let mut live = self
+            .sessions
+            .iter()
+            .filter_map(|slot| slot.session.read(cx).live())
+            .peekable();
+        live.peek().is_some() && live.all(|live| live.nodes.is_loading())
     }
 }
 

@@ -9,6 +9,8 @@ use gpui_kit::{
 use crate::access_bindings::role_key;
 use crate::access_query::who_can_prefill;
 use crate::app_shell::{AppShell, Screen};
+use crate::cluster_registry::ClusterRef;
+use crate::cluster_rows::RowContext;
 use crate::cluster_session::{AccessState, LiveCluster, scope_includes};
 use crate::custom_kind::CustomKind;
 use crate::drawer::DrawerTab;
@@ -18,12 +20,12 @@ use crate::keymap::{
 };
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
 use crate::live_sections::claim_pods;
-use crate::log_dock::LogDock;
+use crate::log_dock::{LogDock, LogOrigin};
 use crate::log_target::{LogTarget, workload_label};
 use crate::network_rows::ingress_urls;
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, ValueAccess};
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::write_guard::{ClusterGuard, WriteLock};
 use crate::yaml_view::object_ref;
 
@@ -291,18 +293,20 @@ pub(crate) fn pod_menu(
     pod: &PodSummary,
     live: &LiveCluster,
     guard: &ClusterGuard<'_>,
-    context: &str,
+    row: &RowContext,
     dock: &WeakEntity<LogDock>,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
-    let access = &live.access;
-    menu.item(view_logs_item(pod, None, live, dock))
+    let access = guard.access;
+    let menu = menu
+        .item(view_logs_item(pod, None, live, row, dock))
         .item(action_item(ResourceAction::OpenShell, guard))
         .item(action_item(ResourceAction::PortForward, guard))
-        .item(view_yaml_item(ResourceKey::of_pod(pod), shell))
+        .item(view_yaml_item(row.object(ResourceKey::of_pod(pod)), shell))
         .separator()
         .item(copy_name_item(&pod.name, access))
-        .item(copy_kubectl_command_item(context, pod))
+        .item(copy_kubectl_command_item(&row.context, pod));
+    with_cluster_filter(menu, row, shell)
 }
 
 /// Copies the read-only `kubectl describe` command for the pod.
@@ -361,6 +365,7 @@ pub(crate) fn view_logs_item(
     pod: &PodSummary,
     container: Option<&str>,
     live: &LiveCluster,
+    row: &RowContext,
     dock: &WeakEntity<LogDock>,
 ) -> PopupMenuItem {
     let label = action_label(ResourceAction::ViewLogs);
@@ -368,10 +373,12 @@ pub(crate) fn view_logs_item(
         Err(reason) => disabled_menu_item(label, reason),
         Ok(target) => {
             let connection = live.connection().clone();
+            let row = row.clone();
             let dock = dock.clone();
             PopupMenuItem::new(label).on_click(move |_, window, cx| {
                 let _ = dock.update(cx, |dock, cx| {
-                    dock.open(connection.clone(), target.clone(), window, cx)
+                    let origin = LogOrigin::new(&row, connection.clone());
+                    dock.open(origin, target.clone(), window, cx)
                 });
             })
         }
@@ -403,6 +410,7 @@ fn workload_logs_entry(
 fn workload_logs_item(
     row: &KindRow,
     access: &AccessState,
+    context: &RowContext,
     shell: &WeakEntity<AppShell>,
 ) -> Option<PopupMenuItem> {
     let (label, availability) = workload_logs_entry(row.related_pods.as_ref(), access)?;
@@ -410,10 +418,11 @@ fn workload_logs_item(
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
         ActionAvailability::Enabled => {
             let owner = row.related_pods.clone()?;
+            let cluster = context.cluster.clone();
             let shell = shell.clone();
             PopupMenuItem::new(label).on_click(move |_, window, cx| {
                 let _ = shell.update(cx, |shell, cx| {
-                    shell.open_workload_logs(owner.clone(), window, cx);
+                    shell.open_workload_logs(&cluster, owner.clone(), window, cx);
                 });
             })
         }
@@ -425,32 +434,41 @@ pub(crate) fn node_menu(
     node: &NodeSummary,
     live: &LiveCluster,
     guard: &ClusterGuard<'_>,
+    row: &RowContext,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
-    menu.item(action_item(ResourceAction::OpenNodeShell, guard))
-        .item(view_yaml_item(ResourceKey::of_node(node), shell))
-        .item(view_pods_on_node_item(node, live.pods.items(), shell))
+    let access = guard.access;
+    let menu = menu
+        .item(action_item(ResourceAction::OpenNodeShell, guard))
+        .item(view_yaml_item(
+            row.object(ResourceKey::of_node(node)),
+            shell,
+        ))
+        .item(view_pods_on_node_item(node, live.pods.items(), row, shell))
         .separator()
         .item(action_item(ResourceAction::Cordon, guard))
         .item(action_item(ResourceAction::Drain, guard))
         .separator()
-        .item(copy_name_item(&node.name, &live.access))
+        .item(copy_name_item(&node.name, access));
+    with_cluster_filter(menu, row, shell)
 }
 
 /// Switches to Pods with only the pods of the node. Always enabled, even for an empty node.
 fn view_pods_on_node_item(
     node: &NodeSummary,
     pods: &[PodSummary],
+    row: &RowContext,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     let name = node.name.clone();
+    let cluster = row.cluster.clone();
     let shell = shell.clone();
     PopupMenuItem::new(format!(
         "View pods on node · {}",
         pods_on_node(pods, &node.name)
     ))
     .on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.view_pods_on_node(&name, cx));
+        let _ = shell.update(cx, |shell, cx| shell.view_pods_on_node(&cluster, &name, cx));
     })
 }
 
@@ -467,6 +485,14 @@ const HELM_VIEW_ITEMS: [(&str, DrawerTab); 2] = [
     ("View manifest", DrawerTab::Manifest),
 ];
 
+/// The cluster a kind menu is built for: the guard, the pod list, and the row context of the row's
+/// own slot.
+pub(crate) struct MenuCluster<'a> {
+    pub(crate) guard: &'a ClusterGuard<'a>,
+    pub(crate) pods: &'a [PodSummary],
+    pub(crate) context: &'a RowContext,
+}
+
 /// The row context menu and the drawer ⋯ menu of an explorer kind. Every item except View YAML and
 /// Copy name (and, for events, Go to object and Copy message) is disabled, because this version
 /// is read-only.
@@ -474,22 +500,27 @@ pub(crate) fn kind_menu(
     menu: PopupMenu,
     kind: ResourceKind,
     row: &KindRow,
-    guard: &ClusterGuard<'_>,
-    pods: &[PodSummary],
+    cluster: &MenuCluster<'_>,
     shell: &WeakEntity<AppShell>,
     extras: MenuExtras,
 ) -> PopupMenu {
+    let MenuCluster {
+        guard,
+        pods,
+        context,
+    } = *cluster;
+    let access = guard.access;
     let mut menu = menu;
     if has_who_can(kind) {
-        menu = menu.item(who_can_item(row, shell));
+        menu = menu.item(who_can_item(row, context, shell));
     }
     if has_check_permissions(kind) {
-        menu = menu.item(check_permissions_item(row, shell));
+        menu = menu.item(check_permissions_item(row, context, shell));
     }
     if has_test_traffic(kind) {
-        menu = menu.item(test_traffic_item(row, shell));
+        menu = menu.item(test_traffic_item(row, context, shell));
     }
-    if let Some(item) = workload_logs_item(row, guard.access, shell) {
+    if let Some(item) = workload_logs_item(row, access, context, shell) {
         menu = menu.item(item);
     }
     if let Some(secret) = extras.secret {
@@ -497,7 +528,7 @@ pub(crate) fn kind_menu(
     }
     if let Some(event) = &row.event {
         menu = menu
-            .item(go_to_object_item(event, shell))
+            .item(go_to_object_item(event, context, shell))
             .item(filter_similar_item(event, shell))
             .item(copy_message_item(event))
             .separator();
@@ -506,19 +537,25 @@ pub(crate) fn kind_menu(
         menu = menu.item(browse);
     }
     let key = ResourceKey::of_row(kind, row);
+    let object = context.object(key.clone());
     // A key without an object reference (a Helm release) has no YAML tab.
     if kind == ResourceKind::HelmReleases {
         for (label, tab) in HELM_VIEW_ITEMS {
-            menu = menu.item(view_tab_item(label, key.clone(), tab, shell));
+            menu = menu.item(view_tab_item(label, object.clone(), tab, shell));
         }
     }
     if object_ref(&key).is_some() {
-        menu = menu.item(view_yaml_item(key.clone(), shell));
+        menu = menu.item(view_yaml_item(object, shell));
     }
     if let Some(item) = extras.open_url {
         menu = menu.item(item);
     }
-    match topology_menu(kind, row.namespace.as_deref(), extras.scope.as_ref()) {
+    match topology_menu(
+        kind,
+        row.namespace.as_deref(),
+        extras.scope.as_ref(),
+        (!context.is_primary).then_some(context.primary_label.as_str()),
+    ) {
         TopologyMenu::Hidden => {}
         TopologyMenu::Enabled => menu = menu.item(show_in_topology_item(key.clone(), shell)),
         TopologyMenu::Disabled(reason) => {
@@ -526,18 +563,20 @@ pub(crate) fn kind_menu(
         }
     }
     if has_go_to_target(kind) {
-        menu = menu.item(go_to_target_item(row, shell));
+        menu = menu.item(go_to_target_item(row, context, shell));
     }
     if has_go_to_owner(kind) {
-        menu = menu.item(go_to_owner_item(row, shell));
+        menu = menu.item(go_to_owner_item(row, context, shell));
     }
     match kind {
         ResourceKind::PersistentVolumeClaims => {
-            menu = menu.item(go_to_pod_item(row, pods, shell));
+            menu = menu.item(go_to_pod_item(row, pods, context, shell));
         }
-        ResourceKind::PersistentVolumes => menu = menu.item(go_to_claim_item(row, shell)),
+        ResourceKind::PersistentVolumes => {
+            menu = menu.item(go_to_claim_item(row, context, shell));
+        }
         ResourceKind::RoleBindings | ResourceKind::ClusterRoleBindings => {
-            menu = menu.item(go_to_role_item(row, shell));
+            menu = menu.item(go_to_role_item(row, context, shell));
         }
         _ => {}
     }
@@ -547,7 +586,12 @@ pub(crate) fn kind_menu(
     if let Some(is_default) =
         default_namespace_state(kind, &row.name, extras.default_namespace.as_deref())
     {
-        menu = menu.item(default_namespace_item(row.name.clone(), is_default, shell));
+        menu = menu.item(default_namespace_item(
+            context.cluster.clone(),
+            row.name.clone(),
+            is_default,
+            shell,
+        ));
     }
     let change_actions = kind.read_only_actions();
     if !change_actions.is_empty() {
@@ -560,13 +604,33 @@ pub(crate) fn kind_menu(
             None => entry,
         });
     }
-    menu.separator()
-        .item(copy_name_item(&row.name, guard.access))
+    let menu = menu
+        .separator()
+        .item(copy_name_item(&row.name, access))
         .separator()
         .item(
             disabled_menu_item(kind.delete_label(), NOT_SHIPPED_REASON.into())
                 .action(ResourceAction::Delete.key_action()),
-        )
+        );
+    with_cluster_filter(menu, context, shell)
+}
+
+/// While several clusters are viewed: `Filter by this cluster`, which keeps the rows of the
+/// row's cluster (an Equals chip on the Cluster column).
+fn with_cluster_filter(
+    menu: PopupMenu,
+    row: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenu {
+    if !row.is_multi {
+        return menu;
+    }
+    let (label, shell) = (row.label.clone(), shell.clone());
+    menu.separator().item(
+        PopupMenuItem::new("Filter by this cluster").on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.filter_by_cluster(&label, cx));
+        }),
+    )
 }
 
 /// Whether the menu of a kind offers Show in Topology.
@@ -575,14 +639,18 @@ enum TopologyMenu {
     /// Only Services and Ingresses have the item.
     Hidden,
     Enabled,
-    /// The namespace is outside the session's scope, so Topology could not draw it.
+    /// The namespace is outside the session's scope, so Topology could not draw it, or the row
+    /// is not in the cluster Topology draws.
     Disabled(String),
 }
 
+/// `other_primary`: the label of the primary cluster when the row is in another one, because
+/// Topology draws the primary cluster alone.
 fn topology_menu(
     kind: ResourceKind,
     namespace: Option<&str>,
     scope: Option<&NamespaceScope>,
+    other_primary: Option<&str>,
 ) -> TopologyMenu {
     if !matches!(kind, ResourceKind::Services | ResourceKind::Ingresses) {
         return TopologyMenu::Hidden;
@@ -590,6 +658,11 @@ fn topology_menu(
     let (Some(namespace), Some(scope)) = (namespace, scope) else {
         return TopologyMenu::Hidden;
     };
+    if let Some(primary) = other_primary {
+        return TopologyMenu::Disabled(format!(
+            "Topology draws only the primary cluster ({primary})"
+        ));
+    }
     if scope_includes(scope, namespace) {
         TopologyMenu::Enabled
     } else {
@@ -617,6 +690,7 @@ fn default_namespace_state(
 /// Stores the namespace as the cluster's default, or clears it when it already is. Local only:
 /// nothing is sent to the cluster, and the current scope does not change.
 fn default_namespace_item(
+    cluster: ClusterRef,
     name: String,
     is_default: bool,
     shell: &WeakEntity<AppShell>,
@@ -625,7 +699,9 @@ fn default_namespace_item(
     PopupMenuItem::new("Set as default namespace")
         .checked(is_default)
         .on_click(move |_, _, cx| {
-            let _ = shell.update(cx, |shell, cx| shell.toggle_default_namespace(&name, cx));
+            let _ = shell.update(cx, |shell, cx| {
+                shell.toggle_default_namespace(&cluster, &name, cx)
+            });
         })
 }
 
@@ -670,7 +746,7 @@ pub(crate) struct MenuExtras {
     pub(crate) secret: Option<SecretMenu>,
     /// A CRD row's Browse instances item.
     pub(crate) browse: Option<PopupMenuItem>,
-    /// The active cluster's default namespace, for the Namespaces menu.
+    /// The row cluster's default namespace, for the Namespaces menu.
     pub(crate) default_namespace: Option<String>,
     /// The scope of the session, for Show in Topology.
     pub(crate) scope: Option<NamespaceScope>,
@@ -753,7 +829,7 @@ pub(crate) fn secret_menu_model(keys: &[SecretKey], access: ValueAccess) -> Secr
 /// The Reveal and Copy items of a Secrets row; `None` for any other row.
 pub(crate) fn secret_menu(
     row: &KindRow,
-    key: ResourceKey,
+    object: ClusterObject,
     access: ValueAccess,
     shell: &WeakEntity<AppShell>,
     window: &mut Window,
@@ -766,7 +842,7 @@ pub(crate) fn secret_menu(
     let reveal = match model.reveal {
         MenuState::Enabled => secret_action_item(
             "Reveal values (30s)".into(),
-            key.clone(),
+            object.clone(),
             SecretAction::RevealAll,
             shell,
         ),
@@ -778,7 +854,7 @@ pub(crate) fn secret_menu(
             let item = match (&entry.state, &entry.key) {
                 (MenuState::Enabled, Some(name)) => secret_action_item(
                     entry.label.clone().into(),
-                    key.clone(),
+                    object.clone(),
                     SecretAction::Copy(name.clone()),
                     &shell,
                 ),
@@ -798,17 +874,17 @@ pub(crate) fn secret_menu(
     })
 }
 
-/// A Reveal or Copy item: it opens the drawer of `key` and runs `action` through the shell.
+/// A Reveal or Copy item: it opens the drawer of `object` and runs `action` through the shell.
 fn secret_action_item(
     label: SharedString,
-    key: ResourceKey,
+    object: ClusterObject,
     action: SecretAction,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     let shell = shell.clone();
     PopupMenuItem::new(label).on_click(move |_, _, cx| {
         let _ = shell.update(cx, |shell, cx| {
-            shell.run_secret_action(key.clone(), action.clone(), cx);
+            shell.run_secret_action(object.clone(), action.clone(), cx);
         });
     })
 }
@@ -883,25 +959,38 @@ fn owner_target(row: &KindRow) -> Option<ResourceKey> {
     ResourceKey::of_owner(&set.namespace, set.owner.as_ref()?)
 }
 
-/// A menu item that reveals `target`; disabled with `reason` when there is none.
+/// A menu item that reveals `target` in the row's cluster; disabled with `reason` when there is
+/// none.
 fn go_to_item(
     label: &'static str,
     target: Option<ResourceKey>,
     reason: SharedString,
+    context: &RowContext,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     let Some(key) = target else {
         return disabled_menu_item(label, reason);
     };
+    let object = context.object(key);
     let shell = shell.clone();
     PopupMenuItem::new(label).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.reveal(key.clone(), cx));
+        let _ = shell.update(cx, |shell, cx| shell.reveal_object(object.clone(), cx));
     })
 }
 
 /// Reveals the owner (a Deployment, usually); disabled when there is none.
-fn go_to_owner_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
-    go_to_item("Go to owner", owner_target(row), "No owner".into(), shell)
+fn go_to_owner_item(
+    row: &KindRow,
+    context: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    go_to_item(
+        "Go to owner",
+        owner_target(row),
+        "No owner".into(),
+        context,
+        shell,
+    )
 }
 
 /// Only HPAs offer Go to target.
@@ -927,11 +1016,16 @@ fn no_target_screen_reason(row: &KindRow) -> SharedString {
     }
 }
 
-fn go_to_target_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+fn go_to_target_item(
+    row: &KindRow,
+    context: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
     go_to_item(
         "Go to target",
         scale_target(row),
         no_target_screen_reason(row),
+        context,
         shell,
     )
 }
@@ -950,12 +1044,14 @@ fn claim_pod_target(row: &KindRow, pods: &[PodSummary]) -> Option<ResourceKey> {
 fn go_to_pod_item(
     row: &KindRow,
     pods: &[PodSummary],
+    context: &RowContext,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     go_to_item(
         "Go to pod",
         claim_pod_target(row, pods),
         "Not mounted by any pod".into(),
+        context,
         shell,
     )
 }
@@ -969,11 +1065,16 @@ fn volume_claim_target(row: &KindRow) -> Option<ResourceKey> {
     ResourceKey::of_object("PersistentVolumeClaim", Some(&claim.namespace), &claim.name)
 }
 
-fn go_to_claim_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+fn go_to_claim_item(
+    row: &KindRow,
+    context: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
     go_to_item(
         "Go to claim",
         volume_claim_target(row),
         "No claim".into(),
+        context,
         shell,
     )
 }
@@ -986,24 +1087,34 @@ fn binding_role_target(row: &KindRow) -> Option<ResourceKey> {
     role_key(binding)
 }
 
-fn go_to_role_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+fn go_to_role_item(
+    row: &KindRow,
+    context: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
     go_to_item(
         "Go to role",
         binding_role_target(row),
         "No screen for this role".into(),
+        context,
         shell,
     )
 }
 
 /// Reveals the involved object on its own screen; disabled when there is none.
-fn go_to_object_item(event: &EventDetail, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+fn go_to_object_item(
+    event: &EventDetail,
+    context: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
     const LABEL: &str = "Go to object";
     let Some(key) = event.object.clone() else {
         return disabled_menu_item(LABEL, "No screen for this kind yet".into());
     };
+    let object = context.object(key);
     let shell = shell.clone();
     PopupMenuItem::new(LABEL).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.reveal(key.clone(), cx));
+        let _ = shell.update(cx, |shell, cx| shell.reveal_object(object.clone(), cx));
     })
 }
 
@@ -1043,7 +1154,12 @@ fn has_test_traffic(kind: ResourceKind) -> bool {
 }
 
 /// Opens Test traffic… with the destination the policy selects, checked at once.
-fn test_traffic_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+fn test_traffic_item(
+    row: &KindRow,
+    context: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let cluster = context.cluster.clone();
     let shell = shell.clone();
     let policy = match &row.object {
         KindObject::NetworkPolicy(policy) => Some(policy.clone()),
@@ -1052,7 +1168,7 @@ fn test_traffic_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuIt
     PopupMenuItem::new("Test traffic…").on_click(move |_, window, cx| {
         let policy = policy.clone();
         let _ = shell.update(cx, |shell, cx| {
-            shell.open_traffic_test(policy.as_ref(), true, window, cx);
+            shell.open_traffic_test(&cluster, policy.as_ref(), true, window, cx);
         });
     })
 }
@@ -1063,7 +1179,12 @@ fn has_check_permissions(kind: ResourceKind) -> bool {
 }
 
 /// Opens Check permissions for this account, in its own namespace, checked at once.
-fn check_permissions_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+fn check_permissions_item(
+    row: &KindRow,
+    context: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let cluster = context.cluster.clone();
     let shell = shell.clone();
     let namespace = row.namespace.clone();
     let subject = namespace
@@ -1073,7 +1194,7 @@ fn check_permissions_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupM
         let subject = subject.clone();
         let namespace = namespace.clone();
         let _ = shell.update(cx, |shell, cx| {
-            shell.open_permissions(subject, namespace, true, window, cx);
+            shell.open_permissions(&cluster, subject, namespace, true, window, cx);
         });
     })
 }
@@ -1088,7 +1209,12 @@ fn who_can_query(row: &KindRow) -> Option<String> {
 
 /// Opens Who can… on the role's own namespace (cluster-wide for a ClusterRole), prefilled and
 /// asked at once when the role has a rule to ask about.
-fn who_can_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+fn who_can_item(
+    row: &KindRow,
+    context: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let cluster = context.cluster.clone();
     let shell = shell.clone();
     let query = who_can_query(row);
     let namespace = row.namespace.clone();
@@ -1097,33 +1223,36 @@ fn who_can_item(row: &KindRow, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
         let namespace = namespace.clone();
         let _ = shell.update(cx, |shell, cx| {
             let check_now = query.is_some();
-            shell.open_who_can(query, namespace, check_now, window, cx);
+            shell.open_who_can(&cluster, query, namespace, check_now, window, cx);
         });
     })
 }
 
-/// Opens the drawer of `key` on its YAML tab. Always enabled: a missing right shows inline there.
-fn view_yaml_item(key: ResourceKey, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+/// Opens the drawer of `object` on its YAML tab. Always enabled: a missing right shows inline
+/// there.
+fn view_yaml_item(object: ClusterObject, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
     view_tab_item(
         action_label(ResourceAction::ViewYaml),
-        key,
+        object,
         DrawerTab::Yaml,
         shell,
     )
     .action(ResourceAction::ViewYaml.key_action())
 }
 
-/// Opens the drawer of `key` on `tab`; the same item serves View YAML, View values, and View
+/// Opens the drawer of `object` on `tab`; the same item serves View YAML, View values, and View
 /// manifest.
 fn view_tab_item(
     label: &'static str,
-    key: ResourceKey,
+    object: ClusterObject,
     tab: DrawerTab,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     let shell = shell.clone();
     PopupMenuItem::new(label).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.open_drawer_tab(key.clone(), tab, cx));
+        let _ = shell.update(cx, |shell, cx| {
+            shell.open_drawer_tab(object.clone(), tab, cx)
+        });
     })
 }
 

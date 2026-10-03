@@ -28,7 +28,7 @@ use crate::drawer::DrawerTab;
 use crate::launch_options::LaunchOptions;
 use crate::resource_kind::ResourceKind;
 use crate::secret_clipboard::{ClipboardMark, write_private_text};
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{ClusterObject, ResourceKey};
 
 /// How long a revealed value stays visible.
 pub(crate) const REVEAL_DURATION: Duration = Duration::from_secs(30);
@@ -126,7 +126,8 @@ pub(crate) fn fetcher(
 /// The Data section of the open Secret drawer. Dropping it drops (and wipes) every revealed value.
 pub(crate) struct SecretValuesView {
     fetch: FetchValues,
-    secret: ResourceKey,
+    /// The Secret and its cluster: the same name exists in several clusters.
+    secret: ClusterObject,
     /// From the summary; never values.
     keys: Vec<SecretKey>,
     /// Sorted by key; at most one per key.
@@ -256,7 +257,7 @@ fn failure_text(error: &ClusterError) -> String {
 impl SecretValuesView {
     pub(crate) fn new(
         fetch: FetchValues,
-        secret: ResourceKey,
+        secret: ClusterObject,
         keys: Vec<SecretKey>,
         access: ValueAccess,
     ) -> Self {
@@ -273,7 +274,7 @@ impl SecretValuesView {
         }
     }
 
-    pub(crate) fn is_for(&self, secret: &ResourceKey) -> bool {
+    pub(crate) fn is_for(&self, secret: &ClusterObject) -> bool {
         self.secret == *secret
     }
 
