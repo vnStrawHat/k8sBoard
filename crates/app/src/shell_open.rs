@@ -5,21 +5,24 @@
 //! A child of `app_shell`, like `write_flow`: every step names the cluster of the pod and takes
 //! its guard, permit, and connection from that cluster's own slot, never from the primary.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use cluster::ShellCommand;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
-use gpui_kit::{Context, Entity, WeakEntity, Window};
+use gpui_kit::{Context, Entity, EntityId, Subscription, WeakEntity, Window};
 
 use super::AppShell;
 use super::write_flow::{ConnectIntent, append_in_background};
-use crate::audit_log::{AuditField, AuditObject, AuditOutcome, connect_entry};
+use crate::audit_log::{
+    AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, connect_entry,
+};
 use crate::cluster_registry::ClusterRef;
 use crate::dock::shell_cap_text;
 use crate::resource_actions::{ResourceAction, action_label, action_risk, default_shell_container};
 use crate::settings::AppSettings;
-use crate::shell_tab::{ShellEvent, ShellGrant, ShellTab, ShellTarget};
+use crate::shell_tab::{ShellEvent, ShellGrant, ShellTab, ShellTarget, short_pod_name};
 use crate::table_selection::{ClusterObject, ResourceKey};
 
 /// The container to open a shell in, and the cluster of its pod.
@@ -28,12 +31,25 @@ pub(crate) struct ShellOpen {
     pub(crate) cluster: ClusterRef,
     pub(crate) namespace: String,
     pub(crate) pod: String,
+    pub(crate) short_pod: String,
     pub(crate) container: String,
 }
 
 /// The name an audit line gives every session start, a reconnect included: a new exec is a new
 /// shell.
 const AUDIT_ACTION: &str = "Open shell";
+/// Why a start has no result: its tab was closed, or a newer start replaced it.
+const ABANDONED_TEXT: &str = "the session was closed or replaced before it reported";
+
+/// The starts that have not reported yet, each with the audit line to write if none ever does. A
+/// request may already have reached the server when a tab is closed, the app quits, or a Reconnect
+/// replaces the session, so the start must not vanish from the log.
+#[derive(Default)]
+pub(super) struct ShellStarts {
+    pending: HashMap<EntityId, AuditEntry>,
+    /// Writes what is still pending when the app quits.
+    quit: Option<Subscription>,
+}
 
 /// What the dialog names and the audit line records of a shell start: the pod, and the container
 /// and the shell it runs.
@@ -90,6 +106,7 @@ impl AppShell {
             cluster: open.cluster,
             namespace: open.namespace,
             pod: open.pod,
+            short_pod: open.short_pod,
             container: open.container,
         };
         let dock = self.dock.clone();
@@ -111,6 +128,7 @@ impl AppShell {
                 });
                 if let Some(tab) = tab {
                     shell.watch_shell(&tab, cx);
+                    shell.begin_shell_start(&tab, ShellCommand::Auto, cx);
                 }
             }),
         );
@@ -138,10 +156,11 @@ impl AppShell {
             Some((
                 pod.namespace.clone(),
                 pod.name.clone(),
+                short_pod_name(pod),
                 container.name.clone(),
             ))
         });
-        let Some((namespace, pod, container)) = found else {
+        let Some((namespace, pod, short_pod, container)) = found else {
             let text = format!(
                 "{} is unavailable: No running container",
                 action_label(ResourceAction::OpenShell)
@@ -153,6 +172,7 @@ impl AppShell {
             cluster: subject.cluster.clone(),
             namespace,
             pod,
+            short_pod,
             container,
         };
         self.start_shell(open, window, cx);
@@ -187,13 +207,18 @@ impl AppShell {
             cluster_name,
             "Reconnect shell",
             "Reconnect",
-            Rc::new(move |_, permit, connection, _, cx| {
+            Rc::new(move |shell, permit, connection, _, cx| {
+                let Some(entity) = tab.upgrade() else {
+                    return;
+                };
                 let grant = ShellGrant {
                     connection,
                     permit,
                     command,
                 };
-                let _ = tab.update(cx, |tab, cx| tab.connect(grant, cx));
+                // The session it replaces may not have reported yet.
+                shell.begin_shell_start(&entity, command, cx);
+                entity.update(cx, |tab, cx| tab.connect(grant, cx));
             }),
         );
         self.start_connect(intent, window, cx);
@@ -206,6 +231,70 @@ impl AppShell {
             shell.audit_shell_start(&tab, event, cx);
         })
         .detach();
+        let id = tab.entity_id();
+        cx.observe_release(tab, move |shell, _, cx| shell.abandon_shell_start(id, cx))
+            .detach();
+    }
+
+    /// A session of `tab` is starting with `command`: remembers the line to write if it never
+    /// reports. A start still pending in the same tab is replaced, and its line is written now.
+    fn begin_shell_start(
+        &mut self,
+        tab: &Entity<ShellTab>,
+        command: ShellCommand,
+        cx: &mut Context<Self>,
+    ) {
+        let target = tab.read(cx).target().clone();
+        let (object, fields) = shell_audit(&target, command);
+        let Some(entry) = self.guard_for(&target.cluster, cx).map(|guard| {
+            let error = Some(ABANDONED_TEXT.to_owned());
+            connect_entry(
+                AUDIT_ACTION,
+                object,
+                fields,
+                &guard,
+                AuditOutcome::Abandoned,
+                error,
+            )
+        }) else {
+            return;
+        };
+        if let Some(replaced) = self.shell_starts.pending.insert(tab.entity_id(), entry) {
+            self.write_audit_line(replaced, cx);
+        }
+        if self.shell_starts.quit.is_none() {
+            self.shell_starts.quit = Some(cx.on_app_quit(|shell, cx| {
+                shell.abandon_all_shell_starts(cx);
+                std::future::ready(())
+            }));
+        }
+    }
+
+    /// The tab is gone with its start unreported.
+    fn abandon_shell_start(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        if let Some(entry) = self.shell_starts.pending.remove(&id) {
+            self.write_audit_line(entry, cx);
+        }
+    }
+
+    /// The app is quitting: every unreported start is written before the process ends, so the
+    /// append is synchronous (a few lines at most).
+    fn abandon_all_shell_starts(&mut self, cx: &mut Context<Self>) {
+        let Some(dir) = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf) else {
+            return;
+        };
+        for (_, entry) in self.shell_starts.pending.drain() {
+            if let Err(error) = append_audit(&dir, &entry) {
+                tracing::warn!(kind = ?error.kind(), "could not append to the audit log");
+            }
+        }
+    }
+
+    fn write_audit_line(&mut self, entry: AuditEntry, cx: &mut Context<Self>) {
+        let config_dir = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf);
+        let shell = cx.weak_entity();
+        cx.spawn(async move |_, cx| append_in_background(&shell, config_dir, entry, cx).await)
+            .detach();
     }
 
     fn audit_shell_start(
@@ -214,6 +303,8 @@ impl AppShell {
         event: &ShellEvent,
         cx: &mut Context<Self>,
     ) {
+        // It reported, so it is no longer pending.
+        self.shell_starts.pending.remove(&tab.entity_id());
         let (target, command) = {
             let tab = tab.read(cx);
             (tab.target().clone(), tab.command())
@@ -229,56 +320,42 @@ impl AppShell {
         else {
             return;
         };
-        let config_dir = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf);
-        let shell = cx.weak_entity();
-        cx.spawn(async move |_, cx| append_in_background(&shell, config_dir, entry, cx).await)
-            .detach();
+        self.write_audit_line(entry, cx);
     }
 }
 
 #[cfg(feature = "screenshot")]
 impl AppShell {
-    /// `--screen shell-confirm-fixture`: the Open shell dialog of a fixed pod in the primary
-    /// cluster, over an unlocked session. It skips the gate, and its confirm button and Enter do
+    /// `--screen shell-confirm-fixture`: the Open shell dialog of a fixed pod of a fixed Production
+    /// cluster. It needs no cluster at all, skips the gate, and its confirm button and Enter do
     /// nothing (`ConfirmDialog::show_fixture`), so it can never open a session.
     pub(super) fn open_shell_confirm_fixture(
         &mut self,
-        cluster: &ClusterRef,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         use gpui_kit::AppContext as _;
 
         use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
-        use crate::write_guard::{WriteLock, confirm_step};
-        let Some(session) = self.slot_session(cluster).cloned() else {
-            return;
-        };
-        session.update(cx, |session, cx| session.set_lock(WriteLock::Unlocked, cx));
-        let Some(guard) = self.guard_for(cluster, cx) else {
-            return;
-        };
-        let target = ShellTarget {
-            cluster: cluster.clone(),
-            namespace: "payments".to_owned(),
-            pod: "api-7d9f8c-m8n2p".to_owned(),
-            container: "api".to_owned(),
-        };
+        use crate::environment::Environment;
+        use crate::screenshot::{SHELL_FIXTURE_CLUSTER, shell_fixture_target};
+        use crate::write_guard::{ActionRisk, ConfirmMode, confirm_step};
+        let target = shell_fixture_target();
         let intent = shell_intent(
             &target,
             ShellCommand::Auto,
-            guard.display_name().to_owned(),
+            SHELL_FIXTURE_CLUSTER.to_owned(),
             "Open shell",
             "Open shell",
             Rc::new(|_, _, _, _, _| {}),
         );
-        let confirm = confirm_step(guard.profile.confirm, intent.risk, intent.expected());
+        let confirm = confirm_step(ConfirmMode::TypeName, ActionRisk::Change, intent.expected());
         let inputs = DialogInputs {
             shell: cx.weak_entity(),
             kind: DialogKind::Connect(Rc::new(intent)),
             confirm,
-            environment: guard.profile.environment,
-            generation: guard.generation,
+            environment: Environment::Production,
+            generation: 0,
         };
         let dialog = cx.new(|cx| ConfirmDialog::new(inputs, window, cx));
         dialog.update(cx, |dialog, _| dialog.show_fixture());

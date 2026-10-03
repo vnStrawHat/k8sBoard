@@ -80,6 +80,7 @@ pub(crate) struct TerminalSession {
 /// The matches of the last Find query, newest first, and the one the user is on.
 #[derive(Default)]
 struct FindState {
+    query: String,
     matches: Vec<SearchMatch>,
     current: Option<usize>,
 }
@@ -144,14 +145,34 @@ impl TerminalSession {
             return false;
         }
         self.term.resize(size, ResizePolicy::BottomAnchor);
+        // A reflow gives rows new identities, which the matches name, so they are found again.
+        if !self.find.query.is_empty() {
+            let (query, current) = (self.find.query.clone(), self.find.current);
+            self.find(&query);
+            if let Some(last) = self.find.matches.len().checked_sub(1) {
+                self.find.current = current.map(|current| current.min(last));
+            }
+        }
         true
     }
 
     /// The current view of the grid, colors resolved against the palette. Cheap when nothing
     /// changed: only the rows that moved since the last call are copied.
+    #[cfg(test)]
     pub(crate) fn snapshot(&mut self, now: Instant) -> &SnapshotState {
+        self.refresh(now);
+        &self.snapshot
+    }
+
+    /// Brings the snapshot up to date. A painter calls this, then reads `view` together with other
+    /// parts of the session (the Find matches) without copying them.
+    pub(crate) fn refresh(&mut self, now: Instant) {
         self.term.snapshot_update(&mut self.snapshot, now);
         self.snapshot.map_colors(&self.palette);
+    }
+
+    /// The snapshot of the last `refresh`.
+    pub(crate) fn view(&self) -> &SnapshotState {
         &self.snapshot
     }
 
@@ -244,6 +265,7 @@ impl TerminalSession {
         if query.is_empty() {
             return 0;
         }
+        self.find.query = query.to_owned();
         let text = GridText::from_terminal(&self.term);
         let mut matches = search_grid_text(
             &text,

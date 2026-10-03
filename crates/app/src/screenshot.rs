@@ -148,6 +148,29 @@ impl FeedProgress {
     }
 }
 
+/// The cluster the shell fixture screens name; they need no real one.
+#[cfg(feature = "screenshot")]
+pub(crate) const SHELL_FIXTURE_CLUSTER: &str = "prod-eu-1";
+
+/// What `--screen shell-find-fixture` searches for: it matches three lines of the transcript.
+#[cfg(feature = "screenshot")]
+pub(crate) const SHELL_FIXTURE_FIND: &str = "ledger";
+
+/// The pod of the shell fixture screens (the W8b pane).
+#[cfg(feature = "screenshot")]
+pub(crate) fn shell_fixture_target() -> crate::shell_tab::ShellTarget {
+    crate::shell_tab::ShellTarget {
+        cluster: crate::cluster_registry::ClusterRef {
+            kubeconfig: std::path::PathBuf::from("fixture.yaml"),
+            context: SHELL_FIXTURE_CLUSTER.to_owned(),
+        },
+        namespace: "payments".to_owned(),
+        pod: "api-7d9f8c-m8n2p".to_owned(),
+        short_pod: "m8n2p".to_owned(),
+        container: "api".to_owned(),
+    }
+}
+
 /// What `--screen shell-fixture` shows in the shell tab: the transcript of the W8b pane. The
 /// private OSC 7770 names the shell, as the `Auto` script does.
 #[cfg(feature = "screenshot")]

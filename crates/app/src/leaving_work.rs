@@ -11,10 +11,11 @@ use std::rc::Rc;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::component::dialog::DialogButtonProps;
-use gpui_kit::{AppContext as _, Context, SharedString};
+use gpui_kit::{App, AppContext as _, Context, IntoElement as _, ParentElement as _, SharedString};
 
 use super::AppShell;
 use crate::cluster_registry::ClusterRef;
+use crate::fresh_enter::FreshEnter;
 
 /// What releasing some clusters would end.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -68,11 +69,31 @@ impl AppShell {
         let (handle, shell) = (self.window, cx.weak_entity());
         cx.defer(move |cx| {
             let _ = cx.update_window(handle, |_, window, cx| {
+                // Runs the release once, whichever of the button and a fresh Enter confirms.
+                let confirm: Rc<dyn Fn(&mut App)> = Rc::new(move |cx| {
+                    let release = release.borrow_mut().take();
+                    if let Some(release) = release {
+                        let _ = shell.update(cx, |shell, cx| release(shell, cx));
+                    }
+                });
+                let on_enter = Rc::clone(&confirm);
+                let text = SharedString::from(lines.join("\n"));
+                // Held Enter must not close live shells under a dialog nobody read.
+                let body = cx.new(|cx| {
+                    FreshEnter::new(
+                        move |_| text.clone().into_any_element(),
+                        move |window, cx| {
+                            on_enter(cx);
+                            window.close_dialog(cx);
+                        },
+                        cx,
+                    )
+                });
                 window.open_alert_dialog(cx, move |alert, _, _| {
-                    let (shell, release) = (shell.clone(), Rc::clone(&release));
+                    let confirm = Rc::clone(&confirm);
                     alert
                         .title("Close open work?")
-                        .description(SharedString::from(lines.join("\n")))
+                        .child(body.clone())
                         .confirm()
                         .button_props(
                             DialogButtonProps::default()
@@ -82,10 +103,7 @@ impl AppShell {
                                 .show_cancel(true),
                         )
                         .on_ok(move |_, _, cx| {
-                            let release = release.borrow_mut().take();
-                            if let Some(release) = release {
-                                let _ = shell.update(cx, |shell, cx| release(shell, cx));
-                            }
+                            confirm(cx);
                             true
                         })
                 });

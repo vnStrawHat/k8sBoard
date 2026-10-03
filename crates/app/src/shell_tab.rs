@@ -9,8 +9,8 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use cluster::{
-    ClusterConnection, ExecPermit, GridSize, ShellCommand, ShellExit, ShellInput, ShellRequest,
-    ShellUpdate,
+    ClusterConnection, ExecPermit, GridSize, PodSummary, ShellCommand, ShellExit, ShellInput,
+    ShellRequest, ShellUpdate,
 };
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use gpui_kit::component::WindowExt as _;
@@ -33,7 +33,10 @@ use crate::app_shell::AppShell;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::cluster_session::error_text;
+use crate::fresh_enter::FreshEnter;
 use crate::keymap::{CloseTerminalFind, TerminalCopy, TerminalFind, TerminalPaste};
+use crate::log_workload::pod_short_name;
+use crate::screenshot::controller_owner_of;
 use crate::secret_clipboard::ClipboardWriteError;
 use crate::status_tone::StatusTone;
 use crate::terminal_element::{SharedMetrics, cell_at, terminal_element};
@@ -51,7 +54,19 @@ pub(crate) struct ShellTarget {
     pub(crate) cluster: ClusterRef,
     pub(crate) namespace: String,
     pub(crate) pod: String,
+    /// What the tab label calls the pod: `short_pod_name`.
+    pub(crate) short_pod: String,
     pub(crate) container: String,
+}
+
+/// The pod name a tab label shows: the Logs tab's rule, the last `-` segment (`m8n2p`), except for
+/// a StatefulSet pod, whose ordinal alone would not tell the replicas apart. A pod no controller
+/// owns keeps its name.
+pub(crate) fn short_pod_name(pod: &PodSummary) -> String {
+    match controller_owner_of(pod) {
+        Some(owner) => pod_short_name(&owner, &pod.name).to_owned(),
+        None => pod.name.clone(),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -438,11 +453,26 @@ impl ShellTab {
             bytes,
         } = ask;
         let more = lines.saturating_sub(preview.len());
-        window.open_alert_dialog(cx, move |alert, _, cx| {
-            let (tab, bytes) = (tab.clone(), bytes.clone());
+        // Held Enter must not paste lines nobody read: the content confirms on a fresh press only.
+        let paste: Rc<dyn Fn(&mut App)> = Rc::new(move |cx| {
+            let _ = tab.update(cx, |tab, cx| tab.send_typed(bytes.clone(), cx));
+        });
+        let on_enter = Rc::clone(&paste);
+        let body = cx.new(|cx| {
+            FreshEnter::new(
+                move |cx| paste_preview(&preview, more, cx).into_any_element(),
+                move |window, cx| {
+                    on_enter(cx);
+                    window.close_dialog(cx);
+                },
+                cx,
+            )
+        });
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let paste = Rc::clone(&paste);
             alert
                 .title(format!("Paste {lines} lines?"))
-                .child(paste_preview(&preview, more, cx))
+                .child(body.clone())
                 .confirm()
                 .button_props(
                     DialogButtonProps::default()
@@ -450,7 +480,7 @@ impl ShellTab {
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _, cx| {
-                    let _ = tab.update(cx, |tab, cx| tab.send_typed(bytes.clone(), cx));
+                    paste(cx);
                     true
                 })
         });
@@ -559,6 +589,22 @@ impl ShellTab {
         }
     }
 
+    /// `--screen shell-find-fixture`: Find open on `query`, with the matches highlighted.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn show_find_fixture(
+        &mut self,
+        query: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.is_find_open = true;
+        self.find_input.update(cx, |input, cx| {
+            input.set_value(query.to_owned(), window, cx)
+        });
+        self.session.borrow_mut().find(query);
+        cx.notify();
+    }
+
     pub(crate) fn target(&self) -> &ShellTarget {
         &self.target
     }
@@ -580,9 +626,12 @@ impl ShellTab {
         &self.cluster_label
     }
 
-    /// `shell · {pod}/{container}`, the tab label (the Logs tab names its pod the same way).
+    /// `shell · m8n2p/api`, the tab label: the pod by the suffix rule of the Logs tab.
     pub(crate) fn label(&self) -> String {
-        format!("shell · {}/{}", self.target.pod, self.target.container)
+        format!(
+            "shell · {}/{}",
+            self.target.short_pod, self.target.container
+        )
     }
 
     /// The dot of the tab: dim once the session has ended.

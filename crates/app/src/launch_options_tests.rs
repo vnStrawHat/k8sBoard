@@ -749,6 +749,7 @@ fn the_shell_fixture_screens_open_pods_with_a_dock() {
         ("shell-paste-fixture", LaunchScreen::ShellPasteFixture),
         ("shell-picker-fixture", LaunchScreen::ShellPickerFixture),
         ("shell-confirm-fixture", LaunchScreen::ShellConfirmFixture),
+        ("shell-find-fixture", LaunchScreen::ShellFindFixture),
     ] {
         let parsed = run_options(&["--screen", name]).screen;
         assert_eq!(parsed, screen);

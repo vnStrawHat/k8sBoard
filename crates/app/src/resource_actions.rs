@@ -31,6 +31,7 @@ use crate::network_rows::ingress_urls;
 use crate::pod_drawer::kind_tag_text;
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, ValueAccess};
+use crate::shell_tab::short_pod_name;
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::write_guard::{ActionRisk, ClusterGuard, WriteLock};
 use crate::yaml_view::object_ref;
@@ -1455,6 +1456,7 @@ pub(crate) struct ShellMenu {
     state: ShellMenuState,
     namespace: String,
     pod: String,
+    short_pod: String,
 }
 
 impl ShellMenu {
@@ -1463,6 +1465,7 @@ impl ShellMenu {
             state: shell_menu_state(pod, guard),
             namespace: pod.namespace.clone(),
             pod: pod.name.clone(),
+            short_pod: short_pod_name(pod),
         }
     }
 
@@ -1479,6 +1482,7 @@ impl ShellMenu {
             state,
             namespace,
             pod,
+            short_pod,
         } = self;
         let open = {
             let (cluster, shell) = (row.cluster.clone(), shell.clone());
@@ -1487,6 +1491,7 @@ impl ShellMenu {
                     cluster: cluster.clone(),
                     namespace: namespace.clone(),
                     pod: pod.clone(),
+                    short_pod: short_pod.clone(),
                     container,
                 };
                 let shell = shell.clone();
@@ -1567,9 +1572,11 @@ pub(crate) fn open_shell_picker_fixture(window: &mut Window, cx: &mut App) {
         choice_items(menu, &choices, &|_| Box::new(|_, _| {}))
     });
     window.open_dialog(cx, move |dialog, _, _| {
+        // The menu draws its own border, so the dialog adds neither a title nor padding.
         dialog
-            .title("Open shell ▸")
-            .w(gpui_kit::px(340.))
+            .w(gpui_kit::px(300.))
+            .p_0()
+            .close_button(false)
             .child(menu.clone())
     });
 }

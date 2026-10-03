@@ -22,6 +22,7 @@ fn target() -> ShellTarget {
         },
         namespace: "payments".to_owned(),
         pod: "api-7d9f8c-m8n2p".to_owned(),
+        short_pod: "m8n2p".to_owned(),
         container: "api".to_owned(),
     }
 }
@@ -380,7 +381,31 @@ fn end_notes_read_as_the_wireframe_says() {
 fn the_tab_label_names_pod_and_container(cx: &mut TestAppContext) {
     let fixture = open_tab(800., 500., cx);
     let label = fixture.tab.read_with(cx, |tab, _| tab.label());
-    assert_eq!(label, "shell · api-7d9f8c-m8n2p/api");
+    assert_eq!(label, "shell · m8n2p/api");
+}
+
+#[test]
+fn a_pod_is_named_by_the_suffix_rule_of_the_logs_tab() {
+    let owned_by = |kind: &str, name: &str| {
+        let mut pod = pod_named(name);
+        pod.controller = Some(cluster::ControllerRef {
+            kind: kind.to_owned(),
+            name: "owner".to_owned(),
+        });
+        pod
+    };
+    use crate::kind_row::{REPLICA_SET_KIND, STATEFUL_SET_KIND};
+    assert_eq!(
+        short_pod_name(&owned_by(REPLICA_SET_KIND, "api-7d9f8c-m8n2p")),
+        "m8n2p"
+    );
+    // A StatefulSet pod keeps its ordinal with its name; a bare pod keeps its name.
+    assert_eq!(
+        short_pod_name(&owned_by(STATEFUL_SET_KIND, "postgres-0")),
+        "postgres-0"
+    );
+    let bare = pod_named("tool-x1");
+    assert_eq!(short_pod_name(&bare), "tool-x1");
 }
 
 // ---- input (step 3b) ----
@@ -635,4 +660,64 @@ fn find_opens_counts_and_closes_with_escape(cx: &mut TestAppContext) {
         .tab
         .read_with(cx, |tab, _| tab.session.borrow().find_matches().len());
     assert_eq!(matches, 0);
+}
+
+fn pod_named(name: &str) -> PodSummary {
+    PodSummary {
+        namespace: "payments".to_owned(),
+        name: name.to_owned(),
+        status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
+        ready: cluster::ReadyCount { ready: 1, total: 1 },
+        restarts: 0,
+        node_name: None,
+        created_at: None,
+        pod_ip: None,
+        qos_class: None,
+        service_account: None,
+        controller: None,
+        conditions: Vec::new(),
+        containers: Vec::new(),
+        status_message: None,
+        labels: Vec::new(),
+        host_network: false,
+        image_pull_secrets: Vec::new(),
+    }
+}
+
+fn enter_event(is_held: bool) -> gpui_kit::KeyDownEvent {
+    gpui_kit::KeyDownEvent {
+        keystroke: Keystroke::parse("enter").expect("a valid keystroke"),
+        is_held,
+        prefer_character_input: false,
+    }
+}
+
+fn send_event(fixture: &Fixture, event: gpui_kit::KeyDownEvent, cx: &mut TestAppContext) {
+    use gpui_kit::InputEvent as _;
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        window.dispatch_event(event.to_platform_input(), cx);
+    })
+    .expect("the window is open");
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn a_held_enter_does_not_confirm_the_multi_line_paste(cx: &mut TestAppContext) {
+    let mut fixture = live_tab(cx);
+    cx.write_to_clipboard(ClipboardItem::new_string("a\nb".to_owned()));
+    dispatch(&fixture, TerminalPaste, cx);
+    render(&fixture, cx);
+    assert!(has_dialog(&fixture, cx));
+    // The key repeat of an Enter that was already down when the dialog opened.
+    send_event(&fixture, enter_event(true), cx);
+    send_event(&fixture, enter_event(true), cx);
+    assert!(
+        has_dialog(&fixture, cx),
+        "a held Enter leaves the dialog open"
+    );
+    assert!(sent_bytes(&mut fixture).is_empty(), "and pastes nothing");
+    // A fresh press confirms.
+    send_event(&fixture, enter_event(false), cx);
+    assert!(!has_dialog(&fixture, cx));
+    assert_eq!(sent_bytes(&mut fixture), [b"a\rb".to_vec()]);
 }

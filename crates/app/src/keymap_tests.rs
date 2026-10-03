@@ -589,7 +589,6 @@ fn dock_chords_still_work_in_the_terminal(cx: &mut TestAppContext) {
         ("ctrl-tab", "NextDockTab"),
         ("ctrl-shift-tab", "PreviousDockTab"),
         ("secondary-shift-m", "ToggleDockZoom"),
-        ("secondary-shift-r", "ToggleReadOnly"),
     ] {
         assert_eq!(
             resolve(key, &TERMINAL_PATH, cx),
@@ -640,4 +639,29 @@ fn the_terminal_context_is_the_only_one_with_shell_chords(cx: &mut TestAppContex
             );
         }
     }
+}
+
+#[gpui_kit::test]
+fn the_read_only_toggle_is_not_an_app_chord_inside_the_terminal(cx: &mut TestAppContext) {
+    bind_all(cx);
+    if cfg!(target_os = "macos") {
+        // There the chord is Cmd, which a shell never receives.
+        return;
+    }
+    // Ctrl Shift R is a history search in some shells; outside the terminal it still toggles.
+    assert_eq!(resolve("ctrl-shift-r", &TERMINAL_PATH, cx), None);
+    assert_eq!(
+        resolve("ctrl-shift-r", &["Root", "AppShell", "Dock"], cx),
+        Some("k8sboard::ToggleReadOnly")
+    );
+}
+
+#[gpui_kit::test]
+fn enter_is_suppressed_in_the_fresh_enter_content(cx: &mut TestAppContext) {
+    bind_all(cx);
+    // `NoAction` unbinds the kit Confirm on Enter there, so a held Enter cannot confirm.
+    assert_eq!(
+        resolve("enter", &["Root", "Dialog", "FreshEnter"], cx),
+        None
+    );
 }

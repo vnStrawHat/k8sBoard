@@ -269,6 +269,11 @@ impl ConfirmDialog {
     /// Why the confirm button is off, `None` when it is on. The guard of the dialog's own cluster
     /// is read now, so a lock or a reconnect since the dialog opened shows at once.
     fn block(&self, cx: &App) -> Option<SharedString> {
+        // A fixture is drawn from fixed data, with no cluster behind it to check.
+        #[cfg(feature = "screenshot")]
+        if self.is_fixture {
+            return None;
+        }
         let shell = self.shell.upgrade();
         let guard = shell
             .as_ref()

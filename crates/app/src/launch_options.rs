@@ -26,7 +26,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|shell-find-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -76,6 +76,8 @@ pub(crate) enum LaunchScreen {
     ShellPasteFixture,
     /// `--screen shell-picker-fixture`: the container list of the Open shell submenu.
     ShellPickerFixture,
+    /// `--screen shell-find-fixture`: the shell tab with Find open and its matches highlighted.
+    ShellFindFixture,
     /// `--screen shell-confirm-fixture`: Pods with the Open shell confirm dialog open on a fixed
     /// pod; its confirm button and Enter do nothing.
     ShellConfirmFixture,
@@ -138,6 +140,7 @@ impl LaunchScreen {
             | Self::ShellDockFixture
             | Self::ShellPasteFixture
             | Self::ShellPickerFixture
+            | Self::ShellFindFixture
             | Self::PodsSelected
             | Self::Shortcuts
             | Self::PodsCursor => Screen::Pods,
@@ -294,6 +297,7 @@ impl LaunchScreen {
                 | Self::ShellDockFixture
                 | Self::ShellPasteFixture
                 | Self::ShellPickerFixture
+                | Self::ShellFindFixture
         )
     }
 
@@ -328,6 +332,7 @@ impl LaunchScreen {
             "shell-paste-fixture" => Some(Self::ShellPasteFixture),
             "shell-picker-fixture" => Some(Self::ShellPickerFixture),
             "shell-confirm-fixture" => Some(Self::ShellConfirmFixture),
+            "shell-find-fixture" => Some(Self::ShellFindFixture),
             "pods-selected" => Some(Self::PodsSelected),
             "nodes-selected" => Some(Self::NodesSelected),
             "shortcuts" => Some(Self::Shortcuts),

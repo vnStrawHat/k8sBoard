@@ -8,6 +8,7 @@ use crate::cluster_switcher::{
     OpenClusterSwitcher, SwitchToCluster1, SwitchToCluster2, SwitchToCluster3, SwitchToCluster4,
     SwitchToCluster5, SwitchToCluster6, SwitchToCluster7, SwitchToCluster8, SwitchToCluster9,
 };
+use crate::fresh_enter::FRESH_ENTER;
 use crate::settings_window::{ImportKubeconfig, OpenSettings};
 
 gpui_kit::actions!(
@@ -145,6 +146,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
     // The confirm dialog handles Enter itself (a held Enter must never confirm), so the kit's Enter
     // bindings of the dialog and of its text field are switched off inside it.
     cx.bind_keys([
+        KeyBinding::new("enter", gpui_kit::NoAction, Some(FRESH_ENTER)),
         KeyBinding::new("enter", gpui_kit::NoAction, Some(WRITE_CONFIRM)),
         KeyBinding::new("enter", gpui_kit::NoAction, Some(WRITE_CONFIRM_INPUT)),
     ]);
@@ -169,7 +171,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-f", TerminalFind, Some(TERMINAL)),
     ]);
     // Keys a shell uses: Tab and Shift Tab (the kit moves focus with them), Ctrl C (the kit copies
-    // with it), and the chords Ctrl K, N, W, and 1 to 9, which are app chords on Windows and Linux.
+    // with it), and the chords Ctrl K, N, W, Shift R, and 1 to 9, which are app chords on Windows and
+    // Linux and which shells use (Ctrl Shift R is a history search in some).
     // `NoAction` lets the key reach the terminal's key handler. macOS app chords use Cmd, which a
     // shell never receives, so they keep their meaning.
     cx.bind_keys(
@@ -180,6 +183,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
             "ctrl-k",
             "ctrl-n",
             "ctrl-w",
+            "ctrl-shift-r",
             "ctrl-1",
             "ctrl-2",
             "ctrl-3",

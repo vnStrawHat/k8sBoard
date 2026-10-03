@@ -63,6 +63,9 @@ pub(crate) enum AuditOutcome {
     Failed,
     /// A commit whose request may have left the client before it failed.
     Unknown,
+    /// A session start that was closed or replaced before it reported: its request may have
+    /// reached the server.
+    Abandoned,
 }
 
 /// The log file inside the settings folder `dir`.

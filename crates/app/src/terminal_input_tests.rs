@@ -142,3 +142,64 @@ fn an_oversized_paste_is_refused_whole() {
     assert_eq!(decide_paste(&text, false), PasteDecision::TooLarge);
     assert_eq!(decide_paste(&text, true), PasteDecision::TooLarge);
 }
+
+fn altgr(key: &str, key_char: Option<&str>) -> Keystroke {
+    let mut keystroke = Keystroke::parse(key).expect("a valid keystroke");
+    keystroke.key_char = key_char.map(str::to_owned);
+    keystroke
+}
+
+#[test]
+fn altgr_types_the_character_the_layout_produced() {
+    // A German layout types @ with AltGr+Q: Windows reports Ctrl+Alt, and the character with it.
+    for (key, text) in [
+        ("q", "@"),
+        ("7", "{"),
+        ("0", "}"),
+        ("8", "["),
+        ("ß", "\\"),
+        ("<", "|"),
+    ] {
+        let keystroke = altgr(&format!("ctrl-alt-{key}"), Some(text));
+        let (spec, mods) =
+            key_to_vt_as(&keystroke, CtrlAltMeans::AltGr).expect("AltGr sends its text");
+        assert_eq!(spec, KeySpec::Character(text.to_owned()), "{key}");
+        assert_eq!(
+            mods,
+            KeyMods::default(),
+            "{key}: no modifiers, no ESC prefix"
+        );
+    }
+}
+
+#[test]
+fn a_real_ctrl_alt_chord_stays_a_chord() {
+    // No printable character came with it, or the platform does not read it as AltGr.
+    let chord = altgr("ctrl-alt-b", None);
+    let (spec, mods) = key_to_vt_as(&chord, CtrlAltMeans::AltGr).expect("a chord");
+    assert_eq!(spec, KeySpec::Character("b".to_owned()));
+    assert!(mods.ctrl && mods.alt);
+    let control = altgr("ctrl-alt-b", Some("\u{2}"));
+    let (_, mods) = key_to_vt_as(&control, CtrlAltMeans::AltGr).expect("a chord");
+    assert!(mods.ctrl && mods.alt);
+    let typed = altgr("ctrl-alt-q", Some("@"));
+    let (spec, mods) = key_to_vt_as(&typed, CtrlAltMeans::Chord).expect("a chord");
+    assert_eq!(spec, KeySpec::Character("q".to_owned()));
+    assert!(mods.ctrl && mods.alt);
+}
+
+#[test]
+fn altgr_with_the_platform_key_is_still_the_apps() {
+    let keystroke = altgr("ctrl-alt-cmd-q", Some("@"));
+    assert!(key_to_vt_as(&keystroke, CtrlAltMeans::AltGr).is_none());
+}
+
+#[test]
+fn paste_debug_prints_sizes_and_never_the_text() {
+    let ask = decide_paste("secret one\nsecret two\n", false);
+    let shown = format!("{ask:?}");
+    assert!(!shown.contains("secret"), "{shown}");
+    assert!(shown.contains("bytes"), "{shown}");
+    let sent = format!("{:?}", decide_paste("secret", false));
+    assert_eq!(sent, "Send(6 bytes)");
+}

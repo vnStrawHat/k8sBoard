@@ -305,6 +305,8 @@ pub(crate) struct AppShell {
     last_leaving: Option<Vec<String>>,
     /// The window of the shell: a dialog that starts outside an event handler opens in it.
     window: gpui_kit::AnyWindowHandle,
+    /// Shell starts that have not reported yet (spec 0036).
+    shell_starts: shell_open::ShellStarts,
     /// The title-bar switcher popover.
     switcher: ClusterSwitcherState,
     _switcher_filter_events: Subscription,
@@ -509,6 +511,7 @@ impl AppShell {
             #[cfg(test)]
             last_leaving: None,
             window: window.window_handle(),
+            shell_starts: shell_open::ShellStarts::default(),
             switcher: ClusterSwitcherState::new(switcher_filter),
             _switcher_filter_events: switcher_filter_events,
             pending_switcher_launch: options.screen == LaunchScreen::Switcher,
@@ -1663,6 +1666,13 @@ impl AppShell {
         let Some(launch) = self.pending_dialog_launch else {
             return;
         };
+        // A fixture dialog is drawn from fixed data, so it does not wait for a cluster.
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::ShellConfirmFixture {
+            self.open_shell_confirm_fixture(window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
         if self.live(cx).is_none() {
             return;
         }
@@ -1697,10 +1707,6 @@ impl AppShell {
             LaunchScreen::Shortcuts => open_shortcut_sheet(window, cx),
             #[cfg(feature = "screenshot")]
             LaunchScreen::UnlockConfirm => self.begin_unlock(&cluster, window, cx),
-            #[cfg(feature = "screenshot")]
-            LaunchScreen::ShellConfirmFixture => {
-                self.open_shell_confirm_fixture(&cluster, window, cx)
-            }
             #[cfg(feature = "screenshot")]
             LaunchScreen::CordonConfirm => {
                 let is_open = self.open_cordon_fixture(&cluster, window, cx);
@@ -3306,6 +3312,7 @@ impl AppShell {
             LaunchScreen::ShellFixture
                 | LaunchScreen::ShellPasteFixture
                 | LaunchScreen::ShellPickerFixture
+                | LaunchScreen::ShellFindFixture
         ) {
             self.open_shell_fixture(launch, window, cx);
             return;
@@ -3370,9 +3377,9 @@ impl AppShell {
         }
     }
 
-    /// The `--screen shell-*-fixture` screens: a shell tab on the primary cluster that never
-    /// connects, fed the transcript of the W8b pane. The dock is zoomed unless the screen shows
-    /// the split. It waits until the session is live.
+    /// The `--screen shell-*-fixture` screens: a shell tab that never connects, on a fixed pod of
+    /// a fixed cluster, fed the transcript of the W8b pane. The dock is zoomed unless the screen
+    /// shows the split. It is drawn from fixed data and waits for no cluster.
     #[cfg(feature = "screenshot")]
     fn open_shell_fixture(
         &mut self,
@@ -3380,26 +3387,9 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(cluster) = self.primary_cluster() else {
-            return;
-        };
-        let Some(label) = self
-            .view
-            .slot_of(&cluster)
-            .map(|index| self.view.slots()[index].label.clone())
-        else {
-            return;
-        };
-        if self.live(cx).is_none() {
-            return;
-        }
         self.pending_launch_screen = None;
-        let target = crate::shell_tab::ShellTarget {
-            cluster,
-            namespace: "payments".to_owned(),
-            pod: "api-7d9f8c-m8n2p".to_owned(),
-            container: "api".to_owned(),
-        };
+        let target = crate::screenshot::shell_fixture_target();
+        let label = crate::screenshot::SHELL_FIXTURE_CLUSTER.to_owned();
         let dock = self.dock.clone();
         let transcript = crate::screenshot::SHELL_FIXTURE_TRANSCRIPT;
         let tab = dock.update(cx, |dock, cx| {
@@ -3412,6 +3402,10 @@ impl AppShell {
         match launch {
             LaunchScreen::ShellPasteFixture => {
                 tab.update(cx, |tab, cx| tab.show_paste_fixture(window, cx));
+            }
+            LaunchScreen::ShellFindFixture => {
+                let query = crate::screenshot::SHELL_FIXTURE_FIND;
+                tab.update(cx, |tab, cx| tab.show_find_fixture(query, window, cx));
             }
             LaunchScreen::ShellPickerFixture => {
                 crate::resource_actions::open_shell_picker_fixture(window, cx);

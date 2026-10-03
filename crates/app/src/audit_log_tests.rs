@@ -101,6 +101,7 @@ fn outcomes_serialize_lowercase() {
         (AuditOutcome::Applied, "applied"),
         (AuditOutcome::Failed, "failed"),
         (AuditOutcome::Unknown, "unknown"),
+        (AuditOutcome::Abandoned, "abandoned"),
     ] {
         let mut entry = full_entry();
         entry.outcome = outcome;

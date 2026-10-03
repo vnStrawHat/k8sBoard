@@ -186,6 +186,7 @@ impl Shells {
             cluster: cluster.clone(),
             namespace: "shop".to_owned(),
             pod: pod.to_owned(),
+            short_pod: pod.to_owned(),
             container: container.to_owned(),
         };
         self.fixture.with_window(cx, |window, cx| {
@@ -747,6 +748,7 @@ fn the_audit_fields_name_the_container_and_the_shell() {
         },
         namespace: "shop".to_owned(),
         pod: "api-0".to_owned(),
+        short_pod: "api-0".to_owned(),
         container: "app".to_owned(),
     };
     let (object, fields) = shell_audit(&target, ShellCommand::Bash);
@@ -760,4 +762,141 @@ fn the_audit_fields_name_the_container_and_the_shell() {
         values,
         [("container", Some("app")), ("command", Some("bash"))]
     );
+}
+
+// ---- held Enter on the release question ----
+
+fn enter_event(is_held: bool) -> gpui_kit::KeyDownEvent {
+    gpui_kit::KeyDownEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").expect("a valid keystroke"),
+        is_held,
+        prefer_character_input: false,
+    }
+}
+
+impl Shells {
+    fn send_enter(&self, is_held: bool, cx: &mut TestAppContext) {
+        use gpui_kit::InputEvent as _;
+        self.fixture.with_window(cx, |window, cx| {
+            window.dispatch_event(enter_event(is_held).to_platform_input(), cx);
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn a_held_enter_does_not_close_live_shells(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    let shells = two_clusters("held-enter", cx);
+    shells.open_and_confirm(&shells.stg, "api-0", "app", cx);
+    let target = shells.fixture.cluster("dev-c", cx);
+    shells
+        .fixture
+        .shell
+        .update(cx, |shell, cx| shell.switch_cluster(&target, cx));
+    cx.run_until_parked();
+    // The question is drawn once, so its content has the focus.
+    shells
+        .fixture
+        .with_window(cx, |window, cx| window.render_frame(cx));
+    assert!(shells.has_dialog(cx));
+    shells.send_enter(true, cx);
+    shells.send_enter(true, cx);
+    assert!(
+        shells.has_dialog(cx),
+        "the repeat of a held Enter keeps the question open"
+    );
+    assert_eq!(shells.tab_count(cx), 1, "and the shell runs");
+    // A fresh Enter answers it.
+    shells.send_enter(false, cx);
+    assert!(!shells.has_dialog(cx));
+    assert_eq!(shells.tab_count(cx), 0);
+}
+
+// ---- starts that never report ----
+
+#[gpui_kit::test]
+fn a_tab_closed_before_its_start_reports_is_audited_as_abandoned(cx: &mut TestAppContext) {
+    let shells = two_clusters("abandon-close", cx);
+    let dir = shells.audit_folder("abandon-close", cx);
+    shells.open_and_confirm(&shells.stg, "api-0", "app", cx);
+    shells.wait_for("the failed start", cx, || !audit_lines(&dir).is_empty());
+    let tab = shells.tabs(cx).remove(0);
+    // A new start that has not reported when the tab goes: the situation of a tab closed while it
+    // is still connecting (the fake answers too fast to catch one in flight).
+    shells.fixture.shell.update(cx, |shell, cx| {
+        shell.begin_shell_start(&tab, ShellCommand::Auto, cx);
+    });
+    drop(tab);
+    shells.fixture.shell.update(cx, |shell, cx| {
+        shell.dock.update(cx, |dock, cx| dock.close_all(cx));
+    });
+    shells.wait_for("the abandoned line", cx, || audit_lines(&dir).len() == 2);
+    let lines = audit_lines(&dir);
+    assert_eq!(lines[0]["outcome"], "failed");
+    assert_eq!(lines[1]["outcome"], "abandoned");
+    assert_eq!(lines[1]["action"], "Open shell");
+    assert_eq!(lines[1]["cluster"], "stg-b");
+    assert_eq!(lines[1]["object"]["name"], "api-0");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn a_start_replaced_before_it_reports_is_audited_as_abandoned(cx: &mut TestAppContext) {
+    let shells = two_clusters("abandon-replace", cx);
+    let dir = shells.audit_folder("abandon-replace", cx);
+    shells.open_and_confirm(&shells.stg, "api-0", "app", cx);
+    shells.wait_for("the failed start", cx, || !audit_lines(&dir).is_empty());
+    let tab = shells.tabs(cx).remove(0);
+    shells.fixture.shell.update(cx, |shell, cx| {
+        shell.begin_shell_start(&tab, ShellCommand::Auto, cx);
+        // A second start in the same tab replaces the first one, which never reported.
+        shell.begin_shell_start(&tab, ShellCommand::Bash, cx);
+    });
+    shells.wait_for("the abandoned line", cx, || audit_lines(&dir).len() == 2);
+    let lines = audit_lines(&dir);
+    assert_eq!(lines[1]["outcome"], "abandoned");
+    assert_eq!(
+        lines[1]["fields"][1]["value"], "auto",
+        "the replaced start, not the new one"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn a_start_that_reported_leaves_nothing_to_abandon(cx: &mut TestAppContext) {
+    let shells = two_clusters("abandon-none", cx);
+    let dir = shells.audit_folder("abandon-none", cx);
+    shells.open_and_confirm(&shells.stg, "api-0", "app", cx);
+    shells.wait_for("the failed start", cx, || !audit_lines(&dir).is_empty());
+    shells.fixture.shell.update(cx, |shell, cx| {
+        shell.dock.update(cx, |dock, cx| dock.close_all(cx));
+    });
+    cx.run_until_parked();
+    std::thread::sleep(Duration::from_millis(200));
+    cx.run_until_parked();
+    assert_eq!(
+        audit_lines(&dir).len(),
+        1,
+        "only the line of the start itself"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn quitting_writes_the_starts_that_never_reported(cx: &mut TestAppContext) {
+    let shells = two_clusters("abandon-quit", cx);
+    let dir = shells.audit_folder("abandon-quit", cx);
+    shells.open_and_confirm(&shells.stg, "api-0", "app", cx);
+    shells.wait_for("the failed start", cx, || !audit_lines(&dir).is_empty());
+    let tab = shells.tabs(cx).remove(0);
+    shells.fixture.shell.update(cx, |shell, cx| {
+        shell.begin_shell_start(&tab, ShellCommand::Auto, cx);
+        shell.abandon_all_shell_starts(cx);
+        // The quit already wrote it: nothing is left for the release of the tab.
+        assert!(shell.shell_starts.pending.is_empty());
+    });
+    let lines = audit_lines(&dir);
+    assert_eq!(lines.len(), 2, "written at once, before the process ends");
+    assert_eq!(lines[1]["outcome"], "abandoned");
+    let _ = std::fs::remove_dir_all(&dir);
 }

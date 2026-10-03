@@ -422,3 +422,20 @@ fn modes_report_bracketed_paste() {
     session.feed(b"\x1b[?2004h", now());
     assert!(session.modes().bracketed_paste);
 }
+
+#[test]
+fn find_matches_follow_the_text_through_a_resize() {
+    let mut session = fed(b"api one\r\nx\r\napi two\r\ny");
+    assert_eq!(session.find("api"), 2);
+    // The element grows the grid after the first frame; rows are reflowed.
+    assert!(session.resize(GridSize { cols: 40, rows: 12 }));
+    let top = session.snapshot(now()).viewport_top();
+    let rows = screen_text(&mut session);
+    assert_eq!(session.find_matches().len(), 2);
+    for found in session.find_matches() {
+        let row =
+            usize::try_from(i64::try_from(found.row.0).unwrap() - i64::try_from(top.0).unwrap())
+                .expect("a match on screen");
+        assert!(rows[row].starts_with("api"), "{row}: {rows:?}");
+    }
+}

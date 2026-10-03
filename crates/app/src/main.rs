@@ -34,6 +34,7 @@ mod environment;
 mod event_rows;
 mod file_export;
 mod filter_bar;
+mod fresh_enter;
 mod fuzzy_score;
 mod helm_release_view;
 mod helm_rows;

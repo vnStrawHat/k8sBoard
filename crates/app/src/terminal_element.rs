@@ -170,10 +170,12 @@ fn paint(
     };
     let palette = *session.palette();
     let cursor_shape = session.cursor_shape();
-    // Copied first: the snapshot below borrows the session mutably until the last paint.
-    let matches = session.find_matches().to_vec();
+    session.refresh(Instant::now());
+    // Both are shared borrows of the session, so the matches are read in place every frame.
+    let session = &*session;
+    let snapshot = session.view();
+    let matches = session.find_matches();
     let current_match = session.current_find_match();
-    let snapshot = session.snapshot(Instant::now());
 
     window.paint_quad(fill(bounds, hsla_of(palette.background)));
     let cell = frame.cell;
@@ -184,7 +186,7 @@ fn paint(
     }
     paint_selection(snapshot, bounds.origin, frame, window);
     paint_find_matches(
-        &matches,
+        matches,
         current_match,
         snapshot,
         bounds.origin,
