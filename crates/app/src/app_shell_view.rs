@@ -168,6 +168,7 @@ impl AppShell {
     /// Takes `cluster` out of the view with what depends on it: its log tabs, the drawer when the
     /// subject is there. The returned slot is dropped by the caller once the delegates let go.
     fn release_slot(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) -> Option<ViewSlot> {
+        self.close_edit_of(cluster, cx);
         if self
             .selected
             .as_ref()
@@ -243,8 +244,10 @@ impl AppShell {
             cx.new(|cx| ClusterSession::new(kubeconfig, &summary, namespace, kind, cache, cx));
         // The new session is still connecting; it keeps the choice for `LiveCluster::start`.
         let is_overview = self.screen == Screen::Overview && self.is_primary(cluster);
+        let edit_kind = self.screen.edit_kind();
         session.update(cx, |session, cx| {
-            session.set_overview_visible(is_overview, cx)
+            session.set_overview_visible(is_overview, cx);
+            session.request_kind_access(edit_kind, cx);
         });
         let observed = cluster.clone();
         let observer = cx.observe(&session, move |shell, _, cx| {

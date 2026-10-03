@@ -46,6 +46,7 @@ mod issue_kind_rules;
 mod issue_rules;
 mod issue_table;
 mod keymap;
+mod kind_access;
 mod kind_diagnosis;
 mod kind_drawer;
 mod kind_join;
@@ -143,6 +144,8 @@ mod who_can_view;
 mod workload_actions;
 mod workload_rows;
 mod write_guard;
+mod yaml_diff;
+mod yaml_edit;
 mod yaml_view;
 
 use std::process::ExitCode;

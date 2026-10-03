@@ -62,14 +62,17 @@ gpui_kit::actions!(
         TerminalPaste,
         TerminalFind,
         CloseTerminalFind,
+        // Edit YAML (0031): applies the edit in the editor.
+        ApplyEdit,
     ]
 );
 
 /// Chords: they work anywhere in the shell tree, text fields included.
 const WINDOW: &str = "AppShell";
-/// Single keys: they never act in a text field, menu, popover, or dialog. Dialogs sit outside
-/// `AppShell`, so `!Dialog` is redundant; it is kept so the predicate states the rule.
-const WORKSPACE: &str = "AppShell && !Input && !PopupMenu && !Popover && !Dialog && !Terminal";
+/// Single keys: they never act in a text field, menu, popover, dialog, or the Edit YAML view. Dialogs sit
+/// outside `AppShell`, so `!Dialog` is redundant; it is kept so the predicate states the rule.
+const WORKSPACE: &str =
+    "AppShell && !Input && !PopupMenu && !Popover && !Dialog && !Terminal && !YamlEdit";
 /// Overrides of the keys the kit table binds itself (`up down home end pageup pagedown escape`).
 const TABLE: &str = "AppShell > DataTable";
 /// The text fields whose Escape returns the focus to the table.
@@ -95,6 +98,9 @@ const PALETTE_ARGUMENT_INPUT: &str = "PaletteArgument > Input";
 /// The New forward and Change local port forms (spec 0035), which handle a fresh Enter themselves.
 pub(crate) const FORWARD_FORM: &str = "ForwardForm";
 const FORWARD_FORM_INPUT: &str = "ForwardForm > Input";
+/// The Edit YAML view (spec 0031): its editor is a text field, and so is the rest of the view for the
+/// workspace's single keys.
+pub(crate) const YAML_EDIT: &str = "YamlEdit";
 
 /// Registers every binding of the app except the switcher popover's own keys
 /// (`cluster_switcher::bind_keys`). It runs after `gpui_kit::init`, so at equal depth these win
@@ -163,6 +169,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("tab", PalettePreview, Some(PALETTE_INPUT)),
         // Ctrl Enter on a Scale entry turns the query into a replicas field (0032).
         KeyBinding::new("secondary-enter", ScaleCursorRow, Some(PALETTE_INPUT)),
+        // Ctrl S in the Edit YAML view checks the edit with the server, then applies it.
+        KeyBinding::new("secondary-s", ApplyEdit, Some(YAML_EDIT)),
     ]);
     // The confirm dialog handles Enter itself (a held Enter must never confirm), so the kit's Enter
     // bindings of the dialog and of its text field are switched off inside it.
@@ -322,6 +330,11 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         row(SelectedResource, "Cordon or uncordon node", Cordon),
         row(SelectedResource, "Drain node (opens a dialog)", Drain),
         row(SelectedResource, "Edit YAML", EditYaml),
+        row(
+            SelectedResource,
+            "Apply the edit (Edit YAML view)",
+            ApplyEdit,
+        ),
         row(SelectedResource, "Restart rollout", RestartRollout),
         row(SelectedResource, "Scale", Scale),
         row(SelectedResource, "Delete", Delete),

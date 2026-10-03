@@ -130,7 +130,7 @@ pub use node::{
     ConditionStatus, NodeAddress, NodeCondition, NodeReadiness, NodeResource, NodeScheduling,
     NodeStatus, NodeSummary, NodeSystemInfo, NodeTaint,
 };
-pub use object_edit::{EditBase, EditError, ObjectEdit};
+pub use object_edit::{EditBase, EditError, ObjectEdit, Rebased, format_yaml, rebase};
 pub use object_write::{
     ChangedField, WriteEffect, WriteError, WriteMode, WriteOperation, WriteOutcome, WritePolicy,
     WriteRequest,

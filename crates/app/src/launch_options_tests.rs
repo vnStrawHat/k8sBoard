@@ -859,3 +859,14 @@ fn usage_lists_the_port_forward_screens() {
         assert!(USAGE.contains(name), "{name}");
     }
 }
+
+#[test]
+fn screen_edit_yaml_diff_parses() {
+    let screen = run_options(&["--screen", "edit-yaml-diff"]).screen;
+    assert_eq!(screen, LaunchScreen::EditYamlDiff);
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::Deployments));
+    // It is opened from fixed data once the shell renders, like a dialog screen, and selects no row.
+    assert!(screen.opens_dialog());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("edit-yaml-diff"));
+}

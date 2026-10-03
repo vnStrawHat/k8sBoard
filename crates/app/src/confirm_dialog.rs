@@ -29,6 +29,7 @@ use crate::app_shell::write_flow::{
 };
 use crate::cluster_registry::ClusterRef;
 use crate::environment::{Environment, environment_badge};
+use crate::resource_actions::ResourceAction;
 use crate::settings::AppSettings;
 use crate::write_guard::{ActionRisk, DialogConfirm, confirm_step};
 
@@ -650,6 +651,17 @@ impl ConfirmDialog {
         Some(v_flex().gap_1().children(lines).children(warnings))
     }
 
+    /// What a passed dry-run adds: the replace of an edit carries the base `resourceVersion`, so a
+    /// pass also says nothing changed on the server since the editor opened.
+    fn passed_note(&self) -> &'static str {
+        match &self.kind {
+            DialogKind::Write(intent) if matches!(intent.action, ResourceAction::EditYaml(_)) => {
+                " · unchanged since you opened it"
+            }
+            _ => "",
+        }
+    }
+
     fn render_dry_run(&self, cx: &App) -> Option<AnyElement> {
         let theme = cx.theme();
         let total = self.items.len();
@@ -678,7 +690,11 @@ impl ConfirmDialog {
                 theme.success,
             ),
             DryRunState::Passed { elapsed } => (
-                format!("Server dry-run passed · {} ms", elapsed.as_millis()),
+                format!(
+                    "Server dry-run passed · {} ms{}",
+                    elapsed.as_millis(),
+                    self.passed_note()
+                ),
                 theme.success,
             ),
             DryRunState::Failed(text) => (text.to_string(), theme.danger),
@@ -905,6 +921,11 @@ impl ConfirmDialog {
             DialogKind::Connect(intent) => Some(intent.button.to_string()),
             DialogKind::Unlock { .. } => None,
         }
+    }
+
+    /// What a passed dry-run adds to its line.
+    pub(crate) fn dry_run_note(&self) -> &'static str {
+        self.passed_note()
     }
 
     pub(crate) fn block_reason(&self, cx: &App) -> Option<SharedString> {

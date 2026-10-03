@@ -430,7 +430,7 @@ static CONFIG_MAPS: KindSpec = KindSpec {
         column("Used by", 220., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &[KindAction::keyed("Edit", ResourceAction::EditYaml)],
+    read_only_actions: &[],
     delete_label: "Delete configmap…",
     has_port_forward: false,
 };
@@ -1362,10 +1362,8 @@ mod tests {
             action_of(ResourceKind::Deployments, "Restart rollout"),
             Some(Some(ResourceAction::RestartRollout(ObjectKind::Deployment)))
         );
-        assert_eq!(
-            action_of(ResourceKind::ConfigMaps, "Edit"),
-            Some(Some(ResourceAction::EditYaml))
-        );
+        // Edit YAML is one item of every editable kind's menu, not a kind action of its own.
+        assert_eq!(action_of(ResourceKind::ConfigMaps, "Edit"), None);
         // Roll back has a unit action of its own, with no default key.
         assert_eq!(
             action_of(ResourceKind::Deployments, "Roll back…"),

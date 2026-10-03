@@ -29,7 +29,7 @@
 | Cron schedules + time zones | own robfig port + `jiff` `tzdb-bundle-always` (0012, done) | 0012 |
 | x509 not-after | `x509-cert` 0.3 with `pem` 3 and `zeroize` (0016, done; Cargo.lock also records the inert `base64ct`) | 0016 |
 | Helm decoding | `flate2` 1 + `base64` 0.22 + `serde-saphyr` `deserialize` for manifests (0017, done; all were already locked, so `Cargo.lock` only lists them under `k8sboard-cluster`) | 0017 |
-| Diff | `similar` (named in the stack table); 0017 uses a path diff of the values, so `similar` waits for 0031 | 0031 |
+| Diff | `similar` 3.2.0 (pinned, default features, no dependencies of its own); 0017 uses a path diff of the values | 0031 (added) |
 | Regex log filter | `regex` | 0019 |
 | Topology layout | hand-written (0022 decision 20): kind columns, bands, and barycenter sweeps; no layout crate (done) | 0022 |
 | PNG export | `resvg` 0.46 (`text`, `system-fonts`), the version `gpui-pre` already builds, so `Cargo.lock` only lists it under `k8sboard` (0022, done) | 0022 |

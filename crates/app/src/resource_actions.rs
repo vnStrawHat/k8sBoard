@@ -24,6 +24,7 @@ use crate::keymap::{
     CopyName, Cordon, Delete, Drain, EditYaml, OpenShell, PauseRollout, PortForward, RerunJob,
     RestartRollout, RollBack, Scale, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
 };
+use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
 use crate::live_sections::claim_pods;
 use crate::log_target::{LogTarget, workload_label};
@@ -50,7 +51,8 @@ pub(crate) enum ResourceAction {
     Drain,
     CopyName,
     ViewYaml,
-    EditYaml,
+    /// Carries the kind of the row: only the editable kinds offer it (spec 0031).
+    EditYaml(ObjectKind),
     Delete,
     /// Carries the kind of the row: Deployments, StatefulSets, and DaemonSets restart.
     RestartRollout(ObjectKind),
@@ -117,6 +119,15 @@ enum ActionGate {
     },
     /// A mutating action whose spec, and so whose permission check, has not been written yet.
     Planned,
+}
+
+/// The object kind Edit YAML edits on a row of `kind`; `None` for a kind that is not editable. A
+/// Helm release reads as a Secret, but its record is never edited here.
+pub(crate) fn edit_yaml_kind(kind: ResourceKind) -> Option<ObjectKind> {
+    if kind == ResourceKind::HelmReleases {
+        return None;
+    }
+    kind.builtin_object().filter(|object| object.is_editable())
 }
 
 /// The permission a restart of `kind` needs; `None` for a kind that does not restart.
@@ -202,7 +213,11 @@ impl ResourceAction {
                 checks: vec![AccessCheck::PatchDeployments],
                 is_shipped: true,
             },
-            Self::Drain | Self::EditYaml | Self::Delete => ActionGate::Planned,
+            Self::EditYaml(kind) => ActionGate::Mutating {
+                checks: vec![AccessCheck::Update(kind)],
+                is_shipped: true,
+            },
+            Self::Drain | Self::Delete => ActionGate::Planned,
         }
     }
 
@@ -217,7 +232,7 @@ impl ResourceAction {
             Self::Drain => RowAction::Drain,
             Self::CopyName => RowAction::CopyName,
             Self::ViewYaml => RowAction::ViewYaml,
-            Self::EditYaml => RowAction::EditYaml,
+            Self::EditYaml(_) => RowAction::EditYaml,
             Self::Delete => RowAction::Delete,
             Self::RestartRollout(_) => RowAction::RestartRollout,
             Self::Scale(_) => RowAction::Scale,
@@ -266,7 +281,7 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::Cordon
         | ResourceAction::CopyName
         | ResourceAction::ViewYaml
-        | ResourceAction::EditYaml
+        | ResourceAction::EditYaml(_)
         | ResourceAction::RestartRollout(_)
         | ResourceAction::Scale(_)
         | ResourceAction::PauseRollout
@@ -288,7 +303,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::Drain => "Drain",
         ResourceAction::CopyName => "Copy name",
         ResourceAction::ViewYaml => "View YAML",
-        ResourceAction::EditYaml => "Edit YAML",
+        ResourceAction::EditYaml(_) => "Edit YAML",
         ResourceAction::Delete => "Delete",
         ResourceAction::RestartRollout(_) => "Restart rollout",
         ResourceAction::Scale(_) => "Scale",
@@ -333,9 +348,15 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         RowAction::ViewYaml => object_ref(subject)
             .is_some()
             .then_some(ResourceAction::ViewYaml),
-        RowAction::EditYaml => object_ref(subject)
-            .is_some()
-            .then_some(ResourceAction::EditYaml),
+        // The editable kinds only: a Helm release has no object reference, a custom resource no
+        // built-in kind.
+        RowAction::EditYaml => match subject {
+            ResourceKey::Pod { .. } => Some(ObjectKind::Pod),
+            ResourceKey::Node { .. } => None,
+            ResourceKey::Kind { kind, .. } => edit_yaml_kind(*kind),
+        }
+        .filter(|kind| kind.is_editable())
+        .map(ResourceAction::EditYaml),
         // The kind table is the one source of which workload kinds offer the action.
         RowAction::RestartRollout
         | RowAction::Scale
@@ -404,7 +425,7 @@ pub(crate) fn action_availability(
 }
 
 fn gate_availability(gate: &ActionGate, guard: &ClusterGuard<'_>) -> ActionAvailability {
-    if let Some(reason) = before_lock_reason(gate, guard.access) {
+    if let Some(reason) = before_lock_reason(gate, guard.access, guard.kind_access) {
         return disabled(reason);
     }
     if matches!(gate, ActionGate::Mutating { .. }) && guard.lock == WriteLock::Locked {
@@ -417,14 +438,18 @@ fn gate_availability(gate: &ActionGate, guard: &ClusterGuard<'_>) -> ActionAvail
 /// YAML, Copy name) that is the whole gate, so they need no guard. The Forward and shell tooltips
 /// ask it too: they only explain why a feature that has not shipped is off.
 fn availability_before_lock(action: ResourceAction, access: &AccessState) -> ActionAvailability {
-    match before_lock_reason(&action.gate(), access) {
+    match before_lock_reason(&action.gate(), access, KindAccessMap::EMPTY) {
         Some(reason) => disabled(reason),
         None => ActionAvailability::Enabled,
     }
 }
 
 /// Rows 2-4 of the gate: why the action is off before the lock is even asked.
-fn before_lock_reason(gate: &ActionGate, access: &AccessState) -> Option<SharedString> {
+fn before_lock_reason(
+    gate: &ActionGate,
+    access: &AccessState,
+    kind_access: &KindAccessMap,
+) -> Option<SharedString> {
     match gate {
         ActionGate::Planned
         | ActionGate::Mutating {
@@ -432,24 +457,47 @@ fn before_lock_reason(gate: &ActionGate, access: &AccessState) -> Option<SharedS
         } => Some(NOT_SHIPPED_REASON.into()),
         // An action with no check is never held back by the permission state.
         ActionGate::ReadOnly { check } => {
-            check.and_then(|check| permission_reason(&[check], access))
+            check.and_then(|check| permission_reason(&[check], access, kind_access))
         }
-        ActionGate::Mutating { checks, .. } => permission_reason(checks, access),
+        ActionGate::Mutating { checks, .. } => permission_reason(checks, access, kind_access),
     }
 }
 
 /// Why the permissions do not allow the action: the state while they are not known, else the
 /// first check of `checks` that is not allowed. A denied verb with its sibling verb on the same
 /// resource in the list names both (`get and create pods/exec`), because the user needs both.
-fn permission_reason(checks: &[AccessCheck], access: &AccessState) -> Option<SharedString> {
-    match access {
-        AccessState::Checking { .. } => Some("Checking permissions…".into()),
-        AccessState::Unknown => Some("Permissions could not be checked".into()),
-        AccessState::Known(report) => {
-            let denied = checks.iter().find(|check| !report.is_allowed(**check))?;
-            Some(denied_text(*denied, checks).into())
+/// An `Update(kind)` check is answered by the lazy review of its kind (`kind_access`, spec 0031);
+/// the other checks by the session's report.
+fn permission_reason(
+    checks: &[AccessCheck],
+    access: &AccessState,
+    kind_access: &KindAccessMap,
+) -> Option<SharedString> {
+    let mut denied = None;
+    for check in checks {
+        let report = match check {
+            AccessCheck::Update(kind) => match kind_access.get(*kind) {
+                None | Some(KindAccess::Checking { .. }) => {
+                    return Some("Checking permissions…".into());
+                }
+                Some(KindAccess::Unknown) => {
+                    return Some("Permissions could not be checked".into());
+                }
+                Some(KindAccess::Known(report)) => report,
+            },
+            _ => match access {
+                AccessState::Checking { .. } => return Some("Checking permissions…".into()),
+                AccessState::Unknown => {
+                    return Some("Permissions could not be checked".into());
+                }
+                AccessState::Known(report) => report,
+            },
+        };
+        if denied.is_none() && !report.is_allowed(*check) {
+            denied = Some(*check);
         }
     }
+    Some(denied_text(denied?, checks).into())
 }
 
 /// The verb pairs that read as one right: a server before Kubernetes 1.35 asks for `get`, one after
@@ -512,6 +560,10 @@ pub(crate) fn pod_menu(
         .item(view_logs_item(pod, None, live, row, dock))
         .item(items.open_shell)
         .item(items.port_forward)
+        .item(action_item(
+            ResourceAction::EditYaml(ObjectKind::Pod),
+            guard,
+        ))
         .item(view_yaml_item(row.object(ResourceKey::of_pod(pod)), shell))
         .separator()
         .item(copy_name_item(&pod.name, access))
@@ -808,7 +860,8 @@ pub(crate) fn kind_menu(
         ));
     }
     let change_actions = kind.read_only_actions();
-    if !change_actions.is_empty() {
+    let edit_yaml = edit_yaml_kind(kind);
+    if !change_actions.is_empty() || edit_yaml.is_some() {
         menu = menu.separator();
     }
     for item in change_actions {
@@ -816,6 +869,9 @@ pub(crate) fn kind_menu(
             Some(action) => row_action_item(item.label, action, guard, &row.object, replica_sets),
             None => disabled_menu_item(item.label, NOT_SHIPPED_REASON.into()),
         });
+    }
+    if let Some(object) = edit_yaml {
+        menu = menu.item(action_item(ResourceAction::EditYaml(object), guard));
     }
     let menu = menu
         .separator()

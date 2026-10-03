@@ -889,6 +889,12 @@ impl AppShell {
         let intent = Rc::clone(&step.intent);
         cx.spawn(async move |_, cx| {
             let result = checked_write(&shell, step, cx).await;
+            // An edit shows its own outcome: the editor closes, or tells what went wrong in place.
+            if matches!(intent.action, ResourceAction::EditYaml(_)) {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.edit_commit_finished(&intent, &result, cx)
+                });
+            }
             finish_commit(&dialog, &intent, handle, result, cx);
         })
         .detach();
@@ -911,6 +917,9 @@ fn finish_commit(
         .and_then(|outcome| outcome.created_name.clone());
     let result = result.map(|_| ());
     if let Err(error) = &result
+        // A stale `resourceVersion` cannot pass a second time, so an edit never offers Retry: its
+        // editor rebases instead.
+        && !matches!(intent.action, ResourceAction::EditYaml(_))
         && let Some(text) = retryable_text(error)
         && dialog
             .update(cx, |dialog, cx| dialog.commit_failed(text.clone(), cx))

@@ -81,7 +81,7 @@ fn workload_clusters_answering(
 
 impl Clusters {
     /// Shows `kind` and gives each cluster the loaded `rows` of its own.
-    fn show_kind(
+    pub(super) fn show_kind(
         &self,
         kind: ResourceKind,
         prod_rows: Vec<KindRow>,
@@ -103,7 +103,7 @@ impl Clusters {
     }
 
     /// Puts the cursor on the object `name` of `kind` in `cluster`.
-    fn cursor_on(
+    pub(super) fn cursor_on(
         &self,
         cluster: &ClusterRef,
         kind: ResourceKind,

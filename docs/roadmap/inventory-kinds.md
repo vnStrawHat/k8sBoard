@@ -10,7 +10,8 @@
 | Events tab | Planned(0006): a tab on Pods, a section on Node and kind drawers | 0006; becomes a tab in 0007 |
 | Copy name | Done for live kinds | 0005 |
 | Columns ▾, filter chips, sort | Done (0009); sort and hidden columns are saved per screen (0024) | 0009, 0024 |
-| Edit YAML (E) / Delete … (red, last) | Missing (disabled) | 0031 / 0033 |
+| Edit YAML (E) | Done (0031: every editable kind; enabled by the lazy `update` check) | 0031 |
+| Delete … (red, last) | Missing (disabled) | 0033 |
 | Monitor tab (◔ kinds: Pod, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, Node) | Done | 0010 (CPU, Memory), 0011 (Network, Disk I/O) |
 
 ## Per kind

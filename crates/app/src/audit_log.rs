@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::app_shell::write_flow::WriteIntent;
+use crate::resource_actions::{ResourceAction, action_label};
 use crate::write_guard::{ClusterGuard, WriteLock};
 
 const AUDIT_FILE: &str = "audit.jsonl";
@@ -119,7 +120,7 @@ pub(crate) fn audit_entry(
         cluster: guard.display_name().to_owned(),
         context: guard.summary.name.clone(),
         user: guard.summary.user.clone(),
-        action: intent.button.to_string(),
+        action: audit_action(intent),
         object: Some(AuditObject {
             kind: target.kind_name().to_owned(),
             namespace: target.namespace().map(str::to_owned),
@@ -129,6 +130,15 @@ pub(crate) fn audit_entry(
         outcome,
         error,
         note: note.and_then(clean_note),
+    }
+}
+
+/// The action the line records: the button of the dialog (`Cordon`), except for an edit, whose
+/// button says `Apply changes` and whose line says what was done: `Edit YAML`.
+fn audit_action(intent: &WriteIntent) -> String {
+    match intent.action {
+        ResourceAction::EditYaml(_) => action_label(intent.action).to_owned(),
+        _ => intent.button.to_string(),
     }
 }
 

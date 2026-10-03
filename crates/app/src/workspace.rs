@@ -106,7 +106,17 @@ impl AppShell {
 
     /// Header, banner, body, and the drawer overlay. The drawer covers this region only, so
     /// it never covers the dock.
-    fn render_upper(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn render_upper(&self, cx: &Context<Self>) -> AnyElement {
+        // The Edit YAML view takes the place of the table and the drawer (spec 0031). The cursor and
+        // the drawer flag are kept, so closing it shows the workspace as it was.
+        if let Some(edit) = &self.edit {
+            return v_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .child(edit.clone())
+                .into_any_element();
+        }
         // One read of the table view for everything drawn from it in this frame.
         let toolkit = self.toolkit_state(cx);
         let toolkit = toolkit.as_ref();
@@ -125,6 +135,7 @@ impl AppShell {
             .children(self.render_selection_bar(toolkit, cx))
             .children(self.render_value_popover(toolkit))
             .children(self.render_drawer(cx))
+            .into_any_element()
     }
 
     fn render_header(

@@ -11,7 +11,7 @@ use crate::cluster_switcher::{
 
 /// Keys that a later spec binds. No binding of this spec may take one; the owner removes the key
 /// from this list in the change that binds it.
-const RESERVED_KEYS: [&str; 1] = ["secondary-s"];
+const RESERVED_KEYS: [&str; 0] = [];
 
 fn bind_all(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -730,4 +730,47 @@ fn enter_is_suppressed_in_the_palette_argument(cx: &mut TestAppContext) {
     }
     // The palette's own query keeps the kit's Enter.
     assert!(resolve("enter", &["Root", "Dialog", "Command", "Input"], cx).is_some());
+}
+
+const YAML_EDIT_PATH: [&str; 3] = ["Root", "AppShell", "YamlEdit"];
+const YAML_EDIT_EDITOR_PATH: [&str; 4] = ["Root", "AppShell", "YamlEdit", "Input"];
+
+#[gpui_kit::test]
+fn ctrl_s_is_bound_in_yaml_edit(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("secondary-s", &YAML_EDIT_PATH, cx),
+        Some("k8sboard::ApplyEdit")
+    );
+    // The code editor is a text field inside the view: the chord works there too.
+    assert_eq!(
+        resolve("secondary-s", &YAML_EDIT_EDITOR_PATH, cx),
+        Some("k8sboard::ApplyEdit")
+    );
+    // Outside the view the chord is free.
+    assert_eq!(resolve("secondary-s", &SHELL, cx), None);
+}
+
+#[gpui_kit::test]
+fn single_keys_stay_silent_in_the_edit_yaml_view(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for key in ["e", "r", "j", "k", "l"] {
+        assert_eq!(resolve(key, &YAML_EDIT_PATH, cx), None, "{key}");
+        assert_eq!(resolve(key, &YAML_EDIT_EDITOR_PATH, cx), None, "{key}");
+    }
+    // Enter and Escape are the kit's own there, never the workspace's OpenDrawer and Dismiss.
+    for key in ["enter", "escape"] {
+        assert!(!is_app_action(resolve(key, &YAML_EDIT_PATH, cx)), "{key}");
+    }
+    // The same keys keep their meaning in the workspace.
+    assert_eq!(resolve("e", &SHELL, cx), Some("k8sboard::EditYaml"));
+}
+
+#[gpui_kit::test]
+fn the_app_chords_work_inside_the_edit_yaml_view(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("secondary-k", &YAML_EDIT_EDITOR_PATH, cx),
+        Some("k8sboard::OpenPalette")
+    );
 }

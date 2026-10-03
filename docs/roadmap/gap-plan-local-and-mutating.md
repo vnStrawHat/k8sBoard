@@ -40,7 +40,7 @@ Per-cluster read-only mode (default on for PROD), lock toggle and Ctrl Shift R, 
 ### 0031 — Edit YAML (W10)
 GPUI Kit Code Editor, diff vs cluster (default view), semantic change list, checks (dry-run, quota, rollout impact), Apply with conflict handling (C8), pre-apply snapshot for one-step rollback (incl. ConfigMaps), Revision history tab, "New" from templates (Namespace, ConfigMap, Quota, PDB, RoleBinding).
 - Deps: 0030, 0007. Risk: High (editor maturity, LSP optional). New dep: `similar`.
-- Spec: [0031-edit-yaml](../specs/0031-edit-yaml/README.md) (draft). Replaces the object with its `resourceVersion` instead of using SSA (C8 amended). Defers quota check, snapshot and rollback, Revision history, and templates to a later spec.
+- Spec: [0031-edit-yaml](../specs/0031-edit-yaml/README.md). **Done for the editor** (steps 3 and 4: the lazy `update` gate, the editor view, the Diff tab from a server dry-run, Apply with conflict rebase and the 422 panel, discard prompts, audit). Replaces the object with its `resourceVersion` instead of using SSA (C8 amended). Defers quota check, snapshot and rollback, Revision history, and templates to a later spec.
 
 ### 0032 — Workload and object actions
 Scale, Restart rollout, Pause/Resume, Roll back to revision, CronJob Trigger now and Suspend, Job Re-run, HPA min/max, StorageClass set default, PVC Expand, Certificate Renew; list-level buttons on selected rows; palette actions enabled.

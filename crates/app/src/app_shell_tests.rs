@@ -761,13 +761,15 @@ fn the_shell_handles_every_key_action_of_its_tree(cx: &mut TestAppContext) {
     let (window, _) = open_shell(cx);
     render(window, cx);
     // Ctrl , is handled by the app (no window), Ctrl O belongs to the Settings window, and the
-    // terminal chords belong to a focused shell tab (`shell_tab_tests` dispatches each of them).
-    let elsewhere: [&dyn gpui_kit::Action; 5] = [
+    // terminal chords belong to a focused shell tab (`shell_tab_tests` dispatches each of them), and
+    // Ctrl S belongs to the Edit YAML view (`app_shell_edit_tests` presses it there).
+    let elsewhere: [&dyn gpui_kit::Action; 6] = [
         &crate::settings_window::OpenSettings,
         &crate::settings_window::ImportKubeconfig,
         &crate::keymap::TerminalCopy,
         &crate::keymap::TerminalPaste,
         &crate::keymap::TerminalFind,
+        &crate::keymap::ApplyEdit,
     ];
     for row in crate::keymap::shortcut_rows() {
         if elsewhere.iter().any(|other| other.partial_eq(&*row.action)) {

@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::connection::{ClusterConnection, ClusterError};
 use crate::edit_placeholders::{self, Unrestorable};
-use crate::edit_preview::{FieldPath, field_paths, has_last_applied};
+use crate::edit_preview::{FieldPath, copy_path, field_paths, has_last_applied};
 use crate::object_yaml::{EnvValues, ObjectKind, ObjectRef, mask_object, to_yaml_text};
 
 const ACTION: &str = "reading the object to edit";
@@ -83,12 +83,7 @@ impl EditBase {
             masked: object,
             text: String::new(),
         };
-        let header = if base.is_secret() {
-            format!("{EDIT_HEADER}\n{SECRET_HEADER}")
-        } else {
-            EDIT_HEADER.to_owned()
-        };
-        base.text = to_yaml_text(&base.masked, Some(&header))?;
+        base.text = to_yaml_text(&base.masked, Some(&edit_header(base.is_secret())))?;
         Ok(base)
     }
 
@@ -129,6 +124,15 @@ impl ClusterConnection {
         let value = self.get_object(object, ACTION).await?;
         EditBase::from_object(object.clone(), value, env)
             .map_err(|message| self.unexpected_response(ACTION, message))
+    }
+}
+
+/// The comment lines above the editor text; a Secret adds that its data is locked.
+fn edit_header(is_secret: bool) -> String {
+    if is_secret {
+        format!("{EDIT_HEADER}\n{SECRET_HEADER}")
+    } else {
+        EDIT_HEADER.to_owned()
     }
 }
 
@@ -270,6 +274,74 @@ impl ObjectEdit {
     pub(crate) fn edited(&self) -> &Value {
         &self.edited
     }
+}
+
+/// Re-serializes the editor text the way the editor text is built: sorted keys, the same
+/// serializer, the leading comment lines kept. Quoting and comments inside the body are not kept.
+pub fn format_yaml(text: &str) -> Result<String, EditError> {
+    let mut value = parse_mapping(text)?;
+    value.sort_all_objects();
+    let header: Vec<&str> = text
+        .lines()
+        .take_while(|line| line.starts_with('#'))
+        .collect();
+    let header = (!header.is_empty()).then(|| header.join("\n"));
+    to_yaml_text(&value, header.as_deref()).map_err(serialization_error)
+}
+
+/// The text of the failure is a fixed message of the serializer.
+fn serialization_error(message: &'static str) -> EditError {
+    EditError::Syntax {
+        line: 0,
+        column: 0,
+        message: message.to_owned(),
+    }
+}
+
+/// The user's edit moved onto a newer object (spec 0031 decision 21).
+// Debug is manual: counts only.
+pub struct Rebased {
+    /// The new base's object with the user's changed paths applied, under the edit header.
+    pub text: String,
+    /// Paths of the user's changes that have no place on the new object.
+    pub unreachable: Vec<FieldPath>,
+    /// What changed on the server between the two bases.
+    pub server_changed: Vec<FieldPath>,
+}
+
+impl fmt::Debug for Rebased {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Rebased")
+            .field("unreachable", &self.unreachable.len())
+            .field("server_changed", &self.server_changed.len())
+            .finish()
+    }
+}
+
+/// Re-applies the paths `text` changed against `old` onto `new`: each path is set (or removed) in
+/// the new object, so a concurrent change to another path, or to another list item, stays. Where
+/// both sides changed one path, the user's value wins. A `<hidden>` copied from the text keeps
+/// meaning "the server's value", now the new one. The error is a syntax error or a non-mapping
+/// only; the identity and the placeholders are checked when the rebased text is applied.
+pub fn rebase(old: &EditBase, text: &str, new: &EditBase) -> Result<Rebased, EditError> {
+    let mut edited = parse_mapping(text)?;
+    strip_server_fields(&mut edited);
+    let server_changed = field_paths(&old.masked, &new.masked);
+    let mut result = new.masked.clone();
+    let mut unreachable = Vec::new();
+    for path in field_paths(&old.masked, &edited) {
+        if !copy_path(&mut result, &edited, &path) {
+            unreachable.push(path);
+        }
+    }
+    let text =
+        to_yaml_text(&result, Some(&edit_header(new.is_secret()))).map_err(serialization_error)?;
+    Ok(Rebased {
+        text,
+        unreachable,
+        server_changed,
+    })
 }
 
 fn parse_mapping(text: &str) -> Result<Value, EditError> {

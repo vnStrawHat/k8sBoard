@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::cluster_registry::{ClusterProfile, ClusterRef};
 use crate::cluster_session::AccessState;
 use crate::environment::Environment;
+use crate::kind_access::KindAccessMap;
 
 /// Whether a session may offer changes. Starts from the profile and toggles for the session only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +80,8 @@ pub(crate) fn confirm_step(mode: ConfirmMode, risk: ActionRisk, expected: &str) 
 pub(crate) struct ClusterGuard<'a> {
     pub(crate) cluster: ClusterRef,
     pub(crate) access: &'a AccessState,
+    /// The lazy `update` answers of the kinds shown so far (spec 0031).
+    pub(crate) kind_access: &'a KindAccessMap,
     pub(crate) lock: WriteLock,
     /// Holds the display name, environment, and confirm mode.
     pub(crate) profile: ClusterProfile,
@@ -92,6 +95,7 @@ pub(crate) struct ClusterGuard<'a> {
 impl<'a> ClusterGuard<'a> {
     pub(crate) fn new(
         access: &'a AccessState,
+        kind_access: &'a KindAccessMap,
         lock: WriteLock,
         profile: ClusterProfile,
         summary: ContextSummary,
@@ -100,6 +104,7 @@ impl<'a> ClusterGuard<'a> {
         Self {
             cluster: ClusterRef::of(&summary),
             access,
+            kind_access,
             lock,
             profile,
             summary,
@@ -134,7 +139,7 @@ pub(crate) fn test_guard<'a>(
         namespace: None,
         source: std::path::PathBuf::from("test.yaml"),
     };
-    ClusterGuard::new(access, lock, profile, summary, 0)
+    ClusterGuard::new(access, KindAccessMap::EMPTY, lock, profile, summary, 0)
 }
 
 #[cfg(test)]

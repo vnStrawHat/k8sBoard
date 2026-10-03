@@ -217,6 +217,48 @@ fn value_at<'a>(value: &'a Value, path: &FieldPath) -> Option<&'a Value> {
         })
 }
 
+/// Sets the value `edited` holds at `path` in `target`, and removes the field when `edited` has
+/// none there. A named item that `target` lacks is added. `false` when the parent of the path does
+/// not exist in `target`, so the change cannot be placed.
+pub(crate) fn copy_path(target: &mut Value, edited: &Value, path: &FieldPath) -> bool {
+    let Some((last, parents)) = path.0.split_last() else {
+        return false;
+    };
+    let Some(parent) = value_at_mut(target, &FieldPath(parents.to_vec())) else {
+        return false;
+    };
+    let value = value_at(edited, path).cloned();
+    match (last, parent, value) {
+        (PathSegment::Key(key), Value::Object(map), Some(value)) => {
+            map.insert(key.clone(), value);
+            true
+        }
+        (PathSegment::Key(key), Value::Object(map), None) => {
+            map.remove(key);
+            true
+        }
+        (PathSegment::Name(name), Value::Array(items), value) => {
+            let position = items.iter().position(|item| name_of(item) == Some(name));
+            match (position, value) {
+                (Some(index), Some(value)) => items[index] = value,
+                (None, Some(value)) => items.push(value),
+                (Some(index), None) => {
+                    items.remove(index);
+                }
+                (None, None) => {}
+            }
+            true
+        }
+        // A positional item is only ever changed, never added or removed: a list of another
+        // length is one path at the list itself.
+        (PathSegment::Index(index), Value::Array(items), Some(value)) if *index < items.len() => {
+            items[*index] = value;
+            true
+        }
+        _ => false,
+    }
+}
+
 fn value_at_mut<'a>(value: &'a mut Value, path: &FieldPath) -> Option<&'a mut Value> {
     path.0
         .iter()

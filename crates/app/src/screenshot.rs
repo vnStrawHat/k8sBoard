@@ -299,6 +299,42 @@ pub(crate) fn forward_fixtures(now: jiff::Timestamp) -> Vec<crate::port_forwards
     ]
 }
 
+/// The object `--screen edit-yaml-diff` edits (W10): the masked YAML of a Deployment, without the
+/// edit header. The screen changes `replicas` and the memory limit.
+#[cfg(feature = "screenshot")]
+pub(crate) const EDIT_FIXTURE_BEFORE: &str = "\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: \"38\"
+  labels:
+    app: api
+    app.kubernetes.io/part-of: payments
+    team: payments
+  name: api
+  namespace: payments
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+      - image: registry.example.com/payments/api:2.14.0
+        name: api
+        resources:
+          limits:
+            memory: 512Mi
+          requests:
+            cpu: 250m
+            memory: 256Mi
+";
+
 /// What `--screen shell-fixture` shows in the shell tab: the transcript of the W8b pane. The
 /// private OSC 7770 names the shell, as the `Auto` script does.
 #[cfg(feature = "screenshot")]

@@ -10,7 +10,7 @@ use cluster::{
     ClusterError, ConfigMapValues, ContextSummary, CrdSummary, CustomObjectFields,
     EndpointSliceSummary, EventFilter, EventSummary, HelmRevision, IngressSummary, InvolvedObject,
     JobSummary, Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary,
-    NodeSummary, PersistentVolumeSummary, PodSummary, RbacSnapshot, ReplicaSetSummary,
+    NodeSummary, ObjectKind, PersistentVolumeSummary, PodSummary, RbacSnapshot, ReplicaSetSummary,
     ResourceQuotaSummary, SecretSummary, ServerVersion, WatchUpdate,
 };
 use futures::StreamExt as _;
@@ -26,6 +26,7 @@ use crate::custom_kind::{CustomKind, CustomKindCache, custom_kinds};
 use crate::event_rows::newest_first;
 use crate::issue_board::{ISSUE_TICK, IssueBoard, IssueChange, IssueInputs, RunReason};
 use crate::issue_feeds::{FeedState, IssueFeeds, core_coverage};
+use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_join::{JoinInputs, join_rows};
 use crate::kind_row::{KindObject, KindRow};
 use crate::kubelet_metrics::KubeletDemand;
@@ -63,6 +64,9 @@ pub(crate) struct ClusterSession {
     /// The kind screen being shown, kept across Connecting and retry so that `LiveCluster::start`
     /// can start its watch.
     explorer_kind: Option<ResourceKind>,
+    /// The kind whose `update` permission the shown screen needs (Edit YAML, spec 0031). Kept across
+    /// Connecting and retry like `explorer_kind`.
+    access_kind: Option<ObjectKind>,
     /// Which events the Events screen asks the server for. Kept across Connecting and retry like
     /// `explorer_kind`; a new session starts at `All`.
     event_filter: EventFilter,
@@ -107,6 +111,8 @@ pub(crate) struct LiveCluster {
     /// Decided before the session is live, so it is never unknown.
     pub(crate) scope: NamespaceScope,
     pub(crate) access: AccessState,
+    /// The lazy `update` answers of the kinds a screen has shown in this scope (spec 0031).
+    pub(crate) kind_access: KindAccessMap,
     /// The RBAC snapshot of the analysis tools, listed on first need.
     pub(crate) rbac: RbacState,
     /// The Can do chips of the account whose drawer is open (`live_sections.rs`).
@@ -1133,6 +1139,7 @@ impl ClusterSession {
             generation: next_generation(),
             phase,
             explorer_kind,
+            access_kind: None,
             event_filter: EventFilter::All,
             custom_kind_cache,
             issues: IssueBoard::default(),
@@ -1382,6 +1389,7 @@ impl ClusterSession {
         let profile = AppSettings::get(cx).registry.profile(&self.summary);
         Some(ClusterGuard::new(
             &live.access,
+            &live.kind_access,
             self.lock,
             profile,
             self.summary.clone(),
@@ -1508,8 +1516,72 @@ impl ClusterSession {
                 message: "the connection task stopped unexpectedly".to_owned(),
             },
         };
+        self.review_kind_access(cx);
         self.refresh_kind_counts(CountTrigger::Review, cx);
         self.update_metrics_feeds(cx);
+        cx.notify();
+    }
+
+    /// Asks which kind the shown screen may be edited as; `None` when it edits nothing. The
+    /// `update` review runs once per kind and scope (spec 0031 decision 24) and is kept across a
+    /// reconnect, which asks again.
+    pub(crate) fn request_kind_access(&mut self, kind: Option<ObjectKind>, cx: &mut Context<Self>) {
+        self.access_kind = kind;
+        self.review_kind_access(cx);
+    }
+
+    fn review_kind_access(&mut self, cx: &mut Context<Self>) {
+        let Some(kind) = self.access_kind.filter(|kind| kind.is_editable()) else {
+            return;
+        };
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        if live.kind_access.get(kind).is_some() {
+            return;
+        }
+        let connection = live.connection.clone();
+        let scope = live.scope.clone();
+        let reviewing = runtime.spawn(async move {
+            connection
+                .review_access_for(&[AccessCheck::Update(kind)], scope)
+                .await
+        });
+        let task = cx.spawn(async move |this, cx| {
+            let result = reviewing.await;
+            let _ = this.update(cx, |session, cx| {
+                session.finish_kind_access(kind, result, cx)
+            });
+        });
+        live.kind_access
+            .set(kind, KindAccess::Checking { _task: task });
+    }
+
+    fn finish_kind_access(
+        &mut self,
+        kind: ObjectKind,
+        result: Result<Result<AccessReport, ClusterError>, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        let access = match result {
+            Ok(Ok(report)) => KindAccess::Known(report),
+            Ok(Err(error)) => {
+                tracing::warn!(message = %error_text(&error), "update access review failed");
+                KindAccess::Unknown
+            }
+            Err(_) => KindAccess::Unknown,
+        };
+        // The answer is what a live check records; it names a kind and a bool, nothing more.
+        tracing::debug!(
+            kind = kind.name(),
+            is_allowed = matches!(&access, KindAccess::Known(report) if report.is_allowed(AccessCheck::Update(kind))),
+            "update permission of the kind"
+        );
+        live.kind_access.set(kind, access);
         cx.notify();
     }
 
@@ -1571,10 +1643,13 @@ impl ClusterSession {
         live.kind_counts = KindCounts::default();
         // The fallback namespaces and so the coverage may differ in the new scope.
         live.rbac.reset_for_scope_change();
+        // The answers are for the old scope; the screen asks again for the new one.
+        live.kind_access.clear();
         live.refresh_kubelet_targets();
         if leaves_scope {
             self.topology_subject = None;
         }
+        self.review_kind_access(cx);
         cx.notify();
     }
 
@@ -2487,6 +2562,7 @@ impl LiveCluster {
             api_latency,
             scope,
             access,
+            kind_access: KindAccessMap::new(),
             rbac: RbacState::Idle,
             can_do: CanDoCell::default(),
             namespaces: LiveList::Loading,

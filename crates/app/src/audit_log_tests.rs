@@ -293,3 +293,44 @@ fn write_entry_uses_the_intent_cluster() {
     assert_eq!(entry.fields[0].path, "spec.unschedulable");
     assert_eq!(entry.fields[0].value.as_deref(), Some("true"));
 }
+
+#[test]
+fn audit_records_paths_only() {
+    use crate::app_shell::write_flow::WriteIntent;
+    use crate::yaml_edit::edit_intent;
+    use crate::yaml_edit::yaml_edit_tests::sample_edit;
+    use cluster::{ObjectKind, ObjectRef, WriteOperation, WriteRequest};
+
+    let target = ObjectRef::new(
+        ObjectKind::Deployment,
+        Some("payments".to_owned()),
+        "api".to_owned(),
+    )
+    .expect("a deployment");
+    let request = WriteRequest::new(
+        target,
+        WriteOperation::ReplaceObject(Box::new(sample_edit())),
+    )
+    .expect("an editable kind");
+    let cluster = crate::cluster_registry::ClusterRef {
+        kubeconfig: PathBuf::from("test.yaml"),
+        context: "stg-b".to_owned(),
+    };
+    let intent: WriteIntent = edit_intent(
+        &cluster,
+        &"stg-b".into(),
+        ObjectKind::Deployment,
+        request,
+        Vec::new(),
+    );
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let entry = audit_entry(&intent, &guard, AuditOutcome::Applied, None, None);
+    // The dialog says `Apply changes`; the line says what was done.
+    assert_eq!(entry.action, "Edit YAML");
+    assert_eq!(entry.fields.len(), 1);
+    assert_eq!(entry.fields[0].path, "spec.replicas");
+    assert_eq!(entry.fields[0].value, None);
+    let json = serde_json::to_string(&entry).expect("a line");
+    assert!(!json.contains("\"value\""), "{json}");
+}

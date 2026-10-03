@@ -281,7 +281,6 @@ fn unshipped_mutating_actions_say_a_later_version() {
         for action in [
             ResourceAction::OpenNodeShell,
             ResourceAction::Drain,
-            ResourceAction::EditYaml,
             ResourceAction::Delete,
         ] {
             assert_eq!(
@@ -1232,7 +1231,6 @@ fn key_availability_explains_a_pod_without_containers() {
 fn key_availability_disables_unshipped_keys_with_the_later_version_reason() {
     let access = known_denying(&[]);
     let offered = [
-        (RowAction::EditYaml, pod_key()),
         (RowAction::Delete, pod_key()),
         (RowAction::Drain, node_key()),
     ];
@@ -1367,7 +1365,7 @@ fn every_resource_action_has_a_row_action() {
         (ResourceAction::Drain, node_key()),
         (ResourceAction::CopyName, pod_key()),
         (ResourceAction::ViewYaml, pod_key()),
-        (ResourceAction::EditYaml, pod_key()),
+        (ResourceAction::EditYaml(ObjectKind::Pod), pod_key()),
         (ResourceAction::Delete, pod_key()),
         (
             ResourceAction::RestartRollout(ObjectKind::Deployment),
@@ -1408,7 +1406,7 @@ fn every_resource_action_has_a_row_action() {
 fn an_unavailable_key_says_what_and_why() {
     assert_eq!(
         unavailable_text(
-            action_label(ResourceAction::EditYaml),
+            action_label(ResourceAction::EditYaml(ObjectKind::Pod)),
             "Comes in a later version"
         ),
         "Edit YAML is unavailable: Comes in a later version"
@@ -1891,4 +1889,177 @@ fn every_new_row_action_has_a_unit_key_action() {
             .partial_eq(&TriggerCronJob)
     );
     assert!(RowAction::RerunJob.key_action().partial_eq(&RerunJob));
+}
+
+// ---- Edit YAML (spec 0031) ----
+
+use crate::kind_access::{KindAccess, KindAccessMap};
+
+fn update_report(kind: ObjectKind, is_allowed: bool) -> KindAccess {
+    let decision = if is_allowed {
+        AccessDecision::Allowed
+    } else {
+        AccessDecision::Denied { reason: None }
+    };
+    KindAccess::Known(AccessReport {
+        reviews: vec![AccessReview {
+            check: AccessCheck::Update(kind),
+            decision,
+        }],
+    })
+}
+
+/// The gate of Edit YAML on a Deployment of an unlocked or locked development cluster that holds
+/// `kind_access`.
+fn edit_gate(kind_access: &KindAccessMap, lock: WriteLock) -> ActionAvailability {
+    let access = known_denying(&[]);
+    let mut guard = test_guard(&access, lock, "dev-1", Environment::Development);
+    guard.kind_access = kind_access;
+    action_availability(ResourceAction::EditYaml(ObjectKind::Deployment), &guard)
+}
+
+#[test]
+fn lazy_gate_reads_kind_access() {
+    let mut map = KindAccessMap::new();
+    // Nothing asked yet: the check is still to come.
+    assert_eq!(
+        reason(edit_gate(&map, WriteLock::Unlocked)),
+        "Checking permissions…"
+    );
+    map.set(
+        ObjectKind::Deployment,
+        KindAccess::Checking {
+            _task: Task::ready(()),
+        },
+    );
+    assert_eq!(
+        reason(edit_gate(&map, WriteLock::Unlocked)),
+        "Checking permissions…"
+    );
+    map.set(ObjectKind::Deployment, KindAccess::Unknown);
+    assert_eq!(
+        reason(edit_gate(&map, WriteLock::Unlocked)),
+        "Permissions could not be checked"
+    );
+    map.set(
+        ObjectKind::Deployment,
+        update_report(ObjectKind::Deployment, false),
+    );
+    assert_eq!(
+        reason(edit_gate(&map, WriteLock::Unlocked)),
+        "Not permitted: update deployments"
+    );
+    map.set(
+        ObjectKind::Deployment,
+        update_report(ObjectKind::Deployment, true),
+    );
+    assert_eq!(
+        edit_gate(&map, WriteLock::Unlocked),
+        ActionAvailability::Enabled
+    );
+}
+
+#[test]
+fn edit_yaml_respects_the_lock_after_the_permission() {
+    let mut map = KindAccessMap::new();
+    map.set(
+        ObjectKind::Deployment,
+        update_report(ObjectKind::Deployment, true),
+    );
+    assert_eq!(
+        reason(edit_gate(&map, WriteLock::Locked)),
+        "dev-1 is read-only"
+    );
+}
+
+#[test]
+fn the_answer_of_another_kind_does_not_open_the_gate() {
+    let mut map = KindAccessMap::new();
+    map.set(
+        ObjectKind::ConfigMap,
+        update_report(ObjectKind::ConfigMap, true),
+    );
+    assert_eq!(
+        reason(edit_gate(&map, WriteLock::Unlocked)),
+        "Checking permissions…"
+    );
+}
+
+#[test]
+fn edit_yaml_is_offered_only_on_editable_kinds() {
+    let offered = |subject: &ResourceKey| subject_action(RowAction::EditYaml, subject);
+    assert_eq!(
+        offered(&pod_key()),
+        Some(ResourceAction::EditYaml(ObjectKind::Pod))
+    );
+    assert_eq!(
+        offered(&kind_key(ResourceKind::Deployments)),
+        Some(ResourceAction::EditYaml(ObjectKind::Deployment))
+    );
+    assert_eq!(
+        offered(&kind_key(ResourceKind::ConfigMaps)),
+        Some(ResourceAction::EditYaml(ObjectKind::ConfigMap))
+    );
+    assert_eq!(
+        offered(&kind_key(ResourceKind::ClusterRoles)),
+        Some(ResourceAction::EditYaml(ObjectKind::ClusterRole))
+    );
+    // A node, a read-only kind, and a Helm release (a Secret by storage) are not edited here.
+    assert_eq!(offered(&node_key()), None);
+    assert_eq!(offered(&kind_key(ResourceKind::Namespaces)), None);
+    assert_eq!(offered(&kind_key(ResourceKind::Events)), None);
+    assert_eq!(offered(&kind_key(ResourceKind::HelmReleases)), None);
+    assert_eq!(offered(&kind_key(ResourceKind::Crds)), None);
+}
+
+#[test]
+fn every_editable_kind_menu_gets_edit_yaml() {
+    for kind in ResourceKind::ALL {
+        let editable = kind.builtin_object().is_some_and(ObjectKind::is_editable)
+            && kind != ResourceKind::HelmReleases;
+        assert_eq!(edit_yaml_kind(kind).is_some(), editable, "{kind:?}");
+    }
+    assert_eq!(
+        edit_yaml_kind(ResourceKind::Secrets),
+        Some(ObjectKind::Secret)
+    );
+    assert_eq!(edit_yaml_kind(ResourceKind::HelmReleases), None);
+}
+
+#[test]
+fn edit_yaml_key_runs_the_resolved_action_when_the_gate_is_open() {
+    let access = known_denying(&[]);
+    let mut map = KindAccessMap::new();
+    map.set(ObjectKind::Pod, update_report(ObjectKind::Pod, true));
+    let mut guard = unlocked(&access);
+    guard.kind_access = &map;
+    let pod = pod_with(vec![container_of("app")]);
+    assert_eq!(
+        key_availability_of(RowAction::EditYaml, &pod_key(), Some(&pod), &guard),
+        KeyAvailability::Run(ResourceAction::EditYaml(ObjectKind::Pod))
+    );
+    let empty = KindAccessMap::new();
+    guard.kind_access = &empty;
+    assert_eq!(
+        disabled_reason(key_availability_of(
+            RowAction::EditYaml,
+            &pod_key(),
+            Some(&pod),
+            &guard
+        )),
+        "Checking permissions…"
+    );
+}
+
+#[test]
+fn screens_name_the_kind_their_rows_edit() {
+    use crate::app_shell::Screen;
+    assert_eq!(Screen::Pods.edit_kind(), Some(ObjectKind::Pod));
+    assert_eq!(
+        Screen::Kind(ResourceKind::Services).edit_kind(),
+        Some(ObjectKind::Service)
+    );
+    assert_eq!(Screen::Nodes.edit_kind(), None);
+    assert_eq!(Screen::Overview.edit_kind(), None);
+    assert_eq!(Screen::Kind(ResourceKind::HelmReleases).edit_kind(), None);
 }

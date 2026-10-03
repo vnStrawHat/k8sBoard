@@ -54,10 +54,10 @@
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
 | W10-1 | Read-only YAML view (managedFields hidden, status kept) | Done (0007) | — |
-| W10-2 | Editor (GPUI Kit Code Editor, Tree-sitter, LSP with cluster schema) | Missing | 0031 (LSP: decision C6) |
-| W10-3 | Diff vs cluster (default), semantic change list, checks (dry-run, quota, rollout impact) | Missing | 0031 |
-| W10-4 | Revision history tab | Missing | read-only list 0012; diff/restore 0031 |
-| W10-5 | Env-tier confirm dialog, audit-log note, snapshot for one-step rollback | Partial (confirm dialog and audit note: 0030; snapshot: 0031) | 0030, 0031 |
+| W10-2 | Editor (GPUI Kit Code Editor, Tree-sitter, LSP with cluster schema) | Done without LSP (0031; the server dry-run validates, decision C6) | — |
+| W10-3 | Diff vs cluster (default), semantic change list, checks (dry-run, quota, rollout impact) | Partial (0031: dry-run, rollout, stale last-applied, moved placeholders, leading zeros; no quota check) | quota check: a later spec |
+| W10-4 | Revision history tab | Missing | read-only list 0012; diff/restore: a later spec (0031 non-goal) |
+| W10-5 | Env-tier confirm dialog, audit-log note, snapshot for one-step rollback | Partial (confirm dialog and audit note: 0030, used by Apply in 0031; snapshot: a later spec, C1 first) | 0030, 0031 |
 
 ## Topology (W11)
 

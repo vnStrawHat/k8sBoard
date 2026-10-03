@@ -232,6 +232,10 @@ impl AppShell {
     /// drawer follows only while it is open. Overview and Topology have no table: the graph is a
     /// canvas without a cursor, so the keys do nothing there.
     fn step_cursor(&mut self, step: RowStep, window: &mut Window, cx: &mut Context<Self>) {
+        // The cursor is kept under the Edit YAML view; no key moves it there.
+        if self.is_editing() {
+            return;
+        }
         match self.screen {
             Screen::Overview | Screen::Topology | Screen::PortForwarding => {}
             Screen::Pods => {
@@ -277,6 +281,9 @@ impl AppShell {
     /// it reveals the issue's object, as a click does. Enter on any other focused control (a
     /// button the user tabbed to) stays with that control.
     fn open_drawer_at_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_editing() {
+            return;
+        }
         if !self.is_cursor_surface_focused(window, cx) {
             cx.propagate();
             return;
@@ -337,6 +344,9 @@ impl AppShell {
 
     /// Esc: undoes one step of the ladder.
     fn dismiss(&mut self, cx: &mut Context<Self>) {
+        if self.is_editing() {
+            return;
+        }
         let state = DismissState {
             is_dock_zoomed: self.dock.read(cx).mode() == DockMode::Zoomed,
             is_drawer_open: self.drawer.is_open,
@@ -448,6 +458,10 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // While Edit YAML is open the cursor is hidden, so no row key acts on it.
+        if self.is_editing() {
+            return;
+        }
         let Some(subject) = self.selected.clone() else {
             return;
         };
@@ -506,8 +520,10 @@ impl AppShell {
             }
             // Unreachable while gated; the owning spec (0034) wires it.
             ResourceAction::Drain => {}
-            // Unreachable while gated; the owning spec (0031–0036) wires it.
-            ResourceAction::EditYaml | ResourceAction::Delete => {}
+            // Opens the editor on the cursor row, in its own cluster (spec 0031).
+            ResourceAction::EditYaml(_) => self.open_edit(subject, window, cx),
+            // Unreachable while gated; the owning spec (0033) wires it.
+            ResourceAction::Delete => {}
             // Each builds its intent from the cursor row and opens the confirm dialog.
             ResourceAction::RestartRollout(_)
             | ResourceAction::PauseRollout

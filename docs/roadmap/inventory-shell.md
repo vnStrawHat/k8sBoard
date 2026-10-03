@@ -87,6 +87,6 @@
 | S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Partial (Clusters, Appearance, About; Keyboard Shortcuts done in 0028; Safety tier table and audit path in 0030 step 2a/3; About lists `oneterm-vt` in 0036) | 0025, 0028, 0030; the rest: Terminal & Shell (moved out of 0036), 0019, backlog |
 | M1 | Multi-cluster aggregated tables | Partial (Pods, Nodes, every kind screen) | 0027; Overview, Issues, Topology draw the primary cluster only until 0020–0022 follow "Screens that land later" |
 | G1 | Env tiers: prod typed name; staging, dev, local a confirm dialog with a click (user 2026-10-02; W10 text superseded) | Done | 0030 `write_guard.rs`, `confirm_dialog.rs` |
-| G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Partial (done in 0030: PROD opens read-only, lock toggle, server dry-run before every write, audit log; the diff comes in 0031) | 0030, 0031 |
+| G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Done (0030: PROD opens read-only, lock toggle, server dry-run before every write, audit log; 0031: the diff of Edit YAML) | 0030, 0031 |
 | G3 | Tokens: status tones OK/WARN/BAD/INFO/DONE | Done | 0003 `status_tone.rs` |
 | G4 | Env tokens PROD/STG/DEV/LOCAL as theme colors | Done | 0024 `environment_color` |

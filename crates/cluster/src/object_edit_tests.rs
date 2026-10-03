@@ -527,3 +527,205 @@ fn the_target_decides_what_is_masked_when_the_object_names_no_kind() {
     assert!(!base.text().contains("c2VjcmV0"), "{}", base.text());
     assert!(base.text().contains("kind: Secret"));
 }
+
+/// The Deployment as the server holds it after somebody else's change: `f` edits the raw object.
+fn deployment_base_after(f: impl FnOnce(&mut Value)) -> EditBase {
+    let mut object = deployment();
+    object["metadata"]["resourceVersion"] = json!("101");
+    f(&mut object);
+    base(ObjectKind::Deployment, "api", object)
+}
+
+fn rebased(old: &EditBase, text: &str, new: &EditBase) -> (Value, Rebased) {
+    let result = rebase(old, text, new).expect("the text parses");
+    let value: Value = serde_saphyr::from_str(&result.text).expect("the rebased text parses");
+    (value, result)
+}
+
+#[test]
+fn rebase_keeps_user_changes_on_the_new_base() {
+    let old = deployment_base();
+    let text = old.text().replacen("replicas: 3", "replicas: 5", 1);
+    let new = deployment_base_after(|object| {
+        object["metadata"]["labels"] = json!({"tier": "backend"});
+    });
+    let (value, result) = rebased(&old, &text, &new);
+    assert_eq!(value["spec"]["replicas"], json!(5));
+    assert_eq!(value["metadata"]["labels"], json!({"tier": "backend"}));
+    assert!(result.unreachable.is_empty());
+    let changed: Vec<String> = result
+        .server_changed
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(changed, ["metadata.labels"]);
+}
+
+#[test]
+fn rebase_keeps_a_concurrent_list_item_change() {
+    let old = deployment_base();
+    let text = old.text().replacen("image: api:1", "image: api:2", 1);
+    let new = deployment_base_after(|object| {
+        object["spec"]["template"]["spec"]["containers"][1]["image"] = json!("proxy:2");
+    });
+    let (value, result) = rebased(&old, &text, &new);
+    let containers = &value["spec"]["template"]["spec"]["containers"];
+    assert_eq!(containers[0]["image"], json!("api:2"));
+    assert_eq!(containers[1]["image"], json!("proxy:2"));
+    assert!(result.unreachable.is_empty());
+}
+
+#[test]
+fn rebase_user_value_wins_on_both_changed() {
+    let old = deployment_base();
+    let text = old.text().replacen("replicas: 3", "replicas: 5", 1);
+    let new = deployment_base_after(|object| object["spec"]["replicas"] = json!(7));
+    let (value, result) = rebased(&old, &text, &new);
+    assert_eq!(value["spec"]["replicas"], json!(5));
+    assert_eq!(result.server_changed[0].to_string(), "spec.replicas");
+}
+
+#[test]
+fn rebase_removed_key_stays_removed() {
+    let old = deployment_base();
+    let text = old.text().replacen("    team: payments\n", "", 1);
+    let new = deployment_base_after(|object| object["spec"]["replicas"] = json!(4));
+    let (value, result) = rebased(&old, &text, &new);
+    assert!(value["metadata"]["annotations"].get("team").is_none());
+    assert_eq!(value["spec"]["replicas"], json!(4));
+    assert!(result.unreachable.is_empty());
+}
+
+#[test]
+fn rebase_reports_unreachable_paths() {
+    let old = deployment_base();
+    let text = old.text().replacen("image: proxy:1", "image: proxy:9", 1);
+    let new = deployment_base_after(|object| {
+        let containers = object["spec"]["template"]["spec"]["containers"]
+            .as_array_mut()
+            .expect("containers");
+        containers.retain(|container| container["name"] != "sidecar");
+    });
+    let (value, result) = rebased(&old, &text, &new);
+    let unreachable: Vec<String> = result.unreachable.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        unreachable,
+        ["spec.template.spec.containers[sidecar].image"]
+    );
+    let containers = value["spec"]["template"]["spec"]["containers"]
+        .as_array()
+        .expect("containers");
+    assert_eq!(containers.len(), 1);
+}
+
+#[test]
+fn rebase_adds_a_new_named_item() {
+    let old = deployment_base();
+    let text = old.text().replacen(
+        "      - image: proxy:1\n        name: sidecar\n",
+        "      - image: proxy:1\n        name: sidecar\n      - image: extra:1\n        name: extra\n",
+        1,
+    );
+    assert_ne!(text, old.text(), "the fixture text changed");
+    let new = deployment_base_after(|object| object["spec"]["replicas"] = json!(4));
+    let (value, _) = rebased(&old, &text, &new);
+    let containers = value["spec"]["template"]["spec"]["containers"]
+        .as_array()
+        .expect("containers");
+    assert_eq!(containers.len(), 3);
+    assert_eq!(containers[2]["name"], json!("extra"));
+}
+
+#[test]
+fn rebase_keeps_a_placeholder_meaning_the_new_server_value() {
+    let old = deployment_base();
+    let text = old.text().replacen("replicas: 3", "replicas: 5", 1);
+    let new = deployment_base_after(|object| {
+        object["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"] =
+            json!("n3w-s3cr3t");
+    });
+    let result = rebase(&old, &text, &new).expect("the text parses");
+    assert!(!result.text.contains("s3cr3t"));
+    assert!(result.text.contains("<hidden>"));
+    assert!(result.text.starts_with(EDIT_HEADER));
+    let applied = ObjectEdit::new(&new, &result.text).expect("the rebased text applies");
+    assert_eq!(applied.changed_paths()[0].to_string(), "spec.replicas");
+}
+
+#[test]
+fn rebase_rejects_text_that_is_not_a_mapping() {
+    let old = deployment_base();
+    let new = deployment_base_after(|_| {});
+    assert!(matches!(
+        rebase(&old, "- a", &new),
+        Err(EditError::NotAnObject)
+    ));
+    assert!(matches!(
+        rebase(&old, "a: [", &new),
+        Err(EditError::Syntax { .. })
+    ));
+}
+
+#[test]
+fn rebased_debug_shows_counts_only() {
+    let old = deployment_base();
+    let new = deployment_base_after(|object| object["spec"]["replicas"] = json!(4));
+    let result = rebase(&old, old.text(), &new).expect("the text parses");
+    let debug = format!("{result:?}");
+    assert!(debug.contains("server_changed: 1"), "{debug}");
+    assert!(!debug.contains("replicas"), "{debug}");
+}
+
+#[test]
+fn format_sorts_keys_and_keeps_the_header() {
+    let base = deployment_base();
+    let shuffled = "# a comment line\nspec:\n  replicas: 3\nmetadata:\n  namespace: payments\n  name: api\nkind: Deployment\napiVersion: apps/v1\n";
+    let formatted = format_yaml(shuffled).expect("formats");
+    assert!(formatted.starts_with("# a comment line\n"));
+    let keys: Vec<&str> = formatted
+        .lines()
+        .filter(|line| !line.starts_with(' ') && !line.starts_with('#'))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "apiVersion: apps/v1",
+            "kind: Deployment",
+            "metadata:",
+            "spec:"
+        ]
+    );
+    let again = format_yaml(base.text()).expect("formats");
+    assert_eq!(again, base.text(), "the editor text is already formatted");
+}
+
+#[test]
+fn format_reports_syntax_errors_and_non_mappings() {
+    assert!(matches!(format_yaml("a: ["), Err(EditError::Syntax { .. })));
+    assert!(matches!(format_yaml("- a"), Err(EditError::NotAnObject)));
+}
+
+#[test]
+fn rebase_lists_server_changes() {
+    let old = deployment_base();
+    let new = deployment_base_after(|object| {
+        object["spec"]["replicas"] = json!(4);
+        object["spec"]["template"]["spec"]["containers"][1]["image"] = json!("proxy:2");
+    });
+    let result = rebase(&old, old.text(), &new).expect("the text parses");
+    let changed: Vec<String> = result
+        .server_changed
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        changed,
+        [
+            "spec.replicas",
+            "spec.template.spec.containers[sidecar].image"
+        ]
+    );
+    // An untouched text takes the new object as it is.
+    let value: Value = serde_saphyr::from_str(&result.text).expect("the text parses");
+    assert_eq!(value["spec"]["replicas"], json!(4));
+}

@@ -59,7 +59,7 @@ Dock actions do nothing when the dock has no tabs. Letters are lowercase in bind
 | `:` | `:` | `OpenKindPalette` (palette opened with `:` typed) | WORKSPACE | 0029 | bound (0029); left `RESERVED_KEYS` |
 | Ctrl ⏎ (W9) | `secondary-enter` | `ScaleCursorRow`: turns the query into a replicas field on an enabled Scale entry | `Command > Input` only | 0032 | bound (0032 step 2a-ii); left `RESERVED_KEYS`. Escape in that field (`PaletteArgument`) steps back to the list |
 | Ctrl Shift R | `secondary-shift-r` | `ToggleReadOnly` | WINDOW | 0030 | bound in 0030 step 2b; it toggles the lock of the cursor cluster, else the primary |
-| Ctrl S (W10) | `secondary-s` | Apply | editor context only | 0031 | |
+| Ctrl S (W10) | `secondary-s` | `ApplyEdit` | `YamlEdit` (the Edit YAML view, its editor included) | 0031 | bound in 0031 step 3; the view is also outside `WORKSPACE` (`!YamlEdit`), so no single key acts in it |
 
 Each owner also adds a row to `shortcut_rows()`, so `every_bound_action_is_on_the_sheet` keeps passing.
 

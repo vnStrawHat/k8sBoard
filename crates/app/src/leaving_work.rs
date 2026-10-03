@@ -24,11 +24,13 @@ pub(crate) struct LeavingWork {
     pub(crate) shells: usize,
     /// Clusters with a batch still committing: it stops at the next item and the rest read `Not sent`.
     pub(crate) batches: usize,
+    /// The open Edit YAML text that was not applied, as `Deployment/payments/api`: it is thrown away.
+    pub(crate) unsaved_edit: Option<String>,
 }
 
 impl LeavingWork {
     pub(crate) fn is_empty(&self) -> bool {
-        self.shells == 0 && self.batches == 0
+        self.shells == 0 && self.batches == 0 && self.unsaved_edit.is_none()
     }
 
     /// One line per kind of work: `2 shells will close`.
@@ -48,6 +50,9 @@ impl LeavingWork {
                 "{count} running batches will stop; their remaining items are not sent"
             )),
         }
+        if let Some(subject) = &self.unsaved_edit {
+            lines.push(format!("Unsaved changes to {subject}"));
+        }
         lines
     }
 }
@@ -64,6 +69,7 @@ impl AppShell {
                 .iter()
                 .filter(|cluster| self.running_batches.contains(cluster))
                 .count(),
+            unsaved_edit: self.unsaved_edit_of(leaving, cx),
         }
     }
 
@@ -172,6 +178,19 @@ mod tests {
         assert_eq!(
             batches(2).lines(),
             ["2 running batches will stop; their remaining items are not sent".to_owned()]
+        );
+    }
+
+    #[test]
+    fn an_unsaved_edit_is_a_line_of_its_own() {
+        let work = LeavingWork {
+            unsaved_edit: Some("Deployment/team-a/api".to_owned()),
+            ..LeavingWork::default()
+        };
+        assert!(!work.is_empty());
+        assert_eq!(
+            work.lines(),
+            ["Unsaved changes to Deployment/team-a/api".to_owned()]
         );
     }
 }

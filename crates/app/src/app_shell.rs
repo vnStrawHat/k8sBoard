@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use cluster::{
     ClusterConnection, ContextSummary, EventFilter, HelmReleaseSummary, InvolvedObject, Kubeconfig,
-    KubeconfigError, NamespaceScope, NetworkPolicySummary, SecretSummary,
+    KubeconfigError, NamespaceScope, NetworkPolicySummary, ObjectKind, SecretSummary,
 };
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::resizable::ResizableState;
@@ -80,7 +80,10 @@ use crate::pod_table::PodTableDelegate;
 use crate::port_forwards::{PortForwards, StartReport};
 use crate::recent_changes::ChangeWindow;
 use crate::related_objects::{RelatedSubject, related_subject};
-use crate::resource_actions::{KeyAvailability, RowAction, key_availability, view_logs_reason};
+use crate::resource_actions::{
+    KeyAvailability, ResourceAction, RowAction, edit_yaml_kind, key_availability, subject_action,
+    view_logs_reason,
+};
 use crate::resource_kind::ResourceKind;
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{FeedProgress, kubelet_progress, slowest_feed};
@@ -113,6 +116,7 @@ use crate::traffic_test_view::{TrafficTestView, traffic_defaults};
 use crate::value_popover::ValuePopover;
 use crate::who_can_view::WhoCanView;
 use crate::write_guard::ClusterGuard;
+use crate::yaml_edit::YamlEditView;
 use crate::yaml_view::{YamlView, yaml_subject};
 
 /// The width of the tool dialogs (Who can, Check permissions, Test traffic).
@@ -126,6 +130,8 @@ pub(crate) mod batch_write;
 
 #[path = "app_shell_view.rs"]
 mod app_shell_view;
+#[path = "edit_yaml_flow.rs"]
+mod edit_yaml_flow;
 #[path = "keyboard_navigation.rs"]
 mod keyboard_navigation;
 #[path = "leaving_work.rs"]
@@ -158,6 +164,10 @@ mod app_shell_multi_tests;
 #[cfg(test)]
 #[path = "app_shell_write_tests.rs"]
 mod app_shell_write_tests;
+
+#[cfg(test)]
+#[path = "app_shell_edit_tests.rs"]
+mod app_shell_edit_tests;
 
 #[cfg(test)]
 #[path = "app_shell_workload_tests.rs"]
@@ -193,6 +203,17 @@ impl Screen {
             | Self::Issues
             | Self::Topology
             | Self::PortForwarding => None,
+        }
+    }
+
+    /// The object kind a row of this screen edits with Edit YAML (spec 0031), if any.
+    pub(crate) fn edit_kind(self) -> Option<ObjectKind> {
+        match self {
+            Self::Pods => Some(ObjectKind::Pod),
+            Self::Kind(kind) => edit_yaml_kind(kind),
+            Self::Overview | Self::Nodes | Self::Issues | Self::Topology | Self::PortForwarding => {
+                None
+            }
         }
     }
 }
@@ -327,6 +348,12 @@ pub(crate) struct AppShell {
     /// The clusters with a confirmed batch still committing. A second batch on one of them waits:
     /// two would race over the same objects and interleave their audit lines.
     running_batches: HashSet<ClusterRef>,
+    /// The open Edit YAML view (spec 0031). It replaces the table and the drawer in the workspace;
+    /// the cursor and the drawer flag are kept under it and come back when it closes.
+    edit: Option<Entity<YamlEditView>>,
+    /// The name in the discard prompt asked last, for the tests that drive it.
+    #[cfg(test)]
+    last_discard: Option<String>,
     /// The confirm dialog opened last, for the tests that drive it.
     #[cfg(test)]
     last_dialog: Option<gpui_kit::WeakEntity<crate::confirm_dialog::ConfirmDialog>>,
@@ -579,6 +606,9 @@ impl AppShell {
             write_notice: None,
             value_popover: None,
             running_batches: HashSet::new(),
+            edit: None,
+            #[cfg(test)]
+            last_discard: None,
             #[cfg(test)]
             last_dialog: None,
             #[cfg(test)]
@@ -834,6 +864,8 @@ impl AppShell {
     /// kind definitions seen so far wait in `kind_cache` for the next session. What the user had
     /// (the scope of each cluster, whether it answered) is kept first.
     fn release_all(&mut self, cx: &mut Context<Self>) {
+        // Every session goes, so the edit of one of them cannot be applied any more.
+        self.edit = None;
         // A multi connect still waiting for its deferred call is stale from here on.
         self.view_request += 1;
         self.clear_selection(cx);
@@ -1430,6 +1462,11 @@ impl AppShell {
         if self.view.slots().is_empty() {
             return;
         }
+        // A new scope leaves the editor, so unsaved text is asked about first.
+        let wanted = scope.clone();
+        if self.parks_for_discard(move |shell, cx| shell.set_namespace(wanted, cx), cx) {
+            return;
+        }
         self.clear_selection(cx);
         self.view_scope = Some(scope.clone());
         for session in self.sessions(cx) {
@@ -1449,6 +1486,10 @@ impl AppShell {
     /// Opens `screen`. The explorer watch follows it: it starts for a kind screen, is replaced on
     /// a kind switch, and is dropped when leaving to Pods or Nodes.
     pub(crate) fn show_screen(&mut self, screen: Screen, cx: &mut Context<Self>) {
+        // Leaving the editor asks first when it holds unsaved text; a clean one just closes.
+        if self.parks_for_discard(move |shell, cx| shell.show_screen(screen, cx), cx) {
+            return;
+        }
         self.screen = screen;
         self.close_value_popover(cx);
         self.drawer.tab = DrawerTab::Overview;
@@ -1459,6 +1500,7 @@ impl AppShell {
         for slot in self.view.sessions() {
             slot.session.update(cx, |session, cx| {
                 session.set_explorer_kind(screen.kind(), cx);
+                session.request_kind_access(screen.edit_kind(), cx);
                 session.set_issues_visible(slot.is_primary && screen == Screen::Issues);
                 session.set_overview_visible(slot.is_primary && screen == Screen::Overview, cx);
                 session.refresh_kind_counts(CountTrigger::Navigation, cx);
@@ -1523,6 +1565,13 @@ impl AppShell {
         cx: &mut Context<Self>,
         then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
     ) {
+        // The reveal leaves the editor: ask about unsaved text before anything is selected.
+        if self.has_unsaved_edit(cx) {
+            let wanted = object.clone();
+            self.ask_discard(move |shell, cx| shell.reveal_then(wanted, cx, then), cx);
+            return;
+        }
+        self.close_edit(cx);
         self.show_screen(object.key.screen(), cx);
         let shell = cx.weak_entity();
         cx.defer(move |cx| {
@@ -1771,6 +1820,12 @@ impl AppShell {
                 }
                 _ => {}
             }
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::EditYamlDiff {
+            self.open_edit_fixture(window, cx);
             self.pending_dialog_launch = None;
             return;
         }
@@ -2500,6 +2555,7 @@ impl AppShell {
         let moves_cluster = self.selected.as_ref().map(|old| &old.cluster)
             != object.as_ref().map(|new| &new.cluster);
         self.selected = object;
+        self.request_edit_access(cx);
         self.close_value_popover(cx);
         // Without a row there is nothing to show.
         if self.selected.is_none() {
@@ -2519,6 +2575,24 @@ impl AppShell {
         self.follow_drawer_subjects(cx);
         cx.notify();
         true
+    }
+
+    /// Asks the session of the cursor row for the `update` permission of the row's kind, so that
+    /// Edit YAML knows its answer by the time a menu, a key, or the palette needs it (a drawer opened
+    /// from Topology or Issues shows kinds no list screen asked for).
+    fn request_edit_access(&self, cx: &mut Context<Self>) {
+        let Some(object) = &self.selected else {
+            return;
+        };
+        let Some(ResourceAction::EditYaml(kind)) = subject_action(RowAction::EditYaml, &object.key)
+        else {
+            return;
+        };
+        if let Some(session) = self.slot_session(&object.cluster) {
+            session.update(cx, |session, cx| {
+                session.request_kind_access(Some(kind), cx)
+            });
+        }
     }
 
     /// A service account drawer shows Can do, which needs the RBAC snapshot. Only an idle

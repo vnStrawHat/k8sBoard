@@ -528,7 +528,8 @@ fn row_actions_follow_key_availability() {
     assert_eq!(reason_of(action("View logs")), None);
     assert_eq!(
         reason_of(action("Edit YAML")),
-        Some("Comes in a later version")
+        // The pod's `update` check has not been asked in this world, so the gate still waits.
+        Some("Checking permissions…")
     );
     assert_eq!(
         reason_of(action("Delete")),
