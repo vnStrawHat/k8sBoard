@@ -16,19 +16,19 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | Tokens | Row density 28 / 36 px (Appearance) | missing | Appearance has Theme only | M |
 | W3 n4 | Recent changes from managedFields (ConfigMap keys, "who"); click opens a diff | partial | `recent_changes.rs` (rollouts, HPA, nodes, namespaces); 0021 open item 1 | M |
 | W4 n1 | Pod menu: Attach (A), Restart pod, Evict | missing | `resource_actions.rs::pod_menu`; 0033 moved them out, 0034 evicts only inside drain | M |
-| W4 n2 | View logs ▸ container submenu (MAIN/SIDECAR) | partial (Shell, Port-forward have one) | `pod_menu` → `view_logs_item` | S |
-| W4b n3 | Container ⋯ menu: logs, shell, attach, copy image | missing | `container_detail.rs` has no menu | S |
+| W4 n2 | View logs ▸ container submenu (MAIN/SIDECAR/INIT) | Done (0039) | `LogsMenu` in `resource_actions.rs` | — |
+| W4b n3 | Container ⋯ menu: logs, shell, attach, copy image | Done (0039) except Attach (0040) | `container_menu` in `resource_actions.rs`, button in `container_detail.rs` | — |
 | W5, W6 | Edit taints/labels, Drain dialog, bulk Cordon/Uncordon/Drain, dock drain tab | in build (0034) | `node_menu`, `row_selection.rs` `NODE_ACTIONS` | — |
 | W6 n2 | Skip PodDisruptionBudgets option | missing | 0034 non-goal, open item 1 | S |
 | W5 n7 dock | `logs · kubelet · node` tab | missing, blocked (`NodeLogQuery` needs ≥ 1.30; UAT is 1.29.5) | 0019 open item 4; `kubelet_stats.rs` `KubeletPath` | M |
 | W5 header | Edit labels for several nodes | missing | 0034 open item 2 | S |
-| W7 Deployments | Revision diff ("history with diff and rollback") | missing (rollback built) | only Helm has a diff (`live_sections.rs:2400`) | S |
-| W7 CronJobs | View logs of last job | missing | no item; 0019 non-goal | S |
-| W7 ConfigMaps | Compare with previous; "restart the workload" hint after a change | missing | 0031 non-goals | M |
+| W7 Deployments | Revision diff ("history with diff and rollback") | Done (0039; rollback 0032) | `revision_diff.rs`, `pod_template_yaml` | — |
+| W7 CronJobs | View logs of last job | Done (0039; key L on the workload kinds too) | `last_job_owner` in `kind_join.rs` | — |
+| W7 ConfigMaps | Compare with previous | missing | 0031 non-goals (the "restart the workload" hint is Done in 0039) | M |
 | W7 5 kinds | New (Namespace, ConfigMap, ResourceQuota, PDB, RoleBinding) | missing | 0031 non-goal ("templates") | M |
 | W7 Secrets | Edit values | missing (disabled `Edit`) | `resource_kind.rs` SECRETS `KindAction::named("Edit")` | M |
-| W7 ResourceQuotas | `Edit` shown disabled next to a working `Edit YAML` | partial | `resource_kind.rs:529` | S |
-| W7 Namespaces | Quota section LimitRange row | missing | no `LimitRange` in the app | S |
+| W7 ResourceQuotas | `Edit` shown disabled next to a working `Edit YAML` | Done (0039: the placeholder is gone) | `resource_kind.rs` RESOURCE_QUOTAS | — |
+| W7 Namespaces | Quota section LimitRange row | Done (0039) | `limit_range.rs`, `AccessCheck::ListLimitRanges`, `namespace_quota_rows` | — |
 | W7 Namespaces, PDBs | Menu items Show remaining resources, Show selected pods | partial (sections exist) | `namespace_rows.rs`, `policy_rows.rs` | S |
 | W7 Certificates | Renew now | missing | 0018 open item 5 | S–M |
 | W8 n1–2 | Dashed 60 % line while dragging, double-click reset, remembered height | missing | `dock.rs`; 0004 non-goals; `dock.height` key unused | S |
@@ -78,7 +78,7 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | # | Spec | Gaps | New or amend | Kind | Size |
 |---|---|---|---|---|---|
 | 0 | housekeeping | tick 0001–0013 ACs, run the 18 ui-verifier and 6 coder-lite checks | no spec | read-only | S |
-| 1 | 0039 Drawer and menu completions | Deployment revision diff, CronJob last-job logs, Logs ▸ submenu, container ⋯ menu (no Attach), LimitRange row, Show remaining / Show selected items, ConfigMap restart hint, drop the stale Quotas `Edit` | new | read-only | M |
+| 1 | 0039 Drawer and menu completions (done, except Show remaining / Show selected items) | Deployment revision diff, CronJob last-job logs, Logs ▸ submenu, container ⋯ menu (no Attach), LimitRange row, Show remaining / Show selected items, ConfigMap restart hint, drop the stale Quotas `Edit` | new | read-only | M |
 | 2 | 0040 Pod lifecycle | Evict (0034 `EvictPod`), Restart pod (controller-owned only, 0033 delete), Attach (A, `create pods/attach` in `pod_shell.rs`), drain Skip PDBs, bulk node labels | new, after 0034 merges | mutating | M |
 | 3 | 0046 One cluster at a time | remove multi-cluster mode (0027 multi view); 0045 dropped (user decision 2026-10-03) | new | local, no new request | M |
 | 4 | 0041 Edit YAML II | Revision history, snapshot and rollback, ConfigMap Compare with previous, quota check, managedFields toggle, Format, Overview timeline diff and "who" | new; C1 decision on snapshots first | mutating + local files | L |

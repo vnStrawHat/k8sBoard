@@ -2183,3 +2183,67 @@ fn service_health_core_matches_list_wrapper() {
         assert_eq!(core, wrapped, "{selector:?}");
     }
 }
+
+// ---- Last job of a CronJob ----
+
+fn scheduled_cron_job(last: Option<i64>) -> cluster::CronJobSummary {
+    let mut cron_job =
+        crate::workload_actions::workload_actions_tests::cron_job("nightly", "Allow", 0);
+    cron_job.last_schedule_at =
+        last.map(|seconds| jiff::Timestamp::from_second(seconds).expect("a valid timestamp"));
+    cron_job
+}
+
+#[test]
+fn last_job_name_uses_unix_minutes() {
+    // 59 s into minute 29_000_000: the controller names the Job by the whole minute.
+    let cron_job = scheduled_cron_job(Some(29_000_000 * 60 + 59));
+    let pods = [owned_by(
+        pod("team-a", "nightly-29000000-x", &[]),
+        "Job",
+        "nightly-29000000",
+    )];
+    assert_eq!(
+        last_job_owner(&cron_job, &pods),
+        Ok(PodOwner::Controller {
+            namespace: "team-a".to_owned(),
+            kind: JOB_KIND,
+            name: "nightly-29000000".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn last_job_needs_a_schedule() {
+    let cron_job = scheduled_cron_job(None);
+    assert_eq!(
+        last_job_owner(&cron_job, &[]),
+        Err("No job has run yet".into())
+    );
+}
+
+#[test]
+fn last_job_needs_pods_left() {
+    let cron_job = scheduled_cron_job(Some(29_000_000 * 60));
+    // A pod of an earlier run does not count.
+    let pods = [owned_by(
+        pod("team-a", "nightly-28999999-x", &[]),
+        "Job",
+        "nightly-28999999",
+    )];
+    assert_eq!(
+        last_job_owner(&cron_job, &pods),
+        Err("Job nightly-29000000 has no pods left".into())
+    );
+}
+
+#[test]
+fn last_job_ignores_other_namespaces() {
+    let cron_job = scheduled_cron_job(Some(29_000_000 * 60));
+    let pods = [owned_by(
+        pod("team-b", "nightly-29000000-x", &[]),
+        "Job",
+        "nightly-29000000",
+    )];
+    assert!(last_job_owner(&cron_job, &pods).is_err());
+}

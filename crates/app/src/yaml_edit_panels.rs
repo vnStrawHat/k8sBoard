@@ -296,54 +296,12 @@ impl YamlEditView {
         let PreviewState::Passed(passed) = &self.preview else {
             return Vec::new();
         };
-        let theme = cx.theme();
-        let mono = theme.mono_font_family.clone();
-        let (danger, success, muted) = (theme.danger, theme.success, theme.muted_foreground);
         passed
             .rows
             .get(range)
             .unwrap_or_default()
             .iter()
-            .map(|row| {
-                let base = h_flex()
-                    .w_full()
-                    .h(px(DIFF_ROW_HEIGHT))
-                    .items_center()
-                    .font_family(mono.clone())
-                    .text_xs();
-                let number = |line: Option<usize>| {
-                    div()
-                        .w(px(LINE_NUMBER_WIDTH))
-                        .flex_shrink_0()
-                        .pr_2()
-                        .text_right()
-                        .text_color(muted)
-                        .child(line.map(|line| line.to_string()).unwrap_or_default())
-                };
-                match row.kind {
-                    DiffRowKind::Folded { lines } => base
-                        .text_color(muted)
-                        .pl(px(LINE_NUMBER_WIDTH * 2.))
-                        .child(format!("··· {lines} unchanged lines")),
-                    DiffRowKind::Same => base
-                        .child(number(row.old_line))
-                        .child(number(row.new_line))
-                        .child(sign("", muted))
-                        .child(line_text(row)),
-                    DiffRowKind::Removed => base
-                        .bg(danger.opacity(ROW_TINT))
-                        .child(number(row.old_line))
-                        .child(number(row.new_line))
-                        .child(sign("−", danger))
-                        .child(line_text(row)),
-                    DiffRowKind::Added => base
-                        .bg(success.opacity(ROW_TINT))
-                        .child(number(row.old_line))
-                        .child(number(row.new_line))
-                        .child(sign("+", success))
-                        .child(line_text(row)),
-                }
-            })
+            .map(|row| diff_row_element(row, cx))
             .collect()
     }
 
@@ -565,6 +523,51 @@ fn muted_center(text: impl Into<SharedString>, color: gpui_kit::Hsla) -> AnyElem
         .px_4()
         .child(div().text_sm().text_color(color).child(text.into()))
         .into_any_element()
+}
+
+/// One row of a line diff: line numbers, sign, and a tint from the theme's danger and success
+/// tokens. Shared by the Edit YAML Diff tab and the revision diff dialog.
+pub(crate) fn diff_row_element(row: &DiffRow, cx: &App) -> Div {
+    let theme = cx.theme();
+    let (danger, success, muted) = (theme.danger, theme.success, theme.muted_foreground);
+    let base = h_flex()
+        .w_full()
+        .h(px(DIFF_ROW_HEIGHT))
+        .items_center()
+        .font_family(theme.mono_font_family.clone())
+        .text_xs();
+    let number = |line: Option<usize>| {
+        div()
+            .w(px(LINE_NUMBER_WIDTH))
+            .flex_shrink_0()
+            .pr_2()
+            .text_right()
+            .text_color(muted)
+            .child(line.map(|line| line.to_string()).unwrap_or_default())
+    };
+    match row.kind {
+        DiffRowKind::Folded { lines } => base
+            .text_color(muted)
+            .pl(px(LINE_NUMBER_WIDTH * 2.))
+            .child(format!("··· {lines} unchanged lines")),
+        DiffRowKind::Same => base
+            .child(number(row.old_line))
+            .child(number(row.new_line))
+            .child(sign("", muted))
+            .child(line_text(row)),
+        DiffRowKind::Removed => base
+            .bg(danger.opacity(ROW_TINT))
+            .child(number(row.old_line))
+            .child(number(row.new_line))
+            .child(sign("−", danger))
+            .child(line_text(row)),
+        DiffRowKind::Added => base
+            .bg(success.opacity(ROW_TINT))
+            .child(number(row.old_line))
+            .child(number(row.new_line))
+            .child(sign("+", success))
+            .child(line_text(row)),
+    }
 }
 
 fn sign(text: &'static str, color: gpui_kit::Hsla) -> Div {

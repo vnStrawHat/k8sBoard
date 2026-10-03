@@ -464,6 +464,18 @@ impl Dock {
             .collect()
     }
 
+    /// The labels of the log tabs, in tab order.
+    #[cfg(test)]
+    pub(crate) fn log_tab_labels(&self, cx: &gpui_kit::App) -> Vec<String> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| match tab {
+                DockTab::Logs(tab) => Some(tab.read(cx).label()),
+                DockTab::Shell(_) | DockTab::Drain(_) => None,
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub(crate) fn is_multi(&self) -> bool {
         self.is_multi

@@ -333,7 +333,7 @@ fn fetch_status(
 }
 
 /// The toggle appears when it has something to do: env values are hidden, or shown.
-fn shows_env_toggle(env: EnvValues, hidden_env_values: usize) -> bool {
+pub(crate) fn shows_env_toggle(env: EnvValues, hidden_env_values: usize) -> bool {
     env == EnvValues::Shown || hidden_env_values > 0
 }
 

@@ -6,10 +6,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use cluster::{
-    ByteAmount, CpuAmount, EndpointPort, EndpointSliceSummary, EndpointSummary, EnvFromSource,
-    EnvSource, IngressSummary, NamespaceScope, PodSummary, PvcUsage, SecretDetails, SecretSummary,
-    Selector, ServiceSummary, VolumeSource,
+    ByteAmount, CpuAmount, CronJobSummary, EndpointPort, EndpointSliceSummary, EndpointSummary,
+    EnvFromSource, EnvSource, IngressSummary, NamespaceScope, PodSummary, PvcUsage, SecretDetails,
+    SecretSummary, Selector, ServiceSummary, VolumeSource,
 };
+
+use gpui_kit::SharedString;
 
 use crate::access_bindings::{
     BindingIndex, BoundRole, is_cluster_admin, pod_account, ready_binding_lists, role_text,
@@ -17,7 +19,9 @@ use crate::access_bindings::{
 use crate::access_rows::service_account_status;
 use crate::cluster_session::{CompanionLists, LiveList};
 use crate::custom_kind::CustomKind;
-use crate::kind_row::{KindCell, KindObject, KindRow, deployment_of_replica_set};
+use crate::kind_row::{
+    JOB_KIND, KindCell, KindObject, KindRow, PodOwner, deployment_of_replica_set,
+};
 use crate::kubelet_history::KubeletHistory;
 use crate::network_policy_rows::network_policy_status;
 use crate::network_rows::{is_address_pending, service_status};
@@ -402,8 +406,8 @@ fn endpoints_verdict(service: &ServiceSummary, health: ServiceHealth) -> Option<
 // ---- ConfigMaps ----
 
 /// How a pod's owner refers to a config map.
-const WAY_ENV: &str = "env";
-const WAY_ENV_FROM: &str = "env from";
+pub(crate) const WAY_ENV: &str = "env";
+pub(crate) const WAY_ENV_FROM: &str = "env from";
 const WAY_VOLUME: &str = "volume";
 const WAY_IMAGE_PULL: &str = "image pull";
 const WAY_TLS: &str = "tls";
@@ -528,6 +532,35 @@ fn pod_owner(pod: &PodSummary) -> (String, Option<ResourceKey>) {
             ResourceKey::of_owner(&pod.namespace, controller),
         ),
     }
+}
+
+/// The pods of the Job the CronJob controller created for `last_schedule_at`, named
+/// `{cron_job}-{unix minutes}`. Pure.
+// ponytail: a manual `Trigger now` Job is named by `generateName`, so it is never "last"; read the
+// drawer's loaded Jobs when a manual run must count.
+pub(crate) fn last_job_owner(
+    cron_job: &CronJobSummary,
+    pods: &[PodSummary],
+) -> Result<PodOwner, SharedString> {
+    let Some(scheduled) = cron_job.last_schedule_at else {
+        return Err("No job has run yet".into());
+    };
+    let name = format!("{}-{}", cron_job.name, scheduled.as_second().div_euclid(60));
+    let has_pods = pods.iter().any(|pod| {
+        pod.namespace == cron_job.namespace
+            && pod
+                .controller
+                .as_ref()
+                .is_some_and(|controller| controller.kind == JOB_KIND && controller.name == name)
+    });
+    if !has_pods {
+        return Err(format!("Job {name} has no pods left").into());
+    }
+    Ok(PodOwner::Controller {
+        namespace: cron_job.namespace.clone(),
+        kind: JOB_KIND,
+        name,
+    })
 }
 
 /// `nightly` for a Job named `nightly-29012345`.

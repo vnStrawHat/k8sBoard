@@ -1287,3 +1287,218 @@ fn the_title_bar_search_box_opens_the_palette(cx: &mut TestAppContext) {
     assert!(has_dialog(window, cx));
     assert_eq!(focused_text(window, cx).as_deref(), Some(""));
 }
+
+// ---- Spec 0039 step 1: log tabs opened from the pod menus ----
+
+pub(super) fn logs_pod() -> cluster::PodSummary {
+    let container = |name: &str, kind: cluster::ContainerKind| cluster::ContainerSummary {
+        name: name.to_owned(),
+        image: "img".to_owned(),
+        kind,
+        state: cluster::ContainerState::Running { started_at: None },
+        is_ready: true,
+        restart_count: 0,
+        last_termination: None,
+        image_digest: None,
+        pull_policy: None,
+        is_started: None,
+        ports: Vec::new(),
+        resources: Vec::new(),
+        probes: cluster::ContainerProbes::default(),
+        env: Vec::new(),
+        env_from: Vec::new(),
+        mounts: Vec::new(),
+    };
+    cluster::PodSummary {
+        namespace: "shop".to_owned(),
+        name: "api-0".to_owned(),
+        status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
+        ready: cluster::ReadyCount { ready: 2, total: 2 },
+        restarts: 0,
+        node_name: None,
+        created_at: None,
+        pod_ip: None,
+        qos_class: None,
+        service_account: None,
+        controller: None,
+        conditions: Vec::new(),
+        status_message: None,
+        labels: Vec::new(),
+        host_network: false,
+        image_pull_secrets: Vec::new(),
+        containers: vec![
+            container("app", cluster::ContainerKind::Main),
+            container("proxy", cluster::ContainerKind::Sidecar),
+        ],
+    }
+}
+
+/// Opens the dock tab that `target_of` names, as a menu entry does, and returns the tab labels.
+fn log_tab_labels_after(
+    name: &str,
+    target_of: impl Fn(&cluster::PodSummary, &crate::cluster_session::AccessState) -> Option<LogTarget>,
+    cx: &mut TestAppContext,
+) -> Vec<String> {
+    let fixture = open_switch_fixture(name, cx);
+    fixture.go_live(NamespaceScope::All, cx);
+    let session = fixture.session(cx);
+    session.update(cx, |session, cx| {
+        let reviews = cluster::AccessCheck::ALL
+            .into_iter()
+            .map(|check| cluster::AccessReview {
+                check,
+                decision: cluster::AccessDecision::Allowed,
+            })
+            .collect();
+        session.set_access_for_test(
+            crate::cluster_session::AccessState::Known(cluster::AccessReport { reviews }),
+            cx,
+        );
+        session.set_pods_for_test(vec![logs_pod()], cx);
+    });
+    cx.run_until_parked();
+    let cluster = fixture.cluster("prod-a", cx);
+    fixture.with_window(cx, |window, cx| {
+        let shell = fixture.shell.read(cx);
+        let row = shell
+            .slot_row_context(&cluster, cx)
+            .expect("the cluster is viewed");
+        let live = shell.slot_live(&cluster, cx).expect("a live slot");
+        let pod = live.pods.items().first().expect("a pod").clone();
+        let target = target_of(&pod, &live.access).expect("a log target");
+        let connection = live.connection().clone();
+        let dock = shell.dock.clone();
+        dock.update(cx, |dock, cx| {
+            dock.open(
+                crate::dock::LogOrigin::new(&row, connection),
+                target,
+                window,
+                cx,
+            )
+        });
+    });
+    fixture
+        .shell
+        .read_with(cx, |shell, cx| shell.dock.read(cx).log_tab_labels(cx))
+}
+
+#[gpui_kit::test]
+fn container_menu_opens_logs_of_that_container(cx: &mut TestAppContext) {
+    // The container menu asks `logs_launch` with the shown container, as its View logs item does.
+    let labels = log_tab_labels_after(
+        "container-menu-logs",
+        |pod, access| crate::resource_actions::logs_launch(pod, Some("proxy"), access).ok(),
+        cx,
+    );
+    assert_eq!(labels, ["api-0/proxy"]);
+}
+
+#[gpui_kit::test]
+fn logs_submenu_opens_tab_on_the_picked_container(cx: &mut TestAppContext) {
+    // A submenu entry opens `LogTarget::of_container` for its container.
+    let labels = log_tab_labels_after(
+        "logs-submenu",
+        |pod, _| LogTarget::of_container(pod, "proxy"),
+        cx,
+    );
+    assert_eq!(labels, ["api-0/proxy"]);
+}
+
+// ---- Spec 0039 step 3: the revision diff dialog ----
+
+fn revision_request() -> crate::revision_diff::RevisionDiffRequest {
+    let side =
+        |replica_set: &str, revision: u64, is_current: bool| crate::revision_diff::RevisionSide {
+            replica_set: replica_set.to_owned(),
+            revision: Some(revision),
+            tag: None,
+            is_current,
+        };
+    crate::revision_diff::diff_request(
+        ResourceKey::Kind {
+            kind: crate::resource_kind::ResourceKind::Deployments,
+            namespace: Some("shop".to_owned()),
+            name: "api".to_owned(),
+        },
+        side("api-old", 37, false),
+        side("api-new", 38, true),
+    )
+}
+
+const REPLICA_SET_JSON: &str = r#"{"apiVersion":"apps/v1","kind":"ReplicaSet","metadata":{"name":"x","namespace":"shop"},"spec":{"template":{"spec":{"containers":[{"name":"api","image":"api:1"}]}}}}"#;
+
+#[gpui_kit::test]
+fn revision_diff_uses_the_session_connection(cx: &mut TestAppContext) {
+    // Without a session there is no connection to read through, so nothing opens.
+    let (window, shell) = open_shell(cx);
+    render(window, cx);
+    cx.update_window(window.into(), |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.open_revision_diff(revision_request(), window, cx)
+        });
+    })
+    .expect("the window is open");
+    cx.run_until_parked();
+    assert!(!has_dialog(window, cx));
+}
+
+#[gpui_kit::test]
+fn revision_diff_reads_both_templates_through_the_drawer_cluster(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture("revision-diff-reads", cx);
+    let (connection, api) = {
+        let _guard = fixture.runtime.enter();
+        cluster::fake_api::FakeApi::connection(cluster::WritePolicy::Blocked, |_| {
+            (200, REPLICA_SET_JSON.to_owned())
+        })
+    };
+    let session = fixture.session(cx);
+    session.update(cx, |session, cx| {
+        session.go_live_for_test(connection, NamespaceScope::All, cx);
+    });
+    let cluster = fixture.cluster("prod-a", cx);
+    let request = revision_request();
+    fixture.shell.update(cx, |shell, cx| {
+        let object = ClusterObject::new(cluster, request.deployment.clone());
+        shell.change_selection(Some(object), cx);
+        shell.set_drawer_open(true, cx);
+    });
+    cx.run_until_parked();
+    fixture.with_window(cx, |window, cx| {
+        fixture.shell.update(cx, |shell, cx| {
+            shell.open_revision_diff(request, window, cx)
+        });
+    });
+    assert!(fixture.with_window(cx, |window, cx| window.has_active_dialog(cx)));
+    // Both templates are read at once; the session's own lists and checks are not the dialog's.
+    let template_requests = || -> Vec<(String, String)> {
+        let mut found: Vec<(String, String)> = api
+            .requests()
+            .into_iter()
+            .filter(|request| request.path.contains("/replicasets/"))
+            .map(|request| (request.method, request.path))
+            .collect();
+        found.sort();
+        found
+    };
+    for _ in 0..500 {
+        cx.run_until_parked();
+        if template_requests().len() >= 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let paths = template_requests();
+    assert_eq!(
+        paths,
+        [
+            (
+                "GET".to_owned(),
+                "/apis/apps/v1/namespaces/shop/replicasets/api-new".to_owned()
+            ),
+            (
+                "GET".to_owned(),
+                "/apis/apps/v1/namespaces/shop/replicasets/api-old".to_owned()
+            ),
+        ]
+    );
+}

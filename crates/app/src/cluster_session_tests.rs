@@ -1,4 +1,5 @@
-use cluster::{AccessDecision, AccessReview};
+use cluster::fake_api::FakeApi;
+use cluster::{AccessDecision, AccessReview, WritePolicy};
 use gpui_kit::Task;
 
 use crate::topology_feeds::TOPOLOGY_FEED_KINDS;
@@ -492,7 +493,7 @@ fn replica_set_subject() -> RelatedSubject {
 
 #[test]
 fn related_list_ignores_other_variant() {
-    let mut list = RelatedList::loading_for(&replica_set_subject());
+    let mut list = RelatedList::loading_for(&replica_set_subject(), NamespaceListGates::OPEN);
     // A stale Jobs update cannot reach a ReplicaSets list.
     list.apply(RelatedUpdate::Jobs(WatchUpdate::Snapshot(Vec::new())));
     assert!(matches!(&list, RelatedList::ReplicaSets(replica_sets) if replica_sets.is_loading()));
@@ -506,7 +507,7 @@ fn related_list_ignores_other_variant() {
         namespace: "team-a".to_owned(),
         cron_job: "nightly".to_owned(),
     };
-    let mut jobs_list = RelatedList::loading_for(&jobs);
+    let mut jobs_list = RelatedList::loading_for(&jobs, NamespaceListGates::OPEN);
     jobs_list.apply(RelatedUpdate::ReplicaSets(
         WatchUpdate::Snapshot(Vec::new()),
     ));
@@ -518,7 +519,7 @@ fn related_list_ignores_other_variant() {
         namespace: "team-a".to_owned(),
         quota: "compute".to_owned(),
     };
-    let mut events_list = RelatedList::loading_for(&rejections);
+    let mut events_list = RelatedList::loading_for(&rejections, NamespaceListGates::OPEN);
     events_list.apply(RelatedUpdate::ResourceQuotas(WatchUpdate::Snapshot(
         Vec::new(),
     )));
@@ -528,10 +529,14 @@ fn related_list_ignores_other_variant() {
     let quotas = RelatedSubject::NamespaceQuotas {
         namespace: "team-a".to_owned(),
     };
-    let mut quotas_list = RelatedList::loading_for(&quotas);
+    let mut quotas_list = RelatedList::loading_for(&quotas, NamespaceListGates::OPEN);
     quotas_list.apply(RelatedUpdate::Events(WatchUpdate::Snapshot(Vec::new())));
-    assert!(matches!(&quotas_list, RelatedList::ResourceQuotas(list) if list.is_loading()));
-    assert!(quotas_list.resource_quotas().is_some());
+    assert!(matches!(
+        &quotas_list,
+        RelatedList::NamespaceLimits { quotas, limit_ranges }
+            if quotas.is_loading() && limit_ranges.is_loading()
+    ));
+    assert!(quotas_list.namespace_limits().is_some());
     assert!(quotas_list.events().is_none());
 }
 
@@ -672,9 +677,10 @@ fn denied_quota_subject_does_not_start() {
         denied_related_check(&rejections, &access_with(AccessCheck::ListEvents)),
         Some(AccessCheck::ListEvents)
     );
+    // The Namespace drawer's lists are gated each by its own check (`namespace_list_gates`).
     assert_eq!(
         denied_related_check(&quotas, &access_with(AccessCheck::ListResourceQuotas)),
-        Some(AccessCheck::ListResourceQuotas)
+        None
     );
     // Another denial does not stop it, and a report that is not known never does.
     assert_eq!(
@@ -1014,7 +1020,7 @@ fn releases_have_a_history_related_list() {
         namespace: "shop".to_owned(),
         release: "api".to_owned(),
     };
-    let list = RelatedList::loading_for(&subject);
+    let list = RelatedList::loading_for(&subject, NamespaceListGates::OPEN);
     assert!(list.helm_history().is_some());
     assert!(list.events().is_none());
     assert_eq!(
@@ -1794,4 +1800,221 @@ fn generations_only_grow() {
     let first = next_generation();
     let second = next_generation();
     assert!(second > first);
+}
+
+// ---- Spec 0039 step 4: the Namespace drawer's quotas and LimitRanges ----
+
+fn namespace_subject() -> RelatedSubject {
+    RelatedSubject::NamespaceQuotas {
+        namespace: "team-a".to_owned(),
+    }
+}
+
+fn limit_range(name: &str) -> LimitRangeSummary {
+    LimitRangeSummary {
+        namespace: "team-a".to_owned(),
+        name: name.to_owned(),
+        limits: Vec::new(),
+    }
+}
+
+#[test]
+fn namespace_related_lists_quotas_and_limit_ranges() {
+    let mut list = RelatedList::loading_for(&namespace_subject(), NamespaceListGates::OPEN);
+    list.apply(RelatedUpdate::ResourceQuotas(WatchUpdate::Snapshot(
+        Vec::new(),
+    )));
+    let Some((quotas, limit_ranges)) = list.namespace_limits() else {
+        panic!("a Namespace drawer holds both lists");
+    };
+    // Each update reaches only its own half.
+    assert_eq!(quotas.ready_count(), Some(0));
+    assert!(limit_ranges.is_loading());
+}
+
+#[test]
+fn limit_range_update_reaches_its_list() {
+    let mut list = RelatedList::loading_for(&namespace_subject(), NamespaceListGates::OPEN);
+    list.apply(RelatedUpdate::LimitRanges(WatchUpdate::Snapshot(vec![
+        limit_range("defaults"),
+    ])));
+    let Some((quotas, limit_ranges)) = list.namespace_limits() else {
+        panic!("a Namespace drawer holds both lists");
+    };
+    assert!(quotas.is_loading());
+    assert_eq!(limit_ranges.items().len(), 1);
+    assert_eq!(limit_ranges.items()[0].name, "defaults");
+    // A stale update of another subject's kind changes nothing.
+    list.apply(RelatedUpdate::Jobs(WatchUpdate::Snapshot(Vec::new())));
+    assert_eq!(
+        list.namespace_limits().map(|(_, l)| l.items().len()),
+        Some(1)
+    );
+}
+
+#[test]
+fn namespace_list_gates_each_follow_their_check() {
+    let gates = |access: &AccessState| namespace_list_gates(access);
+    let open = NamespaceListGates::OPEN;
+    assert_eq!(gates(&access_with(AccessCheck::ListEvents)), open);
+    assert_eq!(
+        gates(&access_with(AccessCheck::ListResourceQuotas)),
+        NamespaceListGates {
+            quotas: false,
+            limit_ranges: true
+        }
+    );
+    assert_eq!(
+        gates(&access_with(AccessCheck::ListLimitRanges)),
+        NamespaceListGates {
+            quotas: true,
+            limit_ranges: false
+        }
+    );
+    // A report that is not known never closes a gate: the server answers.
+    assert_eq!(gates(&AccessState::Unknown), open);
+    let checking = AccessState::Checking {
+        _task: Task::ready(()),
+    };
+    assert_eq!(gates(&checking), open);
+}
+
+#[test]
+fn both_denied_drop_the_subject() {
+    let subject = namespace_subject();
+    let both = report_denying(&[
+        AccessCheck::ListResourceQuotas,
+        AccessCheck::ListLimitRanges,
+    ]);
+    assert!(is_related_denied(&subject, &both));
+    // One denied list leaves the other running, so the subject stays.
+    assert!(!is_related_denied(
+        &subject,
+        &report_denying(&[AccessCheck::ListResourceQuotas])
+    ));
+    assert!(!is_related_denied(
+        &subject,
+        &report_denying(&[AccessCheck::ListLimitRanges])
+    ));
+    assert!(!is_related_denied(&subject, &AccessState::Unknown));
+    // Other subjects keep their single check.
+    let rejections = RelatedSubject::QuotaRejections {
+        namespace: "team-a".to_owned(),
+        quota: "compute".to_owned(),
+    };
+    assert!(is_related_denied(
+        &rejections,
+        &access_with(AccessCheck::ListEvents)
+    ));
+    assert!(!is_related_denied(&rejections, &both));
+}
+
+#[test]
+fn a_closed_half_starts_failed_not_loading() {
+    let gates = NamespaceListGates {
+        quotas: true,
+        limit_ranges: false,
+    };
+    let list = RelatedList::loading_for(&namespace_subject(), gates);
+    let Some((quotas, limit_ranges)) = list.namespace_limits() else {
+        panic!("a Namespace drawer holds both lists");
+    };
+    assert!(quotas.is_loading());
+    // Nothing waits on a list that never starts.
+    assert!(limit_ranges.failure().is_some() && !limit_ranges.is_loading());
+}
+
+const EMPTY_LIST: &str =
+    r#"{"apiVersion":"v1","kind":"List","metadata":{"resourceVersion":"1"},"items":[]}"#;
+
+/// The collection paths the streams of `gates` ask for first, in a namespace `shop`.
+async fn first_requests(gates: NamespaceListGates, polls: usize) -> Vec<String> {
+    let (connection, api) =
+        FakeApi::connection(WritePolicy::Blocked, |_| (200, EMPTY_LIST.to_owned()));
+    let mut updates = namespace_updates(&connection, "shop", gates);
+    for _ in 0..polls {
+        let _ = tokio::time::timeout(Duration::from_millis(300), updates.next()).await;
+    }
+    let mut paths: Vec<String> = api
+        .requests()
+        .into_iter()
+        .filter(|request| request.method == "GET")
+        .map(|request| request.path)
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+#[tokio::test]
+async fn denied_limit_ranges_leave_the_quota_stream() {
+    let paths = first_requests(
+        NamespaceListGates {
+            quotas: true,
+            limit_ranges: false,
+        },
+        1,
+    )
+    .await;
+    assert_eq!(paths, ["/api/v1/namespaces/shop/resourcequotas"]);
+}
+
+#[tokio::test]
+async fn denied_quotas_leave_the_limit_range_stream() {
+    let paths = first_requests(
+        NamespaceListGates {
+            quotas: false,
+            limit_ranges: true,
+        },
+        1,
+    )
+    .await;
+    assert_eq!(paths, ["/api/v1/namespaces/shop/limitranges"]);
+}
+
+#[tokio::test]
+async fn open_gates_start_both_streams() {
+    // Two snapshots, one per stream.
+    let paths = first_requests(NamespaceListGates::OPEN, 2).await;
+    assert_eq!(
+        paths,
+        [
+            "/api/v1/namespaces/shop/limitranges",
+            "/api/v1/namespaces/shop/resourcequotas"
+        ]
+    );
+}
+
+#[test]
+fn related_watch_is_current_only_for_the_same_subject_and_gates() {
+    let subject = namespace_subject();
+    let open = NamespaceListGates::OPEN;
+    let limited = NamespaceListGates {
+        quotas: true,
+        limit_ranges: false,
+    };
+    // Nothing running and nothing wanted needs no restart and no repaint: this runs on every render.
+    assert!(related_watch_is_current(None, None, open));
+    assert!(related_watch_is_current(
+        Some((&subject, open)),
+        Some(&subject),
+        open
+    ));
+    // A permission that closes a list restarts the Namespace watch with the streams that remain.
+    assert!(!related_watch_is_current(
+        Some((&subject, open)),
+        Some(&subject),
+        limited
+    ));
+    assert!(!related_watch_is_current(None, Some(&subject), open));
+    assert!(!related_watch_is_current(
+        Some((&subject, open)),
+        None,
+        open
+    ));
+    assert!(!related_watch_is_current(
+        Some((&subject, open)),
+        Some(&replica_set_subject()),
+        open
+    ));
 }

@@ -4,10 +4,12 @@ use cluster::{
     ByteAmount, ContainerKind, ContainerResource, ContainerState, ContainerSummary, CpuAmount,
     EventSummary, PodCondition, PodSummary, ResourceUsage,
 };
+use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
     Pixels, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
@@ -16,7 +18,7 @@ use gpui_kit::{
 
 use crate::app_shell::AppShell;
 use crate::cluster_rows::RowContext;
-use crate::cluster_session::{ClusterSession, LiveCluster, LiveList};
+use crate::cluster_session::{ClusterSession, LiveList};
 use crate::container_detail::{ContainerDetailInput, container_detail};
 use crate::dock::Dock;
 use crate::drawer::{
@@ -28,7 +30,9 @@ use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
 use crate::port_forward_menu::{ForwardMenu, PortButtons, pod_subject};
-use crate::resource_actions::{PodMenuItems, PodMenuLinks, ShellMenu, pod_menu, view_logs_reason};
+use crate::resource_actions::{
+    LogsMenu, PodMenuItems, PodMenuLinks, ShellMenu, container_menu, pod_menu, view_logs_reason,
+};
 use crate::status_tone::{StatusTone, container_state_label, pod_status_label, toned_text};
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::UsageBar;
@@ -69,7 +73,7 @@ pub(crate) fn pod_drawer(
             state,
             loaded_events,
             forward,
-            session.read(cx).live(),
+            ContainerMenuLinks { session, row, dock },
             now,
             cx,
         )),
@@ -124,7 +128,7 @@ fn pod_menu_button(
                 return menu;
             };
             // The submenus are built from the app, so they are made before the session is borrowed.
-            let (shell_menu, forward_menu) = {
+            let (logs_menu, connection, shell_menu, forward_menu) = {
                 let session = session.read(cx);
                 let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
                     return menu;
@@ -133,12 +137,15 @@ fn pod_menu_button(
                     return menu;
                 };
                 (
+                    LogsMenu::of(pod, &live.access),
+                    live.connection().clone(),
                     ShellMenu::of(pod, &guard),
                     ForwardMenu::of(pod_subject(pod), &row.cluster, &guard),
                 )
             };
             let shell_items = shell_menu.items(&row, &shell, window, cx);
             let items = PodMenuItems {
+                view_logs: logs_menu.item(connection, &row, &dock, window, cx),
                 open_shell: shell_items.open_shell,
                 debug_container: shell_items.debug_container,
                 port_forward: forward_menu.item(&shell, window, cx),
@@ -153,7 +160,7 @@ fn pod_menu_button(
                         dock: &dock,
                         shell: &shell,
                     };
-                    pod_menu(menu, pod, live, &guard, &row, &links, items)
+                    pod_menu(menu, pod, &guard, &row, &links, items)
                 }
                 None => menu,
             }
@@ -472,7 +479,7 @@ fn containers_tab(
     state: &DrawerState,
     events: Option<&[EventSummary]>,
     forward: &PortButtons<'_>,
-    live: Option<&LiveCluster>,
+    links: ContainerMenuLinks<'_>,
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -480,6 +487,8 @@ fn containers_tab(
         return absent_text(cx).into_any_element();
     };
     let list = container_list(&pod.containers, selected, cx);
+    let live = links.session.read(cx).live();
+    let menu = live.map(|_| container_menu_button(pod, &pod.containers[selected].name, links, cx));
     let detail = container_detail(
         &ContainerDetailInput {
             pod,
@@ -499,6 +508,7 @@ fn containers_tab(
             monitor: live.map(|live| MonitorView::of_container(state, live)),
             now,
         },
+        menu,
         cx,
     );
     // At the default width the list stacks above the detail; expanded, they sit side by side.
@@ -516,6 +526,56 @@ fn containers_tab(
             .child(detail)
             .into_any_element()
     }
+}
+
+/// What the container ⋯ menu reads when it opens.
+#[derive(Clone, Copy)]
+struct ContainerMenuLinks<'a> {
+    session: &'a Entity<ClusterSession>,
+    row: &'a RowContext,
+    dock: &'a WeakEntity<Dock>,
+}
+
+/// The ⋯ button of the container header. Like the pod menu it reads the session when it opens,
+/// so it shows the access state and the container of that moment.
+fn container_menu_button(
+    pod: &PodSummary,
+    container: &str,
+    links: ContainerMenuLinks<'_>,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    // Weak: a rendered menu closure must not keep a session alive after a cluster switch.
+    let session = links.session.downgrade();
+    let row = links.row.clone();
+    let dock = links.dock.clone();
+    let shell = cx.weak_entity();
+    let key = ResourceKey::of_pod(pod);
+    let container = container.to_owned();
+    Button::new("container-menu")
+        .ghost()
+        .small()
+        .icon(Icon::new(IconName::Ellipsis))
+        .dropdown_menu(move |menu, _, cx| {
+            let Some(session) = session.upgrade() else {
+                return menu;
+            };
+            let session = session.read(cx);
+            let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
+                return menu;
+            };
+            let Some(pod) = live.pods.items().iter().find(|pod| key.is_pod(pod)) else {
+                return menu;
+            };
+            let Some(container) = pod.containers.iter().find(|c| c.name == container) else {
+                return menu;
+            };
+            let links = PodMenuLinks {
+                dock: &dock,
+                shell: &shell,
+            };
+            container_menu(menu, pod, container, live, &guard, &row, &links)
+        })
+        .into_any_element()
 }
 
 /// The groups of the Containers list, in the order they are shown.

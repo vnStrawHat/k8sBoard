@@ -27,7 +27,7 @@ use crate::cluster_rows::{RowAddress, RowContext, merged_index};
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{
     ClusterSession, CountTrigger, FlowState, LiveCluster, LiveList, RbacState, RelatedList,
-    SessionPhase, denied_related_check, error_text,
+    SessionPhase, error_text, is_related_denied,
 };
 use crate::cluster_switcher::{
     ClusterSwitcherState, OpenClusterSwitcher, SwitchToCluster1, SwitchToCluster2,
@@ -82,8 +82,10 @@ use crate::recent_changes::ChangeWindow;
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_actions::{
     KeyAvailability, RowAction, delete_kind, delete_kind_of, key_availability, view_logs_reason,
+    workload_logs_owner,
 };
 use crate::resource_kind::ResourceKind;
+use crate::revision_diff::{RevisionDiffRequest, RevisionDiffView};
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{FeedProgress, kubelet_progress, slowest_feed};
 #[cfg(feature = "screenshot")]
@@ -120,6 +122,8 @@ use crate::yaml_view::{YamlView, yaml_subject};
 
 /// The width of the tool dialogs (Who can, Check permissions, Test traffic).
 const DIALOG_WIDTH: f32 = 760.;
+/// The revision diff needs room for the long lines of a pod template.
+const REVISION_DIFF_WIDTH: f32 = 960.;
 
 #[path = "workspace.rs"]
 pub(crate) mod workspace;
@@ -1803,6 +1807,61 @@ impl AppShell {
         });
     }
 
+    /// The Diff button of a Deployment revision: a dialog with the line diff of the two pod templates,
+    /// read through the connection of the drawer's own cluster. Nothing opens while that session is
+    /// not live.
+    pub(crate) fn open_revision_diff(
+        &mut self,
+        request: RevisionDiffRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(live) = self.subject_live(cx) else {
+            return;
+        };
+        let connection = live.connection().clone();
+        let title = request.title();
+        let view = cx.new(|cx| RevisionDiffView::new(request, connection, cx));
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title(title.clone())
+                .w(px(REVISION_DIFF_WIDTH))
+                .child(view.clone())
+        });
+    }
+
+    /// `--screen revision-diff`: the dialog over two fixed templates, with no connection behind it.
+    #[cfg(feature = "screenshot")]
+    fn open_revision_diff_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::revision_diff::{RevisionSide, diff_request};
+        use crate::screenshot::{REVISION_FIXTURE_NEWER, REVISION_FIXTURE_OLDER};
+        let side = |replica_set: &str, revision: u64, tag: &str, is_current: bool| RevisionSide {
+            replica_set: replica_set.to_owned(),
+            revision: Some(revision),
+            tag: Some(tag.to_owned()),
+            is_current,
+        };
+        let request = diff_request(
+            ResourceKey::Kind {
+                kind: ResourceKind::Deployments,
+                namespace: Some("payments".to_owned()),
+                name: "api".to_owned(),
+            },
+            side("api-6c8d9f", 38, "2.13.0", false),
+            side("api-7d9f8c", 39, "2.14.0", true),
+        );
+        let title = request.title();
+        let view = cx.new(|_| {
+            RevisionDiffView::fixture(request, REVISION_FIXTURE_OLDER, REVISION_FIXTURE_NEWER, 2)
+        });
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title(title.clone())
+                .w(px(REVISION_DIFF_WIDTH))
+                .child(view.clone())
+        });
+    }
+
     /// Opens the Test traffic dialog with the defaults for `policy` (the pod it selects as the
     /// destination); without one, the first two pods.
     pub(crate) fn open_traffic_test(
@@ -1977,6 +2036,12 @@ impl AppShell {
         #[cfg(feature = "screenshot")]
         if launch == LaunchScreen::HpaRangePopover {
             self.open_hpa_range_fixture(window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::RevisionDiff {
+            self.open_revision_diff_fixture(window, cx);
             self.pending_dialog_launch = None;
             return;
         }
@@ -2869,8 +2934,7 @@ impl AppShell {
             .items()
             .iter()
             .find(|row| key.is_row(*kind, row))?;
-        related_subject(*kind, row)
-            .filter(|subject| denied_related_check(subject, &live.access).is_none())
+        related_subject(*kind, row).filter(|subject| !is_related_denied(subject, &live.access))
     }
 
     fn set_related_subject(
@@ -3217,17 +3281,21 @@ impl AppShell {
                 .find(|pod| key.is_pod(pod))
                 .and_then(LogTarget::of_pod),
             ResourceKey::Node { .. } => None,
-            ResourceKey::Kind { kind, .. } => live
-                .kind_list(*kind)
-                .and_then(|explorer| {
+            ResourceKey::Kind { kind, .. } => {
+                let row = live.kind_list(*kind).and_then(|explorer| {
                     explorer
                         .list
                         .items()
                         .iter()
                         .find(|row| key.is_row(*kind, row))
-                })
-                .and_then(|row| row.related_pods.clone())
-                .and_then(LogTarget::of_workload),
+                });
+                match row.and_then(|row| workload_logs_owner(row, live.pods.items())) {
+                    // A CronJob whose last run left no pods says why.
+                    Some(Err(reason)) => return Err(NoLogTarget::Unavailable(reason)),
+                    Some(Ok(owner)) => LogTarget::of_workload(owner),
+                    None => None,
+                }
+            }
         };
         target.ok_or(NoLogTarget::NotLoggable)
     }

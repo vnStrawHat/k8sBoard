@@ -1522,3 +1522,64 @@ fn menu_shift_s_and_palette_open_the_same_popover(cx: &mut TestAppContext) {
         "3"
     );
 }
+
+// ---- Spec 0039 step 2: L opens workload logs ----
+
+impl Clusters {
+    /// Gives the stg cluster one pod owned by `controller` (a kind and a name) in `team-a`.
+    fn seed_controlled_pod(&self, controller: (&str, &str), cx: &mut TestAppContext) {
+        let mut pod = super::app_shell_tests::logs_pod();
+        pod.namespace = "team-a".to_owned();
+        pod.controller = Some(cluster::ControllerRef {
+            kind: controller.0.to_owned(),
+            name: controller.1.to_owned(),
+        });
+        let session = slot_session(&self.fixture, &self.stg, cx);
+        session.update(cx, |session, cx| session.set_pods_for_test(vec![pod], cx));
+        cx.run_until_parked();
+    }
+
+    fn press_view_logs(&self, cx: &mut TestAppContext) {
+        let action = RowAction::ViewLogs.key_action();
+        self.fixture
+            .with_window(cx, |window, cx| window.dispatch_action(action, cx));
+        cx.run_until_parked();
+    }
+
+    fn log_tab_labels(&self, cx: &mut TestAppContext) -> Vec<String> {
+        self.fixture
+            .shell
+            .read_with(cx, |shell, cx| shell.dock.read(cx).log_tab_labels(cx))
+    }
+}
+
+#[gpui_kit::test]
+fn l_on_cron_job_opens_last_job_logs(cx: &mut TestAppContext) {
+    let t = workload_clusters("l-cron-job", cx);
+    let mut reconcile = cron_job("reconcile", "Forbid", 0);
+    reconcile.last_schedule_at = jiff::Timestamp::from_second(29_000_000 * 60).ok();
+    t.show_kind(
+        ResourceKind::CronJobs,
+        Vec::new(),
+        vec![cron_job_row(&reconcile)],
+        cx,
+    );
+    t.seed_controlled_pod(("Job", "reconcile-29000000"), cx);
+    t.cursor_on(&t.stg, ResourceKind::CronJobs, "reconcile", cx);
+    t.press_view_logs(cx);
+    assert_eq!(t.log_tab_labels(cx), ["job/reconcile-29000000"]);
+}
+
+#[gpui_kit::test]
+fn l_on_deployment_opens_workload_logs(cx: &mut TestAppContext) {
+    let t = workload_clusters("l-deployment", cx);
+    t.show_kind(
+        ResourceKind::Deployments,
+        Vec::new(),
+        deployments(false),
+        cx,
+    );
+    t.cursor_on(&t.stg, ResourceKind::Deployments, "api", cx);
+    t.press_view_logs(cx);
+    assert_eq!(t.log_tab_labels(cx), ["deploy/api"]);
+}

@@ -965,7 +965,7 @@ impl YamlEditView {
 }
 
 #[path = "yaml_edit_panels.rs"]
-mod yaml_edit_panels;
+pub(crate) mod yaml_edit_panels;
 
 #[cfg(test)]
 #[path = "yaml_edit_tests.rs"]

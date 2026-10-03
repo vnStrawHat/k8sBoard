@@ -93,8 +93,10 @@ pub(crate) struct ContainerDetailInput<'a> {
     pub(crate) now: jiff::Timestamp,
 }
 
+/// `menu` is the ⋯ button at the right of the header; `None` while the session is not live.
 pub(crate) fn container_detail(
     input: &ContainerDetailInput<'_>,
+    menu: Option<AnyElement>,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let container = input.container;
@@ -119,7 +121,8 @@ pub(crate) fn container_detail(
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(text)
-        }));
+        }))
+        .children(menu.map(|menu| div().ml_auto().child(menu)));
     let body = match input.tab {
         ContainerTab::Info => info_body(input, cx),
         ContainerTab::Env => source_body(

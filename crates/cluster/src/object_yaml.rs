@@ -28,6 +28,9 @@ use crate::storage_class::mask_mount_option;
 const ACTION: &str = "reading the object YAML";
 const IDENTITY_ACTION: &str = "reading the object before deleting it";
 const MISSING_UID: &str = "the object has no uid";
+const MISSING_TEMPLATE: &str = "the ReplicaSet has no pod template";
+/// The label every ReplicaSet of a Deployment carries with a different value.
+const POD_TEMPLATE_HASH: &str = "pod-template-hash";
 /// Fixed on purpose: the library error could quote the object's content.
 const CONVERSION_FAILURE: &str = "the object could not be converted to YAML";
 
@@ -357,6 +360,17 @@ impl ClusterConnection {
         masked.map_err(|message| self.unexpected_response(ACTION, message))
     }
 
+    /// One GET of a ReplicaSet, reduced to its masked `spec.template` as YAML (no hidden-count
+    /// header; `hidden_env_values` says what `EnvValues::Hidden` hid). Read-only.
+    pub async fn pod_template_yaml(
+        &self,
+        replica_set: &ObjectRef,
+        env: EnvValues,
+    ) -> Result<ObjectYaml, ClusterError> {
+        let value = self.get_object(replica_set, ACTION).await?;
+        pod_template_text(value, env).map_err(|message| self.unexpected_response(ACTION, message))
+    }
+
     /// One GET of `object` as raw JSON. The value can hold secrets: callers mask it before it
     /// leaves the crate and never log it.
     pub(crate) async fn get_object(
@@ -453,6 +467,38 @@ fn to_masked_custom_yaml(object: Value, env: EnvValues) -> Result<ObjectYaml, &'
             .unwrap_or_default()
             .to_owned();
         mask_custom_object(object, &kind)
+    })
+}
+
+/// The masked `spec.template` of a ReplicaSet as YAML, for the revision diff. The template's
+/// `pod-template-hash` label differs on every revision and says nothing, and a null
+/// `creationTimestamp` is noise, so both are dropped. `Err` (fixed text) when there is no template.
+pub(crate) fn pod_template_text(
+    mut object: Value,
+    env: EnvValues,
+) -> Result<ObjectYaml, &'static str> {
+    // The same masking as the YAML tab; the template sits inside `spec`, so env literals and
+    // manifest annotations (also under `spec.template.metadata`) are hidden before it is cut out.
+    let count = mask_object(&mut object, env, |_| 0);
+    let mut template = object
+        .pointer_mut("/spec/template")
+        .map(Value::take)
+        .filter(Value::is_object)
+        .ok_or(MISSING_TEMPLATE)?;
+    if let Some(metadata) = template.get_mut("metadata").and_then(Value::as_object_mut) {
+        if metadata
+            .get("creationTimestamp")
+            .is_some_and(Value::is_null)
+        {
+            metadata.remove("creationTimestamp");
+        }
+        if let Some(labels) = metadata.get_mut("labels").and_then(Value::as_object_mut) {
+            labels.remove(POD_TEMPLATE_HASH);
+        }
+    }
+    Ok(ObjectYaml {
+        text: yaml_text(&template)?,
+        hidden_env_values: count.hidden_env_values,
     })
 }
 

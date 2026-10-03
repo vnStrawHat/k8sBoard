@@ -1,6 +1,7 @@
 use cluster::{
-    AccessCheck, ContainerKind, ContainerState, ContainerSummary, HELM_RELEASE_SECRET_TYPE,
-    NamespaceScope, NodeSummary, ObjectKind, PodSummary, ReplicaSetSummary, SecretKey,
+    AccessCheck, ClusterConnection, ContainerKind, ContainerState, ContainerSummary,
+    HELM_RELEASE_SECRET_TYPE, NamespaceScope, NodeSummary, ObjectKind, PodSummary,
+    ReplicaSetSummary, SecretKey,
 };
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
@@ -27,6 +28,7 @@ use crate::keymap::{
     RollBack, Scale, SetDefaultStorageClass, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
+use crate::kind_join::last_job_owner;
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
 use crate::live_sections::claim_pods;
 use crate::log_target::{LogTarget, workload_label};
@@ -415,9 +417,12 @@ pub(crate) fn unavailable_text(label: &str, reason: &str) -> String {
 /// subject does not offer it (L on a Service).
 pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<ResourceAction> {
     match row {
-        RowAction::ViewLogs => {
-            matches!(subject, ResourceKey::Pod { .. }).then_some(ResourceAction::ViewLogs)
+        RowAction::ViewLogs => match subject {
+            ResourceKey::Pod { .. } => true,
+            ResourceKey::Node { .. } => false,
+            ResourceKey::Kind { kind, .. } => has_workload_logs(*kind),
         }
+        .then_some(ResourceAction::ViewLogs),
         RowAction::OpenShell => match subject {
             ResourceKey::Pod { .. } => Some(ResourceAction::OpenShell),
             ResourceKey::Node { .. } => Some(ResourceAction::OpenNodeShell),
@@ -478,6 +483,19 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
     }
 }
 
+/// The kinds whose rows open the logs of their pods: View logs, key L.
+fn has_workload_logs(kind: ResourceKind) -> bool {
+    matches!(
+        kind,
+        ResourceKind::Deployments
+            | ResourceKind::StatefulSets
+            | ResourceKind::DaemonSets
+            | ResourceKind::ReplicaSets
+            | ResourceKind::Jobs
+            | ResourceKind::CronJobs
+    )
+}
+
 /// The kind Delete removes on a row of `subject`. A Helm release row reads as a Secret by storage,
 /// so naming it a Secret would delete the wrong object; custom resources have no `ObjectKind`.
 /// Both stay off (spec 0033 decision 26).
@@ -504,8 +522,54 @@ pub(crate) fn key_availability(
     live: &LiveCluster,
     guard: &ClusterGuard<'_>,
 ) -> KeyAvailability {
+    if let ResourceKey::Kind { kind, .. } = subject
+        && subject_action(row, subject) == Some(ResourceAction::ViewLogs)
+    {
+        let found = live.kind_list(*kind).and_then(|explorer| {
+            explorer
+                .list
+                .items()
+                .iter()
+                .find(|candidate| subject.is_row(*kind, candidate))
+        });
+        return workload_logs_key(found, live.pods.items(), guard.access);
+    }
     let pod = live.pods.items().iter().find(|pod| subject.is_pod(pod));
     key_availability_of(row, subject, pod, guard)
+}
+
+/// What L does on a workload row: the gate of the logs first, then the row (`None` when its list
+/// no longer holds it). Pure.
+fn workload_logs_key(
+    row: Option<&KindRow>,
+    pods: &[PodSummary],
+    access: &AccessState,
+) -> KeyAvailability {
+    if let ActionAvailability::Disabled { reason } =
+        availability_before_lock(ResourceAction::ViewLogs, access)
+    {
+        return KeyAvailability::Disabled { reason };
+    }
+    match row.and_then(|row| workload_logs_owner(row, pods)) {
+        None => KeyAvailability::NotOffered,
+        Some(Ok(_)) => KeyAvailability::Run(ResourceAction::ViewLogs),
+        Some(Err(reason)) => KeyAvailability::Disabled { reason },
+    }
+}
+
+/// The pods the logs of a workload row merge: the Job of the last run for a CronJob (it owns no
+/// pods itself), else the row's own pods. `None` for a row with no workload; `Err` says why a
+/// CronJob has no job to read. Pure.
+pub(crate) fn workload_logs_owner(
+    row: &KindRow,
+    pods: &[PodSummary],
+) -> Option<Result<PodOwner, SharedString>> {
+    if let KindObject::CronJob(cron_job) = &row.object {
+        return Some(last_job_owner(cron_job, pods));
+    }
+    let owner = row.related_pods.clone()?;
+    workload_label(&owner)?;
+    Some(Ok(owner))
 }
 
 /// `key_availability` with what it reads from the live cluster passed in: the pod of a pod subject
@@ -714,6 +778,7 @@ pub(crate) struct PodMenuLinks<'a> {
 /// The items of a pod menu that hold a submenu, built by the caller (`ShellMenu::item`,
 /// `ForwardMenu::item`) because a submenu needs the app.
 pub(crate) struct PodMenuItems {
+    pub(crate) view_logs: PopupMenuItem,
     pub(crate) open_shell: PopupMenuItem,
     /// `Debug container…` when the Open shell item has no submenu to hold it (spec 0037).
     pub(crate) debug_container: Option<PopupMenuItem>,
@@ -724,17 +789,14 @@ pub(crate) struct PodMenuItems {
 pub(crate) fn pod_menu(
     menu: PopupMenu,
     pod: &PodSummary,
-    live: &LiveCluster,
     guard: &ClusterGuard<'_>,
     row: &RowContext,
     links: &PodMenuLinks<'_>,
     items: PodMenuItems,
 ) -> PopupMenu {
-    let PodMenuLinks { dock, shell } = *links;
+    let shell = links.shell;
     let access = guard.access;
-    let menu = menu
-        .item(view_logs_item(pod, None, live, row, dock))
-        .item(items.open_shell);
+    let menu = menu.item(items.view_logs).item(items.open_shell);
     let menu = match items.debug_container {
         Some(debug_container) => menu.item(debug_container),
         None => menu,
@@ -756,6 +818,100 @@ pub(crate) fn pod_menu(
             shell,
         ));
     with_cluster_filter(menu, row, shell)
+}
+
+/// The entries of the container ⋯ menu, in the order they are shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContainerMenuEntry {
+    ViewLogs,
+    OpenShell,
+    CopyImage,
+}
+
+const CONTAINER_MENU: [ContainerMenuEntry; 3] = [
+    ContainerMenuEntry::ViewLogs,
+    ContainerMenuEntry::OpenShell,
+    ContainerMenuEntry::CopyImage,
+];
+
+/// The ⋯ menu of the container detail (W4b note 3): View logs, Open shell, Copy image, all for the
+/// shown container. No key hints: L and S act on the pod's default container. Attach is not listed.
+pub(crate) fn container_menu(
+    menu: PopupMenu,
+    pod: &PodSummary,
+    container: &ContainerSummary,
+    live: &LiveCluster,
+    guard: &ClusterGuard<'_>,
+    row: &RowContext,
+    links: &PodMenuLinks<'_>,
+) -> PopupMenu {
+    CONTAINER_MENU
+        .into_iter()
+        .fold(menu, |menu, entry| match entry {
+            ContainerMenuEntry::ViewLogs => menu.item(plain_logs_item(
+                pod,
+                Some(&container.name),
+                live,
+                row,
+                links.dock,
+            )),
+            ContainerMenuEntry::OpenShell => menu.item(container_shell_item(
+                pod,
+                container,
+                guard,
+                row,
+                links.shell,
+            )),
+            ContainerMenuEntry::CopyImage => {
+                menu.separator().item(copy_image_item(&container.image))
+            }
+        })
+}
+
+/// Open shell on one named container, through the guarded flow of `start_shell`.
+fn container_shell_item(
+    pod: &PodSummary,
+    container: &ContainerSummary,
+    guard: &ClusterGuard<'_>,
+    row: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let label = action_label(ResourceAction::OpenShell);
+    match container_shell_availability(container, guard) {
+        ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
+        ActionAvailability::Enabled => {
+            let open = ShellOpen {
+                cluster: row.cluster.clone(),
+                namespace: pod.namespace.clone(),
+                pod: pod.name.clone(),
+                short_pod: short_pod_name(pod),
+                container: container.name.clone(),
+            };
+            let shell = shell.clone();
+            PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                let open = open.clone();
+                let _ = shell.update(cx, |shell, cx| shell.start_shell(open, window, cx));
+            })
+        }
+    }
+}
+
+/// The gate of the session, then the container: one that is not running has no shell.
+pub(crate) fn container_shell_availability(
+    container: &ContainerSummary,
+    guard: &ClusterGuard<'_>,
+) -> ActionAvailability {
+    match action_availability(ResourceAction::OpenShell, guard) {
+        ActionAvailability::Enabled if !is_running(container) => disabled(NOT_RUNNING_REASON),
+        availability => availability,
+    }
+}
+
+fn copy_image_item(image: &str) -> PopupMenuItem {
+    let image = image.to_owned();
+    PopupMenuItem::new("Copy image").on_click(move |_, _, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string(image.clone()));
+    })
 }
 
 /// Copies the read-only `kubectl describe` command for the pod.
@@ -817,22 +973,125 @@ pub(crate) fn view_logs_item(
     row: &RowContext,
     dock: &WeakEntity<Dock>,
 ) -> PopupMenuItem {
+    plain_logs_item(pod, container, live, row, dock).action(RowAction::ViewLogs.key_action())
+}
+
+/// `view_logs_item` without the key hint, for a menu whose item names a container: L opens the
+/// pod's default container, so a hint there would lie.
+fn plain_logs_item(
+    pod: &PodSummary,
+    container: Option<&str>,
+    live: &LiveCluster,
+    row: &RowContext,
+    dock: &WeakEntity<Dock>,
+) -> PopupMenuItem {
     let label = action_label(ResourceAction::ViewLogs);
     match logs_launch(pod, container, &live.access) {
         Err(reason) => disabled_menu_item(label, reason),
         Ok(target) => {
-            let connection = live.connection().clone();
-            let row = row.clone();
-            let dock = dock.clone();
-            PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                let _ = dock.update(cx, |dock, cx| {
-                    let origin = LogOrigin::new(&row, connection.clone());
-                    dock.open(origin, target.clone(), window, cx)
-                });
-            })
+            let open = open_logs(live.connection().clone(), row.clone(), dock.clone());
+            PopupMenuItem::new(label)
+                .on_click(move |_, window, cx| open(target.clone(), window, cx))
         }
     }
-    .action(RowAction::ViewLogs.key_action())
+}
+
+/// The call every View logs entry makes: opens `target` in the dock under the row's origin.
+fn open_logs(
+    connection: ClusterConnection,
+    row: RowContext,
+    dock: WeakEntity<Dock>,
+) -> impl Fn(LogTarget, &mut Window, &mut App) + Clone {
+    move |target, window, cx| {
+        let _ = dock.update(cx, |dock, cx| {
+            let origin = LogOrigin::new(&row, connection.clone());
+            dock.open(origin, target, window, cx)
+        });
+    }
+}
+
+/// One container of the View logs submenu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LogChoice {
+    pub(crate) name: String,
+    /// `MAIN`, `SIDECAR`, or `INIT`.
+    pub(crate) tag: &'static str,
+}
+
+/// What the View logs item of a pod offers.
+pub(crate) enum LogsMenuState {
+    /// Logs are not permitted, or the pod has no container.
+    Disabled(SharedString),
+    /// A pod with one container opens it directly.
+    One(LogTarget),
+    /// Several containers: a submenu with every one, init included, none disabled for its state.
+    Pick(Vec<LogChoice>),
+}
+
+/// The View logs item of a pod menu, owned so the caller builds it before it borrows the session
+/// (a submenu is built from the app, like `ShellMenu`).
+pub(crate) struct LogsMenu {
+    state: LogsMenuState,
+    pod: PodSummary,
+}
+
+impl LogsMenu {
+    pub(crate) fn of(pod: &PodSummary, access: &AccessState) -> Self {
+        let state = match logs_launch(pod, None, access) {
+            Err(reason) => LogsMenuState::Disabled(reason),
+            Ok(target) if pod.containers.len() < 2 => LogsMenuState::One(target),
+            Ok(_) => LogsMenuState::Pick(
+                pod.containers
+                    .iter()
+                    .map(|container| LogChoice {
+                        name: container.name.clone(),
+                        tag: kind_tag_text(container.kind),
+                    })
+                    .collect(),
+            ),
+        };
+        Self {
+            state,
+            pod: pod.clone(),
+        }
+    }
+
+    /// Each entry opens its own container in the dock; a single container keeps the key hint.
+    pub(crate) fn item(
+        self,
+        connection: ClusterConnection,
+        row: &RowContext,
+        dock: &WeakEntity<Dock>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> PopupMenuItem {
+        let label = action_label(ResourceAction::ViewLogs);
+        let open = open_logs(connection, row.clone(), dock.clone());
+        match self.state {
+            LogsMenuState::Disabled(reason) => {
+                disabled_menu_item(label, reason).action(RowAction::ViewLogs.key_action())
+            }
+            LogsMenuState::One(target) => PopupMenuItem::new(label)
+                .on_click(move |_, window, cx| open(target.clone(), window, cx))
+                .action(RowAction::ViewLogs.key_action()),
+            LogsMenuState::Pick(choices) => {
+                let pod = self.pod;
+                let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
+                    choices.iter().fold(submenu, |submenu, choice| {
+                        let open = open.clone();
+                        let target = LogTarget::of_container(&pod, &choice.name);
+                        let text = format!("{} · {}", choice.name, choice.tag);
+                        submenu.item(PopupMenuItem::new(text).on_click(move |_, window, cx| {
+                            if let Some(target) = target.clone() {
+                                open(target, window, cx);
+                            }
+                        }))
+                    })
+                });
+                PopupMenuItem::submenu(label, submenu)
+            }
+        }
+    }
 }
 
 /// The label and availability of the logs item of a workload row; `None` for a row that has
@@ -855,18 +1114,29 @@ fn workload_logs_entry(
     ))
 }
 
-/// Merges the logs of every pod of the workload into one dock tab.
+/// The label of the logs item of a CronJob row, which owns no pods itself.
+const LAST_JOB_LOGS_LABEL: &str = "View logs of last job";
+
+/// Merges the logs of every pod of the workload into one dock tab; a CronJob opens its last job.
+/// Both carry the L hint, since the key does the same on the cursor row.
 fn workload_logs_item(
     row: &KindRow,
     access: &AccessState,
+    pods: &[PodSummary],
     context: &RowContext,
     shell: &WeakEntity<AppShell>,
 ) -> Option<PopupMenuItem> {
-    let (label, availability) = workload_logs_entry(row.related_pods.as_ref(), access)?;
-    Some(match availability {
-        ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
-        ActionAvailability::Enabled => {
-            let owner = row.related_pods.clone()?;
+    let label = match &row.object {
+        KindObject::CronJob(_) => LAST_JOB_LOGS_LABEL,
+        _ => workload_logs_entry(row.related_pods.as_ref(), access)?.0,
+    };
+    let owner = workload_logs_owner(row, pods)?;
+    let gate = availability_before_lock(ResourceAction::ViewLogs, access);
+    let item = match (gate, owner) {
+        (ActionAvailability::Disabled { reason }, _) | (_, Err(reason)) => {
+            disabled_menu_item(label, reason)
+        }
+        (ActionAvailability::Enabled, Ok(owner)) => {
             let cluster = context.cluster.clone();
             let shell = shell.clone();
             PopupMenuItem::new(label).on_click(move |_, window, cx| {
@@ -875,7 +1145,8 @@ fn workload_logs_item(
                 });
             })
         }
-    })
+    };
+    Some(item.action(RowAction::ViewLogs.key_action()))
 }
 
 pub(crate) fn node_menu(
@@ -999,7 +1270,7 @@ pub(crate) fn kind_menu(
     if has_test_traffic(kind) {
         menu = menu.item(test_traffic_item(row, context, shell));
     }
-    if let Some(item) = workload_logs_item(row, access, context, shell) {
+    if let Some(item) = workload_logs_item(row, access, pods, context, shell) {
         menu = menu.item(item);
     }
     if let Some(secret) = extras.secret {

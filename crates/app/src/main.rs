@@ -106,6 +106,7 @@ mod related_pods;
 mod resource_actions;
 mod resource_edits;
 mod resource_kind;
+mod revision_diff;
 mod row_selection;
 mod screenshot;
 mod secret_clipboard;

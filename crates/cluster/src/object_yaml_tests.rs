@@ -1101,3 +1101,125 @@ fn to_yaml_text_adds_only_the_given_header() {
         "# header\na: 1\n"
     );
 }
+
+// ---- Pod template of a ReplicaSet (spec 0039) ----
+
+/// A ReplicaSet whose template has a hash label, a null creation time, an env literal, and the
+/// given annotations on the template.
+fn replica_set_json(template_annotations: Value) -> Value {
+    json!({
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+            "name": "api-7d9f8c",
+            "namespace": "shop",
+            "annotations": {
+                "kubectl.kubernetes.io/last-applied-configuration": "{\"secret\":\"top\"}"
+            },
+        },
+        "spec": {
+            "replicas": 2,
+            "template": {
+                "metadata": {
+                    "creationTimestamp": null,
+                    "labels": {"app": "api", "pod-template-hash": "7d9f8c"},
+                    "annotations": template_annotations,
+                },
+                "spec": {"containers": [{
+                    "name": "api",
+                    "image": "api:2",
+                    "env": [{"name": "DB_PASSWORD", "value": "hunter2-literal"}],
+                }]},
+            },
+        },
+    })
+}
+
+fn template_of(object: Value, env: EnvValues) -> ObjectYaml {
+    pod_template_text(object, env).expect("the fixture has a template")
+}
+
+#[test]
+fn pod_template_text_drops_the_hash_label() {
+    let yaml = template_of(replica_set_json(json!({})), EnvValues::Hidden);
+    assert!(yaml.text.contains("app: api"), "{}", yaml.text);
+    assert!(!yaml.text.contains("pod-template-hash"), "{}", yaml.text);
+    assert!(!yaml.text.contains("creationTimestamp"), "{}", yaml.text);
+    // Only the template is kept: nothing of the ReplicaSet around it.
+    assert!(!yaml.text.contains("replicas"), "{}", yaml.text);
+    assert!(!yaml.text.contains("kind: ReplicaSet"), "{}", yaml.text);
+}
+
+#[test]
+fn pod_template_text_masks_env_by_default() {
+    let yaml = template_of(replica_set_json(json!({})), EnvValues::Hidden);
+    assert!(!yaml.text.contains("hunter2-literal"), "{}", yaml.text);
+    assert!(yaml.text.contains(HIDDEN), "{}", yaml.text);
+    assert_eq!(yaml.hidden_env_values, 1);
+    // No hidden-count header: the diff dialog shows the toggle instead.
+    assert!(!yaml.text.starts_with('#'), "{}", yaml.text);
+}
+
+#[test]
+fn pod_template_text_shows_env_when_asked() {
+    let yaml = template_of(replica_set_json(json!({})), EnvValues::Shown);
+    assert!(yaml.text.contains("hunter2-literal"), "{}", yaml.text);
+    assert_eq!(yaml.hidden_env_values, 0);
+}
+
+#[test]
+fn pod_template_text_masks_secret_annotations() {
+    let yaml = template_of(
+        replica_set_json(json!({"kapp.k14s.io/original": "{\"password\":\"p4ss\"}"})),
+        EnvValues::Shown,
+    );
+    assert!(!yaml.text.contains("p4ss"), "{}", yaml.text);
+    assert!(yaml.text.contains("kapp.k14s.io/original"), "{}", yaml.text);
+    assert!(!yaml.text.contains("secret"), "{}", yaml.text);
+}
+
+#[test]
+fn pod_template_text_masks_secret_annotations_under_template_metadata() {
+    let yaml = template_of(
+        replica_set_json(json!({
+            "kubectl.kubernetes.io/last-applied-configuration": "{\"token\":\"t0k3n\"}",
+            "team": "shop",
+        })),
+        EnvValues::Hidden,
+    );
+    assert!(!yaml.text.contains("t0k3n"), "{}", yaml.text);
+    assert!(yaml.text.contains("team: shop"), "{}", yaml.text);
+}
+
+#[test]
+fn pod_template_text_without_template_is_err() {
+    let object = json!({"kind": "ReplicaSet", "metadata": {"name": "x"}, "spec": {"replicas": 1}});
+    assert!(pod_template_text(object, EnvValues::Hidden).is_err());
+}
+
+#[tokio::test]
+async fn pod_template_yaml_gets_the_replica_set() {
+    let body = replica_set_json(json!({})).to_string();
+    let (connection, api) = crate::fake_api::FakeApi::connection(
+        crate::object_write::WritePolicy::Blocked,
+        move |_| (200, body.clone()),
+    );
+    let replica_set = ObjectRef::new(
+        ObjectKind::ReplicaSet,
+        Some("shop".to_owned()),
+        "api-7d9f8c".to_owned(),
+    )
+    .expect("a namespaced kind");
+    let yaml = connection
+        .pod_template_yaml(&replica_set, EnvValues::Hidden)
+        .await
+        .expect("the fake answers");
+    assert!(yaml.text.contains("app: api"), "{}", yaml.text);
+    let requests = api.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(
+        requests[0].path,
+        "/apis/apps/v1/namespaces/shop/replicasets/api-7d9f8c"
+    );
+}

@@ -16,7 +16,7 @@ use crate::dock::Dock;
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::PodUsageHistory;
 use crate::port_forward_menu::{ForwardMenu, pod_subject};
-use crate::resource_actions::{PodMenuItems, PodMenuLinks, ShellMenu, pod_menu};
+use crate::resource_actions::{LogsMenu, PodMenuItems, PodMenuLinks, ShellMenu, pod_menu};
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, pod_status_label, toned_text};
@@ -437,18 +437,21 @@ impl TableDelegate for PodTableDelegate {
                 return menu;
             };
             let session = slot.session.read(cx);
-            let (Some(_), Some(guard)) = (session.live(), session.guard(cx)) else {
+            let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
                 return menu;
             };
             (
                 slot.row_context(cx),
+                LogsMenu::of(pod, &live.access),
+                live.connection().clone(),
                 ShellMenu::of(pod, &guard),
                 ForwardMenu::of(pod_subject(pod), &slot.cluster, &guard),
             )
         };
-        let (row, shell_menu, forward_menu) = prepared;
+        let (row, logs_menu, connection, shell_menu, forward_menu) = prepared;
         let shell_items = shell_menu.items(&row, &self.shell, window, cx);
         let items = PodMenuItems {
+            view_logs: logs_menu.item(connection, &row, &self.dock, window, cx),
             open_shell: shell_items.open_shell,
             debug_container: shell_items.debug_container,
             port_forward: forward_menu.item(&self.shell, window, cx),
@@ -457,13 +460,12 @@ impl TableDelegate for PodTableDelegate {
             return menu;
         };
         let session = slot.session.read(cx);
-        let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
+        let (Some(_), Some(guard)) = (session.live(), session.guard(cx)) else {
             return menu;
         };
         pod_menu(
             menu,
             pod,
-            live,
             &guard,
             &row,
             &PodMenuLinks {

@@ -110,6 +110,8 @@ pub(crate) enum NoLogTarget {
     NotLoggable,
     /// The access review denies `get pods/log`, or has no answer yet; the text says which.
     AccessDenied(SharedString),
+    /// The row is a workload, but there is nothing to read now (a CronJob that has not run).
+    Unavailable(SharedString),
 }
 
 impl fmt::Display for NoLogTarget {
@@ -117,7 +119,7 @@ impl fmt::Display for NoLogTarget {
         f.write_str(match self {
             Self::NotConnected => "Not connected",
             Self::NotLoggable => "Select a pod or workload",
-            Self::AccessDenied(reason) => reason,
+            Self::AccessDenied(reason) | Self::Unavailable(reason) => reason,
         })
     }
 }

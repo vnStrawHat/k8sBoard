@@ -5,12 +5,12 @@
 //! are tested without a window.
 
 use cluster::{
-    BindingSummary, BroadGroup, ConfigMapSummary, ConfigMapValues, CronJobSummary, CronSchedule,
-    DeploymentSummary, EndpointSliceSummary, EventSummary, Identity, IngressSummary, JobSummary,
-    NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary,
-    PodSummary, PvcUsage, RbacSnapshot, ReplicaSetSummary, ResourceQuotaSummary, RoleSummary,
-    SecretSummary, ServiceAccountSummary, ServiceSummary, Subject, SubjectKind, ValuePreview,
-    VolumeSource,
+    AccessCheck, BindingSummary, BroadGroup, ConfigMapSummary, ConfigMapValues, CronJobSummary,
+    CronSchedule, DeploymentSummary, EndpointSliceSummary, EventSummary, Identity, IngressSummary,
+    JobSummary, LimitRangeLimit, LimitRangeSummary, NodeSummary, PersistentVolumeClaimSummary,
+    PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary, PvcUsage, RbacSnapshot,
+    ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, SecretSummary, ServiceAccountSummary,
+    ServiceSummary, Subject, SubjectKind, ValuePreview, VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -33,18 +33,18 @@ use crate::batch_rows::job_status_label;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{
     CompanionLists, CompanionPlan, LiveCluster, LiveList, RbacState, RelatedList, companion_plan,
-    denied_related_check,
+    denied_related_check, namespace_list_gates,
 };
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::custom_rows::{FieldsSide, conditions_rows, field_list_rows};
-use crate::drawer::{link_text, wide_detail_row};
+use crate::drawer::{link_text, truncated_text, wide_detail_row};
 use crate::helm_release_view::ValuesLayout;
 use crate::helm_rows::{HistoryModel, HistoryRow, history_model};
 use crate::kind_diagnosis::{is_pod_not_ready, unready_node};
 use crate::kind_drawer::{DrawerPaint, bar_row, live_detail_rows};
 use crate::kind_join::{
-    EndpointState, UsedBy, config_map_users, endpoint_entries, endpoint_ports, secret_user_list,
-    secret_users, service_slices, users_of,
+    EndpointState, UsedBy, WAY_ENV, WAY_ENV_FROM, config_map_users, endpoint_entries,
+    endpoint_ports, secret_user_list, secret_users, service_slices, users_of,
 };
 use crate::kind_join::{UsageSample, claim_sample, is_shared_filesystem};
 use crate::kind_row::{DetailRow, KindObject, KindRow, LiveContent, owns_pod, percent};
@@ -55,6 +55,7 @@ use crate::policy_rows::{fullest_item, quota_text};
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_actions::ActionAvailability;
 use crate::resource_kind::ResourceKind;
+use crate::revision_diff::{RevisionDiffRequest, RevisionSide, diff_request};
 use crate::secret_rows::{MASK, MaskedKeyRow, certificate_rows, secret_data_rows};
 use crate::status_tone::{
     StatusLabel, StatusTone, pod_status_label, readiness_text, tone_color, toned_text,
@@ -254,7 +255,7 @@ fn replica_set_list<'a>(
             RelatedList::Jobs(_)
             | RelatedList::ConfigMapValues(_)
             | RelatedList::Events(_)
-            | RelatedList::ResourceQuotas(_)
+            | RelatedList::NamespaceLimits { .. }
             | RelatedList::HelmHistory(_)
             | RelatedList::CustomFields(_),
         )
@@ -299,18 +300,38 @@ fn revisions(
                 return vec![note("No ReplicaSets", cx)];
             }
             let hidden = revisions.len().saturating_sub(MAX_LISTED_OBJECTS);
+            let key = ResourceKey::of_row(kind, row);
             revisions
                 .iter()
                 .take(MAX_LISTED_OBJECTS)
                 .enumerate()
                 .map(|(ix, revision)| {
                     let button = roll_back_button(deployment, revision, roll_back);
-                    revision_element(ix, revision, now, button, cx)
+                    let diff = diff_of_revision(&key, revision, &revisions);
+                    revision_element(ix, revision, now, button, diff, cx)
                 })
                 .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
                 .collect()
         }
     }
+}
+
+/// The diff a revision row opens against the revision the Deployment runs: none for the current row,
+/// and none when no row is current. Pure.
+fn diff_of_revision(
+    deployment: &ResourceKey,
+    revision: &Revision,
+    all: &[Revision],
+) -> Option<RevisionDiffRequest> {
+    if revision.is_current {
+        return None;
+    }
+    let current = all.iter().find(|candidate| candidate.is_current)?;
+    Some(diff_request(
+        deployment.clone(),
+        RevisionSide::of(revision.replica_set, false),
+        RevisionSide::of(current.replica_set, true),
+    ))
 }
 
 /// What the Roll back button of one revision does.
@@ -361,6 +382,7 @@ fn revision_element(
     revision: &Revision,
     now: jiff::Timestamp,
     button: RollBackButton,
+    diff: Option<RevisionDiffRequest>,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -462,6 +484,24 @@ fn revision_element(
                             }))
                         }
                     }
+                })),
+        )
+        .child(
+            div()
+                .w(DIFF_BUTTON_SLOT)
+                .flex_shrink_0()
+                .flex()
+                .justify_end()
+                .children(diff.map(|request| {
+                    Button::new(("revision-diff", ix))
+                        .label("Diff")
+                        .xsmall()
+                        .ghost()
+                        .on_click(cx.listener(move |shell, _, window, cx| {
+                            // The row behind the button reveals its ReplicaSet on a click.
+                            cx.stop_propagation();
+                            shell.open_revision_diff(request.clone(), window, cx);
+                        }))
                 })),
         )
         .into_any_element()
@@ -574,7 +614,7 @@ fn recent_jobs_rows(
             RelatedList::ReplicaSets(_)
             | RelatedList::ConfigMapValues(_)
             | RelatedList::Events(_)
-            | RelatedList::ResourceQuotas(_)
+            | RelatedList::NamespaceLimits { .. }
             | RelatedList::HelmHistory(_)
             | RelatedList::CustomFields(_),
         )
@@ -949,7 +989,7 @@ fn config_map_data_rows(
             RelatedList::ReplicaSets(_)
             | RelatedList::Jobs(_)
             | RelatedList::Events(_)
-            | RelatedList::ResourceQuotas(_)
+            | RelatedList::NamespaceLimits { .. }
             | RelatedList::HelmHistory(_)
             | RelatedList::CustomFields(_),
         )
@@ -1008,8 +1048,39 @@ fn used_by_rows(
         .enumerate()
         .map(|(ix, used_by)| used_by_element(ix, used_by, cx))
         .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+        .chain(restart_hint(&users).map(|hint| note(&hint, cx)))
         .chain(std::iter::once(note(&format!("From pods in {scope}"), cx)))
         .collect()
+}
+
+/// How many owners the restart hint names before it counts the rest.
+const HINT_LISTED_OWNERS: usize = 3;
+
+/// The note under Used by when some user reads the ConfigMap through env: those values are read
+/// once at container start. CronJob and Job owners are left out (each run starts fresh), and so are
+/// bare `pod/{name}` owners (a pod without a controller is not restarted; it is replaced). Pure.
+fn restart_hint(users: &[&UsedBy]) -> Option<String> {
+    let readers: Vec<&str> = users
+        .iter()
+        .filter(|used_by| used_by.ways.contains(WAY_ENV) || used_by.ways.contains(WAY_ENV_FROM))
+        .map(|used_by| used_by.owner.as_str())
+        .filter(|owner| {
+            !["cronjob/", "job/", "pod/"]
+                .iter()
+                .any(|prefix| owner.starts_with(prefix))
+        })
+        .collect();
+    if readers.is_empty() {
+        return None;
+    }
+    let listed = readers[..readers.len().min(HINT_LISTED_OWNERS)].join(", ");
+    let more = match readers.len().saturating_sub(HINT_LISTED_OWNERS) {
+        0 => String::new(),
+        count => format!(" and {count} more"),
+    };
+    Some(format!(
+        "Env values are read when a container starts: restart {listed}{more} to use a change. Mounted files update on their own (not with subPath)."
+    ))
 }
 
 fn used_by_element(ix: usize, used_by: &UsedBy, cx: &Context<AppShell>) -> AnyElement {
@@ -1826,6 +1897,90 @@ fn quota_summary_text(quota: &ResourceQuotaSummary) -> String {
     }
 }
 
+/// What one half of the Quota section says before it has rows to show.
+#[derive(Debug, PartialEq, Eq)]
+enum QuotaHalf<'a, T> {
+    Note(String),
+    Items(&'a [T]),
+}
+
+/// The words of one half's notes.
+struct HalfWords {
+    loading: &'static str,
+    unavailable: &'static str,
+    none: &'static str,
+}
+
+const QUOTA_WORDS: HalfWords = HalfWords {
+    loading: "Loading quotas…",
+    unavailable: "Quotas are unavailable",
+    none: "No ResourceQuota",
+};
+
+const LIMIT_RANGE_WORDS: HalfWords = HalfWords {
+    loading: "Loading limit ranges…",
+    unavailable: "Limit ranges are unavailable",
+    none: "No LimitRange",
+};
+
+/// One half of the Quota section: the denied check first (its watch never started), then the state
+/// of its own list, independently of the other half. Pure.
+fn quota_half<'a, T>(
+    check: AccessCheck,
+    is_open: bool,
+    list: Option<&'a LiveList<T>>,
+    words: &HalfWords,
+) -> QuotaHalf<'a, T> {
+    if !is_open {
+        return QuotaHalf::Note(format!("Not permitted: {check}"));
+    }
+    match list {
+        None | Some(LiveList::Loading) => QuotaHalf::Note(words.loading.to_owned()),
+        Some(LiveList::Failed { .. }) => QuotaHalf::Note(words.unavailable.to_owned()),
+        Some(LiveList::Ready { items, .. }) if items.is_empty() => {
+            QuotaHalf::Note(words.none.to_owned())
+        }
+        Some(LiveList::Ready { items, .. }) => QuotaHalf::Items(items),
+    }
+}
+
+/// `Container: default cpu 500m, memory 512Mi · request cpu 100m · max cpu 2`; items joined by
+/// `; `, empty maps left out, a LimitRange without limits reads `no limits`. Pure.
+fn limit_range_text(limit_range: &LimitRangeSummary) -> String {
+    if limit_range.limits.is_empty() {
+        return "no limits".to_owned();
+    }
+    limit_range
+        .limits
+        .iter()
+        .map(limit_text)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn limit_text(limit: &LimitRangeLimit) -> String {
+    let parts: Vec<String> = [
+        ("default", &limit.default),
+        ("request", &limit.default_request),
+        ("max", &limit.max),
+        ("min", &limit.min),
+    ]
+    .into_iter()
+    .filter(|(_, quantities)| !quantities.is_empty())
+    .map(|(label, quantities)| {
+        let pairs: Vec<String> = quantities
+            .iter()
+            .map(|(resource, quantity)| format!("{resource} {quantity}"))
+            .collect();
+        format!("{label} {}", pairs.join(", "))
+    })
+    .collect();
+    if parts.is_empty() {
+        return limit.kind.clone();
+    }
+    format!("{}: {}", limit.kind, parts.join(" · "))
+}
+
 fn namespace_quota_rows(
     namespace: &str,
     live: &LiveCluster,
@@ -1834,40 +1989,61 @@ fn namespace_quota_rows(
     let subject = RelatedSubject::NamespaceQuotas {
         namespace: namespace.to_owned(),
     };
-    if let Some(check) = denied_related_check(&subject, &live.access) {
-        return vec![note(&format!("Not permitted: {check}"), cx)];
-    }
-    match live
+    let gates = namespace_list_gates(&live.access);
+    let lists = live
         .related_of(&subject)
-        .and_then(RelatedList::resource_quotas)
-    {
-        None | Some(LiveList::Loading) => vec![note("Loading quotas…", cx)],
-        Some(LiveList::Failed { .. }) => vec![note("Quotas are unavailable", cx)],
-        Some(LiveList::Ready { items, .. }) => {
-            if items.is_empty() {
-                return vec![note("No ResourceQuota", cx)];
-            }
-            items
-                .iter()
-                .enumerate()
-                .map(|(ix, quota)| {
-                    let text = quota_summary_text(quota);
-                    // A quota is a namespaced kind with a screen, so its key is built directly.
-                    let target = ResourceKey::Kind {
-                        kind: ResourceKind::ResourceQuotas,
-                        namespace: Some(namespace.to_owned()),
-                        name: quota.name.clone(),
-                    };
-                    wide_detail_row(
-                        quota.name.clone(),
-                        link_text(LIVE_LINK_ID_BASE + ix, &text.into(), target, cx),
-                        cx,
-                    )
-                    .into_any_element()
-                })
-                .collect()
-        }
-    }
+        .and_then(RelatedList::namespace_limits);
+    let quotas = quota_half(
+        AccessCheck::ListResourceQuotas,
+        gates.quotas,
+        lists.map(|(quotas, _)| quotas),
+        &QUOTA_WORDS,
+    );
+    let limit_ranges = quota_half(
+        AccessCheck::ListLimitRanges,
+        gates.limit_ranges,
+        lists.map(|(_, limit_ranges)| limit_ranges),
+        &LIMIT_RANGE_WORDS,
+    );
+    let quota_rows = match quotas {
+        QuotaHalf::Note(text) => vec![note(&text, cx)],
+        QuotaHalf::Items(quotas) => quotas
+            .iter()
+            .enumerate()
+            .map(|(ix, quota)| {
+                let text = quota_summary_text(quota);
+                // A quota is a namespaced kind with a screen, so its key is built directly.
+                let target = ResourceKey::Kind {
+                    kind: ResourceKind::ResourceQuotas,
+                    namespace: Some(namespace.to_owned()),
+                    name: quota.name.clone(),
+                };
+                wide_detail_row(
+                    quota.name.clone(),
+                    link_text(LIVE_LINK_ID_BASE + ix, &text.into(), target, cx),
+                    cx,
+                )
+                .into_any_element()
+            })
+            .collect(),
+    };
+    let limit_range_rows = match limit_ranges {
+        QuotaHalf::Note(text) => vec![note(&text, cx)],
+        // No link: k8sBoard has no LimitRange screen. The full text is the tooltip.
+        QuotaHalf::Items(limit_ranges) => limit_ranges
+            .iter()
+            .enumerate()
+            .map(|(ix, limit_range)| {
+                wide_detail_row(
+                    limit_range.name.clone(),
+                    truncated_text(("limit-range", ix), limit_range_text(limit_range)),
+                    cx,
+                )
+                .into_any_element()
+            })
+            .collect(),
+    };
+    quota_rows.into_iter().chain(limit_range_rows).collect()
 }
 
 // ---- Bindings ----

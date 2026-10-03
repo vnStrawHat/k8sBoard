@@ -1526,3 +1526,275 @@ fn no_button_on_the_current_revision() {
         .collect();
     assert_eq!(with_button, ["api-old"]);
 }
+
+// ---- ConfigMap restart hint ----
+
+fn used_by(owner: &str, ways: &[&'static str]) -> UsedBy {
+    UsedBy {
+        owner: owner.to_owned(),
+        target: None,
+        ways: ways.iter().copied().collect(),
+    }
+}
+
+fn hint_of(users: &[UsedBy]) -> Option<String> {
+    restart_hint(&users.iter().collect::<Vec<_>>())
+}
+
+#[test]
+fn restart_hint_names_env_readers() {
+    let hint = hint_of(&[used_by("deployment/api", &["env"])]).expect("an env reader");
+    assert_eq!(
+        hint,
+        "Env values are read when a container starts: restart deployment/api to use a change. Mounted files update on their own (not with subPath)."
+    );
+    // `env from` reads at start too.
+    assert!(hint_of(&[used_by("statefulset/db", &["env from", "volume"])]).is_some());
+}
+
+#[test]
+fn restart_hint_is_none_for_volume_only() {
+    assert_eq!(hint_of(&[used_by("deployment/api", &["volume"])]), None);
+    assert_eq!(hint_of(&[]), None);
+}
+
+#[test]
+fn restart_hint_skips_cronjob_and_job_owners() {
+    let users = [
+        used_by("cronjob/nightly", &["env"]),
+        used_by("job/migrate", &["env from"]),
+    ];
+    assert_eq!(hint_of(&users), None);
+    let mixed = [
+        used_by("cronjob/nightly", &["env"]),
+        used_by("daemonset/agent", &["env"]),
+    ];
+    let hint = hint_of(&mixed).expect("the daemonset reads env");
+    assert!(hint.contains("restart daemonset/agent to use"), "{hint}");
+}
+
+#[test]
+fn restart_hint_skips_bare_pod_owners() {
+    assert_eq!(hint_of(&[used_by("pod/debug-1", &["env"])]), None);
+}
+
+#[test]
+fn restart_hint_caps_at_three_owners() {
+    let users: Vec<UsedBy> = ["a", "b", "c", "d", "e"]
+        .iter()
+        .map(|name| used_by(&format!("deployment/{name}"), &["env"]))
+        .collect();
+    let hint = hint_of(&users).expect("env readers");
+    assert!(
+        hint.contains("restart deployment/a, deployment/b, deployment/c and 2 more to use"),
+        "{hint}"
+    );
+    assert!(!hint.contains("deployment/d"), "{hint}");
+}
+
+// ---- Revision diff buttons ----
+
+fn deployment_key() -> ResourceKey {
+    ResourceKey::Kind {
+        kind: ResourceKind::Deployments,
+        namespace: Some("team-a".to_owned()),
+        name: "api".to_owned(),
+    }
+}
+
+fn diff_buttons(current_revision: Option<&str>) -> Vec<(String, bool)> {
+    let sets = [
+        replica_set("api-new", Some("38"), owner("Deployment", "api")),
+        replica_set("api-old", Some("37"), owner("Deployment", "api")),
+    ];
+    let revisions = revision_rows(&deployment(current_revision), &sets);
+    revisions
+        .iter()
+        .map(|revision| {
+            let diff = diff_of_revision(&deployment_key(), revision, &revisions);
+            (revision.replica_set.name.clone(), diff.is_some())
+        })
+        .collect()
+}
+
+#[test]
+fn diff_button_only_on_non_current_rows() {
+    assert_eq!(
+        diff_buttons(Some("38")),
+        [("api-new".to_owned(), false), ("api-old".to_owned(), true)]
+    );
+}
+
+#[test]
+fn diff_button_compares_against_the_current_revision() {
+    let sets = [
+        replica_set("api-new", Some("38"), owner("Deployment", "api")),
+        replica_set("api-old", Some("37"), owner("Deployment", "api")),
+    ];
+    let revisions = revision_rows(&deployment(Some("38")), &sets);
+    let request = diff_of_revision(&deployment_key(), &revisions[1], &revisions)
+        .expect("a non-current row has a diff");
+    assert_eq!(request.older.replica_set, "api-old");
+    assert_eq!(request.newer.replica_set, "api-new");
+    assert!(request.newer.is_current && !request.older.is_current);
+}
+
+#[test]
+fn no_diff_without_a_current_revision() {
+    assert_eq!(
+        diff_buttons(None),
+        [("api-new".to_owned(), false), ("api-old".to_owned(), false)]
+    );
+}
+
+// ---- Namespace Quota section: LimitRanges ----
+
+fn quantities(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(resource, quantity)| ((*resource).to_owned(), (*quantity).to_owned()))
+        .collect()
+}
+
+fn limit(kind: &str) -> cluster::LimitRangeLimit {
+    cluster::LimitRangeLimit {
+        kind: kind.to_owned(),
+        default: Default::default(),
+        default_request: Default::default(),
+        max: Default::default(),
+        min: Default::default(),
+    }
+}
+
+fn limit_range(limits: Vec<cluster::LimitRangeLimit>) -> cluster::LimitRangeSummary {
+    cluster::LimitRangeSummary {
+        namespace: "team-a".to_owned(),
+        name: "defaults".to_owned(),
+        limits,
+    }
+}
+
+#[test]
+fn limit_range_text_lists_each_part() {
+    let container = cluster::LimitRangeLimit {
+        default: quantities(&[("cpu", "500m"), ("memory", "512Mi")]),
+        default_request: quantities(&[("cpu", "100m")]),
+        max: quantities(&[("cpu", "2")]),
+        ..limit("Container")
+    };
+    assert_eq!(
+        limit_range_text(&limit_range(vec![container.clone()])),
+        "Container: default cpu 500m, memory 512Mi · request cpu 100m · max cpu 2"
+    );
+    // Items are joined by `; ` and min comes last; empty maps are left out.
+    let claim = cluster::LimitRangeLimit {
+        min: quantities(&[("storage", "1Gi")]),
+        ..limit("PersistentVolumeClaim")
+    };
+    assert_eq!(
+        limit_range_text(&limit_range(vec![container, claim])),
+        "Container: default cpu 500m, memory 512Mi · request cpu 100m · max cpu 2; \
+         PersistentVolumeClaim: min storage 1Gi"
+    );
+}
+
+#[test]
+fn limit_range_text_without_limits() {
+    assert_eq!(limit_range_text(&limit_range(Vec::new())), "no limits");
+    // An item with no quantities still names its kind.
+    assert_eq!(limit_range_text(&limit_range(vec![limit("Pod")])), "Pod");
+}
+
+fn loaded_list<T>(items: Vec<T>) -> LiveList<T> {
+    LiveList::Ready {
+        items,
+        interruption: None,
+    }
+}
+
+#[test]
+fn no_limit_range_note() {
+    let empty: LiveList<cluster::LimitRangeSummary> = loaded_list(Vec::new());
+    assert_eq!(
+        quota_half(
+            AccessCheck::ListLimitRanges,
+            true,
+            Some(&empty),
+            &LIMIT_RANGE_WORDS
+        ),
+        QuotaHalf::Note("No LimitRange".to_owned())
+    );
+    let loading: LiveList<cluster::LimitRangeSummary> = LiveList::Loading;
+    assert_eq!(
+        quota_half(
+            AccessCheck::ListLimitRanges,
+            true,
+            Some(&loading),
+            &LIMIT_RANGE_WORDS
+        ),
+        QuotaHalf::Note("Loading limit ranges…".to_owned())
+    );
+    let loaded = loaded_list(vec![limit_range(Vec::new())]);
+    assert!(matches!(
+        quota_half(
+            AccessCheck::ListLimitRanges,
+            true,
+            Some(&loaded),
+            &LIMIT_RANGE_WORDS
+        ),
+        QuotaHalf::Items([_])
+    ));
+}
+
+#[test]
+fn denied_limit_ranges_note() {
+    // A denied half never reads its list, whatever it holds.
+    let loaded = loaded_list(vec![limit_range(Vec::new())]);
+    assert_eq!(
+        quota_half(
+            AccessCheck::ListLimitRanges,
+            false,
+            Some(&loaded),
+            &LIMIT_RANGE_WORDS
+        ),
+        QuotaHalf::Note("Not permitted: list limitranges".to_owned())
+    );
+}
+
+#[test]
+fn denied_quotas_note_with_limit_ranges_listed() {
+    let quotas: LiveList<ResourceQuotaSummary> = LiveList::Loading;
+    let limit_ranges = loaded_list(vec![limit_range(Vec::new())]);
+    assert_eq!(
+        quota_half(
+            AccessCheck::ListResourceQuotas,
+            false,
+            Some(&quotas),
+            &QUOTA_WORDS
+        ),
+        QuotaHalf::Note("Not permitted: list resourcequotas".to_owned())
+    );
+    // The allowed half still lists.
+    assert!(matches!(
+        quota_half(
+            AccessCheck::ListLimitRanges,
+            true,
+            Some(&limit_ranges),
+            &LIMIT_RANGE_WORDS
+        ),
+        QuotaHalf::Items([_])
+    ));
+    // Each half has its own failure note.
+    let failed: LiveList<ResourceQuotaSummary> = LiveList::Failed {
+        message: "boom".to_owned(),
+    };
+    assert_eq!(
+        quota_half(
+            AccessCheck::ListResourceQuotas,
+            true,
+            Some(&failed),
+            &QUOTA_WORDS
+        ),
+        QuotaHalf::Note("Quotas are unavailable".to_owned())
+    );
+}

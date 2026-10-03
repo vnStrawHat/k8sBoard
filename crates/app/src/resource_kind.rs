@@ -526,7 +526,7 @@ static RESOURCE_QUOTAS: KindSpec = KindSpec {
         column("Pods", 100., Align::Right),
         AGE_COLUMN,
     ],
-    read_only_actions: &[KindAction::named("Edit")],
+    read_only_actions: &[],
     delete_label: "Delete quota…",
     has_port_forward: false,
 };

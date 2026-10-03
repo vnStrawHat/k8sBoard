@@ -872,6 +872,17 @@ fn screen_edit_yaml_diff_parses() {
 }
 
 #[test]
+fn screen_revision_diff_parses() {
+    let screen = run_options(&["--screen", "revision-diff"]).screen;
+    assert_eq!(screen, LaunchScreen::RevisionDiff);
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::Deployments));
+    // A dialog over fixed data: it opens once the shell renders, waits for no cluster, selects no row.
+    assert!(screen.opens_dialog() && screen.is_dialog_fixture());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("revision-diff"));
+}
+
+#[test]
 fn screen_delete_confirm_parses() {
     let screen = run_options(&["--screen", "delete-confirm"]).screen;
     assert_eq!(screen, LaunchScreen::DeleteConfirm);

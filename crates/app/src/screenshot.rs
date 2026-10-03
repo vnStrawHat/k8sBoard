@@ -416,6 +416,65 @@ spec:
             memory: 256Mi
 ";
 
+/// The two pod templates `--screen revision-diff` compares: revision 38 and the current 39 of the
+/// `payments/api` Deployment. The image tag, a memory limit, and a readiness probe differ; the env
+/// literal is hidden on both sides, as the dialog opens.
+#[cfg(feature = "screenshot")]
+pub(crate) const REVISION_FIXTURE_OLDER: &str = "\
+metadata:
+  labels:
+    app: api
+spec:
+  containers:
+  - env:
+    - name: LEDGER_TOKEN
+      value: <hidden>
+    - name: LEDGER_URL
+      valueFrom:
+        configMapKeyRef:
+          key: url
+          name: ledger
+    image: registry.example.com/payments/api:2.13.0
+    name: api
+    resources:
+      limits:
+        memory: 256Mi
+      requests:
+        cpu: 250m
+        memory: 128Mi
+  terminationGracePeriodSeconds: 30
+";
+
+#[cfg(feature = "screenshot")]
+pub(crate) const REVISION_FIXTURE_NEWER: &str = "\
+metadata:
+  labels:
+    app: api
+spec:
+  containers:
+  - env:
+    - name: LEDGER_TOKEN
+      value: <hidden>
+    - name: LEDGER_URL
+      valueFrom:
+        configMapKeyRef:
+          key: url
+          name: ledger
+    image: registry.example.com/payments/api:2.14.0
+    name: api
+    readinessProbe:
+      httpGet:
+        path: /healthz
+        port: 8080
+    resources:
+      limits:
+        memory: 512Mi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+  terminationGracePeriodSeconds: 30
+";
+
 /// What `--screen shell-fixture` shows in the shell tab: the transcript of the W8b pane. The
 /// private OSC 7770 names the shell, as the `Auto` script does.
 #[cfg(feature = "screenshot")]
@@ -761,6 +820,24 @@ mod tests {
             };
             assert!(!is_screen_settled(screen, &pending), "{screen:?}");
         }
+    }
+
+    #[test]
+    fn revision_diff_fixture_needs_no_connection() {
+        let screen = LaunchScreen::RevisionDiff;
+        for target in [
+            TargetState::Loading,
+            TargetState::Unavailable,
+            TargetState::Loaded,
+        ] {
+            assert!(is_screen_settled(screen, &input(target, false)));
+        }
+        // Until its dialog has opened.
+        let pending = SettleInput {
+            is_dialog_pending: true,
+            ..input(TargetState::Loading, false)
+        };
+        assert!(!is_screen_settled(screen, &pending));
     }
 
     #[test]

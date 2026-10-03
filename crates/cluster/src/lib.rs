@@ -39,6 +39,7 @@ mod ingress;
 mod job;
 mod kubeconfig;
 mod kubelet_stats;
+mod limit_range;
 mod metrics_api;
 mod namespace;
 mod network_policy;
@@ -127,6 +128,7 @@ pub use kubeconfig::{
 pub use kubelet_stats::{
     KubeletSummary, KubeletTargets, NetworkCounters, NodeKubeletStats, PodKubeletStats, PvcUsage,
 };
+pub use limit_range::{LimitRangeLimit, LimitRangeSummary};
 pub use metrics_api::MetricsApi;
 pub use namespace::{NamespaceDeletionCondition, NamespacePhase, NamespaceScope, NamespaceSummary};
 pub use network_policy::{

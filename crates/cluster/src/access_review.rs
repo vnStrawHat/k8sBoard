@@ -65,6 +65,7 @@ pub enum AccessCheck {
     ListNetworkPolicies,
     ListHorizontalPodAutoscalers,
     ListResourceQuotas,
+    ListLimitRanges,
     ListPodDisruptionBudgets,
     ListPersistentVolumeClaims,
     ListPersistentVolumes,
@@ -111,7 +112,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 54] = [
+    pub const ALL: [AccessCheck; 55] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::GetPodExec,
@@ -144,6 +145,7 @@ impl AccessCheck {
         Self::ListNetworkPolicies,
         Self::ListHorizontalPodAutoscalers,
         Self::ListResourceQuotas,
+        Self::ListLimitRanges,
         Self::ListPodDisruptionBudgets,
         Self::ListPersistentVolumeClaims,
         Self::ListPersistentVolumes,
@@ -212,6 +214,7 @@ impl AccessCheck {
                 true,
             ),
             Self::ListResourceQuotas => ("list", "", "resourcequotas", None, true),
+            Self::ListLimitRanges => ("list", "", "limitranges", None, true),
             Self::ListPodDisruptionBudgets => {
                 ("list", "policy", "poddisruptionbudgets", None, true)
             }
@@ -700,9 +703,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 54);
+        assert_eq!(AccessCheck::ALL.len(), 55);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 54);
+        assert_eq!(distinct.len(), 55);
     }
 
     #[test]
@@ -1051,6 +1054,7 @@ mod tests {
                 "list networkpolicies",
                 "list horizontalpodautoscalers",
                 "list resourcequotas",
+                "list limitranges",
                 "list poddisruptionbudgets",
                 "list persistentvolumeclaims",
                 "list persistentvolumes",
@@ -1118,6 +1122,17 @@ mod tests {
             assert_eq!(attributes.verb.as_deref(), Some("list"), "{check}");
             assert_eq!(attributes.namespace.as_deref(), Some("team-a"), "{check}");
         }
+    }
+
+    #[test]
+    fn list_limit_ranges_attributes() {
+        let attributes = resource_attributes(AccessCheck::ListLimitRanges, Some("team-a"));
+        assert_eq!(attributes.verb.as_deref(), Some("list"));
+        assert_eq!(attributes.group.as_deref(), Some(""));
+        assert_eq!(attributes.resource.as_deref(), Some("limitranges"));
+        assert_eq!(attributes.namespace.as_deref(), Some("team-a"));
+        assert_eq!(AccessCheck::ListLimitRanges.to_string(), "list limitranges");
+        assert!(AccessCheck::ALL.contains(&AccessCheck::ListLimitRanges));
     }
 
     #[test]
@@ -1209,7 +1224,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 54);
+        assert_eq!(AccessCheck::ALL.len(), 55);
     }
 
     #[test]

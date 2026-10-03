@@ -16,7 +16,7 @@ pub(crate) fn key_availability(action: ResourceAction, subject: &ResourceKey, li
 
 | Key | `ResourceAction` | Offered for | Runs (when enabled) |
 |---|---|---|---|
-| L | `ViewLogs` | pods (0019 extends to workloads) | `LogDock::open` for the pod, like the menu; a pod with no containers → `Disabled` "The pod has no containers" |
+| L | `ViewLogs` | pods; also Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, and CronJobs (0039: the workload logs; a CronJob opens its last job, disabled with "No job has run yet" or "Job {name} has no pods left") | `LogDock::open` for the pod, like the menu; a pod with no containers → `Disabled` "The pod has no containers" |
 | Y | `ViewYaml` | subjects with `object_ref` (every YAML tab) | `open_yaml(key)` |
 | Ctrl C | `CopyName` | all | clipboard ← object name (pods: name only, like the menu) |
 | S | `OpenShell` (pods), `OpenNodeShell` (nodes) | pods, nodes | — (gated) |

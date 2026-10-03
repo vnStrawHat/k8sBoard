@@ -2797,3 +2797,249 @@ fn set_default_item_is_gated_then_blocked_by_the_row() {
         "Not permitted: patch storageclasses"
     );
 }
+
+// ---- Spec 0039 step 1: View logs submenu, container menu, quota Edit ----
+
+#[test]
+fn quota_menu_has_edit_yaml_and_no_stale_edit() {
+    assert!(ResourceKind::ResourceQuotas.read_only_actions().is_empty());
+    assert_eq!(
+        edit_yaml_kind(ResourceKind::ResourceQuotas),
+        Some(ObjectKind::ResourceQuota)
+    );
+    // Secrets keep their placeholder: value editing is a later spec.
+    assert!(!ResourceKind::Secrets.read_only_actions().is_empty());
+}
+
+fn logs_menu_of(containers: Vec<ContainerSummary>, access: &AccessState) -> LogsMenuState {
+    LogsMenu::of(&pod_with(containers), access).state
+}
+
+#[test]
+fn logs_menu_one_container_is_direct() {
+    let state = logs_menu_of(
+        vec![container("app", ContainerKind::Main, true)],
+        &known_denying(&[]),
+    );
+    assert!(matches!(state, LogsMenuState::One(_)));
+}
+
+#[test]
+fn logs_menu_lists_every_container_with_tags() {
+    let state = logs_menu_of(
+        vec![
+            container("init-db", ContainerKind::Init, false),
+            container("proxy", ContainerKind::Sidecar, true),
+            container("app", ContainerKind::Main, true),
+        ],
+        &known_denying(&[]),
+    );
+    let LogsMenuState::Pick(choices) = state else {
+        panic!("several containers must pick");
+    };
+    // Spec order, init included, none left out for its state.
+    let entries: Vec<(&str, &str)> = choices
+        .iter()
+        .map(|choice| (choice.name.as_str(), choice.tag))
+        .collect();
+    assert_eq!(
+        entries,
+        [("init-db", "INIT"), ("proxy", "SIDECAR"), ("app", "MAIN")]
+    );
+}
+
+#[test]
+fn logs_menu_disabled_when_logs_not_permitted() {
+    let denied = known_denying(&[AccessCheck::GetPodLogs]);
+    let state = logs_menu_of(
+        vec![
+            container("app", ContainerKind::Main, true),
+            container("proxy", ContainerKind::Sidecar, true),
+        ],
+        &denied,
+    );
+    let LogsMenuState::Disabled(reason) = state else {
+        panic!("denied logs must disable the item");
+    };
+    assert_eq!(
+        reason,
+        format!("Not permitted: {}", AccessCheck::GetPodLogs)
+    );
+    let none = logs_menu_of(Vec::new(), &known_denying(&[]));
+    assert!(matches!(
+        none,
+        LogsMenuState::Disabled(reason) if reason == "The pod has no containers"
+    ));
+}
+
+#[test]
+fn logs_choice_opens_that_container() {
+    let pod = pod_with(vec![
+        container("app", ContainerKind::Main, true),
+        container("proxy", ContainerKind::Sidecar, true),
+    ]);
+    let Some(LogTarget::Pod(target)) = LogTarget::of_container(&pod, "proxy") else {
+        panic!("the pod has a container named proxy");
+    };
+    assert_eq!(target.initial_container, "proxy");
+    // An explicit pick, so a reopen switches the tab to it (the dock keeps the user's own pick otherwise).
+    assert_eq!(target.choice, crate::log_target::ContainerChoice::Explicit);
+}
+
+#[test]
+fn container_menu_items_in_order() {
+    assert_eq!(
+        CONTAINER_MENU,
+        [
+            ContainerMenuEntry::ViewLogs,
+            ContainerMenuEntry::OpenShell,
+            ContainerMenuEntry::CopyImage
+        ]
+    );
+}
+
+#[test]
+fn container_shell_disabled_when_not_running() {
+    let access = known_denying(&[]);
+    let guard = unlocked(&access);
+    assert_eq!(
+        container_shell_availability(&container("app", ContainerKind::Main, true), &guard),
+        ActionAvailability::Enabled
+    );
+    assert_eq!(
+        reason(container_shell_availability(
+            &container("app", ContainerKind::Main, false),
+            &guard
+        )),
+        "Container is not running"
+    );
+}
+
+#[test]
+fn container_shell_follows_the_gate() {
+    let denied = known_denying(&[AccessCheck::GetPodExec]);
+    let running = container("app", ContainerKind::Main, true);
+    // The gate speaks before the container's state.
+    assert_eq!(
+        reason(container_shell_availability(&running, &unlocked(&denied))),
+        "Not permitted: get and create pods/exec"
+    );
+    let allowed = known_denying(&[]);
+    let locked = test_guard(
+        &allowed,
+        WriteLock::Locked,
+        "prod-1",
+        Environment::Production,
+    );
+    assert_eq!(
+        reason(container_shell_availability(&running, &locked)),
+        "prod-1 is read-only"
+    );
+}
+
+// ---- Spec 0039 step 2: L on workload kinds, View logs of last job ----
+
+fn scheduled_cron_job_row(last_schedule: Option<i64>) -> KindRow {
+    let mut cron_job =
+        crate::workload_actions::workload_actions_tests::cron_job("nightly", "Allow", 0);
+    cron_job.last_schedule_at =
+        last_schedule.map(|seconds| jiff::Timestamp::from_second(seconds).expect("a timestamp"));
+    crate::batch_rows::cron_job_row(&cron_job)
+}
+
+/// A pod of `team-a` owned by the Job `job`.
+fn job_pod(job: &str) -> PodSummary {
+    let mut pod = pod_with(vec![container_of("main")]);
+    pod.namespace = "team-a".to_owned();
+    pod.controller = Some(cluster::ControllerRef {
+        kind: "Job".to_owned(),
+        name: job.to_owned(),
+    });
+    pod
+}
+
+#[test]
+fn view_logs_is_offered_on_workload_kinds() {
+    for kind in [
+        ResourceKind::Deployments,
+        ResourceKind::StatefulSets,
+        ResourceKind::DaemonSets,
+        ResourceKind::ReplicaSets,
+        ResourceKind::Jobs,
+        ResourceKind::CronJobs,
+    ] {
+        assert_eq!(
+            subject_action(RowAction::ViewLogs, &kind_key(kind)),
+            Some(ResourceAction::ViewLogs),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn view_logs_not_offered_on_services() {
+    for kind in [
+        ResourceKind::Services,
+        ResourceKind::ConfigMaps,
+        ResourceKind::Namespaces,
+    ] {
+        assert_eq!(subject_action(RowAction::ViewLogs, &kind_key(kind)), None);
+    }
+}
+
+#[test]
+fn cron_job_view_logs_item_has_l_hint() {
+    // The item carries the key action of `ResourceAction::ViewLogs`, which is L.
+    assert_eq!(
+        ResourceAction::ViewLogs.row_action().key_action().name(),
+        RowAction::ViewLogs.key_action().name()
+    );
+    // A CronJob row has a logs entry although it owns no pods.
+    let row = scheduled_cron_job_row(Some(29_000_000 * 60));
+    assert!(workload_logs_owner(&row, &[job_pod("nightly-29000000")]).is_some());
+}
+
+#[test]
+fn cron_job_key_disabled_without_pods_says_why() {
+    let access = known_denying(&[]);
+    let row = scheduled_cron_job_row(Some(29_000_000 * 60));
+    assert_eq!(
+        disabled_reason(workload_logs_key(Some(&row), &[], &access)),
+        "Job nightly-29000000 has no pods left"
+    );
+    let never = scheduled_cron_job_row(None);
+    assert_eq!(
+        disabled_reason(workload_logs_key(Some(&never), &[], &access)),
+        "No job has run yet"
+    );
+    assert_eq!(
+        workload_logs_key(Some(&row), &[job_pod("nightly-29000000")], &access),
+        KeyAvailability::Run(ResourceAction::ViewLogs)
+    );
+}
+
+#[test]
+fn workload_logs_key_asks_the_gate_before_the_row() {
+    let denied = known_denying(&[AccessCheck::GetPodLogs]);
+    let row = scheduled_cron_job_row(None);
+    assert_eq!(
+        disabled_reason(workload_logs_key(Some(&row), &[], &denied)),
+        format!("Not permitted: {}", AccessCheck::GetPodLogs)
+    );
+    // A row the list no longer holds is not offered.
+    assert_eq!(
+        workload_logs_key(None, &[], &known_denying(&[])),
+        KeyAvailability::NotOffered
+    );
+}
+
+#[test]
+fn workload_logs_item_has_l_hint() {
+    // A deployment row opens its own pods; the item reads the same owner the key does.
+    let summary = crate::workload_actions::workload_actions_tests::deployment("api");
+    let row = crate::workload_rows::deployment_row(&summary);
+    assert!(matches!(
+        workload_logs_owner(&row, &[]),
+        Some(Ok(PodOwner::Deployment { .. }))
+    ));
+}

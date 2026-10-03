@@ -9,9 +9,10 @@ use cluster::{
     AccessCheck, AccessDecision, AccessReport, BindingSummary, ChangeEventKind, ClusterConnection,
     ClusterError, ConfigMapValues, ContextSummary, CrdSummary, CustomObjectFields,
     EndpointSliceSummary, EventFilter, EventSummary, HelmRevision, IngressSummary, InvolvedObject,
-    JobSummary, Kubeconfig, KubeletTargets, NamespaceAccess, NamespaceScope, NamespaceSummary,
-    NodeSummary, ObjectKind, PersistentVolumeSummary, PodSummary, RbacSnapshot, ReplicaSetSummary,
-    ResourceQuotaSummary, SecretSummary, ServerVersion, StorageClassSummary, WatchUpdate,
+    JobSummary, Kubeconfig, KubeletTargets, LimitRangeSummary, NamespaceAccess, NamespaceScope,
+    NamespaceSummary, NodeSummary, ObjectKind, PersistentVolumeSummary, PodSummary, RbacSnapshot,
+    ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, StorageClassSummary,
+    WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{App, Context, Task};
@@ -581,6 +582,8 @@ pub(crate) struct ObjectEvents {
 /// The objects related to the object whose drawer is open. Dropping it stops the watch.
 struct RelatedObjects {
     subject: RelatedSubject,
+    /// The lists of a Namespace drawer that were gated open when the watch started.
+    gates: NamespaceListGates,
     list: RelatedList,
     _subscription: WatchSubscription,
 }
@@ -593,7 +596,11 @@ pub(crate) enum RelatedList {
     ConfigMapValues(LiveList<ConfigMapValues>),
     /// The FailedCreate events of a namespace.
     Events(LiveList<EventSummary>),
-    ResourceQuotas(LiveList<ResourceQuotaSummary>),
+    /// The Quota section of a Namespace drawer: each half comes from its own watch.
+    NamespaceLimits {
+        quotas: LiveList<ResourceQuotaSummary>,
+        limit_ranges: LiveList<LimitRangeSummary>,
+    },
     /// Every revision of one Helm release, newest first. Labels and metadata only.
     HelmHistory(LiveList<HelmRevision>),
     /// The masked, flattened spec and status of one custom object (0 or 1 item).
@@ -607,18 +614,24 @@ enum RelatedUpdate {
     ConfigMapValues(WatchUpdate<ConfigMapValues>),
     Events(WatchUpdate<EventSummary>),
     ResourceQuotas(WatchUpdate<ResourceQuotaSummary>),
+    LimitRanges(WatchUpdate<LimitRangeSummary>),
     HelmHistory(WatchUpdate<HelmRevision>),
     CustomFields(WatchUpdate<CustomObjectFields>),
 }
 
 impl RelatedList {
-    fn loading_for(subject: &RelatedSubject) -> Self {
+    /// A half of a Namespace drawer whose gate is closed never starts, so it begins `Failed` instead
+    /// of `Loading`: the drawer prints the gate for it, and nothing waits on it.
+    fn loading_for(subject: &RelatedSubject, gates: NamespaceListGates) -> Self {
         match subject {
             RelatedSubject::ReplicaSets { .. } => Self::ReplicaSets(LiveList::Loading),
             RelatedSubject::Jobs { .. } => Self::Jobs(LiveList::Loading),
             RelatedSubject::ConfigMapValues { .. } => Self::ConfigMapValues(LiveList::Loading),
             RelatedSubject::QuotaRejections { .. } => Self::Events(LiveList::Loading),
-            RelatedSubject::NamespaceQuotas { .. } => Self::ResourceQuotas(LiveList::Loading),
+            RelatedSubject::NamespaceQuotas { .. } => Self::NamespaceLimits {
+                quotas: loading_if(gates.quotas),
+                limit_ranges: loading_if(gates.limit_ranges),
+            },
             RelatedSubject::HelmHistory { .. } => Self::HelmHistory(LiveList::Loading),
             RelatedSubject::CustomFields { .. } => Self::CustomFields(LiveList::Loading),
         }
@@ -633,8 +646,11 @@ impl RelatedList {
                 list.apply(update);
             }
             (Self::Events(list), RelatedUpdate::Events(update)) => list.apply(update),
-            (Self::ResourceQuotas(list), RelatedUpdate::ResourceQuotas(update)) => {
-                list.apply(update);
+            (Self::NamespaceLimits { quotas, .. }, RelatedUpdate::ResourceQuotas(update)) => {
+                quotas.apply(update);
+            }
+            (Self::NamespaceLimits { limit_ranges, .. }, RelatedUpdate::LimitRanges(update)) => {
+                limit_ranges.apply(update);
             }
             (Self::HelmHistory(list), RelatedUpdate::HelmHistory(update)) => list.apply(update),
             (Self::CustomFields(list), RelatedUpdate::CustomFields(update)) => list.apply(update),
@@ -649,7 +665,13 @@ impl RelatedList {
             Self::Jobs(list) => list.mark_stopped(),
             Self::ConfigMapValues(list) => list.mark_stopped(),
             Self::Events(list) => list.mark_stopped(),
-            Self::ResourceQuotas(list) => list.mark_stopped(),
+            Self::NamespaceLimits {
+                quotas,
+                limit_ranges,
+            } => {
+                quotas.mark_stopped();
+                limit_ranges.mark_stopped();
+            }
             Self::HelmHistory(list) => list.mark_stopped(),
             Self::CustomFields(list) => list.mark_stopped(),
         }
@@ -662,16 +684,24 @@ impl RelatedList {
             Self::ReplicaSets(_)
             | Self::Jobs(_)
             | Self::ConfigMapValues(_)
-            | Self::ResourceQuotas(_)
+            | Self::NamespaceLimits { .. }
             | Self::HelmHistory(_)
             | Self::CustomFields(_) => None,
         }
     }
 
-    /// The quotas of a namespace, when this list holds them.
-    pub(crate) fn resource_quotas(&self) -> Option<&LiveList<ResourceQuotaSummary>> {
+    /// The quotas and LimitRanges of a namespace, when this list holds them.
+    pub(crate) fn namespace_limits(
+        &self,
+    ) -> Option<(
+        &LiveList<ResourceQuotaSummary>,
+        &LiveList<LimitRangeSummary>,
+    )> {
         match self {
-            Self::ResourceQuotas(list) => Some(list),
+            Self::NamespaceLimits {
+                quotas,
+                limit_ranges,
+            } => Some((quotas, limit_ranges)),
             Self::ReplicaSets(_)
             | Self::Jobs(_)
             | Self::ConfigMapValues(_)
@@ -689,7 +719,7 @@ impl RelatedList {
             | Self::Jobs(_)
             | Self::ConfigMapValues(_)
             | Self::Events(_)
-            | Self::ResourceQuotas(_)
+            | Self::NamespaceLimits { .. }
             | Self::CustomFields(_) => None,
         }
     }
@@ -710,10 +740,80 @@ impl RelatedList {
             Self::Jobs(list) => list.is_loading(),
             Self::ConfigMapValues(list) => list.is_loading(),
             Self::Events(list) => list.is_loading(),
-            Self::ResourceQuotas(list) => list.is_loading(),
+            Self::NamespaceLimits {
+                quotas,
+                limit_ranges,
+            } => quotas.is_loading() || limit_ranges.is_loading(),
             Self::HelmHistory(list) => list.is_loading(),
             Self::CustomFields(list) => list.is_loading(),
         }
+    }
+}
+
+/// Each list of the Namespace drawer's Quota section, gated by its own check. A check that is
+/// `Known` and denied closes its gate; `Checking`, `Unknown`, and allowed leave it open (the server
+/// answers). Pure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NamespaceListGates {
+    pub(crate) quotas: bool,
+    pub(crate) limit_ranges: bool,
+}
+
+impl NamespaceListGates {
+    /// Both lists open: the gates of every subject but a Namespace drawer's.
+    const OPEN: Self = Self {
+        quotas: true,
+        limit_ranges: true,
+    };
+
+    fn is_closed(self) -> bool {
+        !self.quotas && !self.limit_ranges
+    }
+}
+
+pub(crate) fn namespace_list_gates(access: &AccessState) -> NamespaceListGates {
+    let is_open = |check| match access {
+        AccessState::Known(report) => report.is_allowed(check),
+        AccessState::Checking { .. } | AccessState::Unknown => true,
+    };
+    NamespaceListGates {
+        quotas: is_open(AccessCheck::ListResourceQuotas),
+        limit_ranges: is_open(AccessCheck::ListLimitRanges),
+    }
+}
+
+fn loading_if<T>(is_open: bool) -> LiveList<T> {
+    if is_open {
+        LiveList::Loading
+    } else {
+        LiveList::Failed {
+            message: "not permitted".to_owned(),
+        }
+    }
+}
+
+/// Whether the running related watch (its subject and gates) is the one wanted. No watch running and
+/// none wanted is current too: `set_related_subject` runs on every render and must not notify then.
+fn related_watch_is_current(
+    running: Option<(&RelatedSubject, NamespaceListGates)>,
+    wanted: Option<&RelatedSubject>,
+    gates: NamespaceListGates,
+) -> bool {
+    match (running, wanted) {
+        (None, None) => true,
+        (Some((subject, running_gates)), Some(wanted)) => {
+            subject == wanted && running_gates == gates
+        }
+        _ => false,
+    }
+}
+
+/// Whether the related watch of `subject` is not started because the permissions deny it: the one
+/// check of `denied_related_check`, or, for a Namespace drawer, both of its lists.
+pub(crate) fn is_related_denied(subject: &RelatedSubject, access: &AccessState) -> bool {
+    match subject {
+        RelatedSubject::NamespaceQuotas { .. } => namespace_list_gates(access).is_closed(),
+        _ => denied_related_check(subject, access).is_some(),
     }
 }
 
@@ -725,7 +825,8 @@ pub(crate) fn denied_related_check(
 ) -> Option<AccessCheck> {
     let check = match subject {
         RelatedSubject::QuotaRejections { .. } => AccessCheck::ListEvents,
-        RelatedSubject::NamespaceQuotas { .. } => AccessCheck::ListResourceQuotas,
+        // Its two lists are gated each by its own check: see `namespace_list_gates`.
+        RelatedSubject::NamespaceQuotas { .. } => return None,
         // The history reads the same Secrets the Releases kind lists, which its access check gates.
         RelatedSubject::ReplicaSets { .. }
         | RelatedSubject::Jobs { .. }
@@ -1823,13 +1924,22 @@ impl ClusterSession {
         let Some(live) = self.live_mut() else {
             return;
         };
-        if live.related_subject() == subject.as_ref() {
+        // A Namespace drawer restarts when the permissions close or open one of its lists.
+        let gates = match &subject {
+            Some(RelatedSubject::NamespaceQuotas { .. }) => namespace_list_gates(&live.access),
+            _ => NamespaceListGates::OPEN,
+        };
+        let running = live
+            .related
+            .as_ref()
+            .map(|related| (&related.subject, related.gates));
+        if related_watch_is_current(running, subject.as_ref(), gates) {
             return;
         }
         // The old subscription drops first, so two related watches never overlap.
         live.related = None;
-        live.related =
-            subject.map(|subject| RelatedObjects::start(subject, &runtime, &live.connection, cx));
+        live.related = subject
+            .map(|subject| RelatedObjects::start(subject, gates, &runtime, &live.connection, cx));
         cx.notify();
     }
 
@@ -3218,9 +3328,33 @@ impl ObjectEvents {
     }
 }
 
+/// The watches of a Namespace drawer's Quota section: the quotas and the LimitRanges, each only when
+/// its gate is open, so a denied list never starts and never loops on a 403.
+fn namespace_updates(
+    connection: &ClusterConnection,
+    namespace: &str,
+    gates: NamespaceListGates,
+) -> futures::stream::BoxStream<'static, RelatedUpdate> {
+    let scope = || NamespaceScope::Named(namespace.to_owned());
+    let quotas = gates.quotas.then(|| {
+        connection
+            .watch_resource_quotas(scope())
+            .map(RelatedUpdate::ResourceQuotas)
+            .boxed()
+    });
+    let limit_ranges = gates.limit_ranges.then(|| {
+        connection
+            .watch_limit_ranges(scope())
+            .map(RelatedUpdate::LimitRanges)
+            .boxed()
+    });
+    futures::stream::select_all(quotas.into_iter().chain(limit_ranges)).boxed()
+}
+
 impl RelatedObjects {
     fn start(
         subject: RelatedSubject,
+        gates: NamespaceListGates,
         runtime: &ClusterRuntime,
         connection: &ClusterConnection,
         cx: &mut Context<ClusterSession>,
@@ -3246,10 +3380,9 @@ impl RelatedObjects {
                 .watch_failed_creates(namespace)
                 .map(RelatedUpdate::Events)
                 .boxed(),
-            RelatedSubject::NamespaceQuotas { namespace } => connection
-                .watch_resource_quotas(NamespaceScope::Named(namespace.clone()))
-                .map(RelatedUpdate::ResourceQuotas)
-                .boxed(),
+            RelatedSubject::NamespaceQuotas { namespace } => {
+                namespace_updates(connection, namespace, gates)
+            }
             RelatedSubject::HelmHistory { namespace, release } => connection
                 .watch_helm_history(namespace, release)
                 .map(RelatedUpdate::HelmHistory)
@@ -3284,7 +3417,8 @@ impl RelatedObjects {
             },
         );
         Self {
-            list: RelatedList::loading_for(&subject),
+            list: RelatedList::loading_for(&subject, gates),
+            gates,
             subject,
             _subscription: subscription,
         }
