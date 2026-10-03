@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tokio::time::error::Elapsed;
 
 use crate::access_review::AccessCheck;
-use crate::connection::{ClusterConnection, ClusterError, REQUEST_TIMEOUT, classify_error};
+use crate::connection::{ClusterConnection, ClusterError, classify_error, run_raw};
 use crate::dns_name::{is_dns_subdomain, is_path_segment_name};
 use crate::edit_placeholders::{self, Restored};
 use crate::edit_preview::{EditPreview, build_preview};
@@ -771,14 +771,6 @@ fn action_of(mode: WriteMode) -> &'static str {
         WriteMode::DryRun => "checking a change with a dry-run",
         WriteMode::Commit => "applying a change",
     }
-}
-
-/// Runs one request under `REQUEST_TIMEOUT`, keeping the timeout apart from the `kube::Error`
-/// because `ClusterConnection::run` classifies errors before the `Status` can be read.
-async fn run_raw<T>(
-    request: impl Future<Output = Result<T, kube::Error>>,
-) -> Result<Result<T, kube::Error>, Elapsed> {
-    tokio::time::timeout(REQUEST_TIMEOUT, request).await
 }
 
 fn map_status(context: &str, mode: WriteMode, status: Status) -> WriteError {

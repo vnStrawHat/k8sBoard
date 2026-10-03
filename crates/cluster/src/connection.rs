@@ -7,6 +7,7 @@ use k8s_openapi::serde::de::DeserializeOwned;
 use kube::Api;
 use kube::api::{ApiResource, DynamicObject, ListParams};
 use kube::config::KubeConfigOptions;
+use tokio::time::error::Elapsed;
 
 use crate::kubeconfig::{Kubeconfig, KubeconfigError};
 use crate::namespace::NamespaceScope;
@@ -280,6 +281,15 @@ impl ClusterConnection {
         })
         .await
     }
+}
+
+/// Runs one request under `REQUEST_TIMEOUT`, keeping the timeout apart from the `kube::Error`
+/// because `ClusterConnection::run` classifies errors before the `Status` or the upgrade refusal
+/// can be read. Shared by `object_write.rs`, `pod_shell.rs`, and `port_forward.rs`.
+pub(crate) async fn run_raw<T>(
+    request: impl Future<Output = Result<T, kube::Error>>,
+) -> Result<Result<T, kube::Error>, Elapsed> {
+    tokio::time::timeout(REQUEST_TIMEOUT, request).await
 }
 
 impl fmt::Debug for ClusterConnection {

@@ -1,5 +1,6 @@
 //! Cluster access for k8sBoard: kubeconfig loading, context selection, and
-//! access to Kubernetes clusters. Every write goes through `object_write`.
+//! access to Kubernetes clusters. Every write goes through `object_write`; the exec and
+//! port-forward connections live in `pod_shell` and `port_forward`.
 
 // The fake API server builds a connection whose write policy the caller picks, so it must never
 // reach a release build, where writes are allowed.
@@ -49,10 +50,14 @@ mod persistent_volume;
 mod persistent_volume_claim;
 mod pod;
 mod pod_log;
+mod pod_shell;
 mod pod_status;
+mod port_forward;
+mod port_forward_target;
 mod quantity;
 mod rbac_evaluation;
 mod rbac_snapshot;
+mod reason_text;
 mod replica_set;
 mod resource_metrics;
 mod resource_quota;
@@ -138,7 +143,14 @@ pub use pod::{
     Termination,
 };
 pub use pod_log::{LogLine, LogRequest, LogSource, LogUpdate};
+pub use pod_shell::{
+    ExecPermit, GridSize, ShellCommand, ShellExit, ShellInput, ShellRequest, ShellUpdate,
+};
 pub use pod_status::{InitStatus, PodStatus, StatusReason};
+pub use port_forward::{
+    ForwardControl, ForwardError, ForwardEvent, ForwardRequest, ForwardTarget, ForwardTraffic,
+    ForwardUpdate, LocalPort, PortForwardPermit, default_local_port,
+};
 pub use quantity::{ByteAmount, CpuAmount, quantity_ratio};
 pub use rbac_evaluation::{
     AccessRequest, EffectiveRule, Grant, GrantNames, Identity, RequestTarget, ResourceRequest,

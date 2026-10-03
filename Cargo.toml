@@ -35,7 +35,8 @@ base64 = "0.22"
 regex = "1"
 # Rasterizes the Topology SVG export; the same version gpui-pre already builds (no new package).
 resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts"] }
-# oneterm-vt = { git = "https://github.com/vnStrawHat/OneTerm", rev = "<pin a commit sha>", default-features = false }  # terminal engine for pod/node shell; replaces alacritty_terminal
+# The terminal engine for pod shells (spec 0036); not on crates.io, so a rev pin is the only reproducible form.
+oneterm-vt = { git = "https://github.com/vnStrawHat/OneTerm", rev = "e2f9c24bc747b26dbfe0e338e66f1c41a3ac30d8", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

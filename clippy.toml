@@ -48,9 +48,9 @@ disallowed-methods = [
     { path = "kube::Client::kubelet_node_attach", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
     { path = "kube::Client::kubelet_node_portforward", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
     { path = "kube::Client::request_events", reason = "raw requests bypass the write path; see spec 0030" },
-    # Behind kube's `ws` feature, which is off until 0035-0037; `allow-invalid` keeps the entry from warning meanwhile.
-    { path = "kube::Client::connect", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
-    { path = "kube::Api::exec", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
-    { path = "kube::Api::attach", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
-    { path = "kube::Api::portforward", reason = "connect verbs live in their named files only; see spec 0030", allow-invalid = true },
+    # Connect verbs: real paths since the cluster crate enables kube's `ws` feature (specs 0035, 0036).
+    { path = "kube::Client::connect", reason = "connect verbs live in their named files only; see spec 0030" },
+    { path = "kube::Api::exec", reason = "connect verbs live in their named files only; see spec 0030" },
+    { path = "kube::Api::attach", reason = "connect verbs live in their named files only; see spec 0030" },
+    { path = "kube::Api::portforward", reason = "connect verbs live in their named files only; see spec 0030" },
 ]

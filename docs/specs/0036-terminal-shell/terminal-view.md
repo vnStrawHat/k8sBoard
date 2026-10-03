@@ -26,6 +26,7 @@ pub(crate) const SCROLLBACK_LINES: u32 = 5_000;
 - Event policy (C1, "not a policy" engine): `Reply` → outbox; `ClipboardStore` (OSC 52 write) ignored; `ClipboardLoad` never answered (the remote never reads the local clipboard); `ColorQuery { key, terminator }` answered from `terminal_palette` with the query's own terminator (OSC 10/11/12/4 reply format of vt guide ch. 4); `Osc` 7770 (routed `Forward` in `Config::osc_routes`) sets the resolved shell name when it is `bash`, `ash`, or `sh` ([shell-tab.md](shell-tab.md)); every other `Osc`, and `Title`, `Bell`, `Cwd`, `Notification`, `Progress`, `ShellMark`, are ignored.
 - `note` feeds `\r\n\x1b[2m{text}\x1b[0m\r\n` with `text` stripped of control characters. The first note is the W8b banner `# exec -n {ns} {pod} -c {container} -- {shell} ({context})`.
 - Nothing from the session is logged, traced, persisted, or kept after the tab closes (C1).
+- Limits (W2 security review, 2026-10-03): `feed` discards every decoded Sixel image (`take_graphics`), because 0036 draws none and the engine keeps them until taken; the outbox holds at most 64 KiB of replies until drained, and a reply past that is dropped; `log_filter.rs` pins the `tungstenite` and `tokio_tungstenite` targets at `info`, because they trace every WebSocket frame payload at `trace`, which would put keystrokes in the log.
 
 ## Palette from the kit theme (`terminal_palette(theme: &Theme) -> Palette`, pure)
 

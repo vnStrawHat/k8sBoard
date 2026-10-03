@@ -11,9 +11,10 @@ publish.workspace = true
 name = "cluster"
 
 [dependencies]
-kube.workspace = true
+# `ws` brings the exec and port-forward transports (specs 0035, 0036).
+kube = { workspace = true, features = ["ws"] }
 k8s-openapi.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
 thiserror.workspace = true
 tracing.workspace = true
 futures.workspace = true

@@ -60,7 +60,7 @@ impl FakeApi {
         respond: impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + 'static,
     ) -> (ClusterConnection, Self) {
         let respond = Arc::new(respond);
-        Self::build(policy, move |recorded| {
+        Self::with_answer(policy, move |recorded| {
             let respond = Arc::clone(&respond);
             async move {
                 let (code, body) = respond(&recorded);
@@ -76,7 +76,7 @@ impl FakeApi {
         code: u16,
         body: Vec<u8>,
     ) -> (ClusterConnection, Self) {
-        Self::build(policy, move |_| {
+        Self::with_answer(policy, move |_| {
             let body = body.clone();
             async move { reply(code, body) }
         })
@@ -84,7 +84,7 @@ impl FakeApi {
 
     /// A connection whose requests are recorded and then fail as `failure` says.
     pub fn failing(policy: WritePolicy, failure: Failure) -> (ClusterConnection, Self) {
-        Self::build(policy, move |_| async move {
+        Self::with_answer(policy, move |_| async move {
             match failure {
                 Failure::Hang => pending().await,
                 Failure::Error => Err("connection reset".into()),
@@ -102,7 +102,8 @@ impl FakeApi {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn build<F, Fut>(policy: WritePolicy, answer: F) -> (ClusterConnection, Self)
+    /// A connection whose requests are answered by an async closure, for answers that must wait.
+    pub(crate) fn with_answer<F, Fut>(policy: WritePolicy, answer: F) -> (ClusterConnection, Self)
     where
         F: Fn(RecordedRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Response<Body>, BoxError>> + Send + 'static,
@@ -145,7 +146,7 @@ async fn record(request: Request<Body>) -> Result<RecordedRequest, BoxError> {
     })
 }
 
-fn reply(code: u16, body: Vec<u8>) -> Result<Response<Body>, BoxError> {
+pub(crate) fn reply(code: u16, body: Vec<u8>) -> Result<Response<Body>, BoxError> {
     Ok(Response::builder()
         .status(code)
         .header("content-type", "application/json")

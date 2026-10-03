@@ -36,11 +36,11 @@ UDP; binding any non-loopback address (never `0.0.0.0` or `::`); forwarding seve
 
 ## Acceptance criteria
 
-- [ ] 1. Quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. `Cargo.lock` gains no package beyond 0036's delta (tokio `net`/`io-util` features only).
+- [x] 1. Quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. `Cargo.lock` gains no package beyond 0036's delta (tokio `net`/`io-util` features only).
 - [ ] 2. Every test in [test-plan.md](test-plan.md) exists under its name and passes offline; no test opens a real cluster connection.
-- [ ] 3. Listeners bind `127.0.0.1` and best-effort `[::1]` only (tests inspect the bound addresses); no code path binds another address; a failed `[::1]` bind is ignored.
-- [ ] 4. `port_forward.rs` is the only `portforward` call site and a row of the 0030 allow-list; it requires a `PortForwardPermit`, whose only non-test constructor is `AccessReport::port_forward_permit` (both verbs allowed); upgrade refusals 401/403/404 map to typed errors.
-- [ ] 5. Debug builds without `K8SBOARD_ALLOW_WRITES=1` refuse a forward before any request (zero recorded requests); agents never set it.
+- [x] 3. Listeners bind `127.0.0.1` and best-effort `[::1]` only (tests inspect the bound addresses); no code path binds another address; a failed `[::1]` bind is ignored.
+- [x] 4. `port_forward.rs` is the only `portforward` call site and a row of the 0030 allow-list; it requires a `PortForwardPermit`, whose only non-test constructor is `AccessReport::port_forward_permit` (both verbs allowed); upgrade refusals 401/403/404 map to typed errors.
+- [x] 5. Debug builds without `K8SBOARD_ALLOW_WRITES=1` refuse a forward before any request (zero recorded requests); agents never set it.
 - [ ] 6. A pod that disappears triggers at most 5 re-resolve attempts (1, 5, 15, 30, 60 s); success → Active with a "reconnected" event; exhaustion → `Target lost`.
 - [ ] 7. A busy fixed local port shows `Port N in use`, a Windows-reserved one (`PermissionDenied`) `Port N is reserved by the system`, both with Retry; an auto port moves to the next free one in both cases.
 - [ ] 8. Forwards survive a cluster switch and a 0027 slot release; quitting the app closes every listener.
@@ -54,6 +54,6 @@ UDP; binding any non-loopback address (never `0.0.0.0` or `::`); forwarding seve
 
 1. R2: no write-capable cluster; the allowed path is fake-tested only until the user provides one.
 2. (user) Kept strict: every start, restart, retry, and preset start asks the cluster tier (PROD types the name; every other environment clicks Confirm in the dialog), like 0036 shells. A relief (for example one confirm per preset per app run) is a user decision.
-3. Windows lets a process bind `127.0.0.1:N` while another holds `0.0.0.0:N` without `SO_EXCLUSIVEADDRUSE`; our forward then shadows that service for loopback clients. Accepted; documented in the drawer tooltip.
+3. Windows lets a process bind `127.0.0.1:N` while another holds `0.0.0.0:N` without `SO_EXCLUSIVEADDRUSE`; our forward then shadows that service for loopback clients. Accepted; documented in the drawer tooltip. Added 2026-10-03 (W2 security review): the listeners set no `SO_EXCLUSIVEADDRUSE` on Windows, so another local process could bind the same loopback port first or alongside; the risk is local-only (loopback never leaves the machine) and the same as for any dev server on Windows.
 4. Namespace-only RBAC with scope All shows as denied (0030 open item 5); applies here too.
 5. Asymmetry with 0036: shells close on a cluster switch, forwards keep running on a held `ClusterConnection` clone. 0026 decision 1 ("teardown releases everything of the old session") gains the exception "except port-forwards, which hold their own connection clone" (orchestrator edit).

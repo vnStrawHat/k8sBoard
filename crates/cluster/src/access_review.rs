@@ -16,6 +16,8 @@ use crate::custom_resource_definition::{CustomResourceType, ResourceScope};
 use crate::metrics_api::METRICS_GROUP;
 use crate::namespace::NamespaceScope;
 use crate::object_yaml::ObjectKind;
+use crate::pod_shell::ExecPermit;
+use crate::port_forward::PortForwardPermit;
 use crate::rbac_evaluation::{AccessRequest, RequestTarget, ResourceRequest};
 use crate::role::RbacRule;
 
@@ -26,7 +28,12 @@ const RBAC_GROUP: &str = "rbac.authorization.k8s.io";
 pub enum AccessCheck {
     ListPods,
     GetPodLogs,
+    /// Servers before 1.35 authorize a WebSocket exec as `get` (kubernetes#78741); 1.35 adds
+    /// `create` (KEP-4006). A shell needs both.
+    GetPodExec,
     CreatePodExec,
+    /// Port-forward is authorized like exec: `get` before 1.35, plus `create` after.
+    GetPodPortForward,
     CreatePodPortForward,
     ListSecrets,
     ListNodes,
@@ -87,10 +94,12 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 43] = [
+    pub const ALL: [AccessCheck; 45] = [
         Self::ListPods,
         Self::GetPodLogs,
+        Self::GetPodExec,
         Self::CreatePodExec,
+        Self::GetPodPortForward,
         Self::CreatePodPortForward,
         Self::ListSecrets,
         Self::ListNodes,
@@ -137,7 +146,9 @@ impl AccessCheck {
         let (verb, group, resource, subresource, is_namespaced) = match self {
             Self::ListPods => ("list", "", "pods", None, true),
             Self::GetPodLogs => ("get", "", "pods", Some("log"), true),
+            Self::GetPodExec => ("get", "", "pods", Some("exec"), true),
             Self::CreatePodExec => ("create", "", "pods", Some("exec"), true),
+            Self::GetPodPortForward => ("get", "", "pods", Some("portforward"), true),
             Self::CreatePodPortForward => ("create", "", "pods", Some("portforward"), true),
             Self::ListSecrets => ("list", "", "secrets", None, true),
             Self::ListNodes => ("list", "", "nodes", None, false),
@@ -269,6 +280,21 @@ impl AccessReport {
         self.reviews
             .iter()
             .any(|review| review.check == check && review.decision == AccessDecision::Allowed)
+    }
+
+    /// The proof a shell may open: `Some` only when both exec verbs are allowed. Unknown,
+    /// missing, or one denial means `None` (fail closed). The only non-test `ExecPermit`.
+    pub fn exec_permit(&self) -> Option<ExecPermit> {
+        (self.is_allowed(AccessCheck::GetPodExec) && self.is_allowed(AccessCheck::CreatePodExec))
+            .then(ExecPermit::granted)
+    }
+
+    /// The proof a port-forward may start: `Some` only when both verbs are allowed. The only
+    /// non-test `PortForwardPermit`.
+    pub fn port_forward_permit(&self) -> Option<PortForwardPermit> {
+        (self.is_allowed(AccessCheck::GetPodPortForward)
+            && self.is_allowed(AccessCheck::CreatePodPortForward))
+        .then(PortForwardPermit::granted)
     }
 
     /// One review per entry of `checks` (the list that was reviewed), in that order: Allowed only
@@ -617,9 +643,9 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 43);
+        assert_eq!(AccessCheck::ALL.len(), 45);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 43);
+        assert_eq!(distinct.len(), 45);
     }
 
     #[test]
@@ -639,6 +665,76 @@ mod tests {
         let forward = resource_attributes(AccessCheck::CreatePodPortForward, None);
         assert_eq!(forward.verb.as_deref(), Some("create"));
         assert_eq!(forward.subresource.as_deref(), Some("portforward"));
+    }
+
+    fn assert_get_check(check: AccessCheck, subresource: &str) {
+        let attributes = resource_attributes(check, Some("team-a"));
+        assert_eq!(attributes.verb.as_deref(), Some("get"), "{check}");
+        assert_eq!(attributes.group.as_deref(), Some(""), "{check}");
+        assert_eq!(attributes.resource.as_deref(), Some("pods"), "{check}");
+        assert_eq!(
+            attributes.subresource.as_deref(),
+            Some(subresource),
+            "{check}"
+        );
+        assert_eq!(attributes.namespace.as_deref(), Some("team-a"), "{check}");
+    }
+
+    #[test]
+    fn get_exec_check_targets_the_subresource() {
+        assert_get_check(AccessCheck::GetPodExec, "exec");
+    }
+
+    #[test]
+    fn get_port_forward_check_targets_the_subresource() {
+        assert_get_check(AccessCheck::GetPodPortForward, "portforward");
+    }
+
+    fn report_allowing(allowed: &[AccessCheck]) -> AccessReport {
+        AccessReport {
+            reviews: AccessCheck::ALL
+                .into_iter()
+                .map(|check| AccessReview {
+                    check,
+                    decision: if allowed.contains(&check) {
+                        AccessDecision::Allowed
+                    } else {
+                        AccessDecision::Denied { reason: None }
+                    },
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn exec_permit_needs_get_and_create() {
+        let both = [AccessCheck::GetPodExec, AccessCheck::CreatePodExec];
+        assert!(report_allowing(&both).exec_permit().is_some());
+        assert!(report_allowing(&both[..1]).exec_permit().is_none());
+        assert!(report_allowing(&both[1..]).exec_permit().is_none());
+        assert!(report_allowing(&[]).exec_permit().is_none());
+        let missing = AccessReport {
+            reviews: Vec::new(),
+        };
+        assert!(missing.exec_permit().is_none());
+    }
+
+    #[test]
+    fn port_forward_permit_needs_get_and_create() {
+        let both = [
+            AccessCheck::GetPodPortForward,
+            AccessCheck::CreatePodPortForward,
+        ];
+        assert!(report_allowing(&both).port_forward_permit().is_some());
+        assert!(report_allowing(&both[..1]).port_forward_permit().is_none());
+        assert!(report_allowing(&both[1..]).port_forward_permit().is_none());
+        // Exec rights do not open a port-forward.
+        let exec = [AccessCheck::GetPodExec, AccessCheck::CreatePodExec];
+        assert!(report_allowing(&exec).port_forward_permit().is_none());
+        let missing = AccessReport {
+            reviews: Vec::new(),
+        };
+        assert!(missing.port_forward_permit().is_none());
     }
 
     #[test]
@@ -819,7 +915,9 @@ mod tests {
             [
                 "list pods",
                 "get pods/log",
+                "get pods/exec",
                 "create pods/exec",
+                "get pods/portforward",
                 "create pods/portforward",
                 "list secrets",
                 "list nodes",
@@ -982,7 +1080,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 43);
+        assert_eq!(AccessCheck::ALL.len(), 45);
     }
 
     #[test]

@@ -63,7 +63,7 @@ API servers before 1.35 authorize a WebSocket exec as verb **`get`** on `pods/ex
 | `confirm_step(guard.profile.confirm, ActionRisk::Change, guard.display_name())` (merged signature) | always a dialog: PROD types the cluster name; STG, DEV, LOCAL click Confirm |
 | `run_guarded(GuardedIntent { kind: Connect(..) })` (0030 write-flow.md) | no dry-run (`NotSupported`); after the lock re-check, the connect callback opens the tab |
 | `audit_entry(&GuardedIntent, ..)` | one line per session start: action `Open shell`, object `{ Pod, ns, name }`, fields `container`, `command`; outcome `applied` when `Started` arrives, `failed` with the error otherwise; never stream bytes |
-| allow-list (write-path.md rule 4) | row `pods/exec` and the `pod_shell.rs` clippy exception are already in the 0030 table; the merged `clippy.toml` lists `Api::exec` and `Client::connect` with `allow-invalid` until the `ws` feature makes them real paths. The grep expects `access_review.rs`, `object_write.rs`, `kubelet_stats.rs`, `secret.rs`, `pod_shell.rs` |
+| allow-list (write-path.md rule 4) | row `pods/exec` and the `pod_shell.rs` clippy exception are already in the 0030 table; `clippy.toml` lists `Api::exec` and `Client::connect` without `allow-invalid`: step 1 enables the `ws` feature, which makes them real paths, and `pod_shell.rs` carries the named `#[allow(clippy::disallowed_methods)]` on `exec_process`. The grep expects `access_review.rs`, `object_write.rs`, `kubelet_stats.rs`, `secret.rs`, `pod_shell.rs` |
 
 ```rust
 pub(crate) struct ConnectIntent { pub(crate) object: AuditObject, pub(crate) fields: Vec<AuditField>,
