@@ -1,6 +1,6 @@
 # 0047 · Cluster API (step 1)
 
-[Back to index](README.md) · New module `crates/cluster/src/config_values.rs` (+ `config_values_tests.rs`); changes in `object_write.rs`, `access_review.rs`, `lib.rs`. Decisions 1–7, 12, 13. Nothing here logs.
+[Back to index](README.md) · New module `crates/cluster/src/config_values.rs` (+ `config_values_tests.rs`); changes in `object_write.rs`, `access_review.rs`, `lib.rs`. Decisions 1–7, 12, 13, 16. Nothing here logs.
 
 ## Types
 
@@ -14,7 +14,7 @@ pub struct ValueKey { pub name: String, pub field: DataField, pub size_bytes: us
 #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum DataField { Data, BinaryData }
 #[derive(Clone)] pub enum KeyContent {
     Text(String),   // ConfigMap only, ≤ MAX_INLINE_VALUE (128 KiB)
-    Hidden,         // Secret text: never loaded here
+    Hidden,         // Secret text: never loaded, never shown (decision 3)
     Binary,         // non-UTF-8 Secret value or ConfigMap binaryData
     TooLarge,       // ConfigMap text over the inline cap
 }
@@ -29,9 +29,11 @@ pub struct ValueKey { pub name: String, pub field: DataField, pub size_bytes: us
     Set { key: String, value: NewValue },
     Remove { key: String },
 }
-/// A checked edit. Clone + PartialEq + Eq; manual Debug: kind, name, resourceVersion, counts.
+/// A checked edit. Manual Debug: kind, name, resourceVersion, change counts.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ValuesEdit { target: ObjectRef, resource_version: String, changes: Vec<FieldChange> /* sorted by key */ }
-#[derive(Clone, PartialEq, Eq)] pub struct FieldChange { pub field: DataField, pub change: KeyChange }
+/// Derived Debug is safe: it prints `field` and KeyChange's manual Debug (variant and key).
+#[derive(Clone, Debug, PartialEq, Eq)] pub struct FieldChange { pub field: DataField, pub change: KeyChange }
 ```
 
 ## Functions
@@ -53,15 +55,15 @@ pub(crate) fn values_patch(edit: &ValuesEdit) -> serde_json::Value;   // pure; t
 
 | Error | Variants (Display is fixed text plus at most a key name) |
 |---|---|
-| `ValuesBaseError` | `HelmRelease`, `ServiceAccountToken`, `Immutable`, `NotEditable` (another kind), `Cluster(ClusterError)` |
-| `ValuesEditError` | `NoChange`, `InvalidKey(String)`, `DuplicateKey(String)`, `UnknownKey(String)`, `BinaryValue(String)` (a `Set` on a binary key), `TooLarge(String)` (> 1 MiB) |
+| `ValuesBaseError` | `HelmRelease` (type or `owner=helm` label), `ServiceAccountToken`, `Immutable`, `NotEditable` (another kind), `Cluster(ClusterError)` |
+| `ValuesEditError` | `NoChange`, `InvalidKey(String)`, `DuplicateKey(String)`, `UnknownKey(String)`, `BinaryValue(String)` (a `Set` on a binary key), `TooLarge(String)` (a value > 1 MiB), `ObjectTooLarge` (estimated object > 1 MiB, decision 13) |
 
 ## `values_base` by kind
 
 | Kind | Read | Kept | Refused |
 |---|---|---|---|
-| Secret | `secret_text(ns, name, ACTION)` (0016: `Zeroizing` body, decoded in-crate, kube never decodes it) → `Secret` | `secret_summary` keys (name, size, `is_binary`), `resourceVersion`, the Helm label, first owner | `type` `helm.sh/release.v1` (reuse `object_edit::HELM_RELEASE_TYPE`), `kubernetes.io/service-account-token`, `immutable: true` |
-| ConfigMap | `get_object(target, ACTION)` → typed `ConfigMap` | `data` (Text or TooLarge), `binaryData` (Binary), `resourceVersion`, Helm label, first owner | `immutable: true` |
+| Secret | `secret_text(ns, name, ACTION)` (0016: `Zeroizing` body, decoded in-crate, kube never decodes it) → `Secret` | `secret_summary` keys (name, size, `is_binary`), `resourceVersion`, the Helm label, first owner | `type` `helm.sh/release.v1` (reuse `object_edit::HELM_RELEASE_TYPE`), label `owner=helm`, `kubernetes.io/service-account-token`, `immutable: true` |
+| ConfigMap | `get_object(target, ACTION)` → typed `ConfigMap` | `data` (Text or TooLarge), `binaryData` (Binary), `resourceVersion`, Helm label, first owner | label `owner=helm` (a Helm release record of the ConfigMap storage driver), `immutable: true` |
 
 After the Secret is summarized, every `data` value and every annotation is zeroized (the `values_of` pattern), then dropped. Decode errors are fixed text (0016 `unexpected`).
 
@@ -69,7 +71,7 @@ After the Secret is summarized, every `data` value and every annotation is zeroi
 
 - At least one change; at most one change per key. Keys follow the ConfigMap key rule: `[-._a-zA-Z0-9]+`, ≤ 253 bytes, not `.` or `..`.
 - `Add`: key absent from both fields; one key per change. `Set`: key exists, is `Text`/`Hidden`, not `Binary`/`TooLarge`. `Remove`: key exists.
-- A value ≤ 1 MiB (`TooLarge`). An unchanged `Set` (equal to a loaded value) is dropped by the app before `edit`.
+- A value ≤ 1 MiB (`TooLarge`); the estimated object ≤ 1 MiB (`ObjectTooLarge`, decision 13). A ConfigMap `Set` equal to the base text is dropped by the app before `edit`; a Secret `Set` is always a change (decision 16).
 - Each change is paired with its field: an `Add` goes to `Data`; a `Set`/`Remove` keeps the key's field.
 
 ## Write operation (`object_write.rs`)

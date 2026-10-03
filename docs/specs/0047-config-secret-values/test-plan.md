@@ -9,6 +9,7 @@
 | `secret_base_keeps_names_sizes_and_binary_flags` | keys sorted, `Hidden`/`Binary`, sizes, `resourceVersion` |
 | `secret_base_debug_holds_no_value` | `format!("{base:?}")` lacks the value and its base64 |
 | `helm_release_secret_is_refused` | `type: helm.sh/release.v1` → `HelmRelease`, no base |
+| `owner_helm_label_is_refused_on_both_kinds` | a ConfigMap and a Secret labelled `owner=helm` → `HelmRelease`, no base |
 | `service_account_token_secret_is_refused` | → `ServiceAccountToken` |
 | `immutable_secret_and_config_map_are_refused` | → `Immutable` |
 | `other_kind_is_refused` | a Deployment target → `NotEditable` |
@@ -19,6 +20,9 @@
 | `edit_refuses_set_or_remove_of_unknown_key` | → `UnknownKey` |
 | `edit_refuses_text_set_on_binary_or_large_key` | → `BinaryValue` |
 | `edit_refuses_value_over_one_mebibyte` | → `TooLarge` |
+| `edit_refuses_object_over_one_mebibyte` | many keys under 1 MiB each, estimated total over → `ObjectTooLarge` |
+| `secret_set_is_a_change_even_if_equal` | a `Set` is never dropped as unchanged for a Secret |
+| `newlines_are_kept_in_body` | `a\nb\n` and `a\r\nb` base64-decode from the body byte for byte |
 | `edit_refuses_no_change_and_two_changes_of_one_key` | → `NoChange`, `DuplicateKey` |
 | `edit_debug_shows_counts_only` | `ValuesEdit`, `KeyChange`, `FieldChange` `Debug` lack the value |
 | `secret_patch_base64_encodes_data` | body `data.K` = standard base64; no `stringData`, no `binaryData` |
@@ -47,13 +51,18 @@
 |---|---|
 | `secret_fields_start_masked_and_empty` | masked, empty, state `unchanged` |
 | `typing_makes_a_set_and_empty_keeps` | change list |
-| `loaded_value_unchanged_is_no_change` | `Load current value` then Apply → `NoChange` |
+| `config_map_set_equal_to_base_is_no_change` | ConfigMap only |
+| `pasted_newlines_survive_mask_round_trip` | paste `a\nb\n` and `a\r\nb` (while masked and while unmasked), mask, unmask: `text()` unchanged; the Apply `NewValue` equals it |
+| `secret_field_is_one_textarea_for_life` | the same `TextareaState` entity before and after mask toggles |
+| `masked_field_renders_placeholder_with_char_count` | `•••• N chars`; `unchanged` when empty; no textarea element |
+| `paste_while_masked_fills_hidden_field` | text inserted, still masked |
+| `dirtiness_tracks_change_events_and_length` | `InputEvent::Change` → dirty; no `value()` call path |
+| `apply_copies_rope_once_into_zeroizing` | the copy has `capacity == len` |
 | `unmask_re_masks_after_thirty_seconds` | ticker with a fake clock |
 | `apply_re_masks_every_field` | |
 | `copy_and_cut_in_secret_field_are_dropped` | clipboard port untouched |
-| `row_copy_uses_private_write` | fake `ClipboardPort.write_private` called, clear armed |
 | `binary_and_large_rows_offer_remove_only` | |
-| `screenshot_access_disables_unmask_load_copy` | `ValueAccess::Blocked` |
+| `screenshot_access_disables_the_eye` | `ValueAccess::Blocked` |
 | `reload_keeps_changes_by_key_and_lists_dropped` | decision 12 |
 | `local_error_shows_under_its_key` | nothing sent |
 
@@ -62,7 +71,7 @@
 | Test | Checks |
 |---|---|
 | `menu_offers_edit_values_on_config_maps_and_secrets_only` | not on Helm release rows or other kinds |
-| `refused_secret_types_disable_the_item` | reasons of editor-view.md |
+| `refused_objects_disable_the_item` | reasons of editor-view.md, including `owner=helm` on a ConfigMap row |
 | `denied_patch_disables_with_reason` | `Not permitted: patch secrets` |
 | `apply_runs_dry_run_then_confirm_then_commit` | requests in order; one audit line |
 | `confirm_dialog_shows_names_and_markers_only` | dialog text lacks the value |
@@ -96,10 +105,11 @@ Existing tests that change: `resource_actions_tests` (Secrets placeholder gone; 
 
 - `grep -n "tracing::" crates/cluster/src/config_values.rs crates/app/src/values_edit.rs crates/app/src/values_edit_flow.rs` → none.
 - `grep -n "stringData" crates/cluster/src/config_values.rs` → none outside comments.
-- `grep -n "derive(.*Debug" crates/cluster/src/config_values.rs` → only `DataField`, `BaseNotes`, `FieldChange` (no value inside).
+- `grep -n "derive(.*Debug" crates/cluster/src/config_values.rs` → only `DataField`, `BaseNotes`, `FieldChange` (no value inside). `ValuesBase`, `ValuesEdit`, `KeyChange` have manual `Debug`; `NewValue`, `ValueKey` none.
+- `grep -nE "mask_toggle|set_masked|\.masked\(|\.value\(\)" crates/app/src/values_edit.rs` → none on Secret fields.
 
 ## Step 3 · live (agents)
 
-1. Probe build with `readonly@Monitor`: `--screen secrets`, open a row menu: `Edit values…` disabled with the `patch` reason. No reveal, no load, no copy.
-2. Request log of the run: only GETs and SSAR POSTs; zero PATCH, PUT, DELETE.
+1. Probe build with `readonly@Monitor`: `--screen secrets`, open a row menu: `Edit values…` disabled with the `patch` reason. No reveal, no copy, no typing of real values.
+2. Run with `RUST_LOG=kube_client::client::builder=debug` and count from the app's own debug log only (the `HTTP` span: method and URL): only GET and SSAR POST; zero PATCH, PUT, DELETE. If that is not possible, a code review of the call sites stands in, as in 0026.
 3. ui-verifier: `--screen values-edit` against W7 (Secrets drawer, Data rows) and W10 notes 3–4; masked state only.

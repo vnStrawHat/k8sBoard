@@ -23,7 +23,7 @@
 |---|---|
 | `crates/app/src/values_edit.rs` (new) | `ValuesEditView`: rows, inputs, mask timer, local errors, conflict banner, fixture |
 | `crates/app/src/values_edit_tests.rs` (new) | view model tests |
-| `crates/app/src/values_edit_flow.rs` (new; child of `app_shell`, like `edit_yaml_flow.rs`) | `open_values_edit`, `values_commit_finished`, clipboard clear arming |
+| `crates/app/src/values_edit_flow.rs` (new; child of `app_shell`, like `edit_yaml_flow.rs`) | `open_values_edit`, `values_commit_finished` |
 | `crates/app/src/edit_yaml_flow.rs` | slot helpers take `OpenEdit` |
 | `crates/app/src/app_shell.rs` | `edit: Option<OpenEdit>`, render arm, module declaration, `ValuesScreen` in the root key context while ConfigMaps or Secrets is visible |
 | `crates/app/src/write_flow.rs` | the commit callback calls `values_commit_finished` for `EditValues(_)`, next to `edit_commit_finished` |

@@ -19,13 +19,13 @@ Smaller leak surface and no full-Secret read per request decide it. No SSA and n
 
 `stringData` is a write-only alias: the server merges it into `data` and never returns it. The editor reads and writes `data` only, so the dry-run, the patch, and the next read use one form. A user types plain text (the `stringData` experience); the cluster crate encodes it. ConfigMap `data` is sent as typed.
 
-## 3. No Secret value is fetched when the editor opens
+## 3. Secret values are write-only in the editor (security review, coordinator 2026-10-03)
 
-The base read keeps key names, sizes, `is_binary`, type, and flags; the data is zeroized before `values_base` returns. Changing a value means typing a new one. "Load current value" fetches one key on explicit action via the 0016 `secret_values` GET; the other keys are dropped in the same call.
+The base read keeps key names, sizes, `is_binary`, type, and flags; the data is zeroized before `values_base` returns. The editor never fetches or shows a current Secret value. The user types or pastes a new value, or leaves the field empty to keep the current one. Viewing and copying a current value stays in the W7 drawer (0016 Reveal and Copy value). There is no "Load current value" and no Copy in the editor.
 
 ## 4. An edit exists only from a server-read base
 
-`ValuesBase` has private fields and comes only from `ClusterConnection::values_base`, which refuses Helm release, service-account-token, and immutable objects. `ValuesEdit` comes only from `ValuesBase::edit`. Both carry the base `resourceVersion`; a server object of that version is the one that was checked, so no second GET is needed (fail-closed).
+`ValuesBase` has private fields and comes only from `ClusterConnection::values_base`, which refuses Helm release records (a Secret of type `helm.sh/release.v1`, and any ConfigMap or Secret labelled `owner=helm`: Helm's ConfigMap storage driver), service-account-token Secrets, and immutable objects. `ValuesEdit` comes only from `ValuesBase::edit`. Both carry the base `resourceVersion`; a server object of that version is the one that was checked, so no second GET is needed (fail-closed).
 
 ## 5. Binary values: remove only
 
@@ -63,11 +63,15 @@ Coordinator decision 2026-10-03: follow W7 (`Edit  E` on both drawers). Amends 0
 
 ## 10. Clipboard inside Secret fields
 
-The kit's masked input already keeps its value off the clipboard; an unmasked one would not. Secret fields capture `Copy` and `Cut` and drop them; the row's Copy button uses the 0016 private write and the 30 s clear. Paste is allowed.
+A kit textarea copies to the normal clipboard (history, cloud). Secret fields capture `Copy` and `Cut` and drop them; the editor has no Copy button (decision 3). Paste is allowed. ConfigMap fields copy normally.
 
-## 11. Unmask is per field and timed
+## 11. One textarea per Secret field; the editor's own mask
 
-The field's eye toggles the kit mask (`set_masked`). An unmasked field re-masks after `REVEAL_DURATION` (30 s, 0016), on Apply, and on close.
+A single-line kit `InputState` strips `\n` and `\r` on every insert and paste (gpui-base 0.7.0 `state.rs:2733`, `:3498-3499`), and the kit mask is single-line only. So:
+
+- Each Secret value field is one `TextareaState` (`auto_grow(1, 8)`). The kit mask (`masked`, `set_masked`) and `Input::mask_toggle()` are never used on it.
+- While masked, the view renders a placeholder `•••• N chars` (`N` = `text().chars().count()`; `unchanged` when empty) instead of the textarea element. The `TextareaState` entity stays alive, so the text never moves between widgets.
+- The editor's own eye button unmasks one field; its own timer re-masks after `REVEAL_DURATION` (30 s, 0016), on Apply, and on close. A paste goes into the textarea; a field that is masked shows the eye and a `Paste` button only (paste writes into the hidden textarea).
 
 ## 12. 409: reload and keep changes by key
 
@@ -75,7 +79,7 @@ The field's eye toggles the kit mask (`set_masked`). An unmasked field re-masks 
 
 ## 13. Size limits
 
-A value over 1 MiB is refused locally (`TooLarge`). ConfigMap values over 128 KiB (`MAX_INLINE_VALUE`) are not put in an input (main-thread layout); they read `text, N KiB, edit with Edit YAML` and can only be removed.
+A value over 1 MiB is refused locally (`TooLarge`). So is an edit whose estimated object size exceeds 1 MiB (`ObjectTooLarge`): the base's key sizes, minus removed and replaced keys, plus the new values (base64 length for Secrets). This is an early hint only; the API server's limit decides. ConfigMap values over 128 KiB (`MAX_INLINE_VALUE`) are not put in an input (main-thread layout); they read `text, N KiB, edit with Edit YAML` and can only be removed.
 
 ## 14. Warnings (non-blocking)
 
@@ -83,6 +87,12 @@ A value over 1 MiB is refused locally (`TooLarge`). ConfigMap values over 128 Ki
 - `ownerReferences` not empty: `Owned by {kind}/{name}: its controller may replace this change`.
 - Always: `Pods that read these keys as environment variables keep the old values until they restart`.
 
-## 15. `zeroize` is already a dependency
+## 15. `zeroize` covers only k8sBoard's own short-lived copies
 
-New values, loaded values, and every copy taken out of a kit input are `Zeroizing<String>`. The kit's `Rope`, its undo history, GPUI text caches, and serde/hyper buffers are freed, not wiped: the 0016 ceiling, stated in [secret-safety.md](secret-safety.md).
+- Dirtiness comes from `InputEvent::Change` plus `text().len()` (the borrowed `&Rope`). The view never calls `value()` (an `Arc<str>` copy) on a Secret field, per render or otherwise.
+- At Apply the view copies each changed field once, from the rope's chunks into `String::with_capacity(len)` wrapped in `Zeroizing`, and builds the `NewValue` from it.
+- Everything else is outside zeroize: the kit `Rope` and undo history, any `value()` copy the kit makes itself, `text_for_range` answers to the OS IME, grown or reallocated buffers, GPUI text caches, serde/hyper buffers. See the table in [secret-safety.md](secret-safety.md).
+
+## 16. Empty keeps; an identical value is still a change
+
+An empty Secret field means "keep", so a value cannot be set to `""` here (Edit YAML cannot either: Secret data is locked there; use `kubectl`). The editor cannot compare with a value it never loads, so a typed value equal to the current one is sent and audited as `value changed`.
