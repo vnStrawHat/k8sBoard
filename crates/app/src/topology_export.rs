@@ -55,11 +55,11 @@ pub(crate) struct SvgStyle {
     pub(crate) font_family: String,
     pub(crate) ui_font_family: String,
     /// Per `KindHue`, in `KindHue::ALL` order: the chip, the text on it, and the card surface.
-    pub(crate) kinds: [String; 7],
-    pub(crate) kind_texts: [String; 7],
-    pub(crate) card_fills: [String; 7],
+    pub(crate) kinds: [String; 8],
+    pub(crate) kind_texts: [String; 8],
+    pub(crate) card_fills: [String; 8],
     /// Owns, RoutesTo, Mounts.
-    pub(crate) relations: [String; 3],
+    pub(crate) relations: [String; 4],
 }
 
 pub(crate) fn svg_style(cx: &App) -> SvgStyle {
@@ -83,7 +83,12 @@ pub(crate) fn svg_style(cx: &App) -> SvgStyle {
     }
 }
 
-const RELATIONS: [Relation; 3] = [Relation::Owns, Relation::RoutesTo, Relation::Mounts];
+const RELATIONS: [Relation; 4] = [
+    Relation::Owns,
+    Relation::RoutesTo,
+    Relation::Mounts,
+    Relation::Access,
+];
 
 /// `#rrggbb` from the channels, each rounded from 0 to 1 onto 0 to 255. The alpha is dropped: the
 /// export background is opaque, and translucent fills set `opacity` themselves.
@@ -215,7 +220,7 @@ pub(crate) fn topology_svg(
     svg
 }
 
-/// The arrow heads, one per edge color: owns, routes, mounts, warn, bad. Each is the triangle of
+/// The arrow heads, one per edge color: owns, routes, mounts, access, warn, bad. Each is the triangle of
 /// the arrow on screen, with its tip on the target.
 fn markers(style: &SvgStyle) -> String {
     let (length, half) = (ARROW_LENGTH, ARROW_HALF_WIDTH);
@@ -224,6 +229,7 @@ fn markers(style: &SvgStyle) -> String {
         ("owns", style.relation(Relation::Owns)),
         ("routes", style.relation(Relation::RoutesTo)),
         ("mounts", style.relation(Relation::Mounts)),
+        ("access", style.relation(Relation::Access)),
         ("warn", &style.warn),
         ("bad", &style.bad),
     ] {
@@ -283,6 +289,7 @@ fn edge_svg(
         (None, Relation::Owns) => (style.relation(relation), "owns", EDGE_REST_ALPHA),
         (None, Relation::RoutesTo) => (style.relation(relation), "routes", EDGE_REST_ALPHA),
         (None, Relation::Mounts) => (style.relation(relation), "mounts", EDGE_REST_ALPHA),
+        (None, Relation::Access) => (style.relation(relation), "access", EDGE_REST_ALPHA),
     };
     let dash = stroke
         .dash

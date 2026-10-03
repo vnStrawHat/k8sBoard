@@ -4,15 +4,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cluster::{
-    ConfigMapSummary, ContainerKind, ContainerProbes, ContainerState, ContainerSummary,
-    ControllerRef, DaemonSetSummary, DeploymentSummary, EnvEntry, EnvFromEntry, EnvFromSource,
-    EnvSource, HorizontalPodAutoscalerSummary, IngressPath, IngressSummary, IngressTls, MountEntry,
-    NodeSummary, PersistentVolumeClaimSummary, PodStatus, PodSummary, ReadyCount,
-    ReplicaSetSummary, SecretDetails, SecretSummary, ServicePortSummary, ServiceSummary,
-    StatefulSetSummary, StatusReason, VolumeSource,
+    BindingSummary, ConfigMapSummary, ContainerKind, ContainerProbes, ContainerState,
+    ContainerSummary, ControllerRef, DaemonSetSummary, DeploymentSummary, EnvEntry, EnvFromEntry,
+    EnvFromSource, EnvSource, HorizontalPodAutoscalerSummary, IngressPath, IngressSummary,
+    IngressTls, MountEntry, NodeSummary, PersistentVolumeClaimSummary, PodStatus, PodSummary,
+    RbacRule, ReadyCount, ReplicaSetSummary, RoleKind, RoleRef, RoleSummary, SecretDetails,
+    SecretSummary, ServiceAccountSummary, ServicePortSummary, ServiceSummary, StatefulSetSummary,
+    StatusReason, Subject, SubjectKind, VolumeSource,
 };
 use jiff::Timestamp;
 
+use crate::access_rows::{
+    cluster_role_binding_row, role_binding_row, role_row, service_account_row,
+};
 use crate::config_map_rows::config_map_row;
 use crate::kind_row::KindRow;
 use crate::network_rows::{ingress_row, service_row};
@@ -20,8 +24,8 @@ use crate::policy_rows::horizontal_pod_autoscaler_row;
 use crate::secret_rows::secret_row;
 use crate::storage_rows::persistent_volume_claim_row;
 use crate::topology_graph::{
-    FeedRows, NodeId, TopologyBuild, TopologyFilter, TopologyGraph, TopologyInputs, TopologyKind,
-    build_topology,
+    FeedRows, KindFilter, NodeId, TopologyBuild, TopologyFilter, TopologyGraph, TopologyInputs,
+    TopologyKind, build_topology,
 };
 use crate::workload_rows::{daemon_set_row, deployment_row, replica_set_row, stateful_set_row};
 
@@ -394,6 +398,77 @@ pub(crate) fn secret(name: &str, secret_type: &str) -> SecretSummary {
     }
 }
 
+/// A ServiceAccount of `shop`.
+pub(crate) fn service_account(name: &str) -> ServiceAccountSummary {
+    ServiceAccountSummary {
+        namespace: NAMESPACE.to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        secrets: Vec::new(),
+        image_pull_secrets: Vec::new(),
+        automount_token: None,
+        cloud_identities: Vec::new(),
+    }
+}
+
+/// A Role of `shop` with `rule_count` read rules.
+pub(crate) fn role(name: &str, rule_count: usize) -> RoleSummary {
+    let rule = RbacRule {
+        api_groups: vec![String::new()],
+        resources: vec!["pods".to_owned()],
+        resource_names: Vec::new(),
+        verbs: vec!["get".to_owned()],
+        non_resource_urls: Vec::new(),
+    };
+    RoleSummary {
+        namespace: Some(NAMESPACE.to_owned()),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        rules: vec![rule; rule_count],
+        aggregation: Vec::new(),
+    }
+}
+
+/// The subject of a ServiceAccount of `shop`.
+pub(crate) fn account_subject(name: &str) -> Subject {
+    Subject {
+        kind: SubjectKind::ServiceAccount,
+        name: name.to_owned(),
+        namespace: Some(NAMESPACE.to_owned()),
+    }
+}
+
+/// The subject of a group such as `system:serviceaccounts`.
+pub(crate) fn group_subject(name: &str) -> Subject {
+    Subject {
+        kind: SubjectKind::Group,
+        name: name.to_owned(),
+        namespace: None,
+    }
+}
+
+/// A RoleBinding of `shop` (`namespace: Some`) or, with `None`, a ClusterRoleBinding.
+pub(crate) fn binding(
+    namespace: Option<&str>,
+    name: &str,
+    role: (RoleKind, &str),
+    subjects: Vec<Subject>,
+) -> BindingSummary {
+    BindingSummary {
+        namespace: namespace.map(str::to_owned),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        role: RoleRef {
+            kind: role.0,
+            name: role.1.to_owned(),
+        },
+        subjects,
+    }
+}
+
 /// What one feed holds in a fixture.
 enum Feed {
     Ready(Vec<KindRow>),
@@ -433,7 +508,7 @@ impl Default for Fixture {
             pods: Some(Vec::new()),
             feeds,
             nodes: Vec::new(),
-            filter: TopologyFilter::everything(),
+            filter: TopologyFilter::initial(),
             expanded: BTreeSet::new(),
             now: now(),
         }
@@ -537,6 +612,41 @@ impl Fixture {
             TopologyKind::PersistentVolumeClaim,
             persistent_volume_claim_row(&summary),
         )
+    }
+
+    /// The RBAC chip is on and its four feeds are ready and empty.
+    pub(crate) fn with_rbac(mut self) -> Self {
+        self.filter.kinds.insert(KindFilter::Rbac);
+        for kind in [
+            TopologyKind::ServiceAccount,
+            TopologyKind::RoleBinding,
+            TopologyKind::ClusterRoleBinding,
+            TopologyKind::Role,
+        ] {
+            self.feeds
+                .entry(kind)
+                .or_insert_with(|| Feed::Ready(Vec::new()));
+        }
+        self
+    }
+
+    pub(crate) fn with_service_account(self, summary: ServiceAccountSummary) -> Self {
+        self.push(TopologyKind::ServiceAccount, service_account_row(&summary))
+    }
+
+    pub(crate) fn with_role_binding(self, summary: BindingSummary) -> Self {
+        self.push(TopologyKind::RoleBinding, role_binding_row(&summary))
+    }
+
+    pub(crate) fn with_cluster_role_binding(self, summary: BindingSummary) -> Self {
+        self.push(
+            TopologyKind::ClusterRoleBinding,
+            cluster_role_binding_row(&summary),
+        )
+    }
+
+    pub(crate) fn with_role(self, summary: RoleSummary) -> Self {
+        self.push(TopologyKind::Role, role_row(&summary))
     }
 
     /// The feed of `kind` has not delivered its first snapshot.
@@ -644,4 +754,62 @@ pub(crate) fn has_edge(
         .edges
         .iter()
         .any(|edge| edge.from == from && edge.to == to && edge.relation == relation)
+}
+
+/// `pod` running as `account`.
+pub(crate) fn pod_as(mut pod: PodSummary, account: &str) -> PodSummary {
+    pod.service_account = Some(account.to_owned());
+    pod
+}
+
+/// The RBAC fixture of the test plan: Deployment `api` (its pods run as `api`), the owner-less pod
+/// `cron-x` (runs as `default`), accounts `api` and `default`, RoleBinding `api-reader` (account
+/// `api` to Role `reader`), RoleBinding `ghost` (account `api` to the missing Role `gone`),
+/// ClusterRoleBinding `ci-admin` (account `api` to ClusterRole `cluster-admin`), and
+/// ClusterRoleBinding `all-sa` (group `system:serviceaccounts` to ClusterRole `view`). The RBAC
+/// chip is on.
+pub(crate) fn shop_access() -> Fixture {
+    let api_pods = (0..2).map(|n| {
+        pod_as(
+            pod(
+                &format!("api-7d9f-{n}"),
+                &[],
+                Some(("ReplicaSet", "api-7d9f")),
+            ),
+            "api",
+        )
+    });
+    Fixture::default()
+        .with_rbac()
+        .with_deployment("api", 2, 2)
+        .with_replica_set("api-7d9f", Some("api"), 2, 2)
+        .with_pods(api_pods)
+        .with_pod(pod("cron-x", &[], None))
+        .with_service_account(service_account("api"))
+        .with_service_account(service_account("default"))
+        .with_role(role("reader", 3))
+        .with_role_binding(binding(
+            Some(NAMESPACE),
+            "api-reader",
+            (RoleKind::Role, "reader"),
+            vec![account_subject("api")],
+        ))
+        .with_role_binding(binding(
+            Some(NAMESPACE),
+            "ghost",
+            (RoleKind::Role, "gone"),
+            vec![account_subject("api")],
+        ))
+        .with_cluster_role_binding(binding(
+            None,
+            "ci-admin",
+            (RoleKind::ClusterRole, "cluster-admin"),
+            vec![account_subject("api")],
+        ))
+        .with_cluster_role_binding(binding(
+            None,
+            "all-sa",
+            (RoleKind::ClusterRole, "view"),
+            vec![group_subject("system:serviceaccounts")],
+        ))
 }

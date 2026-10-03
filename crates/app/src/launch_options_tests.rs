@@ -476,6 +476,14 @@ fn screen_topology_parses() {
 }
 
 #[test]
+fn screen_topology_rbac_parses() {
+    let list = run_options(&["--screen", "topology-rbac"]).screen;
+    assert_eq!(list, LaunchScreen::TopologyRbac);
+    assert_eq!(list.screen(), Screen::Topology);
+    assert!(list.shows_topology());
+}
+
+#[test]
 fn screen_topology_problems_parses() {
     let list = run_options(&["--screen", "topology-problems"]).screen;
     assert_eq!(list, LaunchScreen::TopologyProblems);

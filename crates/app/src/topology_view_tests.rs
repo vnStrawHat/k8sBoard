@@ -234,3 +234,55 @@ fn the_minimap_shrinks_while_the_drawer_is_open() {
     // The compact minimap keeps the shape of the full one.
     assert!((compact.0 / compact.1 - full.0 / full.1).abs() < 1e-3);
 }
+
+#[gpui_kit::test]
+fn rbac_chip_is_enabled_and_toggles(cx: &mut gpui_kit::TestAppContext) {
+    let view = view_of(cx);
+    let has_rbac = |cx: &mut gpui_kit::TestAppContext| {
+        cx.update(|cx| view.read(cx).filter.kinds.contains(&KindFilter::Rbac))
+    };
+    // Off by default, and a chip like the others: the toolbar draws one for every kind filter.
+    assert!(!has_rbac(cx));
+    assert!(KindFilter::ALL.contains(&KindFilter::Rbac));
+    assert_eq!(chip_id(KindFilter::Rbac), "topology-chip-rbac");
+    assert_eq!(
+        KindFilter::Rbac.tooltip(),
+        "Show service accounts, bindings, and roles"
+    );
+    notifications(&view, cx, |view, cx| view.toggle_kind(KindFilter::Rbac, cx));
+    assert!(has_rbac(cx));
+    notifications(&view, cx, |view, cx| view.toggle_kind(KindFilter::Rbac, cx));
+    assert!(!has_rbac(cx));
+}
+
+#[gpui_kit::test]
+fn the_rbac_screen_turns_the_chip_on(cx: &mut gpui_kit::TestAppContext) {
+    let view = view_of(cx);
+    notifications(&view, cx, |view, cx| view.set_rbac(true, cx));
+    cx.update(|cx| assert!(view.read(cx).filter.kinds.contains(&KindFilter::Rbac)));
+}
+
+#[test]
+fn click_on_feedless_row_reveals_instead_of_drawer() {
+    let cluster_role = ResourceKey::Kind {
+        kind: crate::resource_kind::ResourceKind::ClusterRoles,
+        namespace: None,
+        name: "cluster-admin".to_owned(),
+    };
+    // No row in any feed: the object is shown on its screen, whatever the click count.
+    assert_eq!(
+        card_click(Some(cluster_role.clone()), false, 1),
+        CardClick::Reveal(cluster_role.clone())
+    );
+    // An object with a row opens the drawer on a click and is revealed by a double click.
+    let service = service_key("web");
+    assert_eq!(
+        card_click(Some(service.clone()), true, 1),
+        CardClick::Select(service.clone())
+    );
+    assert_eq!(
+        card_click(Some(service.clone()), true, 2),
+        CardClick::Reveal(service)
+    );
+    assert_eq!(card_click(None, true, 1), CardClick::Highlight);
+}

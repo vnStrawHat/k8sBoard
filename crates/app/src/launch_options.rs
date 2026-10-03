@@ -26,7 +26,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|drain-dialog|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
@@ -57,6 +57,8 @@ pub(crate) enum LaunchScreen {
     Topology,
     /// `--screen topology-problems`: the same screen with Problems only on.
     TopologyProblems,
+    /// `--screen topology-rbac`: the same screen with the RBAC chip on.
+    TopologyRbac,
     /// `--screen topology-selected`: the first Deployment selected, its drawer open, and motion
     /// reduced so the capture does not depend on the clock.
     TopologySelected,
@@ -260,7 +262,10 @@ impl LaunchScreen {
             Self::Nodes | Self::NodeDrawer(_) | Self::NodesSelected => Screen::Nodes,
             Self::Issues | Self::IssuesDrawer => Screen::Issues,
             Self::Settings(..) => Screen::Overview,
-            Self::Topology | Self::TopologyProblems | Self::TopologySelected => Screen::Topology,
+            Self::Topology
+            | Self::TopologyProblems
+            | Self::TopologyRbac
+            | Self::TopologySelected => Screen::Topology,
             Self::Kind(kind) | Self::KindDrawer(kind, _) | Self::KindMenu(kind) => {
                 Screen::Kind(kind)
             }
@@ -370,7 +375,7 @@ impl LaunchScreen {
     pub(crate) fn shows_topology(self) -> bool {
         matches!(
             self,
-            Self::Topology | Self::TopologyProblems | Self::TopologySelected
+            Self::Topology | Self::TopologyProblems | Self::TopologyRbac | Self::TopologySelected
         )
     }
 
@@ -541,6 +546,7 @@ impl LaunchScreen {
             "issues-drawer" => Some(Self::IssuesDrawer),
             "topology" => Some(Self::Topology),
             "topology-problems" => Some(Self::TopologyProblems),
+            "topology-rbac" => Some(Self::TopologyRbac),
             "topology-selected" => Some(Self::TopologySelected),
             "pod-drawer" => Some(Self::PodDrawer(DrawerTab::Overview)),
             "pod-containers" => Some(Self::PodDrawer(DrawerTab::Containers)),

@@ -11,7 +11,7 @@ use crate::resource_kind::ResourceKind;
 use crate::topology_graph::{FeedRows, KindFilter, TopologyKind};
 
 /// The kinds the graph reads besides pods, which the session lists anyway.
-pub(crate) const TOPOLOGY_FEED_KINDS: [ResourceKind; 10] = [
+pub(crate) const TOPOLOGY_FEED_KINDS: [ResourceKind; 14] = [
     ResourceKind::Ingresses,
     ResourceKind::Services,
     ResourceKind::Deployments,
@@ -22,6 +22,10 @@ pub(crate) const TOPOLOGY_FEED_KINDS: [ResourceKind; 10] = [
     ResourceKind::Secrets,
     ResourceKind::PersistentVolumeClaims,
     ResourceKind::HorizontalPodAutoscalers,
+    ResourceKind::ServiceAccounts,
+    ResourceKind::RoleBindings,
+    ResourceKind::Roles,
+    ResourceKind::ClusterRoleBindings,
 ];
 
 /// The namespace Topology draws and the kind chips that are on. It decides which feeds run.
@@ -301,7 +305,7 @@ mod tests {
     #[test]
     fn chip_off_kinds_get_no_feed() {
         let wanted = without_config().wanted_kinds();
-        assert_eq!(wanted.len(), TOPOLOGY_FEED_KINDS.len() - 3);
+        assert_eq!(wanted.len(), TOPOLOGY_FEED_KINDS.len() - 7);
         for kind in [
             ResourceKind::ConfigMaps,
             ResourceKind::Secrets,
@@ -309,6 +313,80 @@ mod tests {
         ] {
             assert!(!wanted.contains(&kind));
         }
+    }
+
+    fn default_chips() -> TopologySubject {
+        subject("shop", &KindFilter::DEFAULT)
+    }
+
+    const RBAC_KINDS: [ResourceKind; 4] = [
+        ResourceKind::ServiceAccounts,
+        ResourceKind::RoleBindings,
+        ResourceKind::Roles,
+        ResourceKind::ClusterRoleBindings,
+    ];
+
+    #[test]
+    fn rbac_chip_starts_four_feeds() {
+        let wanted = all_chips().wanted_kinds();
+        for kind in RBAC_KINDS {
+            assert!(wanted.contains(&kind), "{kind:?}");
+        }
+        let default = default_chips().wanted_kinds();
+        assert_eq!(wanted.len(), default.len() + 4);
+    }
+
+    #[test]
+    fn default_chips_leave_rbac_off() {
+        let wanted = default_chips().wanted_kinds();
+        assert_eq!(wanted.len(), 10);
+        assert!(RBAC_KINDS.iter().all(|kind| !wanted.contains(kind)));
+        // Turning the chip on adds exactly the four feeds and stops none.
+        let mut with_rbac = default_chips();
+        with_rbac.kinds.insert(KindFilter::Rbac);
+        assert_eq!(
+            subject_change(Some(&default_chips()), Some(&with_rbac)),
+            SubjectChange::Adjust {
+                stop: Vec::new(),
+                start: RBAC_KINDS.to_vec(),
+            }
+        );
+        assert_eq!(
+            subject_change(Some(&with_rbac), Some(&default_chips())),
+            SubjectChange::Adjust {
+                stop: RBAC_KINDS.to_vec(),
+                start: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn denied_rbac_feed_is_off() {
+        let access = report(&[AccessCheck::ListServiceAccounts, AccessCheck::ListRoles]);
+        for kind in [
+            ResourceKind::RoleBindings,
+            ResourceKind::ClusterRoleBindings,
+        ] {
+            assert_eq!(
+                feed_plan(kind, &access),
+                FeedStart::Off("not permitted".to_owned()),
+                "{kind:?}"
+            );
+        }
+        for kind in [ResourceKind::ServiceAccounts, ResourceKind::Roles] {
+            assert_eq!(feed_plan(kind, &access), FeedStart::Start, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn open_count_is_at_most_fourteen() {
+        let feeds: Vec<TopologyFeed> = all_chips()
+            .wanted_kinds()
+            .into_iter()
+            .map(|kind| feed(kind, LiveList::Loading))
+            .collect();
+        assert_eq!(feeds_of(feeds).open_count(), 14);
+        assert_eq!(TOPOLOGY_FEED_KINDS.len(), 14);
     }
 
     #[test]

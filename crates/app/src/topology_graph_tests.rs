@@ -2,8 +2,9 @@ use cluster::{SecretKey, ServiceSummary};
 
 use super::*;
 use crate::topology_fixtures::{
-    Fixture, NAMESPACE, Ref, claim, crashing_pod, has_edge, hpa, ids, index_of, ingress, now,
-    object, pod, pod_in, pod_with, secret, service,
+    Fixture, NAMESPACE, Ref, account_subject, binding, claim, crashing_pod, group_subject,
+    has_edge, hpa, ids, index_of, ingress, now, object, pod, pod_as, pod_in, pod_with, role,
+    secret, service, service_account, shop_access,
 };
 use crate::topology_layout::structure;
 
@@ -652,7 +653,7 @@ fn service_matching_agrees_with_the_health_core() {
 // ---- step 2: filters, groups, expansion ----
 
 fn without(kind: KindFilter) -> TopologyFilter {
-    let mut filter = TopologyFilter::everything();
+    let mut filter = TopologyFilter::initial();
     filter.kinds.remove(&kind);
     filter
 }
@@ -765,4 +766,332 @@ fn unlabelled_component_is_ungrouped() {
         .with_pod(pod("lonely", &[], None))
         .graph();
     assert!(graph.nodes.iter().all(|node| node.group.is_none()));
+}
+
+// ---- RBAC layer (steps 4a, 4b) ----
+
+fn account(name: &str) -> NodeId {
+    object(TopologyKind::ServiceAccount, name)
+}
+
+fn access_nodes(graph: &TopologyGraph) -> Vec<&TopologyNode> {
+    graph
+        .nodes
+        .iter()
+        .filter(|node| node.kind.is_access())
+        .collect()
+}
+
+#[test]
+fn rbac_off_draws_no_access_nodes() {
+    let mut fixture = shop_access();
+    fixture.filter.kinds.remove(&KindFilter::Rbac);
+    let graph = fixture.graph();
+    assert!(access_nodes(&graph).is_empty());
+    assert!(
+        graph
+            .edges
+            .iter()
+            .all(|edge| edge.relation != Relation::Access)
+    );
+    assert!(graph.checks.is_empty(), "{:?}", graph.checks);
+}
+
+#[test]
+fn account_aggregates_to_top_workload() {
+    let graph = shop_access().graph();
+    let api = object(TopologyKind::Deployment, "api");
+    assert!(has_edge(&graph, &api, &account("api"), Relation::Access));
+    let into_account = graph
+        .edges
+        .iter()
+        .filter(|edge| graph.nodes[edge.to].id == account("api"))
+        .count();
+    assert_eq!(
+        into_account, 1,
+        "one edge from the Deployment, none from its pods"
+    );
+}
+
+#[test]
+fn standalone_pod_keeps_its_account_edge() {
+    let graph = shop_access().graph();
+    let cron = object(TopologyKind::Pod, "cron-x");
+    assert!(has_edge(
+        &graph,
+        &cron,
+        &account("default"),
+        Relation::Access
+    ));
+}
+
+#[test]
+fn direct_bindings_and_their_roles_are_drawn() {
+    let graph = shop_access().graph();
+    let api = account("api");
+    for (kind, name) in [
+        (TopologyKind::RoleBinding, "api-reader"),
+        (TopologyKind::RoleBinding, "ghost"),
+        (TopologyKind::ClusterRoleBinding, "ci-admin"),
+    ] {
+        let binding = object(kind, name);
+        assert!(has_edge(&graph, &api, &binding, Relation::Access), "{name}");
+    }
+    assert!(has_edge(
+        &graph,
+        &object(TopologyKind::RoleBinding, "api-reader"),
+        &object(TopologyKind::Role, "reader"),
+        Relation::Access
+    ));
+    assert!(has_edge(
+        &graph,
+        &object(TopologyKind::ClusterRoleBinding, "ci-admin"),
+        &object(TopologyKind::ClusterRole, "cluster-admin"),
+        Relation::Access
+    ));
+    let gone = NodeId::Missing {
+        kind: TopologyKind::Role,
+        name: "gone".to_owned(),
+    };
+    assert!(has_edge(
+        &graph,
+        &object(TopologyKind::RoleBinding, "ghost"),
+        &gone,
+        Relation::Access
+    ));
+    assert_eq!(node(&graph, &gone).look, NodeLook::Ghost);
+}
+
+#[test]
+fn group_bindings_only_count_in_caption() {
+    let graph = shop_access().graph();
+    assert!(
+        graph
+            .nodes
+            .iter()
+            .all(|node| node.name != "all-sa" && node.name != "view"),
+        "a group grant has no binding or role node"
+    );
+    for name in ["api", "default"] {
+        let caption = node(&graph, &account(name)).caption.to_string();
+        assert_eq!(caption, "ServiceAccount \u{b7} +1 via groups", "{name}");
+    }
+}
+
+#[test]
+fn unused_accounts_and_bindings_are_hidden() {
+    let graph = shop_access()
+        .with_service_account(service_account("unused"))
+        .with_role_binding(binding(
+            Some(NAMESPACE),
+            "unused-reader",
+            (RoleKind::Role, "reader"),
+            vec![account_subject("unused")],
+        ))
+        .graph();
+    assert!(graph.nodes.iter().all(|node| node.name != "unused"));
+    assert!(graph.nodes.iter().all(|node| node.name != "unused-reader"));
+}
+
+#[test]
+fn other_namespace_role_bindings_are_not_drawn() {
+    let mut elsewhere = account_subject("api");
+    elsewhere.namespace = Some("other".to_owned());
+    let graph = shop_access()
+        .with_role_binding(binding(
+            Some(NAMESPACE),
+            "foreign",
+            (RoleKind::Role, "reader"),
+            vec![elsewhere],
+        ))
+        .graph();
+    assert!(graph.nodes.iter().all(|node| node.name != "foreign"));
+}
+
+#[test]
+fn cluster_role_node_is_plain_and_unchecked() {
+    let graph = shop_access().graph();
+    let cluster_role = node(&graph, &object(TopologyKind::ClusterRole, "cluster-admin"));
+    assert_eq!(cluster_role.look, NodeLook::Plain);
+    assert_eq!(cluster_role.caption, "ClusterRole");
+    assert_eq!(
+        cluster_role.key,
+        ResourceKey::of_object("ClusterRole", None, "cluster-admin")
+    );
+    assert!(
+        graph
+            .checks
+            .iter()
+            .all(|check| check.node != cluster_role.id)
+    );
+}
+
+#[test]
+fn access_edges_use_the_access_relation() {
+    let graph = shop_access().graph();
+    for edge in &graph.edges {
+        let touches_access =
+            graph.nodes[edge.from].kind.is_access() || graph.nodes[edge.to].kind.is_access();
+        assert_eq!(
+            edge.relation == Relation::Access,
+            touches_access,
+            "{edge:?}"
+        );
+    }
+}
+
+#[test]
+fn a_role_caption_counts_its_rules() {
+    let graph = shop_access().graph();
+    let reader = node(&graph, &object(TopologyKind::Role, "reader"));
+    assert_eq!(reader.caption, "Role \u{b7} 3 rules");
+    let single = Fixture::default()
+        .with_rbac()
+        .with_role(role("one", 1))
+        .with_service_account(service_account("api"))
+        .with_role_binding(binding(
+            Some(NAMESPACE),
+            "b",
+            (RoleKind::Role, "one"),
+            vec![account_subject("api")],
+        ))
+        .with_pod(pod_as(pod("p", &[], None), "api"))
+        .graph();
+    assert_eq!(
+        node(&single, &object(TopologyKind::Role, "one")).caption,
+        "Role \u{b7} 1 rule"
+    );
+}
+
+#[test]
+fn a_quiet_account_says_token_off() {
+    let mut quiet = service_account("worker");
+    quiet.automount_token = Some(false);
+    let graph = Fixture::default()
+        .with_rbac()
+        .with_service_account(quiet)
+        .with_pod(pod_as(pod("w-0", &[], None), "worker"))
+        .graph();
+    assert_eq!(
+        node(&graph, &account("worker")).caption,
+        "ServiceAccount \u{b7} token off"
+    );
+}
+
+#[test]
+fn access_nodes_carry_keys_for_their_screens() {
+    let graph = shop_access().graph();
+    let key = |kind, name: &str| node(&graph, &object(kind, name)).key.clone();
+    assert_eq!(
+        key(TopologyKind::ServiceAccount, "api"),
+        ResourceKey::of_object("ServiceAccount", Some(NAMESPACE), "api")
+    );
+    assert_eq!(
+        key(TopologyKind::ClusterRoleBinding, "ci-admin"),
+        ResourceKey::of_object("ClusterRoleBinding", None, "ci-admin")
+    );
+    assert_eq!(
+        key(TopologyKind::Role, "reader"),
+        ResourceKey::of_object("Role", Some(NAMESPACE), "reader")
+    );
+}
+
+#[test]
+fn rbac_rows_count_toward_raw_limit() {
+    let mut fixture = Fixture::default().with_rbac();
+    for n in 0..=RAW_LIMIT {
+        fixture = fixture.with_role(role(&format!("r{n}"), 1));
+    }
+    let TopologyBuild::TooLarge(too_large) = fixture.build() else {
+        panic!("expected too large");
+    };
+    assert_eq!(too_large, TooLarge::Objects(RAW_LIMIT + 1));
+}
+
+#[test]
+fn only_cluster_role_bindings_of_namespace_accounts_count() {
+    let mut elsewhere = account_subject("worker");
+    elsewhere.namespace = Some("other".to_owned());
+    let mut fixture = Fixture::default().with_rbac();
+    for n in 0..=RAW_LIMIT {
+        fixture = fixture.with_cluster_role_binding(binding(
+            None,
+            &format!("other-{n}"),
+            (RoleKind::ClusterRole, "view"),
+            vec![elsewhere.clone()],
+        ));
+    }
+    assert!(
+        matches!(fixture.build(), TopologyBuild::Graph(_)),
+        "bindings of other namespaces are not counted"
+    );
+    for n in 0..=RAW_LIMIT {
+        fixture = fixture.with_cluster_role_binding(binding(
+            None,
+            &format!("mine-{n}"),
+            (RoleKind::ClusterRole, "view"),
+            vec![if n % 2 == 0 {
+                account_subject("api")
+            } else {
+                group_subject("system:serviceaccounts")
+            }],
+        ));
+    }
+    assert!(matches!(
+        fixture.build(),
+        TopologyBuild::TooLarge(TooLarge::Objects(count)) if count == RAW_LIMIT + 1
+    ));
+}
+
+#[test]
+fn access_chain_stays_without_the_workload_chip() {
+    let mut fixture = shop_access();
+    fixture.filter.kinds.remove(&KindFilter::Workload);
+    let graph = fixture.graph();
+    assert!(
+        graph
+            .nodes
+            .iter()
+            .all(|node| node.kind.filter() != KindFilter::Workload)
+    );
+    // `api` still has bindings to connect it; `default` had only the hidden pod and a group.
+    assert!(ids(&graph).contains(&account("api")));
+    assert!(!ids(&graph).contains(&account("default")));
+}
+
+#[test]
+fn a_denied_account_feed_draws_the_account_unchecked() {
+    let graph = shop_access().off(TopologyKind::ServiceAccount).graph();
+    let api = node(&graph, &account("api"));
+    assert_eq!(api.look, NodeLook::Unchecked);
+    assert_eq!(api.caption, "ServiceAccount \u{b7} not checked");
+    assert!(api.key.is_none());
+}
+
+#[test]
+fn access_nodes_join_the_band_of_their_workload() {
+    let mut labelled = service_account("api");
+    labelled.labels = vec!["app.kubernetes.io/name=operator".to_owned()];
+    let mut owner = crate::topology_fixtures::deployment("api", 1, 1);
+    owner.labels = vec!["app=shop-api".to_owned()];
+    let graph = shop_access()
+        .with_deployment_summary(owner)
+        .with_service_account(labelled)
+        .graph();
+    for kind in [
+        TopologyKind::ServiceAccount,
+        TopologyKind::RoleBinding,
+        TopologyKind::ClusterRoleBinding,
+    ] {
+        let name = match kind {
+            TopologyKind::ServiceAccount => "api",
+            TopologyKind::RoleBinding => "api-reader",
+            _ => "ci-admin",
+        };
+        assert_eq!(
+            node(&graph, &object(kind, name)).group.as_deref(),
+            Some("shop-api"),
+            "{kind:?}"
+        );
+    }
 }

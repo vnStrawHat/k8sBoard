@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use gpui_kit::SharedString;
 
-use crate::topology_graph::{GroupBy, NodeId, Relation, TopologyGraph, TopologyNode};
+use crate::topology_graph::{GroupBy, NodeId, Relation, TopologyGraph, TopologyKind, TopologyNode};
 use crate::topology_route::{EdgeRoute, route_edges};
 
 /// A card is at least this wide, and as wide as its longest name needs up to `MAX_NODE_WIDTH`.
@@ -91,6 +91,8 @@ pub(crate) enum Placement {
     Column(u8),
     /// Under the band, below its columns.
     ConfigRow,
+    /// Under the config row (RBAC layer): accounts, bindings, and roles read left to right.
+    AccessRow,
 }
 
 /// A column of the band, or its config row.
@@ -98,6 +100,7 @@ pub(crate) enum Placement {
 enum Slot {
     Column(u8),
     ConfigRow,
+    AccessRow,
 }
 
 pub(crate) struct Band {
@@ -134,7 +137,7 @@ impl Metrics {
             .iter()
             .filter_map(|node| match slot_of(node) {
                 Slot::Column(column) => Some(column),
-                Slot::ConfigRow => None,
+                Slot::ConfigRow | Slot::AccessRow => None,
             })
             .collect();
         used_columns.sort_unstable();
@@ -425,6 +428,7 @@ fn slot_of(node: &TopologyNode) -> Slot {
     match node.kind.placement() {
         Placement::Column(column) => Slot::Column(column.min(COLUMNS as u8 - 1)),
         Placement::ConfigRow => Slot::ConfigRow,
+        Placement::AccessRow => Slot::AccessRow,
     }
 }
 
@@ -520,10 +524,12 @@ fn place_band(
 ) -> PlacedBand {
     let mut columns: Vec<Vec<usize>> = vec![Vec::new(); metrics.column_count()];
     let mut config = Vec::new();
+    let mut access = Vec::new();
     for &index in &plan.nodes {
         match slot_of(&graph.nodes[index]) {
             Slot::Column(column) => columns[metrics.place_of(column)].push(index),
             Slot::ConfigRow => config.push(index),
+            Slot::AccessRow => access.push(index),
         }
     }
     for column in &mut columns {
@@ -565,6 +571,17 @@ fn place_band(
         };
         let placed = place_config_row(graph, &config, seed, metrics, pad, config_top, rects);
         bottom = bottom.max(config_top + (placed.rows - 1) as f32 * ROW_PITCH + NODE_HEIGHT);
+        order.push(placed.order);
+    }
+    if !access.is_empty() {
+        let has_rows_above = tallest > 0 || !config.is_empty();
+        let access_top = if has_rows_above {
+            bottom + CONFIG_GAP
+        } else {
+            body_top
+        };
+        let placed = place_access_row(graph, &access, seed, metrics, pad, access_top, rects);
+        bottom = bottom.max(access_top + (placed.rows - 1) as f32 * ROW_PITCH + NODE_HEIGHT);
         order.push(placed.order);
     }
     PlacedBand {
@@ -662,9 +679,9 @@ fn sweep_columns(graph: &TopologyGraph, columns: &mut [Vec<usize>], neighbours: 
     }
 }
 
-struct PlacedConfigRow {
+struct PlacedRow {
     order: SlotOrder,
-    /// How many rows of slots the config nodes fill.
+    /// How many rows of slots the nodes fill.
     rows: usize,
 }
 
@@ -679,7 +696,7 @@ fn place_config_row(
     pad: f32,
     top: f32,
     rects: &mut [GraphRect],
-) -> PlacedConfigRow {
+) -> PlacedRow {
     let mut sources: HashMap<usize, Vec<usize>> = HashMap::new();
     for edge in &graph.edges {
         if graph.nodes[edge.to].kind.placement() == Placement::ConfigRow
@@ -690,7 +707,7 @@ fn place_config_row(
     }
     let column_of_source = |index: usize| match slot_of(&graph.nodes[index]) {
         Slot::Column(column) => metrics.place_of(column),
-        Slot::ConfigRow => 0,
+        Slot::ConfigRow | Slot::AccessRow => 0,
     };
     let wanted = |index: usize| {
         sources
@@ -720,7 +737,7 @@ fn place_config_row(
     });
     let mut taken: BTreeSet<(usize, usize)> = BTreeSet::new();
     for &index in &ordered {
-        let (row, slot) = free_position(&taken, wanted(index), metrics.column_count());
+        let (row, slot) = free_position(&taken, (0, wanted(index)), metrics.column_count());
         taken.insert((row, slot));
         rects[index] = GraphRect::node(
             metrics.column_x(pad, slot),
@@ -728,7 +745,7 @@ fn place_config_row(
             metrics.node_width,
         );
     }
-    PlacedConfigRow {
+    PlacedRow {
         order: SlotOrder {
             ids: ids_of(graph, &ordered),
             offset: 0.,
@@ -737,9 +754,101 @@ fn place_config_row(
     }
 }
 
-/// The first free `(row, slot)` from `wanted` in row 0, going right and then down.
-fn free_position(taken: &BTreeSet<(usize, usize)>, wanted: usize, slots: usize) -> (usize, usize) {
-    let (mut row, mut slot) = (0, wanted.min(slots - 1));
+/// Step 6, the access row: an account takes the slot of the column of its first source, a binding
+/// the slot after its account, a role the slot after its binding; a taken slot moves right, and
+/// past the last slot the row wraps like the config row, from the row of the node it follows.
+/// Nodes are placed in the order of the previous layout, then accounts, bindings, and roles, so
+/// what is new takes a free slot and moves nothing that was there.
+fn place_access_row(
+    graph: &TopologyGraph,
+    access: &[usize],
+    seed: Option<&Seed>,
+    metrics: &Metrics,
+    pad: f32,
+    top: f32,
+    rects: &mut [GraphRect],
+) -> PlacedRow {
+    let mut sources: HashMap<usize, Vec<usize>> = HashMap::new();
+    for edge in &graph.edges {
+        if edge.relation == Relation::Access && graph.nodes[edge.to].kind.is_access() {
+            sources.entry(edge.to).or_default().push(edge.from);
+        }
+    }
+    let tier = |index: usize| match graph.nodes[index].kind {
+        TopologyKind::RoleBinding | TopologyKind::ClusterRoleBinding => 1,
+        TopologyKind::Role | TopologyKind::ClusterRole => 2,
+        _ => 0,
+    };
+    let column_place = |index: usize| match slot_of(&graph.nodes[index]) {
+        Slot::Column(column) => Some(metrics.place_of(column)),
+        Slot::ConfigRow | Slot::AccessRow => None,
+    };
+    let mean = |index: usize| {
+        let places: Vec<usize> = sources
+            .get(&index)
+            .into_iter()
+            .flatten()
+            .filter_map(|&source| column_place(source))
+            .collect();
+        if places.is_empty() {
+            0.
+        } else {
+            places.iter().sum::<usize>() as f32 / places.len() as f32
+        }
+    };
+    let mut ordered = access.to_vec();
+    ordered.sort_by(|&a, &b| {
+        let rank = |index: usize| {
+            seed.and_then(|seed| seed.rank.get(&graph.nodes[index].id))
+                .copied()
+                .unwrap_or(usize::MAX)
+        };
+        rank(a)
+            .cmp(&rank(b))
+            .then_with(|| tier(a).cmp(&tier(b)))
+            .then_with(|| mean(a).total_cmp(&mean(b)))
+            .then_with(|| graph.nodes[a].id.cmp(&graph.nodes[b].id))
+    });
+    let mut taken: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut placed: HashMap<usize, (usize, usize)> = HashMap::new();
+    for &index in &ordered {
+        let from = sources.get(&index).map_or(&[][..], Vec::as_slice);
+        // The first source that is already placed decides: a node that follows an account of the
+        // row sits after it, an account sits under the column of its workload.
+        let start = from
+            .iter()
+            .find_map(|source| {
+                placed
+                    .get(source)
+                    .map(|(row, slot)| (*row, slot + 1))
+                    .or_else(|| column_place(*source).map(|place| (0, place)))
+            })
+            .unwrap_or((0, 0));
+        let (row, slot) = free_position(&taken, start, metrics.column_count());
+        taken.insert((row, slot));
+        placed.insert(index, (row, slot));
+        rects[index] = GraphRect::node(
+            metrics.column_x(pad, slot),
+            top + row as f32 * ROW_PITCH,
+            metrics.node_width,
+        );
+    }
+    PlacedRow {
+        order: SlotOrder {
+            ids: ids_of(graph, &ordered),
+            offset: 0.,
+        },
+        rows: taken.iter().map(|(row, _)| row + 1).max().unwrap_or(1),
+    }
+}
+
+/// The first free `(row, slot)` from `start`, going right and then down.
+fn free_position(
+    taken: &BTreeSet<(usize, usize)>,
+    start: (usize, usize),
+    slots: usize,
+) -> (usize, usize) {
+    let (mut row, mut slot) = (start.0, start.1.min(slots - 1));
     while taken.contains(&(row, slot)) {
         slot += 1;
         if slot == slots {

@@ -40,7 +40,7 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W10 n5 | Pre-apply snapshot, one-step rollback (ConfigMaps too) | missing | 0031 non-goal; needs a C1 decision | M |
 | W10 n2 | Quota check ("Namespace quota OK") | missing | 0031 non-goal | S |
 | W10 header | Hide managedFields toggle, Format | missing (always hidden) | `object_yaml.rs:474` | S |
-| W11 | RBAC layer chip | missing (disabled) | `topology_view.rs:1038` | M |
+| W11 | RBAC layer chip | done (0022 steps 4a, 4b: working chip, off by default; account → binding → role access row, three access checks) | [as-built-rbac](../specs/0022-topology/as-built-rbac.md) | — |
 | W11 n1, W4c n1, W2 | Traffic mode; Prometheus with 30-day ranges and Settings › Metrics; Extensions; cloud scans | backlog | `topology_view.rs:1077`, `monitor_tab.rs:32`, `clusters_page.rs:737` | L each |
 | W10 n1 | YAML LSP with the cluster schema | not planned (C6: server dry-run instead) | cross-cutting C6 | — |
 
@@ -86,7 +86,7 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | 6 | 0043 Settings completions | General, Logs, Terminal & Shell pages (content needs the user), density, drag order, Search, color, Proxy, watch folder (C6 dependency) | new | local | L |
 | 7 | 0044 Dock completions | dashed line, double-click reset, saved `dock.height`, `SYS` lines, histogram brush, Pop out | new | local | M |
 | 8 | 0029 step 2 | action × resource results, highlight, `@` namespace carry | amend 0029 | local | M |
-| 9 | 0022c Topology RBAC layer | ServiceAccount → binding → role edges behind the RBAC chip | amend 0022 | read-only | M |
+| 9 | 0022 steps 4a, 4b Topology RBAC layer (done) | ServiceAccount → binding → role edges behind the RBAC chip | amend 0022 | read-only | M |
 | 10 | 0018 step 6 | Certificate Renew now (allow-listed `certificates/status` patch) | amend 0018 | mutating | S–M |
 | 11 | Secret value editing | Edit values with masking and the C1 rules | new; user decision | mutating | M |
 | — | backlog | kubelet logs (≥ 1.30), Prometheus and Metrics page, cloud scans, Traffic, Extensions, LSP, 0038 | user decision | — | L |

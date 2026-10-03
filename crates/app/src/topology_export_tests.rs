@@ -1,7 +1,7 @@
 use gpui_kit::{hsla, rgba};
 
 use super::*;
-use crate::topology_fixtures::{Fixture, Ref, crashing_pod, ingress, pod, pod_with};
+use crate::topology_fixtures::{Fixture, Ref, crashing_pod, ingress, pod, pod_with, shop_access};
 use crate::topology_graph::GroupBy;
 use crate::topology_layout::layout;
 
@@ -18,10 +18,10 @@ fn style() -> SvgStyle {
         bad: "#161718".to_owned(),
         font_family: "Test Mono".to_owned(),
         ui_font_family: "Test Sans".to_owned(),
-        card_fills: [0, 1, 2, 3, 4, 5, 6].map(|n| format!("#d0000{n}")),
-        kinds: [0, 1, 2, 3, 4, 5, 6].map(|n| format!("#a0000{n}")),
-        kind_texts: [0, 1, 2, 3, 4, 5, 6].map(|n| format!("#c0000{n}")),
-        relations: [0, 1, 2].map(|n| format!("#b0000{n}")),
+        card_fills: [0, 1, 2, 3, 4, 5, 6, 7].map(|n| format!("#d0000{n}")),
+        kinds: [0, 1, 2, 3, 4, 5, 6, 7].map(|n| format!("#a0000{n}")),
+        kind_texts: [0, 1, 2, 3, 4, 5, 6, 7].map(|n| format!("#c0000{n}")),
+        relations: [0, 1, 2, 3].map(|n| format!("#b0000{n}")),
     }
 }
 
@@ -95,6 +95,20 @@ fn svg_dash_per_relation() {
             .iter()
             .any(|path| path.contains("stroke-dasharray=\"4 3\""))
     );
+    let access_svg = svg_of(&shop_access(), "t").1;
+    assert!(
+        edge_paths(&access_svg)
+            .iter()
+            .any(|path| path.contains("stroke-dasharray=\"2 3\""))
+    );
+}
+
+#[test]
+fn legend_has_four_entries() {
+    let svg = svg_of(&Fixture::default().with_service("web", &[]), "t").1;
+    for text in ["owns", "routes to", "mounts", "access"] {
+        assert!(svg.contains(&format!(">{text}</text>")), "{text}");
+    }
 }
 
 #[test]

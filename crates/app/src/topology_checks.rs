@@ -12,6 +12,7 @@ use crate::issue_kind_rules::PVC_PENDING_GRACE;
 use crate::kind_diagnosis::{CERTIFICATE_TITLE, DiagnosisInputs, NO_TLS_SECRET, kind_diagnosis};
 use crate::kind_row::{KindObject, KindRow};
 use crate::status_tone::StatusTone;
+use crate::topology_access::ClusterAdminGrant;
 use crate::topology_graph::{
     FeedRows, NodeId, NodeLook, Relation, TopologyInputs, TopologyKind, TopologyNode, all_rows,
     health_of_matches,
@@ -31,6 +32,9 @@ pub(crate) enum CheckRule {
     ClaimNotBound,
     HpaMissingTarget,
     ObjectDiagnosis,
+    MissingServiceAccount,
+    MissingRole,
+    ClusterAdminAccount,
 }
 
 impl CheckRule {
@@ -56,6 +60,12 @@ impl CheckRule {
             Self::HpaMissingTarget => format!("{count} HPAs without targets"),
             Self::ObjectDiagnosis if is_one => "1 object problem".to_owned(),
             Self::ObjectDiagnosis => format!("{count} object problems"),
+            Self::MissingServiceAccount if is_one => "1 missing ServiceAccount".to_owned(),
+            Self::MissingServiceAccount => format!("{count} missing ServiceAccounts"),
+            Self::MissingRole if is_one => "1 binding to a missing Role".to_owned(),
+            Self::MissingRole => format!("{count} bindings to missing Roles"),
+            Self::ClusterAdminAccount if is_one => "1 account with cluster-admin".to_owned(),
+            Self::ClusterAdminAccount => format!("{count} accounts with cluster-admin"),
         }
     }
 }
@@ -81,6 +91,8 @@ pub(crate) struct GraphParts<'a> {
     pub(crate) service_pods: HashMap<&'a str, Vec<&'a PodSummary>>,
     /// The pods of each controller, and of each Deployment through its ReplicaSets.
     owned_pods: HashMap<(TopologyKind, &'a str), Vec<&'a PodSummary>>,
+    /// The drawn accounts that hold cluster-admin (RBAC layer).
+    pub(crate) grants: Vec<ClusterAdminGrant>,
 }
 
 impl<'a> GraphParts<'a> {
@@ -136,6 +148,7 @@ impl<'a> GraphParts<'a> {
             rows,
             service_pods: HashMap::new(),
             owned_pods,
+            grants: Vec::new(),
         }
     }
 
@@ -236,6 +249,9 @@ pub(crate) fn graph_checks(parts: &GraphParts, inputs: &TopologyInputs) -> Vec<C
             });
         }
     }
+    for grant in &parts.grants {
+        add(grant_check(grant));
+    }
     let tls_secrets = tls_secrets_of(parts, inputs);
     for node in parts
         .nodes
@@ -305,9 +321,22 @@ fn ghost_check(parts: &GraphParts, node: &TopologyNode) -> Option<ConfigCheck> {
                     StatusTone::Warn,
                     format!("{owner_text} scales missing {label} {name}."),
                 ),
+                TopologyKind::ServiceAccount => (
+                    CheckRule::MissingServiceAccount,
+                    StatusTone::Bad,
+                    format!("{owner_text} runs as missing ServiceAccount {name}."),
+                ),
+                TopologyKind::Role => (
+                    CheckRule::MissingRole,
+                    StatusTone::Warn,
+                    format!("{owner_text} grants missing Role {name}."),
+                ),
                 TopologyKind::Ingress
                 | TopologyKind::HorizontalPodAutoscaler
-                | TopologyKind::Pod => return None,
+                | TopologyKind::Pod
+                | TopologyKind::RoleBinding
+                | TopologyKind::ClusterRoleBinding
+                | TopologyKind::ClusterRole => return None,
             };
             Some(ConfigCheck {
                 rule,
@@ -317,6 +346,27 @@ fn ghost_check(parts: &GraphParts, node: &TopologyNode) -> Option<ConfigCheck> {
             })
         }
         NodeId::Object { .. } | NodeId::PodGroup { .. } => None,
+    }
+}
+
+/// The cluster-admin check, drawn on the binding when the account is its direct subject, else on
+/// the account (a group grant has no drawn binding).
+fn grant_check(grant: &ClusterAdminGrant) -> ConfigCheck {
+    let group = grant
+        .group
+        .as_ref()
+        .map_or_else(String::new, |group| format!(" (group {group})"));
+    ConfigCheck {
+        rule: CheckRule::ClusterAdminAccount,
+        node: grant
+            .binding
+            .clone()
+            .unwrap_or_else(|| grant.account.clone()),
+        tone: StatusTone::Warn,
+        text: format!(
+            "ServiceAccount {} has cluster-admin through {}{group}.",
+            grant.account_name, grant.binding_text
+        ),
     }
 }
 
@@ -398,7 +448,8 @@ fn diagnosis_check(
     node: &TopologyNode,
     tls_secrets: Option<&[SecretSummary]>,
 ) -> Option<ConfigCheck> {
-    if matches!(node.kind, TopologyKind::PersistentVolumeClaim) {
+    // Claims have `ClaimNotBound`, and the access kinds have the three RBAC rules.
+    if matches!(node.kind, TopologyKind::PersistentVolumeClaim) || node.kind.is_access() {
         return None;
     }
     let row = parts.row(node.kind, node.name.as_ref())?;
@@ -510,6 +561,11 @@ fn feed_name(kind: TopologyKind) -> &'static str {
         TopologyKind::ConfigMap => "configmaps",
         TopologyKind::Secret => "secrets",
         TopologyKind::PersistentVolumeClaim => "PVCs",
+        TopologyKind::ServiceAccount => "serviceaccounts",
+        TopologyKind::RoleBinding => "rolebindings",
+        TopologyKind::ClusterRoleBinding => "clusterrolebindings",
+        TopologyKind::Role => "roles",
+        TopologyKind::ClusterRole => "clusterroles",
     }
 }
 

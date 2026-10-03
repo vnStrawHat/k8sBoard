@@ -129,6 +129,7 @@ mod terminal_element;
 mod terminal_input;
 mod terminal_session;
 mod title_bar;
+mod topology_access;
 mod topology_canvas;
 mod topology_card;
 mod topology_checks;

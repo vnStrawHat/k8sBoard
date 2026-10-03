@@ -1,8 +1,9 @@
-use cluster::WorkloadCondition;
+use cluster::{RoleKind, WorkloadCondition};
 
 use super::*;
 use crate::topology_fixtures::{
-    Fixture, Ref, claim, crashing_pod, has_edge, hpa, ingress, now, object, pod, pod_with,
+    Fixture, NAMESPACE, Ref, account_subject, binding, claim, crashing_pod, group_subject,
+    has_edge, hpa, ingress, now, object, pod, pod_as, pod_with, role, service_account, shop_access,
 };
 
 fn rules(graph: &crate::topology_graph::TopologyGraph) -> Vec<CheckRule> {
@@ -381,5 +382,211 @@ fn a_failed_feed_draws_its_targets_unchecked() {
             .nodes
             .iter()
             .any(|node| node.look == NodeLook::Unchecked)
+    );
+}
+
+// ---- RBAC layer (steps 4a, 4b) ----
+
+fn check_of(graph: &crate::topology_graph::TopologyGraph, rule: CheckRule) -> &ConfigCheck {
+    let found: Vec<&ConfigCheck> = graph
+        .checks
+        .iter()
+        .filter(|check| check.rule == rule)
+        .collect();
+    assert_eq!(found.len(), 1, "{rule:?} in {:?}", graph.checks);
+    found[0]
+}
+
+fn account_node(name: &str) -> NodeId {
+    object(TopologyKind::ServiceAccount, name)
+}
+
+#[test]
+fn missing_service_account_is_bad() {
+    let graph = Fixture::default()
+        .with_rbac()
+        .with_deployment("api", 1, 1)
+        .with_replica_set("api-7d9f", Some("api"), 1, 1)
+        .with_pod(pod_as(
+            pod("api-7d9f-0", &[], Some(("ReplicaSet", "api-7d9f"))),
+            "gone",
+        ))
+        .graph();
+    let check = check_of(&graph, CheckRule::MissingServiceAccount);
+    assert_eq!(check.tone, StatusTone::Bad);
+    assert_eq!(
+        check.node,
+        NodeId::Missing {
+            kind: TopologyKind::ServiceAccount,
+            name: "gone".to_owned()
+        }
+    );
+    assert_eq!(
+        check.text,
+        "Deployment api runs as missing ServiceAccount gone."
+    );
+}
+
+#[test]
+fn binding_to_missing_role_is_warn() {
+    let graph = shop_access().graph();
+    let check = check_of(&graph, CheckRule::MissingRole);
+    assert_eq!(check.tone, StatusTone::Warn);
+    assert_eq!(
+        check.node,
+        NodeId::Missing {
+            kind: TopologyKind::Role,
+            name: "gone".to_owned()
+        }
+    );
+    assert_eq!(check.text, "RoleBinding ghost grants missing Role gone.");
+}
+
+#[test]
+fn cluster_admin_account_is_warn_on_the_binding() {
+    let graph = shop_access().graph();
+    let check = check_of(&graph, CheckRule::ClusterAdminAccount);
+    assert_eq!(check.tone, StatusTone::Warn);
+    assert_eq!(
+        check.node,
+        object(TopologyKind::ClusterRoleBinding, "ci-admin")
+    );
+    assert_eq!(
+        check.text,
+        "ServiceAccount api has cluster-admin through clusterrolebinding/ci-admin."
+    );
+}
+
+fn group_admin_graph(group: &str) -> crate::topology_graph::TopologyGraph {
+    Fixture::default()
+        .with_rbac()
+        .with_deployment("api", 1, 1)
+        .with_replica_set("api-7d9f", Some("api"), 1, 1)
+        .with_pod(pod_as(
+            pod("api-7d9f-0", &[], Some(("ReplicaSet", "api-7d9f"))),
+            "api",
+        ))
+        .with_service_account(service_account("api"))
+        .with_cluster_role_binding(binding(
+            None,
+            "everyone-admin",
+            (RoleKind::ClusterRole, "cluster-admin"),
+            vec![group_subject(group)],
+        ))
+        .graph()
+}
+
+#[test]
+fn cluster_admin_through_group_is_warn_on_the_account() {
+    for group in ["system:serviceaccounts", "system:serviceaccounts:shop"] {
+        let graph = group_admin_graph(group);
+        let check = check_of(&graph, CheckRule::ClusterAdminAccount);
+        assert_eq!(check.tone, StatusTone::Warn, "{group}");
+        assert_eq!(check.node, account_node("api"), "{group}");
+        assert_eq!(
+            check.text,
+            format!(
+                "ServiceAccount api has cluster-admin through clusterrolebinding/everyone-admin (group {group})."
+            )
+        );
+    }
+}
+
+#[test]
+fn cluster_admin_to_authenticated_is_warn_on_the_account() {
+    let graph = group_admin_graph("system:authenticated");
+    let check = check_of(&graph, CheckRule::ClusterAdminAccount);
+    assert_eq!(check.node, account_node("api"));
+    assert!(check.text.ends_with("(group system:authenticated)."));
+}
+
+#[test]
+fn a_group_of_another_namespace_grants_nothing() {
+    let graph = group_admin_graph("system:serviceaccounts:other");
+    assert!(
+        graph
+            .checks
+            .iter()
+            .all(|check| check.rule != CheckRule::ClusterAdminAccount)
+    );
+}
+
+#[test]
+fn off_rbac_feed_skips_access_checks() {
+    let graph = shop_access()
+        .off(TopologyKind::ServiceAccount)
+        .off(TopologyKind::Role)
+        .graph();
+    let rules = rules(&graph);
+    assert!(!rules.contains(&CheckRule::MissingServiceAccount));
+    assert!(!rules.contains(&CheckRule::MissingRole));
+    // The cluster-admin grant needs the binding feeds only.
+    assert!(rules.contains(&CheckRule::ClusterAdminAccount));
+}
+
+#[test]
+fn access_chip_labels_singular_and_plural() {
+    let labels = |rule: CheckRule| (rule.chip_label(1), rule.chip_label(3));
+    assert_eq!(
+        labels(CheckRule::MissingServiceAccount),
+        (
+            "1 missing ServiceAccount".to_owned(),
+            "3 missing ServiceAccounts".to_owned()
+        )
+    );
+    assert_eq!(
+        labels(CheckRule::MissingRole),
+        (
+            "1 binding to a missing Role".to_owned(),
+            "3 bindings to missing Roles".to_owned()
+        )
+    );
+    assert_eq!(
+        labels(CheckRule::ClusterAdminAccount),
+        (
+            "1 account with cluster-admin".to_owned(),
+            "3 accounts with cluster-admin".to_owned()
+        )
+    );
+}
+
+#[test]
+fn coverage_names_the_rbac_feeds() {
+    let fixture = Fixture::default()
+        .with_rbac()
+        .off(TopologyKind::ClusterRoleBinding)
+        .loading(TopologyKind::Role);
+    let note = fixture.with_rows(topology_coverage);
+    assert_eq!(
+        note.as_deref(),
+        Some("Not checked: clusterrolebindings (not permitted). Loading: roles.")
+    );
+}
+
+#[test]
+fn access_nodes_get_no_object_diagnosis() {
+    // A Role that grants everything has a "VERY BROAD" box on its drawer; the graph carries the
+    // three RBAC rules only.
+    let mut everything = role("broad", 1);
+    everything.rules[0].verbs = vec!["*".to_owned()];
+    everything.rules[0].resources = vec!["*".to_owned()];
+    everything.rules[0].api_groups = vec!["*".to_owned()];
+    let graph = Fixture::default()
+        .with_rbac()
+        .with_pod(pod_as(pod("p", &[], None), "api"))
+        .with_service_account(service_account("api"))
+        .with_role(everything)
+        .with_role_binding(binding(
+            Some(NAMESPACE),
+            "b",
+            (RoleKind::Role, "broad"),
+            vec![account_subject("api")],
+        ))
+        .graph();
+    assert!(
+        graph
+            .checks
+            .iter()
+            .all(|check| check.rule != CheckRule::ObjectDiagnosis)
     );
 }

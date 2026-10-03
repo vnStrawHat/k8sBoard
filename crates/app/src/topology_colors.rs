@@ -56,10 +56,12 @@ pub(crate) enum KindHue {
     ConfigMap,
     Secret,
     Claim,
+    /// ServiceAccount, bindings, and roles (the RBAC layer).
+    Access,
 }
 
 impl KindHue {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::Ingress,
         Self::Service,
         Self::Workload,
@@ -67,6 +69,7 @@ impl KindHue {
         Self::ConfigMap,
         Self::Secret,
         Self::Claim,
+        Self::Access,
     ];
 
     /// The place of the hue in `ALL`, which the per-frame color arrays use.
@@ -88,6 +91,11 @@ pub(crate) fn kind_hue(kind: TopologyKind) -> KindHue {
         TopologyKind::ConfigMap => KindHue::ConfigMap,
         TopologyKind::Secret => KindHue::Secret,
         TopologyKind::PersistentVolumeClaim => KindHue::Claim,
+        TopologyKind::ServiceAccount
+        | TopologyKind::RoleBinding
+        | TopologyKind::ClusterRoleBinding
+        | TopologyKind::Role
+        | TopologyKind::ClusterRole => KindHue::Access,
     }
 }
 
@@ -101,6 +109,7 @@ fn hue_color(theme: &ThemeColor, hue: KindHue) -> Hsla {
         KindHue::ConfigMap => theme.green,
         KindHue::Secret => theme.green_light,
         KindHue::Claim => theme.magenta_light,
+        KindHue::Access => theme.cyan_light,
     }
 }
 
@@ -110,10 +119,16 @@ fn relation_color(theme: &ThemeColor, relation: Relation) -> Hsla {
         Relation::Owns => theme.blue,
         Relation::RoutesTo => theme.cyan,
         Relation::Mounts => theme.green,
+        Relation::Access => theme.cyan_light,
     }
 }
 
-const RELATIONS: [Relation; 3] = [Relation::Owns, Relation::RoutesTo, Relation::Mounts];
+const RELATIONS: [Relation; 4] = [
+    Relation::Owns,
+    Relation::RoutesTo,
+    Relation::Mounts,
+    Relation::Access,
+];
 
 /// The theme colors the painting needs, resolved once per frame.
 #[derive(Clone, Copy)]
@@ -132,12 +147,12 @@ pub(crate) struct CanvasColors {
     /// The share of the muted fill in a band.
     pub(crate) band_alpha: f32,
     pub(crate) glow: SelectionGlow,
-    kinds: [Hsla; 7],
+    kinds: [Hsla; 8],
     /// The text on a solid kind chip: whichever of the background and the foreground contrasts more.
-    kind_texts: [Hsla; 7],
+    kind_texts: [Hsla; 8],
     /// The surface of a card of each kind: the card with a little of the kind color.
-    card_fills: [Hsla; 7],
-    relations: [Hsla; 3],
+    card_fills: [Hsla; 8],
+    relations: [Hsla; 4],
 }
 
 impl CanvasColors {
@@ -283,7 +298,7 @@ fn luminance(color: Hsla) -> f32 {
 mod tests {
     use super::*;
 
-    const ALL_KINDS: [TopologyKind; 11] = [
+    const ALL_KINDS: [TopologyKind; 16] = [
         TopologyKind::Ingress,
         TopologyKind::HorizontalPodAutoscaler,
         TopologyKind::Service,
@@ -295,6 +310,11 @@ mod tests {
         TopologyKind::ConfigMap,
         TopologyKind::Secret,
         TopologyKind::PersistentVolumeClaim,
+        TopologyKind::ServiceAccount,
+        TopologyKind::RoleBinding,
+        TopologyKind::ClusterRoleBinding,
+        TopologyKind::Role,
+        TopologyKind::ClusterRole,
     ];
 
     #[test]
@@ -311,6 +331,11 @@ mod tests {
             (TopologyKind::ConfigMap, KindHue::ConfigMap),
             (TopologyKind::Secret, KindHue::Secret),
             (TopologyKind::PersistentVolumeClaim, KindHue::Claim),
+            (TopologyKind::ServiceAccount, KindHue::Access),
+            (TopologyKind::RoleBinding, KindHue::Access),
+            (TopologyKind::ClusterRoleBinding, KindHue::Access),
+            (TopologyKind::Role, KindHue::Access),
+            (TopologyKind::ClusterRole, KindHue::Access),
         ];
         assert_eq!(expected.len(), ALL_KINDS.len());
         for (kind, hue) in expected {
@@ -384,6 +409,14 @@ mod tests {
             edge_color(&colors, Relation::Mounts, Some(StatusTone::Warn)),
             colors.warn
         );
+    }
+
+    #[test]
+    fn access_relation_is_cyan_light() {
+        for theme in [ThemeColor::light(), ThemeColor::dark()] {
+            assert_eq!(relation_color(&theme, Relation::Access), theme.cyan_light);
+            assert_eq!(hue_color(&theme, KindHue::Access), theme.cyan_light);
+        }
     }
 
     #[test]

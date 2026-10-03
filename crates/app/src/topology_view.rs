@@ -145,7 +145,7 @@ impl TopologyView {
             session: None,
             shell,
             namespace: None,
-            filter: TopologyFilter::everything(),
+            filter: TopologyFilter::initial(),
             expanded: BTreeSet::new(),
             pins: HashMap::new(),
             build: None,
@@ -264,6 +264,17 @@ impl TopologyView {
     /// `--screen topology-selected`: the first Deployment of the first graph is selected.
     pub(crate) fn select_first_deployment_once(&mut self, is_wanted: bool) {
         self.wants_first_deployment = is_wanted;
+    }
+
+    /// `--screen topology-rbac`: the RBAC chip is on.
+    pub(crate) fn set_rbac(&mut self, is_on: bool, cx: &mut Context<Self>) {
+        if is_on {
+            self.filter.kinds.insert(KindFilter::Rbac);
+        } else {
+            self.filter.kinds.remove(&KindFilter::Rbac);
+        }
+        self.is_dirty = true;
+        cx.notify();
     }
 
     /// `--screen topology-problems`.
@@ -845,17 +856,25 @@ impl TopologyView {
             self.rebuild(cx);
             return;
         }
-        match key {
-            Some(key) if click_count >= 2 => {
+        let has_row = key.as_ref().is_none_or(|key| self.has_row(key, cx));
+        match card_click(key, has_row, click_count) {
+            CardClick::Reveal(key) => {
                 self.with_shell(cx, |shell, cx| shell.reveal_in_primary(key, cx));
             }
-            Some(key) => {
+            CardClick::Select(key) => {
                 self.highlighted = None;
                 self.reveal_node(id);
                 self.with_shell(cx, |shell, cx| shell.select_on_topology(Some(key), cx));
             }
-            None => self.highlighted = Some(id.clone()),
+            CardClick::Highlight => self.highlighted = Some(id.clone()),
         }
+    }
+
+    /// Whether the drawer could show the object of `key`: a kind row lives in the explorer or a
+    /// feed. A pod is always in the session.
+    fn has_row(&self, key: &ResourceKey, cx: &App) -> bool {
+        !matches!(key, ResourceKey::Kind { .. })
+            || self.live(cx).is_some_and(|live| live.row_of(key).is_some())
     }
 
     /// Pans the node into the part of the canvas the drawer leaves free, if it is not in it.
@@ -1032,15 +1051,9 @@ impl TopologyView {
         let chips = KindFilter::ALL.into_iter().map(|kind| {
             let is_on = self.filter.kinds.contains(&kind);
             toggle_button(chip_id(kind), kind.label(), is_on)
-                .tooltip(format!("Show {} nodes", kind.label()))
+                .tooltip(kind.tooltip())
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle_kind(kind, cx)))
         });
-        let rbac = Button::new("topology-chip-rbac")
-            .label("RBAC")
-            .small()
-            .outline()
-            .disabled(true)
-            .tooltip("Not shown in this version");
         // Amber while on, so it does not read like a kind chip: the graph shows the problems and what
         // touches them, not only the problems.
         let warn = tone_color(StatusTone::Warn, cx);
@@ -1093,7 +1106,7 @@ impl TopologyView {
             .child(segment)
             .child(namespace_button)
             .child(group_button)
-            .child(h_flex().gap_1().children(chips).child(rbac))
+            .child(h_flex().gap_1().children(chips))
             .child(problems)
             .child(
                 h_flex()
@@ -1604,6 +1617,25 @@ fn count_text(namespace: &str, build: Option<&Built>) -> String {
     }
 }
 
+/// What a click on a card does.
+#[derive(Debug, PartialEq, Eq)]
+enum CardClick {
+    /// Show the object on its own screen, not in the drawer over the graph.
+    Reveal(ResourceKey),
+    Select(ResourceKey),
+    Highlight,
+}
+
+/// A double click reveals the object; so does a click on one with no row to show in the drawer
+/// (decision 51).
+fn card_click(key: Option<ResourceKey>, has_row: bool, click_count: usize) -> CardClick {
+    match key {
+        Some(key) if click_count >= 2 || !has_row => CardClick::Reveal(key),
+        Some(key) => CardClick::Select(key),
+        None => CardClick::Highlight,
+    }
+}
+
 /// The element id of a kind chip.
 fn chip_id(kind: KindFilter) -> &'static str {
     match kind {
@@ -1611,6 +1643,7 @@ fn chip_id(kind: KindFilter) -> &'static str {
         KindFilter::Service => "topology-chip-service",
         KindFilter::Workload => "topology-chip-workload",
         KindFilter::Config => "topology-chip-config",
+        KindFilter::Rbac => "topology-chip-rbac",
     }
 }
 

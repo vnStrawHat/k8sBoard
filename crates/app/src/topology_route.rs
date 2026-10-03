@@ -140,7 +140,15 @@ impl<'a> Space<'a> {
 
 fn route_edge(from: usize, to: usize, relation: Relation, space: &Space) -> EdgeRoute {
     let (source, target) = (space.rects[from], space.rects[to]);
-    if relation != Relation::Mounts && target.origin.x >= source.right() + DIRECT_GAP {
+    // A mount runs from the side lane to its config card; an access edge is a curve only along a
+    // row of the access layer, and takes the lanes when it comes down from a workload.
+    let is_level = (source.origin.y - target.origin.y).abs() < 1.;
+    let wants_curve = match relation {
+        Relation::Mounts => false,
+        Relation::Access => is_level,
+        Relation::Owns | Relation::RoutesTo => true,
+    };
+    if wants_curve && target.origin.x >= source.right() + DIRECT_GAP {
         let curve = between_columns(source, target);
         if space.is_free(&curve, from, to) {
             return EdgeRoute { points: curve };

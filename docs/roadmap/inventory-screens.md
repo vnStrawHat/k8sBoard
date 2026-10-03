@@ -68,6 +68,7 @@
 | W11-3 | Layered layout, canvas, zoom/pan, remembered positions, minimap, Fit | Done (0022; positions are kept in memory only; visuals 0022b) | 0022, 0022b |
 | W11-4 | Group by, kind toggles, live node status, select opens the drawer | Done (0022) | 0022 |
 | W11-5 | Export PNG | Done (0022; a .svg path gets the SVG; visuals 0022b) | 0022 (decision C9), 0022b |
+| W11-7 | RBAC layer: workload → ServiceAccount → binding → role, three access checks, `RBAC` chip | Done (0022 steps 4a, 4b; off by default; groups only in the caption; ClusterRole nodes have no feed) | 0022 |
 | W11-6 | Traffic mode (service mesh or eBPF) | Missing | backlog |
 
 ## Port Forwarding page (W7 "Port Forwarding")

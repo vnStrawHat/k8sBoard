@@ -1,12 +1,13 @@
 use std::time::Instant;
 
-use cluster::PodSummary;
+use cluster::{PodSummary, RoleKind};
 
 use super::*;
 use crate::topology_fixtures::{
-    Fixture, Ref, crashing_pod, deployment, hpa, ingress, object, pod, pod_with,
+    Fixture, NAMESPACE, Ref, account_subject, binding, crashing_pod, deployment, hpa, ingress,
+    object, pod, pod_as, pod_with, role, service_account,
 };
-use crate::topology_graph::{TopologyBuild, TopologyEdge, TopologyKind};
+use crate::topology_graph::{TopologyBuild, TopologyEdge};
 
 /// Canvas shapes: a narrow one keeps the bands in one band-column; a wide one spreads them.
 const TALL: f32 = 0.1;
@@ -422,8 +423,24 @@ fn pinned_node_keeps_its_origin() {
 
 #[test]
 fn topology_budget() {
-    // 40 Services, 100 ReplicaSets (and their Deployments), 3,000 pods: 30 per ReplicaSet.
-    let mut fixture = Fixture::default();
+    // 40 Services, 100 ReplicaSets (and their Deployments), 3,000 pods: 30 per ReplicaSet; the RBAC
+    // layer adds 40 accounts, 80 bindings (two per account), and 40 Roles.
+    let mut fixture = Fixture::default().with_rbac();
+    for n in 0..40 {
+        let account = format!("sa-{n:02}");
+        let role_name = format!("role-{n:02}");
+        fixture = fixture
+            .with_service_account(service_account(&account))
+            .with_role(role(&role_name, 2));
+        for copy in 0..2 {
+            fixture = fixture.with_role_binding(binding(
+                Some(NAMESPACE),
+                &format!("bind-{n:02}-{copy}"),
+                (RoleKind::Role, &role_name),
+                vec![account_subject(&account)],
+            ));
+        }
+    }
     for n in 0..40 {
         fixture = fixture.with_service(&format!("svc-{n:02}"), &[&format!("app=svc-{n:02}")]);
     }
@@ -436,10 +453,13 @@ fn topology_budget() {
             .with_replica_set(&set, Some(&deployment_name), 30, 30);
         let app = format!("app=svc-{:02}", n % 40);
         for p in 0..30 {
-            pods.push(pod(
-                &format!("{set}-{p:02}"),
-                &[&app],
-                Some(("ReplicaSet", &set)),
+            pods.push(pod_as(
+                pod(
+                    &format!("{set}-{p:02}"),
+                    &[&app],
+                    Some(("ReplicaSet", &set)),
+                ),
+                &format!("sa-{:02}", n % 40),
             ));
         }
     }
@@ -455,11 +475,12 @@ fn topology_budget() {
         graph.nodes.len(),
         graph.edges.len()
     );
-    // The time is only printed: the work counts are the deterministic ceiling (measured: 340 nodes, 300 edges)
-    // nodes), so a busy machine cannot fail the test.
+    // The time is only printed: the work counts are the deterministic ceiling (measured without the
+    // layer: 340 nodes, 300 edges; the layer adds 160 nodes and 260 edges), so a busy machine cannot
+    // fail the test.
     assert_eq!(built.rects.len(), graph.nodes.len());
-    assert!(graph.nodes.len() <= 400, "{} nodes", graph.nodes.len());
-    assert!(graph.edges.len() <= 400, "{} edges", graph.edges.len());
+    assert!(graph.nodes.len() <= 500, "{} nodes", graph.nodes.len());
+    assert!(graph.edges.len() <= 600, "{} edges", graph.edges.len());
 }
 
 #[test]
@@ -686,4 +707,187 @@ fn the_card_width_follows_the_longest_name_up_to_a_cap() {
             .iter()
             .all(|rect| rect.width == layout.rects[0].width)
     );
+}
+
+// ---- RBAC layer (steps 4a, 4b) ----
+
+/// Deployment `api` with `pods` pods that run as the account `api`, a ConfigMap they mount, and a
+/// binding of the account to a Role. The bands are components, so the access row is one row.
+fn access_chain(pods: usize, bindings: usize) -> Fixture {
+    let mut fixture = Fixture::default()
+        .with_rbac()
+        .with_deployment("api", pods as u32, pods as u32)
+        .with_replica_set("api-1", Some("api"), pods as u32, pods as u32)
+        .with_config_map("settings")
+        .with_service_account(service_account("api"))
+        .with_role(role("reader", 2))
+        .with_pods((0..pods).map(|n| {
+            pod_with(
+                pod_as(
+                    pod(
+                        &format!("api-1-{n}"),
+                        &["app=api"],
+                        Some(("ReplicaSet", "api-1")),
+                    ),
+                    "api",
+                ),
+                &[Ref::EnvConfigMap("settings")],
+            )
+        }));
+    for n in 0..bindings {
+        fixture = fixture.with_role_binding(binding(
+            Some(NAMESPACE),
+            &format!("b{n}"),
+            (RoleKind::Role, "reader"),
+            vec![account_subject("api")],
+        ));
+    }
+    fixture
+}
+
+fn at(graph: &TopologyGraph, layout: &TopologyLayout, kind: TopologyKind, name: &str) -> GraphRect {
+    rect(graph, layout, &object(kind, name))
+}
+
+#[test]
+fn access_row_sits_under_the_config_row() {
+    let graph = access_chain(2, 1).graph();
+    let layout = components(&graph);
+    let settings = at(&graph, &layout, TopologyKind::ConfigMap, "settings");
+    let account = at(&graph, &layout, TopologyKind::ServiceAccount, "api");
+    assert_eq!(
+        account.origin.y,
+        settings.bottom() + CONFIG_GAP,
+        "the access row follows the config row"
+    );
+    let band = &layout.bands[0];
+    assert!(account.bottom() <= band.rect.bottom());
+}
+
+#[test]
+fn access_row_sits_under_the_columns_without_a_config_row() {
+    let graph = Fixture::default()
+        .with_rbac()
+        .with_deployment("api", 1, 1)
+        .with_replica_set("api-1", Some("api"), 1, 1)
+        .with_service_account(service_account("api"))
+        .with_pod(pod_as(
+            pod("api-1-0", &[], Some(("ReplicaSet", "api-1"))),
+            "api",
+        ))
+        .graph();
+    let layout = components(&graph);
+    let lowest_column = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| node.kind.placement() != Placement::AccessRow)
+        .map(|(index, _)| layout.rects[index].bottom())
+        .fold(0., f32::max);
+    let account = at(&graph, &layout, TopologyKind::ServiceAccount, "api");
+    assert_eq!(account.origin.y, lowest_column + CONFIG_GAP);
+}
+
+#[test]
+fn binding_and_role_take_the_next_slots() {
+    let graph = access_chain(1, 1).graph();
+    let layout = components(&graph);
+    let account = at(&graph, &layout, TopologyKind::ServiceAccount, "api");
+    let binding = at(&graph, &layout, TopologyKind::RoleBinding, "b0");
+    let role = at(&graph, &layout, TopologyKind::Role, "reader");
+    // The Deployment is in the first used column, so the chain starts at slot 0.
+    assert_eq!(account.origin.x, column_x(0));
+    assert_eq!(binding.origin.x, column_x(1));
+    assert_eq!(role.origin.x, column_x(2));
+    assert_eq!(binding.origin.y, account.origin.y);
+    assert_eq!(role.origin.y, account.origin.y);
+}
+
+#[test]
+fn access_row_wraps_after_the_last_slot() {
+    // Three used columns hold three slots: the account, then four bindings and the role wrap.
+    let graph = access_chain(1, 4).graph();
+    let layout = components(&graph);
+    let rects: Vec<GraphRect> = ["b0", "b1", "b2", "b3"]
+        .iter()
+        .map(|name| at(&graph, &layout, TopologyKind::RoleBinding, name))
+        .collect();
+    let account = at(&graph, &layout, TopologyKind::ServiceAccount, "api");
+    let xs: Vec<f32> = rects.iter().map(|rect| rect.origin.x).collect();
+    assert_eq!(xs, [1, 2, 0, 1].map(column_x));
+    assert_eq!(rects[2].origin.y - account.origin.y, ROW_PITCH);
+    let role = at(&graph, &layout, TopologyKind::Role, "reader");
+    let mut cards = rects.clone();
+    cards.extend([account, role]);
+    for (n, a) in cards.iter().enumerate() {
+        for b in &cards[n + 1..] {
+            assert!(a.origin != b.origin, "two cards share a place");
+        }
+    }
+    let band = &layout.bands[0];
+    assert!(cards.iter().all(|card| card.bottom() <= band.rect.bottom()));
+}
+
+#[test]
+fn new_pod_moves_no_access_card() {
+    // Extra Services make the workload column the tallest, so a new pod does not grow the
+    // columns and push the rows below them.
+    let busy = |pods| {
+        ["x", "y", "z"]
+            .into_iter()
+            .fold(access_chain(pods, 2), |fixture, name| {
+                fixture.with_service(name, &["app=api"])
+            })
+            .graph()
+    };
+    let before = busy(2);
+    let first = components(&before);
+    let after = busy(3);
+    let second = layout(&after, GroupBy::Components, TALL, &no_pins(), Some(&first));
+    for node in &before.nodes {
+        assert_eq!(
+            rect(&before, &first, &node.id),
+            rect(&after, &second, &node.id),
+            "{:?}",
+            node.id
+        );
+    }
+}
+
+#[test]
+fn a_new_binding_takes_a_free_slot_and_moves_nothing() {
+    let before = access_chain(1, 1).graph();
+    let first = components(&before);
+    let after = access_chain(1, 2).graph();
+    let second = layout(&after, GroupBy::Components, TALL, &no_pins(), Some(&first));
+    for node in &before.nodes {
+        assert_eq!(
+            rect(&before, &first, &node.id),
+            rect(&after, &second, &node.id),
+            "{:?}",
+            node.id
+        );
+    }
+}
+
+#[test]
+fn access_edges_run_within_the_row_and_down_from_the_workload() {
+    let graph = access_chain(1, 1).graph();
+    let layout = components(&graph);
+    for (index, edge) in graph.edges.iter().enumerate() {
+        if edge.relation != Relation::Access {
+            continue;
+        }
+        let route = &layout.routes[index];
+        let (from, to) = (layout.rects[edge.from], layout.rects[edge.to]);
+        let is_within_row = (from.origin.y - to.origin.y).abs() < 1.;
+        if is_within_row {
+            // Left to right, from the right side of the source to the left side of the target.
+            assert!((route.start().x - from.right()).abs() < 1.);
+            assert!((route.end().x - to.origin.x).abs() < 1.);
+        } else {
+            // Down from the workload: it leaves by a side lane, like a mount.
+            assert!(route.end().y > route.start().y);
+        }
+    }
 }

@@ -772,12 +772,14 @@ impl AppShell {
         let is_topology = shell.screen == Screen::Topology;
         let wants_problems = options.screen == LaunchScreen::TopologyProblems;
         let wants_selection = options.screen == LaunchScreen::TopologySelected;
+        let wants_rbac = options.screen == LaunchScreen::TopologyRbac;
         if wants_selection {
             // The flow of the selected edges stands still, so the capture is deterministic.
             cx.set_reduce_motion(true);
         }
         shell.topology.update(cx, |view, cx| {
             view.set_problems_only(wants_problems, cx);
+            view.set_rbac(wants_rbac, cx);
             view.select_first_deployment_once(wants_selection);
             view.set_visible(is_topology, cx);
         });

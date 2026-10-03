@@ -1674,12 +1674,22 @@ fn open_watch_count_includes_topology() {
     let base = open_watch_count(watches(1, 0, 0, false, false));
     // Hidden: no feeds, nothing added.
     assert_eq!(with(None), base);
-    // Visible: all ten kinds run.
+    // Visible with the default chips: the ten kinds run; RBAC is off.
+    let default = subject_with("shop", &KindFilter::DEFAULT).wanted_kinds();
+    assert_eq!(default.len(), 10);
+    assert_eq!(with(Some(&topology_feeds_of(&default, &[]))), base + 10);
+    // RBAC on: the four RBAC feeds run too.
     let all = topology_feeds_of(&TOPOLOGY_FEED_KINDS, &[]);
-    assert_eq!(with(Some(&all)), base + 10);
+    assert_eq!(with(Some(&all)), base + 14);
     // One kind denied: its Off feed counts 0.
-    let denied = topology_feeds_of(&TOPOLOGY_FEED_KINDS[..9], &[ResourceKind::Secrets]);
+    let denied = topology_feeds_of(&default[..9], &[ResourceKind::Secrets]);
     assert_eq!(with(Some(&denied)), base + 9);
+    // One RBAC kind denied: three of the four run.
+    let rbac_denied = topology_feeds_of(
+        &TOPOLOGY_FEED_KINDS[..13],
+        &[ResourceKind::ClusterRoleBindings],
+    );
+    assert_eq!(with(Some(&rbac_denied)), base + 13);
     // Config chip off: ConfigMaps, Secrets, and PVCs have no feed: seven run.
     let without_config = subject_with(
         "shop",
@@ -1765,7 +1775,7 @@ fn same_topology_subject_is_noop() {
 
 #[test]
 fn subject_change_keeps_unchanged_feeds() {
-    let all = subject_with("shop", &KindFilter::ALL);
+    let all = subject_with("shop", &KindFilter::DEFAULT);
     let without_config = subject_with(
         "shop",
         &[

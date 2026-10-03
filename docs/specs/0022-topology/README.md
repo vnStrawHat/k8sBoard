@@ -41,6 +41,7 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 | [screen-and-session.md](screen-and-session.md) | screen wiring, toolbar, namespace, feeds and watch budget, async, drawer, Show in Topology |
 | [export.md](export.md) | step 3: SVG builder, resvg rasterizing, save flow |
 | [rbac-layer.md](rbac-layer.md) | steps 4a, 4b: RBAC nodes, edges, chip, feeds, checks, layout, colors |
+| [as-built-rbac.md](as-built-rbac.md) | steps 4a, 4b as built: deviations, UAT counts |
 | [files-to-touch.md](files-to-touch.md) | prerequisites, modules per step, Cargo change, doc updates |
 | [test-plan.md](test-plan.md) | unit tests per step, live checks, ui-verifier checklist |
 
@@ -58,12 +59,12 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 - [ ] 10. On UAT, a pod set above `POD_GROUP_LIMIT` shows one group node, and a click expands it. Adding a pod (rollout) leaves the siblings in place. No UAT namespace has a set that large, so group nodes are covered by the unit tests only.
 - [x] 11. Export writes only after the dialog confirms. The `.png` output is a valid PNG of the whole graph, and a `.svg` path gets SVG text. Paths are never traced.
 - [ ] 12. Screenshots `topology` and `topology-problems` exist (light and dark, `.tmp/ui-shots/v58-topology-*.png`). The ui-verifier reports no high-severity defect against W11. The ui-verifier has not run yet.
-- [ ] 13. (4a, W11 chip, W7 ServiceAccounts) With RBAC on, each account a namespace pod runs as is drawn once, linked from its top visible workload, then to every binding that names it directly, then to that binding's role; group-only grants appear only as the `+{n} via groups` caption.
-- [ ] 14. (4a, W11 pin 2, W7 ClusterRoleBindings) The three access checks (missing ServiceAccount Bad, binding to a missing Role Warn, account with cluster-admin Warn, also through a group, by `roles_held`) appear in the checks chip with the texts of rbac-layer.md; ClusterRole refs are never checked.
-- [ ] 15. (4a, W11 pin 3) The access row reads account → binding → role left to right under each band; with `previous`, adding a pod moves no RBAC card; `topology_budget` still passes with RBAC rows added; only ClusterRoleBindings naming the namespace's accounts count toward `RAW_LIMIT`.
-- [ ] 16. (4b, W11 toolbar) RBAC is a working chip, off by default; turning it on raises the watch count by exactly the started RBAC feeds (≤ 4; a denied list is Off and draws `not checked`), off lowers it back; `open_count()` ≤ 14.
-- [ ] 17. (4b) A click on an account, binding, or Role opens the drawer over the graph, and row keys act on it; a ClusterRole click reveals it on the ClusterRoles screen. Read-only: no new request kind; colors from tokens (`cyan_light`), legend and export show `access`.
-- [ ] 18. (4b) Screenshot `topology-rbac` (light, dark) has no high-severity defect against W11.
+- [x] 13. (4a, W11 chip, W7 ServiceAccounts) With RBAC on, each account a namespace pod runs as is drawn once, linked from its top visible workload, then to every binding that names it directly, then to that binding's role; group-only grants appear only as the `+{n} via groups` caption.
+- [x] 14. (4a, W11 pin 2, W7 ClusterRoleBindings) The three access checks (missing ServiceAccount Bad, binding to a missing Role Warn, account with cluster-admin Warn, also through a group, by `roles_held`) appear in the checks chip with the texts of rbac-layer.md; ClusterRole refs are never checked.
+- [x] 15. (4a, W11 pin 3) The access row reads account → binding → role left to right under each band; with `previous`, adding a pod moves no RBAC card; `topology_budget` still passes with RBAC rows added; only ClusterRoleBindings naming the namespace's accounts count toward `RAW_LIMIT`.
+- [x] 16. (4b, W11 toolbar) RBAC is a working chip, off by default; turning it on raises the watch count by exactly the started RBAC feeds (≤ 4; a denied list is Off and draws `not checked`), off lowers it back; `open_count()` ≤ 14.
+- [x] 17. (4b) A click on an account, binding, or Role opens the drawer over the graph, and row keys act on it; a ClusterRole click reveals it on the ClusterRoles screen. Read-only: no new request kind; colors from tokens (`cyan_light`), legend and export show `access`. Checked by unit tests (`card_click`, the feed rows through `row_of`); the click was not driven on UAT.
+- [x] 18. (4b) Screenshot `topology-rbac` (light, dark) has no high-severity defect against W11.
 
 ## Open items
 
@@ -72,4 +73,4 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 3. Edges that span columns can cross nodes. Add dummy-node routing only if graphs prove unreadable.
 4. Positions are memory-only until the 0024 settings store exists.
 5. `row_of` covers the drawer, menu, and YAML sites only (decision 26). Over Topology, the Monitor tab and related lists (Deployment revisions) of a kind drawer show their empty text.
-6. RBAC layer: bindings to User and Group subjects, ClusterRole contents, and SA token Secrets are not drawn (rbac-layer.md "Not in this layer").
+6. RBAC layer: bindings to User and Group subjects, ClusterRole contents, and SA token Secrets are not drawn (rbac-layer.md "Not in this layer"). Built: [as-built-rbac.md](as-built-rbac.md).

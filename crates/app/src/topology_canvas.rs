@@ -104,6 +104,10 @@ pub(crate) fn relation_stroke(relation: Relation) -> Stroke {
             width: 1.5,
             dash: Some((4., 3.)),
         },
+        Relation::Access => Stroke {
+            width: 1.5,
+            dash: Some((2., 3.)),
+        },
     }
 }
 
@@ -728,10 +732,11 @@ fn register_minimap_handlers(
 }
 
 /// The relations of the legend, and what each stroke means.
-pub(crate) const LEGEND: [(Relation, &str); 3] = [
+pub(crate) const LEGEND: [(Relation, &str); 4] = [
     (Relation::Owns, "owns"),
     (Relation::RoutesTo, "routes to"),
     (Relation::Mounts, "mounts"),
+    (Relation::Access, "access"),
 ];
 
 #[cfg(test)]

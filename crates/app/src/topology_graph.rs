@@ -4,17 +4,21 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use cluster::{
-    ContainerKind, ControllerRef, EnvFromSource, EnvSource, NodeSummary, PodSummary, Selector,
-    ServiceSummary, VolumeSource,
+    ContainerKind, ControllerRef, EnvFromSource, EnvSource, NodeSummary, PodSummary, RoleKind,
+    Selector, ServiceAccountSummary, ServiceSummary, VolumeSource,
 };
 use gpui_kit::SharedString;
 use jiff::Timestamp;
 
+use crate::access_bindings::{BindingIndex, BoundRole, pod_account};
 use crate::kind_join::ServiceHealth;
 use crate::kind_row::{KindObject, KindRow};
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusTone, pod_status_label};
 use crate::table_selection::ResourceKey;
+use crate::topology_access::{
+    AccessBindings, binding_node, cluster_admin_grant, names_namespace_account,
+};
 use crate::topology_checks::{ConfigCheck, GraphParts, claim_problem, graph_checks};
 use crate::topology_layout::Placement;
 
@@ -44,6 +48,11 @@ pub(crate) enum TopologyKind {
     ConfigMap,
     Secret,
     PersistentVolumeClaim,
+    ServiceAccount,
+    RoleBinding,
+    ClusterRoleBinding,
+    Role,
+    ClusterRole,
 }
 
 impl TopologyKind {
@@ -56,6 +65,11 @@ impl TopologyKind {
             Self::ReplicaSet => Placement::Column(2),
             Self::Pod => Placement::Column(3),
             Self::ConfigMap | Self::Secret | Self::PersistentVolumeClaim => Placement::ConfigRow,
+            Self::ServiceAccount
+            | Self::RoleBinding
+            | Self::ClusterRoleBinding
+            | Self::Role
+            | Self::ClusterRole => Placement::AccessRow,
         }
     }
 
@@ -90,6 +104,11 @@ impl TopologyKind {
             | Self::ReplicaSet
             | Self::Pod => KindFilter::Workload,
             Self::ConfigMap | Self::Secret | Self::PersistentVolumeClaim => KindFilter::Config,
+            Self::ServiceAccount
+            | Self::RoleBinding
+            | Self::ClusterRoleBinding
+            | Self::Role
+            | Self::ClusterRole => KindFilter::Rbac,
         }
     }
 
@@ -107,10 +126,16 @@ impl TopologyKind {
             Self::ConfigMap => ResourceKind::ConfigMaps,
             Self::Secret => ResourceKind::Secrets,
             Self::PersistentVolumeClaim => ResourceKind::PersistentVolumeClaims,
+            Self::ServiceAccount => ResourceKind::ServiceAccounts,
+            Self::RoleBinding => ResourceKind::RoleBindings,
+            Self::ClusterRoleBinding => ResourceKind::ClusterRoleBindings,
+            Self::Role => ResourceKind::Roles,
+            Self::ClusterRole => ResourceKind::ClusterRoles,
         })
     }
 
-    /// The topology kind of an explorer kind that feeds the graph.
+    /// The topology kind of an explorer kind that feeds the graph. ClusterRoles have no feed
+    /// (decision 45), so they are not here.
     pub(crate) fn of_resource_kind(kind: ResourceKind) -> Option<Self> {
         [
             Self::Ingress,
@@ -123,6 +148,10 @@ impl TopologyKind {
             Self::ConfigMap,
             Self::Secret,
             Self::PersistentVolumeClaim,
+            Self::ServiceAccount,
+            Self::RoleBinding,
+            Self::ClusterRoleBinding,
+            Self::Role,
         ]
         .into_iter()
         .find(|candidate| candidate.resource_kind() == Some(kind))
@@ -143,6 +172,15 @@ impl TopologyKind {
     fn is_config(self) -> bool {
         self.placement() == Placement::ConfigRow
     }
+
+    pub(crate) fn is_access(self) -> bool {
+        self.placement() == Placement::AccessRow
+    }
+
+    /// Whether the kind's nodes appear only when something refers to them (decisions 8 and 43).
+    fn appears_on_reference(self) -> bool {
+        self.is_config() || self.is_access()
+    }
 }
 
 /// The kind chips of the toolbar: each shows or hides a group of node kinds.
@@ -152,10 +190,21 @@ pub(crate) enum KindFilter {
     Service,
     Workload,
     Config,
+    Rbac,
 }
 
 impl KindFilter {
-    pub(crate) const ALL: [Self; 4] = [Self::Ingress, Self::Service, Self::Workload, Self::Config];
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Ingress,
+        Self::Service,
+        Self::Workload,
+        Self::Config,
+        Self::Rbac,
+    ];
+    /// The chips that are on when Topology opens. RBAC costs four more watches, so it is asked for
+    /// (decision 42).
+    pub(crate) const DEFAULT: [Self; 4] =
+        [Self::Ingress, Self::Service, Self::Workload, Self::Config];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -163,6 +212,14 @@ impl KindFilter {
             Self::Service => "Service",
             Self::Workload => "Workload",
             Self::Config => "Config",
+            Self::Rbac => "RBAC",
+        }
+    }
+
+    pub(crate) fn tooltip(self) -> String {
+        match self {
+            Self::Rbac => "Show service accounts, bindings, and roles".to_owned(),
+            other => format!("Show {} nodes", other.label()),
         }
     }
 }
@@ -230,6 +287,8 @@ pub(crate) enum Relation {
     Owns,
     RoutesTo,
     Mounts,
+    /// Workload to ServiceAccount, ServiceAccount to binding, binding to role.
+    Access,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -307,10 +366,10 @@ pub(crate) struct TopologyFilter {
 }
 
 impl TopologyFilter {
-    /// Every kind chip on, nothing filtered, the group chosen automatically.
-    pub(crate) fn everything() -> Self {
+    /// The default chips on, nothing filtered, the group chosen automatically.
+    pub(crate) fn initial() -> Self {
         Self {
-            kinds: KindFilter::ALL.into_iter().collect(),
+            kinds: KindFilter::DEFAULT.into_iter().collect(),
             problems_only: false,
             group_by: None,
         }
@@ -379,8 +438,8 @@ pub(crate) fn build_topology(inputs: &TopologyInputs) -> TopologyBuild {
     let listed: usize = inputs
         .rows
         .iter()
-        .map(|(_, feed)| match feed {
-            FeedRows::Ready(rows) => rows.len(),
+        .map(|(kind, feed)| match feed {
+            FeedRows::Ready(rows) => counted_rows(*kind, rows, inputs.namespace),
             FeedRows::Loading | FeedRows::Failed | FeedRows::Off => 0,
         })
         .sum();
@@ -388,8 +447,16 @@ pub(crate) fn build_topology(inputs: &TopologyInputs) -> TopologyBuild {
     if raw > RAW_LIMIT {
         return TopologyBuild::TooLarge(TooLarge::Objects(raw));
     }
+    let is_rbac = inputs.filter.kinds.contains(&KindFilter::Rbac);
+    // Only the bindings of the layer are copied, and only while its chip is on.
+    let bindings = if is_rbac {
+        AccessBindings::collect(all_rows(inputs), inputs.namespace)
+    } else {
+        AccessBindings::default()
+    };
+    let access = BindingIndex::build(&bindings.lists());
     let mut parts = GraphParts::new(inputs, &namespace_pods);
-    let builder = Builder::new(inputs, &namespace_pods);
+    let builder = Builder::new(inputs, &namespace_pods, &access, is_rbac);
     builder.add_rows(&mut parts);
     builder.add_pods(&mut parts);
     builder.add_owner_edges(&mut parts);
@@ -397,10 +464,26 @@ pub(crate) fn build_topology(inputs: &TopologyInputs) -> TopologyBuild {
     builder.add_ingress_edges(&mut parts);
     builder.add_scale_targets(&mut parts);
     builder.add_config_refs(&mut parts);
+    builder.add_access_edges(&mut parts);
     builder.add_unbound_claims(&mut parts);
     let checks = graph_checks(&parts, inputs);
     parts.raise_tones(&checks);
     finish(parts, checks, inputs)
+}
+
+/// How many rows of a feed count toward `RAW_LIMIT`. The ClusterRoleBindings list is cluster wide,
+/// so only the bindings that name an account of the namespace count (decision 50); the whole list
+/// stays in the feed's memory.
+fn counted_rows(kind: TopologyKind, rows: &[KindRow], namespace: &str) -> usize {
+    if kind != TopologyKind::ClusterRoleBinding {
+        return rows.len();
+    }
+    rows.iter()
+        .filter(|row| {
+            matches!(&row.object, KindObject::Binding(binding)
+                if names_namespace_account(binding, namespace))
+        })
+        .count()
 }
 
 /// Whether a feed can answer "is it listed".
@@ -421,10 +504,19 @@ struct Builder<'a> {
     collapsed: HashSet<(TopologyKind, &'a str)>,
     /// The first ingress path that routes to each Service.
     ingress_paths: HashMap<&'a str, &'a str>,
+    /// The roles each account holds, from the bindings the RBAC layer reads.
+    access: &'a BindingIndex<'a>,
+    /// Whether the RBAC chip is on: without it no account, binding, or role is drawn.
+    is_rbac: bool,
 }
 
 impl<'a> Builder<'a> {
-    fn new(inputs: &'a TopologyInputs<'a>, pods: &'a [&'a PodSummary]) -> Self {
+    fn new(
+        inputs: &'a TopologyInputs<'a>,
+        pods: &'a [&'a PodSummary],
+        access: &'a BindingIndex<'a>,
+        is_rbac: bool,
+    ) -> Self {
         let mut replica_set_owners = HashMap::new();
         let mut ingress_paths: HashMap<&str, &str> = HashMap::new();
         for (_, row) in all_rows(inputs) {
@@ -469,6 +561,8 @@ impl<'a> Builder<'a> {
             replica_set_owners,
             collapsed,
             ingress_paths,
+            access,
+            is_rbac,
         }
     }
 
@@ -486,11 +580,11 @@ impl<'a> Builder<'a> {
         NodeId::object(TopologyKind::Pod, &pod.name)
     }
 
-    /// The nodes of every listed row except the lazy kinds: the config kinds, which appear only
-    /// when something refers to them, and inactive ReplicaSets (decision 7).
+    /// The nodes of every listed row except the lazy kinds: the config and access kinds, which
+    /// appear only when something refers to them, and inactive ReplicaSets (decision 7).
     fn add_rows(&self, parts: &mut GraphParts) {
         for (kind, row) in all_rows(self.inputs) {
-            if kind.is_config() {
+            if kind.appears_on_reference() {
                 continue;
             }
             if let KindObject::ReplicaSet(set) = &row.object
@@ -537,6 +631,20 @@ impl<'a> Builder<'a> {
             KindObject::PersistentVolumeClaim(claim) => (claim.phase.clone(), &claim.labels),
             KindObject::ConfigMap(map) => (String::new(), &map.labels),
             KindObject::Secret(secret) => (secret.secret_type.clone(), &secret.labels),
+            KindObject::ServiceAccount(account) => (self.account_extra(account), &account.labels),
+            KindObject::Binding(binding) => (String::new(), &binding.labels),
+            KindObject::Role(role) => (
+                format!(
+                    "{} {}",
+                    role.rules.len(),
+                    if role.rules.len() == 1 {
+                        "rule"
+                    } else {
+                        "rules"
+                    }
+                ),
+                &role.labels,
+            ),
             _ => return None,
         };
         Some(TopologyNode {
@@ -546,7 +654,13 @@ impl<'a> Builder<'a> {
             name: row.name.clone().into(),
             caption: caption(kind, &extra).into(),
             tone: problem_tone(row.status.tone),
-            group: app_label(labels),
+            // An access node joins the band of the workload that leads to it (spread_groups), so the
+            // access row stays under its app; its own labels name the operator that made it.
+            group: if kind.is_access() {
+                None
+            } else {
+                app_label(labels)
+            },
             objects: 1,
             key: ResourceKey::of_object(kind.object_kind(), Some(self.inputs.namespace), &row.name),
         })
@@ -785,7 +899,10 @@ impl<'a> Builder<'a> {
     fn add_config_refs(&self, parts: &mut GraphParts) {
         let mut refs: BTreeMap<NodeId, BTreeSet<(TopologyKind, &'a str)>> = BTreeMap::new();
         for pod in self.pods {
-            let pod_refs = pod_refs(pod);
+            let mut pod_refs = pod_refs(pod);
+            if self.is_rbac {
+                pod_refs.insert((TopologyKind::ServiceAccount, pod_account(pod)));
+            }
             if pod_refs.is_empty() {
                 continue;
             }
@@ -794,10 +911,104 @@ impl<'a> Builder<'a> {
         }
         for (source, targets) in refs {
             for (kind, name) in targets {
+                let relation = if kind == TopologyKind::ServiceAccount {
+                    Relation::Access
+                } else {
+                    Relation::Mounts
+                };
                 if let Some(to) = self.target(parts, kind, name) {
-                    parts.edges.insert((source.clone(), to, Relation::Mounts));
+                    parts.edges.insert((source.clone(), to, relation));
                 }
             }
+        }
+    }
+
+    /// The caption words after `ServiceAccount`: the groups that reach it (not drawn, decision 44)
+    /// and a token that is not mounted.
+    fn account_extra(&self, account: &ServiceAccountSummary) -> String {
+        let mut extra = Vec::new();
+        let via_groups = self
+            .access
+            .bound_roles(&account.namespace, &account.name)
+            .iter()
+            .filter(|bound| bound.group.is_some())
+            .count();
+        if via_groups > 0 {
+            extra.push(format!("+{via_groups} via groups"));
+        }
+        if account.automount_token == Some(false) {
+            extra.push("token off".to_owned());
+        }
+        extra.join(" \u{b7} ")
+    }
+
+    /// Each drawn account to the bindings that name it directly, and each binding to its role. A
+    /// group binding is not drawn (decision 44), but a cluster-admin grant through one is checked.
+    fn add_access_edges(&self, parts: &mut GraphParts) {
+        let accounts: Vec<NodeId> = parts
+            .nodes
+            .values()
+            .filter(|node| node.kind == TopologyKind::ServiceAccount)
+            .map(|node| node.id.clone())
+            .collect();
+        for account in accounts {
+            let (NodeId::Object { name, .. } | NodeId::Missing { name, .. }) = &account else {
+                continue;
+            };
+            for bound in self.access.bound_roles(self.inputs.namespace, name) {
+                if bound.group.is_some() {
+                    continue;
+                }
+                let Some(binding) = binding_node(&bound.binding).and_then(|id| match id {
+                    NodeId::Object { kind, name } => self.ensure_node(parts, kind, &name),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+                parts
+                    .edges
+                    .insert((account.clone(), binding.clone(), Relation::Access));
+                if let Some(role) = self.role_node(parts, bound) {
+                    parts.edges.insert((binding, role, Relation::Access));
+                }
+            }
+            if let Some(grant) =
+                cluster_admin_grant(self.access, self.inputs.namespace, &account, name)
+            {
+                parts.grants.push(grant);
+            }
+        }
+    }
+
+    /// The node of the role a binding grants: a Role as `target` finds it, a ClusterRole as a
+    /// plain node (it has no feed, decision 45). `None` for a kind the API rejects.
+    fn role_node(&self, parts: &mut GraphParts, bound: &BoundRole) -> Option<NodeId> {
+        match &bound.role.kind {
+            RoleKind::Role => self.target(parts, TopologyKind::Role, &bound.role.name),
+            RoleKind::ClusterRole => {
+                let name = &bound.role.name;
+                let id = NodeId::object(TopologyKind::ClusterRole, name);
+                parts
+                    .nodes
+                    .entry(id.clone())
+                    .or_insert_with(|| TopologyNode {
+                        id: id.clone(),
+                        kind: TopologyKind::ClusterRole,
+                        look: NodeLook::Plain,
+                        name: name.clone().into(),
+                        caption: caption(TopologyKind::ClusterRole, "").into(),
+                        tone: None,
+                        group: None,
+                        objects: 1,
+                        key: ResourceKey::of_object(
+                            TopologyKind::ClusterRole.object_kind(),
+                            None,
+                            name,
+                        ),
+                    });
+                Some(id)
+            }
+            RoleKind::Other(_) => None,
         }
     }
 
@@ -899,7 +1110,7 @@ impl<'a> Builder<'a> {
         if parts.nodes.contains_key(&id) {
             return Some(id);
         }
-        if !kind.is_config() {
+        if !kind.appears_on_reference() {
             return None;
         }
         let row = parts.row(kind, name)?;
@@ -1067,7 +1278,7 @@ fn finish(parts: GraphParts, checks: Vec<ConfigCheck>, inputs: &TopologyInputs) 
             // one it has no place. A config object may stay when it has a check of its own.
             let is_stand_in = node.look != NodeLook::Plain;
             let has_check = checks.iter().any(|check| check.node == **id);
-            is_stand_in || (node.kind.is_config() && !has_check)
+            is_stand_in || (node.kind.appears_on_reference() && !has_check)
         })
         .cloned()
         .collect();

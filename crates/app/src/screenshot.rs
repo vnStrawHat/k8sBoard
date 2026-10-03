@@ -1076,6 +1076,21 @@ mod tests {
     }
 
     #[test]
+    fn topology_rbac_waits_for_rbac_feeds() {
+        // The RBAC chip starts its feeds with the others, and a feed that runs and has not loaded
+        // keeps the capture waiting; a denied one is Off and does not.
+        let pending = SettleInput {
+            is_topology_pending: true,
+            ..input(TargetState::Loaded, true)
+        };
+        assert!(!is_screen_settled(LaunchScreen::TopologyRbac, &pending));
+        assert!(is_screen_settled(
+            LaunchScreen::TopologyRbac,
+            &input(TargetState::Loaded, true)
+        ));
+    }
+
+    #[test]
     fn topology_waits_for_feeds_and_build() {
         let pending = SettleInput {
             is_topology_pending: true,
