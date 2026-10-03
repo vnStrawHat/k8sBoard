@@ -99,7 +99,7 @@ impl LaunchScreen {
             Self::Custom { .. } => Screen::Kind(ResourceKind::Crds),
             Self::Nodes | Self::NodeDrawer(_) | Self::NodesSelected => Screen::Nodes,
             Self::Issues | Self::IssuesDrawer => Screen::Issues,
-            Self::Settings(..) => Screen::Pods,
+            Self::Settings(..) => Screen::Overview,
             Self::Kind(kind) | Self::KindDrawer(kind, _) => Screen::Kind(kind),
             Self::WhoCan => Screen::Kind(ResourceKind::ClusterRoles),
             Self::TestTraffic => Screen::Kind(ResourceKind::NetworkPolicies),

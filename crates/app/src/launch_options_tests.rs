@@ -549,7 +549,7 @@ fn screen_settings_parses() {
         Some((SettingsPage::Clusters, SettingsSize::Standard))
     );
     // The main window behind it is the default one.
-    assert_eq!(screen.screen(), Screen::Pods);
+    assert_eq!(screen.screen(), Screen::Overview);
     assert!(!screen.has_drawer());
 }
 
