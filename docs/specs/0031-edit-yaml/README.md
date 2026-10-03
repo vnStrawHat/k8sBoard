@@ -94,5 +94,5 @@ The spec predates the code; its names map as follows.
 2. 0030 open item 5 applies to the lazy checks too: with scope All, namespace-only `update` rights show as denied.
 3. Deferred W10 parts (non-goals) need their own spec. Snapshots of Secrets and ConfigMaps need a C1 decision first.
 4. Closed: C8, decision 1 (replace vs SSA), user, 2026-10-02.
-5. Closed (architect default, 2026-10-03; the user may override): E is offered only on editable kinds (decision 25), elsewhere it does nothing (`NotOffered`). Every editable kind's menu gets `Edit YAML` (E hint); the ConfigMaps `Edit` `KindAction` becomes that item.
+5. Closed (architect default, 2026-10-03; the user may override): E is offered only on editable kinds (decision 25), elsewhere it does nothing (`NotOffered`). Every editable kind's menu gets `Edit YAML` (E hint); the ConfigMaps `Edit` `KindAction` becomes that item. **Amended by [0047 decision 9](../0047-config-secret-values/decisions.md) (coordinator decision 2026-10-03):** on ConfigMaps and Secrets E opens Edit values; Edit YAML stays in their menu without a key.
 6. (user) RBAC names such as `system:aggregate-to-admin` are not DNS-1123 subdomains, so the merged `WriteRequest::new` refuses them. Default: the RBAC kinds accept a path-segment name (decision 27); the alternative is to leave such objects uneditable.
