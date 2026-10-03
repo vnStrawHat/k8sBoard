@@ -1,6 +1,6 @@
 # 0045 — Multi-cluster Overview, Issues, and Topology
 
-Status: draft, 2026-10-03, against main `a50264c`. **Read-only: no new mutating calls** and no new request kind; every slot already lists, watches, and runs its issue board. Crate: `crates/app` only. Closes 0027 open items 4–6 and the "Screens that land later" contract ([0027 aggregated-views.md](../0027-multi-cluster/aggregated-views.md)). Audit gap 1. Prerequisites: 0020, 0021, 0022, 0027 (all merged). Wireframes: W1 note 6 (Cluster column in every table), W1 pin 3 (per-cluster health), W3 pins 1–4, W11 (single graph), the title-bar `⚑ N` flag.
+Status: **Dropped (user decision 2026-10-03: single cluster only)**; multi-cluster mode is removed by [0046](../0046-single-cluster/README.md). Kept for the record; do not implement. Was: draft, 2026-10-03, against main `a50264c`. **Read-only: no new mutating calls** and no new request kind; every slot already lists, watches, and runs its issue board. Crate: `crates/app` only. Closes 0027 open items 4–6 and the "Screens that land later" contract ([0027 aggregated-views.md](../0027-multi-cluster/aggregated-views.md)). Audit gap 1. Prerequisites: 0020, 0021, 0022, 0027 (all merged). Wireframes: W1 note 6 (Cluster column in every table), W1 pin 3 (per-cluster health), W3 pins 1–4, W11 (single graph), the title-bar `⚑ N` flag.
 
 ## Goal
 

@@ -7,9 +7,9 @@
 | ID | Item | Status | Covered by | Gap → spec |
 |---|---|---|---|---|
 | T1 | Custom GPUI title bar, logo, window controls | Done | 0003 `title_bar.rs` | — |
-| T2 | Cluster switcher (every context of every loaded kubeconfig, env badge) | Done | 0003, 0024, 0026 (popover with filter, env groups, health, Retry, Ctrl Shift C, Ctrl 1–9); several live clusters 0027 | — |
-| T3 | Multi-select clusters, "View N clusters", `prod-eu-1 +1` label | Done | 0027 `cluster_switcher.rs` (ticks, Space, footer, Enter), `cluster_view.rs`, `title_bar.rs` | — |
-| T4 | Environment badge and env-colored top border (riskiest env) | Done | 0024 `environment.rs`, `title_bar.rs`; riskiest of several clusters 0027 | — |
+| T2 | Cluster switcher (every context of every loaded kubeconfig, env badge) | Done | 0003, 0024, 0026 (popover with filter, env groups, health, Retry, Ctrl Shift C, Ctrl 1–9); one cluster at a time (0046) | — |
+| T3 | Multi-select clusters, "View N clusters", `prod-eu-1 +1` label | Removed by user decision 2026-10-03 (single cluster only) | built in 0027; removal 0046 | — |
+| T4 | Environment badge and env-colored top border | Done | 0024 `environment.rs`, `title_bar.rs`; the riskiest-of-several rule (0027) goes with 0046 | — |
 | T5 | Namespace picker (wireframe shows several namespaces: `ns: payments, web`) | Done | 0003, 0009 (`NamespaceScope::Several`, `title_bar.rs` `ns: a, b`) | — |
 | T6 | Search box "Search resources or run a command… Ctrl K" | Done | 0029 (`title_bar.rs` middle slot; click opens the palette) | — |
 | T7 | Read-only lock badge | Done | 0030 `title_bar.rs` (per-session lock, dashed env border, Ctrl Shift R on the cursor cluster) | — |
@@ -40,7 +40,7 @@
 | H5 | List-level buttons (Scale, Trigger now, Reveal all, Hide inactive, Hide system, …) | Done (bulk ones in the selection bar; New missing, see the audit) | 0009, 0015, 0016, 0032, 0032b | read-only ones 0009/0015/0016; mutating 0032 (workload buttons Done) and 0032b (HPA Edit limits, PVC Expand, StorageClass Set default: Done) |
 | H6 | Row checkboxes, multi-select, floating selection bar | Done | 0009 `row_selection.rs`, `table_selection.rs` | selection 0009; workload bulk actions Done (0032); HPA, PVC, and StorageClass bulk actions Done (0032b); bulk `Delete…` Done (0033); nodes Done (0034) |
 | H7 | Virtualized table, themed status tones, muted namespace prefix | Done | 0003, 0005 | — |
-| H8 | Cluster column in multi-cluster mode | Done (Pods, Nodes, every kind screen) | 0027 `cluster_rows.rs`, `table_layout.rs` | Issues has none: it draws the primary cluster |
+| H8 | Cluster column in multi-cluster mode | Removed by user decision 2026-10-03 (single cluster only) | built in 0027; removal 0046 | the Port Forwarding page keeps its Cluster column (forwards survive a switch, 0035) |
 | H9 | Row density 28 / 36 px | Missing | — | 0025 did not ship it; audit 0043 (Appearance) |
 
 ## Drawer frame
@@ -85,7 +85,7 @@
 | S3 | Add cluster: import file, watch folder, paste YAML | Partial (no watch folder) | 0025 |
 | S4 | Add cluster: scan AWS EKS, GKE, AKS | Missing | backlog |
 | S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Partial (Clusters, Appearance, About; Keyboard Shortcuts done in 0028; Safety tier table and audit path in 0030 step 2a/3, the per-cluster Allow node shell toggle in 0037; About lists `oneterm-vt` in 0036) | 0025, 0028, 0030; the rest: Terminal & Shell (moved out of 0036), 0019, backlog |
-| M1 | Multi-cluster aggregated tables | Partial (Pods, Nodes, every kind screen) | 0027; Overview, Issues, Topology draw the primary cluster only until 0020–0022 follow "Screens that land later" |
+| M1 | Multi-cluster aggregated tables | Removed by user decision 2026-10-03 (single cluster only) | 0027 built, 0046 removes; 0045 dropped |
 | G1 | Env tiers: prod typed name; staging, dev, local a confirm dialog with a click (user 2026-10-02; W10 text superseded) | Done | 0030 `write_guard.rs`, `confirm_dialog.rs` |
 | G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Done (0030: PROD opens read-only, lock toggle, server dry-run before every write, audit log; 0031: the diff of Edit YAML) | 0030, 0031 |
 | G3 | Tokens: status tones OK/WARN/BAD/INFO/DONE | Done | 0003 `status_tone.rs` |

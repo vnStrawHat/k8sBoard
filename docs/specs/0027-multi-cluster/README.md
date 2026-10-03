@@ -1,6 +1,6 @@
 # 0027 — Multi-cluster views (W1)
 
-Status: implemented (steps 1-4). Amended after the advisor review (M1–M3, S1–S10, N1–N6), HEAD `d5ccbd0`. Crate: `crates/app` only. Read-only: each viewed cluster runs the same list/watch/metrics calls a single session runs today; no new request kind. Prerequisites: 0024, 0025 steps 1–3, 0026 (all steps), 0009. Applies C4, C11, C13. Wireframe: W1 (pins 1, 2, 4, 6; notes 1–6), the "multi-cluster on the title bar" principle (no cluster rail).
+Status: **multi-view parts superseded (user decision 2026-10-03: single cluster only)**: ticks, several sessions, merged rows and the Cluster column, `+N`, per-slot banners and locks, `--view`, `pods-multi` are removed by [0046](../0046-single-cluster/README.md); open items 1–7 and the [0045](../0045-multi-cluster-screens/README.md) follow-up are void. Still current: `ClusterObject`, `RowContext`, `guard_for(&ClusterRef)` (0046 [write-safety.md](../0046-single-cluster/write-safety.md)). Was: implemented (steps 1-4). Amended after the advisor review (M1–M3, S1–S10, N1–N6), HEAD `d5ccbd0`. Crate: `crates/app` only. Read-only: each viewed cluster runs the same list/watch/metrics calls a single session runs today; no new request kind. Prerequisites: 0024, 0025 steps 1–3, 0026 (all steps), 0009. Applies C4, C11, C13. Wireframe: W1 (pins 1, 2, 4, 6; notes 1–6), the "multi-cluster on the title bar" principle (no cluster rail).
 
 User decision (wireframe intro and W1): single or multi cluster is chosen **only** through the title-bar dropdown; there is no cluster rail.
 

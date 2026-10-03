@@ -8,7 +8,7 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 
 | Wireframe | Element | Status | Evidence | Size |
 |---|---|---|---|---|
-| W1 n6, W3, W11 | Overview, Issues (with `⚑ N`, sidebar count, Cluster column), Topology over several viewed clusters | partial: primary cluster only | `workspace.rs:916`, `issue_table.rs:59`; 0027 open items 4–6 | L |
+| W1 n6, W3, W11 | Overview, Issues (with `⚑ N`, sidebar count, Cluster column), Topology over several viewed clusters | dropped (user decision 2026-10-03: single cluster only) | 0045 dropped; multi-cluster mode removed by 0046 | — |
 | W2 nav | Pages General, Terminal & Shell, Logs | missing | `settings_window.rs` `SettingsPage` has 5 pages; owners in 0025 `other-pages.md` (0019, 0036) never added them | M |
 | W2 n3 | Drag to reorder clusters (drives Ctrl 1–9), ⌕ Search | missing | `clusters_page.rs` | M |
 | W2 form | Color swatches, Proxy | missing | `clusters_page.rs`, `cluster_registry.rs` (no color field) | M |
@@ -80,7 +80,7 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | 0 | housekeeping | tick 0001–0013 ACs, run the 18 ui-verifier and 6 coder-lite checks | no spec | read-only | S |
 | 1 | 0039 Drawer and menu completions | Deployment revision diff, CronJob last-job logs, Logs ▸ submenu, container ⋯ menu (no Attach), LimitRange row, Show remaining / Show selected items, ConfigMap restart hint, drop the stale Quotas `Edit` | new | read-only | M |
 | 2 | 0040 Pod lifecycle | Evict (0034 `EvictPod`), Restart pod (controller-owned only, 0033 delete), Attach (A, `create pods/attach` in `pod_shell.rs`), drain Skip PDBs, bulk node labels | new, after 0034 merges | mutating | M |
-| 3 | 0027 step 5 | merged Issues (Cluster column, per-cluster counts), Overview cluster choice, Topology slot dropdown (decision 21) | amend 0027 ("Screens that land later") | read-only | L |
+| 3 | 0046 One cluster at a time | remove multi-cluster mode (0027 multi view); 0045 dropped (user decision 2026-10-03) | new | local, no new request | M |
 | 4 | 0041 Edit YAML II | Revision history, snapshot and rollback, ConfigMap Compare with previous, quota check, managedFields toggle, Format, Overview timeline diff and "who" | new; C1 decision on snapshots first | mutating + local files | L |
 | 5 | 0042 Create from templates | New for the 5 kinds; a `Create` `WriteOperation` | new | mutating | M |
 | 6 | 0043 Settings completions | General, Logs, Terminal & Shell pages (content needs the user), density, drag order, Search, color, Proxy, watch folder (C6 dependency) | new | local | L |
