@@ -241,3 +241,54 @@ fn the_log_is_audit_jsonl_in_the_settings_folder() {
     let dir = PathBuf::from("settings-folder");
     assert_eq!(audit_path(&dir), dir.join("audit.jsonl"));
 }
+
+#[test]
+fn write_entry_uses_the_intent_cluster() {
+    use crate::app_shell::write_flow::WriteIntent;
+    use crate::cluster_registry::ClusterRef;
+    use crate::resource_actions::ResourceAction;
+    use crate::write_guard::ActionRisk;
+    use cluster::{ObjectKind, ObjectRef, WriteOperation, WriteRequest};
+
+    let target = ObjectRef::new(ObjectKind::Node, None, "wk-04".to_owned()).expect("a node");
+    let operation = WriteOperation::SetNodeSchedulable { schedulable: false };
+    let request = WriteRequest::new(target, operation).expect("a node fits");
+    let intent = WriteIntent {
+        cluster: ClusterRef {
+            kubeconfig: PathBuf::from("test.yaml"),
+            context: "stg-b".to_owned(),
+        },
+        cluster_name: "stg-b".into(),
+        action: ResourceAction::Cordon,
+        label: "Cordon node wk-04".into(),
+        button: "Cordon".into(),
+        request,
+        risk: ActionRisk::Change,
+        expected_name: None,
+        warnings: Vec::new(),
+    };
+    let access = AccessState::Unknown;
+    // The guard is the intent's cluster, whatever else is viewed.
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let entry = audit_entry(
+        &intent,
+        &guard,
+        AuditOutcome::Unknown,
+        Some("no answer".to_owned()),
+        Some("  maintenance\n"),
+    );
+    assert_eq!(entry.cluster, "stg-b");
+    assert_eq!(entry.context, "stg-b");
+    assert_eq!(entry.action, "Cordon");
+    assert_eq!(entry.outcome, AuditOutcome::Unknown);
+    assert_eq!(entry.error.as_deref(), Some("no answer"));
+    assert_eq!(entry.note.as_deref(), Some("maintenance"));
+    let object = entry.object.expect("an object");
+    assert_eq!(
+        (object.kind.as_str(), object.name.as_str()),
+        ("Node", "wk-04")
+    );
+    assert_eq!(object.namespace, None);
+    assert_eq!(entry.fields[0].path, "spec.unschedulable");
+    assert_eq!(entry.fields[0].value.as_deref(), Some("true"));
+}

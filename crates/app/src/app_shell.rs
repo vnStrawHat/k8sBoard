@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cluster::{
-    ContextSummary, EventFilter, HelmReleaseSummary, InvolvedObject, Kubeconfig, KubeconfigError,
-    NamespaceScope, NetworkPolicySummary, SecretSummary,
+    ClusterConnection, ContextSummary, EventFilter, HelmReleaseSummary, InvolvedObject, Kubeconfig,
+    KubeconfigError, NamespaceScope, NetworkPolicySummary, SecretSummary,
 };
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::resizable::ResizableState;
@@ -121,6 +121,10 @@ pub(crate) mod workspace;
 mod app_shell_view;
 #[path = "keyboard_navigation.rs"]
 mod keyboard_navigation;
+#[path = "write_flow.rs"]
+pub(crate) mod write_flow;
+#[path = "write_lock.rs"]
+mod write_lock;
 
 #[cfg(test)]
 #[path = "app_shell_tests.rs"]
@@ -133,6 +137,10 @@ mod app_shell_switch_tests;
 #[cfg(test)]
 #[path = "app_shell_multi_tests.rs"]
 mod app_shell_multi_tests;
+
+#[cfg(test)]
+#[path = "app_shell_write_tests.rs"]
+mod app_shell_write_tests;
 
 /// The logical column of the Events table that holds the reason.
 const EVENT_REASON_COLUMN: usize = 1;
@@ -283,6 +291,11 @@ pub(crate) struct AppShell {
     kind_cache: CustomKindCache,
     /// Why the last switch did nothing; shown by the title-bar warning button.
     switch_notice: Option<String>,
+    /// Why the last audit line could not be written; shown by the title-bar warning button.
+    write_notice: Option<String>,
+    /// The confirm dialog opened last, for the tests that drive it.
+    #[cfg(test)]
+    last_dialog: Option<gpui_kit::WeakEntity<crate::confirm_dialog::ConfirmDialog>>,
     /// The title-bar switcher popover.
     switcher: ClusterSwitcherState,
     _switcher_filter_events: Subscription,
@@ -481,6 +494,9 @@ impl AppShell {
             scope_memory: ScopeMemory::new(),
             kind_cache: CustomKindCache::default(),
             switch_notice: None,
+            write_notice: None,
+            #[cfg(test)]
+            last_dialog: None,
             switcher: ClusterSwitcherState::new(switcher_filter),
             _switcher_filter_events: switcher_filter_events,
             pending_switcher_launch: options.screen == LaunchScreen::Switcher,
@@ -1100,6 +1116,7 @@ impl AppShell {
     /// Clears the notice behind the title-bar warning button.
     pub(crate) fn dismiss_notices(&mut self, cx: &mut Context<Self>) {
         self.switch_notice = None;
+        self.write_notice = None;
         self.catalog
             .update(cx, |catalog, cx| catalog.clear_notices(cx));
         AppSettings::dismiss_notice(cx);
@@ -1113,6 +1130,7 @@ impl AppShell {
             .iter()
             .map(ToString::to_string)
             .chain(self.switch_notice.clone())
+            .chain(self.write_notice.clone())
             .collect()
     }
 
@@ -1152,6 +1170,12 @@ impl AppShell {
     /// goes through the cluster of its subject, never the primary.
     fn slot_live<'a>(&self, cluster: &ClusterRef, cx: &'a App) -> Option<&'a LiveCluster> {
         self.slot_session(cluster)?.read(cx).live()
+    }
+
+    /// The connection of the viewed cluster `cluster`: the one every action on a row or the cursor
+    /// of that cluster must use, never the primary's. `None` while its session is not live.
+    fn slot_connection(&self, cluster: &ClusterRef, cx: &App) -> Option<ClusterConnection> {
+        Some(self.slot_live(cluster, cx)?.connection().clone())
     }
 
     /// The live data that tells the namespace scope of the view: the primary cluster's, else the
@@ -1642,6 +1666,15 @@ impl AppShell {
                 self.open_traffic_test(&cluster, policy.as_ref(), true, window, cx);
             }
             LaunchScreen::Shortcuts => open_shortcut_sheet(window, cx),
+            #[cfg(feature = "screenshot")]
+            LaunchScreen::UnlockConfirm => self.begin_unlock(&cluster, window, cx),
+            #[cfg(feature = "screenshot")]
+            LaunchScreen::CordonConfirm => {
+                let is_open = self.open_cordon_fixture(&cluster, window, cx);
+                if !is_open {
+                    return;
+                }
+            }
             _ => {}
         }
         self.pending_dialog_launch = None;

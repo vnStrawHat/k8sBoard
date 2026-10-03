@@ -1,6 +1,11 @@
 //! Cluster access for k8sBoard: kubeconfig loading, context selection, and
 //! access to Kubernetes clusters. Every write goes through `object_write`.
 
+// The fake API server builds a connection whose write policy the caller picks, so it must never
+// reach a release build, where writes are allowed.
+#[cfg(all(feature = "test-support", not(debug_assertions)))]
+compile_error!("the `test-support` feature is for debug test builds only");
+
 mod access_review;
 mod autoscaler;
 mod cadvisor_text;
@@ -19,8 +24,9 @@ mod disruption_budget;
 mod dns_name;
 mod endpoint_slice;
 mod event;
-#[cfg(test)]
-mod fake_api;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod fake_api;
 mod helm_release;
 mod helm_release_detail;
 mod helm_values_diff;

@@ -57,7 +57,7 @@ Dock actions do nothing when the dock has no tabs. Letters are lowercase in bind
 | Ctrl K | `secondary-k` | `OpenPalette` | WINDOW | 0029 | bound (0029); left `RESERVED_KEYS` |
 | `:` | `:` | `OpenKindPalette` (palette opened with `:` typed) | WORKSPACE | 0029 | bound (0029); left `RESERVED_KEYS` |
 | Ctrl ⏎ (W9) | `secondary-enter` | palette secondary action | palette context only | 0032 | reserved; 0029 decision 18 moved the owner to 0032 |
-| Ctrl Shift R | `secondary-shift-r` | `ToggleReadOnly` | WINDOW | 0030 | |
+| Ctrl Shift R | `secondary-shift-r` | `ToggleReadOnly` | WINDOW | 0030 | bound in 0030 step 2b; it toggles the lock of the cursor cluster, else the primary |
 | Ctrl S (W10) | `secondary-s` | Apply | editor context only | 0031 | |
 
 Each owner also adds a row to `shortcut_rows()`, so `every_bound_action_is_on_the_sheet` keeps passing.

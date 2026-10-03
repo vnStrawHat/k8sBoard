@@ -18,7 +18,8 @@ use crate::keymap::{
     CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditYaml, LeaveInput, NextContainer,
     NextDockTab, OpenDrawer, OpenShell, PortForward, PreviousContainer, PreviousDockTab,
     RestartRollout, Scale, SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow,
-    SelectPreviousPage, SelectPreviousRow, ToggleDock, ToggleDockZoom, ViewLogs, ViewYaml,
+    SelectPreviousPage, SelectPreviousRow, ToggleDock, ToggleDockZoom, ToggleReadOnly, ViewLogs,
+    ViewYaml,
 };
 use crate::log_dock::{DockMode, TabStep};
 use crate::pod_drawer::{container_display_order, selected_container_index};
@@ -156,6 +157,9 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
         .on_action(
             cx.listener(|shell, _: &CopyName, window, cx| shell.copy_cursor_name(window, cx)),
         )
+        .on_action(cx.listener(|shell, _: &ToggleReadOnly, window, cx| {
+            shell.toggle_lock_of_target(window, cx);
+        }))
         .on_action(cx.listener(|shell, _: &ToggleDock, _, cx| {
             shell
                 .log_dock
@@ -426,9 +430,9 @@ impl AppShell {
         }
     }
 
-    /// What an available key does. Only L and Y are ever available in this version: every
-    /// mutating action stays disabled, so their arms are unreachable until the owning spec
-    /// wires them. The match is exhaustive so a new action cannot be forgotten.
+    /// What an available key does. Cordon is the only mutating action that has shipped: every other
+    /// mutating action stays disabled, so their arms are unreachable until the owning spec wires
+    /// them. The match is exhaustive so a new action cannot be forgotten.
     fn run_available_row_key(
         &mut self,
         action: ResourceAction,
@@ -445,8 +449,14 @@ impl AppShell {
             ResourceAction::OpenShell | ResourceAction::OpenNodeShell => {}
             // Unreachable while gated; the owning spec (0031–0036) wires it.
             ResourceAction::PortForward => {}
-            // Unreachable while gated; the owning spec (0031–0036) wires it.
-            ResourceAction::Cordon | ResourceAction::Drain => {}
+            // Always on the subject's own cluster, never the primary.
+            ResourceAction::Cordon => {
+                if let ResourceKey::Node { name } = &subject.key {
+                    self.start_cordon(&subject.cluster, name, None, window, cx);
+                }
+            }
+            // Unreachable while gated; the owning spec (0034) wires it.
+            ResourceAction::Drain => {}
             // Unreachable while gated; the owning spec (0031–0036) wires it.
             ResourceAction::EditYaml | ResourceAction::Delete => {}
             // Unreachable while gated; the owning spec (0031–0036) wires it.

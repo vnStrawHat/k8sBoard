@@ -85,7 +85,7 @@ impl AppShell { pub(crate) fn guard_for(&self, cluster: &ClusterRef, cx: &App) -
 - `write_flow` resolves the guard at the dry-run **and** again right before the commit. A ref no longer viewed, or a `generation` that changed (switch or reconnect in between) → `{cluster} is no longer open; nothing was changed`.
 - The audit line names that cluster. No guardrail API takes an implicit session.
 - Single mode (0030 alone): the only session is the row's cluster, so behavior is the same; 0027 only adds slots.
-- Title bar in multi mode: the badge reads `Read-only` while any viewed cluster is locked (tooltip lists them), else `Unlocked`; its click opens a menu with one checked item per viewed cluster (env badge + name) that toggles that cluster. Ctrl Shift R locks every viewed cluster when any is unlocked, else opens that menu (unlocking stays per cluster, through its own tier).
+- Title bar in multi mode: the badge reads `Read-only` only when every viewed cluster is locked; while any is open the open lock wins, as `Unlocked: stg-b` (one open cluster among several) or `2 of 3 unlocked` (decision 12, amended 2026-10-03: the state that can change something must not be hidden by a locked neighbour; the tooltip lists each cluster's state); its click opens a menu with one item per viewed cluster (env badge + name, ticked while read-only) that toggles that cluster. **Ctrl Shift R toggles the lock of one cluster: the cluster of the cursor row (which is the cluster of the open drawer), else the primary when there is no cursor** (as built; it replaces "lock every viewed cluster", so a key press never unlocks or locks a cluster the user is not looking at). Locking is immediate; unlocking asks that cluster's own tier.
 
 ## Badge and key
 

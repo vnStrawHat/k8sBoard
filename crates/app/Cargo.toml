@@ -37,6 +37,8 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Data
 [dev-dependencies]
 # Headless windows for the key binding tests; `screenshot` already enables the same feature.
 gpui-kit = { workspace = true, features = ["test-support"] }
+# A fake API server, so the write-flow tests never reach a cluster.
+k8sboard-cluster = { path = "../cluster", features = ["test-support"] }
 
 [lints]
 workspace = true

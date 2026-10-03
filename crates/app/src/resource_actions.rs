@@ -8,6 +8,7 @@ use gpui_kit::{
 
 use crate::access_bindings::role_key;
 use crate::access_query::who_can_prefill;
+use crate::app_shell::write_flow::cordon_label;
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_rows::RowContext;
@@ -26,7 +27,7 @@ use crate::network_rows::ingress_urls;
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, ValueAccess};
 use crate::table_selection::{ClusterObject, ResourceKey};
-use crate::write_guard::{ClusterGuard, WriteLock};
+use crate::write_guard::{ActionRisk, ClusterGuard, WriteLock};
 use crate::yaml_view::object_ref;
 
 /// Why a mutating action is off while its spec has not shipped.
@@ -102,10 +103,10 @@ impl ResourceAction {
                 check: AccessCheck::CreatePodExec,
                 is_shipped: false,
             },
-            // Step 4 of spec 0030 ships Cordon.
+            // The first shipped mutating action (spec 0030).
             Self::Cordon => ActionGate::Mutating {
                 check: AccessCheck::PatchNodes,
-                is_shipped: false,
+                is_shipped: true,
             },
             Self::Drain | Self::EditYaml | Self::Delete | Self::RestartRollout | Self::Scale => {
                 ActionGate::Planned
@@ -129,6 +130,23 @@ impl ResourceAction {
             Self::RestartRollout => Box::new(RestartRollout),
             Self::Scale => Box::new(Scale),
         }
+    }
+}
+
+/// What an action can do to the cluster; the confirm dialog's button style follows it.
+pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
+    match action {
+        ResourceAction::Delete | ResourceAction::Drain => ActionRisk::Destructive,
+        ResourceAction::ViewLogs
+        | ResourceAction::OpenShell
+        | ResourceAction::PortForward
+        | ResourceAction::OpenNodeShell
+        | ResourceAction::Cordon
+        | ResourceAction::CopyName
+        | ResourceAction::ViewYaml
+        | ResourceAction::EditYaml
+        | ResourceAction::RestartRollout
+        | ResourceAction::Scale => ActionRisk::Change,
     }
 }
 
@@ -446,7 +464,7 @@ pub(crate) fn node_menu(
         ))
         .item(view_pods_on_node_item(node, live.pods.items(), row, shell))
         .separator()
-        .item(action_item(ResourceAction::Cordon, guard))
+        .item(cordon_item(node, guard, row, shell))
         .item(action_item(ResourceAction::Drain, guard))
         .separator()
         .item(copy_name_item(&node.name, access));
@@ -1286,6 +1304,30 @@ pub(crate) fn port_forward_reason(access: &AccessState) -> SharedString {
         ActionAvailability::Disabled { reason } => reason,
         ActionAvailability::Enabled => NOT_SHIPPED_REASON.into(),
     }
+}
+
+/// Cordon, or Uncordon on a cordoned node. It acts on the node of the row's own cluster, never on the
+/// cursor or the primary.
+fn cordon_item(
+    node: &NodeSummary,
+    guard: &ClusterGuard<'_>,
+    row: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let label = cordon_label(&node.status.scheduling);
+    match action_availability(ResourceAction::Cordon, guard) {
+        ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
+        ActionAvailability::Enabled => {
+            let (cluster, name, shell) = (row.cluster.clone(), node.name.clone(), shell.clone());
+            let scheduling = node.status.scheduling;
+            PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.start_cordon(&cluster, &name, Some(scheduling), window, cx);
+                });
+            })
+        }
+    }
+    .action(ResourceAction::Cordon.key_action())
 }
 
 /// Disabled items stay visible with their reason, so users learn what exists. The item shows the

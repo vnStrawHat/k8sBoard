@@ -46,6 +46,7 @@ gpui_kit::actions!(
         NextDockTab,
         PreviousDockTab,
         CloseDockTab,
+        ToggleReadOnly,
     ]
 );
 
@@ -63,6 +64,9 @@ const SETTINGS_WINDOW: &str = "SettingsWindow";
 /// The palette's query input. The palette is a dialog outside `AppShell`, so only its own keys
 /// apply there.
 const PALETTE_INPUT: &str = "Command > Input";
+/// The content of the confirm dialog, and the text field inside it.
+const WRITE_CONFIRM: &str = "WriteConfirm";
+const WRITE_CONFIRM_INPUT: &str = "WriteConfirm > Input";
 
 /// Registers every binding of the app except the switcher popover's own keys
 /// (`cluster_switcher::bind_keys`). It runs after `gpui_kit::init`, so at equal depth these win
@@ -78,6 +82,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-tab", PreviousDockTab, Some(WINDOW)),
         KeyBinding::new("secondary-w", CloseDockTab, Some(WINDOW)),
         KeyBinding::new("secondary-shift-c", OpenClusterSwitcher, Some(WINDOW)),
+        KeyBinding::new("secondary-shift-r", ToggleReadOnly, Some(WINDOW)),
         KeyBinding::new("secondary-1", SwitchToCluster1, Some(WINDOW)),
         KeyBinding::new("secondary-2", SwitchToCluster2, Some(WINDOW)),
         KeyBinding::new("secondary-3", SwitchToCluster3, Some(WINDOW)),
@@ -128,6 +133,12 @@ pub(crate) fn bind_keys(cx: &mut App) {
         // The palette: Tab previews the highlighted resource, which the kit would otherwise use to
         // move focus out of the query.
         KeyBinding::new("tab", PalettePreview, Some(PALETTE_INPUT)),
+    ]);
+    // The confirm dialog handles Enter itself (a held Enter must never confirm), so the kit's Enter
+    // bindings of the dialog and of its text field are switched off inside it.
+    cx.bind_keys([
+        KeyBinding::new("enter", gpui_kit::NoAction, Some(WRITE_CONFIRM)),
+        KeyBinding::new("enter", gpui_kit::NoAction, Some(WRITE_CONFIRM_INPUT)),
     ]);
     cx.bind_keys(
         FIELDS
@@ -191,6 +202,7 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         row(General, "Jump to a resource kind", OpenKindPalette),
         row(General, "Choose namespace", OpenNamespacePicker),
         row(General, "Open cluster switcher", OpenClusterSwitcher),
+        row(General, "Toggle read-only", ToggleReadOnly),
         row(General, "Switch to cluster 1–9", SwitchToCluster1),
         row(General, "Open Settings", OpenSettings),
         row(

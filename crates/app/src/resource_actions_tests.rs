@@ -229,14 +229,45 @@ fn gate_and_confirm_use_the_rows_cluster() {
 }
 
 #[test]
-fn cordon_is_gated_on_patch_nodes_and_not_shipped_yet() {
+fn cordon_is_gated_on_patch_nodes_and_is_the_first_shipped_action() {
     assert!(matches!(
         ResourceAction::Cordon.gate(),
         ActionGate::Mutating {
             check: AccessCheck::PatchNodes,
-            is_shipped: false
+            is_shipped: true
         }
     ));
+}
+
+#[test]
+fn cordon_follows_the_gate_order() {
+    let allowed = known_denying(&[]);
+    let denied = known_denying(&[AccessCheck::PatchNodes]);
+    let (checking, unknown) = (checking(), unknown());
+    let at = |access: &AccessState, lock| {
+        let guard = test_guard(access, lock, "dev-1", Environment::Development);
+        action_availability(ResourceAction::Cordon, &guard)
+    };
+    assert_eq!(
+        reason(at(&checking, WriteLock::Unlocked)),
+        "Checking permissions…"
+    );
+    assert_eq!(
+        reason(at(&unknown, WriteLock::Unlocked)),
+        "Permissions could not be checked"
+    );
+    assert_eq!(
+        reason(at(&denied, WriteLock::Locked)),
+        "Not permitted: patch nodes"
+    );
+    assert_eq!(
+        reason(at(&allowed, WriteLock::Locked)),
+        "dev-1 is read-only"
+    );
+    assert_eq!(
+        at(&allowed, WriteLock::Unlocked),
+        ActionAvailability::Enabled
+    );
 }
 
 #[test]
@@ -251,7 +282,6 @@ fn unshipped_mutating_actions_say_a_later_version() {
             ResourceAction::OpenShell,
             ResourceAction::PortForward,
             ResourceAction::OpenNodeShell,
-            ResourceAction::Cordon,
             ResourceAction::Drain,
             ResourceAction::EditYaml,
             ResourceAction::Delete,
@@ -1187,7 +1217,6 @@ fn key_availability_disables_unshipped_keys_with_the_later_version_reason() {
     let offered = [
         (ResourceAction::EditYaml, pod_key()),
         (ResourceAction::Delete, pod_key()),
-        (ResourceAction::Cordon, node_key()),
         (ResourceAction::Drain, node_key()),
         (
             ResourceAction::RestartRollout,

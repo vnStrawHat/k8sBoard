@@ -166,12 +166,8 @@ impl ClusterConnection {
     }
 
     /// A connection over a fake transport, so tests never reach a cluster.
-    #[cfg(test)]
-    pub(crate) fn from_client(
-        client: kube::Client,
-        context: &str,
-        write_policy: WritePolicy,
-    ) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_client(client: kube::Client, context: &str, write_policy: WritePolicy) -> Self {
         Self {
             client,
             context: context.to_owned(),

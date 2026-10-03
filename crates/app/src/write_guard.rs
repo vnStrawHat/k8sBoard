@@ -84,6 +84,9 @@ pub(crate) struct ClusterGuard<'a> {
     pub(crate) profile: ClusterProfile,
     /// Read by the audit lines (`lock_entry`).
     pub(crate) summary: ContextSummary,
+    /// The session's connection generation: it changes on a reconnect and on a new session, so a
+    /// step that began on one connection can tell it is gone.
+    pub(crate) generation: u64,
 }
 
 impl<'a> ClusterGuard<'a> {
@@ -92,6 +95,7 @@ impl<'a> ClusterGuard<'a> {
         lock: WriteLock,
         profile: ClusterProfile,
         summary: ContextSummary,
+        generation: u64,
     ) -> Self {
         Self {
             cluster: ClusterRef::of(&summary),
@@ -99,6 +103,7 @@ impl<'a> ClusterGuard<'a> {
             lock,
             profile,
             summary,
+            generation,
         }
     }
 
@@ -129,7 +134,7 @@ pub(crate) fn test_guard<'a>(
         namespace: None,
         source: std::path::PathBuf::from("test.yaml"),
     };
-    ClusterGuard::new(access, lock, profile, summary)
+    ClusterGuard::new(access, lock, profile, summary, 0)
 }
 
 #[cfg(test)]

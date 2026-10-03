@@ -26,10 +26,15 @@ pem.workspace = true
 zeroize.workspace = true
 flate2.workspace = true
 base64.workspace = true
+# Only for the `test-support` feature: the fake transport. Both are already in Cargo.lock.
+tower = { version = "0.5", default-features = false, features = ["util"], optional = true }
+http = { version = "1", optional = true }
 
 [features]
 # Set by the app's screenshot build: every connection refuses writes, whatever the environment says.
 block-writes = []
+# A fake API server for the tests of other crates. Never enabled by a build of the app itself.
+test-support = ["dep:tower", "dep:http"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

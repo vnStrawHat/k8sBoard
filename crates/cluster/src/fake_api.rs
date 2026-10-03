@@ -14,25 +14,25 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// One request the fake received.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RecordedRequest {
-    pub(crate) method: String,
-    pub(crate) path: String,
+pub struct RecordedRequest {
+    pub method: String,
+    pub path: String,
     /// The raw query string, empty when there is none.
-    pub(crate) query: String,
-    pub(crate) content_type: Option<String>,
-    pub(crate) body: String,
+    pub query: String,
+    pub content_type: Option<String>,
+    pub body: String,
 }
 
 impl RecordedRequest {
     /// Whether the query has the pair `key=value`.
-    pub(crate) fn has_query(&self, key: &str, value: &str) -> bool {
+    pub fn has_query(&self, key: &str, value: &str) -> bool {
         self.query
             .split('&')
             .any(|pair| pair.split_once('=') == Some((key, value)))
     }
 
     /// Whether the query names `key` at all.
-    pub(crate) fn has_query_key(&self, key: &str) -> bool {
+    pub fn has_query_key(&self, key: &str) -> bool {
         self.query
             .split('&')
             .any(|pair| pair.split_once('=').map_or(pair, |(name, _)| name) == key)
@@ -41,7 +41,7 @@ impl RecordedRequest {
 
 /// How a transport that cannot answer fails.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Failure {
+pub enum Failure {
     /// The request is accepted and never answered.
     Hang,
     /// The service returns an error.
@@ -49,13 +49,13 @@ pub(crate) enum Failure {
 }
 
 /// The recorder of one fake connection.
-pub(crate) struct FakeApi {
+pub struct FakeApi {
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
 impl FakeApi {
     /// A connection whose every request is answered by `respond` with an HTTP status and a body.
-    pub(crate) fn connection(
+    pub fn connection(
         policy: WritePolicy,
         respond: impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + 'static,
     ) -> (ClusterConnection, Self) {
@@ -71,7 +71,7 @@ impl FakeApi {
 
     /// A connection whose every request is answered with `code` and the raw `body`, which need
     /// not be UTF-8.
-    pub(crate) fn answering_bytes(
+    pub fn answering_bytes(
         policy: WritePolicy,
         code: u16,
         body: Vec<u8>,
@@ -83,7 +83,7 @@ impl FakeApi {
     }
 
     /// A connection whose requests are recorded and then fail as `failure` says.
-    pub(crate) fn failing(policy: WritePolicy, failure: Failure) -> (ClusterConnection, Self) {
+    pub fn failing(policy: WritePolicy, failure: Failure) -> (ClusterConnection, Self) {
         Self::build(policy, move |_| async move {
             match failure {
                 Failure::Hang => pending().await,
@@ -92,7 +92,7 @@ impl FakeApi {
         })
     }
 
-    pub(crate) fn requests(&self) -> Vec<RecordedRequest> {
+    pub fn requests(&self) -> Vec<RecordedRequest> {
         self.lock().clone()
     }
 

@@ -1557,6 +1557,23 @@ impl ClusterSession {
         self.finish_connect(Ok(Ok(connected)), cx);
     }
 
+    /// A seam for the shell tests: the permission report the gate reads, as if the review had
+    /// answered.
+    pub(crate) fn set_access_for_test(&mut self, access: AccessState, cx: &mut Context<Self>) {
+        if let Some(live) = self.live_mut() {
+            live.access = access;
+        }
+        cx.notify();
+    }
+
+    /// A seam for the shell tests: the node list a live session shows.
+    pub(crate) fn set_nodes_for_test(&mut self, nodes: Vec<NodeSummary>, cx: &mut Context<Self>) {
+        if let Some(live) = self.live_mut() {
+            live.nodes.apply(WatchUpdate::Snapshot(nodes));
+        }
+        cx.notify();
+    }
+
     /// A seam for the shell tests: the pod list a live session shows, as if its watch had sent
     /// this snapshot.
     pub(crate) fn set_pods_for_test(&mut self, pods: Vec<PodSummary>, cx: &mut Context<Self>) {
@@ -1735,4 +1752,11 @@ fn topology_scope_includes_every_namespace_of_all() {
     assert!(scope_includes(&several, "a"));
     assert!(!scope_includes(&several, "c"));
     assert!(scope_includes(&NamespaceScope::All, "anything"));
+}
+
+#[test]
+fn generations_only_grow() {
+    let first = next_generation();
+    let second = next_generation();
+    assert!(second > first);
 }

@@ -57,3 +57,14 @@ No runtime dependency change. kube features unchanged (no `ws`).
 | 2b | `docs/specs/0028-keyboard-map/keymap.md` | Ctrl Shift R from reserved to bound |
 | 4 | `docs/specs/0034-*` (when written) | single-node Cordon / Uncordon already shipped by 0030 |
 | 4 | `docs/roadmap/gap-plan-local-and-mutating.md`, `inventory-*.md` | 0030 done; W2 Safety partial (node shell 0037) |
+
+## As built (steps 2b and 4)
+
+| Item | Change |
+|---|---|
+| `crates/app/src/write_lock.rs` (new, child of `app_shell`) | the lock toggle, the unlock dialog, the lock and unlock audit lines |
+| `crates/app/src/write_flow.rs` and `write_flow_tests.rs` (new, child of `app_shell`) | see [write-flow.md](write-flow.md) "As built" |
+| `crates/app/src/confirm_dialog.rs` (new) | the unlock and write variants of the dialog |
+| `crates/app/src/app_shell_write_tests.rs` (new) | window tests over two fake API servers |
+| `crates/cluster/Cargo.toml` | feature `block-writes` (turned on by the app's `screenshot` feature) and feature `test-support` (the app's dev-dependency: `cluster::fake_api`, `ClusterConnection::from_client`) |
+| `title_bar.rs`, `keymap.rs`, `keyboard_navigation.rs`, `resource_actions.rs`, `launch_options.rs`, `app_shell.rs`, `cluster_session.rs` | badge, `ToggleReadOnly`, Cordon item and key, `--screen cordon-confirm` and `unlock-confirm`, the per-session lock and generation |

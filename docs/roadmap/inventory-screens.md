@@ -57,7 +57,7 @@
 | W10-2 | Editor (GPUI Kit Code Editor, Tree-sitter, LSP with cluster schema) | Missing | 0031 (LSP: decision C6) |
 | W10-3 | Diff vs cluster (default), semantic change list, checks (dry-run, quota, rollout impact) | Missing | 0031 |
 | W10-4 | Revision history tab | Missing | read-only list 0012; diff/restore 0031 |
-| W10-5 | Env-tier confirm dialog, audit-log note, snapshot for one-step rollback | Missing | 0030, 0031 |
+| W10-5 | Env-tier confirm dialog, audit-log note, snapshot for one-step rollback | Partial (confirm dialog and audit note: 0030; snapshot: 0031) | 0030, 0031 |
 
 ## Topology (W11)
 

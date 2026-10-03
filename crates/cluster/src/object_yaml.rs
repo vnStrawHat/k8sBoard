@@ -165,18 +165,18 @@ impl ObjectRef {
     }
 
     /// The Kubernetes `kind` of the object, for example `Node`.
-    pub(crate) fn kind_name(&self) -> &str {
+    pub fn kind_name(&self) -> &str {
         match &self.target {
             ObjectTarget::Builtin(kind) => kind.name(),
             ObjectTarget::Custom(resource) => &resource.kind,
         }
     }
 
-    pub(crate) fn namespace(&self) -> Option<&str> {
+    pub fn namespace(&self) -> Option<&str> {
         self.namespace.as_deref()
     }
 
-    pub(crate) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
 

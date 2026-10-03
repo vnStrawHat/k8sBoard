@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::app_shell::write_flow::WriteIntent;
 use crate::write_guard::{ClusterGuard, WriteLock};
 
 const AUDIT_FILE: &str = "audit.jsonl";
@@ -87,6 +88,44 @@ pub(crate) fn lock_entry(guard: &ClusterGuard<'_>, lock: WriteLock) -> AuditEntr
         outcome: AuditOutcome::Applied,
         error: None,
         note: None,
+    }
+}
+
+/// One guarded action (a write commit): the cluster, context, and user come from the guard of
+/// `intent.cluster`, never from the primary; the fields are the paths the request changes, and
+/// their values only when the kind allows recording them.
+pub(crate) fn audit_entry(
+    intent: &WriteIntent,
+    guard: &ClusterGuard<'_>,
+    outcome: AuditOutcome,
+    error: Option<String>,
+    note: Option<&str>,
+) -> AuditEntry {
+    let target = intent.request.target();
+    let fields = intent
+        .request
+        .changed_fields()
+        .into_iter()
+        .map(|field| AuditField {
+            path: field.path.to_owned(),
+            value: field.value,
+        })
+        .collect();
+    AuditEntry {
+        at: timestamp_now(),
+        cluster: guard.display_name().to_owned(),
+        context: guard.summary.name.clone(),
+        user: guard.summary.user.clone(),
+        action: intent.button.to_string(),
+        object: Some(AuditObject {
+            kind: target.kind_name().to_owned(),
+            namespace: target.namespace().map(str::to_owned),
+            name: target.name().to_owned(),
+        }),
+        fields: recordable_fields(target.kind_name(), fields),
+        outcome,
+        error,
+        note: note.and_then(clean_note),
     }
 }
 

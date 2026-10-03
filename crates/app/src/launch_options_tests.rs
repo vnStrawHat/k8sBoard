@@ -726,3 +726,17 @@ fn view_flag_needs_a_context_and_at_most_five() {
     assert_eq!(run_options(&["--view", "a,b,c,d,e"]).view.len(), 5);
     assert!(run_options(&[]).view.is_empty());
 }
+
+#[test]
+fn the_write_dialog_screens_open_on_nodes() {
+    for (name, screen) in [
+        ("cordon-confirm", LaunchScreen::CordonConfirm),
+        ("unlock-confirm", LaunchScreen::UnlockConfirm),
+    ] {
+        let parsed = run_options(&["--screen", name]).screen;
+        assert_eq!(parsed, screen);
+        assert!(parsed.opens_dialog());
+        assert_eq!(parsed.screen(), Screen::Nodes);
+        assert!(parsed.shows_node_usage());
+    }
+}

@@ -122,3 +122,18 @@ Credentials never appear (0001 errors carry none); request bodies never appear i
 ## Screenshot (`--screen cordon-confirm`, screenshot feature only)
 
 Opens the dialog for the first node with a fixture state (`DryRunState::Passed { 412 ms }`, TypeName tier, seeded PROD entry) and **no** connection call: the screen bypasses steps 1–3 and never reaches step 5. Screenshot builds are debug builds, so `write` would return `WritesBlocked` anyway. Listed in `USAGE`.
+
+## As built (steps 2b and 4)
+
+- One struct, `WriteIntent` (with `cluster_name`, `button`, and `warnings`), instead of `WriteIntent` plus `GuardedIntent` and `GuardedKind`: `Write` is the only kind until 0035–0037 add theirs, so the split would be dead code. `start_write` is the entry; `checked_write`, `WriteStep`, `CommitMode`, `Confirmed`, and `confirmed` are as written above.
+- `commit_block` also takes the cluster name (its texts name the cluster even when the guard is gone) and the text to type. `live_block` (guard gone or reconnected, locked) is the half `checked_write` runs before every commit; `unlock_block` is the unlock dialog's check (no lock, no dry-run).
+- `DryRunState::NotSupported` is not built: every 0030 operation supports a dry-run.
+- Focus and Enter: the dialog content takes the focus (the typed-name field in the `TypeName` tier) and confirms on a fresh Enter; a focused button keeps its own Enter, so Back stays Back. The kit's Enter bindings are switched off inside the dialog with `NoAction` (`WriteConfirm`, `WriteConfirm > Input`).
+- The commit task lives on the shell, so closing the dialog does not cancel it. A 409 or 429 keeps the dialog open with a Retry that runs the dry-run again; every other failure closes it with a notice.
+- The lock and the generation live on each session (`ClusterSession::lock`, `generation`); the generation comes from one process-wide counter, so a new session of the same cluster never repeats a number. Lock and unlock lines are written by `write_lock.rs`.
+- Screenshot screens: `--screen cordon-confirm` (a fixed dialog over an unlocked session; its confirm button and Enter do nothing) and `--screen unlock-confirm` (the real unlock dialog).
+- A commit that fails with a 409 or 429 turns the dry-run line into that failure, so the confirm button stays off until Retry has checked again; Retry shows whenever the check is `Failed`. The dialog tracks `is_open` (set by every close path), so a late commit result closes only an open dialog and otherwise falls back to the notice.
+- `block` and the typed-name check read the tier of the cluster's live guard too and use the stricter one, so a tier made stricter in Settings applies to a dialog already open.
+- A menu item passes the scheduling it was built for; if the node changed since, the dialog adds a warning line (`The menu offered Cordon, but the node has changed since, so this is Uncordon.`).
+- The lock toggle is offered only on a live session. The disabled notice uses the button text (`Uncordon is unavailable: …`).
+- `cluster`'s `test-support` feature fails to compile in a release build (`compile_error!`): the fake API server must never reach a build where writes are allowed.

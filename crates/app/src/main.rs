@@ -5,11 +5,6 @@ mod access_query;
 mod access_rows;
 mod age;
 mod app_shell;
-// The lock toggle (step 2b) and the write flow (step 4) are the production users of the log.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no lock toggle or write flow appends a line yet")
-)]
 mod audit_log;
 mod batch_rows;
 mod certificate_expiry;
@@ -28,6 +23,7 @@ mod cluster_view;
 mod clusters_page;
 mod command_palette;
 mod config_map_rows;
+mod confirm_dialog;
 mod container_detail;
 mod crd_rows;
 mod custom_kind;

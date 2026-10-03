@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use cluster::{
@@ -39,12 +40,25 @@ use crate::topology_feeds::{
 };
 use crate::write_guard::{ClusterGuard, WriteLock};
 
+/// The next connection generation. One counter for the whole run, so a session that replaces another
+/// for the same cluster never repeats a number.
+fn next_generation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// One connected kubeconfig context: the connection, its live lists, and the access report.
 /// Dropping the entity cancels every task and watch it owns.
 pub(crate) struct ClusterSession {
     inputs: ConnectInputs,
     /// The context this session connects to, so the write guard can name its cluster.
     summary: ContextSummary,
+    /// Whether this session may offer changes. Starts from the cluster's profile and toggles for
+    /// the session only; a reconnect keeps it.
+    lock: WriteLock,
+    /// Names this connection: a new session and every reconnect take a fresh one, so a dry-run or a
+    /// confirm dialog can tell that the connection it was started on is gone.
+    generation: u64,
     phase: SessionPhase,
     /// The kind screen being shown, kept across Connecting and retry so that `LiveCluster::start`
     /// can start its watch.
@@ -1097,9 +1111,12 @@ impl ClusterSession {
             requested_namespace,
         };
         let phase = Self::begin_connect(&inputs, cx);
+        let lock = WriteLock::at_open(&AppSettings::get(cx).registry.profile(summary));
         Self {
             inputs,
             summary: summary.clone(),
+            lock,
+            generation: next_generation(),
             phase,
             explorer_kind,
             event_filter: EventFilter::All,
@@ -1349,14 +1366,30 @@ impl ClusterSession {
     pub(crate) fn guard(&self, cx: &App) -> Option<ClusterGuard<'_>> {
         let live = self.live()?;
         let profile = AppSettings::get(cx).registry.profile(&self.summary);
-        // The session keeps no lock of its own yet, so every session opens in its profile's state.
-        let lock = WriteLock::at_open(&profile);
         Some(ClusterGuard::new(
             &live.access,
-            lock,
+            self.lock,
             profile,
             self.summary.clone(),
+            self.generation,
         ))
+    }
+
+    /// The connection generation, for the tests that watch a reconnect.
+    #[cfg(test)]
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The lock of this session, also while it is not live.
+    pub(crate) fn lock(&self) -> WriteLock {
+        self.lock
+    }
+
+    /// Locks or unlocks this session only; nothing is written to the settings.
+    pub(crate) fn set_lock(&mut self, lock: WriteLock, cx: &mut Context<Self>) {
+        self.lock = lock;
+        cx.notify();
     }
 
     pub(crate) fn phase(&self) -> &SessionPhase {
@@ -1421,6 +1454,7 @@ impl ClusterSession {
         if !matches!(self.phase, SessionPhase::Failed { .. }) {
             return;
         }
+        self.generation = next_generation();
         self.phase = Self::begin_connect(&self.inputs, cx);
         cx.notify();
     }

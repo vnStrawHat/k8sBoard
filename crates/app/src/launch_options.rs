@@ -26,7 +26,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|shortcuts|pods-cursor|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -87,6 +87,11 @@ pub(crate) enum LaunchScreen {
     /// `--screen switcher`: Overview with the cluster switcher popover open once the session is live
     /// and the probes of the other clusters have answered.
     Switcher,
+    /// `--screen cordon-confirm`: Nodes with the Cordon dialog of the first node open, in a fixed
+    /// state (the dry-run passed in 412 ms). Screenshot builds only; it never reaches a cluster.
+    CordonConfirm,
+    /// `--screen unlock-confirm`: Nodes with the dialog that unlocks the primary cluster open.
+    UnlockConfirm,
     /// `--screen settings|settings-appearance|settings-shortcuts`: the main window opens as usual,
     /// then the Settings window on that page, which is what the screenshot captures.
     Settings(SettingsPage, SettingsSize),
@@ -109,6 +114,7 @@ impl LaunchScreen {
     pub(crate) fn screen(self) -> Screen {
         match self {
             Self::Overview | Self::Switcher => Screen::Overview,
+            Self::CordonConfirm | Self::UnlockConfirm => Screen::Nodes,
             Self::Pods
             | Self::PodsMulti
             | Self::PodDrawer(_)
@@ -239,6 +245,8 @@ impl LaunchScreen {
             Self::Overview
                 | Self::Nodes
                 | Self::NodesSelected
+                | Self::CordonConfirm
+                | Self::UnlockConfirm
                 | Self::NodeDrawer(DrawerTab::Overview | DrawerTab::Monitor)
         )
     }
@@ -252,6 +260,8 @@ impl LaunchScreen {
                 | Self::AccountPermissions
                 | Self::TestTraffic
                 | Self::Shortcuts
+                | Self::CordonConfirm
+                | Self::UnlockConfirm
         )
     }
 
@@ -264,6 +274,8 @@ impl LaunchScreen {
         match text {
             "overview" => Some(Self::Overview),
             "switcher" => Some(Self::Switcher),
+            "cordon-confirm" => Some(Self::CordonConfirm),
+            "unlock-confirm" => Some(Self::UnlockConfirm),
             "pods" => Some(Self::Pods),
             "pods-multi" => Some(Self::PodsMulti),
             "nodes" => Some(Self::Nodes),

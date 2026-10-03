@@ -11,7 +11,7 @@ use crate::cluster_switcher::{
 
 /// Keys that a later spec binds. No binding of this spec may take one; the owner removes the key
 /// from this list in the change that binds it.
-const RESERVED_KEYS: [&str; 3] = ["secondary-enter", "secondary-shift-r", "secondary-s"];
+const RESERVED_KEYS: [&str; 2] = ["secondary-enter", "secondary-s"];
 
 fn bind_all(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -443,4 +443,41 @@ fn palette_keys_leave_the_shell_keys_alone_inside_the_dialog(cx: &mut TestAppCon
         let name = resolve(key, &palette, cx);
         assert!(!is_app_action(name), "{key}: {name:?}");
     }
+}
+
+#[gpui_kit::test]
+fn toggle_read_only_is_bound_in_window(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let paths: [&[&str]; 3] = [
+        &["Root", "AppShell"],
+        &["Root", "AppShell", "DataTable"],
+        &["Root", "AppShell", "Input"],
+    ];
+    for path in paths {
+        assert_eq!(
+            resolve("secondary-shift-r", path, cx),
+            Some("k8sboard::ToggleReadOnly"),
+            "{path:?}"
+        );
+    }
+    // A dialog sits outside the shell, so the chord does not reach through one.
+    assert_ne!(
+        resolve("secondary-shift-r", &["Root", "Dialog"], cx),
+        Some("k8sboard::ToggleReadOnly")
+    );
+}
+
+#[gpui_kit::test]
+fn enter_is_suppressed_in_write_confirm(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let paths: [&[&str]; 2] = [
+        &["Root", "Dialog", "WriteConfirm"],
+        &["Root", "Dialog", "WriteConfirm", "Input"],
+    ];
+    // A `NoAction` binding unbinds the key: nothing resolves inside the confirm dialog.
+    for path in paths {
+        assert_eq!(resolve("enter", path, cx), None, "{path:?}");
+    }
+    // Other dialogs keep the kit's Enter.
+    assert!(resolve("enter", &["Root", "Dialog"], cx).is_some());
 }
