@@ -137,14 +137,14 @@ mod edit_yaml_flow;
 mod keyboard_navigation;
 #[path = "leaving_work.rs"]
 mod leaving_work;
-#[path = "object_delete.rs"]
-pub(crate) mod object_delete;
 #[path = "node_shell_cleanup.rs"]
 mod node_shell_cleanup;
 #[path = "node_shell_open.rs"]
 mod node_shell_open;
 #[path = "node_shell_sweep.rs"]
 mod node_shell_sweep;
+#[path = "object_delete.rs"]
+pub(crate) mod object_delete;
 #[path = "port_forward_dialogs.rs"]
 mod port_forward_dialogs;
 #[path = "port_forward_open.rs"]
@@ -1841,8 +1841,22 @@ impl AppShell {
             return;
         }
         #[cfg(feature = "screenshot")]
-        if launch == LaunchScreen::NodeShellConfirm {
-            self.open_node_shell_confirm_fixture(window, cx);
+        if matches!(
+            launch,
+            LaunchScreen::NodeShellConfirm | LaunchScreen::NodeShellConfirmStaging
+        ) {
+            let environment = if launch == LaunchScreen::NodeShellConfirm {
+                crate::environment::Environment::Production
+            } else {
+                crate::environment::Environment::Staging
+            };
+            self.open_node_shell_confirm_fixture(environment, window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::LeftoverSweepFixture {
+            self.open_leftover_fixture(window, cx);
             self.pending_dialog_launch = None;
             return;
         }
@@ -3585,6 +3599,8 @@ impl AppShell {
                 | LaunchScreen::ShellPasteFixture
                 | LaunchScreen::ShellPickerFixture
                 | LaunchScreen::ShellFindFixture
+                | LaunchScreen::NodeShellTabFixture
+                | LaunchScreen::DebugShellTabFixture
         ) {
             self.open_shell_fixture(launch, window, cx);
             return;
@@ -3660,12 +3676,10 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) {
         self.pending_launch_screen = None;
-        let target = crate::screenshot::shell_fixture_target();
-        let label = crate::screenshot::SHELL_FIXTURE_CLUSTER.to_owned();
+        let fixture = crate::screenshot::shell_tab_fixture(launch);
         let dock = self.dock.clone();
-        let transcript = crate::screenshot::SHELL_FIXTURE_TRANSCRIPT;
         let tab = dock.update(cx, |dock, cx| {
-            let tab = dock.open_shell_fixture(target, label, transcript, window, cx);
+            let tab = dock.open_shell_fixture(fixture, window, cx);
             if launch != LaunchScreen::ShellDockFixture {
                 dock.set_mode(DockMode::Zoomed, cx);
             }

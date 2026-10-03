@@ -12,6 +12,7 @@ use super::*;
 use crate::app_shell::debug_open::debug_open_tests::{
     Answers, CREATED_UID, Debugs, MIRROR_IMAGE, audit_lines, report_denying, two_clusters,
 };
+use crate::confirm_dialog::ConfirmDialog;
 use crate::settings::AppSettings;
 use crate::write_guard::{DialogConfirm, WriteLock};
 
@@ -519,4 +520,153 @@ fn node_shell_uses_the_rows_cluster(cx: &mut TestAppContext) {
     });
     debugs.wait_for("the delete", cx, |_| !deletes(&debugs.prod_api).is_empty());
     assert!(deletes(&debugs.stg_api).is_empty());
+}
+
+// ---- the gate is read again at confirm time ----
+
+/// Opens the node shell dialog on stg-b, waits for the dry-run, and types the node name: the user
+/// is one press from the create.
+fn ready_to_confirm(debugs: &Debugs, cx: &mut TestAppContext) -> gpui_kit::Entity<ConfirmDialog> {
+    debugs.start_node(
+        &debugs.stg,
+        "wk-03",
+        "kube-system",
+        cluster::DEFAULT_DEBUG_IMAGE,
+        cx,
+    );
+    let dialog = debugs.dialog(cx);
+    debugs.wait_for_dry_run(&dialog, cx);
+    debugs.fixture.with_window(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.type_text("wk-03", window, cx));
+    });
+    assert_eq!(cx.read(|cx| dialog.read(cx).block_reason(cx)), None);
+    dialog
+}
+
+fn press_and_settle(
+    debugs: &Debugs,
+    dialog: &gpui_kit::Entity<ConfirmDialog>,
+    cx: &mut TestAppContext,
+) {
+    debugs.fixture.with_window(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.press_confirm(window, cx));
+    });
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn turning_the_setting_off_while_the_dialog_is_open_creates_nothing(cx: &mut TestAppContext) {
+    let debugs = node_clusters("ns-late-off", Answers::Waiting, cx);
+    let dialog = ready_to_confirm(&debugs, cx);
+    cx.update(|cx| crate::clusters_page::set_allow_node_shell(&debugs.stg, Some(false), cx));
+    cx.run_until_parked();
+    let block = cx.read(|cx| dialog.read(cx).block_reason(cx));
+    assert_eq!(
+        block.as_deref(),
+        Some("Node shell is off for stg-b (Settings › Clusters › Safety)")
+    );
+    press_and_settle(&debugs, &dialog, cx);
+    assert!(
+        commits(&debugs.stg_api).is_empty(),
+        "no pod after the switch went off"
+    );
+    assert_eq!(debugs.tab_count(cx), 0);
+}
+
+#[gpui_kit::test]
+fn making_the_cluster_production_while_the_dialog_is_open_creates_nothing(cx: &mut TestAppContext) {
+    let debugs = node_clusters("ns-late-prod", Answers::Waiting, cx);
+    let dialog = ready_to_confirm(&debugs, cx);
+    // The explicit switch goes, and the environment is now Production: off by default.
+    cx.update(|cx| {
+        crate::settings::AppSettings::update(cx, |settings| {
+            crate::cluster_form::edit_entry(&mut settings.registry, &debugs.stg, |entry| {
+                entry.allow_node_shell = None;
+                entry.environment = Some(crate::environment::Environment::Production);
+            });
+        });
+    });
+    cx.run_until_parked();
+    assert!(cx.read(|cx| dialog.read(cx).block_reason(cx)).is_some());
+    press_and_settle(&debugs, &dialog, cx);
+    assert!(commits(&debugs.stg_api).is_empty());
+    assert_eq!(debugs.tab_count(cx), 0);
+}
+
+#[gpui_kit::test]
+fn a_revoked_create_right_while_the_dialog_is_open_creates_nothing(cx: &mut TestAppContext) {
+    for (name, denied) in [
+        ("ns-late-create", AccessCheck::CreatePods),
+        ("ns-late-delete", AccessCheck::DeletePods),
+    ] {
+        let debugs = node_clusters(name, Answers::Waiting, cx);
+        let dialog = ready_to_confirm(&debugs, cx);
+        debugs.set_access(&debugs.stg, report_denying(&[denied]), cx);
+        let block = cx.read(|cx| dialog.read(cx).block_reason(cx));
+        assert!(
+            block
+                .as_deref()
+                .is_some_and(|text| text.starts_with("Not permitted")),
+            "{denied:?}: {block:?}"
+        );
+        press_and_settle(&debugs, &dialog, cx);
+        assert!(commits(&debugs.stg_api).is_empty(), "{denied:?}");
+    }
+}
+
+#[gpui_kit::test]
+fn the_commit_itself_refuses_a_stale_yes(cx: &mut TestAppContext) {
+    use crate::app_shell::write_flow::{ConnectCommit, DryRunState, TypedMatch, confirmed};
+    let debugs = node_clusters("ns-late-direct", Answers::Waiting, cx);
+    let dialog = ready_to_confirm(&debugs, cx);
+    let intent = cx
+        .read(|cx| dialog.read(cx).connect_intent())
+        .expect("a start");
+    let generation = cx.read(|cx| dialog.read(cx).generation());
+    let proof = confirmed(
+        &DryRunState::Passed {
+            elapsed: std::time::Duration::ZERO,
+        },
+        TypedMatch::Matches,
+        generation,
+    );
+    // The dialog's own check is bypassed: the commit must refuse on its own.
+    cx.update(|cx| crate::clusters_page::set_allow_node_shell(&debugs.stg, Some(false), cx));
+    cx.run_until_parked();
+    debugs.fixture.with_window(cx, |window, cx| {
+        debugs.fixture.shell.update(cx, |shell, cx| {
+            let commit = ConnectCommit {
+                generation,
+                confirmed: proof,
+                note: None,
+            };
+            shell.commit_connect(&intent, commit, window, cx);
+        });
+    });
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    cx.run_until_parked();
+    assert!(commits(&debugs.stg_api).is_empty());
+    assert_eq!(debugs.tab_count(cx), 0);
+}
+
+impl Debugs {
+    /// The connection of a viewed cluster, as a tab or a cleanup would hold it.
+    pub(in crate::app_shell) fn session_connection(
+        &self,
+        cluster: &ClusterRef,
+        cx: &mut TestAppContext,
+    ) -> cluster::ClusterConnection {
+        self.fixture
+            .shell
+            .read_with(cx, |shell, cx| shell.slot_connection(cluster, cx))
+            .expect("a live slot")
+    }
+
+    /// The proof a started debug shell may attach, from a report that allows both verbs.
+    pub(in crate::app_shell) fn attach_permit(&self) -> cluster::AttachPermit {
+        report_denying(&[])
+            .attach_permit()
+            .expect("both attach verbs allowed")
+    }
 }

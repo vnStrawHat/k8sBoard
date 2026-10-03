@@ -713,9 +713,14 @@ impl ShellTab {
     #[cfg(feature = "screenshot")]
     pub(crate) fn show_fixture(&mut self, transcript: &str, cx: &mut Context<Self>) {
         self.state = ShellState::Live;
+        let first_line = if self.kind.is_exec() {
+            banner(&self.target, self.command, &self.cluster_label)
+        } else {
+            attach_banner(&self.target, &self.kind, &self.cluster_label)
+        };
         {
             let mut session = self.session.borrow_mut();
-            session.note(&banner(&self.target, self.command, &self.cluster_label));
+            session.note(&first_line);
             session.feed(transcript.as_bytes(), Instant::now());
         }
         cx.notify();

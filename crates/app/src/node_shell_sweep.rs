@@ -7,7 +7,8 @@
 //! started it and takes its connection, scope, and guard from that cluster's own slot.
 
 use cluster::{
-    AccessCheck, NodeShellLeftover, ObjectKind, ObjectRef, WriteOperation, WriteRequest,
+    AccessCheck, NamespaceScope, NodeShellLeftover, ObjectKind, ObjectRef, WriteOperation,
+    WriteRequest,
 };
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -56,6 +57,24 @@ pub(crate) fn sweep_block(guard: &ClusterGuard<'_>) -> Option<SharedString> {
         .then(|| format!("{} is read-only", guard.display_name()).into())
 }
 
+/// The scope a sweep lists: the view's scope, plus the namespace the node shell pods go to when the
+/// view does not already cover it (`All` does).
+pub(crate) fn sweep_scope(
+    scope: &NamespaceScope,
+    node_shell_namespace: Option<&str>,
+) -> NamespaceScope {
+    if matches!(scope, NamespaceScope::All) {
+        return NamespaceScope::All;
+    }
+    NamespaceScope::of_namespaces(
+        scope
+            .namespaces()
+            .iter()
+            .cloned()
+            .chain(node_shell_namespace.map(str::to_owned)),
+    )
+}
+
 /// Whether a sweep may list: a cluster whose review says no is not asked. While the review is
 /// unknown or still running the list goes out, and a refusal says nothing.
 fn may_list_pods(access: &AccessState) -> bool {
@@ -99,7 +118,12 @@ impl AppShell {
         if !may_list_pods(&live.access) {
             return;
         }
-        let scope = live.scope.clone();
+        // The namespace the node shell pods are created in is listed too: a view scoped elsewhere
+        // would otherwise never see them.
+        let node_shell_namespace = self
+            .guard_for(cluster, cx)
+            .map(|guard| guard.profile.node_shell_namespace.clone());
+        let scope = sweep_scope(&live.scope, node_shell_namespace.as_deref());
         let instance = self.run_id.clone();
         let runtime = cx.global::<ClusterRuntime>().clone();
         let cluster = cluster.clone();
@@ -160,9 +184,8 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let shell = cx.weak_entity();
-        let review = cx.new(|_| LeftoverReview {
-            shell,
+        let review = LeftoverReview {
+            shell: cx.weak_entity(),
             cluster,
             rows: found
                 .into_iter()
@@ -171,7 +194,14 @@ impl AppShell {
                     leftover,
                 })
                 .collect(),
-        });
+            #[cfg(feature = "screenshot")]
+            is_fixture: false,
+        };
+        Self::open_review_dialog(review, window, cx);
+    }
+
+    fn open_review_dialog(review: LeftoverReview, window: &mut Window, cx: &mut Context<Self>) {
+        let review = cx.new(|_| review);
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
                 .title("Leftover node shell pods")
@@ -232,6 +262,9 @@ struct LeftoverReview {
     shell: WeakEntity<AppShell>,
     cluster: ClusterRef,
     rows: Vec<ReviewRow>,
+    /// A screenshot fixture has no cluster behind it, so the gate is not read.
+    #[cfg(feature = "screenshot")]
+    is_fixture: bool,
 }
 
 impl LeftoverReview {
@@ -245,6 +278,10 @@ impl LeftoverReview {
 
     /// Why `Delete selected` is off, read from the cluster's own guard now.
     fn block(&self, cx: &gpui_kit::App) -> Option<SharedString> {
+        #[cfg(feature = "screenshot")]
+        if self.is_fixture {
+            return None;
+        }
         let shell = self.shell.upgrade()?;
         let shell = shell.read(cx);
         match shell.guard_for(&self.cluster, cx) {
@@ -355,6 +392,69 @@ fn phase_text(leftover: &NodeShellLeftover) -> &'static str {
         LeftoverPhase::Succeeded => "Succeeded",
         LeftoverPhase::Failed => "Failed",
         LeftoverPhase::Unknown => "Unknown",
+    }
+}
+
+#[cfg(feature = "screenshot")]
+impl AppShell {
+    /// `--screen leftover-sweep-fixture`: the review dialog over four fixed pods of a fixed cluster,
+    /// two finished (checked) and two not. It reads no gate and `Delete selected` finds no cluster,
+    /// so it can never delete a pod.
+    pub(super) fn open_leftover_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use cluster::LeftoverPhase;
+
+        let now = jiff::Timestamp::now();
+        let row = |name: &str, node: &str, phase: LeftoverPhase, minutes: i64| {
+            let leftover = NodeShellLeftover {
+                namespace: "kube-system".to_owned(),
+                name: name.to_owned(),
+                uid: format!("uid-{name}"),
+                node: Some(node.to_owned()),
+                phase,
+                created_at: now
+                    .checked_sub(jiff::SignedDuration::from_mins(minutes))
+                    .ok(),
+            };
+            ReviewRow {
+                is_checked: is_checked_by_default(&leftover),
+                leftover,
+            }
+        };
+        let review = LeftoverReview {
+            shell: cx.weak_entity(),
+            cluster: ClusterRef {
+                kubeconfig: std::path::PathBuf::from("fixture.yaml"),
+                context: crate::screenshot::SHELL_FIXTURE_CLUSTER.to_owned(),
+            },
+            rows: vec![
+                row(
+                    "k8sboard-node-shell-wk-03-x7k2q",
+                    "wk-03",
+                    LeftoverPhase::Succeeded,
+                    190,
+                ),
+                row(
+                    "k8sboard-node-shell-wk-01-m4d9z",
+                    "wk-01",
+                    LeftoverPhase::Failed,
+                    75,
+                ),
+                row(
+                    "k8sboard-node-shell-wk-02-q8r5t",
+                    "wk-02",
+                    LeftoverPhase::Running,
+                    12,
+                ),
+                row(
+                    "k8sboard-node-shell-wk-04-h2j6c",
+                    "wk-04",
+                    LeftoverPhase::Pending,
+                    3,
+                ),
+            ],
+            is_fixture: true,
+        };
+        Self::open_review_dialog(review, window, cx);
     }
 }
 

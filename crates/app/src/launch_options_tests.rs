@@ -928,3 +928,46 @@ fn the_options_fixtures_are_dialogs_over_pods_and_nodes() {
         assert!(USAGE.contains(name), "{name}");
     }
 }
+
+#[test]
+fn the_staging_confirm_and_the_sweep_are_offline_dialogs() {
+    for (name, screen, list) in [
+        (
+            "node-shell-confirm-staging",
+            LaunchScreen::NodeShellConfirmStaging,
+            Screen::Nodes,
+        ),
+        (
+            "leftover-sweep-fixture",
+            LaunchScreen::LeftoverSweepFixture,
+            Screen::Pods,
+        ),
+    ] {
+        let parsed = run_options(&["--screen", name]).screen;
+        assert_eq!(parsed, screen);
+        assert_eq!(parsed.screen(), list);
+        assert!(parsed.opens_dialog());
+        assert!(parsed.is_dialog_fixture());
+        assert!(!parsed.has_dock());
+        assert!(USAGE.contains(name), "{name}");
+    }
+}
+
+#[test]
+fn the_debug_tab_fixtures_are_offline_dock_screens() {
+    for (name, screen) in [
+        ("node-shell-tab-fixture", LaunchScreen::NodeShellTabFixture),
+        (
+            "debug-shell-tab-fixture",
+            LaunchScreen::DebugShellTabFixture,
+        ),
+    ] {
+        let parsed = run_options(&["--screen", name]).screen;
+        assert_eq!(parsed, screen);
+        assert_eq!(parsed.screen(), Screen::Pods);
+        assert!(parsed.has_dock());
+        assert!(parsed.is_dock_fixture());
+        assert!(!parsed.opens_dialog());
+        assert!(USAGE.contains(name), "{name}");
+    }
+}

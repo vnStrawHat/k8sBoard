@@ -60,7 +60,7 @@ Continue → `run_guarded(GuardedIntent { cluster, action, label, risk, expected
 
 | Key | Type, default | UI |
 |---|---|---|
-| `registry.clusters[].allow_node_shell` | `Option<bool>`; `None` = ON for DEV/LOCAL, ON for STG only when `environment` is set in the entry, else OFF (decision 15) | W2 toggle `Allow node shell` below `Confirm changes by`, hint `Creates a privileged debug pod on the node. Off by default for production.` (muted) |
+| `registry.clusters[].allow_node_shell` | `Option<bool>`; `None` = ON for LOCAL, ON for DEV and STG only when `environment` is set in the entry, else OFF (decision 15) | W2 toggle `Allow node shell` below `Confirm changes by`, hint `Creates a privileged debug pod on the node. Off by default for production.` (muted) |
 | `registry.clusters[].debug_image` | `Option<String>` | options dialogs only (W2 draws no field) |
 | `registry.clusters[].node_shell_namespace` | `Option<String>` | node shell dialog only |
 

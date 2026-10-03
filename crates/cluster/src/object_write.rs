@@ -1171,8 +1171,11 @@ mod object_write_workload_tests;
 mod object_write_replace_tests;
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 #[path = "object_write_delete_tests.rs"]
 mod object_write_delete_tests;
+
+#[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 #[path = "object_write_debug_tests.rs"]
 mod object_write_debug_tests;

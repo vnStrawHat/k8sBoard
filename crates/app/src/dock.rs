@@ -246,15 +246,16 @@ impl Dock {
     #[cfg(feature = "screenshot")]
     pub(crate) fn open_shell_fixture(
         &mut self,
-        target: ShellTarget,
-        cluster_label: String,
-        transcript: &str,
+        fixture: crate::screenshot::ShellTabFixture,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<ShellTab> {
         let app = self.shell.clone();
-        let tab = cx.new(|cx| ShellTab::new(target, cluster_label, app, window, cx));
-        tab.update(cx, |tab, cx| tab.show_fixture(transcript, cx));
+        let tab = cx.new(|cx| {
+            ShellTab::new(fixture.target, fixture.cluster_label, app, window, cx)
+                .with_kind(fixture.kind)
+        });
+        tab.update(cx, |tab, cx| tab.show_fixture(fixture.transcript, cx));
         self.tabs.push(DockTab::Shell(tab.clone()));
         self.activate(self.tabs.len() - 1, cx);
         tab

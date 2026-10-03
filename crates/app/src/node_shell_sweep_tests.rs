@@ -289,3 +289,55 @@ fn the_review_warns_about_running_pods() {
         "Running pods may belong to another k8sBoard window or user."
     );
 }
+
+#[test]
+fn the_sweep_lists_the_node_shell_namespace_beside_the_view_scope() {
+    let named = NamespaceScope::of_namespaces(["shop".to_owned()]);
+    assert_eq!(
+        sweep_scope(&named, Some("kube-system")),
+        NamespaceScope::of_namespaces(["kube-system".to_owned(), "shop".to_owned()])
+    );
+    // Already covered: nothing is added twice, and `All` stays `All`.
+    assert_eq!(
+        sweep_scope(&named, Some("shop")),
+        NamespaceScope::of_namespaces(["shop".to_owned()])
+    );
+    assert_eq!(
+        sweep_scope(&NamespaceScope::All, Some("kube-system")),
+        NamespaceScope::All
+    );
+    assert_eq!(sweep_scope(&named, None), named);
+}
+
+#[gpui_kit::test]
+fn a_view_scoped_elsewhere_still_sweeps_the_node_shell_namespace(cx: &mut TestAppContext) {
+    use cluster::NamespaceScope;
+    let debugs = two_clusters("sw-scope", Answers::Accepts, cx);
+    // Rescope stg-b to one namespace, then look at what a sweep of it asks.
+    let session = debugs.session(&debugs.stg, cx);
+    session.update(cx, |session, cx| {
+        session.set_scope(NamespaceScope::of_namespaces(["shop".to_owned()]), cx);
+    });
+    cx.run_until_parked();
+    let before = lists(&debugs.stg_api).len();
+    debugs
+        .fixture
+        .shell
+        .update(cx, |shell, cx| shell.sweep_leftovers(&debugs.stg, cx));
+    debugs.wait_for("the lists", cx, |_| {
+        lists(&debugs.stg_api).len() >= before + 2
+    });
+    let paths: Vec<String> = lists(&debugs.stg_api)
+        .into_iter()
+        .skip(before)
+        .map(|request| request.path)
+        .collect();
+    assert!(
+        paths.contains(&"/api/v1/namespaces/kube-system/pods".to_owned()),
+        "{paths:?}"
+    );
+    assert!(
+        paths.contains(&"/api/v1/namespaces/shop/pods".to_owned()),
+        "{paths:?}"
+    );
+}

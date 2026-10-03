@@ -129,6 +129,19 @@ pub(crate) struct CreateThenAttach {
     /// Runs after the commit succeeded, with the permit, the cluster's connection, and what the
     /// server reported (the created pod's name and uid).
     pub(crate) open: Rc<AttachOpen>,
+    /// Runs instead of `open` when the commit succeeded but the window is gone, so what was created
+    /// is not forgotten: a node shell deletes its pod.
+    pub(crate) discard: Rc<DiscardStart>,
+}
+
+/// What a start does with the object it created when no window is left to open its tab.
+pub(crate) type DiscardStart =
+    dyn Fn(&mut AppShell, ClusterConnection, WriteOutcome, &mut Context<AppShell>);
+
+/// The two ways a start that created something goes on: `open` with a window, `discard` without.
+pub(crate) struct AttachOpens {
+    open: Rc<AttachOpen>,
+    discard: Rc<DiscardStart>,
 }
 
 pub(crate) type AttachOpen = dyn Fn(
@@ -155,7 +168,12 @@ pub(crate) type PortForwardOpen = dyn Fn(
 enum GrantedOpen {
     Exec(Rc<ExecOpen>, ExecPermit),
     PortForward(Rc<PortForwardOpen>, PortForwardPermit),
-    CreateThenAttach(Rc<WriteIntent>, Rc<AttachOpen>, AttachPermit),
+    CreateThenAttach(
+        Rc<WriteIntent>,
+        Rc<AttachOpen>,
+        Rc<DiscardStart>,
+        AttachPermit,
+    ),
 }
 
 impl ConnectOpen {
@@ -171,6 +189,7 @@ impl ConnectOpen {
             Self::CreateThenAttach(start) => Some(GrantedOpen::CreateThenAttach(
                 Rc::clone(&start.create),
                 Rc::clone(&start.open),
+                Rc::clone(&start.discard),
                 attach_permit_of(access)?,
             )),
         }
@@ -197,7 +216,7 @@ impl GrantedOpen {
         match self {
             Self::Exec(open, permit) => open(shell, permit, connection, window, cx),
             Self::PortForward(open, permit) => open(shell, permit, connection, window, cx),
-            Self::CreateThenAttach(create, open, permit) => {
+            Self::CreateThenAttach(create, open, discard, permit) => {
                 // The dialog never confirms a write without its passed dry-run.
                 let Some(confirmed) = commit.confirmed else {
                     return;
@@ -208,7 +227,8 @@ impl GrantedOpen {
                     mode: CommitMode::Commit { confirmed },
                     note: commit.note,
                 };
-                shell.commit_then_attach(step, open, permit, connection, window, cx);
+                let opens = AttachOpens { open, discard };
+                shell.commit_then_attach(step, opens, permit, connection, window, cx);
             }
         }
     }
@@ -226,6 +246,16 @@ impl ConnectIntent {
         match self.expected_name {
             Some(_) => "the node name",
             None => "the cluster name",
+        }
+    }
+
+    /// Why the gate of the action no longer allows this start, `None` when it does. The dialog reads
+    /// it on every render and the commit reads it again: the permissions, the node shell setting, or
+    /// the tier may have changed while the dialog stood open.
+    pub(crate) fn gate_block(&self, guard: &ClusterGuard<'_>) -> Option<SharedString> {
+        match action_availability(self.action, guard) {
+            ActionAvailability::Disabled { reason } => Some(reason),
+            ActionAvailability::Enabled => None,
         }
     }
 
@@ -457,7 +487,7 @@ pub(crate) async fn checked_write(
     };
     let request = step.intent.request.clone();
     // The first of the two senders of a write (the other is `run_cleanup`; spec 0030 AC 9).
-    #[allow(clippy::disallowed_methods)]
+    #[expect(clippy::disallowed_methods)]
     let sent = runtime
         .spawn(async move { connection.write(&request, mode).await })
         .await;
@@ -1123,7 +1153,10 @@ impl AppShell {
         let generation = commit.generation;
         let prepared = {
             let guard = self.guard_for(&intent.cluster, cx);
-            match live_block(guard.as_ref(), &intent.cluster_name, generation) {
+            // The gate is read again, not only the lock: the setting, the tier, or a re-review may
+            // have changed since the dialog opened, and a privileged pod must not follow a stale yes.
+            let gate_block = guard.as_ref().and_then(|guard| intent.gate_block(guard));
+            match live_block(guard.as_ref(), &intent.cluster_name, generation).or(gate_block) {
                 Some(reason) => Err(reason),
                 None => {
                     let granted = guard
@@ -1151,10 +1184,14 @@ impl AppShell {
     /// The commit of a start that writes first, then the attach: the write is `checked_write`'s
     /// (lock and connection re-checked, audit line), and `open` runs only if it succeeded. A failed
     /// write opens nothing and says why.
+    ///
+    /// A node shell create counts as in flight until its result is handled, so the window does not
+    /// close under it. If the commit succeeded but the window is gone, `discard` runs instead of
+    /// `open`: the pod exists and must not be forgotten.
     fn commit_then_attach(
         &mut self,
         step: WriteStep,
-        open: Rc<AttachOpen>,
+        opens: AttachOpens,
         permit: AttachPermit,
         connection: ClusterConnection,
         window: &mut Window,
@@ -1163,21 +1200,47 @@ impl AppShell {
         let handle: AnyWindowHandle = window.window_handle();
         let shell = cx.weak_entity();
         let create = Rc::clone(&step.intent);
-        cx.spawn(
-            async move |_, cx| match checked_write(&shell, step, cx).await {
+        let is_node_shell = matches!(
+            create.request.operation(),
+            WriteOperation::CreateNodeShellPod { .. }
+        );
+        if is_node_shell {
+            self.node_shell_runs.create_started();
+        }
+        // Whatever the answer, the create stops counting only after its pod has an owner.
+        let finish = move |shell: &mut AppShell, cx: &mut Context<AppShell>| {
+            if is_node_shell {
+                shell.node_shell_runs.create_finished();
+                shell.close_window_when_idle(cx);
+            }
+        };
+        cx.spawn(async move |_, cx| {
+            match checked_write(&shell, step, cx).await {
                 Ok(outcome) => {
-                    let _ = cx.update_window(handle, |_, window, cx| {
-                        let _ = shell.update(cx, |shell, cx| {
+                    let AttachOpens { open, discard } = opens;
+                    let spare = (connection.clone(), outcome.clone());
+                    let opened = cx.update_window(handle, |_, window, cx| {
+                        shell.update(cx, |shell, cx| {
                             open(shell, permit, connection, outcome, window, cx);
-                        });
+                            finish(shell, cx);
+                        })
                     });
+                    if !matches!(opened, Ok(Ok(()))) {
+                        // The window is gone (or the shell is): nothing opened the tab.
+                        let (connection, outcome) = spare;
+                        let _ = shell.update(cx, |shell, cx| {
+                            discard(shell, connection, outcome, cx);
+                            finish(shell, cx);
+                        });
+                    }
                 }
                 Err(error) => {
                     let notice = failure_notice(&create.label, &error);
                     let _ = cx.update_window(handle, |_, window, cx| notify(window, cx, notice));
+                    let _ = shell.update(cx, |shell, cx| finish(shell, cx));
                 }
-            },
-        )
+            }
+        })
         .detach();
     }
 }
@@ -1306,7 +1369,7 @@ async fn delete_and_audit(
 ) -> CleanupOutcome {
     // The one write outside `checked_write` (spec 0030 AC 9, spec 0037): a delete of this
     // application's own node shell pod under a uid precondition. See `NodeShellCleanup`.
-    #[allow(clippy::disallowed_methods)]
+    #[expect(clippy::disallowed_methods)]
     let result = cleanup
         .connection
         .write(&cleanup.request, WriteMode::Commit)

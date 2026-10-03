@@ -229,8 +229,14 @@ impl AppShell {
             expected_name: None,
             open: ConnectOpen::CreateThenAttach(CreateThenAttach {
                 create,
-                open: Rc::new(move |shell, permit, connection, outcome, window, cx| {
-                    shell.open_debug_tab(&plan, permit, connection, outcome, window, cx);
+                open: Rc::new({
+                    let plan = Rc::clone(&plan);
+                    move |shell, permit, connection, outcome, window, cx| {
+                        shell.open_debug_tab(&plan, permit, connection, outcome, window, cx);
+                    }
+                }),
+                discard: Rc::new(move |shell, connection, outcome, cx| {
+                    shell.discard_debug_start(&plan, &connection, &outcome, cx);
                 }),
             }),
         };
@@ -269,8 +275,11 @@ impl AppShell {
                 }
             },
         };
-        let is_closing = self.node_shell_runs.is_closing();
-        let tab = (!is_closing)
+        // A window that is closing, or a cluster released while the create was on its way, has no
+        // one to own the tab: the pod is deleted at once.
+        let has_owner =
+            !self.node_shell_runs.is_closing() && self.view.slot_of(&plan.cluster).is_some();
+        let tab = has_owner
             .then(|| {
                 let grant = AttachGrant { connection, permit };
                 self.dock.update(cx, |dock, cx| {
@@ -297,6 +306,24 @@ impl AppShell {
             self.register_cleanup(tab.entity_id(), cleanup, cx);
         }
         self.store_debug_choice(&plan.cluster, &plan.image, plan.namespace.as_deref(), cx);
+    }
+
+    /// What a start does with what it created when no window is left to show a tab: a node shell's
+    /// pod is deleted, a debug container (which the API cannot remove) is left to the pod's life.
+    pub(super) fn discard_debug_start(
+        &mut self,
+        plan: &TabPlan,
+        connection: &cluster::ClusterConnection,
+        outcome: &WriteOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        let cleanup = plan
+            .cleanup_audit
+            .as_ref()
+            .and_then(|audit| node_shell_cleanup(plan, audit, connection, outcome));
+        if let Some(cleanup) = cleanup {
+            self.begin_cleanup(cleanup, cx);
+        }
     }
 
     /// Writes the image (and namespace) the user chose to the cluster's registry entry, when they

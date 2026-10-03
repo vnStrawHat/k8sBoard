@@ -499,6 +499,7 @@ fn attach_open() -> ConnectOpen {
     ConnectOpen::CreateThenAttach(CreateThenAttach {
         create: debug_write_intent(),
         open: Rc::new(|_, _, _, _, _, _| {}),
+        discard: Rc::new(|_, _, _, _| {}),
     })
 }
 
@@ -601,4 +602,27 @@ fn the_cleanup_audit_line_names_the_delete_and_the_copied_cluster() {
     assert_eq!(line["fields"][0]["path"], "metadata.uid");
     assert_eq!(cleanup.namespace(), "kube-system");
     assert_eq!(cleanup.pod(), "k8sboard-node-shell-wk-03-x7k2q");
+}
+
+#[test]
+fn a_start_is_refused_by_its_gate_when_the_setting_is_off() {
+    let access = AccessState::Known(cluster::AccessReport {
+        reviews: cluster::AccessCheck::ALL
+            .into_iter()
+            .map(|check| cluster::AccessReview {
+                check,
+                decision: cluster::AccessDecision::Allowed,
+            })
+            .collect(),
+    });
+    let mut guard = guard(&access, WriteLock::Unlocked);
+    let mut intent = connect_intent(attach_open(), Some("wk-03".to_owned()));
+    intent.action = ResourceAction::OpenNodeShell;
+    guard.profile.allow_node_shell = true;
+    assert_eq!(intent.gate_block(&guard), None);
+    guard.profile.allow_node_shell = false;
+    assert_eq!(
+        intent.gate_block(&guard).as_deref(),
+        Some("Node shell is off for stg-b (Settings › Clusters › Safety)")
+    );
 }

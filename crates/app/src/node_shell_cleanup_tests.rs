@@ -484,3 +484,203 @@ fn a_pod_that_is_gone_at_delete_time_is_done_without_an_error(cx: &mut TestAppCo
     assert!(line.get("error").is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- review fixes ----
+
+fn window_is_open(debugs: &Debugs, cx: &mut TestAppContext) -> bool {
+    cx.update_window(debugs.fixture.window.into(), |_, _, _| ())
+        .is_ok()
+}
+
+#[gpui_kit::test]
+fn the_title_bar_close_asks_the_shell_first(cx: &mut TestAppContext) {
+    let debugs = node_clusters("nc-titlebar", Answers::Waiting, cx);
+    debugs.open_live_node_shell(&debugs.stg, cx);
+    debugs.fixture.with_window(cx, |window, cx| {
+        debugs
+            .fixture
+            .shell
+            .update(cx, |shell, cx| shell.close_main_window(window, cx));
+    });
+    // The pod is deleted first; the window closes when the delete reports.
+    debugs.wait_for_deletes(&debugs.stg_api, 1, cx);
+    debugs.wait_for("the window to close", cx, |cx| !window_is_open(&debugs, cx));
+}
+
+#[gpui_kit::test]
+fn the_title_bar_close_without_pods_closes_at_once(cx: &mut TestAppContext) {
+    let debugs = node_clusters("nc-titlebar-free", Answers::Waiting, cx);
+    debugs.fixture.with_window(cx, |window, cx| {
+        debugs
+            .fixture
+            .shell
+            .update(cx, |shell, cx| shell.close_main_window(window, cx));
+    });
+    assert!(!window_is_open(&debugs, cx));
+}
+
+#[gpui_kit::test]
+fn quit_writes_an_abandoned_line_for_every_delete_it_starts(cx: &mut TestAppContext) {
+    let (debugs, dir) = audited_node_clusters("nc-quit-order", Answers::Waiting, cx);
+    debugs.open_live_node_shell(&debugs.stg, cx);
+    // Nothing has been deleted yet: the quit starts the delete, then writes its line.
+    let waiting = debugs
+        .fixture
+        .shell
+        .update(cx, |shell, cx| shell.cleanup_for_quit(cx));
+    let lines = delete_lines(&dir);
+    assert!(
+        lines.iter().any(|line| line["outcome"] == "abandoned"),
+        "the delete the quit started has its abandoned line at once: {lines:?}"
+    );
+    drop(waiting);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn a_create_in_flight_keeps_the_window_open(cx: &mut TestAppContext) {
+    let debugs = node_clusters("nc-creating", Answers::Waiting, cx);
+    debugs
+        .fixture
+        .shell
+        .update(cx, |shell, _| shell.node_shell_runs.create_started());
+    let may_close = debugs
+        .fixture
+        .shell
+        .update(cx, |shell, cx| shell.main_window_may_close(cx));
+    assert!(!may_close, "a pod may be created any moment");
+    assert!(window_is_open(&debugs, cx));
+    // Once the create has an owner (here: nothing to own), the close goes through.
+    debugs.fixture.shell.update(cx, |shell, cx| {
+        shell.node_shell_runs.create_finished();
+        shell.close_window_when_idle(cx);
+    });
+    debugs.wait_for("the window to close", cx, |cx| !window_is_open(&debugs, cx));
+}
+
+fn node_plan(
+    debugs: &Debugs,
+    cluster: &ClusterRef,
+    cx: &mut TestAppContext,
+) -> crate::app_shell::debug_open::TabPlan {
+    use crate::shell_tab::{ShellKind, ShellTarget};
+    let audit = debugs.fixture.shell.read_with(cx, |shell, cx| {
+        shell
+            .guard_for(&debugs.stg, cx)
+            .map(|guard| CleanupAudit::of(&guard))
+    });
+    crate::app_shell::debug_open::TabPlan {
+        cluster: cluster.clone(),
+        target: ShellTarget {
+            cluster: cluster.clone(),
+            namespace: "kube-system".to_owned(),
+            pod: "k8sboard-node-shell-wk-03-x7k2q".to_owned(),
+            short_pod: "wk-03".to_owned(),
+            container: "shell".to_owned(),
+        },
+        kind: ShellKind::NodeShell {
+            node: "wk-03".to_owned(),
+            image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
+        },
+        cluster_label: "dev-c".to_owned(),
+        image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
+        namespace: Some("kube-system".to_owned()),
+        cleanup_audit: audit,
+    }
+}
+
+fn created(uid: Option<&str>) -> cluster::WriteOutcome {
+    cluster::WriteOutcome {
+        mode: cluster::WriteMode::Commit,
+        elapsed: Duration::ZERO,
+        effect: cluster::WriteEffect::Created,
+        created_name: Some("k8sboard-node-shell-wk-03-x7k2q".to_owned()),
+        uid: uid.map(str::to_owned),
+    }
+}
+
+#[gpui_kit::test]
+fn a_pod_created_for_a_cluster_that_left_the_view_is_deleted_not_forgotten(
+    cx: &mut TestAppContext,
+) {
+    let debugs = node_clusters("nc-orphan", Answers::Waiting, cx);
+    // dev-c is not viewed, so no slot owns a tab for it.
+    let gone = debugs.fixture.cluster("dev-c", cx);
+    let plan = node_plan(&debugs, &gone, cx);
+    let connection = debugs.session_connection(&debugs.stg, cx);
+    let permit = debugs.attach_permit();
+    debugs.fixture.with_window(cx, |window, cx| {
+        debugs.fixture.shell.update(cx, |shell, cx| {
+            shell.open_debug_tab(
+                &plan,
+                permit,
+                connection,
+                created(Some("uid-1")),
+                window,
+                cx,
+            );
+        });
+    });
+    debugs.wait_for_deletes(&debugs.stg_api, 1, cx);
+    assert_eq!(debugs.tab_count(cx), 0, "no tab for a released cluster");
+}
+
+#[gpui_kit::test]
+fn a_discarded_start_deletes_its_pod_without_a_window(cx: &mut TestAppContext) {
+    let debugs = node_clusters("nc-discard", Answers::Waiting, cx);
+    let plan = node_plan(&debugs, &debugs.stg.clone(), cx);
+    let connection = debugs.session_connection(&debugs.stg, cx);
+    debugs.fixture.shell.update(cx, |shell, cx| {
+        shell.discard_debug_start(&plan, &connection, &created(Some("uid-1")), cx);
+    });
+    debugs.wait_for_deletes(&debugs.stg_api, 1, cx);
+    // A server that reported no uid leaves nothing the delete could be exact about.
+    debugs.fixture.shell.update(cx, |shell, cx| {
+        shell.discard_debug_start(&plan, &connection, &created(None), cx);
+    });
+    debugs.settle(cx);
+    assert_eq!(deletes(&debugs.stg_api).len(), 1);
+}
+
+#[gpui_kit::test]
+fn finished_deletes_are_dropped_and_any_delete_hooks_the_quit(cx: &mut TestAppContext) {
+    let debugs = node_clusters("nc-prune", Answers::Waiting, cx);
+    let plan = node_plan(&debugs, &debugs.stg.clone(), cx);
+    let connection = debugs.session_connection(&debugs.stg, cx);
+    assert!(
+        debugs
+            .fixture
+            .shell
+            .read_with(cx, |shell, _| shell.node_shell_runs.quit.is_none())
+    );
+    for round in 1..=3 {
+        debugs.fixture.shell.update(cx, |shell, cx| {
+            shell.discard_debug_start(&plan, &connection, &created(Some("uid-1")), cx);
+        });
+        debugs.wait_for("the delete", cx, |_| {
+            deletes(&debugs.stg_api).len() >= round
+        });
+        debugs.wait_for("the delete to settle", cx, |cx| {
+            debugs
+                .fixture
+                .shell
+                .read_with(cx, |shell, _| shell.node_shell_runs.pending.is_empty())
+        });
+    }
+    // A delete that no tab started (a sweep row, a late create) hooked the quit all the same.
+    assert!(
+        debugs
+            .fixture
+            .shell
+            .read_with(cx, |shell, _| shell.node_shell_runs.quit.is_some())
+    );
+    // The next start drops the tasks of the finished ones.
+    debugs.fixture.shell.update(cx, |shell, cx| {
+        shell.discard_debug_start(&plan, &connection, &created(Some("uid-1")), cx);
+    });
+    let kept = debugs
+        .fixture
+        .shell
+        .read_with(cx, |shell, _| shell.node_shell_runs.in_flight.len());
+    assert_eq!(kept, 1);
+}

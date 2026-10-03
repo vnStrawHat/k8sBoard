@@ -31,7 +31,14 @@ pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoEl
         Some(environment) => environment_color(environment, cx),
         None => cx.theme().title_bar_border,
     };
+    // Linux draws its own X, which closes without asking the window: it asks the shell first, so a
+    // node shell pod is deleted before the window goes (the hook of the platform window covers the
+    // other platforms).
+    let shell_handle = cx.weak_entity();
     TitleBar::new()
+        .on_close_window(move |_, window, cx| {
+            let _ = shell_handle.update(cx, |shell, cx| shell.close_main_window(window, cx));
+        })
         .border_t(px(3.))
         .border_color(border)
         .child(

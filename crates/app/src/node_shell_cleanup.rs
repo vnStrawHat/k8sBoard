@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::future::Future;
 
 use futures::future::join_all;
-use gpui_kit::{AppContext as _, Context, EntityId, Subscription, Task};
+use gpui_kit::{AppContext as _, Context, EntityId, Subscription, Task, Window};
 
 use super::AppShell;
 use super::write_flow::{CleanupOutcome, NodeShellCleanup, notify, run_cleanup};
@@ -31,8 +31,12 @@ pub(super) struct NodeShellRuns {
     /// quits first.
     pending: HashMap<u64, AuditEntry>,
     next_serial: u64,
-    /// The running deletes. Kept so a quit can wait for them; a finished one costs nothing.
-    in_flight: Vec<Task<()>>,
+    /// The running deletes by serial, so a quit can wait for them. A finished one is dropped at the
+    /// next start (`begin_cleanup`).
+    in_flight: HashMap<u64, Task<()>>,
+    /// Node shell pods whose create is on its way: the window does not close under them, because
+    /// the pod would exist with nobody to delete it.
+    creating: usize,
     /// The main window was asked to close while pods remained: it closes when the last delete
     /// reports.
     is_closing: bool,
@@ -42,7 +46,16 @@ pub(super) struct NodeShellRuns {
 impl NodeShellRuns {
     /// Whether the window may close now: no pod waits for its delete.
     fn is_idle(&self) -> bool {
-        self.cleanups.is_empty() && self.pending.is_empty()
+        self.cleanups.is_empty() && self.pending.is_empty() && self.creating == 0
+    }
+
+    /// A node shell create was sent; `create_finished` follows when its result has been handled.
+    pub(super) fn create_started(&mut self) {
+        self.creating += 1;
+    }
+
+    pub(super) fn create_finished(&mut self) {
+        self.creating = self.creating.saturating_sub(1);
     }
 
     pub(super) fn is_closing(&self) -> bool {
@@ -59,6 +72,11 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) {
         self.node_shell_runs.cleanups.insert(tab, cleanup);
+        self.ensure_quit_hook(cx);
+    }
+
+    /// The first delete of the run hooks the app quit, whatever started it (a tab, the sweep).
+    fn ensure_quit_hook(&mut self, cx: &mut Context<Self>) {
         if self.node_shell_runs.quit.is_none() {
             self.node_shell_runs.quit =
                 Some(cx.on_app_quit(|shell, cx| shell.cleanup_for_quit(cx)));
@@ -76,7 +94,11 @@ impl AppShell {
     /// Starts one delete (a tab's, a sweep row's, or one the window close or a late start owes).
     /// The line to write if the app quits first is remembered until the delete reports.
     pub(super) fn begin_cleanup(&mut self, cleanup: NodeShellCleanup, cx: &mut Context<Self>) {
+        self.ensure_quit_hook(cx);
         let runs = &mut self.node_shell_runs;
+        // Finished deletes are no longer pending: their tasks can go.
+        runs.in_flight
+            .retain(|serial, _| runs.pending.contains_key(serial));
         let serial = runs.next_serial;
         runs.next_serial += 1;
         runs.pending.insert(
@@ -92,7 +114,7 @@ impl AppShell {
                 shell.cleanup_finished(serial, &namespace, &pod, outcome, cx);
             });
         });
-        self.node_shell_runs.in_flight.push(task);
+        self.node_shell_runs.in_flight.insert(serial, task);
     }
 
     fn cleanup_finished(
@@ -115,7 +137,7 @@ impl AppShell {
     }
 
     /// A close waits for the deletes. Once the last one reported, the window goes.
-    fn close_window_when_idle(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_window_when_idle(&mut self, cx: &mut Context<Self>) {
         if !self.node_shell_runs.is_closing || !self.node_shell_runs.is_idle() {
             return;
         }
@@ -143,10 +165,23 @@ impl AppShell {
         false
     }
 
+    /// The close of the main window by a path that does not ask the platform window (the Linux
+    /// title-bar X): the window goes at once when no pod waits, else when the last delete reports.
+    pub(crate) fn close_main_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.main_window_may_close(cx) {
+            window.remove_window();
+        }
+    }
+
     /// The app is quitting by another path: GPUI waits at most 200 ms for what this returns. The
-    /// lines of deletes that may not report in time are written first, synchronously; a delete that
-    /// does report appends its own line after.
+    /// waiting deletes start first, so every delete of the quit has its `abandoned` line; those lines
+    /// are written synchronously, because the process may end before a delete reports, and a delete
+    /// that does report appends its own line after.
     fn cleanup_for_quit(&mut self, cx: &mut Context<Self>) -> impl Future<Output = ()> + use<> {
+        let waiting: Vec<_> = self.node_shell_runs.cleanups.drain().collect();
+        for (_, cleanup) in waiting {
+            self.begin_cleanup(cleanup, cx);
+        }
         if let Some(dir) = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf) {
             for entry in self.node_shell_runs.pending.values() {
                 if let Err(error) = append_audit(&dir, entry) {
@@ -154,13 +189,9 @@ impl AppShell {
                 }
             }
         }
-        let waiting: Vec<_> = self.node_shell_runs.cleanups.drain().collect();
-        for (_, cleanup) in waiting {
-            self.begin_cleanup(cleanup, cx);
-        }
         let running = std::mem::take(&mut self.node_shell_runs.in_flight);
         async move {
-            join_all(running).await;
+            join_all(running.into_values()).await;
         }
     }
 

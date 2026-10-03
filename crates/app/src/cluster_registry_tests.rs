@@ -376,8 +376,10 @@ fn allow_node_shell_defaults_by_environment() {
         Some(Environment::Production),
         None
     ));
-    // Development and Local are on, set or guessed.
-    assert!(allows_node_shell("dev-1", None, None));
+    // Development is on only when it is set (a `dev` in a name is a guess a production cluster can
+    // share, like `devops-core`); Local is on, set or guessed.
+    assert!(!allows_node_shell("dev-1", None, None));
+    assert!(!allows_node_shell("devops-core", None, None));
     assert!(allows_node_shell(
         "anything",
         Some(Environment::Development),

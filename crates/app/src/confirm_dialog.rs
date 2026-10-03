@@ -433,7 +433,12 @@ impl ConfirmDialog {
         {
             return Some("Every object is already gone; nothing to delete".into());
         }
-        match &self.dry_run {
+        // The gate of a start is read again too (the setting, the tier, a re-review): see `gate_block`.
+        let gate_block = match (&self.kind, guard.as_ref()) {
+            (DialogKind::Connect(intent), Some(guard)) => intent.gate_block(guard),
+            _ => None,
+        };
+        let base = match &self.dry_run {
             Some(dry_run) => commit_block(
                 guard.as_ref(),
                 name,
@@ -449,7 +454,8 @@ impl ConfirmDialog {
                 typed,
                 self.kind.expected(),
             ),
-        }
+        };
+        base.or(gate_block)
     }
 
     /// The confirm button, or Enter on it. Nothing happens while `block` holds or a commit runs.
@@ -924,14 +930,8 @@ impl ConfirmDialog {
     fn render_buttons(&self, block: bool, cx: &mut Context<Self>) -> AnyElement {
         let (label, is_danger) = match &self.kind {
             DialogKind::Unlock { .. } => (SharedString::from("Unlock"), false),
-            DialogKind::Write(intent) => (
-                intent.button.clone(),
-                has_danger_button(intent.risk),
-            ),
-            DialogKind::Connect(intent) => (
-                intent.button.clone(),
-                has_danger_button(intent.risk),
-            ),
+            DialogKind::Write(intent) => (intent.button.clone(), has_danger_button(intent.risk)),
+            DialogKind::Connect(intent) => (intent.button.clone(), has_danger_button(intent.risk)),
             DialogKind::Batch(batch) => (
                 batch.confirm_label(self.gone_count()).into(),
                 has_danger_button(batch.risk),
@@ -1029,6 +1029,14 @@ impl Render for ConfirmDialog {
 impl ConfirmDialog {
     pub(crate) fn dry_run_state(&self) -> Option<DryRunState> {
         self.dry_run.clone()
+    }
+
+    /// The start the dialog asks about, for the tests that call the commit directly.
+    pub(crate) fn connect_intent(&self) -> Option<Rc<ConnectIntent>> {
+        match &self.kind {
+            DialogKind::Connect(intent) => Some(Rc::clone(intent)),
+            _ => None,
+        }
     }
 
     pub(crate) fn tier(&self) -> &DialogConfirm {

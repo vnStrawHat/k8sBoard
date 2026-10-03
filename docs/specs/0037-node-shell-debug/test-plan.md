@@ -33,7 +33,7 @@
 | `create_then_attach_opens_after_commit` | `open` gets the permit and the outcome uid; commit error → `open` not called |
 | `cleanup_needs_no_gate_and_audits_one_line` | locked cluster, no viewed session → one DELETE (no dry-run) sent (fake), one `Delete node shell pod` line |
 | `cleanup_runs_once` | `Exited` then release → one delete |
-| `allow_node_shell_defaults_by_environment` | PROD off; DEV/LOCAL (set or guessed) on; STG on only when set in the entry; guessed STG and unknown off; an explicit `allow_node_shell` wins |
+| `allow_node_shell_defaults_by_environment` | PROD off; LOCAL (set or guessed) on; DEV and STG on only when set in the entry; guessed DEV, guessed STG and unknown off; an explicit `allow_node_shell` wins |
 | `registry_keys_are_the_allow_list` | the three new keys |
 | `safety_toggle_stores_allow_node_shell` | settings window test |
 | `debug_image_validation` | empty, whitespace, 256 chars rejected |

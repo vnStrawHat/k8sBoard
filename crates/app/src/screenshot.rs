@@ -172,6 +172,87 @@ pub(crate) fn shell_fixture_target() -> crate::shell_tab::ShellTarget {
     }
 }
 
+/// What a shell tab fixture shows: the pod, what the tab runs, and the transcript it is fed.
+#[cfg(feature = "screenshot")]
+pub(crate) struct ShellTabFixture {
+    pub(crate) target: crate::shell_tab::ShellTarget,
+    pub(crate) kind: crate::shell_tab::ShellKind,
+    pub(crate) cluster_label: String,
+    pub(crate) transcript: &'static str,
+}
+
+/// The tab of `launch`: the node shell and debug shell screens have their own, every other shell
+/// screen shows the exec pane.
+#[cfg(feature = "screenshot")]
+pub(crate) fn shell_tab_fixture(launch: LaunchScreen) -> ShellTabFixture {
+    use crate::shell_tab::{ShellKind, ShellTarget};
+
+    let owner = crate::cluster_registry::ClusterRef {
+        kubeconfig: std::path::PathBuf::from("fixture.yaml"),
+        context: SHELL_FIXTURE_CLUSTER.to_owned(),
+    };
+    match launch {
+        LaunchScreen::NodeShellTabFixture => ShellTabFixture {
+            target: ShellTarget {
+                cluster: owner,
+                namespace: "kube-system".to_owned(),
+                pod: "k8sboard-node-shell-wk-03-x7k2q".to_owned(),
+                short_pod: "wk-03".to_owned(),
+                container: "shell".to_owned(),
+            },
+            kind: ShellKind::NodeShell {
+                node: "wk-03".to_owned(),
+                image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
+            },
+            cluster_label: SHELL_FIXTURE_CLUSTER.to_owned(),
+            transcript: NODE_SHELL_FIXTURE_TRANSCRIPT,
+        },
+        LaunchScreen::DebugShellTabFixture => ShellTabFixture {
+            target: ShellTarget {
+                cluster: owner,
+                namespace: "payments".to_owned(),
+                pod: "api-7d9f8c-m8n2p".to_owned(),
+                short_pod: "m8n2p".to_owned(),
+                container: "debugger-4xk2j".to_owned(),
+            },
+            kind: ShellKind::Debug {
+                target_container: "api".to_owned(),
+                image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
+            },
+            cluster_label: SHELL_FIXTURE_CLUSTER.to_owned(),
+            transcript: DEBUG_SHELL_FIXTURE_TRANSCRIPT,
+        },
+        _ => ShellTabFixture {
+            target: shell_fixture_target(),
+            kind: ShellKind::Exec,
+            cluster_label: SHELL_FIXTURE_CLUSTER.to_owned(),
+            transcript: SHELL_FIXTURE_TRANSCRIPT,
+        },
+    }
+}
+
+/// The node shell fixture pane: a root shell on the host.
+#[cfg(feature = "screenshot")]
+const NODE_SHELL_FIXTURE_TRANSCRIPT: &str = concat!(
+    "\x1b]7770;sh\x07",
+    "\x1b[32mroot@wk-03:/#\x1b[0m uname -r\r\n",
+    "6.1.0-18-amd64\r\n",
+    "\x1b[32mroot@wk-03:/#\x1b[0m df -h /var/lib/kubelet | tail -1\r\n",
+    "/dev/sda2       98G   61G   32G  66% /var/lib/kubelet\r\n",
+    "\x1b[32mroot@wk-03:/#\x1b[0m ",
+);
+
+/// The debug shell fixture pane: a shell in the process namespace of the `api` container.
+#[cfg(feature = "screenshot")]
+const DEBUG_SHELL_FIXTURE_TRANSCRIPT: &str = concat!(
+    "\x1b]7770;sh\x07",
+    "\x1b[32m/ #\x1b[0m ps | head -3\r\n",
+    "PID   USER     COMMAND\r\n",
+    "    1 app      /usr/local/bin/api --port=8080\r\n",
+    "   27 root     sh\r\n",
+    "\x1b[32m/ #\x1b[0m ",
+);
+
 /// The two clusters of the Port Forwarding fixture screens, with their switcher labels: a
 /// Production one and a Staging one. They need no real cluster.
 #[cfg(feature = "screenshot")]
@@ -422,6 +503,9 @@ pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bo
     if screen.is_dialog_fixture() {
         return !input.is_dialog_pending;
     }
+    if screen.is_dock_fixture() {
+        return !input.is_log_pending;
+    }
     match input.target {
         TargetState::Unavailable => true,
         TargetState::Loading => false,
@@ -652,6 +736,8 @@ mod tests {
     fn a_fixed_dialog_is_settled_without_a_cluster() {
         for screen in [
             LaunchScreen::NodeShellConfirm,
+            LaunchScreen::NodeShellConfirmStaging,
+            LaunchScreen::LeftoverSweepFixture,
             LaunchScreen::ShellConfirmFixture,
         ] {
             for target in [
@@ -668,6 +754,26 @@ mod tests {
             let pending = SettleInput {
                 is_dialog_pending: true,
                 ..input(TargetState::Loading, false)
+            };
+            assert!(!is_screen_settled(screen, &pending), "{screen:?}");
+        }
+    }
+
+    #[test]
+    fn a_debug_tab_fixture_waits_only_for_its_tab() {
+        for screen in [
+            LaunchScreen::NodeShellTabFixture,
+            LaunchScreen::DebugShellTabFixture,
+        ] {
+            for target in [TargetState::Loading, TargetState::Unavailable] {
+                assert!(
+                    is_screen_settled(screen, &input(target, false)),
+                    "{screen:?}"
+                );
+            }
+            let pending = SettleInput {
+                is_log_pending: true,
+                ..input(TargetState::Unavailable, false)
             };
             assert!(!is_screen_settled(screen, &pending), "{screen:?}");
         }

@@ -46,8 +46,8 @@ pub(crate) struct ClusterEntry {
     pub(crate) confirm: Option<ConfirmMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) default_namespace: Option<String>,
-    /// Whether the node shell is offered (spec 0037); `None` follows the environment: on for
-    /// Development and Local, on for Staging only when the environment is set here, off otherwise.
+    /// Whether the node shell is offered (spec 0037); `None` follows the environment: on for Local,
+    /// on for Development and Staging only when the environment is set here, off otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) allow_node_shell: Option<bool>,
     /// The image of debug containers and node shell pods; `None` is the pinned busybox.
@@ -141,14 +141,17 @@ impl ClusterRegistry {
         let confirm = entry
             .and_then(|entry| entry.confirm)
             .unwrap_or_else(|| ConfirmMode::for_environment(environment));
-        // A guess must never switch a privileged pod on: Staging is also what an unknown name
-        // falls back to, so it counts only when the entry says it.
+        // A guess must never switch a privileged pod on. Staging is also what an unknown name falls
+        // back to, and a Development guess comes from a `dev` token that a production cluster named
+        // `devops-core` has too, so both count only when the entry sets the environment. Local is a
+        // guess from the strong names of local clusters (`kind-`, `docker-desktop`).
+        let is_environment_set = entry.is_some_and(|entry| entry.environment.is_some());
         let allow_node_shell =
             entry
                 .and_then(|entry| entry.allow_node_shell)
                 .unwrap_or(match environment {
-                    Environment::Development | Environment::Local => true,
-                    Environment::Staging => entry.is_some_and(|entry| entry.environment.is_some()),
+                    Environment::Local => true,
+                    Environment::Development | Environment::Staging => is_environment_set,
                     Environment::Production => false,
                 });
         let stored_text = |text: Option<&String>| {

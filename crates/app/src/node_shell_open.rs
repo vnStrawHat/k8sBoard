@@ -208,8 +208,14 @@ impl AppShell {
             expected_name: Some(node.to_owned()),
             open: ConnectOpen::CreateThenAttach(CreateThenAttach {
                 create,
-                open: Rc::new(move |shell, permit, connection, outcome, window, cx| {
-                    shell.open_debug_tab(&plan, permit, connection, outcome, window, cx);
+                open: Rc::new({
+                    let plan = Rc::clone(&plan);
+                    move |shell, permit, connection, outcome, window, cx| {
+                        shell.open_debug_tab(&plan, permit, connection, outcome, window, cx);
+                    }
+                }),
+                discard: Rc::new(move |shell, connection, outcome, cx| {
+                    shell.discard_debug_start(&plan, &connection, &outcome, cx);
                 }),
             }),
         };
@@ -220,11 +226,13 @@ impl AppShell {
 #[cfg(feature = "screenshot")]
 impl AppShell {
     /// `--screen node-shell-confirm`: the Open node shell dialog of a fixed node of a fixed
-    /// Production cluster, the dry-run passed in 388 ms and the typed-name field empty. It needs no
+    /// Production cluster (or, for `node-shell-confirm-staging`, a Staging one: the node name is
+    /// typed there too), the dry-run passed in 388 ms and the typed-name field empty. It needs no
     /// cluster at all, skips the gate, and its confirm button and Enter do nothing
     /// (`ConfirmDialog::show_fixture_after`), so it can never create a pod.
     pub(super) fn open_node_shell_confirm_fixture(
         &mut self,
+        environment: crate::environment::Environment,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -234,13 +242,16 @@ impl AppShell {
 
         use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
         use crate::environment::Environment;
-        use crate::screenshot::SHELL_FIXTURE_CLUSTER;
-        use crate::write_guard::confirm_step;
+        use crate::write_guard::{ConfirmMode, confirm_step};
 
         const NODE: &str = "wk-03";
+        let fixture_cluster = match environment {
+            Environment::Production => crate::screenshot::SHELL_FIXTURE_CLUSTER,
+            _ => "stg-eu-1",
+        };
         let cluster = ClusterRef {
             kubeconfig: std::path::PathBuf::from("fixture.yaml"),
-            context: SHELL_FIXTURE_CLUSTER.to_owned(),
+            context: fixture_cluster.to_owned(),
         };
         let pod = node_shell_pod_name(NODE, "x7k2q");
         let request = ObjectRef::new(ObjectKind::Pod, Some("kube-system".to_owned()), pod)
@@ -270,7 +281,7 @@ impl AppShell {
             .collect();
         let create = Rc::new(WriteIntent {
             cluster: cluster.clone(),
-            cluster_name: SHELL_FIXTURE_CLUSTER.into(),
+            cluster_name: fixture_cluster.into(),
             action: ResourceAction::OpenNodeShell,
             label: label.clone().into(),
             button: CREATE_ACTION.into(),
@@ -281,7 +292,7 @@ impl AppShell {
         });
         let intent = ConnectIntent {
             cluster,
-            cluster_name: SHELL_FIXTURE_CLUSTER.into(),
+            cluster_name: fixture_cluster.into(),
             action: ResourceAction::OpenNodeShell,
             label: label.into(),
             button: BUTTON.into(),
@@ -297,10 +308,11 @@ impl AppShell {
             open: ConnectOpen::CreateThenAttach(CreateThenAttach {
                 create,
                 open: Rc::new(|_, _, _, _, _, _| {}),
+                discard: Rc::new(|_, _, _, _| {}),
             }),
         };
         let confirm = confirm_step(
-            crate::write_guard::ConfirmMode::TypeName,
+            ConfirmMode::for_environment(environment),
             risk,
             intent.expected(),
         );
@@ -308,7 +320,7 @@ impl AppShell {
             shell: cx.weak_entity(),
             kind: DialogKind::Connect(Rc::new(intent)),
             confirm,
-            environment: Environment::Production,
+            environment,
             generation: 0,
         };
         let dialog = cx.new(|cx| ConfirmDialog::new(inputs, window, cx));

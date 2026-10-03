@@ -26,7 +26,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -89,6 +89,15 @@ pub(crate) enum LaunchScreen {
     /// debug starts over fixed data. Screenshot builds only; they need no cluster and start nothing.
     NodeShellOptions,
     DebugContainerOptions,
+    /// `--screen node-shell-confirm-staging`: the node shell confirm on a Staging cluster, which asks
+    /// for the node name like any Privileged action. Offline like the Production one.
+    NodeShellConfirmStaging,
+    /// `--screen leftover-sweep-fixture`: the leftover review dialog over fixed rows.
+    LeftoverSweepFixture,
+    /// `--screen node-shell-tab-fixture` and `debug-shell-tab-fixture`: the dock zoomed on a node
+    /// shell tab and on a debug shell tab over fixed data; they never open a session.
+    NodeShellTabFixture,
+    DebugShellTabFixture,
     /// `--screen port-forwards`: the Port Forwarding page with five fixed rows and the drawer of the
     /// first. Screenshot builds only; it needs no cluster and starts nothing.
     PortForwards,
@@ -175,8 +184,12 @@ impl LaunchScreen {
             Self::CordonConfirm
             | Self::UnlockConfirm
             | Self::NodeShellConfirm
+            | Self::NodeShellConfirmStaging
             | Self::NodeShellOptions => Screen::Nodes,
-            Self::DebugContainerOptions => Screen::Pods,
+            Self::DebugContainerOptions
+            | Self::LeftoverSweepFixture
+            | Self::NodeShellTabFixture
+            | Self::DebugShellTabFixture => Screen::Pods,
             Self::ShellConfirmFixture | Self::DeleteBulkConfirm => Screen::Pods,
             Self::EditYamlDiff => Screen::Kind(ResourceKind::Deployments),
             Self::ScalePopover
@@ -380,6 +393,8 @@ impl LaunchScreen {
                 | Self::NodeShellConfirm
                 | Self::NodeShellOptions
                 | Self::DebugContainerOptions
+                | Self::NodeShellConfirmStaging
+                | Self::LeftoverSweepFixture
                 | Self::ScalePopover
                 | Self::ScaleConfirm
                 | Self::RestartBulkConfirm
@@ -401,7 +416,16 @@ impl LaunchScreen {
                 | Self::NodeShellConfirm
                 | Self::NodeShellOptions
                 | Self::DebugContainerOptions
+                | Self::NodeShellConfirmStaging
+                | Self::LeftoverSweepFixture
         )
+    }
+
+    /// Whether the screen is a dock tab drawn from fixed data: it waits for no cluster, only for the
+    /// tab to open.
+    #[cfg(any(feature = "screenshot", test))]
+    pub(crate) fn is_dock_fixture(self) -> bool {
+        matches!(self, Self::NodeShellTabFixture | Self::DebugShellTabFixture)
     }
 
     /// Whether the screen is drawn from fixed forwards and waits for no cluster.
@@ -429,6 +453,8 @@ impl LaunchScreen {
                 | Self::ShellPasteFixture
                 | Self::ShellPickerFixture
                 | Self::ShellFindFixture
+                | Self::NodeShellTabFixture
+                | Self::DebugShellTabFixture
         )
     }
 
@@ -472,6 +498,10 @@ impl LaunchScreen {
             "node-shell-confirm" => Some(Self::NodeShellConfirm),
             "node-shell-options" => Some(Self::NodeShellOptions),
             "debug-container-options" => Some(Self::DebugContainerOptions),
+            "node-shell-confirm-staging" => Some(Self::NodeShellConfirmStaging),
+            "leftover-sweep-fixture" => Some(Self::LeftoverSweepFixture),
+            "node-shell-tab-fixture" => Some(Self::NodeShellTabFixture),
+            "debug-shell-tab-fixture" => Some(Self::DebugShellTabFixture),
             "shell-find-fixture" => Some(Self::ShellFindFixture),
             "port-forwards" => Some(Self::PortForwards),
             "port-forwards-list" => Some(Self::PortForwardsList),
