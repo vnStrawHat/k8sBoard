@@ -650,6 +650,10 @@ impl AppShell {
             .update(cx, |table, _| table.delegate_mut().set_session(None));
         self.kind_table
             .update(cx, |table, _| table.delegate_mut().set_session(None));
+        // The graph, its feeds, and the pins of the old cluster go with the session; the view also
+        // holds the session, which must be released before the next one connects.
+        self.topology
+            .update(cx, |view, cx| view.set_session(None, cx));
         self._session_observer = None;
         self.session = None;
         self.has_reported_live = false;

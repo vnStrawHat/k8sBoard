@@ -231,6 +231,32 @@ fn old_session_is_gone_before_the_new_connect(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn switch_leaves_no_topology_of_the_old_cluster(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture_with("topology", &["--screen", "topology"], cx);
+    let old = fixture.session(cx).downgrade();
+    let key = ResourceKey::Kind {
+        kind: ResourceKind::Services,
+        namespace: Some("shop".to_owned()),
+        name: "web".to_owned(),
+    };
+    fixture
+        .shell
+        .update(cx, |shell, cx| shell.show_in_topology(&key, cx));
+    cx.run_until_parked();
+    fixture.shell.read_with(cx, |shell, cx| {
+        assert!(shell.topology.read(cx).header_count().is_some());
+    });
+    fixture.switch("stg-b", cx);
+    cx.run_until_parked();
+    fixture.draw_twice(cx);
+    // The view held the session and a namespace of the old cluster: both are gone.
+    assert!(old.upgrade().is_none(), "the old session is still held");
+    fixture.shell.read_with(cx, |shell, cx| {
+        assert_eq!(shell.topology.read(cx).header_count(), None);
+    });
+}
+
+#[gpui_kit::test]
 fn switch_closes_the_drawer(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture("drawer", cx);
     let key = ResourceKey::Kind {
