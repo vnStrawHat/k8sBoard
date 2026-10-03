@@ -26,7 +26,7 @@ const TLS_TYPE: &str = "kubernetes.io/tls";
 const TLS_CERTIFICATE_KEY: &str = "tls.crt";
 const DOCKER_CONFIG_JSON_TYPE: &str = "kubernetes.io/dockerconfigjson";
 const DOCKER_CONFIG_TYPE: &str = "kubernetes.io/dockercfg";
-const SERVICE_ACCOUNT_TOKEN_TYPE: &str = "kubernetes.io/service-account-token";
+pub(crate) const SERVICE_ACCOUNT_TOKEN_TYPE: &str = "kubernetes.io/service-account-token";
 /// The only annotation read: it holds an account name, never a value.
 const SERVICE_ACCOUNT_NAME_ANNOTATION: &str = "kubernetes.io/service-account.name";
 /// Pages cap the plaintext in flight at 50 Secrets per list response.
@@ -205,7 +205,7 @@ fn without_body_bytes(context: &str, error: ClusterError) -> ClusterError {
     unexpected(context, action, text)
 }
 
-fn decode_secret(context: &str, body: &str) -> Result<Secret, ClusterError> {
+pub(crate) fn decode_secret(context: &str, body: &str) -> Result<Secret, ClusterError> {
     serde_json::from_str(body)
         .map_err(|_| unexpected(context, READ_ACTION, "the secret could not be decoded"))
 }

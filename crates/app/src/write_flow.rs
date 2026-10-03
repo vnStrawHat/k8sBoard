@@ -22,6 +22,7 @@ use gpui_kit::{
 };
 
 use super::AppShell;
+use super::values_edit_flow::values_success_notice;
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, audit_entry,
     created_name_field, timestamp_now,
@@ -1010,6 +1011,11 @@ impl AppShell {
                     shell.edit_commit_finished(&intent, &result, cx)
                 });
             }
+            if matches!(intent.action, ResourceAction::EditValues(_)) {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.values_commit_finished(&intent, &result, cx)
+                });
+            }
             finish_commit(&dialog, &intent, handle, result, cx);
         })
         .detach();
@@ -1034,7 +1040,10 @@ fn finish_commit(
     if let Err(error) = &result
         // A stale `resourceVersion` cannot pass a second time, so an edit never offers Retry: its
         // editor rebases instead.
-        && !matches!(intent.action, ResourceAction::EditYaml(_))
+        && !matches!(
+            intent.action,
+            ResourceAction::EditYaml(_) | ResourceAction::EditValues(_)
+        )
         && let Some(text) = retryable_text(error)
         && dialog
             .update(cx, |dialog, cx| {
@@ -1049,6 +1058,11 @@ fn finish_commit(
         return;
     }
     let notice = match &result {
+        Ok(()) if matches!(intent.action, ResourceAction::EditValues(_)) => {
+            let target = intent.request.target();
+            let count = intent.request.changed_fields().len();
+            values_success_notice(target.kind_name(), target.name(), count)
+        }
         Ok(()) => success_notice(&label, created.as_deref()),
         Err(error) => failure_notice(&label, error),
     };

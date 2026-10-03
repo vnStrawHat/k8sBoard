@@ -100,3 +100,26 @@ fn step_container_clamps_in_display_order() {
     );
     assert_eq!(step_container(&[], Some(0), ContainerStep::Next), None);
 }
+
+// ---- Edit values (spec 0047) ----
+
+#[test]
+fn values_screen_context_follows_the_visible_screen() {
+    use crate::resource_kind::ResourceKind;
+    for kind in [ResourceKind::ConfigMaps, ResourceKind::Secrets] {
+        assert_eq!(
+            shell_key_context(Screen::Kind(kind)),
+            "AppShell ValuesScreen",
+            "{kind:?}"
+        );
+    }
+    for screen in [
+        Screen::Kind(ResourceKind::HelmReleases),
+        Screen::Kind(ResourceKind::Deployments),
+        Screen::Pods,
+        Screen::Nodes,
+        Screen::Overview,
+    ] {
+        assert_eq!(shell_key_context(screen), "AppShell", "{screen:?}");
+    }
+}

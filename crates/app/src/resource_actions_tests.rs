@@ -3026,3 +3026,214 @@ fn workload_logs_item_has_l_hint() {
         Some(Ok(PodOwner::Deployment { .. }))
     ));
 }
+
+// ---- Edit values (spec 0047) ----
+
+fn patch_report(kind: ObjectKind, is_allowed: bool) -> KindAccess {
+    let decision = if is_allowed {
+        AccessDecision::Allowed
+    } else {
+        AccessDecision::Denied { reason: None }
+    };
+    KindAccess::Known(AccessReport {
+        reviews: vec![AccessReview {
+            check: AccessCheck::Patch(kind),
+            decision,
+        }],
+    })
+}
+
+fn values_gate(kind_access: &KindAccessMap, lock: WriteLock) -> ActionAvailability {
+    let access = known_denying(&[]);
+    let mut guard = test_guard(&access, lock, "dev-1", Environment::Development);
+    guard.kind_access = kind_access;
+    action_availability(ResourceAction::EditValues(ObjectKind::Secret), &guard)
+}
+
+#[test]
+fn denied_patch_disables_with_reason() {
+    let mut map = KindAccessMap::new();
+    assert_eq!(
+        reason(values_gate(&map, WriteLock::Unlocked)),
+        "Checking permissions…"
+    );
+    map.set(ObjectKind::Secret, patch_report(ObjectKind::Secret, false));
+    assert_eq!(
+        reason(values_gate(&map, WriteLock::Unlocked)),
+        "Not permitted: patch secrets"
+    );
+    map.set(ObjectKind::Secret, patch_report(ObjectKind::Secret, true));
+    assert_eq!(
+        values_gate(&map, WriteLock::Unlocked),
+        ActionAvailability::Enabled
+    );
+    assert_eq!(
+        reason(values_gate(&map, WriteLock::Locked)),
+        "dev-1 is read-only"
+    );
+}
+
+#[test]
+fn an_update_answer_does_not_open_the_values_gate() {
+    let mut map = KindAccessMap::new();
+    map.set(ObjectKind::Secret, update_report(ObjectKind::Secret, true));
+    assert_eq!(
+        reason(values_gate(&map, WriteLock::Unlocked)),
+        "Not permitted: patch secrets"
+    );
+}
+
+#[test]
+fn edit_values_key_action_is_edit_values() {
+    assert_eq!(
+        RowAction::EditValues.key_action().name(),
+        "k8sboard::EditValues"
+    );
+    assert_eq!(
+        ResourceAction::EditValues(ObjectKind::Secret).row_action(),
+        RowAction::EditValues
+    );
+    assert_eq!(
+        action_label(ResourceAction::EditValues(ObjectKind::Secret)),
+        "Edit values"
+    );
+    assert_eq!(
+        action_risk(ResourceAction::EditValues(ObjectKind::Secret)),
+        ActionRisk::Change
+    );
+}
+
+#[test]
+fn edit_values_resolves_on_two_kinds_only() {
+    let resolved = |subject: &ResourceKey| subject_action(RowAction::EditValues, subject);
+    assert_eq!(
+        resolved(&kind_key(ResourceKind::ConfigMaps)),
+        Some(ResourceAction::EditValues(ObjectKind::ConfigMap))
+    );
+    assert_eq!(
+        resolved(&kind_key(ResourceKind::Secrets)),
+        Some(ResourceAction::EditValues(ObjectKind::Secret))
+    );
+    // A Helm release reads as a Secret by storage; it never offers the editor.
+    assert_eq!(resolved(&kind_key(ResourceKind::HelmReleases)), None);
+    assert_eq!(resolved(&kind_key(ResourceKind::Deployments)), None);
+    assert_eq!(resolved(&pod_key()), None);
+    assert_eq!(resolved(&node_key()), None);
+    assert_eq!(resolved(&kind_key(ResourceKind::Crds)), None);
+}
+
+#[test]
+fn edit_yaml_still_resolves_on_the_two_kinds() {
+    assert_eq!(
+        subject_action(RowAction::EditYaml, &kind_key(ResourceKind::Secrets)),
+        Some(ResourceAction::EditYaml(ObjectKind::Secret))
+    );
+    assert_eq!(
+        subject_action(RowAction::EditYaml, &kind_key(ResourceKind::ConfigMaps)),
+        Some(ResourceAction::EditYaml(ObjectKind::ConfigMap))
+    );
+}
+
+#[test]
+fn the_two_kind_menus_list_edit_values_and_no_stale_edit() {
+    for (kind, object) in [
+        (ResourceKind::ConfigMaps, ObjectKind::ConfigMap),
+        (ResourceKind::Secrets, ObjectKind::Secret),
+    ] {
+        let actions = kind.read_only_actions();
+        assert_eq!(actions.len(), 1, "{kind:?}");
+        assert_eq!(actions[0].label, "Edit values…");
+        assert_eq!(actions[0].action, Some(ResourceAction::EditValues(object)));
+    }
+    assert_eq!(edit_values_kind(ResourceKind::HelmReleases), None);
+}
+
+fn secret_summary(
+    secret_type: &str,
+    labels: &[&str],
+    is_immutable: bool,
+) -> cluster::SecretSummary {
+    cluster::SecretSummary {
+        namespace: "shop".to_owned(),
+        name: "credentials".to_owned(),
+        created_at: None,
+        labels: labels.iter().map(|label| (*label).to_owned()).collect(),
+        secret_type: secret_type.to_owned(),
+        keys: Vec::new(),
+        details: if secret_type == "kubernetes.io/service-account-token" {
+            cluster::SecretDetails::ServiceAccountToken { account: None }
+        } else {
+            cluster::SecretDetails::None
+        },
+        is_immutable,
+        is_owned: false,
+    }
+}
+
+fn config_map_summary(labels: &[&str], is_immutable: bool) -> cluster::ConfigMapSummary {
+    cluster::ConfigMapSummary {
+        namespace: "shop".to_owned(),
+        name: "settings".to_owned(),
+        created_at: None,
+        labels: labels.iter().map(|label| (*label).to_owned()).collect(),
+        keys: Vec::new(),
+        is_immutable,
+    }
+}
+
+#[test]
+fn refused_objects_disable_the_item() {
+    let block = |object: KindObject| values_edit_block(&object).map(|reason| reason.to_string());
+    let secret = |secret_type: &str, labels: &[&str], immutable: bool| {
+        block(KindObject::Secret(secret_summary(
+            secret_type,
+            labels,
+            immutable,
+        )))
+    };
+    assert_eq!(secret("Opaque", &[], false), None);
+    assert_eq!(
+        secret("helm.sh/release.v1", &[], false).as_deref(),
+        Some("Helm release records cannot be edited")
+    );
+    assert_eq!(
+        secret("Opaque", &["owner=helm", "name=x"], false).as_deref(),
+        Some("Helm release records cannot be edited")
+    );
+    assert_eq!(
+        secret("kubernetes.io/service-account-token", &[], false).as_deref(),
+        Some("Service account tokens are managed by Kubernetes")
+    );
+    assert_eq!(
+        secret("Opaque", &[], true).as_deref(),
+        Some("Immutable Secret")
+    );
+    // A ConfigMap labelled owner=helm is a Helm release record of the ConfigMap driver.
+    assert_eq!(
+        block(KindObject::ConfigMap(config_map_summary(
+            &["owner=helm"],
+            false
+        )))
+        .as_deref(),
+        Some("Helm release records cannot be edited")
+    );
+    assert_eq!(
+        block(KindObject::ConfigMap(config_map_summary(&[], true))).as_deref(),
+        Some("Immutable ConfigMap")
+    );
+    assert_eq!(
+        block(KindObject::ConfigMap(config_map_summary(&[], false))),
+        None
+    );
+    assert_eq!(block(KindObject::Plain), None);
+    // The same reasons reach the palette and the menus through `row_block`.
+    assert_eq!(
+        row_block(
+            ResourceAction::EditValues(ObjectKind::Secret),
+            &KindObject::Secret(secret_summary("Opaque", &[], true)),
+            None
+        )
+        .as_deref(),
+        Some("Immutable Secret")
+    );
+}

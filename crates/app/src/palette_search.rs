@@ -222,7 +222,7 @@ pub(crate) struct PaletteInput<'a> {
 }
 
 /// The row actions in the order of the shortcut sheet.
-const ROW_ACTIONS: [RowAction; 21] = [
+const ROW_ACTIONS: [RowAction; 22] = [
     RowAction::ViewLogs,
     RowAction::ViewYaml,
     RowAction::CopyName,
@@ -233,6 +233,7 @@ const ROW_ACTIONS: [RowAction; 21] = [
     RowAction::EditTaints,
     RowAction::EditLabels,
     RowAction::EditYaml,
+    RowAction::EditValues,
     RowAction::RestartRollout,
     RowAction::Scale,
     RowAction::Delete,

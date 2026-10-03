@@ -39,7 +39,7 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 | Overview (W3), Issues, Topology (W11) | Done (Issues in 0020; Overview in 0021, the default landing screen; Topology in 0022) | 0020, 0021, 0022 | — |
 | Settings (W2), multi-cluster (W1), env colors | Partial (settings store, cluster registry, env badge and border, saved sort and columns, default namespace done in 0024; Settings window with Clusters, Appearance, About done in 0025; cluster switcher with health probes and Ctrl 1–9 done in 0026; one cluster at a time by user decision 2026-10-03: the 0027 multi view is removed by 0046, 0045 dropped) | 0024, 0025, 0026, 0046 | 0046 |
 | Keyboard map, command palette (W9) | Done (keyboard map in 0028; command palette in 0029, with the deviations listed in inventory-shell P1) | 0028, 0029, 0032 (Ctrl ⏎) | audit: 0029 step 2 |
-| Every mutation: YAML edit (W10), drain (W6), shell, port-forward, delete | Partial (0030–0033, 0035–0037 built; W10 history and snapshots, New, pod lifecycle missing) | 0030–0033, 0035–0037 | 0034 (in build); audit 0040–0042 (0038 Helm writes deferred) |
+| Every mutation: YAML edit (W10), drain (W6), shell, port-forward, delete | Partial (0030–0033, 0035–0037 built, 0047 Edit values built; W10 history and snapshots, New, pod lifecycle missing) | 0030–0033, 0035–0037, 0047 | 0034 (in build); audit 0040–0042 (0038 Helm writes deferred) |
 
 ## Spec order (summary)
 
@@ -47,7 +47,7 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 |---|---|---|
 | Read-only | 0007 YAML view · 0008 Pod/Node details · 0009 Table toolkit · 0010 Metrics I · 0011 Metrics II (kubelet) · 0012 Kind drawer completions · 0013 Policy kinds · 0014 Storage kinds · 0015 Access-control kinds · 0016 Secrets · 0017 Helm (read) · 0018 CRDs and custom resources · 0019 Workload logs · 0020 Issues (done) · 0021 Overview · 0022 Topology (done) · 0023 RBAC and policy analysis | live-verifiable on UAT |
 | Local only | 0024 Settings store and environments · 0025 Settings window · 0026 Cluster switcher · 0027 Multi-cluster views · 0028 Keyboard map · 0029 Command palette | no cluster writes; app writes its own config files |
-| Mutating | 0030 Guardrails and write path · 0031 Edit YAML · 0032 Workload actions · 0032b Resource edits (HPA limits, PVC Expand, default StorageClass) · 0033 Delete and pod lifecycle · 0034 Node maintenance · 0035 Port-forward · 0036 Terminal and pod shell · 0037 Node shell and debug containers · 0038 Helm write actions (deferred by the user, 2026-10-02; not scheduled) | C3 approved once for 0030–0037 (user, 2026-10-02); RBAC-gated (SSAR); disabled on UAT |
+| Mutating | 0030 Guardrails and write path · 0031 Edit YAML · 0032 Workload actions · 0032b Resource edits (HPA limits, PVC Expand, default StorageClass) · 0033 Delete and pod lifecycle · 0034 Node maintenance · 0035 Port-forward · 0036 Terminal and pod shell · 0037 Node shell and debug containers · 0047 Edit ConfigMap and Secret values · 0038 Helm write actions (deferred by the user, 2026-10-02; not scheduled) | C3 approved once for 0030–0037 (user, 2026-10-02); RBAC-gated (SSAR); disabled on UAT |
 
 ## Open items
 

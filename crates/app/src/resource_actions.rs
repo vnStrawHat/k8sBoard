@@ -3,7 +3,7 @@ use std::rc::Rc;
 use cluster::{
     AccessCheck, ClusterConnection, ContainerKind, ContainerState, ContainerSummary,
     HELM_RELEASE_SECRET_TYPE, NamespaceScope, NodeSummary, ObjectKind, PodSummary,
-    ReplicaSetSummary, SecretKey,
+    ReplicaSetSummary, SecretDetails, SecretKey,
 };
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
@@ -25,8 +25,9 @@ use crate::dock::{Dock, LogOrigin};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
     CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels, EditTaints,
-    EditYaml, ExpandClaim, OpenShell, PauseRollout, PortForward, RerunJob, RestartRollout,
-    RollBack, Scale, SetDefaultStorageClass, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
+    EditValues, EditYaml, ExpandClaim, OpenShell, PauseRollout, PortForward, RerunJob,
+    RestartRollout, RollBack, Scale, SetDefaultStorageClass, SuspendCronJob, TriggerCronJob,
+    ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_join::last_job_owner;
@@ -67,6 +68,8 @@ pub(crate) enum ResourceAction {
     ViewYaml,
     /// Carries the kind of the row: only the editable kinds offer it (spec 0031).
     EditYaml(ObjectKind),
+    /// The key and value editor of a ConfigMap or Secret; carries the kind of the row (spec 0047).
+    EditValues(ObjectKind),
     /// Carries the kind of the row: every built-in kind but a Helm release is deleted (spec 0033).
     Delete(ObjectKind),
     /// Carries the kind of the row: Deployments, StatefulSets, and DaemonSets restart.
@@ -103,6 +106,8 @@ pub(crate) enum RowAction {
     EditTaints,
     EditLabels,
     EditYaml,
+    /// Edit values… of a ConfigMap or Secret (spec 0047); its key is E on those two screens.
+    EditValues,
     RestartRollout,
     Scale,
     Delete,
@@ -157,6 +162,16 @@ pub(crate) fn edit_yaml_kind(kind: ResourceKind) -> Option<ObjectKind> {
         return None;
     }
     kind.builtin_object().filter(|object| object.is_editable())
+}
+
+/// The object kind Edit values edits on a row of `kind`: ConfigMaps and Secrets. A Helm release
+/// reads as a Secret by storage, but its record is never edited here.
+pub(crate) fn edit_values_kind(kind: ResourceKind) -> Option<ObjectKind> {
+    match kind {
+        ResourceKind::ConfigMaps => Some(ObjectKind::ConfigMap),
+        ResourceKind::Secrets => Some(ObjectKind::Secret),
+        _ => None,
+    }
 }
 
 /// The permission a restart of `kind` needs; `None` for a kind that does not restart.
@@ -264,6 +279,11 @@ impl ResourceAction {
                 checks: vec![AccessCheck::Update(kind)],
                 is_shipped: true,
             },
+            // A merge patch needs `patch`, not `update` (spec 0047 decision 7).
+            Self::EditValues(kind) => ActionGate::Mutating {
+                checks: vec![AccessCheck::Patch(kind)],
+                is_shipped: true,
+            },
             Self::Delete(kind) => ActionGate::Mutating {
                 checks: vec![AccessCheck::Delete(kind)],
                 is_shipped: true,
@@ -303,6 +323,7 @@ impl ResourceAction {
             Self::CopyName => RowAction::CopyName,
             Self::ViewYaml => RowAction::ViewYaml,
             Self::EditYaml(_) => RowAction::EditYaml,
+            Self::EditValues(_) => RowAction::EditValues,
             Self::Delete(_) => RowAction::Delete,
             Self::RestartRollout(_) => RowAction::RestartRollout,
             Self::Scale(_) => RowAction::Scale,
@@ -334,6 +355,7 @@ impl RowAction {
             Self::CopyName => Box::new(CopyName),
             Self::ViewYaml => Box::new(ViewYaml),
             Self::EditYaml => Box::new(EditYaml),
+            Self::EditValues => Box::new(EditValues),
             Self::Delete => Box::new(Delete),
             Self::RestartRollout => Box::new(RestartRollout),
             Self::Scale => Box::new(Scale),
@@ -366,6 +388,7 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::CopyName
         | ResourceAction::ViewYaml
         | ResourceAction::EditYaml(_)
+        | ResourceAction::EditValues(_)
         | ResourceAction::RestartRollout(_)
         | ResourceAction::Scale(_)
         | ResourceAction::PauseRollout
@@ -395,6 +418,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::CopyName => "Copy name",
         ResourceAction::ViewYaml => "View YAML",
         ResourceAction::EditYaml(_) => "Edit YAML",
+        ResourceAction::EditValues(_) => "Edit values",
         ResourceAction::Delete(_) => "Delete",
         ResourceAction::RestartRollout(_) => "Restart rollout",
         ResourceAction::Scale(_) => "Scale",
@@ -463,6 +487,13 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         }
         .filter(|kind| kind.is_editable())
         .map(ResourceAction::EditYaml),
+        // ConfigMaps and Secrets only (spec 0047 decision 9); a Helm release row, which reads as a
+        // Secret by storage, a Pod, and a custom kind have none.
+        RowAction::EditValues => match subject {
+            ResourceKey::Kind { kind, .. } => edit_values_kind(*kind),
+            ResourceKey::Pod { .. } | ResourceKey::Node { .. } => None,
+        }
+        .map(ResourceAction::EditValues),
         // The kind table is the one source of which workload kinds offer the action.
         RowAction::RestartRollout
         | RowAction::Scale
@@ -711,15 +742,17 @@ fn permission_reason(
     let mut denied = None;
     for check in checks {
         let report = match check {
-            AccessCheck::Update(kind) | AccessCheck::Delete(kind) => match kind_access.get(*kind) {
-                None | Some(KindAccess::Checking { .. }) => {
-                    return Some("Checking permissions…".into());
+            AccessCheck::Update(kind) | AccessCheck::Delete(kind) | AccessCheck::Patch(kind) => {
+                match kind_access.get(*kind) {
+                    None | Some(KindAccess::Checking { .. }) => {
+                        return Some("Checking permissions…".into());
+                    }
+                    Some(KindAccess::Unknown) => {
+                        return Some("Permissions could not be checked".into());
+                    }
+                    Some(KindAccess::Known(report)) => report,
                 }
-                Some(KindAccess::Unknown) => {
-                    return Some("Permissions could not be checked".into());
-                }
-                Some(KindAccess::Known(report)) => report,
-            },
+            }
             _ => match access {
                 AccessState::Checking { .. } => return Some("Checking permissions…".into()),
                 AccessState::Unknown => {
@@ -1395,6 +1428,39 @@ pub(crate) fn helm_record_reason(object: &KindObject) -> Option<SharedString> {
     match object {
         KindObject::Secret(secret) if secret.secret_type == HELM_RELEASE_SECRET_TYPE => {
             Some(HELM_RECORD_REASON.into())
+        }
+        _ => None,
+    }
+}
+
+/// The Helm storage label of a ConfigMap or Secret that holds a release record (both drivers).
+const HELM_OWNER_TERM: &str = "owner=helm";
+
+/// Why the values of this ConfigMap or Secret row cannot be edited, from its summary (spec 0047):
+/// a Helm release record, a service account token, or an immutable object. The menu and the palette
+/// show it; `values_base` refuses the same objects again from the server's answer.
+pub(crate) fn values_edit_block(object: &KindObject) -> Option<SharedString> {
+    let has_helm_label = |labels: &[String]| labels.iter().any(|label| label == HELM_OWNER_TERM);
+    match object {
+        KindObject::Secret(secret) => {
+            if secret.secret_type == HELM_RELEASE_SECRET_TYPE || has_helm_label(&secret.labels) {
+                Some("Helm release records cannot be edited".into())
+            } else if matches!(secret.details, SecretDetails::ServiceAccountToken { .. }) {
+                Some("Service account tokens are managed by Kubernetes".into())
+            } else if secret.is_immutable {
+                Some("Immutable Secret".into())
+            } else {
+                None
+            }
+        }
+        KindObject::ConfigMap(config_map) => {
+            if has_helm_label(&config_map.labels) {
+                Some("Helm release records cannot be edited".into())
+            } else if config_map.is_immutable {
+                Some("Immutable ConfigMap".into())
+            } else {
+                None
+            }
         }
         _ => None,
     }

@@ -57,3 +57,26 @@ fn kind_access_includes_delete() {
         [AccessCheck::Delete(ObjectKind::Node)]
     );
 }
+
+#[test]
+fn config_maps_and_secrets_also_ask_patch() {
+    for kind in [ObjectKind::ConfigMap, ObjectKind::Secret] {
+        assert_eq!(
+            lazy_checks(kind),
+            [
+                AccessCheck::Update(kind),
+                AccessCheck::Patch(kind),
+                AccessCheck::Delete(kind)
+            ]
+        );
+    }
+    // No other kind asks for it: a merge patch of values exists for these two only.
+    for kind in ObjectKind::ALL {
+        if !matches!(kind, ObjectKind::ConfigMap | ObjectKind::Secret) {
+            assert!(
+                !lazy_checks(kind).contains(&AccessCheck::Patch(kind)),
+                "{kind:?}"
+            );
+        }
+    }
+}

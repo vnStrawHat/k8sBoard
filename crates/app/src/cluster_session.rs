@@ -1697,7 +1697,9 @@ impl ClusterSession {
         tracing::debug!(
             kind = kind.name(),
             is_delete_allowed = matches!(&access, KindAccess::Known(report) if report.is_allowed(AccessCheck::Delete(kind))),
-            "delete permission of the kind"
+            // False for a kind whose values are not edited: the check was not asked (spec 0047).
+            is_patch_allowed = matches!(&access, KindAccess::Known(report) if report.is_allowed(AccessCheck::Patch(kind))),
+            "delete and patch permission of the kind"
         );
         live.kind_access.set(kind, access);
         cx.notify();

@@ -210,7 +210,8 @@ impl EditTest {
     }
 
     fn edit(&self, cx: &mut TestAppContext) -> Option<Entity<YamlEditView>> {
-        self.shell().read_with(cx, |shell, _| shell.edit.clone())
+        self.shell()
+            .read_with(cx, |shell, _| shell.edit.as_ref().and_then(OpenEdit::yaml))
     }
 
     fn view(&self, cx: &mut TestAppContext) -> Entity<YamlEditView> {

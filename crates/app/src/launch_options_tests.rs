@@ -1052,3 +1052,14 @@ fn the_stuck_drain_screen_is_an_offline_dock_over_nodes() {
     assert!(!parsed.shows_node_usage());
     assert!(USAGE.contains("drain-progress-stuck"));
 }
+
+#[test]
+fn screen_values_edit_parses() {
+    let screen = run_options(&["--screen", "values-edit"]).screen;
+    assert_eq!(screen, LaunchScreen::ValuesEdit);
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::Secrets));
+    // It is opened from fixed data once the shell renders, like Edit YAML's diff, and selects no row.
+    assert!(screen.opens_dialog());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("values-edit"));
+}

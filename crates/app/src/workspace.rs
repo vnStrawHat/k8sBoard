@@ -113,7 +113,7 @@ impl AppShell {
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
-                .child(edit.clone())
+                .child(edit.element())
                 .into_any_element();
         }
         // One read of the table view for everything drawn from it in this frame.

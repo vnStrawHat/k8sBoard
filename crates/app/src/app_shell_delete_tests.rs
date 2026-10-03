@@ -829,7 +829,9 @@ fn deleting_the_object_open_in_the_editor_shows_it_gone(cx: &mut TestAppContext)
     assert!(t.shell().read_with(cx, |shell, _| shell.is_editing()));
     t.t.confirm(cx);
     t.t.wait_for("the editor to learn it", cx, |cx| {
-        let edit = t.shell().read_with(cx, |shell, _| shell.edit.clone());
+        let edit = t
+            .shell()
+            .read_with(cx, |shell, _| shell.edit.as_ref().and_then(OpenEdit::yaml));
         edit.is_some_and(|edit| {
             edit.read_with(cx, |view, _| {
                 matches!(view.banner(), Some(EditBanner::Deleted))

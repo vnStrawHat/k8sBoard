@@ -815,3 +815,73 @@ fn cmd_backspace_is_not_bound_off_macos(cx: &mut TestAppContext) {
     bind_all(cx);
     assert!(!is_app_action(resolve("cmd-backspace", &SHELL, cx)));
 }
+
+// ---- Edit values (spec 0047) ----
+
+const VALUES_SCREEN: [&str; 2] = ["Root", "AppShell ValuesScreen"];
+const VALUES_SCREEN_TABLE: [&str; 3] = ["Root", "AppShell ValuesScreen", "DataTable"];
+const VALUES_EDIT_PATH: [&str; 4] = ["Root", "AppShell ValuesScreen", "ValuesEdit", "Input"];
+
+#[gpui_kit::test]
+fn e_binds_edit_values_only_in_values_screen(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("e", &VALUES_SCREEN, cx),
+        Some("k8sboard::EditValues")
+    );
+    assert_eq!(
+        resolve("e", &VALUES_SCREEN_TABLE, cx),
+        Some("k8sboard::EditValues")
+    );
+    // Every other screen keeps E = Edit YAML.
+    assert_eq!(resolve("e", &SHELL, cx), Some("k8sboard::EditYaml"));
+    assert_eq!(resolve("e", &TABLE_PATH, cx), Some("k8sboard::EditYaml"));
+}
+
+#[gpui_kit::test]
+fn e_stays_silent_in_text_fields_and_the_values_view(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(resolve("e", &VALUES_EDIT_PATH, cx), None);
+    assert_eq!(
+        resolve("e", &["Root", "AppShell ValuesScreen", "ValuesEdit"], cx),
+        None
+    );
+    assert_eq!(
+        resolve("e", &["Root", "AppShell ValuesScreen", "Input"], cx),
+        None
+    );
+}
+
+#[gpui_kit::test]
+fn ctrl_s_is_bound_in_values_edit(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("secondary-s", &VALUES_EDIT_PATH, cx),
+        Some("k8sboard::ApplyEdit")
+    );
+    // Outside the view the chord is free.
+    assert_eq!(resolve("secondary-s", &VALUES_SCREEN, cx), None);
+}
+
+#[gpui_kit::test]
+fn the_single_keys_are_silent_in_the_values_view(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for key in ["r", "j", "k", "l", "d"] {
+        assert_eq!(
+            resolve(key, &["Root", "AppShell ValuesScreen", "ValuesEdit"], cx),
+            None,
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn shortcut_rows_name_both_edit_keys() {
+    let labels: Vec<&str> = shortcut_rows().iter().map(|row| row.label).collect();
+    assert!(
+        labels.contains(&"Edit values (ConfigMaps, Secrets)"),
+        "{labels:?}"
+    );
+    assert!(labels.contains(&"Edit YAML (other kinds)"), "{labels:?}");
+    assert!(!labels.contains(&"Edit YAML"));
+}

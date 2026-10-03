@@ -26,7 +26,7 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W7 CronJobs | View logs of last job | Done (0039; key L on the workload kinds too) | `last_job_owner` in `kind_join.rs` | — |
 | W7 ConfigMaps | Compare with previous | missing | 0031 non-goals (the "restart the workload" hint is Done in 0039) | M |
 | W7 5 kinds | New (Namespace, ConfigMap, ResourceQuota, PDB, RoleBinding) | missing | 0031 non-goal ("templates") | M |
-| W7 Secrets | Edit values | missing (disabled `Edit`) | `resource_kind.rs` SECRETS `KindAction::named("Edit")` | M |
+| W7 Secrets, ConfigMaps | Edit values (E on the two screens; Edit YAML stays in the menu) | Done (0047; masked write-only Secret fields, merge patch with the base `resourceVersion`) | [as-built](../specs/0047-config-secret-values/README.md), `values_edit.rs`, `config_values.rs` | — |
 | W7 ResourceQuotas | `Edit` shown disabled next to a working `Edit YAML` | Done (0039: the placeholder is gone) | `resource_kind.rs` RESOURCE_QUOTAS | — |
 | W7 Namespaces | Quota section LimitRange row | Done (0039) | `limit_range.rs`, `AccessCheck::ListLimitRanges`, `namespace_quota_rows` | — |
 | W7 Namespaces, PDBs | Menu items Show remaining resources, Show selected pods | partial (sections exist) | `namespace_rows.rs`, `policy_rows.rs` | S |
@@ -88,5 +88,5 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | 8 | 0029 step 2 | action × resource results, highlight, `@` namespace carry | amend 0029 | local | M |
 | 9 | 0022 steps 4a, 4b Topology RBAC layer (done) | ServiceAccount → binding → role edges behind the RBAC chip | amend 0022 | read-only | M |
 | 10 | 0018 step 6 | Certificate Renew now (allow-listed `certificates/status` patch) | amend 0018 | mutating | S–M |
-| 11 | Secret value editing | Edit values with masking and the C1 rules | new; user decision | mutating | M |
+| 11 | 0047 Secret and ConfigMap value editing (done) | Edit values with masking and the C1 rules | new; user decision | mutating | M |
 | — | backlog | kubelet logs (≥ 1.30), Prometheus and Metrics page, cloud scans, Traffic, Extensions, LSP, 0038 | user decision | — | L |

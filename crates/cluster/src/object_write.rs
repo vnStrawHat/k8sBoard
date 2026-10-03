@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use tokio::time::error::Elapsed;
 
 use crate::access_review::AccessCheck;
+use crate::config_values::{ValuesEdit, values_patch};
 use crate::connection::{ClusterConnection, ClusterError, classify_error, run_raw};
 use crate::debug_pod_bodies::{
     DEBUG_CONTAINER_PREFIX, NODE_SHELL_PREFIX, NodeShellPod, debug_container_patch,
@@ -132,6 +133,9 @@ pub enum WriteOperation {
     },
     /// Per-key merge patch of `metadata.labels` (0034).
     SetNodeLabels { changes: Vec<LabelChange> },
+    /// Merge patch of the changed keys of a ConfigMap or Secret, guarded by the base
+    /// `resourceVersion` (0047). The edit holds new values: nothing prints it.
+    SetDataValues(Box<ValuesEdit>),
 }
 
 impl WriteOperation {
@@ -156,6 +160,7 @@ impl WriteOperation {
             Self::EvictPod { .. } => "EvictPod",
             Self::SetNodeTaints { .. } => "SetNodeTaints",
             Self::SetNodeLabels { .. } => "SetNodeLabels",
+            Self::SetDataValues(_) => "SetDataValues",
         }
     }
 }
@@ -460,6 +465,14 @@ impl WriteRequest {
                     .collect::<Vec<_>>()
                     .join("; "),
             )],
+            // Names and markers only: a value never reaches the dialog or the audit line (0047).
+            WriteOperation::SetDataValues(edit) => edit
+                .change_paths()
+                .map(|path| ChangedField {
+                    path: Cow::Owned(path),
+                    value: None,
+                })
+                .collect(),
         }
     }
 
@@ -485,7 +498,8 @@ impl WriteRequest {
             | WriteOperation::SetDefaultStorageClass { .. }
             | WriteOperation::EvictPod { .. }
             | WriteOperation::SetNodeTaints { .. }
-            | WriteOperation::SetNodeLabels { .. } => true,
+            | WriteOperation::SetNodeLabels { .. }
+            | WriteOperation::SetDataValues(_) => true,
         }
     }
 }
@@ -533,7 +547,8 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
         | WriteOperation::SetDefaultStorageClass { .. }
         | WriteOperation::EvictPod { .. }
         | WriteOperation::SetNodeTaints { .. }
-        | WriteOperation::SetNodeLabels { .. }) => Some(operation),
+        | WriteOperation::SetNodeLabels { .. }
+        | WriteOperation::SetDataValues(_)) => Some(operation),
     }
 }
 
@@ -578,6 +593,10 @@ fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Optio
             AccessCheck::Update(kind)
         }
         (WriteOperation::DeleteObject { .. }, kind) => AccessCheck::Delete(kind),
+        (
+            WriteOperation::SetDataValues(edit),
+            kind @ (ObjectKind::ConfigMap | ObjectKind::Secret),
+        ) if edit.target() == target => AccessCheck::Patch(kind),
         (WriteOperation::AddDebugContainer { .. }, ObjectKind::Pod) => {
             AccessCheck::PatchPodEphemeralContainers
         }
@@ -987,6 +1006,13 @@ impl ClusterConnection {
             WriteOperation::SetNodeLabels { changes } => {
                 let body = labels_patch(changes);
                 let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::SetDataValues(edit) => {
+                let body = values_patch(edit);
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                // The answer holds every value of a Secret: it is dropped at once.
                 self.settle(request, mode, sent)?;
                 Ok(Answer::patched())
             }
@@ -1436,3 +1462,8 @@ mod object_write_node_tests;
 #[allow(clippy::disallowed_methods)]
 #[path = "object_write_resource_edit_tests.rs"]
 mod object_write_resource_edit_tests;
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+#[path = "object_write_values_tests.rs"]
+mod object_write_values_tests;

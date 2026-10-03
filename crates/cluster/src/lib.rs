@@ -13,6 +13,7 @@ mod cadvisor_text;
 mod certificate;
 mod column_path;
 mod config_map;
+mod config_values;
 mod connection;
 mod container_spec;
 mod cron_job;
@@ -86,6 +87,10 @@ pub use cadvisor_text::{ContainerDiskIo, DiskIoCounters, DiskIoSample};
 pub use certificate::{CertificateInfo, CertificateIssue};
 pub use config_map::{
     ConfigMapKey, ConfigMapSummary, ConfigMapValue, ConfigMapValues, ValuePreview,
+};
+pub use config_values::{
+    BaseNotes, DataField, DataFieldChange, KeyChange, KeyContent, MAX_INLINE_VALUE, NewValue,
+    ValueKey, ValuesBase, ValuesBaseError, ValuesEdit, ValuesEditError, is_valid_key_name,
 };
 pub use connection::{ClusterConnection, ClusterError, ServerVersion};
 pub use container_spec::{

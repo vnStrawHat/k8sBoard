@@ -885,12 +885,8 @@ impl AppShell {
         let Some(edit) = self.edit.clone() else {
             return;
         };
-        let is_open_here = {
-            let view = edit.read(cx);
-            view.cluster() == cluster && view.object() == object
-        };
-        if is_open_here {
-            edit.update(cx, |view, cx| view.commit_failed(EditFailure::Deleted, cx));
+        if edit.cluster(cx) == cluster && edit.object(cx) == object {
+            edit.commit_failed(EditFailure::Deleted, cx);
         }
     }
 }

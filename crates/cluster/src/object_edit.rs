@@ -21,7 +21,7 @@ const MISSING_VERSION: &str = "the object has no resourceVersion or uid";
 const MAX_EDIT_BYTES: usize = 2 * 1024 * 1024;
 const HELM_RELEASE: &str = "the object is a Helm release record and cannot be edited here";
 /// The `type` of the Secret that stores a Helm release.
-const HELM_RELEASE_TYPE: &str = "helm.sh/release.v1";
+pub(crate) const HELM_RELEASE_TYPE: &str = "helm.sh/release.v1";
 /// Owned by the server (0031 decision 12): never shown in the editor, stripped when typed back.
 const SERVER_METADATA: [&str; 8] = [
     "managedFields",

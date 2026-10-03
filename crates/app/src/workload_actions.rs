@@ -15,7 +15,7 @@ use crate::app_shell::batch_write::{
 use crate::app_shell::write_flow::WriteIntent;
 use crate::cluster_registry::ClusterRef;
 use crate::kind_row::KindObject;
-use crate::resource_actions::{ResourceAction, action_risk};
+use crate::resource_actions::{ResourceAction, action_risk, values_edit_block};
 use crate::resource_edits::{claim_block, class_block};
 use crate::write_guard::ActionRisk;
 
@@ -219,6 +219,7 @@ pub(crate) fn row_block(
         {
             Some(PAUSED_REASON.into())
         }
+        (ResourceAction::EditValues(_), object) => values_edit_block(object),
         (ResourceAction::ExpandClaim, KindObject::PersistentVolumeClaim(claim)) => {
             claim_block(claim, &[])
         }

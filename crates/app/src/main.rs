@@ -149,6 +149,7 @@ mod usage_bar;
 mod usage_chart;
 mod usage_format;
 mod value_popover;
+mod values_edit;
 mod who_can_view;
 mod workload_actions;
 mod workload_rows;

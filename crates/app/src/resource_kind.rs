@@ -430,7 +430,10 @@ static CONFIG_MAPS: KindSpec = KindSpec {
         column("Used by", 220., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &[],
+    read_only_actions: &[KindAction::keyed(
+        "Edit values…",
+        ResourceAction::EditValues(ObjectKind::ConfigMap),
+    )],
     delete_label: "Delete configmap…",
     has_port_forward: false,
 };
@@ -740,7 +743,10 @@ static SECRETS: KindSpec = KindSpec {
         column("Used by", 220., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &[KindAction::named("Edit")],
+    read_only_actions: &[KindAction::keyed(
+        "Edit values…",
+        ResourceAction::EditValues(ObjectKind::Secret),
+    )],
     delete_label: "Delete secret…",
     has_port_forward: false,
 };
@@ -1368,8 +1374,18 @@ mod tests {
             action_of(ResourceKind::Deployments, "Restart rollout"),
             Some(Some(ResourceAction::RestartRollout(ObjectKind::Deployment)))
         );
-        // Edit YAML is one item of every editable kind's menu, not a kind action of its own.
+        // Edit YAML is one item of every editable kind's menu, not a kind action of its own; Edit
+        // values is the keyed kind action of ConfigMaps and Secrets (spec 0047).
         assert_eq!(action_of(ResourceKind::ConfigMaps, "Edit"), None);
+        assert_eq!(action_of(ResourceKind::Secrets, "Edit"), None);
+        assert_eq!(
+            action_of(ResourceKind::ConfigMaps, "Edit values…"),
+            Some(Some(ResourceAction::EditValues(ObjectKind::ConfigMap)))
+        );
+        assert_eq!(
+            action_of(ResourceKind::Secrets, "Edit values…"),
+            Some(Some(ResourceAction::EditValues(ObjectKind::Secret)))
+        );
         // Roll back has a unit action of its own, with no default key.
         assert_eq!(
             action_of(ResourceKind::Deployments, "Roll back…"),

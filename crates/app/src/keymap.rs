@@ -38,6 +38,7 @@ gpui_kit::actions!(
         Cordon,
         Drain,
         EditYaml,
+        EditValues,
         RestartRollout,
         Scale,
         Delete,
@@ -78,8 +79,10 @@ gpui_kit::actions!(
 const WINDOW: &str = "AppShell";
 /// Single keys: they never act in a text field, menu, popover, dialog, or the Edit YAML view. Dialogs sit
 /// outside `AppShell`, so `!Dialog` is redundant; it is kept so the predicate states the rule.
-const WORKSPACE: &str =
-    "AppShell && !Input && !PopupMenu && !Popover && !Dialog && !Terminal && !YamlEdit";
+const WORKSPACE: &str = "AppShell && !Input && !PopupMenu && !Popover && !Dialog && !Terminal && !YamlEdit && !ValuesEdit";
+/// The ConfigMaps and Secrets screens, where E opens Edit values (spec 0047 decision 9): `AppShell`
+/// adds `ValuesScreen` to its key context while one of them is shown.
+pub(crate) const VALUES_SCREEN: &str = "ValuesScreen";
 /// Overrides of the keys the kit table binds itself (`up down home end pageup pagedown escape`).
 const TABLE: &str = "AppShell > DataTable";
 /// The text fields whose Escape returns the focus to the table.
@@ -108,11 +111,15 @@ const FORWARD_FORM_INPUT: &str = "ForwardForm > Input";
 /// The Edit YAML view (spec 0031): its editor is a text field, and so is the rest of the view for the
 /// workspace's single keys.
 pub(crate) const YAML_EDIT: &str = "YamlEdit";
+/// The Edit values view (spec 0047), the same kind of context.
+pub(crate) const VALUES_EDIT: &str = "ValuesEdit";
 
 /// Registers every binding of the app except the switcher popover's own keys
 /// (`cluster_switcher::bind_keys`). It runs after `gpui_kit::init`, so at equal depth these win
 /// over the kit's bindings.
 pub(crate) fn bind_keys(cx: &mut App) {
+    let values_screen = format!("{WORKSPACE} && {VALUES_SCREEN}");
+    let other_screens = format!("{WORKSPACE} && !{VALUES_SCREEN}");
     cx.bind_keys([
         // Chords.
         KeyBinding::new("secondary-k", OpenPalette, Some(WINDOW)),
@@ -159,7 +166,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("f", PortForward, Some(WORKSPACE)),
         KeyBinding::new("c", Cordon, Some(WORKSPACE)),
         KeyBinding::new("d", Drain, Some(WORKSPACE)),
-        KeyBinding::new("e", EditYaml, Some(WORKSPACE)),
+        KeyBinding::new("e", EditYaml, Some(other_screens.as_str())),
+        KeyBinding::new("e", EditValues, Some(values_screen.as_str())),
         KeyBinding::new("r", RestartRollout, Some(WORKSPACE)),
         KeyBinding::new("shift-s", Scale, Some(WORKSPACE)),
         KeyBinding::new("delete", Delete, Some(WORKSPACE)),
@@ -178,6 +186,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-enter", ScaleCursorRow, Some(PALETTE_INPUT)),
         // Ctrl S in the Edit YAML view checks the edit with the server, then applies it.
         KeyBinding::new("secondary-s", ApplyEdit, Some(YAML_EDIT)),
+        KeyBinding::new("secondary-s", ApplyEdit, Some(VALUES_EDIT)),
     ]);
     // The confirm dialog handles Enter itself (a held Enter must never confirm), so the kit's Enter
     // bindings of the dialog and of its text field are switched off inside it.
@@ -338,10 +347,15 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         row(SelectedResource, "Port-forward", PortForward),
         row(SelectedResource, "Cordon or uncordon node", Cordon),
         row(SelectedResource, "Drain node (opens a dialog)", Drain),
-        row(SelectedResource, "Edit YAML", EditYaml),
+        row(SelectedResource, "Edit YAML (other kinds)", EditYaml),
         row(
             SelectedResource,
-            "Apply the edit (Edit YAML view)",
+            "Edit values (ConfigMaps, Secrets)",
+            EditValues,
+        ),
+        row(
+            SelectedResource,
+            "Apply the edit (Edit YAML and Edit values views)",
             ApplyEdit,
         ),
         row(SelectedResource, "Restart rollout", RestartRollout),

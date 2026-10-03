@@ -99,6 +99,8 @@ pub enum AccessCheck {
     Update(ObjectKind),
     /// Delete (0033): `delete` on the kind's resource. Lazy per kind, so not in `ALL`.
     Delete(ObjectKind),
+    /// Edit values (0047): `patch` on the kind's resource. Lazy per kind, so not in `ALL`.
+    Patch(ObjectKind),
 }
 
 /// The API resource a check asks about.
@@ -262,6 +264,10 @@ impl AccessCheck {
             Self::Delete(kind) => {
                 let (group, resource) = kind.resource();
                 ("delete", group, resource, None, kind.is_namespaced())
+            }
+            Self::Patch(kind) => {
+                let (group, resource) = kind.resource();
+                ("patch", group, resource, None, kind.is_namespaced())
             }
         };
         CheckTarget {
@@ -1573,6 +1579,22 @@ mod tests {
         let cluster_scoped =
             resource_attributes(AccessCheck::Delete(ObjectKind::Node), Some("shop"));
         assert_eq!(cluster_scoped.namespace, None);
+    }
+
+    #[test]
+    fn patch_check_targets_patch_verb() {
+        let check = AccessCheck::Patch(ObjectKind::Secret);
+        assert!(!AccessCheck::ALL.contains(&check));
+        assert_eq!(check.to_string(), "patch secrets");
+        let attributes = resource_attributes(check, Some("shop"));
+        assert_eq!(attributes.verb.as_deref(), Some("patch"));
+        assert_eq!(attributes.group.as_deref(), Some(""));
+        assert_eq!(attributes.resource.as_deref(), Some("secrets"));
+        assert_eq!(attributes.namespace.as_deref(), Some("shop"));
+        assert_eq!(
+            AccessCheck::Patch(ObjectKind::ConfigMap).to_string(),
+            "patch configmaps"
+        );
     }
 
     #[test]

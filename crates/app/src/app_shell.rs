@@ -115,7 +115,6 @@ use crate::traffic_test_view::{TrafficTestView, traffic_defaults};
 use crate::value_popover::ValuePopover;
 use crate::who_can_view::WhoCanView;
 use crate::write_guard::ClusterGuard;
-use crate::yaml_edit::YamlEditView;
 use crate::yaml_view::{YamlView, yaml_subject};
 
 /// The width of the tool dialogs (Who can, Check permissions, Test traffic).
@@ -163,10 +162,15 @@ mod port_forward_page;
 mod resource_edit_flow;
 #[path = "shell_open.rs"]
 pub(crate) mod shell_open;
+#[path = "values_edit_flow.rs"]
+mod values_edit_flow;
 #[path = "write_flow.rs"]
 pub(crate) mod write_flow;
 #[path = "write_lock.rs"]
 mod write_lock;
+
+use edit_yaml_flow::OpenEdit;
+use keyboard_navigation::shell_key_context;
 
 #[cfg(test)]
 #[path = "app_shell_tests.rs"]
@@ -183,6 +187,10 @@ mod app_shell_write_tests;
 #[cfg(test)]
 #[path = "app_shell_edit_tests.rs"]
 mod app_shell_edit_tests;
+
+#[cfg(test)]
+#[path = "app_shell_values_edit_tests.rs"]
+mod app_shell_values_edit_tests;
 
 #[cfg(test)]
 #[path = "app_shell_workload_tests.rs"]
@@ -374,7 +382,7 @@ pub(crate) struct AppShell {
     delete_start: Option<Task<()>>,
     /// The open Edit YAML view (spec 0031). It replaces the table and the drawer in the workspace;
     /// the cursor and the drawer flag are kept under it and come back when it closes.
-    edit: Option<Entity<YamlEditView>>,
+    edit: Option<OpenEdit>,
     /// The name in the discard prompt asked last, for the tests that drive it.
     #[cfg(test)]
     last_discard: Option<String>,
@@ -1883,6 +1891,12 @@ impl AppShell {
         #[cfg(feature = "screenshot")]
         if launch == LaunchScreen::EditYamlDiff {
             self.open_edit_fixture(window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::ValuesEdit {
+            self.open_values_fixture(window, cx);
             self.pending_dialog_launch = None;
             return;
         }
@@ -4315,7 +4329,7 @@ impl Render for AppShell {
         let root = v_flex()
             .size_full()
             .track_focus(&self.focus_handle)
-            .key_context("AppShell")
+            .key_context(shell_key_context(self.screen))
             .on_action(cx.listener(|shell, _: &FocusQuickFilter, window, cx| {
                 shell.focus_quick_filter(window, cx);
             }))

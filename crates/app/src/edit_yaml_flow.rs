@@ -16,7 +16,8 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::{
-    App, AppContext as _, Context, IntoElement as _, ParentElement as _, SharedString, Window,
+    AnyElement, App, AppContext as _, Context, Entity, IntoElement as _, ParentElement as _,
+    SharedString, Window,
 };
 
 use super::AppShell;
@@ -28,11 +29,83 @@ use crate::resource_actions::{
     subject_action, unavailable_text,
 };
 use crate::table_selection::ClusterObject;
+use crate::values_edit::ValuesEditView;
 use crate::yaml_edit::{EditFailure, EditSubject, YamlEditView, edit_failure_of};
 use crate::yaml_view::object_ref;
 
 /// What runs once the user agreed to throw the unsaved text away.
 type AfterDiscard = Box<dyn FnOnce(&mut AppShell, &mut Context<AppShell>)>;
+
+/// The one open editor of the shell (`AppShell.edit`): Edit YAML or Edit values (spec 0047 decision 8).
+/// They share the slot, so one edit is open at a time and the discard prompt, the leaving dialog, and
+/// the inert table keys work for both.
+#[derive(Clone)]
+pub(crate) enum OpenEdit {
+    Yaml(Entity<YamlEditView>),
+    Values(Entity<ValuesEditView>),
+}
+
+impl OpenEdit {
+    pub(crate) fn cluster<'a>(&'a self, cx: &'a App) -> &'a ClusterRef {
+        match self {
+            Self::Yaml(edit) => edit.read(cx).cluster(),
+            Self::Values(edit) => edit.read(cx).cluster(),
+        }
+    }
+
+    pub(crate) fn object<'a>(&'a self, cx: &'a App) -> &'a cluster::ObjectRef {
+        match self {
+            Self::Yaml(edit) => edit.read(cx).object(),
+            Self::Values(edit) => edit.read(cx).object(),
+        }
+    }
+
+    pub(crate) fn is_dirty(&self, cx: &App) -> bool {
+        match self {
+            Self::Yaml(edit) => edit.read(cx).is_dirty(),
+            Self::Values(edit) => edit.read(cx).is_dirty(),
+        }
+    }
+
+    /// `Secret/payments/api-db`: what the discard prompt and the leaving dialog call the edit.
+    pub(crate) fn subject_text(&self, cx: &App) -> String {
+        match self {
+            Self::Yaml(edit) => edit.read(cx).subject_text(),
+            Self::Values(edit) => edit.read(cx).subject_text(),
+        }
+    }
+
+    /// Shows a failed write in the editor, whichever one it is.
+    pub(crate) fn commit_failed(&self, failure: EditFailure, cx: &mut App) {
+        match self {
+            Self::Yaml(edit) => edit.update(cx, |view, cx| view.commit_failed(failure, cx)),
+            Self::Values(edit) => edit.update(cx, |view, cx| view.commit_failed(failure, cx)),
+        }
+    }
+
+    pub(crate) fn element(&self) -> AnyElement {
+        match self {
+            Self::Yaml(edit) => edit.clone().into_any_element(),
+            Self::Values(edit) => edit.clone().into_any_element(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn yaml(&self) -> Option<Entity<YamlEditView>> {
+        match self {
+            Self::Yaml(edit) => Some(edit.clone()),
+            Self::Values(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn values(&self) -> Option<Entity<ValuesEditView>> {
+        match self {
+            Self::Values(edit) => Some(edit.clone()),
+            Self::Yaml(_) => None,
+        }
+    }
+}
 
 impl AppShell {
     /// Opens Edit YAML on `subject`, the cursor row, in its own cluster. The key, the menu item, and
@@ -90,7 +163,7 @@ impl AppShell {
             };
             YamlEditView::new(shell, subject, connection, window, cx)
         });
-        self.edit = Some(edit);
+        self.edit = Some(OpenEdit::Yaml(edit));
         cx.notify();
     }
 
@@ -153,15 +226,13 @@ impl AppShell {
     /// `Unsaved changes to Deployment/payments/api` when the open edit belongs to one of `leaving`
     /// and holds changes; a clean edit just closes with its cluster.
     pub(super) fn unsaved_edit_of(&self, leaving: &[ClusterRef], cx: &App) -> Option<String> {
-        let edit = self.edit.as_ref()?.read(cx);
-        (edit.is_dirty() && leaving.contains(edit.cluster())).then(|| edit.subject_text())
+        let edit = self.edit.as_ref()?;
+        (edit.is_dirty(cx) && leaving.contains(edit.cluster(cx))).then(|| edit.subject_text(cx))
     }
 
     /// Whether the open edit holds text that was not applied.
     pub(super) fn has_unsaved_edit(&self, cx: &App) -> bool {
-        self.edit
-            .as_ref()
-            .is_some_and(|edit| edit.read(cx).is_dirty())
+        self.edit.as_ref().is_some_and(|edit| edit.is_dirty(cx))
     }
 
     /// A call that would leave the editor (another screen, a reveal, a namespace change). With
@@ -193,7 +264,7 @@ impl AppShell {
         cx.defer(move |cx| {
             let name = shell
                 .read_with(cx, |shell, cx| {
-                    shell.edit.as_ref().map(|edit| edit.read(cx).subject_text())
+                    shell.edit.as_ref().map(|edit| edit.subject_text(cx))
                 })
                 .ok()
                 .flatten();
@@ -257,7 +328,7 @@ impl AppShell {
         result: &Result<WriteOutcome, CheckedWriteError>,
         cx: &mut Context<Self>,
     ) {
-        let Some(edit) = self.edit.clone() else {
+        let Some(OpenEdit::Yaml(edit)) = self.edit.clone() else {
             return;
         };
         // Another edit may have been opened since; this commit's result is not for it.
@@ -313,7 +384,7 @@ impl AppShell {
             kind: cluster::ObjectKind::Deployment,
         };
         let edit = cx.new(|cx| YamlEditView::fixture(shell, subject, window, cx));
-        self.edit = Some(edit);
+        self.edit = Some(OpenEdit::Yaml(edit));
         cx.notify();
     }
 }
