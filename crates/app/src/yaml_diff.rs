@@ -1,11 +1,15 @@
 //! The line diff of Edit YAML (spec 0031): the object as it is now against the server's dry-run
 //! answer, both masked and without the edit header, as rows for the Diff tab. Pure.
 
+use std::time::Duration;
+
 use gpui_kit::SharedString;
 use similar::{ChangeTag, TextDiff};
 
 /// Unchanged lines kept around a change; longer runs fold.
 const CONTEXT_LINES: usize = 3;
+/// The most time the line diff may take on the main thread of a huge text.
+const DIFF_DEADLINE: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DiffRowKind {
@@ -41,7 +45,10 @@ impl DiffRow {
 /// The rows of `before` against `after`: every changed line with three lines of context, and one
 /// `Folded` row for each longer run of unchanged lines, also at the start and the end.
 pub(crate) fn diff_rows(before: &str, after: &str) -> Vec<DiffRow> {
-    let diff = TextDiff::from_lines(before, after);
+    // A diff that would take longer than this is cut short and comes out coarser, never late.
+    let diff = TextDiff::configure()
+        .timeout(DIFF_DEADLINE)
+        .diff_lines(before, after);
     let total = diff.old_len();
     let mut rows = Vec::new();
     // Old lines already shown or folded: unchanged runs have the same length on both sides, so the

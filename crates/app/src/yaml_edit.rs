@@ -17,8 +17,8 @@ use cluster::{
 };
 use gpui_kit::component::input::{EditorState, InputEvent};
 use gpui_kit::{
-    AppContext as _, Context, Entity, FocusHandle, Focusable, SharedString, Subscription, Task,
-    UniformListScrollHandle, WeakEntity, Window,
+    AppContext as _, Context, Entity, FocusHandle, Focusable, KeyDownEvent, SharedString,
+    Subscription, Task, UniformListScrollHandle, WeakEntity, Window,
 };
 
 use crate::app_shell::AppShell;
@@ -105,7 +105,14 @@ pub(crate) enum EditBanner {
     /// A 409, or a newer `resourceVersion` than the one the edit started from.
     Conflict,
     /// The edit was moved onto the newer object; these paths had no place on it.
-    Rebased { unreachable: Vec<SharedString> },
+    Rebased {
+        unreachable: Vec<SharedString>,
+        /// Where the user's value replaced a change made on the server.
+        overwritten: Vec<SharedString>,
+    },
+    /// A rebase found another object under the name: the text was for the deleted one. Only
+    /// Discard is offered.
+    Recreated,
     /// A 404: the text is kept but cannot be applied.
     Deleted,
     /// A commit whose request may have left the client before it failed.
@@ -145,6 +152,13 @@ pub(crate) fn edit_failure_of(error: &CheckedWriteError) -> EditFailure {
             other => EditFailure::Other(other.to_string().into()),
         },
     }
+}
+
+/// How a press of Apply arrived: a repeat of a held key never confirms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyPress {
+    Fresh,
+    Held,
 }
 
 /// What a load of the object is for.
@@ -188,6 +202,11 @@ pub(crate) struct YamlEditView {
     banner: Option<EditBanner>,
     /// Paths that changed on the server between the two bases of the last rebase.
     server_changed: Vec<SharedString>,
+    /// The user's paths that replace a server change after the last rebase, as warning lines: the
+    /// side panel and the confirm dialog show them until the text is replaced.
+    overwritten: Vec<SharedString>,
+    /// A held Ctrl S was seen in this key event (see `apply_from_key`).
+    is_apply_key_held: bool,
     diff_scroll: UniformListScrollHandle,
     focus_handle: FocusHandle,
     /// `--screen edit-yaml-diff`: a picture drawn from fixed data that sends nothing.
@@ -259,6 +278,8 @@ impl YamlEditView {
             preview: PreviewState::NotChecked,
             banner: None,
             server_changed: Vec::new(),
+            overwritten: Vec::new(),
+            is_apply_key_held: false,
             diff_scroll: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             #[cfg(feature = "screenshot")]
@@ -374,7 +395,6 @@ impl YamlEditView {
     ) {
         self.load = LoadState::Ready;
         self.env = base.env();
-        self.resource_version = Some(base.resource_version().to_owned().into());
         let current = self.text(cx);
         let rebased = match (&self.base, purpose) {
             (Some(old), LoadPurpose::Rebase) => Some(rebase(old, &current, &base)),
@@ -382,14 +402,17 @@ impl YamlEditView {
         };
         match rebased {
             Some(Ok(rebased)) => {
+                self.resource_version = Some(base.resource_version().to_owned().into());
                 self.set_text(&rebased.text, window, cx);
                 self.server_changed = paths_text(&rebased.server_changed);
+                self.overwritten = rebased.overwritten.iter().map(overwritten_text).collect();
                 self.banner = Some(EditBanner::Rebased {
                     unreachable: rebased
                         .unreachable
                         .iter()
                         .map(|path| format!("{path}: no longer exists on the server").into())
                         .collect(),
+                    overwritten: self.overwritten.clone(),
                 });
                 self.base = Some(base);
                 self.refresh_dirty(cx);
@@ -397,17 +420,24 @@ impl YamlEditView {
                 self.preview = PreviewState::NotChecked;
                 self.apply(window, cx);
             }
+            Some(Err(EditError::Recreated)) => {
+                // Another object has the old one's name. The text stays for the user to copy; the
+                // old base is kept, so nothing can be applied to the new object by accident.
+                self.banner = Some(EditBanner::Recreated);
+                self.preview = PreviewState::NotChecked;
+            }
             Some(Err(error)) => {
-                // The text no longer parses (the user broke it while the object loaded); the new
-                // object is kept as the base, the text as the user left it.
-                self.base = Some(base);
-                self.refresh_dirty(cx);
+                // The text cannot be moved (it no longer parses, or holds a leading zero). The old
+                // base is kept: applying it again reports the conflict, so the server's changes
+                // are never replaced without a rebase.
                 self.preview = PreviewState::Failed(PreviewFailure::Local(error));
             }
             None => {
+                self.resource_version = Some(base.resource_version().to_owned().into());
                 self.set_text(base.text(), window, cx);
                 self.banner = None;
                 self.server_changed.clear();
+                self.overwritten.clear();
                 self.base = Some(base);
                 self.refresh_dirty(cx);
                 self.preview = PreviewState::NotChecked;
@@ -502,18 +532,47 @@ impl YamlEditView {
     /// next one for the same text opens the confirm dialog. Nothing while a check runs or while the
     /// text is unchanged (decision 15).
     pub(crate) fn apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_press(KeyPress::Fresh, window, cx);
+    }
+
+    /// Ctrl S as the key layer delivers it. The action runs before the key-down listeners, so the
+    /// decision waits until the end of the event: a repeat of a held key (`is_held`) is seen by then,
+    /// and must never open the confirm dialog.
+    fn apply_from_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.defer_in(window, |view, window, cx| {
+            let press = if std::mem::take(&mut view.is_apply_key_held) {
+                KeyPress::Held
+            } else {
+                KeyPress::Fresh
+            };
+            view.apply_press(press, window, cx);
+        });
+    }
+
+    /// Notes that the Ctrl S being delivered is a repeat of a held key.
+    fn note_key_down(&mut self, event: &KeyDownEvent) {
+        if event.is_held && event.keystroke.key == "s" && event.keystroke.modifiers.modified() {
+            self.is_apply_key_held = true;
+        }
+    }
+
+    fn apply_press(&mut self, press: KeyPress, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(feature = "screenshot")]
         if self.is_fixture {
             return;
         }
-        if self.is_running() || self.base.is_none() || !self.is_dirty {
+        // A recreated object cannot take the text; only Discard leaves the banner.
+        let is_recreated = matches!(self.banner, Some(EditBanner::Recreated));
+        if self.is_running() || self.base.is_none() || !self.is_dirty || is_recreated {
             return;
         }
         let text = self.text(cx);
         if let PreviewState::Passed(passed) = &self.preview
             && passed.for_text == text
         {
-            self.confirm(window, cx);
+            if press == KeyPress::Fresh {
+                self.confirm(window, cx);
+            }
             return;
         }
         self.run_preview(text, cx);
@@ -527,7 +586,8 @@ impl YamlEditView {
         let Some(request) = passed.request.clone() else {
             return;
         };
-        let warnings = passed.checks.clone();
+        let mut warnings = passed.checks.clone();
+        warnings.extend(self.overwritten.iter().cloned());
         let intent = self.intent(request, warnings);
         let _ = self
             .shell
@@ -763,6 +823,25 @@ pub(crate) fn edit_intent(
         expected_name: None,
         warnings,
     }
+}
+
+/// `path` cut in the middle to at most `max` characters: the end names the field that changed, and
+/// the start names the object, so both stay. The tooltip carries the whole path.
+pub(crate) fn elide_middle(path: &str, max: usize) -> String {
+    let chars: Vec<char> = path.chars().collect();
+    if chars.len() <= max || max < 3 {
+        return path.to_owned();
+    }
+    let tail = (max - 1) * 2 / 3;
+    let head = max - 1 - tail;
+    let start: String = chars[..head].iter().collect();
+    let end: String = chars[chars.len() - tail..].iter().collect();
+    format!("{start}…{end}")
+}
+
+/// `{path}: your value replaces a change made on the server`.
+fn overwritten_text(path: &FieldPath) -> SharedString {
+    format!("{path}: your value replaces a change made on the server").into()
 }
 
 fn paths_text(paths: &[FieldPath]) -> Vec<SharedString> {

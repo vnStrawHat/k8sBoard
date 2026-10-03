@@ -17,6 +17,8 @@ const EDIT_HEADER: &str =
     "# Values shown as <hidden> keep their value on the server. Replace one to set a new value.";
 const SECRET_HEADER: &str = "# Secret data and stringData cannot be edited here.";
 const MISSING_VERSION: &str = "the object has no resourceVersion or uid";
+/// The editor text is parsed on the main thread, so a larger text is refused before it is read.
+const MAX_EDIT_BYTES: usize = 2 * 1024 * 1024;
 const HELM_RELEASE: &str = "the object is a Helm release record and cannot be edited here";
 /// The `type` of the Secret that stores a Helm release.
 const HELM_RELEASE_TYPE: &str = "helm.sh/release.v1";
@@ -209,6 +211,16 @@ pub enum EditError {
     /// Text that starts with `<hidden` but is not the placeholder: the diff view's markers.
     #[error("{path} holds diff marker text; write a value or <hidden>")]
     MarkerText { path: String },
+    /// A rebase onto an object that was deleted and created again: the text was for the old one.
+    #[error("the object was deleted and created again")]
+    Recreated,
+    /// A number with a leading zero, which a re-serialization would silently turn into decimal.
+    #[error(
+        "line {line}: a number with a leading zero is read as decimal (YAML 1.2); quote it, or write the decimal or 0o value"
+    )]
+    LeadingZero { line: usize },
+    #[error("the text is larger than 2 MiB")]
+    TooLarge,
     #[error("nothing changed")]
     NoChanges,
 }
@@ -279,6 +291,7 @@ impl ObjectEdit {
 /// Re-serializes the editor text the way the editor text is built: sorted keys, the same
 /// serializer, the leading comment lines kept. Quoting and comments inside the body are not kept.
 pub fn format_yaml(text: &str) -> Result<String, EditError> {
+    refuse_leading_zero(text)?;
     let mut value = parse_mapping(text)?;
     value.sort_all_objects();
     let header: Vec<&str> = text
@@ -307,6 +320,9 @@ pub struct Rebased {
     pub unreachable: Vec<FieldPath>,
     /// What changed on the server between the two bases.
     pub server_changed: Vec<FieldPath>,
+    /// Paths of the user's changes that equal, contain, or lie inside a path the server changed:
+    /// the user's value replaces the server's change. A list that became one path is here too.
+    pub overwritten: Vec<FieldPath>,
 }
 
 impl fmt::Debug for Rebased {
@@ -315,6 +331,7 @@ impl fmt::Debug for Rebased {
             .debug_struct("Rebased")
             .field("unreachable", &self.unreachable.len())
             .field("server_changed", &self.server_changed.len())
+            .field("overwritten", &self.overwritten.len())
             .finish()
     }
 }
@@ -325,12 +342,21 @@ impl fmt::Debug for Rebased {
 /// meaning "the server's value", now the new one. The error is a syntax error or a non-mapping
 /// only; the identity and the placeholders are checked when the rebased text is applied.
 pub fn rebase(old: &EditBase, text: &str, new: &EditBase) -> Result<Rebased, EditError> {
+    // A different uid is another object with the same name: the text was written for the old one.
+    if old.uid != new.uid {
+        return Err(EditError::Recreated);
+    }
+    refuse_leading_zero(text)?;
     let mut edited = parse_mapping(text)?;
     strip_server_fields(&mut edited);
     let server_changed = field_paths(&old.masked, &new.masked);
     let mut result = new.masked.clone();
     let mut unreachable = Vec::new();
+    let mut overwritten = Vec::new();
     for path in field_paths(&old.masked, &edited) {
+        if server_changed.iter().any(|changed| changed.overlaps(&path)) {
+            overwritten.push(path.clone());
+        }
         if !copy_path(&mut result, &edited, &path) {
             unreachable.push(path);
         }
@@ -341,10 +367,23 @@ pub fn rebase(old: &EditBase, text: &str, new: &EditBase) -> Result<Rebased, Edi
         text,
         unreachable,
         server_changed,
+        overwritten,
     })
 }
 
+/// Refuses a text that has a number with a leading zero: the parser reads `0444` as decimal 444,
+/// so writing the text again would erase what the warning of `leading_zero_lines` says.
+fn refuse_leading_zero(text: &str) -> Result<(), EditError> {
+    match leading_zero_lines(text).first() {
+        Some(line) => Err(EditError::LeadingZero { line: *line }),
+        None => Ok(()),
+    }
+}
+
 fn parse_mapping(text: &str) -> Result<Value, EditError> {
+    if text.len() > MAX_EDIT_BYTES {
+        return Err(EditError::TooLarge);
+    }
     let mut value = serde_saphyr::from_str::<Value>(text).map_err(|error| {
         let (line, column) = error
             .location()

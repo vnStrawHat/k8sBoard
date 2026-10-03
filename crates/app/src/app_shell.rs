@@ -3891,7 +3891,9 @@ impl AppShell {
             .collect();
         let input = PaletteInput {
             screen: self.screen,
-            cursor: self.selected.as_ref(),
+            // The cursor is hidden under the Edit YAML view, so the palette offers no row action: an
+            // entry would act on a row the user cannot see.
+            cursor: self.selected.as_ref().filter(|_| !self.is_editing()),
             has_dock_tabs: self.dock.read(cx).has_tabs(),
             include_resources: wants_resources,
             sessions,

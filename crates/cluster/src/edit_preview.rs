@@ -37,6 +37,12 @@ impl FieldPath {
         Self(segments)
     }
 
+    /// Whether one path is the other or lies inside it.
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        let shorter = self.0.len().min(other.0.len());
+        self.0[..shorter] == other.0[..shorter]
+    }
+
     fn starts_with_keys(&self, keys: &[&str]) -> bool {
         self.0.len() >= keys.len()
             && self

@@ -225,3 +225,19 @@ pub(crate) fn sample_edit() -> ObjectEdit {
     let text = base.text().replace("replicas: 3", "replicas: 5");
     ObjectEdit::new(&base, &text).expect("a change")
 }
+
+#[test]
+fn a_long_path_is_cut_in_the_middle_and_keeps_its_field() {
+    let path = "spec.template.spec.containers[api].resources.limits.memory";
+    let shown = elide_middle(path, 34);
+    assert_eq!(shown.chars().count(), 34);
+    assert!(shown.starts_with("spec.templ"), "{shown}");
+    assert!(shown.ends_with("limits.memory"), "{shown}");
+    assert!(shown.contains('…'));
+}
+
+#[test]
+fn a_short_path_is_shown_whole() {
+    assert_eq!(elide_middle("spec.replicas", 34), "spec.replicas");
+    assert_eq!(elide_middle("abcdef", 6), "abcdef");
+}

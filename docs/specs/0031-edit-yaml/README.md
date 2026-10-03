@@ -79,6 +79,13 @@ The spec predates the code; its names map as follows.
 - **Menus**: every editable kind's menu gets `Edit YAML` (`edit_yaml_kind`; Helm releases excluded); the ConfigMaps `Edit` kind action is gone. The Quotas and Secrets `Edit` items stay (other specs).
 - **Tests**: `app_shell_edit_tests.rs` (shell flows over two fake clusters), `yaml_edit_tests.rs`, `yaml_diff_tests.rs`, `kind_access_tests.rs`, and additions to the resource-action, keymap, launch-option, leaving-work, audit, and `object_edit` tests. Obsolete step 3 names: `edit_yaml_is_not_shipped_in_step_3` (shipped), `ctrl_s_runs_local_checks_only` (step 4 checks with the server; `local_error_stays_on_editor_tab` covers the local half).
 - **UAT (2026-10-03, screenshot build, `readonly@Monitor`)**: all 17 editable kinds answered `update` denied; the Deployments menu shows `Edit YAML` disabled with `Not permitted: update deployments`. Requests of the run (cluster log): 47 SSAR POSTs, 32 reads, 0 write actions; no PUT, PATCH, or DELETE (the screenshot build also blocks writes). Screenshots: `.tmp/ui-shots/v77-edit-yaml-*`.
+- **Review fixes (after the rebase onto the 0035 port-forward page)**:
+  - A rebase onto an object with another `uid` returns `EditError::Recreated`; the view keeps the old base, shows "The object was deleted and created again", and offers Discard only.
+  - `Rebased.overwritten` lists the user paths that equal, contain, or lie inside a server-changed path (a positional list that became one path included). The banner, the side panel, and one dialog warning per path read `{path}: your value replaces a change made on the server`.
+  - `format_yaml` and `rebase` refuse a number with a leading zero (`EditError::LeadingZero { line }`) and a text over 2 MiB (`TooLarge`). A failed rebase keeps the old base, so the conflict stands and the server's changes are never replaced without a rebase.
+  - While an edit is open the palette lists no cursor-row action (`PaletteInput.cursor` is `None`), and `start_roll_back` and `scale_cursor_row` return early.
+  - A held Ctrl S never opens the confirm dialog: the action propagates, a capture key-down listener notes `is_held`, and the deferred apply ignores a held press for the confirm step.
+  - The line diff has a one-second deadline; the side panel cuts a long path in the middle (the tooltip has all of it). The disabled `Apply…` uses the kit's standard disabled style, like `Env values` and `Format`.
 - **Merge notes**: shared files touched are small and append-only (`app_shell.rs`, `keyboard_navigation.rs`, `keymap.rs`, `resource_actions.rs`, `write_flow.rs`, `leaving_work.rs`, `launch_options.rs`); `ClusterGuard::new` gained a `kind_access` argument.
 
 ## Open items

@@ -650,6 +650,10 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The palette hides these entries while an edit is open; a direct call is refused too.
+        if self.is_editing() {
+            return;
+        }
         let label = action_label(ResourceAction::RollBack);
         let intent = {
             let (Some(guard), Some(live)) = (
@@ -757,6 +761,10 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The palette hides these entries while an edit is open; a direct call is refused too.
+        if self.is_editing() {
+            return;
+        }
         let Some(subject) = self.selected.clone() else {
             return;
         };

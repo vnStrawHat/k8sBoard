@@ -729,3 +729,114 @@ fn rebase_lists_server_changes() {
     let value: Value = serde_saphyr::from_str(&result.text).expect("the text parses");
     assert_eq!(value["spec"]["replicas"], json!(4));
 }
+
+/// The Deployment of `deployment_base_after`, with a new uid: the object was deleted and created
+/// again under the same name.
+fn recreated_base() -> EditBase {
+    deployment_base_after(|object| {
+        object["metadata"]["uid"] = json!("uid-2");
+    })
+}
+
+#[test]
+fn rebase_onto_a_recreated_object_is_refused() {
+    let old = deployment_base();
+    let text = old.text().replacen("replicas: 3", "replicas: 5", 1);
+    let error = rebase(&old, &text, &recreated_base()).expect_err("another object");
+    assert!(matches!(error, EditError::Recreated), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        "the object was deleted and created again"
+    );
+}
+
+#[test]
+fn rebase_lists_the_paths_the_user_overwrites() {
+    let old = deployment_base();
+    let text = old
+        .text()
+        .replacen("replicas: 3", "replicas: 5", 1)
+        .replacen("image: api:1", "image: api:2", 1);
+    // The server moved the replicas too, and changed another container.
+    let new = deployment_base_after(|object| {
+        object["spec"]["replicas"] = json!(7);
+        object["spec"]["template"]["spec"]["containers"][1]["image"] = json!("proxy:2");
+    });
+    let result = rebase(&old, &text, &new).expect("the text parses");
+    let overwritten: Vec<String> = result.overwritten.iter().map(ToString::to_string).collect();
+    assert_eq!(overwritten, ["spec.replicas"]);
+}
+
+#[test]
+fn a_list_that_became_one_path_overlaps_the_users_item_edit() {
+    let with_args = |args: Value| {
+        let mut object = deployment();
+        object["spec"]["template"]["spec"]["containers"][0]["args"] = args;
+        object
+    };
+    let old = base(
+        ObjectKind::Deployment,
+        "api",
+        with_args(json!(["--a", "--b"])),
+    );
+    let text = old.text().replacen("- --a", "- --changed", 1);
+    assert_ne!(text, old.text());
+    let mut newer = with_args(json!(["--a", "--b", "--c"]));
+    newer["metadata"]["resourceVersion"] = json!("101");
+    let new = base(ObjectKind::Deployment, "api", newer);
+    let result = rebase(&old, &text, &new).expect("the text parses");
+    // The server's list is one path; the user's edit of item 0 lies inside it, and replaces it.
+    assert_eq!(result.overwritten.len(), 1, "{:?}", result.overwritten);
+    assert!(
+        result.overwritten[0]
+            .to_string()
+            .ends_with("containers[api].args[0]"),
+        "{}",
+        result.overwritten[0]
+    );
+}
+
+#[test]
+fn changes_apart_from_the_servers_overwrite_nothing() {
+    let old = deployment_base();
+    let text = old.text().replacen("replicas: 3", "replicas: 5", 1);
+    let new = deployment_base_after(|object| object["metadata"]["labels"] = json!({"tier": "x"}));
+    let result = rebase(&old, &text, &new).expect("the text parses");
+    assert!(result.overwritten.is_empty());
+}
+
+#[test]
+fn format_refuses_a_leading_zero_and_names_the_line() {
+    let text = "apiVersion: v1\nkind: ConfigMap\nspec:\n  defaultMode: 0444\n";
+    let error = format_yaml(text).expect_err("a leading zero");
+    assert!(
+        matches!(error, EditError::LeadingZero { line: 4 }),
+        "{error:?}"
+    );
+    assert!(error.to_string().starts_with("line 4: "), "{error}");
+    // The same number quoted is a string, and formats.
+    assert!(format_yaml("spec:\n  defaultMode: \"0444\"\n").is_ok());
+}
+
+#[test]
+fn rebase_refuses_a_leading_zero_too() {
+    let old = deployment_base();
+    let text = old.text().replacen("replicas: 3", "replicas: 0444", 1);
+    let error = rebase(&old, &text, &deployment_base_after(|_| {})).expect_err("a leading zero");
+    assert!(matches!(error, EditError::LeadingZero { .. }), "{error:?}");
+}
+
+#[test]
+fn a_text_over_two_mebibytes_is_refused_before_parsing() {
+    let base = deployment_base();
+    let big = format!("{}# {}\n", base.text(), "x".repeat(2 * 1024 * 1024));
+    assert!(matches!(
+        ObjectEdit::new(&base, &big),
+        Err(EditError::TooLarge)
+    ));
+    assert!(matches!(format_yaml(&big), Err(EditError::TooLarge)));
+    assert!(matches!(
+        rebase(&base, &big, &deployment_base_after(|_| {})),
+        Err(EditError::TooLarge)
+    ));
+}

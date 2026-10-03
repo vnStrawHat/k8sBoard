@@ -15,25 +15,37 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div, px,
-    uniform_list,
+    AnyElement, App, Context, Div, InteractiveElement as _, IntoElement, KeyDownEvent,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    div, px, uniform_list,
 };
 
 use super::{
     EditBanner, EditTab, LoadState, PassedPreview, PreviewFailure, PreviewState, YamlEditView,
-    footer_text,
+    elide_middle, footer_text,
 };
 use crate::drawer::truncated_text_with_tooltip;
 use crate::keymap::{ApplyEdit, YAML_EDIT};
 use crate::yaml_diff::{DiffRow, DiffRowKind};
 
 const SIDE_PANEL_WIDTH: f32 = 280.;
+/// How many characters of a path fit the side panel in the mono font; a longer one is cut in the
+/// middle (the tooltip has all of it), so the field that changed stays visible.
+const PATH_CHARS: usize = 34;
 const DIFF_ROW_HEIGHT: f32 = 20.;
 /// The width of a line-number column of the diff.
 const LINE_NUMBER_WIDTH: f32 = 44.;
 /// How strongly a removed or added row is tinted by its theme token.
 const ROW_TINT: f32 = 0.14;
+
+/// The buttons that answer a banner.
+enum BannerAnswers {
+    /// Reload and keep my changes, or discard them.
+    Reload,
+    DiscardOnly,
+    Dismiss,
+    None,
+}
 
 impl YamlEditView {
     fn render_header(&self, cx: &Context<Self>) -> AnyElement {
@@ -139,30 +151,47 @@ impl YamlEditView {
     fn render_banner(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let banner = self.banner.as_ref()?;
         let theme = cx.theme();
-        let (title, lines, has_reload) = match banner {
+        let (title, lines, answers) = match banner {
             EditBanner::Conflict => (
                 "The object changed since you opened it.".to_owned(),
                 Vec::new(),
-                true,
+                BannerAnswers::Reload,
             ),
-            EditBanner::Rebased { unreachable } => (
+            EditBanner::Rebased {
+                unreachable,
+                overwritten,
+            } => (
                 "Your changes were moved onto the newest version.".to_owned(),
-                unreachable.clone(),
-                false,
+                unreachable.iter().chain(overwritten).cloned().collect(),
+                BannerAnswers::Dismiss,
             ),
             EditBanner::Deleted => (
                 "The object was deleted. Your text is kept but cannot be applied.".to_owned(),
                 Vec::new(),
-                false,
+                BannerAnswers::None,
+            ),
+            EditBanner::Recreated => (
+                "The object was deleted and created again. Your text was for the old one."
+                    .to_owned(),
+                Vec::new(),
+                BannerAnswers::DiscardOnly,
             ),
             EditBanner::OutcomeUnknown => (
                 "The last apply got no answer, so the change may have been applied.".to_owned(),
                 Vec::new(),
-                true,
+                BannerAnswers::Reload,
             ),
         };
-        let buttons = if has_reload {
-            h_flex()
+        let discard = Button::new("edit-discard")
+            .label("Discard my changes")
+            .small()
+            .outline()
+            .disabled(self.is_running())
+            .on_click(cx.listener(|view, _, window, cx| {
+                view.discard_my_changes(window, cx);
+            }));
+        let buttons = match answers {
+            BannerAnswers::Reload => h_flex()
                 .gap_2()
                 .child(
                     Button::new("edit-keep")
@@ -174,26 +203,16 @@ impl YamlEditView {
                             view.keep_my_changes(window, cx);
                         })),
                 )
-                .child(
-                    Button::new("edit-discard")
-                        .label("Discard my changes")
-                        .small()
-                        .outline()
-                        .disabled(self.is_running())
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.discard_my_changes(window, cx);
-                        })),
-                )
-        } else if matches!(banner, EditBanner::Rebased { .. }) {
-            h_flex().gap_2().child(
+                .child(discard),
+            BannerAnswers::DiscardOnly => h_flex().gap_2().child(discard),
+            BannerAnswers::Dismiss => h_flex().gap_2().child(
                 Button::new("edit-dismiss")
                     .label("Dismiss")
                     .small()
                     .outline()
                     .on_click(cx.listener(|view, _, _, cx| view.dismiss_banner(cx))),
-            )
-        } else {
-            h_flex()
+            ),
+            BannerAnswers::None => h_flex(),
         };
         Some(
             v_flex()
@@ -360,7 +379,7 @@ impl YamlEditView {
                                 .child(
                                     truncated_text_with_tooltip(
                                         ("edit-change", index),
-                                        change.path.clone(),
+                                        elide_middle(&change.path, PATH_CHARS),
                                         change.path.clone(),
                                     )
                                     .text_xs()
@@ -380,6 +399,14 @@ impl YamlEditView {
         side = side.child(heading("Checks".to_owned()));
         let (status, tone) = dry_run_line(&self.preview, text, cx);
         side = side.child(div().text_xs().text_color(tone).child(status));
+        for line in &self.overwritten {
+            side = side.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.warning)
+                    .child(line.clone()),
+            );
+        }
         if let PreviewState::Passed(passed) = &self.preview {
             for check in &passed.checks {
                 side = side.child(
@@ -398,7 +425,7 @@ impl YamlEditView {
                 side = side.child(
                     truncated_text_with_tooltip(
                         ("edit-server-change", index),
-                        path.clone(),
+                        elide_middle(path, PATH_CHARS),
                         path.clone(),
                     )
                     .text_xs()
@@ -489,7 +516,15 @@ impl Render for YamlEditView {
         v_flex()
             .key_context(YAML_EDIT)
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|view, _: &ApplyEdit, window, cx| view.apply(window, cx)))
+            .capture_key_down(
+                cx.listener(|view, event: &KeyDownEvent, _, _| view.note_key_down(event)),
+            )
+            .on_action(cx.listener(|view, _: &ApplyEdit, window, cx| {
+                view.apply_from_key(window, cx);
+                // A handled action ends the key event before the key-down listeners, which tell a held
+                // key from a fresh one: let the event go on.
+                cx.propagate();
+            }))
             .size_full()
             .min_h_0()
             .child(self.render_header(cx))

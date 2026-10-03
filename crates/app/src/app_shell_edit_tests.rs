@@ -8,8 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cluster::fake_api::{FakeApi, RecordedRequest};
+use gpui_kit::InputEvent as _;
 use gpui_kit::component::dialog::{Cancel, Confirm};
-use gpui_kit::{Entity, TestAppContext};
+use gpui_kit::{Entity, KeyDownEvent, Keystroke, TestAppContext};
 use serde_json::{Value, json};
 
 use super::app_shell_switch_tests::open_switch_fixture;
@@ -923,7 +924,7 @@ fn reload_and_keep_my_changes_rebases_and_checks_again(cx: &mut TestAppContext) 
     t.with_view(cx, |view| {
         assert!(matches!(
             view.banner(),
-            Some(EditBanner::Rebased { unreachable }) if unreachable.is_empty()
+            Some(EditBanner::Rebased { unreachable, .. }) if unreachable.is_empty()
         ));
         let changed: Vec<&str> = view.server_changed().iter().map(AsRef::as_ref).collect();
         assert_eq!(changed, ["metadata.labels.tier"]);
@@ -960,7 +961,7 @@ fn rebase_lists_a_path_that_no_longer_exists(cx: &mut TestAppContext) {
         })
     });
     t.with_view(cx, |view| {
-        let Some(EditBanner::Rebased { unreachable }) = view.banner() else {
+        let Some(EditBanner::Rebased { unreachable, .. }) = view.banner() else {
             panic!("expected the rebase banner");
         };
         assert_eq!(
@@ -1215,4 +1216,212 @@ fn preview_never_reaches_audit_or_notice(cx: &mut TestAppContext) {
     let notice = failure_notice("Apply changes", &error);
     assert!(!notice.contains("replicas: -1"), "{notice}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- review fixes ----
+
+fn key_down(key: &str, is_held: bool) -> KeyDownEvent {
+    KeyDownEvent {
+        keystroke: Keystroke::parse(key).expect("a valid keystroke"),
+        is_held,
+        prefer_character_input: false,
+    }
+}
+
+impl EditTest {
+    fn press_event(&self, event: KeyDownEvent, cx: &mut TestAppContext) {
+        self.t.fixture.with_window(cx, |window, cx| {
+            window.dispatch_event(event.to_platform_input(), cx);
+        });
+    }
+
+    /// Opens the editor, changes the replicas, and moves the server on to another version in which
+    /// `change` was made (the object keeps its uid unless `change` replaces it). The first check
+    /// then reports the conflict.
+    fn conflict_with(&self, change: impl FnOnce(&mut Value), cx: &mut TestAppContext) {
+        self.open(cx);
+        self.change("replicas: 3", "replicas: 5", cx);
+        let mut newer = deployment_object("200");
+        change(&mut newer);
+        *lock(&self.server.object) = newer;
+        self.apply(cx);
+        self.wait_for_preview(cx);
+    }
+
+    fn keep_my_changes(&self, cx: &mut TestAppContext) {
+        let view = self.view(cx);
+        self.t.fixture.with_window(cx, |window, cx| {
+            view.update(cx, |view, cx| view.keep_my_changes(window, cx));
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn rebase_onto_a_recreated_object_offers_only_discard(cx: &mut TestAppContext) {
+    let t = edit_test("edit-recreated", cx);
+    t.conflict_with(|object| object["metadata"]["uid"] = json!("uid-2"), cx);
+    t.keep_my_changes(cx);
+    t.t.wait_for("the banner", cx, |cx| {
+        t.with_view(cx, |view| {
+            matches!(view.banner(), Some(EditBanner::Recreated))
+        })
+    });
+    // The text is kept, and nothing can be applied to the new object.
+    assert!(t.text(cx).contains("replicas: 5"));
+    t.apply(cx);
+    cx.run_until_parked();
+    assert!(t.puts().is_empty());
+    assert!(!t.t.has_dialog(cx));
+    t.t.fixture.draw_twice(cx);
+    // Discard reads the new object.
+    let view = t.view(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        view.update(cx, |view, cx| view.discard_my_changes(window, cx));
+    });
+    t.t.wait_for("the new object", cx, |cx| {
+        t.with_view(cx, |view| view.banner().is_none() && !view.is_dirty())
+    });
+    assert!(t.text(cx).contains("replicas: 3"));
+}
+
+#[gpui_kit::test]
+fn a_rebase_that_overwrites_a_server_change_says_so_and_warns_in_the_dialog(
+    cx: &mut TestAppContext,
+) {
+    let t = edit_test("edit-overwrite", cx);
+    t.conflict_with(|object| object["spec"]["replicas"] = json!(7), cx);
+    t.keep_my_changes(cx);
+    t.t.wait_for("the new check", cx, |_| t.puts().len() == 1);
+    t.wait_for_preview(cx);
+    let line = "spec.replicas: your value replaces a change made on the server";
+    t.with_view(cx, |view| {
+        let Some(EditBanner::Rebased { overwritten, .. }) = view.banner() else {
+            panic!("expected the rebase banner");
+        };
+        assert_eq!(overwritten.len(), 1);
+        assert_eq!(overwritten[0].as_ref(), line);
+    });
+    t.apply(cx);
+    let lines: Vec<String> = t.t.dialog(cx).read_with(cx, |dialog, _| {
+        dialog
+            .warning_lines()
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    });
+    assert!(lines.iter().any(|text| text == line), "{lines:?}");
+    t.t.fixture.draw_twice(cx);
+}
+
+#[gpui_kit::test]
+fn a_failed_rebase_keeps_the_old_base_so_the_conflict_stands(cx: &mut TestAppContext) {
+    let t = edit_test("edit-rebase-fails", cx);
+    t.conflict_with(|object| object["spec"]["replicas"] = json!(7), cx);
+    let base_text = t.base_text(cx);
+    t.change("replicas: 5", "replicas: 0444", cx);
+    t.keep_my_changes(cx);
+    t.t.wait_for("the refusal", cx, |cx| {
+        t.with_view(cx, |view| {
+            matches!(
+                view.preview_state(),
+                PreviewState::Failed(PreviewFailure::Local(
+                    cluster::EditError::LeadingZero { .. }
+                ))
+            )
+        })
+    });
+    assert_eq!(t.base_text(cx), base_text, "the old base is kept");
+    assert!(t.with_view(cx, |view| matches!(
+        view.banner(),
+        Some(EditBanner::Conflict)
+    )));
+}
+
+#[gpui_kit::test]
+fn format_refuses_a_leading_zero_and_keeps_the_text(cx: &mut TestAppContext) {
+    let t = edit_test("edit-format-zero", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 0444", cx);
+    let before = t.text(cx);
+    let view = t.view(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        view.update(cx, |view, cx| view.format(window, cx));
+    });
+    assert_eq!(t.text(cx), before, "the text is not rewritten");
+    t.with_view(cx, |view| {
+        let PreviewState::Failed(PreviewFailure::Local(error)) = view.preview_state() else {
+            panic!("expected a local failure");
+        };
+        assert!(error.to_string().starts_with("line "), "{error}");
+    });
+}
+
+#[gpui_kit::test]
+fn a_text_over_two_mebibytes_is_refused_without_a_request(cx: &mut TestAppContext) {
+    let t = edit_test("edit-big", cx);
+    t.open(cx);
+    let big = format!("{}# {}\n", t.base_text(cx), "x".repeat(2 * 1024 * 1024));
+    t.set_text(&big, cx);
+    t.apply(cx);
+    cx.run_until_parked();
+    t.with_view(cx, |view| {
+        assert!(matches!(
+            view.preview_state(),
+            PreviewState::Failed(PreviewFailure::Local(cluster::EditError::TooLarge))
+        ));
+    });
+    assert!(t.puts().is_empty());
+}
+
+#[gpui_kit::test]
+fn the_palette_offers_no_row_write_while_editing(cx: &mut TestAppContext) {
+    let t = edit_test("edit-palette-hidden", cx);
+    t.cursor_on(&t.t.stg, cx);
+    let offered = |t: &EditTest, cx: &mut TestAppContext| {
+        t.shell()
+            .read_with(cx, |shell, cx| shell.palette_snapshot(false, cx))
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.target,
+                    crate::palette_search::PaletteTarget::RowAction(_)
+                        | crate::palette_search::PaletteTarget::RollBack(..)
+                )
+            })
+            .count()
+    };
+    assert!(
+        offered(&t, cx) > 0,
+        "the cursor row has actions before the edit"
+    );
+    t.t.fixture.press("e", cx);
+    t.wait_for_base(cx);
+    assert_eq!(offered(&t, cx), 0, "none while the cursor is hidden");
+    // A direct call, such as the replicas field of the palette, is refused as well.
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.shell()
+            .update(cx, |shell, cx| shell.scale_cursor_row(9, window, cx));
+    });
+    cx.run_until_parked();
+    assert!(!t.t.has_dialog(cx));
+    assert!(writes(&t.t.stg_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn a_held_ctrl_s_never_opens_the_confirm_dialog(cx: &mut TestAppContext) {
+    let t = edit_test("edit-held", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    t.press_event(key_down("ctrl-s", false), cx);
+    t.wait_for_preview(cx);
+    assert!(t.is_passed(cx));
+    // The repeat of the held key finds the passed check, and still opens nothing.
+    t.press_event(key_down("ctrl-s", true), cx);
+    cx.run_until_parked();
+    assert!(!t.t.has_dialog(cx));
+    // A fresh press does.
+    t.press_event(key_down("ctrl-s", false), cx);
+    cx.run_until_parked();
+    assert!(t.t.has_dialog(cx));
 }
