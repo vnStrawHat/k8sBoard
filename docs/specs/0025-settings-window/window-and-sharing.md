@@ -47,38 +47,39 @@ impl ClusterCatalog {                                                  // step 2
 ## Catalog file operations (step 4, decisions 25, 27)
 
 ```rust
-pub(crate) enum CatalogNotice { Skipped(String), Unregistered(PathBuf), DeleteFailed(PathBuf), SaveFailed(io::ErrorKind) }
+pub(crate) enum CatalogNotice { Skipped { path: Option<PathBuf>, error: String }, Unregistered(PathBuf), DeleteFailed(PathBuf), SaveFailed(io::ErrorKind) }
 pub(crate) enum PasteStatus { Idle, Saving, Added(PathBuf), Failed }
-pub(crate) struct ClipboardFingerprint { length: usize, hash: u64 }   // no Debug
-impl ClipboardFingerprint { pub(crate) fn of(text: &str) -> Self; }    // std DefaultHasher
 impl ClusterCatalog {
-    pub(crate) fn add_pasted(&mut self, text: String, clipboard: ClipboardFingerprint, cx: &mut Context<Self>);
+    pub(crate) fn add_pasted(&mut self, text: String, first_context: Option<String>, clipboard: ClipboardMark, cx: &mut Context<Self>);
     pub(crate) fn remove_kubeconfig(&mut self, path: PathBuf, cx: &mut Context<Self>);
     pub(crate) fn paste_status(&self) -> &PasteStatus;
     pub(crate) fn reset_paste_status(&mut self, cx: &mut Context<Self>);
 }
 ```
 
-- `add_pasted`: `paste = Saving`; `cx.spawn(..).detach()` (the catalog lives as long as the app, so closing Settings does not cancel it). Background: `write_pasted_kubeconfig(dir, &text)`, drop `text`, then `Kubeconfig::load(&[path])`; a load error deletes the new file. Then **one** `this.update`: insert `(path, Loaded)` into `standalone` first (the observer then sees no difference), `AppSettings::update` pushes the path, clear the clipboard when its fingerprint still matches (decision 11), `paste = Added(path)`. Write error → `SaveFailed(kind)`, `paste = Failed`, clipboard untouched.
+- `add_pasted`: `paste = Saving`; `cx.spawn(..).detach()` (the catalog lives as long as the app, so closing Settings does not cancel it). Background: `write_pasted_kubeconfig(dir, first_context, &text)` (on a write or sync error the partial file is removed), drop `text`, then `Kubeconfig::load(&[path])`; a load error deletes the new file. Then **one** `this.update`: insert `(path, Loaded)` into `standalone` first (the observer then sees no difference), `AppSettings::update` pushes the path, clear the clipboard when its text still matches the `ClipboardMark` (decision 11; the clipboard text read for the check is `Zeroizing`), `paste = Added(path)`. Write error → `SaveFailed(kind)`, `paste = Failed`, clipboard untouched.
 - `remove_kubeconfig`: app-owned path (`is_app_owned`, needs `AppSettings::config_dir`) → background `remove_file`; `Ok` → `AppSettings::update(cluster_form::remove_kubeconfig)` and drop an `Unregistered` notice for it; `Err` → `DeleteFailed(path)`, registry untouched. Other paths, or writes off → registry edit only, no delete.
-- **Unregistered files**: `new` also lists `<config>/kubeconfigs/*.yaml` (background `read_dir`, start only) and raises `Unregistered(path)` for each path not in `registry.kubeconfigs` (a crash between write and push). Its Remove action calls `remove_kubeconfig`.
+- **Unregistered files**: `new` also lists the pasted-looking `<config>/kubeconfigs/*.yaml` (names `is_pasted_file_name` accepts; background `read_dir`, start only) and raises `Unregistered(path)` for each path not in `registry.kubeconfigs` (a crash between write and push). Its Remove action calls `remove_kubeconfig`.
+- **Per-part notices**: every part that fails to load (and every skipped chain file) raises a `Skipped` notice, also when nothing loads at all (the error screen then shows it too). A notice holds the file path when the error names one: it is dropped when the file leaves the registry, and a notice already shown is not added again.
 - Notice texts: `Skipped kubeconfig: {error}` · `Pasted file {name} is not registered` · `Could not delete {name}; it is still listed` · `Could not save the pasted kubeconfig ({kind})`. Paths and kinds only in `tracing`.
 - The main title bar shows notice text (as 0024); the Clusters page shows them with their Remove action.
 
 ## Opening (`settings_window.rs`, step 2b)
 
 ```rust
-gpui_kit::actions!(k8sboard, [OpenSettings, ImportKubeconfig]);
-pub(crate) struct SettingsWindowHandle(Option<AnyWindowHandle>);    // Global, default None
-pub(crate) fn open_settings_window(cx: &mut App);                   // activate or open
+gpui_kit::actions!(k8sboard, [OpenSettings, ManageClusters, ImportKubeconfig]);
+pub(crate) struct SettingsWindowHandle(Option<OpenWindow>);          // Global; OpenWindow { window: AnyWindowHandle, view: WeakEntity<SettingsWindow> }
+pub(crate) enum SettingsSize { Standard, Tall }                       // Tall: screenshots of the whole form
+pub(crate) fn open_settings_window(page: SettingsPage, size: SettingsSize, cx: &mut App) -> Option<AnyWindowHandle>; // activate (page stays) or open
+pub(crate) fn manage_clusters(cx: &mut App);                          // like the above, then show Clusters
 pub(crate) fn forget_closed_window(id: WindowId, cx: &mut App);     // handle → None on match
 pub(crate) fn bind_keys(cx: &mut App);   // other-pages.md "Keys"
 pub(crate) struct SettingsWindow { catalog: Entity<ClusterCatalog>, clusters: ClustersPageState,
     focus_handle: FocusHandle, _observers: Vec<Subscription> }      // no Debug (paste_text)
 ```
 
-- `main.rs`: `cx.on_action(|_: &OpenSettings, cx| open_settings_window(cx))`, `settings_window::bind_keys(cx)`.
-- Title bar: the Settings button is enabled, `.tooltip_with_action("Settings", &OpenSettings, None)` (kit `Kbd`, per OS); click dispatches `OpenSettings`. "Manage clusters…" becomes a normal item doing the same. A new window opens on Clusters (`SelectIndex { page_ix: CLUSTERS_PAGE, group_ix: None }`); an open window only activates. `SettingsWindow::new` calls `reset_paste_status`.
+- `main.rs`: `cx.on_action` for `OpenSettings` (`open_settings_window(Clusters, Standard, cx)`) and `ManageClusters` (`manage_clusters`), `settings_window::bind_keys(cx)`.
+- Title bar: the Settings button is enabled, `.tooltip_with_action("Settings", &OpenSettings, None)` (kit `Kbd`, per OS); click dispatches `OpenSettings`. "Manage clusters…" dispatches `ManageClusters`: it opens the window or brings it forward, and switches an open window to Clusters (a new `Settings` key per request, so the kit selection restarts; `Ctrl ,` leaves the page alone). A new window opens on Clusters (`SelectIndex { page_ix: CLUSTERS_PAGE, group_ix: None }`); an open window only activates (see `ManageClusters`). `SettingsWindow::new` calls `reset_paste_status`.
 - `SettingsWindow` observes `AppSettings` and the catalog; never `AppShell`. Nothing else holds a strong handle to it, so closing the window drops it with `ClustersPageState`.
 - Root element: `.key_context("SettingsWindow")`, `.track_focus`, `on_action(ImportKubeconfig)`; a kit `TitleBar` with "Settings", then `Settings::new("settings").pages(..)`.
 
@@ -94,7 +95,7 @@ Hook body: `forget_closed_window(id, cx)`; then `if id == main || cx.windows().i
 ## Theme and screenshots (step 2b)
 
 - `ThemePreference::apply(self, cx)` in `settings.rs` replaces `main.rs` `apply_theme` (keeps `table_active = selection`). Called at start with `options.theme.unwrap_or(stored)` and by the Appearance dropdown.
-- `--screen settings` / `settings-appearance` (`LaunchScreen::Settings(SettingsPage)`): the main window opens as usual, then `open_settings_window` on that page; the capture targets the Settings window once the catalog has loaded and Test connection is idle. USAGE updated.
+- `--screen settings` / `settings-appearance` / `settings-tall` (`LaunchScreen::Settings(SettingsPage, SettingsSize)`; tall is 900 px high so a shot shows the Reset and Remove footer, which the standard 620 px window scrolls to): the main window opens as usual, then `open_settings_window` on that page; the capture targets the Settings window once the catalog has loaded and Test connection is idle. USAGE updated.
 
 ## Async contract
 

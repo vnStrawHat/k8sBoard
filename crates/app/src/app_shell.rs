@@ -18,6 +18,7 @@ use gpui_kit::{
 };
 
 use crate::FocusQuickFilter;
+use crate::cluster_catalog::{CatalogHandle, ClusterCatalog};
 use crate::cluster_registry::{
     ClusterProfile, ClusterRef, StartChoice, launch_last_used, start_choice, switcher_label,
 };
@@ -41,10 +42,7 @@ use crate::issue_table::IssueTableDelegate;
 use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
-use crate::launch_options::{
-    LaunchOptions, LaunchScreen, LoadedKubeconfigs, kubeconfig_chain, load_kubeconfigs,
-    standalone_files,
-};
+use crate::launch_options::{LaunchOptions, LaunchScreen};
 use crate::log_dock::{DockMode, LogDock};
 use crate::log_target::{LogTarget, NoLogTarget, check_logs_access};
 use crate::monitor_data::{MonitorInput, MonitorSubject, monitor_data};
@@ -122,10 +120,10 @@ impl Screen {
     }
 }
 
+/// How far the catalog is: the shell shows a busy view, the load error, or its screens.
 enum KubeconfigState {
     Loading,
-    /// The launch chain first (when it loaded), then each registry file.
-    Loaded(Vec<Arc<Kubeconfig>>),
+    Loaded,
     Failed(String),
 }
 
@@ -216,13 +214,13 @@ struct RequestedStart {
 /// The root view: the six regions of the window, the screen choice, and the selection that
 /// opens the drawer.
 pub(crate) struct AppShell {
-    kubeconfig: KubeconfigState,
+    /// The loaded kubeconfigs, shared with the Settings window.
+    catalog: Entity<ClusterCatalog>,
+    _catalog_observer: Subscription,
     /// Set when the kubeconfig loaded but names no usable context; there is no session then.
     context_error: Option<String>,
     /// The context the session was started for, also while it is connecting or failed.
     active: Option<ContextSummary>,
-    /// One line per kubeconfig file that was skipped; shown by the title-bar warning button.
-    notices: Vec<String>,
     /// Whether the current session was already seen Live, so `last_used` is written once.
     has_reported_live: bool,
     session: Option<Entity<ClusterSession>>,
@@ -303,23 +301,13 @@ pub(crate) fn bind_keys(cx: &mut App) {
 impl AppShell {
     pub(crate) fn new(options: LaunchOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let secret_value_access = value_access(&options);
-        let is_explicit = options.kubeconfig.is_some();
-        let chain = kubeconfig_chain(
-            options.kubeconfig,
-            std::env::var_os("KUBECONFIG"),
-            std::env::home_dir(),
-        );
-        let explicit_files = is_explicit.then(|| chain.clone());
-        let standalone = standalone_files(&AppSettings::get(cx).registry.kubeconfigs, &chain);
-        let kubeconfig = if chain.is_empty() && standalone.is_empty() {
-            KubeconfigState::Failed(
-                "no kubeconfig found: pass --kubeconfig, set KUBECONFIG, or create ~/.kube/config"
-                    .to_owned(),
-            )
-        } else {
-            Self::load_kubeconfigs(chain, standalone, cx);
-            KubeconfigState::Loading
-        };
+        let catalog = CatalogHandle::of(cx);
+        let catalog_observer = cx.observe(&catalog, |shell, _, cx| shell.on_catalog_changed(cx));
+        // Only an explicit `--kubeconfig` limits which saved `last_used` may pick the start cluster.
+        let explicit_files = options
+            .kubeconfig
+            .is_some()
+            .then(|| catalog.read(cx).chain_files().to_vec());
 
         let shell = cx.weak_entity();
         let log_dock = cx.new(|_| LogDock::new(shell.clone()));
@@ -395,10 +383,10 @@ impl AppShell {
         let launch_filter = options.filter;
         let launch_select = options.select;
         let mut shell = Self {
-            kubeconfig,
+            catalog,
+            _catalog_observer: catalog_observer,
             context_error: None,
             active: None,
-            notices: Vec::new(),
             has_reported_live: false,
             session: None,
             _session_observer: None,
@@ -454,53 +442,40 @@ impl AppShell {
         if let Some(text) = launch_filter {
             shell.apply_launch_filter(&text, cx);
         }
+        // A catalog with nothing to load is already done and will not notify.
+        shell.on_catalog_changed(cx);
         shell
     }
 
-    /// Reading the files is blocking I/O, so it runs on the background executor, not on the
-    /// UI thread and not on tokio.
-    fn load_kubeconfigs(chain: Vec<PathBuf>, standalone: Vec<PathBuf>, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
-            let loaded = cx
-                .background_executor()
-                .spawn(async move { load_kubeconfigs(&chain, &standalone) })
-                .await;
-            let _ = this.update(cx, |shell, cx| shell.finish_kubeconfig_load(loaded, cx));
-        })
-        .detach();
-    }
-
-    fn finish_kubeconfig_load(
-        &mut self,
-        loaded: Result<LoadedKubeconfigs, KubeconfigError>,
-        cx: &mut Context<Self>,
-    ) {
-        let loaded = match loaded {
-            Ok(loaded) => loaded,
-            Err(error) => {
-                self.kubeconfig = KubeconfigState::Failed(error_text(&error));
-                cx.notify();
+    /// Starts the first session once the catalog has loaded; later catalog changes only re-render
+    /// (the switcher reads the catalog).
+    fn on_catalog_changed(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
+        let is_waiting_to_start = self.session.is_none() && self.context_error.is_none();
+        if !is_waiting_to_start {
+            return;
+        }
+        let kubeconfigs = {
+            let catalog = self.catalog.read(cx);
+            if catalog.is_loading() {
                 return;
             }
+            catalog.kubeconfigs().cloned().collect::<Vec<_>>()
         };
-        self.notices = loaded.notices;
-        self.kubeconfig = KubeconfigState::Loaded(loaded.kubeconfigs.clone());
+        if kubeconfigs.is_empty() {
+            return;
+        }
         let requested = self.requested.context.take();
         let explicit_files = self.requested.explicit_files.take();
         let saved = AppSettings::get(cx).registry.last_used.as_ref();
         let last_used = launch_last_used(saved, explicit_files.as_deref()).cloned();
-        match resolve_start(
-            &loaded.kubeconfigs,
-            requested.as_deref(),
-            last_used.as_ref(),
-        ) {
+        match resolve_start(&kubeconfigs, requested.as_deref(), last_used.as_ref()) {
             Ok((kubeconfig, summary)) => {
                 let namespace = self.requested.namespace.take();
                 self.start_session(kubeconfig, &summary, namespace, cx);
             }
             Err(error) => self.context_error = Some(error_text(&error)),
         }
-        cx.notify();
     }
 
     /// Replaces the session. Dropping the old one cancels every task and watch it owns.
@@ -570,13 +545,26 @@ impl AppShell {
 
     /// Clears the notice behind the title-bar warning button.
     pub(crate) fn dismiss_notices(&mut self, cx: &mut Context<Self>) {
-        self.notices.clear();
+        self.catalog
+            .update(cx, |catalog, cx| catalog.clear_notices(cx));
         AppSettings::dismiss_notice(cx);
     }
 
     /// The skipped-kubeconfig lines for the warning button.
-    pub(crate) fn notices(&self) -> &[String] {
-        &self.notices
+    pub(crate) fn notices(&self, cx: &App) -> Vec<String> {
+        let catalog = self.catalog.read(cx);
+        catalog.notices().iter().map(ToString::to_string).collect()
+    }
+
+    fn kubeconfig_state(&self, cx: &App) -> KubeconfigState {
+        let catalog = self.catalog.read(cx);
+        if catalog.is_loading() {
+            return KubeconfigState::Loading;
+        }
+        match catalog.kubeconfigs().next() {
+            Some(_) => KubeconfigState::Loaded,
+            None => KubeconfigState::Failed(catalog.failure_text()),
+        }
     }
 
     pub(crate) fn session(&self) -> Option<&Entity<ClusterSession>> {
@@ -585,12 +573,11 @@ impl AppShell {
 
     /// The loaded contexts for the switcher, in load order.
     pub(crate) fn switcher_items(&self, cx: &App) -> Vec<SwitcherItem> {
-        let KubeconfigState::Loaded(kubeconfigs) = &self.kubeconfig else {
-            return Vec::new();
-        };
         let registry = &AppSettings::get(cx).registry;
-        let summaries: Vec<&ContextSummary> = kubeconfigs
-            .iter()
+        let summaries: Vec<&ContextSummary> = self
+            .catalog
+            .read(cx)
+            .kubeconfigs()
             .flat_map(|kubeconfig| kubeconfig.contexts())
             .collect();
         summaries
@@ -642,10 +629,9 @@ impl AppShell {
     }
 
     pub(crate) fn switch_cluster(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
-        let KubeconfigState::Loaded(kubeconfigs) = &self.kubeconfig else {
-            return;
-        };
-        let Some((kubeconfig, summary)) = find_cluster(kubeconfigs, cluster) else {
+        let kubeconfigs: Vec<Arc<Kubeconfig>> =
+            self.catalog.read(cx).kubeconfigs().cloned().collect();
+        let Some((kubeconfig, summary)) = find_cluster(&kubeconfigs, cluster) else {
             return;
         };
         let is_active = self
@@ -2326,12 +2312,12 @@ impl AppShell {
     /// What the screenshot hook inspects to know when the screen shows its target.
     #[cfg(feature = "screenshot")]
     pub(crate) fn settle_input(&self, cx: &App) -> SettleInput {
-        let target = match (&self.kubeconfig, &self.session) {
+        let target = match (self.kubeconfig_state(cx), &self.session) {
             (KubeconfigState::Loading, _) => TargetState::Loading,
-            (KubeconfigState::Failed(_), _) | (KubeconfigState::Loaded(_), None) => {
+            (KubeconfigState::Failed(_), _) | (KubeconfigState::Loaded, None) => {
                 TargetState::Unavailable
             }
-            (KubeconfigState::Loaded(_), Some(session)) => match session.read(cx).phase() {
+            (KubeconfigState::Loaded, Some(session)) => match session.read(cx).phase() {
                 SessionPhase::Connecting { .. } => TargetState::Loading,
                 SessionPhase::Failed { .. } => TargetState::Unavailable,
                 SessionPhase::Live(live) => {
@@ -2392,6 +2378,7 @@ impl AppShell {
             || self.log_dock.read(cx).is_connecting(cx);
         SettleInput {
             target,
+            is_catalog_loading: self.catalog.read(cx).is_loading(),
             // An empty list opens no drawer, but the launch request is resolved then, so it settles.
             is_drawer_ready: is_drawer_ready(
                 self.selected.is_some(),
@@ -2764,7 +2751,7 @@ impl Render for AppShell {
         let theme = cx.theme();
         let counts = self.navigation_counts(cx);
         let session = self.session.as_ref().map(|session| session.read(cx));
-        let is_kubeconfig_loading = matches!(self.kubeconfig, KubeconfigState::Loading);
+        let is_kubeconfig_loading = self.catalog.read(cx).is_loading();
         v_flex()
             .size_full()
             .track_focus(&self.focus_handle)
@@ -2862,7 +2849,7 @@ fn start_namespace(
 }
 
 /// The loaded kubeconfig that defines `cluster`, with its context.
-fn find_cluster(
+pub(crate) fn find_cluster(
     kubeconfigs: &[Arc<Kubeconfig>],
     cluster: &ClusterRef,
 ) -> Option<(Arc<Kubeconfig>, ContextSummary)> {
@@ -2892,7 +2879,7 @@ fn resolve_start(
     {
         return Ok(found);
     }
-    // `load_kubeconfigs` fails on an empty list, so there is a first one in practice.
+    // The caller passes at least one loaded kubeconfig.
     let first = kubeconfigs.first().ok_or(KubeconfigError::NoFiles)?;
     let wanted = match choice {
         StartChoice::RequestedMissing => requested,

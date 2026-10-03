@@ -15,8 +15,8 @@ use crate::cluster_session::namespaces_label;
 use crate::environment::{environment_badge, environment_color};
 use crate::issue_board::IssueSummary;
 use crate::namespace_picker::{PickerAnchor, namespace_picker as picker};
-use crate::resource_actions::disabled_menu_item;
 use crate::settings::AppSettings;
+use crate::settings_window::{ManageClusters, OpenSettings};
 use crate::status_tone::tone_color;
 
 pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
@@ -142,10 +142,8 @@ fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
                         }),
                 )
             });
-            menu.separator().item(disabled_menu_item(
-                "Manage clusters…",
-                "Settings window comes later".into(),
-            ))
+            menu.separator()
+                .item(PopupMenuItem::new("Manage clusters…").action(Box::new(ManageClusters)))
         })
         .into_any_element()
 }
@@ -180,8 +178,8 @@ fn settings_button() -> impl IntoElement {
         .ghost()
         .small()
         .icon(Icon::new(IconName::Settings))
-        .tooltip("Settings window comes later")
-        .disabled(true)
+        .tooltip_with_action("Settings", &OpenSettings, None)
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx))
 }
 
 /// One line per notice (a corrupt settings file, a skipped kubeconfig). The click dismisses them.
@@ -189,7 +187,7 @@ fn notice_lines(shell: &AppShell, cx: &App) -> Vec<String> {
     AppSettings::notice(cx)
         .map(ToString::to_string)
         .into_iter()
-        .chain(shell.notices().iter().cloned())
+        .chain(shell.notices(cx))
         .collect()
 }
 

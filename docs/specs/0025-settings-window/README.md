@@ -1,6 +1,6 @@
 # 0025 — Settings window (W2)
 
-Status: draft, amended after the advisor review (M1–M3, S1–S12, N1–N8), HEAD `9d5af01`. Builds on 0024 (settings store, registry, environments; may not be merged yet: step 1 here starts from the 0024 code). Crates: `crates/cluster` (parse, connection info, names) and `crates/app`. Local only: no Kubernetes write; the one cluster call is the read-only `GET /version` of Test connection. Applies C1, C2, C5. Wireframe: W2 (pins 1–6), W1 "Manage clusters…", keyboard map `Ctrl ,`.
+Status: implemented (ACs 4, 7, 9 partly verified, see the coder report); amended after the advisor review (M1–M3, S1–S12, N1–N8), HEAD `9d5af01`. Builds on 0024 (settings store, registry, environments; may not be merged yet: step 1 here starts from the 0024 code). Crates: `crates/cluster` (parse, connection info, names) and `crates/app`. Local only: no Kubernetes write; the one cluster call is the read-only `GET /version` of Test connection. Applies C1, C2, C5. Wireframe: W2 (pins 1–6), W1 "Manage clusters…", keyboard map `Ctrl ,`.
 
 ## Goal
 
@@ -39,18 +39,18 @@ Status: draft, amended after the advisor review (M1–M3, S1–S12, N1–N8), HE
 
 ## Acceptance criteria
 
-- [ ] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`, no `unsafe`.
-- [ ] 2. Every test in [test-plan.md](test-plan.md) for the step exists under that name and passes offline; file tests write only under `std::env::temp_dir()`. Step 2a leaves every existing test and `--screen` output unchanged.
-- [ ] 3. No credential reaches the UI, a log, or `settings.json`: connection info shows auth kinds and the exec command's file name only; `Debug` of the new types holds no credential (tests); `SettingsWindow` and `ClustersPageState` have no `Debug`.
+- [x] 1. The quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`, no `unsafe`.
+- [x] 2. Every test in [test-plan.md](test-plan.md) for the step exists under that name and passes offline; file tests write only under `std::env::temp_dir()`. Step 2a leaves every existing test and `--screen` output unchanged.
+- [x] 3. No credential reaches the UI, a log, or `settings.json`: connection info shows auth kinds and the exec command's file name only; `Debug` of the new types holds no credential (tests); `SettingsWindow` and `ClustersPageState` have no `Debug`.
 - [ ] 4. `Ctrl ,` twice, the Settings button, and "Manage clusters…" all leave exactly one Settings window, focused.
-- [ ] 5. Closing Settings keeps the app running and clears the handle; closing the main window quits the app (Settings closes too).
-- [ ] 6. Changing the theme in Appearance re-themes both windows at once and persists (`settings.json` `theme`).
+- [x] 5. Closing Settings keeps the app running and clears the handle; closing the main window quits the app (Settings closes too).
+- [x] 6. Changing the theme in Appearance re-themes both windows at once and persists (`settings.json` `theme`).
 - [ ] 7. Editing a display name or environment updates the main title-bar label and badge without restart.
-- [ ] 8. Invalid input shows the exact message from [clusters-page.md](clusters-page.md) under the field and is not saved.
+- [x] 8. Invalid input shows the exact message from [clusters-page.md](clusters-page.md) under the field and is not saved.
 - [ ] 9. Test connection on `readonly@Monitor` shows `Connected · v1.29.5 · {n} ms` and sends only `GET /version` (0001 read-only grep unchanged; a `RUST_LOG=kube=trace` run shows one request).
-- [ ] 10. Importing a file adds only its path to `registry.kubeconfigs`; its contexts appear in the switcher without restart. Colliding names show the warnings from [import.md](import.md).
-- [ ] 11. Paste never renders the clipboard text; the file lands in `<config>/kubeconfigs/` (Unix: file `mode & 0o077 == 0`, folder `0o700`); `settings.json` holds only its path. Closing Settings during the save still registers the file. Remove deletes an app-owned file first and drops its entries only after the delete succeeded.
-- [ ] 12. Screenshots `settings` (Clusters) and `settings-appearance`, light and dark: no high-severity defect against W2 (known deviations: no nav count, row meta shows the file name).
+- [x] 10. Importing a file adds only its path to `registry.kubeconfigs`; its contexts appear in the switcher without restart. Colliding names show the warnings from [import.md](import.md).
+- [x] 11. Paste never renders the clipboard text; the file lands in `<config>/kubeconfigs/` (Unix: file `mode & 0o077 == 0`, folder `0o700`); `settings.json` holds only its path. Closing Settings during the save still registers the file. Remove deletes an app-owned file first and drops its entries only after the delete succeeded.
+- [x] 12. Screenshots `settings` (Clusters) and `settings-appearance`, light and dark: no high-severity defect against W2 (known deviations: no nav count, row meta shows the file name).
 
 ## Open items
 

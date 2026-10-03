@@ -91,7 +91,8 @@ pub use helm_values_diff::{HelmValuesDiff, ValueChange, ValueVisibility};
 pub use ingress::{IngressPath, IngressSummary, IngressTls};
 pub use job::{JobStatus, JobSummary};
 pub use kubeconfig::{
-    ContextOrigin, ContextSummary, Kubeconfig, KubeconfigError, LoadedKubeconfig,
+    AuthKind, ConnectionInfo, ContextOrigin, ContextSummary, EntryNames, Kubeconfig,
+    KubeconfigError, LoadedKubeconfig,
 };
 pub use kubelet_stats::{
     KubeletSummary, KubeletTargets, NetworkCounters, NodeKubeletStats, PodKubeletStats, PvcUsage,

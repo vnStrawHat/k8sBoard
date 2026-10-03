@@ -13,8 +13,9 @@ use gpui_kit::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
+use crate::cluster_catalog::CatalogHandle;
 use crate::cluster_registry::ClusterRef;
-use crate::launch_options::{LaunchRequest, parse_launch_options};
+use crate::launch_options::{LaunchRequest, kubeconfig_chain, parse_launch_options};
 use crate::settings::{AppSettings, Settings};
 use crate::settings_store::{LoadedSettings, WriteMode};
 
@@ -31,10 +32,16 @@ fn open_shell_with(
     extra: &[&str],
     cx: &mut TestAppContext,
 ) -> (WindowHandle<Root>, Entity<AppShell>) {
-    let args = ["--kubeconfig", "does-not-exist/kubeconfig.yml"]
-        .iter()
-        .chain(extra)
-        .map(|arg| (*arg).to_owned());
+    open_shell_on("does-not-exist/kubeconfig.yml", extra, cx)
+}
+
+fn open_shell_on(
+    kubeconfig: &str,
+    extra: &[&str],
+    cx: &mut TestAppContext,
+) -> (WindowHandle<Root>, Entity<AppShell>) {
+    let leading = ["--kubeconfig", kubeconfig];
+    let args = leading.iter().chain(extra).map(|arg| (*arg).to_owned());
     let Ok(LaunchRequest::Run(options)) = parse_launch_options(args) else {
         panic!("the launch flags are valid");
     };
@@ -50,6 +57,8 @@ fn open_shell_with(
             },
             cx,
         );
+        let chain = kubeconfig_chain(options.kubeconfig.clone(), None, None);
+        CatalogHandle::install(chain, cx);
         let bounds = Bounds {
             origin: Point::default(),
             size: size(px(1320.), px(900.)),
@@ -593,4 +602,118 @@ fn toggle_default_namespace_clears_it_when_already_set(cx: &mut TestAppContext) 
 fn the_shell_starts_on_overview_without_screen_flag(cx: &mut TestAppContext) {
     let (_window, shell) = open_shell(cx);
     shell.read_with(cx, |shell, _| assert_eq!(shell.screen, Screen::Overview));
+}
+
+// ---- Settings edits reach the main window ----
+
+/// A shell over a real kubeconfig with one context, `ctx`. The requested context does not
+/// exist, so no session starts (nothing touches the network); `active` is set by hand as the
+/// first load would.
+fn open_shell_over_fixture(
+    name: &str,
+    cx: &mut TestAppContext,
+) -> (WindowHandle<Root>, Entity<AppShell>, ContextSummary) {
+    let dir =
+        std::env::temp_dir().join(format!("k8sboard-0025-shell-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("kubeconfig.yaml");
+    std::fs::write(
+        &path,
+        "apiVersion: v1\nkind: Config\nclusters:\n  - name: c\n    cluster: { server: 'https://127.0.0.1:1' }\ncontexts:\n  - name: ctx\n    context: { cluster: c }\n",
+    )
+    .expect("write fixture");
+    let (window, shell) = open_shell_on(&path.to_string_lossy(), &["--context", "nope"], cx);
+    cx.run_until_parked();
+    let summary = ContextSummary {
+        name: "ctx".to_owned(),
+        cluster: "c".to_owned(),
+        user: None,
+        namespace: None,
+        source: path,
+    };
+    shell.update(cx, |shell, _| shell.active = Some(summary.clone()));
+    (window, shell, summary)
+}
+
+fn remove_fixture(summary: &ContextSummary) {
+    if let Some(dir) = summary.source.parent() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+fn switcher_labels(shell: &Entity<AppShell>, cx: &mut TestAppContext) -> Vec<String> {
+    cx.update(|cx| {
+        shell
+            .read(cx)
+            .switcher_items(cx)
+            .into_iter()
+            .map(|item| item.label)
+            .collect()
+    })
+}
+
+fn active_display_name(shell: &Entity<AppShell>, cx: &mut TestAppContext) -> Option<String> {
+    cx.update(|cx| {
+        shell
+            .read(cx)
+            .active_profile(cx)
+            .map(|profile| profile.display_name)
+    })
+}
+
+#[gpui_kit::test]
+fn editing_display_name_updates_title_bar(cx: &mut TestAppContext) {
+    let (window, shell, summary) = open_shell_over_fixture("rename", cx);
+    render(window, cx);
+    assert_eq!(active_display_name(&shell, cx).as_deref(), Some("ctx"));
+    assert_eq!(switcher_labels(&shell, cx), ["ctx"]);
+    // What the Settings window does when the display name field changes.
+    let cluster = ClusterRef::of(&summary);
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            crate::cluster_form::edit_entry(&mut settings.registry, &cluster, |entry| {
+                entry.display_name = Some("uat-monitor".to_owned());
+            });
+        });
+    });
+    cx.run_until_parked();
+    // The title bar reads the profile and the switcher labels at render time.
+    render(window, cx);
+    assert_eq!(
+        active_display_name(&shell, cx).as_deref(),
+        Some("uat-monitor")
+    );
+    assert_eq!(switcher_labels(&shell, cx), ["uat-monitor"]);
+    remove_fixture(&summary);
+}
+
+#[gpui_kit::test]
+fn read_only_switch_leaves_title_bar_badge(cx: &mut TestAppContext) {
+    let (window, shell, summary) = open_shell_over_fixture("read-only", cx);
+    render(window, cx);
+    let cluster = ClusterRef::of(&summary);
+    let profile = |cx: &mut TestAppContext| {
+        cx.update(|cx| shell.read(cx).active_profile(cx))
+            .expect("an active cluster")
+    };
+    let before = profile(cx);
+    assert!(!before.read_only, "ctx is not guessed as Production");
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            crate::cluster_form::edit_entry(&mut settings.registry, &cluster, |entry| {
+                entry.read_only = Some(true);
+            });
+        });
+    });
+    cx.run_until_parked();
+    // The switch is stored and read by the profile; the title bar still renders, with its
+    // fixed "Read-only" badge (`read_only_badge` takes no profile), the name, and the
+    // environment unchanged.
+    render(window, cx);
+    let after = profile(cx);
+    assert!(after.read_only);
+    assert_eq!(after.display_name, before.display_name);
+    assert_eq!(after.environment, before.environment);
+    remove_fixture(&summary);
 }

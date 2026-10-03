@@ -14,8 +14,8 @@
 | T6 | Search box "Search resources or run a command… Ctrl K" | Missing | — | 0029 |
 | T7 | Read-only lock badge | Partial | 0003 (static) | per-cluster toggle, Ctrl Shift R → 0030 |
 | T8 | Issues button `⚑ 4` | Done | 0020 | — |
-| T9 | Settings button ⚙ | Partial | 0003 (no action) | 0025 |
-| T10 | "Manage clusters…" item | Partial | 0003 (disabled) | 0025 |
+| T9 | Settings button ⚙ | Done | 0025 (opens the Settings window, Ctrl ,) | — |
+| T10 | "Manage clusters…" item | Done | 0025 | — |
 
 ## Navigation sidebar
 
@@ -80,11 +80,11 @@
 |---|---|---|---|
 | P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Missing | 0029 |
 | P2 | Keyboard map (22 bindings) and `?` cheat sheet | Missing | 0028 |
-| S1 | Settings window (W2) as a separate OS window, single instance | Missing | 0025 |
-| S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (data model only) | 0024 registry fields; the page is 0025 |
-| S3 | Add cluster: import file, watch folder, paste YAML | Partial (data model only) | 0024 `registry.kubeconfigs` loaded standalone; the editing UI is 0025 |
+| S1 | Settings window (W2) as a separate OS window, single instance | Done | 0025 |
+| S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (no drag order) | 0025 |
+| S3 | Add cluster: import file, watch folder, paste YAML | Partial (no watch folder) | 0025 |
 | S4 | Add cluster: scan AWS EKS, GKE, AKS | Missing | backlog |
-| S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Missing | 0025 (frame), owners: 0028, 0030, 0036, 0019, backlog |
+| S5 | Pages General, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, Metrics, Extensions, About | Partial (Clusters, Appearance, About) | 0025; the rest: 0028, 0030, 0036, 0019, backlog |
 | M1 | Multi-cluster aggregated tables | Missing | 0027 |
 | G1 | Env tiers: prod typed name; staging, dev, local a confirm dialog with a click (user 2026-10-02; W10 text superseded) | Missing | 0030 |
 | G2 | Prod opens read-only; lock toggle; diff + dry-run before writes; audit log | Missing | 0030, 0031 |

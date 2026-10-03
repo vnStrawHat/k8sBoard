@@ -1,14 +1,14 @@
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use cluster::{Kubeconfig, KubeconfigError, NamespaceScope};
+use cluster::NamespaceScope;
 
 use crate::app_shell::Screen;
 use crate::drawer::DrawerTab;
 use crate::namespace_picker::MAX_NAMESPACES;
 use crate::resource_kind::ResourceKind;
 use crate::settings::ThemePreference;
+use crate::settings_window::{SettingsPage, SettingsSize};
 
 pub(crate) const USAGE: &str = "\
 Usage: k8sboard [options]
@@ -26,7 +26,7 @@ Options:
   --screen overview|pods|nodes|issues|issues-drawer|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|pods-selected|nodes-selected|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
-           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic
+           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance
                          screen to open (default: overview)
   --window-width <px>    window width, 800 to 3840 (default: 1320)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
@@ -66,6 +66,9 @@ pub(crate) enum LaunchScreen {
     /// `--screen test-traffic`: NetworkPolicies with the Test traffic dialog open on the defaults
     /// of the first policy shown (after `--filter`), or the one `--select` names.
     TestTraffic,
+    /// `--screen settings|settings-appearance`: the main window opens as usual, then the Settings
+    /// window on that page, which is what the screenshot captures.
+    Settings(SettingsPage, SettingsSize),
     /// `--screen <plural>`, e.g. `deployments`.
     Kind(ResourceKind),
     /// `--screen <plural>-drawer|<plural>-events|<plural>-yaml`: the kind's first row selected, on that tab.
@@ -96,12 +99,21 @@ impl LaunchScreen {
             Self::Custom { .. } => Screen::Kind(ResourceKind::Crds),
             Self::Nodes | Self::NodeDrawer(_) | Self::NodesSelected => Screen::Nodes,
             Self::Issues | Self::IssuesDrawer => Screen::Issues,
+            Self::Settings(..) => Screen::Pods,
             Self::Kind(kind) | Self::KindDrawer(kind, _) => Screen::Kind(kind),
             Self::WhoCan => Screen::Kind(ResourceKind::ClusterRoles),
             Self::TestTraffic => Screen::Kind(ResourceKind::NetworkPolicies),
             Self::CheckPermissions | Self::AccountPermissions => {
                 Screen::Kind(ResourceKind::ServiceAccounts)
             }
+        }
+    }
+
+    /// The Settings page and window size of the settings screens.
+    pub(crate) fn settings_screen(self) -> Option<(SettingsPage, SettingsSize)> {
+        match self {
+            Self::Settings(page, size) => Some((page, size)),
+            _ => None,
         }
     }
 
@@ -227,6 +239,16 @@ impl LaunchScreen {
             "check-permissions" => Some(Self::CheckPermissions),
             "account-permissions" => Some(Self::AccountPermissions),
             "test-traffic" => Some(Self::TestTraffic),
+            "settings" => Some(Self::Settings(
+                SettingsPage::Clusters,
+                SettingsSize::Standard,
+            )),
+            // The whole Clusters form fits, so a screenshot can show its footer.
+            "settings-tall" => Some(Self::Settings(SettingsPage::Clusters, SettingsSize::Tall)),
+            "settings-appearance" => Some(Self::Settings(
+                SettingsPage::Appearance,
+                SettingsSize::Standard,
+            )),
             _ => {
                 if let Some(plural) = text.strip_suffix("-drawer") {
                     let kind = ResourceKind::from_plural(plural)?;
@@ -438,51 +460,6 @@ fn absolute(path: PathBuf) -> PathBuf {
 
 fn non_empty_entries(value: &OsStr) -> impl Iterator<Item = PathBuf> {
     std::env::split_paths(value).filter(|entry| !entry.as_os_str().is_empty())
-}
-
-/// The kubeconfigs that loaded (the launch chain first) and one notice per file that did not.
-pub(crate) struct LoadedKubeconfigs {
-    pub(crate) kubeconfigs: Vec<Arc<Kubeconfig>>,
-    pub(crate) notices: Vec<String>,
-}
-
-/// Loads the launch `chain` merged, then every `standalone` file on its own. Blocking file I/O.
-/// `Err` only when nothing loads.
-pub(crate) fn load_kubeconfigs(
-    chain: &[PathBuf],
-    standalone: &[PathBuf],
-) -> Result<LoadedKubeconfigs, KubeconfigError> {
-    let mut kubeconfigs = Vec::new();
-    let mut errors = Vec::new();
-    if !chain.is_empty() {
-        match Kubeconfig::load(chain) {
-            Ok(loaded) => {
-                kubeconfigs.push(Arc::new(loaded.kubeconfig));
-                errors.extend(loaded.skipped);
-            }
-            Err(error) => errors.push(error),
-        }
-    }
-    for file in standalone {
-        match Kubeconfig::load(std::slice::from_ref(file)) {
-            Ok(loaded) => kubeconfigs.push(Arc::new(loaded.kubeconfig)),
-            Err(error) => errors.push(error),
-        }
-    }
-    if kubeconfigs.is_empty() {
-        return Err(errors
-            .into_iter()
-            .next()
-            .unwrap_or(KubeconfigError::NoFiles));
-    }
-    let notices = errors
-        .iter()
-        .map(|error| format!("Skipped kubeconfig: {error}"))
-        .collect();
-    Ok(LoadedKubeconfigs {
-        kubeconfigs,
-        notices,
-    })
 }
 
 #[cfg(test)]

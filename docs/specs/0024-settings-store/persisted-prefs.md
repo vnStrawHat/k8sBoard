@@ -64,9 +64,9 @@ Each later spec adds one `#[serde(default)]` field to `Settings` (or to `Cluster
 | `issues.watch_tls_secrets` | `bool`, true | 0020 (decision 11) | opt out of the cluster-wide TLS Secrets watch (C13 budget) |
 | `topology.group_by` | enum, `app` | 0022 (decision 27) | last Group by choice |
 | `topology.pins` | map `"{context}/{namespace}"` → map node id → `{x, y}` | 0022 (decision 23) | dragged positions; cap 2,000 pins per key |
-| `appearance.density` | `"compact"`(28) / `"comfortable"`(36) | 0025 | row height |
+| `appearance.density` | `"compact"`(28) / `"comfortable"`(36) | later | row height (needs a table row-height audit) |
 | `dock.height` | `Option<f32>` px | 0019 or 0025 | remembered dock height, written on drag end |
-| `registry.clusters[].color`, `.metrics_source`, `.allow_node_shell`, `.confirm` | per W2 form | 0025 / 0030 / 0037 | W2 Clusters fields; `confirm` is `"type-name"` or `"click"`, absent = environment default (0030) |
+| `registry.clusters[].color`, `.metrics_source`, `.allow_node_shell`, `.confirm` | per W2 form | later / backlog / 0037 / 0030 | W2 Clusters fields; `confirm` is `"type-name"` or `"click"`, absent = environment default (0030) |
 | `port_forward.presets` | list | 0035 | saved forwards |
 
 Pin keys and any new map keys use context names, namespaces, and object names only.

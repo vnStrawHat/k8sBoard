@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use gpui_kit::{App, BorrowAppContext as _, Global, Subscription};
+use gpui_kit::component::{Theme, ThemeMode};
+use gpui_kit::{App, BorrowAppContext as _, Global, SharedString, Subscription};
 use serde::{Deserialize, Serialize};
 
 use crate::app_shell::Screen;
@@ -51,6 +52,51 @@ pub(crate) enum ThemePreference {
     System,
     Light,
     Dark,
+}
+
+/// The dropdown options: the key is the label, so there is no second string table.
+const THEME_OPTIONS: [(ThemePreference, &str); 3] = [
+    (ThemePreference::System, "Follow the system"),
+    (ThemePreference::Light, "Light"),
+    (ThemePreference::Dark, "Dark"),
+];
+
+impl ThemePreference {
+    /// Re-themes every window now.
+    pub(crate) fn apply(self, cx: &mut App) {
+        match self {
+            Self::Light => Theme::change(ThemeMode::Light, None, cx),
+            Self::Dark => Theme::change(ThemeMode::Dark, None, cx),
+            Self::System => Theme::sync_system_appearance(None, cx),
+        }
+        // The kit highlights the selected row with a faint tint; the theme's selection colour
+        // makes the open drawer's row easy to find in both modes.
+        Theme::update(cx, |theme| theme.table_active = theme.selection);
+    }
+}
+
+/// The dropdown label of `theme`.
+pub(crate) fn theme_label(theme: ThemePreference) -> &'static str {
+    THEME_OPTIONS
+        .iter()
+        .find(|(option, _)| *option == theme)
+        .map_or("Follow the system", |(_, label)| label)
+}
+
+/// The theme a dropdown label names; an unknown label is `System`.
+pub(crate) fn theme_from_label(label: &str) -> ThemePreference {
+    THEME_OPTIONS
+        .iter()
+        .find(|(_, option_label)| *option_label == label)
+        .map_or(ThemePreference::System, |(theme, _)| *theme)
+}
+
+/// The dropdown choices as `(key, label)` pairs.
+pub(crate) fn theme_choices() -> Vec<(SharedString, SharedString)> {
+    THEME_OPTIONS
+        .iter()
+        .map(|(_, label)| ((*label).into(), (*label).into()))
+        .collect()
 }
 
 /// What one table remembers: the sort and the hidden columns, by column name so they survive a
@@ -152,6 +198,12 @@ impl AppSettings {
             // The receiver only closes when the app is shutting down.
             let _ = writer.sender.unbounded_send((app.generation, bytes));
         });
+    }
+
+    /// The folder the settings are saved to; `None` while writes are off.
+    pub(crate) fn config_dir(cx: &App) -> Option<&std::path::Path> {
+        let writer = cx.global::<Self>().writer.as_ref()?;
+        Some(writer.dir.as_path())
     }
 
     pub(crate) fn notice(cx: &App) -> Option<&SettingsNotice> {

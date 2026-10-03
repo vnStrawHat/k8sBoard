@@ -44,7 +44,31 @@ fn profile_of_unregistered_context_uses_name_and_guess() {
             display_name: "prod-eu".to_owned(),
             environment: Environment::Production,
             default_namespace: None,
+            read_only: true,
         }
+    );
+}
+
+#[test]
+fn read_only_defaults_to_production() {
+    let registry = ClusterRegistry::default();
+    assert!(registry.profile(&summary("prod-eu", "a.yaml")).read_only);
+    assert!(!registry.profile(&summary("dev-1", "a.yaml")).read_only);
+    assert!(!registry.profile(&summary("stage", "a.yaml")).read_only);
+}
+
+#[test]
+fn stored_read_only_overrides_the_environment_default() {
+    let mut unlocked = entry("prod-eu", "a.yaml");
+    unlocked.read_only = Some(false);
+    let profile = registry_with(unlocked).profile(&summary("prod-eu", "a.yaml"));
+    assert!(!profile.read_only);
+    let mut locked = entry("dev-1", "a.yaml");
+    locked.read_only = Some(true);
+    assert!(
+        registry_with(locked)
+            .profile(&summary("dev-1", "a.yaml"))
+            .read_only
     );
 }
 

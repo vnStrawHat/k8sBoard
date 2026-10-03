@@ -24,6 +24,53 @@ pub struct ContextSummary {
     pub source: PathBuf,
 }
 
+/// What a context connects to, for display. Holds no credential value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectionInfo {
+    /// `scheme://host[:port]`: userinfo, path, query, and fragment are dropped.
+    pub server: Option<String>,
+    pub auth: AuthKind,
+}
+
+/// How a context authenticates: the kind only, never a token, key, or argument.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AuthKind {
+    Token,
+    TokenFile,
+    ClientCertificate,
+    /// `command` is the file name of the plugin executable, without arguments or environment.
+    Exec {
+        command: String,
+    },
+    AuthProvider {
+        name: String,
+    },
+    Basic,
+    None,
+}
+
+impl fmt::Display for AuthKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Token => formatter.write_str("token"),
+            Self::TokenFile => formatter.write_str("token file"),
+            Self::ClientCertificate => formatter.write_str("client certificate"),
+            Self::Exec { command } => write!(formatter, "exec: {command}"),
+            Self::AuthProvider { name } => write!(formatter, "auth provider: {name}"),
+            Self::Basic => formatter.write_str("basic"),
+            Self::None => formatter.write_str("none"),
+        }
+    }
+}
+
+/// The context, cluster, and user entry names of a kubeconfig, in file order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EntryNames {
+    pub contexts: Vec<String>,
+    pub clusters: Vec<String>,
+    pub users: Vec<String>,
+}
+
 /// The merged kubeconfig and the errors of the files that were skipped.
 #[derive(Debug)]
 pub struct LoadedKubeconfig {
@@ -146,6 +193,64 @@ impl Kubeconfig {
         }
     }
 
+    /// Parses YAML text in memory (pasted content). `origin` is used in errors and as the
+    /// context source only; relative credential paths stay relative (the file is re-loaded with
+    /// `load` after it is written).
+    pub fn parse(text: &str, origin: &Path) -> Result<Kubeconfig, KubeconfigError> {
+        // The parser error is dropped: it can quote a line that holds a token.
+        let document =
+            kube::config::Kubeconfig::from_yaml(text).map_err(|_| KubeconfigError::Parse {
+                path: origin.to_path_buf(),
+            })?;
+        Ok(Self::from_document(
+            vec![origin.to_path_buf()],
+            document,
+            &HashMap::new(),
+        ))
+    }
+
+    /// Server and auth kind of a context; never a credential value.
+    pub fn connection_info(&self, context: &ContextSummary) -> ConnectionInfo {
+        let server = self
+            .document
+            .clusters
+            .iter()
+            .find(|named| named.name == context.cluster)
+            .and_then(|named| named.cluster.as_ref())
+            .and_then(|cluster| cluster.server.as_deref())
+            .map(display_server);
+        let auth_info = context.user.as_deref().and_then(|user| {
+            self.document
+                .auth_infos
+                .iter()
+                .find(|named| named.name == user)
+                .and_then(|named| named.auth_info.as_ref())
+        });
+        ConnectionInfo {
+            server,
+            auth: auth_info.map_or(AuthKind::None, auth_kind),
+        }
+    }
+
+    /// Context, cluster, and user entry names, in file order.
+    pub fn entry_names(&self) -> EntryNames {
+        EntryNames {
+            contexts: self.context_names(),
+            clusters: self
+                .document
+                .clusters
+                .iter()
+                .map(|named| named.name.clone())
+                .collect(),
+            users: self
+                .document
+                .auth_infos
+                .iter()
+                .map(|named| named.name.clone())
+                .collect(),
+        }
+    }
+
     fn from_document(
         sources: Vec<PathBuf>,
         document: kube::config::Kubeconfig,
@@ -255,6 +360,60 @@ impl fmt::Debug for Kubeconfig {
             .field("contexts", &self.context_names())
             .finish()
     }
+}
+
+/// `scheme://host[:port]` of a server URL. Done by hand: the value is free text, and a URL
+/// parser dependency is not worth it for display.
+fn display_server(server: &str) -> String {
+    let (scheme, rest) = match server.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, server),
+    };
+    let (authority, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+    // An `@` after the first delimiter means the delimiter may be part of a raw password
+    // (`u:pa/ss@host`) or the path holds an `@`. Which one cannot be told, so no host is shown:
+    // part of a password must never reach the screen.
+    if tail.contains('@') {
+        return scheme.map_or_else(|| "…".to_owned(), |scheme| format!("{scheme}://…"));
+    }
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    match scheme {
+        Some(scheme) => format!("{scheme}://{host}"),
+        None => host.to_owned(),
+    }
+}
+
+fn auth_kind(auth: &kube::config::AuthInfo) -> AuthKind {
+    if let Some(exec) = &auth.exec {
+        let command = exec.command.as_deref().unwrap_or_default();
+        return AuthKind::Exec {
+            command: command
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+        };
+    }
+    if let Some(provider) = &auth.auth_provider {
+        return AuthKind::AuthProvider {
+            name: provider.name.clone(),
+        };
+    }
+    if auth.client_certificate.is_some() || auth.client_certificate_data.is_some() {
+        return AuthKind::ClientCertificate;
+    }
+    if auth.token.is_some() {
+        return AuthKind::Token;
+    }
+    if auth.token_file.is_some() {
+        return AuthKind::TokenFile;
+    }
+    if auth.username.is_some() {
+        return AuthKind::Basic;
+    }
+    AuthKind::None
 }
 
 fn is_incompatible(merged: &kube::config::Kubeconfig, next: &kube::config::Kubeconfig) -> bool {

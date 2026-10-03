@@ -49,6 +49,9 @@ pub(crate) struct ClusterProfile {
     pub(crate) display_name: String,
     pub(crate) environment: Environment,
     pub(crate) default_namespace: Option<String>,
+    /// The stored switch, else on for Production. Read by the write guard of 0030; no screen
+    /// enforces it yet.
+    pub(crate) read_only: bool,
 }
 
 impl ClusterRef {
@@ -103,10 +106,14 @@ impl ClusterRegistry {
         let environment = entry
             .and_then(|entry| entry.environment)
             .unwrap_or_else(|| guess_environment(&summary.name, &summary.cluster));
+        let read_only = entry
+            .and_then(|entry| entry.read_only)
+            .unwrap_or(environment == Environment::Production);
         ClusterProfile {
             display_name,
             environment,
             default_namespace: entry.and_then(|entry| entry.default_namespace.clone()),
+            read_only,
         }
     }
 }

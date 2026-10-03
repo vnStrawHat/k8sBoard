@@ -350,3 +350,175 @@ fn context_not_found_lists_every_source() {
     assert!(message.contains("b.yaml"), "{message}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- parse, connection info, entry names (spec 0025) ----
+
+const TOKEN_FIXTURE: &str = "fixture-token-value";
+
+/// One cluster plus one context per user entry, so each user shape has its own context.
+fn kubeconfig_with_users(users: &str) -> Kubeconfig {
+    let yaml = format!(
+        "clusters:\n  - name: c\n    cluster: {{ server: 'https://u:p@h:6443/x?y' }}\nusers:\n{users}contexts:\n  - name: ctx\n    context: {{ cluster: c, user: u }}\n"
+    );
+    Kubeconfig::parse(&yaml, Path::new("fixture.yaml")).expect("fixture parses")
+}
+
+fn auth_of(users: &str) -> AuthKind {
+    let kubeconfig = kubeconfig_with_users(users);
+    kubeconfig.connection_info(&kubeconfig.contexts()[0]).auth
+}
+
+#[test]
+fn parse_reads_contexts_from_text() {
+    let kubeconfig =
+        Kubeconfig::parse(FIXTURE, Path::new("clipboard")).expect("fixture text parses");
+    assert_eq!(names(&kubeconfig), ["alpha", "beta"]);
+    assert!(
+        kubeconfig
+            .contexts()
+            .iter()
+            .all(|context| context.source == Path::new("clipboard"))
+    );
+}
+
+#[test]
+fn parse_merges_multiple_documents() {
+    let yaml = format!(
+        "{}---\n{}",
+        file_yaml("one", "c1", None),
+        file_yaml("two", "c2", None)
+    );
+    let kubeconfig = Kubeconfig::parse(&yaml, Path::new("clipboard")).expect("both documents");
+    assert_eq!(names(&kubeconfig), ["one", "two"]);
+}
+
+#[test]
+fn parse_error_does_not_quote_the_text() {
+    let broken = format!("token: {TOKEN_FIXTURE}\n  : [unbalanced");
+    let error = Kubeconfig::parse(&broken, Path::new("clipboard")).expect_err("broken YAML");
+    assert!(matches!(error, KubeconfigError::Parse { .. }), "{error:?}");
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    assert!(!text.contains(TOKEN_FIXTURE), "{text}");
+}
+
+#[test]
+fn server_drops_userinfo_path_and_query() {
+    let kubeconfig = kubeconfig_with_users("  - name: u\n    user: {}\n");
+    let info = kubeconfig.connection_info(&kubeconfig.contexts()[0]);
+    assert_eq!(info.server.as_deref(), Some("https://h:6443"));
+}
+
+#[test]
+fn display_server_table() {
+    let cases = [
+        ("https://u:p@h:6443/x?y", "https://h:6443"),
+        ("https://h:6443", "https://h:6443"),
+        ("https://h:6443/k8s/clusters/c-1?x=1#f", "https://h:6443"),
+        ("https://u:p@ss@h:6443/x", "https://h:6443"),
+        ("h:6443/x", "h:6443"),
+        // A raw password with a delimiter: no part of it may show, so no host either.
+        ("https://u:pa/ss@h:6443", "https://…"),
+        ("https://u:pa?ss@h:6443/x", "https://…"),
+        ("https://u:pa#ss@h:6443", "https://…"),
+        ("https://h:6443/a@b", "https://…"),
+        ("u:pa/ss@h:6443", "…"),
+    ];
+    for (server, shown) in cases {
+        assert_eq!(display_server(server), shown, "{server}");
+    }
+    for server in [
+        "https://u:pa/ss@h:6443",
+        "https://u:pa?ss@h:6443",
+        "https://u:pa#ss@h:6443",
+    ] {
+        assert!(!display_server(server).contains("pa"), "{server}");
+    }
+}
+
+#[test]
+fn server_is_none_without_a_cluster_entry() {
+    let kubeconfig = from_yaml("contexts:\n  - name: ctx\n    context: { cluster: missing }\n");
+    let info = kubeconfig.connection_info(&kubeconfig.contexts()[0]);
+    assert_eq!(info.server, None);
+    assert_eq!(info.auth, AuthKind::None);
+}
+
+#[test]
+fn auth_kind_per_user_shape() {
+    let cases = [
+        (
+            "  - name: u\n    user:\n      exec: { command: aws, apiVersion: client.authentication.k8s.io/v1 }\n",
+            AuthKind::Exec {
+                command: "aws".to_owned(),
+            },
+        ),
+        (
+            "  - name: u\n    user:\n      auth-provider: { name: gcp }\n",
+            AuthKind::AuthProvider {
+                name: "gcp".to_owned(),
+            },
+        ),
+        (
+            "  - name: u\n    user:\n      client-certificate: cert.pem\n      client-key: key.pem\n",
+            AuthKind::ClientCertificate,
+        ),
+        (
+            "  - name: u\n    user:\n      client-certificate-data: Zm9v\n      client-key-data: Zm9v\n",
+            AuthKind::ClientCertificate,
+        ),
+        (
+            "  - name: u\n    user:\n      token: fixture-token-value\n",
+            AuthKind::Token,
+        ),
+        (
+            "  - name: u\n    user:\n      tokenFile: /var/token\n",
+            AuthKind::TokenFile,
+        ),
+        (
+            "  - name: u\n    user:\n      username: fixture-user\n      password: fixture-password\n",
+            AuthKind::Basic,
+        ),
+        ("  - name: u\n    user: {}\n", AuthKind::None),
+    ];
+    for (users, expected) in cases {
+        assert_eq!(auth_of(users), expected, "{users}");
+    }
+}
+
+#[test]
+fn exec_kind_keeps_only_the_command_file_name() {
+    let unix = "  - name: u\n    user:\n      exec:\n        command: /usr/local/bin/aws\n        args: [eks, get-token, --secret-arg-value]\n        env: [{ name: SECRET_ENV, value: secret-env-value }]\n";
+    let windows = "  - name: u\n    user:\n      exec:\n        command: 'C:\x5ctools\x5caws.exe'\n        args: [--secret-arg-value]\n";
+    for (users, expected) in [(unix, "exec: aws"), (windows, "exec: aws.exe")] {
+        let kubeconfig = kubeconfig_with_users(users);
+        let info = kubeconfig.connection_info(&kubeconfig.contexts()[0]);
+        assert_eq!(info.auth.to_string(), expected);
+        let text = format!("{info:?} {}", info.auth);
+        assert!(!text.contains("secret-arg-value"), "{text}");
+        assert!(!text.contains("secret-env-value"), "{text}");
+    }
+}
+
+#[test]
+fn entry_names_list_contexts_clusters_users() {
+    let names = fixture().entry_names();
+    assert_eq!(names.contexts, ["alpha", "beta"]);
+    assert_eq!(names.clusters, ["alpha", "beta"]);
+    assert_eq!(names.users, ["alpha-user", "beta-user"]);
+}
+
+#[test]
+fn connection_info_debug_has_no_credentials() {
+    let kubeconfig = kubeconfig_with_users(&format!(
+        "  - name: u\n    user:\n      token: {TOKEN_FIXTURE}\n"
+    ));
+    let info = kubeconfig.connection_info(&kubeconfig.contexts()[0]);
+    let text = format!("{info:?} {}", info.auth);
+    assert!(!text.contains(TOKEN_FIXTURE), "{text}");
+    assert_eq!(info.auth, AuthKind::Token);
+}

@@ -21,7 +21,7 @@ pub struct EntryNames { pub contexts: Vec<String>, pub clusters: Vec<String>, pu
 ```
 
 - `parse`: `kube::config::Kubeconfig::from_yaml(text)`, which merges every YAML document (`file_config.rs:502`), then `from_document(vec![origin], doc, &HashMap::new())`. Any error, a multi-document merge error included → `KubeconfigError::Parse { path: origin }` without the source (it can quote a token line).
-- `server`: manual split (no new direct dependency): keep `scheme://host[:port]`; drop userinfo (`…@`), path, query, fragment.
+- `server`: manual split (no new direct dependency): keep `scheme://host[:port]`; drop userinfo (`…@`), path, query, fragment. An `@` after the first `/`, `?`, or `#` is ambiguous (a raw password may hold one): then only `scheme://…` shows.
 - `AuthKind` order of checks: exec, auth provider, client certificate (file or data), token, token file, basic (username), none. `Exec.command`: the text after the last `/` or `\` of `exec.command`, never args or env.
 
 ## Preview (`kubeconfig_import.rs`)
@@ -76,7 +76,7 @@ Lives in `cluster_catalog.rs` (step 3, first user `is_chain_source`). Used by `i
 2. `cx.read_from_clipboard().and_then(|item| item.text())` into a local: none → `The clipboard has no text.`; > 1 MiB → `The clipboard text is larger than 1 MiB; that is not a kubeconfig.`
 3. Background `Kubeconfig::parse(&text, Path::new("clipboard"))`, which returns the text with the preview: error → `The clipboard text is not a valid kubeconfig.`; zero contexts → as above. On any error the text is dropped in the task.
 4. Only now `ClustersPageState.paste_text = Some(text)`; preview with `target = pasted_file_path(config_dir, first_context)`.
-5. `Save and add` (`on_ok`): `ClipboardFingerprint::of(&text)` (u64 hash + length), then `paste_text.take()` moves into `ClusterCatalog::add_pasted` (window-and-sharing.md), dialog closes. On `Added(path)` the page selects its first row and calls `reset_paste_status`.
+5. `Save and add` (`on_ok`): `ClipboardMark::of(&text)`, then `paste_text.take()` moves into `ClusterCatalog::add_pasted` (window-and-sharing.md), dialog closes. On `Added(path)` the page selects its first row and calls `reset_paste_status`.
 
 `paste_text` is `None` again after: Save and add (moved out), Cancel, Esc or overlay click (`on_close`), a preview error, and window close (the view is dropped).
 
@@ -86,8 +86,8 @@ pub(crate) const PASTED_DIR: &str = "kubeconfigs";
 /// [a-z0-9._-] → '-', trimmed to 40, empty → "pasted"; `-2`, `-3`, … while the name exists.
 pub(crate) fn pasted_file_path(config_dir: &Path, first_context: Option<&str>) -> PathBuf;
 /// Creates the folder, writes with `create_new` (never overwrites), `sync_all`. Unix: file 0o600, folder 0o700.
-pub(crate) fn write_pasted_kubeconfig(config_dir: &Path, text: &str) -> io::Result<PathBuf>;
-pub(crate) fn is_app_owned(path: &Path, config_dir: &Path) -> bool;   // parent == <dir>/kubeconfigs
+pub(crate) fn write_pasted_kubeconfig(config_dir: &Path, first_context: Option<&str>, text: &str) -> io::Result<PathBuf>;
+pub(crate) fn is_app_owned(path: &Path, config_dir: &Path) -> bool;   // parent == <dir>/kubeconfigs and the name passes `is_pasted_file_name` ({slug}[-n].yaml, [a-z0-9._-]); a user file under another name is never deleted
 ```
 
 `AppSettings::config_dir(cx) -> Option<&Path>` is new (0024 `WriteMode::Enabled(dir)`).

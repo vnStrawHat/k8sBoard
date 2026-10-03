@@ -537,48 +537,43 @@ fn theme_rejects_unknown() {
     assert!(error.contains("--theme"), "{error}");
 }
 
-fn temp_kubeconfig(dir: &std::path::Path, name: &str, context: &str) -> PathBuf {
-    let text = format!(
-        "apiVersion: v1\nkind: Config\nclusters:\n  - name: c\n    cluster: {{ server: 'https://127.0.0.1:1' }}\ncontexts:\n  - name: {context}\n    context: {{ cluster: c }}\n"
+#[test]
+fn screen_settings_parses() {
+    let screen = run_options(&["--screen", "settings"]).screen;
+    assert_eq!(
+        screen,
+        LaunchScreen::Settings(SettingsPage::Clusters, SettingsSize::Standard)
     );
-    let path = dir.join(name);
-    std::fs::write(&path, text).expect("write kubeconfig fixture");
-    path
+    assert_eq!(
+        screen.settings_screen(),
+        Some((SettingsPage::Clusters, SettingsSize::Standard))
+    );
+    // The main window behind it is the default one.
+    assert_eq!(screen.screen(), Screen::Pods);
+    assert!(!screen.has_drawer());
 }
 
 #[test]
-fn load_keeps_good_files_and_notes_the_skipped_ones() {
-    let dir = std::env::temp_dir().join(format!("k8sboard-0024-load-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let chain = [
-        temp_kubeconfig(&dir, "a.yaml", "one"),
-        dir.join("missing.yaml"),
-    ];
-    let extra = [
-        temp_kubeconfig(&dir, "b.yaml", "two"),
-        dir.join("gone.yaml"),
-    ];
-    let loaded = load_kubeconfigs(&chain, &extra).expect("some files load");
-    assert_eq!(loaded.kubeconfigs.len(), 2);
-    assert_eq!(loaded.notices.len(), 2);
-    assert!(
-        loaded
-            .notices
-            .iter()
-            .all(|notice| notice.starts_with("Skipped kubeconfig: "))
+fn screen_settings_appearance_parses() {
+    let screen = run_options(&["--screen", "settings-appearance"]).screen;
+    assert_eq!(
+        screen,
+        LaunchScreen::Settings(SettingsPage::Appearance, SettingsSize::Standard)
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn load_fails_when_nothing_loads() {
-    let missing = [PathBuf::from("definitely-missing-kubeconfig.yaml")];
-    assert!(load_kubeconfigs(&missing, &[]).is_err());
-    assert!(matches!(
-        load_kubeconfigs(&[], &[]),
-        Err(KubeconfigError::NoFiles)
-    ));
+fn screen_settings_tall_parses() {
+    let screen = run_options(&["--screen", "settings-tall"]).screen;
+    assert_eq!(
+        screen,
+        LaunchScreen::Settings(SettingsPage::Clusters, SettingsSize::Tall)
+    );
+}
+
+#[test]
+fn other_screens_have_no_settings_page() {
+    assert_eq!(LaunchScreen::Pods.settings_screen(), None);
 }
 
 #[test]

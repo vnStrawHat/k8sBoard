@@ -549,12 +549,12 @@ impl AppShell {
 
     /// The first matching state of the priority list in the shell-layout spec.
     fn render_body(&self, cx: &Context<Self>) -> AnyElement {
-        match &self.kubeconfig {
+        match self.kubeconfig_state(cx) {
             KubeconfigState::Loading => return busy_view("Loading kubeconfig…", cx),
             KubeconfigState::Failed(message) => {
-                return error_view("Cannot load the kubeconfig", message, None, None, cx);
+                return error_view("Cannot load the kubeconfig", &message, None, None, cx);
             }
-            KubeconfigState::Loaded(_) => {}
+            KubeconfigState::Loaded => {}
         }
         let Some(session) = &self.session else {
             let message = self

@@ -101,6 +101,8 @@ pub(crate) enum TargetState {
 #[cfg(any(feature = "screenshot", test))]
 pub(crate) struct SettleInput {
     pub(crate) target: TargetState,
+    /// The kubeconfig catalog is still loading, which the Settings screens wait for.
+    pub(crate) is_catalog_loading: bool,
     /// A drawer screen has its row selected, or found no row to select.
     pub(crate) is_drawer_ready: bool,
     /// A logs screen whose tab is not open yet or still connecting.
@@ -168,6 +170,10 @@ pub(crate) fn is_drawer_ready(
 /// Whether the screen shows what `--screen` asked for, so a screenshot is worth taking.
 #[cfg(any(feature = "screenshot", test))]
 pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bool {
+    // A Settings screen shows the catalog, not the main window's session.
+    if screen.settings_screen().is_some() {
+        return !input.is_catalog_loading;
+    }
     match input.target {
         TargetState::Unavailable => true,
         TargetState::Loading => false,
@@ -360,6 +366,7 @@ mod tests {
     fn input(target: TargetState, is_drawer_ready: bool) -> SettleInput {
         SettleInput {
             target,
+            is_catalog_loading: false,
             is_drawer_ready,
             is_log_pending: false,
             is_dialog_pending: false,
@@ -368,6 +375,22 @@ mod tests {
             node_metrics: progress(FeedStatus::Live, 1),
             kubelet: progress(FeedStatus::Live, 4),
         }
+    }
+
+    #[test]
+    fn settings_screen_waits_for_catalog() {
+        use crate::settings_window::{SettingsPage, SettingsSize};
+        let screen = LaunchScreen::Settings(SettingsPage::Clusters, SettingsSize::Standard);
+        let loading = SettleInput {
+            is_catalog_loading: true,
+            ..input(TargetState::Loading, false)
+        };
+        assert!(!is_screen_settled(screen, &loading));
+        // The main window's session plays no part.
+        assert!(is_screen_settled(
+            screen,
+            &input(TargetState::Loading, false)
+        ));
     }
 
     #[test]

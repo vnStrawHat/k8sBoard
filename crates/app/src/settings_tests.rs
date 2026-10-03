@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::TestAppContext;
+use gpui_kit::component::Theme;
 use serde_json::{Value, json};
 
 use super::*;
@@ -334,4 +335,37 @@ fn custom_kind_key_is_the_crd_name_never_a_builtin_key() {
     let key = screen_key(Screen::Kind(ResourceKind::Custom(kind)));
     assert_eq!(key, "nodes.longhorn.io");
     assert_ne!(key, screen_key(Screen::Nodes));
+}
+
+#[test]
+fn theme_label_round_trip() {
+    for (theme, _) in THEME_OPTIONS {
+        assert_eq!(theme_from_label(theme_label(theme)), theme);
+    }
+    let labels: Vec<&str> = THEME_OPTIONS.iter().map(|(_, label)| *label).collect();
+    assert_eq!(labels, ["Follow the system", "Light", "Dark"]);
+}
+
+#[test]
+fn unknown_theme_label_is_system() {
+    assert_eq!(theme_from_label("Sepia"), ThemePreference::System);
+    assert_eq!(theme_from_label(""), ThemePreference::System);
+}
+
+#[test]
+fn theme_choices_use_the_label_as_key() {
+    for (key, label) in theme_choices() {
+        assert_eq!(key, label);
+    }
+}
+
+#[gpui_kit::test]
+fn applying_a_theme_preference_sets_the_theme_mode(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        ThemePreference::Dark.apply(cx);
+        assert!(Theme::global(cx).is_dark());
+        ThemePreference::Light.apply(cx);
+        assert!(!Theme::global(cx).is_dark());
+    });
 }

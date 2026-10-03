@@ -17,6 +17,16 @@ pub(crate) enum Environment {
 }
 
 impl Environment {
+    /// The full name, as the Environment control of Settings lists it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Local => "Local",
+            Self::Development => "Development",
+            Self::Staging => "Staging",
+            Self::Production => "Production",
+        }
+    }
+
     pub(crate) fn badge(self) -> &'static str {
         match self {
             Self::Local => "LOCAL",

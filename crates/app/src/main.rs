@@ -8,10 +8,13 @@ mod app_shell;
 mod batch_rows;
 mod certificate_expiry;
 mod cluster_capacity;
+mod cluster_catalog;
+mod cluster_form;
 mod cluster_metrics;
 mod cluster_registry;
 mod cluster_runtime;
 mod cluster_session;
+mod clusters_page;
 mod config_map_rows;
 mod container_detail;
 mod crd_rows;
@@ -36,6 +39,7 @@ mod kind_drawer;
 mod kind_join;
 mod kind_row;
 mod kind_table;
+mod kubeconfig_import;
 mod kubelet_history;
 mod kubelet_metrics;
 mod launch_options;
@@ -87,6 +91,7 @@ mod secret_rows;
 mod secret_values;
 mod settings;
 mod settings_store;
+mod settings_window;
 mod status_bar;
 mod status_tone;
 mod storage_rows;
@@ -107,15 +112,19 @@ mod yaml_view;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use gpui_kit::component::{Theme, ThemeMode, TitleBar};
-use gpui_kit::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui_kit::component::TitleBar;
+use gpui_kit::{AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 
 use crate::app_shell::AppShell;
+use crate::cluster_catalog::CatalogHandle;
 use crate::cluster_runtime::ClusterRuntime;
-use crate::launch_options::{LaunchOptions, LaunchRequest, USAGE};
-use crate::settings::{AppSettings, ThemePreference};
+use crate::launch_options::{LaunchOptions, LaunchRequest, USAGE, kubeconfig_chain};
+use crate::settings::AppSettings;
 use crate::settings_store::{
     CONFIG_DIR_ENV, LoadedSettings, WriteMode, config_dir, default_config_dir, load_settings,
+};
+use crate::settings_window::{
+    ManageClusters, OpenSettings, SettingsPage, SettingsSize, manage_clusters, open_settings_window,
 };
 
 gpui_kit::actions!(k8sboard, [FocusQuickFilter]);
@@ -176,15 +185,24 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
         .run(move |cx| {
             gpui_kit::init(cx);
             AppSettings::install(loaded_settings, cx);
-            apply_theme(options.theme.unwrap_or(AppSettings::get(cx).theme), cx);
+            options
+                .theme
+                .unwrap_or(AppSettings::get(cx).theme)
+                .apply(cx);
             cx.set_global(ClusterRuntime::new(handle));
+            let chain = kubeconfig_chain(
+                options.kubeconfig.clone(),
+                std::env::var_os("KUBECONFIG"),
+                std::env::home_dir(),
+            );
+            CatalogHandle::install(chain, cx);
             app_shell::bind_keys(cx);
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
+            settings_window::bind_keys(cx);
+            cx.on_action(|_: &OpenSettings, cx| {
+                open_settings_window(SettingsPage::Clusters, SettingsSize::Standard, cx);
+            });
+            cx.on_action(|_: &ManageClusters, cx| manage_clusters(cx));
+            let settings_screen = options.screen.settings_screen();
 
             #[cfg(feature = "screenshot")]
             let screenshot_request =
@@ -214,6 +232,13 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
                     cx.quit();
                     return;
                 }
+            };
+            settings_window::quit_when_main_window_closes(window.window_id(), |cx| cx.quit(), cx);
+            // A settings screen shows the Settings window next to the main one; a screenshot
+            // captures the Settings window.
+            let window = match settings_screen {
+                Some((page, size)) => open_settings_window(page, size, cx).unwrap_or(window),
+                None => window,
             };
             #[cfg(feature = "screenshot")]
             if let Some(request) = screenshot_request {
@@ -246,15 +271,4 @@ fn load_launch_settings(options: &LaunchOptions) -> LoadedSettings {
         loaded.writes = WriteMode::Disabled;
     }
     loaded
-}
-
-fn apply_theme(preference: ThemePreference, cx: &mut App) {
-    match preference {
-        ThemePreference::Light => Theme::change(ThemeMode::Light, None, cx),
-        ThemePreference::Dark => Theme::change(ThemeMode::Dark, None, cx),
-        ThemePreference::System => Theme::sync_system_appearance(None, cx),
-    }
-    // The kit highlights the selected row with a faint tint; the theme's selection colour
-    // makes the open drawer's row easy to find in both modes.
-    Theme::update(cx, |theme| theme.table_active = theme.selection);
 }
