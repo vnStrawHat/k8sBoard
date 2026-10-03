@@ -222,10 +222,11 @@ fn next_cursor_row<D: TableDelegate>(
 
 impl AppShell {
     /// J, K, the arrows, Home, End, PgUp, PgDn: moves the row cursor of the visible table. The
-    /// drawer follows only while it is open.
+    /// drawer follows only while it is open. Overview and Topology have no table: the graph is a
+    /// canvas without a cursor, so the keys do nothing there.
     fn step_cursor(&mut self, step: RowStep, window: &mut Window, cx: &mut Context<Self>) {
         match self.screen {
-            Screen::Overview => {}
+            Screen::Overview | Screen::Topology => {}
             Screen::Pods => {
                 let table = self.pod_table.clone();
                 self.move_cursor(&table, step, window, cx);
@@ -274,7 +275,8 @@ impl AppShell {
             return;
         }
         match self.screen {
-            Screen::Overview => {}
+            // A canvas has no cursor row to open; a node opens by click.
+            Screen::Overview | Screen::Topology => {}
             Screen::Pods => {
                 let table = self.pod_table.clone();
                 self.open_table_row(&table, window, cx);
@@ -349,7 +351,7 @@ impl AppShell {
             return;
         }
         match self.screen {
-            Screen::Overview => window.focus(&self.focus_handle, cx),
+            Screen::Overview | Screen::Topology => window.focus(&self.focus_handle, cx),
             Screen::Pods => focus_table(&self.pod_table.clone(), window, cx),
             Screen::Nodes => focus_table(&self.node_table.clone(), window, cx),
             Screen::Issues => focus_table(&self.issue_table.clone(), window, cx),

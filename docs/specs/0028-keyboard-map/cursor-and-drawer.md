@@ -58,7 +58,7 @@ pub(crate) fn take_row_echo(echo: &mut Option<usize>, row: usize) -> bool;
 | `Dismiss` step `CloseDrawer` | kept | false |
 | `Dismiss` step `ClearSelection` | none (`clear_selection`) | false |
 
-Because `TABLE` re-binds every kit row-move key, a non-echo `SelectRow` from then on is always a pointer click. On Issues, ⏎ reveals the object of the cursor row, as a click does, and does nothing without a cursor. Enter stays with a focused button (the action propagates unless the shell root or a table has focus).
+Because `TABLE` re-binds every kit row-move key, a non-echo `SelectRow` from then on is always a pointer click. On Issues, ⏎ reveals the object of the cursor row, as a click does, and does nothing without a cursor. Enter stays with a focused button (the action propagates unless the shell root or a table has focus). Topology (0022) is a canvas with no cursor row: the row-move keys and ⏎ do nothing there. A node click calls `select_on_topology`, which selects and opens the drawer; "object gone" and "namespace changed" call `clear_selection`, Esc and ✕ call `close_drawer`; the graph highlights `drawer_subject()`.
 
 ```rust
 pub(crate) enum RowStep { Next, Previous, First, Last, NextPage, PreviousPage }

@@ -1061,3 +1061,58 @@ fn enter_on_issues_without_a_cursor_does_nothing(cx: &mut TestAppContext) {
         assert!(!shell.drawer.is_open);
     });
 }
+
+// ---- Topology and the drawer split ----
+
+#[gpui_kit::test]
+fn a_topology_click_opens_the_drawer(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    let key = service_key("shop", "web");
+    shell.update(cx, |shell, cx| {
+        shell.select_on_topology(Some(key.clone()), cx);
+        assert!(shell.drawer.is_open);
+        assert_eq!(shell.drawer_subject(), Some(&key));
+        // A click on the empty canvas closes it and drops the row.
+        shell.select_on_topology(None, cx);
+        assert!(!shell.drawer.is_open);
+        assert_eq!(shell.selected, None);
+    });
+}
+
+#[gpui_kit::test]
+fn a_namespace_change_on_topology_clears_the_selection(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell(cx);
+    let (namespace, id) = topology_target(&service_key("blog", "web")).expect("a Service");
+    shell.update(cx, |shell, cx| {
+        shell.select_on_topology(Some(service_key("shop", "web")), cx);
+        assert!(shell.drawer.is_open);
+        // The view draws another namespace, so the object of the old one cannot stay.
+        shell
+            .topology
+            .update(cx, |view, cx| view.show_object(&namespace, id, cx));
+    });
+    cx.run_until_parked();
+    render(window, cx);
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected, None);
+        assert!(!shell.drawer.is_open);
+        assert_eq!(shell.drawer_subject(), None);
+    });
+}
+
+#[gpui_kit::test]
+fn row_keys_do_nothing_on_topology(cx: &mut TestAppContext) {
+    let (window, shell) = open_shell_with(&["--screen", "topology"], cx);
+    render(window, cx);
+    shell.update(cx, |shell, cx| {
+        shell.select_on_topology(Some(service_key("shop", "web")), cx);
+        shell.close_drawer(cx);
+    });
+    // The graph is a canvas: J moves nothing and Enter opens nothing.
+    press(window, "j", cx);
+    press(window, "enter", cx);
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected, Some(service_key("shop", "web")));
+        assert!(!shell.drawer.is_open);
+    });
+}

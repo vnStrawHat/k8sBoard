@@ -245,9 +245,10 @@ impl TopologyView {
             .map_or("", |session| session.read(cx).context())
     }
 
+    /// The object of the open drawer, which is what the graph highlights.
     fn selected(&self, cx: &App) -> Option<ResourceKey> {
         self.shell
-            .read_with(cx, |shell, _| shell.selected().cloned())
+            .read_with(cx, |shell, _| shell.drawer_subject().cloned())
             .ok()
             .flatten()
     }
@@ -307,7 +308,7 @@ impl TopologyView {
         self.expanded.clear();
         self.pending_focus = None;
         self.clear_graph();
-        self.with_shell(cx, |shell, cx| shell.close_drawer(cx));
+        self.clear_selection(cx);
         cx.notify();
     }
 
@@ -403,7 +404,7 @@ impl TopologyView {
         };
         // The object of an open drawer is gone from a feed that has loaded.
         if selection_is_gone {
-            self.close_drawer(cx);
+            self.clear_selection(cx);
         }
         is_changed |= self.apply_pending_focus(cx);
         if is_changed {
@@ -741,8 +742,14 @@ impl TopologyView {
         cx.notify();
     }
 
+    /// Esc: the drawer closes and the row cursor stays.
     fn close_drawer(&mut self, cx: &mut Context<Self>) {
         self.with_shell(cx, |shell, cx| shell.close_drawer(cx));
+    }
+
+    /// The object is gone or the namespace changed: the cursor goes with the drawer.
+    fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        self.with_shell(cx, |shell, cx| shell.clear_selection(cx));
     }
 
     // ---- export (step 3) ----

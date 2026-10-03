@@ -1176,14 +1176,12 @@ impl AppShell {
         });
     }
 
-    /// The object whose drawer is open.
-    pub(crate) fn selected(&self) -> Option<&ResourceKey> {
-        self.selected.as_ref()
-    }
-
-    /// A click on a Topology node: the drawer opens (or closes with `None`) over the graph.
+    /// A click on a Topology node: the drawer opens (or closes with `None`) over the graph. A
+    /// click is a pointer selection, so it opens the drawer, like a table row click.
     pub(crate) fn select_on_topology(&mut self, key: Option<ResourceKey>, cx: &mut Context<Self>) {
+        let is_selected = key.is_some();
         self.change_selection(key, cx);
+        self.set_drawer_open(is_selected, cx);
     }
 
     /// Show in Topology: the graph of the object's namespace, centered on the object. `None` for
