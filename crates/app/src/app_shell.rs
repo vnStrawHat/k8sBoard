@@ -77,6 +77,7 @@ use crate::palette_search::{
 use crate::permissions_view::PermissionsView;
 use crate::pod_drawer::selected_container_index;
 use crate::pod_table::PodTableDelegate;
+use crate::port_forwards::{PortForwards, StartReport};
 use crate::recent_changes::ChangeWindow;
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_actions::{KeyAvailability, RowAction, key_availability, view_logs_reason};
@@ -129,6 +130,12 @@ mod app_shell_view;
 mod keyboard_navigation;
 #[path = "leaving_work.rs"]
 mod leaving_work;
+#[path = "port_forward_dialogs.rs"]
+mod port_forward_dialogs;
+#[path = "port_forward_open.rs"]
+mod port_forward_open;
+#[path = "port_forward_page.rs"]
+mod port_forward_page;
 #[path = "shell_open.rs"]
 pub(crate) mod shell_open;
 #[path = "write_flow.rs"]
@@ -170,6 +177,8 @@ pub(crate) enum Screen {
     /// The resource graph of one namespace; it lists no explorer kind and opens its drawers over the
     /// graph.
     Topology,
+    /// The forwards of every cluster; a local list that needs no live session.
+    PortForwarding,
     Kind(ResourceKind),
 }
 
@@ -178,7 +187,12 @@ impl Screen {
     pub(crate) fn kind(self) -> Option<ResourceKind> {
         match self {
             Self::Kind(kind) => Some(kind),
-            Self::Overview | Self::Pods | Self::Nodes | Self::Issues | Self::Topology => None,
+            Self::Overview
+            | Self::Pods
+            | Self::Nodes
+            | Self::Issues
+            | Self::Topology
+            | Self::PortForwarding => None,
         }
     }
 }
@@ -323,6 +337,17 @@ pub(crate) struct AppShell {
     window: gpui_kit::AnyWindowHandle,
     /// Shell starts that have not reported yet (spec 0036).
     shell_starts: shell_open::ShellStarts,
+    /// The port forwards of every cluster (spec 0035). They outlive a switch and a released slot.
+    port_forwards: Entity<PortForwards>,
+    /// Forward starts that have not reported yet.
+    forward_starts: port_forward_open::ForwardStarts,
+    /// The filter of the Port Forwarding page.
+    forward_filter: Entity<InputState>,
+    _forward_subscriptions: Vec<Subscription>,
+    /// `--screen port-forwards` and its dialogs: the list holds fixed rows, which neither the
+    /// presets nor a cluster may replace.
+    #[cfg(feature = "screenshot")]
+    forward_fixture: bool,
     /// The title-bar switcher popover.
     switcher: ClusterSwitcherState,
     _switcher_filter_events: Subscription,
@@ -512,6 +537,24 @@ impl AppShell {
         drawer.is_expanded = options.screen.opens_expanded();
         let launch_filter = options.filter;
         let launch_select = options.select;
+        let port_forwards = cx.new(|_| PortForwards::new());
+        let forward_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter targets and clusters"));
+        let forward_subscriptions = vec![
+            cx.subscribe(&port_forwards, |shell, _, report: &StartReport, cx| {
+                shell.audit_forward_start(report, cx);
+            }),
+            cx.observe(&port_forwards, |_, _, cx| cx.notify()),
+            cx.subscribe_in(
+                &forward_filter,
+                window,
+                |_, _, event: &InputEvent, _, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                },
+            ),
+        ];
         let mut shell = Self {
             catalog,
             _catalog_observer: catalog_observer,
@@ -530,6 +573,12 @@ impl AppShell {
             last_leaving: None,
             window: window.window_handle(),
             shell_starts: shell_open::ShellStarts::default(),
+            port_forwards,
+            forward_starts: port_forward_open::ForwardStarts::default(),
+            forward_filter,
+            _forward_subscriptions: forward_subscriptions,
+            #[cfg(feature = "screenshot")]
+            forward_fixture: options.screen.is_port_forward_fixture(),
             switcher: ClusterSwitcherState::new(switcher_filter),
             _switcher_filter_events: switcher_filter_events,
             pending_switcher_launch: options.screen == LaunchScreen::Switcher,
@@ -603,6 +652,7 @@ impl AppShell {
                 if shell.refresh_slot_labels(cx) {
                     shell.sync_view_sessions(cx);
                 }
+                shell.sync_forward_presets(cx);
                 cx.notify();
             }),
         };
@@ -623,6 +673,10 @@ impl AppShell {
         }
         // A catalog with nothing to load is already done and will not notify.
         shell.on_catalog_changed(cx);
+        #[cfg(feature = "screenshot")]
+        if options.screen.is_port_forward_fixture() {
+            shell.fill_forward_fixture(options.screen != LaunchScreen::PortForwardsList, cx);
+        }
         shell
     }
 
@@ -630,6 +684,7 @@ impl AppShell {
     /// (the switcher reads the catalog) and refresh the labels of the viewed clusters.
     fn on_catalog_changed(&mut self, cx: &mut Context<Self>) {
         cx.notify();
+        self.sync_forward_presets(cx);
         if self.refresh_slot_labels(cx) {
             self.sync_view_sessions(cx);
         }
@@ -1689,6 +1744,21 @@ impl AppShell {
         #[cfg(feature = "screenshot")]
         if launch == LaunchScreen::ShellConfirmFixture {
             self.open_shell_confirm_fixture(window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch.is_port_forward_fixture() {
+            match launch {
+                LaunchScreen::PortForwardNewFixture => self.open_new_forward_fixture(window, cx),
+                LaunchScreen::PortForwardConfirmFixture => {
+                    self.open_forward_confirm_fixture(window, cx);
+                }
+                LaunchScreen::PortForwardRemoveFixture => {
+                    self.open_remove_preset_fixture(window, cx)
+                }
+                _ => {}
+            }
             self.pending_dialog_launch = None;
             return;
         }
@@ -2979,6 +3049,7 @@ impl AppShell {
     /// so a cluster that fails to connect is not reopened at the next start) and settles the
     /// scope; everything that shows rows or the drawer is then brought up to date.
     fn on_slot_changed(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
+        self.sync_forward_lock(cluster, cx);
         let Some(index) = self.view.slot_of(cluster) else {
             return;
         };
@@ -3499,6 +3570,8 @@ impl AppShell {
             ),
             // The graph is built from the pods and the feeds; a feed that failed draws as a gap.
             Screen::Topology => (live.pods.is_loading(), false),
+            // A local list: there is no cluster data to wait for.
+            Screen::PortForwarding => (false, false),
             Screen::Pods => (live.pods.is_loading(), live.pods.failure().is_some()),
             Screen::Nodes => (live.nodes.is_loading(), live.nodes.failure().is_some()),
             // The table shows what the pods and nodes lists found; a failed one is a gap the
@@ -3549,6 +3622,12 @@ impl AppShell {
                     .iter()
                     .map(|slot| self.slot_target(slot.session.read(cx), cx)),
             ),
+        };
+        // The forwards are a local list: there is no cluster data to wait for.
+        let target = if self.screen == Screen::PortForwarding {
+            TargetState::Loaded
+        } else {
+            target
         };
         // A drawer waits for the debounce, then for its events, related objects, and YAML.
         let is_content_pending = self.pending_subjects.is_some()
@@ -3664,7 +3743,7 @@ impl AppShell {
             Screen::Kind(kind) => live
                 .kind_list(kind)
                 .is_none_or(|explorer| explorer.list.is_loading()),
-            Screen::Overview | Screen::Issues | Screen::Topology => false,
+            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => false,
         }
     }
 
@@ -3838,7 +3917,7 @@ impl AppShell {
             Screen::Pods => rebuild_table(&self.pod_table, change, cx),
             Screen::Nodes => rebuild_table(&self.node_table, change, cx),
             // Overview and Topology have no table.
-            Screen::Overview | Screen::Topology => {}
+            Screen::Overview | Screen::Topology | Screen::PortForwarding => {}
             Screen::Issues => rebuild_table(&self.issue_table, change, cx),
             Screen::Kind(_) => rebuild_table(&self.kind_table, change, cx),
         }
@@ -3895,7 +3974,7 @@ impl AppShell {
             Screen::Pods => table_prefs(&self.pod_table, cx),
             Screen::Nodes => table_prefs(&self.node_table, cx),
             // Overview and Topology have no table.
-            Screen::Overview | Screen::Topology => None,
+            Screen::Overview | Screen::Topology | Screen::PortForwarding => None,
             Screen::Issues => table_prefs(&self.issue_table, cx),
             Screen::Kind(_) => table_prefs(&self.kind_table, cx),
         };
@@ -3931,7 +4010,7 @@ impl AppShell {
         match self.screen {
             Screen::Pods => check_table(&self.pod_table, change, cx),
             Screen::Nodes => check_table(&self.node_table, change, cx),
-            Screen::Overview | Screen::Topology => {}
+            Screen::Overview | Screen::Topology | Screen::PortForwarding => {}
             Screen::Issues => check_table(&self.issue_table, change, cx),
             Screen::Kind(_) => check_table(&self.kind_table, change, cx),
         }
@@ -3975,7 +4054,7 @@ impl AppShell {
             Screen::Pods => self.pod_table.read(cx).delegate().cluster_column(),
             Screen::Nodes => self.node_table.read(cx).delegate().cluster_column(),
             Screen::Kind(_) => self.kind_table.read(cx).delegate().cluster_column(),
-            Screen::Overview | Screen::Issues | Screen::Topology => None,
+            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => None,
         };
         let Some(column) = column else {
             return;
@@ -4114,7 +4193,7 @@ impl AppShell {
     /// What the filter bar and the screen header read; `None` before the table has a view.
     pub(crate) fn toolkit_state(&self, cx: &App) -> Option<ToolkitState> {
         let mut state = match self.screen {
-            Screen::Overview | Screen::Topology => return None,
+            Screen::Overview | Screen::Topology | Screen::PortForwarding => return None,
             Screen::Pods => ToolkitState::of(self.pod_table.read(cx).delegate(), self.screen)?,
             Screen::Nodes => {
                 let mut state = ToolkitState::of(self.node_table.read(cx).delegate(), self.screen)?;
@@ -4127,7 +4206,7 @@ impl AppShell {
         // Nodes and Namespaces are cluster-scoped: the scope does not apply to them.
         let is_namespaced = match self.screen {
             Screen::Pods | Screen::Issues => true,
-            Screen::Overview | Screen::Topology | Screen::Nodes => false,
+            Screen::Overview | Screen::Topology | Screen::PortForwarding | Screen::Nodes => false,
             Screen::Kind(kind) => kind.is_namespaced(),
         };
         if is_namespaced {
@@ -4195,6 +4274,7 @@ impl AppShell {
             explorer: sum_explorer(lives.iter().filter_map(|live| live.explorer_count())),
             kinds: sum_kinds(lives.iter().map(|live| kinds_of(live))),
             slots,
+            port_forwards: self.port_forwards.read(cx).running_count(),
         }
     }
 }
@@ -4258,7 +4338,12 @@ impl Render for AppShell {
                     .child(sidebar(self.screen, &counts, self.live(cx), cx))
                     .child(self.render_workspace(cx)),
             )
-            .child(status_bar(self, is_kubeconfig_loading, cx))
+            .child(status_bar(
+                self,
+                is_kubeconfig_loading,
+                cx.weak_entity(),
+                cx,
+            ))
     }
 }
 

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::cluster_registry::{ClusterEntry, ClusterRef};
 use crate::environment::Environment;
+use crate::port_forwards::{ForwardPreset, ForwardSpec, LocalPortSpec, TargetSpec};
 use crate::settings_store::settings_path;
 use crate::table_sort::SortDirection;
 use crate::write_guard::ConfirmMode;
@@ -43,6 +44,20 @@ fn full_settings() -> Settings {
                 default_namespace: Some("ns".to_owned()),
             }],
             last_used: Some(cluster),
+        },
+        port_forward: PortForwardSettings {
+            presets: vec![ForwardPreset {
+                cluster: ClusterRef {
+                    kubeconfig: PathBuf::from("a.yaml"),
+                    context: "ctx".to_owned(),
+                },
+                spec: ForwardSpec {
+                    namespace: "shop".to_owned(),
+                    target: TargetSpec::pod("api-0"),
+                    remote_port: 8080,
+                    local_port: LocalPortSpec::Exact(18080),
+                },
+            }],
         },
         tables: BTreeMap::from([(
             "pods".to_owned(),
@@ -113,6 +128,19 @@ fn settings_keys_are_the_allow_list() {
     assert_eq!(
         keys,
         [
+            "port_forward",
+            "port_forward.presets",
+            "port_forward.presets.cluster",
+            "port_forward.presets.cluster.context",
+            "port_forward.presets.cluster.kubeconfig",
+            "port_forward.presets.spec",
+            "port_forward.presets.spec.local_port",
+            "port_forward.presets.spec.local_port.exact",
+            "port_forward.presets.spec.namespace",
+            "port_forward.presets.spec.remote_port",
+            "port_forward.presets.spec.target",
+            "port_forward.presets.spec.target.kind",
+            "port_forward.presets.spec.target.name",
             "registry",
             "registry.clusters",
             "registry.clusters.confirm",

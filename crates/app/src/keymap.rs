@@ -92,6 +92,9 @@ const VALUE_POPOVER_INPUT: &str = "ValuePopover > Input";
 /// The palette's inline argument (the replicas of Scale), and the text field inside it.
 const PALETTE_ARGUMENT: &str = "PaletteArgument";
 const PALETTE_ARGUMENT_INPUT: &str = "PaletteArgument > Input";
+/// The New forward and Change local port forms (spec 0035), which handle a fresh Enter themselves.
+pub(crate) const FORWARD_FORM: &str = "ForwardForm";
+const FORWARD_FORM_INPUT: &str = "ForwardForm > Input";
 
 /// Registers every binding of the app except the switcher popover's own keys
 /// (`cluster_switcher::bind_keys`). It runs after `gpui_kit::init`, so at equal depth these win
@@ -167,6 +170,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", gpui_kit::NoAction, Some(FRESH_ENTER)),
         KeyBinding::new("enter", gpui_kit::NoAction, Some(WRITE_CONFIRM)),
         KeyBinding::new("enter", gpui_kit::NoAction, Some(WRITE_CONFIRM_INPUT)),
+        KeyBinding::new("enter", gpui_kit::NoAction, Some(FORWARD_FORM)),
+        KeyBinding::new("enter", gpui_kit::NoAction, Some(FORWARD_FORM_INPUT)),
     ]);
     // Escape in the popover and in the palette argument steps back one level, text field included:
     // the kit binds Escape inside its own `Input`, which would otherwise win.

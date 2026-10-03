@@ -114,7 +114,9 @@ fn service_ports_cell_follows_kubectl_and_drawer_lists_targets() {
     assert_eq!(
         ports.rows,
         [DetailRow::Port {
-            text: "80 → 8080/TCP · http · node 30080".into()
+            text: "80 → 8080/TCP · http · node 30080".into(),
+            port: 80,
+            is_tcp: true,
         }]
     );
 }

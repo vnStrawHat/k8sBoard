@@ -45,6 +45,8 @@ pub(crate) fn service_row(service: &ServiceSummary) -> KindRow {
                 .iter()
                 .map(|port| DetailRow::Port {
                     text: port_text(port).into(),
+                    port: port.port,
+                    is_tcp: port.protocol.eq_ignore_ascii_case("TCP"),
                 })
                 .collect(),
         });

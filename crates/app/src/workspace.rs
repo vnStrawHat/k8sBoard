@@ -37,6 +37,7 @@ use crate::overview::{
     OverviewData, change_window_button, headline_text, overview_body, stats_line,
 };
 use crate::pod_drawer::pod_drawer;
+use crate::port_forward_menu::PortButtons;
 use crate::resource_kind::ResourceKind;
 use crate::row_selection::selection_bar;
 use crate::table_filter::FilterPreset;
@@ -173,6 +174,7 @@ impl AppShell {
                     .map(|summary| count_label(summary.total, "issue", "issues")),
             ),
             Screen::Topology => ("Topology", self.topology.read(cx).header_count()),
+            Screen::PortForwarding => ("Port Forwarding", Some(self.port_forward_header_count(cx))),
             Screen::Kind(kind) => (
                 kind.label(),
                 multi_count.or_else(|| {
@@ -240,7 +242,7 @@ impl AppShell {
             return None;
         }
         let (singular, plural) = match self.screen {
-            Screen::Overview | Screen::Topology => return None,
+            Screen::Overview | Screen::Topology | Screen::PortForwarding => return None,
             Screen::Pods => ("pod", "pods"),
             Screen::Nodes => ("node", "nodes"),
             Screen::Issues => ("issue", "issues"),
@@ -409,6 +411,7 @@ impl AppShell {
         let buttons: Vec<AnyElement> = match self.screen {
             Screen::Overview => self.overview_header_buttons(cx),
             Screen::Topology => self.topology_header_buttons(cx),
+            Screen::PortForwarding => self.port_forward_header_buttons(cx),
             Screen::Issues => return self.render_issues_status(cx),
             Screen::Kind(ResourceKind::ReplicaSets) => {
                 self.render_hide_inactive(toolkit, cx).into_iter().collect()
@@ -621,6 +624,8 @@ impl AppShell {
                 .or_else(|| live.nodes.interruption()),
             // The graph is drawn from the pods and the feeds of the namespace.
             Screen::Topology => live.pods.interruption(),
+            // A local list: no cluster list can interrupt it.
+            Screen::PortForwarding => return None,
             Screen::Kind(kind) => live.kind_list(kind)?.list.interruption(),
         }?;
         Some(
@@ -637,6 +642,10 @@ impl AppShell {
 
     /// The first matching state of the priority list in the shell-layout spec.
     fn render_body(&self, cx: &Context<Self>) -> AnyElement {
+        // The forwards are a local list: they show with no cluster, and while the kubeconfig loads.
+        if self.screen == Screen::PortForwarding {
+            return self.render_port_forwards(cx);
+        }
         match self.kubeconfig_state(cx) {
             KubeconfigState::Loading => return busy_view("Loading kubeconfig…", cx),
             KubeconfigState::Failed(message) => {
@@ -700,6 +709,7 @@ impl AppShell {
             Screen::Issues => ("Issues".to_owned(), None),
             // The graph needs the pods; a feed that failed is a gap the coverage note names.
             Screen::Topology => ("Pods".to_owned(), live.pods.failure()),
+            Screen::PortForwarding => ("Port Forwarding".to_owned(), None),
             Screen::Kind(kind) => (
                 kind.label().to_owned(),
                 live.kind_list(kind)
@@ -738,6 +748,7 @@ impl AppShell {
                 .into_any_element(),
             Screen::Issues => self.render_issues(cx),
             Screen::Topology => self.topology.clone().into_any_element(),
+            Screen::PortForwarding => self.render_port_forwards(cx),
             Screen::Kind(_) => DataTable::new(&self.kind_table)
                 .bordered(false)
                 .into_any_element(),
@@ -778,12 +789,22 @@ impl AppShell {
     /// An overlay on the workspace only, so it never covers the title bar, the sidebar, or
     /// the status bar. `None` when nothing is selected or the subject is not in the list.
     fn render_drawer(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if self.screen == Screen::PortForwarding {
+            return self.render_port_forward_drawer(cx);
+        }
         let object = self.drawer_subject()?;
         let key = &object.key;
         // The drawer reads the cluster of its subject, never the primary.
         let session = self.slot_session(&object.cluster)?;
         let live = session.read(cx).live()?;
         let row = self.slot_row_context(&object.cluster, cx)?;
+        // The Forward buttons read the running forwards and the gate of the subject's own cluster.
+        let gate = self.forward_start_gate(&object.cluster, cx)?;
+        let forward = PortButtons {
+            forwards: self.port_forwards.read(cx),
+            cluster: &object.cluster,
+            gate,
+        };
         match key {
             ResourceKey::Pod { .. } => {
                 let pod = live.pods.items().iter().find(|pod| key.is_pod(pod))?;
@@ -793,6 +814,7 @@ impl AppShell {
                     session,
                     &row,
                     &self.dock.downgrade(),
+                    &forward,
                     cx,
                 ))
             }
@@ -808,7 +830,7 @@ impl AppShell {
                     live_row,
                     &self.drawer,
                     live,
-                    session,
+                    &forward,
                     &row,
                     cx,
                 ))
@@ -858,7 +880,9 @@ impl AppShell {
                 kind.singular(),
                 kind.plural(),
             ),
-            Screen::Overview | Screen::Issues | Screen::Topology => return None,
+            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => {
+                return None;
+            }
         };
         Some(clusters_count_text(
             self.view.slots().len(),
@@ -927,7 +951,7 @@ impl AppShell {
             Screen::Pods => Some("pods"),
             Screen::Nodes => Some("nodes"),
             Screen::Kind(kind) => Some(kind.plural()),
-            Screen::Overview | Screen::Issues | Screen::Topology => None,
+            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => None,
         }
     }
 
@@ -937,7 +961,7 @@ impl AppShell {
             Screen::Pods => live.pods.failure(),
             Screen::Nodes => live.nodes.failure(),
             Screen::Kind(kind) => live.kind_list(kind)?.list.failure(),
-            Screen::Overview | Screen::Issues | Screen::Topology => None,
+            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => None,
         }
     }
 
@@ -949,7 +973,7 @@ impl AppShell {
             Screen::Pods => Some(AccessCheck::ListPods),
             Screen::Nodes => Some(AccessCheck::ListNodes),
             Screen::Kind(kind) => kind.access_check(),
-            Screen::Overview | Screen::Issues | Screen::Topology => None,
+            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => None,
         };
         let is_denied = match (&live.access, check) {
             (AccessState::Known(report), Some(check)) => !report.is_allowed(check),

@@ -143,6 +143,7 @@ pub(crate) fn default_filter(screen: Screen) -> TableFilter {
         | Screen::Nodes
         | Screen::Issues
         | Screen::Topology
+        | Screen::PortForwarding
         | Screen::Kind(_) => TableFilter::default(),
     }
 }

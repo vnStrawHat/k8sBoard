@@ -15,7 +15,8 @@ use crate::cluster_rows::{Clustered, RowAddress, SlotSession, merge_slot_rows};
 use crate::dock::Dock;
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::PodUsageHistory;
-use crate::resource_actions::{PodMenuLinks, ShellMenu, pod_menu};
+use crate::port_forward_menu::{ForwardMenu, pod_subject};
+use crate::resource_actions::{PodMenuItems, PodMenuLinks, ShellMenu, pod_menu};
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, pod_status_label, toned_text};
@@ -405,7 +406,7 @@ impl TableDelegate for PodTableDelegate {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        // The shell submenu is built from the app, so it is made before the session is borrowed.
+        // The submenus are built from the app, so they are made before the session is borrowed.
         let prepared = {
             let Some((slot, pod)) = self.pod_at(row_ix, cx) else {
                 return menu;
@@ -414,10 +415,17 @@ impl TableDelegate for PodTableDelegate {
             let (Some(_), Some(guard)) = (session.live(), session.guard(cx)) else {
                 return menu;
             };
-            (slot.row_context(cx), ShellMenu::of(pod, &guard))
+            (
+                slot.row_context(cx),
+                ShellMenu::of(pod, &guard),
+                ForwardMenu::of(pod_subject(pod), &slot.cluster, &guard),
+            )
         };
-        let (row, shell_menu) = prepared;
-        let open_shell = shell_menu.item(&row, &self.shell, window, cx);
+        let (row, shell_menu, forward_menu) = prepared;
+        let items = PodMenuItems {
+            open_shell: shell_menu.item(&row, &self.shell, window, cx),
+            port_forward: forward_menu.item(&self.shell, window, cx),
+        };
         let Some((slot, pod)) = self.pod_at(row_ix, cx) else {
             return menu;
         };
@@ -435,7 +443,7 @@ impl TableDelegate for PodTableDelegate {
                 dock: &self.dock,
                 shell: &self.shell,
             },
-            open_shell,
+            items,
         )
     }
 

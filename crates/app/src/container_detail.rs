@@ -22,13 +22,14 @@ use gpui_kit::{
 use crate::age::{format_age, format_countdown};
 use crate::app_shell::AppShell;
 use crate::drawer::{
-    ContainerTab, absent_text, detail_row, link_text, port_row, section_title, truncated_text,
+    ContainerTab, absent_text, detail_row, link_text, section_title, truncated_text,
     value_or_absent,
 };
 use crate::kubelet_history::KubeletHistory;
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::pod_diagnosis::{ProbeKind, ProbeResult, next_retry, probe_of, probe_result};
 use crate::pod_drawer::{UsageRow, container_usage_row, kind_tag};
+use crate::port_forward_menu::{PortButtons, PortChoice, pod_subject};
 use crate::status_tone::{StatusLabel, StatusTone, container_state_label, tone_color, toned_text};
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::usage_bar;
@@ -79,8 +80,8 @@ pub(crate) struct ContainerDetailInput<'a> {
     pub(crate) tab: ContainerTab,
     /// The pod's object events when they are loaded.
     pub(crate) events: Option<&'a [EventSummary]>,
-    /// Why the disabled Forward button is disabled.
-    pub(crate) forward_reason: &'a SharedString,
+    /// What the Forward buttons of the ports read: the pod's own cluster.
+    pub(crate) forward: &'a PortButtons<'a>,
     /// Why the Logs sub-tab cannot open the dock, or `None` when it can.
     pub(crate) logs_reason: Option<SharedString>,
     /// The container's newest usage; `None` without a sample.
@@ -245,15 +246,22 @@ fn info_body(input: &ContainerDetailInput<'_>, cx: &Context<AppShell>) -> AnyEle
     if container.ports.is_empty() {
         column = column.child(absent_text(cx));
     }
+    let forward_subject = pod_subject(input.pod);
     for (index, port) in container.ports.iter().enumerate() {
         let mut text = format!("{}/{}", port.port, port.protocol);
         if let Some(name) = &port.name {
             text.push_str(&format!(" · {name}"));
         }
-        column = column.child(port_row(
+        let choice = PortChoice {
+            label: text.clone(),
+            remote_port: port.port,
+            is_tcp: port.protocol.eq_ignore_ascii_case("TCP"),
+        };
+        column = column.child(input.forward.row(
             &text.into(),
             LINK_ID_BASE + index,
-            input.forward_reason,
+            &forward_subject,
+            &choice,
             cx,
         ));
     }

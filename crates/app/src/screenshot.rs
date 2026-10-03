@@ -172,6 +172,133 @@ pub(crate) fn shell_fixture_target() -> crate::shell_tab::ShellTarget {
     }
 }
 
+/// The two clusters of the Port Forwarding fixture screens, with their switcher labels: a
+/// Production one and a Staging one. They need no real cluster.
+#[cfg(feature = "screenshot")]
+pub(crate) fn forward_fixture_clusters() -> (
+    (crate::cluster_registry::ClusterRef, &'static str),
+    (crate::cluster_registry::ClusterRef, &'static str),
+) {
+    let cluster = |context: &str| crate::cluster_registry::ClusterRef {
+        kubeconfig: std::path::PathBuf::from("fixture.yaml"),
+        context: context.to_owned(),
+    };
+    (
+        (cluster("prod-eu-1"), "prod-eu-1"),
+        (cluster("stg-eu-1"), "stg-eu-1"),
+    )
+}
+
+/// The five rows of the W7 Port Forwarding page (`--screen port-forwards`), oldest first. Times
+/// are relative to `now`, so the uptimes read `2h 14m` and `38m` whenever it is taken.
+#[cfg(feature = "screenshot")]
+pub(crate) fn forward_fixtures(now: jiff::Timestamp) -> Vec<crate::port_forwards::ForwardFixture> {
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    use cluster::ForwardTraffic;
+
+    use crate::environment::Environment;
+    use crate::port_forwards::{
+        ForwardFailure, ForwardFixture, ForwardLogLine, ForwardSpec, ForwardState, LocalPortSpec,
+        TargetKind, TargetSpec,
+    };
+    use crate::status_tone::StatusTone;
+
+    let (production, staging) = forward_fixture_clusters();
+    let ago =
+        |minutes: i64| jiff::Timestamp::from_second(now.as_second() - minutes * 60).unwrap_or(now);
+    let local = |port: u16| Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
+    let spec =
+        |namespace: &str, kind: TargetKind, name: &str, remote: u16, port: u16| ForwardSpec {
+            namespace: namespace.to_owned(),
+            target: TargetSpec {
+                kind,
+                name: name.to_owned(),
+            },
+            remote_port: remote,
+            local_port: LocalPortSpec::Exact(port),
+        };
+    let line = |minutes: i64, text: &str, tone: Option<StatusTone>| ForwardLogLine {
+        at: ago(minutes),
+        text: text.to_owned().into(),
+        tone,
+    };
+    let row = |origin: &(crate::cluster_registry::ClusterRef, &str),
+               environment: Environment,
+               spec: ForwardSpec,
+               state: ForwardState| ForwardFixture {
+        cluster: origin.0.clone(),
+        cluster_label: origin.1.to_owned().into(),
+        environment,
+        spec,
+        state,
+        local: None,
+        pod: None,
+        traffic: ForwardTraffic::default(),
+        events: Vec::new(),
+        started_at: None,
+        is_preset: false,
+    };
+    vec![
+        ForwardFixture {
+            local: local(15432),
+            pod: Some("postgres-0".to_owned()),
+            traffic: ForwardTraffic {
+                open_connections: 3,
+                received: 182_000_000,
+                sent: 9_400_000,
+            },
+            events: vec![
+                line(134, "started for pod/postgres-0", None),
+                line(2, "connection lost: pod deleted", Some(StatusTone::Warn)),
+                line(1, "reconnected to postgres-0", Some(StatusTone::Ok)),
+            ],
+            started_at: Some(ago(134)),
+            ..row(
+                &production,
+                Environment::Production,
+                spec("payments", TargetKind::Pod, "postgres-0", 5432, 15432),
+                ForwardState::Active,
+            )
+        },
+        ForwardFixture {
+            local: local(18080),
+            pod: Some("payments-api-6d5c7b9f4-q8x2w".to_owned()),
+            started_at: Some(ago(38)),
+            ..row(
+                &production,
+                Environment::Production,
+                spec("payments", TargetKind::Service, "payments-api", 80, 18080),
+                ForwardState::Active,
+            )
+        },
+        ForwardFixture {
+            local: local(19090),
+            ..row(
+                &production,
+                Environment::Production,
+                spec("payments", TargetKind::Pod, "api-7d9f8c-x2k4q", 9090, 19090),
+                ForwardState::Reconnecting { attempt: 2 },
+            )
+        },
+        row(
+            &staging,
+            Environment::Staging,
+            spec("monitoring", TargetKind::Service, "grafana", 3000, 3000),
+            ForwardState::Failed(ForwardFailure::PortInUse(3000)),
+        ),
+        ForwardFixture {
+            is_preset: true,
+            ..row(
+                &staging,
+                Environment::Staging,
+                spec("data", TargetKind::Service, "kafka-bootstrap", 9092, 9092),
+                ForwardState::Stopped,
+            )
+        },
+    ]
+}
+
 /// What `--screen shell-fixture` shows in the shell tab: the transcript of the W8b pane. The
 /// private OSC 7770 names the shell, as the `Auto` script does.
 #[cfg(feature = "screenshot")]

@@ -233,7 +233,7 @@ impl AppShell {
     /// canvas without a cursor, so the keys do nothing there.
     fn step_cursor(&mut self, step: RowStep, window: &mut Window, cx: &mut Context<Self>) {
         match self.screen {
-            Screen::Overview | Screen::Topology => {}
+            Screen::Overview | Screen::Topology | Screen::PortForwarding => {}
             Screen::Pods => {
                 let table = self.pod_table.clone();
                 self.move_cursor(&table, step, window, cx);
@@ -283,7 +283,7 @@ impl AppShell {
         }
         match self.screen {
             // A canvas has no cursor row to open; a node opens by click.
-            Screen::Overview | Screen::Topology => {}
+            Screen::Overview | Screen::Topology | Screen::PortForwarding => {}
             Screen::Pods => {
                 let table = self.pod_table.clone();
                 self.open_table_row(&table, window, cx);
@@ -358,7 +358,9 @@ impl AppShell {
             return;
         }
         match self.screen {
-            Screen::Overview | Screen::Topology => window.focus(&self.focus_handle, cx),
+            Screen::Overview | Screen::Topology | Screen::PortForwarding => {
+                window.focus(&self.focus_handle, cx);
+            }
             Screen::Pods => focus_table(&self.pod_table.clone(), window, cx),
             Screen::Nodes => focus_table(&self.node_table.clone(), window, cx),
             Screen::Issues => focus_table(&self.issue_table.clone(), window, cx),
@@ -493,8 +495,9 @@ impl AppShell {
             ResourceAction::OpenShell => self.open_default_shell(&subject, window, cx),
             // Unreachable while gated; the owning spec (0037) wires it.
             ResourceAction::OpenNodeShell => {}
-            // Unreachable while gated; the owning spec (0031–0036) wires it.
-            ResourceAction::PortForward => {}
+            // One TCP port starts at once; several or none open New forward (spec 0035). On the
+            // subject's own cluster, never the primary.
+            ResourceAction::PortForward => self.run_port_forward_key(&subject, window, cx),
             // Always on the subject's own cluster, never the primary.
             ResourceAction::Cordon => {
                 if let ResourceKey::Node { name } = &subject.key {

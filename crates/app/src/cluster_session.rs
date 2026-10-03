@@ -759,6 +759,12 @@ impl AccessState {
                     create_pods_exec = report.is_allowed(AccessCheck::CreatePodExec),
                     "exec permissions of the session"
                 );
+                // The same for the two verbs of a port-forward (spec 0035).
+                tracing::debug!(
+                    get_pods_portforward = report.is_allowed(AccessCheck::GetPodPortForward),
+                    create_pods_portforward = report.is_allowed(AccessCheck::CreatePodPortForward),
+                    "port-forward permissions of the session"
+                );
                 Self::Known(report)
             }
             Err(message) => {

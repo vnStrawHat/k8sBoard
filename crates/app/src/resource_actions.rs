@@ -152,9 +152,14 @@ impl ResourceAction {
                 checks: vec![AccessCheck::GetPodExec, AccessCheck::CreatePodExec],
                 is_shipped: true,
             },
+            // Like exec: a WebSocket upgrade is authorized as `get`, and from Kubernetes 1.35 as
+            // `create` too (spec 0035), so a forward needs both.
             Self::PortForward => ActionGate::Mutating {
-                checks: vec![AccessCheck::CreatePodPortForward],
-                is_shipped: false,
+                checks: vec![
+                    AccessCheck::GetPodPortForward,
+                    AccessCheck::CreatePodPortForward,
+                ],
+                is_shipped: true,
             },
             // The node shell is a debug pod, so it needs the same right as a pod shell.
             Self::OpenNodeShell => ActionGate::Mutating {
@@ -484,8 +489,14 @@ pub(crate) struct PodMenuLinks<'a> {
     pub(crate) shell: &'a WeakEntity<AppShell>,
 }
 
-/// Shared by the row context menu and the drawer header menu, so both always agree. `open_shell`
-/// is built by the caller (`ShellMenu::item`) because a submenu needs the app.
+/// The items of a pod menu that hold a submenu, built by the caller (`ShellMenu::item`,
+/// `ForwardMenu::item`) because a submenu needs the app.
+pub(crate) struct PodMenuItems {
+    pub(crate) open_shell: PopupMenuItem,
+    pub(crate) port_forward: PopupMenuItem,
+}
+
+/// Shared by the row context menu and the drawer header menu, so both always agree.
 pub(crate) fn pod_menu(
     menu: PopupMenu,
     pod: &PodSummary,
@@ -493,14 +504,14 @@ pub(crate) fn pod_menu(
     guard: &ClusterGuard<'_>,
     row: &RowContext,
     links: &PodMenuLinks<'_>,
-    open_shell: PopupMenuItem,
+    items: PodMenuItems,
 ) -> PopupMenu {
     let PodMenuLinks { dock, shell } = *links;
     let access = guard.access;
     let menu = menu
         .item(view_logs_item(pod, None, live, row, dock))
-        .item(open_shell)
-        .item(action_item(ResourceAction::PortForward, guard))
+        .item(items.open_shell)
+        .item(items.port_forward)
         .item(view_yaml_item(row.object(ResourceKey::of_pod(pod)), shell))
         .separator()
         .item(copy_name_item(&pod.name, access))
@@ -783,8 +794,8 @@ pub(crate) fn kind_menu(
         }
         _ => {}
     }
-    if kind.has_port_forward() {
-        menu = menu.item(action_item(ResourceAction::PortForward, guard));
+    if let Some(item) = extras.port_forward {
+        menu = menu.item(item);
     }
     if let Some(is_default) =
         default_namespace_state(kind, &row.name, extras.default_namespace.as_deref())
@@ -945,6 +956,8 @@ pub(crate) fn browse_instances_item(
 #[derive(Default)]
 pub(crate) struct MenuExtras {
     pub(crate) open_url: Option<PopupMenuItem>,
+    /// The Port-forward item of a Service, Deployment, or StatefulSet row.
+    pub(crate) port_forward: Option<PopupMenuItem>,
     pub(crate) secret: Option<SecretMenu>,
     /// A CRD row's Browse instances item.
     pub(crate) browse: Option<PopupMenuItem>,
@@ -1670,14 +1683,6 @@ pub(crate) fn open_shell_picker_fixture(window: &mut Window, cx: &mut App) {
             .close_button(false)
             .child(menu.clone())
     });
-}
-
-/// The tooltip of a disabled Forward button. Port-forward has not shipped, so the lock never decides.
-pub(crate) fn port_forward_reason(access: &AccessState) -> SharedString {
-    match availability_before_lock(ResourceAction::PortForward, access) {
-        ActionAvailability::Disabled { reason } => reason,
-        ActionAvailability::Enabled => NOT_SHIPPED_REASON.into(),
-    }
 }
 
 /// Cordon, or Uncordon on a cordoned node. It acts on the node of the row's own cluster, never on the

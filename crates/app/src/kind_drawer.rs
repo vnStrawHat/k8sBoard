@@ -20,7 +20,7 @@ use crate::app_shell::AppShell;
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_rows::RowContext;
-use crate::cluster_session::{ClusterSession, CompanionLists, LiveCluster};
+use crate::cluster_session::{CompanionLists, LiveCluster};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
@@ -38,10 +38,13 @@ use crate::live_sections::{
 };
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
+use crate::port_forward_menu::{
+    ForwardMenu, ForwardSubject, PortButton, PortButtons, PortChoice, row_subject,
+};
 use crate::related_pods::pods_section;
 use crate::resource_actions::{
     MenuCluster, MenuExtras, OpenUrl, ResourceAction, action_availability, browse_instances_item,
-    kind_menu, open_url_choice, open_url_menu_item, port_forward_reason, secret_menu,
+    kind_menu, open_url_choice, open_url_menu_item, secret_menu,
 };
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretValuesView, ValueAccess};
@@ -53,7 +56,7 @@ pub(crate) fn kind_drawer(
     row: &KindRow,
     state: &DrawerState,
     live: &LiveCluster,
-    session: &Entity<ClusterSession>,
+    forward: &PortButtons<'_>,
     context: &RowContext,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -63,7 +66,7 @@ pub(crate) fn kind_drawer(
         name: header_name(row),
         subtitle: subtitle(row, now, cx),
         cluster: state.cluster.clone(),
-        menu: kind_menu_button(kind, row, session, context, cx.weak_entity()),
+        menu: kind_menu_button(kind, row, context, cx.weak_entity()),
         expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
@@ -85,15 +88,19 @@ pub(crate) fn kind_drawer(
         DrawerTab::Values | DrawerTab::Manifest | DrawerTab::Notes => helm_body(state),
         DrawerTab::Overview | DrawerTab::Containers => {
             // The Roll back buttons are gated by the cluster of the drawer's own subject.
-            let roll_back = session.read(cx).guard(cx).map(|guard| RollBackGate {
-                subject: ClusterObject::new(context.cluster.clone(), key.clone()),
-                availability: action_availability(ResourceAction::RollBack, &guard),
+            let roll_back = context.session.upgrade().and_then(|session| {
+                let session = session.read(cx);
+                session.guard(cx).map(|guard| RollBackGate {
+                    subject: ClusterObject::new(context.cluster.clone(), key.clone()),
+                    availability: action_availability(ResourceAction::RollBack, &guard),
+                })
             });
             let paint = DrawerPaint::new(kind, row, live, now)
                 .in_cluster(&context.cluster)
                 .with_roll_back(roll_back)
                 .with_secret_values(state.secret_values.as_ref())
-                .with_helm(state.helm.as_ref(), state.helm_revision);
+                .with_helm(state.helm.as_ref(), state.helm_revision)
+                .with_ports(forward);
             let Overview {
                 sections,
                 revisions_at,
@@ -188,12 +195,11 @@ fn revision_text(row: &KindRow) -> Option<String> {
 fn kind_menu_button(
     kind: ResourceKind,
     row: &KindRow,
-    session: &Entity<ClusterSession>,
     context: &RowContext,
     shell: WeakEntity<AppShell>,
 ) -> AnyElement {
     // Weak: a rendered menu closure must not keep a session alive after a cluster switch.
-    let session = session.downgrade();
+    let session = context.session.clone();
     let context = context.clone();
     let key = ResourceKey::of_row(kind, row);
     menu_button()
@@ -229,6 +235,15 @@ fn kind_menu_button(
                     )
                 })
                 .flatten();
+            // The submenu is built from the app, so it is made before the session is borrowed.
+            let forward_menu = {
+                let session = session.read(cx);
+                session.guard(cx).and_then(|guard| {
+                    let subject = row_subject(session.live()?.row_of(&key)?)?;
+                    Some(ForwardMenu::of(subject, &context.cluster, &guard))
+                })
+            };
+            let port_forward = forward_menu.map(|menu| menu.item(&shell, window, cx));
             let default_namespace = shell
                 .read_with(cx, |shell, cx| {
                     shell.default_namespace(&context.cluster, cx)
@@ -254,6 +269,7 @@ fn kind_menu_button(
                     &shell,
                     MenuExtras {
                         open_url,
+                        port_forward,
                         secret,
                         browse: browse_instances_item(row, live.crd_kinds(), &shell),
                         default_namespace,
@@ -396,12 +412,19 @@ fn why_box(diagnosis: &KindDiagnosis, cx: &Context<AppShell>) -> AnyElement {
         .into_any_element()
 }
 
+/// The Forward buttons of a drawer's Port rows and the object they forward to.
+struct PortRows<'a> {
+    buttons: &'a PortButtons<'a>,
+    subject: ForwardSubject,
+}
+
 /// What painting a drawer row may read besides the row itself.
 pub(crate) struct DrawerPaint<'a> {
     kind: ResourceKind,
     row: &'a KindRow,
     live: &'a LiveCluster,
-    forward_reason: SharedString,
+    /// The Forward buttons of the ports: the drawer subject's own cluster.
+    ports: Option<PortRows<'a>>,
     now: jiff::Timestamp,
     /// The values view of the open Secret drawer, which draws the Data section.
     secret_values: Option<&'a Entity<SecretValuesView>>,
@@ -426,7 +449,7 @@ impl<'a> DrawerPaint<'a> {
             kind,
             row,
             live,
-            forward_reason: port_forward_reason(&live.access),
+            ports: None,
             now,
             secret_values: None,
             helm: None,
@@ -445,6 +468,12 @@ impl<'a> DrawerPaint<'a> {
 
     fn with_roll_back(mut self, gate: Option<RollBackGate>) -> Self {
         self.roll_back = gate;
+        self
+    }
+
+    /// The Forward buttons of the Port rows, for the object of the row.
+    fn with_ports(mut self, buttons: &'a PortButtons<'a>) -> Self {
+        self.ports = row_subject(self.row).map(|subject| PortRows { buttons, subject });
         self
     }
 
@@ -557,7 +586,20 @@ fn detail_element(
             let link = link_text(id, text, target.clone(), cx);
             stacked_row(label, link, id, cx)
         }
-        DetailRow::Port { text } => port_row(text, id, &paint.forward_reason, cx),
+        DetailRow::Port { text, port, is_tcp } => match &paint.ports {
+            Some(ports) => {
+                let choice = PortChoice {
+                    label: text.to_string(),
+                    remote_port: *port,
+                    is_tcp: *is_tcp,
+                };
+                ports.buttons.row(text, id, &ports.subject, &choice, cx)
+            }
+            None => {
+                let button = PortButton::Disabled("Not connected".into());
+                port_row(text, id, &button, None, cx)
+            }
+        },
         DetailRow::Stacked { label, value } => {
             stacked_row(label, field_value(value, id, now, cx), id, cx)
         }

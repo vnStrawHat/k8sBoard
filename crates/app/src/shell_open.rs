@@ -14,7 +14,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::{Context, Entity, EntityId, Subscription, WeakEntity, Window};
 
 use super::AppShell;
-use super::write_flow::{ConnectIntent, append_in_background};
+use super::write_flow::{ConnectIntent, ConnectOpen, ExecOpen, append_in_background};
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, connect_entry,
 };
@@ -290,7 +290,7 @@ impl AppShell {
         }
     }
 
-    fn write_audit_line(&mut self, entry: AuditEntry, cx: &mut Context<Self>) {
+    pub(super) fn write_audit_line(&mut self, entry: AuditEntry, cx: &mut Context<Self>) {
         let config_dir = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf);
         let shell = cx.weak_entity();
         cx.spawn(async move |_, cx| append_in_background(&shell, config_dir, entry, cx).await)
@@ -370,7 +370,7 @@ fn shell_intent(
     cluster_name: String,
     label: &str,
     button: &str,
-    open: Rc<crate::app_shell::write_flow::ConnectOpen>,
+    open: Rc<ExecOpen>,
 ) -> ConnectIntent {
     let (object, fields) = shell_audit(target, command);
     ConnectIntent {
@@ -383,7 +383,7 @@ fn shell_intent(
         warnings: Vec::new(),
         object,
         fields,
-        open,
+        open: ConnectOpen::Exec(open),
     }
 }
 

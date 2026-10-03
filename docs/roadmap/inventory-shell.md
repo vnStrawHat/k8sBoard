@@ -72,7 +72,7 @@
 |---|---|---|---|---|
 | B1 | Watch state, identity, app version | Done | 0003 `status_bar.rs` | — |
 | B2 | API latency ("API 38 ms") | Done | 0026 | — |
-| B3 | "⇄ N port-forwards", click opens the page | Missing | — | 0035 |
+| B3 | "⇄ N port-forwards", click opens the page | Done | 0035 `status_bar.rs` | — |
 
 ## Palette, keyboard, Settings, multi-cluster, guardrails, tokens
 

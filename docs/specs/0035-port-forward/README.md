@@ -37,18 +37,29 @@ UDP; binding any non-loopback address (never `0.0.0.0` or `::`); forwarding seve
 ## Acceptance criteria
 
 - [x] 1. Quality gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. `Cargo.lock` gains no package beyond 0036's delta (tokio `net`/`io-util` features only).
-- [ ] 2. Every test in [test-plan.md](test-plan.md) exists under its name and passes offline; no test opens a real cluster connection.
+- [x] 2. Every test in [test-plan.md](test-plan.md) exists under its name and passes offline; no test opens a real cluster connection (the window tests use fake API servers and bind only loopback listeners).
 - [x] 3. Listeners bind `127.0.0.1` and best-effort `[::1]` only (tests inspect the bound addresses); no code path binds another address; a failed `[::1]` bind is ignored.
 - [x] 4. `port_forward.rs` is the only `portforward` call site and a row of the 0030 allow-list; it requires a `PortForwardPermit`, whose only non-test constructor is `AccessReport::port_forward_permit` (both verbs allowed); upgrade refusals 401/403/404 map to typed errors.
 - [x] 5. Debug builds without `K8SBOARD_ALLOW_WRITES=1` refuse a forward before any request (zero recorded requests); agents never set it.
-- [ ] 6. A pod that disappears triggers at most 5 re-resolve attempts (1, 5, 15, 30, 60 s); success → Active with a "reconnected" event; exhaustion → `Target lost`.
-- [ ] 7. A busy fixed local port shows `Port N in use`, a Windows-reserved one (`PermissionDenied`) `Port N is reserved by the system`, both with Retry; an auto port moves to the next free one in both cases.
-- [ ] 8. Forwards survive a cluster switch and a 0027 slot release; quitting the app closes every listener.
-- [ ] 9. Every start, restart, retry, and preset start runs the target cluster's 0030 gate and tier (`guard_for(&forward.cluster)`, never the primary) and appends one audit line (no traffic data, no per-connection lines).
-- [ ] 10. On UAT the SSAR answers for `get` and `create pods/portforward` are recorded; Forward buttons, menus, F, and the page Start show `Not permitted: get and create pods/portforward`; **no portforward request is ever sent** (trace).
-- [ ] 11. Colors come from theme tokens only (0003 grep clean).
-- [ ] 12. ui-verifier: `--screen port-forwards` (fixture rows, drawer open) matches W7 Port Forwarding with no high-severity defect.
-- [ ] 13. While a cluster is locked, its running forwards refuse new local connections (open ones continue) and show `Paused · read-only`; unlocking resumes them.
+- [x] 6. A pod that disappears triggers at most 5 re-resolve attempts (1, 5, 15, 30, 60 s); success → Active with a "reconnected" event; exhaustion → `Target lost`.
+- [x] 7. A busy fixed local port shows `Port N in use`, a Windows-reserved one (`PermissionDenied`) `Port N is reserved by the system`, both with Retry; an auto port moves to the next free one in both cases.
+- [x] 8. Forwards survive a cluster switch and a 0027 slot release; quitting the app closes every listener.
+- [x] 9. Every start, restart, retry, and preset start runs the target cluster's 0030 gate and tier (`guard_for(&forward.cluster)`, never the primary) and appends one audit line (no traffic data, no per-connection lines).
+- [x] 10. On UAT the SSAR answers for `get` and `create pods/portforward` are recorded; Forward buttons, menus, F, and the page Start show `Not permitted: get and create pods/portforward`; **no portforward request is ever sent** (trace).
+- [x] 11. Colors come from theme tokens only (0003 grep clean).
+- [ ] 12. ui-verifier (screenshots v75 taken and read by the coder; the ui-verifier pass is pending): `--screen port-forwards` (fixture rows, drawer open) matches W7 Port Forwarding with no high-severity defect.
+- [x] 13. While a cluster is locked, its running forwards refuse new local connections (open ones continue) and show `Paused · read-only`; unlocking resumes them.
+
+## As built (steps 2 to 3b)
+
+- The spec predates 0036, so its names map onto what 0036 built: there is no `run_guarded`. `ConnectIntent.open` is the `ConnectOpen` enum (`Exec`, `PortForward`) of `write_flow.rs`, and `commit_connect` takes the matching permit from the cluster's own report (`ConnectOpen::granted`). The gate is `ActionGate::Mutating { checks: [GetPodPortForward, CreatePodPortForward], is_shipped: true }`.
+- `PortForwards` (`port_forwards.rs`) is an entity of `AppShell`; `port_forward_open.rs` holds `start_forward`, `start_forward_again` (Restart, Retry, Start), `stop_forward`, `change_local_port`, the preset save and remove, the lock sync, and the F arm. The audit follows 0036: the `abandoned` line is built at start and written if the start never reports (stop, restart, quit); `applied` or `failed` is written on the first of `Resolved` and `Ended`, and an automatic port is recorded as bound.
+- The lock is read in `on_slot_changed`: the cluster's running forwards get `Refuse` or `Accept` once per change. A cluster that left the view keeps its last control. Forwards add no `leaving_work` line, because a switch or a released slot keeps them (decision 20).
+- Drawers and menus: `PortButtons` (the running forwards and the gate of the drawer subject's cluster) feeds `drawer::port_row`; `ForwardMenu` builds the `Port-forward ▸` item for pods (`PodMenuItems`), Services, Deployments, and StatefulSets (`MenuExtras::port_forward`). `port_forward_reason` is gone. Pod menus and F list TCP ports only; UDP entries are disabled.
+- The page and drawer render from `PortForwards` and need no live cluster (`render_body` and `render_drawer` branch on `Screen::PortForwarding`). The filter is a text field above the list, not the shell quick filter. Drawer menu items: Stop forward (or Remove from list for a failed plain row), Restart or Start, Open in browser, Copy local address, Change local port…, Save as preset, Go to target, Remove preset…. No Del key is bound, so the menu shows no key hint.
+- Dialogs: New forward and Change local port… are forms that take Enter themselves and submit on a fresh press only (`keymap.rs` binds `enter` to `NoAction` in `ForwardForm`); Remove preset… uses `fresh_enter.rs` with an Enter that does nothing, so only a click removes. Starting from a form closes it and then asks the cluster's tier.
+- Screenshot screens (all offline, no cluster wait): `port-forwards`, `port-forwards-list` (no drawer, every column), `port-forward-new-fixture`, `port-forward-confirm-fixture`, `port-forward-remove-fixture`. Traffic is shown in decimal units (`182 MB`).
+- UAT (read-only, denied path): the session review answered `get pods/portforward` allowed and `create pods/portforward` denied, so the gate says `Not permitted: get and create pods/portforward`. A pod drawer run sent 78 `connection.run` requests (46 access reviews as POST, 32 reads as GET) plus the watch GETs, none with the actions `forwarding a port` or `finding the forward target`.
 
 ## Open items
 

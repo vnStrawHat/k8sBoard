@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_shell::Screen;
 use crate::cluster_registry::ClusterRegistry;
+use crate::port_forwards::ForwardPreset;
 use crate::resource_kind::ResourceKind;
 use crate::settings_store::{
     LoadedSettings, SettingsNotice, WriteGate, WriteMode, serialize_settings, settings_path,
@@ -32,6 +33,23 @@ pub(crate) struct Settings {
     /// Per screen key (`screen_key`).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) tables: BTreeMap<String, TablePrefs>,
+    /// Forwards kept to start again (spec 0035).
+    #[serde(skip_serializing_if = "PortForwardSettings::is_empty")]
+    pub(crate) port_forward: PortForwardSettings,
+}
+
+/// The `port_forward` section: names and numbers only, never a secret.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct PortForwardSettings {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) presets: Vec<ForwardPreset>,
+}
+
+impl PortForwardSettings {
+    fn is_empty(&self) -> bool {
+        self.presets.is_empty()
+    }
 }
 
 impl Default for Settings {
@@ -41,6 +59,7 @@ impl Default for Settings {
             theme: ThemePreference::default(),
             registry: ClusterRegistry::default(),
             tables: BTreeMap::new(),
+            port_forward: PortForwardSettings::default(),
         }
     }
 }
@@ -124,6 +143,7 @@ pub(crate) fn screen_key(screen: Screen) -> &'static str {
         Screen::Overview => "overview",
         Screen::Issues => "issues",
         Screen::Topology => "topology",
+        Screen::PortForwarding => "port-forwarding",
         // A custom plural has no group, so it could equal a built-in key; the CRD name never does.
         Screen::Kind(ResourceKind::Custom(kind)) => kind.crd_name(),
         Screen::Kind(kind) => kind.plural(),

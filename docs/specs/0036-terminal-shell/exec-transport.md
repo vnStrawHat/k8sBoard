@@ -73,6 +73,8 @@ impl AppShell { // thin wrapper, like start_write
 }
 ```
 
+As built, `ConnectIntent.open` is the `ConnectOpen` enum of `write_flow.rs` (0035): `Exec(Rc<ExecOpen>)` and `PortForward(Rc<PortForwardOpen>)`. `commit_connect` takes the permit that matches the variant from the cluster's own report (`ConnectOpen::granted`), so a call and its permit cannot be mixed up.
+
 **Multi-check gate (step 4; 0035 and 0037 reuse it).** On main `ActionGate::Mutating { check: AccessCheck, is_shipped }` holds one check (`OpenShell` → `CreatePodExec`, unshipped). It becomes `Mutating { checks: Vec<AccessCheck>, is_shipped }` (one-check actions pass a one-item list; `gate()` builds it per call, so the carried-kind checks of 0031–0033 fit). `permission_reason` returns the first check that is not allowed; when that check has a sibling in the list with the same resource and subresource and the other verb (`get`/`create`), the text names both: `Not permitted: get and create pods/exec`.
 
 - `run_guarded` takes the `ExecPermit` from the guard's `AccessReport` right before `open`; no permit → the gate reason, nothing opens. 0035 decides how its own permit enters `Connect` (it may generalize `open`).

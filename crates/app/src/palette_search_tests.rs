@@ -561,12 +561,13 @@ fn unshipped_row_actions_are_never_enabled() {
         let PaletteTarget::RowAction(action) = entry.target else {
             continue;
         };
-        // The read-only actions, and the workload actions whose spec has shipped.
+        // The read-only actions, and those whose spec has shipped (workloads: 0032, port-forward: 0035).
         let is_available = matches!(
             action,
             RowAction::ViewLogs
                 | RowAction::ViewYaml
                 | RowAction::CopyName
+                | RowAction::PortForward
                 | RowAction::RestartRollout
                 | RowAction::PauseRollout
                 | RowAction::Scale

@@ -25,6 +25,7 @@ pub(crate) const SIDEBAR_WIDTH: Pixels = px(220.);
 const TOP_ITEMS: [&str; 3] = ["Overview", ISSUES_ITEM, TOPOLOGY_ITEM];
 const ISSUES_ITEM: &str = "Issues";
 const TOPOLOGY_ITEM: &str = "Topology";
+const PORT_FORWARDING_ITEM: &str = "Port Forwarding";
 
 /// The section whose items are followed by one submenu per API group of the custom kinds.
 const CUSTOM_RESOURCES: &str = "Custom Resources";
@@ -62,7 +63,7 @@ const SECTIONS: [NavigationSection; 8] = [
             "Services",
             "Ingresses",
             "NetworkPolicies",
-            "Port Forwarding",
+            PORT_FORWARDING_ITEM,
         ],
         is_open_by_default: false,
     },
@@ -107,6 +108,7 @@ fn screen_of(item: &str) -> Option<Screen> {
         "Overview" => Some(Screen::Overview),
         ISSUES_ITEM => Some(Screen::Issues),
         TOPOLOGY_ITEM => Some(Screen::Topology),
+        PORT_FORWARDING_ITEM => Some(Screen::PortForwarding),
         _ => ResourceKind::from_label(item).map(Screen::Kind),
     }
 }
@@ -125,6 +127,8 @@ pub(crate) struct NavigationCounts {
     pub(crate) issue_counts: Vec<ScreenIssues>,
     /// What each viewed cluster knows, for the tooltips of the sums; empty for one cluster.
     pub(crate) slots: Vec<SlotCounts>,
+    /// The forwards that run, for the Port Forwarding item; the item shows nothing at zero.
+    pub(crate) port_forwards: usize,
 }
 
 /// The numbers one viewed cluster knows.
@@ -210,7 +214,9 @@ impl NavigationCounts {
             let count = match screen {
                 Screen::Pods => slot.pods,
                 Screen::Nodes => slot.nodes,
-                Screen::Overview | Screen::Issues | Screen::Topology => None,
+                Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => {
+                    None
+                }
                 Screen::Kind(kind) => slot
                     .explorer
                     .filter(|(listed, _)| *listed == kind)
@@ -471,6 +477,7 @@ fn screen_item(
         Screen::Nodes => counts.nodes,
         // Overview, Issues, and Topology show no list count; Issues shows the issue total instead.
         Screen::Overview | Screen::Issues | Screen::Topology => None,
+        Screen::PortForwarding => Some(counts.port_forwards).filter(|count| *count > 0),
         Screen::Kind(kind) => counts.of_kind(kind),
     };
     let issues = counts.issues_of(screen);
@@ -559,6 +566,7 @@ mod tests {
                 "Services",
                 "Ingresses",
                 "NetworkPolicies",
+                "Port Forwarding",
                 "ConfigMaps",
                 "Secrets",
                 "HPAs",
@@ -864,6 +872,7 @@ mod tests {
                 slot("stg-b", Some(31)),
                 slot("dev-c", None),
             ],
+            port_forwards: 0,
         };
         assert_eq!(
             counts.slot_tooltip_of(Screen::Pods).as_deref(),
@@ -886,6 +895,7 @@ mod tests {
             issue_total: None,
             issue_counts: Vec::new(),
             slots: Vec::new(),
+            port_forwards: 0,
         };
         // The visible kind shows its live list; the others show what was counted.
         assert_eq!(counts.of_kind(ResourceKind::Services), Some(71));
@@ -992,6 +1002,7 @@ mod tests {
             issue_total: total,
             issue_counts: counts,
             slots: Vec::new(),
+            port_forwards: 0,
         };
         assert_eq!(
             navigation.issues_of(Screen::Pods),
@@ -1017,5 +1028,11 @@ mod tests {
         assert_eq!(screen_of("Topology"), Some(Screen::Topology));
         assert_eq!(Screen::Topology.kind(), None);
         assert_eq!(Screen::Issues.kind(), None);
+    }
+
+    #[test]
+    fn port_forwarding_is_an_item_that_opens_its_page() {
+        assert_eq!(screen_of("Port Forwarding"), Some(Screen::PortForwarding));
+        assert_eq!(Screen::PortForwarding.kind(), None);
     }
 }

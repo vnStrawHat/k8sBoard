@@ -57,7 +57,7 @@ Cordon/Uncordon (bulk), Drain dialog (kubectl-flag options with consequences and
 - Deps: 0030, 0013, 0009. Risk: High (long-running operation, eviction retries, cancel semantics).
 
 ### 0035 — Port-forward and Port Forwarding page
-kube `ws` feature on; local listeners; Forward buttons (pods, services, workloads pick a ready pod); W4b live state; Port Forwarding page across clusters (Stop/Start/Retry, auto-reconnect up to 5, presets persisted, change local port, Open in browser, Copy address, traffic counters, events); status bar count.
+kube `ws` feature on; local listeners; Forward buttons (pods, services, workloads pick a ready pod); W4b live state; Port Forwarding page across clusters (Stop/Start/Retry, auto-reconnect up to 5, presets persisted, change local port, Open in browser, Copy address, traffic counters, events); status bar count. Built (steps 1 to 3b): the transport, the page and drawer, the guarded start (one confirm dialog per start, an audit line per start), Forward buttons, `Port-forward ▸` menus, F, New forward, Change local port…, Remove preset…. UDP and several ports in one row are out of scope.
 - Deps: 0030, 0024. Risk: High (sockets, reconnect, port conflicts). UAT denies `create pods/portforward`.
 
 ### 0036 — Terminal and pod shell

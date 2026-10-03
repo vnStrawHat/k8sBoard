@@ -811,6 +811,7 @@ fn screen_badge(screen: Screen) -> &'static str {
         Screen::Nodes => "No",
         Screen::Kind(kind) => kind.badge(),
         Screen::Overview | Screen::Issues | Screen::Topology => "·",
+        Screen::PortForwarding => "⇄",
     }
 }
 

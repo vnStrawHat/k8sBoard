@@ -25,6 +25,7 @@ use crate::helm_release_view::{HelmReleaseView, ValuesLayout};
 use crate::history_rings::Resolution;
 use crate::monitor_data::MonitorData;
 use crate::object_events::events_title;
+use crate::port_forward_menu::PortButton;
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, SecretValuesView};
 use crate::table_selection::{ClusterObject, ResourceKey};
@@ -678,14 +679,49 @@ pub(crate) fn chips(terms: &[SharedString], cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// A port with its Forward button. The button is always disabled: port-forwarding is not
-/// available in this version, and the tooltip says why.
+/// A port with its Forward button: Forward to start, `● localhost:19090 · Stop` while a forward of
+/// the port runs, or a disabled button whose tooltip says why (spec 0035).
 pub(crate) fn port_row(
     text: &SharedString,
     id: usize,
-    reason: &SharedString,
+    button: &PortButton,
+    on_click: Option<ClickHandler>,
     cx: &App,
 ) -> AnyElement {
+    let theme = cx.theme();
+    let action: AnyElement = match (button, on_click) {
+        (PortButton::Live { local_port, .. }, Some(on_click)) => div()
+            .id(("forward-live", id))
+            .cursor_pointer()
+            .text_xs()
+            .text_color(theme.success)
+            .tooltip(|window, cx| Tooltip::new("Stop this forward").build(window, cx))
+            .on_click(move |event, window, cx| on_click(event, window, cx))
+            .child(format!("● localhost:{local_port} · Stop"))
+            .into_any_element(),
+        (PortButton::Offer, Some(on_click)) => Button::new(("forward", id))
+            .label("Forward")
+            .icon(Icon::new(IconName::ArrowLeftRight))
+            .xsmall()
+            .ghost()
+            .on_click(move |event, window, cx| on_click(event, window, cx))
+            .into_any_element(),
+        (PortButton::Disabled(reason), _) => Button::new(("forward", id))
+            .label("Forward")
+            .icon(Icon::new(IconName::ArrowLeftRight))
+            .xsmall()
+            .ghost()
+            .disabled(true)
+            .tooltip(reason.clone())
+            .into_any_element(),
+        // A button state without its click is not drawn as clickable.
+        (PortButton::Live { .. } | PortButton::Offer, None) => Button::new(("forward", id))
+            .label("Forward")
+            .xsmall()
+            .ghost()
+            .disabled(true)
+            .into_any_element(),
+    };
     h_flex()
         .gap_2()
         .py_1()
@@ -695,17 +731,9 @@ pub(crate) fn port_row(
             truncated_text(("port", id), text.clone())
                 .flex_1()
                 .min_w_0()
-                .font_family(cx.theme().mono_font_family.clone()),
+                .font_family(theme.mono_font_family.clone()),
         )
-        .child(
-            Button::new(("forward", id))
-                .label("Forward")
-                .icon(Icon::new(IconName::ArrowLeftRight))
-                .xsmall()
-                .ghost()
-                .disabled(true)
-                .tooltip(reason.clone()),
-        )
+        .child(action)
         .into_any_element()
 }
 

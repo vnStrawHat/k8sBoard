@@ -24,6 +24,7 @@ use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
 use crate::kind_row::{KindCell, KindRow};
 use crate::live_sections::{loaded_replica_sets, next_run_text};
+use crate::port_forward_menu::{ForwardMenu, row_subject};
 use crate::resource_actions::{
     MenuCluster, MenuExtras, browse_instances_item, kind_menu, open_url_choice, open_url_menu_item,
     secret_menu,
@@ -545,6 +546,12 @@ impl TableDelegate for KindTableDelegate {
                 secret_menu(&row, object, access, &self.shell, window, cx)
             })
             .flatten();
+        // The submenu is built from the app, so its owned parts are made before the session is
+        // borrowed again.
+        let forward_menu = slot.session.read(cx).guard(cx).and_then(|guard| {
+            row_subject(&row).map(|subject| ForwardMenu::of(subject, &slot.cluster, &guard))
+        });
+        let port_forward = forward_menu.map(|menu| menu.item(&self.shell, window, cx));
         let default_namespace = self
             .shell
             .read_with(cx, |shell, cx| shell.default_namespace(&slot.cluster, cx))
@@ -567,6 +574,7 @@ impl TableDelegate for KindTableDelegate {
             &self.shell,
             MenuExtras {
                 open_url,
+                port_forward,
                 secret,
                 browse: browse_instances_item(&row, live.crd_kinds(), &self.shell),
                 default_namespace,

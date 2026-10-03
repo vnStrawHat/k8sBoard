@@ -163,10 +163,14 @@ fn deployment_ports_section_lists_named_and_unnamed_ports() {
         ports.rows,
         [
             DetailRow::Port {
-                text: "8080/TCP · http · web".into()
+                text: "8080/TCP · http · web".into(),
+                port: 8080,
+                is_tcp: true,
             },
             DetailRow::Port {
-                text: "9090/UDP · web".into()
+                text: "9090/UDP · web".into(),
+                port: 9090,
+                is_tcp: false,
             },
         ]
     );
@@ -631,10 +635,14 @@ fn daemon_set_port_shows_host_port() {
         ports.rows,
         [
             DetailRow::Port {
-                text: "9100/TCP · metrics · agent · host 9100".into()
+                text: "9100/TCP · metrics · agent · host 9100".into(),
+                port: 9100,
+                is_tcp: true,
             },
             DetailRow::Port {
-                text: "8080/TCP · agent".into()
+                text: "8080/TCP · agent".into(),
+                port: 8080,
+                is_tcp: true,
             },
         ]
     );

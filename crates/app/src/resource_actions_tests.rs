@@ -279,7 +279,6 @@ fn unshipped_mutating_actions_say_a_later_version() {
         known_denying(&AccessCheck::ALL),
     ] {
         for action in [
-            ResourceAction::PortForward,
             ResourceAction::OpenNodeShell,
             ResourceAction::Drain,
             ResourceAction::EditYaml,
@@ -332,14 +331,39 @@ fn logs_denied_reason_names_access_check() {
 }
 
 #[test]
-fn forward_button_reason_says_the_feature_has_not_shipped() {
-    for access in [
-        known_denying(&[AccessCheck::CreatePodPortForward]),
-        known_denying(&[]),
-        checking(),
+fn port_forward_needs_get_and_create() {
+    let guard =
+        |access: &AccessState| action_availability(ResourceAction::PortForward, &unlocked(access));
+    assert_eq!(guard(&known_denying(&[])), ActionAvailability::Enabled);
+    for denied in [
+        AccessCheck::GetPodPortForward,
+        AccessCheck::CreatePodPortForward,
     ] {
-        assert_eq!(port_forward_reason(&access), "Comes in a later version");
+        assert_eq!(
+            reason(guard(&known_denying(&[denied]))),
+            "Not permitted: get and create pods/portforward"
+        );
     }
+    assert_eq!(reason(guard(&checking())), "Checking permissions…");
+    assert_eq!(
+        reason(guard(&unknown())),
+        "Permissions could not be checked"
+    );
+}
+
+#[test]
+fn port_forward_is_off_while_the_cluster_is_locked() {
+    let access = known_denying(&[]);
+    let locked = test_guard(
+        &access,
+        WriteLock::Locked,
+        "prod-1",
+        Environment::Production,
+    );
+    assert_eq!(
+        reason(action_availability(ResourceAction::PortForward, &locked)),
+        "prod-1 is read-only"
+    );
 }
 
 #[test]

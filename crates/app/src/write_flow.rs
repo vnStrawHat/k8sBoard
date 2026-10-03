@@ -10,8 +10,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cluster::{
-    ClusterConnection, ClusterError, ExecPermit, NodeScheduling, ObjectKind, ObjectRef, WriteError,
-    WriteMode, WriteOperation, WriteOutcome, WriteRequest,
+    ClusterConnection, ClusterError, ExecPermit, NodeScheduling, ObjectKind, ObjectRef,
+    PortForwardPermit, WriteError, WriteMode, WriteOperation, WriteOutcome, WriteRequest,
 };
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
@@ -105,12 +105,60 @@ pub(crate) struct ConnectIntent {
     pub(crate) fields: Vec<AuditField>,
     /// Runs after the confirm, with the proof from the cluster's own report and its connection,
     /// both read at that moment.
-    pub(crate) open: Rc<ConnectOpen>,
+    pub(crate) open: ConnectOpen,
 }
 
-/// The call that opens the stream of a `ConnectIntent`.
-pub(crate) type ConnectOpen =
+/// The call that opens the stream of a `ConnectIntent`, and so which proof it needs.
+pub(crate) enum ConnectOpen {
+    Exec(Rc<ExecOpen>),
+    PortForward(Rc<PortForwardOpen>),
+}
+
+pub(crate) type ExecOpen =
     dyn Fn(&mut AppShell, ExecPermit, ClusterConnection, &mut Window, &mut Context<AppShell>);
+pub(crate) type PortForwardOpen = dyn Fn(
+    &mut AppShell,
+    PortForwardPermit,
+    ClusterConnection,
+    &mut Window,
+    &mut Context<AppShell>,
+);
+
+/// A `ConnectOpen` with its proof in hand: only `ConnectOpen::granted` builds one, so the call and
+/// the permit always match.
+enum GrantedOpen {
+    Exec(Rc<ExecOpen>, ExecPermit),
+    PortForward(Rc<PortForwardOpen>, PortForwardPermit),
+}
+
+impl ConnectOpen {
+    /// The open call with the proof `access` gives for it; `None` while the permissions are
+    /// checking, unknown, or deny a verb the stream needs.
+    fn granted(&self, access: &AccessState) -> Option<GrantedOpen> {
+        match self {
+            Self::Exec(open) => Some(GrantedOpen::Exec(Rc::clone(open), exec_permit_of(access)?)),
+            Self::PortForward(open) => Some(GrantedOpen::PortForward(
+                Rc::clone(open),
+                port_forward_permit_of(access)?,
+            )),
+        }
+    }
+}
+
+impl GrantedOpen {
+    fn run(
+        self,
+        shell: &mut AppShell,
+        connection: ClusterConnection,
+        window: &mut Window,
+        cx: &mut Context<AppShell>,
+    ) {
+        match self {
+            Self::Exec(open, permit) => open(shell, permit, connection, window, cx),
+            Self::PortForward(open, permit) => open(shell, permit, connection, window, cx),
+        }
+    }
+}
 
 impl ConnectIntent {
     /// What the `TypeName` tier asks to type: the cluster name.
@@ -908,6 +956,14 @@ fn exec_permit_of(access: &AccessState) -> Option<ExecPermit> {
     }
 }
 
+/// The proof that a forward may start: both port-forward verbs allowed.
+fn port_forward_permit_of(access: &AccessState) -> Option<PortForwardPermit> {
+    match access {
+        AccessState::Known(report) => report.port_forward_permit(),
+        AccessState::Checking { .. } | AccessState::Unknown => None,
+    }
+}
+
 impl AppShell {
     /// The guarded start of a stream (spec 0036): the gate of the intent's own cluster, then the
     /// confirm dialog of its tier. Nothing opens without the dialog, for every tier and trigger.
@@ -965,11 +1021,11 @@ impl AppShell {
             match live_block(guard.as_ref(), &intent.cluster_name, generation) {
                 Some(reason) => Err(reason),
                 None => {
-                    let permit = guard
+                    let granted = guard
                         .as_ref()
-                        .and_then(|guard| exec_permit_of(guard.access));
-                    match (permit, self.slot_connection(&intent.cluster, cx)) {
-                        (Some(permit), Some(connection)) => Ok((permit, connection)),
+                        .and_then(|guard| intent.open.granted(guard.access));
+                    match (granted, self.slot_connection(&intent.cluster, cx)) {
+                        (Some(granted), Some(connection)) => Ok((granted, connection)),
                         _ => Err(guard
                             .as_ref()
                             .map(|guard| match action_availability(intent.action, guard) {
@@ -982,7 +1038,7 @@ impl AppShell {
             }
         };
         match prepared {
-            Ok((permit, connection)) => (intent.open)(self, permit, connection, window, cx),
+            Ok((granted, connection)) => granted.run(self, connection, window, cx),
             Err(reason) => notify(window, cx, format!("{}: {reason}", intent.label)),
         }
     }

@@ -2,9 +2,12 @@ use std::time::Duration;
 
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
-use gpui_kit::{App, Hsla, IntoElement, ParentElement as _, Styled as _, div};
+use gpui_kit::{
+    App, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
+    StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
+};
 
-use crate::app_shell::AppShell;
+use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::{ClusterSession, SessionPhase, latency_millis};
 
 /// What the first status bar slot says about the live updates.
@@ -67,6 +70,7 @@ fn multi_watching_text(count: usize, clusters: usize) -> String {
 pub(crate) fn status_bar(
     shell: &AppShell,
     is_kubeconfig_loading: bool,
+    handle: WeakEntity<AppShell>,
     cx: &App,
 ) -> impl IntoElement {
     let theme = cx.theme();
@@ -120,7 +124,34 @@ pub(crate) fn status_bar(
     if let Some(user) = user {
         bar = bar.left(user);
     }
+    let forwards = shell.running_forward_count(cx);
+    if forwards > 0 {
+        bar = bar.left(forwards_slot(forwards, handle));
+    }
     bar.right(format!("k8sBoard {}", env!("CARGO_PKG_VERSION")))
+}
+
+/// `⇄ 3 port-forwards`; a click opens the Port Forwarding page.
+fn forwards_slot(count: usize, shell: WeakEntity<AppShell>) -> impl IntoElement {
+    div()
+        .id("status-port-forwards")
+        .cursor_pointer()
+        .child(forwards_text(count))
+        .on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.show_screen(Screen::PortForwarding, cx);
+            });
+        })
+}
+
+/// `⇄ 1 port-forward`, `⇄ 3 port-forwards`.
+fn forwards_text(count: usize) -> String {
+    let noun = if count == 1 {
+        "port-forward"
+    } else {
+        "port-forwards"
+    };
+    format!("⇄ {count} {noun}")
 }
 
 /// `API v1.29.5 · 38 ms`: the server version and the round trip of its request.
@@ -158,6 +189,12 @@ mod tests {
             api_text("v1.29.5", Duration::from_millis(38)),
             "API v1.29.5 · 38 ms"
         );
+    }
+
+    #[test]
+    fn the_forwards_item_counts_in_singular_and_plural() {
+        assert_eq!(forwards_text(1), "⇄ 1 port-forward");
+        assert_eq!(forwards_text(3), "⇄ 3 port-forwards");
     }
 
     #[test]

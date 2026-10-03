@@ -173,6 +173,8 @@ fn port_rows(containers: &[TemplateContainer]) -> Vec<DetailRow> {
                         host.unwrap_or_default()
                     )
                     .into(),
+                    port: port.port,
+                    is_tcp: port.protocol.eq_ignore_ascii_case("TCP"),
                 }
             })
         })

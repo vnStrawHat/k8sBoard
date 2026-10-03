@@ -384,3 +384,52 @@ fn the_audit_records_the_name_the_server_picked() {
     assert_eq!(field.path, "metadata.name");
     assert_eq!(field.value.as_deref(), Some("reconcile-manual-x7k2p"));
 }
+
+fn allowing_only(allowed: &[cluster::AccessCheck]) -> AccessState {
+    use cluster::{AccessCheck, AccessDecision, AccessReport, AccessReview};
+    AccessState::Known(AccessReport {
+        reviews: AccessCheck::ALL
+            .into_iter()
+            .map(|check| AccessReview {
+                check,
+                decision: if allowed.contains(&check) {
+                    AccessDecision::Allowed
+                } else {
+                    AccessDecision::Denied { reason: None }
+                },
+            })
+            .collect(),
+    })
+}
+
+#[test]
+fn only_both_port_forward_verbs_give_a_permit() {
+    use cluster::AccessCheck;
+    let both = [
+        AccessCheck::GetPodPortForward,
+        AccessCheck::CreatePodPortForward,
+    ];
+    assert!(port_forward_permit_of(&allowing_only(&both)).is_some());
+    assert!(port_forward_permit_of(&allowing_only(&both[..1])).is_none());
+    assert!(port_forward_permit_of(&allowing_only(&both[1..])).is_none());
+    assert!(port_forward_permit_of(&AccessState::Unknown).is_none());
+}
+
+#[test]
+fn run_guarded_picks_the_port_forward_permit() {
+    use cluster::AccessCheck;
+    let forward = ConnectOpen::PortForward(Rc::new(|_, _, _, _, _| {}));
+    let shell = ConnectOpen::Exec(Rc::new(|_, _, _, _, _| {}));
+    let forward_rights = allowing_only(&[
+        AccessCheck::GetPodPortForward,
+        AccessCheck::CreatePodPortForward,
+    ]);
+    let exec_rights = allowing_only(&[AccessCheck::GetPodExec, AccessCheck::CreatePodExec]);
+    // Each open takes its own permit, and exec rights never open a forward (or the reverse).
+    assert!(forward.granted(&forward_rights).is_some());
+    assert!(forward.granted(&exec_rights).is_none());
+    assert!(shell.granted(&exec_rights).is_some());
+    assert!(shell.granted(&forward_rights).is_none());
+    // No permit: the open call is never reached.
+    assert!(forward.granted(&AccessState::Unknown).is_none());
+}

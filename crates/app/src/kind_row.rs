@@ -206,9 +206,11 @@ pub(crate) enum DetailRow {
     Chips(Vec<SharedString>),
     /// A muted explanation that wraps, such as "No keys".
     Note(SharedString),
-    /// A port, followed by its disabled Forward button.
+    /// A port, followed by its Forward button.
     Port {
         text: SharedString,
+        port: u16,
+        is_tcp: bool,
     },
     /// A label above its value, for labels that are too long for the label column, such as
     /// ingress hosts.

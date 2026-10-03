@@ -91,6 +91,8 @@ mod pod_diagnosis;
 mod pod_drawer;
 mod pod_table;
 mod policy_rows;
+mod port_forward_menu;
+mod port_forwards;
 mod recent_changes;
 mod related_objects;
 mod related_pods;

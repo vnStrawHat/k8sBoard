@@ -23,16 +23,16 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Cluster | Namespaces | Partial | Partial | Pods, CPU req, Memory req columns Done (0012); STUCK box and remaining resources Done (0018; object names not listed); quota section Done (0013; LimitRange row open); "Set as default" Done (0024) | New 0031; delete 0033 |
 | Cluster | Events | Planned(0006) | Planned(0006) | Warnings only, Go to object, Copy message: 0006; Pause stream, Filter similar 0009 | — |
 | Workloads | Pods | Done | Partial | see [inventory-screens.md](inventory-screens.md) W4 rows | see W4 rows |
-| Workloads | Deployments | Done | Done (WHY box, Revisions: 0012) | View logs (all pods) 0019 | scale, restart, roll back, pause Done (0032); port-forward 0035 |
-| Workloads | StatefulSets | Done | Done (pods by ordinal with claims: 0012) | logs 0019 | scale, restart Done (0032); port-forward 0035 |
+| Workloads | Deployments | Done | Done (WHY box, Revisions: 0012) | View logs (all pods) 0019 | scale, restart, roll back, pause Done (0032); port-forward Done (0035) |
+| Workloads | StatefulSets | Done | Done (pods by ordinal with claims: 0012) | logs 0019 | scale, restart Done (0032); port-forward Done (0035) |
 | Workloads | DaemonSets | Done | Done (rollout bars, not-ready nodes, WHY box: 0012) | logs 0019 | restart Done (0032) |
 | Workloads | ReplicaSets | Done | Done (Hide inactive 0009; Go to owner 0012) | logs 0019 | — (scale locked by owner) |
 | Workloads | Jobs | Done | Done (attempts, BACKOFF LIMIT box: 0012) | logs 0019 | Re-run Done (0032) |
 | Workloads | CronJobs | Done (0012) | Done (next runs, recent jobs: 0012) | logs of last job 0019 | Trigger now, Suspend Done (0032) |
-| Network | Services | Done (0012) | Done (Endpoints, "matches no pods": 0012) | Show in Topology: Done (0022) | port-forward 0035 |
+| Network | Services | Done (0012) | Done (Endpoints, "matches no pods": 0012) | Show in Topology: Done (0022) | port-forward Done (0035) |
 | Network | Ingresses | Done (0016) | Done (TLS column with expiry replaces Ports, TLS section with Secret links and leaf facts, CERTIFICATE box: 0016; Open URL and backend links: 0012) | Show in Topology: Done (0022) | — |
 | Network | NetworkPolicies | Done (0013) | Done (rules as sentences, Affects: 0013) | Done (Test traffic: 0023) | — |
-| Network | Port Forwarding (local page) | Missing | Missing | — | 0035 |
+| Network | Port Forwarding (local page) | Done (0035) | Done (0035) | — | Start, Stop, Retry, presets, Change local port: 0035 |
 | Config | ConfigMaps | Done (0012) | Done (Used by, value previews: 0012) | — | Edit, New, Compare with previous 0031 |
 | Config | Secrets | Done (0016) | Done (masked Data, per-key Reveal and Reveal all for 30 s, Copy without reveal with private clipboard and 30 s clear, certificate section, CERTIFICATE box, Used by, unused flag: 0016) | — | Edit 0031 |
 | Config | HPAs | Done (0013) | Done (metric bars, scaling events, AT MAX box: 0013) | — | Edit min/max 0032 |

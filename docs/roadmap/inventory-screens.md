@@ -19,14 +19,14 @@
 |---|---|---|---|---|
 | W4-1 | Live table: Name, Status, Ready, Restarts, Node, Age | Done | 0003 | — |
 | W4-2 | Memory column (W4) | Done | 0010 | — |
-| W4-3 | Context menu = ⋯ menu, grouped, Delete last in red | Partial | View logs, Open shell (0036: gated on `get` and `create` on `pods/exec`, confirm dialog), Port-forward (off), Copy name, Copy kubectl command (0008) | Edit YAML, Restart, Evict, Delete → 0031, 0033; Attach: a later item |
+| W4-3 | Context menu = ⋯ menu, grouped, Delete last in red | Partial | View logs, Open shell (0036: gated on `get` and `create` on `pods/exec`, confirm dialog), Port-forward (0035: gated on `get` and `create` on `pods/portforward`, a submenu of the TCP ports), Copy name, Copy kubectl command (0008) | Edit YAML, Restart, Evict, Delete → 0031, 0033; Attach: a later item |
 | W4-4 | Container submenu (MAIN/SIDECAR) for Logs, Shell, Port-forward; "Debug container…" | Partial | 0004 picks the container inside the log tab; 0019 adds the Logs sub-tab and the workload container picker; 0036 adds the Open shell submenu (running containers, init left out) | Logs and Port-forward submenus (0019 decision 30 skipped them); Debug container → 0037 |
 | W4-5 | Overview tab: Node, Pod IP, QoS, Controlled by, Conditions, container summary | Done | 0003, 0008 | — |
 | W4-6 | WHY box tied to a container with "Open container …" link | Done | 0008 | — |
 | W4-7 | Containers tab master-detail, lifecycle groups, expand ⤢ | Done (`[` `]` switching in 0028) | 0003, 0028 | — |
 | W4-8 | Container detail: State, Last state, Restarts, Image | Done | 0003, 0008 | — |
 | W4-9 | Container sub-tabs Info / Env / Mounts / Logs / Monitor | Done | 0008 (Info, Env, Mounts), 0010 (Monitor), 0019 (Logs) | — |
-| W4-10 | Ports with Forward button / live "● localhost:19090 · Stop" | Partial | 0008 (disabled button) | live → 0035 |
+| W4-10 | Ports with Forward button / live "● localhost:19090 · Stop" | Done | 0035 `drawer::port_row`, `port_forward_menu.rs` (Offer, Live, Disabled: UDP, no selector, the gate of the drawer subject's cluster); the allowed path awaits a write-capable cluster (risks R2) | — |
 | W4-11 | Resource bars (usage vs limit, request tick, red near limit) | Done | 0008, 0010 | — |
 | W4-12 | Probes with current result | Done | 0008 | — |
 | W4-13 | Env and mounts summary (sources: ConfigMap, Secret) | Done | 0008 (names and sources only, decision C1) | — |
@@ -74,5 +74,5 @@
 
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
-| PF-1 | Local list across clusters: Target, Ports, Status, Cluster, Uptime, Stop/Retry/Start | Missing (nav item disabled) | 0035 |
-| PF-2 | Drawer: forward details, traffic counters, recent events; presets; auto-reconnect | Missing | 0035 |
+| PF-1 | Local list across clusters: Target, Ports, Status, Cluster, Uptime, Stop/Retry/Start | Done | 0035 `port_forward_page.rs`, `port_forwards.rs` |
+| PF-2 | Drawer: forward details, traffic counters, recent events; presets; auto-reconnect | Done | 0035 (reconnect in `port_forward.rs`; the allowed path awaits a write-capable cluster, risks R2) |

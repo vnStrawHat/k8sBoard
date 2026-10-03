@@ -26,7 +26,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|shell-find-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -81,6 +81,18 @@ pub(crate) enum LaunchScreen {
     /// `--screen shell-confirm-fixture`: Pods with the Open shell confirm dialog open on a fixed
     /// pod; its confirm button and Enter do nothing.
     ShellConfirmFixture,
+    /// `--screen port-forwards`: the Port Forwarding page with five fixed rows and the drawer of the
+    /// first. Screenshot builds only; it needs no cluster and starts nothing.
+    PortForwards,
+    /// `--screen port-forwards-list`: the same rows with no drawer, so every column shows.
+    PortForwardsList,
+    /// `--screen port-forward-new-fixture`: the same page with the New forward dialog open.
+    PortForwardNewFixture,
+    /// `--screen port-forward-confirm-fixture`: the confirm dialog of a forward start on a fixed
+    /// Production cluster; its confirm button and Enter do nothing.
+    PortForwardConfirmFixture,
+    /// `--screen port-forward-remove-fixture`: the Remove preset dialog of the fixed preset row.
+    PortForwardRemoveFixture,
     /// `--screen pods-selected|nodes-selected`: the first two rows are ticked.
     PodsSelected,
     NodesSelected,
@@ -147,6 +159,11 @@ impl LaunchScreen {
             Self::ScalePopover | Self::ScaleConfirm | Self::RestartBulkConfirm => {
                 Screen::Kind(ResourceKind::Deployments)
             }
+            Self::PortForwards
+            | Self::PortForwardsList
+            | Self::PortForwardNewFixture
+            | Self::PortForwardConfirmFixture
+            | Self::PortForwardRemoveFixture => Screen::PortForwarding,
             Self::Pods
             | Self::PodsMulti
             | Self::PodDrawer(_)
@@ -339,6 +356,22 @@ impl LaunchScreen {
                 | Self::ScalePopover
                 | Self::ScaleConfirm
                 | Self::RestartBulkConfirm
+                | Self::PortForwardNewFixture
+                | Self::PortForwardConfirmFixture
+                | Self::PortForwardRemoveFixture
+        )
+    }
+
+    /// Whether the screen is drawn from fixed forwards and waits for no cluster.
+    #[cfg(any(feature = "screenshot", test))]
+    pub(crate) fn is_port_forward_fixture(self) -> bool {
+        matches!(
+            self,
+            Self::PortForwards
+                | Self::PortForwardsList
+                | Self::PortForwardNewFixture
+                | Self::PortForwardConfirmFixture
+                | Self::PortForwardRemoveFixture
         )
     }
 
@@ -392,6 +425,11 @@ impl LaunchScreen {
             "shell-picker-fixture" => Some(Self::ShellPickerFixture),
             "shell-confirm-fixture" => Some(Self::ShellConfirmFixture),
             "shell-find-fixture" => Some(Self::ShellFindFixture),
+            "port-forwards" => Some(Self::PortForwards),
+            "port-forwards-list" => Some(Self::PortForwardsList),
+            "port-forward-new-fixture" => Some(Self::PortForwardNewFixture),
+            "port-forward-confirm-fixture" => Some(Self::PortForwardConfirmFixture),
+            "port-forward-remove-fixture" => Some(Self::PortForwardRemoveFixture),
             "pods-selected" => Some(Self::PodsSelected),
             "nodes-selected" => Some(Self::NodesSelected),
             "shortcuts" => Some(Self::Shortcuts),

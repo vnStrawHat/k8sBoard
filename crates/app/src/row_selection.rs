@@ -56,7 +56,12 @@ pub(crate) fn bulk_actions(screen: Screen) -> &'static [KindAction] {
         Screen::Kind(ResourceKind::DaemonSets) => &DAEMON_SET_ACTIONS,
         Screen::Kind(ResourceKind::Jobs) => &JOB_ACTIONS,
         Screen::Kind(ResourceKind::CronJobs) => &CRON_JOB_ACTIONS,
-        Screen::Overview | Screen::Pods | Screen::Issues | Screen::Topology | Screen::Kind(_) => {
+        Screen::Overview
+        | Screen::Pods
+        | Screen::Issues
+        | Screen::Topology
+        | Screen::PortForwarding
+        | Screen::Kind(_) => {
             &[]
         }
     }

@@ -10,7 +10,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
+    Pixels, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
     prelude::FluentBuilder as _, px,
 };
 
@@ -27,9 +27,8 @@ use crate::drawer::{
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
-use crate::resource_actions::{
-    PodMenuLinks, ShellMenu, pod_menu, port_forward_reason, view_logs_reason,
-};
+use crate::port_forward_menu::{ForwardMenu, PortButtons, pod_subject};
+use crate::resource_actions::{PodMenuItems, PodMenuLinks, ShellMenu, pod_menu, view_logs_reason};
 use crate::status_tone::{StatusTone, container_state_label, pod_status_label, toned_text};
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::UsageBar;
@@ -43,6 +42,7 @@ pub(crate) fn pod_drawer(
     session: &Entity<ClusterSession>,
     row: &RowContext,
     dock: &WeakEntity<Dock>,
+    forward: &PortButtons<'_>,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let now = jiff::Timestamp::now();
@@ -68,11 +68,7 @@ pub(crate) fn pod_drawer(
             pod,
             state,
             loaded_events,
-            &session
-                .read(cx)
-                .live()
-                .map(|live| port_forward_reason(&live.access))
-                .unwrap_or_default(),
+            forward,
             session.read(cx).live(),
             now,
             cx,
@@ -127,8 +123,8 @@ fn pod_menu_button(
             let Some(session) = session.upgrade() else {
                 return menu;
             };
-            // The shell submenu is built from the app, so it is made before the session is borrowed.
-            let shell_menu = {
+            // The submenus are built from the app, so they are made before the session is borrowed.
+            let (shell_menu, forward_menu) = {
                 let session = session.read(cx);
                 let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
                     return menu;
@@ -136,9 +132,15 @@ fn pod_menu_button(
                 let Some(pod) = live.pods.items().iter().find(|pod| key.is_pod(pod)) else {
                     return menu;
                 };
-                ShellMenu::of(pod, &guard)
+                (
+                    ShellMenu::of(pod, &guard),
+                    ForwardMenu::of(pod_subject(pod), &row.cluster, &guard),
+                )
             };
-            let open_shell = shell_menu.item(&row, &shell, window, cx);
+            let items = PodMenuItems {
+                open_shell: shell_menu.item(&row, &shell, window, cx),
+                port_forward: forward_menu.item(&shell, window, cx),
+            };
             let session = session.read(cx);
             let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
                 return menu;
@@ -149,7 +151,7 @@ fn pod_menu_button(
                         dock: &dock,
                         shell: &shell,
                     };
-                    pod_menu(menu, pod, live, &guard, &row, &links, open_shell)
+                    pod_menu(menu, pod, live, &guard, &row, &links, items)
                 }
                 None => menu,
             }
@@ -467,7 +469,7 @@ fn containers_tab(
     pod: &PodSummary,
     state: &DrawerState,
     events: Option<&[EventSummary]>,
-    forward_reason: &SharedString,
+    forward: &PortButtons<'_>,
     live: Option<&LiveCluster>,
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
@@ -483,7 +485,7 @@ fn containers_tab(
             tab: state.container_tab,
             events,
             logs_reason: view_logs_reason(live),
-            forward_reason,
+            forward,
             usage: live.and_then(|live| {
                 let name = &pod.containers[selected].name;
                 live.metrics

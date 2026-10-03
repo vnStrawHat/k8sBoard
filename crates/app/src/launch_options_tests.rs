@@ -815,3 +815,47 @@ fn a_menu_screen_opens_the_drawer_menu_of_the_first_row() {
     assert!(!LaunchScreen::Kind(ResourceKind::CronJobs).opens_menu());
     assert!(parse(&["--screen", "nothings-menu"]).is_err());
 }
+
+#[test]
+fn the_port_forward_fixture_screens_open_the_page_and_need_no_cluster() {
+    for (name, screen, opens_dialog) in [
+        ("port-forwards", LaunchScreen::PortForwards, false),
+        ("port-forwards-list", LaunchScreen::PortForwardsList, false),
+        (
+            "port-forward-new-fixture",
+            LaunchScreen::PortForwardNewFixture,
+            true,
+        ),
+        (
+            "port-forward-confirm-fixture",
+            LaunchScreen::PortForwardConfirmFixture,
+            true,
+        ),
+        (
+            "port-forward-remove-fixture",
+            LaunchScreen::PortForwardRemoveFixture,
+            true,
+        ),
+    ] {
+        let parsed = run_options(&["--screen", name]).screen;
+        assert_eq!(parsed, screen);
+        assert_eq!(parsed.screen(), Screen::PortForwarding);
+        assert!(parsed.is_port_forward_fixture());
+        assert_eq!(parsed.opens_dialog(), opens_dialog, "{name}");
+        assert!(!parsed.has_dock() && !parsed.selects_row(), "{name}");
+    }
+    assert!(!LaunchScreen::Pods.is_port_forward_fixture());
+}
+
+#[test]
+fn usage_lists_the_port_forward_screens() {
+    for name in [
+        "port-forwards",
+        "port-forwards-list",
+        "port-forward-new-fixture",
+        "port-forward-confirm-fixture",
+        "port-forward-remove-fixture",
+    ] {
+        assert!(USAGE.contains(name), "{name}");
+    }
+}
