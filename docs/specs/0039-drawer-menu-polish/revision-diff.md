@@ -28,29 +28,30 @@ pub(crate) fn pod_template_text(object: Value, env: EnvValues) -> Result<ObjectY
 // revision_diff.rs
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RevisionSide { pub(crate) replica_set: String, pub(crate) revision: Option<u64>, pub(crate) tag: Option<String> }
+// `revision` is `ReplicaSetSummary.revision` (the annotation text) parsed with `str::parse::<u64>().ok()`, as `revision_rows` does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RevisionDiffRequest {
-    pub(crate) deployment: ClusterObject,   // the drawer subject: its cluster is the one asked
+    pub(crate) deployment: ResourceKey,     // the drawer subject
     pub(crate) older: RevisionSide,         // the lower revision number left (decision 9)
     pub(crate) newer: RevisionSide,
 }
 /// Orders the clicked revision and the current one into (older, newer). Pure.
-pub(crate) fn diff_request(deployment: ClusterObject, clicked: RevisionSide, current: RevisionSide) -> RevisionDiffRequest;
+pub(crate) fn diff_request(deployment: ResourceKey, clicked: RevisionSide, current: RevisionSide) -> RevisionDiffRequest;
 impl AppShell { pub(crate) fn open_revision_diff(&mut self, request: RevisionDiffRequest, window: &mut Window, cx: &mut Context<Self>); }
 ```
 
-The current side comes from `revision_rows` (`is_current`); with no current row the `Diff` buttons are hidden. The `ClusterObject` comes from the drawer paint (its cluster, `DrawerPaint::in_cluster`, and the row key), not from `RollBackGate`, so Diff works where Roll back is not permitted.
+The current side comes from `revision_rows` (`is_current`); with no current row the `Diff` buttons are hidden. The key is the drawer row's own (`ResourceKey::of_row`), not taken from `RollBackGate`, so Diff works where Roll back is not permitted.
 
 ## Dialog (`RevisionDiffView`, entity in `revision_diff.rs`)
 
-`open_revision_diff` takes `slot_connection(&request.deployment.cluster, cx)` (never the primary; `None` → nothing opens), creates the view, and `window.open_dialog(cx, …)` with it as the child (width as the Edit YAML diff, height ~70 % of the window, Esc closes).
+`open_revision_diff` takes the connection of the live session (`None` while not connected → nothing opens), creates the view, and `window.open_dialog(cx, …)` with it as the child (width as the Edit YAML diff, height ~70 % of the window, Esc closes).
 
 | Part | Content |
 |---|---|
 | Title | `Revision diff · deployment/{name}` |
-| Subtitle | `rev {old} · {tag} → rev {new} · {tag}` (`(current)` after the current side), plus ` · {label}` in multi mode |
+| Subtitle | `rev {old} · {tag} → rev {new} · {tag}` (`(current)` after the current side) |
 | Toolbar | `Show env values` / `Hide env values` toggle, shown only when either side hid some (`hidden_env_values > 0`), like the YAML tab (`shows_env_toggle`) |
-| Body | Loading: spinner `Loading revisions…`; Failed: `Could not load rev {n}: {error text}` (`error_text` as the YAML tab); Same: `The pod templates of the two revisions are the same.`; Diff: `uniform_list` of `diff_row_element(row)` |
+| Body | Loading: spinner `Loading revisions…`; Failed: `Could not load rev {n}: {error text}` (`error_text` as the YAML tab); Same (equal texts, nothing hidden): `The pod templates of the two revisions are the same.`; Same with `hidden_env_values > 0` on either side: `No visible difference; env values are hidden`, shown next to the `Show env values` toggle (hidden values may differ); Diff: `uniform_list` of `diff_row_element(row)` |
 
 ```rust
 enum DiffState { Loading { _task: Task<()> }, Failed(SharedString), Ready(Rc<[DiffRow]>) }

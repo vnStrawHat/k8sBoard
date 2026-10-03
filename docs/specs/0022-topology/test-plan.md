@@ -39,8 +39,8 @@ Fixtures: namespace `shop` with Deployment `api` (pods run as `api`), pod `cron-
 
 | Step | Module | Tests |
 |---|---|---|
-| 4a | `topology_graph_tests.rs` | `rbac_off_draws_no_access_nodes`, `account_aggregates_to_top_workload`, `standalone_pod_keeps_its_account_edge`, `direct_bindings_and_their_roles_are_drawn`, `group_bindings_only_count_in_caption`, `unused_accounts_and_bindings_are_hidden`, `cluster_role_node_is_plain_and_unchecked`, `access_edges_use_the_access_relation`, `rbac_rows_count_toward_raw_limit` |
-| 4a | `topology_checks_tests.rs` | `missing_service_account_is_bad`, `binding_to_missing_role_is_warn`, `cluster_admin_account_is_warn_on_the_binding`, `off_rbac_feed_skips_access_checks`, `access_chip_labels_singular_and_plural` |
+| 4a | `topology_graph_tests.rs` | `rbac_off_draws_no_access_nodes`, `account_aggregates_to_top_workload`, `standalone_pod_keeps_its_account_edge`, `direct_bindings_and_their_roles_are_drawn`, `group_bindings_only_count_in_caption`, `unused_accounts_and_bindings_are_hidden`, `cluster_role_node_is_plain_and_unchecked`, `access_edges_use_the_access_relation`, `rbac_rows_count_toward_raw_limit`, `only_cluster_role_bindings_of_namespace_accounts_count`, `other_namespace_role_bindings_are_not_drawn` |
+| 4a | `topology_checks_tests.rs` | `missing_service_account_is_bad`, `binding_to_missing_role_is_warn`, `cluster_admin_account_is_warn_on_the_binding`, `cluster_admin_through_group_is_warn_on_the_account`, `cluster_admin_to_authenticated_is_warn_on_the_account`, `off_rbac_feed_skips_access_checks`, `access_chip_labels_singular_and_plural` |
 | 4a | `topology_layout_tests.rs` | `access_row_sits_under_the_config_row`, `binding_and_role_take_the_next_slots`, `access_row_wraps_after_the_last_slot`, `new_pod_moves_no_access_card`, `topology_budget` (extended: + 40 accounts, 80 bindings, 40 roles) |
 | 4b | `topology_feeds.rs` tests | `rbac_chip_starts_four_feeds`, `default_chips_leave_rbac_off`, `denied_rbac_feed_is_off`, `open_count_is_at_most_fourteen` |
 | 4b | `cluster_session_tests.rs` | `open_watch_count_includes_topology` (extended: RBAC on +4, one denied +3) |

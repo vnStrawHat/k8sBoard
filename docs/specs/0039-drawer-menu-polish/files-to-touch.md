@@ -20,7 +20,7 @@
 | 1 | `src/resource_actions.rs` (+ `resource_actions_tests.rs`) | `LogsMenu`, `LogsMenuState`, `LogChoice`; `PodMenuItems.view_logs`; `container_menu`, `container_shell_availability` |
 | 1 | `src/pod_drawer.rs`, `src/pod_table.rs` | build `LogsMenu` before borrowing the session (both pod menus); `containers_tab` builds the container ⋯ button |
 | 1 | `src/container_detail.rs` | `ContainerDetailInput.menu`; the button in the header |
-| 2 | `src/log_target.rs` (+ tests) | `last_job_owner` |
+| 2 | `src/kind_join.rs` (+ `kind_join_tests.rs`) | `last_job_owner`, next to `CRON_JOB_SUFFIX_DIGITS` |
 | 2 | `src/resource_actions.rs` (+ tests) | `subject_action` ViewLogs for workload kinds; `key_availability` kind path; CronJob menu item; `workload_logs_item` hint |
 | 2 | `src/app_shell.rs` | `selected_log_target` CronJob arm |
 | 3 | `src/revision_diff.rs` (new, tests in module) | `RevisionSide`, `RevisionDiffRequest`, `diff_request`, `RevisionDiffView`, `DiffState` |
@@ -28,7 +28,7 @@
 | 3 | `src/live_sections.rs` (+ tests) | `Diff` button in `revision_element` |
 | 3 | `src/app_shell.rs`, `src/main.rs` | `open_revision_diff`; `mod revision_diff;` |
 | 3 | `src/launch_options.rs` (+ tests), `src/screenshot.rs` (+ tests) | `--screen revision-diff` (fixture, no connection) |
-| 4 | `src/related_objects.rs`, `src/cluster_session.rs` (+ tests) | `RelatedList::NamespaceLimits`, `RelatedUpdate::LimitRanges`, `namespace_limits`, `RelatedObjects::start(.., access, ..)` with the selected stream |
+| 4 | `src/related_objects.rs`, `src/cluster_session.rs` (+ tests), `src/app_shell.rs` (drop the subject only when both gates are closed) | `RelatedList::NamespaceLimits`, `RelatedUpdate::LimitRanges`, `namespace_limits`, `NamespaceListGates`, `namespace_list_gates`, `denied_related_check` → `None` for `NamespaceQuotas`, `RelatedObjects::start(.., gates, ..)` with the selected streams |
 | 4 | `src/live_sections.rs` (+ tests) | LimitRange rows in `namespace_quota_rows`, `limit_range_text` |
 
 ## Docs

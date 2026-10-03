@@ -1,6 +1,6 @@
 # 0039 · Logs items and menus
 
-[Back to index](README.md) · Steps 1–2 · Modules: `resource_actions.rs`, `pod_drawer.rs`, `container_detail.rs`, `log_target.rs`, `app_shell.rs`, `keyboard_navigation.rs`. Decisions 1–7.
+[Back to index](README.md) · Steps 1–2 · Modules: `resource_actions.rs`, `pod_drawer.rs`, `container_detail.rs`, `kind_join.rs`, `app_shell.rs`, `keyboard_navigation.rs`. Decisions 1–7.
 
 ## View logs ▸ container submenu (step 1, W4 n2)
 
@@ -35,7 +35,7 @@ impl LogsMenu {
 // resource_actions.rs, next to pod_menu
 pub(crate) fn container_menu(menu: PopupMenu, pod: &PodSummary, container: &ContainerSummary,
     live: &LiveCluster, guard: &ClusterGuard<'_>, row: &RowContext, links: &PodMenuLinks<'_>) -> PopupMenu;
-/// The gate of the pod's cluster, then the container: not running → NOT_RUNNING_REASON.
+/// The gate of the session, then the container: not running → NOT_RUNNING_REASON.
 pub(crate) fn container_shell_availability(container: &ContainerSummary, guard: &ClusterGuard<'_>) -> ActionAvailability;
 ```
 
@@ -51,7 +51,7 @@ No key hints on these items: L, S act on the pod's default container (decision 3
 ## CronJob View logs of last job (step 2, W7 CronJobs)
 
 ```rust
-// log_target.rs
+// kind_join.rs, next to CRON_JOB_SUFFIX_DIGITS and cron_job_of_job (the same naming rule)
 /// The pods of the Job the CronJob controller created for `last_schedule_at`, named
 /// `{cron_job}-{unix minutes}`. Pure.
 pub(crate) fn last_job_owner(cron_job: &CronJobSummary, pods: &[PodSummary]) -> Result<PodOwner, SharedString>;
@@ -72,8 +72,8 @@ pub(crate) fn last_job_owner(cron_job: &CronJobSummary, pods: &[PodSummary]) -> 
 | Function | Today | Change |
 |---|---|---|
 | `subject_action(ViewLogs, subject)` | pods only | also `Kind { kind }` when `kind` is Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, or CronJobs |
-| `key_availability(row, subject, live, guard)` | pod lookup | for a kind subject: `availability_before_lock(ViewLogs, access)`, then the row: CronJob → `last_job_owner` (Err → `Disabled { reason }`); others → `row.related_pods` present, else `NotOffered` |
-| `selected_log_target` | `row.related_pods` for kinds | CronJob arm through `last_job_owner`; reads the cursor's own slot (`slot_live(&selected.cluster)`), never the primary |
+| `key_availability(row, subject, live, guard)` | pod lookup | for a kind subject: `availability_before_lock(ViewLogs, access)`, then the row, looked up with `live.kind_list(kind)` and `ResourceKey::is_row` (`key_availability` has no `KindRow` of its own): CronJob → `last_job_owner` (Err → `Disabled { reason }`); others → `row.related_pods` present, else `NotOffered` |
+| `selected_log_target` | `row.related_pods` for kinds | CronJob arm through `last_job_owner` |
 | `workload_logs_item` | no hint | `.action(RowAction::ViewLogs.key_action())` |
 
 `run_available_row_key` already maps `ResourceAction::ViewLogs` to `open_logs_of_selection`; no new arm. The palette lists L for these rows through the same `key_availability`.

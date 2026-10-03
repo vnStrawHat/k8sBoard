@@ -59,10 +59,10 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 - [x] 11. Export writes only after the dialog confirms. The `.png` output is a valid PNG of the whole graph, and a `.svg` path gets SVG text. Paths are never traced.
 - [ ] 12. Screenshots `topology` and `topology-problems` exist (light and dark, `.tmp/ui-shots/v58-topology-*.png`). The ui-verifier reports no high-severity defect against W11. The ui-verifier has not run yet.
 - [ ] 13. (4a, W11 chip, W7 ServiceAccounts) With RBAC on, each account a namespace pod runs as is drawn once, linked from its top visible workload, then to every binding that names it directly, then to that binding's role; group-only grants appear only as the `+{n} via groups` caption.
-- [ ] 14. (4a, W11 pin 2, W7 ClusterRoleBindings) The three access checks (missing ServiceAccount Bad, binding to a missing Role Warn, account with cluster-admin Warn) appear in the checks chip with the texts of rbac-layer.md; ClusterRole refs are never checked.
-- [ ] 15. (4a, W11 pin 3) The access row reads account → binding → role left to right under each band; with `previous`, adding a pod moves no RBAC card; `topology_budget` still passes with RBAC rows added.
+- [ ] 14. (4a, W11 pin 2, W7 ClusterRoleBindings) The three access checks (missing ServiceAccount Bad, binding to a missing Role Warn, account with cluster-admin Warn, also through a group, by `roles_held`) appear in the checks chip with the texts of rbac-layer.md; ClusterRole refs are never checked.
+- [ ] 15. (4a, W11 pin 3) The access row reads account → binding → role left to right under each band; with `previous`, adding a pod moves no RBAC card; `topology_budget` still passes with RBAC rows added; only ClusterRoleBindings naming the namespace's accounts count toward `RAW_LIMIT`.
 - [ ] 16. (4b, W11 toolbar) RBAC is a working chip, off by default; turning it on raises the watch count by exactly the started RBAC feeds (≤ 4; a denied list is Off and draws `not checked`), off lowers it back; `open_count()` ≤ 14.
-- [ ] 17. (4b) A click on an account, binding, or Role opens the drawer over the graph in the drawn cluster, and row keys act on it; a ClusterRole click reveals it on the ClusterRoles screen. Read-only: no new request kind; colors from tokens (`cyan_light`), legend and export show `access`.
+- [ ] 17. (4b) A click on an account, binding, or Role opens the drawer over the graph, and row keys act on it; a ClusterRole click reveals it on the ClusterRoles screen. Read-only: no new request kind; colors from tokens (`cyan_light`), legend and export show `access`.
 - [ ] 18. (4b) Screenshot `topology-rbac` (light, dark) has no high-severity defect against W11.
 
 ## Open items

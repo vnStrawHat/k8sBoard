@@ -14,7 +14,8 @@ Who the namespace's workloads run as, and what that grants: `workload → Servic
 | `Role` | `Roles` (namespace) | a drawn binding refers to it |
 | `ClusterRole` | none (decision 45) | a drawn binding refers to it; `NodeLook::Plain`, never checked |
 
-- Joins reuse `BindingIndex::build(&BindingLists { role_bindings, cluster_role_bindings })` and `bound_roles(namespace, account)`; entries with `group.is_some()` are not drawn, they only count in the caption (decision 44).
+- Joins reuse `BindingIndex::build(&BindingLists { role_bindings, cluster_role_bindings })`. The feeds hold `KindRow`s, so each graph build collects **cloned** `BindingSummary` values from `KindObject::Binding` rows into two `Vec`s and borrows them as `BindingLists`; the RoleBindings come from the namespace feed, the ClusterRoleBindings only after the namespace filter below. The copy is bounded by `RAW_LIMIT`; `BindingLists` is not generalized.
+- Drawn edges use `bound_roles(namespace, account)` entries with `group.is_none()`; group entries are not drawn, they only count in the caption (decision 44). The cluster-admin check reads `roles_held(namespace, account)` (`access_bindings.rs`), groups included, as the W7 boxes do.
 - Captions: `ServiceAccount` (`· +{n} via groups` when group bindings reach it; `· token off` when `automount_token == Some(false)`), `RoleBinding`, `ClusterRoleBinding`, `Role · {k} rules`, `ClusterRole`.
 - Keys: every node has a `ResourceKey` (all five kinds have screens). A click on a node whose row is not in the feeds (`ClusterRole`) reveals it on its screen instead of opening the drawer over the graph (`LiveCluster::row_of` is `None`).
 
@@ -38,7 +39,8 @@ Legend: a fourth entry `access` (`LEGEND` in `topology_canvas.rs`, the export le
 - The toolbar loop over `KindFilter::ALL` draws the RBAC chip like the others; the disabled `topology-chip-rbac` button goes. Tooltip `Show service accounts, bindings, and roles`.
 - `TopologyKind::filter()` maps the five new kinds to `Rbac`; `TopologySubject::wants` starts their feeds only while the chip is on. `open_count()` ≤ 14.
 - `feed_plan` (Known and denied → Off) applies unchanged: refs of an Off or failed kind draw `Unchecked` (decision 4).
-- `RAW_LIMIT` counts the RBAC rows like every feed (the cluster-wide ClusterRoleBindings list counts in full).
+- `RAW_LIMIT` counts the RBAC rows like every feed, except that ClusterRoleBindings count **only those that name an account of the drawn namespace** (direct, or through `system:serviceaccounts` / `system:serviceaccounts:{ns}` / `system:authenticated`), filtered before counting. The full cluster-wide list stays in the feed's memory only (decision 50).
+- `ponytail:` a namespace change restarts every feed (`SubjectChange::Restart`), so the cluster-wide ClusterRoleBindings list is fetched again although it did not change; upgrade path: keep that one feed across `Restart` when the RBAC chip stays on.
 
 ## Checks (`CheckRule`, +3; `topology_checks.rs`)
 
@@ -46,7 +48,7 @@ Legend: a fourth entry `access` (`LEGEND` in `topology_canvas.rs`, the export le
 |---|---|---|---|---|---|
 | `MissingServiceAccount` | a pod's account is not listed (ServiceAccounts Ready) | `Missing { ServiceAccount }` | Bad | `{owner} runs as missing ServiceAccount {name}.` | `1 missing ServiceAccount` / `{n} missing ServiceAccounts` |
 | `MissingRole` | a RoleBinding names a Role that is not listed (Roles Ready) | `Missing { Role }` | Warn | `RoleBinding {b} grants missing Role {r}.` | `1 binding to a missing Role` / `{n} bindings to missing Roles` |
-| `ClusterAdminAccount` | a drawn binding grants cluster-admin (`is_cluster_admin`) to a drawn account | the binding | Warn | `ServiceAccount {sa} has cluster-admin through {binding}.` | `1 account with cluster-admin` / `{n} accounts with cluster-admin` |
+| `ClusterAdminAccount` | `roles_held(namespace, account)` of a drawn account has an `is_cluster_admin` role, directly or through a group (`system:serviceaccounts`, `system:serviceaccounts:{ns}`, `system:authenticated`), as `broad_admin` flags it on W7 | the binding when it is drawn (direct subject), else the account | Warn | `ServiceAccount {sa} has cluster-admin through {binding}.`; a group grant adds ` (group {group})` before the period | `1 account with cluster-admin` / `{n} accounts with cluster-admin` |
 
 `ClusterRole` refs are never checked (no feed; decision 45). The checks follow visible nodes and Problems only as today.
 
@@ -65,11 +67,10 @@ Legend: a fourth entry `access` (`LEGEND` in `topology_canvas.rs`, the export le
 
 The 0003 AC4 color-literal grep stays clean; the SVG export maps the same tokens (`svg_dash_per_relation` gains the fourth).
 
-## Multi-cluster and keys
+## Keys
 
-- Feeds run in the slot Topology draws only (0027 decision 21; [0045 topology.md](../0045-multi-cluster-screens/topology.md)).
-- A node click puts the cursor (`ClusterObject` of the drawn cluster) on the account, binding, or role, so `RowAction` keys work as on their tables (Y, E, Del, Copy name). No key changes.
+- A node click puts the cursor (`ClusterObject` of the cluster in view) on the account, binding, or role, so `RowAction` keys work as on their tables (Y, E, Del, Copy name). No key changes.
 
 ## Not in this layer
 
-User and Group subjects as nodes; ClusterRole rules or aggregation; Secrets listed in `ServiceAccount.secrets`; "who can" queries (0023 owns them).
+User and Group subjects as nodes; RoleBindings in other namespaces that name this namespace's ServiceAccounts (not drawn); ClusterRole rules or aggregation; Secrets listed in `ServiceAccount.secrets`; "who can" queries (0023 owns them).
