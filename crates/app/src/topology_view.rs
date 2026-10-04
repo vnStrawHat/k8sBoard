@@ -360,6 +360,11 @@ impl TopologyView {
             .as_ref()
             .map(|session| cx.observe(session, |view, _, cx| view.on_session_changed(cx)));
         self.session = session;
+        // A fixture keeps its fixed namespace and graph whatever session arrives.
+        if self.fixture_pods.is_some() {
+            cx.notify();
+            return;
+        }
         self.namespace = None;
         self.expanded.clear();
         self.traffic = TrafficRun::default();
