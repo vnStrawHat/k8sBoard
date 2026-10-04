@@ -21,6 +21,7 @@ use crate::settings_store::{
     write_settings,
 };
 use crate::table_sort::SortDirection;
+use crate::topology_route::EdgeShape;
 
 pub(crate) const SETTINGS_VERSION: u32 = 1;
 
@@ -53,6 +54,16 @@ pub(crate) struct Settings {
     /// The Terminal & Shell page (spec 0043).
     #[serde(skip_serializing_if = "is_default")]
     pub(crate) terminal: TerminalSettings,
+    /// The Topology toolbar choices that are remembered (spec 0050).
+    #[serde(skip_serializing_if = "is_default")]
+    pub(crate) topology: TopologySettings,
+}
+
+/// The `topology` section: how the edges are drawn. Group by and the pins stay in memory.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct TopologySettings {
+    pub(crate) edges: EdgeShape,
 }
 
 /// The `general` section: a path and a switch.
@@ -301,6 +312,7 @@ impl Default for Settings {
             appearance: AppearanceSettings::default(),
             logs: LogSettings::default(),
             terminal: TerminalSettings::default(),
+            topology: TopologySettings::default(),
         }
     }
 }

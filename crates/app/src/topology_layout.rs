@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use gpui_kit::SharedString;
 
 use crate::topology_graph::{GroupBy, NodeId, Relation, TopologyGraph, TopologyKind, TopologyNode};
-use crate::topology_route::{EdgeRoute, route_edges};
+use crate::topology_route::{EdgeRoute, EdgeShape, route_edges};
 
 /// A card is at least this wide, and as wide as its longest name needs up to `MAX_NODE_WIDTH`.
 pub(crate) const MIN_NODE_WIDTH: f32 = 200.;
@@ -255,13 +255,15 @@ struct BandPlan {
 /// from scratch, the bands flow into as many band-columns as make the extent look like it.
 /// `pins` move nodes to the origins the user dragged them to. `previous` seeds the order, the
 /// offsets of the columns, and the band-columns from an earlier layout of the same namespace and
-/// grouping, and skips the sweeps; without it the order comes from sorting and the sweeps.
+/// grouping, and skips the sweeps; without it the order comes from sorting and the sweeps. `edges`
+/// only shapes the routes: the cards do not move with it.
 pub(crate) fn layout(
     graph: &TopologyGraph,
     group_by: GroupBy,
     aspect: f32,
     pins: &HashMap<NodeId, GraphPoint>,
     previous: Option<&TopologyLayout>,
+    edges: EdgeShape,
 ) -> TopologyLayout {
     let seed = previous.map(Seed::of);
     let neighbours = neighbours(graph);
@@ -322,7 +324,7 @@ pub(crate) fn layout(
     }
     let extent = extent_of(&rects, &bands);
     let frames: Vec<GraphRect> = bands.iter().map(|band| band.rect).collect();
-    let routes = route_edges(graph, &rects, &frames);
+    let routes = route_edges(graph, &rects, &frames, edges);
     TopologyLayout {
         rects,
         routes,

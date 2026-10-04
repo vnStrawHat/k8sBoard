@@ -526,6 +526,15 @@ fn screen_topology_selected_parses() {
 }
 
 #[test]
+fn topology_curves_screen_parses() {
+    let list = run_options(&["--screen", "topology-curves"]).screen;
+    assert_eq!(list, LaunchScreen::TopologyCurves);
+    assert_eq!(list.screen(), Screen::Topology);
+    assert!(!list.has_drawer());
+    assert!(list.shows_topology());
+}
+
+#[test]
 fn screen_issues_parses() {
     let list = run_options(&["--screen", "issues"]).screen;
     assert_eq!(list, LaunchScreen::Issues);

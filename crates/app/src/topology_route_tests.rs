@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use super::*;
+use crate::topology_canvas::{ARROW_HALF_WIDTH, ARROW_LENGTH, ARROW_TIP_GAP, arrow_head};
 use crate::topology_fixtures::{Fixture, Ref, ingress, pod, pod_with};
 use crate::topology_graph::GroupBy;
-use crate::topology_layout::{TopologyLayout, layout};
+use crate::topology_graph::TopologyKind;
+use crate::topology_layout::{NODE_HEIGHT, TopologyLayout, layout};
 
 fn app_pod(app: &str, n: usize, refs: &[Ref]) -> cluster::PodSummary {
     let labels = format!("app={app}");
@@ -96,7 +98,16 @@ fn monitoring() -> TopologyGraph {
 }
 
 fn laid_out(graph: &TopologyGraph, group_by: GroupBy, aspect: f32) -> TopologyLayout {
-    layout(graph, group_by, aspect, &HashMap::new(), None)
+    laid_out_as(graph, group_by, aspect, EdgeShape::Elbows)
+}
+
+fn laid_out_as(
+    graph: &TopologyGraph,
+    group_by: GroupBy,
+    aspect: f32,
+    shape: EdgeShape,
+) -> TopologyLayout {
+    layout(graph, group_by, aspect, &HashMap::new(), None, shape)
 }
 
 /// Every segment of every route, against every card that is not one of its ends.
@@ -358,4 +369,185 @@ fn routes_are_computed_for_every_edge_in_edge_order() {
     let arranged = laid_out(&graph, GroupBy::App, 1.);
     assert_eq!(arranged.routes.len(), graph.edges.len());
     assert!(arranged.routes.iter().all(|route| route.points.len() >= 2));
+}
+
+// ---- 0050: curved edges ----
+
+fn card(x: f32, y: f32) -> GraphRect {
+    GraphRect {
+        origin: GraphPoint { x, y },
+        width: 160.,
+        height: NODE_HEIGHT,
+    }
+}
+
+fn curve(source: GraphRect, target: GraphRect) -> Vec<GraphPoint> {
+    bezier(ports(source, target))
+}
+
+#[test]
+fn a_curve_leaves_flat_and_ends_in_a_horizontal_stub() {
+    let points = curve(card(0., 0.), card(400., 300.));
+    let last = points.len() - 1;
+    // Flat where it leaves, within the flatness tolerance of the first chord.
+    assert!((points[1].y - points[0].y).abs() < 0.5);
+    let stub = points[last].x - points[last - 1].x;
+    assert!((stub - ARRIVAL_STUB).abs() < 1e-3, "{stub}");
+    assert!((points[last].y - points[last - 1].y).abs() < 1e-3);
+}
+
+#[test]
+fn a_same_column_edge_is_a_loop_in_the_gutter() {
+    let source = card(0., 0.);
+    let points = curve(source, card(0., 200.));
+    // Out of the right side, round the gutter, and back in by the right side.
+    for at in &points {
+        assert!(at.x >= source.right() - 1e-3, "{at:?}");
+        assert!(at.x <= source.right() + LANE_OFFSET + 1., "{at:?}");
+    }
+    let peak = points.iter().map(|at| at.x).fold(f32::MIN, f32::max);
+    assert!(peak > source.right() + 20., "{peak}");
+    assert_eq!(points[points.len() - 1].x, source.right());
+}
+
+#[test]
+fn a_backward_edge_is_one_s_curve() {
+    let points = curve(card(400., 0.), card(0., 200.));
+    // Leftward and downward only: no loop and no wiggle.
+    for pair in points.windows(2) {
+        assert!(pair[1].x <= pair[0].x + 1e-3, "{pair:?}");
+        assert!(pair[1].y >= pair[0].y - 1e-3, "{pair:?}");
+    }
+    assert_eq!(points[0].x, 400.);
+    assert_eq!(points[points.len() - 1].x, 160.);
+}
+
+#[test]
+fn a_close_neighbour_curve_never_runs_backwards() {
+    let graph = Fixture::default()
+        .with_deployment("web", 1, 1)
+        .with_replica_set("web-rs", Some("web"), 1, 1)
+        .graph();
+    let owns = graph
+        .edges
+        .iter()
+        .position(|edge| edge.relation == Relation::Owns)
+        .expect("a deployment owns the replica set");
+    let (from, to) = (graph.edges[owns].from, graph.edges[owns].to);
+    let first = laid_out(&graph, GroupBy::Components, 1.);
+    // A 25-unit gap, as after a drag; a 20-37 gap is where a floored reach would turn back.
+    let source = first.rects[from];
+    let pins = HashMap::from([
+        (graph.nodes[from].id.clone(), GraphPoint { x: 0., y: 0. }),
+        (
+            graph.nodes[to].id.clone(),
+            GraphPoint {
+                x: source.width + 25.,
+                y: 50.,
+            },
+        ),
+    ]);
+    for shape in [EdgeShape::Elbows, EdgeShape::Curves] {
+        let arranged = layout(&graph, GroupBy::Components, 1., &pins, None, shape);
+        for pair in arranged.routes[owns].points.windows(2) {
+            assert!(pair[1].x >= pair[0].x - 1e-3, "{shape:?} {pair:?}");
+        }
+    }
+}
+
+#[test]
+fn the_arrow_of_a_curve_points_along_its_end_tangent() {
+    let cases = [
+        (card(0., 0.), card(400., 300.)),
+        (card(0., 0.), card(0., 200.)),
+        (card(400., 0.), card(0., 200.)),
+    ];
+    for (source, target) in cases {
+        let route = EdgeRoute {
+            points: curve(source, target),
+        };
+        let [tip, left, right] = arrow_head(&route, ARROW_LENGTH, ARROW_HALF_WIDTH);
+        let end = route.end();
+        let (dx, dy) = route.end_direction();
+        assert!(dx.abs() == 1. && dy == 0., "{dx} {dy}");
+        assert!((tip.x - (end.x - dx * ARROW_TIP_GAP)).abs() < 1e-3);
+        assert!((tip.y - end.y).abs() < 1e-3);
+        // A horizontal axis: the base corners share x and sit above and below the tip.
+        assert!((left.x - right.x).abs() < 1e-3);
+        assert!((left.y + right.y - 2. * end.y).abs() < 1e-3);
+    }
+}
+
+#[test]
+fn arrival_stub_is_the_arrow_length_and_gap() {
+    assert_eq!(ARRIVAL_STUB, ARROW_LENGTH + ARROW_TIP_GAP);
+}
+
+fn fixtures() -> [(&'static str, TopologyGraph); 2] {
+    [("keda", keda()), ("monitoring", monitoring())]
+}
+
+#[test]
+fn curves_keep_the_ports_of_elbows() {
+    for (name, graph) in fixtures() {
+        let elbows = laid_out_as(&graph, GroupBy::App, 1.7, EdgeShape::Elbows);
+        let curves = laid_out_as(&graph, GroupBy::App, 1.7, EdgeShape::Curves);
+        for (index, (a, b)) in elbows.routes.iter().zip(&curves.routes).enumerate() {
+            assert!(distance(a.start(), b.start()) < 1e-3, "{name} {index}");
+            assert!(distance(a.end(), b.end()) < 1e-3, "{name} {index}");
+        }
+    }
+}
+
+#[test]
+fn no_curved_edge_runs_through_a_card_it_does_not_join() {
+    for (name, graph) in fixtures() {
+        for (group_by, aspect) in [
+            (GroupBy::App, 0.1),
+            (GroupBy::App, 1.7),
+            (GroupBy::Components, 1.),
+        ] {
+            let arranged = laid_out_as(&graph, group_by, aspect, EdgeShape::Curves);
+            let found = crossings(&graph, &arranged);
+            assert!(
+                found.is_empty(),
+                "{name} {group_by:?} {aspect}: {} crossings, e.g. {:?}",
+                found.len(),
+                found.first()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_blocked_curve_keeps_the_lane_route() {
+    // The ReplicaSet sits between the Service and the pod: the straight curve would run behind it.
+    let graph = with_app(Fixture::default(), "web", 1, &[]).graph();
+    let curves = laid_out_as(&graph, GroupBy::Components, 1., EdgeShape::Curves);
+    let elbows = laid_out_as(&graph, GroupBy::Components, 1., EdgeShape::Elbows);
+    let skip = graph
+        .edges
+        .iter()
+        .position(|edge| {
+            edge.relation == Relation::RoutesTo
+                && graph.nodes[edge.from].kind == TopologyKind::Service
+        })
+        .expect("a service routes to the pod");
+    let (source, target) = (
+        curves.rects[graph.edges[skip].from],
+        curves.rects[graph.edges[skip].to],
+    );
+    assert_ne!(curves.routes[skip].points, curve(source, target));
+    assert_eq!(curves.routes[skip], elbows.routes[skip]);
+    assert!(crossings(&graph, &curves).is_empty());
+}
+
+#[test]
+fn the_edge_shape_does_not_move_cards() {
+    for (name, graph) in fixtures() {
+        let elbows = laid_out_as(&graph, GroupBy::App, 1.7, EdgeShape::Elbows);
+        let curves = laid_out_as(&graph, GroupBy::App, 1.7, EdgeShape::Curves);
+        assert_eq!(elbows.rects, curves.rects, "{name}");
+        assert_eq!(elbows.extent, curves.extent, "{name}");
+    }
 }

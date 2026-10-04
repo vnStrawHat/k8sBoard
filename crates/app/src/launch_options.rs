@@ -24,7 +24,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|topology-curves|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
@@ -57,6 +57,9 @@ pub(crate) enum LaunchScreen {
     /// `--screen topology-selected`: the first Deployment selected, its drawer open, and motion
     /// reduced so the capture does not depend on the clock.
     TopologySelected,
+    /// `--screen topology-curves`: the same screen with the edges drawn as curves, in memory
+    /// only (the setting is not written).
+    TopologyCurves,
     /// `--screen pod-drawer|pod-containers|pod-events|pod-yaml`: a pod drawer on that tab.
     PodDrawer(DrawerTab),
     /// `--screen node-drawer|node-events|node-yaml`.
@@ -306,7 +309,8 @@ impl LaunchScreen {
             Self::Topology
             | Self::TopologyProblems
             | Self::TopologyRbac
-            | Self::TopologySelected => Screen::Topology,
+            | Self::TopologySelected
+            | Self::TopologyCurves => Screen::Topology,
             Self::Kind(kind) | Self::KindDrawer(kind, _) | Self::KindMenu(kind) => {
                 Screen::Kind(kind)
             }
@@ -416,7 +420,11 @@ impl LaunchScreen {
     pub(crate) fn shows_topology(self) -> bool {
         matches!(
             self,
-            Self::Topology | Self::TopologyProblems | Self::TopologyRbac | Self::TopologySelected
+            Self::Topology
+                | Self::TopologyProblems
+                | Self::TopologyRbac
+                | Self::TopologySelected
+                | Self::TopologyCurves
         )
     }
 
@@ -609,6 +617,7 @@ impl LaunchScreen {
             "topology-problems" => Some(Self::TopologyProblems),
             "topology-rbac" => Some(Self::TopologyRbac),
             "topology-selected" => Some(Self::TopologySelected),
+            "topology-curves" => Some(Self::TopologyCurves),
             "pod-drawer" => Some(Self::PodDrawer(DrawerTab::Overview)),
             "pod-containers" => Some(Self::PodDrawer(DrawerTab::Containers)),
             "pod-events" => Some(Self::PodDrawer(DrawerTab::Events)),

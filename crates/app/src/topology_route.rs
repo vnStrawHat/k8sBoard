@@ -2,9 +2,12 @@
 //! it can never look like a link it is not. An edge between neighbouring columns is one smooth
 //! curve through the gutter. Any other edge leaves its card by the side, bends along the vertical
 //! lane in the gutter, crosses over in a horizontal corridor that is free of cards, and enters the
-//! other card by the side. Pure, in graph units, and computed once per layout, not per frame.
+//! other card by the side. With `EdgeShape::Curves` (0050) every edge is one smooth curve while a
+//! free one exists, and the lane route with rounded corners otherwise. Pure, in graph units, and
+//! computed once per layout, not per frame.
 
 use gpui_kit::{Point, point};
+use serde::{Deserialize, Serialize};
 
 use crate::topology_graph::{Relation, TopologyGraph};
 use crate::topology_layout::{GraphPoint, GraphRect};
@@ -24,6 +27,33 @@ const FLATTEN_TOLERANCE: f32 = 0.1;
 const MARGIN_CORRIDOR: f32 = 12.;
 /// Corridors tried for one edge before the margin one.
 const MAX_CORRIDORS: usize = 24;
+/// The straight horizontal run into the target card. It is the arrow: the canvas trims exactly
+/// `ARROW_LENGTH + ARROW_TIP_GAP` off the end, so the stroke stops on the true tangent and the
+/// arrow points straight along it (a test pins the sum, because this module must not import the
+/// canvas).
+const ARRIVAL_STUB: f32 = 13.;
+/// How far a curve bulges out of a card when it has to turn back (a U-turn).
+const LOOP_REACH: f32 = 24.;
+
+/// How the edges are drawn: geometry only. Color, dash, width, and emphasis ignore it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum EdgeShape {
+    /// Right-angle lanes with rounded corners, and a curve between neighbouring columns.
+    #[default]
+    Elbows,
+    /// One smooth curve per edge.
+    Curves,
+}
+
+impl EdgeShape {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Elbows => "Elbows",
+            Self::Curves => "Curves",
+        }
+    }
+}
 
 /// An edge as a polyline in graph units, with its corners rounded.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,12 +103,13 @@ pub(crate) fn route_edges(
     graph: &TopologyGraph,
     rects: &[GraphRect],
     bands: &[GraphRect],
+    shape: EdgeShape,
 ) -> Vec<EdgeRoute> {
     let space = Space::new(rects, bands);
     graph
         .edges
         .iter()
-        .map(|edge| route_edge(edge.from, edge.to, edge.relation, &space))
+        .map(|edge| route_edge(edge.from, edge.to, edge.relation, shape, &space))
         .collect()
 }
 
@@ -119,6 +150,29 @@ impl<'a> Space<'a> {
         }
     }
 
+    /// Whether no card but `from` and `to` meets the box of `points`, grown by `CLEARANCE`.
+    fn box_is_clear(&self, points: &[GraphPoint], from: usize, to: usize) -> bool {
+        let fold = |value: fn(&GraphPoint) -> f32, init: f32, pick: fn(f32, f32) -> f32| {
+            points.iter().map(value).fold(init, pick)
+        };
+        let (left, right) = (
+            fold(|p| p.x, f32::INFINITY, f32::min),
+            fold(|p| p.x, f32::NEG_INFINITY, f32::max),
+        );
+        let (top, bottom) = (
+            fold(|p| p.y, f32::INFINITY, f32::min),
+            fold(|p| p.y, f32::NEG_INFINITY, f32::max),
+        );
+        self.rects.iter().enumerate().all(|(index, rect)| {
+            index == from
+                || index == to
+                || rect.right() + CLEARANCE < left
+                || rect.origin.x - CLEARANCE > right
+                || rect.bottom() + CLEARANCE < top
+                || rect.origin.y - CLEARANCE > bottom
+        })
+    }
+
     /// Whether a polyline keeps clear of every card but `from` and `to`.
     fn is_free(&self, points: &[GraphPoint], from: usize, to: usize) -> bool {
         points.windows(2).all(|pair| {
@@ -138,19 +192,36 @@ impl<'a> Space<'a> {
     }
 }
 
-fn route_edge(from: usize, to: usize, relation: Relation, space: &Space) -> EdgeRoute {
+fn route_edge(
+    from: usize,
+    to: usize,
+    relation: Relation,
+    shape: EdgeShape,
+    space: &Space,
+) -> EdgeRoute {
     let (source, target) = (space.rects[from], space.rects[to]);
-    // A mount runs from the side lane to its config card; an access edge is a curve only along a
-    // row of the access layer, and takes the lanes when it comes down from a workload.
-    let is_level = (source.origin.y - target.origin.y).abs() < 1.;
-    let wants_curve = match relation {
-        Relation::Mounts => false,
-        Relation::Access => is_level,
-        Relation::Owns | Relation::RoutesTo => true,
+    let wants_curve = match shape {
+        EdgeShape::Curves => true,
+        EdgeShape::Elbows => {
+            // A mount runs from the side lane to its config card; an access edge is a curve only
+            // along a row of the access layer, and takes the lanes when it comes down from a
+            // workload.
+            let is_level = (source.origin.y - target.origin.y).abs() < 1.;
+            let has_room = target.origin.x >= source.right() + DIRECT_GAP;
+            has_room
+                && match relation {
+                    Relation::Mounts => false,
+                    Relation::Access => is_level,
+                    Relation::Owns | Relation::RoutesTo => true,
+                }
+        }
     };
-    if wants_curve && target.origin.x >= source.right() + DIRECT_GAP {
-        let curve = between_columns(source, target);
-        if space.is_free(&curve, from, to) {
+    if wants_curve {
+        let ports = ports(source, target);
+        let curve = bezier(ports);
+        let [start, c1, c2, base] = controls(ports);
+        let is_clear = space.box_is_clear(&[start, c1, c2, base, ports.end], from, to);
+        if is_clear || space.is_free(&curve, from, to) {
             return EdgeRoute { points: curve };
         }
     }
@@ -159,22 +230,76 @@ fn route_edge(from: usize, to: usize, relation: Relation, space: &Space) -> Edge
     }
 }
 
-/// The curve from the right side of `source` to the left side of `target`, flat where it leaves
-/// and where it arrives.
-fn between_columns(source: GraphRect, target: GraphRect) -> Vec<GraphPoint> {
-    let (start, end) = (side_port(source, true), side_port(target, false));
-    let half = (end.x - start.x) / 2.;
-    let corner = |x: f32, y: f32| point(x, y);
-    flatten_cubic(
-        corner(start.x, start.y),
-        corner(start.x + half, start.y),
-        corner(end.x - half, end.y),
-        corner(end.x, end.y),
-        FLATTEN_TOLERANCE,
-    )
-    .into_iter()
-    .map(graph_point)
-    .collect()
+/// Where an edge leaves and enters its cards, and the direction it travels in at both: `out` and
+/// `into` are +1 for rightward and -1 for leftward.
+#[derive(Clone, Copy)]
+struct Ports {
+    start: GraphPoint,
+    out: f32,
+    end: GraphPoint,
+    into: f32,
+}
+
+/// The ports of the lane route: out of the side that faces the target, into the side that faces
+/// the lane.
+fn ports(source: GraphRect, target: GraphRect) -> Ports {
+    let leaves_right = target.center().x >= source.center().x;
+    let start = side_port(source, leaves_right);
+    let out = if leaves_right { 1. } else { -1. };
+    let lane_out = start.x + out * LANE_OFFSET;
+    let arrives_right = lane_out > target.center().x;
+    Ports {
+        start,
+        out,
+        end: side_port(target, arrives_right),
+        into: if arrives_right { -1. } else { 1. },
+    }
+}
+
+/// The four points of the cubic: the start, two control points, and the base of the stub.
+fn controls(ports: Ports) -> [GraphPoint; 4] {
+    let Ports {
+        start,
+        out,
+        end,
+        into,
+    } = ports;
+    let base = GraphPoint {
+        x: end.x - into * ARRIVAL_STUB,
+        y: end.y,
+    };
+    let forward = (base.x - start.x) * out;
+    // The floor is for a U-turn only: on a forward S it would run the curve backwards when the
+    // gap is small after a drag.
+    let reach = if out == into && forward > 0. {
+        forward / 2.
+    } else {
+        LOOP_REACH
+    };
+    let shifted = |from: GraphPoint, dx: f32| GraphPoint {
+        x: from.x + dx,
+        y: from.y,
+    };
+    [
+        start,
+        shifted(start, out * reach),
+        shifted(base, -into * reach),
+        base,
+    ]
+}
+
+/// One cubic with horizontal tangents (React Flow's default edge) from the start to the base of
+/// a straight stub into the end.
+fn bezier(ports: Ports) -> Vec<GraphPoint> {
+    let [start, c1, c2, base] = controls(ports);
+    let at = |p: GraphPoint| point(p.x, p.y);
+    let mut points: Vec<GraphPoint> =
+        flatten_cubic(at(start), at(c1), at(c2), at(base), FLATTEN_TOLERANCE)
+            .into_iter()
+            .map(graph_point)
+            .collect();
+    points.push(ports.end);
+    points
 }
 
 /// The middle of the right or left side of a card.
@@ -193,16 +318,14 @@ fn side_port(rect: GraphRect, is_right: bool) -> GraphPoint {
 /// corridor, and into the side of `to` that faces that lane.
 fn along_lanes(from: usize, to: usize, space: &Space) -> Vec<GraphPoint> {
     let (source, target) = (space.rects[from], space.rects[to]);
-    let leaves_right = target.center().x >= source.center().x;
-    let start = side_port(source, leaves_right);
-    let lane_out = start.x
-        + if leaves_right {
-            LANE_OFFSET
-        } else {
-            -LANE_OFFSET
-        };
-    let arrives_right = lane_out > target.center().x;
-    let end = side_port(target, arrives_right);
+    let Ports {
+        start,
+        out,
+        end,
+        into,
+    } = ports(source, target);
+    let lane_out = start.x + out * LANE_OFFSET;
+    let arrives_right = into < 0.;
     let lane_in = end.x
         + if arrives_right {
             LANE_OFFSET

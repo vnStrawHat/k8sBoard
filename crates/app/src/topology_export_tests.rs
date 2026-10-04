@@ -4,6 +4,7 @@ use super::*;
 use crate::topology_fixtures::{Fixture, Ref, crashing_pod, ingress, pod, pod_with, shop_access};
 use crate::topology_graph::GroupBy;
 use crate::topology_layout::layout;
+use crate::topology_route::EdgeShape;
 
 fn style() -> SvgStyle {
     SvgStyle {
@@ -27,7 +28,14 @@ fn style() -> SvgStyle {
 
 fn svg_of(fixture: &Fixture, title: &str) -> (TopologyGraph, String) {
     let graph = fixture.graph();
-    let arranged = layout(&graph, GroupBy::Components, 1., &Default::default(), None);
+    let arranged = layout(
+        &graph,
+        GroupBy::Components,
+        1.,
+        &Default::default(),
+        None,
+        EdgeShape::Elbows,
+    );
     let svg = topology_svg(&graph, &arranged, title, &style());
     (graph, svg)
 }
@@ -56,10 +64,10 @@ fn svg_escapes_names() {
     assert!(!svg.contains("a&b<c>"));
 }
 
-/// The `<path>` elements of the edges: the ones that carry an arrow.
+/// The `<path>` elements of the edges.
 fn edge_paths(svg: &str) -> Vec<&str> {
     svg.lines()
-        .filter(|line| line.contains("marker-end"))
+        .filter(|line| line.contains("class=\"edge\""))
         .collect()
 }
 
@@ -187,27 +195,31 @@ fn svg_edge_into_a_ghost_keeps_its_tone() {
 }
 
 #[test]
-fn svg_has_a_marker_for_every_edge_color() {
-    let (_, svg) = svg_of(&all_relations(), "t");
-    for name in ["owns", "routes", "mounts", "warn", "bad"] {
-        assert!(
-            svg.contains(&format!("<marker id=\"arrow-{name}\"")),
-            "{name}"
-        );
-    }
-    // The marker is the arrow of the screen, and every edge points at one of them.
-    let arrow = format!(
-        "d=\"M0,0 L{ARROW_LENGTH},{ARROW_HALF_WIDTH} L0,{} z\"",
-        2. * ARROW_HALF_WIDTH
+fn svg_arrows_are_polygons_at_the_route_end() {
+    let (graph, svg) = svg_of(&all_relations(), "t");
+    assert!(!svg.contains("<marker") && !svg.contains("marker-end"));
+    // The legend draws one arrow per relation.
+    assert_eq!(
+        svg.matches("<polygon ").count(),
+        graph.edges.len() + LEGEND.len()
     );
-    assert!(svg.contains(&arrow), "{arrow}");
-    for name in ["owns", "routes", "mounts"] {
+    let arranged = layout(
+        &graph,
+        GroupBy::Components,
+        1.,
+        &Default::default(),
+        None,
+        EdgeShape::Elbows,
+    );
+    for route in &arranged.routes {
+        let points = arrow_head(route, ARROW_LENGTH, ARROW_HALF_WIDTH)
+            .map(|at| format!("{} {}", at.x, at.y))
+            .join(" ");
         assert!(
-            svg.contains(&format!("marker-end=\"url(#arrow-{name})\"")),
-            "{name}"
+            svg.contains(&format!("<polygon points=\"{points}\"")),
+            "{points}"
         );
     }
-    assert!(!svg.contains("arrow-muted") && !svg.contains("arrow-accent"));
 }
 
 #[test]
@@ -232,7 +244,14 @@ fn svg_bands_are_filled() {
         .with_service("web", &["app=web"])
         .with_pod(pod("web-1", &["app=web"], None));
     let graph = fixture.graph();
-    let arranged = layout(&graph, GroupBy::App, 1., &Default::default(), None);
+    let arranged = layout(
+        &graph,
+        GroupBy::App,
+        1.,
+        &Default::default(),
+        None,
+        EdgeShape::Elbows,
+    );
     assert!(arranged.bands.iter().any(|band| band.title.is_some()));
     let svg = topology_svg(&graph, &arranged, "t", &style());
     let style = style();

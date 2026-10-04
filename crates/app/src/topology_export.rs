@@ -175,7 +175,6 @@ pub(crate) fn topology_svg(
          viewBox=\"{left} {top} {width} {height}\" font-family=\"{}, monospace\">\n",
         escape(&style.font_family)
     );
-    svg.push_str(&markers(style));
     svg.push_str(&format!(
         "<rect x=\"{left}\" y=\"{top}\" width=\"{width}\" height=\"{height}\" fill=\"{}\"/>\n",
         style.background
@@ -220,31 +219,6 @@ pub(crate) fn topology_svg(
     svg
 }
 
-/// The arrow heads, one per edge color: owns, routes, mounts, access, warn, bad. Each is the triangle of
-/// the arrow on screen, with its tip on the target.
-fn markers(style: &SvgStyle) -> String {
-    let (length, half) = (ARROW_LENGTH, ARROW_HALF_WIDTH);
-    let mut defs = String::from("<defs>\n");
-    for (name, color) in [
-        ("owns", style.relation(Relation::Owns)),
-        ("routes", style.relation(Relation::RoutesTo)),
-        ("mounts", style.relation(Relation::Mounts)),
-        ("access", style.relation(Relation::Access)),
-        ("warn", &style.warn),
-        ("bad", &style.bad),
-    ] {
-        defs.push_str(&format!(
-            "<marker id=\"arrow-{name}\" markerUnits=\"userSpaceOnUse\" markerWidth=\"{length}\" \
-             markerHeight=\"{}\" refX=\"0\" refY=\"{half}\" orient=\"auto\">\
-             <path d=\"M0,0 L{length},{half} L0,{} z\" fill=\"{color}\"/></marker>\n",
-            half * 2.,
-            half * 2.
-        ));
-    }
-    defs.push_str("</defs>\n");
-    defs
-}
-
 fn band_svg(title: &str, rect: GraphRect, style: &SvgStyle) -> String {
     // The pill of the title, as wide as its text.
     let pill_x = rect.origin.x + TITLE_PILL_LEFT;
@@ -283,19 +257,17 @@ fn edge_svg(
 ) -> String {
     let stroke = relation_stroke(relation);
     // A tone is drawn at full strength; a relation color at the rest alpha of the screen.
-    let (color, marker, opacity) = match (graph.ghost_tone(to), relation) {
-        (Some(StatusTone::Bad), _) => (style.bad.as_str(), "bad", 1.),
-        (Some(_), _) => (style.warn.as_str(), "warn", 1.),
-        (None, Relation::Owns) => (style.relation(relation), "owns", EDGE_REST_ALPHA),
-        (None, Relation::RoutesTo) => (style.relation(relation), "routes", EDGE_REST_ALPHA),
-        (None, Relation::Mounts) => (style.relation(relation), "mounts", EDGE_REST_ALPHA),
-        (None, Relation::Access) => (style.relation(relation), "access", EDGE_REST_ALPHA),
+    let (color, opacity) = match graph.ghost_tone(to) {
+        Some(StatusTone::Bad) => (style.bad.as_str(), 1.),
+        Some(_) => (style.warn.as_str(), 1.),
+        None => (style.relation(relation), EDGE_REST_ALPHA),
     };
     let dash = stroke
         .dash
         .map(|(on, off)| format!(" stroke-dasharray=\"{on} {off}\""))
         .unwrap_or_default();
-    // The line stops at the base of the arrow, as on screen; the marker draws the arrow from there.
+    // The line stops at the base of the arrow, as on screen. The arrow is a polygon on the end
+    // tangent, not a marker: a marker follows the last flattened segment, which tilts on a curve.
     let mut points: Vec<_> = route.points.iter().map(|at| point(at.x, at.y)).collect();
     trim_end(&mut points, ARROW_LENGTH + ARROW_TIP_GAP);
     let mut path = String::new();
@@ -303,9 +275,13 @@ fn edge_svg(
         let command = if index == 0 { 'M' } else { 'L' };
         path.push_str(&format!("{command}{} {} ", at.x, at.y));
     }
+    let head = arrow_head(route, ARROW_LENGTH, ARROW_HALF_WIDTH)
+        .map(|at| format!("{} {}", at.x, at.y))
+        .join(" ");
     format!(
-        "<path d=\"{}\" fill=\"none\" stroke=\"{color}\" stroke-opacity=\"{opacity}\" \
-         stroke-width=\"{}\"{dash} marker-end=\"url(#arrow-{marker})\"/>\n",
+        "<path class=\"edge\" d=\"{}\" fill=\"none\" stroke=\"{color}\" \
+         stroke-opacity=\"{opacity}\" stroke-width=\"{}\"{dash}/>\n\
+         <polygon points=\"{head}\" fill=\"{color}\"/>\n",
         path.trim_end(),
         stroke.width
     )
