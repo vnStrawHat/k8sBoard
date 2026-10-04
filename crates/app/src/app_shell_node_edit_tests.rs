@@ -714,16 +714,14 @@ fn the_bulk_editor_opens_with_one_empty_row_and_no_review(cx: &mut TestAppContex
 fn the_bulk_editor_names_a_problem_before_review(cx: &mut TestAppContext) {
     let t = node_test("bulk-labels-problem", cx);
     let editor = t.bulk_over_three(cx);
-    editor.read_with(cx, |editor, cx| {
-        assert_eq!(editor.current_problem(cx), None)
-    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.current_problem(), None));
     t.t.fixture.with_window(cx, |window, cx| {
         editor.update(cx, |editor, cx| editor.push_row(window, cx));
     });
     t.fill(&editor, ("kubernetes.io/os", "linux", false), cx);
-    editor.read_with(cx, |editor, cx| {
+    editor.read_with(cx, |editor, _| {
         assert_eq!(
-            editor.current_problem(cx).as_deref(),
+            editor.current_problem().as_deref(),
             Some("kubernetes.io/os is set by the kubelet")
         );
     });
@@ -810,9 +808,9 @@ fn a_review_that_finds_nothing_to_do_says_why_and_sends_nothing(cx: &mut TestApp
     t.open_bulk(&t.t.stg, 2, cx);
     let editor = t.bulk_editor(cx).expect("the bulk editor opened");
     t.fill(&editor, ("team", "infra", false), cx);
-    editor.read_with(cx, |editor, cx| {
+    editor.read_with(cx, |editor, _| {
         assert_eq!(
-            editor.current_problem(cx).as_deref(),
+            editor.current_problem().as_deref(),
             Some("All selected nodes already have these labels")
         );
     });
@@ -893,4 +891,27 @@ fn a_held_enter_never_confirms_the_bulk_labels(cx: &mut TestAppContext) {
         window.dispatch_event(fresh.to_platform_input(), cx);
     });
     t.t.wait_for("the commits", cx, |_| writes(&t.t.stg_api).len() == 4);
+}
+
+#[gpui_kit::test]
+fn removing_a_bulk_row_drops_its_subscriptions_and_refreshes_the_problem(cx: &mut TestAppContext) {
+    let t = node_test("bulk-labels-remove-row", cx);
+    let editor = t.bulk_over_three(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.push_row(window, cx));
+    });
+    t.fill(&editor, ("kubernetes.io/os", "linux", false), cx);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.row_subscription_count(), 6, "three per row");
+        assert!(editor.current_problem().is_some());
+    });
+    // The row with the kubelet key goes: its subscriptions go with it and the problem clears.
+    t.t.fixture.with_window(cx, |_, cx| {
+        editor.update(cx, |editor, cx| editor.drop_row(1, cx));
+    });
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.row_count(), 1);
+        assert_eq!(editor.row_subscription_count(), 3);
+        assert_eq!(editor.current_problem(), None);
+    });
 }

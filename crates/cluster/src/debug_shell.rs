@@ -1,9 +1,10 @@
 //! Attaching a shell to a container k8sBoard created (spec 0037): a debug container or a node shell
 //! pod, or (0040) to a running container of a pod's own spec that has a terminal. `debug_shell` is
-//! the only attach call site: the `debug_shell.rs` row of the 0030 allow-list. It needs an `AttachPermit`, refuses to start while the connection's `WritePolicy` is
-//! `Blocked`, and waits for the container to run with a 1 s GET poll (no watch) before it attaches.
-//! It calls no `spawn`: the stream owns the `AttachedProcess`, so dropping the stream ends the
-//! attach, and `stdinOnce` ends the shell with it.
+//! the only attach call site: the `debug_shell.rs` row of the 0030 allow-list. It needs an
+//! `AttachPermit`, refuses to start while the connection's `WritePolicy` is `Blocked`, and waits for
+//! the container to run with a 1 s GET poll (no watch) before it attaches. It calls no `spawn`: the
+//! stream owns the `AttachedProcess`, so dropping the stream ends the attach, and `stdinOnce` ends
+//! the shell with it.
 //!
 //! Nothing here logs, traces, or keeps session bytes (C1); the poll keeps fixed reason words and
 //! drops the server's messages, because a registry error can quote credentials.

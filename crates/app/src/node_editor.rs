@@ -839,6 +839,8 @@ struct BulkRow {
     key: Entity<InputState>,
     operation: Entity<SelectState<Vec<String>>>,
     value: Entity<InputState>,
+    /// Dropped with the row, so a removed row stops calling back.
+    _subscriptions: Vec<Subscription>,
 }
 
 impl BulkRow {
@@ -857,7 +859,9 @@ pub(crate) struct BulkLabelEditor {
     shell: WeakEntity<AppShell>,
     cluster: ClusterRef,
     rows: Vec<BulkRow>,
-    _subscriptions: Vec<Subscription>,
+    /// Why the batch of the changes now would not go; worked out when a row changes, not on every
+    /// draw (it reads every ticked node).
+    problem: Option<SharedString>,
 }
 
 impl BulkLabelEditor {
@@ -871,7 +875,7 @@ impl BulkLabelEditor {
             shell,
             cluster,
             rows: Vec::new(),
-            _subscriptions: Vec::new(),
+            problem: None,
         };
         editor.add_row(window, cx);
         editor
@@ -887,35 +891,41 @@ impl BulkLabelEditor {
         let operation =
             cx.new(|cx| SelectState::new(choices, Some(IndexPath::default().row(0)), window, cx));
         // The problem line and the Remove layout follow what is typed and picked.
-        for input in [&key, &value] {
-            self._subscriptions.push(cx.subscribe_in(
-                input,
-                window,
-                |_, _, event: &InputEvent, _, cx| {
+        let mut subscriptions: Vec<Subscription> = [&key, &value]
+            .into_iter()
+            .map(|input| {
+                cx.subscribe_in(input, window, |editor, _, event: &InputEvent, _, cx| {
                     if matches!(event, InputEvent::Change) {
-                        cx.notify();
+                        editor.refresh_problem(cx);
                     }
-                },
-            ));
-        }
-        self._subscriptions.push(cx.subscribe_in(
+                })
+            })
+            .collect();
+        subscriptions.push(cx.subscribe_in(
             &operation,
             window,
-            |_, _, _: &SelectEvent<Vec<String>>, _, cx| cx.notify(),
+            |editor, _, _: &SelectEvent<Vec<String>>, _, cx| editor.refresh_problem(cx),
         ));
         self.rows.push(BulkRow {
             key,
             operation,
             value,
+            _subscriptions: subscriptions,
         });
-        cx.notify();
+        self.refresh_problem(cx);
     }
 
     fn remove_row(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.rows.len() {
             self.rows.remove(index);
-            cx.notify();
+            self.refresh_problem(cx);
         }
+    }
+
+    /// Works the problem line out again, and draws.
+    fn refresh_problem(&mut self, cx: &mut Context<Self>) {
+        self.problem = self.compute_problem(cx);
+        cx.notify();
     }
 
     /// The changes the non-empty rows describe now. A row with nothing in it is not a change.
@@ -939,7 +949,7 @@ impl BulkLabelEditor {
 
     /// Why the batch of the changes now would not go, over the nodes ticked now. `None` while there
     /// is no change to judge or no ticked node to judge it over (the fixture has none).
-    fn problem(&self, cx: &App) -> Option<SharedString> {
+    fn compute_problem(&self, cx: &App) -> Option<SharedString> {
         let changes = self.changes(cx);
         if changes.is_empty() {
             return None;
@@ -1044,7 +1054,8 @@ impl Render for BulkLabelEditor {
             .child(self.render_rows(cx))
             .child(h_flex().child(add))
             .children(
-                self.problem(cx)
+                self.problem
+                    .clone()
                     .map(|text| div().text_sm().text_color(danger).child(text)),
             )
             .child(
@@ -1347,6 +1358,8 @@ impl BulkLabelEditor {
             let index = if is_remove { BULK_REMOVE } else { 0 };
             select.set_selected_index(Some(IndexPath::default().row(index)), window, cx);
         });
+        // Setting a value from code raises no change event, as typing does.
+        self.refresh_problem(cx);
     }
 
     pub(crate) fn push_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1357,8 +1370,17 @@ impl BulkLabelEditor {
         self.changes(cx)
     }
 
-    pub(crate) fn current_problem(&self, cx: &App) -> Option<SharedString> {
-        self.problem(cx)
+    pub(crate) fn current_problem(&self) -> Option<SharedString> {
+        self.problem.clone()
+    }
+
+    /// How many subscriptions the rows hold: one set per row still in the editor.
+    pub(crate) fn row_subscription_count(&self) -> usize {
+        self.rows.iter().map(|row| row._subscriptions.len()).sum()
+    }
+
+    pub(crate) fn drop_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.remove_row(index, cx);
     }
 
     pub(crate) fn press_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -47,6 +47,8 @@ struct DrainServer {
     is_delete_denied: bool,
     /// Pod names a direct delete answers 429 for (the API's own rate limiting, not a budget).
     throttled: Vec<String>,
+    /// The delete right holds in a namespace only: a review without one is denied.
+    is_delete_namespaced_only: bool,
 }
 
 fn status(code: u16, reason: &str, message: &str, details: Value) -> (u16, String) {
@@ -142,7 +144,10 @@ fn server(
         }
         if request.method == "POST" && request.path.ends_with("/selfsubjectaccessreviews") {
             let asks_delete = request.body.contains("\"verb\":\"delete\"");
-            let is_allowed = !(asks_delete && state.is_delete_denied);
+            let is_cluster_wide = !request.body.contains("\"namespace\"");
+            let is_denied =
+                state.is_delete_denied || (state.is_delete_namespaced_only && is_cluster_wide);
+            let is_allowed = !(asks_delete && is_denied);
             let review = json!({
                 "apiVersion": "authorization.k8s.io/v1", "kind": "SelfSubjectAccessReview",
                 "metadata": {}, "spec": {}, "status": {"allowed": is_allowed},
@@ -1966,4 +1971,68 @@ fn a_held_enter_never_confirms_a_skip_pdbs_drain(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(t.tab(cx).is_none(), "a held Enter starts nothing");
     assert!(delete_requests(&t.t.stg_api, false).is_empty());
+}
+
+#[gpui_kit::test]
+fn skip_pdbs_needs_the_cluster_wide_delete_right(cx: &mut TestAppContext) {
+    // A drain deletes the pods of every namespace on the node, so a right that holds in one
+    // namespace only does not enable the option.
+    let t = drain_test(
+        "skip-cluster-wide",
+        |server| {
+            three_pods(server);
+            server.is_delete_namespaced_only = true;
+        },
+        cx,
+    );
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    t.t.wait_for("the review", cx, |cx| {
+        t.skip_reason(&dialog, cx).as_deref() == Some("Not permitted: delete pods")
+    });
+    t.tick_skip(&dialog, true, cx);
+    assert!(dialog.read_with(cx, |dialog, _| {
+        dialog.options().budgets == crate::drain_plan::BudgetPolicy::Respect
+    }));
+    // The review the dialog asked had no namespace on it.
+    let reviews: Vec<RecordedRequest> =
+        t.t.stg_api
+            .requests()
+            .into_iter()
+            .filter(|request| {
+                request.path.ends_with("/selfsubjectaccessreviews")
+                    && request.body.contains("\"verb\":\"delete\"")
+                    && request.body.contains("\"resource\":\"pods\"")
+            })
+            .collect();
+    assert!(!reviews.is_empty(), "the dialog asked about deleting pods");
+    assert!(
+        reviews
+            .iter()
+            .all(|request| !request.body.contains("\"namespace\"")),
+        "cluster-wide, no namespace"
+    );
+    // Allowed cluster-wide: on.
+    let allowed = drain_test("skip-cluster-wide-ok", three_pods, cx);
+    let dialog = allowed.open_and_settle(&allowed.t.stg, &["node-b"], cx);
+    allowed.wait_for_skip(&dialog, cx);
+}
+
+#[gpui_kit::test]
+fn unticking_skip_pdbs_restores_the_grace_the_user_chose(cx: &mut TestAppContext) {
+    use cluster::GracePeriod;
+    let t = drain_test("skip-grace", three_pods, cx);
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    t.wait_for_skip(&dialog, cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.pick_grace(2, window, cx));
+    });
+    let grace = |cx: &mut TestAppContext| dialog.read_with(cx, |dialog, _| dialog.options().grace);
+    assert_eq!(grace(cx), GracePeriod::Seconds(30));
+    t.tick_skip(&dialog, true, cx);
+    assert_eq!(grace(cx), GracePeriod::PodDefault);
+    t.t.wait_for("the dry-runs", cx, |cx| {
+        dialog.read_with(cx, |dialog, cx| dialog.skip_blocked_by(cx).is_none())
+    });
+    t.tick_skip(&dialog, false, cx);
+    assert_eq!(grace(cx), GracePeriod::Seconds(30));
 }

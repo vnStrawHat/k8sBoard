@@ -13,8 +13,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cluster::{
-    ClusterConnection, ClusterError, DrainPod, GracePeriod, NodeScheduling, ObjectKind,
-    PodDisruptionBudgetSummary,
+    AccessCheck, ClusterConnection, ClusterError, DrainPod, GracePeriod, NamespaceScope,
+    NodeScheduling, ObjectKind, PodDisruptionBudgetSummary,
 };
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -54,7 +54,7 @@ use crate::resource_actions::{
     ActionAvailability, ResourceAction, action_availability, action_label, unavailable_text,
 };
 use crate::status_tone::{StatusTone, tone_color};
-use crate::write_guard::{ActionRisk, ConfirmMode, DialogConfirm, confirm_step};
+use crate::write_guard::{ActionRisk, ConfirmMode, DialogConfirm, WriteLock, confirm_step};
 
 const DIALOG_WIDTH: f32 = 600.;
 /// Every preview row is this tall, so the scroll area cuts between rows, never through one.
@@ -94,6 +94,16 @@ struct NodeData {
     pods: PodsLoad,
 }
 
+/// The cluster-wide `delete pods` review behind Skip PodDisruptionBudgets: a drain deletes the pods
+/// of every namespace on the node, so a right in the session's namespaces alone is not enough.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeleteReview {
+    Checking,
+    Allowed,
+    Denied,
+    Unknown,
+}
+
 /// What the dry-runs have answered so far.
 #[derive(Default)]
 struct Checks {
@@ -129,6 +139,9 @@ pub(crate) struct DrainDialog {
     nodes: Vec<NodeData>,
     budgets: BudgetsLoad,
     options: DrainOptions,
+    delete_review: DeleteReview,
+    /// The grace the user chose before ticking Skip, put back when it is unticked.
+    grace_before_skip: Option<GracePeriod>,
     plans: Vec<NodePlan>,
     checks: Checks,
     typed: Entity<InputState>,
@@ -144,6 +157,7 @@ pub(crate) struct DrainDialog {
     needs_focus: bool,
     focus_handle: FocusHandle,
     _load: Option<Task<()>>,
+    _delete_review: Option<Task<()>>,
     _checks: Option<Task<()>>,
     /// `--screen drain-dialog`: a fixed picture that never loads, checks, or sends.
     #[cfg(feature = "screenshot")]
@@ -196,7 +210,7 @@ impl DrainDialog {
             .unwrap_or(0);
         let timeout_items = TIMEOUT_CHOICES.into_iter().map(timeout_text).collect();
         let timeout = select_of(timeout_items, timeout_index, window, cx);
-        let mut subscriptions = vec![
+        let subscriptions = vec![
             // The match line follows the field as it is typed.
             cx.subscribe_in(&typed, window, |_, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -214,10 +228,6 @@ impl DrainDialog {
                 |dialog, _, _: &SelectEvent<Vec<String>>, _, cx| dialog.timeout_picked(cx),
             ),
         ];
-        // The lazy `delete pods` review answers on the shell's session, not on the dialog.
-        if let Some(shell) = shell.upgrade() {
-            subscriptions.push(cx.observe(&shell, |_, _, cx| cx.notify()));
-        }
         let nodes: Vec<NodeData> = target
             .nodes
             .iter()
@@ -234,6 +244,23 @@ impl DrainDialog {
                 .insert(node.name.clone(), CordonCheck::Waiting);
         }
         let names: Vec<String> = nodes.iter().map(|node| node.name.clone()).collect();
+        // One review, cluster-wide (no namespace on the SelfSubjectAccessReview), asked now.
+        let reviewing = load.as_ref().map(|(connection, runtime)| {
+            let (connection, runtime) = (connection.clone(), runtime.clone());
+            cx.spawn_in(window, async move |this, cx| {
+                let read = runtime
+                    .spawn(async move {
+                        connection
+                            .review_access_for(
+                                &[AccessCheck::Delete(ObjectKind::Pod)],
+                                NamespaceScope::All,
+                            )
+                            .await
+                    })
+                    .await;
+                let _ = this.update(cx, |dialog, cx| dialog.reviewed(read, cx));
+            })
+        });
         let loading = load.map(|(connection, runtime)| {
             cx.spawn_in(window, async move |this, cx| {
                 let read = runtime
@@ -259,6 +286,13 @@ impl DrainDialog {
             nodes,
             budgets: BudgetsLoad::Loading,
             options,
+            // The picture has no cluster to ask.
+            delete_review: if reviewing.is_some() {
+                DeleteReview::Checking
+            } else {
+                DeleteReview::Allowed
+            },
+            grace_before_skip: None,
             plans: Vec::new(),
             checks,
             typed,
@@ -272,11 +306,28 @@ impl DrainDialog {
             needs_focus: true,
             focus_handle: cx.focus_handle(),
             _load: loading,
+            _delete_review: reviewing,
             _checks: None,
             #[cfg(feature = "screenshot")]
             is_fixture: false,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The cluster-wide `delete pods` review answered.
+    fn reviewed(
+        &mut self,
+        read: Result<Result<cluster::AccessReport, ClusterError>, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        self.delete_review = match read {
+            Ok(Ok(report)) if report.is_allowed(AccessCheck::Delete(ObjectKind::Pod)) => {
+                DeleteReview::Allowed
+            }
+            Ok(Ok(_)) => DeleteReview::Denied,
+            Ok(Err(_)) | Err(_) => DeleteReview::Unknown,
+        };
+        cx.notify();
     }
 
     /// The pods and budgets came back: each failure is shown where it belongs, and the dry-runs
@@ -529,19 +580,29 @@ impl DrainDialog {
         cx.notify();
     }
 
-    /// Whether Skip PodDisruptionBudgets may be ticked: the lazy `delete pods` review of the
-    /// cluster allows it (the check Delete pod reads). The dialog's own gate stays the eviction's.
+    /// Whether Skip PodDisruptionBudgets may be ticked: the cluster is open and unlocked, and the
+    /// cluster-wide `delete pods` review allows it, because a drain deletes the pods of every
+    /// namespace on the node. The dialog's own gate stays the eviction's.
     fn skip_gate(&self, cx: &App) -> ActionAvailability {
+        #[cfg(feature = "screenshot")]
+        if self.is_fixture {
+            return ActionAvailability::Enabled;
+        }
         let shell = self.shell.upgrade();
         let guard = shell
             .as_ref()
             .and_then(|shell| shell.read(cx).guard_for(&self.cluster, cx));
-        match guard {
-            Some(guard) => action_availability(ResourceAction::Delete(ObjectKind::Pod), &guard),
-            None => ActionAvailability::Disabled {
-                reason: "the cluster is not open".into(),
-            },
-        }
+        let reason: SharedString = match (guard, self.delete_review) {
+            (None, _) => "the cluster is not open".into(),
+            (Some(guard), _) if guard.lock == WriteLock::Locked => {
+                format!("{} is read-only", guard.display_name()).into()
+            }
+            (Some(_), DeleteReview::Checking) => "Checking permissions…".into(),
+            (Some(_), DeleteReview::Unknown) => "Permissions could not be checked".into(),
+            (Some(_), DeleteReview::Denied) => "Not permitted: delete pods".into(),
+            (Some(_), DeleteReview::Allowed) => return ActionAvailability::Enabled,
+        };
+        ActionAvailability::Disabled { reason }
     }
 
     /// Why the Skip checkbox cannot change now, `None` when it can: the gate says no, a dry-run is
@@ -581,16 +642,29 @@ impl DrainDialog {
         if is_on {
             // The name to type appears: the field takes the focus.
             self.typed.update(cx, |input, cx| input.focus(window, cx));
+            self.grace_before_skip = Some(self.options.grace);
             self.options.grace = GracePeriod::PodDefault;
-            self.grace.update(cx, |select, cx| {
-                select.set_selected_index(Some(IndexPath::default().row(0)), window, cx);
-            });
+            self.show_grace(window, cx);
+        } else if let Some(grace) = self.grace_before_skip.take() {
+            self.options.grace = grace;
+            self.show_grace(window, cx);
         }
         self.checks.pods.clear();
         self.checks.elapsed = Duration::ZERO;
         self.replan();
         self.pump(cx);
         cx.notify();
+    }
+
+    /// Makes the grace select show `self.options.grace`.
+    fn show_grace(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let row = grace_choices()
+            .iter()
+            .position(|choice| *choice == self.options.grace)
+            .unwrap_or(0);
+        self.grace.update(cx, |select, cx| {
+            select.set_selected_index(Some(IndexPath::default().row(row)), window, cx);
+        });
     }
 
     fn drain_check(&self, uid: &str) -> PodCheck {
@@ -1418,15 +1492,6 @@ impl AppShell {
             };
             (target, live.connection().clone())
         };
-        // The Skip checkbox reads the lazy `delete pods` review, which the Nodes screen does not ask
-        // for. The session keeps the kind of the shown screen for a reconnect.
-        let screen_kind = self.screen.access_kind();
-        if let Some(session) = self.slot_session(cluster) {
-            session.update(cx, |session, cx| {
-                session.request_kind_access(Some(ObjectKind::Pod), cx);
-                session.request_kind_access(screen_kind, cx);
-            });
-        }
         let runtime = cx.global::<ClusterRuntime>().clone();
         let shell = cx.weak_entity();
         let dialog =
