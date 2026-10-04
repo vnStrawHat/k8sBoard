@@ -103,6 +103,7 @@ async fn query_range_path_and_query() {
 fn endpoints_are_fixed() {
     assert_eq!(MetricsEndpoint::Query.path(), "query");
     assert_eq!(MetricsEndpoint::QueryRange.path(), "query_range");
+    assert_eq!(MetricsEndpoint::MetricNames.path(), "label/__name__/values");
 }
 
 #[tokio::test]
@@ -474,4 +475,45 @@ fn one_line_drops_direction_and_format_characters() {
     let text = "a\u{200B}b\u{200F}c\u{202A}d\u{202E}e\u{2060}f\u{2069}g\u{FEFF}h\u{061C}i";
     assert_eq!(one_line(Some(text)), "abcdefghi");
     assert_eq!(one_line(None), "");
+}
+
+#[tokio::test]
+async fn metric_names_ask_for_the_last_hour() {
+    let body = json!({"status": "success", "data": ["up", "istio_requests_total", "up"]});
+    let body = body.to_string();
+    let (connection, api) = FakeApi::connection(WritePolicy::Blocked, move |_| (200, body.clone()));
+    let before = jiff::Timestamp::now().as_second();
+    let names = connection.metric_names(&source()).await.expect("answered");
+    let after = jiff::Timestamp::now().as_second();
+    assert_eq!(
+        names.into_iter().collect::<Vec<_>>(),
+        ["istio_requests_total", "up"]
+    );
+    let requests = api.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(
+        requests[0].path,
+        "/api/v1/namespaces/monitoring/services/http:vmselect-x:8481/proxy/select/0/prometheus/api/v1/label/__name__/values"
+    );
+    let pairs = decoded_query(&requests[0]);
+    let start: i64 = pairs["start"].parse().expect("a number");
+    let end: i64 = pairs["end"].parse().expect("a number");
+    assert!((before..=after).contains(&end));
+    assert_eq!(end - start, 3600);
+    assert_eq!(pairs["timeout"], "15s");
+    assert!(!pairs.contains_key("query"));
+}
+
+#[tokio::test]
+async fn metric_names_reject_a_non_list() {
+    let body = json!({"status": "success", "data": {"resultType": "vector", "result": []}});
+    let body = body.to_string();
+    let (connection, _api) =
+        FakeApi::connection(WritePolicy::Blocked, move |_| (200, body.clone()));
+    let error = connection
+        .metric_names(&source())
+        .await
+        .expect_err("not names");
+    assert_eq!(error, undecodable());
 }

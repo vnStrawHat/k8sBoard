@@ -333,3 +333,39 @@ fn step_table_point_counts_match_the_spec() {
         .collect();
     assert_eq!(counts, [61, 241, 361, 289, 337, 361]);
 }
+
+#[test]
+fn traffic_queries_per_source() {
+    let istio = traffic_queries(TrafficSourceKind::Istio, "payments").expect("valid");
+    let by = "sum by (source_workload,source_workload_namespace,destination_service_name)";
+    let matchers = r#"reporter="destination",destination_service_namespace="payments""#;
+    assert_eq!(
+        istio.first,
+        format!("{by} (rate(istio_requests_total{{{matchers}}}[300s]))")
+    );
+    assert_eq!(
+        istio.second,
+        format!(r#"{by} (rate(istio_requests_total{{{matchers},response_code=~"5.."}}[300s]))"#)
+    );
+    let bytes = traffic_queries(TrafficSourceKind::PodNetwork, "payments").expect("valid");
+    assert_eq!(
+        bytes.first,
+        r#"sum by (pod) (rate(container_network_receive_bytes_total{namespace="payments",interface!="lo"}[300s]))"#
+    );
+    assert_eq!(
+        bytes.second,
+        r#"sum by (pod) (rate(container_network_transmit_bytes_total{namespace="payments",interface!="lo"}[300s]))"#
+    );
+}
+
+#[test]
+fn traffic_namespace_must_be_a_dns_label() {
+    for kind in [TrafficSourceKind::Istio, TrafficSourceKind::PodNetwork] {
+        for bad in ["", "a\"b", "A", "a.b", "a}b", "-a"] {
+            assert!(
+                matches!(traffic_queries(kind, bad), Err(QueryError::InvalidName)),
+                "{kind:?} {bad:?}"
+            );
+        }
+    }
+}

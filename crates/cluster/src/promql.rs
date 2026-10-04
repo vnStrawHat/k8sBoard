@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use crate::dns_name::{is_dns_label, is_dns_subdomain};
+use crate::traffic_metrics::TrafficSourceKind;
 
 /// Most points one range query may ask for.
 pub const MAX_POINTS: u64 = 400;
@@ -23,6 +24,9 @@ const POD_INTERFACES: &str = r#"interface!="lo""#;
 const ALL_CONTAINERS: &str = r#"container!="",container!="POD""#;
 /// The labels that hold a node's name on its root-cgroup series, tried in this order.
 const NODE_LABELS: [&str; 2] = ["node", "kubernetes_io_hostname"];
+
+/// The `rate` window of the traffic queries (spec 0049 decision 3).
+const TRAFFIC_WINDOW: &str = "300s";
 
 /// Range spans with their steps, all within `MAX_POINTS` points.
 pub const RANGE_STEPS: [(Duration, Duration); 6] = [
@@ -268,6 +272,48 @@ fn network_query(direction: &str, selector: &Selector, window: &str) -> String {
         "sum(rate(container_network_{direction}_bytes_total{{{},{interfaces}}}[{window}]))",
         selector.pods
     )
+}
+
+/// The two instant queries of one traffic source: the totals and the errors (Istio) or the
+/// transmit rate (pod network).
+pub(crate) struct TrafficQueries {
+    pub(crate) first: String,
+    pub(crate) second: String,
+}
+
+/// The queries of `kind` for `namespace` (spec 0049): both are `sum by (...) (rate(...[300s]))`.
+pub(crate) fn traffic_queries(
+    kind: TrafficSourceKind,
+    namespace: &str,
+) -> Result<TrafficQueries, QueryError> {
+    check(is_dns_label(namespace))?;
+    let namespace = string_literal(namespace);
+    Ok(match kind {
+        TrafficSourceKind::Istio => {
+            let matchers =
+                format!(r#"reporter="destination",destination_service_namespace={namespace}"#);
+            let by = "source_workload,source_workload_namespace,destination_service_name";
+            TrafficQueries {
+                first: rate_by(by, "istio_requests_total", &matchers),
+                second: rate_by(
+                    by,
+                    "istio_requests_total",
+                    &format!(r#"{matchers},response_code=~"5..""#),
+                ),
+            }
+        }
+        TrafficSourceKind::PodNetwork => {
+            let matchers = format!("namespace={namespace},{POD_INTERFACES}");
+            TrafficQueries {
+                first: rate_by("pod", "container_network_receive_bytes_total", &matchers),
+                second: rate_by("pod", "container_network_transmit_bytes_total", &matchers),
+            }
+        }
+    })
+}
+
+fn rate_by(by: &str, metric: &str, matchers: &str) -> String {
+    format!("sum by ({by}) (rate({metric}{{{matchers}}}[{TRAFFIC_WINDOW}]))")
 }
 
 enum Level {

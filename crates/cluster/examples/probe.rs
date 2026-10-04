@@ -8,7 +8,7 @@
 //! With `--metrics-source` it checks a Prometheus-compatible source through the API server service proxy, prints the spec 0048 live facts (counts, rates, and booleans, never a body), and stops.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis] [--metrics-source <ns>/<svc>:<port>[<prefix>]]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis] [--metrics-source <ns>/<svc>:<port>[<prefix>] [--traffic <namespace>]]
 //! ```
 
 use std::collections::BTreeMap;
@@ -26,14 +26,14 @@ use cluster::{
     MetricsSource, MetricsSourceFields, NamespaceCoverage, NamespaceScope, NodeKubeletStats,
     NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary, ObjectKind, ObjectRef, PodMetrics,
     PodStatus, PodSummary, ProxyChoice, RANGE_STEPS, RangeSpec, RequestTarget, ResourceRequest,
-    SecretDetails, SecretSummary, StatusReason, Termination, UsageMetric, UsageSeries, UsageTarget,
-    ValueVisibility, WatchUpdate,
+    SecretDetails, SecretSummary, StatusReason, Termination, TrafficMetricSource, TrafficRate,
+    UsageMetric, UsageSeries, UsageTarget, ValueVisibility, WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 use tokio::sync::watch;
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis] [--metrics-source <ns>/<svc>:<port>[<prefix>]]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis] [--metrics-source <ns>/<svc>:<port>[<prefix>] [--traffic <namespace>]]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -53,6 +53,7 @@ struct Args {
     crds: bool,
     analysis: bool,
     metrics_source: Option<MetricsSourceFields>,
+    traffic: Option<String>,
 }
 
 enum Parsed {
@@ -75,6 +76,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut crds = false;
     let mut analysis = false;
     let mut metrics_source = None;
+    let mut traffic = None;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
         match flag.as_str() {
@@ -90,6 +92,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
             "--metrics-source" => {
                 metrics_source = Some(parse_metrics_source(&value("--metrics-source")?)?)
             }
+            "--traffic" => traffic = Some(value("--traffic")?),
             "--namespace" => namespace = Some(value("--namespace")?),
             "--watch-seconds" => {
                 watch_seconds = Some(parse_seconds(
@@ -131,6 +134,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         crds,
         analysis,
         metrics_source,
+        traffic,
     })))
 }
 
@@ -1376,7 +1380,7 @@ async fn run(args: &Args) -> io::Result<bool> {
         };
 
     if let Some(fields) = &args.metrics_source {
-        metrics_source_for(&mut probe, &connection, fields).await?;
+        metrics_source_for(&mut probe, &connection, fields, args.traffic.as_deref()).await?;
         return Ok(probe.all_succeeded);
     }
 
@@ -1930,6 +1934,67 @@ fn recent_mean(series: &UsageSeries, count: usize) -> Option<f64> {
     (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
 }
 
+/// The spec 0049 live check: the names list, the detected traffic kinds, and one line per kind
+/// (rows, cut flag, milliseconds), through the typed API only. Counts and names, never a body.
+async fn traffic_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    source: &MetricsSource,
+    namespace: &str,
+) -> io::Result<()> {
+    let started = std::time::Instant::now();
+    let names = match connection.metric_names(source).await {
+        Ok(names) => names,
+        Err(error) => {
+            probe.all_succeeded = false;
+            return writeln!(probe.out, "  metric names failed: {error}");
+        }
+    };
+    let detected = TrafficMetricSource::detect(&names);
+    let labels: Vec<&str> = detected.iter().map(|found| found.kind().label()).collect();
+    writeln!(
+        probe.out,
+        "  names: {} in the last hour, {} ms; traffic sources: {}",
+        names.len(),
+        started.elapsed().as_millis(),
+        if labels.is_empty() {
+            NONE_TEXT.to_owned()
+        } else {
+            labels.join(", ")
+        }
+    )?;
+    for found in detected {
+        let started = std::time::Instant::now();
+        match connection.traffic_rates(source, found, namespace).await {
+            Ok(reading) => writeln!(
+                probe.out,
+                "  {}: {} rows, {} with traffic, cut {}, {} ms",
+                found.kind().label(),
+                reading.rates.len(),
+                reading
+                    .rates
+                    .iter()
+                    .filter(|rate| has_traffic(rate))
+                    .count(),
+                reading.was_cut,
+                started.elapsed().as_millis()
+            )?,
+            Err(error) => {
+                probe.all_succeeded = false;
+                writeln!(probe.out, "  {} failed: {error}", found.kind().label())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn has_traffic(rate: &TrafficRate) -> bool {
+    [rate.requests, rate.receive, rate.transmit]
+        .into_iter()
+        .flatten()
+        .any(|value| value > 0.0)
+}
+
 /// The step 2 live check of spec 0048: the check query, one 30d node CPU `query_range`, and the three
 /// facts of promql.md, through the typed `usage_range` only. Prints names, counts, booleans, and
 /// rates, never an answer body.
@@ -1937,6 +2002,7 @@ async fn metrics_source_for(
     probe: &mut Probe,
     connection: &ClusterConnection,
     fields: &MetricsSourceFields,
+    traffic: Option<&str>,
 ) -> io::Result<()> {
     probe.section("metrics source")?;
     let source = match MetricsSource::new(fields) {
@@ -1958,6 +2024,9 @@ async fn metrics_source_for(
             probe.all_succeeded = false;
             return writeln!(probe.out, "  check failed: {error}");
         }
+    }
+    if let Some(namespace) = traffic {
+        return traffic_for(probe, connection, &source, namespace).await;
     }
     let nodes: Vec<String> = match connection.list_nodes().await {
         Ok(nodes) => nodes

@@ -1,18 +1,23 @@
 //! Read-only queries of a Prometheus-compatible source through the API server service proxy
-//! (spec 0048). Only `query` and `query_range` are ever requested, as a `GET` whose path comes from
-//! a validated `MetricsSource` and whose query text comes from `promql.rs`. A body or a header is
-//! never traced or echoed.
+//! (specs 0048, 0049). Only `query`, `query_range`, and `label/__name__/values` are ever
+//! requested, as a `GET` whose path comes from a validated `MetricsSource` and whose query text
+//! comes from `promql.rs`. A body or a header is never traced or echoed.
 
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use http_body_util::{BodyExt, LengthLimitError, Limited};
 use kube::client::Body;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use tokio::time::Instant;
 
 use crate::connection::ClusterConnection;
 use crate::metrics_source::MetricsSource;
 use crate::promql::{QueryError, RangeSpec, UsageMetric, UsageTarget, usage_query};
+
+/// How far back `metric_names` looks, so a metric that stopped being scraped drops out.
+const NAMES_LOOKBACK_SECONDS: i64 = 60 * 60;
 
 /// Head and body together, for a success and an error answer alike.
 const METRICS_DEADLINE: Duration = Duration::from_secs(20);
@@ -28,6 +33,7 @@ const CPU_SERIES_QUERY: &str = "count(container_cpu_usage_seconds_total)";
 enum MetricsEndpoint {
     Query,
     QueryRange,
+    MetricNames,
 }
 
 impl MetricsEndpoint {
@@ -35,6 +41,7 @@ impl MetricsEndpoint {
         match self {
             Self::Query => "query",
             Self::QueryRange => "query_range",
+            Self::MetricNames => "label/__name__/values",
         }
     }
 }
@@ -93,22 +100,47 @@ impl ClusterConnection {
         let now = jiff::Timestamp::now().as_second().to_string();
         let query = query_string(&[("query", CPU_SERIES_QUERY), ("time", &now)]);
         let data = self
-            .metrics_data(source, MetricsEndpoint::Query, &query)
+            .metrics_data::<Data>(source, MetricsEndpoint::Query, &query)
             .await?;
         let latency = started.elapsed();
-        if data.result_type != "vector" {
-            return Err(undecodable());
-        }
-        let cpu_series = data
-            .result
+        let cpu_series = instant_rows(&data)?
             .first()
-            .and_then(|series| series.value.as_ref())
-            .and_then(Sample::finite)
-            .map_or(0, |count| count.max(0.0).round() as u64);
+            .map_or(0, |row| row.value.max(0.0).round() as u64);
         Ok(SourceCheck {
             latency,
             cpu_series,
         })
+    }
+
+    /// The metric names the source saw in the last hour: `start` = now − 1 h, `end` = now.
+    pub async fn metric_names(
+        &self,
+        source: &MetricsSource,
+    ) -> Result<BTreeSet<String>, MetricsError> {
+        let end = jiff::Timestamp::now().as_second();
+        let query = query_string(&[
+            ("start", &(end - NAMES_LOOKBACK_SECONDS).to_string()),
+            ("end", &end.to_string()),
+        ]);
+        let names = self
+            .metrics_data::<Vec<String>>(source, MetricsEndpoint::MetricNames, &query)
+            .await?;
+        Ok(names.into_iter().collect())
+    }
+
+    /// One instant query at now. Not `pub`: the query text is built in this crate only
+    /// (`promql.rs`), never by the app.
+    pub(crate) async fn instant_query(
+        &self,
+        source: &MetricsSource,
+        promql: &str,
+    ) -> Result<Vec<InstantRow>, MetricsError> {
+        let now = jiff::Timestamp::now().as_second().to_string();
+        let query = query_string(&[("query", promql), ("time", &now)]);
+        let data = self
+            .metrics_data::<Data>(source, MetricsEndpoint::Query, &query)
+            .await?;
+        instant_rows(&data)
     }
 
     /// One metric of one target over `range`, summed per step.
@@ -130,7 +162,7 @@ impl ClusterConnection {
             ("step", &range.step().as_secs().to_string()),
         ]);
         let data = self
-            .metrics_data(source, MetricsEndpoint::QueryRange, &query)
+            .metrics_data::<Data>(source, MetricsEndpoint::QueryRange, &query)
             .await?;
         if data.result_type != "matrix" {
             return Err(undecodable());
@@ -139,20 +171,20 @@ impl ClusterConnection {
     }
 
     /// One request, its answer decoded; traces endpoint, status, size, series, and time only.
-    async fn metrics_data(
+    async fn metrics_data<T: Counted>(
         &self,
         source: &MetricsSource,
         endpoint: MetricsEndpoint,
         query: &str,
-    ) -> Result<Data, MetricsError> {
+    ) -> Result<T, MetricsError> {
         let started = Instant::now();
         let answer = self.metrics_get(source, endpoint, query).await?;
-        let decoded = decode(&answer);
+        let decoded = decode::<T>(&answer);
         tracing::debug!(
             endpoint = endpoint.path(),
             status = answer.status.as_u16(),
             bytes = answer.body.len(),
-            series = decoded.as_ref().map_or(0, |data| data.result.len()),
+            series = decoded.as_ref().map_or(0, Counted::count),
             ms = started.elapsed().as_millis() as u64,
             "read metrics"
         );
@@ -233,7 +265,7 @@ fn query_string(pairs: &[(&str, &str)]) -> String {
 
 /// What the API server and the backend both send; unknown fields are ignored.
 #[derive(Deserialize)]
-struct Envelope {
+struct Envelope<T> {
     /// `Status` for an API server error object.
     kind: Option<String>,
     /// The backend's `success` or `error`, or the API server's `Failure`.
@@ -242,7 +274,7 @@ struct Envelope {
     message: Option<String>,
     /// The backend's text.
     error: Option<String>,
-    data: Option<Data>,
+    data: Option<T>,
 }
 
 #[derive(Deserialize)]
@@ -254,10 +286,54 @@ struct Data {
 
 #[derive(Deserialize)]
 struct Series {
+    /// The series labels.
+    #[serde(default)]
+    metric: HashMap<String, String>,
     /// A vector sample.
     value: Option<Sample>,
     /// A matrix: samples in time order.
     values: Option<Vec<Sample>>,
+}
+
+/// How many series (or names) an answer holds, for the debug trace.
+trait Counted: DeserializeOwned {
+    fn count(&self) -> usize;
+}
+
+impl Counted for Data {
+    fn count(&self) -> usize {
+        self.result.len()
+    }
+}
+
+impl Counted for Vec<String> {
+    fn count(&self) -> usize {
+        self.len()
+    }
+}
+
+/// One series of an instant vector: its labels and its finite value.
+pub(crate) struct InstantRow {
+    pub(crate) labels: HashMap<String, String>,
+    pub(crate) value: f64,
+}
+
+/// The rows of a `vector` answer; a `NaN`, an infinity, or a sample-less series drops its row.
+fn instant_rows(data: &Data) -> Result<Vec<InstantRow>, MetricsError> {
+    if data.result_type != "vector" {
+        return Err(undecodable());
+    }
+    Ok(data
+        .result
+        .iter()
+        .filter_map(|series| {
+            let value = series.value.as_ref()?.finite()?;
+            Some(InstantRow {
+                labels: series.metric.clone(),
+                value,
+            })
+        })
+        .collect())
 }
 
 /// `[unix seconds, "value"]`.
@@ -273,9 +349,9 @@ impl Sample {
 
 /// Maps status and body to the data or to the error; the body is never echoed, only the
 /// message fields of a `Status` and of a backend error, cut to one short line.
-fn decode(answer: &MetricsAnswer) -> Result<Data, MetricsError> {
+fn decode<T: DeserializeOwned>(answer: &MetricsAnswer) -> Result<T, MetricsError> {
     let code = answer.status.as_u16();
-    let envelope: Option<Envelope> = serde_json::from_slice(&answer.body).ok();
+    let envelope: Option<Envelope<T>> = serde_json::from_slice(&answer.body).ok();
     if let Some(envelope) = &envelope {
         if envelope.kind.as_deref() == Some("Status") {
             let message = one_line(envelope.message.as_deref());
@@ -331,7 +407,7 @@ fn one_line(text: Option<&str>) -> String {
         .collect()
 }
 
-fn is_invisible_format(ch: char) -> bool {
+pub(crate) fn is_invisible_format(ch: char) -> bool {
     matches!(
         ch,
         '\u{061C}'
