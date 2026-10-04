@@ -47,6 +47,7 @@
 | list pods, nodes, namespaces, the 10 workload/network/config kinds, events | allowed | 0006–0012 fully verifiable |
 | `get pods/log` | allowed | 0019 verifiable |
 | `metrics.k8s.io/v1beta1` | available | 0010 verifiable |
+| Prometheus-compatible source (`get services/proxy`, `list services`) | allowed (probe 2026-10-04): VictoriaMetrics cluster in `monitoring`, reads at `services/http:vmselect-vm-victoria-metrics-k8s-stack:8481/proxy/select/0/prometheus/api/v1/`, 2,210 metric names, retention 60 d; no mesh, ingress, or span-metric series | 0048 verifiable live; 0049 live only for the pod-bytes fallback, edge sources by fixtures |
 | `get nodes/proxy` | allowed | verified by the 0011 probe (summary 39 to 175 KB per node, cAdvisor about 0.9 MB); node logs 0019 |
 | `list secrets` | allowed | real Secret values reachable: C1 landed with 0016 (0016 probe: 42 secrets, 8 TLS all parsed, earliest leaf not-after 2026-12-26); Helm data readable if releases exist; 0017 probe: 0 Helm releases on UAT (no `helm.sh/release.v1` Secret), so Releases is verified by fixture tests and the empty state |
 | `create pods/exec`, `create pods/portforward`, `create pods`, `delete pods`, `patch pods/ephemeralcontainers`, `create pods/attach` | denied (`get pods/attach` allowed; recorded by the 0037 live check) | 0035–0037 render disabled; live checks need another cluster |

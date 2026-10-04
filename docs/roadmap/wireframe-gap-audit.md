@@ -42,7 +42,9 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W10 header | Format button | Done (0031: `format_yaml`) | `yaml_edit.rs`, `object_edit.rs` `format_yaml` | — |
 | W10 header | Hide managedFields toggle | won't do (decision): Apply strips `managedFields`, so showing them would invite edits that are thrown away | 0041 non-goals, 0031 decision 12; `object_yaml.rs` | — |
 | W11 | RBAC layer chip | done (0022 steps 4a, 4b: working chip, off by default; account → binding → role access row, three access checks) | [as-built-rbac](../specs/0022-topology/as-built-rbac.md) | — |
-| W11 n1, W4c n1, W2 | Traffic mode; Prometheus with 30-day ranges and Settings › Metrics; Extensions; cloud scans | backlog | `topology_view.rs:1077`, `monitor_tab.rs:32`, `clusters_page.rs:737` | L each |
+| W4c n1, W2 nav and form | Prometheus-compatible source (30-day Monitor ranges), Settings › Metrics page, cluster form `Metrics · Source` | specified (0048, approved 2026-10-04): service proxy only, no stored credential; UAT runs VictoriaMetrics cluster (`monitoring/vmselect-…:8481`, `/select/0/prometheus`) | [0048](../specs/0048-prometheus-metrics/README.md); `monitor_tab.rs:31` `SHORT_HISTORY_TIP`, `settings_window.rs` `SettingsPage` | L |
+| W11 n1 | Traffic mode | specified (0049, on 0048, approved 2026-10-04): first cut Istio plus a pod network bytes fallback (the only data on UAT); starts after 0050 | [0049](../specs/0049-topology-traffic/README.md); the disabled Traffic button at `topology_view.rs:1090-1095` | L |
+| W2 nav, W2 Add menu | Extensions page; cloud scans (EKS, GKE, AKS) | backlog | no spec | L each |
 | W10 n1 | YAML LSP with the cluster schema | not planned (C6: server dry-run instead) | cross-cutting C6 | — |
 
 Accepted deviations, not gaps: confirm tiers (user, 2026-10-02), no Follow toggle (0019), row click switches the drawer subject (0028 decision 14), bulk actions in the selection bar instead of header buttons.
@@ -90,4 +92,6 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | 9 | 0022 steps 4a, 4b Topology RBAC layer (done) | ServiceAccount → binding → role edges behind the RBAC chip | amend 0022 | read-only | M |
 | 10 | 0018 step 6 (done) | Certificate Renew now (allow-listed `certificates/status` PUT) | amend 0018 | mutating | S–M |
 | 11 | 0047 Secret and ConfigMap value editing (done) | Edit values with masking and the C1 rules | new; user decision | mutating | M |
-| — | backlog | kubelet logs (≥ 1.30), Prometheus and Metrics page, cloud scans, Traffic, Extensions, LSP, 0038 | user decision | — | L |
+| 12 | 0048 Prometheus-compatible metrics (specified) | Settings › Metrics, cluster form row, 7d and 30d Monitor ranges from the source | new; approved 2026-10-04 | read-only | L |
+| 13 | 0049 Topology Traffic (specified) | Traffic segment on 0048: edge widths, labels, 5xx tones; Istio and pod-bytes fallback; after 0050 | new; approved 2026-10-04 | read-only | M–L |
+| — | backlog | kubelet logs (≥ 1.30), cloud scans, Extensions, LSP, 0038 | user decision | — | L |
