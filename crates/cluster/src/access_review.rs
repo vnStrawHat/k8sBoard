@@ -94,6 +94,9 @@ pub enum AccessCheck {
     PatchStorageClasses,
     /// Drain (0034): `create pods/eviction`, namespaced.
     CreatePodEviction,
+    /// Certificate Renew now (0018 step 6): `update certificates/status` in `cert-manager.io`. In
+    /// `ALL` because a custom kind has no `ObjectKind` for the lazy per-kind checks.
+    UpdateCertificateStatus,
     /// Edit YAML (0031): `update` on the kind's resource. Reviewed lazily per kind, so it is not in
     /// `ALL`.
     Update(ObjectKind),
@@ -116,7 +119,7 @@ struct CheckTarget {
 }
 
 impl AccessCheck {
-    pub const ALL: [AccessCheck; 55] = [
+    pub const ALL: [AccessCheck; 56] = [
         Self::ListPods,
         Self::GetPodLogs,
         Self::GetPodExec,
@@ -172,6 +175,7 @@ impl AccessCheck {
         Self::PatchPersistentVolumeClaims,
         Self::PatchStorageClasses,
         Self::CreatePodEviction,
+        Self::UpdateCertificateStatus,
     ];
 
     fn target(self) -> CheckTarget {
@@ -259,6 +263,13 @@ impl AccessCheck {
             }
             Self::PatchStorageClasses => ("patch", "storage.k8s.io", "storageclasses", None, false),
             Self::CreatePodEviction => ("create", "", "pods", Some("eviction"), true),
+            Self::UpdateCertificateStatus => (
+                "update",
+                "cert-manager.io",
+                "certificates",
+                Some("status"),
+                true,
+            ),
             Self::Update(kind) => {
                 let (group, resource) = kind.resource();
                 ("update", group, resource, None, kind.is_namespaced())
@@ -402,7 +413,7 @@ impl ClusterConnection {
     /// any request error fails the whole call, so a report is never partial.
     ///
     /// For `Several` the cluster-scoped checks run once, then the namespaced checks run
-    /// one namespace at a time (22 x N + 4 requests); a check is allowed only when every
+    /// one namespace at a time (45 x N + 11 requests); a check is allowed only when every
     /// namespace allows it. That gates menus, it never filters data.
     pub async fn review_access(&self, scope: NamespaceScope) -> Result<AccessReport, ClusterError> {
         self.review_access_for(&AccessCheck::ALL, scope).await
@@ -715,9 +726,19 @@ mod tests {
 
     #[test]
     fn all_checks_cover_distinct_permissions() {
-        assert_eq!(AccessCheck::ALL.len(), 55);
+        assert_eq!(AccessCheck::ALL.len(), 56);
         let distinct: HashSet<_> = AccessCheck::ALL.into_iter().collect();
-        assert_eq!(distinct.len(), 55);
+        assert_eq!(distinct.len(), 56);
+    }
+
+    #[test]
+    fn certificate_renewal_check_updates_the_status_subresource() {
+        let attributes = resource_attributes(AccessCheck::UpdateCertificateStatus, Some("shop"));
+        assert_eq!(attributes.verb.as_deref(), Some("update"));
+        assert_eq!(attributes.group.as_deref(), Some("cert-manager.io"));
+        assert_eq!(attributes.resource.as_deref(), Some("certificates"));
+        assert_eq!(attributes.subresource.as_deref(), Some("status"));
+        assert_eq!(attributes.namespace.as_deref(), Some("shop"));
     }
 
     #[test]
@@ -1089,6 +1110,7 @@ mod tests {
                 "patch persistentvolumeclaims",
                 "patch storageclasses",
                 "create pods/eviction",
+                "update certificates/status",
             ]
         );
     }
@@ -1236,7 +1258,7 @@ mod tests {
         assert_eq!(nodes.group.as_deref(), Some("metrics.k8s.io"));
         assert_eq!(nodes.resource.as_deref(), Some("nodes"));
         assert_eq!(nodes.namespace, None);
-        assert_eq!(AccessCheck::ALL.len(), 55);
+        assert_eq!(AccessCheck::ALL.len(), 56);
     }
 
     #[test]

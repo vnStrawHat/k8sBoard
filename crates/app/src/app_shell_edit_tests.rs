@@ -351,11 +351,15 @@ fn gets_of(api: &FakeApi) -> usize {
         .count()
 }
 
+/// The reviews of `update` on deployments: the connect-time review of every check also asks for
+/// `update certificates/status` (0018 step 6), which is not what these tests count.
 fn update_reviews_of(api: &FakeApi) -> usize {
     api.requests()
         .iter()
         .filter(|request| {
-            request.path.ends_with("/selfsubjectaccessreviews") && request.body.contains("update")
+            request.path.ends_with("/selfsubjectaccessreviews")
+                && request.body.contains("update")
+                && request.body.contains("deployments")
         })
         .count()
 }

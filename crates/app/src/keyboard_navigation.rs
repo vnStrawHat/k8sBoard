@@ -22,10 +22,10 @@ use crate::keymap::{
     Attach, CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels,
     EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, LeaveInput, NextContainer,
     NextDockTab, OpenDrawer, OpenShell, PauseRollout, PortForward, PreviousContainer,
-    PreviousDockTab, RerunJob, RestartPod, RestartRollout, RollBack, Scale, SelectFirstRow,
-    SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage, SelectPreviousRow,
-    SetDefaultStorageClass, SuspendCronJob, ToggleDock, ToggleDockZoom, ToggleReadOnly,
-    TriggerCronJob, ViewLogs, ViewYaml,
+    PreviousDockTab, RenewCertificate, RerunJob, RestartPod, RestartRollout, RollBack, Scale,
+    SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage,
+    SelectPreviousRow, SetDefaultStorageClass, SuspendCronJob, ToggleDock, ToggleDockZoom,
+    ToggleReadOnly, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::live_sections::loaded_replica_sets;
 use crate::pod_drawer::{container_display_order, selected_container_index};
@@ -218,6 +218,7 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_row_key::<EditHpaRange>(root, RowAction::EditHpaRange, cx);
     let root = on_row_key::<ExpandClaim>(root, RowAction::ExpandClaim, cx);
     let root = on_row_key::<SetDefaultStorageClass>(root, RowAction::SetDefaultStorageClass, cx);
+    let root = on_row_key::<RenewCertificate>(root, RowAction::RenewCertificate, cx);
     on_row_key::<Delete>(root, RowAction::Delete, cx)
 }
 
@@ -636,6 +637,8 @@ impl AppShell {
             ResourceAction::RollBack => self.show_revisions(&subject, window, cx),
             // The `New` header button has no row and no key (spec 0042).
             ResourceAction::CreateObject(_) => {}
+            // The cursor Certificate, read again from its own cluster (spec 0018 step 6).
+            ResourceAction::RenewCertificate => self.start_renew_certificate(&subject, window, cx),
         }
     }
 }

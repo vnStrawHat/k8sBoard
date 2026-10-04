@@ -131,6 +131,9 @@ pub(crate) mod workspace;
 #[path = "batch_write.rs"]
 pub(crate) mod batch_write;
 
+#[path = "certificate_renewal.rs"]
+pub(crate) mod certificate_renewal;
+
 #[path = "app_shell_view.rs"]
 mod app_shell_view;
 #[path = "debug_open.rs"]
@@ -212,6 +215,10 @@ mod app_shell_create_tests;
 #[cfg(test)]
 #[path = "app_shell_workload_tests.rs"]
 mod app_shell_workload_tests;
+
+#[cfg(test)]
+#[path = "app_shell_certificate_tests.rs"]
+mod app_shell_certificate_tests;
 
 #[cfg(test)]
 #[path = "app_shell_delete_tests.rs"]
@@ -2028,6 +2035,12 @@ impl AppShell {
         #[cfg(feature = "screenshot")]
         if launch == LaunchScreen::DefaultClassConfirm {
             self.open_default_class_fixture(window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::RenewConfirm {
+            self.open_renew_fixture(window, cx);
             self.pending_dialog_launch = None;
             return;
         }

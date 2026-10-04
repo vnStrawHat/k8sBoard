@@ -25,9 +25,9 @@ use crate::dock::{Dock, LogOrigin};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
     Attach, CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels, EditTaints,
-    EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell, PauseRollout, PortForward, RerunJob,
-    RestartPod, RestartRollout, RollBack, Scale, SetDefaultStorageClass, SuspendCronJob,
-    TriggerCronJob, ViewLogs, ViewYaml,
+    EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell, PauseRollout, PortForward,
+    RenewCertificate, RerunJob, RestartPod, RestartRollout, RollBack, Scale,
+    SetDefaultStorageClass, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_join::last_job_owner;
@@ -96,6 +96,9 @@ pub(crate) enum ResourceAction {
     ExpandClaim,
     /// Makes a StorageClass the default and unsets the old default (spec 0032b).
     SetDefaultStorageClass,
+    /// Adds `Issuing=True` to a cert-manager Certificate's status, which makes cert-manager issue
+    /// a new certificate now (spec 0018 step 6).
+    RenewCertificate,
 }
 
 /// A row action as a key, a menu hint, or the palette names it, before the subject is known:
@@ -133,6 +136,7 @@ pub(crate) enum RowAction {
     EditHpaRange,
     ExpandClaim,
     SetDefaultStorageClass,
+    RenewCertificate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -332,6 +336,11 @@ impl ResourceAction {
                 checks: vec![AccessCheck::PatchStorageClasses],
                 is_shipped: true,
             },
+            // A custom kind has no lazy per-kind check: this one is in the session report (0018).
+            Self::RenewCertificate => ActionGate::Mutating {
+                checks: vec![AccessCheck::UpdateCertificateStatus],
+                is_shipped: true,
+            },
             // A drain evicts pods (spec 0034). It cordons first, so the cordon right is needed too.
             Self::Drain => ActionGate::Mutating {
                 checks: vec![AccessCheck::CreatePodEviction, AccessCheck::PatchNodes],
@@ -370,6 +379,7 @@ impl ResourceAction {
             Self::EditHpaRange => RowAction::EditHpaRange,
             Self::ExpandClaim => RowAction::ExpandClaim,
             Self::SetDefaultStorageClass => RowAction::SetDefaultStorageClass,
+            Self::RenewCertificate => RowAction::RenewCertificate,
             Self::CreateObject(_) => return None,
         };
         Some(row)
@@ -407,6 +417,7 @@ impl RowAction {
             Self::EditHpaRange => Box::new(EditHpaRange),
             Self::ExpandClaim => Box::new(ExpandClaim),
             Self::SetDefaultStorageClass => Box::new(SetDefaultStorageClass),
+            Self::RenewCertificate => Box::new(RenewCertificate),
         }
     }
 }
@@ -462,7 +473,8 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::RerunJob
         | ResourceAction::EditHpaRange
         | ResourceAction::ExpandClaim
-        | ResourceAction::SetDefaultStorageClass => ActionRisk::Change,
+        | ResourceAction::SetDefaultStorageClass
+        | ResourceAction::RenewCertificate => ActionRisk::Change,
     }
 }
 
@@ -498,6 +510,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::EditHpaRange => "Edit min / max",
         ResourceAction::ExpandClaim => "Expand",
         ResourceAction::SetDefaultStorageClass => "Set as default",
+        ResourceAction::RenewCertificate => "Renew now",
     }
 }
 
@@ -593,7 +606,8 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         | RowAction::RerunJob
         | RowAction::EditHpaRange
         | RowAction::ExpandClaim
-        | RowAction::SetDefaultStorageClass => match subject {
+        | RowAction::SetDefaultStorageClass
+        | RowAction::RenewCertificate => match subject {
             ResourceKey::Kind { kind, .. } => kind.read_only_actions().iter().find_map(|item| {
                 item.action
                     .filter(|action| action.row_action() == Some(row))
@@ -729,10 +743,31 @@ pub(crate) fn key_availability_of(
         };
     }
     match action_availability(action, guard) {
-        ActionAvailability::Enabled => KeyAvailability::Run(action),
+        ActionAvailability::Enabled => match subject {
+            ResourceKey::Kind { kind, .. } => match kind_block(action, *kind) {
+                Some(reason) => KeyAvailability::Disabled { reason },
+                None => KeyAvailability::Run(action),
+            },
+            ResourceKey::Pod { .. } | ResourceKey::Node { .. } => KeyAvailability::Run(action),
+        },
         ActionAvailability::Disabled { reason } => KeyAvailability::Disabled { reason },
     }
 }
+
+/// Why `kind` cannot take `action` whatever the row: Renew now reaches `cert-manager.io/v1` only,
+/// so a cluster that serves another version of the CRD shows the item off (spec 0018 step 6).
+/// `None` for every other pair. Pure.
+pub(crate) fn kind_block(action: ResourceAction, kind: ResourceKind) -> Option<SharedString> {
+    if action != ResourceAction::RenewCertificate {
+        return None;
+    }
+    let custom = kind.custom()?;
+    (custom.is_cert_manager_certificate() && !custom.is_cert_manager_v1())
+        .then(|| NEEDS_CERT_MANAGER_V1.into())
+}
+
+/// The reason Renew now is off on a Certificate kind served at another version.
+pub(crate) const NEEDS_CERT_MANAGER_V1: &str = "Needs cert-manager.io/v1";
 
 /// The gate, in order: a mutating action whose spec has not shipped, then the permission state,
 /// then the denied permission, then the cluster's read-only lock. A read-only action skips the
@@ -1736,7 +1771,13 @@ pub(crate) fn kind_menu(
     }
     for item in change_actions {
         menu = menu.item(match item.action {
-            Some(action) => row_action_item(item.label, action, guard, &row.object, replica_sets),
+            Some(action) => match (action_availability(action, guard), kind_block(action, kind)) {
+                // The gate first, then the kind: the reason the user can act on first.
+                (ActionAvailability::Enabled, Some(reason)) => {
+                    keyed(disabled_menu_item(item.label, reason), action)
+                }
+                _ => row_action_item(item.label, action, guard, &row.object, replica_sets),
+            },
             None => disabled_menu_item(item.label, NOT_SHIPPED_REASON.into()),
         });
     }

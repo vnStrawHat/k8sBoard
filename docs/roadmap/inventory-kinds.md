@@ -49,7 +49,7 @@ Cells: **T** table, **Dr** drawer Overview. Read-only gaps name the spec; "mut" 
 | Access Control | ClusterRoleBindings | Done (0015) | Done (cluster-admin to everyone or service accounts flag, REVIEW box, Hide system: 0015) | — | — |
 | Helm | Releases | Done (0017) | Done (history, values and diff masked with 30 s Reveal, manifest, notes, UPGRADE FAILED box: 0017) | — | Roll back, Uninstall 0038 (deferred) |
 | Custom Resources | CRDs | Done | Done | Versions, printer columns, schema, Instances, Browse instances Done (0018) | — |
-| Custom Resources | Certificates (any discovered CR) | Done | Done | Done for read (0018): printer columns, Expires built-in, status box (NOT READY, UNAVAILABLE, READY UNKNOWN, or {TYPE} FAILING), Conditions, Status and Spec fields, Go to secret link, masked YAML | Renew 0018 (open item 5) |
+| Custom Resources | Certificates (any discovered CR) | Done | Done | Done for read (0018): printer columns, Expires built-in, status box (NOT READY, UNAVAILABLE, READY UNKNOWN, or {TYPE} FAILING), Conditions, Status and Spec fields, Go to secret link, masked YAML | Renew now Done (0018 step 6; `certificates/status` PUT, `RenewCertificate`) |
 
 ## Notes
 

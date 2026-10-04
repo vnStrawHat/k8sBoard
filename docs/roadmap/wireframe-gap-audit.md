@@ -30,7 +30,7 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W7 ResourceQuotas | `Edit` shown disabled next to a working `Edit YAML` | Done (0039: the placeholder is gone) | `resource_kind.rs` RESOURCE_QUOTAS | — |
 | W7 Namespaces | Quota section LimitRange row | Done (0039) | `limit_range.rs`, `AccessCheck::ListLimitRanges`, `namespace_quota_rows` | — |
 | W7 Namespaces, PDBs | Menu items Show remaining resources, Show selected pods | partial (sections exist) | `namespace_rows.rs`, `policy_rows.rs` | S |
-| W7 Certificates | Renew now | missing | 0018 open item 5 | S–M |
+| W7 Certificates | Renew now | Done (0018 step 6; `Issuing=True` through `certificates/status`, menus, header `Renew`, warnings on ACME rate limits and the private key) | [renew-now](../specs/0018-custom-resources/renew-now.md), `certificate_renewal.rs` | — |
 | W8 n1–2 | Dashed 60 % line while dragging, double-click reset, remembered height | Done (0044) | `workspace.rs` `dock_handle_appearance`, `dock.rs` `initial_dock_height`, `dock.height` | — |
 | W8 | `SYS` marker lines (container restart) | Done (0044; no pod joined or left lines) | `log_tab.rs` `note_restarts`, `log_workload.rs` `restart_marker` | — |
 | W8b | Histogram brush window; Pop out | Done (0044; Pop out for log tabs only, Shell tabs stay in the dock) | `log_volume.rs` brush, `log_window.rs`, `dock.rs` `pop_out` | — |
@@ -87,6 +87,6 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | 7 | 0044 Dock completions (done) | dashed line, double-click reset, saved `dock.height`, `SYS` lines, histogram brush, Pop out | new | local | M |
 | 8 | 0029 step 5 (done) | action × resource results, highlight, `@` namespace carry | amend 0029 | local | M |
 | 9 | 0022 steps 4a, 4b Topology RBAC layer (done) | ServiceAccount → binding → role edges behind the RBAC chip | amend 0022 | read-only | M |
-| 10 | 0018 step 6 | Certificate Renew now (allow-listed `certificates/status` patch) | amend 0018 | mutating | S–M |
+| 10 | 0018 step 6 (done) | Certificate Renew now (allow-listed `certificates/status` PUT) | amend 0018 | mutating | S–M |
 | 11 | 0047 Secret and ConfigMap value editing (done) | Edit values with masking and the C1 rules | new; user decision | mutating | M |
 | — | backlog | kubelet logs (≥ 1.30), Prometheus and Metrics page, cloud scans, Traffic, Extensions, LSP, 0038 | user decision | — | L |

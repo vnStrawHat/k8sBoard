@@ -24,7 +24,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
@@ -215,6 +215,10 @@ pub(crate) enum LaunchScreen {
     /// classes of a fixed Staging cluster open, drawn from fixed data (0032b). Screenshot builds
     /// only; it waits for no cluster and can never send.
     DefaultClassConfirm,
+    /// `--screen renew-confirm` (spec 0018 step 6): the CRDs screen with the Renew now dialog of a fixed
+    /// Certificate of a fixed Production cluster open, drawn from fixed data. Screenshot builds only;
+    /// it waits for no cluster and can never send.
+    RenewConfirm,
     /// `--screen settings|settings-appearance|settings-shortcuts`: the main window opens as usual,
     /// then the Settings window on that page, which is what the screenshot captures.
     Settings(SettingsPage, SettingsSize),
@@ -269,6 +273,7 @@ impl LaunchScreen {
             Self::HpaRangePopover => Screen::Kind(ResourceKind::HorizontalPodAutoscalers),
             Self::ExpandConfirm => Screen::Kind(ResourceKind::PersistentVolumeClaims),
             Self::DefaultClassConfirm => Screen::Kind(ResourceKind::StorageClasses),
+            Self::RenewConfirm => Screen::Kind(ResourceKind::Crds),
             Self::ScalePopover
             | Self::ScaleConfirm
             | Self::RestartBulkConfirm
@@ -488,6 +493,7 @@ impl LaunchScreen {
                 | Self::DeleteBulkConfirm
                 | Self::RestartPodConfirm
                 | Self::EvictConfirm
+                | Self::RenewConfirm
                 | Self::EditYamlDiff
                 | Self::EditYamlHistory
                 | Self::ValuesEdit
@@ -511,6 +517,7 @@ impl LaunchScreen {
                 | Self::AttachConfirm
                 | Self::RestartPodConfirm
                 | Self::EvictConfirm
+                | Self::RenewConfirm
                 | Self::NodeShellConfirm
                 | Self::NodeShellOptions
                 | Self::DebugContainerOptions
@@ -593,6 +600,7 @@ impl LaunchScreen {
             "hpa-range-popover" => Some(Self::HpaRangePopover),
             "expand-confirm" => Some(Self::ExpandConfirm),
             "default-class-confirm" => Some(Self::DefaultClassConfirm),
+            "renew-confirm" => Some(Self::RenewConfirm),
             "pods" => Some(Self::Pods),
             "nodes" => Some(Self::Nodes),
             "issues" => Some(Self::Issues),

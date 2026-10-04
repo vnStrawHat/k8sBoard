@@ -245,7 +245,7 @@ pub(crate) struct PaletteInput<'a> {
 }
 
 /// The row actions in the order of the shortcut sheet.
-const ROW_ACTIONS: [RowAction; 25] = [
+const ROW_ACTIONS: [RowAction; 26] = [
     RowAction::ViewLogs,
     RowAction::ViewYaml,
     RowAction::CopyName,
@@ -271,6 +271,7 @@ const ROW_ACTIONS: [RowAction; 25] = [
     RowAction::EditHpaRange,
     RowAction::ExpandClaim,
     RowAction::SetDefaultStorageClass,
+    RowAction::RenewCertificate,
 ];
 
 /// Everything the palette may show, in source order, from in-memory state only. `scan_loaded_rows`
@@ -510,7 +511,7 @@ fn score_sum(scores: &[Option<u32>], eligible: Option<&[bool]>) -> Option<u32> {
 
 /// The actions a pair can carry, for `labelled_tokens`: the labels of `subject_action` that any
 /// subject can offer, and the two that an object state flips (`state_label`).
-const PAIR_LABEL_ACTIONS: [ResourceAction; 23] = [
+const PAIR_LABEL_ACTIONS: [ResourceAction; 24] = [
     ResourceAction::ViewLogs,
     ResourceAction::OpenShell,
     ResourceAction::PortForward,
@@ -534,6 +535,7 @@ const PAIR_LABEL_ACTIONS: [ResourceAction; 23] = [
     ResourceAction::EditHpaRange,
     ResourceAction::ExpandClaim,
     ResourceAction::SetDefaultStorageClass,
+    ResourceAction::RenewCertificate,
 ];
 const STATE_LABELS: [&str; 2] = ["Resume rollout", "Resume"];
 

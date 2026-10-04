@@ -1109,3 +1109,108 @@ fn the_lock_badge_toggles_the_active_cluster(cx: &mut TestAppContext) {
     t.confirm(cx);
     assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Unlocked);
 }
+
+// ---- 0018 step 6: Certificate Renew now ----
+
+fn certificate_resource() -> cluster::CustomResourceType {
+    cluster::CustomResourceType {
+        group: "cert-manager.io".to_owned(),
+        version: "v1".to_owned(),
+        kind: "Certificate".to_owned(),
+        plural: "certificates".to_owned(),
+        scope: cluster::ResourceScope::Namespaced,
+    }
+}
+
+#[test]
+fn renew_intent_has_warnings_and_audit_field() {
+    use crate::app_shell::certificate_renewal::{
+        PRIVATE_KEY_WARNING, RATE_LIMIT_WARNING, renew_intent,
+    };
+    use crate::audit_log::{AuditOutcome, audit_entry};
+    use crate::workload_actions::WorkloadScope;
+    use crate::write_guard::{ActionRisk, test_guard};
+
+    let cluster = ClusterRef {
+        kubeconfig: PathBuf::from("test.yaml"),
+        context: "prod-eu-1".to_owned(),
+    };
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "prod-eu-1",
+    };
+    let intent = renew_intent(
+        &scope,
+        &certificate_resource(),
+        "shop",
+        "tls",
+        jiff::Timestamp::UNIX_EPOCH,
+    )
+    .expect("a cert-manager v1 certificate");
+    assert_eq!(&*intent.label, "Renew certificate shop/tls");
+    assert_eq!(&*intent.button, "Renew");
+    assert_eq!(intent.action, ResourceAction::RenewCertificate);
+    assert_eq!(intent.risk, ActionRisk::Change);
+    assert_eq!(intent.expected_name, None);
+    let warnings: Vec<&str> = intent.warnings.iter().map(|text| &**text).collect();
+    assert_eq!(warnings, [RATE_LIMIT_WARNING, PRIVATE_KEY_WARNING]);
+    assert!(
+        RATE_LIMIT_WARNING.contains("rate limits"),
+        "{RATE_LIMIT_WARNING}"
+    );
+    assert_eq!(
+        PRIVATE_KEY_WARNING,
+        "The private key changes too unless privateKey.rotationPolicy is Never"
+    );
+
+    let access = allowed();
+    let guard = test_guard(
+        &access,
+        WriteLock::Unlocked,
+        "prod-eu-1",
+        Environment::Production,
+    );
+    let entry = audit_entry(&intent, &guard, AuditOutcome::Applied, None, None);
+    assert_eq!(entry.action, "Renew");
+    let object = entry.object.expect("an object");
+    assert_eq!(
+        (
+            object.kind.as_str(),
+            object.namespace.as_deref(),
+            object.name.as_str()
+        ),
+        ("Certificate", Some("shop"), "tls")
+    );
+    assert_eq!(entry.fields.len(), 1);
+    assert_eq!(entry.fields[0].path, "status.conditions[Issuing]");
+    assert_eq!(
+        entry.fields[0].value.as_deref(),
+        Some("True (ManuallyTriggered)")
+    );
+}
+
+#[test]
+fn renew_intent_refuses_what_the_write_path_refuses() {
+    use crate::app_shell::certificate_renewal::{renew_intent, renewal_notice};
+    use crate::workload_actions::WorkloadScope;
+
+    let cluster = ClusterRef {
+        kubeconfig: PathBuf::from("test.yaml"),
+        context: "dev".to_owned(),
+    };
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "dev",
+    };
+    let now = jiff::Timestamp::UNIX_EPOCH;
+    let mut old = certificate_resource();
+    old.version = "v1alpha2".to_owned();
+    assert!(renew_intent(&scope, &old, "shop", "tls", now).is_none());
+    assert!(renew_intent(&scope, &certificate_resource(), "shop", "Bad/Name", now).is_none());
+    let intent = renew_intent(&scope, &certificate_resource(), "shop", "tls", now)
+        .expect("a valid certificate");
+    assert_eq!(
+        renewal_notice(intent.request.target()),
+        "Renewal requested for shop/tls"
+    );
+}

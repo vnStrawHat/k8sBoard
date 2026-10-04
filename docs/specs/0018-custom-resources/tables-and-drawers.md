@@ -87,7 +87,7 @@ pub(crate) enum RelatedList { /* … */ CustomFields(LiveList<CustomObjectFields
 
 ### Menus
 
-`kind_menu` unchanged: no read-only actions, View YAML, Copy name, `Delete {singular}…` disabled "Read-only mode". W7's cert-manager items (Renew now, Go to secret, Edit YAML) are not rendered; Go to secret is the `secretName` field link.
+`kind_menu` unchanged: no read-only actions, View YAML, Copy name, `Delete {singular}…` disabled "Read-only mode". W7's cert-manager items: Renew now is built in step 6 ([renew-now.md](renew-now.md)); Go to secret is the `secretName` field link; Edit YAML is not rendered.
 
 ## Worked example: cert-manager Certificates (fixture tests and screenshots)
 
@@ -104,4 +104,4 @@ CRD `certificates.cert-manager.io`, served `v1` (storage), Namespaced; printer c
 | Status | `notAfter`, `renewalTime`, `revision 5` |
 | Spec | `dnsNames`, `issuerRef.kind`, `issuerRef.name`, `secretName` → link to Secrets |
 
-Accepted W7 deviations: an extra Status message column (printer column), no meta line (0013 convention), no Renew menu item.
+Accepted W7 deviations: an extra Status message column (printer column), no meta line (0013 convention).

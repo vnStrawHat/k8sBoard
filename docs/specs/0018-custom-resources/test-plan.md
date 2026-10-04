@@ -63,4 +63,10 @@
 - Sidebar: Custom Resources › CRDs plus collapsed API groups; the shown kind's group open; counts muted.
 - CRDs table columns and drawer sections; custom table printer columns, toned Ready cell, Expires tone (Certificates), Name qualified by namespace.
 - Drawer: status box title and tone, Conditions, Status, Spec, links; YAML tab with `<hidden>` where rules apply.
-- **Accepted deviations, not defects**: decision 20 (API-group submenus instead of a flat list), 27 (values, not schema descriptions), 30 (full CRD name plus Group column), the extra Certificates Status column, no meta lines, no Renew/Show remaining resources items, Remaining resources without object names.
+- **Accepted deviations, not defects**: decision 20 (API-group submenus instead of a flat list), 27 (values, not schema descriptions), 30 (full CRD name plus Group column), the extra Certificates Status column, no meta lines, no Show remaining resources item (Renew now is step 6), Remaining resources without object names.
+
+## Step 6 — Certificate Renew now
+
+The tests are listed in [renew-now.md](renew-now.md) (cluster: `certificate_renewal_tests.rs`, `object_write_certificate_tests.rs`; app: `resource_actions_tests.rs`, `app_shell_write_tests.rs`). Added when built: `app_shell_certificate_tests.rs` (key flow over a fake server, held Enter, session change at commit, lock, other CRD version, header state), `launch_options_tests.rs` (`renew-confirm`), `custom_kind_tests.rs` (predicates).
+
+Live (UAT, no cert-manager): `RUST_LOG=cluster=debug` on the screenshot build shows 57 `reviewing access` lines on `--screen overview` (56 of `ALL`, one cluster-wide each, plus the pod-metrics review), no `write finished` line, and no Renew row. Screenshots: `--screen renew-confirm --theme light|dark` (`v101-*`).

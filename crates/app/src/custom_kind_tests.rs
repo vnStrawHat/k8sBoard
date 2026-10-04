@@ -303,7 +303,9 @@ fn custom_kinds_describe_their_resource() {
     assert!(spec.is_namespaced);
     assert!(spec.has_labels);
     assert!(!spec.has_port_forward);
-    assert!(spec.read_only_actions.is_empty());
+    // Only the cert-manager Certificates kind carries a change item (0018 step 6).
+    assert_eq!(spec.read_only_actions.len(), 1);
+    assert_eq!(spec.read_only_actions[0].label, "Renew now");
     assert_eq!(kind.resource().group, "cert-manager.io");
     assert_eq!(
         format!("{kind:?}"),
@@ -388,4 +390,25 @@ fn cache_warns_once_past_the_limit() {
     custom_kinds(&crds, &mut cache);
     assert!(cache.has_warned);
     assert_eq!(cache.kinds.len(), CACHE_WARN_LIMIT + 1);
+}
+
+#[test]
+fn cert_manager_predicates_follow_the_crd_and_its_version() {
+    let v1 = one_kind(&certificates());
+    assert!(v1.is_cert_manager_certificate() && v1.is_cert_manager_v1());
+    let mut old = certificates();
+    old.versions[0].name = "v1alpha2".to_owned();
+    let old = one_kind(&old);
+    assert!(old.is_cert_manager_certificate());
+    assert!(!old.is_cert_manager_v1());
+    let other = crd(
+        "example.org",
+        "Certificate",
+        "certificates",
+        ResourceScope::Namespaced,
+        Vec::new(),
+    );
+    let other = one_kind(&other);
+    assert!(!other.is_cert_manager_certificate() && !other.is_cert_manager_v1());
+    assert!(other.spec().read_only_actions.is_empty());
 }

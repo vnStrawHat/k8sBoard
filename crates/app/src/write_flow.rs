@@ -22,6 +22,7 @@ use gpui_kit::{
 };
 
 use super::AppShell;
+use super::certificate_renewal::renewal_notice;
 use super::values_edit_flow::values_success_notice;
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, AuditReceipt, append_audit, audit_entry,
@@ -1109,6 +1110,9 @@ fn finish_commit(
         }
         Ok(()) if matches!(intent.action, ResourceAction::CreateObject(_)) => {
             create_success_notice(&intent.request)
+        }
+        Ok(()) if intent.action == ResourceAction::RenewCertificate => {
+            renewal_notice(intent.request.target())
         }
         Ok(()) => success_notice(&label, created.as_deref()),
         Err(error) => failure_notice(&label, error),

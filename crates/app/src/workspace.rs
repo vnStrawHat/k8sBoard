@@ -43,7 +43,7 @@ use crate::overview::{
 };
 use crate::pod_drawer::pod_drawer;
 use crate::port_forward_menu::PortButtons;
-use crate::resource_actions::{ActionAvailability, ResourceAction, action_availability};
+use crate::resource_actions::{ActionAvailability, ResourceAction, RowAction, action_availability};
 use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
 use crate::row_selection::selection_bar;
@@ -458,6 +458,11 @@ impl AppShell {
             Screen::Kind(ResourceKind::ServiceAccounts) => {
                 self.render_check_permissions(cx).into_iter().collect()
             }
+            Screen::Kind(kind @ ResourceKind::Custom(custom))
+                if custom.is_cert_manager_certificate() =>
+            {
+                self.render_renew(kind, cx).into_iter().collect()
+            }
             Screen::Kind(ResourceKind::Roles) => self.render_who_can(cx).into_iter().collect(),
             Screen::Kind(ResourceKind::ClusterRoles) => [
                 self.render_who_can(cx),
@@ -589,6 +594,24 @@ impl AppShell {
             ActionAvailability::Enabled => None,
             ActionAvailability::Disabled { reason } => Some(reason),
         }
+    }
+
+    /// Renew on the Certificates header: renews the cursor Certificate through the same gate as the
+    /// key, so the reason it is off is the one the key would give.
+    fn render_renew(&self, kind: ResourceKind, cx: &Context<Self>) -> Option<AnyElement> {
+        let button = Button::new("renew-certificate")
+            .label("Renew")
+            .small()
+            .outline();
+        let button = match self.renew_header_state(kind, cx) {
+            Ok(_) => button
+                .tooltip("Request a new certificate for the selected Certificate now")
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    shell.run_row_key(RowAction::RenewCertificate, window, cx);
+                })),
+            Err(reason) => button.disabled(true).tooltip(reason),
+        };
+        Some(button.into_any_element())
     }
 
     /// Opens the Who can… dialog on the namespace the scope starts in.

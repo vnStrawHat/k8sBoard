@@ -11,6 +11,7 @@ mod access_review;
 mod autoscaler;
 mod cadvisor_text;
 mod certificate;
+mod certificate_renewal;
 mod column_path;
 mod config_map;
 mod config_values;

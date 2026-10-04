@@ -54,7 +54,7 @@ Fixtures are built in code with `serde_json::json!` (cert-manager, Argo CD, Stri
 
 ## Docs (with the last step)
 
-- `docs/roadmap/inventory-kinds.md`: CRDs → Done (Instances, Browse instances); Certificates (any discovered CR) → Done for read (Expires built-in; Renew 0032); Namespaces STUCK → Done (object names not listed).
+- `docs/roadmap/inventory-kinds.md`: CRDs → Done (Instances, Browse instances); Certificates (any discovered CR) → Done for read (Expires built-in; Renew now 0018 step 6); Namespaces STUCK → Done (object names not listed).
 - `docs/roadmap/inventory-shell.md`: N6 → Done (grouped by API group).
 - `docs/roadmap/cross-cutting.md`: C1 note "0018: custom objects shown like ConfigMaps plus key, kind, URL-userinfo, and password-format heuristics; `is_secret_key` shared with 0014; no reveal"; UAT table: CRD probe results.
 - `docs/roadmap/README.md` status row; 0001 `probe-example.md`: `--crds` lines.

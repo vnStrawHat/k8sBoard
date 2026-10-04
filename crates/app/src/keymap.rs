@@ -59,6 +59,8 @@ gpui_kit::actions!(
         EditHpaRange,
         ExpandClaim,
         SetDefaultStorageClass,
+        // Certificate Renew now (0018 step 6), unbound like the other resource edits.
+        RenewCertificate,
         // The value popover and the palette argument (0032): Escape steps back one level.
         CancelValuePopover,
         ScaleCursorRow,

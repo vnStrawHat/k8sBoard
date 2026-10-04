@@ -3712,3 +3712,157 @@ fn new_button_disabled_with_gate_reason() {
         "dev-1 is read-only"
     );
 }
+
+// ---- 0018 step 6: Certificate Renew now ----
+
+/// A Certificates kind served at `version`; its CRD name is the cert-manager one whatever the
+/// version, like a cluster that serves only an old API.
+fn served_certificate(group: &str, version: &str) -> crate::custom_kind::CustomKind {
+    let crd = cluster::CrdSummary {
+        name: format!("certificates.{group}"),
+        group: group.to_owned(),
+        kind: "Certificate".to_owned(),
+        plural: "certificates".to_owned(),
+        singular: "certificate".to_owned(),
+        scope: cluster::ResourceScope::Namespaced,
+        versions: vec![cluster::CrdVersion {
+            name: version.to_owned(),
+            is_served: true,
+            is_storage: true,
+            is_deprecated: false,
+            deprecation_warning: None,
+            printer_columns: Vec::new(),
+            schema: cluster::SchemaOutline::default(),
+        }],
+        state: cluster::CrdState::Established,
+        created_at: None,
+    };
+    crate::custom_kind::custom_kinds(&[crd], &mut crate::custom_kind::CustomKindCache::default())[0]
+}
+
+fn renew_key_availability(
+    kind: crate::custom_kind::CustomKind,
+    access: &AccessState,
+    lock: WriteLock,
+) -> KeyAvailability {
+    let guard = test_guard(access, lock, "dev-1", Environment::Development);
+    key_availability_of(
+        RowAction::RenewCertificate,
+        &kind_key(ResourceKind::Custom(kind)),
+        None,
+        &guard,
+    )
+}
+
+#[test]
+fn renew_item_only_on_cert_manager_kind() {
+    let certificates = ResourceKind::Custom(served_certificate("cert-manager.io", "v1"));
+    let items = certificates.read_only_actions();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label, "Renew now");
+    assert_eq!(items[0].action, Some(ResourceAction::RenewCertificate));
+    assert_eq!(
+        subject_action(RowAction::RenewCertificate, &kind_key(certificates)),
+        Some(ResourceAction::RenewCertificate)
+    );
+    // Argo CD Applications, other custom kinds, and built-in kinds offer none.
+    let applications = ResourceKind::Custom(served_widget("applications.argoproj.io"));
+    assert!(applications.read_only_actions().is_empty());
+    for kind in [
+        applications,
+        ResourceKind::Custom(served_widget("certificates.example.org")),
+        ResourceKind::Deployments,
+    ] {
+        assert_eq!(
+            subject_action(RowAction::RenewCertificate, &kind_key(kind)),
+            None,
+            "{kind:?}"
+        );
+    }
+    assert_eq!(
+        subject_action(RowAction::RenewCertificate, &pod_key()),
+        None
+    );
+}
+
+#[test]
+fn renew_item_disabled_reasons() {
+    let v1 = served_certificate("cert-manager.io", "v1");
+    assert_eq!(
+        disabled_reason(renew_key_availability(v1, &checking(), WriteLock::Unlocked)),
+        "Checking permissions…"
+    );
+    assert_eq!(
+        disabled_reason(renew_key_availability(
+            v1,
+            &known_denying(&[AccessCheck::UpdateCertificateStatus]),
+            WriteLock::Unlocked
+        )),
+        "Not permitted: update certificates/status"
+    );
+    assert_eq!(
+        disabled_reason(renew_key_availability(
+            v1,
+            &known_denying(&[]),
+            WriteLock::Locked
+        )),
+        "dev-1 is read-only"
+    );
+    assert_eq!(
+        renew_key_availability(v1, &known_denying(&[]), WriteLock::Unlocked),
+        KeyAvailability::Run(ResourceAction::RenewCertificate)
+    );
+    // The gate says no first; only an open gate reaches the version.
+    let old = served_certificate("cert-manager.io", "v1alpha2");
+    assert_eq!(
+        disabled_reason(renew_key_availability(
+            old,
+            &known_denying(&[]),
+            WriteLock::Unlocked
+        )),
+        "Needs cert-manager.io/v1"
+    );
+    assert_eq!(
+        disabled_reason(renew_key_availability(
+            old,
+            &known_denying(&[AccessCheck::UpdateCertificateStatus]),
+            WriteLock::Unlocked
+        )),
+        "Not permitted: update certificates/status"
+    );
+}
+
+#[test]
+fn renew_is_a_change_with_a_key_and_a_label() {
+    let action = ResourceAction::RenewCertificate;
+    assert_eq!(action_risk(action), ActionRisk::Change);
+    assert_eq!(action_label(action), "Renew now");
+    assert_eq!(action.row_action(), Some(RowAction::RenewCertificate));
+    assert!(needs_confirm(action));
+    assert!(!is_planned(action));
+    assert!(
+        RowAction::RenewCertificate
+            .key_action()
+            .partial_eq(&crate::keymap::RenewCertificate)
+    );
+}
+
+#[test]
+fn only_the_cert_manager_kind_is_v1_gated() {
+    let v1 = served_certificate("cert-manager.io", "v1");
+    let action = ResourceAction::RenewCertificate;
+    assert_eq!(kind_block(action, ResourceKind::Custom(v1)), None);
+    assert_eq!(
+        kind_block(
+            action,
+            ResourceKind::Custom(served_certificate("cert-manager.io", "v1beta1"))
+        )
+        .as_deref(),
+        Some(NEEDS_CERT_MANAGER_V1)
+    );
+    assert_eq!(kind_block(action, ResourceKind::Deployments), None);
+    assert_eq!(
+        kind_block(ResourceAction::PauseRollout, ResourceKind::Custom(v1)),
+        None
+    );
+}

@@ -1095,6 +1095,17 @@ fn screen_default_class_confirm_parses() {
 }
 
 #[test]
+fn screen_renew_confirm_is_an_offline_dialog_over_crds() {
+    let screen = run_options(&["--screen", "renew-confirm"]).screen;
+    assert_eq!(screen, LaunchScreen::RenewConfirm);
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::Crds));
+    // Drawn from fixed data: it waits for no cluster and selects no row.
+    assert!(screen.opens_dialog() && screen.is_dialog_fixture());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("renew-confirm"));
+}
+
+#[test]
 fn the_stuck_drain_screen_is_an_offline_dock_over_nodes() {
     let parsed = run_options(&["--screen", "drain-progress-stuck"]).screen;
     assert_eq!(parsed, LaunchScreen::DrainProgressStuck);

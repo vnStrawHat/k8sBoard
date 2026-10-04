@@ -18,8 +18,10 @@ use serde_json::{Value, json};
 use tokio::time::error::Elapsed;
 
 use crate::access_review::AccessCheck;
+use crate::certificate_renewal::{RenewRefusal, renewal_status_body};
 use crate::config_values::{ValuesEdit, values_patch};
 use crate::connection::{ClusterConnection, ClusterError, classify_error, run_raw};
+use crate::custom_resource_definition::{CustomResourceType, ResourceScope};
 use crate::debug_pod_bodies::{
     DEBUG_CONTAINER_PREFIX, NODE_SHELL_PREFIX, NodeShellPod, debug_container_patch,
     is_container_name, is_label_value, is_valid_debug_image, node_shell_pod,
@@ -140,6 +142,10 @@ pub enum WriteOperation {
     /// `POST` of a new object of a creatable kind (0042). The draft holds user text: nothing
     /// prints it.
     CreateObject(Box<ObjectDraft>),
+    /// `PUT` of a cert-manager `Certificate`'s `status` adding `Issuing=True` (`cmctl renew`, 0018
+    /// step 6). `requested_at` is the condition time, fixed so the dry-run and the commit send
+    /// one body.
+    RenewCertificate { requested_at: jiff::Timestamp },
 }
 
 impl WriteOperation {
@@ -166,6 +172,7 @@ impl WriteOperation {
             Self::SetNodeLabels { .. } => "SetNodeLabels",
             Self::SetDataValues(_) => "SetDataValues",
             Self::CreateObject(_) => "CreateObject",
+            Self::RenewCertificate { .. } => "RenewCertificate",
         }
     }
 }
@@ -482,6 +489,10 @@ impl WriteRequest {
                 .collect(),
             // Names and paths only: a ConfigMap value never reaches the dialog or the audit line.
             WriteOperation::CreateObject(draft) => draft.changed_fields(),
+            WriteOperation::RenewCertificate { .. } => vec![field(
+                "status.conditions[Issuing]",
+                "True (ManuallyTriggered)".to_owned(),
+            )],
         }
     }
 
@@ -509,7 +520,8 @@ impl WriteRequest {
             | WriteOperation::SetNodeTaints { .. }
             | WriteOperation::SetNodeLabels { .. }
             | WriteOperation::SetDataValues(_)
-            | WriteOperation::CreateObject(_) => true,
+            | WriteOperation::CreateObject(_)
+            | WriteOperation::RenewCertificate { .. } => true,
         }
     }
 }
@@ -562,12 +574,31 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
         | WriteOperation::EvictPod { .. }
         | WriteOperation::SetNodeTaints { .. }
         | WriteOperation::SetNodeLabels { .. }
-        | WriteOperation::SetDataValues(_)) => Some(operation),
+        | WriteOperation::SetDataValues(_)
+        // The target rule (`fitting_access_check`) carries the check: the operation has no value
+        // of its own to validate.
+        | WriteOperation::RenewCertificate { .. }) => Some(operation),
     }
+}
+
+/// The one custom resource a write may reach: cert-manager `Certificate` at `v1`, namespaced.
+fn is_cert_manager_certificate(resource: &CustomResourceType) -> bool {
+    resource.group == "cert-manager.io"
+        && resource.version == "v1"
+        && resource.plural == "certificates"
+        && resource.kind == "Certificate"
+        && resource.scope == ResourceScope::Namespaced
 }
 
 /// The permission `operation` needs on `target`, or `None` when the kind does not fit.
 fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Option<AccessCheck> {
+    // Before `builtin_kind`, which is `None` for every custom target: only Renew now reaches one.
+    if let Some((resource, namespace, _)) = target.as_custom() {
+        return (matches!(operation, WriteOperation::RenewCertificate { .. })
+            && is_cert_manager_certificate(resource)
+            && namespace.is_some())
+        .then_some(AccessCheck::UpdateCertificateStatus);
+    }
     let kind = target.builtin_kind()?;
     Some(match (operation, kind) {
         (
@@ -1111,6 +1142,14 @@ impl ClusterConnection {
                 self.settle(request, mode, sent)?;
                 Ok(Answer::patched())
             }
+            WriteOperation::RenewCertificate { requested_at } => {
+                let object = self
+                    .renewal_status(&request.target, *requested_at, mode)
+                    .await?;
+                let sent = run_raw(api.replace_status(name, &post_params(mode), &object)).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
         }
     }
 
@@ -1163,6 +1202,32 @@ impl ClusterConnection {
                 fields: Vec::new(),
             }),
         }
+    }
+
+    /// The Certificate to `PUT` to `/status` for a Renew now: a fresh GET (a 404 is `NotFound`),
+    /// refused when it is already issuing or being deleted, with the `Issuing` condition added.
+    async fn renewal_status(
+        &self,
+        target: &ObjectRef,
+        requested_at: jiff::Timestamp,
+        mode: WriteMode,
+    ) -> Result<DynamicObject, WriteError> {
+        let fresh = match self.get_object(target, READ_ACTION).await {
+            Err(ClusterError::Api { code: 404, .. }) => return Err(WriteError::NotFound),
+            read => read?,
+        };
+        let body = renewal_status_body(fresh, requested_at).map_err(|refusal| match refusal {
+            RenewRefusal::AlreadyIssuing => WriteError::Invalid {
+                message: "the certificate is already being issued".to_owned(),
+                fields: vec!["status.conditions[Issuing]".to_owned()],
+            },
+            RenewRefusal::Deleting => WriteError::Invalid {
+                message: "the certificate is being deleted".to_owned(),
+                fields: Vec::new(),
+            },
+            RenewRefusal::Unreadable => self.unusable_object(mode),
+        })?;
+        serde_json::from_value(body).map_err(|_| self.unusable_object(mode))
     }
 
     /// The Job to create from a CronJob, and where to create it.
@@ -1558,3 +1623,8 @@ mod object_write_values_tests;
 #[allow(clippy::disallowed_methods)]
 #[path = "object_write_create_tests.rs"]
 mod object_write_create_tests;
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+#[path = "object_write_certificate_tests.rs"]
+mod object_write_certificate_tests;

@@ -9,7 +9,8 @@ use std::ptr;
 
 use cluster::{ColumnType, CrdState, CrdSummary, CustomResourceType, PrinterColumn, ResourceScope};
 
-use crate::resource_kind::{Align, KindApi, KindColumn, KindSpec, NameColumn, column};
+use crate::resource_actions::ResourceAction;
+use crate::resource_kind::{Align, KindAction, KindApi, KindColumn, KindSpec, NameColumn, column};
 
 /// How the app paints one printer column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +39,15 @@ static BUILT_IN_COLUMNS: [BuiltInColumn; 1] = [BuiltInColumn {
     json_path: ".status.notAfter",
     rule: ColumnRule::Expiry,
 }];
+
+/// The one CRD whose objects offer Renew now (spec 0018 step 6), and the only version the write
+/// path reaches.
+const CERT_MANAGER_CERTIFICATES: &str = "certificates.cert-manager.io";
+const CERT_MANAGER_VERSION: &str = "v1";
+static CERTIFICATE_ACTIONS: [KindAction; 1] = [KindAction::keyed(
+    "Renew now",
+    ResourceAction::RenewCertificate,
+)];
 
 const AGE_COLUMN_NAME: &str = "Age";
 const AGE_COLUMN: KindColumn = column(AGE_COLUMN_NAME, 70., Align::Right);
@@ -103,6 +113,16 @@ impl CustomKind {
 
     pub(crate) fn spec(self) -> &'static KindSpec {
         &self.0.spec
+    }
+
+    /// Whether this is the cert-manager Certificate kind, at whatever version it is served.
+    pub(crate) fn is_cert_manager_certificate(self) -> bool {
+        self.crd_name() == CERT_MANAGER_CERTIFICATES
+    }
+
+    /// Whether Renew now can reach this kind: the write path accepts `cert-manager.io/v1` only.
+    pub(crate) fn is_cert_manager_v1(self) -> bool {
+        self.is_cert_manager_certificate() && self.resource().version == CERT_MANAGER_VERSION
     }
 }
 
@@ -232,7 +252,11 @@ fn leak_kind(source: CustomKindSource, rules: Vec<ColumnRule>, crd: &CrdSummary)
         is_namespaced: crd.scope == ResourceScope::Namespaced,
         api: KindApi::Custom,
         columns: columns.leak(),
-        read_only_actions: &[],
+        read_only_actions: if crd.name == CERT_MANAGER_CERTIFICATES {
+            &CERTIFICATE_ACTIONS
+        } else {
+            &[]
+        },
         delete_label: format!("Delete {singular}…").leak(),
         has_port_forward: false,
     };

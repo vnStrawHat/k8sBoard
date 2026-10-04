@@ -930,7 +930,9 @@ fn row_action_icon(action: RowAction) -> IconName {
         RowAction::Drain => IconName::ArrowDown,
         RowAction::EditTaints | RowAction::EditLabels => IconName::Replace,
         RowAction::EditYaml | RowAction::EditValues => IconName::Replace,
-        RowAction::RestartRollout | RowAction::RestartPod => IconName::RotateCw,
+        RowAction::RestartRollout | RowAction::RestartPod | RowAction::RenewCertificate => {
+            IconName::RotateCw
+        }
         RowAction::EvictPod => IconName::LogOut,
         RowAction::Scale => IconName::ChevronsUpDown,
         RowAction::Delete => IconName::Delete,
