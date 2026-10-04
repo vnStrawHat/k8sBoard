@@ -2014,8 +2014,6 @@ async fn metrics_source_for(
         ("memory", UsageMetric::Memory),
         ("net-rx", UsageMetric::NetworkReceive),
         ("net-tx", UsageMetric::NetworkTransmit),
-        ("disk-read", UsageMetric::DiskRead),
-        ("disk-write", UsageMetric::DiskWrite),
     ];
     for (index, name) in nodes.iter().enumerate() {
         let target = UsageTarget::Node { name: name.clone() };
@@ -2034,6 +2032,17 @@ async fn metrics_source_for(
             "  fact node #{index} root-cgroup series (1h, has data): {}",
             cells.join(", ")
         )?;
+    }
+    // Node disk is never asked of the source (decision 17): the answer must be `Unsupported`.
+    match connection
+        .usage_range(&source, &node_target, UsageMetric::DiskRead, &hour)
+        .await
+    {
+        Err(error) => writeln!(probe.out, "  node disk-read: {error}")?,
+        Ok(_) => {
+            probe.all_succeeded = false;
+            writeln!(probe.out, "  node disk-read: unexpectedly answered")?;
+        }
     }
     pod_network_fact(probe, connection, &source, node).await
 }

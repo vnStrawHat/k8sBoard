@@ -401,3 +401,25 @@ fn error_texts_name_what_failed() {
         "the metrics request failed: HTTP 502"
     );
 }
+
+#[tokio::test]
+async fn node_disk_sends_no_request() {
+    let (connection, api) = FakeApi::connection(WritePolicy::Blocked, |_| (200, String::new()));
+    let node = UsageTarget::Node {
+        name: "worker-1".to_owned(),
+    };
+    let error = connection
+        .usage_range(&source(), &node, UsageMetric::DiskRead, &range())
+        .await
+        .expect_err("unsupported");
+    assert_eq!(error, MetricsError::Unsupported);
+    assert!(api.requests().is_empty());
+}
+
+#[test]
+fn unsupported_display_text() {
+    assert_eq!(
+        MetricsError::Unsupported.to_string(),
+        "the metrics source does not provide this metric for this target"
+    );
+}

@@ -80,12 +80,47 @@ fn container_memory_query_text() {
 fn node_query_text() {
     assert_eq!(
         query(&node(), UsageMetric::Cpu, 60),
-        r#"sum(rate(container_cpu_usage_seconds_total{id=~"/|",pod="",node="worker-1"}[120s]))"#
+        concat!(
+            r#"sum(rate(container_cpu_usage_seconds_total{id=~"/|",pod="",node="worker-1"}[120s]))"#,
+            " or ",
+            r#"sum(rate(container_cpu_usage_seconds_total{id=~"/|",pod="",kubernetes_io_hostname="worker-1"}[120s]))"#
+        )
     );
     assert_eq!(
         query(&node(), UsageMetric::Memory, 60),
-        r#"sum(container_memory_working_set_bytes{id=~"/|",pod="",node="worker-1"})"#
+        concat!(
+            r#"sum(container_memory_working_set_bytes{id=~"/|",pod="",node="worker-1"})"#,
+            " or ",
+            r#"sum(container_memory_working_set_bytes{id=~"/|",pod="",kubernetes_io_hostname="worker-1"})"#
+        )
     );
+}
+
+#[test]
+fn node_name_is_escaped_in_both_alternatives() {
+    let dotted = UsageTarget::Node {
+        name: "ip-10-0-0-1.eu".to_owned(),
+    };
+    let text = query(&dotted, UsageMetric::Memory, 15);
+    assert_eq!(text.matches(r#"="ip-10-0-0-1.eu""#).count(), 2, "{text}");
+    assert_eq!(text.matches(" or ").count(), 1);
+}
+
+#[test]
+fn pod_and_workload_queries_have_no_alternative() {
+    for target in [pod(None), workload(WorkloadKind::Job, "batch")] {
+        assert!(!query(&target, UsageMetric::Cpu, 15).contains(" or "));
+    }
+}
+
+#[test]
+fn node_disk_is_not_read_from_the_source() {
+    for metric in [UsageMetric::DiskRead, UsageMetric::DiskWrite] {
+        assert_eq!(
+            usage_query(&node(), metric, &range(15)),
+            Err(QueryError::NodeDisk)
+        );
+    }
 }
 
 #[test]
@@ -95,8 +130,12 @@ fn disk_queries_use_the_filesystem_counters() {
         r#"sum(rate(container_fs_reads_bytes_total{namespace="shop",pod="api-7d9f8c-x2k4q",container="api"}[120s]))"#
     );
     assert_eq!(
-        query(&node(), UsageMetric::DiskWrite, 15),
-        r#"sum(rate(container_fs_writes_bytes_total{id=~"/|",pod="",node="worker-1"}[120s]))"#
+        query(
+            &workload(WorkloadKind::StatefulSet, "db"),
+            UsageMetric::DiskWrite,
+            15
+        ),
+        r#"sum(rate(container_fs_writes_bytes_total{namespace="shop",pod=~"db-[0-9]+",container!="",container!="POD"}[120s]))"#
     );
 }
 
@@ -168,7 +207,11 @@ fn deployment_pattern_skips_cronjob_pods() {
 fn node_network_uses_the_virtual_interface_filter() {
     assert_eq!(
         query(&node(), UsageMetric::NetworkReceive, 15),
-        r#"sum(rate(container_network_receive_bytes_total{id=~"/|",pod="",node="worker-1",interface!~"lo|(veth|cali|cni|flannel|cilium|lxc|docker|tunl|vxlan|kube-|weave|br-).*"}[120s]))"#
+        concat!(
+            r#"sum(rate(container_network_receive_bytes_total{id=~"/|",pod="",node="worker-1",interface!~"lo|(veth|cali|cni|flannel|cilium|lxc|docker|tunl|vxlan|kube-|weave|br-).*"}[120s]))"#,
+            " or ",
+            r#"sum(rate(container_network_receive_bytes_total{id=~"/|",pod="",kubernetes_io_hostname="worker-1",interface!~"lo|(veth|cali|cni|flannel|cilium|lxc|docker|tunl|vxlan|kube-|weave|br-).*"}[120s]))"#
+        )
     );
     assert_eq!(
         query(&pod(None), UsageMetric::NetworkTransmit, 15),
@@ -224,7 +267,7 @@ fn invalid_names_build_no_query() {
     ] {
         assert_eq!(
             usage_query(&target, UsageMetric::Cpu, &range(15)),
-            Err(InvalidName),
+            Err(QueryError::InvalidName),
             "{target:?}"
         );
     }

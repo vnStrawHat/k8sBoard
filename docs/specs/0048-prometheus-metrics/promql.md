@@ -66,7 +66,7 @@ Pod-name patterns (decision 11; `{name}` is `regex_literal`-escaped):
 | DiskRead | `sum(rate(container_fs_reads_bytes_total{P,C}[W]))` | `sum(rate(container_fs_reads_bytes_total{N}[W]))` |
 | DiskWrite | same with `writes` | same with `writes` |
 
-`N` is the Node selector. Units: CPU cores, memory bytes, rates bytes/s (the 0010/0011 `Measure`s).
+`N` is the Node selector `id=~"/|",pod="",node="{n}"` (decision 16: the `id` label may be absent), written twice joined by `or`, the second with `kubernetes_io_hostname` in place of `node`: `sum(A{N1}) or sum(A{N2})`. Node DiskRead and DiskWrite build no query (decision 17). Units: CPU cores, memory bytes, rates bytes/s (the 0010/0011 `Measure`s).
 
 Facts the step 2 live check settles and records in as-built (open item 1):
 

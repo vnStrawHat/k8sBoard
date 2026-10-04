@@ -12,7 +12,7 @@ use tokio::time::Instant;
 
 use crate::connection::ClusterConnection;
 use crate::metrics_source::MetricsSource;
-use crate::promql::{InvalidName, RangeSpec, UsageMetric, UsageTarget, usage_query};
+use crate::promql::{QueryError, RangeSpec, UsageMetric, UsageTarget, usage_query};
 
 /// Head and body together, for a success and an error answer alike.
 const METRICS_DEADLINE: Duration = Duration::from_secs(20);
@@ -55,6 +55,8 @@ pub enum MetricsError {
     TimedOut,
     #[error("a name is not valid for a metrics query")]
     InvalidName,
+    #[error("the metrics source does not provide this metric for this target")]
+    Unsupported,
     #[error("the metrics request failed: {0}")]
     Unexpected(String),
 }
@@ -117,8 +119,10 @@ impl ClusterConnection {
         metric: UsageMetric,
         range: &RangeSpec,
     ) -> Result<UsageSeries, MetricsError> {
-        let promql =
-            usage_query(target, metric, range).map_err(|InvalidName| MetricsError::InvalidName)?;
+        let promql = usage_query(target, metric, range).map_err(|error| match error {
+            QueryError::InvalidName => MetricsError::InvalidName,
+            QueryError::NodeDisk => MetricsError::Unsupported,
+        })?;
         let query = query_string(&[
             ("query", &promql),
             ("start", &range.start().as_second().to_string()),

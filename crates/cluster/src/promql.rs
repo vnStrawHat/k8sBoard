@@ -21,6 +21,8 @@ const NODE_INTERFACES: &str =
     r#"interface!~"lo|(veth|cali|cni|flannel|cilium|lxc|docker|tunl|vxlan|kube-|weave|br-).*""#;
 const POD_INTERFACES: &str = r#"interface!="lo""#;
 const ALL_CONTAINERS: &str = r#"container!="",container!="POD""#;
+/// The labels that hold a node's name on its root-cgroup series, tried in this order.
+const NODE_LABELS: [&str; 2] = ["node", "kubernetes_io_hostname"];
 
 /// Range spans with their steps, all within `MAX_POINTS` points.
 pub const RANGE_STEPS: [(Duration, Duration); 6] = [
@@ -169,9 +171,15 @@ impl RangeSpec {
     }
 }
 
-/// A name failed its DNS check; no query is built.
+/// Why no query is built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct InvalidName;
+pub(crate) enum QueryError {
+    /// A name failed its DNS check.
+    InvalidName,
+    /// The source is not asked for this metric of this target: a node's device list holds
+    /// device-mapper aliases of one disk, so a sum would count it twice (spec 0048 decisions).
+    NodeDisk,
+}
 
 /// A PromQL double-quoted string: `\` becomes `\\`, `"` becomes `\"`, a newline becomes `\n`, and
 /// other control characters are dropped. The result includes its quotes.
@@ -205,15 +213,30 @@ fn regex_escape(value: &str) -> String {
     text
 }
 
-/// The query text for `metric` of `target`; `range` sets the rate window.
+/// The query text for `metric` of `target`; `range` sets the rate window. A node is matched by
+/// `node` first and by `kubernetes_io_hostname` second, joined with `or`: the first sum wins when
+/// its label matches, and the second answers when it matches nothing (the UAT scrape sets `node`
+/// to the wrong value on workers).
 pub(crate) fn usage_query(
     target: &UsageTarget,
     metric: UsageMetric,
     range: &RangeSpec,
-) -> Result<String, InvalidName> {
-    let selector = Selector::of(target)?;
+) -> Result<String, QueryError> {
+    if matches!(target, UsageTarget::Node { .. })
+        && matches!(metric, UsageMetric::DiskRead | UsageMetric::DiskWrite)
+    {
+        return Err(QueryError::NodeDisk);
+    }
     let window = range.rate_window();
-    let query = match metric {
+    let queries: Vec<String> = Selector::of(target)?
+        .iter()
+        .map(|selector| metric_query(metric, selector, &window))
+        .collect();
+    Ok(queries.join(" or "))
+}
+
+fn metric_query(metric: UsageMetric, selector: &Selector, window: &str) -> String {
+    match metric {
         UsageMetric::Cpu => format!(
             "sum(rate(container_cpu_usage_seconds_total{{{}}}[{window}]))",
             selector.with_containers()
@@ -222,8 +245,8 @@ pub(crate) fn usage_query(
             "sum(container_memory_working_set_bytes{{{}}})",
             selector.with_containers()
         ),
-        UsageMetric::NetworkReceive => network_query("receive", &selector, &window),
-        UsageMetric::NetworkTransmit => network_query("transmit", &selector, &window),
+        UsageMetric::NetworkReceive => network_query("receive", selector, window),
+        UsageMetric::NetworkTransmit => network_query("transmit", selector, window),
         UsageMetric::DiskRead => format!(
             "sum(rate(container_fs_reads_bytes_total{{{}}}[{window}]))",
             selector.with_containers()
@@ -232,8 +255,7 @@ pub(crate) fn usage_query(
             "sum(rate(container_fs_writes_bytes_total{{{}}}[{window}]))",
             selector.with_containers()
         ),
-    };
-    Ok(query)
+    }
 }
 
 /// Network is counted at pod level, so a container filter is ignored.
@@ -261,7 +283,7 @@ struct Selector {
 }
 
 impl Selector {
-    fn of(target: &UsageTarget) -> Result<Self, InvalidName> {
+    fn of(target: &UsageTarget) -> Result<Vec<Self>, QueryError> {
         match target {
             UsageTarget::Pod {
                 namespace,
@@ -277,7 +299,7 @@ impl Selector {
                     }
                     None => ALL_CONTAINERS.to_owned(),
                 };
-                Ok(Self {
+                Ok(vec![Self {
                     pods: format!(
                         "namespace={},pod={}",
                         string_literal(namespace),
@@ -285,7 +307,7 @@ impl Selector {
                     ),
                     containers: Some(containers),
                     level: Level::Pods,
-                })
+                }])
             }
             UsageTarget::Workload {
                 namespace,
@@ -294,7 +316,7 @@ impl Selector {
             } => {
                 check(is_dns_label(namespace))?;
                 check(is_dns_subdomain(name))?;
-                Ok(Self {
+                Ok(vec![Self {
                     pods: format!(
                         "namespace={},pod=~{}",
                         string_literal(namespace),
@@ -302,18 +324,21 @@ impl Selector {
                     ),
                     containers: Some(ALL_CONTAINERS.to_owned()),
                     level: Level::Pods,
-                })
+                }])
             }
             UsageTarget::Node { name } => {
                 check(is_dns_subdomain(name))?;
                 // The root cgroup: `id="/"` where the source keeps the `id` label, else (the UAT
                 // VictoriaMetrics scrape drops it) the series with no pod. `id=~"/|"` also matches
-                // an absent label. See as-built.md for the UAT fact.
-                Ok(Self {
-                    pods: format!(r#"id=~"/|",pod="",node={}"#, string_literal(name)),
-                    containers: None,
-                    level: Level::Node,
-                })
+                // an absent label. See as-built.md for the UAT facts.
+                Ok(NODE_LABELS
+                    .iter()
+                    .map(|label| Self {
+                        pods: format!(r#"id=~"/|",pod="",{label}={}"#, string_literal(name)),
+                        containers: None,
+                        level: Level::Node,
+                    })
+                    .collect())
             }
         }
     }
@@ -326,8 +351,12 @@ impl Selector {
     }
 }
 
-fn check(is_valid: bool) -> Result<(), InvalidName> {
-    if is_valid { Ok(()) } else { Err(InvalidName) }
+fn check(is_valid: bool) -> Result<(), QueryError> {
+    if is_valid {
+        Ok(())
+    } else {
+        Err(QueryError::InvalidName)
+    }
 }
 
 /// The regex (unquoted, name escaped) matching the pods a workload of `kind` creates.

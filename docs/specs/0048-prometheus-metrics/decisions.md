@@ -19,6 +19,8 @@
 | 13 | No SelfSubjectAccessReview for `services/proxy`; a 403 maps to `MetricsError::Denied` | The check query gives the same answer with one request fewer |
 | 14 | `form_urlencoded` (already locked as a dependency of `url`) and `http-body-util` (already locked under kube) become direct dependencies of `k8sboard-cluster` | Correct percent-encoding of PromQL (`{`, `"`, `=~`, `+`); a capped body read; no new package |
 | 15 | Detection lists services cluster-wide once per page open (`list services`); denied → manual entry only | UAT allows it; the list is small and needs no watch |
+| 16 | The Node selector is `id=~"/\|",pod="",node="{n}"` joined by `or` with the same selector on `kubernetes_io_hostname="{n}"`; the first sum answers when its label matches, else the second | UAT facts (2026-10-04): the scrape drops `id`, and `node` is wrong on workers (`mon`) while `kubernetes_io_hostname` is right. Both selectors use the escaped name |
+| 17 | Node Disk I/O is not read from the source (`UsageTarget::Node` with `DiskRead` or `DiskWrite` builds no query: `MetricsError::Unsupported`); it stays on the kubelet feed. Pod and workload disk use the source | Node-level `container_fs_*` series list each device and its device-mapper alias, so a sum counts one disk twice |
 
 ## UAT probe (2026-10-04, `readonly@Monitor`, v1.29.5)
 
