@@ -1,6 +1,6 @@
 # 0041 — Edit YAML part 2: revision history, quota check, timeline
 
-Status: draft, 2026-10-04, against main `4d99faa`. **Read-only: no new `WriteOperation`, connect file, or `disallowed-methods` exception.** New requests: one ReplicaSet LIST (namespace, filtered to one Deployment) per history open or timeline click, and the two 0039 template GETs per diff. No new SSAR (`ListReplicaSets`, `ListResourceQuotas` are in `AccessCheck::ALL`). Crates: `crates/cluster`, `crates/app`. One cluster at a time (0046). Wireframes: **W10** (tabs, side panel Checks), **W3 n4** (Recent changes "who", click opens diff). Roadmap: gap audit rows W10, W10 n2, W3 n4; 0031 non-goals; 0021 open item 1.
+Status: draft, 2026-10-04, against main `11b9787`; amended 2026-10-04 after the opus review (must-fix 1–3, should-fix 4–6, nits). **Read-only: no new `WriteOperation`, connect file, or `disallowed-methods` exception.** New requests: one ReplicaSet LIST (namespace, `labelSelector` = the Deployment's selector, then the owner filter) per history open or timeline click, and the two 0039 template GETs per diff. No new SSAR (`ListReplicaSets`, `ListResourceQuotas` are in `AccessCheck::ALL`). Crates: `crates/cluster`, `crates/app`. One cluster at a time (0046). Wireframes: **W10** (tabs, side panel Checks), **W3 n4** (Recent changes "who", click opens diff). Roadmap: gap audit rows W10, W10 n2, W3 n4; 0031 non-goals; 0021 open item 1.
 
 ## Goal
 
@@ -25,7 +25,7 @@ Status: draft, 2026-10-04, against main `4d99faa`. **Read-only: no new `WriteOpe
 | 1 | Cluster: `deployment_revisions`, `DeploymentSummary.template_change` (managedFields), `quota_demand.rs` (`WorkloadDemand`, `DemandChange`, `quota_check`), `EditPreview.demand`. No app caller | 1–3, 10, 11 |
 | 2 | App: `EditTab::History`, `revision_history.rs` (list, selection, embedded `RevisionDiffView`), `--screen edit-yaml-history` | 1–5, 12 |
 | 3 | App: quota line in the side panel and dialog warning, read from the session's ResourceQuotas condition feed; `--screen edit-yaml-diff` shows it | 1–3, 6, 7, 12 |
-| 4 | App: timeline "who" and click-to-diff (`open_latest_revision_diff`, `Go to deployment` in the dialog); UAT trace; ui-verifier for all steps | 1–3, 8–10, 12 |
+| 4 | App: timeline "who" and click-to-diff (`open_change_diff`, `change_pair`, `Go to deployment` in the dialog); UAT trace; ui-verifier for all steps | 1–3, 8–10, 12 |
 
 ## Files
 
@@ -44,10 +44,10 @@ Status: draft, 2026-10-04, against main `4d99faa`. **Read-only: no new `WriteOpe
 - [ ] 3. Read-only: no new `WriteOperation`, connect file, or clippy exception; the only new request is the ReplicaSet LIST of `deployment_revisions`; no new `AccessCheck`.
 - [ ] 4. (W10) Edit YAML on a Deployment shows `Editor`, `Diff vs cluster`, `Revision history`; other kinds show two tabs. The tab lists `rev {n} · {tag}`, age, and `current`, newest first; the previous revision is selected on open.
 - [ ] 5. Selecting a past revision shows its pod-template diff against the current one with the 0039 masking and env toggle; the current row reads `This is the current revision.`; a denied list reads `Not permitted: list replicasets`; one revision reads `No earlier revision kept (revisionHistoryLimit)`. The tab never changes the editor text.
-- [ ] 6. (W10 n2) After a passed dry-run of a Deployment, StatefulSet, or DaemonSet change that adds pods, CPU, or memory, Checks shows `Namespace quota OK ({left} {resource} left)` or, per exceeded item, `Quota {name}: {resource} needs {needed} more, {left} left` (warning tone, also a confirm-dialog warning). No line when nothing grows or the namespace has no unscoped quota.
+- [ ] 6. (W10 n2) After a passed dry-run of a Deployment, StatefulSet, or DaemonSet change that adds pods, CPU, or memory, Checks shows `Namespace quota OK ({left} {resource} left)` for the item with the smallest `left / hard` fraction after the change, or, per exceeded item, `Quota {name}: {resource} needs {needed} more, {left} left` (warning tone, also a confirm-dialog warning). No line when nothing grows or the namespace has no unscoped quota.
 - [ ] 7. With the ResourceQuotas feed off or loading, Checks reads `Quota not checked: {reason}`; Apply is never blocked by the quota check.
-- [ ] 8. (W3 n4) A Deployment rollout row shows the field manager of the latest template change when it falls in the rule window (decision 7); otherwise the event source, as today. HPA, node, and namespace rows are unchanged.
-- [ ] 9. Clicking a Deployment row opens the revision diff of the newest revision against the one before; the dialog has `Go to deployment` (reveals the row, closes the dialog). Other rows keep reveal. A failed list pushes `Could not load revisions: {error}`.
+- [ ] 8. (W3 n4) A Deployment rollout row shows the field manager of the latest template change when it falls in the rule window (decision 7), marked as inferred: tooltip `probably {manager} · last pod-template writer (field manager)`; otherwise the event source, as today (tooltip suffix `· event source`). HPA, node, and namespace rows are unchanged.
+- [ ] 9. Clicking a Deployment row opens a revision diff: when the event message names a listed ReplicaSet that has a numbered predecessor, that ReplicaSet against its predecessor; otherwise the newest revision against the one before (decision 8); the dialog has `Go to deployment` (reveals the row, closes the dialog). Other rows keep reveal. A failed list pushes `Could not load revisions: {error}`.
 - [ ] 10. Nothing logs a template, a manager name, or a quota value; `WorkloadDemand` and `DemandChange` derive `Debug` over numbers only.
 - [ ] 11. `quota_check` and `workload_demand` follow [quota-check.md](quota-check.md) on every fixture (replicas default 1, init and sidecar rule, DaemonSet node count, unparsable quantity skipped).
 - [ ] 12. ui-verifier: `edit-yaml-history`, `edit-yaml-diff` (with the quota line), `overview` (who column), `revision-diff` (Go to deployment), light and dark, no high-severity defect against W10 and W3.

@@ -6,7 +6,8 @@
 
 | Test | File | Checks |
 |---|---|---|
-| `deployment_revisions_lists_the_namespace_once` | replica_set tests (`FakeApi`) | one `GET /apis/apps/v1/namespaces/{ns}/replicasets`, no other request |
+| `deployment_revisions_lists_the_namespace_once` | replica_set tests (`FakeApi`) | one `GET /apis/apps/v1/namespaces/{ns}/replicasets`, no other request (query `labelSelector=app%3Dapi`) |
+| `deployment_revisions_empty_selector_sends_nothing` | same | `""` and `<invalid>` → `Ok(vec![])`, zero requests |
 | `deployment_revisions_keeps_only_controlled_sets` | same | another Deployment's set, an orphan, and a non-controller owner are dropped |
 | `deployment_revisions_refuses_other_kinds` | same | a Service `ObjectRef` → error, zero requests |
 | `template_writer_is_the_newest_template_owner` | `deployment_tests.rs` | two entries owning `f:spec.f:template`: the later `time` wins |
@@ -17,14 +18,16 @@
 | `demand_takes_a_larger_init_container` | same | a regular init larger than the containers sets the per-pod value |
 | `demand_uses_desired_scheduled_for_daemon_sets` | same | `status.desiredNumberScheduled: 4` |
 | `demand_skips_unparsable_quantities` | same | `cpu: lots` → 0 |
+| `demand_request_defaults_to_limit` | `limits.memory: 1Gi` and no request → `requests_memory` = 1Gi; both missing → 0 |
 | `demand_is_none_for_other_kinds` | same | ConfigMap, Pod → `None` |
 | `check_not_affected_when_nothing_grows` | same | equal or smaller demand |
-| `check_fits_reports_smallest_headroom` | same | two items, the tighter one reported, `left` after the change |
+| `check_fits_reports_smallest_fraction` | same | `requests.cpu` 1 of 40 cores left vs `requests.memory` 20Gi of 64Gi: CPU (2.5 %) is reported, not the smaller raw number; `left` after the change |
 | `check_exceeds_lists_every_shortfall` | same | memory and pods exceeded, order quota then resource |
 | `check_reads_cpu_and_memory_aliases` | same | `cpu`, `memory`, `count/pods` |
 | `check_skips_scoped_and_unsynced_quotas` | same | `scopes: [BestEffort]`, `used: None` |
 | `preview_carries_demand_for_replica_change` | `edit_preview_tests.rs` | replicas 3 → 5 → `Some`, before/after pods 3/5 |
 | `preview_has_no_demand_for_label_change` | same | `None` (equal) |
+| `preview_daemon_set_demand_reads_status` | DaemonSet `status.desiredNumberScheduled: 4` in fresh and response → pods 4 on both sides (demand computed before the strip) |
 | `demand_types_debug_holds_numbers_only` | `quota_demand_tests.rs` | `Debug` of `DemandChange` has no names or text |
 
 ## Step 2 · app
@@ -55,10 +58,14 @@
 | Test | File | Checks |
 |---|---|---|
 | `rollout_actor_is_field_manager_in_window` | `recent_changes_tests.rs` | writer 20 s before `last_seen` → `ci-bot`, `FieldManager` |
+| `field_manager_actor_tooltip_says_probably` | tooltip `probably ci-bot · last pod-template writer (field manager)` |
 | `rollout_actor_falls_back_outside_window` | same | writer 2 min after, or 40 min before → event source |
 | `rollout_actor_without_feed_is_event_source` | same | `deployments: None` |
 | `other_rows_keep_their_actor` | same | HPA, node, namespace unchanged |
-| `deployment_row_click_opens_latest_diff` | shell flow (fake cluster) | one LIST, dialog opened with (previous, newest) |
+| `deployment_row_click_opens_latest_diff` | shell flow (fake cluster) | message names no listed set → one LIST (with `labelSelector`), dialog opened with (previous, newest) |
+| `deployment_row_click_diffs_the_named_set` | same | message `Scaled up replica set api-b to 3` with revisions a=1, b=2, c=3 → (a, b) |
+| `change_pair_falls_back_without_predecessor` | `revision_diff_tests.rs` | named set has the lowest number, or is unlisted → `latest_pair` |
+| `event_entry_reads_named_replica_set` | `recent_changes_tests.rs` | `Scaled down replica set api-7d9f8c to 0` → `Some("api-7d9f8c")`; other text → `None` |
 | `deployment_row_click_denied_shows_notice` | same | notice text, zero requests |
 | `single_revision_click_shows_notice` | same | `No earlier revision kept for deployment/{name}` |
 | `go_to_deployment_reveals_and_closes` | `revision_diff_tests.rs` or shell flow | reveal called with the key; dialog closed |

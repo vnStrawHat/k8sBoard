@@ -6,11 +6,11 @@
 
 | File | Change |
 |---|---|
-| `crates/cluster/src/replica_set.rs` | `ClusterConnection::deployment_revisions` (one LIST, owner filter) |
+| `crates/cluster/src/replica_set.rs` | `ClusterConnection::deployment_revisions(deployment, selector)` (one LIST with `labelSelector`, owner filter; empty or `<invalid>` selector sends nothing) |
 | `crates/cluster/src/deployment.rs` | `FieldWriter`, `DeploymentSummary.template_change`, the `managedFields` reader in `deployment_summary` |
 | `crates/cluster/src/deployment_tests.rs` | managedFields fixtures |
 | `crates/cluster/src/quota_demand.rs` (new) + `quota_demand_tests.rs` (new) | `WorkloadDemand`, `DemandChange`, `QuotaResource`, `QuotaCheck`, `QuotaShortfall`, `workload_demand`, `quota_check` |
-| `crates/cluster/src/edit_preview.rs` | `EditPreview.demand`, set in `build_preview` |
+| `crates/cluster/src/edit_preview.rs` | `EditPreview.demand`, computed at the top of `build_preview` from the unstripped `fresh` and `response` (before `strip_server_fields` removes `status`) |
 | `crates/cluster/src/edit_preview_tests.rs` | demand set / not set |
 | `crates/cluster/src/connection_tests.rs` or a new `replica_set_tests.rs` | `deployment_revisions` over `FakeApi` |
 | `crates/cluster/src/lib.rs` | module and exports (`FieldWriter`, `WorkloadDemand`, `DemandChange`, `QuotaResource`, `QuotaCheck`, `QuotaShortfall`, `quota_check`) |
@@ -20,7 +20,7 @@
 | File | Change |
 |---|---|
 | `crates/app/src/revision_history.rs` (new) + `revision_history_tests.rs` (new) | `RevisionHistory` entity, `HistoryState`, list and selection |
-| `crates/app/src/revision_diff.rs` | `revision_list`, `latest_pair`; root sized `size_full` (height moves to the dialog wrapper) |
+| `crates/app/src/revision_diff.rs` | `revision_list`, `latest_pair`, `change_pair`; root sized `size_full` (height moves to the dialog wrapper) |
 | `crates/app/src/revision_diff_tests.rs` | the two helpers |
 | `crates/app/src/yaml_edit.rs` | `EditTab::History`, `history` field, `show_tab` |
 | `crates/app/src/yaml_edit_panels.rs` | third tab for Deployments, History body |
@@ -41,10 +41,10 @@
 
 | File | Change |
 |---|---|
-| `crates/app/src/recent_changes.rs` + `recent_changes_tests.rs` | `ChangeInputs.deployments`, `ActorSource`, the window rule |
+| `crates/app/src/recent_changes.rs` + `recent_changes_tests.rs` | `ChangeInputs.deployments`, `ActorSource` and the inferred tooltip, the window rule, `ChangeEntry.replica_set` from the event message |
 | `crates/app/src/overview.rs` | pass the Deployments feed; row click per kind; tooltip suffix |
 | `crates/app/src/overview_report.rs` | unchanged texts; passes `deployments: None` or the feed (report shows the actor it gets) |
-| `crates/app/src/app_shell.rs` | `open_latest_revision_diff`, `revision_lookup` task field |
+| `crates/app/src/app_shell.rs` | `open_change_diff`, `revision_lookup` task field |
 | `crates/app/src/revision_diff.rs` | `go_to: Option<ResourceKey>`, `Go to deployment` button |
 | `crates/app/src/app_shell_tests.rs` (or a new `app_shell_revision_tests.rs`) | click flow over a fake cluster |
 

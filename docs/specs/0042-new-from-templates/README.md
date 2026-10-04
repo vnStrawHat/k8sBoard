@@ -1,6 +1,6 @@
 # 0042 — New from templates
 
-Status: draft, 2026-10-04, against main `4d99faa`. **Mutating**: one new allow-listed operation, `CreateObject` (POST of a new object). C3: covered by the user's one approval of 2026-10-02 for all mutating specs. Debug builds block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. Builds on 0030 (write path, gate, tiers, audit), 0031 (editor, edit slot, discard prompt, `ApplyEdit`), 0046 (one cluster). Wireframes: **W7** `top` buttons `New namespace` (Namespaces), `New` (ConfigMaps, ResourceQuotas, PDBs, RoleBindings); W10 notes 3–4 (dry-run, tiered confirm, audit). Roadmap: gap audit row "W7 5 kinds · New", plan item 5; C3, C8; R1, R2.
+Status: draft, 2026-10-04, against main `11b9787`; amended 2026-10-04 after the opus review (must-fix 1–3, should-fix 4–9, nits). **Mutating**: one new allow-listed operation, `CreateObject` (POST of a new object). C3: covered by the user's one approval of 2026-10-02 for all mutating specs. Debug builds block writes unless `K8SBOARD_ALLOW_WRITES=1` (agents never set it); UAT checks stay denied-path-only. Builds on 0030 (write path, gate, tiers, audit), 0031 (editor, edit slot, discard prompt, `ApplyEdit`), 0046 (one cluster). Wireframes: **W7** `top` buttons `New namespace` (Namespaces), `New` (ConfigMaps, ResourceQuotas, PDBs, RoleBindings); W10 notes 3–4 (dry-run, tiered confirm, audit). Roadmap: gap audit row "W7 5 kinds · New", plan item 5; C3, C8; R1, R2.
 
 ## Goal
 
@@ -19,8 +19,8 @@ Status: draft, 2026-10-04, against main `4d99faa`. **Mutating**: one new allow-l
 
 | Step | Scope | ACs |
 |---|---|---|
-| 1 | Cluster only: `object_create.rs` (`ObjectDraft`, `DraftError`, `DraftWarning`), `ObjectKind::is_creatable`, `WriteOperation::CreateObject`, `AccessCheck::Create(kind)` (lazy), 409 mapping, allow-list row, fake-transport tests. No app caller | 1–5, 13 |
-| 2 | App: `object_templates.rs`, `ObjectCreateView` in the edit slot (`OpenEdit::Create`), `New` header buttons and gate, dry-run and confirm flow, reveal after commit, discard and leaving prompts, `--screen new-config-map` | 1, 2, 6–12, 14 |
+| 1 | Cluster only: `object_create.rs` (`ObjectDraft`, `DraftError`, `DraftWarning`, `missing_paths`), `ObjectKind::is_creatable`, `WriteOperation::CreateObject`, `AccessCheck::Create(kind)` (lazy), 409 and 404 mapping, `WriteOutcome.dropped_fields`, allow-list row, fake-transport tests. No app caller | 1–5, 13, 16 |
+| 2 | App: `object_templates.rs`, `ObjectCreateView` in the edit slot (`OpenEdit::Create`, per-variant texts), `New` header buttons and gate, dry-run and confirm flow (privileged tier for risky bindings), kind screen and notice after commit, discard and leaving prompts, `--screen new-config-map` | 1, 2, 6–12, 14, 16 |
 | 3 | Live: UAT denied path and request trace; ui-verifier | 15 |
 
 ## Files
@@ -38,20 +38,22 @@ Status: draft, 2026-10-04, against main `4d99faa`. **Mutating**: one new allow-l
 - [ ] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes offline; no test talks to a real cluster.
 - [ ] 3. Request shape: `POST {collection path}?dryRun=All&fieldManager=k8sboard` (a commit has no `dryRun`), `application/json`, body = the draft with no `status` and no server metadata. Namespace: `POST /api/v1/namespaces`.
 - [ ] 4. `WriteRequest::new(_, CreateObject(_))` is `None` for any kind outside Namespace, ConfigMap, ResourceQuota, PodDisruptionBudget, RoleBinding, a target that differs from the draft, or an unsafe name; `checked_operation` re-checks the draft (kind, `apiVersion`, name, no server fields).
-- [ ] 5. A 409 `AlreadyExists` reads `{Kind} {name} already exists` (field `metadata.name`), not "changed since it was read".
+- [ ] 5. A 409 `AlreadyExists` reads `{Kind} {name} already exists` (field `metadata.name`), not "changed since it was read"; a 404 (namespace missing), on dry-run or commit, reads `The namespace {ns} does not exist` (field `metadata.namespace`), not "the object no longer exists".
 - [ ] 6. (W7) Namespaces shows `New namespace`; ConfigMaps, ResourceQuotas, PDBs, RoleBindings show `New`. Disabled with the gate reason (`Checking permissions…`, `Not permitted: create {resource}`, `{cluster} is read-only`).
-- [ ] 7. The editor opens with the kind's template, `metadata.namespace` = the single scoped namespace, else `default`. Local errors (syntax, wrong kind or `apiVersion`, missing or invalid name, missing namespace, `generateName`, server fields, `status`, `<hidden>` text) block before any request and name the field.
+- [ ] 7. The editor opens with the kind's template, `metadata.namespace` = the first scoped namespace (`Named` or `Several`), else `default`. Local errors (syntax, more than one YAML document, wrong kind or `apiVersion`, missing or invalid name, missing namespace, `generateName`, server fields, `status`, `<hidden>` text) block before any request and name the field.
 - [ ] 8. Ctrl S or `Create…` runs the dry-run; a passed dry-run for the current text enables the confirm; a changed text needs a new dry-run; Ctrl S during a dry-run does nothing.
-- [ ] 9. The confirm uses the active cluster's guard and tier (PROD types the cluster name); it lists the name, namespace, and, for a RoleBinding, `roleRef` and subjects; it shows the draft warnings (decision 7).
-- [ ] 10. After a commit the editor closes, the notice reads `Created {Kind} {namespace}/{name}`, and the cursor moves to the new row once the list shows it. One audit line, action `Create`, fields from `changed_fields()` (ConfigMap values never; path-only rule).
+- [ ] 9. The confirm uses the active cluster's guard and tier (PROD types the cluster name); it lists the name, namespace, and, for a RoleBinding, `roleRef` and one line per subject `{Kind} {ns/}{name}` (at most 10, then `and {n} more`); ConfigMap keys likewise capped (`data` and `binaryData`). It shows the draft warnings and the dry-run's dropped-field warnings (decisions 7, 14).
+- [ ] 10. After a commit the editor closes, the kind's screen is shown, and the notice reads `Created {Kind} {namespace}/{name}` (from the success-notice arm in `write_flow.rs`); the watch adds the row, and the cursor is not moved (decision 11). One audit line, action `Create`, fields from `changed_fields()` (ConfigMap values never; path-only rule).
 - [ ] 11. Cancel, a screen or namespace change, and a cluster switch ask before discarding a changed text (`Discard the new {Kind}?`); an unchanged template closes without a prompt.
-- [ ] 12. A commit timeout says the object may have been created and keeps the editor; Retry is not offered (the user checks the list).
+- [ ] 12. A commit timeout says the object may have been created and keeps the editor; Retry is offered neither in the dialog (`CreateObject` joins the edit exclusion) nor in the view (the user checks the list).
 - [ ] 13. No `tracing::` call with draft content; `ObjectDraft` has a manual `Debug` (kind, namespace, name).
 - [ ] 14. Screenshot builds send nothing (`block-writes`); `--screen new-config-map` shows the template, a passed dry-run line, and no connection call.
 - [ ] 15. UAT (debug build, `readonly@Monitor`): every `New` is disabled with `Not permitted: create {resource}` (or the probe's real answer); the trace shows only GETs, LISTs, watches, and SSAR POSTs. ui-verifier: `new-config-map` and the five screens' headers, light and dark, no high-severity defect against W7 and W10.
+- [ ] 16. A RoleBinding draft with a `PowerfulRole` or `BroadSubject` warning (roleRef ClusterRole `cluster-admin`, `admin`, or `edit`; any Group or User subject starting with `system:`) confirms with `ActionRisk::Privileged` and `expected_name: Some(binding name)`: the binding name must be typed on every environment (decision 15).
 
 ## Open items
 
 1. R2: no write-capable cluster; the commit is proven by fake-transport tests only.
 2. 0030 open item 5 applies: with scope All, the lazy `create` check is cluster-wide, so namespace-only rights read as denied; the dry-run is the precise check.
 3. Secrets `New` is deferred (non-goal); add it only with a 0047-style write-only form if the user asks.
+4. Field validation: kube 4.2 `PostParams` has no `fieldValidation`, so the server drops unknown fields silently; decision 14 warns about dropped paths instead. Ceiling: a typo inside a free-form map (`labels`, `data`, `spec.hard`) is valid data and is not caught.

@@ -15,7 +15,12 @@
 | `draft_namespace_rules` | ConfigMap without namespace → `MissingNamespace`; Namespace with one → `UnexpectedNamespace` |
 | `draft_refuses_hidden_placeholder` | `data.K: <hidden>` → `Placeholder { "data.K" }` |
 | `draft_reports_syntax_and_size` | bad YAML → `Text(Syntax)`; > 2 MiB → `Text(TooLarge)`; `0755` → `Text(LeadingZero)` |
-| `role_binding_warnings` | ClusterRole `cluster-admin` → `PowerfulRole`; Group `system:authenticated` → `BroadSubject`; `view` → none |
+| `draft_refuses_multi_document_yaml` | `a: 1
+---
+b: 2` → `Text(NotAnObject)` |
+| `role_binding_warnings` | ClusterRole `cluster-admin`, `admin`, `edit` → `PowerfulRole`; Group `system:authenticated` and User `system:anonymous` → `BroadSubject`; `view` with a ServiceAccount → none; both kinds `needs_typed_name` |
+| `namespace_privileged_pod_security_warns` | label `pod-security.kubernetes.io/enforce: privileged` → `PrivilegedPodSecurity`; `baseline` → none |
+| `missing_paths_reports_dropped_leaves_only` | `spec.minAvailble` absent from the answer → reported; empty `labels: {}` and `null` skipped; extra server fields ignored |
 | `draft_debug_holds_no_content` | `Debug` has kind, namespace, name; not a data value |
 
 ## Step 1 · `object_write_create_tests.rs` (fake transport)
@@ -31,7 +36,10 @@
 | `checked_operation_refuses_inconsistent_draft` | a draft whose body name differs from its target (built in-crate) → `None` |
 | `access_check_is_create_of_kind` | `Create(ConfigMap)`; text `create configmaps`; namespaced flag per kind |
 | `already_exists_reads_as_invalid_name` | 409 `AlreadyExists` → `Invalid { "ConfigMap new-config already exists", ["metadata.name"] }` |
-| `changed_fields_never_hold_config_map_values` | ConfigMap: `data[KEY]` paths with `None`; RoleBinding: `roleRef`, `subjects` |
+| `missing_namespace_reads_as_namespace_text` | 404 on dry-run and on commit → `Invalid { "The namespace payments does not exist", ["metadata.namespace"] }`, never `NotFound` |
+| `dry_run_reports_dropped_fields` | the answer lacks a draft path → `outcome.dropped_fields` = that path; other operations report none |
+| `changed_fields_never_hold_config_map_values` | ConfigMap: `data[KEY]` and `binaryData[KEY]` paths with `None`; RoleBinding: `roleRef`, one `subjects[i]` per subject `{Kind} {ns/}{name}` |
+| `changed_fields_cap_long_lists` | 25 keys → 10 key fields + `… and 15 more`; 12 subjects → 10 + `… and 2 more` |
 | `commit_timeout_is_outcome_unknown` | transport error on commit → `OutcomeUnknown` |
 | `allow_list_matches_the_operations` | this module's own table test (as in the other write test modules): method, path, query, content type, body of `CreateObject` |
 
@@ -40,15 +48,18 @@
 | Test | File | Checks |
 |---|---|---|
 | `every_template_is_a_valid_draft` | `object_templates.rs` | each of the five parses with `ObjectDraft::new` for `payments` |
-| `template_uses_single_scoped_namespace_else_default` | same | `Named(["payments"])` → `payments`; `All` → `default` |
+| `template_uses_first_scoped_namespace_else_default` | same | `Named("payments".into())` → `payments`; `Several(["a", "b"])` → `a`; `All` → `default` |
 | `new_buttons_on_the_five_screens` | `object_create_view_tests.rs` or workspace tests | labels `New namespace` / `New`; none on Secrets |
 | `new_button_disabled_with_gate_reason` | same | `Checking permissions…`, `Not permitted: create configmaps`, read-only lock |
 | `lazy_checks_ask_create_for_creatable_kinds` | `kind_access_tests.rs` | ConfigMap → Update, Patch, Delete, Create; Deployment → no Create |
 | `local_error_blocks_before_request` | `object_create_view_tests.rs` | `Failed(Local)`, zero requests |
 | `ctrl_s_during_dry_run_does_nothing` | same | no second request |
 | `changed_text_needs_new_dry_run` | same | `Passed` stale after an edit; Ctrl S runs a dry-run, not the dialog |
-| `passed_dry_run_opens_confirm_with_warnings` | `app_shell_create_tests.rs` | `WriteIntent` action, label, button `Create`, warnings |
-| `commit_closes_and_reveals` | same | view closed, notice `Created ConfigMap payments/new-config`, reveal key |
+| `passed_dry_run_opens_confirm_with_warnings` | `app_shell_create_tests.rs` | `WriteIntent` action, label, button `Create`, draft and dropped-field warnings, `ActionRisk::Change`, `expected_name: None` |
+| `risky_binding_types_its_name_everywhere` | same | `cluster-admin` binding on a DEV (click) cluster → `Privileged`, `expected_name: Some("new-binding")`, dialog `TypeName` |
+| `commit_closes_and_shows_the_kind_screen` | same | view closed, screen `Kind(ConfigMaps)`, one notice `Created ConfigMap payments/new-config` (from the `write_flow` arm), cursor unchanged |
+| `failed_create_offers_no_dialog_retry` | same | a 409 or 429 on commit: no Retry button in the dialog |
+| `open_create_slot_has_no_object` | `edit_yaml_flow` tests | `OpenEdit::object` is `None`; `discard_title` `Discard the new ConfigMap?`; `leaving_line` `Unsaved new ConfigMap` |
 | `outcome_unknown_keeps_view_without_retry` | same | footer text; no Retry |
 | `dirty_cancel_asks_clean_cancel_closes` | same | prompt only when the text differs from the template |
 | `cluster_switch_lists_unsaved_new_object` | `leaving_work` tests | `Unsaved new ConfigMap` |

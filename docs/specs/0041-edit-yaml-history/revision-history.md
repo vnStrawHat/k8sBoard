@@ -6,14 +6,16 @@
 
 ```rust
 impl ClusterConnection {
-    /// One LIST of `deployment`'s namespace's ReplicaSets, kept when their controller owner is that
-    /// Deployment (kind `Deployment`, same name). Summaries only; read-only. `deployment` must be a
-    /// Deployment `ObjectRef`, else `ClusterError::UnexpectedResponse` with fixed text.
-    pub async fn deployment_revisions(&self, deployment: &ObjectRef) -> Result<Vec<ReplicaSetSummary>, ClusterError>;
+    /// One LIST of `deployment`'s namespace's ReplicaSets with `labelSelector = selector` (kubectl
+    /// syntax, as `watch_selected_replica_sets`), kept when their controller owner is that Deployment
+    /// (kind `Deployment`, same name). An empty selector, or one with `<invalid>`, is `Ok(vec![])` with
+    /// no request. Summaries only; read-only. `deployment` must be a Deployment `ObjectRef`, else
+    /// `ClusterError::UnexpectedResponse` with fixed text.
+    pub async fn deployment_revisions(&self, deployment: &ObjectRef, selector: &str) -> Result<Vec<ReplicaSetSummary>, ClusterError>;
 }
 ```
 
-- `Api::<ReplicaSet>::namespaced(..).list(&ListParams::default())` through `self.run(ACTION, ..)`, `ACTION = "listing the revisions of a deployment"`; `replica_set_summary` per item (existing). No tracing of content.
+- `Api::<ReplicaSet>::namespaced(..).list(&ListParams::default().labels(selector))` through `self.run(ACTION, ..)`, `ACTION = "listing the revisions of a deployment"`; `replica_set_summary` per item (existing). No tracing of content.
 - Order: as returned; the app sorts.
 
 ## App: shared pure helpers (`revision_diff.rs`)
@@ -45,7 +47,7 @@ pub(crate) fn latest_pair(sides: &[RevisionSide]) -> Option<(RevisionSide, Revis
 
 ## Async contract
 
-1. First show of the tab: if `live.access` denies `ListReplicaSets` → `Denied`. Else `cx.spawn` → `ClusterRuntime::spawn(connection.deployment_revisions(&object))` on tokio → back on GPUI: `revision_list`, `Ready`, one `cx.notify()`.
+1. First show of the tab: if `live.access` denies `ListReplicaSets` → `Denied`. The selector is the edited Deployment's `DeploymentSummary.selector` joined by `,`, read from the session's Deployments kind list (or the Deployments condition feed); not found → `Failed("the deployment is not loaded yet")`, no request. Else `cx.spawn` → `ClusterRuntime::spawn(connection.deployment_revisions(&object, &selector))` on tokio → back on GPUI: `revision_list`, `Ready`, one `cx.notify()`.
 2. A row click replaces `diff` with `cx.new(|cx| RevisionDiffView::new(diff_request(..), connection.clone(), cx))`; dropping the old entity cancels its GETs (0039 contract).
 3. The list is read once per editor; reopening the editor reads again. No cache (0039 decision 11).
 4. The connection is the one `open_edit` resolved for the view (the active cluster, 0046); a cluster switch closes the editor through `leaving_work`, dropping both entities.

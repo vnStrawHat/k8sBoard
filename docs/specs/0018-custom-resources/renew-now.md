@@ -32,14 +32,14 @@ pub(crate) fn renewal_status_body(fresh: Value, requested_at: jiff::Timestamp) -
 
 | Item | Rule |
 |---|---|
-| Target fit (`fitting_access_check`) | a **custom** target whose resource is group `cert-manager.io`, version `v1`, plural `certificates`, kind `Certificate`, namespaced → `UpdateCertificateStatus`. Every other custom target stays `None` for every operation |
+| Target fit (`fitting_access_check`) | a **custom** target whose resource is group `cert-manager.io`, version `v1`, plural `certificates`, kind `Certificate`, namespaced → `UpdateCertificateStatus`. Every other custom target stays `None` for every operation. **Order matters**: the custom arm goes **before** the function's first line `let kind = target.builtin_kind()?;` (`object_write.rs`), which returns `None` for every custom target; e.g. `if let Some((resource, namespace, _)) = target.as_custom() { return (matches!(operation, RenewCertificate { .. }) && is_cert_manager_v1(resource) && namespace.is_some()).then_some(AccessCheck::UpdateCertificateStatus); }` |
 | `checked_operation` | explicit arm, kept as is (the target rule carries the check) |
 | `is_safe_path` | name and namespace DNS subdomains (the default rule) |
 | `changed_fields` | `status.conditions[Issuing]` = `True (ManuallyTriggered)` |
 | `supports_dry_run` | true |
 | `renewal_status_body` | `metadata.deletionTimestamp` set → `Deleting`; a condition `type: Issuing, status: "True"` → `AlreadyIssuing`; no `metadata.resourceVersion` → `Unreadable`. Else: remove `metadata.managedFields` (the server keeps them when absent); in `status.conditions` (created if missing) drop any `Issuing`, append `{type: Issuing, status: "True", reason: ManuallyTriggered, message: "Certificate re-issuance manually triggered", lastTransitionTime: requested_at (RFC 3339, whole seconds), observedGeneration: metadata.generation}`. Spec and other conditions unchanged |
-| `send` arm | `get_object(target, READ_ACTION)`; refusal → `AlreadyIssuing`: `Invalid { "the certificate is already being issued", ["status.conditions[Issuing]"] }`, `Deleting`: `Invalid { "the certificate is being deleted", [] }`, `Unreadable`: `unusable_object`; then `api.replace_status(name, &post_params(mode), &body)` in `run_raw`; response dropped; `Answer::patched()` |
-| Errors | merged mapping: 409 `Conflict` (0030 Retry re-reads), 404 `NotFound`, 403 `Denied` / `Invalid`, 400 webhook `DryRunRejected` |
+| `send` arm | `get_object(target, READ_ACTION)`; a `ClusterError::Api { code: 404, .. }` from this GET → `WriteError::NotFound` (other read errors stay `Cluster`); refusal → `AlreadyIssuing`: `Invalid { "the certificate is already being issued", ["status.conditions[Issuing]"] }`, `Deleting`: `Invalid { "the certificate is being deleted", [] }`, `Unreadable`: `unusable_object`; then `serde_json::from_value::<DynamicObject>(body)` (a failure → `unusable_object(mode)`), and `api.replace_status(name, &post_params(mode), &object)` in `run_raw` (kube 4.2 takes `&K`, here `&DynamicObject`); response dropped; `Answer::patched()` |
+| Errors | the PUT through the merged mapping: 409 `Conflict` (0030 Retry re-reads), 404 `NotFound` (the GET's 404 is mapped in the arm above), 403 `Denied` / `Invalid`, 400 webhook `DryRunRejected` |
 
 Allow-list row (added to the 0030 table by this step): `RenewCertificate` · GET, then PUT `application/json` · `/apis/cert-manager.io/v1/namespaces/{ns}/certificates/{name}/status?dryRun=All&fieldManager=k8sboard` (commit: `?fieldManager=k8sboard`) · fresh object, fresh `resourceVersion`, no `managedFields`, one added `Issuing` condition · dry-run yes · 0018. No new clippy exception (`Api::replace_status` is in the excepted `send` match).
 
@@ -51,7 +51,7 @@ Allow-list row (added to the 0030 table by this step): `RenewCertificate` · GET
 | Action | `ResourceAction::RenewCertificate`; gate `Mutating { checks: [UpdateCertificateStatus], is_shipped: true }`; risk `Change`; label `Renew now` |
 | Menus | row menu and drawer ⋯ menu: `Renew now` in the change section (`kind_menu` arm for that custom kind) |
 | Header | `Renew` on that screen: acts on the cursor row; disabled `Select a certificate` without one |
-| Intent | `label: "Renew certificate {ns}/{name}"`, `button: "Renew"`, `expected_name: None`, warnings: `cert-manager requests a new certificate now; ACME issuers count it against their rate limits (Let's Encrypt: 5 duplicate certificates per week)` and `The private key changes too when privateKey.rotationPolicy is Always` |
+| Intent | `label: "Renew certificate {ns}/{name}"`, `button: "Renew"`, `expected_name: None`, warnings: `cert-manager requests a new certificate now; ACME issuers count it against their rate limits (Let's Encrypt: 5 duplicate certificates per week)` and `The private key changes too unless privateKey.rotationPolicy is Never` (cert-manager v1.18 made `Always` the default; the coder confirms against the cert-manager release notes if they are available offline) |
 | After commit | notice `Renewal requested for {ns}/{name}`; the drawer's Conditions follow the fields watch (`Issuing True`) |
 | Audit | action `Renew`; field `status.conditions[Issuing]` = `True (ManuallyTriggered)` |
 
@@ -59,10 +59,11 @@ Allow-list row (added to the 0030 table by this step): `RenewCertificate` · GET
 
 | Test | File | Checks |
 |---|---|---|
-| `renewal_body_adds_one_issuing_condition` | `certificate_renewal_tests.rs` | condition fields, `observedGeneration`, other conditions and spec unchanged |
+| `renewal_body_adds_one_issuing_condition` | `certificate_renewal_tests.rs` | condition fields, `observedGeneration`; spec, other conditions, and other status fields (`notAfter`, `renewalTime`, `revision`) unchanged |
 | `renewal_body_replaces_a_false_issuing_condition` | same | `Issuing=False` → replaced, one left |
 | `renewal_refuses_issuing_and_deleting` | same | `AlreadyIssuing`, `Deleting` |
 | `renewal_body_drops_managed_fields_keeps_version` | same | no `managedFields`; `resourceVersion` kept |
+| `renew_get_not_found_is_not_found` | `object_write_certificate_tests.rs` | the GET answers 404 → `WriteError::NotFound`, zero PUTs |
 | `renew_dry_run_request_shape` | `object_write_certificate_tests.rs` (`FakeApi`) | GET, then `PUT …/certificates/tls/status?dryRun=All&fieldManager=k8sboard`, body |
 | `renew_commit_has_no_dry_run` | same | `?fieldManager=k8sboard` |
 | `renew_already_issuing_sends_no_put` | same | `Invalid`, one GET, zero PUTs |
@@ -77,4 +78,4 @@ Live: cert-manager is not on UAT (decisions.md probe table), so no row offers Re
 
 ## Files to touch
 
-Cluster: `certificate_renewal.rs` (new) + `certificate_renewal_tests.rs`, `object_write.rs` (variant, `name`, `checked_operation`, `fitting_access_check` custom arm, `changed_fields`, `supports_dry_run`, `send` arm), `object_write_certificate_tests.rs` (new, wired like the other write test modules), `access_review.rs` (`UpdateCertificateStatus` in `ALL`), `object_yaml.rs` (`as_custom` reuse only), `lib.rs`. App: `custom_kind.rs` (`is_cert_manager_certificate`), `resource_actions.rs` (action, gate, label, `kind_menu` arm), `workspace.rs` (header `Renew`), `resource_actions_tests.rs`, `app_shell_write_tests.rs`. Docs: the 0030 `write-path.md` allow-list row; gap audit row "W7 Certificates · Renew now".
+Cluster: `certificate_renewal.rs` (new) + `certificate_renewal_tests.rs`, `object_write.rs` (variant, `name`, `checked_operation`, `fitting_access_check` custom arm, `changed_fields`, `supports_dry_run`, `send` arm), `object_write_certificate_tests.rs` (new, wired like the other write test modules), `access_review.rs` (`UpdateCertificateStatus` in `ALL`; the `ALL` length test `all_checks_cover_distinct_permissions` goes from 55 to 56; the stale `22 x N + 4 requests` comment on `review_access` is rewritten from the current cluster-scoped and namespaced counts), `object_yaml.rs` (`as_custom` reuse only), `lib.rs`. App: `custom_kind.rs` (`is_cert_manager_certificate`), `resource_actions.rs` (action, gate, label, `kind_menu` arm), `workspace.rs` (header `Renew`), `resource_actions_tests.rs`, `app_shell_write_tests.rs`. Docs: the 0030 `write-path.md` allow-list row; gap audit row "W7 Certificates · Renew now".

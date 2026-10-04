@@ -28,24 +28,27 @@ pub struct DeploymentSummary { /* … */ pub template_change: Option<FieldWriter
 
 - `ChangeInputs` gains `deployments: Option<&[DeploymentSummary]>` (the Deployments condition feed's `KindObject::Deployment` items; `None` when the feed is off or loading).
 - `event_entry` for `ChangeKind::Deployment`: the event's Deployment (namespace, name) found in `deployments`; its `template_change` used as `actor` when `event.last_seen − 30 min ≤ at ≤ event.last_seen + 60 s` (decision 7); else the event source actor (today).
-- `ChangeEntry` gains `actor_source: ActorSource { FieldManager, EventSource }`; the row tooltip appends `· field manager` or `· event source`. Rendering of the actor text is unchanged.
+- `ChangeEntry` gains `actor_source: ActorSource { FieldManager, EventSource }`. A `FieldManager` actor is inferred, not recorded: the row tooltip reads `probably {manager} · last pod-template writer (field manager)`; an `EventSource` actor keeps today's tooltip plus `· event source`. The actor text in the row is unchanged.
+- Known ceiling (decision 7): an HPA scale of the same Deployment inside the window is attributed to the template writer too.
 
 ## App: click-to-diff
 
 ```rust
 impl AppShell {
-    /// Lists the Deployment's revisions on tokio, then opens the 0039 dialog with the newest and the
-    /// one before. Fewer than two numbered revisions → notice `No earlier revision kept for deployment/{name}`.
-    pub(crate) fn open_latest_revision_diff(&mut self, deployment: ResourceKey, window: &mut Window, cx: &mut Context<Self>);
+    /// Lists the Deployment's revisions on tokio, then opens the 0039 dialog: `named` (the ReplicaSet the
+    /// event names) against its predecessor when both are listed, else the newest and the one before.
+    /// Fewer than two numbered revisions → notice `No earlier revision kept for deployment/{name}`.
+    pub(crate) fn open_change_diff(&mut self, deployment: ResourceKey, named: Option<String>, window: &mut Window, cx: &mut Context<Self>);
 }
 ```
 
 | Item | Rule |
 |---|---|
-| Row click | `ChangeKind::Deployment` with a target → `open_latest_revision_diff`; every other row → `reveal` (today) |
+| Row click | `ChangeKind::Deployment` with a target and a known selector → `open_change_diff(key, entry.replica_set)`; a Deployment row whose selector is unknown (feed off), and every other row → `reveal` (today) |
+| Named set | `ChangeEntry` gains `replica_set: Option<String>`: `event_entry` takes the word after `replica set ` in the event message (`Scaled up replica set api-7d9f8c to 3`) when it is a DNS subdomain; else `None` |
 | Access | `ListReplicaSets` denied → notice `Revision diff is unavailable: Not permitted: list replicasets`; no request |
-| Request | `deployment_revisions` (one LIST), then the dialog's own two GETs (0039) |
-| Pair | `latest_pair(revision_list(..))` ([revision-history.md](revision-history.md)) → `diff_request(key, previous, newest)` |
+| Request | `deployment_revisions(key, selector)` (one LIST; selector from the Deployments condition feed row), then the dialog's own two GETs (0039) |
+| Pair | `change_pair(sides, named)` (pure, `revision_diff.rs`): the named side and the highest numbered side below it when both exist; else `latest_pair(revision_list(..))` ([revision-history.md](revision-history.md)). Then `diff_request(key, older, newer)` |
 | Busy | a second click while the LIST runs replaces the task (the field `revision_lookup: Option<Task<()>>`) |
 | Failure | notice `Could not load revisions: {error_text}` |
 | Dialog footer | `RevisionDiffView` gains an optional `go_to: Option<ResourceKey>`; when set, a ghost `Go to deployment` button reveals the key and closes the dialog. The drawer's Diff buttons pass `None` (they are already on the Deployment) |
