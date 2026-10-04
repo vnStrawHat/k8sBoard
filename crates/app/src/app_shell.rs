@@ -17,7 +17,7 @@ use gpui_kit::{
     Styled as _, Subscription, Task, Window, px,
 };
 
-use crate::active_session::ActiveSession;
+use crate::active_session::{ActiveConnection, ActiveSession};
 use crate::cluster_catalog::{CatalogHandle, ClusterCatalog};
 use crate::cluster_form::RowOrigin;
 use crate::cluster_health::{ProbeCandidate, ProbeResult, ProbeTarget, RowHealth, probe_stream};
@@ -188,6 +188,10 @@ mod app_shell_tests;
 #[cfg(test)]
 #[path = "app_shell_switch_tests.rs"]
 mod app_shell_switch_tests;
+
+#[cfg(test)]
+#[path = "app_shell_metrics_tests.rs"]
+mod app_shell_metrics_tests;
 
 #[cfg(test)]
 #[path = "app_shell_log_defaults_tests.rs"]
@@ -786,6 +790,7 @@ impl AppShell {
                     shell.sync_view_sessions(cx);
                 }
                 shell.sync_forward_presets(cx);
+                shell.sync_metrics_source(cx);
                 cx.notify();
             }),
         };
@@ -1050,6 +1055,7 @@ impl AppShell {
         // The delegates and the graph hold the session too: they must let go before the entity
         // can be released, and before the next session connects.
         let released = self.active_session.take();
+        self.sync_active_connection(cx);
         self.sync_view_sessions(cx);
         drop(released);
         // A filter, a pending reveal, or a picker draft written for one cluster would surprise in
@@ -3369,6 +3375,47 @@ impl AppShell {
         }
     }
 
+    /// Publishes the live connection of the open cluster for the Settings window, or removes it
+    /// when there is none. The same connection is not set again: every watch update lands here.
+    fn sync_active_connection(&self, cx: &mut Context<Self>) {
+        let published = self.active_session.as_ref().and_then(|open| {
+            let session = open.session.read(cx);
+            let live = session.live()?;
+            Some(ActiveConnection {
+                cluster: open.cluster.clone(),
+                label: open.label.clone(),
+                connection: live.connection().clone(),
+                session: open.session.downgrade(),
+                generation: session.generation(),
+            })
+        });
+        let Some(published) = published else {
+            if cx.has_global::<ActiveConnection>() {
+                cx.remove_global::<ActiveConnection>();
+            }
+            return;
+        };
+        let is_current = cx.try_global::<ActiveConnection>().is_some_and(|current| {
+            current.cluster == published.cluster
+                && current.label == published.label
+                && current.generation == published.generation
+        });
+        if !is_current {
+            cx.set_global(published);
+        }
+    }
+
+    /// Hands the stored metrics source of the open cluster to its session, which rebuilds the
+    /// state when the entry changed.
+    fn sync_metrics_source(&mut self, cx: &mut Context<Self>) {
+        let Some(open) = &self.active_session else {
+            return;
+        };
+        let wanted = AppSettings::get(cx).registry.profile(&open.summary).metrics;
+        open.session
+            .update(cx, |session, cx| session.set_metrics_source(wanted, cx));
+    }
+
     /// The session changed. Its first Live writes `last_used` (so a cluster that fails to connect
     /// is not reopened at the next start); everything that shows rows or the drawer is then brought
     /// up to date.
@@ -3393,6 +3440,7 @@ impl AppShell {
         self.apply_pending_reveal(cx);
         self.sync_selection(cx);
         self.follow_drawer_subjects(cx);
+        self.sync_active_connection(cx);
         cx.notify();
     }
 
@@ -3974,6 +4022,8 @@ impl AppShell {
         SettleInput {
             target,
             is_catalog_loading: self.catalog.read(cx).is_loading(),
+            is_metrics_page_pending: target != TargetState::Unavailable
+                && crate::settings_window::is_metrics_page_pending(cx),
             // An empty list opens no drawer, but the launch request is resolved then, so it settles.
             is_drawer_ready: is_drawer_ready(
                 self.drawer_subject().is_some(),

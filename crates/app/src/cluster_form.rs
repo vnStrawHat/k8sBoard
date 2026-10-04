@@ -234,6 +234,7 @@ pub(crate) fn edit_entry(
             || entry.node_shell_namespace.is_some()
             || entry.color.is_some()
             || entry.proxy.is_some()
+            || entry.metrics.is_some()
     });
 }
 

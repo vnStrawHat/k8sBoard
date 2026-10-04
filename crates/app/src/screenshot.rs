@@ -105,6 +105,8 @@ pub(crate) struct SettleInput {
     pub(crate) target: TargetState,
     /// The kubeconfig catalog is still loading, which the Settings screens wait for.
     pub(crate) is_catalog_loading: bool,
+    /// The Metrics page of the Settings window waits for its cluster or its detection.
+    pub(crate) is_metrics_page_pending: bool,
     /// A drawer screen has its row selected, or found no row to select.
     pub(crate) is_drawer_ready: bool,
     /// A logs screen whose tab is not open yet or still connecting.
@@ -521,7 +523,7 @@ pub(crate) fn is_drawer_ready(
 pub(crate) fn is_screen_settled(screen: LaunchScreen, input: &SettleInput) -> bool {
     // A Settings screen shows the catalog, not the main window's session.
     if screen.settings_screen().is_some() {
-        return !input.is_catalog_loading;
+        return !input.is_catalog_loading && !input.is_metrics_page_pending;
     }
     // A dialog drawn from fixed data waits for no cluster, only for its own opening.
     if screen.is_dialog_fixture() {
@@ -774,6 +776,7 @@ mod tests {
         SettleInput {
             target,
             is_catalog_loading: false,
+            is_metrics_page_pending: false,
             is_drawer_ready,
             is_log_pending: false,
             is_dialog_pending: false,
@@ -868,6 +871,7 @@ mod tests {
         let screen = LaunchScreen::Settings(SettingsPage::Clusters, SettingsSize::Standard);
         let loading = SettleInput {
             is_catalog_loading: true,
+            is_metrics_page_pending: false,
             ..input(TargetState::Loading, false)
         };
         assert!(!is_screen_settled(screen, &loading));
@@ -876,6 +880,24 @@ mod tests {
             screen,
             &input(TargetState::Loading, false)
         ));
+    }
+
+    #[test]
+    fn metrics_settings_screen_waits_for_its_page() {
+        let pending = SettleInput {
+            is_metrics_page_pending: true,
+            ..input(TargetState::Loaded, false)
+        };
+        for screen in [
+            LaunchScreen::SettingsMetrics,
+            LaunchScreen::SettingsMetricsFixture,
+        ] {
+            assert!(!is_screen_settled(screen, &pending), "{screen:?}");
+            assert!(is_screen_settled(
+                screen,
+                &input(TargetState::Loaded, false)
+            ));
+        }
     }
 
     #[test]

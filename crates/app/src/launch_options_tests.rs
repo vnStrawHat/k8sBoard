@@ -1157,3 +1157,22 @@ fn screen_new_config_map_parses() {
     assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
     assert!(USAGE.contains("new-config-map"));
 }
+
+#[test]
+fn screen_settings_metrics_parses() {
+    for (text, screen) in [
+        ("settings-metrics", LaunchScreen::SettingsMetrics),
+        (
+            "settings-metrics-fixture",
+            LaunchScreen::SettingsMetricsFixture,
+        ),
+    ] {
+        let parsed = run_options(&["--screen", text]).screen;
+        assert_eq!(parsed, screen);
+        assert_eq!(
+            parsed.settings_screen(),
+            Some((SettingsPage::Metrics, SettingsSize::Standard))
+        );
+        assert_eq!(parsed.screen(), Screen::Overview);
+    }
+}

@@ -74,6 +74,7 @@ fn entry(context: &str, source: &str) -> ClusterEntry {
         node_shell_namespace: None,
         color: None,
         proxy: None,
+        metrics: None,
     }
 }
 
@@ -812,4 +813,25 @@ contexts:
         "{note}"
     );
     assert_eq!(note_of(false), None);
+}
+
+#[test]
+fn reset_clears_metrics() {
+    let mut registry = ClusterRegistry::default();
+    let target = ClusterRef {
+        kubeconfig: PathBuf::from("a.yaml"),
+        context: "one".to_owned(),
+    };
+    edit_entry(&mut registry, &target, |entry| {
+        entry.metrics = Some(cluster::MetricsSourceFields {
+            namespace: "monitoring".to_owned(),
+            service: "vmselect".to_owned(),
+            port: "8481".to_owned(),
+            scheme: cluster::MetricsScheme::Http,
+            prefix: String::new(),
+        });
+    });
+    assert_eq!(registry.clusters.len(), 1, "a metrics-only entry is kept");
+    reset_entry(&mut registry, &target);
+    assert!(registry.clusters.is_empty());
 }

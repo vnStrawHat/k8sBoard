@@ -78,6 +78,7 @@ mod log_volume;
 mod log_window;
 mod log_workload;
 mod metrics_history;
+mod metrics_page;
 mod monitor_data;
 mod monitor_notices;
 mod monitor_tab;
@@ -258,6 +259,10 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
             });
             cx.on_action(|_: &ManageClusters, cx| manage_clusters(cx));
             let settings_screen = options.screen.settings_screen();
+            #[cfg(feature = "screenshot")]
+            if options.screen == launch_options::LaunchScreen::SettingsMetricsFixture {
+                cx.set_global(metrics_page::MetricsFixture);
+            }
 
             #[cfg(feature = "screenshot")]
             let screenshot_request =

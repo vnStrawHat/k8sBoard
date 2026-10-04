@@ -3,8 +3,8 @@
 //! polls, so they are not watches and never set the status bar's problem flag.
 
 use cluster::{
-    AccessCheck, AccessDecision, ClusterError, NamespaceAccess, NamespaceScope, NodeMetrics,
-    PodMetrics, PodSummary, WatchUpdate,
+    AccessCheck, AccessDecision, ClusterError, MetricsError, MetricsSource, NamespaceAccess,
+    NamespaceScope, NodeMetrics, PodMetrics, PodSummary, SourceCheck, WatchUpdate,
 };
 use gpui_kit::Task;
 
@@ -22,6 +22,9 @@ pub(crate) struct ClusterMetrics {
     pub(crate) pods: MetricsFeed<PodUsageHistory>,
     pub(crate) nodes: MetricsFeed<NodeUsageHistory>,
     pub(crate) kubelet: KubeletFeed,
+    /// The Prometheus-compatible source of the cluster (spec 0048); its check runs once per session
+    /// start and after each change of the stored entry.
+    pub(crate) source: SourceState,
     pod_review: PodReview,
 }
 
@@ -37,6 +40,7 @@ impl ClusterMetrics {
             pods: MetricsFeed::new("pod metrics"),
             nodes: MetricsFeed::new("node metrics"),
             kubelet: KubeletFeed::new(),
+            source: SourceState::None,
             pod_review,
         }
     }
@@ -62,6 +66,26 @@ impl ClusterMetrics {
         self.pods.status = FeedStatus::Checking;
         self.pod_review = review;
     }
+}
+
+/// Where the metrics source of the cluster stands. Dropping `Checking` drops its request.
+pub(crate) enum SourceState {
+    /// metrics-server only.
+    None,
+    /// The stored entry does not validate; no request is made for it.
+    Invalid,
+    Checking {
+        source: MetricsSource,
+        _task: Task<()>,
+    },
+    Ready {
+        source: MetricsSource,
+        check: SourceCheck,
+    },
+    Failed {
+        source: MetricsSource,
+        error: MetricsError,
+    },
 }
 
 /// One metrics feed: the history it fills and where it stands.

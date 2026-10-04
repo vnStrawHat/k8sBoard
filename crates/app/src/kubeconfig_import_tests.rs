@@ -60,6 +60,7 @@ fn collisions_report_context_display_name_cluster_and_user() {
             node_shell_namespace: None,
             color: None,
             proxy: None,
+            metrics: None,
         }],
         ..ClusterRegistry::default()
     };

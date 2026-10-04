@@ -23,6 +23,7 @@ use crate::cluster_catalog::CatalogHandle;
 use crate::cluster_form::MoveStep;
 use crate::clusters_page::{ClustersPage, add_cluster_button};
 use crate::environment::Environment;
+use crate::metrics_page::MetricsPage;
 use crate::settings::{
     AppSettings, DENSITY_OPTIONS, FONT_SIZE_OPTIONS, OptionTable, SCROLLBACK_OPTIONS,
     SHELL_OPTIONS, Settings as SettingsData, TAIL_OPTIONS, theme_choices, theme_from_label,
@@ -53,7 +54,7 @@ const SEARCH_WIDTH: f32 = 200.;
 
 /// The pages in W2 nav order, keeping only those with content. A later spec inserts its page
 /// at its W2 position.
-const PAGES: [SettingsPage; 8] = [
+const PAGES: [SettingsPage; 9] = [
     SettingsPage::General,
     SettingsPage::Clusters,
     SettingsPage::Appearance,
@@ -61,6 +62,7 @@ const PAGES: [SettingsPage; 8] = [
     SettingsPage::Safety,
     SettingsPage::TerminalAndShell,
     SettingsPage::Logs,
+    SettingsPage::Metrics,
     SettingsPage::About,
 ];
 
@@ -73,6 +75,7 @@ pub(crate) enum SettingsPage {
     Safety,
     TerminalAndShell,
     Logs,
+    Metrics,
     About,
 }
 
@@ -86,6 +89,7 @@ impl SettingsPage {
             Self::Safety => "Safety",
             Self::TerminalAndShell => "Terminal & Shell",
             Self::Logs => "Logs",
+            Self::Metrics => "Metrics",
             Self::About => "About",
         }
     }
@@ -99,6 +103,7 @@ impl SettingsPage {
             Self::Safety => IconName::ShieldCheck,
             Self::TerminalAndShell => IconName::SquareTerminal,
             Self::Logs => IconName::FileText,
+            Self::Metrics => IconName::ChartLine,
             Self::About => IconName::Info,
         }
     }
@@ -191,9 +196,31 @@ pub(crate) fn manage_clusters(cx: &mut App) {
     open_settings_window(SettingsPage::Clusters, SettingsSize::Standard, cx);
 }
 
+/// "Choose on the Metrics page…": the Settings window on the Metrics page, opened or brought
+/// forward.
+pub(crate) fn show_metrics_page(cx: &mut App) {
+    if let Some(open) = open_window_of(cx) {
+        let _ = open
+            .view
+            .update(cx, |view, cx| view.show_page(SettingsPage::Metrics, cx));
+    }
+    open_settings_window(SettingsPage::Metrics, SettingsSize::Standard, cx);
+}
+
 fn open_window_of(cx: &App) -> Option<OpenWindow> {
     cx.try_global::<SettingsWindowHandle>()
         .and_then(|handle| handle.0.clone())
+}
+
+/// Whether the open Settings window shows the Metrics page and that page still waits for its
+/// cluster or its detection; a screenshot of it waits too.
+#[cfg(feature = "screenshot")]
+pub(crate) fn is_metrics_page_pending(cx: &App) -> bool {
+    let Some(view) = open_window_of(cx).and_then(|open| open.view.upgrade()) else {
+        return false;
+    };
+    let window = view.read(cx);
+    window.first_page == SettingsPage::Metrics && !window.metrics.read(cx).is_settled()
 }
 
 /// Clears the handle when the Settings window closes.
@@ -233,6 +260,7 @@ pub(crate) struct SettingsWindow {
     /// Changes with each `show_page`: a new key gives the kit `Settings` a fresh selection.
     page_generation: usize,
     clusters: Entity<ClustersPage>,
+    metrics: Entity<MetricsPage>,
     focus_handle: FocusHandle,
     _observers: Vec<Subscription>,
 }
@@ -243,10 +271,12 @@ impl SettingsWindow {
         // A status left over from a closed window must not show here.
         catalog.update(cx, |catalog, cx| catalog.reset_paste_status(cx));
         let clusters = cx.new(|cx| ClustersPage::new(catalog.clone(), window, cx));
+        let metrics = cx.new(|cx| MetricsPage::open(window, cx));
         Self {
             first_page,
             page_generation: 0,
             clusters,
+            metrics,
             focus_handle: cx.focus_handle(),
             _observers: vec![
                 cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
@@ -273,6 +303,7 @@ impl SettingsWindow {
                     SettingsPage::Safety => safety_page(),
                     SettingsPage::TerminalAndShell => terminal_page(),
                     SettingsPage::Logs => logs_page(),
+                    SettingsPage::Metrics => metrics_page(&self.metrics),
                     SettingsPage::About => about_page(cx),
                 };
                 built.icon(page.icon())
@@ -339,6 +370,15 @@ fn clusters_page(page: &Entity<ClustersPage>, cx: &App) -> SettingPage {
                 .child(Input::new(&search).w(px(SEARCH_WIDTH)))
                 .child(add_cluster_button(add.clone(), blocked))
         })
+        .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| body.clone())))
+}
+
+/// The Metrics page: one element item, because the radio list and the inputs are a view of their
+/// own (the item closure only gets the app context).
+fn metrics_page(page: &Entity<MetricsPage>) -> SettingPage {
+    let body = page.clone();
+    SettingPage::new(SettingsPage::Metrics.title())
+        .resettable(false)
         .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| body.clone())))
 }
 

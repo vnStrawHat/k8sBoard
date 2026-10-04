@@ -9,17 +9,19 @@ use cluster::{
     AccessCheck, AccessDecision, AccessReport, BindingSummary, ChangeEventKind, ClusterConnection,
     ClusterError, ConfigMapValues, ContextSummary, CrdSummary, CustomObjectFields,
     EndpointSliceSummary, EventFilter, EventSummary, HelmRevision, IngressSummary, InvolvedObject,
-    JobSummary, Kubeconfig, KubeletTargets, LimitRangeSummary, NamespaceAccess, NamespaceScope,
-    NamespaceSummary, NodeSummary, ObjectKind, PersistentVolumeSummary, PodSummary, ProxyChoice,
-    ProxyUrlError, RbacSnapshot, ReplicaSetSummary, ResourceQuotaSummary, SecretSummary,
-    ServerVersion, StorageClassSummary, WatchUpdate,
+    JobSummary, Kubeconfig, KubeletTargets, LimitRangeSummary, MetricsError, MetricsSource,
+    MetricsSourceError, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, ObjectKind,
+    PersistentVolumeSummary, PodSummary, ProxyChoice, ProxyUrlError, RbacSnapshot,
+    ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, SourceCheck,
+    StorageClassSummary, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{App, Context, Task};
 use tokio::sync::watch;
 
 use crate::cluster_metrics::{
-    ClusterMetrics, NodesGate, PodReview, PodReviewResult, PodsGate, nodes_gate, pods_gate,
+    ClusterMetrics, NodesGate, PodReview, PodReviewResult, PodsGate, SourceState, nodes_gate,
+    pods_gate,
 };
 use crate::cluster_registry::open_cluster;
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
@@ -86,6 +88,9 @@ pub(crate) struct ClusterSession {
     /// What Topology draws while it is shown: its feeds run for this subject. Kept across Connecting
     /// and retry like `explorer_kind`.
     topology_subject: Option<TopologySubject>,
+    /// The stored metrics source this session follows (spec 0048); the live state is rebuilt when it
+    /// changes. Kept across Connecting and retry like `explorer_kind`.
+    source_entry: Option<Result<MetricsSource, MetricsSourceError>>,
     _issue_tick: Task<()>,
 }
 
@@ -1251,7 +1256,9 @@ impl ClusterSession {
             requested_namespace,
         };
         let phase = Self::begin_connect(&inputs, summary, cx);
-        let lock = WriteLock::at_open(&AppSettings::get(cx).registry.profile(summary));
+        let profile = AppSettings::get(cx).registry.profile(summary);
+        let lock = WriteLock::at_open(&profile);
+        let source_entry = profile.metrics;
         Self {
             inputs,
             summary: summary.clone(),
@@ -1266,6 +1273,7 @@ impl ClusterSession {
             is_issues_visible: false,
             is_overview_visible: false,
             topology_subject: None,
+            source_entry,
             _issue_tick: Self::start_issue_tick(cx),
         }
     }
@@ -1517,8 +1525,7 @@ impl ClusterSession {
         ))
     }
 
-    /// The connection generation, for the tests that watch a reconnect.
-    #[cfg(test)]
+    /// The connection generation: a reconnect takes a new one.
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
@@ -1647,6 +1654,7 @@ impl ClusterSession {
         self.review_kind_access(cx);
         self.refresh_kind_counts(CountTrigger::Review, cx);
         self.update_metrics_feeds(cx);
+        self.restart_source_check(cx);
         cx.notify();
     }
 
@@ -2213,6 +2221,72 @@ impl ClusterSession {
                 live.start_explorer(kind, scope, event_filter, &runtime, cx);
             }
         }
+        cx.notify();
+    }
+
+    /// Follows the stored metrics source of the cluster. The same entry is a no-op; another one
+    /// rebuilds the state at once (a running check is dropped), or waits for the session to be live.
+    pub(crate) fn set_metrics_source(
+        &mut self,
+        entry: Option<Result<MetricsSource, MetricsSourceError>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.source_entry == entry {
+            return;
+        }
+        self.source_entry = entry;
+        self.restart_source_check(cx);
+    }
+
+    /// Builds the `SourceState` from the stored entry: one `check_metrics_source` for a valid one,
+    /// no request for `Invalid` or `None`. A live session only.
+    fn restart_source_check(&mut self, cx: &mut Context<Self>) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let entry = self.source_entry.clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        live.metrics.source = match entry {
+            None => SourceState::None,
+            Some(Err(_)) => SourceState::Invalid,
+            Some(Ok(source)) => {
+                let connection = live.connection.clone();
+                let checked = source.clone();
+                let checking =
+                    runtime.spawn(async move { connection.check_metrics_source(&checked).await });
+                let task = cx.spawn(async move |this, cx| {
+                    let result = checking.await;
+                    let _ = this.update(cx, |session, cx| session.finish_source_check(result, cx));
+                });
+                SourceState::Checking {
+                    source,
+                    _task: task,
+                }
+            }
+        };
+        cx.notify();
+    }
+
+    fn finish_source_check(
+        &mut self,
+        result: Result<Result<SourceCheck, MetricsError>, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        let SourceState::Checking { source, .. } = &live.metrics.source else {
+            return;
+        };
+        let source = source.clone();
+        live.metrics.source = match result {
+            Ok(Ok(check)) => SourceState::Ready { source, check },
+            Ok(Err(error)) => SourceState::Failed { source, error },
+            Err(_) => SourceState::Failed {
+                source,
+                error: MetricsError::Unexpected("the check task stopped unexpectedly".to_owned()),
+            },
+        };
         cx.notify();
     }
 

@@ -10,7 +10,7 @@ Status: **built 2026-10-04 on main `bdc1f31` (steps 1–5, [as-built.md](as-buil
 
 ## Non-goals
 
-Metrics and Extensions pages (backlog); anything multi-cluster; a clipboard-clear setting (0016 decision 26 stays); a global proxy, `HTTPS_PROXY`/`NO_PROXY`, `https://` proxies in Settings, proxy credentials in settings or an OS keychain; recursive folder watch; settings not tied to existing behaviour (decision 32); dock height (0044).
+the Extensions page (backlog; the Metrics page is 0048); anything multi-cluster; a clipboard-clear setting (0016 decision 26 stays); a global proxy, `HTTPS_PROXY`/`NO_PROXY`, `https://` proxies in Settings, proxy credentials in settings or an OS keychain; recursive folder watch; settings not tied to existing behaviour (decision 32); dock height (0044).
 
 ## Implementation steps
 

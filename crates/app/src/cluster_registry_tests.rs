@@ -31,6 +31,7 @@ fn entry(context: &str, source: &str) -> ClusterEntry {
         node_shell_namespace: None,
         color: None,
         proxy: None,
+        metrics: None,
     }
 }
 
@@ -57,6 +58,7 @@ fn profile_of_unregistered_context_uses_name_and_guess() {
             node_shell_namespace: "kube-system".to_owned(),
             color: crate::environment::ClusterColor::Red,
             proxy: Ok(cluster::ProxyChoice::Kubeconfig),
+            metrics: None,
         }
     );
 }
@@ -535,4 +537,59 @@ fn debug_of_cluster_proxy_hides_userinfo() {
     stored.proxy = Some(hand_edited);
     let text = format!("{stored:?}");
     assert!(!text.contains("u:p"), "{text}");
+}
+
+fn metrics_fields(prefix: &str) -> MetricsSourceFields {
+    MetricsSourceFields {
+        namespace: "monitoring".to_owned(),
+        service: "vmselect".to_owned(),
+        port: "8481".to_owned(),
+        scheme: cluster::MetricsScheme::Http,
+        prefix: prefix.to_owned(),
+    }
+}
+
+#[test]
+fn profile_without_a_metrics_entry_has_no_source() {
+    let profile = ClusterRegistry::default().profile(&summary("dev-1", "a.yaml"));
+    assert_eq!(profile.metrics, None);
+}
+
+#[test]
+fn stored_metrics_entry_is_validated_into_the_profile() {
+    let mut stored = entry("dev-1", "a.yaml");
+    stored.metrics = Some(metrics_fields("/select/0/prometheus"));
+    let profile = registry_with(stored).profile(&summary("dev-1", "a.yaml"));
+    let source = profile.metrics.expect("an entry").expect("valid");
+    assert_eq!(source.fields(), metrics_fields("/select/0/prometheus"));
+}
+
+#[test]
+fn invalid_metrics_entry_fails_closed() {
+    let mut stored = entry("dev-1", "a.yaml");
+    stored.metrics = Some(metrics_fields("/a/../b"));
+    let registry = registry_with(stored);
+    let profile = registry.profile(&summary("dev-1", "a.yaml"));
+    assert_eq!(profile.metrics, Some(Err(MetricsSourceError::Prefix)));
+    assert_eq!(
+        registry.clusters[0].metrics,
+        Some(metrics_fields("/a/../b")),
+        "the stored text is not rewritten"
+    );
+}
+
+#[test]
+fn metrics_entry_round_trips_without_a_credential_field() {
+    let mut stored = entry("dev-1", "a.yaml");
+    stored.metrics = Some(metrics_fields(""));
+    let json = serde_json::to_value(&stored).expect("serializes");
+    assert_eq!(
+        json["metrics"],
+        serde_json::json!({
+            "namespace": "monitoring", "service": "vmselect", "port": "8481",
+            "scheme": "http", "prefix": ""
+        })
+    );
+    let back: ClusterEntry = serde_json::from_value(json).expect("parses");
+    assert_eq!(back, stored);
 }

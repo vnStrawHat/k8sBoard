@@ -28,6 +28,7 @@ fn row(context: &str, label: &str, environment: Environment) -> ClusterRow {
             node_shell_namespace: "kube-system".to_owned(),
             color: crate::environment::ClusterColor::of(environment),
             proxy: Ok(cluster::ProxyChoice::Kubeconfig),
+            metrics: None,
         },
         label: label.to_owned(),
         meta: String::new(),

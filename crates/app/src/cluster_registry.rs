@@ -7,7 +7,8 @@ use std::fmt;
 
 use cluster::{
     ClusterConnection, ClusterError, ContextSummary, DEFAULT_DEBUG_IMAGE, Kubeconfig,
-    NamespaceScope, ProxyChoice, ProxyUrl, ProxyUrlError,
+    MetricsSource, MetricsSourceError, MetricsSourceFields, NamespaceScope, ProxyChoice, ProxyUrl,
+    ProxyUrlError,
 };
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +77,11 @@ pub(crate) struct ClusterEntry {
     /// How the client reaches the API server; `None` is the kubeconfig's own `proxy-url`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) proxy: Option<ClusterProxy>,
+    /// The Prometheus-compatible source of the Monitor ranges and Topology traffic (spec 0048):
+    /// namespace, service, port, scheme, and prefix only, never a credential. `None` is
+    /// metrics-server only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) metrics: Option<MetricsSourceFields>,
 }
 
 /// The namespace of a node shell pod unless the entry names another: usually exempt from Pod
@@ -102,6 +108,9 @@ pub(crate) struct ClusterProfile {
     /// The stored proxy, parsed here so that nothing past the profile holds an unchecked URL. A
     /// stored URL that does not parse is an `Err`: the connection fails instead of going direct.
     pub(crate) proxy: Result<ProxyChoice, ProxyUrlError>,
+    /// The stored metrics source, validated here so that nothing past the profile holds an
+    /// unchecked one. A stored entry that does not validate is an `Err`: no request is made for it.
+    pub(crate) metrics: Option<Result<MetricsSource, MetricsSourceError>>,
 }
 
 impl ClusterRef {
@@ -145,6 +154,7 @@ impl ClusterRegistry {
                 node_shell_namespace: None,
                 color: None,
                 proxy: None,
+                metrics: None,
             });
             self.clusters.len() - 1
         });
@@ -203,6 +213,9 @@ impl ClusterRegistry {
                 .and_then(|entry| entry.color)
                 .unwrap_or_else(|| ClusterColor::of(environment)),
             proxy: stored_proxy(entry.and_then(|entry| entry.proxy.as_ref())),
+            metrics: entry
+                .and_then(|entry| entry.metrics.as_ref())
+                .map(MetricsSource::new),
         }
     }
 }

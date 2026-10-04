@@ -197,6 +197,7 @@ fn pages_follow_w2_order() {
             "Safety",
             "Terminal & Shell",
             "Logs",
+            "Metrics",
             "About"
         ]
     );
@@ -206,7 +207,7 @@ fn pages_follow_w2_order() {
 fn default_page_is_clusters() {
     assert_eq!(PAGES[1], SettingsPage::Clusters);
     assert_eq!(SettingsPage::Clusters.index(), 1);
-    assert_eq!(SettingsPage::About.index(), 7);
+    assert_eq!(SettingsPage::About.index(), 8);
 }
 
 #[gpui_kit::test]

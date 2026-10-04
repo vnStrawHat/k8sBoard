@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use cluster::ShellCommand;
+use cluster::{MetricsScheme, MetricsSourceFields, ShellCommand};
 use gpui_kit::TestAppContext;
 use gpui_kit::component::Theme;
 use serde_json::{Value, json};
@@ -50,6 +50,13 @@ fn full_settings() -> Settings {
                 node_shell_namespace: Some("debug".to_owned()),
                 color: Some(ClusterColor::Teal),
                 proxy: Some(ClusterProxy::Url("http://proxy.example:3128".to_owned())),
+                metrics: Some(MetricsSourceFields {
+                    namespace: "monitoring".to_owned(),
+                    service: "vmselect".to_owned(),
+                    port: "8481".to_owned(),
+                    scheme: MetricsScheme::Http,
+                    prefix: "/select/0/prometheus".to_owned(),
+                }),
             }],
             last_used: Some(cluster),
             last_used_stamp: Some(FileStamp {
@@ -231,6 +238,12 @@ fn settings_keys_are_the_allow_list() {
             "registry.clusters.display_name",
             "registry.clusters.environment",
             "registry.clusters.kubeconfig",
+            "registry.clusters.metrics",
+            "registry.clusters.metrics.namespace",
+            "registry.clusters.metrics.port",
+            "registry.clusters.metrics.prefix",
+            "registry.clusters.metrics.scheme",
+            "registry.clusters.metrics.service",
             "registry.clusters.node_shell_namespace",
             "registry.clusters.proxy",
             "registry.clusters.proxy.url",

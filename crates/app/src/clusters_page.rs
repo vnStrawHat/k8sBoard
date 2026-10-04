@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cluster::Kubeconfig;
+use cluster::{Kubeconfig, MetricsSourceFields};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogButtonProps;
@@ -26,6 +26,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 
+use crate::active_session::ActiveConnection;
 use crate::app_shell::find_cluster;
 use crate::cluster_catalog::{CatalogNotice, ClusterCatalog, PasteStatus};
 use crate::cluster_form::{
@@ -42,7 +43,7 @@ use crate::drawer::truncated_text;
 use crate::environment::{ClusterColor, Environment, cluster_color, environment_badge};
 use crate::resource_actions::disabled_menu_item;
 use crate::settings::AppSettings;
-use crate::settings_window::ImportKubeconfig;
+use crate::settings_window::{ImportKubeconfig, show_metrics_page};
 use crate::write_guard::ConfirmMode;
 
 #[path = "clusters_page_import.rs"]
@@ -882,6 +883,15 @@ impl ClustersPage {
                 .into_any_element(),
             cx,
         );
+        let metrics_row = form_row(
+            "Source",
+            v_flex()
+                .gap_1()
+                .child(centered(metrics_menu(row, entry.as_ref(), cx)))
+                .child(muted_text(METRICS_HINT, cx))
+                .into_any_element(),
+            cx,
+        );
         let proxy_row = self.render_proxy(
             entry.as_ref(),
             info.as_ref().and_then(|info| info.proxy.as_deref()),
@@ -926,6 +936,7 @@ impl ClustersPage {
                 [read_only_row, confirm_row, node_shell_row],
                 cx,
             ))
+            .child(section("Metrics", [metrics_row], cx))
             .child(
                 v_flex()
                     .gap_2()
@@ -1175,6 +1186,70 @@ pub(crate) fn set_allow_node_shell(cluster: &ClusterRef, allowed: Option<bool>, 
             entry.allow_node_shell = allowed;
         });
     });
+}
+
+const METRICS_HINT: &str = "Used for 7- and 30-day Monitor ranges and Topology traffic.";
+const METRICS_SERVER_ONLY: &str = "metrics-server only";
+
+/// Stores the metrics source of `cluster`; `None` is metrics-server only.
+pub(crate) fn set_metrics_source(
+    cluster: &ClusterRef,
+    source: Option<MetricsSourceFields>,
+    cx: &mut App,
+) {
+    AppSettings::update(cx, |settings| {
+        edit_entry(&mut settings.registry, cluster, |entry| {
+            entry.metrics = source;
+        });
+    });
+}
+
+/// What the Source button shows: `metrics-server only` or the saved service.
+fn metrics_source_label(stored: Option<&MetricsSourceFields>) -> String {
+    match stored {
+        None => METRICS_SERVER_ONLY.to_owned(),
+        Some(fields) => format!(
+            "Prometheus-compatible · {}/{}:{}",
+            fields.namespace, fields.service, fields.port
+        ),
+    }
+}
+
+/// The Metrics section's Source dropdown (W2 `Metrics · Source ▾`).
+fn metrics_menu(row: &ClusterRow, entry: Option<&ClusterEntry>, cx: &App) -> impl IntoElement {
+    let stored = entry.and_then(|entry| entry.metrics.clone());
+    let is_active = cx
+        .try_global::<ActiveConnection>()
+        .is_some_and(|active| active.cluster == row.cluster);
+    let cluster = row.cluster.clone();
+    Button::new("metrics-source")
+        .small()
+        .outline()
+        .label(metrics_source_label(stored.as_ref()))
+        .dropdown_caret(true)
+        .dropdown_menu(move |menu, _, _| {
+            let cluster = cluster.clone();
+            let clear = PopupMenuItem::new(METRICS_SERVER_ONLY)
+                .checked(stored.is_none())
+                .on_click(move |_, _, cx| set_metrics_source(&cluster, None, cx));
+            let menu = menu.item(clear);
+            let menu = match &stored {
+                Some(fields) => {
+                    menu.item(PopupMenuItem::new(metrics_source_label(Some(fields))).checked(true))
+                }
+                None => menu,
+            };
+            let choose = if is_active {
+                PopupMenuItem::new("Choose on the Metrics page…")
+                    .on_click(|_, _, cx| show_metrics_page(cx))
+            } else {
+                disabled_menu_item(
+                    "Choose on the Metrics page…",
+                    "Connect to this cluster first".into(),
+                )
+            };
+            menu.separator().item(choose)
+        })
 }
 
 fn confirm_menu(row: &ClusterRow, entry: Option<&ClusterEntry>) -> impl IntoElement {

@@ -13,6 +13,7 @@ fn profile(environment: Environment, read_only: bool) -> ClusterProfile {
         node_shell_namespace: "kube-system".to_owned(),
         color: crate::environment::ClusterColor::of(environment),
         proxy: Ok(cluster::ProxyChoice::Kubeconfig),
+        metrics: None,
     }
 }
 

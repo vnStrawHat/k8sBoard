@@ -901,3 +901,49 @@ fn proxy_input_never_shows_an_unparsable_value(cx: &mut TestAppContext) {
     assert_eq!(shown, "");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- The Metrics section ----
+
+fn metrics_fields() -> MetricsSourceFields {
+    MetricsSourceFields {
+        namespace: "monitoring".to_owned(),
+        service: "vmselect".to_owned(),
+        port: "8481".to_owned(),
+        scheme: cluster::MetricsScheme::Http,
+        prefix: "/select/0/prometheus".to_owned(),
+    }
+}
+
+#[test]
+fn source_button_names_metrics_server_or_the_saved_service() {
+    assert_eq!(metrics_source_label(None), "metrics-server only");
+    assert_eq!(
+        metrics_source_label(Some(&metrics_fields())),
+        "Prometheus-compatible · monitoring/vmselect:8481"
+    );
+}
+
+#[gpui_kit::test]
+fn form_dropdown_clears_the_source(cx: &mut TestAppContext) {
+    let (dir, _window, _page) = two_cluster_setup("metrics-clear", cx);
+    let cluster = ClusterRef {
+        kubeconfig: dir.join("chain.yaml"),
+        context: "prod-a".to_owned(),
+    };
+    let stored = |cx: &mut TestAppContext| {
+        cx.read(|cx| {
+            AppSettings::get(cx)
+                .registry
+                .clusters
+                .iter()
+                .find(|entry| entry.cluster == cluster)
+                .and_then(|entry| entry.metrics.clone())
+        })
+    };
+    cx.update(|cx| set_metrics_source(&cluster, Some(metrics_fields()), cx));
+    assert_eq!(stored(cx), Some(metrics_fields()));
+    cx.update(|cx| set_metrics_source(&cluster, None, cx));
+    assert_eq!(stored(cx), None);
+    assert!(cx.read(|cx| AppSettings::get(cx).registry.clusters.is_empty()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
