@@ -150,19 +150,6 @@ impl AppShell {
         cx.notify();
     }
 
-    /// Closes the editor when it belongs to a cluster that is being released: its session is gone,
-    /// so the text could not be applied anyway (the leaving dialog already asked).
-    pub(super) fn close_edit_of(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
-        let belongs = self
-            .edit
-            .as_ref()
-            .is_some_and(|edit| edit.read(cx).cluster() == cluster);
-        if belongs {
-            self.edit = None;
-            cx.notify();
-        }
-    }
-
     /// `Unsaved changes to Deployment/payments/api` when the open edit belongs to one of `leaving`
     /// and holds changes; a clean edit just closes with its cluster.
     pub(super) fn unsaved_edit_of(&self, leaving: &[ClusterRef], cx: &App) -> Option<String> {

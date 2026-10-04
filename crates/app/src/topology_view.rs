@@ -859,7 +859,7 @@ impl TopologyView {
         let has_row = key.as_ref().is_none_or(|key| self.has_row(key, cx));
         match card_click(key, has_row, click_count) {
             CardClick::Reveal(key) => {
-                self.with_shell(cx, |shell, cx| shell.reveal_in_primary(key, cx));
+                self.with_shell(cx, |shell, cx| shell.reveal(key, cx));
             }
             CardClick::Select(key) => {
                 self.highlighted = None;

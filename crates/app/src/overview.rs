@@ -27,7 +27,6 @@ use crate::cluster_capacity::{
     CapacityInputs, CapacityRow, FromPods, VolumeFeed, cluster_capacity, volume_totals,
 };
 use crate::cluster_metrics::FeedStatus;
-use crate::cluster_rows::RowContext;
 use crate::cluster_session::{ChangeEvents, LiveCluster, LiveList};
 use crate::dock::{Dock, LogOrigin};
 use crate::event_rows::message_line;
@@ -40,6 +39,7 @@ use crate::node_heatmap::{heat_cells, node_heatmap};
 use crate::recent_changes::{CHANGE_ROWS, ChangeEntry, ChangeInputs, ChangeWindow, recent_changes};
 use crate::resource_actions::logs_launch;
 use crate::resource_kind::ResourceKind;
+use crate::row_context::RowContext;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::{CapacityBar, capacity_bar};
@@ -688,7 +688,7 @@ fn change_row(
     match entry.target.clone() {
         Some(key) => row
             .cursor_pointer()
-            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal_in_primary(key.clone(), cx)))
+            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
             .into_any_element(),
         None => row.into_any_element(),
     }
@@ -905,7 +905,7 @@ fn attention_row(
     match issue.target.clone() {
         Some(key) => row
             .cursor_pointer()
-            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal_in_primary(key.clone(), cx)))
+            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
             .into_any_element(),
         None => row.into_any_element(),
     }
@@ -928,7 +928,7 @@ fn attention_button(
                 .label(label)
                 .on_click(cx.listener(move |shell, _, _, cx| {
                     cx.stop_propagation();
-                    shell.reveal_in_primary(key.clone(), cx);
+                    shell.reveal(key.clone(), cx);
                 }))
         }
         AttentionAction::ViewLogs => {

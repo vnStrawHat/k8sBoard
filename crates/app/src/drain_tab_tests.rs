@@ -27,7 +27,6 @@ fn tab_over(nodes: &[&str]) -> DrainTab {
         shell: WeakEntity::new_invalid(),
         cluster,
         cluster_name: "stg-b".into(),
-        cluster_label: "stg".to_owned(),
         run,
         identity: stub_identity(),
         note: Some("night shift".to_owned()),
@@ -58,7 +57,6 @@ fn a_running_tab_is_pinned_and_warns() {
     assert_eq!(tab.tone(), StatusTone::Warn);
     assert_eq!(tab.note(), Some("night shift"));
     assert_eq!(tab.cluster_name().as_ref(), "stg-b");
-    assert_eq!(tab.cluster_label(), "stg");
 }
 
 #[test]

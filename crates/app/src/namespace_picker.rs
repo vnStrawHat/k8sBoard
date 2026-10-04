@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
-use crate::cluster_session::{LiveList, SessionPhase};
+use crate::cluster_session::LiveList;
 
 /// Bounds the watches (2N + 3) and the access reviews (16N + 3) of one scope.
 pub(crate) const MAX_NAMESPACES: usize = 5;
@@ -102,36 +102,8 @@ impl NamespacePickerState {
 struct PickerContent {
     scope: NamespaceScope,
     namespaces: NamespaceRows,
-    /// One muted line for each viewed cluster whose list is not there (several clusters only).
-    notes: Vec<String>,
     draft: NamespacePickerState,
     shell: WeakEntity<AppShell>,
-}
-
-/// What one viewed cluster knows of its namespaces.
-pub(crate) enum SlotNamespaces {
-    Ready(Vec<String>),
-    Loading,
-    /// The list failed or is not permitted.
-    Denied,
-    /// The connect failed, so there is no list to wait for.
-    Unreachable,
-}
-
-/// The rows for several viewed clusters: the union of the namespace names of the clusters whose
-/// list is ready, sorted, and a muted line for each of the others. `slots` are `(label, state)`.
-pub(crate) fn union_rows(slots: &[(&str, SlotNamespaces)]) -> (Vec<String>, Vec<String>) {
-    let mut names = BTreeSet::new();
-    let mut notes = Vec::new();
-    for (label, state) in slots {
-        match state {
-            SlotNamespaces::Ready(ready) => names.extend(ready.iter().cloned()),
-            SlotNamespaces::Loading => notes.push(format!("Loading namespaces of {label}…")),
-            SlotNamespaces::Denied => notes.push(format!("Not permitted in {label}")),
-            SlotNamespaces::Unreachable => notes.push(format!("Cannot connect to {label}")),
-        }
-    }
-    (names.into_iter().collect(), notes)
 }
 
 enum NamespaceRows {
@@ -189,10 +161,7 @@ fn content_of(
     weak: WeakEntity<AppShell>,
     cx: &Context<AppShell>,
 ) -> Option<PickerContent> {
-    let live = shell.scope_live(cx)?;
-    if shell.view().is_multi() {
-        return Some(union_content(shell, live.scope.clone(), state, weak, cx));
-    }
+    let live = shell.live(cx)?;
     let namespaces = match &live.namespaces {
         LiveList::Loading => NamespaceRows::Loading,
         LiveList::Failed { message } => NamespaceRows::Failed {
@@ -209,56 +178,12 @@ fn content_of(
     Some(PickerContent {
         scope: live.scope.clone(),
         namespaces,
-        notes: Vec::new(),
         draft: NamespacePickerState {
             anchor: state.anchor,
             draft: state.draft.clone(),
         },
         shell: weak,
     })
-}
-
-/// The picker of several viewed clusters: one list of every namespace any of them has.
-fn union_content(
-    shell: &AppShell,
-    scope: NamespaceScope,
-    state: &NamespacePickerState,
-    weak: WeakEntity<AppShell>,
-    cx: &Context<AppShell>,
-) -> PickerContent {
-    let slots: Vec<(&str, SlotNamespaces)> = shell
-        .view()
-        .slots()
-        .iter()
-        .map(|slot| {
-            let session = slot.session.read(cx);
-            if matches!(session.phase(), SessionPhase::Failed { .. }) {
-                return (slot.label.as_str(), SlotNamespaces::Unreachable);
-            }
-            let namespaces = match session.live().map(|live| &live.namespaces) {
-                Some(LiveList::Ready { items, .. }) => SlotNamespaces::Ready(
-                    items
-                        .iter()
-                        .map(|namespace| namespace.name.clone())
-                        .collect(),
-                ),
-                Some(LiveList::Failed { .. }) => SlotNamespaces::Denied,
-                Some(LiveList::Loading) | None => SlotNamespaces::Loading,
-            };
-            (slot.label.as_str(), namespaces)
-        })
-        .collect();
-    let (names, notes) = union_rows(&slots);
-    PickerContent {
-        scope,
-        namespaces: NamespaceRows::Ready(names),
-        notes,
-        draft: NamespacePickerState {
-            anchor: state.anchor,
-            draft: state.draft.clone(),
-        },
-        shell: weak,
-    }
 }
 
 fn render_content(content: &PickerContent, cx: &gpui_kit::App) -> AnyElement {
@@ -283,13 +208,6 @@ fn render_content(content: &PickerContent, cx: &gpui_kit::App) -> AnyElement {
         .child(all)
         .child(separator(cx))
         .child(namespace_list(content))
-        .children(content.notes.iter().map(|note| {
-            div()
-                .px_2()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(note.clone())
-        }))
         .child(separator(cx))
         .child(footer(content))
         .into_any_element()
@@ -408,35 +326,6 @@ mod tests {
 
     fn several(names: &[&str]) -> NamespaceScope {
         NamespaceScope::of_namespaces(names.iter().map(|name| (*name).to_owned()))
-    }
-
-    #[test]
-    fn picker_names_a_cluster_that_failed_to_connect() {
-        let (names, notes) = union_rows(&[
-            ("prod-eu", SlotNamespaces::Unreachable),
-            ("stg-b", SlotNamespaces::Ready(vec!["web".to_owned()])),
-        ]);
-        // A failed connect is not "Loading" for ever.
-        assert_eq!(names, ["web"]);
-        assert_eq!(notes, ["Cannot connect to prod-eu"]);
-    }
-
-    #[test]
-    fn picker_lists_union_with_loading_lines() {
-        let ready = |names: &[&str]| {
-            SlotNamespaces::Ready(names.iter().map(|name| (*name).to_owned()).collect())
-        };
-        let (names, notes) = union_rows(&[
-            ("prod-eu", ready(&["web", "payments"])),
-            ("stg-b", ready(&["web", "kube-system"])),
-            ("dev-c", SlotNamespaces::Loading),
-            ("uat", SlotNamespaces::Denied),
-        ]);
-        assert_eq!(names, ["kube-system", "payments", "web"]);
-        assert_eq!(
-            notes,
-            ["Loading namespaces of dev-c…", "Not permitted in uat"]
-        );
     }
 
     #[test]

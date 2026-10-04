@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use cluster::NamespaceScope;
 
 use crate::app_shell::Screen;
-use crate::cluster_view::MAX_VIEWED_CLUSTERS;
 use crate::drawer::DrawerTab;
 use crate::namespace_picker::MAX_NAMESPACES;
 use crate::resource_kind::ResourceKind;
@@ -17,8 +16,6 @@ Usage: k8sboard [options]
 Options:
   --kubeconfig <path>    kubeconfig file (default: first KUBECONFIG entry, else ~/.kube/config)
   --context <name>       context to open (default: the kubeconfig current-context)
-  --view <a[,b]>         contexts to view together, at most 5; the first in the switcher order is the
-                         primary; wins over --context (default: the one cluster of --context)
   --namespace <a[,b]>    namespaces to show, at most 5 (default: all namespaces if allowed)
   --filter <text>        quick filter of the start screen; label:k=v,k2!=v2 becomes label chips
   --select <name>       with a drawer screen, open the row named <name> or <namespace>/<name>
@@ -26,7 +23,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|pods-multi|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|drain-dialog|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
@@ -45,9 +42,6 @@ pub(crate) enum LaunchScreen {
     /// `--screen overview`.
     Overview,
     Pods,
-    /// `--screen pods-multi`: Pods over the clusters `--view` names; the screenshot waits for every
-    /// slot to be Live with a loaded list, or Failed.
-    PodsMulti,
     Nodes,
     /// `--screen issues`.
     Issues,
@@ -243,7 +237,6 @@ impl LaunchScreen {
             | Self::PortForwardConfirmFixture
             | Self::PortForwardRemoveFixture => Screen::PortForwarding,
             Self::Pods
-            | Self::PodsMulti
             | Self::PodDrawer(_)
             | Self::LogsDock
             | Self::LogsZoomed
@@ -385,7 +378,6 @@ impl LaunchScreen {
         matches!(
             self,
             Self::Pods
-                | Self::PodsMulti
                 | Self::PodsSelected
                 | Self::Shortcuts
                 | Self::PodsCursor
@@ -540,7 +532,6 @@ impl LaunchScreen {
             "expand-confirm" => Some(Self::ExpandConfirm),
             "default-class-confirm" => Some(Self::DefaultClassConfirm),
             "pods" => Some(Self::Pods),
-            "pods-multi" => Some(Self::PodsMulti),
             "nodes" => Some(Self::Nodes),
             "issues" => Some(Self::Issues),
             "issues-drawer" => Some(Self::IssuesDrawer),
@@ -650,9 +641,6 @@ pub(crate) struct LaunchOptions {
     pub(crate) kubeconfig: Option<PathBuf>,
     pub(crate) context: Option<String>,
     pub(crate) namespace: Option<NamespaceScope>,
-    /// `--view`: the contexts to view together, at most `MAX_VIEWED_CLUSTERS`; empty views the one
-    /// cluster the start rules pick.
-    pub(crate) view: Vec<String>,
     /// The start screen's quick filter text; a `label:` text becomes chips.
     pub(crate) filter: Option<String>,
     /// The row a drawer screen opens: `name` or `namespace/name`; the first row without it.
@@ -685,7 +673,6 @@ pub(crate) fn parse_launch_options(
         kubeconfig: None,
         context: None,
         namespace: None,
-        view: Vec::new(),
         filter: None,
         select: None,
         theme: None,
@@ -707,7 +694,6 @@ pub(crate) fn parse_launch_options(
             "--kubeconfig" => options.kubeconfig = Some(PathBuf::from(value()?)),
             "--context" => options.context = Some(value()?),
             "--namespace" => options.namespace = Some(parse_namespaces(&value()?)?),
-            "--view" => options.view = parse_view(&value()?)?,
             "--filter" => options.filter = Some(value()?),
             "--select" => options.select = Some(value()?),
             "--theme" => options.theme = Some(parse_theme(&value()?)?),
@@ -759,27 +745,6 @@ fn parse_window_width(text: &str) -> Result<u16, String> {
             WINDOW_WIDTH_RANGE.start(),
             WINDOW_WIDTH_RANGE.end()
         )),
-    }
-}
-
-/// `a` or `a,b`: the contexts to view together. Empty parts are ignored.
-fn parse_view(text: &str) -> Result<Vec<String>, String> {
-    let mut contexts: Vec<String> = Vec::new();
-    for context in text
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        if !contexts.iter().any(|known| known == context) {
-            contexts.push(context.to_owned());
-        }
-    }
-    match contexts.len() {
-        0 => Err("--view needs at least one context".to_owned()),
-        count if count > MAX_VIEWED_CLUSTERS => {
-            Err(format!("at most {MAX_VIEWED_CLUSTERS} contexts for --view"))
-        }
-        _ => Ok(contexts),
     }
 }
 

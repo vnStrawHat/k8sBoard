@@ -455,14 +455,17 @@ fn secret_action_on_another_row_waits_for_the_selection(cx: &mut TestAppContext)
 
 #[gpui_kit::test]
 fn helm_values_keep_their_revision_through_a_reveal(cx: &mut TestAppContext) {
-    let (_, shell) = open_shell(cx);
+    let fixture = open_switch_fixture("helm-reveal", cx);
+    let shell = fixture.shell.clone();
+    // A release link inside an open drawer: the drawer's cluster is the open one.
+    let cluster = fixture.cluster("prod-a", cx);
+    let object = |key: ResourceKey| ClusterObject::new(cluster.clone(), key);
     let key = ResourceKey::Kind {
         kind: ResourceKind::HelmReleases,
         namespace: Some("shop".to_owned()),
         name: "api".to_owned(),
     };
     shell.update(cx, |shell, cx| {
-        // A release link inside an open drawer: the drawer's cluster is the release's.
         shell.change_selection(Some(object(pod_key("api-0"))), cx);
         shell.set_drawer_open(true, cx);
         shell.open_helm_values(key.clone(), 3, ValuesLayout::Diff, cx);

@@ -139,9 +139,7 @@ impl AppShell {
         let (Some(cluster_name), Some(tab_label)) = (
             self.guard_for(&open.cluster, cx)
                 .map(|guard| guard.display_name().to_owned()),
-            self.view
-                .slot_of(&open.cluster)
-                .map(|index| self.view.slots()[index].label.clone()),
+            self.slot_label(&open.cluster),
         ) else {
             let text = format!("{} is not open", open.cluster.context);
             window.push_notification(Notification::warning(text), cx);

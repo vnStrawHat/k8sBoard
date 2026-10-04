@@ -1,6 +1,7 @@
-//! Bulk Cordon and Uncordon, Edit taints, and Edit labels in a headless window over two viewed
-//! clusters (`prod-a`, locked at open, and `stg-b`, unlocked), each with its own fake API server:
-//! a test sees which cluster a request reached, and nothing leaves the machine.
+//! Bulk Cordon and Uncordon, Edit taints, and Edit labels in a headless window over two loaded
+//! clusters, one active at a time (`prod-a`, locked at open, and `stg-b`, unlocked), each session
+//! with its own fake API server: a test sees which cluster a request reached, and nothing leaves
+//! the machine.
 
 use std::sync::{Arc, Mutex};
 
@@ -10,7 +11,7 @@ use gpui_kit::TestAppContext;
 use serde_json::{Value, json};
 
 use super::app_shell_switch_tests::open_switch_fixture;
-use super::app_shell_write_tests::{Clusters, go_live_answering, view, writes};
+use super::app_shell_write_tests::{Clusters, go_live_answering, switch_to, writes};
 use super::batch_write::BATCH_RUNNING_REASON;
 use super::node_editor::{CHANGED_NOTICE, NodeEditKind, NodeEditor};
 use super::write_flow::DryRunState;
@@ -97,10 +98,9 @@ struct NodeTest {
 
 fn node_test(name: &str, cx: &mut TestAppContext) -> NodeTest {
     let fixture = open_switch_fixture(name, cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
     let patch = Arc::new(Mutex::new((200, NODE_JSON.to_owned())));
-    let prod_api = go_live_answering(&fixture, &prod, "node-a", server(Arc::clone(&patch)), cx);
     let stg_api = go_live_answering(&fixture, &stg, "node-b", server(Arc::clone(&patch)), cx);
     fixture
         .shell
@@ -110,7 +110,6 @@ fn node_test(name: &str, cx: &mut TestAppContext) -> NodeTest {
     NodeTest {
         t: Clusters {
             fixture,
-            prod_api,
             stg_api,
             prod,
             stg,
@@ -120,13 +119,28 @@ fn node_test(name: &str, cx: &mut TestAppContext) -> NodeTest {
 }
 
 impl NodeTest {
+    /// Switches to `prod-a` and makes it live over a new fake server on the Nodes screen. The old
+    /// session is gone, so a test never has both clusters live at once.
+    fn activate_prod(&self, cx: &mut TestAppContext) -> FakeApi {
+        let api =
+            self.t
+                .activate_answering(&self.t.prod, "node-a", server(Arc::clone(&self.patch)), cx);
+        self.t
+            .fixture
+            .shell
+            .update(cx, |shell, cx| shell.show_screen(Screen::Nodes, cx));
+        cx.run_until_parked();
+        self.t.fixture.draw_twice(cx);
+        api
+    }
+
     fn set_nodes(&self, cluster: &ClusterRef, nodes: Vec<NodeSummary>, cx: &mut TestAppContext) {
         let session = self
             .t
             .fixture
             .shell
             .read_with(cx, |shell, _| shell.slot_session(cluster).cloned())
-            .expect("a viewed slot");
+            .expect("an open cluster");
         session.update(cx, |session, cx| session.set_nodes_for_test(nodes, cx));
         cx.run_until_parked();
         self.t.fixture.draw_twice(cx);
@@ -220,7 +234,6 @@ fn the_editor_reads_the_node_from_its_own_cluster(cx: &mut TestAppContext) {
     t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
     let editor = t.wait_for_editor(cx);
     assert_eq!(reads_of(&t.t.stg_api, "/api/v1/nodes/node-b"), 1);
-    assert_eq!(reads_of(&t.t.prod_api, "/api/v1/nodes/node-b"), 0);
     // The node has one taint, so the editor starts with one row and nothing to review.
     editor.read_with(cx, |editor, cx| {
         assert_eq!(editor.row_count(), 1);
@@ -234,9 +247,10 @@ fn the_editor_reads_the_node_from_its_own_cluster(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_locked_cluster_opens_no_editor(cx: &mut TestAppContext) {
     let t = node_test("node-edit-locked", cx);
+    let prod_api = t.activate_prod(cx);
     t.open_editor(NodeEditKind::Labels, &t.t.prod, "node-a", cx);
     assert!(t.editor(cx).is_none());
-    assert_eq!(reads_of(&t.t.prod_api, "/api/v1/nodes/node-a"), 0);
+    assert_eq!(reads_of(&prod_api, "/api/v1/nodes/node-a"), 0);
 }
 
 #[gpui_kit::test]
@@ -292,7 +306,6 @@ fn editor_review_opens_the_confirm_dialog(cx: &mut TestAppContext) {
     let body = body_of(&sent[0]);
     assert_eq!(body["metadata"]["resourceVersion"], "7");
     assert_eq!(body["spec"]["taints"].as_array().map(Vec::len), Some(2));
-    assert!(writes(&t.t.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
@@ -361,13 +374,11 @@ fn edit_labels_commit_sends_a_minimal_patch(cx: &mut TestAppContext) {
         body_of(commit),
         json!({"metadata": {"labels": {"env": "staging"}}})
     );
-    assert!(writes(&t.t.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
 fn the_header_edit_labels_needs_one_ticked_node(cx: &mut TestAppContext) {
     let t = node_test("node-edit-header", cx);
-    t.set_nodes(&t.t.prod, Vec::new(), cx);
     t.set_nodes(
         &t.t.stg,
         vec![
@@ -392,7 +403,7 @@ fn the_header_edit_labels_needs_one_ticked_node(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_header_edit_labels_follows_the_lock_of_the_nodes_cluster(cx: &mut TestAppContext) {
     let t = node_test("node-edit-header-locked", cx);
-    t.set_nodes(&t.t.stg, Vec::new(), cx);
+    t.activate_prod(cx);
     t.tick(&[0], cx);
     let target =
         t.t.fixture
@@ -410,7 +421,6 @@ fn state_of(states: &[(String, BulkState)], label: &str) -> BulkState {
 }
 
 fn three_nodes(t: &NodeTest, cx: &mut TestAppContext) {
-    t.set_nodes(&t.t.prod, Vec::new(), cx);
     t.set_nodes(
         &t.t.stg,
         vec![
@@ -464,7 +474,6 @@ fn bulk_cordon_is_a_batch_and_skips_already_cordoned(cx: &mut TestAppContext) {
         body_of(&commits[0]),
         json!({"spec": {"unschedulable": true}})
     );
-    assert!(writes(&t.t.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
@@ -505,21 +514,6 @@ fn bulk_uncordon_of_schedulable_nodes_says_why(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn bulk_buttons_are_off_across_clusters(cx: &mut TestAppContext) {
-    let t = node_test("node-bulk-clusters", cx);
-    t.set_nodes(&t.t.prod, vec![summary("p1", NodeScheduling::Enabled)], cx);
-    t.set_nodes(&t.t.stg, vec![summary("n1", NodeScheduling::Enabled)], cx);
-    t.tick(&[0, 1], cx);
-    let states = t.bulk_states(cx);
-    for label in ["Cordon", "Uncordon"] {
-        assert_eq!(
-            state_of(&states, label),
-            BulkState::Off("Select rows of one cluster".into())
-        );
-    }
-}
-
-#[gpui_kit::test]
 fn bulk_buttons_are_off_while_a_batch_runs_on_the_cluster(cx: &mut TestAppContext) {
     let t = node_test("node-bulk-running", cx);
     three_nodes(&t, cx);
@@ -540,7 +534,7 @@ fn bulk_buttons_are_off_while_a_batch_runs_on_the_cluster(cx: &mut TestAppContex
 #[gpui_kit::test]
 fn bulk_cordon_on_a_locked_cluster_is_off(cx: &mut TestAppContext) {
     let t = node_test("node-bulk-locked", cx);
-    t.set_nodes(&t.t.stg, Vec::new(), cx);
+    t.activate_prod(cx);
     t.set_nodes(&t.t.prod, vec![summary("p1", NodeScheduling::Enabled)], cx);
     t.tick(&[0], cx);
     let states = t.bulk_states(cx);

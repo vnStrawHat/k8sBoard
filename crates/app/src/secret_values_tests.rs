@@ -153,7 +153,6 @@ fn options(screenshot: Option<&str>) -> LaunchOptions {
         kubeconfig: None,
         context: None,
         namespace: None,
-        view: Vec::new(),
         filter: None,
         select: None,
         theme: Some(ThemePreference::Light),

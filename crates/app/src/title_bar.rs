@@ -2,7 +2,6 @@ use cluster::NamespaceScope;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::kbd::Kbd;
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, TitleBar, h_flex,
 };
@@ -11,10 +10,9 @@ use gpui_kit::{
 };
 
 use crate::app_shell::{AppShell, Screen};
-use crate::cluster_registry::ClusterRef;
 use crate::cluster_session::namespaces_label;
 use crate::cluster_switcher::cluster_switcher as switcher_popover;
-use crate::environment::{Environment, environment_badge, environment_color};
+use crate::environment::{environment_badge, environment_color};
 use crate::issue_board::IssueSummary;
 use crate::keymap::{OpenPalette, ToggleReadOnly};
 use crate::namespace_picker::{PickerAnchor, namespace_picker as picker};
@@ -27,8 +25,8 @@ use crate::write_guard::WriteLock;
 pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
     // Always 3 px, so the layout does not shift when a session starts. GPUI has one border
     // color per element, so the kit's 1 px bottom border takes the same color.
-    let border = match border_environment(shell, cx) {
-        Some(environment) => environment_color(environment, cx),
+    let border = match shell.active_profile(cx) {
+        Some(profile) => environment_color(profile.environment, cx),
         None => cx.theme().title_bar_border,
     };
     // Linux draws its own X, which closes without asking the window: it asks the shell first, so a
@@ -123,66 +121,15 @@ fn issues_tooltip(summary: IssueSummary, coverage_note: Option<String>) -> Strin
     text
 }
 
-/// The environment of the top border: the riskiest of the viewed clusters while several are viewed
-/// (0024 decision 26), else the one cluster's own.
-fn border_environment(shell: &AppShell, cx: &App) -> Option<Environment> {
-    if shell.view().is_multi() {
-        return shell.view().riskiest();
-    }
-    shell.active_profile(cx).map(|profile| profile.environment)
-}
-
-/// What the cluster trigger shows: the primary label, and `+{n−1}` for the other viewed clusters.
-#[derive(Debug, PartialEq, Eq)]
-struct TriggerText {
-    label: String,
-    plus: Option<String>,
-    /// `Viewing: {label}, {label}, …`, while several clusters are viewed.
-    tooltip: Option<String>,
-}
-
-/// `labels` are the viewed clusters in display order; `primary_label` is the primary's.
-fn trigger_text(primary_label: &str, labels: &[&str]) -> TriggerText {
-    let is_multi = labels.len() >= 2;
-    TriggerText {
-        label: primary_label.to_owned(),
-        plus: is_multi.then(|| format!("+{}", labels.len() - 1)),
-        tooltip: is_multi.then(|| format!("Viewing: {}", labels.join(", "))),
-    }
-}
-
+/// The open cluster as the trigger shows it: its environment badge and its display name.
 fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
-    let view = shell.view();
-    let mut tooltip = None;
     let trigger = match shell.active_profile(cx) {
-        Some(profile) => {
-            let labels: Vec<&str> = view
-                .slots()
-                .iter()
-                .map(|slot| slot.label.as_str())
-                .collect();
-            // The primary decides the badge and the label of several clusters; one cluster keeps
-            // its display name.
-            let primary = view.primary().filter(|_| view.is_multi());
-            let (environment, label) = match primary {
-                Some(slot) => (slot.profile.environment, slot.label.as_str()),
-                None => (profile.environment, profile.display_name.as_str()),
-            };
-            let text = trigger_text(label, &labels);
-            tooltip = text.tooltip;
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(environment_badge(environment, cx))
-                .child(text.label)
-                .children(text.plus.map(|plus| {
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(plus)
-                }))
-                .into_any_element()
-        }
+        Some(profile) => h_flex()
+            .gap_2()
+            .items_center()
+            .child(environment_badge(profile.environment, cx))
+            .child(profile.display_name)
+            .into_any_element(),
         None => "No cluster".into_any_element(),
     };
     let trigger = Button::new("cluster-switcher")
@@ -190,10 +137,6 @@ fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
         .small()
         .child(trigger)
         .dropdown_caret(true);
-    let trigger = match tooltip {
-        Some(tooltip) => trigger.tooltip(tooltip),
-        None => trigger,
-    };
     switcher_popover(trigger, shell, cx)
 }
 
@@ -239,7 +182,7 @@ pub(crate) fn scope_label(scope: &NamespaceScope) -> String {
 
 fn namespace_picker(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
     let trigger = Button::new("namespace-picker").ghost().small();
-    let Some(live) = shell.scope_live(cx) else {
+    let Some(live) = shell.live(cx) else {
         return trigger.label("ns: —").disabled(true).into_any_element();
     };
     let label = scope_label(&live.scope);
@@ -247,88 +190,26 @@ fn namespace_picker(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
     picker(PickerAnchor::TitleBar, trigger, shell, cx)
 }
 
-/// One viewed cluster as the lock badge reads it.
-struct LockedCluster {
-    cluster: ClusterRef,
-    label: String,
-    environment: Environment,
-    lock: WriteLock,
-}
-
-/// What the badge shows: the lock icon and its text.
-#[derive(Debug, PartialEq, Eq)]
-struct BadgeFace {
-    lock: WriteLock,
-    text: String,
-}
-
-/// `Read-only` only when every viewed cluster is locked. Any open cluster wins, because it is the
-/// state that can change something: `Unlocked` for one viewed cluster, `Unlocked: stg-b` for one
-/// open cluster among several, and `2 of 3 unlocked` for more.
-fn badge_face(clusters: &[LockedCluster]) -> BadgeFace {
-    let open: Vec<&LockedCluster> = clusters
-        .iter()
-        .filter(|cluster| cluster.lock == WriteLock::Unlocked)
-        .collect();
-    let text = match (clusters.len(), open.as_slice()) {
-        (_, []) => {
-            return BadgeFace {
-                lock: WriteLock::Locked,
-                text: "Read-only".to_owned(),
-            };
-        }
-        (1, _) => "Unlocked".to_owned(),
-        (_, [only]) => format!("Unlocked: {}", only.label),
-        (total, several) => format!("{} of {total} unlocked", several.len()),
-    };
-    BadgeFace {
-        lock: WriteLock::Unlocked,
-        text,
+/// The icon and the text of the badge for `lock`.
+fn badge_face(lock: WriteLock) -> (IconName, &'static str) {
+    match lock {
+        WriteLock::Locked => (IconName::Lock, "Read-only"),
+        WriteLock::Unlocked => (IconName::LockOpen, "Unlocked"),
     }
 }
 
-/// The tooltip of the badge: one cluster says what the lock means; several list each one's state.
-fn badge_tooltip(clusters: &[LockedCluster]) -> String {
-    let state = |lock: WriteLock| match lock {
-        WriteLock::Locked => "Read-only",
-        WriteLock::Unlocked => "Unlocked",
-    };
-    match clusters {
-        [only] => format!("{}: {}", only.label, state(only.lock)),
-        several => several
-            .iter()
-            .map(|cluster| format!("{}: {}", cluster.label, state(cluster.lock)))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    }
+/// `{label}: Read-only` or `{label}: Unlocked`.
+fn badge_tooltip(label: &str, lock: WriteLock) -> String {
+    format!("{label}: {}", badge_face(lock).1)
 }
 
-/// The lock of the viewed clusters: a lock and `Read-only`, or an open lock and `Unlocked`, with a
-/// dashed border in the environment color. One cluster: a click toggles its lock. Several: a click
-/// opens a menu with one item per cluster, ticked while it is read-only. Hidden without a session.
+/// The lock of the open cluster: a lock and `Read-only`, or an open lock and `Unlocked`, with a
+/// dashed border in its environment color. A click toggles it. Hidden without a session.
 fn write_lock_badge(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyElement> {
-    let view = shell.view();
-    let clusters: Vec<LockedCluster> = view
-        .slots()
-        .iter()
-        .map(|slot| LockedCluster {
-            cluster: slot.cluster.clone(),
-            label: slot.label.clone(),
-            environment: slot.profile.environment,
-            lock: slot.session.read(cx).lock(),
-        })
-        .collect();
-    let first = clusters.first()?;
-    let environment = if view.is_multi() {
-        view.riskiest().unwrap_or(first.environment)
-    } else {
-        first.environment
-    };
-    let face = badge_face(&clusters);
-    let icon = match face.lock {
-        WriteLock::Locked => IconName::Lock,
-        WriteLock::Unlocked => IconName::LockOpen,
-    };
+    let open = shell.active_session()?;
+    let lock = open.session.read(cx).lock();
+    let (icon, text) = badge_face(lock);
+    let target = open.cluster.clone();
     let button = Button::new("write-lock")
         .ghost()
         .small()
@@ -337,49 +218,22 @@ fn write_lock_badge(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyEleme
                 .gap_1()
                 .items_center()
                 .child(Icon::new(icon).size_3())
-                .child(face.text),
+                .child(text),
         )
-        .tooltip_with_action(badge_tooltip(&clusters), &ToggleReadOnly, None);
+        .tooltip_with_action(badge_tooltip(&open.label, lock), &ToggleReadOnly, None)
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            shell.toggle_write_lock(&target, window, cx);
+        }));
     // The kit button draws its own border, so the dashed environment border is a frame around it.
-    let frame = |inner: AnyElement| {
+    Some(
         div()
             .border_1()
             .border_dashed()
-            .border_color(environment_color(environment, cx))
+            .border_color(environment_color(open.profile.environment, cx))
             .rounded(cx.theme().radius)
-            .child(inner)
-            .into_any_element()
-    };
-    if view.is_multi() {
-        let shell = cx.weak_entity();
-        return Some(frame(
-            button
-                .dropdown_menu(move |menu, _, _| {
-                    clusters.iter().fold(menu, |menu, entry| {
-                        let (target, shell) = (entry.cluster.clone(), shell.clone());
-                        let label = format!("{} · {}", entry.environment.badge(), entry.label);
-                        menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(entry.lock == WriteLock::Locked)
-                                .on_click(move |_, window, cx| {
-                                    let _ = shell.update(cx, |shell, cx| {
-                                        shell.toggle_write_lock(&target, window, cx);
-                                    });
-                                }),
-                        )
-                    })
-                })
-                .into_any_element(),
-        ));
-    }
-    let target = first.cluster.clone();
-    Some(frame(
-        button
-            .on_click(cx.listener(move |shell, _, window, cx| {
-                shell.toggle_write_lock(&target, window, cx);
-            }))
+            .child(button)
             .into_any_element(),
-    ))
+    )
 }
 
 fn settings_button() -> impl IntoElement {
@@ -427,96 +281,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn trigger_shows_plus_n_and_primary_label() {
-        let text = trigger_text("prod-eu", &["dev-a", "prod-eu", "stg-b"]);
-        assert_eq!(text.label, "prod-eu");
-        assert_eq!(text.plus.as_deref(), Some("+2"));
-    }
-
-    #[test]
-    fn trigger_tooltip_lists_the_viewed_clusters() {
-        let text = trigger_text("prod-eu", &["dev-a", "prod-eu", "stg-b"]);
+    fn the_badge_shows_the_lock_state() {
+        assert_eq!(badge_face(WriteLock::Locked), (IconName::Lock, "Read-only"));
         assert_eq!(
-            text.tooltip.as_deref(),
-            Some("Viewing: dev-a, prod-eu, stg-b")
+            badge_face(WriteLock::Unlocked),
+            (IconName::LockOpen, "Unlocked")
         );
     }
 
     #[test]
-    fn trigger_has_no_plus_or_tooltip_for_one_cluster() {
-        let one = trigger_text("prod-eu", &["prod-eu"]);
-        assert_eq!((one.plus, one.tooltip), (None, None));
-    }
-}
-
-#[cfg(test)]
-mod lock_badge_tests {
-    use super::*;
-
-    fn entry(label: &str, lock: WriteLock) -> LockedCluster {
-        LockedCluster {
-            cluster: ClusterRef {
-                kubeconfig: std::path::PathBuf::from("test.yaml"),
-                context: label.to_owned(),
-            },
-            label: label.to_owned(),
-            environment: Environment::Staging,
-            lock,
-        }
-    }
-
-    fn face(locks: &[(&str, WriteLock)]) -> BadgeFace {
-        let clusters: Vec<LockedCluster> = locks
-            .iter()
-            .map(|(label, lock)| entry(label, *lock))
-            .collect();
-        badge_face(&clusters)
-    }
-
-    #[test]
-    fn badge_shows_the_lock_state() {
-        use WriteLock::{Locked, Unlocked};
-        let read_only = BadgeFace {
-            lock: Locked,
-            text: "Read-only".to_owned(),
-        };
-        assert_eq!(face(&[("stg-b", Locked)]), read_only);
-        assert_eq!(face(&[("a", Locked), ("b", Locked)]), read_only);
-        let unlocked = face(&[("stg-b", Unlocked)]);
+    fn the_tooltip_names_the_cluster_and_its_state() {
         assert_eq!(
-            (unlocked.lock, unlocked.text.as_str()),
-            (Unlocked, "Unlocked")
-        );
-    }
-
-    #[test]
-    fn an_open_cluster_wins_over_locked_ones() {
-        use WriteLock::{Locked, Unlocked};
-        let one = face(&[("prod-a", Locked), ("stg-b", Unlocked)]);
-        assert_eq!((one.lock, one.text.as_str()), (Unlocked, "Unlocked: stg-b"));
-        let several = face(&[("prod-a", Locked), ("stg-b", Unlocked), ("dev-c", Unlocked)]);
-        assert_eq!(
-            (several.lock, several.text.as_str()),
-            (Unlocked, "2 of 3 unlocked")
-        );
-        let all = face(&[("a", Unlocked), ("b", Unlocked)]);
-        assert_eq!(all.text, "2 of 2 unlocked");
-    }
-
-    #[test]
-    fn the_tooltip_lists_every_viewed_cluster() {
-        let clusters = [
-            entry("prod-a", WriteLock::Locked),
-            entry("stg-b", WriteLock::Unlocked),
-        ];
-        assert_eq!(
-            badge_tooltip(&clusters),
-            "prod-a: Read-only\nstg-b: Unlocked"
+            badge_tooltip("prod-a", WriteLock::Locked),
+            "prod-a: Read-only"
         );
         assert_eq!(
-            badge_tooltip(&clusters[1..]),
-            "stg-b: Unlocked",
-            "one cluster names only itself"
+            badge_tooltip("stg-b", WriteLock::Unlocked),
+            "stg-b: Unlocked"
         );
     }
 }

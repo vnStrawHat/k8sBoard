@@ -207,8 +207,6 @@ struct WorkloadSubject {
 pub(crate) struct LogTab {
     /// The cluster the streams read from.
     cluster: ClusterRef,
-    /// The switcher text of that cluster, for the title while several clusters are viewed.
-    cluster_label: String,
     connection: ClusterConnection,
     subject: LogSubject,
     instance: LogInstance,
@@ -267,7 +265,6 @@ impl LogTab {
         };
         let mut tab = Self {
             cluster: origin.cluster,
-            cluster_label: origin.label,
             connection: origin.connection,
             subject,
             instance: LogInstance::Current,
@@ -305,14 +302,6 @@ impl LogTab {
             (LogSubject::Workload(mine), LogTarget::Workload(other)) => mine.target.is_same(other),
             _ => false,
         }
-    }
-
-    pub(crate) fn cluster(&self) -> &ClusterRef {
-        &self.cluster
-    }
-
-    pub(crate) fn cluster_label(&self) -> &str {
-        &self.cluster_label
     }
 
     /// The tab label: `{pod}/{container}`, or the workload label.
@@ -1395,15 +1384,6 @@ fn count_text(visible: usize, total: usize, has_filter: bool, has_dropped: bool)
     text
 }
 
-/// The title of a dock tab: its label, and ` · {cluster}` while several clusters are viewed.
-pub(crate) fn tab_title(label: &str, cluster_label: &str, is_multi: bool) -> String {
-    if is_multi {
-        format!("{label} · {cluster_label}")
-    } else {
-        label.to_owned()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use cluster::{
@@ -1413,19 +1393,6 @@ mod tests {
 
     use super::*;
     use crate::kind_row::JOB_KIND;
-
-    #[test]
-    fn log_tab_title_has_cluster_in_multi() {
-        assert_eq!(
-            tab_title("api-7/app", "prod-eu", true),
-            "api-7/app · prod-eu"
-        );
-    }
-
-    #[test]
-    fn log_tab_title_is_the_label_in_single() {
-        assert_eq!(tab_title("api-7/app", "prod-eu", false), "api-7/app");
-    }
 
     fn tone_of(list: &[LogStreamState]) -> StatusTone {
         workload_tone(list.iter())

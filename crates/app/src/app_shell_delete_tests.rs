@@ -1,6 +1,8 @@
-//! Delete (spec 0033) in a headless window over two viewed clusters, `prod-a` (the primary, locked
-//! at open) and `stg-b` (unlocked). Each answers from its own fake API server, so a test sees which
-//! cluster a request reached and nothing leaves the machine: no test sends a real delete.
+//! Delete (spec 0033) in a headless window over two loaded clusters, one active at a time: the
+//! fixture starts on `prod-a` (locked at open), switches to `stg-b` (unlocked), and makes it live.
+//! `activate` does the same for `prod-a`. Each session answers from its own fake API server, so a
+//! test sees which cluster a request reached and nothing leaves the machine: no test sends a real
+//! delete.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,9 +16,10 @@ use serde_json::{Value, json};
 
 use super::app_shell_switch_tests::open_switch_fixture;
 use super::app_shell_write_tests::{
-    Clusters, audit_lines, go_live_answering, slot_session, view, writes,
+    Clusters, audit_lines, go_live_answering, slot_session, switch_to, writes,
 };
 use super::batch_write::ItemProgress;
+use super::shell_open::ShellOpen;
 use super::*;
 use crate::app_shell::write_flow::DryRunState;
 use crate::batch_rows::job_row;
@@ -223,15 +226,13 @@ fn delete_test(name: &str, cx: &mut TestAppContext) -> DeleteTest {
     // Dialogs open without their animation, so the confirm button takes input at once.
     cx.update(|cx| cx.set_reduce_motion(true));
     let fixture = open_switch_fixture(name, cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
     let server = DeleteServer::new();
-    let prod_api = go_live_answering(&fixture, &prod, "node-a", answers(&server), cx);
     let stg_api = go_live_answering(&fixture, &stg, "node-b", answers(&server), cx);
     DeleteTest {
         t: Clusters {
             fixture,
-            prod_api,
             stg_api,
             prod,
             stg,
@@ -245,21 +246,37 @@ impl DeleteTest {
         &self.t.fixture.shell
     }
 
-    /// Shows Pods with `pods` on both clusters and waits for the delete answer of each.
+    /// Switches to `cluster` and makes it live over a new fake server that serves the same
+    /// objects. The old session is gone, so a test never has both clusters live at once.
+    fn activate(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> FakeApi {
+        let node = if *cluster == self.t.prod {
+            "node-a"
+        } else {
+            "node-b"
+        };
+        self.t
+            .activate_answering(cluster, node, answers(&self.server), cx)
+    }
+
+    /// Shows Pods with `pods` on the open cluster and waits for its delete answer.
     fn show_pods(&self, pods: &[PodSummary], cx: &mut TestAppContext) {
         self.show_pods_on(pods, pods, cx);
     }
 
-    /// Shows Pods with `prod` pods on `prod-a` and `stg` pods on `stg-b`.
+    /// Shows Pods with `prod` pods when `prod-a` is open and `stg` pods when `stg-b` is.
     fn show_pods_on(&self, prod: &[PodSummary], stg: &[PodSummary], cx: &mut TestAppContext) {
         self.shell()
             .update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx));
         cx.run_until_parked();
         for (cluster, pods) in [(&self.t.prod, prod), (&self.t.stg, stg)] {
-            let session = slot_session(&self.t.fixture, cluster, cx);
-            session.update(cx, |session, cx| {
-                session.set_pods_for_test(pods.to_vec(), cx);
-            });
+            let session = self
+                .shell()
+                .read_with(cx, |shell, _| shell.slot_session(cluster).cloned());
+            if let Some(session) = session {
+                session.update(cx, |session, cx| {
+                    session.set_pods_for_test(pods.to_vec(), cx);
+                });
+            }
         }
         cx.run_until_parked();
         self.t.fixture.draw_twice(cx);
@@ -278,9 +295,15 @@ impl DeleteTest {
         self.wait_for_answers(ObjectKind::Deployment, cx);
     }
 
-    /// Waits until the lazy review of `kind` has an answer on both clusters.
+    /// Waits until the lazy review of `kind` has an answer on the open cluster.
     fn wait_for_answers(&self, kind: ObjectKind, cx: &mut TestAppContext) {
         for cluster in [&self.t.prod, &self.t.stg] {
+            let is_open = self
+                .shell()
+                .read_with(cx, |shell, _| shell.slot_session(cluster).is_some());
+            if !is_open {
+                continue;
+            }
             self.t.wait_for("the delete review", cx, |cx| {
                 self.shell().read_with(cx, |shell, cx| {
                     shell.guard_for(cluster, cx).is_some_and(|guard| {
@@ -390,7 +413,6 @@ fn del_reads_the_uid_then_opens_a_click_dialog_on_staging(cx: &mut TestAppContex
         assert_eq!(*dialog.tier(), DialogConfirm::Click);
         assert_eq!(dialog.confirm_text().as_deref(), Some("Delete"));
     });
-    assert_eq!(t.identity_reads(&t.t.prod_api), 0);
 }
 
 #[gpui_kit::test]
@@ -415,24 +437,29 @@ fn delete_always_dry_runs_first_and_pins_the_uid(cx: &mut TestAppContext) {
     let body = body_of(committed);
     assert!(body.get("dryRun").is_none(), "{body}");
     assert_eq!(body["preconditions"]["uid"], "uid-api-x");
-    assert!(writes(&t.t.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
 fn delete_always_opens_a_dialog_on_both_tiers(cx: &mut TestAppContext) {
     let t = delete_test("delete-both-tiers", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    t.press_delete(cx);
+    t.wait_for_dialog(cx);
+    assert!(t.t.has_dialog(cx));
+    t.t.fixture.press("escape", cx);
+    cx.run_until_parked();
+    let prod_api = t.activate(&t.t.prod, cx);
     t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
     t.show_pods(&[pod("api-x", true)], cx);
-    for cluster in [&t.t.stg, &t.t.prod] {
-        t.cursor_on_pod(cluster, "api-x", cx);
-        t.press_delete(cx);
-        t.wait_for_dialog(cx);
-        assert!(t.t.has_dialog(cx));
-        t.t.fixture.press("escape", cx);
-        cx.run_until_parked();
-    }
+    t.cursor_on_pod(&t.t.prod, "api-x", cx);
+    t.press_delete(cx);
+    t.wait_for_dialog(cx);
+    assert!(t.t.has_dialog(cx));
+    t.t.fixture.press("escape", cx);
+    cx.run_until_parked();
     assert!(
-        writes(&t.t.prod_api)
+        writes(&prod_api)
             .iter()
             .all(|request| body_of(request).get("dryRun").is_some()),
         "only dry-runs were sent"
@@ -442,6 +469,7 @@ fn delete_always_opens_a_dialog_on_both_tiers(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn prod_delete_types_the_object_name(cx: &mut TestAppContext) {
     let t = delete_test("delete-prod-tier", cx);
+    let prod_api = t.activate(&t.t.prod, cx);
     t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
     t.show_pods(&[pod("api-x", true)], cx);
     t.cursor_on_pod(&t.t.prod, "api-x", cx);
@@ -456,15 +484,15 @@ fn prod_delete_types_the_object_name(cx: &mut TestAppContext) {
     });
     t.t.confirm(cx);
     cx.run_until_parked();
-    assert_eq!(writes(&t.t.prod_api).len(), 1, "the name was not typed");
+    assert_eq!(writes(&prod_api).len(), 1, "the name was not typed");
     // The cluster name is not the object name.
     t.t.type_name("prod-a", cx);
     t.t.confirm(cx);
     cx.run_until_parked();
-    assert_eq!(writes(&t.t.prod_api).len(), 1);
+    assert_eq!(writes(&prod_api).len(), 1);
     t.t.type_name("api-x", cx);
     t.t.confirm(cx);
-    t.t.wait_for("the commit", cx, |_| writes(&t.t.prod_api).len() == 2);
+    t.t.wait_for("the commit", cx, |_| writes(&prod_api).len() == 2);
     assert!(writes(&t.t.stg_api).is_empty());
 }
 
@@ -517,7 +545,7 @@ fn a_held_del_opens_one_dialog_and_reads_once(cx: &mut TestAppContext) {
 // ---- The gate and the cluster ----
 
 #[gpui_kit::test]
-fn delete_uses_the_cursor_cluster_not_the_primary(cx: &mut TestAppContext) {
+fn delete_uses_the_tier_of_the_active_cluster(cx: &mut TestAppContext) {
     let t = delete_test("delete-cursor-slot", cx);
     t.show_pods(&[pod("api-x", true)], cx);
     t.cursor_on_pod(&t.t.stg, "api-x", cx);
@@ -528,25 +556,24 @@ fn delete_uses_the_cursor_cluster_not_the_primary(cx: &mut TestAppContext) {
     assert_ne!(
         environment,
         crate::environment::Environment::Production,
-        "the tier is staging's, not the primary's"
+        "the tier is staging's, not production's"
     );
     t.t.confirm(cx);
     t.t.wait_for("the commit", cx, |_| writes(&t.t.stg_api).len() == 2);
-    assert_eq!(t.identity_reads(&t.t.prod_api), 0);
-    assert!(writes(&t.t.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
 fn a_locked_cluster_deletes_nothing(cx: &mut TestAppContext) {
     let t = delete_test("delete-locked", cx);
+    let prod_api = t.activate(&t.t.prod, cx);
     t.show_pods(&[pod("api-x", true)], cx);
     t.cursor_on_pod(&t.t.prod, "api-x", cx);
     let before = t.notification_count(cx);
     t.press_delete(cx);
     cx.run_until_parked();
     assert!(!t.t.has_dialog(cx));
-    assert_eq!(t.identity_reads(&t.t.prod_api), 0, "the gate stops first");
-    assert!(writes(&t.t.prod_api).is_empty());
+    assert_eq!(t.identity_reads(&prod_api), 0, "the gate stops first");
+    assert!(writes(&prod_api).is_empty());
     assert!(t.notification_count(cx) > before, "Del says why");
 }
 
@@ -933,6 +960,7 @@ fn del_on_an_unticked_row_deletes_that_row_only(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_bulk_delete_types_the_cluster_name_on_production(cx: &mut TestAppContext) {
     let t = delete_test("delete-bulk-prod", cx);
+    t.activate(&t.t.prod, cx);
     t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
     t.show_pods_on(&pods_named(&["api-0", "api-1"]), &[], cx);
     t.tick(&[0, 1], cx);
@@ -1193,8 +1221,6 @@ fn the_selection_bar_ends_with_a_danger_delete_on_pods(cx: &mut TestAppContext) 
 #[gpui_kit::test]
 fn the_selection_bar_offers_delete_on_nodes_and_kind_screens(cx: &mut TestAppContext) {
     let t = delete_test("delete-bar-screens", cx);
-    // Whichever cluster lists the first node, its lock is open.
-    t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
     t.shell()
         .update(cx, |shell, cx| shell.show_screen(Screen::Nodes, cx));
     cx.run_until_parked();
@@ -1243,19 +1269,6 @@ fn the_bar_button_is_off_without_the_delete_right(cx: &mut TestAppContext) {
     assert_eq!(
         t.delete_button(cx).state,
         BulkState::Off("Not permitted: delete pods".into())
-    );
-}
-
-#[gpui_kit::test]
-fn the_bar_button_is_off_for_rows_of_two_clusters(cx: &mut TestAppContext) {
-    let t = delete_test("delete-bar-two-clusters", cx);
-    t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
-    t.show_pods(&[pod("api-0", true)], cx);
-    // One row of each cluster.
-    t.tick(&[0, 1], cx);
-    assert_eq!(
-        t.delete_button(cx).state,
-        BulkState::Off("Select rows of one cluster".into())
     );
 }
 
@@ -1320,6 +1333,74 @@ fn a_lock_that_comes_on_mid_batch_stops_the_rest(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_running_batch_of_a_sends_nothing_to_b(cx: &mut TestAppContext) {
+    let t = delete_test("delete-bulk-switch", cx);
+    let dir = t.t.enable_audit_folder("delete-bulk-switch", cx);
+    t.tick_staging_pods(&["api-0", "api-1", "api-2"], 3, cx);
+    let _ = t.cursor_on_first_ticked(cx);
+    t.open_dialog(cx);
+    let (release, gate) = mpsc::channel();
+    *lock(&t.server.gate) = Some(gate);
+    t.t.confirm(cx);
+    // Three dry-runs and the first commit have reached the server, which holds the commit.
+    t.t.wait_for("the first commit", cx, |_| writes(&t.t.stg_api).len() == 4);
+    // The switch to prod-a asks first and names the batch; confirming it releases stg-b.
+    let prod = t.t.prod.clone();
+    t.shell()
+        .update(cx, |shell, cx| shell.switch_cluster(&prod, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        t.shell()
+            .read_with(cx, |shell, _| shell.last_leaving.clone()),
+        Some(vec![
+            "1 running batch will stop; its remaining items are not sent".to_owned()
+        ])
+    );
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_action(
+            Box::new(gpui_kit::component::dialog::Confirm { secondary: false }),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let prod_api = go_live_answering(&t.t.fixture, &prod, "node-a", answers(&t.server), cx);
+    release.send(()).expect("the server waits for the release");
+    t.t.wait_for("the first audit line", cx, |_| audit_lines(&dir).len() == 1);
+    t.t.wait_for("the batch to end", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| !shell.running_batches.contains(&t.t.stg))
+    });
+    // The second and third items were never sent, to either cluster.
+    assert_eq!(writes(&t.t.stg_api).len(), 4);
+    assert_eq!(audit_lines(&dir).len(), 1);
+    assert!(writes(&prod_api).is_empty(), "{:?}", writes(&prod_api));
+}
+
+#[gpui_kit::test]
+fn a_delete_read_landing_after_a_switch_opens_nothing(cx: &mut TestAppContext) {
+    let t = delete_test("delete-read-after-switch", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    let (release, gate) = mpsc::channel();
+    *lock(&t.server.identity_gate) = Some(gate);
+    t.press_delete(cx);
+    t.t.wait_for("the read to start", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| shell.delete_start.is_some())
+    });
+    // The shell switches to prod-a while the objects are still being read on stg-b.
+    let prod_api = t.activate(&t.t.prod, cx);
+    release.send(()).expect("the server waits for the release");
+    t.t.wait_for("the read to end", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| shell.delete_start.is_none())
+    });
+    assert!(!t.t.has_dialog(cx), "no dialog for a cluster that left");
+    assert!(writes(&t.t.stg_api).is_empty());
+    assert!(writes(&prod_api).is_empty());
+}
+
+#[gpui_kit::test]
 fn a_dialog_that_opens_during_the_reads_stops_the_delete(cx: &mut TestAppContext) {
     let t = delete_test("delete-dialog-during-read", cx);
     t.show_pods(&[pod("api-x", true)], cx);
@@ -1331,8 +1412,18 @@ fn a_dialog_that_opens_during_the_reads_stops_the_delete(cx: &mut TestAppContext
         t.shell()
             .read_with(cx, |shell, _| shell.delete_start.is_some())
     });
-    // Another dialog opens while the objects are being read: unlocking production.
-    t.t.toggle(&t.t.prod, cx);
+    // Another dialog opens while the objects are being read: an Open shell question.
+    let open = ShellOpen {
+        cluster: t.t.stg.clone(),
+        namespace: NAMESPACE.to_owned(),
+        pod: "api-x".to_owned(),
+        short_pod: "api-x".to_owned(),
+        container: "app".to_owned(),
+    };
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.shell()
+            .update(cx, |shell, cx| shell.start_shell(open, window, cx));
+    });
     cx.run_until_parked();
     let before = t.notification_count(cx);
     release.send(()).expect("the server waits for the release");

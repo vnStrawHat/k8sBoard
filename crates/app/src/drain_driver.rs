@@ -99,10 +99,9 @@ impl AppShell {
             note,
         } = start;
         let prepared = {
-            let (Some(guard), Some(connection), Some(index)) = (
+            let (Some(guard), Some(connection)) = (
                 self.guard_for(&cluster, cx),
                 self.slot_connection(&cluster, cx),
-                self.view.slot_of(&cluster),
             ) else {
                 notify(window, cx, format!("{} is not open", cluster.context));
                 return;
@@ -117,14 +116,9 @@ impl AppShell {
                 notify(window, cx, format!("{BATCH_RUNNING_REASON} on {name}"));
                 return;
             }
-            (
-                name,
-                AuditIdentity::of(&guard),
-                connection,
-                self.view.slots()[index].label.clone(),
-            )
+            (name, AuditIdentity::of(&guard), connection)
         };
-        let (cluster_name, identity, connection, cluster_label) = prepared;
+        let (cluster_name, identity, connection) = prepared;
         let run = DrainRun::new(RunInput {
             nodes,
             to_cordon,
@@ -137,7 +131,6 @@ impl AppShell {
             shell: cx.weak_entity(),
             cluster,
             cluster_name: cluster_name.into(),
-            cluster_label,
             run,
             identity,
             note,
@@ -183,8 +176,7 @@ impl AppShell {
     /// Stops every running drain because the app is quitting. The lines are written at once: the
     /// process may end before a task would write them.
     pub(super) fn stop_all_drains_now(&mut self, cx: &mut Context<Self>) {
-        let all = self.view.clusters();
-        let running = self.dock.read(cx).running_drains_of(&all, cx);
+        let running = self.dock.read(cx).running_drains(cx);
         let dir = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf);
         for (tab, _) in running {
             // Read before the stop: the summary counts the request in the air as unknown.
@@ -200,6 +192,16 @@ impl AppShell {
                 }
             }
         }
+    }
+
+    /// The names of the clusters with a running drain, whichever they are, for the quit dialog.
+    pub(super) fn running_drain_names(&self, cx: &gpui_kit::App) -> Vec<SharedString> {
+        self.dock
+            .read(cx)
+            .running_drains(cx)
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect()
     }
 
     /// The names of the clusters with a running drain among `clusters`, for the "work will close"
@@ -371,7 +373,6 @@ impl AppShell {
                     context: "onprem-hn-1".to_owned(),
                 },
                 cluster_name: "onprem-hn-1".into(),
-                cluster_label: "onprem-hn-1".to_owned(),
                 run,
                 identity: AuditIdentity::fixture("onprem-hn-1"),
                 note: None,

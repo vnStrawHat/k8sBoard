@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use cluster::{
     AccessCheck, ClusterConnection, ContainerKind, ContainerState, ContainerSummary,
     HELM_RELEASE_SECRET_TYPE, NamespaceScope, NodeSummary, ObjectKind, PodSummary,
@@ -17,7 +19,6 @@ use crate::app_shell::shell_open::ShellOpen;
 use crate::app_shell::write_flow::cordon_label;
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_registry::ClusterRef;
-use crate::cluster_rows::RowContext;
 use crate::cluster_session::{AccessState, LiveCluster, scope_includes};
 use crate::custom_kind::CustomKind;
 use crate::dock::{Dock, LogOrigin};
@@ -35,6 +36,7 @@ use crate::log_target::{LogTarget, workload_label};
 use crate::network_rows::ingress_urls;
 use crate::pod_drawer::kind_tag_text;
 use crate::resource_kind::ResourceKind;
+use crate::row_context::RowContext;
 use crate::secret_values::{SecretAction, ValueAccess};
 use crate::shell_tab::short_pod_name;
 use crate::table_selection::{ClusterObject, ResourceKey};
@@ -801,13 +803,15 @@ pub(crate) fn pod_menu(
         Some(debug_container) => menu.item(debug_container),
         None => menu,
     };
-    let menu = menu
-        .item(items.port_forward)
+    menu.item(guarded(row, items.port_forward))
         .item(action_item(
             ResourceAction::EditYaml(ObjectKind::Pod),
             guard,
         ))
-        .item(view_yaml_item(row.object(ResourceKey::of_pod(pod)), shell))
+        .item(guarded(
+            row,
+            view_yaml_item(row.object(ResourceKey::of_pod(pod)), shell),
+        ))
         .separator()
         .item(copy_name_item(&pod.name, access))
         .item(copy_kubectl_command_item(&row.context, pod))
@@ -816,8 +820,7 @@ pub(crate) fn pod_menu(
             DeleteLabel::of("Delete pod…", "pods"),
             action_availability(ResourceAction::Delete(ObjectKind::Pod), guard),
             shell,
-        ));
-    with_cluster_filter(menu, row, shell)
+        ))
 }
 
 /// The entries of the container ⋯ menu, in the order they are shown.
@@ -855,12 +858,9 @@ pub(crate) fn container_menu(
                 row,
                 links.dock,
             )),
-            ContainerMenuEntry::OpenShell => menu.item(container_shell_item(
-                pod,
-                container,
-                guard,
+            ContainerMenuEntry::OpenShell => menu.item(guarded(
                 row,
-                links.shell,
+                container_shell_item(pod, container, guard, row, links.shell),
             )),
             ContainerMenuEntry::CopyImage => {
                 menu.separator().item(copy_image_item(&container.image))
@@ -996,13 +996,17 @@ fn plain_logs_item(
     }
 }
 
-/// The call every View logs entry makes: opens `target` in the dock under the row's origin.
+/// The call every View logs entry makes: opens `target` in the dock under the row's origin, while
+/// the session the row was built on is still open (spec 0046 decision 5).
 fn open_logs(
     connection: ClusterConnection,
     row: RowContext,
     dock: WeakEntity<Dock>,
 ) -> impl Fn(LogTarget, &mut Window, &mut App) + Clone {
     move |target, window, cx| {
+        if row.session.upgrade().is_none() {
+            return;
+        }
         let _ = dock.update(cx, |dock, cx| {
             let origin = LogOrigin::new(&row, connection.clone());
             dock.open(origin, target, window, cx)
@@ -1158,17 +1162,19 @@ pub(crate) fn node_menu(
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenu {
     let access = guard.access;
-    let menu = menu
-        .item(open_node_shell_item(node, guard))
-        .item(cordon_item(node, guard, row, shell))
+    menu.item(open_node_shell_item(node, guard))
+        .item(guarded(row, cordon_item(node, guard, row, shell)))
         .item(action_item(ResourceAction::Drain, guard))
         .separator()
         .item(action_item(ResourceAction::EditTaints, guard))
         .item(action_item(ResourceAction::EditLabels, guard))
-        .item(view_pods_on_node_item(node, live.pods.items(), row, shell))
-        .item(view_yaml_item(
-            row.object(ResourceKey::of_node(node)),
-            shell,
+        .item(guarded(
+            row,
+            view_pods_on_node_item(node, live.pods.items(), shell),
+        ))
+        .item(guarded(
+            row,
+            view_yaml_item(row.object(ResourceKey::of_node(node)), shell),
         ))
         .separator()
         .item(copy_name_item(&node.name, access))
@@ -1177,8 +1183,7 @@ pub(crate) fn node_menu(
             DeleteLabel::of("Delete node…", "nodes"),
             action_availability(ResourceAction::Delete(ObjectKind::Node), guard),
             shell,
-        ));
-    with_cluster_filter(menu, row, shell)
+        ))
 }
 
 /// Open node shell, with the reason a node cannot take it (a Windows node) after the gate's own.
@@ -1203,18 +1208,16 @@ fn open_node_shell_item(node: &NodeSummary, guard: &ClusterGuard<'_>) -> PopupMe
 fn view_pods_on_node_item(
     node: &NodeSummary,
     pods: &[PodSummary],
-    row: &RowContext,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     let name = node.name.clone();
-    let cluster = row.cluster.clone();
     let shell = shell.clone();
     PopupMenuItem::new(format!(
         "View pods on node · {}",
         pods_on_node(pods, &node.name)
     ))
     .on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.view_pods_on_node(&cluster, &name, cx));
+        let _ = shell.update(cx, |shell, cx| shell.view_pods_on_node(&name, cx));
     })
 }
 
@@ -1262,85 +1265,89 @@ pub(crate) fn kind_menu(
     let access = guard.access;
     let mut menu = menu;
     if has_who_can(kind) {
-        menu = menu.item(who_can_item(row, context, shell));
+        menu = menu.item(guarded(context, who_can_item(row, context, shell)));
     }
     if has_check_permissions(kind) {
-        menu = menu.item(check_permissions_item(row, context, shell));
+        menu = menu.item(guarded(
+            context,
+            check_permissions_item(row, context, shell),
+        ));
     }
     if has_test_traffic(kind) {
-        menu = menu.item(test_traffic_item(row, context, shell));
+        menu = menu.item(guarded(context, test_traffic_item(row, context, shell)));
     }
     if let Some(item) = workload_logs_item(row, access, pods, context, shell) {
-        menu = menu.item(item);
+        menu = menu.item(guarded(context, item));
     }
     if let Some(secret) = extras.secret {
-        menu = menu.item(secret.reveal).item(secret.copy).separator();
+        for item in secret.into_items() {
+            menu = menu.item(item);
+        }
+        menu = menu.separator();
     }
     if let Some(event) = &row.event {
         menu = menu
-            .item(go_to_object_item(event, context, shell))
-            .item(filter_similar_item(event, shell))
+            .item(guarded(context, go_to_object_item(event, context, shell)))
+            .item(guarded(context, filter_similar_item(event, shell)))
             .item(copy_message_item(event))
             .separator();
     }
     if let Some(browse) = extras.browse {
-        menu = menu.item(browse);
+        menu = menu.item(guarded(context, browse));
     }
     let key = ResourceKey::of_row(kind, row);
     let object = context.object(key.clone());
     // A key without an object reference (a Helm release) has no YAML tab.
     if kind == ResourceKind::HelmReleases {
         for (label, tab) in HELM_VIEW_ITEMS {
-            menu = menu.item(view_tab_item(label, object.clone(), tab, shell));
+            menu = menu.item(guarded(
+                context,
+                view_tab_item(label, object.clone(), tab, shell),
+            ));
         }
     }
     if object_ref(&key).is_some() {
-        menu = menu.item(view_yaml_item(object, shell));
+        menu = menu.item(guarded(context, view_yaml_item(object, shell)));
     }
     if let Some(item) = extras.open_url {
         menu = menu.item(item);
     }
-    match topology_menu(
-        kind,
-        row.namespace.as_deref(),
-        extras.scope.as_ref(),
-        (!context.is_primary).then_some(context.primary_label.as_str()),
-    ) {
+    match topology_menu(kind, row.namespace.as_deref(), extras.scope.as_ref()) {
         TopologyMenu::Hidden => {}
-        TopologyMenu::Enabled => menu = menu.item(show_in_topology_item(key.clone(), shell)),
+        TopologyMenu::Enabled => {
+            menu = menu.item(guarded(context, show_in_topology_item(key.clone(), shell)));
+        }
         TopologyMenu::Disabled(reason) => {
             menu = menu.item(disabled_menu_item("Show in Topology", reason.into()));
         }
     }
     if has_go_to_target(kind) {
-        menu = menu.item(go_to_target_item(row, context, shell));
+        menu = menu.item(guarded(context, go_to_target_item(row, context, shell)));
     }
     if has_go_to_owner(kind) {
-        menu = menu.item(go_to_owner_item(row, context, shell));
+        menu = menu.item(guarded(context, go_to_owner_item(row, context, shell)));
     }
     match kind {
         ResourceKind::PersistentVolumeClaims => {
-            menu = menu.item(go_to_pod_item(row, pods, context, shell));
+            menu = menu.item(guarded(context, go_to_pod_item(row, pods, context, shell)));
         }
         ResourceKind::PersistentVolumes => {
-            menu = menu.item(go_to_claim_item(row, context, shell));
+            menu = menu.item(guarded(context, go_to_claim_item(row, context, shell)));
         }
         ResourceKind::RoleBindings | ResourceKind::ClusterRoleBindings => {
-            menu = menu.item(go_to_role_item(row, context, shell));
+            menu = menu.item(guarded(context, go_to_role_item(row, context, shell)));
         }
         _ => {}
     }
     if let Some(item) = extras.port_forward {
-        menu = menu.item(item);
+        menu = menu.item(guarded(context, item));
     }
     if let Some(is_default) =
         default_namespace_state(kind, &row.name, extras.default_namespace.as_deref())
     {
-        menu = menu.item(default_namespace_item(
-            context.cluster.clone(),
-            row.name.clone(),
-            is_default,
-            shell,
+        menu = menu.item(guarded(
+            context,
+            default_namespace_item(context.cluster.clone(), row.name.clone(), is_default, shell),
         ));
     }
     let change_actions = kind.read_only_actions();
@@ -1357,12 +1364,10 @@ pub(crate) fn kind_menu(
     if let Some(object) = edit_yaml {
         menu = menu.item(action_item(ResourceAction::EditYaml(object), guard));
     }
-    let menu = menu
-        .separator()
+    menu.separator()
         .item(copy_name_item(&row.name, access))
         .separator()
-        .item(kind_delete_item(kind, row, guard, shell));
-    with_cluster_filter(menu, context, shell)
+        .item(kind_delete_item(kind, row, guard, shell))
 }
 
 /// The Delete item of an explorer kind's menu. Helm releases and custom kinds keep it off with the
@@ -1443,22 +1448,29 @@ fn delete_item(
     .action(RowAction::Delete.key_action())
 }
 
-/// While several clusters are viewed: `Filter by this cluster`, which keeps the rows of the
-/// row's cluster (an Equals chip on the Cluster column).
-fn with_cluster_filter(
-    menu: PopupMenu,
-    row: &RowContext,
-    shell: &WeakEntity<AppShell>,
-) -> PopupMenu {
-    if !row.is_multi {
-        return menu;
+/// Makes `item` act only while the session `row` was built on is still open. A menu that stays
+/// open over a switch must do nothing: after A to B the guard of A is gone, and after A to B to A
+/// the old session is released too, so the new session of A is not the one the menu showed (spec
+/// 0046 decision 5). An item without a click handler dispatches a key action to the cursor row,
+/// which a switch clears.
+fn guarded(row: &RowContext, mut item: PopupMenuItem) -> PopupMenuItem {
+    if let PopupMenuItem::Item {
+        handler: Some(handler),
+        ..
     }
-    let (label, shell) = (row.label.clone(), shell.clone());
-    menu.separator().item(
-        PopupMenuItem::new("Filter by this cluster").on_click(move |_, _, cx| {
-            let _ = shell.update(cx, |shell, cx| shell.filter_by_cluster(&label, cx));
-        }),
-    )
+    | PopupMenuItem::ElementItem {
+        handler: Some(handler),
+        ..
+    } = &mut item
+    {
+        let (inner, session) = (Rc::clone(handler), row.session.clone());
+        *handler = Rc::new(move |event, window, cx| {
+            if session.upgrade().is_some() {
+                inner(event, window, cx);
+            }
+        });
+    }
+    item
 }
 
 /// Whether the menu of a kind offers Show in Topology.
@@ -1467,18 +1479,14 @@ enum TopologyMenu {
     /// Only Services and Ingresses have the item.
     Hidden,
     Enabled,
-    /// The namespace is outside the session's scope, so Topology could not draw it, or the row
-    /// is not in the cluster Topology draws.
+    /// The namespace is outside the session's scope, so Topology could not draw it.
     Disabled(String),
 }
 
-/// `other_primary`: the label of the primary cluster when the row is in another one, because
-/// Topology draws the primary cluster alone.
 fn topology_menu(
     kind: ResourceKind,
     namespace: Option<&str>,
     scope: Option<&NamespaceScope>,
-    other_primary: Option<&str>,
 ) -> TopologyMenu {
     if !matches!(kind, ResourceKind::Services | ResourceKind::Ingresses) {
         return TopologyMenu::Hidden;
@@ -1486,11 +1494,6 @@ fn topology_menu(
     let (Some(namespace), Some(scope)) = (namespace, scope) else {
         return TopologyMenu::Hidden;
     };
-    if let Some(primary) = other_primary {
-        return TopologyMenu::Disabled(format!(
-            "Topology draws only the primary cluster ({primary})"
-        ));
-    }
     if scope_includes(scope, namespace) {
         TopologyMenu::Enabled
     } else {
@@ -1588,6 +1591,13 @@ pub(crate) struct SecretMenu {
     copy: PopupMenuItem,
 }
 
+impl SecretMenu {
+    /// Reveal, then the Copy submenu, in menu order.
+    pub(crate) fn into_items(self) -> [PopupMenuItem; 2] {
+        [self.reveal, self.copy]
+    }
+}
+
 /// Why an item is disabled, or that it is not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MenuState {
@@ -1659,6 +1669,7 @@ pub(crate) fn secret_menu_model(keys: &[SecretKey], access: ValueAccess) -> Secr
 /// The Reveal and Copy items of a Secrets row; `None` for any other row.
 pub(crate) fn secret_menu(
     row: &KindRow,
+    context: &RowContext,
     object: ClusterObject,
     access: ValueAccess,
     shell: &WeakEntity<AppShell>,
@@ -1674,11 +1685,12 @@ pub(crate) fn secret_menu(
             "Reveal values (30s)".into(),
             object.clone(),
             SecretAction::RevealAll,
+            context,
             shell,
         ),
         MenuState::Disabled(reason) => disabled_menu_item("Reveal values (30s)", reason.into()),
     };
-    let shell = shell.clone();
+    let (shell, context) = (shell.clone(), context.clone());
     let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
         model.copies.iter().fold(submenu, |submenu, entry| {
             let item = match (&entry.state, &entry.key) {
@@ -1686,6 +1698,7 @@ pub(crate) fn secret_menu(
                     entry.label.clone().into(),
                     object.clone(),
                     SecretAction::Copy(name.clone()),
+                    &context,
                     &shell,
                 ),
                 (MenuState::Disabled(reason), _) => {
@@ -1704,19 +1717,24 @@ pub(crate) fn secret_menu(
     })
 }
 
-/// A Reveal or Copy item: it opens the drawer of `object` and runs `action` through the shell.
+/// A Reveal or Copy item: it opens the drawer of `object` and runs `action` through the shell,
+/// while the session `context` was built on is still open.
 fn secret_action_item(
     label: SharedString,
     object: ClusterObject,
     action: SecretAction,
+    context: &RowContext,
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     let shell = shell.clone();
-    PopupMenuItem::new(label).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| {
-            shell.run_secret_action(object.clone(), action.clone(), cx);
-        });
-    })
+    guarded(
+        context,
+        PopupMenuItem::new(label).on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.run_secret_action(object.clone(), action.clone(), cx);
+            });
+        }),
+    )
 }
 
 /// How many URLs the Open URL submenu lists.
@@ -1751,6 +1769,7 @@ pub(crate) fn open_url_choice(row: &KindRow) -> OpenUrl {
 /// it before it borrows the session, because a submenu needs the app mutably.
 pub(crate) fn open_url_menu_item(
     choice: OpenUrl,
+    row: &RowContext,
     window: &mut Window,
     cx: &mut App,
 ) -> PopupMenuItem {
@@ -1759,11 +1778,12 @@ pub(crate) fn open_url_menu_item(
     const LABEL: &str = "Open URL";
     match choice {
         OpenUrl::Unavailable => disabled_menu_item(LABEL, "No host to open".into()),
-        OpenUrl::One(url) => open_url_item(LABEL, url),
+        OpenUrl::One(url) => open_url_item(LABEL, url, row),
         OpenUrl::Several(urls) => {
+            let row = row.clone();
             let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
                 urls.iter().fold(submenu, |submenu, url| {
-                    submenu.item(open_url_item(url.clone(), url.clone()))
+                    submenu.item(open_url_item(url.clone(), url.clone(), &row))
                 })
             });
             PopupMenuItem::submenu(LABEL, submenu)
@@ -1771,8 +1791,11 @@ pub(crate) fn open_url_menu_item(
     }
 }
 
-fn open_url_item(label: impl Into<SharedString>, url: String) -> PopupMenuItem {
-    PopupMenuItem::new(label).on_click(move |_, _, cx| cx.open_url(&url))
+fn open_url_item(label: impl Into<SharedString>, url: String, row: &RowContext) -> PopupMenuItem {
+    guarded(
+        row,
+        PopupMenuItem::new(label).on_click(move |_, _, cx| cx.open_url(&url)),
+    )
 }
 
 /// Only ReplicaSets offer Go to owner: a Job's owner is a link in its drawer.
@@ -2234,17 +2257,21 @@ impl ShellMenu {
             pod,
             short_pod,
         } = self;
-        let debug_item = debug_container_item(
-            debug,
-            DebugPod {
-                cluster: row.cluster.clone(),
-                namespace: namespace.clone(),
-                pod: pod.clone(),
-            },
-            shell,
+        let debug_item = guarded(
+            row,
+            debug_container_item(
+                debug,
+                DebugPod {
+                    cluster: row.cluster.clone(),
+                    namespace: namespace.clone(),
+                    pod: pod.clone(),
+                },
+                shell,
+            ),
         );
         let open = {
-            let (cluster, shell) = (row.cluster.clone(), shell.clone());
+            let (cluster, shell, session) =
+                (row.cluster.clone(), shell.clone(), row.session.clone());
             move |container: String| -> StartShell {
                 let open = ShellOpen {
                     cluster: cluster.clone(),
@@ -2253,8 +2280,11 @@ impl ShellMenu {
                     short_pod: short_pod.clone(),
                     container,
                 };
-                let shell = shell.clone();
+                let (shell, session) = (shell.clone(), session.clone());
                 Box::new(move |window: &mut Window, cx: &mut App| {
+                    if session.upgrade().is_none() {
+                        return;
+                    }
                     let open = open.clone();
                     let _ = shell.update(cx, |shell, cx| shell.start_shell(open, window, cx));
                 })

@@ -17,7 +17,6 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
-use crate::cluster_rows::RowContext;
 use crate::cluster_session::{ClusterSession, LiveList};
 use crate::container_detail::{ContainerDetailInput, container_detail};
 use crate::dock::Dock;
@@ -33,6 +32,7 @@ use crate::port_forward_menu::{ForwardMenu, PortButtons, pod_subject};
 use crate::resource_actions::{
     LogsMenu, PodMenuItems, PodMenuLinks, ShellMenu, container_menu, pod_menu, view_logs_reason,
 };
+use crate::row_context::RowContext;
 use crate::status_tone::{StatusTone, container_state_label, pod_status_label, toned_text};
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::UsageBar;
@@ -54,7 +54,6 @@ pub(crate) fn pod_drawer(
         kind_badge: "Po",
         name: pod.name.clone().into(),
         subtitle: subtitle(pod, now, cx),
-        cluster: state.cluster.clone(),
         menu: pod_menu_button(pod, session, row, dock, cx.weak_entity()),
         expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),

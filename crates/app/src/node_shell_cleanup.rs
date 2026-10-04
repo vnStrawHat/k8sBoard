@@ -155,7 +155,7 @@ impl AppShell {
         // A running drain is asked about first (spec 0034): leaving stops it, and its nodes stay
         // cordoned. The answer starts the close again, which then does not ask a second time.
         if !self.is_quit_confirmed {
-            let drains = self.running_drain_names_of(&self.view.clusters(), cx);
+            let drains = self.running_drain_names(cx);
             if !drains.is_empty() {
                 let work = LeavingWork {
                     drains,

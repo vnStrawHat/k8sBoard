@@ -23,8 +23,6 @@ pub(crate) struct DrainTab {
     cluster: ClusterRef,
     /// The display name of the cluster, for the texts that outlive its session.
     cluster_name: SharedString,
-    /// The switcher text of the cluster, for the tab title while several clusters are viewed.
-    cluster_label: String,
     run: DrainRun,
     identity: AuditIdentity,
     /// The dialog's note, written on every summary line.
@@ -42,7 +40,6 @@ pub(crate) struct DrainTabInputs {
     pub(crate) shell: WeakEntity<AppShell>,
     pub(crate) cluster: ClusterRef,
     pub(crate) cluster_name: SharedString,
-    pub(crate) cluster_label: String,
     pub(crate) run: DrainRun,
     pub(crate) identity: AuditIdentity,
     pub(crate) note: Option<String>,
@@ -54,7 +51,6 @@ impl DrainTab {
             shell: inputs.shell,
             cluster: inputs.cluster,
             cluster_name: inputs.cluster_name,
-            cluster_label: inputs.cluster_label,
             run: inputs.run,
             identity: inputs.identity,
             note: inputs.note,
@@ -115,10 +111,6 @@ impl DrainTab {
 
     pub(crate) fn cluster_name(&self) -> &SharedString {
         &self.cluster_name
-    }
-
-    pub(crate) fn cluster_label(&self) -> &str {
-        &self.cluster_label
     }
 
     /// `Drain wk-04` or `Drain 3 nodes`, the tab label.

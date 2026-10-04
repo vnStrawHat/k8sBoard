@@ -136,6 +136,7 @@ pub(crate) struct FeedProgress {
 #[cfg(any(feature = "screenshot", test))]
 impl FeedProgress {
     /// No session: nothing to wait for.
+    #[cfg(feature = "screenshot")]
     pub(crate) fn unavailable() -> Self {
         Self {
             status: FeedStatus::Unavailable(String::new()),
@@ -491,42 +492,6 @@ pub(crate) const SHELL_FIXTURE_TRANSCRIPT: &str = concat!(
     "MemAvailable:   21504112 kB\r\n",
     "\x1b[32m/app $\x1b[0m ",
 );
-
-/// The data of several viewed clusters as one state: any cluster still loading holds the screen,
-/// and the target is unavailable only when every cluster is (a failed cluster is a banner next to
-/// the rows of the others, which is the target to capture).
-#[cfg(any(feature = "screenshot", test))]
-pub(crate) fn combine_targets(states: impl Iterator<Item = TargetState>) -> TargetState {
-    let mut has_loaded = false;
-    for state in states {
-        match state {
-            TargetState::Loading => return TargetState::Loading,
-            TargetState::Loaded => has_loaded = true,
-            TargetState::Unavailable => {}
-        }
-    }
-    if has_loaded {
-        TargetState::Loaded
-    } else {
-        TargetState::Unavailable
-    }
-}
-
-/// The feed that settles last among several clusters': one that is down settles at once, so the
-/// others come first, and among those the one with the fewest ticks. An unavailable feed without
-/// any.
-#[cfg(any(feature = "screenshot", test))]
-pub(crate) fn slowest_feed(feeds: impl Iterator<Item = FeedProgress>) -> FeedProgress {
-    let is_down = |status: &FeedStatus| {
-        matches!(
-            status,
-            FeedStatus::Unavailable(_) | FeedStatus::Failed(_) | FeedStatus::Interrupted(_)
-        )
-    };
-    feeds
-        .min_by_key(|feed| (is_down(&feed.status), feed.ticks))
-        .unwrap_or_else(FeedProgress::unavailable)
-}
 
 /// The kubelet feed's progress. With no node to poll (a large cluster without demand) no round
 /// ever comes, so the feed counts as settled.
@@ -1215,48 +1180,6 @@ mod tests {
         assert_eq!(controller_owner_of(&owned_by("Node")), None);
         assert_eq!(controller_owner_of(&pod("bare", 1)), None);
     }
-    #[test]
-    fn pods_multi_settles_when_slots_are_live_or_failed() {
-        let settled = |states: &[TargetState]| {
-            let input = input(combine_targets(states.iter().copied()), false);
-            is_screen_settled(LaunchScreen::PodsMulti, &input)
-        };
-        // Every slot Live with a loaded list, or Failed.
-        assert!(settled(&[TargetState::Loaded, TargetState::Loaded]));
-        assert!(settled(&[TargetState::Loaded, TargetState::Unavailable]));
-        // Every slot failed: the error screen is the target.
-        assert!(settled(&[
-            TargetState::Unavailable,
-            TargetState::Unavailable
-        ]));
-        // One slot still connecting or loading holds the screen.
-        assert!(!settled(&[TargetState::Loaded, TargetState::Loading]));
-        assert!(!settled(&[TargetState::Unavailable, TargetState::Loading]));
-    }
-
-    #[test]
-    fn pods_multi_waits_for_the_slowest_metrics_feed() {
-        let waiting = progress(FeedStatus::Waiting, 0);
-        let live = progress(FeedStatus::Live, 3);
-        let down = progress(FeedStatus::Unavailable("denied".to_owned()), 0);
-        // The cluster that has not ticked holds the screen; a denied feed does not.
-        assert_eq!(
-            slowest_feed([live.clone(), waiting.clone()].into_iter()),
-            waiting
-        );
-        assert_eq!(slowest_feed([down.clone(), live.clone()].into_iter()), live);
-        assert_eq!(
-            slowest_feed(std::iter::empty()),
-            FeedProgress::unavailable()
-        );
-        let screen = LaunchScreen::PodsMulti;
-        let pending = SettleInput {
-            pod_metrics: slowest_feed([live, waiting].into_iter()),
-            ..input(TargetState::Loaded, false)
-        };
-        assert!(!is_screen_settled(screen, &pending));
-    }
-
     #[test]
     fn outcome_exit_codes() {
         assert_eq!(ScreenshotOutcome::Saved.exit_code(), 0);

@@ -144,13 +144,18 @@ impl AppShell {
         .detach();
     }
 
-    /// `{n} leftover node shell pods` with `Review…`. It never deletes by itself.
+    /// `{n} leftover node shell pods` with `Review…`. It never deletes by itself. The answer of a
+    /// sweep can land after a switch: a notice for a cluster that is no longer open is dropped,
+    /// because its review would find no guard anyway.
     fn show_leftover_notice(
         &mut self,
         cluster: ClusterRef,
         found: Vec<NodeShellLeftover>,
         cx: &mut Context<Self>,
     ) {
+        if self.slot_session(&cluster).is_none() {
+            return;
+        }
         #[cfg(test)]
         self.sweep_notices.push((cluster.clone(), found.len()));
         let text = notice_text(found.len());

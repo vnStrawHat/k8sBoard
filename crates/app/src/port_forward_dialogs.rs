@@ -6,8 +6,7 @@
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::select::{Select, SelectState};
-use gpui_kit::component::{ActiveTheme as _, IndexPath, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
     KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, WeakEntity, Window, div,
@@ -101,23 +100,17 @@ pub(crate) fn validate_local_port(text: &str) -> Result<u16, &'static str> {
     parse_port(text).ok_or(PORT_ERROR)
 }
 
-/// The viewed cluster a form can start in.
+/// The cluster a form starts in: the open one, shown as a badge and a label.
 struct FormCluster {
     cluster: ClusterRef,
     label: String,
     environment: Environment,
 }
 
-/// The entry at the Select's selected row.
-fn cluster_at(clusters: &[FormCluster], selected: Option<IndexPath>) -> Option<&FormCluster> {
-    clusters.get(selected?.row)
-}
-
 /// The body of the New forward dialog.
 struct NewForwardForm {
     shell: WeakEntity<AppShell>,
-    clusters: Vec<FormCluster>,
-    cluster: Entity<SelectState<Vec<String>>>,
+    cluster: FormCluster,
     namespace: Entity<InputState>,
     target: Entity<InputState>,
     remote_port: Entity<InputState>,
@@ -126,12 +119,7 @@ struct NewForwardForm {
 }
 
 impl NewForwardForm {
-    /// The cluster the Select shows, by its index: two clusters may share a label.
-    fn chosen_cluster(&self, cx: &gpui_kit::App) -> Option<&FormCluster> {
-        cluster_at(&self.clusters, self.cluster.read(cx).selected_index(cx))
-    }
-
-    /// Forward: validates, then closes and starts through the guarded flow of the chosen cluster.
+    /// Forward: validates, then closes and starts through the guarded flow of the cluster.
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = |state: &Entity<InputState>| state.read(cx).value().to_string();
         let (namespace, target) = (input(&self.namespace), input(&self.target));
@@ -142,9 +130,7 @@ impl NewForwardForm {
             remote_port: &remote_port,
             local_port: &local_port,
         });
-        let Some(chosen) = self.chosen_cluster(cx).map(|entry| entry.cluster.clone()) else {
-            return;
-        };
+        let chosen = self.cluster.cluster.clone();
         match spec {
             Err(errors) => {
                 self.errors = errors;
@@ -198,7 +184,6 @@ impl NewForwardForm {
 
 impl Render for NewForwardForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let environment = self.chosen_cluster(cx).map(|entry| entry.environment);
         v_flex()
             .key_context(FORWARD_FORM)
             .on_key_down(cx.listener(Self::on_key_down))
@@ -215,10 +200,16 @@ impl Render for NewForwardForm {
                     )
                     .child(
                         h_flex()
+                            .id("forward-cluster")
                             .gap_2()
                             .items_center()
-                            .child(div().flex_1().child(Select::new(&self.cluster).small()))
-                            .children(environment.map(|value| environment_badge(value, cx))),
+                            .child(environment_badge(self.cluster.environment, cx))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .font_family(cx.theme().mono_font_family.clone())
+                                    .child(self.cluster.label.clone()),
+                            ),
                     ),
             )
             .child(self.field("Namespace", &self.namespace, self.errors.namespace, cx))
@@ -344,50 +335,44 @@ impl Render for LocalPortForm {
 }
 
 impl AppShell {
-    /// New forward: the cluster is chosen among the viewed ones, the rest is typed.
+    /// New forward, in the open cluster; the rest is typed. A prefill of any other cluster opens
+    /// nothing: only the open one can start a forward.
     pub(crate) fn open_new_forward(
         &mut self,
         prefill: NewForwardPrefill,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let clusters: Vec<FormCluster> = self
-            .view
-            .slots()
-            .iter()
-            .map(|slot| FormCluster {
-                cluster: slot.cluster.clone(),
-                label: slot.label.clone(),
-                environment: slot.profile.environment,
-            })
-            .collect();
-        let primary = self.view.primary_cluster().cloned();
-        open_form(clusters, primary.as_ref(), prefill, window, cx);
+        let Some(open) = self
+            .active_session()
+            .filter(|open| open.cluster == prefill.cluster)
+        else {
+            return;
+        };
+        let cluster = FormCluster {
+            cluster: open.cluster.clone(),
+            label: open.label.clone(),
+            environment: open.profile.environment,
+        };
+        open_form(cluster, prefill, window, cx);
     }
 
-    /// `--screen port-forward-new-fixture`: the form over two fixed clusters, so it needs none.
+    /// `--screen port-forward-new-fixture`: the form over one fixed cluster, so it needs none.
     #[cfg(feature = "screenshot")]
     pub(super) fn open_new_forward_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (production, staging) = crate::screenshot::forward_fixture_clusters();
-        let clusters = vec![
-            FormCluster {
-                cluster: production.0.clone(),
-                label: production.1.to_owned(),
-                environment: Environment::Production,
-            },
-            FormCluster {
-                cluster: staging.0,
-                label: staging.1.to_owned(),
-                environment: Environment::Staging,
-            },
-        ];
-        let prefill = NewForwardPrefill {
+        let (production, _) = crate::screenshot::forward_fixture_clusters();
+        let cluster = FormCluster {
             cluster: production.0.clone(),
+            label: production.1.to_owned(),
+            environment: Environment::Production,
+        };
+        let prefill = NewForwardPrefill {
+            cluster: production.0,
             namespace: "payments".to_owned(),
             target: Some(TargetSpec::pod("postgres-0")),
             remote_port: Some(5432),
         };
-        open_form(clusters, Some(&production.0), prefill, window, cx);
+        open_form(cluster, prefill, window, cx);
     }
 
     /// Change local port…: the current port, or the preset's, in one field.
@@ -496,32 +481,15 @@ impl AppShell {
     }
 }
 
-/// Opens the New forward dialog over `clusters`; the prefilled cluster, else `primary`, else the
-/// first is selected. Nothing opens without a cluster to start in.
+/// Opens the New forward dialog in `cluster`.
 fn open_form(
-    clusters: Vec<FormCluster>,
-    primary: Option<&ClusterRef>,
+    cluster: FormCluster,
     prefill: NewForwardPrefill,
     window: &mut Window,
     cx: &mut Context<AppShell>,
 ) {
-    if clusters.is_empty() {
-        return;
-    }
-    let selected = clusters
-        .iter()
-        .position(|entry| entry.cluster == prefill.cluster)
-        .or_else(|| {
-            let primary = primary?;
-            clusters.iter().position(|entry| entry.cluster == *primary)
-        })
-        .unwrap_or(0);
     let shell = cx.weak_entity();
     let form = cx.new(|cx| {
-        let labels: Vec<String> = clusters.iter().map(|entry| entry.label.clone()).collect();
-        let cluster = cx.new(|cx| {
-            SelectState::new(labels, Some(IndexPath::default().row(selected)), window, cx)
-        });
         let mut text_input =
             |placeholder: &'static str, value: Option<String>, cx: &mut Context<NewForwardForm>| {
                 cx.new(|cx| {
@@ -545,7 +513,6 @@ fn open_form(
         let local_port = text_input("automatic", None, cx);
         NewForwardForm {
             shell,
-            clusters,
             cluster,
             namespace,
             target,

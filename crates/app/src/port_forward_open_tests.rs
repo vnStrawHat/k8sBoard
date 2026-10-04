@@ -1,7 +1,9 @@
-//! Starting, stopping, auditing, and keeping port forwards in a headless window over two viewed
-//! clusters: `prod-a` (the primary, Production, locked at open) and `stg-b` (unlocked, a click
-//! tier). Each cluster answers from its own fake API server, so a test sees which cluster a request
-//! reached and nothing leaves the machine. A fake never upgrades a connection to a stream, so no
+//! Starting, stopping, auditing, and keeping port forwards in a headless window over two loaded
+//! clusters, one active at a time: `prod-a` (Production, locked at open) and `stg-b` (unlocked, a
+//! click tier). The fixture starts on `prod-a`, switches to `stg-b`, and makes it live; `activate`
+//! does the same for the other one. Each session answers from its own fake API server, so a test
+//! sees which cluster a request reached and nothing leaves the machine. A fake never upgrades a
+//! connection to a stream, so no
 //! test opens a real port-forward. Listeners bind loopback only, on a free port. No test sets
 //! `K8SBOARD_ALLOW_WRITES`; the fake connections carry their own write policy.
 
@@ -116,7 +118,7 @@ enum Answers {
 
 struct Forwards {
     fixture: SwitchFixture,
-    prod_api: FakeApi,
+    /// The fake server of `stg-b`, the cluster the fixture ends on.
     stg_api: FakeApi,
     prod: ClusterRef,
     stg: ClusterRef,
@@ -171,13 +173,9 @@ fn go_live(
 
 fn two_clusters(name: &str, stg_answers: Answers, cx: &mut TestAppContext) -> Forwards {
     let fixture = open_switch_fixture(name, cx);
-    let wanted = [fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx)];
-    fixture
-        .shell
-        .update(cx, |shell, cx| shell.view_clusters(&wanted, cx));
+    fixture.switch("stg-b", cx);
     cx.run_until_parked();
-    let [prod, stg] = wanted;
-    let prod_api = go_live(&fixture, &prod, Answers::Pod, WritePolicy::Allowed, cx);
+    let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
     let stg_api = go_live(&fixture, &stg, stg_answers, WritePolicy::Allowed, cx);
     fixture
         .shell
@@ -186,7 +184,6 @@ fn two_clusters(name: &str, stg_answers: Answers, cx: &mut TestAppContext) -> Fo
     fixture.draw_twice(cx);
     Forwards {
         fixture,
-        prod_api,
         stg_api,
         prod,
         stg,
@@ -235,6 +232,28 @@ fn free_port() -> u16 {
 }
 
 impl Forwards {
+    /// Switches to `cluster` and makes it live over a new fake server that finds the pod. The old
+    /// session is gone, so a test never has both clusters live at once.
+    fn activate(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> FakeApi {
+        self.fixture
+            .shell
+            .update(cx, |shell, cx| shell.switch_cluster(cluster, cx));
+        cx.run_until_parked();
+        let api = go_live(
+            &self.fixture,
+            cluster,
+            Answers::Pod,
+            WritePolicy::Allowed,
+            cx,
+        );
+        self.fixture
+            .shell
+            .update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx));
+        cx.run_until_parked();
+        self.fixture.draw_twice(cx);
+        api
+    }
+
     fn start(&self, cluster: &ClusterRef, spec: ForwardSpec, cx: &mut TestAppContext) {
         self.fixture.with_window(cx, |window, cx| {
             self.fixture.shell.update(cx, |shell, cx| {
@@ -407,6 +426,7 @@ fn a_forward_always_asks_before_it_starts(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn forward_uses_the_rows_cluster(cx: &mut TestAppContext) {
     let forwards = two_clusters("rows-cluster", Answers::Pod, cx);
+    let prod_api = forwards.activate(&forwards.prod, cx);
     forwards.set_lock(&forwards.prod, WriteLock::Unlocked, cx);
     // Production, not the click tier of the other cluster: the tier is the target's own.
     forwards.start(
@@ -428,7 +448,7 @@ fn forward_uses_the_rows_cluster(cx: &mut TestAppContext) {
     let (_, _, cluster) = forwards.only_row(cx);
     assert_eq!(cluster, forwards.prod);
     // The request reached prod-a, and stg-b saw none.
-    assert!(!forward_requests(&forwards.prod_api).is_empty());
+    assert!(!forward_requests(&prod_api).is_empty());
     assert!(forward_requests(&forwards.stg_api).is_empty());
 }
 
@@ -465,7 +485,6 @@ fn confirm_starts_the_forward_on_the_clusters_own_connection(cx: &mut TestAppCon
             .iter()
             .any(|request| request.method == "GET" && request.path.ends_with("/pods/api-0"))
     );
-    assert!(forward_requests(&forwards.prod_api).is_empty());
     // Resolving a target is a read: nothing asked to forward, and nothing was sent to portforward.
     assert!(portforward_requests(&forwards.stg_api).is_empty());
 }
@@ -473,6 +492,7 @@ fn confirm_starts_the_forward_on_the_clusters_own_connection(cx: &mut TestAppCon
 #[gpui_kit::test]
 fn the_forward_follows_the_0030_gate(cx: &mut TestAppContext) {
     let forwards = two_clusters("gate", Answers::Pod, cx);
+    let prod_api = forwards.activate(&forwards.prod, cx);
     // prod-a is locked at open: no dialog, no row, no request.
     forwards.start(
         &forwards.prod,
@@ -480,6 +500,7 @@ fn the_forward_follows_the_0030_gate(cx: &mut TestAppContext) {
         cx,
     );
     assert!(!forwards.has_dialog(cx));
+    forwards.activate(&forwards.stg, cx);
     // A denied verb of the pair says so and starts nothing.
     forwards.set_access(
         &forwards.stg,
@@ -493,21 +514,24 @@ fn the_forward_follows_the_0030_gate(cx: &mut TestAppContext) {
     );
     assert!(!forwards.has_dialog(cx));
     assert!(forwards.rows(cx).is_empty());
-    assert!(forward_requests(&forwards.prod_api).is_empty());
+    assert!(forward_requests(&prod_api).is_empty());
     assert!(forward_requests(&forwards.stg_api).is_empty());
 }
 
 #[gpui_kit::test]
-fn start_needs_a_viewed_cluster(cx: &mut TestAppContext) {
-    let forwards = two_clusters("not-viewed", Answers::Pod, cx);
+fn start_needs_the_active_cluster(cx: &mut TestAppContext) {
+    let forwards = two_clusters("not-open", Answers::Pod, cx);
     let gone = ClusterRef {
         kubeconfig: PathBuf::from("elsewhere.yaml"),
         context: "far-away".to_owned(),
     };
-    forwards.start(&gone, pod_spec("api-0", 8080, LocalPortSpec::Auto), cx);
-    // "Open far-away to start this forward": a notice, no dialog, no row.
-    assert!(!forwards.has_dialog(cx));
-    assert!(forwards.rows(cx).is_empty());
+    // "Open prod-a to start this forward": prod-a is loaded, but stg-b is the open one. The same
+    // for a cluster no kubeconfig has: a notice, no dialog, no row.
+    for cluster in [&forwards.prod, &gone] {
+        forwards.start(cluster, pod_spec("api-0", 8080, LocalPortSpec::Auto), cx);
+        assert!(!forwards.has_dialog(cx));
+        assert!(forwards.rows(cx).is_empty());
+    }
 }
 
 #[gpui_kit::test]
@@ -812,7 +836,7 @@ fn locked_cluster_pauses_running_forwards_and_blocks_start(cx: &mut TestAppConte
 // ---- forwards outlive the view ----
 
 #[gpui_kit::test]
-fn switch_cluster_keeps_forwards(cx: &mut TestAppContext) {
+fn forwards_keep_running_after_a_switch(cx: &mut TestAppContext) {
     let forwards = two_clusters("switch-keeps", Answers::Pod, cx);
     forwards.start_and_confirm(
         &forwards.stg,
@@ -833,41 +857,29 @@ fn switch_cluster_keeps_forwards(cx: &mut TestAppContext) {
         .shell
         .read_with(cx, |shell, _| shell.last_leaving.clone());
     assert_eq!(lines, None);
-    let viewed = forwards
+    let gone = forwards
         .fixture
         .shell
-        .read_with(cx, |shell, _| shell.view.clusters());
-    assert!(!viewed.contains(&forwards.stg), "stg-b left the view");
-    // The forward still runs, with the label of the cluster it was started on.
+        .read_with(cx, |shell, _| shell.slot_session(&forwards.stg).is_none());
+    assert!(gone, "stg-b is no longer open");
+    // The forward still runs, with the label of the cluster it was started on, and keeps its last
+    // control (spec 0046 decision 17): the listener still accepts new local connections.
     let (_, state, cluster) = forwards.only_row(cx);
     assert_eq!(
         (state, cluster),
         (ForwardState::Active, forwards.stg.clone())
     );
-}
-
-#[gpui_kit::test]
-fn release_slot_keeps_forwards(cx: &mut TestAppContext) {
-    let forwards = two_clusters("release", Answers::Pod, cx);
-    forwards.start_and_confirm(
-        &forwards.stg,
-        pod_spec("api-0", 8080, LocalPortSpec::Auto),
-        cx,
+    let port = forwards.fixture.shell.read_with(cx, |shell, cx| {
+        shell.port_forwards.read(cx).forwards()[0]
+            .local
+            .map(|local| local.port())
+    });
+    let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port.expect("bound")));
+    assert!(
+        std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok(),
+        "the listener of a cluster that was left still accepts"
     );
-    forwards.wait_for_state(ForwardState::Active, cx);
-    forwards
-        .fixture
-        .shell
-        .update(cx, |shell, cx| shell.remove_from_view(&forwards.stg, cx));
-    cx.run_until_parked();
-    let gone = forwards
-        .fixture
-        .shell
-        .read_with(cx, |shell, _| shell.slot_session(&forwards.stg).is_none());
-    assert!(gone, "the slot was released");
-    let (_, state, _) = forwards.only_row(cx);
-    assert_eq!(state, ForwardState::Active);
-    // Its row cannot start again until the cluster is viewed: the start names the cluster to open.
+    // Its row cannot start again until the cluster is open: the start names the cluster to open.
     let (id, ..) = forwards.only_row(cx);
     forwards.fixture.with_window(cx, |window, cx| {
         forwards.fixture.shell.update(cx, |shell, cx| {
@@ -878,7 +890,7 @@ fn release_slot_keeps_forwards(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn release_adds_no_leaving_work_line(cx: &mut TestAppContext) {
+fn a_switch_with_forwards_asks_nothing(cx: &mut TestAppContext) {
     let forwards = two_clusters("release-quiet", Answers::Pod, cx);
     forwards.start_and_confirm(
         &forwards.stg,
@@ -889,9 +901,9 @@ fn release_adds_no_leaving_work_line(cx: &mut TestAppContext) {
     forwards
         .fixture
         .shell
-        .update(cx, |shell, cx| shell.remove_from_view(&forwards.stg, cx));
+        .update(cx, |shell, cx| shell.switch_cluster(&forwards.prod, cx));
     cx.run_until_parked();
-    // A release with only forwards running asks nothing: they survive it (decision 20).
+    // A switch with only forwards running asks nothing: they survive it (decision 20).
     assert!(!forwards.has_dialog(cx));
     let lines = forwards
         .fixture
@@ -932,12 +944,14 @@ fn status_bar_shows_running_count_and_opens_the_page(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn page_lists_forwards_of_every_cluster(cx: &mut TestAppContext) {
     let forwards = two_clusters("page", Answers::Pod, cx);
+    forwards.activate(&forwards.prod, cx);
     forwards.set_lock(&forwards.prod, WriteLock::Unlocked, cx);
     forwards.start_and_confirm(
         &forwards.prod,
         pod_spec("api-0", 8080, LocalPortSpec::Auto),
         cx,
     );
+    forwards.activate(&forwards.stg, cx);
     forwards.start_and_confirm(
         &forwards.stg,
         pod_spec("api-0", 8080, LocalPortSpec::Auto),
@@ -1168,7 +1182,31 @@ fn f_key_menu_and_palette_share_the_arm(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_dialogs_open_over_the_viewed_clusters(cx: &mut TestAppContext) {
+fn the_new_forward_form_shows_the_active_cluster_only(cx: &mut TestAppContext) {
+    let forwards = two_clusters("form-cluster", Answers::Pod, cx);
+    let open_form = |cluster: &ClusterRef, cx: &mut TestAppContext| {
+        forwards.fixture.with_window(cx, |window, cx| {
+            forwards.fixture.shell.update(cx, |shell, cx| {
+                let prefill = crate::app_shell::port_forward_dialogs::NewForwardPrefill {
+                    cluster: cluster.clone(),
+                    namespace: "shop".to_owned(),
+                    target: None,
+                    remote_port: None,
+                };
+                shell.open_new_forward(prefill, window, cx);
+            });
+        });
+    };
+    // A cluster that is not the open one cannot start a forward: nothing opens.
+    open_form(&forwards.prod, cx);
+    assert!(!forwards.has_dialog(cx));
+    open_form(&forwards.stg, cx);
+    assert!(forwards.has_dialog(cx));
+    forwards.press_dialog(Cancel, cx);
+}
+
+#[gpui_kit::test]
+fn the_dialogs_open_in_the_open_cluster(cx: &mut TestAppContext) {
     let forwards = two_clusters("dialogs", Answers::Pod, cx);
     forwards.fixture.with_window(cx, |window, cx| {
         forwards.fixture.shell.update(cx, |shell, cx| {

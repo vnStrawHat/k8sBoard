@@ -1,6 +1,7 @@
-//! Opening, confirming, auditing, and releasing shell tabs in a headless window over two viewed
-//! clusters: `prod-a` (the primary, Production, locked at open) and `stg-b` (unlocked, a click
-//! tier). Each cluster answers from its own fake API server, so a test sees which cluster a request
+//! Opening, confirming, auditing, and releasing shell tabs in a headless window over two loaded
+//! clusters, one active at a time: `prod-a` (Production, locked at open) and `stg-b` (unlocked, a
+//! click tier). The fixture starts on `prod-a`, switches to `stg-b`, and makes it live over a fake
+//! API server; `activate` does the same for the other one. A test sees which cluster a request
 //! reached and nothing leaves the machine. No test sets `K8SBOARD_ALLOW_WRITES`; the fake
 //! connections carry their own write policy, and a fake never upgrades a connection to a stream.
 
@@ -98,7 +99,7 @@ fn report_denying(denied: &[AccessCheck]) -> AccessReport {
 
 struct Shells {
     fixture: SwitchFixture,
-    prod_api: FakeApi,
+    /// The fake server of `stg-b`, the cluster the fixture ends on.
     stg_api: FakeApi,
     prod: ClusterRef,
     stg: ClusterRef,
@@ -136,28 +137,25 @@ fn go_live(
     api
 }
 
+fn pods() -> Vec<PodSummary> {
+    vec![
+        pod("api-0", vec![container("app", ContainerKind::Main, true)]),
+        pod(
+            "multi-0",
+            vec![
+                container("init", ContainerKind::Init, false),
+                container("proxy", ContainerKind::Sidecar, true),
+                container("web", ContainerKind::Main, true),
+            ],
+        ),
+    ]
+}
+
 fn two_clusters(name: &str, cx: &mut TestAppContext) -> Shells {
     let fixture = open_switch_fixture(name, cx);
-    let wanted = [fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx)];
-    fixture
-        .shell
-        .update(cx, |shell, cx| shell.view_clusters(&wanted, cx));
+    fixture.switch("stg-b", cx);
     cx.run_until_parked();
-    let [prod, stg] = wanted;
-    let pods = || {
-        vec![
-            pod("api-0", vec![container("app", ContainerKind::Main, true)]),
-            pod(
-                "multi-0",
-                vec![
-                    container("init", ContainerKind::Init, false),
-                    container("proxy", ContainerKind::Sidecar, true),
-                    container("web", ContainerKind::Main, true),
-                ],
-            ),
-        ]
-    };
-    let prod_api = go_live(&fixture, &prod, pods(), cx);
+    let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
     let stg_api = go_live(&fixture, &stg, pods(), cx);
     fixture
         .shell
@@ -166,7 +164,6 @@ fn two_clusters(name: &str, cx: &mut TestAppContext) -> Shells {
     fixture.draw_twice(cx);
     Shells {
         fixture,
-        prod_api,
         stg_api,
         prod,
         stg,
@@ -181,6 +178,22 @@ fn exec_requests(api: &FakeApi) -> Vec<RecordedRequest> {
 }
 
 impl Shells {
+    /// Switches to `cluster` and makes it live over a new fake server. The old session is gone, so
+    /// a test never has both clusters live at once.
+    fn activate(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> FakeApi {
+        self.fixture
+            .shell
+            .update(cx, |shell, cx| shell.switch_cluster(cluster, cx));
+        cx.run_until_parked();
+        let api = go_live(&self.fixture, cluster, pods(), cx);
+        self.fixture
+            .shell
+            .update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx));
+        cx.run_until_parked();
+        self.fixture.draw_twice(cx);
+        api
+    }
+
     fn open(&self, cluster: &ClusterRef, pod: &str, container: &str, cx: &mut TestAppContext) {
         let open = ShellOpen {
             cluster: cluster.clone(),
@@ -338,15 +351,14 @@ fn a_shell_always_asks_before_it_opens(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn open_shell_uses_the_cursor_slot(cx: &mut TestAppContext) {
+fn open_shell_uses_the_active_cluster(cx: &mut TestAppContext) {
     let shells = two_clusters("slot", cx);
     shells.open_and_confirm(&shells.stg, "api-0", "app", cx);
     assert_eq!(shells.tab_count(cx), 1);
-    // The request reached stg-b, the pod's own cluster, and the primary saw none.
+    // The request reached stg-b, the pod's own cluster.
     shells.wait_for("the exec request", cx, || {
         !exec_requests(&shells.stg_api).is_empty()
     });
-    assert!(exec_requests(&shells.prod_api).is_empty());
     let tab = shells.tabs(cx).remove(0);
     let (cluster, label) = tab.read_with(cx, |tab, _| {
         (tab.cluster().clone(), tab.cluster_label().to_owned())
@@ -358,14 +370,11 @@ fn open_shell_uses_the_cursor_slot(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn open_shell_follows_the_0030_gate(cx: &mut TestAppContext) {
     let shells = two_clusters("gate", cx);
+    let prod_api = shells.activate(&shells.prod, cx);
     // prod-a is locked at open: no dialog, no tab, no request.
     shells.open(&shells.prod, "api-0", "app", cx);
     assert!(!shells.has_dialog(cx));
     assert_eq!(shells.tab_count(cx), 0);
-    // A denied verb of the pair says so and opens nothing.
-    shells.set_access(&shells.stg, report_denying(&[AccessCheck::GetPodExec]), cx);
-    shells.open(&shells.stg, "api-0", "app", cx);
-    assert!(!shells.has_dialog(cx));
     // Unlocked and allowed, a Production cluster types its name.
     shells.set_lock(&shells.prod, WriteLock::Unlocked, cx);
     shells.open(&shells.prod, "api-0", "app", cx);
@@ -379,8 +388,14 @@ fn open_shell_follows_the_0030_gate(cx: &mut TestAppContext) {
             expected: "prod-a".to_owned()
         }
     );
-    assert!(exec_requests(&shells.prod_api).is_empty());
-    assert!(exec_requests(&shells.stg_api).is_empty());
+    shells.press_dialog(Cancel, cx);
+    // A denied verb of the pair says so and opens nothing.
+    let stg_api = shells.activate(&shells.stg, cx);
+    shells.set_access(&shells.stg, report_denying(&[AccessCheck::GetPodExec]), cx);
+    shells.open(&shells.stg, "api-0", "app", cx);
+    assert!(!shells.has_dialog(cx));
+    assert!(exec_requests(&prod_api).is_empty());
+    assert!(exec_requests(&stg_api).is_empty());
 }
 
 #[gpui_kit::test]
@@ -607,11 +622,12 @@ fn switch_with_open_shells_asks_first(cx: &mut TestAppContext) {
     shells.press_dialog(Cancel, cx);
     assert!(!shells.has_dialog(cx));
     assert_eq!(shells.tab_count(cx), 2);
-    let viewed = shells
+    let stg = shells.stg.clone();
+    let is_open = shells
         .fixture
         .shell
-        .read_with(cx, |shell, _| shell.view.clusters());
-    assert_eq!(viewed.len(), 2, "both clusters are still viewed");
+        .read_with(cx, |shell, _| shell.slot_session(&stg).is_some());
+    assert!(is_open, "the cluster is still open");
     // Asking again and confirming releases them and ends the shells.
     shells
         .fixture
@@ -637,56 +653,6 @@ fn a_switch_without_shells_asks_nothing(cx: &mut TestAppContext) {
         .shell
         .read_with(cx, |shell, _| shell.last_leaving.clone());
     assert_eq!(lines, None);
-}
-
-#[gpui_kit::test]
-fn slot_release_closes_only_its_shells(cx: &mut TestAppContext) {
-    let shells = two_clusters("release", cx);
-    shells.set_lock(&shells.prod, WriteLock::Unlocked, cx);
-    shells.open_and_confirm(&shells.prod, "api-0", "app", cx);
-    shells.open_and_confirm(&shells.stg, "api-0", "app", cx);
-    assert_eq!(
-        (
-            shells.tabs_of(&shells.prod, cx),
-            shells.tabs_of(&shells.stg, cx)
-        ),
-        (1, 1)
-    );
-    shells
-        .fixture
-        .shell
-        .update(cx, |shell, cx| shell.remove_from_view(&shells.stg, cx));
-    cx.run_until_parked();
-    let lines = shells
-        .fixture
-        .shell
-        .read_with(cx, |shell, _| shell.last_leaving.clone());
-    assert_eq!(lines, Some(vec!["1 shell will close".to_owned()]));
-    shells.press_dialog(Confirm { secondary: false }, cx);
-    assert_eq!(
-        shells.tabs_of(&shells.stg, cx),
-        0,
-        "the released slot's shell is gone"
-    );
-    assert_eq!(
-        shells.tabs_of(&shells.prod, cx),
-        1,
-        "the other cluster's shell runs"
-    );
-}
-
-#[gpui_kit::test]
-fn a_view_change_that_keeps_every_shell_asks_nothing(cx: &mut TestAppContext) {
-    let shells = two_clusters("view-keeps", cx);
-    shells.open_and_confirm(&shells.stg, "api-0", "app", cx);
-    let wanted = [shells.prod.clone(), shells.stg.clone()];
-    shells
-        .fixture
-        .shell
-        .update(cx, |shell, cx| shell.view_clusters(&wanted, cx));
-    cx.run_until_parked();
-    assert!(!shells.has_dialog(cx));
-    assert_eq!(shells.tab_count(cx), 1);
 }
 
 // ---- reconnect ----

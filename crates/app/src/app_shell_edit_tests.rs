@@ -1,5 +1,6 @@
-//! Edit YAML (spec 0031) in a headless window over two viewed clusters, `prod-a` (the primary,
-//! locked at open) and `stg-b` (unlocked). Both answer from one fake API server per cluster, so a
+//! Edit YAML (spec 0031) in a headless window over two loaded clusters, one active at a time: the
+//! fixture starts on `prod-a` (locked at open), switches to `stg-b` (unlocked), and makes it live;
+//! `activate` does the same for `prod-a`. Each session answers from its own fake API server, so a
 //! test sees which cluster a request reached, and nothing leaves the machine. No test sets
 //! `K8SBOARD_ALLOW_WRITES`: the fake connection is built with an allowing policy of its own.
 
@@ -14,7 +15,7 @@ use gpui_kit::{Entity, KeyDownEvent, Keystroke, TestAppContext};
 use serde_json::{Value, json};
 
 use super::app_shell_switch_tests::open_switch_fixture;
-use super::app_shell_write_tests::{Clusters, audit_lines, go_live_answering, view, writes};
+use super::app_shell_write_tests::{Clusters, audit_lines, go_live_answering, switch_to, writes};
 use super::*;
 use crate::kind_access::KindAccess;
 use crate::kind_row::KindRow;
@@ -135,14 +136,12 @@ fn edit_test(name: &str, cx: &mut TestAppContext) -> EditTest {
     // Dialogs open without their animation, so the confirm button takes input at once.
     cx.update(|cx| cx.set_reduce_motion(true));
     let fixture = open_switch_fixture(name, cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
     let server = EditServer::new();
-    let prod_api = go_live_answering(&fixture, &prod, "node-a", answers(&server), cx);
     let stg_api = go_live_answering(&fixture, &stg, "node-b", answers(&server), cx);
     let t = Clusters {
         fixture,
-        prod_api,
         stg_api,
         prod,
         stg,
@@ -154,6 +153,22 @@ fn edit_test(name: &str, cx: &mut TestAppContext) -> EditTest {
 impl EditTest {
     fn shell(&self) -> &Entity<AppShell> {
         &self.t.fixture.shell
+    }
+
+    /// Switches to `cluster`, makes it live over a new fake server, and lists the Deployment on it.
+    /// The old session is gone, so a test never has both clusters live at once.
+    fn activate(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> FakeApi {
+        let node = if *cluster == self.t.prod {
+            "node-a"
+        } else {
+            "node-b"
+        };
+        let api = self
+            .t
+            .activate_answering(cluster, node, answers(&self.server), cx);
+        self.t
+            .show_kind(ResourceKind::Deployments, deployments(), deployments(), cx);
+        api
     }
 
     /// Waits until the lazy `update deployments` review of `cluster` has an answer.
@@ -318,7 +333,6 @@ fn e_opens_the_editor_on_the_cursor_row_of_its_own_cluster(cx: &mut TestAppConte
     assert_eq!((&cluster, name.as_str()), (&t.t.stg, "api"));
     // One read of the object, on the cluster of the row.
     assert_eq!(gets_of(&t.t.stg_api), 1);
-    assert_eq!(gets_of(&t.t.prod_api), 0);
     let text = t.base_text(cx);
     assert!(
         text.starts_with("# Values shown as <hidden>"),
@@ -828,16 +842,13 @@ fn commit_success_closes_the_editor(cx: &mut TestAppContext) {
             "{forbidden} reached the audit log"
         );
     }
-    assert!(
-        writes(&t.t.prod_api).is_empty(),
-        "the primary was not touched"
-    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[gpui_kit::test]
 fn commit_rechecks_the_row_cluster(cx: &mut TestAppContext) {
     let t = edit_test("edit-prod", cx);
+    let prod_api = t.activate(&t.t.prod, cx);
     t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
     let dir = audit_dir(&t, "edit-prod", cx);
     t.cursor_on(&t.t.prod, cx);
@@ -859,9 +870,9 @@ fn commit_rechecks_the_row_cluster(cx: &mut TestAppContext) {
     // Without the name nothing is committed.
     t.t.confirm(cx);
     cx.run_until_parked();
-    assert_eq!(puts_of(&t.t.prod_api).len(), 2, "two dry-runs, no commit");
+    assert_eq!(puts_of(&prod_api).len(), 2, "two dry-runs, no commit");
     t.confirm_dialog(cx);
-    t.t.wait_for("the commit", cx, |_| puts_of(&t.t.prod_api).len() == 3);
+    t.t.wait_for("the commit", cx, |_| puts_of(&prod_api).len() == 3);
     t.t.wait_for("the audit line", cx, |_| audit_lines(&dir).len() == 1);
     assert_eq!(audit_lines(&dir)[0]["cluster"], json!("prod-a"));
     assert!(puts_of(&t.t.stg_api).is_empty(), "staging was not touched");
@@ -1136,39 +1147,6 @@ fn closing_the_editor_restores_the_cursor_and_the_table(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
-fn release_of_the_edited_cluster_asks_first(cx: &mut TestAppContext) {
-    let t = edit_test("edit-release", cx);
-    t.open(cx);
-    t.change("replicas: 3", "replicas: 5", cx);
-    let stg = t.t.stg.clone();
-    t.shell()
-        .update(cx, |shell, cx| shell.remove_from_view(&stg, cx));
-    cx.run_until_parked();
-    assert_eq!(
-        t.shell()
-            .read_with(cx, |shell, _| shell.last_leaving.clone()),
-        Some(vec!["Unsaved changes to Deployment/team-a/api".to_owned()])
-    );
-    // Stay: the slot and the text are kept.
-    t.press_dialog(Cancel, cx);
-    assert!(t.has_edit(cx));
-    assert!(
-        t.shell()
-            .read_with(cx, |shell, _| shell.view.slot_of(&stg).is_some())
-    );
-    // Leave: the cluster is released and the editor goes with it.
-    t.shell()
-        .update(cx, |shell, cx| shell.remove_from_view(&stg, cx));
-    cx.run_until_parked();
-    t.press_dialog(Confirm { secondary: false }, cx);
-    assert!(!t.has_edit(cx));
-    assert!(
-        t.shell()
-            .read_with(cx, |shell, _| shell.view.slot_of(&stg).is_none())
-    );
-}
-
-#[gpui_kit::test]
 fn cluster_switch_with_changes_asks_to_discard(cx: &mut TestAppContext) {
     let t = edit_test("edit-switch", cx);
     t.open(cx);
@@ -1182,38 +1160,35 @@ fn cluster_switch_with_changes_asks_to_discard(cx: &mut TestAppContext) {
             .read_with(cx, |shell, _| shell.last_leaving.clone()),
         Some(vec!["Unsaved changes to Deployment/team-a/api".to_owned()])
     );
+    // Stay: the session and the text are kept.
+    t.press_dialog(Cancel, cx);
     assert!(t.has_edit(cx));
+    assert!(
+        t.shell()
+            .read_with(cx, |shell, _| shell.slot_session(&t.t.stg).is_some())
+    );
+    // Leave: the cluster is released and the editor goes with it.
+    t.shell()
+        .update(cx, |shell, cx| shell.switch_cluster(&target, cx));
+    cx.run_until_parked();
     t.press_dialog(Confirm { secondary: false }, cx);
     assert!(!t.has_edit(cx));
+    assert!(
+        t.shell()
+            .read_with(cx, |shell, _| shell.slot_session(&t.t.stg).is_none())
+    );
 }
 
 #[gpui_kit::test]
 fn a_clean_editor_closes_with_its_released_cluster_without_asking(cx: &mut TestAppContext) {
     let t = edit_test("edit-release-clean", cx);
     t.open(cx);
-    let stg = t.t.stg.clone();
+    let target = t.t.fixture.cluster("dev-c", cx);
     t.shell()
-        .update(cx, |shell, cx| shell.remove_from_view(&stg, cx));
+        .update(cx, |shell, cx| shell.switch_cluster(&target, cx));
     cx.run_until_parked();
     assert!(!t.t.has_dialog(cx));
     assert!(!t.has_edit(cx));
-}
-
-#[gpui_kit::test]
-fn releasing_another_cluster_keeps_the_editor(cx: &mut TestAppContext) {
-    let t = edit_test("edit-release-other", cx);
-    t.open(cx);
-    t.change("replicas: 3", "replicas: 5", cx);
-    let prod = t.t.prod.clone();
-    t.shell()
-        .update(cx, |shell, cx| shell.remove_from_view(&prod, cx));
-    cx.run_until_parked();
-    assert!(
-        !t.t.has_dialog(cx),
-        "the edit is not in the released cluster"
-    );
-    assert!(t.has_edit(cx));
-    assert!(t.text(cx).contains("replicas: 5"));
 }
 
 #[gpui_kit::test]

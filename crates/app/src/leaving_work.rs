@@ -1,7 +1,7 @@
 //! The one dialog that asks before a release ends work the user may lose (spec 0036 decision 37).
-//! A switch, a view change, and "Remove from view" ask it before the release starts, because the
-//! release of a session cannot wait for an answer once it began. It lists the leaving clusters'
-//! work only; other features add their lines (unsaved edits, a running drain, node shells).
+//! A switch asks it before the release starts, because the release of a session cannot wait for
+//! an answer once it began. It lists the leaving cluster's work only; other features add their
+//! lines (unsaved edits, a running drain, node shells).
 //!
 //! A child of `app_shell`, like `write_flow`: it reads the dock and runs the release afterwards.
 

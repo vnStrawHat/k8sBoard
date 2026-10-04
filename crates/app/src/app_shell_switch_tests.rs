@@ -13,7 +13,7 @@ use gpui_kit::{TestAppContext, WindowHandle};
 use super::app_shell_tests::{open_shell_on, render};
 use super::*;
 use crate::cluster_session::SessionPhase;
-use crate::cluster_switcher::{SwitcherConfirm, ToggleClusterTick};
+use crate::cluster_switcher::SwitcherConfirm;
 use cluster::ClusterConnection;
 
 use crate::cluster_runtime::ClusterRuntime;
@@ -748,23 +748,54 @@ fn arrows_move_highlight_in_filter(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn space_ticks_a_row_and_never_confirms(cx: &mut TestAppContext) {
+fn space_never_confirms_in_the_switcher(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture("space", cx);
-    let (ticks, confirms) = cx.update(|cx| {
+    let (is_ignored, confirms) = cx.update(|cx| {
         let space = [gpui_kit::Keystroke::parse("space").expect("a valid keystroke")];
         let bindings = cx.all_bindings_for_input(&space);
         (
             bindings
                 .iter()
-                .any(|binding| binding.action().partial_eq(&ToggleClusterTick)),
+                .any(|binding| binding.action().partial_eq(&gpui_kit::NoAction)),
             bindings
                 .iter()
                 .any(|binding| binding.action().partial_eq(&SwitcherConfirm)),
         )
     });
-    assert!(ticks);
+    assert!(is_ignored);
     assert!(!confirms);
     drop(fixture);
+}
+
+#[gpui_kit::test]
+fn space_keeps_the_switcher_open(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture("space-open", cx);
+    fixture.open_switcher(cx);
+    let before = fixture.session(cx).entity_id();
+    // In the filter.
+    fixture.press("space", cx);
+    assert!(fixture.is_switcher_open(cx));
+    assert_eq!(fixture.session(cx).entity_id(), before);
+    // On a row: Tab leaves the filter for the controls of the popover.
+    fixture.press("down", cx);
+    fixture.press("tab", cx);
+    render(fixture.window, cx);
+    fixture.press("space", cx);
+    assert!(fixture.is_switcher_open(cx));
+    assert_eq!(fixture.active_context(cx).as_deref(), Some("prod-a"));
+    assert_eq!(fixture.session(cx).entity_id(), before);
+}
+
+#[gpui_kit::test]
+fn enter_always_switches_to_the_highlight(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture("enter-highlight", cx);
+    fixture.open_switcher(cx);
+    assert_eq!(fixture.highlight(cx).as_deref(), Some("prod-a"));
+    fixture.press("down", cx);
+    assert_eq!(fixture.highlight(cx).as_deref(), Some("stg-b"));
+    fixture.press("enter", cx);
+    assert!(!fixture.is_switcher_open(cx));
+    assert_eq!(fixture.active_context(cx).as_deref(), Some("stg-b"));
 }
 
 #[gpui_kit::test]
@@ -912,7 +943,7 @@ fn palette_pod_object(
 ) -> ClusterObject {
     let cluster = fixture
         .shell
-        .read_with(cx, |shell, _| shell.primary_cluster())
+        .read_with(cx, |shell, _| shell.active_cluster())
         .expect("the fixture has a primary cluster");
     ClusterObject::new(cluster, palette_pod_key(name))
 }
@@ -1015,4 +1046,273 @@ fn the_palette_lists_the_loaded_pods_and_the_row_actions_of_the_cursor(cx: &mut 
         entry.target,
         crate::palette_search::PaletteTarget::Resource(_)
     )));
+}
+
+// ---- spec 0046: one cluster is open at a time ----
+
+fn last_used(cx: &mut TestAppContext) -> Option<ClusterRef> {
+    cx.update(|cx| AppSettings::get(cx).registry.last_used.clone())
+}
+
+fn select_pod_row(fixture: &SwitchFixture, row: usize, cx: &mut TestAppContext) {
+    let table = fixture
+        .shell
+        .read_with(cx, |shell, _| shell.pod_table.clone());
+    cx.update(|cx| table.update(cx, |table, cx| table.set_selected_row(row, cx)));
+    cx.run_until_parked();
+}
+
+fn selected_name(fixture: &SwitchFixture, cx: &mut TestAppContext) -> Option<String> {
+    fixture.shell.read_with(cx, |shell, _| {
+        shell.selected.as_ref().map(|object| match &object.key {
+            ResourceKey::Pod { name, .. } => name.clone(),
+            other => panic!("not a pod: {other:?}"),
+        })
+    })
+}
+
+#[gpui_kit::test]
+fn last_used_is_written_on_live(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture("last-used-live", cx);
+    assert_eq!(last_used(cx), None);
+    fixture.go_live(NamespaceScope::All, cx);
+    assert_eq!(last_used(cx), Some(fixture.cluster("prod-a", cx)));
+}
+
+#[gpui_kit::test]
+fn last_used_is_not_written_on_failure(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture("last-used-failed", cx);
+    fixture.wait_until_failed(cx);
+    assert_eq!(last_used(cx), None);
+}
+
+#[gpui_kit::test]
+fn last_used_is_written_once_per_session(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture("last-used-once", cx);
+    fixture.go_live(NamespaceScope::All, cx);
+    // Another cluster is saved meanwhile; the same session going on does not write it back.
+    let other = fixture.cluster("dev-c", cx);
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            settings.registry.last_used = Some(other.clone())
+        });
+    });
+    fixture
+        .session(cx)
+        .update(cx, |session, cx| session.set_pods_for_test(Vec::new(), cx));
+    cx.run_until_parked();
+    assert_eq!(last_used(cx), Some(other));
+}
+
+#[gpui_kit::test]
+fn select_all_follows_the_ticks(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("select-all", cx);
+    let is_all_checked = |cx: &mut TestAppContext| {
+        fixture.shell.read_with(cx, |shell, cx| {
+            shell.pod_table.read(cx).delegate().all_checked()
+        })
+    };
+    assert!(!is_all_checked(cx));
+    fixture
+        .shell
+        .update(cx, |shell, cx| shell.set_all_checked(true, cx));
+    assert!(is_all_checked(cx));
+    fixture
+        .shell
+        .update(cx, |shell, cx| shell.toggle_row_checked(0, cx));
+    assert!(!is_all_checked(cx));
+}
+
+#[gpui_kit::test]
+fn a_closed_drawer_keeps_its_cursor(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("closed-drawer-context", cx);
+    select_pod_row(&fixture, 1, cx);
+    assert_eq!(selected_name(&fixture, cx).as_deref(), Some("web-0"));
+    fixture.shell.update(cx, |shell, cx| shell.close_drawer(cx));
+    // The cursor stays on its row with the drawer closed.
+    assert_eq!(selected_name(&fixture, cx).as_deref(), Some("web-0"));
+    fixture
+        .shell
+        .read_with(cx, |shell, _| assert!(!shell.drawer.is_open));
+    // A bare reveal moves it to the object it names, in the one open cluster.
+    fixture
+        .shell
+        .update(cx, |shell, cx| shell.reveal(palette_pod_key("api-0"), cx));
+    cx.run_until_parked();
+    assert_eq!(selected_name(&fixture, cx).as_deref(), Some("api-0"));
+}
+
+#[gpui_kit::test]
+fn palette_resource_entries_have_no_cluster_label(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("palette-single", cx);
+    let snapshot = fixture
+        .shell
+        .read_with(cx, |shell, cx| shell.palette_snapshot(true, cx));
+    let detail = snapshot.entries.iter().find_map(|entry| {
+        matches!(
+            entry.target,
+            crate::palette_search::PaletteTarget::Resource(_)
+        )
+        .then(|| entry.detail.clone())
+    });
+    assert_eq!(detail.flatten().as_deref(), Some("shop/api-0"));
+}
+
+#[gpui_kit::test]
+fn the_yaml_key_acts_on_the_cursor_row(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("yaml-key", cx);
+    select_pod_row(&fixture, 1, cx);
+    fixture.shell.update(cx, |shell, cx| shell.close_drawer(cx));
+    fixture.draw_twice(cx);
+    fixture.press("y", cx);
+    cx.run_until_parked();
+    fixture.shell.read_with(cx, |shell, _| {
+        assert!(shell.drawer.is_open);
+        assert_eq!(shell.drawer.tab, DrawerTab::Yaml);
+        assert_eq!(
+            shell.drawer_subject().map(|object| object.key.clone()),
+            Some(palette_pod_key("web-0"))
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn right_click_menu_action_acts_on_the_clicked_row(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("right-click-menu", cx);
+    // The cursor sits on the first row, with the drawer closed.
+    select_pod_row(&fixture, 0, cx);
+    fixture.shell.update(cx, |shell, cx| shell.close_drawer(cx));
+    fixture.draw_twice(cx);
+    assert_eq!(selected_name(&fixture, cx).as_deref(), Some("api-0"));
+    // A right click on the second row opens its menu.
+    fixture.with_window(cx, |window, cx| window.right_click(("row", 1usize), cx));
+    cx.run_until_parked();
+    fixture.draw_twice(cx);
+    cx.run_until_parked();
+    // The kit leaves the cursor alone, so the shell moves it: key actions run on the cursor.
+    assert_eq!(selected_name(&fixture, cx).as_deref(), Some("web-0"));
+    fixture
+        .shell
+        .read_with(cx, |shell, _| assert!(!shell.drawer.is_open));
+    // The second clickable item of the menu is View YAML.
+    for key in ["down", "down", "enter"] {
+        fixture.press(key, cx);
+        cx.run_until_parked();
+    }
+    fixture.shell.read_with(cx, |shell, _| {
+        assert!(shell.drawer.is_open);
+        assert_eq!(shell.drawer.tab, DrawerTab::Yaml);
+        assert_eq!(
+            shell.drawer_subject().map(|object| object.key.clone()),
+            Some(palette_pod_key("web-0"))
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_disabled_menu_item_confirmed_by_key_acts_on_the_clicked_row(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("right-click-key", cx);
+    select_pod_row(&fixture, 0, cx);
+    fixture.shell.update(cx, |shell, cx| shell.close_drawer(cx));
+    fixture.draw_twice(cx);
+    fixture.with_window(cx, |window, cx| window.right_click(("row", 1usize), cx));
+    cx.run_until_parked();
+    fixture.draw_twice(cx);
+    cx.run_until_parked();
+    // The first item is confirmed without a handler of its own: the kit dispatches its action,
+    // which runs on the cursor. It must be the clicked row.
+    for key in ["down", "enter"] {
+        fixture.press(key, cx);
+        cx.run_until_parked();
+    }
+    assert_eq!(selected_name(&fixture, cx).as_deref(), Some("web-0"));
+}
+
+#[gpui_kit::test]
+fn a_switch_clears_ticks_of_a_same_named_row(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("clears-ticks", cx);
+    fixture.shell.update(cx, |shell, cx| {
+        shell.check_rows(crate::table_view::RowCheck::Toggle(0), cx);
+    });
+    cx.run_until_parked();
+    let ticked = |cx: &mut TestAppContext| {
+        fixture.shell.read_with(cx, |shell, cx| {
+            let count = shell
+                .pod_table
+                .read(cx)
+                .delegate()
+                .view()
+                .map_or(0, crate::table_view::TableView::checked_count);
+            (count, shell.checked_objects(cx).len())
+        })
+    };
+    assert_eq!(ticked(cx), (1, 1), "api-0 of the first cluster is ticked");
+    // The second cluster lists a pod of the same name and namespace.
+    fixture.switch("stg-b", cx);
+    cx.run_until_parked();
+    fixture.go_live(NamespaceScope::All, cx);
+    fixture.session(cx).update(cx, |session, cx| {
+        session.set_pods_for_test(vec![palette_pod("api-0")], cx);
+    });
+    cx.run_until_parked();
+    fixture.draw_twice(cx);
+    assert_eq!(ticked(cx), (0, 0), "no tick follows the switch");
+}
+
+#[gpui_kit::test]
+fn set_session_clears_ticks_and_anchor_on_any_change(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("set-session-clears", cx);
+    let ticked = |cx: &mut TestAppContext| {
+        fixture.shell.read_with(cx, |shell, cx| {
+            shell
+                .pod_table
+                .read(cx)
+                .delegate()
+                .view()
+                .map_or(0, crate::table_view::TableView::checked_count)
+        })
+    };
+    let set_session = |session: Option<crate::row_context::TableSession>,
+                       cx: &mut TestAppContext| {
+        fixture.shell.update(cx, |shell, cx| {
+            shell
+                .pod_table
+                .update(cx, |table, _| table.delegate_mut().set_session(session));
+        });
+    };
+    let open = |cx: &mut TestAppContext| {
+        fixture.shell.read_with(cx, |shell, _| {
+            shell.active_session().map(ActiveSession::table_session)
+        })
+    };
+    fixture.shell.update(cx, |shell, cx| {
+        shell.check_rows(crate::table_view::RowCheck::Toggle(0), cx);
+    });
+    assert_eq!(ticked(cx), 1);
+    // The same session again changes nothing.
+    set_session(open(cx), cx);
+    assert_eq!(ticked(cx), 1, "the same session keeps its ticks");
+    // Going to none clears them, and coming back to the same session does not restore them.
+    set_session(None, cx);
+    assert_eq!(ticked(cx), 0, "none clears the ticks");
+    set_session(open(cx), cx);
+    assert_eq!(ticked(cx), 0, "the ticks are gone for good");
+}
+
+#[gpui_kit::test]
+fn slot_session_is_none_for_a_cluster_that_is_not_active(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture("slot-session", cx);
+    let prod = fixture.cluster("prod-a", cx);
+    let stg = fixture.cluster("stg-b", cx);
+    let has_session = |cluster: &ClusterRef, cx: &mut TestAppContext| {
+        fixture
+            .shell
+            .read_with(cx, |shell, _| shell.slot_session(cluster).is_some())
+    };
+    assert!(has_session(&prod, cx));
+    assert!(!has_session(&stg, cx), "a cluster that is not open");
+    fixture.switch("stg-b", cx);
+    cx.run_until_parked();
+    assert!(has_session(&stg, cx));
+    assert!(!has_session(&prod, cx), "the cluster just left");
 }

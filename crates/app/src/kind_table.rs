@@ -18,7 +18,6 @@ use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_registry::ClusterRef;
-use crate::cluster_rows::{Clustered, RowAddress, SlotSession, merge_slot_rows};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::truncated_text;
 use crate::filter_bar::filtered_empty_state;
@@ -30,13 +29,12 @@ use crate::resource_actions::{
     secret_menu,
 };
 use crate::resource_kind::{Align, NAME_COLUMN, NameColumn, ResourceKind, kind_columns};
+use crate::row_context::TableSession;
 use crate::secret_values::ValueAccess;
 use crate::settings::{TablePrefs, screen_key};
 use crate::status_tone::{StatusTone, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
-use crate::table_layout::{
-    ColumnPlan, TableLayout, clickable_row, cluster_cell, header_cell, select_cell,
-};
+use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 
@@ -46,12 +44,10 @@ const NAME_MIN_WIDTH: Pixels = px(NAME_COLUMN.width);
 
 /// Rows come straight from the sessions, so the table never owns a copy of the rows.
 pub(crate) struct KindTableDelegate {
-    /// One per viewed cluster, in slot order; empty before the first session.
-    sessions: Vec<SlotSession>,
-    /// Where each merged item of the shown kind came from, as of the last rebuild.
-    addresses: Vec<RowAddress>,
+    /// The open cluster's session; `None` before the first one.
+    session: Option<TableSession>,
     /// Every shown row of the shown kind is ticked: read by the header checkbox, computed with the
-    /// rows (a rebuild or a tick) so a frame never merges the rows again.
+    /// rows (a rebuild or a tick) so a frame never reads the rows again.
     all_checked: bool,
     /// `None` while Pods or Nodes is shown; the table is not rendered then.
     kind: Option<ResourceKind>,
@@ -71,20 +67,18 @@ pub(crate) struct KindTableDelegate {
 fn new_view(kind: ResourceKind, saved: &BTreeMap<String, TablePrefs>) -> TableView {
     let mut view = TableView::new(default_filter(Screen::Kind(kind)));
     if let Some(prefs) = saved.get(screen_key(Screen::Kind(kind))) {
-        view.apply_prefs(prefs, &kind_plan(Some(kind), false));
+        view.apply_prefs(prefs, &kind_plan(Some(kind)));
     }
     view
 }
 
-/// The logical columns of `kind`, and which one takes the rest of the table. Several viewed
-/// clusters add the Cluster column.
-fn kind_plan(kind: Option<ResourceKind>, is_multi: bool) -> ColumnPlan {
+/// The logical columns of `kind`, and which one takes the rest of the table.
+fn kind_plan(kind: Option<ResourceKind>) -> ColumnPlan {
     let Some(kind) = kind else {
         return ColumnPlan {
             specs: Vec::new(),
             flexible: 0,
             flexible_min: Pixels::ZERO,
-            session_column: None,
         };
     };
     let specs = kind_columns(kind);
@@ -95,16 +89,10 @@ fn kind_plan(kind: Option<ResourceKind>, is_multi: bool) -> ColumnPlan {
             (flexible, px(width))
         }
     };
-    let plan = ColumnPlan {
+    ColumnPlan {
         specs,
         flexible,
         flexible_min,
-        session_column: None,
-    };
-    if is_multi {
-        plan.with_cluster_column()
-    } else {
-        plan
     }
 }
 
@@ -128,45 +116,31 @@ impl KindTableDelegate {
             .map(|kind| (kind, new_view(kind, &saved)))
             .collect();
         Self {
-            sessions: Vec::new(),
-            addresses: Vec::new(),
+            session: None,
             all_checked: false,
             kind,
-            layout: TableLayout::new(kind_plan(kind, false)),
+            layout: TableLayout::new(kind_plan(kind)),
             views,
             saved,
             shell,
         }
     }
 
-    /// The sessions the rows come from, one per viewed cluster. Two or more add the Cluster
-    /// column; leaving that mode forgets what the user did to it in every kind. The caller
-    /// refreshes the table.
-    pub(crate) fn set_sessions(&mut self, sessions: Vec<SlotSession>) {
-        let was_multi = self.is_multi();
-        self.sessions = sessions;
-        self.addresses.clear();
-        let is_multi = self.is_multi();
-        if was_multi == is_multi {
-            return;
-        }
-        if !is_multi {
-            for (kind, view) in &mut self.views {
-                view.drop_column(kind_plan(Some(*kind), false).specs.len());
+    /// The session the rows come from. A tick belongs to the session it was made on: any change of
+    /// the session entity, also to and from none, clears the ticks and the range anchor of every
+    /// kind, so a same-named row of another cluster never inherits one. The caller refreshes the
+    /// table.
+    pub(crate) fn set_session(&mut self, session: Option<TableSession>) {
+        let id = |session: &Option<TableSession>| {
+            session.as_ref().map(|session| session.session.entity_id())
+        };
+        if id(&self.session) != id(&session) {
+            for view in self.views.values_mut() {
+                view.clear_checked();
             }
+            self.all_checked = false;
         }
-        self.layout
-            .replace_plan(kind_plan(self.kind, is_multi), &self.hidden());
-    }
-
-    fn is_multi(&self) -> bool {
-        self.sessions.len() >= 2
-    }
-
-    /// The logical index of the Cluster column of the shown kind while several clusters are
-    /// viewed.
-    pub(crate) fn cluster_column(&self) -> Option<usize> {
-        self.layout.plan.session_column
+        self.session = session;
     }
 
     /// Switches the columns and returns whether the kind changed. The flexible column keeps the
@@ -183,8 +157,7 @@ impl KindTableDelegate {
                 .entry(kind)
                 .or_insert_with(|| new_view(kind, &self.saved));
         }
-        self.layout
-            .replace_plan(kind_plan(kind, self.is_multi()), &self.hidden());
+        self.layout.replace_plan(kind_plan(kind), &self.hidden());
         true
     }
 
@@ -208,39 +181,27 @@ impl KindTableDelegate {
             .unwrap_or_default()
     }
 
-    /// The logical index of the Cluster column; past the last column in single mode.
-    fn merge_column(&self) -> usize {
-        self.layout
-            .plan
-            .session_column
-            .unwrap_or(self.layout.plan.specs.len())
-    }
-
-    /// The rows of the shown kind in every slot; none while its session is not live or has no
-    /// explorer for the kind yet.
-    fn slot_rows<'a>(&self, cx: &'a App) -> Vec<Vec<KindTableRow<'a>>> {
-        let Some(kind) = self.kind else {
-            return self.sessions.iter().map(|_| Vec::new()).collect();
+    /// The rows of the shown kind; none while the session is not live or has no explorer for the
+    /// kind yet.
+    fn rows<'a>(&self, cx: &'a App) -> Vec<KindTableRow<'a>> {
+        let (Some(kind), Some(session)) = (self.kind, &self.session) else {
+            return Vec::new();
         };
-        self.sessions
-            .iter()
-            .map(|slot| table_rows(slot_kind_rows(slot, kind, cx), kind.name_column()))
-            .collect()
+        table_rows(session_kind_rows(session, kind, cx), kind.name_column())
     }
 
-    /// The row shown at table row `row_ix`, with its slot and the slot's index.
-    fn row_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<(usize, &SlotSession, &'a KindRow)> {
-        let address = self.addresses.get(self.view()?.item_index(row_ix)?)?;
-        let slot_index = usize::from(address.slot);
-        let slot = self.sessions.get(slot_index)?;
-        let row = slot_kind_rows(slot, self.kind?, cx).get(address.item as usize)?;
-        Some((slot_index, slot, row))
+    /// The row shown at table row `row_ix`, and the session it belongs to.
+    fn row_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<(&TableSession, &'a KindRow)> {
+        let session = self.session.as_ref()?;
+        let row =
+            session_kind_rows(session, self.kind?, cx).get(self.view()?.item_index(row_ix)?)?;
+        Some((session, row))
     }
 
     /// The ticked rows of the shown kind in display order, each with the cluster it came from. A
     /// bulk action reads them when it is built, never from a copy kept earlier.
     pub(crate) fn checked_rows<'a>(&'a self, cx: &'a App) -> Vec<(&'a ClusterRef, &'a KindRow)> {
-        let Some(kind) = self.kind else {
+        let (Some(kind), Some(session)) = (self.kind, &self.session) else {
             return Vec::new();
         };
         let Some(view) = self
@@ -250,16 +211,11 @@ impl KindTableDelegate {
         else {
             return Vec::new();
         };
-        let rows = self.slot_rows(cx);
-        let (merged, addresses) = merge_slot_rows(&self.sessions, &rows, self.merge_column());
-        view.checked_rows(&merged)
+        let rows = self.rows(cx);
+        let items = session_kind_rows(session, kind, cx);
+        view.checked_rows(&rows)
             .into_iter()
-            .filter_map(|index| {
-                let address = addresses.get(index)?;
-                let slot = self.sessions.get(usize::from(address.slot))?;
-                let row = slot_kind_rows(slot, kind, cx).get(address.item as usize)?;
-                Some((&slot.cluster, row))
-            })
+            .filter_map(|index| Some((&session.cluster, items.get(index)?)))
             .collect()
     }
 
@@ -278,27 +234,21 @@ impl KindTableDelegate {
 
     /// Whether the row at table row `row_ix` is ticked.
     fn is_row_checked(&self, row_ix: usize, cx: &App) -> bool {
-        let (Some((_, slot, row)), Some(view), Some(kind)) =
+        let (Some((_, row)), Some(view), Some(kind)) =
             (self.row_at(row_ix, cx), self.view(), self.kind)
         else {
             return false;
         };
-        let row = KindTableRow {
+        view.is_checked(&KindTableRow {
             row,
             name_column: kind.name_column(),
-        };
-        view.is_checked(&Clustered {
-            cluster: &slot.cluster,
-            label: &slot.label,
-            column: self.merge_column(),
-            item: &row,
         })
     }
 
     fn scope_label(&self, cx: &App) -> String {
-        self.sessions
-            .iter()
-            .find_map(|slot| slot.session.read(cx).live())
+        self.session
+            .as_ref()
+            .and_then(|session| session.session.read(cx).live())
             .map_or_else(String::new, |live| live.scope_label())
     }
 
@@ -311,10 +261,10 @@ impl KindTableDelegate {
     }
 }
 
-/// The rows of `kind` in one slot's explorer; none while it is not live or the explorer shows
+/// The rows of `kind` in the session's explorer; none while it is not live or the explorer shows
 /// another kind.
-fn slot_kind_rows<'a>(slot: &SlotSession, kind: ResourceKind, cx: &'a App) -> &'a [KindRow] {
-    let explorer = slot
+fn session_kind_rows<'a>(session: &TableSession, kind: ResourceKind, cx: &'a App) -> &'a [KindRow] {
+    let explorer = session
         .session
         .read(cx)
         .live()
@@ -428,11 +378,10 @@ impl FilteredTable for KindTableDelegate {
         let Some(kind) = self.kind else {
             return;
         };
-        let rows = self.slot_rows(cx);
-        let (merged, _) = merge_slot_rows(&self.sessions, &rows, self.merge_column());
+        let rows = self.rows(cx);
         if let Some(view) = self.views.get_mut(&kind) {
-            view.apply_check(&merged, change);
-            self.all_checked = view.all_checked(&merged);
+            view.apply_check(&rows, change);
+            self.all_checked = view.all_checked(&rows);
         }
     }
 
@@ -440,24 +389,14 @@ impl FilteredTable for KindTableDelegate {
         let Some(kind) = self.kind else {
             return false;
         };
-        let rows = self.slot_rows(cx);
-        let (merged, addresses) = merge_slot_rows(&self.sessions, &rows, self.merge_column());
+        let rows = self.rows(cx);
         let view = self
             .views
             .entry(kind)
             .or_insert_with(|| new_view(kind, &self.saved));
-        view.rebuild(
-            &merged,
-            self.layout.plan.specs.len(),
-            jiff::Timestamp::now(),
-        );
-        self.all_checked = view.all_checked(&merged);
-        self.addresses = addresses;
+        view.rebuild(&rows, self.layout.plan.specs.len(), jiff::Timestamp::now());
+        self.all_checked = view.all_checked(&rows);
         self.layout.relayout(&view.hidden)
-    }
-
-    fn addresses(&self) -> &[RowAddress] {
-        &self.addresses
     }
 }
 
@@ -510,7 +449,7 @@ impl TableDelegate for KindTableDelegate {
             let is_checked = self.is_row_checked(row_ix, cx);
             return select_cell(row_ix, is_checked, &self.shell);
         }
-        let (Some((_, slot, row)), Some(logical), Some(kind)) = (
+        let (Some((_, row)), Some(logical), Some(kind)) = (
             self.row_at(row_ix, cx),
             self.layout.columns.logical(col_ix),
             self.kind,
@@ -518,9 +457,6 @@ impl TableDelegate for KindTableDelegate {
             return div().into_any_element();
         };
         let mono = cx.theme().mono_font_family.clone();
-        if self.layout.plan.session_column == Some(logical) {
-            return cluster_cell(slot.environment, &slot.label, cx);
-        }
         let Some(cell_ix) = cell_index(kind.name_column(), logical) else {
             return name_cell(row, row_ix, mono, cx);
         };
@@ -542,13 +478,13 @@ impl TableDelegate for KindTableDelegate {
         };
         // Cloned so the session is not borrowed while a submenu is built: that needs the app
         // mutably.
-        let Some((_, slot, row)) = self.row_at(row_ix, cx) else {
+        let Some((open, row)) = self.row_at(row_ix, cx) else {
             return menu;
         };
         let row = row.clone();
-        let row_context = slot.row_context(cx);
+        let row_context = open.row_context(cx);
         let open_url = (kind == ResourceKind::Ingresses)
-            .then(|| open_url_menu_item(open_url_choice(&row), window, cx));
+            .then(|| open_url_menu_item(open_url_choice(&row), &row_context, window, cx));
         let secret = (kind == ResourceKind::Secrets)
             .then(|| {
                 let access = self
@@ -556,21 +492,21 @@ impl TableDelegate for KindTableDelegate {
                     .read_with(cx, |shell, _| shell.secret_value_access())
                     .unwrap_or(ValueAccess::Blocked);
                 let object = row_context.object(ResourceKey::of_row(kind, &row));
-                secret_menu(&row, object, access, &self.shell, window, cx)
+                secret_menu(&row, &row_context, object, access, &self.shell, window, cx)
             })
             .flatten();
         // The submenu is built from the app, so its owned parts are made before the session is
         // borrowed again.
-        let forward_menu = slot.session.read(cx).guard(cx).and_then(|guard| {
-            row_subject(&row).map(|subject| ForwardMenu::of(subject, &slot.cluster, &guard))
+        let forward_menu = open.session.read(cx).guard(cx).and_then(|guard| {
+            row_subject(&row).map(|subject| ForwardMenu::of(subject, &open.cluster, &guard))
         });
         let port_forward = forward_menu.map(|menu| menu.item(&self.shell, window, cx));
         let default_namespace = self
             .shell
-            .read_with(cx, |shell, cx| shell.default_namespace(&slot.cluster, cx))
+            .read_with(cx, |shell, cx| shell.default_namespace(&open.cluster, cx))
             .ok()
             .flatten();
-        let session = slot.session.read(cx);
+        let session = open.session.read(cx);
         let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
             return menu;
         };
@@ -611,18 +547,15 @@ impl TableDelegate for KindTableDelegate {
     }
 
     /// Loading also covers a kind switch, while a session still shows the previous kind; it
-    /// lasts while every slot that is live still waits for its list.
+    /// lasts while the live session still waits for its list.
     fn loading(&self, cx: &App) -> bool {
         let Some(kind) = self.kind else {
             return false;
         };
-        let mut live = self
-            .sessions
-            .iter()
-            .filter_map(|slot| slot.session.read(cx).live())
-            .peekable();
-        live.peek().is_some()
-            && live.all(|live| {
+        self.session
+            .as_ref()
+            .and_then(|session| session.session.read(cx).live())
+            .is_some_and(|live| {
                 live.kind_list(kind)
                     .is_none_or(|explorer| explorer.list.is_loading())
             })
@@ -822,7 +755,7 @@ mod tests {
 
     #[test]
     fn columns_start_with_name_unless_the_kind_hides_it() {
-        assert!(kind_plan(None, false).specs.is_empty());
+        assert!(kind_plan(None).specs.is_empty());
         for kind in ResourceKind::ALL {
             let columns = kind_columns(kind);
             assert_eq!(columns.len(), kind.columns().len() + extra_columns(kind));
@@ -849,12 +782,11 @@ mod tests {
 
     #[test]
     fn events_columns_flex_message_with_minimum_width() {
-        let plan = kind_plan(Some(ResourceKind::Events), false);
+        let plan = kind_plan(Some(ResourceKind::Events));
         let layout = layout_columns(
             &plan.specs,
             plan.flexible,
             plan.flexible_min,
-            plan.session_column,
             Pixels::ZERO,
             &Default::default(),
         );
@@ -886,7 +818,7 @@ mod tests {
     }
 
     fn saved_last_column(kind: ResourceKind) -> BTreeMap<String, TablePrefs> {
-        let plan = kind_plan(Some(kind), false);
+        let plan = kind_plan(Some(kind));
         let hidden_name = plan.specs[plan.specs.len() - 1].name;
         BTreeMap::from([(
             screen_key(Screen::Kind(kind)).to_owned(),
@@ -900,7 +832,7 @@ mod tests {
     #[test]
     fn new_view_applies_saved_prefs() {
         let kind = ResourceKind::Deployments;
-        let columns = kind_plan(Some(kind), false).specs.len();
+        let columns = kind_plan(Some(kind)).specs.len();
         let mut delegate =
             KindTableDelegate::new(None, WeakEntity::new_invalid(), saved_last_column(kind));
         delegate.set_kind(Some(kind));

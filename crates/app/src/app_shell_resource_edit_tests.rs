@@ -1,7 +1,8 @@
 //! The resource edits of spec 0032b (HPA min / max, PVC Expand, Set as default storage class) in a
-//! headless window over two viewed clusters, `prod-a` (the primary, locked at open) and `stg-b`
-//! (unlocked). Each answers from its own fake API server, so a test sees which cluster a request
-//! reached and nothing leaves the machine: no test sends a real write.
+//! headless window over two loaded clusters, one active at a time: the fixture starts on `prod-a`
+//! (locked at open), switches to `stg-b` (unlocked), and makes it live; `activate_prod` does the
+//! same for `prod-a`. Each session answers from its own fake API server, so a test sees which
+//! cluster a request reached and nothing leaves the machine: no test sends a real write.
 
 use cluster::fake_api::RecordedRequest;
 use cluster::{AccessCheck, AccessDecision, AccessReport, AccessReview};
@@ -10,7 +11,7 @@ use gpui_kit::{Entity, KeyDownEvent, Keystroke, TestAppContext};
 
 use super::app_shell_switch_tests::open_switch_fixture;
 use super::app_shell_write_tests::{
-    Clusters, audit_lines, go_live_answering, slot_session, view, writes,
+    Clusters, audit_lines, go_live_answering, slot_session, switch_to, writes,
 };
 use super::batch_write::ItemProgress;
 use super::write_flow::DryRunState;
@@ -42,7 +43,13 @@ fn edit_clusters(name: &str, cx: &mut TestAppContext) -> Clusters {
     edit_clusters_answering(name, accept_patches, cx)
 }
 
-/// Both clusters answer with `respond`.
+/// `prod-a` becomes the open cluster, live over a new fake server that accepts patches. The old
+/// session is gone, so a test never has both clusters live at once.
+fn activate_prod(t: &Clusters, cx: &mut TestAppContext) -> cluster::fake_api::FakeApi {
+    t.activate_answering(&t.prod, "node-a", accept_patches, cx)
+}
+
+/// The open cluster, `stg-b`, answers with `respond`.
 fn edit_clusters_answering(
     name: &str,
     respond: impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + Clone + 'static,
@@ -51,13 +58,11 @@ fn edit_clusters_answering(
     // Dialogs open without their animation, so the keys reach the fields at once.
     cx.update(|cx| cx.set_reduce_motion(true));
     let fixture = open_switch_fixture(name, cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
-    let prod_api = go_live_answering(&fixture, &prod, "node-a", respond.clone(), cx);
     let stg_api = go_live_answering(&fixture, &stg, "node-b", respond, cx);
     Clusters {
         fixture,
-        prod_api,
         stg_api,
         prod,
         stg,
@@ -176,7 +181,6 @@ fn edit_min_max_opens_the_confirm_dialog(cx: &mut TestAppContext) {
     let sent = writes(&t.stg_api);
     assert!(!sent[1].has_query_key("dryRun"));
     assert_eq!(sent[0].body, sent[1].body);
-    assert!(writes(&t.prod_api).is_empty(), "{:?}", writes(&t.prod_api));
 }
 
 #[gpui_kit::test]
@@ -264,13 +268,14 @@ fn the_range_popover_follows_the_hpa_it_has_now(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn edit_min_max_on_a_locked_production_row_opens_no_popover(cx: &mut TestAppContext) {
     let t = edit_clusters("hpa-range-locked", cx);
+    let prod_api = activate_prod(&t, cx);
     let rows = || hpa_rows(&[("frontend-hpa", 3, 20, 9)]);
     t.show_kind(HPA_KIND, rows(), rows(), cx);
     t.cursor_on(&t.prod, HPA_KIND, "frontend-hpa", cx);
     dispatch(&t, RowAction::EditHpaRange, cx);
     assert!(t.popover(cx).is_none());
     assert!(!t.has_dialog(cx));
-    assert!(writes(&t.prod_api).is_empty());
+    assert!(writes(&prod_api).is_empty());
     assert!(writes(&t.stg_api).is_empty());
 }
 
@@ -317,6 +322,7 @@ fn edit_min_max_without_patch_hpa_permission_opens_no_popover(cx: &mut TestAppCo
 #[gpui_kit::test]
 fn production_edit_min_max_types_the_cluster_name(cx: &mut TestAppContext) {
     let t = edit_clusters("hpa-range-prod", cx);
+    let prod_api = activate_prod(&t, cx);
     t.set_lock(&t.prod, WriteLock::Unlocked, cx);
     let rows = || hpa_rows(&[("frontend-hpa", 3, 20, 9)]);
     t.show_kind(HPA_KIND, rows(), rows(), cx);
@@ -335,10 +341,10 @@ fn production_edit_min_max_types_the_cluster_name(cx: &mut TestAppContext) {
     t.wait_for_dry_run(cx);
     t.confirm(cx);
     cx.run_until_parked();
-    assert_eq!(writes(&t.prod_api).len(), 1, "the name was not typed");
+    assert_eq!(writes(&prod_api).len(), 1, "the name was not typed");
     t.type_name("prod-a", cx);
     t.confirm(cx);
-    t.wait_for("the commit", cx, |_| writes(&t.prod_api).len() == 2);
+    t.wait_for("the commit", cx, |_| writes(&prod_api).len() == 2);
     assert!(writes(&t.stg_api).is_empty());
 }
 
@@ -502,7 +508,6 @@ fn edit_limits_applies_one_range_and_audits_each_object(cx: &mut TestAppContext)
             .iter()
             .all(|request| request.body == r#"{"spec":{"minReplicas":4,"maxReplicas":10}}"#)
     );
-    assert!(writes(&t.prod_api).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -631,7 +636,6 @@ fn expand_opens_the_popover_then_the_confirm_dialog(cx: &mut TestAppContext) {
     let sent = writes(&t.stg_api);
     assert!(!sent[1].has_query_key("dryRun"));
     assert_eq!(sent[0].body, sent[1].body);
-    assert!(writes(&t.prod_api).is_empty(), "{:?}", writes(&t.prod_api));
 }
 
 #[gpui_kit::test]
@@ -705,18 +709,20 @@ fn expand_on_a_claim_that_is_not_bound_opens_no_popover(cx: &mut TestAppContext)
 #[gpui_kit::test]
 fn expand_on_a_locked_production_row_opens_no_popover(cx: &mut TestAppContext) {
     let t = edit_clusters("expand-locked", cx);
+    let prod_api = activate_prod(&t, cx);
     let rows = || claim_rows(&[("data-kafka-0", "100Gi", "100Gi")]);
     t.show_kind(PVC_KIND, rows(), rows(), cx);
     t.cursor_on(&t.prod, PVC_KIND, "data-kafka-0", cx);
     dispatch(&t, RowAction::ExpandClaim, cx);
     assert!(t.popover(cx).is_none());
     assert!(!t.has_dialog(cx));
-    assert!(writes(&t.prod_api).is_empty());
+    assert!(writes(&prod_api).is_empty());
 }
 
 #[gpui_kit::test]
 fn production_expand_types_the_cluster_name(cx: &mut TestAppContext) {
     let t = edit_clusters("expand-prod", cx);
+    let prod_api = activate_prod(&t, cx);
     t.set_lock(&t.prod, WriteLock::Unlocked, cx);
     let rows = || claim_rows(&[("data-kafka-0", "100Gi", "100Gi")]);
     t.show_kind(PVC_KIND, rows(), rows(), cx);
@@ -735,10 +741,10 @@ fn production_expand_types_the_cluster_name(cx: &mut TestAppContext) {
     t.wait_for_dry_run(cx);
     t.confirm(cx);
     cx.run_until_parked();
-    assert_eq!(writes(&t.prod_api).len(), 1, "the name was not typed");
+    assert_eq!(writes(&prod_api).len(), 1, "the name was not typed");
     t.type_name("prod-a", cx);
     t.confirm(cx);
-    t.wait_for("the commit", cx, |_| writes(&t.prod_api).len() == 2);
+    t.wait_for("the commit", cx, |_| writes(&prod_api).len() == 2);
     assert!(writes(&t.stg_api).is_empty());
 }
 
@@ -891,7 +897,6 @@ fn bulk_expand_applies_one_size_skips_the_large_and_audits_each_object(cx: &mut 
     assert!(commits.iter().all(|request| {
         request.body == r#"{"spec":{"resources":{"requests":{"storage":"200Gi"}}}}"#
     }));
-    assert!(writes(&t.prod_api).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1027,7 +1032,6 @@ fn set_default_sets_the_new_class_then_unsets_the_old(cx: &mut TestAppContext) {
     assert_eq!(objects, ["gp3", "io2"]);
     assert_eq!(lines[0]["fields"][0]["value"], "true");
     assert_eq!(lines[1]["fields"][0]["value"], "false");
-    assert!(writes(&t.prod_api).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1212,6 +1216,7 @@ fn set_default_without_a_previous_default_is_one_item(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn production_set_default_types_the_cluster_name(cx: &mut TestAppContext) {
     let t = edit_clusters("default-prod", cx);
+    let prod_api = activate_prod(&t, cx);
     t.set_lock(&t.prod, WriteLock::Unlocked, cx);
     let rows = class_rows(&[("gp3", false, NEWER), ("io2", true, OLDER)]);
     t.show_kind(CLASS_KIND, rows, Vec::new(), cx);
@@ -1228,10 +1233,10 @@ fn production_set_default_types_the_cluster_name(cx: &mut TestAppContext) {
     t.wait_for_dry_run(cx);
     t.confirm(cx);
     cx.run_until_parked();
-    assert_eq!(writes(&t.prod_api).len(), 2, "the name was not typed");
+    assert_eq!(writes(&prod_api).len(), 2, "the name was not typed");
     t.type_name("prod-a", cx);
     t.confirm(cx);
-    t.wait_for("the commits", cx, |_| writes(&t.prod_api).len() == 4);
+    t.wait_for("the commits", cx, |_| writes(&prod_api).len() == 4);
     assert!(writes(&t.stg_api).is_empty());
 }
 

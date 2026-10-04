@@ -27,9 +27,9 @@ fn in_context(&self, key: ResourceKey) -> Option<ClusterObject>;          // act
 
 // row_context.rs (replaces cluster_rows.rs)
 #[derive(Clone)] pub(crate) struct TableSession { pub(crate) cluster: ClusterRef,
-    pub(crate) label: String, pub(crate) session: Entity<ClusterSession> }   // was SlotSession
+    pub(crate) session: Entity<ClusterSession> }   // was SlotSession; no label (the shell has it)
 impl TableSession { pub(crate) fn row_context(&self, cx: &App) -> RowContext; }
-#[derive(Clone)] pub(crate) struct RowContext { pub(crate) cluster: ClusterRef, pub(crate) label: String,
+#[derive(Clone)] pub(crate) struct RowContext { pub(crate) cluster: ClusterRef,
     pub(crate) context: String, pub(crate) session: WeakEntity<ClusterSession> }
 // delegates (pod, node, kind, issue)
 pub(crate) fn set_session(&mut self, session: Option<TableSession>); // clears ticks + anchor on any change of the session entity, to and from None

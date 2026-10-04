@@ -1,4 +1,4 @@
-//! Opening a node shell over two viewed clusters (see `debug_open_tests` for the fixture): the
+//! Opening a node shell over two loaded clusters (see `debug_open_tests` for the fixture): the
 //! always-typed node name, the permit before the create, the namespace and labels of the pod, the
 //! audit lines, and the setting. A fake never upgrades a connection to a stream: a pod read that
 //! finds nothing fails the attach at once, which ends the tab and so runs the cleanup.
@@ -10,7 +10,8 @@ use gpui_kit::component::WindowExt as _;
 
 use super::*;
 use crate::app_shell::debug_open::debug_open_tests::{
-    Answers, CREATED_UID, Debugs, MIRROR_IMAGE, audit_lines, report_denying, two_clusters,
+    Answers, CREATED_UID, Debugs, MIRROR_IMAGE, audit_lines, go_live_answering, report_denying,
+    respond, two_clusters,
 };
 use crate::confirm_dialog::ConfirmDialog;
 use crate::settings::AppSettings;
@@ -37,7 +38,7 @@ fn commits(api: &cluster::fake_api::FakeApi) -> Vec<RecordedRequest> {
         .collect()
 }
 
-/// Two viewed clusters with the node shell switched on in both: a guessed Staging and a Production
+/// The two clusters with the node shell switched on in both: a guessed Staging and a Production
 /// cluster have it off by default.
 pub(in crate::app_shell) fn node_clusters(
     name: &str,
@@ -137,10 +138,11 @@ fn a_node_shell_always_types_the_node_name(cx: &mut TestAppContext) {
     assert_eq!(block.as_deref(), Some("Type wk-03 to confirm"));
     assert!(commits(&debugs.stg_api).is_empty());
     // The production cluster types the node name too, not its own name.
-    debugs.set_lock(&debugs.prod, WriteLock::Unlocked, cx);
     debugs
         .fixture
         .with_window(cx, |window, cx| window.close_dialog(cx));
+    debugs.activate(&debugs.prod, cx);
+    debugs.set_lock(&debugs.prod, WriteLock::Unlocked, cx);
     debugs.start_node(
         &debugs.prod,
         "wk-03",
@@ -255,7 +257,6 @@ fn the_pod_is_created_on_the_nodes_own_cluster_with_the_labels_the_sweep_selects
         body["spec"]["containers"][0]["securityContext"]["privileged"],
         true
     );
-    assert!(creates(&debugs.prod_api).is_empty());
     let tab = debugs.tabs(cx).remove(0);
     let (label, kind) = tab.read_with(cx, |tab, _| (tab.label(), tab.kind().clone()));
     assert_eq!(label, "node shell · wk-03 (debug pod)");
@@ -316,8 +317,10 @@ fn nothing_opens_for_a_locked_cluster_a_windows_node_or_a_cluster_that_turned_it
 ) {
     let debugs = two_clusters("ns-gate", Answers::Accepts, cx);
     // prod-a is locked at open.
+    debugs.activate(&debugs.prod, cx);
     debugs.open_node_options(&debugs.prod, "wk-03", cx);
     assert!(!debugs.has_dialog(cx));
+    let stg_api = debugs.activate(&debugs.stg, cx);
     // A Windows node, and a node that is not listed.
     debugs.open_node_options(&debugs.stg, "win-01", cx);
     assert!(!debugs.has_dialog(cx));
@@ -340,7 +343,7 @@ fn nothing_opens_for_a_locked_cluster_a_windows_node_or_a_cluster_that_turned_it
     debugs.set_access(&debugs.stg, report_denying(&[AccessCheck::DeletePods]), cx);
     debugs.open_node_options(&debugs.stg, "wk-03", cx);
     assert!(!debugs.has_dialog(cx));
-    assert!(creates(&debugs.stg_api).is_empty());
+    assert!(creates(&stg_api).is_empty());
 }
 
 #[gpui_kit::test]
@@ -490,6 +493,7 @@ fn s_on_a_node_menu_and_palette_share_the_arm(cx: &mut TestAppContext) {
 fn node_shell_uses_the_rows_cluster(cx: &mut TestAppContext) {
     // A node of the second cluster: its guard, tier, connection, and audit line are that cluster's.
     let debugs = node_clusters("ns-rows", Answers::Waiting, cx);
+    let prod_api = debugs.activate(&debugs.prod, cx);
     debugs.set_lock(&debugs.prod, WriteLock::Unlocked, cx);
     debugs.start_node(
         &debugs.prod,
@@ -500,11 +504,7 @@ fn node_shell_uses_the_rows_cluster(cx: &mut TestAppContext) {
     );
     debugs.confirm(cx);
     debugs.wait_for("the tab", cx, |cx| debugs.tab_count(cx) == 1);
-    assert_eq!(
-        creates(&debugs.prod_api).len(),
-        2,
-        "a dry-run and the commit"
-    );
+    assert_eq!(creates(&prod_api).len(), 2, "a dry-run and the commit");
     assert!(creates(&debugs.stg_api).is_empty());
     let tab = debugs.tabs(cx).remove(0);
     let (cluster, label) = tab.read_with(cx, |tab, _| {
@@ -518,8 +518,58 @@ fn node_shell_uses_the_rows_cluster(cx: &mut TestAppContext) {
     debugs.fixture.shell.update(cx, |shell, cx| {
         shell.dock.update(cx, |dock, cx| dock.close_active_tab(cx));
     });
-    debugs.wait_for("the delete", cx, |_| !deletes(&debugs.prod_api).is_empty());
+    debugs.wait_for("the delete", cx, |_| !deletes(&prod_api).is_empty());
     assert!(deletes(&debugs.stg_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn a_node_shell_create_landing_after_a_switch_opens_no_tab(cx: &mut TestAppContext) {
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
+    let (debugs, dir) = audited_node_clusters("ns-mid-create", Answers::Waiting, cx);
+    // The commit of the create on stg-b waits until the shell has switched to prod-a.
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let held_api = go_live_answering(
+        &debugs.fixture,
+        &debugs.stg,
+        move |request| {
+            let is_commit = request.method == "POST"
+                && request.path.ends_with("/pods")
+                && !request.has_query_key("dryRun");
+            if is_commit && let Ok(gate) = gate.lock() {
+                let _ = gate.recv_timeout(Duration::from_secs(10));
+            }
+            respond(Answers::Waiting, request)
+        },
+        cx,
+    );
+    debugs.start_node(
+        &debugs.stg,
+        "wk-03",
+        "kube-system",
+        cluster::DEFAULT_DEBUG_IMAGE,
+        cx,
+    );
+    debugs.confirm(cx);
+    let prod_api = debugs.activate(&debugs.prod, cx);
+    let _ = release.send(());
+    // The pod exists on stg-b but nothing owns it: it is deleted on the connection the create held.
+    debugs.wait_for("the delete", cx, |_| !deletes(&held_api).is_empty());
+    debugs.wait_for("the audit line", cx, |_| {
+        audit_lines(&dir)
+            .iter()
+            .any(|line| line["action"] == "Delete node shell pod")
+    });
+    assert_eq!(debugs.tab_count(cx), 0, "no tab for a cluster that left");
+    let delete_line = audit_lines(&dir)
+        .into_iter()
+        .find(|line| line["action"] == "Delete node shell pod")
+        .expect("the delete is audited");
+    assert_eq!(delete_line["cluster"], "stg-b");
+    assert!(deletes(&prod_api).is_empty());
+    assert!(creates(&prod_api).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---- the gate is read again at confirm time ----

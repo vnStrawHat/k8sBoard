@@ -15,12 +15,12 @@ use gpui_kit::{
 
 use crate::app_shell::AppShell;
 use crate::cluster_registry::ClusterRef;
-use crate::cluster_rows::RowContext;
 use crate::cluster_session::ClusterSession;
 use crate::drain_tab::DrainTab;
-use crate::log_tab::{LogLayout, LogTab, tab_title};
+use crate::log_tab::{LogLayout, LogTab};
 use crate::log_target::{ContainerChoice, LogTarget, NoLogTarget};
 use crate::resource_actions::{RowAction, disabled_menu_item};
+use crate::row_context::RowContext;
 use crate::shell_tab::{AttachGrant, ShellGrant, ShellKind, ShellTab, ShellTarget};
 use crate::status_tone::{StatusTone, tone_color};
 
@@ -52,8 +52,6 @@ pub(crate) enum DockMode {
 /// The cluster a log tab reads from: its connection, and the session its workload tabs follow.
 pub(crate) struct LogOrigin {
     pub(crate) cluster: ClusterRef,
-    /// The switcher text of the cluster, for the tab title while several clusters are viewed.
-    pub(crate) label: String,
     /// Weak: workload tabs observe the session, but a tab never keeps it alive.
     pub(crate) session: WeakEntity<ClusterSession>,
     pub(crate) connection: ClusterConnection,
@@ -63,7 +61,6 @@ impl LogOrigin {
     pub(crate) fn new(row: &RowContext, connection: ClusterConnection) -> Self {
         Self {
             cluster: row.cluster.clone(),
-            label: row.label.clone(),
             session: row.session.clone(),
             connection,
         }
@@ -79,15 +76,6 @@ pub(crate) enum DockTab {
 }
 
 impl DockTab {
-    /// The cluster the tab reads from or runs in: a release of that cluster closes the tab.
-    pub(crate) fn cluster<'a>(&'a self, cx: &'a App) -> &'a ClusterRef {
-        match self {
-            Self::Logs(tab) => tab.read(cx).cluster(),
-            Self::Shell(tab) => tab.read(cx).cluster(),
-            Self::Drain(tab) => tab.read(cx).cluster(),
-        }
-    }
-
     /// A running drain stays: closing its tab would hide a live run (`Cancel the drain first`).
     fn is_pinned(&self, cx: &App) -> bool {
         match self {
@@ -96,22 +84,12 @@ impl DockTab {
         }
     }
 
-    fn title(&self, is_multi: bool, cx: &App) -> String {
-        let (label, cluster_label) = match self {
-            Self::Logs(tab) => (
-                tab.read(cx).label(),
-                tab.read(cx).cluster_label().to_owned(),
-            ),
-            Self::Shell(tab) => (
-                tab.read(cx).label(),
-                tab.read(cx).cluster_label().to_owned(),
-            ),
-            Self::Drain(tab) => (
-                tab.read(cx).label(),
-                tab.read(cx).cluster_label().to_owned(),
-            ),
-        };
-        tab_title(&label, &cluster_label, is_multi)
+    fn title(&self, cx: &App) -> String {
+        match self {
+            Self::Logs(tab) => tab.read(cx).label(),
+            Self::Shell(tab) => tab.read(cx).label(),
+            Self::Drain(tab) => tab.read(cx).label(),
+        }
     }
 
     fn tone(&self, cx: &App) -> StatusTone {
@@ -144,8 +122,6 @@ pub(crate) struct Dock {
     /// `None` exactly when `tabs` is empty.
     active: Option<usize>,
     mode: DockMode,
-    /// Several clusters are viewed, so tab titles name their cluster.
-    is_multi: bool,
     /// The "+ ▾" menu reads the selection and opens tabs through the shell.
     shell: WeakEntity<AppShell>,
 }
@@ -156,16 +132,7 @@ impl Dock {
             tabs: Vec::new(),
             active: None,
             mode: DockMode::Normal,
-            is_multi: false,
             shell,
-        }
-    }
-
-    /// Whether the titles of the tabs name their cluster.
-    pub(crate) fn set_multi(&mut self, is_multi: bool, cx: &mut Context<Self>) {
-        if self.is_multi != is_multi {
-            self.is_multi = is_multi;
-            cx.notify();
         }
     }
 
@@ -294,20 +261,28 @@ impl Dock {
         })
     }
 
-    /// The running drains of `clusters`, each with the cluster's display name: what leaving them
-    /// would stop.
+    /// Every running drain, whatever its cluster, each with the cluster's display name: what the
+    /// quit stops.
+    pub(crate) fn running_drains(&self, cx: &App) -> Vec<(Entity<DrainTab>, SharedString)> {
+        self.drain_tabs()
+            .filter_map(|tab| {
+                let state = tab.read(cx);
+                state
+                    .is_running()
+                    .then(|| (tab.clone(), state.cluster_name().clone()))
+            })
+            .collect()
+    }
+
+    /// The running drains of `clusters`: what leaving them would stop.
     pub(crate) fn running_drains_of(
         &self,
         clusters: &[ClusterRef],
         cx: &App,
     ) -> Vec<(Entity<DrainTab>, SharedString)> {
-        self.drain_tabs()
-            .filter_map(|tab| {
-                let state = tab.read(cx);
-                (state.is_running() && clusters.contains(state.cluster()))
-                    .then(|| (tab.clone(), state.cluster_name().clone()))
-            })
-            .collect()
+        let mut running = self.running_drains(cx);
+        running.retain(|(tab, _)| clusters.contains(tab.read(cx).cluster()));
+        running
     }
 
     /// Whether the dock holds a running drain of `cluster`: one per cluster at a time.
@@ -395,18 +370,6 @@ impl Dock {
         cx.notify();
     }
 
-    /// A released cluster: its streams go with it, the other clusters' tabs stay.
-    pub(crate) fn close_tabs_of(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
-        let mut index = 0;
-        while index < self.tabs.len() {
-            if self.tabs[index].cluster(cx) == cluster {
-                self.remove_tab(index, cx);
-            } else {
-                index += 1;
-            }
-        }
-    }
-
     /// A navigation click returns the dock to its split; the tabs stay.
     pub(crate) fn unzoom(&mut self, cx: &mut Context<Self>) {
         if self.mode == DockMode::Zoomed {
@@ -474,11 +437,6 @@ impl Dock {
                 DockTab::Shell(_) | DockTab::Drain(_) => None,
             })
             .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_multi(&self) -> bool {
-        self.is_multi
     }
 
     /// Whether the active tab is still waiting for its stream to open.
@@ -639,7 +597,7 @@ impl Dock {
 
     fn render_tab(&self, index: usize, tab: &DockTab, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let title = tab.title(self.is_multi, cx);
+        let title = tab.title(cx);
         let is_active = self.active == Some(index);
         h_flex()
             .h_full()

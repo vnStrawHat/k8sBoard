@@ -1,7 +1,8 @@
-//! Starting a debug container in a headless window over two viewed clusters: `prod-a` (the
-//! primary, Production, locked at open) and `stg-b` (unlocked, a click tier). Each cluster answers
-//! from its own fake API server, so a test sees which cluster a request reached and nothing leaves
-//! the machine. No test sets `K8SBOARD_ALLOW_WRITES`; the fake connections carry their own write
+//! Starting a debug container in a headless window over two loaded clusters, one active at a time:
+//! `prod-a` (Production, locked at open) and `stg-b` (unlocked, a click tier). The fixture starts
+//! on `prod-a`, switches to `stg-b`, and makes it live over a fake API server; `activate` does the
+//! same for the other one. A test sees which cluster a request reached and nothing leaves the
+//! machine. No test sets `K8SBOARD_ALLOW_WRITES`; the fake connections carry their own write
 //! policy, and a fake never upgrades a connection to a stream: its pod reads answer 404, so the
 //! attach of a started tab fails at once.
 
@@ -14,6 +15,7 @@ use cluster::{
     ContainerSummary, NamespaceScope, PodStatus, PodSummary, ReadyCount, StatusReason, WritePolicy,
 };
 use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::{Entity, TestAppContext};
 
 use super::super::write_flow::DryRunState;
@@ -75,7 +77,7 @@ fn other_run_pod(name: &str, phase: &str) -> serde_json::Value {
 
 /// What the fake API server of a cluster answers: the debug container patch, the node shell pod
 /// create and delete, the leftover list, and nothing else.
-fn respond(answers: Answers, request: &RecordedRequest) -> (u16, String) {
+pub(in crate::app_shell) fn respond(answers: Answers, request: &RecordedRequest) -> (u16, String) {
     let is_commit = !request.has_query_key("dryRun");
     match request.method.as_str() {
         "PATCH" if is_commit && matches!(answers, Answers::RefusesCommit) => {
@@ -230,7 +232,9 @@ pub(in crate::app_shell) fn report_denying(denied: &[AccessCheck]) -> AccessRepo
 
 pub(in crate::app_shell) struct Debugs {
     pub(in crate::app_shell) fixture: SwitchFixture,
-    pub(in crate::app_shell) prod_api: FakeApi,
+    /// How every fake cluster of this test answers.
+    answers: Answers,
+    /// The fake server of `stg-b`, the cluster the fixture ends on.
     pub(in crate::app_shell) stg_api: FakeApi,
     pub(in crate::app_shell) prod: ClusterRef,
     pub(in crate::app_shell) stg: ClusterRef,
@@ -242,12 +246,25 @@ pub(in crate::app_shell) fn go_live(
     answers: Answers,
     cx: &mut TestAppContext,
 ) -> FakeApi {
+    go_live_answering(
+        fixture,
+        cluster,
+        move |request| respond(answers, request),
+        cx,
+    )
+}
+
+/// `go_live` over a fake server that answers with `respond`, for a test that holds an answer back.
+pub(in crate::app_shell) fn go_live_answering(
+    fixture: &SwitchFixture,
+    cluster: &ClusterRef,
+    respond: impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + 'static,
+    cx: &mut TestAppContext,
+) -> FakeApi {
     // The client's worker is a tokio task, so it must be built inside the runtime.
     let (connection, api) = {
         let _guard = fixture.runtime.enter();
-        FakeApi::connection(WritePolicy::Allowed, move |request| {
-            respond(answers, request)
-        })
+        FakeApi::connection(WritePolicy::Allowed, respond)
     };
     let session = fixture
         .shell
@@ -281,13 +298,9 @@ pub(in crate::app_shell) fn two_clusters(
     cx: &mut TestAppContext,
 ) -> Debugs {
     let fixture = open_switch_fixture(name, cx);
-    let wanted = [fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx)];
-    fixture
-        .shell
-        .update(cx, |shell, cx| shell.view_clusters(&wanted, cx));
+    fixture.switch("stg-b", cx);
     cx.run_until_parked();
-    let [prod, stg] = wanted;
-    let prod_api = go_live(&fixture, &prod, answers, cx);
+    let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
     let stg_api = go_live(&fixture, &stg, answers, cx);
     fixture
         .shell
@@ -296,7 +309,7 @@ pub(in crate::app_shell) fn two_clusters(
     fixture.draw_twice(cx);
     Debugs {
         fixture,
-        prod_api,
+        answers,
         stg_api,
         prod,
         stg,
@@ -319,6 +332,26 @@ pub(in crate::app_shell) fn commits(api: &FakeApi) -> Vec<RecordedRequest> {
 }
 
 impl Debugs {
+    /// Switches to `cluster` and makes it live over a new fake server. The old session is gone, so
+    /// a test never has both clusters live at once.
+    pub(in crate::app_shell) fn activate(
+        &self,
+        cluster: &ClusterRef,
+        cx: &mut TestAppContext,
+    ) -> FakeApi {
+        self.fixture
+            .shell
+            .update(cx, |shell, cx| shell.switch_cluster(cluster, cx));
+        cx.run_until_parked();
+        let api = go_live(&self.fixture, cluster, self.answers, cx);
+        self.fixture
+            .shell
+            .update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx));
+        cx.run_until_parked();
+        self.fixture.draw_twice(cx);
+        api
+    }
+
     pub(in crate::app_shell) fn pod_ref(&self, cluster: &ClusterRef, pod: &str) -> DebugPod {
         DebugPod {
             cluster: cluster.clone(),
@@ -510,7 +543,6 @@ fn a_debug_container_always_asks_and_checks_before_anything_is_changed(cx: &mut 
     assert_eq!(patches.len(), 1, "one dry-run and no commit");
     assert!(patches[0].has_query("dryRun", "All"));
     assert!(commits(&debugs.stg_api).is_empty());
-    assert!(self::patches(&debugs.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
@@ -564,7 +596,6 @@ fn create_then_attach_opens_after_commit(cx: &mut TestAppContext) {
         Some("application/strategic-merge-patch+json")
     );
     assert!(commits[0].has_query("fieldManager", "k8sboard"));
-    assert!(patches(&debugs.prod_api).is_empty());
     let tab = debugs.tabs(cx).remove(0);
     let (cluster, label, kind) = tab.read_with(cx, |tab, _| {
         (tab.cluster().clone(), tab.label(), tab.kind().clone())
@@ -648,6 +679,7 @@ fn a_commit_error_opens_nothing_and_is_audited_as_failed(cx: &mut TestAppContext
 #[gpui_kit::test]
 fn a_locked_cluster_offers_no_debug_container(cx: &mut TestAppContext) {
     let debugs = two_clusters("locked", Answers::Accepts, cx);
+    let prod_api = debugs.activate(&debugs.prod, cx);
     // prod-a is locked at open: no dialog, no request.
     debugs.start(
         &debugs.prod,
@@ -657,7 +689,7 @@ fn a_locked_cluster_offers_no_debug_container(cx: &mut TestAppContext) {
         cx,
     );
     assert!(!debugs.has_dialog(cx));
-    assert!(patches(&debugs.prod_api).is_empty());
+    assert!(patches(&prod_api).is_empty());
     assert_eq!(debugs.tab_count(cx), 0);
 }
 
@@ -799,28 +831,23 @@ fn a_debug_tab_closed_before_its_attach_reports_is_audited_as_abandoned(cx: &mut
 
 // ---- the menu item ----
 
-/// The shell items of `pod` on stg-b, as the row menu builds them.
+/// The shell items of `pod` on `cluster`, as the row menu builds them.
 fn menu_items(
     debugs: &Debugs,
+    cluster: &ClusterRef,
     pod_name: &str,
     cx: &mut TestAppContext,
 ) -> crate::resource_actions::ShellItems {
     let (menu, row) = debugs.fixture.shell.read_with(cx, |shell, cx| {
-        let guard = shell.guard_for(&debugs.stg, cx).expect("a guard");
-        let live = shell.slot_live(&debugs.stg, cx).expect("a live slot");
+        let guard = shell.guard_for(cluster, cx).expect("a guard");
+        let live = shell.slot_live(cluster, cx).expect("a live slot");
         let pod = live
             .pods
             .items()
             .iter()
             .find(|pod| pod.name == pod_name)
             .expect("the pod is listed");
-        let row = shell
-            .view
-            .sessions()
-            .into_iter()
-            .find(|slot| slot.cluster == debugs.stg)
-            .map(|slot| slot.row_context(cx))
-            .expect("a slot");
+        let row = shell.slot_row_context(cluster, cx).expect("a slot");
         (crate::resource_actions::ShellMenu::of(pod, &guard), row)
     });
     let weak = debugs.fixture.shell.downgrade();
@@ -833,16 +860,25 @@ fn menu_items(
 fn debug_container_item_is_last_in_the_shell_submenu(cx: &mut TestAppContext) {
     let debugs = two_clusters("menu-pick", Answers::Accepts, cx);
     // Open shell has a submenu, which holds Debug container… after a separator.
-    let items = menu_items(&debugs, "multi-0", cx);
+    let items = menu_items(&debugs, &debugs.stg, "multi-0", cx);
     assert!(items.debug_container.is_none());
 }
 
 #[gpui_kit::test]
 fn a_pod_with_one_container_gets_the_debug_item_beside_open_shell(cx: &mut TestAppContext) {
     let debugs = two_clusters("menu-one", Answers::Accepts, cx);
-    assert!(menu_items(&debugs, "api-0", cx).debug_container.is_some());
+    let stg = &debugs.stg;
+    assert!(
+        menu_items(&debugs, stg, "api-0", cx)
+            .debug_container
+            .is_some()
+    );
     // Also when Open shell itself is off: the item stays visible, with its own reason.
-    assert!(menu_items(&debugs, "idle-0", cx).debug_container.is_some());
+    assert!(
+        menu_items(&debugs, stg, "idle-0", cx)
+            .debug_container
+            .is_some()
+    );
 }
 
 #[gpui_kit::test]
@@ -861,11 +897,12 @@ fn the_debug_item_reads_the_gate_of_its_own_cluster(cx: &mut TestAppContext) {
             crate::resource_actions::debug_menu_state(pod, &guard)
         })
     };
-    // prod-a is locked, stg-b is not: one pod name, two answers.
+    // prod-a is locked, stg-b is not: one pod name, two answers, each from the active session.
     assert_eq!(
         state(&debugs.stg, cx),
         crate::resource_actions::DebugMenuState::Ready
     );
+    debugs.activate(&debugs.prod, cx);
     assert_eq!(
         state(&debugs.prod, cx),
         crate::resource_actions::DebugMenuState::Disabled("prod-a is read-only".into())
@@ -923,4 +960,185 @@ fn reconnect_of_a_debug_tab_reopens_the_options_and_reuses_nothing(cx: &mut Test
         .remove(1)
         .read_with(cx, |tab, _| tab.target().container.clone());
     assert_ne!(first_container, second_container);
+}
+
+// ---- a menu built on one cluster outlives a switch (spec 0046, write-safety.md I9) ----
+
+/// Clicks `item`, as the open menu would.
+fn click(item: &PopupMenuItem, debugs: &Debugs, cx: &mut TestAppContext) {
+    debugs.fixture.with_window(cx, |window, cx| match item {
+        PopupMenuItem::Item {
+            handler: Some(handler),
+            ..
+        }
+        | PopupMenuItem::ElementItem {
+            handler: Some(handler),
+            ..
+        } => handler(&gpui_kit::ClickEvent::default(), window, cx),
+        _ => panic!("the item has no click handler"),
+    });
+}
+
+/// Clicks every action of the pod menu that was built on `stg-b` before a switch.
+fn click_menu_built_on_stg(
+    items: &crate::resource_actions::ShellItems,
+    debugs: &Debugs,
+    cx: &mut TestAppContext,
+) {
+    click(&items.open_shell, debugs, cx);
+    click(
+        items.debug_container.as_ref().expect("the debug item"),
+        debugs,
+        cx,
+    );
+}
+
+#[gpui_kit::test]
+fn a_menu_built_on_a_acts_on_nothing_after_a_switch(cx: &mut TestAppContext) {
+    let debugs = two_clusters("menu-after-switch", Answers::Accepts, cx);
+    let items = menu_items(&debugs, &debugs.stg, "api-0", cx);
+    let prod_api = debugs.activate(&debugs.prod, cx);
+    click_menu_built_on_stg(&items, &debugs, cx);
+    assert!(!debugs.has_dialog(cx), "a stale menu opens no dialog");
+    assert_eq!(debugs.tab_count(cx), 0);
+    assert!(patches(&prod_api).is_empty());
+    assert!(commits(&debugs.stg_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn a_menu_built_on_a_does_nothing_after_switching_back(cx: &mut TestAppContext) {
+    let debugs = two_clusters("menu-after-back", Answers::Accepts, cx);
+    let items = menu_items(&debugs, &debugs.stg, "api-0", cx);
+    let row = debugs
+        .fixture
+        .shell
+        .read_with(cx, |shell, cx| shell.slot_row_context(&debugs.stg, cx))
+        .expect("the open cluster has a row context");
+    debugs.activate(&debugs.prod, cx);
+    let stg_again = debugs.activate(&debugs.stg, cx);
+    // The same cluster is open again, but it is a new session: the menu's one is gone.
+    assert!(row.session.upgrade().is_none());
+    click_menu_built_on_stg(&items, &debugs, cx);
+    assert!(!debugs.has_dialog(cx), "a stale menu opens no dialog");
+    assert_eq!(debugs.tab_count(cx), 0);
+    assert!(patches(&stg_again).is_empty());
+    assert!(commits(&stg_again).is_empty());
+}
+
+/// A Secrets row with one key, so Reveal is enabled.
+fn secret_row() -> crate::kind_row::KindRow {
+    let mut secret = crate::topology_fixtures::secret("db", "Opaque");
+    secret.keys.push(cluster::SecretKey {
+        name: "password".to_owned(),
+        size_bytes: 8,
+        is_binary: false,
+    });
+    crate::kind_row::KindRow {
+        namespace: Some("shop".to_owned()),
+        name: "db".to_owned(),
+        created_at: None,
+        status: crate::status_tone::StatusLabel {
+            text: "Opaque".into(),
+            tone: crate::status_tone::StatusTone::Ok,
+        },
+        cells: Vec::new(),
+        sections: Vec::new(),
+        related_pods: None,
+        event: None,
+        labels: Vec::new(),
+        object: crate::kind_row::KindObject::Secret(secret),
+    }
+}
+
+/// The Reveal item of the `db` Secret, as the row menu of `cluster` builds it now.
+fn reveal_item(debugs: &Debugs, cluster: &ClusterRef, cx: &mut TestAppContext) -> PopupMenuItem {
+    let row = secret_row();
+    let context = debugs
+        .fixture
+        .shell
+        .read_with(cx, |shell, cx| shell.slot_row_context(cluster, cx))
+        .expect("the open cluster has a row context");
+    let object = context.object(crate::table_selection::ResourceKey::Kind {
+        kind: crate::resource_kind::ResourceKind::Secrets,
+        namespace: Some("shop".to_owned()),
+        name: "db".to_owned(),
+    });
+    let weak = debugs.fixture.shell.downgrade();
+    let [reveal, _copy] = debugs.fixture.with_window(cx, |window, cx| {
+        crate::resource_actions::secret_menu(
+            &row,
+            &context,
+            object,
+            crate::secret_values::ValueAccess::Enabled,
+            &weak,
+            window,
+            cx,
+        )
+        .expect("a Secret row has a menu")
+        .into_items()
+    });
+    reveal
+}
+
+#[gpui_kit::test]
+fn a_secret_reveal_built_on_a_does_nothing_after_switching_back(cx: &mut TestAppContext) {
+    let debugs = two_clusters("secret-after-back", Answers::Accepts, cx);
+    let stale = reveal_item(&debugs, &debugs.stg, cx);
+    debugs.activate(&debugs.prod, cx);
+    debugs.activate(&debugs.stg, cx);
+    // A reveal goes to the Secrets screen first.
+    let is_on_secrets = |cx: &mut TestAppContext| {
+        debugs.fixture.shell.read_with(cx, |shell, _| {
+            shell.screen == Screen::Kind(crate::resource_kind::ResourceKind::Secrets)
+        })
+    };
+    assert!(!is_on_secrets(cx));
+    click(&stale, &debugs, cx);
+    assert!(!is_on_secrets(cx), "a stale menu reveals nothing");
+    // The same item, built on the new session, does act.
+    let fresh = reveal_item(&debugs, &debugs.stg, cx);
+    click(&fresh, &debugs, cx);
+    assert!(is_on_secrets(cx));
+}
+
+#[gpui_kit::test]
+fn a_logs_item_built_on_a_opens_nothing_after_switching_back(cx: &mut TestAppContext) {
+    let debugs = two_clusters("logs-after-back", Answers::Accepts, cx);
+    let build = |debugs: &Debugs, cx: &mut TestAppContext| {
+        let (menu, connection, row, dock) = debugs.fixture.shell.read_with(cx, |shell, cx| {
+            let live = shell.slot_live(&debugs.stg, cx).expect("a live slot");
+            let pod = live
+                .pods
+                .items()
+                .iter()
+                .find(|pod| pod.name == "api-0")
+                .expect("the pod is listed");
+            (
+                crate::resource_actions::LogsMenu::of(pod, &live.access),
+                live.connection().clone(),
+                shell
+                    .slot_row_context(&debugs.stg, cx)
+                    .expect("a row context"),
+                shell.dock.downgrade(),
+            )
+        });
+        debugs.fixture.with_window(cx, |window, cx| {
+            menu.item(connection, &row, &dock, window, cx)
+        })
+    };
+    let stale = build(&debugs, cx);
+    debugs.activate(&debugs.prod, cx);
+    debugs.activate(&debugs.stg, cx);
+    click(&stale, &debugs, cx);
+    let has_tabs = |cx: &mut TestAppContext| {
+        debugs
+            .fixture
+            .shell
+            .read_with(cx, |shell, cx| shell.dock.read(cx).has_tabs())
+    };
+    assert!(!has_tabs(cx), "a stale menu opens no log tab");
+    // The same item, built on the new session, does open one.
+    let fresh = build(&debugs, cx);
+    click(&fresh, &debugs, cx);
+    assert!(has_tabs(cx));
 }

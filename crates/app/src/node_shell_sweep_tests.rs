@@ -1,6 +1,6 @@
-//! The leftover sweep over two viewed clusters (see `debug_open_tests` for the fixture): a list per
-//! slot on its first Live, a notice that never deletes, and a delete that goes through the cleanup
-//! path with the uid the list gave.
+//! The leftover sweep over two loaded clusters (see `debug_open_tests` for the fixture): a list on
+//! the first Live of the active one, a notice that never deletes, and a delete that goes through the
+//! cleanup path with the uid the list gave.
 
 use cluster::{AccessCheck, LeftoverPhase};
 use gpui_kit::TestAppContext;
@@ -8,7 +8,7 @@ use gpui_kit::component::WindowExt as _;
 
 use super::*;
 use crate::app_shell::debug_open::debug_open_tests::{
-    Answers, Debugs, audit_lines, report_denying, two_clusters,
+    Answers, Debugs, audit_lines, go_live_answering, report_denying, respond, two_clusters,
 };
 use crate::app_shell::node_shell_open::node_shell_open_tests::deletes;
 use crate::cluster_session::AccessState;
@@ -42,15 +42,12 @@ impl Debugs {
 }
 
 #[gpui_kit::test]
-fn sweep_runs_on_each_slots_first_live(cx: &mut TestAppContext) {
+fn sweep_runs_on_first_live(cx: &mut TestAppContext) {
     let debugs = two_clusters("sw-first", Answers::Leftovers, cx);
-    debugs.wait_for("both notices", cx, |cx| debugs.notices(cx).len() == 2);
-    // One list per slot, on that slot's own connection.
-    assert_eq!(lists(&debugs.prod_api).len(), 1);
+    debugs.wait_for("the notice", cx, |cx| debugs.notices(cx).len() == 1);
+    // One list, on the connection of the cluster that went live; prod-a never did.
     assert_eq!(lists(&debugs.stg_api).len(), 1);
-    let mut notices = debugs.notices(cx);
-    notices.sort_by(|a, b| a.0.context.cmp(&b.0.context));
-    assert_eq!(notices, [(debugs.prod.clone(), 2), (debugs.stg.clone(), 2)]);
+    assert_eq!(debugs.notices(cx), [(debugs.stg.clone(), 2)]);
 }
 
 #[gpui_kit::test]
@@ -82,10 +79,9 @@ fn sweep_lists_other_instances_in_any_phase(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn sweep_notice_never_deletes_by_itself(cx: &mut TestAppContext) {
     let debugs = two_clusters("sw-quiet", Answers::Leftovers, cx);
-    debugs.wait_for("both notices", cx, |cx| debugs.notices(cx).len() == 2);
+    debugs.wait_for("the notice", cx, |cx| debugs.notices(cx).len() == 1);
     debugs.settle_for_sweep(cx);
     assert!(deletes(&debugs.stg_api).is_empty());
-    assert!(deletes(&debugs.prod_api).is_empty());
     assert!(
         !debugs.has_dialog(cx),
         "no dialog until the user clicks Review"
@@ -139,10 +135,6 @@ fn sweep_deletes_selected_leftovers_through_cleanup(cx: &mut TestAppContext) {
             "uid-k8sboard-node-shell-wk-03-bbbbb"
         ]
     );
-    assert!(
-        deletes(&debugs.prod_api).is_empty(),
-        "the row's own cluster only"
-    );
     // One audit line per delete.
     debugs.wait_for("both lines", cx, |_| {
         audit_lines(&dir)
@@ -157,6 +149,7 @@ fn sweep_deletes_selected_leftovers_through_cleanup(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_locked_cluster_deletes_nothing_and_says_why(cx: &mut TestAppContext) {
     let debugs = two_clusters("sw-locked", Answers::Leftovers, cx);
+    let prod_api = debugs.activate(&debugs.prod, cx);
     // prod-a is locked at open.
     let rows = [leftover(
         "k8sboard-node-shell-wk-03-aaaaa",
@@ -168,7 +161,7 @@ fn a_locked_cluster_deletes_nothing_and_says_why(cx: &mut TestAppContext) {
         });
     });
     debugs.settle_for_sweep(cx);
-    assert!(deletes(&debugs.prod_api).is_empty());
+    assert!(deletes(&prod_api).is_empty());
 }
 
 #[gpui_kit::test]
@@ -339,5 +332,40 @@ fn a_view_scoped_elsewhere_still_sweeps_the_node_shell_namespace(cx: &mut TestAp
     assert!(
         paths.contains(&"/api/v1/namespaces/shop/pods".to_owned()),
         "{paths:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_leftover_notice_landing_after_a_switch_is_dropped(cx: &mut TestAppContext) {
+    use std::sync::{Mutex, mpsc};
+    let debugs = two_clusters("sw-after-switch", Answers::Accepts, cx);
+    // The list of stg-b waits at the server until the shell has switched to prod-a.
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let held_api = go_live_answering(
+        &debugs.fixture,
+        &debugs.stg,
+        move |request| {
+            if request.method == "GET"
+                && request.has_query_key("labelSelector")
+                && let Ok(gate) = gate.lock()
+            {
+                let _ = gate.recv_timeout(std::time::Duration::from_secs(10));
+            }
+            respond(Answers::Leftovers, request)
+        },
+        cx,
+    );
+    debugs
+        .fixture
+        .shell
+        .update(cx, |shell, cx| shell.sweep_leftovers(&debugs.stg, cx));
+    debugs.wait_for("the list", cx, |_| !lists(&held_api).is_empty());
+    debugs.activate(&debugs.prod, cx);
+    let _ = release.send(());
+    debugs.settle_for_sweep(cx);
+    assert!(
+        debugs.notices(cx).is_empty(),
+        "a notice for a cluster that left is dropped"
     );
 }

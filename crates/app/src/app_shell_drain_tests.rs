@@ -1,6 +1,6 @@
-//! The drain dialog in a headless window over two viewed clusters (`prod-a`, locked at open, and
-//! `stg-b`, unlocked), each with its own fake API server: a test sees which cluster a request
-//! reached, and nothing leaves the machine.
+//! The drain dialog in a headless window over two loaded clusters, one active at a time (`prod-a`,
+//! locked at open, and `stg-b`, unlocked), each session with its own fake API server: a test sees
+//! which cluster a request reached, and nothing leaves the machine.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,7 +12,7 @@ use gpui_kit::{Entity, TestAppContext};
 use serde_json::{Value, json};
 
 use super::app_shell_switch_tests::open_switch_fixture;
-use super::app_shell_write_tests::{Clusters, audit_lines, go_live_answering, view, writes};
+use super::app_shell_write_tests::{Clusters, audit_lines, go_live_answering, switch_to, writes};
 use super::drain_dialog::DrainDialog;
 use super::write_flow::DryRunState;
 use super::*;
@@ -202,20 +202,13 @@ fn drain_test(
     cx: &mut TestAppContext,
 ) -> DrainTest {
     let fixture = open_switch_fixture(name, cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
     let mut stg_server = DrainServer::default();
     setup(&mut stg_server);
     let stg_gate = Arc::clone(&stg_server.eviction_gate);
     let stg_state = Arc::new(Mutex::new(stg_server));
     let prod_state = Arc::new(Mutex::new(DrainServer::default()));
-    let prod_api = go_live_answering(
-        &fixture,
-        &prod,
-        "node-a",
-        server(Arc::clone(&prod_state)),
-        cx,
-    );
     let stg_api = go_live_answering(&fixture, &stg, "node-b", server(Arc::clone(&stg_state)), cx);
     fixture
         .shell
@@ -225,7 +218,6 @@ fn drain_test(
     DrainTest {
         t: Clusters {
             fixture,
-            prod_api,
             stg_api,
             prod,
             stg,
@@ -236,13 +228,31 @@ fn drain_test(
 }
 
 impl DrainTest {
+    /// Switches to `prod-a` and makes it live over a new fake server on the Nodes screen. The old
+    /// session is gone, so a test never has both clusters live at once.
+    fn activate_prod(&self, cx: &mut TestAppContext) -> FakeApi {
+        let api = self.t.activate_answering(
+            &self.t.prod,
+            "node-a",
+            server(Arc::clone(&self.prod_state)),
+            cx,
+        );
+        self.t
+            .fixture
+            .shell
+            .update(cx, |shell, cx| shell.show_screen(Screen::Nodes, cx));
+        cx.run_until_parked();
+        self.t.fixture.draw_twice(cx);
+        api
+    }
+
     fn set_nodes(&self, cluster: &ClusterRef, nodes: Vec<NodeSummary>, cx: &mut TestAppContext) {
         let session = self
             .t
             .fixture
             .shell
             .read_with(cx, |shell, _| shell.slot_session(cluster).cloned())
-            .expect("a viewed slot");
+            .expect("an open cluster");
         session.update(cx, |session, cx| session.set_nodes_for_test(nodes, cx));
         cx.run_until_parked();
         self.t.fixture.draw_twice(cx);
@@ -327,15 +337,15 @@ fn three_pods(server: &mut DrainServer) {
 }
 
 #[gpui_kit::test]
-fn drain_uses_the_cursor_slot(cx: &mut TestAppContext) {
+fn drain_uses_the_active_cluster(cx: &mut TestAppContext) {
     let t = drain_test("drain-slot", three_pods, cx);
-    // The cursor is on a node of the second cluster; the primary is the locked `prod-a`.
+    // The cursor is on a node of the open cluster, `stg-b`; `prod-a` is the locked one.
     t.cursor_on_node(&t.t.stg, "node-b", cx);
     t.t.fixture.press("d", cx);
     let dialog = t.dialog(cx).expect("D opens the dialog");
     t.settle(&dialog, cx);
     dialog.read_with(cx, |dialog, _| {
-        // The guard and the tier are stg-b's own: a click on STG, never the primary's typed name.
+        // The guard and the tier are stg-b's own: a click on STG, never prod-a's typed name.
         assert_eq!(*dialog.tier(), DialogConfirm::Click);
         assert_eq!(dialog.environment(), Environment::Staging);
         assert_eq!(dialog.expected_name(), "node-b");
@@ -344,7 +354,6 @@ fn drain_uses_the_cursor_slot(cx: &mut TestAppContext) {
     });
     // Reads and dry-runs went to the node's cluster only.
     assert_eq!(pod_lists(&t.t.stg_api).len(), 1);
-    assert!(pod_lists(&t.t.prod_api).is_empty());
     let sent = writes(&t.t.stg_api);
     assert_eq!(sent.len(), 3, "a cordon and two evictions: {sent:?}");
     assert!(
@@ -361,7 +370,6 @@ fn drain_uses_the_cursor_slot(cx: &mut TestAppContext) {
         sent[2].path,
         "/api/v1/namespaces/payments/pods/api-2/eviction"
     );
-    assert!(writes(&t.t.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
@@ -389,15 +397,17 @@ fn the_d_key_opens_a_dialog_and_nothing_runs_from_it(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_dialog_on_a_locked_cluster_does_not_open(cx: &mut TestAppContext) {
     let t = drain_test("drain-locked", three_pods, cx);
+    let prod_api = t.activate_prod(cx);
     t.open(&t.t.prod, &["node-a"], cx);
     assert!(t.dialog(cx).is_none());
-    assert!(pod_lists(&t.t.prod_api).is_empty());
-    assert!(writes(&t.t.prod_api).is_empty());
+    assert!(pod_lists(&prod_api).is_empty());
+    assert!(writes(&prod_api).is_empty());
 }
 
 #[gpui_kit::test]
 fn drain_dialog_requires_the_node_name_on_prod(cx: &mut TestAppContext) {
     let t = drain_test("drain-prod", three_pods, cx);
+    t.activate_prod(cx);
     t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
     t.prod_state.lock().expect("state").pods =
         vec![pod_json("payments", "api-1", Some("ReplicaSet"), false)];
@@ -416,6 +426,7 @@ fn drain_dialog_requires_the_node_name_on_prod(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn drain_of_several_nodes_types_the_cluster_name(cx: &mut TestAppContext) {
     let t = drain_test("drain-several", three_pods, cx);
+    let prod_api = t.activate_prod(cx);
     t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
     t.set_nodes(
         &t.t.prod,
@@ -437,9 +448,9 @@ fn drain_of_several_nodes_types_the_cluster_name(cx: &mut TestAppContext) {
         assert_eq!(dialog.plans().len(), 2);
     });
     // One pod list per node, one budget list, and a cordon dry-run for each node.
-    assert_eq!(pod_lists(&t.t.prod_api).len(), 2);
+    assert_eq!(pod_lists(&prod_api).len(), 2);
     assert_eq!(
-        writes(&t.t.prod_api)
+        writes(&prod_api)
             .iter()
             .filter(|request| request.method == "PATCH")
             .count(),
@@ -690,7 +701,6 @@ fn cordon_only_sends_no_eviction(cx: &mut TestAppContext) {
     assert_eq!(line["cluster"], "stg-b");
     assert_eq!(line["object"]["name"], "node-b");
     assert_eq!(line["outcome"], "applied");
-    assert!(writes(&t.t.prod_api).is_empty());
     t.t.wait_for("the dialog to close", cx, |cx| {
         dialog.read_with(cx, |dialog, _| !dialog.is_open())
     });
@@ -716,6 +726,7 @@ fn cordon_only_commits_through_checked_write(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn cordon_only_needs_the_typed_name_on_prod(cx: &mut TestAppContext) {
     let t = drain_test("drain-cordon-typed", three_pods, cx);
+    let prod_api = t.activate_prod(cx);
     t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
     let dialog = t.open_and_settle(&t.t.prod, &["node-a"], cx);
     t.t.fixture.with_window(cx, |window, cx| {
@@ -724,7 +735,7 @@ fn cordon_only_needs_the_typed_name_on_prod(cx: &mut TestAppContext) {
     cx.run_until_parked();
     // The name is not typed: nothing is committed.
     assert!(
-        writes(&t.t.prod_api)
+        writes(&prod_api)
             .iter()
             .all(|request| request.has_query("dryRun", "All"))
     );
@@ -735,7 +746,7 @@ fn cordon_only_needs_the_typed_name_on_prod(cx: &mut TestAppContext) {
         });
     });
     t.t.wait_for("the commit", cx, |_| {
-        writes(&t.t.prod_api)
+        writes(&prod_api)
             .iter()
             .any(|request| request.method == "PATCH" && !request.has_query_key("dryRun"))
     });
@@ -767,7 +778,6 @@ impl DrainTest {
 #[gpui_kit::test]
 fn the_selection_bar_drains_the_ticked_nodes_of_one_cluster(cx: &mut TestAppContext) {
     let t = drain_test("drain-bar", three_pods, cx);
-    t.set_nodes(&t.t.prod, Vec::new(), cx);
     t.set_nodes(
         &t.t.stg,
         vec![
@@ -810,25 +820,12 @@ fn the_selection_bar_drains_the_ticked_nodes_of_one_cluster(cx: &mut TestAppCont
         .map(|request| request.path)
         .collect();
     assert_eq!(cordons, ["/api/v1/nodes/n1"]);
-    assert!(writes(&t.t.prod_api).is_empty());
-}
-
-#[gpui_kit::test]
-fn the_bar_drain_is_off_across_clusters(cx: &mut TestAppContext) {
-    let t = drain_test("drain-bar-clusters", three_pods, cx);
-    t.set_nodes(&t.t.prod, vec![summary("p1", NodeScheduling::Enabled)], cx);
-    t.set_nodes(&t.t.stg, vec![summary("n1", NodeScheduling::Enabled)], cx);
-    t.tick(&[0, 1], cx);
-    assert_eq!(
-        t.drain_button(cx),
-        crate::row_selection::BulkState::Off("Select rows of one cluster".into())
-    );
 }
 
 #[gpui_kit::test]
 fn the_bar_drain_is_off_on_a_locked_cluster(cx: &mut TestAppContext) {
     let t = drain_test("drain-bar-locked", three_pods, cx);
-    t.set_nodes(&t.t.stg, Vec::new(), cx);
+    t.activate_prod(cx);
     t.tick(&[0], cx);
     assert_eq!(
         t.drain_button(cx),
@@ -932,7 +929,6 @@ fn a_drain_cordons_evicts_waits_and_ends_drained(cx: &mut TestAppContext) {
     )
     .expect("a JSON body");
     assert_eq!(body["deleteOptions"]["preconditions"]["uid"], "uid-api-1");
-    assert!(writes(&t.t.prod_api).is_empty());
     // One line per commit and one summary for the node.
     t.t.wait_for("the audit lines", cx, |_| audit_lines(&dir).len() == 4);
     let lines = audit_lines(&dir);
@@ -1065,7 +1061,6 @@ fn second_drain_on_the_cluster_is_disabled(cx: &mut TestAppContext) {
     t.open(&t.t.stg, &["node-b"], cx);
     // The first dialog closed when the run started, and no second one opened.
     assert!(t.dialog(cx).is_none(), "no second dialog opened");
-    t.set_nodes(&t.t.prod, Vec::new(), cx);
     t.set_nodes(
         &t.t.stg,
         vec![
@@ -1107,6 +1102,7 @@ fn held_enter_does_not_drain(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_drain_waits_for_the_typed_name_on_prod(cx: &mut TestAppContext) {
     let t = drain_test("drain-typed", three_pods, cx);
+    t.activate_prod(cx);
     t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
     t.prod_state.lock().expect("state").pods =
         vec![pod_json("payments", "api-1", Some("ReplicaSet"), false)];
@@ -1177,19 +1173,19 @@ fn a_multi_node_drain_cordons_every_node_first(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn slot_release_stops_the_drain(cx: &mut TestAppContext) {
+fn a_switch_stops_the_drain(cx: &mut TestAppContext) {
     let t = drain_test("drain-release", refusing_api_2, cx);
     let dir = t.t.enable_audit_folder("drain-release", cx);
     let tab = t.start(cx);
     t.t.wait_for("the refusal", cx, |cx| {
         tab.read_with(cx, |tab, _| tab.run().pod_rows(Duration::ZERO).len() == 3)
     });
-    let stg = t.t.stg.clone();
+    let prod = t.t.prod.clone();
     t.t.fixture
         .shell
-        .update(cx, |shell, cx| shell.remove_from_view(&stg, cx));
+        .update(cx, |shell, cx| shell.switch_cluster(&prod, cx));
     cx.run_until_parked();
-    // The release asks first and names the drain.
+    // The switch asks first and names the drain.
     assert_eq!(
         t.t.fixture
             .shell
@@ -1206,7 +1202,7 @@ fn slot_release_stops_the_drain(cx: &mut TestAppContext) {
         );
     });
     cx.run_until_parked();
-    // The run ended `stopped`, its tab went with the slot, and the node got one summary line.
+    // The run ended `stopped`, its tab went with the session, and the node got one summary line.
     assert_eq!(t.dock_tabs(cx), 0);
     assert!(!tab.read_with(cx, |tab, _| tab.is_running()));
     t.t.wait_for("the summary", cx, |_| {
@@ -1249,6 +1245,49 @@ fn quitting_with_a_running_drain_asks_first(cx: &mut TestAppContext) {
     assert!(tab.read_with(cx, |tab, _| tab.is_running()));
     tab.update(cx, |tab, cx| tab.cancel(cx));
     t.wait_for_end(&tab, cx);
+}
+
+#[gpui_kit::test]
+fn quit_stops_a_drain_of_a_cluster_just_left(cx: &mut TestAppContext) {
+    let t = drain_test("drain-quit-left", refusing_api_2, cx);
+    let dir = t.t.enable_audit_folder("drain-quit-left", cx);
+    let tab = t.start(cx);
+    t.t.wait_for("the refusal", cx, |cx| {
+        tab.read_with(cx, |tab, _| tab.run().pod_rows(Duration::ZERO).len() == 3)
+    });
+    // Synthetic state: a switch stops its drains first, so no real path leaves a drain tab
+    // without a session. Taking the session out stands for the moment a drain is still ending
+    // after its cluster was left (spec 0046 decision 20); the session is kept alive by `_left`.
+    let _left =
+        t.t.fixture
+            .shell
+            .update(cx, |shell, _| shell.active_session.take());
+    let may_close =
+        t.t.fixture
+            .shell
+            .update(cx, |shell, cx| shell.main_window_may_close(cx));
+    assert!(!may_close, "the drain of the left cluster still asks");
+    cx.run_until_parked();
+    assert_eq!(
+        t.t.fixture
+            .shell
+            .read_with(cx, |shell, _| shell.last_leaving.clone()),
+        Some(vec![
+            "A drain on stg-b will stop; its nodes stay cordoned".to_owned()
+        ])
+    );
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_action(
+            Box::new(gpui_kit::component::dialog::Confirm { secondary: false }),
+            cx,
+        );
+    });
+    assert!(!tab.read_with(cx, |tab, _| tab.is_running()));
+    let summaries = audit_lines(&dir)
+        .into_iter()
+        .filter(|line| line["action"] == "Drain" && line["outcome"] == "stopped")
+        .count();
+    assert_eq!(summaries, 1);
 }
 
 #[gpui_kit::test]
@@ -1305,7 +1344,6 @@ fn cordon_uncordon_and_taint_edits_are_refused_while_a_drain_runs(cx: &mut TestA
     t.t.wait_for("the refusal", cx, |cx| {
         tab.read_with(cx, |tab, _| tab.run().pod_rows(Duration::ZERO).len() == 3)
     });
-    t.set_nodes(&t.t.prod, Vec::new(), cx);
     t.set_nodes(
         &t.t.stg,
         vec![
@@ -1396,7 +1434,6 @@ fn a_drain_is_refused_while_a_batch_runs_on_the_cluster(cx: &mut TestAppContext)
     assert!(t.dialog(cx).is_none());
     assert!(pod_lists(&t.t.stg_api).is_empty());
     // The bar button says why.
-    t.set_nodes(&t.t.prod, Vec::new(), cx);
     t.tick(&[0], cx);
     assert_eq!(
         t.drain_button(cx),
@@ -1418,21 +1455,6 @@ fn a_drain_is_refused_while_a_batch_runs_on_the_cluster(cx: &mut TestAppContext)
             .iter()
             .all(|request| request.has_query("dryRun", "All"))
     );
-}
-
-#[gpui_kit::test]
-fn the_bar_drain_refuses_ticks_of_two_clusters_instead_of_dropping_one(cx: &mut TestAppContext) {
-    let t = drain_test("drain-two-clusters", three_pods, cx);
-    t.set_nodes(&t.t.prod, vec![summary("p1", NodeScheduling::Enabled)], cx);
-    t.set_nodes(&t.t.stg, vec![summary("n1", NodeScheduling::Enabled)], cx);
-    t.tick(&[0, 1], cx);
-    t.t.fixture.with_window(cx, |window, cx| {
-        t.t.fixture.shell.update(cx, |shell, cx| {
-            shell.run_bulk(crate::resource_actions::ResourceAction::Drain, window, cx);
-        });
-    });
-    assert!(t.dialog(cx).is_none(), "no dialog for half of the ticks");
-    assert!(pod_lists(&t.t.stg_api).is_empty() && pod_lists(&t.t.prod_api).is_empty());
 }
 
 #[gpui_kit::test]

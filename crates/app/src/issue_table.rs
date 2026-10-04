@@ -14,7 +14,6 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
-use crate::cluster_rows::{RowAddress, SlotSession};
 use crate::dock::Dock;
 use crate::drawer::truncated_text;
 use crate::event_rows::message_line;
@@ -23,6 +22,7 @@ use crate::issue::{Issue, IssueAction};
 use crate::issue_feeds::Coverage;
 use crate::resource_actions::{disabled_menu_item, view_logs_item};
 use crate::resource_kind::{Align, KindColumn, column};
+use crate::row_context::TableSession;
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusLabel, StatusTone, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
@@ -57,7 +57,7 @@ const ISSUE_COLUMNS: [KindColumn; 8] = [
 
 pub(crate) struct IssueTableDelegate {
     /// The primary cluster: the issues of the other viewed clusters are not merged yet.
-    session: Option<SlotSession>,
+    session: Option<TableSession>,
     /// The row menu's View logs opens a tab here.
     dock: WeakEntity<Dock>,
     /// A click reveals the object through the shell.
@@ -76,7 +76,6 @@ impl IssueTableDelegate {
             specs: ISSUE_COLUMNS.to_vec(),
             flexible: CAUSE,
             flexible_min: CAUSE_MIN_WIDTH,
-            session_column: None,
         };
         let mut view = TableView::new(default_filter(Screen::Issues));
         if let Some(saved) = saved {
@@ -97,7 +96,7 @@ impl IssueTableDelegate {
         self.layout.fit_width(table_width, &self.view.hidden)
     }
 
-    pub(crate) fn set_session(&mut self, session: Option<SlotSession>) {
+    pub(crate) fn set_session(&mut self, session: Option<TableSession>) {
         self.session = session;
     }
 
@@ -169,11 +168,6 @@ impl TableRow for Issue {
 }
 
 impl FilteredTable for IssueTableDelegate {
-    /// The issues are the primary cluster's alone, so a view item is the board's own index.
-    fn addresses(&self) -> &[RowAddress] {
-        &[]
-    }
-
     fn view(&self) -> Option<&TableView> {
         Some(&self.view)
     }
@@ -428,7 +422,7 @@ fn open_item(issue: &Issue, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
     };
     let shell = shell.clone();
     PopupMenuItem::new(label).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.reveal_in_primary(target.clone(), cx));
+        let _ = shell.update(cx, |shell, cx| shell.reveal(target.clone(), cx));
     })
 }
 

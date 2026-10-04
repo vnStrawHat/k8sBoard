@@ -51,7 +51,8 @@ Step 1 also adds the unmarked safety tests of [write-safety.md](write-safety.md)
 | Do | Tests |
 |---|---|
 | D | `cluster_rows_tests.rs` (file); `table_selection_tests.rs` address tests; `table_view_tests.rs` cluster-in-`RowName` tests; `cluster_view_tests.rs` (file) |
-| A | `set_session_clears_ticks_and_anchor_on_any_change` (pod delegate: A → B, A → `None` → A); `slot_session_is_none_for_a_cluster_that_is_not_active` (`app_shell_switch_tests.rs`); `the_new_forward_form_shows_the_active_cluster_only` (`port_forward_dialogs_tests.rs`); `quit_stops_a_drain_of_a_cluster_just_left` (`app_shell_drain_tests.rs`) |
+| A | `set_session_clears_ticks_and_anchor_on_any_change` (pod delegate: A → B, A → `None` → A); `slot_session_is_none_for_a_cluster_that_is_not_active` (`app_shell_switch_tests.rs`); `the_new_forward_form_shows_the_active_cluster_only` (`port_forward_open_tests.rs`: needs the shell fixture; the fixed label is checked by the `port-forward-new-fixture` screenshot); `quit_stops_a_drain_of_a_cluster_just_left` (`app_shell_drain_tests.rs`) |
+| A (review fixes) | `a_secret_reveal_built_on_a_does_nothing_after_switching_back`, `a_logs_item_built_on_a_opens_nothing_after_switching_back` (`debug_open_tests.rs`, beside `a_menu_built_on_a_does_nothing_after_switching_back`); `a_pod_created_across_a_switch_and_back_is_deleted_not_given_a_tab` (`node_shell_cleanup_tests.rs`: `TabPlan.generation` is compared at `open_debug_tab`) |
 | keep green | every step-1 safety test; `unknown_fields_are_ignored`; `switch_cluster_keeps_forwards` |
 
 ## Final greps (step 4, must print nothing)

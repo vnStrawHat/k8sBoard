@@ -109,9 +109,7 @@ pub(crate) fn node_heatmap(cells: &[HeatCell], cx: &Context<AppShell>) -> impl I
                 .cursor_pointer()
                 .bg(theme.muted)
                 .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-                .on_click(
-                    cx.listener(move |shell, _, _, cx| shell.reveal_in_primary(key.clone(), cx)),
-                );
+                .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)));
             if cell.is_not_ready() {
                 return base
                     .border_2()

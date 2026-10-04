@@ -1,14 +1,15 @@
-//! The workload actions of spec 0032 in a headless window over two viewed clusters, `prod-a` (the
-//! primary, locked at open) and `stg-b` (unlocked). Each answers from its own fake API server, so a
-//! test sees which cluster a request reached and nothing leaves the machine.
+//! The workload actions of spec 0032 in a headless window over two loaded clusters, one active at a
+//! time: the fixture starts on `prod-a` (locked at open), switches to `stg-b` (unlocked), and makes
+//! it live. `activate_prod` does the same for `prod-a`. Each session answers from its own fake API
+//! server, so a test sees which cluster a request reached and nothing leaves the machine.
 
-use cluster::fake_api::RecordedRequest;
+use cluster::fake_api::{FakeApi, RecordedRequest};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Entity, TestAppContext};
 
 use super::app_shell_switch_tests::open_switch_fixture;
 use super::app_shell_write_tests::{
-    Clusters, audit_lines, go_live_answering, slot_session, view, writes,
+    Clusters, audit_lines, go_live_answering, slot_session, switch_to, writes,
 };
 use super::batch_write::{ItemProgress, MAX_BATCH_ITEMS};
 use super::write_flow::DryRunState;
@@ -66,13 +67,11 @@ fn workload_clusters_answering(
     // Dialogs open without their animation, so the palette field takes keys at once.
     cx.update(|cx| cx.set_reduce_motion(true));
     let fixture = open_switch_fixture(name, cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
-    let prod_api = go_live_answering(&fixture, &prod, "node-a", respond, cx);
     let stg_api = go_live_answering(&fixture, &stg, "node-b", respond, cx);
     Clusters {
         fixture,
-        prod_api,
         stg_api,
         prod,
         stg,
@@ -80,7 +79,14 @@ fn workload_clusters_answering(
 }
 
 impl Clusters {
-    /// Shows `kind` and gives each cluster the loaded `rows` of its own.
+    /// Switches to `prod-a` and makes it live over a new fake server that answers like the
+    /// default workload server. The old session is gone, so a test never has both clusters live.
+    pub(super) fn activate_prod(&self, cx: &mut TestAppContext) -> FakeApi {
+        self.activate_answering(&self.prod, "node-a", workload_answers, cx)
+    }
+
+    /// Shows `kind` and gives the open cluster the loaded `rows` of its own: `prod_rows` when
+    /// `prod-a` is open, `stg_rows` when `stg-b` is.
     pub(super) fn show_kind(
         &self,
         kind: ResourceKind,
@@ -93,10 +99,15 @@ impl Clusters {
             .update(cx, |shell, cx| shell.show_screen(Screen::Kind(kind), cx));
         cx.run_until_parked();
         for (cluster, rows) in [(&self.prod, prod_rows), (&self.stg, stg_rows)] {
-            let session = slot_session(&self.fixture, cluster, cx);
-            session.update(cx, |session, cx| {
-                session.set_kind_rows_for_test(kind, rows, cx);
-            });
+            let session = self
+                .fixture
+                .shell
+                .read_with(cx, |shell, _| shell.slot_session(cluster).cloned());
+            if let Some(session) = session {
+                session.update(cx, |session, cx| {
+                    session.set_kind_rows_for_test(kind, rows, cx);
+                });
+            }
         }
         cx.run_until_parked();
         self.fixture.draw_twice(cx);
@@ -173,12 +184,12 @@ fn r_restarts_the_cursor_row(cx: &mut TestAppContext) {
     assert!(!sent[1].has_query_key("dryRun"));
     // The dry-run and the commit are one request, so the check says what the commit does.
     assert_eq!(sent[0].body, sent[1].body);
-    assert!(writes(&t.prod_api).is_empty(), "{:?}", writes(&t.prod_api));
 }
 
 #[gpui_kit::test]
-fn restart_acts_on_the_cursor_cluster_not_the_primary(cx: &mut TestAppContext) {
+fn restart_in_production_types_the_cluster_name(cx: &mut TestAppContext) {
     let t = workload_clusters("restart-cluster", cx);
+    let prod_api = t.activate_prod(cx);
     t.set_lock(&t.prod, WriteLock::Unlocked, cx);
     t.show_kind(
         ResourceKind::Deployments,
@@ -188,7 +199,7 @@ fn restart_acts_on_the_cursor_cluster_not_the_primary(cx: &mut TestAppContext) {
     );
     t.cursor_on(&t.prod, ResourceKind::Deployments, "api", cx);
     t.press("r", cx);
-    // The primary is production: its tier asks for the cluster name.
+    // The cluster is production: its tier asks for the cluster name.
     t.dialog(cx).read_with(cx, |dialog, _| {
         assert_eq!(
             *dialog.tier(),
@@ -198,14 +209,14 @@ fn restart_acts_on_the_cursor_cluster_not_the_primary(cx: &mut TestAppContext) {
         );
     });
     t.wait_for_dry_run(cx);
-    assert_eq!(writes(&t.prod_api).len(), 1);
+    assert_eq!(writes(&prod_api).len(), 1);
     assert!(writes(&t.stg_api).is_empty());
     t.confirm(cx);
     cx.run_until_parked();
-    assert_eq!(writes(&t.prod_api).len(), 1, "the name was not typed");
+    assert_eq!(writes(&prod_api).len(), 1, "the name was not typed");
     t.type_name("prod-a", cx);
     t.confirm(cx);
-    t.wait_for("the commit", cx, |_| writes(&t.prod_api).len() == 2);
+    t.wait_for("the commit", cx, |_| writes(&prod_api).len() == 2);
     assert!(writes(&t.stg_api).is_empty());
 }
 
@@ -227,6 +238,7 @@ fn r_on_a_paused_deployment_opens_no_dialog(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn r_on_a_locked_production_row_opens_no_dialog(cx: &mut TestAppContext) {
     let t = workload_clusters("restart-locked", cx);
+    let prod_api = t.activate_prod(cx);
     t.show_kind(
         ResourceKind::Deployments,
         deployments(false),
@@ -236,7 +248,7 @@ fn r_on_a_locked_production_row_opens_no_dialog(cx: &mut TestAppContext) {
     t.cursor_on(&t.prod, ResourceKind::Deployments, "api", cx);
     t.press("r", cx);
     assert!(!t.has_dialog(cx));
-    assert!(writes(&t.prod_api).is_empty());
+    assert!(writes(&prod_api).is_empty());
     assert!(writes(&t.stg_api).is_empty());
 }
 
@@ -389,14 +401,12 @@ fn menu_item_dispatches_the_key_on_the_right_clicked_row(cx: &mut TestAppContext
         deployments(false),
         cx,
     );
-    // The cursor starts on the production row; the right click is on the staging row.
-    t.cursor_on(&t.prod, ResourceKind::Deployments, "api", cx);
     t.fixture
         .shell
         .update(cx, |shell, cx| shell.close_drawer(cx));
     t.fixture.draw_twice(cx);
     t.fixture
-        .with_window(cx, |window, cx| window.right_click(("row", 1usize), cx));
+        .with_window(cx, |window, cx| window.right_click(("row", 0usize), cx));
     cx.run_until_parked();
     t.fixture.draw_twice(cx);
     cx.run_until_parked();
@@ -412,7 +422,6 @@ fn menu_item_dispatches_the_key_on_the_right_clicked_row(cx: &mut TestAppContext
     assert_eq!(t.dialog_label(cx), "Restart rollout of deployment api");
     t.wait_for_dry_run(cx);
     assert_eq!(writes(&t.stg_api).len(), 1);
-    assert!(writes(&t.prod_api).is_empty());
 }
 
 // ---- Scale: the popover and the palette ----
@@ -485,13 +494,12 @@ fn palette_enter_on_scale_falls_back_to_the_popover(cx: &mut TestAppContext) {
 fn menu_scale_opens_the_popover_for_the_clicked_row(cx: &mut TestAppContext) {
     let t = workload_clusters("scale-menu", cx);
     t.on_stg_deployment(cx);
-    t.cursor_on(&t.prod, ResourceKind::Deployments, "api", cx);
     t.fixture
         .shell
         .update(cx, |shell, cx| shell.close_drawer(cx));
     t.fixture.draw_twice(cx);
     t.fixture
-        .with_window(cx, |window, cx| window.right_click(("row", 1usize), cx));
+        .with_window(cx, |window, cx| window.right_click(("row", 0usize), cx));
     cx.run_until_parked();
     t.fixture.draw_twice(cx);
     cx.run_until_parked();
@@ -616,7 +624,6 @@ fn enter_is_a_key_trigger(cx: &mut TestAppContext) {
     assert_eq!(sent[0].body, r#"{"spec":{"replicas":5}}"#);
     t.confirm(cx);
     t.wait_for("the commit", cx, |_| writes(&t.stg_api).len() == 2);
-    assert!(writes(&t.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
@@ -658,7 +665,10 @@ fn the_popover_closes_when_the_cursor_leaves_its_row(cx: &mut TestAppContext) {
     t.on_stg_deployment(cx);
     t.press("shift-s", cx);
     assert!(t.popover(cx).is_some());
-    t.cursor_on(&t.prod, ResourceKind::Deployments, "api", cx);
+    t.fixture
+        .shell
+        .update(cx, |shell, cx| shell.clear_selection(cx));
+    cx.run_until_parked();
     assert!(t.popover(cx).is_none());
 }
 
@@ -724,7 +734,6 @@ fn palette_ctrl_enter_argument_mode(cx: &mut TestAppContext) {
     t.wait_for_dry_run(cx);
     let sent = writes(&t.stg_api);
     assert_eq!(sent[0].body, r#"{"spec":{"replicas":5}}"#);
-    assert!(writes(&t.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
@@ -785,8 +794,9 @@ fn esc_returns_to_the_list(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn ctrl_enter_does_nothing_on_a_disabled_scale_entry(cx: &mut TestAppContext) {
-    // The primary is locked: its Scale entry is disabled with its reason, so no field opens.
+    // The cluster is locked: its Scale entry is disabled with its reason, so no field opens.
     let t = workload_clusters("scale-argument-locked", cx);
+    let prod_api = t.activate_prod(cx);
     t.show_kind(
         ResourceKind::Deployments,
         deployments(false),
@@ -802,7 +812,7 @@ fn ctrl_enter_does_nothing_on_a_disabled_scale_entry(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(!t.has_dialog(cx));
     assert!(t.popover(cx).is_none());
-    assert!(writes(&t.prod_api).is_empty());
+    assert!(writes(&prod_api).is_empty());
 }
 
 // ---- Roll back: the drawer buttons, the menu, the palette ----
@@ -899,7 +909,6 @@ fn revision_roll_back_opens_the_confirm_dialog(cx: &mut TestAppContext) {
             .count()
             == 2
     });
-    assert!(writes(&t.prod_api).is_empty());
     // The button did not also open the ReplicaSet behind the row.
     let subject = t
         .fixture
@@ -1115,6 +1124,7 @@ fn bulk_buttons_follow_the_ticks_and_the_gate(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn bulk_buttons_are_off_for_a_locked_cluster(cx: &mut TestAppContext) {
     let t = workload_clusters("bulk-locked", cx);
+    t.activate_prod(cx);
     t.show_kind(
         ResourceKind::Deployments,
         deployment_rows(&BATCH_NAMES),
@@ -1127,26 +1137,6 @@ fn bulk_buttons_are_off_for_a_locked_cluster(cx: &mut TestAppContext) {
         assert_eq!(
             Clusters::state_of(&buttons, label),
             BulkState::Off("prod-a is read-only".into()),
-            "{label}"
-        );
-    }
-}
-
-#[gpui_kit::test]
-fn rows_of_two_clusters_have_no_bulk_action(cx: &mut TestAppContext) {
-    let t = workload_clusters("bulk-mixed", cx);
-    t.show_kind(
-        ResourceKind::Deployments,
-        deployment_rows(&["api"]),
-        deployment_rows(&["api"]),
-        cx,
-    );
-    t.tick(&[0, 1], cx);
-    let buttons = t.bulk_buttons(cx);
-    for label in ["Scale…", "Restart"] {
-        assert_eq!(
-            Clusters::state_of(&buttons, label),
-            BulkState::Off("Select rows of one cluster".into()),
             "{label}"
         );
     }
@@ -1285,7 +1275,6 @@ fn batch_dry_runs_are_sequential_and_unaudited(cx: &mut TestAppContext) {
             .all(|request| request.has_query("dryRun", "All"))
     );
     assert!(audit_lines(&dir).is_empty());
-    assert!(writes(&t.prod_api).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1367,6 +1356,7 @@ fn batch_continues_after_a_failed_commit(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn batch_in_production_types_the_cluster_name(cx: &mut TestAppContext) {
     let t = workload_clusters("bulk-prod", cx);
+    let prod_api = t.activate_prod(cx);
     t.set_lock(&t.prod, WriteLock::Unlocked, cx);
     t.show_kind(
         ResourceKind::Deployments,
@@ -1387,14 +1377,14 @@ fn batch_in_production_types_the_cluster_name(cx: &mut TestAppContext) {
     });
     t.wait_for_dry_run(cx);
     assert_eq!(t.block(cx).as_deref(), Some("Type prod-a to confirm"));
-    let before = writes(&t.prod_api).len();
+    let before = writes(&prod_api).len();
     t.confirm(cx);
     cx.run_until_parked();
-    assert_eq!(writes(&t.prod_api).len(), before, "the name was not typed");
+    assert_eq!(writes(&prod_api).len(), before, "the name was not typed");
     t.type_name("prod-a", cx);
     t.confirm(cx);
     t.wait_for("two commits", cx, |_| {
-        writes(&t.prod_api)
+        writes(&prod_api)
             .iter()
             .filter(|request| !request.has_query_key("dryRun"))
             .count()
@@ -1507,7 +1497,7 @@ fn menu_shift_s_and_palette_open_the_same_popover(cx: &mut TestAppContext) {
         .update(cx, |shell, cx| shell.close_drawer(cx));
     t.fixture.draw_twice(cx);
     t.fixture
-        .with_window(cx, |window, cx| window.right_click(("row", 1usize), cx));
+        .with_window(cx, |window, cx| window.right_click(("row", 0usize), cx));
     cx.run_until_parked();
     t.fixture.draw_twice(cx);
     for key in ["down", "down", "down", "down", "enter"] {

@@ -42,7 +42,6 @@ fn parses_all_flags() {
             kubeconfig: Some(PathBuf::from("kube.yml")),
             context: Some("ctx".to_owned()),
             namespace: Some(NamespaceScope::Named("team-a".to_owned())),
-            view: Vec::new(),
             filter: Some("label:app=api".to_owned()),
             select: Some("team-a/api".to_owned()),
             theme: Some(ThemePreference::Dark),
@@ -711,28 +710,6 @@ fn palette_flag_needs_a_value() {
 #[test]
 fn the_usage_lists_the_palette_flag() {
     assert!(USAGE.contains("--palette"));
-}
-
-#[test]
-fn screen_pods_multi_parses() {
-    let options = run_options(&["--screen", "pods-multi", "--view", "prod-eu, stg-b,prod-eu"]);
-    assert_eq!(options.screen, LaunchScreen::PodsMulti);
-    assert_eq!(options.screen.screen(), Screen::Pods);
-    // Spaces and a repeated context do not make a cluster twice.
-    assert_eq!(options.view, ["prod-eu", "stg-b"]);
-    assert!(options.screen.shows_pod_usage());
-}
-
-#[test]
-fn view_flag_needs_a_context_and_at_most_five() {
-    assert!(parse(&["--view", ""]).is_err());
-    assert!(parse(&["--view", " , "]).is_err());
-    assert!(parse(&["--view"]).is_err());
-    let six = "a,b,c,d,e,f";
-    let error = parse(&["--view", six]).expect_err("six contexts are too many");
-    assert_eq!(error, "at most 5 contexts for --view");
-    assert_eq!(run_options(&["--view", "a,b,c,d,e"]).view.len(), 5);
-    assert!(run_options(&[]).view.is_empty());
 }
 
 #[test]

@@ -17,6 +17,7 @@ All actions are unit structs from `gpui_kit::actions!(k8sboard, [...])` in `keym
 | ⏎ | `enter` | `OpenDrawer` | WORKSPACE | opens the drawer on the cursor row (first row when none) |
 | Esc | `escape` | `Dismiss` | WORKSPACE, TABLE | ladder in [contexts-and-focus.md](contexts-and-focus.md) |
 | Esc (in a field) | `escape` | `LeaveInput` | FIELD | focus leaves the text field |
+| Space | `space` | `NoAction` | cluster switcher (both contexts) | `space` → `NoAction` in the switcher (0046); no tick, never confirms or closes |
 | `[` / `]` | `[` / `]` | `PreviousContainer` / `NextContainer` | WORKSPACE | pod drawer: previous/next container |
 | L | `l` | `ViewLogs` | WORKSPACE | [row-actions.md](row-actions.md) |
 | Y | `y` | `ViewYaml` | WORKSPACE | drawer opens on the YAML tab |

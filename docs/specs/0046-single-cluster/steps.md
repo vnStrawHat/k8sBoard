@@ -62,6 +62,8 @@ After 0039 merges, before the queued lanes (0022 RBAC, 0044, 0029 step 5). Steps
 
 Mechanical, no behavior change: the table in [single-session.md](single-session.md) "Step 5 renames", plus test and doc-comment mentions. Gate only.
 
+Also left for this step (single-session leftovers, no behavior change): `open_clusters() -> Vec<ClusterRef>` (one entry at most, an `Option`), `viewed_health -> Vec`, and the `cluster_label` field of `shell_tab.rs`.
+
 ## Hot spots with 0034 (merged at `0a1109d`, `6662108`)
 
 | File | Site | Effect |

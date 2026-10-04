@@ -112,15 +112,14 @@ impl AppShell {
             notify(window, cx, shell_cap_text().to_owned());
             return;
         }
-        let (Some(cluster_label), Some((cluster_name, user, audit))) = (
-            self.view
-                .slot_of(cluster)
-                .map(|index| self.view.slots()[index].label.clone()),
+        let (Some(cluster_label), Some((cluster_name, user, audit, generation))) = (
+            self.slot_label(cluster),
             self.guard_for(cluster, cx).map(|guard| {
                 (
                     guard.display_name().to_owned(),
                     guard.summary.user.clone(),
                     CleanupAudit::of(&guard),
+                    guard.generation,
                 )
             }),
         ) else {
@@ -190,6 +189,7 @@ impl AppShell {
             image: chosen.image,
             namespace: Some(chosen.namespace),
             cleanup_audit: Some(audit),
+            generation,
         });
         let intent = ConnectIntent {
             cluster: cluster.clone(),

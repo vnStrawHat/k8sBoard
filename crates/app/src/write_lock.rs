@@ -17,18 +17,9 @@ use crate::settings::AppSettings;
 use crate::write_guard::{ActionRisk, WriteLock, confirm_step};
 
 impl AppShell {
-    /// The cluster Ctrl Shift R acts on: the cluster of the cursor row (which is the cluster of the
-    /// open drawer too), else the primary when there is no cursor.
-    pub(crate) fn lock_target(&self) -> Option<ClusterRef> {
-        match &self.selected {
-            Some(object) => Some(object.cluster.clone()),
-            None => self.primary_cluster(),
-        }
-    }
-
-    /// Ctrl Shift R.
-    pub(crate) fn toggle_lock_of_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(cluster) = self.lock_target() {
+    /// Ctrl Shift R: the lock of the open cluster, which holds the cursor row and the drawer too.
+    pub(crate) fn toggle_open_cluster_lock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(cluster) = self.active_cluster() {
             self.toggle_write_lock(&cluster, window, cx);
         }
     }
@@ -146,12 +137,6 @@ impl AppShell {
         let shell = cx.weak_entity();
         cx.spawn(async move |_, cx| append_in_background(&shell, config_dir, entry, cx).await)
             .detach();
-    }
-
-    /// The switcher text of a viewed cluster, for notices.
-    fn slot_label(&self, cluster: &ClusterRef) -> Option<String> {
-        let slot = self.view.slots().get(self.view.slot_of(cluster)?)?;
-        Some(slot.label.clone())
     }
 }
 

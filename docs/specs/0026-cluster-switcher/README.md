@@ -53,6 +53,8 @@ Status: amended after the advisor review (M1–M5, S1–S8, N1–N5), HEAD `9d5a
 - [x] 11. On UAT the switcher shows `readonly@Monitor` as current with `Live · {n} ms`; the probe code calls only `open` + `server_version` (`GET /version`); the 0001 read-only grep is unchanged.
 - [x] 12. Screenshot `switcher` (light, dark): no high-severity defect against W1 (ignoring 0027 parts).
 
+0027 multi view removed by 0046.
+
 ## Open items
 
 1. Exec-auth clusters are probed only on Check (decision 9); an opt-in auto-probe setting needs a user decision.

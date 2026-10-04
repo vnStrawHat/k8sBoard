@@ -772,6 +772,7 @@ impl ShellTab {
         &self.target.cluster
     }
 
+    #[cfg(test)]
     pub(crate) fn cluster_label(&self) -> &str {
         &self.cluster_label
     }

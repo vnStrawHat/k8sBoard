@@ -19,7 +19,6 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_registry::ClusterRef;
-use crate::cluster_rows::RowContext;
 use crate::cluster_session::{CompanionLists, LiveCluster};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
@@ -47,6 +46,7 @@ use crate::resource_actions::{
     kind_menu, open_url_choice, open_url_menu_item, secret_menu,
 };
 use crate::resource_kind::ResourceKind;
+use crate::row_context::RowContext;
 use crate::secret_values::{SecretValuesView, ValueAccess};
 use crate::status_tone::{StatusTone, tone_color, toned_text};
 use crate::table_selection::{ClusterObject, ResourceKey};
@@ -65,7 +65,6 @@ pub(crate) fn kind_drawer(
         kind_badge: kind.badge(),
         name: header_name(row),
         subtitle: subtitle(row, now, cx),
-        cluster: state.cluster.clone(),
         menu: kind_menu_button(kind, row, context, cx.weak_entity()),
         expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
@@ -214,7 +213,7 @@ fn kind_menu_button(
                     .live()
                     .and_then(|live| live.row_of(&key))
                     .map_or(OpenUrl::Unavailable, open_url_choice);
-                open_url_menu_item(choice, window, cx)
+                open_url_menu_item(choice, &context, window, cx)
             });
             let secret = (kind == ResourceKind::Secrets)
                 .then(|| {
@@ -228,6 +227,7 @@ fn kind_menu_button(
                         .unwrap_or(ValueAccess::Blocked);
                     secret_menu(
                         &row,
+                        &context,
                         context.object(key.clone()),
                         access,
                         &shell,

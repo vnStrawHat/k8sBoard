@@ -20,7 +20,6 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::LiveList;
-use crate::environment::{Environment, environment_badge};
 use crate::helm_release_view::{HelmReleaseView, ValuesLayout};
 use crate::history_rings::Resolution;
 use crate::monitor_data::MonitorData;
@@ -70,21 +69,11 @@ pub(crate) struct DrawerState {
     pub(crate) pending_helm_layout: Option<(ResourceKey, ValuesLayout)>,
     /// The Monitor tab: range and Table view survive a change of subject, the scope does not.
     pub(crate) monitor: MonitorState,
-    /// The cluster of the subject while several clusters are viewed; `None` in single mode.
-    /// `AppShell::sync_drawer_cluster` keeps it.
-    pub(crate) cluster: Option<DrawerCluster>,
     /// The scroll position of the body of an overview drawer, so a menu can move it.
     pub(crate) scroll: ScrollHandle,
     /// Roll back… asked for the Revisions section: the next paint of the drawer scrolls to it and
     /// clears the flag. A `Cell` because painting reads the state and never writes it.
     pub(crate) reveal_revisions: Cell<bool>,
-}
-
-/// The badge and the label that name the cluster of a drawer in multi mode.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DrawerCluster {
-    pub(crate) environment: Environment,
-    pub(crate) label: SharedString,
 }
 
 impl DrawerState {
@@ -102,7 +91,6 @@ impl DrawerState {
             helm_revision: None,
             pending_helm_layout: None,
             monitor: MonitorState::new(),
-            cluster: None,
             scroll: ScrollHandle::new(),
             reveal_revisions: Cell::new(false),
         }
@@ -382,8 +370,6 @@ pub(crate) struct DrawerHeader {
     pub(crate) kind_badge: &'static str,
     pub(crate) name: SharedString,
     pub(crate) subtitle: AnyElement,
-    /// The cluster of the subject, in multi mode.
-    pub(crate) cluster: Option<DrawerCluster>,
     /// The ⋯ button with its dropdown menu.
     pub(crate) menu: AnyElement,
     pub(crate) expand: ExpandToggle,
@@ -511,22 +497,6 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                 ),
         )
         .child(header.subtitle)
-        .children(header.cluster.map(|cluster| cluster_line(cluster, cx)))
-}
-
-/// The environment badge and the switcher text of the subject's cluster.
-fn cluster_line(cluster: DrawerCluster, cx: &App) -> impl IntoElement {
-    h_flex()
-        .gap_2()
-        .items_center()
-        .text_xs()
-        .child(environment_badge(cluster.environment, cx))
-        .child(
-            truncated_text("drawer-cluster", cluster.label)
-                .min_w_0()
-                .text_color(cx.theme().muted_foreground)
-                .font_family(cx.theme().mono_font_family.clone()),
-        )
 }
 
 /// The ⋯ button; the caller attaches the dropdown menu to it.

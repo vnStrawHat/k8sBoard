@@ -75,25 +75,3 @@ fn change_local_port_takes_1_to_65535() {
         );
     }
 }
-
-#[test]
-fn the_chosen_cluster_is_the_selected_row_even_when_labels_repeat() {
-    let entry = |context: &str, environment| FormCluster {
-        cluster: ClusterRef {
-            kubeconfig: std::path::PathBuf::from("a.yaml"),
-            context: context.to_owned(),
-        },
-        // The same switcher text for two different clusters.
-        label: "payments".to_owned(),
-        environment,
-    };
-    let clusters = vec![
-        entry("stg-payments", Environment::Staging),
-        entry("prod-payments", Environment::Production),
-    ];
-    let second = cluster_at(&clusters, Some(IndexPath::default().row(1))).expect("a cluster");
-    assert_eq!(second.cluster.context, "prod-payments");
-    assert_eq!(second.environment, Environment::Production);
-    assert!(cluster_at(&clusters, Some(IndexPath::default().row(2))).is_none());
-    assert!(cluster_at(&clusters, None).is_none());
-}

@@ -6,7 +6,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _, StyledExt as _};
 use gpui_kit::{App, Hsla, IntoElement, ParentElement as _, Styled as _};
 use serde::{Deserialize, Serialize};
 
-/// Ordered by risk, lowest first, so the riskiest of several clusters is `max()`.
+/// Ordered by risk, lowest first, so the riskiest of several name matches is `max()`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Environment {

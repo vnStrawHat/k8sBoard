@@ -4,19 +4,15 @@
 
 use gpui_kit::Action;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    KeyBinding, ParentElement as _, Pixels, SharedString, StatefulInteractiveElement as _,
-    Styled as _, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    KeyBinding, NoAction, ParentElement as _, Pixels, StatefulInteractiveElement as _, Styled as _,
+    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::AppShell;
@@ -24,10 +20,7 @@ use crate::cluster_health::{HealthBoard, RowHealth};
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::WatchSubscription;
 use crate::cluster_session::latency_millis;
-use crate::cluster_switcher_rows::{
-    HighlightStep, SwitcherRow, SwitcherSection, SwitcherSegment, toggle_tick,
-};
-use crate::cluster_view::TooManyClusters;
+use crate::cluster_switcher_rows::{HighlightStep, SwitcherRow, SwitcherSection, SwitcherSegment};
 use crate::environment::environment_badge;
 use crate::settings_window::{ManageClusters, OpenSettings};
 use crate::status_tone::{StatusTone, tone_color};
@@ -49,7 +42,6 @@ gpui_kit::actions!(
         SwitcherPrevious,
         SwitcherConfirm,
         CloseClusterSwitcher,
-        ToggleClusterTick,
     ]
 );
 
@@ -61,11 +53,11 @@ const SWITCHER_CONTEXT: &str = "ClusterSwitcher";
 /// The context the `Ctrl n` hints are looked up in: the shell root holds the chords.
 const SHELL_CONTEXT: &str = "AppShell";
 
-/// The popover's own keys: the arrows move the highlight, Enter switches or applies the ticks,
-/// Space ticks the highlighted row, Escape closes. They are bound for a focused row and for the
-/// filter input. Both contexts are deeper than the kit `Popover`, which binds Escape, Enter, and
-/// Space (`space` is `Confirm`, which would close the popover), so depth decides; they are also
-/// registered after the kit's bindings, so they win over the `Input` keys at equal depth.
+/// The popover's own keys: the arrows move the highlight, Enter switches to it, Escape closes,
+/// and Space does nothing. They are bound for a focused row and for the filter input. Both
+/// contexts are deeper than the kit `Popover`, which binds Escape, Enter, and Space (`space` is
+/// `Confirm`, which would close the popover), so depth decides; they are also registered after
+/// the kit's bindings, so they win over the `Input` keys at equal depth.
 pub(crate) fn bind_keys(cx: &mut App) {
     let contexts = [SWITCHER_CONTEXT, "ClusterSwitcher > Input"];
     cx.bind_keys(contexts.into_iter().flat_map(|context| {
@@ -73,7 +65,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
             KeyBinding::new("down", SwitcherNext, Some(context)),
             KeyBinding::new("up", SwitcherPrevious, Some(context)),
             KeyBinding::new("enter", SwitcherConfirm, Some(context)),
-            KeyBinding::new("space", ToggleClusterTick, Some(context)),
+            KeyBinding::new("space", NoAction, Some(context)),
             KeyBinding::new("escape", CloseClusterSwitcher, Some(context)),
         ]
     }));
@@ -104,10 +96,6 @@ pub(crate) struct ClusterSwitcherState {
     segment: SwitcherSegment,
     /// The row Enter switches to; the first visible row on open and after every edit.
     highlight: Option<ClusterRef>,
-    /// The draft of the next view: it starts as the viewed set, and `View {n} clusters` applies it.
-    ticked: Vec<ClusterRef>,
-    /// Why the last tick was refused; it stays until the next tick change.
-    tick_notice: Option<SharedString>,
     health: HealthBoard,
     /// Dropped on close, which aborts the probes that still run.
     probes: Vec<WatchSubscription>,
@@ -120,33 +108,9 @@ impl ClusterSwitcherState {
             filter,
             segment: SwitcherSegment::All,
             highlight: None,
-            ticked: Vec::new(),
-            tick_notice: None,
             health: HealthBoard::default(),
             probes: Vec::new(),
         }
-    }
-
-    pub(crate) fn ticked(&self) -> &[ClusterRef] {
-        &self.ticked
-    }
-
-    /// Replaces the draft, for example with the viewed set when the popover opens.
-    pub(crate) fn set_ticked(&mut self, ticked: Vec<ClusterRef>) {
-        self.ticked = ticked;
-        self.tick_notice = None;
-    }
-
-    /// Ticks or unticks `cluster`; a sixth tick is refused with a notice.
-    pub(crate) fn toggle_tick(&mut self, cluster: &ClusterRef) {
-        self.tick_notice = match toggle_tick(&mut self.ticked, cluster) {
-            Ok(()) => None,
-            Err(TooManyClusters) => Some(TooManyClusters.to_string().into()),
-        };
-    }
-
-    pub(crate) fn tick_notice(&self) -> Option<&SharedString> {
-        self.tick_notice.as_ref()
     }
 
     pub(crate) fn is_open(&self) -> bool {
@@ -222,10 +186,6 @@ pub(crate) struct SwitcherContent {
     pub(crate) connected_count: usize,
     pub(crate) segment: SwitcherSegment,
     pub(crate) highlight: Option<ClusterRef>,
-    /// The ticks differ from the viewed set, so the footer offers to apply them.
-    pub(crate) has_pending_ticks: bool,
-    pub(crate) ticked_count: usize,
-    pub(crate) tick_notice: Option<SharedString>,
     pub(crate) filter: Entity<InputState>,
     pub(crate) filter_text: String,
     pub(crate) shell: WeakEntity<AppShell>,
@@ -265,7 +225,7 @@ pub(crate) fn cluster_switcher(
 }
 
 fn render_content(content: &SwitcherContent, window: &Window, cx: &App) -> AnyElement {
-    let [next, previous, confirm, close, tick] = std::array::from_fn(|_| content.shell.clone());
+    let [next, previous, confirm, close] = std::array::from_fn(|_| content.shell.clone());
     v_flex()
         .key_context(SWITCHER_CONTEXT)
         .w(SWITCHER_WIDTH)
@@ -283,16 +243,11 @@ fn render_content(content: &SwitcherContent, window: &Window, cx: &App) -> AnyEl
         .on_action(move |_: &SwitcherConfirm, _, cx| {
             let _ = confirm.update(cx, |shell, cx| shell.confirm_switcher_highlight(cx));
         })
-        .on_action(move |_: &ToggleClusterTick, _, cx| {
-            let _ = tick.update(cx, |shell, cx| shell.toggle_highlight_tick(cx));
-        })
         .on_action(move |_: &CloseClusterSwitcher, _, cx| {
             let _ = close.update(cx, |shell, cx| shell.close_cluster_switcher(cx));
         })
         .child(header(content))
         .child(list(content, window, cx))
-        .children(tick_notice_line(content.tick_notice.as_ref()))
-        .children(ticks_footer(content, window, cx))
         .child(footer(content, window, cx))
         .into_any_element()
 }
@@ -418,15 +373,6 @@ fn render_row(
     let hover_background = theme.list_hover;
     let target = row.cluster.clone();
     let shell = content.shell.clone();
-    let tick = {
-        let (shell, target) = (content.shell.clone(), row.cluster.clone());
-        // A separate sibling of the switch button, so ticking never switches.
-        Checkbox::new(("switcher-tick", index))
-            .checked(row.is_ticked)
-            .on_click(move |_: &bool, _, cx| {
-                let _ = shell.update(cx, |shell, cx| shell.toggle_cluster_tick(&target, cx));
-            })
-    };
     // A kit button: focusable with Tab, and Enter on it clicks it.
     let switch_area = Button::new(("switcher-row", index))
         .ghost()
@@ -455,7 +401,6 @@ fn render_row(
                         .truncate()
                         .text_left()
                         .font_family(theme.mono_font_family.clone())
-                        .when(row.is_primary, |label| label.font_bold())
                         .child(row.label.clone()),
                 )
                 .child(
@@ -478,7 +423,6 @@ fn render_row(
         .when(row.is_active, |this| this.bg(theme.accent))
         .when(is_highlighted, |this| this.bg(hover_background))
         .hover(move |style| style.bg(hover_background))
-        .child(tick)
         .child(switch_area)
         .child(row_action(index, row, content, window))
         .into_any_element()
@@ -522,80 +466,6 @@ fn row_action(
         .children(probe)
         .children(hint)
         .into_any_element()
-}
-
-/// Why the last tick was refused. It shows whether or not the footer does: a full view that
-/// refuses a sixth tick has nothing to apply, so no footer, and the user still needs the reason.
-fn tick_notice_line(notice: Option<&SharedString>) -> Option<AnyElement> {
-    let notice = notice?.clone();
-    Some(
-        Alert::warning("switcher-tick-notice", notice)
-            .small()
-            .into_any_element(),
-    )
-}
-
-/// `{n} selected`, Clear, and `View {n} clusters ⏎`; shown only while the ticks differ from the
-/// viewed set, so there is no footer when applying would change nothing.
-fn ticks_footer(content: &SwitcherContent, window: &Window, cx: &App) -> Option<AnyElement> {
-    if !content.has_pending_ticks {
-        return None;
-    }
-    let theme = cx.theme();
-    let count = content.ticked_count;
-    let apply_label = if count == 1 {
-        "View 1 cluster".to_owned()
-    } else {
-        format!("View {count} clusters")
-    };
-    let (clear_shell, apply_shell) = (content.shell.clone(), content.shell.clone());
-    let hint = Kbd::binding_for_action(&SwitcherConfirm, Some(SWITCHER_CONTEXT), window);
-    Some(
-        v_flex()
-            .gap_1()
-            .pt_2()
-            .border_t_1()
-            .border_color(theme.border)
-            .child(
-                h_flex()
-                    .justify_between()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_semibold()
-                            .child(format!("{count} selected")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                Button::new("switcher-clear")
-                                    .ghost()
-                                    .small()
-                                    .label("Clear")
-                                    .on_click(move |_, _, cx| {
-                                        let _ = clear_shell
-                                            .update(cx, |shell, cx| shell.clear_switcher_ticks(cx));
-                                    }),
-                            )
-                            .child(
-                                Button::new("switcher-apply")
-                                    .primary()
-                                    .small()
-                                    .label(apply_label)
-                                    .disabled(count == 0)
-                                    .on_click(move |_, _, cx| {
-                                        let _ = apply_shell
-                                            .update(cx, |shell, cx| shell.apply_switcher_ticks(cx));
-                                    }),
-                            )
-                            .children(hint),
-                    ),
-            )
-            .into_any_element(),
-    )
 }
 
 fn footer(content: &SwitcherContent, window: &Window, cx: &App) -> AnyElement {
@@ -669,14 +539,6 @@ mod tests {
         assert_eq!(health_text(RowHealth::NotChecked), "Not checked");
         assert_eq!(health_text(RowHealth::Connecting), "Connecting…");
         assert_eq!(health_text(RowHealth::Interrupted), "Interrupted");
-    }
-
-    #[test]
-    fn the_notice_line_needs_only_a_notice() {
-        // Not the footer: a full view that refuses a sixth tick has nothing to apply.
-        let notice = SharedString::from("View at most 5 clusters at once.");
-        assert!(tick_notice_line(Some(&notice)).is_some());
-        assert!(tick_notice_line(None).is_none());
     }
 
     #[test]

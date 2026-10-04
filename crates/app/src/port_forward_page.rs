@@ -20,8 +20,8 @@ use super::AppShell;
 use super::port_forward_dialogs::NewForwardPrefill;
 use super::port_forward_open::target_key;
 use crate::drawer::{
-    DrawerBody, DrawerCluster, DrawerHeader, absent_text, drawer_frame, expand_toggle, menu_button,
-    section_title, truncated_text, truncated_text_with_tooltip, wide_detail_row,
+    DrawerBody, DrawerHeader, absent_text, drawer_frame, expand_toggle, menu_button, section_title,
+    truncated_text, truncated_text_with_tooltip, wide_detail_row,
 };
 use crate::environment::environment_badge;
 use crate::port_forwards::{Forward, ForwardId, ForwardState, byte_count_text};
@@ -68,14 +68,14 @@ impl AppShell {
 
     /// `+ New forward` and `Stop all`, right-aligned in the header.
     pub(super) fn port_forward_header_buttons(&self, cx: &Context<Self>) -> Vec<AnyElement> {
-        let has_cluster = self.primary_cluster().is_some();
+        let has_cluster = self.active_cluster().is_some();
         let new = Button::new("forward-new")
             .label("+ New forward")
             .small()
             .outline()
             .disabled(!has_cluster)
             .on_click(cx.listener(|shell, _, window, cx| {
-                let Some(cluster) = shell.primary_cluster() else {
+                let Some(cluster) = shell.active_cluster() else {
                     return;
                 };
                 let namespace = shell.tool_namespace(cx).unwrap_or_default();
@@ -313,7 +313,6 @@ impl AppShell {
                         .child(format!("· {}", meta.join(" · "))),
                 )
                 .into_any_element(),
-            cluster: None::<DrawerCluster>,
             menu: self.forward_menu_button(id, cx.weak_entity()),
             expand: expand_toggle(&self.drawer, cx),
             on_close: Rc::new(cx.listener(|shell, _, _, cx| {
@@ -399,7 +398,7 @@ impl AppShell {
 
     fn menu_snapshot(&self, id: ForwardId, cx: &App) -> Option<MenuSnapshot> {
         let forward = self.port_forwards.read(cx).get(id)?;
-        let viewed = self.view.slot_of(&forward.cluster).is_some();
+        let viewed = self.slot_session(&forward.cluster).is_some();
         Some(MenuSnapshot {
             is_running: forward.state.is_running(),
             is_preset: forward.is_preset,

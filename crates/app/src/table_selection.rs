@@ -3,7 +3,6 @@ use gpui_kit::{App, WeakEntity};
 
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_registry::ClusterRef;
-use crate::cluster_rows::RowAddress;
 use crate::cluster_session::LiveList;
 use crate::kind_row::KindRow;
 use crate::resource_kind::ResourceKind;
@@ -147,28 +146,24 @@ pub(crate) fn list_item_index<T>(
     Some(list.items().iter().position(is_target))
 }
 
-/// The table row of the selected item in `list`, the list of slot `slot`, searched in the rows
-/// `view` shows. `addresses` maps the merged items of the view to slots and list items. `None`
-/// while the list is loading, so the selection waits for the first snapshot; otherwise
-/// `Some(found)`. A failed list has no rows, and a filter can hide the item, so the selection
-/// is dropped like a missing row (a denied kind reached through a reveal).
+/// The table row of the selected item in `list`, searched in the rows `view` shows. `None` while
+/// the list is loading, so the selection waits for the first snapshot; otherwise `Some(found)`. A
+/// failed list has no rows, and a filter can hide the item, so the selection is dropped like a
+/// missing row (a denied kind reached through a reveal).
 pub(crate) fn list_row_index<T>(
     list: &LiveList<T>,
     view: &TableView,
-    addresses: &[RowAddress],
-    slot: usize,
     is_selected: impl Fn(&T) -> bool,
 ) -> Option<Option<usize>> {
     if list.is_loading() {
         return None;
     }
     let items = list.items();
-    Some(view.rows().iter().position(|&merged| {
-        addresses.get(merged).is_some_and(|address| {
-            usize::from(address.slot) == slot
-                && items.get(address.item as usize).is_some_and(&is_selected)
-        })
-    }))
+    Some(
+        view.rows()
+            .iter()
+            .position(|&item| items.get(item).is_some_and(&is_selected)),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

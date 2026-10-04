@@ -11,19 +11,17 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
-use crate::cluster_rows::{Clustered, RowAddress, SlotSession, merge_slot_rows};
 use crate::dock::Dock;
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::PodUsageHistory;
 use crate::port_forward_menu::{ForwardMenu, pod_subject};
 use crate::resource_actions::{LogsMenu, PodMenuItems, PodMenuLinks, ShellMenu, pod_menu};
 use crate::resource_kind::{Align, KindColumn, column};
+use crate::row_context::TableSession;
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, pod_status_label, toned_text};
 use crate::table_filter::FilterPreset;
-use crate::table_layout::{
-    ColumnPlan, TableLayout, clickable_row, cluster_cell, header_cell, select_cell,
-};
+use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 use crate::usage_format::Measure;
@@ -53,12 +51,10 @@ const POD_COLUMNS: [KindColumn; 8] = [
 
 /// Rows come straight from the sessions, so the table never owns a copy of the pods.
 pub(crate) struct PodTableDelegate {
-    /// One per viewed cluster, in slot order; empty before the first session.
-    sessions: Vec<SlotSession>,
-    /// Where each merged item came from, as of the last rebuild.
-    addresses: Vec<RowAddress>,
+    /// The open cluster's session; `None` before the first one.
+    session: Option<TableSession>,
     /// Every shown row is ticked: read by the header checkbox, computed with the rows (a rebuild or
-    /// a tick) so a frame never merges the rows again.
+    /// a tick) so a frame never reads the rows again.
     all_checked: bool,
     dock: WeakEntity<Dock>,
     /// The row menu's "View YAML" opens the drawer through the shell.
@@ -67,18 +63,11 @@ pub(crate) struct PodTableDelegate {
     view: TableView,
 }
 
-/// The logical columns; several viewed clusters add the Cluster column.
-fn pod_plan(is_multi: bool) -> ColumnPlan {
-    let plan = ColumnPlan {
+fn pod_plan() -> ColumnPlan {
+    ColumnPlan {
         specs: POD_COLUMNS.to_vec(),
         flexible: NAME,
         flexible_min: NAME_MIN_WIDTH,
-        session_column: None,
-    };
-    if is_multi {
-        plan.with_cluster_column()
-    } else {
-        plan
     }
 }
 
@@ -88,14 +77,13 @@ impl PodTableDelegate {
         shell: WeakEntity<AppShell>,
         saved: Option<&TablePrefs>,
     ) -> Self {
-        let plan = pod_plan(false);
+        let plan = pod_plan();
         let mut view = pods_view();
         if let Some(saved) = saved {
             view.apply_prefs(saved, &plan);
         }
         Self {
-            sessions: Vec::new(),
-            addresses: Vec::new(),
+            session: None,
             all_checked: false,
             dock,
             shell,
@@ -110,25 +98,18 @@ impl PodTableDelegate {
         self.layout.fit_width(table_width, &self.view.hidden)
     }
 
-    /// The sessions the rows come from, one per viewed cluster. Two or more add the Cluster
-    /// column; leaving that mode forgets what the user did to it. The caller refreshes the table.
-    pub(crate) fn set_sessions(&mut self, sessions: Vec<SlotSession>) {
-        let was_multi = self.is_multi();
-        self.sessions = sessions;
-        self.addresses.clear();
-        let is_multi = self.is_multi();
-        if was_multi == is_multi {
-            return;
+    /// The session the rows come from. A tick belongs to the session it was made on: any change of
+    /// the session entity, also to and from none, clears the ticks and the range anchor, so a
+    /// same-named row of another cluster never inherits one. The caller refreshes the table.
+    pub(crate) fn set_session(&mut self, session: Option<TableSession>) {
+        let id = |session: &Option<TableSession>| {
+            session.as_ref().map(|session| session.session.entity_id())
+        };
+        if id(&self.session) != id(&session) {
+            self.view.clear_checked();
+            self.all_checked = false;
         }
-        if let Some(column) = self.layout.plan.session_column {
-            self.view.drop_column(column);
-        }
-        self.layout
-            .replace_plan(pod_plan(is_multi), &self.view.hidden);
-    }
-
-    fn is_multi(&self) -> bool {
-        self.sessions.len() >= 2
+        self.session = session;
     }
 
     /// Whether every shown row is ticked, as of the last rebuild or tick.
@@ -137,60 +118,46 @@ impl PodTableDelegate {
         self.all_checked
     }
 
-    /// The ticked pods in display order, each in its own cluster: what a bulk Delete covers.
+    /// The ticked pods in display order, in the open cluster: what a bulk Delete covers.
     pub(crate) fn checked_objects(&self, cx: &App) -> Vec<ClusterObject> {
+        let Some(session) = &self.session else {
+            return Vec::new();
+        };
         if self.view.checked_count() == 0 {
             return Vec::new();
         }
-        let rows = self.slot_rows(cx);
-        let (merged, addresses) = merge_slot_rows(&self.sessions, &rows, POD_COLUMNS.len());
+        let rows = self.rows(cx);
         self.view
-            .checked_rows(&merged)
+            .checked_rows(&rows)
             .into_iter()
-            .filter_map(|index| {
-                let address = addresses.get(index)?;
-                let slot = self.sessions.get(usize::from(address.slot))?;
-                let row = rows
-                    .get(usize::from(address.slot))?
-                    .get(address.item as usize)?;
-                Some(ClusterObject::new(
-                    slot.cluster.clone(),
-                    ResourceKey::of_pod(row.pod),
-                ))
-            })
+            .filter_map(|index| rows.get(index))
+            .map(|row| ClusterObject::new(session.cluster.clone(), ResourceKey::of_pod(row.pod)))
             .collect()
     }
 
-    /// The logical index of the Cluster column while several clusters are viewed.
-    pub(crate) fn cluster_column(&self) -> Option<usize> {
-        self.layout.plan.session_column
+    /// The pods of the open cluster with their newest usage, so item indices still index the
+    /// session list.
+    fn rows<'a>(&self, cx: &'a App) -> Vec<PodRow<'a>> {
+        let live = self
+            .session
+            .as_ref()
+            .and_then(|session| session.session.read(cx).live());
+        let pods = live.map_or(&[][..], |live| live.pods.items());
+        pod_rows(pods, live.map(|live| &live.metrics.pods.history))
     }
 
-    /// The pods of every slot with their newest usage, in session order, so item indices still
-    /// index the session lists.
-    fn slot_rows<'a>(&self, cx: &'a App) -> Vec<Vec<PodRow<'a>>> {
-        self.sessions
-            .iter()
-            .map(|slot| {
-                let live = slot.session.read(cx).live();
-                let pods = live.map_or(&[][..], |live| live.pods.items());
-                pod_rows(pods, live.map(|live| &live.metrics.pods.history))
-            })
-            .collect()
-    }
-
-    /// The pod shown at table row `row_ix`, and the slot it belongs to.
-    fn pod_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<(&SlotSession, &'a PodSummary)> {
-        let address = self.addresses.get(self.view.item_index(row_ix)?)?;
-        let slot = self.sessions.get(usize::from(address.slot))?;
-        let live = slot.session.read(cx).live()?;
-        Some((slot, live.pods.items().get(address.item as usize)?))
+    /// The pod shown at table row `row_ix`, and the session it belongs to.
+    fn pod_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<(&TableSession, &'a PodSummary)> {
+        let session = self.session.as_ref()?;
+        let live = session.session.read(cx).live()?;
+        let item = self.view.item_index(row_ix)?;
+        Some((session, live.pods.items().get(item)?))
     }
 
     fn scope_label(&self, cx: &App) -> String {
-        self.sessions
-            .iter()
-            .find_map(|slot| slot.session.read(cx).live())
+        self.session
+            .as_ref()
+            .and_then(|session| session.session.read(cx).live())
             .map_or_else(String::new, |live| live.scope_label())
     }
 }
@@ -289,27 +256,17 @@ impl FilteredTable for PodTableDelegate {
     }
 
     fn check_rows(&mut self, change: RowCheck, cx: &App) {
-        let rows = self.slot_rows(cx);
-        let (merged, _) = merge_slot_rows(&self.sessions, &rows, POD_COLUMNS.len());
-        self.view.apply_check(&merged, change);
-        self.all_checked = self.view.all_checked(&merged);
+        let rows = self.rows(cx);
+        self.view.apply_check(&rows, change);
+        self.all_checked = self.view.all_checked(&rows);
     }
 
     fn rebuild_view(&mut self, cx: &App) -> bool {
-        let rows = self.slot_rows(cx);
-        let (merged, addresses) = merge_slot_rows(&self.sessions, &rows, POD_COLUMNS.len());
-        self.view.rebuild(
-            &merged,
-            self.layout.plan.specs.len(),
-            jiff::Timestamp::now(),
-        );
-        self.all_checked = self.view.all_checked(&merged);
-        self.addresses = addresses;
+        let rows = self.rows(cx);
+        self.view
+            .rebuild(&rows, self.layout.plan.specs.len(), jiff::Timestamp::now());
+        self.all_checked = self.view.all_checked(&rows);
         self.layout.relayout(&self.view.hidden)
-    }
-
-    fn addresses(&self) -> &[RowAddress] {
-        &self.addresses
     }
 }
 
@@ -365,26 +322,17 @@ impl TableDelegate for PodTableDelegate {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         if self.layout.columns.is_select(col_ix) {
-            let is_checked = self.pod_at(row_ix, cx).is_some_and(|(slot, pod)| {
-                let row = PodRow { pod, usage: None };
-                self.view.is_checked(&Clustered {
-                    cluster: &slot.cluster,
-                    label: &slot.label,
-                    column: POD_COLUMNS.len(),
-                    item: &row,
-                })
-            });
+            let is_checked = self
+                .pod_at(row_ix, cx)
+                .is_some_and(|(_, pod)| self.view.is_checked(&PodRow { pod, usage: None }));
             return select_cell(row_ix, is_checked, &self.shell);
         }
-        let (Some((slot, pod)), Some(logical)) =
+        let (Some((session, pod)), Some(logical)) =
             (self.pod_at(row_ix, cx), self.layout.columns.logical(col_ix))
         else {
             return div().into_any_element();
         };
         let mono = cx.theme().mono_font_family.clone();
-        if self.layout.plan.session_column == Some(logical) {
-            return cluster_cell(slot.environment, &slot.label, cx);
-        }
         match logical {
             NAME => name_cell(pod, mono, cx),
             STATUS => toned_text(pod_status_label(pod), cx).into_any_element(),
@@ -400,7 +348,7 @@ impl TableDelegate for PodTableDelegate {
                 .into_any_element(),
             CPU | MEMORY => {
                 let usage =
-                    slot.session.read(cx).live().and_then(|live| {
+                    session.session.read(cx).live().and_then(|live| {
                         live.metrics.pods.history.latest(&pod.namespace, &pod.name)
                     });
                 let text = usage.map(|usage| match logical {
@@ -433,19 +381,19 @@ impl TableDelegate for PodTableDelegate {
     ) -> PopupMenu {
         // The submenus are built from the app, so they are made before the session is borrowed.
         let prepared = {
-            let Some((slot, pod)) = self.pod_at(row_ix, cx) else {
+            let Some((open, pod)) = self.pod_at(row_ix, cx) else {
                 return menu;
             };
-            let session = slot.session.read(cx);
+            let session = open.session.read(cx);
             let (Some(live), Some(guard)) = (session.live(), session.guard(cx)) else {
                 return menu;
             };
             (
-                slot.row_context(cx),
+                open.row_context(cx),
                 LogsMenu::of(pod, &live.access),
                 live.connection().clone(),
                 ShellMenu::of(pod, &guard),
-                ForwardMenu::of(pod_subject(pod), &slot.cluster, &guard),
+                ForwardMenu::of(pod_subject(pod), &open.cluster, &guard),
             )
         };
         let (row, logs_menu, connection, shell_menu, forward_menu) = prepared;
@@ -456,10 +404,10 @@ impl TableDelegate for PodTableDelegate {
             debug_container: shell_items.debug_container,
             port_forward: forward_menu.item(&self.shell, window, cx),
         };
-        let Some((slot, pod)) = self.pod_at(row_ix, cx) else {
+        let Some((open, pod)) = self.pod_at(row_ix, cx) else {
             return menu;
         };
-        let session = slot.session.read(cx);
+        let session = open.session.read(cx);
         let (Some(_), Some(guard)) = (session.live(), session.guard(cx)) else {
             return menu;
         };
@@ -485,14 +433,12 @@ impl TableDelegate for PodTableDelegate {
         filtered_empty_state(&self.view, empty, "pods", &self.shell, cx)
     }
 
-    /// Loading while every slot that is live still waits for its first list.
+    /// Loading while the session is live and still waits for its first list.
     fn loading(&self, cx: &App) -> bool {
-        let mut live = self
-            .sessions
-            .iter()
-            .filter_map(|slot| slot.session.read(cx).live())
-            .peekable();
-        live.peek().is_some() && live.all(|live| live.pods.is_loading())
+        self.session
+            .as_ref()
+            .and_then(|session| session.session.read(cx).live())
+            .is_some_and(|live| live.pods.is_loading())
     }
 }
 

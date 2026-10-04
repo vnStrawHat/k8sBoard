@@ -10,8 +10,6 @@ use gpui_kit::SharedString;
 use gpui_kit::component::table::TableDelegate;
 
 use crate::app_shell::Screen;
-use crate::cluster_registry::ClusterRef;
-use crate::cluster_rows::RowAddress;
 use crate::resource_kind::ResourceKind;
 use crate::settings::{SavedSort, TablePrefs};
 use crate::status_tone::StatusTone;
@@ -31,11 +29,6 @@ pub(crate) trait TableRow {
     /// Whether the row passes the screen's own switch. A switch the screen does not have
     /// keeps every row.
     fn in_preset(&self, preset: &FilterPreset) -> bool;
-    /// The cluster the row belongs to when several clusters share the table: `(namespace, name)`
-    /// is unique only within one cluster.
-    fn cluster(&self) -> Option<&ClusterRef> {
-        None
-    }
 }
 
 /// One cell as the filter and the sort read it.
@@ -74,9 +67,6 @@ pub(crate) trait FilteredTable: TableDelegate {
     fn rebuild_view(&mut self, cx: &App) -> bool;
     /// Ticks or unticks rows of the view, reading the session items for their identity.
     fn check_rows(&mut self, change: RowCheck, cx: &App);
-    /// Where each item of the view came from, as of the last rebuild: the merged index is the
-    /// item index of `TableView::rows`.
-    fn addresses(&self) -> &[RowAddress];
 }
 
 /// Filter, sort, and hidden columns of one table, and the item indices they produce.
@@ -97,11 +87,10 @@ pub(crate) struct TableView {
     total: usize,
 }
 
-/// A row's identity within one table: `(cluster, namespace, name)` is unique there. The cluster is
-/// that of the row, so the same name in two clusters is two rows.
+/// A row's identity within one table: `(namespace, name)` is unique in the one open cluster. A
+/// switch clears every tick, so a name never carries over to another cluster.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct RowName {
-    cluster: Option<ClusterRef>,
     namespace: Option<String>,
     name: String,
 }
@@ -109,7 +98,6 @@ struct RowName {
 impl RowName {
     fn of<T: TableRow>(row: &T) -> Self {
         Self {
-            cluster: row.cluster().cloned(),
             namespace: row.namespace().map(str::to_owned),
             name: row.name().to_owned(),
         }
@@ -178,13 +166,7 @@ impl TableView {
 
     /// The sort and the hidden columns by column name, in logical order.
     pub(crate) fn prefs(&self, plan: &ColumnPlan) -> TablePrefs {
-        // The Cluster column exists only while several clusters are viewed, so no pref names it.
-        let name_of = |column: usize| {
-            if plan.session_column == Some(column) {
-                return None;
-            }
-            plan.specs.get(column).map(|spec| spec.name.to_owned())
-        };
+        let name_of = |column: usize| plan.specs.get(column).map(|spec| spec.name.to_owned());
         TablePrefs {
             sort: self.sort.and_then(|sort| {
                 Some(SavedSort {
@@ -197,14 +179,6 @@ impl TableView {
                 .iter()
                 .filter_map(|&column| name_of(column))
                 .collect(),
-        }
-    }
-
-    /// Forgets the hidden state and the sort of `column`, which stopped existing.
-    pub(crate) fn drop_column(&mut self, column: usize) {
-        self.hidden.remove(&column);
-        if self.sort.is_some_and(|sort| sort.column == column) {
-            self.sort = None;
         }
     }
 
@@ -247,21 +221,16 @@ impl TableView {
             return;
         }
         // Borrowed keys: nothing is allocated per row.
-        let visible: HashSet<(Option<&ClusterRef>, Option<&str>, &str)> = self
+        let visible: HashSet<(Option<&str>, &str)> = self
             .rows
             .iter()
             .map(|&index| {
                 let row = &items[index];
-                (row.cluster(), row.namespace(), row.name())
+                (row.namespace(), row.name())
             })
             .collect();
-        let is_visible = |name: &RowName| {
-            visible.contains(&(
-                name.cluster.as_ref(),
-                name.namespace.as_deref(),
-                name.name.as_str(),
-            ))
-        };
+        let is_visible =
+            |name: &RowName| visible.contains(&(name.namespace.as_deref(), name.name.as_str()));
         self.checked.retain(is_visible);
         if self
             .anchor

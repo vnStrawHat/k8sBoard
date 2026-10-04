@@ -132,8 +132,6 @@ fn cluster_row(context: &str, label: &str, shortcut: u8, is_active: bool) -> Swi
         failure: None,
         shortcut: Some(shortcut),
         is_active,
-        is_primary: is_active,
-        is_ticked: false,
         search_text: format!("{label}\n{context}\nstg\nconfig").to_lowercase(),
     }
 }
@@ -182,10 +180,8 @@ impl World {
             cursor,
             has_dock_tabs: false,
             include_resources: true,
-            sessions: vec![PaletteSession {
+            session: Some(PaletteSession {
                 cluster: test_cluster(),
-                label: None,
-                is_primary: true,
                 scope: &self.scope,
                 guard: &self.guard,
                 namespaces: &self.namespaces,
@@ -196,7 +192,7 @@ impl World {
                     .as_ref()
                     .map(|(kind, rows)| (*kind, rows.as_slice())),
                 replica_sets: self.replica_sets.as_deref(),
-            }],
+            }),
             clusters: &self.sections,
         }
     }
@@ -414,7 +410,7 @@ fn no_session_lists_commands_and_screens_only() {
     let world = World::new();
     let cursor = pod_key("payments-api-0");
     let mut input = world.input(Screen::Pods, Some(&cursor));
-    input.sessions.clear();
+    input.session = None;
     let all = palette_entries(&input);
     assert!(all.iter().all(|entry| matches!(
         entry.target,

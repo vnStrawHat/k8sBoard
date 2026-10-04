@@ -398,7 +398,6 @@ fn plan() -> ColumnPlan {
         ],
         flexible: 0,
         flexible_min: gpui_kit::px(100.),
-        session_column: None,
     }
 }
 

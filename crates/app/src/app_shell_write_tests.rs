@@ -1,6 +1,7 @@
-//! The write flow, the lock, and the confirm dialog in a headless window over two viewed clusters:
-//! `prod-a` (the primary, locked at open) and `stg-b` (unlocked). Each cluster answers from its own
-//! fake API server, so a test sees which cluster a request reached and nothing leaves the machine.
+//! The write flow, the lock, and the confirm dialog in a headless window over two loaded clusters,
+//! one active at a time: the fixture starts on `prod-a` (locked at open), switches to `stg-b`
+//! (unlocked), and makes it live. `activate` switches to the other one over a fresh fake API
+//! server, so a test sees which cluster a request reached and nothing leaves the machine.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -11,6 +12,7 @@ use cluster::{
     NodeStatus, NodeSummary, NodeSystemInfo, WritePolicy,
 };
 use gpui_kit::InputEvent as _;
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Entity, KeyDownEvent, Keystroke, TestAppContext};
 
 use super::app_shell_switch_tests::{SwitchFixture, open_switch_fixture};
@@ -72,7 +74,7 @@ pub(super) fn writes(api: &FakeApi) -> Vec<RecordedRequest> {
 
 pub(super) struct Clusters {
     pub(super) fixture: SwitchFixture,
-    pub(super) prod_api: FakeApi,
+    /// The fake server of `stg-b`, the cluster the fixture ends on.
     pub(super) stg_api: FakeApi,
     pub(super) prod: ClusterRef,
     pub(super) stg: ClusterRef,
@@ -89,14 +91,9 @@ pub(super) fn slot_session(
         .expect("a viewed slot")
 }
 
-pub(super) fn view(fixture: &SwitchFixture, contexts: &[&str], cx: &mut TestAppContext) {
-    let wanted: Vec<ClusterRef> = contexts
-        .iter()
-        .map(|context| fixture.cluster(context, cx))
-        .collect();
-    fixture
-        .shell
-        .update(cx, |shell, cx| shell.view_clusters(&wanted, cx));
+/// Switches to `context`: the old session is released and the new one is connecting.
+pub(super) fn switch_to(fixture: &SwitchFixture, context: &str, cx: &mut TestAppContext) {
+    fixture.switch(context, cx);
     cx.run_until_parked();
 }
 
@@ -144,11 +141,11 @@ pub(super) fn go_live_answering(
     api
 }
 
+/// Both clusters loaded, started on `prod-a`, switched to `stg-b`, which goes live on Nodes.
 pub(super) fn two_clusters(name: &str, cx: &mut TestAppContext) -> Clusters {
     let fixture = open_switch_fixture(name, cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
-    let prod_api = go_live_fake(&fixture, &prod, "node-a", cx);
     let stg_api = go_live_fake(&fixture, &stg, "node-b", cx);
     fixture
         .shell
@@ -157,7 +154,6 @@ pub(super) fn two_clusters(name: &str, cx: &mut TestAppContext) -> Clusters {
     fixture.draw_twice(cx);
     Clusters {
         fixture,
-        prod_api,
         stg_api,
         prod,
         stg,
@@ -165,6 +161,34 @@ pub(super) fn two_clusters(name: &str, cx: &mut TestAppContext) -> Clusters {
 }
 
 impl Clusters {
+    /// Switches to `cluster` and makes it live over a new fake server that answers with `respond`.
+    /// The old session is gone, so a test never has both clusters live at once.
+    pub(super) fn activate_answering(
+        &self,
+        cluster: &ClusterRef,
+        node_name: &str,
+        respond: impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + 'static,
+        cx: &mut TestAppContext,
+    ) -> FakeApi {
+        self.fixture
+            .shell
+            .update(cx, |shell, cx| shell.switch_cluster(cluster, cx));
+        cx.run_until_parked();
+        let api = go_live_answering(&self.fixture, cluster, node_name, respond, cx);
+        self.fixture.draw_twice(cx);
+        api
+    }
+
+    /// `activate_answering` over the default server, which accepts patches.
+    pub(super) fn activate(
+        &self,
+        cluster: &ClusterRef,
+        node_name: &str,
+        cx: &mut TestAppContext,
+    ) -> FakeApi {
+        self.activate_answering(cluster, node_name, accept_patches, cx)
+    }
+
     pub(super) fn lock_of(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> WriteLock {
         slot_session(&self.fixture, cluster, cx).read_with(cx, |session, _| session.lock())
     }
@@ -308,13 +332,11 @@ fn press_key_event(clusters: &Clusters, event: KeyDownEvent, cx: &mut TestAppCon
 #[gpui_kit::test]
 fn cordon_on_a_staging_row_uses_that_clusters_connection_guard_and_tier(cx: &mut TestAppContext) {
     let t = two_clusters("cordon-stg", cx);
-    // The primary is `prod-a`: locked, and typing its name would confirm there.
-    assert_eq!(t.lock_of(&t.prod, cx), WriteLock::Locked);
     assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Unlocked);
     let stg_generation = t.generation_of(&t.stg, cx);
     t.cordon(&t.stg, "node-b", cx);
     let dialog = t.dialog(cx);
-    // The guard and the tier are stg-b's own: a click on STG, never the primary's typed name.
+    // The guard and the tier are stg-b's own: a click on STG, never prod-a's typed name.
     dialog.read_with(cx, |dialog, _| {
         assert_eq!(*dialog.tier(), DialogConfirm::Click);
         assert_eq!(dialog.environment(), Environment::Staging);
@@ -332,22 +354,22 @@ fn cordon_on_a_staging_row_uses_that_clusters_connection_guard_and_tier(cx: &mut
     let sent = writes(&t.stg_api);
     assert!(!sent[1].has_query_key("dryRun"));
     assert!(sent[1].has_query("fieldManager", "k8sboard"));
-    // Nothing reached the primary.
-    assert!(writes(&t.prod_api).is_empty(), "{:?}", writes(&t.prod_api));
 }
 
 #[gpui_kit::test]
 fn cordon_on_a_locked_production_row_opens_no_dialog(cx: &mut TestAppContext) {
     let t = two_clusters("cordon-locked", cx);
+    let prod_api = t.activate(&t.prod, "node-a", cx);
     t.cordon(&t.prod, "node-a", cx);
     assert!(!t.has_dialog(cx));
-    assert!(writes(&t.prod_api).is_empty());
+    assert!(writes(&prod_api).is_empty());
     assert!(writes(&t.stg_api).is_empty());
 }
 
 #[gpui_kit::test]
 fn type_name_tier_needs_the_match(cx: &mut TestAppContext) {
     let t = two_clusters("cordon-prod", cx);
+    let prod_api = t.activate(&t.prod, "node-a", cx);
     t.set_lock(&t.prod, WriteLock::Unlocked, cx);
     t.cordon(&t.prod, "node-a", cx);
     let dialog = t.dialog(cx);
@@ -365,15 +387,15 @@ fn type_name_tier_needs_the_match(cx: &mut TestAppContext) {
     // A press without the name sends nothing.
     t.confirm(cx);
     cx.run_until_parked();
-    assert_eq!(writes(&t.prod_api).len(), 1);
+    assert_eq!(writes(&prod_api).len(), 1);
     t.type_name("prod-b", cx);
     t.confirm(cx);
     cx.run_until_parked();
-    assert_eq!(writes(&t.prod_api).len(), 1);
+    assert_eq!(writes(&prod_api).len(), 1);
     t.type_name("  prod-a ", cx);
     assert!(t.block(cx).is_none());
     t.confirm(cx);
-    t.wait_for("the commit", cx, |_| writes(&t.prod_api).len() == 2);
+    t.wait_for("the commit", cx, |_| writes(&prod_api).len() == 2);
     assert!(writes(&t.stg_api).is_empty());
 }
 
@@ -397,7 +419,7 @@ fn checked_write_runs_commit_block_before_commit(cx: &mut TestAppContext) {
     let t = two_clusters("leaves-view", cx);
     t.cordon(&t.stg, "node-b", cx);
     t.wait_for_dry_run(cx);
-    view(&t.fixture, &["prod-a"], cx);
+    switch_to(&t.fixture, "prod-a", cx);
     assert_eq!(
         t.block(cx).as_deref(),
         Some("stg-b is no longer open; nothing was changed")
@@ -482,8 +504,9 @@ fn held_enter_does_not_confirm(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_session_opens_in_its_profiles_lock_state(cx: &mut TestAppContext) {
     let t = two_clusters("open-state", cx);
-    assert_eq!(t.lock_of(&t.prod, cx), WriteLock::Locked);
     assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Unlocked);
+    t.activate(&t.prod, "node-a", cx);
+    assert_eq!(t.lock_of(&t.prod, cx), WriteLock::Locked);
 }
 
 #[gpui_kit::test]
@@ -507,6 +530,7 @@ fn lock_toggle_appends_a_line(cx: &mut TestAppContext) {
 fn unlocking_prod_asks_for_the_typed_name(cx: &mut TestAppContext) {
     let t = two_clusters("unlock-prod", cx);
     let dir = t.enable_audit_folder("unlock-prod", cx);
+    let prod_api = t.activate(&t.prod, "node-a", cx);
     t.toggle(&t.prod, cx);
     // Nothing changes until the dialog is confirmed.
     assert_eq!(t.lock_of(&t.prod, cx), WriteLock::Locked);
@@ -529,7 +553,7 @@ fn unlocking_prod_asks_for_the_typed_name(cx: &mut TestAppContext) {
     t.wait_for("the audit line", cx, |_| audit_lines(&dir).len() == 1);
     assert_eq!(audit_lines(&dir)[0]["action"], "Unlock");
     assert_eq!(audit_lines(&dir)[0]["cluster"], "prod-a");
-    assert!(writes(&t.prod_api).is_empty(), "an unlock sends nothing");
+    assert!(writes(&prod_api).is_empty(), "an unlock sends nothing");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -545,48 +569,25 @@ fn unlocking_non_prod_asks_for_a_click(cx: &mut TestAppContext) {
     assert!(t.block(cx).is_none());
     t.confirm(cx);
     assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Unlocked);
-    assert_eq!(
-        t.lock_of(&t.prod, cx),
-        WriteLock::Locked,
-        "the other cluster keeps its lock"
-    );
 }
 
 #[gpui_kit::test]
-fn the_lock_chord_acts_on_the_cursor_cluster(cx: &mut TestAppContext) {
-    let t = two_clusters("chord-cursor", cx);
-    // Without a cursor the chord means the primary.
-    assert_eq!(
-        t.fixture
-            .shell
-            .read_with(cx, |shell, _| shell.lock_target()),
-        Some(t.prod.clone())
-    );
+fn the_lock_chord_acts_on_the_active_cluster(cx: &mut TestAppContext) {
+    let t = two_clusters("chord-active", cx);
+    assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Unlocked);
+    // With the cursor on a node, the chord means the cluster of that node: the active one.
     let table = t
         .fixture
         .shell
         .read_with(cx, |shell, _| shell.node_table.clone());
-    for row in 0..2 {
-        cx.update(|cx| table.update(cx, |table, cx| table.set_selected_row(row, cx)));
-        cx.run_until_parked();
-        let target = t
-            .fixture
-            .shell
-            .read_with(cx, |shell, _| shell.lock_target());
-        let cursor = t.fixture.shell.read_with(cx, |shell, _| {
-            shell.selected.as_ref().map(|object| object.cluster.clone())
-        });
-        assert_eq!(target, cursor);
-    }
-    // The last row is stg-b's node: the chord locks stg-b and leaves the primary alone.
+    cx.update(|cx| table.update(cx, |table, cx| table.set_selected_row(0, cx)));
+    cx.run_until_parked();
+    let cursor = t.fixture.shell.read_with(cx, |shell, _| {
+        shell.selected.as_ref().map(|object| object.cluster.clone())
+    });
+    assert_eq!(cursor, Some(t.stg.clone()));
     t.fixture.press("secondary-shift-r", cx);
-    let target = t
-        .fixture
-        .shell
-        .read_with(cx, |shell, _| shell.lock_target());
-    assert_eq!(target, Some(t.stg.clone()));
     assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Locked);
-    assert_eq!(t.lock_of(&t.prod, cx), WriteLock::Locked);
 }
 
 #[gpui_kit::test]
@@ -619,9 +620,8 @@ fn refuses_commits_with(
 #[gpui_kit::test]
 fn a_conflict_keeps_the_dialog_with_a_retry_that_checks_again(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture("conflict", cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
-    let prod_api = go_live_fake(&fixture, &prod, "node-a", cx);
     let stg_api = go_live_answering(
         &fixture,
         &stg,
@@ -631,7 +631,6 @@ fn a_conflict_keeps_the_dialog_with_a_retry_that_checks_again(cx: &mut TestAppCo
     );
     let t = Clusters {
         fixture,
-        prod_api,
         stg_api,
         prod,
         stg,
@@ -669,15 +668,13 @@ fn a_conflict_keeps_the_dialog_with_a_retry_that_checks_again(cx: &mut TestAppCo
     assert!(writes(&t.stg_api)[2].has_query("dryRun", "All"));
     t.wait_for_dry_run(cx);
     assert_eq!(t.block(cx), None);
-    assert!(writes(&t.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
 fn a_refused_commit_with_no_retry_closes_the_dialog(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture("forbidden", cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
-    let prod_api = go_live_fake(&fixture, &prod, "node-a", cx);
     let stg_api = go_live_answering(
         &fixture,
         &stg,
@@ -687,7 +684,6 @@ fn a_refused_commit_with_no_retry_closes_the_dialog(cx: &mut TestAppContext) {
     );
     let t = Clusters {
         fixture,
-        prod_api,
         stg_api,
         prod,
         stg,
@@ -756,7 +752,6 @@ fn cordon_without_patch_nodes_is_not_permitted_and_sends_nothing(cx: &mut TestAp
     t.cordon(&t.stg, "node-b", cx);
     assert!(!t.has_dialog(cx));
     assert!(writes(&t.stg_api).is_empty());
-    assert!(writes(&t.prod_api).is_empty());
 }
 
 // ---- The rest of the plan's window tests ----
@@ -781,14 +776,8 @@ fn ctrl_shift_r_locks_at_once(cx: &mut TestAppContext) {
         .fixture
         .shell
         .read_with(cx, |shell, _| shell.node_table.clone());
-    cx.update(|cx| table.update(cx, |table, cx| table.set_selected_row(1, cx)));
+    cx.update(|cx| table.update(cx, |table, cx| table.set_selected_row(0, cx)));
     cx.run_until_parked();
-    assert_eq!(
-        t.fixture
-            .shell
-            .read_with(cx, |shell, _| shell.lock_target()),
-        Some(t.stg.clone())
-    );
     t.fixture.press("secondary-shift-r", cx);
     assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Locked);
     assert!(!t.has_dialog(cx), "locking asks nothing");
@@ -825,9 +814,8 @@ fn confirm_dialog_enables_apply_after_dry_run_passes(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn rejected_dry_run_keeps_apply_disabled(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture("rejected", cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
-    let prod_api = go_live_fake(&fixture, &prod, "node-a", cx);
     let rejecting = |request: &RecordedRequest| {
         if request.method != "PATCH" {
             return (404, NOT_FOUND.to_owned());
@@ -841,7 +829,6 @@ fn rejected_dry_run_keeps_apply_disabled(cx: &mut TestAppContext) {
     let stg_api = go_live_answering(&fixture, &stg, "node-b", rejecting, cx);
     let t = Clusters {
         fixture,
-        prod_api,
         stg_api,
         prod,
         stg,
@@ -872,8 +859,12 @@ fn closing_the_dialog_drops_the_dry_run(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert!(!t.has_dialog(cx), "nothing keeps the dialog alive");
-    // The audit log has no line for a change that was never confirmed.
-    assert!(writes(&t.prod_api).is_empty());
+    // Nothing but the dry-run ever reached the cluster: the change was never confirmed.
+    assert!(
+        writes(&t.stg_api)
+            .iter()
+            .all(|request| request.has_query_key("dryRun"))
+    );
 }
 
 #[gpui_kit::test]
@@ -892,9 +883,8 @@ fn checked_write_dry_run_writes_no_audit(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_retry_button_shows_after_a_failed_check(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture("retry-shown", cx);
-    view(&fixture, &["prod-a", "stg-b"], cx);
+    switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
-    let prod_api = go_live_fake(&fixture, &prod, "node-a", cx);
     // A refusal for now (429) on the dry-run: the check failed and can be run again.
     let refusing = |request: &RecordedRequest| {
         if request.method != "PATCH" {
@@ -909,7 +899,6 @@ fn the_retry_button_shows_after_a_failed_check(cx: &mut TestAppContext) {
     let stg_api = go_live_answering(&fixture, &stg, "node-b", refusing, cx);
     let t = Clusters {
         fixture,
-        prod_api,
         stg_api,
         prod,
         stg,
@@ -1027,18 +1016,13 @@ fn the_audit_log_of_a_lock_session_holds_only_lock_lines(cx: &mut TestAppContext
     // Test-plan step 4: Ctrl Shift R on a production cluster, unlock with the typed name, lock again.
     let t = two_clusters("lock-session", cx);
     let dir = t.enable_audit_folder("lock-session", cx);
+    let prod_api = t.activate(&t.prod, "node-a", cx);
     let table = t
         .fixture
         .shell
         .read_with(cx, |shell, _| shell.node_table.clone());
     cx.update(|cx| table.update(cx, |table, cx| table.set_selected_row(0, cx)));
     cx.run_until_parked();
-    assert_eq!(
-        t.fixture
-            .shell
-            .read_with(cx, |shell, _| shell.lock_target()),
-        Some(t.prod.clone())
-    );
     t.fixture.press("secondary-shift-r", cx);
     t.type_name("prod-a", cx);
     t.confirm(cx);
@@ -1049,6 +1033,79 @@ fn the_audit_log_of_a_lock_session_holds_only_lock_lines(cx: &mut TestAppContext
         .map(|line| line["action"].as_str().unwrap_or_default().to_owned())
         .collect();
     assert_eq!(actions, ["Unlock", "Lock"]);
-    assert!(writes(&t.prod_api).is_empty() && writes(&t.stg_api).is_empty());
+    assert!(writes(&prod_api).is_empty() && writes(&t.stg_api).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- A → B: nothing captured on A reaches B (spec 0046, write-safety.md) ----
+
+#[gpui_kit::test]
+fn guard_for_another_cluster_is_none(cx: &mut TestAppContext) {
+    let t = two_clusters("guard-other", cx);
+    t.activate(&t.prod, "node-a", cx);
+    t.fixture.shell.read_with(cx, |shell, cx| {
+        assert!(shell.guard_for(&t.stg, cx).is_none(), "A left");
+        let guard = shell.guard_for(&t.prod, cx).expect("B is live");
+        assert_eq!(guard.cluster, t.prod);
+    });
+}
+
+#[gpui_kit::test]
+fn a_dialog_confirmed_after_a_switch_sends_nothing(cx: &mut TestAppContext) {
+    let t = two_clusters("dialog-after-switch", cx);
+    t.cordon(&t.stg, "node-b", cx);
+    t.wait_for_dry_run(cx);
+    assert_eq!(writes(&t.stg_api).len(), 1, "the dry-run");
+    let prod_api = t.activate(&t.prod, "node-a", cx);
+    assert_eq!(
+        t.block(cx).as_deref(),
+        Some("stg-b is no longer open; nothing was changed")
+    );
+    t.confirm(cx);
+    cx.run_until_parked();
+    assert_eq!(writes(&t.stg_api).len(), 1, "only the dry-run reached A");
+    assert!(writes(&prod_api).is_empty(), "{:?}", writes(&prod_api));
+}
+
+#[gpui_kit::test]
+fn a_dialog_confirmed_after_switching_back_sends_nothing(cx: &mut TestAppContext) {
+    let t = two_clusters("dialog-after-back", cx);
+    t.cordon(&t.stg, "node-b", cx);
+    t.wait_for_dry_run(cx);
+    let opened_on = t.dialog(cx).read_with(cx, |dialog, _| dialog.generation());
+    let prod_api = t.activate(&t.prod, "node-a", cx);
+    let stg_again = t.activate(&t.stg, "node-b", cx);
+    // The same cluster is Live again, but it is a new session.
+    assert_ne!(t.generation_of(&t.stg, cx), opened_on);
+    assert_eq!(
+        t.block(cx).as_deref(),
+        Some("stg-b is no longer open; nothing was changed")
+    );
+    t.confirm(cx);
+    cx.run_until_parked();
+    assert_eq!(writes(&t.stg_api).len(), 1, "only the dry-run reached A");
+    assert!(writes(&stg_again).is_empty(), "{:?}", writes(&stg_again));
+    assert!(writes(&prod_api).is_empty(), "{:?}", writes(&prod_api));
+}
+
+#[gpui_kit::test]
+fn the_lock_badge_toggles_the_active_cluster(cx: &mut TestAppContext) {
+    let t = two_clusters("badge-click", cx);
+    assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Unlocked);
+    // A click locks at once, and there is no menu to pick a cluster from.
+    t.fixture
+        .with_window(cx, |window, cx| window.click("write-lock", cx));
+    assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Locked);
+    assert!(!t.has_dialog(cx));
+    // Unlocking asks the tier of that cluster first. GPUI reads time from the system clock, not
+    // the test executor's, so a second click inside its 500 ms double-click interval is not
+    // delivered as a click: wait past it for real.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    t.fixture.draw_twice(cx);
+    t.fixture
+        .with_window(cx, |window, cx| window.click("write-lock", cx));
+    assert!(t.has_dialog(cx));
+    assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Locked);
+    t.confirm(cx);
+    assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Unlocked);
 }

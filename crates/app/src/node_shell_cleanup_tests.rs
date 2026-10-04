@@ -92,7 +92,6 @@ fn a_shell_that_exits_deletes_its_pod(cx: &mut TestAppContext) {
         !delete.has_query_key("dryRun"),
         "a cleanup is a commit only"
     );
-    assert!(deletes(&debugs.prod_api).is_empty());
 }
 
 #[gpui_kit::test]
@@ -144,25 +143,20 @@ fn a_switch_asks_then_deletes_the_pod_on_the_held_connection(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn releasing_a_slot_deletes_only_its_pods(cx: &mut TestAppContext) {
+fn a_switch_deletes_the_node_shell_pods_of_the_old_cluster(cx: &mut TestAppContext) {
     let debugs = node_clusters("nc-release", Answers::Waiting, cx);
-    debugs.set_lock(&debugs.prod, WriteLock::Unlocked, cx);
-    debugs.open_live_node_shell(&debugs.prod, cx);
+    debugs.open_live_node_shell(&debugs.stg, cx);
     debugs.open_live_node_shell(&debugs.stg, cx);
     debugs
         .fixture
         .shell
-        .update(cx, |shell, cx| shell.remove_from_view(&debugs.stg, cx));
+        .update(cx, |shell, cx| shell.switch_cluster(&debugs.prod, cx));
     cx.run_until_parked();
     debugs.press(Confirm { secondary: false }, cx);
-    debugs.wait_for_deletes(&debugs.stg_api, 1, cx);
+    debugs.wait_for_deletes(&debugs.stg_api, 2, cx);
     debugs.settle(cx);
-    assert_eq!(deletes(&debugs.stg_api).len(), 1);
-    assert!(
-        deletes(&debugs.prod_api).is_empty(),
-        "the other cluster's pod stays"
-    );
-    assert_eq!(debugs.tab_count(cx), 1);
+    assert_eq!(deletes(&debugs.stg_api).len(), 2);
+    assert_eq!(debugs.tab_count(cx), 0);
 }
 
 #[gpui_kit::test]
@@ -586,6 +580,13 @@ fn node_plan(
         image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
         namespace: Some("kube-system".to_owned()),
         cleanup_audit: audit,
+        generation: debugs
+            .fixture
+            .shell
+            .read_with(cx, |shell, cx| {
+                shell.guard_for(cluster, cx).map(|guard| guard.generation)
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -623,6 +624,32 @@ fn a_pod_created_for_a_cluster_that_left_the_view_is_deleted_not_forgotten(
     });
     debugs.wait_for_deletes(&debugs.stg_api, 1, cx);
     assert_eq!(debugs.tab_count(cx), 0, "no tab for a released cluster");
+}
+
+#[gpui_kit::test]
+fn a_pod_created_across_a_switch_and_back_is_deleted_not_given_a_tab(cx: &mut TestAppContext) {
+    let debugs = node_clusters("nc-back", Answers::Waiting, cx);
+    // The start was made on the first session of stg-b.
+    let plan = node_plan(&debugs, &debugs.stg.clone(), cx);
+    debugs.activate(&debugs.prod, cx);
+    let stg_again = debugs.activate(&debugs.stg, cx);
+    // The create answers now: the cluster is open again, but it is a new session.
+    let connection = debugs.session_connection(&debugs.stg, cx);
+    let permit = debugs.attach_permit();
+    debugs.fixture.with_window(cx, |window, cx| {
+        debugs.fixture.shell.update(cx, |shell, cx| {
+            shell.open_debug_tab(
+                &plan,
+                permit,
+                connection,
+                created(Some("uid-1")),
+                window,
+                cx,
+            );
+        });
+    });
+    debugs.wait_for_deletes(&stg_again, 1, cx);
+    assert_eq!(debugs.tab_count(cx), 0, "no tab in the new session");
 }
 
 #[gpui_kit::test]

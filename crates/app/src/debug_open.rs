@@ -48,6 +48,9 @@ pub(super) struct TabPlan {
     pub(super) namespace: Option<String>,
     /// Set for a node shell: how to describe the cluster in the audit line of its delete.
     pub(super) cleanup_audit: Option<CleanupAudit>,
+    /// The connection generation the start was made on: a tab opens only on that same session
+    /// (an A to B to A switch during the create leaves a new one).
+    pub(super) generation: u64,
 }
 
 impl AppShell {
@@ -130,12 +133,10 @@ impl AppShell {
             notify(window, cx, shell_cap_text().to_owned());
             return;
         }
-        let (Some(cluster_name), Some(cluster_label)) = (
+        let (Some((cluster_name, generation)), Some(cluster_label)) = (
             self.guard_for(&pod.cluster, cx)
-                .map(|guard| guard.display_name().to_owned()),
-            self.view
-                .slot_of(&pod.cluster)
-                .map(|index| self.view.slots()[index].label.clone()),
+                .map(|guard| (guard.display_name().to_owned(), guard.generation)),
+            self.slot_label(&pod.cluster),
         ) else {
             notify(window, cx, format!("{} is not open", pod.cluster.context));
             return;
@@ -211,6 +212,7 @@ impl AppShell {
             image: chosen.image,
             namespace: None,
             cleanup_audit: None,
+            generation,
         });
         let intent = ConnectIntent {
             cluster: pod.cluster.clone(),
@@ -275,10 +277,13 @@ impl AppShell {
                 }
             },
         };
-        // A window that is closing, or a cluster released while the create was on its way, has no
-        // one to own the tab: the pod is deleted at once.
-        let has_owner =
-            !self.node_shell_runs.is_closing() && self.view.slot_of(&plan.cluster).is_some();
+        // A window that is closing, or a session released (or replaced by a new one of the same
+        // cluster) while the create was on its way, has no one to own the tab: the pod is deleted
+        // at once.
+        let has_owner = !self.node_shell_runs.is_closing()
+            && self
+                .guard_for(&plan.cluster, cx)
+                .is_some_and(|guard| guard.generation == plan.generation);
         let tab = has_owner
             .then(|| {
                 let grant = AttachGrant { connection, permit };

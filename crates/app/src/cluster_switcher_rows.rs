@@ -4,7 +4,6 @@
 use crate::cluster_form::{ClusterGroup, file_name_text};
 use crate::cluster_health::{HealthBoard, RowHealth};
 use crate::cluster_registry::ClusterRef;
-use crate::cluster_view::{MAX_VIEWED_CLUSTERS, TooManyClusters};
 use crate::environment::Environment;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,12 +22,8 @@ pub(crate) struct SwitcherRow {
     pub(crate) failure: Option<String>,
     /// The `Ctrl n` number: the first nine rows of the unfiltered list.
     pub(crate) shortcut: Option<u8>,
-    /// The cluster is viewed: it has a session in the window.
+    /// The cluster is open: it has a session in the window.
     pub(crate) is_active: bool,
-    /// The primary cluster among the viewed ones.
-    pub(crate) is_primary: bool,
-    /// The row is ticked in the draft that `View {n} clusters` applies.
-    pub(crate) is_ticked: bool,
     /// Lowercased label, context name, environment badge, and file name without any whitespace,
     /// which the filter reads (`normalize_query`).
     pub(crate) search_text: String,
@@ -53,21 +48,19 @@ pub(crate) enum HighlightStep {
     Previous,
 }
 
-/// A viewed cluster with the health its session reports.
+/// A cluster with a session, and the health that session reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ViewedCluster {
     pub(crate) cluster: ClusterRef,
     pub(crate) health: RowHealth,
-    pub(crate) is_primary: bool,
 }
 
 /// The sections in display order. `viewed` are the clusters with a session, with the health it
-/// reports; every other row reads the probe board. `ticked` is the draft of the next view.
+/// reports; every other row reads the probe board.
 pub(crate) fn switcher_sections(
     groups: &[ClusterGroup],
     health: &HealthBoard,
     viewed: &[ViewedCluster],
-    ticked: &[ClusterRef],
 ) -> Vec<SwitcherSection> {
     let mut next_shortcut = 1_u8;
     groups
@@ -78,8 +71,10 @@ pub(crate) fn switcher_sections(
                 .rows
                 .iter()
                 .map(|row| {
-                    let viewed_row = viewed.iter().find(|viewed| viewed.cluster == row.cluster);
-                    let active_health = viewed_row.map(|viewed| viewed.health);
+                    let active_health = viewed
+                        .iter()
+                        .find(|viewed| viewed.cluster == row.cluster)
+                        .map(|viewed| viewed.health);
                     let environment = row.profile.environment;
                     let shortcut = (next_shortcut <= 9).then_some(next_shortcut);
                     next_shortcut = next_shortcut.saturating_add(1);
@@ -91,8 +86,6 @@ pub(crate) fn switcher_sections(
                         health: active_health.unwrap_or_else(|| health.row_health(&row.cluster)),
                         shortcut,
                         is_active: active_health.is_some(),
-                        is_primary: viewed_row.is_some_and(|viewed| viewed.is_primary),
-                        is_ticked: ticked.contains(&row.cluster),
                         search_text: search_text(
                             &row.label,
                             &row.cluster.context,
@@ -124,27 +117,6 @@ pub(crate) fn normalize_query(text: &str) -> String {
         .filter(|c| !c.is_whitespace())
         .flat_map(char::to_lowercase)
         .collect()
-}
-
-/// Ticks `cluster`, or unticks it when it is ticked. A sixth tick is refused and changes nothing.
-pub(crate) fn toggle_tick(
-    ticked: &mut Vec<ClusterRef>,
-    cluster: &ClusterRef,
-) -> Result<(), TooManyClusters> {
-    if let Some(position) = ticked.iter().position(|other| other == cluster) {
-        ticked.remove(position);
-        return Ok(());
-    }
-    if ticked.len() >= MAX_VIEWED_CLUSTERS {
-        return Err(TooManyClusters);
-    }
-    ticked.push(cluster.clone());
-    Ok(())
-}
-
-/// Whether applying `ticked` would change what is viewed; the order does not matter.
-pub(crate) fn ticks_differ(ticked: &[ClusterRef], viewed: &[ClusterRef]) -> bool {
-    ticked.len() != viewed.len() || ticked.iter().any(|cluster| !viewed.contains(cluster))
 }
 
 /// The rows that match `filter` (a case-insensitive substring) and `segment`; a section left

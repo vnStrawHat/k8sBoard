@@ -13,16 +13,14 @@ use gpui_kit::component::{
     h_flex, v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, InteractiveElement as _, IntoElement, ParentElement as _,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
-use cluster::{AccessCheck, EVENT_LIMIT, EventFilter};
+use cluster::{EVENT_LIMIT, EventFilter};
 
 use super::{AppShell, KubeconfigState, Screen};
-use crate::cluster_registry::ClusterRef;
-use crate::cluster_rows::RowContext;
-use crate::cluster_session::{AccessState, FlowState, LiveCluster, SessionPhase};
+use crate::cluster_session::{FlowState, LiveCluster, SessionPhase};
 use crate::dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
 use crate::drawer::ClickHandler;
 use crate::file_export::ExportState;
@@ -30,7 +28,7 @@ use crate::filter_bar::{ToolkitState, filter_bar};
 use crate::issue_board::IssueSummary;
 use crate::issue_table::coverage_status;
 use crate::kind_drawer::kind_drawer;
-use crate::navigation::{SIDEBAR_WIDTH, sum_known};
+use crate::navigation::SIDEBAR_WIDTH;
 use crate::node_drawer::node_drawer;
 use crate::node_summary::role_counts;
 use crate::overview::{
@@ -39,6 +37,7 @@ use crate::overview::{
 use crate::pod_drawer::pod_drawer;
 use crate::port_forward_menu::PortButtons;
 use crate::resource_kind::ResourceKind;
+use crate::row_context::RowContext;
 use crate::row_selection::selection_bar;
 use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
@@ -126,7 +125,6 @@ impl AppShell {
             .min_h_0()
             .relative()
             .child(self.render_header(toolkit, cx))
-            .children(self.render_slot_notices(cx))
             .children(self.render_filter_bar(toolkit, cx))
             .children(self.render_overview_stats(cx))
             .children(self.render_overview_export_error())
@@ -144,7 +142,6 @@ impl AppShell {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let live = self.live(cx);
-        let multi_count = self.multi_header_count(cx);
         let (title, count) = match self.screen {
             Screen::Overview => (
                 "Overview",
@@ -158,25 +155,21 @@ impl AppShell {
             ),
             Screen::Pods => (
                 "Pods",
-                multi_count.or_else(|| {
-                    live.and_then(|live| {
-                        live.pods.ready_count().map(|count| {
-                            format!(
-                                "{} · {}",
-                                count_label(count, "pod", "pods"),
-                                live.scope_label()
-                            )
-                        })
+                live.and_then(|live| {
+                    live.pods.ready_count().map(|count| {
+                        format!(
+                            "{} · {}",
+                            count_label(count, "pod", "pods"),
+                            live.scope_label()
+                        )
                     })
                 }),
             ),
             Screen::Nodes => (
                 "Nodes",
-                multi_count.or_else(|| {
-                    live.and_then(|live| {
-                        let count = live.nodes.ready_count()?;
-                        Some(nodes_count_text(count, &role_counts(live.nodes.items())))
-                    })
+                live.and_then(|live| {
+                    let count = live.nodes.ready_count()?;
+                    Some(nodes_count_text(count, &role_counts(live.nodes.items())))
                 }),
             ),
             Screen::Issues => (
@@ -188,21 +181,19 @@ impl AppShell {
             Screen::PortForwarding => ("Port Forwarding", Some(self.port_forward_header_count(cx))),
             Screen::Kind(kind) => (
                 kind.label(),
-                multi_count.or_else(|| {
-                    live.and_then(|live| {
-                        let count = live.kind_list(kind)?.list.ready_count()?;
-                        let label = count_label(count, kind.singular(), kind.plural());
-                        let text = if kind.is_namespaced() {
-                            format!("{label} · {}", live.scope_label())
-                        } else {
-                            label
-                        };
-                        // The events store keeps only the newest ones, so say so at the cap.
-                        Some(if kind == ResourceKind::Events && count >= EVENT_LIMIT {
-                            format!("{text} · newest {}", group_digits(EVENT_LIMIT))
-                        } else {
-                            text
-                        })
+                live.and_then(|live| {
+                    let count = live.kind_list(kind)?.list.ready_count()?;
+                    let label = count_label(count, kind.singular(), kind.plural());
+                    let text = if kind.is_namespaced() {
+                        format!("{label} · {}", live.scope_label())
+                    } else {
+                        label
+                    };
+                    // The events store keeps only the newest ones, so say so at the cap.
+                    Some(if kind == ResourceKind::Events && count >= EVENT_LIMIT {
+                        format!("{text} · newest {}", group_digits(EVENT_LIMIT))
+                    } else {
+                        text
                     })
                 }),
             ),
@@ -493,7 +484,7 @@ impl AppShell {
             button
                 .tooltip("Check whether NetworkPolicies allow a connection")
                 .on_click(cx.listener(|shell, _, window, cx| {
-                    let Some(cluster) = shell.primary_cluster() else {
+                    let Some(cluster) = shell.active_cluster() else {
                         return;
                     };
                     shell.open_traffic_test(&cluster, None, false, window, cx);
@@ -514,8 +505,8 @@ impl AppShell {
             button
                 .tooltip("See what You or a service account can do")
                 .on_click(cx.listener(|shell, _, window, cx| {
-                    // The drawer's cluster when an account is open, else the primary one.
-                    let Some(cluster) = shell.context_cluster() else {
+                    // The one open cluster.
+                    let Some(cluster) = shell.active_cluster() else {
                         return;
                     };
                     let (subject, namespace) = match shell.drawer_account() {
@@ -537,7 +528,7 @@ impl AppShell {
             button
                 .tooltip("Find the subjects that can do something")
                 .on_click(cx.listener(|shell, _, window, cx| {
-                    let Some(cluster) = shell.primary_cluster() else {
+                    let Some(cluster) = shell.active_cluster() else {
                         return;
                     };
                     let namespace = shell.tool_namespace(cx);
@@ -665,9 +656,6 @@ impl AppShell {
             }
             KubeconfigState::Loaded => {}
         }
-        if self.view.is_multi() {
-            return self.render_multi_body(cx);
-        }
         let Some(session) = self.session() else {
             // Between the release of the old session and the deferred connect of the new one.
             if let Some(label) = self.active_label(cx) {
@@ -739,7 +727,7 @@ impl AppShell {
             );
         }
         match self.screen {
-            Screen::Overview => match (self.session(), self.primary_row_context(cx)) {
+            Screen::Overview => match (self.session(), self.open_row_context(cx)) {
                 (Some(session), Some(row)) => overview_body(
                     &OverviewData {
                         live,
@@ -852,425 +840,15 @@ impl AppShell {
 }
 
 impl AppShell {
-    /// Whether any viewed cluster is live: the filter bar and the selection bar need rows.
+    /// Whether the open cluster is live: the filter bar and the selection bar need rows.
     fn any_live(&self, cx: &App) -> bool {
-        self.view
-            .slots()
-            .iter()
-            .any(|slot| slot.session.read(cx).live().is_some())
+        self.live(cx).is_some()
     }
 
-    /// What a row menu keeps of the primary cluster.
-    fn primary_row_context(&self, cx: &App) -> Option<RowContext> {
-        self.slot_row_context(self.view.primary_cluster()?, cx)
+    /// What a row menu keeps of the open cluster.
+    fn open_row_context(&self, cx: &App) -> Option<RowContext> {
+        self.slot_row_context(&self.active_cluster()?, cx)
     }
-
-    /// `{n} clusters · {count} {plural}` of the shown list over the viewed clusters that know it;
-    /// `None` while one cluster is viewed, on screens without a table, and while none knows.
-    pub(super) fn multi_header_count(&self, cx: &App) -> Option<String> {
-        if !self.view.is_multi() {
-            return None;
-        }
-        let lives = self
-            .view
-            .slots()
-            .iter()
-            .filter_map(|slot| slot.session.read(cx).live());
-        let (total, singular, plural) = match self.screen {
-            Screen::Pods => (
-                sum_known(lives.map(|live| live.pods.ready_count())),
-                "pod",
-                "pods",
-            ),
-            Screen::Nodes => (
-                sum_known(lives.map(|live| live.nodes.ready_count())),
-                "node",
-                "nodes",
-            ),
-            Screen::Kind(kind) => (
-                sum_known(lives.map(|live| live.kind_list(kind)?.list.ready_count())),
-                kind.singular(),
-                kind.plural(),
-            ),
-            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => {
-                return None;
-            }
-        };
-        Some(clusters_count_text(
-            self.view.slots().len(),
-            total?,
-            singular,
-            plural,
-        ))
-    }
-
-    /// What each viewed cluster tells for the shown screen, as banners and notes over the rows of
-    /// the others (the 0027 per-slot states). One cluster viewed: none, its state has the screens
-    /// of its own.
-    fn render_slot_notices(&self, cx: &Context<Self>) -> Vec<AnyElement> {
-        let mut notices: Vec<AnyElement> = self
-            .slot_notice_list(cx)
-            .into_iter()
-            .enumerate()
-            .map(|(index, notice)| render_slot_notice(index, notice, cx))
-            .collect();
-        // Overview, Issues, and Topology draw the primary cluster alone.
-        if self.view.is_multi()
-            && matches!(
-                self.screen,
-                Screen::Overview | Screen::Issues | Screen::Topology
-            )
-            && let Some(primary) = self.view.primary()
-        {
-            let text = format!("Showing {} only", primary.label);
-            notices.push(muted_notice(text, cx));
-        }
-        notices
-    }
-
-    /// The notices of the viewed clusters for the shown screen; none while one cluster is viewed.
-    pub(super) fn slot_notice_list(&self, cx: &App) -> Vec<SlotNotice> {
-        if !self.view.is_multi() {
-            return Vec::new();
-        }
-        let plural = self.list_plural();
-        let statuses: Vec<SlotStatus> = self
-            .view
-            .slots()
-            .iter()
-            .map(|slot| {
-                let state = match slot.session.read(cx).phase() {
-                    SessionPhase::Connecting { .. } => SlotState::Connecting,
-                    SessionPhase::Failed { message } => SlotState::Failed(message),
-                    SessionPhase::Live(live) => SlotState::Live {
-                        is_interrupted: live.has_problem(),
-                        list_failure: self.list_problem(live),
-                    },
-                };
-                SlotStatus {
-                    cluster: &slot.cluster,
-                    label: &slot.label,
-                    state,
-                }
-            })
-            .collect();
-        slot_notices(&statuses, plural)
-    }
-
-    /// The plural of what the shown screen lists; `None` on the screens that list no kind.
-    fn list_plural(&self) -> Option<&'static str> {
-        match self.screen {
-            Screen::Pods => Some("pods"),
-            Screen::Nodes => Some("nodes"),
-            Screen::Kind(kind) => Some(kind.plural()),
-            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => None,
-        }
-    }
-
-    /// Why the list of the shown screen is not there in `live`, when its watch failed.
-    fn list_failure<'a>(&self, live: &'a LiveCluster) -> Option<&'a str> {
-        match self.screen {
-            Screen::Pods => live.pods.failure(),
-            Screen::Nodes => live.nodes.failure(),
-            Screen::Kind(kind) => live.kind_list(kind)?.list.failure(),
-            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => None,
-        }
-    }
-
-    /// The failed list of the shown screen in `live`, and whether the access review says the list
-    /// is not permitted (else it is some other failure, such as a CRD the cluster does not have).
-    fn list_problem<'a>(&self, live: &'a LiveCluster) -> Option<ListFailure<'a>> {
-        let message = self.list_failure(live)?;
-        let check = match self.screen {
-            Screen::Pods => Some(AccessCheck::ListPods),
-            Screen::Nodes => Some(AccessCheck::ListNodes),
-            Screen::Kind(kind) => kind.access_check(),
-            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => None,
-        };
-        let is_denied = match (&live.access, check) {
-            (AccessState::Known(report), Some(check)) => !report.is_allowed(check),
-            _ => false,
-        };
-        Some(ListFailure { message, is_denied })
-    }
-
-    /// The workspace while several clusters are viewed: the rows of the clusters that answer, with
-    /// the others as banners above (`render_slot_notices`). The error view only when every cluster
-    /// failed, with Retry all.
-    fn render_multi_body(&self, cx: &Context<Self>) -> AnyElement {
-        let slots = self.view.slots();
-        let is_failed = |slot: &&crate::cluster_view::ViewSlot| {
-            matches!(slot.session.read(cx).phase(), SessionPhase::Failed { .. })
-        };
-        let primary_label = self
-            .view
-            .primary()
-            .map_or_else(String::new, |slot| slot.label.clone());
-        if slots.iter().all(|slot| is_failed(&slot)) {
-            let message = self
-                .view
-                .primary()
-                .and_then(|slot| match slot.session.read(cx).phase() {
-                    SessionPhase::Failed { message } => Some(message.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            let retry_all: ClickHandler = Rc::new(cx.listener(|shell, _, _, cx| shell.retry(cx)));
-            return v_flex()
-                .child(error_view(
-                    &format!("Cannot connect to {primary_label}"),
-                    &message,
-                    Some("Every viewed cluster failed to connect."),
-                    None,
-                    None,
-                    cx,
-                ))
-                .child(
-                    div().px_4().child(
-                        Button::new("retry-all")
-                            .label("Retry all")
-                            .small()
-                            .on_click(move |event, window, cx| retry_all(event, window, cx)),
-                    ),
-                )
-                .into_any_element();
-        }
-        if !self.any_live(cx) {
-            let labels: Vec<&str> = slots.iter().map(|slot| slot.label.as_str()).collect();
-            return busy_view(&format!("Connecting to {}…", labels.join(", ")), cx);
-        }
-        // Overview, Issues, and Topology draw the primary cluster alone.
-        if matches!(
-            self.screen,
-            Screen::Overview | Screen::Issues | Screen::Topology
-        ) {
-            return match self
-                .view
-                .primary()
-                .map(|slot| (&slot.cluster, slot.session.read(cx).phase()))
-            {
-                Some((_, SessionPhase::Live(live))) => self.render_list(live, cx),
-                Some((cluster, SessionPhase::Failed { message })) => {
-                    let cluster = cluster.clone();
-                    let retry: ClickHandler = Rc::new(cx.listener(move |shell, _, _, cx| {
-                        shell.retry_cluster(&cluster, cx);
-                    }));
-                    error_view(
-                        &format!("Cannot connect to {primary_label}"),
-                        message,
-                        Some("This screen draws the primary cluster only."),
-                        Some(retry),
-                        None,
-                        cx,
-                    )
-                }
-                _ => busy_view(&format!("Connecting to {primary_label}…"), cx),
-            };
-        }
-        // A cluster whose list failed is a note of its own; the error view needs every live
-        // cluster to have failed.
-        let mut failures = slots
-            .iter()
-            .filter_map(|slot| slot.session.read(cx).live())
-            .map(|live| self.list_failure(live))
-            .peekable();
-        if failures.peek().is_some() && failures.all(|failure| failure.is_some()) {
-            let message = slots
-                .iter()
-                .filter_map(|slot| slot.session.read(cx).live())
-                .find_map(|live| self.list_failure(live))
-                .unwrap_or_default();
-            let title = match self.list_plural() {
-                Some(plural) => format!("{} are unavailable", capitalized(plural)),
-                None => "The list is unavailable".to_owned(),
-            };
-            return error_view(
-                &title,
-                message,
-                Some("Retrying automatically."),
-                None,
-                None,
-                cx,
-            );
-        }
-        match self.screen {
-            Screen::Pods => DataTable::new(&self.pod_table)
-                .bordered(false)
-                .into_any_element(),
-            Screen::Nodes => DataTable::new(&self.node_table)
-                .bordered(false)
-                .into_any_element(),
-            _ => DataTable::new(&self.kind_table)
-                .bordered(false)
-                .into_any_element(),
-        }
-    }
-}
-
-/// How one viewed cluster stands, for the banners.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum SlotState<'a> {
-    Connecting,
-    /// The connect failed with this message.
-    Failed(&'a str),
-    Live {
-        /// A watch of the session is interrupted and retrying.
-        is_interrupted: bool,
-        /// Why the list of the shown screen is not there, when its watch failed.
-        list_failure: Option<ListFailure<'a>>,
-    },
-}
-
-/// A list that failed, and whether the access review denies it.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct ListFailure<'a> {
-    pub(super) message: &'a str,
-    pub(super) is_denied: bool,
-}
-
-pub(super) struct SlotStatus<'a> {
-    pub(super) cluster: &'a ClusterRef,
-    pub(super) label: &'a str,
-    pub(super) state: SlotState<'a>,
-}
-
-/// One banner or note over the rows of a multi view.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum SlotNotice {
-    /// The connect failed: Retry and Remove from view.
-    Failed {
-        cluster: ClusterRef,
-        text: String,
-    },
-    /// A watch is interrupted; it recovers on its own, so there are no buttons.
-    Interrupted {
-        text: String,
-    },
-    Connecting {
-        text: String,
-    },
-    /// The list of the shown screen is not permitted in this cluster.
-    Denied {
-        text: String,
-    },
-    /// The list of the shown screen failed for another reason, such as a CRD missing here.
-    ListFailed {
-        text: String,
-    },
-}
-
-/// The notices of the viewed clusters, in slot order. `plural` is what the shown screen lists.
-pub(super) fn slot_notices(slots: &[SlotStatus], plural: Option<&str>) -> Vec<SlotNotice> {
-    let mut notices = Vec::new();
-    for slot in slots {
-        let label = slot.label;
-        match &slot.state {
-            SlotState::Connecting => notices.push(SlotNotice::Connecting {
-                text: format!("Connecting to {label}…"),
-            }),
-            SlotState::Failed(message) => notices.push(SlotNotice::Failed {
-                cluster: slot.cluster.clone(),
-                text: format!("Cannot connect to {label}: {message}"),
-            }),
-            SlotState::Live {
-                is_interrupted,
-                list_failure,
-            } => {
-                if *is_interrupted {
-                    notices.push(SlotNotice::Interrupted {
-                        text: format!("Live updates interrupted in {label}"),
-                    });
-                }
-                if let (Some(failure), Some(plural)) = (list_failure, plural) {
-                    notices.push(if failure.is_denied {
-                        SlotNotice::Denied {
-                            text: format!("Not permitted in {label}: list {plural}"),
-                        }
-                    } else {
-                        SlotNotice::ListFailed {
-                            text: format!("Cannot list {plural} in {label}: {}", failure.message),
-                        }
-                    });
-                }
-            }
-        }
-    }
-    notices
-}
-
-fn render_slot_notice(index: usize, notice: SlotNotice, cx: &Context<AppShell>) -> AnyElement {
-    let theme = cx.theme();
-    let row = h_flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap_2()
-        .px_4()
-        .py_1()
-        .text_sm();
-    match notice {
-        SlotNotice::Failed { cluster, text } => {
-            let (retry, remove) = (cluster.clone(), cluster);
-            row.id(("slot-failed", index))
-                .text_color(theme.danger)
-                .child(div().flex_1().min_w_0().truncate().child(text))
-                .child(
-                    Button::new(("slot-retry", index))
-                        .ghost()
-                        .small()
-                        .label("Retry")
-                        .on_click(cx.listener(move |shell, _, _, cx| {
-                            shell.retry_cluster(&retry, cx);
-                        })),
-                )
-                .child(
-                    Button::new(("slot-remove", index))
-                        .ghost()
-                        .small()
-                        .label("Remove from view")
-                        .on_click(cx.listener(move |shell, _, _, cx| {
-                            shell.remove_from_view(&remove, cx);
-                        })),
-                )
-                .into_any_element()
-        }
-        SlotNotice::Interrupted { text } => row
-            .id(("slot-interrupted", index))
-            .text_color(theme.warning)
-            .child(text)
-            .into_any_element(),
-        SlotNotice::Connecting { text }
-        | SlotNotice::Denied { text }
-        | SlotNotice::ListFailed { text } => muted_notice(text, cx),
-    }
-}
-
-/// A muted line under the header.
-fn muted_notice(text: String, cx: &App) -> AnyElement {
-    div()
-        .flex_shrink_0()
-        .px_4()
-        .py_1()
-        .text_sm()
-        .text_color(cx.theme().muted_foreground)
-        .child(text)
-        .into_any_element()
-}
-
-/// `Pods` for `pods`; the plurals of the kinds are lowercase words.
-fn capitalized(text: &str) -> String {
-    let mut chars = text.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => String::new(),
-    }
-}
-
-/// `2 clusters · 2,431 pods`.
-fn clusters_count_text(clusters: usize, count: usize, singular: &str, plural: &str) -> String {
-    format!(
-        "{clusters} clusters · {}",
-        count_label(count, singular, plural)
-    )
 }
 
 /// `38 of 1,284 match`.
@@ -1391,126 +969,6 @@ mod tests {
     fn match_count_label_groups_both_numbers() {
         assert_eq!(match_count_label(38, 1_284), "38 of 1,284 match");
         assert_eq!(match_count_label(0, 12), "0 of 12 match");
-    }
-
-    #[test]
-    fn header_counts_all_clusters() {
-        assert_eq!(
-            clusters_count_text(2, 2_431, "pod", "pods"),
-            "2 clusters · 2,431 pods"
-        );
-        assert_eq!(
-            clusters_count_text(3, 1, "node", "nodes"),
-            "3 clusters · 1 node"
-        );
-    }
-
-    fn cluster(context: &str) -> ClusterRef {
-        ClusterRef {
-            kubeconfig: std::path::PathBuf::from("kube.yaml"),
-            context: context.to_owned(),
-        }
-    }
-
-    /// The notices of one cluster in `state`, for a screen that lists pods.
-    fn notices_of(state: SlotState) -> Vec<SlotNotice> {
-        let cluster = cluster("a");
-        let status = SlotStatus {
-            cluster: &cluster,
-            label: "prod-eu",
-            state,
-        };
-        slot_notices(&[status], Some("pods"))
-    }
-
-    fn live_with(is_interrupted: bool, list_failure: Option<ListFailure>) -> SlotState {
-        SlotState::Live {
-            is_interrupted,
-            list_failure,
-        }
-    }
-
-    #[test]
-    fn a_failed_connect_has_a_banner_with_its_cluster() {
-        assert_eq!(
-            notices_of(SlotState::Failed("connection refused")),
-            [SlotNotice::Failed {
-                cluster: cluster("a"),
-                text: "Cannot connect to prod-eu: connection refused".to_owned(),
-            }]
-        );
-    }
-
-    #[test]
-    fn an_interrupted_watch_has_a_banner_without_buttons() {
-        assert_eq!(
-            notices_of(live_with(true, None)),
-            [SlotNotice::Interrupted {
-                text: "Live updates interrupted in prod-eu".to_owned(),
-            }]
-        );
-    }
-
-    #[test]
-    fn a_connecting_cluster_has_a_muted_line() {
-        assert_eq!(
-            notices_of(SlotState::Connecting),
-            [SlotNotice::Connecting {
-                text: "Connecting to prod-eu…".to_owned(),
-            }]
-        );
-    }
-
-    #[test]
-    fn a_denied_list_says_not_permitted() {
-        let failure = ListFailure {
-            message: "forbidden",
-            is_denied: true,
-        };
-        assert_eq!(
-            notices_of(live_with(false, Some(failure))),
-            [SlotNotice::Denied {
-                text: "Not permitted in prod-eu: list pods".to_owned(),
-            }]
-        );
-    }
-
-    #[test]
-    fn a_list_that_failed_otherwise_says_cannot_list_with_the_message() {
-        // A CRD missing in this cluster is a 404, not a denial.
-        let failure = ListFailure {
-            message: "the server could not find the requested resource",
-            is_denied: false,
-        };
-        assert_eq!(
-            notices_of(live_with(false, Some(failure))),
-            [SlotNotice::ListFailed {
-                text:
-                    "Cannot list pods in prod-eu: the server could not find the requested resource"
-                        .to_owned(),
-            }]
-        );
-    }
-
-    #[test]
-    fn a_screen_without_a_list_has_no_list_note() {
-        let cluster = cluster("a");
-        let failure = ListFailure {
-            message: "forbidden",
-            is_denied: true,
-        };
-        let status = SlotStatus {
-            cluster: &cluster,
-            label: "prod-eu",
-            state: live_with(false, Some(failure)),
-        };
-        assert!(slot_notices(&[status], None).is_empty());
-    }
-
-    #[test]
-    fn capitalized_uppercases_the_first_letter() {
-        assert_eq!(capitalized("pods"), "Pods");
-        assert_eq!(capitalized(""), "");
     }
 
     #[test]

@@ -163,7 +163,7 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
             cx.listener(|shell, _: &CopyName, window, cx| shell.copy_cursor_name(window, cx)),
         )
         .on_action(cx.listener(|shell, _: &ToggleReadOnly, window, cx| {
-            shell.toggle_lock_of_target(window, cx);
+            shell.toggle_open_cluster_lock(window, cx);
         }))
         .on_action(cx.listener(|shell, _: &ToggleDock, _, cx| {
             shell.dock.update(cx, |dock, cx| dock.toggle_visibility(cx));
@@ -371,7 +371,7 @@ impl AppShell {
     /// Esc in a text field: the focus goes to the table the screen shows, or to the shell root
     /// while no table is drawn. The field keeps its text.
     pub(super) fn focus_visible_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.scope_live(cx).is_none() {
+        if self.live(cx).is_none() {
             window.focus(&self.focus_handle, cx);
             return;
         }

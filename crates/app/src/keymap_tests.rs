@@ -6,7 +6,7 @@ use gpui_kit::{AsKeystroke as _, KeyContext, Keystroke, Modifiers, TestAppContex
 
 use super::*;
 use crate::cluster_switcher::{
-    CloseClusterSwitcher, SwitcherConfirm, SwitcherNext, SwitcherPrevious, ToggleClusterTick,
+    CloseClusterSwitcher, SwitcherConfirm, SwitcherNext, SwitcherPrevious,
 };
 
 /// Keys that a later spec binds. No binding of this spec may take one; the owner removes the key
@@ -272,7 +272,7 @@ fn every_sheet_row_has_a_binding(cx: &mut TestAppContext) {
 fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
     bind_all(cx);
     let rows = shortcut_rows();
-    let without_row: [&dyn Action; 19] = [
+    let without_row: [&dyn Action; 18] = [
         &LeaveInput,
         &CloseTerminalFind,
         &PalettePreview,
@@ -290,7 +290,6 @@ fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
         &SwitcherNext,
         &SwitcherPrevious,
         &SwitcherConfirm,
-        &ToggleClusterTick,
         &CloseClusterSwitcher,
     ];
     for binding in app_bindings(cx) {
@@ -302,6 +301,23 @@ fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
             "{} is not on the sheet",
             action.name()
         );
+    }
+}
+
+#[gpui_kit::test]
+fn space_is_ignored_in_both_switcher_contexts(cx: &mut TestAppContext) {
+    bind_all(cx);
+    // The kit Popover binds space to Confirm, which would close the popover.
+    assert!(
+        resolve("space", &["Root", "AppShell", "Popover"], cx).is_some(),
+        "the kit binds space in a popover"
+    );
+    // The switcher is deeper and binds it to NoAction, which resolves to no action at all.
+    for path in [
+        &["Root", "AppShell", "Popover", "ClusterSwitcher"][..],
+        &["Root", "AppShell", "Popover", "ClusterSwitcher", "Input"][..],
+    ] {
+        assert_eq!(resolve("space", path, cx), None, "{path:?}");
     }
 }
 
