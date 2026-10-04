@@ -679,12 +679,15 @@ impl ConfirmDialog {
                     .justify_between()
                     .child(
                         div()
+                            .flex_shrink_0()
                             .text_sm()
                             .font_family(mono.clone())
                             .child(item.object.clone()),
                     )
                     .child(
                         div()
+                            .min_w_0()
+                            .truncate()
                             .text_xs()
                             .text_color(tone(progress))
                             .child(progress.text()),

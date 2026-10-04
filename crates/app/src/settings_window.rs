@@ -486,12 +486,14 @@ fn terminal_page() -> SettingPage {
     );
     SettingPage::new(SettingsPage::TerminalAndShell.title())
         .resettable(false)
-        .description("Applies to new shell tabs; font size applies at once.")
         .group(
-            SettingGroup::new().title("Shell").item(
-                SettingItem::new("Default shell", shell)
-                    .description("Used by Open shell. The tab can still pick another."),
-            ),
+            SettingGroup::new()
+                .title("Shell")
+                .description("Applies to new shell tabs; font size applies at once.")
+                .item(
+                    SettingItem::new("Default shell", shell)
+                        .description("Used by Open shell. The tab can still pick another."),
+                ),
         )
         .group(
             SettingGroup::new()

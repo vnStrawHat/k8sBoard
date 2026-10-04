@@ -670,13 +670,16 @@ impl ClustersPage {
             .max_h(px(LIST_MAX_HEIGHT))
             .overflow_y_scroll()
             .p_1()
-            .gap_1()
-            .border_1()
-            .border_color(border)
-            .rounded(cx.theme().radius);
+            .gap_1();
         if groups.is_empty() {
             list = list.child(muted_text("No clusters yet.", cx));
-        } else if visible.is_empty() {
+        } else {
+            list = list
+                .border_1()
+                .border_color(border)
+                .rounded(cx.theme().radius);
+        }
+        if !groups.is_empty() && visible.is_empty() {
             let text = format!("No clusters match '{}'.", search.trim());
             list = list.child(muted_text(text, cx));
         }

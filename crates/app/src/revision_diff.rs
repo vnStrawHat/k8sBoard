@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use cluster::{ClusterConnection, EnvValues, ObjectKind, ObjectRef, ReplicaSetSummary};
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
@@ -446,7 +446,7 @@ impl RevisionDiffView {
                     Button::new("revision-diff-go-to")
                         .label("Go to deployment")
                         .small()
-                        .ghost()
+                        .outline()
                         .on_click(cx.listener(|view, _, window, cx| {
                             view.go_to_deployment(window, cx);
                         })),
