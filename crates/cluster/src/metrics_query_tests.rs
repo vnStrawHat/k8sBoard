@@ -471,7 +471,7 @@ async fn empty_status_message_uses_a_fixed_text() {
 
 #[test]
 fn one_line_drops_direction_and_format_characters() {
-    let text = "a\u{200B}b\u{200F}c\u{202A}d\u{202E}e\u{2060}f\u{2069}g\u{FEFF}h";
-    assert_eq!(one_line(Some(text)), "abcdefgh");
+    let text = "a\u{200B}b\u{200F}c\u{202A}d\u{202E}e\u{2060}f\u{2069}g\u{FEFF}h\u{061C}i";
+    assert_eq!(one_line(Some(text)), "abcdefghi");
     assert_eq!(one_line(None), "");
 }

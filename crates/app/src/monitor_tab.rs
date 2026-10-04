@@ -18,7 +18,7 @@ use crate::cluster_session::LiveCluster;
 use crate::drawer::{DrawerState, MonitorRange, MonitorScope, MonitorState};
 use crate::history_rings::{COARSE_POINTS, Resolution, TICKS_PER_COARSE};
 use crate::monitor_data::{MonitorData, MonitorRow};
-use crate::monitor_source::{SourceFetch, SourceView, step_text};
+use crate::monitor_source::{SourceFetch, SourceView, fallback_note, step_text};
 use crate::status_tone::{StatusTone, tone_color};
 use crate::usage_chart::{UsageChartModel, usage_chart_card};
 use crate::usage_format::{Measure, format_offset};
@@ -26,12 +26,15 @@ use crate::usage_format::{Measure, format_offset};
 const CHART_HEIGHT: f32 = 110.;
 const CHART_HEIGHT_EXPANDED: f32 = 140.;
 const CHART_MIN_WIDTH: f32 = 280.;
-/// The most points a range can hold: every coarse point, and the fine ticks newer than the last
-/// one (fewer than 20, or that tick would have closed a coarse point).
-const MAX_TABLE_ROWS: usize = {
-    let sampler = COARSE_POINTS + TICKS_PER_COARSE - 1;
-    // A source answer holds up to 400 points (the cluster crate's `MAX_POINTS`).
-    if sampler > 400 { sampler } else { 400 }
+/// The most rows the Table view shows: the sampler holds every coarse point and the fine ticks newer
+/// than the last one (fewer than 20, or that tick would have closed a coarse point); a source answer
+/// holds at most `cluster::MAX_POINTS` points.
+const SAMPLER_ROWS: usize = COARSE_POINTS + TICKS_PER_COARSE - 1;
+const SOURCE_ROWS: usize = cluster::MAX_POINTS as usize;
+const MAX_TABLE_ROWS: usize = if SAMPLER_ROWS > SOURCE_ROWS {
+    SAMPLER_ROWS
+} else {
+    SOURCE_ROWS
 };
 const SHORT_HISTORY_TIP: &str = "Showing data since k8sBoard connected; choose a metrics source in Settings › Metrics for up to 30 days";
 const SOURCE_NOTE: &str = "CPU and memory: metrics-server, sampled by k8sBoard every 15s while the app is open. Network and disk I/O: kubelet stats summary and cAdvisor through the API server node proxy, sampled every 15s while needed. Kept 24 hours.";
@@ -147,11 +150,7 @@ pub(crate) fn monitor_tab(view: &MonitorView<'_>, cx: &Context<AppShell>) -> Any
                     .title("Metrics source query failed"),
             )
             .into_any_element(),
-        Some(SourceView::Fallback(reason)) => sampler_tab(
-            view,
-            Some(format!("Prometheus: {reason}. Showing k8sBoard samples.")),
-            cx,
-        ),
+        Some(SourceView::Fallback(reason)) => sampler_tab(view, Some(fallback_note(reason)), cx),
         None if is_long => v_flex()
             .gap_3()
             .child(toolbar(view, None, cx))

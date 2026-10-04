@@ -463,3 +463,59 @@ fn settings_page_icons_are_distinct() {
         );
     }
 }
+
+// ---- The Metrics page ----
+
+#[gpui_kit::test]
+fn a_window_on_another_page_lists_no_service_until_the_metrics_page_shows(cx: &mut TestAppContext) {
+    install(None, &[], cx);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("a tokio runtime");
+    cx.executor().allow_parking();
+    let (connection, api) = {
+        let _guard = runtime.enter();
+        cluster::fake_api::FakeApi::connection(cluster::WritePolicy::Blocked, |_| {
+            (
+                200,
+                r#"{"apiVersion":"v1","kind":"ServiceList","metadata":{},"items":[]}"#.to_owned(),
+            )
+        })
+    };
+    cx.update(|cx| {
+        cx.set_global(crate::cluster_runtime::ClusterRuntime::new(
+            runtime.handle().clone(),
+        ));
+        cx.set_global(crate::active_session::ActiveConnection {
+            cluster: target_cluster(),
+            label: "ctx".to_owned(),
+            connection,
+            session: WeakEntity::new_invalid(),
+            generation: 1,
+        });
+    });
+    let window = open_settings(cx);
+    render(window, cx);
+    render(window, cx);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    cx.run_until_parked();
+    assert!(
+        api.requests().is_empty(),
+        "opening Settings on Clusters lists nothing: {:?}",
+        api.requests()
+    );
+    cx.update(show_metrics_page);
+    render(window, cx);
+    for _ in 0..500 {
+        cx.run_until_parked();
+        if !api.requests().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(api.requests().len(), 1);
+    assert_eq!(api.requests()[0].path, "/api/v1/services");
+    close(window, cx);
+}

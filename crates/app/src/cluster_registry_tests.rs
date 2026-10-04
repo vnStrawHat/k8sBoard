@@ -558,7 +558,9 @@ fn profile_without_a_metrics_entry_has_no_source() {
 #[test]
 fn stored_metrics_entry_is_validated_into_the_profile() {
     let mut stored = entry("dev-1", "a.yaml");
-    stored.metrics = Some(metrics_fields("/select/0/prometheus"));
+    stored.metrics = Some(StoredMetrics::Fields(metrics_fields(
+        "/select/0/prometheus",
+    )));
     let profile = registry_with(stored).profile(&summary("dev-1", "a.yaml"));
     let source = profile.metrics.expect("an entry").expect("valid");
     assert_eq!(source.fields(), metrics_fields("/select/0/prometheus"));
@@ -567,13 +569,13 @@ fn stored_metrics_entry_is_validated_into_the_profile() {
 #[test]
 fn invalid_metrics_entry_fails_closed() {
     let mut stored = entry("dev-1", "a.yaml");
-    stored.metrics = Some(metrics_fields("/a/../b"));
+    stored.metrics = Some(StoredMetrics::Fields(metrics_fields("/a/../b")));
     let registry = registry_with(stored);
     let profile = registry.profile(&summary("dev-1", "a.yaml"));
     assert_eq!(profile.metrics, Some(Err(MetricsSourceError::Prefix)));
     assert_eq!(
         registry.clusters[0].metrics,
-        Some(metrics_fields("/a/../b")),
+        Some(StoredMetrics::Fields(metrics_fields("/a/../b"))),
         "the stored text is not rewritten"
     );
 }
@@ -581,7 +583,7 @@ fn invalid_metrics_entry_fails_closed() {
 #[test]
 fn metrics_entry_round_trips_without_a_credential_field() {
     let mut stored = entry("dev-1", "a.yaml");
-    stored.metrics = Some(metrics_fields(""));
+    stored.metrics = Some(StoredMetrics::Fields(metrics_fields("")));
     let json = serde_json::to_value(&stored).expect("serializes");
     assert_eq!(
         json["metrics"],

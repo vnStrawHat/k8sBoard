@@ -823,13 +823,15 @@ fn reset_clears_metrics() {
         context: "one".to_owned(),
     };
     edit_entry(&mut registry, &target, |entry| {
-        entry.metrics = Some(cluster::MetricsSourceFields {
-            namespace: "monitoring".to_owned(),
-            service: "vmselect".to_owned(),
-            port: "8481".to_owned(),
-            scheme: cluster::MetricsScheme::Http,
-            prefix: String::new(),
-        });
+        entry.metrics = Some(crate::cluster_registry::StoredMetrics::Fields(
+            cluster::MetricsSourceFields {
+                namespace: "monitoring".to_owned(),
+                service: "vmselect".to_owned(),
+                port: "8481".to_owned(),
+                scheme: cluster::MetricsScheme::Http,
+                prefix: String::new(),
+            },
+        ));
     });
     assert_eq!(registry.clusters.len(), 1, "a metrics-only entry is kept");
     reset_entry(&mut registry, &target);

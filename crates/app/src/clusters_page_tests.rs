@@ -918,7 +918,7 @@ fn metrics_fields() -> MetricsSourceFields {
 fn source_button_names_metrics_server_or_the_saved_service() {
     assert_eq!(metrics_source_label(None), "metrics-server only");
     assert_eq!(
-        metrics_source_label(Some(&metrics_fields())),
+        metrics_source_label(Some(&StoredMetrics::Fields(metrics_fields()))),
         "Prometheus-compatible · monitoring/vmselect:8481"
     );
 }
@@ -941,7 +941,7 @@ fn form_dropdown_clears_the_source(cx: &mut TestAppContext) {
         })
     };
     cx.update(|cx| set_metrics_source(&cluster, Some(metrics_fields()), cx));
-    assert_eq!(stored(cx), Some(metrics_fields()));
+    assert_eq!(stored(cx), Some(StoredMetrics::Fields(metrics_fields())));
     cx.update(|cx| set_metrics_source(&cluster, None, cx));
     assert_eq!(stored(cx), None);
     assert!(cx.read(|cx| AppSettings::get(cx).registry.clusters.is_empty()));

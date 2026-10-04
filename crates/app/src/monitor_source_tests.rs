@@ -88,6 +88,15 @@ fn all_ok() -> Vec<(UsageMetric, Result<SourceSeries, MetricsError>)> {
 }
 
 fn view_of(subject: MonitorSubject<'_>, pods: &[PodSummary], result: &SourceResult) -> SourceView {
+    view_in_range(MonitorRange::Hours6, subject, pods, result)
+}
+
+fn view_in_range(
+    range: MonitorRange,
+    subject: MonitorSubject<'_>,
+    pods: &[PodSummary],
+    result: &SourceResult,
+) -> SourceView {
     let (pod_history, node_history, kubelet) = (
         PodUsageHistory::default(),
         NodeUsageHistory::default(),
@@ -98,7 +107,7 @@ fn view_of(subject: MonitorSubject<'_>, pods: &[PodSummary], result: &SourceResu
         &MonitorInput {
             subject,
             scope: &scope,
-            range: MonitorRange::Hours6,
+            range,
             pods,
             pod_history: &pod_history,
             node_history: &node_history,
@@ -534,4 +543,34 @@ fn an_unknown_scope_falls_back_to_the_total() {
     );
     let (data, _) = charts_of(view);
     assert_eq!(data.scope, MonitorScope::Total);
+}
+
+#[test]
+fn the_node_disk_card_follows_the_range_resolution() {
+    let worker = node("worker-1");
+    let mut answers = all_ok();
+    answers.truncate(4);
+    for (range, step) in [
+        (MonitorRange::Minutes15, Duration::from_secs(15)),
+        (MonitorRange::Hour1, Duration::from_secs(15)),
+        (MonitorRange::Hours6, Duration::from_secs(300)),
+        (MonitorRange::Days30, Duration::from_secs(300)),
+    ] {
+        let view = view_in_range(
+            range,
+            MonitorSubject::Node(&worker),
+            &[],
+            &result(answers.clone()),
+        );
+        let (data, _) = charts_of(view);
+        assert_eq!(data.kubelet_charts[1].step, step, "{range:?}");
+    }
+}
+
+#[test]
+fn fallback_note_names_the_source() {
+    assert_eq!(
+        fallback_note("the metrics backend did not answer within 20 s"),
+        "Metrics source: the metrics backend did not answer within 20 s. Showing k8sBoard samples."
+    );
 }

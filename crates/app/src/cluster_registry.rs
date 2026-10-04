@@ -81,7 +81,47 @@ pub(crate) struct ClusterEntry {
     /// namespace, service, port, scheme, and prefix only, never a credential. `None` is
     /// metrics-server only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) metrics: Option<MetricsSourceFields>,
+    pub(crate) metrics: Option<StoredMetrics>,
+}
+
+/// The metrics source of a cluster as the settings file holds it. An entry of the wrong shape (a
+/// scheme of `ftp`, a missing port) is kept as the value it was, instead of failing the whole
+/// file: it reads as an invalid source, no request is made for it, and it is written back as it
+/// was until the user picks another source.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub(crate) enum StoredMetrics {
+    Fields(MetricsSourceFields),
+    Unreadable(serde_json::Value),
+}
+
+impl<'de> Deserialize<'de> for StoredMetrics {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(
+            match serde_json::from_value::<MetricsSourceFields>(value.clone()) {
+                Ok(fields) => Self::Fields(fields),
+                Err(_) => Self::Unreadable(value),
+            },
+        )
+    }
+}
+
+impl StoredMetrics {
+    /// The fields of a readable entry.
+    pub(crate) fn fields(&self) -> Option<&MetricsSourceFields> {
+        match self {
+            Self::Fields(fields) => Some(fields),
+            Self::Unreadable(_) => None,
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<MetricsSource, MetricsSourceError> {
+        match self {
+            Self::Fields(fields) => MetricsSource::new(fields),
+            Self::Unreadable(_) => Err(MetricsSourceError::Unreadable),
+        }
+    }
 }
 
 /// The namespace of a node shell pod unless the entry names another: usually exempt from Pod
@@ -215,7 +255,7 @@ impl ClusterRegistry {
             proxy: stored_proxy(entry.and_then(|entry| entry.proxy.as_ref())),
             metrics: entry
                 .and_then(|entry| entry.metrics.as_ref())
-                .map(MetricsSource::new),
+                .map(StoredMetrics::validate),
         }
     }
 }

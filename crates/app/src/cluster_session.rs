@@ -1630,11 +1630,27 @@ impl ClusterSession {
         SessionPhase::Connecting { _task: task }
     }
 
+    /// The `Ready` source state of the live session being replaced, when the stored entry is still
+    /// the one it checked: a new connection keeps it, so a 7d or 30d Monitor survives the swap
+    /// instead of dropping to the sampler for the length of a check.
+    fn kept_ready_source(&self) -> Option<SourceState> {
+        let (source, check) = self.live()?.metrics.source.ready()?;
+        let is_same = self
+            .source_entry
+            .as_ref()
+            .is_some_and(|entry| entry.as_ref().ok() == Some(source));
+        is_same.then(|| SourceState::Ready {
+            source: source.clone(),
+            check: *check,
+        })
+    }
+
     fn finish_connect(
         &mut self,
         result: Result<Result<Connected, ClusterError>, tokio::task::JoinError>,
         cx: &mut Context<Self>,
     ) {
+        let kept = self.kept_ready_source();
         self.phase = match result {
             Ok(Ok(connected)) => SessionPhase::Live(Box::new(LiveCluster::start(
                 connected,
@@ -1654,7 +1670,14 @@ impl ClusterSession {
         self.review_kind_access(cx);
         self.refresh_kind_counts(CountTrigger::Review, cx);
         self.update_metrics_feeds(cx);
-        self.restart_source_check(cx);
+        match kept {
+            Some(ready) => {
+                if let Some(live) = self.live_mut() {
+                    live.metrics.source = ready;
+                }
+            }
+            None => self.restart_source_check(cx),
+        }
         cx.notify();
     }
 
@@ -2222,6 +2245,13 @@ impl ClusterSession {
             }
         }
         cx.notify();
+    }
+
+    /// The `pod-monitor-source-fixture` screen sends no request to a source: the session forgets
+    /// the stored entry, so no check runs.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn forget_metrics_source_for_fixture(&mut self) {
+        self.source_entry = None;
     }
 
     /// Follows the stored metrics source of the cluster. The same entry is a no-op; another one

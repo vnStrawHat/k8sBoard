@@ -802,6 +802,13 @@ impl AppShell {
                 cx.notify();
             }),
         };
+        // The Settings window reads the published connection; it must not outlive the shell.
+        cx.on_release(|_, cx| {
+            if cx.has_global::<ActiveConnection>() {
+                cx.remove_global::<ActiveConnection>();
+            }
+        })
+        .detach();
         // However the main window goes, its pop-outs go with it: a log tab must not outlive it.
         let (main_window, popped_dock) =
             (window.window_handle().window_id(), shell.dock.downgrade());
@@ -3424,6 +3431,11 @@ impl AppShell {
         let Some(open) = &self.active_session else {
             return;
         };
+        // The fixture sends no request to a source, whatever the settings hold.
+        #[cfg(feature = "screenshot")]
+        if self.is_monitor_source_fixture {
+            return;
+        }
         let wanted = AppSettings::get(cx).registry.profile(&open.summary).metrics;
         open.session
             .update(cx, |session, cx| session.set_metrics_source(wanted, cx));

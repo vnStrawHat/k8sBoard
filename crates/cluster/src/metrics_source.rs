@@ -62,6 +62,9 @@ pub enum MetricsSourceError {
     Port,
     #[error("Use a path such as /select/0/prometheus.")]
     Prefix,
+    /// The stored entry could not be read at all (a hand-edited value of the wrong shape).
+    #[error("The stored entry cannot be read.")]
+    Unreadable,
 }
 
 impl MetricsSource {

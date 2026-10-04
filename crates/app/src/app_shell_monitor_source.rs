@@ -144,7 +144,7 @@ impl AppShell {
         self.drawer.monitor.source = Some(fetch);
     }
 
-    fn finish_source_fetch(
+    pub(super) fn finish_source_fetch(
         &mut self,
         key: &SourceKey,
         (end, step): (jiff::Timestamp, std::time::Duration),
@@ -238,10 +238,9 @@ impl AppShell {
         let Some(live) = self.subject_live(cx) else {
             return;
         };
-        let Some(pod) = live.pods.items().iter().find(|pod| subject.key.is_pod(pod)) else {
+        if !live.pods.items().iter().any(|pod| subject.key.is_pod(pod)) {
             return;
-        };
-        let _ = pod;
+        }
         let Some(source) = crate::monitor_source::fixture_source() else {
             return;
         };

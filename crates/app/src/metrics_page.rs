@@ -23,7 +23,7 @@ use gpui_kit::{
 use crate::active_session::ActiveConnection;
 use crate::cluster_form::edit_entry;
 use crate::cluster_metrics::SourceState;
-use crate::cluster_registry::ClusterRef;
+use crate::cluster_registry::{ClusterRef, StoredMetrics};
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{ClusterSession, error_text};
 use crate::settings::AppSettings;
@@ -42,7 +42,6 @@ const METRICS_SERVER_DETAIL: &str = "CPU and memory sampled by k8sBoard while it
 const PAGE_INTRO: &str = "Where the Monitor tab reads 7- and 30-day history and Topology reads traffic. k8sBoard reaches it through the API server service proxy with your kubeconfig credentials and stores no credential.";
 const NO_CLUSTER_TEXT: &str = "Connect to a cluster to choose its metrics source.";
 
-/// Marks the launch as `--screen settings-metrics-fixture`: the page shows fixed data.#[cfg(feature = "screenshot")]pub(crate) struct MetricsFixture;#[cfg(feature = "screenshot")]impl gpui_kit::Global for MetricsFixture {}
 /// Marks the launch as `--screen settings-metrics-fixture`: the page shows fixed data.
 #[cfg(feature = "screenshot")]
 pub(crate) struct MetricsFixture;
@@ -50,11 +49,12 @@ pub(crate) struct MetricsFixture;
 #[cfg(feature = "screenshot")]
 impl gpui_kit::Global for MetricsFixture {}
 
-/// What the radio list has selected.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What the radio list has selected. A detected row is held by its fields, not by its position:
+/// "Detect again" may reorder or drop rows, and Save must still write what the user picked.
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Choice {
     ServerOnly,
-    Candidate(usize),
+    Candidate(MetricsSourceFields),
     Other,
 }
 
@@ -123,10 +123,13 @@ fn initial_choice(saved: Option<&MetricsSourceFields>, candidates: &[MetricsCand
     let Some(saved) = saved else {
         return Choice::ServerOnly;
     };
-    candidates
+    if candidates
         .iter()
-        .position(|candidate| candidate.fields == *saved)
-        .map_or(Choice::Other, Choice::Candidate)
+        .any(|candidate| candidate.fields == *saved)
+    {
+        return Choice::Candidate(saved.clone());
+    }
+    Choice::Other
 }
 
 /// The Test result line and its tone.
@@ -150,9 +153,9 @@ fn test_line(result: &Result<SourceCheck, MetricsError>) -> (String, StatusTone)
 
 /// The `Saved:` line: the stored source and what the session made of it. `None` when nothing is
 /// saved.
-fn saved_line(saved: Option<&MetricsSourceFields>, state: Option<&SourceState>) -> Option<String> {
+fn saved_line(saved: Option<&StoredMetrics>, state: Option<&SourceState>) -> Option<String> {
     let saved = saved?;
-    let Ok(stored) = MetricsSource::new(saved) else {
+    let Ok(stored) = saved.validate() else {
         return Some("Saved: invalid entry in settings".to_owned());
     };
     // The state names the source it checked, which can briefly lag the stored one.
@@ -167,6 +170,17 @@ fn saved_line(saved: Option<&MetricsSourceFields>, state: Option<&SourceState>) 
         Some(SourceState::None) | None => return Some(format!("Saved: {}", stored.display())),
     };
     Some(format!("Saved: {} · {shown}", source.display()))
+}
+
+/// What the Other service inputs hold for a cluster: its saved source, else empty fields.
+fn blank_fields(saved: Option<&MetricsSourceFields>) -> MetricsSourceFields {
+    saved.cloned().unwrap_or(MetricsSourceFields {
+        namespace: String::new(),
+        service: String::new(),
+        port: String::new(),
+        scheme: MetricsScheme::Http,
+        prefix: String::new(),
+    })
 }
 
 fn candidate_detail(candidate: &MetricsCandidate) -> String {
@@ -344,12 +358,13 @@ impl MetricsPage {
         self.cluster = Some(cluster);
         self.has_chosen = false;
         self.test = TestResult::Idle;
-        let saved = self.saved_fields(cx);
-        self.choice = initial_choice(saved.as_ref(), &[]);
-        if let Some(saved) = &saved {
-            self.set_inputs(saved, window, cx);
-        }
-        self.start_detection(cx);
+        self.detection = Detection::Idle;
+        let saved = self.saved_entry(cx);
+        let fields = saved.as_ref().and_then(StoredMetrics::fields);
+        self.choice = initial_choice(fields, &[]);
+        // Another cluster must not inherit what was typed for the last one.
+        self.set_inputs(&blank_fields(fields), window, cx);
+        // The first render starts the detection, so a window opened for another page lists nothing.
         cx.notify();
     }
 
@@ -370,7 +385,7 @@ impl MetricsPage {
     }
 
     /// What Settings stores for the open cluster.
-    fn saved_fields(&self, cx: &App) -> Option<MetricsSourceFields> {
+    fn saved_entry(&self, cx: &App) -> Option<StoredMetrics> {
         let cluster = self.cluster.as_ref()?;
         AppSettings::get(cx)
             .registry
@@ -411,9 +426,9 @@ impl MetricsPage {
             Err(_) => Detection::Failed("the service listing stopped unexpectedly".to_owned()),
         };
         if !self.has_chosen {
-            let saved = self.saved_fields(cx);
-            let candidates = self.candidates();
-            self.choice = initial_choice(saved.as_ref(), candidates);
+            let saved = self.saved_entry(cx);
+            let fields = saved.as_ref().and_then(StoredMetrics::fields);
+            self.choice = initial_choice(fields, self.candidates());
         }
         cx.notify();
     }
@@ -434,10 +449,12 @@ impl MetricsPage {
     }
 
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
-        let candidates = self.candidates().len();
+        let candidates = self.candidates();
         self.choice = match index {
             0 => Choice::ServerOnly,
-            index if index <= candidates => Choice::Candidate(index - 1),
+            index if index <= candidates.len() => {
+                Choice::Candidate(candidates[index - 1].fields.clone())
+            }
             _ => Choice::Other,
         };
         self.has_chosen = true;
@@ -458,18 +475,21 @@ impl MetricsPage {
 
     /// The selected choice as what would be saved; `Err` while `Other service` does not validate.
     fn selected(&self, cx: &App) -> Result<Option<MetricsSource>, MetricsSourceError> {
-        match self.choice {
+        match &self.choice {
             Choice::ServerOnly => Ok(None),
-            Choice::Candidate(index) => match self.candidates().get(index) {
-                Some(candidate) => MetricsSource::new(&candidate.fields).map(Some),
-                None => Ok(None),
-            },
+            Choice::Candidate(fields) => MetricsSource::new(fields).map(Some),
             Choice::Other => MetricsSource::new(&self.other_fields(cx)).map(Some),
         }
     }
 
+    /// Whether the detection is still listing: what is offered may change, so nothing is tested or
+    /// saved meanwhile.
+    fn is_detecting(&self) -> bool {
+        matches!(self.detection, Detection::Running { .. })
+    }
+
     fn start_test(&mut self, cx: &mut Context<Self>) {
-        if self.is_fixture {
+        if self.is_fixture || self.is_detecting() {
             return;
         }
         let Ok(Some(source)) = self.selected(cx) else {
@@ -499,10 +519,12 @@ impl MetricsPage {
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
-        let (Some(cluster), Ok(selected)) = (self.cluster.clone(), self.selected(cx)) else {
+        let (Some(cluster), Ok(selected), false) =
+            (self.cluster.clone(), self.selected(cx), self.is_detecting())
+        else {
             return;
         };
-        let stored = selected.map(|source| source.fields());
+        let stored = selected.map(|source| StoredMetrics::Fields(source.fields()));
         AppSettings::update(cx, |settings| {
             edit_entry(&mut settings.registry, &cluster, |entry| {
                 entry.metrics = stored;
@@ -546,13 +568,18 @@ impl MetricsPage {
             )
         }));
         rows.push(("Other service".into(), String::new()));
-        let selected = match self.choice {
-            Choice::ServerOnly => 0,
-            Choice::Candidate(index) => index + 1,
-            Choice::Other => rows.len() - 1,
+        // A chosen row that "Detect again" no longer lists has no row to show it on.
+        let selected = match &self.choice {
+            Choice::ServerOnly => Some(0),
+            Choice::Candidate(fields) => self
+                .candidates()
+                .iter()
+                .position(|candidate| candidate.fields == *fields)
+                .map(|index| index + 1),
+            Choice::Other => Some(rows.len() - 1),
         };
         RadioGroup::vertical("metrics-source")
-            .selected_index(Some(selected))
+            .selected_index(selected)
             .on_change(cx.listener(|page, index: &usize, _, cx| page.choose(*index, cx)))
             .children(
                 rows.into_iter()
@@ -651,9 +678,9 @@ impl MetricsPage {
 
     fn render_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         let selection = self.selected(cx);
-        let can_run = matches!(selection, Ok(Some(_)));
-        let can_save = selection.is_ok();
-        let is_detecting = matches!(self.detection, Detection::Running { .. });
+        let is_detecting = self.is_detecting();
+        let can_run = matches!(selection, Ok(Some(_))) && !is_detecting;
+        let can_save = selection.is_ok() && !is_detecting;
         let is_testing = matches!(self.test, TestResult::Running { .. });
         let result = match &self.test {
             TestResult::Idle => None,
@@ -705,7 +732,12 @@ impl Render for MetricsPage {
         if self.cluster.is_none() {
             return muted(NO_CLUSTER_TEXT, cx).into_any_element();
         }
-        let saved = self.saved_fields(cx);
+        // Detection lists every service of the cluster, so it starts when the page is first shown,
+        // not when the Settings window opens on another page.
+        if matches!(self.detection, Detection::Idle) {
+            self.start_detection(cx);
+        }
+        let saved = self.saved_entry(cx);
         let session = self.session.as_ref().and_then(|session| session.upgrade());
         let live_state = session
             .as_ref()

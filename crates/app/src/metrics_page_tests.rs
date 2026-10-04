@@ -9,6 +9,7 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, TestAppContext, WeakEntity, WindowOptions};
 
 use super::*;
+use crate::cluster_registry::StoredMetrics;
 use crate::settings::Settings;
 use crate::settings_store::{LoadedSettings, WriteMode};
 
@@ -58,7 +59,7 @@ fn saved_source_is_preselected() {
     let saved = candidates[1].fields.clone();
     assert_eq!(
         initial_choice(Some(&saved), &candidates),
-        Choice::Candidate(1)
+        Choice::Candidate(saved.clone())
     );
     let elsewhere = fields("obs", "thanos", "10902", "");
     assert_eq!(initial_choice(Some(&elsewhere), &candidates), Choice::Other);
@@ -100,10 +101,11 @@ fn test_lines_per_outcome() {
 #[test]
 fn saved_line_names_the_source_and_its_state() {
     let saved = fields("monitoring", "vmselect", "8481", "/select/0/prometheus");
+    let stored = StoredMetrics::Fields(saved.clone());
     let name = "monitoring/vmselect:8481 /select/0/prometheus";
     assert_eq!(saved_line(None, None), None);
     assert_eq!(
-        saved_line(Some(&saved), None).as_deref(),
+        saved_line(Some(&stored), None).as_deref(),
         Some(format!("Saved: {name}").as_str())
     );
     let ready = SourceState::Ready {
@@ -114,7 +116,7 @@ fn saved_line_names_the_source_and_its_state() {
         },
     };
     assert_eq!(
-        saved_line(Some(&saved), Some(&ready)).as_deref(),
+        saved_line(Some(&stored), Some(&ready)).as_deref(),
         Some(format!("Saved: {name} · Ready").as_str())
     );
     let failed = SourceState::Failed {
@@ -122,19 +124,19 @@ fn saved_line_names_the_source_and_its_state() {
         error: MetricsError::TimedOut,
     };
     assert_eq!(
-        saved_line(Some(&saved), Some(&failed)).as_deref(),
+        saved_line(Some(&stored), Some(&failed)).as_deref(),
         Some(
             format!("Saved: {name} · Failed: the metrics backend did not answer within 20 s")
                 .as_str()
         )
     );
     assert_eq!(
-        saved_line(Some(&saved), Some(&SourceState::Invalid)).as_deref(),
+        saved_line(Some(&stored), Some(&SourceState::Invalid)).as_deref(),
         Some(format!("Saved: {name} · Invalid entry in settings").as_str())
     );
     let invalid = fields("Bad", "x", "80", "");
     assert_eq!(
-        saved_line(Some(&invalid), None).as_deref(),
+        saved_line(Some(&StoredMetrics::Fields(invalid)), None).as_deref(),
         Some("Saved: invalid entry in settings")
     );
 }
@@ -157,13 +159,16 @@ fn install(cx: &mut TestAppContext) {
     cx.run_until_parked();
 }
 
+/// The page as the root view of a window, drawn once: detection starts with the first draw.
 fn open_page(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<MetricsPage>) {
-    cx.update(|cx| {
+    let (window, page) = cx.update(|cx| {
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| MetricsPage::new(window, cx))
         })
         .expect("open the test window")
-    })
+    });
+    render(window, cx);
+    (window, page)
 }
 
 fn render(window: AnyWindowHandle, cx: &mut TestAppContext) {
@@ -179,19 +184,49 @@ fn cluster_ref() -> ClusterRef {
     }
 }
 
+fn other_cluster_ref() -> ClusterRef {
+    ClusterRef {
+        kubeconfig: std::path::PathBuf::from("a.yaml"),
+        context: "other".to_owned(),
+    }
+}
+
+fn vmselect_fields() -> MetricsSourceFields {
+    fields("monitoring", "vmselect-x", "8481", "/select/0/prometheus")
+}
+
 const SERVICES: &str = r#"{"apiVersion":"v1","kind":"ServiceList","metadata":{},"items":[
  {"metadata":{"name":"vmselect-x","namespace":"monitoring","labels":{"app.kubernetes.io/name":"vmselect"}},
   "spec":{"ports":[{"name":"http","port":8481}]}},
  {"metadata":{"name":"vm-grafana","namespace":"monitoring","labels":{"app.kubernetes.io/name":"grafana"}},
   "spec":{"ports":[{"name":"http","port":80}]}}]}"#;
 
-/// A runtime that stays alive for the test, with the connection published as the shell would.
-fn publish_connection(cx: &mut TestAppContext) -> (tokio::runtime::Runtime, FakeApi) {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+const OTHER_SERVICES: &str = r#"{"apiVersion":"v1","kind":"ServiceList","metadata":{},"items":[
+ {"metadata":{"name":"prometheus-operated","namespace":"obs"},
+  "spec":{"ports":[{"name":"web","port":9090}]}}]}"#;
+
+fn new_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
         .build()
-        .expect("a tokio runtime");
+        .expect("a tokio runtime")
+}
+
+fn set_connection(cluster: ClusterRef, connection: cluster::ClusterConnection, cx: &mut App) {
+    cx.set_global(ActiveConnection {
+        label: cluster.context.clone(),
+        cluster,
+        connection,
+        session: WeakEntity::new_invalid(),
+        generation: 1,
+    });
+}
+
+/// A runtime that stays alive for the test, with the connection of the first cluster published as
+/// the shell would, answering the service list and a count of one series per query.
+fn publish_connection(cx: &mut TestAppContext) -> (tokio::runtime::Runtime, FakeApi) {
+    let runtime = new_runtime();
     cx.executor().allow_parking();
     let handle = runtime.handle().clone();
     let (connection, api) = {
@@ -210,13 +245,7 @@ fn publish_connection(cx: &mut TestAppContext) -> (tokio::runtime::Runtime, Fake
     };
     cx.update(|cx| {
         cx.set_global(ClusterRuntime::new(handle));
-        cx.set_global(ActiveConnection {
-            cluster: cluster_ref(),
-            label: "readonly@Monitor".to_owned(),
-            connection,
-            session: WeakEntity::new_invalid(),
-            generation: 1,
-        });
+        set_connection(cluster_ref(), connection, cx);
     });
     (runtime, api)
 }
@@ -237,11 +266,31 @@ fn wait_for(
     panic!("timed out waiting for {what}");
 }
 
+fn stored_entry(cluster: &ClusterRef, cx: &mut TestAppContext) -> Option<StoredMetrics> {
+    cx.read(|cx| {
+        AppSettings::get(cx)
+            .registry
+            .clusters
+            .iter()
+            .find(|entry| entry.cluster == *cluster)
+            .and_then(|entry| entry.metrics.clone())
+    })
+}
+
+fn save_vmselect(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            edit_entry(&mut settings.registry, &cluster_ref(), |entry| {
+                entry.metrics = Some(StoredMetrics::Fields(vmselect_fields()));
+            });
+        });
+    });
+}
+
 #[gpui_kit::test]
 fn metrics_page_without_cluster_shows_the_hint(cx: &mut TestAppContext) {
     install(cx);
-    let (window, page) = open_page(cx);
-    render(window, cx);
+    let (_window, page) = open_page(cx);
     page.read_with(cx, |page, _| {
         assert!(page.cluster.is_none());
         assert!(
@@ -260,9 +309,8 @@ fn metrics_page_without_cluster_shows_the_hint(cx: &mut TestAppContext) {
 fn detection_lists_the_candidates_of_the_connected_cluster(cx: &mut TestAppContext) {
     install(cx);
     let (_runtime, api) = publish_connection(cx);
-    let (window, page) = open_page(cx);
+    let (_window, page) = open_page(cx);
     wait_for("detection", cx, &page, |page| page.is_settled());
-    render(window, cx);
     page.read_with(cx, |page, _| {
         let found: Vec<&str> = page
             .candidates()
@@ -282,21 +330,12 @@ fn detection_lists_the_candidates_of_the_connected_cluster(cx: &mut TestAppConte
 fn saved_candidate_is_preselected_after_detection(cx: &mut TestAppContext) {
     install(cx);
     let (_runtime, _api) = publish_connection(cx);
-    cx.update(|cx| {
-        AppSettings::update(cx, |settings| {
-            edit_entry(&mut settings.registry, &cluster_ref(), |entry| {
-                entry.metrics = Some(fields(
-                    "monitoring",
-                    "vmselect-x",
-                    "8481",
-                    "/select/0/prometheus",
-                ));
-            });
-        });
-    });
+    save_vmselect(cx);
     let (_window, page) = open_page(cx);
     wait_for("detection", cx, &page, |page| page.is_settled());
-    page.read_with(cx, |page, _| assert_eq!(page.choice, Choice::Candidate(0)));
+    page.read_with(cx, |page, _| {
+        assert_eq!(page.choice, Choice::Candidate(vmselect_fields()));
+    });
 }
 
 #[gpui_kit::test]
@@ -305,34 +344,72 @@ fn save_writes_fields_only_and_server_only_clears_them(cx: &mut TestAppContext) 
     let (_runtime, _api) = publish_connection(cx);
     let (_window, page) = open_page(cx);
     wait_for("detection", cx, &page, |page| page.is_settled());
-    let stored = |cx: &mut TestAppContext| {
-        cx.read(|cx| {
-            AppSettings::get(cx)
-                .registry
-                .clusters
-                .iter()
-                .find(|entry| entry.cluster == cluster_ref())
-                .and_then(|entry| entry.metrics.clone())
-        })
-    };
     page.update(cx, |page, cx| {
         page.choose(1, cx);
         page.save(cx);
     });
     assert_eq!(
-        stored(cx),
-        Some(fields(
-            "monitoring",
-            "vmselect-x",
-            "8481",
-            "/select/0/prometheus"
-        ))
+        stored_entry(&cluster_ref(), cx),
+        Some(StoredMetrics::Fields(vmselect_fields()))
     );
     page.update(cx, |page, cx| {
         page.choose(0, cx);
         page.save(cx);
     });
-    assert_eq!(stored(cx), None, "metrics-server only stores nothing");
+    assert_eq!(
+        stored_entry(&cluster_ref(), cx),
+        None,
+        "metrics-server only stores nothing"
+    );
+}
+
+#[gpui_kit::test]
+fn detect_again_keeps_the_picked_row_and_save_writes_it(cx: &mut TestAppContext) {
+    install(cx);
+    let (_runtime, _api) = publish_connection(cx);
+    let (window, page) = open_page(cx);
+    wait_for("detection", cx, &page, |page| page.is_settled());
+    save_vmselect(cx);
+    page.update(cx, |page, cx| {
+        page.choose(1, cx);
+        page.start_detection(cx);
+    });
+    // Save and Test do nothing while the list is being read.
+    page.update(cx, |page, cx| {
+        assert!(page.is_detecting());
+        page.save(cx);
+        page.start_test(cx);
+        assert!(matches!(page.test, TestResult::Idle));
+    });
+    wait_for("the second detection", cx, &page, |page| page.is_settled());
+    render(window, cx);
+    page.update(cx, |page, cx| {
+        assert_eq!(page.choice, Choice::Candidate(vmselect_fields()));
+        page.save(cx);
+    });
+    assert_eq!(
+        stored_entry(&cluster_ref(), cx),
+        Some(StoredMetrics::Fields(vmselect_fields())),
+        "the stored entry is unchanged, not wiped"
+    );
+}
+
+#[gpui_kit::test]
+fn a_picked_row_that_detection_drops_still_saves_what_was_picked(cx: &mut TestAppContext) {
+    install(cx);
+    let (_runtime, _api) = publish_connection(cx);
+    let (_window, page) = open_page(cx);
+    wait_for("detection", cx, &page, |page| page.is_settled());
+    page.update(cx, |page, cx| {
+        page.choose(1, cx);
+        // The list changes under the choice: nothing is listed any more.
+        page.detection = Detection::Done(Vec::new());
+        page.save(cx);
+    });
+    assert_eq!(
+        stored_entry(&cluster_ref(), cx),
+        Some(StoredMetrics::Fields(vmselect_fields()))
+    );
 }
 
 #[gpui_kit::test]
@@ -382,6 +459,55 @@ fn test_checks_the_selected_source(cx: &mut TestAppContext) {
     assert!(path.starts_with(
         "/api/v1/namespaces/monitoring/services/http:vmselect-x:8481/proxy/select/0/prometheus/api/v1/query"
     ));
+}
+
+#[gpui_kit::test]
+fn switching_clusters_clears_inputs_and_drops_a_running_detection(cx: &mut TestAppContext) {
+    install(cx);
+    // The first cluster never answers its list.
+    let runtime = new_runtime();
+    cx.executor().allow_parking();
+    let (hung, _hung_api) = {
+        let _guard = runtime.enter();
+        FakeApi::failing(WritePolicy::Blocked, cluster::fake_api::Failure::Hang)
+    };
+    let (answering, _answering_api) = {
+        let _guard = runtime.enter();
+        FakeApi::connection(WritePolicy::Blocked, |_| (200, OTHER_SERVICES.to_owned()))
+    };
+    let handle = runtime.handle().clone();
+    cx.update(|cx| {
+        cx.set_global(ClusterRuntime::new(handle));
+        set_connection(cluster_ref(), hung, cx);
+    });
+    // The first cluster has a saved source, so its fields fill the inputs.
+    save_vmselect(cx);
+    let (window, page) = open_page(cx);
+    page.read_with(cx, |page, cx| {
+        assert!(page.is_detecting());
+        assert_eq!(page.service.read(cx).value().as_ref(), "vmselect-x");
+    });
+    // The user moves to a cluster with no saved source.
+    cx.update(|cx| set_connection(other_cluster_ref(), answering, cx));
+    cx.run_until_parked();
+    render(window, cx);
+    wait_for("the second detection", cx, &page, |page| page.is_settled());
+    page.read_with(cx, |page, cx| {
+        assert_eq!(page.cluster, Some(other_cluster_ref()));
+        let found: Vec<&str> = page
+            .candidates()
+            .iter()
+            .map(|candidate| candidate.fields.service.as_str())
+            .collect();
+        assert_eq!(found, ["prometheus-operated"], "the old list was dropped");
+        assert_eq!(page.choice, Choice::ServerOnly);
+        assert_eq!(
+            page.service.read(cx).value().as_ref(),
+            "",
+            "inputs are cleared"
+        );
+        assert_eq!(page.namespace.read(cx).value().as_ref(), "");
+    });
 }
 
 #[gpui_kit::test]

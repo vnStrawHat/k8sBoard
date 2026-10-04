@@ -7,7 +7,7 @@ use gpui_kit::component::Theme;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef};
+use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef, StoredMetrics};
 use crate::environment::{ClusterColor, Environment};
 use crate::kubeconfig_folder::FileStamp;
 use crate::port_forwards::{ForwardPreset, ForwardSpec, LocalPortSpec, TargetSpec};
@@ -50,13 +50,13 @@ fn full_settings() -> Settings {
                 node_shell_namespace: Some("debug".to_owned()),
                 color: Some(ClusterColor::Teal),
                 proxy: Some(ClusterProxy::Url("http://proxy.example:3128".to_owned())),
-                metrics: Some(MetricsSourceFields {
+                metrics: Some(StoredMetrics::Fields(MetricsSourceFields {
                     namespace: "monitoring".to_owned(),
                     service: "vmselect".to_owned(),
                     port: "8481".to_owned(),
                     scheme: MetricsScheme::Http,
                     prefix: "/select/0/prometheus".to_owned(),
-                }),
+                })),
             }],
             last_used: Some(cluster),
             last_used_stamp: Some(FileStamp {
@@ -624,5 +624,52 @@ fn log_and_terminal_sections_stay_out_of_a_default_file() {
     let value = serde_json::to_value(Settings::default()).expect("serializes");
     for key in ["logs", "terminal", "general", "appearance"] {
         assert!(value.get(key).is_none(), "{key}");
+    }
+}
+
+/// A hand-edited metrics entry of the wrong shape must not make the whole file corrupt.
+#[test]
+fn a_bad_metrics_entry_does_not_fail_the_settings_file() {
+    let bad_scheme =
+        json!({"namespace": "monitoring", "service": "vmselect", "port": "8481", "scheme": "ftp"});
+    let missing_port = json!({"namespace": "monitoring", "service": "vmselect", "scheme": "http"});
+    let wrong_type = json!("not an object");
+    for bad in [bad_scheme, missing_port, wrong_type] {
+        let file = json!({
+            "version": 1,
+            "theme": "dark",
+            "registry": {"clusters": [
+                {"kubeconfig": "a.yaml", "context": "bad", "metrics": bad},
+                {"kubeconfig": "a.yaml", "context": "good", "display_name": "Good"},
+            ]},
+        });
+        let settings: Settings = serde_json::from_value(file).expect("the file still loads");
+        assert_eq!(
+            settings.theme,
+            ThemePreference::Dark,
+            "the rest of the file loads"
+        );
+        let clusters = &settings.registry.clusters;
+        assert_eq!(clusters[1].display_name.as_deref(), Some("Good"));
+        assert_eq!(
+            clusters[0].metrics,
+            Some(StoredMetrics::Unreadable(bad.clone()))
+        );
+        // It reads as an invalid source, so no request is made for it.
+        let summary = cluster::ContextSummary {
+            name: "bad".to_owned(),
+            cluster: "c".to_owned(),
+            user: None,
+            namespace: None,
+            source: PathBuf::from("a.yaml"),
+        };
+        let profile = settings.registry.profile(&summary);
+        assert_eq!(
+            profile.metrics,
+            Some(Err(cluster::MetricsSourceError::Unreadable))
+        );
+        // And it is written back as it was, not rewritten.
+        let written = serde_json::to_value(&settings).expect("serializes");
+        assert_eq!(written["registry"]["clusters"][0]["metrics"], bad);
     }
 }

@@ -334,7 +334,11 @@ fn one_line(text: Option<&str>) -> String {
 fn is_invisible_format(ch: char) -> bool {
     matches!(
         ch,
-        '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+        '\u{061C}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2069}'
+            | '\u{FEFF}'
     )
 }
 

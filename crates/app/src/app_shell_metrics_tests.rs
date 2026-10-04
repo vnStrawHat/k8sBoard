@@ -9,6 +9,7 @@ use super::app_shell_switch_tests::{SwitchFixture, open_switch_fixture};
 use super::*;
 use crate::cluster_form::edit_entry;
 use crate::cluster_metrics::SourceState;
+use crate::cluster_registry::StoredMetrics;
 
 const EMPTY_LIST: &str =
     r#"{"apiVersion":"v1","kind":"List","metadata":{"resourceVersion":"1"},"items":[]}"#;
@@ -53,7 +54,7 @@ fn save_metrics(
     cx.update(|cx| {
         AppSettings::update(cx, |settings| {
             edit_entry(&mut settings.registry, &cluster, |stored| {
-                stored.metrics = entry
+                stored.metrics = entry.map(StoredMetrics::Fields)
             });
         });
     });
@@ -154,9 +155,28 @@ use super::app_shell_switch_tests::{palette_pod, palette_pod_object};
 use crate::drawer::{DrawerTab, MonitorRange, MonitorScope};
 use crate::monitor_source::SourceView;
 
+const REFUSED: &str = r#"{"status":"error","errorType":"bad_data","error":"too many series"}"#;
+const NO_CPU: &str = r#"{"status":"success","data":{"resultType":"vector","result":[]}}"#;
+
+/// How the fake source answers.
+#[derive(Clone, Copy)]
+struct Backend {
+    /// The answer to the check query.
+    count: &'static str,
+    /// Every range query is refused with a backend error.
+    is_range_refused: bool,
+}
+
+impl Backend {
+    const HEALTHY: Self = Self {
+        count: CPU_COUNT,
+        is_range_refused: false,
+    };
+}
+
 /// A fake API: a matrix for every `query_range` (one point per step), a vector for `query`, and an
 /// empty list for the rest.
-fn monitor_answer(request: &cluster::fake_api::RecordedRequest) -> (u16, String) {
+fn monitor_answer(request: &cluster::fake_api::RecordedRequest, backend: Backend) -> (u16, String) {
     // The session's own pods watch must keep the pod the test shows.
     if request.path == "/api/v1/pods" {
         let pod =
@@ -172,7 +192,10 @@ fn monitor_answer(request: &cluster::fake_api::RecordedRequest) -> (u16, String)
         return (200, EMPTY_LIST.to_owned());
     }
     if request.path.ends_with("/query") {
-        return (200, CPU_COUNT.to_owned());
+        return (200, backend.count.to_owned());
+    }
+    if backend.is_range_refused {
+        return (400, REFUSED.to_owned());
     }
     // The numbers are plain digits, so the raw query needs no decoding.
     let number = |key: &str| {
@@ -198,10 +221,20 @@ fn monitor_answer(request: &cluster::fake_api::RecordedRequest) -> (u16, String)
 }
 
 fn monitor_fixture(name: &str, cx: &mut TestAppContext) -> (SwitchFixture, FakeApi) {
+    monitor_fixture_with(name, Backend::HEALTHY, cx)
+}
+
+fn monitor_fixture_with(
+    name: &str,
+    backend: Backend,
+    cx: &mut TestAppContext,
+) -> (SwitchFixture, FakeApi) {
     let fixture = open_switch_fixture(name, cx);
     let (connection, api) = {
         let _guard = fixture.runtime.enter();
-        FakeApi::connection(WritePolicy::Blocked, monitor_answer)
+        FakeApi::connection(WritePolicy::Blocked, move |request| {
+            monitor_answer(request, backend)
+        })
     };
     let session = fixture.session(cx);
     session.update(cx, |session, cx| {
@@ -340,4 +373,149 @@ fn a_long_range_builds_no_sampler_cache(cx: &mut TestAppContext) {
             "7d never reads the sampler"
         );
     });
+}
+
+#[gpui_kit::test]
+fn a_source_without_cpu_series_offers_the_sampler_ranges_only(cx: &mut TestAppContext) {
+    let backend = Backend {
+        count: NO_CPU,
+        ..Backend::HEALTHY
+    };
+    let (fixture, api) = monitor_fixture_with("monitor-no-cpu", backend, cx);
+    let session = fixture.session(cx);
+    session.read_with(cx, |session, _| {
+        let live = session.live().expect("live");
+        let (_, check) = live.metrics.source.ready().expect("a reachable source");
+        assert_eq!(check.cpu_series, 0);
+    });
+    fixture.shell.update(cx, |shell, cx| {
+        shell.set_monitor_range(MonitorRange::Days30, cx);
+    });
+    fixture.draw_twice(cx);
+    fixture.shell.read_with(cx, |shell, _| {
+        assert!(shell.drawer.monitor.source.is_none(), "no fetch is wanted");
+        assert_eq!(
+            shell.drawer.monitor.range,
+            MonitorRange::Hours24,
+            "the long range goes back to 24h"
+        );
+    });
+    assert_eq!(range_requests(&api), 0);
+}
+
+#[gpui_kit::test]
+fn a_refused_short_range_falls_back_to_the_sampler_with_its_reason(cx: &mut TestAppContext) {
+    let backend = Backend {
+        is_range_refused: true,
+        ..Backend::HEALTHY
+    };
+    let (fixture, _api) = monitor_fixture_with("monitor-refused", backend, cx);
+    wait_for_view(&fixture, cx);
+    fixture.draw_twice(cx);
+    fixture.shell.read_with(cx, |shell, _| {
+        let fetch = shell.drawer.monitor.source.as_ref().expect("a fetch");
+        assert_eq!(shell.drawer.monitor.range, MonitorRange::Minutes15);
+        match &fetch.view {
+            Some(SourceView::Fallback(reason)) => assert_eq!(
+                crate::monitor_source::fallback_note(reason),
+                "Metrics source: the metrics backend refused the query: too many series. Showing k8sBoard samples."
+            ),
+            _ => panic!("a refused query falls back"),
+        }
+    });
+}
+
+#[gpui_kit::test]
+fn a_switch_drops_the_fetch_and_ignores_a_late_answer(cx: &mut TestAppContext) {
+    let (fixture, _api) = monitor_fixture("monitor-switch", cx);
+    wait_for_view(&fixture, cx);
+    let old_key = fixture.shell.read_with(cx, |shell, _| {
+        shell
+            .drawer
+            .monitor
+            .source
+            .as_ref()
+            .expect("a fetch")
+            .key
+            .clone()
+    });
+    let other = fixture.cluster("stg-b", cx);
+    fixture
+        .shell
+        .update(cx, |shell, cx| shell.switch_cluster(&other, cx));
+    cx.run_until_parked();
+    fixture.draw_twice(cx);
+    fixture.shell.read_with(cx, |shell, _| {
+        assert!(shell.drawer.monitor.source.is_none());
+    });
+    // An answer of the old key that lands after the switch changes nothing.
+    fixture.shell.update(cx, |shell, cx| {
+        shell.finish_source_fetch(
+            &old_key,
+            (jiff::Timestamp::now(), std::time::Duration::from_secs(15)),
+            Ok(Vec::new()),
+            cx,
+        );
+    });
+    fixture.shell.read_with(cx, |shell, _| {
+        assert!(shell.drawer.monitor.source.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn a_ready_source_survives_a_new_connection_with_the_same_entry(cx: &mut TestAppContext) {
+    let (fixture, api) = live_fixture("metrics-keep", cx);
+    save_metrics(&fixture, Some(fields("/select/0/prometheus")), cx);
+    wait_for_state(&fixture, "ready", cx);
+    assert_eq!(proxy_requests(&api), 1);
+    let session = fixture.session(cx);
+    let connection = session.read_with(cx, |session, _| {
+        session.live().expect("live").connection().clone()
+    });
+    session.update(cx, |session, cx| {
+        session.go_live_for_test(connection, NamespaceScope::All, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        state_name(&fixture, cx),
+        "ready",
+        "kept at once, not checking"
+    );
+    assert_eq!(proxy_requests(&api), 1, "no second check");
+    // Another entry is not kept.
+    save_metrics(&fixture, Some(fields("")), cx);
+    wait_for_state(&fixture, "ready", cx);
+    assert_eq!(proxy_requests(&api), 2);
+}
+
+#[gpui_kit::test]
+fn an_unreadable_entry_is_invalid_and_sends_no_request(cx: &mut TestAppContext) {
+    let (fixture, api) = live_fixture("metrics-unreadable", cx);
+    let cluster = fixture.cluster("prod-a", cx);
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            edit_entry(&mut settings.registry, &cluster, |stored| {
+                stored.metrics = Some(StoredMetrics::Unreadable(
+                    serde_json::json!({"namespace": "monitoring", "scheme": "ftp"}),
+                ));
+            });
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(state_name(&fixture, cx), "invalid");
+    assert_eq!(proxy_requests(&api), 0);
+}
+
+#[gpui_kit::test]
+fn releasing_the_shell_removes_the_published_connection(cx: &mut TestAppContext) {
+    let (fixture, _api) = live_fixture("metrics-release", cx);
+    assert!(cx.update(|cx| cx.has_global::<ActiveConnection>()));
+    let shell = fixture.shell.downgrade();
+    cx.update_window(fixture.window.into(), |_, window, _| window.remove_window())
+        .expect("the window is open");
+    cx.run_until_parked();
+    drop(fixture);
+    cx.run_until_parked();
+    assert!(shell.upgrade().is_none(), "the shell is released");
+    assert!(!cx.update(|cx| cx.has_global::<ActiveConnection>()));
 }

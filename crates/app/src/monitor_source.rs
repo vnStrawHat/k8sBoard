@@ -12,7 +12,6 @@ use cluster::{
 use gpui_kit::Task;
 
 use crate::drawer::{MonitorRange, MonitorScope};
-use crate::history_rings::Resolution;
 use crate::kind_row::{PodOwner, owns_pod};
 use crate::kubelet_history::{RateKind, RatePair};
 use crate::monitor_data::{
@@ -200,6 +199,11 @@ pub(crate) fn step_text(step: Duration) -> String {
     }
 }
 
+/// The muted line above the sampler charts when a short range could not be served by the source.
+pub(crate) fn fallback_note(reason: &str) -> String {
+    format!("Metrics source: {reason}. Showing k8sBoard samples.")
+}
+
 type Points = Vec<(jiff::Timestamp, Option<f64>)>;
 
 fn answer(
@@ -285,30 +289,28 @@ pub(crate) fn source_monitor_data(input: &MonitorInput, result: &SourceResult) -
     ];
     let network = pair_chart(
         &frame,
-        input,
-        &scope,
         (
             "monitor-network",
             "Network",
             "network",
             ["receive", "transmit"],
         ),
+        source_network_notice(input, &scope),
         [
             answer(result, UsageMetric::NetworkReceive),
             answer(result, UsageMetric::NetworkTransmit),
         ],
     );
     let is_node = matches!(input.subject, MonitorSubject::Node(_));
-    let disk_rates = read_rates(input, &scope, RateKind::DiskIo, Resolution::Coarse);
+    let disk_rates = read_rates(input, &scope, RateKind::DiskIo, input.range.resolution());
     let disk = if is_node {
         // Device-mapper aliases make a node sum from the source count one disk twice.
         kubelet_chart(input, &scope, RateKind::DiskIo, &disk_rates, (start, end))
     } else {
         pair_chart(
             &frame,
-            input,
-            &scope,
             ("monitor-disk", "Disk I/O", "disk I/O", ["read", "write"]),
+            None,
             [
                 answer(result, UsageMetric::DiskRead),
                 answer(result, UsageMetric::DiskWrite),
@@ -411,21 +413,15 @@ struct Extras {
     notice: Option<String>,
 }
 
-/// A card of two rate series. A host-network pod shows the 0011 notice and no data; a failed query
-/// names its error; a card with no value says the source has no such series.
+/// A card of two rate series. With a `host_notice` (the 0011 rule: such counters are the node's) it
+/// shows that notice and no data; a failed query names its error; a card with no value says the
+/// source has no such series.
 fn pair_chart(
     frame: &Frame,
-    input: &MonitorInput,
-    scope: &MonitorScope,
     (id, title, what, names): (&str, &str, &str, [&str; 2]),
+    host_notice: Option<String>,
     answers: [Option<&Result<SourceSeries, MetricsError>>; 2],
 ) -> Rc<UsageChartModel> {
-    // Only the Network card has a host-network rule (0011): such counters are the node's.
-    let host_notice = if id == "monitor-network" {
-        source_network_notice(input, scope)
-    } else {
-        None
-    };
     if let Some(notice) = host_notice {
         let empty = names.map(|name| (name, Vec::new()));
         let extras = Extras {

@@ -35,9 +35,15 @@ impl AppShell {
         // The new session is still connecting; it keeps the choice for `LiveCluster::start`.
         let is_overview = self.screen == Screen::Overview;
         let access_kind = self.screen.access_kind();
+        #[cfg(feature = "screenshot")]
+        let is_fixture = self.is_monitor_source_fixture;
         session.update(cx, |session, cx| {
             session.set_overview_visible(is_overview, cx);
             session.request_kind_access(access_kind, cx);
+            #[cfg(feature = "screenshot")]
+            if is_fixture {
+                session.forget_metrics_source_for_fixture();
+            }
         });
         let observed = cluster.clone();
         let observer = cx.observe(&session, move |shell, _, cx| {

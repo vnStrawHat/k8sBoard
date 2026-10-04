@@ -36,7 +36,7 @@ use crate::cluster_form::{
     remove_dialog_text, reset_entry, resolve_selection, step_cluster, stop_watching_folder,
     test_connection, validate_display_name, validate_namespace, validate_proxy_url,
 };
-use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef};
+use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef, StoredMetrics};
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_switcher_rows::normalize_query;
 use crate::drawer::truncated_text;
@@ -1199,16 +1199,17 @@ pub(crate) fn set_metrics_source(
 ) {
     AppSettings::update(cx, |settings| {
         edit_entry(&mut settings.registry, cluster, |entry| {
-            entry.metrics = source;
+            entry.metrics = source.map(StoredMetrics::Fields);
         });
     });
 }
 
 /// What the Source button shows: `metrics-server only` or the saved service.
-fn metrics_source_label(stored: Option<&MetricsSourceFields>) -> String {
+fn metrics_source_label(stored: Option<&StoredMetrics>) -> String {
     match stored {
         None => METRICS_SERVER_ONLY.to_owned(),
-        Some(fields) => format!(
+        Some(StoredMetrics::Unreadable(_)) => "Invalid entry in settings".to_owned(),
+        Some(StoredMetrics::Fields(fields)) => format!(
             "Prometheus-compatible · {}/{}:{}",
             fields.namespace, fields.service, fields.port
         ),
@@ -1234,8 +1235,8 @@ fn metrics_menu(row: &ClusterRow, entry: Option<&ClusterEntry>, cx: &App) -> imp
                 .on_click(move |_, _, cx| set_metrics_source(&cluster, None, cx));
             let menu = menu.item(clear);
             let menu = match &stored {
-                Some(fields) => {
-                    menu.item(PopupMenuItem::new(metrics_source_label(Some(fields))).checked(true))
+                Some(stored) => {
+                    menu.item(PopupMenuItem::new(metrics_source_label(Some(stored))).checked(true))
                 }
                 None => menu,
             };
