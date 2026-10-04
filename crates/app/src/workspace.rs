@@ -35,7 +35,7 @@ use crate::filter_bar::{ToolkitState, filter_bar};
 use crate::issue_board::IssueSummary;
 use crate::issue_table::coverage_status;
 use crate::kind_drawer::kind_drawer;
-use crate::navigation::SIDEBAR_WIDTH;
+use crate::navigation::{SIDEBAR_WIDTH, screen_icon};
 use crate::node_drawer::node_drawer;
 use crate::node_summary::role_counts;
 use crate::overview::{
@@ -254,7 +254,17 @@ impl AppShell {
             .py_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(div().text_lg().font_semibold().child(title))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Icon::new(screen_icon(self.screen))
+                            .size_4()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(div().text_lg().font_semibold().child(title)),
+            )
             .children(count.map(|count| {
                 div()
                     .text_sm()

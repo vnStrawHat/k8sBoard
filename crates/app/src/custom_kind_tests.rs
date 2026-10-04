@@ -412,3 +412,10 @@ fn cert_manager_predicates_follow_the_crd_and_its_version() {
     assert!(!other.is_cert_manager_certificate() && !other.is_cert_manager_v1());
     assert!(other.spec().read_only_actions.is_empty());
 }
+
+#[test]
+fn custom_kinds_share_the_puzzle_icon() {
+    let mut cache = CustomKindCache::default();
+    let kinds = custom_kinds(&[certificates()], &mut cache);
+    assert_eq!(ResourceKind::Custom(kinds[0]).icon(), IconName::Puzzle);
+}

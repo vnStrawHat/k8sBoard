@@ -15,7 +15,7 @@ use crate::cluster_session::{AccessState, CustomGate, LiveCluster, LiveList, nam
 use crate::custom_kind::CustomKind;
 use crate::issue::IssueSeverity;
 use crate::issue_board::IssueBoard;
-use crate::resource_kind::ResourceKind;
+use crate::resource_kind::{NODE_ICON, POD_ICON, ResourceKind};
 use crate::status_tone::tone_color;
 
 pub(crate) const SIDEBAR_WIDTH: Pixels = px(220.);
@@ -31,6 +31,7 @@ const CUSTOM_RESOURCES: &str = "Custom Resources";
 
 struct NavigationSection {
     name: &'static str,
+    icon: IconName,
     items: &'static [&'static str],
     is_open_by_default: bool,
 }
@@ -40,11 +41,13 @@ struct NavigationSection {
 const SECTIONS: [NavigationSection; 8] = [
     NavigationSection {
         name: "Cluster",
+        icon: IconName::Cloud,
         items: &["Nodes", "Namespaces", "Events"],
         is_open_by_default: true,
     },
     NavigationSection {
         name: "Workloads",
+        icon: IconName::Boxes,
         items: &[
             "Pods",
             "Deployments",
@@ -58,6 +61,7 @@ const SECTIONS: [NavigationSection; 8] = [
     },
     NavigationSection {
         name: "Network",
+        icon: IconName::Network,
         items: &[
             "Services",
             "Ingresses",
@@ -68,16 +72,19 @@ const SECTIONS: [NavigationSection; 8] = [
     },
     NavigationSection {
         name: "Config",
+        icon: IconName::SlidersHorizontal,
         items: &["ConfigMaps", "Secrets", "HPAs", "ResourceQuotas", "PDBs"],
         is_open_by_default: false,
     },
     NavigationSection {
         name: "Storage",
+        icon: IconName::HardDrive,
         items: &["PVCs", "PVs", "StorageClasses"],
         is_open_by_default: false,
     },
     NavigationSection {
         name: "Access Control",
+        icon: IconName::ShieldUser,
         items: &[
             "ServiceAccounts",
             "Roles",
@@ -89,11 +96,13 @@ const SECTIONS: [NavigationSection; 8] = [
     },
     NavigationSection {
         name: "Helm",
+        icon: IconName::ShipWheel,
         items: &["Releases"],
         is_open_by_default: false,
     },
     NavigationSection {
         name: "Custom Resources",
+        icon: IconName::Puzzle,
         items: &["CRDs"],
         is_open_by_default: false,
     },
@@ -109,6 +118,20 @@ fn screen_of(item: &str) -> Option<Screen> {
         TOPOLOGY_ITEM => Some(Screen::Topology),
         PORT_FORWARDING_ITEM => Some(Screen::PortForwarding),
         _ => ResourceKind::from_label(item).map(Screen::Kind),
+    }
+}
+
+/// The icon of a screen: before its title in the header, on its top sidebar item, and on its
+/// palette row.
+pub(crate) fn screen_icon(screen: Screen) -> IconName {
+    match screen {
+        Screen::Overview => IconName::LayoutDashboard,
+        Screen::Pods => POD_ICON,
+        Screen::Nodes => NODE_ICON,
+        Screen::Issues => IconName::Flag,
+        Screen::Topology => IconName::Waypoints,
+        Screen::PortForwarding => IconName::ArrowLeftRight,
+        Screen::Kind(kind) => kind.icon(),
     }
 }
 
@@ -234,6 +257,7 @@ pub(crate) fn sidebar(
     let top = SidebarMenu::new().children(TOP_ITEMS.map(|name| top_item(name, active, counts, cx)));
     let sections = SidebarMenu::new().children(SECTIONS.iter().map(|section| {
         SidebarMenuItem::new(section.name)
+            .icon(section.icon)
             .default_open(is_section_open(section, active))
             .click_to_toggle(true)
             .children(
@@ -263,6 +287,7 @@ fn top_item(
         return SidebarMenuItem::new(name).disable(true);
     };
     let item = SidebarMenuItem::new(name)
+        .icon(screen_icon(screen))
         .active(screen == active)
         .on_click(cx.listener(move |shell, _, _, cx| shell.show_screen(screen, cx)));
     match counts.issue_total {

@@ -5,6 +5,7 @@ use cluster::{
 };
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
+use gpui_kit::assets::IconName;
 
 use crate::access_rows::{
     cluster_role_binding_row, cluster_role_row, role_binding_row, role_row, service_account_row,
@@ -26,6 +27,10 @@ use crate::resource_actions::ResourceAction;
 use crate::secret_rows::secret_row;
 use crate::storage_rows::{persistent_volume_claim_row, persistent_volume_row, storage_class_row};
 use crate::workload_rows::{daemon_set_row, deployment_row, replica_set_row, stateful_set_row};
+
+/// Pods and nodes have their own screens, so their icons are not a `KindSpec` field.
+pub(crate) const POD_ICON: IconName = IconName::Box;
+pub(crate) const NODE_ICON: IconName = IconName::Server;
 
 /// One kind with an explorer screen. Per-kind variation is data (the tables below) plus one
 /// `match` in `watch_rows`; there is no trait.
@@ -129,6 +134,7 @@ pub(crate) struct KindSpec {
     pub(crate) singular: &'static str,
     pub(crate) plural: &'static str,
     pub(crate) badge: &'static str,
+    pub(crate) icon: IconName,
     pub(crate) is_namespaced: bool,
     pub(crate) api: KindApi,
     pub(crate) columns: &'static [KindColumn],
@@ -156,6 +162,7 @@ static NAMESPACES: KindSpec = KindSpec {
     singular: "namespace",
     plural: "namespaces",
     badge: "Ns",
+    icon: IconName::Folder,
     is_namespaced: false,
     api: KindApi::Builtin {
         object: ObjectKind::Namespace,
@@ -180,6 +187,7 @@ static EVENTS: KindSpec = KindSpec {
     singular: "event",
     plural: "events",
     badge: "Ev",
+    icon: IconName::Bell,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::Event,
@@ -205,6 +213,7 @@ static DEPLOYMENTS: KindSpec = KindSpec {
     singular: "deployment",
     plural: "deployments",
     badge: "De",
+    icon: IconName::Layers,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::Deployment,
@@ -237,6 +246,7 @@ static STATEFUL_SETS: KindSpec = KindSpec {
     singular: "statefulset",
     plural: "statefulsets",
     badge: "Ss",
+    icon: IconName::Database,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::StatefulSet,
@@ -266,6 +276,7 @@ static DAEMON_SETS: KindSpec = KindSpec {
     singular: "daemonset",
     plural: "daemonsets",
     badge: "Ds",
+    icon: IconName::Radio,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::DaemonSet,
@@ -295,6 +306,7 @@ static REPLICA_SETS: KindSpec = KindSpec {
     singular: "replicaset",
     plural: "replicasets",
     badge: "Rs",
+    icon: IconName::Grid2x2,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::ReplicaSet,
@@ -320,6 +332,7 @@ static JOBS: KindSpec = KindSpec {
     singular: "job",
     plural: "jobs",
     badge: "Jb",
+    icon: IconName::BriefcaseBusiness,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::Job,
@@ -343,6 +356,7 @@ static CRON_JOBS: KindSpec = KindSpec {
     singular: "cronjob",
     plural: "cronjobs",
     badge: "Cj",
+    icon: IconName::CalendarClock,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::CronJob,
@@ -371,6 +385,7 @@ static SERVICES: KindSpec = KindSpec {
     singular: "service",
     plural: "services",
     badge: "Sv",
+    icon: IconName::Network,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::Service,
@@ -396,6 +411,7 @@ static INGRESSES: KindSpec = KindSpec {
     singular: "ingress",
     plural: "ingresses",
     badge: "In",
+    icon: IconName::Globe,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::Ingress,
@@ -420,6 +436,7 @@ static CONFIG_MAPS: KindSpec = KindSpec {
     singular: "configmap",
     plural: "configmaps",
     badge: "Cm",
+    icon: IconName::FileCog,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::ConfigMap,
@@ -445,6 +462,7 @@ static NETWORK_POLICIES: KindSpec = KindSpec {
     singular: "networkpolicy",
     plural: "networkpolicies",
     badge: "Np",
+    icon: IconName::BrickWallShield,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::NetworkPolicy,
@@ -468,6 +486,7 @@ static POD_DISRUPTION_BUDGETS: KindSpec = KindSpec {
     singular: "poddisruptionbudget",
     plural: "poddisruptionbudgets",
     badge: "Pd",
+    icon: IconName::ShieldCheck,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::PodDisruptionBudget,
@@ -491,6 +510,7 @@ static HORIZONTAL_POD_AUTOSCALERS: KindSpec = KindSpec {
     singular: "horizontalpodautoscaler",
     plural: "horizontalpodautoscalers",
     badge: "Hp",
+    icon: IconName::Gauge,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::HorizontalPodAutoscaler,
@@ -518,6 +538,7 @@ static RESOURCE_QUOTAS: KindSpec = KindSpec {
     singular: "resourcequota",
     plural: "resourcequotas",
     badge: "Rq",
+    icon: IconName::ChartPie,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::ResourceQuota,
@@ -541,6 +562,7 @@ static PERSISTENT_VOLUME_CLAIMS: KindSpec = KindSpec {
     singular: "persistentvolumeclaim",
     plural: "persistentvolumeclaims",
     badge: "Pc",
+    icon: IconName::Ticket,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::PersistentVolumeClaim,
@@ -566,6 +588,7 @@ static PERSISTENT_VOLUMES: KindSpec = KindSpec {
     singular: "persistentvolume",
     plural: "persistentvolumes",
     badge: "Pv",
+    icon: IconName::HardDrive,
     is_namespaced: false,
     api: KindApi::Builtin {
         object: ObjectKind::PersistentVolume,
@@ -592,6 +615,7 @@ static STORAGE_CLASSES: KindSpec = KindSpec {
     singular: "storageclass",
     plural: "storageclasses",
     badge: "Sc",
+    icon: IconName::Archive,
     is_namespaced: false,
     api: KindApi::Builtin {
         object: ObjectKind::StorageClass,
@@ -621,6 +645,7 @@ static ROLES: KindSpec = KindSpec {
     singular: "role",
     plural: "roles",
     badge: "Ro",
+    icon: IconName::ScrollText,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::Role,
@@ -643,6 +668,7 @@ static CLUSTER_ROLES: KindSpec = KindSpec {
     singular: "clusterrole",
     plural: "clusterroles",
     badge: "Cr",
+    icon: IconName::BookKey,
     is_namespaced: false,
     api: KindApi::Builtin {
         object: ObjectKind::ClusterRole,
@@ -666,6 +692,7 @@ static ROLE_BINDINGS: KindSpec = KindSpec {
     singular: "rolebinding",
     plural: "rolebindings",
     badge: "Rb",
+    icon: IconName::Link,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::RoleBinding,
@@ -688,6 +715,7 @@ static CLUSTER_ROLE_BINDINGS: KindSpec = KindSpec {
     singular: "clusterrolebinding",
     plural: "clusterrolebindings",
     badge: "Cb",
+    icon: IconName::Cable,
     is_namespaced: false,
     api: KindApi::Builtin {
         object: ObjectKind::ClusterRoleBinding,
@@ -710,6 +738,7 @@ static SERVICE_ACCOUNTS: KindSpec = KindSpec {
     singular: "serviceaccount",
     plural: "serviceaccounts",
     badge: "Sa",
+    icon: IconName::Bot,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::ServiceAccount,
@@ -732,6 +761,7 @@ static SECRETS: KindSpec = KindSpec {
     singular: "secret",
     plural: "secrets",
     badge: "Se",
+    icon: IconName::KeyRound,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::Secret,
@@ -759,6 +789,7 @@ static HELM_RELEASES: KindSpec = KindSpec {
     singular: "release",
     plural: "releases",
     badge: "Hm",
+    icon: IconName::ShipWheel,
     is_namespaced: true,
     api: KindApi::Builtin {
         object: ObjectKind::Secret,
@@ -784,6 +815,7 @@ static CRDS: KindSpec = KindSpec {
     singular: "customresourcedefinition",
     plural: "customresourcedefinitions",
     badge: "Cd",
+    icon: IconName::Blocks,
     is_namespaced: false,
     api: KindApi::Builtin {
         object: ObjectKind::CustomResourceDefinition,
@@ -890,9 +922,13 @@ impl ResourceKind {
         self.spec().plural
     }
 
-    /// Two letters in the drawer header.
+    /// Two letters in the Topology export.
     pub(crate) fn badge(self) -> &'static str {
         self.spec().badge
+    }
+
+    pub(crate) fn icon(self) -> IconName {
+        self.spec().icon
     }
 
     pub(crate) fn is_namespaced(self) -> bool {
@@ -1195,6 +1231,17 @@ mod tests {
         assert!(!ResourceKind::CronJobs.has_monitor());
     }
 
+    #[test]
+    fn built_in_kind_icons_are_distinct() {
+        let mut seen = std::collections::HashSet::new();
+        let icons = ResourceKind::ALL
+            .into_iter()
+            .map(ResourceKind::icon)
+            .chain([POD_ICON, NODE_ICON]);
+        for icon in icons {
+            assert!(seen.insert(format!("{icon:?}")), "{icon:?} repeats");
+        }
+    }
     #[test]
     fn labels_round_trip() {
         for kind in ResourceKind::ALL {

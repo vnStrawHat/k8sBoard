@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::ptr;
 
 use cluster::{ColumnType, CrdState, CrdSummary, CustomResourceType, PrinterColumn, ResourceScope};
+use gpui_kit::assets::IconName;
 
 use crate::resource_actions::ResourceAction;
 use crate::resource_kind::{Align, KindAction, KindApi, KindColumn, KindSpec, NameColumn, column};
@@ -249,6 +250,7 @@ fn leak_kind(source: CustomKindSource, rules: Vec<ColumnRule>, crd: &CrdSummary)
         singular: singular.clone().leak(),
         plural: crd.plural.clone().leak(),
         badge: kind_badge(&crd.kind).leak(),
+        icon: IconName::Puzzle,
         is_namespaced: crd.scope == ResourceScope::Namespaced,
         api: KindApi::Custom,
         columns: columns.leak(),

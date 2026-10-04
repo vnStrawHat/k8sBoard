@@ -31,11 +31,13 @@ use crate::keymap::{
     CloseDockTab, LeavePaletteArgument, NextDockTab, OpenNamespacePicker, PALETTE_LIST,
     PalettePreview, PreviousDockTab, ScaleCursorRow, ShowShortcuts, ToggleDock, ToggleDockZoom,
 };
+use crate::navigation::screen_icon;
 use crate::palette_search::{
     EntryRanges, EntryState, PaletteEntry, PaletteGroup, PaletteTarget, empty_text,
     entry_match_ranges, parse_query, ranked,
 };
 use crate::resource_actions::RowAction;
+use crate::resource_kind::{NODE_ICON, POD_ICON};
 use crate::settings_window::OpenSettings;
 use crate::shortcut_sheet::row_keys;
 use crate::status_tone::{StatusLabel, StatusTone, tone_color, toned_text};
@@ -736,12 +738,6 @@ fn command_item(shown: &ShownEntry) -> CommandItem {
         .child(move |_, cx| row.render(cx))
 }
 
-/// What leads a row: a kind badge, `@`, or `#` as text, or an icon for an action.
-enum RowIcon {
-    Text(SharedString),
-    Glyph(IconName),
-}
-
 /// A cluster row's environment and health, which stand in for the status pill.
 #[derive(Clone, Copy)]
 struct ClusterLine {
@@ -751,7 +747,7 @@ struct ClusterLine {
 
 /// Everything one row draws, owned so the kit may build the row again for measuring.
 struct RowContent {
-    icon: RowIcon,
+    icon: IconName,
     label: SharedString,
     detail: Option<SharedString>,
     /// The characters the query matched in the label and the detail, drawn underlined.
@@ -817,10 +813,7 @@ impl RowContent {
             .flex_none()
             .text_xs()
             .text_color(muted)
-            .child(match &self.icon {
-                RowIcon::Text(text) => div().child(text.clone()).into_any_element(),
-                RowIcon::Glyph(name) => Icon::new(*name).size_4().into_any_element(),
-            });
+            .child(Icon::new(self.icon).size_4());
         h_flex()
             .w_full()
             .gap_2()
@@ -890,60 +883,29 @@ fn underlined(text: SharedString, ranges: &[Range<usize>]) -> StyledText {
     StyledText::new(text).with_highlights(highlights)
 }
 
-/// The icon before a label: an icon for an action, else the kind badge of a resource or screen,
-/// `@`, or `#`.
-fn row_icon(target: &PaletteTarget) -> RowIcon {
-    let text = |text: &'static str| RowIcon::Text(text.into());
+/// The icon before a label: an icon for an action, else the icon of the screen, resource kind,
+/// namespace, or cluster.
+fn row_icon(target: &PaletteTarget) -> IconName {
     match target {
-        PaletteTarget::Command(action) => RowIcon::Glyph(command_icon(&**action)),
-        PaletteTarget::RowAction(action) => RowIcon::Glyph(row_action_icon(*action)),
-        PaletteTarget::RollBack(..) => RowIcon::Glyph(row_action_icon(RowAction::RollBack)),
-        PaletteTarget::ObjectAction(_, action) => RowIcon::Glyph(row_action_icon(*action)),
-        PaletteTarget::Screen(screen) => text(screen_badge(*screen)),
+        PaletteTarget::Command(action) => command_icon(&**action),
+        PaletteTarget::RowAction(action) => action.icon(),
+        PaletteTarget::RollBack(..) => RowAction::RollBack.icon(),
+        PaletteTarget::ObjectAction(_, action) => action.icon(),
+        PaletteTarget::Screen(screen) => screen_icon(*screen),
         PaletteTarget::Resource(ClusterObject {
             key: ResourceKey::Pod { .. },
             ..
-        }) => text("Po"),
+        }) => POD_ICON,
         PaletteTarget::Resource(ClusterObject {
             key: ResourceKey::Node { .. },
             ..
-        }) => text("No"),
+        }) => NODE_ICON,
         PaletteTarget::Resource(ClusterObject {
             key: ResourceKey::Kind { kind, .. },
             ..
-        }) => text(kind.badge()),
-        PaletteTarget::Namespace(_) => text("#"),
-        PaletteTarget::Cluster(..) => text("@"),
-    }
-}
-
-fn row_action_icon(action: RowAction) -> IconName {
-    match action {
-        RowAction::ViewLogs => IconName::FileText,
-        RowAction::ViewYaml => IconName::Eye,
-        RowAction::CopyName => IconName::Copy,
-        RowAction::OpenShell | RowAction::DebugContainer | RowAction::Attach => {
-            IconName::SquareTerminal
-        }
-        RowAction::PortForward => IconName::Network,
-        RowAction::Cordon => IconName::Ban,
-        RowAction::Drain => IconName::ArrowDown,
-        RowAction::EditTaints | RowAction::EditLabels => IconName::Replace,
-        RowAction::EditYaml | RowAction::EditValues => IconName::Replace,
-        RowAction::RestartRollout | RowAction::RestartPod | RowAction::RenewCertificate => {
-            IconName::RotateCw
-        }
-        RowAction::EvictPod => IconName::LogOut,
-        RowAction::Scale => IconName::ChevronsUpDown,
-        RowAction::Delete => IconName::Delete,
-        RowAction::PauseRollout => IconName::Pause,
-        RowAction::RollBack => IconName::Undo2,
-        RowAction::SuspendCronJob => IconName::Timer,
-        RowAction::TriggerCronJob => IconName::Play,
-        RowAction::RerunJob => IconName::Repeat,
-        RowAction::EditHpaRange => IconName::ChevronsUpDown,
-        RowAction::ExpandClaim => IconName::HardDrive,
-        RowAction::SetDefaultStorageClass => IconName::Star,
+        }) => kind.icon(),
+        PaletteTarget::Namespace(_) => IconName::Folder,
+        PaletteTarget::Cluster(..) => IconName::Building2,
     }
 }
 
@@ -969,16 +931,6 @@ fn command_icon(action: &dyn Action) -> IconName {
     }
 }
 
-fn screen_badge(screen: Screen) -> &'static str {
-    match screen {
-        Screen::Pods => "Po",
-        Screen::Nodes => "No",
-        Screen::Kind(kind) => kind.badge(),
-        Screen::Overview | Screen::Issues | Screen::Topology => "·",
-        Screen::PortForwarding => "⇄",
-    }
-}
-
 /// What an enabled entry says when its action reaches a 0030 confirm (W9 note 3).
 const NEEDS_CONFIRM: &str = "needs confirm";
 
@@ -1000,6 +952,61 @@ fn reason_pill(reason: SharedString, cx: &App) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cluster::NamespaceScope;
+
+    use crate::cluster_registry::ClusterRef;
+    use crate::cluster_switcher_rows::SwitcherRow;
+    use crate::resource_kind::ResourceKind;
+
+    fn cluster_ref() -> ClusterRef {
+        ClusterRef {
+            kubeconfig: "config.yaml".into(),
+            context: "dev".to_owned(),
+        }
+    }
+
+    fn cluster_row() -> SwitcherRow {
+        SwitcherRow {
+            cluster: cluster_ref(),
+            label: "dev".to_owned(),
+            environment: Environment::Development,
+            health: RowHealth::NotChecked,
+            failure: None,
+            note: None,
+            shortcut: None,
+            is_active: false,
+            search_text: String::new(),
+        }
+    }
+
+    #[test]
+    fn rows_lead_with_the_icon_of_their_target() {
+        let pod = ClusterObject::new(
+            cluster_ref(),
+            ResourceKey::Pod {
+                namespace: "default".to_owned(),
+                name: "web".to_owned(),
+            },
+        );
+        let screen = Screen::Kind(ResourceKind::Services);
+        assert_eq!(
+            row_icon(&PaletteTarget::Screen(screen)),
+            screen_icon(screen)
+        );
+        assert_eq!(row_icon(&PaletteTarget::Resource(pod)), POD_ICON);
+        assert_eq!(
+            row_icon(&PaletteTarget::Namespace(NamespaceScope::All)),
+            IconName::Folder
+        );
+        assert_eq!(
+            row_icon(&PaletteTarget::Cluster(cluster_row(), None)),
+            IconName::Building2
+        );
+        assert_eq!(
+            row_icon(&PaletteTarget::RowAction(RowAction::Delete)),
+            IconName::Trash
+        );
+    }
 
     #[test]
     fn the_first_shell_change_ranks_at_once() {

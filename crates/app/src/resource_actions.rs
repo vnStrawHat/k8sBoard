@@ -5,6 +5,7 @@ use cluster::{
     ContainerTerminal, HELM_RELEASE_SECRET_TYPE, NamespacePhase, NamespaceScope, NodeSummary,
     ObjectKind, PodStatus, PodSummary, ReplicaSetSummary, SecretDetails, SecretKey,
 };
+use gpui_kit::assets::IconName;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
@@ -420,6 +421,36 @@ impl RowAction {
             Self::ExpandClaim => Box::new(ExpandClaim),
             Self::SetDefaultStorageClass => Box::new(SetDefaultStorageClass),
             Self::RenewCertificate => Box::new(RenewCertificate),
+        }
+    }
+
+    /// The icon of the action in menus and the palette (spec 0051).
+    pub(crate) fn icon(self) -> IconName {
+        match self {
+            Self::ViewLogs => IconName::FileText,
+            Self::ViewYaml => IconName::FileCode,
+            Self::CopyName => IconName::Copy,
+            Self::OpenShell => IconName::SquareTerminal,
+            Self::Attach => IconName::Plug,
+            Self::DebugContainer => IconName::Bug,
+            Self::PortForward => IconName::ArrowLeftRight,
+            Self::Cordon => IconName::Ban,
+            Self::Drain => IconName::ArrowDown,
+            Self::EditTaints | Self::EditLabels => IconName::Tag,
+            Self::EditYaml => IconName::FilePenLine,
+            Self::EditValues => IconName::Pencil,
+            Self::RestartRollout | Self::RestartPod => IconName::RotateCw,
+            Self::RenewCertificate => IconName::RefreshCw,
+            Self::EvictPod => IconName::LogOut,
+            Self::Scale | Self::EditHpaRange => IconName::ChevronsUpDown,
+            Self::Delete => IconName::Trash,
+            Self::PauseRollout => IconName::Pause,
+            Self::RollBack => IconName::Undo2,
+            Self::SuspendCronJob => IconName::Timer,
+            Self::TriggerCronJob => IconName::Play,
+            Self::RerunJob => IconName::Repeat,
+            Self::ExpandClaim => IconName::HardDriveUpload,
+            Self::SetDefaultStorageClass => IconName::Star,
         }
     }
 }
