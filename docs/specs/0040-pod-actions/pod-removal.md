@@ -19,10 +19,12 @@ pub(crate) fn pod_block(action: ResourceAction, pod: &PodSummary) -> Option<Shar
 | Pod | Restart pod | Evict |
 |---|---|---|
 | no controller | `Not managed by a controller; it would not come back. Use Delete pod…` | allowed, warning |
-| controller kind `Node` (static) | `Static pod: the kubelet owns it` | `Static pods cannot be evicted; the kubelet owns them` |
-| `PodStatus::Terminating` | `Already terminating` | `Already terminating` |
-| finished (`Succeeded` / `Failed`) | `The pod has finished; its controller does not restart it` | allowed (the API deletes it without a budget check) |
+| controller kind `Node` (static) | `Static pod: the kubelet owns it` | `Static pod: the kubelet owns it` |
+| terminating: row `PodStatus::Terminating`, or `identity.deletion_started` at the uid read | `Already terminating` | `Already terminating` |
+| `pod.is_finished` (phase `Succeeded` / `Failed`, step 1; never the status reason, which reads `Error`, `Completed`, `OOMKilled` on running pods too) | `The pod has finished; its controller does not restart it` | allowed (the API deletes it without a budget check) |
 | otherwise | allowed | allowed |
+
+The uid read re-checks the one fact the row may lag on: `finish_delete_start` refuses Restart and Evict with `Already terminating` when `identity.deletion_started` is set (nothing sent, no dialog).
 
 `key_availability_of`: for these two actions on a pod, the gate first, then `pod_block` (the reason the user can act on first comes first, like `row_availability`). The palette lists `> Restart pod` and `> Evict` with `needs confirm`; disabled entries never run.
 
@@ -59,6 +61,8 @@ impl AppShell {
 | `expected_name` | pod name | pod name | pod name |
 
 ## Warnings (warning tone, after the 0033 finalizer lines)
+
+The 0033 `kind_warnings` run for `Removal::Delete` only, so the bare-pod line of an Evict appears once (from the table below). Restart and Evict use only these lines:
 
 | Removal | Condition | Line |
 |---|---|---|

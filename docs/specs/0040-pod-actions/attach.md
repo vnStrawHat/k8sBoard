@@ -37,7 +37,8 @@ pub enum AttachWait { NodeShellPod, EphemeralContainer, /** 0040: a running cont
 | Pod row menu and drawer ⋯ (`pod_menu`) | `Attach` with key hint A, after `Port-forward ▸` (W4); disabled with the gate or block reason | dispatches A |
 | A, palette `> Attach` | the `Attach` arm of `run_available_row_key` → `attach_default(&subject)` | the default container, cursor's cluster |
 | Container ⋯ menu (`container_menu`) | `Attach` after `Open shell`; `container_attach_item` with `on_click`, wrapped in `guarded(row, item)` | that container |
-| Shell tab Reconnect (attach tab) | header button | `reconnect_attach(tab)` |
+
+No Reconnect on an attach tab (decision 9): pressing A again opens a new tab through the same gate.
 
 ## Intent (`shell_open.rs`, `write_flow.rs`)
 
@@ -48,7 +49,6 @@ pub(crate) type ContainerAttachOpen =
 impl AppShell {
     pub(crate) fn start_attach(&mut self, open: ShellOpen, window: &mut Window, cx: &mut Context<Self>);
     pub(crate) fn attach_default(&mut self, subject: &ClusterObject, window: &mut Window, cx: &mut Context<Self>);
-    pub(crate) fn reconnect_attach(&mut self, tab: &WeakEntity<ShellTab>, window: &mut Window, cx: &mut Context<Self>);
 }
 ```
 
@@ -58,29 +58,26 @@ impl AppShell {
 | Field | Value |
 |---|---|
 | `action`, `risk`, `expected_name` | `Attach`, `Change`, `None` (TypeName types the cluster name) |
-| `label`, `button` | `Attach to {pod}/{container}`, `Attach`; Reconnect: `Reattach to {pod}/{container}`, `Reattach` |
-| `warnings` | `What you type goes to the main process of {container}; Ctrl C may stop it, and the container restarts.` · when `InteractiveOnce`: `This container closes its input after one attach (stdinOnce): closing the tab ends its process.` |
+| `label`, `button` | `Attach to {pod}/{container}`, `Attach` |
+| `warnings` | `What you type goes to the main process of {container}; Ctrl C, Ctrl D or exit may stop it, and the container restarts.` · when `InteractiveOnce`: `This container closes its input after one attach (stdinOnce): closing the tab ends its process.` |
 | `object`, `fields` | Pod `{ns}/{pod}`; `container` |
 | `open` | `Dock::open_attach(target, ShellKind::Attach, label, AttachGrant { connection, permit })`, then `watch_shell` and `begin_shell_start` (as `start_shell`) |
 
 - The dialog line reads `Dry-run not supported for this action` (0036 `NotSupported`); `gate_block` is re-read on render and at commit, so a lock or a lost permission while the dialog stands refuses the confirm.
-- `reconnect_attach` builds the same intent from the tab's `ShellTarget` and, on confirm, calls `tab.connect_attach(grant)` on the same tab (scrollback kept, separator note). The container's `terminal` is read again from the live pod at that moment; gone or off → the block text as a notice, nothing opens.
-
-## Tab (`shell_tab.rs`, `debug_open.rs`)
+## Tab (`shell_tab.rs`)
 
 | Item | Attach |
 |---|---|
 | `ShellKind::Attach` | new variant; `is_exec()` false; `connect_attach` maps it to `AttachWait::Container` |
 | Tab label | `›_ attach · {pod suffix}/{container}` |
-| Header | `›_ attach {pod} · {container} · {context}`; no shell picker; Find, Clear, Reconnect as 0036 |
+| Header | `›_ attach {pod} · {container} · {context}`; no shell picker, **no Reconnect**; Find and Clear as 0036 |
 | Connecting | `Attaching…`; after `Started` the 0037 note `If you don't see a prompt, press Enter.` |
 | Ended | `[process exited with code N]` or `[connection lost: …]`; no `Debug container…` button |
-| Reconnect | `is_debug_tab` true only for `Debug` and `NodeShell`; `Attach` routes to `reconnect_attach` |
 | Close, switch, quit | dropping the tab drops the stream: the WebSocket closes (detach). Counted in the 8-tab cap and in `leaving_work` shells |
 
 ## Audit (`shell_open.rs` `start_audit`)
 
-`ShellKind::Attach` → action `Attach`, object Pod, field `container`; outcome `applied` on `Opened`, `failed` with the error on `OpenFailed`, `abandoned` through `ShellStarts` when the tab closes first. A Reattach writes its own line. Never stream bytes.
+`ShellKind::Attach` → action `Attach`, object Pod, field `container`; outcome `applied` on `Opened`, `failed` with the error on `OpenFailed`, `abandoned` through `ShellStarts` when the tab closes first. Each A press is its own start and line. Never stream bytes.
 
 ## Screen
 

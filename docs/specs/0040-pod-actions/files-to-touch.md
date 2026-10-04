@@ -6,10 +6,10 @@
 
 | File | Change |
 |---|---|
-| `crates/cluster/src/pod.rs` (+ `pod_tests.rs`) | `ContainerTerminal`, `ContainerSummary.terminal` from `stdin`, `stdinOnce`, `tty` |
+| `crates/cluster/src/pod.rs` (+ `pod_tests.rs`) | `ContainerTerminal`, `ContainerSummary.terminal` from `stdin`, `stdinOnce`, `tty`; `PodSummary.is_finished` (phase `Succeeded` or `Failed`, read like `DrainPod.is_finished`) |
 | `crates/cluster/src/lib.rs` | `pub use` `ContainerTerminal` |
 | `crates/cluster/src/debug_shell.rs` (+ `debug_shell_tests.rs`) | `AttachWait::Container`; `readiness` reads main then init statuses; action words per wait; module comment |
-| every `ContainerSummary { .. }` literal (≈ 72, cluster and app fixtures) | `terminal: ContainerTerminal::None` (mechanical; coder-lite may do it) |
+| every `ContainerSummary { .. }` literal (≈ 72) and `PodSummary { .. }` literal (cluster and app fixtures) | `terminal: ContainerTerminal::None`, `is_finished: false` (mechanical; coder-lite may do it) |
 
 ## Step 2 · Attach
 
@@ -21,9 +21,8 @@
 | `crates/app/src/palette_search.rs`, `command_palette.rs` | `RowAction::Attach` in the action lists and its icon |
 | `crates/app/src/shortcut_sheet.rs` (+ tests) | `A · Attach` in the resource group |
 | `crates/app/src/write_flow.rs` (+ tests) | `ConnectOpen::Attach`, `ContainerAttachOpen`, `GrantedOpen::Attach`, `granted`, `create()` |
-| `crates/app/src/shell_open.rs` (+ tests) | `start_attach`, `attach_default`, `reconnect_attach`, `start_audit` arm, fixture screen |
-| `crates/app/src/shell_tab.rs` (+ tests) | `ShellKind::Attach`, wait mapping, label, header, starting text, Reconnect routing |
-| `crates/app/src/debug_open.rs` | `is_debug_tab` for `Debug` and `NodeShell` only; `reopen_debug_options` arm for `Attach` unreachable → route in `shell_tab.rs` |
+| `crates/app/src/shell_open.rs` (+ tests) | `start_attach`, `attach_default`, `start_audit` arm, fixture screen |
+| `crates/app/src/shell_tab.rs` (+ tests) | `ShellKind::Attach`, wait mapping, label, header (no Reconnect button), starting text |
 | `crates/app/src/launch_options.rs` (+ tests), `screenshot.rs` | `attach-confirm` |
 
 ## Step 3 · Restart pod and Evict
@@ -33,7 +32,7 @@
 | `crates/app/src/resource_actions.rs` (+ tests) | `RestartPod`, `EvictPod` (actions, row actions, gates, risk, labels), `pod_block`, pod menu in W4 order |
 | `crates/app/src/keymap.rs` | unbound unit actions `RestartPod`, `EvictPod` |
 | `crates/app/src/keyboard_navigation.rs` | two arms → `start_removal` |
-| `crates/app/src/object_delete.rs` (+ tests) | `Removal`, `DeleteExtras.removal`, `start_delete` → `start_removal`, gate and `still_ready` by removal, `DeleteTarget::request`, `TargetFacts::Pod { controller }`, texts, warnings, notices (gone text from `item.object`) |
+| `crates/app/src/object_delete.rs` (+ tests) | `Removal`, `DeleteExtras.removal`, `start_delete` → `start_removal`, gate and `still_ready` by removal, `DeleteTarget::request`, `TargetFacts::Pod { controller }`, `deletion_started` refusal, `kind_warnings` for `Delete` only, texts, warnings, notices (gone text from `item.object`) |
 | `crates/app/src/app_shell_delete_tests.rs` | window flow tests (two fake clusters) |
 | `crates/app/src/palette_search.rs`, `command_palette.rs` | the two row actions and icons |
 | `crates/app/src/launch_options.rs` (+ tests), `screenshot.rs` | `restart-pod-confirm`, `evict-confirm` |
@@ -44,7 +43,7 @@
 |---|---|
 | `crates/app/src/drain_plan.rs` (+ tests) | `BudgetPolicy`, `DrainOptions.budgets`, `Budget::Bypassed`, verdict row 7, preview text and order, steps-strip and dry-run line words |
 | `crates/app/src/drain_writes.rs` (+ tests) | `evict_write` → `removal_write` |
-| `crates/app/src/drain_dialog.rs` | enabled checkbox and its gate, toggle → rerun dry-runs, HEADS UP, grace select, `live_tier` by policy |
+| `crates/app/src/drain_dialog.rs` | checkbox gate (requests the lazy `Delete(Pod)` review on open; off while `is_checking`), toggle clears `checks.pods` and `checks.elapsed` and reruns the dry-runs, HEADS UP, grace select, `live_tier` per button |
 | `crates/app/src/drain_driver.rs`, `drain_run.rs` (+ tests), `drain_tab.rs` (+ tests) | `removal_write` calls, `Deleting…` texts |
 | `crates/app/src/audit_log.rs` (+ tests) | `disable_eviction` field of `drain_summary_entry` |
 | `crates/app/src/write_guard.rs` | `ActionRisk::Privileged` doc: also a drain that skips budgets |

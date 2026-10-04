@@ -1,6 +1,6 @@
 # 0040 · Edit labels of several nodes
 
-[Back to index](README.md) · Step 5 · Decisions 21–23. Wireframe: W5 header `Edit labels`, note 4 (multi-select), note 6. Modules: `node_edits.rs` (+ tests), `node_editor.rs`, `screenshot.rs`. Closes 0034 open item 2 and decision 13.
+[Back to index](README.md) · Step 5 · Decisions 21–24. Wireframe: W5 header `Edit labels`, note 4 (multi-select), note 6. Modules: `node_edits.rs` (+ tests), `node_editor.rs`, `screenshot.rs`. Closes 0034 open item 2 and decision 13.
 
 ## Header button (`node_editor.rs`)
 
@@ -9,7 +9,7 @@
 | 0 | disabled `Tick nodes first` |
 | 1 | the 0034 single editor (`open_node_editor(Labels, ..)`), unchanged |
 | 2–50 | the bulk editor; tooltip `Edit the labels of the ticked nodes` |
-| > 50, or two clusters | disabled with the `ticked_nodes` texts (`Select at most 50 rows`, `Select rows of one cluster`) |
+| > 50 | disabled with the `ticked_nodes` text `Select at most 50 rows` (one cluster at a time, 0046; its `Select rows of one cluster` guard stays as written) |
 
 Then, in order: `action_availability(EditLabels, guard_for(&cluster))` (`patch nodes`, lock), `A batch is running` while `running_batches` holds the cluster. `edit_labels_target` returns:
 
@@ -57,6 +57,7 @@ Per node: a `Set` whose value already equals the node's, and a `Remove` of a key
 | `label` | `Edit labels of {k} nodes` (k = items) |
 | `verb`, `button` | `Edit labels`, `Edit labels` |
 | `expected_name` | `None`: TypeName types the cluster name (a bulk names no single object) |
+| `warnings` | when any change is a Remove: `Removing a label can make DaemonSets that select nodes by it delete their pods on these nodes` (decision 24) |
 | item | `object` = node name, `label` = `Edit labels of node {name}`, request `SetNodeLabels { changes }` (that node's own list, sorted by key) |
 | plan | `skipped`, `BatchExtras::None`, `BatchFailure::Continue` |
 

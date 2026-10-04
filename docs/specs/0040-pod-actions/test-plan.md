@@ -11,6 +11,7 @@
 | `container_wait_keeps_exit_127_as_an_ended_container` | same | no `NO_SHELL` text outside `NodeShellPod` |
 | `container_attach_requests_the_attach_path_after_one_read` | same | one GET of the pod, then `GET …/pods/{p}/attach` with query `container=c`, `stdin=true`, `stdout=true`, `tty=true` (any order) |
 | `the_debug_policy_blocks_an_attach` | same | `Blocked`: one `Failed` with the `WritesBlocked` text, zero requests |
+| `pod_is_finished_reads_the_phase` | `pod_tests.rs` | `Succeeded` and `Failed` phases → true; a `Running` pod whose status reason reads `Error` or `OOMKilled` → false |
 
 ## Step 2 · Attach
 
@@ -23,29 +24,29 @@
 | `a_runs_attach_on_pods_only` | `keymap_tests.rs` | A → `Attach` on a pod; `NotOffered` on nodes and kinds |
 | `shortcut_sheet_lists_attach` | `shortcut_sheet_tests.rs` | `A` row |
 | `attach_open_takes_the_attach_permit` | `write_flow_tests.rs` | `granted` is `None` without both verbs; `create()` is `None` |
-| `attach_follows_the_0030_gate_and_tier` | `shell_open_tests.rs` | PROD types the cluster name; the dialog shows both warnings and `Dry-run not supported` |
+| `attach_follows_the_0030_gate_and_tier` | `shell_open_tests.rs` | PROD types the cluster name; the dialog shows both warnings (`Ctrl C, Ctrl D or exit`) and `Dry-run not supported` |
 | `attach_audits_one_line_per_start` | same | `Attach`, `container`; applied / failed / abandoned |
-| `reattach_reuses_the_tab` | same | Reconnect on an attach tab opens the connect dialog, not the debug options; same tab, separator note |
 | `attach_after_a_switch_opens_nothing` | same | [safety.md](safety.md) |
 | `container_attach_item_is_inert_after_a_switch` | `resource_actions_tests.rs` | [safety.md](safety.md) |
-| `attach_tab_label_and_header` | `shell_tab_tests.rs` | `attach · {suffix}/{container}`, no shell picker, `AttachWait::Container` |
+| `attach_tab_label_and_header` | `shell_tab_tests.rs` | `attach · {suffix}/{container}`, no shell picker, no Reconnect, `AttachWait::Container` |
 
 ## Step 3 · Restart pod and Evict
 
 | Test | File | Asserts |
 |---|---|---|
-| `restart_pod_refuses_bare_static_finished_and_terminating_pods` | `resource_actions_tests.rs` | the four texts; a ReplicaSet pod is allowed |
-| `evict_refuses_static_and_terminating_pods_only` | same | bare and DaemonSet pods allowed |
+| `restart_pod_refuses_bare_static_finished_and_terminating_pods` | `resource_actions_tests.rs` | the four texts; finished from `is_finished`, not the status reason; a ReplicaSet pod is allowed |
+| `evict_refuses_static_and_terminating_pods_only` | same | one static-pod text shared with Restart; bare and DaemonSet pods allowed |
 | `restart_and_evict_gates_and_risks` | same | `Delete(Pod)` lazy / `CreatePodEviction`; `Destructive`; no single key |
 | `removal_requests_are_uid_pinned` | `object_delete_tests.rs` | Restart → `DeleteObject { uid, Background }`; Evict → `EvictPod { uid, PodDefault }` |
 | `removal_batch_texts` | same | title, verb, audit action, item label, typed pod name per removal |
-| `removal_warnings_by_owner` | same | Restart PDB line, StatefulSet, Job; Evict bare, DaemonSet |
+| `removal_warnings_by_owner` | same | Restart PDB line, StatefulSet, Job; Evict bare (exactly once: no `kind_warnings` line), DaemonSet |
 | `removal_notices` | same | success, gone (from `item.object`), 409, 429 texts |
 | `restart_pod_dry_runs_then_deletes_with_uid` | `app_shell_delete_tests.rs` | metadata GET, dry-run body with `dryRun`, commit body with the uid; one audit line `Restart pod` |
 | `evict_429_dry_run_blocks_the_commit` | same | both 0034 429 fixtures: row shows the cause, Apply off, nothing committed |
 | `evict_commit_429_is_not_audited` | same | commit 429 → notice `refused for now`, zero audit lines |
 | `restart_read_landing_after_a_switch_opens_nothing` | same | [safety.md](safety.md) |
 | `evict_confirmed_after_switching_back_sends_nothing` | same | [safety.md](safety.md) |
+| `restart_of_a_pod_found_terminating_at_the_uid_read_opens_nothing` | same | `deletion_started` set → `Already terminating`, no dialog, nothing sent |
 
 ## Step 4 · Skip PodDisruptionBudgets
 
@@ -56,20 +57,21 @@
 | `removal_write_follows_the_budget_policy` | `drain_writes_tests.rs` | `EvictPod` with grace / `DeleteObject` with uid; labels and audit actions |
 | `delete_mode_results_map_like_evictions` | `drain_run_tests.rs` | Ok, 404, 409, unknown, 429 transitions identical |
 | `skip_pdbs_summary_records_disable_eviction` | `audit_log_tests.rs` | field only for `Skip` |
-| `skip_pdbs_is_off_without_delete_pods` | `app_shell_drain_tests.rs` | replaces 0034 `skip_pdbs_is_disabled_with_reason` (kit has no text query: state read from the dialog entity) |
+| `skip_pdbs_is_off_without_delete_pods` | `app_shell_drain_tests.rs` | replaces 0034 `skip_pdbs_is_disabled_with_reason`: lazy `Delete(Pod)` checking → off, denied → off, allowed → on; off while `is_checking` (state read from the dialog entity) |
 | `skip_pdbs_starts_off_each_time` | same | tick, cancel, reopen: off |
-| `toggling_skip_pdbs_reruns_every_dry_run` | same | eviction dry-runs then delete dry-runs; a late answer of the old policy is dropped |
-| `skip_pdbs_types_the_name_in_every_tier` | same | a Click cluster asks for the node name while ticked; unticked → click |
+| `toggling_skip_pdbs_reruns_every_dry_run` | same | toggle after the eviction dry-runs: `checks.pods` and `checks.elapsed` cleared, `Drain` off until every pod has a delete dry-run |
+| `skip_pdbs_types_the_name_in_every_tier` | same | a Click cluster asks for the node name for `Drain` while ticked; `Cordon only` stays click; unticked → click |
 | `skip_pdbs_run_deletes_with_uid` | same | the run sends `DELETE` with `preconditions.uid`, never `/eviction` |
+| `skip_pdbs_run_skips_dry_runs_the_dialog_recorded` | same | the run sends no dry-run for uids the dialog accepted or refused after the toggle |
 | `skip_pdbs_run_stops_on_a_lock` | same | [safety.md](safety.md) |
 
 ## Step 5 · Bulk labels
 
 | Test | File | Asserts |
 |---|---|---|
-| `label_batch_skips_nodes_that_already_match` | `node_edits_tests.rs` | per-node change lists; `already labelled` |
+| `label_batch_skips_nodes_that_already_match` | `node_edits_tests.rs` | per-node change lists; `already labelled`; a Remove adds the DaemonSet warning, a Set alone does not |
 | `label_batch_checks_in_order` | same | the six texts of [bulk-labels.md](bulk-labels.md) |
-| `header_edit_labels_by_tick_count` | `app_shell_node_edit_tests.rs` | 0 / 1 / 2–50 / 51 / two clusters |
+| `header_edit_labels_by_tick_count` | `app_shell_node_edit_tests.rs` | 0 / 1 / 2–50 / 51 |
 | `bulk_labels_dry_run_every_node_then_commit` | same | one PATCH per node per mode; one audit line per node |
 | `bulk_labels_batch_of_a_sends_nothing_to_b` | same | [safety.md](safety.md) |
 

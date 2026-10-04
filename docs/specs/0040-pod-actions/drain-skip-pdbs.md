@@ -20,19 +20,20 @@ pub(crate) enum Budget { /* 0034 variants */ /** Skip: the budgets that would ha
 
 | Part | `Respect` (0034) | `Skip` |
 |---|---|---|
-| Checkbox | — | enabled when the session report allows `AccessCheck::DeletePods` (`delete pods`, 0037); else disabled with `Not permitted: delete pods`; while a dry-run or commit runs, disabled |
+| Checkbox | — | enabled when the lazy `AccessCheck::Delete(ObjectKind::Pod)` allows it (the check Delete pod and Restart pod read; the dialog calls `request_kind_access(Pod)` on open, since the Nodes screen does not); `Checking permissions…` until it answers; else `Not permitted: delete pods`. Disabled while `is_checking` (a dry-run runs) and while a commit runs |
 | Steps strip | `2 Evict {n} pods` | `2 Delete {n} pods` |
 | Preview `Evict(Bypassed)` | — | `Deleted directly; PDB {name} not checked` (`{name} and {k} more`), warn tone, sorted with `Waits` |
 | HEADS UP | budget waits (0034) | danger tone: `PodDisruptionBudgets are not checked. {k} pods protected by {pdb}, {pdb2} go down without waiting for replacements.` (only when k > 0) |
 | Grace select | 0034 choices | fixed `Pod default`, disabled, muted `Deletes use each pod's own grace period` |
 | Dry-run line | `… evictions accepted, … refused by PDB` | `Server dry-run: cordon passed · {a} of {n} deletes accepted` |
-| Confirm tier | `confirm_step(mode, Destructive, expected)` | `confirm_step(mode, Privileged, expected)`: TypeName in **every** tier; node name for one node, cluster name for several |
-| Buttons | `Cordon only` · `Drain wk-04` | same labels, danger primary; `Cordon only` shares the one typed field, so it also asks for the name |
+| Confirm tier, `Drain` | `confirm_step(mode, Destructive, expected)` | `confirm_step(mode, Privileged, expected)`: TypeName in **every** tier; node name for one node, cluster name for several |
+| Confirm tier, `Cordon only` | 0034 | unchanged: a cordon never touches budgets. On a Click tier the typed field shows for `Drain` only, and `Cordon only` does not wait for it |
+| Buttons | `Cordon only` · `Drain wk-04` | same labels, danger primary |
 
-- Toggling the option resets the eviction dry-run aggregate to `Running` and dry-runs **every** pod again (the request kind changed); the cordon dry-runs stand. A dry-run that answers after a toggle is dropped (keyed by the policy it was sent with).
+- Toggling (possible only while `is_checking` is false, so no dry-run is in flight) clears `checks.pods` and `checks.elapsed` and dry-runs **every** pod again (the request kind changed); the cordon dry-runs stand. With nothing in flight there is no late answer to drop.
 - The dialog's own gate is unchanged (`create pods/eviction`, `patch nodes`): a user who may delete but not evict cannot open it.
-- `live_tier` reads the policy: `Privileged` while ticked, the 0034 rule otherwise. Unticking returns to the open-time tier.
-- The `Drain` button carries the policy into the run with the `Confirmed` of the current dry-run generation, so a toggle after the dry-run passed needs a new pass.
+- `live_tier` takes the button: `Drain` reads the policy (`Privileged` while ticked, the 0034 rule otherwise; unticking returns to the open-time tier); `Cordon only` always reads the 0034 rule.
+- `Confirmed` holds the session generation, not a per-policy one; what keeps a toggle honest is the cleared `checks.pods`: the aggregate is `Running` again until every pod has a dry-run of the current policy, so `Drain` stays disabled until then. The run skips its own dry-run for uids the dialog already recorded as accepted or refused (0034 as built), and after a toggle those records are all of the current policy.
 
 ## Writes (`drain_writes.rs`)
 

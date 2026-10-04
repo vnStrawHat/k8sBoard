@@ -19,14 +19,14 @@
 | 6 | `ContainerSummary` gains `terminal: ContainerTerminal`, read from `spec.stdin`, `spec.stdinOnce`, `spec.tty` | the menu must know before the dialog; three spec booleans, no churn |
 | 7 | A picks the default attach container: first such running Main, else first such running Sidecar. The pod menu item has no submenu (W4 draws none); the container ⋯ menu attaches to its container | W4 "Attach A", W4b note 3 |
 | 8 | Risk `Change`, the cluster's own tier (PROD types the cluster name); warnings name the main-process hazard and `stdinOnce` | attach writes to PID 1's stdin; Ctrl C can stop the container |
-| 9 | Reconnect on an attach tab re-attaches the same container through the same intent; `is_debug_tab` becomes true for `Debug` and `NodeShell` only | an attach creates nothing, so repeating it is safe; today `!is_exec()` would send Attach to the debug options dialog |
+| 9 | An attach tab has **no Reconnect**; the user presses A (or the menu) again, which opens a new tab through the same gate. `is_debug_tab` stays `!is_exec()`: the button that would route there is not drawn | a `stdinOnce` container cannot take a second attach after a detach; one entry point is less code than a re-attach path with its own checks |
 
 ## Restart pod (bare pods: refused)
 
 | # | Decision | Rationale |
 |---|---|---|
 | 10 | **Restart pod is refused for a pod with no controller** (`Not managed by a controller; it would not come back. Use Delete pod…`), not offered with a stronger warning | "Restart" promises a new pod. A bare pod deleted is gone: that is Delete, which already exists with its typed name and its `will not come back` warning. One honest action per outcome beats a dialog that relabels a delete |
-| 11 | Also refused: a static pod (controller kind `Node`: `Static pod: the kubelet owns it; restart the kubelet's manifest instead`), a finished pod (`The pod has finished; its controller does not restart it`), a terminating pod (`Already terminating`) | deleting a mirror pod restarts nothing; a finished pod is not restarted by Jobs or ReplicaSets |
+| 11 | Also refused: a static pod (controller kind `Node`: `Static pod: the kubelet owns it`), a finished pod (`PodSummary.is_finished`, phase `Succeeded`/`Failed`: `The pod has finished; its controller does not restart it`), a terminating pod (`Already terminating`: row status `Terminating`, or `deletion_started` from the uid read) | deleting a mirror pod restarts nothing; a finished pod is not restarted by Jobs or ReplicaSets. The phase, not the status reason: the reason reads `Error`, `Completed`, or `OOMKilled` on running pods too |
 | 12 | Allowed for any other controller kind (ReplicaSet, StatefulSet, DaemonSet, Job, custom); warnings per owner ([pod-removal.md](pod-removal.md)) and always `Restart deletes the pod without checking PodDisruptionBudgets; Evict checks them` | custom controllers recreate too; the PDB line points to the safer action |
 | 13 | Restart and Evict are `Destructive`, typed **pod name** on TypeName tiers, no single key (unbound row actions; menu and palette only) | they end a running pod; W4 shows no key; Del stays the only destructive single key |
 
@@ -34,7 +34,7 @@
 
 | # | Decision | Rationale |
 |---|---|---|
-| 14 | Evict is refused only for a static pod (`Static pods cannot be evicted`); a bare pod and a DaemonSet pod get warnings, not refusals | the eviction API is the PDB-respecting delete; kubectl's drain filters are drain policy, not eviction policy |
+| 14 | Evict is refused only for a static pod (`Static pod: the kubelet owns it`) and a terminating one; a bare pod and a DaemonSet pod get one warning each, not refusals | the eviction API is the PDB-respecting delete; kubectl's drain filters are drain policy, not eviction policy |
 | 15 | 429 on the dry-run blocks the commit and shows the cause (`refused for now: The disruption budget api-pdb needs 2 healthy pods…`); no automatic retry; the user evicts again later | the drain owns backoff (0034 decision 27); a single action should not wait silently |
 | 16 | Grace is the pod default | W4 draws no grace choice; the drain keeps its grace select |
 
@@ -43,7 +43,7 @@
 | # | Decision | Rationale |
 |---|---|---|
 | 17 | **Ship it.** W6 draws it; it is kubectl `--disable-eviction`; it is the only way a drain finishes past a pod matched by two PDBs (the API refuses it for good, HTTP 500) or a budget that can never allow (`minAvailable` = replicas, `maxUnavailable: 0`, unhealthy pods). The alternatives (edit someone's PDB and restore it, or delete each blocked pod by hand under its own typed name) are slower and easier to get wrong | small cost: one option, one request switch in `drain_writes.rs`, existing `DeleteObject` and tier |
-| 18 | Strong friction: enabled only when `delete pods` is allowed; **off on every open, never remembered**; risk `Privileged` while ticked, so the name is typed in **every** tier (node name for one node, cluster name for several); a danger HEADS UP names the bypassed budgets and the pods they protect; the steps strip reads `Delete {n} pods` | the user sees exactly what loses protection and types it even on DEV |
+| 18 | Strong friction: enabled only when the lazy `delete pods` check (`Delete(Pod)`, the one Delete pod reads) allows it and no dry-run runs; **off on every open, never remembered**; risk `Privileged` for `Drain` while ticked, so the name is typed in **every** tier (node name for one node, cluster name for several); `Cordon only` keeps its normal tier (a cordon never touches budgets); a danger HEADS UP names the bypassed budgets and the pods they protect; the steps strip reads `Delete {n} pods` | the user sees exactly what loses protection and types it even on DEV |
 | 19 | While ticked, every pod is deleted (kubectl semantics), not only the blocked ones | one request kind per run; "Allows" can turn into a 429 mid-run, which would stall a mixed run |
 | 20 | The grace select is fixed to `Pod default` while ticked (`Deletes use each pod's own grace period`) | `DeleteObject` sends no grace (0033 decision 6); adding one changes a pinned wire format. Ceiling noted in [drain-skip-pdbs.md](drain-skip-pdbs.md) |
 
@@ -54,3 +54,4 @@
 | 21 | The W5 header `Edit labels`: one ticked node → the 0034 editor; 2–50 → the bulk editor; none → `Tick nodes first` | W5 draws one header button; W5 note 4 is the multi-select model |
 | 22 | The bulk editor lists **changes only** (Set key=value, Remove key), not the nodes' labels, which differ per node | per-key merge patches are independent (0034 decision 6) |
 | 23 | Per node, changes that are already true are dropped; a node with none left is skipped (`already labelled`) | the dialog lists only real writes; the patch would be a no-op anyway |
+| 24 | A batch with any Remove carries the warning `Removing a label can make DaemonSets that select nodes by it delete their pods on these nodes` | node labels drive DaemonSet placement; the DaemonSet controller deletes pods from nodes that no longer match, without a PDB check |
