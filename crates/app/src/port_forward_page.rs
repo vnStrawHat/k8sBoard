@@ -10,7 +10,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, ClipboardItem, Context, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity,
@@ -37,7 +37,7 @@ const CLUSTER_WIDTH: f32 = 200.;
 const UPTIME_WIDTH: f32 = 80.;
 const ACTION_WIDTH: f32 = 96.;
 
-const EMPTY_TEXT: &str = "No port forwards. Use Forward next to a port, or + New forward.";
+const EMPTY_TEXT: &str = "No port forwards. Use Forward next to a port, or New forward.";
 const BIND_TOOLTIP: &str = "The forward listens on this computer only (127.0.0.1 and ::1). On Windows another local program could bind the same port first.";
 
 /// What a row's drawer menu reads, taken when the menu opens.
@@ -67,11 +67,12 @@ impl AppShell {
         )
     }
 
-    /// `+ New forward` and `Stop all`, right-aligned in the header.
+    /// `New forward` and `Stop all`, right-aligned in the header.
     pub(super) fn port_forward_header_buttons(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         let has_cluster = self.active_cluster().is_some();
         let new = Button::new("forward-new")
-            .label("+ New forward")
+            .icon(Icon::new(IconName::Plus))
+            .label("New forward")
             .small()
             .outline()
             .disabled(!has_cluster)
@@ -95,6 +96,7 @@ impl AppShell {
         };
         let running = self.port_forwards.read(cx).running_count();
         let stop_all = Button::new("forward-stop-all")
+            .icon(Icon::new(IconName::CircleStop))
             .label("Stop all")
             .small()
             .outline()

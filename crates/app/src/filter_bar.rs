@@ -1,4 +1,4 @@
-//! The row under the screen header: active filter chips, + Filter, the quick filter input,
+//! The row under the screen header: active filter chips, Filter, the quick filter input,
 //! and Columns. It also draws the empty state of a filter that hides every row.
 
 use std::collections::BTreeSet;
@@ -140,6 +140,7 @@ fn namespace_chips(
         let trigger = Button::new("namespace-chip")
             .small()
             .outline()
+            .icon(Icon::new(IconName::Folder))
             .label("Namespace: all")
             .dropdown_caret(true);
         return vec![namespace_picker(
@@ -160,6 +161,7 @@ fn namespace_chips(
             Button::new(("namespace-chip", index))
                 .small()
                 .outline()
+                .icon(Icon::new(IconName::Folder))
                 .label(format!("Namespace: {name}"))
                 .child(Icon::new(IconName::X).size_3())
                 .tooltip("Remove namespace")
@@ -247,7 +249,7 @@ fn group_id(group: Option<&NodeGroup>) -> gpui_kit::SharedString {
     }
 }
 
-/// `+ Filter`: the status toggle (Pods and the kinds) and `Label…`. Events have none: Warnings
+/// `Filter`: the status toggle (Pods and the kinds) and `Label…`. Events have none: Warnings
 /// only covers their status.
 fn add_filter_button(state: &ToolkitState, cx: &Context<AppShell>) -> Option<AnyElement> {
     if state.screen == Screen::Kind(ResourceKind::Events) {
@@ -260,7 +262,8 @@ fn add_filter_button(state: &ToolkitState, cx: &Context<AppShell>) -> Option<Any
         Button::new("add-filter")
             .ghost()
             .small()
-            .label("+ Filter")
+            .icon(Icon::new(IconName::ListFilterPlus))
+            .label("Filter")
             .dropdown_caret(true)
             .dropdown_menu(move |menu, _, _| {
                 let menu = if screen == Screen::Nodes {
@@ -292,6 +295,7 @@ fn columns_button(state: &ToolkitState, cx: &Context<AppShell>) -> AnyElement {
     Button::new("columns")
         .ghost()
         .small()
+        .icon(Icon::new(IconName::Columns3))
         .label("Columns")
         .dropdown_caret(true)
         .dropdown_menu(move |menu, _, _| {
@@ -340,6 +344,7 @@ pub(crate) fn filtered_empty_state(
             Button::new("clear-filters")
                 .small()
                 .outline()
+                .icon(Icon::new(IconName::X))
                 .label("Clear filters")
                 .on_click(move |_, window, cx| {
                     let _ = shell.update(cx, |shell, cx| shell.clear_filters(window, cx));

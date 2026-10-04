@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 
 use cluster::{ClusterConnection, ClusterError, SecretKey, SecretValue};
 use futures::future::BoxFuture;
+use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Context, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _,
     Render, SharedString, Styled as _, Task, Window, div, prelude::FluentBuilder as _,
@@ -419,6 +420,7 @@ impl SecretValuesView {
         let is_blocked = self.access == ValueAccess::Blocked;
         let toggle = if self.revealed.is_empty() {
             Button::new("secret-reveal-all")
+                .icon(Icon::new(IconName::Eye))
                 .label("Reveal all (30s)")
                 .ghost()
                 .xsmall()
@@ -427,6 +429,7 @@ impl SecretValuesView {
                 .on_click(cx.listener(|view, _, _, cx| view.press(SecretAction::RevealAll, cx)))
         } else {
             Button::new("secret-hide-all")
+                .icon(Icon::new(IconName::EyeOff))
                 .label("Hide")
                 .ghost()
                 .xsmall()
@@ -463,6 +466,7 @@ impl SecretValuesView {
         };
         let name = key.name.clone();
         Button::new(("secret-copy", ix))
+            .icon(Icon::new(IconName::Copy))
             .label(if is_copied { "Copied" } else { "Copy" })
             .ghost()
             .xsmall()
@@ -522,6 +526,7 @@ impl SecretValuesView {
                 )
                 .child(
                     Button::new(("secret-reveal", ix))
+                        .icon(Icon::new(IconName::Eye))
                         .label("Reveal")
                         .ghost()
                         .xsmall()
@@ -588,6 +593,7 @@ impl SecretValuesView {
                     )
                     .child(
                         Button::new(("secret-hide", ix))
+                            .icon(Icon::new(IconName::EyeOff))
                             .label("Hide")
                             .ghost()
                             .xsmall()

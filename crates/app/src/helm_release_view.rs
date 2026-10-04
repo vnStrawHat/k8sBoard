@@ -14,12 +14,13 @@ use cluster::{
     ClusterConnection, ClusterError, EnvValues, HelmReleaseDetail, HelmReleaseSummary,
     HelmRevealed, HelmRevisionRef, HelmValuesDiff, ValueChange, ValueVisibility,
 };
+use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::input::{Copy, Cut, Editor, EditorState};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::{
     AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter,
@@ -856,6 +857,7 @@ impl HelmReleaseView {
                 "Show these for 30 seconds"
             };
             return Button::new("helm-reveal")
+                .icon(Icon::new(IconName::Eye))
                 .label(label)
                 .ghost()
                 .xsmall()
@@ -875,6 +877,7 @@ impl HelmReleaseView {
             }))
             .child(
                 Button::new("helm-hide")
+                    .icon(Icon::new(IconName::EyeOff))
                     .label("Hide")
                     .ghost()
                     .xsmall()
@@ -1032,6 +1035,7 @@ impl HelmReleaseView {
             .child(div().ml_auto())
             .child(
                 Button::new("helm-refresh")
+                    .icon(Icon::new(IconName::RefreshCw))
                     .label("Refresh")
                     .ghost()
                     .xsmall()
@@ -1128,6 +1132,7 @@ impl HelmReleaseView {
             })
             .child(
                 Button::new("helm-copy")
+                    .icon(Icon::new(IconName::Copy))
                     .label("Copy")
                     .small()
                     .ghost()

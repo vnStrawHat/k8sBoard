@@ -6,13 +6,14 @@ use cluster::{
     AccessDecision, AccessRequest, EffectiveRule, Identity, RbacSnapshot, RequestTarget,
     RulesReview,
 };
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::select::{Select, SelectState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
-    ActiveTheme as _, IndexPath, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Icon, IndexPath, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -818,6 +819,7 @@ impl PermissionsView {
         if shown.listed_at.is_some() {
             source = source.child(
                 Button::new("permissions-refresh")
+                    .icon(Icon::new(IconName::RefreshCw))
                     .small()
                     .outline()
                     .label("Refresh")

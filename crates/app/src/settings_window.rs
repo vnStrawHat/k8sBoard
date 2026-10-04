@@ -90,6 +90,19 @@ impl SettingsPage {
         }
     }
 
+    fn icon(self) -> IconName {
+        match self {
+            Self::General => IconName::Settings,
+            Self::Clusters => IconName::Building2,
+            Self::Appearance => IconName::Palette,
+            Self::KeyboardShortcuts => IconName::Keyboard,
+            Self::Safety => IconName::ShieldCheck,
+            Self::TerminalAndShell => IconName::SquareTerminal,
+            Self::Logs => IconName::FileText,
+            Self::About => IconName::Info,
+        }
+    }
+
     fn index(self) -> usize {
         PAGES
             .iter()
@@ -251,15 +264,18 @@ impl SettingsWindow {
     fn pages(&self, cx: &App) -> Vec<SettingPage> {
         PAGES
             .iter()
-            .map(|page| match page {
-                SettingsPage::General => general_page(),
-                SettingsPage::Clusters => clusters_page(&self.clusters, cx),
-                SettingsPage::Appearance => appearance_page(),
-                SettingsPage::KeyboardShortcuts => keyboard_shortcuts_page(),
-                SettingsPage::Safety => safety_page(),
-                SettingsPage::TerminalAndShell => terminal_page(),
-                SettingsPage::Logs => logs_page(),
-                SettingsPage::About => about_page(cx),
+            .map(|page| {
+                let built = match page {
+                    SettingsPage::General => general_page(),
+                    SettingsPage::Clusters => clusters_page(&self.clusters, cx),
+                    SettingsPage::Appearance => appearance_page(),
+                    SettingsPage::KeyboardShortcuts => keyboard_shortcuts_page(),
+                    SettingsPage::Safety => safety_page(),
+                    SettingsPage::TerminalAndShell => terminal_page(),
+                    SettingsPage::Logs => logs_page(),
+                    SettingsPage::About => about_page(cx),
+                };
+                built.icon(page.icon())
             })
             .collect()
     }

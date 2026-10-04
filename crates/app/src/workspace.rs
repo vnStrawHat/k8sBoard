@@ -387,6 +387,7 @@ impl AppShell {
         let fit = Button::new("topology-fit")
             .ghost()
             .small()
+            .icon(Icon::new(IconName::Maximize))
             .label("Fit")
             .tooltip("Fit the whole graph in view")
             .disabled(!has_graph)
@@ -528,6 +529,7 @@ impl AppShell {
     /// Opens Test traffic on the defaults for the first pods.
     fn render_test_traffic(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let button = Button::new("test-traffic")
+            .icon(Icon::new(IconName::Activity))
             .label("Test traffic")
             .small()
             .outline();
@@ -549,6 +551,7 @@ impl AppShell {
     /// Opens Check permissions for the account whose drawer is open, else for You.
     fn render_check_permissions(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let button = Button::new("check-permissions")
+            .icon(Icon::new(IconName::ShieldQuestionMark))
             .label("Check permissions")
             .small()
             .outline();
@@ -580,7 +583,11 @@ impl AppShell {
         label: &'static str,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let button = Button::new("new-object").label(label).small().outline();
+        let button = Button::new("new-object")
+            .icon(Icon::new(IconName::Plus))
+            .label(label)
+            .small()
+            .outline();
         match self.new_object_block(kind, cx) {
             Some(reason) => button.disabled(true).tooltip(reason),
             None => button
@@ -610,6 +617,7 @@ impl AppShell {
     /// key, so the reason it is off is the one the key would give.
     fn render_renew(&self, kind: ResourceKind, cx: &Context<Self>) -> Option<AnyElement> {
         let button = Button::new("renew-certificate")
+            .icon(Icon::new(IconName::RefreshCw))
             .label("Renew")
             .small()
             .outline();
@@ -626,7 +634,11 @@ impl AppShell {
 
     /// Opens the Who can… dialog on the namespace the scope starts in.
     fn render_who_can(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let button = Button::new("who-can").label("Who can…").small().outline();
+        let button = Button::new("who-can")
+            .icon(Icon::new(IconName::UserSearch))
+            .label("Who can…")
+            .small()
+            .outline();
         let button = if self.live(cx).is_some() {
             button
                 .tooltip("Find the subjects that can do something")

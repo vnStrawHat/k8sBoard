@@ -508,7 +508,8 @@ impl Render for NodeEditor {
                 .into_any_element(),
             EditorState::Ready { .. } => {
                 let add = Button::new("node-edit-add")
-                    .label("+ Add")
+                    .icon(Icon::new(IconName::Plus))
+                    .label("Add")
                     .small()
                     .outline()
                     .on_click(cx.listener(|editor, _, window, cx| editor.add_row(window, cx)));
@@ -1037,7 +1038,8 @@ impl Render for BulkLabelEditor {
             review.tooltip("No changes")
         };
         let add = Button::new("bulk-label-add")
-            .label("+ Add")
+            .icon(Icon::new(IconName::Plus))
+            .label("Add")
             .small()
             .outline()
             .on_click(cx.listener(|editor, _, window, cx| editor.add_row(window, cx)));

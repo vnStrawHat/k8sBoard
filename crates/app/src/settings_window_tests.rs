@@ -451,3 +451,14 @@ fn every_page_renders_with_non_default_values(cx: &mut TestAppContext) {
         close(window, cx);
     }
 }
+
+#[test]
+fn settings_page_icons_are_distinct() {
+    let mut seen = std::collections::HashSet::new();
+    for page in PAGES {
+        assert!(
+            seen.insert(format!("{:?}", page.icon())),
+            "{page:?} repeats an icon"
+        );
+    }
+}
