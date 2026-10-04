@@ -1,0 +1,55 @@
+# 0041 · Revision history tab
+
+[Back to index](README.md) · Steps 1 (cluster) and 2 (app) · Decisions 2, 3, 8, 9. Wireframe W10 tabs.
+
+## Cluster crate (`replica_set.rs`)
+
+```rust
+impl ClusterConnection {
+    /// One LIST of `deployment`'s namespace's ReplicaSets, kept when their controller owner is that
+    /// Deployment (kind `Deployment`, same name). Summaries only; read-only. `deployment` must be a
+    /// Deployment `ObjectRef`, else `ClusterError::UnexpectedResponse` with fixed text.
+    pub async fn deployment_revisions(&self, deployment: &ObjectRef) -> Result<Vec<ReplicaSetSummary>, ClusterError>;
+}
+```
+
+- `Api::<ReplicaSet>::namespaced(..).list(&ListParams::default())` through `self.run(ACTION, ..)`, `ACTION = "listing the revisions of a deployment"`; `replica_set_summary` per item (existing). No tracing of content.
+- Order: as returned; the app sorts.
+
+## App: shared pure helpers (`revision_diff.rs`)
+
+```rust
+/// Newest first by revision number (missing numbers last, then by name). Pure.
+pub(crate) fn revision_list(replica_sets: &[ReplicaSetSummary]) -> Vec<RevisionSide>;   // is_current = highest number
+/// (newest, previous) of `revision_list`; `None` with fewer than two numbered revisions.
+pub(crate) fn latest_pair(sides: &[RevisionSide]) -> Option<(RevisionSide, RevisionSide)>;
+```
+
+`RevisionSide::of` (0039) builds each side. `diff_request(deployment, clicked, current)` (0039) orders a pair.
+
+## App: the tab
+
+| Item | Rule |
+|---|---|
+| `EditTab` | gains `History`; `render_tabs` adds `Tab::new().label("Revision history")` only when `kind == Deployment` (index 2) |
+| `YamlEditView` fields | `history: Option<Entity<RevisionHistory>>`, created on the first show of the tab, dropped with the view |
+| `RevisionHistory` (new entity, `revision_history.rs`) | `deployment: ResourceKey`, `object: ObjectRef`, `connection: ClusterConnection`, `state: HistoryState`, `selected: Option<usize>`, `diff: Option<Entity<RevisionDiffView>>` |
+| `HistoryState` | `Loading { _task }`, `Denied` (session access says `ListReplicaSets` denied; no request), `Failed(SharedString)` (`error_text`), `Ready(Vec<RevisionSide>)` |
+| Layout | left list 240 px: `rev {n} · {tag}`, muted age, `current` pill; selected row tinted (theme `list_active`). Right: the selected diff (`RevisionDiffView` as a child element) |
+| Default selection | `latest_pair`'s previous side; with one revision: `No earlier revision kept (revisionHistoryLimit)` |
+| Current row selected | `This is the current revision.` (muted, centered), no diff entity |
+| Texts | Loading `Loading revisions…` (spinner); Denied `Not permitted: list replicasets`; Failed `Could not load revisions: {error}` |
+| Editor text | never changed by the tab; Ctrl S and Apply act on the editor whatever tab is shown (0031 flow) |
+
+`RevisionDiffView` needs one change for embedding: its root is a sized `v_flex` (`size_full`) without the dialog height share, so the dialog keeps `h(HEIGHT_SHARE × window)` on its wrapper in `open_revision_diff`. No visual change to the dialog.
+
+## Async contract
+
+1. First show of the tab: if `live.access` denies `ListReplicaSets` → `Denied`. Else `cx.spawn` → `ClusterRuntime::spawn(connection.deployment_revisions(&object))` on tokio → back on GPUI: `revision_list`, `Ready`, one `cx.notify()`.
+2. A row click replaces `diff` with `cx.new(|cx| RevisionDiffView::new(diff_request(..), connection.clone(), cx))`; dropping the old entity cancels its GETs (0039 contract).
+3. The list is read once per editor; reopening the editor reads again. No cache (0039 decision 11).
+4. The connection is the one `open_edit` resolved for the view (the active cluster, 0046); a cluster switch closes the editor through `leaving_work`, dropping both entities.
+
+## Screenshot
+
+`--screen edit-yaml-history`: the 0031 fixture view on `History`, with a fixed `Ready` list (`rev 38 current`, `rev 37`, `rev 36`) and the `--screen revision-diff` fixture diff embedded. No connection call.
