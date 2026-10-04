@@ -5,6 +5,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use cluster::TrafficSourceKind;
 use gpui_kit::{
     App, BorderStyle, Bounds, DispatchPhase, Hitbox, HitboxBehavior, Hsla, IntoElement,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Point, ScrollWheelEvent, Styled as _, WeakEntity,
@@ -13,11 +14,12 @@ use gpui_kit::{
 
 use crate::status_tone::StatusTone;
 use crate::topology_card::{CardDetail, MIN_BADGE_ZOOM, card_detail};
-use crate::topology_colors::{CanvasColors, edge_color, kind_hue};
+use crate::topology_colors::{CanvasColors, EDGE_REST_ALPHA, edge_color, kind_hue};
 use crate::topology_graph::{Relation, TopologyEdge, TopologyGraph};
 use crate::topology_layout::{GraphPoint, GraphRect, TopologyLayout};
 use crate::topology_route::EdgeRoute;
 use crate::topology_stroke::{Dash, feather, fill_convex, stroke_dashed, stroke_line, trim_end};
+use crate::topology_traffic::{EdgeTraffic, TrafficLayer};
 use crate::topology_view::TopologyView;
 use crate::topology_viewport::{MIN_TEXT_ZOOM, Viewport, minimap_transform, snap};
 
@@ -108,7 +110,69 @@ pub(crate) fn relation_stroke(relation: Relation) -> Stroke {
             width: 1.5,
             dash: Some((2., 3.)),
         },
+        Relation::Calls => Stroke {
+            width: 1.5,
+            dash: None,
+        },
     }
+}
+
+/// The idle edge of Traffic mode: thin, muted, and dotted (spec 0049).
+const IDLE_WIDTH: f32 = 0.75;
+const IDLE_DASH: (f32, f32) = (2., 4.);
+/// An `Owns` flow is the quietest: it only shows that bytes pass.
+const OWNS_FLOW_ALPHA: f32 = 0.6;
+
+/// How an edge is stroked in Traffic mode, as the screen and the export both draw it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TrafficLook {
+    /// In graph units.
+    pub(crate) width: f32,
+    pub(crate) dash: Option<(f32, f32)>,
+    /// The 5xx tone of a flow, which colors the stroke and the arrow.
+    pub(crate) tone: Option<StatusTone>,
+    /// An idle edge takes the muted text color.
+    pub(crate) is_muted: bool,
+    pub(crate) alpha: f32,
+}
+
+/// `None` for a hidden edge. A flow is solid whatever its relation's dash (decision 13): width
+/// must read as rate.
+pub(crate) fn traffic_look(traffic: &EdgeTraffic, relation: Relation) -> Option<TrafficLook> {
+    match traffic {
+        EdgeTraffic::Hidden => None,
+        EdgeTraffic::Idle => Some(TrafficLook {
+            width: IDLE_WIDTH,
+            dash: Some(IDLE_DASH),
+            tone: None,
+            is_muted: true,
+            alpha: EDGE_REST_ALPHA,
+        }),
+        EdgeTraffic::Flow(flow) => Some(TrafficLook {
+            width: flow.width,
+            dash: None,
+            tone: flow.tone,
+            is_muted: false,
+            alpha: match (flow.tone, relation) {
+                (Some(_), _) => 1.,
+                (None, Relation::Owns) => OWNS_FLOW_ALPHA,
+                (
+                    None,
+                    Relation::RoutesTo | Relation::Mounts | Relation::Access | Relation::Calls,
+                ) => EDGE_REST_ALPHA,
+            },
+        }),
+    }
+}
+
+/// The color of an edge in Traffic mode, with its alpha.
+fn traffic_color(colors: &CanvasColors, look: &TrafficLook, relation: Relation) -> Hsla {
+    let base = match (look.is_muted, look.tone) {
+        (true, _) => colors.muted_foreground,
+        (false, Some(tone)) => colors.tone(tone),
+        (false, None) => colors.relation(relation),
+    };
+    base.opacity(look.alpha)
 }
 
 /// The dash of an edge that flows: its own, or long dashes for a solid edge.
@@ -206,6 +270,8 @@ pub(crate) struct CanvasPaint {
     pub(crate) view: WeakEntity<TopologyView>,
     /// A drag runs, so the move and up handlers are registered this frame.
     pub(crate) is_dragging: bool,
+    /// Traffic mode (spec 0049): what flows on each edge, and the `Calls` edges beside the graph.
+    pub(crate) traffic: Option<Rc<TrafficLayer>>,
 }
 
 /// The paint layer under the cards. It registers the wheel handler always and the move and up
@@ -233,13 +299,22 @@ pub(crate) fn graph_canvas(paint: CanvasPaint) -> impl IntoElement {
 pub(crate) fn handle_canvas(
     graph: Rc<TopologyGraph>,
     layout: Rc<TopologyLayout>,
+    traffic: Option<Rc<TrafficLayer>>,
     viewport: Viewport,
     colors: CanvasColors,
 ) -> impl IntoElement {
     canvas(
         |_, _, _| (),
         move |bounds, (), window, _| {
-            paint_handles(&graph, &layout, viewport, &colors, bounds, window);
+            paint_handles(
+                &graph,
+                &layout,
+                traffic.as_deref(),
+                viewport,
+                &colors,
+                bounds,
+                window,
+            );
         },
     )
     .absolute()
@@ -395,6 +470,32 @@ fn edge_dash(dash: Option<(f32, f32)>, zoom: f32) -> Option<Dash> {
     })
 }
 
+/// Every edge with its route and, in Traffic mode, what it carries: the graph's own edges first,
+/// then the `Calls` edges the traffic added beside it (`overlay.edges` has the same order).
+pub(crate) fn drawn_edges<'a>(
+    graph: &'a TopologyGraph,
+    routes: &'a [EdgeRoute],
+    traffic: Option<&'a TrafficLayer>,
+) -> impl Iterator<Item = (&'a TopologyEdge, &'a EdgeRoute, Option<&'a EdgeTraffic>)> {
+    let (calls, call_routes): (&[TopologyEdge], &[EdgeRoute]) = traffic
+        .map_or((&[], &[]), |layer| {
+            (layer.calls.as_slice(), layer.call_routes.as_slice())
+        });
+    graph
+        .edges
+        .iter()
+        .zip(routes)
+        .chain(calls.iter().zip(call_routes))
+        .enumerate()
+        .map(move |(index, (edge, route))| {
+            (
+                edge,
+                route,
+                traffic.map(|layer| &layer.overlay.edges[index]),
+            )
+        })
+}
+
 /// Paints the edges and their arrows. Returns how many of them flow.
 fn paint_edges(
     paint: &CanvasPaint,
@@ -413,33 +514,62 @@ fn paint_edges(
         point(left + x, top + y)
     };
     let mut animated = 0;
-    for (index, edge) in paint.graph.edges.iter().enumerate() {
-        let route = &paint.layout.routes[index];
+    let edges = drawn_edges(&paint.graph, &paint.layout.routes, paint.traffic.as_deref());
+    for (edge, route, edge_traffic) in edges {
         if !touches(viewport, route.bounds(), width, height) {
             continue;
         }
+        // A hidden edge (a mount or an access edge in Traffic mode) is not drawn.
+        let look = match edge_traffic {
+            Some(edge_traffic) => match traffic_look(edge_traffic, edge.relation) {
+                Some(look) => Some(look),
+                None => continue,
+            },
+            None => None,
+        };
         let emphasis = edge_emphasis(edge, paint.focus);
-        let is_flowing = is_animated(edge, paint.focus, paint.selected, zoom);
         let stroke = relation_stroke(edge.relation);
+        // No flow animation in Traffic mode: width is the signal there.
+        let is_flowing = look.is_none() && is_animated(edge, paint.focus, paint.selected, zoom);
         let extra = if emphasis == Emphasis::Focused {
             FOCUS_EXTRA_WIDTH
         } else {
             0.
         };
-        let base = edge_color(
-            &paint.colors,
-            edge.relation,
-            paint.graph.ghost_tone(edge.to),
-        );
+        let (base, graph_width, rest_dash) = match &look {
+            Some(look) => (
+                traffic_color(&paint.colors, look, edge.relation),
+                look.width,
+                look.dash,
+            ),
+            None => (
+                edge_color(
+                    &paint.colors,
+                    edge.relation,
+                    paint.graph.ghost_tone(edge.to),
+                ),
+                stroke.width,
+                stroke.dash,
+            ),
+        };
         let color = emphasized(base, emphasis);
-        // The arrow stays solid at rest, so the direction reads at a glance.
-        let arrow_color = emphasized(Hsla { a: 1., ..base }, emphasis);
+        // The arrow stays solid at rest, so the direction reads at a glance; an idle or `Owns`
+        // edge keeps its quiet arrow.
+        let is_quiet = look
+            .as_ref()
+            .is_some_and(|look| look.alpha < EDGE_REST_ALPHA || look.is_muted);
+        let arrow_base = if is_quiet {
+            base
+        } else {
+            Hsla { a: 1., ..base }
+        };
+        let arrow_color = emphasized(arrow_base, emphasis);
         let mut points: Vec<Point<f32>> = route.points.iter().map(|p| at(*p)).collect();
         // The stroke stops at the arrow base, so a translucent edge does not double up under it.
         if has_arrows {
             trim_end(&mut points, (ARROW_LENGTH + ARROW_TIP_GAP) * zoom);
         }
-        let line_width = edge_width(stroke.width + extra, zoom);
+        let line_width = edge_width(graph_width + extra, zoom);
         let dash = if is_flowing {
             animated += 1;
             let (on, off) = flow_dash(edge.relation);
@@ -455,7 +585,7 @@ fn paint_edges(
                 phase,
             })
         } else {
-            edge_dash(stroke.dash, zoom)
+            edge_dash(rest_dash, zoom)
         };
         let path = match dash {
             Some(dash) => stroke_dashed(&points, dash, line_width, feather),
@@ -479,6 +609,7 @@ fn paint_edges(
 fn paint_handles(
     graph: &TopologyGraph,
     layout: &TopologyLayout,
+    traffic: Option<&TrafficLayer>,
     viewport: Viewport,
     colors: &CanvasColors,
     bounds: Bounds<gpui_kit::Pixels>,
@@ -492,9 +623,10 @@ fn paint_handles(
     let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let (left, top) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
     let diameter = handle_diameter(zoom);
-    for (index, edge) in graph.edges.iter().enumerate() {
-        let route = &layout.routes[index];
-        if !touches(viewport, route.bounds(), width, height) {
+    for (edge, route, edge_traffic) in drawn_edges(graph, &layout.routes, traffic) {
+        let is_hidden = edge_traffic
+            .is_some_and(|edge_traffic| traffic_look(edge_traffic, edge.relation).is_none());
+        if is_hidden || !touches(viewport, route.bounds(), width, height) {
             continue;
         }
         let [start, end] = handle_points(route);
@@ -533,18 +665,52 @@ fn touches(viewport: Viewport, bounds: (f32, f32, f32, f32), width: f32, height:
     right >= 0. && bottom >= 0. && left <= width && top <= height
 }
 
-/// A legend swatch: a short edge of the relation with its arrow, drawn like the real ones.
-pub(crate) fn legend_swatch(relation: Relation, colors: CanvasColors) -> impl IntoElement {
+/// What a legend swatch shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Swatch {
+    /// The stroke of a relation at rest.
+    Relation(Relation),
+    /// A solid flow of a relation (Traffic mode).
+    Flow(Relation),
+    /// A flow in the tone of its 5xx share (Traffic mode).
+    Tone(StatusTone),
+}
+
+/// The width of the swatch of a flow, in graph units.
+pub(crate) const FLOW_SWATCH_WIDTH: f32 = 3.;
+
+/// A legend swatch: a short edge with its arrow, drawn like the real ones.
+pub(crate) fn legend_swatch(swatch: Swatch, colors: CanvasColors) -> impl IntoElement {
     canvas(
         |_, _, _| (),
-        move |bounds, (), window, _| paint_swatch(relation, &colors, bounds, window),
+        move |bounds, (), window, _| paint_swatch(swatch, &colors, bounds, window),
     )
     .w(px(SWATCH_WIDTH))
     .h(px(SWATCH_HEIGHT))
 }
 
+/// How a swatch strokes: its width, its dash, and its color.
+fn swatch_stroke(swatch: Swatch, colors: &CanvasColors) -> (f32, Option<Dash>, Hsla) {
+    match swatch {
+        Swatch::Relation(relation) => {
+            let stroke = relation_stroke(relation);
+            (
+                stroke.width,
+                edge_dash(stroke.dash, 1.),
+                edge_color(colors, relation, None),
+            )
+        }
+        Swatch::Flow(relation) => (
+            FLOW_SWATCH_WIDTH,
+            None,
+            colors.relation(relation).opacity(EDGE_REST_ALPHA),
+        ),
+        Swatch::Tone(tone) => (FLOW_SWATCH_WIDTH, None, colors.tone(tone)),
+    }
+}
+
 fn paint_swatch(
-    relation: Relation,
+    swatch: Swatch,
     colors: &CanvasColors,
     bounds: Bounds<gpui_kit::Pixels>,
     window: &mut Window,
@@ -564,11 +730,10 @@ fn paint_swatch(
     let at = |p: GraphPoint| point(p.x, p.y);
     let mut points: Vec<Point<f32>> = route.points.iter().map(|p| at(*p)).collect();
     trim_end(&mut points, ARROW_LENGTH + ARROW_TIP_GAP);
-    let stroke = relation_stroke(relation);
-    let color = edge_color(colors, relation, None);
-    let path = match edge_dash(stroke.dash, 1.) {
-        Some(dash) => stroke_dashed(&points, dash, stroke.width, feather),
-        None => stroke_line(&points, stroke.width, feather),
+    let (width, dash, color) = swatch_stroke(swatch, colors);
+    let path = match dash {
+        Some(dash) => stroke_dashed(&points, dash, width, feather),
+        None => stroke_line(&points, width, feather),
     };
     if let Some(path) = path {
         window.paint_path(path, color);
@@ -739,6 +904,32 @@ pub(crate) const LEGEND: [(Relation, &str); 4] = [
     (Relation::Access, "access"),
 ];
 
+/// The entries of the legend: the relations at rest, or in Traffic mode the flows and the 5xx
+/// tones (the tones only when a source reports requests). `sources` are the ones that answered.
+pub(crate) fn legend_entries(sources: Option<&[TrafficSourceKind]>) -> Vec<(Swatch, &'static str)> {
+    let Some(sources) = sources else {
+        return LEGEND
+            .iter()
+            .map(|(relation, text)| (Swatch::Relation(*relation), *text))
+            .collect();
+    };
+    let has_requests = sources.contains(&TrafficSourceKind::Istio);
+    let routes_to = if has_requests {
+        "routes to \u{b7} width = req/s"
+    } else {
+        "routes to \u{b7} width = receive bytes/s per pod"
+    };
+    let mut entries = vec![
+        (Swatch::Flow(Relation::RoutesTo), routes_to),
+        (Swatch::Flow(Relation::Calls), "calls"),
+        (Swatch::Relation(Relation::Owns), "owns"),
+    ];
+    if has_requests {
+        entries.push((Swatch::Tone(StatusTone::Warn), "\u{2265} 1% 5xx"));
+        entries.push((Swatch::Tone(StatusTone::Bad), "\u{2265} 5% 5xx"));
+    }
+    entries
+}
 #[cfg(test)]
 #[path = "topology_canvas_tests.rs"]
 mod topology_canvas_tests;

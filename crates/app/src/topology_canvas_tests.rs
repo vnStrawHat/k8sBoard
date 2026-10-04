@@ -252,3 +252,105 @@ fn no_frame_request_when_idle_reduced_or_inactive() {
     assert!(!needs_flow_frame(2, true, true));
     assert!(!needs_flow_frame(2, false, false));
 }
+
+fn flow(width: f32, tone: Option<StatusTone>) -> EdgeTraffic {
+    EdgeTraffic::Flow(crate::topology_traffic::EdgeFlow {
+        rate: 1.,
+        unit: crate::topology_traffic::TrafficUnit::Requests,
+        error_share: None,
+        width,
+        tone,
+        label: None,
+    })
+}
+
+#[test]
+fn flow_edges_are_solid() {
+    // A RoutesTo edge is dashed at rest, and solid once it carries a flow.
+    assert_eq!(relation_stroke(Relation::RoutesTo).dash, Some((7., 4.)));
+    for relation in [
+        Relation::RoutesTo,
+        Relation::Mounts,
+        Relation::Access,
+        Relation::Owns,
+    ] {
+        let look = traffic_look(&flow(3., None), relation).expect("drawn");
+        assert_eq!(look.dash, None, "{relation:?}");
+        assert_eq!(look.width, 3.);
+    }
+    let idle = traffic_look(&EdgeTraffic::Idle, Relation::RoutesTo).expect("drawn");
+    assert_eq!(idle.dash, Some((2., 4.)));
+    assert_eq!(idle.width, 0.75);
+    assert!(idle.is_muted);
+}
+
+#[test]
+fn hidden_edges_have_no_look() {
+    assert_eq!(traffic_look(&EdgeTraffic::Hidden, Relation::Mounts), None);
+}
+
+#[test]
+fn tones_and_owns_flows_set_the_alpha() {
+    let bad = traffic_look(&flow(2., Some(StatusTone::Bad)), Relation::Calls).expect("drawn");
+    assert_eq!((bad.tone, bad.alpha), (Some(StatusTone::Bad), 1.));
+    let owns = traffic_look(&flow(2., None), Relation::Owns).expect("drawn");
+    assert_eq!(owns.alpha, 0.6);
+    let routes = traffic_look(&flow(2., None), Relation::RoutesTo).expect("drawn");
+    assert_eq!(routes.alpha, EDGE_REST_ALPHA);
+}
+
+#[test]
+fn traffic_colors_come_from_theme_tokens() {
+    let colors = CanvasColors::light();
+    let bad = traffic_look(&flow(2., Some(StatusTone::Bad)), Relation::Calls).expect("drawn");
+    assert_eq!(
+        traffic_color(&colors, &bad, Relation::Calls),
+        colors.bad.opacity(1.)
+    );
+    let idle = traffic_look(&EdgeTraffic::Idle, Relation::Owns).expect("drawn");
+    assert_eq!(
+        traffic_color(&colors, &idle, Relation::Owns),
+        colors.muted_foreground.opacity(EDGE_REST_ALPHA)
+    );
+    let calls = traffic_look(&flow(2., None), Relation::Calls).expect("drawn");
+    assert_eq!(
+        traffic_color(&colors, &calls, Relation::Calls),
+        colors.relation(Relation::Calls).opacity(EDGE_REST_ALPHA)
+    );
+}
+
+#[test]
+fn the_legend_follows_the_sources() {
+    let resources = legend_entries(None);
+    assert_eq!(resources.len(), LEGEND.len());
+    assert!(
+        resources
+            .iter()
+            .all(|(swatch, _)| matches!(swatch, Swatch::Relation(_)))
+    );
+    let istio = legend_entries(Some(&[
+        TrafficSourceKind::Istio,
+        TrafficSourceKind::PodNetwork,
+    ]));
+    let texts: Vec<&str> = istio.iter().map(|(_, text)| *text).collect();
+    assert_eq!(
+        texts,
+        [
+            "routes to \u{b7} width = req/s",
+            "calls",
+            "owns",
+            "\u{2265} 1% 5xx",
+            "\u{2265} 5% 5xx"
+        ]
+    );
+    let bytes = legend_entries(Some(&[TrafficSourceKind::PodNetwork]));
+    let texts: Vec<&str> = bytes.iter().map(|(_, text)| *text).collect();
+    assert_eq!(
+        texts,
+        [
+            "routes to \u{b7} width = receive bytes/s per pod",
+            "calls",
+            "owns"
+        ]
+    );
+}

@@ -519,3 +519,136 @@ fn releasing_the_shell_removes_the_published_connection(cx: &mut TestAppContext)
     assert!(shell.upgrade().is_none(), "the shell is released");
     assert!(!cx.update(|cx| cx.has_global::<ActiveConnection>()));
 }
+
+// ---- Topology Traffic: the metric list of the source (spec 0049) ----
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::cluster_metrics::TrafficSources;
+
+const METRIC_NAMES: &str =
+    r#"{"status":"success","data":["container_network_receive_bytes_total","up"]}"#;
+
+/// A live session whose saved source is Ready. The list of metric names answers with
+/// `METRIC_NAMES`, or with an error while `is_failing` is set.
+fn traffic_fixture(
+    name: &str,
+    is_failing: Arc<AtomicBool>,
+    cx: &mut TestAppContext,
+) -> (SwitchFixture, FakeApi) {
+    let fixture = open_switch_fixture(name, cx);
+    let (connection, api) = {
+        let _guard = fixture.runtime.enter();
+        FakeApi::connection(WritePolicy::Blocked, move |request| {
+            if request.path.ends_with("/label/__name__/values") {
+                return if is_failing.load(Ordering::SeqCst) {
+                    (500, "boom".to_owned())
+                } else {
+                    (200, METRIC_NAMES.to_owned())
+                };
+            }
+            if request.path.contains("/proxy/") {
+                (200, CPU_COUNT.to_owned())
+            } else {
+                (200, EMPTY_LIST.to_owned())
+            }
+        })
+    };
+    let session = fixture.session(cx);
+    session.update(cx, |session, cx| {
+        session.go_live_for_test(connection, NamespaceScope::All, cx);
+    });
+    cx.run_until_parked();
+    save_metrics(&fixture, Some(fields("/select/0/prometheus")), cx);
+    wait_for_state(&fixture, "ready", cx);
+    (fixture, api)
+}
+
+fn names_requests(api: &FakeApi) -> usize {
+    api.requests()
+        .iter()
+        .filter(|request| request.path.ends_with("/label/__name__/values"))
+        .count()
+}
+
+fn load_names(fixture: &SwitchFixture, cx: &mut TestAppContext) {
+    let session = fixture.session(cx);
+    session.update(cx, |session, cx| session.load_traffic_sources(cx));
+}
+
+fn traffic_state(fixture: &SwitchFixture, cx: &mut TestAppContext) -> String {
+    let session = fixture.session(cx);
+    session.read_with(cx, |session, _| {
+        match session.live().map(|live| &live.metrics.traffic_sources) {
+            Some(TrafficSources::NotLoaded) => "not loaded".to_owned(),
+            Some(TrafficSources::Loading { .. }) => "loading".to_owned(),
+            Some(TrafficSources::Loaded(Ok(sources))) => sources
+                .iter()
+                .map(|source| source.kind().label())
+                .collect::<Vec<_>>()
+                .join(", "),
+            Some(TrafficSources::Loaded(Err(_))) => "failed".to_owned(),
+            None => "not live".to_owned(),
+        }
+    })
+}
+
+fn wait_for_traffic(fixture: &SwitchFixture, wanted: &str, cx: &mut TestAppContext) {
+    for _ in 0..1_500 {
+        cx.run_until_parked();
+        if traffic_state(fixture, cx) == wanted {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("timed out waiting for the {wanted} state");
+}
+
+#[gpui_kit::test]
+fn first_traffic_click_loads_names_once(cx: &mut TestAppContext) {
+    let (fixture, api) = traffic_fixture("traffic-names", Arc::default(), cx);
+    // Nothing reads the list until Traffic is used.
+    assert_eq!(traffic_state(&fixture, cx), "not loaded");
+    assert_eq!(names_requests(&api), 0);
+    load_names(&fixture, cx);
+    assert_eq!(traffic_state(&fixture, cx), "loading");
+    // Asking again while it loads, and after it loaded, sends nothing.
+    load_names(&fixture, cx);
+    wait_for_traffic(&fixture, "pod network bytes", cx);
+    load_names(&fixture, cx);
+    assert_eq!(names_requests(&api), 1);
+    let request = api
+        .requests()
+        .into_iter()
+        .find(|request| request.path.ends_with("/label/__name__/values"))
+        .expect("the list was read");
+    assert_eq!(request.method, "GET");
+    assert!(request.has_query_key("start") && request.has_query_key("end"));
+}
+
+#[gpui_kit::test]
+fn a_failed_list_is_read_again(cx: &mut TestAppContext) {
+    let is_failing = Arc::new(AtomicBool::new(true));
+    let (fixture, api) = traffic_fixture("traffic-retry", Arc::clone(&is_failing), cx);
+    load_names(&fixture, cx);
+    wait_for_traffic(&fixture, "failed", cx);
+    assert_eq!(names_requests(&api), 1);
+    is_failing.store(false, Ordering::SeqCst);
+    load_names(&fixture, cx);
+    wait_for_traffic(&fixture, "pod network bytes", cx);
+    assert_eq!(names_requests(&api), 2);
+}
+
+#[gpui_kit::test]
+fn a_changed_entry_forgets_the_list(cx: &mut TestAppContext) {
+    let (fixture, api) = traffic_fixture("traffic-forget", Arc::default(), cx);
+    load_names(&fixture, cx);
+    wait_for_traffic(&fixture, "pod network bytes", cx);
+    save_metrics(&fixture, Some(fields("")), cx);
+    assert_eq!(traffic_state(&fixture, cx), "not loaded");
+    wait_for_state(&fixture, "ready", cx);
+    load_names(&fixture, cx);
+    wait_for_traffic(&fixture, "pod network bytes", cx);
+    assert_eq!(names_requests(&api), 2);
+}

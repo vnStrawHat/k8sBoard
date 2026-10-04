@@ -4,7 +4,8 @@
 
 use cluster::{
     AccessCheck, AccessDecision, ClusterError, MetricsError, MetricsSource, NamespaceAccess,
-    NamespaceScope, NodeMetrics, PodMetrics, PodSummary, SourceCheck, WatchUpdate,
+    NamespaceScope, NodeMetrics, PodMetrics, PodSummary, SourceCheck, TrafficMetricSource,
+    WatchUpdate,
 };
 use gpui_kit::Task;
 
@@ -25,6 +26,8 @@ pub(crate) struct ClusterMetrics {
     /// The Prometheus-compatible source of the cluster (spec 0048); its check runs once per session
     /// start and after each change of the stored entry.
     pub(crate) source: SourceState,
+    /// Which traffic metrics that source holds; read on the first Topology Traffic use.
+    pub(crate) traffic_sources: TrafficSources,
     pod_review: PodReview,
 }
 
@@ -41,6 +44,7 @@ impl ClusterMetrics {
             nodes: MetricsFeed::new("node metrics"),
             kubelet: KubeletFeed::new(),
             source: SourceState::None,
+            traffic_sources: TrafficSources::NotLoaded,
             pod_review,
         }
     }
@@ -96,6 +100,15 @@ impl SourceState {
             Self::None | Self::Invalid | Self::Checking { .. } | Self::Failed { .. } => None,
         }
     }
+}
+
+/// The traffic metrics the source holds (spec 0049): read once per source from its metric names,
+/// and again after a reconnect or a change of the stored entry. A failed read is tried again at
+/// the next Traffic refresh.
+pub(crate) enum TrafficSources {
+    NotLoaded,
+    Loading { _task: Task<()> },
+    Loaded(Result<Vec<TrafficMetricSource>, MetricsError>),
 }
 
 /// The reason line the Monitor (and Topology traffic) shows under a source that cannot serve:

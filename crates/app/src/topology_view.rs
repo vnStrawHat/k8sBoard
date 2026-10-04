@@ -6,7 +6,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use cluster::{NamespaceScope, NamespaceSummary, PodSummary};
+use cluster::{
+    ClusterConnection, MetricsSource, NamespaceScope, NamespaceSummary, PodSummary,
+    TrafficMetricSource, TrafficSourceKind,
+};
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -23,6 +26,8 @@ use gpui_kit::{
 
 use crate::app_shell::AppShell;
 use crate::app_shell::workspace::toggle_button;
+use crate::cluster_metrics::{SourceState, TrafficSources};
+use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{ClusterSession, LiveCluster, scope_includes};
 use crate::drawer::DRAWER_WIDTH;
 use crate::file_export::{ExportState, export_file_name, start_export_with};
@@ -30,8 +35,9 @@ use crate::settings::AppSettings;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ResourceKey;
 use crate::topology_canvas::{
-    CanvasPaint, LEGEND, MinimapPaint, TITLE_PILL_HEIGHT, TITLE_PILL_LEFT, TITLE_PILL_PADDING,
-    TITLE_PILL_TOP, TITLE_SIZE, graph_canvas, handle_canvas, legend_swatch, minimap_canvas,
+    CanvasPaint, MinimapPaint, TITLE_PILL_HEIGHT, TITLE_PILL_LEFT, TITLE_PILL_PADDING,
+    TITLE_PILL_TOP, TITLE_SIZE, graph_canvas, handle_canvas, legend_entries, legend_swatch,
+    minimap_canvas,
 };
 use crate::topology_card::{CardFrame, CardState, node_card};
 use crate::topology_checks::{ConfigCheck, checks_chip, topology_coverage};
@@ -47,6 +53,10 @@ use crate::topology_layout::{
     GraphPoint, GraphStructure, TopologyLayout, layout as lay_out, structure,
 };
 use crate::topology_route::EdgeShape;
+use crate::topology_traffic::{
+    TrafficLayer, TrafficOverlay, TrafficSample, shown_caption, tooltip_with_traffic,
+};
+use crate::topology_traffic_labels::{LABEL_HEIGHT, LABEL_TEXT_SIZE, edge_labels};
 use crate::topology_viewport::{
     CONTROLS_INSET, MIN_TEXT_ZOOM, MINIMAP_HEIGHT, MINIMAP_WIDTH, OVERLAY_GUTTER, Viewport,
     ZOOM_BUTTON_STEPS, is_drag, visible_nodes, wheel_steps,
@@ -73,6 +83,8 @@ const LEGEND_TEXT_SIZE: f32 = 11.;
 const LOW_ZOOM_TITLE_HEIGHT: f32 = 18.;
 /// The height of the namespace list the dropdown shows before it scrolls.
 const NAMESPACE_MENU_HEIGHT: f32 = 320.;
+/// How often the Traffic sample is read again, and the metric list tried again after a failure.
+const TRAFFIC_REFRESH: Duration = Duration::from_secs(30);
 
 /// The pointer interaction that is running.
 enum Drag {
@@ -93,8 +105,150 @@ enum Drag {
     Minimap,
 }
 
+/// What the canvas draws: the Resources layout alone, or the traffic that flows over it (0049).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TopologyMode {
+    Resources,
+    Traffic,
+}
+
+/// The Traffic fetches of the view: dropped as a whole on a mode, namespace, session, or
+/// visibility change, which stops the request and the refresh with it.
+#[derive(Default)]
+struct TrafficRun {
+    /// The newest sample with an answer, kept while a refresh fails.
+    sample: Option<Rc<TrafficSample>>,
+    /// The layer drawn: derived from the sample, the graph, and the layout.
+    layer: Option<Rc<TrafficLayer>>,
+    /// The request in flight; dropping it aborts the request.
+    fetch: Option<Task<()>>,
+    last_fetch: Option<Instant>,
+    /// When the metric list failed last, so a retry waits for the next refresh.
+    last_names_try: Option<Instant>,
+    /// Why the last refresh failed; the older sample stays drawn.
+    paused: Option<String>,
+}
+
 /// The built graph, or why there is none.
 type Built = Result<Rc<TopologyGraph>, TooLarge>;
+
+/// What one Traffic request round returns: the reading of each detected source.
+type TrafficReadings = Vec<(
+    TrafficMetricSource,
+    Result<cluster::TrafficReading, cluster::MetricsError>,
+)>;
+
+/// What one Traffic request round needs.
+struct TrafficFetchPlan {
+    sources: Vec<TrafficMetricSource>,
+    source: MetricsSource,
+    connection: ClusterConnection,
+}
+/// What `sync_traffic` does next.
+enum TrafficStep {
+    /// The source no longer serves, or has no traffic metric: back to Resources.
+    Leave,
+    LoadNames,
+    Wait,
+    Fetch(Box<TrafficFetchPlan>),
+}
+
+/// The Traffic segment: whether it can be pressed, and what its tooltip says.
+pub(crate) struct TrafficButton {
+    pub(crate) is_enabled: bool,
+    pub(crate) tooltip: String,
+}
+
+/// The state table of the Traffic segment (spec 0049): the 0048 source state, then the metric list.
+pub(crate) fn traffic_button(metrics: &crate::cluster_metrics::ClusterMetrics) -> TrafficButton {
+    let disabled = |tooltip: String| TrafficButton {
+        is_enabled: false,
+        tooltip,
+    };
+    let enabled = |tooltip: String| TrafficButton {
+        is_enabled: true,
+        tooltip,
+    };
+    let source = match &metrics.source {
+        SourceState::None => {
+            return disabled("Choose a metrics source in Settings \u{203a} Metrics".to_owned());
+        }
+        SourceState::Invalid => {
+            return disabled("The metrics source in Settings is not valid".to_owned());
+        }
+        SourceState::Checking { .. } => {
+            return disabled("Checking the metrics source\u{2026}".to_owned());
+        }
+        SourceState::Failed { error, .. } => {
+            return disabled(format!("Metrics source unreachable: {error}"));
+        }
+        SourceState::Ready { source, .. } => source.display(),
+    };
+    match &metrics.traffic_sources {
+        TrafficSources::NotLoaded | TrafficSources::Loading { .. } => {
+            enabled(format!("Show traffic from {source}"))
+        }
+        TrafficSources::Loaded(Ok(sources)) if sources.is_empty() => {
+            disabled(format!("No traffic metrics in {source}"))
+        }
+        TrafficSources::Loaded(Ok(_)) => enabled(format!("Show traffic from {source}")),
+        TrafficSources::Loaded(Err(error)) => enabled(format!(
+            "Show traffic (the metric list failed: {error}; retrying)"
+        )),
+    }
+}
+
+/// The first error of a sample in which no source answered; `None` when any did (or none was
+/// asked).
+fn sample_failure(sample: &TrafficSample) -> Option<String> {
+    if sample.readings.iter().any(|(_, reading)| reading.is_ok()) {
+        return None;
+    }
+    sample
+        .readings
+        .iter()
+        .find_map(|(_, reading)| reading.as_ref().err().map(ToString::to_string))
+        .or_else(|| Some("no traffic source answered".to_owned()))
+}
+
+/// The chip of Traffic mode. `shown` is the sources of the layer drawn and its clock time.
+fn traffic_chip_text(shown: Option<(&[TrafficSourceKind], &str)>, paused: Option<&str>) -> String {
+    if let Some(reason) = paused {
+        return format!("Traffic \u{b7} paused \u{b7} {reason}");
+    }
+    let Some((sources, clock)) = shown else {
+        return "Traffic \u{b7} loading\u{2026}".to_owned();
+    };
+    let names = match sources {
+        [TrafficSourceKind::PodNetwork] => {
+            "pod network bytes (per pod, not per connection)".to_owned()
+        }
+        other => other
+            .iter()
+            .map(|kind| kind.label())
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    format!("Traffic \u{b7} {names} \u{b7} last 5 min \u{b7} {clock}")
+}
+
+/// The chip tooltip: the notes of failed or cut readings, then the peers outside the namespace.
+fn traffic_chip_tooltip(overlay: &TrafficOverlay) -> Option<String> {
+    let mut lines = overlay.notes.clone();
+    if !overlay.outside.is_empty() {
+        lines.push(format!(
+            "{} peers outside this namespace: {}",
+            overlay.outside.len(),
+            overlay.outside.join(", ")
+        ));
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// `HH:MM:SS` of `at` in `zone`.
+fn clock_text(at: jiff::Timestamp, zone: &jiff::tz::TimeZone) -> String {
+    at.to_zoned(zone.clone()).strftime("%H:%M:%S").to_string()
+}
 
 pub(crate) struct TopologyView {
     session: Option<Entity<ClusterSession>>,
@@ -110,6 +264,13 @@ pub(crate) struct TopologyView {
     layout: Option<(GraphStructure, GroupBy, Rc<TopologyLayout>)>,
     /// How the edges are drawn; the saved choice, or the one a launch screen set in memory.
     edge_shape: EdgeShape,
+    mode: TopologyMode,
+    traffic: TrafficRun,
+    /// `--screen topology-traffic`: switch to Traffic once the source is ready.
+    wants_traffic: bool,
+    /// `--screen topology-traffic-fixture`: the pods of the fixture graph. The view then shows a
+    /// fixed graph and sample and reads no feed and no source.
+    fixture_pods: Option<Rc<Vec<PodSummary>>>,
     viewport: Viewport,
     needs_fit: bool,
     /// The first view was made for `DEFAULT_CANVAS`: it is made again once the real size is known.
@@ -154,6 +315,10 @@ impl TopologyView {
             pins: HashMap::new(),
             build: None,
             layout: None,
+            mode: TopologyMode::Resources,
+            traffic: TrafficRun::default(),
+            wants_traffic: false,
+            fixture_pods: None,
             edge_shape: AppSettings::try_get(cx)
                 .map_or_else(EdgeShape::default, |settings| settings.topology.edges),
             viewport: Viewport::default(),
@@ -197,6 +362,7 @@ impl TopologyView {
         self.session = session;
         self.namespace = None;
         self.expanded.clear();
+        self.traffic = TrafficRun::default();
         self.clear_graph();
         self.sync_subject(cx);
         cx.notify();
@@ -221,6 +387,7 @@ impl TopologyView {
         } else {
             self._tick = None;
             self.drag = Drag::None;
+            self.traffic = TrafficRun::default();
         }
         self.sync_subject(cx);
         cx.notify();
@@ -336,6 +503,10 @@ impl TopologyView {
     /// Keeps the namespace inside the scope and the feeds on the namespace and chips: one that left
     /// the scope resets to the default, and the session starts, keeps, or drops its feeds.
     fn sync_subject(&mut self, cx: &mut Context<Self>) {
+        // A fixture shows fixed data: it starts no feed.
+        if self.fixture_pods.is_some() {
+            return;
+        }
         let Some(session) = self.session.clone() else {
             return;
         };
@@ -365,6 +536,7 @@ impl TopologyView {
         self.expanded.clear();
         self.pending_focus = None;
         self.hovered = None;
+        self.traffic = TrafficRun::default();
         self.clear_graph();
         self.clear_selection(cx);
         cx.notify();
@@ -382,6 +554,7 @@ impl TopologyView {
         if self.is_dirty {
             self.rebuild(cx);
         }
+        self.sync_traffic(cx);
     }
 
     /// The pins of the namespace drawn, in this context.
@@ -412,6 +585,10 @@ impl TopologyView {
     /// not delivered its first snapshot, so the graph does not grow node by node. It repaints only
     /// when the graph or the view changed.
     fn rebuild(&mut self, cx: &mut Context<Self>) {
+        if self.fixture_pods.is_some() {
+            self.is_dirty = false;
+            return;
+        }
         let Some(namespace) = self.namespace.clone() else {
             return;
         };
@@ -518,6 +695,7 @@ impl TopologyView {
             self.hovered = None;
         }
         self.build = Some(Ok(Rc::new(graph)));
+        self.rebuild_traffic_layer(cx);
         self.apply_fit();
         true
     }
@@ -593,6 +771,230 @@ impl TopologyView {
             self.edge_shape,
         ));
         self.layout = Some((shape, group_by, layout));
+        self.reroute_traffic_calls();
+    }
+
+    // ---- traffic (spec 0049) ----
+
+    /// `--screen topology-traffic`: Traffic opens as soon as the source is ready.
+    pub(crate) fn start_in_traffic(&mut self, is_wanted: bool) {
+        self.wants_traffic = is_wanted;
+    }
+
+    /// The segment: Resources or Traffic. Any change drops the fetch and the sample.
+    pub(crate) fn set_mode(&mut self, mode: TopologyMode, cx: &mut Context<Self>) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        self.traffic = TrafficRun::default();
+        self.sync_traffic(cx);
+        cx.notify();
+    }
+
+    /// The pods of the namespace drawn, which the traffic names are resolved against.
+    fn namespace_pods<'a>(&self, cx: &'a App) -> Vec<&'a PodSummary> {
+        let Some(namespace) = self.namespace.as_deref() else {
+            return Vec::new();
+        };
+        self.live(cx)
+            .and_then(|live| live.pods.ready_items())
+            .unwrap_or_default()
+            .iter()
+            .filter(|pod| pod.namespace == namespace)
+            .collect()
+    }
+
+    /// Keeps the Traffic fetches in step with the mode and the source: it runs on every tick and
+    /// on a mode switch. It leaves Traffic when the source stops serving, loads the metric list
+    /// once, and reads a sample every `TRAFFIC_REFRESH`.
+    fn sync_traffic(&mut self, cx: &mut Context<Self>) {
+        if self.fixture_pods.is_some() {
+            return;
+        }
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        if self.wants_traffic && self.mode == TopologyMode::Resources {
+            let is_ready = session
+                .read(cx)
+                .live()
+                .is_some_and(|live| traffic_button(&live.metrics).is_enabled);
+            if is_ready {
+                self.wants_traffic = false;
+                self.set_mode(TopologyMode::Traffic, cx);
+            }
+            return;
+        }
+        let Some(namespace) = self.namespace.clone() else {
+            return;
+        };
+        if self.mode != TopologyMode::Traffic || !self.is_visible {
+            return;
+        }
+        let step = {
+            let Some(live) = session.read(cx).live() else {
+                return;
+            };
+            self.traffic_step(live)
+        };
+        match step {
+            TrafficStep::Leave => self.set_mode(TopologyMode::Resources, cx),
+            TrafficStep::LoadNames => {
+                self.traffic.last_names_try = Some(Instant::now());
+                session.update(cx, |session, cx| session.load_traffic_sources(cx));
+            }
+            TrafficStep::Wait => {}
+            TrafficStep::Fetch(plan) => {
+                let TrafficFetchPlan {
+                    sources,
+                    source,
+                    connection,
+                } = *plan;
+                self.start_traffic_fetch(sources, source, connection, namespace, cx);
+            }
+        }
+    }
+
+    fn traffic_step(&self, live: &LiveCluster) -> TrafficStep {
+        let metrics = &live.metrics;
+        let Some((source, _)) = metrics.source.ready() else {
+            return TrafficStep::Leave;
+        };
+        let is_due = |at: Option<Instant>| at.is_none_or(|at| at.elapsed() >= TRAFFIC_REFRESH);
+        match &metrics.traffic_sources {
+            TrafficSources::NotLoaded => TrafficStep::LoadNames,
+            TrafficSources::Loading { .. } => TrafficStep::Wait,
+            TrafficSources::Loaded(Err(_)) if is_due(self.traffic.last_names_try) => {
+                TrafficStep::LoadNames
+            }
+            TrafficSources::Loaded(Err(_)) => TrafficStep::Wait,
+            TrafficSources::Loaded(Ok(sources)) if sources.is_empty() => TrafficStep::Leave,
+            TrafficSources::Loaded(Ok(sources)) => {
+                if self.traffic.fetch.is_some() || !is_due(self.traffic.last_fetch) {
+                    return TrafficStep::Wait;
+                }
+                TrafficStep::Fetch(Box::new(TrafficFetchPlan {
+                    sources: sources.clone(),
+                    source: source.clone(),
+                    connection: live.connection().clone(),
+                }))
+            }
+        }
+    }
+
+    fn start_traffic_fetch(
+        &mut self,
+        sources: Vec<TrafficMetricSource>,
+        source: MetricsSource,
+        connection: ClusterConnection,
+        namespace: String,
+        cx: &mut Context<Self>,
+    ) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let fetching = runtime.spawn(async move {
+            let mut readings = Vec::with_capacity(sources.len());
+            for traffic in sources {
+                let reading = connection.traffic_rates(&source, traffic, &namespace).await;
+                readings.push((traffic, reading));
+            }
+            readings
+        });
+        self.traffic.last_fetch = Some(Instant::now());
+        self.traffic.fetch = Some(cx.spawn(async move |this, cx| {
+            let result = fetching.await;
+            let _ = this.update(cx, |view, cx| view.finish_traffic_fetch(result, cx));
+        }));
+    }
+
+    fn finish_traffic_fetch(
+        &mut self,
+        result: Result<TrafficReadings, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        self.traffic.fetch = None;
+        let readings = result.unwrap_or_default();
+        self.apply_traffic_sample(
+            TrafficSample {
+                at: jiff::Timestamp::now(),
+                readings,
+            },
+            cx,
+        );
+    }
+
+    /// A refresh landed. A sample in which every source failed keeps the older one drawn and says
+    /// why in the chip; any other replaces it.
+    fn apply_traffic_sample(&mut self, sample: TrafficSample, cx: &mut Context<Self>) {
+        match sample_failure(&sample) {
+            Some(reason) => self.traffic.paused = Some(reason),
+            None => {
+                self.traffic.paused = None;
+                self.traffic.sample = Some(Rc::new(sample));
+                self.rebuild_traffic_layer(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The layer from the sample, the graph, and the layout as they are now. The layout is not
+    /// computed again: the `Calls` edges are routed over its cards.
+    fn rebuild_traffic_layer(&mut self, cx: &App) {
+        self.traffic.layer = None;
+        if self.mode != TopologyMode::Traffic {
+            return;
+        }
+        let (Some(sample), Some(Ok(graph)), Some((_, _, layout))) =
+            (&self.traffic.sample, &self.build, &self.layout)
+        else {
+            return;
+        };
+        // A fixture resolves the names against its own pods.
+        let fixture_pods = self.fixture_pods.clone();
+        let pods: Vec<&PodSummary> = match &fixture_pods {
+            Some(fixture) => fixture.iter().collect(),
+            None => self.namespace_pods(cx),
+        };
+        self.traffic.layer = Some(Rc::new(TrafficLayer::build(
+            graph,
+            layout,
+            self.edge_shape,
+            &pods,
+            Rc::clone(sample),
+        )));
+    }
+
+    /// The cards moved or the shape changed: only the `Calls` routes are computed again.
+    fn reroute_traffic_calls(&mut self) {
+        let (Some(layer), Some((_, _, layout))) = (&self.traffic.layer, &self.layout) else {
+            return;
+        };
+        self.traffic.layer = Some(Rc::new(layer.rerouted(layout, self.edge_shape)));
+    }
+
+    /// `--screen topology-traffic-fixture`: the fixed namespace of W11 with its Istio and pod
+    /// network readings, in Traffic mode. Nothing is read from the cluster.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn show_traffic_fixture(&mut self, cx: &mut Context<Self>) {
+        use crate::topology_traffic_fixture::{
+            NAMESPACE, traffic_fixture_graph, traffic_fixture_pods, traffic_fixture_sample,
+        };
+        self.fixture_pods = Some(Rc::new(traffic_fixture_pods()));
+        self.namespace = Some(NAMESPACE.to_owned());
+        self.mode = TopologyMode::Traffic;
+        self.traffic.sample = Some(Rc::new(traffic_fixture_sample()));
+        let aspect = self.aspect();
+        self.install(traffic_fixture_graph(), GroupBy::Components, aspect, cx);
+        cx.notify();
+    }
+
+    /// Whether a screenshot of a Traffic screen still waits for its first sample.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn is_traffic_pending(&self) -> bool {
+        self.wants_traffic
+            || (self.mode == TopologyMode::Traffic
+                && self.traffic.layer.is_none()
+                && self.traffic.paused.is_none())
     }
 
     // ---- toolbar actions ----
@@ -1003,7 +1405,13 @@ impl TopologyView {
             graph.resources,
             jiff::Timestamp::now()
         );
-        let svg = topology_svg(graph, layout, &title, &svg_style(cx));
+        let svg = topology_svg(
+            graph,
+            layout,
+            self.traffic.layer.as_deref(),
+            &title,
+            &svg_style(cx),
+        );
         let scale = export_scale(
             layout.extent.width,
             layout.extent.height + crate::topology_export::TITLE_STRIP,
@@ -1129,21 +1537,42 @@ impl TopologyView {
                 .tooltip("Lay the graph out again")
                 .on_click(cx.listener(|view, _, _, cx| view.reset_positions(cx)))
         });
+        let traffic_button = traffic_button(&live.metrics);
+        let is_traffic = self.mode == TopologyMode::Traffic;
         let segment = h_flex()
             .gap_1()
             .child(
                 Button::new("topology-resources")
                     .small()
-                    .primary()
-                    .label("Resources"),
+                    .map(|button| {
+                        if is_traffic {
+                            button.outline()
+                        } else {
+                            button.primary()
+                        }
+                    })
+                    .label("Resources")
+                    .tooltip("The objects of the namespace and how they relate")
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.set_mode(TopologyMode::Resources, cx);
+                    })),
             )
             .child(
                 Button::new("topology-traffic")
                     .small()
-                    .outline()
+                    .map(|button| {
+                        if is_traffic {
+                            button.primary()
+                        } else {
+                            button.outline()
+                        }
+                    })
                     .label("Traffic")
-                    .disabled(true)
-                    .tooltip("Needs a service mesh; not available yet"),
+                    .disabled(!traffic_button.is_enabled)
+                    .tooltip(traffic_button.tooltip)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.set_mode(TopologyMode::Traffic, cx);
+                    })),
             );
         h_flex()
             .flex_shrink_0()
@@ -1165,9 +1594,44 @@ impl TopologyView {
                     .ml_auto()
                     .gap_2()
                     .children(reset)
-                    .children(self.render_checks_chip(cx)),
+                    .children(self.render_checks_chip(cx))
+                    .children(self.render_traffic_chip(cx)),
             )
             .into_any_element()
+    }
+
+    /// The chip of Traffic mode: the sources, the window, the time of the sample, or why the
+    /// refresh paused. Its tooltip lists the notes and the peers outside the namespace.
+    fn render_traffic_chip(&self, cx: &App) -> Option<AnyElement> {
+        if self.mode != TopologyMode::Traffic {
+            return None;
+        }
+        let layer = self.traffic.layer.as_ref();
+        let clock = layer.map(|layer| clock_text(layer.sample.at, &jiff::tz::TimeZone::system()));
+        let shown = layer
+            .zip(clock.as_deref())
+            .map(|(layer, clock)| (layer.overlay.sources.as_slice(), clock));
+        let text = traffic_chip_text(shown, self.traffic.paused.as_deref());
+        let tooltip = layer.and_then(|layer| traffic_chip_tooltip(&layer.overlay));
+        let theme = cx.theme();
+        let chip = div()
+            .id("topology-traffic-chip")
+            .px_2()
+            .py_1()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(theme.border)
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(text);
+        Some(match tooltip {
+            Some(tooltip) => chip
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+                })
+                .into_any_element(),
+            None => chip.into_any_element(),
+        })
     }
 
     /// The grouping the graph was laid out with; before a layout, what it would resolve to.
@@ -1347,6 +1811,7 @@ impl TopologyView {
             colors,
             view: cx.weak_entity(),
             is_dragging: !matches!(self.drag, Drag::None | Drag::Minimap),
+            traffic: self.traffic.layer.clone(),
         };
         let cards: Vec<AnyElement> = visible
             .into_iter()
@@ -1430,9 +1895,11 @@ impl TopologyView {
                     .child(handle_canvas(
                         Rc::clone(&graph),
                         Rc::clone(&layout),
+                        self.traffic.layer.clone(),
                         viewport,
                         colors,
                     ))
+                    .children(self.render_edge_labels(&graph, &layout, colors, cx))
                     .child(self.render_controls(cx))
                     .child(self.render_legend(colors, minimap_size.0 + drawer, cx))
                     .child(self.render_minimap(&graph, &layout, colors, minimap_size, drawer, cx)),
@@ -1462,11 +1929,21 @@ impl TopologyView {
             })
             .flatten()
             .unwrap_or_else(|| node.name.clone());
+        // In Traffic mode a node shows what flows into it, unless it is a problem; the tooltip
+        // always ends with it.
+        let traffic = self
+            .traffic
+            .layer
+            .as_ref()
+            .and_then(|layer| layer.overlay.nodes[index].as_ref());
+        let caption = shown_caption(node, traffic);
+        let tooltip = tooltip_with_traffic(&tooltip, traffic);
         let state = CardState {
             is_selected: selected == Some(index),
             is_hovered: self.hovered.as_ref() == Some(&node.id),
             is_highlighted: self.highlighted.as_ref() == Some(&node.id),
             tooltip,
+            caption,
         };
         let id = node.id.clone();
         node_card(index, node, layout.rects[index], frame, &state, cx)
@@ -1524,16 +2001,60 @@ impl TopologyView {
             )
     }
 
+    /// The labels of the flow edges (Traffic mode): the rate, and the 5xx share when there is one.
+    fn render_edge_labels(
+        &self,
+        graph: &TopologyGraph,
+        layout: &TopologyLayout,
+        colors: CanvasColors,
+        cx: &App,
+    ) -> Vec<AnyElement> {
+        let Some(layer) = &self.traffic.layer else {
+            return Vec::new();
+        };
+        let canvas = self.canvas_size.unwrap_or(DEFAULT_CANVAS);
+        let mono = cx.theme().mono_font_family.clone();
+        edge_labels(graph, layout, layer, self.viewport, canvas)
+            .into_iter()
+            .map(|label| {
+                div()
+                    .absolute()
+                    .left(px(label.left))
+                    .top(px(label.top))
+                    .w(px(label.width))
+                    .h(px(LABEL_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(colors.card_border)
+                    .bg(colors.background)
+                    .text_color(colors.foreground)
+                    .font_family(mono.clone())
+                    .text_size(px(LABEL_TEXT_SIZE))
+                    .whitespace_nowrap()
+                    .child(label.text)
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     /// The legend, in the strip at the bottom that Fit keeps clear: a swatch drawn like a real
-    /// edge, and its meaning, for each relation.
+    /// edge, and its meaning, for each relation (in Traffic mode, for each flow).
     fn render_legend(&self, colors: CanvasColors, inset: f32, cx: &App) -> Div {
         let theme = cx.theme();
         let mono = theme.mono_font_family.clone();
-        let entries = LEGEND.map(|(relation, text)| {
+        let sources = self
+            .traffic
+            .layer
+            .as_ref()
+            .map(|layer| layer.overlay.sources.as_slice());
+        let entries = legend_entries(sources).into_iter().map(|(swatch, text)| {
             h_flex()
                 .gap_2()
                 .items_center()
-                .child(legend_swatch(relation, colors))
+                .child(legend_swatch(swatch, colors))
                 .child(div().text_color(theme.muted_foreground).child(text))
         });
         div().absolute().bottom_3().right(px(inset + 28.)).child(

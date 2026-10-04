@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use super::*;
 use crate::topology_canvas::{ARROW_HALF_WIDTH, ARROW_LENGTH, ARROW_TIP_GAP, arrow_head};
 use crate::topology_fixtures::{Fixture, Ref, ingress, pod, pod_with};
-use crate::topology_graph::GroupBy;
 use crate::topology_graph::TopologyKind;
+use crate::topology_graph::{GroupBy, TopologyGraph};
 use crate::topology_layout::{NODE_HEIGHT, TopologyLayout, layout};
 
 fn app_pod(app: &str, n: usize, refs: &[Ref]) -> cluster::PodSummary {
@@ -549,5 +549,23 @@ fn the_edge_shape_does_not_move_cards() {
         let curves = laid_out_as(&graph, GroupBy::App, 1.7, EdgeShape::Curves);
         assert_eq!(elbows.rects, curves.rects, "{name}");
         assert_eq!(elbows.extent, curves.extent, "{name}");
+    }
+}
+
+#[test]
+fn route_edges_routes_a_slice() {
+    let graph = monitoring();
+    for shape in [EdgeShape::Elbows, EdgeShape::Curves] {
+        let layout = laid_out_as(&graph, GroupBy::Components, 1.6, shape);
+        let frames: Vec<GraphRect> = layout.bands.iter().map(|band| band.rect).collect();
+        let routes = route_edges(&graph.edges, &layout.rects, &frames, shape);
+        assert_eq!(routes, layout.routes, "{shape:?}");
+        let half = graph.edges.len() / 2;
+        let tail = route_edges(&graph.edges[half..], &layout.rects, &frames, shape);
+        assert_eq!(
+            tail,
+            layout.routes[half..],
+            "{shape:?}: a slice routes alone"
+        );
     }
 }

@@ -1176,3 +1176,39 @@ fn screen_settings_metrics_parses() {
         assert_eq!(parsed.screen(), Screen::Overview);
     }
 }
+
+#[test]
+fn topology_traffic_screens_parse() {
+    for (text, expected) in [
+        ("topology-traffic", LaunchScreen::TopologyTraffic),
+        (
+            "topology-traffic-curves",
+            LaunchScreen::TopologyTrafficCurves,
+        ),
+    ] {
+        let screen = run_options(&["--screen", text]).screen;
+        assert_eq!(screen, expected);
+        assert_eq!(screen.screen(), Screen::Topology);
+        assert!(!screen.has_drawer());
+        assert!(screen.shows_topology());
+    }
+}
+
+#[test]
+fn topology_traffic_fixture_screens_parse() {
+    for (text, expected) in [
+        (
+            "topology-traffic-fixture",
+            LaunchScreen::TopologyTrafficFixture,
+        ),
+        (
+            "topology-traffic-fixture-curves",
+            LaunchScreen::TopologyTrafficFixtureCurves,
+        ),
+    ] {
+        let screen = run_options(&["--screen", text]).screen;
+        assert_eq!(screen, expected);
+        assert_eq!(screen.screen(), Screen::Topology);
+        assert!(screen.shows_topology());
+    }
+}

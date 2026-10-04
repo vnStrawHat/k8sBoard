@@ -11,9 +11,9 @@ use resvg::{tiny_skia, usvg};
 
 use crate::status_tone::StatusTone;
 use crate::topology_canvas::{
-    ARROW_HALF_WIDTH, ARROW_LENGTH, ARROW_TIP_GAP, HANDLE_SIZE, LEGEND, SWATCH_WIDTH,
-    TITLE_PILL_HEIGHT, TITLE_PILL_LEFT, TITLE_PILL_PADDING, TITLE_PILL_TOP, TITLE_SIZE, arrow_head,
-    handle_points, relation_stroke,
+    ARROW_HALF_WIDTH, ARROW_LENGTH, ARROW_TIP_GAP, FLOW_SWATCH_WIDTH, HANDLE_SIZE, SWATCH_WIDTH,
+    Swatch, TITLE_PILL_HEIGHT, TITLE_PILL_LEFT, TITLE_PILL_PADDING, TITLE_PILL_TOP, TITLE_SIZE,
+    arrow_head, drawn_edges, handle_points, legend_entries, relation_stroke, traffic_look,
 };
 use crate::topology_card::{
     ACCENT_BAR, CAPTION_SIZE, CARD_PADDING, CHIP_SIZE, CHIP_TEXT_SIZE, NAME_SIZE,
@@ -23,6 +23,9 @@ use crate::topology_graph::{NodeLook, Relation, TopologyGraph, TopologyNode};
 use crate::topology_layout::{GraphPoint, GraphRect, NODE_HEIGHT, Placement, TopologyLayout};
 use crate::topology_route::EdgeRoute;
 use crate::topology_stroke::trim_end;
+use crate::topology_traffic::{EdgeTraffic, TrafficLayer, shown_caption};
+use crate::topology_traffic_labels::{LABEL_HEIGHT, LABEL_TEXT_SIZE, edge_labels};
+use crate::topology_viewport::Viewport;
 
 /// The strip above the graph that holds the title.
 pub(crate) const TITLE_STRIP: f32 = 32.;
@@ -58,8 +61,8 @@ pub(crate) struct SvgStyle {
     pub(crate) kinds: [String; 8],
     pub(crate) kind_texts: [String; 8],
     pub(crate) card_fills: [String; 8],
-    /// Owns, RoutesTo, Mounts.
-    pub(crate) relations: [String; 4],
+    /// Owns, RoutesTo, Mounts, Access, Calls.
+    pub(crate) relations: [String; 5],
 }
 
 pub(crate) fn svg_style(cx: &App) -> SvgStyle {
@@ -83,11 +86,12 @@ pub(crate) fn svg_style(cx: &App) -> SvgStyle {
     }
 }
 
-const RELATIONS: [Relation; 4] = [
+const RELATIONS: [Relation; 5] = [
     Relation::Owns,
     Relation::RoutesTo,
     Relation::Mounts,
     Relation::Access,
+    Relation::Calls,
 ];
 
 /// `#rrggbb` from the channels, each rounded from 0 to 1 onto 0 to 255. The alpha is dropped: the
@@ -160,10 +164,13 @@ fn fitted(text: &str, limit: usize) -> String {
     format!("{kept}\u{2026}")
 }
 
-/// The SVG of the whole graph as laid out now: background, title, bands, edges, nodes, legend.
+/// The SVG of the whole graph as laid out now: background, title, bands, edges, nodes, legend. In
+/// Traffic mode (`traffic`) the edges carry their widths and tones, the flow edges their labels,
+/// the cards their traffic text, and the legend the flows.
 pub(crate) fn topology_svg(
     graph: &TopologyGraph,
     layout: &TopologyLayout,
+    traffic: Option<&TrafficLayer>,
     title: &str,
     style: &SvgStyle,
 ) -> String {
@@ -193,28 +200,29 @@ pub(crate) fn topology_svg(
             style,
         ));
     }
-    for (index, edge) in graph.edges.iter().enumerate() {
-        svg.push_str(&edge_svg(
-            graph,
-            &layout.routes[index],
-            edge.to,
-            edge.relation,
-            style,
-        ));
+    for (edge, route, edge_traffic) in drawn_edges(graph, &layout.routes, traffic) {
+        svg.push_str(&match edge_traffic {
+            Some(edge_traffic) => traffic_edge_svg(route, edge.relation, edge_traffic, style),
+            None => edge_svg(graph, route, edge.to, edge.relation, style),
+        });
     }
     for (index, node) in graph.nodes.iter().enumerate() {
-        svg.push_str(&node_svg(index, node, layout.rects[index], style));
+        let node_traffic = traffic.and_then(|layer| layer.overlay.nodes[index].as_ref());
+        let caption = shown_caption(node, node_traffic);
+        svg.push_str(&node_svg(index, node, &caption, layout.rects[index], style));
     }
-    for (index, edge) in graph.edges.iter().enumerate() {
-        svg.push_str(&handles_svg(
-            graph,
-            &layout.routes[index],
-            edge.from,
-            edge.to,
-            style,
-        ));
+    for (edge, route, edge_traffic) in drawn_edges(graph, &layout.routes, traffic) {
+        let is_hidden = edge_traffic
+            .is_some_and(|edge_traffic| traffic_look(edge_traffic, edge.relation).is_none());
+        if !is_hidden {
+            svg.push_str(&handles_svg(graph, route, edge.from, edge.to, style));
+        }
     }
-    svg.push_str(&legend_svg(extent, style));
+    if let Some(layer) = traffic {
+        svg.push_str(&labels_svg(graph, layout, layer, style));
+    }
+    let sources = traffic.map(|layer| layer.overlay.sources.as_slice());
+    svg.push_str(&legend_svg(extent, &legend_entries(sources), style));
     svg.push_str("</svg>\n");
     svg
 }
@@ -262,7 +270,58 @@ fn edge_svg(
         Some(_) => (style.warn.as_str(), 1.),
         None => (style.relation(relation), EDGE_REST_ALPHA),
     };
-    let dash = stroke
+    path_svg(
+        route,
+        &EdgeInk {
+            color,
+            opacity,
+            arrow_opacity: 1.,
+            width: stroke.width,
+            dash: stroke.dash,
+        },
+    )
+}
+
+/// An edge in Traffic mode: the width of its flow, its tone on the stroke and on the arrow; a
+/// hidden edge is not written.
+fn traffic_edge_svg(
+    route: &EdgeRoute,
+    relation: Relation,
+    traffic: &EdgeTraffic,
+    style: &SvgStyle,
+) -> String {
+    let Some(look) = traffic_look(traffic, relation) else {
+        return String::new();
+    };
+    let color = match (look.is_muted, look.tone) {
+        (true, _) => &style.muted,
+        (false, Some(tone)) => style.tone(tone),
+        (false, None) => style.relation(relation),
+    };
+    let is_quiet = look.is_muted || look.alpha < EDGE_REST_ALPHA;
+    path_svg(
+        route,
+        &EdgeInk {
+            color,
+            opacity: look.alpha,
+            arrow_opacity: if is_quiet { look.alpha } else { 1. },
+            width: look.width,
+            dash: look.dash,
+        },
+    )
+}
+
+/// How one edge is inked in the SVG.
+struct EdgeInk<'a> {
+    color: &'a str,
+    opacity: f32,
+    arrow_opacity: f32,
+    width: f32,
+    dash: Option<(f32, f32)>,
+}
+
+fn path_svg(route: &EdgeRoute, ink: &EdgeInk) -> String {
+    let dash = ink
         .dash
         .map(|(on, off)| format!(" stroke-dasharray=\"{on} {off}\""))
         .unwrap_or_default();
@@ -278,13 +337,49 @@ fn edge_svg(
     let head = arrow_head(route, ARROW_LENGTH, ARROW_HALF_WIDTH)
         .map(|at| format!("{} {}", at.x, at.y))
         .join(" ");
+    let EdgeInk {
+        color,
+        opacity,
+        arrow_opacity,
+        width,
+        ..
+    } = ink;
     format!(
         "<path class=\"edge\" d=\"{}\" fill=\"none\" stroke=\"{color}\" \
-         stroke-opacity=\"{opacity}\" stroke-width=\"{}\"{dash}/>\n\
-         <polygon points=\"{head}\" fill=\"{color}\"/>\n",
-        path.trim_end(),
-        stroke.width
+         stroke-opacity=\"{opacity}\" stroke-width=\"{width}\"{dash}/>\n\
+         <polygon points=\"{head}\" fill=\"{color}\" fill-opacity=\"{arrow_opacity}\"/>\n",
+        path.trim_end()
     )
+}
+
+/// The labels of the flow edges, each in a small box on the line, where the screen puts them.
+fn labels_svg(
+    graph: &TopologyGraph,
+    layout: &TopologyLayout,
+    layer: &TrafficLayer,
+    style: &SvgStyle,
+) -> String {
+    // The export has no edge of the canvas to cut a label at.
+    let canvas = (f32::MAX, f32::MAX);
+    let mut svg = String::new();
+    for label in edge_labels(graph, layout, layer, Viewport::default(), canvas) {
+        svg.push_str(&format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{LABEL_HEIGHT}\" rx=\"4\" fill=\"{}\" \
+             stroke=\"{}\"/>\n\
+             <text x=\"{}\" y=\"{}\" font-size=\"{LABEL_TEXT_SIZE}\" text-anchor=\"middle\" \
+             fill=\"{}\">{}</text>\n",
+            label.left,
+            label.top,
+            label.width,
+            style.background,
+            style.border,
+            label.left + label.width / 2.,
+            label.top + LABEL_HEIGHT / 2. + LABEL_TEXT_SIZE * 0.35,
+            style.text,
+            escape(&label.text)
+        ));
+    }
+    svg
 }
 
 /// The two handle dots of an edge: the kind color of the node each sits on, in a ring of the
@@ -311,7 +406,13 @@ fn handles_svg(
     svg
 }
 
-fn node_svg(index: usize, node: &TopologyNode, rect: GraphRect, style: &SvgStyle) -> String {
+fn node_svg(
+    index: usize,
+    node: &TopologyNode,
+    caption: &str,
+    rect: GraphRect,
+    style: &SvgStyle,
+) -> String {
     let node_width = rect.width;
     let (x, y) = (rect.origin.x, rect.origin.y);
     let hue = kind_hue(node.kind);
@@ -388,7 +489,7 @@ fn node_svg(index: usize, node: &TopologyNode, rect: GraphRect, style: &SvgStyle
          fill=\"{}\">{}</text>\n</g>\n",
         y + 25.,
         escape(&fitted(
-            &node.caption.to_uppercase(),
+            &caption.to_uppercase(),
             fit_chars(available, CAPTION_SIZE, MONO_EM_WIDTH)
         )),
         y + 42.,
@@ -403,25 +504,23 @@ fn node_svg(index: usize, node: &TopologyNode, rect: GraphRect, style: &SvgStyle
 }
 
 /// The legend at the bottom right: a swatch drawn like a real edge, and its meaning, for each
-/// relation.
-fn legend_svg(extent: GraphRect, style: &SvgStyle) -> String {
+/// entry.
+fn legend_svg(extent: GraphRect, entries: &[(Swatch, &str)], style: &SvgStyle) -> String {
     let mut svg = String::new();
     let y = extent.bottom() - 16.;
     // Each entry is as wide as its swatch, its text, and a gap; the row ends at the right margin.
-    let widths: Vec<f32> = LEGEND
+    let widths: Vec<f32> = entries
         .iter()
         .map(|(_, text)| {
             SWATCH_WIDTH + 8. + text.chars().count() as f32 * 11. * MONO_EM_WIDTH + 20.
         })
         .collect();
     let mut x = extent.right() - 24. - widths.iter().sum::<f32>();
-    for ((relation, text), width) in LEGEND.iter().zip(&widths) {
-        let stroke = relation_stroke(*relation);
-        let dash = stroke
-            .dash
+    for ((swatch, text), width) in entries.iter().zip(&widths) {
+        let (stroke_width, dash, color, opacity) = swatch_ink(*swatch, style);
+        let dash = dash
             .map(|(on, off)| format!(" stroke-dasharray=\"{on} {off}\""))
             .unwrap_or_default();
-        let color = style.relation(*relation);
         let base = x + SWATCH_WIDTH - ARROW_LENGTH - ARROW_TIP_GAP;
         let route = EdgeRoute {
             points: vec![
@@ -435,10 +534,9 @@ fn legend_svg(extent: GraphRect, style: &SvgStyle) -> String {
         let head = arrow_head(&route, ARROW_LENGTH, ARROW_HALF_WIDTH);
         svg.push_str(&format!(
             "<path d=\"M{x} {y} L{base} {y}\" fill=\"none\" stroke=\"{color}\" \
-             stroke-opacity=\"{EDGE_REST_ALPHA}\" stroke-width=\"{}\"{dash}/>\n\
+             stroke-opacity=\"{opacity}\" stroke-width=\"{stroke_width}\"{dash}/>\n\
              <polygon points=\"{} {} {} {} {} {}\" fill=\"{color}\"/>\n\
              <text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"{}\">{}</text>\n",
-            stroke.width,
             head[0].x,
             head[0].y,
             head[1].x,
@@ -453,6 +551,28 @@ fn legend_svg(extent: GraphRect, style: &SvgStyle) -> String {
         x += width;
     }
     svg
+}
+
+/// The width, dash, color, and opacity of a legend swatch, as the screen strokes it.
+fn swatch_ink(swatch: Swatch, style: &SvgStyle) -> (f32, Option<(f32, f32)>, &str, f32) {
+    match swatch {
+        Swatch::Relation(relation) => {
+            let stroke = relation_stroke(relation);
+            (
+                stroke.width,
+                stroke.dash,
+                style.relation(relation),
+                EDGE_REST_ALPHA,
+            )
+        }
+        Swatch::Flow(relation) => (
+            FLOW_SWATCH_WIDTH,
+            None,
+            style.relation(relation),
+            EDGE_REST_ALPHA,
+        ),
+        Swatch::Tone(tone) => (FLOW_SWATCH_WIDTH, None, style.tone(tone), 1.),
+    }
 }
 
 #[derive(Debug)]

@@ -9,7 +9,7 @@
 use gpui_kit::{Point, point};
 use serde::{Deserialize, Serialize};
 
-use crate::topology_graph::{Relation, TopologyGraph};
+use crate::topology_graph::{Relation, TopologyEdge};
 use crate::topology_layout::{GraphPoint, GraphRect};
 use crate::topology_stroke::flatten_cubic;
 
@@ -97,22 +97,21 @@ impl EdgeRoute {
     }
 }
 
-/// The route of every edge of `graph`, in edge order. `bands` are the frames, which only decide
-/// where the corridors between rows of bands are.
+/// The route of every edge of `edges`, in edge order: the graph's own, or the 0049 `Calls` edges
+/// routed over the same cards. `bands` are the frames, which only decide where the corridors
+/// between rows of bands are.
 pub(crate) fn route_edges(
-    graph: &TopologyGraph,
+    edges: &[TopologyEdge],
     rects: &[GraphRect],
     bands: &[GraphRect],
     shape: EdgeShape,
 ) -> Vec<EdgeRoute> {
     let space = Space::new(rects, bands);
-    graph
-        .edges
+    edges
         .iter()
         .map(|edge| route_edge(edge.from, edge.to, edge.relation, shape, &space))
         .collect()
 }
-
 /// The cards, and the horizontal corridors between them.
 struct Space<'a> {
     rects: &'a [GraphRect],
@@ -212,7 +211,7 @@ fn route_edge(
                 && match relation {
                     Relation::Mounts => false,
                     Relation::Access => is_level,
-                    Relation::Owns | Relation::RoutesTo => true,
+                    Relation::Owns | Relation::RoutesTo | Relation::Calls => true,
                 }
         }
     };

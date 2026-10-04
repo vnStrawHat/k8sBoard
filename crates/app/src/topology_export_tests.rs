@@ -1,6 +1,7 @@
 use gpui_kit::{hsla, rgba};
 
 use super::*;
+use crate::topology_canvas::LEGEND;
 use crate::topology_fixtures::{Fixture, Ref, crashing_pod, ingress, pod, pod_with, shop_access};
 use crate::topology_graph::GroupBy;
 use crate::topology_layout::layout;
@@ -22,7 +23,7 @@ fn style() -> SvgStyle {
         card_fills: [0, 1, 2, 3, 4, 5, 6, 7].map(|n| format!("#d0000{n}")),
         kinds: [0, 1, 2, 3, 4, 5, 6, 7].map(|n| format!("#a0000{n}")),
         kind_texts: [0, 1, 2, 3, 4, 5, 6, 7].map(|n| format!("#c0000{n}")),
-        relations: [0, 1, 2, 3].map(|n| format!("#b0000{n}")),
+        relations: [0, 1, 2, 3, 4].map(|n| format!("#b0000{n}")),
     }
 }
 
@@ -36,7 +37,7 @@ fn svg_of(fixture: &Fixture, title: &str) -> (TopologyGraph, String) {
         None,
         EdgeShape::Elbows,
     );
-    let svg = topology_svg(&graph, &arranged, title, &style());
+    let svg = topology_svg(&graph, &arranged, None, title, &style());
     (graph, svg)
 }
 
@@ -177,7 +178,11 @@ fn svg_badge_columns_use_kind_colors() {
 fn svg_edges_use_relation_colors_at_rest_opacity() {
     let (_, svg) = svg_of(&all_relations(), "t");
     let style = style();
-    for relation in RELATIONS {
+    // Calls edges exist only in Traffic mode (spec 0049), so no Resources graph draws one.
+    for relation in RELATIONS
+        .into_iter()
+        .filter(|relation| *relation != Relation::Calls)
+    {
         let stroke = format!(
             "stroke=\"{}\" stroke-opacity=\"{EDGE_REST_ALPHA}\"",
             style.relation(relation)
@@ -253,7 +258,7 @@ fn svg_bands_are_filled() {
         EdgeShape::Elbows,
     );
     assert!(arranged.bands.iter().any(|band| band.title.is_some()));
-    let svg = topology_svg(&graph, &arranged, "t", &style());
+    let svg = topology_svg(&graph, &arranged, None, "t", &style());
     let style = style();
     assert!(svg.contains(&format!(
         "fill=\"{}\" fill-opacity=\"0.6\" stroke=\"{}\" stroke-dasharray=\"4 3\"",
@@ -363,4 +368,75 @@ fn write_export_picks_the_format_from_the_extension() {
     assert_eq!(&std::fs::read(&as_png).expect("reads")[1..4], b"PNG");
     let _ = std::fs::remove_file(as_svg);
     let _ = std::fs::remove_file(as_png);
+}
+
+#[test]
+fn export_in_traffic_mode_draws_tones_and_labels() {
+    use std::rc::Rc;
+
+    use crate::topology_fixtures::traffic_namespace;
+    use crate::topology_traffic::TrafficLayer;
+    use crate::topology_traffic_fixture::istio_sample;
+
+    let fixture = traffic_namespace();
+    let graph = fixture.graph();
+    let pods = fixture.pods.clone().expect("pods listed");
+    let refs: Vec<&cluster::PodSummary> = pods.iter().collect();
+    for shape in [EdgeShape::Elbows, EdgeShape::Curves] {
+        let arranged = layout(
+            &graph,
+            GroupBy::Components,
+            1.6,
+            &Default::default(),
+            None,
+            shape,
+        );
+        let layer = TrafficLayer::build(&graph, &arranged, shape, &refs, Rc::new(istio_sample()));
+        let style = style();
+        let svg = topology_svg(&graph, &arranged, Some(&layer), "t", &style);
+        let edges = graph.edges.len() + layer.calls.len();
+        // Mounts and Access edges are hidden; every other edge has a path with its class.
+        let hidden = layer
+            .overlay
+            .edges
+            .iter()
+            .filter(|edge| matches!(edge, crate::topology_traffic::EdgeTraffic::Hidden))
+            .count();
+        assert_eq!(
+            svg.matches("class=\"edge\"").count(),
+            edges - hidden,
+            "{shape:?}"
+        );
+        // The 6 % call is Bad: its stroke and its arrow polygon take the Bad color.
+        let bad = &style.bad;
+        assert!(
+            svg.contains(&format!("stroke=\"{bad}\" stroke-opacity=\"1\"")),
+            "{shape:?}: the stroke"
+        );
+        assert!(
+            svg.contains(&format!("fill=\"{bad}\" fill-opacity=\"1\"/>")),
+            "{shape:?}: the arrow"
+        );
+        // Its label, its width, and the Traffic legend.
+        assert!(
+            svg.contains("35 req/s \u{b7} 6% 5xx"),
+            "{shape:?}: the label"
+        );
+        assert!(
+            svg.contains("stroke-width=\"6\""),
+            "{shape:?}: the widest flow"
+        );
+        assert!(svg.contains(">calls</text>"));
+        assert!(svg.contains("\u{2265} 5% 5xx"));
+        assert!(svg.contains("routes to \u{b7} width = req/s"));
+        // A Warn or Bad card keeps its caption, the others show their traffic.
+        assert!(svg.contains("CRASHLOOPBACKOFF"));
+    }
+}
+
+#[test]
+fn export_without_traffic_has_no_labels_or_traffic_legend() {
+    let (_, svg) = svg_of(&all_relations(), "t");
+    assert!(!svg.contains("req/s"));
+    assert!(!svg.contains(">calls</text>"));
 }

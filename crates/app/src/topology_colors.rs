@@ -120,14 +120,16 @@ fn relation_color(theme: &ThemeColor, relation: Relation) -> Hsla {
         Relation::RoutesTo => theme.cyan,
         Relation::Mounts => theme.green,
         Relation::Access => theme.cyan_light,
+        Relation::Calls => theme.cyan,
     }
 }
 
-const RELATIONS: [Relation; 4] = [
+const RELATIONS: [Relation; 5] = [
     Relation::Owns,
     Relation::RoutesTo,
     Relation::Mounts,
     Relation::Access,
+    Relation::Calls,
 ];
 
 /// The theme colors the painting needs, resolved once per frame.
@@ -152,7 +154,7 @@ pub(crate) struct CanvasColors {
     kind_texts: [Hsla; 8],
     /// The surface of a card of each kind: the card with a little of the kind color.
     card_fills: [Hsla; 8],
-    relations: [Hsla; 4],
+    relations: [Hsla; 5],
 }
 
 impl CanvasColors {

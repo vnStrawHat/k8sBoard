@@ -25,6 +25,7 @@ fn card_state(is_selected: bool, is_hovered: bool) -> CardState {
         is_hovered,
         is_highlighted: false,
         tooltip: "api".into(),
+        caption: "Service".into(),
     }
 }
 

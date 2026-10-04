@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use gpui_kit::SharedString;
 
-use crate::topology_graph::{GroupBy, NodeId, Relation, TopologyGraph, TopologyKind, TopologyNode};
+use crate::topology_graph::{
+    GroupBy, NodeId, Relation, TopologyEdge, TopologyGraph, TopologyKind, TopologyNode,
+};
 use crate::topology_route::{EdgeRoute, EdgeShape, route_edges};
 
 /// A card is at least this wide, and as wide as its longest name needs up to `MAX_NODE_WIDTH`.
@@ -192,6 +194,15 @@ pub(crate) struct TopologyLayout {
     band_columns: usize,
 }
 
+impl TopologyLayout {
+    /// The routes of edges the graph does not hold (the 0049 `Calls` edges) over this layout's
+    /// cards and bands. Nothing moves, and the layout is not computed again.
+    pub(crate) fn route_extra(&self, edges: &[TopologyEdge], shape: EdgeShape) -> Vec<EdgeRoute> {
+        let frames: Vec<GraphRect> = self.bands.iter().map(|band| band.rect).collect();
+        route_edges(edges, &self.rects, &frames, shape)
+    }
+}
+
 /// The nodes and edges of a graph by identity. Two graphs of the same structure keep their layout:
 /// only tones and captions changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -324,7 +335,7 @@ pub(crate) fn layout(
     }
     let extent = extent_of(&rects, &bands);
     let frames: Vec<GraphRect> = bands.iter().map(|band| band.rect).collect();
-    let routes = route_edges(graph, &rects, &frames, edges);
+    let routes = route_edges(&graph.edges, &rects, &frames, edges);
     TopologyLayout {
         rects,
         routes,

@@ -822,7 +822,16 @@ impl AppShell {
         let wants_problems = options.screen == LaunchScreen::TopologyProblems;
         let wants_selection = options.screen == LaunchScreen::TopologySelected;
         let wants_rbac = options.screen == LaunchScreen::TopologyRbac;
-        let wants_curves = options.screen == LaunchScreen::TopologyCurves;
+        let wants_traffic = matches!(
+            options.screen,
+            LaunchScreen::TopologyTraffic | LaunchScreen::TopologyTrafficCurves
+        );
+        let wants_curves = matches!(
+            options.screen,
+            LaunchScreen::TopologyCurves
+                | LaunchScreen::TopologyTrafficCurves
+                | LaunchScreen::TopologyTrafficFixtureCurves
+        );
         if wants_selection {
             // The flow of the selected edges stands still, so the capture is deterministic.
             cx.set_reduce_motion(true);
@@ -835,6 +844,14 @@ impl AppShell {
                 view.set_edge_shape(EdgeShape::Curves, cx);
             }
             view.select_first_deployment_once(wants_selection);
+            view.start_in_traffic(wants_traffic);
+            #[cfg(feature = "screenshot")]
+            if matches!(
+                options.screen,
+                LaunchScreen::TopologyTrafficFixture | LaunchScreen::TopologyTrafficFixtureCurves
+            ) {
+                view.show_traffic_fixture(cx);
+            }
             view.set_visible(is_topology, cx);
         });
         if let Some(text) = launch_filter {
@@ -4065,7 +4082,8 @@ impl AppShell {
                 && (self
                     .session()
                     .is_some_and(|session| session.read(cx).is_topology_pending())
-                    || !self.topology.read(cx).has_build()),
+                    || !self.topology.read(cx).has_build()
+                    || self.topology.read(cx).is_traffic_pending()),
             is_dialog_pending: self.pending_dialog_launch.is_some()
                 || self.pending_palette_launch.is_some()
                 || self.who_can.as_ref().is_some_and(|view| {

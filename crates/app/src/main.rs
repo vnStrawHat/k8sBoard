@@ -152,6 +152,10 @@ mod topology_graph;
 mod topology_layout;
 mod topology_route;
 mod topology_stroke;
+mod topology_traffic;
+#[cfg(any(test, feature = "screenshot"))]
+mod topology_traffic_fixture;
+mod topology_traffic_labels;
 mod topology_view;
 mod topology_viewport;
 mod traffic_test_view;

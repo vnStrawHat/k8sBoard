@@ -295,6 +295,9 @@ pub(crate) enum Relation {
     Mounts,
     /// Workload to ServiceAccount, ServiceAccount to binding, binding to role.
     Access,
+    /// Traffic mode only (spec 0049): a pair that talks with no Resources edge between its nodes.
+    /// Never part of `TopologyGraph.edges`.
+    Calls,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1140,7 +1143,7 @@ fn is_bad(pod: &PodSummary) -> bool {
 }
 
 /// The controller of a pod when it is a workload that has a node of its own.
-fn controller_of(pod: &PodSummary) -> Option<(TopologyKind, &str)> {
+pub(crate) fn controller_of(pod: &PodSummary) -> Option<(TopologyKind, &str)> {
     let controller = pod.controller.as_ref()?;
     let kind = TopologyKind::of_workload_kind(&controller.kind)?;
     (kind != TopologyKind::Deployment).then_some((kind, controller.name.as_str()))

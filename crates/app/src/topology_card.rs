@@ -38,6 +38,8 @@ pub(crate) struct CardState {
     pub(crate) is_highlighted: bool,
     /// What the tooltip says: the check text of a ghost, else the full name.
     pub(crate) tooltip: SharedString,
+    /// The caption line: the node's own, or its traffic text in Traffic mode (spec 0049).
+    pub(crate) caption: SharedString,
 }
 
 /// What every card of a frame shares.
@@ -102,7 +104,7 @@ pub(crate) fn node_card(
         NodeLook::Plain if node.kind.placement() == Placement::ConfigRow => 0.85,
         NodeLook::Plain | NodeLook::Ghost => 1.,
     };
-    card.child(card_body(node, zoom, detail, colors, cx).opacity(opacity))
+    card.child(card_body(node, &state.caption, zoom, detail, colors, cx).opacity(opacity))
 }
 
 /// The surface of a card: the highlight of a clicked ghost, the kind-tinted surface of an object,
@@ -178,6 +180,7 @@ fn card_border(node: &TopologyNode, state: &CardState, colors: &CanvasColors) ->
 
 fn card_body(
     node: &TopologyNode,
+    caption: &SharedString,
     zoom: f32,
     detail: CardDetail,
     colors: &CanvasColors,
@@ -207,7 +210,7 @@ fn card_body(
                 .whitespace_nowrap()
                 .overflow_hidden()
                 .text_ellipsis()
-                .child(node.caption.to_uppercase()),
+                .child(caption.to_uppercase()),
         )
         .child(
             div()

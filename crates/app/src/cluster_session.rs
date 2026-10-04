@@ -13,15 +13,15 @@ use cluster::{
     MetricsSourceError, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, ObjectKind,
     PersistentVolumeSummary, PodSummary, ProxyChoice, ProxyUrlError, RbacSnapshot,
     ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, SourceCheck,
-    StorageClassSummary, WatchUpdate,
+    StorageClassSummary, TrafficMetricSource, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{App, Context, Task};
 use tokio::sync::watch;
 
 use crate::cluster_metrics::{
-    ClusterMetrics, NodesGate, PodReview, PodReviewResult, PodsGate, SourceState, nodes_gate,
-    pods_gate,
+    ClusterMetrics, NodesGate, PodReview, PodReviewResult, PodsGate, SourceState, TrafficSources,
+    nodes_gate, pods_gate,
 };
 use crate::cluster_registry::open_cluster;
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
@@ -2276,6 +2276,8 @@ impl ClusterSession {
         let Some(live) = self.live_mut() else {
             return;
         };
+        // The list belongs to the source it was read from.
+        live.metrics.traffic_sources = TrafficSources::NotLoaded;
         live.metrics.source = match entry {
             None => SourceState::None,
             Some(Err(_)) => SourceState::Invalid,
@@ -2294,6 +2296,55 @@ impl ClusterSession {
                 }
             }
         };
+        cx.notify();
+    }
+
+    /// Reads which traffic metrics the Ready source holds (spec 0049): one `metric_names` request,
+    /// started by the first Traffic use. A list already loaded stays; a failed one is read again.
+    pub(crate) fn load_traffic_sources(&mut self, cx: &mut Context<Self>) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        match &live.metrics.traffic_sources {
+            TrafficSources::Loading { .. } | TrafficSources::Loaded(Ok(_)) => return,
+            TrafficSources::NotLoaded | TrafficSources::Loaded(Err(_)) => {}
+        }
+        let Some((source, _)) = live.metrics.source.ready() else {
+            return;
+        };
+        let source = source.clone();
+        let connection = live.connection.clone();
+        let loading = runtime.spawn(async move {
+            connection
+                .metric_names(&source)
+                .await
+                .map(|names| TrafficMetricSource::detect(&names))
+        });
+        let task = cx.spawn(async move |this, cx| {
+            let result = loading.await;
+            let _ = this.update(cx, |session, cx| session.finish_traffic_sources(result, cx));
+        });
+        live.metrics.traffic_sources = TrafficSources::Loading { _task: task };
+        cx.notify();
+    }
+
+    fn finish_traffic_sources(
+        &mut self,
+        result: Result<Result<Vec<TrafficMetricSource>, MetricsError>, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        if !matches!(live.metrics.traffic_sources, TrafficSources::Loading { .. }) {
+            return;
+        }
+        live.metrics.traffic_sources = TrafficSources::Loaded(result.unwrap_or_else(|_| {
+            Err(MetricsError::Unexpected(
+                "the metric list task stopped unexpectedly".to_owned(),
+            ))
+        }));
         cx.notify();
     }
 

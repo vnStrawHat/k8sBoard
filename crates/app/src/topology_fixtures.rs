@@ -817,3 +817,37 @@ pub(crate) fn shop_access() -> Fixture {
             vec![group_subject("system:serviceaccounts")],
         ))
 }
+
+/// The Traffic fixture of W11: Ingress `shop-api` to Service `payments-api` to Deployment `api`
+/// (ReplicaSet `api-7d9f`, three pods, one crashing), Service `ledger` to StatefulSet `ledger`
+/// (one pod), Service `payments-legacy` with no pods, and the host-network pod `node-agent-x7k2p`
+/// of DaemonSet `node-agent`. The namespace is `shop`, like every fixture here.
+pub(crate) fn traffic_namespace() -> Fixture {
+    let api = |name: &str| pod(name, &["app=api"], Some(("ReplicaSet", "api-7d9f")));
+    let mut agent = pod(
+        "node-agent-x7k2p",
+        &["app=node-agent"],
+        Some(("DaemonSet", "node-agent")),
+    );
+    agent.host_network = true;
+    Fixture::default()
+        .with_ingress(ingress("shop-api", &[("/", "payments-api")], None, None))
+        .with_service("payments-api", &["app=api"])
+        .with_service("ledger", &["app=ledger"])
+        .with_service("payments-legacy", &["app=legacy"])
+        .with_deployment("api", 3, 2)
+        .with_replica_set("api-7d9f", Some("api"), 3, 3)
+        .with_stateful_set("ledger", 1, 1)
+        .with_daemon_set("node-agent", 1, 1)
+        .with_pods([
+            api("api-7d9f-4xk2p"),
+            api("api-7d9f-9qz7v"),
+            crashing_pod(
+                "api-7d9f-t5bcm",
+                &["app=api"],
+                Some(("ReplicaSet", "api-7d9f")),
+            ),
+            pod("ledger-0", &["app=ledger"], Some(("StatefulSet", "ledger"))),
+            agent,
+        ])
+}

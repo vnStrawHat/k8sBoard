@@ -15,7 +15,7 @@ Status: amended after the advisor review (must-fix 1–4, should-fix 5–13, nic
 
 ## Non-goals
 
-- Traffic mode (backlog; segment disabled), multi-namespace graphs, and any mutation. RBAC: User and Group subjects as nodes, ClusterRole rules (rbac-layer.md).
+- Traffic mode (built in 0049, not part of this spec), multi-namespace graphs, and any mutation. RBAC: User and Group subjects as nodes, ClusterRole rules (rbac-layer.md).
 - Jobs, CronJobs, NetworkPolicies, PDBs, EndpointSlices, and custom resources (0018) as nodes.
 - Persisting positions (0024), edge routing around nodes, Collapse pods. Zoom buttons and animation: see 0022b.
 
