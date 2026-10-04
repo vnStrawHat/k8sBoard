@@ -7,7 +7,7 @@ Status: implemented (steps 1–5) and verified; amended after the advisor review
 - A versioned **settings file** (`settings.json`) in the OS config dir, with `--config-dir` / `K8SBOARD_CONFIG_DIR` overrides, atomic writes, a `.bak` on corruption, and a notice.
 - A **cluster registry**: user-added kubeconfig files and per-context overrides (display name, environment, read-only lock, default namespace) plus the last-used cluster. Paths and names only, never credentials.
 - **`KUBECONFIG` multi-entry merge** with kubectl semantics (first file wins); registry-added files load standalone.
-- **Environments** PROD/STG/DEV/LOCAL guessed from names (C5), theme-token colors, an env badge on the cluster switcher, and an env-colored 3 px top border on the title bar.
+- **Environments** PROD/STG/DEV/LOCAL guessed from names (C5), theme-token colors, an env badge on the cluster switcher, and an env-colored 3 px top border on the title bar. **Removed on user request on 2026-10-04: the title bar has no coloured top or bottom border; it uses the kit's normal `title_bar_border`.**
 - **Persisted prefs wired now**: theme, table sort and hidden columns (0009), default namespace ("Set as default"). Later specs add their own sections through the same API.
 
 ## Non-goals

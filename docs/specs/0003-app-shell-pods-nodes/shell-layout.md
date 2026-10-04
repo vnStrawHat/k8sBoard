@@ -32,7 +32,7 @@
 
 - Clicking a context switches immediately (single cluster).
 - W1 multi-select is designed, not built. A future `ClusterSelection { primary, extra: Vec<String> }` replaces the single `session`; rows become `(context, summary)` and the Cluster column appears at 2+ clusters. Nothing in this spec blocks that change.
-- There are no env colors and no title bar border color. They need Settings (W2) metadata.
+- There are no env colors and no title bar border color (the title bar border was removed on user request on 2026-10-04). They need Settings (W2) metadata.
 
 ## Navigation (`Sidebar` + `SidebarGroup` + `SidebarMenu`)
 

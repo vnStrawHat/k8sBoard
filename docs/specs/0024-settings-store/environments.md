@@ -52,7 +52,7 @@ Known ceiling: words that merely start with `prod`/`dev` (`products`, `device`) 
 
 ## Title bar (`title_bar.rs`)
 
-- **Top border**: `title_bar(..)` styles the kit `TitleBar` itself with `.border_t(px(3.)).border_color(color)` (it is `Styled`). `color` = `environment_color(profile.environment)` with an active cluster, else `theme.title_bar_border`. Always 3 px, so the layout does not shift when a session starts. GPUI has one border color per element, so the kit's 1 px bottom border takes the same color (decision 26).
+- **Top border**: `title_bar(..)` styles the kit `TitleBar` itself with `.border_t(px(3.)).border_color(color)` (it is `Styled`). `color` = `environment_color(profile.environment)` with an active cluster, else `theme.title_bar_border`. Always 3 px, so the layout does not shift when a session starts. GPUI has one border color per element, so the kit's 1 px bottom border takes the same color (decision 26). **Removed on user request on 2026-10-04: the title bar has no coloured top or bottom border; it uses the kit's normal `title_bar_border`.**
 - **Switcher trigger**: `h_flex` of `environment_badge(profile.environment)` + the button label `profile.display_name` (W1 `.ctx`). No session → no badge, label "No cluster" (unchanged).
 - **Switcher menu**: one item per context with `profile.display_name`, checked = active. Badges and env groups in the menu are 0026.
 - **Notices button** (decision 30): when `AppSettings::notice` or the shell's kubeconfig notices are non-empty, a ghost small icon button (a kit warning/alert icon), `theme.warning` icon color, before the Read-only badge. Tooltip: one notice per line. Click: `AppSettings::dismiss_notice` and clear the shell notices.

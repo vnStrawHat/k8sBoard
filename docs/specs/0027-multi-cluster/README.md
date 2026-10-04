@@ -9,7 +9,7 @@ User decision (wireframe intro and W1): single or multi cluster is chosen **only
 - **Tick to view several clusters**: checkboxes (and Space) in the 0026 switcher, a footer `{n} selected · Clear · View {n} clusters ⏎`, applied once (W1 note 4). A name click still switches to that one cluster (0026, break before make).
 - **Several live sessions at once**, one `ClusterSession` per viewed cluster (C4), at most 5. Applying a new set keeps sessions that stay, drops removed ones, then connects added ones.
 - **Merged tables**: Pods, Nodes, and every kind screen list the rows of all viewed clusters with a **Cluster** column (badge + label), filterable and sortable (W1 note 6); header `{n} clusters · {count} {plural}`.
-- Title bar: trigger `primary label +N` (W1 note 1), top border in the **riskiest** viewed environment (0024 decision 26 rule for several clusters).
+- Title bar: trigger `primary label +N` (W1 note 1), top border in the **riskiest** viewed environment (0024 decision 26 rule for several clusters). **Removed on user request on 2026-10-04: the title bar has no coloured top or bottom border; it uses the kit's normal `title_bar_border`.**
 - Drawer, YAML, Monitor, events, related lists, row menus, and log tabs work on the row's own cluster.
 
 ## Non-goals

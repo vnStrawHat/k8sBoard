@@ -52,7 +52,7 @@ pub(crate) fn cluster_color(color: ClusterColor, cx: &App) -> Hsla;
 
 - `environment_color(env, cx)` becomes `cluster_color(ClusterColor::of(env), cx)`; no colour literal (0003 grep).
 - `ClusterEntry.color: Option<ClusterColor>`; `ClusterProfile.color: ClusterColor` = entry value, else `ClusterColor::of(environment)`.
-- **Reads**: the title-bar top border (`title_bar.rs`, 0024 decision 26) uses `cluster_color(profile.color)`. The environment badge keeps the environment colour everywhere (switcher, Clusters list, title bar): the badge is the risk signal, the border is the user's cue.
+- **Reads**: the title-bar top border (`title_bar.rs`, 0024 decision 26) uses `cluster_color(profile.color)`. The environment badge keeps the environment colour everywhere (switcher, Clusters list, title bar): the badge is the risk signal, the border is the user's cue. **Removed on user request on 2026-10-04: the title bar has no coloured top or bottom border; it uses the kit's normal `title_bar_border`.**
 - **Form**: row `Color` between Environment and Default namespace (W2 order): six 18 px round swatches, the current one ringed (`border_2`, `theme.foreground`), tooltip = name. Click → store `None` when the colour equals `ClusterColor::of(profile.environment)`, else `Some(color)`; so a cluster on its environment colour keeps following the environment.
 - Changing the environment with `color: None` moves the border with it; with `Some` it stays.
 - No new key for "labels in every table" (W2 note 4): after 0046 no table shows a cluster label.
