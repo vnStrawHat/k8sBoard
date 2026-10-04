@@ -32,6 +32,7 @@ use crate::port_forward_menu::{ForwardMenu, PortButtons, pod_subject};
 use crate::resource_actions::{
     LogsMenu, PodMenuItems, PodMenuLinks, ShellMenu, container_menu, pod_menu, view_logs_reason,
 };
+use crate::resource_kind::POD_ICON;
 use crate::row_context::RowContext;
 use crate::status_tone::{StatusTone, container_state_label, pod_status_label, toned_text};
 use crate::table_selection::ResourceKey;
@@ -51,7 +52,8 @@ pub(crate) fn pod_drawer(
 ) -> AnyElement {
     let now = jiff::Timestamp::now();
     let header = DrawerHeader {
-        kind_badge: "Po",
+        kind_icon: POD_ICON,
+        kind_name: "Pod".into(),
         name: pod.name.clone().into(),
         subtitle: subtitle(pod, now, cx),
         menu: pod_menu_button(pod, session, row, dock, cx.weak_entity()),

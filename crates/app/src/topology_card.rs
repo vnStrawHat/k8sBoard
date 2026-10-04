@@ -3,10 +3,11 @@
 //! kind, the caption and the name, and a surface that carries a trace of the kind.
 
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::{
-    App, BoxShadow, Div, FontWeight, Hsla, InteractiveElement as _, ParentElement as _,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div, point, px,
+    App, BoxShadow, Div, FontWeight, Hsla, InteractiveElement as _, IntoElement as _,
+    ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
+    point, px,
 };
 
 use crate::status_tone::StatusTone;
@@ -21,6 +22,8 @@ pub(crate) const MIN_BADGE_ZOOM: f32 = 0.3;
 /// and the font sizes (React Flow nodes use about 12 px text with 10 px padding).
 pub(crate) const ACCENT_BAR: f32 = 3.;
 pub(crate) const CHIP_SIZE: f32 = 30.;
+/// The icon in the chip, as a share of the chip.
+const ICON_SHARE: f32 = 0.55;
 pub(crate) const CARD_PADDING: f32 = 10.;
 pub(crate) const NAME_SIZE: f32 = 13.;
 pub(crate) const CAPTION_SIZE: f32 = 11.;
@@ -234,11 +237,11 @@ fn card_body(
             .items_center()
             .justify_center()
             .bg(colors.kind(hue))
-            .font_family(theme.mono_font_family.clone())
-            .font_weight(FontWeight::BOLD)
-            .text_size(px(CHIP_TEXT_SIZE * zoom))
-            .text_color(colors.kind_text(hue))
-            .child(node.kind.badge())
+            .child(
+                Icon::new(node.kind.icon())
+                    .size(px(CHIP_SIZE * ICON_SHARE * zoom))
+                    .text_color(colors.kind_text(hue)),
+            )
     });
     h_flex()
         .size_full()
@@ -248,17 +251,28 @@ fn card_body(
         .child(lines)
 }
 
-/// The card of a zoomed-out graph: a solid chip with the badge fills the middle, in the tone of
+/// The card of a zoomed-out graph: a solid chip with the kind icon fills the middle, in the tone of
 /// the node when it is a problem.
 fn badge_only_body(node: &TopologyNode, zoom: f32, colors: &CanvasColors, cx: &App) -> Div {
     let fill = match node.tone {
         Some(tone @ (StatusTone::Bad | StatusTone::Warn)) => colors.tone(tone),
         _ => colors.kind(kind_hue(node.kind)),
     };
-    let label = if node.look == NodeLook::Plain {
-        node.kind.badge()
+    let text_on = colors.text_on(fill);
+    // A ghost has no kind to show, so it keeps its question mark.
+    let mark = if node.look == NodeLook::Plain {
+        Icon::new(node.kind.icon())
+            .size(px(NODE_HEIGHT * zoom * 0.4))
+            .text_color(text_on)
+            .into_any_element()
     } else {
-        "?"
+        div()
+            .font_family(cx.theme().mono_font_family.clone())
+            .font_weight(FontWeight::BOLD)
+            .text_size(px(NODE_HEIGHT * zoom * 0.34))
+            .text_color(text_on)
+            .child("?")
+            .into_any_element()
     };
     div()
         .size_full()
@@ -273,11 +287,7 @@ fn badge_only_body(node: &TopologyNode, zoom: f32, colors: &CanvasColors, cx: &A
                 .flex()
                 .items_center()
                 .bg(fill)
-                .font_family(cx.theme().mono_font_family.clone())
-                .font_weight(FontWeight::BOLD)
-                .text_size(px(NODE_HEIGHT * zoom * 0.34))
-                .text_color(colors.text_on(fill))
-                .child(label),
+                .child(mark),
         )
 }
 

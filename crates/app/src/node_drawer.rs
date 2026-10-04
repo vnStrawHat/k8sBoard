@@ -29,6 +29,7 @@ use crate::node_usage::{
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
 use crate::resource_actions::node_menu;
+use crate::resource_kind::NODE_ICON;
 use crate::row_context::RowContext;
 use crate::status_tone::{
     StatusLabel, condition_status_text, node_condition_tone, node_status_label, toned_text,
@@ -46,7 +47,8 @@ pub(crate) fn node_drawer(
 ) -> AnyElement {
     let now = jiff::Timestamp::now();
     let header = DrawerHeader {
-        kind_badge: "No",
+        kind_icon: NODE_ICON,
+        kind_name: "Node".into(),
         name: node.name.clone().into(),
         subtitle: subtitle(node, now, cx),
         menu: node_menu_button(node, session, row, cx.weak_entity()),

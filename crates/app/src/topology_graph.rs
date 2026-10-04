@@ -8,12 +8,13 @@ use cluster::{
     Selector, ServiceAccountSummary, ServiceSummary, VolumeSource,
 };
 use gpui_kit::SharedString;
+use gpui_kit::assets::IconName;
 use jiff::Timestamp;
 
 use crate::access_bindings::{BindingIndex, BoundRole, pod_account};
 use crate::kind_join::ServiceHealth;
 use crate::kind_row::{KindObject, KindRow};
-use crate::resource_kind::ResourceKind;
+use crate::resource_kind::{POD_ICON, ResourceKind};
 use crate::status_tone::{StatusTone, pod_status_label};
 use crate::table_selection::ResourceKey;
 use crate::topology_access::{
@@ -73,7 +74,12 @@ impl TopologyKind {
         }
     }
 
-    /// The two letters on a card.
+    /// The icon on a card chip.
+    pub(crate) fn icon(self) -> IconName {
+        self.resource_kind().map_or(POD_ICON, ResourceKind::icon)
+    }
+
+    /// The two letters of the Topology export, which draws no icon.
     pub(crate) fn badge(self) -> &'static str {
         self.resource_kind().map_or("Po", ResourceKind::badge)
     }

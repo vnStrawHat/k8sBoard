@@ -62,7 +62,8 @@ pub(crate) fn kind_drawer(
 ) -> AnyElement {
     let now = jiff::Timestamp::now();
     let header = DrawerHeader {
-        kind_badge: kind.badge(),
+        kind_icon: kind.icon(),
+        kind_name: kind.singular().into(),
         name: header_name(row),
         subtitle: subtitle(row, now, cx),
         menu: kind_menu_button(kind, row, context, cx.weak_entity()),

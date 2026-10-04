@@ -367,8 +367,9 @@ pub(crate) struct ExpandToggle {
 }
 
 pub(crate) struct DrawerHeader {
-    /// Two letters naming the kind, "Po" or "No".
-    pub(crate) kind_badge: &'static str,
+    /// The kind icon in the chip, and the kind name as its tooltip.
+    pub(crate) kind_icon: IconName,
+    pub(crate) kind_name: SharedString,
     pub(crate) name: SharedString,
     pub(crate) subtitle: AnyElement,
     /// The ⋯ button with its dropdown menu.
@@ -446,6 +447,7 @@ pub(crate) fn drawer_frame(
 
 fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
+    let kind_name = header.kind_name;
     let on_close = header.on_close;
     let on_expand = header.expand.on_click;
     let expand_icon = if header.expand.is_expanded {
@@ -466,13 +468,16 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                 .items_center()
                 .child(
                     div()
+                        .id("drawer-kind")
                         .px_1p5()
+                        .py_0p5()
                         .rounded(theme.radius)
                         .bg(theme.muted)
                         .text_color(theme.muted_foreground)
-                        .text_xs()
-                        .font_family(theme.mono_font_family.clone())
-                        .child(header.kind_badge),
+                        .child(Icon::new(header.kind_icon).size_4())
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(kind_name.clone()).build(window, cx)
+                        }),
                 )
                 .child(
                     truncated_text("drawer-title", header.name)

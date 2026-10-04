@@ -1095,3 +1095,12 @@ fn access_nodes_join_the_band_of_their_workload() {
         );
     }
 }
+
+#[test]
+fn pod_card_uses_the_pod_icon() {
+    assert_eq!(TopologyKind::Pod.icon(), POD_ICON);
+    assert_eq!(
+        TopologyKind::Deployment.icon(),
+        ResourceKind::Deployments.icon()
+    );
+}

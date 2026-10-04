@@ -6,6 +6,7 @@
 
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -296,7 +297,8 @@ impl AppShell {
         ];
         meta.extend(since.map(|since| format!("since {since}")));
         let header = DrawerHeader {
-            kind_badge: "Pf",
+            kind_icon: IconName::ArrowLeftRight,
+            kind_name: "Port forward".into(),
             name: format!(
                 "{} · {}",
                 forward.spec.short_target_text(),
