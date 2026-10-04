@@ -906,7 +906,7 @@ fn carried(found: &Ranked) -> Vec<(Option<NamespaceScope>, Option<&str>)> {
         .entries
         .iter()
         .map(|entry| match &entry.target {
-            PaletteTarget::Cluster(_, scope) => (scope.clone(), entry.detail.as_deref()),
+            PaletteTarget::Cluster(_, scope) => (scope.clone(), entry.note.as_deref()),
             _ => (None, None),
         })
         .collect()
@@ -949,10 +949,13 @@ fn cluster_rows_carry_nothing_without_a_session() {
 }
 
 #[test]
-fn the_carried_namespace_is_matched_like_any_detail() {
+fn the_carried_namespace_note_is_never_searched() {
     let world = world_with_clusters(NamespaceScope::Named("payments".to_owned()));
-    let found = search(&mut world.input(Screen::Pods, None), "@same namespace");
-    assert_eq!(labels(&found), ["stg"]);
+    let mut input = world.input(Screen::Pods, None);
+    // `same namespace payments` is shown, but typing it must not select the rows that carry it.
+    assert!(search(&mut input, "@same namespace").entries.is_empty());
+    assert!(search(&mut input, "@payments").entries.is_empty());
+    assert_eq!(labels(&search(&mut input, "@stg-ctx")), ["stg"]);
 }
 
 // ---- Step 5c: action x resource pairs ----
@@ -1257,4 +1260,39 @@ fn commands_screens_resources_namespaces_and_clusters_never_need_confirm() {
     let all = palette_entries(&world.input(Screen::Pods, None));
     assert!(all.iter().any(|entry| entry.group == PaletteGroup::GoTo));
     assert!(all.iter().all(|entry| !entry.needs_confirm));
+}
+
+#[test]
+fn objects_that_only_match_the_action_token_do_not_crowd_out_the_named_one() {
+    let mut world = World::new();
+    // Sixty pods match `logs` better than `payments-api-0` matches `pay`.
+    world.pods = (0..60)
+        .map(|index| pod("shop", &format!("logstash-{index:02}")))
+        .chain(std::iter::once(pod("shop", "payments-api-0")))
+        .collect();
+    let mut input = world.input(Screen::Pods, None);
+    for raw in ["> logs pay", "logs pay"] {
+        let found = search(&mut input, raw);
+        assert_eq!(
+            pairs_of(&found),
+            [("View logs", "pod/payments-api-0 · shop")],
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn object_tokens_leave_out_the_tokens_that_name_an_action() {
+    assert_eq!(object_tokens(&["logs", "pay"]), [false, true]);
+    assert_eq!(object_tokens(&["rest", "api", "pay"]), [false, true, true]);
+    // Every token reads as an action: any of them may name the object.
+    assert_eq!(object_tokens(&["rest", "logs"]), [true, true]);
+    assert_eq!(object_tokens(&["pay", "api"]), [true, true]);
+}
+
+#[test]
+fn the_pair_label_actions_are_all_pairable() {
+    for action in PAIR_LABEL_ACTIONS {
+        assert!(is_pairable(action.row_action()), "{action:?}");
+    }
 }

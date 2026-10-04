@@ -9,11 +9,9 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::{AppContext as _, Context, Window};
 
 use super::AppShell;
-use super::write_flow::append_in_background;
 use crate::audit_log::lock_entry;
 use crate::cluster_registry::ClusterRef;
 use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
-use crate::settings::AppSettings;
 use crate::write_guard::{ActionRisk, WriteLock, confirm_step};
 
 impl AppShell {
@@ -129,14 +127,10 @@ impl AppShell {
         let entry = self
             .guard_for(cluster, cx)
             .map(|guard| lock_entry(&guard, lock));
-        let config_dir = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf);
         cx.notify();
-        let Some(entry) = entry else {
-            return;
-        };
-        let shell = cx.weak_entity();
-        cx.spawn(async move |_, cx| append_in_background(&shell, config_dir, entry, cx).await)
-            .detach();
+        if let Some(entry) = entry {
+            self.write_audit_line(entry, cx);
+        }
     }
 }
 

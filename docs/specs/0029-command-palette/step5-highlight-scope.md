@@ -37,7 +37,7 @@ pub(crate) fn switch_cluster_in_scope(&mut self, target: &ClusterRef,
 ```
 
 - `cluster_entries`: the carried scope is the live scope when it is a single `Named` namespace and the row is not the active cluster (`!row.is_active`); otherwise `None` (decision 31, accepted by the user).
-- Detail when carried: `same namespace payments`. The detail is matched by the query like any detail.
+- Detail when carried: none; `same namespace payments` is the entry's `note`, shown where the detail would be and never matched by the query.
 - `switch_cluster(target, cx)` becomes `switch_cluster_in_scope(target, None, cx)`. The scope rides through `confirm_leaving` (shells, node shells, batches, unsaved edit) into `switch_to(target, scope, cx)`, whose `requested` argument already wins over `start_scope`; its doc comment names both callers.
 - `CommandPalette::confirm`: `Cluster(row, scope)` → `shell.switch_cluster_in_scope(&row.cluster, scope, cx)`.
 - Not carried: `All` and several namespaces (the target's memory is the better start), the active cluster (a switch to it does nothing), Ctrl 1–9 and the cluster switcher (0026 unchanged).

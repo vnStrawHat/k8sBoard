@@ -5,7 +5,7 @@
 //! names the cluster of the row or cursor (`WriteIntent::cluster`) and takes its guard and its
 //! connection from that cluster's own slot session, never from the primary.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -24,8 +24,8 @@ use gpui_kit::{
 use super::AppShell;
 use super::values_edit_flow::values_success_notice;
 use crate::audit_log::{
-    AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, audit_entry,
-    created_name_field, timestamp_now,
+    AuditEntry, AuditField, AuditObject, AuditOutcome, AuditReceipt, append_audit, audit_entry,
+    created_name_field, submit_audit, timestamp_now,
 };
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
@@ -524,25 +524,35 @@ fn audit_outcome(result: &Result<WriteOutcome, WriteError>) -> Option<AuditOutco
     }
 }
 
-/// Appends `entry` off the main thread; with no settings folder nothing is written. A failure
-/// warns and shows a title-bar notice, but never undoes the change.
+/// Queues `entry` on the audit writer at once; with no settings folder nothing is written.
+pub(super) fn queue_audit(config_dir: Option<&Path>, entry: &AuditEntry) -> Option<AuditReceipt> {
+    config_dir.map(|dir| submit_audit(dir, entry))
+}
+
+/// Waits for a queued line. A failure warns and shows a title-bar notice, but never undoes the
+/// change.
+pub(super) async fn report_audit(
+    queued: Option<AuditReceipt>,
+    shell: &WeakEntity<AppShell>,
+    cx: &mut AsyncApp,
+) {
+    let Some(queued) = queued else {
+        return;
+    };
+    if let Err(error) = queued.await {
+        tracing::warn!(kind = ?error.kind(), "could not append to the audit log");
+        let _ = shell.update(cx, |shell, cx| shell.audit_failed(error.kind(), cx));
+    }
+}
+
+/// Queues `entry` and waits for it, for a flow that goes on after its line is written.
 pub(super) async fn append_in_background(
     shell: &WeakEntity<AppShell>,
     config_dir: Option<PathBuf>,
     entry: AuditEntry,
     cx: &mut AsyncApp,
 ) {
-    let Some(dir) = config_dir else {
-        return;
-    };
-    let written = cx
-        .background_executor()
-        .spawn(async move { append_audit(&dir, &entry) })
-        .await;
-    if let Err(error) = written {
-        tracing::warn!(kind = ?error.kind(), "could not append to the audit log");
-        let _ = shell.update(cx, |shell, cx| shell.audit_failed(error.kind(), cx));
-    }
+    report_audit(queue_audit(config_dir.as_deref(), &entry), shell, cx).await;
 }
 
 /// The dry-run line a finished dry-run gives.

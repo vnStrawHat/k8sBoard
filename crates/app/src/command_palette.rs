@@ -4,7 +4,7 @@
 //! memory only: no list, watch, or request starts while it opens or while the user types.
 
 use std::ops::Range;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
@@ -18,7 +18,7 @@ use gpui_kit::component::{
 use gpui_kit::{
     Action, App, AppContext as _, Context, Entity, FocusHandle, HighlightStyle,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
-    Styled as _, StyledText, Subscription, UnderlineStyle, WeakEntity, Window, div,
+    Styled as _, StyledText, Subscription, Task, UnderlineStyle, WeakEntity, Window, div,
     prelude::FluentBuilder as _, px,
 };
 
@@ -74,6 +74,55 @@ pub(crate) struct PaletteSnapshot {
     pub(crate) context: PaletteContext,
 }
 
+/// The least time between two rankings that only a shell change asked for.
+const SHELL_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+
+/// What a shell change does to the ranking.
+#[derive(Debug, PartialEq, Eq)]
+enum ShellRefresh {
+    Now,
+    After(Duration),
+    /// A ranking is already due, or a timer for one is running.
+    AlreadyPending,
+}
+
+/// Lets one shell-caused ranking through per `SHELL_REFRESH_INTERVAL`. Pure over the instants it
+/// is given, so a test needs no clock.
+#[derive(Default)]
+struct ShellRefreshThrottle {
+    last_refresh: Option<Instant>,
+    is_pending: bool,
+}
+
+impl ShellRefreshThrottle {
+    fn on_shell_changed(&mut self, now: Instant) -> ShellRefresh {
+        if self.is_pending {
+            return ShellRefresh::AlreadyPending;
+        }
+        self.is_pending = true;
+        let wait = self.last_refresh.map_or(Duration::ZERO, |last| {
+            SHELL_REFRESH_INTERVAL.saturating_sub(now.saturating_duration_since(last))
+        });
+        if wait.is_zero() {
+            ShellRefresh::Now
+        } else {
+            ShellRefresh::After(wait)
+        }
+    }
+
+    /// Any ranking, a keystroke's included, covers the pending shell change.
+    fn on_refreshed(&mut self, now: Instant) {
+        self.last_refresh = Some(now);
+        self.is_pending = false;
+    }
+}
+
+/// A ranked entry with the matched characters of its label and detail.
+struct ShownEntry {
+    entry: PaletteEntry,
+    ranges: EntryRanges,
+}
+
 /// The dialog content. It is created once per open, together with its `CommandState`.
 pub(crate) struct CommandPalette {
     state: Entity<CommandState>,
@@ -83,13 +132,17 @@ pub(crate) struct CommandPalette {
     /// The entries the last render handed to the kit. The kit's index paths (highlight, confirm)
     /// refer to this list, so confirming and previewing resolve against it, never against a list
     /// that was ranked after that render.
-    shown: Vec<PaletteEntry>,
+    shown: Vec<ShownEntry>,
     more: usize,
     context: PaletteContext,
     query: String,
-    /// The shell or the query changed since `shown` was ranked. Ranking happens once per frame, in
-    /// `render`, however many notifications arrived.
+    /// The query changed, or the shell changed and the throttle let it through, since `shown` was
+    /// ranked. Ranking happens once per frame, in `render`, however many notifications arrived.
     is_stale: bool,
+    /// Keeps a burst of shell changes (each batched watch update) from ranking again and again.
+    shell_refresh: ShellRefreshThrottle,
+    /// Marks the ranking stale once the throttle's wait is over; dropped by the next ranking.
+    shell_refresh_timer: Option<Task<()>>,
     /// The resource to highlight once the next ranking has placed it (after a Tab preview moved
     /// the cursor, the row actions of the new cursor row join the list above it).
     reselect: Option<ClusterObject>,
@@ -149,10 +202,7 @@ impl CommandPalette {
         cx: &mut Context<Self>,
     ) -> Self {
         // Live statuses (W9 note 4): a shell change marks the ranking stale; the next render ranks.
-        let shell_observer = cx.observe(shell, |palette, _, cx| {
-            palette.is_stale = true;
-            cx.notify();
-        });
+        let shell_observer = cx.observe(shell, |palette, _, cx| palette.on_shell_changed(cx));
         let mut palette = Self {
             state,
             shell: shell.downgrade(),
@@ -162,6 +212,8 @@ impl CommandPalette {
             context: snapshot.context.clone(),
             query: initial.to_owned(),
             is_stale: false,
+            shell_refresh: ShellRefreshThrottle::default(),
+            shell_refresh_timer: None,
             reselect: None,
             is_seed_untouched: initial == ":",
             argument: None,
@@ -172,15 +224,28 @@ impl CommandPalette {
     }
 
     fn rank(&mut self, snapshot: PaletteSnapshot) {
-        let ranked = ranked(snapshot.entries, &parse_query(&self.query));
-        self.shown = ranked.entries;
+        let query = parse_query(&self.query);
+        let ranked = ranked(snapshot.entries, &query);
         self.more = ranked.more;
+        // The underlines are computed here, once per ranking, for the shown rows only (at most
+        // 100): a render only draws them.
+        self.shown = ranked
+            .entries
+            .into_iter()
+            .map(|entry| ShownEntry {
+                ranges: entry_match_ranges(&entry, query.text),
+                entry,
+            })
+            .collect();
         self.context = snapshot.context;
     }
 
     /// Builds the entries again from the shell and ranks them for the current query.
     fn refresh(&mut self, cx: &App) {
         self.is_stale = false;
+        self.shell_refresh.on_refreshed(Instant::now());
+        // A refresh already has what the waiting one would fetch.
+        self.shell_refresh_timer = None;
         let Some(shell) = self.shell.upgrade() else {
             return;
         };
@@ -200,6 +265,27 @@ impl CommandPalette {
         );
     }
 
+    /// A shell change (live statuses, W9 note 4) ranks again at once when the last ranking is
+    /// old enough, else once the interval is over. A keystroke never waits (`on_query`).
+    fn on_shell_changed(&mut self, cx: &mut Context<Self>) {
+        match self.shell_refresh.on_shell_changed(Instant::now()) {
+            ShellRefresh::Now => {
+                self.is_stale = true;
+                cx.notify();
+            }
+            ShellRefresh::After(wait) => {
+                self.shell_refresh_timer = Some(cx.spawn(async move |palette, cx| {
+                    cx.background_executor().timer(wait).await;
+                    let _ = palette.update(cx, |palette, cx| {
+                        palette.is_stale = true;
+                        cx.notify();
+                    });
+                }));
+            }
+            ShellRefresh::AlreadyPending => {}
+        }
+    }
+
     fn on_query(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_seed_untouched {
             if text.is_empty() {
@@ -217,13 +303,13 @@ impl CommandPalette {
 
     /// The entries the kit draws, one list per non-empty group in `PaletteGroup::ALL` order: the
     /// position in this list is the kit's section.
-    fn sections(&self) -> Vec<Vec<&PaletteEntry>> {
+    fn sections(&self) -> Vec<Vec<&ShownEntry>> {
         PaletteGroup::ALL
             .into_iter()
             .map(|group| {
                 self.shown
                     .iter()
-                    .filter(|entry| entry.group == group)
+                    .filter(|shown| shown.entry.group == group)
                     .collect::<Vec<_>>()
             })
             .filter(|members| !members.is_empty())
@@ -231,7 +317,8 @@ impl CommandPalette {
     }
 
     fn entry_at(&self, path: IndexPath) -> Option<&PaletteEntry> {
-        self.sections().get(path.section)?.get(path.row).copied()
+        let shown = self.sections().get(path.section)?.get(path.row).copied()?;
+        Some(&shown.entry)
     }
 
     /// The kit path of the first shown entry `is_wanted` picks.
@@ -240,7 +327,7 @@ impl CommandPalette {
             .iter()
             .enumerate()
             .find_map(|(section, members)| {
-                let row = members.iter().position(|entry| is_wanted(entry))?;
+                let row = members.iter().position(|shown| is_wanted(&shown.entry))?;
                 Some(IndexPath::new(row).section(section))
             })
     }
@@ -445,13 +532,11 @@ impl Render for CommandPalette {
             .on_confirm(move |path, window, cx| {
                 let _ = palette.update(cx, |palette, cx| palette.confirm(path, window, cx));
             });
-        // Ranges are built here, for the shown rows only (at most 100), never while ranking.
-        let query_text = parse_query(&self.query).text;
         for members in self.sections() {
-            let heading = members.first().map_or("", |entry| entry.group.heading());
-            let items = members
-                .into_iter()
-                .map(|entry| command_item(entry, query_text));
+            let heading = members
+                .first()
+                .map_or("", |shown| shown.entry.group.heading());
+            let items = members.into_iter().map(command_item);
             command = command.group(CommandGroup::new().label(heading).items(items));
         }
         let argument = self.render_argument(cx);
@@ -641,8 +726,9 @@ fn footer(can_preview: bool, more: usize, cx: &App) -> impl IntoElement + use<> 
 
 /// The kit item of an entry. Its content is custom, so the kit adds no hint of its own, and it
 /// carries no action: the palette runs the target itself, on the shell (decision 11).
-fn command_item(entry: &PaletteEntry, query_text: &str) -> CommandItem {
-    let row = RowContent::of(entry, entry_match_ranges(entry, query_text));
+fn command_item(shown: &ShownEntry) -> CommandItem {
+    let entry = &shown.entry;
+    let row = RowContent::of(entry, shown.ranges.clone());
     let is_disabled = !entry.is_enabled();
     CommandItem::new()
         .label(entry.label.clone())
@@ -704,7 +790,7 @@ impl RowContent {
         Self {
             icon: row_icon(&entry.target),
             label: entry.label.clone(),
-            detail: entry.detail.clone(),
+            detail: entry.detail.clone().or_else(|| entry.note.clone()),
             ranges,
             status: entry.status.clone(),
             reason: match &entry.state {
@@ -904,4 +990,52 @@ fn reason_pill(reason: SharedString, cx: &App) -> impl IntoElement {
         .text_xs()
         .text_color(color)
         .child(reason)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_shell_change_ranks_at_once() {
+        let mut throttle = ShellRefreshThrottle::default();
+        assert_eq!(throttle.on_shell_changed(Instant::now()), ShellRefresh::Now);
+    }
+
+    #[test]
+    fn a_burst_of_shell_changes_ranks_once_per_interval() {
+        let start = Instant::now();
+        let mut throttle = ShellRefreshThrottle::default();
+        throttle.on_refreshed(start);
+        let at = |millis: u64| start + Duration::from_millis(millis);
+        // The first change after a ranking waits out the rest of the interval...
+        assert_eq!(
+            throttle.on_shell_changed(at(50)),
+            ShellRefresh::After(Duration::from_millis(200))
+        );
+        // ...and the rest of the burst adds nothing.
+        for millis in [60, 120, 240] {
+            assert_eq!(
+                throttle.on_shell_changed(at(millis)),
+                ShellRefresh::AlreadyPending
+            );
+        }
+        // Once a ranking ran, the next change after the interval is let through at once.
+        throttle.on_refreshed(at(250));
+        assert_eq!(throttle.on_shell_changed(at(600)), ShellRefresh::Now);
+    }
+
+    #[test]
+    fn a_keystroke_ranking_covers_the_pending_shell_change() {
+        let start = Instant::now();
+        let mut throttle = ShellRefreshThrottle::default();
+        throttle.on_refreshed(start);
+        let after = |wait: ShellRefresh| matches!(wait, ShellRefresh::After(_));
+        assert!(after(throttle.on_shell_changed(start)));
+        // A keystroke ranked the fresh shell state itself, so the next change starts a new wait.
+        throttle.on_refreshed(start + Duration::from_millis(10));
+        assert!(after(
+            throttle.on_shell_changed(start + Duration::from_millis(20))
+        ));
+    }
 }

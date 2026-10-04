@@ -1083,10 +1083,11 @@ fn a_bulk_commit_survives_the_dialog_closing(cx: &mut TestAppContext) {
     t.t.fixture.press("escape", cx);
     t.t.wait_for("every commit", cx, |_| audit_lines(&dir).len() == 3);
     assert_eq!(writes(&t.t.stg_api).len(), 6);
-    let running = t
-        .shell()
-        .read_with(cx, |shell, _| shell.running_batches.contains(&t.t.stg));
-    assert!(!running, "the guard is released when the loop ends");
+    // The last line is on disk before the loop learns it and ends, so wait for the release.
+    t.t.wait_for("the guard to be released", cx, |cx| {
+        !t.shell()
+            .read_with(cx, |shell, _| shell.running_batches.contains(&t.t.stg))
+    });
 }
 
 #[gpui_kit::test]

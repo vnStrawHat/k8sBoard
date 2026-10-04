@@ -7,7 +7,9 @@
 use std::cmp::Reverse;
 use std::ops::Range;
 
-use cluster::{NamespaceScope, NamespaceSummary, NodeSummary, PodSummary, ReplicaSetSummary};
+use cluster::{
+    NamespaceScope, NamespaceSummary, NodeSummary, ObjectKind, PodSummary, ReplicaSetSummary,
+};
 use gpui_kit::{Action, SharedString};
 
 use crate::app_shell::Screen;
@@ -19,8 +21,8 @@ use crate::keymap::{OpenKindPalette, OpenPalette, ShortcutGroup, shortcut_rows};
 use crate::kind_row::{KindObject, KindRow};
 use crate::navigation::{KindAvailability, kind_availability};
 use crate::resource_actions::{
-    KeyAvailability, RowAction, action_label, is_planned, key_availability_of, needs_confirm,
-    subject_action,
+    KeyAvailability, ResourceAction, RowAction, action_label, is_planned, key_availability_of,
+    needs_confirm, subject_action,
 };
 use crate::resource_kind::ResourceKind;
 use crate::settings_window::ImportKubeconfig;
@@ -169,6 +171,8 @@ pub(crate) struct PaletteEntry {
     pub(crate) group: PaletteGroup,
     pub(crate) label: SharedString,
     pub(crate) detail: Option<SharedString>,
+    /// Text shown where the detail would be when there is none; the query never matches it.
+    pub(crate) note: Option<SharedString>,
     /// Words the query matches besides the label and the detail: kind aliases, a cluster's context.
     pub(crate) keywords: Vec<SharedString>,
     pub(crate) status: Option<StatusLabel>,
@@ -189,6 +193,7 @@ impl PaletteEntry {
             group,
             label: label.into(),
             detail: None,
+            note: None,
             keywords: Vec::new(),
             status: None,
             state: EntryState::Enabled,
@@ -460,22 +465,17 @@ impl<'a> Subject<'a> {
         [self.name(), buffer.as_str(), singular, plural]
     }
 
-    /// How the tokens of `text` match this object's fields.
-    fn match_tokens(self, text: &str, buffer: &mut String) -> TokenMatch {
+    /// The best field score of each token, `None` for a token that matches no field. `scores` is
+    /// reused across objects.
+    fn token_scores(self, tokens: &[&str], buffer: &mut String, scores: &mut Vec<Option<u32>>) {
         let fields = self.fields(buffer);
-        let mut matched = TokenMatch::default();
-        for token in text.split_whitespace() {
-            matched.tokens += 1;
-            let best = fields
+        scores.clear();
+        scores.extend(tokens.iter().map(|token| {
+            fields
                 .iter()
                 .filter_map(|field| fuzzy_score(token, field))
-                .max();
-            if let Some(best) = best {
-                matched.score = matched.score.saturating_add(best);
-                matched.hits += 1;
-            }
-        }
-        matched
+                .max()
+        }));
     }
 
     /// Whether each token matches one of this object's fields.
@@ -492,19 +492,67 @@ impl<'a> Subject<'a> {
     }
 }
 
-/// The sum of each token's best field score, over the tokens that matched some field, and how many
-/// matched. A resource lists when every token matched; a pair object needs only one.
-#[derive(Default)]
-struct TokenMatch {
-    score: u32,
-    tokens: usize,
-    hits: usize,
+/// The sum of the scores of the tokens that matched; the scores of `eligible` tokens only when a
+/// mask is given, and then `None` when none of those matched.
+fn score_sum(scores: &[Option<u32>], eligible: Option<&[bool]>) -> Option<u32> {
+    let mut sum = None;
+    for (index, score) in scores.iter().enumerate() {
+        let is_eligible = eligible.is_none_or(|mask| mask[index]);
+        if let (Some(score), true) = (score, is_eligible) {
+            sum = Some(sum.unwrap_or(0_u32).saturating_add(*score));
+        }
+    }
+    sum
 }
 
-impl TokenMatch {
-    fn is_complete(&self) -> bool {
-        self.hits == self.tokens
+/// The actions a pair can carry, for `labelled_tokens`: the labels of `subject_action` that any
+/// subject can offer, and the two that an object state flips (`state_label`).
+const PAIR_LABEL_ACTIONS: [ResourceAction; 22] = [
+    ResourceAction::ViewLogs,
+    ResourceAction::OpenShell,
+    ResourceAction::PortForward,
+    ResourceAction::OpenNodeShell,
+    ResourceAction::DebugContainer,
+    ResourceAction::Cordon,
+    ResourceAction::Drain,
+    ResourceAction::EditTaints,
+    ResourceAction::EditLabels,
+    ResourceAction::CopyName,
+    ResourceAction::ViewYaml,
+    ResourceAction::EditYaml(ObjectKind::Pod),
+    ResourceAction::EditValues(ObjectKind::ConfigMap),
+    ResourceAction::RestartRollout(ObjectKind::Deployment),
+    ResourceAction::Scale(ObjectKind::Deployment),
+    ResourceAction::PauseRollout,
+    ResourceAction::SuspendCronJob,
+    ResourceAction::TriggerCronJob,
+    ResourceAction::RerunJob,
+    ResourceAction::EditHpaRange,
+    ResourceAction::ExpandClaim,
+    ResourceAction::SetDefaultStorageClass,
+];
+const STATE_LABELS: [&str; 2] = ["Resume rollout", "Resume"];
+
+/// Which tokens an object may be picked for when it is a pair candidate. A token that matches the
+/// label of some pairable action names the action, so an object that only matches that token
+/// (every `logstash-*` pod for `logs`) would crowd out the object the other tokens name. The
+/// other tokens are the eligible ones; when every token reads as an action label, all are.
+fn object_tokens(tokens: &[&str]) -> Vec<bool> {
+    let is_label = |token: &str| {
+        PAIR_LABEL_ACTIONS
+            .iter()
+            .map(|action| action_label(*action))
+            .chain(STATE_LABELS)
+            .any(|label| fuzzy_score(token, label).is_some())
+    };
+    let on_label: Vec<bool> = tokens.iter().map(|token| is_label(token)).collect();
+    if on_label.iter().all(|is_on_label| *is_on_label) {
+        return vec![true; tokens.len()];
     }
+    on_label
+        .into_iter()
+        .map(|is_on_label| !is_on_label)
+        .collect()
 }
 
 /// The visible explorer kind first (it is what the user is looking at), then pods, then nodes.
@@ -549,11 +597,12 @@ struct Scan<'a> {
 
 /// Scans the loaded rows once for the resource entries and the pair objects.
 ///
-/// Per keystroke this is tokens x rows x 3 `fuzzy_score` calls (the name, `namespace/name`, and the
-/// kind words), byte compares with no allocation: about 45,000 for 5,000 rows and 3 tokens. It
-/// runs on every query change and on every shell notify while the palette is open, inside the
-/// 4 ms budget that the `palette ranked` trace measures. Pair building afterwards is bounded by
-/// `RESOURCES_CAP` objects x `ROW_ACTIONS`. Only a row that matched every token builds an entry.
+/// Per keystroke this is tokens x rows x 4 `fuzzy_score` calls (the name, `namespace/name`, and the
+/// two kind words), byte compares with no allocation: about 60,000 for 5,000 rows and 3 tokens. It
+/// runs on every query change; a shell notify with an unchanged query is throttled to one per
+/// `SHELL_REFRESH_INTERVAL` (`command_palette.rs`). The `palette ranked` trace measures it
+/// against the 4 ms budget. Pair building afterwards is bounded by `RESOURCES_CAP` objects x
+/// `ROW_ACTIONS`. Only a row that matched every token builds a resource entry.
 ///
 /// ponytail: top-50 objects by one linear scan; an index per token if traces exceed the budget.
 fn scan_loaded_rows<'a>(input: &PaletteInput<'a>) -> Scan<'a> {
@@ -568,19 +617,29 @@ fn scan_loaded_rows<'a>(input: &PaletteInput<'a>) -> Scan<'a> {
     if !input.include_resources && !wants_pairs {
         return scan;
     }
+    let tokens: Vec<&str> = input.query_text.split_whitespace().collect();
+    // Once per scan, not per row.
+    let eligible = if wants_pairs {
+        object_tokens(&tokens)
+    } else {
+        Vec::new()
+    };
     let mut hits: Vec<(u32, Subject<'_>)> = Vec::new();
     let mut buffer = String::new();
+    let mut scores = Vec::with_capacity(tokens.len());
     for subject in subjects(session) {
-        let matched = subject.match_tokens(input.query_text, &mut buffer);
-        let is_cursor = input
-            .cursor
-            .is_some_and(|cursor| cursor.cluster == session.cluster && subject.is(&cursor.key));
-        if wants_pairs && matched.hits > 0 && !is_cursor {
-            hits.push((matched.score, subject));
+        subject.token_scores(&tokens, &mut buffer, &mut scores);
+        if wants_pairs
+            && let Some(score) = score_sum(&scores, Some(&eligible))
+            && !input
+                .cursor
+                .is_some_and(|cursor| cursor.cluster == session.cluster && subject.is(&cursor.key))
+        {
+            hits.push((score, subject));
         }
-        if input.include_resources && matched.is_complete() {
+        if input.include_resources && scores.iter().all(Option::is_some) {
             let mut entry = resource_entry(session, subject);
-            entry.score = Some(matched.score);
+            entry.score = Some(score_sum(&scores, None).unwrap_or(0));
             scan.resources.push(entry);
         }
     }
@@ -784,7 +843,7 @@ fn cluster_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
                 row.label.clone(),
                 PaletteTarget::Cluster(row.clone(), scope),
             );
-            entry.detail = namespace.map(|name| format!("same namespace {name}").into());
+            entry.note = namespace.map(|name| format!("same namespace {name}").into());
             // The switcher's own search text: the context, the environment badge, the file name.
             entry.keywords = row.search_text.lines().map(SharedString::from).collect();
             entry.is_current = row.is_active;
@@ -827,7 +886,7 @@ fn score_of(entry: &PaletteEntry, text: &str) -> Option<u32> {
 }
 
 /// The byte ranges to underline in an entry's label and detail.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct EntryRanges {
     pub(crate) label: Vec<Range<usize>>,
     pub(crate) detail: Vec<Range<usize>>,

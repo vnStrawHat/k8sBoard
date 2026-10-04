@@ -388,7 +388,9 @@ fn options_persist_image_and_namespace_after_start(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn the_audit_follows_the_pod_from_create_to_delete(cx: &mut TestAppContext) {
-    // The fake finds no pod to wait for, so the attach fails at once and the cleanup runs.
+    // The fake finds no pod to wait for, so the attach fails at once and the cleanup runs. The
+    // Open line (queued by the main thread) and the Delete line (queued by the tokio runtime) go
+    // through the one audit writer, so their order is the order they were queued in.
     let (debugs, dir) = audited_node_clusters("ns-audit", Answers::Accepts, cx);
     debugs.start_node(
         &debugs.stg,

@@ -14,7 +14,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::{Context, Entity, EntityId, Subscription, WeakEntity, Window};
 
 use super::AppShell;
-use super::write_flow::{ConnectIntent, ConnectOpen, ExecOpen, append_in_background};
+use super::write_flow::{ConnectIntent, ConnectOpen, ExecOpen, queue_audit, report_audit};
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, connect_entry,
 };
@@ -341,10 +341,13 @@ impl AppShell {
         }
     }
 
+    /// Queues the line now, so file order is call order, and reports a failed write when it
+    /// finishes.
     pub(super) fn write_audit_line(&mut self, entry: AuditEntry, cx: &mut Context<Self>) {
         let config_dir = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf);
+        let queued = queue_audit(config_dir.as_deref(), &entry);
         let shell = cx.weak_entity();
-        cx.spawn(async move |_, cx| append_in_background(&shell, config_dir, entry, cx).await)
+        cx.spawn(async move |_, cx| report_audit(queued, &shell, cx).await)
             .detach();
     }
 

@@ -4,10 +4,16 @@
 //! A line holds names and paths, never a request body, a token, or the value of a Secret field.
 
 use std::fs::OpenOptions;
+use std::future::Future;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::{OnceLock, mpsc};
+use std::task::{Context, Poll};
+use std::thread;
 
 use cluster::GracePeriod;
+use futures::channel::oneshot;
 use serde::Serialize;
 
 use crate::app_shell::write_flow::WriteIntent;
@@ -316,13 +322,87 @@ pub(crate) fn created_name_field(name: &str) -> AuditField {
     }
 }
 
-/// Appends `entry` as one line. Blocking: callers run it off the main thread.
+/// One serialized line waiting for the writer.
+struct Submission {
+    dir: PathBuf,
+    line: String,
+    reply: oneshot::Sender<io::Result<()>>,
+}
+
+/// The one channel every audit line goes through, drained by one thread. The Open line of a
+/// failed node shell (queued by the main thread) and the Delete line of its pod (queued by the
+/// tokio runtime) used to race through separate executors; one queue makes the file order the
+/// order in which `submit_audit` was called.
+static WRITER: OnceLock<io::Result<mpsc::Sender<Submission>>> = OnceLock::new();
+
+fn writer() -> io::Result<&'static mpsc::Sender<Submission>> {
+    let started = WRITER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<Submission>();
+        thread::Builder::new()
+            .name("audit-log".to_owned())
+            .spawn(move || {
+                for job in receiver {
+                    // A caller that stopped waiting still gets its line written.
+                    let _ = job.reply.send(write_line(&job.dir, &job.line));
+                }
+            })
+            .map(|_| sender)
+    });
+    started
+        .as_ref()
+        .map_err(|error| io::Error::new(error.kind(), "the audit writer did not start"))
+}
+
+/// Resolves once the line is on disk, or with the error that stopped it.
+pub(crate) struct AuditReceipt(oneshot::Receiver<io::Result<()>>);
+
+impl Future for AuditReceipt {
+    type Output = io::Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx).map(|received| {
+            received.unwrap_or_else(|_| Err(io::Error::other("the audit writer stopped")))
+        })
+    }
+}
+
+/// Queues `entry` as one line behind every line queued before it, and returns at once: the line
+/// is queued when this is called, not when the receipt is first polled, so call order is file
+/// order. The entry is serialized here, so the writer thread only does the file work.
+pub(crate) fn submit_audit(dir: &Path, entry: &AuditEntry) -> AuditReceipt {
+    let (reply, receipt) = oneshot::channel();
+    let queued = serde_json::to_string(entry)
+        .map_err(io::Error::other)
+        .and_then(|mut line| {
+            line.push('\n');
+            writer()?
+                .send(Submission {
+                    dir: dir.to_path_buf(),
+                    line,
+                    reply,
+                })
+                .map_err(|_| io::Error::other("the audit writer stopped"))
+        });
+    // A failure to queue is reported through the receipt like a failure to write.
+    if let Err(error) = queued {
+        let (reply, failed) = oneshot::channel();
+        let _ = reply.send(Err(error));
+        return AuditReceipt(failed);
+    }
+    AuditReceipt(receipt)
+}
+
+/// Appends `entry` as one line and waits for it. Blocking: callers run it off the main thread
+/// or where the process is about to end. It queues behind the lines `submit_audit` queued.
+pub(crate) fn append_audit(dir: &Path, entry: &AuditEntry) -> io::Result<()> {
+    futures::executor::block_on(submit_audit(dir, entry))
+}
+
+/// Writes `line`, which ends in a newline.
 ///
 /// The whole line goes out in one `write_all` on an append-only handle, so lines do not
 /// interleave; a crash can leave a truncated last line, which a reader skips.
-pub(crate) fn append_audit(dir: &Path, entry: &AuditEntry) -> io::Result<()> {
-    let mut line = serde_json::to_string(entry).map_err(io::Error::other)?;
-    line.push('\n');
+fn write_line(dir: &Path, line: &str) -> io::Result<()> {
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     // The file names clusters and objects, so only its owner may read it. The mode applies only

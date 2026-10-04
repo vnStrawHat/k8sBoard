@@ -547,3 +547,56 @@ fn a_commit_in_the_air_at_quit_is_an_unknown_line() {
         drain_in_flight_entry(&identity, &NextStep::Poll, GracePeriod::PodDefault, None).is_none()
     );
 }
+
+fn entry_named(action: &str) -> AuditEntry {
+    let mut entry = full_entry();
+    action.clone_into(&mut entry.action);
+    entry
+}
+
+fn actions_in(dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(audit_path(dir))
+        .expect("the log exists")
+        .lines()
+        .map(|line| {
+            let value: Value = serde_json::from_str(line).expect("each line is JSON");
+            value["action"].as_str().unwrap_or_default().to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn lines_land_in_submission_order_whoever_waits() {
+    let dir = temp_dir("order");
+    // Queued without waiting, as the main thread does for an Open line...
+    let receipts: Vec<AuditReceipt> = (0..100)
+        .map(|index| submit_audit(&dir, &entry_named(&format!("line-{index:03}"))))
+        .collect();
+    // ...and a blocking append from another thread, as the tokio runtime does for a Delete line,
+    // which lands behind everything queued before it.
+    let last = std::thread::scope(|scope| {
+        scope
+            .spawn(|| append_audit(&dir, &entry_named("line-100")))
+            .join()
+            .expect("the thread finished")
+    });
+    last.expect("the last line");
+    for receipt in receipts {
+        futures::executor::block_on(receipt).expect("a queued line");
+    }
+    let expected: Vec<String> = (0..=100).map(|index| format!("line-{index:03}")).collect();
+    assert_eq!(actions_in(&dir), expected);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_line_that_cannot_be_written_fails_its_own_receipt_only() {
+    let dir = temp_dir("receipt");
+    let missing = dir.join("not-there");
+    let failed = submit_audit(&missing, &entry_named("lost"));
+    let kept = submit_audit(&dir, &entry_named("kept"));
+    assert!(futures::executor::block_on(failed).is_err());
+    futures::executor::block_on(kept).expect("the next line still lands");
+    assert_eq!(actions_in(&dir), ["kept"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
