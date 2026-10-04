@@ -634,6 +634,8 @@ impl AppShell {
             }
             // The buttons are in the drawer, so Roll back… takes the user to the revisions.
             ResourceAction::RollBack => self.show_revisions(&subject, window, cx),
+            // The `New` header button has no row and no key (spec 0042).
+            ResourceAction::CreateObject(_) => {}
         }
     }
 }

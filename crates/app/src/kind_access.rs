@@ -7,15 +7,18 @@ use cluster::{AccessCheck, AccessReport, ObjectKind};
 use gpui_kit::Task;
 
 /// The permissions one review of `kind` asks: `update` for an editable kind, `patch` for the two
-/// kinds whose values are edited (spec 0047 decision 7), and `delete` for all.
+/// kinds whose values are edited (spec 0047 decision 7), `delete` for all, and `create` for a kind
+/// that gets a `New` button (spec 0042).
 pub(crate) fn lazy_checks(kind: ObjectKind) -> Vec<AccessCheck> {
     let update = kind.is_editable().then_some(AccessCheck::Update(kind));
     let patch = matches!(kind, ObjectKind::ConfigMap | ObjectKind::Secret)
         .then_some(AccessCheck::Patch(kind));
+    let create = kind.is_creatable().then_some(AccessCheck::Create(kind));
     update
         .into_iter()
         .chain(patch)
         .chain([AccessCheck::Delete(kind)])
+        .chain(create)
         .collect()
 }
 

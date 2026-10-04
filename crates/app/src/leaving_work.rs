@@ -24,7 +24,8 @@ pub(crate) struct LeavingWork {
     pub(crate) shells: usize,
     /// Clusters with a batch still committing: it stops at the next item and the rest read `Not sent`.
     pub(crate) batches: usize,
-    /// The open Edit YAML text that was not applied, as `Deployment/payments/api`: it is thrown away.
+    /// The line about the open edit text that was not applied (`Unsaved changes to Deployment/payments/api`,
+    /// or `Unsaved new ConfigMap`): it is thrown away.
     pub(crate) unsaved_edit: Option<String>,
     /// Open node shells: each pod is deleted with its tab.
     pub(crate) node_shells: usize,
@@ -58,8 +59,8 @@ impl LeavingWork {
                 "{count} running batches will stop; their remaining items are not sent"
             )),
         }
-        if let Some(subject) = &self.unsaved_edit {
-            lines.push(format!("Unsaved changes to {subject}"));
+        if let Some(line) = &self.unsaved_edit {
+            lines.push(line.clone());
         }
         match self.node_shells {
             0 => {}
@@ -206,7 +207,7 @@ mod tests {
     #[test]
     fn an_unsaved_edit_is_a_line_of_its_own() {
         let work = LeavingWork {
-            unsaved_edit: Some("Deployment/team-a/api".to_owned()),
+            unsaved_edit: Some("Unsaved changes to Deployment/team-a/api".to_owned()),
             ..LeavingWork::default()
         };
         assert!(!work.is_empty());

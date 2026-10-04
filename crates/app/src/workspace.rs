@@ -17,11 +17,11 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, Bounds, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, Pixels, Styled as _, Window, canvas, deferred, div, fill,
-    point, prelude::FluentBuilder as _, px, size,
+    MouseButton, ParentElement as _, Pixels, SharedString, Styled as _, Window, canvas, deferred,
+    div, fill, point, prelude::FluentBuilder as _, px, size,
 };
 
-use cluster::{EVENT_LIMIT, EventFilter};
+use cluster::{EVENT_LIMIT, EventFilter, ObjectKind};
 
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{FlowState, LiveCluster, SessionPhase};
@@ -43,6 +43,7 @@ use crate::overview::{
 };
 use crate::pod_drawer::pod_drawer;
 use crate::port_forward_menu::PortButtons;
+use crate::resource_actions::{ActionAvailability, ResourceAction, action_availability};
 use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
 use crate::row_selection::selection_bar;
@@ -474,7 +475,10 @@ impl AppShell {
                     .flatten()
                     .collect()
             }
-            _ => return None,
+            screen => {
+                let (kind, label) = new_button_of(screen)?;
+                vec![self.render_new_button(kind, label, cx)]
+            }
         };
         Some(
             h_flex()
@@ -551,6 +555,40 @@ impl AppShell {
             button.disabled(true).tooltip("Not connected")
         };
         Some(button.into_any_element())
+    }
+
+    /// The `New` button of a screen whose kind can be created (spec 0042). Off with the gate's
+    /// reason: the permissions still checking, `Not permitted: create {resource}`, or the lock.
+    fn render_new_button(
+        &self,
+        kind: ObjectKind,
+        label: &'static str,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let button = Button::new("new-object").label(label).small().outline();
+        match self.new_object_block(kind, cx) {
+            Some(reason) => button.disabled(true).tooltip(reason),
+            None => button
+                .tooltip(format!("Create a {}", kind.name()))
+                .on_click(cx.listener(move |shell, _, window, cx| {
+                    shell.open_create(kind, window, cx);
+                })),
+        }
+        .into_any_element()
+    }
+
+    /// Why `New` of `kind` is off on the open cluster, `None` when it is on.
+    pub(super) fn new_object_block(&self, kind: ObjectKind, cx: &App) -> Option<SharedString> {
+        let guard = self
+            .active_cluster()
+            .and_then(|cluster| self.guard_for(&cluster, cx));
+        let Some(guard) = guard else {
+            return Some("Not connected".into());
+        };
+        match action_availability(ResourceAction::CreateObject(kind), &guard) {
+            ActionAvailability::Enabled => None,
+            ActionAvailability::Disabled { reason } => Some(reason),
+        }
     }
 
     /// Opens the Who can… dialog on the namespace the scope starts in.
@@ -1103,9 +1141,52 @@ fn dashed_rule(color: Hsla) -> impl IntoElement {
     .size_full()
 }
 
+/// The kind a screen's `New` button creates, and its label (spec 0042, W7): `New namespace` on
+/// Namespaces, `New` on the four screens of a namespaced kind.
+fn new_button_of(screen: Screen) -> Option<(ObjectKind, &'static str)> {
+    match screen {
+        Screen::Kind(ResourceKind::Namespaces) => Some((ObjectKind::Namespace, "New namespace")),
+        Screen::Kind(
+            kind @ (ResourceKind::ConfigMaps
+            | ResourceKind::ResourceQuotas
+            | ResourceKind::PodDisruptionBudgets
+            | ResourceKind::RoleBindings),
+        ) => kind.builtin_object().map(|object| (object, "New")),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_buttons_on_the_five_screens() {
+        let button = |kind| new_button_of(Screen::Kind(kind));
+        assert_eq!(
+            button(ResourceKind::Namespaces),
+            Some((ObjectKind::Namespace, "New namespace"))
+        );
+        for (kind, object) in [
+            (ResourceKind::ConfigMaps, ObjectKind::ConfigMap),
+            (ResourceKind::ResourceQuotas, ObjectKind::ResourceQuota),
+            (
+                ResourceKind::PodDisruptionBudgets,
+                ObjectKind::PodDisruptionBudget,
+            ),
+            (ResourceKind::RoleBindings, ObjectKind::RoleBinding),
+        ] {
+            assert_eq!(button(kind), Some((object, "New")));
+        }
+        // Every other screen has none; Secrets keeps `Reveal all` only.
+        let others = ResourceKind::ALL
+            .into_iter()
+            .filter(|kind| button(*kind).is_none())
+            .count();
+        assert_eq!(others, ResourceKind::ALL.len() - 5);
+        assert_eq!(button(ResourceKind::Secrets), None);
+        assert_eq!(new_button_of(Screen::Pods), None);
+    }
 
     #[test]
     fn count_label_pluralizes() {

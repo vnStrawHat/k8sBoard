@@ -84,6 +84,7 @@ fn outcome(effect: WriteEffect) -> WriteOutcome {
         elapsed: Duration::ZERO,
         effect,
         created_name: None,
+        dropped_fields: Vec::new(),
         uid: None,
     }
 }

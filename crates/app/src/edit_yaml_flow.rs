@@ -11,7 +11,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use cluster::{AccessCheck, ClusterConnection, ObjectRef, WriteOutcome};
+use cluster::{AccessCheck, ClusterConnection, ObjectKind, ObjectRef, WriteOutcome};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::component::dialog::DialogButtonProps;
@@ -20,14 +20,16 @@ use gpui_kit::{
     SharedString, Window,
 };
 
-use super::AppShell;
 use super::write_flow::{CheckedWriteError, CommitMode, WriteIntent, WriteStep, notify};
+use super::{AppShell, Screen};
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_session::AccessState;
 use crate::edit_quota::QuotaInput;
 use crate::fresh_enter::FreshEnter;
 use crate::issue_feeds::FeedState;
 use crate::kind_row::KindObject;
+use crate::object_create_view::ObjectCreateView;
+use crate::object_templates::{template_namespace, template_text};
 use crate::resource_actions::{
     ActionAvailability, ResourceAction, RowAction, action_availability, action_label,
     subject_action, unavailable_text,
@@ -42,13 +44,14 @@ use crate::yaml_view::object_ref;
 /// What runs once the user agreed to throw the unsaved text away.
 type AfterDiscard = Box<dyn FnOnce(&mut AppShell, &mut Context<AppShell>)>;
 
-/// The one open editor of the shell (`AppShell.edit`): Edit YAML or Edit values (spec 0047 decision 8).
-/// They share the slot, so one edit is open at a time and the discard prompt, the leaving dialog, and
-/// the inert table keys work for both.
+/// The one open editor of the shell (`AppShell.edit`): Edit YAML, Edit values (spec 0047 decision 8),
+/// or a New object (spec 0042). They share the slot, so one edit is open at a time and the discard
+/// prompt, the leaving dialog, and the inert table keys work for all of them.
 #[derive(Clone)]
 pub(crate) enum OpenEdit {
     Yaml(Entity<YamlEditView>),
     Values(Entity<ValuesEditView>),
+    Create(Entity<ObjectCreateView>),
 }
 
 impl OpenEdit {
@@ -56,13 +59,16 @@ impl OpenEdit {
         match self {
             Self::Yaml(edit) => edit.read(cx).cluster(),
             Self::Values(edit) => edit.read(cx).cluster(),
+            Self::Create(edit) => edit.read(cx).cluster(),
         }
     }
 
-    pub(crate) fn object<'a>(&'a self, cx: &'a App) -> &'a ObjectRef {
+    /// The object being edited; a New object has none yet.
+    pub(crate) fn object<'a>(&'a self, cx: &'a App) -> Option<&'a ObjectRef> {
         match self {
-            Self::Yaml(edit) => edit.read(cx).object(),
-            Self::Values(edit) => edit.read(cx).object(),
+            Self::Yaml(edit) => Some(edit.read(cx).object()),
+            Self::Values(edit) => Some(edit.read(cx).object()),
+            Self::Create(_) => None,
         }
     }
 
@@ -70,14 +76,36 @@ impl OpenEdit {
         match self {
             Self::Yaml(edit) => edit.read(cx).is_dirty(),
             Self::Values(edit) => edit.read(cx).is_dirty(),
+            Self::Create(edit) => edit.read(cx).is_dirty(),
         }
     }
 
-    /// `Secret/payments/api-db`: what the discard prompt and the leaving dialog call the edit.
+    /// `Secret/payments/api-db`, or `new ConfigMap`: what the edit is called in the prompts.
     pub(crate) fn subject_text(&self, cx: &App) -> String {
         match self {
             Self::Yaml(edit) => edit.read(cx).subject_text(),
             Self::Values(edit) => edit.read(cx).subject_text(),
+            Self::Create(edit) => edit.read(cx).subject_text(),
+        }
+    }
+
+    /// The title of the discard prompt.
+    pub(crate) fn discard_title(&self, cx: &App) -> String {
+        match self {
+            Self::Yaml(_) | Self::Values(_) => {
+                format!("Discard changes to {}?", self.subject_text(cx))
+            }
+            Self::Create(edit) => format!("Discard the new {}?", edit.read(cx).kind().name()),
+        }
+    }
+
+    /// The line of the leaving dialog about this edit.
+    pub(crate) fn leaving_line(&self, cx: &App) -> String {
+        match self {
+            Self::Yaml(_) | Self::Values(_) => {
+                format!("Unsaved changes to {}", self.subject_text(cx))
+            }
+            Self::Create(edit) => format!("Unsaved new {}", edit.read(cx).kind().name()),
         }
     }
 
@@ -86,6 +114,7 @@ impl OpenEdit {
         match self {
             Self::Yaml(edit) => edit.update(cx, |view, cx| view.commit_failed(failure, cx)),
             Self::Values(edit) => edit.update(cx, |view, cx| view.commit_failed(failure, cx)),
+            Self::Create(edit) => edit.update(cx, |view, cx| view.commit_failed(failure, cx)),
         }
     }
 
@@ -93,6 +122,7 @@ impl OpenEdit {
         match self {
             Self::Yaml(edit) => edit.clone().into_any_element(),
             Self::Values(edit) => edit.clone().into_any_element(),
+            Self::Create(edit) => edit.clone().into_any_element(),
         }
     }
 
@@ -100,7 +130,7 @@ impl OpenEdit {
     pub(crate) fn yaml(&self) -> Option<Entity<YamlEditView>> {
         match self {
             Self::Yaml(edit) => Some(edit.clone()),
-            Self::Values(_) => None,
+            Self::Values(_) | Self::Create(_) => None,
         }
     }
 
@@ -108,7 +138,15 @@ impl OpenEdit {
     pub(crate) fn values(&self) -> Option<Entity<ValuesEditView>> {
         match self {
             Self::Values(edit) => Some(edit.clone()),
-            Self::Yaml(_) => None,
+            Self::Yaml(_) | Self::Create(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn create(&self) -> Option<Entity<ObjectCreateView>> {
+        match self {
+            Self::Create(edit) => Some(edit.clone()),
+            Self::Yaml(_) | Self::Values(_) => None,
         }
     }
 }
@@ -170,6 +208,63 @@ impl AppShell {
             YamlEditView::new(shell, subject, connection, window, cx)
         });
         self.edit = Some(OpenEdit::Yaml(edit));
+        cx.notify();
+    }
+
+    /// Opens the New view for `kind` on the active cluster, with the kind's template for the first
+    /// namespace of the scope. The header button ends here, after the gate said yes; the gate is read
+    /// again because the button may be a moment old.
+    pub(crate) fn open_create(
+        &mut self,
+        kind: ObjectKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = action_label(ResourceAction::CreateObject(kind));
+        // One edit at a time: the header buttons are behind the editor while one is open.
+        if self.edit.is_some() {
+            return;
+        }
+        let Some(cluster) = self.active_cluster() else {
+            return;
+        };
+        let (name, template) = {
+            let (Some(guard), Some(live)) =
+                (self.guard_for(&cluster, cx), self.slot_live(&cluster, cx))
+            else {
+                notify(
+                    window,
+                    cx,
+                    unavailable_text(label, "the cluster is not open"),
+                );
+                return;
+            };
+            if let ActionAvailability::Disabled { reason } =
+                action_availability(ResourceAction::CreateObject(kind), &guard)
+            {
+                notify(window, cx, unavailable_text(label, &reason));
+                return;
+            }
+            let namespace = template_namespace(&live.scope);
+            (
+                SharedString::from(guard.display_name().to_owned()),
+                template_text(kind, namespace),
+            )
+        };
+        let Some(template) = template else {
+            notify(
+                window,
+                cx,
+                unavailable_text(label, "this object cannot be created here"),
+            );
+            return;
+        };
+        self.close_value_popover(cx);
+        let shell = cx.weak_entity();
+        let view =
+            cx.new(|cx| ObjectCreateView::new(shell, cluster, name, kind, template, window, cx));
+        view.update(cx, |view, cx| view.focus_editor(window, cx));
+        self.edit = Some(OpenEdit::Create(view));
         cx.notify();
     }
 
@@ -291,11 +386,11 @@ impl AppShell {
         cx.notify();
     }
 
-    /// `Unsaved changes to Deployment/payments/api` when the open edit belongs to one of `leaving`
-    /// and holds changes; a clean edit just closes with its cluster.
+    /// `Unsaved changes to Deployment/payments/api` (or `Unsaved new ConfigMap`) when the open edit
+    /// belongs to one of `leaving` and holds changes; a clean edit just closes with its cluster.
     pub(super) fn unsaved_edit_of(&self, leaving: &[ClusterRef], cx: &App) -> Option<String> {
         let edit = self.edit.as_ref()?;
-        (edit.is_dirty(cx) && leaving.contains(edit.cluster(cx))).then(|| edit.subject_text(cx))
+        (edit.is_dirty(cx) && leaving.contains(edit.cluster(cx))).then(|| edit.leaving_line(cx))
     }
 
     /// Whether the open edit holds text that was not applied.
@@ -330,17 +425,22 @@ impl AppShell {
         let then: Rc<RefCell<Option<AfterDiscard>>> = Rc::new(RefCell::new(Some(Box::new(then))));
         let (handle, shell) = (self.window, cx.weak_entity());
         cx.defer(move |cx| {
-            let name = shell
+            let asked = shell
                 .read_with(cx, |shell, cx| {
-                    shell.edit.as_ref().map(|edit| edit.subject_text(cx))
+                    shell
+                        .edit
+                        .as_ref()
+                        .map(|edit| (edit.subject_text(cx), edit.discard_title(cx)))
                 })
                 .ok()
                 .flatten();
-            let Some(name) = name else {
+            #[cfg(test)]
+            if let Some((subject, _)) = &asked {
+                let _ = shell.update(cx, |shell, _| shell.last_discard = Some(subject.clone()));
+            }
+            let Some((_, title)) = asked else {
                 return;
             };
-            #[cfg(test)]
-            let _ = shell.update(cx, |shell, _| shell.last_discard = Some(name.clone()));
             let _ = cx.update_window(handle, |_, window, cx| {
                 let discard: Rc<dyn Fn(&mut App)> = Rc::new(move |cx| {
                     let then = then.borrow_mut().take();
@@ -364,7 +464,7 @@ impl AppShell {
                         cx,
                     )
                 });
-                let title = SharedString::from(format!("Discard changes to {name}?"));
+                let title = SharedString::from(title);
                 window.open_alert_dialog(cx, move |alert, _, _| {
                     let discard = Rc::clone(&discard);
                     alert
@@ -416,6 +516,51 @@ impl AppShell {
         }
     }
 
+    /// A commit of the New view finished (spec 0042): success closes the view and shows the kind's
+    /// screen, where the watch adds the new row (no cursor move, decision 11); a failure is shown
+    /// in the view. The success notice comes from the write flow's own arm, so nothing is pushed
+    /// here.
+    pub(super) fn create_commit_finished(
+        &mut self,
+        intent: &WriteIntent,
+        result: &Result<WriteOutcome, CheckedWriteError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(OpenEdit::Create(view)) = self.edit.clone() else {
+            return;
+        };
+        // Another view may have been opened since; this commit's result is not for it.
+        let is_ours = {
+            let view = view.read(cx);
+            view.cluster() == &intent.cluster
+                && intent.action == ResourceAction::CreateObject(view.kind())
+        };
+        if !is_ours {
+            return;
+        }
+        match result {
+            Ok(_) => {
+                let kind = view.read(cx).kind();
+                self.close_edit(cx);
+                let screen = ResourceKind::ALL
+                    .into_iter()
+                    .find(|resource| resource.builtin_object() == Some(kind))
+                    .map(Screen::Kind);
+                // The `New` button is on the kind's own screen, so this is normally the screen
+                // already; showing it again would clear the cursor.
+                if let Some(screen) = screen
+                    && self.screen != screen
+                {
+                    self.show_screen(screen, cx);
+                }
+            }
+            Err(error) => {
+                let failure: EditFailure = edit_failure_of(error);
+                view.update(cx, |view, cx| view.commit_failed(failure, cx));
+            }
+        }
+    }
+
     /// Whether an edit is open: the keys that move the hidden cursor do nothing then.
     pub(crate) fn is_editing(&self) -> bool {
         self.edit.is_some()
@@ -458,6 +603,22 @@ impl AppShell {
         };
         let edit = cx.new(|cx| YamlEditView::fixture(shell, subject, tab, window, cx));
         self.edit = Some(OpenEdit::Yaml(edit));
+        cx.notify();
+    }
+}
+
+#[cfg(feature = "screenshot")]
+impl AppShell {
+    /// `--screen new-config-map`: the New view of a ConfigMap from fixed data, over a fixed
+    /// cluster. It waits for no cluster and sends nothing.
+    pub(super) fn open_create_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::screenshot::{SHELL_FIXTURE_CLUSTER, shell_fixture_target};
+        let shell = cx.weak_entity();
+        let cluster = shell_fixture_target().cluster;
+        let view = cx.new(|cx| {
+            ObjectCreateView::fixture(shell, cluster, SHELL_FIXTURE_CLUSTER.into(), window, cx)
+        });
+        self.edit = Some(OpenEdit::Create(view));
         cx.notify();
     }
 }

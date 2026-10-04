@@ -299,6 +299,7 @@ impl AppShell {
                 effect: WriteEffect::Created,
                 created_name: None,
                 uid: None,
+                dropped_fields: Vec::new(),
             })
         };
         let Some(proof) = confirmed(&DryRunState::NotSupported, TypedMatch::NotNeeded, 0) else {

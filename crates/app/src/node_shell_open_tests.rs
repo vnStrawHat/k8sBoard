@@ -469,7 +469,7 @@ fn s_on_a_node_menu_and_palette_share_the_arm(cx: &mut TestAppContext) {
     );
     assert_eq!(
         ResourceAction::OpenNodeShell.row_action(),
-        RowAction::OpenShell
+        Some(RowAction::OpenShell)
     );
     // And the arm opens the options dialog for the cursor node, in the cursor's own cluster.
     debugs.fixture.shell.update(cx, |shell, _| {

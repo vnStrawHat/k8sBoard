@@ -67,6 +67,7 @@ impl ClusterConnection {
 | `EvictPod`, `SetNodeTaints`, `SetNodeLabels` | POST (eviction), PATCH (merge) | 0034 write-operations.md | 0034 write-operations.md | yes | 0034 |
 | `SetHpaReplicaRange`, `ExpandClaim`, `SetDefaultStorageClass` | PATCH (merge) | 0032b operations.md | 0032b operations.md | yes | 0032b |
 | `SetDataValues` | PATCH (merge, `application/merge-patch+json`) | `{path}/{name}?dryRun=All&fieldManager=k8sboard` (commit: `?fieldManager=k8sboard`) | base `resourceVersion` + changed keys of `data` / `binaryData` (`null` removes); Secret text base64, no `stringData` | yes (query) | 0047 |
+| `CreateObject` | POST (`application/json`) | `{collection path}?dryRun=All&fieldManager=k8sboard` (commit: `?fieldManager=k8sboard`) | the draft: Namespace, ConfigMap, ResourceQuota, PodDisruptionBudget, RoleBinding only; no `status` or server metadata; the path comes from the kind, never from the text | yes (query) | 0042 |
 | `pods/portforward` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/portforward?ports={p}` | stream | no | 0035 step 1 (`port_forward.rs`) |
 | `pods/exec` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/exec?…` | stream | no | 0036 step 1 (`pod_shell.rs`) |
 | `AddDebugContainer`, `CreateNodeShellPod`, `DeleteNodeShellPod` | PATCH (strategic) `ephemeralcontainers`, POST pod, DELETE pod | 0037 pod-specs.md | 0037 pod-specs.md | yes, yes, no (delete is commit only) | 0037 step 1 |

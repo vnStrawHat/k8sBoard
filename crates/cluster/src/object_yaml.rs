@@ -421,7 +421,7 @@ impl ClusterConnection {
     }
 }
 
-fn api_resource(kind: ObjectKind) -> ApiResource {
+pub(crate) fn api_resource(kind: ObjectKind) -> ApiResource {
     match kind {
         ObjectKind::Pod => ApiResource::erase::<Pod>(&()),
         ObjectKind::Node => ApiResource::erase::<Node>(&()),

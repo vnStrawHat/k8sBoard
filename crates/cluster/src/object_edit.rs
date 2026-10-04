@@ -23,7 +23,7 @@ const HELM_RELEASE: &str = "the object is a Helm release record and cannot be ed
 /// The `type` of the Secret that stores a Helm release.
 pub(crate) const HELM_RELEASE_TYPE: &str = "helm.sh/release.v1";
 /// Owned by the server (0031 decision 12): never shown in the editor, stripped when typed back.
-const SERVER_METADATA: [&str; 8] = [
+pub(crate) const SERVER_METADATA: [&str; 8] = [
     "managedFields",
     "resourceVersion",
     "uid",
@@ -373,14 +373,14 @@ pub fn rebase(old: &EditBase, text: &str, new: &EditBase) -> Result<Rebased, Edi
 
 /// Refuses a text that has a number with a leading zero: the parser reads `0444` as decimal 444,
 /// so writing the text again would erase what the warning of `leading_zero_lines` says.
-fn refuse_leading_zero(text: &str) -> Result<(), EditError> {
+pub(crate) fn refuse_leading_zero(text: &str) -> Result<(), EditError> {
     match leading_zero_lines(text).first() {
         Some(line) => Err(EditError::LeadingZero { line: *line }),
         None => Ok(()),
     }
 }
 
-fn parse_mapping(text: &str) -> Result<Value, EditError> {
+pub(crate) fn parse_mapping(text: &str) -> Result<Value, EditError> {
     if text.len() > MAX_EDIT_BYTES {
         return Err(EditError::TooLarge);
     }

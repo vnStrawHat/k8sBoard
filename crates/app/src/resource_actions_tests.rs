@@ -326,7 +326,10 @@ fn node_editors_are_offered_on_nodes_only_and_uncordon_has_no_key() {
         subject_action(RowAction::Cordon, &node_key()),
         Some(ResourceAction::Cordon)
     );
-    assert_eq!(ResourceAction::Uncordon.row_action(), RowAction::Cordon);
+    assert_eq!(
+        ResourceAction::Uncordon.row_action(),
+        Some(RowAction::Cordon)
+    );
 }
 
 #[test]
@@ -1522,7 +1525,7 @@ fn every_resource_action_has_a_row_action() {
     ];
     for (action, subject) in subjects {
         assert_eq!(
-            subject_action(action.row_action(), &subject),
+            subject_action(action.row_action().expect("a row action"), &subject),
             Some(action),
             "{action:?}"
         );
@@ -1548,6 +1551,7 @@ fn menu_hints_name_the_key_action() {
     assert!(
         ResourceAction::OpenNodeShell
             .row_action()
+            .expect("a row action")
             .key_action()
             .partial_eq(&OpenShell)
     );
@@ -2329,7 +2333,7 @@ fn delete_menu_hint_is_the_delete_key() {
     assert!(RowAction::Delete.key_action().partial_eq(&Delete));
     assert_eq!(
         ResourceAction::Delete(ObjectKind::Secret).row_action(),
-        RowAction::Delete
+        Some(RowAction::Delete)
     );
 }
 
@@ -2463,7 +2467,7 @@ fn the_debug_container_key_resolves_for_pods_only() {
     assert_eq!(subject_action(RowAction::DebugContainer, &node_key()), None);
     assert_eq!(
         ResourceAction::DebugContainer.row_action(),
-        RowAction::DebugContainer
+        Some(RowAction::DebugContainer)
     );
     assert_eq!(
         action_label(ResourceAction::DebugContainer),
@@ -2979,7 +2983,11 @@ fn view_logs_not_offered_on_services() {
 fn cron_job_view_logs_item_has_l_hint() {
     // The item carries the key action of `ResourceAction::ViewLogs`, which is L.
     assert_eq!(
-        ResourceAction::ViewLogs.row_action().key_action().name(),
+        ResourceAction::ViewLogs
+            .row_action()
+            .expect("a row action")
+            .key_action()
+            .name(),
         RowAction::ViewLogs.key_action().name()
     );
     // A CronJob row has a logs entry although it owns no pods.
@@ -3096,7 +3104,7 @@ fn edit_values_key_action_is_edit_values() {
     );
     assert_eq!(
         ResourceAction::EditValues(ObjectKind::Secret).row_action(),
-        RowAction::EditValues
+        Some(RowAction::EditValues)
     );
     assert_eq!(
         action_label(ResourceAction::EditValues(ObjectKind::Secret)),
@@ -3635,4 +3643,72 @@ fn a_removal_key_reads_the_gate_then_the_pod() {
     };
     assert_eq!(subject_action(RowAction::RestartPod, &node), None);
     assert_eq!(subject_action(RowAction::EvictPod, &node), None);
+}
+
+// ---- New from templates (spec 0042) ----
+
+#[test]
+fn the_new_button_is_a_gated_header_action_with_no_row() {
+    let action = ResourceAction::CreateObject(ObjectKind::ConfigMap);
+    assert_eq!(action.row_action(), None);
+    assert_eq!(action_label(action), "New ConfigMap");
+    assert_eq!(action_risk(action), ActionRisk::Change);
+    assert!(needs_confirm(action));
+    assert!(!is_planned(action));
+}
+
+fn create_gate(kind_access: &KindAccessMap, lock: WriteLock) -> ActionAvailability {
+    let access = known_denying(&[]);
+    let mut guard = test_guard(&access, lock, "dev-1", Environment::Development);
+    guard.kind_access = kind_access;
+    action_availability(ResourceAction::CreateObject(ObjectKind::ConfigMap), &guard)
+}
+
+fn create_report(kind: ObjectKind, is_allowed: bool) -> KindAccess {
+    let decision = if is_allowed {
+        AccessDecision::Allowed
+    } else {
+        AccessDecision::Denied { reason: None }
+    };
+    KindAccess::Known(AccessReport {
+        reviews: vec![AccessReview {
+            check: AccessCheck::Create(kind),
+            decision,
+        }],
+    })
+}
+
+#[test]
+fn new_button_disabled_with_gate_reason() {
+    let mut map = KindAccessMap::new();
+    assert_eq!(
+        reason(create_gate(&map, WriteLock::Unlocked)),
+        "Checking permissions…"
+    );
+    map.set(ObjectKind::ConfigMap, KindAccess::Unknown);
+    assert_eq!(
+        reason(create_gate(&map, WriteLock::Unlocked)),
+        "Permissions could not be checked"
+    );
+    map.set(
+        ObjectKind::ConfigMap,
+        create_report(ObjectKind::ConfigMap, false),
+    );
+    assert_eq!(
+        reason(create_gate(&map, WriteLock::Unlocked)),
+        "Not permitted: create configmaps"
+    );
+    map.set(
+        ObjectKind::ConfigMap,
+        create_report(ObjectKind::ConfigMap, true),
+    );
+    assert_eq!(
+        create_gate(&map, WriteLock::Unlocked),
+        ActionAvailability::Enabled
+    );
+    // The lock comes after the permission.
+    assert_eq!(
+        reason(create_gate(&map, WriteLock::Locked)),
+        "dev-1 is read-only"
+    );
 }

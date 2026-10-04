@@ -611,6 +611,19 @@ fn success_notice(label: &str, created: Option<&str>) -> String {
     }
 }
 
+/// `Created ConfigMap payments/new-config` (a Namespace has no `payments/`).
+fn create_success_notice(request: &WriteRequest) -> String {
+    let target = request.target();
+    match target.namespace() {
+        Some(namespace) => format!(
+            "Created {} {namespace}/{}",
+            target.kind_name(),
+            target.name()
+        ),
+        None => format!("Created {} {}", target.kind_name(), target.name()),
+    }
+}
+
 /// A commit failure the dialog shows in place, with a Retry that runs the dry-run again.
 pub(crate) fn retryable_text(error: &CheckedWriteError) -> Option<String> {
     match error {
@@ -1037,6 +1050,13 @@ impl AppShell {
                     shell.values_commit_finished(&intent, &result, cx)
                 });
             }
+            // A New object closes its view on success and shows a failure in place; the notice
+            // below is the write flow's own.
+            if matches!(intent.action, ResourceAction::CreateObject(_)) {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.create_commit_finished(&intent, &result, cx)
+                });
+            }
             finish_commit(&dialog, &intent, handle, result, cx);
         })
         .detach();
@@ -1060,10 +1080,13 @@ fn finish_commit(
     let result = result.map(|_| ());
     if let Err(error) = &result
         // A stale `resourceVersion` cannot pass a second time, so an edit never offers Retry: its
-        // editor rebases instead.
+        // editor rebases instead. A create never does either: after an unknown outcome a repeat
+        // reads as a 409, and after a refusal the text must change first (spec 0042 decision 12).
         && !matches!(
             intent.action,
-            ResourceAction::EditYaml(_) | ResourceAction::EditValues(_)
+            ResourceAction::EditYaml(_)
+                | ResourceAction::EditValues(_)
+                | ResourceAction::CreateObject(_)
         )
         && let Some(text) = retryable_text(error)
         && dialog
@@ -1083,6 +1106,9 @@ fn finish_commit(
             let target = intent.request.target();
             let count = intent.request.changed_fields().len();
             values_success_notice(target.kind_name(), target.name(), count)
+        }
+        Ok(()) if matches!(intent.action, ResourceAction::CreateObject(_)) => {
+            create_success_notice(&intent.request)
         }
         Ok(()) => success_notice(&label, created.as_deref()),
         Err(error) => failure_notice(&label, error),

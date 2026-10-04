@@ -206,6 +206,10 @@ mod app_shell_edit_tests;
 mod app_shell_values_edit_tests;
 
 #[cfg(test)]
+#[path = "app_shell_create_tests.rs"]
+mod app_shell_create_tests;
+
+#[cfg(test)]
 #[path = "app_shell_workload_tests.rs"]
 mod app_shell_workload_tests;
 
@@ -2060,6 +2064,12 @@ impl AppShell {
         #[cfg(feature = "screenshot")]
         if launch == LaunchScreen::ValuesEdit {
             self.open_values_fixture(window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::NewConfigMap {
+            self.open_create_fixture(window, cx);
             self.pending_dialog_launch = None;
             return;
         }

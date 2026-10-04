@@ -596,6 +596,7 @@ fn created(uid: Option<&str>) -> cluster::WriteOutcome {
         elapsed: Duration::ZERO,
         effect: cluster::WriteEffect::Created,
         created_name: Some("k8sboard-node-shell-wk-03-x7k2q".to_owned()),
+        dropped_fields: Vec::new(),
         uid: uid.map(str::to_owned),
     }
 }

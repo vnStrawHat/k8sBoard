@@ -187,6 +187,7 @@ fn done() -> Result<WriteOutcome, CheckedWriteError> {
         effect: cluster::WriteEffect::Patched,
         created_name: None,
         uid: None,
+        dropped_fields: Vec::new(),
     })
 }
 

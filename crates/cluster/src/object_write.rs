@@ -24,7 +24,7 @@ use crate::debug_pod_bodies::{
     DEBUG_CONTAINER_PREFIX, NODE_SHELL_PREFIX, NodeShellPod, debug_container_patch,
     is_container_name, is_label_value, is_valid_debug_image, node_shell_pod,
 };
-use crate::dns_name::{is_dns_subdomain, is_path_segment_name};
+use crate::dns_name::{is_dns_label, is_dns_subdomain, is_path_segment_name};
 use crate::edit_placeholders::{self, Restored};
 use crate::edit_preview::{EditPreview, build_preview};
 use crate::node::NodeTaint;
@@ -32,6 +32,7 @@ use crate::node_maintenance_bodies::{
     GracePeriod, LabelChange, are_valid_label_changes, are_valid_taints, eviction_body,
     is_valid_uid, labels_patch, taints_patch,
 };
+use crate::object_create::{ObjectDraft, is_valid_name, missing_paths};
 use crate::object_edit::{ObjectEdit, is_helm_release};
 use crate::object_yaml::{ObjectKind, ObjectRef};
 use crate::quantity::ByteAmount;
@@ -136,6 +137,9 @@ pub enum WriteOperation {
     /// Merge patch of the changed keys of a ConfigMap or Secret, guarded by the base
     /// `resourceVersion` (0047). The edit holds new values: nothing prints it.
     SetDataValues(Box<ValuesEdit>),
+    /// `POST` of a new object of a creatable kind (0042). The draft holds user text: nothing
+    /// prints it.
+    CreateObject(Box<ObjectDraft>),
 }
 
 impl WriteOperation {
@@ -161,6 +165,7 @@ impl WriteOperation {
             Self::SetNodeTaints { .. } => "SetNodeTaints",
             Self::SetNodeLabels { .. } => "SetNodeLabels",
             Self::SetDataValues(_) => "SetDataValues",
+            Self::CreateObject(_) => "CreateObject",
         }
     }
 }
@@ -255,6 +260,8 @@ pub struct WriteOutcome {
     pub effect: WriteEffect,
     pub created_name: Option<String>,
     pub uid: Option<String>,
+    /// Paths of the draft the server dropped (0042 decision 14); empty for every other operation.
+    pub dropped_fields: Vec<String>,
 }
 
 /// One field a write changes, for the confirm summary and the audit line. `None` means the value
@@ -473,6 +480,8 @@ impl WriteRequest {
                     value: None,
                 })
                 .collect(),
+            // Names and paths only: a ConfigMap value never reaches the dialog or the audit line.
+            WriteOperation::CreateObject(draft) => draft.changed_fields(),
         }
     }
 
@@ -499,7 +508,8 @@ impl WriteRequest {
             | WriteOperation::EvictPod { .. }
             | WriteOperation::SetNodeTaints { .. }
             | WriteOperation::SetNodeLabels { .. }
-            | WriteOperation::SetDataValues(_) => true,
+            | WriteOperation::SetDataValues(_)
+            | WriteOperation::CreateObject(_) => true,
         }
     }
 }
@@ -528,6 +538,10 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
             ref resource_version,
         } if resource_version.is_empty() || !are_valid_taints(taints) => None,
         WriteOperation::SetNodeLabels { ref changes } if !are_valid_label_changes(changes) => None,
+        // A draft is checked again here: its body must still agree with its target (0042 decision 5).
+        WriteOperation::CreateObject(draft) => draft
+            .is_consistent()
+            .then_some(WriteOperation::CreateObject(draft)),
         // Listed one by one, not as `other`: a new operation does not compile until it gets a
         // validation decision here.
         operation @ (WriteOperation::SetNodeSchedulable { .. }
@@ -597,6 +611,11 @@ fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Optio
             WriteOperation::SetDataValues(edit),
             kind @ (ObjectKind::ConfigMap | ObjectKind::Secret),
         ) if edit.target() == target => AccessCheck::Patch(kind),
+        (WriteOperation::CreateObject(draft), kind)
+            if draft.target() == target && kind.is_creatable() =>
+        {
+            AccessCheck::Create(kind)
+        }
         (WriteOperation::AddDebugContainer { .. }, ObjectKind::Pod) => {
             AccessCheck::PatchPodEphemeralContainers
         }
@@ -630,7 +649,15 @@ fn is_safe_path(target: &ObjectRef, operation: &WriteOperation) -> bool {
         WriteOperation::ReplaceObject(_) | WriteOperation::DeleteObject { .. } if is_rbac => {
             is_path_segment_name(target.name())
         }
+        WriteOperation::CreateObject(_) => target
+            .builtin_kind()
+            .is_some_and(|kind| is_valid_name(kind, target.name())),
         _ => is_dns_subdomain(target.name()),
+    };
+    // A created object's namespace is in both the path and the body: a DNS label.
+    let is_safe_namespace = match operation {
+        WriteOperation::CreateObject(_) => target.namespace().is_none_or(is_dns_label),
+        _ => target.namespace().is_none_or(is_dns_subdomain),
     };
     let is_safe_replica_set = match operation {
         WriteOperation::RollBackDeployment { replica_set, .. } => is_dns_subdomain(replica_set),
@@ -638,7 +665,7 @@ fn is_safe_path(target: &ObjectRef, operation: &WriteOperation) -> bool {
     };
     is_safe_name
         && is_safe_replica_set
-        && target.namespace().is_none_or(is_dns_subdomain)
+        && is_safe_namespace
         && is_fit_debug_operation(target, operation)
 }
 
@@ -730,6 +757,7 @@ struct Answer {
     effect: WriteEffect,
     created_name: Option<String>,
     uid: Option<String>,
+    dropped_fields: Vec<String>,
 }
 
 impl Answer {
@@ -742,6 +770,7 @@ impl Answer {
             effect,
             created_name: None,
             uid: None,
+            dropped_fields: Vec::new(),
         }
     }
 
@@ -768,6 +797,7 @@ impl Answer {
             effect: WriteEffect::Created,
             created_name,
             uid: committed_uid(object, mode),
+            dropped_fields: Vec::new(),
         }
     }
 }
@@ -830,6 +860,7 @@ impl ClusterConnection {
             effect: answer.effect,
             created_name: answer.created_name,
             uid: answer.uid,
+            dropped_fields: answer.dropped_fields,
         })
     }
 
@@ -917,6 +948,7 @@ impl ClusterConnection {
                     effect: WriteEffect::Replaced(preview),
                     created_name: None,
                     uid,
+                    dropped_fields: Vec::new(),
                 })
             }
             WriteOperation::DeleteObject { uid, propagation } => {
@@ -973,6 +1005,7 @@ impl ClusterConnection {
                     effect: WriteEffect::Created,
                     created_name: created.metadata.name.clone().filter(|_| is_commit),
                     uid: created.metadata.uid.clone().filter(|_| is_commit),
+                    dropped_fields: Vec::new(),
                 })
             }
             WriteOperation::EvictPod { uid, grace } => {
@@ -1016,6 +1049,24 @@ impl ClusterConnection {
                 self.settle(request, mode, sent)?;
                 Ok(Answer::patched())
             }
+            WriteOperation::CreateObject(draft) => {
+                // `api` addresses the collection of the target's kind, never a path from the text.
+                let body = serde_json::from_value::<DynamicObject>(draft.body().clone())
+                    .map_err(|_| self.unusable_object(mode))?;
+                let sent = run_raw(api.create(&post_params(mode), &body)).await;
+                let created = self.settle(request, mode, sent)?;
+                let answer =
+                    serde_json::to_value(&created).map_err(|_| self.unusable_object(mode))?;
+                // The answer holds the data of a ConfigMap: only paths are read, then it is dropped.
+                let dropped_fields = missing_paths(draft.body(), &answer)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect();
+                Ok(Answer {
+                    dropped_fields,
+                    ..Answer::created(&created, mode)
+                })
+            }
             WriteOperation::DeleteNodeShellPod { uid } => {
                 let pods = self.pod_api(&request.target, mode)?;
                 let delete = DeleteParams {
@@ -1032,6 +1083,7 @@ impl ClusterConnection {
                     effect: WriteEffect::Deleted,
                     created_name: None,
                     uid: None,
+                    dropped_fields: Vec::new(),
                 })
             }
             WriteOperation::SetHpaReplicaRange { min, max } => {
@@ -1234,6 +1286,9 @@ impl ClusterConnection {
                 {
                     return error;
                 }
+                if let Some(error) = create_failure(request, &status) {
+                    return error;
+                }
                 error_from_status(self.context(), mode, request.target.kind_name(), *status)
             }
             // These fail while the request is built, before anything is sent.
@@ -1278,6 +1333,27 @@ fn unprocessable(operation: &WriteOperation, status: &Status) -> Option<WriteErr
         WriteOperation::TriggerCronJob | WriteOperation::RerunJob => Some(WriteError::Invalid {
             message: REJECTED_OBJECT.to_owned(),
             fields: cause_fields(status),
+        }),
+        _ => None,
+    }
+}
+
+/// The two answers of a create that read wrong as the generic mapping (0042 decision 6): a 409
+/// `AlreadyExists` is not "changed since it was read", and the 404 of a POST means its namespace
+/// is missing, not that "the object no longer exists".
+fn create_failure(request: &WriteRequest, status: &Status) -> Option<WriteError> {
+    if !matches!(request.operation, WriteOperation::CreateObject(_)) {
+        return None;
+    }
+    let target = &request.target;
+    match (status.code, target.namespace()) {
+        (409, _) if status.reason == "AlreadyExists" => Some(WriteError::Invalid {
+            message: format!("{} {} already exists", target.kind_name(), target.name()),
+            fields: vec!["metadata.name".to_owned()],
+        }),
+        (404, Some(namespace)) => Some(WriteError::Invalid {
+            message: format!("The namespace {namespace} does not exist"),
+            fields: vec!["metadata.namespace".to_owned()],
         }),
         _ => None,
     }
@@ -1467,3 +1543,8 @@ mod object_write_resource_edit_tests;
 #[allow(clippy::disallowed_methods)]
 #[path = "object_write_values_tests.rs"]
 mod object_write_values_tests;
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+#[path = "object_write_create_tests.rs"]
+mod object_write_create_tests;

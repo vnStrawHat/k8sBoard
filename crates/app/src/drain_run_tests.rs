@@ -58,6 +58,7 @@ fn ok() -> Result<WriteOutcome, CheckedWriteError> {
         effect: WriteEffect::Created,
         created_name: None,
         uid: None,
+        dropped_fields: Vec::new(),
     })
 }
 

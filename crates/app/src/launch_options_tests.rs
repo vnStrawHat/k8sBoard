@@ -1126,3 +1126,14 @@ fn screen_edit_yaml_history_parses() {
     assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
     assert!(USAGE.contains("edit-yaml-history"));
 }
+
+#[test]
+fn screen_new_config_map_parses() {
+    let screen = run_options(&["--screen", "new-config-map"]).screen;
+    assert_eq!(screen, LaunchScreen::NewConfigMap);
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::ConfigMaps));
+    // Opened from fixed data once the shell renders, and it selects no row.
+    assert!(screen.opens_dialog());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("new-config-map"));
+}

@@ -1709,7 +1709,9 @@ impl ClusterSession {
             is_delete_allowed = matches!(&access, KindAccess::Known(report) if report.is_allowed(AccessCheck::Delete(kind))),
             // False for a kind whose values are not edited: the check was not asked (spec 0047).
             is_patch_allowed = matches!(&access, KindAccess::Known(report) if report.is_allowed(AccessCheck::Patch(kind))),
-            "delete and patch permission of the kind"
+            // False for a kind with no `New` button: the check was not asked (spec 0042).
+            is_create_allowed = matches!(&access, KindAccess::Known(report) if report.is_allowed(AccessCheck::Create(kind))),
+            "delete, patch, and create permission of the kind"
         );
         live.kind_access.set(kind, access);
         cx.notify();

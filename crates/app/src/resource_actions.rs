@@ -72,6 +72,9 @@ pub(crate) enum ResourceAction {
     EditYaml(ObjectKind),
     /// The key and value editor of a ConfigMap or Secret; carries the kind of the row (spec 0047).
     EditValues(ObjectKind),
+    /// Carries the kind of the new object: the `New` header button of its screen (spec 0042). It
+    /// has no row and no key.
+    CreateObject(ObjectKind),
     /// Carries the kind of the row: every built-in kind but a Helm release is deleted (spec 0033).
     Delete(ObjectKind),
     /// Carries the kind of the row: Deployments, StatefulSets, and DaemonSets restart.
@@ -300,6 +303,10 @@ impl ResourceAction {
                 checks: vec![AccessCheck::Patch(kind)],
                 is_shipped: true,
             },
+            Self::CreateObject(kind) => ActionGate::Mutating {
+                checks: vec![AccessCheck::Create(kind)],
+                is_shipped: true,
+            },
             Self::Delete(kind) => ActionGate::Mutating {
                 checks: vec![AccessCheck::Delete(kind)],
                 is_shipped: true,
@@ -334,9 +341,9 @@ impl ResourceAction {
     }
 
     /// The kind-less name the key layer, menus, and palette know the action by. The node shell
-    /// shares the key of the pod shell.
-    pub(crate) fn row_action(self) -> RowAction {
-        match self {
+    /// shares the key of the pod shell. `None` for the `New` header button, which has no row.
+    pub(crate) fn row_action(self) -> Option<RowAction> {
+        let row = match self {
             Self::ViewLogs => RowAction::ViewLogs,
             Self::OpenShell | Self::OpenNodeShell => RowAction::OpenShell,
             Self::DebugContainer => RowAction::DebugContainer,
@@ -363,7 +370,9 @@ impl ResourceAction {
             Self::EditHpaRange => RowAction::EditHpaRange,
             Self::ExpandClaim => RowAction::ExpandClaim,
             Self::SetDefaultStorageClass => RowAction::SetDefaultStorageClass,
-        }
+            Self::CreateObject(_) => return None,
+        };
+        Some(row)
     }
 }
 
@@ -443,6 +452,7 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::ViewYaml
         | ResourceAction::EditYaml(_)
         | ResourceAction::EditValues(_)
+        | ResourceAction::CreateObject(_)
         | ResourceAction::RestartRollout(_)
         | ResourceAction::Scale(_)
         | ResourceAction::PauseRollout
@@ -474,6 +484,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::ViewYaml => "View YAML",
         ResourceAction::EditYaml(_) => "Edit YAML",
         ResourceAction::EditValues(_) => "Edit values",
+        ResourceAction::CreateObject(kind) => create_label(kind),
         ResourceAction::Delete(_) => "Delete",
         ResourceAction::RestartRollout(_) => "Restart rollout",
         ResourceAction::RestartPod => "Restart pod",
@@ -487,6 +498,18 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::EditHpaRange => "Edit min / max",
         ResourceAction::ExpandClaim => "Expand",
         ResourceAction::SetDefaultStorageClass => "Set as default",
+    }
+}
+
+/// `New ConfigMap`: the label of a `New` button in notices (the creatable kinds only).
+fn create_label(kind: ObjectKind) -> &'static str {
+    match kind {
+        ObjectKind::Namespace => "New Namespace",
+        ObjectKind::ConfigMap => "New ConfigMap",
+        ObjectKind::ResourceQuota => "New ResourceQuota",
+        ObjectKind::PodDisruptionBudget => "New PodDisruptionBudget",
+        ObjectKind::RoleBinding => "New RoleBinding",
+        _ => "New object",
     }
 }
 
@@ -571,10 +594,10 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         | RowAction::EditHpaRange
         | RowAction::ExpandClaim
         | RowAction::SetDefaultStorageClass => match subject {
-            ResourceKey::Kind { kind, .. } => kind
-                .read_only_actions()
-                .iter()
-                .find_map(|item| item.action.filter(|action| action.row_action() == row)),
+            ResourceKey::Kind { kind, .. } => kind.read_only_actions().iter().find_map(|item| {
+                item.action
+                    .filter(|action| action.row_action() == Some(row))
+            }),
             ResourceKey::Pod { .. } | ResourceKey::Node { .. } => None,
         },
         RowAction::CopyName => Some(ResourceAction::CopyName),
@@ -894,17 +917,18 @@ fn permission_reason(
     let mut denied = None;
     for check in checks {
         let report = match check {
-            AccessCheck::Update(kind) | AccessCheck::Delete(kind) | AccessCheck::Patch(kind) => {
-                match kind_access.get(*kind) {
-                    None | Some(KindAccess::Checking { .. }) => {
-                        return Some("Checking permissions…".into());
-                    }
-                    Some(KindAccess::Unknown) => {
-                        return Some("Permissions could not be checked".into());
-                    }
-                    Some(KindAccess::Known(report)) => report,
+            AccessCheck::Update(kind)
+            | AccessCheck::Delete(kind)
+            | AccessCheck::Patch(kind)
+            | AccessCheck::Create(kind) => match kind_access.get(*kind) {
+                None | Some(KindAccess::Checking { .. }) => {
+                    return Some("Checking permissions…".into());
                 }
-            }
+                Some(KindAccess::Unknown) => {
+                    return Some("Permissions could not be checked".into());
+                }
+                Some(KindAccess::Known(report)) => report,
+            },
             _ => match access {
                 AccessState::Checking { .. } => return Some("Checking permissions…".into()),
                 AccessState::Unknown => {
@@ -1211,7 +1235,7 @@ fn pod_removal_item(
         },
         disabled => disabled,
     };
-    match availability {
+    let item = match availability {
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
         ActionAvailability::Enabled if action == ResourceAction::RestartPod => {
             PopupMenuItem::element(move |_, cx| {
@@ -1229,8 +1253,8 @@ fn pod_removal_item(
             })
         }
         ActionAvailability::Enabled => PopupMenuItem::new(label),
-    }
-    .action(action.row_action().key_action())
+    };
+    keyed(item, action)
 }
 
 /// The Attach item of a pod menu. It has no `on_click`: the menu dispatches the key action, which
@@ -1556,7 +1580,7 @@ fn open_node_shell_item(node: &NodeSummary, guard: &ClusterGuard<'_>) -> PopupMe
         ActionAvailability::Enabled => PopupMenuItem::new(label),
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
     }
-    .action(ResourceAction::OpenNodeShell.row_action().key_action())
+    .action(RowAction::OpenShell.key_action())
 }
 
 /// Switches to Pods with only the pods of the node. Always enabled, even for an empty node.
@@ -2843,11 +2867,11 @@ fn action_item(action: ResourceAction, guard: &ClusterGuard<'_>) -> PopupMenuIte
         ResourceAction::EditLabels => "Edit labels…",
         _ => action_label(action),
     };
-    match action_availability(action, guard) {
+    let item = match action_availability(action, guard) {
         ActionAvailability::Enabled => PopupMenuItem::new(label),
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
-    }
-    .action(action.row_action().key_action())
+    };
+    keyed(item, action)
 }
 
 /// The gate first, then the state of this row: the lock and the permissions win over a paused
@@ -2878,11 +2902,19 @@ fn row_action_item(
     replica_sets: Option<&[ReplicaSetSummary]>,
 ) -> PopupMenuItem {
     let label = state_label(action, label, object);
-    match row_availability(action, guard, object, replica_sets) {
+    let item = match row_availability(action, guard, object, replica_sets) {
         ActionAvailability::Enabled => PopupMenuItem::new(label),
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
+    };
+    keyed(item, action)
+}
+
+/// `item` with the key hint of `action`: a menu item of a row action shows its key.
+fn keyed(item: PopupMenuItem, action: ResourceAction) -> PopupMenuItem {
+    match action.row_action() {
+        Some(row) => item.action(row.key_action()),
+        None => item,
     }
-    .action(action.row_action().key_action())
 }
 
 /// A `PopupMenuItem` has no tooltip, so the reason sits under the label in smaller text.

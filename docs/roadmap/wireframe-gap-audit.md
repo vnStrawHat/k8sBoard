@@ -25,7 +25,7 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W7 Deployments | Revision diff ("history with diff and rollback") | Done (0039; rollback 0032) | `revision_diff.rs`, `pod_template_yaml` | — |
 | W7 CronJobs | View logs of last job | Done (0039; key L on the workload kinds too) | `last_job_owner` in `kind_join.rs` | — |
 | W7 ConfigMaps | Compare with previous | dropped (user, 2026-10-03) | 0041 non-goals (the "restart the workload" hint is Done in 0039) | — |
-| W7 5 kinds | New (Namespace, ConfigMap, ResourceQuota, PDB, RoleBinding) | missing | 0031 non-goal ("templates") | M |
+| W7 5 kinds | New (Namespace, ConfigMap, ResourceQuota, PDB, RoleBinding) | Done (0042: a YAML template in the edit slot, server dry-run, tiered confirm, narrow `CreateObject` write) | [as-built](../specs/0042-new-from-templates/as-built.md), `object_create.rs`, `object_create_view.rs` | - |
 | W7 Secrets, ConfigMaps | Edit values (E on the two screens; Edit YAML stays in the menu) | Done (0047; masked write-only Secret fields, merge patch with the base `resourceVersion`) | [as-built](../specs/0047-config-secret-values/README.md), `values_edit.rs`, `config_values.rs` | — |
 | W7 ResourceQuotas | `Edit` shown disabled next to a working `Edit YAML` | Done (0039: the placeholder is gone) | `resource_kind.rs` RESOURCE_QUOTAS | — |
 | W7 Namespaces | Quota section LimitRange row | Done (0039) | `limit_range.rs`, `AccessCheck::ListLimitRanges`, `namespace_quota_rows` | — |
@@ -82,7 +82,7 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | 2 | 0040 Pod lifecycle | Evict (0034 `EvictPod`), Restart pod (controller-owned only, 0033 delete), Attach (A, `create pods/attach` in `pod_shell.rs`), drain Skip PDBs, bulk node labels | new, after 0034 merges | mutating | M |
 | 3 | 0046 One cluster at a time | remove multi-cluster mode (0027 multi view); 0045 dropped (user decision 2026-10-03) | new | local, no new request | M |
 | 4 | 0041 Edit YAML II | **Built 2026-10-04** (Revision history, quota check, timeline "who" and diff); snapshot, rollback, ConfigMap Compare, and the managedFields toggle dropped or not planned | done | read-only | L |
-| 5 | 0042 Create from templates | New for the 5 kinds; a `Create` `WriteOperation` | new | mutating | M |
+| 5 | 0042 Create from templates | **Built 2026-10-04** (New for the 5 kinds; `WriteOperation::CreateObject`; Secrets deferred) | done | mutating | M |
 | 6 | 0043 Settings completions (Done) | General, Logs, Terminal & Shell pages (content needs the user), density, drag order, Search, color, Proxy, watch folder (C6 dependency) | new | local | L |
 | 7 | 0044 Dock completions (done) | dashed line, double-click reset, saved `dock.height`, `SYS` lines, histogram brush, Pop out | new | local | M |
 | 8 | 0029 step 5 (done) | action × resource results, highlight, `@` namespace carry | amend 0029 | local | M |

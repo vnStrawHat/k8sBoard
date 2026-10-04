@@ -741,8 +741,14 @@ impl ConfirmDialog {
             Some(namespace) => format!("{namespace}/{}", target.name()),
             None => target.name().to_owned(),
         };
-        let count = intent.request.changed_fields().len();
-        let unit = if count == 1 { "field" } else { "fields" };
+        // A create changes no existing object: its fields are listed below, so the row says `new`.
+        let count_text = if matches!(intent.action, ResourceAction::CreateObject(_)) {
+            "new".to_owned()
+        } else {
+            let count = intent.request.changed_fields().len();
+            let unit = if count == 1 { "field" } else { "fields" };
+            format!("{count} {unit} changed")
+        };
         Some(
             h_flex()
                 .gap_2()
@@ -759,7 +765,7 @@ impl ConfirmDialog {
                     div()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(format!("{count} {unit} changed")),
+                        .child(count_text),
                 )
                 .into_any_element(),
         )

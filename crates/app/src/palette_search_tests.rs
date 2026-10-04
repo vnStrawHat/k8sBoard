@@ -1302,7 +1302,10 @@ fn object_tokens_leave_out_the_tokens_that_name_an_action() {
 #[test]
 fn the_pair_label_actions_are_all_pairable() {
     for action in PAIR_LABEL_ACTIONS {
-        assert!(is_pairable(action.row_action()), "{action:?}");
+        assert!(
+            is_pairable(action.row_action().expect("a row action")),
+            "{action:?}"
+        );
     }
 }
 

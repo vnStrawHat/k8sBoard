@@ -200,6 +200,7 @@ fn dry_run_results_become_dialog_states() {
         effect: cluster::WriteEffect::Patched,
         created_name: None,
         uid: None,
+        dropped_fields: Vec::new(),
     };
     assert_eq!(dry_run_state_of(Ok(outcome)), PASSED);
     let state = |error| dry_run_state_of(Err(CheckedWriteError::Write(error)));
@@ -642,5 +643,29 @@ fn a_start_is_refused_by_its_gate_when_the_setting_is_off() {
     assert_eq!(
         intent.gate_block(&guard).as_deref(),
         Some("Node shell is off for stg-b (Settings › Clusters › Safety)")
+    );
+}
+
+fn create_request(kind: ObjectKind, text: &str) -> WriteRequest {
+    let draft = cluster::ObjectDraft::new(kind, text).expect("a valid draft");
+    WriteRequest::new(
+        draft.target().clone(),
+        WriteOperation::CreateObject(Box::new(draft)),
+    )
+    .expect("a creatable kind fits")
+}
+
+#[test]
+fn a_create_notice_names_the_kind_and_where_it_is() {
+    let config_map =
+        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: new-config\n  namespace: payments\n";
+    assert_eq!(
+        create_success_notice(&create_request(ObjectKind::ConfigMap, config_map)),
+        "Created ConfigMap payments/new-config"
+    );
+    let namespace = "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: team-a\n";
+    assert_eq!(
+        create_success_notice(&create_request(ObjectKind::Namespace, namespace)),
+        "Created Namespace team-a"
     );
 }

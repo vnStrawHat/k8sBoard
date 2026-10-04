@@ -711,3 +711,45 @@ fn a_skip_pdbs_commit_in_the_air_is_a_delete_line() {
         serde_json::json!({"path": "deleteOptions.propagationPolicy", "value": "Background"})
     );
 }
+
+#[test]
+fn audit_line_for_create() {
+    use crate::object_create_view::create_intent;
+    use cluster::{ObjectDraft, ObjectKind, WriteOperation, WriteRequest};
+
+    let text = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: new-config\n  namespace: payments\ndata:\n  PASSWORD: S3cr3t-0042\n";
+    let draft = ObjectDraft::new(ObjectKind::ConfigMap, text).expect("a valid draft");
+    let request = WriteRequest::new(
+        draft.target().clone(),
+        WriteOperation::CreateObject(Box::new(draft)),
+    )
+    .expect("a creatable kind");
+    let cluster = crate::cluster_registry::ClusterRef {
+        kubeconfig: PathBuf::from("test.yaml"),
+        context: "stg-b".to_owned(),
+    };
+    let intent = create_intent(
+        &cluster,
+        &"stg-b".into(),
+        ObjectKind::ConfigMap,
+        request,
+        Vec::new(),
+    );
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let entry = audit_entry(&intent, &guard, AuditOutcome::Applied, None, None);
+    assert_eq!(entry.action, "Create");
+    let paths: Vec<_> = entry
+        .fields
+        .iter()
+        .map(|field| field.path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        ["metadata.name", "metadata.namespace", "data[PASSWORD]"]
+    );
+    // A ConfigMap records paths only: no field value, and no name either.
+    assert!(entry.fields.iter().all(|field| field.value.is_none()));
+    let json = serde_json::to_string(&entry).expect("a line");
+    assert!(!json.contains("S3cr3t-0042"), "{json}");
+}

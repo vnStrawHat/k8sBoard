@@ -1024,7 +1024,7 @@ impl AppShell {
         let Some(edit) = self.edit.clone() else {
             return;
         };
-        if edit.cluster(cx) == cluster && edit.object(cx) == object {
+        if edit.cluster(cx) == cluster && edit.object(cx) == Some(object) {
             edit.commit_failed(EditFailure::Deleted, cx);
         }
     }

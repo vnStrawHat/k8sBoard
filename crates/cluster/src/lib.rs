@@ -49,6 +49,7 @@ mod node;
 mod node_maintenance_bodies;
 mod node_shell_leftovers;
 mod object_count;
+mod object_create;
 mod object_edit;
 mod object_write;
 mod object_yaml;
@@ -151,6 +152,7 @@ pub use node::{
 };
 pub use node_maintenance_bodies::{GracePeriod, LabelChange};
 pub use node_shell_leftovers::{LeftoverPhase, NodeShellLeftover};
+pub use object_create::{DraftError, DraftWarning, ObjectDraft};
 pub use object_edit::{EditBase, EditError, ObjectEdit, Rebased, format_yaml, rebase};
 pub use object_write::{
     ChangedField, DeletePropagation, WriteEffect, WriteError, WriteMode, WriteOperation,

@@ -101,6 +101,8 @@ pub enum AccessCheck {
     Delete(ObjectKind),
     /// Edit values (0047): `patch` on the kind's resource. Lazy per kind, so not in `ALL`.
     Patch(ObjectKind),
+    /// New from templates (0042): `create` on the kind's resource. Lazy per kind, so not in `ALL`.
+    Create(ObjectKind),
 }
 
 /// The API resource a check asks about.
@@ -268,6 +270,10 @@ impl AccessCheck {
             Self::Patch(kind) => {
                 let (group, resource) = kind.resource();
                 ("patch", group, resource, None, kind.is_namespaced())
+            }
+            Self::Create(kind) => {
+                let (group, resource) = kind.resource();
+                ("create", group, resource, None, kind.is_namespaced())
             }
         };
         CheckTarget {

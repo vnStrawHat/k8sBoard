@@ -60,16 +60,14 @@ fn kind_access_includes_delete() {
 
 #[test]
 fn config_maps_and_secrets_also_ask_patch() {
-    for kind in [ObjectKind::ConfigMap, ObjectKind::Secret] {
-        assert_eq!(
-            lazy_checks(kind),
-            [
-                AccessCheck::Update(kind),
-                AccessCheck::Patch(kind),
-                AccessCheck::Delete(kind)
-            ]
-        );
-    }
+    assert_eq!(
+        lazy_checks(ObjectKind::Secret),
+        [
+            AccessCheck::Update(ObjectKind::Secret),
+            AccessCheck::Patch(ObjectKind::Secret),
+            AccessCheck::Delete(ObjectKind::Secret)
+        ]
+    );
     // No other kind asks for it: a merge patch of values exists for these two only.
     for kind in ObjectKind::ALL {
         if !matches!(kind, ObjectKind::ConfigMap | ObjectKind::Secret) {
@@ -78,5 +76,34 @@ fn config_maps_and_secrets_also_ask_patch() {
                 "{kind:?}"
             );
         }
+    }
+}
+
+#[test]
+fn lazy_checks_ask_create_for_creatable_kinds() {
+    let config_map = ObjectKind::ConfigMap;
+    assert_eq!(
+        lazy_checks(config_map),
+        [
+            AccessCheck::Update(config_map),
+            AccessCheck::Patch(config_map),
+            AccessCheck::Delete(config_map),
+            AccessCheck::Create(config_map)
+        ]
+    );
+    // Not editable, but creatable: delete, then create.
+    assert_eq!(
+        lazy_checks(ObjectKind::Namespace),
+        [
+            AccessCheck::Delete(ObjectKind::Namespace),
+            AccessCheck::Create(ObjectKind::Namespace)
+        ]
+    );
+    for kind in ObjectKind::ALL {
+        assert_eq!(
+            lazy_checks(kind).contains(&AccessCheck::Create(kind)),
+            kind.is_creatable(),
+            "{kind:?}"
+        );
     }
 }

@@ -39,7 +39,7 @@ Status words: **Done** (matches the wireframe), **Partial** (built, but parts ar
 | Overview (W3), Issues, Topology (W11) | Done (Issues in 0020; Overview in 0021, the default landing screen; Topology in 0022) | 0020, 0021, 0022 | — |
 | Settings (W2), multi-cluster (W1), env colors | Partial (settings store, cluster registry, env badge and border, saved sort and columns, default namespace done in 0024; Settings window with Clusters, Appearance, About done in 0025; cluster switcher with health probes and Ctrl 1–9 done in 0026; one cluster at a time by user decision 2026-10-03: the 0027 multi view is removed by 0046, 0045 dropped) | 0024, 0025, 0026, 0046 | 0046 |
 | Keyboard map, command palette (W9) | Done (keyboard map in 0028; command palette in 0029, with the deviations listed in inventory-shell P1) | 0028, 0029, 0032 (Ctrl ⏎) | audit: 0029 step 2 |
-| Every mutation: YAML edit (W10), drain (W6), shell, port-forward, delete | Partial (0030–0033, 0035–0037 built, 0047 Edit values built, 0041 history and quota built; New, pod lifecycle missing) | 0030–0033, 0035–0037, 0047 | 0034 (in build); audit 0040–0042 (0038 Helm writes deferred) |
+| Every mutation: YAML edit (W10), drain (W6), shell, port-forward, delete | Partial (0030–0033, 0035–0037 built, 0047 Edit values built, 0041 history and quota built, 0042 New built; pod lifecycle missing) | 0030–0033, 0035–0037, 0042, 0047 | 0034 (in build); audit 0040 (0038 Helm writes deferred) |
 
 ## Spec order (summary)
 
