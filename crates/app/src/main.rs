@@ -64,6 +64,8 @@ mod line_matcher;
 mod live_sections;
 mod log_buffer;
 mod log_filter;
+#[cfg(test)]
+mod log_fixtures;
 mod log_json;
 mod log_legend;
 mod log_level;
@@ -71,6 +73,7 @@ mod log_rows;
 mod log_tab;
 mod log_target;
 mod log_volume;
+mod log_window;
 mod log_workload;
 mod metrics_history;
 mod monitor_data;

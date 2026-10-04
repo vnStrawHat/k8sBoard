@@ -7,7 +7,7 @@ use gpui_kit::{
 };
 
 use crate::line_matcher::LineMatcher;
-use crate::log_buffer::{BufferedLine, format_log_time};
+use crate::log_buffer::{BufferedLine, LineKind, format_log_time};
 use crate::log_json::{JsonLine, json_line};
 use crate::log_level::LogLevel;
 use crate::status_tone::{StatusTone, tone_color};
@@ -38,7 +38,10 @@ pub(crate) struct RowStyle<'a> {
 pub(crate) fn log_row(line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let text = line.line.text.as_str();
-    let json = style.shows_json.then(|| json_line(text)).flatten();
+    let is_marker = line.kind == LineKind::Marker;
+    let json = (style.shows_json && !is_marker)
+        .then(|| json_line(text))
+        .flatten();
     let headline = match &json {
         Some(JsonLine {
             headline: Some(headline),
@@ -50,6 +53,7 @@ pub(crate) fn log_row(line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyEle
     let shown = if headline.is_empty() { " " } else { headline };
     let highlights: Vec<_> = style
         .matcher
+        .filter(|_| !is_marker)
         .map(|matcher| matcher.ranges(shown))
         .unwrap_or_default()
         .into_iter()
@@ -65,6 +69,9 @@ pub(crate) fn log_row(line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyEle
     let text_column = v_flex()
         .flex_1()
         .min_w_0()
+        .when(is_marker, |column| {
+            column.text_color(theme.muted_foreground)
+        })
         .child(
             no_wrap_unless(div(), style.wraps_lines)
                 .child(StyledText::new(shown.to_owned()).with_highlights(highlights)),
@@ -99,13 +106,25 @@ pub(crate) fn log_row(line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyEle
                 .text_color(prefix.color)
                 .child(prefix.text.clone())
         }))
-        .when(style.shows_json, |row| row.child(level_tag(line.level, cx)))
+        .when(is_marker, |row| row.child(system_tag(cx)))
+        .when(style.shows_json && !is_marker, |row| {
+            row.child(level_tag(line.level, cx))
+        })
         .child(text_column)
         .into_any_element()
 }
 
 fn no_wrap_unless(cell: Div, wraps_lines: bool) -> Div {
     cell.when(!wraps_lines, |cell| cell.whitespace_nowrap().truncate())
+}
+
+/// The `SYS` tag of a marker row, shown in either mode.
+fn system_tag(cx: &App) -> Div {
+    div()
+        .w(LEVEL_COLUMN_WIDTH)
+        .flex_shrink_0()
+        .text_color(tone_color(StatusTone::Warn, cx))
+        .child("SYS")
 }
 
 /// The level word in JSON mode; the column stays so rows without a level line up.

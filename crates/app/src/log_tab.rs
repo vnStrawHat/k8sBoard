@@ -1,6 +1,8 @@
 //! One log view: a pod container or every pod of a workload. Toolbar, streams, merge, and the
 //! line list.
 
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -14,9 +16,9 @@ use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerStat
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, IntoElement,
-    ParentElement as _, Render, SharedString, StyleRefinement, Styled as _, Subscription, Task,
-    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Entity, EventEmitter,
+    IntoElement, ParentElement as _, Pixels, Render, SharedString, StyleRefinement, Styled as _,
+    Subscription, Task, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::cluster_registry::ClusterRef;
@@ -26,15 +28,20 @@ use crate::dock::LogOrigin;
 use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::kind_row::PodOwner;
 use crate::line_matcher::{FilterMode, InvalidRegex, LineMatcher};
-use crate::log_buffer::{LineTime, LineView, LogBuffer, SourceId, SourcedLine};
+use crate::log_buffer::{
+    LineKind, LineTime, LineView, LogBuffer, SourceId, SourcedLine, TimeWindow,
+};
 use crate::log_legend::{LegendChip, legend_row, pod_color};
 use crate::log_level::{LevelSet, LogLevel};
 use crate::log_rows::{RowPrefix, RowStyle, log_row};
 use crate::log_target::{LogTarget, PodTarget, WorkloadTarget};
-use crate::log_volume::{Volume, volume, volume_chart};
+use crate::log_volume::{
+    BrushDrag, BrushHandlers, BrushView, FractionHandler, Volume, brush_window, volume,
+    volume_chart,
+};
 use crate::log_workload::{
     MemberChange, container_names, join_slots, member_change, pod_short_name, ranked_pods,
-    scope_covers,
+    restart_marker, rising_restarts, scope_covers,
 };
 use crate::pod_drawer::{default_container, kind_tag_text};
 use crate::status_tone::{StatusTone, tone_color};
@@ -50,6 +57,10 @@ const MERGE_WINDOW: Duration = Duration::from_secs(2);
 /// long its streams may still deliver them.
 const LEAVE_GRACE: Duration = Duration::from_secs(10);
 const MAX_STAGING_BYTES: usize = 8 * 1024 * 1024;
+const PLAIN_PLACEHOLDER: &str = "Filter lines";
+const REGEX_PLACEHOLDER: &str = "Regex, e.g. error|timeout";
+/// A release closer than this to the press is a click, not a drag.
+const MIN_BRUSH_DRAG_PX: f32 = 3.;
 
 /// Compact is the docked tab; Full (the zoomed dock) adds the pod legend and the histogram.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,7 +171,9 @@ fn workload_tone<'a>(states: impl Iterator<Item = &'a LogStreamState>) -> Status
 
 /// One pod container's stream inside a tab. Its index in `LogTab::streams` is its `SourceId`.
 struct TabStream {
+    namespace: String,
     pod: String,
+    container: String,
     /// `{short}/{container}`, as shown on screen.
     prefix: SharedString,
     /// `{pod}/{container}`, as written by Export.
@@ -185,6 +198,10 @@ enum LogSubject {
     Pod {
         target: PodTarget,
         container: String,
+        /// Weak: the tab never keeps the session alive.
+        session: WeakEntity<ClusterSession>,
+        /// Restart markers follow the session's pod list.
+        _pods_observer: Subscription,
     },
     Workload(WorkloadSubject),
 }
@@ -219,12 +236,20 @@ pub(crate) struct LogTab {
     has_invalid_filter: bool,
     buffer: LogBuffer,
     streams: Vec<TabStream>,
+    /// The last restart count seen per (pod, container), so only a rise adds a marker.
+    restart_seen: HashMap<(String, String), u32>,
     staging: Option<Staging>,
     /// The color slot of each pod name, in join order; a returning pod keeps its slot.
     pod_slots: Vec<String>,
     layout: LogLayout,
+    /// The tab lives in a window of its own (`Pop out`), outside the dock.
+    is_popped_out: bool,
     /// The histogram of the visible lines, computed for the buffer revision it carries.
     volume_memo: Option<(u64, Option<Rc<Volume>>)>,
+    /// The drag across the histogram in progress.
+    brush: Option<BrushDrag>,
+    /// Where the histogram sits, from its last prepaint (the brush maps the pointer onto it).
+    chart_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     export_state: ExportState,
     /// The line count of the last saved export, for the status text.
     exported_lines: usize,
@@ -244,7 +269,7 @@ impl LogTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter lines"));
+        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(PLAIN_PLACEHOLDER));
         let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
         let filter_events = cx.subscribe(&filter_input, Self::on_filter_event);
         let scroller_observer = cx.observe(&scroller, |_, _, cx| cx.notify());
@@ -252,6 +277,8 @@ impl LogTab {
             LogTarget::Pod(target) => LogSubject::Pod {
                 container: target.initial_container.clone(),
                 target,
+                session: session.downgrade(),
+                _pods_observer: cx.observe(session, |tab, _, cx| tab.note_restarts(cx)),
             },
             LogTarget::Workload(target) => LogSubject::Workload(WorkloadSubject {
                 target,
@@ -276,10 +303,14 @@ impl LogTab {
             has_invalid_filter: false,
             buffer: LogBuffer::new(),
             streams: Vec::new(),
+            restart_seen: HashMap::new(),
             staging: None,
             pod_slots: Vec::new(),
             layout: LogLayout::Compact,
+            is_popped_out: false,
             volume_memo: None,
+            brush: None,
+            chart_bounds: Rc::new(Cell::new(None)),
             export_state: ExportState::Idle,
             exported_lines: 0,
             _export: None,
@@ -307,7 +338,9 @@ impl LogTab {
     /// The tab label: `{pod}/{container}`, or the workload label.
     pub(crate) fn label(&self) -> String {
         match &self.subject {
-            LogSubject::Pod { target, container } => format!("{}/{container}", target.pod),
+            LogSubject::Pod {
+                target, container, ..
+            } => format!("{}/{container}", target.pod),
             LogSubject::Workload(workload) => workload.target.label.clone(),
         }
     }
@@ -333,6 +366,7 @@ impl LogTab {
     /// Every start is fresh: no resume, so there is nothing to de-duplicate.
     fn restart_stream(&mut self, cx: &mut Context<Self>) {
         self.streams.clear();
+        self.restart_seen.clear();
         self.staging = None;
         self.pod_slots.clear();
         // A save in flight finishes: dropping its task would cut the file short and hide the
@@ -345,6 +379,11 @@ impl LogTab {
             workload.members.clear();
         }
         self.buffer.clear();
+        // A restarted buffer holds other lines, so a window over the old ones means nothing.
+        self.brush = None;
+        if self.buffer.view().window.is_some() {
+            self.apply_view(None, cx);
+        }
         self.scroller
             .update(cx, |scroller, cx| scroller.reset(0, cx));
         self.start_streams(cx);
@@ -352,7 +391,9 @@ impl LogTab {
 
     fn start_streams(&mut self, cx: &mut Context<Self>) {
         match &self.subject {
-            LogSubject::Pod { target, container } => {
+            LogSubject::Pod {
+                target, container, ..
+            } => {
                 let open = StreamOpen {
                     namespace: target.namespace.clone(),
                     pod: target.pod.clone(),
@@ -363,6 +404,7 @@ impl LogTab {
                     tail_lines: POD_TAIL_LINES,
                 };
                 self.open_stream(open, cx);
+                self.note_restarts(cx);
             }
             LogSubject::Workload(_) => {
                 self.sync_members(cx);
@@ -384,9 +426,9 @@ impl LogTab {
             LogInstance::Previous => LogSource::Previous,
         };
         let updates = self.connection.pod_logs(LogRequest {
-            namespace: open.namespace,
+            namespace: open.namespace.clone(),
             pod: open.pod.clone(),
-            container: open.container,
+            container: open.container.clone(),
             source,
             tail_lines: open.tail_lines,
         });
@@ -398,6 +440,8 @@ impl LogTab {
             move |tab, cx| tab.close_stream(id, cx),
         );
         self.streams.push(TabStream {
+            namespace: open.namespace,
+            container: open.container,
             pod: open.pod,
             prefix: open.prefix,
             full_prefix: open.full_prefix,
@@ -431,7 +475,11 @@ impl LogTab {
             LogUpdate::Lines(lines) => {
                 let lines: Vec<SourcedLine> = lines
                     .into_iter()
-                    .map(|line| SourcedLine { source: id, line })
+                    .map(|line| SourcedLine {
+                        source: id,
+                        kind: LineKind::Log,
+                        line,
+                    })
                     .collect();
                 let Some(staging) = &mut self.staging else {
                     self.push_lines(lines, cx);
@@ -467,6 +515,44 @@ impl LogTab {
         });
     }
 
+    /// Adds a `SYS` line for each streamed container whose restart count rose in the session's
+    /// pod list. Every streamed (pod, container) pair is checked, whatever its stream state: a
+    /// follow stream ends when its container exits, before the kubelet raises `restartCount`.
+    /// Only the Current instance marks; Previous is a fixed read of the old container.
+    fn note_restarts(&mut self, cx: &mut Context<Self>) {
+        if self.instance != LogInstance::Current {
+            return;
+        }
+        let session = match &self.subject {
+            LogSubject::Pod { session, .. } => session,
+            LogSubject::Workload(workload) => &workload.session,
+        };
+        let Some(session) = session.upgrade() else {
+            return;
+        };
+        let markers = {
+            let session = session.read(cx);
+            let Some(pods) = session.live().and_then(|live| live.pods.ready_items()) else {
+                return;
+            };
+            restart_markers(&self.streams, &mut self.restart_seen, pods)
+        };
+        if markers.is_empty() {
+            return;
+        }
+        match &mut self.staging {
+            Some(staging) => {
+                staging.bytes += markers
+                    .iter()
+                    .map(|line| line.line.text.len())
+                    .sum::<usize>();
+                staging.lines.extend(markers);
+            }
+            None => self.push_lines(markers, cx),
+        }
+        cx.notify();
+    }
+
     /// Pushes the staged lines once, sorted by kubelet time. Later lines append on arrival.
     fn flush_staging(&mut self, cx: &mut Context<Self>) {
         let Some(mut staging) = self.staging.take() else {
@@ -477,9 +563,15 @@ impl LogTab {
         cx.notify();
     }
 
-    /// Follows the pods of a workload: starts streams for pods that joined the list, and lets
-    /// the streams of pods that left run out their grace.
+    /// Follows the pods of a workload, then notes the restarts of the containers it streams.
     fn sync_members(&mut self, cx: &mut Context<Self>) {
+        self.follow_members(cx);
+        self.note_restarts(cx);
+    }
+
+    /// Starts streams for pods that joined the list, and lets the streams of pods that left run
+    /// out their grace.
+    fn follow_members(&mut self, cx: &mut Context<Self>) {
         let LogSubject::Workload(workload) = &self.subject else {
             return;
         };
@@ -599,9 +691,15 @@ impl LogTab {
         self.refresh_view(cx);
     }
 
-    /// Applies the input text, the filter mode, and the level chips to the buffer. An invalid
-    /// regex keeps the previous matcher, so typing `a|(` never blanks the view.
+    /// Applies the input text, the filter mode, and the level chips to the buffer; the brush
+    /// window stays as it is. An invalid regex keeps the previous matcher, so typing `a|(` never
+    /// blanks the view.
     fn refresh_view(&mut self, cx: &mut Context<Self>) {
+        self.apply_view(self.buffer.view().window, cx);
+    }
+
+    /// `refresh_view` with `window` as the brush window.
+    fn apply_view(&mut self, window: Option<TimeWindow>, cx: &mut Context<Self>) {
         let text = self.filter_input.read(cx).value();
         let matcher = match LineMatcher::parse(&text, self.filter_mode) {
             Ok(matcher) => {
@@ -616,11 +714,53 @@ impl LogTab {
         self.buffer.set_view(LineView {
             matcher,
             hidden_levels: self.hidden_levels,
+            window,
         });
         let visible = self.buffer.visible_len();
         self.scroller
             .update(cx, |scroller, cx| scroller.reset(visible, cx));
         cx.notify();
+    }
+
+    /// The press on the histogram starts a drag.
+    fn begin_brush(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        self.brush = Some(BrushDrag {
+            anchor: fraction,
+            current: fraction,
+        });
+        cx.notify();
+    }
+
+    fn move_brush(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        let Some(drag) = &mut self.brush else {
+            return;
+        };
+        drag.current = fraction;
+        cx.notify();
+    }
+
+    /// The release ends the drag: a drag across the chart sets the window of its buckets, a
+    /// click without movement clears the window.
+    fn end_brush(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        let Some(drag) = self.brush.take() else {
+            return;
+        };
+        let width = self
+            .chart_bounds
+            .get()
+            .map_or(0., |bounds| f32::from(bounds.size.width));
+        let has_moved = (fraction - drag.anchor).abs() * width >= MIN_BRUSH_DRAG_PX;
+        let window = if has_moved {
+            self.current_volume()
+                .and_then(|volume| brush_window(&volume, drag.anchor, fraction))
+        } else {
+            None
+        };
+        self.apply_view(window, cx);
+    }
+
+    fn clear_time_window(&mut self, cx: &mut Context<Self>) {
+        self.apply_view(None, cx);
     }
 
     /// Switching the mode re-reads the input, so the placeholder and the matcher agree.
@@ -631,8 +771,8 @@ impl LogTab {
             FilterMode::Plain
         };
         let placeholder = match self.filter_mode {
-            FilterMode::Plain => "Filter lines",
-            FilterMode::Regex => "Regex, e.g. error|timeout",
+            FilterMode::Plain => PLAIN_PLACEHOLDER,
+            FilterMode::Regex => REGEX_PLACEHOLDER,
         };
         self.filter_input.update(cx, |input, cx| {
             input.set_placeholder(placeholder, window, cx);
@@ -657,6 +797,33 @@ impl LogTab {
             LogInstance::Previous => LogInstance::Current,
         };
         self.restart_stream(cx);
+    }
+
+    /// The tab moves to a window of its own. The kit input ties focus, blur, and activation to the
+    /// window that created it, so the filter input is created again here with the same text and
+    /// placeholder, and focused. The buffer, streams, scroller, staging, export, and brush hold no
+    /// window and move as they are.
+    pub(crate) fn move_to_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.filter_input.read(cx).value();
+        let placeholder = match self.filter_mode {
+            FilterMode::Plain => PLAIN_PLACEHOLDER,
+            FilterMode::Regex => REGEX_PLACEHOLDER,
+        };
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(placeholder)
+                .default_value(text)
+        });
+        self._filter_events = cx.subscribe(&input, Self::on_filter_event);
+        input.update(cx, |input, cx| input.focus(window, cx));
+        self.filter_input = input;
+        self.is_popped_out = true;
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_popped_out(&self) -> bool {
+        self.is_popped_out
     }
 
     pub(crate) fn set_layout(&mut self, layout: LogLayout, cx: &mut Context<Self>) {
@@ -699,7 +866,9 @@ impl LogTab {
             return;
         }
         let label = match &self.subject {
-            LogSubject::Pod { target, container } => format!("{}-{container}", target.pod),
+            LogSubject::Pod {
+                target, container, ..
+            } => format!("{}-{container}", target.pod),
             LogSubject::Workload(workload) => workload.target.label.clone(),
         };
         let name = export_file_name(&label, "log", jiff::Timestamp::now());
@@ -725,12 +894,39 @@ impl LogTab {
         }
         let computed = volume(
             self.buffer
-                .visible_lines()
+                .volume_lines()
                 .filter_map(|line| Some((line.line.timestamp?, line.level))),
         )
         .map(Rc::new);
         self.volume_memo = Some((revision, computed.clone()));
         computed
+    }
+
+    /// The brush as the histogram draws it, with the handlers that drive this tab.
+    fn brush_view(&self, cx: &Context<Self>) -> BrushView {
+        let tab = cx.weak_entity();
+        let handler = |act: fn(&mut Self, f32, &mut Context<Self>)| {
+            let tab = tab.clone();
+            Rc::new(move |fraction: f32, cx: &mut App| {
+                let _ = tab.update(cx, |tab, cx| act(tab, fraction, cx));
+            }) as FractionHandler
+        };
+        BrushView {
+            window: self.buffer.view().window,
+            drag: self.brush,
+            bounds: Rc::clone(&self.chart_bounds),
+            handlers: BrushHandlers {
+                press: handler(Self::begin_brush),
+                moved: handler(Self::move_brush),
+                release: handler(Self::end_brush),
+                clear: Rc::new({
+                    let tab = tab.clone();
+                    move |cx: &mut App| {
+                        let _ = tab.update(cx, |tab, cx| tab.clear_time_window(cx));
+                    }
+                }),
+            },
+        }
     }
 
     /// Row heights depend on both toggles, so the list measures its rows again.
@@ -924,6 +1120,19 @@ impl LogTab {
                     .disabled(self.export_state.is_busy() || self.buffer.visible_len() == 0)
                     .on_click(cx.listener(|tab, _, _, cx| tab.export(cx))),
             )
+            .when(!self.is_popped_out, |toolbar| {
+                toolbar.child(
+                    Button::new("log-pop-out")
+                        .ghost()
+                        .small()
+                        .icon(Icon::new(IconName::ExternalLink))
+                        .when(self.layout == LogLayout::Full, |button| {
+                            button.label("Pop out")
+                        })
+                        .tooltip("Open in a new window")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(LogTabEvent::PopOut))),
+                )
+            })
             .when(!is_connecting, |toolbar| {
                 toolbar.child(
                     Button::new("log-reconnect")
@@ -1034,7 +1243,10 @@ impl LogTab {
 
     /// The pod container picker, or the workload container picker.
     fn render_container_picker(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let LogSubject::Pod { target, container } = &self.subject else {
+        let LogSubject::Pod {
+            target, container, ..
+        } = &self.subject
+        else {
             return self.render_workload_picker(cx);
         };
         let theme = cx.theme();
@@ -1129,6 +1341,9 @@ impl LogTab {
         if self.buffer.visible_len() == 0 {
             return match &self.buffer.view().matcher {
                 Some(matcher) => muted(format!("No lines match \"{}\"", matcher.pattern())),
+                None if self.buffer.view().window.is_some() => {
+                    muted("No lines in the selected time window".to_owned())
+                }
                 None => muted("No lines at the selected levels".to_owned()),
             };
         }
@@ -1171,6 +1386,15 @@ fn row_of(tab: &WeakEntity<LogTab>, index: usize, cx: &App) -> AnyElement {
         .unwrap_or_else(|_| div().into_any_element())
 }
 
+/// What a tab asks of whoever holds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LogTabEvent {
+    /// The Pop out button: move the tab to a window of its own.
+    PopOut,
+}
+
+impl EventEmitter<LogTabEvent> for LogTab {}
+
 impl Render for LogTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let stream_failure = match self.phase() {
@@ -1193,8 +1417,9 @@ impl Render for LogTab {
             _ => None,
         };
         let histogram = if is_full {
+            let brush = self.brush_view(cx);
             self.current_volume()
-                .map(|volume| volume_chart(&volume, cx))
+                .map(|volume| volume_chart(&volume, brush, cx))
         } else {
             None
         };
@@ -1324,6 +1549,58 @@ fn plan_membership(
     }
 }
 
+/// The marker lines for the restarts of the streamed containers, each from the latest stream of
+/// its pod and container (so a reopened pod keeps its newest prefix and color). A pod that is no
+/// longer listed is skipped.
+fn restart_markers(
+    streams: &[TabStream],
+    seen: &mut HashMap<(String, String), u32>,
+    pods: &[PodSummary],
+) -> Vec<SourcedLine> {
+    let now = jiff::Timestamp::now();
+    let mut markers = Vec::new();
+    let mut checked: Vec<(&str, &str)> = Vec::new();
+    for stream in streams {
+        let owner = (stream.namespace.as_str(), stream.pod.as_str());
+        if checked.contains(&owner) {
+            continue;
+        }
+        checked.push(owner);
+        let Some(pod) = pods
+            .iter()
+            .find(|pod| pod.namespace == owner.0 && pod.name == owner.1)
+        else {
+            continue;
+        };
+        let of_pod = || {
+            streams
+                .iter()
+                .enumerate()
+                .filter(|(_, other)| (other.namespace.as_str(), other.pod.as_str()) == owner)
+        };
+        let streamed: Vec<&str> = of_pod()
+            .map(|(_, other)| other.container.as_str())
+            .collect();
+        for (container, _) in rising_restarts(seen, pod, &streamed) {
+            let source = of_pod()
+                .rfind(|(_, other)| other.container == container)
+                .and_then(|(index, _)| u16::try_from(index).ok());
+            let summary = pod
+                .containers
+                .iter()
+                .find(|summary| summary.name == container);
+            if let (Some(source), Some(summary)) = (source, summary) {
+                markers.push(SourcedLine {
+                    source: SourceId(source),
+                    kind: LineKind::Marker,
+                    line: restart_marker(summary, now),
+                });
+            }
+        }
+    }
+    markers
+}
+
 /// The merge window opens with the first pod that gets a stream, so the initial tails of the
 /// pods admitted together are sorted. Later pods join without one and ask for a short tail.
 fn opens_merge_window(stream_count: usize, has_staging: bool, admitted: usize) -> bool {
@@ -1407,6 +1684,7 @@ mod tests {
     fn staged(source: u16, time: Option<&str>, text: &str) -> SourcedLine {
         SourcedLine {
             source: SourceId(source),
+            kind: LineKind::Log,
             line: LogLine {
                 timestamp: time.map(|time| time.parse().expect("valid time")),
                 text: text.to_owned(),
@@ -1651,3 +1929,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "log_tab_tests.rs"]
+mod log_tab_tests;

@@ -1,14 +1,21 @@
-//! The log volume histogram of a zoomed tab: lines per time bucket, errors marked.
+//! The log volume histogram of a zoomed tab: lines per time bucket, errors marked, and the brush
+//! that picks a time window over it.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::chart::BarChart;
-use gpui_kit::component::{ActiveTheme as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, IntoElement as _, ParentElement as _, SharedString, Styled as _, div, px,
+    AnyElement, App, Bounds, DispatchPhase, InteractiveElement as _, IntoElement as _, MouseButton,
+    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, SharedString, Styled as _, canvas,
+    div, px, relative,
 };
 
+use crate::log_buffer::TimeWindow;
 use crate::log_level::LogLevel;
 use crate::status_tone::{StatusTone, tone_color};
 
@@ -106,8 +113,89 @@ fn width_label(width: Duration) -> String {
     }
 }
 
-/// The caption and the bars. A bar with an error line is drawn in the `Bad` tone.
-pub(crate) fn volume_chart(volume: &Rc<Volume>, cx: &App) -> AnyElement {
+/// The bucket under a fraction of the chart width: equal-width buckets, clamped to the range.
+fn bucket_at(volume: &Volume, fraction: f32) -> usize {
+    // ponytail: ignores the kit bar padding; an edge can be off by one bucket of 60.
+    let count = volume.buckets.len();
+    let index = (fraction.clamp(0., 1.) * count as f32) as usize;
+    index.min(count.saturating_sub(1))
+}
+
+/// The end of a bucket that starts at `start`.
+fn bucket_end(start: jiff::Timestamp, width: Duration) -> Option<jiff::Timestamp> {
+    start.checked_add(width).ok()
+}
+
+/// The window a drag covers; `from` and `to` are fractions of the chart width, in any order.
+pub(crate) fn brush_window(volume: &Volume, from: f32, to: f32) -> Option<TimeWindow> {
+    let (a, b) = (bucket_at(volume, from), bucket_at(volume, to));
+    let first = volume.buckets.get(a.min(b))?;
+    let last = volume.buckets.get(a.max(b))?;
+    Some(TimeWindow {
+        start: first.start,
+        end: bucket_end(last.start, volume.width)?,
+    })
+}
+
+/// Where `window` sits on the chart, as fractions of its width; `None` when it misses every
+/// bucket.
+pub(crate) fn window_span(volume: &Volume, window: TimeWindow) -> Option<(f32, f32)> {
+    let first = volume.buckets.iter().position(|bucket| {
+        bucket_end(bucket.start, volume.width).is_some_and(|end| end > window.start)
+    })?;
+    let last = volume
+        .buckets
+        .iter()
+        .rposition(|bucket| bucket.start < window.end)?;
+    if last < first {
+        return None;
+    }
+    let count = volume.buckets.len() as f32;
+    Some((first as f32 / count, (last + 1) as f32 / count))
+}
+
+/// The pointer's place on the chart as a fraction of its width, clamped to the chart so a
+/// pointer outside it still reads as the nearest edge; `None` for a chart without width.
+pub(crate) fn brush_fraction(x: Pixels, bounds: Bounds<Pixels>) -> Option<f32> {
+    let width = bounds.size.width;
+    if width <= px(0.) {
+        return None;
+    }
+    Some(((x - bounds.left()) / width).clamp(0., 1.))
+}
+
+/// A drag in progress across the chart: where it started and where the pointer is now, as
+/// fractions of the chart width.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BrushDrag {
+    pub(crate) anchor: f32,
+    pub(crate) current: f32,
+}
+
+/// A pointer handler: it gets a fraction of the chart width.
+pub(crate) type FractionHandler = Rc<dyn Fn(f32, &mut App)>;
+
+/// What the tab does with the pointer.
+#[derive(Clone)]
+pub(crate) struct BrushHandlers {
+    pub(crate) press: FractionHandler,
+    pub(crate) moved: FractionHandler,
+    pub(crate) release: FractionHandler,
+    pub(crate) clear: Rc<dyn Fn(&mut App)>,
+}
+
+/// The brush as the tab holds it: the committed window, the live drag, and the handlers.
+pub(crate) struct BrushView {
+    pub(crate) window: Option<TimeWindow>,
+    pub(crate) drag: Option<BrushDrag>,
+    /// The chart's bounds from the last prepaint; the kit `BarChart` has no hit test.
+    pub(crate) bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    pub(crate) handlers: BrushHandlers,
+}
+
+/// The caption, the bars with the brush over them. A bar with an error line is drawn in the
+/// `Bad` tone.
+pub(crate) fn volume_chart(volume: &Rc<Volume>, brush: BrushView, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let (normal, bad) = (theme.chart_1, tone_color(StatusTone::Bad, cx));
     let width = volume.width;
@@ -132,6 +220,48 @@ pub(crate) fn volume_chart(volume: &Rc<Volume>, cx: &App) -> AnyElement {
         .tooltip_value(|(_, bucket), lines| {
             SharedString::from(format!("{lines} lines · {} errors", bucket.errors))
         });
+    // The live drag is shaded as it moves; the committed window sits where its time falls.
+    let shade = match (brush.drag, brush.window) {
+        (Some(drag), _) => Some((drag.anchor.min(drag.current), drag.anchor.max(drag.current))),
+        (None, Some(window)) => window_span(volume, window),
+        (None, None) => None,
+    };
+    let BrushView {
+        window,
+        drag,
+        bounds,
+        handlers,
+    } = brush;
+    let cell = div()
+        .id("log-volume-brush")
+        .debug_selector(|| "log-volume-brush".into())
+        .relative()
+        .flex_1()
+        .h(px(CHART_HEIGHT))
+        .py_1()
+        .cursor_crosshair()
+        .on_mouse_down(MouseButton::Left, {
+            let (bounds, press) = (Rc::clone(&bounds), Rc::clone(&handlers.press));
+            move |event, _, cx| {
+                let fraction = bounds
+                    .get()
+                    .and_then(|bounds| brush_fraction(event.position.x, bounds));
+                if let Some(fraction) = fraction {
+                    press(fraction, cx);
+                }
+            }
+        })
+        .child(chart)
+        .children(shade.map(|(from, to)| {
+            div()
+                .absolute()
+                .top_0()
+                .h_full()
+                .left(relative(from))
+                .w(relative(to - from))
+                .bg(theme.selection)
+        }))
+        .child(bounds_canvas(drag.is_some(), bounds, handlers.clone()));
     h_flex()
         .flex_shrink_0()
         .items_center()
@@ -147,12 +277,92 @@ pub(crate) fn volume_chart(volume: &Rc<Volume>, cx: &App) -> AnyElement {
                 .text_color(theme.muted_foreground)
                 .child(format!("Lines per {}", width_label(width))),
         )
-        .child(div().flex_1().h(px(CHART_HEIGHT)).py_1().child(chart))
+        .children(window.map(|window| window_chip(window, width, handlers.clear, cx)))
+        .child(cell)
         .into_any_element()
+}
+
+/// `HH:MM:SS – HH:MM:SS` and the ✕ that shows every line again.
+fn window_chip(
+    window: TimeWindow,
+    width: Duration,
+    clear: Rc<dyn Fn(&mut App)>,
+    cx: &App,
+) -> AnyElement {
+    let theme = cx.theme();
+    let label = format!(
+        "{} – {}",
+        bucket_label(window.start, width),
+        bucket_label(window.end, width)
+    );
+    h_flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap_0p5()
+        .child(
+            div()
+                .px_1p5()
+                .rounded_sm()
+                .bg(theme.muted)
+                .font_family(theme.mono_font_family.clone())
+                .text_xs()
+                .child(label),
+        )
+        .child(
+            Button::new("log-volume-clear")
+                .ghost()
+                .xsmall()
+                .icon(Icon::new(IconName::X))
+                .tooltip("Show all lines")
+                .on_click(move |_, _, cx| clear(cx)),
+        )
+        .into_any_element()
+}
+
+/// Fills the chart's box: stores its bounds at prepaint, and, while a drag runs, listens on the
+/// window so a pointer that left the chart keeps dragging and a release anywhere ends the drag.
+fn bounds_canvas(
+    is_dragging: bool,
+    bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    handlers: BrushHandlers,
+) -> AnyElement {
+    let stored = Rc::clone(&bounds);
+    canvas(
+        move |chart_bounds, _, _| stored.set(Some(chart_bounds)),
+        move |_, (), window, _| {
+            if !is_dragging {
+                return;
+            }
+            window.on_mouse_event({
+                let (bounds, moved) = (Rc::clone(&bounds), Rc::clone(&handlers.moved));
+                move |event: &MouseMoveEvent, phase, _, cx| {
+                    let fraction = bounds
+                        .get()
+                        .and_then(|bounds| brush_fraction(event.position.x, bounds));
+                    if let (DispatchPhase::Bubble, Some(fraction)) = (phase, fraction) {
+                        moved(fraction, cx);
+                    }
+                }
+            });
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                let fraction = bounds
+                    .get()
+                    .and_then(|bounds| brush_fraction(event.position.x, bounds));
+                if let (DispatchPhase::Bubble, Some(fraction)) = (phase, fraction) {
+                    (handlers.release)(fraction, cx);
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_full()
+    .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
+    use gpui_kit::{point, size};
+
     use super::*;
 
     fn at(text: &str) -> jiff::Timestamp {
@@ -253,6 +463,70 @@ mod tests {
         assert_eq!(bucket_label(start, secs(86_400)), "05-01");
     }
 
+    /// Ten buckets of 5 s from 10:00:00.
+    fn ten_buckets() -> Volume {
+        let first = at("2024-05-01T10:00:00Z");
+        Volume {
+            width: secs(5),
+            buckets: (0..10)
+                .map(|index| VolumeBucket {
+                    start: first + Duration::from_secs(5 * index),
+                    lines: 1,
+                    errors: 0,
+                })
+                .collect(),
+        }
+    }
+
+    fn window_of_buckets(first: u64, last: u64) -> TimeWindow {
+        let start = at("2024-05-01T10:00:00Z");
+        TimeWindow {
+            start: start + Duration::from_secs(5 * first),
+            end: start + Duration::from_secs(5 * (last + 1)),
+        }
+    }
+
+    #[test]
+    fn brush_window_covers_the_dragged_buckets_in_any_order() {
+        let volume = ten_buckets();
+        let expected = Some(window_of_buckets(2, 5));
+        assert_eq!(brush_window(&volume, 0.25, 0.55), expected);
+        assert_eq!(brush_window(&volume, 0.55, 0.25), expected);
+    }
+
+    #[test]
+    fn brush_window_clamps_to_the_chart() {
+        let volume = ten_buckets();
+        assert_eq!(
+            brush_window(&volume, -0.2, 1.4),
+            Some(window_of_buckets(0, 9))
+        );
+    }
+
+    #[test]
+    fn window_span_places_the_shade() {
+        let volume = ten_buckets();
+        let (from, to) = window_span(&volume, window_of_buckets(2, 5)).expect("on the chart");
+        assert!(
+            (from - 0.2).abs() < 1e-6 && (to - 0.6).abs() < 1e-6,
+            "{from} {to}"
+        );
+        let outside = TimeWindow {
+            start: at("2024-05-01T11:00:00Z"),
+            end: at("2024-05-01T11:00:05Z"),
+        };
+        assert_eq!(window_span(&volume, outside), None);
+    }
+
+    #[test]
+    fn brush_fraction_clamps_outside_the_chart() {
+        let bounds = Bounds::new(point(px(100.), px(0.)), size(px(200.), px(48.)));
+        assert_eq!(brush_fraction(px(150.), bounds), Some(0.25));
+        assert_eq!(brush_fraction(px(40.), bounds), Some(0.));
+        assert_eq!(brush_fraction(px(900.), bounds), Some(1.));
+        let empty = Bounds::new(point(px(100.), px(0.)), size(px(0.), px(48.)));
+        assert_eq!(brush_fraction(px(150.), empty), None);
+    }
     #[test]
     fn width_label_names_the_unit() {
         assert_eq!(width_label(secs(15)), "15s");

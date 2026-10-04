@@ -1344,6 +1344,28 @@ fn log_tab_labels_after(
     target_of: impl Fn(&cluster::PodSummary, &crate::cluster_session::AccessState) -> Option<LogTarget>,
     cx: &mut TestAppContext,
 ) -> Vec<String> {
+    let fixture = open_log_tab_fixture(name, target_of, cx);
+    fixture
+        .shell
+        .read_with(cx, |shell, cx| shell.dock.read(cx).log_tab_labels(cx))
+}
+
+/// A live shell whose dock holds the log tab that `target_of` names.
+pub(super) fn open_log_tab_fixture(
+    name: &str,
+    target_of: impl Fn(&cluster::PodSummary, &crate::cluster_session::AccessState) -> Option<LogTarget>,
+    cx: &mut TestAppContext,
+) -> super::app_shell_switch_tests::SwitchFixture {
+    let fixture = open_live_logs_fixture(name, cx);
+    open_log_tab(&fixture, target_of, cx);
+    fixture
+}
+
+/// A live shell with every access allowed and one pod (`logs_pod`), and an empty dock.
+pub(super) fn open_live_logs_fixture(
+    name: &str,
+    cx: &mut TestAppContext,
+) -> super::app_shell_switch_tests::SwitchFixture {
     let fixture = open_switch_fixture(name, cx);
     fixture.go_live(NamespaceScope::All, cx);
     let session = fixture.session(cx);
@@ -1362,6 +1384,15 @@ fn log_tab_labels_after(
         session.set_pods_for_test(vec![logs_pod()], cx);
     });
     cx.run_until_parked();
+    fixture
+}
+
+/// Opens the dock tab that `target_of` names, as a menu entry does.
+pub(super) fn open_log_tab(
+    fixture: &super::app_shell_switch_tests::SwitchFixture,
+    target_of: impl Fn(&cluster::PodSummary, &crate::cluster_session::AccessState) -> Option<LogTarget>,
+    cx: &mut TestAppContext,
+) {
     let cluster = fixture.cluster("prod-a", cx);
     fixture.with_window(cx, |window, cx| {
         let shell = fixture.shell.read(cx);
@@ -1382,9 +1413,6 @@ fn log_tab_labels_after(
             )
         });
     });
-    fixture
-        .shell
-        .read_with(cx, |shell, cx| shell.dock.read(cx).log_tab_labels(cx))
 }
 
 #[gpui_kit::test]
@@ -1506,4 +1534,108 @@ fn revision_diff_reads_both_templates_through_the_drawer_cluster(cx: &mut TestAp
             ),
         ]
     );
+}
+
+// ---- Spec 0044 step 1: the remembered dock height ----
+
+fn dock_height_of(
+    fixture: &super::app_shell_switch_tests::SwitchFixture,
+    cx: &mut TestAppContext,
+) -> Option<f32> {
+    fixture.shell.read_with(cx, |shell, cx| {
+        shell
+            .dock_split
+            .read(cx)
+            .sizes()
+            .get(1)
+            .copied()
+            .map(f32::from)
+    })
+}
+
+fn saved_height(cx: &mut TestAppContext) -> Option<f32> {
+    cx.update(|cx| AppSettings::get(cx).dock.height)
+}
+
+fn resize_dock(
+    fixture: &super::app_shell_switch_tests::SwitchFixture,
+    height: f32,
+    cx: &mut TestAppContext,
+) {
+    let split = fixture
+        .shell
+        .read_with(cx, |shell, _| shell.dock_split.clone());
+    fixture.with_window(cx, |window, cx| {
+        split.update(cx, |state, cx| {
+            state.resize_panel(1, px(height), window, cx);
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn resize_end_saves_the_dock_height(cx: &mut TestAppContext) {
+    let fixture = open_log_tab_fixture(
+        "dock-height-save",
+        |pod, _| LogTarget::of_container(pod, "proxy"),
+        cx,
+    );
+    fixture.draw_twice(cx);
+    resize_dock(&fixture, 400., cx);
+    assert_eq!(saved_height(cx), Some(400.));
+}
+
+#[gpui_kit::test]
+fn double_click_on_the_handle_resets_the_dock(cx: &mut TestAppContext) {
+    let fixture = open_log_tab_fixture(
+        "dock-height-reset",
+        |pod, _| LogTarget::of_container(pod, "proxy"),
+        cx,
+    );
+    fixture.draw_twice(cx);
+    resize_dock(&fixture, 400., cx);
+    fixture.draw_twice(cx);
+    assert_eq!(dock_height_of(&fixture, cx), Some(400.));
+    let mut visual = gpui_kit::VisualTestContext::from_window(fixture.window.into(), cx);
+    let area = visual
+        .debug_bounds("dock-handle-reset")
+        .expect("the handle has its double-click area");
+    visual.simulate_event(gpui_kit::MouseDownEvent {
+        button: gpui_kit::MouseButton::Left,
+        position: area.center(),
+        modifiers: gpui_kit::Modifiers::default(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    assert_eq!(dock_height_of(&fixture, cx), Some(280.));
+    assert_eq!(saved_height(cx), None);
+}
+
+#[gpui_kit::test]
+fn dock_opens_at_the_saved_height(cx: &mut TestAppContext) {
+    let fixture = open_live_logs_fixture("dock-height-restore", cx);
+    cx.update(|cx| AppSettings::update(cx, |settings| settings.dock.height = Some(400.)));
+    open_log_tab(&fixture, |pod, _| LogTarget::of_container(pod, "proxy"), cx);
+    fixture.draw_twice(cx);
+    assert_eq!(dock_height_of(&fixture, cx), Some(400.));
+}
+
+// ---- Spec 0044 step 4: Pop out ----
+
+#[gpui_kit::test]
+fn leaving_work_ignores_popped_log_tabs(cx: &mut TestAppContext) {
+    let fixture = open_log_tab_fixture(
+        "pop-out-leaving-work",
+        |pod, _| LogTarget::of_container(pod, "proxy"),
+        cx,
+    );
+    let tab = fixture.shell.read_with(cx, |shell, cx| {
+        shell.dock.read(cx).log_tab_entities().remove(0)
+    });
+    tab.update(cx, |_, cx| cx.emit(crate::log_tab::LogTabEvent::PopOut));
+    cx.run_until_parked();
+    let cluster = fixture.cluster("prod-a", cx);
+    fixture.shell.read_with(cx, |shell, cx| {
+        assert!(!shell.dock.read(cx).has_tabs());
+        assert!(shell.leaving_work(&[cluster], cx).is_empty());
+    });
 }

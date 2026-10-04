@@ -3,9 +3,12 @@
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::{ResizeHandleRenderer, ResizeHandleState};
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::resizable::{resizable_panel, v_resizable};
+use gpui_kit::component::resizable::{
+    ResizableState, resizable_panel, resize_handle_appearance, v_resizable,
+};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::table::DataTable;
 use gpui_kit::component::{
@@ -13,15 +16,19 @@ use gpui_kit::component::{
     h_flex, v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, Bounds, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, Pixels, Styled as _, Window, canvas, deferred, div, fill,
+    point, prelude::FluentBuilder as _, px, size,
 };
 
 use cluster::{EVENT_LIMIT, EventFilter};
 
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{FlowState, LiveCluster, SessionPhase};
-use crate::dock::{DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height};
+use crate::dock::{
+    DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height, initial_dock_height,
+    max_line_offset, saved_dock_height,
+};
 use crate::drawer::ClickHandler;
 use crate::file_export::ExportState;
 use crate::filter_bar::{ToolkitState, filter_bar};
@@ -39,6 +46,7 @@ use crate::port_forward_menu::PortButtons;
 use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
 use crate::row_selection::selection_bar;
+use crate::settings::AppSettings;
 use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
 use crate::usage_format::group_digits;
@@ -72,7 +80,7 @@ impl AppShell {
 
     /// The region right of the sidebar: the list region with the log dock below it, or the
     /// dock alone over the whole region when zoomed.
-    pub(super) fn render_workspace(&self, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn render_workspace(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
         let region = v_flex()
             .flex_1()
             .min_w_0()
@@ -87,13 +95,20 @@ impl AppShell {
             DockMode::Minimized => region.child(self.render_upper(cx)).child(self.dock.clone()),
             DockMode::Normal => {
                 let max_height = dock_max_height(self.dock_split.read(cx).container_size());
+                // The kit clamps from the second frame on; the first frame has no measured
+                // workspace yet, so the viewport caps it.
+                let height = initial_dock_height(
+                    AppSettings::get(cx).dock.height,
+                    window.viewport_size().height,
+                );
                 region.child(
                     v_resizable("workspace-split")
+                        .with_handle_appearance(dock_handle_appearance(self.dock_split.clone()))
                         .with_state(&self.dock_split)
                         .child(resizable_panel().child(self.render_upper(cx)))
                         .child(
                             resizable_panel()
-                                .size(DEFAULT_DOCK_HEIGHT)
+                                .size(height)
                                 .flex_none()
                                 .size_range(MIN_DOCK_HEIGHT..max_height)
                                 .child(self.dock.clone()),
@@ -101,6 +116,17 @@ impl AppShell {
                 )
             }
         }
+    }
+
+    /// Stores the dock height when a resize ends; a reset to the default forgets it.
+    pub(super) fn save_dock_height(split: &Entity<ResizableState>, cx: &mut App) {
+        // The dock is the second panel; with one panel there is nothing to save.
+        let Some(size) = split.read(cx).sizes().get(1).copied() else {
+            return;
+        };
+        AppSettings::update(cx, |settings| {
+            settings.dock.height = saved_dock_height(size)
+        });
     }
 
     /// Header, banner, body, and the drawer overlay. The drawer covers this region only, so
@@ -950,6 +976,104 @@ fn error_view(
             )
         })
         .into_any_element()
+}
+
+/// The reach of the double-click area around the 1 px divider, like the kit's own band.
+const HANDLE_HIT_PADDING: Pixels = px(4.);
+/// The dashes of the 60 % line.
+const DASH_LENGTH: Pixels = px(6.);
+const DASH_GAP: Pixels = px(4.);
+
+/// The kit's divider, plus the double-click reset and, while dragging, the dashed 60 % line.
+fn dock_handle_appearance(split: Entity<ResizableState>) -> ResizeHandleRenderer {
+    let kit_line = resize_handle_appearance();
+    Rc::new(move |handle, window, cx| {
+        let line = kit_line(handle, window, cx)?;
+        let reset_split = split.clone();
+        // Does not occlude, so the press still reaches the kit handle and starts the drag.
+        let hit_area = div()
+            .id("dock-handle-reset")
+            .debug_selector(|| "dock-handle-reset".into())
+            .absolute()
+            .left_0()
+            .w_full()
+            .top(-HANDLE_HIT_PADDING)
+            .h(HANDLE_HIT_PADDING * 2. + px(1.))
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                if event.click_count != 2 {
+                    return;
+                }
+                reset_split.update(cx, |state, cx| {
+                    state.resize_panel(1, DEFAULT_DOCK_HEIGHT, window, cx);
+                });
+            });
+        let max_line = (handle.state() == ResizeHandleState::Dragging)
+            .then(|| max_height_line(&split, cx))
+            .flatten();
+        Some(
+            div()
+                .relative()
+                .flex_none()
+                .w_full()
+                .h(px(1.))
+                .child(line)
+                .child(hit_area)
+                .children(max_line)
+                .into_any_element(),
+        )
+    })
+}
+
+/// The dashed line at 60 % of the workspace and its label, above the handle. Deferred so it paints
+/// over the upper panel; it exists only during a drag, when no popover is open.
+fn max_height_line(split: &Entity<ResizableState>, cx: &App) -> Option<AnyElement> {
+    let state = split.read(cx);
+    let dock = *state.sizes().get(1)?;
+    let offset = max_line_offset(state.container_size(), dock)?;
+    let theme = cx.theme();
+    Some(
+        deferred(
+            div()
+                .absolute()
+                .left_0()
+                .w_full()
+                .top(-offset)
+                .h(px(1.))
+                .child(dashed_rule(theme.muted_foreground))
+                .child(
+                    div()
+                        .absolute()
+                        .right_2()
+                        .top(px(-18.))
+                        .px_1()
+                        .rounded_sm()
+                        .bg(theme.background)
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("max height · 60%"),
+                ),
+        )
+        .into_any_element(),
+    )
+}
+
+/// A one-pixel dashed rule across its box, painted dash by dash: a dashed border on a one-pixel
+/// box draws nothing (the dash shader needs a box with room around the border).
+fn dashed_rule(color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            let mut x = bounds.left();
+            while x < bounds.right() {
+                let length = DASH_LENGTH.min(bounds.right() - x);
+                let dash = Bounds::new(point(x, bounds.top()), size(length, bounds.size.height));
+                window.paint_quad(fill(dash, color));
+                x += DASH_LENGTH + DASH_GAP;
+            }
+        },
+    )
+    .absolute()
+    .size_full()
 }
 
 #[cfg(test)]

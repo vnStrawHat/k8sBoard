@@ -36,6 +36,24 @@ pub(crate) struct Settings {
     /// Forwards kept to start again (spec 0035).
     #[serde(skip_serializing_if = "PortForwardSettings::is_empty")]
     pub(crate) port_forward: PortForwardSettings,
+    /// The log dock (spec 0044).
+    #[serde(skip_serializing_if = "DockSettings::is_empty")]
+    pub(crate) dock: DockSettings,
+}
+
+/// The `dock` section: a pixel height, never a secret.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct DockSettings {
+    /// The dock height in pixels; `None` is the default height.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) height: Option<f32>,
+}
+
+impl DockSettings {
+    fn is_empty(&self) -> bool {
+        self.height.is_none()
+    }
 }
 
 /// The `port_forward` section: names and numbers only, never a secret.
@@ -60,6 +78,7 @@ impl Default for Settings {
             registry: ClusterRegistry::default(),
             tables: BTreeMap::new(),
             port_forward: PortForwardSettings::default(),
+            dock: DockSettings::default(),
         }
     }
 }

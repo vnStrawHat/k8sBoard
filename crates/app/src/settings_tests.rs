@@ -62,6 +62,7 @@ fn full_settings() -> Settings {
                 },
             }],
         },
+        dock: DockSettings { height: Some(402.) },
         tables: BTreeMap::from([(
             "pods".to_owned(),
             TablePrefs {
@@ -74,6 +75,19 @@ fn full_settings() -> Settings {
         )]),
         ..Settings::default()
     }
+}
+
+#[test]
+fn dock_height_round_trips_and_is_omitted_when_unset() {
+    let settings = Settings {
+        dock: DockSettings { height: Some(402.) },
+        ..Settings::default()
+    };
+    let bytes = serialize_settings(&settings).expect("serializes");
+    let back: Settings = serde_json::from_slice(&bytes).expect("parses");
+    assert_eq!(back.dock.height, Some(402.));
+    let value = serde_json::to_value(Settings::default()).expect("serializes");
+    assert!(value.get("dock").is_none(), "{value}");
 }
 
 #[test]
@@ -131,6 +145,8 @@ fn settings_keys_are_the_allow_list() {
     assert_eq!(
         keys,
         [
+            "dock",
+            "dock.height",
             "port_forward",
             "port_forward.presets",
             "port_forward.presets.cluster",

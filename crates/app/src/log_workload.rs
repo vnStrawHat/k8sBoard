@@ -1,6 +1,8 @@
 //! Which pods of a workload a log tab follows, as pure functions over the pods list.
 
-use cluster::{ContainerKind, NamespaceScope, PodSummary};
+use std::collections::HashMap;
+
+use cluster::{ContainerKind, ContainerSummary, LogLine, NamespaceScope, PodSummary};
 
 use crate::kind_row::{PodOwner, STATEFUL_SET_KIND, owns_pod};
 
@@ -102,6 +104,55 @@ pub(crate) fn container_names(members: &[&PodSummary]) -> Vec<String> {
     init_names.retain(|name| !names.contains(name));
     names.extend(init_names);
     names
+}
+
+/// The `SYS` line for a container whose restart count rose, timed by the last termination when
+/// the pod reports one, else `now`. Only the reason, exit code, and count are read: no message.
+pub(crate) fn restart_marker(container: &ContainerSummary, now: jiff::Timestamp) -> LogLine {
+    let name = &container.name;
+    let count = container.restart_count;
+    let (text, time) = match &container.last_termination {
+        Some(termination) => {
+            let cause = match &termination.reason {
+                Some(reason) => format!("terminated: {reason} (exit {})", termination.exit_code),
+                None => format!("terminated (exit {})", termination.exit_code),
+            };
+            (
+                format!("── container {name} {cause} · restart #{count} ──"),
+                termination.finished_at.unwrap_or(now),
+            )
+        }
+        None => (
+            format!("── container {name} restarted · restart #{count} ──"),
+            now,
+        ),
+    };
+    LogLine {
+        timestamp: Some(time),
+        text,
+    }
+}
+
+/// Containers of `pod` among `streamed` whose restart count rose since `seen`, with the new
+/// count; `seen` is updated. A first sight only records, and a lower count (the pod was
+/// recreated under the same name) only re-baselines.
+pub(crate) fn rising_restarts(
+    seen: &mut HashMap<(String, String), u32>,
+    pod: &PodSummary,
+    streamed: &[&str],
+) -> Vec<(String, u32)> {
+    let mut rises = Vec::new();
+    for container in &pod.containers {
+        if !streamed.contains(&container.name.as_str()) {
+            continue;
+        }
+        let key = (pod.name.clone(), container.name.clone());
+        let before = seen.insert(key, container.restart_count);
+        if before.is_some_and(|before| container.restart_count > before) {
+            rises.push((container.name.clone(), container.restart_count));
+        }
+    }
+    rises
 }
 
 #[cfg(test)]
@@ -321,6 +372,83 @@ mod tests {
             ["api", "proxy", "worker", "setup", "migrate"]
         );
         assert!(container_names(&[]).is_empty());
+    }
+
+    fn restarted(
+        name: &str,
+        count: u32,
+        termination: Option<cluster::Termination>,
+    ) -> ContainerSummary {
+        ContainerSummary {
+            restart_count: count,
+            last_termination: termination,
+            ..container(name, ContainerKind::Main)
+        }
+    }
+
+    #[test]
+    fn restart_marker_names_reason_exit_and_count() {
+        let now: jiff::Timestamp = "2024-05-01T12:00:00Z".parse().expect("valid time");
+        let finished: jiff::Timestamp = "2024-05-01T11:59:00Z".parse().expect("valid time");
+        let killed = cluster::Termination {
+            reason: Some(StatusReason::OomKilled),
+            exit_code: 137,
+            signal: None,
+            started_at: None,
+            finished_at: Some(finished),
+        };
+        let marker = restart_marker(&restarted("api", 14, Some(killed)), now);
+        assert_eq!(
+            marker.text,
+            "── container api terminated: OOMKilled (exit 137) · restart #14 ──"
+        );
+        assert_eq!(marker.timestamp, Some(finished));
+        let plain = restart_marker(&restarted("api", 14, None), now);
+        assert_eq!(plain.text, "── container api restarted · restart #14 ──");
+        assert_eq!(plain.timestamp, Some(now));
+    }
+
+    #[test]
+    fn restart_marker_without_a_reason_still_gives_the_exit_code() {
+        let now: jiff::Timestamp = "2024-05-01T12:00:00Z".parse().expect("valid time");
+        let unknown = cluster::Termination {
+            reason: None,
+            exit_code: 2,
+            signal: None,
+            started_at: None,
+            finished_at: None,
+        };
+        let marker = restart_marker(&restarted("api", 3, Some(unknown)), now);
+        assert_eq!(
+            marker.text,
+            "── container api terminated (exit 2) · restart #3 ──"
+        );
+        assert_eq!(marker.timestamp, Some(now));
+    }
+
+    #[test]
+    fn rising_restarts_report_rises_only() {
+        let with = |count: u32| {
+            let mut api = pod("api-0", (1, 1), None);
+            api.containers = vec![
+                restarted("api", count, None),
+                restarted("proxy", count, None),
+            ];
+            api
+        };
+        let mut seen = HashMap::new();
+        // First sight records without a rise.
+        assert!(rising_restarts(&mut seen, &with(3), &["api"]).is_empty());
+        assert!(rising_restarts(&mut seen, &with(3), &["api"]).is_empty());
+        assert_eq!(
+            rising_restarts(&mut seen, &with(5), &["api"]),
+            [("api".to_owned(), 5)]
+        );
+        // A recreated pod starts at a lower count: only the baseline moves.
+        assert!(rising_restarts(&mut seen, &with(0), &["api"]).is_empty());
+        assert_eq!(seen.get(&("api-0".to_owned(), "api".to_owned())), Some(&0));
+        // A container that is not streamed is never read.
+        assert!(!seen.contains_key(&("api-0".to_owned(), "proxy".to_owned())));
     }
     #[test]
     fn scope_covers_named_several_and_all() {

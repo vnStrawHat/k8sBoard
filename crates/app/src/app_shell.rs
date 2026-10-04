@@ -8,7 +8,7 @@ use cluster::{
     KubeconfigError, NamespaceScope, NetworkPolicySummary, ObjectKind, SecretSummary,
 };
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::resizable::ResizableState;
+use gpui_kit::component::resizable::{ResizablePanelEvent, ResizableState};
 use gpui_kit::component::table::{TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
@@ -512,6 +512,8 @@ pub(crate) struct AppShell {
     _clipboard_quit: Subscription,
     /// Re-renders the title bar when a setting or a settings notice changes.
     _settings_observer: Subscription,
+    /// Saves the dock height when a resize ends (spec 0044).
+    _dock_split_events: Subscription,
 }
 
 impl AppShell {
@@ -528,6 +530,10 @@ impl AppShell {
         let shell = cx.weak_entity();
         let dock = cx.new(|_| Dock::new(shell.clone()));
         let dock_split = cx.new(|_| ResizableState::default());
+        let dock_split_events =
+            cx.subscribe(&dock_split, |_, split, _: &ResizablePanelEvent, cx| {
+                Self::save_dock_height(&split, cx);
+            });
         let saved_tables = AppSettings::get(cx).tables.clone();
         let pod_table = cx.new(|cx| {
             configure(TableState::new(
@@ -698,6 +704,7 @@ impl AppShell {
             pending_reveal: None,
             dock,
             dock_split,
+            _dock_split_events: dock_split_events,
             // A custom launch resolves against the CRD list first, then sets this.
             pending_launch_screen: (options.screen.selects_row()
                 || options.screen.has_dock()
@@ -3681,6 +3688,19 @@ impl AppShell {
         }
     }
 
+    /// `--screen logs-popout`: moves the active log tab of the dock to a window of its own.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn pop_out_active_log_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dock
+            .update(cx, |dock, cx| dock.pop_out_active(window, cx));
+    }
+
+    /// The window a popped-out log tab opened in.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn popped_log_window(&self, cx: &App) -> Option<gpui_kit::AnyWindowHandle> {
+        self.dock.read(cx).popped_window()
+    }
+
     /// The failure of a `--screen custom:` request, which a screenshot run reports instead of
     /// capturing the fallback screen.
     #[cfg(feature = "screenshot")]
@@ -4387,7 +4407,7 @@ impl Render for AppShell {
                     .flex_1()
                     .min_h_0()
                     .child(sidebar(self.screen, &counts, self.live(cx), cx))
-                    .child(self.render_workspace(cx)),
+                    .child(self.render_workspace(window, cx)),
             )
             .child(status_bar(
                 self,

@@ -17,32 +17,67 @@ const MAX_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SourceId(pub(crate) u16);
 
+/// What a line is: written by a container, or added by the tab (a restart marker).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LineKind {
+    Log,
+    Marker,
+}
+
 pub(crate) struct SourcedLine {
     pub(crate) source: SourceId,
+    pub(crate) kind: LineKind,
     pub(crate) line: LogLine,
 }
 
 pub(crate) struct BufferedLine {
     pub(crate) source: SourceId,
+    pub(crate) kind: LineKind,
     pub(crate) level: Option<LogLevel>,
     pub(crate) line: LogLine,
 }
 
-/// What the tab shows: lines that match the filter and are not at a hidden level.
+/// A span of time the brush picked on the histogram. `start` is inclusive, `end` exclusive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TimeWindow {
+    pub(crate) start: jiff::Timestamp,
+    pub(crate) end: jiff::Timestamp,
+}
+
+impl TimeWindow {
+    /// A line without a timestamp cannot be placed in time, so it is outside every window.
+    fn contains(&self, time: Option<jiff::Timestamp>) -> bool {
+        time.is_some_and(|time| self.start <= time && time < self.end)
+    }
+}
+
+/// What the tab shows: lines that match the filter, are not at a hidden level, and fall inside
+/// the brush window.
 #[derive(Default)]
 pub(crate) struct LineView {
     pub(crate) matcher: Option<LineMatcher>,
     pub(crate) hidden_levels: LevelSet,
+    pub(crate) window: Option<TimeWindow>,
 }
 
 impl LineView {
     /// Whether the view can hide a line.
     pub(crate) fn is_filtering(&self) -> bool {
-        self.matcher.is_some() || !self.hidden_levels.hides_none()
+        self.matcher.is_some() || !self.hidden_levels.hides_none() || self.window.is_some()
     }
 
-    /// A line without a detected level counts as INFO (decision 15).
     fn shows(&self, line: &BufferedLine) -> bool {
+        self.window
+            .is_none_or(|window| window.contains(line.line.timestamp))
+            && self.shows_outside_window(line)
+    }
+
+    /// A line without a detected level counts as INFO (decision 15). A marker ignores the level
+    /// chips and the text filter: it is the tab's own note, not a line to search.
+    fn shows_outside_window(&self, line: &BufferedLine) -> bool {
+        if line.kind == LineKind::Marker {
+            return true;
+        }
         let level = line.level.unwrap_or(LogLevel::Info);
         !self.hidden_levels.is_hidden(level)
             && self
@@ -107,6 +142,7 @@ impl LogBuffer {
             let level = self.level_of(&sourced);
             let line = BufferedLine {
                 source: sourced.source,
+                kind: sourced.kind,
                 level,
                 line: sourced.line,
             };
@@ -156,6 +192,10 @@ impl LogBuffer {
     /// The detected level; an indented line without one continues the previous line of its
     /// source (a stack trace follows its error).
     fn level_of(&mut self, sourced: &SourcedLine) -> Option<LogLevel> {
+        // A marker is no log text: it has no level and must not break a continuation.
+        if sourced.kind == LineKind::Marker {
+            return None;
+        }
         let slot = usize::from(sourced.source.0);
         if self.last_levels.len() <= slot {
             self.last_levels.resize(slot + 1, None);
@@ -228,6 +268,25 @@ impl LogBuffer {
 
     pub(crate) fn visible_lines(&self) -> impl Iterator<Item = &BufferedLine> {
         (0..self.visible_len()).filter_map(|index| self.visible_line(index))
+    }
+
+    /// What the histogram counts: the log lines the view shows without its window, so the bars
+    /// keep the whole range while a window is set. A marker is not log volume.
+    pub(crate) fn volume_lines(&self) -> Box<dyn Iterator<Item = &BufferedLine> + '_> {
+        if self.view.window.is_none() {
+            return Box::new(
+                self.visible_lines()
+                    .filter(|buffered| buffered.kind == LineKind::Log),
+            );
+        }
+        // ponytail: rescans up to 10,000 lines per buffer revision while a window is set (Full
+        // layout only); keep a second index if traces show the cost.
+        Box::new(
+            self.lines
+                .iter()
+                .filter(|buffered| buffered.kind == LineKind::Log)
+                .filter(|buffered| self.view.shows_outside_window(buffered)),
+        )
     }
 
     pub(crate) fn total_len(&self) -> usize {

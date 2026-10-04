@@ -4,6 +4,7 @@ use crate::line_matcher::FilterMode;
 fn sourced(source: u16, text: &str) -> SourcedLine {
     SourcedLine {
         source: SourceId(source),
+        kind: LineKind::Log,
         line: LogLine {
             timestamp: None,
             text: text.to_owned(),
@@ -272,6 +273,7 @@ fn view_combines_levels_and_matcher() {
     buffer.set_view(LineView {
         matcher: LineMatcher::parse("disk", FilterMode::Plain).expect("plain"),
         hidden_levels: LevelSet::default().toggled(LogLevel::Warn),
+        ..LineView::default()
     });
     assert_eq!(visible(&buffer), ["ERROR disk", "DEBUG disk"]);
 }
@@ -280,6 +282,7 @@ fn view_combines_levels_and_matcher() {
 fn visible_text_writes_prefixes_and_clock_time() {
     let stamp = |source: u16, text: &str| SourcedLine {
         source: SourceId(source),
+        kind: LineKind::Log,
         line: LogLine {
             timestamp: "2024-05-01T10:47:58.902345678Z".parse().ok(),
             text: text.to_owned(),
@@ -311,6 +314,7 @@ fn format_log_time_is_utc_with_millis() {
 fn visible_text_writes_prefixes_and_rfc3339_time() {
     let stamped = |source: u16, text: &str| SourcedLine {
         source: SourceId(source),
+        kind: LineKind::Log,
         line: LogLine {
             timestamp: "2024-05-01T10:47:58.902345678Z".parse().ok(),
             text: text.to_owned(),
@@ -349,4 +353,161 @@ fn revision_bumps_on_push_clear_and_view() {
     buffer.clear();
     assert!(has_bumped(&buffer));
     assert!(!has_bumped(&buffer));
+}
+
+fn marker(text: &str) -> SourcedLine {
+    SourcedLine {
+        kind: LineKind::Marker,
+        ..sourced(0, text)
+    }
+}
+
+#[test]
+fn markers_ignore_levels_and_the_text_filter() {
+    let mut buffer = LogBuffer::new();
+    push_checked(
+        &mut buffer,
+        vec![
+            line("ERROR timeout"),
+            line("INFO fine"),
+            marker("── container api restarted · restart #1 ──"),
+        ],
+    );
+    buffer.set_view(LineView {
+        matcher: LineMatcher::parse("timeout", FilterMode::Plain).expect("plain"),
+        hidden_levels: LevelSet::default().toggled(LogLevel::Error),
+        ..LineView::default()
+    });
+    assert_eq!(
+        visible(&buffer),
+        ["── container api restarted · restart #1 ──"]
+    );
+}
+
+#[test]
+fn markers_keep_the_continuation_level() {
+    let mut buffer = LogBuffer::new();
+    push_checked(
+        &mut buffer,
+        vec![
+            line("ERROR boom"),
+            marker("── container api restarted · restart #1 ──"),
+            line("  at frame"),
+        ],
+    );
+    let levels: Vec<_> = buffer.visible_lines().map(|line| line.level).collect();
+    assert_eq!(levels, [Some(LogLevel::Error), None, Some(LogLevel::Error)]);
+}
+
+#[test]
+fn volume_lines_skip_markers() {
+    let mut buffer = LogBuffer::new();
+    push_checked(&mut buffer, vec![line("a"), marker("m"), line("b")]);
+    assert_eq!(buffer.visible_len(), 3);
+    assert_eq!(buffer.volume_lines().count(), 2);
+}
+
+#[test]
+fn export_writes_markers() {
+    let mut buffer = LogBuffer::new();
+    push_checked(&mut buffer, vec![line("a"), marker("── restart ──")]);
+    let prefixes = [SharedString::from("api-1/app")];
+    assert_eq!(
+        buffer.visible_text(LineTime::Hidden, &prefixes),
+        "api-1/app a\napi-1/app ── restart ──"
+    );
+}
+
+fn stamped(text: &str, time: Option<&str>) -> SourcedLine {
+    SourcedLine {
+        line: LogLine {
+            timestamp: time.map(|time| time.parse().expect("valid time")),
+            text: text.to_owned(),
+        },
+        ..sourced(0, text)
+    }
+}
+
+fn window(start: &str, end: &str) -> TimeWindow {
+    TimeWindow {
+        start: start.parse().expect("valid time"),
+        end: end.parse().expect("valid time"),
+    }
+}
+
+#[test]
+fn window_hides_lines_outside_and_without_a_timestamp() {
+    let mut buffer = LogBuffer::new();
+    push_checked(
+        &mut buffer,
+        vec![
+            stamped("before", Some("2024-05-01T10:00:00Z")),
+            stamped("start", Some("2024-05-01T10:00:05Z")),
+            stamped("inside", Some("2024-05-01T10:00:07Z")),
+            stamped("end", Some("2024-05-01T10:00:10Z")),
+            stamped("untimed", None),
+        ],
+    );
+    buffer.set_view(LineView {
+        window: Some(window("2024-05-01T10:00:05Z", "2024-05-01T10:00:10Z")),
+        ..LineView::default()
+    });
+    assert_eq!(visible(&buffer), ["start", "inside"]);
+    assert!(buffer.view().is_filtering());
+}
+
+#[test]
+fn volume_lines_ignore_the_window() {
+    let mut buffer = LogBuffer::new();
+    push_checked(
+        &mut buffer,
+        vec![
+            stamped("a", Some("2024-05-01T10:00:00Z")),
+            stamped("b", Some("2024-05-01T10:00:07Z")),
+            stamped("c", Some("2024-05-01T10:00:20Z")),
+        ],
+    );
+    buffer.set_view(LineView {
+        window: Some(window("2024-05-01T10:00:05Z", "2024-05-01T10:00:10Z")),
+        ..LineView::default()
+    });
+    assert_eq!(buffer.visible_len(), 1);
+    assert_eq!(buffer.volume_lines().count(), 3);
+}
+
+#[test]
+fn volume_lines_keep_the_text_filter_while_a_window_is_set() {
+    let mut buffer = LogBuffer::new();
+    push_checked(
+        &mut buffer,
+        vec![
+            stamped("keep a", Some("2024-05-01T10:00:00Z")),
+            stamped("drop b", Some("2024-05-01T10:00:07Z")),
+            stamped("keep c", Some("2024-05-01T10:00:20Z")),
+        ],
+    );
+    buffer.set_view(LineView {
+        matcher: LineMatcher::parse("keep", FilterMode::Plain).expect("plain"),
+        window: Some(window("2024-05-01T10:00:05Z", "2024-05-01T10:00:10Z")),
+        ..LineView::default()
+    });
+    assert_eq!(buffer.volume_lines().count(), 2);
+}
+
+#[test]
+fn a_window_applies_to_a_marker() {
+    let mut buffer = LogBuffer::new();
+    let timed_marker = SourcedLine {
+        line: LogLine {
+            timestamp: "2024-05-01T10:00:20Z".parse().ok(),
+            text: "── restart ──".to_owned(),
+        },
+        ..marker("")
+    };
+    push_checked(&mut buffer, vec![timed_marker]);
+    buffer.set_view(LineView {
+        window: Some(window("2024-05-01T10:00:05Z", "2024-05-01T10:00:10Z")),
+        ..LineView::default()
+    });
+    assert_eq!(buffer.visible_len(), 0);
 }

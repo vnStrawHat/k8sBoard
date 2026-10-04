@@ -1,0 +1,241 @@
+//! Log tab behavior in a headless window over a fake API server (see `log_fixtures`).
+
+use gpui_kit::{Entity, Focusable as _, TestAppContext, Window, point, px};
+
+use super::*;
+use crate::log_fixtures::{fixture_container, fixture_pod, oom_killed, open_log_fixture};
+use crate::log_window::open_log_window;
+
+const LOG_BODY: &str =
+    "2024-05-01T10:00:00.000000000Z first\n2024-05-01T10:00:01.000000000Z second\n";
+
+fn marker_texts(tab: &LogTab) -> Vec<String> {
+    tab.buffer
+        .visible_lines()
+        .filter(|line| line.kind == LineKind::Marker)
+        .map(|line| line.line.text.clone())
+        .collect()
+}
+
+#[gpui_kit::test]
+fn restart_marker_shows_after_the_stream_ended(cx: &mut TestAppContext) {
+    let pod = fixture_pod("api-0", vec![fixture_container("api", 3, None)]);
+    let fixture = open_log_fixture(vec![pod.clone()], LOG_BODY, cx);
+    let tab = fixture.open_tab(&pod, "api", cx);
+    // The fake server closes the body, so the follow stream ends like a container's does.
+    fixture.wait_until("the stream to end", cx, |cx| {
+        tab.read_with(cx, |tab, _| tab.phase() == TabPhase::Ended)
+    });
+    assert_eq!(tab.read_with(cx, |tab, _| tab.buffer.total_len()), 2);
+
+    // The kubelet raises the count only after the stream has ended.
+    let restarted = fixture_pod(
+        "api-0",
+        vec![fixture_container(
+            "api",
+            14,
+            Some(oom_killed("2024-05-01T10:00:02Z")),
+        )],
+    );
+    fixture.session.update(cx, |session, cx| {
+        session.set_pods_for_test(vec![restarted], cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        tab.read_with(cx, |tab, _| marker_texts(tab)),
+        ["── container api terminated: OOMKilled (exit 137) · restart #14 ──"]
+    );
+    // The marker comes from the pod list: it opens no stream.
+    assert_eq!(fixture.log_reads(), 1);
+}
+
+fn timestamps_of_window(tab: &LogTab) -> Option<(String, String)> {
+    tab.buffer
+        .view()
+        .window
+        .map(|window| (window.start.to_string(), window.end.to_string()))
+}
+
+/// A tab in the Full layout whose two lines, a second apart, make a two-bucket histogram.
+fn open_full_tab(cx: &mut TestAppContext) -> (crate::log_fixtures::LogFixture, Entity<LogTab>) {
+    let pod = fixture_pod("api-0", vec![fixture_container("api", 0, None)]);
+    let fixture = open_log_fixture(vec![pod.clone()], LOG_BODY, cx);
+    let tab = fixture.open_tab(&pod, "api", cx);
+    fixture.wait_until("the stream to end", cx, |cx| {
+        tab.read_with(cx, |tab, _| tab.phase() == TabPhase::Ended)
+    });
+    tab.update(cx, |tab, cx| tab.set_layout(LogLayout::Full, cx));
+    fixture.draw(cx);
+    (fixture, tab)
+}
+
+fn mouse_down(position: gpui_kit::Point<Pixels>) -> gpui_kit::MouseDownEvent {
+    gpui_kit::MouseDownEvent {
+        button: gpui_kit::MouseButton::Left,
+        position,
+        modifiers: gpui_kit::Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
+    }
+}
+
+fn mouse_move(position: gpui_kit::Point<Pixels>) -> gpui_kit::MouseMoveEvent {
+    gpui_kit::MouseMoveEvent {
+        position,
+        pressed_button: Some(gpui_kit::MouseButton::Left),
+        modifiers: gpui_kit::Modifiers::default(),
+    }
+}
+
+fn mouse_up(position: gpui_kit::Point<Pixels>) -> gpui_kit::MouseUpEvent {
+    gpui_kit::MouseUpEvent {
+        button: gpui_kit::MouseButton::Left,
+        position,
+        modifiers: gpui_kit::Modifiers::default(),
+        click_count: 1,
+    }
+}
+
+#[gpui_kit::test]
+fn release_outside_the_chart_ends_the_brush(cx: &mut TestAppContext) {
+    let (fixture, tab) = open_full_tab(cx);
+    let mut visual = gpui_kit::VisualTestContext::from_window(fixture.window.into(), cx);
+    let chart = visual
+        .debug_bounds("log-volume-brush")
+        .expect("the histogram is drawn");
+    let y = chart.center().y;
+    visual.simulate_event(mouse_down(point(chart.left() + chart.size.width * 0.25, y)));
+    assert!(tab.read_with(cx, |tab, _| tab.brush.is_some()));
+    // The drag shows on the next frame, which is when the window listeners are registered.
+    fixture.draw(cx);
+    let beyond = point(chart.right() + px(120.), y);
+    visual.simulate_event(mouse_move(beyond));
+    visual.simulate_event(mouse_up(beyond));
+    assert!(tab.read_with(cx, |tab, _| tab.brush.is_none()));
+    // The release clamps to the last bucket: the window spans both buckets.
+    assert_eq!(
+        tab.read_with(cx, |tab, _| timestamps_of_window(tab)),
+        Some((
+            "2024-05-01T10:00:00Z".to_owned(),
+            "2024-05-01T10:00:02Z".to_owned()
+        ))
+    );
+}
+
+#[gpui_kit::test]
+fn restart_clears_the_window(cx: &mut TestAppContext) {
+    let (_fixture, tab) = open_full_tab(cx);
+    tab.update(cx, |tab, cx| {
+        tab.apply_view(
+            Some(TimeWindow {
+                start: "2024-05-01T10:00:00Z".parse().expect("valid time"),
+                end: "2024-05-01T10:00:01Z".parse().expect("valid time"),
+            }),
+            cx,
+        );
+        tab.restart_stream(cx);
+    });
+    assert_eq!(tab.read_with(cx, |tab, _| timestamps_of_window(tab)), None);
+}
+
+fn shown_texts(tab: &LogTab) -> Vec<String> {
+    tab.buffer
+        .visible_lines()
+        .map(|line| line.line.text.clone())
+        .collect()
+}
+
+#[gpui_kit::test]
+fn pop_out_keeps_the_filter_text(cx: &mut TestAppContext) {
+    let (fixture, tab) = open_full_tab(cx);
+    fixture.with_window(cx, |window, cx| {
+        let input = tab.read(cx).filter_input.clone();
+        input.update(cx, |input, cx| input.replace_all("second", window, cx));
+    });
+    let shown = tab.read_with(cx, |tab, _| shown_texts(tab));
+    assert_eq!(shown, ["second"]);
+    let old_input = tab.read_with(cx, |tab, _| tab.filter_input.entity_id());
+
+    fixture.clear(cx);
+    let window = cx
+        .update(|cx| open_log_window(tab.clone(), "api-0/api".to_owned(), cx))
+        .expect("the window opens");
+    cx.run_until_parked();
+
+    // The kit input belongs to the window that made it, so the new window has its own, with the
+    // same text, and the view did not change.
+    let (new_input, text) = tab.read_with(cx, |tab, cx| {
+        (
+            tab.filter_input.entity_id(),
+            tab.filter_input.read(cx).value().to_string(),
+        )
+    });
+    assert_ne!(new_input, old_input);
+    assert_eq!(text, "second");
+    assert_eq!(tab.read_with(cx, |tab, _| shown_texts(tab)), shown);
+    // It takes the focus there.
+    let input = tab.read_with(cx, |tab, _| tab.filter_input.clone());
+    let is_focused = window
+        .update(cx, |_, window, cx| {
+            input.read(cx).focus_handle(cx).is_focused(window)
+        })
+        .expect("the window is open");
+    assert!(is_focused);
+    // A typed change reaches the tab through the new subscription.
+    window
+        .update(cx, |_, window, cx| {
+            input.update(cx, |input, cx| input.replace_all("first", window, cx));
+        })
+        .expect("the window is open");
+    cx.run_until_parked();
+    assert_eq!(tab.read_with(cx, |tab, _| shown_texts(tab)), ["first"]);
+}
+
+#[gpui_kit::test]
+fn pop_out_button_hides_once_the_tab_is_popped_out(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    let (fixture, tab) = open_full_tab(cx);
+    let is_drawn = |window: &mut Window| window.try_find("log-pop-out").is_some();
+    assert!(fixture.with_window(cx, |window, _| is_drawn(window)));
+    fixture.clear(cx);
+    let window = cx
+        .update(|cx| open_log_window(tab.clone(), "api-0/api".to_owned(), cx))
+        .expect("the window opens");
+    cx.run_until_parked();
+    let is_drawn_there = window
+        .update(cx, |_, window, cx| {
+            window.render_frame(cx);
+            is_drawn(window)
+        })
+        .expect("the window is open");
+    assert!(!is_drawn_there);
+}
+
+fn one_second_window() -> TimeWindow {
+    TimeWindow {
+        start: "2024-05-01T10:00:00Z".parse().expect("valid time"),
+        end: "2024-05-01T10:00:01Z".parse().expect("valid time"),
+    }
+}
+
+#[gpui_kit::test]
+fn a_click_without_a_drag_clears_the_window(cx: &mut TestAppContext) {
+    let (_fixture, tab) = open_full_tab(cx);
+    tab.update(cx, |tab, cx| {
+        tab.apply_view(Some(one_second_window()), cx);
+        tab.begin_brush(0.5, cx);
+        tab.end_brush(0.5, cx);
+    });
+    assert_eq!(tab.read_with(cx, |tab, _| timestamps_of_window(tab)), None);
+}
+
+#[gpui_kit::test]
+fn the_clear_button_shows_every_line_again(cx: &mut TestAppContext) {
+    let (_fixture, tab) = open_full_tab(cx);
+    tab.update(cx, |tab, cx| {
+        tab.apply_view(Some(one_second_window()), cx);
+        assert_eq!(tab.buffer.visible_len(), 1);
+        tab.clear_time_window(cx);
+    });
+    assert_eq!(tab.read_with(cx, |tab, _| tab.buffer.visible_len()), 2);
+}

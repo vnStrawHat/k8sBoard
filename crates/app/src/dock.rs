@@ -8,17 +8,18 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, AnyWindowHandle, App, AppContext as _, Context, Entity, InteractiveElement as _,
+    IntoElement, ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::AppShell;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_session::ClusterSession;
 use crate::drain_tab::DrainTab;
-use crate::log_tab::{LogLayout, LogTab};
+use crate::log_tab::{LogLayout, LogTab, LogTabEvent};
 use crate::log_target::{ContainerChoice, LogTarget, NoLogTarget};
+use crate::log_window::open_log_window;
 use crate::resource_actions::{RowAction, disabled_menu_item};
 use crate::row_context::RowContext;
 use crate::shell_tab::{AttachGrant, ShellGrant, ShellKind, ShellTab, ShellTarget};
@@ -40,6 +41,30 @@ pub(crate) fn dock_max_height(container: Pixels) -> Pixels {
         return Pixels::MAX;
     }
     (container * MAX_DOCK_FRACTION).max(MIN_DOCK_HEIGHT)
+}
+
+/// The dock height a launch starts with: the saved one when finite and positive, clamped to
+/// `MIN_DOCK_HEIGHT ..= dock_max_height(viewport)`; else `DEFAULT_DOCK_HEIGHT` under the same cap.
+/// The workspace is unmeasured on the first frame, so the viewport stands in for it.
+pub(crate) fn initial_dock_height(saved: Option<f32>, viewport: Pixels) -> Pixels {
+    let wanted = saved
+        .filter(|height| height.is_finite() && *height > 0.)
+        .map_or(DEFAULT_DOCK_HEIGHT, px);
+    wanted.max(MIN_DOCK_HEIGHT).min(dock_max_height(viewport))
+}
+
+/// What a resize end stores: whole pixels, `None` for the default (a reset forgets the preference).
+pub(crate) fn saved_dock_height(height: Pixels) -> Option<f32> {
+    let whole = f32::from(height).round();
+    (whole != f32::from(DEFAULT_DOCK_HEIGHT)).then_some(whole)
+}
+
+/// How far above the handle the 60 % line sits; `None` before the first layout.
+pub(crate) fn max_line_offset(container: Pixels, dock: Pixels) -> Option<Pixels> {
+    if container <= px(0.) {
+        return None;
+    }
+    Some((dock_max_height(container) - dock).max(px(0.)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,8 +142,17 @@ impl DockTab {
     }
 }
 
+/// A log tab that moved to a window of its own. The window owns the tab; the dock keeps a weak
+/// handle, so closing the window ends the stream with no bookkeeping here.
+struct PoppedTab {
+    tab: WeakEntity<LogTab>,
+    window: AnyWindowHandle,
+}
+
 pub(crate) struct Dock {
     tabs: Vec<DockTab>,
+    /// Pop-outs of the current cluster; closed windows are dropped before each use.
+    popped: Vec<PoppedTab>,
     /// `None` exactly when `tabs` is empty.
     active: Option<usize>,
     mode: DockMode,
@@ -130,6 +164,7 @@ impl Dock {
     pub(crate) fn new(shell: WeakEntity<AppShell>) -> Self {
         Self {
             tabs: Vec::new(),
+            popped: Vec::new(),
             active: None,
             mode: DockMode::Normal,
             shell,
@@ -148,6 +183,9 @@ impl Dock {
         let Some(session) = origin.session.upgrade() else {
             return;
         };
+        if self.activate_popped(&origin, &target, cx) {
+            return;
+        }
         let existing = self.tabs.iter().position(|tab| {
             matches!(tab, DockTab::Logs(tab) if tab.read(cx).is_for(&origin.cluster, &target))
         });
@@ -166,6 +204,8 @@ impl Dock {
             }
             None => {
                 let tab = cx.new(|cx| LogTab::new(origin, target, &session, window, cx));
+                cx.subscribe_in(&tab, window, Self::on_log_tab_event)
+                    .detach();
                 let layout = self.layout();
                 tab.update(cx, |tab, cx| tab.set_layout(layout, cx));
                 self.tabs.push(DockTab::Logs(tab));
@@ -177,6 +217,95 @@ impl Dock {
             self.mode = DockMode::Normal;
         }
         cx.notify();
+    }
+
+    /// A pop-out already shows `target` of that cluster: its window is brought forward, and an
+    /// explicit container pick applies as it does to a dock tab. No tab, no stream.
+    fn activate_popped(
+        &mut self,
+        origin: &LogOrigin,
+        target: &LogTarget,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.popped.retain(|popped| popped.tab.upgrade().is_some());
+        let shown = self.popped.iter().find_map(|popped| {
+            let tab = popped.tab.upgrade()?;
+            tab.read(cx)
+                .is_for(&origin.cluster, target)
+                .then_some((tab, popped.window))
+        });
+        let Some((tab, window)) = shown else {
+            return false;
+        };
+        if let LogTarget::Pod(pod) = target
+            && pod.choice == ContainerChoice::Explicit
+        {
+            let container = pod.initial_container.clone();
+            tab.update(cx, |tab, cx| tab.pick_container(container, cx));
+        }
+        let _ = window.update(cx, |_, window, _| window.activate_window());
+        true
+    }
+
+    /// Moves a log tab out of the dock into a window of its own; the same entity keeps its
+    /// stream. The dock keeps a weak handle (decision 19). If the window cannot open, the tab goes
+    /// back where it was and a notice says so.
+    fn pop_out(&mut self, tab: &Entity<LogTab>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|open| matches!(open, DockTab::Logs(logs) if logs == tab))
+        else {
+            return;
+        };
+        let (active, mode) = (self.active, self.mode);
+        let Some(taken) = self.take_tab(index, cx) else {
+            return;
+        };
+        let title = tab.read(cx).label();
+        match open_log_window(tab.clone(), title, cx) {
+            Some(handle) => self.popped.push(PoppedTab {
+                tab: tab.downgrade(),
+                window: handle,
+            }),
+            None => {
+                self.tabs.insert(index, taken);
+                self.active = active;
+                self.mode = mode;
+                window.push_notification(Notification::warning("Could not open a new window"), cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn on_log_tab_event(
+        &mut self,
+        tab: &Entity<LogTab>,
+        event: &LogTabEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            LogTabEvent::PopOut => self.pop_out(tab, window, cx),
+        }
+    }
+
+    /// `--screen logs-popout`: the active log tab moves to its window.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn pop_out_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(DockTab::Logs(tab)) = self.active_tab() {
+            let tab = tab.clone();
+            self.pop_out(&tab, window, cx);
+        }
+    }
+
+    /// The window of the first live pop-out.
+    #[cfg(any(feature = "screenshot", test))]
+    pub(crate) fn popped_window(&self) -> Option<AnyWindowHandle> {
+        self.popped
+            .iter()
+            .find(|popped| popped.tab.upgrade().is_some())
+            .map(|popped| popped.window)
     }
 
     /// Opens a shell tab on `connection`, the connection of the target's own cluster, with the
@@ -342,16 +471,16 @@ impl Dock {
         if self.tabs.get(index).is_some_and(|tab| tab.is_pinned(cx)) {
             return;
         }
-        self.remove_tab(index, cx);
+        self.take_tab(index, cx);
     }
 
-    /// Takes the tab out whatever it is doing: for the release of its cluster, whose session the
-    /// tab cannot outlive.
-    fn remove_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+    /// Takes the tab out whatever it is doing, and moves the active index and the mode as a
+    /// close does.
+    fn take_tab(&mut self, index: usize, cx: &mut Context<Self>) -> Option<DockTab> {
         if index >= self.tabs.len() {
-            return;
+            return None;
         }
-        self.tabs.remove(index);
+        let taken = self.tabs.remove(index);
         let remaining = self.tabs.len();
         self.active = self
             .active
@@ -360,10 +489,17 @@ impl Dock {
             self.mode = DockMode::Normal;
         }
         cx.notify();
+        Some(taken)
     }
 
-    /// A context switch: every stream belongs to the old connection.
+    /// A context switch: every stream belongs to the old connection, in the dock and in the
+    /// pop-out windows alike.
     pub(crate) fn close_all(&mut self, cx: &mut Context<Self>) {
+        for popped in self.popped.drain(..) {
+            let _ = popped
+                .window
+                .update(cx, |_, window, _| window.remove_window());
+        }
         self.tabs.clear();
         self.active = None;
         self.mode = DockMode::Normal;
@@ -423,6 +559,18 @@ impl Dock {
             .filter_map(|tab| match tab {
                 DockTab::Shell(tab) => Some(tab.clone()),
                 DockTab::Logs(_) | DockTab::Drain(_) => None,
+            })
+            .collect()
+    }
+
+    /// The open log tabs, in tab order.
+    #[cfg(test)]
+    pub(crate) fn log_tab_entities(&self) -> Vec<Entity<LogTab>> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| match tab {
+                DockTab::Logs(tab) => Some(tab.clone()),
+                DockTab::Shell(_) | DockTab::Drain(_) => None,
             })
             .collect()
     }
@@ -794,6 +942,32 @@ mod tests {
     }
 
     #[test]
+    fn initial_dock_height_uses_a_valid_saved_height() {
+        let viewport = px(1000.);
+        assert_eq!(initial_dock_height(None, viewport), px(280.));
+        assert_eq!(initial_dock_height(Some(400.), viewport), px(400.));
+        assert_eq!(initial_dock_height(Some(50.), viewport), px(120.));
+        for invalid in [0., -1., f32::INFINITY, f32::NAN] {
+            assert_eq!(initial_dock_height(Some(invalid), viewport), px(280.));
+        }
+        assert_eq!(initial_dock_height(Some(900.), viewport), px(600.));
+        assert_eq!(initial_dock_height(Some(400.), px(300.)), px(180.));
+    }
+
+    #[test]
+    fn saved_dock_height_rounds_and_forgets_the_default() {
+        assert_eq!(saved_dock_height(px(401.6)), Some(402.));
+        assert_eq!(saved_dock_height(px(280.)), None);
+    }
+
+    #[test]
+    fn max_line_offset_is_the_room_left_to_sixty_percent() {
+        assert_eq!(max_line_offset(px(1000.), px(280.)), Some(px(320.)));
+        assert_eq!(max_line_offset(px(1000.), px(600.)), Some(px(0.)));
+        assert_eq!(max_line_offset(px(0.), px(280.)), None);
+    }
+
+    #[test]
     fn dock_max_height_unbounded_before_first_layout() {
         assert_eq!(dock_max_height(px(0.)), Pixels::MAX);
     }
@@ -869,3 +1043,7 @@ mod tests {
         assert_eq!(step_tab(0, 1, TabStep::Next), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "dock_tests.rs"]
+mod dock_tests;

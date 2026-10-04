@@ -25,7 +25,7 @@ Zoomed      log_dock alone, size_full; `upper` is not rendered (the table and dr
   - `container = self.dock_split.read(cx).container_size()`, the measured workspace height from the previous frame;
   - the panel's `size_range` applies the cap both to dragging (`panel_size_range`) and at render (`max_h`). When the window shrinks, the next prepaint adjusts the sizes to the container.
 - **The handle** is the kit's own: a hairline with a pill on hover or drag (W8 note 1). It is drawn by the panel, so there is no separate grip element and no `on_drag_move` listener.
-- Double-click reset is dropped: the kit handle exposes no click hook. `ResizableState::reset_panel` keeps the current size, so it is not a reset.
+- Double-click reset was dropped here (the kit handle has no click hook; `ResizableState::reset_panel` keeps the current size). Done by 0044 through a custom handle renderer that calls `resize_panel(1, 280 px)`.
 
 ```rust
 const DEFAULT_DOCK_HEIGHT: Pixels = px(280.);

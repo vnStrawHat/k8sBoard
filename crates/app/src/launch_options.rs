@@ -23,7 +23,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|values-edit|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|values-edit|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|drain-dialog|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
@@ -62,6 +62,9 @@ pub(crate) enum LaunchScreen {
     NodeDrawer(DrawerTab),
     LogsDock,
     LogsZoomed,
+    /// `--screen logs-popout`: the zoomed dock, then its active tab moved to a window of its own;
+    /// a screenshot captures that window.
+    LogsPopout,
     /// `--screen logs-workload`: the dock zoomed on the workload that owns the logs pod.
     LogsWorkload,
     /// `--screen shell-fixture`: Pods with the dock zoomed on a shell tab fed a fixed transcript
@@ -245,6 +248,7 @@ impl LaunchScreen {
             | Self::PodDrawer(_)
             | Self::LogsDock
             | Self::LogsZoomed
+            | Self::LogsPopout
             | Self::LogsWorkload
             | Self::ShellFixture
             | Self::ShellDockFixture
@@ -508,6 +512,7 @@ impl LaunchScreen {
             self,
             Self::LogsDock
                 | Self::LogsZoomed
+                | Self::LogsPopout
                 | Self::LogsWorkload
                 | Self::ShellFixture
                 | Self::ShellDockFixture
@@ -557,6 +562,7 @@ impl LaunchScreen {
             "node-yaml" => Some(Self::NodeDrawer(DrawerTab::Yaml)),
             "logs-dock" => Some(Self::LogsDock),
             "logs-zoomed" => Some(Self::LogsZoomed),
+            "logs-popout" => Some(Self::LogsPopout),
             "logs-workload" => Some(Self::LogsWorkload),
             "shell-fixture" => Some(Self::ShellFixture),
             "shell-dock-fixture" => Some(Self::ShellDockFixture),

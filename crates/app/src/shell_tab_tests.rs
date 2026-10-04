@@ -916,3 +916,16 @@ fn node_shell_tab_label_matches_w5(cx: &mut TestAppContext) {
         "node shell · wk-03 (debug pod)"
     );
 }
+
+#[gpui_kit::test]
+fn shell_tabs_have_no_pop_out(cx: &mut TestAppContext) {
+    // A shell holds window-bound state and counts in `leaving_work`, so it stays in the dock.
+    let fixture = open_tab(900., 300., cx);
+    render(&fixture, cx);
+    render(&fixture, cx);
+    assert!(
+        is_drawn(&fixture, "shell-clear", cx),
+        "the toolbar is drawn"
+    );
+    assert!(!is_drawn(&fixture, "log-pop-out", cx));
+}

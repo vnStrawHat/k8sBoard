@@ -156,12 +156,17 @@ fn parses_logs_screens() {
         LaunchScreen::LogsZoomed
     );
     assert_eq!(
+        run_options(&["--screen", "logs-popout"]).screen,
+        LaunchScreen::LogsPopout
+    );
+    assert_eq!(
         run_options(&["--screen", "logs-workload"]).screen,
         LaunchScreen::LogsWorkload
     );
     for screen in [
         LaunchScreen::LogsDock,
         LaunchScreen::LogsZoomed,
+        LaunchScreen::LogsPopout,
         LaunchScreen::LogsWorkload,
     ] {
         assert_eq!(screen.screen(), Screen::Pods);

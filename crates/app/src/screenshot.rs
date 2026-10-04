@@ -640,22 +640,33 @@ async fn capture_when_settled(
         waited += POLL_INTERVAL;
     }
     cx.background_executor().timer(SETTLE_DELAY).await;
+    // The pop-out screen moves the active tab out first and captures the window it lands in.
+    let shot = if request.screen == LaunchScreen::LogsPopout {
+        pop_out_window(window, shell, cx).await?
+    } else {
+        *window
+    };
     if request.screen.opens_menu() {
         // The ⋯ menu of the drawer opens as a click opens it, so the capture shows its items.
-        window.update(cx, |_, window, cx| {
+        shot.update(cx, |_, window, cx| {
             window.refresh();
             window.click("drawer-menu", cx);
         })?;
         cx.background_executor().timer(SETTLE_DELAY).await;
     }
-    window.update(cx, |_, window, _| window.refresh())?;
+    shot.update(cx, |_, window, _| window.refresh())?;
     cx.background_executor().timer(POLL_INTERVAL).await;
 
-    let image = window.update(cx, |_, window, _| window.render_to_image())??;
+    let image = shot.update(cx, |_, window, _| window.render_to_image())??;
     if let Some(parent) = request.path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     image.save(&request.path)?;
+    // The focused filter input of the pop-out is a handle the leak check of this build reports at
+    // exit, so the window goes before the app quits (as the palette shot closes its dialogs).
+    if request.screen == LaunchScreen::LogsPopout {
+        shot.update(cx, |_, window, _| window.remove_window())?;
+    }
     // An open popover leaves its input focused, and the blink timer of a focused input is a handle the
     // leak check of this build reports at exit. Closing the switcher and the value popover moves the
     // focus back first, and so does closing the dialogs: the command palette leaves its query input
@@ -679,6 +690,23 @@ async fn capture_when_settled(
         eprintln!("screenshot saved after timeout (screen not settled)");
         Ok(ScreenshotOutcome::TimedOut)
     }
+}
+
+/// Moves the active log tab of the main window to its own window, and waits for that window to
+/// show the tab, which keeps its stream (no second read).
+#[cfg(feature = "screenshot")]
+async fn pop_out_window(
+    main: &AnyWindowHandle,
+    shell: &Entity<AppShell>,
+    cx: &mut gpui_kit::AsyncApp,
+) -> anyhow::Result<AnyWindowHandle> {
+    main.update(cx, |_, window, cx| {
+        shell.update(cx, |shell, cx| shell.pop_out_active_log_tab(window, cx));
+    })?;
+    cx.background_executor().timer(SETTLE_DELAY).await;
+    shell
+        .read_with(cx, |shell, cx| shell.popped_log_window(cx))
+        .ok_or_else(|| anyhow::anyhow!("the log tab did not pop out"))
 }
 
 #[cfg(test)]
