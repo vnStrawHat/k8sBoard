@@ -12,6 +12,7 @@ use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext, WeakEntity, Win
 use super::*;
 use crate::cluster_registry::{ClusterRef, ClusterRegistry};
 use crate::clusters_page::set_confirm;
+use crate::color_theme::ColorTheme;
 use crate::settings::{Settings, ThemePreference};
 use crate::settings_store::{LoadedSettings, WriteMode};
 
@@ -249,6 +250,37 @@ fn appearance_change_updates_settings_and_theme(cx: &mut TestAppContext) {
         change_theme("Light", cx);
         assert_eq!(AppSettings::get(cx).theme, ThemePreference::Light);
         assert!(!Theme::global(cx).is_dark());
+    });
+}
+
+#[test]
+fn color_theme_labels_round_trip() {
+    for colors in [ColorTheme::Default, ColorTheme::ZedOne] {
+        let label = COLOR_THEME_OPTIONS.label(colors, || unreachable!("every value is listed"));
+        assert_eq!(COLOR_THEME_OPTIONS.value(&label), colors);
+    }
+    assert_eq!(COLOR_THEME_OPTIONS.value("Solarized"), ColorTheme::Default);
+}
+
+#[gpui_kit::test]
+fn changing_color_theme_saves_and_applies(cx: &mut TestAppContext) {
+    install(None, &[], cx);
+    cx.update(|cx| {
+        change_theme("Dark", cx);
+        change_color_theme("Zed One", cx);
+        assert_eq!(
+            AppSettings::get(cx).appearance.color_theme,
+            ColorTheme::ZedOne
+        );
+        assert_eq!(Theme::global(cx).theme_name(), "One Dark");
+        change_theme("Light", cx);
+        assert_eq!(Theme::global(cx).theme_name(), "One Light");
+        change_color_theme("Default", cx);
+        assert_eq!(
+            AppSettings::get(cx).appearance.color_theme,
+            ColorTheme::Default
+        );
+        assert_eq!(Theme::global(cx).theme_name(), "Default Light");
     });
 }
 

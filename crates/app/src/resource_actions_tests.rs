@@ -932,6 +932,7 @@ fn secret_menu_blocked_in_screenshot_runs() {
         filter: None,
         select: None,
         theme: None,
+        color_theme: None,
         config_dir: None,
         screen: crate::launch_options::LaunchScreen::Kind(ResourceKind::Secrets),
         screenshot: Some("secrets.png".into()),

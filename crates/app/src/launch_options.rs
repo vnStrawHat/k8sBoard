@@ -5,6 +5,7 @@ use cluster::NamespaceScope;
 
 use crate::app_shell::Screen;
 use crate::cluster_catalog::{PathStyle, same_path_text};
+use crate::color_theme::ColorTheme;
 use crate::drawer::DrawerTab;
 use crate::namespace_picker::MAX_NAMESPACES;
 use crate::resource_kind::ResourceKind;
@@ -23,6 +24,8 @@ Options:
                          (default: the first row)
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
+  --color-theme default|zed-one
+                         colour family (default: the saved one, else Default)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
   --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|topology-curves|topology-traffic|topology-traffic-curves|topology-traffic-fixture|topology-traffic-fixture-curves|pod-drawer|pod-containers|pod-events|pod-monitor|pod-monitor-source-fixture|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|
@@ -782,6 +785,8 @@ pub(crate) struct LaunchOptions {
     /// The row a drawer screen opens: `name` or `namespace/name`; the first row without it.
     pub(crate) select: Option<String>,
     pub(crate) theme: Option<ThemePreference>,
+    /// `--color-theme`: the colour family for this run only; never saved.
+    pub(crate) color_theme: Option<ColorTheme>,
     /// `--config-dir`: where `settings.json` lives; the environment or the OS default without it.
     pub(crate) config_dir: Option<PathBuf>,
     pub(crate) screen: LaunchScreen,
@@ -812,6 +817,7 @@ pub(crate) fn parse_launch_options(
         filter: None,
         select: None,
         theme: None,
+        color_theme: None,
         config_dir: None,
         screen: LaunchScreen::Overview,
         screenshot: None,
@@ -833,6 +839,7 @@ pub(crate) fn parse_launch_options(
             "--filter" => options.filter = Some(value()?),
             "--select" => options.select = Some(value()?),
             "--theme" => options.theme = Some(parse_theme(&value()?)?),
+            "--color-theme" => options.color_theme = Some(parse_color_theme(&value()?)?),
             "--config-dir" => options.config_dir = Some(PathBuf::from(value()?)),
             "--screen" => {
                 let text = value()?;
@@ -898,6 +905,14 @@ fn parse_namespaces(text: &str) -> Result<NamespaceScope, String> {
             "at most {MAX_NAMESPACES} namespaces for --namespace"
         )),
         scope => Ok(scope),
+    }
+}
+
+fn parse_color_theme(text: &str) -> Result<ColorTheme, String> {
+    match text {
+        "default" => Ok(ColorTheme::Default),
+        "zed-one" => Ok(ColorTheme::ZedOne),
+        _ => Err(format!("invalid value '{text}' for --color-theme")),
     }
 }
 

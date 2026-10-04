@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_shell::Screen;
 use crate::cluster_registry::ClusterRegistry;
+use crate::color_theme::ColorTheme;
 use crate::port_forwards::ForwardPreset;
 use crate::resource_kind::ResourceKind;
 use crate::settings_store::{
@@ -86,11 +87,13 @@ impl Default for GeneralSettings {
     }
 }
 
-/// The `appearance` section: what the Theme dropdown does not cover.
+/// The `appearance` section: the colour theme and the row density; the Mode dropdown (`theme`)
+/// is separate.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct AppearanceSettings {
     pub(crate) density: RowDensity,
+    pub(crate) color_theme: ColorTheme,
 }
 
 /// The height of a table row, header included (the wireframe Tokens page).
@@ -257,6 +260,14 @@ impl<T: Copy + PartialEq> OptionTable<T> {
     }
 }
 
+pub(crate) const COLOR_THEME_OPTIONS: OptionTable<ColorTheme> = OptionTable {
+    options: &[
+        (ColorTheme::Default, "Default"),
+        (ColorTheme::ZedOne, "Zed One"),
+    ],
+    default: ColorTheme::Default,
+};
+
 pub(crate) const DENSITY_OPTIONS: OptionTable<RowDensity> = OptionTable {
     options: &[
         (RowDensity::Compact, "Compact (28 px) (default)"),
@@ -334,8 +345,10 @@ const THEME_OPTIONS: [(ThemePreference, &str); 3] = [
 ];
 
 impl ThemePreference {
-    /// Re-themes every window now.
-    pub(crate) fn apply(self, cx: &mut App) {
+    /// Re-themes every window now: the colour family first, then the mode picks its light or dark
+    /// config.
+    pub(crate) fn apply(self, colors: ColorTheme, cx: &mut App) {
+        colors.install(cx);
         match self {
             Self::Light => Theme::change(ThemeMode::Light, None, cx),
             Self::Dark => Theme::change(ThemeMode::Dark, None, cx),

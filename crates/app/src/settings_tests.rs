@@ -96,6 +96,7 @@ fn full_settings() -> Settings {
         },
         appearance: AppearanceSettings {
             density: RowDensity::Comfortable,
+            color_theme: ColorTheme::ZedOne,
         },
         // The default would be omitted from the value, and with it the key.
         topology: TopologySettings {
@@ -203,6 +204,7 @@ fn settings_keys_are_the_allow_list() {
         keys,
         [
             "appearance",
+            "appearance.color_theme",
             "appearance.density",
             "dock",
             "dock.height",
@@ -502,9 +504,9 @@ fn theme_choices_use_the_label_as_key() {
 fn applying_a_theme_preference_sets_the_theme_mode(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        ThemePreference::Dark.apply(cx);
+        ThemePreference::Dark.apply(ColorTheme::Default, cx);
         assert!(Theme::global(cx).is_dark());
-        ThemePreference::Light.apply(cx);
+        ThemePreference::Light.apply(ColorTheme::Default, cx);
         assert!(!Theme::global(cx).is_dark());
     });
 }
@@ -519,6 +521,34 @@ fn section_with_one_change_round_trips() {
     let value = serde_json::to_value(&settings).expect("serializes");
     assert_eq!(value["general"], json!({ "watch_tls_secrets": false }));
     assert!(value.get("appearance").is_none());
+}
+
+#[test]
+fn color_theme_round_trips() {
+    for (colors, text) in [
+        (ColorTheme::ZedOne, "zed-one"),
+        (ColorTheme::Default, "default"),
+    ] {
+        let value = serde_json::to_value(colors).expect("serializes");
+        assert_eq!(value, json!(text));
+        assert_eq!(
+            serde_json::from_value::<ColorTheme>(value).expect("parses"),
+            colors
+        );
+    }
+}
+
+#[test]
+fn unknown_color_theme_loads_as_default() {
+    let value = json!({
+        "version": 1,
+        "theme": "dark",
+        "appearance": { "color_theme": "solarized", "density": "comfortable" }
+    });
+    let settings: Settings = serde_json::from_value(value).expect("an unknown name is not corrupt");
+    assert_eq!(settings.appearance.color_theme, ColorTheme::Default);
+    assert_eq!(settings.appearance.density, RowDensity::Comfortable);
+    assert_eq!(settings.theme, ThemePreference::Dark);
 }
 
 #[test]

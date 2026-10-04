@@ -25,9 +25,9 @@ use crate::clusters_page::{ClustersPage, add_cluster_button};
 use crate::environment::Environment;
 use crate::metrics_page::MetricsPage;
 use crate::settings::{
-    AppSettings, DENSITY_OPTIONS, FONT_SIZE_OPTIONS, OptionTable, SCROLLBACK_OPTIONS,
-    SHELL_OPTIONS, Settings as SettingsData, TAIL_OPTIONS, theme_choices, theme_from_label,
-    theme_label,
+    AppSettings, COLOR_THEME_OPTIONS, DENSITY_OPTIONS, FONT_SIZE_OPTIONS, OptionTable,
+    SCROLLBACK_OPTIONS, SHELL_OPTIONS, Settings as SettingsData, TAIL_OPTIONS, theme_choices,
+    theme_from_label, theme_label,
 };
 use crate::shortcut_sheet::shortcut_sheet;
 use crate::usage_format::group_digits;
@@ -559,15 +559,30 @@ fn terminal_page() -> SettingPage {
         )
 }
 
-/// The theme dropdown: saves the choice and re-themes every window now.
+/// The Mode dropdown: saves the choice and re-themes every window now.
 fn change_theme(label: &str, cx: &mut App) {
     let theme = theme_from_label(label);
     AppSettings::update(cx, |settings| settings.theme = theme);
-    theme.apply(cx);
+    theme.apply(AppSettings::get(cx).appearance.color_theme, cx);
+}
+
+/// The Theme dropdown: saves the colour family and re-themes every window now.
+fn change_color_theme(label: &str, cx: &mut App) {
+    let colors = COLOR_THEME_OPTIONS.value(label);
+    AppSettings::update(cx, |settings| settings.appearance.color_theme = colors);
+    AppSettings::get(cx).theme.apply(colors, cx);
 }
 
 fn appearance_page() -> SettingPage {
-    let theme = SettingField::dropdown(
+    let colors = SettingField::dropdown(
+        COLOR_THEME_OPTIONS.choices(),
+        |cx| {
+            let colors = AppSettings::get(cx).appearance.color_theme;
+            COLOR_THEME_OPTIONS.label(colors, || "Default".to_owned())
+        },
+        |label, cx| change_color_theme(&label, cx),
+    );
+    let mode = SettingField::dropdown(
         theme_choices(),
         |cx| theme_label(AppSettings::get(cx).theme).into(),
         |label, cx| change_theme(&label, cx),
@@ -581,9 +596,14 @@ fn appearance_page() -> SettingPage {
     SettingPage::new(SettingsPage::Appearance.title())
         .resettable(false)
         .group(
-            SettingGroup::new().title("Theme").item(
-                SettingItem::new("Theme", theme).description("Applies to every window at once."),
-            ),
+            SettingGroup::new()
+                .title("Theme")
+                .description("Applies to every window at once.")
+                .item(
+                    SettingItem::new("Theme", colors)
+                        .description("Zed One is One Light or One Dark, following Mode."),
+                )
+                .item(SettingItem::new("Mode", mode)),
         )
         .group(
             SettingGroup::new().title("Tables").item(

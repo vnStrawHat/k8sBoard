@@ -156,6 +156,7 @@ fn options(screenshot: Option<&str>) -> LaunchOptions {
         filter: None,
         select: None,
         theme: Some(ThemePreference::Light),
+        color_theme: None,
         config_dir: None,
         screen: LaunchScreen::Kind(ResourceKind::Secrets),
         screenshot: screenshot.map(Into::into),

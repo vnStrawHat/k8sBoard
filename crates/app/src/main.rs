@@ -20,6 +20,7 @@ mod cluster_session;
 mod cluster_switcher;
 mod cluster_switcher_rows;
 mod clusters_page;
+mod color_theme;
 mod command_palette;
 mod config_map_rows;
 mod confirm_dialog;
@@ -246,10 +247,10 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
         .run(move |cx| {
             gpui_kit::init(cx);
             AppSettings::install(loaded_settings, cx);
-            options
-                .theme
-                .unwrap_or(AppSettings::get(cx).theme)
-                .apply(cx);
+            let saved = AppSettings::get(cx);
+            let theme = options.theme.unwrap_or(saved.theme);
+            let colors = options.color_theme.unwrap_or(saved.appearance.color_theme);
+            theme.apply(colors, cx);
             cx.set_global(ClusterRuntime::new(handle));
             let chain = kubeconfig_chain(
                 options.kubeconfig.clone(),

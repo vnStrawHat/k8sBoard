@@ -29,6 +29,8 @@ fn parses_all_flags() {
         "team-a/api",
         "--theme",
         "dark",
+        "--color-theme",
+        "zed-one",
         "--config-dir",
         "cfg",
         "--screen",
@@ -45,6 +47,7 @@ fn parses_all_flags() {
             filter: Some("label:app=api".to_owned()),
             select: Some("team-a/api".to_owned()),
             theme: Some(ThemePreference::Dark),
+            color_theme: Some(ColorTheme::ZedOne),
             config_dir: Some(PathBuf::from("cfg")),
             screen: LaunchScreen::PodDrawer(DrawerTab::Containers),
             screenshot: Some(PathBuf::from("out.png")),
@@ -59,6 +62,7 @@ fn defaults_without_flags() {
     let options = run_options(&[]);
     assert_eq!(options.window_width, None);
     assert_eq!(options.theme, None);
+    assert_eq!(options.color_theme, None);
     assert_eq!(options.screenshot, None);
     assert_eq!(options.kubeconfig, None);
     assert_eq!(options.context, None);
@@ -591,6 +595,30 @@ fn theme_accepts_system() {
     ] {
         assert_eq!(run_options(&["--theme", text]).theme, Some(expected));
     }
+}
+
+#[test]
+fn color_theme_accepts_default_and_zed_one() {
+    for (text, expected) in [
+        ("default", ColorTheme::Default),
+        ("zed-one", ColorTheme::ZedOne),
+    ] {
+        assert_eq!(
+            run_options(&["--color-theme", text]).color_theme,
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn color_theme_rejects_unknown() {
+    let error = parse(&["--color-theme", "solarized"]).expect_err("unknown colour theme");
+    assert!(error.contains("--color-theme"), "{error}");
+}
+
+#[test]
+fn usage_lists_the_color_theme_flag() {
+    assert!(USAGE.contains("--color-theme"));
 }
 
 #[test]
