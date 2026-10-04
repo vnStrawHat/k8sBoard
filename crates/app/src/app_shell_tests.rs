@@ -1662,3 +1662,34 @@ fn closing_the_main_window_closes_the_pop_outs(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(cx.update(|cx| cx.windows().len()), 0);
 }
+
+#[gpui_kit::test]
+fn open_drawer_section_reveals_the_row_on_its_overview(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        // Another tab shows, so only the section request can bring the Overview back.
+        shell.drawer.tab = DrawerTab::Yaml;
+        shell.open_drawer_section(object(secret_key()), "Selected pods", cx);
+    });
+    cx.run_until_parked();
+    // The drawer paints the request away only when a session shows the row; there is none here.
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected, Some(object(secret_key())));
+        assert_eq!(shell.drawer.tab, DrawerTab::Overview);
+        assert_eq!(shell.drawer.reveal_section.get(), Some("Selected pods"));
+    });
+}
+
+#[gpui_kit::test]
+fn open_drawer_section_on_the_selection_needs_no_reveal(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(object(secret_key())), cx);
+        shell.open_drawer_section(object(secret_key()), "Remaining resources", cx);
+        // At once, before anything is deferred.
+        assert_eq!(
+            shell.drawer.reveal_section.get(),
+            Some("Remaining resources")
+        );
+    });
+}

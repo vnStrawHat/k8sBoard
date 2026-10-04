@@ -49,7 +49,7 @@ fn namespace_sections(
     }];
     if namespace.phase == NamespacePhase::Terminating {
         sections.push(DetailSection {
-            title: "Remaining resources",
+            title: REMAINING_RESOURCES_TITLE,
             rows: remaining_rows(&namespace.deletion_conditions),
         });
     }
@@ -59,6 +59,9 @@ fn namespace_sections(
     });
     sections
 }
+
+/// The Namespace drawer section the Show remaining resources menu item scrolls to.
+pub(crate) const REMAINING_RESOURCES_TITLE: &str = "Remaining resources";
 
 /// A namespace that has been Terminating for longer than this is STUCK.
 pub(crate) const STUCK_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);

@@ -71,9 +71,10 @@ pub(crate) struct DrawerState {
     pub(crate) monitor: MonitorState,
     /// The scroll position of the body of an overview drawer, so a menu can move it.
     pub(crate) scroll: ScrollHandle,
-    /// Roll back… asked for the Revisions section: the next paint of the drawer scrolls to it and
-    /// clears the flag. A `Cell` because painting reads the state and never writes it.
-    pub(crate) reveal_revisions: Cell<bool>,
+    /// The title of an Overview section a menu item asked to see (Roll back…, Show remaining
+    /// resources, Show selected pods): the next paint of the drawer scrolls to it and clears the
+    /// request. A `Cell` because painting reads the state and never writes it.
+    pub(crate) reveal_section: Cell<Option<&'static str>>,
 }
 
 impl DrawerState {
@@ -92,7 +93,7 @@ impl DrawerState {
             pending_helm_layout: None,
             monitor: MonitorState::new(),
             scroll: ScrollHandle::new(),
-            reveal_revisions: Cell::new(false),
+            reveal_section: Cell::new(None),
         }
     }
 

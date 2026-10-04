@@ -102,12 +102,17 @@ pub(crate) fn kind_drawer(
                 .with_ports(forward);
             let Overview {
                 sections,
-                revisions_at,
+                section_starts,
             } = overview(&paint, cx);
-            // Roll back… asked to see the Revisions, once: the scroll handle moves the box on the
-            // paint this frame ends with.
-            let wants_revisions = state.reveal_revisions.take();
-            if let (true, Some(at)) = (wants_revisions, revisions_at) {
+            // A menu item asked to see a section, once: the scroll handle moves the box on the
+            // paint this frame ends with. A section the row lacks leaves the scroll as it is.
+            let wanted = state.reveal_section.take();
+            let start = wanted.and_then(|title| {
+                section_starts
+                    .iter()
+                    .find_map(|&(found, at)| (found == title).then_some(at))
+            });
+            if let Some(at) = start {
                 state.scroll.scroll_to_top_of_item(at);
             }
             DrawerBody::Sections {
@@ -289,14 +294,12 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
     // Gives every element that needs an id one that is unique inside the drawer.
     let mut next_id = 0_usize;
     let mut sections: Vec<AnyElement> = Vec::new();
-    let mut revisions_at = None;
+    let mut section_starts = Vec::with_capacity(row.sections.len());
     if let Some(diagnosis) = row_diagnosis(row, live, now) {
         sections.push(why_box(&diagnosis, cx));
     }
     for section in &row.sections {
-        if section.title == REVISIONS_TITLE {
-            revisions_at = Some(sections.len());
-        }
+        section_starts.push((section.title, sections.len()));
         // The values view draws its own heading, which names the revision.
         if section.title != VALUES_CHANGE_TITLE {
             sections.push(section_title(section.title, cx).into_any_element());
@@ -318,17 +321,18 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
     }
     Overview {
         sections,
-        revisions_at,
+        section_starts,
     }
 }
 
 /// The title of the Deployment section that lists the revisions with their Roll back buttons.
-const REVISIONS_TITLE: &str = "Revisions";
+pub(crate) const REVISIONS_TITLE: &str = "Revisions";
 
-/// The overview of a row as the drawer's sections, and where the Revisions start among them.
+/// The overview of a row as the drawer's sections, and the index among them where each titled
+/// section starts.
 struct Overview {
     sections: Vec<AnyElement>,
-    revisions_at: Option<usize>,
+    section_starts: Vec<(&'static str, usize)>,
 }
 
 /// The WHY box of the row, read from its object, its owned pods (a Service's matching pods), and

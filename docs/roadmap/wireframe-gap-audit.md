@@ -20,7 +20,7 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W4b n3 | Container ⋯ menu: logs, shell, attach, copy image | Done (0039, Attach 0040) | `container_menu` in `resource_actions.rs`, button in `container_detail.rs` | — |
 | W5, W6 | Edit taints/labels, Drain dialog, bulk Cordon/Uncordon/Drain, dock drain tab | in build (0034) | `node_menu`, `row_selection.rs` `NODE_ACTIONS` | — |
 | W6 n2 | Skip PodDisruptionBudgets option | Done (0040; typed name in every tier, direct deletes) | `BudgetPolicy` in `drain_plan.rs`, `removal_write` | — |
-| W5 n7 dock | `logs · kubelet · node` tab | missing, blocked (`NodeLogQuery` needs ≥ 1.30; UAT is 1.29.5) | 0019 open item 4; `kubelet_stats.rs` `KubeletPath` | M |
+| W5 n7 dock | `logs · kubelet · node` tab | blocked, backlog: the node log query API needs Kubernetes ≥ 1.30 and the UAT cluster runs 1.29.5; do nothing until the cluster is upgraded | 0019 open item 4; `kubelet_stats.rs` `KubeletPath` | M |
 | W5 header | Edit labels for several nodes | Done (0040) | `label_batch` in `node_edits.rs`, `BulkLabelEditor` in `node_editor.rs` | — |
 | W7 Deployments | Revision diff ("history with diff and rollback") | Done (0039; rollback 0032) | `revision_diff.rs`, `pod_template_yaml` | — |
 | W7 CronJobs | View logs of last job | Done (0039; key L on the workload kinds too) | `last_job_owner` in `kind_join.rs` | — |
@@ -29,7 +29,7 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W7 Secrets, ConfigMaps | Edit values (E on the two screens; Edit YAML stays in the menu) | Done (0047; masked write-only Secret fields, merge patch with the base `resourceVersion`) | [as-built](../specs/0047-config-secret-values/README.md), `values_edit.rs`, `config_values.rs` | — |
 | W7 ResourceQuotas | `Edit` shown disabled next to a working `Edit YAML` | Done (0039: the placeholder is gone) | `resource_kind.rs` RESOURCE_QUOTAS | — |
 | W7 Namespaces | Quota section LimitRange row | Done (0039) | `limit_range.rs`, `AccessCheck::ListLimitRanges`, `namespace_quota_rows` | — |
-| W7 Namespaces, PDBs | Menu items Show remaining resources, Show selected pods | partial (sections exist) | `namespace_rows.rs`, `policy_rows.rs` | S |
+| W7 Namespaces, PDBs | Menu items Show remaining resources, Show selected pods | Done (0039 follow-up: each opens the drawer on its Overview, scrolled to the Remaining resources / Selected pods section; Show remaining is off unless the namespace is Terminating) | `show_section` in `resource_actions.rs`, `open_drawer_section` in `app_shell.rs`; [README](../specs/0039-drawer-menu-polish/README.md) | — |
 | W7 Certificates | Renew now | Done (0018 step 6; `Issuing=True` through `certificates/status`, menus, header `Renew`, warnings on ACME rate limits and the private key) | [renew-now](../specs/0018-custom-resources/renew-now.md), `certificate_renewal.rs` | — |
 | W8 n1–2 | Dashed 60 % line while dragging, double-click reset, remembered height | Done (0044) | `workspace.rs` `dock_handle_appearance`, `dock.rs` `initial_dock_height`, `dock.height` | — |
 | W8 | `SYS` marker lines (container restart) | Done (0044; no pod joined or left lines) | `log_tab.rs` `note_restarts`, `log_workload.rs` `restart_marker` | — |
@@ -39,7 +39,8 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W10 | Revision history tab | done (0041, Deployments only) | `revision_history.rs` | — |
 | W10 n5 | Pre-apply snapshot, one-step rollback (ConfigMaps too) | dropped (user, 2026-10-03) | 0041 non-goals | — |
 | W10 n2 | Quota check ("Namespace quota OK") | done (0041, advisory) | `edit_quota.rs`, `quota_demand.rs` | — |
-| W10 header | Hide managedFields toggle, Format | missing (always hidden) | `object_yaml.rs:474` | S |
+| W10 header | Format button | Done (0031: `format_yaml`) | `yaml_edit.rs`, `object_edit.rs` `format_yaml` | — |
+| W10 header | Hide managedFields toggle | won't do (decision): Apply strips `managedFields`, so showing them would invite edits that are thrown away | 0041 non-goals, 0031 decision 12; `object_yaml.rs` | — |
 | W11 | RBAC layer chip | done (0022 steps 4a, 4b: working chip, off by default; account → binding → role access row, three access checks) | [as-built-rbac](../specs/0022-topology/as-built-rbac.md) | — |
 | W11 n1, W4c n1, W2 | Traffic mode; Prometheus with 30-day ranges and Settings › Metrics; Extensions; cloud scans | backlog | `topology_view.rs:1077`, `monitor_tab.rs:32`, `clusters_page.rs:737` | L each |
 | W10 n1 | YAML LSP with the cluster schema | not planned (C6: server dry-run instead) | cross-cutting C6 | — |
@@ -78,7 +79,7 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | # | Spec | Gaps | New or amend | Kind | Size |
 |---|---|---|---|---|---|
 | 0 | housekeeping | tick 0001–0013 ACs, run the 18 ui-verifier and 6 coder-lite checks | no spec | read-only | S |
-| 1 | 0039 Drawer and menu completions (done, except Show remaining / Show selected items) | Deployment revision diff, CronJob last-job logs, Logs ▸ submenu, container ⋯ menu (no Attach), LimitRange row, Show remaining / Show selected items, ConfigMap restart hint, drop the stale Quotas `Edit` | new | read-only | M |
+| 1 | 0039 Drawer and menu completions (done, including Show remaining / Show selected items) | Deployment revision diff, CronJob last-job logs, Logs ▸ submenu, container ⋯ menu (no Attach), LimitRange row, Show remaining / Show selected items, ConfigMap restart hint, drop the stale Quotas `Edit` | new | read-only | M |
 | 2 | 0040 Pod lifecycle | Evict (0034 `EvictPod`), Restart pod (controller-owned only, 0033 delete), Attach (A, `create pods/attach` in `pod_shell.rs`), drain Skip PDBs, bulk node labels | new, after 0034 merges | mutating | M |
 | 3 | 0046 One cluster at a time | remove multi-cluster mode (0027 multi view); 0045 dropped (user decision 2026-10-03) | new | local, no new request | M |
 | 4 | 0041 Edit YAML II | **Built 2026-10-04** (Revision history, quota check, timeline "who" and diff); snapshot, rollback, ConfigMap Compare, and the managedFields toggle dropped or not planned | done | read-only | L |

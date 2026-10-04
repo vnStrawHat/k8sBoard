@@ -1,5 +1,6 @@
 use cluster::{
     AccessDecision, AccessReport, AccessReview, ContainerKind, ContainerState, ContainerSummary,
+    NamespacePhase, NamespaceSummary, PodDisruptionBudgetSummary,
 };
 use gpui_kit::Task;
 
@@ -3865,4 +3866,82 @@ fn only_the_cert_manager_kind_is_v1_gated() {
         kind_block(ResourceAction::PauseRollout, ResourceKind::Custom(v1)),
         None
     );
+}
+
+// ---- Show remaining resources, Show selected pods ----
+
+fn namespace_in(phase: NamespacePhase) -> KindRow {
+    crate::namespace_rows::namespace_row(&NamespaceSummary {
+        name: "team-a".to_owned(),
+        phase,
+        labels: Vec::new(),
+        created_at: None,
+        deleting_since: None,
+        deletion_conditions: Vec::new(),
+    })
+}
+
+fn budget_row() -> KindRow {
+    crate::policy_rows::pod_disruption_budget_row(&PodDisruptionBudgetSummary {
+        namespace: "shop".to_owned(),
+        name: "web".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        min_available: Some("2".to_owned()),
+        max_unavailable: None,
+        selector: None,
+        current_healthy: 2,
+        desired_healthy: 2,
+        expected_pods: 2,
+        disruptions_allowed: 0,
+        unhealthy_pod_eviction_policy: None,
+        conditions: Vec::new(),
+        is_status_stale: false,
+    })
+}
+
+#[test]
+fn a_terminating_namespace_shows_its_remaining_resources() {
+    let row = namespace_in(NamespacePhase::Terminating);
+    let show = show_section(&row).expect("namespaces have the item");
+    assert_eq!(show.label, "Show remaining resources");
+    assert_eq!(show.block, None);
+    assert!(row.section(show.title).is_some());
+}
+
+#[test]
+fn an_active_namespace_has_no_remaining_resources_to_show() {
+    let row = namespace_in(NamespacePhase::Active);
+    let show = show_section(&row).expect("namespaces have the item");
+    assert_eq!(show.block, Some("The namespace is not terminating"));
+    assert!(row.section(show.title).is_none());
+}
+
+#[test]
+fn a_budget_shows_its_selected_pods() {
+    let row = budget_row();
+    let show = show_section(&row).expect("budgets have the item");
+    assert_eq!(show.label, "Show selected pods");
+    assert_eq!(show.block, None);
+    assert!(row.section(show.title).is_some());
+}
+
+#[test]
+fn other_kinds_have_no_show_section_item() {
+    let row = crate::kind_row::KindRow {
+        namespace: Some("shop".to_owned()),
+        name: "api".to_owned(),
+        created_at: None,
+        status: crate::status_tone::StatusLabel {
+            text: "Ready".into(),
+            tone: crate::status_tone::StatusTone::Ok,
+        },
+        cells: Vec::new(),
+        sections: Vec::new(),
+        event: None,
+        related_pods: None,
+        labels: Vec::new(),
+        object: KindObject::Plain,
+    };
+    assert_eq!(show_section(&row), None);
 }

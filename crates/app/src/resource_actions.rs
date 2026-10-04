@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use cluster::{
     AccessCheck, ClusterConnection, ContainerKind, ContainerState, ContainerSummary,
-    ContainerTerminal, HELM_RELEASE_SECRET_TYPE, NamespaceScope, NodeSummary, ObjectKind,
-    PodStatus, PodSummary, ReplicaSetSummary, SecretDetails, SecretKey,
+    ContainerTerminal, HELM_RELEASE_SECRET_TYPE, NamespacePhase, NamespaceScope, NodeSummary,
+    ObjectKind, PodStatus, PodSummary, ReplicaSetSummary, SecretDetails, SecretKey,
 };
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
@@ -34,8 +34,10 @@ use crate::kind_join::last_job_owner;
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
 use crate::live_sections::claim_pods;
 use crate::log_target::{LogTarget, workload_label};
+use crate::namespace_rows::REMAINING_RESOURCES_TITLE;
 use crate::network_rows::ingress_urls;
 use crate::pod_drawer::kind_tag_text;
+use crate::policy_rows::SELECTED_PODS_TITLE;
 use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
 use crate::secret_values::{SecretAction, ValueAccess};
@@ -1720,6 +1722,9 @@ pub(crate) fn kind_menu(
             ));
         }
     }
+    if let Some(item) = show_section_item(row, object.clone(), shell) {
+        menu = menu.item(guarded(context, item));
+    }
     if object_ref(&key).is_some() {
         menu = menu.item(guarded(context, view_yaml_item(object, shell)));
     }
@@ -1959,6 +1964,55 @@ fn show_in_topology_item(key: ResourceKey, shell: &WeakEntity<AppShell>) -> Popu
     PopupMenuItem::new("Show in Topology").on_click(move |_, _, cx| {
         let _ = shell.update(cx, |shell, cx| shell.show_in_topology(&key, cx));
     })
+}
+
+/// A menu item that opens the drawer scrolled to one of its sections: the label, the section title,
+/// and why the item is off, if it is.
+#[derive(Debug, PartialEq, Eq)]
+struct ShowSection {
+    label: &'static str,
+    title: &'static str,
+    block: Option<&'static str>,
+}
+
+/// The Show item of a Namespace (its remaining resources, only while it is Terminating) or of a
+/// PDB (its selected pods); `None` for every other kind.
+fn show_section(row: &KindRow) -> Option<ShowSection> {
+    match &row.object {
+        KindObject::Namespace(namespace) => Some(ShowSection {
+            label: "Show remaining resources",
+            title: REMAINING_RESOURCES_TITLE,
+            block: (namespace.phase != NamespacePhase::Terminating)
+                .then_some("The namespace is not terminating"),
+        }),
+        KindObject::PodDisruptionBudget(_) => Some(ShowSection {
+            label: "Show selected pods",
+            title: SELECTED_PODS_TITLE,
+            block: None,
+        }),
+        _ => None,
+    }
+}
+
+fn show_section_item(
+    row: &KindRow,
+    object: ClusterObject,
+    shell: &WeakEntity<AppShell>,
+) -> Option<PopupMenuItem> {
+    let ShowSection {
+        label,
+        title,
+        block,
+    } = show_section(row)?;
+    if let Some(reason) = block {
+        return Some(disabled_menu_item(label, reason.into()));
+    }
+    let shell = shell.clone();
+    Some(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+        let _ = shell.update(cx, |shell, cx| {
+            shell.open_drawer_section(object.clone(), title, cx)
+        });
+    }))
 }
 
 /// Whether the Namespaces menu offers "Set as default namespace" for `row_name`, and if so

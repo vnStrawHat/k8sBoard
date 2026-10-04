@@ -15,7 +15,7 @@ Status: built (2026-10-03), against main `7682712`. Spec drafted against `a50264
 ## Non-goals
 
 - Attach (A), Restart pod, Evict (audit 0040, mutating); Secret value editing; ConfigMap "Compare with previous" (audit 0041, needs snapshots).
-- Namespaces "Show remaining resources" and PDBs "Show selected pods" menu items (audit row 1 lists them; not in this task's list, left to a later pass).
+- Namespaces "Show remaining resources" and PDBs "Show selected pods" menu items: built later, see Follow-up (2026-10-04).
 - A restart button in the ConfigMap hint (writes; the workload's own Restart rollout, key R, stays the way).
 - Logs of manually triggered jobs in "last job" (decision 6).
 
@@ -68,3 +68,7 @@ Status: built (2026-10-03), against main `7682712`. Spec drafted against `a50264
 - Step 4: `LimitRangeSummary` holds quantities only, so the watch has nothing to mask. `RelatedList::NamespaceLimits` replaces `ResourceQuotas`; a closed half starts `Failed` (not `Loading`) so nothing waits on it. `set_related_subject` restarts a Namespace watch when the gates change (`related_watch_is_current`); `is_related_denied` drops the subject only when both gates are closed.
 - Tests: `subtitle_names_revisions_tags_and_cluster` is `subtitle_names_revisions_and_tags` (one cluster in view). `copy_image_copies_the_spec_image` is not written: the click handler of a popup item cannot be driven headless, and the item is one clipboard write of `ContainerSummary.image`. The two headless log tests open the dock with the exact target the menu entry builds. Tests live in `*_tests.rs` siblings.
 - Live check (UAT, screenshot build, `RUST_LOG=cluster=debug`): the debug log counts the one-shot requests (`sending request`): SSAR POSTs 57 to 58 per start (55 checks, `ListLimitRanges` among them) and 33 GETs; no PATCH, PUT, or DELETE. Watches are not in that log. UAT has no CronJobs and no ResourceQuotas, so `cronjobs-menu` and `resourcequotas-menu` have no row to open and are covered by unit tests only. The Diff button shares the state slot with the `current` label (they never meet), so the revision title keeps its width.
+
+## Follow-up (2026-10-04): Show remaining resources, Show selected pods
+
+Read-only, no new request, no new `WriteOperation`. Both items are the drawer's own sections made reachable from the menu (W7 Namespaces, PDBs), built like Roll back…: `resource_actions.rs` `show_section` picks the item for a row (`Show remaining resources` on a Namespace, `Show selected pods` on a PDB, none elsewhere) and `kind_menu` adds it before View YAML, through `guarded`. A click calls `AppShell::open_drawer_section`, which reveals the row, selects the Overview tab, and sets `DrawerState.reveal_section` (it replaces `reveal_revisions`) to the section title; the next paint of the drawer scrolls to that section once (`kind_drawer.rs` `section_starts`). `Show remaining resources` is shown disabled with `The namespace is not terminating` unless the namespace is Terminating, because only then has the drawer that section. A Pods-screen filter by the PDB selector was not built: the drawer lists the selected pods with their health, and a filter chip would need selector expressions the label chips cannot hold.

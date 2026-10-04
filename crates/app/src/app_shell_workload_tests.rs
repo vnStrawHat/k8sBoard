@@ -954,13 +954,13 @@ fn menu_roll_back_scrolls_to_revisions(cx: &mut TestAppContext) {
         (
             shell.drawer.is_open,
             shell.drawer.tab,
-            shell.drawer.reveal_revisions.get(),
+            shell.drawer.reveal_section.get(),
         )
     });
     assert!(is_open);
     assert_eq!(tab, crate::drawer::DrawerTab::Overview);
     // The paint took the request, so the drawer scrolls once.
-    assert!(!pending);
+    assert_eq!(pending, None);
     assert!(!t.has_dialog(cx));
 }
 

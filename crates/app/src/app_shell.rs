@@ -2421,6 +2421,22 @@ impl AppShell {
         });
     }
 
+    /// Opens the drawer of `object` on its Overview, scrolled to the section titled `title`
+    /// (Show remaining resources, Show selected pods). The scroll happens on the next paint of the
+    /// drawer; a section the row lacks leaves the scroll as it is.
+    pub(crate) fn open_drawer_section(
+        &mut self,
+        object: ClusterObject,
+        title: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        self.when_selected(object, cx, move |shell, cx| {
+            shell.drawer.tab = DrawerTab::Overview;
+            shell.drawer.reveal_section.set(Some(title));
+            cx.notify();
+        });
+    }
+
     /// Opens the drawer of `key` on the Values tab for `revision`, in `layout`. The key is revealed
     /// first when it is not the selection; a vanished row clears the selection, and then nothing
     /// opens. The layout waits for the view of its revision (`sync_helm_view`).

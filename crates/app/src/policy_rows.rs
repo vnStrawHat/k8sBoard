@@ -18,6 +18,9 @@ use crate::workload_rows::condition_row;
 
 const DEFAULT_EVICTION_POLICY: &str = "IfHealthyBudget (default)";
 
+/// The PDB drawer section the Show selected pods menu item scrolls to.
+pub(crate) const SELECTED_PODS_TITLE: &str = "Selected pods";
+
 pub(crate) fn pod_disruption_budget_row(budget: &PodDisruptionBudgetSummary) -> KindRow {
     let allowed = allowed_label(budget);
     let mut budget_rows = Vec::new();
@@ -81,7 +84,7 @@ pub(crate) fn pod_disruption_budget_row(budget: &PodDisruptionBudgetSummary) -> 
             },
             selector_section(budget),
             DetailSection {
-                title: "Selected pods",
+                title: SELECTED_PODS_TITLE,
                 rows: vec![DetailRow::Live(LiveContent::SelectedPods)],
             },
             DetailSection {

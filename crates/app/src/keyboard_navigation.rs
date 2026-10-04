@@ -27,6 +27,7 @@ use crate::keymap::{
     SelectPreviousRow, SetDefaultStorageClass, SuspendCronJob, ToggleDock, ToggleDockZoom,
     ToggleReadOnly, TriggerCronJob, ViewLogs, ViewYaml,
 };
+use crate::kind_drawer::REVISIONS_TITLE;
 use crate::live_sections::loaded_replica_sets;
 use crate::pod_drawer::{container_display_order, selected_container_index};
 use crate::resource_actions::{
@@ -470,7 +471,7 @@ impl AppShell {
             return;
         }
         self.drawer.tab = DrawerTab::Overview;
-        self.drawer.reveal_revisions.set(true);
+        self.drawer.reveal_section.set(Some(REVISIONS_TITLE));
         self.set_drawer_open(true, cx);
     }
 
