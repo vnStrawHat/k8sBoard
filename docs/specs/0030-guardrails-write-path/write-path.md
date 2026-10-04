@@ -91,13 +91,14 @@ Enforcement:
    | `access_review.rs` | `post_review` (the SSAR and SSRR `create`, non-mutating) | 0030 |
    | `object_write.rs` | `send`, the `match` that sends each allow-listed operation | 0030 |
    | `kubelet_stats.rs` | `kubelet_text` / `kubelet_lines` (read-only GETs of the 0011 kubelet path allow-list) | 0030 |
+| `metrics_query.rs` | `metrics_get` (read-only GETs of the 0048 metrics endpoint allow-list through the API server service proxy, `Client::send` with a capped body) | 0048 |
    | `secret.rs` | `secret_text` (read-only GET decoded in-crate, 0016) | 0016 |
    | `pod_shell.rs` | `exec` | 0036 |
    | `port_forward.rs` | `portforward` | 0035 |
    | `debug_shell.rs` | `attach` | 0037 |
    | `write_flow.rs` (app) | the `write` call of `checked_write`, the one sender of every confirmed write | 0030 |
    | `write_flow.rs` (app) | the `write` call of `run_cleanup`, the commit-only delete of the app's own node shell pod under a `uid` precondition (no gate, lock, or dialog: it must work after a lock, a switch, and inside the shutdown window) | 0037 |
-3. The grep stays as documentation: `grep -rnE "\.(create|patch|replace|delete|delete_collection|exec|attach|portforward|evict|create_subresource|patch_subresource|replace_subresource|patch_status|replace_status|patch_scale|replace_scale)\(" crates/cluster/src crates/cluster/examples` lists only the kube files of that table that have shipped. Shipped so far: `access_review.rs`, `object_write.rs`, `kubelet_stats.rs`, `secret.rs`, `pod_shell.rs` (0036 step 1, `exec`), `port_forward.rs` (0035 step 1, `portforward`), and `debug_shell.rs` (0037 step 1, `attach`).
+3. The grep stays as documentation: `grep -rnE "\.(create|patch|replace|delete|delete_collection|exec|attach|portforward|evict|create_subresource|patch_subresource|replace_subresource|patch_status|replace_status|patch_scale|replace_scale)\(" crates/cluster/src crates/cluster/examples` lists only the kube files of that table that have shipped. Shipped so far: `access_review.rs`, `object_write.rs`, `kubelet_stats.rs`, `secret.rs`, `pod_shell.rs` (0036 step 1, `exec`), `port_forward.rs` (0035 step 1, `portforward`), `debug_shell.rs` (0037 step 1, `attach`), and `metrics_query.rs` (0048 step 2; it has no mutating method, so the grep result is unchanged).
 4. `crates/app` has no `kube` dependency (test `app_has_no_kube_dependency`), so it can only write through `ClusterConnection::write`.
 5. `allow_list_matches_the_operations` pins method, path, query, content type, and body per variant through the fake transport. Connect calls do not live in `object_write.rs`: they are rows with "Dry-run: no" whose call sites are `pod_shell.rs` (0036), `port_forward.rs` (0035), and `debug_shell.rs` (0037), each with its own permit.
 

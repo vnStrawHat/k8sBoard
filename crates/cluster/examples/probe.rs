@@ -5,9 +5,10 @@
 //! and node metrics (metrics.k8s.io) and prints one count-and-sum line per poll. With `--kubelet-seconds` it polls the kubelet stats of every Ready node through the node proxy (cAdvisor disk I/O for the first one) and prints counts per node per round. With `--counts` it prints one object-count line per kind (`limit=1` lists, nothing else is read). With `--yaml` it reads the masked
 //! YAML of the first pod and the first node and prints line counts and masking checks, never
 //! the YAML text. With `--secrets` it prints Secret counts by type and certificate parse counts, then reads one TLS secret and prints its key and byte counts, never a value. With `--helm` it prints Helm release counts by status, then reads the first release and prints line and document counts, never values, manifest text, notes, or descriptions. With `--crds` it prints CRD counts and printer-column support, then access, count, object watch, and YAML lines for the established CRDs (add `--watch-seconds` for the watch line and `--yaml` for the YAML line), never object names or values. The access section doubles as the RBAC probe of the context. With `--analysis` it prints the RBAC snapshot counts and coverage, the caller's rules review count, and the Who-can grant count for `get secrets`, counts only.
+//! With `--metrics-source` it checks a Prometheus-compatible source through the API server service proxy, prints the spec 0048 live facts (counts, rates, and booleans, never a body), and stops.
 //!
 //! ```text
-//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis]
+//! cargo run -p k8sboard-cluster --example probe -- --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis] [--metrics-source <ns>/<svc>:<port>[<prefix>]]
 //! ```
 
 use std::collections::BTreeMap;
@@ -21,17 +22,18 @@ use cluster::{
     AccessCheck, AccessDecision, AccessReport, AccessRequest, ClusterConnection, ClusterError,
     ColumnValue, ContainerKind, ContainerState, ContainerSummary, CrdState, CrdSummary,
     CronJobSummary, EnvValues, EventFilter, GrantNames, HelmReleaseSummary, HelmRevisionRef,
-    Kubeconfig, KubeletTargets, LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceCoverage,
-    NamespaceScope, NodeKubeletStats, NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary,
-    ObjectKind, ObjectRef, PodMetrics, PodStatus, PodSummary, ProxyChoice, RequestTarget,
-    ResourceRequest, SecretDetails, SecretSummary, StatusReason, Termination, ValueVisibility,
-    WatchUpdate,
+    Kubeconfig, KubeletTargets, LogRequest, LogSource, LogUpdate, MetricsApi, MetricsScheme,
+    MetricsSource, MetricsSourceFields, NamespaceCoverage, NamespaceScope, NodeKubeletStats,
+    NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary, ObjectKind, ObjectRef, PodMetrics,
+    PodStatus, PodSummary, ProxyChoice, RANGE_STEPS, RangeSpec, RequestTarget, ResourceRequest,
+    SecretDetails, SecretSummary, StatusReason, Termination, UsageMetric, UsageSeries, UsageTarget,
+    ValueVisibility, WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 use tokio::sync::watch;
 
-const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis]";
+const USAGE: &str = "usage: probe --kubeconfig <path> [--context <name>] [--namespace <name[,name...]>] [--watch-seconds <n>] [--logs-seconds <n>] [--metrics-seconds <n>] [--kubelet-seconds <n>] [--counts] [--yaml] [--secrets] [--helm] [--crds] [--analysis] [--metrics-source <ns>/<svc>:<port>[<prefix>]]";
 const MAX_LISTED_PODS: usize = 30;
 const MAX_DETAILED_PODS: usize = 20;
 const NONE_TEXT: &str = "<none>";
@@ -50,10 +52,11 @@ struct Args {
     helm: bool,
     crds: bool,
     analysis: bool,
+    metrics_source: Option<MetricsSourceFields>,
 }
 
 enum Parsed {
-    Run(Args),
+    Run(Box<Args>),
     Help,
 }
 
@@ -71,6 +74,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
     let mut helm = false;
     let mut crds = false;
     let mut analysis = false;
+    let mut metrics_source = None;
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("missing value for {name}"));
         match flag.as_str() {
@@ -83,6 +87,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
             "--analysis" => analysis = true,
             "--kubeconfig" => kubeconfig = Some(PathBuf::from(value("--kubeconfig")?)),
             "--context" => context = Some(value("--context")?),
+            "--metrics-source" => {
+                metrics_source = Some(parse_metrics_source(&value("--metrics-source")?)?)
+            }
             "--namespace" => namespace = Some(value("--namespace")?),
             "--watch-seconds" => {
                 watch_seconds = Some(parse_seconds(
@@ -109,7 +116,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         }
     }
     let kubeconfig = kubeconfig.ok_or("missing required --kubeconfig")?;
-    Ok(Parsed::Run(Args {
+    Ok(Parsed::Run(Box::new(Args {
         kubeconfig,
         context,
         namespace,
@@ -123,7 +130,8 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> 
         helm,
         crds,
         analysis,
-    }))
+        metrics_source,
+    })))
 }
 
 /// A positive integer number of seconds.
@@ -1367,6 +1375,11 @@ async fn run(args: &Args) -> io::Result<bool> {
             }
         };
 
+    if let Some(fields) = &args.metrics_source {
+        metrics_source_for(&mut probe, &connection, fields).await?;
+        return Ok(probe.all_succeeded);
+    }
+
     let scope = match &args.namespace {
         Some(namespaces) => NamespaceScope::of_namespaces(
             namespaces
@@ -1876,4 +1889,255 @@ fn allocatable_totals(nodes: &[NodeSummary]) -> (f64, u64, u64) {
         }
     }
     totals
+}
+
+/// `<ns>/<svc>:<port>[<prefix>]`, for example `monitoring/vmselect-x:8481/select/0/prometheus`.
+fn parse_metrics_source(text: &str) -> Result<MetricsSourceFields, String> {
+    let bad = || format!("--metrics-source needs <ns>/<svc>:<port>[<prefix>], got '{text}'");
+    let (namespace, rest) = text.split_once('/').ok_or_else(bad)?;
+    let (target, prefix) = match rest.find('/') {
+        Some(slash) => rest.split_at(slash),
+        None => (rest, ""),
+    };
+    let (service, port) = target.rsplit_once(':').ok_or_else(bad)?;
+    Ok(MetricsSourceFields {
+        namespace: namespace.to_owned(),
+        service: service.to_owned(),
+        port: port.to_owned(),
+        scheme: MetricsScheme::Http,
+        prefix: prefix.to_owned(),
+    })
+}
+
+/// How many points of `series` hold a value.
+fn points_with_data(series: &UsageSeries) -> usize {
+    series
+        .points
+        .iter()
+        .filter(|(_, value)| value.is_some())
+        .count()
+}
+
+/// Mean of the last `count` values of `series` that hold one.
+fn recent_mean(series: &UsageSeries, count: usize) -> Option<f64> {
+    let values: Vec<f64> = series
+        .points
+        .iter()
+        .rev()
+        .filter_map(|(_, value)| *value)
+        .take(count)
+        .collect();
+    (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+}
+
+/// The step 2 live check of spec 0048: the check query, one 30d node CPU `query_range`, and the three
+/// facts of promql.md, through the typed `usage_range` only. Prints names, counts, booleans, and
+/// rates, never an answer body.
+async fn metrics_source_for(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    fields: &MetricsSourceFields,
+) -> io::Result<()> {
+    probe.section("metrics source")?;
+    let source = match MetricsSource::new(fields) {
+        Ok(source) => source,
+        Err(error) => {
+            probe.all_succeeded = false;
+            return writeln!(probe.out, "  invalid source: {error}");
+        }
+    };
+    writeln!(probe.out, "  source {}", source.display())?;
+    match connection.check_metrics_source(&source).await {
+        Ok(check) => writeln!(
+            probe.out,
+            "  check: reachable, {} ms, {} CPU series",
+            check.latency.as_millis(),
+            check.cpu_series
+        )?,
+        Err(error) => {
+            probe.all_succeeded = false;
+            return writeln!(probe.out, "  check failed: {error}");
+        }
+    }
+    let nodes: Vec<String> = match connection.list_nodes().await {
+        Ok(nodes) => nodes
+            .into_iter()
+            .filter(|node| node.status.readiness == NodeReadiness::Ready)
+            .map(|node| node.name)
+            .collect(),
+        Err(error) => {
+            probe.fail(&error)?;
+            Vec::new()
+        }
+    };
+    let Some(node) = nodes.first() else {
+        probe.all_succeeded = false;
+        return writeln!(probe.out, "  no Ready node to query");
+    };
+    let node_target = UsageTarget::Node { name: node.clone() };
+    let now = jiff::Timestamp::now();
+
+    let started = std::time::Instant::now();
+    let month = RangeSpec::ending_at(now, RANGE_STEPS[5].0);
+    let outcome = match &month {
+        Ok(month) => {
+            connection
+                .usage_range(&source, &node_target, UsageMetric::Cpu, month)
+                .await
+        }
+        Err(error) => {
+            probe.all_succeeded = false;
+            return writeln!(probe.out, "  30d range: {error}");
+        }
+    };
+    match outcome {
+        Ok(series) => writeln!(
+            probe.out,
+            "  30d node CPU query_range: {} of {} points with data, cut {}, {} ms",
+            points_with_data(&series),
+            series.points.len(),
+            series.was_cut,
+            started.elapsed().as_millis()
+        )?,
+        Err(error) => {
+            probe.all_succeeded = false;
+            writeln!(probe.out, "  30d node CPU query_range failed: {error}")?;
+        }
+    }
+
+    let Ok(hour) = RangeSpec::ending_at(now, RANGE_STEPS[1].0) else {
+        probe.all_succeeded = false;
+        return writeln!(probe.out, "  1h range: not in the step table");
+    };
+    let metrics = [
+        ("cpu", UsageMetric::Cpu),
+        ("memory", UsageMetric::Memory),
+        ("net-rx", UsageMetric::NetworkReceive),
+        ("net-tx", UsageMetric::NetworkTransmit),
+        ("disk-read", UsageMetric::DiskRead),
+        ("disk-write", UsageMetric::DiskWrite),
+    ];
+    for (index, name) in nodes.iter().enumerate() {
+        let target = UsageTarget::Node { name: name.clone() };
+        let mut cells = Vec::new();
+        for (label, metric) in metrics {
+            let outcome = connection
+                .usage_range(&source, &target, metric, &hour)
+                .await;
+            cells.push(match outcome {
+                Ok(series) => format!("{label} {}", points_with_data(&series) > 0),
+                Err(error) => format!("{label} failed: {error}"),
+            });
+        }
+        writeln!(
+            probe.out,
+            "  fact node #{index} root-cgroup series (1h, has data): {}",
+            cells.join(", ")
+        )?;
+    }
+    pod_network_fact(probe, connection, &source, node).await
+}
+
+/// Fact 3: the receive rate of the busiest pods from kubelet summaries at least 60 s apart, against
+/// the mean of the source's last four points (a 2 min rate window each) for the same pod.
+async fn pod_network_fact(
+    probe: &mut Probe,
+    connection: &ClusterConnection,
+    source: &MetricsSource,
+    node: &str,
+) -> io::Result<()> {
+    let (sender, receiver) = watch::channel(KubeletTargets {
+        summary_nodes: vec![node.to_owned()],
+        disk_io_nodes: Vec::new(),
+    });
+    let mut updates = Box::pin(connection.poll_kubelet_stats(receiver));
+    let mut rounds: Vec<Vec<(String, String, jiff::Timestamp, u64)>> = Vec::new();
+    while rounds.len() < 10 {
+        let Some(update) = updates.next().await else {
+            break;
+        };
+        let WatchUpdate::Snapshot(nodes) = update else {
+            continue;
+        };
+        let pods = nodes
+            .iter()
+            .filter_map(|stats| stats.summary.as_ref().ok())
+            .flat_map(|summary| &summary.pods)
+            .filter_map(|pod| {
+                let network = pod.network?;
+                Some((
+                    pod.namespace.clone(),
+                    pod.name.clone(),
+                    network.sampled_at?,
+                    network.rx_bytes,
+                ))
+            })
+            .collect::<Vec<_>>();
+        rounds.push(pods);
+        let first = rounds.first().and_then(|round| round.first());
+        let last = rounds.last().and_then(|round| round.first());
+        if let (Some(first), Some(last)) = (first, last)
+            && last.2.as_second() - first.2.as_second() >= 60
+        {
+            break;
+        }
+    }
+    drop(sender);
+    let (Some(first), Some(last)) = (rounds.first(), rounds.last()) else {
+        probe.all_succeeded = false;
+        return writeln!(probe.out, "  fact pod network: no kubelet summary");
+    };
+    let mut rates: Vec<(&str, &str, f64)> = Vec::new();
+    for (namespace, name, at, rx) in last {
+        let Some((_, _, earlier_at, earlier_rx)) = first
+            .iter()
+            .find(|(other_namespace, other, _, _)| other_namespace == namespace && other == name)
+        else {
+            continue;
+        };
+        let seconds = (at.as_second() - earlier_at.as_second()) as f64;
+        if seconds >= 30.0 && rx >= earlier_rx {
+            rates.push((namespace, name, (rx - earlier_rx) as f64 / seconds));
+        }
+    }
+    rates.sort_by(|left, right| right.2.total_cmp(&left.2));
+    let Ok(quarter) = RangeSpec::ending_at(jiff::Timestamp::now(), RANGE_STEPS[0].0) else {
+        probe.all_succeeded = false;
+        return writeln!(probe.out, "  15m range: not in the step table");
+    };
+    let mut ratios = Vec::new();
+    for (index, (namespace, name, kubelet_rate)) in rates.iter().take(5).enumerate() {
+        if *kubelet_rate < 1_000.0 {
+            continue;
+        }
+        let target = UsageTarget::Pod {
+            namespace: (*namespace).to_owned(),
+            pod: (*name).to_owned(),
+            container: None,
+        };
+        let series = connection
+            .usage_range(source, &target, UsageMetric::NetworkReceive, &quarter)
+            .await;
+        match series.as_ref().map(|series| recent_mean(series, 4)) {
+            Ok(Some(source_rate)) => {
+                let ratio = source_rate / kubelet_rate;
+                ratios.push(ratio);
+                writeln!(
+                    probe.out,
+                    "  fact pod network #{index}: kubelet {kubelet_rate:.0} B/s, source {source_rate:.0} B/s, ratio {ratio:.2}"
+                )?;
+            }
+            Ok(None) => writeln!(probe.out, "  fact pod network #{index}: no source data")?,
+            Err(error) => writeln!(probe.out, "  fact pod network #{index} failed: {error}")?,
+        }
+    }
+    let within = ratios
+        .iter()
+        .filter(|ratio| (0.8..=1.2).contains(*ratio))
+        .count();
+    writeln!(
+        probe.out,
+        "  fact pod network counted once (within 20%): {within} of {} compared pods",
+        ratios.len()
+    )
 }

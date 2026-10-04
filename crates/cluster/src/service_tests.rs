@@ -1,7 +1,10 @@
 use k8s_openapi::api::core::v1::{LoadBalancerStatus, ServiceSpec, ServiceStatus};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
+use serde_json::json;
 
 use super::*;
+use crate::fake_api::FakeApi;
+use crate::object_write::WritePolicy;
 
 fn service_with_spec(spec: ServiceSpec) -> Service {
     Service {
@@ -139,4 +142,41 @@ fn external_name_service_reports_its_name() {
         ..Default::default()
     });
     assert!(service_summary(&cluster_ip).external_addresses.is_empty());
+}
+
+fn service_list(names: &[&str], continue_token: &str) -> String {
+    let items: Vec<_> = names
+        .iter()
+        .map(|name| json!({"metadata": {"name": name, "namespace": "monitoring"}}))
+        .collect();
+    json!({
+        "apiVersion": "v1", "kind": "ServiceList",
+        "metadata": {"continue": continue_token},
+        "items": items,
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn list_all_services_lists_every_namespace() {
+    let (connection, api) = FakeApi::connection(WritePolicy::Blocked, |request| {
+        if request.has_query("continue", "next") {
+            (200, service_list(&["b"], ""))
+        } else {
+            (200, service_list(&["a"], "next"))
+        }
+    });
+    let services = connection.list_all_services().await.expect("listed");
+    let names: Vec<&str> = services
+        .iter()
+        .map(|service| service.name.as_str())
+        .collect();
+    assert_eq!(names, ["a", "b"], "the second page is followed");
+    let requests = api.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.method == "GET" && request.path == "/api/v1/services")
+    );
 }

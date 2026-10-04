@@ -2,8 +2,9 @@ use std::fmt;
 
 use futures::Stream;
 use k8s_openapi::api::core::v1::{LoadBalancerIngress, Service, ServicePort};
+use kube::Api;
 
-use crate::connection::ClusterConnection;
+use crate::connection::{ClusterConnection, ClusterError};
 use crate::namespace::NamespaceScope;
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::{int_or_string_text, key_value_terms, label_terms, non_empty};
@@ -64,6 +65,14 @@ impl ClusterConnection {
             "watching services",
             service_summary,
         )
+    }
+
+    /// Lists the services of every namespace once, following continue tokens; no watch. The
+    /// Settings › Metrics page reads it to propose a metrics source.
+    pub async fn list_all_services(&self) -> Result<Vec<ServiceSummary>, ClusterError> {
+        let api = Api::<Service>::all(self.client().clone());
+        let services = self.list_all(api, "listing services").await?;
+        Ok(services.iter().map(service_summary).collect())
     }
 }
 
