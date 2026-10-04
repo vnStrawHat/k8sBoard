@@ -368,9 +368,9 @@ fn pod_name_pattern(kind: WorkloadKind, name: &str) -> String {
     match kind {
         WorkloadKind::Deployment => format!("{name}-{SUFFIX_CLASS}{{1,10}}-{SUFFIX_CLASS}{{5}}"),
         WorkloadKind::StatefulSet => format!("{name}-[0-9]+"),
-        WorkloadKind::DaemonSet | WorkloadKind::ReplicaSet | WorkloadKind::Job => {
-            format!("{name}-{SUFFIX_CLASS}{{5}}")
-        }
+        WorkloadKind::DaemonSet | WorkloadKind::ReplicaSet => format!("{name}-{SUFFIX_CLASS}{{5}}"),
+        // An Indexed Job adds its completion index before the pod suffix.
+        WorkloadKind::Job => format!("{name}(-[0-9]+)?-{SUFFIX_CLASS}{{5}}"),
     }
 }
 

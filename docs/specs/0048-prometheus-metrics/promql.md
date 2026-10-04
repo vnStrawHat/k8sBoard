@@ -49,7 +49,8 @@ Pod-name patterns (decision 11; `{name}` is `regex_literal`-escaped):
 |---|---|
 | Deployment | `{name}-S{1,10}-S{5}` |
 | StatefulSet | `{name}-[0-9]+` |
-| DaemonSet, ReplicaSet, Job | `{name}-S{5}` |
+| DaemonSet, ReplicaSet | `{name}-S{5}` |
+| Job | `{name}(-[0-9]+)?-S{5}` (an Indexed Job adds its completion index) |
 
 `S` = `[bcdfghjklmnpqrstvwxz2456789]`, the alphabet of Kubernetes' generated suffixes (`rand.SafeEncodeString`; no vowels, no `0 1 3`), so CronJob timestamps (`api-28312790-…`) and most words do not match. `ponytail:` a sibling workload whose name plus a dash and a word of that alphabet fits the pattern (`api` and `api-v2x`) still counts; upgrade path: a `kube_pod_owner` join when kube-state-metrics is present (decision 11).
 

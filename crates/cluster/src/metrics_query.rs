@@ -280,13 +280,20 @@ fn decode(answer: &MetricsAnswer) -> Result<Data, MetricsError> {
         if envelope.kind.as_deref() == Some("Status") {
             let message = one_line(envelope.message.as_deref());
             return Err(match code {
-                403 => MetricsError::Denied(message),
-                404 | 503 => MetricsError::Unreachable(message),
+                // The text of a 401 is not quoted: it can echo what the credential looked like.
+                401 => MetricsError::Denied("credentials were rejected".to_owned()),
+                403 => MetricsError::Denied(or_text(message, "the API server refused the request")),
+                404 | 503 => {
+                    MetricsError::Unreachable(or_text(message, "the service did not answer"))
+                }
                 _ => MetricsError::Unexpected(format!("HTTP {code}")),
             });
         }
         if envelope.status.as_deref() == Some("error") {
-            return Err(MetricsError::Rejected(one_line(envelope.error.as_deref())));
+            return Err(MetricsError::Rejected(or_text(
+                one_line(envelope.error.as_deref()),
+                "no reason given",
+            )));
         }
     }
     if code == 404 {
@@ -305,13 +312,30 @@ fn decode(answer: &MetricsAnswer) -> Result<Data, MetricsError> {
     }
 }
 
-/// At most 200 characters, control characters dropped.
+/// `fallback` when `text` is empty, so an error never ends in a bare colon.
+fn or_text(text: String, fallback: &str) -> String {
+    if text.is_empty() {
+        fallback.to_owned()
+    } else {
+        text
+    }
+}
+
+/// At most 200 characters; control characters and the invisible direction and format characters
+/// are dropped, so a backend text cannot reorder or hide what the line shows.
 fn one_line(text: Option<&str>) -> String {
     text.unwrap_or_default()
         .chars()
-        .filter(|ch| !ch.is_control())
+        .filter(|ch| !ch.is_control() && !is_invisible_format(*ch))
         .take(MESSAGE_LIMIT)
         .collect()
+}
+
+fn is_invisible_format(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+    )
 }
 
 /// Adds the first 64 series per step. A sample goes to the nearest step (never a float equality)

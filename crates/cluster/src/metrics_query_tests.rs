@@ -119,6 +119,8 @@ async fn check_counts_cpu_series() {
         .expect("answered");
     assert_eq!(check.cpu_series, 1234);
     let requests = api.requests();
+    assert_eq!(requests[0].method, "GET");
+    assert!(requests[0].body.is_empty());
     assert_eq!(
         requests[0].path,
         "/api/v1/namespaces/monitoring/services/http:vmselect-x:8481/proxy/select/0/prometheus/api/v1/query"
@@ -422,4 +424,54 @@ fn unsupported_display_text() {
         MetricsError::Unsupported.to_string(),
         "the metrics source does not provide this metric for this target"
     );
+}
+
+#[tokio::test]
+async fn status_401_and_500_do_not_quote_the_backend_text() {
+    let leaked = "Bearer abc.def.ghi";
+    let unauthorized = status_body(401, "Unauthorized", leaked);
+    let error = usage_answering(401, unauthorized).await.expect_err("401");
+    assert_eq!(
+        error,
+        MetricsError::Denied("credentials were rejected".to_owned())
+    );
+    let failed = status_body(500, "InternalError", leaked);
+    let error = usage_answering(500, failed).await.expect_err("500");
+    assert_eq!(error, MetricsError::Unexpected("HTTP 500".to_owned()));
+    assert!(!error.to_string().contains("Bearer"));
+}
+
+#[tokio::test]
+async fn status_message_reaches_the_error_only_through_one_line() {
+    let long = format!("Bearer abc.def\n\u{202E}{}", "x".repeat(500));
+    let body = status_body(403, "Forbidden", &long);
+    let MetricsError::Denied(text) = usage_answering(403, body).await.expect_err("403") else {
+        panic!("expected Denied");
+    };
+    assert_eq!(text.chars().count(), 200);
+    assert!(text.starts_with("Bearer abc.def"));
+    assert!(!text.chars().any(|ch| ch.is_control() || ch == '\u{202E}'));
+}
+
+#[tokio::test]
+async fn empty_status_message_uses_a_fixed_text() {
+    let body = status_body(403, "Forbidden", "");
+    let error = usage_answering(403, body).await.expect_err("403");
+    assert_eq!(
+        error.to_string(),
+        "not permitted: the API server refused the request"
+    );
+    let body = status_body(404, "NotFound", "");
+    let error = usage_answering(404, body).await.expect_err("404");
+    assert_eq!(
+        error.to_string(),
+        "the metrics service cannot be reached: the service did not answer"
+    );
+}
+
+#[test]
+fn one_line_drops_direction_and_format_characters() {
+    let text = "a\u{200B}b\u{200F}c\u{202A}d\u{202E}e\u{2060}f\u{2069}g\u{FEFF}h";
+    assert_eq!(one_line(Some(text)), "abcdefgh");
+    assert_eq!(one_line(None), "");
 }

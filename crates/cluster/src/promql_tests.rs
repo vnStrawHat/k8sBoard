@@ -161,7 +161,7 @@ fn workload_patterns_per_kind() {
         ),
         (
             WorkloadKind::Job,
-            format!(r#"pod=~"api\\.v1-{class}{{5}}""#),
+            format!(r#"pod=~"api\\.v1(-[0-9]+)?-{class}{{5}}""#),
         ),
     ];
     for (kind, matcher) in cases {

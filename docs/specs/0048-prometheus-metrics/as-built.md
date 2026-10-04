@@ -37,3 +37,7 @@ Clippy flags the step 1 items as dead code until `metrics_query.rs` reads them (
 
 1. Node subjects: option A, `node` first and `kubernetes_io_hostname` second joined with `or` (decision 16; deviation 1).
 2. Node Disk I/O stays on the kubelet feed; pod and workload disk may use the source (decision 17; deviation 8).
+
+## Security review fixes (07726bb)
+
+Error texts: a 401 `Status` maps to `Denied("credentials were rejected")` without the backend message; an empty `Status` or backend message gets a fixed text; `one_line` also drops bidi and format characters; a Job pod pattern accepts an Indexed Job's index.
