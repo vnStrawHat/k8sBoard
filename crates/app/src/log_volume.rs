@@ -261,7 +261,7 @@ pub(crate) fn volume_chart(volume: &Rc<Volume>, brush: BrushView, cx: &App) -> A
                 .w(relative(to - from))
                 .bg(theme.selection)
         }))
-        .child(bounds_canvas(drag.is_some(), bounds, handlers.clone()));
+        .child(bounds_canvas(drag, bounds, handlers.clone()));
     h_flex()
         .flex_shrink_0()
         .items_center()
@@ -319,10 +319,19 @@ fn window_chip(
         .into_any_element()
 }
 
+/// Where a release lands: on the chart, else (no bounds yet, or a chart without width) where the
+/// drag was last seen, so the drag always ends.
+fn release_fraction(x: Pixels, bounds: Option<Bounds<Pixels>>, drag: BrushDrag) -> f32 {
+    bounds
+        .and_then(|bounds| brush_fraction(x, bounds))
+        .unwrap_or(drag.current)
+}
+
 /// Fills the chart's box: stores its bounds at prepaint, and, while a drag runs, listens on the
 /// window so a pointer that left the chart keeps dragging and a release anywhere ends the drag.
+/// The listeners run in the capture phase, so a child that stops propagation cannot swallow them.
 fn bounds_canvas(
-    is_dragging: bool,
+    drag: Option<BrushDrag>,
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     handlers: BrushHandlers,
 ) -> AnyElement {
@@ -330,25 +339,23 @@ fn bounds_canvas(
     canvas(
         move |chart_bounds, _, _| stored.set(Some(chart_bounds)),
         move |_, (), window, _| {
-            if !is_dragging {
+            let Some(drag) = drag else {
                 return;
-            }
+            };
             window.on_mouse_event({
                 let (bounds, moved) = (Rc::clone(&bounds), Rc::clone(&handlers.moved));
                 move |event: &MouseMoveEvent, phase, _, cx| {
                     let fraction = bounds
                         .get()
                         .and_then(|bounds| brush_fraction(event.position.x, bounds));
-                    if let (DispatchPhase::Bubble, Some(fraction)) = (phase, fraction) {
+                    if let (DispatchPhase::Capture, Some(fraction)) = (phase, fraction) {
                         moved(fraction, cx);
                     }
                 }
             });
             window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                let fraction = bounds
-                    .get()
-                    .and_then(|bounds| brush_fraction(event.position.x, bounds));
-                if let (DispatchPhase::Bubble, Some(fraction)) = (phase, fraction) {
+                if phase == DispatchPhase::Capture {
+                    let fraction = release_fraction(event.position.x, bounds.get(), drag);
                     (handlers.release)(fraction, cx);
                 }
             });
@@ -527,6 +534,20 @@ mod tests {
         let empty = Bounds::new(point(px(100.), px(0.)), size(px(0.), px(48.)));
         assert_eq!(brush_fraction(px(150.), empty), None);
     }
+    #[test]
+    fn a_release_off_the_chart_still_ends_the_drag_where_it_was() {
+        let drag = BrushDrag {
+            anchor: 0.2,
+            current: 0.7,
+        };
+        let bounds = Bounds::new(point(px(100.), px(0.)), size(px(200.), px(48.)));
+        assert_eq!(release_fraction(px(900.), Some(bounds), drag), 1.);
+        // No bounds yet, or a chart without width: the last known place.
+        assert_eq!(release_fraction(px(900.), None, drag), 0.7);
+        let empty = Bounds::new(point(px(100.), px(0.)), size(px(0.), px(48.)));
+        assert_eq!(release_fraction(px(150.), Some(empty), drag), 0.7);
+    }
+
     #[test]
     fn width_label_names_the_unit() {
         assert_eq!(width_label(secs(15)), "15s");

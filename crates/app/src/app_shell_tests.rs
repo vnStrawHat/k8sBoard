@@ -1639,3 +1639,21 @@ fn leaving_work_ignores_popped_log_tabs(cx: &mut TestAppContext) {
         assert!(shell.leaving_work(&[cluster], cx).is_empty());
     });
 }
+
+#[gpui_kit::test]
+fn closing_the_main_window_closes_the_pop_outs(cx: &mut TestAppContext) {
+    let fixture = open_log_tab_fixture(
+        "pop-out-main-close",
+        |pod, _| LogTarget::of_container(pod, "proxy"),
+        cx,
+    );
+    let tab = fixture.shell.read_with(cx, |shell, cx| {
+        shell.dock.read(cx).log_tab_entities().remove(0)
+    });
+    tab.update(cx, |_, cx| cx.emit(crate::log_tab::LogTabEvent::PopOut));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| cx.windows().len()), 2);
+    fixture.with_window(cx, |window, _| window.remove_window());
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| cx.windows().len()), 0);
+}

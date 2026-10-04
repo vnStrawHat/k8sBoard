@@ -40,8 +40,8 @@ use crate::log_volume::{
     volume_chart,
 };
 use crate::log_workload::{
-    MemberChange, container_names, join_slots, member_change, pod_short_name, ranked_pods,
-    restart_marker, rising_restarts, scope_covers,
+    MemberChange, RestartBaselines, container_names, join_slots, member_change, pod_short_name,
+    ranked_pods, restart_marker, rising_restarts, scope_covers,
 };
 use crate::pod_drawer::{default_container, kind_tag_text};
 use crate::status_tone::{StatusTone, tone_color};
@@ -237,7 +237,7 @@ pub(crate) struct LogTab {
     buffer: LogBuffer,
     streams: Vec<TabStream>,
     /// The last restart count seen per (pod, container), so only a rise adds a marker.
-    restart_seen: HashMap<(String, String), u32>,
+    restart_seen: RestartBaselines,
     staging: Option<Staging>,
     /// The color slot of each pod name, in join order; a returning pod keeps its slot.
     pod_slots: Vec<String>,
@@ -831,6 +831,10 @@ impl LogTab {
             return;
         }
         self.layout = layout;
+        // The histogram is not drawn outside Full, so a drag in progress would never see its release.
+        if layout != LogLayout::Full {
+            self.brush = None;
+        }
         cx.notify();
     }
 
@@ -1554,37 +1558,48 @@ fn plan_membership(
 /// longer listed is skipped.
 fn restart_markers(
     streams: &[TabStream],
-    seen: &mut HashMap<(String, String), u32>,
+    seen: &mut RestartBaselines,
     pods: &[PodSummary],
 ) -> Vec<SourcedLine> {
     let now = jiff::Timestamp::now();
+    let listed: HashMap<(&str, &str), &PodSummary> = pods
+        .iter()
+        .map(|pod| ((pod.namespace.as_str(), pod.name.as_str()), pod))
+        .collect();
+    // The streams of each pod, as indexes (the index is the source id), in the order they opened.
+    let mut by_pod: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (index, stream) in streams.iter().enumerate() {
+        by_pod
+            .entry((stream.namespace.as_str(), stream.pod.as_str()))
+            .or_default()
+            .push(index);
+    }
+    // A pod that is gone and has no live stream left has nothing to compare with.
+    seen.retain(|(namespace, pod, _), _| {
+        let owner = (namespace.as_str(), pod.as_str());
+        listed.contains_key(&owner)
+            || by_pod
+                .get(&owner)
+                .is_some_and(|own| own.iter().any(|index| streams[*index].state.is_live()))
+    });
     let mut markers = Vec::new();
-    let mut checked: Vec<(&str, &str)> = Vec::new();
-    for stream in streams {
-        let owner = (stream.namespace.as_str(), stream.pod.as_str());
-        if checked.contains(&owner) {
+    // Pods in the order their first stream opened, so the markers come out in a stable order.
+    let mut owners: Vec<_> = by_pod.iter().collect();
+    owners.sort_by_key(|(_, own)| own[0]);
+    for (owner, own) in owners {
+        // A pod that is no longer listed is skipped.
+        let Some(pod) = listed.get(owner) else {
             continue;
-        }
-        checked.push(owner);
-        let Some(pod) = pods
+        };
+        let streamed: Vec<&str> = own
             .iter()
-            .find(|pod| pod.namespace == owner.0 && pod.name == owner.1)
-        else {
-            continue;
-        };
-        let of_pod = || {
-            streams
-                .iter()
-                .enumerate()
-                .filter(|(_, other)| (other.namespace.as_str(), other.pod.as_str()) == owner)
-        };
-        let streamed: Vec<&str> = of_pod()
-            .map(|(_, other)| other.container.as_str())
+            .map(|index| streams[*index].container.as_str())
             .collect();
         for (container, _) in rising_restarts(seen, pod, &streamed) {
-            let source = of_pod()
-                .rfind(|(_, other)| other.container == container)
-                .and_then(|(index, _)| u16::try_from(index).ok());
+            let source = own
+                .iter()
+                .rfind(|index| streams[**index].container == container)
+                .and_then(|index| u16::try_from(*index).ok());
             let summary = pod
                 .containers
                 .iter()

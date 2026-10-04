@@ -749,6 +749,15 @@ impl AppShell {
                 cx.notify();
             }),
         };
+        // However the main window goes, its pop-outs go with it: a log tab must not outlive it.
+        let (main_window, popped_dock) =
+            (window.window_handle().window_id(), shell.dock.downgrade());
+        cx.on_window_closed(move |cx, closed| {
+            if closed == main_window {
+                let _ = popped_dock.update(cx, |dock, cx| dock.close_popped(cx));
+            }
+        })
+        .detach();
         let is_topology = shell.screen == Screen::Topology;
         let wants_problems = options.screen == LaunchScreen::TopologyProblems;
         let wants_selection = options.screen == LaunchScreen::TopologySelected;

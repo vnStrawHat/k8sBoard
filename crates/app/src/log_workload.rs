@@ -133,11 +133,15 @@ pub(crate) fn restart_marker(container: &ContainerSummary, now: jiff::Timestamp)
     }
 }
 
+/// The last restart count seen per (namespace, pod, container): pods of one name live in several
+/// namespaces.
+pub(crate) type RestartBaselines = HashMap<(String, String, String), u32>;
+
 /// Containers of `pod` among `streamed` whose restart count rose since `seen`, with the new
 /// count; `seen` is updated. A first sight only records, and a lower count (the pod was
 /// recreated under the same name) only re-baselines.
 pub(crate) fn rising_restarts(
-    seen: &mut HashMap<(String, String), u32>,
+    seen: &mut RestartBaselines,
     pod: &PodSummary,
     streamed: &[&str],
 ) -> Vec<(String, u32)> {
@@ -146,7 +150,11 @@ pub(crate) fn rising_restarts(
         if !streamed.contains(&container.name.as_str()) {
             continue;
         }
-        let key = (pod.name.clone(), container.name.clone());
+        let key = (
+            pod.namespace.clone(),
+            pod.name.clone(),
+            container.name.clone(),
+        );
         let before = seen.insert(key, container.restart_count);
         if before.is_some_and(|before| container.restart_count > before) {
             rises.push((container.name.clone(), container.restart_count));
@@ -426,6 +434,28 @@ mod tests {
         assert_eq!(marker.timestamp, Some(now));
     }
 
+    fn key(namespace: &str, pod: &str, container: &str) -> (String, String, String) {
+        (namespace.to_owned(), pod.to_owned(), container.to_owned())
+    }
+
+    #[test]
+    fn same_named_pods_of_two_namespaces_keep_their_own_baselines() {
+        let in_namespace = |namespace: &str, count: u32| {
+            let mut api = pod("api-0", (1, 1), None);
+            api.namespace = namespace.to_owned();
+            api.containers = vec![restarted("api", count, None)];
+            api
+        };
+        let mut seen = HashMap::new();
+        assert!(rising_restarts(&mut seen, &in_namespace("a", 5), &["api"]).is_empty());
+        assert!(rising_restarts(&mut seen, &in_namespace("b", 1), &["api"]).is_empty());
+        // Each namespace compares with its own count: no rise, no fake marker.
+        assert!(rising_restarts(&mut seen, &in_namespace("a", 5), &["api"]).is_empty());
+        assert_eq!(
+            rising_restarts(&mut seen, &in_namespace("b", 2), &["api"]),
+            [("api".to_owned(), 2)]
+        );
+    }
     #[test]
     fn rising_restarts_report_rises_only() {
         let with = |count: u32| {
@@ -446,9 +476,9 @@ mod tests {
         );
         // A recreated pod starts at a lower count: only the baseline moves.
         assert!(rising_restarts(&mut seen, &with(0), &["api"]).is_empty());
-        assert_eq!(seen.get(&("api-0".to_owned(), "api".to_owned())), Some(&0));
+        assert_eq!(seen.get(&key("ns", "api-0", "api")), Some(&0));
         // A container that is not streamed is never read.
-        assert!(!seen.contains_key(&("api-0".to_owned(), "proxy".to_owned())));
+        assert!(!seen.contains_key(&key("ns", "api-0", "proxy")));
     }
     #[test]
     fn scope_covers_named_several_and_all() {

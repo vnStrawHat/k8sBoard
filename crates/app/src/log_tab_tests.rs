@@ -5,6 +5,7 @@ use gpui_kit::{Entity, Focusable as _, TestAppContext, Window, point, px};
 use super::*;
 use crate::log_fixtures::{fixture_container, fixture_pod, oom_killed, open_log_fixture};
 use crate::log_window::open_log_window;
+use cluster::PodSummary;
 
 const LOG_BODY: &str =
     "2024-05-01T10:00:00.000000000Z first\n2024-05-01T10:00:01.000000000Z second\n";
@@ -238,4 +239,69 @@ fn the_clear_button_shows_every_line_again(cx: &mut TestAppContext) {
         tab.clear_time_window(cx);
     });
     assert_eq!(tab.read_with(cx, |tab, _| tab.buffer.visible_len()), 2);
+}
+
+fn stream_of(namespace: &str, pod: &str, state: LogStreamState) -> TabStream {
+    TabStream {
+        namespace: namespace.to_owned(),
+        pod: pod.to_owned(),
+        container: "api".to_owned(),
+        prefix: "p/api".into(),
+        full_prefix: "pod/api".into(),
+        color_slot: 0,
+        is_member: true,
+        state,
+        _stream: None,
+        _grace: None,
+    }
+}
+
+fn pod_in(namespace: &str, restarts: u32) -> PodSummary {
+    let mut pod = fixture_pod("api-0", vec![fixture_container("api", restarts, None)]);
+    pod.namespace = namespace.to_owned();
+    pod
+}
+
+#[test]
+fn restart_markers_keep_same_named_pods_of_two_namespaces_apart() {
+    let streams = [
+        stream_of("a", "api-0", LogStreamState::Streaming),
+        stream_of("b", "api-0", LogStreamState::Streaming),
+    ];
+    let mut seen = RestartBaselines::new();
+    let listed = [pod_in("a", 5), pod_in("b", 1)];
+    assert!(restart_markers(&streams, &mut seen, &listed).is_empty());
+    // Nothing changed: the other namespace's count is not a rise.
+    assert!(restart_markers(&streams, &mut seen, &listed).is_empty());
+    let after = [pod_in("a", 5), pod_in("b", 2)];
+    assert_eq!(restart_markers(&streams, &mut seen, &after).len(), 1);
+}
+
+#[test]
+fn baselines_of_gone_pods_with_no_live_stream_are_dropped() {
+    let streams = [
+        stream_of("a", "api-0", LogStreamState::Ended),
+        stream_of("b", "api-0", LogStreamState::Streaming),
+    ];
+    let mut seen = RestartBaselines::new();
+    restart_markers(&streams, &mut seen, &[pod_in("a", 1), pod_in("b", 1)]);
+    assert_eq!(seen.len(), 2);
+    // Both pods left the list: the ended stream's baseline goes, the live one's stays.
+    restart_markers(&streams, &mut seen, &[]);
+    let kept: Vec<_> = seen
+        .keys()
+        .map(|(namespace, _, _)| namespace.as_str())
+        .collect();
+    assert_eq!(kept, ["b"]);
+}
+
+#[gpui_kit::test]
+fn leaving_the_full_layout_drops_a_drag_in_progress(cx: &mut TestAppContext) {
+    let (_fixture, tab) = open_full_tab(cx);
+    tab.update(cx, |tab, cx| {
+        tab.begin_brush(0.3, cx);
+        assert!(tab.brush.is_some());
+        tab.set_layout(LogLayout::Compact, cx);
+        assert!(tab.brush.is_none());
+    });
 }

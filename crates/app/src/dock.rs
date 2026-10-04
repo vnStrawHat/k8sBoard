@@ -492,6 +492,15 @@ impl Dock {
         Some(taken)
     }
 
+    /// Closes every pop-out window; each drops its tab and ends its stream.
+    pub(crate) fn close_popped(&mut self, cx: &mut Context<Self>) {
+        for popped in self.popped.drain(..) {
+            let _ = popped
+                .window
+                .update(cx, |_, window, _| window.remove_window());
+        }
+    }
+
     /// A context switch: every stream belongs to the old connection, in the dock and in the
     /// pop-out windows alike.
     pub(crate) fn close_all(&mut self, cx: &mut Context<Self>) {
