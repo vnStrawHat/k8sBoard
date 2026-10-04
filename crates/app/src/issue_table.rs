@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::tooltip::Tooltip;
@@ -418,12 +419,14 @@ fn open_item(issue: &Issue, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
     let label = format!("Open {}", issue.shown.kind.to_lowercase());
     let Some(target) = issue.target.clone() else {
         let reason = format!("No screen for {}", issue.shown.kind);
-        return disabled_menu_item(label, reason.into());
+        return disabled_menu_item(label, reason.into()).icon(IconName::CornerDownRight);
     };
     let shell = shell.clone();
-    PopupMenuItem::new(label).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.reveal(target.clone(), cx));
-    })
+    PopupMenuItem::new(label)
+        .on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.reveal(target.clone(), cx));
+        })
+        .icon(IconName::CornerDownRight)
 }
 
 /// The pod View logs reads: the issue's subject, when the action asks for logs and the pod is
@@ -442,9 +445,11 @@ pub(crate) fn logs_pod<'a>(
 
 fn copy_name_item(issue: &Issue) -> PopupMenuItem {
     let name = issue.shown.name.clone();
-    PopupMenuItem::new("Copy object name").on_click(move |_, _, cx| {
-        cx.write_to_clipboard(ClipboardItem::new_string(name.clone()));
-    })
+    PopupMenuItem::new("Copy object name")
+        .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(name.clone()));
+        })
+        .icon(IconName::Copy)
 }
 
 /// How the issues were found, and what could not be checked, right of the Issues and Needs

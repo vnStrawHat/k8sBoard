@@ -19,7 +19,7 @@ use crate::pod_drawer::kind_tag_text;
 use crate::port_forwards::{ForwardId, PortForwards, TargetKind, TargetSpec};
 use crate::resource_actions::{
     ActionAvailability, ResourceAction, RowAction, action_availability, action_label,
-    disabled_menu_item,
+    disabled_menu_item, row_keyed,
 };
 use crate::write_guard::ClusterGuard;
 
@@ -223,7 +223,6 @@ impl ForwardMenu {
         cx: &mut App,
     ) -> PopupMenuItem {
         let label = action_label(ResourceAction::PortForward);
-        let key = RowAction::PortForward.key_action();
         let Self {
             state,
             cluster,
@@ -248,23 +247,27 @@ impl ForwardMenu {
             }
         };
         match state {
-            MenuState::Disabled(reason) => disabled_menu_item(label, reason).action(key),
+            MenuState::Disabled(reason) => {
+                row_keyed(disabled_menu_item(label, reason), RowAction::PortForward)
+            }
             MenuState::Direct(choice) => {
                 let start = start(choice.remote_port);
-                PopupMenuItem::new(label)
-                    .on_click(move |_, window, cx| start(window, cx))
-                    .action(key)
+                row_keyed(
+                    PopupMenuItem::new(label).on_click(move |_, window, cx| start(window, cx)),
+                    RowAction::PortForward,
+                )
             }
             MenuState::NewForward => {
                 let shell = shell.clone();
-                PopupMenuItem::new(format!("{label}…"))
-                    .on_click(move |_, window, cx| {
+                row_keyed(
+                    PopupMenuItem::new(format!("{label}…")).on_click(move |_, window, cx| {
                         let (cluster, subject) = (cluster.clone(), subject.clone());
                         let _ = shell.update(cx, |shell, cx| {
                             shell.open_new_forward_for(&cluster, &subject, window, cx);
                         });
-                    })
-                    .action(key)
+                    }),
+                    RowAction::PortForward,
+                )
             }
             MenuState::Pick(choices) => {
                 let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
@@ -280,7 +283,10 @@ impl ForwardMenu {
                         )
                     })
                 });
-                PopupMenuItem::submenu(label, submenu)
+                row_keyed(
+                    PopupMenuItem::submenu(label, submenu),
+                    RowAction::PortForward,
+                )
             }
         }
     }

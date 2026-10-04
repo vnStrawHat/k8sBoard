@@ -488,7 +488,8 @@ fn forward_menu(
                 let _ = shell.update(cx, |shell, cx| run(shell, id, window, cx));
             }
         };
-    let stop_label = if row.is_running || row.is_preset {
+    let is_stop = row.is_running || row.is_preset;
+    let stop_label = if is_stop {
         "Stop forward"
     } else {
         "Remove from list"
@@ -499,7 +500,12 @@ fn forward_menu(
         }))
     } else {
         disabled_menu_item(stop_label, "Not running".into())
-    };
+    }
+    .icon(if is_stop {
+        IconName::CircleStop
+    } else {
+        IconName::X
+    });
     let start_label = if row.is_running { "Restart" } else { "Start" };
     let start = match &row.gate {
         Some(ActionAvailability::Disabled { reason }) => {
@@ -511,29 +517,38 @@ fn forward_menu(
                 shell.start_forward_again(id, window, cx);
             }))
         }
-    };
+    }
+    .icon(if row.is_running {
+        IconName::RotateCw
+    } else {
+        IconName::Play
+    });
     let browser = match (row.is_running, row.local_port) {
         (true, Some(port)) => PopupMenuItem::new("Open in browser")
             .on_click(move |_, _, cx| cx.open_url(&format!("http://127.0.0.1:{port}"))),
         _ => disabled_menu_item("Open in browser", "Not listening".into()),
-    };
+    }
+    .icon(IconName::ExternalLink);
     let copy = match row.local_port {
         Some(port) => PopupMenuItem::new("Copy local address").on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(format!("127.0.0.1:{port}")));
         }),
         None => disabled_menu_item("Copy local address", "Not listening".into()),
-    };
-    let change =
-        PopupMenuItem::new("Change local port…").on_click(on_shell(|shell, id, window, cx| {
+    }
+    .icon(IconName::Copy);
+    let change = PopupMenuItem::new("Change local port…")
+        .on_click(on_shell(|shell, id, window, cx| {
             shell.open_change_local_port(id, window, cx);
-        }));
+        }))
+        .icon(IconName::Pencil);
     let save = if row.is_preset {
         disabled_menu_item("Save as preset", "Already a preset".into())
     } else {
         PopupMenuItem::new("Save as preset").on_click(on_shell(|shell, id, _, cx| {
             shell.save_forward_preset(id, cx);
         }))
-    };
+    }
+    .icon(IconName::Star);
     let go = match &row.target {
         Some(target) => {
             let (shell, target) = (shell.clone(), target.clone());
@@ -545,7 +560,8 @@ fn forward_menu(
             "Go to target",
             format!("Open {} first", row.cluster_label).into(),
         ),
-    };
+    }
+    .icon(IconName::CornerDownRight);
     let menu = menu
         .item(stop)
         .item(start)
@@ -557,10 +573,11 @@ fn forward_menu(
     if !row.is_preset {
         return menu;
     }
-    menu.separator()
-        .item(
-            PopupMenuItem::new("Remove preset…").on_click(on_shell(|shell, id, window, cx| {
+    menu.separator().item(
+        PopupMenuItem::new("Remove preset…")
+            .on_click(on_shell(|shell, id, window, cx| {
                 shell.open_remove_preset(id, window, cx);
-            })),
-        )
+            }))
+            .icon(IconName::X),
+    )
 }

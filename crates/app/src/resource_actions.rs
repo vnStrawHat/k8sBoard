@@ -1220,7 +1220,7 @@ fn container_shell_item(
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     let label = action_label(ResourceAction::OpenShell);
-    match container_shell_availability(container, guard) {
+    let item = match container_shell_availability(container, guard) {
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
         ActionAvailability::Enabled => {
             let open = ShellOpen {
@@ -1236,7 +1236,8 @@ fn container_shell_item(
                 let _ = shell.update(cx, |shell, cx| shell.start_shell(open, window, cx));
             })
         }
-    }
+    };
+    item.icon(RowAction::OpenShell.icon())
 }
 
 /// Attach to one named container, through the guarded flow of `start_attach`. The item acts only
@@ -1269,7 +1270,7 @@ pub(crate) fn container_attach_item(
             })
         }
     };
-    guarded(row, item)
+    guarded(row, item.icon(RowAction::Attach.icon()))
 }
 
 /// The gate of the session, then the container: one that is not running, is an init container, or
@@ -1336,11 +1337,11 @@ fn attach_item(pod: &PodSummary, guard: &ClusterGuard<'_>) -> PopupMenuItem {
         },
         disabled => disabled,
     };
-    match availability {
+    let item = match availability {
         ActionAvailability::Enabled => PopupMenuItem::new(label),
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
-    }
-    .action(RowAction::Attach.key_action())
+    };
+    row_keyed(item, RowAction::Attach)
 }
 
 /// The gate of the session, then the container: one that is not running has no shell.
@@ -1356,17 +1357,21 @@ pub(crate) fn container_shell_availability(
 
 fn copy_image_item(image: &str) -> PopupMenuItem {
     let image = image.to_owned();
-    PopupMenuItem::new("Copy image").on_click(move |_, _, cx| {
-        cx.write_to_clipboard(ClipboardItem::new_string(image.clone()));
-    })
+    PopupMenuItem::new("Copy image")
+        .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(image.clone()));
+        })
+        .icon(IconName::Copy)
 }
 
 /// Copies the read-only `kubectl describe` command for the pod.
 fn copy_kubectl_command_item(context: &str, pod: &PodSummary) -> PopupMenuItem {
     let command = kubectl_describe_command(context, &pod.namespace, &pod.name);
-    PopupMenuItem::new("Copy kubectl command").on_click(move |_, _, cx| {
-        cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
-    })
+    PopupMenuItem::new("Copy kubectl command")
+        .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
+        })
+        .icon(IconName::Terminal)
 }
 
 /// `kubectl --context C -n NS describe pod NAME`. It has no `--kubeconfig`: a path is specific
@@ -1420,7 +1425,10 @@ pub(crate) fn view_logs_item(
     row: &RowContext,
     dock: &WeakEntity<Dock>,
 ) -> PopupMenuItem {
-    plain_logs_item(pod, container, live, row, dock).action(RowAction::ViewLogs.key_action())
+    row_keyed(
+        plain_logs_item(pod, container, live, row, dock),
+        RowAction::ViewLogs,
+    )
 }
 
 /// `view_logs_item` without the key hint, for a menu whose item names a container: L opens the
@@ -1433,14 +1441,15 @@ fn plain_logs_item(
     dock: &WeakEntity<Dock>,
 ) -> PopupMenuItem {
     let label = action_label(ResourceAction::ViewLogs);
-    match logs_launch(pod, container, &live.access) {
+    let item = match logs_launch(pod, container, &live.access) {
         Err(reason) => disabled_menu_item(label, reason),
         Ok(target) => {
             let open = open_logs(live.connection().clone(), row.clone(), dock.clone());
             PopupMenuItem::new(label)
                 .on_click(move |_, window, cx| open(target.clone(), window, cx))
         }
-    }
+    };
+    item.icon(RowAction::ViewLogs.icon())
 }
 
 /// The call every View logs entry makes: opens `target` in the dock under the row's origin, while
@@ -1520,11 +1529,13 @@ impl LogsMenu {
         let open = open_logs(connection, row.clone(), dock.clone());
         match self.state {
             LogsMenuState::Disabled(reason) => {
-                disabled_menu_item(label, reason).action(RowAction::ViewLogs.key_action())
+                row_keyed(disabled_menu_item(label, reason), RowAction::ViewLogs)
             }
-            LogsMenuState::One(target) => PopupMenuItem::new(label)
-                .on_click(move |_, window, cx| open(target.clone(), window, cx))
-                .action(RowAction::ViewLogs.key_action()),
+            LogsMenuState::One(target) => row_keyed(
+                PopupMenuItem::new(label)
+                    .on_click(move |_, window, cx| open(target.clone(), window, cx)),
+                RowAction::ViewLogs,
+            ),
             LogsMenuState::Pick(choices) => {
                 let pod = self.pod;
                 let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
@@ -1539,7 +1550,7 @@ impl LogsMenu {
                         }))
                     })
                 });
-                PopupMenuItem::submenu(label, submenu)
+                row_keyed(PopupMenuItem::submenu(label, submenu), RowAction::ViewLogs)
             }
         }
     }
@@ -1597,7 +1608,7 @@ fn workload_logs_item(
             })
         }
     };
-    Some(item.action(RowAction::ViewLogs.key_action()))
+    Some(row_keyed(item, RowAction::ViewLogs))
 }
 
 pub(crate) fn node_menu(
@@ -1644,11 +1655,11 @@ fn open_node_shell_item(node: &NodeSummary, guard: &ClusterGuard<'_>) -> PopupMe
         },
         disabled => disabled,
     };
-    match availability {
+    let item = match availability {
         ActionAvailability::Enabled => PopupMenuItem::new(label),
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
-    }
-    .action(RowAction::OpenShell.key_action())
+    };
+    row_keyed(item, RowAction::OpenShell)
 }
 
 /// Switches to Pods with only the pods of the node. Always enabled, even for an empty node.
@@ -1666,6 +1677,7 @@ fn view_pods_on_node_item(
     .on_click(move |_, _, cx| {
         let _ = shell.update(cx, |shell, cx| shell.view_pods_on_node(&name, cx));
     })
+    .icon(IconName::List)
 }
 
 /// How many of `pods` are scheduled on `node`.
@@ -1676,9 +1688,9 @@ fn pods_on_node(pods: &[PodSummary], node: &str) -> usize {
 }
 
 /// The items a release adds before its disabled ones: each opens the drawer on a Helm tab.
-const HELM_VIEW_ITEMS: [(&str, DrawerTab); 2] = [
-    ("View values", DrawerTab::Values),
-    ("View manifest", DrawerTab::Manifest),
+const HELM_VIEW_ITEMS: [(&str, DrawerTab, IconName); 2] = [
+    ("View values", DrawerTab::Values, IconName::FileText),
+    ("View manifest", DrawerTab::Manifest, IconName::FileCode),
 ];
 
 /// The cluster a kind menu is built for: the guard, the pod list, and the row context of the row's
@@ -1746,10 +1758,10 @@ pub(crate) fn kind_menu(
     let object = context.object(key.clone());
     // A key without an object reference (a Helm release) has no YAML tab.
     if kind == ResourceKind::HelmReleases {
-        for (label, tab) in HELM_VIEW_ITEMS {
+        for (label, tab, icon) in HELM_VIEW_ITEMS {
             menu = menu.item(guarded(
                 context,
-                view_tab_item(label, object.clone(), tab, shell),
+                view_tab_item(label, object.clone(), tab, shell).icon(icon),
             ));
         }
     }
@@ -1768,7 +1780,9 @@ pub(crate) fn kind_menu(
             menu = menu.item(guarded(context, show_in_topology_item(key.clone(), shell)));
         }
         TopologyMenu::Disabled(reason) => {
-            menu = menu.item(disabled_menu_item("Show in Topology", reason.into()));
+            menu = menu.item(
+                disabled_menu_item("Show in Topology", reason.into()).icon(IconName::Waypoints),
+            );
         }
     }
     if has_go_to_target(kind) {
@@ -1836,8 +1850,10 @@ fn kind_delete_item(
 ) -> PopupMenuItem {
     let label = kind.delete_label();
     let Some(object) = delete_kind_of(kind) else {
-        return disabled_menu_item(label, NOT_SHIPPED_REASON.into())
-            .action(RowAction::Delete.key_action());
+        return row_keyed(
+            disabled_menu_item(label, NOT_SHIPPED_REASON.into()),
+            RowAction::Delete,
+        );
     };
     let availability = match helm_record_reason(&row.object) {
         Some(reason) => ActionAvailability::Disabled { reason },
@@ -1911,7 +1927,7 @@ fn delete_item(
 ) -> PopupMenuItem {
     let shell = shell.clone();
     let is_disabled = matches!(availability, ActionAvailability::Disabled { .. });
-    PopupMenuItem::element(move |_, cx| {
+    let item = PopupMenuItem::element(move |_, cx| {
         let count = shell
             .read_with(cx, |shell, cx| shell.delete_scope_size(cx))
             .unwrap_or(1);
@@ -1933,8 +1949,8 @@ fn delete_item(
             ),
         }
     })
-    .disabled(is_disabled)
-    .action(RowAction::Delete.key_action())
+    .disabled(is_disabled);
+    row_keyed(item, RowAction::Delete)
 }
 
 /// Makes `item` act only while the session `row` was built on is still open. A menu that stays
@@ -1992,9 +2008,11 @@ fn topology_menu(
 
 fn show_in_topology_item(key: ResourceKey, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
     let shell = shell.clone();
-    PopupMenuItem::new("Show in Topology").on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.show_in_topology(&key, cx));
-    })
+    PopupMenuItem::new("Show in Topology")
+        .on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.show_in_topology(&key, cx));
+        })
+        .icon(IconName::Waypoints)
 }
 
 /// A menu item that opens the drawer scrolled to one of its sections: the label, the section title,
@@ -2036,14 +2054,18 @@ fn show_section_item(
         block,
     } = show_section(row)?;
     if let Some(reason) = block {
-        return Some(disabled_menu_item(label, reason.into()));
+        return Some(disabled_menu_item(label, reason.into()).icon(IconName::List));
     }
     let shell = shell.clone();
-    Some(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| {
-            shell.open_drawer_section(object.clone(), title, cx)
-        });
-    }))
+    Some(
+        PopupMenuItem::new(label)
+            .on_click(move |_, _, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.open_drawer_section(object.clone(), title, cx)
+                });
+            })
+            .icon(IconName::List),
+    )
 }
 
 /// Whether the Namespaces menu offers "Set as default namespace" for `row_name`, and if so
@@ -2094,16 +2116,19 @@ pub(crate) fn browse_instances_item(
         return None;
     };
     let Some(kind) = browse_target(&crd.name, kinds) else {
-        return Some(disabled_menu_item(
-            LABEL,
-            "Not established or not served".into(),
-        ));
+        return Some(
+            disabled_menu_item(LABEL, "Not established or not served".into()).icon(IconName::List),
+        );
     };
     let shell = shell.clone();
-    Some(PopupMenuItem::new(LABEL).on_click(move |_, _, cx| {
-        let screen = Screen::Kind(ResourceKind::Custom(kind));
-        let _ = shell.update(cx, |shell, cx| shell.show_screen(screen, cx));
-    }))
+    Some(
+        PopupMenuItem::new(LABEL)
+            .on_click(move |_, _, cx| {
+                let screen = Screen::Kind(ResourceKind::Custom(kind));
+                let _ = shell.update(cx, |shell, cx| shell.show_screen(screen, cx));
+            })
+            .icon(IconName::List),
+    )
 }
 
 /// What the caller supplies beyond the row and the access state: items that need the window or
@@ -2227,7 +2252,8 @@ pub(crate) fn secret_menu(
             shell,
         ),
         MenuState::Disabled(reason) => disabled_menu_item("Reveal values (30s)", reason.into()),
-    };
+    }
+    .icon(IconName::Eye);
     let (shell, context) = (shell.clone(), context.clone());
     let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
         model.copies.iter().fold(submenu, |submenu, entry| {
@@ -2251,7 +2277,7 @@ pub(crate) fn secret_menu(
     });
     Some(SecretMenu {
         reveal,
-        copy: PopupMenuItem::submenu("Copy value", submenu),
+        copy: PopupMenuItem::submenu("Copy value", submenu).icon(IconName::Copy),
     })
 }
 
@@ -2314,7 +2340,7 @@ pub(crate) fn open_url_menu_item(
     // The kit wires the parent of `PopupMenuItem::submenu` in `PopupMenu::render`, so `build` is the
     // sanctioned path from the table context menu.
     const LABEL: &str = "Open URL";
-    match choice {
+    let item = match choice {
         OpenUrl::Unavailable => disabled_menu_item(LABEL, "No host to open".into()),
         OpenUrl::One(url) => open_url_item(LABEL, url, row),
         OpenUrl::Several(urls) => {
@@ -2326,7 +2352,8 @@ pub(crate) fn open_url_menu_item(
             });
             PopupMenuItem::submenu(LABEL, submenu)
         }
-    }
+    };
+    item.icon(IconName::ExternalLink)
 }
 
 fn open_url_item(label: impl Into<SharedString>, url: String, row: &RowContext) -> PopupMenuItem {
@@ -2360,13 +2387,15 @@ fn go_to_item(
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     let Some(key) = target else {
-        return disabled_menu_item(label, reason);
+        return disabled_menu_item(label, reason).icon(IconName::CornerDownRight);
     };
     let object = context.object(key);
     let shell = shell.clone();
-    PopupMenuItem::new(label).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.reveal_object(object.clone(), cx));
-    })
+    PopupMenuItem::new(label)
+        .on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.reveal_object(object.clone(), cx));
+        })
+        .icon(IconName::CornerDownRight)
 }
 
 /// Reveals the owner (a Deployment, usually); disabled when there is none.
@@ -2500,26 +2529,32 @@ fn go_to_object_item(
 ) -> PopupMenuItem {
     const LABEL: &str = "Go to object";
     let Some(key) = event.object.clone() else {
-        return disabled_menu_item(LABEL, "No screen for this kind yet".into());
+        return disabled_menu_item(LABEL, "No screen for this kind yet".into())
+            .icon(IconName::CornerDownRight);
     };
     let object = context.object(key);
     let shell = shell.clone();
-    PopupMenuItem::new(LABEL).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.reveal_object(object.clone(), cx));
-    })
+    PopupMenuItem::new(LABEL)
+        .on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.reveal_object(object.clone(), cx));
+        })
+        .icon(IconName::CornerDownRight)
 }
 
 /// Filters the Events list to the reason of this event; disabled when it has none.
 fn filter_similar_item(event: &EventDetail, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
     const LABEL: &str = "Filter similar";
     let Some(reason) = similar_reason(event) else {
-        return disabled_menu_item(LABEL, "This event has no reason".into());
+        return disabled_menu_item(LABEL, "This event has no reason".into())
+            .icon(IconName::ListFilter);
     };
     let reason = reason.clone();
     let shell = shell.clone();
-    PopupMenuItem::new(LABEL).on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| shell.filter_similar(&reason, cx));
-    })
+    PopupMenuItem::new(LABEL)
+        .on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.filter_similar(&reason, cx));
+        })
+        .icon(IconName::ListFilter)
 }
 
 /// What Filter similar matches on: the reason, when the event has one.
@@ -2529,9 +2564,11 @@ fn similar_reason(event: &EventDetail) -> Option<&SharedString> {
 
 fn copy_message_item(event: &EventDetail) -> PopupMenuItem {
     let message = event.message.clone();
-    PopupMenuItem::new("Copy message").on_click(move |_, _, cx| {
-        cx.write_to_clipboard(ClipboardItem::new_string(message.to_string()));
-    })
+    PopupMenuItem::new("Copy message")
+        .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(message.to_string()));
+        })
+        .icon(IconName::Copy)
 }
 
 /// Roles and ClusterRoles offer Who can… as their first menu item.
@@ -2556,12 +2593,14 @@ fn test_traffic_item(
         KindObject::NetworkPolicy(policy) => Some(policy.clone()),
         _ => None,
     };
-    PopupMenuItem::new("Test traffic…").on_click(move |_, window, cx| {
-        let policy = policy.clone();
-        let _ = shell.update(cx, |shell, cx| {
-            shell.open_traffic_test(&cluster, policy.as_ref(), true, window, cx);
-        });
-    })
+    PopupMenuItem::new("Test traffic…")
+        .on_click(move |_, window, cx| {
+            let policy = policy.clone();
+            let _ = shell.update(cx, |shell, cx| {
+                shell.open_traffic_test(&cluster, policy.as_ref(), true, window, cx);
+            });
+        })
+        .icon(IconName::Activity)
 }
 
 /// Service accounts offer Check permissions as their first menu item.
@@ -2581,13 +2620,15 @@ fn check_permissions_item(
     let subject = namespace
         .as_ref()
         .map(|namespace| format!("sa {namespace}/{}", row.name));
-    PopupMenuItem::new("Check permissions").on_click(move |_, window, cx| {
-        let subject = subject.clone();
-        let namespace = namespace.clone();
-        let _ = shell.update(cx, |shell, cx| {
-            shell.open_permissions(&cluster, subject, namespace, true, window, cx);
-        });
-    })
+    PopupMenuItem::new("Check permissions")
+        .on_click(move |_, window, cx| {
+            let subject = subject.clone();
+            let namespace = namespace.clone();
+            let _ = shell.update(cx, |shell, cx| {
+                shell.open_permissions(&cluster, subject, namespace, true, window, cx);
+            });
+        })
+        .icon(IconName::ShieldQuestionMark)
 }
 
 /// The Who can… query a role row prefills: its first resource rule, if it has one.
@@ -2609,26 +2650,30 @@ fn who_can_item(
     let shell = shell.clone();
     let query = who_can_query(row);
     let namespace = row.namespace.clone();
-    PopupMenuItem::new("Who can…").on_click(move |_, window, cx| {
-        let query = query.clone();
-        let namespace = namespace.clone();
-        let _ = shell.update(cx, |shell, cx| {
-            let check_now = query.is_some();
-            shell.open_who_can(&cluster, query, namespace, check_now, window, cx);
-        });
-    })
+    PopupMenuItem::new("Who can…")
+        .on_click(move |_, window, cx| {
+            let query = query.clone();
+            let namespace = namespace.clone();
+            let _ = shell.update(cx, |shell, cx| {
+                let check_now = query.is_some();
+                shell.open_who_can(&cluster, query, namespace, check_now, window, cx);
+            });
+        })
+        .icon(IconName::UserSearch)
 }
 
 /// Opens the drawer of `object` on its YAML tab. Always enabled: a missing right shows inline
 /// there.
 fn view_yaml_item(object: ClusterObject, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
-    view_tab_item(
-        action_label(ResourceAction::ViewYaml),
-        object,
-        DrawerTab::Yaml,
-        shell,
+    row_keyed(
+        view_tab_item(
+            action_label(ResourceAction::ViewYaml),
+            object,
+            DrawerTab::Yaml,
+            shell,
+        ),
+        RowAction::ViewYaml,
     )
-    .action(RowAction::ViewYaml.key_action())
 }
 
 /// Opens the drawer of `object` on `tab`; the same item serves View YAML, View values, and View
@@ -2830,16 +2875,16 @@ impl ShellMenu {
         };
         match state {
             ShellMenuState::Disabled(reason) => ShellItems {
-                open_shell: disabled_menu_item(label, reason)
-                    .action(RowAction::OpenShell.key_action()),
+                open_shell: row_keyed(disabled_menu_item(label, reason), RowAction::OpenShell),
                 debug_container: Some(debug_item),
             },
             ShellMenuState::One(container) => {
                 let start = open(container);
                 ShellItems {
-                    open_shell: PopupMenuItem::new(label)
-                        .on_click(move |_, window, cx| start(window, cx))
-                        .action(RowAction::OpenShell.key_action()),
+                    open_shell: row_keyed(
+                        PopupMenuItem::new(label).on_click(move |_, window, cx| start(window, cx)),
+                        RowAction::OpenShell,
+                    ),
                     debug_container: Some(debug_item),
                 }
             }
@@ -2850,7 +2895,10 @@ impl ShellMenu {
                         .item(debug_item)
                 });
                 ShellItems {
-                    open_shell: PopupMenuItem::submenu(label, submenu),
+                    open_shell: row_keyed(
+                        PopupMenuItem::submenu(label, submenu),
+                        RowAction::OpenShell,
+                    ),
                     debug_container: None,
                 }
             }
@@ -2874,7 +2922,7 @@ fn debug_container_item(
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     const LABEL: &str = "Debug container…";
-    match state {
+    let item = match state {
         DebugMenuState::Disabled(reason) => disabled_menu_item(LABEL, reason),
         DebugMenuState::Ready => {
             let shell = shell.clone();
@@ -2897,7 +2945,8 @@ fn debug_container_item(
                 });
             })
         }
-    }
+    };
+    item.icon(RowAction::DebugContainer.icon())
 }
 
 /// The call an entry of the submenu makes when it is clicked.
@@ -2969,7 +3018,7 @@ fn cordon_item(
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     let label = cordon_label(&node.status.scheduling);
-    match action_availability(ResourceAction::Cordon, guard) {
+    let item = match action_availability(ResourceAction::Cordon, guard) {
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
         ActionAvailability::Enabled => {
             let (cluster, name, shell) = (row.cluster.clone(), node.name.clone(), shell.clone());
@@ -2980,8 +3029,8 @@ fn cordon_item(
                 });
             })
         }
-    }
-    .action(RowAction::Cordon.key_action())
+    };
+    row_keyed(item, RowAction::Cordon)
 }
 
 /// Disabled items stay visible with their reason, so users learn what exists. The item shows the
@@ -3035,10 +3084,16 @@ fn row_action_item(
     keyed(item, action)
 }
 
+/// `item` with the key hint and the icon of `row`. `.action()` is a no-op on a submenu, and the
+/// icon is what it shows.
+pub(crate) fn row_keyed(item: PopupMenuItem, row: RowAction) -> PopupMenuItem {
+    item.action(row.key_action()).icon(row.icon())
+}
+
 /// `item` with the key hint of `action`: a menu item of a row action shows its key.
 fn keyed(item: PopupMenuItem, action: ResourceAction) -> PopupMenuItem {
     match action.row_action() {
-        Some(row) => item.action(row.key_action()),
+        Some(row) => row_keyed(item, row),
         None => item,
     }
 }
@@ -3062,7 +3117,7 @@ pub(crate) fn disabled_menu_item(
 
 fn copy_name_item(name: &str, access: &AccessState) -> PopupMenuItem {
     let label = action_label(ResourceAction::CopyName);
-    match availability_before_lock(ResourceAction::CopyName, access) {
+    let item = match availability_before_lock(ResourceAction::CopyName, access) {
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
         ActionAvailability::Enabled => {
             let name = name.to_owned();
@@ -3070,8 +3125,8 @@ fn copy_name_item(name: &str, access: &AccessState) -> PopupMenuItem {
                 cx.write_to_clipboard(ClipboardItem::new_string(name.clone()));
             })
         }
-    }
-    .action(RowAction::CopyName.key_action())
+    };
+    row_keyed(item, RowAction::CopyName)
 }
 
 #[cfg(test)]

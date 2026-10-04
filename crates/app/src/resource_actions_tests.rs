@@ -977,7 +977,7 @@ fn helm_release_menu_disables_rollback_and_uninstall() {
 fn helm_release_menu_opens_values_and_manifest() {
     // The menu model: one item per Helm view tab, in order, and each tab exists on the release
     // drawer, so the click reaches a tab that is shown.
-    let labels: Vec<&str> = HELM_VIEW_ITEMS.iter().map(|(label, _)| *label).collect();
+    let labels: Vec<&str> = HELM_VIEW_ITEMS.iter().map(|(label, ..)| *label).collect();
     assert_eq!(labels, ["View values", "View manifest"]);
     let key = ResourceKey::Kind {
         kind: ResourceKind::HelmReleases,
@@ -985,7 +985,7 @@ fn helm_release_menu_opens_values_and_manifest() {
         name: "api".to_owned(),
     };
     let tabs = crate::drawer::drawer_tabs(&key);
-    for (_, tab) in HELM_VIEW_ITEMS {
+    for (_, tab, _) in HELM_VIEW_ITEMS {
         assert!(tabs.contains(&tab), "{tab:?}");
     }
     assert_eq!(HELM_VIEW_ITEMS[0].1, DrawerTab::Values);
@@ -3944,4 +3944,29 @@ fn other_kinds_have_no_show_section_item() {
         object: KindObject::Plain,
     };
     assert_eq!(show_section(&row), None);
+}
+
+#[test]
+fn row_keyed_sets_key_and_icon() {
+    let item = row_keyed(PopupMenuItem::new("Delete"), RowAction::Delete);
+    assert!(matches!(
+        item,
+        PopupMenuItem::Item {
+            icon: Some(_),
+            action: Some(_),
+            ..
+        }
+    ));
+    let disabled = row_keyed(
+        disabled_menu_item("Copy name", "Not connected".into()),
+        RowAction::CopyName,
+    );
+    assert!(matches!(
+        disabled,
+        PopupMenuItem::ElementItem {
+            icon: Some(_),
+            action: Some(_),
+            ..
+        }
+    ));
 }
