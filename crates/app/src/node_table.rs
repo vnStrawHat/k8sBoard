@@ -22,7 +22,9 @@ use crate::row_context::TableSession;
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, node_status_label, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
-use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
+use crate::table_layout::{
+    ColumnPlan, TableLayout, centered_cell, clickable_row, header_cell, select_cell,
+};
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 use crate::usage_bar::{UsageBar, usage_bar};
@@ -285,57 +287,14 @@ impl FilteredTable for NodeTableDelegate {
     }
 }
 
-impl TableDelegate for NodeTableDelegate {
-    fn columns_count(&self, _: &App) -> usize {
-        self.layout.columns.columns.len()
-    }
-
-    fn rows_count(&self, _: &App) -> usize {
-        self.view.rows().len()
-    }
-
-    fn column(&self, col_ix: usize, _: &App) -> Column {
-        self.layout
-            .columns
-            .columns
-            .get(col_ix)
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    fn render_th(
-        &mut self,
-        col_ix: usize,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
-        let all_checked = self.layout.columns.is_select(col_ix) && self.all_checked;
-        header_cell(
-            &self.layout,
-            self.view.sort,
-            all_checked,
-            &self.shell,
-            col_ix,
-            cx,
-        )
-    }
-
-    fn render_tr(
-        &mut self,
-        row_ix: usize,
-        _: &mut Window,
-        _: &mut Context<TableState<Self>>,
-    ) -> Stateful<Div> {
-        clickable_row(row_ix, &self.shell)
-    }
-
-    fn render_td(
+impl NodeTableDelegate {
+    /// The content of one body cell; the trait method centres it.
+    fn cell(
         &mut self,
         row_ix: usize,
         col_ix: usize,
-        _: &mut Window,
         cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         if self.layout.columns.is_select(col_ix) {
             let is_checked = self.node_at(row_ix, cx).is_some_and(|(_, node)| {
                 self.view.is_checked(&NodeRow {
@@ -388,6 +347,61 @@ impl TableDelegate for NodeTableDelegate {
                 .into_any_element(),
             _ => div().into_any_element(),
         }
+    }
+}
+
+impl TableDelegate for NodeTableDelegate {
+    fn columns_count(&self, _: &App) -> usize {
+        self.layout.columns.columns.len()
+    }
+
+    fn rows_count(&self, _: &App) -> usize {
+        self.view.rows().len()
+    }
+
+    fn column(&self, col_ix: usize, _: &App) -> Column {
+        self.layout
+            .columns
+            .columns
+            .get(col_ix)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let all_checked = self.layout.columns.is_select(col_ix) && self.all_checked;
+        header_cell(
+            &self.layout,
+            self.view.sort,
+            all_checked,
+            &self.shell,
+            col_ix,
+            cx,
+        )
+    }
+
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        clickable_row(row_ix, &self.shell)
+    }
+
+    fn render_td(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        centered_cell(self.cell(row_ix, col_ix, cx))
     }
 
     fn context_menu(

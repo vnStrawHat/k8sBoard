@@ -196,10 +196,16 @@ pub(crate) fn header_cell(
     )
 }
 
-/// The cell around a checkbox. Text sits a little below the middle of a cell (font metrics), so
-/// the box is pushed down by half the 6 px padding to line up with it.
+/// The content of a body cell, centred vertically. The kit lays a cell out as a plain block, so a
+/// bare child sits at the top of the cell padding; a text line is taller than the padding box of
+/// a 28 px row, which pushed the text towards the row border.
+pub(crate) fn centered_cell(content: impl IntoElement) -> Div {
+    div().size_full().flex().items_center().child(content)
+}
+
+/// The cell around a checkbox, centred in its cell.
 fn select_cell_base() -> Div {
-    div().size_full().flex().items_center().pt(px(6.))
+    div().size_full().flex().items_center()
 }
 
 /// The header checkbox: ticks every shown row, or unticks them when all are ticked.

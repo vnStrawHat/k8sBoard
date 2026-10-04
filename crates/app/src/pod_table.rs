@@ -21,7 +21,9 @@ use crate::row_context::TableSession;
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, pod_status_label, toned_text};
 use crate::table_filter::FilterPreset;
-use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
+use crate::table_layout::{
+    ColumnPlan, TableLayout, centered_cell, clickable_row, header_cell, select_cell,
+};
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 use crate::usage_format::Measure;
@@ -270,6 +272,66 @@ impl FilteredTable for PodTableDelegate {
     }
 }
 
+impl PodTableDelegate {
+    /// The content of one body cell; the trait method centres it.
+    fn cell(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        cx: &mut Context<TableState<Self>>,
+    ) -> AnyElement {
+        if self.layout.columns.is_select(col_ix) {
+            let is_checked = self
+                .pod_at(row_ix, cx)
+                .is_some_and(|(_, pod)| self.view.is_checked(&PodRow { pod, usage: None }));
+            return select_cell(row_ix, is_checked, &self.shell);
+        }
+        let (Some((session, pod)), Some(logical)) =
+            (self.pod_at(row_ix, cx), self.layout.columns.logical(col_ix))
+        else {
+            return div().into_any_element();
+        };
+        let mono = cx.theme().mono_font_family.clone();
+        match logical {
+            NAME => name_cell(pod, mono, cx),
+            STATUS => toned_text(pod_status_label(pod), cx).into_any_element(),
+            READY => div()
+                .font_family(mono)
+                .child(pod.ready.to_string())
+                .into_any_element(),
+            RESTARTS => div()
+                .w_full()
+                .text_right()
+                .font_family(mono)
+                .child(pod.restarts.to_string())
+                .into_any_element(),
+            CPU | MEMORY => {
+                let usage =
+                    session.session.read(cx).live().and_then(|live| {
+                        live.metrics.pods.history.latest(&pod.namespace, &pod.name)
+                    });
+                let text = usage.map(|usage| match logical {
+                    CPU => Measure::Cpu.format(usage.cpu.cores()),
+                    _ => Measure::Bytes.format(usage.memory.bytes() as f64),
+                });
+                usage_cell(text, mono, cx)
+            }
+            NODE => match &pod.node_name {
+                Some(node_name) => div().child(node_name.clone()).into_any_element(),
+                None => dash_cell(cx),
+            },
+            AGE => div()
+                .w_full()
+                .text_right()
+                .font_family(mono)
+                // Read per cell: a render has no shared clock, and a second of skew is invisible.
+                .child(format_age(pod.created_at, jiff::Timestamp::now()))
+                .into_any_element(),
+            _ => div().into_any_element(),
+        }
+    }
+}
+
 impl TableDelegate for PodTableDelegate {
     fn columns_count(&self, _: &App) -> usize {
         self.layout.columns.columns.len()
@@ -321,55 +383,7 @@ impl TableDelegate for PodTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        if self.layout.columns.is_select(col_ix) {
-            let is_checked = self
-                .pod_at(row_ix, cx)
-                .is_some_and(|(_, pod)| self.view.is_checked(&PodRow { pod, usage: None }));
-            return select_cell(row_ix, is_checked, &self.shell);
-        }
-        let (Some((session, pod)), Some(logical)) =
-            (self.pod_at(row_ix, cx), self.layout.columns.logical(col_ix))
-        else {
-            return div().into_any_element();
-        };
-        let mono = cx.theme().mono_font_family.clone();
-        match logical {
-            NAME => name_cell(pod, mono, cx),
-            STATUS => toned_text(pod_status_label(pod), cx).into_any_element(),
-            READY => div()
-                .font_family(mono)
-                .child(pod.ready.to_string())
-                .into_any_element(),
-            RESTARTS => div()
-                .w_full()
-                .text_right()
-                .font_family(mono)
-                .child(pod.restarts.to_string())
-                .into_any_element(),
-            CPU | MEMORY => {
-                let usage =
-                    session.session.read(cx).live().and_then(|live| {
-                        live.metrics.pods.history.latest(&pod.namespace, &pod.name)
-                    });
-                let text = usage.map(|usage| match logical {
-                    CPU => Measure::Cpu.format(usage.cpu.cores()),
-                    _ => Measure::Bytes.format(usage.memory.bytes() as f64),
-                });
-                usage_cell(text, mono, cx)
-            }
-            NODE => match &pod.node_name {
-                Some(node_name) => div().child(node_name.clone()).into_any_element(),
-                None => dash_cell(cx),
-            },
-            AGE => div()
-                .w_full()
-                .text_right()
-                .font_family(mono)
-                // Read per cell: a render has no shared clock, and a second of skew is invisible.
-                .child(format_age(pod.created_at, jiff::Timestamp::now()))
-                .into_any_element(),
-            _ => div().into_any_element(),
-        }
+        centered_cell(self.cell(row_ix, col_ix, cx))
     }
 
     fn context_menu(

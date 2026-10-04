@@ -92,7 +92,8 @@ fn table_layout_reports_only_real_changes() {
 mod checkbox_clicks {
     use gpui_kit::base::Root;
     use gpui_kit::component::table::{DataTable, TableDelegate, TableState};
-    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::component::{Sizable as _, Size};
+    use gpui_kit::test::{TestSupportExt as _, TestWindowExt as _};
     use gpui_kit::{
         AppContext as _, Bounds, Context, Entity, IntoElement, Point, Render, TestAppContext,
         WindowBounds, WindowOptions, px, size,
@@ -100,8 +101,16 @@ mod checkbox_clicks {
 
     use super::*;
 
+    /// What the first column shows. The kit draws only that column in a test window.
+    #[derive(Clone, Copy)]
+    enum Probe {
+        Checkbox,
+        Text,
+    }
+
     struct Rows {
         columns: TableColumns,
+        probe: Probe,
     }
 
     impl TableDelegate for Rows {
@@ -133,24 +142,41 @@ mod checkbox_clicks {
             _: &mut Window,
             _: &mut Context<TableState<Self>>,
         ) -> impl IntoElement {
-            if self.columns.is_select(col_ix) {
-                return select_cell(row_ix, false, &WeakEntity::new_invalid());
+            if !self.columns.is_select(col_ix) {
+                return div().into_any_element();
             }
-            div().id(("plain", row_ix)).child("cell").into_any_element()
+            let content = match self.probe {
+                Probe::Checkbox => select_cell(row_ix, false, &WeakEntity::new_invalid()),
+                // Shorter than the cell padding box of a 28 px row, so a top-aligned cell is caught.
+                Probe::Text => div()
+                    .id(("plain", row_ix))
+                    .h(px(14.))
+                    .child("cell")
+                    .test_support()
+                    .into_any_element(),
+            };
+            centered_cell(content).into_any_element()
         }
     }
 
     struct Host {
         table: Entity<TableState<Rows>>,
+        size: Size,
     }
 
     impl Render for Host {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().size_full().child(DataTable::new(&self.table))
+            div()
+                .size_full()
+                .child(DataTable::new(&self.table).with_size(self.size))
         }
     }
 
-    fn open(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<Root>, Entity<Host>) {
+    fn open(
+        cx: &mut TestAppContext,
+        row_size: Size,
+        probe: Probe,
+    ) -> (gpui_kit::WindowHandle<Root>, Entity<Host>) {
         cx.update(|cx| {
             gpui_kit::init(cx);
             let bounds = Bounds {
@@ -167,8 +193,10 @@ mod checkbox_clicks {
                     let columns = layout_columns(&specs(), 0, px(160.), px(640.), &BTreeSet::new());
                     cx.new(|cx| Host {
                         table: cx.new(|cx| {
-                            TableState::new(Rows { columns }, window, cx).row_selectable(true)
+                            TableState::new(Rows { columns, probe }, window, cx)
+                                .row_selectable(true)
                         }),
+                        size: row_size,
                     })
                 },
             )
@@ -181,7 +209,7 @@ mod checkbox_clicks {
         cx: &mut TestAppContext,
         click: impl FnOnce(&mut Window, &mut App),
     ) -> Option<usize> {
-        let (window, host) = open(cx);
+        let (window, host) = open(cx, Size::Medium, Probe::Checkbox);
         cx.update_window(window.into(), |_, window, cx| {
             window.render_frame(cx);
             click(window, cx);
@@ -200,5 +228,37 @@ mod checkbox_clicks {
     fn a_click_on_the_row_checkbox_does_not_select_the_row(cx: &mut TestAppContext) {
         let selected = selected_row_after(cx, |window, cx| window.click(("select", 1usize), cx));
         assert_eq!(selected, None);
+    }
+
+    /// The vertical distance from the centre of `id` to the centre of the second body row.
+    fn centre_offset(
+        cx: &mut TestAppContext,
+        row_size: Size,
+        probe: Probe,
+        id: (&'static str, usize),
+    ) -> f32 {
+        let (window, _host) = open(cx, row_size, probe);
+        cx.update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let row = window.find(("row", 1usize)).bounds().center().y;
+            let content = window.find(id).bounds().center().y;
+            f32::from(content - row).abs()
+        })
+        .expect("the window is open")
+    }
+
+    #[gpui_kit::test]
+    fn cell_content_is_centred_in_the_row_at_both_densities(cx: &mut TestAppContext) {
+        for height in [28., 36.] {
+            let row_size = Size::Size(px(height));
+            // A pixel is the slack: the row border sits below the content box.
+            let text = centre_offset(cx, row_size, Probe::Text, ("plain", 1));
+            assert!(text <= 1., "text off centre by {text} px at {height}");
+            let checkbox = centre_offset(cx, row_size, Probe::Checkbox, ("select", 1));
+            assert!(
+                checkbox <= 1.,
+                "box off centre by {checkbox} px at {height}"
+            );
+        }
     }
 }

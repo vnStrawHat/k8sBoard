@@ -9,8 +9,9 @@ use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
-    App, ClipboardItem, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, Stateful, StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div, px,
+    AnyElement, App, ClipboardItem, Context, Div, InteractiveElement as _, IntoElement,
+    ParentElement as _, Pixels, Stateful, StatefulInteractiveElement as _, Styled as _, WeakEntity,
+    Window, div, px,
 };
 
 use crate::age::format_age;
@@ -27,7 +28,7 @@ use crate::row_context::TableSession;
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusLabel, StatusTone, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
-use crate::table_layout::{ColumnPlan, TableLayout, header_cell};
+use crate::table_layout::{ColumnPlan, TableLayout, centered_cell, header_cell};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 
 const SEVERITY: usize = 0;
@@ -192,6 +193,71 @@ impl FilteredTable for IssueTableDelegate {
     }
 }
 
+impl IssueTableDelegate {
+    /// The content of one body cell; the trait method centres it.
+    fn cell(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        cx: &mut Context<TableState<Self>>,
+    ) -> AnyElement {
+        let (Some(issue), Some(logical)) = (
+            self.issue_at(row_ix, cx),
+            self.layout.columns.logical(col_ix),
+        ) else {
+            return div().into_any_element();
+        };
+        let mono = cx.theme().mono_font_family.clone();
+        match logical {
+            SEVERITY => toned_text(
+                StatusLabel {
+                    text: issue.severity.label().into(),
+                    tone: issue.severity.tone(),
+                },
+                cx,
+            )
+            .into_any_element(),
+            REASON => toned_text(
+                StatusLabel {
+                    text: issue.reason.clone(),
+                    tone: issue.severity.tone(),
+                },
+                cx,
+            )
+            .truncate()
+            .into_any_element(),
+            KIND => div()
+                .truncate()
+                .child(short_kind(&issue.shown.kind).to_owned())
+                .into_any_element(),
+            OBJECT => object_cell(issue, row_ix, mono, cx),
+            NAMESPACE => match &issue.shown.namespace {
+                Some(namespace) => div().truncate().child(namespace.clone()).into_any_element(),
+                None => absent(cx),
+            },
+            CAUSE => truncated_text(("issue-cause", row_ix), message_line(&issue.cause))
+                .into_any_element(),
+            COUNT => match count_text(issue.count) {
+                None => absent_right(cx),
+                Some(count) => div()
+                    .w_full()
+                    .text_right()
+                    .font_family(mono)
+                    .child(count)
+                    .into_any_element(),
+            },
+            AGE => div()
+                .w_full()
+                .text_right()
+                .font_family(mono)
+                // Read per cell: a render has no shared clock, and a second of skew is invisible.
+                .child(format_age(Some(issue.since), jiff::Timestamp::now()))
+                .into_any_element(),
+            _ => div().into_any_element(),
+        }
+    }
+}
+
 impl TableDelegate for IssueTableDelegate {
     fn columns_count(&self, _: &App) -> usize {
         self.layout.columns.columns.len()
@@ -248,60 +314,7 @@ impl TableDelegate for IssueTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let (Some(issue), Some(logical)) = (
-            self.issue_at(row_ix, cx),
-            self.layout.columns.logical(col_ix),
-        ) else {
-            return div().into_any_element();
-        };
-        let mono = cx.theme().mono_font_family.clone();
-        match logical {
-            SEVERITY => toned_text(
-                StatusLabel {
-                    text: issue.severity.label().into(),
-                    tone: issue.severity.tone(),
-                },
-                cx,
-            )
-            .into_any_element(),
-            REASON => toned_text(
-                StatusLabel {
-                    text: issue.reason.clone(),
-                    tone: issue.severity.tone(),
-                },
-                cx,
-            )
-            .truncate()
-            .into_any_element(),
-            KIND => div()
-                .truncate()
-                .child(short_kind(&issue.shown.kind).to_owned())
-                .into_any_element(),
-            OBJECT => object_cell(issue, row_ix, mono, cx),
-            NAMESPACE => match &issue.shown.namespace {
-                Some(namespace) => div().truncate().child(namespace.clone()).into_any_element(),
-                None => absent(cx),
-            },
-            CAUSE => truncated_text(("issue-cause", row_ix), message_line(&issue.cause))
-                .into_any_element(),
-            COUNT => match count_text(issue.count) {
-                None => absent_right(cx),
-                Some(count) => div()
-                    .w_full()
-                    .text_right()
-                    .font_family(mono)
-                    .child(count)
-                    .into_any_element(),
-            },
-            AGE => div()
-                .w_full()
-                .text_right()
-                .font_family(mono)
-                // Read per cell: a render has no shared clock, and a second of skew is invisible.
-                .child(format_age(Some(issue.since), jiff::Timestamp::now()))
-                .into_any_element(),
-            _ => div().into_any_element(),
-        }
+        centered_cell(self.cell(row_ix, col_ix, cx))
     }
 
     fn context_menu(

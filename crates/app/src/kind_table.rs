@@ -34,7 +34,9 @@ use crate::secret_values::ValueAccess;
 use crate::settings::{TablePrefs, screen_key};
 use crate::status_tone::{StatusTone, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
-use crate::table_layout::{ColumnPlan, TableLayout, clickable_row, header_cell, select_cell};
+use crate::table_layout::{
+    ColumnPlan, TableLayout, centered_cell, clickable_row, header_cell, select_cell,
+};
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
 
@@ -400,6 +402,36 @@ impl FilteredTable for KindTableDelegate {
     }
 }
 
+impl KindTableDelegate {
+    /// The content of one body cell; the trait method centres it.
+    fn cell(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        cx: &mut Context<TableState<Self>>,
+    ) -> AnyElement {
+        if self.layout.columns.is_select(col_ix) {
+            let is_checked = self.is_row_checked(row_ix, cx);
+            return select_cell(row_ix, is_checked, &self.shell);
+        }
+        let (Some((_, row)), Some(logical), Some(kind)) = (
+            self.row_at(row_ix, cx),
+            self.layout.columns.logical(col_ix),
+            self.kind,
+        ) else {
+            return div().into_any_element();
+        };
+        let mono = cx.theme().mono_font_family.clone();
+        let Some(cell_ix) = cell_index(kind.name_column(), logical) else {
+            return name_cell(row, row_ix, mono, cx);
+        };
+        match row.cells.get(cell_ix) {
+            Some(cell) => cell_element(cell, row_ix, self.align(logical), mono, cx),
+            None => div().into_any_element(),
+        }
+    }
+}
+
 impl TableDelegate for KindTableDelegate {
     fn columns_count(&self, _: &App) -> usize {
         self.layout.columns.columns.len()
@@ -445,25 +477,7 @@ impl TableDelegate for KindTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        if self.layout.columns.is_select(col_ix) {
-            let is_checked = self.is_row_checked(row_ix, cx);
-            return select_cell(row_ix, is_checked, &self.shell);
-        }
-        let (Some((_, row)), Some(logical), Some(kind)) = (
-            self.row_at(row_ix, cx),
-            self.layout.columns.logical(col_ix),
-            self.kind,
-        ) else {
-            return div().into_any_element();
-        };
-        let mono = cx.theme().mono_font_family.clone();
-        let Some(cell_ix) = cell_index(kind.name_column(), logical) else {
-            return name_cell(row, row_ix, mono, cx);
-        };
-        match row.cells.get(cell_ix) {
-            Some(cell) => cell_element(cell, row_ix, self.align(logical), mono, cx),
-            None => div().into_any_element(),
-        }
+        centered_cell(self.cell(row_ix, col_ix, cx))
     }
 
     fn context_menu(
