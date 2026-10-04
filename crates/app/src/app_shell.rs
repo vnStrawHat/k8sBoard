@@ -383,6 +383,8 @@ pub(crate) struct AppShell {
     /// The open Edit YAML view (spec 0031). It replaces the table and the drawer in the workspace;
     /// the cursor and the drawer flag are kept under it and come back when it closes.
     edit: Option<OpenEdit>,
+    /// The editor an Apply started a write from (`ValuesEditView::open_id`), until its commit ends.
+    values_commit_open: Option<u64>,
     /// The name in the discard prompt asked last, for the tests that drive it.
     #[cfg(test)]
     last_discard: Option<String>,
@@ -644,6 +646,7 @@ impl AppShell {
             running_batches: HashSet::new(),
             delete_start: None,
             edit: None,
+            values_commit_open: None,
             #[cfg(test)]
             last_discard: None,
             #[cfg(test)]

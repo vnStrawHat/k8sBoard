@@ -13,13 +13,14 @@
 | `value()` copies (`Arc<str>`) | the whole text | until the last clone drops | **no**; the view never calls `value()` on a Secret field, the kit may |
 | `text_for_range` answers to the OS IME | ranges of the text | OS-owned | **no** (outside our control) |
 | `Paste` clipboard read | the pasted text | one call, then inserted | yes (read into `Zeroizing<String>`) |
+| Ctrl V in a shown field | the kit's own paste: it reads the clipboard and inserts the text itself | until the view drops | **no** (kit-owned; only the Paste button of a masked field wipes its own read, the `Zeroizing` stays the owner and the kit gets a borrowed copy) |
 | Apply copy (rope chunks → `String::with_capacity(len)`) | one changed value | until the `NewValue` drops | yes (`Zeroizing`) |
 | `NewValue` in `ValuesEdit` / `WriteRequest` / `WriteIntent` | new values only | until the dialog closes and the intent drops | yes |
 | `values_patch` body `serde_json::Value`, request bytes | new values, base64 | one request | no (freed) |
 | PATCH response (`DynamicObject`) | every value of the Secret | inside `send`, dropped at once | no (freed; the 0016 log filter covers a decode failure) |
 | GPUI paint of an unmasked field | text | ≤ 30 s, frames after re-mask | no (outside our control) |
 
-**Ceiling, stated honestly.** `zeroize` (already a dependency) covers only k8sBoard's own short-lived copies: the GET body, the decoded Secret, the paste read, the Apply copy, and `NewValue`. The kit's text storage, undo stack, grown buffers and `value()` copies, the IME, GPUI text caches, serde and hyper buffers, and the server response are freed, not wiped. The design limits **how long** and **where**: the editor never fetches a current value, only changed keys travel, and every buffer goes with the view.
+**Ceiling, stated honestly.** `zeroize` (already a dependency) covers only k8sBoard's own short-lived copies: the GET body, the decoded Secret, the Paste button read, the Apply copy, and `NewValue`. The kit's own Ctrl V paste in a shown field, The kit's text storage, undo stack, grown buffers and `value()` copies, the IME, GPUI text caches, serde and hyper buffers, and the server response are freed, not wiped. The design limits **how long** and **where**: the editor never fetches a current value, only changed keys travel, and every buffer goes with the view.
 
 ## Rules (each is a review item)
 

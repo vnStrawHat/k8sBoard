@@ -98,6 +98,11 @@ impl AppShell {
         cx.notify();
     }
 
+    /// Apply of the editor `open_id` starts a write: its result is for that editor only.
+    pub(crate) fn note_values_commit(&mut self, open_id: u64) {
+        self.values_commit_open = Some(open_id);
+    }
+
     /// A commit of the values edit finished: success closes the editor, and a failure that the
     /// editor can show (a conflict, an invalid key, a deleted object) is shown in place. The dialog
     /// is gone by now, and the write flow has already audited the commit.
@@ -107,13 +112,16 @@ impl AppShell {
         result: &Result<WriteOutcome, CheckedWriteError>,
         cx: &mut Context<Self>,
     ) {
+        let submitted = self.values_commit_open.take();
         let Some(OpenEdit::Values(edit)) = self.edit.clone() else {
             return;
         };
-        // Another edit may have been opened since; this commit's result is not for it.
+        // Another editor may have been opened since, on the same object; this commit is not for it.
         let is_ours = {
             let view = edit.read(cx);
-            view.cluster() == &intent.cluster && view.object() == intent.request.target()
+            submitted == Some(view.open_id())
+                && view.cluster() == &intent.cluster
+                && view.object() == intent.request.target()
         };
         if !is_ours {
             return;

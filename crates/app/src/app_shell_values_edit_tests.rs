@@ -924,3 +924,25 @@ fn menu_hint_follows_the_key_context(cx: &mut TestAppContext) {
     t.show(ResourceKind::Deployments, rows, cx);
     assert_eq!(hints(&t, cx), (0, 1));
 }
+
+#[gpui_kit::test]
+fn a_commit_finishing_after_a_reopen_leaves_the_new_editor_alone(cx: &mut TestAppContext) {
+    let t = values_test("values-reopen", cx);
+    t.open_dialog(cx);
+    let first = t.edit_view(cx).read_with(cx, |view, _| view.open_id());
+    // The editor goes away while its dialog is still open, and another opens on the same object.
+    t.shell().update(cx, |shell, cx| shell.close_edit(cx));
+    cx.run_until_parked();
+    t.fixture.draw_twice(cx);
+    t.fixture.press("e", cx);
+    t.wait_for_base(cx);
+    let second = t.edit_view(cx).read_with(cx, |view, _| view.open_id());
+    assert_ne!(first, second);
+    // The first commit finishes: it must not close the second editor.
+    t.confirm(cx);
+    t.wait_for("the commit", cx, |_| t.patches().len() == 2);
+    cx.run_until_parked();
+    assert!(t.is_editing(cx));
+    let open = t.edit_view(cx).read_with(cx, |view, _| view.open_id());
+    assert_eq!(open, second);
+}

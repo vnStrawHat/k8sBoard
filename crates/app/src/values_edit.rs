@@ -10,6 +10,7 @@
 //! Nothing here logs, writes to disk, or sends a request itself: Apply hands a `WriteIntent` to the
 //! write flow (dry-run, confirm tier, commit, audit), always on the cluster of the edited object.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use cluster::{
@@ -118,6 +119,9 @@ pub(crate) struct ValueRow {
     /// The field holds a change: text typed in a Secret field, or ConfigMap text that differs from
     /// the server's. Set from `InputEvent::Change`, never from a per-render read of the text.
     pub(crate) has_text_change: bool,
+    /// Characters of a Secret field's text, for the mask placeholder. Set with `has_text_change`, so
+    /// drawing a frame never walks the rope.
+    pub(crate) char_count: usize,
     _subscription: Option<Subscription>,
 }
 
@@ -195,6 +199,21 @@ pub(crate) fn copy_text(field: &Entity<TextareaState>, cx: &App) -> Zeroizing<St
     copy
 }
 
+/// Inserts the pasted text and gives the wrapper back untouched: the caller drops it, which wipes
+/// the clipboard copy. The kit gets its own copy through a borrow; moving the `String` out of the
+/// wrapper would leave nothing to wipe.
+fn insert_clipboard_text(
+    field: &Entity<TextareaState>,
+    text: Zeroizing<String>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Zeroizing<String> {
+    field.update(cx, |state, cx| {
+        state.insert(SharedString::from(text.as_str()), window, cx)
+    });
+    text
+}
+
 /// A row problem found before any request.
 struct RowProblem {
     key: String,
@@ -208,8 +227,14 @@ enum Pending {
     Remove,
 }
 
+/// Counts the editors opened in this run, so a commit can tell which one it was started from.
+static NEXT_OPEN_ID: AtomicU64 = AtomicU64::new(1);
+
 /// The open values edit, in `AppShell.edit`.
 pub(crate) struct ValuesEditView {
+    /// Told to the shell when Apply starts a write, so a commit that finishes after this editor was
+    /// closed and another opened does not act on the new one.
+    open_id: u64,
     shell: WeakEntity<AppShell>,
     /// The cursor's cluster and key; the guard, the connection, the tier, and the audit line are
     /// resolved from this slot for every request.
@@ -293,6 +318,7 @@ impl ValuesEditView {
             },
         );
         Self {
+            open_id: NEXT_OPEN_ID.fetch_add(1, Ordering::Relaxed),
             shell,
             target,
             cluster_name,
@@ -320,6 +346,10 @@ impl ValuesEditView {
             is_fixture: false,
             _subscription: subscription,
         }
+    }
+
+    pub(crate) fn open_id(&self) -> u64 {
+        self.open_id
     }
 
     pub(crate) fn cluster(&self) -> &ClusterRef {
@@ -489,6 +519,7 @@ impl ValuesEditView {
                     origin: RowOrigin::Server { is_removed: false },
                     field,
                     has_text_change: false,
+                    char_count: 0,
                     _subscription: subscription,
                 }
             })
@@ -532,8 +563,11 @@ impl ValuesEditView {
         let Some(row) = self.rows.iter_mut().find(|row| row.name == name) else {
             return;
         };
+        if let FieldKind::Secret { field, .. } = &row.field {
+            row.char_count = field.read(cx).text().chars().count();
+        }
         row.has_text_change = match &row.field {
-            FieldKind::Secret { field, .. } => field.read(cx).text().len() > 0,
+            FieldKind::Secret { .. } => row.char_count > 0,
             FieldKind::Text { field, original } => {
                 field.read(cx).value().as_ref() != original.as_str()
             }
@@ -657,19 +691,39 @@ impl ValuesEditView {
                 };
                 let field = field.clone();
                 field.update(cx, |state, cx| state.focus(window, cx));
-                self.start_ticker(cx);
+                self.start_ticker(window, cx);
             }
-            Reveal::Shown { .. } => *reveal = Reveal::Masked,
+            Reveal::Shown { .. } => {
+                *reveal = Reveal::Masked;
+                self.release_focus_of_masked(window, cx);
+            }
         }
         cx.notify();
     }
 
     /// Masks every Secret field: Apply and close do.
-    fn mask_all(&mut self) {
+    fn mask_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for row in &mut self.rows {
             if let FieldKind::Secret { reveal, .. } = &mut row.field {
                 *reveal = Reveal::Masked;
             }
+        }
+        self.release_focus_of_masked(window, cx);
+    }
+
+    /// A masked field is not drawn, so its textarea cannot keep the keyboard: focus would sit on an
+    /// element outside the tree, and Ctrl S and the other keys of the view would stop working. The
+    /// view's own handle takes it.
+    fn release_focus_of_masked(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let has_focus = self.rows.iter().any(|row| match &row.field {
+            FieldKind::Secret {
+                field,
+                reveal: Reveal::Masked,
+            } => field.read(cx).focus_handle(cx).is_focused(window),
+            _ => false,
+        });
+        if has_focus {
+            self.focus_handle.focus(window, cx);
         }
     }
 
@@ -687,10 +741,8 @@ impl ValuesEditView {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        let mut text = Zeroizing::new(text);
-        field.update(cx, |state, cx| {
-            state.insert(SharedString::from(std::mem::take(&mut *text)), window, cx)
-        });
+        // Dropped at the end of this call, which wipes it.
+        let _text = insert_clipboard_text(&field, Zeroizing::new(text), window, cx);
     }
 
     /// Adds a row for the name in the Add field. The name is checked locally; the value is typed in
@@ -728,6 +780,7 @@ impl ValuesEditView {
             origin: RowOrigin::Added,
             field,
             has_text_change: true,
+            char_count: 0,
             _subscription: Some(subscription),
         });
         self.rows.sort_by(|left, right| left.name.cmp(&right.name));
@@ -768,15 +821,16 @@ impl ValuesEditView {
     }
 
     /// Runs once a second while any field is shown.
-    fn start_ticker(&mut self, cx: &mut Context<Self>) {
+    fn start_ticker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_ticking {
             return;
         }
         self.is_ticking = true;
-        self._ticker = Some(cx.spawn(async move |this, cx| {
+        self._ticker = Some(cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(TICK).await;
-                let keeps_going = this.update(cx, |view, cx| view.tick(Instant::now(), cx));
+                let keeps_going =
+                    this.update_in(cx, |view, window, cx| view.tick(Instant::now(), window, cx));
                 if !matches!(keeps_going, Ok(true)) {
                     break;
                 }
@@ -785,8 +839,9 @@ impl ValuesEditView {
     }
 
     /// Masks what is due; false when nothing is left to count down.
-    fn tick(&mut self, now: Instant, cx: &mut Context<Self>) -> bool {
+    fn tick(&mut self, now: Instant, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if expire_reveals(&mut self.rows, now) {
+            self.release_focus_of_masked(window, cx);
             cx.notify();
         }
         let keeps_going = self.rows.iter().any(|row| {
@@ -813,6 +868,8 @@ impl ValuesEditView {
         if self.is_fixture {
             return;
         }
+        // Apply hides every field again, whatever the answer: a local error leaves none shown.
+        self.mask_all(window, cx);
         let is_deleted = matches!(self.banner, Some(ValuesBanner::Deleted));
         if self.base.is_none() || self.is_running() || !self.is_dirty() || is_deleted {
             return;
@@ -847,8 +904,6 @@ impl ValuesEditView {
             cx.notify();
             return;
         };
-        // Apply hides every field again, whatever the dialog answers.
-        self.mask_all();
         let mut warnings = self.warnings.clone();
         warnings.extend(self.server_changed_keys.iter().map(|key| {
             SharedString::from(format!(
@@ -871,9 +926,11 @@ impl ValuesEditView {
             expected_name: None,
             warnings,
         };
-        let _ = self
-            .shell
-            .update(cx, |shell, cx| shell.start_write(intent, window, cx));
+        let open_id = self.open_id;
+        let _ = self.shell.update(cx, |shell, cx| {
+            shell.note_values_commit(open_id);
+            shell.start_write(intent, window, cx)
+        });
         cx.notify();
     }
 
@@ -1072,6 +1129,7 @@ impl ValuesEditView {
                 reveal: Reveal::Masked,
             },
             has_text_change: true,
+            char_count: 4,
             _subscription: Some(subscription),
         });
         view.rows.sort_by(|left, right| left.name.cmp(&right.name));

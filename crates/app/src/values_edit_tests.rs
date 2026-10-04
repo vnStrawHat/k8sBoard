@@ -752,3 +752,103 @@ fn view_has_no_value_in_any_debug_or_error_text() {
         "Helm release records cannot be edited"
     );
 }
+
+// ---- review fixes ----
+
+#[gpui_kit::test]
+fn pasted_text_stays_in_its_wiping_wrapper(cx: &mut TestAppContext) {
+    let t = secret_view(cx);
+    let field = t.field("DB_HOST", cx);
+    let text = t.with(cx, |_, window, cx| {
+        insert_clipboard_text(&field, Zeroizing::new("a\r\nb".to_owned()), window, cx)
+    });
+    // The wrapper still owns the text (nothing was moved out), so dropping it wipes it.
+    assert_eq!(text.as_str(), "a\r\nb");
+    assert_eq!(t.text("DB_HOST", cx), "a\r\nb");
+}
+
+#[gpui_kit::test]
+fn masking_a_focused_field_gives_the_keyboard_back_to_the_view(cx: &mut TestAppContext) {
+    let t = secret_view(cx);
+    let focused = |t: &ViewTest, cx: &mut TestAppContext| {
+        let field = t.field("DB_HOST", cx);
+        let view = t.view.read_with(cx, |view, _| view.focus_handle.clone());
+        cx.update_window(t.window, |_, window, cx| {
+            (
+                field.read(cx).focus_handle(cx).is_focused(window),
+                view.is_focused(window),
+            )
+        })
+        .expect("the window is open")
+    };
+    // The eye gives the field the keyboard.
+    t.toggle_reveal("DB_HOST", cx);
+    t.render(cx);
+    assert_eq!(focused(&t, cx), (true, false));
+    // The eye again masks it: the view keeps the keys, and Ctrl S still has its context.
+    t.toggle_reveal("DB_HOST", cx);
+    t.render(cx);
+    assert_eq!(focused(&t, cx), (false, true));
+    let is_available = cx
+        .update_window(t.window, |_, window, cx| {
+            window.is_action_available(&crate::keymap::ApplyEdit, cx)
+        })
+        .expect("the window is open");
+    assert!(is_available);
+    // The 30 s timer does the same.
+    t.toggle_reveal("DB_HOST", cx);
+    t.render(cx);
+    let Reveal::Shown { hides_at } = t.reveal_of("DB_HOST", cx) else {
+        panic!("the field is shown");
+    };
+    t.with(cx, |view, window, cx| view.tick(hides_at, window, cx));
+    t.render(cx);
+    assert_eq!(t.reveal_of("DB_HOST", cx), Reveal::Masked);
+    assert_eq!(focused(&t, cx), (false, true));
+    // Apply masks too.
+    t.toggle_reveal("DB_HOST", cx);
+    t.render(cx);
+    t.with(cx, |view, window, cx| view.mask_all(window, cx));
+    t.render(cx);
+    assert_eq!(focused(&t, cx), (false, true));
+}
+
+#[gpui_kit::test]
+fn masked_field_count_is_stored_on_change_not_read_per_frame(cx: &mut TestAppContext) {
+    let t = secret_view(cx);
+    let count = |t: &ViewTest, cx: &mut TestAppContext| {
+        t.view.read_with(cx, |view, _| {
+            view.rows
+                .iter()
+                .find(|row| row.name == "DB_USER")
+                .map(|row| row.char_count)
+        })
+    };
+    assert_eq!(count(&t, cx), Some(0));
+    cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("héllo\nx".to_owned())));
+    t.with(cx, |view, window, cx| {
+        view.paste_into("DB_USER", window, cx)
+    });
+    assert_eq!(count(&t, cx), Some(7));
+    let field = t.field("DB_USER", cx);
+    t.with(cx, |_, window, cx| {
+        field.update(cx, |state, cx| state.replace_all("", window, cx))
+    });
+    assert_eq!(count(&t, cx), Some(0));
+}
+
+#[gpui_kit::test]
+fn a_local_error_in_apply_leaves_no_field_shown(cx: &mut TestAppContext) {
+    let t = secret_view(cx);
+    let add_name = t.view.read_with(cx, |view, _| view.add_name.clone());
+    t.with(cx, |_, window, cx| {
+        add_name.update(cx, |input, cx| input.set_value("EMPTY", window, cx))
+    });
+    t.with(cx, |view, window, cx| view.add_key(window, cx));
+    t.toggle_reveal("DB_HOST", cx);
+    assert!(matches!(t.reveal_of("DB_HOST", cx), Reveal::Shown { .. }));
+    t.with(cx, |view, window, cx| view.apply(window, cx));
+    t.view
+        .read_with(cx, |view, _| assert!(!view.row_errors.is_empty()));
+    assert_eq!(t.reveal_of("DB_HOST", cx), Reveal::Masked);
+}

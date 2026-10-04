@@ -335,24 +335,21 @@ impl ValuesEditView {
                 .into(),
             ),
             FieldKind::Text { field, .. } => text_field(field, window),
-            FieldKind::Secret { field, reveal } => {
-                let char_count = field.read(cx).text().chars().count();
-                match field_display(*reveal, char_count) {
-                    FieldDisplay::Masked(text) => div()
-                        .id(("values-mask", index))
-                        .px_2()
-                        .py_1()
-                        .rounded(theme.radius)
-                        .border_1()
-                        .border_color(theme.border)
-                        .text_sm()
-                        .font_family(theme.mono_font_family.clone())
-                        .text_color(theme.muted_foreground)
-                        .child(text)
-                        .into_any_element(),
-                    FieldDisplay::Editor => secret_field(field),
-                }
-            }
+            FieldKind::Secret { field, reveal } => match field_display(*reveal, row.char_count) {
+                FieldDisplay::Masked(text) => div()
+                    .id(("values-mask", index))
+                    .px_2()
+                    .py_1()
+                    .rounded(theme.radius)
+                    .border_1()
+                    .border_color(theme.border)
+                    .text_sm()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_color(theme.muted_foreground)
+                    .child(text)
+                    .into_any_element(),
+                FieldDisplay::Editor => secret_field(field),
+            },
         }
     }
 
