@@ -138,3 +138,43 @@ fn the_footer_follows_the_check() {
     assert_eq!(footer_text(&passed, "a: 1"), "Dry-run OK · 212 ms");
     assert_eq!(footer_text(&passed, "a: 2"), "Changed since the last check");
 }
+
+#[test]
+fn a_thousand_dropped_fields_are_cut_at_ten_lines() {
+    let dropped: Vec<String> = (0..1000).map(|index| format!("data.K{index}")).collect();
+    let lines = warning_lines(&[], &dropped);
+    assert_eq!(lines.len(), 11);
+    assert_eq!(
+        lines[0],
+        "data.K0 is not a known field; the server dropped it"
+    );
+    assert_eq!(lines[10], "\u{2026} and 990 more");
+}
+
+#[test]
+fn five_hundred_broad_subjects_are_cut_at_ten_lines() {
+    let subjects: String = (0..500)
+        .map(|index| format!("  - kind: Group\n    name: system:g{index}\n    apiGroup: rbac.authorization.k8s.io\n"))
+        .collect();
+    let text = binding("view").replace(
+        "  - kind: ServiceAccount\n    name: default\n    namespace: payments\n",
+        &subjects,
+    );
+    let draft = ObjectDraft::new(ObjectKind::RoleBinding, &text).expect("a valid draft");
+    assert_eq!(draft.warnings().len(), 500);
+    let lines = warning_lines(draft.warnings(), &[]);
+    assert_eq!(lines.len(), 11);
+    assert_eq!(lines[10], "\u{2026} and 490 more");
+    // The warnings still ask for the binding name: only their lines are cut.
+    let request = request(ObjectKind::RoleBinding, &text);
+    assert_eq!(confirm_risk(&request).0, ActionRisk::Privileged);
+}
+
+#[test]
+fn a_short_list_is_shown_whole() {
+    let lines = warning_lines(
+        &[DraftWarning::PrivilegedPodSecurity],
+        &["spec.minAvailble".to_owned()],
+    );
+    assert_eq!(lines.len(), 2);
+}

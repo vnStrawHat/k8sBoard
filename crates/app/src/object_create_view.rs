@@ -293,7 +293,7 @@ impl ObjectCreateView {
                 return;
             }
         };
-        let warnings = draft.warnings().iter().map(warning_text).collect();
+        let warnings = draft.warnings().to_vec();
         let Some(request) = WriteRequest::new(
             draft.target().clone(),
             WriteOperation::CreateObject(Box::new(draft)),
@@ -330,13 +330,13 @@ impl ObjectCreateView {
         &mut self,
         text: SharedString,
         request: WriteRequest,
-        mut warnings: Vec<SharedString>,
+        warnings: Vec<DraftWarning>,
         result: Result<WriteOutcome, CheckedWriteError>,
         cx: &mut Context<Self>,
     ) {
         match result {
             Ok(outcome) => {
-                warnings.extend(outcome.dropped_fields.iter().map(|path| dropped_text(path)));
+                let warnings = warning_lines(&warnings, &outcome.dropped_fields);
                 self.check = CreateCheck::Passed(Box::new(PassedCreate {
                     for_text: text,
                     request: Some(request),
@@ -449,7 +449,32 @@ fn warning_text(warning: &DraftWarning) -> SharedString {
         DraftWarning::PrivilegedPodSecurity => {
             "Pods in this namespace may run privileged (pod-security enforce: privileged)".into()
         }
+        DraftWarning::SystemNamespaceAccount { name } => {
+            format!("ServiceAccount kube-system/{name} is a control plane account").into()
+        }
+        DraftWarning::SystemRole { role } => {
+            format!("{role} is a built-in ClusterRole of the API server").into()
+        }
     }
+}
+
+/// How many warning lines the side panel and the confirm show; the rest is one `and {n} more`
+/// line, so a draft of hundreds of subjects or dropped fields cannot flood either.
+const MAX_WARNING_LINES: usize = 10;
+
+/// The draft warnings, then one line per field the server dropped, cut at ten lines.
+pub(crate) fn warning_lines(warnings: &[DraftWarning], dropped: &[String]) -> Vec<SharedString> {
+    let mut lines: Vec<SharedString> = warnings
+        .iter()
+        .map(warning_text)
+        .chain(dropped.iter().map(|path| dropped_text(path)))
+        .collect();
+    let more = lines.len().saturating_sub(MAX_WARNING_LINES);
+    if more > 0 {
+        lines.truncate(MAX_WARNING_LINES);
+        lines.push(format!("\u{2026} and {more} more").into());
+    }
+    lines
 }
 
 /// A field of the draft that the server dropped (decision 14): a misspelled field name.

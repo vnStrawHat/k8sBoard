@@ -1346,6 +1346,16 @@ fn create_failure(request: &WriteRequest, status: &Status) -> Option<WriteError>
         return None;
     }
     let target = &request.target;
+    // A Namespace has no namespace in its path, so its 404 can only mean the API is missing.
+    if status.code == 404 && target.namespace().is_none() {
+        return Some(WriteError::Invalid {
+            message: format!(
+                "The {} API is not available on this cluster",
+                target.kind_name()
+            ),
+            fields: Vec::new(),
+        });
+    }
     match (status.code, target.namespace()) {
         (409, _) if status.reason == "AlreadyExists" => Some(WriteError::Invalid {
             message: format!("{} {} already exists", target.kind_name(), target.name()),

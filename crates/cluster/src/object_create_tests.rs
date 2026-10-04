@@ -325,3 +325,52 @@ fn checked_operation_refuses_inconsistent_draft() {
         assert!(request(draft).is_none());
     }
 }
+
+#[test]
+fn missing_paths_skips_empty_strings_like_null() {
+    // A ServiceAccount subject with `apiGroup: ""` comes back without the field.
+    let draft =
+        json!({"subjects": [{"kind": "ServiceAccount", "apiGroup": "", "name": "default"}]});
+    let answer = json!({"subjects": [{"kind": "ServiceAccount", "name": "default"}]});
+    assert!(missing_paths(&draft, &answer).is_empty());
+}
+
+#[test]
+fn missing_paths_reports_every_leaf_of_a_large_draft() {
+    let data: serde_json::Map<String, serde_json::Value> = (0..1000)
+        .map(|index| (format!("K{index}"), json!("v")))
+        .collect();
+    let draft = json!({"data": data});
+    assert_eq!(missing_paths(&draft, &json!({})).len(), 1000);
+}
+
+#[test]
+fn kube_system_accounts_and_system_roles_warn_without_typing_the_name() {
+    let subjects = "  - kind: ServiceAccount\n    name: coredns\n    namespace: kube-system\n  - kind: ServiceAccount\n    name: default\n    namespace: payments\n";
+    let warnings = draft(
+        ObjectKind::RoleBinding,
+        &binding("view", "ClusterRole", subjects),
+    )
+    .warnings()
+    .to_vec();
+    assert_eq!(
+        warnings,
+        [DraftWarning::SystemNamespaceAccount {
+            name: "coredns".to_owned()
+        }]
+    );
+    assert!(!warnings[0].needs_typed_name());
+    let role = draft(
+        ObjectKind::RoleBinding,
+        &binding("system:node-proxier", "ClusterRole", SERVICE_ACCOUNT),
+    );
+    assert_eq!(
+        role.warnings(),
+        [DraftWarning::SystemRole {
+            role: "system:node-proxier".to_owned()
+        }]
+    );
+    // A namespaced Role of that name is not a built-in ClusterRole.
+    let role = binding("system:x", "Role", SERVICE_ACCOUNT);
+    assert!(draft(ObjectKind::RoleBinding, &role).warnings().is_empty());
+}

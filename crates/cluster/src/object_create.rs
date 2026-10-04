@@ -20,6 +20,7 @@ use crate::object_yaml::{ObjectKind, ObjectRef, api_resource};
 const MAX_LISTED: usize = 10;
 const POWERFUL_ROLES: [&str; 3] = ["cluster-admin", "admin", "edit"];
 const POD_SECURITY_ENFORCE: &str = "pod-security.kubernetes.io/enforce";
+const KUBE_SYSTEM: &str = "kube-system";
 
 impl ObjectKind {
     /// The kinds W7 gives a `New` button (decision 1): a closed list, so a new kind is a reviewed
@@ -66,6 +67,10 @@ pub enum DraftWarning {
     BroadSubject { kind: String, name: String },
     /// The Namespace enforces the `privileged` pod security level.
     PrivilegedPodSecurity,
+    /// A ServiceAccount subject in `kube-system`, where the control plane's own accounts live.
+    SystemNamespaceAccount { name: String },
+    /// The `roleRef` is a ClusterRole whose name starts with `system:`.
+    SystemRole { role: String },
 }
 
 impl DraftWarning {
@@ -201,6 +206,7 @@ impl ObjectDraft {
                 Some(namespace.to_owned()),
             ));
         }
+        fields.extend(self.finalizer_fields());
         let kind = self.target.builtin_kind();
         match kind {
             Some(ObjectKind::RoleBinding) => fields.extend(self.role_binding_fields()),
@@ -210,6 +216,27 @@ impl ObjectDraft {
             _ => {}
         }
         fields
+    }
+
+    /// A finalizer the draft sets is listed: a name nothing removes keeps the object (a Namespace
+    /// especially) from ever being deleted.
+    fn finalizer_fields(&self) -> Vec<ChangedField> {
+        let finalizers = self
+            .body
+            .pointer("/metadata/finalizers")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        let listed = finalizers
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                field(
+                    Cow::Owned(format!("metadata.finalizers[{index}]")),
+                    Some(scalar_text(name)),
+                )
+            })
+            .collect();
+        capped(listed)
     }
 
     fn role_binding_fields(&self) -> Vec<ChangedField> {
@@ -307,6 +334,9 @@ fn collect_missing(
     match draft {
         Value::Null => {}
         Value::Object(map) if map.is_empty() => {}
+        // The server omits an empty string like a `null`: a ServiceAccount subject with
+        // `apiGroup: ""` comes back without it.
+        Value::String(text) if text.is_empty() => {}
         Value::Array(items) if items.is_empty() => {}
         Value::Object(map) => {
             for (key, child) in map {
@@ -445,6 +475,13 @@ fn role_binding_warnings(body: &Value) -> Vec<DraftWarning> {
             role: name.to_owned(),
         });
     }
+    if let (Some("ClusterRole"), Some(name)) = (role_kind, role_name)
+        && name.starts_with("system:")
+    {
+        warnings.push(DraftWarning::SystemRole {
+            role: name.to_owned(),
+        });
+    }
     let subjects = body.get("subjects").and_then(Value::as_array);
     for subject in subjects.into_iter().flatten() {
         let kind = subject.get("kind").and_then(Value::as_str);
@@ -454,6 +491,12 @@ fn role_binding_warnings(body: &Value) -> Vec<DraftWarning> {
         {
             warnings.push(DraftWarning::BroadSubject {
                 kind: kind.to_owned(),
+                name: name.to_owned(),
+            });
+        }
+        let namespace = subject.get("namespace").and_then(Value::as_str);
+        if let (Some("ServiceAccount"), Some(name), Some(KUBE_SYSTEM)) = (kind, name, namespace) {
+            warnings.push(DraftWarning::SystemNamespaceAccount {
                 name: name.to_owned(),
             });
         }

@@ -390,3 +390,41 @@ async fn allow_list_matches_the_operations() {
         assert!(body["metadata"].get("uid").is_none());
     }
 }
+
+#[tokio::test]
+async fn a_missing_namespace_api_reads_as_such_for_a_namespace_create() {
+    let text = "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: team-a\n";
+    let (connection, _api) = answering(
+        404,
+        status(
+            404,
+            "NotFound",
+            "the server could not find the requested resource",
+        ),
+    );
+    let error = connection
+        .write(&request_of(ObjectKind::Namespace, text), WriteMode::Commit)
+        .await
+        .expect_err("a missing API");
+    assert!(
+        matches!(&error, WriteError::Invalid { message, .. }
+            if message == "The Namespace API is not available on this cluster"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn finalizers_are_listed_and_capped() {
+    let finalizers: String = (0..12)
+        .map(|index| format!("    - example.com/f{index}\n"))
+        .collect();
+    let text = format!(
+        "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: team-a\n  finalizers:\n{finalizers}"
+    );
+    let fields = request_of(ObjectKind::Namespace, &text).changed_fields();
+    let paths: Vec<_> = fields.iter().map(|field| field.path.to_string()).collect();
+    assert_eq!(paths[1], "metadata.finalizers[0]");
+    assert_eq!(fields[1].value.as_deref(), Some("example.com/f0"));
+    assert_eq!(paths.len(), 1 + 10 + 1);
+    assert_eq!(paths[11], "\u{2026} and 2 more");
+}
