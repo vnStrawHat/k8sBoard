@@ -23,8 +23,9 @@ use cluster::{
     CronJobSummary, EnvValues, EventFilter, GrantNames, HelmReleaseSummary, HelmRevisionRef,
     Kubeconfig, KubeletTargets, LogRequest, LogSource, LogUpdate, MetricsApi, NamespaceCoverage,
     NamespaceScope, NodeKubeletStats, NodeMetrics, NodeReadiness, NodeScheduling, NodeSummary,
-    ObjectKind, ObjectRef, PodMetrics, PodStatus, PodSummary, RequestTarget, ResourceRequest,
-    SecretDetails, SecretSummary, StatusReason, Termination, ValueVisibility, WatchUpdate,
+    ObjectKind, ObjectRef, PodMetrics, PodStatus, PodSummary, ProxyChoice, RequestTarget,
+    ResourceRequest, SecretDetails, SecretSummary, StatusReason, Termination, ValueVisibility,
+    WatchUpdate,
 };
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
@@ -1357,13 +1358,14 @@ async fn run(args: &Args) -> io::Result<bool> {
         }
     };
     writeln!(probe.out, "\ncontext: {context}")?;
-    let connection = match ClusterConnection::open(&kubeconfig, &context).await {
-        Ok(connection) => connection,
-        Err(error) => {
-            print_error_chain("", &error);
-            return Ok(false);
-        }
-    };
+    let connection =
+        match ClusterConnection::open(&kubeconfig, &context, &ProxyChoice::Kubeconfig).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                print_error_chain("", &error);
+                return Ok(false);
+            }
+        };
 
     let scope = match &args.namespace {
         Some(namespaces) => NamespaceScope::of_namespaces(
@@ -1844,6 +1846,7 @@ fn error_kind(error: &ClusterError) -> &'static str {
     match error {
         ClusterError::Kubeconfig(_) => "Kubeconfig: ",
         ClusterError::InvalidConfig { .. } => "InvalidConfig: ",
+        ClusterError::InvalidProxy { .. } => "InvalidProxy: ",
         ClusterError::Unreachable { .. } => "Unreachable: ",
         ClusterError::TimedOut { .. } => "TimedOut: ",
         ClusterError::CredentialsUnavailable { .. } => "CredentialsUnavailable: ",

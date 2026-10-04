@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use cluster::NamespaceScope;
 
 use crate::app_shell::Screen;
+use crate::cluster_catalog::{PathStyle, same_path_text};
 use crate::drawer::DrawerTab;
 use crate::namespace_picker::MAX_NAMESPACES;
 use crate::resource_kind::ResourceKind;
@@ -27,7 +28,7 @@ Options:
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
-           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
+           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-general|settings-appearance|settings-terminal|settings-logs|settings-shortcuts
                          screen to open (default: overview)
   --palette <text>       open the command palette with <text> typed (for example :po or > rest)
   --window-width <px>    window width, 800 to 3840 (default: 1320)
@@ -647,6 +648,15 @@ impl LaunchScreen {
             )),
             // The whole Clusters form fits, so a screenshot can show its footer.
             "settings-tall" => Some(Self::Settings(SettingsPage::Clusters, SettingsSize::Tall)),
+            "settings-general" => Some(Self::Settings(
+                SettingsPage::General,
+                SettingsSize::Standard,
+            )),
+            "settings-logs" => Some(Self::Settings(SettingsPage::Logs, SettingsSize::Standard)),
+            "settings-terminal" => Some(Self::Settings(
+                SettingsPage::TerminalAndShell,
+                SettingsSize::Standard,
+            )),
             "settings-appearance" => Some(Self::Settings(
                 SettingsPage::Appearance,
                 SettingsSize::Standard,
@@ -854,12 +864,22 @@ pub(crate) fn kubeconfig_chain(
     chain.into_iter().map(absolute).collect()
 }
 
-/// The registry files to load on their own: absolute, in registry order, without chain members
-/// and without duplicates.
-pub(crate) fn standalone_files(registered: &[PathBuf], chain: &[PathBuf]) -> Vec<PathBuf> {
+/// The files to load on their own: the registry files in registry order, then the files of the
+/// watched folders; absolute, without chain members and without duplicates (a file in the registry
+/// loads there, not again as a folder file).
+pub(crate) fn standalone_files(
+    registered: &[PathBuf],
+    folder_files: &[PathBuf],
+    chain: &[PathBuf],
+) -> Vec<PathBuf> {
+    let same = |a: &PathBuf, b: &PathBuf| {
+        same_path_text(&a.to_string_lossy(), &b.to_string_lossy(), PathStyle::HOST)
+    };
     let mut files: Vec<PathBuf> = Vec::new();
-    for file in registered.iter().cloned().map(absolute) {
-        if !chain.contains(&file) && !files.contains(&file) {
+    for file in registered.iter().chain(folder_files).cloned().map(absolute) {
+        if !chain.iter().any(|member| same(member, &file))
+            && !files.iter().any(|known| same(known, &file))
+        {
             files.push(file);
         }
     }

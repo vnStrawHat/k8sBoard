@@ -59,15 +59,16 @@ Each later spec adds one `#[serde(default)]` field to `Settings` (or to `Cluster
 
 | Key | Type, default | Owner | Use |
 |---|---|---|---|
-| `secrets.clipboard_clear_seconds` | `u32`, 30; 0 = never | 0016 | replaces `CLIPBOARD_CLEAR_DELAY` |
-| `logs.export_dir` | `Option<PathBuf>` | 0019 / 0021 / 0022 | start folder of the C9 save dialog; updated after a confirmed save |
-| `issues.watch_tls_secrets` | `bool`, true | 0020 (decision 11) | opt out of the cluster-wide TLS Secrets watch (C13 budget) |
+| `secrets.clipboard_clear_seconds` | `u32`, 30; 0 = never | 0016 | still reserved and unused: 0043 keeps the fixed 30 s (0016 decision 26) |
+| `general.export_dir` | `Option<PathBuf>` | 0043 | start folder of the C9 save dialog; updated after a confirmed save (reserved earlier as `logs.export_dir`) |
+| `general.watch_tls_secrets` | `bool`, true | 0043 (0020 decision 11) | opt out of the cluster-wide TLS Secrets watch, C13 budget (reserved earlier as `issues.watch_tls_secrets`) |
 | `topology.group_by` | enum, `app` | 0022 (decision 27) | last Group by choice |
 | `topology.pins` | map `"{context}/{namespace}"` → map node id → `{x, y}` | 0022 (decision 23) | dragged positions; cap 2,000 pins per key |
-| `appearance.density` | `"compact"`(28) / `"comfortable"`(36) | later | row height (needs a table row-height audit) |
+| `appearance.density` | `"compact"`(28, default) / `"comfortable"`(36) | 0043 | row height of every `DataTable`, header included |
 | `dock.height` | `Option<f32>` px | 0044 | remembered dock height in whole pixels, written on a resize end; absent = 280 px (a double-click reset forgets it) |
-| `registry.clusters[].color`, `.metrics_source`, `.confirm` | per W2 form | later / backlog / 0030 | W2 Clusters fields; `confirm` is `"type-name"` or `"click"`, absent = environment default (0030) |
+| `registry.clusters[].color`, `.proxy`, `.metrics_source`, `.confirm` | per W2 form | 0043 (`color`: red, amber, blue, purple, teal, gray; `proxy`: `"direct"` or `{"url": "http://host:port"}`, never userinfo) / backlog / 0030 | W2 Clusters fields; `confirm` is `"type-name"` or `"click"`, absent = environment default (0030) |
 | `registry.clusters[].allow_node_shell`, `.debug_image`, `.node_shell_namespace` | `Option<bool>`, `Option<String>`, `Option<String>` | 0037 | `allow_node_shell` absent = on for Local, on for Development and Staging only when `environment` is set in the entry, else off; `debug_image` absent = the pinned busybox digest; `node_shell_namespace` absent = `kube-system`. The switch is the W2 Safety toggle; the other two are written after a successful start |
 | `port_forward.presets` | list | 0035 | saved forwards |
+| `logs.*`, `terminal.*`, `registry.kubeconfig_folders` | see [0043 settings-model](../0043-settings-pages/settings-model.md) | 0043 | log and shell defaults for new tabs; watched kubeconfig folders |
 
 Pin keys and any new map keys use context names, namespaces, and object names only.

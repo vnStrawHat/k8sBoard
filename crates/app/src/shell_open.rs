@@ -172,9 +172,11 @@ impl AppShell {
         };
         let dock = self.dock.clone();
         let opened = target.clone();
+        // Read once: the dialog, the grant, and the start must all name the same shell.
+        let command = AppSettings::get(cx).terminal.default_shell;
         let intent = shell_intent(
             &target,
-            ShellCommand::Auto,
+            command,
             cluster_name,
             "Open shell",
             "Open shell",
@@ -182,14 +184,14 @@ impl AppShell {
                 let grant = ShellGrant {
                     connection,
                     permit,
-                    command: ShellCommand::Auto,
+                    command,
                 };
                 let tab = dock.update(cx, |dock, cx| {
                     dock.open_shell(opened.clone(), tab_label.clone(), grant, window, cx)
                 });
                 if let Some(tab) = tab {
                     shell.watch_shell(&tab, cx);
-                    shell.begin_shell_start(&tab, ShellCommand::Auto, cx);
+                    shell.begin_shell_start(&tab, command, cx);
                 }
             }),
         );

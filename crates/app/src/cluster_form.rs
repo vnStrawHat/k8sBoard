@@ -1,18 +1,20 @@
 //! What the Clusters page of Settings shows and edits, without any view code: the grouped rows,
 //! field validation, registry edits, and the Test connection future.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cluster::{ClusterConnection, ClusterError, Kubeconfig};
+use cluster::{ClusterError, Kubeconfig, ProxyChoice, ProxyUrl, ProxyUrlError};
 use gpui_kit::SharedString;
 
 use crate::cluster_catalog::{PathStyle, same_path_text};
 use crate::cluster_registry::{
-    ClusterEntry, ClusterProfile, ClusterRef, ClusterRegistry, switcher_label,
+    ClusterEntry, ClusterProfile, ClusterProxy, ClusterRef, ClusterRegistry, open_cluster,
+    switcher_label,
 };
-use crate::environment::{Environment, guess_environment};
+use crate::cluster_switcher_rows::{normalize_query, search_text};
+use crate::environment::{ClusterColor, Environment, guess_environment};
 use crate::kubeconfig_import::is_app_owned;
 
 const MAX_DISPLAY_NAME_CHARS: usize = 64;
@@ -29,6 +31,9 @@ pub(crate) enum RowOrigin {
     Registry,
     /// A file k8sBoard wrote under `<config>/kubeconfigs/` when the user pasted a kubeconfig.
     AppOwned,
+    /// A file of a watched folder: the folder is the source of truth, so only stopping the watch or
+    /// deleting the file takes the row away.
+    Folder,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,6 +49,7 @@ pub(crate) struct ClusterRow {
     pub(crate) origin: RowOrigin,
 }
 
+#[derive(Clone)]
 pub(crate) struct ClusterGroup {
     pub(crate) title: &'static str,
     pub(crate) rows: Vec<ClusterRow>,
@@ -67,6 +73,7 @@ pub(crate) fn cluster_groups(
     kubeconfigs: &[&Kubeconfig],
     registry: &ClusterRegistry,
     is_chain_source: impl Fn(&Path) -> bool,
+    is_folder_source: impl Fn(&Path) -> bool,
     owned_dir: Option<&Path>,
 ) -> Vec<ClusterGroup> {
     let summaries: Vec<_> = kubeconfigs
@@ -90,6 +97,8 @@ pub(crate) fn cluster_groups(
                 RowOrigin::Chain
             } else if owned_dir.is_some_and(|dir| is_app_owned(source, dir)) {
                 RowOrigin::AppOwned
+            } else if is_folder_source(source) {
+                RowOrigin::Folder
             } else {
                 RowOrigin::Registry
             };
@@ -213,7 +222,211 @@ pub(crate) fn edit_entry(
             || entry.allow_node_shell.is_some()
             || entry.debug_image.is_some()
             || entry.node_shell_namespace.is_some()
+            || entry.color.is_some()
+            || entry.proxy.is_some()
     });
+}
+
+/// Whether `row` matches the search text, by the switcher's rule: its name, context, environment
+/// badge, and file name, with whitespace and case ignored.
+pub(crate) fn cluster_matches(row: &ClusterRow, text: &str) -> bool {
+    let haystack = search_text(
+        &row.label,
+        &row.cluster.context,
+        row.profile.environment,
+        &row.cluster.kubeconfig.to_string_lossy(),
+    );
+    haystack.contains(&normalize_query(text))
+}
+
+/// The groups of `groups` that keep at least one row matching `text`, with only those rows.
+pub(crate) fn filter_groups(groups: &[ClusterGroup], text: &str) -> Vec<ClusterGroup> {
+    groups
+        .iter()
+        .filter_map(|group| {
+            let rows: Vec<ClusterRow> = group
+                .rows
+                .iter()
+                .filter(|row| cluster_matches(row, text))
+                .cloned()
+                .collect();
+            (!rows.is_empty()).then_some(ClusterGroup {
+                title: group.title,
+                rows,
+            })
+        })
+        .collect()
+}
+
+/// What to store when the user picks `color`: nothing when it is the color of the cluster's
+/// environment, so a cluster on that color keeps following its environment.
+pub(crate) fn color_to_store(
+    color: ClusterColor,
+    environment: Environment,
+) -> Option<ClusterColor> {
+    (color != ClusterColor::of(environment)).then_some(color)
+}
+
+/// Moves `from` to the place of `to` inside `group` (display order). Every row of the group gets an
+/// entry, then the group's entries move to the end of `registry.clusters` in the new order; the
+/// other groups keep their relative order. Nothing happens when `from == to` or either is outside
+/// the group.
+pub(crate) fn move_cluster(
+    registry: &mut ClusterRegistry,
+    group: &ClusterGroup,
+    from: &ClusterRef,
+    to: &ClusterRef,
+) {
+    let mut order: Vec<ClusterRef> = group.rows.iter().map(|row| row.cluster.clone()).collect();
+    let position = |cluster: &ClusterRef| order.iter().position(|other| other == cluster);
+    let (Some(from_index), Some(to_index)) = (position(from), position(to)) else {
+        return;
+    };
+    if from_index == to_index {
+        return;
+    }
+    let moved = order.remove(from_index);
+    order.insert(to_index, moved);
+    for cluster in &order {
+        registry.entry_mut(cluster);
+    }
+    let (mut moving, mut kept): (Vec<_>, Vec<_>) = std::mem::take(&mut registry.clusters)
+        .into_iter()
+        .partition(|entry| order.contains(&entry.cluster));
+    moving.sort_by_key(|entry| order.iter().position(|cluster| *cluster == entry.cluster));
+    kept.append(&mut moving);
+    registry.clusters = kept;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MoveStep {
+    Up,
+    Down,
+}
+
+/// Moves `cluster` one place up or down inside `group`; nothing happens at the ends.
+pub(crate) fn step_cluster(
+    registry: &mut ClusterRegistry,
+    group: &ClusterGroup,
+    cluster: &ClusterRef,
+    step: MoveStep,
+) {
+    let Some(index) = group.rows.iter().position(|row| row.cluster == *cluster) else {
+        return;
+    };
+    let target = match step {
+        MoveStep::Up => index.checked_sub(1),
+        MoveStep::Down => Some(index + 1),
+    };
+    let Some(target) = target.and_then(|target| group.rows.get(target)) else {
+        return;
+    };
+    move_cluster(registry, group, cluster, &target.cluster);
+}
+
+/// What the Proxy control of the Connection section offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProxyMode {
+    /// The kubeconfig's own `proxy-url`, else none.
+    FromKubeconfig,
+    Direct,
+    Custom,
+}
+
+/// The mode the control shows: a stored URL is Custom, and so is a pick whose URL is not
+/// committed yet.
+pub(crate) fn proxy_mode(stored: Option<&ClusterProxy>, is_custom_picked: bool) -> ProxyMode {
+    match stored {
+        Some(ClusterProxy::Url(_)) => ProxyMode::Custom,
+        _ if is_custom_picked => ProxyMode::Custom,
+        Some(ClusterProxy::Direct) => ProxyMode::Direct,
+        None => ProxyMode::FromKubeconfig,
+    }
+}
+
+/// `kubeconfig_proxy` is the kubeconfig's `proxy-url` as `scheme://host[:port]`, never with userinfo.
+pub(crate) fn proxy_mode_label(mode: ProxyMode, kubeconfig_proxy: Option<&str>) -> String {
+    match mode {
+        ProxyMode::FromKubeconfig => {
+            format!("From kubeconfig ({})", kubeconfig_proxy.unwrap_or("none"))
+        }
+        ProxyMode::Direct => "None (direct)".to_owned(),
+        ProxyMode::Custom => "Custom URL".to_owned(),
+    }
+}
+
+/// What the URL input starts with: the stored URL as `scheme://host:port`, or nothing when the
+/// stored text does not parse, so that raw text (which a hand edit could fill with a password)
+/// is never shown.
+pub(crate) fn proxy_input_prefill(stored: Option<&ClusterProxy>) -> String {
+    match stored {
+        Some(ClusterProxy::Url(text)) => ProxyUrl::parse(text)
+            .map(|url| url.display())
+            .unwrap_or_default(),
+        Some(ClusterProxy::Direct) | None => String::new(),
+    }
+}
+
+/// Whether the typed text differs from what is stored, so that the `Not applied` note shows. A
+/// stored URL that does not parse counts as nothing stored.
+pub(crate) fn is_proxy_pending(stored: Option<&ClusterProxy>, typed: &str) -> bool {
+    let shown = |text: &str| ProxyUrl::parse(text).map(|url| url.display()).ok();
+    let applied = match stored {
+        Some(ClusterProxy::Url(text)) => shown(text),
+        Some(ClusterProxy::Direct) | None => None,
+    };
+    applied.is_none() || applied != shown(typed)
+}
+
+/// What committing the typed text means: `Ok(None)` for blank text (nothing to store), the URL to
+/// store, or the message under the field. The URL is stored as `scheme://host:port`.
+pub(crate) fn validate_proxy_url(text: &str) -> Result<Option<ClusterProxy>, FieldError> {
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    match ProxyUrl::parse(text) {
+        Ok(url) => Ok(Some(ClusterProxy::Url(url.display()))),
+        Err(error) => Err(FieldError(proxy_error_text(error).into())),
+    }
+}
+
+fn proxy_error_text(error: ProxyUrlError) -> &'static str {
+    match error {
+        ProxyUrlError::Scheme => "Use http:// or socks5://.",
+        ProxyUrlError::Credentials => {
+            "Leave out the user name and password: k8sBoard does not store proxy credentials. Put them in the kubeconfig proxy-url instead."
+        }
+        ProxyUrlError::Host => "Add the proxy host.",
+        ProxyUrlError::Port => "Use a port from 1 to 65535.",
+        ProxyUrlError::Path => "Remove the path; a proxy URL is scheme://host:port.",
+        ProxyUrlError::TooLong | ProxyUrlError::Malformed => {
+            "Enter a URL such as http://proxy.example:3128."
+        }
+    }
+}
+
+/// Adds `folder` to the watched folders unless the registry has it already (`same_path_text`).
+/// Returns whether it was added.
+pub(crate) fn add_watched_folder(registry: &mut ClusterRegistry, folder: PathBuf) -> bool {
+    let folder = std::path::absolute(&folder).unwrap_or(folder);
+    let text = folder.to_string_lossy();
+    let is_known = registry
+        .kubeconfig_folders
+        .iter()
+        .any(|known| same_path_text(&known.to_string_lossy(), &text, PathStyle::HOST));
+    if !is_known {
+        registry.kubeconfig_folders.push(folder);
+    }
+    !is_known
+}
+
+/// Stops watching `folder`. Only the registry changes: nothing in the folder is touched.
+pub(crate) fn stop_watching_folder(registry: &mut ClusterRegistry, folder: &Path) {
+    let folder = std::path::absolute(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let text = folder.to_string_lossy();
+    registry
+        .kubeconfig_folders
+        .retain(|known| !same_path_text(&known.to_string_lossy(), &text, PathStyle::HOST));
 }
 
 /// The cluster the page shows: `selected` while a row still has it, else `preferred`, else the
@@ -254,7 +467,9 @@ pub(crate) fn remove_dialog_text(
     };
     let fate = match origin {
         RowOrigin::AppOwned => "k8sBoard created this file when you pasted it; it will be deleted.",
-        RowOrigin::Chain | RowOrigin::Registry => "The file itself is not changed.",
+        RowOrigin::Chain | RowOrigin::Registry | RowOrigin::Folder => {
+            "The file itself is not changed."
+        }
     };
     let body = format!(
         "{} {noun} from this file {verb} the list: {}. {fate}",
@@ -262,6 +477,21 @@ pub(crate) fn remove_dialog_text(
         labels.join(", ")
     );
     (title, body)
+}
+
+/// Why Remove from k8sBoard is off for `row`, or `None` when it applies. `folder` is the watched folder
+/// the row's file belongs to.
+pub(crate) fn remove_block_reason(row: &ClusterRow, folder: Option<&Path>) -> Option<String> {
+    match row.origin {
+        RowOrigin::Chain => {
+            Some("Comes from KUBECONFIG or ~/.kube/config; edit that instead.".to_owned())
+        }
+        RowOrigin::Folder => Some(format!(
+            "Comes from the watched folder {}; stop watching it or delete the file.",
+            folder.map_or_else(String::new, |folder| folder.display().to_string())
+        )),
+        RowOrigin::Registry | RowOrigin::AppOwned => None,
+    }
 }
 
 /// Drops the entry of `cluster`: name, environment, lock, and namespace go back to the defaults.
@@ -304,10 +534,11 @@ pub(crate) enum TestState {
 pub(crate) async fn test_connection(
     kubeconfig: Arc<Kubeconfig>,
     context: String,
+    proxy: Result<ProxyChoice, ProxyUrlError>,
     timeout: Duration,
 ) -> TestState {
     let attempt = async {
-        let connection = ClusterConnection::open(&kubeconfig, &context).await?;
+        let connection = open_cluster(&kubeconfig, &context, &proxy).await?;
         let started = Instant::now();
         let version = connection.server_version().await?;
         Ok::<_, ClusterError>((version, started.elapsed()))

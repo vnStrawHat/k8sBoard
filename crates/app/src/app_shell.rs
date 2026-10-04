@@ -19,6 +19,7 @@ use gpui_kit::{
 
 use crate::active_session::ActiveSession;
 use crate::cluster_catalog::{CatalogHandle, ClusterCatalog};
+use crate::cluster_form::RowOrigin;
 use crate::cluster_health::{ProbeCandidate, ProbeResult, ProbeTarget, RowHealth, probe_stream};
 use crate::cluster_registry::{
     ClusterProfile, ClusterRef, ScopeMemory, StartChoice, launch_last_used, remember_scope,
@@ -182,6 +183,14 @@ mod app_shell_tests;
 #[cfg(test)]
 #[path = "app_shell_switch_tests.rs"]
 mod app_shell_switch_tests;
+
+#[cfg(test)]
+#[path = "app_shell_log_defaults_tests.rs"]
+mod app_shell_log_defaults_tests;
+
+#[cfg(test)]
+#[path = "app_shell_folder_tests.rs"]
+mod app_shell_folder_tests;
 
 #[cfg(test)]
 #[path = "app_shell_write_tests.rs"]
@@ -358,6 +367,11 @@ pub(crate) struct AppShell {
     _catalog_observer: Subscription,
     /// Set when the kubeconfig loaded but names no usable context; there is no session then.
     context_error: Option<String>,
+    /// Nothing may start on its own (only a file of a watched folder is loaded): the shell shows
+    /// "No cluster selected" and the switcher opens. Cleared by the next start.
+    needs_pick: bool,
+    /// The switcher opens from `render`, which has the window.
+    pending_pick_switcher: bool,
     /// The context of the primary cluster, also while its session is connecting or failed, and
     /// between the release of the old sessions and the deferred connect of the new ones.
     active: Option<ContextSummary>,
@@ -651,6 +665,8 @@ impl AppShell {
             catalog,
             _catalog_observer: catalog_observer,
             context_error: None,
+            needs_pick: false,
+            pending_pick_switcher: false,
             active: None,
             previous: None,
             scope_memory: ScopeMemory::new(),
@@ -808,25 +824,72 @@ impl AppShell {
         if !is_waiting_to_start {
             return;
         }
-        let kubeconfigs = {
+        let (kubeconfigs, listed) = {
             let catalog = self.catalog.read(cx);
             if catalog.is_loading() {
                 return;
             }
-            catalog.kubeconfigs().cloned().collect::<Vec<_>>()
+            (
+                catalog.start_kubeconfigs().cloned().collect::<Vec<_>>(),
+                catalog.kubeconfigs().cloned().collect::<Vec<_>>(),
+            )
         };
-        if kubeconfigs.is_empty() {
+        if listed.is_empty() {
             return;
         }
-        let requested = self.requested.context.take();
-        let explicit_files = self.requested.explicit_files.take();
-        let namespace = self.requested.namespace.take();
         let saved = AppSettings::get(cx).registry.last_used.as_ref();
-        let last_used = launch_last_used(saved, explicit_files.as_deref()).cloned();
+        let last_used = launch_last_used(saved, self.requested.explicit_files.as_deref()).cloned();
+        // A file of a watched folder starts a session only as the exact cluster the user picked
+        // last time: never through `--context`, `current-context`, or the first-file fallback.
+        if let Some(cluster) = folder_start(
+            self.requested.context.as_deref(),
+            last_used.as_ref(),
+            &kubeconfigs,
+            &listed,
+        ) {
+            let namespace = self.take_launch_request().1;
+            self.switch_to(&cluster, namespace, cx);
+            return;
+        }
+        if kubeconfigs.is_empty() {
+            self.ask_for_a_pick(cx);
+            return;
+        }
+        let (requested, namespace) = self.take_launch_request();
         match resolve_start(&kubeconfigs, requested.as_deref(), last_used.as_ref()) {
             Ok((_, summary)) => self.switch_to(&ClusterRef::of(&summary), namespace, cx),
             Err(error) => self.context_error = Some(error_text(&error)),
         }
+    }
+
+    /// The launch request of the first start: the `--context` and the `--namespace`. The explicit
+    /// files are spent with it.
+    fn take_launch_request(&mut self) -> (Option<String>, Option<NamespaceScope>) {
+        self.requested.explicit_files = None;
+        (
+            self.requested.context.take(),
+            self.requested.namespace.take(),
+        )
+    }
+
+    /// Nothing may start on its own: says so, and opens the switcher once.
+    fn ask_for_a_pick(&mut self, cx: &mut Context<Self>) {
+        if self.needs_pick {
+            return;
+        }
+        self.needs_pick = true;
+        self.pending_pick_switcher = true;
+        cx.notify();
+    }
+
+    /// Opens the switcher after `ask_for_a_pick`. It runs from `render` because opening needs a
+    /// window.
+    fn open_pending_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pending_pick_switcher {
+            return;
+        }
+        self.pending_pick_switcher = false;
+        self.open_cluster_switcher(window, cx);
     }
 
     /// Switches to `target`: the open session is released first. Nothing happens when it already
@@ -891,6 +954,7 @@ impl AppShell {
         }
         self.switch_notice = None;
         self.context_error = None;
+        self.needs_pick = false;
         let profile = AppSettings::get(cx).registry.profile(&summary);
         // The first start has nothing to release and keeps the launch filter and screen request.
         let Some(current) = self.active.as_ref().map(ClusterRef::of) else {
@@ -1204,16 +1268,22 @@ impl AppShell {
     fn probe_candidates(&self, cx: &App) -> Vec<ProbeCandidate> {
         let viewed = self.open_clusters();
         let viewed = &viewed;
-        self.catalog
-            .read(cx)
+        let catalog = self.catalog.read(cx);
+        catalog
             .kubeconfigs()
             .flat_map(|kubeconfig| {
                 kubeconfig.contexts().iter().map(move |summary| {
                     let cluster = ClusterRef::of(summary);
+                    let origin = if catalog.is_folder_source(&summary.source) {
+                        RowOrigin::Folder
+                    } else {
+                        RowOrigin::Registry
+                    };
                     ProbeCandidate {
                         is_active: viewed.contains(&cluster),
                         auth: kubeconfig.connection_info(summary).auth,
                         cluster,
+                        origin,
                     }
                 })
             })
@@ -1229,10 +1299,12 @@ impl AppShell {
             .iter()
             .filter_map(|cluster| {
                 let (kubeconfig, summary) = find_cluster(&kubeconfigs, cluster)?;
+                let proxy = AppSettings::get(cx).registry.profile(&summary).proxy;
                 Some(ProbeTarget {
                     cluster: cluster.clone(),
                     kubeconfig,
                     context: summary.name,
+                    proxy,
                 })
             })
             .collect();
@@ -4407,6 +4479,7 @@ impl Render for AppShell {
         self.sync_kubelet_demand(cx);
         self.sync_quick_filter(window, cx);
         self.open_pending_switcher(window, cx);
+        self.open_pending_pick(window, cx);
         self.open_pending_palette(window, cx);
         let theme = cx.theme();
         let counts = self.navigation_counts(cx);
@@ -4590,6 +4663,22 @@ pub(crate) fn find_cluster(
             .find(|summary| cluster.is_of(summary))?;
         Some((Arc::clone(kubeconfig), summary.clone()))
     })
+}
+
+/// The cluster of a watched-folder file that may start on its own: only the `last_used` the user
+/// picked, found in no chain or registry file, and never with `--context`.
+fn folder_start(
+    requested: Option<&str>,
+    last_used: Option<&ClusterRef>,
+    start: &[Arc<Kubeconfig>],
+    listed: &[Arc<Kubeconfig>],
+) -> Option<ClusterRef> {
+    if requested.is_some() {
+        return None;
+    }
+    let cluster = last_used?;
+    (find_cluster(listed, cluster).is_some() && find_cluster(start, cluster).is_none())
+        .then(|| cluster.clone())
 }
 
 /// The kubeconfig and context to open first (`start_choice`). The error is the one of the first

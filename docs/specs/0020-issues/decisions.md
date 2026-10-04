@@ -16,7 +16,7 @@
 | 8 | Feed updates use a **silent** subscription (no `cx.notify()`); they only mark the board dirty | core lists already notify; condition feeds must not repaint the app 8 more times per batch |
 | 9 | While the explorer shows a fed kind, two watches of that kind run | sharing would rewire 0005/0012 explorer ownership; README open item 1 |
 | 10 | Budget AC: idle RSS with all feeds stays **< 150 MB** on UAT; the numbers, including the UAT Jobs count, are recorded below before merge | C13; measured, not estimated |
-| 11 | A cluster-wide TLS Secrets watch appears in API audit logs as `list/watch secrets`; it becomes opt-out once 0024 settings exist | the user should know; certificates have no other signal |
+| 11 | A cluster-wide TLS Secrets watch appears in API audit logs as `list/watch secrets`; it is opt-out as `general.watch_tls_secrets` in Settings › General (0043); off, coverage says `Not checked: certificates (off in Settings)` | the user should know; certificates have no other signal |
 
 ## Engine
 

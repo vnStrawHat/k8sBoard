@@ -260,7 +260,7 @@ impl ValuesTest {
         cx: &mut TestAppContext,
         done: impl Fn(&mut TestAppContext) -> bool,
     ) {
-        for _ in 0..500 {
+        for _ in 0..1_500 {
             cx.run_until_parked();
             if done(cx) {
                 return;

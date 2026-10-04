@@ -27,7 +27,7 @@ impl HealthBoard {
     pub(crate) fn clear_running(&mut self);
     pub(crate) fn row_health(&self, cluster: &ClusterRef) -> RowHealth; // non-active rows
 }
-pub(crate) fn is_probed_automatically(auth: &AuthKind) -> bool; // false for Exec and AuthProvider
+pub(crate) fn is_probed_automatically(auth: &AuthKind, origin: RowOrigin) -> bool; // false for Exec, AuthProvider, and every watched-folder row (0043)
 ```
 
 `AuthKind` is 0025 step 1's `Kubeconfig::connection_info(..).auth`. `Instant` is passed in so tests are deterministic. `ClusterRef` is a map key (0024 derive amended with `Hash`).
@@ -37,6 +37,7 @@ pub(crate) fn is_probed_automatically(auth: &AuthKind) -> bool; // false for Exe
 | Trigger | Action |
 |---|---|
 | Switcher opens | probe `due(..)`: rows with `is_probed_automatically`, not active, no entry younger than `PROBE_TTL`, not running |
+| A row of a watched folder (0043) | never `due`, whatever its auth kind (`ProbeCandidate.origin`, `is_probed_automatically(auth, origin)`): a dropped file can aim `tokenFile` at a real token and `server` at any host; only the per-row Check probes it |
 | Retry on an Unreachable non-active row, Check on a NotChecked row | probe that row only, any auth kind (the user asked) |
 | Retry on the **active** row (session Failed) | `ClusterSession::retry` (same as the workspace Retry); no probe |
 | Retry/Check on a row that `is_running` | no-op |

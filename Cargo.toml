@@ -11,7 +11,7 @@ version = "0.1.0"
 
 [workspace.dependencies]
 gpui-kit = { version = "0.7", features = ["tree-sitter-yaml"] }
-kube = { version = "4.2", default-features = false, features = ["client", "config", "runtime", "rustls-tls", "ring", "jsonpatch"] }
+kube = { version = "4.2", default-features = false, features = ["client", "config", "runtime", "rustls-tls", "ring", "jsonpatch", "http-proxy", "socks5"] }
 # Lowest API version k8s-openapi 0.28 supports; the UAT cluster runs v1.29.5.
 k8s-openapi = { version = "0.28", features = ["v1_32"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
@@ -31,6 +31,8 @@ similar = "=3.2.0"
 x509-cert = { version = "0.3", default-features = false }
 pem = "3"
 zeroize = "1"
+# Watches a kubeconfig folder (spec 0043); 7.0.0 is already locked through gpui-component.
+notify = "7"
 flate2 = "1"
 base64 = "0.22"
 # 1.13.x is already locked through tracing-subscriber env-filter.

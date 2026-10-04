@@ -12,7 +12,7 @@ use gpui_kit::component::resizable::{
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::table::DataTable;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, StyledExt as _,
+    ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, Size, StyledExt as _,
     h_flex, v_flex,
 };
 use gpui_kit::{
@@ -50,6 +50,12 @@ use crate::settings::AppSettings;
 use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
 use crate::usage_format::group_digits;
+
+/// The row height of every table, from the saved density. The kit uses the same size for the
+/// header row, so the header follows (accepted: the Tokens page shows one row height).
+fn row_size(cx: &App) -> Size {
+    Size::Size(px(AppSettings::get(cx).appearance.density.row_height()))
+}
 
 impl AppShell {
     /// The tables have fixed pixel columns, so one column is resized to fill the workspace
@@ -687,6 +693,9 @@ impl AppShell {
             if let Some(label) = self.active_label(cx) {
                 return busy_view(&format!("Connecting to {label}…"), cx);
             }
+            if self.needs_pick {
+                return pick_cluster_view(cx);
+            }
             let message = self
                 .context_error
                 .as_deref()
@@ -767,15 +776,18 @@ impl AppShell {
                 _ => div().into_any_element(),
             },
             Screen::Pods => DataTable::new(&self.pod_table)
+                .with_size(row_size(cx))
                 .bordered(false)
                 .into_any_element(),
             Screen::Nodes => DataTable::new(&self.node_table)
+                .with_size(row_size(cx))
                 .bordered(false)
                 .into_any_element(),
             Screen::Issues => self.render_issues(cx),
             Screen::Topology => self.topology.clone().into_any_element(),
             Screen::PortForwarding => self.render_port_forwards(cx),
             Screen::Kind(_) => DataTable::new(&self.kind_table)
+                .with_size(row_size(cx))
                 .bordered(false)
                 .into_any_element(),
         }
@@ -789,6 +801,7 @@ impl AppShell {
         };
         if summary.total > 0 {
             return DataTable::new(&self.issue_table)
+                .with_size(row_size(cx))
                 .bordered(false)
                 .into_any_element();
         }
@@ -923,6 +936,20 @@ fn count_label(count: usize, singular: &str, plural: &str) -> String {
         format!("{} {plural}", group_digits(count))
     }
 }
+
+/// Shown while nothing may start on its own and the user has not picked a cluster yet.
+fn pick_cluster_view(cx: &App) -> AnyElement {
+    v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(cx.theme().muted_foreground)
+        .child(NO_CLUSTER_SELECTED)
+        .into_any_element()
+}
+
+pub(crate) const NO_CLUSTER_SELECTED: &str = "No cluster selected. Pick one in the switcher.";
 
 fn busy_view(text: &str, cx: &App) -> AnyElement {
     v_flex()
@@ -1093,6 +1120,27 @@ mod tests {
     fn match_count_label_groups_both_numbers() {
         assert_eq!(match_count_label(38, 1_284), "38 of 1,284 match");
         assert_eq!(match_count_label(0, 12), "0 of 12 match");
+    }
+
+    #[gpui_kit::test]
+    fn density_change_resizes_the_table_rows(cx: &mut gpui_kit::TestAppContext) {
+        use crate::settings::{RowDensity, Settings};
+        use crate::settings_store::{LoadedSettings, WriteMode};
+        cx.update(|cx| {
+            AppSettings::install(
+                LoadedSettings {
+                    settings: Settings::default(),
+                    writes: WriteMode::Disabled,
+                    notice: None,
+                },
+                cx,
+            );
+            assert_eq!(row_size(cx), Size::Size(px(28.)));
+            AppSettings::update(cx, |settings| {
+                settings.appearance.density = RowDensity::Comfortable;
+            });
+            assert_eq!(row_size(cx), Size::Size(px(36.)));
+        });
     }
 
     #[test]

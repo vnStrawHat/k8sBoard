@@ -10,6 +10,7 @@ use gpui_kit::{AnyWindowHandle, ClipboardItem, TestAppContext, WindowOptions};
 
 use super::*;
 use crate::cluster_catalog::CatalogHandle;
+use crate::cluster_form::RowOrigin;
 use crate::settings::Settings;
 use crate::settings_store::{LoadedSettings, WriteMode};
 
@@ -68,8 +69,8 @@ fn install(config_dir: Option<&Path>, chain: &[PathBuf], cx: &mut TestAppContext
 fn open_page(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<ClustersPage>) {
     cx.update(|cx| {
         let catalog = CatalogHandle::of(cx);
-        gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
-            cx.new(|cx| ClustersPage::new(catalog, cx))
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| ClustersPage::new(catalog, window, cx))
         })
         .expect("open the test window")
     })
@@ -608,4 +609,295 @@ fn the_node_shell_hint_is_the_wireframe_text() {
         NODE_SHELL_HINT,
         "Creates a privileged debug pod on the node. Off by default for production."
     );
+}
+
+// ---- Spec 0043 step 3: search, order, color ----
+
+fn row_contexts(page: &Entity<ClustersPage>, cx: &TestAppContext) -> Vec<String> {
+    page.read_with(cx, |page, cx| {
+        page.rows(cx)
+            .into_iter()
+            .map(|row| row.cluster.context)
+            .collect()
+    })
+}
+
+/// Sets the search text. The box lives in the Settings header, which this window does not draw,
+/// so the text is set on the state instead of typed.
+fn type_into_search(
+    window: AnyWindowHandle,
+    page: &Entity<ClustersPage>,
+    text: &str,
+    cx: &mut TestAppContext,
+) {
+    cx.update_window(window, |_, window, cx| {
+        let search = page.read(cx).search_input();
+        search.update(cx, |state, cx| state.set_value(text.to_owned(), window, cx));
+    })
+    .expect("the window is open");
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn picking_the_environment_colour_stores_none(cx: &mut TestAppContext) {
+    let (dir, window, page) = two_cluster_setup("color", cx);
+    let target = page
+        .read_with(cx, |page, _| page.selected.clone())
+        .expect("a selected cluster");
+    let color = |cx: &mut TestAppContext| {
+        page.read_with(cx, |page, cx| {
+            page.rows(cx)
+                .into_iter()
+                .find(|row| row.cluster == target)
+                .map(|row| row.profile.color)
+        })
+    };
+    // prod-a is a Production guess: its own color is Red, which stores nothing.
+    cx.update(|cx| set_cluster_color(&target, ClusterColor::Red, Environment::Production, cx));
+    assert!(cx.read(|cx| AppSettings::get(cx).registry.clusters.is_empty()));
+    cx.update(|cx| set_cluster_color(&target, ClusterColor::Teal, Environment::Production, cx));
+    render(window, cx);
+    let stored = cx.read(|cx| AppSettings::get(cx).registry.clusters.clone());
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].color, Some(ClusterColor::Teal));
+    assert_eq!(color(cx), Some(ClusterColor::Teal));
+    // Picking the environment's color again drops the override and the entry with it.
+    cx.update(|cx| set_cluster_color(&target, ClusterColor::Red, Environment::Production, cx));
+    assert!(cx.read(|cx| AppSettings::get(cx).registry.clusters.is_empty()));
+    assert_eq!(color(cx), Some(ClusterColor::Red));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn alt_arrows_move_the_selected_cluster(cx: &mut TestAppContext) {
+    let (dir, window, page) = two_cluster_setup("alt-arrows", cx);
+    assert_eq!(row_contexts(&page, cx), ["prod-a", "prod-b"]);
+    page.update(cx, |page, cx| page.step_selected(MoveStep::Down, cx));
+    render(window, cx);
+    assert_eq!(row_contexts(&page, cx), ["prod-b", "prod-a"]);
+    assert_eq!(selected(&page, cx).as_deref(), Some("prod-a"));
+    page.update(cx, |page, cx| page.step_selected(MoveStep::Up, cx));
+    assert_eq!(row_contexts(&page, cx), ["prod-a", "prod-b"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn the_order_is_fixed_while_searching(cx: &mut TestAppContext) {
+    let (dir, window, page) = two_cluster_setup("order-search", cx);
+    type_into_search(window, &page, "prod", cx);
+    render(window, cx);
+    assert!(page.read_with(cx, |page, cx| page.is_searching(cx)));
+    page.update(cx, |page, cx| page.step_selected(MoveStep::Down, cx));
+    assert!(cx.read(|cx| AppSettings::get(cx).registry.clusters.is_empty()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn search_leaves_the_selection_and_its_form(cx: &mut TestAppContext) {
+    let (dir, window, page) = two_cluster_setup("search-selection", cx);
+    assert_eq!(selected(&page, cx).as_deref(), Some("prod-a"));
+    // Only prod-b matches, so the selected row is filtered out of the list.
+    type_into_search(window, &page, "prod-b", cx);
+    render(window, cx);
+    assert_eq!(selected(&page, cx).as_deref(), Some("prod-a"));
+    assert!(page.read_with(cx, |page, _| page.form.is_some()));
+    // The header count stays the full count.
+    assert_eq!(
+        page.read_with(cx, |page, cx| page.description(cx)),
+        "2 clusters · 1 kubeconfig file"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn dropping_a_row_inside_its_group_reorders_and_across_groups_does_nothing(
+    cx: &mut TestAppContext,
+) {
+    let (dir, window, page) = two_cluster_setup("drop", cx);
+    let rows = page.read_with(cx, |page, cx| page.rows(cx));
+    let (first, second) = (rows[0].cluster.clone(), rows[1].cluster.clone());
+    let dragged = DraggedCluster {
+        cluster: first.clone(),
+        group_title: "Production",
+        label: "prod-a".into(),
+    };
+    page.update(cx, |page, cx| page.drop_cluster(&dragged, &second, cx));
+    render(window, cx);
+    assert_eq!(row_contexts(&page, cx), ["prod-b", "prod-a"]);
+    // A drag that started in another group does not move anything here.
+    let before = cx.read(|cx| AppSettings::get(cx).registry.clone());
+    let stranger = DraggedCluster {
+        cluster: first,
+        group_title: "Staging",
+        label: "prod-a".into(),
+    };
+    page.update(cx, |page, cx| page.drop_cluster(&stranger, &second, cx));
+    assert_eq!(cx.read(|cx| AppSettings::get(cx).registry.clone()), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- Spec 0043 step 4: the Proxy control ----
+
+fn stored_proxy_of(cx: &TestAppContext) -> Option<ClusterProxy> {
+    cx.read(|cx| {
+        AppSettings::get(cx)
+            .registry
+            .clusters
+            .first()
+            .and_then(|entry| entry.proxy.clone())
+    })
+}
+
+/// Types into the proxy input, which only draws once Custom URL is picked.
+fn type_into_proxy(
+    window: AnyWindowHandle,
+    page: &Entity<ClustersPage>,
+    text: &str,
+    cx: &mut TestAppContext,
+) {
+    cx.update_window(window, |_, window, cx| {
+        let input = page
+            .read(cx)
+            .form
+            .as_ref()
+            .expect("a form")
+            .proxy_url
+            .clone();
+        input.update(cx, |state, cx| state.focus(window, cx));
+        window.input(text, cx);
+    })
+    .expect("the window is open");
+    cx.run_until_parked();
+}
+
+fn emit_on_proxy_input(page: &Entity<ClustersPage>, event: InputEvent, cx: &mut TestAppContext) {
+    let input = page.read_with(cx, |page, _| {
+        page.form.as_ref().expect("a form").proxy_url.clone()
+    });
+    input.update(cx, |_, cx| cx.emit(event));
+    cx.run_until_parked();
+}
+
+fn proxy_error_of(page: &Entity<ClustersPage>, cx: &TestAppContext) -> Option<String> {
+    page.read_with(cx, |page, _| {
+        page.form
+            .as_ref()
+            .and_then(|form| form.proxy_error.as_ref())
+            .map(|error| error.0.to_string())
+    })
+}
+
+#[gpui_kit::test]
+fn proxy_input_commits_on_enter_or_blur_only(cx: &mut TestAppContext) {
+    let (dir, window, page) = two_cluster_setup("proxy-commit", cx);
+    page.update(cx, |page, cx| page.pick_proxy_mode(ProxyMode::Custom, cx));
+    render(window, cx);
+    type_into_proxy(window, &page, "http://p:3128", cx);
+    // Typing stores nothing.
+    assert_eq!(stored_proxy_of(cx), None);
+    let text = page.read_with(cx, |page, cx| {
+        page.form
+            .as_ref()
+            .expect("a form")
+            .proxy_url
+            .read(cx)
+            .value()
+    });
+    assert_eq!(text, "http://p:3128");
+    emit_on_proxy_input(
+        &page,
+        InputEvent::PressEnter {
+            secondary: false,
+            shift: false,
+        },
+        cx,
+    );
+    assert_eq!(
+        stored_proxy_of(cx),
+        Some(ClusterProxy::Url("http://p:3128".to_owned()))
+    );
+    // Blur commits the next edit the same way.
+    cx.update_window(window, |_, window, cx| {
+        let input = page
+            .read(cx)
+            .form
+            .as_ref()
+            .expect("a form")
+            .proxy_url
+            .clone();
+        input.update(cx, |state, cx| {
+            state.set_value("socks5://q:1080".to_owned(), window, cx);
+        });
+    })
+    .expect("the window is open");
+    assert_eq!(
+        stored_proxy_of(cx),
+        Some(ClusterProxy::Url("http://p:3128".to_owned()))
+    );
+    emit_on_proxy_input(&page, InputEvent::Blur, cx);
+    assert_eq!(
+        stored_proxy_of(cx),
+        Some(ClusterProxy::Url("socks5://q:1080".to_owned()))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn a_proxy_with_credentials_is_refused_with_the_message(cx: &mut TestAppContext) {
+    let (dir, window, page) = two_cluster_setup("proxy-credentials", cx);
+    page.update(cx, |page, cx| page.pick_proxy_mode(ProxyMode::Custom, cx));
+    render(window, cx);
+    type_into_proxy(window, &page, "http://user:pw@p:3128", cx);
+    emit_on_proxy_input(&page, InputEvent::Blur, cx);
+    assert_eq!(stored_proxy_of(cx), None);
+    let message = proxy_error_of(&page, cx).expect("a message");
+    assert!(
+        message.starts_with("Leave out the user name and password"),
+        "{message}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn picking_none_or_the_kubeconfig_stores_at_once(cx: &mut TestAppContext) {
+    let (dir, window, page) = two_cluster_setup("proxy-pick", cx);
+    page.update(cx, |page, cx| page.pick_proxy_mode(ProxyMode::Direct, cx));
+    render(window, cx);
+    assert_eq!(stored_proxy_of(cx), Some(ClusterProxy::Direct));
+    // Custom stores nothing by itself: the stored choice still applies.
+    page.update(cx, |page, cx| page.pick_proxy_mode(ProxyMode::Custom, cx));
+    assert_eq!(stored_proxy_of(cx), Some(ClusterProxy::Direct));
+    page.update(cx, |page, cx| {
+        page.pick_proxy_mode(ProxyMode::FromKubeconfig, cx);
+    });
+    assert!(cx.read(|cx| AppSettings::get(cx).registry.clusters.is_empty()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn proxy_input_never_shows_an_unparsable_value(cx: &mut TestAppContext) {
+    let (dir, window, page) = two_cluster_setup("proxy-prefill", cx);
+    let target = page
+        .read_with(cx, |page, _| page.selected.clone())
+        .expect("a selected cluster");
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            edit_entry(&mut settings.registry, &target, |entry| {
+                entry.proxy = Some(ClusterProxy::Url("http://u:p@x".to_owned()));
+            });
+        });
+    });
+    render(window, cx);
+    page.update(cx, |page, _| page.forget_form_and_test());
+    render(window, cx);
+    let shown = page.read_with(cx, |page, cx| {
+        page.form
+            .as_ref()
+            .expect("a form")
+            .proxy_url
+            .read(cx)
+            .value()
+    });
+    assert_eq!(shown, "");
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -19,6 +19,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::Status;
 use kube::Api;
 use kube::api::{AttachParams, AttachedProcess, TerminalSize};
 use kube::client::UpgradeConnectionError;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::connection::{
@@ -46,8 +47,9 @@ pub struct GridSize {
     pub rows: u16,
 }
 
-/// Which shell to run in the container.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Which shell to run in the container. Saved as the default shell in settings (`auto`, `bash`, `sh`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ShellCommand {
     /// The first of bash, ash, sh the container has; the pick is reported with OSC 7770.
     #[default]

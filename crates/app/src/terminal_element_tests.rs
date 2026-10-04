@@ -117,10 +117,10 @@ struct Fixture {
 }
 
 fn open_probe(width: f32, height: f32, cx: &mut TestAppContext) -> Fixture {
-    let session = Rc::new(RefCell::new(TerminalSession::new(GridSize {
-        cols: 80,
-        rows: 24,
-    })));
+    let session = Rc::new(RefCell::new(TerminalSession::new(
+        GridSize { cols: 80, rows: 24 },
+        5_000,
+    )));
     let (input, resizes) = mpsc::unbounded();
     let probe_session = Rc::clone(&session);
     let (window, probe) = cx.update(|cx| {
@@ -286,4 +286,10 @@ fn a_pointer_maps_to_fractional_cells_and_clamps_above_the_grid() {
     assert_eq!(cell_at(metrics, point(px(26.), px(52.))), (2., 2.));
     assert_eq!(cell_at(metrics, point(px(14.), px(28.))), (0.5, 0.5));
     assert_eq!(cell_at(metrics, point(px(0.), px(0.))), (0., 0.));
+}
+
+#[test]
+fn terminal_font_size_overrides_the_theme() {
+    assert_eq!(terminal_font_size(Some(16), px(13.)), px(16.));
+    assert_eq!(terminal_font_size(None, px(13.)), px(13.));
 }

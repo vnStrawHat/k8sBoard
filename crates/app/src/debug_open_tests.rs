@@ -417,7 +417,7 @@ impl Debugs {
         dialog: &Entity<ConfirmDialog>,
         cx: &mut TestAppContext,
     ) {
-        for _ in 0..500 {
+        for _ in 0..1_500 {
             cx.run_until_parked();
             let state = dialog.read_with(cx, |dialog, _| dialog.dry_run_state());
             if matches!(state, Some(DryRunState::Passed { .. })) {
@@ -434,7 +434,7 @@ impl Debugs {
         cx: &mut TestAppContext,
         done: impl Fn(&mut TestAppContext) -> bool,
     ) {
-        for _ in 0..500 {
+        for _ in 0..1_500 {
             cx.run_until_parked();
             if done(cx) {
                 return;

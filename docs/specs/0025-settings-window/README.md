@@ -11,8 +11,8 @@ Status: implemented (ACs 4, 7, 9 partly verified, see the coder report); amended
 
 ## Non-goals
 
-- Pages without content yet: General, Keyboard Shortcuts (0028), Safety (0030), Terminal & Shell (0036), Logs (0019), Metrics (backlog), Extensions (backlog). See [other-pages.md](other-pages.md).
-- Watch a kubeconfig folder, cloud scans, drag reorder, cluster colors, proxy, density, confirm mode, node shell toggle, list search, the W2 nav count.
+- Pages without content yet: Keyboard Shortcuts (0028), Safety (0030), Metrics (backlog), Extensions (backlog); General, Terminal & Shell, and Logs are owned by [0043](../0043-settings-pages/README.md). See [other-pages.md](other-pages.md).
+- Cloud scans, confirm mode, node shell toggle, the W2 nav count. Watch a kubeconfig folder, drag reorder, cluster colors, proxy, density, and list search moved to [0043](../0043-settings-pages/README.md).
 - Showing or editing credentials; editing kubeconfig files (except deleting an app-owned pasted file on Remove).
 
 ## Implementation steps

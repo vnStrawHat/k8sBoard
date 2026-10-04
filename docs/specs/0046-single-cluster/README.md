@@ -2,6 +2,8 @@
 
 Status: steps 1–4 built 2026-10-03 (step 5, the `slot_*` rename, waits for the queued lanes); drafted 2026-10-03, against main `6662108` (0034 merged); **amended after the opus review** (2 must-fix, 6 should-fix, nits). **User decision 2026-10-03: k8sBoard works on one cluster at a time; multi-cluster mode is removed.** Supersedes the multi-view parts of [0027](../0027-multi-cluster/README.md); drops [0045](../0045-multi-cluster-screens/README.md). Crate: `crates/app` only. **No new Kubernetes call; the write path stays exactly as strict** ([write-safety.md](write-safety.md)). No settings migration. Lands after 0039, before the queued lanes (0022 RBAC, 0044, 0029 step 5); step 5 follows them.
 
+> **Start rule for watched folders (0043).** A file of a watched folder starts a session only as the exact `last_used` the user picked: never through `--context`, `current-context`, or the first-file fallback (`ClusterCatalog::start_kubeconfigs()` has the chain and the registry files only). With nothing to start the shell shows "No cluster selected. Pick one in the switcher." and opens the switcher.
+
 ## Goal
 
 - One active cluster. The switcher (click, Enter, Ctrl 1–9), palette `@`, and "Back to" switch it, 0026 break before make, unchanged.

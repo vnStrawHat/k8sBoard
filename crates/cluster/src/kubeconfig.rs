@@ -30,6 +30,8 @@ pub struct ConnectionInfo {
     /// `scheme://host[:port]`: userinfo, path, query, and fragment are dropped.
     pub server: Option<String>,
     pub auth: AuthKind,
+    /// The `proxy-url` of the cluster entry as `scheme://host[:port]`; its userinfo is dropped.
+    pub proxy: Option<String>,
 }
 
 /// How a context authenticates: the kind only, never a token, key, or argument.
@@ -107,6 +109,9 @@ pub enum KubeconfigError {
     Parse { path: PathBuf },
     #[error("kubeconfig '{}' has a different kind or apiVersion; skipped", .path.display())]
     Incompatible { path: PathBuf },
+    /// A file of a watched folder over the size cap (the read is bounded).
+    #[error("kubeconfig '{}' is larger than 1 MiB; skipped", .path.display())]
+    TooLarge { path: PathBuf },
     #[error("no kubeconfig file was given")]
     NoFiles,
     #[error("{origin} '{requested}' not found in kubeconfig '{}'; available contexts: {}",
@@ -209,15 +214,39 @@ impl Kubeconfig {
         ))
     }
 
+    /// `parse` for the text of the file at `path`, with the path rule of kube's `read_from`:
+    /// a relative `certificate-authority`, `client-certificate`, `client-key`, `tokenFile`, and an
+    /// exec `command` with a path separator become absolute against the folder of the file. The
+    /// caller reads the file itself (a bounded read), so no unbounded read happens here.
+    pub fn parse_file(text: &str, path: &Path) -> Result<Kubeconfig, KubeconfigError> {
+        let mut document =
+            kube::config::Kubeconfig::from_yaml(text).map_err(|_| KubeconfigError::Parse {
+                path: path.to_path_buf(),
+            })?;
+        if let Some(folder) = path.parent() {
+            make_paths_absolute(&mut document, folder);
+        }
+        Ok(Self::from_document(
+            vec![path.to_path_buf()],
+            document,
+            &HashMap::new(),
+        ))
+    }
+
     /// Server and auth kind of a context; never a credential value.
     pub fn connection_info(&self, context: &ContextSummary) -> ConnectionInfo {
-        let server = self
+        let cluster = self
             .document
             .clusters
             .iter()
             .find(|named| named.name == context.cluster)
-            .and_then(|named| named.cluster.as_ref())
+            .and_then(|named| named.cluster.as_ref());
+        let server = cluster
             .and_then(|cluster| cluster.server.as_deref())
+            .map(display_server);
+        let proxy = cluster
+            .and_then(|cluster| cluster.proxy_url.as_deref())
+            .filter(|url| !url.is_empty())
             .map(display_server);
         let auth_info = context.user.as_deref().and_then(|user| {
             self.document
@@ -228,6 +257,7 @@ impl Kubeconfig {
         });
         ConnectionInfo {
             server,
+            proxy,
             auth: auth_info.map_or(AuthKind::None, auth_kind),
         }
     }
@@ -359,6 +389,51 @@ impl fmt::Debug for Kubeconfig {
             .field("sources", &self.sources)
             .field("contexts", &self.context_names())
             .finish()
+    }
+}
+
+/// Kube's `read_from` rule, applied to a document that was read another way: every file
+/// reference that is relative is resolved against `folder`.
+fn make_paths_absolute(document: &mut kube::config::Kubeconfig, folder: &Path) {
+    let absolute = |text: &Option<String>| -> Option<String> {
+        let path = Path::new(text.as_deref()?);
+        path.is_relative()
+            .then(|| folder.join(path).to_str().map(str::to_owned))
+            .flatten()
+    };
+    for cluster in document
+        .clusters
+        .iter_mut()
+        .filter_map(|named| named.cluster.as_mut())
+    {
+        if let Some(path) = absolute(&cluster.certificate_authority) {
+            cluster.certificate_authority = Some(path);
+        }
+    }
+    for auth in document
+        .auth_infos
+        .iter_mut()
+        .filter_map(|named| named.auth_info.as_mut())
+    {
+        if let Some(path) = absolute(&auth.client_certificate) {
+            auth.client_certificate = Some(path);
+        }
+        if let Some(path) = absolute(&auth.client_key) {
+            auth.client_key = Some(path);
+        }
+        if let Some(path) = absolute(&auth.token_file) {
+            auth.token_file = Some(path);
+        }
+        // Only a command with a separator is a path; a bare name is a `PATH` lookup (client-go).
+        if let Some(exec) = &mut auth.exec
+            && exec
+                .command
+                .as_deref()
+                .is_some_and(|command| command.contains(std::path::MAIN_SEPARATOR))
+            && let Some(path) = absolute(&exec.command)
+        {
+            exec.command = Some(path);
+        }
     }
 }
 

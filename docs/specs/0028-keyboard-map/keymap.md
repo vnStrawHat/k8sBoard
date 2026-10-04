@@ -48,6 +48,7 @@ Dock actions do nothing when the dock has no tabs. Letters are lowercase in bind
 |---|---|---|---|---|
 | Ctrl , | `secondary-,` | `OpenSettings` | none (every window, dialogs included) | opens or focuses the Settings window (0025) |
 | Ctrl O (W2) | `secondary-o` | `ImportKubeconfig` | `SettingsWindow` | import flow (0025) |
+| Alt ↑ / Alt ↓ (W2) | `alt-up`, `alt-down` | `MoveClusterUp`, `MoveClusterDown` | `SettingsWindow && !Input` | moves the selected cluster inside its environment group; off while the list is searched (0043) |
 
 ## Keys of other specs
 

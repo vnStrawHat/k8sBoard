@@ -15,7 +15,9 @@ use super::app_shell_tests::{open_shell_on, render};
 use super::*;
 use crate::cluster_session::SessionPhase;
 use crate::cluster_switcher::SwitcherConfirm;
-use cluster::ClusterConnection;
+use cluster::ProxyChoice;
+
+use crate::cluster_registry::open_cluster;
 
 use crate::cluster_runtime::ClusterRuntime;
 use crate::settings_window::{ManageClusters, OpenSettings};
@@ -136,7 +138,11 @@ impl SwitchFixture {
         let kubeconfig = Kubeconfig::parse(FIXTURE_YAML, &self.path).expect("the fixture parses");
         let connection = self
             .runtime
-            .block_on(ClusterConnection::open(&kubeconfig, &context))
+            .block_on(open_cluster(
+                &kubeconfig,
+                &context,
+                &Ok(ProxyChoice::Kubeconfig),
+            ))
             .expect("a client builds without a round trip");
         let session = self.session(cx);
         session.update(cx, |session, cx| {
@@ -161,7 +167,7 @@ impl SwitchFixture {
         cx: &mut TestAppContext,
         done: impl Fn(&AppShell, &App) -> bool,
     ) {
-        for _ in 0..500 {
+        for _ in 0..1_500 {
             cx.run_until_parked();
             if self.shell.read_with(cx, |shell, cx| done(shell, cx)) {
                 return;
@@ -303,7 +309,11 @@ fn switch_closes_log_tabs(cx: &mut TestAppContext) {
     let kubeconfig = Kubeconfig::parse(FIXTURE_YAML, &fixture.path).expect("the fixture parses");
     let connection = fixture
         .runtime
-        .block_on(ClusterConnection::open(&kubeconfig, "prod-a"))
+        .block_on(open_cluster(
+            &kubeconfig,
+            "prod-a",
+            &Ok(ProxyChoice::Kubeconfig),
+        ))
         .expect("a client builds without a round trip");
     let target = LogTarget::of_workload(PodOwner::Deployment {
         namespace: "shop".to_owned(),

@@ -143,6 +143,8 @@ pub(crate) fn test_guard<'a>(
         allow_node_shell: true,
         debug_image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
         node_shell_namespace: "kube-system".to_owned(),
+        color: crate::environment::ClusterColor::of(environment),
+        proxy: Ok(cluster::ProxyChoice::Kubeconfig),
     };
     let summary = ContextSummary {
         name: name.to_owned(),

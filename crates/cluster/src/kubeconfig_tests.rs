@@ -522,3 +522,101 @@ fn connection_info_debug_has_no_credentials() {
     assert!(!text.contains(TOKEN_FIXTURE), "{text}");
     assert_eq!(info.auth, AuthKind::Token);
 }
+
+#[test]
+fn connection_info_proxy_drops_userinfo() {
+    let yaml = |proxy: &str| {
+        let cluster = if proxy.is_empty() {
+            "{ server: 'https://h:6443' }".to_owned()
+        } else {
+            format!("{{ server: 'https://h:6443', proxy-url: '{proxy}' }}")
+        };
+        from_yaml(&format!(
+            "clusters:\n  - name: c\n    cluster: {cluster}\ncontexts:\n  - name: ctx\n    context: {{ cluster: c }}\n"
+        ))
+    };
+    let proxy_of = |proxy: &str| {
+        let kubeconfig = yaml(proxy);
+        kubeconfig.connection_info(&kubeconfig.contexts()[0]).proxy
+    };
+    assert_eq!(
+        proxy_of("http://user:secret@p:3128").as_deref(),
+        Some("http://p:3128")
+    );
+    assert_eq!(
+        proxy_of("socks5://user:secret@p:1080/path").as_deref(),
+        Some("socks5://p:1080")
+    );
+    assert_eq!(proxy_of(""), None);
+    let kubeconfig = yaml("http://user:secret@p:3128");
+    let info = kubeconfig.connection_info(&kubeconfig.contexts()[0]);
+    assert!(!format!("{info:?}").contains("secret"));
+}
+
+const RELATIVE_FIXTURE: &str = "\
+apiVersion: v1
+kind: Config
+clusters:
+  - name: c
+    cluster: { server: 'https://h:6443', certificate-authority: ca/ca.pem }
+users:
+  - name: u
+    user:
+      client-certificate: certs/client.pem
+      client-key: certs/client.key
+      tokenFile: tokens/token
+  - name: e
+    user:
+      exec: { apiVersion: client.authentication.k8s.io/v1, command: './bin/plugin' }
+  - name: bare
+    user:
+      exec: { apiVersion: client.authentication.k8s.io/v1, command: aws }
+contexts:
+  - name: ctx
+    context: { cluster: c, user: u }
+";
+
+#[test]
+fn parse_file_resolves_relative_paths_against_the_folder() {
+    let dir = std::env::temp_dir().join(format!("k8sboard-0043-parse-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp folder");
+    let path = dir.join("team.yaml");
+    std::fs::write(&path, RELATIVE_FIXTURE).expect("write the fixture");
+    let parsed = Kubeconfig::parse_file(RELATIVE_FIXTURE, &path).expect("parses");
+    // The same document as kube's own `read_from`.
+    let from_kube = kube::config::Kubeconfig::read_from(&path).expect("kube reads it");
+    assert_eq!(
+        serde_json::to_value(parsed.document()).expect("serializes"),
+        serde_json::to_value(&from_kube).expect("serializes")
+    );
+    // And the references really are absolute under the file's folder.
+    let user = |name: &str| {
+        parsed
+            .document()
+            .auth_infos
+            .iter()
+            .find(|named| named.name == name)
+            .and_then(|named| named.auth_info.clone())
+            .expect("the user exists")
+    };
+    let token_file = user("u").token_file.expect("a token file");
+    assert!(Path::new(&token_file).is_absolute(), "{token_file}");
+    assert!(Path::new(&token_file).starts_with(&dir), "{token_file}");
+    // A bare command stays a PATH lookup.
+    assert_eq!(
+        user("bare").exec.and_then(|exec| exec.command).as_deref(),
+        Some("aws")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn parse_file_error_names_the_path_and_no_content() {
+    let text = "clusters: [token: s3cr3t-value";
+    let Err(error) = Kubeconfig::parse_file(text, Path::new("a/b.yaml")) else {
+        panic!("broken YAML must not parse");
+    };
+    assert!(matches!(error, KubeconfigError::Parse { .. }));
+    assert!(!format!("{error} {error:?}").contains("s3cr3t"));
+}

@@ -22,8 +22,6 @@ use oneterm_vt::{
     VtEvent,
 };
 
-/// The rows of history one terminal keeps.
-pub(crate) const SCROLLBACK_LINES: u32 = 5_000;
 /// The most reply bytes held before the owner drains the outbox. A program can ask for a reply
 /// with every few bytes it prints (`ESC [ c`), so a bulk print would otherwise queue megabytes;
 /// a reply past the bound is dropped, which a program that floods queries cannot tell from a
@@ -86,11 +84,12 @@ struct FindState {
 }
 
 impl TerminalSession {
-    pub(crate) fn new(size: GridSize) -> Self {
+    /// `scrollback_lines` is the rows of history the terminal keeps (the saved setting, already clamped).
+    pub(crate) fn new(size: GridSize, scrollback_lines: u32) -> Self {
         let mut osc_routes = OscRoutes::new();
         osc_routes.route(SHELL_OSC, OscRoute::Forward);
         let config = Config {
-            scrollback_limit: SCROLLBACK_LINES,
+            scrollback_limit: scrollback_lines,
             osc_routes,
             product_name: Some("k8sBoard".into()),
             // DECRQCRA would let a program read back screen text it did not write, such as a

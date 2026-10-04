@@ -4,7 +4,7 @@
 //!
 //! `ClustersPage` has no `Debug`: it can hold the clipboard text of a pending paste.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cluster::Kubeconfig;
@@ -14,6 +14,7 @@ use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex,
     v_flex,
@@ -21,21 +22,24 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, ElementId, Entity, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, Window, div, px,
+    IntoElement, ParentElement as _, PathPromptOptions, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 
 use crate::app_shell::find_cluster;
 use crate::cluster_catalog::{CatalogNotice, ClusterCatalog, PasteStatus};
 use crate::cluster_form::{
-    ClusterGroup, ClusterRow, FieldError, RowOrigin, TEST_CONNECTION_TIMEOUT, TestState,
-    count_text, edit_entry, remove_dialog_text, reset_entry, resolve_selection, test_connection,
-    validate_display_name, validate_namespace,
+    ClusterGroup, ClusterRow, FieldError, MoveStep, ProxyMode, TEST_CONNECTION_TIMEOUT, TestState,
+    add_watched_folder, color_to_store, count_text, edit_entry, filter_groups, is_proxy_pending,
+    move_cluster, proxy_input_prefill, proxy_mode, proxy_mode_label, remove_block_reason,
+    remove_dialog_text, reset_entry, resolve_selection, step_cluster, stop_watching_folder,
+    test_connection, validate_display_name, validate_namespace, validate_proxy_url,
 };
-use crate::cluster_registry::{ClusterEntry, ClusterRef};
+use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef};
 use crate::cluster_runtime::ClusterRuntime;
+use crate::cluster_switcher_rows::normalize_query;
 use crate::drawer::truncated_text;
-use crate::environment::{Environment, environment_badge};
+use crate::environment::{ClusterColor, Environment, cluster_color, environment_badge};
 use crate::resource_actions::disabled_menu_item;
 use crate::settings::AppSettings;
 use crate::settings_window::ImportKubeconfig;
@@ -55,7 +59,8 @@ const FIELD_LABEL_WIDTH: f32 = 150.;
 /// a band of this height so they line up with it.
 const CONTROL_HEIGHT: f32 = 32.;
 const LATER_VERSION: &str = "Comes in a later version";
-const CHAIN_ROW_REASON: &str = "Comes from KUBECONFIG or ~/.kube/config; edit that instead.";
+const PROXY_PLACEHOLDER: &str = "http://proxy.example:3128";
+const PROXY_HINT: &str = "Applies the next time k8sBoard connects. HTTPS_PROXY and NO_PROXY are not read, but exec credential plugins (aws, gcloud, …) inherit them from the environment.";
 
 pub(crate) struct ClustersPage {
     catalog: Entity<ClusterCatalog>,
@@ -70,6 +75,8 @@ pub(crate) struct ClustersPage {
     paste_text: Option<String>,
     /// A file whose first row becomes the selection once it has loaded.
     pending_select: Option<PathBuf>,
+    /// The search box of the page header; it is not saved.
+    search: Entity<InputState>,
     _observers: Vec<Subscription>,
 }
 
@@ -79,16 +86,30 @@ struct ClusterForm {
     cluster: ClusterRef,
     name: Entity<InputState>,
     namespace: Entity<InputState>,
+    proxy_url: Entity<InputState>,
     name_error: Option<FieldError>,
     namespace_error: Option<FieldError>,
+    proxy_error: Option<FieldError>,
+    /// Custom URL was picked, so its input shows before a URL is stored.
+    is_custom_proxy: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl ClustersPage {
-    pub(crate) fn new(catalog: Entity<ClusterCatalog>, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        catalog: Entity<ClusterCatalog>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search clusters"));
         let observers = vec![
             cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
             cx.observe(&catalog, |page, _, cx| page.on_catalog_changed(cx)),
+            cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
         ];
         Self {
             catalog,
@@ -98,6 +119,7 @@ impl ClustersPage {
             test_task: None,
             paste_text: None,
             pending_select: None,
+            search,
             _observers: observers,
         }
     }
@@ -114,6 +136,61 @@ impl ClustersPage {
             .map(|kubeconfig| kubeconfig.sources().len())
             .sum();
         count_text(clusters, files)
+    }
+
+    /// The search box for the page header (W2 places it before Add cluster).
+    pub(crate) fn search_input(&self) -> Entity<InputState> {
+        self.search.clone()
+    }
+
+    /// The search text; empty (or only blanks) means the list is not filtered.
+    fn search_text(&self, cx: &App) -> SharedString {
+        self.search.read(cx).value()
+    }
+
+    fn is_searching(&self, cx: &App) -> bool {
+        !normalize_query(&self.search_text(cx)).is_empty()
+    }
+
+    /// `Alt ↑` and `Alt ↓`: moves the selected row one place inside its group. Off while
+    /// searching, like the drag, because hidden rows make the place ambiguous.
+    pub(crate) fn step_selected(&mut self, step: MoveStep, cx: &mut Context<Self>) {
+        let Some(cluster) = self.selected.clone() else {
+            return;
+        };
+        if self.is_searching(cx) {
+            return;
+        }
+        let groups = self.groups(cx);
+        let Some(group) = groups
+            .iter()
+            .find(|group| group.rows.iter().any(|row| row.cluster == cluster))
+        else {
+            return;
+        };
+        AppSettings::update(cx, |settings| {
+            step_cluster(&mut settings.registry, group, &cluster, step);
+        });
+    }
+
+    /// A row dropped on `target`: it takes that place when both are in the dragged row's group;
+    /// a drop on another group changes nothing (the environment decides the group).
+    fn drop_cluster(
+        &mut self,
+        dragged: &DraggedCluster,
+        target: &ClusterRef,
+        cx: &mut Context<Self>,
+    ) {
+        let groups = self.groups(cx);
+        let Some(group) = groups
+            .iter()
+            .find(|group| group.title == dragged.group_title)
+        else {
+            return;
+        };
+        AppSettings::update(cx, |settings| {
+            move_cluster(&mut settings.registry, group, &dragged.cluster, target);
+        });
     }
 
     fn groups(&self, cx: &App) -> Vec<ClusterGroup> {
@@ -195,16 +272,26 @@ impl ClustersPage {
             state.set_value(namespace_text, window, cx);
             state
         });
+        let proxy_text = proxy_input_prefill(entry.as_ref().and_then(|entry| entry.proxy.as_ref()));
+        let proxy_url = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder(PROXY_PLACEHOLDER);
+            state.set_value(proxy_text, window, cx);
+            state
+        });
         let subscriptions = vec![
             cx.subscribe_in(&name, window, Self::on_name_event),
             cx.subscribe_in(&namespace, window, Self::on_namespace_event),
+            cx.subscribe_in(&proxy_url, window, Self::on_proxy_event),
         ];
         self.form = Some(ClusterForm {
             cluster: row.cluster.clone(),
             name,
             namespace,
+            proxy_url,
             name_error: None,
             namespace_error: None,
+            proxy_error: None,
+            is_custom_proxy: false,
             _subscriptions: subscriptions,
         });
     }
@@ -272,6 +359,71 @@ impl ClustersPage {
         cx.notify();
     }
 
+    /// The URL is stored on Enter or blur, never per keystroke: a half-typed URL must not apply.
+    fn on_proxy_event(
+        &mut self,
+        _: &Entity<InputState>,
+        event: &InputEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::PressEnter { .. } | InputEvent::Blur => self.commit_proxy(cx),
+            // Only the `Not applied` note follows the typing.
+            InputEvent::Change => cx.notify(),
+            InputEvent::Focus => {}
+        }
+    }
+
+    fn commit_proxy(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = &self.form else {
+            return;
+        };
+        let cluster = form.cluster.clone();
+        let text = form.proxy_url.read(cx).value();
+        let error = match validate_proxy_url(&text) {
+            Ok(Some(proxy)) => {
+                AppSettings::update(cx, |settings| {
+                    edit_entry(&mut settings.registry, &cluster, |entry| {
+                        entry.proxy = Some(proxy);
+                    });
+                });
+                None
+            }
+            // Blank text stores nothing and says nothing.
+            Ok(None) => None,
+            Err(error) => Some(error),
+        };
+        if let Some(form) = &mut self.form {
+            form.proxy_error = error;
+        }
+        cx.notify();
+    }
+
+    /// From kubeconfig and None store at once; Custom URL only shows the input, and stores nothing
+    /// until a URL is committed.
+    fn pick_proxy_mode(&mut self, mode: ProxyMode, cx: &mut Context<Self>) {
+        let Some(form) = &mut self.form else {
+            return;
+        };
+        let cluster = form.cluster.clone();
+        form.proxy_error = None;
+        form.is_custom_proxy = mode == ProxyMode::Custom;
+        let stored = match mode {
+            ProxyMode::FromKubeconfig => Some(None),
+            ProxyMode::Direct => Some(Some(ClusterProxy::Direct)),
+            ProxyMode::Custom => None,
+        };
+        if let Some(stored) = stored {
+            AppSettings::update(cx, |settings| {
+                edit_entry(&mut settings.registry, &cluster, |entry| {
+                    entry.proxy = stored
+                });
+            });
+        }
+        cx.notify();
+    }
+
     fn start_test(&mut self, cx: &mut Context<Self>) {
         let Some(cluster) = self.selected.clone() else {
             return;
@@ -282,9 +434,12 @@ impl ClustersPage {
             return;
         };
         self.test = TestState::Running;
+        // The stored choice, read now: a proxy typed but not committed is not tested.
+        let proxy = AppSettings::get(cx).registry.profile(&summary).proxy;
         let running = cx.global::<ClusterRuntime>().spawn(test_connection(
             kubeconfig,
             summary.name,
+            proxy,
             TEST_CONNECTION_TIMEOUT,
         ));
         self.test_task = Some(cx.spawn(async move |this, cx| {
@@ -370,6 +525,7 @@ impl Render for ClustersPage {
             .w_full()
             .gap_3()
             .children(self.render_notices(cx))
+            .children(self.render_folder_lines(cx))
             .children(self.render_paste_status(cx))
             .child(
                 h_flex()
@@ -383,6 +539,69 @@ impl Render for ClustersPage {
 }
 
 impl ClustersPage {
+    /// One line per watched folder, with the way to stop watching it. Stopping only edits the
+    /// settings: nothing in the folder is touched, so there is no dialog.
+    fn render_folder_lines(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+        let muted = cx.theme().muted_foreground;
+        self.catalog
+            .read(cx)
+            .folder_summaries()
+            .into_iter()
+            .enumerate()
+            .map(|(index, summary)| {
+                let folder = summary.path.clone();
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .text_sm()
+                    .text_color(muted)
+                    .child(Icon::new(IconName::FolderOpen))
+                    .child(summary.line_text())
+                    .child(
+                        Button::new(("stop-watching", index))
+                            .ghost()
+                            .small()
+                            .label("Stop watching")
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                page.stop_watching(&folder, cx);
+                            })),
+                    )
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// Watch a kubeconfig folder…: the folder picker, then the folder joins the registry unless it
+    /// is there already.
+    fn watch_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Watch folder".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(folder) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |_, cx| {
+                AppSettings::update(cx, |settings| {
+                    add_watched_folder(&mut settings.registry, folder);
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn stop_watching(&mut self, folder: &Path, cx: &mut Context<Self>) {
+        AppSettings::update(cx, |settings| {
+            stop_watching_folder(&mut settings.registry, folder);
+        });
+    }
+
     fn render_notices(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         let warning = cx.theme().warning;
         self.catalog
@@ -418,7 +637,8 @@ impl ClustersPage {
                     }
                     CatalogNotice::Skipped { .. }
                     | CatalogNotice::DeleteFailed(_)
-                    | CatalogNotice::SaveFailed(_) => line.into_any_element(),
+                    | CatalogNotice::SaveFailed(_)
+                    | CatalogNotice::FolderMissing { .. } => line.into_any_element(),
                 }
             })
             .collect()
@@ -436,9 +656,16 @@ impl ClustersPage {
     fn render_list(&self, groups: &[ClusterGroup], cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let (border, muted) = (theme.border, theme.muted_foreground);
+        let search = self.search_text(cx);
+        let is_searching = self.is_searching(cx);
+        let visible = if is_searching {
+            filter_groups(groups, &search)
+        } else {
+            groups.to_vec()
+        };
         let mut list = v_flex()
             .id("cluster-list")
-            .w(px(LIST_WIDTH))
+            .w_full()
             .flex_none()
             .max_h(px(LIST_MAX_HEIGHT))
             .overflow_y_scroll()
@@ -449,9 +676,12 @@ impl ClustersPage {
             .rounded(cx.theme().radius);
         if groups.is_empty() {
             list = list.child(muted_text("No clusters yet.", cx));
+        } else if visible.is_empty() {
+            let text = format!("No clusters match '{}'.", search.trim());
+            list = list.child(muted_text(text, cx));
         }
         let mut index = 0;
-        for group in groups {
+        for group in &visible {
             list = list.child(
                 h_flex()
                     .px_2()
@@ -464,19 +694,43 @@ impl ClustersPage {
                     .child(group.rows.len().to_string()),
             );
             for row in &group.rows {
-                list = list.child(self.render_row(index, row, cx));
+                list = list.child(self.render_row(index, group.title, row, is_searching, cx));
                 index += 1;
             }
         }
-        list.into_any_element()
+        let hint = if is_searching {
+            "Clear the search to reorder."
+        } else {
+            "Drag to reorder inside a group; the order sets Ctrl 1–9."
+        };
+        v_flex()
+            .w(px(LIST_WIDTH))
+            .flex_none()
+            .gap_1()
+            .child(list)
+            .child(muted_text(hint, cx).text_xs())
+            .into_any_element()
     }
 
-    fn render_row(&self, index: usize, row: &ClusterRow, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(
+        &self,
+        index: usize,
+        group_title: &'static str,
+        row: &ClusterRow,
+        is_searching: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let is_selected = self.selected.as_ref() == Some(&row.cluster);
         let theme = cx.theme();
         let (active, hover, muted) = (theme.list_active, theme.list_hover, theme.muted_foreground);
         let mono = theme.mono_font_family.clone();
         let cluster = row.cluster.clone();
+        let target = row.cluster.clone();
+        let dragged = DraggedCluster {
+            cluster: row.cluster.clone(),
+            group_title,
+            label: row.label.clone().into(),
+        };
         h_flex()
             .id(ElementId::from(("cluster-row", index)))
             .w_full()
@@ -489,6 +743,20 @@ impl ClustersPage {
             .when(is_selected, |this| this.bg(active))
             .hover(|style| style.bg(hover))
             .on_click(cx.listener(move |page, _, _, cx| page.select(cluster.clone(), cx)))
+            .when(!is_searching, |this| {
+                this.on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
+            })
+            // The tint shows only on a row of the dragged row's own group.
+            .drag_over::<DraggedCluster>(move |style, dragged, _, cx| {
+                if dragged.group_title == group_title {
+                    style.bg(cx.theme().drop_target)
+                } else {
+                    style
+                }
+            })
+            .on_drop(cx.listener(move |page, dragged: &DraggedCluster, _, cx| {
+                page.drop_cluster(dragged, &target, cx);
+            }))
             .child(environment_badge(row.profile.environment, cx))
             .child(
                 v_flex()
@@ -565,6 +833,7 @@ impl ClustersPage {
             centered(environment_menu(row, entry.as_ref())),
             cx,
         );
+        let color_row = form_row("Color", color_swatches(row, cx), cx);
         let cluster = row.cluster.clone();
         let read_only_row = form_row(
             "Open as read-only",
@@ -610,14 +879,24 @@ impl ClustersPage {
                 .into_any_element(),
             cx,
         );
-        let can_remove = row.origin != RowOrigin::Chain;
+        let proxy_row = self.render_proxy(
+            entry.as_ref(),
+            info.as_ref().and_then(|info| info.proxy.as_deref()),
+            cx,
+        );
+        let folder = self
+            .catalog
+            .read(cx)
+            .watched_folder_of(&row.cluster.kubeconfig);
+        let block_reason = remove_block_reason(row, folder);
+        let can_remove = block_reason.is_none();
         let remove_row = row.clone();
         v_flex()
             .w_full()
             .gap_3()
             .child(section(
                 "General",
-                [name_row, environment_row, namespace_row],
+                [name_row, environment_row, color_row, namespace_row],
                 cx,
             ))
             .child(section(
@@ -626,6 +905,7 @@ impl ClustersPage {
                     form_row("Source", mono_line("source-path", source, &mono), cx),
                     form_row("Server", mono_line("server-text", server, &mono), cx),
                     form_row("Authentication", centered(div().text_sm().child(auth)), cx),
+                    form_row("Proxy", proxy_row, cx),
                     form_row("Connection test", centered(self.render_test(cx)), cx),
                 ],
                 cx,
@@ -647,6 +927,7 @@ impl ClustersPage {
                                     .ghost()
                                     .small()
                                     .label("Reset to defaults")
+                                    .tooltip("Clears the overrides and the place in the list.")
                                     .disabled(entry.is_none())
                                     .on_click(
                                         cx.listener(|page, _, _, cx| page.reset_selected(cx)),
@@ -663,8 +944,69 @@ impl ClustersPage {
                                     })),
                             ),
                     )
-                    .children((!can_remove).then(|| muted_text(CHAIN_ROW_REASON, cx))),
+                    .children(block_reason.map(|reason| muted_text(reason, cx))),
             )
+            .into_any_element()
+    }
+
+    /// The Proxy control: the stored choice, the URL input of Custom with its message, and the note.
+    fn render_proxy(
+        &self,
+        entry: Option<&ClusterEntry>,
+        kubeconfig_proxy: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(form) = &self.form else {
+            return div().into_any_element();
+        };
+        let stored = entry.and_then(|entry| entry.proxy.as_ref());
+        let mode = proxy_mode(stored, form.is_custom_proxy);
+        let is_pending =
+            mode == ProxyMode::Custom && is_proxy_pending(stored, &form.proxy_url.read(cx).value());
+        let danger = cx.theme().danger;
+        let page = cx.entity();
+        let kubeconfig_proxy = kubeconfig_proxy.map(str::to_owned);
+        let label = proxy_mode_label(mode, kubeconfig_proxy.as_deref());
+        let menu = Button::new("proxy-mode")
+            .small()
+            .outline()
+            .label(label)
+            .dropdown_caret(true)
+            .dropdown_menu(move |menu, _, _| {
+                [
+                    ProxyMode::FromKubeconfig,
+                    ProxyMode::Direct,
+                    ProxyMode::Custom,
+                ]
+                .into_iter()
+                .fold(menu, |menu, choice| {
+                    let page = page.clone();
+                    menu.item(
+                        PopupMenuItem::new(proxy_mode_label(choice, kubeconfig_proxy.as_deref()))
+                            .checked(choice == mode)
+                            .on_click(move |_, _, cx| {
+                                page.update(cx, |page, cx| page.pick_proxy_mode(choice, cx));
+                            }),
+                    )
+                })
+            });
+        v_flex()
+            .gap_1()
+            .child(centered(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .child(menu)
+                    .children(is_pending.then(|| muted_text("Not applied", cx))),
+            ))
+            .when(mode == ProxyMode::Custom, |column| {
+                column.child(Input::new(&form.proxy_url)).children(
+                    form.proxy_error
+                        .as_ref()
+                        .map(|error| error_text(error, danger)),
+                )
+            })
+            .child(muted_text(PROXY_HINT, cx))
             .into_any_element()
     }
 
@@ -733,17 +1075,16 @@ pub(crate) fn add_cluster_button(
                     })
                 }
             };
-            let later = [
-                "Watch a kubeconfig folder…",
-                "Scan AWS EKS",
-                "Scan Google GKE",
-                "Scan Azure AKS",
-            ];
-            later
-                .into_iter()
-                .fold(menu.item(import).item(paste).separator(), |menu, label| {
-                    menu.item(disabled_menu_item(label, LATER_VERSION.into()))
-                })
+            let folder_page = page.clone();
+            let watch =
+                PopupMenuItem::new("Watch a kubeconfig folder…").on_click(move |_, window, cx| {
+                    folder_page.update(cx, |page, cx| page.watch_folder(window, cx));
+                });
+            let later = ["Scan AWS EKS", "Scan Google GKE", "Scan Azure AKS"];
+            later.into_iter().fold(
+                menu.item(import).item(paste).item(watch).separator(),
+                |menu, label| menu.item(disabled_menu_item(label, LATER_VERSION.into())),
+            )
         })
 }
 
@@ -930,4 +1271,69 @@ fn section<const N: usize>(
                 .child(title),
         )
         .children(rows)
+}
+
+/// The payload of a row drag, and the chip that follows the pointer (the `DraggedTab` pattern
+/// of the dock).
+#[derive(Clone)]
+struct DraggedCluster {
+    cluster: ClusterRef,
+    /// A row only drops on its own group: the environment decides the group.
+    group_title: &'static str,
+    label: SharedString,
+}
+
+impl Render for DraggedCluster {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .bg(theme.muted)
+            .border_1()
+            .border_color(theme.border)
+            .font_family(theme.mono_font_family.clone())
+            .text_xs()
+            .child(self.label.clone())
+    }
+}
+
+/// Stores the title-bar color of `cluster`; a color equal to its environment's is not stored, so
+/// the cluster keeps following its environment.
+pub(crate) fn set_cluster_color(
+    cluster: &ClusterRef,
+    color: ClusterColor,
+    environment: Environment,
+    cx: &mut App,
+) {
+    let stored = color_to_store(color, environment);
+    AppSettings::update(cx, |settings| {
+        edit_entry(&mut settings.registry, cluster, |entry| {
+            entry.color = stored
+        });
+    });
+}
+
+/// Six round swatches, the current one ringed.
+fn color_swatches(row: &ClusterRow, cx: &App) -> AnyElement {
+    let ring = cx.theme().foreground;
+    let mut swatches = h_flex().h(px(CONTROL_HEIGHT)).items_center().gap_2();
+    for (index, color) in ClusterColor::ALL.into_iter().enumerate() {
+        let is_current = row.profile.color == color;
+        let (cluster, environment) = (row.cluster.clone(), row.profile.environment);
+        swatches = swatches.child(
+            div()
+                .id(ElementId::from(("cluster-color", index)))
+                .size(px(18.))
+                .flex_none()
+                .rounded_full()
+                .bg(cluster_color(color, cx))
+                .cursor_pointer()
+                .when(is_current, |swatch| swatch.border_2().border_color(ring))
+                .tooltip(move |window, cx| Tooltip::new(color.name()).build(window, cx))
+                .on_click(move |_, _, cx| set_cluster_color(&cluster, color, environment, cx)),
+        );
+    }
+    swatches.into_any_element()
 }

@@ -12,7 +12,7 @@ fn kubeconfig(source: &str, context: &str, cluster: &str, user: &str) -> Kubecon
 }
 
 fn rows_of(kubeconfigs: &[&Kubeconfig], registry: &ClusterRegistry) -> Vec<ClusterRow> {
-    cluster_groups(kubeconfigs, registry, |_| false, None)
+    cluster_groups(kubeconfigs, registry, |_| false, |_| false, None)
         .into_iter()
         .flat_map(|group| group.rows)
         .collect()
@@ -58,6 +58,8 @@ fn collisions_report_context_display_name_cluster_and_user() {
             allow_node_shell: None,
             debug_image: None,
             node_shell_namespace: None,
+            color: None,
+            proxy: None,
         }],
         ..ClusterRegistry::default()
     };

@@ -7,10 +7,11 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cluster::{AuthKind, ClusterConnection, ClusterError, Kubeconfig};
+use cluster::{AuthKind, ClusterError, Kubeconfig, ProxyChoice, ProxyUrlError};
 use futures::{Stream, StreamExt as _};
 
-use crate::cluster_registry::ClusterRef;
+use crate::cluster_form::RowOrigin;
+use crate::cluster_registry::{ClusterRef, open_cluster};
 use crate::cluster_session::error_text;
 
 /// How long an answer stays valid; the switcher probes a cluster again after it.
@@ -52,6 +53,8 @@ pub(crate) struct ProbeCandidate {
     pub(crate) cluster: ClusterRef,
     pub(crate) auth: AuthKind,
     pub(crate) is_active: bool,
+    /// Where the row comes from: a file of a watched folder is never probed on its own.
+    pub(crate) origin: RowOrigin,
 }
 
 /// One cluster to probe: the loaded kubeconfig and the context inside it.
@@ -59,6 +62,8 @@ pub(crate) struct ProbeTarget {
     pub(crate) cluster: ClusterRef,
     pub(crate) kubeconfig: Arc<Kubeconfig>,
     pub(crate) context: String,
+    /// Read on the main thread when the probe starts.
+    pub(crate) proxy: Result<ProxyChoice, ProxyUrlError>,
 }
 
 #[derive(Default)]
@@ -68,8 +73,12 @@ pub(crate) struct HealthBoard {
 }
 
 /// Exec plugins and auth providers may open a browser login or an MFA prompt, so they are probed
-/// only when the user asks.
-pub(crate) fn is_probed_automatically(auth: &AuthKind) -> bool {
+/// only when the user asks. So is every row of a watched folder, whatever its auth kind: a file
+/// anyone can drop there may point `tokenFile` at a real token and `server` at any host.
+pub(crate) fn is_probed_automatically(auth: &AuthKind, origin: RowOrigin) -> bool {
+    if origin == RowOrigin::Folder {
+        return false;
+    }
     match auth {
         AuthKind::Exec { .. } | AuthKind::AuthProvider { .. } => false,
         AuthKind::Token
@@ -87,7 +96,7 @@ impl HealthBoard {
         rows.iter()
             .filter(|row| {
                 !row.is_active
-                    && is_probed_automatically(&row.auth)
+                    && is_probed_automatically(&row.auth, row.origin)
                     && !self.is_running(&row.cluster)
                     && !self.is_fresh(&row.cluster, now)
             })
@@ -175,7 +184,7 @@ where
 /// times the version request only, as the status bar does.
 async fn probe_one(target: ProbeTarget) -> ProbeResult {
     let attempt = async {
-        let connection = ClusterConnection::open(&target.kubeconfig, &target.context).await?;
+        let connection = open_cluster(&target.kubeconfig, &target.context, &target.proxy).await?;
         let started = Instant::now();
         connection.server_version().await?;
         Ok(started.elapsed())

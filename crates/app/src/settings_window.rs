@@ -3,6 +3,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::Input;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::setting::{
     SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
@@ -12,53 +13,79 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, FocusHandle,
-    Focusable, Global, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Subscription, WeakEntity, Window, WindowBounds, WindowId, WindowOptions, div, px,
-    size,
+    Focusable, Global, InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions,
+    Render, SharedString, Styled as _, Subscription, WeakEntity, Window, WindowBounds, WindowId,
+    WindowOptions, div, prelude::FluentBuilder as _, px, size,
 };
 
 use crate::audit_log::audit_path;
 use crate::cluster_catalog::CatalogHandle;
+use crate::cluster_form::MoveStep;
 use crate::clusters_page::{ClustersPage, add_cluster_button};
 use crate::environment::Environment;
-use crate::settings::{AppSettings, theme_choices, theme_from_label, theme_label};
+use crate::settings::{
+    AppSettings, DENSITY_OPTIONS, FONT_SIZE_OPTIONS, OptionTable, SCROLLBACK_OPTIONS,
+    SHELL_OPTIONS, Settings as SettingsData, TAIL_OPTIONS, theme_choices, theme_from_label,
+    theme_label,
+};
 use crate::shortcut_sheet::shortcut_sheet;
+use crate::usage_format::group_digits;
 use crate::write_guard::{ActionRisk, ConfirmMode, DialogConfirm, confirm_step};
 
-gpui_kit::actions!(k8sboard, [OpenSettings, ManageClusters, ImportKubeconfig]);
+gpui_kit::actions!(
+    k8sboard,
+    [
+        OpenSettings,
+        ManageClusters,
+        ImportKubeconfig,
+        MoveClusterUp,
+        MoveClusterDown
+    ]
+);
 
 const WINDOW_WIDTH: f32 = 1000.;
 const WINDOW_HEIGHT: f32 = 620.;
 /// For a screenshot of the whole Clusters form, which is taller than the standard window.
 const TALL_WINDOW_HEIGHT: f32 = 900.;
 const SIDEBAR_WIDTH: f32 = 200.;
+/// The search box of the Clusters header (W2).
+const SEARCH_WIDTH: f32 = 200.;
 
 /// The pages in W2 nav order, keeping only those with content. A later spec inserts its page
 /// at its W2 position.
-const PAGES: [SettingsPage; 5] = [
+const PAGES: [SettingsPage; 8] = [
+    SettingsPage::General,
     SettingsPage::Clusters,
     SettingsPage::Appearance,
     SettingsPage::KeyboardShortcuts,
     SettingsPage::Safety,
+    SettingsPage::TerminalAndShell,
+    SettingsPage::Logs,
     SettingsPage::About,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingsPage {
+    General,
     Clusters,
     Appearance,
     KeyboardShortcuts,
     Safety,
+    TerminalAndShell,
+    Logs,
     About,
 }
 
 impl SettingsPage {
     fn title(self) -> &'static str {
         match self {
+            Self::General => "General",
             Self::Clusters => "Clusters",
             Self::Appearance => "Appearance",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::Safety => "Safety",
+            Self::TerminalAndShell => "Terminal & Shell",
+            Self::Logs => "Logs",
             Self::About => "About",
         }
     }
@@ -198,11 +225,11 @@ pub(crate) struct SettingsWindow {
 }
 
 impl SettingsWindow {
-    fn new(first_page: SettingsPage, _: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(first_page: SettingsPage, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let catalog = CatalogHandle::of(cx);
         // A status left over from a closed window must not show here.
         catalog.update(cx, |catalog, cx| catalog.reset_paste_status(cx));
-        let clusters = cx.new(|cx| ClustersPage::new(catalog.clone(), cx));
+        let clusters = cx.new(|cx| ClustersPage::new(catalog.clone(), window, cx));
         Self {
             first_page,
             page_generation: 0,
@@ -225,10 +252,13 @@ impl SettingsWindow {
         PAGES
             .iter()
             .map(|page| match page {
+                SettingsPage::General => general_page(),
                 SettingsPage::Clusters => clusters_page(&self.clusters, cx),
                 SettingsPage::Appearance => appearance_page(),
                 SettingsPage::KeyboardShortcuts => keyboard_shortcuts_page(),
                 SettingsPage::Safety => safety_page(),
+                SettingsPage::TerminalAndShell => terminal_page(),
+                SettingsPage::Logs => logs_page(),
                 SettingsPage::About => about_page(cx),
             })
             .collect()
@@ -252,6 +282,14 @@ impl Render for SettingsWindow {
                 this.clusters
                     .update(cx, |page, cx| page.import_file(window, cx));
             }))
+            .on_action(cx.listener(|this, _: &MoveClusterUp, _, cx| {
+                this.clusters
+                    .update(cx, |page, cx| page.step_selected(MoveStep::Up, cx));
+            }))
+            .on_action(cx.listener(|this, _: &MoveClusterDown, _, cx| {
+                this.clusters
+                    .update(cx, |page, cx| page.step_selected(MoveStep::Down, cx));
+            }))
             .bg(theme.background)
             .text_color(theme.foreground)
             .child(TitleBar::new().child(div().font_semibold().child("Settings")))
@@ -273,12 +311,194 @@ impl Render for SettingsWindow {
 /// only gets the app context.
 fn clusters_page(page: &Entity<ClustersPage>, cx: &App) -> SettingPage {
     let (body, add) = (page.clone(), page.clone());
+    let search = page.read(cx).search_input();
     let blocked = ClustersPage::paste_blocked_reason(cx);
     SettingPage::new(SettingsPage::Clusters.title())
         .resettable(false)
         .description(page.read(cx).description(cx))
-        .title_suffix(move |_, _| add_cluster_button(add.clone(), blocked))
+        .title_suffix(move |_, _| {
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(Input::new(&search).w(px(SEARCH_WIDTH)))
+                .child(add_cluster_button(add.clone(), blocked))
+        })
         .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| body.clone())))
+}
+
+/// The General page: where exports start, and what the Issues engine watches.
+fn general_page() -> SettingPage {
+    let folder = SettingField::render(|_, _, cx| export_folder_field(cx));
+    let tls = SettingField::switch(
+        |cx| AppSettings::get(cx).general.watch_tls_secrets,
+        |value, cx| AppSettings::update(cx, |settings| settings.general.watch_tls_secrets = value),
+    );
+    SettingPage::new(SettingsPage::General.title())
+        .resettable(false)
+        .group(
+            SettingGroup::new().title("Files").item(
+                SettingItem::new("Export folder", folder)
+                    .description("Where Export dialogs start. Updated after each export."),
+            ),
+        )
+        .group(
+            SettingGroup::new().title("Issues").item(
+                SettingItem::new("Watch TLS Secrets for expiry", tls).description(
+                    "Lists and watches Secrets of type kubernetes.io/tls; this shows in API audit logs. Applies when the cluster is opened again.",
+                ),
+            ),
+        )
+}
+
+/// The saved export folder in monospace (or the home folder, muted), a picker, and the way back
+/// to the home folder.
+fn export_folder_field(cx: &App) -> AnyElement {
+    let stored = AppSettings::get(cx).general.export_dir.clone();
+    let shown = match &stored {
+        Some(dir) => div()
+            .text_sm()
+            .font_family(cx.theme().mono_font_family.clone())
+            .child(dir.display().to_string())
+            .into_any_element(),
+        None => muted_note("Home folder", cx),
+    };
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(shown)
+        .child(
+            Button::new("choose-export-folder")
+                .ghost()
+                .small()
+                .icon(Icon::new(IconName::FolderOpen))
+                .label("Choose…")
+                .on_click(|_, _, cx| choose_export_folder(cx)),
+        )
+        .when(stored.is_some(), |row| {
+            row.child(
+                Button::new("use-home-export-folder")
+                    .ghost()
+                    .small()
+                    .label("Use home folder")
+                    .on_click(|_, _, cx| {
+                        AppSettings::update(cx, |settings| settings.general.export_dir = None);
+                    }),
+            )
+        })
+        .into_any_element()
+}
+
+/// Opens the folder picker and saves the folder it returns; a cancel changes nothing.
+fn choose_export_folder(cx: &mut App) {
+    let picked = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some("Export folder".into()),
+    });
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(paths))) = picked.await else {
+            return;
+        };
+        let Some(folder) = paths.into_iter().next() else {
+            return;
+        };
+        cx.update(|cx| {
+            AppSettings::update(cx, |settings| settings.general.export_dir = Some(folder));
+        });
+    })
+    .detach();
+}
+
+/// A dropdown over an option table: `get` reads the stored value, `set` stores the picked one.
+/// A stored value outside the table shows as `unlisted` says.
+fn table_dropdown<T: Copy + PartialEq + 'static>(
+    table: &'static OptionTable<T>,
+    get: fn(&SettingsData) -> T,
+    set: fn(&mut SettingsData, T),
+    unlisted: fn(T) -> String,
+) -> SettingField<SharedString> {
+    SettingField::dropdown(
+        table.choices(),
+        move |cx| {
+            let value = get(AppSettings::get(cx));
+            table.label(value, || unlisted(value))
+        },
+        move |label, cx| {
+            let value = table.value(&label);
+            AppSettings::update(cx, |settings| set(settings, value));
+        },
+    )
+}
+
+/// Defaults for new log tabs; a tab can still change them from its toolbar.
+fn logs_page() -> SettingPage {
+    let tail = table_dropdown(
+        &TAIL_OPTIONS,
+        |settings| settings.logs.tail_lines,
+        |settings, lines| settings.logs.tail_lines = lines,
+        |lines| format!("{} lines", group_digits(lines as usize)),
+    );
+    let timestamps = SettingField::switch(
+        |cx| AppSettings::get(cx).logs.show_timestamps,
+        |value, cx| AppSettings::update(cx, |settings| settings.logs.show_timestamps = value),
+    );
+    let wrap = SettingField::switch(
+        |cx| AppSettings::get(cx).logs.wrap_lines,
+        |value, cx| AppSettings::update(cx, |settings| settings.logs.wrap_lines = value),
+    );
+    let json = SettingField::switch(
+        |cx| AppSettings::get(cx).logs.show_json,
+        |value, cx| AppSettings::update(cx, |settings| settings.logs.show_json = value),
+    );
+    SettingPage::new(SettingsPage::Logs.title())
+        .resettable(false)
+        .group(
+            SettingGroup::new()
+                .title("New log tabs")
+                .description("Each tab can still change these from its toolbar.")
+                .item(SettingItem::new("Lines loaded at open", tail))
+                .item(SettingItem::new("Timestamps", timestamps))
+                .item(SettingItem::new("Wrap long lines", wrap))
+                .item(SettingItem::new("Show JSON as message and fields", json)),
+        )
+}
+
+/// The shell a new tab runs, and how the terminal keeps and draws its text.
+fn terminal_page() -> SettingPage {
+    let shell = table_dropdown(
+        &SHELL_OPTIONS,
+        |settings| settings.terminal.default_shell,
+        |settings, shell| settings.terminal.default_shell = shell,
+        |_| "Auto".to_owned(),
+    );
+    let scrollback = table_dropdown(
+        &SCROLLBACK_OPTIONS,
+        |settings| settings.terminal.scrollback_lines,
+        |settings, lines| settings.terminal.scrollback_lines = lines,
+        |lines| format!("{} lines", group_digits(lines as usize)),
+    );
+    let font = table_dropdown(
+        &FONT_SIZE_OPTIONS,
+        |settings| settings.terminal.font_size,
+        |settings, size| settings.terminal.font_size = size,
+        |size| size.map_or_else(|| "Theme size".to_owned(), |size| format!("{size} px")),
+    );
+    SettingPage::new(SettingsPage::TerminalAndShell.title())
+        .resettable(false)
+        .description("Applies to new shell tabs; font size applies at once.")
+        .group(
+            SettingGroup::new().title("Shell").item(
+                SettingItem::new("Default shell", shell)
+                    .description("Used by Open shell. The tab can still pick another."),
+            ),
+        )
+        .group(
+            SettingGroup::new()
+                .title("Terminal")
+                .item(SettingItem::new("Scrollback", scrollback))
+                .item(SettingItem::new("Font size", font)),
+        )
 }
 
 /// The theme dropdown: saves the choice and re-themes every window now.
@@ -294,11 +514,24 @@ fn appearance_page() -> SettingPage {
         |cx| theme_label(AppSettings::get(cx).theme).into(),
         |label, cx| change_theme(&label, cx),
     );
+    let density = table_dropdown(
+        &DENSITY_OPTIONS,
+        |settings| settings.appearance.density,
+        |settings, density| settings.appearance.density = density,
+        |_| "Compact (28 px)".to_owned(),
+    );
     SettingPage::new(SettingsPage::Appearance.title())
         .resettable(false)
         .group(
             SettingGroup::new().title("Theme").item(
                 SettingItem::new("Theme", theme).description("Applies to every window at once."),
+            ),
+        )
+        .group(
+            SettingGroup::new().title("Tables").item(
+                SettingItem::new("Row density", density).description(
+                    "The height of every table row, header included. Applies at once.",
+                ),
             ),
         )
 }

@@ -1,9 +1,11 @@
 use std::path::Path;
+use std::time::Duration;
 
 use gpui_kit::{AppContext as _, ClipboardItem, TestAppContext};
 
 use super::*;
 use crate::cluster_registry::ClusterRegistry;
+use crate::kubeconfig_folder::{FolderStatus, RESCAN_DEBOUNCE, RESCAN_MAX_WAIT};
 use crate::settings::{Settings, ThemePreference};
 use crate::settings_store::{LoadedSettings, WriteMode};
 
@@ -490,5 +492,313 @@ fn user_file_in_the_pasted_folder_is_not_offered_for_deletion(cx: &mut TestAppCo
     });
     cx.run_until_parked();
     assert!(mine.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- Spec 0043 step 5: watched folders ----
+//
+// No real watcher runs here: a test sends `FolderEvent`s through `folder_events_for_test` and moves
+// the GPUI fake clock, so the debounce is exact and nothing waits on the wall clock.
+
+fn install_folder_settings(folders: &[PathBuf], registered: &[PathBuf], cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        AppSettings::install(
+            LoadedSettings {
+                settings: Settings {
+                    registry: ClusterRegistry {
+                        kubeconfigs: registered.to_vec(),
+                        kubeconfig_folders: folders.to_vec(),
+                        ..ClusterRegistry::default()
+                    },
+                    ..Settings::default()
+                },
+                writes: WriteMode::Disabled,
+                notice: None,
+            },
+            cx,
+        );
+    });
+}
+
+fn send_event(folder: &Path, catalog: &Entity<ClusterCatalog>, cx: &mut TestAppContext) {
+    let sender = catalog.read_with(cx, |catalog, _| catalog.folder_events_for_test());
+    sender
+        .unbounded_send(FolderEvent {
+            folder: folder.to_path_buf(),
+        })
+        .expect("the catalog listens");
+    // The task has taken the event, so its timers exist before the clock moves.
+    cx.run_until_parked();
+}
+
+fn advance(by: Duration, cx: &mut TestAppContext) {
+    cx.executor().advance_clock(by);
+    cx.run_until_parked();
+}
+
+/// Sends an event for `folder` and lets the debounce pass: one rescan.
+fn rescan_after_debounce(folder: &Path, catalog: &Entity<ClusterCatalog>, cx: &mut TestAppContext) {
+    send_event(folder, catalog, cx);
+    advance(RESCAN_DEBOUNCE, cx);
+}
+
+fn rescans(catalog: &Entity<ClusterCatalog>, cx: &TestAppContext) -> usize {
+    catalog.read_with(cx, |catalog, _| catalog.folder_rescans())
+}
+
+fn notice_texts(catalog: &Entity<ClusterCatalog>, cx: &TestAppContext) -> Vec<String> {
+    catalog.read_with(cx, |catalog, _| {
+        catalog.notices().iter().map(ToString::to_string).collect()
+    })
+}
+
+#[gpui_kit::test]
+fn folder_file_rows_come_and_go(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-rows");
+    write_kubeconfig(&dir, "a.yaml", "from-a");
+    install_folder_settings(std::slice::from_ref(&dir), &[], cx);
+    let catalog = open_catalog(&[], cx);
+    assert_eq!(context_names(&catalog, cx), ["from-a"]);
+    write_kubeconfig(&dir, "b.yaml", "from-b");
+    // Nothing happens before the debounce has passed.
+    send_event(&dir, &catalog, cx);
+    advance(Duration::from_millis(499), cx);
+    assert_eq!(context_names(&catalog, cx), ["from-a"]);
+    advance(Duration::from_millis(1), cx);
+    assert_eq!(context_names(&catalog, cx), ["from-a", "from-b"]);
+    std::fs::remove_file(dir.join("b.yaml")).expect("delete a file");
+    rescan_after_debounce(&dir, &catalog, cx);
+    assert_eq!(context_names(&catalog, cx), ["from-a"]);
+    // The app only reads: the folder holds what the test left there.
+    assert!(dir.join("a.yaml").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn burst_of_events_rescans_once(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-burst");
+    write_kubeconfig(&dir, "a.yaml", "from-a");
+    install_folder_settings(std::slice::from_ref(&dir), &[], cx);
+    let catalog = open_catalog(&[], cx);
+    for _ in 0..5 {
+        send_event(&dir, &catalog, cx);
+        advance(Duration::from_millis(100), cx);
+    }
+    // 100 ms after the last event: still waiting. 500 ms after it: one rescan.
+    assert_eq!(rescans(&catalog, cx), 0);
+    advance(RESCAN_DEBOUNCE - Duration::from_millis(101), cx);
+    assert_eq!(rescans(&catalog, cx), 0);
+    advance(Duration::from_millis(1), cx);
+    assert_eq!(rescans(&catalog, cx), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn endless_events_rescan_every_two_seconds(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-endless");
+    write_kubeconfig(&dir, "a.yaml", "from-a");
+    install_folder_settings(std::slice::from_ref(&dir), &[], cx);
+    let catalog = open_catalog(&[], cx);
+    // An event every 100 ms for 5 s, as a log file written in a folder would cause.
+    for _ in 0..50 {
+        send_event(&dir, &catalog, cx);
+        advance(Duration::from_millis(100), cx);
+    }
+    let during = rescans(&catalog, &*cx);
+    assert!(
+        (2..=3).contains(&during),
+        "about one rescan per {RESCAN_MAX_WAIT:?} while events keep coming, got {during}"
+    );
+    // The stream ends: one more rescan after the debounce.
+    advance(RESCAN_DEBOUNCE, cx);
+    assert_eq!(rescans(&catalog, cx), during + 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn broken_rewrite_keeps_the_last_good_file(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-broken");
+    let file = write_kubeconfig(&dir, "a.yaml", "good");
+    install_folder_settings(std::slice::from_ref(&dir), &[], cx);
+    let catalog = open_catalog(&[], cx);
+    assert_eq!(context_names(&catalog, cx), ["good"]);
+    // An editor saved half a file.
+    std::fs::write(&file, "clusters: [token: s3cr3t-value").expect("rewrite");
+    rescan_after_debounce(&dir, &catalog, cx);
+    assert_eq!(context_names(&catalog, cx), ["good"]);
+    let notices = notice_texts(&catalog, cx);
+    assert!(
+        notices
+            .iter()
+            .any(|text| text.starts_with("Skipped kubeconfig:")),
+        "{notices:?}"
+    );
+    assert!(
+        notices.iter().all(|text| !text.contains("s3cr3t")),
+        "{notices:?}"
+    );
+    // The next good version replaces it and the notice goes.
+    write_kubeconfig(&dir, "a.yaml", "better-name");
+    rescan_after_debounce(&dir, &catalog, cx);
+    assert_eq!(context_names(&catalog, cx), ["better-name"]);
+    assert!(notice_texts(&catalog, cx).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn missing_folder_raises_a_notice(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-missing");
+    write_kubeconfig(&dir, "a.yaml", "from-a");
+    install_folder_settings(std::slice::from_ref(&dir), &[], cx);
+    let catalog = open_catalog(&[], cx);
+    assert_eq!(context_names(&catalog, cx), ["from-a"]);
+    std::fs::remove_dir_all(&dir).expect("remove the folder");
+    rescan_after_debounce(&dir, &catalog, cx);
+    assert!(context_names(&catalog, cx).is_empty());
+    let notices = notice_texts(&catalog, cx);
+    let expected_start = format!("Watched folder {} is missing (", dir.display());
+    assert!(
+        notices.iter().any(|text| text.starts_with(&expected_start)
+            && text.ends_with("); checked again at the next start")),
+        "{notices:?}"
+    );
+    let status = catalog.read_with(cx, |catalog, _| catalog.folder_summaries()[0].status);
+    assert_eq!(status, FolderStatus::Missing);
+    // The folder stays in the settings.
+    let folders = cx.read(|cx| AppSettings::get(cx).registry.kubeconfig_folders.clone());
+    assert_eq!(folders, [dir]);
+}
+
+#[gpui_kit::test]
+fn a_folder_that_is_missing_at_start_raises_the_notice_at_once(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-missing-at-start");
+    std::fs::remove_dir_all(&dir).expect("remove the folder");
+    install_folder_settings(std::slice::from_ref(&dir), &[], cx);
+    let catalog = open_catalog(&[], cx);
+    assert!(
+        notice_texts(&catalog, cx)
+            .iter()
+            .any(|text| text.contains("is missing"))
+    );
+    assert!(catalog.read_with(cx, |catalog, _| !catalog.is_loading()));
+}
+
+#[gpui_kit::test]
+fn stop_watching_keeps_the_files(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-stop");
+    write_kubeconfig(&dir, "a.yaml", "from-a");
+    install_folder_settings(std::slice::from_ref(&dir), &[], cx);
+    let catalog = open_catalog(&[], cx);
+    assert_eq!(context_names(&catalog, cx), ["from-a"]);
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            crate::cluster_form::stop_watching_folder(&mut settings.registry, &dir);
+        });
+    });
+    cx.run_until_parked();
+    assert!(context_names(&catalog, cx).is_empty());
+    assert!(cx.read(|cx| AppSettings::get(cx).registry.kubeconfig_folders.is_empty()));
+    assert!(dir.join("a.yaml").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn adding_a_folder_lists_its_files(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-add");
+    write_kubeconfig(&dir, "a.yaml", "from-a");
+    install_folder_settings(&[], &[], cx);
+    let catalog = open_catalog(&[], cx);
+    assert!(context_names(&catalog, cx).is_empty());
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            assert!(crate::cluster_form::add_watched_folder(
+                &mut settings.registry,
+                dir.clone()
+            ));
+            // The same folder twice is one watch.
+            assert!(!crate::cluster_form::add_watched_folder(
+                &mut settings.registry,
+                dir.clone()
+            ));
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(context_names(&catalog, cx), ["from-a"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn a_folder_file_is_never_a_start_candidate(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-start");
+    let watched = dir.join("watched");
+    std::fs::create_dir_all(&watched).expect("folder");
+    let chain = write_kubeconfig(&dir, "chain.yaml", "from-chain");
+    let registered = write_kubeconfig(&dir, "reg.yaml", "from-registry");
+    write_kubeconfig(&watched, "dropped.yaml", "from-folder");
+    install_folder_settings(std::slice::from_ref(&watched), &[registered], cx);
+    let catalog = open_catalog(&[chain], cx);
+    let listed = context_names(&catalog, cx);
+    assert_eq!(listed, ["from-chain", "from-registry", "from-folder"]);
+    let started: Vec<String> = catalog.read_with(cx, |catalog, _| {
+        catalog
+            .start_kubeconfigs()
+            .flat_map(|kubeconfig| kubeconfig.contexts())
+            .map(|context| context.name.clone())
+            .collect()
+    });
+    assert_eq!(started, ["from-chain", "from-registry"]);
+    let is_folder_source = |name: &str, cx: &TestAppContext| {
+        catalog.read_with(cx, |catalog, _| {
+            catalog.is_folder_source(&watched.join(name))
+        })
+    };
+    assert!(is_folder_source("dropped.yaml", cx));
+    assert!(!catalog.read_with(cx, |catalog, _| {
+        catalog.is_folder_source(&dir.join("reg.yaml"))
+    }));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn a_folder_file_the_registry_names_loads_once(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-dup");
+    let file = write_kubeconfig(&dir, "a.yaml", "from-a");
+    install_folder_settings(std::slice::from_ref(&dir), &[file], cx);
+    let catalog = open_catalog(&[], cx);
+    assert_eq!(context_names(&catalog, cx), ["from-a"]);
+    // It loads as the registry's file, so it is not a folder row.
+    assert!(!catalog.read_with(cx, |catalog, _| {
+        catalog.is_folder_source(&dir.join("a.yaml"))
+    }));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn the_folder_line_counts_what_it_found(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-line");
+    for index in 0..52 {
+        write_kubeconfig(
+            &dir,
+            &format!("f{index:02}.yaml"),
+            &format!("ctx-{index:02}"),
+        );
+    }
+    std::fs::write(dir.join("f00.yaml"), "not a kubeconfig: [").expect("replace one");
+    install_folder_settings(std::slice::from_ref(&dir), &[], cx);
+    let catalog = open_catalog(&[], cx);
+    let summaries = catalog.read_with(cx, |catalog, _| catalog.folder_summaries());
+    let [summary] = summaries.as_slice() else {
+        panic!("one watched folder");
+    };
+    assert_eq!(summary.kubeconfigs, 49);
+    assert_eq!(summary.not_kubeconfigs, 1);
+    assert_eq!(summary.not_loaded, 2);
+    assert_eq!(
+        summary.line_text(),
+        format!(
+            "Watching {} · 49 kubeconfig files, 1 not a kubeconfig, 2 more files not loaded",
+            dir.display()
+        )
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

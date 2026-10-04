@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 use futures::executor::block_on;
 use kube::core::Status;
 
+use crate::proxy::ProxyUrl;
+
 use super::*;
 
 fn api_error(code: u16, message: &str) -> kube::Error {
@@ -187,23 +189,31 @@ contexts:
 
 #[tokio::test]
 async fn proxy_url_userinfo_never_appears_in_invalid_config_error() {
+    // Only a scheme kube cannot use fails now, and its error must not echo the userinfo.
+    let options = KubeConfigOptions::default();
+    let config = kube::Config::from_custom_kubeconfig(
+        kubeconfig_with_proxy("ftp://user:secret@proxy:21"),
+        &options,
+    )
+    .await
+    .expect("config builds");
+    let Err(kube_error) = kube::Client::try_from(config) else {
+        panic!("an ftp proxy is not supported, so building the client must fail");
+    };
+    let text = visible_text(&invalid_config("ctx", kube_error));
+    assert!(text.contains("proxy URL"), "{text}");
+    assert!(!text.contains("secret"), "{text}");
+    assert!(!text.contains("user:"), "{text}");
+    // http and socks5 (with userinfo, which kube turns into proxy auth) build a client.
     for proxy_url in [
         "http://user:secret@proxy:3128",
         "socks5://user:secret@proxy:1080",
-        "ftp://user:secret@proxy:21",
     ] {
-        let options = KubeConfigOptions::default();
         let config =
             kube::Config::from_custom_kubeconfig(kubeconfig_with_proxy(proxy_url), &options)
                 .await
                 .expect("config builds");
-        let Err(kube_error) = kube::Client::try_from(config) else {
-            panic!("proxy support is disabled, so building the client must fail");
-        };
-        let text = visible_text(&invalid_config("ctx", kube_error));
-        assert!(text.contains("proxy-url"), "{text}");
-        assert!(!text.contains("secret"), "{text}");
-        assert!(!text.contains("user:"), "{text}");
+        assert!(kube::Client::try_from(config).is_ok(), "{proxy_url}");
     }
 }
 
@@ -225,13 +235,6 @@ fn serde_error_from_response_is_redacted() {
     let error = classify_error("ctx", "get", kube::Error::SerdeError(decode_error));
     let text = visible_text(&error);
     assert!(!text.contains("body-distinctive"), "{text}");
-}
-
-#[test]
-fn proxy_is_kept_only_when_kubeconfig_sets_proxy_url() {
-    assert_eq!(proxy_for(true, Some("proxy")), Some("proxy"));
-    assert_eq!(proxy_for(false, Some("proxy")), None);
-    assert_eq!(proxy_for::<&str>(true, None), None);
 }
 
 #[tokio::test]
@@ -310,5 +313,60 @@ async fn scoped_dynamic_apis_builds_one_api_per_namespace() {
                 "/apis/metrics.k8s.io/v1beta1/namespaces/b/pods".to_owned()
             ),
         ]
+    );
+}
+
+fn kubeconfig_file(proxy_url: &str) -> Kubeconfig {
+    let yaml = format!(
+        "\
+current-context: ctx
+clusters:
+  - name: c
+    cluster: {{ server: 'https://127.0.0.1:1', proxy-url: '{proxy_url}' }}
+users:
+  - name: u
+    user: {{ token: fixture-token-do-not-print }}
+contexts:
+  - name: ctx
+    context: {{ cluster: c, user: u }}
+"
+    );
+    Kubeconfig::parse(&yaml, std::path::Path::new("fixture.yaml")).expect("fixture parses")
+}
+
+#[tokio::test]
+async fn open_applies_the_proxy_choice() {
+    // An ftp proxy in the kubeconfig makes kube refuse the client, with the URL redacted.
+    let kubeconfig = kubeconfig_file("ftp://user:secret@proxy:21");
+    let failed = ClusterConnection::open(&kubeconfig, "ctx", &ProxyChoice::Kubeconfig).await;
+    let Err(error) = failed else {
+        panic!("an ftp proxy must fail the client");
+    };
+    let text = visible_text(&error);
+    assert!(!text.contains("secret"), "{text}");
+    // None overrides the kubeconfig proxy, and a Settings URL replaces it.
+    ClusterConnection::open(&kubeconfig, "ctx", &ProxyChoice::Direct)
+        .await
+        .expect("a direct connection builds");
+    let custom = ProxyChoice::Url(ProxyUrl::parse("http://127.0.0.1:9").expect("valid"));
+    ClusterConnection::open(&kubeconfig, "ctx", &custom)
+        .await
+        .expect("the Settings proxy replaces the kubeconfig one");
+    // A kubeconfig proxy of a supported scheme now works.
+    let supported = kubeconfig_file("http://user:secret@127.0.0.1:3128");
+    ClusterConnection::open(&supported, "ctx", &ProxyChoice::Kubeconfig)
+        .await
+        .expect("an http proxy builds");
+}
+
+#[test]
+fn invalid_proxy_error_names_no_url() {
+    let error = ClusterError::InvalidProxy {
+        context: "ctx".to_owned(),
+        source: ProxyUrlError::Credentials,
+    };
+    assert_eq!(
+        error.to_string(),
+        "context 'ctx': the proxy URL in Settings is not valid"
     );
 }

@@ -917,3 +917,28 @@ fn a_runs_attach_on_pods_only(cx: &mut TestAppContext) {
     assert_eq!(subject_action(RowAction::Attach, &node), None);
     assert_eq!(subject_action(RowAction::Attach, &deployment), None);
 }
+
+#[gpui_kit::test]
+fn alt_arrows_move_clusters_outside_text_fields(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("alt-up", &["Root", "SettingsWindow"], cx),
+        Some("k8sboard::MoveClusterUp")
+    );
+    assert_eq!(
+        resolve("alt-down", &["Root", "SettingsWindow"], cx),
+        Some("k8sboard::MoveClusterDown")
+    );
+    // A text field keeps the keys, and the main window never gets them.
+    for path in [
+        &["Root", "SettingsWindow", "Input"][..],
+        &["Root", "AppShell"][..],
+    ] {
+        for key in ["alt-up", "alt-down"] {
+            assert!(
+                !is_app_action(resolve(key, path, cx)),
+                "{key} under {path:?}"
+            );
+        }
+    }
+}

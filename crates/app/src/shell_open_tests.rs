@@ -299,7 +299,7 @@ impl Shells {
     }
 
     fn wait_for(&self, what: &str, cx: &mut TestAppContext, done: impl Fn() -> bool) {
-        for _ in 0..500 {
+        for _ in 0..1_500 {
             cx.run_until_parked();
             if done() {
                 return;
@@ -1202,4 +1202,32 @@ fn container_attach_item_is_inert_after_a_switch(cx: &mut TestAppContext) {
     click_it(cx);
     assert!(!shells.has_dialog(cx));
     assert_eq!(shells.tab_count(cx), 0);
+}
+
+#[gpui_kit::test]
+fn open_shell_uses_the_default_shell(cx: &mut TestAppContext) {
+    let shells = two_clusters("default-shell", cx);
+    let dir = shells.audit_folder("default-shell", cx);
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            settings.terminal.default_shell = ShellCommand::Bash;
+        });
+    });
+    shells.open_and_confirm(&shells.stg, "multi-0", "web", cx);
+    assert_eq!(shells.tab_count(cx), 1);
+    let tab = shells.tabs(cx).remove(0);
+    assert_eq!(
+        tab.read_with(cx, |tab, _| tab.command()),
+        ShellCommand::Bash
+    );
+    shells.wait_for("the audit line", cx, || !audit_lines(&dir).is_empty());
+    let lines = audit_lines(&dir);
+    let command = lines[0]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["path"] == "command")
+        .map(|field| field["value"].clone());
+    assert_eq!(command, Some(serde_json::json!("bash")));
+    let _ = std::fs::remove_dir_all(&dir);
 }

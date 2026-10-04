@@ -3,10 +3,15 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use cluster::{ContextSummary, DEFAULT_DEBUG_IMAGE, NamespaceScope};
+use std::fmt;
+
+use cluster::{
+    ClusterConnection, ClusterError, ContextSummary, DEFAULT_DEBUG_IMAGE, Kubeconfig,
+    NamespaceScope, ProxyChoice, ProxyUrl, ProxyUrlError,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::environment::{Environment, guess_environment};
+use crate::environment::{ClusterColor, Environment, guess_environment};
 use crate::write_guard::ConfirmMode;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -15,6 +20,10 @@ pub(crate) struct ClusterRegistry {
     /// Files added by the user; each loads standalone, apart from the launch chain.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) kubeconfigs: Vec<PathBuf>,
+    /// Folders whose kubeconfig files are listed and watched (spec 0043). Their files are never
+    /// copied here: the folder is the source of truth, and nothing in it is ever written.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) kubeconfig_folders: Vec<PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) clusters: Vec<ClusterEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,6 +65,12 @@ pub(crate) struct ClusterEntry {
     /// Where the node shell pod is created; `None` is `kube-system`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) node_shell_namespace: Option<String>,
+    /// The title-bar border color; `None` follows the environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) color: Option<ClusterColor>,
+    /// How the client reaches the API server; `None` is the kubeconfig's own `proxy-url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) proxy: Option<ClusterProxy>,
 }
 
 /// The namespace of a node shell pod unless the entry names another: usually exempt from Pod
@@ -77,6 +92,11 @@ pub(crate) struct ClusterProfile {
     pub(crate) allow_node_shell: bool,
     pub(crate) debug_image: String,
     pub(crate) node_shell_namespace: String,
+    /// The stored color, else the environment's: the title-bar border.
+    pub(crate) color: ClusterColor,
+    /// The stored proxy, parsed here so that nothing past the profile holds an unchecked URL. A
+    /// stored URL that does not parse is an `Err`: the connection fails instead of going direct.
+    pub(crate) proxy: Result<ProxyChoice, ProxyUrlError>,
 }
 
 impl ClusterRef {
@@ -118,6 +138,8 @@ impl ClusterRegistry {
                 allow_node_shell: None,
                 debug_image: None,
                 node_shell_namespace: None,
+                color: None,
+                proxy: None,
             });
             self.clusters.len() - 1
         });
@@ -172,7 +194,59 @@ impl ClusterRegistry {
                 entry.and_then(|entry| entry.node_shell_namespace.as_ref()),
             )
             .unwrap_or_else(|| DEFAULT_NODE_SHELL_NAMESPACE.to_owned()),
+            color: entry
+                .and_then(|entry| entry.color)
+                .unwrap_or_else(|| ClusterColor::of(environment)),
+            proxy: stored_proxy(entry.and_then(|entry| entry.proxy.as_ref())),
         }
+    }
+}
+
+/// The proxy a cluster is saved with. Settings accept `http://` and `socks5://` without userinfo,
+/// so the stored text never holds a credential (`ClusterProxy` has no secret to hide).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ClusterProxy {
+    /// No proxy, even when the kubeconfig sets one.
+    Direct,
+    Url(String),
+}
+
+// Manual: a hand-edited URL may carry userinfo, which must never reach a log through `Debug` of
+// `Settings` or `ClusterEntry`.
+impl fmt::Debug for ClusterProxy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Direct => formatter.write_str("Direct"),
+            Self::Url(text) => match ProxyUrl::parse(text) {
+                Ok(url) => write!(formatter, "Url({})", url.display()),
+                Err(_) => formatter.write_str("Url(<invalid>)"),
+            },
+        }
+    }
+}
+
+fn stored_proxy(stored: Option<&ClusterProxy>) -> Result<ProxyChoice, ProxyUrlError> {
+    match stored {
+        None => Ok(ProxyChoice::Kubeconfig),
+        Some(ClusterProxy::Direct) => Ok(ProxyChoice::Direct),
+        Some(ClusterProxy::Url(text)) => ProxyUrl::parse(text).map(ProxyChoice::Url),
+    }
+}
+
+/// The one way the app opens a client. A stored proxy that does not parse fails the connection
+/// (`InvalidProxy`) and never falls back to a direct one.
+pub(crate) async fn open_cluster(
+    kubeconfig: &Kubeconfig,
+    context: &str,
+    proxy: &Result<ProxyChoice, ProxyUrlError>,
+) -> Result<ClusterConnection, ClusterError> {
+    match proxy {
+        Ok(choice) => ClusterConnection::open(kubeconfig, context, choice).await,
+        Err(error) => Err(ClusterError::InvalidProxy {
+            context: context.to_owned(),
+            source: *error,
+        }),
     }
 }
 

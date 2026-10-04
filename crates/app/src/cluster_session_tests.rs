@@ -1436,12 +1436,12 @@ fn rbac_ready() -> RbacState {
 
 #[test]
 fn condition_plan_opens_the_expected_number_of_watches() {
-    use crate::issue_feeds::{FeedPlan, condition_plan};
+    use crate::issue_feeds::{CertificateWatch, FeedPlan, condition_plan};
     let access = AccessState::Unknown;
     let issue_watches = |names: &[&str]| {
         let scope = NamespaceScope::of_namespaces(names.iter().map(|name| (*name).to_owned()));
         let events = scope_multiplicity(&scope);
-        let conditions: usize = condition_plan(&scope, &access)
+        let conditions: usize = condition_plan(&scope, &access, CertificateWatch::Watch)
             .into_iter()
             .map(|(_, plan)| match plan {
                 FeedPlan::Start { watch_scope } => scope_multiplicity(&watch_scope),

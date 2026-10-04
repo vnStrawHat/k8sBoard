@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
+use crate::cluster_form::RowOrigin;
 
 fn cluster(context: &str) -> ClusterRef {
     ClusterRef {
@@ -11,10 +12,20 @@ fn cluster(context: &str) -> ClusterRef {
 }
 
 fn candidate(context: &str, auth: AuthKind, is_active: bool) -> ProbeCandidate {
+    from_origin(context, auth, is_active, RowOrigin::Registry)
+}
+
+fn from_origin(
+    context: &str,
+    auth: AuthKind,
+    is_active: bool,
+    origin: RowOrigin,
+) -> ProbeCandidate {
     ProbeCandidate {
         cluster: cluster(context),
         auth,
         is_active,
+        origin,
     }
 }
 
@@ -38,8 +49,8 @@ fn exec_and_auth_provider_are_not_auto_probed() {
     let provider = AuthKind::AuthProvider {
         name: "gcp".to_owned(),
     };
-    assert!(!is_probed_automatically(&exec));
-    assert!(!is_probed_automatically(&provider));
+    assert!(!is_probed_automatically(&exec, RowOrigin::Registry));
+    assert!(!is_probed_automatically(&provider, RowOrigin::Registry));
     for auth in [
         AuthKind::Token,
         AuthKind::TokenFile,
@@ -47,7 +58,10 @@ fn exec_and_auth_provider_are_not_auto_probed() {
         AuthKind::Basic,
         AuthKind::None,
     ] {
-        assert!(is_probed_automatically(&auth), "{auth}");
+        assert!(
+            is_probed_automatically(&auth, RowOrigin::Registry),
+            "{auth}"
+        );
     }
 }
 
@@ -166,6 +180,7 @@ contexts:
         cluster: cluster(context),
         kubeconfig: Arc::new(Kubeconfig::parse(yaml, Path::new("a.yaml")).expect("parses")),
         context: "ctx".to_owned(),
+        proxy: Ok(cluster::ProxyChoice::Kubeconfig),
     }
 }
 
@@ -219,6 +234,7 @@ contexts:
         cluster: cluster("ctx"),
         kubeconfig: Arc::new(Kubeconfig::parse(yaml, Path::new("a.yaml")).expect("parses")),
         context: "ctx".to_owned(),
+        proxy: Ok(cluster::ProxyChoice::Kubeconfig),
     };
     let results: Vec<_> = probe_stream(vec![target]).collect().await;
     let [(probed, ProbeResult::Unreachable { reason })] = results.as_slice() else {
@@ -236,4 +252,49 @@ fn is_probing_follows_running() {
     assert!(board.is_probing());
     board.record(cluster("a"), reachable(1), Instant::now());
     assert!(!board.is_probing());
+}
+
+#[tokio::test]
+async fn a_probe_with_an_invalid_proxy_fails_closed_and_names_no_url() {
+    let mut target = target("ctx");
+    target.proxy = Err(cluster::ProxyUrlError::Credentials);
+    let results: Vec<_> = probe_stream(vec![target]).collect().await;
+    let [(_, ProbeResult::Unreachable { reason })] = results.as_slice() else {
+        panic!("a bad proxy must not probe directly, got {results:?}");
+    };
+    assert_eq!(
+        reason,
+        "context 'ctx': the proxy URL in Settings is not valid: the proxy URL must not carry a user name or password"
+    );
+}
+
+#[test]
+fn folder_rows_are_never_probed_automatically() {
+    // A dropped file can aim `tokenFile` at a real token and `server` at any host, so no auth kind
+    // makes a folder row due; the same rows from a registry file are.
+    let auths = [
+        AuthKind::TokenFile,
+        AuthKind::ClientCertificate,
+        AuthKind::Token,
+        AuthKind::Basic,
+        AuthKind::None,
+        AuthKind::Exec {
+            command: "aws".to_owned(),
+        },
+    ];
+    let now = Instant::now();
+    let board = HealthBoard::default();
+    for auth in auths {
+        let folder = from_origin("ctx", auth.clone(), false, RowOrigin::Folder);
+        assert!(board.due(&[folder], now).is_empty(), "{auth}");
+        assert!(!is_probed_automatically(&auth, RowOrigin::Folder), "{auth}");
+    }
+    for auth in [
+        AuthKind::TokenFile,
+        AuthKind::ClientCertificate,
+        AuthKind::Token,
+    ] {
+        let registry = from_origin("ctx", auth.clone(), false, RowOrigin::Registry);
+        assert_eq!(board.due(&[registry], now), [cluster("ctx")], "{auth}");
+    }
 }

@@ -54,7 +54,7 @@
 | 29 | Init containers never offered | not running after start |
 | 30 | In the terminal, Ctrl Shift C is copy, not the cluster switcher | the terminal convention wins where the user types |
 | 31 | Ctrl K, N, W, C, Tab go to the program on Windows and Linux; Ctrl W closes a tab only outside the terminal; Esc never un-zooms from the terminal (Ctrl Shift M does) | core shell keys and vim |
-| 32 | Out of scope: Attach (moves out of 0036 to a later item), node shell and debug containers (0037), Settings › Terminal & Shell | W2 draws no Terminal & Shell content |
+| 32 | Out of scope: Attach (moves out of 0036 to a later item), node shell and debug containers (0037), Settings › Terminal & Shell (built by [0043](../0043-settings-pages/README.md): default shell, scrollback up to 10,000 lines, font size) | W2 draws no Terminal & Shell content |
 
 ## Baseline (refresh 2026-10-03, main `2c7dc08`)
 

@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use cluster::ShellCommand;
 use gpui_kit::TestAppContext;
 use gpui_kit::component::Theme;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::cluster_registry::{ClusterEntry, ClusterRef};
-use crate::environment::Environment;
+use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef};
+use crate::environment::{ClusterColor, Environment};
 use crate::port_forwards::{ForwardPreset, ForwardSpec, LocalPortSpec, TargetSpec};
 use crate::settings_store::settings_path;
 use crate::table_sort::SortDirection;
@@ -35,6 +36,7 @@ fn full_settings() -> Settings {
         theme: ThemePreference::Dark,
         registry: ClusterRegistry {
             kubeconfigs: vec![PathBuf::from("extra.yaml")],
+            kubeconfig_folders: vec![PathBuf::from("watched")],
             clusters: vec![ClusterEntry {
                 cluster: cluster.clone(),
                 display_name: Some("name".to_owned()),
@@ -45,6 +47,8 @@ fn full_settings() -> Settings {
                 allow_node_shell: Some(true),
                 debug_image: Some("registry.local/busybox:1".to_owned()),
                 node_shell_namespace: Some("debug".to_owned()),
+                color: Some(ClusterColor::Teal),
+                proxy: Some(ClusterProxy::Url("http://proxy.example:3128".to_owned())),
             }],
             last_used: Some(cluster),
         },
@@ -63,6 +67,24 @@ fn full_settings() -> Settings {
             }],
         },
         dock: DockSettings { height: Some(402.) },
+        logs: LogSettings {
+            tail_lines: 500,
+            show_timestamps: false,
+            wrap_lines: true,
+            show_json: true,
+        },
+        terminal: TerminalSettings {
+            default_shell: ShellCommand::Bash,
+            scrollback_lines: 10_000,
+            font_size: Some(14),
+        },
+        general: GeneralSettings {
+            export_dir: Some(PathBuf::from("exports")),
+            watch_tls_secrets: false,
+        },
+        appearance: AppearanceSettings {
+            density: RowDensity::Comfortable,
+        },
         tables: BTreeMap::from([(
             "pods".to_owned(),
             TablePrefs {
@@ -145,8 +167,18 @@ fn settings_keys_are_the_allow_list() {
     assert_eq!(
         keys,
         [
+            "appearance",
+            "appearance.density",
             "dock",
             "dock.height",
+            "general",
+            "general.export_dir",
+            "general.watch_tls_secrets",
+            "logs",
+            "logs.show_json",
+            "logs.show_timestamps",
+            "logs.tail_lines",
+            "logs.wrap_lines",
             "port_forward",
             "port_forward.presets",
             "port_forward.presets.cluster",
@@ -163,6 +195,7 @@ fn settings_keys_are_the_allow_list() {
             "registry",
             "registry.clusters",
             "registry.clusters.allow_node_shell",
+            "registry.clusters.color",
             "registry.clusters.confirm",
             "registry.clusters.context",
             "registry.clusters.debug_image",
@@ -171,7 +204,10 @@ fn settings_keys_are_the_allow_list() {
             "registry.clusters.environment",
             "registry.clusters.kubeconfig",
             "registry.clusters.node_shell_namespace",
+            "registry.clusters.proxy",
+            "registry.clusters.proxy.url",
             "registry.clusters.read_only",
+            "registry.kubeconfig_folders",
             "registry.kubeconfigs",
             "registry.last_used",
             "registry.last_used.context",
@@ -182,6 +218,10 @@ fn settings_keys_are_the_allow_list() {
             "tables.pods.sort",
             "tables.pods.sort.column",
             "tables.pods.sort.direction",
+            "terminal",
+            "terminal.default_shell",
+            "terminal.font_size",
+            "terminal.scrollback_lines",
             "theme",
             "version",
         ]
@@ -421,4 +461,122 @@ fn applying_a_theme_preference_sets_the_theme_mode(cx: &mut TestAppContext) {
         ThemePreference::Light.apply(cx);
         assert!(!Theme::global(cx).is_dark());
     });
+}
+
+#[test]
+fn section_with_one_change_round_trips() {
+    let settings: Settings =
+        serde_json::from_value(json!({ "general": { "watch_tls_secrets": false } }))
+            .expect("parses");
+    assert!(!settings.general.watch_tls_secrets);
+    assert_eq!(settings.general.export_dir, None);
+    let value = serde_json::to_value(&settings).expect("serializes");
+    assert_eq!(value["general"], json!({ "watch_tls_secrets": false }));
+    assert!(value.get("appearance").is_none());
+}
+
+#[test]
+fn density_row_heights() {
+    assert_eq!(RowDensity::default(), RowDensity::Compact);
+    assert_eq!(RowDensity::Compact.row_height(), 28.);
+    assert_eq!(RowDensity::Comfortable.row_height(), 36.);
+    assert_eq!(
+        serde_json::to_value(RowDensity::Compact).expect("serializes"),
+        json!("compact")
+    );
+    assert_eq!(
+        serde_json::to_value(RowDensity::Comfortable).expect("serializes"),
+        json!("comfortable")
+    );
+}
+
+/// Every option labels and parses back; the default labels itself `(default)`; an unknown label
+/// is the default; a value the table lacks shows as `unlisted` says.
+fn assert_table<T: Copy + PartialEq + std::fmt::Debug>(
+    table: &OptionTable<T>,
+    values: &[T],
+    default: T,
+) {
+    for value in values {
+        let label = table.label(*value, || "unlisted".to_owned());
+        assert_ne!(label, "unlisted", "{value:?} is an option");
+        assert_eq!(table.value(&label), *value);
+    }
+    assert_eq!(table.value("nonsense"), default);
+    assert!(
+        table.label(default, String::new).ends_with(" (default)"),
+        "the default option names itself"
+    );
+    assert_eq!(table.choices().len(), values.len());
+}
+
+#[test]
+fn option_labels_round_trip() {
+    assert_table(
+        &DENSITY_OPTIONS,
+        &[RowDensity::Compact, RowDensity::Comfortable],
+        RowDensity::Compact,
+    );
+    assert_table(&TAIL_OPTIONS, &[100, 500, 1_000, 5_000, 10_000], 1_000);
+    assert_table(&SCROLLBACK_OPTIONS, &[1_000, 5_000, 10_000], 5_000);
+    assert_table(
+        &FONT_SIZE_OPTIONS,
+        &[None, Some(12), Some(13), Some(14), Some(16), Some(18)],
+        None,
+    );
+    assert_table(
+        &SHELL_OPTIONS,
+        &[ShellCommand::Auto, ShellCommand::Bash, ShellCommand::Sh],
+        ShellCommand::Auto,
+    );
+}
+
+#[test]
+fn an_unlisted_value_shows_its_own_label() {
+    let label = TAIL_OPTIONS.label(50, || "50 lines".to_owned());
+    assert_eq!(label, "50 lines");
+}
+
+#[test]
+fn tail_lines_is_clamped() {
+    let tail = |lines| LogSettings {
+        tail_lines: lines,
+        ..LogSettings::default()
+    };
+    assert_eq!(tail(1).tail_lines(), 10);
+    assert_eq!(tail(500).tail_lines(), 500);
+    assert_eq!(tail(1_000_000).tail_lines(), 10_000);
+    // The stored value is not rewritten.
+    assert_eq!(tail(1).tail_lines, 1);
+}
+
+#[test]
+fn scrollback_is_clamped() {
+    let scrollback = |lines| TerminalSettings {
+        scrollback_lines: lines,
+        ..TerminalSettings::default()
+    };
+    assert_eq!(scrollback(10).scrollback_lines(), 1_000);
+    assert_eq!(scrollback(5_000).scrollback_lines(), 5_000);
+    assert_eq!(scrollback(50_000).scrollback_lines(), 10_000);
+}
+
+#[test]
+fn font_size_is_clamped() {
+    let font = |size| TerminalSettings {
+        font_size: size,
+        ..TerminalSettings::default()
+    };
+    assert_eq!(font(None).font_size(), None);
+    assert_eq!(font(Some(4)).font_size(), Some(10));
+    assert_eq!(font(Some(14)).font_size(), Some(14));
+    assert_eq!(font(Some(99)).font_size(), Some(24));
+}
+
+#[test]
+fn log_and_terminal_sections_stay_out_of_a_default_file() {
+    let value = serde_json::to_value(Settings::default()).expect("serializes");
+    for key in ["logs", "terminal", "general", "appearance"] {
+        assert!(value.get(key).is_none(), "{key}");
+    }
 }

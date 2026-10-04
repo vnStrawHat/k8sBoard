@@ -12,6 +12,7 @@ use tokio::time::error::Elapsed;
 use crate::kubeconfig::{Kubeconfig, KubeconfigError};
 use crate::namespace::NamespaceScope;
 use crate::object_write::{ALLOW_WRITES_VARIABLE, WritePolicy};
+use crate::proxy::{ProxyChoice, ProxyUrlError};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -49,6 +50,14 @@ pub enum ClusterError {
         context: String,
         #[source]
         source: BoxError,
+    },
+    /// The proxy saved in Settings does not parse. The client is not built, and the connection is
+    /// never made direct instead: traffic must not bypass a proxy the user asked for.
+    #[error("context '{context}': the proxy URL in Settings is not valid")]
+    InvalidProxy {
+        context: String,
+        #[source]
+        source: ProxyUrlError,
     },
     #[error("cannot reach the API server of context '{context}' while {action}")]
     Unreachable {
@@ -119,9 +128,13 @@ struct Page<K> {
 }
 
 impl ClusterConnection {
-    /// Builds a client for `context`. Does no network I/O, but spawns kube's client
-    /// worker, so it must be polled on the application's tokio runtime.
-    pub async fn open(kubeconfig: &Kubeconfig, context: &str) -> Result<Self, ClusterError> {
+    /// Builds a client for `context` that reaches the server as `proxy` says. Does no network I/O,
+    /// but spawns kube's client worker, so it must be polled on the application's tokio runtime.
+    pub async fn open(
+        kubeconfig: &Kubeconfig,
+        context: &str,
+        proxy: &ProxyChoice,
+    ) -> Result<Self, ClusterError> {
         let summary = kubeconfig.resolve_context(Some(context))?;
         let name = summary.name.clone();
         let has_proxy_url = kubeconfig.has_proxy_url(&summary.cluster);
@@ -135,18 +148,25 @@ impl ClusterConnection {
                 .await
                 .map_err(|error| invalid_config(&name, error.into()))?;
         config.connect_timeout = Some(CONNECT_TIMEOUT);
-        // kube falls back to HTTPS_PROXY/https_proxy, never reads NO_PROXY, and this build has
-        // no proxy support, so an ambient proxy would make every open() fail with
-        // ProxyProtocolDisabled. Only a proxy-url set in the kubeconfig is kept.
-        if !has_proxy_url && let Some(proxy) = &config.proxy_url {
+        // kube falls back to HTTPS_PROXY/https_proxy and never reads NO_PROXY, so honouring the
+        // variable could send a local cluster through a proxy. Only a proxy-url set in the
+        // kubeconfig, or the one picked in Settings, is used.
+        if matches!(proxy, ProxyChoice::Kubeconfig)
+            && !has_proxy_url
+            && let Some(ambient) = &config.proxy_url
+        {
             // Host only: the URL may carry userinfo.
             tracing::info!(
                 context = %name,
-                proxy_host = proxy.host().unwrap_or("unknown"),
+                proxy_host = ambient.host().unwrap_or("unknown"),
                 "ignoring the proxy from the environment"
             );
         }
-        config.proxy_url = proxy_for(has_proxy_url, config.proxy_url.take());
+        config.proxy_url = proxy.config_uri(has_proxy_url, config.proxy_url.take());
+        if let Some(url) = &config.proxy_url {
+            // Host only, as above.
+            tracing::debug!(context = %name, proxy_host = url.host().unwrap_or("unknown"), "connecting through a proxy");
+        }
         // No read timeout: watches (0002) need long reads.
         let default_namespace = config.default_namespace.clone();
         let client =
@@ -325,11 +345,6 @@ fn invalid_config(context: &str, error: kube::Error) -> ClusterError {
     }
 }
 
-/// The proxy to use: the loaded one only when the kubeconfig itself set a `proxy-url`.
-fn proxy_for<T>(has_proxy_url: bool, loaded: Option<T>) -> Option<T> {
-    if has_proxy_url { loaded } else { None }
-}
-
 /// Replaces errors whose text can embed secrets with fixed messages and drops the
 /// original: a proxy URL may carry `user:pass@` userinfo, and auth errors may carry
 /// exec plugin output.
@@ -337,7 +352,7 @@ fn redact_config_error(error: kube::Error) -> BoxError {
     match error {
         kube::Error::ProxyProtocolDisabled { .. }
         | kube::Error::ProxyProtocolUnsupported { .. } => {
-            "kubeconfig proxy-url is set but this build has no proxy support".into()
+            "the proxy URL uses a scheme k8sBoard cannot use".into()
         }
         kube::Error::Auth(_) => "credentials could not be prepared".into(),
         other => Box::new(other),

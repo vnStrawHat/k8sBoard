@@ -29,6 +29,8 @@ fn entry(context: &str, source: &str) -> ClusterEntry {
         allow_node_shell: None,
         debug_image: None,
         node_shell_namespace: None,
+        color: None,
+        proxy: None,
     }
 }
 
@@ -53,6 +55,8 @@ fn profile_of_unregistered_context_uses_name_and_guess() {
             allow_node_shell: false,
             debug_image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
             node_shell_namespace: "kube-system".to_owned(),
+            color: crate::environment::ClusterColor::Red,
+            proxy: Ok(cluster::ProxyChoice::Kubeconfig),
         }
     );
 }
@@ -435,4 +439,100 @@ fn debug_image_and_node_shell_namespace_default_and_override() {
     let profile = registry_with(blank).profile(&summary("dev-1", "a.yaml"));
     assert_eq!(profile.debug_image, cluster::DEFAULT_DEBUG_IMAGE);
     assert_eq!(profile.node_shell_namespace, "kube-system");
+}
+
+#[test]
+fn profile_color_prefers_the_entry() {
+    let mut teal = entry("prod-eu", "a.yaml");
+    teal.color = Some(ClusterColor::Teal);
+    let profile = registry_with(teal).profile(&summary("prod-eu", "a.yaml"));
+    assert_eq!(profile.color, ClusterColor::Teal);
+    // The badge follows the environment, not the stored color.
+    assert_eq!(profile.environment, Environment::Production);
+    let plain = ClusterRegistry::default().profile(&summary("prod-eu", "a.yaml"));
+    assert_eq!(plain.color, ClusterColor::Red);
+}
+
+#[test]
+fn a_color_follows_the_environment_when_none_is_stored() {
+    let mut moved = entry("dev-1", "a.yaml");
+    moved.environment = Some(Environment::Staging);
+    let profile = registry_with(moved).profile(&summary("dev-1", "a.yaml"));
+    assert_eq!(profile.color, ClusterColor::Amber);
+}
+
+// ---- Spec 0043 step 4: the proxy ----
+
+#[test]
+fn cluster_proxy_json_shape() {
+    assert_eq!(
+        serde_json::to_value(ClusterProxy::Direct).expect("serializes"),
+        serde_json::json!("direct")
+    );
+    assert_eq!(
+        serde_json::to_value(ClusterProxy::Url("http://proxy:3128".to_owned()))
+            .expect("serializes"),
+        serde_json::json!({ "url": "http://proxy:3128" })
+    );
+    let back: ClusterProxy =
+        serde_json::from_value(serde_json::json!({ "url": "socks5://p:1" })).expect("parses");
+    assert_eq!(back, ClusterProxy::Url("socks5://p:1".to_owned()));
+    // Absent means the kubeconfig's own proxy.
+    let plain = ClusterRegistry::default().profile(&summary("prod-eu", "a.yaml"));
+    assert_eq!(plain.proxy, Ok(ProxyChoice::Kubeconfig));
+    let mut direct = entry("prod-eu", "a.yaml");
+    direct.proxy = Some(ClusterProxy::Direct);
+    let profile = registry_with(direct).profile(&summary("prod-eu", "a.yaml"));
+    assert_eq!(profile.proxy, Ok(ProxyChoice::Direct));
+}
+
+#[test]
+fn a_stored_url_becomes_a_parsed_choice() {
+    let mut custom = entry("prod-eu", "a.yaml");
+    custom.proxy = Some(ClusterProxy::Url("HTTP://p:3128/".to_owned()));
+    let profile = registry_with(custom).profile(&summary("prod-eu", "a.yaml"));
+    let Ok(ProxyChoice::Url(url)) = profile.proxy else {
+        panic!("a valid URL parses");
+    };
+    assert_eq!(url.display(), "http://p:3128");
+}
+
+#[tokio::test]
+async fn invalid_stored_proxy_fails_closed() {
+    let mut bad = entry("prod-eu", "a.yaml");
+    bad.proxy = Some(ClusterProxy::Url("http://u:p@x".to_owned()));
+    let profile = registry_with(bad).profile(&summary("prod-eu", "a.yaml"));
+    assert_eq!(profile.proxy, Err(ProxyUrlError::Credentials));
+    let yaml = "clusters:\n  - name: c\n    cluster: { server: \"https://127.0.0.1:1\" }\ncontexts:\n  - name: ctx\n    context: { cluster: c }\n";
+    let kubeconfig = Kubeconfig::parse(yaml, std::path::Path::new("a.yaml")).expect("parses");
+    let Err(error) = open_cluster(&kubeconfig, "ctx", &profile.proxy).await else {
+        panic!("a bad proxy must not open a client");
+    };
+    assert!(matches!(
+        error,
+        ClusterError::InvalidProxy {
+            source: ProxyUrlError::Credentials,
+            ..
+        }
+    ));
+    let text = format!("{error} {error:?}");
+    assert!(!text.contains("u:p"), "{text}");
+    // A good choice opens a client without a round trip.
+    open_cluster(&kubeconfig, "ctx", &Ok(ProxyChoice::Direct))
+        .await
+        .expect("a direct client builds");
+}
+
+#[test]
+fn debug_of_cluster_proxy_hides_userinfo() {
+    let hand_edited = ClusterProxy::Url("http://u:p@x:1".to_owned());
+    assert_eq!(format!("{hand_edited:?}"), "Url(<invalid>)");
+    let valid = ClusterProxy::Url("http://x:1".to_owned());
+    assert_eq!(format!("{valid:?}"), "Url(http://x:1)");
+    assert_eq!(format!("{:?}", ClusterProxy::Direct), "Direct");
+    // The same holds through the entry that holds it.
+    let mut stored = entry("ctx", "a.yaml");
+    stored.proxy = Some(hand_edited);
+    let text = format!("{stored:?}");
+    assert!(!text.contains("u:p"), "{text}");
 }

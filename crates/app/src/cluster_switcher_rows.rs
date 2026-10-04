@@ -104,7 +104,12 @@ pub(crate) fn switcher_sections(
 
 /// The text the filter reads. Whitespace is dropped inside each part, and the parts are joined by
 /// a separator that is not whitespace, so a query never matches across two parts.
-fn search_text(label: &str, context: &str, environment: Environment, file: &str) -> String {
+pub(crate) fn search_text(
+    label: &str,
+    context: &str,
+    environment: Environment,
+    file: &str,
+) -> String {
     [label, context, environment.badge(), file_name_text(file)]
         .map(normalize_query)
         .join("\u{1f}")

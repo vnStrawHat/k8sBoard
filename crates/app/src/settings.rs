@@ -2,8 +2,10 @@
 //! lives in `settings_store.rs`.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use cluster::ShellCommand;
 use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui_kit::component::{Theme, ThemeMode};
@@ -39,6 +41,222 @@ pub(crate) struct Settings {
     /// The log dock (spec 0044).
     #[serde(skip_serializing_if = "DockSettings::is_empty")]
     pub(crate) dock: DockSettings,
+    /// The General page (spec 0043).
+    #[serde(skip_serializing_if = "is_default")]
+    pub(crate) general: GeneralSettings,
+    /// The Appearance page beyond the theme (spec 0043).
+    #[serde(skip_serializing_if = "is_default")]
+    pub(crate) appearance: AppearanceSettings,
+    /// The Logs page (spec 0043).
+    #[serde(skip_serializing_if = "is_default")]
+    pub(crate) logs: LogSettings,
+    /// The Terminal & Shell page (spec 0043).
+    #[serde(skip_serializing_if = "is_default")]
+    pub(crate) terminal: TerminalSettings,
+}
+
+/// The `general` section: a path and a switch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct GeneralSettings {
+    /// Where Export dialogs start; `None` is the home folder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) export_dir: Option<PathBuf>,
+    /// Whether the Issues engine lists and watches TLS Secrets for expiry.
+    pub(crate) watch_tls_secrets: bool,
+}
+
+impl Default for GeneralSettings {
+    fn default() -> Self {
+        Self {
+            export_dir: None,
+            watch_tls_secrets: true,
+        }
+    }
+}
+
+/// The `appearance` section: what the Theme dropdown does not cover.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct AppearanceSettings {
+    pub(crate) density: RowDensity,
+}
+
+/// The height of a table row, header included (the wireframe Tokens page).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RowDensity {
+    #[default]
+    Compact,
+    Comfortable,
+}
+
+impl RowDensity {
+    pub(crate) fn row_height(self) -> f32 {
+        match self {
+            Self::Compact => 28.,
+            Self::Comfortable => 36.,
+        }
+    }
+}
+
+/// The `logs` section: the defaults of a new log tab. A tab's own toggles never write back.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct LogSettings {
+    pub(crate) tail_lines: u32,
+    pub(crate) show_timestamps: bool,
+    pub(crate) wrap_lines: bool,
+    pub(crate) show_json: bool,
+}
+
+impl Default for LogSettings {
+    fn default() -> Self {
+        Self {
+            tail_lines: DEFAULT_TAIL_LINES,
+            show_timestamps: true,
+            wrap_lines: false,
+            show_json: false,
+        }
+    }
+}
+
+const DEFAULT_TAIL_LINES: u32 = 1_000;
+const TAIL_LINES_RANGE: (u32, u32) = (10, 10_000);
+
+impl LogSettings {
+    /// The lines a log tab asks for at open. A hand-edited value is clamped here, so it never
+    /// reaches a request; the buffer keeps 10,000 lines.
+    pub(crate) fn tail_lines(&self) -> u32 {
+        self.tail_lines
+            .clamp(TAIL_LINES_RANGE.0, TAIL_LINES_RANGE.1)
+    }
+}
+
+pub(crate) const TAIL_OPTIONS: OptionTable<u32> = OptionTable {
+    options: &[
+        (100, "100 lines"),
+        (500, "500 lines"),
+        (DEFAULT_TAIL_LINES, "1,000 lines (default)"),
+        (5_000, "5,000 lines"),
+        (10_000, "10,000 lines"),
+    ],
+    default: DEFAULT_TAIL_LINES,
+};
+
+/// The `terminal` section: the defaults of a new shell tab, and the font of every terminal.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct TerminalSettings {
+    pub(crate) default_shell: ShellCommand,
+    pub(crate) scrollback_lines: u32,
+    /// `None` is the theme's monospace size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) font_size: Option<u16>,
+}
+
+impl Default for TerminalSettings {
+    fn default() -> Self {
+        Self {
+            default_shell: ShellCommand::Auto,
+            scrollback_lines: DEFAULT_SCROLLBACK_LINES,
+            font_size: None,
+        }
+    }
+}
+
+const DEFAULT_SCROLLBACK_LINES: u32 = 5_000;
+/// 0036 sized 5,000 lines at about 8 MB per tab; 10,000 lines double that (about 128 MB for
+/// the 8-tab cap), so a higher value is not offered and a hand edit is clamped.
+const SCROLLBACK_RANGE: (u32, u32) = (1_000, 10_000);
+const FONT_SIZE_RANGE: (u16, u16) = (10, 24);
+
+impl TerminalSettings {
+    pub(crate) fn scrollback_lines(&self) -> u32 {
+        self.scrollback_lines
+            .clamp(SCROLLBACK_RANGE.0, SCROLLBACK_RANGE.1)
+    }
+
+    pub(crate) fn font_size(&self) -> Option<u16> {
+        self.font_size
+            .map(|size| size.clamp(FONT_SIZE_RANGE.0, FONT_SIZE_RANGE.1))
+    }
+}
+
+pub(crate) const SCROLLBACK_OPTIONS: OptionTable<u32> = OptionTable {
+    options: &[
+        (1_000, "1,000 lines"),
+        (DEFAULT_SCROLLBACK_LINES, "5,000 lines (default)"),
+        (10_000, "10,000 lines"),
+    ],
+    default: DEFAULT_SCROLLBACK_LINES,
+};
+
+pub(crate) const FONT_SIZE_OPTIONS: OptionTable<Option<u16>> = OptionTable {
+    options: &[
+        (None, "Theme size (default)"),
+        (Some(12), "12 px"),
+        (Some(13), "13 px"),
+        (Some(14), "14 px"),
+        (Some(16), "16 px"),
+        (Some(18), "18 px"),
+    ],
+    default: None,
+};
+
+pub(crate) const SHELL_OPTIONS: OptionTable<ShellCommand> = OptionTable {
+    options: &[
+        (ShellCommand::Auto, "Auto: bash, ash, sh (default)"),
+        (ShellCommand::Bash, "bash"),
+        (ShellCommand::Sh, "sh"),
+    ],
+    default: ShellCommand::Auto,
+};
+/// One dropdown: the options with their labels (the label is the dropdown key, so there is no
+/// second string table) and the default, which is also what an unknown label means.
+pub(crate) struct OptionTable<T: 'static> {
+    options: &'static [(T, &'static str)],
+    default: T,
+}
+
+impl<T: Copy + PartialEq> OptionTable<T> {
+    /// The label of `value`; a value the table lacks (a hand edit) shows as `unlisted` says, so
+    /// the file's value stays visible and is not silently replaced.
+    pub(crate) fn label(&self, value: T, unlisted: impl FnOnce() -> String) -> SharedString {
+        self.options
+            .iter()
+            .find(|(option, _)| *option == value)
+            .map_or_else(|| unlisted().into(), |(_, label)| (*label).into())
+    }
+
+    /// The value a label names; an unknown label is the default.
+    pub(crate) fn value(&self, label: &str) -> T {
+        self.options
+            .iter()
+            .find(|(_, option_label)| *option_label == label)
+            .map_or(self.default, |(value, _)| *value)
+    }
+
+    /// The dropdown choices as `(key, label)` pairs.
+    pub(crate) fn choices(&self) -> Vec<(SharedString, SharedString)> {
+        self.options
+            .iter()
+            .map(|(_, label)| ((*label).into(), (*label).into()))
+            .collect()
+    }
+}
+
+pub(crate) const DENSITY_OPTIONS: OptionTable<RowDensity> = OptionTable {
+    options: &[
+        (RowDensity::Compact, "Compact (28 px) (default)"),
+        (RowDensity::Comfortable, "Comfortable (36 px)"),
+    ],
+    default: RowDensity::Compact,
+};
+
+/// Serializes a section only when it differs from its default, so an untouched file stays minimal.
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 /// The `dock` section: a pixel height, never a secret.
@@ -79,6 +297,10 @@ impl Default for Settings {
             tables: BTreeMap::new(),
             port_forward: PortForwardSettings::default(),
             dock: DockSettings::default(),
+            general: GeneralSettings::default(),
+            appearance: AppearanceSettings::default(),
+            logs: LogSettings::default(),
+            terminal: TerminalSettings::default(),
         }
     }
 }
@@ -211,6 +433,11 @@ impl AppSettings {
             }));
         }
         cx.set_global(app);
+    }
+
+    /// The settings, or `None` when no global is installed (an export started from a test view).
+    pub(crate) fn try_get(cx: &App) -> Option<&Settings> {
+        cx.try_global::<Self>().map(|app| &app.settings)
     }
 
     pub(crate) fn get(cx: &App) -> &Settings {

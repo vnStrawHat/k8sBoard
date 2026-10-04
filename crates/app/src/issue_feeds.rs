@@ -12,7 +12,7 @@ use cluster::{
 };
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt as _};
-use gpui_kit::{Context, Task};
+use gpui_kit::{App, Context, Task};
 
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
@@ -22,6 +22,7 @@ use crate::cluster_session::{
 use crate::issue::IssueObject;
 use crate::kind_row::KindObject;
 use crate::resource_kind::ResourceKind;
+use crate::settings::AppSettings;
 
 /// How long a scope change waits before the Warning events watch restarts. The API server keeps no
 /// watch cache for events and cannot index them, so each start scans every event of the scope in
@@ -318,6 +319,24 @@ const CONDITION_KINDS: [ResourceKind; 8] = [
     ResourceKind::Secrets,
 ];
 
+/// Whether the TLS Secrets list and watch run (`general.watch_tls_secrets`). It shows in API audit
+/// logs, so the user can turn it off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CertificateWatch {
+    Watch,
+    Skip,
+}
+
+impl CertificateWatch {
+    /// The saved choice; without settings (a view built in a test) the default is to watch.
+    fn of(cx: &App) -> Self {
+        match AppSettings::try_get(cx) {
+            Some(settings) if !settings.general.watch_tls_secrets => Self::Skip,
+            _ => Self::Watch,
+        }
+    }
+}
+
 /// What one condition feed does for a scope.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FeedPlan {
@@ -339,6 +358,7 @@ pub(crate) enum FeedPlan {
 pub(crate) fn condition_plan(
     scope: &NamespaceScope,
     access: &AccessState,
+    certificates: CertificateWatch,
 ) -> Vec<(ResourceKind, FeedPlan)> {
     let is_narrow = scope.namespaces().len() <= 2;
     let watch_scope = if is_narrow {
@@ -349,6 +369,9 @@ pub(crate) fn condition_plan(
     CONDITION_KINDS
         .into_iter()
         .map(|kind| {
+            if kind == ResourceKind::Secrets && certificates == CertificateWatch::Skip {
+                return (kind, FeedPlan::Off("off in Settings".to_owned()));
+            }
             let plan = match access {
                 AccessState::Checking { .. } => FeedPlan::Wait,
                 AccessState::Known(report) if is_narrow => {
@@ -462,7 +485,7 @@ impl IssueFeeds {
         access: &AccessState,
         cx: &mut Context<ClusterSession>,
     ) {
-        self.conditions = condition_plan(scope, access)
+        self.conditions = condition_plan(scope, access, CertificateWatch::of(cx))
             .into_iter()
             .map(|(kind, plan)| match plan {
                 FeedPlan::Wait => ConditionFeed::idle(kind, None),

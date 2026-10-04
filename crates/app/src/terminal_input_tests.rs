@@ -9,7 +9,7 @@ fn typed(key: &str) -> Option<(KeySpec, KeyMods)> {
 
 /// The bytes the key sends to a fresh terminal.
 fn sent(key: &str) -> Option<Vec<u8>> {
-    let session = TerminalSession::new(GridSize { cols: 80, rows: 24 });
+    let session = TerminalSession::new(GridSize { cols: 80, rows: 24 }, 5_000);
     let (spec, mods) = typed(key)?;
     session.encode_key(&spec, mods)
 }

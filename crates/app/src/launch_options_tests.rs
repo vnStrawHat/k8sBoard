@@ -140,8 +140,30 @@ fn standalone_files_skip_chain_members_and_duplicates() {
         PathBuf::from("other.yml"),
     ];
     assert_eq!(
-        standalone_files(&registered, &chain),
+        standalone_files(&registered, &[], &chain),
         [absolute("extra.yml"), absolute("other.yml")]
+    );
+}
+
+#[test]
+fn standalone_files_put_folders_last_without_duplicates() {
+    let chain = [absolute("chain.yml")];
+    let registered = [PathBuf::from("extra.yml")];
+    let in_folders = [
+        PathBuf::from("chain.yml"),
+        PathBuf::from("dropped-a.yml"),
+        PathBuf::from("extra.yml"),
+        PathBuf::from("dropped-b.yml"),
+        PathBuf::from("dropped-a.yml"),
+    ];
+    // The chain, the registry, then the folders; a file the registry names loads once.
+    assert_eq!(
+        standalone_files(&registered, &in_folders, &chain),
+        [
+            absolute("extra.yml"),
+            absolute("dropped-a.yml"),
+            absolute("dropped-b.yml")
+        ]
     );
 }
 
@@ -607,6 +629,27 @@ fn screen_settings_appearance_parses() {
     assert_eq!(
         screen,
         LaunchScreen::Settings(SettingsPage::Appearance, SettingsSize::Standard)
+    );
+}
+
+#[test]
+fn launch_screen_settings_general() {
+    let screen = run_options(&["--screen", "settings-general"]).screen;
+    assert_eq!(
+        screen,
+        LaunchScreen::Settings(SettingsPage::General, SettingsSize::Standard)
+    );
+}
+
+#[test]
+fn launch_screen_settings_logs_and_terminal() {
+    assert_eq!(
+        run_options(&["--screen", "settings-logs"]).screen,
+        LaunchScreen::Settings(SettingsPage::Logs, SettingsSize::Standard)
+    );
+    assert_eq!(
+        run_options(&["--screen", "settings-terminal"]).screen,
+        LaunchScreen::Settings(SettingsPage::TerminalAndShell, SettingsSize::Standard)
     );
 }
 

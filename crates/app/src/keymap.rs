@@ -9,7 +9,7 @@ use crate::cluster_switcher::{
     SwitchToCluster5, SwitchToCluster6, SwitchToCluster7, SwitchToCluster8, SwitchToCluster9,
 };
 use crate::fresh_enter::FRESH_ENTER;
-use crate::settings_window::{ImportKubeconfig, OpenSettings};
+use crate::settings_window::{ImportKubeconfig, MoveClusterDown, MoveClusterUp, OpenSettings};
 
 gpui_kit::actions!(
     k8sboard,
@@ -93,6 +93,7 @@ const TABLE: &str = "AppShell > DataTable";
 const FIELDS: [&str; 3] = ["QuickFilter > Input", "Drawer > Input", "Dock > Input"];
 /// Only the Settings window has this context, so Ctrl O imports there and nowhere else.
 const SETTINGS_WINDOW: &str = "SettingsWindow";
+const SETTINGS_WINDOW_NO_INPUT: &str = "SettingsWindow && !Input";
 /// The palette's query input. The palette is a dialog outside `AppShell`, so only its own keys
 /// apply there.
 const PALETTE_INPUT: &str = "Command > Input";
@@ -152,6 +153,9 @@ pub(crate) fn bind_keys(cx: &mut App) {
         // Settings: Ctrl , has no context, so it also works in dialogs and in the Settings window.
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-o", ImportKubeconfig, Some(SETTINGS_WINDOW)),
+        // Reorder the selected cluster of the Clusters page; a text field keeps Alt arrows.
+        KeyBinding::new("alt-up", MoveClusterUp, Some(SETTINGS_WINDOW_NO_INPUT)),
+        KeyBinding::new("alt-down", MoveClusterDown, Some(SETTINGS_WINDOW_NO_INPUT)),
         // Single keys.
         KeyBinding::new("?", ShowShortcuts, Some(WORKSPACE)),
         KeyBinding::new(":", OpenKindPalette, Some(WORKSPACE)),
@@ -339,6 +343,12 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
             General,
             "Import kubeconfig file (Settings window)",
             ImportKubeconfig,
+        ),
+        row(General, "Move cluster up (Settings window)", MoveClusterUp),
+        row(
+            General,
+            "Move cluster down (Settings window)",
+            MoveClusterDown,
         ),
         row(Tables, "Filter the table", FocusQuickFilter),
         row(Tables, "Next row", SelectNextRow),

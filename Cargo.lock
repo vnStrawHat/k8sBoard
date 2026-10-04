@@ -3349,6 +3349,7 @@ version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
+ "base64 0.23.1",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -3356,7 +3357,9 @@ dependencies = [
  "http-body",
  "httparse",
  "hyper",
+ "ipnet",
  "libc",
+ "percent-encoding",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -3883,6 +3886,7 @@ dependencies = [
  "gpui-kit",
  "jiff",
  "k8sboard-cluster",
+ "notify",
  "oneterm-vt",
  "regex",
  "resvg 0.46.0",

@@ -228,6 +228,10 @@ fn audit_lines(dir: &std::path::Path) -> Vec<serde_json::Value> {
 }
 
 /// A loopback port that is free now.
+/// 30 s of 20 ms polls: a loaded machine (a full workspace run) can take several seconds to
+/// start a forward, and the wait only costs time on a failure.
+const WAIT_POLLS: usize = 1_500;
+
 fn free_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind a free port");
     listener.local_addr().expect("a local address").port()
@@ -320,7 +324,7 @@ impl Forwards {
         cx: &mut TestAppContext,
         done: impl Fn(&Forwards, &mut TestAppContext) -> bool,
     ) {
-        for _ in 0..500 {
+        for _ in 0..WAIT_POLLS {
             cx.run_until_parked();
             if done(self, cx) {
                 return;
@@ -1263,7 +1267,7 @@ fn stopping_a_forward_closes_its_listener(cx: &mut TestAppContext) {
     let forwards = two_clusters("closes", Answers::Pod, cx);
     forwards.start_and_confirm(
         &forwards.stg,
-        pod_spec("api-0", 8080, LocalPortSpec::Auto),
+        pod_spec("api-0", 8080, LocalPortSpec::Exact(free_port())),
         cx,
     );
     forwards.wait_for_state(ForwardState::Active, cx);
@@ -1281,6 +1285,8 @@ fn stopping_a_forward_closes_its_listener(cx: &mut TestAppContext) {
         .fixture
         .shell
         .update(cx, |shell, cx| shell.stop_forward(id, cx));
+    // A fixed free port, not `Auto`: tests run in parallel, and another test's `Auto` forward could
+    // take the port this one frees, so "the listener closed" would never hold.
     // Dropping the stream closes the listener; quitting the app drops it the same way.
     forwards.wait_for("the listener to close", cx, |_, _| !accepts());
 }

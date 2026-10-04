@@ -10,9 +10,10 @@ use gpui_kit::{
 };
 
 use crate::app_shell::{AppShell, Screen};
+use crate::cluster_registry::ClusterProfile;
 use crate::cluster_session::namespaces_label;
 use crate::cluster_switcher::cluster_switcher as switcher_popover;
-use crate::environment::{environment_badge, environment_color};
+use crate::environment::{cluster_color, environment_badge, environment_color};
 use crate::issue_board::IssueSummary;
 use crate::keymap::{OpenPalette, ToggleReadOnly};
 use crate::namespace_picker::{PickerAnchor, namespace_picker as picker};
@@ -22,13 +23,19 @@ use crate::shortcut_sheet::row_keys;
 use crate::status_tone::tone_color;
 use crate::write_guard::WriteLock;
 
+/// The top border: the cluster's own color (its environment's unless the user picked one), while
+/// the environment badge keeps the environment color.
+fn border_color(profile: Option<&ClusterProfile>, cx: &App) -> Hsla {
+    match profile {
+        Some(profile) => cluster_color(profile.color, cx),
+        None => cx.theme().title_bar_border,
+    }
+}
+
 pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
     // Always 3 px, so the layout does not shift when a session starts. GPUI has one border
     // color per element, so the kit's 1 px bottom border takes the same color.
-    let border = match shell.active_profile(cx) {
-        Some(profile) => environment_color(profile.environment, cx),
-        None => cx.theme().title_bar_border,
-    };
+    let border = border_color(shell.active_profile(cx).as_ref(), cx);
     // Linux draws its own X, which closes without asking the window: it asks the shell first, so a
     // node shell pod is deleted before the window goes (the hook of the platform window covers the
     // other platforms).
@@ -279,6 +286,33 @@ fn notices_button(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyElement
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui_kit::test]
+    fn title_bar_border_uses_the_cluster_color(cx: &mut gpui_kit::TestAppContext) {
+        use crate::cluster_registry::ClusterRegistry;
+        use crate::environment::ClusterColor;
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            let summary = cluster::ContextSummary {
+                name: "prod-a".to_owned(),
+                cluster: "prod-a".to_owned(),
+                user: None,
+                namespace: None,
+                source: std::path::PathBuf::from("a.yaml"),
+            };
+            let mut registry = ClusterRegistry::default();
+            let plain = registry.profile(&summary);
+            assert_eq!(border_color(Some(&plain), cx), cx.theme().danger);
+            registry
+                .entry_mut(&crate::cluster_registry::ClusterRef::of(&summary))
+                .color = Some(ClusterColor::Teal);
+            let teal = registry.profile(&summary);
+            assert_eq!(border_color(Some(&teal), cx), cx.theme().cyan);
+            // The badge stays the environment color.
+            assert_eq!(environment_color(teal.environment, cx), cx.theme().danger);
+            assert_eq!(border_color(None, cx), cx.theme().title_bar_border);
+        });
+    }
 
     #[test]
     fn the_badge_shows_the_lock_state() {

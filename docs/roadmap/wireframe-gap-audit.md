@@ -9,11 +9,11 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | Wireframe | Element | Status | Evidence | Size |
 |---|---|---|---|---|
 | W1 n6, W3, W11 | Overview, Issues (with `⚑ N`, sidebar count, Cluster column), Topology over several viewed clusters | dropped (user decision 2026-10-03: single cluster only) | 0045 dropped; multi-cluster mode removed by 0046 | — |
-| W2 nav | Pages General, Terminal & Shell, Logs | missing | `settings_window.rs` `SettingsPage` has 5 pages; owners in 0025 `other-pages.md` (0019, 0036) never added them | M |
-| W2 n3 | Drag to reorder clusters (drives Ctrl 1–9), ⌕ Search | missing | `clusters_page.rs` | M |
-| W2 form | Color swatches, Proxy | missing | `clusters_page.rs`, `cluster_registry.rs` (no color field) | M |
-| W2 n2 | Watch a kubeconfig folder | missing (disabled "later") | `clusters_page.rs:737` | M |
-| Tokens | Row density 28 / 36 px (Appearance) | missing | Appearance has Theme only | M |
+| W2 nav | Pages General, Terminal & Shell, Logs | Done (0043) | `general_page`, `logs_page`, `terminal_page` in `settings_window.rs`; [as-built](../specs/0043-settings-pages/as-built.md) | — |
+| W2 n3 | Drag to reorder clusters (drives Ctrl 1–9), ⌕ Search | Done (0043: drag inside a group, Alt ↑/↓, search like the switcher) | `clusters_page.rs`, `cluster_form.rs` `move_cluster` | — |
+| W2 form | Color swatches, Proxy | Done (0043: six theme-token swatches drive the title-bar border; per-cluster proxy, no stored credentials) | `environment.rs` `ClusterColor`, `proxy.rs` in the cluster crate | — |
+| W2 n2 | Watch a kubeconfig folder | Done (0043: bounded reads, never started or probed on its own) | `cluster_catalog_folders.rs`, `kubeconfig_folder.rs` | — |
+| Tokens | Row density 28 / 36 px (Appearance) | Done (0043: Compact 28 px default, Comfortable 36 px, live) | `workspace.rs` `row_size` | — |
 | W3 n4 | Recent changes from managedFields (ConfigMap keys, "who"); click opens a diff | done for Deployments (0041); ConfigMap rows dropped | `recent_changes.rs`, `revision_change_flow.rs` | — |
 | W4 n1 | Pod menu: Attach (A), Restart pod, Evict | Done (0040) | `pod_menu`, `pod_block`, `start_removal`, `start_attach`; [as-built](../specs/0040-pod-actions/as-built.md) | — |
 | W4 n2 | View logs ▸ container submenu (MAIN/SIDECAR/INIT) | Done (0039) | `LogsMenu` in `resource_actions.rs` | — |
@@ -83,7 +83,7 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | 3 | 0046 One cluster at a time | remove multi-cluster mode (0027 multi view); 0045 dropped (user decision 2026-10-03) | new | local, no new request | M |
 | 4 | 0041 Edit YAML II | **Built 2026-10-04** (Revision history, quota check, timeline "who" and diff); snapshot, rollback, ConfigMap Compare, and the managedFields toggle dropped or not planned | done | read-only | L |
 | 5 | 0042 Create from templates | New for the 5 kinds; a `Create` `WriteOperation` | new | mutating | M |
-| 6 | 0043 Settings completions | General, Logs, Terminal & Shell pages (content needs the user), density, drag order, Search, color, Proxy, watch folder (C6 dependency) | new | local | L |
+| 6 | 0043 Settings completions (Done) | General, Logs, Terminal & Shell pages (content needs the user), density, drag order, Search, color, Proxy, watch folder (C6 dependency) | new | local | L |
 | 7 | 0044 Dock completions (done) | dashed line, double-click reset, saved `dock.height`, `SYS` lines, histogram brush, Pop out | new | local | M |
 | 8 | 0029 step 5 (done) | action × resource results, highlight, `@` namespace carry | amend 0029 | local | M |
 | 9 | 0022 steps 4a, 4b Topology RBAC layer (done) | ServiceAccount → binding → role edges behind the RBAC chip | amend 0022 | read-only | M |

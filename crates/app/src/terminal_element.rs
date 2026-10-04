@@ -20,6 +20,7 @@ use oneterm_vt::{
     SnapshotRow, SnapshotState, Style,
 };
 
+use crate::settings::AppSettings;
 use crate::terminal_session::{TerminalSession, terminal_palette};
 
 /// The cell is this much taller than the font size, which leaves room for descenders.
@@ -95,7 +96,10 @@ fn measure(
         family: theme.mono_font_family.clone(),
         ..Font::default()
     };
-    let font_size = theme.mono_font_size;
+    let font_size = terminal_font_size(
+        AppSettings::try_get(cx).and_then(|settings| settings.terminal.font_size()),
+        theme.mono_font_size,
+    );
     let palette = terminal_palette(theme);
     let selection = theme.selection;
     let find = theme.warning;
@@ -127,6 +131,11 @@ fn measure(
         let _ = input.unbounded_send(ShellInput::Resize(grid));
     }
     frame
+}
+
+/// The saved font size, else the theme's monospace size.
+fn terminal_font_size(saved: Option<u16>, theme: Pixels) -> Pixels {
+    saved.map_or(theme, |size| px(f32::from(size)))
 }
 
 /// The width of one `M` and a line of 1.3 times the font size, so that rows sit apart.

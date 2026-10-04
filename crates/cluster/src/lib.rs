@@ -60,6 +60,7 @@ mod pod_shell;
 mod pod_status;
 mod port_forward;
 mod port_forward_target;
+mod proxy;
 mod quantity;
 mod quota_demand;
 mod rbac_evaluation;
@@ -171,6 +172,7 @@ pub use port_forward::{
     ForwardControl, ForwardError, ForwardEvent, ForwardRequest, ForwardTarget, ForwardTraffic,
     ForwardUpdate, LocalPort, PortForwardPermit, default_local_port,
 };
+pub use proxy::{ProxyChoice, ProxyUrl, ProxyUrlError};
 pub use quantity::{ByteAmount, CpuAmount, quantity_ratio};
 pub use quota_demand::{
     DemandChange, QuotaCheck, QuotaResource, QuotaShortfall, WorkloadDemand, quota_check,

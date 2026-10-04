@@ -190,10 +190,13 @@ fn pages_follow_w2_order() {
     assert_eq!(
         titles,
         [
+            "General",
             "Clusters",
             "Appearance",
             "Keyboard Shortcuts",
             "Safety",
+            "Terminal & Shell",
+            "Logs",
             "About"
         ]
     );
@@ -201,9 +204,9 @@ fn pages_follow_w2_order() {
 
 #[test]
 fn default_page_is_clusters() {
-    assert_eq!(PAGES[0], SettingsPage::Clusters);
-    assert_eq!(SettingsPage::Clusters.index(), 0);
-    assert_eq!(SettingsPage::About.index(), 4);
+    assert_eq!(PAGES[1], SettingsPage::Clusters);
+    assert_eq!(SettingsPage::Clusters.index(), 1);
+    assert_eq!(SettingsPage::About.index(), 7);
 }
 
 #[gpui_kit::test]
@@ -321,7 +324,7 @@ fn the_clusters_footer_scrolls_into_view_in_a_short_window(cx: &mut TestAppConte
     cx.update_window(window, |_, window, cx| {
         window.scroll(
             "environment",
-            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-600.))),
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-2000.))),
             cx,
         );
     })
@@ -425,4 +428,26 @@ fn the_about_page_carries_the_terminal_engine_notice() {
     assert!(ONETERM_NOTICE.contains("oneterm-vt"));
     assert!(ONETERM_NOTICE.contains("Apache-2.0"));
     assert!(ONETERM_NOTICE.contains("The OneTerm authors"));
+}
+
+#[gpui_kit::test]
+fn every_page_renders_with_non_default_values(cx: &mut TestAppContext) {
+    install(None, &[], cx);
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            settings.general.export_dir = Some(PathBuf::from("exports"));
+            settings.general.watch_tls_secrets = false;
+            settings.logs.tail_lines = 50;
+            settings.terminal.scrollback_lines = 1_234;
+            settings.terminal.font_size = Some(16);
+        });
+    });
+    for page in PAGES {
+        let window = cx
+            .update(|cx| open_settings_window(page, SettingsSize::Standard, cx))
+            .expect("the Settings window opens");
+        render(window, cx);
+        render(window, cx);
+        close(window, cx);
+    }
 }

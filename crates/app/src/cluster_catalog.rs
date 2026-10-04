@@ -6,17 +6,25 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cluster::{Kubeconfig, KubeconfigError};
-use gpui_kit::{App, AppContext as _, ClipboardItem, Context, Entity, Global, Subscription};
+use futures::channel::mpsc::UnboundedSender;
+use gpui_kit::{App, AppContext as _, ClipboardItem, Context, Entity, Global, Subscription, Task};
 use zeroize::Zeroizing;
 
 use crate::cluster_form::{ClusterGroup, cluster_groups, file_name_text, remove_kubeconfig};
 use crate::cluster_session::error_text;
+use crate::kubeconfig_folder::load_folder_file;
 use crate::kubeconfig_import::{
     PASTED_DIR, is_app_owned, is_pasted_file_name, write_pasted_kubeconfig,
 };
 use crate::launch_options::standalone_files;
 use crate::secret_clipboard::ClipboardMark;
 use crate::settings::AppSettings;
+
+#[path = "cluster_catalog_folders.rs"]
+mod folders;
+
+pub(crate) use folders::FolderEvent;
+use folders::WatchedFolder;
 
 /// The catalog entity, held as a global so both windows reach the same one.
 pub(crate) struct CatalogHandle(pub(crate) Entity<ClusterCatalog>);
@@ -57,6 +65,11 @@ pub(crate) enum CatalogNotice {
     Unregistered(PathBuf),
     DeleteFailed(PathBuf),
     SaveFailed(io::ErrorKind),
+    /// A watched folder that cannot be listed. It is looked at again only at the next start.
+    FolderMissing {
+        path: PathBuf,
+        kind: io::ErrorKind,
+    },
 }
 
 impl std::fmt::Display for CatalogNotice {
@@ -78,6 +91,11 @@ impl std::fmt::Display for CatalogNotice {
             Self::SaveFailed(kind) => {
                 write!(formatter, "Could not save the pasted kubeconfig ({kind})")
             }
+            Self::FolderMissing { path, kind } => write!(
+                formatter,
+                "Watched folder {} is missing ({kind}); checked again at the next start",
+                path.display()
+            ),
         }
     }
 }
@@ -101,11 +119,35 @@ pub(crate) struct ClusterCatalog {
     chain_files: Vec<PathBuf>,
     /// `None` when no chain file could be located.
     chain: Option<CatalogPart>,
-    /// Registry files in registry order.
-    standalone: Vec<(PathBuf, CatalogPart)>,
+    /// Registry files in registry order, then the files of the watched folders.
+    standalone: Vec<StandalonePart>,
+    /// Watched folders in registry order; the rules are in `cluster_catalog_folders.rs`.
+    folders: Vec<WatchedFolder>,
+    /// Every folder watcher sends here; tests send through `folder_events_for_test`.
+    folder_events: UnboundedSender<FolderEvent>,
+    /// Reads the events and rescans after the debounce; dropped with the catalog.
+    _folder_task: Task<()>,
+    /// How many rescans ran, for the debounce tests.
+    #[cfg(test)]
+    folder_rescans: usize,
     notices: Vec<CatalogNotice>,
     paste: PasteStatus,
     _settings_observer: Subscription,
+}
+
+/// A file loaded on its own, and where its place in the list comes from.
+struct StandalonePart {
+    path: PathBuf,
+    source: PartSource,
+    part: CatalogPart,
+}
+
+/// A registry file starts a session on its own; a file of a watched folder never does (the
+/// folder is a place anyone can drop a file in).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PartSource {
+    Registry,
+    Folder,
 }
 
 /// What one load produced, for one part.
@@ -114,6 +156,9 @@ struct PartLoad {
     part: CatalogPart,
     /// One notice per file that was skipped.
     skipped: Vec<CatalogNotice>,
+    /// A file of a watched folder that changed: when it no longer loads, the last good version
+    /// stays and a notice names the file.
+    is_reload: bool,
 }
 
 enum PartTarget {
@@ -125,7 +170,8 @@ impl ClusterCatalog {
     /// Loads the chain once and every standalone registry file, on the background executor.
     pub(crate) fn new(chain: Vec<PathBuf>, cx: &mut Context<Self>) -> Self {
         let registered = &AppSettings::get(cx).registry.kubeconfigs;
-        let files = standalone_files(registered, &chain);
+        let files = standalone_files(registered, &[], &chain);
+        let (folder_events, folder_receiver) = futures::channel::mpsc::unbounded();
         let mut targets = Vec::new();
         if !chain.is_empty() {
             targets.push(LoadRequest::Chain(chain.clone()));
@@ -136,29 +182,58 @@ impl ClusterCatalog {
             chain_files: chain,
             standalone: files
                 .into_iter()
-                .map(|file| (file, CatalogPart::Loading))
+                .map(|path| StandalonePart {
+                    path,
+                    source: PartSource::Registry,
+                    part: CatalogPart::Loading,
+                })
                 .collect(),
+            folders: Vec::new(),
+            folder_events,
+            _folder_task: folders::watch_events(folder_receiver, cx),
+            #[cfg(test)]
+            folder_rescans: 0,
             notices: Vec::new(),
             paste: PasteStatus::Idle,
             _settings_observer: cx.observe_global::<AppSettings>(Self::follow_registry),
         };
         Self::load(targets, cx);
         Self::list_unregistered_files(cx);
-        catalog
+        catalog.start_watching_folders(cx)
     }
 
-    fn parts(&self) -> impl Iterator<Item = &CatalogPart> {
-        self.chain
-            .iter()
-            .chain(self.standalone.iter().map(|(_, part)| part))
+    /// The chain and the registry files: what the start and the failure text look at. A folder file
+    /// is not here, because it is never a start candidate and its failure is not the catalog's.
+    fn start_parts(&self) -> impl Iterator<Item = &CatalogPart> {
+        self.chain.iter().chain(
+            self.standalone
+                .iter()
+                .filter(|standalone| standalone.source == PartSource::Registry)
+                .map(|standalone| &standalone.part),
+        )
     }
 
-    /// Every loaded kubeconfig: the chain first, then registry files in registry order.
-    pub(crate) fn kubeconfigs(&self) -> impl Iterator<Item = &Arc<Kubeconfig>> {
-        self.parts().filter_map(|part| match part {
+    fn loaded(part: &CatalogPart) -> Option<&Arc<Kubeconfig>> {
+        match part {
             CatalogPart::Loaded(kubeconfig) => Some(kubeconfig),
             CatalogPart::Loading | CatalogPart::Failed(_) => None,
-        })
+        }
+    }
+
+    /// Every loaded kubeconfig: the chain first, then registry files in registry order, then the
+    /// files of the watched folders. The switcher and Settings list all of them.
+    pub(crate) fn kubeconfigs(&self) -> impl Iterator<Item = &Arc<Kubeconfig>> {
+        self.chain
+            .iter()
+            .chain(self.standalone.iter().map(|standalone| &standalone.part))
+            .filter_map(Self::loaded)
+    }
+
+    /// The kubeconfigs a session may start from on its own: the chain and the registry files, never
+    /// a file of a watched folder (spec 0043). A folder context starts only when the user picked
+    /// it, and the saved `last_used` is the record of that pick.
+    pub(crate) fn start_kubeconfigs(&self) -> impl Iterator<Item = &Arc<Kubeconfig>> {
+        self.start_parts().filter_map(Self::loaded)
     }
 
     /// The loaded clusters grouped by environment, as Settings and the switcher list them.
@@ -171,13 +246,15 @@ impl ClusterCatalog {
             &kubeconfigs,
             &AppSettings::get(cx).registry,
             |path| self.is_chain_source(path),
+            |path| self.is_folder_source(path),
             AppSettings::config_dir(cx),
         )
     }
 
     pub(crate) fn is_loading(&self) -> bool {
-        self.parts()
+        self.start_parts()
             .any(|part| matches!(part, CatalogPart::Loading))
+            || self.has_scanning_folder()
     }
 
     /// Whether `path` is one of the launch chain files (`KUBECONFIG` or `--kubeconfig`).
@@ -195,7 +272,7 @@ impl ClusterCatalog {
 
     /// Why nothing is listed: the first load error, or that no file was located.
     pub(crate) fn failure_text(&self) -> String {
-        for part in self.parts() {
+        for part in self.start_parts() {
             if let CatalogPart::Failed(message) = part {
                 return message.clone();
             }
@@ -213,32 +290,53 @@ impl ClusterCatalog {
         cx.notify();
     }
 
-    /// Reloads only what the registry changed: added files load, removed files drop. The chain
-    /// never reloads, and a session running from a removed file is not touched.
+    /// Follows the registry: its folders start or stop being watched, then added files load and
+    /// removed files drop. The chain never reloads, and a session running from a removed file is not
+    /// touched.
     fn follow_registry(&mut self, cx: &mut Context<Self>) {
-        let registered = &AppSettings::get(cx).registry.kubeconfigs;
-        let wanted = standalone_files(registered, &self.chain_files);
+        self.sync_folders(cx);
+        self.reconcile_standalone(cx);
+    }
+
+    /// Brings `standalone` to the files the registry and the watched folders name now, in that
+    /// order and without duplicates. A file that is already loaded keeps its part.
+    fn reconcile_standalone(&mut self, cx: &mut Context<Self>) {
+        let wanted = self.wanted_standalone(cx);
         let is_unchanged = wanted.len() == self.standalone.len()
             && wanted
                 .iter()
                 .zip(&self.standalone)
-                .all(|(wanted, (have, _))| wanted == have);
+                .all(|((path, source), have)| *path == have.path && *source == have.source);
         if is_unchanged {
             return;
         }
         let mut previous = std::mem::take(&mut self.standalone);
         let mut added = Vec::new();
-        for file in wanted {
-            match previous.iter().position(|(have, _)| *have == file) {
-                Some(index) => self.standalone.push(previous.swap_remove(index)),
+        for (file, source) in wanted {
+            match previous.iter().position(|have| have.path == file) {
+                Some(index) => {
+                    let mut kept = previous.swap_remove(index);
+                    kept.source = source;
+                    self.standalone.push(kept);
+                }
                 None => {
-                    added.push(LoadRequest::File(file.clone()));
-                    self.standalone.push((file, CatalogPart::Loading));
+                    added.push(match source {
+                        PartSource::Registry => LoadRequest::File(file.clone()),
+                        PartSource::Folder => LoadRequest::FolderFile {
+                            path: file.clone(),
+                            is_reload: false,
+                        },
+                    });
+                    self.standalone.push(StandalonePart {
+                        path: file,
+                        source,
+                        part: CatalogPart::Loading,
+                    });
                 }
             }
         }
-        // What is left of `previous` left the registry; a skip notice for it is stale.
-        for (removed, _) in previous {
+        // What is left of `previous` left the list; a skip notice for it is stale.
+        for StandalonePart { path: removed, .. } in previous {
             self.notices.retain(|notice| {
                 !matches!(notice, CatalogNotice::Skipped { path: Some(path), .. } if *path == removed)
             });
@@ -262,12 +360,11 @@ impl ClusterCatalog {
         }
     }
 
-    /// The loaded registry files, in registry order; the chain is not among them.
+    /// The loaded registry and folder files; the chain is not among them.
     pub(crate) fn standalone_kubeconfigs(&self) -> impl Iterator<Item = &Arc<Kubeconfig>> {
-        self.standalone.iter().filter_map(|(_, part)| match part {
-            CatalogPart::Loaded(kubeconfig) => Some(kubeconfig),
-            CatalogPart::Loading | CatalogPart::Failed(_) => None,
-        })
+        self.standalone
+            .iter()
+            .filter_map(|standalone| Self::loaded(&standalone.part))
     }
 
     pub(crate) fn paste_status(&self) -> &PasteStatus {
@@ -320,8 +417,11 @@ impl ClusterCatalog {
             Ok((path, kubeconfig)) => {
                 // Listed before the registry names it, so the registry observer finds nothing
                 // to load.
-                self.standalone
-                    .push((path.clone(), CatalogPart::Loaded(kubeconfig)));
+                self.standalone.push(StandalonePart {
+                    path: path.clone(),
+                    source: PartSource::Registry,
+                    part: CatalogPart::Loaded(kubeconfig),
+                });
                 let registered = path.clone();
                 AppSettings::update(cx, |settings| {
                     settings.registry.kubeconfigs.push(registered)
@@ -435,29 +535,66 @@ impl ClusterCatalog {
         .detach();
     }
 
+    /// Stores the load of one file. The file may have left the list while it loaded: then its part
+    /// and its notices are dropped. A good load clears the notice of the file. A watched-folder file
+    /// that changed and no longer loads keeps its last good part and gets a notice; a new one that
+    /// does not load stays out of the list without one.
+    fn finish_file_load(
+        &mut self,
+        path: PathBuf,
+        part: CatalogPart,
+        skipped: Vec<CatalogNotice>,
+        is_reload: bool,
+    ) {
+        let Some(standalone) = self.standalone.iter_mut().find(|have| have.path == path) else {
+            return;
+        };
+        let is_folder_file = standalone.source == PartSource::Folder;
+        let had_good_part = matches!(standalone.part, CatalogPart::Loaded(_));
+        if matches!(part, CatalogPart::Loaded(_)) {
+            standalone.part = part;
+            self.notices.retain(|notice| {
+                !matches!(notice, CatalogNotice::Skipped { path: Some(other), .. } if *other == path)
+            });
+            return;
+        }
+        if !is_folder_file {
+            standalone.part = part;
+            for notice in skipped {
+                self.push_notice(notice);
+            }
+            return;
+        }
+        if is_reload && had_good_part {
+            self.notices.retain(|notice| {
+                !matches!(notice, CatalogNotice::Skipped { path: Some(other), .. } if *other == path)
+            });
+            for notice in skipped {
+                self.push_notice(notice);
+            }
+            return;
+        }
+        standalone.part = part;
+    }
+
     fn finish_load(&mut self, loads: Vec<PartLoad>, cx: &mut Context<Self>) {
-        for load in loads {
-            match load.target {
+        for PartLoad {
+            target,
+            part,
+            skipped,
+            is_reload,
+        } in loads
+        {
+            match target {
                 PartTarget::Chain => {
                     if self.chain.is_some() {
-                        self.chain = Some(load.part);
+                        self.chain = Some(part);
                     }
-                    for notice in load.skipped {
+                    for notice in skipped {
                         self.push_notice(notice);
                     }
                 }
-                PartTarget::File(path) => {
-                    // The file may have left the registry while it loaded: then its part and
-                    // its notices are dropped.
-                    if let Some((_, part)) =
-                        self.standalone.iter_mut().find(|(have, _)| *have == path)
-                    {
-                        *part = load.part;
-                        for notice in load.skipped {
-                            self.push_notice(notice);
-                        }
-                    }
-                }
+                PartTarget::File(path) => self.finish_file_load(path, part, skipped, is_reload),
             }
         }
         cx.notify();
@@ -500,6 +637,11 @@ pub(crate) fn same_path_text(a: &str, b: &str, style: PathStyle) -> bool {
 enum LoadRequest {
     Chain(Vec<PathBuf>),
     File(PathBuf),
+    /// A file of a watched folder: a bounded read, and `parse_file`'s path rule.
+    FolderFile {
+        path: PathBuf,
+        is_reload: bool,
+    },
 }
 
 /// Writes the pasted text, drops it, then loads the new file; a file that does not load is
@@ -567,6 +709,7 @@ fn skipped_notice(error: &KubeconfigError) -> CatalogNotice {
     let path = match error {
         KubeconfigError::Read { path, .. }
         | KubeconfigError::Parse { path }
+        | KubeconfigError::TooLarge { path }
         | KubeconfigError::Incompatible { path } => Some(path.clone()),
         _ => None,
     };
@@ -581,18 +724,47 @@ fn load_part(request: LoadRequest) -> PartLoad {
     let (target, files) = match request {
         LoadRequest::Chain(chain) => (PartTarget::Chain, chain),
         LoadRequest::File(file) => (PartTarget::File(file.clone()), vec![file]),
+        LoadRequest::FolderFile { path, is_reload } => return load_folder_part(path, is_reload),
     };
     match Kubeconfig::load(&files) {
         Ok(loaded) => PartLoad {
             target,
             part: CatalogPart::Loaded(Arc::new(loaded.kubeconfig)),
             skipped: loaded.skipped.iter().map(skipped_notice).collect(),
+            is_reload: false,
         },
         Err(error) => PartLoad {
             target,
             skipped: vec![skipped_notice(&error)],
             part: CatalogPart::Failed(error_text(&error)),
+            is_reload: false,
         },
+    }
+}
+
+/// A file of a watched folder. A file that does not load raises no notice here: a new one is only
+/// counted in the folder line, and `finish_file_load` decides for a changed one. Blocking file I/O:
+/// call it off the UI thread.
+fn load_folder_part(path: PathBuf, is_reload: bool) -> PartLoad {
+    let result = load_folder_file(&path);
+    let target = PartTarget::File(path.clone());
+    match result {
+        Ok(kubeconfig) => PartLoad {
+            target,
+            part: CatalogPart::Loaded(Arc::new(kubeconfig)),
+            skipped: Vec::new(),
+            is_reload,
+        },
+        Err(error) => {
+            // The path only: the text of a file anyone could drop here is never traced.
+            tracing::debug!(path = %path.display(), "a folder file did not load");
+            PartLoad {
+                target,
+                skipped: vec![skipped_notice(&error)],
+                part: CatalogPart::Failed(error_text(&error)),
+                is_reload,
+            }
+        }
     }
 }
 

@@ -238,7 +238,7 @@ fn scope_of(names: &[&str]) -> NamespaceScope {
 }
 
 fn plan_for(scope: &NamespaceScope, access: &AccessState) -> Vec<FeedPlan> {
-    condition_plan(scope, access)
+    condition_plan(scope, access, CertificateWatch::Watch)
         .into_iter()
         .map(|(_, plan)| plan)
         .collect()
@@ -289,7 +289,7 @@ fn condition_plan_waits_for_review() {
 #[test]
 fn condition_plan_off_when_denied() {
     let access = report_denying(&[AccessCheck::ListSecrets, AccessCheck::ListJobs]);
-    let plans: Vec<_> = condition_plan(&scope_of(&["a", "b"]), &access);
+    let plans: Vec<_> = condition_plan(&scope_of(&["a", "b"]), &access, CertificateWatch::Watch);
     let plan_of = |kind| {
         plans
             .iter()
@@ -311,11 +311,88 @@ fn condition_plan_off_when_denied() {
         FeedPlan::Start { .. }
     ));
     // Above two namespaces the denial may be of one namespace only: the cluster-wide watch finds out.
-    let wide = condition_plan(&scope_of(&["a", "b", "c"]), &access);
+    let wide = condition_plan(
+        &scope_of(&["a", "b", "c"]),
+        &access,
+        CertificateWatch::Watch,
+    );
     assert!(
         wide.iter()
             .all(|(_, plan)| matches!(plan, FeedPlan::Start { .. }))
     );
+}
+
+#[test]
+fn tls_watch_off_turns_the_secrets_feed_off() {
+    let plans = condition_plan(
+        &scope_of(&["a"]),
+        &report_denying(&[]),
+        CertificateWatch::Skip,
+    );
+    for (kind, plan) in plans {
+        if kind == ResourceKind::Secrets {
+            assert_eq!(plan, FeedPlan::Off("off in Settings".to_owned()));
+        } else {
+            assert!(matches!(plan, FeedPlan::Start { .. }), "{kind:?}");
+        }
+    }
+    // The setting wins over a review that is still running.
+    let checking = AccessState::Checking {
+        _task: gpui_kit::Task::ready(()),
+    };
+    let waiting = condition_plan(&scope_of(&["a"]), &checking, CertificateWatch::Skip);
+    assert!(waiting.iter().any(|(kind, plan)| {
+        *kind == ResourceKind::Secrets && matches!(plan, FeedPlan::Off(_))
+    }));
+}
+
+#[test]
+fn tls_watch_off_is_named_in_coverage() {
+    let reason = condition_plan(
+        &scope_of(&["a"]),
+        &report_denying(&[]),
+        CertificateWatch::Skip,
+    )
+    .into_iter()
+    .find_map(|(kind, plan)| match plan {
+        FeedPlan::Off(reason) if kind == ResourceKind::Secrets => Some(reason),
+        _ => None,
+    });
+    let feed = ConditionFeed::idle(ResourceKind::Secrets, reason);
+    let coverage = Coverage {
+        feeds: vec![(IssueFeed::Kind(ResourceKind::Secrets), feed.state())],
+    };
+    let note = coverage.note();
+    assert!(
+        note.as_deref()
+            .is_some_and(|text| text.contains("Not checked: certificates (off in Settings).")),
+        "{note:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn certificate_watch_follows_the_saved_choice(cx: &mut gpui_kit::TestAppContext) {
+    use crate::settings::{GeneralSettings, Settings};
+    use crate::settings_store::{LoadedSettings, WriteMode};
+    cx.update(|cx| {
+        assert_eq!(CertificateWatch::of(cx), CertificateWatch::Watch);
+        let settings = Settings {
+            general: GeneralSettings {
+                watch_tls_secrets: false,
+                ..GeneralSettings::default()
+            },
+            ..Settings::default()
+        };
+        AppSettings::install(
+            LoadedSettings {
+                settings,
+                writes: WriteMode::Disabled,
+                notice: None,
+            },
+            cx,
+        );
+        assert_eq!(CertificateWatch::of(cx), CertificateWatch::Skip);
+    });
 }
 
 fn deployment_in(namespace: &str) -> DeploymentSummary {
@@ -453,7 +530,7 @@ fn planned_feeds(
     scope: &NamespaceScope,
     cx: &mut Context<Probe>,
 ) -> IssueFeeds {
-    let conditions = condition_plan(scope, &AccessState::Unknown)
+    let conditions = condition_plan(scope, &AccessState::Unknown, CertificateWatch::Watch)
         .into_iter()
         .map(|(kind, plan)| match plan {
             FeedPlan::Start { watch_scope } => ConditionFeed {
@@ -494,6 +571,32 @@ fn watch_count_follows_the_condition_plan(cx: &mut TestAppContext) {
         });
         drop(probe);
     }
+    // TLS watch off: the Secrets feed is one watch fewer.
+    let skipped = cx.update(|cx| {
+        cx.new(|cx| {
+            let scope = NamespaceScope::All;
+            let conditions = condition_plan(&scope, &AccessState::Unknown, CertificateWatch::Skip)
+                .into_iter()
+                .map(|(kind, plan)| match plan {
+                    FeedPlan::Start { watch_scope } => ConditionFeed {
+                        watch_scope: Some(watch_scope),
+                        subscription: Some(idle_subscription(&runtime, cx)),
+                        ..ConditionFeed::idle(kind, None)
+                    },
+                    FeedPlan::Wait | FeedPlan::Off(_) => ConditionFeed::idle(kind, None),
+                })
+                .collect();
+            let feeds = IssueFeeds {
+                events: WarningEvents::default(),
+                events_watch: None,
+                events_restart: None,
+                conditions,
+            };
+            assert_eq!(feeds.watch_count(1), 7);
+            Probe
+        })
+    });
+    drop(skipped);
     // A restart that waits for its delay runs no events watch.
     let waiting = cx.update(|cx| {
         cx.new(|cx| {

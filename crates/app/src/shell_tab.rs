@@ -38,6 +38,7 @@ use crate::keymap::{CloseTerminalFind, TerminalCopy, TerminalFind, TerminalPaste
 use crate::log_workload::pod_short_name;
 use crate::screenshot::controller_owner_of;
 use crate::secret_clipboard::ClipboardWriteError;
+use crate::settings::AppSettings;
 use crate::status_tone::StatusTone;
 use crate::terminal_element::{SharedMetrics, cell_at, terminal_element};
 use crate::terminal_input::{MAX_PASTE_BYTES, PasteAsk, PasteDecision, decide_paste, key_to_vt};
@@ -173,6 +174,8 @@ pub(crate) struct ShellTab {
     is_find_open: bool,
     find_input: Entity<InputState>,
     _find_events: Subscription,
+    /// A font size change repaints the terminal, which measures its grid every frame.
+    _settings_observer: Subscription,
     /// Reconnect and a change of shell run through it, like the first open.
     app: WeakEntity<AppShell>,
 }
@@ -189,13 +192,19 @@ impl ShellTab {
         let (input, _) = unbounded();
         let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find"));
         let find_events = cx.subscribe_in(&find_input, window, Self::on_find_event);
+        let terminal = AppSettings::try_get(cx)
+            .map(|settings| settings.terminal.clone())
+            .unwrap_or_default();
         Self {
             target,
             kind: ShellKind::Exec,
             cluster_label,
-            command: ShellCommand::Auto,
+            command: terminal.default_shell,
             state: ShellState::Connecting,
-            session: Rc::new(RefCell::new(TerminalSession::new(START_SIZE))),
+            session: Rc::new(RefCell::new(TerminalSession::new(
+                START_SIZE,
+                terminal.scrollback_lines(),
+            ))),
             input,
             metrics: SharedMetrics::default(),
             connection: None,
@@ -208,6 +217,7 @@ impl ShellTab {
             is_find_open: false,
             find_input,
             _find_events: find_events,
+            _settings_observer: cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
             app,
         }
     }

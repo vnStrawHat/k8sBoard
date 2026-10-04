@@ -44,10 +44,16 @@ use crate::log_workload::{
     ranked_pods, restart_marker, rising_restarts, scope_covers,
 };
 use crate::pod_drawer::{default_container, kind_tag_text};
+use crate::settings::{AppSettings, LogSettings};
 use crate::status_tone::{StatusTone, tone_color};
 
-/// The lines requested when a pod tab opens, and for the members that open with a workload tab.
-const POD_TAIL_LINES: u32 = 1000;
+/// The saved defaults of new tabs; a view built without settings (a test) gets the built-in ones.
+fn log_defaults(cx: &App) -> LogSettings {
+    AppSettings::try_get(cx)
+        .map(|settings| settings.logs.clone())
+        .unwrap_or_default()
+}
+
 /// A pod that joins after the merge flush asks for little history, so it cannot land far out of
 /// order.
 const LATE_JOIN_TAIL_LINES: u32 = 50;
@@ -290,14 +296,15 @@ impl LogTab {
                 _pods_observer: cx.observe(session, |tab, _, cx| tab.sync_members(cx)),
             }),
         };
+        let defaults = log_defaults(cx);
         let mut tab = Self {
             cluster: origin.cluster,
             connection: origin.connection,
             subject,
             instance: LogInstance::Current,
-            shows_timestamps: true,
-            wraps_lines: false,
-            shows_json: false,
+            shows_timestamps: defaults.show_timestamps,
+            wraps_lines: defaults.wrap_lines,
+            shows_json: defaults.show_json,
             filter_mode: FilterMode::Plain,
             hidden_levels: LevelSet::default(),
             has_invalid_filter: false,
@@ -333,6 +340,20 @@ impl LogTab {
             (LogSubject::Workload(mine), LogTarget::Workload(other)) => mine.target.is_same(other),
             _ => false,
         }
+    }
+
+    /// The tab's own toggles as `(timestamps, wrap, json)`, for the tests of the saved defaults.
+    #[cfg(test)]
+    pub(crate) fn toggles(&self) -> (bool, bool, bool) {
+        (self.shows_timestamps, self.wraps_lines, self.shows_json)
+    }
+
+    /// Flips the three toggles as the toolbar does.
+    #[cfg(test)]
+    pub(crate) fn flip_toggles(&mut self) {
+        self.shows_timestamps = !self.shows_timestamps;
+        self.wraps_lines = !self.wraps_lines;
+        self.shows_json = !self.shows_json;
     }
 
     /// The tab label: `{pod}/{container}`, or the workload label.
@@ -401,7 +422,7 @@ impl LogTab {
                     prefix: SharedString::from(format!("{}/{container}", target.pod)),
                     full_prefix: SharedString::from(format!("{}/{container}", target.pod)),
                     color_slot: 0,
-                    tail_lines: POD_TAIL_LINES,
+                    tail_lines: log_defaults(cx).tail_lines(),
                 };
                 self.open_stream(open, cx);
                 self.note_restarts(cx);
@@ -622,7 +643,7 @@ impl LogTab {
             self.drop_streams_of(&admission.pod);
             let color_slot = slot_for(&mut self.pod_slots, &admission.pod);
             let tail_lines = if self.staging.is_some() {
-                POD_TAIL_LINES
+                log_defaults(cx).tail_lines()
             } else {
                 LATE_JOIN_TAIL_LINES
             };

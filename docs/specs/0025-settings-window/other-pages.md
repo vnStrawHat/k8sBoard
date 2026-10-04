@@ -8,13 +8,13 @@ W2 nav order, keeping only pages with content. A later spec inserts its page at 
 
 | W2 nav | 0025 | Owner of the page |
 |---|---|---|
-| General | omitted | the first spec with a General field (0016 or 0020, below) |
+| General | omitted | **0043** (export folder, TLS Secrets watch) |
 | **Clusters** | yes, default page | 0025 ([clusters-page.md](clusters-page.md)) |
-| **Appearance** | yes (theme) | 0025; density joins later |
+| **Appearance** | yes (theme) | 0025; row density joined in 0043 |
 | Keyboard Shortcuts | omitted | **0028**, inserted at W2 position 4 (after Appearance) |
 | Safety | omitted | 0030 (confirm modes, lock defaults) |
-| Terminal & Shell | omitted | 0036 |
-| Logs | omitted | 0019 |
+| Terminal & Shell | omitted | **0043** (not 0036) |
+| Logs | omitted | **0043** (not 0019) |
 | Metrics | omitted | backlog (Prometheus) |
 | Extensions | omitted | backlog |
 | **About** | yes | 0025 |

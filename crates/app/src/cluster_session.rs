@@ -10,9 +10,9 @@ use cluster::{
     ClusterError, ConfigMapValues, ContextSummary, CrdSummary, CustomObjectFields,
     EndpointSliceSummary, EventFilter, EventSummary, HelmRevision, IngressSummary, InvolvedObject,
     JobSummary, Kubeconfig, KubeletTargets, LimitRangeSummary, NamespaceAccess, NamespaceScope,
-    NamespaceSummary, NodeSummary, ObjectKind, PersistentVolumeSummary, PodSummary, RbacSnapshot,
-    ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, StorageClassSummary,
-    WatchUpdate,
+    NamespaceSummary, NodeSummary, ObjectKind, PersistentVolumeSummary, PodSummary, ProxyChoice,
+    ProxyUrlError, RbacSnapshot, ReplicaSetSummary, ResourceQuotaSummary, SecretSummary,
+    ServerVersion, StorageClassSummary, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{App, Context, Task};
@@ -21,6 +21,7 @@ use tokio::sync::watch;
 use crate::cluster_metrics::{
     ClusterMetrics, NodesGate, PodReview, PodReviewResult, PodsGate, nodes_gate, pods_gate,
 };
+use crate::cluster_registry::open_cluster;
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::crd_rows::crd_row;
 use crate::custom_kind::{CustomKind, CustomKindCache, custom_kinds};
@@ -1199,9 +1200,10 @@ struct Connected {
 async fn connect_cluster(
     kubeconfig: Arc<Kubeconfig>,
     context: String,
+    proxy: Result<ProxyChoice, ProxyUrlError>,
     requested_namespace: Option<NamespaceScope>,
 ) -> Result<Connected, ClusterError> {
-    let connection = ClusterConnection::open(&kubeconfig, &context).await?;
+    let connection = open_cluster(&kubeconfig, &context, &proxy).await?;
     let version_started = Instant::now();
     let server_version = connection.server_version().await?;
     let api_latency = version_started.elapsed();
@@ -1248,7 +1250,7 @@ impl ClusterSession {
             context: summary.name.clone(),
             requested_namespace,
         };
-        let phase = Self::begin_connect(&inputs, cx);
+        let phase = Self::begin_connect(&inputs, summary, cx);
         let lock = WriteLock::at_open(&AppSettings::get(cx).registry.profile(summary));
         Self {
             inputs,
@@ -1595,15 +1597,23 @@ impl ClusterSession {
             return;
         }
         self.generation = next_generation();
-        self.phase = Self::begin_connect(&self.inputs, cx);
+        self.phase = Self::begin_connect(&self.inputs, &self.summary, cx);
         cx.notify();
     }
 
-    fn begin_connect(inputs: &ConnectInputs, cx: &mut Context<Self>) -> SessionPhase {
+    /// The proxy is read here, on the main thread, each time a connect starts: a Retry picks up a
+    /// proxy changed in Settings since the failure.
+    fn begin_connect(
+        inputs: &ConnectInputs,
+        summary: &ContextSummary,
+        cx: &mut Context<Self>,
+    ) -> SessionPhase {
         let runtime = cx.global::<ClusterRuntime>().clone();
+        let proxy = AppSettings::get(cx).registry.profile(summary).proxy;
         let connecting = runtime.spawn(connect_cluster(
             Arc::clone(&inputs.kubeconfig),
             inputs.context.clone(),
+            proxy,
             inputs.requested_namespace.clone(),
         ));
         let task = cx.spawn(async move |this, cx| {

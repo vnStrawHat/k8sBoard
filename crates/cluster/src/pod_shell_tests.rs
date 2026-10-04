@@ -462,3 +462,17 @@ async fn a_status_that_never_comes_ends_the_session_after_the_request_timeout() 
     assert_eq!(started.elapsed(), REQUEST_TIMEOUT);
     assert!(harness.updates.next().await.is_none(), "nothing follows");
 }
+
+#[test]
+fn shell_command_serializes_lowercase() {
+    for (command, text) in [
+        (ShellCommand::Auto, "auto"),
+        (ShellCommand::Bash, "bash"),
+        (ShellCommand::Sh, "sh"),
+    ] {
+        let json = serde_json::to_string(&command).expect("serializes");
+        assert_eq!(json, format!("\"{text}\""));
+        let back: ShellCommand = serde_json::from_str(&json).expect("parses");
+        assert_eq!(back, command);
+    }
+}

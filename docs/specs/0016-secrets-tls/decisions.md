@@ -17,7 +17,7 @@
 | 29 | `secret_values` builds the GET with `Request::get` and decodes `request_text` itself; never `Api::get` or `Client::request` (M1b); its call site is a named exception in the 0030 clippy table (`secret.rs`, write-path.md) | kube-client 4.2 logs the whole body at `warn` on a decode failure; owning the text also lets us wipe it |
 | 30 | The app adds the fixed directive `kube_client::client=error` after the env filter (M1a) | the same log path serves every `Api::list` and watcher initial list, Secrets included; `RUST_LOG` must not reopen it |
 | 25 | Both secret watches use `ListSemantic::MostRecent` with `page_size(50)` from step 1 (M3) | the watch-cache list (`resourceVersion=0`) ignores `limit` and returns every Secret in scope in one body; paging caps transient plaintext and peak memory at 50 objects |
-| 26 | **Copy is private and auto-cleared** (M2): Windows write adds `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory=0`, `CanUploadToCloudClipboard=0` in the same clipboard session; the clipboard is cleared after 30 s if it still holds our value (keyed hash), on by default | coordinator decision; settles the C1 open question; [secret-clipboard.md](secret-clipboard.md); macOS/Linux managers stay a ceiling |
+| 26 | **Copy is private and auto-cleared** (0043 adds no setting for the 30 s: it stays fixed) (M2): Windows write adds `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory=0`, `CanUploadToCloudClipboard=0` in the same clipboard session; the clipboard is cleared after 30 s if it still holds our value (keyed hash), on by default | coordinator decision; settles the C1 open question; [secret-clipboard.md](secret-clipboard.md); macOS/Linux managers stay a ceiling |
 
 ## Type details
 

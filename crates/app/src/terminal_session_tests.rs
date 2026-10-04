@@ -4,6 +4,7 @@ use oneterm_vt::{Attrs, CellWidth, Color, SelectionKind, SnapshotContent, Snapsh
 use super::*;
 
 const SIZE: GridSize = GridSize { cols: 20, rows: 5 };
+const SCROLLBACK: u32 = 5_000;
 
 fn now() -> Instant {
     Instant::now()
@@ -11,7 +12,7 @@ fn now() -> Instant {
 
 /// A session fed `bytes`, painted with the light theme.
 fn fed(bytes: &[u8]) -> TerminalSession {
-    let mut session = TerminalSession::new(SIZE);
+    let mut session = TerminalSession::new(SIZE, SCROLLBACK);
     session.set_palette(terminal_palette(&ThemeColor::light()));
     session.feed(bytes, now());
     session
@@ -125,14 +126,14 @@ const SIXEL: &[u8] = b"\x1bPq#0;2;100;0;0#0~\x1b\\";
 #[test]
 fn the_engine_keeps_a_decoded_image_until_it_is_taken() {
     // Guards the test below: this sequence really is decoded into an image.
-    let mut session = TerminalSession::new(SIZE);
+    let mut session = TerminalSession::new(SIZE, SCROLLBACK);
     session.term.feed(SIXEL, &mut session.batch, now());
     assert_eq!(session.term.take_graphics().len(), 1);
 }
 
 #[test]
 fn sixel_images_are_not_kept() {
-    let mut session = TerminalSession::new(SIZE);
+    let mut session = TerminalSession::new(SIZE, SCROLLBACK);
     for _ in 0..50 {
         session.feed(SIXEL, now());
     }
@@ -227,11 +228,11 @@ fn note_strips_control_characters() {
 }
 
 #[test]
-fn scrollback_is_capped() {
-    let mut session = TerminalSession::new(GridSize { cols: 80, rows: 24 });
-    let lines: String = (0..6_000).map(|line| format!("line {line}\r\n")).collect();
+fn scrollback_follows_the_argument() {
+    let mut session = TerminalSession::new(GridSize { cols: 80, rows: 24 }, 1_000);
+    let lines: String = (0..1_500).map(|line| format!("line {line}\r\n")).collect();
     session.feed(lines.as_bytes(), now());
-    assert_eq!(session.term.screen().history_len(), SCROLLBACK_LINES);
+    assert_eq!(session.term.screen().history_len(), 1_000);
 }
 
 #[test]

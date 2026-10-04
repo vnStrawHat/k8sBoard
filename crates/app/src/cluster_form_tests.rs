@@ -37,6 +37,7 @@ fn groups_of(
         kubeconfigs,
         registry,
         |path| chain.iter().any(|file| path == Path::new(file)),
+        |_| false,
         owned,
     )
 }
@@ -71,6 +72,8 @@ fn entry(context: &str, source: &str) -> ClusterEntry {
         allow_node_shell: None,
         debug_image: None,
         node_shell_namespace: None,
+        color: None,
+        proxy: None,
     }
 }
 
@@ -241,6 +244,7 @@ fn remove_drops_path_entries_and_last_used() {
         kubeconfigs: vec![PathBuf::from("a.yaml"), PathBuf::from("b.yaml")],
         clusters: vec![entry("one", "a.yaml"), entry("two", "b.yaml")],
         last_used: Some(cluster("one", "a.yaml")),
+        ..ClusterRegistry::default()
     };
     remove_kubeconfig(&mut registry, Path::new("a.yaml"));
     assert_eq!(registry.kubeconfigs, [PathBuf::from("b.yaml")]);
@@ -344,6 +348,7 @@ contexts:
     let state = runtime.block_on(test_connection(
         kubeconfig,
         "ctx".to_owned(),
+        Ok(ProxyChoice::Kubeconfig),
         Duration::from_secs(2),
     ));
     let TestState::Failed(message) = state else {
@@ -373,6 +378,7 @@ fn live_test_connection_reports_the_server_version() {
     let state = runtime.block_on(test_connection(
         Arc::new(loaded.kubeconfig),
         context,
+        Ok(ProxyChoice::Kubeconfig),
         TEST_CONNECTION_TIMEOUT,
     ));
     let TestState::Connected {
@@ -391,6 +397,7 @@ fn remove_matches_the_path_text_not_the_exact_buffer() {
         kubeconfigs: vec![PathBuf::from("dir//sub/./a.yaml"), PathBuf::from("b.yaml")],
         clusters: vec![entry("one", "dir/sub/a.yaml")],
         last_used: Some(cluster("one", "dir/./sub/a.yaml")),
+        ..ClusterRegistry::default()
     };
     remove_kubeconfig(&mut registry, Path::new("dir/sub/a.yaml"));
     assert_eq!(registry.kubeconfigs, [PathBuf::from("b.yaml")]);
@@ -420,4 +427,329 @@ fn edit_entry_keeps_an_entry_that_only_sets_the_node_shell() {
         entry.node_shell_namespace = None
     });
     assert!(registry.clusters.is_empty());
+}
+
+// ---- Spec 0043 step 3: search, order, color ----
+
+fn reordered(registry: &ClusterRegistry, file: &Kubeconfig) -> Vec<ClusterGroup> {
+    groups_of(&[file], registry, &[], None)
+}
+
+fn first_group_clusters(groups: &[ClusterGroup]) -> Vec<ClusterRef> {
+    groups[0]
+        .rows
+        .iter()
+        .map(|row| row.cluster.clone())
+        .collect()
+}
+
+#[test]
+fn move_cluster_reorders_inside_the_group() {
+    let file = kubeconfig("a.yaml", &["prod-a", "prod-b", "prod-c"]);
+    let mut registry = ClusterRegistry::default();
+    let groups = reordered(&registry, &file);
+    move_cluster(
+        &mut registry,
+        &groups[0],
+        &cluster("prod-c", "a.yaml"),
+        &cluster("prod-a", "a.yaml"),
+    );
+    let groups = reordered(&registry, &file);
+    assert_eq!(labels(&groups[0]), ["prod-c", "prod-a", "prod-b"]);
+    // Dropping on a later row moves the row down to that place.
+    let groups = reordered(&registry, &file);
+    move_cluster(
+        &mut registry,
+        &groups[0],
+        &cluster("prod-c", "a.yaml"),
+        &cluster("prod-b", "a.yaml"),
+    );
+    let groups = reordered(&registry, &file);
+    assert_eq!(labels(&groups[0]), ["prod-a", "prod-b", "prod-c"]);
+}
+
+#[test]
+fn move_cluster_registers_the_group_only() {
+    let file = kubeconfig("a.yaml", &["prod-a", "prod-b", "stg-a", "stg-b"]);
+    let mut registry = ClusterRegistry {
+        clusters: vec![entry("stg-b", "a.yaml"), entry("stg-a", "a.yaml")],
+        ..ClusterRegistry::default()
+    };
+    let groups = reordered(&registry, &file);
+    move_cluster(
+        &mut registry,
+        &groups[0],
+        &cluster("prod-b", "a.yaml"),
+        &cluster("prod-a", "a.yaml"),
+    );
+    // The two Production rows got entries; the Staging entries keep their order.
+    let order: Vec<&str> = registry
+        .clusters
+        .iter()
+        .map(|entry| entry.cluster.context.as_str())
+        .collect();
+    assert_eq!(order, ["stg-b", "stg-a", "prod-b", "prod-a"]);
+    let groups = reordered(&registry, &file);
+    assert_eq!(labels(&groups[1]), ["stg-b", "stg-a"]);
+    assert_eq!(labels(&groups[0]), ["prod-b", "prod-a"]);
+}
+
+#[test]
+fn move_cluster_across_groups_is_a_no_op() {
+    let file = kubeconfig("a.yaml", &["prod-a", "dev-a", "dev-b"]);
+    let mut registry = ClusterRegistry::default();
+    let groups = reordered(&registry, &file);
+    move_cluster(
+        &mut registry,
+        &groups[0],
+        &cluster("prod-a", "a.yaml"),
+        &cluster("dev-a", "a.yaml"),
+    );
+    assert_eq!(registry, ClusterRegistry::default());
+}
+
+#[test]
+fn step_cluster_stops_at_the_ends() {
+    let file = kubeconfig("a.yaml", &["prod-a", "prod-b", "prod-c"]);
+    let mut registry = ClusterRegistry::default();
+    let groups = reordered(&registry, &file);
+    let before = first_group_clusters(&groups);
+    step_cluster(&mut registry, &groups[0], &before[0], MoveStep::Up);
+    step_cluster(&mut registry, &groups[0], &before[2], MoveStep::Down);
+    assert_eq!(registry, ClusterRegistry::default());
+    step_cluster(&mut registry, &groups[0], &before[1], MoveStep::Up);
+    let groups = reordered(&registry, &file);
+    assert_eq!(labels(&groups[0]), ["prod-b", "prod-a", "prod-c"]);
+    step_cluster(&mut registry, &groups[0], &before[1], MoveStep::Down);
+    let groups = reordered(&registry, &file);
+    assert_eq!(labels(&groups[0]), ["prod-a", "prod-b", "prod-c"]);
+}
+
+#[test]
+fn shortcut_numbers_follow_the_new_order() {
+    use crate::cluster_health::HealthBoard;
+    use crate::cluster_switcher_rows::{nth_cluster, switcher_sections};
+    let file = kubeconfig("a.yaml", &["prod-a", "prod-b", "prod-c"]);
+    let mut registry = ClusterRegistry::default();
+    let groups = reordered(&registry, &file);
+    move_cluster(
+        &mut registry,
+        &groups[0],
+        &cluster("prod-c", "a.yaml"),
+        &cluster("prod-a", "a.yaml"),
+    );
+    let groups = reordered(&registry, &file);
+    let sections = switcher_sections(&groups, &HealthBoard::default(), &[]);
+    assert_eq!(
+        nth_cluster(&sections, 1),
+        Some(&cluster("prod-c", "a.yaml"))
+    );
+    assert_eq!(
+        nth_cluster(&sections, 3),
+        Some(&cluster("prod-b", "a.yaml"))
+    );
+}
+
+#[test]
+fn cluster_search_matches_label_context_env_and_file() {
+    let file = kubeconfig("team-one.yaml", &["prod-eu-1", "stg-us"]);
+    let rows = rows_of(groups_of(&[&file], &ClusterRegistry::default(), &[], None));
+    let matches = |text: &str| -> Vec<&str> {
+        rows.iter()
+            .filter(|row| cluster_matches(row, text))
+            .map(|row| row.cluster.context.as_str())
+            .collect()
+    };
+    assert_eq!(matches("prod-eu"), ["prod-eu-1"]);
+    // Whitespace is ignored, as in the switcher.
+    assert_eq!(matches("p r o d - e u"), ["prod-eu-1"]);
+    assert_eq!(matches("STG"), ["stg-us"]);
+    assert_eq!(matches("team-one"), ["prod-eu-1", "stg-us"]);
+    assert_eq!(matches("PROD"), ["prod-eu-1"]);
+    assert!(matches("xyz").is_empty());
+    assert_eq!(matches("").len(), 2);
+}
+
+#[test]
+fn a_color_equal_to_the_environment_stores_nothing() {
+    assert_eq!(
+        color_to_store(ClusterColor::Red, Environment::Production),
+        None
+    );
+    assert_eq!(
+        color_to_store(ClusterColor::Teal, Environment::Production),
+        Some(ClusterColor::Teal)
+    );
+    assert_eq!(color_to_store(ClusterColor::Gray, Environment::Local), None);
+}
+
+#[test]
+fn a_stored_color_keeps_its_entry() {
+    let mut registry = ClusterRegistry::default();
+    let target = cluster("prod-a", "a.yaml");
+    edit_entry(&mut registry, &target, |entry| {
+        entry.color = Some(ClusterColor::Teal);
+    });
+    assert_eq!(registry.clusters.len(), 1);
+    edit_entry(&mut registry, &target, |entry| entry.color = None);
+    assert!(registry.clusters.is_empty());
+}
+
+#[test]
+fn filter_groups_keeps_matching_rows_and_drops_empty_groups() {
+    let file = kubeconfig("a.yaml", &["prod-a", "prod-b", "stg-a"]);
+    let groups = groups_of(&[&file], &ClusterRegistry::default(), &[], None);
+    let found = filter_groups(&groups, "prod-b");
+    assert_eq!(titles(&found), ["Production"]);
+    assert_eq!(labels(&found[0]), ["prod-b"]);
+    assert!(filter_groups(&groups, "zzz").is_empty());
+    assert_eq!(filter_groups(&groups, "").len(), 2);
+}
+
+// ---- Spec 0043 step 4: the proxy control ----
+
+#[test]
+fn proxy_form_rejects_credentials() {
+    let Err(error) = validate_proxy_url("http://user:pw@proxy:3128") else {
+        panic!("userinfo must be refused");
+    };
+    assert_eq!(
+        error.0,
+        "Leave out the user name and password: k8sBoard does not store proxy credentials. Put them in the kubeconfig proxy-url instead."
+    );
+    assert!(!error.0.contains("pw"));
+}
+
+#[test]
+fn proxy_form_messages_follow_the_rule() {
+    let message = |text: &str| validate_proxy_url(text).expect_err("rejected").0;
+    assert_eq!(message("https://p:1"), "Use http:// or socks5://.");
+    assert_eq!(message("http://:1"), "Add the proxy host.");
+    assert_eq!(message("http://p:0"), "Use a port from 1 to 65535.");
+    assert_eq!(
+        message("http://p/x"),
+        "Remove the path; a proxy URL is scheme://host:port."
+    );
+    assert_eq!(
+        message("http://p q"),
+        "Enter a URL such as http://proxy.example:3128."
+    );
+}
+
+#[test]
+fn a_valid_proxy_is_stored_without_its_case_or_slash() {
+    assert_eq!(
+        validate_proxy_url("  HTTP://Proxy:3128/ "),
+        Ok(Some(ClusterProxy::Url("http://Proxy:3128".to_owned())))
+    );
+    assert_eq!(validate_proxy_url("   "), Ok(None));
+}
+
+#[test]
+fn the_proxy_control_shows_the_stored_choice() {
+    let custom = ClusterProxy::Url("http://p:3128".to_owned());
+    assert_eq!(proxy_mode(None, false), ProxyMode::FromKubeconfig);
+    assert_eq!(
+        proxy_mode(Some(&ClusterProxy::Direct), false),
+        ProxyMode::Direct
+    );
+    assert_eq!(proxy_mode(Some(&custom), false), ProxyMode::Custom);
+    // Picking Custom shows the input before anything is stored.
+    assert_eq!(proxy_mode(None, true), ProxyMode::Custom);
+    assert_eq!(
+        proxy_mode_label(ProxyMode::FromKubeconfig, Some("http://k:1")),
+        "From kubeconfig (http://k:1)"
+    );
+    assert_eq!(
+        proxy_mode_label(ProxyMode::FromKubeconfig, None),
+        "From kubeconfig (none)"
+    );
+    assert_eq!(proxy_mode_label(ProxyMode::Direct, None), "None (direct)");
+    assert_eq!(proxy_mode_label(ProxyMode::Custom, None), "Custom URL");
+}
+
+#[test]
+fn proxy_input_shows_only_a_parsable_value() {
+    let stored = |text: &str| ClusterProxy::Url(text.to_owned());
+    assert_eq!(
+        proxy_input_prefill(Some(&stored("HTTP://p:3128/"))),
+        "http://p:3128"
+    );
+    // A hand-edited value with userinfo is never echoed.
+    assert_eq!(proxy_input_prefill(Some(&stored("http://u:p@x"))), "");
+    assert_eq!(proxy_input_prefill(Some(&ClusterProxy::Direct)), "");
+    assert_eq!(proxy_input_prefill(None), "");
+}
+
+#[test]
+fn not_applied_shows_until_the_typed_url_is_stored() {
+    let stored = ClusterProxy::Url("http://p:3128".to_owned());
+    assert!(is_proxy_pending(None, "http://p:3128"));
+    assert!(is_proxy_pending(None, ""));
+    assert!(!is_proxy_pending(Some(&stored), "http://p:3128"));
+    assert!(!is_proxy_pending(Some(&stored), "HTTP://p:3128/"));
+    assert!(is_proxy_pending(Some(&stored), "http://other:1"));
+    assert!(is_proxy_pending(Some(&stored), "not a url"));
+    let unparsable = ClusterProxy::Url("http://u:p@x".to_owned());
+    assert!(is_proxy_pending(Some(&unparsable), ""));
+}
+
+#[test]
+fn folder_rows_cannot_be_removed() {
+    let file = kubeconfig("watched/a.yaml", &["prod-1"]);
+    let groups = cluster_groups(
+        &[&file],
+        &ClusterRegistry::default(),
+        |_| false,
+        |path| path == Path::new("watched/a.yaml"),
+        None,
+    );
+    let row = &groups[0].rows[0];
+    assert_eq!(row.origin, RowOrigin::Folder);
+    assert_eq!(
+        remove_block_reason(row, Some(Path::new("watched"))).as_deref(),
+        Some("Comes from the watched folder watched; stop watching it or delete the file.")
+    );
+    // The dialog text for it never promises a file change.
+    let (_, body) = remove_dialog_text(
+        Path::new("watched/a.yaml"),
+        std::slice::from_ref(row),
+        row.origin,
+    );
+    assert!(body.ends_with("The file itself is not changed."), "{body}");
+}
+
+#[test]
+fn only_chain_and_folder_rows_are_blocked_from_removal() {
+    let file = kubeconfig("a.yaml", &["prod-1"]);
+    let groups = groups_of(&[&file], &ClusterRegistry::default(), &["a.yaml"], None);
+    let chain = &groups[0].rows[0];
+    assert_eq!(
+        remove_block_reason(chain, None).as_deref(),
+        Some("Comes from KUBECONFIG or ~/.kube/config; edit that instead.")
+    );
+    let groups = groups_of(&[&file], &ClusterRegistry::default(), &[], None);
+    assert_eq!(remove_block_reason(&groups[0].rows[0], None), None);
+}
+
+#[test]
+fn watched_folders_are_added_once_and_stopped_without_touching_clusters() {
+    let mut registry = ClusterRegistry {
+        clusters: vec![entry("one", "a.yaml")],
+        ..ClusterRegistry::default()
+    };
+    assert!(add_watched_folder(&mut registry, PathBuf::from("watched")));
+    assert!(!add_watched_folder(
+        &mut registry,
+        PathBuf::from("watched/")
+    ));
+    assert!(!add_watched_folder(
+        &mut registry,
+        PathBuf::from("./watched")
+    ));
+    assert_eq!(registry.kubeconfig_folders.len(), 1);
+    stop_watching_folder(&mut registry, Path::new("watched"));
+    assert!(registry.kubeconfig_folders.is_empty());
+    // The overrides of a vanished file stay (0024 open item 4).
+    assert_eq!(registry.clusters, [entry("one", "a.yaml")]);
 }

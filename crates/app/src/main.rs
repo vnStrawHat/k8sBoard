@@ -57,6 +57,7 @@ mod kind_drawer;
 mod kind_join;
 mod kind_row;
 mod kind_table;
+mod kubeconfig_folder;
 mod kubeconfig_import;
 mod kubelet_history;
 mod kubelet_metrics;

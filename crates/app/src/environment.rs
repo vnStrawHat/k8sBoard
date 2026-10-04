@@ -87,15 +87,68 @@ fn tokens(lowered: &str) -> Vec<&str> {
         .collect()
 }
 
-/// The only place an environment touches the theme.
-pub(crate) fn environment_color(environment: Environment, cx: &App) -> Hsla {
-    let theme = cx.theme();
-    match environment {
-        Environment::Production => theme.danger,
-        Environment::Staging => theme.warning,
-        Environment::Development => theme.info,
-        Environment::Local => theme.muted_foreground,
+/// The colors a cluster can wear on the title-bar border (W2 `Color` row), in swatch order. Each
+/// one is a theme token, so no color literal lives here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ClusterColor {
+    Red,
+    Amber,
+    Blue,
+    Purple,
+    Teal,
+    Gray,
+}
+
+impl ClusterColor {
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Red,
+        Self::Amber,
+        Self::Blue,
+        Self::Purple,
+        Self::Teal,
+        Self::Gray,
+    ];
+
+    /// The color a cluster wears until the user picks another: its environment's.
+    pub(crate) fn of(environment: Environment) -> Self {
+        match environment {
+            Environment::Production => Self::Red,
+            Environment::Staging => Self::Amber,
+            Environment::Development => Self::Blue,
+            Environment::Local => Self::Gray,
+        }
     }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Red => "Red",
+            Self::Amber => "Amber",
+            Self::Blue => "Blue",
+            Self::Purple => "Purple",
+            Self::Teal => "Teal",
+            Self::Gray => "Gray",
+        }
+    }
+}
+
+/// The only place a cluster color touches the theme.
+pub(crate) fn cluster_color(color: ClusterColor, cx: &App) -> Hsla {
+    let theme = cx.theme();
+    match color {
+        ClusterColor::Red => theme.danger,
+        ClusterColor::Amber => theme.warning,
+        ClusterColor::Blue => theme.info,
+        ClusterColor::Purple => theme.magenta,
+        ClusterColor::Teal => theme.cyan,
+        ClusterColor::Gray => theme.muted_foreground,
+    }
+}
+
+/// The color of the environment badge, which stays the risk signal whatever color the user gave
+/// the cluster.
+pub(crate) fn environment_color(environment: Environment, cx: &App) -> Hsla {
+    cluster_color(ClusterColor::of(environment), cx)
 }
 
 /// A filled badge with light text on the environment color.
