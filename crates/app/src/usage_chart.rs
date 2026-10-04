@@ -19,6 +19,7 @@ use crate::drawer::truncated_text;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::usage_format::{Measure, format_offset};
 
+const SECONDS_PER_DAY: u64 = 86_400;
 const GUTTER_LEFT: f32 = 52.;
 const GUTTER_BOTTOM: f32 = 16.;
 const GUTTER_TOP: f32 = 6.;
@@ -514,6 +515,10 @@ impl Plot for UsageChart {
 /// The label at the left edge of the axis: how far back the chart reaches.
 fn range_label(model: &UsageChartModel) -> String {
     let seconds = model.end.duration_since(model.start).as_secs().max(0) as u64;
+    // A source range of whole days reads `-7d` and `-30d`, not `-168h`.
+    if seconds >= SECONDS_PER_DAY * 7 && seconds.is_multiple_of(SECONDS_PER_DAY) {
+        return format!("-{}d", seconds / SECONDS_PER_DAY);
+    }
     format_offset(seconds)
 }
 

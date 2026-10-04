@@ -88,6 +88,35 @@ pub(crate) enum SourceState {
     },
 }
 
+impl SourceState {
+    /// The source whose check passed.
+    pub(crate) fn ready(&self) -> Option<(&MetricsSource, &SourceCheck)> {
+        match self {
+            Self::Ready { source, check } => Some((source, check)),
+            Self::None | Self::Invalid | Self::Checking { .. } | Self::Failed { .. } => None,
+        }
+    }
+}
+
+/// The reason line the Monitor (and Topology traffic) shows under a source that cannot serve:
+/// `None` when there is no source or it is ready with container CPU series.
+pub(crate) fn source_note(state: &SourceState) -> Option<String> {
+    match state {
+        SourceState::None => None,
+        SourceState::Invalid => {
+            Some("Metrics source in settings is not valid (Settings › Metrics)".to_owned())
+        }
+        SourceState::Checking { .. } => Some("Metrics source: checking…".to_owned()),
+        SourceState::Ready { check, .. } if check.cpu_series == 0 => {
+            Some("Metrics source has no container CPU series".to_owned())
+        }
+        SourceState::Ready { .. } => None,
+        SourceState::Failed { error, .. } => Some(format!(
+            "Metrics source unreachable: {error} (Settings › Metrics)"
+        )),
+    }
+}
+
 /// One metrics feed: the history it fills and where it stands.
 pub(crate) struct MetricsFeed<H> {
     pub(crate) history: H,

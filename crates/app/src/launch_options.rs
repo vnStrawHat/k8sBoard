@@ -24,7 +24,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|topology-curves|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|topology-curves|pod-drawer|pod-containers|pod-events|pod-monitor|pod-monitor-source-fixture|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
@@ -62,6 +62,9 @@ pub(crate) enum LaunchScreen {
     TopologyCurves,
     /// `--screen pod-drawer|pod-containers|pod-events|pod-yaml`: a pod drawer on that tab.
     PodDrawer(DrawerTab),
+    /// `--screen pod-monitor-source-fixture` (spec 0048): the first pod's Monitor on 30d with
+    /// synthetic source data. Screenshot builds only; the pod comes from the connected cluster.
+    PodMonitorSourceFixture,
     /// `--screen node-drawer|node-events|node-yaml`.
     NodeDrawer(DrawerTab),
     LogsDock,
@@ -294,6 +297,7 @@ impl LaunchScreen {
             | Self::PortForwardRemoveFixture => Screen::PortForwarding,
             Self::Pods
             | Self::PodDrawer(_)
+            | Self::PodMonitorSourceFixture
             | Self::LogsDock
             | Self::LogsZoomed
             | Self::LogsPopout
@@ -352,6 +356,7 @@ impl LaunchScreen {
         matches!(
             self,
             Self::PodDrawer(_)
+                | Self::PodMonitorSourceFixture
                 | Self::NodeDrawer(_)
                 | Self::KindDrawer(..)
                 | Self::KindMenu(_)
@@ -383,6 +388,7 @@ impl LaunchScreen {
     pub(crate) fn drawer_tab(self) -> Option<DrawerTab> {
         match self {
             Self::PodDrawer(tab) | Self::NodeDrawer(tab) | Self::KindDrawer(_, tab) => Some(tab),
+            Self::PodMonitorSourceFixture => Some(DrawerTab::Monitor),
             Self::KindMenu(_) => Some(DrawerTab::Overview),
             Self::Custom { tab, .. } => tab,
             _ => None,
@@ -394,6 +400,7 @@ impl LaunchScreen {
         matches!(
             self,
             Self::PodDrawer(DrawerTab::Containers | DrawerTab::Monitor)
+                | Self::PodMonitorSourceFixture
                 | Self::NodeDrawer(DrawerTab::Monitor)
                 | Self::KindDrawer(_, DrawerTab::Monitor)
         )
@@ -449,6 +456,7 @@ impl LaunchScreen {
                 | Self::Shortcuts
                 | Self::PodsCursor
                 | Self::PodDrawer(DrawerTab::Containers | DrawerTab::Monitor)
+                | Self::PodMonitorSourceFixture
                 | Self::KindDrawer(_, DrawerTab::Monitor)
         )
     }
@@ -633,6 +641,7 @@ impl LaunchScreen {
             "pod-containers" => Some(Self::PodDrawer(DrawerTab::Containers)),
             "pod-events" => Some(Self::PodDrawer(DrawerTab::Events)),
             "pod-monitor" => Some(Self::PodDrawer(DrawerTab::Monitor)),
+            "pod-monitor-source-fixture" => Some(Self::PodMonitorSourceFixture),
             "node-monitor" => Some(Self::NodeDrawer(DrawerTab::Monitor)),
             "node-drawer" => Some(Self::NodeDrawer(DrawerTab::Overview)),
             "node-events" => Some(Self::NodeDrawer(DrawerTab::Events)),

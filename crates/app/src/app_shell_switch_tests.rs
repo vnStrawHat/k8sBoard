@@ -968,7 +968,7 @@ fn retry_on_a_running_row_starts_no_second_probe(cx: &mut TestAppContext) {
 
 // ---- Command palette over a live list ----
 
-fn palette_pod(name: &str) -> cluster::PodSummary {
+pub(super) fn palette_pod(name: &str) -> cluster::PodSummary {
     cluster::PodSummary {
         is_finished: false,
         namespace: "shop".to_owned(),
@@ -999,7 +999,7 @@ fn palette_pod_key(name: &str) -> ResourceKey {
 }
 
 /// The pod `name` of the fixture's primary cluster, as the palette and the cursor name it.
-fn palette_pod_object(
+pub(super) fn palette_pod_object(
     fixture: &SwitchFixture,
     name: &str,
     cx: &mut TestAppContext,

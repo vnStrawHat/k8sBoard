@@ -209,3 +209,18 @@ fn points_in_range_ignore_gaps_and_old_points() {
     chart.start = at(0);
     assert!(has_points_in_range(&chart));
 }
+
+#[test]
+fn range_label_reads_whole_days_for_source_ranges() {
+    let mut chart = model(&[], &[], Measure::Cpu);
+    for (seconds, label) in [
+        (900, "-15m"),
+        (86_400, "-24h"),
+        (7 * 86_400, "-7d"),
+        (30 * 86_400, "-30d"),
+        (7 * 86_400 + 3_600, "-169h"),
+    ] {
+        chart.end = at(seconds);
+        assert_eq!(range_label(&chart), label);
+    }
+}

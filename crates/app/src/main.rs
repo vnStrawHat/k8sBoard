@@ -81,6 +81,7 @@ mod metrics_history;
 mod metrics_page;
 mod monitor_data;
 mod monitor_notices;
+mod monitor_source;
 mod monitor_tab;
 mod namespace_picker;
 mod namespace_rows;

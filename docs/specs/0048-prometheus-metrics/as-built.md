@@ -41,3 +41,20 @@ Clippy flags the step 1 items as dead code until `metrics_query.rs` reads them (
 ## Security review fixes (07726bb)
 
 Error texts: a 401 `Status` maps to `Denied("credentials were rejected")` without the backend message; an empty `Status` or backend message gets a fixed text; `one_line` also drops bidi and format characters; a Job pod pattern accepts an Indexed Job's index.
+
+## Steps 3a, 3b, and 4 (app)
+
+| # | Spec | Built | Why |
+|---|---|---|---|
+| 9 | 3a and 3b as two commits | One commit | `SourceState` fields and `ActiveConnection` are read only by the Metrics page; clippy flags them as dead code alone |
+| 10 | `source_note_texts` and `SourceState::ready` in 3a | In step 4 | Their reader is the Monitor tab |
+| 11 | `ActiveConnection { cluster, label, connection }` | Also `session` (weak) and `generation` | The page shows the session's `SourceState` and tells a reconnect from the same connection |
+| 12 | `AppShell.source_fetch` | `MonitorState.source: Option<SourceFetch>` | The tab reads it through `MonitorView`; another drawer subject drops it with its state |
+| 13 | `SourceFetch.result` | `SourceFetch.view` (the built `SourceView`) and `last_failure` | The charts are built once when an answer lands, so a repaint copies nothing |
+| 14 | `sync_monitor_source` next to `sync_kubelet_demand` | Called before `refresh_monitor_cache` | A long range reset to 24h must be seen by the cache of the same frame |
+| 15 | `pod-monitor-source-fixture` has no cluster | The first pod of the connected cluster, 30d, synthetic source data, no request to a source | The drawer needs a live session, which offline fixtures of the app do not have |
+| 16 | `source_monitor_data(input, result)` reads OOM from the sampler history | `SourceResult.oom` (read from the history when the answer lands; the fixture sets its own) | One place decides the markers |
+| 17 | x axis label of a long range | `-7d`, `-30d` (whole days from 7) | `-720h` is unreadable |
+| 18 | Test `ranges_follow_the_source_state`, `range_click_indexes_the_shown_set` | `ranges_follow_the_source` (the sets), the click indexes `shown` in the same function | The toolbar is drawn by GPUI code; the set is the testable part |
+
+Live checks (UAT, light theme, `.tmp/shots-0048/`): `settings-metrics` lists the two VictoriaMetrics rows with the saved vmselect row selected and `Saved: … · Ready`; `pod-monitor` with the saved entry shows six ranges, `step 15s · metrics source`, and the source footer; `pod-monitor-source-fixture` shows 30d with `step 2h · metrics source`, the OOM marker, and the footer.

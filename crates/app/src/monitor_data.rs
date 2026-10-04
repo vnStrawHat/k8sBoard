@@ -211,7 +211,7 @@ pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData {
 }
 
 /// The kubelet rates of the subject and scope.
-fn read_rates(
+pub(crate) fn read_rates(
     input: &MonitorInput,
     scope: &MonitorScope,
     kind: RateKind,
@@ -235,7 +235,7 @@ fn read_rates(
 }
 
 /// The rate of the kubelet tick nearest to `at`, within half a step; `None` beyond it.
-fn nearest_rate(series: &RateSeries, at: jiff::Timestamp) -> Option<RatePair<f64>> {
+pub(crate) fn nearest_rate(series: &RateSeries, at: jiff::Timestamp) -> Option<RatePair<f64>> {
     let points = &series.points;
     let after = points.partition_point(|(time, _)| *time < at);
     let distance = |index: usize| {
@@ -290,7 +290,7 @@ fn rate_rows(
 }
 
 /// One kubelet card: two rate series in the window, and why it may be empty.
-fn kubelet_chart(
+pub(crate) fn kubelet_chart(
     input: &MonitorInput,
     scope: &MonitorScope,
     kind: RateKind,
@@ -340,7 +340,7 @@ fn kubelet_chart(
 }
 
 /// The series of the subject and scope, the history's span, and the newest tick.
-fn read_series(
+pub(crate) fn read_series(
     input: &MonitorInput,
     scope: &MonitorScope,
     resolution: Resolution,
@@ -375,7 +375,7 @@ fn running_containers(pod: &PodSummary) -> impl Iterator<Item = &ContainerSummar
         .filter(|container| container.kind != ContainerKind::Init)
 }
 
-fn scope_choices(input: &MonitorInput) -> Vec<ScopeChoice> {
+pub(crate) fn scope_choices(input: &MonitorInput) -> Vec<ScopeChoice> {
     let total = |label: &str| ScopeChoice {
         label: label.to_owned(),
         scope: MonitorScope::Total,
@@ -406,7 +406,7 @@ fn scope_choices(input: &MonitorInput) -> Vec<ScopeChoice> {
     }
 }
 
-fn series_name(input: &MonitorInput, scope: &MonitorScope, pod_count: usize) -> String {
+pub(crate) fn series_name(input: &MonitorInput, scope: &MonitorScope, pod_count: usize) -> String {
     match (&input.subject, scope) {
         (MonitorSubject::Pod(_), MonitorScope::Total) => "pod total".to_owned(),
         (MonitorSubject::Workload(_), MonitorScope::Total) => match pod_count {
@@ -502,7 +502,7 @@ fn lines_to_references(lines: &ContainerLines) -> Vec<ReferenceLine> {
 }
 
 /// The reference lines of the CPU chart and of the Memory chart.
-fn reference_lines(
+pub(crate) fn reference_lines(
     input: &MonitorInput,
     scope: &MonitorScope,
 ) -> (Vec<ReferenceLine>, Vec<ReferenceLine>) {

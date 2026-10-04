@@ -268,3 +268,63 @@ fn kubelet_gate_reads_the_node_proxy_review() {
         NodesGate::Poll
     );
 }
+
+fn source() -> MetricsSource {
+    MetricsSource::new(&cluster::MetricsSourceFields {
+        namespace: "monitoring".to_owned(),
+        service: "vmselect".to_owned(),
+        port: "8481".to_owned(),
+        scheme: cluster::MetricsScheme::Http,
+        prefix: String::new(),
+    })
+    .expect("valid source")
+}
+
+fn ready(cpu_series: u64) -> SourceState {
+    SourceState::Ready {
+        source: source(),
+        check: SourceCheck {
+            latency: std::time::Duration::from_millis(35),
+            cpu_series,
+        },
+    }
+}
+
+#[test]
+fn source_note_texts() {
+    assert_eq!(source_note(&SourceState::None), None);
+    assert_eq!(source_note(&ready(1_234)), None);
+    assert_eq!(
+        source_note(&ready(0)).as_deref(),
+        Some("Metrics source has no container CPU series")
+    );
+    assert_eq!(
+        source_note(&SourceState::Invalid).as_deref(),
+        Some("Metrics source in settings is not valid (Settings › Metrics)")
+    );
+    let checking = SourceState::Checking {
+        source: source(),
+        _task: Task::ready(()),
+    };
+    assert_eq!(
+        source_note(&checking).as_deref(),
+        Some("Metrics source: checking…")
+    );
+    let failed = SourceState::Failed {
+        source: source(),
+        error: MetricsError::TimedOut,
+    };
+    assert_eq!(
+        source_note(&failed).as_deref(),
+        Some(
+            "Metrics source unreachable: the metrics backend did not answer within 20 s (Settings › Metrics)"
+        )
+    );
+}
+
+#[test]
+fn only_a_checked_source_is_ready() {
+    assert!(ready(5).ready().is_some());
+    assert!(SourceState::None.ready().is_none());
+    assert!(SourceState::Invalid.ready().is_none());
+}

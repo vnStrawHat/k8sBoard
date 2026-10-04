@@ -213,3 +213,11 @@ fn shared_network_notice(subject: &Subject) -> Option<String> {
         .container
         .map(|_| "Pod network, shared by all containers".to_owned())
 }
+
+/// The Network card of a metrics source view: only the host-network rules apply, since the source
+/// has no kubelet to wait for. A host-network pod, or a workload with any, shows the notice
+/// instead of source data.
+pub(crate) fn source_network_notice(input: &MonitorInput, scope: &MonitorScope) -> Option<String> {
+    let subject = Subject::of(input, scope);
+    host_network_notice(input, &subject).or_else(|| workload_host_network_notice(&subject))
+}

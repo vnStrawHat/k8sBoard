@@ -147,3 +147,197 @@ fn the_live_connection_is_published_and_removed(cx: &mut TestAppContext) {
     fixture.shell.update(cx, |shell, cx| shell.release_all(cx));
     assert!(!cx.update(|cx| cx.has_global::<ActiveConnection>()));
 }
+
+// ---- The Monitor query of the open drawer ----
+
+use super::app_shell_switch_tests::{palette_pod, palette_pod_object};
+use crate::drawer::{DrawerTab, MonitorRange, MonitorScope};
+use crate::monitor_source::SourceView;
+
+/// A fake API: a matrix for every `query_range` (one point per step), a vector for `query`, and an
+/// empty list for the rest.
+fn monitor_answer(request: &cluster::fake_api::RecordedRequest) -> (u16, String) {
+    // The session's own pods watch must keep the pod the test shows.
+    if request.path == "/api/v1/pods" {
+        let pod =
+            r#"{"metadata":{"name":"api-0","namespace":"shop"},"status":{"phase":"Running"}}"#;
+        return (
+            200,
+            format!(
+                r#"{{"apiVersion":"v1","kind":"PodList","metadata":{{"resourceVersion":"1"}},"items":[{pod}]}}"#
+            ),
+        );
+    }
+    if !request.path.contains("/proxy/") {
+        return (200, EMPTY_LIST.to_owned());
+    }
+    if request.path.ends_with("/query") {
+        return (200, CPU_COUNT.to_owned());
+    }
+    // The numbers are plain digits, so the raw query needs no decoding.
+    let number = |key: &str| {
+        request
+            .query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix(&format!("{key}=")))
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    let (start, end, step) = (number("start"), number("end"), number("step"));
+    let mut values = Vec::new();
+    let mut at = start;
+    while at <= end {
+        values.push(serde_json::json!([at, "2"]));
+        at += step;
+    }
+    (
+        200,
+        serde_json::json!({"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":values}]}})
+            .to_string(),
+    )
+}
+
+fn monitor_fixture(name: &str, cx: &mut TestAppContext) -> (SwitchFixture, FakeApi) {
+    let fixture = open_switch_fixture(name, cx);
+    let (connection, api) = {
+        let _guard = fixture.runtime.enter();
+        FakeApi::connection(WritePolicy::Blocked, monitor_answer)
+    };
+    let session = fixture.session(cx);
+    session.update(cx, |session, cx| {
+        session.go_live_for_test(connection, NamespaceScope::All, cx);
+        session.set_pods_for_test(vec![palette_pod("api-0")], cx);
+    });
+    cx.run_until_parked();
+    save_metrics(&fixture, Some(fields("/select/0/prometheus")), cx);
+    wait_for_state(&fixture, "ready", cx);
+    // The selection is kept only while its row shows, so the table draws first.
+    fixture
+        .shell
+        .update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx));
+    cx.run_until_parked();
+    fixture.draw_twice(cx);
+    let pod = palette_pod_object(&fixture, "api-0", cx);
+    fixture.shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(pod), cx);
+        shell.set_drawer_open(true, cx);
+        shell.set_drawer_tab(DrawerTab::Monitor, cx);
+    });
+    fixture.draw_twice(cx);
+    (fixture, api)
+}
+
+fn range_requests(api: &FakeApi) -> usize {
+    api.requests()
+        .iter()
+        .filter(|request| request.path.ends_with("/query_range"))
+        .count()
+}
+
+fn wait_for_view(fixture: &SwitchFixture, cx: &mut TestAppContext) {
+    fixture.wait_until("the source answer", cx, |shell, _| {
+        shell
+            .drawer
+            .monitor
+            .source
+            .as_ref()
+            .is_some_and(|fetch| fetch.view.is_some())
+    });
+}
+
+#[gpui_kit::test]
+fn an_open_monitor_queries_the_source_once(cx: &mut TestAppContext) {
+    let (fixture, api) = monitor_fixture("monitor-once", cx);
+    wait_for_view(&fixture, cx);
+    assert_eq!(range_requests(&api), 6, "one query per metric");
+    fixture.shell.read_with(cx, |shell, _| {
+        let fetch = shell.drawer.monitor.source.as_ref().expect("a fetch");
+        assert!(matches!(fetch.view, Some(SourceView::Charts { .. })));
+    });
+    // Renders with the same key and a fresh answer send nothing more.
+    fixture.draw_twice(cx);
+    fixture.draw_twice(cx);
+    assert_eq!(
+        range_requests(&api),
+        6,
+        "same key, fresh answer: no refetch"
+    );
+    let pods = api
+        .requests()
+        .into_iter()
+        .filter(|request| request.path.ends_with("/query_range"))
+        .map(|request| request.method)
+        .collect::<Vec<_>>();
+    assert!(pods.iter().all(|method| method == "GET"));
+}
+
+#[gpui_kit::test]
+fn a_scope_change_drops_the_fetch_and_queries_again(cx: &mut TestAppContext) {
+    let (fixture, api) = monitor_fixture("monitor-scope", cx);
+    wait_for_view(&fixture, cx);
+    fixture.shell.update(cx, |shell, cx| {
+        shell.set_monitor_scope(MonitorScope::Part("app".to_owned()), cx);
+    });
+    fixture.draw_twice(cx);
+    let scope_of_fetch = fixture.shell.read_with(cx, |shell, _| {
+        shell
+            .drawer
+            .monitor
+            .source
+            .as_ref()
+            .map(|fetch| fetch.key.scope.clone())
+    });
+    assert_eq!(scope_of_fetch, Some(MonitorScope::Part("app".to_owned())));
+    wait_for_view(&fixture, cx);
+    assert_eq!(range_requests(&api), 12);
+}
+
+#[gpui_kit::test]
+fn a_hidden_monitor_drops_the_fetch(cx: &mut TestAppContext) {
+    let (fixture, _api) = monitor_fixture("monitor-hidden", cx);
+    wait_for_view(&fixture, cx);
+    fixture.shell.update(cx, |shell, cx| {
+        shell.set_drawer_tab(DrawerTab::Overview, cx);
+    });
+    fixture.draw_twice(cx);
+    fixture.shell.read_with(cx, |shell, _| {
+        assert!(shell.drawer.monitor.source.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn leaving_ready_resets_long_ranges(cx: &mut TestAppContext) {
+    let (fixture, _api) = monitor_fixture("monitor-reset", cx);
+    fixture.shell.update(cx, |shell, cx| {
+        shell.set_monitor_range(MonitorRange::Days30, cx);
+    });
+    fixture.draw_twice(cx);
+    fixture.shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.drawer.monitor.range, MonitorRange::Days30);
+        assert!(shell.drawer.monitor.source.is_some());
+    });
+    // The source is removed from the settings: the long range goes back to 24h.
+    save_metrics(&fixture, None, cx);
+    fixture.draw_twice(cx);
+    fixture.shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.drawer.monitor.range, MonitorRange::Hours24);
+        assert!(shell.drawer.monitor.source.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn a_long_range_builds_no_sampler_cache(cx: &mut TestAppContext) {
+    let (fixture, _api) = monitor_fixture("monitor-no-cache", cx);
+    fixture.shell.update(cx, |shell, cx| {
+        shell.set_monitor_range(MonitorRange::Days7, cx);
+    });
+    fixture.draw_twice(cx);
+    wait_for_view(&fixture, cx);
+    fixture.draw_twice(cx);
+    fixture.shell.read_with(cx, |shell, _| {
+        assert!(
+            shell.drawer.monitor.cache.is_none(),
+            "7d never reads the sampler"
+        );
+    });
+}

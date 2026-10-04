@@ -135,6 +135,8 @@ pub(crate) mod batch_write;
 #[path = "certificate_renewal.rs"]
 pub(crate) mod certificate_renewal;
 
+#[path = "app_shell_monitor_source.rs"]
+mod app_shell_monitor_source;
 #[path = "app_shell_session.rs"]
 mod app_shell_session;
 #[path = "debug_open.rs"]
@@ -466,6 +468,10 @@ pub(crate) struct AppShell {
     /// presets nor a cluster may replace.
     #[cfg(feature = "screenshot")]
     forward_fixture: bool,
+    /// `--screen pod-monitor-source-fixture`: the Monitor shows synthetic source data and sends no
+    /// request to a source.
+    #[cfg(feature = "screenshot")]
+    is_monitor_source_fixture: bool,
     /// The title-bar switcher popover.
     switcher: ClusterSwitcherState,
     _switcher_filter_events: Subscription,
@@ -723,6 +729,8 @@ impl AppShell {
             _forward_subscriptions: forward_subscriptions,
             #[cfg(feature = "screenshot")]
             forward_fixture: options.screen.is_port_forward_fixture(),
+            #[cfg(feature = "screenshot")]
+            is_monitor_source_fixture: options.screen == LaunchScreen::PodMonitorSourceFixture,
             switcher: ClusterSwitcherState::new(switcher_filter),
             _switcher_filter_events: switcher_filter_events,
             pending_switcher_launch: options.screen == LaunchScreen::Switcher,
@@ -2309,6 +2317,11 @@ impl AppShell {
         let is_container_tab = self.drawer.tab == DrawerTab::Containers
             && self.drawer.container_tab == ContainerTab::Monitor;
         if !self.shows_monitor() {
+            self.drawer.monitor.cache = None;
+            return;
+        }
+        // 7d and 30d are read from the source alone: nothing builds sampler data for them.
+        if self.drawer.monitor.range.is_long() {
             self.drawer.monitor.cache = None;
             return;
         }
@@ -4588,6 +4601,7 @@ impl AppShell {
 impl Render for AppShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.fit_table_widths(window, cx);
+        self.sync_monitor_source(cx);
         self.refresh_monitor_cache(cx);
         self.open_pending_logs(window, cx);
         self.open_pending_dialog(window, cx);

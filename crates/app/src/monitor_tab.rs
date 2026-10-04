@@ -13,11 +13,12 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
-use crate::cluster_metrics::FeedStatus;
+use crate::cluster_metrics::{FeedStatus, source_note};
 use crate::cluster_session::LiveCluster;
 use crate::drawer::{DrawerState, MonitorRange, MonitorScope, MonitorState};
 use crate::history_rings::{COARSE_POINTS, Resolution, TICKS_PER_COARSE};
 use crate::monitor_data::{MonitorData, MonitorRow};
+use crate::monitor_source::{SourceFetch, SourceView, step_text};
 use crate::status_tone::{StatusTone, tone_color};
 use crate::usage_chart::{UsageChartModel, usage_chart_card};
 use crate::usage_format::{Measure, format_offset};
@@ -27,9 +28,12 @@ const CHART_HEIGHT_EXPANDED: f32 = 140.;
 const CHART_MIN_WIDTH: f32 = 280.;
 /// The most points a range can hold: every coarse point, and the fine ticks newer than the last
 /// one (fewer than 20, or that tick would have closed a coarse point).
-const MAX_TABLE_ROWS: usize = COARSE_POINTS + TICKS_PER_COARSE - 1;
-const SHORT_HISTORY_TIP: &str =
-    "Showing data since k8sBoard connected; connect Prometheus for 30 days";
+const MAX_TABLE_ROWS: usize = {
+    let sampler = COARSE_POINTS + TICKS_PER_COARSE - 1;
+    // A source answer holds up to 400 points (the cluster crate's `MAX_POINTS`).
+    if sampler > 400 { sampler } else { 400 }
+};
+const SHORT_HISTORY_TIP: &str = "Showing data since k8sBoard connected; choose a metrics source in Settings › Metrics for up to 30 days";
 const SOURCE_NOTE: &str = "CPU and memory: metrics-server, sampled by k8sBoard every 15s while the app is open. Network and disk I/O: kubelet stats summary and cAdvisor through the API server node proxy, sampled every 15s while needed. Kept 24 hours.";
 const METRICS_UNAVAILABLE_TITLE: &str = "Metrics unavailable";
 const KUBELET_UNAVAILABLE_TITLE: &str = "Network and disk I/O unavailable";
@@ -48,6 +52,10 @@ pub(crate) struct MonitorView<'a> {
     /// The container sub-tab has no scope selector.
     has_scope: bool,
     pub(crate) is_expanded: bool,
+    /// The metrics source query (spec 0048): `Some` makes the tab a source view with six ranges.
+    source: Option<&'a SourceFetch>,
+    /// Why a saved source is not serving the tab (checking, unreachable, not valid).
+    source_note: Option<String>,
 }
 
 impl<'a> MonitorView<'a> {
@@ -60,6 +68,8 @@ impl<'a> MonitorView<'a> {
             note: live.metrics.pods.note.as_deref(),
             has_scope: true,
             is_expanded: state.is_expanded,
+            source: state.monitor.source.as_ref(),
+            source_note: source_note(&live.metrics.source),
         }
     }
 
@@ -80,11 +90,87 @@ impl<'a> MonitorView<'a> {
             note: None,
             has_scope: true,
             is_expanded: state.is_expanded,
+            source: state.monitor.source.as_ref(),
+            source_note: source_note(&live.metrics.source),
         }
     }
 }
 
+/// The tab body. A source view draws from the source's answer; everything else (no source, a
+/// query still running on a short range, a failed query on a short range) draws the sampler.
 pub(crate) fn monitor_tab(view: &MonitorView<'_>, cx: &Context<AppShell>) -> AnyElement {
+    let Some(fetch) = view.source else {
+        return sampler_tab(view, view.source_note.clone(), cx);
+    };
+    let muted = |text: String| {
+        div()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .child(text)
+    };
+    let is_long = view.state.range.is_long();
+    match &fetch.view {
+        Some(SourceView::Charts { data, was_cut }) => {
+            let mut column = v_flex().gap_3().child(toolbar(view, Some(data), cx));
+            if let Some(reason) = &fetch.last_failure {
+                column = column.child(muted(format!(
+                    "Last query failed: {reason}. Showing older results."
+                )));
+            }
+            if *was_cut {
+                column = column.child(muted(
+                    "Some series were left out (more than 64).".to_owned(),
+                ));
+            }
+            column = if view.state.is_table {
+                column.child(table(&data.rows, true, cx))
+            } else {
+                column.child(charts(
+                    data.charts.iter().chain(&data.kubelet_charts),
+                    view.is_expanded,
+                    cx,
+                ))
+            };
+            column
+                .child(muted(format!(
+                    "CPU, memory, network, and disk I/O: {}, step {}. Request and limit lines show the current spec.",
+                    fetch.key.source.display(),
+                    step_text(view.state.range.source_step())
+                )))
+                .into_any_element()
+        }
+        Some(SourceView::Fallback(reason)) if is_long => v_flex()
+            .gap_3()
+            .child(toolbar(view, None, cx))
+            .child(
+                Alert::warning("monitor-source-failed", reason.clone())
+                    .title("Metrics source query failed"),
+            )
+            .into_any_element(),
+        Some(SourceView::Fallback(reason)) => sampler_tab(
+            view,
+            Some(format!("Prometheus: {reason}. Showing k8sBoard samples.")),
+            cx,
+        ),
+        None if is_long => v_flex()
+            .gap_3()
+            .child(toolbar(view, None, cx))
+            .child(muted(format!("Querying {}…", fetch.key.source.display())).text_sm())
+            .into_any_element(),
+        None => sampler_tab(
+            view,
+            Some(format!("Querying {}…", fetch.key.source.display())),
+            cx,
+        ),
+    }
+}
+
+/// The sampler body: today's Monitor. `lead_note` is a muted line under the toolbar.
+fn sampler_tab(
+    view: &MonitorView<'_>,
+    lead_note: Option<String>,
+    cx: &Context<AppShell>,
+) -> AnyElement {
     let theme = cx.theme();
     let muted = |text: SharedString| {
         div()
@@ -126,6 +212,14 @@ pub(crate) fn monitor_tab(view: &MonitorView<'_>, cx: &Context<AppShell>) -> Any
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(note.to_owned()),
+        );
+    }
+    if let Some(note) = lead_note {
+        column = column.child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(note),
         );
     }
     if let FeedStatus::Interrupted(reason) = view.status {
@@ -202,26 +296,31 @@ fn toolbar(
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let state = view.state;
+    // The click indexes this same set, so `30d` can never map to another range.
+    let shown: &'static [MonitorRange] = if view.source.is_some() {
+        &MonitorRange::SOURCE
+    } else {
+        &MonitorRange::SAMPLER
+    };
     let ranges = ButtonGroup::new("monitor-range")
         .outline()
         .small()
-        .children(MonitorRange::ALL.into_iter().map(|range| {
-            // A range longer than the history reads dimmed: the data starts when the app did.
-            let is_short = data.is_none_or(|data| data.is_short_for(range));
+        .children(shown.iter().map(|range| {
+            // Without a source, a range longer than the history reads dimmed: the data starts
+            // when the app did.
+            let is_short =
+                view.source.is_none() && data.is_none_or(|data| data.is_short_for(*range));
             let button = Button::new(range.label())
                 .label(range.label())
-                .selected(range == state.range);
+                .selected(*range == state.range);
             if is_short {
                 button.opacity(0.55).tooltip(SHORT_HISTORY_TIP)
             } else {
                 button
             }
         }))
-        .on_click(cx.listener(|shell, clicks: &Vec<usize>, _, cx| {
-            if let Some(range) = clicks
-                .first()
-                .and_then(|index| MonitorRange::ALL.get(*index))
-            {
+        .on_click(cx.listener(move |shell, clicks: &Vec<usize>, _, cx| {
+            if let Some(range) = clicks.first().and_then(|index| shown.get(*index)) {
                 shell.set_monitor_range(*range, cx);
             }
         }));
@@ -284,6 +383,18 @@ fn status_text(
 ) -> AnyElement {
     let theme = cx.theme();
     let text = div().ml_auto().text_xs().text_color(theme.muted_foreground);
+    if let Some(fetch) = view.source {
+        match &fetch.view {
+            Some(SourceView::Charts { .. }) => {
+                let step = step_text(view.state.range.source_step());
+                return text
+                    .child(format!("step {step} · metrics source"))
+                    .into_any_element();
+            }
+            None => return text.child("querying…").into_any_element(),
+            Some(SourceView::Fallback(_)) => {}
+        }
+    }
     match view.status {
         FeedStatus::Interrupted(reason) => {
             let tooltip = SharedString::from(reason.clone());

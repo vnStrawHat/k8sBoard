@@ -23,6 +23,7 @@ use crate::cluster_session::LiveList;
 use crate::helm_release_view::{HelmReleaseView, ValuesLayout};
 use crate::history_rings::Resolution;
 use crate::monitor_data::MonitorData;
+use crate::monitor_source::SourceFetch;
 use crate::object_events::events_title;
 use crate::port_forward_menu::PortButton;
 use crate::resource_kind::ResourceKind;
@@ -113,6 +114,10 @@ pub(crate) struct MonitorState {
     pub(crate) scope: MonitorScope,
     pub(crate) is_table: bool,
     pub(crate) cache: Option<MonitorCache>,
+    /// The metrics source query of the shown Monitor (spec 0048); `Some` exactly while the source is
+    /// ready, the subject has a target, and a Monitor tab shows. It lives with the range and scope
+    /// it was fetched for, so another drawer subject drops it.
+    pub(crate) source: Option<SourceFetch>,
 }
 
 impl MonitorState {
@@ -122,6 +127,7 @@ impl MonitorState {
             scope: MonitorScope::Total,
             is_table: false,
             cache: None,
+            source: None,
         }
     }
 }
@@ -132,10 +138,23 @@ pub(crate) enum MonitorRange {
     Hour1,
     Hours6,
     Hours24,
+    Days7,
+    Days30,
 }
 
 impl MonitorRange {
-    pub(crate) const ALL: [Self; 4] = [Self::Minutes15, Self::Hour1, Self::Hours6, Self::Hours24];
+    /// What the app's own sampler can show: it keeps 24 hours.
+    pub(crate) const SAMPLER: [Self; 4] =
+        [Self::Minutes15, Self::Hour1, Self::Hours6, Self::Hours24];
+    /// What a ready metrics source adds to: 7 and 30 days.
+    pub(crate) const SOURCE: [Self; 6] = [
+        Self::Minutes15,
+        Self::Hour1,
+        Self::Hours6,
+        Self::Hours24,
+        Self::Days7,
+        Self::Days30,
+    ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -143,6 +162,8 @@ impl MonitorRange {
             Self::Hour1 => "1h",
             Self::Hours6 => "6h",
             Self::Hours24 => "24h",
+            Self::Days7 => "7d",
+            Self::Days30 => "30d",
         }
     }
 
@@ -152,15 +173,32 @@ impl MonitorRange {
             Self::Hour1 => 60,
             Self::Hours6 => 6 * 60,
             Self::Hours24 => 24 * 60,
+            Self::Days7 => 7 * 24 * 60,
+            Self::Days30 => 30 * 24 * 60,
         };
         Duration::from_secs(minutes * 60)
     }
 
-    /// The short ranges read the fine ticks; the long ones read the coarse points.
+    /// The step of a metrics source query for this range (the `cluster::RANGE_STEPS` table).
+    pub(crate) fn source_step(self) -> Duration {
+        let duration = self.duration();
+        cluster::RANGE_STEPS
+            .iter()
+            .find(|(span, _)| *span == duration)
+            .map_or(Duration::from_secs(60), |(_, step)| *step)
+    }
+
+    /// 7d and 30d: nothing reads the sampler for them, which keeps 24 hours.
+    pub(crate) fn is_long(self) -> bool {
+        matches!(self, Self::Days7 | Self::Days30)
+    }
+
+    /// The short ranges read the fine ticks; the long ones read the coarse points. The two source
+    /// ranges are coarse too, but no code reads the sampler for them.
     pub(crate) fn resolution(self) -> Resolution {
         match self {
             Self::Minutes15 | Self::Hour1 => Resolution::Fine,
-            Self::Hours6 | Self::Hours24 => Resolution::Coarse,
+            Self::Hours6 | Self::Hours24 | Self::Days7 | Self::Days30 => Resolution::Coarse,
         }
     }
 }
@@ -836,11 +874,22 @@ mod tests {
             MonitorRange::Hours24.duration(),
             Duration::from_secs(86_400)
         );
-        let labels: Vec<_> = MonitorRange::ALL
+        let labels: Vec<_> = MonitorRange::SOURCE
             .iter()
             .map(|range| range.label())
             .collect();
-        assert_eq!(labels, ["15m", "1h", "6h", "24h"]);
+        assert_eq!(labels, ["15m", "1h", "6h", "24h", "7d", "30d"]);
+        assert_eq!(MonitorRange::SAMPLER.len(), 4);
+        assert!(MonitorRange::Days7.is_long() && MonitorRange::Days30.is_long());
+        assert!(!MonitorRange::Hours24.is_long());
+        assert_eq!(
+            MonitorRange::Days30.source_step(),
+            Duration::from_secs(7_200)
+        );
+        assert_eq!(
+            MonitorRange::Minutes15.source_step(),
+            Duration::from_secs(15)
+        );
     }
 
     #[test]
