@@ -31,7 +31,9 @@ const BAD_SHARE: f64 = 0.05;
 const TEXT_SHARE: f64 = 0.001;
 /// Peers outside the namespace that are kept for the chip tooltip.
 const OUTSIDE_LIMIT: usize = 20;
-/// The kinds a `TrafficEnd::Workload` can name.
+/// The kinds a `TrafficEnd::Workload` can name, in the order they are tried. Istio's
+/// `source_workload` carries no kind, so a Deployment with the same name wins over a StatefulSet
+/// or a DaemonSet.
 const WORKLOAD_KINDS: [TopologyKind; 3] = [
     TopologyKind::Deployment,
     TopologyKind::StatefulSet,
@@ -98,8 +100,8 @@ pub(crate) struct TrafficOverlay {
 /// Where a `TrafficEnd` lands in the graph.
 enum Resolved {
     Node(usize),
-    /// A pod of the namespace that adds nothing: a host-network pod, or one the graph does not
-    /// draw (decision 14).
+    /// A name that adds nothing: a host-network pod, or a pod, Service, or workload of the
+    /// namespace that is not a node (ended, not delivered yet, hidden by a filter).
     Skipped,
     /// Another namespace or an unknown peer.
     Outside(String),
@@ -132,18 +134,18 @@ impl<'a> Resolver<'a> {
         self.ids.get(&id).copied()
     }
 
+    /// Both queries are scoped to the Topology namespace, so a name that is not a node is a pod
+    /// that just ended, an object not delivered yet, or one the filters hide: it is skipped. Only
+    /// `TrafficEnd::Outside` (an Istio peer of another namespace or an unknown caller) is outside.
     fn end(&self, end: &TrafficEnd) -> Resolved {
-        let found = |index: Option<usize>, name: &str| {
-            index.map_or_else(|| Resolved::Outside(name.to_owned()), Resolved::Node)
-        };
+        let found = |index: Option<usize>| index.map_or(Resolved::Skipped, Resolved::Node);
         match end {
             TrafficEnd::Workload(name) => found(
                 WORKLOAD_KINDS
                     .iter()
                     .find_map(|kind| self.object(*kind, name)),
-                name,
             ),
-            TrafficEnd::Service(name) => found(self.object(TopologyKind::Service, name), name),
+            TrafficEnd::Service(name) => found(self.object(TopologyKind::Service, name)),
             TrafficEnd::Pod(name) => self.pod(name),
             TrafficEnd::Outside(label) => Resolved::Outside(label.clone()),
         }
@@ -152,7 +154,7 @@ impl<'a> Resolver<'a> {
     /// The pod's own node, else the group node that holds it.
     fn pod(&self, name: &str) -> Resolved {
         let Some(pod) = self.pods.get(name) else {
-            return Resolved::Outside(name.to_owned());
+            return Resolved::Skipped;
         };
         if pod.host_network {
             return Resolved::Skipped;

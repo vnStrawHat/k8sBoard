@@ -217,7 +217,10 @@ fn unresolved_ends_count_as_outside() {
     ));
     let (_, calls, overlay) = overlay_of(&sample);
     assert_eq!(calls.len(), 2, "an unknown Service makes no edge");
-    assert!(overlay.outside.contains(&"gone".to_owned()));
+    assert!(
+        !overlay.outside.contains(&"gone".to_owned()),
+        "a Service of the namespace that is not drawn is not an outside peer"
+    );
 }
 
 #[test]
@@ -617,4 +620,27 @@ fn sources_follow_the_answers() {
         [TrafficSourceKind::Istio, TrafficSourceKind::PodNetwork]
     );
     assert!(overlay.notes.is_empty());
+}
+
+#[test]
+fn a_pod_gone_from_the_list_is_not_an_outside_peer() {
+    let (graph, mut pods) = namespace();
+    // The pod ended after the sample was read: it is no longer in the list.
+    pods.retain(|pod| pod.name != "ledger-0");
+    let sample = bytes_sample();
+    let overlay = traffic_overlay(&graph, &[], &refs(&pods), &sample);
+    assert!(overlay.outside.is_empty(), "{:?}", overlay.outside);
+    let ledger = node(&graph, TopologyKind::StatefulSet, "ledger");
+    assert_eq!(overlay.nodes[ledger], None, "its bytes are not counted");
+    // A pod the graph does not draw is skipped the same way.
+    let hidden = Fixture::default().with_pod(pod("p", &[], None)).graph();
+    let only_pods = [pod("p", &[], None)];
+    let rates = refs(&only_pods);
+    let mut only_p = bytes_sample();
+    only_p.readings[0].1 = Ok(TrafficReading {
+        rates: vec![pod_rate("p", 5., 5.)],
+        was_cut: false,
+    });
+    let overlay = traffic_overlay(&hidden, &[], &rates, &only_p);
+    assert!(overlay.outside.is_empty());
 }

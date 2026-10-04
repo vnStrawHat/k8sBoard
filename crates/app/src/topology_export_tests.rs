@@ -440,3 +440,37 @@ fn export_without_traffic_has_no_labels_or_traffic_legend() {
     assert!(!svg.contains("req/s"));
     assert!(!svg.contains(">calls</text>"));
 }
+
+#[test]
+fn bytes_only_export_lists_no_calls_or_tones_in_the_legend() {
+    use std::rc::Rc;
+
+    use crate::topology_fixtures::traffic_namespace;
+    use crate::topology_traffic::TrafficLayer;
+    use crate::topology_traffic_fixture::bytes_sample;
+
+    let fixture = traffic_namespace();
+    let graph = fixture.graph();
+    let pods = fixture.pods.clone().expect("pods listed");
+    let refs: Vec<&cluster::PodSummary> = pods.iter().collect();
+    let arranged = layout(
+        &graph,
+        GroupBy::Components,
+        1.6,
+        &Default::default(),
+        None,
+        EdgeShape::Elbows,
+    );
+    let layer = TrafficLayer::build(
+        &graph,
+        &arranged,
+        EdgeShape::Elbows,
+        &refs,
+        Rc::new(bytes_sample()),
+    );
+    let svg = topology_svg(&graph, &arranged, Some(&layer), "t", &style());
+    assert!(svg.contains("routes to \u{b7} width = receive bytes/s per pod"));
+    assert!(svg.contains(">owns</text>"));
+    assert!(!svg.contains(">calls</text>"));
+    assert!(!svg.contains("5xx"));
+}

@@ -347,10 +347,12 @@ fn the_legend_follows_the_sources() {
     let texts: Vec<&str> = bytes.iter().map(|(_, text)| *text).collect();
     assert_eq!(
         texts,
-        [
-            "routes to \u{b7} width = receive bytes/s per pod",
-            "calls",
-            "owns"
-        ]
+        ["routes to \u{b7} width = receive bytes/s per pod", "owns"]
+    );
+    // Every Traffic entry is a flow, as the edges are drawn, except the tones.
+    assert!(
+        istio
+            .iter()
+            .all(|(swatch, _)| !matches!(swatch, Swatch::Relation(_)))
     );
 }

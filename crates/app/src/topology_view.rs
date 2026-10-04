@@ -145,14 +145,51 @@ struct TrafficFetchPlan {
     connection: ClusterConnection,
 }
 /// What `sync_traffic` does next.
+#[derive(Debug, PartialEq, Eq)]
 enum TrafficStep {
-    /// The source no longer serves, or has no traffic metric: back to Resources.
+    /// The source cannot serve, or holds no traffic metric: back to Resources.
     Leave,
     LoadNames,
     Wait,
-    Fetch(Box<TrafficFetchPlan>),
+    Fetch,
 }
 
+/// The next step, from the source state, the metric list, and the run so far. A source that is
+/// being checked again (after a change in Settings) is waited for; only one that is missing,
+/// invalid, or unreachable ends Traffic mode.
+fn traffic_step(run: &TrafficRun, metrics: &crate::cluster_metrics::ClusterMetrics) -> TrafficStep {
+    match &metrics.source {
+        SourceState::Ready { .. } => {}
+        SourceState::Checking { .. } => return TrafficStep::Wait,
+        SourceState::None | SourceState::Invalid | SourceState::Failed { .. } => {
+            return TrafficStep::Leave;
+        }
+    }
+    let is_due = |at: Option<Instant>| at.is_none_or(|at| at.elapsed() >= TRAFFIC_REFRESH);
+    match &metrics.traffic_sources {
+        TrafficSources::NotLoaded => TrafficStep::LoadNames,
+        TrafficSources::Loading { .. } => TrafficStep::Wait,
+        TrafficSources::Loaded(Err(_)) if is_due(run.last_names_try) => TrafficStep::LoadNames,
+        TrafficSources::Loaded(Err(_)) => TrafficStep::Wait,
+        TrafficSources::Loaded(Ok(sources)) if sources.is_empty() => TrafficStep::Leave,
+        TrafficSources::Loaded(Ok(_)) if run.fetch.is_some() || !is_due(run.last_fetch) => {
+            TrafficStep::Wait
+        }
+        TrafficSources::Loaded(Ok(_)) => TrafficStep::Fetch,
+    }
+}
+
+fn fetch_plan(live: &LiveCluster) -> Option<TrafficFetchPlan> {
+    let (source, _) = live.metrics.source.ready()?;
+    let TrafficSources::Loaded(Ok(sources)) = &live.metrics.traffic_sources else {
+        return None;
+    };
+    Some(TrafficFetchPlan {
+        sources: sources.clone(),
+        source: source.clone(),
+        connection: live.connection().clone(),
+    })
+}
 /// The Traffic segment: whether it can be pressed, and what its tooltip says.
 pub(crate) struct TrafficButton {
     pub(crate) is_enabled: bool,
@@ -841,7 +878,7 @@ impl TopologyView {
             let Some(live) = session.read(cx).live() else {
                 return;
             };
-            self.traffic_step(live)
+            traffic_step(&self.traffic, &live.metrics)
         };
         match step {
             TrafficStep::Leave => self.set_mode(TopologyMode::Resources, cx),
@@ -850,40 +887,21 @@ impl TopologyView {
                 session.update(cx, |session, cx| session.load_traffic_sources(cx));
             }
             TrafficStep::Wait => {}
-            TrafficStep::Fetch(plan) => {
-                let TrafficFetchPlan {
+            TrafficStep::Fetch => {
+                let plan = {
+                    let Some(live) = session.read(cx).live() else {
+                        return;
+                    };
+                    fetch_plan(live)
+                };
+                if let Some(TrafficFetchPlan {
                     sources,
                     source,
                     connection,
-                } = *plan;
-                self.start_traffic_fetch(sources, source, connection, namespace, cx);
-            }
-        }
-    }
-
-    fn traffic_step(&self, live: &LiveCluster) -> TrafficStep {
-        let metrics = &live.metrics;
-        let Some((source, _)) = metrics.source.ready() else {
-            return TrafficStep::Leave;
-        };
-        let is_due = |at: Option<Instant>| at.is_none_or(|at| at.elapsed() >= TRAFFIC_REFRESH);
-        match &metrics.traffic_sources {
-            TrafficSources::NotLoaded => TrafficStep::LoadNames,
-            TrafficSources::Loading { .. } => TrafficStep::Wait,
-            TrafficSources::Loaded(Err(_)) if is_due(self.traffic.last_names_try) => {
-                TrafficStep::LoadNames
-            }
-            TrafficSources::Loaded(Err(_)) => TrafficStep::Wait,
-            TrafficSources::Loaded(Ok(sources)) if sources.is_empty() => TrafficStep::Leave,
-            TrafficSources::Loaded(Ok(sources)) => {
-                if self.traffic.fetch.is_some() || !is_due(self.traffic.last_fetch) {
-                    return TrafficStep::Wait;
+                }) = plan
+                {
+                    self.start_traffic_fetch(sources, source, connection, namespace, cx);
                 }
-                TrafficStep::Fetch(Box::new(TrafficFetchPlan {
-                    sources: sources.clone(),
-                    source: source.clone(),
-                    connection: live.connection().clone(),
-                }))
             }
         }
     }
@@ -991,6 +1009,17 @@ impl TopologyView {
         let aspect = self.aspect();
         self.install(traffic_fixture_graph(), GroupBy::Components, aspect, cx);
         cx.notify();
+    }
+
+    /// Test seam: pretend a Traffic request is in flight.
+    #[cfg(test)]
+    pub(crate) fn hold_traffic_fetch_for_test(&mut self) {
+        self.traffic.fetch = Some(Task::ready(()));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_traffic_fetch_for_test(&self) -> bool {
+        self.traffic.fetch.is_some()
     }
 
     /// Whether a screenshot of a Traffic screen still waits for its first sample.

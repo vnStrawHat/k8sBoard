@@ -643,3 +643,73 @@ fn chip_tooltip_lists_notes_then_outside_peers() {
     };
     assert_eq!(traffic_chip_tooltip(&quiet), None);
 }
+
+#[test]
+fn a_source_being_checked_again_does_not_end_traffic_mode() {
+    let run = TrafficRun::default();
+    let checking = || SourceState::Checking {
+        source: metrics_source(),
+        _task: Task::ready(()),
+    };
+    let step = |source| {
+        traffic_step(
+            &run,
+            &metrics_in(source, TrafficSources::Loaded(Ok(pod_network()))),
+        )
+    };
+    assert_eq!(step(checking()), TrafficStep::Wait);
+    assert_eq!(step(SourceState::None), TrafficStep::Leave);
+    assert_eq!(step(SourceState::Invalid), TrafficStep::Leave);
+    let failed = SourceState::Failed {
+        source: metrics_source(),
+        error: cluster::MetricsError::TimedOut,
+    };
+    assert_eq!(step(failed), TrafficStep::Leave);
+    assert_eq!(step(ready_source()), TrafficStep::Fetch);
+}
+
+#[test]
+fn traffic_step_follows_the_list_and_the_clock() {
+    let traffic_step_of = |run: &TrafficRun, sources: TrafficSources| {
+        traffic_step(run, &metrics_in(ready_source(), sources))
+    };
+    let loaded = || TrafficSources::Loaded(Ok(pod_network()));
+    let run = TrafficRun::default();
+    assert_eq!(
+        traffic_step_of(&run, TrafficSources::NotLoaded),
+        TrafficStep::LoadNames
+    );
+    let loading = TrafficSources::Loading {
+        _task: Task::ready(()),
+    };
+    assert_eq!(traffic_step_of(&run, loading), TrafficStep::Wait);
+    assert_eq!(
+        traffic_step_of(&run, TrafficSources::Loaded(Ok(Vec::new()))),
+        TrafficStep::Leave
+    );
+    assert_eq!(traffic_step_of(&run, loaded()), TrafficStep::Fetch);
+    // A request in flight is waited for, and so is a sample younger than 30 s.
+    let in_flight = TrafficRun {
+        fetch: Some(Task::ready(())),
+        ..TrafficRun::default()
+    };
+    assert_eq!(traffic_step_of(&in_flight, loaded()), TrafficStep::Wait);
+    let fresh = TrafficRun {
+        last_fetch: Some(Instant::now()),
+        ..TrafficRun::default()
+    };
+    assert_eq!(traffic_step_of(&fresh, loaded()), TrafficStep::Wait);
+    let old = TrafficRun {
+        last_fetch: Instant::now().checked_sub(TRAFFIC_REFRESH),
+        ..TrafficRun::default()
+    };
+    assert_eq!(traffic_step_of(&old, loaded()), TrafficStep::Fetch);
+    // A failed list is tried again only once the last try is 30 s old.
+    let failed = || TrafficSources::Loaded(Err(cluster::MetricsError::TimedOut));
+    assert_eq!(traffic_step_of(&run, failed()), TrafficStep::LoadNames);
+    let tried = TrafficRun {
+        last_names_try: Some(Instant::now()),
+        ..TrafficRun::default()
+    };
+    assert_eq!(traffic_step_of(&tried, failed()), TrafficStep::Wait);
+}

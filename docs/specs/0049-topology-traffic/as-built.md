@@ -17,7 +17,7 @@ Step 1 is its own commit. Steps 2, 3a, and 3b ship as one: the overlay, the `Cal
 | 5 | A 30 s `cx.spawn` timer | The existing 500 ms topology tick starts the fetch when the last one is 30 s old | One timer fewer; it already stops on hide, and every other drop rule drops the fetch the same way |
 | 6 | `TrafficLayer` in `topology_view.rs` | In `topology_traffic.rs`, behind `Rc` fields (`sample`, `overlay`) | The canvas and the export read it; a drag clones two `Rc`s and re-routes the `Calls` only |
 | 7 | Labels at the arc-length midpoint | The midpoint first, then 0.58, 0.42, 0.66, 0.34, 0.74, 0.26 of the arc length, the first spot that is on the canvas and clear of every card and of the placed labels; none clear means no label | A gutter (50 units) is narrower than a label, so the midpoint of an edge in a gutter is beside a card almost always. `label_anchor` is the midpoint and is tried first |
-| 8 | Legend: swatches `≥ 1% 5xx`, `≥ 5% 5xx` always | Only when Istio is among the sources that answered | Bytes flows have no tone |
+| 8 | Legend: swatches `≥ 1% 5xx`, `≥ 5% 5xx` always | The tone swatches and `calls` only when Istio is among the sources that answered; `owns` is a solid flow swatch | Bytes flows have no tone and make no `Calls` edge |
 | 9 | `LEGEND` arm for `Calls` | `Calls` is in the Traffic legend only (`legend_entries`); the Resources legend is unchanged | Resources mode has no `Calls` edge |
 | 10 | HPA to workload `Owns` edge carries the target's bytes | It stays `Idle`, and an HPA is not an ancestor when pods are summed up | A scaler is not in the data path |
 | 11 | Namespace `payments` in the fixtures | `shop`, like every other topology fixture | The builders in `topology_fixtures.rs` are fixed to `shop` |
@@ -42,8 +42,12 @@ Unchanged: `MetricsEndpoint::MetricNames` (`label/__name__/values`, `start` = no
 
 `topology-traffic-fixture` (light, dark, curves-light): the 35 req/s · 6 % 5xx call `ledger` → `payments-api` is Bad with its label, the 12 req/s call is neutral, Service to pod edges carry 1.2 MB/s and 300 KB/s, the crashing pod keeps its caption, the idle edges are dotted. `topology-traffic-argocd-{light,dark}`, `topology-traffic-monitoring-light`, `topology-traffic-monitoring-curves-dark`: the live bytes fallback.
 
-Known look: with only the bytes source the legend still lists `calls` (no such edge exists then), and the `Curves` shape falls back to lane routes for edges a card blocks (0050 rule).
-
 ## Not done
 
 - The coder-lite UAT trace of AC 14 (only GETs): the only code that sends is `metrics_get`, covered by the fake-server tests (`metric_names_ask_for_the_last_hour`, `traffic_queries_per_source`), and the probe and the screens above ran without a write.
+
+## After the review
+
+- A pod, Service, or workload of the namespace that is not a node (ended, not delivered yet, hidden by a filter) is skipped, not counted as an outside peer; only `TrafficEnd::Outside` is.
+- A source in the `Checking` state is waited for; Traffic mode ends only for a missing, invalid, or unreachable source.
+- Istio's `source_workload` carries no kind, so a Deployment wins over a StatefulSet or DaemonSet of the same name.

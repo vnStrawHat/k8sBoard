@@ -129,26 +129,21 @@ fn a_label_box_fits_its_text() {
 }
 
 #[test]
-fn zz_debug() {
-    let scene = scene(istio_sample(), EdgeShape::Elbows);
-    for (edge, route, traffic) in
-        drawn_edges(&scene.graph, &scene.layout.routes, Some(&scene.layer))
-    {
-        let a = crate::topology_traffic::label_anchor(route);
-        eprintln!(
-            "{:?} {:?}->{:?} anchor {:?} n={} traffic {:?}",
-            edge.relation,
-            edge.from,
-            edge.to,
-            a,
-            route.points.len(),
-            traffic.map(|t| matches!(t, EdgeTraffic::Flow(_)))
-        );
-    }
-    for (i, r) in scene.layout.rects.iter().enumerate() {
-        eprintln!(
-            "rect {i} {:?} {} {:?}",
-            r.origin, r.width, scene.graph.nodes[i].name
-        );
-    }
+fn a_label_sits_on_the_midpoint_when_it_is_clear() {
+    let scene = scene(bytes_sample(), EdgeShape::Elbows);
+    let labels = edge_labels(
+        &scene.graph,
+        &scene.layout,
+        &scene.layer,
+        zoom_one(),
+        CANVAS,
+    );
+    let on_midpoint = scene.layout.routes.iter().any(|route| {
+        let (x, y) = zoom_one().to_screen(crate::topology_traffic::label_anchor(route));
+        labels.iter().any(|label| {
+            (label.left + label.width / 2. - x).abs() < 0.01
+                && (label.top + LABEL_HEIGHT / 2. - y).abs() < 0.01
+        })
+    });
+    assert!(on_midpoint, "{labels:?}");
 }

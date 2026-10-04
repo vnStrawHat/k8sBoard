@@ -91,7 +91,7 @@ Enforcement:
    | `access_review.rs` | `post_review` (the SSAR and SSRR `create`, non-mutating) | 0030 |
    | `object_write.rs` | `send`, the `match` that sends each allow-listed operation | 0030 |
    | `kubelet_stats.rs` | `kubelet_text` / `kubelet_lines` (read-only GETs of the 0011 kubelet path allow-list) | 0030 |
-   | `metrics_query.rs` | `metrics_get` (read-only GETs of the 0048 metrics endpoint allow-list through the API server service proxy, `Client::send` with a capped body) | 0048 |
+   | `metrics_query.rs` | `metrics_get` (read-only GETs of the 0048 metrics endpoint allow-list through the API server service proxy, `Client::send` with a capped body) (0049: `label/__name__/values`) | 0048 |
    | `secret.rs` | `secret_text` (read-only GET decoded in-crate, 0016) | 0016 |
    | `pod_shell.rs` | `exec` | 0036 |
    | `port_forward.rs` | `portforward` | 0035 |

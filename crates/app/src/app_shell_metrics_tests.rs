@@ -652,3 +652,15 @@ fn a_changed_entry_forgets_the_list(cx: &mut TestAppContext) {
     wait_for_traffic(&fixture, "pod network bytes", cx);
     assert_eq!(names_requests(&api), 2);
 }
+
+#[gpui_kit::test]
+fn a_session_switch_drops_the_traffic_fetch(cx: &mut TestAppContext) {
+    let (fixture, _api) = traffic_fixture("traffic-switch", Arc::default(), cx);
+    let topology = fixture
+        .shell
+        .read_with(cx, |shell, _| shell.topology.clone());
+    topology.update(cx, |view, _| view.hold_traffic_fetch_for_test());
+    assert!(topology.read_with(cx, |view, _| view.has_traffic_fetch_for_test()));
+    topology.update(cx, |view, cx| view.set_session(None, cx));
+    assert!(!topology.read_with(cx, |view, _| view.has_traffic_fetch_for_test()));
+}

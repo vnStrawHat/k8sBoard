@@ -919,11 +919,12 @@ pub(crate) fn legend_entries(sources: Option<&[TrafficSourceKind]>) -> Vec<(Swat
     } else {
         "routes to \u{b7} width = receive bytes/s per pod"
     };
-    let mut entries = vec![
-        (Swatch::Flow(Relation::RoutesTo), routes_to),
-        (Swatch::Flow(Relation::Calls), "calls"),
-        (Swatch::Relation(Relation::Owns), "owns"),
-    ];
+    let mut entries = vec![(Swatch::Flow(Relation::RoutesTo), routes_to)];
+    if has_requests {
+        // Only Istio makes pairs without a Resources edge.
+        entries.push((Swatch::Flow(Relation::Calls), "calls"));
+    }
+    entries.push((Swatch::Flow(Relation::Owns), "owns"));
     if has_requests {
         entries.push((Swatch::Tone(StatusTone::Warn), "\u{2265} 1% 5xx"));
         entries.push((Swatch::Tone(StatusTone::Bad), "\u{2265} 5% 5xx"));
