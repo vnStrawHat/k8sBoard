@@ -739,7 +739,7 @@ impl AppShell {
             .guard_for(first.cluster, cx)
             .ok_or_else(|| SharedString::from("Not connected"))?;
         let live = self
-            .slot_live(first.cluster, cx)
+            .live_of(first.cluster, cx)
             .ok_or_else(|| SharedString::from("Not connected"))?;
         let inputs = BulkInputs {
             cluster_name: guard.display_name(),
@@ -856,7 +856,7 @@ impl AppShell {
         let Ok(intent) = self.bulk_batch(action, BulkValue::Nothing, cx) else {
             return;
         };
-        if let Some(session) = self.slot_session(&intent.cluster).cloned() {
+        if let Some(session) = self.session_of(&intent.cluster).cloned() {
             session.update(cx, |session, cx| session.set_lock(WriteLock::Unlocked, cx));
         }
         let inputs = {

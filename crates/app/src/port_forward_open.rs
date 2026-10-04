@@ -465,7 +465,7 @@ impl AppShell {
 
     /// What `object` declares to forward, read from its own cluster's live data.
     fn forward_subject_of(&self, object: &ClusterObject, cx: &App) -> Option<ForwardSubject> {
-        let live = self.slot_live(&object.cluster, cx)?;
+        let live = self.live_of(&object.cluster, cx)?;
         match &object.key {
             ResourceKey::Pod { .. } => live
                 .pods

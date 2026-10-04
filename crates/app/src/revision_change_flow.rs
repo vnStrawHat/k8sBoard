@@ -36,7 +36,7 @@ impl AppShell {
         ) else {
             return;
         };
-        let Some(live) = self.slot_live(&cluster, cx) else {
+        let Some(live) = self.live_of(&cluster, cx) else {
             return;
         };
         if let AccessState::Known(report) = &live.access

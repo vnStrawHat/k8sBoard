@@ -126,14 +126,14 @@ struct Forwards {
     stg: ClusterRef,
 }
 
-fn slot_session(
+fn session_of(
     fixture: &SwitchFixture,
     cluster: &ClusterRef,
     cx: &mut TestAppContext,
 ) -> Entity<ClusterSession> {
     fixture
         .shell
-        .read_with(cx, |shell, _| shell.slot_session(cluster).cloned())
+        .read_with(cx, |shell, _| shell.session_of(cluster).cloned())
         .expect("a viewed slot")
 }
 
@@ -163,7 +163,7 @@ fn go_live(
         pod("api-0", vec![tcp(8080)]),
         pod("multi-0", vec![tcp(8080), tcp(9090)]),
     ];
-    let session = slot_session(fixture, cluster, cx);
+    let session = session_of(fixture, cluster, cx);
     session.update(cx, |session, cx| {
         session.go_live_for_test(connection, NamespaceScope::All, cx);
         session.set_access_for_test(AccessState::Known(report_denying(&[])), cx);
@@ -348,13 +348,13 @@ impl Forwards {
     }
 
     fn set_lock(&self, cluster: &ClusterRef, lock: WriteLock, cx: &mut TestAppContext) {
-        let session = slot_session(&self.fixture, cluster, cx);
+        let session = session_of(&self.fixture, cluster, cx);
         session.update(cx, |session, cx| session.set_lock(lock, cx));
         cx.run_until_parked();
     }
 
     fn set_access(&self, cluster: &ClusterRef, access: AccessReport, cx: &mut TestAppContext) {
-        let session = slot_session(&self.fixture, cluster, cx);
+        let session = session_of(&self.fixture, cluster, cx);
         session.update(cx, |session, cx| {
             session.set_access_for_test(AccessState::Known(access), cx);
         });
@@ -866,7 +866,7 @@ fn forwards_keep_running_after_a_switch(cx: &mut TestAppContext) {
     let gone = forwards
         .fixture
         .shell
-        .read_with(cx, |shell, _| shell.slot_session(&forwards.stg).is_none());
+        .read_with(cx, |shell, _| shell.session_of(&forwards.stg).is_none());
     assert!(gone, "stg-b is no longer open");
     // The forward still runs, with the label of the cluster it was started on, and keeps its last
     // control (spec 0046 decision 17): the listener still accepts new local connections.

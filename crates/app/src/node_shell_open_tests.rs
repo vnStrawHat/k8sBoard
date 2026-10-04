@@ -711,7 +711,7 @@ impl Debugs {
     ) -> cluster::ClusterConnection {
         self.fixture
             .shell
-            .read_with(cx, |shell, cx| shell.slot_connection(cluster, cx))
+            .read_with(cx, |shell, cx| shell.connection_of(cluster, cx))
             .expect("a live slot")
     }
 

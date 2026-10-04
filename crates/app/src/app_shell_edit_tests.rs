@@ -1212,7 +1212,7 @@ fn cluster_switch_with_changes_asks_to_discard(cx: &mut TestAppContext) {
     assert!(t.has_edit(cx));
     assert!(
         t.shell()
-            .read_with(cx, |shell, _| shell.slot_session(&t.t.stg).is_some())
+            .read_with(cx, |shell, _| shell.session_of(&t.t.stg).is_some())
     );
     // Leave: the cluster is released and the editor goes with it.
     t.shell()
@@ -1222,7 +1222,7 @@ fn cluster_switch_with_changes_asks_to_discard(cx: &mut TestAppContext) {
     assert!(!t.has_edit(cx));
     assert!(
         t.shell()
-            .read_with(cx, |shell, _| shell.slot_session(&t.t.stg).is_none())
+            .read_with(cx, |shell, _| shell.session_of(&t.t.stg).is_none())
     );
 }
 

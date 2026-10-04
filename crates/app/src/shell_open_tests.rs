@@ -108,14 +108,14 @@ struct Shells {
     stg: ClusterRef,
 }
 
-fn slot_session(
+fn session_of(
     fixture: &SwitchFixture,
     cluster: &ClusterRef,
     cx: &mut TestAppContext,
 ) -> Entity<ClusterSession> {
     fixture
         .shell
-        .read_with(cx, |shell, _| shell.slot_session(cluster).cloned())
+        .read_with(cx, |shell, _| shell.session_of(cluster).cloned())
         .expect("a viewed slot")
 }
 
@@ -130,7 +130,7 @@ fn go_live(
         let _guard = fixture.runtime.enter();
         FakeApi::connection(WritePolicy::Allowed, |_| (404, NOT_FOUND.to_owned()))
     };
-    let session = slot_session(fixture, cluster, cx);
+    let session = session_of(fixture, cluster, cx);
     session.update(cx, |session, cx| {
         session.go_live_for_test(connection, NamespaceScope::All, cx);
         session.set_access_for_test(AccessState::Known(report_denying(&[])), cx);
@@ -285,13 +285,13 @@ impl Shells {
     }
 
     fn set_lock(&self, cluster: &ClusterRef, lock: WriteLock, cx: &mut TestAppContext) {
-        let session = slot_session(&self.fixture, cluster, cx);
+        let session = session_of(&self.fixture, cluster, cx);
         session.update(cx, |session, cx| session.set_lock(lock, cx));
         cx.run_until_parked();
     }
 
     fn set_access(&self, cluster: &ClusterRef, access: AccessReport, cx: &mut TestAppContext) {
-        let session = slot_session(&self.fixture, cluster, cx);
+        let session = session_of(&self.fixture, cluster, cx);
         session.update(cx, |session, cx| {
             session.set_access_for_test(AccessState::Known(access), cx);
         });
@@ -648,7 +648,7 @@ fn switch_with_open_shells_asks_first(cx: &mut TestAppContext) {
     let is_open = shells
         .fixture
         .shell
-        .read_with(cx, |shell, _| shell.slot_session(&stg).is_some());
+        .read_with(cx, |shell, _| shell.session_of(&stg).is_some());
     assert!(is_open, "the cluster is still open");
     // Asking again and confirming releases them and ends the shells.
     shells
@@ -1041,7 +1041,7 @@ fn a_attaches_the_default_container_in_the_pods_own_cluster(cx: &mut TestAppCont
 fn a_says_why_when_no_container_has_a_terminal(cx: &mut TestAppContext) {
     let shells = two_clusters("attach-none", cx);
     let stg = shells.stg.clone();
-    let session = slot_session(&shells.fixture, &stg, cx);
+    let session = session_of(&shells.fixture, &stg, cx);
     session.update(cx, |session, cx| {
         session.set_pods_for_test(
             vec![pod(
@@ -1159,7 +1159,7 @@ fn container_attach_item_is_inert_after_a_switch(cx: &mut TestAppContext) {
     let shells = two_clusters("attach-item", cx);
     let stg = shells.stg.clone();
     // Weak, and no strong handle kept: the test must not keep the session alive itself.
-    let session = slot_session(&shells.fixture, &stg, cx).downgrade();
+    let session = session_of(&shells.fixture, &stg, cx).downgrade();
     let row = RowContext {
         cluster: stg.clone(),
         context: "stg-b".to_owned(),

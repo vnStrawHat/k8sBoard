@@ -1433,7 +1433,7 @@ impl AppShell {
         let label = action_label(ResourceAction::Drain);
         let (target, connection) = {
             let (Some(guard), Some(live)) =
-                (self.guard_for(cluster, cx), self.slot_live(cluster, cx))
+                (self.guard_for(cluster, cx), self.live_of(cluster, cx))
             else {
                 notify(
                     window,

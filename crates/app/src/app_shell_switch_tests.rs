@@ -324,7 +324,7 @@ fn switch_closes_log_tabs(cx: &mut TestAppContext) {
     fixture.with_window(cx, |window, cx| {
         let shell = fixture.shell.read(cx);
         let row = shell
-            .slot_row_context(&cluster, cx)
+            .row_context_of(&cluster, cx)
             .expect("the cluster is viewed");
         let dock = shell.dock.clone();
         dock.update(cx, |dock, cx| {
@@ -1385,14 +1385,14 @@ fn set_session_clears_ticks_and_anchor_on_any_change(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn slot_session_is_none_for_a_cluster_that_is_not_active(cx: &mut TestAppContext) {
+fn session_of_is_none_for_a_cluster_that_is_not_active(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture("slot-session", cx);
     let prod = fixture.cluster("prod-a", cx);
     let stg = fixture.cluster("stg-b", cx);
     let has_session = |cluster: &ClusterRef, cx: &mut TestAppContext| {
         fixture
             .shell
-            .read_with(cx, |shell, _| shell.slot_session(cluster).is_some())
+            .read_with(cx, |shell, _| shell.session_of(cluster).is_some())
     };
     assert!(has_session(&prod, cx));
     assert!(!has_session(&stg, cx), "a cluster that is not open");

@@ -312,7 +312,7 @@ impl DrainTest {
             .t
             .fixture
             .shell
-            .read_with(cx, |shell, _| shell.slot_session(cluster).cloned())
+            .read_with(cx, |shell, _| shell.session_of(cluster).cloned())
             .expect("an open cluster");
         session.update(cx, |session, cx| session.set_nodes_for_test(nodes, cx));
         cx.run_until_parked();

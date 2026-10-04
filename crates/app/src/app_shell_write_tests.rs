@@ -80,14 +80,14 @@ pub(super) struct Clusters {
     pub(super) stg: ClusterRef,
 }
 
-pub(super) fn slot_session(
+pub(super) fn session_of(
     fixture: &SwitchFixture,
     cluster: &ClusterRef,
     cx: &mut TestAppContext,
 ) -> Entity<ClusterSession> {
     fixture
         .shell
-        .read_with(cx, |shell, _| shell.slot_session(cluster).cloned())
+        .read_with(cx, |shell, _| shell.session_of(cluster).cloned())
         .expect("a viewed slot")
 }
 
@@ -130,7 +130,7 @@ pub(super) fn go_live_answering(
         let _guard = fixture.runtime.enter();
         FakeApi::connection(WritePolicy::Allowed, respond)
     };
-    let session = slot_session(fixture, cluster, cx);
+    let session = session_of(fixture, cluster, cx);
     let node_name = node_name.to_owned();
     session.update(cx, |session, cx| {
         session.go_live_for_test(connection, NamespaceScope::All, cx);
@@ -190,11 +190,11 @@ impl Clusters {
     }
 
     pub(super) fn lock_of(&self, cluster: &ClusterRef, cx: &mut TestAppContext) -> WriteLock {
-        slot_session(&self.fixture, cluster, cx).read_with(cx, |session, _| session.lock())
+        session_of(&self.fixture, cluster, cx).read_with(cx, |session, _| session.lock())
     }
 
     pub(super) fn set_lock(&self, cluster: &ClusterRef, lock: WriteLock, cx: &mut TestAppContext) {
-        let session = slot_session(&self.fixture, cluster, cx);
+        let session = session_of(&self.fixture, cluster, cx);
         session.update(cx, |session, cx| session.set_lock(lock, cx));
         cx.run_until_parked();
     }
@@ -437,7 +437,7 @@ fn the_debug_policy_blocks_a_write_at_the_dry_run(cx: &mut TestAppContext) {
         let _guard = t.fixture.runtime.enter();
         FakeApi::connection(WritePolicy::Blocked, |_| (200, NODE_JSON.to_owned()))
     };
-    let session = slot_session(&t.fixture, &t.stg, cx);
+    let session = session_of(&t.fixture, &t.stg, cx);
     session.update(cx, |session, cx| {
         session.go_live_for_test(connection, NamespaceScope::All, cx);
         session.set_access_for_test(allowed(), cx);
@@ -459,7 +459,7 @@ fn the_debug_policy_blocks_a_write_at_the_dry_run(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_cordoned_node_is_uncordoned(cx: &mut TestAppContext) {
     let t = two_clusters("uncordon", cx);
-    let session = slot_session(&t.fixture, &t.stg, cx);
+    let session = session_of(&t.fixture, &t.stg, cx);
     session.update(cx, |session, cx| {
         session.set_nodes_for_test(vec![node("node-b", NodeScheduling::Disabled)], cx);
     });
@@ -735,7 +735,7 @@ fn cordon_without_patch_nodes_is_not_permitted_and_sends_nothing(cx: &mut TestAp
             },
         })
         .collect();
-    let session = slot_session(&t.fixture, &t.stg, cx);
+    let session = session_of(&t.fixture, &t.stg, cx);
     session.update(cx, |session, cx| {
         session.set_access_for_test(AccessState::Known(AccessReport { reviews }), cx);
     });
@@ -935,7 +935,7 @@ fn a_session_that_is_not_live_offers_no_lock(cx: &mut TestAppContext) {
     // The primary connects to a closed port and never goes live.
     let fixture = open_switch_fixture("not-live", cx);
     let cluster = fixture.cluster("prod-a", cx);
-    let session = slot_session(&fixture, &cluster, cx);
+    let session = session_of(&fixture, &cluster, cx);
     let before = session.read_with(cx, |session, _| session.lock());
     fixture.with_window(cx, |window, cx| {
         fixture.shell.update(cx, |shell, cx| {
@@ -955,7 +955,7 @@ fn a_session_that_is_not_live_offers_no_lock(cx: &mut TestAppContext) {
 fn a_menu_that_is_out_of_date_adds_a_warning(cx: &mut TestAppContext) {
     let t = two_clusters("stale-menu", cx);
     // The menu was built for a schedulable node, which has been cordoned since.
-    let session = slot_session(&t.fixture, &t.stg, cx);
+    let session = session_of(&t.fixture, &t.stg, cx);
     session.update(cx, |session, cx| {
         session.set_nodes_for_test(vec![node("node-b", NodeScheduling::Disabled)], cx);
     });

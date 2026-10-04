@@ -563,7 +563,7 @@ impl AppShell {
         let label = action_label(kind.action());
         let (target, connection) = {
             let (Some(guard), Some(live)) =
-                (self.guard_for(cluster, cx), self.slot_live(cluster, cx))
+                (self.guard_for(cluster, cx), self.live_of(cluster, cx))
             else {
                 notify(
                     window,
@@ -700,7 +700,7 @@ impl AppShell {
         if ticked.iter().any(|object| object.cluster != first.cluster) {
             return Err("Select rows of one cluster".into());
         }
-        let live = self.slot_live(&first.cluster, cx).ok_or("Not connected")?;
+        let live = self.live_of(&first.cluster, cx).ok_or("Not connected")?;
         let nodes: Vec<TickedNode> = ticked
             .iter()
             .filter_map(|object| {

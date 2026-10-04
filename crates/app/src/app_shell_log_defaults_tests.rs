@@ -37,9 +37,9 @@ fn open_log_tab(
     fixture.with_window(cx, |window, cx| {
         let shell = fixture.shell.read(cx);
         let row = shell
-            .slot_row_context(&cluster, cx)
+            .row_context_of(&cluster, cx)
             .expect("the cluster is viewed");
-        let live = shell.slot_live(&cluster, cx).expect("a live slot");
+        let live = shell.live_of(&cluster, cx).expect("a live slot");
         let pod = live.pods.items().first().expect("a pod").clone();
         let target = LogTarget::of_container(&pod, "app").expect("a log target");
         let dock = shell.dock.clone();

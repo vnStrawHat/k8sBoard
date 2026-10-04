@@ -48,7 +48,7 @@ impl AppShell {
         let label = action_label(ResourceAction::OpenNodeShell);
         let form = {
             let (Some(guard), Some(live)) =
-                (self.guard_for(cluster, cx), self.slot_live(cluster, cx))
+                (self.guard_for(cluster, cx), self.live_of(cluster, cx))
             else {
                 notify(
                     window,
@@ -113,7 +113,7 @@ impl AppShell {
             return;
         }
         let (Some(cluster_label), Some((cluster_name, user, audit, generation))) = (
-            self.slot_label(cluster),
+            self.label_of(cluster),
             self.guard_for(cluster, cx).map(|guard| {
                 (
                     guard.display_name().to_owned(),

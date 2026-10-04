@@ -195,7 +195,7 @@ impl AppShell {
             }
             SharedString::from(guard.display_name().to_owned())
         };
-        let connection = self.slot_connection(&subject.cluster, cx);
+        let connection = self.connection_of(&subject.cluster, cx);
         self.close_value_popover(cx);
         let shell = cx.weak_entity();
         let edit = cx.new(|cx| {
@@ -230,7 +230,7 @@ impl AppShell {
         };
         let (name, template) = {
             let (Some(guard), Some(live)) =
-                (self.guard_for(&cluster, cx), self.slot_live(&cluster, cx))
+                (self.guard_for(&cluster, cx), self.live_of(&cluster, cx))
             else {
                 notify(
                     window,
@@ -274,7 +274,7 @@ impl AppShell {
         cluster: &ClusterRef,
         cx: &App,
     ) -> Option<ClusterConnection> {
-        self.slot_connection(cluster, cx)
+        self.connection_of(cluster, cx)
     }
 
     /// What the Revision history tab of an edit of `object` needs: the connection, the permission
@@ -286,7 +286,7 @@ impl AppShell {
         object: &ObjectRef,
         cx: &App,
     ) -> HistoryInputs {
-        let Some(live) = self.slot_live(cluster, cx) else {
+        let Some(live) = self.live_of(cluster, cx) else {
             return HistoryInputs::Unavailable("the cluster is not open".into());
         };
         if let AccessState::Known(report) = &live.access
@@ -314,7 +314,7 @@ impl AppShell {
         namespace: &str,
         cx: &App,
     ) -> QuotaInput {
-        let Some(live) = self.slot_live(cluster, cx) else {
+        let Some(live) = self.live_of(cluster, cx) else {
             return QuotaInput::Off("the cluster is not open".to_owned());
         };
         let Some(feed) = live.issue_feeds.condition(ResourceKind::ResourceQuotas) else {

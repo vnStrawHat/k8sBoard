@@ -15,7 +15,7 @@ use crate::settings::AppSettings;
 
 impl AppShell {
     /// A session for `cluster`, connecting; `None` once the cluster left every loaded kubeconfig.
-    pub(super) fn new_slot(
+    pub(super) fn new_session(
         &mut self,
         cluster: &ClusterRef,
         namespace: Option<NamespaceScope>,
@@ -41,7 +41,7 @@ impl AppShell {
         });
         let observed = cluster.clone();
         let observer = cx.observe(&session, move |shell, _, cx| {
-            shell.on_slot_changed(&observed, cx);
+            shell.on_session_changed(&observed, cx);
         });
         Some(ActiveSession {
             cluster: cluster.clone(),
@@ -112,7 +112,7 @@ impl AppShell {
     /// becomes the `last_used` one.
     pub(super) fn on_first_live(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
         self.sweep_leftovers(cluster, cx);
-        if self.slot_live(cluster, cx).is_none() {
+        if self.live_of(cluster, cx).is_none() {
             return;
         }
         let last_used = cluster.clone();

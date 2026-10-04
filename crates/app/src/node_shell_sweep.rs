@@ -109,10 +109,9 @@ impl AppShell {
     /// connection, over its own scope. An answer of none, or an error (no right to list, a network
     /// failure), says nothing: this is a convenience, not a gate.
     pub(super) fn sweep_leftovers(&mut self, cluster: &ClusterRef, cx: &mut Context<Self>) {
-        let (Some(connection), Some(live)) = (
-            self.slot_connection(cluster, cx),
-            self.slot_live(cluster, cx),
-        ) else {
+        let (Some(connection), Some(live)) =
+            (self.connection_of(cluster, cx), self.live_of(cluster, cx))
+        else {
             return;
         };
         if !may_list_pods(&live.access) {
@@ -153,7 +152,7 @@ impl AppShell {
         found: Vec<NodeShellLeftover>,
         cx: &mut Context<Self>,
     ) {
-        if self.slot_session(&cluster).is_none() {
+        if self.session_of(&cluster).is_none() {
             return;
         }
         #[cfg(test)]
@@ -224,10 +223,9 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (Some(guard), Some(connection)) = (
-            self.guard_for(cluster, cx),
-            self.slot_connection(cluster, cx),
-        ) else {
+        let (Some(guard), Some(connection)) =
+            (self.guard_for(cluster, cx), self.connection_of(cluster, cx))
+        else {
             self.notify_window(window, cx, format!("{} is not open", cluster.context));
             return;
         };

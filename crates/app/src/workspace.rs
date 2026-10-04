@@ -895,9 +895,9 @@ impl AppShell {
         let object = self.drawer_subject()?;
         let key = &object.key;
         // The drawer reads the cluster of its subject, never the primary.
-        let session = self.slot_session(&object.cluster)?;
+        let session = self.session_of(&object.cluster)?;
         let live = session.read(cx).live()?;
-        let row = self.slot_row_context(&object.cluster, cx)?;
+        let row = self.row_context_of(&object.cluster, cx)?;
         // The Forward buttons read the running forwards and the gate of the subject's own cluster.
         let gate = self.forward_start_gate(&object.cluster, cx)?;
         let forward = PortButtons {
@@ -947,7 +947,7 @@ impl AppShell {
 
     /// What a row menu keeps of the open cluster.
     fn open_row_context(&self, cx: &App) -> Option<RowContext> {
-        self.slot_row_context(&self.active_cluster()?, cx)
+        self.row_context_of(&self.active_cluster()?, cx)
     }
 }
 

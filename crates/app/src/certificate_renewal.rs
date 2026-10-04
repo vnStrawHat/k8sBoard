@@ -77,7 +77,7 @@ impl AppShell {
         let intent = {
             let (Some(guard), Some(live)) = (
                 self.guard_for(&subject.cluster, cx),
-                self.slot_live(&subject.cluster, cx),
+                self.live_of(&subject.cluster, cx),
             ) else {
                 notify(
                     window,
@@ -147,7 +147,7 @@ impl AppShell {
             .filter(|subject| matches!(&subject.key, ResourceKey::Kind { kind: shown, .. } if *shown == kind))
             .ok_or(SELECT)?;
         let (Some(live), Some(guard)) = (
-            self.slot_live(&subject.cluster, cx),
+            self.live_of(&subject.cluster, cx),
             self.guard_for(&subject.cluster, cx),
         ) else {
             return Err("Not connected".into());

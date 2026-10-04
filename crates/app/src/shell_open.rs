@@ -157,7 +157,7 @@ impl AppShell {
         let (Some(cluster_name), Some(tab_label)) = (
             self.guard_for(&open.cluster, cx)
                 .map(|guard| guard.display_name().to_owned()),
-            self.slot_label(&open.cluster),
+            self.label_of(&open.cluster),
         ) else {
             let text = format!("{} is not open", open.cluster.context);
             window.push_notification(Notification::warning(text), cx);
@@ -209,7 +209,7 @@ impl AppShell {
         let ResourceKey::Pod { .. } = &subject.key else {
             return;
         };
-        let found = self.slot_live(&subject.cluster, cx).and_then(|live| {
+        let found = self.live_of(&subject.cluster, cx).and_then(|live| {
             let pod = live
                 .pods
                 .items()
@@ -258,7 +258,7 @@ impl AppShell {
         let (Some(cluster_name), Some(tab_label)) = (
             self.guard_for(&open.cluster, cx)
                 .map(|guard| guard.display_name().to_owned()),
-            self.slot_label(&open.cluster),
+            self.label_of(&open.cluster),
         ) else {
             let text = format!("{} is not open", open.cluster.context);
             window.push_notification(Notification::warning(text), cx);
@@ -308,7 +308,7 @@ impl AppShell {
         let ResourceKey::Pod { .. } = &subject.key else {
             return;
         };
-        let found = self.slot_live(&subject.cluster, cx).and_then(|live| {
+        let found = self.live_of(&subject.cluster, cx).and_then(|live| {
             let pod = live
                 .pods
                 .items()

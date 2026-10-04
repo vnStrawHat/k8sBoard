@@ -10,10 +10,10 @@
 |---|---|---|---|
 | `cluster_view.rs`: `ClusterView`, `ViewPlan`, `plan_view`, `TooManyClusters`, `MAX_VIEWED_CLUSTERS`, `riskiest`, `reorder`, `insert`, `take_all`, `sessions` | D | 2 (plan), 4 (struct) | 180 |
 | `cluster_view.rs`: `ViewSlot` | S → `ActiveSession` in `active_session.rs`; file deleted | 4 | — |
-| `app_shell_view.rs`: `view_clusters`, `apply_view`, `scope_for_view`, `release_slot`, `connect_slots`, `display_order`, `reapply_view_scope`, `set_slot_scope`, `retry_cluster`, `remove_from_view` | D | 2 | 300 |
+| `app_shell_session.rs`: `view_clusters`, `apply_view`, `scope_for_view`, `release_slot`, `connect_slots`, `display_order`, `reapply_view_scope`, `set_slot_scope`, `retry_cluster`, `remove_from_view` | D | 2 | 300 |
 | Orphans of `release_slot`: `dock.rs` `close_tabs_of` (~399), `edit_yaml_flow.rs` `close_edit_of` (~155), `cluster_view.rs` `ClusterView::remove` (~138) | D (`release_all` closes every tab and sets `edit = None`) | 2 | 30 |
 | `#[cfg(test)]` hooks read only by `app_shell_multi_tests.rs`: `view_connects`, `ViewConnectCheck`, `released_sessions` | D with the file | 2 | 25 |
-| `app_shell_view.rs`: `new_slot`, `sync_view_sessions`, `refresh_slot_labels`, `on_first_live` | S (one session; `on_first_live` keeps sweep + `last_used`) | 2, 4 | — |
+| `app_shell_session.rs`: `new_session`, `sync_view_sessions`, `refresh_slot_labels`, `on_first_live` | S (one session; `on_first_live` keeps sweep + `last_used`) | 2, 4 | — |
 | `app_shell.rs`: `view`, `view_scope`, `view_request`, `view_connects`, `released_sessions`, `subject_cluster` | D (`view` → `active_session`) | 2, 4 | 60 |
 | `app_shell.rs`: start `--view` branch, `named_clusters`; `switch_to` multi branches; `release_all` `set_multi` | D | 2 | 50 |
 | `app_shell.rs`: `sessions()`, fan-out loops in `set_namespace`, `show_screen`, `sync_kubelet_demand` | S (the one session) | 3 | 40 |
@@ -64,29 +64,29 @@
 
 | File: items | Do | Step |
 |---|---|---|
-| `guard_for(&ClusterRef)`, `slot_session`, `slot_live`, `slot_connection` | K signature; body: the active session iff `cluster` matches | 4 |
+| `guard_for(&ClusterRef)`, `session_of`, `live_of`, `connection_of` | K signature; body: the active session iff `cluster` matches | 4 |
 | `write_lock.rs`: `lock_target` | S → `active_cluster()` | 3 |
-| `write_lock.rs`: `toggle_write_lock(cluster)`, `finish_unlock` generation check, `slot_label` | K | — |
+| `write_lock.rs`: `toggle_write_lock(cluster)`, `finish_unlock` generation check, `label_of` | K | — |
 | `batch_write.rs` (`batch_plan`, `bulk_state`), `object_delete.rs` (`delete_scope`, `delete_gate`), `node_editor.rs` (`ticked_nodes`), `drain_dialog.rs` (`start_drain_of_ticked`): `Select rows of one cluster` | K ([write-safety.md](write-safety.md)) | — |
 | `running_batches: HashSet<ClusterRef>`, session `generation`, `lock` | K | — |
 | `port_forward_*`: forward `cluster`, `cluster_label`, page Cluster column, `Open {cluster} first`, `sync_forward_lock` | K (0035 AC 8) | — |
 | `release_all`: forwards of the released cluster | K: no lock change; they keep their last control (decision 17) | — |
 | `port_forward_dialogs.rs` New-forward form: cluster `Select` (~214), `FormCluster` list over slots (~355–364); `port-forward-new-fixture` over two clusters | S: one `FormCluster` from the active session, a fixed badge + label (no `Select`); fixture over one fixed cluster | 4 |
-| `node_shell_sweep.rs` `show_leftover_notice` | A: drop the notice when `self.slot_session(&cluster).is_none()` at show time (Review already refuses via `guard_for`) | 2 |
+| `node_shell_sweep.rs` `show_leftover_notice` | A: drop the notice when `self.session_of(&cluster).is_none()` at show time (Review already refuses via `guard_for`) | 2 |
 | `leaving_work.rs`: `leaving_work(&[ClusterRef])`, `confirm_leaving` | K; doc drops "view change", "Remove from view" | 2 |
 | `ClusterObject` and its 37 user files | K ([write-safety.md](write-safety.md)) | — |
 
 ## Connect and write-path callers of the view (exact replacements, step 4)
 
-Rule: a check on a named cluster becomes `self.slot_session(&x).is_some()` (or `slot_label`, `slot_live`), **never** `self.active_session.is_some()`; the cluster check must survive.
+Rule: a check on a named cluster becomes `self.session_of(&x).is_some()` (or `label_of`, `live_of`), **never** `self.active_session.is_some()`; the cluster check must survive.
 
 | Site | Today | Becomes |
 |---|---|---|
-| `debug_open.rs` ~137 (debug options) | `self.view.slot_of(&pod.cluster).map(\|i\| self.view.slots()[i].label.clone())` | `self.slot_label(&pod.cluster)` |
-| `debug_open.rs` ~281 `has_owner` (node-shell / debug create landed) | `… && self.view.slot_of(&plan.cluster).is_some()` | `… && self.slot_session(&plan.cluster).is_some()`; an A → B switch mid-create opens no tab and deletes the pod on the held connection |
-| `node_shell_open.rs` ~117, `shell_open.rs` ~143 | label via `slot_of` + `slots()` | `self.slot_label(cluster)` / `self.slot_label(&open.cluster)` |
-| `drain_driver.rs` ~105, ~124 (drain start) | `Some(index) = self.view.slot_of(&cluster)` … `slots()[index].label` | `Some(cluster_label) = self.slot_label(&cluster)` in the same `let (…) else` |
+| `debug_open.rs` ~137 (debug options) | `self.view.slot_of(&pod.cluster).map(\|i\| self.view.slots()[i].label.clone())` | `self.label_of(&pod.cluster)` |
+| `debug_open.rs` ~281 `has_owner` (node-shell / debug create landed) | `… && self.view.slot_of(&plan.cluster).is_some()` | `… && self.session_of(&plan.cluster).is_some()`; an A → B switch mid-create opens no tab and deletes the pod on the held connection |
+| `node_shell_open.rs` ~117, `shell_open.rs` ~143 | label via `slot_of` + `slots()` | `self.label_of(cluster)` / `self.label_of(&open.cluster)` |
+| `drain_driver.rs` ~105, ~124 (drain start) | `Some(index) = self.view.slot_of(&cluster)` … `slots()[index].label` | `Some(cluster_label) = self.label_of(&cluster)` in the same `let (…) else` |
 | `drain_driver.rs` ~186 `stop_all_drains_now`; `node_shell_cleanup.rs` ~158 quit check | `running_drains_of(&self.view.clusters())`, `running_drain_names_of(&self.view.clusters())` | every running drain tab, whatever its cluster (a dock query without a cluster filter); never only the active cluster |
-| `port_forward_page.rs` ~402 | `self.view.slot_of(&forward.cluster).is_some()` | `self.slot_session(&forward.cluster).is_some()` |
-| `write_lock.rs` ~153 `slot_label` | over `slots()` | moves to `app_shell.rs`: `self.active_session.as_ref().filter(\|open\| open.cluster == *cluster).map(\|open\| open.label.clone())` |
+| `port_forward_page.rs` ~402 | `self.view.slot_of(&forward.cluster).is_some()` | `self.session_of(&forward.cluster).is_some()` |
+| `write_lock.rs` ~153 `label_of` | over `slots()` | moves to `app_shell.rs`: `self.active_session.as_ref().filter(\|open\| open.cluster == *cluster).map(\|open\| open.label.clone())` |
 | `object_delete.rs` ~822 `still_ready` | `guard_for(&cluster)` + generation | unchanged (test (a) in write-safety.md) |

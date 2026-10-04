@@ -22,10 +22,10 @@ After 0039 merges, before the queued lanes (0022 RBAC, 0044, 0029 step 5). Steps
 
 | File | Change |
 |---|---|
-| `app_shell_multi_tests.rs` | delete the file and its mod; with it `view_connects`, `ViewConnectCheck`, `released_sessions` (`app_shell.rs`, `app_shell_view.rs`) |
+| `app_shell_multi_tests.rs` | delete the file and its mod; with it `view_connects`, `ViewConnectCheck`, `released_sessions` (`app_shell.rs`, `app_shell_session.rs`) |
 | `cluster_switcher.rs`, `cluster_switcher_rows.rs` (+ tests) | ticks, checkbox, footer, tick notice, `ToggleClusterTick` gone; `space` → `gpui_kit::NoAction` in both contexts |
 | `app_shell.rs` | tick methods, `--view` start branch, `named_clusters`, multi branches of `switch_to`, `view_request`, `view_scope`, `subject_cluster`; `release_all` leaves the forwards alone (decision 17) |
-| `app_shell_view.rs` | delete `view_clusters` … `remove_from_view` and `release_slot` (inventory.md); rewrite the module doc |
+| `app_shell_session.rs` | delete `view_clusters` … `remove_from_view` and `release_slot` (inventory.md); rewrite the module doc |
 | `dock.rs` `close_tabs_of`, `edit_yaml_flow.rs` `close_edit_of`, `cluster_view.rs` `ClusterView::remove` | delete (orphans of `release_slot`) |
 | `cluster_view.rs` (+ tests) | delete `plan_view`, `ViewPlan`, `TooManyClusters`, `MAX_VIEWED_CLUSTERS`, `reorder` |
 | `workspace.rs` (+ tests) | multi body, banners, header count, `Showing {label} only`, `Retry all` |
@@ -53,9 +53,9 @@ After 0039 merges, before the queued lanes (0022 RBAC, 0044, 0029 step 5). Steps
 | `active_session.rs` (new), `cluster_view.rs` (deleted), `main.rs` mods | `ActiveSession` |
 | `cluster_rows.rs` (+ tests, deleted) → `row_context.rs` | `TableSession`, `RowContext` |
 | `pod_table.rs`, `node_table.rs`, `kind_table.rs`, `issue_table.rs`, `table_layout.rs`, `table_view.rs`, `table_selection.rs` (+ tests) | one session; no merge; backup tick clear in `set_session`; `TableRow::cluster`, `RowName.cluster`, `session_column` gone; `clear_all_filters` in `release_all` untouched |
-| `debug_open.rs`, `node_shell_open.rs`, `shell_open.rs`, `drain_driver.rs`, `node_shell_cleanup.rs`, `port_forward_page.rs`, `write_lock.rs` | exact replacements in [inventory.md](inventory.md) "Connect and write-path callers"; `slot_label` moves to `app_shell.rs` |
+| `debug_open.rs`, `node_shell_open.rs`, `shell_open.rs`, `drain_driver.rs`, `node_shell_cleanup.rs`, `port_forward_page.rs`, `write_lock.rs` | exact replacements in [inventory.md](inventory.md) "Connect and write-path callers"; `label_of` moves to `app_shell.rs` |
 | `port_forward_dialogs.rs`, `screenshot.rs` | New-forward form: one fixed cluster, no `Select`; `port-forward-new-fixture` over one cluster |
-| `app_shell.rs`, `app_shell_view.rs`, `port_forward_dialogs.rs`, `workspace.rs` | `view` → `active_session`; `primary_cluster` → `active_cluster`; `slot_session` body |
+| `app_shell.rs`, `app_shell_session.rs`, `port_forward_dialogs.rs`, `workspace.rs` | `view` → `active_session`; `primary_cluster` → `active_cluster`; `session_of` body |
 | — | final greps, ui-verifier run (test-plan.md) |
 
 ## Step 5 — renames (after the queued lanes merge)
@@ -68,7 +68,7 @@ Also left for this step (single-session leftovers, no behavior change): `open_cl
 
 | File | Site | Effect |
 |---|---|---|
-| `drain_dialog.rs` | `start_drain_of_ticked` (~1349), `guard_for` / `slot_live` (~577, 605, 1211) | no code change (K2, K3) |
+| `drain_dialog.rs` | `start_drain_of_ticked` (~1349), `guard_for` / `live_of` (~577, 605, 1211) | no code change (K2, K3) |
 | `drain_driver.rs` | drain start (~105, ~124), `stop_all_drains_now` (~186) | step 4 replacements |
 | `node_editor.rs` | `ticked_nodes` "Select rows of one cluster" (~632); `guard_for` (~614, 662, 697) | unchanged |
 | `app_shell_drain_tests.rs` | `drain_uses_the_cursor_slot` (~332), `the_bar_drain_is_off_across_clusters` (~824), `slot_release_stops_the_drain` (~1190), `the_bar_drain_refuses_ticks_of_two_clusters_instead_of_dropping_one` (~1424) | step 1: port to a switch, or delete (test-plan.md) |

@@ -853,7 +853,7 @@ impl AppShell {
             return Err(super::batch_write::BATCH_RUNNING_REASON.into());
         }
         let live = self
-            .slot_live(&first.cluster, cx)
+            .live_of(&first.cluster, cx)
             .ok_or_else(|| SharedString::from("the cluster is not open"))?;
         // The row may lag the cluster, so the uid read checks the terminating state again.
         let pod = live.pods.items().iter().find(|pod| first.key.is_pod(pod));
@@ -875,8 +875,7 @@ impl AppShell {
     ) -> Result<DeletePlan, SharedString> {
         let kind = self.delete_gate(removal, scope, cx)?;
         let cluster = scope[0].cluster.clone();
-        let (Some(guard), Some(live)) =
-            (self.guard_for(&cluster, cx), self.slot_live(&cluster, cx))
+        let (Some(guard), Some(live)) = (self.guard_for(&cluster, cx), self.live_of(&cluster, cx))
         else {
             return Err("the cluster is not open".into());
         };

@@ -6,12 +6,12 @@
 
 | # | Invariant | Where it is enforced |
 |---|---|---|
-| I1 | A write needs `guard_for(cluster)`, which is `Some` only for the active cluster while Live | `slot_session` cluster filter + `guard.cluster == *cluster` in `guard_for` |
+| I1 | A write needs `guard_for(cluster)`, which is `Some` only for the active cluster while Live | `session_of` cluster filter + `guard.cluster == *cluster` in `guard_for` |
 | I2 | Guard, lock, generation, and tier are read again at commit from the active session | `live_block` / `gone_block` (`write_flow.rs`), batch commit (`batch_write.rs`), drain (`drain_dialog.rs`, `drain_driver.rs`), node edits (`node_editor.rs`), unlock (`finish_unlock`), connect starts (`shell_open.rs`, `port_forward_open.rs`, `debug_open.rs`, `node_shell_open.rs`) — unchanged |
 | I3 | A session has a run-unique `generation`; a reconnect or a switch back gets a new one | `next_generation()` in `cluster_session.rs` — unchanged |
 | I4 | Every row in a batch, delete, drain, or node edit is of one cluster, and that cluster is the active one | the "Select rows of one cluster" checks + `guard_for(first.cluster)` — unchanged |
 | I5 | Ticks never outlive a switch | primary: `release_all` → `clear_all_filters` → `reset_filter` → `clear_checked` (`app_shell.rs` ~976, ~4378; `table_view.rs` ~403), which **must stay**; backup: `set_session` clears ticks and anchor on any change of the session entity, including to and from `None` (so A → B → A clears too) |
-| I8 | A create or start that lands after a switch has no owner | `has_owner` in `debug_open.rs` keeps `self.slot_session(&plan.cluster).is_some()`: no tab, the pod is deleted on the held connection |
+| I8 | A create or start that lands after a switch has no owner | `has_owner` in `debug_open.rs` keeps `self.session_of(&plan.cluster).is_some()`: no tab, the pod is deleted on the held connection |
 | I9 | A stale menu acts on nothing | a `RowContext` action runs only if `row.session.upgrade()` is `Some` (the old entity is released before the next connect) |
 | I10 | Results that land after a switch are dropped | `still_ready` in `object_delete.rs` (guard + generation); `show_leftover_notice` drops a notice whose cluster is not active |
 | I6 | Menus, dialogs, and key actions act on the cluster they captured, not on "whatever is active now" | `RowContext.cluster`, `ClusterObject.cluster`, `DialogInputs.generation` — unchanged |

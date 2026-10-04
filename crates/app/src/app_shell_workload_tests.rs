@@ -10,7 +10,7 @@ use gpui_kit::{Entity, InputEvent as _, KeyDownEvent, Keystroke, TestAppContext}
 
 use super::app_shell_switch_tests::open_switch_fixture;
 use super::app_shell_write_tests::{
-    Clusters, audit_lines, go_live_answering, slot_session, switch_to, writes,
+    Clusters, audit_lines, go_live_answering, session_of, switch_to, writes,
 };
 use super::batch_write::{ItemProgress, MAX_BATCH_ITEMS};
 use super::write_flow::DryRunState;
@@ -103,7 +103,7 @@ impl Clusters {
             let session = self
                 .fixture
                 .shell
-                .read_with(cx, |shell, _| shell.slot_session(cluster).cloned());
+                .read_with(cx, |shell, _| shell.session_of(cluster).cloned());
             if let Some(session) = session {
                 session.update(cx, |session, cx| {
                     session.set_kind_rows_for_test(kind, rows, cx);
@@ -857,11 +857,11 @@ impl Clusters {
         self.wait_for("the related watch", cx, |cx| {
             self.fixture.shell.read_with(cx, |shell, cx| {
                 shell
-                    .slot_live(&self.stg, cx)
+                    .live_of(&self.stg, cx)
                     .is_some_and(|live| live.related_subject().is_some())
             })
         });
-        let session = slot_session(&self.fixture, &self.stg, cx);
+        let session = session_of(&self.fixture, &self.stg, cx);
         session.update(cx, |session, cx| {
             session.set_replica_sets_for_test(revision_sets(), cx);
         });
@@ -1525,7 +1525,7 @@ impl Clusters {
             kind: controller.0.to_owned(),
             name: controller.1.to_owned(),
         });
-        let session = slot_session(&self.fixture, &self.stg, cx);
+        let session = session_of(&self.fixture, &self.stg, cx);
         session.update(cx, |session, cx| session.set_pods_for_test(vec![pod], cx));
         cx.run_until_parked();
     }

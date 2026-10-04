@@ -63,7 +63,7 @@ impl AppShell {
                 return;
             }
             let row = self
-                .slot_live(&subject.cluster, cx)
+                .live_of(&subject.cluster, cx)
                 .and_then(|live| live.row_of(&subject.key));
             if let Some(reason) = row.and_then(|row| values_edit_block(&row.object)) {
                 notify(window, cx, unavailable_text(label, &reason));
@@ -78,7 +78,7 @@ impl AppShell {
                 secret_type,
             )
         };
-        let connection = self.slot_connection(&subject.cluster, cx);
+        let connection = self.connection_of(&subject.cluster, cx);
         let access = self.secret_value_access();
         self.close_value_popover(cx);
         let shell = cx.weak_entity();

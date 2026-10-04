@@ -11,7 +11,7 @@ use gpui_kit::{Entity, KeyDownEvent, Keystroke, TestAppContext};
 
 use super::app_shell_switch_tests::open_switch_fixture;
 use super::app_shell_write_tests::{
-    Clusters, audit_lines, go_live_answering, slot_session, switch_to, writes,
+    Clusters, audit_lines, go_live_answering, session_of, switch_to, writes,
 };
 use super::batch_write::ItemProgress;
 use super::write_flow::DryRunState;
@@ -292,7 +292,7 @@ fn deny(t: &Clusters, cluster: &ClusterRef, denied: AccessCheck, cx: &mut TestAp
             },
         })
         .collect();
-    let session = slot_session(&t.fixture, cluster, cx);
+    let session = session_of(&t.fixture, cluster, cx);
     session.update(cx, |session, cx| {
         session.set_access_for_test(AccessState::Known(AccessReport { reviews }), cx);
     });
@@ -1291,7 +1291,7 @@ fn set_default_is_off_without_permission_and_while_locked(cx: &mut TestAppContex
 fn the_class_list_is_loaded_only_on_the_storage_classes_screen(cx: &mut TestAppContext) {
     let t = edit_clusters("default-loaded", cx);
     let names = |t: &Clusters, cx: &mut TestAppContext| -> Vec<String> {
-        slot_session(&t.fixture, &t.stg, cx).read_with(cx, |session, _| {
+        session_of(&t.fixture, &t.stg, cx).read_with(cx, |session, _| {
             session
                 .live()
                 .map(|live| {

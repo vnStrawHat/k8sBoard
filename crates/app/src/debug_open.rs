@@ -68,7 +68,7 @@ impl AppShell {
         let form = {
             let (Some(guard), Some(live)) = (
                 self.guard_for(&pod.cluster, cx),
-                self.slot_live(&pod.cluster, cx),
+                self.live_of(&pod.cluster, cx),
             ) else {
                 notify(
                     window,
@@ -136,13 +136,13 @@ impl AppShell {
         let (Some((cluster_name, generation)), Some(cluster_label)) = (
             self.guard_for(&pod.cluster, cx)
                 .map(|guard| (guard.display_name().to_owned(), guard.generation)),
-            self.slot_label(&pod.cluster),
+            self.label_of(&pod.cluster),
         ) else {
             notify(window, cx, format!("{} is not open", pod.cluster.context));
             return;
         };
         let short_pod = self
-            .slot_live(&pod.cluster, cx)
+            .live_of(&pod.cluster, cx)
             .and_then(|live| {
                 live.pods
                     .items()

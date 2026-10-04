@@ -36,7 +36,7 @@ impl AppShell {
         subject: &ClusterObject,
         cx: &App,
     ) -> Option<HorizontalPodAutoscalerSummary> {
-        let live = self.slot_live(&subject.cluster, cx)?;
+        let live = self.live_of(&subject.cluster, cx)?;
         match &live.row_of(&subject.key)?.object {
             KindObject::HorizontalPodAutoscaler(hpa) => Some(hpa.clone()),
             _ => None,
@@ -151,7 +151,7 @@ impl AppShell {
         subject: &ClusterObject,
         cx: &App,
     ) -> Option<PersistentVolumeClaimSummary> {
-        let live = self.slot_live(&subject.cluster, cx)?;
+        let live = self.live_of(&subject.cluster, cx)?;
         match &live.row_of(&subject.key)?.object {
             KindObject::PersistentVolumeClaim(claim) => Some(claim.clone()),
             _ => None,
@@ -192,7 +192,7 @@ impl AppShell {
         claim: &PersistentVolumeClaimSummary,
         cx: &App,
     ) -> Option<SharedString> {
-        let live = self.slot_live(&subject.cluster, cx)?;
+        let live = self.live_of(&subject.cluster, cx)?;
         claim_block(claim, &live.loaded_storage_classes())
     }
 
@@ -296,7 +296,7 @@ impl AppShell {
         let intent = {
             let (Some(guard), Some(live)) = (
                 self.guard_for(&subject.cluster, cx),
-                self.slot_live(&subject.cluster, cx),
+                self.live_of(&subject.cluster, cx),
             ) else {
                 notify(
                     window,
@@ -351,7 +351,7 @@ impl AppShell {
         if !matches!(batch.plan.extras, BatchExtras::DefaultClass(_)) {
             return None;
         }
-        let live = self.slot_live(&batch.cluster, cx)?;
+        let live = self.live_of(&batch.cluster, cx)?;
         let defaults = defaults_after(batch, results, &live.loaded_storage_classes());
         many_defaults_warning(&defaults)
     }

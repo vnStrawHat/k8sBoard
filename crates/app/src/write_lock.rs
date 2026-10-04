@@ -37,7 +37,7 @@ impl AppShell {
             .map(|guard| (guard.lock, guard.display_name().to_owned()))
         else {
             let name = self
-                .slot_label(cluster)
+                .label_of(cluster)
                 .unwrap_or_else(|| cluster.context.clone());
             let text = format!("{name} is not connected yet");
             window.push_notification(Notification::warning(text), cx);
@@ -65,7 +65,7 @@ impl AppShell {
         let inputs = {
             let Some(guard) = self.guard_for(cluster, cx) else {
                 let name = self
-                    .slot_label(cluster)
+                    .label_of(cluster)
                     .unwrap_or_else(|| cluster.context.clone());
                 let text = format!("{name} is not connected yet");
                 window.push_notification(Notification::warning(text), cx);
@@ -108,7 +108,7 @@ impl AppShell {
             .is_some_and(|guard| guard.generation == generation);
         if !is_same_connection {
             let name = self
-                .slot_label(cluster)
+                .label_of(cluster)
                 .unwrap_or_else(|| cluster.context.clone());
             let text = format!("{name} is no longer open; nothing was changed");
             window.push_notification(Notification::warning(text), cx);
@@ -120,7 +120,7 @@ impl AppShell {
     /// Sets the lock of `cluster`'s own session and appends the audit line of the change. The lock
     /// of a session that is not live yet is not offered, so there is always a guard to name.
     fn set_write_lock(&mut self, cluster: &ClusterRef, lock: WriteLock, cx: &mut Context<Self>) {
-        let Some(session) = self.slot_session(cluster).cloned() else {
+        let Some(session) = self.session_of(cluster).cloned() else {
             return;
         };
         session.update(cx, |session, cx| session.set_lock(lock, cx));

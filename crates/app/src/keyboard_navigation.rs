@@ -412,7 +412,7 @@ impl AppShell {
         if !matches!(key, ResourceKey::Pod { .. }) {
             return;
         }
-        let Some(live) = self.slot_live(&subject.cluster, cx) else {
+        let Some(live) = self.live_of(&subject.cluster, cx) else {
             return;
         };
         let Some(pod) = live.pods.items().iter().find(|pod| key.is_pod(pod)) else {
@@ -456,7 +456,7 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let blocked = self.slot_live(&subject.cluster, cx).and_then(|live| {
+        let blocked = self.live_of(&subject.cluster, cx).and_then(|live| {
             let ResourceKey::Kind { kind, .. } = &subject.key else {
                 return None;
             };
@@ -490,7 +490,7 @@ impl AppShell {
             return;
         };
         let (Some(live), Some(guard)) = (
-            self.slot_live(&subject.cluster, cx),
+            self.live_of(&subject.cluster, cx),
             self.guard_for(&subject.cluster, cx),
         ) else {
             return;

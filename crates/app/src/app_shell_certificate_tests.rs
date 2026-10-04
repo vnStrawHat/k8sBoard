@@ -82,7 +82,7 @@ fn certificate_clusters(name: &str, kind: CustomKind, cx: &mut TestAppContext) -
     t.wait_for("the Certificate row", cx, |cx| {
         t.fixture.shell.read_with(cx, |shell, cx| {
             shell
-                .slot_live(&t.stg, cx)
+                .live_of(&t.stg, cx)
                 .is_some_and(|live| live.row_of(&key).is_some())
         })
     });

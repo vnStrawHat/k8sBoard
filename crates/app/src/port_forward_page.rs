@@ -398,7 +398,7 @@ impl AppShell {
 
     fn menu_snapshot(&self, id: ForwardId, cx: &App) -> Option<MenuSnapshot> {
         let forward = self.port_forwards.read(cx).get(id)?;
-        let viewed = self.slot_session(&forward.cluster).is_some();
+        let viewed = self.session_of(&forward.cluster).is_some();
         Some(MenuSnapshot {
             is_running: forward.state.is_running(),
             is_preset: forward.is_preset,

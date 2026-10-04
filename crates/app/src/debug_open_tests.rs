@@ -270,7 +270,7 @@ pub(in crate::app_shell) fn go_live_answering(
     };
     let session = fixture
         .shell
-        .read_with(cx, |shell, _| shell.slot_session(cluster).cloned())
+        .read_with(cx, |shell, _| shell.session_of(cluster).cloned())
         .expect("a viewed slot");
     let pods = vec![
         pod("api-0", vec![container("app", ContainerKind::Main, true)]),
@@ -487,7 +487,7 @@ impl Debugs {
     ) -> Entity<ClusterSession> {
         self.fixture
             .shell
-            .read_with(cx, |shell, _| shell.slot_session(cluster).cloned())
+            .read_with(cx, |shell, _| shell.session_of(cluster).cloned())
             .expect("a viewed slot")
     }
 
@@ -842,14 +842,14 @@ fn menu_items(
 ) -> crate::resource_actions::ShellItems {
     let (menu, row) = debugs.fixture.shell.read_with(cx, |shell, cx| {
         let guard = shell.guard_for(cluster, cx).expect("a guard");
-        let live = shell.slot_live(cluster, cx).expect("a live slot");
+        let live = shell.live_of(cluster, cx).expect("a live slot");
         let pod = live
             .pods
             .items()
             .iter()
             .find(|pod| pod.name == pod_name)
             .expect("the pod is listed");
-        let row = shell.slot_row_context(cluster, cx).expect("a slot");
+        let row = shell.row_context_of(cluster, cx).expect("a slot");
         (crate::resource_actions::ShellMenu::of(pod, &guard), row)
     });
     let weak = debugs.fixture.shell.downgrade();
@@ -889,7 +889,7 @@ fn the_debug_item_reads_the_gate_of_its_own_cluster(cx: &mut TestAppContext) {
     let state = |cluster: &ClusterRef, cx: &mut TestAppContext| {
         debugs.fixture.shell.read_with(cx, |shell, cx| {
             let guard = shell.guard_for(cluster, cx).expect("a guard");
-            let live = shell.slot_live(cluster, cx).expect("a live slot");
+            let live = shell.live_of(cluster, cx).expect("a live slot");
             let pod = live
                 .pods
                 .items()
@@ -1014,7 +1014,7 @@ fn a_menu_built_on_a_does_nothing_after_switching_back(cx: &mut TestAppContext) 
     let row = debugs
         .fixture
         .shell
-        .read_with(cx, |shell, cx| shell.slot_row_context(&debugs.stg, cx))
+        .read_with(cx, |shell, cx| shell.row_context_of(&debugs.stg, cx))
         .expect("the open cluster has a row context");
     debugs.activate(&debugs.prod, cx);
     let stg_again = debugs.activate(&debugs.stg, cx);
@@ -1058,7 +1058,7 @@ fn reveal_item(debugs: &Debugs, cluster: &ClusterRef, cx: &mut TestAppContext) -
     let context = debugs
         .fixture
         .shell
-        .read_with(cx, |shell, cx| shell.slot_row_context(cluster, cx))
+        .read_with(cx, |shell, cx| shell.row_context_of(cluster, cx))
         .expect("the open cluster has a row context");
     let object = context.object(crate::table_selection::ResourceKey::Kind {
         kind: crate::resource_kind::ResourceKind::Secrets,
@@ -1108,7 +1108,7 @@ fn a_logs_item_built_on_a_opens_nothing_after_switching_back(cx: &mut TestAppCon
     let debugs = two_clusters("logs-after-back", Answers::Accepts, cx);
     let build = |debugs: &Debugs, cx: &mut TestAppContext| {
         let (menu, connection, row, dock) = debugs.fixture.shell.read_with(cx, |shell, cx| {
-            let live = shell.slot_live(&debugs.stg, cx).expect("a live slot");
+            let live = shell.live_of(&debugs.stg, cx).expect("a live slot");
             let pod = live
                 .pods
                 .items()
@@ -1119,7 +1119,7 @@ fn a_logs_item_built_on_a_opens_nothing_after_switching_back(cx: &mut TestAppCon
                 crate::resource_actions::LogsMenu::of(pod, &live.access),
                 live.connection().clone(),
                 shell
-                    .slot_row_context(&debugs.stg, cx)
+                    .row_context_of(&debugs.stg, cx)
                     .expect("a row context"),
                 shell.dock.downgrade(),
             )

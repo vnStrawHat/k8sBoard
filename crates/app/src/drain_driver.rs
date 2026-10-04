@@ -101,7 +101,7 @@ impl AppShell {
         let prepared = {
             let (Some(guard), Some(connection)) = (
                 self.guard_for(&cluster, cx),
-                self.slot_connection(&cluster, cx),
+                self.connection_of(&cluster, cx),
             ) else {
                 notify(window, cx, format!("{} is not open", cluster.context));
                 return;
@@ -240,7 +240,7 @@ impl AppShell {
         let label = "Uncordon";
         let intent = {
             let (Some(guard), Some(live)) =
-                (self.guard_for(cluster, cx), self.slot_live(cluster, cx))
+                (self.guard_for(cluster, cx), self.live_of(cluster, cx))
             else {
                 notify(
                     window,

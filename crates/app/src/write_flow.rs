@@ -447,7 +447,7 @@ impl AppShell {
         if let Some(reason) = block {
             return Err(reason);
         }
-        let (Some(guard), Some(connection)) = (guard, self.slot_connection(&intent.cluster, cx))
+        let (Some(guard), Some(connection)) = (guard, self.connection_of(&intent.cluster, cx))
         else {
             return Err(format!(
                 "{} is no longer open; nothing was changed",
@@ -692,7 +692,7 @@ impl AppShell {
     ) {
         let intent = {
             let (Some(guard), Some(live)) =
-                (self.guard_for(cluster, cx), self.slot_live(cluster, cx))
+                (self.guard_for(cluster, cx), self.live_of(cluster, cx))
             else {
                 return;
             };
@@ -744,7 +744,7 @@ impl AppShell {
         let intent = {
             let (Some(guard), Some(live)) = (
                 self.guard_for(&subject.cluster, cx),
-                self.slot_live(&subject.cluster, cx),
+                self.live_of(&subject.cluster, cx),
             ) else {
                 notify(
                     window,
@@ -797,7 +797,7 @@ impl AppShell {
         let intent = {
             let (Some(guard), Some(live)) = (
                 self.guard_for(&subject.cluster, cx),
-                self.slot_live(&subject.cluster, cx),
+                self.live_of(&subject.cluster, cx),
             ) else {
                 notify(
                     window,
@@ -836,7 +836,7 @@ impl AppShell {
     /// The row under `subject` as a Scale target. The HPA is read from the Issues feed only when that
     /// list is already loaded: no list starts for a hint.
     pub(crate) fn scale_target_of(&self, subject: &ClusterObject, cx: &App) -> Option<ScaleTarget> {
-        let live = self.slot_live(&subject.cluster, cx)?;
+        let live = self.live_of(&subject.cluster, cx)?;
         let row = live.row_of(&subject.key)?;
         ScaleTarget::of(&row.object, live.loaded_hpas())
     }
@@ -1237,7 +1237,7 @@ impl AppShell {
                     let granted = guard
                         .as_ref()
                         .and_then(|guard| intent.open.granted(guard.access));
-                    match (granted, self.slot_connection(&intent.cluster, cx)) {
+                    match (granted, self.connection_of(&intent.cluster, cx)) {
                         (Some(granted), Some(connection)) => Ok((granted, connection)),
                         _ => Err(guard
                             .as_ref()
@@ -1490,10 +1490,10 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(session) = self.slot_session(cluster).cloned() else {
+        let Some(session) = self.session_of(cluster).cloned() else {
             return false;
         };
-        let node = match self.slot_live(cluster, cx) {
+        let node = match self.live_of(cluster, cx) {
             Some(live) if !live.nodes.is_loading() => live.nodes.items().first().cloned(),
             _ => return false,
         };
@@ -1527,7 +1527,7 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) -> bool {
         let (Some(session), Some(target)) = (
-            self.slot_session(&subject.cluster).cloned(),
+            self.session_of(&subject.cluster).cloned(),
             self.scale_target_of(subject, cx),
         ) else {
             return false;

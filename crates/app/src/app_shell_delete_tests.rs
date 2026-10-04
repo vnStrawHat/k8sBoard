@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use super::app_shell_switch_tests::open_switch_fixture;
 use super::app_shell_write_tests::{
-    Clusters, audit_lines, go_live_answering, slot_session, switch_to, writes,
+    Clusters, audit_lines, go_live_answering, session_of, switch_to, writes,
 };
 use super::batch_write::ItemProgress;
 use super::object_delete::Removal;
@@ -299,7 +299,7 @@ impl DeleteTest {
         for (cluster, pods) in [(&self.t.prod, prod), (&self.t.stg, stg)] {
             let session = self
                 .shell()
-                .read_with(cx, |shell, _| shell.slot_session(cluster).cloned());
+                .read_with(cx, |shell, _| shell.session_of(cluster).cloned());
             if let Some(session) = session {
                 session.update(cx, |session, cx| {
                     session.set_pods_for_test(pods.to_vec(), cx);
@@ -328,7 +328,7 @@ impl DeleteTest {
         for cluster in [&self.t.prod, &self.t.stg] {
             let is_open = self
                 .shell()
-                .read_with(cx, |shell, _| shell.slot_session(cluster).is_some());
+                .read_with(cx, |shell, _| shell.session_of(cluster).is_some());
             if !is_open {
                 continue;
             }
@@ -879,7 +879,7 @@ fn deleting_the_drawer_object_closes_the_drawer_once_the_row_is_gone(cx: &mut Te
     t.t.confirm(cx);
     t.t.wait_for("the commit", cx, |_| writes(&t.t.stg_api).len() == 2);
     // The watch drops the row.
-    let session = slot_session(&t.t.fixture, &t.t.stg, cx);
+    let session = session_of(&t.t.fixture, &t.t.stg, cx);
     session.update(cx, |session, cx| session.set_pods_for_test(Vec::new(), cx));
     cx.run_until_parked();
     t.t.fixture.draw_twice(cx);
