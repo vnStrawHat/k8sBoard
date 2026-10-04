@@ -139,7 +139,7 @@ impl AppShell {
         &self,
         kind: ResourceKind,
         cx: &App,
-    ) -> Result<ClusterObject, SharedString> {
+    ) -> Result<(), SharedString> {
         const SELECT: &str = "Select a certificate";
         let subject = self
             .selected
@@ -153,7 +153,7 @@ impl AppShell {
             return Err("Not connected".into());
         };
         match key_availability(RowAction::RenewCertificate, &subject.key, live, &guard) {
-            KeyAvailability::Run(_) => Ok(subject.clone()),
+            KeyAvailability::Run(_) => Ok(()),
             KeyAvailability::Disabled { reason } => Err(reason),
             KeyAvailability::NotOffered => Err(SELECT.into()),
         }

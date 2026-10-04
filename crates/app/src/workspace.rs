@@ -604,7 +604,7 @@ impl AppShell {
             .small()
             .outline();
         let button = match self.renew_header_state(kind, cx) {
-            Ok(_) => button
+            Ok(()) => button
                 .tooltip("Request a new certificate for the selected Certificate now")
                 .on_click(cx.listener(|shell, _, window, cx| {
                     shell.run_row_key(RowAction::RenewCertificate, window, cx);
