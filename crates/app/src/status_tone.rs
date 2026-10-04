@@ -3,7 +3,7 @@ use cluster::{
     NodeReadiness, NodeScheduling, NodeStatus, PodStatus, PodSummary, StatusReason,
 };
 use gpui_kit::component::{ActiveTheme as _, Colorize as _};
-use gpui_kit::{App, Div, Hsla, ParentElement as _, SharedString, Styled as _, div};
+use gpui_kit::{App, Div, Hsla, ParentElement as _, Rgba, SharedString, Styled as _, div};
 
 /// How a status reads at a glance. Each tone maps to one theme token in `tone_color`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,12 +21,16 @@ pub(crate) struct StatusLabel {
     pub(crate) tone: StatusTone,
 }
 
-/// The share of its own hue a tone keeps on a light background. It is the `factor` of
-/// `mix_oklab`, which computes `self * factor + other * (1 - factor)`, so at 0.6 the tone
-/// moves 40% toward the foreground to reach a readable contrast.
+/// The smallest share of its own hue a tone keeps on a light background (the cap of the mix:
+/// the tone moves at most 40% toward the foreground). The share is the `factor` of `mix_oklab`,
+/// which computes `self * factor + other * (1 - factor)`.
 const LIGHT_THEME_TONE_SHARE: f32 = 0.6;
 /// Amber mixed toward near-black turns grey-brown at small sizes, so it keeps more of its hue.
 const LIGHT_THEME_WARN_SHARE: f32 = 0.7;
+/// The contrast ratio (WCAG) a tone needs against the background to read as text.
+const TEXT_CONTRAST: f32 = 4.5;
+/// Steps of the search for the largest share that still reaches `TEXT_CONTRAST`.
+const SHARE_SEARCH_STEPS: u32 = 12;
 
 /// The only place a tone touches the theme, so every status colour comes from one table.
 pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla {
@@ -47,12 +51,52 @@ pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla {
             StatusTone::Warn => LIGHT_THEME_WARN_SHARE,
             _ => LIGHT_THEME_TONE_SHARE,
         };
-        readable_on_light(color, theme.foreground, share)
+        readable_on_light(color, theme.foreground, theme.background, share)
     }
 }
 
-fn readable_on_light(color: Hsla, foreground: Hsla, share: f32) -> Hsla {
-    color.mix_oklab(foreground, share)
+/// `color` moved toward `foreground` only as far as it needs to reach `TEXT_CONTRAST` on
+/// `background`, and never further than `min_share` allows. A fill that already reads is kept,
+/// and a muted fill keeps its hue instead of a fixed mix turning it grey.
+fn readable_on_light(color: Hsla, foreground: Hsla, background: Hsla, min_share: f32) -> Hsla {
+    let reads = |share: f32| {
+        let mixed = color.mix_oklab(foreground, share);
+        (contrast(mixed, background) >= TEXT_CONTRAST).then_some(mixed)
+    };
+    // Checked on the color itself: a mix at share 1 still round-trips through Oklab.
+    if contrast(color, background) >= TEXT_CONTRAST {
+        return color;
+    }
+    // Contrast grows as the share falls, so a bisection finds the largest share that reads.
+    let (mut low, mut high) = (min_share, 1.);
+    for _ in 0..SHARE_SEARCH_STEPS {
+        let middle = (low + high) / 2.;
+        if reads(middle).is_some() {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    reads(low).unwrap_or_else(|| color.mix_oklab(foreground, min_share))
+}
+
+/// The contrast ratio (WCAG 2) of two colors.
+pub(crate) fn contrast(a: Hsla, b: Hsla) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// The relative luminance of an sRGB color (WCAG 2).
+fn luminance(color: Hsla) -> f32 {
+    let rgba = Rgba::from(color);
+    let linear = |channel: f32| {
+        if channel <= 0.03928 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(rgba.r) + 0.7152 * linear(rgba.g) + 0.0722 * linear(rgba.b)
 }
 
 /// The share of its own hue a chart color keeps as text. Chart colors are fills tuned for bars,

@@ -1,4 +1,5 @@
 use cluster::{ReadyCount, Termination};
+use gpui_kit::component::ThemeColor;
 
 use super::*;
 
@@ -223,18 +224,88 @@ fn container_terminated_exit_zero_is_done_nonzero_is_bad() {
     assert_eq!(label.tone, StatusTone::Bad);
 }
 
+const WHITE: (f32, f32, f32) = (0., 0., 1.);
+
+fn white() -> Hsla {
+    gpui_kit::hsla(WHITE.0, WHITE.1, WHITE.2, 1.)
+}
+
+fn near_black() -> Hsla {
+    gpui_kit::hsla(0., 0., 0.05, 1.)
+}
+
+#[test]
+fn light_theme_text_reaches_the_text_contrast_or_the_cap() {
+    let foreground = near_black();
+    for hue in [0.02, 0.12, 0.38, 0.58] {
+        for lightness in [0.35, 0.5, 0.65] {
+            let fill = gpui_kit::hsla(hue, 0.6, lightness, 1.);
+            for cap in [LIGHT_THEME_TONE_SHARE, LIGHT_THEME_WARN_SHARE] {
+                let text = readable_on_light(fill, foreground, white(), cap);
+                let at_cap = fill.mix_oklab(foreground, cap);
+                assert!(
+                    contrast(text, white()) >= TEXT_CONTRAST - 0.02
+                        || contrast(text, white()) >= contrast(at_cap, white()) - 0.02,
+                    "hue {hue} lightness {lightness} cap {cap}"
+                );
+                // Never darker than the cap allows.
+                assert!(text.l >= at_cap.l - 0.01, "hue {hue} lightness {lightness}");
+            }
+        }
+    }
+}
+
+#[test]
+fn light_theme_text_keeps_more_hue_than_the_fixed_mix() {
+    let foreground = near_black();
+    // A muted green that needs less than the full cap to read.
+    let fill = gpui_kit::hsla(0.33, 0.35, 0.42, 1.);
+    let text = readable_on_light(fill, foreground, white(), LIGHT_THEME_TONE_SHARE);
+    let capped = fill.mix_oklab(foreground, LIGHT_THEME_TONE_SHARE);
+    assert!(contrast(text, white()) >= TEXT_CONTRAST - 0.02);
+    assert!(text.l > capped.l, "{} vs {}", text.l, capped.l);
+}
+
+#[test]
+fn light_theme_tone_that_already_reads_is_not_mixed() {
+    let dark_green = gpui_kit::hsla(0.38, 0.6, 0.2, 1.);
+    assert!(contrast(dark_green, white()) >= TEXT_CONTRAST);
+    assert_eq!(
+        readable_on_light(dark_green, near_black(), white(), LIGHT_THEME_TONE_SHARE),
+        dark_green
+    );
+}
+
 #[test]
 fn light_theme_text_is_darker_than_the_fill_colour() {
     let green = gpui_kit::hsla(0.38, 0.6, 0.5, 1.);
-    let foreground = gpui_kit::hsla(0., 0., 0.05, 1.);
-    let text = readable_on_light(green, foreground, LIGHT_THEME_TONE_SHARE);
+    let foreground = near_black();
+    let text = readable_on_light(green, foreground, white(), LIGHT_THEME_TONE_SHARE);
     assert!(text.l < green.l);
     assert!(text.l > foreground.l);
-    // Amber keeps more of its hue, so it stays amber instead of turning grey-brown.
-    let amber = gpui_kit::hsla(0.12, 0.8, 0.5, 1.);
-    let common = readable_on_light(amber, foreground, LIGHT_THEME_TONE_SHARE);
-    let warn = readable_on_light(amber, foreground, LIGHT_THEME_WARN_SHARE);
-    assert!(warn.l > common.l);
+}
+
+#[test]
+fn default_light_tones_stay_close_to_the_old_fixed_mix() {
+    let theme = ThemeColor::light();
+    for (fill, cap) in [
+        (theme.success, LIGHT_THEME_TONE_SHARE),
+        (theme.warning, LIGHT_THEME_WARN_SHARE),
+        (theme.danger, LIGHT_THEME_TONE_SHARE),
+        (theme.info, LIGHT_THEME_TONE_SHARE),
+    ] {
+        let now = readable_on_light(fill, theme.foreground, theme.background, cap);
+        let old = fill.mix_oklab(theme.foreground, cap);
+        // Never less readable than the old mix, nor than the text contrast.
+        let needed = TEXT_CONTRAST.min(contrast(old, theme.background));
+        assert!(contrast(now, theme.background) >= needed - 0.02);
+        assert!(
+            (now.l - old.l).abs() < 0.2,
+            "lightness {} vs {}",
+            now.l,
+            old.l
+        );
+    }
 }
 
 #[test]

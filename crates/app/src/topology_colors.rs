@@ -3,9 +3,9 @@
 //! from a theme token; red and yellow stay reserved for the Bad and Warn tones.
 
 use gpui_kit::component::{ActiveTheme as _, Colorize as _, ThemeColor};
-use gpui_kit::{App, Hsla, Rgba};
+use gpui_kit::{App, Hsla};
 
-use crate::status_tone::{StatusTone, tone_color};
+use crate::status_tone::{StatusTone, contrast, tone_color};
 use crate::topology_graph::{Relation, TopologyKind};
 
 /// The alpha of an edge at rest (React Flow draws its edges light too).
@@ -276,24 +276,6 @@ fn readable_on(fill: Hsla, first: Hsla, second: Hsla) -> Hsla {
     } else {
         second
     }
-}
-
-fn contrast(a: Hsla, b: Hsla) -> f32 {
-    let (a, b) = (luminance(a), luminance(b));
-    (a.max(b) + 0.05) / (a.min(b) + 0.05)
-}
-
-/// The relative luminance of an sRGB color (WCAG 2).
-fn luminance(color: Hsla) -> f32 {
-    let rgba = Rgba::from(color);
-    let linear = |channel: f32| {
-        if channel <= 0.03928 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * linear(rgba.r) + 0.7152 * linear(rgba.g) + 0.0722 * linear(rgba.b)
 }
 
 #[cfg(test)]

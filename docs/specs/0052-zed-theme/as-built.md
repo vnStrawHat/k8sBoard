@@ -12,6 +12,12 @@ Implemented in one code commit (steps 1 and 2 together; the gate was green for t
 - **Two more struct initialisers** gained `color_theme: None` (`resource_actions_tests.rs`, `secret_values_tests.rs`) because `LaunchOptions` has a new field.
 - **Settings shot shows the saved value.** `--color-theme` is never saved, so on `settings-appearance --color-theme zed-one` the Theme dropdown still reads `Default` while the window is themed One Dark/Light. The Mode dropdown behaves the same way with `--theme` today.
 
-## Finding for the architect (no code change made)
+## Follow-up: light-mode status tones (fixed)
 
-- **One Light status tones lose their hue.** `status_tone::tone_color` mixes the light-mode tone 0.6 to 0.7 toward the foreground. With One Light's muted `success` (`#669f59`) and foreground (`#242529`), `Running` renders as a dark grey-green that reads as plain text (contrast is fine, about 5.6:1, but the green is barely visible). Default light shows a clear green. The same applies to the drain dialog result lines ("Will be rescheduled") and the Ready counts. Dark is fine. Options: a more saturated One Light `success`/`warning`/`danger` for the tone path, or a lower mix for this family. Not done, per the spec's "report back" rule.
+The first build showed One Light's `Running` and drain result lines as plain dark text, because `status_tone::tone_color` mixed every light-mode tone a fixed 40% (30% for amber) toward the foreground. That ratio suits Default's bright green but flattens a muted fill such as One Light's `success`.
+
+- `readable_on_light` now bisects for the smallest move toward the foreground that reaches 4.5:1 (WCAG) on the theme background, capped at the old 40% / 30%. A tone that already reads is returned unchanged. There is no per-theme branch.
+- `tone_color` is the only caller, and every status text, the drain dialog result lines, the traffic tone label, and the topology warn/bad edges and ghosts read it, so all of them follow. `contrast` moved from `topology_colors.rs` to `status_tone.rs` (still one definition) so both use it.
+- One Light: `Running`, "Will be rescheduled", and the dry-run line keep a visible green, and the 5xx edges and CrashLoop node are clearly red instead of brown. The muted green still reads olive, as 4.5:1 on `#fafafa` requires a dark green.
+- Default light: success and info are slightly lighter than before; amber is unchanged (it hits the cap and stays below 4.5:1, as before); danger is visibly brighter (lightness 0.36 to 0.54), because Default's red already reached 4.5:1 with less darkening. The test bounds the lightness change at 0.2 and requires at least the old contrast.
+- Dark mode is untouched.
