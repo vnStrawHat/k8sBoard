@@ -157,3 +157,65 @@ fn quota_line_absent_when_not_affected() {
         QuotaLine::None
     );
 }
+
+fn cpu_growth(nanocores: u64) -> DemandChange {
+    change(
+        WorkloadDemand::default(),
+        WorkloadDemand {
+            requests_cpu: nanocores,
+            ..WorkloadDemand::default()
+        },
+    )
+}
+
+fn cpu_quota(used: &str) -> QuotaInput {
+    QuotaInput::Quotas(vec![quota("compute", &[("requests.cpu", "4", used)])])
+}
+
+#[test]
+fn quota_headroom_is_rounded_down_and_need_up() {
+    // 2.75 used of 4, 1.5 added: exactly 1.25 left after the change, shown as 1.2 and never 1.3.
+    assert_eq!(
+        quota_line(Some(&cpu_growth(1_500_000_000)), &cpu_quota("1250m")),
+        QuotaLine::Fits("Namespace quota OK (1.2 requests.cpu left)".into())
+    );
+    // 1.0 left, 1.04 needed: the need reads 1.1 (never 1), the left reads 1.
+    assert_eq!(
+        quota_line(Some(&cpu_growth(1_040_000_000)), &cpu_quota("3")),
+        QuotaLine::Exceeds(vec![
+            "Quota compute: requests.cpu needs 1.1 more, 1 left".into()
+        ])
+    );
+    // A need just under a core stays in millicores and rounds up.
+    assert_eq!(
+        quota_line(Some(&cpu_growth(999_400_000)), &cpu_quota("3500m")),
+        QuotaLine::Exceeds(vec![
+            "Quota compute: requests.cpu needs 1 more, 500m left".into()
+        ])
+    );
+}
+
+#[test]
+fn quota_memory_is_rounded_the_same_way() {
+    let quotas =
+        |used: &str| QuotaInput::Quotas(vec![quota("q", &[("requests.memory", "64Gi", used)])]);
+    // 1.25Gi left after the change reads 1.2Gi, not 1.3Gi.
+    let line = quota_line(Some(&memory_growth(GI)), &quotas("61.75Gi"));
+    assert_eq!(
+        line,
+        QuotaLine::Fits("Namespace quota OK (1.2Gi requests.memory left)".into())
+    );
+    // Needing 1.01Gi with 1Gi left: 1.1Gi needed, 1Gi left.
+    let needed = GI + GI / 100;
+    assert_eq!(
+        quota_line(Some(&memory_growth(needed)), &quotas("63Gi")),
+        QuotaLine::Exceeds(vec![
+            "Quota q: requests.memory needs 1.1Gi more, 1Gi left".into()
+        ])
+    );
+    // Below a gibibyte the numbers are whole mebibytes, rounded the same way.
+    assert_eq!(memory_text(1536 * 1024, Round::Down), "1Mi");
+    assert_eq!(memory_text(1536 * 1024, Round::Up), "2Mi");
+    assert_eq!(memory_text(1024 * 1024 * 1024 - 1, Round::Up), "1Gi");
+    assert_eq!(memory_text(1024 * 1024 * 1024 - 1, Round::Down), "1023Mi");
+}

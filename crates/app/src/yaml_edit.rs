@@ -474,7 +474,12 @@ impl YamlEditView {
 
     pub(crate) fn show_tab(&mut self, tab: EditTab, cx: &mut Context<Self>) {
         self.tab = tab;
-        if tab == EditTab::History && self.history.is_none() {
+        // A failed list (the Deployment was not loaded yet, a network error) is asked again.
+        let needs_history = self
+            .history
+            .as_ref()
+            .is_none_or(|history| history.read(cx).has_failed());
+        if tab == EditTab::History && needs_history {
             self.history = Some(self.new_history(cx));
         }
         cx.notify();

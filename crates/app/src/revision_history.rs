@@ -26,6 +26,7 @@ const PILL_TINT: f32 = 0.14;
 
 const CURRENT_NOTE: &str = "This is the current revision.";
 const SINGLE_NOTE: &str = "No earlier revision kept (revisionHistoryLimit)";
+const UNNUMBERED_NOTE: &str = "These ReplicaSets carry no revision number to compare.";
 const DENIED_NOTE: &str = "Not permitted: list replicasets";
 
 /// What the shell knows when the tab is first shown.
@@ -86,6 +87,11 @@ impl RevisionHistory {
             } => history.load(connection, object, selector, cx),
         }
         history
+    }
+
+    /// Whether the list failed or could not be asked, so showing the tab again should ask again.
+    pub(crate) fn has_failed(&self) -> bool {
+        matches!(self.state, HistoryState::Failed(_))
     }
 
     fn load(
@@ -247,7 +253,14 @@ fn detail_note(
     {
         return Some(CURRENT_NOTE);
     }
-    (!has_diff).then_some(SINGLE_NOTE)
+    if has_diff {
+        return None;
+    }
+    // Without a revision number there is no order, so "earlier" and the history limit mean nothing.
+    if sides.iter().all(|side| side.revision.is_none()) {
+        return Some(UNNUMBERED_NOTE);
+    }
+    Some(SINGLE_NOTE)
 }
 
 impl Render for RevisionHistory {

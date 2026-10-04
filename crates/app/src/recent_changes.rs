@@ -2,7 +2,9 @@
 //! server), node readiness transitions, joined nodes, and new namespaces, newest first. Pure: it
 //! takes the Ready snapshots and a clock. Event messages are arbitrary text, so nothing here logs.
 
-use cluster::{ConditionStatus, DeploymentSummary, EventSummary, NamespaceSummary, NodeSummary};
+use std::collections::HashMap;
+
+use cluster::{ConditionStatus, EventSummary, FieldWriter, NamespaceSummary, NodeSummary};
 use jiff::{SignedDuration, Timestamp};
 
 use crate::event_rows::message_line;
@@ -125,6 +127,7 @@ pub(crate) struct ChangeInputs<'a> {
 pub(crate) fn recent_changes(inputs: &ChangeInputs) -> Vec<ChangeEntry> {
     // An event stamped slightly ahead of this machine's clock is recent, not dropped.
     let is_recent = |at: Timestamp| inputs.now.duration_since(at) < inputs.window.span();
+    let writers = template_writers(inputs.deployments);
     let mut entries = Vec::new();
     for (events, kind) in [
         (inputs.rollouts, ChangeKind::Deployment),
@@ -134,7 +137,7 @@ pub(crate) fn recent_changes(inputs: &ChangeInputs) -> Vec<ChangeEntry> {
             events
                 .into_iter()
                 .flatten()
-                .filter_map(|event| event_entry(event, kind, inputs.deployments, &is_recent)),
+                .filter_map(|event| event_entry(event, kind, &writers, &is_recent)),
         );
     }
     for node in inputs.nodes.into_iter().flatten() {
@@ -173,7 +176,7 @@ const WRITER_WINDOW_AFTER: SignedDuration = SignedDuration::from_secs(60);
 fn event_entry(
     event: &EventSummary,
     kind: ChangeKind,
-    deployments: Option<&[KindObject]>,
+    writers: &TemplateWriters,
     is_recent: &impl Fn(Timestamp) -> bool,
 ) -> Option<ChangeEntry> {
     // An aggregated event moves to its newest occurrence; one without a time cannot be placed.
@@ -181,7 +184,7 @@ fn event_entry(
     let object = &event.object;
     let is_deployment = kind == ChangeKind::Deployment;
     let manager = is_deployment
-        .then(|| template_writer(event, at, deployments))
+        .then(|| template_writer(event, at, writers))
         .flatten();
     let (actor, actor_source) = match manager {
         Some(manager) => (Some(manager), ActorSource::FieldManager),
@@ -211,27 +214,43 @@ fn event_entry(
 /// The newest manager of the event's Deployment's pod template when its write is at most 30 min
 /// before and 60 s after the event (a rollout starts right after the template write; a later
 /// write cannot have caused it).
+/// The template writers of the Deployments feed by (namespace, name), built once per call.
+type TemplateWriters<'a> = HashMap<(&'a str, &'a str), &'a FieldWriter>;
+
+fn template_writers(deployments: Option<&[KindObject]>) -> TemplateWriters<'_> {
+    deployments
+        .into_iter()
+        .flatten()
+        .filter_map(|object| match object {
+            KindObject::Deployment(deployment) => {
+                deployment.template_change.as_ref().map(|writer| {
+                    (
+                        (deployment.namespace.as_str(), deployment.name.as_str()),
+                        writer,
+                    )
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The newest manager of the event's Deployment's pod template when its write is at most 30 min
+/// before and 60 s after the event (a rollout starts right after the template write; a later
+/// write cannot have caused it).
 ///
 /// `ponytail:` a heuristic: an exact cause needs the audit log. An HPA scale of the same
 /// Deployment inside the window (a `ScalingReplicaSet` event with no template change) is also
-/// attributed to the template writer.
+/// attributed to the template writer. The time is that of the manager's whole `managedFields`
+/// entry, which any field the manager owns can refresh, so a later edit by the same manager of
+/// another template field moves it too.
 fn template_writer(
     event: &EventSummary,
     at: Timestamp,
-    deployments: Option<&[KindObject]>,
+    writers: &TemplateWriters,
 ) -> Option<String> {
     let namespace = event.object.namespace.as_deref()?;
-    let writer = deployments?.iter().find_map(|object| match object {
-        KindObject::Deployment(DeploymentSummary {
-            namespace: found_namespace,
-            name,
-            template_change,
-            ..
-        }) if found_namespace == namespace && *name == event.object.name => {
-            template_change.as_ref()
-        }
-        _ => None,
-    })?;
+    let writer = writers.get(&(namespace, event.object.name.as_str()))?;
     let lag = at.duration_since(writer.at);
     (lag <= WRITER_WINDOW_BEFORE && lag >= -WRITER_WINDOW_AFTER).then(|| writer.manager.clone())
 }

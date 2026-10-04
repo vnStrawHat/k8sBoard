@@ -5,8 +5,6 @@
 use cluster::{DemandChange, QuotaCheck, QuotaResource, ResourceQuotaSummary, quota_check};
 use gpui_kit::SharedString;
 
-use crate::usage_format::Measure;
-
 /// What the session knows of the quotas of the edited namespace.
 pub(crate) enum QuotaInput {
     /// The feed does not run, with the reason it gives.
@@ -58,7 +56,7 @@ pub(crate) fn quota_line(demand: Option<&DemandChange>, input: &QuotaInput) -> Q
         QuotaCheck::Fits { resource, left, .. } => QuotaLine::Fits(
             format!(
                 "Namespace quota OK ({} {} left)",
-                amount_text(resource, left),
+                amount_text(resource, left, Round::Down),
                 resource.name()
             )
             .into(),
@@ -71,8 +69,8 @@ pub(crate) fn quota_line(demand: Option<&DemandChange>, input: &QuotaInput) -> Q
                         "Quota {}: {} needs {} more, {} left",
                         shortfall.quota,
                         shortfall.resource.name(),
-                        amount_text(shortfall.resource, shortfall.needed),
-                        amount_text(shortfall.resource, shortfall.left),
+                        amount_text(shortfall.resource, shortfall.needed, Round::Up),
+                        amount_text(shortfall.resource, shortfall.left, Round::Down),
                     )
                     .into()
                 })
@@ -81,22 +79,75 @@ pub(crate) fn quota_line(demand: Option<&DemandChange>, input: &QuotaInput) -> Q
     }
 }
 
-/// Memory as binary bytes (`22Gi`), CPU as cores or millicores (`1.5`, `250m`), pods as a count.
-fn amount_text(resource: QuotaResource, value: u64) -> String {
-    match resource {
-        QuotaResource::Pods => value.to_string(),
-        QuotaResource::RequestsMemory | QuotaResource::LimitsMemory => {
-            Measure::Bytes.format(value as f64)
-        }
-        QuotaResource::RequestsCpu | QuotaResource::LimitsCpu => {
-            let text = Measure::Cpu.format(value as f64 / 1e9);
-            text.trim_end_matches(" cores")
-                .trim_end_matches(" core")
-                .to_owned()
-        }
+/// Which way a shown amount is rounded: a headroom must never read larger than it is, and a need
+/// never smaller.
+#[derive(Clone, Copy)]
+enum Round {
+    /// For what is left.
+    Down,
+    /// For what is needed.
+    Up,
+}
+
+fn divide(numerator: u128, denominator: u128, round: Round) -> u128 {
+    match round {
+        Round::Down => numerator / denominator,
+        Round::Up => numerator.div_ceil(denominator),
     }
 }
 
+/// Memory as binary bytes (`22Gi`, `1.2Gi`), CPU as cores or millicores (`1.5`, `250m`), pods as a
+/// count. The text is cut to the shown precision in the direction `round` says, so `left` is never
+/// overstated and `needed` never understated.
+fn amount_text(resource: QuotaResource, value: u64, round: Round) -> String {
+    match resource {
+        QuotaResource::Pods => value.to_string(),
+        QuotaResource::RequestsMemory | QuotaResource::LimitsMemory => memory_text(value, round),
+        QuotaResource::RequestsCpu | QuotaResource::LimitsCpu => cpu_text(value, round),
+    }
+}
+
+/// `value` nanocores: whole millicores below one core, tenths of a core from there on.
+fn cpu_text(nanocores: u64, round: Round) -> String {
+    let millicores = divide(u128::from(nanocores), 1_000_000, round);
+    if millicores < 1000 {
+        return format!("{millicores}m");
+    }
+    tenths_text(divide(u128::from(nanocores), 100_000_000, round))
+}
+
+/// The smallest binary unit that shows `bytes` below 1024, in whole numbers up to `Mi` and in tenths
+/// from `Gi`.
+fn memory_text(bytes: u64, round: Round) -> String {
+    const UNITS: [&str; 7] = ["B", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei"];
+    const FIRST_TENTHS_UNIT: usize = 3;
+    for (position, unit) in UNITS.iter().enumerate() {
+        let size = 1u128 << (10 * position);
+        let is_last = position == UNITS.len() - 1;
+        if position < FIRST_TENTHS_UNIT {
+            let whole = divide(u128::from(bytes), size, round);
+            if whole < 1024 || is_last {
+                return format!("{whole}{unit}");
+            }
+        } else {
+            let tenths = divide(u128::from(bytes) * 10, size, round);
+            if tenths < 10_240 || is_last {
+                return format!("{}{unit}", tenths_text(tenths));
+            }
+        }
+    }
+    // The last unit always returns above.
+    format!("{bytes}B")
+}
+
+/// `15` tenths is `1.5`, `20` is `2`.
+fn tenths_text(tenths: u128) -> String {
+    if tenths.is_multiple_of(10) {
+        (tenths / 10).to_string()
+    } else {
+        format!("{}.{}", tenths / 10, tenths % 10)
+    }
+}
 /// `--screen edit-yaml-diff`: the quota line of W10, `Namespace quota OK (22Gi requests.memory
 /// left)`, computed from a fixed quota of 64Gi with 41Gi used and a change that adds 1Gi.
 #[cfg(feature = "screenshot")]

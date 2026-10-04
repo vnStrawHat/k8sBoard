@@ -233,3 +233,53 @@ fn detail_note_is_none_only_with_a_diff() {
         Some(CURRENT_NOTE)
     );
 }
+
+#[test]
+fn detail_note_is_neutral_without_revision_numbers() {
+    let side = |revision| RevisionSide {
+        replica_set: "x".to_owned(),
+        revision,
+        tag: None,
+        is_current: false,
+        created_at: None,
+    };
+    assert_eq!(
+        detail_note(&[side(None), side(None)], None, false),
+        Some(UNNUMBERED_NOTE)
+    );
+    // One numbered revision keeps the history-limit wording.
+    assert_eq!(
+        detail_note(&[side(Some(3)), side(None)], None, false),
+        Some(SINGLE_NOTE)
+    );
+}
+
+#[gpui_kit::test]
+fn history_failure_can_be_retried(cx: &mut TestAppContext) {
+    let unavailable = cx.new(|cx| {
+        RevisionHistory::new(
+            deployment_key(),
+            deployment_object(),
+            HistoryInputs::Unavailable("the deployment is not loaded yet".into()),
+            cx,
+        )
+    });
+    assert!(unavailable.read_with(cx, |history, _| history.has_failed()));
+    // A denied list is not asked again by showing the tab, and a loaded one never is.
+    let denied = cx.new(|cx| {
+        RevisionHistory::new(
+            deployment_key(),
+            deployment_object(),
+            HistoryInputs::Denied,
+            cx,
+        )
+    });
+    assert!(!denied.read_with(cx, |history, _| history.has_failed()));
+    let fixture = open(three_sets(), cx);
+    fixture.wait_until_ready(cx);
+    assert!(
+        !fixture
+            .history
+            .read_with(cx, |history, _| history.has_failed())
+    );
+}

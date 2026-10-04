@@ -102,6 +102,8 @@ struct EditServer {
     /// The ReplicaSets the list route answers with.
     replica_sets: Mutex<Vec<Value>>,
     may_update: AtomicBool,
+    /// Whether the ReplicaSet list route answers with an error.
+    fail_lists: AtomicBool,
     dry_run_answer: Mutex<Option<(u16, String)>>,
     commit_answer: Mutex<Option<(u16, String)>>,
 }
@@ -112,6 +114,7 @@ impl EditServer {
             object: Mutex::new(deployment_object("100")),
             replica_sets: Mutex::new(vec![replica_set("api-a", 1), replica_set("api-b", 2)]),
             may_update: AtomicBool::new(true),
+            fail_lists: AtomicBool::new(false),
             dry_run_answer: Mutex::new(None),
             commit_answer: Mutex::new(None),
         })
@@ -124,6 +127,12 @@ impl EditServer {
                 (201, access_review(self.may_update.load(Ordering::SeqCst)))
             }
             "GET" if path == PATH => (200, lock(&self.object).to_string()),
+            "GET"
+                if path == "/apis/apps/v1/namespaces/team-a/replicasets"
+                    && self.fail_lists.load(Ordering::SeqCst) =>
+            {
+                (404, NOT_FOUND.to_owned())
+            }
             "GET" if path == "/apis/apps/v1/namespaces/team-a/replicasets" => {
                 (200, replica_set_list(&lock(&self.replica_sets)).to_string())
             }
@@ -1760,4 +1769,46 @@ fn go_to_deployment_reveals_and_closes(cx: &mut TestAppContext) {
     });
     assert!(!has_dialog_open(&t, cx));
     assert!(t.shell().read_with(cx, |shell, _| shell.drawer.is_open));
+}
+
+#[gpui_kit::test]
+fn history_tab_asks_again_after_a_failed_list(cx: &mut TestAppContext) {
+    let t = edit_test("edit-history-retry", cx);
+    t.open(cx);
+    t.server.fail_lists.store(true, Ordering::SeqCst);
+    let view = t.view(cx);
+    let has_failed = |cx: &mut TestAppContext| {
+        view.read_with(cx, |view, cx| {
+            view.history()
+                .is_some_and(|history| history.read(cx).has_failed())
+        })
+    };
+    view.update(cx, |view, cx| view.show_tab(EditTab::History, cx));
+    t.t.wait_for("the failed list", cx, |cx| has_failed(cx));
+    // The list works again: leaving the tab and coming back asks again.
+    t.server.fail_lists.store(false, Ordering::SeqCst);
+    view.update(cx, |view, cx| view.show_tab(EditTab::Editor, cx));
+    view.update(cx, |view, cx| view.show_tab(EditTab::History, cx));
+    t.t.wait_for("the revisions", cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.history()
+                .is_some_and(|history| history.read(cx).is_ready())
+        })
+    });
+    assert_eq!(replica_set_lists_of(&t.t.stg_api).len(), 2);
+}
+
+#[gpui_kit::test]
+fn a_missing_quota_feed_is_off_not_loading(cx: &mut TestAppContext) {
+    let t = edit_test("edit-quota-missing", cx);
+    t.t.fixture.session(cx).update(cx, |session, _| {
+        session.drop_condition_feeds_for_test();
+    });
+    let input = t
+        .shell()
+        .read_with(cx, |shell, cx| shell.quota_input(&t.t.stg, "team-a", cx));
+    assert!(matches!(
+        input,
+        crate::edit_quota::QuotaInput::Off(reason) if reason == "quotas are not watched"
+    ));
 }

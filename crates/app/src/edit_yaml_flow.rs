@@ -223,7 +223,8 @@ impl AppShell {
             return QuotaInput::Off("the cluster is not open".to_owned());
         };
         let Some(feed) = live.issue_feeds.condition(ResourceKind::ResourceQuotas) else {
-            return QuotaInput::Loading;
+            // A session without the ResourceQuotas feed does not watch quotas.
+            return QuotaInput::Off("quotas are not watched".to_owned());
         };
         match feed.state() {
             FeedState::Off(reason) => QuotaInput::Off(reason),

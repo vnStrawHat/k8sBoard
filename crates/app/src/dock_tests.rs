@@ -28,6 +28,8 @@ fn open_two_tabs(cx: &mut TestAppContext) -> (LogFixture, Entity<Dock>, Entity<L
         DockTab::Logs(tab) => tab.clone(),
         DockTab::Shell(_) | DockTab::Drain(_) => unreachable!("log tabs only"),
     });
+    // Each tab starts its log read on the cluster runtime; a test that counts reads must wait for both.
+    fixture.wait_until("both log streams", cx, |_| fixture.log_reads() == 2);
     (fixture, dock, first)
 }
 

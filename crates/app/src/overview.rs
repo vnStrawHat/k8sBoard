@@ -1,7 +1,7 @@
 //! The Overview screen (W3): what is broken, how much room is left, what just changed. This module
 //! holds the pure header text and counts, and the panels' view code over the live snapshots.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use jiff::tz::TimeZone;
 
@@ -35,6 +35,7 @@ use crate::issue::{Issue, IssueAction};
 use crate::issue_board::IssueBoard;
 use crate::issue_feeds::{FeedState, volume_usage_state};
 use crate::issue_table::{coverage_status, logs_pod, short_kind};
+use crate::kind_row::KindObject;
 use crate::node_heatmap::{heat_cells, node_heatmap};
 use crate::recent_changes::{
     CHANGE_ROWS, ChangeEntry, ChangeInputs, ChangeKind, ChangeWindow, recent_changes,
@@ -605,12 +606,13 @@ fn changes_body(live: &LiveCluster, window: ChangeWindow, cx: &Context<AppShell>
     let theme = cx.theme();
     let zone = TimeZone::system();
     let shown = entries.len().min(CHANGE_ROWS);
+    let diffable = diffable_deployments(live);
     let rows = entries
         .iter()
         .take(CHANGE_ROWS)
         .enumerate()
         .map(|(index, entry)| {
-            let opens_diff = opens_diff(entry, live);
+            let opens_diff = opens_diff(entry, &diffable);
             change_row(index, entry, index + 1 == shown, opens_diff, &zone, cx)
         });
     let empty = entries.is_empty().then(|| {
@@ -704,9 +706,25 @@ fn change_row(
     }
 }
 
-/// Whether a click on the row opens the revision diff: a Deployment row whose selector the
-/// Deployments feed knows. Every other row reveals its object.
-fn opens_diff(entry: &ChangeEntry, live: &LiveCluster) -> bool {
+/// The Deployments of the feed that have a selector, by (namespace, name), built once per render.
+/// A click on their rows opens the revision diff; without a selector there is nothing to list.
+fn diffable_deployments(live: &LiveCluster) -> HashSet<(&str, &str)> {
+    live.issue_feeds
+        .deployments()
+        .into_iter()
+        .flatten()
+        .filter_map(|object| match object {
+            KindObject::Deployment(deployment) if !deployment.selector.is_empty() => {
+                Some((deployment.namespace.as_str(), deployment.name.as_str()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether a click on the row opens the revision diff: a Deployment row of `diffable`. Every other
+/// row reveals its object.
+fn opens_diff(entry: &ChangeEntry, diffable: &HashSet<(&str, &str)>) -> bool {
     let Some(ResourceKey::Kind {
         namespace: Some(namespace),
         name,
@@ -715,10 +733,7 @@ fn opens_diff(entry: &ChangeEntry, live: &LiveCluster) -> bool {
     else {
         return false;
     };
-    entry.kind == ChangeKind::Deployment
-        && live
-            .deployment_selector(namespace, name)
-            .is_some_and(|selector| !selector.is_empty())
+    entry.kind == ChangeKind::Deployment && diffable.contains(&(namespace.as_str(), name.as_str()))
 }
 
 fn state_text(text: String, cx: &App) -> AnyElement {
@@ -1224,5 +1239,34 @@ mod tests {
         let issues: Vec<Issue> = (0..9).map(|_| pod_issue()).collect();
         assert_eq!(attention_issues(&issues).len(), ATTENTION_ROWS);
         assert_eq!(attention_issues(&issues[..2]).len(), 2);
+    }
+
+    #[test]
+    fn only_deployment_rows_of_the_feed_open_the_diff() {
+        let entry = |kind, object_kind: &str, name: &str| ChangeEntry {
+            at: jiff::Timestamp::UNIX_EPOCH,
+            kind,
+            object: format!("payments/{name}"),
+            text: String::new(),
+            count: 1,
+            actor: None,
+            actor_source: crate::recent_changes::ActorSource::EventSource,
+            replica_set: None,
+            target: ResourceKey::of_object(object_kind, Some("payments"), name),
+        };
+        let diffable = HashSet::from([("payments", "api")]);
+        assert!(opens_diff(
+            &entry(ChangeKind::Deployment, "Deployment", "api"),
+            &diffable
+        ));
+        // A Deployment the feed does not hold (or holds without a selector) reveals instead.
+        assert!(!opens_diff(
+            &entry(ChangeKind::Deployment, "Deployment", "web"),
+            &diffable
+        ));
+        assert!(!opens_diff(
+            &entry(ChangeKind::Autoscaler, "HorizontalPodAutoscaler", "api"),
+            &diffable
+        ));
     }
 }

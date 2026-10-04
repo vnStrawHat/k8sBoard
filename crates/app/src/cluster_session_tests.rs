@@ -1565,6 +1565,13 @@ impl ClusterSession {
         cx.notify();
     }
 
+    /// A seam for the shell tests: a session whose condition feeds are not planned.
+    pub(crate) fn drop_condition_feeds_for_test(&mut self) {
+        if let Some(live) = self.live_mut() {
+            live.issue_feeds.conditions.clear();
+        }
+    }
+
     /// A seam for the shell tests: the node list a live session shows.
     pub(crate) fn set_nodes_for_test(&mut self, nodes: Vec<NodeSummary>, cx: &mut Context<Self>) {
         if let Some(live) = self.live_mut() {
