@@ -15,13 +15,13 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W2 n2 | Watch a kubeconfig folder | missing (disabled "later") | `clusters_page.rs:737` | M |
 | Tokens | Row density 28 / 36 px (Appearance) | missing | Appearance has Theme only | M |
 | W3 n4 | Recent changes from managedFields (ConfigMap keys, "who"); click opens a diff | done for Deployments (0041); ConfigMap rows dropped | `recent_changes.rs`, `revision_change_flow.rs` | — |
-| W4 n1 | Pod menu: Attach (A), Restart pod, Evict | missing | `resource_actions.rs::pod_menu`; 0033 moved them out, 0034 evicts only inside drain | M |
+| W4 n1 | Pod menu: Attach (A), Restart pod, Evict | Done (0040) | `pod_menu`, `pod_block`, `start_removal`, `start_attach`; [as-built](../specs/0040-pod-actions/as-built.md) | — |
 | W4 n2 | View logs ▸ container submenu (MAIN/SIDECAR/INIT) | Done (0039) | `LogsMenu` in `resource_actions.rs` | — |
-| W4b n3 | Container ⋯ menu: logs, shell, attach, copy image | Done (0039) except Attach (0040) | `container_menu` in `resource_actions.rs`, button in `container_detail.rs` | — |
+| W4b n3 | Container ⋯ menu: logs, shell, attach, copy image | Done (0039, Attach 0040) | `container_menu` in `resource_actions.rs`, button in `container_detail.rs` | — |
 | W5, W6 | Edit taints/labels, Drain dialog, bulk Cordon/Uncordon/Drain, dock drain tab | in build (0034) | `node_menu`, `row_selection.rs` `NODE_ACTIONS` | — |
-| W6 n2 | Skip PodDisruptionBudgets option | missing | 0034 non-goal, open item 1 | S |
+| W6 n2 | Skip PodDisruptionBudgets option | Done (0040; typed name in every tier, direct deletes) | `BudgetPolicy` in `drain_plan.rs`, `removal_write` | — |
 | W5 n7 dock | `logs · kubelet · node` tab | missing, blocked (`NodeLogQuery` needs ≥ 1.30; UAT is 1.29.5) | 0019 open item 4; `kubelet_stats.rs` `KubeletPath` | M |
-| W5 header | Edit labels for several nodes | missing | 0034 open item 2 | S |
+| W5 header | Edit labels for several nodes | Done (0040) | `label_batch` in `node_edits.rs`, `BulkLabelEditor` in `node_editor.rs` | — |
 | W7 Deployments | Revision diff ("history with diff and rollback") | Done (0039; rollback 0032) | `revision_diff.rs`, `pod_template_yaml` | — |
 | W7 CronJobs | View logs of last job | Done (0039; key L on the workload kinds too) | `last_job_owner` in `kind_join.rs` | — |
 | W7 ConfigMaps | Compare with previous | dropped (user, 2026-10-03) | 0041 non-goals (the "restart the workload" hint is Done in 0039) | — |

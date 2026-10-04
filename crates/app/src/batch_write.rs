@@ -15,7 +15,7 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{AnyWindowHandle, App, AppContext as _, Context, SharedString, WeakEntity, Window};
 
-use super::object_delete::{DeleteExtras, delete_commit_progress, delete_notice};
+use super::object_delete::{DeleteExtras, Removal, delete_commit_progress, delete_notice};
 use super::write_flow::{
     CheckedWriteError, CommitMode, Confirmed, DryRunState, WriteIntent, WriteStep, checked_write,
     notify, notify_with, write_error_text,
@@ -791,7 +791,7 @@ impl AppShell {
         }
         if let ResourceAction::Delete(_) = action {
             let scope = self.checked_objects(cx);
-            self.start_delete(scope, window, cx);
+            self.start_removal(Removal::Delete, scope, window, cx);
             return;
         }
         if self.screen == Screen::Nodes {

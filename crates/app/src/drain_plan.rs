@@ -25,6 +25,15 @@ pub(crate) const TIMEOUT_CHOICES: [Duration; 4] = [
 pub(crate) const GRACE_CHOICES: [u32; 4] = [10, 30, 60, 120];
 const DAEMON_SET: &str = "DaemonSet";
 
+/// Whether the drain asks the eviction API, which checks budgets, or deletes pods directly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BudgetPolicy {
+    #[default]
+    Respect,
+    /// kubectl `--disable-eviction` (spec 0040).
+    Skip,
+}
+
 /// The kubectl flags a drain can be given, with the consequence of each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DrainOptions {
@@ -37,6 +46,8 @@ pub(crate) struct DrainOptions {
     pub(crate) grace: GracePeriod,
     /// Per node.
     pub(crate) timeout: Duration,
+    /// Never remembered: the dialog builds a fresh default on every open.
+    pub(crate) budgets: BudgetPolicy,
 }
 
 impl Default for DrainOptions {
@@ -47,6 +58,7 @@ impl Default for DrainOptions {
             force_unmanaged: false,
             grace: GracePeriod::PodDefault,
             timeout: DEFAULT_TIMEOUT,
+            budgets: BudgetPolicy::Respect,
         }
     }
 }
@@ -87,6 +99,10 @@ pub(crate) enum Budget {
     Blocked {
         name: String,
         cause: BlockCause,
+    },
+    /// `BudgetPolicy::Skip`: the budgets that would have been checked, by name.
+    Bypassed {
+        names: Vec<String>,
     },
 }
 
@@ -200,6 +216,16 @@ pub(crate) fn pod_verdict(
         return verdict;
     }
     let matching = matching_budgets(pod, budgets);
+    // Deleting directly never asks a budget, so even a pod two budgets match is deleted.
+    if options.budgets == BudgetPolicy::Skip {
+        let mut names: Vec<String> = matching.iter().map(|budget| budget.name.clone()).collect();
+        names.sort();
+        return PodVerdict::Evict(if names.is_empty() {
+            Budget::None
+        } else {
+            Budget::Bypassed { names }
+        });
+    }
     let [budget] = matching.as_slice() else {
         return match matching.len() {
             0 => PodVerdict::Evict(Budget::None),
@@ -230,6 +256,8 @@ pub(crate) struct PlannedPod {
 pub(crate) struct NodePlan {
     pub(crate) node: String,
     pub(crate) pods: Vec<PlannedPod>,
+    /// The policy the plan was made under: it words the preview.
+    pub(crate) budgets: BudgetPolicy,
 }
 
 impl NodePlan {
@@ -273,6 +301,7 @@ pub(crate) fn node_plan(
     NodePlan {
         node: node.to_owned(),
         pods: planned,
+        budgets: options.budgets,
     }
 }
 
@@ -395,6 +424,15 @@ pub(crate) enum PreviewLine {
     Skipped { text: SharedString },
 }
 
+/// `api-pdb`, or `api-pdb and 2 more`.
+fn budget_names(names: &[String]) -> String {
+    match names.split_first() {
+        None => String::new(),
+        Some((only, [])) => only.clone(),
+        Some((first, more)) => format!("{first} and {} more", more.len()),
+    }
+}
+
 /// The result column of a pod before any server answer, and its tone.
 fn local_result(planned: &PlannedPod) -> (String, StatusTone) {
     match &planned.verdict {
@@ -421,6 +459,10 @@ fn local_result(planned: &PlannedPod) -> (String, StatusTone) {
         PodVerdict::Evict(Budget::Allows { name, allowed }) => {
             (format!("PDB {name} allows {allowed}"), StatusTone::Ok)
         }
+        PodVerdict::Evict(Budget::Bypassed { names }) => (
+            format!("Deleted directly; PDB {} not checked", budget_names(names)),
+            StatusTone::Warn,
+        ),
         PodVerdict::Evict(Budget::None) if planned.pod.controller.is_none() => {
             ("Will not come back".to_owned(), StatusTone::Warn)
         }
@@ -436,8 +478,16 @@ fn local_result(planned: &PlannedPod) -> (String, StatusTone) {
 /// The text and tone of a pod's result with its dry-run: a server refusal or failure replaces the
 /// local guess, and an accepted dry-run downgrades a local `Blocked` or `Waits` to `Dry-run
 /// accepted` (the server would evict the pod now).
-pub(crate) fn pod_result(planned: &PlannedPod, check: &PodCheck) -> (SharedString, StatusTone) {
+pub(crate) fn pod_result(
+    planned: &PlannedPod,
+    check: &PodCheck,
+    budgets: BudgetPolicy,
+) -> (SharedString, StatusTone) {
     match check {
+        // A delete asks no budget, so a 429 of one is the API's own rate limiting.
+        PodCheck::Refused(message) if budgets == BudgetPolicy::Skip => {
+            return (format!("Refused: {message}").into(), StatusTone::Bad);
+        }
         PodCheck::Refused(message) => {
             return (format!("Blocked by PDB: {message}").into(), StatusTone::Bad);
         }
@@ -468,7 +518,7 @@ fn preview_rank(planned: &PlannedPod, check: &PodCheck) -> u8 {
         PodVerdict::Evict(Budget::Waits { .. }) if *check == PodCheck::Accepted => 5,
         PodVerdict::Evict(Budget::Blocked { .. }) => 1,
         PodVerdict::Needs(_) => 2,
-        PodVerdict::Evict(Budget::Waits { .. }) => 3,
+        PodVerdict::Evict(Budget::Waits { .. } | Budget::Bypassed { .. }) => 3,
         PodVerdict::Evict(Budget::Allows { .. }) => 4,
         PodVerdict::Evict(_) => 5,
         PodVerdict::Terminating => 6,
@@ -499,7 +549,7 @@ pub(crate) fn preview_lines(
         // A stable sort keeps the order the node listed the pods in within a rank.
         shown.sort_by_key(|(rank, ..)| *rank);
         for (_, planned, check) in shown {
-            let (result, tone) = pod_result(planned, &check);
+            let (result, tone) = pod_result(planned, &check, plan.budgets);
             lines.push(PreviewLine::Pod {
                 namespace: planned.pod.namespace.clone().into(),
                 name: planned.pod.name.clone().into(),
@@ -571,6 +621,38 @@ pub(crate) fn heads_up(plans: &[NodePlan], timeout: Duration) -> Option<String> 
     ))
 }
 
+/// The danger note of a drain that skips budgets: which budgets lose their say and how many pods
+/// they protected. `None` when no pod of the plan is protected by one.
+pub(crate) fn bypass_note(plans: &[NodePlan]) -> Option<String> {
+    let mut names: Vec<&String> = Vec::new();
+    let mut count = 0;
+    for planned in plans.iter().flat_map(|plan| &plan.pods) {
+        if let PodVerdict::Evict(Budget::Bypassed { names: bypassed }) = &planned.verdict {
+            count += 1;
+            for name in bypassed {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    names.sort();
+    let shown: Vec<&str> = names.iter().take(3).map(|name| name.as_str()).collect();
+    let rest = names.len() - shown.len();
+    let mut list = shown.join(", ");
+    if rest > 0 {
+        list.push_str(&format!(" and {rest} more"));
+    }
+    let verb = if count == 1 { "goes" } else { "go" };
+    Some(format!(
+        "PodDisruptionBudgets are not checked. {} protected by {list} {verb} down without waiting for replacements.",
+        pod_count(count)
+    ))
+}
+
 /// Where the dry-run of a node's cordon stands.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum CordonCheck {
@@ -612,11 +694,12 @@ pub(crate) fn drain_dry_run(
 }
 
 /// The dry-run line of the dialog: `Server dry-run: cordon passed · 21 of 23 evictions accepted,
-/// 2 refused by PDB`.
+/// 2 refused by PDB`, or `… 23 of 24 deletes accepted` when the budgets are skipped.
 pub(crate) fn dry_run_text(
     state: &DryRunState,
     cordons: &[CordonCheck],
     pods: &[PodCheck],
+    budgets: BudgetPolicy,
 ) -> String {
     match state {
         DryRunState::Running => {
@@ -652,9 +735,13 @@ pub(crate) fn dry_run_text(
                 parts.push("cordon passed".to_owned());
             }
             if !pods.is_empty() {
-                let mut evictions = format!("{accepted} of {} evictions accepted", pods.len());
+                let (noun, by) = match budgets {
+                    BudgetPolicy::Respect => ("evictions", " by PDB"),
+                    BudgetPolicy::Skip => ("deletes", ""),
+                };
+                let mut evictions = format!("{accepted} of {} {noun} accepted", pods.len());
                 if refused > 0 {
-                    evictions.push_str(&format!(", {refused} refused by PDB"));
+                    evictions.push_str(&format!(", {refused} refused{by}"));
                 }
                 parts.push(evictions);
             }

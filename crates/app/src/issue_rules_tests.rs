@@ -43,6 +43,7 @@ fn inputs() -> IssueInputs<'static> {
 
 fn container(name: &str, state: ContainerState) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "registry/app:1".to_owned(),
         kind: ContainerKind::Main,
@@ -68,6 +69,7 @@ fn running() -> ContainerState {
 
 fn serving(name: &str) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         is_ready: true,
         ..container(name, running())
     }
@@ -82,6 +84,7 @@ fn waiting(reason: StatusReason) -> ContainerState {
 
 fn pod_with(name: &str, status: PodStatus, containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),
         status,
@@ -135,6 +138,7 @@ fn termination(reason: Option<StatusReason>, exit_code: i32, finished_ago: i64) 
 
 fn crash_looping() -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         restart_count: 7,
         last_termination: Some(termination(Some(StatusReason::Error), 1, 120)),
         ..container("api", waiting(StatusReason::CrashLoopBackOff))

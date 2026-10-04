@@ -356,6 +356,7 @@ fn ticked(name: &str, scheduling: NodeScheduling) -> TickedNode {
     TickedNode {
         name: name.to_owned(),
         scheduling,
+        labels: Vec::new(),
     }
 }
 
@@ -423,4 +424,161 @@ fn bulk_cordon_refuses_an_unsafe_node_name() {
     let nodes = [ticked("a/../b", NodeScheduling::Enabled)];
     assert!(cordon_batch(&scope(&cluster), CordonMode::Cordon, &nodes).is_err());
     assert_eq!(MAX_BATCH_ITEMS, 50);
+}
+
+// ---- bulk Edit labels (spec 0040) ----
+
+fn labelled(name: &str, labels: &[&str]) -> TickedNode {
+    TickedNode {
+        labels: labels.iter().map(|term| (*term).to_owned()).collect(),
+        ..ticked(name, NodeScheduling::Enabled)
+    }
+}
+
+fn set(key: &str, value: &str) -> LabelChange {
+    LabelChange {
+        key: key.to_owned(),
+        value: Some(value.to_owned()),
+    }
+}
+
+fn remove(key: &str) -> LabelChange {
+    LabelChange {
+        key: key.to_owned(),
+        value: None,
+    }
+}
+
+/// The per-node change lists of a batch, by node.
+fn node_changes(batch: &BatchIntent) -> Vec<(String, Vec<LabelChange>)> {
+    batch
+        .plan
+        .items
+        .iter()
+        .map(|item| {
+            let WriteOperation::SetNodeLabels { changes } = item.request.operation() else {
+                panic!("a label write");
+            };
+            (item.object.to_string(), changes.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn label_batch_skips_nodes_that_already_match() {
+    let cluster = cluster();
+    let nodes = [
+        labelled("wk-01", &["team=dev", "old-key=x"]),
+        labelled("wk-02", &["team=infra"]),
+        labelled("wk-03", &["role=worker"]),
+    ];
+    let changes = [set("team", "infra"), remove("old-key")];
+    let batch = label_batch(&scope(&cluster), &nodes, &changes).expect("a batch");
+    // wk-01 gets both; wk-02 has the Set already and no old key; wk-03 only lacks the Set.
+    assert_eq!(
+        node_changes(&batch),
+        [
+            (
+                "wk-01".to_owned(),
+                vec![remove("old-key"), set("team", "infra")]
+            ),
+            ("wk-03".to_owned(), vec![set("team", "infra")]),
+        ]
+    );
+    assert_eq!(batch.plan.skipped.len(), 1);
+    assert_eq!(batch.plan.skipped[0].object, "wk-02");
+    assert_eq!(batch.plan.skipped[0].reason, "already labelled");
+    assert_eq!(batch.label, "Edit labels of 2 nodes");
+    assert_eq!(batch.verb, "Edit labels");
+    assert_eq!(batch.button, "Edit labels");
+    assert_eq!(batch.action, ResourceAction::EditLabels);
+    assert_eq!(batch.risk, ActionRisk::Change);
+    assert_eq!(batch.plan.on_failure, BatchFailure::Continue);
+    assert!(matches!(batch.plan.extras, BatchExtras::None));
+    assert_eq!(batch.plan.items[0].label, "Edit labels of node wk-01");
+    // A bulk names no single object, so the tier types the cluster name.
+    assert_eq!(batch.expected(), "prod-a");
+    // A Remove adds the DaemonSet warning; a Set alone does not.
+    assert_eq!(
+        batch.warnings,
+        [SharedString::from(
+            "Removing a label can make DaemonSets that select nodes by it delete their pods on these nodes"
+        )]
+    );
+    let only_set = label_batch(&scope(&cluster), &nodes, &[set("team", "infra")]).expect("a batch");
+    assert!(only_set.warnings.is_empty());
+}
+
+#[test]
+fn label_batch_keeps_a_changed_value_and_treats_an_empty_value_as_a_value() {
+    let cluster = cluster();
+    // `team=` is a label with an empty value, not a missing one.
+    let nodes = [
+        labelled("wk-01", &["team="]),
+        labelled("wk-02", &["team=infra"]),
+    ];
+    let batch = label_batch(&scope(&cluster), &nodes, &[set("team", "")]).expect("a batch");
+    assert_eq!(
+        node_changes(&batch),
+        [("wk-02".to_owned(), vec![set("team", "")])]
+    );
+    // A Remove of a key a node lacks is dropped for that node.
+    let batch = label_batch(&scope(&cluster), &nodes, &[remove("team")]).expect("a batch");
+    assert_eq!(batch.plan.items.len(), 2);
+    let none = [labelled("wk-01", &[])];
+    assert_eq!(
+        error_text(label_batch(&scope(&cluster), &none, &[remove("team")])),
+        "All selected nodes already have these labels"
+    );
+}
+
+#[test]
+fn label_batch_checks_in_order() {
+    let cluster = cluster();
+    let nodes = [labelled("wk-01", &["team=infra"])];
+    let try_with =
+        |changes: &[LabelChange]| error_text(label_batch(&scope(&cluster), &nodes, changes));
+    assert_eq!(try_with(&[]), "No changes");
+    assert_eq!(try_with(&[set("", "x")]), "Enter a key for every label");
+    assert_eq!(try_with(&[set("a", "1"), remove("a")]), "a is listed twice");
+    assert_eq!(
+        try_with(&[set("kubernetes.io/os", "linux")]),
+        "kubernetes.io/os is set by the kubelet"
+    );
+    assert_eq!(
+        try_with(&[set("fine", "not valid!")]),
+        "A key or value is not valid for Kubernetes (letters, digits, - _ .)"
+    );
+    assert_eq!(
+        try_with(&[set("team", "infra")]),
+        "All selected nodes already have these labels"
+    );
+    // The first failing check wins: an empty key before a kubelet key and a bad value.
+    assert_eq!(
+        try_with(&[set("kubernetes.io/os", "bad value!"), set(" ", "x")]),
+        "Enter a key for every label"
+    );
+    assert_eq!(
+        try_with(&[set("kubernetes.io/os", "bad value!")]),
+        "kubernetes.io/os is set by the kubelet"
+    );
+}
+
+#[test]
+fn label_batch_refuses_an_unsafe_node_name() {
+    let cluster = cluster();
+    let nodes = [labelled("a/../b", &[])];
+    assert!(label_batch(&scope(&cluster), &nodes, &[set("team", "infra")]).is_err());
+}
+
+#[test]
+fn label_batch_trims_keys_and_values_like_the_single_editor() {
+    let cluster = cluster();
+    let nodes = [labelled("wk-01", &[])];
+    let batch =
+        label_batch(&scope(&cluster), &nodes, &[set(" team ", " infra ")]).expect("a batch");
+    assert_eq!(
+        node_changes(&batch),
+        [("wk-01".to_owned(), vec![set("team", "infra")])]
+    );
 }

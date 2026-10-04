@@ -1,6 +1,6 @@
 //! Attaching a shell to a container k8sBoard created (spec 0037): a debug container or a node shell
-//! pod. `debug_shell` is the only attach call site: the `debug_shell.rs` row of the 0030
-//! allow-list. It needs an `AttachPermit`, refuses to start while the connection's `WritePolicy` is
+//! pod, or (0040) to a running container of a pod's own spec that has a terminal. `debug_shell` is
+//! the only attach call site: the `debug_shell.rs` row of the 0030 allow-list. It needs an `AttachPermit`, refuses to start while the connection's `WritePolicy` is
 //! `Blocked`, and waits for the container to run with a 1 s GET poll (no watch) before it attaches.
 //! It calls no `spawn`: the stream owns the `AttachedProcess`, so dropping the stream ends the
 //! attach, and `stdinOnce` ends the shell with it.
@@ -12,7 +12,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use futures::{Stream, StreamExt, stream};
-use k8s_openapi::api::core::v1::{ContainerState, Pod};
+use k8s_openapi::api::core::v1::{ContainerState, ContainerStatus, Pod};
 use kube::Api;
 use kube::api::{AttachParams, AttachedProcess};
 use tokio::time::Instant;
@@ -28,6 +28,11 @@ const ATTACH: UpgradeVerb = UpgradeVerb {
     verb: "attach",
 };
 const WAIT_ACTION: &str = "waiting for the debug container";
+const CONTAINER_ATTACH: UpgradeVerb = UpgradeVerb {
+    action: "attaching to a container",
+    verb: "attach",
+};
+const CONTAINER_WAIT_ACTION: &str = "waiting for the container";
 /// How often the pod is read while the container starts.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Image pulls are slow, but a container that has not run by now is not going to.
@@ -62,11 +67,29 @@ impl AttachPermit {
     }
 }
 
-/// Which status list holds the container: a node shell pod's own container, or an ephemeral one.
+/// Which status list holds the container: a node shell pod's own container, an ephemeral one, or
+/// (0040) a running container of the pod's spec.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttachWait {
     NodeShellPod,
     EphemeralContainer,
+    Container,
+}
+
+impl AttachWait {
+    fn attach_verb(self) -> UpgradeVerb {
+        match self {
+            Self::Container => CONTAINER_ATTACH,
+            Self::NodeShellPod | Self::EphemeralContainer => ATTACH,
+        }
+    }
+
+    fn wait_action(self) -> &'static str {
+        match self {
+            Self::Container => CONTAINER_WAIT_ACTION,
+            Self::NodeShellPod | Self::EphemeralContainer => WAIT_ACTION,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -156,7 +179,9 @@ async fn read_pod(
     request: &AttachRequest,
 ) -> Result<Option<Pod>, ClusterError> {
     let api: Api<Pod> = Api::namespaced(connection.client().clone(), &request.namespace);
-    connection.run(WAIT_ACTION, api.get_opt(&request.pod)).await
+    connection
+        .run(request.wait.wait_action(), api.get_opt(&request.pod))
+        .await
 }
 
 async fn step(phase: Phase) -> Option<(ShellUpdate, Phase)> {
@@ -246,11 +271,17 @@ async fn attach(
     let opened = run_raw(attach_process(&api, &request.pod, &params)).await;
     let process = match opened {
         Ok(Ok(process)) => process,
-        Ok(Err(error)) => return Err(connect_error(connection.context(), ATTACH, error)),
+        Ok(Err(error)) => {
+            return Err(connect_error(
+                connection.context(),
+                request.wait.attach_verb(),
+                error,
+            ));
+        }
         Err(_elapsed) => {
             return Err(ClusterError::TimedOut {
                 context: connection.context().to_owned(),
-                action: ATTACH.action,
+                action: request.wait.attach_verb().action,
             });
         }
     };
@@ -292,18 +323,29 @@ pub(crate) fn readiness(pod: Option<&Pod>, container: &str, wait: AttachWait) ->
     if matches!(status.phase.as_deref(), Some("Failed" | "Succeeded")) {
         return Readiness::Failed("the pod has ended".to_owned());
     }
-    let statuses = match wait {
-        AttachWait::NodeShellPod => status.container_statuses.as_deref(),
-        AttachWait::EphemeralContainer => status.ephemeral_container_statuses.as_deref(),
+    // Native sidecars report in the init status list.
+    let found = match wait {
+        AttachWait::NodeShellPod => find_status(status.container_statuses.as_deref(), container),
+        AttachWait::EphemeralContainer => {
+            find_status(status.ephemeral_container_statuses.as_deref(), container)
+        }
+        AttachWait::Container => find_status(status.container_statuses.as_deref(), container)
+            .or_else(|| find_status(status.init_container_statuses.as_deref(), container)),
     };
-    let found = statuses
-        .unwrap_or_default()
-        .iter()
-        .find(|status| status.name == container);
     match found.and_then(|status| status.state.as_ref()) {
         Some(state) => state_readiness(state, wait),
         None => Readiness::Waiting(None),
     }
+}
+
+fn find_status<'a>(
+    statuses: Option<&'a [ContainerStatus]>,
+    container: &str,
+) -> Option<&'a ContainerStatus> {
+    statuses
+        .unwrap_or_default()
+        .iter()
+        .find(|status| status.name == container)
 }
 
 fn state_readiness(state: &ContainerState, wait: AttachWait) -> Readiness {

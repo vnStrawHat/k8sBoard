@@ -50,6 +50,7 @@ fn terms(items: &[&str]) -> Vec<String> {
 /// A running, ready pod of `shop`; `owner` is its controller as `(kind, name)`.
 pub(crate) fn pod(name: &str, labels: &[&str], owner: Option<(&str, &str)>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: NAMESPACE.to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),
@@ -73,6 +74,7 @@ pub(crate) fn pod(name: &str, labels: &[&str], owner: Option<(&str, &str)>) -> P
 /// `pod` in another namespace.
 pub(crate) fn pod_in(namespace: &str, name: &str, labels: &[&str]) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: namespace.to_owned(),
         ..pod(name, labels, None)
     }
@@ -95,6 +97,7 @@ pub(crate) fn crashing_pod(name: &str, labels: &[&str], owner: Option<(&str, &st
 
 pub(crate) fn container(name: &str) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "img".to_owned(),
         kind: ContainerKind::Main,

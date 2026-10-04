@@ -6,20 +6,20 @@
 //! A child of `app_shell`, like `node_shell_open`: every step names the cluster of the node and
 //! takes its guard, connection, and tier from that cluster's own slot, never from the primary.
 
-use cluster::{ClusterConnection, ClusterError, NodeEdit};
+use cluster::{ClusterConnection, ClusterError, LabelChange, NodeEdit};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::select::{Select, SelectState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IndexPath, Sizable as _};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Task,
-    WeakEntity, Window, div, px,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, WeakEntity, Window, div, px,
 };
 
 use super::AppShell;
@@ -31,7 +31,7 @@ use crate::cluster_runtime::ClusterRuntime;
 use crate::keymap::FORWARD_FORM;
 use crate::node_edits::{
     CordonMode, LabelRow, NO_EXECUTE_WARNING, NodeScope, TaintRow, TickedNode, cordon_batch,
-    label_intent, label_rows, taint_intent, taint_rows,
+    label_batch, label_intent, label_rows, taint_intent, taint_rows,
 };
 use crate::resource_actions::{
     ActionAvailability, NOT_SHIPPED_REASON, ResourceAction, action_availability, action_label,
@@ -44,6 +44,9 @@ const DIALOG_WIDTH: f32 = 560.;
 const ROWS_MAX_HEIGHT: f32 = 320.;
 const EFFECT_CHOICES: [&str; 3] = ["NoSchedule", "PreferNoSchedule", "NoExecute"];
 const MANAGED_BY_KUBERNETES: &str = "Managed by Kubernetes";
+/// The operations of a bulk label row, in select order.
+const BULK_OPERATIONS: [&str; 2] = ["Set", "Remove"];
+const BULK_REMOVE: usize = 1;
 const SET_BY_KUBELET: &str = "Set by the kubelet";
 /// The line the editor opens with after a conflict.
 pub(crate) const CHANGED_NOTICE: &str =
@@ -616,7 +619,8 @@ impl AppShell {
         });
     }
 
-    /// The Edit labels button of the Nodes header: it acts on the one ticked node.
+    /// The Edit labels button of the Nodes header: the 0034 editor for one ticked node, the bulk
+    /// editor for 2 to 50 (spec 0040).
     pub(super) fn node_header_buttons(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         let button = || {
             Button::new("node-edit-labels")
@@ -624,38 +628,63 @@ impl AppShell {
                 .small()
                 .outline()
         };
-        let (cluster, name) = match self.edit_labels_target(cx) {
+        let target = match self.edit_labels_target(cx) {
             Ok(target) => target,
             Err(reason) => return vec![button().disabled(true).tooltip(reason).into_any_element()],
         };
-        vec![
-            button()
+        let button = match target {
+            LabelTarget::One { cluster, node } => button()
                 .tooltip("Edit the labels of the ticked node")
                 .on_click(cx.listener(move |shell, _, window, cx| {
-                    shell.open_node_editor(NodeEditKind::Labels, &cluster, &name, None, window, cx);
-                }))
-                .into_any_element(),
-        ]
+                    shell.open_node_editor(NodeEditKind::Labels, &cluster, &node, None, window, cx);
+                })),
+            LabelTarget::Several { cluster, nodes } => {
+                let count = nodes.len();
+                button()
+                    .tooltip("Edit the labels of the ticked nodes")
+                    .on_click(cx.listener(move |shell, _, window, cx| {
+                        shell.open_bulk_label_editor(&cluster, count, window, cx);
+                    }))
+            }
+        };
+        vec![button.into_any_element()]
     }
 
-    /// The node the header's Edit labels acts on: the one ticked node of its own cluster, or why
-    /// the button is off.
-    pub(super) fn edit_labels_target(
-        &self,
-        cx: &App,
-    ) -> Result<(ClusterRef, String), SharedString> {
+    /// What the header's Edit labels acts on: the one ticked node, or the 2 to 50 ticked nodes of
+    /// one cluster, each in that cluster; or why the button is off.
+    pub(super) fn edit_labels_target(&self, cx: &App) -> Result<LabelTarget, SharedString> {
+        const TICK_FIRST: &str = "Tick nodes first";
         let ticked = self.checked_objects(cx);
-        let [only] = ticked.as_slice() else {
-            return Err("Tick one node".into());
+        let target = match ticked.as_slice() {
+            [] => return Err(TICK_FIRST.into()),
+            [only] => {
+                let ResourceKey::Node { name } = &only.key else {
+                    return Err(TICK_FIRST.into());
+                };
+                LabelTarget::One {
+                    cluster: only.cluster.clone(),
+                    node: name.clone(),
+                }
+            }
+            _ => {
+                let (cluster, nodes) = self.ticked_nodes(&ticked, cx)?;
+                LabelTarget::Several { cluster, nodes }
+            }
         };
-        let ResourceKey::Node { name } = &only.key else {
-            return Err("Tick one node".into());
+        let cluster = match &target {
+            LabelTarget::One { cluster, .. } | LabelTarget::Several { cluster, .. } => cluster,
         };
-        let guard = self.guard_for(&only.cluster, cx).ok_or("Not connected")?;
-        match action_availability(ResourceAction::EditLabels, &guard) {
-            ActionAvailability::Disabled { reason } => Err(reason),
-            ActionAvailability::Enabled => Ok((only.cluster.clone(), name.clone())),
+        let guard = self.guard_for(cluster, cx).ok_or("Not connected")?;
+        if let ActionAvailability::Disabled { reason } =
+            action_availability(ResourceAction::EditLabels, &guard)
+        {
+            return Err(reason);
         }
+        // A bulk is a batch: it cannot start while another one commits on the cluster.
+        if matches!(target, LabelTarget::Several { .. }) && self.running_batches.contains(cluster) {
+            return Err(BATCH_RUNNING_REASON.into());
+        }
+        Ok(target)
     }
 
     /// The ticked nodes as their own cluster reports them: `Err` is why the bulk buttons are off.
@@ -682,6 +711,7 @@ impl AppShell {
                 Some(TickedNode {
                     name: name.clone(),
                     scheduling: summary.status.scheduling,
+                    labels: summary.labels.clone(),
                 })
             })
             .collect();
@@ -792,6 +822,343 @@ impl AppShell {
     }
 }
 
+/// What the header's Edit labels acts on (spec 0040).
+pub(super) enum LabelTarget {
+    One {
+        cluster: ClusterRef,
+        node: String,
+    },
+    Several {
+        cluster: ClusterRef,
+        nodes: Vec<TickedNode>,
+    },
+}
+
+/// One row of the bulk label editor: a key, Set or Remove, and the value of a Set.
+struct BulkRow {
+    key: Entity<InputState>,
+    operation: Entity<SelectState<Vec<String>>>,
+    value: Entity<InputState>,
+}
+
+impl BulkRow {
+    fn is_remove(&self, cx: &App) -> bool {
+        self.operation
+            .read(cx)
+            .selected_index(cx)
+            .is_some_and(|index| index.row == BULK_REMOVE)
+    }
+}
+
+/// The body of the bulk label editor: changes only (Set key=value, Remove key), not the labels of
+/// the nodes, which differ per node. It reads no node; Review… builds the batch from the nodes
+/// ticked at that moment.
+pub(crate) struct BulkLabelEditor {
+    shell: WeakEntity<AppShell>,
+    cluster: ClusterRef,
+    rows: Vec<BulkRow>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl BulkLabelEditor {
+    fn new(
+        shell: WeakEntity<AppShell>,
+        cluster: ClusterRef,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut editor = Self {
+            shell,
+            cluster,
+            rows: Vec::new(),
+            _subscriptions: Vec::new(),
+        };
+        editor.add_row(window, cx);
+        editor
+    }
+
+    fn add_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let key = text_input("", "key", window, cx);
+        let value = text_input("", "value", window, cx);
+        let choices: Vec<String> = BULK_OPERATIONS
+            .iter()
+            .map(|text| (*text).to_owned())
+            .collect();
+        let operation =
+            cx.new(|cx| SelectState::new(choices, Some(IndexPath::default().row(0)), window, cx));
+        // The problem line and the Remove layout follow what is typed and picked.
+        for input in [&key, &value] {
+            self._subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                |_, _, event: &InputEvent, _, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                },
+            ));
+        }
+        self._subscriptions.push(cx.subscribe_in(
+            &operation,
+            window,
+            |_, _, _: &SelectEvent<Vec<String>>, _, cx| cx.notify(),
+        ));
+        self.rows.push(BulkRow {
+            key,
+            operation,
+            value,
+        });
+        cx.notify();
+    }
+
+    fn remove_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.rows.len() {
+            self.rows.remove(index);
+            cx.notify();
+        }
+    }
+
+    /// The changes the non-empty rows describe now. A row with nothing in it is not a change.
+    fn changes(&self, cx: &App) -> Vec<LabelChange> {
+        self.rows
+            .iter()
+            .filter_map(|row| {
+                let key = row.key.read(cx).value().to_string();
+                let value = row.value.read(cx).value().to_string();
+                let is_remove = row.is_remove(cx);
+                if key.trim().is_empty() && (is_remove || value.trim().is_empty()) {
+                    return None;
+                }
+                Some(LabelChange {
+                    key,
+                    value: (!is_remove).then_some(value),
+                })
+            })
+            .collect()
+    }
+
+    /// Why the batch of the changes now would not go, over the nodes ticked now. `None` while there
+    /// is no change to judge or no ticked node to judge it over (the fixture has none).
+    fn problem(&self, cx: &App) -> Option<SharedString> {
+        let changes = self.changes(cx);
+        if changes.is_empty() {
+            return None;
+        }
+        let shell = self.shell.upgrade()?;
+        let shell = shell.read(cx);
+        let ticked = shell.checked_objects(cx);
+        let (cluster, nodes) = shell.ticked_nodes(&ticked, cx).ok()?;
+        let guard = shell.guard_for(&cluster, cx)?;
+        let scope = NodeScope {
+            cluster: &cluster,
+            cluster_name: guard.display_name(),
+        };
+        label_batch(&scope, &nodes, &changes).err()
+    }
+
+    /// Review…: closes the editor and starts the guarded batch over the nodes ticked now, whose
+    /// dialog follows. Nothing is sent from here.
+    fn review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let changes = self.changes(cx);
+        if changes.is_empty() {
+            return;
+        }
+        let (shell, cluster) = (self.shell.clone(), self.cluster.clone());
+        window.close_dialog(cx);
+        // After the close: the flow opens the confirm dialog, which the close must not pop.
+        window.defer(cx, move |window, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.start_bulk_labels(&cluster, &changes, window, cx);
+            });
+        });
+    }
+
+    fn render_rows(&self, cx: &mut Context<Self>) -> AnyElement {
+        let list = self.rows.iter().enumerate().map(|(index, row)| {
+            let value_cell = if row.is_remove(cx) {
+                div().flex_1().into_any_element()
+            } else {
+                div()
+                    .flex_1()
+                    .child(Input::new(&row.value).small())
+                    .into_any_element()
+            };
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(div().flex_1().child(Input::new(&row.key).small()))
+                .child(div().w(px(110.)).child(Select::new(&row.operation).small()))
+                .child(value_cell)
+                .child(
+                    Button::new(("bulk-label-remove", index))
+                        .ghost()
+                        .xsmall()
+                        .icon(Icon::new(IconName::X))
+                        .tooltip("Remove")
+                        .on_click(
+                            cx.listener(move |editor, _, _, cx| editor.remove_row(index, cx)),
+                        ),
+                )
+        });
+        v_flex()
+            .id("bulk-label-rows")
+            .gap_1()
+            .max_h(px(ROWS_MAX_HEIGHT))
+            .overflow_y_scroll()
+            .children(list)
+            .into_any_element()
+    }
+}
+
+impl Render for BulkLabelEditor {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (muted, danger) = (theme.muted_foreground, theme.danger);
+        let has_changes = !self.changes(cx).is_empty();
+        let review = Button::new("bulk-label-review")
+            .label("Review…")
+            .small()
+            .primary()
+            .disabled(!has_changes)
+            .on_click(cx.listener(|editor, _, window, cx| editor.review(window, cx)));
+        let review = if has_changes {
+            review
+        } else {
+            review.tooltip("No changes")
+        };
+        let add = Button::new("bulk-label-add")
+            .label("+ Add")
+            .small()
+            .outline()
+            .on_click(cx.listener(|editor, _, window, cx| editor.add_row(window, cx)));
+        v_flex()
+            .key_context(FORWARD_FORM)
+            .w_full()
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("Changes apply to every ticked node; other labels stay."),
+            )
+            .child(self.render_rows(cx))
+            .child(h_flex().child(add))
+            .children(
+                self.problem(cx)
+                    .map(|text| div().text_sm().text_color(danger).child(text)),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .justify_end()
+                    .child(
+                        Button::new("bulk-label-cancel")
+                            .label("Cancel")
+                            .small()
+                            .outline()
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(review),
+            )
+    }
+}
+
+impl AppShell {
+    /// Opens the bulk label editor for the `count` ticked nodes of `cluster`. The gate is checked
+    /// again here (a stale button or a key pressed in a gap cannot bypass it); the nodes are read
+    /// when Review… is pressed.
+    pub(super) fn open_bulk_label_editor(
+        &mut self,
+        cluster: &ClusterRef,
+        count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = action_label(ResourceAction::EditLabels);
+        let Some(guard) = self.guard_for(cluster, cx) else {
+            notify(
+                window,
+                cx,
+                unavailable_text(label, "the cluster is not open"),
+            );
+            return;
+        };
+        if let ActionAvailability::Disabled { reason } =
+            action_availability(ResourceAction::EditLabels, &guard)
+        {
+            notify(window, cx, unavailable_text(label, &reason));
+            return;
+        }
+        if self.running_batches.contains(cluster) {
+            notify(window, cx, unavailable_text(label, BATCH_RUNNING_REASON));
+            return;
+        }
+        let (shell, cluster) = (cx.weak_entity(), cluster.clone());
+        let editor = cx.new(|cx| BulkLabelEditor::new(shell, cluster, window, cx));
+        self.show_bulk_label_editor(editor, count, window, cx);
+    }
+
+    fn show_bulk_label_editor(
+        &mut self,
+        editor: Entity<BulkLabelEditor>,
+        count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(test)]
+        {
+            self.last_bulk_label_editor = Some(editor.downgrade());
+        }
+        let title = format!("Edit labels of {count} nodes");
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title(title.clone())
+                .w(px(DIALOG_WIDTH))
+                .child(editor.clone())
+        });
+    }
+
+    /// Review… of the bulk editor: the batch over the nodes ticked now, in the editor's own
+    /// cluster, or the reason there is none. The batch dialog follows; nothing is sent from here.
+    pub(super) fn start_bulk_labels(
+        &mut self,
+        cluster: &ClusterRef,
+        changes: &[LabelChange],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.bulk_label_batch(cluster, changes, cx) {
+            Ok(intent) => self.start_batch(intent, window, cx),
+            Err(reason) => notify(
+                window,
+                cx,
+                unavailable_text(action_label(ResourceAction::EditLabels), &reason),
+            ),
+        }
+    }
+
+    fn bulk_label_batch(
+        &self,
+        cluster: &ClusterRef,
+        changes: &[LabelChange],
+        cx: &App,
+    ) -> Result<crate::app_shell::batch_write::BatchIntent, SharedString> {
+        let ticked = self.checked_objects(cx);
+        let (found, nodes) = self.ticked_nodes(&ticked, cx)?;
+        // The selection may have moved to another cluster since the editor opened.
+        if found != *cluster {
+            return Err("the ticked nodes are of another cluster".into());
+        }
+        let guard = self.guard_for(&found, cx).ok_or("Not connected")?;
+        let scope = NodeScope {
+            cluster: &found,
+            cluster_name: guard.display_name(),
+        };
+        label_batch(&scope, &nodes, changes)
+    }
+}
+
 /// `--screen node-taints-editor` and `node-labels-editor`: the editors over a fixed node, with no
 /// cluster behind them. Review… opens the confirm dialog like the real one, but the fixture's
 /// cluster is not open, so nothing can be sent.
@@ -875,6 +1242,48 @@ impl AppShell {
     }
 }
 
+/// `--screen node-labels-bulk-editor`: the bulk editor of three fixed ticked nodes with a Set and a
+/// Remove typed. No node is ticked behind it, so Review… could build nothing.
+#[cfg(feature = "screenshot")]
+impl AppShell {
+    pub(super) fn open_bulk_label_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        const COUNT: usize = 3;
+        let cluster = ClusterRef {
+            kubeconfig: std::path::PathBuf::from("fixture.yaml"),
+            context: "prod-eu-1".to_owned(),
+        };
+        let shell = cx.weak_entity();
+        let editor = cx.new(|cx| {
+            let mut editor = BulkLabelEditor::new(shell, cluster, window, cx);
+            editor.fill_fixture(window, cx);
+            editor
+        });
+        self.show_bulk_label_editor(editor, COUNT, window, cx);
+    }
+}
+
+#[cfg(feature = "screenshot")]
+impl BulkLabelEditor {
+    /// The two rows of the picture: `team = infra` (Set) and `old-key` (Remove).
+    fn fill_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.add_row(window, cx);
+        let mut fill = |row: &BulkRow, key: &str, value: &str, operation: usize| {
+            row.key
+                .update(cx, |input, cx| input.set_value(key.to_owned(), window, cx));
+            row.value.update(cx, |input, cx| {
+                input.set_value(value.to_owned(), window, cx)
+            });
+            row.operation.update(cx, |select, cx| {
+                select.set_selected_index(Some(IndexPath::default().row(operation)), window, cx);
+            });
+        };
+        if let [first, second] = self.rows.as_slice() {
+            fill(first, "team", "infra", 0);
+            fill(second, "old-key", "", BULK_REMOVE);
+        }
+    }
+}
+
 #[cfg(feature = "screenshot")]
 impl NodeEditor {
     /// Appends a taint row with the given text, as if typed.
@@ -907,6 +1316,53 @@ impl NodeEditor {
                 select.set_selected_index(Some(IndexPath::default().row(index)), window, cx);
             });
         }
+    }
+}
+
+/// What the shell tests read from, and do to, an open bulk editor.
+#[cfg(test)]
+impl BulkLabelEditor {
+    pub(crate) fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Fills the last row; `is_remove` picks Remove, whose value is ignored.
+    pub(crate) fn fill_last_row(
+        &mut self,
+        key: &str,
+        value: &str,
+        is_remove: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(row) = self.rows.last() else {
+            return;
+        };
+        row.key
+            .update(cx, |input, cx| input.set_value(key.to_owned(), window, cx));
+        row.value.update(cx, |input, cx| {
+            input.set_value(value.to_owned(), window, cx)
+        });
+        row.operation.update(cx, |select, cx| {
+            let index = if is_remove { BULK_REMOVE } else { 0 };
+            select.set_selected_index(Some(IndexPath::default().row(index)), window, cx);
+        });
+    }
+
+    pub(crate) fn push_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.add_row(window, cx);
+    }
+
+    pub(crate) fn current_changes(&self, cx: &App) -> Vec<LabelChange> {
+        self.changes(cx)
+    }
+
+    pub(crate) fn current_problem(&self, cx: &App) -> Option<SharedString> {
+        self.problem(cx)
+    }
+
+    pub(crate) fn press_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.review(window, cx);
     }
 }
 

@@ -663,3 +663,79 @@ fn pod_condition_and_waiting_messages_hide_url_userinfo() {
         Some("Back-off pulling https://<hidden>@registry/app")
     );
 }
+
+fn terminal_of(
+    stdin: Option<bool>,
+    stdin_once: Option<bool>,
+    tty: Option<bool>,
+) -> ContainerTerminal {
+    let main = Container {
+        name: "app".to_owned(),
+        stdin,
+        stdin_once,
+        tty,
+        ..Default::default()
+    };
+    summaries(&pod_with_containers(Vec::new(), vec![main]))[0].terminal
+}
+
+#[test]
+fn container_terminal_reads_stdin_stdin_once_and_tty() {
+    assert_eq!(terminal_of(None, None, None), ContainerTerminal::None);
+    assert_eq!(terminal_of(None, None, Some(true)), ContainerTerminal::None);
+    assert_eq!(terminal_of(Some(true), None, None), ContainerTerminal::None);
+    assert_eq!(
+        terminal_of(Some(true), None, Some(false)),
+        ContainerTerminal::None
+    );
+    // `stdinOnce` alone does not make a terminal.
+    assert_eq!(
+        terminal_of(Some(false), Some(true), Some(true)),
+        ContainerTerminal::None
+    );
+    assert_eq!(
+        terminal_of(Some(true), None, Some(true)),
+        ContainerTerminal::Interactive
+    );
+    assert_eq!(
+        terminal_of(Some(true), Some(true), Some(true)),
+        ContainerTerminal::InteractiveOnce
+    );
+}
+
+#[test]
+fn init_and_sidecar_containers_read_their_terminal_too() {
+    let interactive = |name: &str, restart_policy: Option<&str>| Container {
+        stdin: Some(true),
+        tty: Some(true),
+        ..container(name, restart_policy)
+    };
+    let listed = summaries(&pod_with_containers(
+        vec![
+            interactive("sidecar", Some("Always")),
+            interactive("init", None),
+        ],
+        vec![container("app", None)],
+    ));
+    assert_eq!(listed[0].kind, ContainerKind::Sidecar);
+    assert_eq!(listed[0].terminal, ContainerTerminal::Interactive);
+    assert_eq!(listed[1].kind, ContainerKind::Init);
+    assert_eq!(listed[1].terminal, ContainerTerminal::Interactive);
+    assert_eq!(listed[2].terminal, ContainerTerminal::None);
+}
+
+#[test]
+fn pod_is_finished_reads_the_phase() {
+    let with_phase = |phase: &str, reason: Option<&str>| {
+        pod_summary(&pod_with_status(ApiPodStatus {
+            phase: Some(phase.to_owned()),
+            reason: reason.map(str::to_owned),
+            ..Default::default()
+        }))
+    };
+    assert!(with_phase("Succeeded", None).is_finished);
+    assert!(with_phase("Failed", None).is_finished);
+    assert!(!with_phase("Running", Some("Error")).is_finished);
+    assert!(!with_phase("Running", Some("OOMKilled")).is_finished);
+    assert!(!with_phase("Pending", None).is_finished);
+}

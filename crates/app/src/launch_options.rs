@@ -23,8 +23,8 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|edit-yaml-history|values-edit|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
-           node-taints-editor|node-taints-editor-invalid|node-labels-editor|drain-dialog|drain-progress|drain-progress-stuck|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+           node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-appearance|settings-shortcuts
@@ -81,6 +81,9 @@ pub(crate) enum LaunchScreen {
     /// `--screen shell-confirm-fixture`: Pods with the Open shell confirm dialog open on a fixed
     /// pod; its confirm button and Enter do nothing.
     ShellConfirmFixture,
+    /// `--screen attach-confirm` (spec 0040): Pods with the Attach confirm dialog open on a fixed
+    /// pod of a fixed Production cluster; its confirm button and Enter do nothing.
+    AttachConfirm,
     /// `--screen node-shell-confirm`: Nodes with the Open node shell confirm dialog open on a fixed
     /// node of a fixed Production cluster; its confirm button and Enter do nothing. Screenshot builds
     /// only; it needs no cluster.
@@ -96,12 +99,18 @@ pub(crate) enum LaunchScreen {
     /// Nodes list. Screenshot builds only; they need no cluster and send nothing.
     NodeTaintsEditor,
     NodeLabelsEditor,
+    /// `--screen node-labels-bulk-editor` (spec 0040): the bulk label editor of three ticked nodes of
+    /// a fixed cluster, with a Set and a Remove typed. Screenshot builds only; it sends nothing.
+    NodeLabelsBulkEditor,
     /// `--screen node-taints-editor-invalid`: the taints editor with one invalid key and one
     /// NoExecute row added, so the validation message and the warning show. Offline like the rest.
     NodeTaintsEditorInvalid,
     /// `--screen drain-dialog`: the W6 drain dialog over fixed pods of a fixed Production cluster.
     /// Screenshot builds only; it needs no cluster and can never send.
     DrainDialog,
+    /// `--screen drain-dialog-skip-pdbs` (spec 0040): the same dialog on a fixed Staging cluster with
+    /// Skip PodDisruptionBudgets ticked. Same rules.
+    DrainDialogSkipPdbs,
     /// `--screen drain-progress`: the dock zoomed on the tab of a fixed drain of one node. Screenshot
     /// builds only; it needs no cluster and starts no run.
     DrainProgress,
@@ -168,6 +177,13 @@ pub(crate) enum LaunchScreen {
     /// `--screen delete-bulk-confirm`: Pods with the Delete dialog of twelve fixed pods of a fixed
     /// Staging cluster open. Screenshot builds only; it waits for no cluster and can never send.
     DeleteBulkConfirm,
+    /// `--screen restart-pod-confirm` (spec 0040): Pods with the Restart pod dialog of a fixed
+    /// StatefulSet pod of a fixed Production cluster open. Screenshot builds only; it waits for no
+    /// cluster and can never send.
+    RestartPodConfirm,
+    /// `--screen evict-confirm` (spec 0040): Pods with the Evict dialog of a fixed pod of a fixed
+    /// Staging cluster open, its dry-run refused by a PodDisruptionBudget. Same rules.
+    EvictConfirm,
     /// `--screen edit-yaml-diff`: the Edit YAML view on its Diff tab, drawn from fixed data (W10). It
     /// waits for no cluster and can never send. Screenshot builds only.
     EditYamlDiff,
@@ -226,14 +242,20 @@ impl LaunchScreen {
             | Self::NodeTaintsEditor
             | Self::NodeTaintsEditorInvalid
             | Self::NodeLabelsEditor
+            | Self::NodeLabelsBulkEditor
             | Self::DrainDialog
+            | Self::DrainDialogSkipPdbs
             | Self::NodeShellOptions => Screen::Nodes,
             Self::DebugContainerOptions
             | Self::LeftoverSweepFixture
             | Self::NodeShellTabFixture
             | Self::DebugShellTabFixture => Screen::Pods,
             Self::DrainProgress | Self::DrainProgressStuck => Screen::Nodes,
-            Self::ShellConfirmFixture | Self::DeleteBulkConfirm => Screen::Pods,
+            Self::ShellConfirmFixture
+            | Self::AttachConfirm
+            | Self::DeleteBulkConfirm
+            | Self::RestartPodConfirm
+            | Self::EvictConfirm => Screen::Pods,
             Self::EditYamlDiff | Self::EditYamlHistory | Self::RevisionDiff => {
                 Screen::Kind(ResourceKind::Deployments)
             }
@@ -441,6 +463,7 @@ impl LaunchScreen {
                 | Self::CordonConfirm
                 | Self::UnlockConfirm
                 | Self::ShellConfirmFixture
+                | Self::AttachConfirm
                 | Self::NodeShellConfirm
                 | Self::NodeShellOptions
                 | Self::DebugContainerOptions
@@ -448,13 +471,17 @@ impl LaunchScreen {
                 | Self::NodeTaintsEditor
                 | Self::NodeTaintsEditorInvalid
                 | Self::NodeLabelsEditor
+                | Self::NodeLabelsBulkEditor
                 | Self::DrainDialog
+                | Self::DrainDialogSkipPdbs
                 | Self::LeftoverSweepFixture
                 | Self::ScalePopover
                 | Self::ScaleConfirm
                 | Self::RestartBulkConfirm
                 | Self::DeleteConfirm
                 | Self::DeleteBulkConfirm
+                | Self::RestartPodConfirm
+                | Self::EvictConfirm
                 | Self::EditYamlDiff
                 | Self::EditYamlHistory
                 | Self::ValuesEdit
@@ -474,6 +501,9 @@ impl LaunchScreen {
         matches!(
             self,
             Self::ShellConfirmFixture
+                | Self::AttachConfirm
+                | Self::RestartPodConfirm
+                | Self::EvictConfirm
                 | Self::NodeShellConfirm
                 | Self::NodeShellOptions
                 | Self::DebugContainerOptions
@@ -481,7 +511,9 @@ impl LaunchScreen {
                 | Self::NodeTaintsEditor
                 | Self::NodeTaintsEditorInvalid
                 | Self::NodeLabelsEditor
+                | Self::NodeLabelsBulkEditor
                 | Self::DrainDialog
+                | Self::DrainDialogSkipPdbs
                 | Self::LeftoverSweepFixture
                 | Self::RevisionDiff
         )
@@ -544,6 +576,8 @@ impl LaunchScreen {
             "restart-bulk-confirm" => Some(Self::RestartBulkConfirm),
             "delete-confirm" => Some(Self::DeleteConfirm),
             "delete-bulk-confirm" => Some(Self::DeleteBulkConfirm),
+            "restart-pod-confirm" => Some(Self::RestartPodConfirm),
+            "evict-confirm" => Some(Self::EvictConfirm),
             "edit-yaml-diff" => Some(Self::EditYamlDiff),
             "edit-yaml-history" => Some(Self::EditYamlHistory),
             "values-edit" => Some(Self::ValuesEdit),
@@ -577,14 +611,17 @@ impl LaunchScreen {
             "shell-paste-fixture" => Some(Self::ShellPasteFixture),
             "shell-picker-fixture" => Some(Self::ShellPickerFixture),
             "shell-confirm-fixture" => Some(Self::ShellConfirmFixture),
+            "attach-confirm" => Some(Self::AttachConfirm),
             "node-shell-confirm" => Some(Self::NodeShellConfirm),
             "node-shell-options" => Some(Self::NodeShellOptions),
             "debug-container-options" => Some(Self::DebugContainerOptions),
             "node-shell-confirm-staging" => Some(Self::NodeShellConfirmStaging),
             "node-taints-editor" => Some(Self::NodeTaintsEditor),
             "node-labels-editor" => Some(Self::NodeLabelsEditor),
+            "node-labels-bulk-editor" => Some(Self::NodeLabelsBulkEditor),
             "node-taints-editor-invalid" => Some(Self::NodeTaintsEditorInvalid),
             "drain-dialog" => Some(Self::DrainDialog),
+            "drain-dialog-skip-pdbs" => Some(Self::DrainDialogSkipPdbs),
             "drain-progress" => Some(Self::DrainProgress),
             "drain-progress-stuck" => Some(Self::DrainProgressStuck),
             "leftover-sweep-fixture" => Some(Self::LeftoverSweepFixture),

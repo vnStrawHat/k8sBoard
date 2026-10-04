@@ -401,7 +401,7 @@ impl AppShell {
             ShellKind::NodeShell { node, .. } => {
                 self.open_node_shell_options(&target.cluster, &node, window, cx);
             }
-            ShellKind::Exec => {}
+            ShellKind::Exec | ShellKind::Attach => {}
         }
     }
 

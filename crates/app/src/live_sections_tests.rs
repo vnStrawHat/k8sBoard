@@ -656,6 +656,7 @@ fn selected_budget(selector: Option<&[&str]>) -> PodDisruptionBudgetSummary {
 
 fn labelled_pod(namespace: &str, name: &str, label: &str, is_ready: bool) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
         status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
@@ -838,6 +839,7 @@ fn mounting_pod(namespace: &str, name: &str, claim: &str, paths: &[&str]) -> Pod
         sub_path: None,
     };
     let container = |index: usize, path: &str| cluster::ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: format!("c{index}"),
         image: "img".to_owned(),
         kind: cluster::ContainerKind::Main,
@@ -856,6 +858,7 @@ fn mounting_pod(namespace: &str, name: &str, claim: &str, paths: &[&str]) -> Pod
         mounts: vec![mount(path)],
     };
     PodSummary {
+        is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
         status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
@@ -1163,6 +1166,7 @@ fn pod_running_as(namespace: &str, name: &str, account: Option<&str>) -> PodSumm
     use cluster::{PodStatus, ReadyCount, StatusReason};
 
     PodSummary {
+        is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),

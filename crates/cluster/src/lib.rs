@@ -159,8 +159,8 @@ pub use object_yaml::{EnvValues, ObjectIdentity, ObjectKind, ObjectRef, ObjectYa
 pub use persistent_volume::{ClaimRef, PersistentVolumeSummary, VolumeBackend};
 pub use persistent_volume_claim::PersistentVolumeClaimSummary;
 pub use pod::{
-    ContainerKind, ContainerState, ContainerSummary, DrainPod, PodCondition, PodSummary,
-    ReadyCount, Termination,
+    ContainerKind, ContainerState, ContainerSummary, ContainerTerminal, DrainPod, PodCondition,
+    PodSummary, ReadyCount, Termination,
 };
 pub use pod_log::{LogLine, LogRequest, LogSource, LogUpdate};
 pub use pod_shell::{

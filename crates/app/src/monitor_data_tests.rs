@@ -39,6 +39,7 @@ fn container(
     resources: Vec<ContainerResource>,
 ) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "img".to_owned(),
         kind,
@@ -60,6 +61,7 @@ fn container(
 
 fn pod(name: &str, containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "ns".to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),

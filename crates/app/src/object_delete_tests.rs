@@ -4,6 +4,7 @@ use cluster::{WriteMode, WriteOutcome};
 
 use super::*;
 use crate::workload_actions::workload_actions_tests::test_cluster;
+use crate::write_guard::ActionRisk;
 
 fn pod_key(name: &str) -> ResourceKey {
     ResourceKey::Pod {
@@ -37,12 +38,26 @@ fn target_of(kind: ObjectKind, name: &str, facts: TargetFacts) -> DeleteTarget {
     }
 }
 
+fn controller(kind: &str) -> ControllerRef {
+    ControllerRef {
+        kind: kind.to_owned(),
+        name: format!("{}-owner", kind.to_ascii_lowercase()),
+    }
+}
+
 fn pod(name: &str, has_controller: bool) -> DeleteTarget {
-    target_of(ObjectKind::Pod, name, TargetFacts::Pod { has_controller })
+    let controller = has_controller.then(|| controller("ReplicaSet"));
+    target_of(ObjectKind::Pod, name, TargetFacts::Pod { controller })
+}
+
+fn owned_pod(name: &str, owner: Option<&str>) -> DeleteTarget {
+    let controller = owner.map(controller);
+    target_of(ObjectKind::Pod, name, TargetFacts::Pod { controller })
 }
 
 fn extras(kind: ObjectKind, targets: Vec<DeleteTarget>) -> DeleteExtras {
     DeleteExtras {
+        removal: Removal::Delete,
         propagation: DeletePropagation::Background,
         kind,
         targets,
@@ -146,7 +161,7 @@ fn delete_label_names_kind_and_count() {
 #[test]
 fn items_carry_the_uid_and_the_propagation() {
     let targets = vec![pod("a", true), pod("b", true)];
-    let items = delete_items(&targets, DeletePropagation::Orphan);
+    let items = delete_items(&targets, Removal::Delete, DeletePropagation::Orphan);
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].object, "payments/a");
     assert_eq!(items[0].label, "Delete pod payments/a");
@@ -411,37 +426,52 @@ fn dependents_text_per_owner_kind() {
 
 // ---- progress and notices ----
 
+/// The one item of a single-object removal, as the notice reads it.
+fn notice_item(removal: Removal, kind: ObjectKind, name: &str) -> BatchItem {
+    let extras = DeleteExtras {
+        removal,
+        ..extras(kind, vec![target_of(kind, name, TargetFacts::Plain)])
+    };
+    let mut items = delete_batch(
+        &test_cluster(),
+        "prod-a",
+        extras,
+        jiff::Timestamp::UNIX_EPOCH,
+    )
+    .plan
+    .items;
+    items.remove(0)
+}
+
+fn notice(removal: Removal, kind: ObjectKind, progress: &ItemProgress) -> String {
+    single_notice(&notice_item(removal, kind, "a"), progress, removal)
+}
+
 #[test]
 fn pod_pending_without_finalizers_reads_grace_period() {
     let pending = ItemProgress::Pending(Vec::new());
     assert_eq!(
-        single_notice("Delete pod payments/a", &pending, "Pod"),
+        notice(Removal::Delete, ObjectKind::Pod, &pending),
         "Delete pod payments/a: terminating (grace period)"
     );
     assert_eq!(
-        single_notice("Delete deployment payments/a", &pending, "Deployment"),
+        notice(Removal::Delete, ObjectKind::Deployment, &pending),
         "Delete deployment payments/a: terminating"
     );
 }
 
 #[test]
 fn single_notices() {
-    let label = "Delete pod payments/a";
+    let pod = |progress: &ItemProgress| notice(Removal::Delete, ObjectKind::Pod, progress);
+    assert_eq!(pod(&ItemProgress::Done), "Delete pod payments/a: done");
     assert_eq!(
-        single_notice(label, &ItemProgress::Done, "Pod"),
-        "Delete pod payments/a: done"
-    );
-    assert_eq!(
-        single_notice(label, &ItemProgress::Pending(vec!["f1".to_owned()]), "Pod"),
+        pod(&ItemProgress::Pending(vec!["f1".to_owned()])),
         "Delete pod payments/a: marked for deletion; waiting for finalizers: f1"
     );
-    assert_eq!(
-        single_notice(label, &ItemProgress::Gone, "Pod"),
-        "pod payments/a was already deleted"
-    );
+    assert_eq!(pod(&ItemProgress::Gone), "payments/a was already deleted");
     let conflict = ItemProgress::Failed(RECREATED_TEXT.into());
     assert_eq!(
-        single_notice(label, &conflict, "Pod"),
+        pod(&conflict),
         "Delete pod payments/a failed: A new object with this name exists; nothing was deleted"
     );
 }
@@ -575,4 +605,182 @@ fn identity_failure_names_the_object() {
         "{text}"
     );
     assert!(text.ends_with("); nothing was deleted"), "{text}");
+}
+
+// ---- restart pod and evict (spec 0040) ----
+
+fn removal_batch(removal: Removal, targets: Vec<DeleteTarget>) -> BatchIntent {
+    let extras = DeleteExtras {
+        removal,
+        ..extras(ObjectKind::Pod, targets)
+    };
+    delete_batch(
+        &test_cluster(),
+        "prod-a",
+        extras,
+        jiff::Timestamp::UNIX_EPOCH,
+    )
+}
+
+#[test]
+fn removal_requests_are_uid_pinned() {
+    let targets = vec![owned_pod("api-0", Some("ReplicaSet"))];
+    let restart = removal_batch(Removal::Restart, targets.clone());
+    assert_eq!(
+        restart.plan.items[0].request.operation(),
+        &WriteOperation::DeleteObject {
+            uid: "uid-api-0".to_owned(),
+            propagation: DeletePropagation::Background,
+        }
+    );
+    let evict = removal_batch(Removal::Evict, targets);
+    assert_eq!(
+        evict.plan.items[0].request.operation(),
+        &WriteOperation::EvictPod {
+            uid: "uid-api-0".to_owned(),
+            grace: GracePeriod::PodDefault,
+        }
+    );
+}
+
+#[test]
+fn removal_batch_texts() {
+    let targets = vec![owned_pod("api-0", Some("ReplicaSet"))];
+    for (removal, action, title, verb, audit, item) in [
+        (
+            Removal::Restart,
+            ResourceAction::RestartPod,
+            "Restart pod",
+            "Restart",
+            "Restart pod",
+            "Restart pod payments/api-0",
+        ),
+        (
+            Removal::Evict,
+            ResourceAction::EvictPod,
+            "Evict pod",
+            "Evict",
+            "Evict",
+            "Evict pod payments/api-0",
+        ),
+        (
+            Removal::Delete,
+            ResourceAction::Delete(ObjectKind::Pod),
+            "Delete pod",
+            "Delete",
+            "Delete",
+            "Delete pod payments/api-0",
+        ),
+    ] {
+        let batch = removal_batch(removal, targets.clone());
+        assert_eq!(batch.action, action);
+        assert_eq!(batch.label, title);
+        assert_eq!(batch.verb, verb);
+        assert_eq!(batch.button, audit);
+        assert_eq!(batch.plan.items[0].label, item);
+        // The pod name is what a TypeName tier asks for.
+        assert_eq!(batch.expected(), "api-0");
+        assert_eq!(batch.risk, ActionRisk::Destructive);
+    }
+}
+
+#[test]
+fn removal_warnings_by_owner() {
+    let warnings = |removal: Removal, owner: Option<&str>| {
+        lines(removal_batch(removal, vec![owned_pod("web-0", owner)]).warnings)
+    };
+    let pdb = "Restart deletes the pod without checking PodDisruptionBudgets; Evict checks them";
+    assert_eq!(warnings(Removal::Restart, Some("ReplicaSet")), [pdb]);
+    assert_eq!(
+        warnings(Removal::Restart, Some("StatefulSet")),
+        [
+            pdb,
+            "The replacement keeps the name web-0 and its volume claims"
+        ]
+    );
+    assert_eq!(
+        warnings(Removal::Restart, Some("Job")),
+        [
+            pdb,
+            "A Job may count the deleted pod as failed toward its backoffLimit"
+        ]
+    );
+    // The bare-pod line of an eviction shows exactly once: `kind_warnings` runs for Delete only.
+    assert_eq!(
+        warnings(Removal::Evict, None),
+        ["Not managed by a controller; it will not come back"]
+    );
+    assert_eq!(
+        warnings(Removal::Evict, Some("DaemonSet")),
+        ["A DaemonSet pod is recreated on the same node at once"]
+    );
+    assert!(warnings(Removal::Evict, Some("ReplicaSet")).is_empty());
+    // A delete keeps its own table and gains none of these.
+    assert_eq!(
+        warnings(Removal::Delete, None),
+        ["Not managed by a controller; it will not come back"]
+    );
+}
+
+#[test]
+fn removal_warnings_come_after_the_finalizer_lines() {
+    let mut target = owned_pod("kafka-1", Some("StatefulSet"));
+    target.identity.finalizers = vec!["f1".to_owned()];
+    let batch = removal_batch(Removal::Restart, vec![target]);
+    let text = lines(batch.warnings);
+    assert!(text[0].starts_with("Has finalizers: f1"), "{text:?}");
+    assert!(text[1].starts_with("Restart deletes the pod"), "{text:?}");
+}
+
+#[test]
+fn removal_notices() {
+    let restart = |progress: &ItemProgress| notice(Removal::Restart, ObjectKind::Pod, progress);
+    let evict = |progress: &ItemProgress| notice(Removal::Evict, ObjectKind::Pod, progress);
+    assert_eq!(
+        restart(&ItemProgress::Done),
+        "Restart pod payments/a: terminating; its controller creates a replacement"
+    );
+    assert_eq!(
+        restart(&ItemProgress::Pending(Vec::new())),
+        "Restart pod payments/a: terminating; its controller creates a replacement"
+    );
+    assert_eq!(
+        evict(&ItemProgress::Done),
+        "Evict pod payments/a: accepted; the pod is terminating"
+    );
+    // A gone pod reads from the item's object, whatever the label says.
+    assert_eq!(
+        restart(&ItemProgress::Gone),
+        "payments/a was already deleted"
+    );
+    assert_eq!(evict(&ItemProgress::Gone), "payments/a was already deleted");
+    let conflict = ItemProgress::Failed(RECREATED_TEXT.into());
+    assert_eq!(
+        evict(&conflict),
+        "Evict pod payments/a failed: A new object with this name exists; nothing was deleted"
+    );
+    let refused = ItemProgress::Failed(
+        "refused for now: The disruption budget api-pdb needs 2 healthy pods and has 2 currently"
+            .into(),
+    );
+    assert_eq!(
+        evict(&refused),
+        "Evict pod payments/a failed: refused for now: The disruption budget api-pdb needs 2 healthy pods and has 2 currently"
+    );
+}
+
+#[test]
+fn a_propagation_change_keeps_the_removal() {
+    let batch = removal_batch(Removal::Evict, vec![owned_pod("a", Some("ReplicaSet"))]);
+    let rebuilt = with_propagation(
+        &batch,
+        DeletePropagation::Foreground,
+        jiff::Timestamp::UNIX_EPOCH,
+    )
+    .expect("a delete batch");
+    assert_eq!(rebuilt.action, ResourceAction::EvictPod);
+    assert!(matches!(
+        rebuilt.plan.items[0].request.operation(),
+        WriteOperation::EvictPod { .. }
+    ));
 }

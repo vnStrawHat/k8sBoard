@@ -1297,6 +1297,7 @@ fn the_title_bar_search_box_opens_the_palette(cx: &mut TestAppContext) {
 
 pub(super) fn logs_pod() -> cluster::PodSummary {
     let container = |name: &str, kind: cluster::ContainerKind| cluster::ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "img".to_owned(),
         kind,
@@ -1315,6 +1316,7 @@ pub(super) fn logs_pod() -> cluster::PodSummary {
         mounts: Vec::new(),
     };
     cluster::PodSummary {
+        is_finished: false,
         namespace: "shop".to_owned(),
         name: "api-0".to_owned(),
         status: cluster::PodStatus::Reason(cluster::StatusReason::Running),

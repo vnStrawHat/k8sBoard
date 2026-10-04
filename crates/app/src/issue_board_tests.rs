@@ -22,6 +22,7 @@ fn ago(seconds: i64) -> Timestamp {
 
 fn container(name: &str, state: ContainerState) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "registry/app:1".to_owned(),
         kind: ContainerKind::Main,
@@ -43,6 +44,7 @@ fn container(name: &str, state: ContainerState) -> ContainerSummary {
 
 fn pod_of(namespace: &str, name: &str, controller: Option<(&str, &str)>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),
@@ -59,6 +61,7 @@ fn pod_of(namespace: &str, name: &str, controller: Option<(&str, &str)>) -> PodS
         }),
         conditions: Vec::new(),
         containers: vec![ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
             is_ready: true,
             ..container("api", ContainerState::Running { started_at: None })
         }],
@@ -85,6 +88,7 @@ fn crashing_pod(name: &str, ready_ago: i64, restarts: u32) -> PodSummary {
     let mut pod = pod_of("shop", name, Some(("ReplicaSet", "api-7d9f8c")));
     pod.conditions = vec![not_ready_since(ready_ago)];
     pod.containers = vec![ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         restart_count: restarts,
         last_termination: Some(Termination {
             reason: Some(StatusReason::Error),

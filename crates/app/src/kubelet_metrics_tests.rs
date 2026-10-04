@@ -32,6 +32,7 @@ fn ready_nodes(count: usize) -> Vec<NodeSummary> {
 
 fn pod(name: &str, node: Option<&str>, reason: StatusReason) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(reason),
@@ -396,6 +397,7 @@ fn claim_subject_nodes_are_mounting_pods_nodes() {
     let mounting = |name: &str, node: &str, claim: &str, reason: StatusReason| {
         let mut pod = pod(name, Some(node), reason);
         pod.containers.push(cluster::ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
             name: "main".to_owned(),
             image: "img".to_owned(),
             kind: cluster::ContainerKind::Main,

@@ -668,6 +668,7 @@ fn find_opens_counts_and_closes_with_escape(cx: &mut TestAppContext) {
 
 fn pod_named(name: &str) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "payments".to_owned(),
         name: name.to_owned(),
         status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
@@ -928,4 +929,71 @@ fn shell_tabs_have_no_pop_out(cx: &mut TestAppContext) {
         "the toolbar is drawn"
     );
     assert!(!is_drawn(&fixture, "log-pop-out", cx));
+}
+
+#[gpui_kit::test]
+fn attach_tab_label_and_header(cx: &mut TestAppContext) {
+    let attach = open_debug_tab(ShellKind::Attach, cx);
+    attach
+        .tab
+        .update(cx, |tab, _| tab.target.container = "api".to_owned());
+    render(&attach, cx);
+    render(&attach, cx);
+    assert_eq!(
+        attach.tab.read_with(cx, |tab, _| tab.label()),
+        "attach · m8n2p/api"
+    );
+    assert_eq!(
+        attach.tab.read_with(cx, |tab, _| tab.header_text()),
+        "›_ attach api-7d9f8c-m8n2p · api · stg-b"
+    );
+    assert!(
+        !is_drawn(&attach, "shell-picker", cx),
+        "an attach has no shell picker"
+    );
+    assert!(
+        !is_drawn(&attach, "shell-reconnect", cx),
+        "an attach has no Reconnect: A attaches anew"
+    );
+    // Find and Clear stay, as in every shell tab.
+    assert!(is_drawn(&attach, "shell-find", cx));
+    assert!(is_drawn(&attach, "shell-clear", cx));
+    // Every other kind keeps its Reconnect.
+    let exec = open_tab(900., 300., cx);
+    render(&exec, cx);
+    render(&exec, cx);
+    assert!(is_drawn(&exec, "shell-reconnect", cx));
+    assert_eq!(starting_text(&ShellKind::Attach), "Attaching…");
+}
+
+#[gpui_kit::test]
+fn an_ended_attach_tab_offers_no_debug_container(cx: &mut TestAppContext) {
+    let attach = open_debug_tab(ShellKind::Attach, cx);
+    apply(
+        &attach,
+        ShellUpdate::Exited(ShellExit {
+            code: None,
+            message: Some("OCI runtime exec failed: executable file not found in $PATH".into()),
+        }),
+        cx,
+    );
+    render(&attach, cx);
+    render(&attach, cx);
+    assert!(!is_drawn(&attach, "shell-debug-container", cx));
+}
+
+#[gpui_kit::test]
+fn an_attach_tab_ends_with_the_exit_code(cx: &mut TestAppContext) {
+    let attach = open_debug_tab(ShellKind::Attach, cx);
+    apply(&attach, ShellUpdate::Started, cx);
+    apply(
+        &attach,
+        ShellUpdate::Exited(ShellExit {
+            code: Some(137),
+            message: None,
+        }),
+        cx,
+    );
+    let text = screen_text(&attach, cx).join("\n");
+    assert!(text.contains("[process exited with code 137]"), "{text}");
 }

@@ -310,6 +310,7 @@ fn replica_set() -> ReplicaSetSummary {
 
 fn pod_named(name: &str) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),

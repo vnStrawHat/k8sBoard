@@ -9,6 +9,7 @@ fn container(
     is_ready: bool,
 ) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "img".to_owned(),
         kind,

@@ -165,6 +165,7 @@ pub(in crate::app_shell) fn container(
     is_running: bool,
 ) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "img".to_owned(),
         kind,
@@ -193,6 +194,7 @@ pub(in crate::app_shell) fn container(
 
 pub(in crate::app_shell) fn pod(name: &str, containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),

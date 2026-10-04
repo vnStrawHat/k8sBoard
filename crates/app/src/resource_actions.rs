@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use cluster::{
     AccessCheck, ClusterConnection, ContainerKind, ContainerState, ContainerSummary,
-    HELM_RELEASE_SECRET_TYPE, NamespaceScope, NodeSummary, ObjectKind, PodSummary,
-    ReplicaSetSummary, SecretDetails, SecretKey,
+    ContainerTerminal, HELM_RELEASE_SECRET_TYPE, NamespaceScope, NodeSummary, ObjectKind,
+    PodStatus, PodSummary, ReplicaSetSummary, SecretDetails, SecretKey,
 };
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
@@ -24,10 +24,10 @@ use crate::custom_kind::CustomKind;
 use crate::dock::{Dock, LogOrigin};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
-    CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels, EditTaints,
-    EditValues, EditYaml, ExpandClaim, OpenShell, PauseRollout, PortForward, RerunJob,
-    RestartRollout, RollBack, Scale, SetDefaultStorageClass, SuspendCronJob, TriggerCronJob,
-    ViewLogs, ViewYaml,
+    Attach, CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels, EditTaints,
+    EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell, PauseRollout, PortForward, RerunJob,
+    RestartPod, RestartRollout, RollBack, Scale, SetDefaultStorageClass, SuspendCronJob,
+    TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_join::last_job_owner;
@@ -53,6 +53,8 @@ pub(crate) enum ResourceAction {
     ViewLogs,
     OpenShell,
     PortForward,
+    /// Attaches to a running container that has a terminal (spec 0040).
+    Attach,
     OpenNodeShell,
     /// Adds an ephemeral container to a running pod and attaches a shell to it (spec 0037).
     DebugContainer,
@@ -74,6 +76,10 @@ pub(crate) enum ResourceAction {
     Delete(ObjectKind),
     /// Carries the kind of the row: Deployments, StatefulSets, and DaemonSets restart.
     RestartRollout(ObjectKind),
+    /// Deletes a controller-owned pod so its controller recreates it (spec 0040).
+    RestartPod,
+    /// Asks the eviction API to remove a pod, which checks its PodDisruptionBudgets (spec 0040).
+    EvictPod,
     /// Carries the kind of the row: Deployments and StatefulSets scale.
     Scale(ObjectKind),
     PauseRollout,
@@ -98,6 +104,8 @@ pub(crate) enum RowAction {
     CopyName,
     OpenShell,
     PortForward,
+    /// A on a pod: the default container with a terminal (spec 0040).
+    Attach,
     /// Has an unbound key action only: the menu item carries the container it acts on.
     DebugContainer,
     Cordon,
@@ -109,6 +117,9 @@ pub(crate) enum RowAction {
     /// Edit values… of a ConfigMap or Secret (spec 0047); its key is E on those two screens.
     EditValues,
     RestartRollout,
+    /// Have unbound unit actions only: the pod menu and the palette dispatch them (spec 0040).
+    RestartPod,
+    EvictPod,
     Scale,
     Delete,
     PauseRollout,
@@ -216,6 +227,11 @@ impl ResourceAction {
                 ],
                 is_shipped: true,
             },
+            // Like exec: an attach upgrade is `get`, and from Kubernetes 1.35 `create` too (0040).
+            Self::Attach => ActionGate::Mutating {
+                checks: vec![AccessCheck::GetPodAttach, AccessCheck::CreatePodAttach],
+                is_shipped: true,
+            },
             // The node shell creates a privileged pod, attaches to it, and deletes it (spec 0037).
             Self::OpenNodeShell => ActionGate::Mutating {
                 checks: vec![
@@ -288,6 +304,15 @@ impl ResourceAction {
                 checks: vec![AccessCheck::Delete(kind)],
                 is_shipped: true,
             },
+            // The lazy check Delete pod reads, so the two menu items agree (spec 0040).
+            Self::RestartPod => ActionGate::Mutating {
+                checks: vec![AccessCheck::Delete(ObjectKind::Pod)],
+                is_shipped: true,
+            },
+            Self::EvictPod => ActionGate::Mutating {
+                checks: vec![AccessCheck::CreatePodEviction],
+                is_shipped: true,
+            },
             Self::EditHpaRange => ActionGate::Mutating {
                 checks: vec![AccessCheck::PatchHorizontalPodAutoscalers],
                 is_shipped: true,
@@ -316,6 +341,7 @@ impl ResourceAction {
             Self::OpenShell | Self::OpenNodeShell => RowAction::OpenShell,
             Self::DebugContainer => RowAction::DebugContainer,
             Self::PortForward => RowAction::PortForward,
+            Self::Attach => RowAction::Attach,
             Self::Cordon | Self::Uncordon => RowAction::Cordon,
             Self::Drain => RowAction::Drain,
             Self::EditTaints => RowAction::EditTaints,
@@ -326,6 +352,8 @@ impl ResourceAction {
             Self::EditValues(_) => RowAction::EditValues,
             Self::Delete(_) => RowAction::Delete,
             Self::RestartRollout(_) => RowAction::RestartRollout,
+            Self::RestartPod => RowAction::RestartPod,
+            Self::EvictPod => RowAction::EvictPod,
             Self::Scale(_) => RowAction::Scale,
             Self::PauseRollout => RowAction::PauseRollout,
             Self::RollBack => RowAction::RollBack,
@@ -348,6 +376,7 @@ impl RowAction {
             Self::OpenShell => Box::new(OpenShell),
             Self::DebugContainer => Box::new(DebugContainer),
             Self::PortForward => Box::new(PortForward),
+            Self::Attach => Box::new(Attach),
             Self::Cordon => Box::new(Cordon),
             Self::Drain => Box::new(Drain),
             Self::EditTaints => Box::new(EditTaints),
@@ -358,6 +387,8 @@ impl RowAction {
             Self::EditValues => Box::new(EditValues),
             Self::Delete => Box::new(Delete),
             Self::RestartRollout => Box::new(RestartRollout),
+            Self::RestartPod => Box::new(RestartPod),
+            Self::EvictPod => Box::new(EvictPod),
             Self::Scale => Box::new(Scale),
             Self::PauseRollout => Box::new(PauseRollout),
             Self::RollBack => Box::new(RollBack),
@@ -393,12 +424,16 @@ pub(crate) fn is_planned(action: ResourceAction) -> bool {
 /// What an action can do to the cluster; the confirm dialog's button style follows it.
 pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
     match action {
-        ResourceAction::Delete(_) | ResourceAction::Drain => ActionRisk::Destructive,
+        ResourceAction::Delete(_)
+        | ResourceAction::Drain
+        | ResourceAction::RestartPod
+        | ResourceAction::EvictPod => ActionRisk::Destructive,
         // A root shell on the node: the strongest tier, typed in every environment.
         ResourceAction::OpenNodeShell => ActionRisk::Privileged,
         ResourceAction::ViewLogs
         | ResourceAction::OpenShell
         | ResourceAction::PortForward
+        | ResourceAction::Attach
         | ResourceAction::DebugContainer
         | ResourceAction::Cordon
         | ResourceAction::Uncordon
@@ -427,6 +462,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::ViewLogs => "View logs",
         ResourceAction::OpenShell => "Open shell",
         ResourceAction::PortForward => "Port-forward",
+        ResourceAction::Attach => "Attach",
         ResourceAction::OpenNodeShell => "Open node shell",
         ResourceAction::DebugContainer => "Debug container",
         ResourceAction::Cordon => "Cordon",
@@ -440,6 +476,8 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::EditValues(_) => "Edit values",
         ResourceAction::Delete(_) => "Delete",
         ResourceAction::RestartRollout(_) => "Restart rollout",
+        ResourceAction::RestartPod => "Restart pod",
+        ResourceAction::EvictPod => "Evict",
         ResourceAction::Scale(_) => "Scale",
         ResourceAction::PauseRollout => "Pause rollout",
         ResourceAction::RollBack => "Roll back",
@@ -475,6 +513,15 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         },
         RowAction::DebugContainer => {
             matches!(subject, ResourceKey::Pod { .. }).then_some(ResourceAction::DebugContainer)
+        }
+        RowAction::Attach => {
+            matches!(subject, ResourceKey::Pod { .. }).then_some(ResourceAction::Attach)
+        }
+        RowAction::RestartPod => {
+            matches!(subject, ResourceKey::Pod { .. }).then_some(ResourceAction::RestartPod)
+        }
+        RowAction::EvictPod => {
+            matches!(subject, ResourceKey::Pod { .. }).then_some(ResourceAction::EvictPod)
         }
         RowAction::PortForward => match subject {
             ResourceKey::Pod { .. } => true,
@@ -644,6 +691,20 @@ pub(crate) fn key_availability_of(
             Err(reason) => KeyAvailability::Disabled { reason },
         };
     }
+    if matches!(
+        action,
+        ResourceAction::Attach | ResourceAction::RestartPod | ResourceAction::EvictPod
+    ) {
+        // The gate first, then the pod: the reason the user can act on first comes first.
+        return match (action_availability(action, guard), pod) {
+            (ActionAvailability::Disabled { reason }, _) => KeyAvailability::Disabled { reason },
+            (ActionAvailability::Enabled, None) => KeyAvailability::NotOffered,
+            (ActionAvailability::Enabled, Some(pod)) => match pod_state_block(action, pod) {
+                Some(reason) => KeyAvailability::Disabled { reason },
+                None => KeyAvailability::Run(action),
+            },
+        };
+    }
     match action_availability(action, guard) {
         ActionAvailability::Enabled => KeyAvailability::Run(action),
         ActionAvailability::Disabled { reason } => KeyAvailability::Disabled { reason },
@@ -707,6 +768,78 @@ pub(crate) fn debug_targets(pod: &PodSummary) -> impl Iterator<Item = &Container
     pod.containers
         .iter()
         .filter(|container| container.kind != ContainerKind::Init && is_running(container))
+}
+
+/// A static pod (the mirror pod of the kubelet) has a Node as its controller.
+const STATIC_POD_CONTROLLER_KIND: &str = "Node";
+/// The refusal both Restart pod and Evict give a static pod.
+pub(crate) const STATIC_POD_TEXT: &str = "Static pod: the kubelet owns it";
+/// The refusal of a pod whose deletion has started.
+pub(crate) const ALREADY_TERMINATING_TEXT: &str = "Already terminating";
+
+/// Why this pod cannot take `action` (Restart pod or Evict), `None` when it can. Pure: the menus,
+/// the keys, the palette, and the start of the removal all read it.
+pub(crate) fn pod_block(action: ResourceAction, pod: &PodSummary) -> Option<SharedString> {
+    let is_restart = match action {
+        ResourceAction::RestartPod => true,
+        ResourceAction::EvictPod => false,
+        _ => return None,
+    };
+    if is_restart && pod.controller.is_none() {
+        return Some("Not managed by a controller; it would not come back. Use Delete pod…".into());
+    }
+    let is_static = pod
+        .controller
+        .as_ref()
+        .is_some_and(|controller| controller.kind == STATIC_POD_CONTROLLER_KIND);
+    if is_static {
+        return Some(STATIC_POD_TEXT.into());
+    }
+    if pod.status == PodStatus::Terminating {
+        return Some(ALREADY_TERMINATING_TEXT.into());
+    }
+    // A finished pod is not restarted by its Job or ReplicaSet; the eviction API deletes it
+    // without a budget check, so Evict stays allowed.
+    (is_restart && pod.is_finished)
+        .then(|| "The pod has finished; its controller does not restart it".into())
+}
+
+/// What the state of the pod says against `action`, for the pod actions that read it.
+fn pod_state_block(action: ResourceAction, pod: &PodSummary) -> Option<SharedString> {
+    match action {
+        ResourceAction::Attach => default_attach_container(pod).err(),
+        _ => pod_block(action, pod),
+    }
+}
+
+/// Why this container cannot be attached, `None` when it can: it must run, be a main or sidecar
+/// container, and have both stdin and a tty, since the attach drives the terminal.
+pub(crate) fn attach_block(container: &ContainerSummary) -> Option<SharedString> {
+    if !is_running(container) {
+        return Some(NOT_RUNNING_REASON.into());
+    }
+    if container.kind == ContainerKind::Init {
+        return Some("Init containers cannot be attached".into());
+    }
+    (container.terminal == ContainerTerminal::None)
+        .then(|| "The container has no terminal (stdin and tty); use View logs".into())
+}
+
+/// The container A attaches: the first attachable running main container, else the first
+/// attachable running sidecar.
+pub(crate) fn default_attach_container(
+    pod: &PodSummary,
+) -> Result<&ContainerSummary, SharedString> {
+    let mut attachable = pod
+        .containers
+        .iter()
+        .filter(|container| attach_block(container).is_none());
+    let first = attachable.next();
+    let main = first
+        .filter(|container| container.kind == ContainerKind::Main)
+        .or_else(|| attachable.find(|container| container.kind == ContainerKind::Main));
+    main.or(first)
+        .ok_or_else(|| "No running container has a terminal (stdin and tty); use View logs".into())
 }
 
 fn gate_availability(gate: &ActionGate, guard: &ClusterGuard<'_>) -> ActionAvailability {
@@ -839,6 +972,43 @@ pub(crate) struct PodMenuItems {
     pub(crate) port_forward: PopupMenuItem,
 }
 
+/// The entries of the pod menu, in the order they are shown (W4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PodMenuEntry {
+    ViewLogs,
+    OpenShell,
+    /// Absent when the Open shell item holds `Debug container…` in its submenu.
+    DebugContainer,
+    PortForward,
+    Attach,
+    EditYaml,
+    ViewYaml,
+    RestartPod,
+    EvictPod,
+    CopyName,
+    CopyKubectlCommand,
+    DeletePod,
+    Separator,
+}
+
+const POD_MENU: [PodMenuEntry; 15] = [
+    PodMenuEntry::ViewLogs,
+    PodMenuEntry::OpenShell,
+    PodMenuEntry::DebugContainer,
+    PodMenuEntry::PortForward,
+    PodMenuEntry::Attach,
+    PodMenuEntry::Separator,
+    PodMenuEntry::EditYaml,
+    PodMenuEntry::ViewYaml,
+    PodMenuEntry::RestartPod,
+    PodMenuEntry::EvictPod,
+    PodMenuEntry::Separator,
+    PodMenuEntry::CopyName,
+    PodMenuEntry::CopyKubectlCommand,
+    PodMenuEntry::Separator,
+    PodMenuEntry::DeletePod,
+];
+
 /// Shared by the row context menu and the drawer header menu, so both always agree.
 pub(crate) fn pod_menu(
     menu: PopupMenu,
@@ -850,29 +1020,49 @@ pub(crate) fn pod_menu(
 ) -> PopupMenu {
     let shell = links.shell;
     let access = guard.access;
-    let menu = menu.item(items.view_logs).item(items.open_shell);
-    let menu = match items.debug_container {
-        Some(debug_container) => menu.item(debug_container),
-        None => menu,
-    };
-    menu.item(guarded(row, items.port_forward))
-        .item(action_item(
-            ResourceAction::EditYaml(ObjectKind::Pod),
-            guard,
-        ))
-        .item(guarded(
-            row,
-            view_yaml_item(row.object(ResourceKey::of_pod(pod)), shell),
-        ))
-        .separator()
-        .item(copy_name_item(&pod.name, access))
-        .item(copy_kubectl_command_item(&row.context, pod))
-        .separator()
-        .item(delete_item(
-            DeleteLabel::of("Delete pod…", "pods"),
-            action_availability(ResourceAction::Delete(ObjectKind::Pod), guard),
-            shell,
-        ))
+    // Each caller-built item is used once, at its entry.
+    let PodMenuItems {
+        view_logs,
+        open_shell,
+        debug_container,
+        port_forward,
+    } = items;
+    let (mut view_logs, mut open_shell, mut port_forward) =
+        (Some(view_logs), Some(open_shell), Some(port_forward));
+    let mut debug_container = debug_container;
+    POD_MENU.into_iter().fold(menu, |menu, entry| {
+        let item = match entry {
+            PodMenuEntry::Separator => return menu.separator(),
+            PodMenuEntry::ViewLogs => view_logs.take(),
+            PodMenuEntry::OpenShell => open_shell.take(),
+            PodMenuEntry::DebugContainer => debug_container.take(),
+            PodMenuEntry::PortForward => port_forward.take().map(|item| guarded(row, item)),
+            PodMenuEntry::Attach => Some(attach_item(pod, guard)),
+            PodMenuEntry::EditYaml => Some(action_item(
+                ResourceAction::EditYaml(ObjectKind::Pod),
+                guard,
+            )),
+            PodMenuEntry::ViewYaml => Some(guarded(
+                row,
+                view_yaml_item(row.object(ResourceKey::of_pod(pod)), shell),
+            )),
+            PodMenuEntry::RestartPod => {
+                Some(pod_removal_item(ResourceAction::RestartPod, pod, guard))
+            }
+            PodMenuEntry::EvictPod => Some(pod_removal_item(ResourceAction::EvictPod, pod, guard)),
+            PodMenuEntry::CopyName => Some(copy_name_item(&pod.name, access)),
+            PodMenuEntry::CopyKubectlCommand => Some(copy_kubectl_command_item(&row.context, pod)),
+            PodMenuEntry::DeletePod => Some(delete_item(
+                DeleteLabel::of("Delete pod…", "pods"),
+                action_availability(ResourceAction::Delete(ObjectKind::Pod), guard),
+                shell,
+            )),
+        };
+        match item {
+            Some(item) => menu.item(item),
+            None => menu,
+        }
+    })
 }
 
 /// The entries of the container ⋯ menu, in the order they are shown.
@@ -880,17 +1070,19 @@ pub(crate) fn pod_menu(
 enum ContainerMenuEntry {
     ViewLogs,
     OpenShell,
+    Attach,
     CopyImage,
 }
 
-const CONTAINER_MENU: [ContainerMenuEntry; 3] = [
+const CONTAINER_MENU: [ContainerMenuEntry; 4] = [
     ContainerMenuEntry::ViewLogs,
     ContainerMenuEntry::OpenShell,
+    ContainerMenuEntry::Attach,
     ContainerMenuEntry::CopyImage,
 ];
 
-/// The ⋯ menu of the container detail (W4b note 3): View logs, Open shell, Copy image, all for the
-/// shown container. No key hints: L and S act on the pod's default container. Attach is not listed.
+/// The ⋯ menu of the container detail (W4b note 3): View logs, Open shell, Attach, Copy image, all
+/// for the shown container. No key hints: L, S, and A act on the pod's default container.
 pub(crate) fn container_menu(
     menu: PopupMenu,
     pod: &PodSummary,
@@ -913,6 +1105,13 @@ pub(crate) fn container_menu(
             ContainerMenuEntry::OpenShell => menu.item(guarded(
                 row,
                 container_shell_item(pod, container, guard, row, links.shell),
+            )),
+            ContainerMenuEntry::Attach => menu.item(container_attach_item(
+                pod,
+                container,
+                guard,
+                row,
+                links.shell,
             )),
             ContainerMenuEntry::CopyImage => {
                 menu.separator().item(copy_image_item(&container.image))
@@ -946,6 +1145,110 @@ fn container_shell_item(
             })
         }
     }
+}
+
+/// Attach to one named container, through the guarded flow of `start_attach`. The item acts only
+/// while the session `row` was built on is still open (`guarded`), so a menu left open over a
+/// switch does nothing.
+pub(crate) fn container_attach_item(
+    pod: &PodSummary,
+    container: &ContainerSummary,
+    guard: &ClusterGuard<'_>,
+    row: &RowContext,
+    shell: &WeakEntity<AppShell>,
+) -> PopupMenuItem {
+    let label = action_label(ResourceAction::Attach);
+    let item = match container_attach_availability(container, guard) {
+        ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
+        ActionAvailability::Enabled => {
+            let open = ShellOpen {
+                cluster: row.cluster.clone(),
+                namespace: pod.namespace.clone(),
+                pod: pod.name.clone(),
+                short_pod: short_pod_name(pod),
+                container: container.name.clone(),
+            };
+            let (terminal, shell) = (container.terminal, shell.clone());
+            PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                let open = open.clone();
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.start_attach(open, terminal, window, cx)
+                });
+            })
+        }
+    };
+    guarded(row, item)
+}
+
+/// The gate of the session, then the container: one that is not running, is an init container, or
+/// has no terminal cannot be attached.
+pub(crate) fn container_attach_availability(
+    container: &ContainerSummary,
+    guard: &ClusterGuard<'_>,
+) -> ActionAvailability {
+    match action_availability(ResourceAction::Attach, guard) {
+        ActionAvailability::Enabled => match attach_block(container) {
+            Some(reason) => ActionAvailability::Disabled { reason },
+            None => ActionAvailability::Enabled,
+        },
+        disabled => disabled,
+    }
+}
+
+/// Restart pod or Evict in a pod menu: the gate decides first, then the state of the pod. Neither
+/// has a click handler: the menu dispatches the unit action, which runs on the cursor pod. Restart
+/// carries the muted `delete & recreate` (W4).
+fn pod_removal_item(
+    action: ResourceAction,
+    pod: &PodSummary,
+    guard: &ClusterGuard<'_>,
+) -> PopupMenuItem {
+    let label = action_label(action);
+    let availability = match action_availability(action, guard) {
+        ActionAvailability::Enabled => match pod_block(action, pod) {
+            Some(reason) => ActionAvailability::Disabled { reason },
+            None => ActionAvailability::Enabled,
+        },
+        disabled => disabled,
+    };
+    match availability {
+        ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
+        ActionAvailability::Enabled if action == ResourceAction::RestartPod => {
+            PopupMenuItem::element(move |_, cx| {
+                h_flex()
+                    .w_full()
+                    .gap_4()
+                    .justify_between()
+                    .child(label)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("delete & recreate"),
+                    )
+            })
+        }
+        ActionAvailability::Enabled => PopupMenuItem::new(label),
+    }
+    .action(action.row_action().key_action())
+}
+
+/// The Attach item of a pod menu. It has no `on_click`: the menu dispatches the key action, which
+/// runs on the cursor row.
+fn attach_item(pod: &PodSummary, guard: &ClusterGuard<'_>) -> PopupMenuItem {
+    let label = action_label(ResourceAction::Attach);
+    let availability = match action_availability(ResourceAction::Attach, guard) {
+        ActionAvailability::Enabled => match default_attach_container(pod) {
+            Ok(_) => ActionAvailability::Enabled,
+            Err(reason) => ActionAvailability::Disabled { reason },
+        },
+        disabled => disabled,
+    };
+    match availability {
+        ActionAvailability::Enabled => PopupMenuItem::new(label),
+        ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
+    }
+    .action(RowAction::Attach.key_action())
 }
 
 /// The gate of the session, then the container: one that is not running has no shell.

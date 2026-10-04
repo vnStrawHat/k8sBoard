@@ -17,6 +17,7 @@ use futures::channel::oneshot;
 use serde::Serialize;
 
 use crate::app_shell::write_flow::WriteIntent;
+use crate::drain_plan::{BudgetPolicy, DrainOptions};
 use crate::drain_run::{NextStep, NodeSummary, SummaryOutcome};
 use crate::resource_actions::{ResourceAction, action_label};
 use crate::write_guard::{ClusterGuard, WriteLock};
@@ -221,6 +222,7 @@ impl AuditIdentity {
 pub(crate) fn drain_summary_entry(
     identity: &AuditIdentity,
     summary: &NodeSummary,
+    budgets: BudgetPolicy,
     note: Option<&str>,
 ) -> AuditEntry {
     let count = |path: &str, value: usize| AuditField {
@@ -245,6 +247,11 @@ pub(crate) fn drain_summary_entry(
             Some(count("skipped", summary.skipped)),
             // Only a run that ended with a request in the air has an unknown count.
             (summary.unknown > 0).then(|| count("unknown", summary.unknown)),
+            // Only a drain that skipped the budgets says so (kubectl `--disable-eviction`).
+            (budgets == BudgetPolicy::Skip).then(|| AuditField {
+                path: "disable_eviction".to_owned(),
+                value: Some("true".to_owned()),
+            }),
         ]
         .into_iter()
         .flatten()
@@ -266,25 +273,38 @@ pub(crate) fn drain_summary_entry(
 pub(crate) fn drain_in_flight_entry(
     identity: &AuditIdentity,
     step: &NextStep,
-    grace: GracePeriod,
+    options: &DrainOptions,
     note: Option<&str>,
 ) -> Option<AuditEntry> {
     let (action, object, fields) = match step {
-        NextStep::Evict(key) => (
-            "Evict",
-            AuditObject {
+        NextStep::Evict(key) => {
+            let pod = AuditObject {
                 kind: "Pod".to_owned(),
                 namespace: Some(key.namespace.clone()),
                 name: key.name.clone(),
-            },
-            AuditField {
-                path: "pods/eviction".to_owned(),
-                value: Some(match grace {
-                    GracePeriod::PodDefault => "grace pod default".to_owned(),
-                    GracePeriod::Seconds(seconds) => format!("grace {seconds}s"),
-                }),
-            },
-        ),
+            };
+            match options.budgets {
+                BudgetPolicy::Respect => (
+                    "Evict",
+                    pod,
+                    AuditField {
+                        path: "pods/eviction".to_owned(),
+                        value: Some(match options.grace {
+                            GracePeriod::PodDefault => "grace pod default".to_owned(),
+                            GracePeriod::Seconds(seconds) => format!("grace {seconds}s"),
+                        }),
+                    },
+                ),
+                BudgetPolicy::Skip => (
+                    "Delete",
+                    pod,
+                    AuditField {
+                        path: "deleteOptions.propagationPolicy".to_owned(),
+                        value: Some("Background".to_owned()),
+                    },
+                ),
+            }
+        }
         NextStep::Cordon(node) => (
             "Cordon",
             AuditObject {

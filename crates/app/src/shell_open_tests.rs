@@ -11,7 +11,8 @@ use std::time::Duration;
 use cluster::fake_api::{FakeApi, RecordedRequest};
 use cluster::{
     AccessCheck, AccessDecision, AccessReport, AccessReview, ContainerKind, ContainerState,
-    ContainerSummary, NamespaceScope, PodStatus, PodSummary, ReadyCount, StatusReason, WritePolicy,
+    ContainerSummary, ContainerTerminal, NamespaceScope, PodStatus, PodSummary, ReadyCount,
+    StatusReason, WritePolicy,
 };
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::{Cancel, Confirm};
@@ -32,6 +33,7 @@ const NOT_FOUND: &str = r#"{"kind":"Status","apiVersion":"v1","status":"Failure"
 
 fn container(name: &str, kind: ContainerKind, is_running: bool) -> ContainerSummary {
     ContainerSummary {
+        terminal: ContainerTerminal::None,
         name: name.to_owned(),
         image: "img".to_owned(),
         kind,
@@ -60,6 +62,7 @@ fn container(name: &str, kind: ContainerKind, is_running: bool) -> ContainerSumm
 
 fn pod(name: &str, containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),
@@ -137,15 +140,34 @@ fn go_live(
     api
 }
 
+fn with_terminal(mut container: ContainerSummary, terminal: ContainerTerminal) -> ContainerSummary {
+    container.terminal = terminal;
+    container
+}
+
+/// `api-0` has one attachable container; `multi-0` has an attachable sidecar before an
+/// attachable main container whose input closes after one attach.
 fn pods() -> Vec<PodSummary> {
     vec![
-        pod("api-0", vec![container("app", ContainerKind::Main, true)]),
+        pod(
+            "api-0",
+            vec![with_terminal(
+                container("app", ContainerKind::Main, true),
+                ContainerTerminal::Interactive,
+            )],
+        ),
         pod(
             "multi-0",
             vec![
                 container("init", ContainerKind::Init, false),
-                container("proxy", ContainerKind::Sidecar, true),
-                container("web", ContainerKind::Main, true),
+                with_terminal(
+                    container("proxy", ContainerKind::Sidecar, true),
+                    ContainerTerminal::Interactive,
+                ),
+                with_terminal(
+                    container("web", ContainerKind::Main, true),
+                    ContainerTerminal::InteractiveOnce,
+                ),
             ],
         ),
     ]
@@ -865,4 +887,319 @@ fn quitting_writes_the_starts_that_never_reported(cx: &mut TestAppContext) {
     assert_eq!(lines.len(), 2, "written at once, before the process ends");
     assert_eq!(lines[1]["outcome"], "abandoned");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- attach (spec 0040) ----
+
+impl Shells {
+    fn attach(&self, cluster: &ClusterRef, pod: &str, container: &str, cx: &mut TestAppContext) {
+        self.attach_terminal(cluster, pod, container, ContainerTerminal::Interactive, cx);
+    }
+
+    fn attach_terminal(
+        &self,
+        cluster: &ClusterRef,
+        pod: &str,
+        container: &str,
+        terminal: ContainerTerminal,
+        cx: &mut TestAppContext,
+    ) {
+        let open = ShellOpen {
+            cluster: cluster.clone(),
+            namespace: "shop".to_owned(),
+            pod: pod.to_owned(),
+            short_pod: pod.to_owned(),
+            container: container.to_owned(),
+        };
+        self.fixture.with_window(cx, |window, cx| {
+            self.fixture.shell.update(cx, |shell, cx| {
+                shell.start_attach(open, terminal, window, cx);
+            });
+        });
+    }
+
+    fn dialog_warnings(&self, cx: &mut TestAppContext) -> Vec<String> {
+        self.dialog(cx).read_with(cx, |dialog, _| {
+            dialog
+                .warning_lines()
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect()
+        })
+    }
+}
+
+fn attach_requests(api: &FakeApi) -> Vec<RecordedRequest> {
+    api.requests()
+        .into_iter()
+        .filter(|request| request.path.ends_with("/attach"))
+        .collect()
+}
+
+#[gpui_kit::test]
+fn attach_follows_the_0030_gate_and_tier(cx: &mut TestAppContext) {
+    let shells = two_clusters("attach-gate", cx);
+    let prod_api = shells.activate(&shells.prod, cx);
+    // Locked at open: no dialog.
+    shells.attach(&shells.prod, "api-0", "app", cx);
+    assert!(!shells.has_dialog(cx));
+    // Unlocked on a Production cluster: the cluster name is typed, the warning is shown, and the
+    // dialog says a dry-run is not supported.
+    shells.set_lock(&shells.prod, WriteLock::Unlocked, cx);
+    shells.attach(&shells.prod, "api-0", "app", cx);
+    assert!(shells.has_dialog(cx));
+    let dialog = shells.dialog(cx);
+    let (tier, dry_run) = dialog.read_with(cx, |dialog, _| {
+        (dialog.tier().clone(), dialog.dry_run_state())
+    });
+    assert_eq!(
+        tier,
+        DialogConfirm::TypeName {
+            expected: "prod-a".to_owned()
+        }
+    );
+    assert_eq!(dry_run, Some(DryRunState::NotSupported));
+    assert_eq!(
+        shells.dialog_warnings(cx),
+        [
+            "What you type goes to the main process of app; Ctrl C, Ctrl D or exit may stop it, \
+             and the container restarts."
+        ]
+    );
+    shells.press_dialog(Cancel, cx);
+    // A denied verb of the pair refuses the start.
+    shells.set_access(
+        &shells.prod,
+        report_denying(&[AccessCheck::CreatePodAttach]),
+        cx,
+    );
+    shells.attach(&shells.prod, "api-0", "app", cx);
+    assert!(!shells.has_dialog(cx));
+    assert!(attach_requests(&prod_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn attach_to_a_stdin_once_container_adds_its_warning(cx: &mut TestAppContext) {
+    let shells = two_clusters("attach-once", cx);
+    shells.attach_terminal(
+        &shells.stg,
+        "multi-0",
+        "web",
+        ContainerTerminal::InteractiveOnce,
+        cx,
+    );
+    let warnings = shells.dialog_warnings(cx);
+    assert_eq!(warnings.len(), 2);
+    assert!(
+        warnings[0].contains("Ctrl C, Ctrl D or exit"),
+        "{warnings:?}"
+    );
+    assert_eq!(
+        warnings[1],
+        "This container closes its input after one attach (stdinOnce): closing the tab ends its \
+         process."
+    );
+}
+
+#[gpui_kit::test]
+fn a_attaches_the_default_container_in_the_pods_own_cluster(cx: &mut TestAppContext) {
+    let shells = two_clusters("attach-key", cx);
+    let object = ClusterObject::new(
+        shells.stg.clone(),
+        ResourceKey::Pod {
+            namespace: "shop".to_owned(),
+            name: "multi-0".to_owned(),
+        },
+    );
+    shells
+        .fixture
+        .shell
+        .update(cx, |shell, cx| shell.change_selection(Some(object), cx));
+    cx.run_until_parked();
+    shells.fixture.with_window(cx, |window, cx| {
+        window.dispatch_action(Box::new(crate::keymap::Attach), cx);
+    });
+    assert!(shells.has_dialog(cx));
+    shells.confirm(cx);
+    assert_eq!(shells.tabs_of(&shells.stg, cx), 1);
+    assert_eq!(shells.tabs_of(&shells.prod, cx), 0);
+    let tab = shells.tabs(cx).remove(0);
+    let (kind, container, label) = tab.read_with(cx, |tab, _| {
+        (
+            tab.kind().clone(),
+            tab.target().container.clone(),
+            tab.label(),
+        )
+    });
+    // The main container, not the sidecar before it.
+    assert_eq!(kind, ShellKind::Attach);
+    assert_eq!(container, "web");
+    assert_eq!(label, "attach · multi-0/web");
+}
+
+#[gpui_kit::test]
+fn a_says_why_when_no_container_has_a_terminal(cx: &mut TestAppContext) {
+    let shells = two_clusters("attach-none", cx);
+    let stg = shells.stg.clone();
+    let session = slot_session(&shells.fixture, &stg, cx);
+    session.update(cx, |session, cx| {
+        session.set_pods_for_test(
+            vec![pod(
+                "plain-0",
+                vec![container("app", ContainerKind::Main, true)],
+            )],
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let object = ClusterObject::new(
+        stg,
+        ResourceKey::Pod {
+            namespace: "shop".to_owned(),
+            name: "plain-0".to_owned(),
+        },
+    );
+    shells
+        .fixture
+        .shell
+        .update(cx, |shell, cx| shell.change_selection(Some(object), cx));
+    cx.run_until_parked();
+    shells.fixture.with_window(cx, |window, cx| {
+        window.dispatch_action(Box::new(crate::keymap::Attach), cx);
+    });
+    assert!(!shells.has_dialog(cx));
+    assert_eq!(shells.tab_count(cx), 0);
+}
+
+#[gpui_kit::test]
+fn attach_audits_one_line_per_start(cx: &mut TestAppContext) {
+    let shells = two_clusters("attach-audit", cx);
+    let dir = shells.audit_folder("attach-audit", cx);
+    shells.attach(&shells.stg, "multi-0", "web", cx);
+    shells.confirm(cx);
+    // The fake answers the pod read with 404, so the start fails and says why.
+    shells.wait_for("the failed line", cx, || !audit_lines(&dir).is_empty());
+    let tab = shells.tabs(cx).remove(0);
+    tab.update(cx, |tab, cx| {
+        tab.mark_start_unreported_for_test();
+        tab.apply(cluster::ShellUpdate::Started, cx);
+    });
+    shells.wait_for("the applied line", cx, || audit_lines(&dir).len() == 2);
+    // A start whose tab is closed before it reports is abandoned.
+    shells.fixture.shell.update(cx, |shell, cx| {
+        shell.begin_shell_start(&tab, ShellCommand::Auto, cx);
+    });
+    drop(tab);
+    shells.fixture.shell.update(cx, |shell, cx| {
+        shell.dock.update(cx, |dock, cx| dock.close_all(cx));
+    });
+    shells.wait_for("the abandoned line", cx, || audit_lines(&dir).len() == 3);
+    let lines = audit_lines(&dir);
+    let outcomes: Vec<&str> = lines
+        .iter()
+        .map(|line| line["outcome"].as_str().expect("an outcome"))
+        .collect();
+    assert_eq!(outcomes, ["failed", "applied", "abandoned"]);
+    for line in &lines {
+        assert_eq!(line["action"], "Attach");
+        assert_eq!(line["cluster"], "stg-b");
+        assert_eq!(line["object"]["kind"], "Pod");
+        assert_eq!(line["object"]["name"], "multi-0");
+        let fields = line["fields"].as_array().expect("fields");
+        assert_eq!(fields.len(), 1, "the container only, never stream bytes");
+        assert_eq!(fields[0]["path"], "container");
+        assert_eq!(fields[0]["value"], "web");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn attach_after_a_switch_opens_nothing(cx: &mut TestAppContext) {
+    let shells = two_clusters("attach-switch", cx);
+    let dir = shells.audit_folder("attach-switch", cx);
+    shells.attach(&shells.stg, "api-0", "app", cx);
+    assert!(shells.has_dialog(cx));
+    // The dialog stands on stg-b; the user switches to prod-a, then confirms.
+    let prod_api = shells.activate(&shells.prod, cx);
+    shells.confirm(cx);
+    assert_eq!(shells.tab_count(cx), 0);
+    assert!(
+        attach_requests(&prod_api).is_empty(),
+        "nothing reached prod-a"
+    );
+    assert!(attach_requests(&shells.stg_api).is_empty());
+    assert!(audit_lines(&dir).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn a_held_enter_never_confirms_an_attach(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    let shells = two_clusters("attach-held", cx);
+    shells.attach(&shells.stg, "api-0", "app", cx);
+    shells
+        .fixture
+        .with_window(cx, |window, cx| window.render_frame(cx));
+    shells.send_enter(true, cx);
+    shells.send_enter(true, cx);
+    assert!(shells.has_dialog(cx), "a held Enter keeps the dialog open");
+    assert_eq!(shells.tab_count(cx), 0);
+    shells.send_enter(false, cx);
+    assert!(!shells.has_dialog(cx));
+    assert_eq!(shells.tab_count(cx), 1, "a fresh Enter confirms");
+}
+
+#[gpui_kit::test]
+fn container_attach_item_is_inert_after_a_switch(cx: &mut TestAppContext) {
+    use crate::resource_actions::container_attach_item;
+    use crate::row_context::RowContext;
+    use crate::write_guard::test_guard;
+    use gpui_kit::component::menu::PopupMenuItem;
+
+    let shells = two_clusters("attach-item", cx);
+    let stg = shells.stg.clone();
+    // Weak, and no strong handle kept: the test must not keep the session alive itself.
+    let session = slot_session(&shells.fixture, &stg, cx).downgrade();
+    let row = RowContext {
+        cluster: stg.clone(),
+        context: "stg-b".to_owned(),
+        session,
+    };
+    let access = AccessState::Known(report_denying(&[]));
+    let guard = test_guard(
+        &access,
+        WriteLock::Unlocked,
+        "stg-b",
+        crate::environment::Environment::Staging,
+    );
+    let attachable = pods().remove(0);
+    let item = container_attach_item(
+        &attachable,
+        &attachable.containers[0],
+        &guard,
+        &row,
+        &shells.fixture.shell.downgrade(),
+    );
+    let PopupMenuItem::Item {
+        handler: Some(click),
+        ..
+    } = &item
+    else {
+        panic!("an enabled attach item has a click handler");
+    };
+    let click_it = |cx: &mut TestAppContext| {
+        shells.fixture.with_window(cx, |window, cx| {
+            click(&gpui_kit::ClickEvent::default(), window, cx);
+        });
+    };
+    // The session of the menu is the open one: the click asks.
+    click_it(cx);
+    assert!(shells.has_dialog(cx));
+    shells.press_dialog(Cancel, cx);
+    // A to B to A: the session the menu was built on is released, so the same item does nothing.
+    shells.activate(&shells.prod, cx);
+    shells.activate(&stg, cx);
+    click_it(cx);
+    assert!(!shells.has_dialog(cx));
+    assert_eq!(shells.tab_count(cx), 0);
 }

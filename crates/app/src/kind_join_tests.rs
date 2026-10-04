@@ -31,6 +31,7 @@ fn service(selector: &[&str]) -> ServiceSummary {
 
 fn pod(namespace: &str, name: &str, labels: &[&str]) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
         status: cluster::PodStatus::Reason(StatusReason::Running),
@@ -529,6 +530,7 @@ fn selector_less_service_matches_no_pods() {
 
 fn container(kind: ContainerKind) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: "main".to_owned(),
         image: "registry/app:1".to_owned(),
         kind,

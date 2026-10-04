@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use cluster::GracePeriod;
+
 use super::*;
 use crate::write_guard::ActionRisk;
 
@@ -35,6 +37,14 @@ fn a_cordon_write_cordons_the_node_of_its_own_cluster() {
     assert!(cordon_write(scope, "a/../b").is_none());
 }
 
+fn options(budgets: BudgetPolicy, grace: GracePeriod) -> DrainOptions {
+    DrainOptions {
+        budgets,
+        grace,
+        ..DrainOptions::default()
+    }
+}
+
 #[test]
 fn an_eviction_write_is_pinned_to_the_uid_and_destructive() {
     let cluster = cluster();
@@ -42,10 +52,12 @@ fn an_eviction_write_is_pinned_to_the_uid_and_destructive() {
         cluster: &cluster,
         cluster_name: "prod-a",
     };
-    let intent = evict_write(scope, &pod("u-1"), GracePeriod::Seconds(30)).expect("a valid pod");
+    let respect = options(BudgetPolicy::Respect, GracePeriod::Seconds(30));
+    let intent = removal_write(scope, &pod("u-1"), &respect).expect("a valid pod");
     assert_eq!(intent.label, "Evict pod payments/api-1");
     assert_eq!(intent.button, "Evict");
     assert_eq!(intent.risk, ActionRisk::Destructive);
+    assert_eq!(intent.action, ResourceAction::Drain);
     assert_eq!(intent.cluster, cluster);
     let WriteOperation::EvictPod { uid, grace } = intent.request.operation() else {
         panic!("expected EvictPod");
@@ -53,5 +65,30 @@ fn an_eviction_write_is_pinned_to_the_uid_and_destructive() {
     assert_eq!(uid, "u-1");
     assert_eq!(*grace, GracePeriod::Seconds(30));
     // Without a uid the eviction could hit a recreated pod.
-    assert!(evict_write(scope, &pod(""), GracePeriod::PodDefault).is_none());
+    assert!(removal_write(scope, &pod(""), &DrainOptions::default()).is_none());
+}
+
+#[test]
+fn removal_write_follows_the_budget_policy() {
+    let cluster = cluster();
+    let scope = DrainScope {
+        cluster: &cluster,
+        cluster_name: "prod-a",
+    };
+    // A delete takes no grace, so the grace choice never reaches the request.
+    let skip = options(BudgetPolicy::Skip, GracePeriod::Seconds(30));
+    let intent = removal_write(scope, &pod("u-1"), &skip).expect("a valid pod");
+    assert_eq!(intent.label, "Delete pod payments/api-1");
+    assert_eq!(intent.button, "Delete");
+    assert_eq!(intent.risk, ActionRisk::Destructive);
+    assert_eq!(intent.action, ResourceAction::Drain);
+    assert_eq!(
+        intent.request.operation(),
+        &WriteOperation::DeleteObject {
+            uid: "u-1".to_owned(),
+            propagation: DeletePropagation::Background,
+        }
+    );
+    // Still pinned to the uid.
+    assert!(removal_write(scope, &pod(""), &skip).is_none());
 }

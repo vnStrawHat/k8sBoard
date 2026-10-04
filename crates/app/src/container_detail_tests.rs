@@ -8,6 +8,7 @@ fn at(seconds: i64) -> jiff::Timestamp {
 
 fn container() -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: "api".to_owned(),
         image: "img".to_owned(),
         kind: ContainerKind::Main,
@@ -586,6 +587,7 @@ fn state_text_running_includes_started_age() {
 #[test]
 fn resource_rows_add_usage_rows_for_missing_cpu_and_memory() {
     let mut container = ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         resources: vec![resource("ephemeral-storage", Some("1Gi"), None)],
         ..container()
     };
@@ -612,6 +614,7 @@ fn resource_rows_add_usage_rows_for_missing_cpu_and_memory() {
 #[test]
 fn resource_rows_keep_the_order_when_nothing_is_added() {
     let container = ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         resources: vec![
             resource("memory", None, Some("1Gi")),
             resource("cpu", Some("1"), None),

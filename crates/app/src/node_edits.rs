@@ -33,6 +33,11 @@ const EFFECTS: [&str; 3] = ["NoSchedule", "PreferNoSchedule", "NoExecute"];
 const NO_EXECUTE: &str = "NoExecute";
 pub(crate) const NO_EXECUTE_WARNING: &str = "NoExecute evicts pods that do not tolerate it";
 const NO_CHANGES: &str = "No changes";
+const INVALID_LABEL: &str = "A key or value is not valid for Kubernetes (letters, digits, - _ .)";
+/// What a bulk label edit adds to its confirm when it removes a key: node labels drive where
+/// DaemonSets place their pods.
+const REMOVED_LABEL_WARNING: &str =
+    "Removing a label can make DaemonSets that select nodes by it delete their pods on these nodes";
 
 /// A taint the editor must keep and never let the user change.
 pub(crate) fn is_system_taint(key: &str) -> bool {
@@ -192,9 +197,7 @@ pub(crate) fn taint_intent(
             resource_version: edit.resource_version.clone(),
         },
     )
-    .ok_or_else(|| {
-        SharedString::from("A key or value is not valid for Kubernetes (letters, digits, - _ .)")
-    })?;
+    .ok_or_else(|| SharedString::from(INVALID_LABEL))?;
     let (risk, warnings) = if adds_no_execute {
         (ActionRisk::Destructive, vec![NO_EXECUTE_WARNING.into()])
     } else {
@@ -270,9 +273,7 @@ pub(crate) fn label_intent(
         node_target(node)?,
         WriteOperation::SetNodeLabels { changes },
     )
-    .ok_or_else(|| {
-        SharedString::from("A key or value is not valid for Kubernetes (letters, digits, - _ .)")
-    })?;
+    .ok_or_else(|| SharedString::from(INVALID_LABEL))?;
     Ok(WriteIntent {
         cluster: scope.cluster.clone(),
         cluster_name: scope.cluster_name.to_owned().into(),
@@ -328,6 +329,121 @@ impl CordonMode {
 pub(crate) struct TickedNode {
     pub(crate) name: String,
     pub(crate) scheduling: NodeScheduling,
+    /// The `key=value` terms of the node's labels, as `NodeSummary.labels` has them.
+    pub(crate) labels: Vec<String>,
+}
+
+impl TickedNode {
+    fn label(&self, key: &str) -> Option<&str> {
+        self.labels.iter().find_map(|term| {
+            let (name, value) = term.split_once('=').unwrap_or((term.as_str(), ""));
+            (name == key).then_some(value)
+        })
+    }
+}
+
+/// Bulk Edit labels of the ticked nodes of one cluster: one 0032 batch with one item per node,
+/// each carrying only the changes that are not already true there. A node with nothing left is
+/// skipped. `Err` is why the batch cannot go (the first failing check wins).
+pub(crate) fn label_batch(
+    scope: &NodeScope<'_>,
+    nodes: &[TickedNode],
+    changes: &[LabelChange],
+) -> Result<BatchIntent, SharedString> {
+    if changes.is_empty() {
+        return Err(NO_CHANGES.into());
+    }
+    let changes: Vec<LabelChange> = changes
+        .iter()
+        .map(|change| LabelChange {
+            key: change.key.trim().to_owned(),
+            value: change.value.as_deref().map(|value| value.trim().to_owned()),
+        })
+        .collect();
+    let mut seen = HashSet::new();
+    for change in &changes {
+        if change.key.is_empty() {
+            return Err("Enter a key for every label".into());
+        }
+        if !seen.insert(change.key.as_str()) {
+            return Err(format!("{} is listed twice", change.key).into());
+        }
+    }
+    if let Some(change) = changes.iter().find(|change| is_kubelet_label(&change.key)) {
+        return Err(format!("{} is set by the kubelet", change.key).into());
+    }
+    // The write path decides what a valid key and value are; any node name fits for the check.
+    let is_valid = WriteRequest::new(
+        node_target("node")?,
+        WriteOperation::SetNodeLabels {
+            changes: changes.clone(),
+        },
+    )
+    .is_some();
+    if !is_valid {
+        return Err(INVALID_LABEL.into());
+    }
+    let (mut items, mut skipped) = (Vec::new(), Vec::new());
+    for node in nodes {
+        let mut own: Vec<LabelChange> = changes
+            .iter()
+            .filter(|change| match &change.value {
+                Some(value) => node.label(&change.key) != Some(value.as_str()),
+                None => node.label(&change.key).is_some(),
+            })
+            .cloned()
+            .collect();
+        if own.is_empty() {
+            skipped.push(SkippedItem {
+                object: node.name.clone().into(),
+                reason: "already labelled".into(),
+            });
+            continue;
+        }
+        own.sort_by(|left, right| left.key.cmp(&right.key));
+        let request = WriteRequest::new(
+            node_target(&node.name)?,
+            WriteOperation::SetNodeLabels { changes: own },
+        )
+        .ok_or_else(|| SharedString::from(INVALID_LABEL))?;
+        items.push(BatchItem {
+            object: node.name.clone().into(),
+            label: format!("Edit labels of node {}", node.name).into(),
+            request,
+        });
+    }
+    if items.is_empty() {
+        return Err("All selected nodes already have these labels".into());
+    }
+    let label = match items.len() {
+        1 => "Edit labels of 1 node".to_owned(),
+        count => format!("Edit labels of {count} nodes"),
+    };
+    let warnings = changes
+        .iter()
+        .any(|change| change.value.is_none())
+        .then(|| SharedString::from(REMOVED_LABEL_WARNING))
+        .into_iter()
+        .collect();
+    Ok(BatchIntent {
+        cluster: scope.cluster.clone(),
+        cluster_name: scope.cluster_name.to_owned().into(),
+        action: ResourceAction::EditLabels,
+        label: label.into(),
+        verb: "Edit labels".into(),
+        button: "Edit labels".into(),
+        risk: action_risk(ResourceAction::EditLabels),
+        warnings,
+        // A bulk names no single object: the TypeName tier types the cluster name.
+        expected_name: None,
+        plan: BatchPlan {
+            cluster: scope.cluster.clone(),
+            items,
+            skipped,
+            extras: BatchExtras::None,
+            on_failure: BatchFailure::Continue,
+        },
+    })
 }
 
 /// Bulk Cordon or Uncordon of the ticked nodes of one cluster, as a 0032 batch of the 0030

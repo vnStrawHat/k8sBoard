@@ -11,6 +11,7 @@ fn terms(items: &[&str]) -> Vec<String> {
 
 fn container(kind: ContainerKind, ports: &[(Option<&str>, u16)]) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: "c".to_owned(),
         image: "img".to_owned(),
         kind,
@@ -45,6 +46,7 @@ fn pod(
     containers: Vec<ContainerSummary>,
 ) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),

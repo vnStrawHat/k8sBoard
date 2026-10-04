@@ -12,7 +12,8 @@ use gpui_kit::SharedString;
 
 use crate::app_shell::write_flow::{CheckedWriteError, Confirmed, write_error_text};
 use crate::drain_plan::{
-    DrainOptions, PodKey, PodVerdict, SkipReason, pod_count, run_verdict, timeout_text,
+    BudgetPolicy, DrainOptions, PodKey, PodVerdict, SkipReason, pod_count, run_verdict,
+    timeout_text,
 };
 use crate::status_tone::StatusTone;
 
@@ -597,6 +598,8 @@ pub(crate) enum NodeState {
     Evicting {
         gone: usize,
         total: usize,
+        /// `Skip` reads `Deleting`: the pods are deleted, not evicted.
+        budgets: BudgetPolicy,
     },
     Drained,
     Stuck(SharedString),
@@ -609,7 +612,16 @@ impl NodeState {
         match self {
             Self::Waiting => "Waiting".to_owned(),
             Self::Cordoning => "Cordoning".to_owned(),
-            Self::Evicting { gone, total } => format!("Evicting {gone}/{total}"),
+            Self::Evicting {
+                gone,
+                total,
+                budgets: BudgetPolicy::Respect,
+            } => format!("Evicting {gone}/{total}"),
+            Self::Evicting {
+                gone,
+                total,
+                budgets: BudgetPolicy::Skip,
+            } => format!("Deleting {gone}/{total}"),
             Self::Drained => "Drained".to_owned(),
             Self::Stuck(_) => "Stuck".to_owned(),
             Self::Cancelled => "Cancelled".to_owned(),
@@ -650,7 +662,11 @@ impl DrainRun {
             None if !self.to_cordon.is_empty() => NodeState::Cordoning,
             None if is_current => {
                 let (gone, total) = node.progress();
-                NodeState::Evicting { gone, total }
+                NodeState::Evicting {
+                    gone,
+                    total,
+                    budgets: self.options.budgets,
+                }
             }
             None => NodeState::Waiting,
         }
@@ -686,7 +702,7 @@ impl DrainRun {
             .pods
             .iter()
             .map(|pod| {
-                let (text, tone) = pod_text(&pod.progress, now);
+                let (text, tone) = pod_text(&pod.progress, now, self.options.budgets);
                 let rank = match tone {
                     StatusTone::Bad => 0,
                     StatusTone::Warn => 1,
@@ -807,7 +823,7 @@ impl NodeRun {
 }
 
 /// The state text of a pod and its tone.
-fn pod_text(progress: &PodProgress, now: Duration) -> (String, StatusTone) {
+fn pod_text(progress: &PodProgress, now: Duration, budgets: BudgetPolicy) -> (String, StatusTone) {
     match progress {
         PodProgress::Pending => ("Waiting".to_owned(), StatusTone::Done),
         PodProgress::Refused {
@@ -816,12 +832,24 @@ fn pod_text(progress: &PodProgress, now: Duration) -> (String, StatusTone) {
             message,
         } => {
             let seconds = retry_at.saturating_sub(now).as_secs();
+            // A delete asks no budget: its refusal is the API's own rate limiting.
+            let by = match budgets {
+                BudgetPolicy::Respect => " by PDB",
+                BudgetPolicy::Skip => "",
+            };
             (
-                format!("Refused by PDB: {message} · retry in {seconds} s (attempt {attempt})"),
+                format!("Refused{by}: {message} · retry in {seconds} s (attempt {attempt})"),
                 StatusTone::Warn,
             )
         }
-        PodProgress::Evicted => ("Evicting…".to_owned(), StatusTone::Info),
+        PodProgress::Evicted => (
+            match budgets {
+                BudgetPolicy::Respect => "Evicting…",
+                BudgetPolicy::Skip => "Deleting…",
+            }
+            .to_owned(),
+            StatusTone::Info,
+        ),
         PodProgress::Awaited => ("Terminating".to_owned(), StatusTone::Info),
         PodProgress::Gone => ("Gone".to_owned(), StatusTone::Ok),
         PodProgress::Failed(error) => (format!("Failed: {error}"), StatusTone::Bad),

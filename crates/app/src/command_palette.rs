@@ -922,13 +922,16 @@ fn row_action_icon(action: RowAction) -> IconName {
         RowAction::ViewLogs => IconName::FileText,
         RowAction::ViewYaml => IconName::Eye,
         RowAction::CopyName => IconName::Copy,
-        RowAction::OpenShell | RowAction::DebugContainer => IconName::SquareTerminal,
+        RowAction::OpenShell | RowAction::DebugContainer | RowAction::Attach => {
+            IconName::SquareTerminal
+        }
         RowAction::PortForward => IconName::Network,
         RowAction::Cordon => IconName::Ban,
         RowAction::Drain => IconName::ArrowDown,
         RowAction::EditTaints | RowAction::EditLabels => IconName::Replace,
         RowAction::EditYaml | RowAction::EditValues => IconName::Replace,
-        RowAction::RestartRollout => IconName::RotateCw,
+        RowAction::RestartRollout | RowAction::RestartPod => IconName::RotateCw,
+        RowAction::EvictPod => IconName::LogOut,
         RowAction::Scale => IconName::ChevronsUpDown,
         RowAction::Delete => IconName::Delete,
         RowAction::PauseRollout => IconName::Pause,

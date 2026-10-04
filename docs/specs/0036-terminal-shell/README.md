@@ -11,7 +11,7 @@ Status: steps 1 to 4 built (lane W2, branch `spec-0036-3`); the allowed path awa
 
 ## Non-goals
 
-Node shell and debug containers (0037); Attach (ownership moves out of 0036 to a later item); Settings › Terminal & Shell (W2 draws no content); click reporting to programs; IME composition; OSC 52 clipboard access; session recording or saved scrollback; automatic reconnect; port-forward (0035, which reuses the `ws` feature).
+Node shell and debug containers (0037); Attach (0040); Settings › Terminal & Shell (W2 draws no content); click reporting to programs; IME composition; OSC 52 clipboard access; session recording or saved scrollback; automatic reconnect; port-forward (0035, which reuses the `ws` feature).
 
 ## Implementation steps
 

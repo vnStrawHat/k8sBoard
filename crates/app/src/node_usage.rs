@@ -205,6 +205,7 @@ mod tests {
 
     fn container(kind: ContainerKind, requests: &[(&str, &str)]) -> ContainerSummary {
         ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
             name: "c".to_owned(),
             image: "img".to_owned(),
             kind,
@@ -237,6 +238,7 @@ mod tests {
         containers: Vec<ContainerSummary>,
     ) -> PodSummary {
         PodSummary {
+            is_finished: false,
             namespace: "ns".to_owned(),
             name: "p".to_owned(),
             status: PodStatus::Reason(reason),

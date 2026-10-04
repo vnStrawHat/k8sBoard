@@ -8,8 +8,9 @@
 //! guard, connection, lock, and tier from that cluster's own slot, never from the primary.
 
 use cluster::{
-    ClusterConnection, ClusterError, DeletePropagation, HELM_RELEASE_SECRET_TYPE, ObjectIdentity,
-    ObjectKind, ObjectRef, WriteEffect, WriteError, WriteOperation, WriteOutcome, WriteRequest,
+    ClusterConnection, ClusterError, ControllerRef, DeletePropagation, GracePeriod,
+    HELM_RELEASE_SECRET_TYPE, ObjectIdentity, ObjectKind, ObjectRef, WriteEffect, WriteError,
+    WriteOperation, WriteOutcome, WriteRequest,
 };
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
@@ -29,8 +30,8 @@ use crate::cluster_session::{CompanionLists, LiveCluster, error_text};
 use crate::environment::Environment;
 use crate::kind_row::KindObject;
 use crate::resource_actions::{
-    ActionAvailability, ResourceAction, action_availability, action_label, action_risk,
-    delete_kind, unavailable_text,
+    ALREADY_TERMINATING_TEXT, ActionAvailability, ResourceAction, action_availability,
+    action_label, action_risk, delete_kind, pod_block, unavailable_text,
 };
 use crate::row_selection::{BulkButton, BulkState};
 use crate::table_selection::{ClusterObject, ResourceKey};
@@ -44,6 +45,27 @@ pub(crate) const HELM_RECORD_REASON: &str =
 const RECREATED_TEXT: &str = "A new object with this name exists; nothing was deleted";
 /// The most finalizer names a line spells out before it counts the rest.
 const FINALIZER_NAMES: usize = 3;
+
+/// What one pass of the 0033 start removes a pod or an object with: a delete, a restart (a delete of
+/// a controller-owned pod), or an eviction (spec 0040). All three read the uid first and pin their
+/// request to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Removal {
+    Delete,
+    Restart,
+    Evict,
+}
+
+impl Removal {
+    /// The action whose gate, risk, and label the removal of an object of `kind` carries.
+    fn action(self, kind: ObjectKind) -> ResourceAction {
+        match self {
+            Self::Delete => ResourceAction::Delete(kind),
+            Self::Restart => ResourceAction::RestartPod,
+            Self::Evict => ResourceAction::EvictPod,
+        }
+    }
+}
 
 // ---- Scope ----
 
@@ -76,7 +98,7 @@ pub(crate) fn delete_scope(
 pub(crate) enum TargetFacts {
     Plain,
     Pod {
-        has_controller: bool,
+        controller: Option<ControllerRef>,
     },
     /// A persistent volume: whether its reclaim policy deletes the storage asset.
     Volume {
@@ -111,15 +133,18 @@ impl DeleteTarget {
         object_text(&self.object)
     }
 
-    /// `None` when the object cannot form a request (a name that is not a path segment).
-    fn request(&self, propagation: DeletePropagation) -> Option<WriteRequest> {
-        WriteRequest::new(
-            self.object.clone(),
-            WriteOperation::DeleteObject {
-                uid: self.identity.uid.clone(),
-                propagation,
+    /// `None` when the object cannot form a request (a name that is not a path segment). A restart
+    /// is a delete by definition; an eviction asks the budgets first.
+    fn request(&self, removal: Removal, propagation: DeletePropagation) -> Option<WriteRequest> {
+        let uid = self.identity.uid.clone();
+        let operation = match removal {
+            Removal::Delete | Removal::Restart => WriteOperation::DeleteObject { uid, propagation },
+            Removal::Evict => WriteOperation::EvictPod {
+                uid,
+                grace: GracePeriod::PodDefault,
             },
-        )
+        };
+        WriteRequest::new(self.object.clone(), operation)
     }
 }
 
@@ -133,6 +158,7 @@ fn object_text(object: &ObjectRef) -> SharedString {
 /// What a delete adds to the batch (decisions 19 and 20).
 #[derive(Clone)]
 pub(crate) struct DeleteExtras {
+    pub(crate) removal: Removal,
     pub(crate) propagation: DeletePropagation,
     pub(crate) kind: ObjectKind,
     /// The objects the items are built from, so a propagation change can rebuild them.
@@ -145,16 +171,22 @@ pub(crate) struct DeleteExtras {
 /// refuses those before it reads their identity).
 pub(crate) fn delete_items(
     targets: &[DeleteTarget],
+    removal: Removal,
     propagation: DeletePropagation,
 ) -> Vec<BatchItem> {
     let kind_word = |target: &DeleteTarget| target.object.kind_name().to_ascii_lowercase();
     targets
         .iter()
         .filter_map(|target| {
+            let label = match removal {
+                Removal::Delete => format!("Delete {} {}", kind_word(target), target.text()),
+                Removal::Restart => format!("Restart pod {}", target.text()),
+                Removal::Evict => format!("Evict pod {}", target.text()),
+            };
             Some(BatchItem {
                 object: target.text(),
-                label: format!("Delete {} {}", kind_word(target), target.text()).into(),
-                request: target.request(propagation)?,
+                label: label.into(),
+                request: target.request(removal, propagation)?,
             })
         })
         .collect()
@@ -181,23 +213,35 @@ pub(crate) fn delete_batch(
     extras: DeleteExtras,
     now: jiff::Timestamp,
 ) -> BatchIntent {
-    let items = delete_items(&extras.targets, extras.propagation);
+    let removal = extras.removal;
+    let items = delete_items(&extras.targets, removal, extras.propagation);
     let kind = extras.kind;
-    let label = format!("Delete {}", kind_noun(kind, items.len()));
+    let action = removal.action(kind);
+    let (label, verb) = match removal {
+        Removal::Delete => (format!("Delete {}", kind_noun(kind, items.len())), "Delete"),
+        Removal::Restart => ("Restart pod".to_owned(), "Restart"),
+        Removal::Evict => ("Evict pod".to_owned(), "Evict"),
+    };
     let expected_name = match (items.as_slice(), extras.targets.as_slice()) {
         ([_], [target]) => Some(target.object.name().to_owned()),
         _ => None,
     };
-    let mut warnings = kind_warnings(kind, &extras.targets);
+    // The kind table is the warnings of a delete; a restart or an eviction has its own lines, so
+    // the bare-pod line of an eviction shows once.
+    let mut warnings = match removal {
+        Removal::Delete => kind_warnings(kind, &extras.targets),
+        Removal::Restart | Removal::Evict => Vec::new(),
+    };
     warnings.extend(finalizer_lines(&extras.targets, now));
+    warnings.extend(removal_warnings(removal, &extras.targets));
     BatchIntent {
         cluster: cluster.clone(),
         cluster_name: cluster_name.to_owned().into(),
-        action: ResourceAction::Delete(kind),
+        action,
         label: label.into(),
-        verb: "Delete".into(),
-        button: action_label(ResourceAction::Delete(kind)).into(),
-        risk: action_risk(ResourceAction::Delete(kind)),
+        verb: verb.into(),
+        button: action_label(action).into(),
+        risk: action_risk(action),
         warnings,
         expected_name,
         plan: BatchPlan {
@@ -272,12 +316,7 @@ pub(crate) fn kind_warnings(kind: ObjectKind, targets: &[DeleteTarget]) -> Vec<S
         ObjectKind::PersistentVolumeClaim => lines.extend(claim_lines(targets)),
         ObjectKind::Pod => {
             let loose = count_of(targets, |facts| {
-                matches!(
-                    facts,
-                    TargetFacts::Pod {
-                        has_controller: false
-                    }
-                )
+                matches!(facts, TargetFacts::Pod { controller: None })
             });
             match (loose, is_single) {
                 (0, _) => {}
@@ -288,6 +327,49 @@ pub(crate) fn kind_warnings(kind: ObjectKind, targets: &[DeleteTarget]) -> Vec<S
             }
         }
         _ => {}
+    }
+    lines.into_iter().map(Into::into).collect()
+}
+
+/// The lines of a restart or an eviction of one pod (spec 0040), by what owns it. A delete has none:
+/// its lines are `kind_warnings`.
+fn removal_warnings(removal: Removal, targets: &[DeleteTarget]) -> Vec<SharedString> {
+    let [target] = targets else {
+        return Vec::new();
+    };
+    let controller = match &target.facts {
+        TargetFacts::Pod { controller } => controller.as_ref(),
+        _ => None,
+    };
+    let owner = controller.map(|controller| controller.kind.as_str());
+    let name = target.object.name();
+    let mut lines: Vec<String> = Vec::new();
+    match removal {
+        Removal::Delete => {}
+        Removal::Restart => {
+            lines.push(
+                "Restart deletes the pod without checking PodDisruptionBudgets; Evict checks them"
+                    .to_owned(),
+            );
+            match owner {
+                Some("StatefulSet") => lines.push(format!(
+                    "The replacement keeps the name {name} and its volume claims"
+                )),
+                Some("Job") => lines.push(
+                    "A Job may count the deleted pod as failed toward its backoffLimit".to_owned(),
+                ),
+                _ => {}
+            }
+        }
+        Removal::Evict => match owner {
+            None if matches!(target.facts, TargetFacts::Pod { .. }) => {
+                lines.push("Not managed by a controller; it will not come back".to_owned());
+            }
+            Some("DaemonSet") => {
+                lines.push("A DaemonSet pod is recreated on the same node at once".to_owned());
+            }
+            _ => {}
+        },
     }
     lines.into_iter().map(Into::into).collect()
 }
@@ -493,15 +575,32 @@ pub(crate) fn delete_commit_progress(
 /// The notice after the last delete commit: the per-object line for one object (decision 14), the
 /// counts for several.
 pub(crate) fn delete_notice(batch: &BatchIntent, results: &[ItemProgress]) -> String {
+    let removal = match &batch.plan.extras {
+        BatchExtras::Delete(extras) => extras.removal,
+        BatchExtras::None | BatchExtras::DefaultClass(_) => Removal::Delete,
+    };
     match (batch.plan.items.as_slice(), results) {
-        ([item], [progress]) => {
-            single_notice(&item.label, progress, item.request.target().kind_name())
-        }
+        ([item], [progress]) => single_notice(item, progress, removal),
         _ => bulk_notice(results),
     }
 }
 
-fn single_notice(label: &str, progress: &ItemProgress, kind_name: &str) -> String {
+fn single_notice(item: &BatchItem, progress: &ItemProgress, removal: Removal) -> String {
+    let label = item.label.as_str();
+    let kind_name = item.request.target().kind_name();
+    // A pod the server accepted without finalizers: what happens next depends on the removal.
+    let is_accepted = match progress {
+        ItemProgress::Done => true,
+        ItemProgress::Pending(finalizers) => finalizers.is_empty(),
+        _ => false,
+    };
+    match (removal, is_accepted) {
+        (Removal::Restart, true) => {
+            return format!("{label}: terminating; its controller creates a replacement");
+        }
+        (Removal::Evict, true) => return format!("{label}: accepted; the pod is terminating"),
+        _ => {}
+    }
     match progress {
         ItemProgress::Done => format!("{label}: done"),
         ItemProgress::Pending(finalizers) if !finalizers.is_empty() => format!(
@@ -512,10 +611,7 @@ fn single_notice(label: &str, progress: &ItemProgress, kind_name: &str) -> Strin
             format!("{label}: terminating (grace period)")
         }
         ItemProgress::Pending(_) => format!("{label}: terminating"),
-        ItemProgress::Gone => format!(
-            "{} was already deleted",
-            label.trim_start_matches("Delete ")
-        ),
+        ItemProgress::Gone => format!("{} was already deleted", item.object),
         ItemProgress::Failed(reason) | ItemProgress::NotSent(reason) => {
             format!("{label} failed: {reason}")
         }
@@ -576,6 +672,7 @@ fn bulk_notice(results: &[ItemProgress]) -> String {
 /// What a delete needs from the shell before it reads anything: the objects to read, on which
 /// cluster and connection, and the guard generation they were gated on.
 struct DeletePlan {
+    removal: Removal,
     cluster: ClusterRef,
     cluster_name: SharedString,
     kind: ObjectKind,
@@ -633,7 +730,7 @@ impl AppShell {
     // screen with tens of thousands of rows makes the selection bar slow.
     pub(crate) fn delete_bulk_button(&self, cx: &App) -> Option<BulkButton> {
         self.screen.access_kind()?;
-        let state = match self.delete_gate(&self.checked_objects(cx), cx) {
+        let state = match self.delete_gate(Removal::Delete, &self.checked_objects(cx), cx) {
             Ok(kind) => BulkState::Ready(ResourceAction::Delete(kind)),
             Err(reason) => BulkState::Off(reason),
         };
@@ -662,7 +759,7 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) {
         match delete_scope(subject, &self.checked_objects(cx)) {
-            Ok(scope) => self.start_delete(scope, window, cx),
+            Ok(scope) => self.start_removal(Removal::Delete, scope, window, cx),
             Err(reason) => {
                 let label = action_label(ResourceAction::Delete(ObjectKind::Pod));
                 notify_delete(window, cx, unavailable_text(label, &reason));
@@ -670,13 +767,15 @@ impl AppShell {
         }
     }
 
-    /// The first step of a delete: gate, then read the uid of every object (decision 2), then the
-    /// confirm dialog. Nothing is sent without the dialog, and nothing is deleted from here.
+    /// The first step of a delete, a restart, or an eviction: gate, then read the uid of every object
+    /// (decision 2), then the confirm dialog. Nothing is sent without the dialog, and nothing is
+    /// removed from here. A restart or an eviction takes the cursor pod alone.
     ///
     /// A second call while a read is running, or while a dialog is open, does nothing: a held Del
     /// repeats, and must not open the dialog twice.
-    pub(crate) fn start_delete(
+    pub(crate) fn start_removal(
         &mut self,
+        removal: Removal,
         scope: Vec<ClusterObject>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -684,10 +783,10 @@ impl AppShell {
         if self.is_editing() || self.delete_start.is_some() || window.has_active_dialog(cx) {
             return;
         }
-        let plan = match self.delete_plan(&scope, cx) {
+        let plan = match self.delete_plan(removal, &scope, cx) {
             Ok(plan) => plan,
             Err(reason) => {
-                let label = action_label(ResourceAction::Delete(ObjectKind::Pod));
+                let label = action_label(removal.action(ObjectKind::Pod));
                 notify_delete(window, cx, unavailable_text(label, &reason));
                 return;
             }
@@ -715,6 +814,7 @@ impl AppShell {
     /// its button, and the start reads it again because a menu or a key may be a moment old.
     pub(crate) fn delete_gate(
         &self,
+        removal: Removal,
         scope: &[ClusterObject],
         cx: &App,
     ) -> Result<ObjectKind, SharedString> {
@@ -723,6 +823,18 @@ impl AppShell {
             .ok_or_else(|| SharedString::from("Select rows first"))?;
         if scope.iter().any(|object| object.cluster != first.cluster) {
             return Err("Select rows of one cluster".into());
+        }
+        // A restart or an eviction is one pod; the ticked set is never its scope.
+        if removal != Removal::Delete
+            && !matches!(
+                scope,
+                [ClusterObject {
+                    key: ResourceKey::Pod { .. },
+                    ..
+                }]
+            )
+        {
+            return Err("Select one pod".into());
         }
         if scope.len() > MAX_BATCH_ITEMS {
             return Err(format!("Select at most {MAX_BATCH_ITEMS} rows").into());
@@ -733,7 +845,7 @@ impl AppShell {
             .guard_for(&first.cluster, cx)
             .ok_or_else(|| SharedString::from("the cluster is not open"))?;
         if let ActionAvailability::Disabled { reason } =
-            action_availability(ResourceAction::Delete(kind), &guard)
+            action_availability(removal.action(kind), &guard)
         {
             return Err(reason);
         }
@@ -743,6 +855,11 @@ impl AppShell {
         let live = self
             .slot_live(&first.cluster, cx)
             .ok_or_else(|| SharedString::from("the cluster is not open"))?;
+        // The row may lag the cluster, so the uid read checks the terminating state again.
+        let pod = live.pods.items().iter().find(|pod| first.key.is_pod(pod));
+        if let Some(reason) = pod.and_then(|pod| pod_block(removal.action(kind), pod)) {
+            return Err(reason);
+        }
         if scope.iter().all(|object| is_helm_record(live, &object.key)) {
             return Err(HELM_RECORD_REASON.into());
         }
@@ -750,8 +867,13 @@ impl AppShell {
     }
 
     /// The gate, then the facts the warnings use and the objects to read.
-    fn delete_plan(&self, scope: &[ClusterObject], cx: &App) -> Result<DeletePlan, SharedString> {
-        let kind = self.delete_gate(scope, cx)?;
+    fn delete_plan(
+        &self,
+        removal: Removal,
+        scope: &[ClusterObject],
+        cx: &App,
+    ) -> Result<DeletePlan, SharedString> {
+        let kind = self.delete_gate(removal, scope, cx)?;
         let cluster = scope[0].cluster.clone();
         let (Some(guard), Some(live)) =
             (self.guard_for(&cluster, cx), self.slot_live(&cluster, cx))
@@ -775,6 +897,7 @@ impl AppShell {
             return Err(reason);
         }
         Ok(DeletePlan {
+            removal,
             cluster_name: guard.display_name().to_owned().into(),
             generation: guard.generation,
             connection: live.connection().clone(),
@@ -799,6 +922,7 @@ impl AppShell {
             task.detach();
         }
         let DeletePlan {
+            removal,
             cluster,
             cluster_name,
             kind,
@@ -807,7 +931,8 @@ impl AppShell {
             skipped,
             ..
         } = plan;
-        let label = action_label(ResourceAction::Delete(kind));
+        let action = removal.action(kind);
+        let label = action_label(action);
         // Another dialog or an editor opened while the objects were read (the reads take time):
         // a second dialog on top of it could start a second batch on the cluster.
         if self.is_editing() || window.has_active_dialog(cx) {
@@ -822,7 +947,7 @@ impl AppShell {
         let still_ready = self.guard_for(&cluster, cx).is_some_and(|guard| {
             guard.generation == generation
                 && matches!(
-                    action_availability(ResourceAction::Delete(kind), &guard),
+                    action_availability(action, &guard),
                     ActionAvailability::Enabled
                 )
         });
@@ -862,7 +987,21 @@ impl AppShell {
             notify_delete(window, cx, gone_notice(&already_gone));
             return;
         }
+        // The row lagged: the pod is already on its way out, so there is nothing to restart or evict.
+        if removal != Removal::Delete
+            && targets
+                .iter()
+                .any(|target| target.identity.deletion_started.is_some())
+        {
+            notify_delete(
+                window,
+                cx,
+                unavailable_text(label, ALREADY_TERMINATING_TEXT),
+            );
+            return;
+        }
         let extras = DeleteExtras {
+            removal,
             propagation: DeletePropagation::Background,
             kind,
             targets,
@@ -985,7 +1124,7 @@ fn target_facts(live: &LiveCluster, key: &ResourceKey) -> TargetFacts {
                 .iter()
                 .find(|pod| key.is_pod(pod))
                 .map_or(TargetFacts::Plain, |pod| TargetFacts::Pod {
-                    has_controller: pod.controller.is_some(),
+                    controller: pod.controller.clone(),
                 })
         }
         ResourceKey::Node { .. } => TargetFacts::Plain,
@@ -1031,31 +1170,42 @@ impl AppShell {
     /// nothing (`ConfirmDialog::show_fixture`), so it can never delete anything.
     pub(super) fn open_delete_fixture(
         &mut self,
-        is_bulk: bool,
+        launch: crate::launch_options::LaunchScreen,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         use gpui_kit::AppContext as _;
 
         use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
+        use crate::launch_options::LaunchScreen;
         use crate::write_guard::{ConfirmMode, confirm_step};
-        let (cluster, cluster_name, environment) = if is_bulk {
-            (
+        let (cluster, cluster_name, environment) = match launch {
+            LaunchScreen::DeleteBulkConfirm | LaunchScreen::EvictConfirm => (
                 fixture_cluster("stg-eu-1"),
                 "stg-eu-1",
                 Environment::Staging,
-            )
-        } else {
-            (
+            ),
+            _ => (
                 fixture_cluster("prod-eu-1"),
                 "prod-eu-1",
                 Environment::Production,
-            )
+            ),
         };
-        let batch = if is_bulk {
-            fixture_bulk_batch(&cluster, cluster_name)
-        } else {
-            fixture_single_batch(&cluster, cluster_name)
+        let batch = match launch {
+            LaunchScreen::DeleteBulkConfirm => fixture_bulk_batch(&cluster, cluster_name),
+            LaunchScreen::RestartPodConfirm => fixture_removal_batch(
+                Removal::Restart,
+                ("data", "kafka-1", "StatefulSet", "kafka"),
+                &cluster,
+                cluster_name,
+            ),
+            LaunchScreen::EvictConfirm => fixture_removal_batch(
+                Removal::Evict,
+                ("payments", "api-7d9f8c-m8n2p", "ReplicaSet", "api-7d9f8c"),
+                &cluster,
+                cluster_name,
+            ),
+            _ => fixture_single_batch(&cluster, cluster_name),
         };
         let confirm = confirm_step(
             ConfirmMode::for_environment(environment),
@@ -1070,7 +1220,16 @@ impl AppShell {
             generation: 0,
         };
         let dialog = cx.new(|cx| ConfirmDialog::new(inputs, window, cx));
-        dialog.update(cx, |dialog, _| dialog.show_fixture());
+        dialog.update(cx, |dialog, _| match launch {
+            LaunchScreen::RestartPodConfirm => {
+                dialog.show_fixture_after(std::time::Duration::from_millis(112));
+            }
+            LaunchScreen::EvictConfirm => dialog.show_fixture_refused(
+                "refused for now: The disruption budget api-pdb needs 2 healthy pods and has 2 currently"
+                    .into(),
+            ),
+            _ => dialog.show_fixture(),
+        });
         ConfirmDialog::open(&dialog, window, cx);
     }
 }
@@ -1102,6 +1261,38 @@ fn fixture_target(
     })
 }
 
+/// One controller-owned pod (namespace, name, owner kind, owner name) of a restart or an eviction.
+#[cfg(feature = "screenshot")]
+fn fixture_removal_batch(
+    removal: Removal,
+    (namespace, name, owner_kind, owner): (&str, &str, &str, &str),
+    cluster: &ClusterRef,
+    cluster_name: &str,
+) -> BatchIntent {
+    let targets = fixture_target(
+        ObjectKind::Pod,
+        namespace,
+        name,
+        &[],
+        TargetFacts::Pod {
+            controller: Some(ControllerRef {
+                kind: owner_kind.to_owned(),
+                name: owner.to_owned(),
+            }),
+        },
+    )
+    .into_iter()
+    .collect();
+    let extras = DeleteExtras {
+        removal,
+        propagation: DeletePropagation::Background,
+        kind: ObjectKind::Pod,
+        targets,
+        already_gone: Vec::new(),
+    };
+    delete_batch(cluster, cluster_name, extras, jiff::Timestamp::now())
+}
+
 /// One Deployment with a finalizer, so the dialog shows the Dependents choice and a finalizer line.
 #[cfg(feature = "screenshot")]
 fn fixture_single_batch(cluster: &ClusterRef, cluster_name: &str) -> BatchIntent {
@@ -1115,6 +1306,7 @@ fn fixture_single_batch(cluster: &ClusterRef, cluster_name: &str) -> BatchIntent
     .into_iter()
     .collect();
     let extras = DeleteExtras {
+        removal: Removal::Delete,
         propagation: DeletePropagation::Background,
         kind: ObjectKind::Deployment,
         targets,
@@ -1134,12 +1326,16 @@ fn fixture_bulk_batch(cluster: &ClusterRef, cluster_name: &str) -> BatchIntent {
                 &format!("worker-7d9f8c-{index:05}"),
                 &[],
                 TargetFacts::Pod {
-                    has_controller: index >= 2,
+                    controller: (index >= 2).then(|| ControllerRef {
+                        kind: "ReplicaSet".to_owned(),
+                        name: "worker-7d9f8c".to_owned(),
+                    }),
                 },
             )
         })
         .collect();
     let extras = DeleteExtras {
+        removal: Removal::Delete,
         propagation: DeletePropagation::Background,
         kind: ObjectKind::Pod,
         targets,

@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cluster::{
-    ClusterConnection, ClusterError, DrainPod, GracePeriod, NodeScheduling,
+    ClusterConnection, ClusterError, DrainPod, GracePeriod, NodeScheduling, ObjectKind,
     PodDisruptionBudgetSummary,
 };
 use gpui_kit::component::WindowExt as _;
@@ -42,20 +42,19 @@ use super::write_flow::{
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::drain_plan::{
-    CordonCheck, DrainOption, DrainOptions, GRACE_CHOICES, NodePlan, OptionCounts, PodCheck,
-    PodKey, PreviewLine, TIMEOUT_CHOICES, drain_blocker, drain_dry_run, dry_run_text,
-    eviction_count, grace_text, heads_up, node_plan, option_counts, option_hint, preview_lines,
-    timeout_text,
+    BudgetPolicy, CordonCheck, DrainOption, DrainOptions, GRACE_CHOICES, NodePlan, OptionCounts,
+    PodCheck, PodKey, PreviewLine, TIMEOUT_CHOICES, bypass_note, drain_blocker, drain_dry_run,
+    dry_run_text, eviction_count, grace_text, heads_up, node_plan, option_counts, option_hint,
+    preview_lines, timeout_text,
 };
-use crate::drain_writes::{DrainScope, cordon_write, evict_write};
+use crate::drain_writes::{DrainScope, cordon_write, removal_write};
 use crate::environment::{Environment, environment_badge};
 use crate::keymap::FORWARD_FORM;
 use crate::resource_actions::{
-    ActionAvailability, NOT_SHIPPED_REASON, ResourceAction, action_availability, action_label,
-    unavailable_text,
+    ActionAvailability, ResourceAction, action_availability, action_label, unavailable_text,
 };
 use crate::status_tone::{StatusTone, tone_color};
-use crate::write_guard::{ActionRisk, DialogConfirm, confirm_step};
+use crate::write_guard::{ActionRisk, ConfirmMode, DialogConfirm, confirm_step};
 
 const DIALOG_WIDTH: f32 = 600.;
 /// Every preview row is this tall, so the scroll area cuts between rows, never through one.
@@ -63,8 +62,9 @@ const PREVIEW_ROW_HEIGHT: f32 = 24.;
 const PREVIEW_VISIBLE_ROWS: f32 = 8.;
 /// The result column of the preview is cut with an ellipsis past this width.
 const RESULT_MAX_WIDTH: f32 = 300.;
-/// The body above the buttons scrolls past this height, so a small window still reaches them.
-const BODY_MAX_HEIGHT: f32 = 660.;
+/// The body above the typed name and the buttons scrolls past this height, so a small window
+/// still reaches them.
+const BODY_MAX_HEIGHT: f32 = 590.;
 
 /// What the dialog reads when it opens: every budget of the cluster and the pods of each node, in
 /// the order of the nodes.
@@ -102,6 +102,13 @@ struct Checks {
     /// By pod uid.
     pods: HashMap<String, PodCheck>,
     elapsed: Duration,
+}
+
+/// The two buttons that confirm: each has its own tier, because only a drain touches budgets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DrainButton {
+    Drain,
+    CordonOnly,
 }
 
 /// One dry-run to send.
@@ -189,7 +196,7 @@ impl DrainDialog {
             .unwrap_or(0);
         let timeout_items = TIMEOUT_CHOICES.into_iter().map(timeout_text).collect();
         let timeout = select_of(timeout_items, timeout_index, window, cx);
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             // The match line follows the field as it is typed.
             cx.subscribe_in(&typed, window, |_, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -207,6 +214,10 @@ impl DrainDialog {
                 |dialog, _, _: &SelectEvent<Vec<String>>, _, cx| dialog.timeout_picked(cx),
             ),
         ];
+        // The lazy `delete pods` review answers on the shell's session, not on the dialog.
+        if let Some(shell) = shell.upgrade() {
+            subscriptions.push(cx.observe(&shell, |_, _, cx| cx.notify()));
+        }
         let nodes: Vec<NodeData> = target
             .nodes
             .iter()
@@ -413,7 +424,7 @@ impl DrainDialog {
         let job = self.claim_next()?;
         let intent = match &job {
             Job::Cordon(node) => cordon_write(self.scope(), node),
-            Job::Evict(pod) => evict_write(self.scope(), &PodKey::of(pod), self.options.grace),
+            Job::Evict(pod) => removal_write(self.scope(), &PodKey::of(pod), &self.options),
         };
         let Some(intent) = intent else {
             // A name the write path refuses: the check fails here, nothing is sent.
@@ -518,6 +529,70 @@ impl DrainDialog {
         cx.notify();
     }
 
+    /// Whether Skip PodDisruptionBudgets may be ticked: the lazy `delete pods` review of the
+    /// cluster allows it (the check Delete pod reads). The dialog's own gate stays the eviction's.
+    fn skip_gate(&self, cx: &App) -> ActionAvailability {
+        let shell = self.shell.upgrade();
+        let guard = shell
+            .as_ref()
+            .and_then(|shell| shell.read(cx).guard_for(&self.cluster, cx));
+        match guard {
+            Some(guard) => action_availability(ResourceAction::Delete(ObjectKind::Pod), &guard),
+            None => ActionAvailability::Disabled {
+                reason: "the cluster is not open".into(),
+            },
+        }
+    }
+
+    /// Why the Skip checkbox cannot change now, `None` when it can: the gate says no, a dry-run is
+    /// in flight (its answer would be of the other request kind), or a commit runs.
+    fn skip_block(&self, cx: &App) -> Option<SharedString> {
+        // The picture has no cluster behind it, and its checkbox reads as an open one.
+        #[cfg(feature = "screenshot")]
+        if self.is_fixture {
+            return None;
+        }
+        if let ActionAvailability::Disabled { reason } = self.skip_gate(cx) {
+            return Some(reason);
+        }
+        if self.is_committing {
+            return Some("A drain is starting".into());
+        }
+        self.is_checking.then(|| "Waiting for the dry-runs".into())
+    }
+
+    /// Ticks or unticks Skip PodDisruptionBudgets. The request kind changes, so every pod's dry-run
+    /// is asked again; the cordon dry-runs stand. The grace select reads `Pod default` while it is
+    /// ticked: a delete takes no grace.
+    fn set_skip_budgets(&mut self, is_on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // Not while a dry-run is in flight, so no late answer of the old kind is ever recorded.
+        if self.skip_block(cx).is_some() {
+            return;
+        }
+        let policy = if is_on {
+            BudgetPolicy::Skip
+        } else {
+            BudgetPolicy::Respect
+        };
+        if self.options.budgets == policy {
+            return;
+        }
+        self.options.budgets = policy;
+        if is_on {
+            // The name to type appears: the field takes the focus.
+            self.typed.update(cx, |input, cx| input.focus(window, cx));
+            self.options.grace = GracePeriod::PodDefault;
+            self.grace.update(cx, |select, cx| {
+                select.set_selected_index(Some(IndexPath::default().row(0)), window, cx);
+            });
+        }
+        self.checks.pods.clear();
+        self.checks.elapsed = Duration::ZERO;
+        self.replan();
+        self.pump(cx);
+        cx.notify();
+    }
+
     fn drain_check(&self, uid: &str) -> PodCheck {
         self.checks.pods.get(uid).cloned().unwrap_or_default()
     }
@@ -572,9 +647,14 @@ impl DrainDialog {
         }
     }
 
-    /// The tier now: the one the dialog opened with, or the live one of the cluster when the user
-    /// made it stricter since (Settings), whichever asks for more.
-    fn live_tier(&self, cx: &App) -> DialogConfirm {
+    /// The tier of `button` now: the one the dialog opened with, or the live one of the cluster when
+    /// the user made it stricter since (Settings), whichever asks for more. A drain that skips the
+    /// budgets types the name in every tier; a cordon never touches budgets, so `Cordon only` keeps
+    /// its own.
+    fn live_tier(&self, button: DrainButton, cx: &App) -> DialogConfirm {
+        if button == DrainButton::Drain && self.options.budgets == BudgetPolicy::Skip {
+            return confirm_step(ConfirmMode::Click, ActionRisk::Privileged, self.expected());
+        }
         let live = self.shell.upgrade().and_then(|shell| {
             shell.read(cx).guard_for(&self.cluster, cx).map(|guard| {
                 confirm_step(
@@ -590,13 +670,18 @@ impl DrainDialog {
         }
     }
 
-    fn typed_match(&self, cx: &App) -> TypedMatch {
-        typed_match(&self.live_tier(cx), &self.typed.read(cx).value())
+    fn typed_match(&self, button: DrainButton, cx: &App) -> TypedMatch {
+        typed_match(&self.live_tier(button, cx), &self.typed.read(cx).value())
     }
 
     /// `commit_block` over `state`: the cluster is gone or reconnected, locked, the dry-run has not
     /// passed, or the name differs.
-    fn commit_block_of(&self, state: &DryRunState, cx: &App) -> Option<SharedString> {
+    fn commit_block_of(
+        &self,
+        state: &DryRunState,
+        button: DrainButton,
+        cx: &App,
+    ) -> Option<SharedString> {
         #[cfg(feature = "screenshot")]
         if self.is_fixture {
             return None;
@@ -610,7 +695,7 @@ impl DrainDialog {
             &self.cluster_name,
             self.generation,
             state,
-            self.typed_match(cx),
+            self.typed_match(button, cx),
             self.expected(),
         )
     }
@@ -627,7 +712,7 @@ impl DrainDialog {
         if let Some(blocker) = drain_blocker(&self.plans) {
             return Some(blocker);
         }
-        self.commit_block_of(&self.drain_state(), cx)
+        self.commit_block_of(&self.drain_state(), DrainButton::Drain, cx)
     }
 
     /// Why Cordon only is off, `None` when it is on.
@@ -642,7 +727,7 @@ impl DrainDialog {
                 .into(),
             );
         }
-        self.commit_block_of(&self.cordon_state(), cx)
+        self.commit_block_of(&self.cordon_state(), DrainButton::CordonOnly, cx)
     }
 
     /// Drain: closes the dialog and starts the run with the plan, the options, the proof of the
@@ -655,7 +740,7 @@ impl DrainDialog {
         if self.is_committing || self.drain_block(cx).is_some() {
             return;
         }
-        let typed = self.typed_match(cx);
+        let typed = self.typed_match(DrainButton::Drain, cx);
         let Some(proof) = confirmed(&self.drain_state(), typed, self.generation) else {
             return;
         };
@@ -701,7 +786,7 @@ impl DrainDialog {
         if self.is_committing || self.cordon_block(cx).is_some() {
             return;
         }
-        let typed = self.typed_match(cx);
+        let typed = self.typed_match(DrainButton::CordonOnly, cx);
         let Some(proof) = confirmed(&self.cordon_state(), typed, self.generation) else {
             return;
         };
@@ -802,7 +887,13 @@ impl DrainDialog {
             .flex_wrap()
             .text_xs()
             .child(step("1", "Cordon: stop new pods".to_owned()))
-            .child(step("2", format!("Evict {evictions} pods")))
+            .child(step(
+                "2",
+                match self.options.budgets {
+                    BudgetPolicy::Respect => format!("Evict {evictions} pods"),
+                    BudgetPolicy::Skip => format!("Delete {evictions} pods"),
+                },
+            ))
             .child(step("3", "Wait until done or timeout".to_owned()))
             .into_any_element()
     }
@@ -839,6 +930,7 @@ impl DrainDialog {
     fn render_options(&self, cx: &mut Context<Self>) -> AnyElement {
         let counts = option_counts(&self.plans);
         let (muted, danger) = (cx.theme().muted_foreground, cx.theme().danger);
+        let skip_block = self.skip_block(cx);
         v_flex()
             .gap_2()
             .child(self.render_option(
@@ -859,15 +951,19 @@ impl DrainDialog {
                 &counts,
                 cx,
             ))
-            // Skipping the budgets deletes pods directly, which is a delete operation (spec 0033).
+            // Skipping the budgets deletes pods directly, which is a delete operation (spec 0033); it
+            // starts off on every open and is never remembered (spec 0040).
             .child(
                 v_flex()
                     .gap_0p5()
                     .child(
                         Checkbox::new("drain-skip-pdbs")
                             .label("Skip PodDisruptionBudgets")
-                            .checked(false)
-                            .disabled(true),
+                            .checked(self.options.budgets == BudgetPolicy::Skip)
+                            .disabled(skip_block.is_some())
+                            .on_click(cx.listener(|dialog, checked: &bool, window, cx| {
+                                dialog.set_skip_budgets(*checked, window, cx);
+                            })),
                     )
                     .child(
                         h_flex()
@@ -879,7 +975,15 @@ impl DrainDialog {
                                     .text_color(danger)
                                     .child("Deletes pods directly. Can cause downtime."),
                             )
-                            .child(div().text_color(muted).child(NOT_SHIPPED_REASON)),
+                            .children(
+                                skip_block.map(|reason| div().text_color(muted).child(reason)),
+                            )
+                            // The grace select reads `Pod default` and is off while it is ticked.
+                            .children((self.options.budgets == BudgetPolicy::Skip).then(|| {
+                                div()
+                                    .text_color(muted)
+                                    .child("Deletes use each pod's own grace period")
+                            })),
                     ),
             )
             .into_any_element()
@@ -887,11 +991,16 @@ impl DrainDialog {
 
     fn render_timing(&self, cx: &App) -> AnyElement {
         let muted = cx.theme().muted_foreground;
+        let is_direct = self.options.budgets == BudgetPolicy::Skip;
         h_flex()
             .gap_2()
             .items_center()
             .child(div().text_sm().text_color(muted).child("Grace period"))
-            .child(div().w(px(140.)).child(Select::new(&self.grace).small()))
+            .child(
+                div()
+                    .w(px(140.))
+                    .child(Select::new(&self.grace).small().disabled(is_direct)),
+            )
             .child(
                 div()
                     .ml_3()
@@ -996,7 +1105,14 @@ impl DrainDialog {
                     .justify_between()
                     .text_xs()
                     .text_color(muted)
-                    .child(format!("Pods to evict · {}", eviction_count(&self.plans)))
+                    .child(format!(
+                        "{} · {}",
+                        match self.options.budgets {
+                            BudgetPolicy::Respect => "Pods to evict",
+                            BudgetPolicy::Skip => "Pods to delete",
+                        },
+                        eviction_count(&self.plans)
+                    ))
                     .child("Result"),
             )
             .child(
@@ -1012,15 +1128,25 @@ impl DrainDialog {
     }
 
     fn render_heads_up(&self, cx: &App) -> Option<AnyElement> {
-        let text = heads_up(&self.plans, self.options.timeout)?;
+        // Skipping the budgets is the one danger note; waiting on a budget is the neutral one.
+        let (text, is_danger) = match self.options.budgets {
+            BudgetPolicy::Respect => (heads_up(&self.plans, self.options.timeout)?, false),
+            BudgetPolicy::Skip => (bypass_note(&self.plans)?, true),
+        };
         let theme = cx.theme();
+        let (border, color) = if is_danger {
+            (theme.danger, theme.danger)
+        } else {
+            (theme.border, theme.foreground)
+        };
         Some(
             div()
                 .p_2()
                 .rounded_md()
                 .border_1()
-                .border_color(theme.border)
+                .border_color(border)
                 .bg(theme.muted)
+                .text_color(color)
                 .text_xs()
                 .child(
                     h_flex()
@@ -1035,7 +1161,12 @@ impl DrainDialog {
 
     fn render_dry_run(&self, cx: &App) -> AnyElement {
         let state = self.drain_state();
-        let text = dry_run_text(&state, &self.cordon_checks(), &self.eviction_checks());
+        let text = dry_run_text(
+            &state,
+            &self.cordon_checks(),
+            &self.eviction_checks(),
+            self.options.budgets,
+        );
         let color = match state {
             DryRunState::Passed { .. } => tone_color(StatusTone::Ok, cx),
             DryRunState::Failed(_) | DryRunState::Rejected(_) => tone_color(StatusTone::Bad, cx),
@@ -1049,11 +1180,12 @@ impl DrainDialog {
     }
 
     fn render_typed(&self, cx: &App) -> Option<AnyElement> {
-        if matches!(self.live_tier(cx), DialogConfirm::Click) {
+        // The field is Drain's: when a cordon alone asks for it, so does the drain.
+        if matches!(self.live_tier(DrainButton::Drain, cx), DialogConfirm::Click) {
             return None;
         }
         let theme = cx.theme();
-        let matches = self.typed_match(cx) == TypedMatch::Matches;
+        let matches = self.typed_match(DrainButton::Drain, cx) == TypedMatch::Matches;
         Some(
             v_flex()
                 .gap_1()
@@ -1163,7 +1295,7 @@ impl Render for DrainDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.needs_focus {
             self.needs_focus = false;
-            match self.live_tier(cx) {
+            match self.live_tier(DrainButton::Drain, cx) {
                 DialogConfirm::TypeName { .. } => {
                     self.typed.update(cx, |input, cx| input.focus(window, cx));
                 }
@@ -1188,10 +1320,9 @@ impl Render for DrainDialog {
             .child(self.render_timing(cx))
             .child(self.render_preview(cx))
             .children(self.render_heads_up(cx))
-            .child(self.render_dry_run(cx))
-            .children(self.render_typed(cx))
-            .children(self.render_note_input(cx));
-        // Outside the scroll area, so the reason Drain is off is never out of sight.
+            .child(self.render_dry_run(cx));
+        // Outside the scroll area, so the name to type, the note, and the reason Drain is off are
+        // never out of sight (ticking Skip makes the name appear below a full list).
         let reason = block_text.map(|text| div().text_xs().text_color(muted).child(text));
         v_flex()
             .key_context(FORWARD_FORM)
@@ -1200,6 +1331,8 @@ impl Render for DrainDialog {
             .w_full()
             .gap_3()
             .child(body)
+            .children(self.render_typed(cx))
+            .children(self.render_note_input(cx))
             .children(reason)
             .child(self.render_buttons(cordon_block.is_some(), drain_block.is_some(), cx))
     }
@@ -1285,6 +1418,15 @@ impl AppShell {
             };
             (target, live.connection().clone())
         };
+        // The Skip checkbox reads the lazy `delete pods` review, which the Nodes screen does not ask
+        // for. The session keeps the kind of the shown screen for a reconnect.
+        let screen_kind = self.screen.access_kind();
+        if let Some(session) = self.slot_session(cluster) {
+            session.update(cx, |session, cx| {
+                session.request_kind_access(Some(ObjectKind::Pod), cx);
+                session.request_kind_access(screen_kind, cx);
+            });
+        }
         let runtime = cx.global::<ClusterRuntime>().clone();
         let shell = cx.weak_entity();
         let dialog =
@@ -1384,11 +1526,21 @@ impl AppShell {
 /// Enter do nothing, so it can never send.
 #[cfg(feature = "screenshot")]
 impl AppShell {
-    pub(super) fn open_drain_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::write_guard::ConfirmMode;
-
+    /// `--screen drain-dialog`, and `--screen drain-dialog-skip-pdbs` (spec 0040) on a Staging
+    /// cluster with the budgets skipped.
+    pub(super) fn open_drain_fixture(
+        &mut self,
+        launch: crate::launch_options::LaunchScreen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         const NODE: &str = "wk-04";
-        let environment = Environment::Production;
+        let is_skip = launch == crate::launch_options::LaunchScreen::DrainDialogSkipPdbs;
+        let environment = if is_skip {
+            Environment::Staging
+        } else {
+            Environment::Production
+        };
         let target = DrainTarget {
             cluster: ClusterRef {
                 kubeconfig: std::path::PathBuf::from("fixture.yaml"),
@@ -1407,7 +1559,7 @@ impl AppShell {
         let shell = cx.weak_entity();
         let dialog = cx.new(|cx| {
             let mut dialog = DrainDialog::new(shell, target, None, window, cx);
-            dialog.show_fixture(window, cx);
+            dialog.show_fixture(is_skip, window, cx);
             dialog
         });
         DrainDialog::open(&dialog, window, cx);
@@ -1417,7 +1569,7 @@ impl AppShell {
 #[cfg(feature = "screenshot")]
 impl DrainDialog {
     /// Fills the dialog with the pods of W6 and the answers of their dry-runs.
-    fn show_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_fixture(&mut self, is_skip: bool, window: &mut Window, cx: &mut Context<Self>) {
         use cluster::{ControllerRef, Selector};
 
         let pod =
@@ -1488,23 +1640,31 @@ impl DrainDialog {
         ]);
         self.nodes[0].pods = PodsLoad::Ready(pods);
         self.options.delete_empty_dir = true;
+        if is_skip {
+            self.options.budgets = BudgetPolicy::Skip;
+        }
         self.replan();
         self.checks
             .cordons
             .insert(self.nodes[0].name.clone(), CordonCheck::Passed);
         let refusal = "The disruption budget api-pdb needs 2 healthy pods and has 2 currently";
         for planned in self.plans.iter().flat_map(|plan| plan.evictions()) {
-            let check = if planned.pod.name.starts_with("api-7d9f8c") {
+            // Deleting directly asks no budget, so every delete is accepted.
+            let check = if !is_skip && planned.pod.name.starts_with("api-7d9f8c") {
                 PodCheck::Refused(refusal.into())
             } else {
                 PodCheck::Accepted
             };
             self.checks.pods.insert(planned.pod.uid.clone(), check);
         }
-        self.typed.update(cx, |input, cx| {
-            input.set_value("wk-04".to_owned(), window, cx)
-        });
-        self.needs_focus = false;
+        // The skip picture asks for the typed name, which is what it shows: the field is empty and
+        // takes the focus on its first render, as it does on a Production cluster.
+        if !is_skip {
+            self.typed.update(cx, |input, cx| {
+                input.set_value("wk-04".to_owned(), window, cx)
+            });
+        }
+        self.needs_focus = is_skip;
         self.is_fixture = true;
     }
 }
@@ -1545,7 +1705,34 @@ impl DrainDialog {
             &self.drain_state(),
             &self.cordon_checks(),
             &self.eviction_checks(),
+            self.options.budgets,
         )
+    }
+
+    /// Why the Skip checkbox cannot change now, `None` when it can.
+    pub(crate) fn skip_blocked_by(&self, cx: &App) -> Option<SharedString> {
+        self.skip_block(cx)
+    }
+
+    pub(crate) fn tick_skip(&mut self, is_on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_skip_budgets(is_on, window, cx);
+    }
+
+    /// Whether a dry-run loop is running now.
+    pub(crate) fn is_checking(&self) -> bool {
+        self.is_checking
+    }
+
+    /// The tier of Drain and of Cordon only now.
+    pub(crate) fn live_tiers(&self, cx: &App) -> (DialogConfirm, DialogConfirm) {
+        (
+            self.live_tier(DrainButton::Drain, cx),
+            self.live_tier(DrainButton::CordonOnly, cx),
+        )
+    }
+
+    pub(crate) fn recorded_elapsed(&self) -> Duration {
+        self.checks.elapsed
     }
 
     pub(crate) fn preview(&self) -> Vec<PreviewLine> {
@@ -1586,6 +1773,11 @@ impl DrainDialog {
 
     pub(crate) fn press_drain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.drain(window, cx);
+    }
+
+    /// Cancel: closes the dialog.
+    pub(crate) fn close_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close(window, cx);
     }
 
     pub(crate) fn expected_name(&self) -> String {

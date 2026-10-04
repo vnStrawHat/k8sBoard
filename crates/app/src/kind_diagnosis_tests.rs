@@ -112,6 +112,7 @@ fn node(name: &str, readiness: NodeReadiness) -> NodeSummary {
 /// A healthy pod, ready and running.
 fn pod(name: &str, node: Option<&str>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),
@@ -161,6 +162,7 @@ fn failed_pod(
     pod.created_at = Some(at(created));
     pod.status = PodStatus::Reason(StatusReason::Error);
     pod.containers = vec![ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: "main".to_owned(),
         image: "registry/app:1".to_owned(),
         kind: ContainerKind::Main,
@@ -558,6 +560,7 @@ fn warming_up(name: &str) -> PodSummary {
     let mut pod = pod(name, None);
     pod.ready = ReadyCount { ready: 0, total: 1 };
     pod.containers = vec![ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: "main".to_owned(),
         image: "registry/app:1".to_owned(),
         kind: ContainerKind::Main,

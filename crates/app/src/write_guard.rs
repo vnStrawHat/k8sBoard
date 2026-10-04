@@ -53,7 +53,8 @@ impl ConfirmMode {
 pub(crate) enum ActionRisk {
     Change,
     Destructive,
-    /// Opens a root shell on a node (0037): the strongest tier, whatever the cluster's own.
+    /// Opens a root shell on a node (0037), or drains with the budgets skipped (0040): the strongest
+    /// tier, whatever the cluster's own.
     Privileged,
 }
 

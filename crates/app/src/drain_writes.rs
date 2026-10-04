@@ -1,11 +1,14 @@
-//! The writes of a drain (spec 0034): the cordon of a node and the eviction of one pod, as the
-//! `WriteIntent` that `checked_write` sends, dry-runs first. Pure: nothing here sends anything.
+//! The writes of a drain (spec 0034): the cordon of a node and the eviction of one pod, or its direct
+//! delete when the budgets are skipped (spec 0040), as the `WriteIntent` that `checked_write` sends,
+//! dry-runs first. Pure: nothing here sends anything.
 
-use cluster::{GracePeriod, NodeScheduling, ObjectKind, ObjectRef, WriteOperation, WriteRequest};
+use cluster::{
+    DeletePropagation, NodeScheduling, ObjectKind, ObjectRef, WriteOperation, WriteRequest,
+};
 
 use crate::app_shell::write_flow::{WriteIntent, cordon_intent};
 use crate::cluster_registry::ClusterRef;
-use crate::drain_plan::PodKey;
+use crate::drain_plan::{BudgetPolicy, DrainOptions, PodKey};
 use crate::resource_actions::{ResourceAction, action_risk};
 
 /// The cluster the drain runs on: every write names it, so the guard, the connection, the tier,
@@ -26,31 +29,43 @@ pub(crate) fn cordon_write(scope: DrainScope<'_>, node: &str) -> Option<WriteInt
     )
 }
 
-/// The eviction of `pod`, pinned to its uid so a pod recreated under the same name is never
-/// evicted. `None` when the pod has no uid or a name that is not a valid object name.
-pub(crate) fn evict_write(
+/// The eviction or the direct delete of `pod` under `options`, pinned to its uid so a pod recreated
+/// under the same name is never removed. `None` when the pod has no uid or a name that is not a
+/// valid object name. The delete takes no grace: it uses the pod's own (0033 decision 6).
+pub(crate) fn removal_write(
     scope: DrainScope<'_>,
     pod: &PodKey,
-    grace: GracePeriod,
+    options: &DrainOptions,
 ) -> Option<WriteIntent> {
     let target = ObjectRef::new(
         ObjectKind::Pod,
         Some(pod.namespace.clone()),
         pod.name.clone(),
     )?;
-    let request = WriteRequest::new(
-        target,
-        WriteOperation::EvictPod {
-            uid: pod.uid.clone(),
-            grace,
-        },
-    )?;
+    let uid = pod.uid.clone();
+    let (operation, verb) = match options.budgets {
+        BudgetPolicy::Respect => (
+            WriteOperation::EvictPod {
+                uid,
+                grace: options.grace,
+            },
+            "Evict",
+        ),
+        BudgetPolicy::Skip => (
+            WriteOperation::DeleteObject {
+                uid,
+                propagation: DeletePropagation::Background,
+            },
+            "Delete",
+        ),
+    };
+    let request = WriteRequest::new(target, operation)?;
     Some(WriteIntent {
         cluster: scope.cluster.clone(),
         cluster_name: scope.cluster_name.to_owned().into(),
         action: ResourceAction::Drain,
-        label: format!("Evict pod {}", pod.text()).into(),
-        button: "Evict".into(),
+        label: format!("{verb} pod {}", pod.text()).into(),
+        button: verb.into(),
         request,
         risk: action_risk(ResourceAction::Drain),
         expected_name: None,

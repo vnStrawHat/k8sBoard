@@ -19,6 +19,7 @@ use super::app_shell_write_tests::{
     Clusters, audit_lines, go_live_answering, slot_session, switch_to, writes,
 };
 use super::batch_write::ItemProgress;
+use super::object_delete::Removal;
 use super::shell_open::ShellOpen;
 use super::*;
 use crate::app_shell::write_flow::DryRunState;
@@ -73,6 +74,11 @@ struct DeleteServer {
     refused_dry_runs: Mutex<HashSet<String>>,
     /// Objects that exist for the identity read and are gone by the time they are deleted.
     vanished: Mutex<HashSet<String>>,
+    /// What a dry-run eviction and a committed one answer instead of success (a budget's 429).
+    eviction_dry_run_answer: Mutex<Option<(u16, String)>>,
+    eviction_commit_answer: Mutex<Option<(u16, String)>>,
+    /// Pods whose identity read says their deletion has started.
+    terminating: Mutex<HashSet<String>>,
     /// Held by the first committed delete until the test releases it: the batch is mid-commit.
     gate: Mutex<Option<mpsc::Receiver<()>>>,
     /// Held by the first identity read until the test releases it: the delete is still reading.
@@ -90,6 +96,9 @@ impl DeleteServer {
             is_pending: AtomicBool::new(false),
             refused_dry_runs: Mutex::new(HashSet::new()),
             vanished: Mutex::new(HashSet::new()),
+            eviction_dry_run_answer: Mutex::new(None),
+            eviction_commit_answer: Mutex::new(None),
+            terminating: Mutex::new(HashSet::new()),
             gate: Mutex::new(None),
             identity_gate: Mutex::new(None),
         })
@@ -117,11 +126,15 @@ impl DeleteServer {
             _ => "Node",
         };
         let finalizers = lock(&self.finalizers).clone();
+        let deleted_at = lock(&self.terminating)
+            .contains(name)
+            .then_some("2026-10-03T08:00:00Z");
         json!({
             "apiVersion": "v1", "kind": kind,
             "metadata": {
                 "name": name, "namespace": NAMESPACE, "uid": format!("uid-{name}"),
                 "resourceVersion": "100", "finalizers": finalizers,
+                "deletionTimestamp": deleted_at,
             },
             "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "api"}},
                 "template": {"metadata": {"labels": {"app": "api"}},
@@ -139,8 +152,22 @@ impl DeleteServer {
             }
             "GET" => self.read(path),
             "DELETE" => self.delete(request),
+            "POST" if path.ends_with("/eviction") => self.evict(request),
             _ => (404, NOT_FOUND.to_owned()),
         }
+    }
+
+    fn evict(&self, request: &RecordedRequest) -> (u16, String) {
+        let slot = if request.has_query("dryRun", "All") {
+            &self.eviction_dry_run_answer
+        } else {
+            &self.eviction_commit_answer
+        };
+        if let Some(answer) = lock(slot).clone() {
+            return answer;
+        }
+        let ok = json!({"kind": "Status", "apiVersion": "v1", "status": "Success", "code": 201});
+        (201, ok.to_string())
     }
 
     fn read(&self, path: &str) -> (u16, String) {
@@ -194,6 +221,7 @@ fn answers(server: &Arc<DeleteServer>) -> impl Fn(&RecordedRequest) -> (u16, Str
 
 fn pod(name: &str, has_controller: bool) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: NAMESPACE.to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),
@@ -1169,7 +1197,7 @@ fn a_delete_whose_read_is_pending_starts_nothing_more(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn start_delete_is_inert_behind_an_open_dialog(cx: &mut TestAppContext) {
+fn a_removal_is_inert_behind_an_open_dialog(cx: &mut TestAppContext) {
     let t = delete_test("delete-behind-dialog", cx);
     t.show_pods(&[pod("api-x", true), pod("api-y", true)], cx);
     t.cursor_on_pod(&t.t.stg, "api-x", cx);
@@ -1182,8 +1210,9 @@ fn start_delete_is_inert_behind_an_open_dialog(cx: &mut TestAppContext) {
         },
     );
     t.t.fixture.with_window(cx, |window, cx| {
-        t.shell()
-            .update(cx, |shell, cx| shell.start_delete(vec![other], window, cx));
+        t.shell().update(cx, |shell, cx| {
+            shell.start_removal(Removal::Delete, vec![other], window, cx)
+        });
     });
     cx.run_until_parked();
     assert_eq!(t.identity_reads(&t.t.stg_api), 1, "no second read");
@@ -1520,4 +1549,306 @@ fn the_reads_announce_themselves(cx: &mut TestAppContext) {
     assert!(t.notification_count(cx) > before, "Reading 1 object…");
     release.send(()).expect("the server waits for the release");
     t.wait_for_dialog(cx);
+}
+
+// ---- Restart pod and Evict (spec 0040) ----
+
+/// The 429 of an eviction a PodDisruptionBudget refuses: the cause names the budget.
+fn budget_refusal() -> (u16, String) {
+    let body = json!({
+        "kind": "Status", "apiVersion": "v1", "status": "Failure",
+        "message": "Cannot evict pod as it would violate the pod's disruption budget.",
+        "reason": "TooManyRequests", "code": 429,
+        "details": {"causes": [{
+            "reason": "DisruptionBudget",
+            "message": "The disruption budget api-pdb needs 2 healthy pods and has 2 currently",
+        }]},
+    });
+    (429, body.to_string())
+}
+
+/// The same 429 without a cause list: the message of the status stands in.
+fn plain_refusal() -> (u16, String) {
+    let body = json!({
+        "kind": "Status", "apiVersion": "v1", "status": "Failure",
+        "message": "Too many requests, try again later",
+        "reason": "TooManyRequests", "code": 429,
+    });
+    (429, body.to_string())
+}
+
+impl DeleteTest {
+    /// The key action of `row` on the cursor pod, as the menu item and the palette dispatch it.
+    fn run(&self, row: RowAction, cx: &mut TestAppContext) {
+        let action = row.key_action();
+        self.t
+            .fixture
+            .with_window(cx, |window, cx| window.dispatch_action(action, cx));
+    }
+
+    /// Opens the dialog of `row` on the cursor pod and waits for its dry-run.
+    fn open_removal(&self, row: RowAction, cx: &mut TestAppContext) {
+        self.run(row, cx);
+        self.wait_for_dialog(cx);
+        self.t.wait_for_dry_run(cx);
+    }
+}
+
+#[gpui_kit::test]
+fn restart_pod_dry_runs_then_deletes_with_uid(cx: &mut TestAppContext) {
+    let t = delete_test("restart-pod", cx);
+    let dir = t.t.enable_audit_folder("restart-pod", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    t.open_removal(RowAction::RestartPod, cx);
+    assert_eq!(t.dialog_label(cx), "Restart pod");
+    // The uid was read first, then one dry-run delete carried it.
+    assert_eq!(t.identity_reads(&t.t.stg_api), 1);
+    let sent = writes(&t.t.stg_api);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].method, "DELETE");
+    assert_eq!(sent[0].path, "/api/v1/namespaces/team-a/pods/api-x");
+    let body = body_of(&sent[0]);
+    assert_eq!(body["dryRun"], json!(["All"]));
+    assert_eq!(body["propagationPolicy"], "Background");
+    assert_eq!(body["preconditions"]["uid"], "uid-api-x");
+    t.t.dialog(cx).read_with(cx, |dialog, _| {
+        assert_eq!(dialog.confirm_text().as_deref(), Some("Restart"));
+    });
+    t.t.confirm(cx);
+    t.t.wait_for("the commit", cx, |_| writes(&t.t.stg_api).len() == 2);
+    let committed = body_of(&writes(&t.t.stg_api)[1]);
+    assert!(committed.get("dryRun").is_none(), "{committed}");
+    assert_eq!(committed["preconditions"]["uid"], "uid-api-x");
+    t.t.wait_for("the audit line", cx, |_| audit_lines(&dir).len() == 1);
+    let line = &audit_lines(&dir)[0];
+    assert_eq!(line["action"], "Restart pod");
+    assert_eq!(line["outcome"], "applied");
+    assert_eq!(line["fields"][0]["path"], "deleteOptions.propagationPolicy");
+    assert_eq!(line["fields"][0]["value"], "Background");
+}
+
+#[gpui_kit::test]
+fn evict_dry_runs_then_evicts_with_uid(cx: &mut TestAppContext) {
+    let t = delete_test("evict-pod", cx);
+    let dir = t.t.enable_audit_folder("evict-pod", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    t.open_removal(RowAction::EvictPod, cx);
+    assert_eq!(t.dialog_label(cx), "Evict pod");
+    let sent = writes(&t.t.stg_api);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].method, "POST");
+    assert_eq!(
+        sent[0].path,
+        "/api/v1/namespaces/team-a/pods/api-x/eviction"
+    );
+    assert!(sent[0].has_query("dryRun", "All"), "{}", sent[0].query);
+    let body = body_of(&sent[0]);
+    assert_eq!(body["deleteOptions"]["preconditions"]["uid"], "uid-api-x");
+    assert!(body["deleteOptions"].get("gracePeriodSeconds").is_none());
+    t.t.confirm(cx);
+    t.t.wait_for("the commit", cx, |_| writes(&t.t.stg_api).len() == 2);
+    assert!(!writes(&t.t.stg_api)[1].has_query_key("dryRun"));
+    t.t.wait_for("the audit line", cx, |_| audit_lines(&dir).len() == 1);
+    let line = &audit_lines(&dir)[0];
+    assert_eq!(line["action"], "Evict");
+    assert_eq!(line["fields"][0]["path"], "pods/eviction");
+    assert_eq!(line["fields"][0]["value"], "grace pod default");
+}
+
+#[gpui_kit::test]
+fn evict_429_dry_run_blocks_the_commit(cx: &mut TestAppContext) {
+    for (name, refusal, cause) in [
+        (
+            "evict-429-cause",
+            budget_refusal(),
+            "refused for now: The disruption budget api-pdb needs 2 healthy pods and has 2 currently",
+        ),
+        (
+            "evict-429-plain",
+            plain_refusal(),
+            "refused for now: Too many requests, try again later",
+        ),
+    ] {
+        let t = delete_test(name, cx);
+        *lock(&t.server.eviction_dry_run_answer) = Some(refusal);
+        t.show_pods(&[pod("api-x", true)], cx);
+        t.cursor_on_pod(&t.t.stg, "api-x", cx);
+        t.open_removal(RowAction::EvictPod, cx);
+        assert_eq!(
+            t.items(cx),
+            [ItemProgress::Rejected(cause.into())],
+            "{name}"
+        );
+        assert!(t.t.block(cx).is_some(), "Apply stays off");
+        t.t.confirm(cx);
+        cx.run_until_parked();
+        assert_eq!(writes(&t.t.stg_api).len(), 1, "{name}: only the dry-run");
+    }
+}
+
+#[gpui_kit::test]
+fn evict_commit_429_is_not_audited(cx: &mut TestAppContext) {
+    let t = delete_test("evict-commit-429", cx);
+    let dir = t.t.enable_audit_folder("evict-commit-429", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    t.open_removal(RowAction::EvictPod, cx);
+    *lock(&t.server.eviction_commit_answer) = Some(budget_refusal());
+    t.t.confirm(cx);
+    t.t.wait_for("the commit", cx, |_| writes(&t.t.stg_api).len() == 2);
+    t.t.wait_for("the batch to end", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| !shell.running_batches.contains(&t.t.stg))
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    cx.run_until_parked();
+    assert!(
+        audit_lines(&dir).is_empty(),
+        "a refusal for now is not audited"
+    );
+}
+
+#[gpui_kit::test]
+fn restart_of_a_pod_found_terminating_at_the_uid_read_opens_nothing(cx: &mut TestAppContext) {
+    for row in [RowAction::RestartPod, RowAction::EvictPod] {
+        let t = delete_test("removal-terminating", cx);
+        // The row still reads Running; the uid read learns that its deletion has started.
+        lock(&t.server.terminating).insert("api-x".to_owned());
+        t.show_pods(&[pod("api-x", true)], cx);
+        t.cursor_on_pod(&t.t.stg, "api-x", cx);
+        let before = t.notification_count(cx);
+        t.run(row, cx);
+        t.t.wait_for("the notice", cx, |cx| t.notification_count(cx) > before);
+        assert!(!t.t.has_dialog(cx), "no dialog for a pod on its way out");
+        assert!(writes(&t.t.stg_api).is_empty(), "{row:?}");
+    }
+}
+
+#[gpui_kit::test]
+fn restart_and_evict_refuse_a_blocked_pod_without_reading(cx: &mut TestAppContext) {
+    let t = delete_test("removal-blocked", cx);
+    t.show_pods(&[pod("bare", false)], cx);
+    t.cursor_on_pod(&t.t.stg, "bare", cx);
+    let before = t.notification_count(cx);
+    t.run(RowAction::RestartPod, cx);
+    cx.run_until_parked();
+    assert!(!t.t.has_dialog(cx));
+    assert_eq!(t.identity_reads(&t.t.stg_api), 0, "the gate stops first");
+    assert!(t.notification_count(cx) > before, "the key says why");
+    // A bare pod can be evicted: the dialog opens and warns once.
+    t.open_removal(RowAction::EvictPod, cx);
+    let lines: Vec<String> =
+        t.t.dialog(cx)
+            .read_with(cx, |dialog, _| dialog.warning_lines())
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+    assert_eq!(
+        lines,
+        ["Not managed by a controller; it will not come back"]
+    );
+}
+
+#[gpui_kit::test]
+fn a_restart_acts_on_the_cursor_pod_never_the_ticked_set(cx: &mut TestAppContext) {
+    let t = delete_test("restart-cursor-only", cx);
+    t.tick_staging_pods(&["api-0", "api-1", "api-2"], 3, cx);
+    let ticked = t.cursor_on_first_ticked(cx);
+    t.open_removal(RowAction::RestartPod, cx);
+    assert_eq!(t.items(cx).len(), 1, "one pod, not the three ticked");
+    assert_eq!(t.identity_reads(&t.t.stg_api), 1);
+    assert_eq!(
+        writes(&t.t.stg_api)[0].path.rsplit('/').next(),
+        ticked.first().map(String::as_str)
+    );
+}
+
+#[gpui_kit::test]
+fn prod_restart_and_evict_type_the_pod_name(cx: &mut TestAppContext) {
+    for row in [RowAction::RestartPod, RowAction::EvictPod] {
+        let t = delete_test("removal-prod-tier", cx);
+        let prod_api = t.activate(&t.t.prod, cx);
+        t.t.set_lock(&t.t.prod, WriteLock::Unlocked, cx);
+        t.show_pods(&[pod("api-x", true)], cx);
+        t.cursor_on_pod(&t.t.prod, "api-x", cx);
+        t.open_removal(row, cx);
+        t.t.dialog(cx).read_with(cx, |dialog, _| {
+            assert_eq!(
+                *dialog.tier(),
+                DialogConfirm::TypeName {
+                    expected: "api-x".to_owned()
+                },
+                "{row:?}"
+            );
+        });
+        t.t.confirm(cx);
+        cx.run_until_parked();
+        assert_eq!(
+            writes(&prod_api).len(),
+            1,
+            "{row:?}: the name was not typed"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn restart_read_landing_after_a_switch_opens_nothing(cx: &mut TestAppContext) {
+    let t = delete_test("restart-read-after-switch", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    let (release, gate) = mpsc::channel();
+    *lock(&t.server.identity_gate) = Some(gate);
+    t.run(RowAction::RestartPod, cx);
+    t.t.wait_for("the read to start", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| shell.delete_start.is_some())
+    });
+    let prod_api = t.activate(&t.t.prod, cx);
+    release.send(()).expect("the server waits for the release");
+    t.t.wait_for("the read to end", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| shell.delete_start.is_none())
+    });
+    assert!(!t.t.has_dialog(cx));
+    assert!(writes(&t.t.stg_api).is_empty());
+    assert!(writes(&prod_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn evict_confirmed_after_switching_back_sends_nothing(cx: &mut TestAppContext) {
+    let t = delete_test("evict-switch-back", cx);
+    t.show_pods(&[pod("api-x", true)], cx);
+    t.cursor_on_pod(&t.t.stg, "api-x", cx);
+    t.open_removal(RowAction::EvictPod, cx);
+    // A to B to A: the session of the dialog is gone, and the new one has another generation.
+    t.activate(&t.t.prod, cx);
+    let again = t.activate(&t.t.stg, cx);
+    t.t.confirm(cx);
+    cx.run_until_parked();
+    assert_eq!(writes(&t.t.stg_api).len(), 1, "only the first dry-run");
+    assert!(writes(&again).is_empty(), "nothing reached the new session");
+}
+
+#[gpui_kit::test]
+fn a_held_enter_never_confirms_a_restart_or_an_evict(cx: &mut TestAppContext) {
+    for row in [RowAction::RestartPod, RowAction::EvictPod] {
+        let t = delete_test("removal-held-enter", cx);
+        t.show_pods(&[pod("api-x", true)], cx);
+        t.cursor_on_pod(&t.t.stg, "api-x", cx);
+        t.open_removal(row, cx);
+        t.t.fixture.draw_twice(cx);
+        for _ in 0..3 {
+            t.t.fixture.with_window(cx, |window, cx| {
+                window.dispatch_event(key_down("enter", true).to_platform_input(), cx);
+            });
+        }
+        cx.run_until_parked();
+        assert_eq!(writes(&t.t.stg_api).len(), 1, "{row:?}: only the dry-run");
+        t.t.fixture.with_window(cx, |window, cx| {
+            window.dispatch_event(key_down("enter", false).to_platform_input(), cx);
+        });
+        t.t.wait_for("the commit", cx, |_| writes(&t.t.stg_api).len() == 2);
+    }
 }

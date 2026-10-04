@@ -24,3 +24,13 @@ fn a_row_lists_each_key_once_in_registration_order(cx: &mut TestAppContext) {
 fn the_question_mark_row_shows_the_character(cx: &mut TestAppContext) {
     assert_eq!(keys_of(&ShowShortcuts, cx), ["?"]);
 }
+
+#[gpui_kit::test]
+fn shortcut_sheet_lists_attach(cx: &mut TestAppContext) {
+    assert_eq!(keys_of(&crate::keymap::Attach, cx), ["a"]);
+    assert!(
+        crate::keymap::shortcut_rows()
+            .iter()
+            .any(|row| row.label.starts_with("Attach"))
+    );
+}

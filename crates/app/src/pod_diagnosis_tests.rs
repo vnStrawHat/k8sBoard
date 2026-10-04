@@ -11,6 +11,7 @@ fn at(seconds: i64) -> Timestamp {
 
 fn container(name: &str, kind: ContainerKind, state: ContainerState) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "registry/app:1".to_owned(),
         kind,
@@ -53,6 +54,7 @@ fn waiting(reason: StatusReason, message: Option<&str>) -> ContainerState {
 fn pod(status: PodStatus, containers: Vec<ContainerSummary>) -> PodSummary {
     let total = u32::try_from(containers.len()).unwrap_or_default();
     PodSummary {
+        is_finished: false,
         namespace: "shop".to_owned(),
         name: "api-0".to_owned(),
         status,

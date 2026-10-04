@@ -13,17 +13,19 @@ use gpui_kit::{
 };
 
 use super::node_editor::NodeEditKind;
+use super::object_delete::Removal;
 use super::resource_edit_flow::RowCheck;
 use super::{AppShell, Screen, focus_table};
 use crate::dock::{DockMode, TabStep};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
-    CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels, EditTaints,
-    EditValues, EditYaml, ExpandClaim, LeaveInput, NextContainer, NextDockTab, OpenDrawer,
-    OpenShell, PauseRollout, PortForward, PreviousContainer, PreviousDockTab, RerunJob,
-    RestartRollout, RollBack, Scale, SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow,
-    SelectPreviousPage, SelectPreviousRow, SetDefaultStorageClass, SuspendCronJob, ToggleDock,
-    ToggleDockZoom, ToggleReadOnly, TriggerCronJob, ViewLogs, ViewYaml,
+    Attach, CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels,
+    EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, LeaveInput, NextContainer,
+    NextDockTab, OpenDrawer, OpenShell, PauseRollout, PortForward, PreviousContainer,
+    PreviousDockTab, RerunJob, RestartPod, RestartRollout, RollBack, Scale, SelectFirstRow,
+    SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage, SelectPreviousRow,
+    SetDefaultStorageClass, SuspendCronJob, ToggleDock, ToggleDockZoom, ToggleReadOnly,
+    TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::live_sections::loaded_replica_sets;
 use crate::pod_drawer::{container_display_order, selected_container_index};
@@ -197,6 +199,7 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_row_key::<ViewYaml>(root, RowAction::ViewYaml, cx);
     let root = on_row_key::<OpenShell>(root, RowAction::OpenShell, cx);
     let root = on_row_key::<PortForward>(root, RowAction::PortForward, cx);
+    let root = on_row_key::<Attach>(root, RowAction::Attach, cx);
     let root = on_row_key::<Cordon>(root, RowAction::Cordon, cx);
     let root = on_row_key::<Drain>(root, RowAction::Drain, cx);
     let root = on_row_key::<EditTaints>(root, RowAction::EditTaints, cx);
@@ -204,6 +207,8 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_row_key::<EditYaml>(root, RowAction::EditYaml, cx);
     let root = on_row_key::<EditValues>(root, RowAction::EditValues, cx);
     let root = on_row_key::<RestartRollout>(root, RowAction::RestartRollout, cx);
+    let root = on_row_key::<RestartPod>(root, RowAction::RestartPod, cx);
+    let root = on_row_key::<EvictPod>(root, RowAction::EvictPod, cx);
     let root = on_row_key::<Scale>(root, RowAction::Scale, cx);
     let root = on_row_key::<PauseRollout>(root, RowAction::PauseRollout, cx);
     let root = on_row_key::<RollBack>(root, RowAction::RollBack, cx);
@@ -574,6 +579,9 @@ impl AppShell {
             // One TCP port starts at once; several or none open New forward (spec 0035). On the
             // subject's own cluster, never the primary.
             ResourceAction::PortForward => self.run_port_forward_key(&subject, window, cx),
+            // The default container with a terminal of the cursor pod, in the cursor's own cluster
+            // (spec 0040).
+            ResourceAction::Attach => self.attach_default(&subject, window, cx),
             // Always on the subject's own cluster, never the primary.
             ResourceAction::Cordon => {
                 if let ResourceKey::Node { name } = &subject.key {
@@ -605,6 +613,13 @@ impl AppShell {
             ResourceAction::EditValues(_) => self.open_values_edit(subject, window, cx),
             // The cursor row, or the ticked set when it is one of several (spec 0033).
             ResourceAction::Delete(_) => self.delete_at_cursor(&subject, window, cx),
+            // The cursor pod alone: never the ticked set (spec 0040).
+            ResourceAction::RestartPod => {
+                self.start_removal(Removal::Restart, vec![subject], window, cx);
+            }
+            ResourceAction::EvictPod => {
+                self.start_removal(Removal::Evict, vec![subject], window, cx);
+            }
             // Each builds its intent from the cursor row and opens the confirm dialog.
             ResourceAction::RestartRollout(_)
             | ResourceAction::PauseRollout

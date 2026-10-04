@@ -403,6 +403,9 @@ pub(crate) struct AppShell {
     /// The node editor opened last, for the tests that drive it.
     #[cfg(test)]
     last_node_editor: Option<gpui_kit::WeakEntity<node_editor::NodeEditor>>,
+    /// The bulk label editor opened last, for the tests that drive it.
+    #[cfg(test)]
+    last_bulk_label_editor: Option<gpui_kit::WeakEntity<node_editor::BulkLabelEditor>>,
     /// The drain dialog opened last, for the tests that drive it.
     #[cfg(test)]
     last_drain_dialog: Option<gpui_kit::WeakEntity<drain_dialog::DrainDialog>>,
@@ -668,6 +671,8 @@ impl AppShell {
             last_leaving: None,
             #[cfg(test)]
             last_node_editor: None,
+            #[cfg(test)]
+            last_bulk_label_editor: None,
             #[cfg(test)]
             last_drain_dialog: None,
             #[cfg(test)]
@@ -1865,8 +1870,17 @@ impl AppShell {
             return;
         }
         #[cfg(feature = "screenshot")]
-        if launch == LaunchScreen::DrainDialog {
-            self.open_drain_fixture(window, cx);
+        if matches!(
+            launch,
+            LaunchScreen::DrainDialog | LaunchScreen::DrainDialogSkipPdbs
+        ) {
+            self.open_drain_fixture(launch, window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::NodeLabelsBulkEditor {
+            self.open_bulk_label_fixture(window, cx);
             self.pending_dialog_launch = None;
             return;
         }
@@ -1877,8 +1891,11 @@ impl AppShell {
             return;
         }
         #[cfg(feature = "screenshot")]
-        if launch == LaunchScreen::ShellConfirmFixture {
-            self.open_shell_confirm_fixture(window, cx);
+        if matches!(
+            launch,
+            LaunchScreen::ShellConfirmFixture | LaunchScreen::AttachConfirm
+        ) {
+            self.open_shell_confirm_fixture(launch, window, cx);
             self.pending_dialog_launch = None;
             return;
         }
@@ -1900,9 +1917,12 @@ impl AppShell {
         #[cfg(feature = "screenshot")]
         if matches!(
             launch,
-            LaunchScreen::DeleteConfirm | LaunchScreen::DeleteBulkConfirm
+            LaunchScreen::DeleteConfirm
+                | LaunchScreen::DeleteBulkConfirm
+                | LaunchScreen::RestartPodConfirm
+                | LaunchScreen::EvictConfirm
         ) {
-            self.open_delete_fixture(launch == LaunchScreen::DeleteBulkConfirm, window, cx);
+            self.open_delete_fixture(launch, window, cx);
             self.pending_dialog_launch = None;
             return;
         }

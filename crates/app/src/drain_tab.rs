@@ -96,7 +96,7 @@ impl DrainTab {
         crate::audit_log::drain_in_flight_entry(
             &self.identity,
             step,
-            self.run.options().grace,
+            self.run.options(),
             self.note(),
         )
     }

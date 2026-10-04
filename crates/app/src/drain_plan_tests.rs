@@ -498,20 +498,20 @@ fn passing_dry_run_downgrades_blocked_and_waits() {
         PodVerdict::Evict(Budget::Waits { .. })
     ));
     assert_eq!(
-        pod_result(waits, &PodCheck::Waiting).0,
+        pod_result(waits, &PodCheck::Waiting, BudgetPolicy::Respect).0,
         "Waits on PDB api-pdb (allows 1)"
     );
-    let (text, tone) = pod_result(waits, &PodCheck::Accepted);
+    let (text, tone) = pod_result(waits, &PodCheck::Accepted, BudgetPolicy::Respect);
     assert_eq!((text.as_ref(), tone), ("Dry-run accepted", StatusTone::Ok));
     // A local pass keeps its text.
     assert_eq!(
-        pod_result(&plan.pods[0], &PodCheck::Accepted).0,
+        pod_result(&plan.pods[0], &PodCheck::Accepted, BudgetPolicy::Respect).0,
         "PDB api-pdb allows 1"
     );
     let blocked = [budget("api-pdb", 2, 2, 0)];
     let plan = node_plan("wk-04", &pods, &blocked, &DrainOptions::default());
     assert_eq!(
-        pod_result(&plan.pods[0], &PodCheck::Accepted).0,
+        pod_result(&plan.pods[0], &PodCheck::Accepted, BudgetPolicy::Respect).0,
         "Dry-run accepted"
     );
 }
@@ -521,10 +521,15 @@ fn a_refused_or_failed_dry_run_is_the_server_truth() {
     let pods = [pod("payments", "api-1")];
     let plan = node_plan("wk-04", &pods, &[], &DrainOptions::default());
     let planned = &plan.pods[0];
-    let (text, tone) = pod_result(planned, &PodCheck::Refused("needs 2 healthy pods".into()));
+    let refused = PodCheck::Refused("needs 2 healthy pods".into());
+    let (text, tone) = pod_result(planned, &refused, BudgetPolicy::Respect);
     assert_eq!(text, "Blocked by PDB: needs 2 healthy pods");
     assert_eq!(tone, StatusTone::Bad);
-    let (text, tone) = pod_result(planned, &PodCheck::Failed("not permitted".into()));
+    let (text, tone) = pod_result(
+        planned,
+        &PodCheck::Failed("not permitted".into()),
+        BudgetPolicy::Respect,
+    );
     assert_eq!(text, "Failed: not permitted");
     assert_eq!(tone, StatusTone::Bad);
     // And the pod floats to the top.
@@ -653,7 +658,12 @@ fn a_drain_without_checks_passes() {
         DryRunState::Passed { elapsed: secs(0) }
     );
     assert_eq!(
-        dry_run_text(&DryRunState::Passed { elapsed: secs(0) }, &[], &[]),
+        dry_run_text(
+            &DryRunState::Passed { elapsed: secs(0) },
+            &[],
+            &[],
+            BudgetPolicy::Respect
+        ),
         "Server dry-run: nothing to check"
     );
 }
@@ -665,19 +675,19 @@ fn the_dry_run_line_counts_accepted_and_refused_evictions() {
     pods.extend([PodCheck::Refused("a".into()), PodCheck::Refused("b".into())]);
     let state = drain_dry_run(&cordons, &pods, secs(1));
     assert_eq!(
-        dry_run_text(&state, &cordons, &pods),
+        dry_run_text(&state, &cordons, &pods, BudgetPolicy::Respect),
         "Server dry-run: cordon passed · 21 of 23 evictions accepted, 2 refused by PDB"
     );
     // Nothing refused: the clause goes.
     let pods = vec![PodCheck::Accepted; 3];
     let state = drain_dry_run(&cordons, &pods, secs(1));
     assert_eq!(
-        dry_run_text(&state, &cordons, &pods),
+        dry_run_text(&state, &cordons, &pods, BudgetPolicy::Respect),
         "Server dry-run: cordon passed · 3 of 3 evictions accepted"
     );
     // A node that was cordoned already has no cordon check.
     assert_eq!(
-        dry_run_text(&state, &[], &pods),
+        dry_run_text(&state, &[], &pods, BudgetPolicy::Respect),
         "Server dry-run: 3 of 3 evictions accepted"
     );
 }
@@ -687,7 +697,181 @@ fn the_running_dry_run_line_shows_progress() {
     let cordons = [CordonCheck::Passed];
     let pods = [PodCheck::Accepted, PodCheck::Running, PodCheck::Waiting];
     assert_eq!(
-        dry_run_text(&DryRunState::Running, &cordons, &pods),
+        dry_run_text(
+            &DryRunState::Running,
+            &cordons,
+            &pods,
+            BudgetPolicy::Respect
+        ),
         "Server dry-run… 2 of 4"
     );
+}
+
+// ---- Skip PodDisruptionBudgets (spec 0040) ----
+
+fn skip() -> DrainOptions {
+    DrainOptions {
+        budgets: BudgetPolicy::Skip,
+        ..DrainOptions::default()
+    }
+}
+
+#[test]
+fn the_budget_policy_defaults_to_respect() {
+    assert_eq!(DrainOptions::default().budgets, BudgetPolicy::Respect);
+}
+
+#[test]
+fn skip_pdbs_turns_blocked_and_refused_pods_into_deletes() {
+    let api = pod("payments", "api-1");
+    let blocked = [budget("api-pdb", 2, 2, 0)];
+    let bypassed = |names: &[&str]| {
+        PodVerdict::Evict(Budget::Bypassed {
+            names: names.iter().map(|name| (*name).to_owned()).collect(),
+        })
+    };
+    // Blocked, waiting, and allowed pods all read the same: the budget is not asked.
+    assert_eq!(
+        pod_verdict(&api, &blocked, &skip(), 1),
+        bypassed(&["api-pdb"])
+    );
+    let waiting = [budget("api-pdb", 2, 2, 1)];
+    assert_eq!(
+        pod_verdict(&api, &waiting, &skip(), 2),
+        bypassed(&["api-pdb"])
+    );
+    // Two budgets: the API refuses an eviction for good, a delete does not ask.
+    let two = [budget("b-pdb", 2, 2, 1), budget("a-pdb", 2, 2, 1)];
+    assert!(matches!(
+        pod_verdict(&api, &two, &DrainOptions::default(), 1),
+        PodVerdict::Refused(_)
+    ));
+    assert_eq!(
+        pod_verdict(&api, &two, &skip(), 1),
+        bypassed(&["a-pdb", "b-pdb"])
+    );
+    // No budget: nothing to name.
+    assert_eq!(
+        pod_verdict(&api, &[], &skip(), 0),
+        PodVerdict::Evict(Budget::None)
+    );
+    // The other rows are unchanged: a DaemonSet pod still needs its option, a mirror is skipped.
+    let strict = DrainOptions {
+        ignore_daemon_sets: false,
+        ..skip()
+    };
+    assert_eq!(
+        pod_verdict(&daemon_set_pod("agent-1"), &[], &strict, 0),
+        PodVerdict::Needs(DrainOption::IgnoreDaemonSets)
+    );
+    let mirror = DrainPod {
+        is_mirror: true,
+        ..pod("kube-system", "etcd")
+    };
+    assert_eq!(
+        pod_verdict(&mirror, &blocked, &skip(), 0),
+        PodVerdict::Skip(SkipReason::Mirror)
+    );
+    // The run reads no budgets at all.
+    assert_eq!(run_verdict(&api, &skip()), PodVerdict::Evict(Budget::None));
+}
+
+#[test]
+fn skip_pdbs_preview_names_bypassed_budgets() {
+    let pods = [
+        pod("payments", "api-1"),
+        pod("payments", "api-2"),
+        DrainPod {
+            labels: vec!["app=web".to_owned()],
+            ..pod("web", "web-1")
+        },
+    ];
+    let budgets = [budget("api-pdb", 2, 2, 0)];
+    let plan = node_plan("wk-04", &pods, &budgets, &skip());
+    assert_eq!(plan.budgets, BudgetPolicy::Skip);
+    let lines = preview_lines(std::slice::from_ref(&plan), |_| PodCheck::Accepted);
+    let rows: Vec<(String, String, StatusTone)> = lines
+        .iter()
+        .filter_map(|line| match line {
+            PreviewLine::Pod {
+                name, result, tone, ..
+            } => Some((name.to_string(), result.to_string(), *tone)),
+            _ => None,
+        })
+        .collect();
+    // The bypassed pods sort with the waiting ones, before the pod no budget covers.
+    let bypassed = "Deleted directly; PDB api-pdb not checked".to_owned();
+    assert_eq!(
+        rows,
+        [
+            ("api-1".to_owned(), bypassed.clone(), StatusTone::Warn),
+            ("api-2".to_owned(), bypassed, StatusTone::Warn),
+            (
+                "web-1".to_owned(),
+                "Will be rescheduled".to_owned(),
+                StatusTone::Ok
+            ),
+        ]
+    );
+    // Several budgets over one pod: the first by name and a count.
+    let several = [budget("b-pdb", 2, 2, 1), budget("a-pdb", 2, 2, 1)];
+    let plan = node_plan("wk-04", &pods[..1], &several, &skip());
+    let line = &preview_lines(&[plan], |_| PodCheck::Waiting)[0];
+    let PreviewLine::Pod { result, .. } = line else {
+        panic!("a pod line");
+    };
+    assert_eq!(result, "Deleted directly; PDB a-pdb and 1 more not checked");
+}
+
+#[test]
+fn skip_pdbs_words_a_refusal_as_rate_limiting_and_counts_deletes() {
+    let pods = [pod("payments", "api-1")];
+    let plan = node_plan("wk-04", &pods, &[], &skip());
+    let refused = PodCheck::Refused("Too many requests".into());
+    let (text, tone) = pod_result(&plan.pods[0], &refused, BudgetPolicy::Skip);
+    assert_eq!(
+        (text.as_ref(), tone),
+        ("Refused: Too many requests", StatusTone::Bad)
+    );
+    let cordons = [CordonCheck::Passed];
+    let mut checks = vec![PodCheck::Accepted; 23];
+    checks.push(PodCheck::Refused("slow".into()));
+    let state = drain_dry_run(&cordons, &checks, secs(1));
+    assert_eq!(
+        dry_run_text(&state, &cordons, &checks, BudgetPolicy::Skip),
+        "Server dry-run: cordon passed · 23 of 24 deletes accepted, 1 refused"
+    );
+}
+
+#[test]
+fn the_bypass_note_names_the_budgets_and_counts_the_pods() {
+    let pods = [
+        pod("payments", "api-1"),
+        pod("payments", "api-2"),
+        pod("payments", "api-3"),
+    ];
+    let budgets = [budget("api-pdb", 3, 3, 1)];
+    let plan = node_plan("wk-04", &pods, &budgets, &skip());
+    assert_eq!(
+        bypass_note(std::slice::from_ref(&plan)).as_deref(),
+        Some(
+            "PodDisruptionBudgets are not checked. 3 pods protected by api-pdb go down without \
+             waiting for replacements."
+        )
+    );
+    let one = node_plan("wk-04", &pods[..1], &budgets, &skip());
+    assert_eq!(
+        bypass_note(&[one]).as_deref(),
+        Some(
+            "PodDisruptionBudgets are not checked. 1 pod protected by api-pdb goes down without \
+             waiting for replacements."
+        )
+    );
+    // Only when a budget protects a pod.
+    let unprotected = node_plan("wk-04", &pods, &[], &skip());
+    assert_eq!(bypass_note(&[unprotected]), None);
+    // The respecting plan has none, and its own waiting note is untouched.
+    let respect = node_plan("wk-04", &pods, &budgets, &DrainOptions::default());
+    assert_eq!(bypass_note(std::slice::from_ref(&respect)), None);
+    assert!(heads_up(&[respect], DEFAULT_TIMEOUT).is_some());
 }

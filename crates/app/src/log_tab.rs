@@ -1777,6 +1777,7 @@ mod tests {
 
     fn container(name: &str, kind: ContainerKind, is_ready: bool) -> ContainerSummary {
         ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
             name: name.to_owned(),
             image: "img".to_owned(),
             kind,
@@ -1798,6 +1799,7 @@ mod tests {
 
     fn job_pod(name: &str, containers: Vec<ContainerSummary>) -> PodSummary {
         PodSummary {
+            is_finished: false,
             namespace: "ns".to_owned(),
             name: name.to_owned(),
             status: PodStatus::Reason(StatusReason::Running),

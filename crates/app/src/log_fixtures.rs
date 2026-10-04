@@ -223,6 +223,7 @@ pub(crate) fn fixture_container(
     last_termination: Option<Termination>,
 ) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "img".to_owned(),
         kind: ContainerKind::Main,
@@ -255,6 +256,7 @@ pub(crate) fn oom_killed(finished_at: &str) -> Termination {
 
 pub(crate) fn fixture_pod(name: &str, containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),

@@ -33,6 +33,7 @@ fn known_denying(denied: &[AccessCheck]) -> AccessState {
 
 fn pod(namespace: &str, name: &str) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),
@@ -50,6 +51,7 @@ fn pod(namespace: &str, name: &str) -> PodSummary {
         host_network: false,
         image_pull_secrets: Vec::new(),
         containers: vec![cluster::ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
             name: "app".to_owned(),
             image: "img".to_owned(),
             kind: ContainerKind::Main,
@@ -1050,7 +1052,13 @@ fn pairs_skip_the_cursor_roll_back_delete_and_unshipped_actions() {
     for row in ROW_ACTIONS {
         assert_eq!(
             is_pairable(row),
-            !matches!(row, RowAction::Delete | RowAction::RollBack),
+            !matches!(
+                row,
+                RowAction::Delete
+                    | RowAction::RollBack
+                    | RowAction::RestartPod
+                    | RowAction::EvictPod
+            ),
             "{row:?}"
         );
     }
@@ -1295,4 +1303,40 @@ fn the_pair_label_actions_are_all_pairable() {
     for action in PAIR_LABEL_ACTIONS {
         assert!(is_pairable(action.row_action()), "{action:?}");
     }
+}
+
+#[test]
+fn attach_restart_pod_and_evict_are_cursor_entries_with_their_states() {
+    let world = World::new();
+    let cursor = pod_key("payments-api-0");
+    let mut input = world.input(Screen::Pods, Some(&cursor));
+    let found = search(&mut input, "> pod");
+    let entry = |action: RowAction| {
+        found
+            .entries
+            .iter()
+            .find(|entry| matches!(&entry.target, PaletteTarget::RowAction(row) if *row == action))
+    };
+    // Evict of a bare pod is allowed and needs a confirm.
+    let evict = entry(RowAction::EvictPod).expect("Evict is listed");
+    assert_eq!(evict.label.as_ref(), "Evict");
+    assert!(evict.is_enabled() && evict.needs_confirm);
+    // Restart pod reads the lazy Delete pod review (unanswered here) and then the bare pod.
+    let restart = entry(RowAction::RestartPod).expect("Restart pod is listed");
+    assert_eq!(restart.label.as_ref(), "Restart pod");
+    assert_eq!(reason_of(restart), Some("Checking permissions…"));
+    assert!(!restart.needs_confirm);
+    // The test pod has no terminal, so Attach says so.
+    let attach = entry(RowAction::Attach).expect("Attach is listed");
+    assert_eq!(
+        reason_of(attach),
+        Some("No running container has a terminal (stdin and tty); use View logs")
+    );
+    // They are cursor entries only: no pair for another pod.
+    let found = search(&mut input, "> evict pay");
+    assert!(
+        pairs_of(&found)
+            .iter()
+            .all(|(label, _)| *label != "Evict" && *label != "Restart pod")
+    );
 }

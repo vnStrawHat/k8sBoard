@@ -275,6 +275,7 @@ mod tests {
 
     fn pod(name: &str, created: Option<i64>) -> PodSummary {
         PodSummary {
+            is_finished: false,
             namespace: "ns".to_owned(),
             name: name.to_owned(),
             status: PodStatus::Reason(StatusReason::Running),
@@ -302,6 +303,7 @@ mod tests {
         mounts: Vec<MountEntry>,
     ) -> ContainerSummary {
         ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
             name: "main".to_owned(),
             image: "app:1".to_owned(),
             kind,

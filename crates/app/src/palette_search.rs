@@ -245,12 +245,13 @@ pub(crate) struct PaletteInput<'a> {
 }
 
 /// The row actions in the order of the shortcut sheet.
-const ROW_ACTIONS: [RowAction; 22] = [
+const ROW_ACTIONS: [RowAction; 25] = [
     RowAction::ViewLogs,
     RowAction::ViewYaml,
     RowAction::CopyName,
     RowAction::OpenShell,
     RowAction::PortForward,
+    RowAction::Attach,
     RowAction::Cordon,
     RowAction::Drain,
     RowAction::EditTaints,
@@ -258,6 +259,8 @@ const ROW_ACTIONS: [RowAction; 22] = [
     RowAction::EditYaml,
     RowAction::EditValues,
     RowAction::RestartRollout,
+    RowAction::RestartPod,
+    RowAction::EvictPod,
     RowAction::Scale,
     RowAction::Delete,
     RowAction::PauseRollout,
@@ -507,10 +510,11 @@ fn score_sum(scores: &[Option<u32>], eligible: Option<&[bool]>) -> Option<u32> {
 
 /// The actions a pair can carry, for `labelled_tokens`: the labels of `subject_action` that any
 /// subject can offer, and the two that an object state flips (`state_label`).
-const PAIR_LABEL_ACTIONS: [ResourceAction; 22] = [
+const PAIR_LABEL_ACTIONS: [ResourceAction; 23] = [
     ResourceAction::ViewLogs,
     ResourceAction::OpenShell,
     ResourceAction::PortForward,
+    ResourceAction::Attach,
     ResourceAction::OpenNodeShell,
     ResourceAction::DebugContainer,
     ResourceAction::Cordon,
@@ -650,10 +654,15 @@ fn scan_loaded_rows<'a>(input: &PaletteInput<'a>) -> Scan<'a> {
     scan
 }
 
-/// The row actions a pair may carry: Delete acts on the ticked set (decision 26), and Roll back
-/// needs the revisions only the cursor Deployment's drawer loads.
+/// The row actions a pair may carry: Delete acts on the ticked set (decision 26), Roll back needs
+/// the revisions only the cursor Deployment's drawer loads, and Restart pod and Evict (spec 0040)
+/// are cursor entries only, since `rest pay` would otherwise list a refused Restart pod for every
+/// bare pod.
 fn is_pairable(row: RowAction) -> bool {
-    !matches!(row, RowAction::Delete | RowAction::RollBack)
+    !matches!(
+        row,
+        RowAction::Delete | RowAction::RollBack | RowAction::RestartPod | RowAction::EvictPod
+    )
 }
 
 /// Pairs apply to `All` or `Actions` mode with two or more tokens: one names the action, another

@@ -516,6 +516,24 @@ fn create_then_attach_picks_the_attach_permit() {
 }
 
 #[test]
+fn attach_open_takes_the_attach_permit() {
+    use cluster::AccessCheck;
+    let open = ConnectOpen::Attach(Rc::new(|_, _, _, _, _| {}));
+    let attach_rights = allowing_only(&[AccessCheck::GetPodAttach, AccessCheck::CreatePodAttach]);
+    let exec_rights = allowing_only(&[AccessCheck::GetPodExec, AccessCheck::CreatePodExec]);
+    assert!(open.granted(&attach_rights).is_some());
+    // One verb of the pair, or exec rights, never open an attach.
+    assert!(
+        open.granted(&allowing_only(&[AccessCheck::GetPodAttach]))
+            .is_none()
+    );
+    assert!(open.granted(&exec_rights).is_none());
+    assert!(open.granted(&AccessState::Unknown).is_none());
+    // An attach writes nothing first, so its dialog has no dry-run.
+    assert!(connect_intent(open, None).create().is_none());
+}
+
+#[test]
 fn a_start_that_writes_first_exposes_its_write() {
     let writes = connect_intent(attach_open(), None);
     let create = writes.create().expect("a write comes first");

@@ -8,21 +8,27 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use cluster::ShellCommand;
+use cluster::{ContainerTerminal, ShellCommand};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{Context, Entity, EntityId, Subscription, WeakEntity, Window};
 
 use super::AppShell;
-use super::write_flow::{ConnectIntent, ConnectOpen, ExecOpen, queue_audit, report_audit};
+use super::write_flow::{
+    ConnectIntent, ConnectOpen, ContainerAttachOpen, ExecOpen, queue_audit, report_audit,
+};
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, connect_entry,
 };
 use crate::cluster_registry::ClusterRef;
 use crate::dock::shell_cap_text;
-use crate::resource_actions::{ResourceAction, action_label, action_risk, default_shell_container};
+use crate::resource_actions::{
+    ResourceAction, action_label, action_risk, default_attach_container, default_shell_container,
+};
 use crate::settings::AppSettings;
-use crate::shell_tab::{ShellEvent, ShellGrant, ShellKind, ShellTab, ShellTarget, short_pod_name};
+use crate::shell_tab::{
+    AttachGrant, ShellEvent, ShellGrant, ShellKind, ShellTab, ShellTarget, short_pod_name,
+};
 use crate::table_selection::{ClusterObject, ResourceKey};
 
 /// The container to open a shell in, and the cluster of its pod.
@@ -38,6 +44,8 @@ pub(crate) struct ShellOpen {
 /// The name an audit line gives every session start, a reconnect included: a new exec is a new
 /// shell.
 const AUDIT_ACTION: &str = "Open shell";
+/// The audit action of an attach start: each press is its own start and its own line.
+const ATTACH_AUDIT_ACTION: &str = "Attach";
 /// Why a start has no result: its tab was closed, or a newer start replaced it.
 const ABANDONED_TEXT: &str = "the session was closed or replaced before it reported";
 
@@ -120,8 +128,18 @@ fn start_audit(
                 field("privileged", "true"),
             ],
         ),
+        ShellKind::Attach => (
+            ATTACH_AUDIT_ACTION,
+            pod(),
+            vec![field("container", &target.container)],
+        ),
     }
 }
+
+/// What the main process of the container receives from an attach, and what can stop it.
+const ATTACH_WARNING: &str = "What you type goes to the main process of {container}; Ctrl C, Ctrl D or exit may stop it, and the container restarts.";
+/// A container with `stdinOnce` closes its input after the first attach.
+const ATTACH_ONCE_WARNING: &str = "This container closes its input after one attach (stdinOnce): closing the tab ends its process.";
 
 impl AppShell {
     /// Opens a shell in `open.container` of the pod: the one entry of S, the menus, the palette, and
@@ -219,6 +237,102 @@ impl AppShell {
             container,
         };
         self.start_shell(open, window, cx);
+    }
+
+    /// Attaches to `open.container` through the guarded flow of the pod's own cluster (spec 0040):
+    /// the gate, the tier dialog (the cluster's own), then a new Attach tab and its audit line. No
+    /// dry-run: an attach changes nothing on the server.
+    pub(crate) fn start_attach(
+        &mut self,
+        open: ShellOpen,
+        terminal: ContainerTerminal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.dock.read(cx).has_room_for_shell(cx) {
+            window.push_notification(Notification::warning(shell_cap_text()), cx);
+            return;
+        }
+        let (Some(cluster_name), Some(tab_label)) = (
+            self.guard_for(&open.cluster, cx)
+                .map(|guard| guard.display_name().to_owned()),
+            self.slot_label(&open.cluster),
+        ) else {
+            let text = format!("{} is not open", open.cluster.context);
+            window.push_notification(Notification::warning(text), cx);
+            return;
+        };
+        let target = ShellTarget {
+            cluster: open.cluster,
+            namespace: open.namespace,
+            pod: open.pod,
+            short_pod: open.short_pod,
+            container: open.container,
+        };
+        let dock = self.dock.clone();
+        let opened = target.clone();
+        let intent = attach_intent(
+            &target,
+            terminal,
+            cluster_name,
+            Rc::new(move |shell, permit, connection, window, cx| {
+                let grant = AttachGrant { connection, permit };
+                let tab = dock.update(cx, |dock, cx| {
+                    dock.open_attach(
+                        opened.clone(),
+                        ShellKind::Attach,
+                        tab_label.clone(),
+                        grant,
+                        window,
+                        cx,
+                    )
+                });
+                if let Some(tab) = tab {
+                    shell.watch_shell(&tab, cx);
+                    shell.begin_shell_start(&tab, ShellCommand::Auto, cx);
+                }
+            }),
+        );
+        self.start_connect(intent, window, cx);
+    }
+
+    /// A on a pod: its default container with a terminal, in the cluster of the cursor row.
+    pub(crate) fn attach_default(
+        &mut self,
+        subject: &ClusterObject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ResourceKey::Pod { .. } = &subject.key else {
+            return;
+        };
+        let found = self.slot_live(&subject.cluster, cx).and_then(|live| {
+            let pod = live
+                .pods
+                .items()
+                .iter()
+                .find(|pod| subject.key.is_pod(pod))?;
+            let container = default_attach_container(pod).ok()?;
+            Some((
+                ShellOpen {
+                    cluster: subject.cluster.clone(),
+                    namespace: pod.namespace.clone(),
+                    pod: pod.name.clone(),
+                    short_pod: short_pod_name(pod),
+                    container: container.name.clone(),
+                },
+                container.terminal,
+            ))
+        });
+        let Some((open, terminal)) = found else {
+            let text = format!(
+                "{} is unavailable: No running container has a terminal (stdin and tty); use View logs",
+                action_label(ResourceAction::Attach)
+            );
+            window.push_notification(Notification::warning(text), cx);
+            return;
+        };
+        self.start_attach(open, terminal, window, cx);
     }
 
     /// Reconnect, and a change of the shell: a new exec in the same tab, through the same guarded
@@ -382,11 +496,13 @@ impl AppShell {
 
 #[cfg(feature = "screenshot")]
 impl AppShell {
-    /// `--screen shell-confirm-fixture`: the Open shell dialog of a fixed pod of a fixed Production
-    /// cluster. It needs no cluster at all, skips the gate, and its confirm button and Enter do
-    /// nothing (`ConfirmDialog::show_fixture`), so it can never open a session.
+    /// `--screen shell-confirm-fixture` and `--screen attach-confirm`: the Open shell or Attach
+    /// dialog of a fixed pod of a fixed Production cluster. It needs no cluster at all, skips the
+    /// gate, and its confirm button and Enter do nothing (`ConfirmDialog::show_fixture`), so it can
+    /// never open a session.
     pub(super) fn open_shell_confirm_fixture(
         &mut self,
+        launch: crate::launch_options::LaunchScreen,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -397,14 +513,23 @@ impl AppShell {
         use crate::screenshot::{SHELL_FIXTURE_CLUSTER, shell_fixture_target};
         use crate::write_guard::{ActionRisk, ConfirmMode, confirm_step};
         let target = shell_fixture_target();
-        let intent = shell_intent(
-            &target,
-            ShellCommand::Auto,
-            SHELL_FIXTURE_CLUSTER.to_owned(),
-            "Open shell",
-            "Open shell",
-            Rc::new(|_, _, _, _, _| {}),
-        );
+        let intent = if launch == crate::launch_options::LaunchScreen::AttachConfirm {
+            attach_intent(
+                &target,
+                ContainerTerminal::InteractiveOnce,
+                SHELL_FIXTURE_CLUSTER.to_owned(),
+                Rc::new(|_, _, _, _, _| {}),
+            )
+        } else {
+            shell_intent(
+                &target,
+                ShellCommand::Auto,
+                SHELL_FIXTURE_CLUSTER.to_owned(),
+                "Open shell",
+                "Open shell",
+                Rc::new(|_, _, _, _, _| {}),
+            )
+        };
         let confirm = confirm_step(ConfirmMode::TypeName, ActionRisk::Change, intent.expected());
         let inputs = DialogInputs {
             shell: cx.weak_entity(),
@@ -416,6 +541,43 @@ impl AppShell {
         let dialog = cx.new(|cx| ConfirmDialog::new(inputs, window, cx));
         dialog.update(cx, |dialog, _| dialog.show_fixture());
         ConfirmDialog::open(&dialog, window, cx);
+    }
+}
+
+/// The intent of an attach: a `Change` on the cluster's own tier, with the main-process warning.
+fn attach_intent(
+    target: &ShellTarget,
+    terminal: ContainerTerminal,
+    cluster_name: String,
+    open: Rc<ContainerAttachOpen>,
+) -> ConnectIntent {
+    let mut warnings = vec![
+        ATTACH_WARNING
+            .replace("{container}", &target.container)
+            .into(),
+    ];
+    if terminal == ContainerTerminal::InteractiveOnce {
+        warnings.push(ATTACH_ONCE_WARNING.into());
+    }
+    ConnectIntent {
+        cluster: target.cluster.clone(),
+        cluster_name: cluster_name.into(),
+        action: ResourceAction::Attach,
+        label: format!("Attach to {}/{}", target.pod, target.container).into(),
+        button: action_label(ResourceAction::Attach).into(),
+        risk: action_risk(ResourceAction::Attach),
+        warnings,
+        object: AuditObject {
+            kind: "Pod".to_owned(),
+            namespace: Some(target.namespace.clone()),
+            name: target.pod.clone(),
+        },
+        fields: vec![AuditField {
+            path: "container".to_owned(),
+            value: Some(target.container.clone()),
+        }],
+        expected_name: None,
+        open: ConnectOpen::Attach(open),
     }
 }
 

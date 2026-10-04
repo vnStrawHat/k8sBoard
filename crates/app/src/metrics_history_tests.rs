@@ -52,6 +52,7 @@ fn rings_of<'a>(
 /// A pod summary for the controller and the OOM kills; the rest is blank.
 fn summary(namespace: &str, name: &str, controller: Option<(&str, &str)>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(StatusReason::Running),
@@ -77,6 +78,7 @@ fn summary(namespace: &str, name: &str, controller: Option<(&str, &str)>) -> Pod
 
 fn oom_container(name: &str, finished_at: jiff::Timestamp) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "img".to_owned(),
         kind: ContainerKind::Main,

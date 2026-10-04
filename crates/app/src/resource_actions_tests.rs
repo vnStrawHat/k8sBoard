@@ -477,6 +477,7 @@ fn kubectl_command_quotes_only_unsafe_parts() {
 
 fn pod_on(node: Option<&str>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "ns".to_owned(),
         name: "pod".to_owned(),
         status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
@@ -721,6 +722,7 @@ fn pod_mounting_claim(namespace: &str, name: &str, claim: &str) -> PodSummary {
     pod.namespace = namespace.to_owned();
     pod.name = name.to_owned();
     pod.containers.push(cluster::ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: "main".to_owned(),
         image: "img".to_owned(),
         kind: cluster::ContainerKind::Main,
@@ -1237,6 +1239,7 @@ fn kind_key(kind: ResourceKind) -> ResourceKey {
 
 fn container_of(name: &str) -> cluster::ContainerSummary {
     cluster::ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "img".to_owned(),
         kind: cluster::ContainerKind::Main,
@@ -1258,6 +1261,7 @@ fn container_of(name: &str) -> cluster::ContainerSummary {
 
 fn pod_with(containers: Vec<cluster::ContainerSummary>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "shop".to_owned(),
         name: "api-0".to_owned(),
         status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
@@ -2876,6 +2880,7 @@ fn container_menu_items_in_order() {
         [
             ContainerMenuEntry::ViewLogs,
             ContainerMenuEntry::OpenShell,
+            ContainerMenuEntry::Attach,
             ContainerMenuEntry::CopyImage
         ]
     );
@@ -3317,4 +3322,317 @@ fn is_planned_matches_the_unshipped_gates() {
     // Drain shipped with spec 0034, so it is not planned any more.
     assert!(!is_planned(ResourceAction::Drain));
     assert!(!is_planned(ResourceAction::ViewLogs));
+}
+
+// ---- Attach (spec 0040) ----
+
+fn attachable(name: &str, kind: ContainerKind) -> ContainerSummary {
+    let mut container = container(name, kind, true);
+    container.terminal = cluster::ContainerTerminal::Interactive;
+    container
+}
+
+#[test]
+fn attach_gate_needs_both_attach_verbs() {
+    let allowed = known_denying(&[]);
+    assert_eq!(
+        action_availability(ResourceAction::Attach, &unlocked(&allowed)),
+        ActionAvailability::Enabled
+    );
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::Attach,
+            &unlocked(&checking())
+        )),
+        "Checking permissions…"
+    );
+    for verb in [AccessCheck::GetPodAttach, AccessCheck::CreatePodAttach] {
+        let denied = known_denying(&[verb]);
+        assert_eq!(
+            reason(action_availability(
+                ResourceAction::Attach,
+                &unlocked(&denied)
+            )),
+            "Not permitted: get and create pods/attach",
+            "{verb:?}"
+        );
+    }
+    let locked = test_guard(
+        &allowed,
+        WriteLock::Locked,
+        "prod-1",
+        Environment::Production,
+    );
+    assert_eq!(
+        reason(action_availability(ResourceAction::Attach, &locked)),
+        "prod-1 is read-only"
+    );
+    assert_eq!(action_risk(ResourceAction::Attach), ActionRisk::Change);
+    assert_eq!(action_label(ResourceAction::Attach), "Attach");
+}
+
+#[test]
+fn attach_block_reasons() {
+    let ok = attachable("app", ContainerKind::Main);
+    assert_eq!(attach_block(&ok), None);
+    let mut stopped = ok.clone();
+    stopped.state = ContainerState::Waiting {
+        reason: None,
+        message: None,
+    };
+    assert_eq!(
+        attach_block(&stopped).as_deref(),
+        Some("Container is not running")
+    );
+    let init = attachable("init", ContainerKind::Init);
+    assert_eq!(
+        attach_block(&init).as_deref(),
+        Some("Init containers cannot be attached")
+    );
+    let plain = container("app", ContainerKind::Main, true);
+    assert_eq!(
+        attach_block(&plain).as_deref(),
+        Some("The container has no terminal (stdin and tty); use View logs")
+    );
+    // A sidecar with a terminal can be attached, and `stdinOnce` is still a terminal.
+    let mut once = attachable("proxy", ContainerKind::Sidecar);
+    once.terminal = cluster::ContainerTerminal::InteractiveOnce;
+    assert_eq!(attach_block(&once), None);
+}
+
+#[test]
+fn default_attach_container_prefers_running_main() {
+    let pod = pod_with(vec![
+        attachable("proxy", ContainerKind::Sidecar),
+        attachable("app", ContainerKind::Main),
+    ]);
+    assert_eq!(
+        default_attach_container(&pod).map(|container| container.name.as_str()),
+        Ok("app")
+    );
+    // A main container without a terminal does not hide a sidecar that has one.
+    let pod = pod_with(vec![
+        attachable("proxy", ContainerKind::Sidecar),
+        container("app", ContainerKind::Main, true),
+    ]);
+    assert_eq!(
+        default_attach_container(&pod).map(|container| container.name.as_str()),
+        Ok("proxy")
+    );
+    let none = pod_with(vec![container("app", ContainerKind::Main, true)]);
+    assert_eq!(
+        default_attach_container(&none).err().as_deref(),
+        Some("No running container has a terminal (stdin and tty); use View logs")
+    );
+}
+
+#[test]
+fn a_key_reads_the_gate_then_the_default_container() {
+    let subject = ResourceKey::Pod {
+        namespace: "shop".to_owned(),
+        name: "api-0".to_owned(),
+    };
+    let allowed = known_denying(&[]);
+    let with_terminal = pod_with(vec![attachable("app", ContainerKind::Main)]);
+    let without = pod_with(vec![container("app", ContainerKind::Main, true)]);
+    let key = |pod: Option<&PodSummary>, access: &AccessState| {
+        key_availability_of(RowAction::Attach, &subject, pod, &unlocked(access))
+    };
+    assert_eq!(
+        key(Some(&with_terminal), &allowed),
+        KeyAvailability::Run(ResourceAction::Attach)
+    );
+    assert_eq!(
+        disabled_reason(key(Some(&without), &allowed)),
+        "No running container has a terminal (stdin and tty); use View logs"
+    );
+    // The gate wins over the pod: the reason the user can act on first comes first.
+    assert_eq!(
+        disabled_reason(key(
+            Some(&without),
+            &known_denying(&[AccessCheck::GetPodAttach])
+        )),
+        "Not permitted: get and create pods/attach"
+    );
+    assert_eq!(key(None, &allowed), KeyAvailability::NotOffered);
+}
+
+// ---- Restart pod and Evict (spec 0040) ----
+
+fn owned_by(kind: &str) -> Option<cluster::ControllerRef> {
+    Some(cluster::ControllerRef {
+        kind: kind.to_owned(),
+        name: "owner".to_owned(),
+    })
+}
+
+fn removal_pod(controller: Option<cluster::ControllerRef>) -> PodSummary {
+    PodSummary {
+        controller,
+        ..pod_with(Vec::new())
+    }
+}
+
+#[test]
+fn pod_menu_follows_w4_order() {
+    use PodMenuEntry::*;
+    assert_eq!(
+        POD_MENU,
+        [
+            ViewLogs,
+            OpenShell,
+            DebugContainer,
+            PortForward,
+            Attach,
+            Separator,
+            EditYaml,
+            ViewYaml,
+            RestartPod,
+            EvictPod,
+            Separator,
+            CopyName,
+            CopyKubectlCommand,
+            Separator,
+            DeletePod,
+        ]
+    );
+}
+
+#[test]
+fn restart_pod_refuses_bare_static_finished_and_terminating_pods() {
+    let restart = |pod: &PodSummary| pod_block(ResourceAction::RestartPod, pod);
+    assert_eq!(restart(&removal_pod(owned_by("ReplicaSet"))), None);
+    assert_eq!(restart(&removal_pod(owned_by("StatefulSet"))), None);
+    assert_eq!(restart(&removal_pod(owned_by("MyOperatorKind"))), None);
+    assert_eq!(
+        restart(&removal_pod(None)).as_deref(),
+        Some("Not managed by a controller; it would not come back. Use Delete pod…")
+    );
+    assert_eq!(
+        restart(&removal_pod(owned_by("Node"))).as_deref(),
+        Some("Static pod: the kubelet owns it")
+    );
+    let mut terminating = removal_pod(owned_by("ReplicaSet"));
+    terminating.status = cluster::PodStatus::Terminating;
+    assert_eq!(
+        restart(&terminating).as_deref(),
+        Some("Already terminating")
+    );
+    // The phase decides, never the status reason: an `Error` reason on a running pod restarts.
+    let mut errored = removal_pod(owned_by("ReplicaSet"));
+    errored.status = cluster::PodStatus::Reason(cluster::StatusReason::Error);
+    assert_eq!(restart(&errored), None);
+    let mut finished = removal_pod(owned_by("Job"));
+    finished.is_finished = true;
+    assert_eq!(
+        restart(&finished).as_deref(),
+        Some("The pod has finished; its controller does not restart it")
+    );
+}
+
+#[test]
+fn evict_refuses_static_and_terminating_pods_only() {
+    let evict = |pod: &PodSummary| pod_block(ResourceAction::EvictPod, pod);
+    let static_pod = removal_pod(owned_by("Node"));
+    assert_eq!(evict(&static_pod).as_deref(), Some(STATIC_POD_TEXT));
+    // One text for both actions.
+    assert_eq!(
+        pod_block(ResourceAction::RestartPod, &static_pod).as_deref(),
+        Some(STATIC_POD_TEXT)
+    );
+    let mut terminating = removal_pod(owned_by("ReplicaSet"));
+    terminating.status = cluster::PodStatus::Terminating;
+    assert_eq!(evict(&terminating).as_deref(), Some("Already terminating"));
+    // A bare pod, a DaemonSet pod, and a finished pod can be evicted.
+    assert_eq!(evict(&removal_pod(None)), None);
+    assert_eq!(evict(&removal_pod(owned_by("DaemonSet"))), None);
+    let mut finished = removal_pod(owned_by("Job"));
+    finished.is_finished = true;
+    assert_eq!(evict(&finished), None);
+}
+
+#[test]
+fn restart_and_evict_gates_and_risks() {
+    assert_eq!(
+        action_risk(ResourceAction::RestartPod),
+        ActionRisk::Destructive
+    );
+    assert_eq!(
+        action_risk(ResourceAction::EvictPod),
+        ActionRisk::Destructive
+    );
+    assert_eq!(action_label(ResourceAction::RestartPod), "Restart pod");
+    assert_eq!(action_label(ResourceAction::EvictPod), "Evict");
+    // Evict reads the session report: create pods/eviction.
+    let denied = known_denying(&[AccessCheck::CreatePodEviction]);
+    assert_eq!(
+        reason(action_availability(
+            ResourceAction::EvictPod,
+            &unlocked(&denied)
+        )),
+        "Not permitted: create pods/eviction"
+    );
+    // Restart reads the lazy review Delete pod reads, so the two items agree.
+    assert_eq!(
+        action_availability(ResourceAction::RestartPod, &unlocked(&known_denying(&[]))),
+        action_availability(
+            ResourceAction::Delete(ObjectKind::Pod),
+            &unlocked(&known_denying(&[]))
+        ),
+    );
+    let allowed = known_denying(&[]);
+    let guard = unlocked(&allowed);
+    assert_eq!(
+        reason(action_availability(ResourceAction::RestartPod, &guard)),
+        "Checking permissions…"
+    );
+    // Neither has a single key: the unit actions are in no binding.
+    assert_eq!(
+        RowAction::RestartPod.key_action().name(),
+        "k8sboard::RestartPod"
+    );
+    assert_eq!(
+        RowAction::EvictPod.key_action().name(),
+        "k8sboard::EvictPod"
+    );
+}
+
+#[test]
+fn a_removal_key_reads_the_gate_then_the_pod() {
+    let subject = ResourceKey::Pod {
+        namespace: "shop".to_owned(),
+        name: "api-0".to_owned(),
+    };
+    let allowed = known_denying(&[]);
+    let bare = removal_pod(None);
+    let key = |row: RowAction, pod: Option<&PodSummary>, access: &AccessState| {
+        key_availability_of(row, &subject, pod, &unlocked(access))
+    };
+    // Evict of a bare pod runs; Restart says why not.
+    assert_eq!(
+        key(RowAction::EvictPod, Some(&bare), &allowed),
+        KeyAvailability::Run(ResourceAction::EvictPod)
+    );
+    // The lazy Delete review has not answered here, so Restart reads `Checking` first.
+    assert_eq!(
+        disabled_reason(key(RowAction::RestartPod, Some(&bare), &allowed)),
+        "Checking permissions…"
+    );
+    assert_eq!(
+        disabled_reason(key(
+            RowAction::EvictPod,
+            Some(&bare),
+            &known_denying(&[AccessCheck::CreatePodEviction])
+        )),
+        "Not permitted: create pods/eviction"
+    );
+    assert_eq!(
+        key(RowAction::EvictPod, None, &allowed),
+        KeyAvailability::NotOffered
+    );
+    let node = ResourceKey::Node {
+        name: "wk-01".to_owned(),
+    };
+    assert_eq!(subject_action(RowAction::RestartPod, &node), None);
+    assert_eq!(subject_action(RowAction::EvictPod, &node), None);
 }

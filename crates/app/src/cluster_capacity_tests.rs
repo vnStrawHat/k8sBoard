@@ -46,6 +46,7 @@ fn container(kind: ContainerKind, cpu: &str, memory: &str) -> ContainerSummary {
         limit: None,
     };
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: "c".to_owned(),
         image: "img".to_owned(),
         kind,
@@ -67,6 +68,7 @@ fn container(kind: ContainerKind, cpu: &str, memory: &str) -> ContainerSummary {
 
 fn pod(name: &str, node: &str, status: StatusReason, cpu: &str, memory: &str) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "ns".to_owned(),
         name: name.to_owned(),
         status: PodStatus::Reason(status),

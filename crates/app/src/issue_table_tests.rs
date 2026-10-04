@@ -120,6 +120,7 @@ fn quick_filter_matches_kind_and_cause() {
 #[test]
 fn view_logs_needs_the_subject_pod_in_the_list() {
     let pod = |name: &str| cluster::PodSummary {
+        is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),
         status: cluster::PodStatus::Reason(cluster::StatusReason::Running),

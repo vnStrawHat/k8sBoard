@@ -885,3 +885,35 @@ fn shortcut_rows_name_both_edit_keys() {
     assert!(labels.contains(&"Edit YAML (other kinds)"), "{labels:?}");
     assert!(!labels.contains(&"Edit YAML"));
 }
+
+#[gpui_kit::test]
+fn a_runs_attach_on_pods_only(cx: &mut TestAppContext) {
+    use crate::resource_actions::{ResourceAction, RowAction, subject_action};
+    use crate::table_selection::ResourceKey;
+    bind_all(cx);
+    assert_eq!(resolve("a", &SHELL, cx), Some("k8sboard::Attach"));
+    assert_eq!(resolve("a", &TABLE_PATH, cx), Some("k8sboard::Attach"));
+    // A single key never acts in a text field or in the terminal.
+    for path in [&INPUT_PATH[..], &TERMINAL_PATH[..]] {
+        let name = resolve("a", path, cx);
+        assert!(!is_app_action(name), "a under {path:?}: {name:?}");
+    }
+    let pod = ResourceKey::Pod {
+        namespace: "shop".to_owned(),
+        name: "api-0".to_owned(),
+    };
+    let node = ResourceKey::Node {
+        name: "wk-01".to_owned(),
+    };
+    let deployment = ResourceKey::Kind {
+        kind: crate::resource_kind::ResourceKind::Deployments,
+        namespace: Some("shop".to_owned()),
+        name: "api".to_owned(),
+    };
+    assert_eq!(
+        subject_action(RowAction::Attach, &pod),
+        Some(ResourceAction::Attach)
+    );
+    assert_eq!(subject_action(RowAction::Attach, &node), None);
+    assert_eq!(subject_action(RowAction::Attach, &deployment), None);
+}

@@ -447,3 +447,113 @@ fn attach_refusals_map_to_typed_errors_that_name_the_verb() {
         other => panic!("expected Api 502, got {other:?}"),
     }
 }
+
+/// A pod whose container `name` runs, listed under `list`.
+fn running_in(list: &str, name: &str) -> Pod {
+    let value = json!({
+        "apiVersion": "v1", "kind": "Pod",
+        "metadata": {"name": "api-0", "namespace": "kube-system"},
+        "status": {"phase": "Running", list: [{
+            "name": name, "image": "busybox", "imageID": "", "ready": true,
+            "restartCount": 0, "state": running(),
+        }]},
+    });
+    serde_json::from_value(value).expect("a pod")
+}
+
+#[test]
+fn container_wait_reads_main_and_sidecar_statuses() {
+    let main = running_in("containerStatuses", "app");
+    assert_eq!(
+        readiness(Some(&main), "app", AttachWait::Container),
+        Readiness::Running
+    );
+    let sidecar = running_in("initContainerStatuses", "proxy");
+    assert_eq!(
+        readiness(Some(&sidecar), "proxy", AttachWait::Container),
+        Readiness::Running
+    );
+    // A node shell wait does not look in the init list.
+    assert_eq!(
+        readiness(Some(&sidecar), "proxy", AttachWait::NodeShellPod),
+        Readiness::Waiting(None)
+    );
+}
+
+#[test]
+fn container_wait_keeps_exit_127_as_an_ended_container() {
+    let mut ended = pod_with("containerStatuses", terminated(127));
+    ended["status"]["phase"] = json!("Running");
+    let ended: Pod = serde_json::from_value(ended).expect("a pod");
+    assert_eq!(
+        readiness(Some(&ended), "shell", AttachWait::Container),
+        Readiness::Failed("the container ended (Error)".to_owned())
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn container_attach_requests_the_attach_path_after_one_read() {
+    let (connection, api, reads) = scripted(vec![running()], 403);
+    let updates: Vec<_> = connection
+        .attach_shell(
+            AttachPermit::for_tests(),
+            request(AttachWait::Container),
+            blocked_input(),
+        )
+        .collect()
+        .await;
+    match updates.as_slice() {
+        [
+            ShellUpdate::Failed(ClusterError::Forbidden {
+                action, message, ..
+            }),
+        ] => {
+            assert_eq!(*action, "attaching to a container");
+            assert!(message.contains("pods/attach"), "{message}");
+        }
+        other => panic!("unexpected updates: {other:?}"),
+    }
+    assert_eq!(reads.load(Ordering::SeqCst), 1, "one read, then the attach");
+    let requests = api.requests();
+    let attach = requests
+        .iter()
+        .find(|request| request.path.ends_with("/attach"))
+        .expect("the attach request");
+    assert_eq!(attach.method, "GET");
+    assert_eq!(
+        attach.path,
+        "/api/v1/namespaces/kube-system/pods/k8sboard-node-shell-wk-03-x7k2q/attach"
+    );
+    for (key, value) in [
+        ("container", "shell"),
+        ("tty", "true"),
+        ("stdin", "true"),
+        ("stdout", "true"),
+    ] {
+        assert!(
+            attach.has_query(key, value),
+            "{key}={value} in {}",
+            attach.query
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_debug_policy_blocks_an_attach() {
+    let (connection, api) = FakeApi::connection(WritePolicy::Blocked, |_| (200, "{}".to_owned()));
+    let updates: Vec<_> = connection
+        .attach_shell(
+            AttachPermit::for_tests(),
+            request(AttachWait::Container),
+            blocked_input(),
+        )
+        .collect()
+        .await;
+    match updates.as_slice() {
+        [ShellUpdate::Failed(ClusterError::Rendered { message })] => {
+            assert_eq!(message, &WriteError::WritesBlocked.to_string());
+        }
+        other => panic!("expected one Failed, got {other:?}"),
+    }
+    assert!(api.requests().is_empty(), "no request left the client");
+}

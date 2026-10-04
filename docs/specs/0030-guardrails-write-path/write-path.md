@@ -70,7 +70,7 @@ impl ClusterConnection {
 | `pods/portforward` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/portforward?ports={p}` | stream | no | 0035 step 1 (`port_forward.rs`) |
 | `pods/exec` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/exec?…` | stream | no | 0036 step 1 (`pod_shell.rs`) |
 | `AddDebugContainer`, `CreateNodeShellPod`, `DeleteNodeShellPod` | PATCH (strategic) `ephemeralcontainers`, POST pod, DELETE pod | 0037 pod-specs.md | 0037 pod-specs.md | yes, yes, no (delete is commit only) | 0037 step 1 |
-| `pods/attach` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/attach?…` | stream | no | 0037 step 1 (`debug_shell.rs`) |
+| `pods/attach` (connect) | GET + WebSocket upgrade | `/api/v1/namespaces/{ns}/pods/{pod}/attach?…` | stream | no | 0037 step 1, 0040 (attach to a running container) (`debug_shell.rs`) |
 
 Deferred (user, 2026-10-02): 0038 Helm writes (`helm rollback`, `helm uninstall` through the user's `helm` CLI, call site `helm_command.rs`) are not scheduled; their allow-list row and clippy exception are added only if 0038 is.
 

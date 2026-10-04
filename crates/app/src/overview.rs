@@ -1029,6 +1029,7 @@ mod tests {
 
     fn pod(status: PodStatus) -> PodSummary {
         PodSummary {
+            is_finished: false,
             namespace: "ns".to_owned(),
             name: "p".to_owned(),
             status,

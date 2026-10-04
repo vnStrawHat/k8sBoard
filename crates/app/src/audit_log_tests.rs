@@ -1,7 +1,9 @@
 use serde_json::Value;
 
 use super::*;
+use crate::app_shell::object_delete::Removal;
 use crate::cluster_session::AccessState;
+use crate::drain_plan::{BudgetPolicy, DrainOptions};
 use crate::environment::Environment;
 use crate::write_guard::test_guard;
 
@@ -337,6 +339,11 @@ fn audit_records_paths_only() {
 
 /// The audit entry a delete of `kind` named `name` would write for `item` of its batch.
 fn delete_entry(kind: cluster::ObjectKind, name: &str) -> AuditEntry {
+    removal_entry(Removal::Delete, kind, name)
+}
+
+/// The same for a removal of any kind of the 0033 start (a restart or an eviction too).
+fn removal_entry(removal: Removal, kind: cluster::ObjectKind, name: &str) -> AuditEntry {
     use crate::app_shell::object_delete::{DeleteExtras, DeleteTarget, TargetFacts, delete_batch};
     use cluster::{DeletePropagation, ObjectIdentity, ObjectRef};
 
@@ -355,6 +362,7 @@ fn delete_entry(kind: cluster::ObjectKind, name: &str) -> AuditEntry {
         context: "stg-b".to_owned(),
     };
     let extras = DeleteExtras {
+        removal,
         propagation: DeletePropagation::Foreground,
         kind,
         targets: vec![target],
@@ -412,6 +420,7 @@ fn a_drain_summary_is_one_line_of_counts_and_an_outcome() {
     let entry = drain_summary_entry(
         &identity,
         &summary(SummaryOutcome::Stuck),
+        BudgetPolicy::Respect,
         Some("night shift"),
     );
     let value = serde_json::to_value(&entry).expect("serializes");
@@ -455,7 +464,7 @@ fn every_drain_outcome_has_its_own_word() {
         (SummaryOutcome::Cancelled, "cancelled"),
         (SummaryOutcome::Stopped, "stopped"),
     ] {
-        let entry = drain_summary_entry(&identity, &summary(outcome), None);
+        let entry = drain_summary_entry(&identity, &summary(outcome), BudgetPolicy::Respect, None);
         let value = serde_json::to_value(&entry).expect("serializes");
         assert_eq!(value["outcome"], word);
         assert!(value.get("note").is_none());
@@ -471,11 +480,18 @@ fn a_stuck_summary_records_why_in_the_error() {
         reason: Some("Timed out after 5m: 2 pods left".into()),
         ..summary(SummaryOutcome::Stuck)
     };
-    let value = serde_json::to_value(drain_summary_entry(&identity, &stuck, None)).expect("JSON");
+    let value = serde_json::to_value(drain_summary_entry(
+        &identity,
+        &stuck,
+        BudgetPolicy::Respect,
+        None,
+    ))
+    .expect("JSON");
     assert_eq!(value["error"], "Timed out after 5m: 2 pods left");
     let drained = serde_json::to_value(drain_summary_entry(
         &identity,
         &summary(SummaryOutcome::Drained),
+        BudgetPolicy::Respect,
         None,
     ))
     .expect("JSON");
@@ -492,7 +508,13 @@ fn the_unknown_count_is_a_field_only_when_there_is_one() {
             unknown,
             ..summary(SummaryOutcome::Stopped)
         };
-        serde_json::to_value(drain_summary_entry(&identity, &line, None)).expect("JSON")
+        serde_json::to_value(drain_summary_entry(
+            &identity,
+            &line,
+            BudgetPolicy::Respect,
+            None,
+        ))
+        .expect("JSON")
     };
     assert_eq!(value(0)["fields"].as_array().map(Vec::len), Some(4));
     let with = value(1);
@@ -513,8 +535,11 @@ fn a_commit_in_the_air_at_quit_is_an_unknown_line() {
         name: "api-1".to_owned(),
         uid: "u-1".to_owned(),
     });
-    let entry = drain_in_flight_entry(&identity, &evict, GracePeriod::Seconds(30), Some("note"))
-        .expect("a line");
+    let options = DrainOptions {
+        grace: GracePeriod::Seconds(30),
+        ..DrainOptions::default()
+    };
+    let entry = drain_in_flight_entry(&identity, &evict, &options, Some("note")).expect("a line");
     let value = serde_json::to_value(entry).expect("JSON");
     assert_eq!(value["action"], "Evict");
     assert_eq!(value["outcome"], "unknown");
@@ -533,7 +558,7 @@ fn a_commit_in_the_air_at_quit_is_an_unknown_line() {
     let cordon = drain_in_flight_entry(
         &identity,
         &NextStep::Cordon("wk-04".to_owned()),
-        GracePeriod::PodDefault,
+        &DrainOptions::default(),
         None,
     )
     .expect("a line");
@@ -544,7 +569,7 @@ fn a_commit_in_the_air_at_quit_is_an_unknown_line() {
     );
     // A read or a dry-run has nothing to record.
     assert!(
-        drain_in_flight_entry(&identity, &NextStep::Poll, GracePeriod::PodDefault, None).is_none()
+        drain_in_flight_entry(&identity, &NextStep::Poll, &DrainOptions::default(), None).is_none()
     );
 }
 
@@ -599,4 +624,90 @@ fn a_line_that_cannot_be_written_fails_its_own_receipt_only() {
     futures::executor::block_on(kept).expect("the next line still lands");
     assert_eq!(actions_in(&dir), ["kept"]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn restart_pod_records_its_own_action_and_the_propagation() {
+    let entry = removal_entry(Removal::Restart, cluster::ObjectKind::Pod, "api-0");
+    assert_eq!(entry.action, "Restart pod");
+    assert_eq!(entry.fields.len(), 1);
+    assert_eq!(entry.fields[0].path, "deleteOptions.propagationPolicy");
+    assert_eq!(entry.fields[0].value.as_deref(), Some("Foreground"));
+}
+
+#[test]
+fn evict_records_the_grace_period_and_no_body() {
+    let entry = removal_entry(Removal::Evict, cluster::ObjectKind::Pod, "api-0");
+    assert_eq!(entry.action, "Evict");
+    assert_eq!(
+        entry.object.as_ref().map(|object| object.name.as_str()),
+        Some("api-0")
+    );
+    let fields: Vec<(&str, Option<&str>)> = entry
+        .fields
+        .iter()
+        .map(|field| (field.path.as_str(), field.value.as_deref()))
+        .collect();
+    assert_eq!(fields, [("pods/eviction", Some("grace pod default"))]);
+}
+
+#[test]
+fn skip_pdbs_summary_records_disable_eviction() {
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let identity = AuditIdentity::of(&guard);
+    let line = summary(SummaryOutcome::Drained);
+    let fields = |budgets| {
+        let entry = drain_summary_entry(&identity, &line, budgets, None);
+        serde_json::to_value(entry).expect("JSON")["fields"].clone()
+    };
+    // The counts keep their keys and `evicted` counts the pods removed either way.
+    let respect = fields(BudgetPolicy::Respect);
+    assert!(
+        respect
+            .as_array()
+            .is_some_and(|list| list.iter().all(|field| field["path"] != "disable_eviction"))
+    );
+    let skip = fields(BudgetPolicy::Skip);
+    let paths: Vec<&str> = skip
+        .as_array()
+        .expect("fields")
+        .iter()
+        .filter_map(|field| field["path"].as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "evicted",
+            "refused",
+            "failed",
+            "skipped",
+            "disable_eviction"
+        ]
+    );
+    assert_eq!(skip[4]["value"], "true");
+}
+
+#[test]
+fn a_skip_pdbs_commit_in_the_air_is_a_delete_line() {
+    use crate::drain_plan::PodKey;
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let identity = AuditIdentity::of(&guard);
+    let step = NextStep::Evict(PodKey {
+        namespace: "payments".to_owned(),
+        name: "api-1".to_owned(),
+        uid: "u-1".to_owned(),
+    });
+    let options = DrainOptions {
+        budgets: BudgetPolicy::Skip,
+        ..DrainOptions::default()
+    };
+    let entry = drain_in_flight_entry(&identity, &step, &options, None).expect("a line");
+    let value = serde_json::to_value(entry).expect("JSON");
+    assert_eq!(value["action"], "Delete");
+    assert_eq!(
+        value["fields"][0],
+        serde_json::json!({"path": "deleteOptions.propagationPolicy", "value": "Background"})
+    );
 }

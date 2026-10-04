@@ -487,6 +487,7 @@ mod tests {
 
     fn pod() -> PodSummary {
         PodSummary {
+            is_finished: false,
             namespace: "payments".to_owned(),
             name: "api-7".to_owned(),
             status: PodStatus::Reason(StatusReason::Running),
@@ -558,6 +559,7 @@ mod tests {
         assert!(matches!(row.value(AGE), CellValue::Age(None)));
         assert!(matches!(row.value(POD_COLUMNS.len()), CellValue::Absent));
         let unscheduled = PodSummary {
+            is_finished: false,
             node_name: None,
             ..pod
         };
@@ -610,6 +612,7 @@ mod tests {
     fn pod_rows_keep_session_order_and_attach_usage() {
         let first = pod();
         let second = PodSummary {
+            is_finished: false,
             name: "api-8".to_owned(),
             ..pod()
         };

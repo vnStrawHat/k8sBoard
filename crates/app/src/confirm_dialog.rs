@@ -219,6 +219,15 @@ impl ConfirmDialog {
         self.is_fixture = true;
     }
 
+    /// The picture of `--screen evict-confirm`: every dry-run was refused with `reason`, so the
+    /// dry-run line fails and the confirm button stays off.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn show_fixture_refused(&mut self, reason: SharedString) {
+        self.items = vec![ItemProgress::Rejected(reason); self.items.len()];
+        self.dry_run = Some(summarize_dry_runs(&self.items, Duration::ZERO));
+        self.is_fixture = true;
+    }
+
     /// Opens `dialog` as the window's modal.
     pub(crate) fn open(dialog: &Entity<Self>, window: &mut Window, cx: &mut App) {
         let view = dialog.clone();

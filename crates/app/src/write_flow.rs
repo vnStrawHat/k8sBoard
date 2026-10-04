@@ -120,6 +120,8 @@ pub(crate) enum ConnectOpen {
     /// Creates or changes an object first (a debug container, a node shell pod), then attaches to
     /// it (spec 0037).
     CreateThenAttach(CreateThenAttach),
+    /// Attaches to a running container of the pod's own spec (spec 0040): no write, no dry-run.
+    Attach(Rc<ContainerAttachOpen>),
 }
 
 /// A start that writes before it attaches. The write is a `WriteIntent` in every respect: the
@@ -154,6 +156,9 @@ pub(crate) type AttachOpen = dyn Fn(
     &mut Context<AppShell>,
 );
 
+pub(crate) type ContainerAttachOpen =
+    dyn Fn(&mut AppShell, AttachPermit, ClusterConnection, &mut Window, &mut Context<AppShell>);
+
 pub(crate) type ExecOpen =
     dyn Fn(&mut AppShell, ExecPermit, ClusterConnection, &mut Window, &mut Context<AppShell>);
 pub(crate) type PortForwardOpen = dyn Fn(
@@ -169,6 +174,7 @@ pub(crate) type PortForwardOpen = dyn Fn(
 enum GrantedOpen {
     Exec(Rc<ExecOpen>, ExecPermit),
     PortForward(Rc<PortForwardOpen>, PortForwardPermit),
+    Attach(Rc<ContainerAttachOpen>, AttachPermit),
     CreateThenAttach(
         Rc<WriteIntent>,
         Rc<AttachOpen>,
@@ -186,6 +192,10 @@ impl ConnectOpen {
             Self::PortForward(open) => Some(GrantedOpen::PortForward(
                 Rc::clone(open),
                 port_forward_permit_of(access)?,
+            )),
+            Self::Attach(open) => Some(GrantedOpen::Attach(
+                Rc::clone(open),
+                attach_permit_of(access)?,
             )),
             Self::CreateThenAttach(start) => Some(GrantedOpen::CreateThenAttach(
                 Rc::clone(&start.create),
@@ -217,6 +227,7 @@ impl GrantedOpen {
         match self {
             Self::Exec(open, permit) => open(shell, permit, connection, window, cx),
             Self::PortForward(open, permit) => open(shell, permit, connection, window, cx),
+            Self::Attach(open, permit) => open(shell, permit, connection, window, cx),
             Self::CreateThenAttach(create, open, discard, permit) => {
                 // The dialog never confirms a write without its passed dry-run.
                 let Some(confirmed) = commit.confirmed else {
@@ -264,7 +275,7 @@ impl ConnectIntent {
     pub(crate) fn create(&self) -> Option<&Rc<WriteIntent>> {
         match &self.open {
             ConnectOpen::CreateThenAttach(start) => Some(&start.create),
-            ConnectOpen::Exec(_) | ConnectOpen::PortForward(_) => None,
+            ConnectOpen::Exec(_) | ConnectOpen::PortForward(_) | ConnectOpen::Attach(_) => None,
         }
     }
 }

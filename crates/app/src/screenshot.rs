@@ -721,6 +721,7 @@ mod tests {
 
     fn container(name: &str) -> ContainerSummary {
         ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
             name: name.to_owned(),
             image: "img".to_owned(),
             kind: ContainerKind::Main,
@@ -742,6 +743,7 @@ mod tests {
 
     fn pod(name: &str, container_count: usize) -> PodSummary {
         PodSummary {
+            is_finished: false,
             namespace: "ns".to_owned(),
             name: name.to_owned(),
             status: PodStatus::Reason(StatusReason::Running),
@@ -792,9 +794,14 @@ mod tests {
             LaunchScreen::NodeTaintsEditor,
             LaunchScreen::NodeTaintsEditorInvalid,
             LaunchScreen::NodeLabelsEditor,
+            LaunchScreen::NodeLabelsBulkEditor,
             LaunchScreen::DrainDialog,
+            LaunchScreen::DrainDialogSkipPdbs,
             LaunchScreen::LeftoverSweepFixture,
             LaunchScreen::ShellConfirmFixture,
+            LaunchScreen::AttachConfirm,
+            LaunchScreen::RestartPodConfirm,
+            LaunchScreen::EvictConfirm,
         ] {
             for target in [
                 TargetState::Loading,

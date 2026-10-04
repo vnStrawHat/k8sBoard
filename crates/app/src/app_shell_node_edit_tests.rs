@@ -13,11 +13,12 @@ use serde_json::{Value, json};
 use super::app_shell_switch_tests::open_switch_fixture;
 use super::app_shell_write_tests::{Clusters, go_live_answering, switch_to, writes};
 use super::batch_write::BATCH_RUNNING_REASON;
-use super::node_editor::{CHANGED_NOTICE, NodeEditKind, NodeEditor};
+use super::node_editor::{BulkLabelEditor, CHANGED_NOTICE, LabelTarget, NodeEditKind, NodeEditor};
 use super::write_flow::DryRunState;
 use super::*;
 use crate::resource_actions::ResourceAction;
 use crate::row_selection::BulkState;
+use crate::write_guard::WriteLock;
 
 const NODE_JSON: &str = r#"{"apiVersion":"v1","kind":"Node","metadata":{"name":"n"}}"#;
 
@@ -377,14 +378,15 @@ fn edit_labels_commit_sends_a_minimal_patch(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_header_edit_labels_needs_one_ticked_node(cx: &mut TestAppContext) {
+fn header_edit_labels_by_tick_count(cx: &mut TestAppContext) {
     let t = node_test("node-edit-header", cx);
+    let names: Vec<String> = (0..52).map(|index| format!("n{index:02}")).collect();
     t.set_nodes(
         &t.t.stg,
-        vec![
-            summary("n1", NodeScheduling::Enabled),
-            summary("n2", NodeScheduling::Enabled),
-        ],
+        names
+            .iter()
+            .map(|name| summary(name, NodeScheduling::Enabled))
+            .collect(),
         cx,
     );
     let target = |cx: &mut TestAppContext| {
@@ -392,12 +394,42 @@ fn the_header_edit_labels_needs_one_ticked_node(cx: &mut TestAppContext) {
             .shell
             .read_with(cx, |shell, cx| shell.edit_labels_target(cx))
     };
-    assert_eq!(target(cx).err().as_deref(), Some("Tick one node"));
-    t.tick(&[0, 1], cx);
-    assert_eq!(target(cx).err().as_deref(), Some("Tick one node"));
+    // None ticked.
+    assert_eq!(target(cx).err().as_deref(), Some("Tick nodes first"));
+    // One ticked: the 0034 editor, on its own node.
     t.tick(&[1], cx);
-    let (cluster, name) = target(cx).expect("one node is ticked");
-    assert_eq!((cluster, name.as_str()), (t.t.stg.clone(), "n1"));
+    let Ok(LabelTarget::One { cluster, node }) = target(cx) else {
+        panic!("one node is ticked");
+    };
+    assert_eq!((cluster, node.as_str()), (t.t.stg.clone(), "n01"));
+    // Two ticked: the bulk editor over both.
+    t.tick(&[0], cx);
+    let Ok(LabelTarget::Several { cluster, nodes }) = target(cx) else {
+        panic!("two nodes are ticked");
+    };
+    assert_eq!(cluster, t.t.stg);
+    assert_eq!(nodes.len(), 2);
+    // Fifty ticked is the most; fifty-one is refused with the text of the other bulk buttons.
+    t.tick(&(2..50).collect::<Vec<_>>(), cx);
+    assert!(matches!(target(cx), Ok(LabelTarget::Several { nodes, .. }) if nodes.len() == 50));
+    t.tick(&[50], cx);
+    assert_eq!(target(cx).err().as_deref(), Some("Select at most 50 rows"));
+}
+
+#[gpui_kit::test]
+fn the_header_edit_labels_is_off_while_a_batch_runs(cx: &mut TestAppContext) {
+    let t = node_test("node-edit-header-batch", cx);
+    three_nodes(&t, cx);
+    t.tick(&[0, 1], cx);
+    let stg = t.t.stg.clone();
+    t.t.fixture.shell.update(cx, |shell, _| {
+        shell.running_batches.insert(stg);
+    });
+    let target =
+        t.t.fixture
+            .shell
+            .read_with(cx, |shell, cx| shell.edit_labels_target(cx));
+    assert_eq!(target.err().as_deref(), Some(BATCH_RUNNING_REASON));
 }
 
 #[gpui_kit::test]
@@ -405,6 +437,21 @@ fn the_header_edit_labels_follows_the_lock_of_the_nodes_cluster(cx: &mut TestApp
     let t = node_test("node-edit-header-locked", cx);
     t.activate_prod(cx);
     t.tick(&[0], cx);
+    let target =
+        t.t.fixture
+            .shell
+            .read_with(cx, |shell, cx| shell.edit_labels_target(cx));
+    assert_eq!(target.err().as_deref(), Some("prod-a is read-only"));
+    // Two ticked nodes of a locked cluster read the same.
+    t.set_nodes(
+        &t.t.prod,
+        vec![
+            summary("p1", NodeScheduling::Enabled),
+            summary("p2", NodeScheduling::Enabled),
+        ],
+        cx,
+    );
+    t.tick(&[1], cx);
     let target =
         t.t.fixture
             .shell
@@ -575,4 +622,275 @@ fn taint_retry_after_another_error_checks_again_and_keeps_the_rows(cx: &mut Test
         body_of_both[0], body_of_both[1],
         "the same rows are checked again"
     );
+}
+
+// ---- Edit labels of several nodes (spec 0040) ----
+
+fn labelled(name: &str, labels: &[&str]) -> NodeSummary {
+    NodeSummary {
+        labels: labels.iter().map(|term| (*term).to_owned()).collect(),
+        ..summary(name, NodeScheduling::Enabled)
+    }
+}
+
+impl NodeTest {
+    fn bulk_editor(&self, cx: &mut TestAppContext) -> Option<Entity<BulkLabelEditor>> {
+        self.t
+            .fixture
+            .shell
+            .read_with(cx, |shell, _| shell.last_bulk_label_editor.clone())
+            .and_then(|editor| editor.upgrade())
+    }
+
+    /// Opens the bulk editor of the ticked nodes of `cluster`, as the header button does.
+    fn open_bulk(&self, cluster: &ClusterRef, count: usize, cx: &mut TestAppContext) {
+        self.t.fixture.with_window(cx, |window, cx| {
+            self.t.fixture.shell.update(cx, |shell, cx| {
+                shell.open_bulk_label_editor(cluster, count, window, cx);
+            });
+        });
+    }
+
+    fn fill(
+        &self,
+        editor: &Entity<BulkLabelEditor>,
+        row: (&str, &str, bool),
+        cx: &mut TestAppContext,
+    ) {
+        self.t.fixture.with_window(cx, |window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.fill_last_row(row.0, row.1, row.2, window, cx);
+            });
+        });
+    }
+
+    fn review_bulk(&self, editor: &Entity<BulkLabelEditor>, cx: &mut TestAppContext) {
+        self.t.fixture.with_window(cx, |window, cx| {
+            editor.update(cx, |editor, cx| editor.press_review(window, cx));
+        });
+        cx.run_until_parked();
+    }
+
+    /// Ticks the three nodes `n1`..`n3`, one of them labelled already, and opens the editor with a
+    /// Set typed.
+    fn bulk_over_three(&self, cx: &mut TestAppContext) -> Entity<BulkLabelEditor> {
+        self.set_nodes(
+            &self.t.stg,
+            vec![
+                labelled("n1", &["team=infra"]),
+                labelled("n2", &["team=dev", "old-key=x"]),
+                labelled("n3", &[]),
+            ],
+            cx,
+        );
+        self.tick(&[0, 1, 2], cx);
+        self.open_bulk(&self.t.stg, 3, cx);
+        let editor = self.bulk_editor(cx).expect("the bulk editor opened");
+        self.fill(&editor, ("team", "infra", false), cx);
+        editor
+    }
+}
+
+#[gpui_kit::test]
+fn the_bulk_editor_opens_with_one_empty_row_and_no_review(cx: &mut TestAppContext) {
+    let t = node_test("bulk-labels-open", cx);
+    let editor = t.bulk_over_three(cx);
+    editor.read_with(cx, |editor, _| assert_eq!(editor.row_count(), 1));
+    // An empty row is not a change, so there is nothing to review yet.
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.push_row(window, cx));
+    });
+    t.fill(&editor, ("", "", false), cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(editor.row_count(), 2);
+        assert_eq!(editor.current_changes(cx).len(), 1);
+    });
+    // Nothing is sent by opening it, and no node is read.
+    assert!(writes(&t.t.stg_api).is_empty());
+    assert_eq!(reads_of(&t.t.stg_api, "/api/v1/nodes/n1"), 0);
+}
+
+#[gpui_kit::test]
+fn the_bulk_editor_names_a_problem_before_review(cx: &mut TestAppContext) {
+    let t = node_test("bulk-labels-problem", cx);
+    let editor = t.bulk_over_three(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(editor.current_problem(cx), None)
+    });
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.push_row(window, cx));
+    });
+    t.fill(&editor, ("kubernetes.io/os", "linux", false), cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(
+            editor.current_problem(cx).as_deref(),
+            Some("kubernetes.io/os is set by the kubelet")
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn bulk_labels_dry_run_every_node_then_commit(cx: &mut TestAppContext) {
+    let t = node_test("bulk-labels-run", cx);
+    let dir = t.t.enable_audit_folder("bulk-labels-run", cx);
+    let editor = t.bulk_over_three(cx);
+    // A second row removes a key.
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.push_row(window, cx));
+    });
+    t.fill(&editor, ("old-key", "", true), cx);
+    t.review_bulk(&editor, cx);
+    t.t.wait_for_dry_run(cx);
+    // n1 has team=infra already and no old key: skipped. n2 and n3 are dry-run, one PATCH each.
+    let dry_runs = writes(&t.t.stg_api);
+    let paths: Vec<&str> = dry_runs
+        .iter()
+        .map(|request| request.path.as_str())
+        .collect();
+    assert_eq!(paths, ["/api/v1/nodes/n2", "/api/v1/nodes/n3"]);
+    assert!(
+        dry_runs
+            .iter()
+            .all(|request| request.method == "PATCH" && request.has_query("dryRun", "All"))
+    );
+    assert_eq!(
+        body_of(&dry_runs[0]),
+        json!({"metadata": {"labels": {"old-key": null, "team": "infra"}}})
+    );
+    assert_eq!(
+        body_of(&dry_runs[1]),
+        json!({"metadata": {"labels": {"team": "infra"}}})
+    );
+    let dialog = t.t.dialog(cx);
+    dialog.read_with(cx, |dialog, _| {
+        assert_eq!(dialog.label().as_deref(), Some("Edit labels of 2 nodes"));
+        // The removal carries the DaemonSet warning.
+        assert!(
+            dialog
+                .warning_lines()
+                .iter()
+                .any(|line| line.contains("DaemonSets that select nodes by it"))
+        );
+    });
+    // The cluster tier of staging is a click; nothing is committed before the confirm.
+    assert_eq!(writes(&t.t.stg_api).len(), 2);
+    t.t.confirm(cx);
+    t.t.wait_for("the commits", cx, |_| writes(&t.t.stg_api).len() == 4);
+    let commits = &writes(&t.t.stg_api)[2..];
+    assert!(
+        commits
+            .iter()
+            .all(|request| !request.has_query_key("dryRun"))
+    );
+    // One audit line per committed node, with the changed keys.
+    t.t.wait_for("the audit lines", cx, |_| {
+        super::app_shell_write_tests::audit_lines(&dir).len() == 2
+    });
+    let lines = super::app_shell_write_tests::audit_lines(&dir);
+    for (line, node) in lines.iter().zip(["n2", "n3"]) {
+        assert_eq!(line["action"], "Edit labels");
+        assert_eq!(line["object"]["name"], node);
+        assert_eq!(line["fields"][0]["path"], "metadata.labels");
+    }
+    assert_eq!(lines[0]["fields"][0]["value"], "-old-key; team=infra");
+}
+
+#[gpui_kit::test]
+fn a_review_that_finds_nothing_to_do_says_why_and_sends_nothing(cx: &mut TestAppContext) {
+    let t = node_test("bulk-labels-noop", cx);
+    t.set_nodes(
+        &t.t.stg,
+        vec![
+            labelled("n1", &["team=infra"]),
+            labelled("n2", &["team=infra"]),
+        ],
+        cx,
+    );
+    t.tick(&[0, 1], cx);
+    t.open_bulk(&t.t.stg, 2, cx);
+    let editor = t.bulk_editor(cx).expect("the bulk editor opened");
+    t.fill(&editor, ("team", "infra", false), cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(
+            editor.current_problem(cx).as_deref(),
+            Some("All selected nodes already have these labels")
+        );
+    });
+    let before =
+        t.t.fixture
+            .with_window(cx, |window, cx| window.notifications(cx).len());
+    t.review_bulk(&editor, cx);
+    assert!(!t.t.has_dialog(cx), "no batch dialog opens");
+    let after =
+        t.t.fixture
+            .with_window(cx, |window, cx| window.notifications(cx).len());
+    assert!(after > before, "Review says why");
+    assert!(writes(&t.t.stg_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn bulk_labels_batch_of_a_sends_nothing_to_b(cx: &mut TestAppContext) {
+    let t = node_test("bulk-labels-switch", cx);
+    let dir = t.t.enable_audit_folder("bulk-labels-switch", cx);
+    let editor = t.bulk_over_three(cx);
+    // The selection leaves stg-b while the editor stands: Review finds nothing ticked there.
+    let prod_api = t.activate_prod(cx);
+    t.review_bulk(&editor, cx);
+    assert!(!t.t.has_dialog(cx), "no batch of a cluster that left");
+    assert!(writes(&t.t.stg_api).is_empty());
+    assert!(writes(&prod_api).is_empty());
+    assert!(super::app_shell_write_tests::audit_lines(&dir).is_empty());
+}
+
+#[gpui_kit::test]
+fn bulk_labels_stop_when_the_cluster_locks_mid_batch(cx: &mut TestAppContext) {
+    use gpui_kit::component::dialog::Confirm;
+    let t = node_test("bulk-labels-lock", cx);
+    let editor = t.bulk_over_three(cx);
+    t.review_bulk(&editor, cx);
+    t.t.wait_for_dry_run(cx);
+    assert_eq!(
+        writes(&t.t.stg_api).len(),
+        2,
+        "two dry-runs: n1 has the label already"
+    );
+    // Locked between the dry-runs and the confirm: every commit is blocked.
+    t.t.set_lock(&t.t.stg, WriteLock::Locked, cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_action(Box::new(Confirm { secondary: false }), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(writes(&t.t.stg_api).len(), 2, "nothing was committed");
+}
+
+#[gpui_kit::test]
+fn a_held_enter_never_confirms_the_bulk_labels(cx: &mut TestAppContext) {
+    use gpui_kit::InputEvent as _;
+    use gpui_kit::test::TestWindowExt as _;
+    let t = node_test("bulk-labels-held-enter", cx);
+    let editor = t.bulk_over_three(cx);
+    t.review_bulk(&editor, cx);
+    t.t.wait_for_dry_run(cx);
+    t.t.fixture
+        .with_window(cx, |window, cx| window.render_frame(cx));
+    let held = gpui_kit::KeyDownEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").expect("a valid keystroke"),
+        is_held: true,
+        prefer_character_input: false,
+    };
+    for _ in 0..3 {
+        t.t.fixture.with_window(cx, |window, cx| {
+            window.dispatch_event(held.clone().to_platform_input(), cx);
+        });
+    }
+    cx.run_until_parked();
+    assert_eq!(writes(&t.t.stg_api).len(), 2, "only the dry-runs were sent");
+    let fresh = gpui_kit::KeyDownEvent {
+        is_held: false,
+        ..held
+    };
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_event(fresh.to_platform_input(), cx);
+    });
+    t.t.wait_for("the commits", cx, |_| writes(&t.t.stg_api).len() == 4);
 }

@@ -105,6 +105,9 @@ pub(crate) enum ShellKind {
     },
     /// A privileged pod on `node`. `ShellTarget` names the pod and its namespace.
     NodeShell { node: String, image: String },
+    /// A running container of the pod's own spec that has a terminal (spec 0040). Its tab has no
+    /// Reconnect: the user attaches anew through the same gate.
+    Attach,
 }
 
 impl ShellKind {
@@ -246,6 +249,7 @@ impl ShellTab {
         let (receiver, size) = self.begin_session(&banner);
         let wait = match self.kind {
             ShellKind::NodeShell { .. } => AttachWait::NodeShellPod,
+            ShellKind::Attach => AttachWait::Container,
             ShellKind::Debug { .. } | ShellKind::Exec => AttachWait::EphemeralContainer,
         };
         let request = AttachRequest {
@@ -600,7 +604,7 @@ impl ShellTab {
     /// The `Debug container…` button of an exec that found no shell in its container: it opens
     /// the options dialog for that pod with the container prefilled.
     fn render_debug_offer(&self, cx: &Context<Self>) -> Option<impl IntoElement> {
-        if self.state != ShellState::Ended(ShellEnd::NoShell) {
+        if self.state != ShellState::Ended(ShellEnd::NoShell) || self.kind == ShellKind::Attach {
             return None;
         }
         Some(
@@ -639,6 +643,10 @@ impl ShellTab {
             ShellKind::NodeShell { node, image } => format!(
                 "›_ node {node} · pod {}/{} · {image} · {context}",
                 self.target.namespace, self.target.pod
+            ),
+            ShellKind::Attach => format!(
+                "›_ attach {} · {} · {context}",
+                self.target.pod, self.target.container
             ),
         }
     }
@@ -790,6 +798,10 @@ impl ShellTab {
                 target_container, ..
             } => format!("debug · {}/{target_container}", self.target.short_pod),
             ShellKind::NodeShell { node, .. } => format!("node shell · {node} (debug pod)"),
+            ShellKind::Attach => format!(
+                "attach · {}/{}",
+                self.target.short_pod, self.target.container
+            ),
         }
     }
 
@@ -853,7 +865,7 @@ impl ShellTab {
                     .tooltip("Clear the screen and the scrollback of this tab")
                     .on_click(cx.listener(|tab, _, _, cx| tab.clear(cx))),
             )
-            .child(
+            .children((self.kind != ShellKind::Attach).then(|| {
                 Button::new("shell-reconnect")
                     .ghost()
                     .small()
@@ -862,8 +874,8 @@ impl ShellTab {
                     .disabled(self.state == ShellState::Connecting)
                     .on_click(cx.listener(|tab, _, window, cx| {
                         tab.request_reconnect(tab.command, window, cx);
-                    })),
-            )
+                    }))
+            }))
     }
 
     /// `Shell: Auto ▾`: a change reconnects with the new shell.
@@ -949,6 +961,10 @@ fn attach_banner(target: &ShellTarget, kind: &ShellKind, cluster_label: &str) ->
             "# node shell {node}: attach -n {} {} -c {} ({cluster_label})",
             target.namespace, target.pod, target.container
         ),
+        ShellKind::Attach => format!(
+            "# attach -n {} {} -c {} ({cluster_label})",
+            target.namespace, target.pod, target.container
+        ),
         ShellKind::Debug { .. } | ShellKind::Exec => format!(
             "# debug: attach -n {} {} -c {} ({cluster_label})",
             target.namespace, target.pod, target.container
@@ -960,6 +976,7 @@ fn attach_banner(target: &ShellTarget, kind: &ShellKind, cluster_label: &str) ->
 fn starting_text(kind: &ShellKind) -> &'static str {
     match kind {
         ShellKind::NodeShell { .. } => "Starting node shell pod…",
+        ShellKind::Attach => "Attaching…",
         ShellKind::Debug { .. } | ShellKind::Exec => "Starting debug container…",
     }
 }

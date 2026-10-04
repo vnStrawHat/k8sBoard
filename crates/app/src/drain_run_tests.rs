@@ -525,7 +525,11 @@ fn the_tab_reads_states_progress_and_rows() {
     run.on_write(&NextStep::Cordon("b".to_owned()), ok(), secs(0));
     assert_eq!(
         run.node_states()[0].1,
-        NodeState::Evicting { gone: 0, total: 0 }
+        NodeState::Evicting {
+            gone: 0,
+            total: 0,
+            budgets: BudgetPolicy::Respect
+        }
     );
     assert_eq!(run.node_states()[1].1, NodeState::Waiting);
     run.on_read(Ok(vec![pod("one"), pod("two"), pod("three")]), secs(0));
@@ -676,4 +680,81 @@ fn a_stuck_summary_carries_the_reason() {
     let (mut done, _) = run_over(&[]);
     done.on_node_done(NodeOutcome::Drained);
     assert_eq!(done.take_summaries()[0].reason, None);
+}
+
+// ---- Skip PodDisruptionBudgets (spec 0040) ----
+
+fn skip_run_over(pods: &[&str]) -> (DrainRun, Duration) {
+    let mut run_input = input(&["wk-04"], &[]);
+    run_input.options.budgets = BudgetPolicy::Skip;
+    run_input.checked = pods.iter().map(|name| format!("uid-{name}")).collect();
+    let mut run = DrainRun::new(run_input);
+    run.on_read(Ok(pods.iter().map(|name| pod(name)).collect()), secs(0));
+    (run, secs(0))
+}
+
+#[test]
+fn delete_mode_results_map_like_evictions() {
+    // The state machine is the same: only the words differ. Each answer of a delete reads as the
+    // answer of an eviction would (Ok, 404, 409, unknown, 429).
+    let names = ["a", "b", "c", "d", "e"];
+    for budgets in [BudgetPolicy::Respect, BudgetPolicy::Skip] {
+        let mut run_input = input(&["wk-04"], &[]);
+        run_input.options.budgets = budgets;
+        run_input.checked = names.iter().map(|name| format!("uid-{name}")).collect();
+        let mut run = DrainRun::new(run_input);
+        run.on_read(Ok(names.iter().map(|name| pod(name)).collect()), secs(0));
+        let step = |name: &str| NextStep::Evict(key(name));
+        run.on_write(&step("a"), ok(), secs(0));
+        run.on_write(&step("b"), failed(WriteError::NotFound), secs(0));
+        run.on_write(
+            &step("c"),
+            failed(WriteError::Conflict {
+                message: "uid".to_owned(),
+                managers: Vec::new(),
+            }),
+            secs(0),
+        );
+        run.on_write(&step("d"), failed(WriteError::OutcomeUnknown), secs(0));
+        run.on_write(&step("e"), refused(None), secs(0));
+        assert_eq!(progress_of(&run, "a"), PodProgress::Evicted, "{budgets:?}");
+        assert_eq!(progress_of(&run, "b"), PodProgress::Gone);
+        assert_eq!(progress_of(&run, "c"), PodProgress::Gone);
+        // An unknown outcome retries, with the uid pin that makes a repeat safe.
+        assert!(matches!(
+            progress_of(&run, "d"),
+            PodProgress::Refused { attempt: 1, .. }
+        ));
+        assert!(matches!(
+            progress_of(&run, "e"),
+            PodProgress::Refused { attempt: 1, .. }
+        ));
+    }
+}
+
+#[test]
+fn skip_pdbs_run_words_follow_the_policy() {
+    let (mut run, now) = skip_run_over(&["api-1", "api-2"]);
+    run.on_write(&NextStep::Evict(key("api-1")), ok(), now);
+    run.on_write(&NextStep::Evict(key("api-2")), refused(None), now);
+    let rows = run.pod_rows(now);
+    let text = |name: &str| {
+        rows.iter()
+            .find(|row| row.pod.as_ref().ends_with(name))
+            .map(|row| row.text.to_string())
+            .expect("a row")
+    };
+    assert_eq!(text("api-1"), "Deleting…");
+    // A delete asks no budget, so its 429 is not "by PDB".
+    assert!(
+        text("api-2").starts_with("Refused: needs 2 healthy pods · retry in"),
+        "{}",
+        text("api-2")
+    );
+    assert_eq!(run.node_states()[0].1.text(), "Deleting 0/2");
+    // The same run under Respect keeps its words.
+    let (mut respect, now) = run_over(&["api-1"]);
+    respect.on_write(&NextStep::Evict(key("api-1")), ok(), now);
+    assert_eq!(respect.pod_rows(now)[0].text.as_ref(), "Evicting…");
+    assert_eq!(respect.node_states()[0].1.text(), "Evicting 0/1");
 }

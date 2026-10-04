@@ -57,7 +57,7 @@ Status: **built, steps 1, 2, 3a, 3b** (see [as-built.md](as-built.md)); amended 
 
 ## Open items
 
-1. "Skip PodDisruptionBudgets" needs a pod delete operation (0033). Proposed: enable it there with a second typed confirm.
-2. Bulk label editing from the W5 header button (one node in 0034).
+1. "Skip PodDisruptionBudgets": done in 0040 (a direct delete per pod through the 0033 `DeleteObject`, typed name in every tier).
+2. Bulk label editing from the W5 header button: done in 0040 (one 0032 batch of `SetNodeLabels`).
 3. A drain is not resumed after an app restart; nodes stay cordoned and the next drain starts fresh.
 4. R2: eviction, PDB 429s, and taints are proven by fake transport and pure tests until a disposable cluster exists.

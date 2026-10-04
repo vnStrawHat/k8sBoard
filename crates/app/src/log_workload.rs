@@ -172,6 +172,7 @@ mod tests {
 
     fn pod(name: &str, ready: (u32, u32), created: Option<&str>) -> PodSummary {
         PodSummary {
+            is_finished: false,
             namespace: "ns".to_owned(),
             name: name.to_owned(),
             status: PodStatus::Reason(StatusReason::Running),
@@ -341,6 +342,7 @@ mod tests {
 
     fn container(name: &str, kind: ContainerKind) -> cluster::ContainerSummary {
         cluster::ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
             name: name.to_owned(),
             image: "img".to_owned(),
             kind,

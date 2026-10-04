@@ -55,6 +55,9 @@ pub struct PodSummary {
     pub host_network: bool,
     /// `spec.imagePullSecrets[].name`; empty names are dropped.
     pub image_pull_secrets: Vec<String>,
+    /// Phase `Succeeded` or `Failed`, like `DrainPod::is_finished`. The phase, not the status
+    /// reason: the reason reads `Error`, `Completed`, or `OOMKilled` on running pods too.
+    pub is_finished: bool,
 }
 
 /// What a drain needs to know about one pod on a node (0034). Only these fields are read: no env
@@ -131,6 +134,18 @@ pub struct ContainerSummary {
     pub env: Vec<EnvEntry>,
     pub env_from: Vec<EnvFromEntry>,
     pub mounts: Vec<MountEntry>,
+    /// Whether an attach can read and write the container's terminal.
+    pub terminal: ContainerTerminal,
+}
+
+/// What the container spec asks for in stdin and tty (0040): attach needs both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContainerTerminal {
+    /// Not both `stdin` and `tty`.
+    None,
+    Interactive,
+    /// `stdinOnce`: the stream closes its input after the first attach.
+    InteractiveOnce,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -273,6 +288,12 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
             .flat_map(|spec| spec.image_pull_secrets.iter().flatten())
             .filter_map(|reference| non_empty(Some(reference.name.as_str())))
             .collect(),
+        is_finished: matches!(
+            pod.status
+                .as_ref()
+                .and_then(|status| status.phase.as_deref()),
+            Some("Succeeded" | "Failed")
+        ),
     }
 }
 
@@ -364,6 +385,16 @@ fn container_summary(
         env: env_entries(container),
         env_from: env_from_entries(container),
         mounts: mount_entries(container, volumes),
+        terminal: container_terminal(container),
+    }
+}
+
+fn container_terminal(container: &Container) -> ContainerTerminal {
+    let is_interactive = container.stdin == Some(true) && container.tty == Some(true);
+    match (is_interactive, container.stdin_once == Some(true)) {
+        (false, _) => ContainerTerminal::None,
+        (true, false) => ContainerTerminal::Interactive,
+        (true, true) => ContainerTerminal::InteractiveOnce,
     }
 }
 

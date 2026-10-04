@@ -473,6 +473,7 @@ mod tests {
 
     fn pod(namespace: &str, controller: Option<(&str, &str)>) -> PodSummary {
         PodSummary {
+            is_finished: false,
             namespace: namespace.to_owned(),
             name: "pod".to_owned(),
             status: PodStatus::Reason(StatusReason::Running),

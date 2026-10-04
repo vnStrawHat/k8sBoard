@@ -755,6 +755,7 @@ mod tests {
 
     fn pod(name: &str, controller: Option<(&str, &str)>, state: ContainerState) -> PodSummary {
         let container = cluster::ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
             name: "api".to_owned(),
             image: "registry/app:1".to_owned(),
             kind: cluster::ContainerKind::Main,
@@ -773,6 +774,7 @@ mod tests {
             mounts: Vec::new(),
         };
         PodSummary {
+            is_finished: false,
             namespace: "shop".to_owned(),
             name: name.to_owned(),
             status: cluster::PodStatus::Reason(cluster::StatusReason::Running),

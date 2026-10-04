@@ -30,6 +30,7 @@ fn udp(port: u16) -> ContainerPort {
 
 fn container(name: &str, kind: ContainerKind, ports: Vec<ContainerPort>) -> ContainerSummary {
     ContainerSummary {
+        terminal: cluster::ContainerTerminal::None,
         name: name.to_owned(),
         image: "img".to_owned(),
         kind,
@@ -51,6 +52,7 @@ fn container(name: &str, kind: ContainerKind, ports: Vec<ContainerPort>) -> Cont
 
 fn pod(containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        is_finished: false,
         namespace: "shop".to_owned(),
         name: "api-0".to_owned(),
         status: PodStatus::Reason(StatusReason::Running),

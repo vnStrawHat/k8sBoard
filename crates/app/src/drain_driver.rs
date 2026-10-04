@@ -28,7 +28,7 @@ use crate::cluster_runtime::ClusterRuntime;
 use crate::drain_plan::DrainOptions;
 use crate::drain_run::{DrainRun, NextStep, NodeSummary, RunInput};
 use crate::drain_tab::{DrainTab, DrainTabInputs};
-use crate::drain_writes::{DrainScope, cordon_write, evict_write};
+use crate::drain_writes::{DrainScope, cordon_write, removal_write};
 use crate::node_edits::{CordonMode, NodeScope, TickedNode, cordon_batch};
 use crate::resource_actions::{ResourceAction, unavailable_text};
 use crate::settings::AppSettings;
@@ -256,6 +256,7 @@ impl AppShell {
                     Some(TickedNode {
                         name: name.clone(),
                         scheduling: summary.status.scheduling,
+                        labels: summary.labels.clone(),
                     })
                 })
                 .collect();
@@ -406,7 +407,10 @@ fn stop_tab(
 fn summary_entries(tab: &DrainTab, lines: &[NodeSummary]) -> Vec<AuditEntry> {
     lines
         .iter()
-        .map(|line| drain_summary_entry(tab.identity(), line, tab.note()))
+        .map(|line| {
+            let budgets = tab.run().options().budgets;
+            drain_summary_entry(tab.identity(), line, budgets, tab.note())
+        })
         .collect()
 }
 
@@ -543,11 +547,11 @@ async fn send(
             },
         ),
         NextStep::DryRun(key) => (
-            evict_write(scope, key, sending.options.grace),
+            removal_write(scope, key, &sending.options),
             CommitMode::DryRun,
         ),
         NextStep::Evict(key) => (
-            evict_write(scope, key, sending.options.grace),
+            removal_write(scope, key, &sending.options),
             CommitMode::Commit {
                 confirmed: sending.confirmed,
             },

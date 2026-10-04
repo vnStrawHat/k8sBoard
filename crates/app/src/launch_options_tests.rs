@@ -960,10 +960,15 @@ fn the_node_editor_fixtures_are_offline_dialogs_over_nodes() {
         ("node-taints-editor", LaunchScreen::NodeTaintsEditor),
         ("node-labels-editor", LaunchScreen::NodeLabelsEditor),
         (
+            "node-labels-bulk-editor",
+            LaunchScreen::NodeLabelsBulkEditor,
+        ),
+        (
             "node-taints-editor-invalid",
             LaunchScreen::NodeTaintsEditorInvalid,
         ),
         ("drain-dialog", LaunchScreen::DrainDialog),
+        ("drain-dialog-skip-pdbs", LaunchScreen::DrainDialogSkipPdbs),
     ] {
         let parsed = run_options(&["--screen", name]).screen;
         assert_eq!(parsed, screen);

@@ -31,6 +31,8 @@ const PDB_REFUSAL: &str = "The disruption budget api-pdb needs 2 healthy pods an
 struct DrainServer {
     /// A committed eviction waits for this to be released, once.
     eviction_gate: Gate,
+    /// A dry-run eviction waits for this to be released, once: the dialog is mid-check.
+    dry_run_gate: Gate,
     pods: Vec<Value>,
     budgets: Vec<Value>,
     /// Pod names the eviction answers 429 for.
@@ -41,6 +43,10 @@ struct DrainServer {
     is_pod_list_broken: bool,
     /// The cordon patch answers 403.
     is_cordon_forbidden: bool,
+    /// The access review of `delete` answers not allowed (the lazy check Skip PDBs reads).
+    is_delete_denied: bool,
+    /// Pod names a direct delete answers 429 for (the API's own rate limiting, not a budget).
+    throttled: Vec<String>,
 }
 
 fn status(code: u16, reason: &str, message: &str, details: Value) -> (u16, String) {
@@ -95,12 +101,29 @@ fn budget_json(name: &str, expected: u32, allowed: u32) -> Value {
 fn server(
     state: Arc<Mutex<DrainServer>>,
 ) -> impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + 'static {
-    let gate = Arc::clone(&state.lock().expect("the server state").eviction_gate);
+    let (gate, dry_run_gate) = {
+        let state = state.lock().expect("the server state");
+        (
+            Arc::clone(&state.eviction_gate),
+            Arc::clone(&state.dry_run_gate),
+        )
+    };
     move |request| {
+        let is_dry_run_eviction = request.method == "POST"
+            && request.path.ends_with("/eviction")
+            && request.has_query("dryRun", "All");
+        if is_dry_run_eviction {
+            let held = dry_run_gate.lock().expect("the gate").take();
+            if let Some(held) = held {
+                let _ = held.recv_timeout(Duration::from_secs(10));
+            }
+        }
         let is_commit_eviction = request.method == "POST"
             && request.path.ends_with("/eviction")
             && !request.has_query("dryRun", "All");
-        if is_commit_eviction {
+        // A direct delete of a drain that skips the budgets waits at the same gate.
+        let is_commit_delete = request.method == "DELETE" && !request.body.contains("\"dryRun\"");
+        if is_commit_eviction || is_commit_delete {
             let held = gate.lock().expect("the gate").take();
             if let Some(held) = held {
                 let _ = held.recv_timeout(Duration::from_secs(10));
@@ -116,6 +139,35 @@ fn server(
         }
         if is_list && request.path == "/apis/policy/v1/poddisruptionbudgets" {
             return (200, list_of("PodDisruptionBudget", &state.budgets));
+        }
+        if request.method == "POST" && request.path.ends_with("/selfsubjectaccessreviews") {
+            let asks_delete = request.body.contains("\"verb\":\"delete\"");
+            let is_allowed = !(asks_delete && state.is_delete_denied);
+            let review = json!({
+                "apiVersion": "authorization.k8s.io/v1", "kind": "SelfSubjectAccessReview",
+                "metadata": {}, "spec": {}, "status": {"allowed": is_allowed},
+            });
+            return (201, review.to_string());
+        }
+        if request.method == "DELETE" {
+            let name = request
+                .path
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            if state.throttled.contains(&name) {
+                return status(429, "TooManyRequests", "Too many requests", Value::Null);
+            }
+            // A committed delete takes the pod off the node; a dry-run leaves it.
+            if !request.body.contains("\"dryRun\"") {
+                state
+                    .pods
+                    .retain(|pod| pod["metadata"]["name"].as_str() != Some(name.as_str()));
+            }
+            let ok =
+                json!({"kind": "Status", "apiVersion": "v1", "status": "Success", "code": 200});
+            return (200, ok.to_string());
         }
         if request.method == "PATCH" {
             if state.is_cordon_forbidden {
@@ -194,6 +246,8 @@ struct DrainTest {
     prod_state: Arc<Mutex<DrainServer>>,
     /// Holds the next committed eviction of the staging server.
     stg_gate: Gate,
+    /// Holds the next dry-run eviction of the staging server.
+    stg_dry_run_gate: Gate,
 }
 
 fn drain_test(
@@ -207,6 +261,7 @@ fn drain_test(
     let mut stg_server = DrainServer::default();
     setup(&mut stg_server);
     let stg_gate = Arc::clone(&stg_server.eviction_gate);
+    let stg_dry_run_gate = Arc::clone(&stg_server.dry_run_gate);
     let stg_state = Arc::new(Mutex::new(stg_server));
     let prod_state = Arc::new(Mutex::new(DrainServer::default()));
     let stg_api = go_live_answering(&fixture, &stg, "node-b", server(Arc::clone(&stg_state)), cx);
@@ -224,6 +279,7 @@ fn drain_test(
         },
         prod_state,
         stg_gate,
+        stg_dry_run_gate,
     }
 }
 
@@ -1503,4 +1559,411 @@ fn quitting_mid_eviction_writes_an_unknown_line_and_counts_it(cx: &mut TestAppCo
             .is_some_and(|fields| fields.contains(&json!({"path": "unknown", "value": "1"})))
     );
     let _ = release.send(());
+}
+
+// ---- Skip PodDisruptionBudgets (spec 0040) ----
+
+fn delete_requests(api: &FakeApi, is_dry_run: bool) -> Vec<RecordedRequest> {
+    writes(api)
+        .into_iter()
+        .filter(|request| {
+            request.method == "DELETE" && request.body.contains("\"dryRun\"") == is_dry_run
+        })
+        .collect()
+}
+
+impl DrainTest {
+    fn tick_skip(&self, dialog: &Entity<DrainDialog>, is_on: bool, cx: &mut TestAppContext) {
+        self.t.fixture.with_window(cx, |window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.tick_skip(is_on, window, cx));
+        });
+    }
+
+    /// Waits until the Skip checkbox can change: the lazy review answered and no dry-run runs.
+    fn wait_for_skip(&self, dialog: &Entity<DrainDialog>, cx: &mut TestAppContext) {
+        self.t.wait_for("the Skip checkbox", cx, |cx| {
+            dialog.read_with(cx, |dialog, cx| dialog.skip_blocked_by(cx).is_none())
+        });
+    }
+
+    fn skip_reason(&self, dialog: &Entity<DrainDialog>, cx: &mut TestAppContext) -> Option<String> {
+        dialog.read_with(cx, |dialog, cx| {
+            dialog.skip_blocked_by(cx).map(|reason| reason.to_string())
+        })
+    }
+
+    fn type_name(&self, dialog: &Entity<DrainDialog>, text: &str, cx: &mut TestAppContext) {
+        self.t.fixture.with_window(cx, |window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.type_text(text, window, cx));
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn skip_pdbs_is_off_without_delete_pods(cx: &mut TestAppContext) {
+    // Allowed: on once the review answered and the dry-runs are done.
+    let t = drain_test("skip-allowed", three_pods, cx);
+    // While a dry-run runs, the checkbox is off: its answer would be of the other request kind.
+    let (release, gate) = std::sync::mpsc::channel();
+    *t.stg_dry_run_gate.lock().expect("the gate") = Some(gate);
+    t.open(&t.t.stg, &["node-b"], cx);
+    let dialog = t.dialog(cx).expect("a dialog");
+    t.t.wait_for("the dry-run to be held", cx, |cx| {
+        t.skip_reason(&dialog, cx).as_deref() == Some("Waiting for the dry-runs")
+    });
+    assert!(dialog.read_with(cx, |dialog, _| dialog.is_checking()));
+    t.tick_skip(&dialog, true, cx);
+    assert!(dialog.read_with(cx, |dialog, _| {
+        dialog.options().budgets == crate::drain_plan::BudgetPolicy::Respect
+    }));
+    release.send(()).expect("the server waits for the release");
+    t.settle(&dialog, cx);
+    t.wait_for_skip(&dialog, cx);
+    assert!(!dialog.read_with(cx, |dialog, _| dialog.is_checking()));
+    // Denied: off with the reason of the delete pods check.
+    let denied = drain_test(
+        "skip-denied",
+        |server| {
+            three_pods(server);
+            server.is_delete_denied = true;
+        },
+        cx,
+    );
+    let dialog = denied.open_and_settle(&denied.t.stg, &["node-b"], cx);
+    denied.t.wait_for("the review", cx, |cx| {
+        denied.skip_reason(&dialog, cx).as_deref() == Some("Not permitted: delete pods")
+    });
+    // And ticking it does nothing.
+    denied.tick_skip(&dialog, true, cx);
+    assert!(dialog.read_with(cx, |dialog, _| {
+        dialog.options().budgets == crate::drain_plan::BudgetPolicy::Respect
+    }));
+}
+
+#[gpui_kit::test]
+fn skip_pdbs_starts_off_each_time(cx: &mut TestAppContext) {
+    use crate::drain_plan::BudgetPolicy;
+    let t = drain_test("skip-off", three_pods, cx);
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    t.wait_for_skip(&dialog, cx);
+    t.tick_skip(&dialog, true, cx);
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.options().budgets),
+        BudgetPolicy::Skip
+    );
+    t.t.fixture.with_window(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.close_for_test(window, cx));
+    });
+    // A new open builds a fresh default: the choice is never remembered.
+    let again = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    assert_eq!(
+        again.read_with(cx, |dialog, _| dialog.options().budgets),
+        BudgetPolicy::Respect
+    );
+}
+
+#[gpui_kit::test]
+fn toggling_skip_pdbs_reruns_every_dry_run(cx: &mut TestAppContext) {
+    let t = drain_test("skip-toggle", three_pods, cx);
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    t.wait_for_skip(&dialog, cx);
+    assert_eq!(
+        evictions(&t.t.stg_api, true).len(),
+        2,
+        "the eviction dry-runs"
+    );
+    let cordon_dry_runs = |api: &FakeApi| {
+        writes(api)
+            .iter()
+            .filter(|request| request.method == "PATCH")
+            .count()
+    };
+    assert_eq!(cordon_dry_runs(&t.t.stg_api), 1);
+    assert!(dialog.read_with(cx, |dialog, _| dialog.recorded_elapsed() > Duration::ZERO));
+    t.tick_skip(&dialog, true, cx);
+    // At once: every answer of the old request kind is gone, so Drain waits for the new ones.
+    dialog.read_with(cx, |dialog, cx| {
+        assert_eq!(dialog.recorded_elapsed(), Duration::ZERO);
+        assert!(matches!(dialog.state(), DryRunState::Running));
+        assert!(dialog.drain_blocked_by(cx).is_some());
+    });
+    t.type_name(&dialog, "node-b", cx);
+    t.settle(&dialog, cx);
+    // Every pod was checked again as a delete; the cordon stood and no eviction was sent.
+    let dry_runs = delete_requests(&t.t.stg_api, true);
+    let paths: Vec<&str> = dry_runs
+        .iter()
+        .map(|request| request.path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "/api/v1/namespaces/payments/pods/api-1",
+            "/api/v1/namespaces/payments/pods/api-2"
+        ]
+    );
+    for request in &dry_runs {
+        let body: Value = serde_json::from_str(&request.body).expect("a body");
+        assert_eq!(body["propagationPolicy"], "Background");
+        assert!(body["preconditions"]["uid"].as_str().is_some());
+    }
+    assert_eq!(evictions(&t.t.stg_api, true).len(), 2, "no new eviction");
+    assert_eq!(
+        cordon_dry_runs(&t.t.stg_api),
+        1,
+        "the cordon was not asked again"
+    );
+    dialog.read_with(cx, |dialog, cx| {
+        assert_eq!(dialog.drain_blocked_by(cx), None);
+        assert_eq!(
+            dialog.dry_run_line(),
+            "Server dry-run: cordon passed · 2 of 2 deletes accepted"
+        );
+    });
+    // Unticking asks the eviction again.
+    t.wait_for_skip(&dialog, cx);
+    t.tick_skip(&dialog, false, cx);
+    t.settle(&dialog, cx);
+    assert_eq!(evictions(&t.t.stg_api, true).len(), 4);
+}
+
+#[gpui_kit::test]
+fn skip_pdbs_types_the_name_in_every_tier(cx: &mut TestAppContext) {
+    let t = drain_test("skip-tier", three_pods, cx);
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    t.wait_for_skip(&dialog, cx);
+    let tiers = |cx: &mut TestAppContext| dialog.read_with(cx, |dialog, cx| dialog.live_tiers(cx));
+    // A click cluster: both buttons click.
+    assert_eq!(tiers(cx), (DialogConfirm::Click, DialogConfirm::Click));
+    t.tick_skip(&dialog, true, cx);
+    t.settle(&dialog, cx);
+    // Drain types the node name; Cordon only keeps its tier.
+    assert_eq!(
+        tiers(cx),
+        (
+            DialogConfirm::TypeName {
+                expected: "node-b".to_owned()
+            },
+            DialogConfirm::Click
+        )
+    );
+    dialog.read_with(cx, |dialog, cx| {
+        assert_eq!(
+            dialog.drain_blocked_by(cx).as_deref(),
+            Some("Type node-b to confirm")
+        );
+        assert_eq!(
+            dialog.cordon_blocked_by(cx),
+            None,
+            "Cordon only does not wait for it"
+        );
+    });
+    t.type_name(&dialog, "node-b", cx);
+    dialog.read_with(cx, |dialog, cx| {
+        assert_eq!(dialog.drain_blocked_by(cx), None)
+    });
+    // Unticking returns to the tier the dialog opened with.
+    t.wait_for_skip(&dialog, cx);
+    t.tick_skip(&dialog, false, cx);
+    assert_eq!(tiers(cx), (DialogConfirm::Click, DialogConfirm::Click));
+}
+
+#[gpui_kit::test]
+fn skip_pdbs_of_several_nodes_types_the_cluster_name(cx: &mut TestAppContext) {
+    let t = drain_test("skip-several", three_pods, cx);
+    t.set_nodes(
+        &t.t.stg,
+        vec![
+            summary("node-b", NodeScheduling::Enabled),
+            summary("node-c", NodeScheduling::Enabled),
+        ],
+        cx,
+    );
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b", "node-c"], cx);
+    t.wait_for_skip(&dialog, cx);
+    t.tick_skip(&dialog, true, cx);
+    dialog.read_with(cx, |dialog, cx| {
+        let (drain, cordon) = dialog.live_tiers(cx);
+        assert_eq!(
+            drain,
+            DialogConfirm::TypeName {
+                expected: "stg-b".to_owned()
+            }
+        );
+        assert_eq!(cordon, DialogConfirm::Click);
+    });
+}
+
+#[gpui_kit::test]
+fn skip_pdbs_run_deletes_with_uid(cx: &mut TestAppContext) {
+    let t = drain_test("skip-run", three_pods, cx);
+    let dir = t.t.enable_audit_folder("skip-run", cx);
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    t.wait_for_skip(&dialog, cx);
+    t.tick_skip(&dialog, true, cx);
+    t.settle(&dialog, cx);
+    // Without the typed name nothing starts; with it the run starts.
+    t.press_drain(&dialog, cx);
+    cx.run_until_parked();
+    assert!(t.tab(cx).is_none());
+    t.type_name(&dialog, "node-b", cx);
+    t.press_drain(&dialog, cx);
+    t.t.wait_for("the tab", cx, |cx| t.tab(cx).is_some());
+    let tab = t.tab(cx).expect("a drain tab");
+    t.wait_for_end(&tab, cx);
+    // The pods went by DELETE with the uid, and no eviction was committed.
+    let commits = delete_requests(&t.t.stg_api, false);
+    let paths: Vec<&str> = commits
+        .iter()
+        .map(|request| request.path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "/api/v1/namespaces/payments/pods/api-1",
+            "/api/v1/namespaces/payments/pods/api-2"
+        ]
+    );
+    let body: Value = serde_json::from_str(&commits[0].body).expect("a body");
+    assert_eq!(body["preconditions"]["uid"], "uid-api-1");
+    assert_eq!(body["propagationPolicy"], "Background");
+    assert!(evictions(&t.t.stg_api, false).is_empty(), "never /eviction");
+    // The run reuses the dialog's dry-runs: only the two of the toggle were sent.
+    assert_eq!(delete_requests(&t.t.stg_api, true).len(), 2);
+    // The texts and the audit follow the policy.
+    tab.read_with(cx, |tab, _| {
+        assert_eq!(
+            tab.run().end_notice().as_deref(),
+            Some("Drain: node-b drained")
+        );
+    });
+    t.t.wait_for("the audit lines", cx, |_| audit_lines(&dir).len() == 4);
+    let lines = audit_lines(&dir);
+    let actions: Vec<&str> = lines
+        .iter()
+        .map(|line| line["action"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(actions, ["Cordon", "Delete", "Delete", "Drain"]);
+    assert_eq!(
+        lines[1]["fields"][0]["path"],
+        "deleteOptions.propagationPolicy"
+    );
+    assert_eq!(
+        lines[3]["fields"]
+            .as_array()
+            .and_then(|fields| fields.last()),
+        Some(&json!({"path": "disable_eviction", "value": "true"}))
+    );
+}
+
+#[gpui_kit::test]
+fn skip_pdbs_run_skips_dry_runs_the_dialog_recorded(cx: &mut TestAppContext) {
+    let t = drain_test("skip-recorded", three_pods, cx);
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    t.wait_for_skip(&dialog, cx);
+    t.tick_skip(&dialog, true, cx);
+    t.settle(&dialog, cx);
+    t.type_name(&dialog, "node-b", cx);
+    t.press_drain(&dialog, cx);
+    t.t.wait_for("the tab", cx, |cx| t.tab(cx).is_some());
+    let tab = t.tab(cx).expect("a drain tab");
+    t.wait_for_end(&tab, cx);
+    // Two delete dry-runs of the dialog and two commits: the run asked nothing again.
+    assert_eq!(delete_requests(&t.t.stg_api, true).len(), 2);
+    assert_eq!(delete_requests(&t.t.stg_api, false).len(), 2);
+}
+
+#[gpui_kit::test]
+fn skip_pdbs_run_words_the_tab_by_the_policy(cx: &mut TestAppContext) {
+    let t = drain_test(
+        "skip-words",
+        |server| {
+            three_pods(server);
+            server.throttled = vec!["api-2".to_owned()];
+        },
+        cx,
+    );
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    t.wait_for_skip(&dialog, cx);
+    t.tick_skip(&dialog, true, cx);
+    t.settle(&dialog, cx);
+    t.type_name(&dialog, "node-b", cx);
+    t.press_drain(&dialog, cx);
+    t.t.wait_for("the tab", cx, |cx| t.tab(cx).is_some());
+    let tab = t.tab(cx).expect("a drain tab");
+    // api-2 is rate limited, not refused by a budget: the row says so and the run retries it.
+    t.t.wait_for("the refusal", cx, |cx| {
+        tab.read_with(cx, |tab, _| {
+            tab.run()
+                .pod_rows(Duration::ZERO)
+                .iter()
+                .any(|row| row.text.starts_with("Refused: Too many requests"))
+        })
+    });
+    tab.read_with(cx, |tab, _| {
+        let states = tab.run().node_states();
+        assert!(
+            states[0].1.text().starts_with("Deleting "),
+            "{:?}",
+            states[0].1.text()
+        );
+    });
+    tab.update(cx, |tab, cx| tab.cancel(cx));
+    t.wait_for_end(&tab, cx);
+}
+
+#[gpui_kit::test]
+fn skip_pdbs_run_stops_on_a_lock(cx: &mut TestAppContext) {
+    use crate::drain_run::{NextStep, RunEnd};
+    let t = drain_test("skip-lock", three_pods, cx);
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    t.wait_for_skip(&dialog, cx);
+    t.tick_skip(&dialog, true, cx);
+    t.settle(&dialog, cx);
+    t.type_name(&dialog, "node-b", cx);
+    // The first committed delete waits at the server: the run is mid-commit.
+    let (release, gate) = std::sync::mpsc::channel();
+    *t.stg_gate.lock().expect("the gate") = Some(gate);
+    t.press_drain(&dialog, cx);
+    t.t.wait_for("a request in the air", cx, |cx| {
+        t.tab(cx).is_some_and(|tab| {
+            tab.read_with(cx, |tab, _| {
+                matches!(tab.run().in_flight(), Some(NextStep::Evict(_)))
+            })
+        })
+    });
+    let tab = t.tab(cx).expect("a drain tab");
+    t.t.set_lock(&t.t.stg, WriteLock::Locked, cx);
+    release.send(()).expect("the server waits for the release");
+    t.wait_for_end(&tab, cx);
+    cx.run_until_parked();
+    // The delete that had left is the only one: the next was blocked before it was sent.
+    assert_eq!(delete_requests(&t.t.stg_api, false).len(), 1);
+    tab.read_with(cx, |tab, _| {
+        let Some(RunEnd::Stopped(reason)) = tab.run().end() else {
+            panic!("the run stopped: {:?}", tab.run().end());
+        };
+        assert!(reason.ends_with("; drain stopped"), "{reason}");
+    });
+}
+
+#[gpui_kit::test]
+fn a_held_enter_never_confirms_a_skip_pdbs_drain(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    let t = drain_test("skip-held-enter", three_pods, cx);
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    t.wait_for_skip(&dialog, cx);
+    t.tick_skip(&dialog, true, cx);
+    t.settle(&dialog, cx);
+    t.type_name(&dialog, "node-b", cx);
+    t.t.fixture
+        .with_window(cx, |window, cx| window.render_frame(cx));
+    for _ in 0..3 {
+        t.t.fixture.with_window(cx, |window, cx| {
+            window.dispatch_event(key_down("enter", true).to_platform_input(), cx);
+        });
+    }
+    cx.run_until_parked();
+    assert!(t.tab(cx).is_none(), "a held Enter starts nothing");
+    assert!(delete_requests(&t.t.stg_api, false).is_empty());
 }
