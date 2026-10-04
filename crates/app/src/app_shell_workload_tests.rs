@@ -4,8 +4,9 @@
 //! server, so a test sees which cluster a request reached and nothing leaves the machine.
 
 use cluster::fake_api::{FakeApi, RecordedRequest};
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{Entity, TestAppContext};
+use gpui_kit::{Entity, InputEvent as _, KeyDownEvent, Keystroke, TestAppContext};
 
 use super::app_shell_switch_tests::open_switch_fixture;
 use super::app_shell_write_tests::{
@@ -266,7 +267,7 @@ fn palette_runs_the_same_arm(cx: &mut TestAppContext) {
     let snapshot = t
         .fixture
         .shell
-        .read_with(cx, |shell, cx| shell.palette_snapshot(false, cx));
+        .read_with(cx, |shell, cx| shell.palette_snapshot(&parse_query(""), cx));
     let entry = snapshot
         .entries
         .iter()
@@ -970,7 +971,7 @@ fn roll_back_is_off_until_the_revisions_load(cx: &mut TestAppContext) {
     let snapshot = t
         .fixture
         .shell
-        .read_with(cx, |shell, cx| shell.palette_snapshot(false, cx));
+        .read_with(cx, |shell, cx| shell.palette_snapshot(&parse_query(""), cx));
     let entry = snapshot
         .entries
         .iter()
@@ -1001,7 +1002,7 @@ fn palette_roll_back_entry_runs_the_dialog(cx: &mut TestAppContext) {
     let snapshot = t
         .fixture
         .shell
-        .read_with(cx, |shell, cx| shell.palette_snapshot(false, cx));
+        .read_with(cx, |shell, cx| shell.palette_snapshot(&parse_query(""), cx));
     let entry = snapshot
         .entries
         .iter()
@@ -1572,4 +1573,160 @@ fn l_on_deployment_opens_workload_logs(cx: &mut TestAppContext) {
     t.cursor_on(&t.stg, ResourceKind::Deployments, "api", cx);
     t.press_view_logs(cx);
     assert_eq!(t.log_tab_labels(cx), ["deploy/api"]);
+}
+
+// ---- Palette pairs: an action on a search hit ----
+
+/// `api` and `web` in `team-a`, loaded and shown, with the cursor on `web`.
+fn pair_fixture(name: &str, cx: &mut TestAppContext) -> Clusters {
+    let t = workload_clusters(name, cx);
+    t.show_kind(
+        ResourceKind::Deployments,
+        deployment_rows(&["api", "web"]),
+        deployment_rows(&["api", "web"]),
+        cx,
+    );
+    t.cursor_on(&t.stg, ResourceKind::Deployments, "web", cx);
+    t
+}
+
+fn deployment_object(t: &Clusters, name: &str) -> ClusterObject {
+    ClusterObject::new(
+        t.stg.clone(),
+        ResourceKey::Kind {
+            kind: ResourceKind::Deployments,
+            namespace: Some("team-a".to_owned()),
+            name: name.to_owned(),
+        },
+    )
+}
+
+fn run_pair(t: &Clusters, object: ClusterObject, row: RowAction, cx: &mut TestAppContext) {
+    t.fixture.with_window(cx, |window, cx| {
+        t.fixture.shell.update(cx, |shell, cx| {
+            shell.run_row_action_on(object, row, window, cx);
+        });
+    });
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn palette_pair_reveals_then_opens_the_restart_dialog(cx: &mut TestAppContext) {
+    let t = pair_fixture("pair-restart", cx);
+    let api = deployment_object(&t, "api");
+    run_pair(&t, api.clone(), RowAction::RestartRollout, cx);
+    t.fixture.shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected.as_ref(), Some(&api));
+        assert!(shell.drawer.is_open);
+    });
+    // The key's own flow: the 0030 confirm of the cluster's tier, naming the hit.
+    t.wait_for("the dialog", cx, |cx| t.has_dialog(cx));
+    assert_eq!(t.dialog_label(cx), "Restart rollout of deployment api");
+    t.dialog(cx).read_with(cx, |dialog, _| {
+        assert_eq!(*dialog.tier(), DialogConfirm::Click);
+    });
+    t.wait_for_dry_run(cx);
+    // Only the dry-run went out; nothing is committed before Confirm.
+    let sent = writes(&t.stg_api);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(sent[0].has_query("dryRun", "All"));
+    assert_eq!(sent[0].path, restart_path());
+}
+
+#[gpui_kit::test]
+fn palette_pair_on_the_cursor_row_runs_at_once(cx: &mut TestAppContext) {
+    let t = pair_fixture("pair-cursor", cx);
+    run_pair(
+        &t,
+        deployment_object(&t, "web"),
+        RowAction::RestartRollout,
+        cx,
+    );
+    t.wait_for("the dialog", cx, |cx| t.has_dialog(cx));
+    assert_eq!(t.dialog_label(cx), "Restart rollout of deployment web");
+}
+
+#[gpui_kit::test]
+fn palette_pair_on_a_vanished_row_runs_nothing(cx: &mut TestAppContext) {
+    let t = pair_fixture("pair-vanished", cx);
+    let ghost = deployment_object(&t, "ghost");
+    run_pair(&t, ghost.clone(), RowAction::RestartRollout, cx);
+    assert!(!t.has_dialog(cx));
+    assert!(writes(&t.stg_api).is_empty());
+    t.fixture.shell.read_with(cx, |shell, _| {
+        assert_ne!(shell.selected.as_ref(), Some(&ghost));
+    });
+}
+
+#[gpui_kit::test]
+fn palette_pair_rereads_the_gate_when_it_runs(cx: &mut TestAppContext) {
+    // The cluster is locked after the pair was listed: the key's own gate says no.
+    let t = workload_clusters("pair-gate", cx);
+    let _prod_api = t.activate_prod(cx);
+    t.show_kind(
+        ResourceKind::Deployments,
+        deployment_rows(&["api", "web"]),
+        deployment_rows(&["api", "web"]),
+        cx,
+    );
+    let api = ClusterObject::new(
+        t.prod.clone(),
+        ResourceKey::Kind {
+            kind: ResourceKind::Deployments,
+            namespace: Some("team-a".to_owned()),
+            name: "api".to_owned(),
+        },
+    );
+    // `prod-a` is locked at open, so the key refuses the restart.
+    run_pair(&t, api, RowAction::RestartRollout, cx);
+    assert!(!t.has_dialog(cx));
+}
+
+#[gpui_kit::test]
+fn confirming_a_pair_in_the_palette_opens_the_dialog_and_sends_nothing(cx: &mut TestAppContext) {
+    let t = pair_fixture("pair-palette", cx);
+    t.open_palette("> rest api", cx);
+    t.press("enter", cx);
+    cx.run_until_parked();
+    t.wait_for("the dialog", cx, |cx| t.has_dialog(cx));
+    assert_eq!(t.dialog_label(cx), "Restart rollout of deployment api");
+    t.wait_for_dry_run(cx);
+    assert!(
+        writes(&t.stg_api)
+            .iter()
+            .all(|sent| sent.has_query_key("dryRun"))
+    );
+}
+
+#[gpui_kit::test]
+fn a_held_enter_never_confirms_a_palette_pair(cx: &mut TestAppContext) {
+    let t = pair_fixture("pair-held-enter", cx);
+    t.open_palette("> rest api", cx);
+    let held = KeyDownEvent {
+        keystroke: Keystroke::parse("enter").expect("a valid keystroke"),
+        is_held: true,
+        prefer_character_input: false,
+    };
+    t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_event(held.to_platform_input(), cx);
+    });
+    cx.run_until_parked();
+    // Nothing opened and the palette is still there; the cursor did not move.
+    let is_palette_open = t
+        .fixture
+        .with_window(cx, |window, cx| window.has_active_dialog(cx));
+    assert!(
+        is_palette_open && !t.has_dialog(cx),
+        "the palette stays open"
+    );
+    t.fixture.shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected, Some(deployment_object(&t, "web")));
+    });
+    assert!(writes(&t.stg_api).is_empty());
+    // A fresh Enter on the same entry does confirm it.
+    t.press("enter", cx);
+    cx.run_until_parked();
+    t.wait_for("the confirm dialog", cx, |cx| {
+        t.has_dialog(cx) && t.dialog_label(cx) == "Restart rollout of deployment api"
+    });
 }

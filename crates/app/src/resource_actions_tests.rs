@@ -3237,3 +3237,84 @@ fn refused_objects_disable_the_item() {
         Some("Immutable Secret")
     );
 }
+
+/// Every action, with the kind-carrying ones once for a kind that resolves and once for one that
+/// has no check (`Planned`).
+fn every_action() -> Vec<ResourceAction> {
+    vec![
+        ResourceAction::ViewLogs,
+        ResourceAction::OpenShell,
+        ResourceAction::PortForward,
+        ResourceAction::OpenNodeShell,
+        ResourceAction::DebugContainer,
+        ResourceAction::Cordon,
+        ResourceAction::Uncordon,
+        ResourceAction::Drain,
+        ResourceAction::EditTaints,
+        ResourceAction::EditLabels,
+        ResourceAction::CopyName,
+        ResourceAction::ViewYaml,
+        ResourceAction::EditYaml(ObjectKind::Pod),
+        ResourceAction::EditValues(ObjectKind::ConfigMap),
+        ResourceAction::Delete(ObjectKind::Pod),
+        ResourceAction::RestartRollout(ObjectKind::Deployment),
+        ResourceAction::RestartRollout(ObjectKind::Pod),
+        ResourceAction::Scale(ObjectKind::Deployment),
+        ResourceAction::Scale(ObjectKind::Pod),
+        ResourceAction::PauseRollout,
+        ResourceAction::RollBack,
+        ResourceAction::SuspendCronJob,
+        ResourceAction::TriggerCronJob,
+        ResourceAction::RerunJob,
+        ResourceAction::EditHpaRange,
+        ResourceAction::ExpandClaim,
+        ResourceAction::SetDefaultStorageClass,
+    ]
+}
+
+#[test]
+fn needs_confirm_matches_the_mutating_gate() {
+    for action in every_action() {
+        assert_eq!(
+            needs_confirm(action),
+            matches!(action.gate(), ActionGate::Mutating { .. }),
+            "{action:?}"
+        );
+    }
+    // The read-only actions never reach a confirm; a shipped write does.
+    for action in [
+        ResourceAction::ViewLogs,
+        ResourceAction::ViewYaml,
+        ResourceAction::CopyName,
+    ] {
+        assert!(!needs_confirm(action), "{action:?}");
+    }
+    for action in [
+        ResourceAction::RestartRollout(ObjectKind::Deployment),
+        ResourceAction::OpenShell,
+        ResourceAction::EditYaml(ObjectKind::Pod),
+    ] {
+        assert!(needs_confirm(action), "{action:?}");
+    }
+}
+
+#[test]
+fn is_planned_matches_the_unshipped_gates() {
+    for action in every_action() {
+        let is_unshipped = matches!(
+            action.gate(),
+            ActionGate::Planned
+                | ActionGate::Mutating {
+                    is_shipped: false,
+                    ..
+                }
+        );
+        assert_eq!(is_planned(action), is_unshipped, "{action:?}");
+    }
+    // A kind with no restart or scale check has no action to run: it stays planned.
+    assert!(is_planned(ResourceAction::RestartRollout(ObjectKind::Pod)));
+    assert!(is_planned(ResourceAction::Scale(ObjectKind::Pod)));
+    // Drain shipped with spec 0034, so it is not planned any more.
+    assert!(!is_planned(ResourceAction::Drain));
+    assert!(!is_planned(ResourceAction::ViewLogs));
+}

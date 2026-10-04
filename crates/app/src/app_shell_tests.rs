@@ -1203,7 +1203,9 @@ fn the_palette_snapshot_of_a_shell_without_a_session_lists_commands_and_screens(
 ) {
     let (window, shell) = open_shell(cx);
     render(window, cx);
-    let snapshot = shell.read_with(cx, |shell, cx| shell.palette_snapshot(true, cx));
+    let snapshot = shell.read_with(cx, |shell, cx| {
+        shell.palette_snapshot(&parse_query("pod"), cx)
+    });
     assert!(!snapshot.context.has_session);
     assert!(snapshot.context.scope_label.is_none());
     assert!(snapshot.entries.iter().all(|entry| matches!(

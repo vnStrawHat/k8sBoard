@@ -371,6 +371,25 @@ impl RowAction {
     }
 }
 
+/// Whether the action reaches a 0030 confirm (dialog, popover, editor diff, or connect tier): its
+/// gate is `Mutating`. The palette marks such entries `needs confirm`.
+pub(crate) fn needs_confirm(action: ResourceAction) -> bool {
+    matches!(action.gate(), ActionGate::Mutating { .. })
+}
+
+/// Whether the action has not shipped: its gate is `Planned`, or `Mutating` with `is_shipped:
+/// false`. Such an action can never run, so the palette pairs it with no object.
+pub(crate) fn is_planned(action: ResourceAction) -> bool {
+    matches!(
+        action.gate(),
+        ActionGate::Planned
+            | ActionGate::Mutating {
+                is_shipped: false,
+                ..
+            }
+    )
+}
+
 /// What an action can do to the cluster; the confirm dialog's button style follows it.
 pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
     match action {

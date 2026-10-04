@@ -102,6 +102,11 @@ const WRITE_CONFIRM_INPUT: &str = "WriteConfirm > Input";
 /// The Scale popover, and the text field inside it.
 const VALUE_POPOVER: &str = "ValuePopover";
 const VALUE_POPOVER_INPUT: &str = "ValuePopover > Input";
+/// The palette's list, the kit `Command` and its query field inside it. The palette handles Enter
+/// itself, as a fresh press only, so the kit's Enter bindings are switched off in all three.
+pub(crate) const PALETTE_LIST: &str = "PaletteList";
+const PALETTE_LIST_COMMAND: &str = "PaletteList > Command";
+const PALETTE_LIST_INPUT: &str = "PaletteList > Input";
 /// The palette's inline argument (the replicas of Scale), and the text field inside it.
 const PALETTE_ARGUMENT: &str = "PaletteArgument";
 const PALETTE_ARGUMENT_INPUT: &str = "PaletteArgument > Input";
@@ -208,6 +213,11 @@ pub(crate) fn bind_keys(cx: &mut App) {
         // palette in the same key press, before the number is read.
         KeyBinding::new("enter", gpui_kit::NoAction, Some(PALETTE_ARGUMENT)),
         KeyBinding::new("enter", gpui_kit::NoAction, Some(PALETTE_ARGUMENT_INPUT)),
+        // The same for the list: a held Enter repeats the kit's confirm, and a confirm can open a
+        // write dialog under the user's finger.
+        KeyBinding::new("enter", gpui_kit::NoAction, Some(PALETTE_LIST)),
+        KeyBinding::new("enter", gpui_kit::NoAction, Some(PALETTE_LIST_COMMAND)),
+        KeyBinding::new("enter", gpui_kit::NoAction, Some(PALETTE_LIST_INPUT)),
     ]);
     cx.bind_keys(
         FIELDS

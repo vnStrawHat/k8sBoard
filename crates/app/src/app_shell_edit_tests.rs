@@ -355,7 +355,7 @@ fn menus_e_and_palette_share_the_arm(cx: &mut TestAppContext) {
     // The palette lists the action of the cursor row, enabled, and dispatches its key action.
     let snapshot = t
         .shell()
-        .read_with(cx, |shell, cx| shell.palette_snapshot(false, cx));
+        .read_with(cx, |shell, cx| shell.palette_snapshot(&parse_query(""), cx));
     let entry = snapshot
         .entries
         .iter()
@@ -1385,7 +1385,7 @@ fn the_palette_offers_no_row_write_while_editing(cx: &mut TestAppContext) {
     t.cursor_on(&t.t.stg, cx);
     let offered = |t: &EditTest, cx: &mut TestAppContext| {
         t.shell()
-            .read_with(cx, |shell, cx| shell.palette_snapshot(false, cx))
+            .read_with(cx, |shell, cx| shell.palette_snapshot(&parse_query(""), cx))
             .entries
             .iter()
             .filter(|entry| {

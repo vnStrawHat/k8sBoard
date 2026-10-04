@@ -532,7 +532,7 @@ fn the_palette_lists_edit_min_max_and_runs_the_same_arm(cx: &mut TestAppContext)
     let snapshot = t
         .fixture
         .shell
-        .read_with(cx, |shell, cx| shell.palette_snapshot(false, cx));
+        .read_with(cx, |shell, cx| shell.palette_snapshot(&parse_query(""), cx));
     let entry = snapshot
         .entries
         .iter()

@@ -5,6 +5,7 @@
 //! sections, or values, and a query is never stored or traced here.
 
 use std::cmp::Reverse;
+use std::ops::Range;
 
 use cluster::{NamespaceScope, NamespaceSummary, NodeSummary, PodSummary, ReplicaSetSummary};
 use gpui_kit::{Action, SharedString};
@@ -13,12 +14,13 @@ use crate::app_shell::Screen;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_switcher::SwitchToCluster1;
 use crate::cluster_switcher_rows::{SwitcherRow, SwitcherSection};
-use crate::fuzzy_score::fuzzy_score;
+use crate::fuzzy_score::{fuzzy_ranges, fuzzy_score};
 use crate::keymap::{OpenKindPalette, OpenPalette, ShortcutGroup, shortcut_rows};
 use crate::kind_row::{KindObject, KindRow};
 use crate::navigation::{KindAvailability, kind_availability};
 use crate::resource_actions::{
-    KeyAvailability, RowAction, action_label, key_availability_of, subject_action,
+    KeyAvailability, RowAction, action_label, is_planned, key_availability_of, needs_confirm,
+    subject_action,
 };
 use crate::resource_kind::ResourceKind;
 use crate::settings_window::ImportKubeconfig;
@@ -129,12 +131,16 @@ pub(crate) enum PaletteTarget {
     /// Roll back of the cursor Deployment to the revision the entry names, which the shell runs
     /// through its confirm dialog. It carries the revision, so it is not a plain row action.
     RollBack(ClusterObject, RevisionTarget),
+    /// A row action on a search hit: the object becomes the cursor, then the action's key runs on
+    /// it (`run_row_action_on`), so the gate and the confirm are the key's own.
+    ObjectAction(ClusterObject, RowAction),
     Screen(Screen),
     /// An object of one viewed cluster, which the shell reveals in that cluster.
     Resource(ClusterObject),
     Namespace(NamespaceScope),
-    /// A row of the cluster switcher: the cluster, its environment, health, and `Ctrl n` number.
-    Cluster(SwitcherRow),
+    /// A row of the cluster switcher (the cluster, its environment, health, and `Ctrl n` number)
+    /// and the scope the switch carries; `None` keeps the target's own start scope (0026).
+    Cluster(SwitcherRow, Option<NamespaceScope>),
 }
 
 // Cloned when an entry is confirmed, so the palette can close before the target runs.
@@ -144,10 +150,11 @@ impl Clone for PaletteTarget {
             Self::Command(action) => Self::Command(action.boxed_clone()),
             Self::RowAction(action) => Self::RowAction(*action),
             Self::RollBack(object, revision) => Self::RollBack(object.clone(), revision.clone()),
+            Self::ObjectAction(object, action) => Self::ObjectAction(object.clone(), *action),
             Self::Screen(screen) => Self::Screen(*screen),
             Self::Resource(key) => Self::Resource(key.clone()),
             Self::Namespace(scope) => Self::Namespace(scope.clone()),
-            Self::Cluster(row) => Self::Cluster(row.clone()),
+            Self::Cluster(row, scope) => Self::Cluster(row.clone(), scope.clone()),
         }
     }
 }
@@ -168,6 +175,11 @@ pub(crate) struct PaletteEntry {
     pub(crate) state: EntryState,
     /// The screen, namespace scope, or cluster that is open now.
     pub(crate) is_current: bool,
+    /// Enabled, and its action's gate is `Mutating`: the row shows `needs confirm`.
+    pub(crate) needs_confirm: bool,
+    /// The query score `palette_entries` already computed (the `All`-mode resource entries);
+    /// `ranked` uses it instead of scoring again. `None`: not scored yet.
+    pub(crate) score: Option<u32>,
     pub(crate) target: PaletteTarget,
 }
 
@@ -181,6 +193,8 @@ impl PaletteEntry {
             status: None,
             state: EntryState::Enabled,
             is_current: false,
+            needs_confirm: false,
+            score: None,
             target,
         }
     }
@@ -216,6 +230,10 @@ pub(crate) struct PaletteInput<'a> {
     /// Whether to build the resource entries at all: only a query in `All` mode with text lists
     /// them, and thousands of pods are not worth building for any other query.
     pub(crate) include_resources: bool,
+    /// The query text the resource entries are scored against, once (`PaletteEntry::score`).
+    pub(crate) query_text: &'a str,
+    /// The query text when pairs apply (`lists_pairs`); `None` builds none.
+    pub(crate) pair_text: Option<&'a str>,
     /// The open cluster, when it is live.
     pub(crate) session: Option<PaletteSession<'a>>,
     pub(crate) clusters: &'a [SwitcherSection],
@@ -247,14 +265,15 @@ const ROW_ACTIONS: [RowAction; 22] = [
     RowAction::SetDefaultStorageClass,
 ];
 
-/// Everything the palette may show, in source order, from in-memory state only.
+/// Everything the palette may show, in source order, from in-memory state only. `scan_loaded_rows`
+/// states the cost of one rebuild.
 pub(crate) fn palette_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
+    let scan = scan_loaded_rows(input);
     let mut entries = Vec::new();
     entries.extend(row_action_entries(input));
+    entries.extend(pair_entries(input, &scan.pair_subjects));
     entries.extend(command_entries(input));
-    if input.include_resources {
-        entries.extend(input.session.iter().flat_map(resource_entries));
-    }
+    entries.extend(scan.resources);
     entries.extend(screen_entries(input));
     if let Some(session) = &input.session {
         entries.extend(namespace_entries(session));
@@ -319,6 +338,7 @@ fn row_action_entries<'a>(input: &'a PaletteInput<'_>) -> impl Iterator<Item = P
         }
         let mut entry = PaletteEntry::new(PaletteGroup::Actions, label, target);
         entry.detail = Some(subject_text(subject).into());
+        entry.needs_confirm = matches!(state, EntryState::Enabled) && needs_confirm(action);
         entry.state = state;
         Some(entry)
     })
@@ -364,52 +384,324 @@ fn command_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
         .collect()
 }
 
-/// The visible explorer kind, pods, and nodes of the open cluster: names and status only.
-fn resource_entries<'a>(
-    session: &'a PaletteSession<'_>,
-) -> impl Iterator<Item = PaletteEntry> + 'a {
-    let object = |key| PaletteTarget::Resource(ClusterObject::new(session.cluster.clone(), key));
-    let pods = session.pods.iter().map(move |pod| {
-        let mut entry = PaletteEntry::new(
-            PaletteGroup::Resources,
-            pod.name.clone(),
-            object(ResourceKey::of_pod(pod)),
-        );
-        entry.detail = Some(format!("{}/{}", pod.namespace, pod.name).into());
-        entry.keywords = vec!["pod".into(), "pods".into()];
-        entry.status = Some(pod_status_label(pod));
-        entry
-    });
-    let nodes = session.nodes.iter().map(move |node| {
-        let mut entry = PaletteEntry::new(
-            PaletteGroup::Resources,
-            node.name.clone(),
-            object(ResourceKey::of_node(node)),
-        );
-        entry.keywords = vec!["node".into(), "nodes".into()];
-        entry.status = Some(node_status_label(node.status));
-        entry
-    });
+/// One loaded object the palette can search or act on, borrowed from the session lists.
+#[derive(Clone, Copy)]
+enum Subject<'a> {
+    Pod(&'a PodSummary),
+    Node(&'a NodeSummary),
+    Row(ResourceKind, &'a KindRow),
+}
+
+impl<'a> Subject<'a> {
+    fn name(self) -> &'a str {
+        match self {
+            Self::Pod(pod) => &pod.name,
+            Self::Node(node) => &node.name,
+            Self::Row(_, row) => &row.name,
+        }
+    }
+
+    fn namespace(self) -> Option<&'a str> {
+        match self {
+            Self::Pod(pod) => Some(&pod.namespace),
+            Self::Node(_) => None,
+            Self::Row(_, row) => row.namespace.as_deref(),
+        }
+    }
+
+    /// The kind words a query matches besides the name: `deployment`, `deployments`.
+    fn words(self) -> [&'static str; 2] {
+        match self {
+            Self::Pod(_) => ["pod", "pods"],
+            Self::Node(_) => ["node", "nodes"],
+            Self::Row(kind, _) => [kind.singular(), kind.plural()],
+        }
+    }
+
+    fn status(self) -> StatusLabel {
+        match self {
+            Self::Pod(pod) => pod_status_label(pod),
+            Self::Node(node) => node_status_label(node.status),
+            Self::Row(_, row) => row.status.clone(),
+        }
+    }
+
+    fn key(self) -> ResourceKey {
+        match self {
+            Self::Pod(pod) => ResourceKey::of_pod(pod),
+            Self::Node(node) => ResourceKey::of_node(node),
+            Self::Row(kind, row) => ResourceKey::of_row(kind, row),
+        }
+    }
+
+    /// Whether `key` names this object, without building a key.
+    fn is(self, key: &ResourceKey) -> bool {
+        match self {
+            Self::Pod(pod) => key.is_pod(pod),
+            Self::Node(node) => key.is_node(node),
+            Self::Row(kind, row) => key.is_row(kind, row),
+        }
+    }
+
+    /// The text a query matches: the name, `namespace/name` (empty for a node), and the kind
+    /// words. `buffer` holds the joined text, so scoring an object allocates nothing once it has
+    /// grown.
+    fn fields<'b>(self, buffer: &'b mut String) -> [&'b str; 4]
+    where
+        'a: 'b,
+    {
+        buffer.clear();
+        if let Some(namespace) = self.namespace() {
+            buffer.push_str(namespace);
+            buffer.push('/');
+            buffer.push_str(self.name());
+        }
+        let [singular, plural] = self.words();
+        [self.name(), buffer.as_str(), singular, plural]
+    }
+
+    /// How the tokens of `text` match this object's fields.
+    fn match_tokens(self, text: &str, buffer: &mut String) -> TokenMatch {
+        let fields = self.fields(buffer);
+        let mut matched = TokenMatch::default();
+        for token in text.split_whitespace() {
+            matched.tokens += 1;
+            let best = fields
+                .iter()
+                .filter_map(|field| fuzzy_score(token, field))
+                .max();
+            if let Some(best) = best {
+                matched.score = matched.score.saturating_add(best);
+                matched.hits += 1;
+            }
+        }
+        matched
+    }
+
+    /// Whether each token matches one of this object's fields.
+    fn token_hits(self, tokens: &[&str], buffer: &mut String) -> Vec<bool> {
+        let fields = self.fields(buffer);
+        tokens
+            .iter()
+            .map(|token| {
+                fields
+                    .iter()
+                    .any(|field| fuzzy_score(token, field).is_some())
+            })
+            .collect()
+    }
+}
+
+/// The sum of each token's best field score, over the tokens that matched some field, and how many
+/// matched. A resource lists when every token matched; a pair object needs only one.
+#[derive(Default)]
+struct TokenMatch {
+    score: u32,
+    tokens: usize,
+    hits: usize,
+}
+
+impl TokenMatch {
+    fn is_complete(&self) -> bool {
+        self.hits == self.tokens
+    }
+}
+
+/// The visible explorer kind first (it is what the user is looking at), then pods, then nodes.
+fn subjects<'a>(session: &PaletteSession<'a>) -> impl Iterator<Item = Subject<'a>> + use<'a> {
+    // The slices are copied out, so the iterator borrows the lists and not the session value.
+    let (pods, nodes) = (session.pods, session.nodes);
     let rows = session
         .kind_rows
         .into_iter()
-        .flat_map(|(kind, rows)| rows.iter().map(move |row| (kind, row)))
-        .map(move |(kind, row)| {
+        .flat_map(|(kind, rows)| rows.iter().map(move |row| Subject::Row(kind, row)));
+    rows.chain(pods.iter().map(Subject::Pod))
+        .chain(nodes.iter().map(Subject::Node))
+}
+
+/// The Resources entry of an object: its name and status only, never cell text.
+fn resource_entry(session: &PaletteSession<'_>, subject: Subject<'_>) -> PaletteEntry {
+    let object = ClusterObject::new(session.cluster.clone(), subject.key());
+    let mut entry = PaletteEntry::new(
+        PaletteGroup::Resources,
+        subject.name().to_owned(),
+        PaletteTarget::Resource(object),
+    );
+    entry.detail = subject
+        .namespace()
+        .map(|namespace| format!("{namespace}/{}", subject.name()).into());
+    entry.keywords = subject
+        .words()
+        .into_iter()
+        .map(SharedString::from)
+        .collect();
+    entry.status = Some(subject.status());
+    entry
+}
+
+/// What the one scan of the loaded rows found.
+struct Scan<'a> {
+    /// The `All`-mode resource entries that matched every token, scored.
+    resources: Vec<PaletteEntry>,
+    /// The best objects for pairs (at most `RESOURCES_CAP`), matching at least one token.
+    pair_subjects: Vec<Subject<'a>>,
+}
+
+/// Scans the loaded rows once for the resource entries and the pair objects.
+///
+/// Per keystroke this is tokens x rows x 3 `fuzzy_score` calls (the name, `namespace/name`, and the
+/// kind words), byte compares with no allocation: about 45,000 for 5,000 rows and 3 tokens. It
+/// runs on every query change and on every shell notify while the palette is open, inside the
+/// 4 ms budget that the `palette ranked` trace measures. Pair building afterwards is bounded by
+/// `RESOURCES_CAP` objects x `ROW_ACTIONS`. Only a row that matched every token builds an entry.
+///
+/// ponytail: top-50 objects by one linear scan; an index per token if traces exceed the budget.
+fn scan_loaded_rows<'a>(input: &PaletteInput<'a>) -> Scan<'a> {
+    let mut scan = Scan {
+        resources: Vec::new(),
+        pair_subjects: Vec::new(),
+    };
+    let Some(session) = &input.session else {
+        return scan;
+    };
+    let wants_pairs = input.pair_text.is_some();
+    if !input.include_resources && !wants_pairs {
+        return scan;
+    }
+    let mut hits: Vec<(u32, Subject<'_>)> = Vec::new();
+    let mut buffer = String::new();
+    for subject in subjects(session) {
+        let matched = subject.match_tokens(input.query_text, &mut buffer);
+        let is_cursor = input
+            .cursor
+            .is_some_and(|cursor| cursor.cluster == session.cluster && subject.is(&cursor.key));
+        if wants_pairs && matched.hits > 0 && !is_cursor {
+            hits.push((matched.score, subject));
+        }
+        if input.include_resources && matched.is_complete() {
+            let mut entry = resource_entry(session, subject);
+            entry.score = Some(matched.score);
+            scan.resources.push(entry);
+        }
+    }
+    // Stable, so equal scores keep the source order.
+    hits.sort_by_key(|(score, _)| Reverse(*score));
+    hits.truncate(RESOURCES_CAP);
+    scan.pair_subjects = hits.into_iter().map(|(_, subject)| subject).collect();
+    scan
+}
+
+/// The row actions a pair may carry: Delete acts on the ticked set (decision 26), and Roll back
+/// needs the revisions only the cursor Deployment's drawer loads.
+fn is_pairable(row: RowAction) -> bool {
+    !matches!(row, RowAction::Delete | RowAction::RollBack)
+}
+
+/// Pairs apply to `All` or `Actions` mode with two or more tokens: one names the action, another
+/// the object (decision 24).
+pub(crate) fn lists_pairs(query: &PaletteQuery<'_>) -> bool {
+    matches!(query.mode, PaletteMode::All | PaletteMode::Actions)
+        && query.text.split_whitespace().nth(1).is_some()
+}
+
+/// The action × object entries of the best objects (`> rest pay` → `Restart rollout ·
+/// deployment/payments-api`). Pure over the input, like every source here.
+fn pair_entries(input: &PaletteInput<'_>, subjects: &[Subject<'_>]) -> Vec<PaletteEntry> {
+    let (Some(text), Some(session)) = (input.pair_text, &input.session) else {
+        return Vec::new();
+    };
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    subjects
+        .iter()
+        .flat_map(|subject| subject_pairs(session, *subject, &tokens))
+        .collect()
+}
+
+/// The pairs of one object: every shipped row action it offers whose label takes one token while
+/// the object takes another. The state follows the gate of the action's key, read now and again
+/// when the pair runs.
+fn subject_pairs(
+    session: &PaletteSession<'_>,
+    subject: Subject<'_>,
+    tokens: &[&str],
+) -> Vec<PaletteEntry> {
+    let key = subject.key();
+    let object = ClusterObject::new(session.cluster.clone(), key.clone());
+    let pod = match subject {
+        Subject::Pod(pod) => Some(pod),
+        Subject::Node(_) | Subject::Row(..) => None,
+    };
+    // The loaded row: its state flips a label and can block an action (a paused Deployment).
+    let loaded = match subject {
+        Subject::Row(_, row) => Some(&row.object),
+        Subject::Pod(_) | Subject::Node(_) => None,
+    };
+    let on_object = subject.token_hits(tokens, &mut String::new());
+    let namespace = subject
+        .namespace()
+        .filter(|_| !matches!(session.scope, NamespaceScope::Named(_)));
+    ROW_ACTIONS
+        .into_iter()
+        .filter(|row| is_pairable(*row))
+        .filter_map(|row| {
+            let action = subject_action(row, &key)?;
+            // An action that has not shipped can never run.
+            if is_planned(action) {
+                return None;
+            }
+            let label = match loaded {
+                Some(object) => state_label(action, action_label(action), object),
+                None => action_label(action),
+            };
+            if !is_pair(tokens, label, &on_object) {
+                return None;
+            }
+            let (state, can_run) = match key_availability_of(row, &key, pod, session.guard) {
+                KeyAvailability::NotOffered => return None,
+                KeyAvailability::Disabled { reason } => (EntryState::Disabled { reason }, None),
+                KeyAvailability::Run(action) => {
+                    match loaded.and_then(|object| row_block(action, object, None)) {
+                        Some(reason) => (EntryState::Disabled { reason }, None),
+                        None => (EntryState::Enabled, Some(action)),
+                    }
+                }
+            };
+            let detail = match namespace {
+                Some(namespace) => format!("{} · {namespace}", subject_text(&key)),
+                None => subject_text(&key),
+            };
             let mut entry = PaletteEntry::new(
-                PaletteGroup::Resources,
-                row.name.clone(),
-                object(ResourceKey::of_row(kind, row)),
+                PaletteGroup::Actions,
+                label,
+                PaletteTarget::ObjectAction(object.clone(), row),
             );
-            entry.detail = row
-                .namespace
-                .as_ref()
-                .map(|namespace| format!("{namespace}/{}", row.name).into());
-            entry.keywords = vec![kind.singular().into(), kind.plural().into()];
-            entry.status = Some(row.status.clone());
-            entry
-        });
-    // The visible kind first: it is what the user is looking at.
-    rows.chain(pods).chain(nodes)
+            entry.detail = Some(detail.into());
+            entry.state = state;
+            entry.needs_confirm = can_run.is_some_and(needs_confirm);
+            Some(entry)
+        })
+        .collect()
+}
+
+/// Decision 24: every token matches the label or the object, some token matches the label, and a
+/// different one matches the object. `on_object` says which tokens the object matches.
+fn is_pair(tokens: &[&str], label: &str, on_object: &[bool]) -> bool {
+    let on_label: Vec<bool> = tokens
+        .iter()
+        .map(|token| fuzzy_score(token, label).is_some())
+        .collect();
+    let covers_every_token = on_label
+        .iter()
+        .zip(on_object)
+        .all(|(label, object)| *label || *object);
+    let splits = on_label.iter().enumerate().any(|(index, is_on_label)| {
+        *is_on_label
+            && on_object
+                .iter()
+                .enumerate()
+                .any(|(other, is_on_object)| *is_on_object && other != index)
+    });
+    covers_every_token && splits
 }
 
 /// Pods, Nodes, and every explorer kind, with the words `:` matches (plural, singular, short names).
@@ -469,17 +761,30 @@ fn namespace_entries(session: &PaletteSession<'_>) -> Vec<PaletteEntry> {
         .collect()
 }
 
+/// The cluster rows. A row of another cluster carries the live scope when it is one named
+/// namespace (decision 31): `All` and several namespaces carry nothing, so the target starts in its
+/// own remembered scope, and a switch to the active cluster does nothing anyway.
 fn cluster_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
+    let carried = input
+        .session
+        .as_ref()
+        .and_then(|session| match session.scope {
+            NamespaceScope::Named(name) => Some(name),
+            NamespaceScope::All | NamespaceScope::Several(_) => None,
+        });
     input
         .clusters
         .iter()
         .flat_map(|section| &section.rows)
         .map(|row| {
+            let namespace = carried.filter(|_| !row.is_active);
+            let scope = namespace.map(|name| NamespaceScope::Named(name.clone()));
             let mut entry = PaletteEntry::new(
                 PaletteGroup::GoTo,
                 row.label.clone(),
-                PaletteTarget::Cluster(row.clone()),
+                PaletteTarget::Cluster(row.clone(), scope),
             );
+            entry.detail = namespace.map(|name| format!("same namespace {name}").into());
             // The switcher's own search text: the context, the environment badge, the file name.
             entry.keywords = row.search_text.lines().map(SharedString::from).collect();
             entry.is_current = row.is_active;
@@ -500,20 +805,79 @@ fn is_listed(entry: &PaletteEntry, query: &PaletteQuery<'_>) -> bool {
     match query.mode {
         PaletteMode::All => entry.group == PaletteGroup::Actions || !query.text.is_empty(),
         PaletteMode::Kinds => matches!(entry.target, PaletteTarget::Screen(_)),
-        PaletteMode::Clusters => matches!(entry.target, PaletteTarget::Cluster(_)),
+        PaletteMode::Clusters => matches!(entry.target, PaletteTarget::Cluster(..)),
         PaletteMode::Namespaces => matches!(entry.target, PaletteTarget::Namespace(_)),
         PaletteMode::Actions => entry.group == PaletteGroup::Actions,
     }
+}
+
+/// The text a query matches: the label, the detail when there is one, then the keywords.
+fn score_fields(entry: &PaletteEntry) -> Vec<&str> {
+    let mut fields: Vec<&str> = vec![&entry.label];
+    fields.extend(entry.detail.as_deref());
+    fields.extend(entry.keywords.iter().map(SharedString::as_ref));
+    fields
 }
 
 fn score_of(entry: &PaletteEntry, text: &str) -> Option<u32> {
     if text.is_empty() {
         return Some(0);
     }
-    let mut fields: Vec<&str> = vec![&entry.label];
-    fields.extend(entry.detail.as_deref());
-    fields.extend(entry.keywords.iter().map(SharedString::as_ref));
-    entry_score(text, &fields)
+    entry_score(text, &score_fields(entry))
+}
+
+/// The byte ranges to underline in an entry's label and detail.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct EntryRanges {
+    pub(crate) label: Vec<Range<usize>>,
+    pub(crate) detail: Vec<Range<usize>>,
+}
+
+/// Each token underlines only the field that gave its best score, in the order `score_fields`
+/// lists them (the first field wins a tie). A token whose best field is a keyword underlines
+/// nothing: keywords are not drawn. Called for the shown rows only, never while ranking.
+pub(crate) fn entry_match_ranges(entry: &PaletteEntry, query_text: &str) -> EntryRanges {
+    let fields = score_fields(entry);
+    let has_detail = entry.detail.is_some();
+    let mut ranges = EntryRanges::default();
+    for token in query_text.split_whitespace() {
+        let mut best: Option<(usize, u32)> = None;
+        for (index, field) in fields.iter().enumerate() {
+            let Some(score) = fuzzy_score(token, field) else {
+                continue;
+            };
+            if best.is_none_or(|(_, best_score)| score > best_score) {
+                best = Some((index, score));
+            }
+        }
+        let Some((index, _)) = best else {
+            continue;
+        };
+        let target = match index {
+            0 => &mut ranges.label,
+            1 if has_detail => &mut ranges.detail,
+            _ => continue,
+        };
+        if let Some(found) = fuzzy_ranges(token, fields[index]) {
+            target.extend(found);
+        }
+    }
+    merge_overlapping(&mut ranges.label);
+    merge_overlapping(&mut ranges.detail);
+    ranges
+}
+
+/// Sorts the ranges and joins those that overlap or touch, which two tokens on one field can make.
+fn merge_overlapping(ranges: &mut Vec<Range<usize>>) {
+    ranges.sort_by_key(|range| range.start);
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges.drain(..) {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    *ranges = merged;
 }
 
 /// Filters by mode, scores, orders each group by score (equal scores keep source order), and cuts
@@ -525,7 +889,7 @@ pub(crate) fn ranked(entries: Vec<PaletteEntry>, query: &PaletteQuery<'_>) -> Ra
     let mut scored: Vec<(u32, PaletteEntry)> = entries
         .into_iter()
         .filter(|entry| is_listed(entry, query))
-        .filter_map(|entry| Some((score_of(&entry, query.text)?, entry)))
+        .filter_map(|entry| Some((entry.score.or_else(|| score_of(&entry, query.text))?, entry)))
         .collect();
     // Stable, so equal scores keep the source order.
     scored.sort_by_key(|(score, _)| Reverse(*score));

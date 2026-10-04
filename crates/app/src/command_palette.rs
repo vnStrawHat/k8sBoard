@@ -3,6 +3,7 @@
 //! `palette_search`, and a confirmed entry runs after the dialog has closed. The palette reads
 //! memory only: no list, watch, or request starts while it opens or while the user types.
 
+use std::ops::Range;
 use std::time::Instant;
 
 use gpui_kit::assets::IconName;
@@ -15,9 +16,10 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    Action, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription,
-    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    Action, App, AppContext as _, Context, Entity, FocusHandle, HighlightStyle,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
+    Styled as _, StyledText, Subscription, UnderlineStyle, WeakEntity, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::{AppShell, Screen};
@@ -26,12 +28,12 @@ use crate::cluster_switcher::{OpenClusterSwitcher, health_color, health_text};
 use crate::environment::{Environment, environment_badge};
 use crate::fresh_enter::{confirms, is_enter};
 use crate::keymap::{
-    CloseDockTab, LeavePaletteArgument, NextDockTab, OpenNamespacePicker, PalettePreview,
-    PreviousDockTab, ScaleCursorRow, ShowShortcuts, ToggleDock, ToggleDockZoom,
+    CloseDockTab, LeavePaletteArgument, NextDockTab, OpenNamespacePicker, PALETTE_LIST,
+    PalettePreview, PreviousDockTab, ScaleCursorRow, ShowShortcuts, ToggleDock, ToggleDockZoom,
 };
 use crate::palette_search::{
-    EntryState, PaletteEntry, PaletteGroup, PaletteTarget, empty_text, lists_resources,
-    parse_query, ranked,
+    EntryRanges, EntryState, PaletteEntry, PaletteGroup, PaletteTarget, empty_text,
+    entry_match_ranges, parse_query, ranked,
 };
 use crate::resource_actions::RowAction;
 use crate::settings_window::OpenSettings;
@@ -183,8 +185,9 @@ impl CommandPalette {
             return;
         };
         let started = Instant::now();
-        let wants_resources = lists_resources(&parse_query(&self.query));
-        let snapshot = shell.read(cx).palette_snapshot(wants_resources, cx);
+        let snapshot = shell
+            .read(cx)
+            .palette_snapshot(&parse_query(&self.query), cx);
         let candidates = snapshot.entries.len();
         self.rank(snapshot);
         // Counts and a duration only: the query is never traced.
@@ -298,6 +301,9 @@ impl CommandPalette {
             PaletteTarget::RollBack(object, revision) => self.update_shell(cx, |shell, cx| {
                 shell.start_roll_back(&object, &revision, window, cx);
             }),
+            PaletteTarget::ObjectAction(object, action) => self.update_shell(cx, |shell, cx| {
+                shell.run_row_action_on(object, action, window, cx);
+            }),
             PaletteTarget::Screen(screen) => self.update_shell(cx, |shell, cx| {
                 shell.show_screen(screen, cx);
             }),
@@ -307,9 +313,9 @@ impl CommandPalette {
             PaletteTarget::Namespace(scope) => {
                 self.update_shell(cx, |shell, cx| shell.set_namespace(scope, cx));
             }
-            PaletteTarget::Cluster(row) => {
-                self.update_shell(cx, |shell, cx| shell.switch_cluster(&row.cluster, cx));
-            }
+            PaletteTarget::Cluster(row, scope) => self.update_shell(cx, |shell, cx| {
+                shell.switch_cluster_in_scope(&row.cluster, scope, cx);
+            }),
         }
     }
 
@@ -439,13 +445,23 @@ impl Render for CommandPalette {
             .on_confirm(move |path, window, cx| {
                 let _ = palette.update(cx, |palette, cx| palette.confirm(path, window, cx));
             });
+        // Ranges are built here, for the shown rows only (at most 100), never while ranking.
+        let query_text = parse_query(&self.query).text;
         for members in self.sections() {
             let heading = members.first().map_or("", |entry| entry.group.heading());
-            let items = members.into_iter().map(command_item);
+            let items = members
+                .into_iter()
+                .map(|entry| command_item(entry, query_text));
             command = command.group(CommandGroup::new().label(heading).items(items));
         }
         let argument = self.render_argument(cx);
         v_flex()
+            // The list takes Enter itself (the kit's bindings are off in this context): a held
+            // Enter repeats, and a repeat must never confirm an entry that opens a write dialog.
+            .when(self.argument.is_none(), |root| {
+                root.key_context(PALETTE_LIST)
+                    .on_key_down(cx.listener(Self::on_list_key))
+            })
             .on_action(cx.listener(|palette, _: &PalettePreview, _, cx| palette.preview(cx)))
             .on_action(cx.listener(|palette, _: &ScaleCursorRow, window, cx| {
                 palette.ask_replicas(window, cx);
@@ -541,6 +557,22 @@ impl CommandPalette {
         }
     }
 
+    /// Enter on the list, as a fresh key press: it confirms the highlighted entry. A held Enter
+    /// does nothing, and neither does a modified one (Ctrl Enter has its own binding).
+    fn on_list_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !is_enter(event) {
+            return;
+        }
+        window.prevent_default();
+        cx.stop_propagation();
+        if !confirms(event) {
+            return;
+        }
+        if let Some(path) = self.state.read(cx).selected_index() {
+            self.confirm(path, window, cx);
+        }
+    }
+
     /// The palette body while the field is open: the header, the prompt, the field, and a hint.
     /// `None` while the list shows.
     fn render_argument(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
@@ -609,8 +641,8 @@ fn footer(can_preview: bool, more: usize, cx: &App) -> impl IntoElement + use<> 
 
 /// The kit item of an entry. Its content is custom, so the kit adds no hint of its own, and it
 /// carries no action: the palette runs the target itself, on the shell (decision 11).
-fn command_item(entry: &PaletteEntry) -> CommandItem {
-    let row = RowContent::of(entry);
+fn command_item(entry: &PaletteEntry, query_text: &str) -> CommandItem {
+    let row = RowContent::of(entry, entry_match_ranges(entry, query_text));
     let is_disabled = !entry.is_enabled();
     CommandItem::new()
         .label(entry.label.clone())
@@ -636,8 +668,12 @@ struct RowContent {
     icon: RowIcon,
     label: SharedString,
     detail: Option<SharedString>,
+    /// The characters the query matched in the label and the detail, drawn underlined.
+    ranges: EntryRanges,
     status: Option<StatusLabel>,
     reason: Option<SharedString>,
+    /// An enabled entry whose action reaches a 0030 confirm.
+    needs_confirm: bool,
     is_current: bool,
     cluster: Option<ClusterLine>,
     /// The 0028 action whose first key is the hint. Cluster rows show none: their `Ctrl n`
@@ -646,19 +682,20 @@ struct RowContent {
 }
 
 impl RowContent {
-    fn of(entry: &PaletteEntry) -> Self {
+    fn of(entry: &PaletteEntry, ranges: EntryRanges) -> Self {
         let key_action = match &entry.target {
             PaletteTarget::Command(action) => Some(action.boxed_clone()),
             PaletteTarget::RowAction(action) => Some(action.key_action()),
             // The revision is in the label, and the hint of Roll back… is its menu item, not this.
             PaletteTarget::RollBack(..) => None,
+            PaletteTarget::ObjectAction(_, action) => Some(action.key_action()),
             PaletteTarget::Screen(_)
             | PaletteTarget::Resource(_)
             | PaletteTarget::Namespace(_)
-            | PaletteTarget::Cluster(_) => None,
+            | PaletteTarget::Cluster(..) => None,
         };
         let cluster = match &entry.target {
-            PaletteTarget::Cluster(row) => Some(ClusterLine {
+            PaletteTarget::Cluster(row, _) => Some(ClusterLine {
                 environment: row.environment,
                 health: row.health,
             }),
@@ -668,11 +705,13 @@ impl RowContent {
             icon: row_icon(&entry.target),
             label: entry.label.clone(),
             detail: entry.detail.clone(),
+            ranges,
             status: entry.status.clone(),
             reason: match &entry.state {
                 EntryState::Enabled => None,
                 EntryState::Disabled { reason } => Some(reason.clone()),
             },
+            needs_confirm: entry.needs_confirm,
             is_current: entry.is_current,
             cluster,
             key_action,
@@ -704,7 +743,11 @@ impl RowContent {
             .when_some(self.cluster, |row, cluster| {
                 row.child(environment_badge(cluster.environment, cx))
             })
-            .child(div().flex_none().child(self.label.clone()))
+            .child(
+                div()
+                    .flex_none()
+                    .child(underlined(self.label.clone(), &self.ranges.label)),
+            )
             .child(
                 div()
                     .flex_1()
@@ -713,7 +756,11 @@ impl RowContent {
                     .text_xs()
                     .text_color(muted)
                     .font_family(theme.mono_font_family.clone())
-                    .children(self.detail.clone()),
+                    .children(
+                        self.detail
+                            .clone()
+                            .map(|detail| underlined(detail, &self.ranges.detail)),
+                    ),
             )
             .when(self.is_current, |row| {
                 row.child(Icon::new(IconName::Check).size_4())
@@ -732,8 +779,29 @@ impl RowContent {
                 )
             })
             .children(self.reason.clone().map(|reason| reason_pill(reason, cx)))
+            .when(self.needs_confirm, |row| {
+                row.child(reason_pill(NEEDS_CONFIRM.into(), cx))
+            })
             .children(keys.into_iter().take(1).map(Kbd::new))
     }
+}
+
+/// `text` with the matched byte ranges underlined. The underline takes the text color (muted for
+/// the detail, and again muted on a disabled row), so it adds no color of its own.
+fn underlined(text: SharedString, ranges: &[Range<usize>]) -> StyledText {
+    let highlight = HighlightStyle {
+        underline: Some(UnderlineStyle {
+            thickness: px(1.),
+            color: None,
+            wavy: false,
+        }),
+        ..Default::default()
+    };
+    let highlights: Vec<_> = ranges
+        .iter()
+        .map(|range| (range.clone(), highlight))
+        .collect();
+    StyledText::new(text).with_highlights(highlights)
 }
 
 /// The icon before a label: an icon for an action, else the kind badge of a resource or screen,
@@ -744,6 +812,7 @@ fn row_icon(target: &PaletteTarget) -> RowIcon {
         PaletteTarget::Command(action) => RowIcon::Glyph(command_icon(&**action)),
         PaletteTarget::RowAction(action) => RowIcon::Glyph(row_action_icon(*action)),
         PaletteTarget::RollBack(..) => RowIcon::Glyph(row_action_icon(RowAction::RollBack)),
+        PaletteTarget::ObjectAction(_, action) => RowIcon::Glyph(row_action_icon(*action)),
         PaletteTarget::Screen(screen) => text(screen_badge(*screen)),
         PaletteTarget::Resource(ClusterObject {
             key: ResourceKey::Pod { .. },
@@ -758,7 +827,7 @@ fn row_icon(target: &PaletteTarget) -> RowIcon {
             ..
         }) => text(kind.badge()),
         PaletteTarget::Namespace(_) => text("#"),
-        PaletteTarget::Cluster(_) => text("@"),
+        PaletteTarget::Cluster(..) => text("@"),
     }
 }
 
@@ -819,8 +888,11 @@ fn screen_badge(screen: Screen) -> &'static str {
     }
 }
 
+/// What an enabled entry says when its action reaches a 0030 confirm (W9 note 3).
+const NEEDS_CONFIRM: &str = "needs confirm";
+
 /// The pill of a disabled entry: its reason, outlined in the theme's warning tone (the kit tag's
-/// own colors wash out on a muted, disabled row).
+/// own colors wash out on a muted, disabled row). `needs confirm` uses it too.
 fn reason_pill(reason: SharedString, cx: &App) -> impl IntoElement {
     let color = tone_color(StatusTone::Warn, cx);
     div()

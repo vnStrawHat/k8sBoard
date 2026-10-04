@@ -34,8 +34,8 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W8 n1–2 | Dashed 60 % line while dragging, double-click reset, remembered height | missing | `dock.rs`; 0004 non-goals; `dock.height` key unused | S |
 | W8 | `SYS` marker lines (container restart, pod joined) | missing | 0019 follow-up | S |
 | W8b | Histogram brush window; Pop out | missing | 0019 non-goals | S + M |
-| W9 n1, n3 | Action × resource results (`> rest pay` → Restart rollout · deployment/payments-api) | missing (cursor row only) | 0029 decision 10, open item 2 | M |
-| W9 | Matched-character underline; `@` keeps the namespace | missing | 0029 open items 3, 5 | S |
+| W9 n1, n3 | Action × resource results (`> rest pay` → Restart rollout · deployment/payments-api), `needs confirm` pill | Done (0029 step 5c: pairs of the loaded objects; the pair runs its key's own gated flow) | [step5-results](../specs/0029-command-palette/step5-results.md), `palette_search.rs` `pair_entries`, `run_row_action_on` | — |
+| W9 | Matched-character underline; `@` keeps the namespace | Done (0029 steps 5a, 5b: underline of the scored field; a single named namespace is carried to another cluster) | [step5-highlight-scope](../specs/0029-command-palette/step5-highlight-scope.md), `fuzzy_ranges`, `switch_cluster_in_scope` | — |
 | W10 | Revision history tab | missing | 0031 non-goal | M |
 | W10 n5 | Pre-apply snapshot, one-step rollback (ConfigMaps too) | missing | 0031 non-goal; needs a C1 decision | M |
 | W10 n2 | Quota check ("Namespace quota OK") | missing | 0031 non-goal | S |
@@ -85,7 +85,7 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | 5 | 0042 Create from templates | New for the 5 kinds; a `Create` `WriteOperation` | new | mutating | M |
 | 6 | 0043 Settings completions | General, Logs, Terminal & Shell pages (content needs the user), density, drag order, Search, color, Proxy, watch folder (C6 dependency) | new | local | L |
 | 7 | 0044 Dock completions | dashed line, double-click reset, saved `dock.height`, `SYS` lines, histogram brush, Pop out | new | local | M |
-| 8 | 0029 step 2 | action × resource results, highlight, `@` namespace carry | amend 0029 | local | M |
+| 8 | 0029 step 5 (done) | action × resource results, highlight, `@` namespace carry | amend 0029 | local | M |
 | 9 | 0022 steps 4a, 4b Topology RBAC layer (done) | ServiceAccount → binding → role edges behind the RBAC chip | amend 0022 | read-only | M |
 | 10 | 0018 step 6 | Certificate Renew now (allow-listed `certificates/status` patch) | amend 0018 | mutating | S–M |
 | 11 | 0047 Secret and ConfigMap value editing (done) | Edit values with masking and the C1 rules | new; user decision | mutating | M |

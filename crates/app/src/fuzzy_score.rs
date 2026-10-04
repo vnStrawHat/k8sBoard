@@ -1,6 +1,8 @@
 //! The small subsequence scorer behind the command palette. The candidate set is a few thousand
 //! short names, so a greedy alignment is fast enough and needs no matcher dependency.
 
+use std::ops::Range;
+
 /// Every matched character earns this.
 const MATCH: u32 = 1;
 /// A matched character that starts a word: index 0, or after `-` `/` `.` `_` or a space.
@@ -55,28 +57,76 @@ pub(crate) fn fuzzy_score(needle: &str, haystack: &str) -> Option<u32> {
         return Some(0);
     }
     if needle.is_ascii() && haystack.is_ascii() {
-        return score(needle.as_bytes(), haystack.as_bytes());
+        return locate(needle.as_bytes(), haystack.as_bytes(), None);
     }
     let haystack: Vec<char> = haystack.chars().collect();
     let needle: Vec<char> = needle.chars().collect();
-    score(&needle, &haystack)
+    locate(&needle, &haystack, None)
 }
 
-fn score<T: Unit>(needle: &[T], haystack: &[T]) -> Option<u32> {
+/// The byte ranges of `haystack` that `needle` matched, ascending and merged. It follows the
+/// alignment `fuzzy_score` scored, so it is `None` exactly when `fuzzy_score` is. An empty needle
+/// matches with no visible range.
+pub(crate) fn fuzzy_ranges(needle: &str, haystack: &str) -> Option<Vec<Range<usize>>> {
+    if needle.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut positions = Vec::new();
+    if needle.is_ascii() && haystack.is_ascii() {
+        locate(needle.as_bytes(), haystack.as_bytes(), Some(&mut positions))?;
+        return Some(merged_ranges(&positions, |index| (index, index + 1)));
+    }
+    let haystack_chars: Vec<char> = haystack.chars().collect();
+    let needle: Vec<char> = needle.chars().collect();
+    locate(&needle, &haystack_chars, Some(&mut positions))?;
+    let starts: Vec<usize> = haystack.char_indices().map(|(start, _)| start).collect();
+    Some(merged_ranges(&positions, |index| {
+        let end = starts.get(index + 1).copied().unwrap_or(haystack.len());
+        (starts[index], end)
+    }))
+}
+
+/// Joins consecutive positions into one range; `span` maps a position to its byte start and end.
+fn merged_ranges(positions: &[usize], span: impl Fn(usize) -> (usize, usize)) -> Vec<Range<usize>> {
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    for &position in positions {
+        let (start, end) = span(position);
+        match ranges.last_mut() {
+            Some(last) if last.end == start => last.end = end,
+            _ => ranges.push(start..end),
+        }
+    }
+    ranges
+}
+
+/// The score of the best alignment, and its matched positions when `positions` is given. One walk
+/// serves the score and the ranges, so an underline is exactly what was scored.
+fn locate<T: Unit>(
+    needle: &[T],
+    haystack: &[T],
+    mut positions: Option<&mut Vec<usize>>,
+) -> Option<u32> {
     // A word start picked ahead of a nearer hit can use up the later characters, so the plain
     // leftmost alignment is the fallback that always finds a subsequence.
-    let found = align(needle, haystack, true).or_else(|| align(needle, haystack, false))?;
+    let found = align(needle, haystack, true, positions.as_deref_mut())
+        .or_else(|| align(needle, haystack, false, positions.as_deref_mut()))?;
+    if found.starts_at_word_start || found.is_run {
+        return Some(found.score);
+    }
     // "rest" is a subsequence of "previous dock tab", but nobody means it: a scattered hit that
     // starts mid-word and is no run of the text is noise.
-    let is_plausible = found.starts_at_word_start
-        || found.is_run
-        || haystack.windows(needle.len()).any(|window| {
-            window
-                .iter()
-                .zip(needle)
-                .all(|(found, wanted)| wanted.same(*found))
-        });
-    is_plausible.then_some(found.score)
+    let run = haystack.windows(needle.len()).position(|window| {
+        window
+            .iter()
+            .zip(needle)
+            .all(|(found, wanted)| wanted.same(*found))
+    })?;
+    // Only the contiguous run made the match plausible, so that run is what matched.
+    if let Some(positions) = positions {
+        positions.clear();
+        positions.extend(run..run + needle.len());
+    }
+    Some(found.score)
 }
 
 struct Alignment {
@@ -86,7 +136,16 @@ struct Alignment {
     is_run: bool,
 }
 
-fn align<T: Unit>(needle: &[T], haystack: &[T], prefers_word_starts: bool) -> Option<Alignment> {
+fn align<T: Unit>(
+    needle: &[T],
+    haystack: &[T],
+    prefers_word_starts: bool,
+    mut positions: Option<&mut Vec<usize>>,
+) -> Option<Alignment> {
+    // A failed preferring walk may have left positions behind.
+    if let Some(positions) = positions.as_deref_mut() {
+        positions.clear();
+    }
     let mut score = 0_u32;
     let mut from = 0_usize;
     let mut previous: Option<usize> = None;
@@ -94,6 +153,9 @@ fn align<T: Unit>(needle: &[T], haystack: &[T], prefers_word_starts: bool) -> Op
     let mut is_run = true;
     for wanted in needle {
         let found = next_hit(*wanted, haystack, from, prefers_word_starts)?;
+        if let Some(positions) = positions.as_deref_mut() {
+            positions.push(found);
+        }
         score = score.saturating_add(MATCH);
         if is_word_start(haystack, found) {
             score = score.saturating_add(WORD_START);
@@ -154,6 +216,11 @@ fn is_word_start<T: Unit>(haystack: &[T], index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A one-range expectation; `vec![0..4]` trips `clippy::single_range_in_vec_init`.
+    fn run(start: usize, end: usize) -> Range<usize> {
+        start..end
+    }
 
     #[test]
     fn fuzzy_score_rejects_a_non_subsequence() {
@@ -240,5 +307,50 @@ mod tests {
         assert!(fuzzy_score("é", "café").is_some());
         assert!(fuzzy_score("É", "café").is_none());
         assert!(fuzzy_score("caf", "café").is_some());
+    }
+
+    #[test]
+    fn fuzzy_ranges_follow_the_scored_alignment() {
+        assert_eq!(
+            fuzzy_ranges("rest", "Restart rollout"),
+            Some(vec![run(0, 4)])
+        );
+        assert_eq!(
+            fuzzy_ranges("rr", "Restart rollout"),
+            Some(vec![run(0, 1), run(8, 9)])
+        );
+        assert_eq!(fuzzy_ranges("xyz", "Restart rollout"), None);
+    }
+
+    #[test]
+    fn fuzzy_ranges_are_none_exactly_when_the_score_is() {
+        for (needle, haystack) in [
+            ("pay", "payments-api"),
+            ("rest", "previous dock tab"),
+            ("cb", "xcb-c"),
+            ("ipa", "api"),
+        ] {
+            assert_eq!(
+                fuzzy_ranges(needle, haystack).is_some(),
+                fuzzy_score(needle, haystack).is_some(),
+                "{needle} in {haystack}"
+            );
+        }
+    }
+
+    #[test]
+    fn fuzzy_ranges_use_the_run_when_only_the_run_is_plausible() {
+        assert_eq!(fuzzy_ranges("ab", "xaxbxab"), Some(vec![run(5, 7)]));
+    }
+
+    #[test]
+    fn fuzzy_ranges_are_char_boundaries() {
+        assert_eq!(fuzzy_ranges("é", "café"), Some(vec![run(3, 5)]));
+        assert_eq!(fuzzy_ranges("caf", "café"), Some(vec![run(0, 3)]));
+    }
+
+    #[test]
+    fn fuzzy_ranges_of_an_empty_needle_are_empty() {
+        assert_eq!(fuzzy_ranges("", "anything"), Some(Vec::new()));
     }
 }

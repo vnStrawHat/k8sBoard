@@ -25,8 +25,8 @@ Done: focus model (single keys never act in text fields, menus, popovers, or dia
 - Deps: 0025 (page). Risk: Med (GPUI key contexts and kit focus).
 
 ### 0029 — Command palette (W9)
-Done. Ctrl K, `:`, and the title-bar search box; prefixes `:` kind, `@` cluster, `#` namespace, `>` action; fuzzy match over live snapshots with live status; Go to; scope chips with env color; Tab preview; footer hints; mutating actions listed with "needs confirm" and disabled until their spec ships.
-- Deps: 0028, 0026. Risk: Low–Med. No new dependency (own scorer). Tab preview moves the table cursor only (no drawer, no screen switch, no watch); Ctrl ⏎ moved to 0032; mutating actions stay listed and disabled with their 0028 reason.
+Done. Ctrl K, `:`, and the title-bar search box; prefixes `:` kind, `@` cluster, `#` namespace, `>` action; fuzzy match over live snapshots with live status; Go to; scope chips with env color; Tab preview; footer hints; mutating actions listed with the `needs confirm` pill once enabled. Step 5 adds action × resource pairs, underlined matches, and the `@` namespace carry.
+- Deps: 0028, 0026. Risk: Low–Med. No new dependency (own scorer). Tab preview moves the table cursor only (no drawer, no screen switch, no watch); Ctrl ⏎ moved to 0032; a disabled action shows its gate reason.
 
 ## Mutating (RBAC-gated by SSAR, confirmation for destructive actions, disabled on UAT)
 

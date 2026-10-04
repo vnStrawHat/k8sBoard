@@ -508,6 +508,34 @@ impl AppShell {
         }
     }
 
+    /// A palette action on a search hit: `object` becomes the cursor (its screen, the row, the
+    /// drawer), then `row` runs on it exactly as its key would, so the gate is read again and the
+    /// key's own confirm, popover, or editor opens. The palette builds no intent and sends nothing.
+    /// Nothing runs while Edit YAML is open.
+    pub(crate) fn run_row_action_on(
+        &mut self,
+        object: ClusterObject,
+        row: RowAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_editing() {
+            return;
+        }
+        self.when_selected(object.clone(), cx, |_, _| {});
+        // Deferred queues are first in, first out, so this runs after the reveal's own deferred
+        // selection. A row that vanished leaves another selection, and then nothing runs.
+        cx.defer_in(window, move |shell, window, cx| {
+            if shell.selected.as_ref() != Some(&object) {
+                return;
+            }
+            match row {
+                RowAction::CopyName => shell.copy_cursor_name(window, cx),
+                _ => shell.run_row_key(row, window, cx),
+            }
+        });
+    }
+
     /// What an available key does. A mutating action that has not shipped stays disabled, so its arm is
     /// unreachable until the owning spec wires it. The match is exhaustive so a new action cannot be
     /// forgotten.

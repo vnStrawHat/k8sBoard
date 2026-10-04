@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use gpui_kit::base::Root;
+use gpui_kit::component::dialog::Confirm;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, WindowHandle};
@@ -528,6 +529,57 @@ fn leaving_and_coming_back_restores_the_scope(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn palette_switch_starts_the_target_in_the_carried_scope(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture("scope-carried", cx);
+    let carried = NamespaceScope::Named("payments".to_owned());
+    let stg = fixture.cluster("stg-b", cx);
+    // The target remembers another namespace: the carried scope wins for this switch.
+    fixture.shell.update(cx, |shell, _| {
+        shell
+            .scope_memory
+            .insert(stg.clone(), NamespaceScope::Named("default".to_owned()));
+    });
+    fixture.shell.update(cx, |shell, cx| {
+        shell.switch_cluster_in_scope(&stg, Some(carried.clone()), cx);
+    });
+    cx.run_until_parked();
+    let scopes = fixture
+        .shell
+        .read_with(cx, |shell, _| shell.connected_scopes.clone());
+    assert_eq!(scopes, [None, Some(carried)]);
+}
+
+#[gpui_kit::test]
+fn palette_switch_with_open_work_asks_then_carries_the_scope(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture("scope-carried-asks", cx);
+    let carried = NamespaceScope::Named("payments".to_owned());
+    let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
+    // A running batch is the cheapest open work the leaving dialog asks about.
+    fixture.shell.update(cx, |shell, cx| {
+        shell.running_batches.insert(prod);
+        shell.switch_cluster_in_scope(&stg, Some(carried.clone()), cx);
+    });
+    cx.run_until_parked();
+    let asked = fixture
+        .shell
+        .read_with(cx, |shell, _| shell.last_leaving.clone());
+    assert!(asked.is_some(), "the dialog asked before leaving");
+    // Nothing started yet: the scope waits for Continue.
+    let before = fixture
+        .shell
+        .read_with(cx, |shell, _| shell.connected_scopes.clone());
+    assert_eq!(before, [None]);
+    fixture.with_window(cx, |window, cx| {
+        window.dispatch_action(Box::new(Confirm { secondary: false }), cx);
+    });
+    cx.run_until_parked();
+    let scopes = fixture
+        .shell
+        .read_with(cx, |shell, _| shell.connected_scopes.clone());
+    assert_eq!(scopes, [None, Some(carried)]);
+}
+
+#[gpui_kit::test]
 fn the_namespace_flag_sets_the_first_scope(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture_with("scope-flag", &["--namespace", "web"], cx);
     let scopes = fixture
@@ -965,6 +1017,28 @@ fn pods_fixture(name: &str, cx: &mut TestAppContext) -> SwitchFixture {
 }
 
 #[gpui_kit::test]
+fn palette_pair_copy_name_copies_the_hit(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("pair-copy-name", cx);
+    let cursor = palette_pod_object(&fixture, "api-0", cx);
+    let hit = palette_pod_object(&fixture, "web-0", cx);
+    fixture.shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(cursor), cx);
+    });
+    fixture.with_window(cx, |window, cx| {
+        fixture.shell.update(cx, |shell, cx| {
+            shell.run_row_action_on(hit.clone(), RowAction::CopyName, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    // The test platform has its own clipboard: the system clipboard is untouched.
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("web-0"));
+    fixture.shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.selected.as_ref(), Some(&hit))
+    });
+}
+
+#[gpui_kit::test]
 fn tab_moves_the_cursor_without_opening_the_drawer(cx: &mut TestAppContext) {
     let fixture = pods_fixture("tab-preview", cx);
     let key = palette_pod_object(&fixture, "web-0", cx);
@@ -1021,9 +1095,9 @@ fn the_palette_lists_the_loaded_pods_and_the_row_actions_of_the_cursor(cx: &mut 
     fixture.shell.update(cx, |shell, cx| {
         shell.change_selection(Some(key.clone()), cx);
     });
-    let snapshot = fixture
-        .shell
-        .read_with(cx, |shell, cx| shell.palette_snapshot(true, cx));
+    let snapshot = fixture.shell.read_with(cx, |shell, cx| {
+        shell.palette_snapshot(&parse_query("pod"), cx)
+    });
     assert!(snapshot.context.has_session);
     let has_pod = |wanted: &ClusterObject| {
         snapshot.entries.iter().any(|entry| {
@@ -1041,7 +1115,7 @@ fn the_palette_lists_the_loaded_pods_and_the_row_actions_of_the_cursor(cx: &mut 
     // A query that cannot list resources builds none of them.
     let snapshot = fixture
         .shell
-        .read_with(cx, |shell, cx| shell.palette_snapshot(false, cx));
+        .read_with(cx, |shell, cx| shell.palette_snapshot(&parse_query(""), cx));
     assert!(!snapshot.entries.iter().any(|entry| matches!(
         entry.target,
         crate::palette_search::PaletteTarget::Resource(_)
@@ -1145,9 +1219,9 @@ fn a_closed_drawer_keeps_its_cursor(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn palette_resource_entries_have_no_cluster_label(cx: &mut TestAppContext) {
     let fixture = pods_fixture("palette-single", cx);
-    let snapshot = fixture
-        .shell
-        .read_with(cx, |shell, cx| shell.palette_snapshot(true, cx));
+    let snapshot = fixture.shell.read_with(cx, |shell, cx| {
+        shell.palette_snapshot(&parse_query("pod"), cx)
+    });
     let detail = snapshot.entries.iter().find_map(|entry| {
         matches!(
             entry.target,

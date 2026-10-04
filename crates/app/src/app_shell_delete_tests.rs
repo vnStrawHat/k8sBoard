@@ -610,7 +610,7 @@ fn the_palette_and_the_menu_item_run_the_same_arm(cx: &mut TestAppContext) {
     t.cursor_on_pod(&t.t.stg, "api-x", cx);
     let snapshot = t
         .shell()
-        .read_with(cx, |shell, cx| shell.palette_snapshot(false, cx));
+        .read_with(cx, |shell, cx| shell.palette_snapshot(&parse_query(""), cx));
     let entry = snapshot
         .entries
         .iter()

@@ -78,7 +78,7 @@
 
 | ID | Item | Status | Gap → spec |
 |---|---|---|---|
-| P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Done (0029: own scorer, loaded lists only, row actions on the cursor row, `@` single switch, Tab moves the cursor only; Ctrl ⏎ Scale argument added by 0032; no action × search-hit pairs, no carried namespace, no match highlighting: audit, 0029 step 2) | `command_palette.rs`, `palette_search.rs`, `fuzzy_score.rs` |
+| P1 | Command palette (W9): prefixes `: @ # >`, fuzzy, live status, scope chips, footer | Done (0029: own scorer, loaded lists only, row actions on the cursor row, Tab moves the cursor only; Ctrl ⏎ Scale argument added by 0032; step 5: action × search-hit pairs with the `needs confirm` pill, underlined matches, `@` carries a single named namespace) | `command_palette.rs`, `palette_search.rs`, `fuzzy_score.rs` |
 | P2 | Keyboard map (22 bindings) and `?` cheat sheet | Done (0028; `:` and Ctrl K bound by 0029), mutating letters run since 0031–0037; the menu's A (Attach) is unbound (audit 0040) | `keymap.rs`, `shortcut_sheet.rs` |
 | S1 | Settings window (W2) as a separate OS window, single instance | Done | 0025 |
 | S2 | Clusters page: env groups, drag order, form, Test connection, Remove | Partial (no drag order) | 0025 |

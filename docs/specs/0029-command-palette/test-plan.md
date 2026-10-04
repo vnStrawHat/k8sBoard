@@ -71,11 +71,11 @@
 | 5a | `fuzzy_ranges_are_char_boundaries` | `fuzzy_score.rs` | `é` in `café` → `[3..5]` |
 | 5a | `entry_match_ranges_follow_the_scoring_field` | `palette_search_tests.rs` | label `Restart rollout`, detail `deployment/payments-api`, `rest pay` → label `[0..4]`, detail `[11..14]`; `pay api` on label `payments-api` → `[0..3, 9..12]`; Pods with `po` (keyword wins) → no ranges; `""` → none |
 | 5b | `cluster_rows_carry_a_single_named_scope` | `palette_search_tests.rs` | scope `payments`: other rows read `same namespace payments`, target scope `Named("payments")` |
-| 5b | `cluster_rows_carry_nothing_for_all_several_or_the_active_cluster` | `palette_search_tests.rs` | scope `All` or two namespaces → `None`, no detail; the `is_active` row → `None` |
+| 5b | `cluster_rows_carry_nothing_for_all_or_several_namespaces` | `palette_search_tests.rs` | scope `All` or two namespaces → `None`, no detail; the `is_active` row → `None` |
 | 5b | `palette_switch_starts_the_target_in_the_carried_scope` | `app_shell_switch_tests.rs` | B remembered `default`; from A in `payments`, `switch_cluster_in_scope(B, Some(payments))` → B's live scope `payments` |
-| 5b | `palette_switch_with_open_shells_asks_then_carries_the_scope` | `app_shell_switch_tests.rs` | `last_leaving` set; Continue → scope `payments` |
+| 5b | `palette_switch_with_open_work_asks_then_carries_the_scope` | `app_shell_switch_tests.rs` | `last_leaving` set; Continue → scope `payments` |
 | 5c | `pairs_need_one_token_on_the_action_and_another_on_the_object` | `palette_search_tests.rs` | `rest pay` → `Restart rollout` · `deployment/payments-api`; `rest` → none; `rest` with a `restic-backup` row → none |
-| 5c | `pairs_skip_the_cursor_roll_back_delete_and_unshipped_actions` | `palette_search_tests.rs` | cursor `payments-api`: no pair for it; `roll pay`, `delete pay` → no pair; a node with `drain ip` → no Drain pair (`is_planned`) |
+| 5c | `pairs_skip_the_cursor_roll_back_delete_and_unshipped_actions` | `palette_search_tests.rs` | cursor `payments-api`: no pair for it; `roll pay`, `delete pay` → no pair; Drain shipped (0034), so a node pairs with it: `a_node_pairs_with_its_shipped_actions`; `is_pairable` and `is_planned` carry the filter |
 | 5c | `pairs_come_from_the_loaded_lists_only` | `palette_search_tests.rs` | `kind_rows: None` → no Deployment pair; a pod pair still listed |
 | 5c | `all_mode_pairs_reuse_the_resource_scores` | `palette_search_tests.rs` | `All` + `rest pay`: resource entries carry `score: Some(_)`, misses are dropped, `ranked` keeps the order a fresh `score_of` would give |
 | 5c | `pairs_keep_the_top_fifty_objects` | `palette_search_tests.rs` | 60 matching pods, `logs pod` → pairs from 50 objects |
@@ -86,6 +86,6 @@
 | 5c | `is_planned_matches_the_unshipped_gates` | `resource_actions.rs` tests | `is_planned(Drain)`; for every `ResourceAction`, `is_planned` ⇔ gate `Planned` or `Mutating { is_shipped: false }` |
 | 5c | `palette_pair_reveals_then_opens_the_restart_dialog` | `app_shell_workload_tests.rs` | cursor on another row; `run_row_action_on(payments-api, RestartRollout)` → `selected` = it, drawer open, `last_dialog` set, no PATCH recorded |
 | 5c | `palette_pair_on_a_vanished_row_runs_nothing` | `app_shell_workload_tests.rs` | row removed before the deferred step → no dialog |
-| 5c | `palette_pair_copy_name_copies_the_hit` | `app_shell_tests.rs` | clipboard holds the hit's name |
+| 5c | `palette_pair_copy_name_copies_the_hit` | `app_shell_switch_tests.rs` | clipboard holds the hit's name |
 
 Live and ui-verifier (step 5c): trace check while typing `> rest <name>` on Deployments → no new `sending request`; on UAT every mutating pair is disabled with its `Not permitted: …` reason. ui-verifier shots of AC 17.

@@ -180,6 +180,8 @@ impl World {
             cursor,
             has_dock_tabs: false,
             include_resources: true,
+            query_text: "",
+            pair_text: None,
             session: Some(PaletteSession {
                 cluster: test_cluster(),
                 scope: &self.scope,
@@ -206,8 +208,14 @@ fn labels(ranked: &Ranked) -> Vec<&str> {
         .collect()
 }
 
-fn search(input: &PaletteInput<'_>, raw: &str) -> Ranked {
-    ranked(palette_entries(input), &parse_query(raw))
+/// Builds the entries for `raw` the way the shell does (the query text rides in the input) and
+/// ranks them.
+fn search<'a>(input: &mut PaletteInput<'a>, raw: &'a str) -> Ranked {
+    let query = parse_query(raw);
+    input.include_resources = lists_resources(&query);
+    input.query_text = query.text;
+    input.pair_text = lists_pairs(&query).then_some(query.text);
+    ranked(palette_entries(input), &query)
 }
 
 fn reason_of(entry: &PaletteEntry) -> Option<&str> {
@@ -286,7 +294,7 @@ fn entry_score_of_empty_text_is_zero() {
 #[test]
 fn empty_query_lists_actions_only() {
     let world = World::new();
-    let found = search(&world.input(Screen::Pods, None), "");
+    let found = search(&mut world.input(Screen::Pods, None), "");
     assert!(!found.entries.is_empty());
     assert!(
         found
@@ -299,16 +307,16 @@ fn empty_query_lists_actions_only() {
 #[test]
 fn kind_mode_ranks_an_exact_alias_first() {
     let world = World::new();
-    let input = world.input(Screen::Pods, None);
-    assert_eq!(labels(&search(&input, ":po"))[0], "Pods");
-    assert_eq!(labels(&search(&input, ":deploy"))[0], "Deployments");
-    assert_eq!(labels(&search(&input, ":ns"))[0], "Namespaces");
+    let mut input = world.input(Screen::Pods, None);
+    assert_eq!(labels(&search(&mut input, ":po"))[0], "Pods");
+    assert_eq!(labels(&search(&mut input, ":deploy"))[0], "Deployments");
+    assert_eq!(labels(&search(&mut input, ":ns"))[0], "Namespaces");
 }
 
 #[test]
 fn kind_mode_lists_every_screen_for_an_empty_text() {
     let world = World::new();
-    let found = search(&world.input(Screen::Pods, None), ":");
+    let found = search(&mut world.input(Screen::Pods, None), ":");
     // Pods and Nodes, then the 26 explorer kinds, capped at 30.
     assert_eq!(found.entries.len(), 28);
     assert!(
@@ -327,14 +335,14 @@ fn kind_mode_disables_denied_kinds_with_the_sidebar_reason() {
         .expect("a built-in kind has a list check");
     world.guard = guard_of(known_denying(&[check]));
     world.scope = NamespaceScope::Named("shop".to_owned());
-    let found = search(&world.input(Screen::Pods, None), ":deploy");
+    let found = search(&mut world.input(Screen::Pods, None), ":deploy");
     let deployments = &found.entries[0];
     assert_eq!(deployments.label.as_ref(), "Deployments");
     assert_eq!(
         reason_of(deployments),
         Some(format!("Not permitted: {check}").as_str())
     );
-    let services = search(&world.input(Screen::Pods, None), ":svc");
+    let services = search(&mut world.input(Screen::Pods, None), ":svc");
     assert_eq!(reason_of(&services.entries[0]), None);
 }
 
@@ -342,19 +350,19 @@ fn kind_mode_disables_denied_kinds_with_the_sidebar_reason() {
 fn namespace_mode_lists_all_namespaces_first_then_the_live_list() {
     let mut world = World::new();
     world.scope = NamespaceScope::Named("shop".to_owned());
-    let found = search(&world.input(Screen::Pods, None), "#");
+    let found = search(&mut world.input(Screen::Pods, None), "#");
     assert_eq!(labels(&found), ["All namespaces", "shop", "kube-system"]);
     let current: Vec<bool> = found.entries.iter().map(|entry| entry.is_current).collect();
     assert_eq!(current, [false, true, false]);
     world.scope = NamespaceScope::All;
-    let found = search(&world.input(Screen::Pods, None), "#");
+    let found = search(&mut world.input(Screen::Pods, None), "#");
     assert!(found.entries[0].is_current);
 }
 
 #[test]
 fn commands_come_from_general_and_dock_rows() {
     let world = World::new();
-    let found = search(&world.input(Screen::Pods, None), "");
+    let found = search(&mut world.input(Screen::Pods, None), "");
     let commands: Vec<&PaletteEntry> = found
         .entries
         .iter()
@@ -401,7 +409,7 @@ fn dock_commands_are_enabled_with_a_tab() {
     let world = World::new();
     let mut input = world.input(Screen::Pods, None);
     input.has_dock_tabs = true;
-    let found = search(&input, "dock");
+    let found = search(&mut input, "dock");
     assert!(found.entries.iter().all(|entry| entry.is_enabled()));
 }
 
@@ -434,8 +442,8 @@ fn resources_search_pods_nodes_and_the_visible_kind_only() {
         ResourceKind::Deployments,
         vec![kind_row(Some("shop"), "payments-api")],
     ));
-    let input = world.input(Screen::Kind(ResourceKind::Deployments), None);
-    let found = search(&input, "pay");
+    let mut input = world.input(Screen::Kind(ResourceKind::Deployments), None);
+    let found = search(&mut input, "pay");
     let resources: Vec<&PaletteEntry> = found
         .entries
         .iter()
@@ -444,7 +452,7 @@ fn resources_search_pods_nodes_and_the_visible_kind_only() {
     let names: Vec<&str> = resources.iter().map(|entry| entry.label.as_ref()).collect();
     assert_eq!(names, ["payments-api", "payments-api-0"]);
     // A node matches by name too.
-    let found = search(&input, "node-1");
+    let found = search(&mut input, "node-1");
     assert!(found.entries.iter().any(|entry| matches!(
         entry.target,
         PaletteTarget::Resource(ClusterObject {
@@ -454,7 +462,7 @@ fn resources_search_pods_nodes_and_the_visible_kind_only() {
     )));
     // Without an explorer kind on screen only pods and nodes are searched.
     world.kind_rows = None;
-    let found = search(&world.input(Screen::Pods, None), "payments-api");
+    let found = search(&mut world.input(Screen::Pods, None), "payments-api");
     assert_eq!(
         found
             .entries
@@ -477,9 +485,9 @@ fn resource_entries_carry_name_and_status_only() {
             kind_row(Some("shop"), "web"),
         ],
     ));
-    let input = world.input(Screen::Kind(ResourceKind::ConfigMaps), None);
+    let mut input = world.input(Screen::Kind(ResourceKind::ConfigMaps), None);
     // Cell text and labels are not indexed.
-    let found = search(&input, "secret-ish");
+    let found = search(&mut input, "secret-ish");
     assert!(
         !found
             .entries
@@ -487,7 +495,7 @@ fn resource_entries_carry_name_and_status_only() {
             .any(|entry| entry.group == PaletteGroup::Resources)
     );
     // Positive control: the name matches, and the entry shows exactly name and namespace/name.
-    let found = search(&input, "api-conf");
+    let found = search(&mut input, "api-conf");
     let entry = found
         .entries
         .iter()
@@ -513,7 +521,7 @@ fn resource_entries_carry_name_and_status_only() {
 fn row_actions_follow_key_availability() {
     let world = World::new();
     let key = pod_key("payments-api-0");
-    let found = search(&world.input(Screen::Pods, Some(&key)), "> ");
+    let found = search(&mut world.input(Screen::Pods, Some(&key)), "> ");
     let action = |label: &str| {
         found
             .entries
@@ -575,7 +583,7 @@ fn unshipped_row_actions_are_never_enabled() {
 fn row_action_detail_names_the_cursor_object() {
     let world = World::new();
     let key = deployment_key("payments-api");
-    let found = search(&world.input(Screen::Pods, Some(&key)), "> restart");
+    let found = search(&mut world.input(Screen::Pods, Some(&key)), "> restart");
     let entry = &found.entries[0];
     assert_eq!(entry.label.as_ref(), "Restart rollout");
     assert_eq!(entry.detail.as_deref(), Some("deployment/payments-api"));
@@ -585,7 +593,7 @@ fn row_action_detail_names_the_cursor_object() {
 fn rest_pay_matches_restart_rollout_on_a_cursor_row() {
     let world = World::new();
     let key = deployment_key("payments-api");
-    let found = search(&world.input(Screen::Pods, Some(&key)), "> rest pay");
+    let found = search(&mut world.input(Screen::Pods, Some(&key)), "> rest pay");
     assert_eq!(labels(&found)[0], "Restart rollout");
 }
 
@@ -647,15 +655,15 @@ fn cluster_mode_lists_switcher_rows_in_order() {
             ],
         },
     ];
-    let input = world.input(Screen::Pods, None);
-    let found = search(&input, "@");
+    let mut input = world.input(Screen::Pods, None);
+    let found = search(&mut input, "@");
     assert_eq!(labels(&found), ["eu-prod", "uat", "stg"]);
     let active: Vec<bool> = found.entries.iter().map(|entry| entry.is_current).collect();
     assert_eq!(active, [false, true, false]);
     // The context name is searchable, as in the switcher.
-    let found = search(&input, "@uat-ctx");
+    let found = search(&mut input, "@uat-ctx");
     assert_eq!(labels(&found)[0], "uat");
-    assert_eq!(search(&input, "@zzz").entries.len(), 0);
+    assert_eq!(search(&mut input, "@zzz").entries.len(), 0);
 }
 
 #[test]
@@ -665,7 +673,7 @@ fn caps_cut_each_group_and_count_the_rest() {
         .map(|index| pod("shop", &format!("web-{index:02}")))
         .collect();
     world.nodes.clear();
-    let found = search(&world.input(Screen::Pods, None), "web");
+    let found = search(&mut world.input(Screen::Pods, None), "web");
     let resources = found
         .entries
         .iter()
@@ -683,7 +691,7 @@ fn ranking_is_stable_for_equal_scores() {
         .map(|name| pod("shop", name))
         .collect();
     world.nodes.clear();
-    let found = search(&world.input(Screen::Pods, None), "web");
+    let found = search(&mut world.input(Screen::Pods, None), "web");
     let names: Vec<&str> = found
         .entries
         .iter()
@@ -696,7 +704,7 @@ fn ranking_is_stable_for_equal_scores() {
 #[test]
 fn groups_keep_the_wireframe_order() {
     let world = World::new();
-    let found = search(&world.input(Screen::Pods, None), "po");
+    let found = search(&mut world.input(Screen::Pods, None), "po");
     let groups: Vec<usize> = found
         .entries
         .iter()
@@ -754,8 +762,8 @@ fn the_visible_kind_ranks_before_pods_for_equal_scores() {
         ResourceKind::Deployments,
         vec![kind_row(Some("shop"), "web-deploy")],
     ));
-    let input = world.input(Screen::Kind(ResourceKind::Deployments), None);
-    let found = search(&input, "web");
+    let mut input = world.input(Screen::Kind(ResourceKind::Deployments), None);
+    let found = search(&mut input, "web");
     let names: Vec<&str> = found
         .entries
         .iter()
@@ -813,4 +821,440 @@ fn a_running_deployment_offers_pause_and_restart() {
             .unwrap_or_else(|| panic!("{label} is listed"));
         assert_eq!(reason_of(entry), None, "{label}");
     }
+}
+
+fn plain_entry(label: &str, detail: Option<&str>, keywords: &[&str]) -> PaletteEntry {
+    let mut entry = PaletteEntry::new(
+        PaletteGroup::GoTo,
+        label.to_owned(),
+        PaletteTarget::Screen(Screen::Pods),
+    );
+    entry.detail = detail.map(|detail| detail.to_owned().into());
+    entry.keywords = keywords
+        .iter()
+        .map(|word| SharedString::from((*word).to_owned()))
+        .collect();
+    entry
+}
+
+#[test]
+fn entry_match_ranges_follow_the_scoring_field() {
+    let entry = plain_entry("Restart rollout", Some("deployment/payments-api"), &[]);
+    let ranges = entry_match_ranges(&entry, "rest pay");
+    assert_eq!(ranges.label, vec![run(0, 4)]);
+    assert_eq!(ranges.detail, vec![run(11, 14)]);
+}
+
+#[test]
+fn entry_match_ranges_merge_tokens_on_one_field() {
+    let entry = plain_entry("payments-api", None, &[]);
+    assert_eq!(
+        entry_match_ranges(&entry, "pay api").label,
+        vec![run(0, 3), run(9, 12)]
+    );
+    // Two tokens that cover the same characters give one range.
+    assert_eq!(
+        entry_match_ranges(&entry, "pay paym").label,
+        vec![run(0, 4)]
+    );
+}
+
+#[test]
+fn entry_match_ranges_leave_a_keyword_match_unmarked() {
+    // `po` is an exact keyword, which outscores the prefix of the label.
+    let entry = plain_entry("Pods", None, &["pod", "pods", "po"]);
+    assert_eq!(entry_match_ranges(&entry, "po"), EntryRanges::default());
+}
+
+#[test]
+fn entry_match_ranges_of_an_empty_text_are_empty() {
+    let entry = plain_entry("Restart rollout", Some("deployment/payments-api"), &[]);
+    assert_eq!(entry_match_ranges(&entry, ""), EntryRanges::default());
+    assert_eq!(entry_match_ranges(&entry, "  "), EntryRanges::default());
+}
+
+#[test]
+fn entry_match_ranges_skip_a_token_that_matches_nothing() {
+    let entry = plain_entry("Restart rollout", None, &[]);
+    assert_eq!(
+        entry_match_ranges(&entry, "zzz").label,
+        Vec::<Range<usize>>::new()
+    );
+}
+
+/// A one-range expectation; `vec![0..4]` trips `clippy::single_range_in_vec_init`.
+fn run(start: usize, end: usize) -> Range<usize> {
+    start..end
+}
+
+fn world_with_clusters(scope: NamespaceScope) -> World {
+    let mut world = World::new();
+    world.scope = scope;
+    world.sections = vec![SwitcherSection {
+        title: "Staging",
+        rows: vec![
+            cluster_row("uat-ctx", "uat", 1, true),
+            cluster_row("stg-ctx", "stg", 2, false),
+        ],
+    }];
+    world
+}
+
+/// The scope each `@` row carries and its detail, in row order.
+fn carried(found: &Ranked) -> Vec<(Option<NamespaceScope>, Option<&str>)> {
+    found
+        .entries
+        .iter()
+        .map(|entry| match &entry.target {
+            PaletteTarget::Cluster(_, scope) => (scope.clone(), entry.detail.as_deref()),
+            _ => (None, None),
+        })
+        .collect()
+}
+
+#[test]
+fn cluster_rows_carry_a_single_named_scope() {
+    let world = world_with_clusters(NamespaceScope::Named("payments".to_owned()));
+    let found = search(&mut world.input(Screen::Pods, None), "@");
+    let payments = NamespaceScope::Named("payments".to_owned());
+    // The active cluster (`uat`) carries nothing: a switch to it does nothing.
+    assert_eq!(
+        carried(&found),
+        [
+            (None, None),
+            (Some(payments), Some("same namespace payments"))
+        ]
+    );
+}
+
+#[test]
+fn cluster_rows_carry_nothing_for_all_or_several_namespaces() {
+    for scope in [
+        NamespaceScope::All,
+        NamespaceScope::of_namespaces(["a".to_owned(), "b".to_owned()]),
+    ] {
+        let world = world_with_clusters(scope);
+        let found = search(&mut world.input(Screen::Pods, None), "@");
+        assert_eq!(carried(&found), [(None, None), (None, None)]);
+    }
+}
+
+#[test]
+fn cluster_rows_carry_nothing_without_a_session() {
+    let world = world_with_clusters(NamespaceScope::Named("payments".to_owned()));
+    let mut input = world.input(Screen::Pods, None);
+    input.session = None;
+    let found = search(&mut input, "@");
+    assert_eq!(carried(&found), [(None, None), (None, None)]);
+}
+
+#[test]
+fn the_carried_namespace_is_matched_like_any_detail() {
+    let world = world_with_clusters(NamespaceScope::Named("payments".to_owned()));
+    let found = search(&mut world.input(Screen::Pods, None), "@same namespace");
+    assert_eq!(labels(&found), ["stg"]);
+}
+
+// ---- Step 5c: action x resource pairs ----
+
+/// A Deployments list in the `shop` namespace, in the world of a test.
+fn world_with_deployments(names: &[&str]) -> World {
+    let mut world = World::new();
+    let rows = names
+        .iter()
+        .map(|name| {
+            let mut summary = crate::workload_actions::workload_actions_tests::deployment(name);
+            summary.namespace = "shop".to_owned();
+            crate::workload_rows::deployment_row(&summary)
+        })
+        .collect();
+    world.kind_rows = Some((ResourceKind::Deployments, rows));
+    world
+}
+
+fn deployments_screen() -> Screen {
+    Screen::Kind(ResourceKind::Deployments)
+}
+
+/// The label and detail of every pair entry, in ranked order.
+fn pairs_of(found: &Ranked) -> Vec<(&str, &str)> {
+    found
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.target, PaletteTarget::ObjectAction(..)))
+        .map(|entry| (entry.label.as_ref(), entry.detail.as_deref().unwrap_or("")))
+        .collect()
+}
+
+fn pair_entry<'a>(found: &'a Ranked, label: &str) -> Option<&'a PaletteEntry> {
+    found.entries.iter().find(|entry| {
+        entry.label.as_ref() == label && matches!(entry.target, PaletteTarget::ObjectAction(..))
+    })
+}
+
+#[test]
+fn lists_pairs_needs_two_tokens_in_all_or_actions_mode() {
+    for (raw, expected) in [
+        ("> rest pay", true),
+        ("rest pay", true),
+        ("> rest", false),
+        ("rest", false),
+        ("", false),
+        (":rest pay", false),
+        ("@rest pay", false),
+        ("#rest pay", false),
+    ] {
+        assert_eq!(lists_pairs(&parse_query(raw)), expected, "{raw:?}");
+    }
+}
+
+#[test]
+fn pairs_need_one_token_on_the_action_and_another_on_the_object() {
+    let world = world_with_deployments(&["payments-api", "restic-backup"]);
+    let mut input = world.input(deployments_screen(), None);
+    let found = search(&mut input, "> rest pay");
+    assert_eq!(
+        pairs_of(&found),
+        [("Restart rollout", "deployment/payments-api · shop")]
+    );
+    let entry = pair_entry(&found, "Restart rollout").expect("the pair is listed");
+    let PaletteTarget::ObjectAction(object, action) = &entry.target else {
+        panic!("a pair");
+    };
+    assert_eq!(*object, deployment_key("payments-api"));
+    assert_eq!(*action, RowAction::RestartRollout);
+    // One token alone would pair Restart with every Deployment, and `restic-backup` matches both
+    // the action and the object: neither is a pair.
+    assert!(pairs_of(&search(&mut input, "> rest")).is_empty());
+    assert!(pairs_of(&search(&mut input, "> restic")).is_empty());
+    // Two tokens that both name the object leave no token for the action.
+    assert!(pairs_of(&search(&mut input, "> pay api")).is_empty());
+}
+
+#[test]
+fn pairs_skip_the_cursor_roll_back_delete_and_unshipped_actions() {
+    let world = world_with_deployments(&["payments-api", "payments-web"]);
+    let cursor = deployment_key("payments-api");
+    let mut input = world.input(deployments_screen(), Some(&cursor));
+    // The cursor keeps its own entry, with the state of the loaded row, and no duplicate.
+    let found = search(&mut input, "> rest pay");
+    assert_eq!(
+        pairs_of(&found),
+        [("Restart rollout", "deployment/payments-web · shop")]
+    );
+    assert_eq!(found.entries.len(), 2);
+    // `roll` also names "Pause rollout", so look at the actions the pairs carry. for raw in ["> roll pay", "> delete pay", "> del pay", "> back pay"] { let found = search(&mut input, raw); let has_excluded = found.entries.iter().any(|entry| { matches!( entry.target, PaletteTarget::ObjectAction(_, RowAction::Delete | RowAction::RollBack) ) }); assert!(!has_excluded, "{raw}"); } assert!(pairs_of(&search(&mut input, "> delete pay")).is_empty());
+    for row in ROW_ACTIONS {
+        assert_eq!(
+            is_pairable(row),
+            !matches!(row, RowAction::Delete | RowAction::RollBack),
+            "{row:?}"
+        );
+    }
+}
+
+#[test]
+fn a_node_pairs_with_its_shipped_actions() {
+    let world = World::new();
+    let mut input = world.input(Screen::Nodes, None);
+    let found = search(&mut input, "> cordon node");
+    assert_eq!(pairs_of(&found), [("Cordon", "node/node-1")]);
+    // Drain shipped with spec 0034, so it is paired like any other shipped action.
+    let found = search(&mut input, "> drain node");
+    assert_eq!(pairs_of(&found), [("Drain", "node/node-1")]);
+}
+
+#[test]
+fn pairs_come_from_the_loaded_lists_only() {
+    // No Deployments list is loaded (any other screen): no Deployment pair, but a pod pair.
+    let world = World::new();
+    let mut input = world.input(Screen::Pods, None);
+    assert!(pairs_of(&search(&mut input, "> rest pay")).is_empty());
+    let found = search(&mut input, "> logs pay");
+    assert_eq!(
+        pairs_of(&found),
+        [("View logs", "pod/payments-api-0 · shop")]
+    );
+}
+
+#[test]
+fn all_mode_pairs_reuse_the_resource_scores() {
+    let mut world = world_with_deployments(&["payments-api"]);
+    world.pods = vec![
+        pod("shop", "payments-api-0"),
+        pod("shop", "restic-payments-0"),
+    ];
+    let mut input = world.input(deployments_screen(), None);
+    let query = parse_query("rest pay");
+    input.include_resources = true;
+    input.query_text = query.text;
+    input.pair_text = Some(query.text);
+    let entries = palette_entries(&input);
+    let resources: Vec<&PaletteEntry> = entries
+        .iter()
+        .filter(|entry| entry.group == PaletteGroup::Resources)
+        .collect();
+    // Only the pod that matches both tokens lists; the misses are dropped.
+    assert_eq!(
+        resources
+            .iter()
+            .map(|entry| entry.label.as_ref())
+            .collect::<Vec<_>>(),
+        ["restic-payments-0"]
+    );
+    for entry in &resources {
+        assert_eq!(entry.score, score_of(entry, query.text));
+        assert!(entry.score.is_some());
+    }
+    // The same scan found the pair object that matches one token (`pay`).
+    let found = ranked(entries, &query);
+    assert_eq!(
+        pairs_of(&found),
+        [("Restart rollout", "deployment/payments-api · shop")]
+    );
+}
+
+#[test]
+fn ranked_keeps_the_order_a_fresh_score_gives() {
+    let mut world = World::new();
+    world.pods = vec![
+        pod("shop", "web-api-0"),
+        pod("shop", "api-0"),
+        pod("shop", "x-api-0"),
+    ];
+    let mut input = world.input(Screen::Pods, None);
+    let found = search(&mut input, "api");
+    let resources: Vec<&PaletteEntry> = found
+        .entries
+        .iter()
+        .filter(|entry| entry.group == PaletteGroup::Resources)
+        .collect();
+    let scores: Vec<Option<u32>> = resources.iter().map(|entry| entry.score).collect();
+    assert!(scores.iter().all(Option::is_some));
+    assert!(scores.windows(2).all(|pair| pair[0] >= pair[1]));
+    assert_eq!(resources[0].label.as_ref(), "api-0");
+    for entry in &resources {
+        assert_eq!(entry.score, score_of(entry, "api"));
+    }
+}
+
+#[test]
+fn ranked_uses_a_stored_score_instead_of_scoring_again() {
+    let mut stored = plain_entry("Pods", None, &[]);
+    stored.score = Some(7);
+    let fresh = plain_entry("Pods", None, &[]);
+    let found = ranked(vec![stored, fresh], &parse_query("pods"));
+    // The stored 7 is below any real score of `pods` against `Pods`, so the fresh entry leads.
+    assert_eq!(found.entries[0].score, None);
+    assert_eq!(found.entries[1].score, Some(7));
+}
+
+#[test]
+fn pairs_keep_the_top_fifty_objects() {
+    let mut world = World::new();
+    world.pods = (0..60)
+        .map(|index| pod("shop", &format!("web-{index:02}")))
+        .collect();
+    let mut input = world.input(Screen::Pods, None);
+    let query = parse_query("> logs web");
+    input.include_resources = false;
+    input.query_text = query.text;
+    input.pair_text = Some(query.text);
+    let pairs = palette_entries(&input)
+        .into_iter()
+        .filter(|entry| matches!(entry.target, PaletteTarget::ObjectAction(..)))
+        .count();
+    assert_eq!(pairs, RESOURCES_CAP);
+}
+
+#[test]
+fn pair_state_follows_the_gate() {
+    let mut world = world_with_deployments(&["payments-api"]);
+    world.guard = guard_of(known_denying(&[AccessCheck::PatchDeployments]));
+    let mut input = world.input(deployments_screen(), None);
+    let found = search(&mut input, "> rest pay");
+    let entry = pair_entry(&found, "Restart rollout").expect("the pair is listed");
+    assert_eq!(reason_of(entry), Some("Not permitted: patch deployments"));
+    assert!(!entry.needs_confirm);
+
+    // A paused Deployment blocks its restart through the loaded row.
+    let mut summary = crate::workload_actions::workload_actions_tests::deployment("payments-api");
+    summary.namespace = "shop".to_owned();
+    summary.is_paused = true;
+    let mut world = World::new();
+    world.kind_rows = Some((
+        ResourceKind::Deployments,
+        vec![crate::workload_rows::deployment_row(&summary)],
+    ));
+    let mut input = world.input(deployments_screen(), None);
+    let found = search(&mut input, "> rest pay");
+    let entry = pair_entry(&found, "Restart rollout").expect("the pair is listed");
+    assert_eq!(reason_of(entry), Some("Resume the rollout first"));
+    assert!(!entry.needs_confirm);
+}
+
+#[test]
+fn pair_detail_names_the_namespace_unless_scoped_to_one() {
+    let mut world = world_with_deployments(&["api"]);
+    let detail_in = |world: &World| {
+        let mut input = world.input(deployments_screen(), None);
+        let found = search(&mut input, "> rest api");
+        pair_entry(&found, "Restart rollout")
+            .and_then(|entry| entry.detail.as_deref().map(str::to_owned))
+    };
+    assert_eq!(detail_in(&world).as_deref(), Some("deployment/api · shop"));
+    world.scope = NamespaceScope::of_namespaces(["shop".to_owned(), "web".to_owned()]);
+    assert_eq!(detail_in(&world).as_deref(), Some("deployment/api · shop"));
+    world.scope = NamespaceScope::Named("shop".to_owned());
+    assert_eq!(detail_in(&world).as_deref(), Some("deployment/api"));
+}
+
+#[test]
+fn needs_confirm_marks_enabled_mutating_entries_only() {
+    let world = world_with_deployments(&["payments-api", "payments-web"]);
+    let cursor = deployment_key("payments-api");
+    let mut input = world.input(deployments_screen(), Some(&cursor));
+    // The cursor entries: Restart (a write) is marked; Copy name and View YAML never are.
+    let found = search(&mut input, "> pay");
+    let cursor_entry = |label: &str| {
+        found.entries.iter().find(|entry| {
+            entry.label.as_ref() == label && matches!(entry.target, PaletteTarget::RowAction(_))
+        })
+    };
+    assert!(cursor_entry("Restart rollout").is_some_and(|entry| entry.needs_confirm));
+    assert!(cursor_entry("View YAML").is_some_and(|entry| !entry.needs_confirm));
+    assert!(cursor_entry("Copy name").is_some_and(|entry| !entry.needs_confirm));
+    // The pairs of the other object follow the same rule.
+    let found = search(&mut input, "> rest pay");
+    assert!(pair_entry(&found, "Restart rollout").is_some_and(|entry| entry.needs_confirm));
+    let found = search(&mut input, "> copy pay");
+    assert!(pair_entry(&found, "Copy name").is_some_and(|entry| !entry.needs_confirm));
+    let found = search(&mut input, "> yaml pay");
+    assert!(pair_entry(&found, "View YAML").is_some_and(|entry| !entry.needs_confirm));
+}
+
+#[test]
+fn a_disabled_entry_never_needs_confirm() {
+    let mut world = world_with_deployments(&["payments-api"]);
+    world.guard = guard_of(known_denying(&[AccessCheck::PatchDeployments]));
+    let cursor = deployment_key("payments-api");
+    let all = palette_entries(&world.input(deployments_screen(), Some(&cursor)));
+    let restart = all
+        .iter()
+        .find(|entry| entry.label.as_ref() == "Restart rollout")
+        .expect("Restart rollout is listed");
+    assert!(!restart.is_enabled());
+    assert!(!restart.needs_confirm);
+}
+
+#[test]
+fn commands_screens_resources_namespaces_and_clusters_never_need_confirm() {
+    let mut world = World::new();
+    world.sections = vec![SwitcherSection {
+        title: "Staging",
+        rows: vec![cluster_row("stg-ctx", "stg", 1, false)],
+    }];
+    let all = palette_entries(&world.input(Screen::Pods, None));
+    assert!(all.iter().any(|entry| entry.group == PaletteGroup::GoTo));
+    assert!(all.iter().all(|entry| !entry.needs_confirm));
 }

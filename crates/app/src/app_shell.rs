@@ -69,7 +69,8 @@ use crate::object_events::{SubjectChange, event_subject, subject_change};
 use crate::overview::OverviewState;
 use crate::overview_report::live_report;
 use crate::palette_search::{
-    PaletteInput, PaletteSession, lists_resources, palette_entries, parse_query,
+    PaletteInput, PaletteQuery, PaletteSession, lists_pairs, lists_resources, palette_entries,
+    parse_query,
 };
 use crate::permissions_view::PermissionsView;
 use crate::pod_drawer::selected_container_index;
@@ -804,6 +805,18 @@ impl AppShell {
     /// Switches to `target`: the open session is released first. Nothing happens when it already
     /// is the open cluster. Every start goes through here.
     pub(crate) fn switch_cluster(&mut self, target: &ClusterRef, cx: &mut Context<Self>) {
+        self.switch_cluster_in_scope(target, None, cx);
+    }
+
+    /// `switch_cluster`, starting the target in `scope` when given: for this switch it wins over
+    /// the remembered and the saved default scope (0026 decision 3), as `--namespace` does. The
+    /// scope rides through the leaving-work dialog, so it applies after Continue.
+    pub(crate) fn switch_cluster_in_scope(
+        &mut self,
+        target: &ClusterRef,
+        scope: Option<NamespaceScope>,
+        cx: &mut Context<Self>,
+    ) {
         // The open cluster leaves; a switch to the open one changes nothing.
         let leaving: Vec<ClusterRef> = self
             .open_clusters()
@@ -812,19 +825,20 @@ impl AppShell {
             .collect();
         let work = self.leaving_work(&leaving, cx);
         if work.is_empty() {
-            self.switch_to(target, None, cx);
+            self.switch_to(target, scope, cx);
             return;
         }
         let target = target.clone();
         self.confirm_leaving(
             work,
-            move |shell, cx| shell.switch_to(&target, None, cx),
+            move |shell, cx| shell.switch_to(&target, scope, cx),
             cx,
         );
     }
 
-    /// `requested` is the `--namespace` scope of the first start; it wins over the remembered and
-    /// the saved default scope.
+    /// `requested` wins over the remembered and the saved default scope. It is the `--namespace`
+    /// scope of the first start, or the scope a palette `@` switch carries
+    /// (`switch_cluster_in_scope`).
     fn switch_to(
         &mut self,
         target: &ClusterRef,
@@ -3822,8 +3836,7 @@ impl AppShell {
         self.close_cluster_switcher(cx);
         self.close_value_popover(cx);
         self.namespace_picker.dismiss();
-        let wants_resources = lists_resources(&parse_query(initial));
-        let snapshot = self.palette_snapshot(wants_resources, cx);
+        let snapshot = self.palette_snapshot(&parse_query(initial), cx);
         let focus = self.focus_handle.clone();
         open_palette(initial, &cx.entity(), snapshot, focus, window, cx);
     }
@@ -3859,7 +3872,7 @@ impl AppShell {
     }
 
     /// What the palette lists now, read from memory only: no list, watch, or request starts here.
-    pub(crate) fn palette_snapshot(&self, wants_resources: bool, cx: &App) -> PaletteSnapshot {
+    pub(crate) fn palette_snapshot(&self, query: &PaletteQuery<'_>, cx: &App) -> PaletteSnapshot {
         let sections = self.all_switcher_sections(cx);
         let live = self.live(cx);
         // The guard is built before the session borrows it.
@@ -3908,7 +3921,12 @@ impl AppShell {
             // entry would act on a row the user cannot see.
             cursor: self.selected.as_ref().filter(|_| !self.is_editing()),
             has_dock_tabs: self.dock.read(cx).has_tabs(),
-            include_resources: wants_resources,
+            include_resources: lists_resources(query),
+            query_text: query.text,
+            // Like the cursor row actions, pairs would act on rows the Edit YAML view hides.
+            pair_text: lists_pairs(query)
+                .then_some(query.text)
+                .filter(|_| !self.is_editing()),
             session,
             clusters: &sections,
         };
