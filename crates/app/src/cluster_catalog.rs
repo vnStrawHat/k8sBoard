@@ -246,7 +246,7 @@ impl ClusterCatalog {
             &kubeconfigs,
             &AppSettings::get(cx).registry,
             |path| self.is_chain_source(path),
-            |path| self.is_folder_source(path),
+            |path| self.folder_source_of(path).map(Path::to_path_buf),
             AppSettings::config_dir(cx),
         )
     }

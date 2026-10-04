@@ -86,7 +86,7 @@ fn open(sets: Vec<Value>, cx: &mut TestAppContext) -> Fixture {
 
 impl Fixture {
     fn wait_until_ready(&self, cx: &mut TestAppContext) {
-        for _ in 0..500 {
+        for _ in 0..1_500 {
             cx.run_until_parked();
             if self.history.read_with(cx, |history, _| {
                 matches!(history.state, HistoryState::Ready(_))

@@ -12,7 +12,7 @@ fn kubeconfig(source: &str, context: &str, cluster: &str, user: &str) -> Kubecon
 }
 
 fn rows_of(kubeconfigs: &[&Kubeconfig], registry: &ClusterRegistry) -> Vec<ClusterRow> {
-    cluster_groups(kubeconfigs, registry, |_| false, |_| false, None)
+    cluster_groups(kubeconfigs, registry, |_| false, |_| None, None)
         .into_iter()
         .flat_map(|group| group.rows)
         .collect()

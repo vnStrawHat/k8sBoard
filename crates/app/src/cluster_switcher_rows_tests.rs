@@ -33,6 +33,7 @@ fn row(context: &str, label: &str, environment: Environment) -> ClusterRow {
         meta: String::new(),
         guessed: environment,
         origin: RowOrigin::Chain,
+        trust_note: None,
     }
 }
 
@@ -287,4 +288,33 @@ fn query_ignores_whitespace() {
     // A query never matches across two parts of the row.
     let visible = visible_sections(&sections, "1eu-ctx", SwitcherSegment::All);
     assert_eq!(row_count(&visible), 0);
+}
+
+#[test]
+fn folder_rows_have_no_shortcut_and_do_not_shift_the_numbers() {
+    let mut groups = three_groups();
+    // The first row of Staging comes from a watched folder.
+    groups[1].rows[0].origin = RowOrigin::Folder;
+    let sections = switcher_sections(&groups, &HealthBoard::default(), &[]);
+    let numbers: Vec<Option<u8>> = sections
+        .iter()
+        .flat_map(|section| section.rows.iter().map(|row| row.shortcut))
+        .collect();
+    assert_eq!(numbers, [Some(1), None, Some(2), Some(3)]);
+    // Ctrl 2 opens the next row that may be numbered, never the folder row.
+    assert_eq!(nth_cluster(&sections, 2), Some(&cluster("stg-ctx")));
+    assert_eq!(nth_cluster(&sections, 4), None);
+}
+
+#[test]
+fn a_folder_row_passes_its_note_to_the_switcher_row() {
+    let mut groups = three_groups();
+    groups[0].rows[0].origin = RowOrigin::Folder;
+    groups[0].rows[0].trust_note = Some("From watched folder f: runs aws".to_owned());
+    let sections = switcher_sections(&groups, &HealthBoard::default(), &[]);
+    assert_eq!(
+        sections[0].rows[0].note.as_deref(),
+        Some("From watched folder f: runs aws")
+    );
+    assert_eq!(sections[1].rows[0].note, None);
 }

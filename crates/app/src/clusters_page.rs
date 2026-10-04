@@ -906,7 +906,15 @@ impl ClustersPage {
                     form_row("Server", mono_line("server-text", server, &mono), cx),
                     form_row("Authentication", centered(div().text_sm().child(auth)), cx),
                     form_row("Proxy", proxy_row, cx),
-                    form_row("Connection test", centered(self.render_test(cx)), cx),
+                    form_row(
+                        "Connection test",
+                        v_flex()
+                            .gap_1()
+                            .child(centered(self.render_test(cx)))
+                            .children(row.trust_note.clone().map(|note| muted_text(note, cx)))
+                            .into_any_element(),
+                        cx,
+                    ),
                 ],
                 cx,
             ))

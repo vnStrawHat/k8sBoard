@@ -1,7 +1,7 @@
 //! What the cluster switcher lists, without any view code: the environment sections, the row
 //! texts the filter reads, the `Ctrl 1…9` numbers, and the keyboard highlight.
 
-use crate::cluster_form::{ClusterGroup, file_name_text};
+use crate::cluster_form::{ClusterGroup, RowOrigin, file_name_text};
 use crate::cluster_health::{HealthBoard, RowHealth};
 use crate::cluster_registry::ClusterRef;
 use crate::environment::Environment;
@@ -20,6 +20,8 @@ pub(crate) struct SwitcherRow {
     pub(crate) health: RowHealth,
     /// Why the last probe failed; the tooltip of the Retry button.
     pub(crate) failure: Option<String>,
+    /// For a row of a watched folder: what its file reads and runs (the tooltip of the row).
+    pub(crate) note: Option<String>,
     /// The `Ctrl n` number: the first nine rows of the unfiltered list.
     pub(crate) shortcut: Option<u8>,
     /// The cluster is open: it has a session in the window.
@@ -76,8 +78,13 @@ pub(crate) fn switcher_sections(
                         .find(|viewed| viewed.cluster == row.cluster)
                         .map(|viewed| viewed.health);
                     let environment = row.profile.environment;
-                    let shortcut = (next_shortcut <= 9).then_some(next_shortcut);
-                    next_shortcut = next_shortcut.saturating_add(1);
+                    // A row of a watched folder has no number: Ctrl n would start a cluster
+                    // the user did not pick, and the numbers below must not shift for it.
+                    let is_numbered = row.origin != RowOrigin::Folder;
+                    let shortcut = (is_numbered && next_shortcut <= 9).then_some(next_shortcut);
+                    if is_numbered {
+                        next_shortcut = next_shortcut.saturating_add(1);
+                    }
                     SwitcherRow {
                         failure: health
                             .failure_reason(&row.cluster)
@@ -85,6 +92,7 @@ pub(crate) fn switcher_sections(
                             .map(str::to_owned),
                         health: active_health.unwrap_or_else(|| health.row_health(&row.cluster)),
                         shortcut,
+                        note: row.trust_note.clone(),
                         is_active: active_health.is_some(),
                         search_text: search_text(
                             &row.label,

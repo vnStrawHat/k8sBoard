@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cluster::{ClusterError, Kubeconfig, ProxyChoice, ProxyUrl, ProxyUrlError};
+use cluster::{ClusterError, ConnectionInfo, Kubeconfig, ProxyChoice, ProxyUrl, ProxyUrlError};
 use gpui_kit::SharedString;
 
 use crate::cluster_catalog::{PathStyle, same_path_text};
@@ -47,6 +47,9 @@ pub(crate) struct ClusterRow {
     /// What the names alone suggest: the "Auto" choice of the Environment control.
     pub(crate) guessed: Environment,
     pub(crate) origin: RowOrigin,
+    /// For a row of a watched folder: where it comes from and what its file would read and run, so
+    /// the user sees that before choosing it (`folder_trust_note`).
+    pub(crate) trust_note: Option<String>,
 }
 
 #[derive(Clone)]
@@ -73,7 +76,7 @@ pub(crate) fn cluster_groups(
     kubeconfigs: &[&Kubeconfig],
     registry: &ClusterRegistry,
     is_chain_source: impl Fn(&Path) -> bool,
-    is_folder_source: impl Fn(&Path) -> bool,
+    folder_of: impl Fn(&Path) -> Option<PathBuf>,
     owned_dir: Option<&Path>,
 ) -> Vec<ClusterGroup> {
     let summaries: Vec<_> = kubeconfigs
@@ -93,16 +96,22 @@ pub(crate) fn cluster_groups(
                 .iter()
                 .any(|(_, other)| other.name == summary.name && other.source != summary.source);
             let source = summary.source.as_path();
+            let folder = folder_of(source);
             let origin = if is_chain_source(source) {
                 RowOrigin::Chain
             } else if owned_dir.is_some_and(|dir| is_app_owned(source, dir)) {
                 RowOrigin::AppOwned
-            } else if is_folder_source(source) {
+            } else if folder.is_some() {
                 RowOrigin::Folder
             } else {
                 RowOrigin::Registry
             };
-            let auth = kubeconfig.connection_info(summary).auth;
+            let info = kubeconfig.connection_info(summary);
+            let trust_note = folder
+                .as_ref()
+                .filter(|_| origin == RowOrigin::Folder)
+                .map(|folder| folder_trust_note(folder, &info));
+            let auth = info.auth;
             ClusterRow {
                 cluster: ClusterRef::of(summary),
                 label: switcher_label(&profile, summary, is_duplicate_name),
@@ -110,6 +119,7 @@ pub(crate) fn cluster_groups(
                 guessed: guess_environment(&summary.name, &summary.cluster),
                 profile,
                 origin,
+                trust_note,
             }
         })
         .collect();
@@ -479,6 +489,26 @@ pub(crate) fn remove_dialog_text(
     (title, body)
 }
 
+/// What a row of a watched folder would do when chosen: its file is not the user's own, so the
+/// files it reads for a credential and the command it runs are named up front (a dropped file
+/// can aim `tokenFile` anywhere and name any plugin).
+pub(crate) fn folder_trust_note(folder: &Path, info: &ConnectionInfo) -> String {
+    let mut note = format!("From watched folder {}", folder.display());
+    let mut parts = Vec::new();
+    if !info.credential_files.is_empty() {
+        parts.push(format!("reads {}", info.credential_files.join(", ")));
+    }
+    if let Some(command) = &info.exec_command {
+        parts.push(format!("runs {command}"));
+    }
+    if parts.is_empty() {
+        parts.push("reads no credential file, runs no command".to_owned());
+    }
+    note.push_str(": ");
+    note.push_str(&parts.join(" / "));
+    note
+}
+
 /// Why Remove from k8sBoard is off for `row`, or `None` when it applies. `folder` is the watched folder
 /// the row's file belongs to.
 pub(crate) fn remove_block_reason(row: &ClusterRow, folder: Option<&Path>) -> Option<String> {
@@ -513,6 +543,7 @@ pub(crate) fn remove_kubeconfig(registry: &mut ClusterRegistry, path: &Path) {
         .is_some_and(|cluster| is_path(&cluster.kubeconfig))
     {
         registry.last_used = None;
+        registry.last_used_stamp = None;
     }
 }
 

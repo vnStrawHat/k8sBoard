@@ -39,3 +39,12 @@ Test names that moved: `density_change_rerenders_the_table` → `density_change_
 - A missing watched folder is looked at again only at the next start.
 - A settings change to `terminal.font_size` repaints open terminals through `observe_global`; the scrollback of an open tab is never changed.
 - The search box cannot be typed into by the screenshot tool, so no shot shows a filtered list; the filter is covered by `cluster_search_matches_label_context_env_and_file` and `filter_groups_keeps_matching_rows_and_drops_empty_groups`.
+
+## After the security review (rebased on main `40bbf9a`)
+
+- **Ctrl 1–9 never number a folder row** (`shortcut: None`, and the numbers below do not shift).
+- **Start race:** the start waits while the file `last_used` names is still loading (`ClusterCatalog::is_file_loading`), so a chain file with a `current-context` cannot win over a picked folder file that is a moment behind.
+- **Pick fingerprint:** `registry.last_used_stamp` (`len`, `modified_ms`) is saved with a `last_used` that is a folder file; a folder file starts on its own only while its stamp is unchanged, else the switcher opens. A saved folder `last_used` with no stamp asks too.
+- **Watcher off the main thread:** `notify` is started in the background scan task and stored when the first listing arrives; an offline share cannot stall start.
+- **Trust note:** a folder row shows `From watched folder {path}: reads {credential files} / runs {exec command}` under Test connection and as the switcher row tooltip (`ClusterRow.trust_note`, `ConnectionInfo.credential_files`, `exec_command`).
+- **Nits:** a folder file's exec `command` with `/` or `\` is a path on every host; the bounded read refuses a non-regular file (`symlink_metadata`); the UTF-16 buffer is wiped; attach, node shell and debug tabs take `ShellCommand::Auto`, not the saved default shell (`ShellTab::with_kind`); the `wait_for` polls of all app tests are 30 s. The port-forward stop test still probes the fixed local port: the listener lives inside the stream the runtime drops, and nothing outside the cluster crate can observe its end.

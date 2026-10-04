@@ -58,6 +58,7 @@ use crate::keymap::{
 };
 use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
+use crate::kubeconfig_folder::FileStamp;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
 use crate::launch_options::{LaunchOptions, LaunchScreen};
 use crate::live_sections::loaded_replica_sets;
@@ -824,32 +825,54 @@ impl AppShell {
         if !is_waiting_to_start {
             return;
         }
-        let (kubeconfigs, listed) = {
+        let registry = &AppSettings::get(cx).registry;
+        let last_used = launch_last_used(
+            registry.last_used.as_ref(),
+            self.requested.explicit_files.as_deref(),
+        )
+        .cloned();
+        let saved_stamp = registry.last_used_stamp;
+        let (kubeconfigs, listed, current_stamp) = {
             let catalog = self.catalog.read(cx);
-            if catalog.is_loading() {
+            // Wait for the file `last_used` names too: its rows are not there while it loads, and
+            // the start would take another cluster (a chain file's) instead.
+            let is_picked_file_loading = last_used
+                .as_ref()
+                .is_some_and(|cluster| catalog.is_file_loading(&cluster.kubeconfig));
+            if catalog.is_loading() || is_picked_file_loading {
                 return;
             }
             (
                 catalog.start_kubeconfigs().cloned().collect::<Vec<_>>(),
                 catalog.kubeconfigs().cloned().collect::<Vec<_>>(),
+                last_used
+                    .as_ref()
+                    .and_then(|cluster| catalog.folder_stamp_of(&cluster.kubeconfig)),
             )
         };
         if listed.is_empty() {
             return;
         }
-        let saved = AppSettings::get(cx).registry.last_used.as_ref();
-        let last_used = launch_last_used(saved, self.requested.explicit_files.as_deref()).cloned();
         // A file of a watched folder starts a session only as the exact cluster the user picked
-        // last time: never through `--context`, `current-context`, or the first-file fallback.
-        if let Some(cluster) = folder_start(
+        // last time, and only while the file is as it was then: never through `--context`,
+        // `current-context`, or the first-file fallback.
+        match folder_start(
             self.requested.context.as_deref(),
             last_used.as_ref(),
+            (saved_stamp, current_stamp),
             &kubeconfigs,
             &listed,
         ) {
-            let namespace = self.take_launch_request().1;
-            self.switch_to(&cluster, namespace, cx);
-            return;
+            FolderStart::NotAFolderFile => {}
+            FolderStart::Start(cluster) => {
+                let namespace = self.take_launch_request().1;
+                self.switch_to(&cluster, namespace, cx);
+                return;
+            }
+            FolderStart::Changed => {
+                self.ask_for_a_pick(cx);
+                return;
+            }
         }
         if kubeconfigs.is_empty() {
             self.ask_for_a_pick(cx);
@@ -4665,20 +4688,39 @@ pub(crate) fn find_cluster(
     })
 }
 
+/// What the start does about a watched-folder file.
+#[derive(Debug, PartialEq, Eq)]
+enum FolderStart {
+    /// `last_used` is not a file of a watched folder (or `--context` decides): the usual start.
+    NotAFolderFile,
+    /// The user picked this file and it is unchanged since: it starts.
+    Start(ClusterRef),
+    /// The user picked this file but it changed since (or no stamp was saved): nothing starts, and
+    /// the user picks again. A file anyone can write must not run on yesterday's trust.
+    Changed,
+}
+
 /// The cluster of a watched-folder file that may start on its own: only the `last_used` the user
-/// picked, found in no chain or registry file, and never with `--context`.
+/// picked, found in no chain or registry file, never with `--context`, and only while its saved
+/// stamp `(saved, current)` still matches the file.
 fn folder_start(
     requested: Option<&str>,
     last_used: Option<&ClusterRef>,
+    (saved, current): (Option<FileStamp>, Option<FileStamp>),
     start: &[Arc<Kubeconfig>],
     listed: &[Arc<Kubeconfig>],
-) -> Option<ClusterRef> {
-    if requested.is_some() {
-        return None;
+) -> FolderStart {
+    let Some(cluster) = last_used.filter(|_| requested.is_none()) else {
+        return FolderStart::NotAFolderFile;
+    };
+    if find_cluster(listed, cluster).is_none() || find_cluster(start, cluster).is_some() {
+        return FolderStart::NotAFolderFile;
     }
-    let cluster = last_used?;
-    (find_cluster(listed, cluster).is_some() && find_cluster(start, cluster).is_none())
-        .then(|| cluster.clone())
+    if saved.is_some() && saved == current {
+        FolderStart::Start(cluster.clone())
+    } else {
+        FolderStart::Changed
+    }
 }
 
 /// The kubeconfig and context to open first (`start_choice`). The error is the one of the first

@@ -32,6 +32,11 @@ pub struct ConnectionInfo {
     pub auth: AuthKind,
     /// The `proxy-url` of the cluster entry as `scheme://host[:port]`; its userinfo is dropped.
     pub proxy: Option<String>,
+    /// The paths of the files the user entry reads for its credential (token file, client
+    /// certificate and key): paths only, never what is in them.
+    pub credential_files: Vec<String>,
+    /// The command an exec plugin runs, as written in the file (a path or a name).
+    pub exec_command: Option<String>,
 }
 
 /// How a context authenticates: the kind only, never a token, key, or argument.
@@ -255,10 +260,24 @@ impl Kubeconfig {
                 .find(|named| named.name == user)
                 .and_then(|named| named.auth_info.as_ref())
         });
+        let credential_files = auth_info
+            .map(|auth| {
+                [&auth.token_file, &auth.client_certificate, &auth.client_key]
+                    .into_iter()
+                    .flatten()
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let exec_command = auth_info
+            .and_then(|auth| auth.exec.as_ref())
+            .and_then(|exec| exec.command.clone());
         ConnectionInfo {
             server,
             proxy,
             auth: auth_info.map_or(AuthKind::None, auth_kind),
+            credential_files,
+            exec_command,
         }
     }
 
@@ -425,11 +444,13 @@ fn make_paths_absolute(document: &mut kube::config::Kubeconfig, folder: &Path) {
             auth.token_file = Some(path);
         }
         // Only a command with a separator is a path; a bare name is a `PATH` lookup (client-go).
+        // Either separator counts here, whatever the host: a file of a watched folder must not run a
+        // command that this host would find relative to the working directory instead.
         if let Some(exec) = &mut auth.exec
             && exec
                 .command
                 .as_deref()
-                .is_some_and(|command| command.contains(std::path::MAIN_SEPARATOR))
+                .is_some_and(|command| command.contains(['/', '\\']))
             && let Some(path) = absolute(&exec.command)
         {
             exec.command = Some(path);

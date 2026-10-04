@@ -226,6 +226,11 @@ impl ShellTab {
     /// before the first connect.
     pub(crate) fn with_kind(mut self, kind: ShellKind) -> Self {
         self.kind = kind;
+        // Only an exec shell takes the saved default shell; attach, node shell and debug have no
+        // shell choice.
+        if self.kind != ShellKind::Exec {
+            self.command = ShellCommand::Auto;
+        }
         self
     }
 

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use cluster::{Kubeconfig, KubeconfigError};
+use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 /// The files of one folder that are listed; the rest are counted and not loaded.
@@ -24,6 +25,29 @@ pub(crate) const RESCAN_MAX_WAIT: Duration = Duration::from_secs(2);
 
 /// The extensions of a kubeconfig file; a file with no extension (`config`) counts too.
 const EXTENSIONS: [&str; 5] = ["yaml", "yml", "conf", "config", "kubeconfig"];
+
+/// The size and modification time of a watched-folder file when it became `last_used`. A file that
+/// changed since is not started on its own: the user picks it again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FileStamp {
+    pub(crate) len: u64,
+    /// Milliseconds since the Unix epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) modified_ms: Option<u64>,
+}
+
+impl FileStamp {
+    pub(crate) fn of(file: &FolderFile) -> Self {
+        let modified_ms = file
+            .modified
+            .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok());
+        Self {
+            len: file.len,
+            modified_ms,
+        }
+    }
+}
 
 /// What a scan saw of one candidate file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,6 +205,15 @@ pub(crate) fn load_folder_file(path: &Path) -> Result<Kubeconfig, KubeconfigErro
         path: path.to_path_buf(),
         source,
     };
+    // A symlink is never followed: a file swapped for one after the scan is refused. The check
+    // and the open are two steps, so this narrows the window and does not close it.
+    let metadata = std::fs::symlink_metadata(path).map_err(read_error)?;
+    if !metadata.is_file() {
+        return Err(read_error(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        )));
+    }
     let file = File::open(path).map_err(read_error)?;
     let Some(bytes) = read_bounded(file).map_err(read_error)? else {
         return Err(KubeconfigError::TooLarge {
@@ -196,10 +229,11 @@ fn decode_text(bytes: &[u8]) -> io::Result<Zeroizing<String>> {
     let invalid = |reason: &'static str| io::Error::new(io::ErrorKind::InvalidData, reason);
     match bytes {
         [0xFF, 0xFE, rest @ ..] => {
-            let units: Vec<u16> = rest
-                .chunks(2)
-                .map(|pair| u16::from_le_bytes([pair[0], *pair.get(1).unwrap_or(&0)]))
-                .collect();
+            let units: Zeroizing<Vec<u16>> = Zeroizing::new(
+                rest.chunks(2)
+                    .map(|pair| u16::from_le_bytes([pair[0], *pair.get(1).unwrap_or(&0)]))
+                    .collect(),
+            );
             String::from_utf16(&units)
                 .map(Zeroizing::new)
                 .map_err(|_| invalid("not valid UTF-16"))

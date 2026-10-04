@@ -183,3 +183,42 @@ fn a_utf16_file_with_a_byte_order_mark_reads_like_kube_does() {
     assert_eq!(loaded.contexts().len(), 1);
     finish(&dir);
 }
+
+#[test]
+fn a_file_that_is_not_a_regular_file_is_refused_before_it_is_read() {
+    let dir = folder("not-regular");
+    // A directory with a kubeconfig name stands in for a file swapped after the scan.
+    std::fs::create_dir(dir.join("swapped.yaml")).expect("a folder");
+    let error = load_folder_file(&dir.join("swapped.yaml")).expect_err("not a file");
+    assert!(matches!(error, KubeconfigError::Read { .. }), "{error:?}");
+    finish(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_swapped_in_after_the_scan_is_refused() {
+    let dir = folder("symlink");
+    write(&dir, "real.yaml", KUBECONFIG);
+    std::os::unix::fs::symlink(dir.join("real.yaml"), dir.join("link.yaml")).expect("a symlink");
+    assert!(load_folder_file(&dir.join("real.yaml")).is_ok());
+    assert!(load_folder_file(&dir.join("link.yaml")).is_err());
+    finish(&dir);
+}
+
+#[test]
+fn a_file_stamp_follows_size_and_modification_time() {
+    let file = |len: u64, seconds: u64| FolderFile {
+        path: PathBuf::from("a.yaml"),
+        len,
+        modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
+    };
+    assert_eq!(FileStamp::of(&file(5, 2)), FileStamp::of(&file(5, 2)));
+    assert_ne!(FileStamp::of(&file(5, 2)), FileStamp::of(&file(6, 2)));
+    assert_ne!(FileStamp::of(&file(5, 2)), FileStamp::of(&file(5, 3)));
+    assert_eq!(FileStamp::of(&file(5, 2)).modified_ms, Some(2_000));
+    let no_time = FolderFile {
+        modified: None,
+        ..file(5, 2)
+    };
+    assert_eq!(FileStamp::of(&no_time).modified_ms, None);
+}

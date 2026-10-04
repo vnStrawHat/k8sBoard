@@ -68,7 +68,7 @@ No migration: no build ever wrote the old names (structure.md: no compatibility 
 | 2 | `logs`, `logs.tail_lines`, `logs.show_timestamps`, `logs.wrap_lines`, `logs.show_json`, `terminal`, `terminal.default_shell`, `terminal.scrollback_lines`, `terminal.font_size` |
 | 3 | `registry.clusters.color` |
 | 4 | `registry.clusters.proxy`, `registry.clusters.proxy.url` |
-| 5 | `registry.kubeconfig_folders` |
+| 5 | `registry.kubeconfig_folders`, `registry.last_used_stamp`, `registry.last_used_stamp.len`, `registry.last_used_stamp.modified_ms` |
 
 `full_settings()` in `settings_tests.rs` sets every new field to a non-default value, including `ClusterProxy::Url`, so each key appears. `default_file_is_minimal` stays `{"version":1,"theme":"system","registry":{}}`.
 

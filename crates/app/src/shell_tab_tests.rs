@@ -997,3 +997,55 @@ fn an_attach_tab_ends_with_the_exit_code(cx: &mut TestAppContext) {
     let text = screen_text(&attach, cx).join("\n");
     assert!(text.contains("[process exited with code 137]"), "{text}");
 }
+
+#[gpui_kit::test]
+fn a_tab_takes_the_saved_shell_and_scrollback_but_an_attach_has_no_shell_choice(
+    cx: &mut TestAppContext,
+) {
+    use crate::settings::{AppSettings, Settings, TerminalSettings};
+    use crate::settings_store::{LoadedSettings, WriteMode};
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        AppSettings::install(
+            LoadedSettings {
+                settings: Settings {
+                    terminal: TerminalSettings {
+                        default_shell: ShellCommand::Bash,
+                        ..TerminalSettings::default()
+                    },
+                    ..Settings::default()
+                },
+                writes: WriteMode::Disabled,
+                notice: None,
+            },
+            cx,
+        );
+    });
+    cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            let exec = cx.new(|cx| {
+                ShellTab::new(
+                    target(),
+                    "stg-b".to_owned(),
+                    WeakEntity::new_invalid(),
+                    window,
+                    cx,
+                )
+            });
+            assert_eq!(exec.read(cx).command(), ShellCommand::Bash);
+            let attach = cx.new(|cx| {
+                ShellTab::new(
+                    target(),
+                    "stg-b".to_owned(),
+                    WeakEntity::new_invalid(),
+                    window,
+                    cx,
+                )
+                .with_kind(ShellKind::Attach)
+            });
+            assert_eq!(attach.read(cx).command(), ShellCommand::Auto);
+            cx.new(|_| Host { tab: exec })
+        })
+        .expect("open the test window");
+    });
+}

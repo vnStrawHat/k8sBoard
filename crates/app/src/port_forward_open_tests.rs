@@ -227,11 +227,11 @@ fn audit_lines(dir: &std::path::Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// A loopback port that is free now.
 /// 30 s of 20 ms polls: a loaded machine (a full workspace run) can take several seconds to
 /// start a forward, and the wait only costs time on a failure.
 const WAIT_POLLS: usize = 1_500;
 
+/// A loopback port that is free now.
 fn free_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind a free port");
     listener.local_addr().expect("a local address").port()

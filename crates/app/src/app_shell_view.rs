@@ -116,6 +116,12 @@ impl AppShell {
             return;
         }
         let last_used = cluster.clone();
-        AppSettings::update(cx, |settings| settings.registry.last_used = Some(last_used));
+        // A file of a watched folder is remembered as it is now: if it changes, the next start
+        // asks instead of running what someone wrote into the folder since.
+        let stamp = self.catalog.read(cx).folder_stamp_of(&cluster.kubeconfig);
+        AppSettings::update(cx, |settings| {
+            settings.registry.last_used = Some(last_used);
+            settings.registry.last_used_stamp = stamp;
+        });
     }
 }

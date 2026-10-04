@@ -75,7 +75,11 @@ pub(crate) fn open_log_fixture(
     let kubeconfig = Kubeconfig::parse(FIXTURE_YAML, &path).expect("the fixture parses");
     let summary = kubeconfig.contexts()[0].clone();
     let own_connection = runtime
-        .block_on(ClusterConnection::open(&kubeconfig, "prod-a"))
+        .block_on(ClusterConnection::open(
+            &kubeconfig,
+            "prod-a",
+            &cluster::ProxyChoice::Kubeconfig,
+        ))
         .expect("a client builds without a round trip");
     let (connection, api) = {
         let _guard = runtime.enter();

@@ -16,6 +16,8 @@
 | Path | Rule |
 |---|---|
 | **Start** (`AppShell::on_catalog_changed` → `resolve_start`, today falling back to `kubeconfigs.first()`) | a folder context starts only when it **is** the user-picked `last_used` (exact `ClusterRef`). `resolve_start` gets the chain and registry kubeconfigs only (`ClusterCatalog::start_kubeconfigs()`), so `--context`, `current-context`, and the first-file fallback never pick a folder file. With no start candidate the shell stays without a session, shows a new empty state `No cluster selected. Pick one in the switcher.`, and opens the switcher. A folder file appearing later while no session runs never starts one, except that same `last_used` |
+| **Pick fingerprint** | `registry.last_used_stamp` (`len`, `modified_ms`) is saved with a folder `last_used`; the file starts on its own only while unchanged since that pick. Changed, or no stamp: no start, the switcher opens. The start also waits while that file is still loading |
+| **Ctrl 1â9** | a folder row has no number (`shortcut: None`); the numbers below it do not shift |
 | **Health probe** (`HealthBoard::due` → `is_probed_automatically`) | `ProbeCandidate` gains `origin: RowOrigin`; `due` skips `RowOrigin::Folder` whatever its auth kind (a dropped file can point `tokenFile` at a real token and `server` at any host). Folder rows are probed only by the explicit per-row action, as exec rows are today |
 | **Connect** | only an explicit pick: switcher click or Enter, Ctrl 1–9, palette `@`, Test connection |
 

@@ -132,6 +132,7 @@ fn cluster_row(context: &str, label: &str, shortcut: u8, is_active: bool) -> Swi
         environment: Environment::Staging,
         health: RowHealth::NotChecked,
         failure: None,
+        note: None,
         shortcut: Some(shortcut),
         is_active,
         search_text: format!("{label}\n{context}\nstg\nconfig").to_lowercase(),

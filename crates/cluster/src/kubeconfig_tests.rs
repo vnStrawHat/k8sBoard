@@ -565,9 +565,6 @@ users:
       client-certificate: certs/client.pem
       client-key: certs/client.key
       tokenFile: tokens/token
-  - name: e
-    user:
-      exec: { apiVersion: client.authentication.k8s.io/v1, command: './bin/plugin' }
   - name: bare
     user:
       exec: { apiVersion: client.authentication.k8s.io/v1, command: aws }
@@ -619,4 +616,95 @@ fn parse_file_error_names_the_path_and_no_content() {
     };
     assert!(matches!(error, KubeconfigError::Parse { .. }));
     assert!(!format!("{error} {error:?}").contains("s3cr3t"));
+}
+
+#[test]
+fn parse_file_resolves_an_exec_command_with_either_separator() {
+    let yaml = "\
+clusters:
+  - name: c
+    cluster: { server: 'https://h:6443' }
+users:
+  - name: slash
+    user:
+      exec: { apiVersion: client.authentication.k8s.io/v1, command: './bin/plugin' }
+  - name: backslash
+    user:
+      exec: { apiVersion: client.authentication.k8s.io/v1, command: '.\\bin\\plugin' }
+  - name: bare
+    user:
+      exec: { apiVersion: client.authentication.k8s.io/v1, command: aws }
+contexts:
+  - name: ctx
+    context: { cluster: c, user: slash }
+";
+    let path = Path::new("watched").join("team.yaml");
+    let parsed = Kubeconfig::parse_file(yaml, &path).expect("parses");
+    let command = |name: &str| {
+        parsed
+            .document()
+            .auth_infos
+            .iter()
+            .find(|named| named.name == name)
+            .and_then(|named| named.auth_info.as_ref())
+            .and_then(|auth| auth.exec.as_ref())
+            .and_then(|exec| exec.command.clone())
+            .expect("an exec command")
+    };
+    // Resolved against the file's folder on every host, so a dropped file runs only what is
+    // next to it, never something found through the working directory.
+    for name in ["slash", "backslash"] {
+        assert!(
+            command(name).starts_with("watched"),
+            "{name}: {}",
+            command(name)
+        );
+    }
+    assert_eq!(command("bare"), "aws");
+}
+
+#[test]
+fn connection_info_names_the_credential_files_and_the_exec_command() {
+    let yaml = "\
+clusters:
+  - name: c
+    cluster: { server: 'https://h:6443' }
+users:
+  - name: files
+    user: { tokenFile: /tokens/t, client-certificate: /certs/c.pem, client-key: /certs/c.key }
+  - name: plugin
+    user:
+      exec: { apiVersion: client.authentication.k8s.io/v1, command: /opt/bin/aws-iam }
+  - name: inline
+    user: { token: fixture-token-do-not-print }
+contexts:
+  - name: files
+    context: { cluster: c, user: files }
+  - name: plugin
+    context: { cluster: c, user: plugin }
+  - name: inline
+    context: { cluster: c, user: inline }
+";
+    let kubeconfig = from_yaml(yaml);
+    let info = |context: &str| {
+        let summary = kubeconfig
+            .contexts()
+            .iter()
+            .find(|summary| summary.name == context)
+            .expect("the context exists");
+        kubeconfig.connection_info(summary)
+    };
+    assert_eq!(
+        info("files").credential_files,
+        ["/tokens/t", "/certs/c.pem", "/certs/c.key"]
+    );
+    assert_eq!(info("files").exec_command, None);
+    assert_eq!(
+        info("plugin").exec_command.as_deref(),
+        Some("/opt/bin/aws-iam")
+    );
+    // An inline token has no file, and its value is never in the info.
+    let inline = info("inline");
+    assert!(inline.credential_files.is_empty());
+    assert!(!format!("{inline:?}").contains("fixture-token"));
 }

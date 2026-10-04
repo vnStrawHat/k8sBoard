@@ -382,6 +382,7 @@ fn render_row(
         .when(row.health == RowHealth::Unreachable, |button| {
             button.opacity(0.55)
         })
+        .when_some(row.note.clone(), |button, note| button.tooltip(note))
         .child(
             h_flex()
                 .w_full()

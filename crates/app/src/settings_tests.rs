@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef};
 use crate::environment::{ClusterColor, Environment};
+use crate::kubeconfig_folder::FileStamp;
 use crate::port_forwards::{ForwardPreset, ForwardSpec, LocalPortSpec, TargetSpec};
 use crate::settings_store::settings_path;
 use crate::table_sort::SortDirection;
@@ -51,6 +52,10 @@ fn full_settings() -> Settings {
                 proxy: Some(ClusterProxy::Url("http://proxy.example:3128".to_owned())),
             }],
             last_used: Some(cluster),
+            last_used_stamp: Some(FileStamp {
+                len: 120,
+                modified_ms: Some(1_730_000_000_000),
+            }),
         },
         port_forward: PortForwardSettings {
             presets: vec![ForwardPreset {
@@ -212,6 +217,9 @@ fn settings_keys_are_the_allow_list() {
             "registry.last_used",
             "registry.last_used.context",
             "registry.last_used.kubeconfig",
+            "registry.last_used_stamp",
+            "registry.last_used_stamp.len",
+            "registry.last_used_stamp.modified_ms",
             "tables",
             "tables.pods",
             "tables.pods.hidden",

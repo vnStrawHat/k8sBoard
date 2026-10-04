@@ -802,3 +802,42 @@ fn the_folder_line_counts_what_it_found(cx: &mut TestAppContext) {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[gpui_kit::test]
+fn the_watcher_starts_in_the_background_scan_never_on_the_calling_thread(cx: &mut TestAppContext) {
+    use crate::cluster_catalog::folders::WATCHER_STARTS;
+    let dir = temp_dir("folder-watcher-thread");
+    write_kubeconfig(&dir, "a.yaml", "from-a");
+    install_folder_settings(std::slice::from_ref(&dir), &[], cx);
+    let before = WATCHER_STARTS.with(std::cell::Cell::get);
+    let catalog = cx.new(|cx| ClusterCatalog::new(Vec::new(), cx));
+    // Creating the catalog returns before any watcher exists: an offline share could stall it.
+    assert_eq!(WATCHER_STARTS.with(std::cell::Cell::get), before);
+    cx.run_until_parked();
+    assert_eq!(WATCHER_STARTS.with(std::cell::Cell::get), before + 1);
+    // A rescan keeps the watcher it has.
+    rescan_after_debounce(&dir, &catalog, cx);
+    assert_eq!(WATCHER_STARTS.with(std::cell::Cell::get), before + 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn a_folder_file_that_is_loading_is_reported_as_loading(cx: &mut TestAppContext) {
+    let dir = temp_dir("folder-file-loading");
+    let file = write_kubeconfig(&dir, "a.yaml", "from-a");
+    install_folder_settings(std::slice::from_ref(&dir), &[], cx);
+    let catalog = cx.new(|cx| ClusterCatalog::new(Vec::new(), cx));
+    let loading =
+        |cx: &TestAppContext| catalog.read_with(cx, |catalog, _| catalog.is_file_loading(&file));
+    assert!(!loading(cx), "not listed yet");
+    cx.run_until_parked();
+    assert!(!loading(cx), "loaded");
+    assert!(catalog.read_with(cx, |catalog, _| catalog.folder_stamp_of(&file).is_some()));
+    assert!(
+        catalog
+            .read_with(cx, |catalog, _| catalog
+                .folder_stamp_of(&dir.join("other.yaml")))
+            .is_none()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

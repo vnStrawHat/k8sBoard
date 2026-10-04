@@ -13,8 +13,8 @@ use gpui_kit::{Context, Task};
 
 use super::{CatalogNotice, ClusterCatalog, LoadRequest, PartSource, PathStyle, same_path_text};
 use crate::kubeconfig_folder::{
-    FolderFile, FolderScan, FolderStatus, FolderSummary, RESCAN_DEBOUNCE, RESCAN_MAX_WAIT,
-    diff_scan, scan_folder,
+    FileStamp, FolderFile, FolderScan, FolderStatus, FolderSummary, RESCAN_DEBOUNCE,
+    RESCAN_MAX_WAIT, diff_scan, scan_folder,
 };
 use crate::launch_options::standalone_files;
 use crate::settings::AppSettings;
@@ -38,20 +38,31 @@ pub(super) struct WatchedFolder {
 }
 
 impl WatchedFolder {
-    fn new(path: PathBuf, events: UnboundedSender<FolderEvent>) -> Self {
+    /// The watcher comes later, with the first listing: starting it can block on a folder that
+    /// is slow to answer (an offline network share), and that must not stall the main thread.
+    fn new(path: PathBuf) -> Self {
         Self {
-            _watcher: start_watcher(&path, events),
             path,
             status: FolderStatus::Scanning,
             files: Vec::new(),
             skipped_over_cap: 0,
+            _watcher: None,
         }
     }
 }
 
+/// What a listing does about the watch of its folder.
+enum WatchStart {
+    /// The first listing of a folder: start the watcher too, on the same background thread.
+    Start(UnboundedSender<FolderEvent>),
+    /// A rescan: the folder is already watched.
+    Keep,
+}
+
 /// Watches `folder` (not its subfolders). Every event, errors included, only sends the folder on
 /// the channel; the catalog task rescans it after the debounce. `None` when the OS refuses the
-/// watch (a missing folder): the folder is looked at again at the next start.
+/// watch (a missing folder): the folder is looked at again at the next start. Blocking: call it
+/// off the UI thread.
 #[cfg(not(test))]
 fn start_watcher(
     folder: &Path,
@@ -79,10 +90,18 @@ fn start_watcher(
     Some(watcher)
 }
 
-/// Tests never start a real watcher: they send `FolderEvent`s on the channel instead.
+/// Tests never start a real watcher: they send `FolderEvent`s on the channel instead. The
+/// number of starts on this thread is counted, so a test can see when a start happens.
 #[cfg(test)]
 fn start_watcher(_: &Path, _: UnboundedSender<FolderEvent>) -> Option<notify::RecommendedWatcher> {
+    WATCHER_STARTS.with(|starts| starts.set(starts.get() + 1));
     None
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The test executor runs every task on the test's own thread, so this counts one test only.
+    pub(super) static WATCHER_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The task that turns events into rescans: one rescan `RESCAN_DEBOUNCE` after the last event of a
@@ -166,8 +185,7 @@ impl ClusterCatalog {
             match previous.iter().position(|have| have.path == path) {
                 Some(index) => self.folders.push(previous.swap_remove(index)),
                 None => {
-                    self.folders
-                        .push(WatchedFolder::new(path.clone(), self.folder_events.clone()));
+                    self.folders.push(WatchedFolder::new(path.clone()));
                     added.push(path);
                 }
             }
@@ -177,25 +195,36 @@ impl ClusterCatalog {
                 !matches!(notice, CatalogNotice::FolderMissing { path, .. } if *path == removed.path)
             });
         }
-        Self::scan(added, cx);
+        for folder in added {
+            Self::scan(folder, WatchStart::Start(self.folder_events.clone()), cx);
+        }
         cx.notify();
     }
 
-    /// Lists `folders` on the background executor and applies each result when it arrives.
-    fn scan(folders: Vec<PathBuf>, cx: &mut Context<Self>) {
-        for folder in folders {
-            cx.spawn(async move |this, cx| {
-                let listed = cx
-                    .background_executor()
-                    .spawn({
-                        let folder = folder.clone();
-                        async move { scan_folder(&folder) }
-                    })
-                    .await;
-                let _ = this.update(cx, |catalog, cx| catalog.finish_scan(&folder, listed, cx));
-            })
-            .detach();
-        }
+    /// Lists `folder` on the background executor, starting its watcher there first when asked,
+    /// and applies the result when it arrives.
+    fn scan(folder: PathBuf, watch: WatchStart, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let (watcher, listed) = cx
+                .background_executor()
+                .spawn({
+                    let folder = folder.clone();
+                    async move {
+                        // Watching first: a change between the two steps then costs one more
+                        // rescan, never a missed one.
+                        let watcher = match watch {
+                            WatchStart::Start(events) => start_watcher(&folder, events),
+                            WatchStart::Keep => None,
+                        };
+                        (watcher, scan_folder(&folder))
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |catalog, cx| {
+                catalog.finish_scan(&folder, listed, watcher, cx);
+            });
+        })
+        .detach();
     }
 
     /// A debounced burst of events: the folders it named are listed again. A folder that was
@@ -211,7 +240,9 @@ impl ClusterCatalog {
             .collect();
         // A count only: a folder path is the user's, and nothing here traces file names.
         tracing::debug!(folders = watched.len(), "rescanning watched folders");
-        Self::scan(watched, cx);
+        for folder in watched {
+            Self::scan(folder, WatchStart::Keep, cx);
+        }
     }
 
     /// Applies one listing: new files load through `reconcile_standalone`, a changed file loads
@@ -221,11 +252,15 @@ impl ClusterCatalog {
         &mut self,
         folder: &Path,
         listed: io::Result<FolderScan>,
+        watcher: Option<notify::RecommendedWatcher>,
         cx: &mut Context<Self>,
     ) {
         let Some(watched) = self.folders.iter_mut().find(|have| have.path == folder) else {
             return;
         };
+        if watcher.is_some() {
+            watched._watcher = watcher;
+        }
         let mut reloads = Vec::new();
         match listed {
             Err(error) => {
@@ -297,6 +332,37 @@ impl ClusterCatalog {
             standalone.source == PartSource::Folder
                 && same_path_text(&standalone.path.to_string_lossy(), &text, PathStyle::HOST)
         })
+    }
+
+    /// Whether the file at `path` is a listed standalone file that is still loading. A start that
+    /// waits for the file `last_used` names reads this: until the load ends, the cluster is not
+    /// there to find, and the start would pick another one.
+    pub(crate) fn is_file_loading(&self, path: &Path) -> bool {
+        let text = path.to_string_lossy();
+        self.standalone.iter().any(|standalone| {
+            matches!(standalone.part, super::CatalogPart::Loading)
+                && same_path_text(&standalone.path.to_string_lossy(), &text, PathStyle::HOST)
+        })
+    }
+
+    /// What the last scan saw of the watched-folder file at `path`; `None` for any other file.
+    pub(crate) fn folder_stamp_of(&self, path: &Path) -> Option<FileStamp> {
+        let text = path.to_string_lossy();
+        self.folders
+            .iter()
+            .flat_map(|folder| &folder.files)
+            .find(|file| same_path_text(&file.path.to_string_lossy(), &text, PathStyle::HOST))
+            .map(FileStamp::of)
+    }
+
+    /// The watched folder that lists `path` as its own file: `None` for a chain or registry file,
+    /// even one that lies in a watched folder.
+    pub(crate) fn folder_source_of(&self, path: &Path) -> Option<&Path> {
+        if self.is_folder_source(path) {
+            self.watched_folder_of(path)
+        } else {
+            None
+        }
     }
 
     /// The watched folder that holds `path`.

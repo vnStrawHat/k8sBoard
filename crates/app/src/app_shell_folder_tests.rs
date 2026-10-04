@@ -17,7 +17,7 @@ use super::*;
 use crate::cluster_catalog::{CatalogHandle, FolderEvent};
 use crate::cluster_registry::{ClusterRef, ClusterRegistry};
 use crate::cluster_runtime::ClusterRuntime;
-use crate::kubeconfig_folder::RESCAN_DEBOUNCE;
+use crate::kubeconfig_folder::{FileStamp, FolderFile, RESCAN_DEBOUNCE};
 use crate::launch_options::{LaunchRequest, kubeconfig_chain, parse_launch_options};
 use crate::settings::Settings;
 use crate::settings_store::{LoadedSettings, WriteMode};
@@ -47,18 +47,30 @@ fn drop_file(folder: &Path, name: &str, context: &str) -> PathBuf {
 }
 
 /// The shell over an empty chain, with `folder` watched and `last_used` saved.
+type Opened = (
+    tokio::runtime::Runtime,
+    WindowHandle<Root>,
+    Entity<AppShell>,
+);
+
 fn open_shell(
     folder: &Path,
     last_used: Option<ClusterRef>,
     extra: &[&str],
     cx: &mut TestAppContext,
-) -> (
-    tokio::runtime::Runtime,
-    WindowHandle<Root>,
-    Entity<AppShell>,
-) {
-    // No `--kubeconfig`: with explicit files only a `last_used` among them counts (0025), and the
-    // chain is empty, so the watched folder is the only source.
+) -> Opened {
+    open_shell_over(folder, &[], last_used, extra, cx)
+}
+
+/// `chain` is the `KUBECONFIG` list. There is never a `--kubeconfig`: with explicit files only a
+/// `last_used` among them counts (0025), and the watched folder would never be picked.
+fn open_shell_over(
+    folder: &Path,
+    chain: &[PathBuf],
+    last_used: Option<ClusterRef>,
+    extra: &[&str],
+    cx: &mut TestAppContext,
+) -> Opened {
     let args = extra.iter().map(|arg| (*arg).to_owned());
     let Ok(LaunchRequest::Run(options)) = parse_launch_options(args) else {
         panic!("the launch flags are valid");
@@ -91,7 +103,8 @@ fn open_shell(
             },
             cx,
         );
-        let chain = kubeconfig_chain(options.kubeconfig.clone(), None, None);
+        let env = (!chain.is_empty()).then(|| std::env::join_paths(chain).expect("paths join"));
+        let chain = kubeconfig_chain(options.kubeconfig.clone(), env, None);
         CatalogHandle::install(chain, cx);
         let bounds = Bounds {
             origin: Point::default(),
@@ -145,6 +158,20 @@ fn needs_pick(shell: &Entity<AppShell>, cx: &TestAppContext) -> bool {
 
 fn switcher_is_open(shell: &Entity<AppShell>, cx: &TestAppContext) -> bool {
     shell.read_with(cx, |shell, _| shell.switcher.is_open())
+}
+
+/// What the last scan would record of `path`: the stamp `last_used` keeps.
+fn stamp_of(path: &Path) -> FileStamp {
+    let metadata = std::fs::metadata(path).expect("the file exists");
+    FileStamp::of(&FolderFile {
+        path: path.to_path_buf(),
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn save_stamp(stamp: Option<FileStamp>, cx: &mut TestAppContext) {
+    cx.update(|cx| AppSettings::update(cx, |settings| settings.registry.last_used_stamp = stamp));
 }
 
 fn cluster_in(file: &Path, context: &str) -> ClusterRef {
@@ -210,9 +237,65 @@ fn folder_file_starts_when_it_is_last_used(cx: &mut TestAppContext) {
     drop_file(&folder, "other.yaml", "other");
     let (_runtime, window, shell) =
         open_shell(&folder, Some(cluster_in(&file, "dropped")), &[], cx);
+    save_stamp(Some(stamp_of(&file)), cx);
     settle(window, cx);
     assert_eq!(active_context(&shell, cx).as_deref(), Some("dropped"));
     assert!(!needs_pick(&shell, cx));
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[gpui_kit::test]
+fn a_folder_file_that_changed_since_the_pick_asks_instead_of_starting(cx: &mut TestAppContext) {
+    let folder = watched_folder("changed");
+    let file = drop_file(&folder, "dropped.yaml", "dropped");
+    // The stamp is of the file as it was when the user picked it.
+    let picked = stamp_of(&file);
+    drop_file(&folder, "dropped.yaml", "dropped-and-then-rewritten");
+    let (_runtime, window, shell) = open_shell(
+        &folder,
+        Some(cluster_in(&file, "dropped-and-then-rewritten")),
+        &[],
+        cx,
+    );
+    save_stamp(Some(picked), cx);
+    settle(window, cx);
+    assert_eq!(active_context(&shell, cx), None);
+    assert!(needs_pick(&shell, cx));
+    assert!(switcher_is_open(&shell, cx));
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[gpui_kit::test]
+fn a_folder_file_without_a_saved_stamp_asks_instead_of_starting(cx: &mut TestAppContext) {
+    let folder = watched_folder("no-stamp");
+    let file = drop_file(&folder, "dropped.yaml", "dropped");
+    let (_runtime, window, shell) =
+        open_shell(&folder, Some(cluster_in(&file, "dropped")), &[], cx);
+    settle(window, cx);
+    assert_eq!(active_context(&shell, cx), None);
+    assert!(needs_pick(&shell, cx));
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[gpui_kit::test]
+fn a_chain_file_does_not_start_before_the_picked_folder_file_has_loaded(cx: &mut TestAppContext) {
+    let folder = watched_folder("chain-race");
+    let chain_dir = watched_folder("chain-race-chain");
+    let chain = drop_file(&chain_dir, "chain.yaml", "from-chain");
+    let file = drop_file(&folder, "dropped.yaml", "dropped");
+    let (_runtime, window, shell) = open_shell_over(
+        &folder,
+        std::slice::from_ref(&chain),
+        Some(cluster_in(&file, "dropped")),
+        &[],
+        cx,
+    );
+    save_stamp(Some(stamp_of(&file)), cx);
+    settle(window, cx);
+    // The chain loads first and has a current-context; the picked file is still loading then,
+    // and the start waits for it instead of taking the chain's cluster.
+    assert_eq!(active_context(&shell, cx).as_deref(), Some("dropped"));
+    let _ = std::fs::remove_dir_all(&chain_dir);
     let _ = std::fs::remove_dir_all(&folder);
 }
 
@@ -223,7 +306,8 @@ fn the_picked_cluster_starts_when_its_file_appears_later(cx: &mut TestAppContext
     let (_runtime, window, shell) = open_shell(&folder, Some(cluster_in(&file, "late")), &[], cx);
     settle(window, cx);
     assert_eq!(active_context(&shell, cx), None);
-    drop_file(&folder, "late.yaml", "late");
+    let file = drop_file(&folder, "late.yaml", "late");
+    save_stamp(Some(stamp_of(&file)), cx);
     folder_changed(&folder, window, cx);
     assert_eq!(active_context(&shell, cx).as_deref(), Some("late"));
     let _ = std::fs::remove_dir_all(&folder);

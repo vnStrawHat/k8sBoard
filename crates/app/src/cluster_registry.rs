@@ -12,6 +12,7 @@ use cluster::{
 use serde::{Deserialize, Serialize};
 
 use crate::environment::{ClusterColor, Environment, guess_environment};
+use crate::kubeconfig_folder::FileStamp;
 use crate::write_guard::ConfirmMode;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -28,6 +29,10 @@ pub(crate) struct ClusterRegistry {
     pub(crate) clusters: Vec<ClusterEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) last_used: Option<ClusterRef>,
+    /// The size and modification time of `last_used` when its file belongs to a watched folder
+    /// (spec 0043): such a file starts on its own only while it is unchanged since that pick.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_used_stamp: Option<FileStamp>,
 }
 
 /// A cluster is its context name in the file that defined it: the same name appears in many files.

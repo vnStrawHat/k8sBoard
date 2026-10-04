@@ -37,7 +37,7 @@ fn groups_of(
         kubeconfigs,
         registry,
         |path| chain.iter().any(|file| path == Path::new(file)),
-        |_| false,
+        |_| None,
         owned,
     )
 }
@@ -701,7 +701,7 @@ fn folder_rows_cannot_be_removed() {
         &[&file],
         &ClusterRegistry::default(),
         |_| false,
-        |path| path == Path::new("watched/a.yaml"),
+        |path| (path == Path::new("watched/a.yaml")).then(|| PathBuf::from("watched")),
         None,
     );
     let row = &groups[0].rows[0];
@@ -752,4 +752,64 @@ fn watched_folders_are_added_once_and_stopped_without_touching_clusters() {
     assert!(registry.kubeconfig_folders.is_empty());
     // The overrides of a vanished file stay (0024 open item 4).
     assert_eq!(registry.clusters, [entry("one", "a.yaml")]);
+}
+
+#[test]
+fn a_folder_row_says_what_its_file_reads_and_runs() {
+    let info = |files: &[&str], exec: Option<&str>| ConnectionInfo {
+        server: None,
+        auth: cluster::AuthKind::None,
+        proxy: None,
+        credential_files: files.iter().map(|file| (*file).to_owned()).collect(),
+        exec_command: exec.map(str::to_owned),
+    };
+    let folder = Path::new("watched");
+    assert_eq!(
+        folder_trust_note(folder, &info(&["/etc/secret/token", "/k/c.pem"], None)),
+        "From watched folder watched: reads /etc/secret/token, /k/c.pem"
+    );
+    assert_eq!(
+        folder_trust_note(folder, &info(&[], Some("/opt/bin/aws-iam"))),
+        "From watched folder watched: runs /opt/bin/aws-iam"
+    );
+    assert_eq!(
+        folder_trust_note(folder, &info(&["/t"], Some("aws"))),
+        "From watched folder watched: reads /t / runs aws"
+    );
+    assert_eq!(
+        folder_trust_note(folder, &info(&[], None)),
+        "From watched folder watched: reads no credential file, runs no command"
+    );
+}
+
+#[test]
+fn only_folder_rows_carry_the_trust_note() {
+    let yaml = "\
+clusters:
+  - name: c
+    cluster: { server: 'https://127.0.0.1:1' }
+users:
+  - name: u
+    user: { tokenFile: /etc/secret/token }
+contexts:
+  - name: prod-1
+    context: { cluster: c, user: u }
+";
+    let file = Kubeconfig::parse(yaml, Path::new("watched/a.yaml")).expect("parses");
+    let note_of = |is_folder: bool| {
+        let groups = cluster_groups(
+            &[&file],
+            &ClusterRegistry::default(),
+            |_| false,
+            |_| is_folder.then(|| PathBuf::from("watched")),
+            None,
+        );
+        groups[0].rows[0].trust_note.clone()
+    };
+    let note = note_of(true).expect("a folder row has a note");
+    assert!(
+        note.starts_with("From watched folder watched: reads /etc/secret/token"),
+        "{note}"
+    );
+    assert_eq!(note_of(false), None);
 }
