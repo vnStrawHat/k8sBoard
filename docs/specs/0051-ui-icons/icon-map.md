@@ -69,7 +69,7 @@ Screen header (`workspace.rs`, before the title) and palette rows (`command_pale
 | Show remaining resources, Show selected pods, Browse instances, View pods on node | `List` |
 | View values / View manifest (Helm) | `FileText` / `FileCode` |
 | Open URL, Open in browser | `ExternalLink` |
-| Set as default namespace | `Star` |
+| Set as default namespace | none (a `.checked()` item; the icon would replace the check mark) |
 | Copy kubectl command | `Terminal` |
 | Copy image, Copy message, Copy object name, Copy value ▸, Copy local address | `Copy` |
 | Filter similar | `ListFilter` |
