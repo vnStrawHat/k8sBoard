@@ -1,5 +1,6 @@
 use futures::Stream;
 use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 use crate::connection::ClusterConnection;
 use crate::namespace::NamespaceScope;
@@ -12,6 +13,14 @@ use crate::workload::{
 
 /// The API server default for `spec.progressDeadlineSeconds`.
 const DEFAULT_PROGRESS_DEADLINE_SECONDS: u32 = 600;
+
+/// The newest writer of the pod template, from `metadata.managedFields`: the field manager name
+/// (what kubectl, Argo CD, Helm, or a CI tool set), not a user identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldWriter {
+    pub manager: String,
+    pub at: jiff::Timestamp,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeploymentSummary {
@@ -37,6 +46,8 @@ pub struct DeploymentSummary {
     pub selector: Vec<String>,
     pub containers: Vec<TemplateContainer>,
     pub conditions: Vec<WorkloadCondition>,
+    /// The newest manager that wrote `spec.template`.
+    pub template_change: Option<FieldWriter>,
 }
 
 impl ClusterConnection {
@@ -100,7 +111,34 @@ pub(crate) fn deployment_summary(deployment: &Deployment) -> DeploymentSummary {
                 )
             })
             .collect(),
+        template_change: template_writer(&deployment.metadata),
     }
+}
+
+/// Among the main-resource `Update` and `Apply` entries that own `f:spec` > `f:template`, the
+/// newest by time (a tie goes to the later entry). Only the name and time are kept; the
+/// `fieldsV1` tree is dropped here.
+fn template_writer(metadata: &ObjectMeta) -> Option<FieldWriter> {
+    metadata
+        .managed_fields
+        .iter()
+        .flatten()
+        .filter(|entry| entry.subresource.as_deref().is_none_or(str::is_empty))
+        .filter(|entry| matches!(entry.operation.as_deref(), Some("Update" | "Apply")))
+        .filter(|entry| {
+            entry
+                .fields_v1
+                .as_ref()
+                .is_some_and(|fields| fields.0.pointer("/f:spec/f:template").is_some())
+        })
+        .filter_map(|entry| {
+            let manager = entry.manager.as_deref().filter(|name| !name.is_empty())?;
+            Some(FieldWriter {
+                manager: manager.to_owned(),
+                at: entry.time.as_ref()?.0,
+            })
+        })
+        .max_by_key(|writer| writer.at)
 }
 
 #[cfg(test)]

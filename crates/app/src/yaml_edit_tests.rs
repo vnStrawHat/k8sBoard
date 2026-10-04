@@ -74,6 +74,7 @@ fn footer_follows_the_preview_and_the_text() {
         changes: Vec::new(),
         more_changes: 0,
         checks: Vec::new(),
+        quota: QuotaLine::None,
         rows: Vec::new(),
         elapsed: Duration::from_millis(412),
     }));
@@ -240,4 +241,20 @@ fn a_long_path_is_cut_in_the_middle_and_keeps_its_field() {
 fn a_short_path_is_shown_whole() {
     assert_eq!(elide_middle("spec.replicas", 34), "spec.replicas");
     assert_eq!(elide_middle("abcdef", 6), "abcdef");
+}
+
+#[test]
+fn history_tab_only_for_deployments() {
+    use super::yaml_edit_panels::edit_tabs;
+    assert_eq!(
+        edit_tabs(ObjectKind::Deployment),
+        [EditTab::Editor, EditTab::Diff, EditTab::History]
+    );
+    for kind in [
+        ObjectKind::Service,
+        ObjectKind::StatefulSet,
+        ObjectKind::ConfigMap,
+    ] {
+        assert_eq!(edit_tabs(kind), [EditTab::Editor, EditTab::Diff]);
+    }
 }

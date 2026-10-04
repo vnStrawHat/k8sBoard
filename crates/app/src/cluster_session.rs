@@ -2654,6 +2654,32 @@ impl LiveCluster {
             .filter(|explorer| explorer.kind == kind)
     }
 
+    /// The selector of a Deployment as this session lists it, `key=value` terms joined by `,` (the
+    /// syntax of a label selector query): the Deployments screen when it is shown, else the
+    /// Deployments condition feed. `None` while neither has the Deployment.
+    pub(crate) fn deployment_selector(&self, namespace: &str, name: &str) -> Option<String> {
+        let on_screen = self
+            .kind_list(ResourceKind::Deployments)
+            .and_then(|kind_list| kind_list.list.ready_items())
+            .into_iter()
+            .flatten()
+            .map(|row| &row.object);
+        let in_feed = self
+            .issue_feeds
+            .condition(ResourceKind::Deployments)
+            .and_then(|feed| feed.list.ready_items())
+            .into_iter()
+            .flatten();
+        on_screen.chain(in_feed).find_map(|object| match object {
+            KindObject::Deployment(deployment)
+                if deployment.namespace == namespace && deployment.name == name =>
+            {
+                Some(deployment.selector.join(","))
+            }
+            _ => None,
+        })
+    }
+
     fn start(
         connected: Connected,
         explorer_kind: Option<ResourceKind>,

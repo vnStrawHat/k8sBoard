@@ -115,6 +115,7 @@ mod tests {
             selector: selector.iter().map(|term| (*term).to_owned()).collect(),
             containers: Vec::new(),
             conditions: Vec::new(),
+            template_change: None,
         }
     }
 

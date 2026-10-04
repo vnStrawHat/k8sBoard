@@ -7,15 +7,17 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use cluster::{ClusterConnection, EnvValues, ObjectKind, ObjectRef, ReplicaSetSummary};
-use gpui_kit::component::button::Button;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Div, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder as _,
-    uniform_list,
+    AnyElement, App, Context, Div, Entity, IntoElement, ParentElement as _, Render, SharedString,
+    Styled as _, Task, UniformListScrollHandle, WeakEntity, Window, div,
+    prelude::FluentBuilder as _, uniform_list,
 };
 
+use crate::app_shell::AppShell;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
 use crate::table_selection::ResourceKey;
@@ -40,11 +42,14 @@ pub(crate) struct RevisionSide {
     pub(crate) tag: Option<String>,
     /// The revision the Deployment runs now.
     pub(crate) is_current: bool,
+    /// When the ReplicaSet was created; the history list shows its age.
+    pub(crate) created_at: Option<jiff::Timestamp>,
 }
 
 impl RevisionSide {
     pub(crate) fn of(replica_set: &ReplicaSetSummary, is_current: bool) -> Self {
         Self {
+            created_at: replica_set.created_at,
             replica_set: replica_set.name.clone(),
             revision: replica_set
                 .revision
@@ -60,15 +65,21 @@ impl RevisionSide {
         }
     }
 
-    /// `rev 12 · v2.1`, with `(current)` after the side the Deployment runs.
-    fn label(&self) -> String {
+    /// `rev 12 · v2.1`.
+    pub(crate) fn title(&self) -> String {
         let revision = self
             .revision
             .map_or_else(|| "—".to_owned(), |number| number.to_string());
-        let mut label = format!("rev {revision}");
+        let mut title = format!("rev {revision}");
         if let Some(tag) = &self.tag {
-            label.push_str(&format!(" · {tag}"));
+            title.push_str(&format!(" · {tag}"));
         }
+        title
+    }
+
+    /// The title, with `(current)` after the side the Deployment runs.
+    fn label(&self) -> String {
+        let mut label = self.title();
         if self.is_current {
             label.push_str(" (current)");
         }
@@ -109,6 +120,57 @@ pub(crate) fn diff_request(
         older,
         newer,
     }
+}
+
+/// The Deployment's ReplicaSets as sides, newest revision first (a missing number last, then by
+/// name). The highest number is the current revision: the Deployment controller gives a rolled-back
+/// ReplicaSet the next number. Pure.
+pub(crate) fn revision_list(replica_sets: &[ReplicaSetSummary]) -> Vec<RevisionSide> {
+    let mut sides: Vec<RevisionSide> = replica_sets
+        .iter()
+        .map(|replica_set| RevisionSide::of(replica_set, false))
+        .collect();
+    sides.sort_by(|a, b| {
+        b.revision
+            .is_some()
+            .cmp(&a.revision.is_some())
+            .then(b.revision.cmp(&a.revision))
+            .then_with(|| a.replica_set.cmp(&b.replica_set))
+    });
+    if let Some(newest) = sides.first_mut() {
+        newest.is_current = newest.revision.is_some();
+    }
+    sides
+}
+
+/// (newest, previous) of the list; `None` with fewer than two numbered revisions. Pure.
+pub(crate) fn latest_pair(sides: &[RevisionSide]) -> Option<(RevisionSide, RevisionSide)> {
+    match sides {
+        [newest, previous, ..] if newest.revision.is_some() && previous.revision.is_some() => {
+            Some((newest.clone(), previous.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// (newer, older) for a click on a rollout row: the ReplicaSet the event `named` against the
+/// highest numbered side below it when both are listed, else the latest pair. Pure.
+pub(crate) fn change_pair(
+    sides: &[RevisionSide],
+    named: Option<&str>,
+) -> Option<(RevisionSide, RevisionSide)> {
+    let pair = named.and_then(|name| {
+        let (position, side) = sides
+            .iter()
+            .enumerate()
+            .find(|(_, side)| side.replica_set == name)?;
+        let number = side.revision?;
+        let predecessor = sides[position + 1..]
+            .iter()
+            .find(|candidate| candidate.revision.is_some_and(|older| older < number))?;
+        Some((side.clone(), predecessor.clone()))
+    });
+    pair.or_else(|| latest_pair(sides))
 }
 
 impl RevisionDiffRequest {
@@ -165,6 +227,13 @@ fn same_note(rows: &[DiffRow], hidden_env_values: usize) -> Option<&'static str>
     }
 }
 
+/// The `Go to deployment` button of a dialog opened from the timeline: the row it reveals, and the
+/// shell that reveals it.
+struct GoTo {
+    deployment: ResourceKey,
+    shell: WeakEntity<AppShell>,
+}
+
 /// The dialog child: fetches the two templates when opened and shows their diff. It is dropped with
 /// the dialog, and nothing is cached.
 pub(crate) struct RevisionDiffView {
@@ -174,6 +243,8 @@ pub(crate) struct RevisionDiffView {
     env: EnvValues,
     state: DiffState,
     scroll: UniformListScrollHandle,
+    /// The Deployment the footer button reveals; `None` where the dialog is already on it.
+    go_to: Option<GoTo>,
 }
 
 impl RevisionDiffView {
@@ -190,9 +261,40 @@ impl RevisionDiffView {
                 _task: Task::ready(()),
             },
             scroll: UniformListScrollHandle::new(),
+            go_to: None,
         };
         view.load(EnvValues::Hidden, cx);
         view
+    }
+
+    /// Adds the `Go to deployment` button for a dialog opened from the Overview timeline.
+    pub(crate) fn with_go_to(
+        mut self,
+        deployment: ResourceKey,
+        shell: WeakEntity<AppShell>,
+    ) -> Self {
+        self.go_to = Some(GoTo { deployment, shell });
+        self
+    }
+
+    /// Closes the dialog and reveals the Deployment's row.
+    fn go_to_deployment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(go_to) = &self.go_to else {
+            return;
+        };
+        window.close_dialog(cx);
+        let key = go_to.deployment.clone();
+        let _ = go_to.shell.update(cx, |shell, cx| shell.reveal(key, cx));
+    }
+
+    /// What a click on the footer button does, for the tests that drive the dialog.
+    #[cfg(test)]
+    pub(crate) fn go_to_deployment_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.go_to_deployment(window, cx);
     }
 
     /// `--screen revision-diff`: a loaded diff of two fixed templates; no request is ever made.
@@ -212,6 +314,7 @@ impl RevisionDiffView {
                 hidden_env_values,
             },
             scroll: UniformListScrollHandle::new(),
+            go_to: None,
         }
     }
 
@@ -331,6 +434,27 @@ impl RevisionDiffView {
             .into_any_element()
     }
 
+    /// The footer of the dialog opened from the timeline: the button that goes to the Deployment.
+    fn render_footer(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        self.go_to.as_ref()?;
+        Some(
+            h_flex()
+                .flex_shrink_0()
+                .justify_end()
+                .pt_2()
+                .child(
+                    Button::new("revision-diff-go-to")
+                        .label("Go to deployment")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.go_to_deployment(window, cx);
+                        })),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_body(&self, cx: &Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         match &self.state {
@@ -391,13 +515,22 @@ fn centered(content: impl IntoElement) -> AnyElement {
 }
 
 impl Render for RevisionDiffView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
-            .w_full()
-            .h(window.viewport_size().height * HEIGHT_SHARE)
+            .size_full()
             .child(self.render_toolbar(cx))
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
+            .children(self.render_footer(cx))
     }
+}
+
+/// The view in a dialog: the view fills its parent, so the dialog gives it a share of the window
+/// high. The Revision history tab embeds the view without this wrapper.
+pub(crate) fn dialog_body(view: &Entity<RevisionDiffView>, window: &Window) -> Div {
+    div()
+        .w_full()
+        .h(window.viewport_size().height * HEIGHT_SHARE)
+        .child(view.clone())
 }
 
 #[cfg(test)]

@@ -35,6 +35,7 @@ pub(crate) fn deployment(name: &str) -> DeploymentSummary {
         selector: vec!["app=api".to_owned()],
         containers: Vec::new(),
         conditions: Vec::new(),
+        template_change: None,
     }
 }
 

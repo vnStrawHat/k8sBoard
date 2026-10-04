@@ -54,7 +54,7 @@ Any mutation (W3 "Fix image" → 0032); diff on change click (W10 → 0031); man
 
 ## Open items
 
-1. The "who" of human users and ConfigMap edits need managedFields; diff on click needs W10 (0031).
+1. Closed by [0041](../0041-edit-yaml-history/README.md): the "who" of a Deployment rollout (the field manager, inferred) and the click-to-diff of Deployment rows are built; ConfigMap rows were dropped (user, 2026-10-03).
 2. StatefulSet and DaemonSet rollouts emit no clean event; add them from ControllerRevisions if wanted.
 3. Aggregates are computed per render. Cache them per snapshot only if profiling on a large cluster shows a cost.
 4. Clusters with a longer `--event-ttl` could offer 6 h and 24 h ranges.

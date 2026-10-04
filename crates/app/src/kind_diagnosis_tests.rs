@@ -43,6 +43,7 @@ fn deployment(desired: u32, ready: u32) -> DeploymentSummary {
         selector: Vec::new(),
         containers: Vec::new(),
         conditions: Vec::new(),
+        template_change: None,
     }
 }
 

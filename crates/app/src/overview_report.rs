@@ -66,6 +66,7 @@ pub(crate) fn live_report(
         rescales,
         nodes: live.nodes.ready_items(),
         namespaces: live.namespaces.ready_items(),
+        deployments: live.issue_feeds.deployments(),
         window,
         now,
     });

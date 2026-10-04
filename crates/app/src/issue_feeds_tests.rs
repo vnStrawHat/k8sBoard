@@ -337,6 +337,7 @@ fn deployment_in(namespace: &str) -> DeploymentSummary {
         selector: Vec::new(),
         containers: Vec::new(),
         conditions: Vec::new(),
+        template_change: None,
     }
 }
 

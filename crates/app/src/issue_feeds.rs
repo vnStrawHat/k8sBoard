@@ -498,6 +498,17 @@ impl IssueFeeds {
                 .sum::<usize>()
     }
 
+    /// The condition feed of `kind`, read only.
+    pub(crate) fn condition(&self, kind: ResourceKind) -> Option<&ConditionFeed> {
+        self.conditions.iter().find(|feed| feed.kind == kind)
+    }
+
+    /// The Deployments of their condition feed once it has loaded; `None` while it is loading or off.
+    pub(crate) fn deployments(&self) -> Option<&[KindObject]> {
+        self.condition(ResourceKind::Deployments)
+            .and_then(|feed| feed.list.ready_items())
+    }
+
     /// The condition feed of `kind`.
     pub(crate) fn condition_mut(&mut self, kind: ResourceKind) -> Option<&mut ConditionFeed> {
         self.conditions.iter_mut().find(|feed| feed.kind == kind)

@@ -61,6 +61,7 @@ mod pod_status;
 mod port_forward;
 mod port_forward_target;
 mod quantity;
+mod quota_demand;
 mod rbac_evaluation;
 mod rbac_snapshot;
 mod reason_text;
@@ -113,7 +114,7 @@ pub use debug_pod_bodies::{
     random_suffix, run_id,
 };
 pub use debug_shell::{AttachPermit, AttachRequest, AttachWait};
-pub use deployment::DeploymentSummary;
+pub use deployment::{DeploymentSummary, FieldWriter};
 pub use disruption_budget::{BlockCause, DisruptionState, PodDisruptionBudgetSummary};
 pub use edit_preview::{EditCheck, EditPreview, FieldChange, FieldPath};
 pub use endpoint_slice::{EndpointPort, EndpointSliceSummary, EndpointSummary};
@@ -171,6 +172,9 @@ pub use port_forward::{
     ForwardUpdate, LocalPort, PortForwardPermit, default_local_port,
 };
 pub use quantity::{ByteAmount, CpuAmount, quantity_ratio};
+pub use quota_demand::{
+    DemandChange, QuotaCheck, QuotaResource, QuotaShortfall, WorkloadDemand, quota_check,
+};
 pub use rbac_evaluation::{
     AccessRequest, EffectiveRule, Grant, GrantNames, Identity, RequestTarget, ResourceRequest,
 };

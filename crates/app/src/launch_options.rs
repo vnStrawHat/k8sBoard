@@ -23,7 +23,7 @@ Options:
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|values-edit|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|edit-yaml-diff|edit-yaml-history|values-edit|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|pod-drawer|pod-containers|pod-events|pod-monitor|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|drain-dialog|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
@@ -171,6 +171,10 @@ pub(crate) enum LaunchScreen {
     /// `--screen edit-yaml-diff`: the Edit YAML view on its Diff tab, drawn from fixed data (W10). It
     /// waits for no cluster and can never send. Screenshot builds only.
     EditYamlDiff,
+    /// `--screen edit-yaml-history`: the Edit YAML view of a Deployment on its Revision history tab,
+    /// drawn from fixed data (spec 0041, W10). It waits for no cluster and can never send.
+    /// Screenshot builds only.
+    EditYamlHistory,
     /// `--screen values-edit`: the Edit values view of a fixed Secret, drawn from fixed data (spec 0047).
     /// Every value is fixture text and every Secret field is masked. It waits for no cluster and can
     /// never send. Screenshot builds only.
@@ -230,7 +234,9 @@ impl LaunchScreen {
             | Self::DebugShellTabFixture => Screen::Pods,
             Self::DrainProgress | Self::DrainProgressStuck => Screen::Nodes,
             Self::ShellConfirmFixture | Self::DeleteBulkConfirm => Screen::Pods,
-            Self::EditYamlDiff | Self::RevisionDiff => Screen::Kind(ResourceKind::Deployments),
+            Self::EditYamlDiff | Self::EditYamlHistory | Self::RevisionDiff => {
+                Screen::Kind(ResourceKind::Deployments)
+            }
             Self::ValuesEdit => Screen::Kind(ResourceKind::Secrets),
             Self::HpaRangePopover => Screen::Kind(ResourceKind::HorizontalPodAutoscalers),
             Self::ExpandConfirm => Screen::Kind(ResourceKind::PersistentVolumeClaims),
@@ -450,6 +456,7 @@ impl LaunchScreen {
                 | Self::DeleteConfirm
                 | Self::DeleteBulkConfirm
                 | Self::EditYamlDiff
+                | Self::EditYamlHistory
                 | Self::ValuesEdit
                 | Self::RevisionDiff
                 | Self::HpaRangePopover
@@ -538,6 +545,7 @@ impl LaunchScreen {
             "delete-confirm" => Some(Self::DeleteConfirm),
             "delete-bulk-confirm" => Some(Self::DeleteBulkConfirm),
             "edit-yaml-diff" => Some(Self::EditYamlDiff),
+            "edit-yaml-history" => Some(Self::EditYamlHistory),
             "values-edit" => Some(Self::ValuesEdit),
             "revision-diff" => Some(Self::RevisionDiff),
             "hpa-range-popover" => Some(Self::HpaRangePopover),

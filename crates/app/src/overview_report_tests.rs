@@ -4,7 +4,7 @@ use super::*;
 use crate::cluster_capacity::{FromPods, Layers};
 use crate::issue::{IssueAction, IssueKey, IssueObject, IssueRule, IssueSeverity};
 use crate::node_usage::NodeUsage;
-use crate::recent_changes::ChangeKind;
+use crate::recent_changes::{ActorSource, ChangeKind};
 
 fn now() -> Timestamp {
     "2024-05-01T12:00:00Z".parse().unwrap()
@@ -123,6 +123,8 @@ fn report_changes_use_window_label() {
         text: "Scaled up replica set api-7d9f8c to 3".to_owned(),
         count: 2,
         actor: Some("deployment-controller".to_owned()),
+        actor_source: ActorSource::EventSource,
+        replica_set: None,
         target: None,
     }];
     let report = overview_report(&ReportInputs {

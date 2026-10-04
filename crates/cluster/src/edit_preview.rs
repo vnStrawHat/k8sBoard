@@ -14,6 +14,7 @@ use crate::edit_placeholders::{
 };
 use crate::object_edit::{ObjectEdit, set_target_kind, strip_server_fields};
 use crate::object_yaml::{ObjectKind, mask_object, to_yaml_text};
+use crate::quota_demand::{DemandChange, workload_demand};
 
 const LAST_APPLIED: &str = "kubectl.kubernetes.io/last-applied-configuration";
 const MAX_CHANGES: usize = 200;
@@ -91,6 +92,8 @@ pub struct EditPreview {
     /// Changes beyond the cap of `changes`.
     pub more_changes: usize,
     pub checks: Vec<EditCheck>,
+    /// The change in steady-state pod demand, when the workload counts pods and the demand differs.
+    pub demand: Option<DemandChange>,
 }
 
 impl fmt::Debug for EditPreview {
@@ -356,6 +359,9 @@ pub(crate) fn build_preview(
     mut response: Value,
     restored: &Restored,
 ) -> Result<EditPreview, &'static str> {
+    // Computed before `strip_server_fields` drops `status`: a DaemonSet's pod count is
+    // `status.desiredNumberScheduled`.
+    let demand = demand_change(edit, &fresh, &response);
     strip_server_fields(&mut fresh);
     strip_server_fields(&mut response);
     let mut before = fresh.clone();
@@ -398,7 +404,16 @@ pub(crate) fn build_preview(
         changes,
         more_changes,
         checks,
+        demand,
     })
+}
+
+/// The demand before and after, when both are known and differ.
+fn demand_change(edit: &ObjectEdit, fresh: &Value, response: &Value) -> Option<DemandChange> {
+    let kind = edit.target().builtin_kind()?;
+    let before = workload_demand(kind, fresh)?;
+    let after = workload_demand(kind, response)?;
+    (before != after).then_some(DemandChange { before, after })
 }
 
 /// The update strategy when the pod template of a workload changed.

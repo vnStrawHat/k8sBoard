@@ -11,7 +11,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use cluster::{ClusterConnection, WriteOutcome};
+use cluster::{AccessCheck, ClusterConnection, ObjectRef, WriteOutcome};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::component::dialog::DialogButtonProps;
@@ -23,11 +23,17 @@ use gpui_kit::{
 use super::AppShell;
 use super::write_flow::{CheckedWriteError, CommitMode, WriteIntent, WriteStep, notify};
 use crate::cluster_registry::ClusterRef;
+use crate::cluster_session::AccessState;
+use crate::edit_quota::QuotaInput;
 use crate::fresh_enter::FreshEnter;
+use crate::issue_feeds::FeedState;
+use crate::kind_row::KindObject;
 use crate::resource_actions::{
     ActionAvailability, ResourceAction, RowAction, action_availability, action_label,
     subject_action, unavailable_text,
 };
+use crate::resource_kind::ResourceKind;
+use crate::revision_history::HistoryInputs;
 use crate::table_selection::ClusterObject;
 use crate::values_edit::ValuesEditView;
 use crate::yaml_edit::{EditFailure, EditSubject, YamlEditView, edit_failure_of};
@@ -53,7 +59,7 @@ impl OpenEdit {
         }
     }
 
-    pub(crate) fn object<'a>(&'a self, cx: &'a App) -> &'a cluster::ObjectRef {
+    pub(crate) fn object<'a>(&'a self, cx: &'a App) -> &'a ObjectRef {
         match self {
             Self::Yaml(edit) => edit.read(cx).object(),
             Self::Values(edit) => edit.read(cx).object(),
@@ -174,6 +180,67 @@ impl AppShell {
         cx: &App,
     ) -> Option<ClusterConnection> {
         self.slot_connection(cluster, cx)
+    }
+
+    /// What the Revision history tab of an edit of `object` needs: the connection, the permission
+    /// to list ReplicaSets, and the Deployment's selector, all from the session of its cluster.
+    /// A review that is still running or failed does not block the list: it shows its own error.
+    pub(crate) fn history_inputs(
+        &self,
+        cluster: &ClusterRef,
+        object: &ObjectRef,
+        cx: &App,
+    ) -> HistoryInputs {
+        let Some(live) = self.slot_live(cluster, cx) else {
+            return HistoryInputs::Unavailable("the cluster is not open".into());
+        };
+        if let AccessState::Known(report) = &live.access
+            && !report.is_allowed(AccessCheck::ListReplicaSets)
+        {
+            return HistoryInputs::Denied;
+        }
+        let selector = object
+            .namespace()
+            .and_then(|namespace| live.deployment_selector(namespace, object.name()));
+        match selector {
+            Some(selector) => HistoryInputs::Ready {
+                connection: live.connection().clone(),
+                selector,
+            },
+            None => HistoryInputs::Unavailable("the deployment is not loaded yet".into()),
+        }
+    }
+
+    /// What the session's ResourceQuotas feed says about the quotas of `namespace`, for the quota
+    /// line of a passed preview. The feed already runs for the session scope, so this sends nothing.
+    pub(crate) fn quota_input(
+        &self,
+        cluster: &ClusterRef,
+        namespace: &str,
+        cx: &App,
+    ) -> QuotaInput {
+        let Some(live) = self.slot_live(cluster, cx) else {
+            return QuotaInput::Off("the cluster is not open".to_owned());
+        };
+        let Some(feed) = live.issue_feeds.condition(ResourceKind::ResourceQuotas) else {
+            return QuotaInput::Loading;
+        };
+        match feed.state() {
+            FeedState::Off(reason) => QuotaInput::Off(reason),
+            FeedState::Loading => QuotaInput::Loading,
+            FeedState::Live | FeedState::Limited(_) => QuotaInput::Quotas(
+                feed.list
+                    .items()
+                    .iter()
+                    .filter_map(|object| match object {
+                        KindObject::ResourceQuota(quota) if quota.namespace == namespace => {
+                            Some(quota.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+        }
     }
 
     /// The gate and the session of a dry-run of `intent`'s change: nothing is sent when the action
@@ -356,9 +423,14 @@ impl AppShell {
 
 #[cfg(feature = "screenshot")]
 impl AppShell {
-    /// `--screen edit-yaml-diff`: W10's diff from fixed data, over a fixed cluster. It waits for no
-    /// cluster and sends nothing.
-    pub(super) fn open_edit_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// `--screen edit-yaml-diff` and `edit-yaml-history`: W10 from fixed data, over a fixed cluster.
+    /// It waits for no cluster and sends nothing.
+    pub(super) fn open_edit_fixture(
+        &mut self,
+        tab: crate::yaml_edit::EditTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         use crate::screenshot::shell_fixture_target;
         use crate::table_selection::ResourceKey;
         let target = ClusterObject::new(
@@ -383,7 +455,7 @@ impl AppShell {
             object,
             kind: cluster::ObjectKind::Deployment,
         };
-        let edit = cx.new(|cx| YamlEditView::fixture(shell, subject, window, cx));
+        let edit = cx.new(|cx| YamlEditView::fixture(shell, subject, tab, window, cx));
         self.edit = Some(OpenEdit::Yaml(edit));
         cx.notify();
     }

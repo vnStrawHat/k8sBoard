@@ -1068,3 +1068,13 @@ fn screen_values_edit_parses() {
     assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
     assert!(USAGE.contains("values-edit"));
 }
+
+#[test]
+fn screen_edit_yaml_history_parses() {
+    let screen = run_options(&["--screen", "edit-yaml-history"]).screen;
+    assert_eq!(screen, LaunchScreen::EditYamlHistory);
+    assert_eq!(screen.screen(), Screen::Kind(ResourceKind::Deployments));
+    assert!(screen.opens_dialog());
+    assert!(!screen.selects_row() && !screen.has_drawer() && !screen.checks_rows());
+    assert!(USAGE.contains("edit-yaml-history"));
+}

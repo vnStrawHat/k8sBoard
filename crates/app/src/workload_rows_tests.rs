@@ -44,6 +44,7 @@ fn deployment() -> DeploymentSummary {
             ],
         }],
         conditions: Vec::new(),
+        template_change: None,
     }
 }
 

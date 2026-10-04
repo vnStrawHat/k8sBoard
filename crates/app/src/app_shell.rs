@@ -83,7 +83,7 @@ use crate::resource_actions::{
     workload_logs_owner,
 };
 use crate::resource_kind::ResourceKind;
-use crate::revision_diff::{RevisionDiffRequest, RevisionDiffView};
+use crate::revision_diff::{RevisionDiffRequest, RevisionDiffView, dialog_body};
 use crate::row_context::RowContext;
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{FeedProgress, kubelet_progress};
@@ -161,6 +161,8 @@ mod port_forward_open;
 mod port_forward_page;
 #[path = "resource_edit_flow.rs"]
 mod resource_edit_flow;
+#[path = "revision_change_flow.rs"]
+mod revision_change_flow;
 #[path = "shell_open.rs"]
 pub(crate) mod shell_open;
 #[path = "values_edit_flow.rs"]
@@ -384,6 +386,9 @@ pub(crate) struct AppShell {
     /// The open Edit YAML view (spec 0031). It replaces the table and the drawer in the workspace;
     /// the cursor and the drawer flag are kept under it and come back when it closes.
     edit: Option<OpenEdit>,
+    /// The ReplicaSet list a click on a Deployment change row waits for (spec 0041); a second click
+    /// replaces it.
+    revision_lookup: Option<Task<()>>,
     /// The editor an Apply started a write from (`ValuesEditView::open_id`), until its commit ends.
     values_commit_open: Option<u64>,
     /// The name in the discard prompt asked last, for the tests that drive it.
@@ -653,6 +658,7 @@ impl AppShell {
             running_batches: HashSet::new(),
             delete_start: None,
             edit: None,
+            revision_lookup: None,
             values_commit_open: None,
             #[cfg(test)]
             last_discard: None,
@@ -1698,11 +1704,11 @@ impl AppShell {
         let connection = live.connection().clone();
         let title = request.title();
         let view = cx.new(|cx| RevisionDiffView::new(request, connection, cx));
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, window, _| {
             dialog
                 .title(title.clone())
                 .w(px(REVISION_DIFF_WIDTH))
-                .child(view.clone())
+                .child(dialog_body(&view, window))
         });
     }
 
@@ -1716,6 +1722,7 @@ impl AppShell {
             revision: Some(revision),
             tag: Some(tag.to_owned()),
             is_current,
+            created_at: None,
         };
         let request = diff_request(
             ResourceKey::Kind {
@@ -1727,14 +1734,16 @@ impl AppShell {
             side("api-7d9f8c", 39, "2.14.0", true),
         );
         let title = request.title();
+        let (deployment, shell) = (request.deployment.clone(), cx.weak_entity());
         let view = cx.new(|_| {
             RevisionDiffView::fixture(request, REVISION_FIXTURE_OLDER, REVISION_FIXTURE_NEWER, 2)
+                .with_go_to(deployment, shell)
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, window, _| {
             dialog
                 .title(title.clone())
                 .w(px(REVISION_DIFF_WIDTH))
-                .child(view.clone())
+                .child(dialog_body(&view, window))
         });
     }
 
@@ -1923,7 +1932,13 @@ impl AppShell {
         }
         #[cfg(feature = "screenshot")]
         if launch == LaunchScreen::EditYamlDiff {
-            self.open_edit_fixture(window, cx);
+            self.open_edit_fixture(crate::yaml_edit::EditTab::Diff, window, cx);
+            self.pending_dialog_launch = None;
+            return;
+        }
+        #[cfg(feature = "screenshot")]
+        if launch == LaunchScreen::EditYamlHistory {
+            self.open_edit_fixture(crate::yaml_edit::EditTab::History, window, cx);
             self.pending_dialog_launch = None;
             return;
         }

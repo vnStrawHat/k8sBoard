@@ -14,7 +14,7 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W2 form | Color swatches, Proxy | missing | `clusters_page.rs`, `cluster_registry.rs` (no color field) | M |
 | W2 n2 | Watch a kubeconfig folder | missing (disabled "later") | `clusters_page.rs:737` | M |
 | Tokens | Row density 28 / 36 px (Appearance) | missing | Appearance has Theme only | M |
-| W3 n4 | Recent changes from managedFields (ConfigMap keys, "who"); click opens a diff | partial | `recent_changes.rs` (rollouts, HPA, nodes, namespaces); 0021 open item 1 | M |
+| W3 n4 | Recent changes from managedFields (ConfigMap keys, "who"); click opens a diff | done for Deployments (0041); ConfigMap rows dropped | `recent_changes.rs`, `revision_change_flow.rs` | — |
 | W4 n1 | Pod menu: Attach (A), Restart pod, Evict | missing | `resource_actions.rs::pod_menu`; 0033 moved them out, 0034 evicts only inside drain | M |
 | W4 n2 | View logs ▸ container submenu (MAIN/SIDECAR/INIT) | Done (0039) | `LogsMenu` in `resource_actions.rs` | — |
 | W4b n3 | Container ⋯ menu: logs, shell, attach, copy image | Done (0039) except Attach (0040) | `container_menu` in `resource_actions.rs`, button in `container_detail.rs` | — |
@@ -24,7 +24,7 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W5 header | Edit labels for several nodes | missing | 0034 open item 2 | S |
 | W7 Deployments | Revision diff ("history with diff and rollback") | Done (0039; rollback 0032) | `revision_diff.rs`, `pod_template_yaml` | — |
 | W7 CronJobs | View logs of last job | Done (0039; key L on the workload kinds too) | `last_job_owner` in `kind_join.rs` | — |
-| W7 ConfigMaps | Compare with previous | missing | 0031 non-goals (the "restart the workload" hint is Done in 0039) | M |
+| W7 ConfigMaps | Compare with previous | dropped (user, 2026-10-03) | 0041 non-goals (the "restart the workload" hint is Done in 0039) | — |
 | W7 5 kinds | New (Namespace, ConfigMap, ResourceQuota, PDB, RoleBinding) | missing | 0031 non-goal ("templates") | M |
 | W7 Secrets, ConfigMaps | Edit values (E on the two screens; Edit YAML stays in the menu) | Done (0047; masked write-only Secret fields, merge patch with the base `resourceVersion`) | [as-built](../specs/0047-config-secret-values/README.md), `values_edit.rs`, `config_values.rs` | — |
 | W7 ResourceQuotas | `Edit` shown disabled next to a working `Edit YAML` | Done (0039: the placeholder is gone) | `resource_kind.rs` RESOURCE_QUOTAS | — |
@@ -36,9 +36,9 @@ Status: **missing**, **partial**, **in build** (0034), **backlog** (no spec, use
 | W8b | Histogram brush window; Pop out | Done (0044; Pop out for log tabs only, Shell tabs stay in the dock) | `log_volume.rs` brush, `log_window.rs`, `dock.rs` `pop_out` | — |
 | W9 n1, n3 | Action × resource results (`> rest pay` → Restart rollout · deployment/payments-api), `needs confirm` pill | Done (0029 step 5c: pairs of the loaded objects; the pair runs its key's own gated flow) | [step5-results](../specs/0029-command-palette/step5-results.md), `palette_search.rs` `pair_entries`, `run_row_action_on` | — |
 | W9 | Matched-character underline; `@` keeps the namespace | Done (0029 steps 5a, 5b: underline of the scored field; a single named namespace is carried to another cluster) | [step5-highlight-scope](../specs/0029-command-palette/step5-highlight-scope.md), `fuzzy_ranges`, `switch_cluster_in_scope` | — |
-| W10 | Revision history tab | missing | 0031 non-goal | M |
-| W10 n5 | Pre-apply snapshot, one-step rollback (ConfigMaps too) | missing | 0031 non-goal; needs a C1 decision | M |
-| W10 n2 | Quota check ("Namespace quota OK") | missing | 0031 non-goal | S |
+| W10 | Revision history tab | done (0041, Deployments only) | `revision_history.rs` | — |
+| W10 n5 | Pre-apply snapshot, one-step rollback (ConfigMaps too) | dropped (user, 2026-10-03) | 0041 non-goals | — |
+| W10 n2 | Quota check ("Namespace quota OK") | done (0041, advisory) | `edit_quota.rs`, `quota_demand.rs` | — |
 | W10 header | Hide managedFields toggle, Format | missing (always hidden) | `object_yaml.rs:474` | S |
 | W11 | RBAC layer chip | done (0022 steps 4a, 4b: working chip, off by default; account → binding → role access row, three access checks) | [as-built-rbac](../specs/0022-topology/as-built-rbac.md) | — |
 | W11 n1, W4c n1, W2 | Traffic mode; Prometheus with 30-day ranges and Settings › Metrics; Extensions; cloud scans | backlog | `topology_view.rs:1077`, `monitor_tab.rs:32`, `clusters_page.rs:737` | L each |
@@ -81,7 +81,7 @@ Not fixed (spec files, owner decision): status lines still read "draft" on built
 | 1 | 0039 Drawer and menu completions (done, except Show remaining / Show selected items) | Deployment revision diff, CronJob last-job logs, Logs ▸ submenu, container ⋯ menu (no Attach), LimitRange row, Show remaining / Show selected items, ConfigMap restart hint, drop the stale Quotas `Edit` | new | read-only | M |
 | 2 | 0040 Pod lifecycle | Evict (0034 `EvictPod`), Restart pod (controller-owned only, 0033 delete), Attach (A, `create pods/attach` in `pod_shell.rs`), drain Skip PDBs, bulk node labels | new, after 0034 merges | mutating | M |
 | 3 | 0046 One cluster at a time | remove multi-cluster mode (0027 multi view); 0045 dropped (user decision 2026-10-03) | new | local, no new request | M |
-| 4 | 0041 Edit YAML II | Revision history, snapshot and rollback, ConfigMap Compare with previous, quota check, managedFields toggle, Format, Overview timeline diff and "who" | new; C1 decision on snapshots first | mutating + local files | L |
+| 4 | 0041 Edit YAML II | **Built 2026-10-04** (Revision history, quota check, timeline "who" and diff); snapshot, rollback, ConfigMap Compare, and the managedFields toggle dropped or not planned | done | read-only | L |
 | 5 | 0042 Create from templates | New for the 5 kinds; a `Create` `WriteOperation` | new | mutating | M |
 | 6 | 0043 Settings completions | General, Logs, Terminal & Shell pages (content needs the user), density, drag order, Search, color, Proxy, watch folder (C6 dependency) | new | local | L |
 | 7 | 0044 Dock completions (done) | dashed line, double-click reset, saved `dock.height`, `SYS` lines, histogram brush, Pop out | new | local | M |

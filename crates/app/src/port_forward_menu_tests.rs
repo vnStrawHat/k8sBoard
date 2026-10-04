@@ -127,6 +127,7 @@ fn deployment(containers: Vec<TemplateContainer>) -> DeploymentSummary {
         selector: vec!["app=web".to_owned()],
         containers,
         conditions: Vec::new(),
+        template_change: None,
     }
 }
 

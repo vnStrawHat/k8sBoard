@@ -36,7 +36,9 @@ use crate::issue_board::IssueBoard;
 use crate::issue_feeds::{FeedState, volume_usage_state};
 use crate::issue_table::{coverage_status, logs_pod, short_kind};
 use crate::node_heatmap::{heat_cells, node_heatmap};
-use crate::recent_changes::{CHANGE_ROWS, ChangeEntry, ChangeInputs, ChangeWindow, recent_changes};
+use crate::recent_changes::{
+    CHANGE_ROWS, ChangeEntry, ChangeInputs, ChangeKind, ChangeWindow, recent_changes,
+};
 use crate::resource_actions::logs_launch;
 use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
@@ -596,6 +598,7 @@ fn changes_body(live: &LiveCluster, window: ChangeWindow, cx: &Context<AppShell>
         rescales: Some(rescales),
         nodes: live.nodes.ready_items(),
         namespaces: live.namespaces.ready_items(),
+        deployments: live.issue_feeds.deployments(),
         window,
         now: jiff::Timestamp::now(),
     });
@@ -606,7 +609,10 @@ fn changes_body(live: &LiveCluster, window: ChangeWindow, cx: &Context<AppShell>
         .iter()
         .take(CHANGE_ROWS)
         .enumerate()
-        .map(|(index, entry)| change_row(index, entry, index + 1 == shown, &zone, cx));
+        .map(|(index, entry)| {
+            let opens_diff = opens_diff(entry, live);
+            change_row(index, entry, index + 1 == shown, opens_diff, &zone, cx)
+        });
     let empty = entries.is_empty().then(|| {
         let span = window.label().trim_start_matches("Last ");
         state_text(format!("No tracked changes seen in the last {span}."), cx)
@@ -632,6 +638,7 @@ fn change_row(
     index: usize,
     entry: &ChangeEntry,
     is_last: bool,
+    opens_diff: bool,
     zone: &TimeZone,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -643,12 +650,7 @@ fn change_row(
         .strftime("%H:%M")
         .to_string();
     let count = (entry.count > 1).then(|| format!(" ×{}", entry.count));
-    let tooltip = SharedString::from(format!(
-        "{} {} {}",
-        entry.kind.label(),
-        entry.object,
-        entry.text
-    ));
+    let tooltip = SharedString::from(entry.tooltip());
     let row = h_flex()
         .id(SharedString::from(format!("change-{index}")))
         .gap_2()
@@ -686,12 +688,37 @@ fn change_row(
                 .child(actor)
         }));
     match entry.target.clone() {
+        Some(key) if opens_diff => {
+            let named = entry.replica_set.clone();
+            row.cursor_pointer()
+                .on_click(cx.listener(move |shell, _, window, cx| {
+                    shell.open_change_diff(key.clone(), named.clone(), window, cx)
+                }))
+                .into_any_element()
+        }
         Some(key) => row
             .cursor_pointer()
             .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
             .into_any_element(),
         None => row.into_any_element(),
     }
+}
+
+/// Whether a click on the row opens the revision diff: a Deployment row whose selector the
+/// Deployments feed knows. Every other row reveals its object.
+fn opens_diff(entry: &ChangeEntry, live: &LiveCluster) -> bool {
+    let Some(ResourceKey::Kind {
+        namespace: Some(namespace),
+        name,
+        ..
+    }) = &entry.target
+    else {
+        return false;
+    };
+    entry.kind == ChangeKind::Deployment
+        && live
+            .deployment_selector(namespace, name)
+            .is_some_and(|selector| !selector.is_empty())
 }
 
 fn state_text(text: String, cx: &App) -> AnyElement {

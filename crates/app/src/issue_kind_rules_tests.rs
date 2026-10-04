@@ -46,6 +46,7 @@ fn deployment(conditions: Vec<WorkloadCondition>) -> DeploymentSummary {
         selector: Vec::new(),
         containers: Vec::new(),
         conditions,
+        template_change: None,
     }
 }
 

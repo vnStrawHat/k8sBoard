@@ -2,10 +2,12 @@
 //! server), node readiness transitions, joined nodes, and new namespaces, newest first. Pure: it
 //! takes the Ready snapshots and a clock. Event messages are arbitrary text, so nothing here logs.
 
-use cluster::{ConditionStatus, EventSummary, NamespaceSummary, NodeSummary};
+use cluster::{ConditionStatus, DeploymentSummary, EventSummary, NamespaceSummary, NodeSummary};
 use jiff::{SignedDuration, Timestamp};
 
 use crate::event_rows::message_line;
+use crate::kind_row::KindObject;
+use crate::port_forwards::is_dns_subdomain;
 use crate::table_selection::ResourceKey;
 
 /// The rows the panel shows; the rest stay in the Events screen.
@@ -61,6 +63,16 @@ impl ChangeKind {
     }
 }
 
+/// Where the actor of a row comes from. A field manager is inferred, not recorded: Kubernetes
+/// stores no user on an object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ActorSource {
+    /// The newest manager of the Deployment's pod template, near the rollout (spec 0041).
+    FieldManager,
+    /// The `source` of the event.
+    EventSource,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ChangeEntry {
     pub(crate) at: Timestamp,
@@ -72,7 +84,27 @@ pub(crate) struct ChangeEntry {
     /// The event count; 1 for state rows.
     pub(crate) count: u32,
     pub(crate) actor: Option<String>,
+    pub(crate) actor_source: ActorSource,
+    /// The ReplicaSet a Deployment event names, which the click diffs against its predecessor.
+    pub(crate) replica_set: Option<String>,
     pub(crate) target: Option<ResourceKey>,
+}
+
+impl ChangeEntry {
+    /// The row tooltip. A Deployment row says where its actor came from, so a field manager is
+    /// never read as proof of who did it.
+    pub(crate) fn tooltip(&self) -> String {
+        let base = format!("{} {} {}", self.kind.label(), self.object, self.text);
+        match (&self.actor, self.actor_source, self.kind) {
+            (Some(manager), ActorSource::FieldManager, _) => {
+                format!("{base} · probably {manager} · last pod-template writer (field manager)")
+            }
+            (Some(_), ActorSource::EventSource, ChangeKind::Deployment) => {
+                format!("{base} · event source")
+            }
+            _ => base,
+        }
+    }
 }
 
 /// What the model reads; `None` means that list has not loaded and contributes nothing.
@@ -81,6 +113,9 @@ pub(crate) struct ChangeInputs<'a> {
     pub(crate) rescales: Option<&'a [EventSummary]>,
     pub(crate) nodes: Option<&'a [NodeSummary]>,
     pub(crate) namespaces: Option<&'a [NamespaceSummary]>,
+    /// The Deployments condition feed, for the field manager of a rollout; `None` while the feed is
+    /// off or loading, which leaves the event source as the actor.
+    pub(crate) deployments: Option<&'a [KindObject]>,
     pub(crate) window: ChangeWindow,
     pub(crate) now: Timestamp,
 }
@@ -99,7 +134,7 @@ pub(crate) fn recent_changes(inputs: &ChangeInputs) -> Vec<ChangeEntry> {
             events
                 .into_iter()
                 .flatten()
-                .filter_map(|event| event_entry(event, kind, &is_recent)),
+                .filter_map(|event| event_entry(event, kind, inputs.deployments, &is_recent)),
         );
     }
     for node in inputs.nodes.into_iter().flatten() {
@@ -116,6 +151,8 @@ pub(crate) fn recent_changes(inputs: &ChangeInputs) -> Vec<ChangeEntry> {
             text: "created".to_owned(),
             count: 1,
             actor: None,
+            actor_source: ActorSource::EventSource,
+            replica_set: None,
             target: ResourceKey::of_object("Namespace", None, &namespace.name),
         });
     }
@@ -128,14 +165,31 @@ pub(crate) fn recent_changes(inputs: &ChangeInputs) -> Vec<ChangeEntry> {
     entries
 }
 
+/// How far before the event's last occurrence a template write may be and still count as its
+/// cause, and how far after it (clock skew between the API server and the controller).
+const WRITER_WINDOW_BEFORE: SignedDuration = SignedDuration::from_mins(30);
+const WRITER_WINDOW_AFTER: SignedDuration = SignedDuration::from_secs(60);
+
 fn event_entry(
     event: &EventSummary,
     kind: ChangeKind,
+    deployments: Option<&[KindObject]>,
     is_recent: &impl Fn(Timestamp) -> bool,
 ) -> Option<ChangeEntry> {
     // An aggregated event moves to its newest occurrence; one without a time cannot be placed.
     let at = event.last_seen.filter(|at| is_recent(*at))?;
     let object = &event.object;
+    let is_deployment = kind == ChangeKind::Deployment;
+    let manager = is_deployment
+        .then(|| template_writer(event, at, deployments))
+        .flatten();
+    let (actor, actor_source) = match manager {
+        Some(manager) => (Some(manager), ActorSource::FieldManager),
+        None => (
+            event.source.as_deref().and_then(actor_of),
+            ActorSource::EventSource,
+        ),
+    };
     Some(ChangeEntry {
         at,
         kind,
@@ -145,9 +199,48 @@ fn event_entry(
         },
         text: message_line(&event.message),
         count: event.count,
-        actor: event.source.as_deref().and_then(actor_of),
+        actor,
+        actor_source,
+        replica_set: is_deployment
+            .then(|| named_replica_set(&event.message))
+            .flatten(),
         target: ResourceKey::of_object(&object.kind, object.namespace.as_deref(), &object.name),
     })
+}
+
+/// The newest manager of the event's Deployment's pod template when its write is at most 30 min
+/// before and 60 s after the event (a rollout starts right after the template write; a later
+/// write cannot have caused it).
+///
+/// `ponytail:` a heuristic: an exact cause needs the audit log. An HPA scale of the same
+/// Deployment inside the window (a `ScalingReplicaSet` event with no template change) is also
+/// attributed to the template writer.
+fn template_writer(
+    event: &EventSummary,
+    at: Timestamp,
+    deployments: Option<&[KindObject]>,
+) -> Option<String> {
+    let namespace = event.object.namespace.as_deref()?;
+    let writer = deployments?.iter().find_map(|object| match object {
+        KindObject::Deployment(DeploymentSummary {
+            namespace: found_namespace,
+            name,
+            template_change,
+            ..
+        }) if found_namespace == namespace && *name == event.object.name => {
+            template_change.as_ref()
+        }
+        _ => None,
+    })?;
+    let lag = at.duration_since(writer.at);
+    (lag <= WRITER_WINDOW_BEFORE && lag >= -WRITER_WINDOW_AFTER).then(|| writer.manager.clone())
+}
+
+/// The word after `replica set ` in `Scaled up replica set api-7d9f8c to 3`, when it is a name.
+fn named_replica_set(message: &str) -> Option<String> {
+    let (_, rest) = message.split_once("replica set ")?;
+    let name = rest.split_whitespace().next()?;
+    is_dns_subdomain(name).then(|| name.to_owned())
 }
 
 /// The event source up to its first ` on `: `kubelet on ip-10-0-1-23` is `kubelet`.
@@ -165,6 +258,8 @@ fn node_entry(node: &NodeSummary, is_recent: &impl Fn(Timestamp) -> bool) -> Opt
         text: text.to_owned(),
         count: 1,
         actor: actor.map(str::to_owned),
+        actor_source: ActorSource::EventSource,
+        replica_set: None,
         target: Some(ResourceKey::of_node(node)),
     };
     if let Some(at) = node.created_at.filter(|at| is_recent(*at)) {

@@ -330,9 +330,54 @@ fn debug_shows_counts_only() {
         changes: Vec::new(),
         more_changes: 2,
         checks: vec![EditCheck::StaleLastApplied],
+        demand: None,
     };
     assert_eq!(
         format!("{preview:?}"),
         "EditPreview { changes: 0, more_changes: 2, checks: 1 }"
+    );
+}
+
+#[tokio::test]
+async fn preview_carries_demand_for_replica_change() {
+    let fresh = deployment();
+    let base = base_of(ObjectKind::Deployment, "api", fresh.clone()).await;
+    let preview = preview_of(&fresh, &edit_of(&base, "replicas: 3", "replicas: 5"));
+    let demand = preview.demand.expect("the pod count changed");
+    assert_eq!((demand.before.pods, demand.after.pods), (3, 5));
+}
+
+#[tokio::test]
+async fn preview_has_no_demand_for_label_change() {
+    let mut fresh = deployment();
+    fresh["metadata"]["labels"] = json!({"tier": "web"});
+    let base = base_of(ObjectKind::Deployment, "api", fresh.clone()).await;
+    let preview = preview_of(&fresh, &edit_of(&base, "tier: web", "tier: api"));
+    assert_eq!(preview.demand, None);
+}
+
+#[tokio::test]
+async fn preview_daemon_set_demand_reads_status() {
+    let fresh = json!({
+        "apiVersion": "apps/v1",
+        "kind": "DaemonSet",
+        "metadata": {"name": "agent", "namespace": "payments", "uid": "uid-4", "resourceVersion": "7"},
+        "spec": {"template": {"spec": {"containers": [
+            {"name": "agent", "image": "agent:1", "resources": {"requests": {"cpu": "100m"}}},
+        ]}}},
+        "status": {"desiredNumberScheduled": 4},
+    });
+    let base = base_of(ObjectKind::DaemonSet, "agent", fresh.clone()).await;
+    let edit = edit_of(&base, "cpu: 100m", "cpu: 200m");
+    let mut body = edit.edited().clone();
+    let restored = edit_placeholders::restore(&mut body, &fresh).expect("restores");
+    // The dry-run answer keeps the status, which `build_preview` strips after reading it.
+    body["status"] = fresh["status"].clone();
+    let preview = build_preview(&edit, fresh, body, &restored).expect("a preview");
+    let demand = preview.demand.expect("the CPU request changed");
+    assert_eq!((demand.before.pods, demand.after.pods), (4, 4));
+    assert_eq!(
+        (demand.before.requests_cpu, demand.after.requests_cpu),
+        (400_000_000, 800_000_000)
     );
 }

@@ -65,6 +65,30 @@ fn deployment_object(resource_version: &str) -> Value {
     })
 }
 
+fn replica_set(name: &str, revision: u32) -> Value {
+    json!({
+        "apiVersion": "apps/v1", "kind": "ReplicaSet",
+        "metadata": {
+            "name": name, "namespace": "team-a",
+            "annotations": {"deployment.kubernetes.io/revision": revision.to_string()},
+            "ownerReferences": [{
+                "apiVersion": "apps/v1", "kind": "Deployment", "name": "api",
+                "uid": "uid-1", "controller": true,
+            }],
+        },
+        "spec": {"template": {"spec": {"containers": [
+            {"name": "api", "image": format!("api:{revision}")},
+        ]}}},
+    })
+}
+
+fn replica_set_list(items: &[Value]) -> Value {
+    json!({
+        "apiVersion": "apps/v1", "kind": "ReplicaSetList", "metadata": {},
+        "items": items,
+    })
+}
+
 fn access_review(is_allowed: bool) -> String {
     format!(
         r#"{{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectAccessReview","metadata":{{}},"spec":{{}},"status":{{"allowed":{is_allowed}}}}}"#
@@ -75,6 +99,8 @@ fn access_review(is_allowed: bool) -> String {
 /// what a dry-run or a commit `PUT` answers instead of an echo.
 struct EditServer {
     object: Mutex<Value>,
+    /// The ReplicaSets the list route answers with.
+    replica_sets: Mutex<Vec<Value>>,
     may_update: AtomicBool,
     dry_run_answer: Mutex<Option<(u16, String)>>,
     commit_answer: Mutex<Option<(u16, String)>>,
@@ -84,6 +110,7 @@ impl EditServer {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             object: Mutex::new(deployment_object("100")),
+            replica_sets: Mutex::new(vec![replica_set("api-a", 1), replica_set("api-b", 2)]),
             may_update: AtomicBool::new(true),
             dry_run_answer: Mutex::new(None),
             commit_answer: Mutex::new(None),
@@ -97,6 +124,12 @@ impl EditServer {
                 (201, access_review(self.may_update.load(Ordering::SeqCst)))
             }
             "GET" if path == PATH => (200, lock(&self.object).to_string()),
+            "GET" if path == "/apis/apps/v1/namespaces/team-a/replicasets" => {
+                (200, replica_set_list(&lock(&self.replica_sets)).to_string())
+            }
+            "GET" if path.starts_with("/apis/apps/v1/namespaces/team-a/replicasets/") => {
+                (200, replica_set("api-x", 1).to_string())
+            }
             "PUT" if path == PATH => self.answer_put(request),
             _ => (404, NOT_FOUND.to_owned()),
         }
@@ -1430,4 +1463,301 @@ fn a_held_ctrl_s_never_opens_the_confirm_dialog(cx: &mut TestAppContext) {
     t.press_event(key_down("ctrl-s", false), cx);
     cx.run_until_parked();
     assert!(t.t.has_dialog(cx));
+}
+
+// ---- Spec 0041: the Revision history tab ----
+
+fn replica_set_lists_of(api: &FakeApi) -> Vec<RecordedRequest> {
+    api.requests()
+        .into_iter()
+        .filter(|request| request.path == "/apis/apps/v1/namespaces/team-a/replicasets")
+        .collect()
+}
+
+#[gpui_kit::test]
+fn history_never_changes_the_editor_text(cx: &mut TestAppContext) {
+    let t = edit_test("edit-history", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 4", cx);
+    let before = t.text(cx);
+    let view = t.view(cx);
+    view.update(cx, |view, cx| view.show_tab(EditTab::History, cx));
+    t.t.wait_for("the revisions", cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.history()
+                .is_some_and(|history| history.read(cx).is_ready())
+        })
+    });
+    view.update(cx, |view, cx| view.show_tab(EditTab::Editor, cx));
+    assert_eq!(t.text(cx), before);
+    assert!(t.with_view(cx, YamlEditView::is_dirty));
+    // One LIST bounded by the Deployment's selector, and showing the tab again asks nothing more.
+    view.update(cx, |view, cx| view.show_tab(EditTab::History, cx));
+    cx.run_until_parked();
+    let lists = replica_set_lists_of(&t.t.stg_api);
+    assert_eq!(lists.len(), 1, "{lists:?}");
+    assert!(lists[0].has_query("labelSelector", "app%3Dapi"));
+    assert!(puts_of(&t.t.stg_api).is_empty());
+}
+
+// ---- Spec 0041: the quota line ----
+
+fn quota_snapshot(hard: &str, used: &str) -> Vec<crate::kind_row::KindObject> {
+    vec![crate::kind_row::KindObject::ResourceQuota(
+        cluster::ResourceQuotaSummary {
+            namespace: "team-a".to_owned(),
+            name: "compute".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            items: vec![cluster::QuotaItem {
+                resource: "pods".to_owned(),
+                hard: hard.to_owned(),
+                used: Some(used.to_owned()),
+            }],
+            scopes: Vec::new(),
+        },
+    )]
+}
+
+/// Gives the ResourceQuotas feed of the live session this snapshot, as its watch would.
+fn set_quotas(t: &EditTest, items: Vec<crate::kind_row::KindObject>, cx: &mut TestAppContext) {
+    let session = t.t.fixture.session(cx);
+    session.update(cx, |session, _| {
+        session.apply_condition_update(
+            ResourceKind::ResourceQuotas,
+            cluster::WatchUpdate::Snapshot(items),
+        );
+    });
+}
+
+fn quota_of(t: &EditTest, cx: &mut TestAppContext) -> crate::edit_quota::QuotaLine {
+    t.view(cx)
+        .read_with(cx, |view, _| match view.preview_state() {
+            PreviewState::Passed(passed) => passed.quota.clone(),
+            _ => panic!("the preview did not pass"),
+        })
+}
+
+#[gpui_kit::test]
+fn apply_stays_enabled_when_quota_exceeds(cx: &mut TestAppContext) {
+    let t = edit_test("edit-quota-exceeds", cx);
+    t.open(cx);
+    // 1 pod left; the change adds 2.
+    set_quotas(&t, quota_snapshot("4", "3"), cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    t.apply(cx);
+    t.wait_for_preview(cx);
+    let expected = "Quota compute: pods needs 2 more, 1 left";
+    assert_eq!(
+        quota_of(&t, cx),
+        crate::edit_quota::QuotaLine::Exceeds(vec![expected.into()])
+    );
+    assert_eq!(t.with_view(cx, YamlEditView::apply_block_reason), None);
+    // Apply still opens the confirm dialog, which repeats the warning next to the other checks.
+    t.apply(cx);
+    t.t.dialog(cx).read_with(cx, |dialog, _| {
+        let lines: Vec<String> = dialog
+            .warning_lines()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(lines.contains(&expected.to_owned()), "{lines:?}");
+    });
+}
+
+#[gpui_kit::test]
+fn quota_fits_reads_the_namespace_headroom(cx: &mut TestAppContext) {
+    let t = edit_test("edit-quota-fits", cx);
+    t.open(cx);
+    set_quotas(&t, quota_snapshot("10", "3"), cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    t.apply(cx);
+    t.wait_for_preview(cx);
+    assert_eq!(
+        quota_of(&t, cx),
+        crate::edit_quota::QuotaLine::Fits("Namespace quota OK (5 pods left)".into())
+    );
+}
+
+#[gpui_kit::test]
+fn quota_feed_off_says_not_checked_and_adds_no_warning(cx: &mut TestAppContext) {
+    let t = edit_test("edit-quota-off", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    t.apply(cx);
+    t.wait_for_preview(cx);
+    // The fake server has no quotas route, so the feed never loaded.
+    let line = quota_of(&t, cx);
+    let crate::edit_quota::QuotaLine::NotChecked(text) = &line else {
+        panic!("expected NotChecked, got {line:?}");
+    };
+    assert!(text.starts_with("Quota not checked: "), "{text}");
+    assert!(line.warnings().is_empty());
+    assert_eq!(t.with_view(cx, YamlEditView::apply_block_reason), None);
+}
+
+// ---- Spec 0041: a click on a Deployment row of the timeline ----
+
+fn deployment_key() -> ResourceKey {
+    ResourceKey::Kind {
+        kind: ResourceKind::Deployments,
+        namespace: Some("team-a".to_owned()),
+        name: "api".to_owned(),
+    }
+}
+
+fn click_change(t: &EditTest, named: Option<&str>, cx: &mut TestAppContext) {
+    let named = named.map(str::to_owned);
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.shell().update(cx, |shell, cx| {
+            shell.open_change_diff(deployment_key(), named, window, cx)
+        });
+    });
+}
+
+fn has_dialog_open(t: &EditTest, cx: &mut TestAppContext) -> bool {
+    t.t.fixture
+        .with_window(cx, |window, cx| window.has_active_dialog(cx))
+}
+
+fn notice_count(t: &EditTest, cx: &mut TestAppContext) -> usize {
+    t.t.fixture
+        .with_window(cx, |window, cx| window.notifications(cx).len())
+}
+
+/// The names of the ReplicaSets whose templates the dialog read, sorted.
+fn template_reads(api: &FakeApi) -> Vec<String> {
+    let mut names: Vec<String> = api
+        .requests()
+        .into_iter()
+        .filter(|request| request.method == "GET")
+        .filter_map(|request| {
+            request
+                .path
+                .strip_prefix("/apis/apps/v1/namespaces/team-a/replicasets/")
+                .map(str::to_owned)
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+fn wait_for_template_reads(t: &EditTest, count: usize, cx: &mut TestAppContext) {
+    t.t.wait_for("the template reads", cx, |_| {
+        template_reads(&t.t.stg_api).len() >= count
+    });
+}
+
+#[gpui_kit::test]
+fn deployment_row_click_opens_latest_diff(cx: &mut TestAppContext) {
+    let t = edit_test("change-latest", cx);
+    // The message names no listed set: the newest revision against the one before.
+    click_change(&t, Some("api-gone"), cx);
+    wait_for_template_reads(&t, 2, cx);
+    assert!(has_dialog_open(&t, cx));
+    let lists = replica_set_lists_of(&t.t.stg_api);
+    assert_eq!(lists.len(), 1, "{lists:?}");
+    assert!(lists[0].has_query("labelSelector", "app%3Dapi"));
+    assert_eq!(template_reads(&t.t.stg_api), ["api-a", "api-b"]);
+}
+
+#[gpui_kit::test]
+fn deployment_row_click_diffs_the_named_set(cx: &mut TestAppContext) {
+    let t = edit_test("change-named", cx);
+    *lock(&t.server.replica_sets) = vec![
+        replica_set("api-a", 1),
+        replica_set("api-b", 2),
+        replica_set("api-c", 3),
+    ];
+    click_change(&t, Some("api-b"), cx);
+    wait_for_template_reads(&t, 2, cx);
+    assert!(has_dialog_open(&t, cx));
+    // The named set against its predecessor, not the newest pair.
+    assert_eq!(template_reads(&t.t.stg_api), ["api-a", "api-b"]);
+}
+
+#[gpui_kit::test]
+fn deployment_row_click_denied_shows_notice(cx: &mut TestAppContext) {
+    let t = edit_test("change-denied", cx);
+    let report = cluster::AccessReport {
+        reviews: cluster::AccessCheck::ALL
+            .into_iter()
+            .map(|check| cluster::AccessReview {
+                check,
+                decision: if check == cluster::AccessCheck::ListReplicaSets {
+                    cluster::AccessDecision::Denied { reason: None }
+                } else {
+                    cluster::AccessDecision::Allowed
+                },
+            })
+            .collect(),
+    };
+    t.t.fixture.session(cx).update(cx, |session, cx| {
+        session.set_access_for_test(crate::cluster_session::AccessState::Known(report), cx);
+    });
+    let before = notice_count(&t, cx);
+    click_change(&t, None, cx);
+    cx.run_until_parked();
+    assert_eq!(notice_count(&t, cx), before + 1);
+    assert!(!has_dialog_open(&t, cx));
+    assert!(replica_set_lists_of(&t.t.stg_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn single_revision_click_shows_notice(cx: &mut TestAppContext) {
+    let t = edit_test("change-single", cx);
+    *lock(&t.server.replica_sets) = vec![replica_set("api-a", 1)];
+    let before = notice_count(&t, cx);
+    click_change(&t, None, cx);
+    t.t.wait_for("the list", cx, |_| {
+        !replica_set_lists_of(&t.t.stg_api).is_empty()
+    });
+    cx.run_until_parked();
+    assert_eq!(notice_count(&t, cx), before + 1);
+    assert!(!has_dialog_open(&t, cx));
+    assert!(template_reads(&t.t.stg_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn go_to_deployment_reveals_and_closes(cx: &mut TestAppContext) {
+    let t = edit_test("change-go-to", cx);
+    click_change(&t, None, cx);
+    wait_for_template_reads(&t, 2, cx);
+    assert!(has_dialog_open(&t, cx));
+    assert!(!t.shell().read_with(cx, |shell, _| shell.drawer.is_open));
+    // The footer button runs `go_to_deployment` of the view the dialog holds; a twin view with the
+    // same key and shell does the same to the dialog that is open.
+    let connection = t
+        .shell()
+        .read_with(cx, |shell, cx| shell.edit_connection(&t.t.stg, cx))
+        .expect("a live connection");
+    let request = crate::revision_diff::diff_request(
+        deployment_key(),
+        crate::revision_diff::RevisionSide {
+            replica_set: "api-a".to_owned(),
+            revision: Some(1),
+            tag: None,
+            is_current: false,
+            created_at: None,
+        },
+        crate::revision_diff::RevisionSide {
+            replica_set: "api-b".to_owned(),
+            revision: Some(2),
+            tag: None,
+            is_current: true,
+            created_at: None,
+        },
+    );
+    let shell = t.shell().downgrade();
+    let view = t.t.fixture.with_window(cx, |_, cx| {
+        cx.new(|cx| {
+            crate::revision_diff::RevisionDiffView::new(request, connection, cx)
+                .with_go_to(deployment_key(), shell)
+        })
+    });
+    t.t.fixture.with_window(cx, |window, cx| {
+        view.update(cx, |view, cx| view.go_to_deployment_for_test(window, cx));
+    });
+    assert!(!has_dialog_open(&t, cx));
+    assert!(t.shell().read_with(cx, |shell, _| shell.drawer.is_open));
 }

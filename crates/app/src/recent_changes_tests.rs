@@ -82,6 +82,7 @@ fn inputs<'a>() -> ChangeInputs<'a> {
         rescales: None,
         nodes: None,
         namespaces: None,
+        deployments: None,
         window: ChangeWindow::FifteenMinutes,
         now: now(),
     }
@@ -355,4 +356,175 @@ fn event_slightly_ahead_of_the_clock_is_recent() {
         ..inputs()
     });
     assert_eq!(entries.len(), 1);
+}
+
+// ---- Spec 0041: the field manager of a rollout ----
+
+fn deployment_written(manager: &str, written: &str) -> KindObject {
+    let mut deployment = crate::workload_actions::workload_actions_tests::deployment("api");
+    deployment.namespace = "payments".to_owned();
+    deployment.template_change = Some(cluster::FieldWriter {
+        manager: manager.to_owned(),
+        at: at(written),
+    });
+    KindObject::Deployment(deployment)
+}
+
+/// The one rollout entry of `api` seen at `RECENT` (11:55:00Z), with the feed `deployments`.
+fn rollout_entry(deployments: Option<&[KindObject]>) -> ChangeEntry {
+    let events = [event("Deployment", Some("payments"), "api", Some(RECENT))];
+    let mut entries = recent_changes(&ChangeInputs {
+        rollouts: Some(&events),
+        deployments,
+        ..inputs()
+    });
+    assert_eq!(entries.len(), 1);
+    entries.remove(0)
+}
+
+#[test]
+fn rollout_actor_is_field_manager_in_window() {
+    // 20 s before the event's last occurrence.
+    let feed = [deployment_written("ci-bot", "2024-05-01T11:54:40Z")];
+    let entry = rollout_entry(Some(&feed));
+    assert_eq!(entry.actor.as_deref(), Some("ci-bot"));
+    assert_eq!(entry.actor_source, ActorSource::FieldManager);
+}
+
+#[test]
+fn field_manager_actor_tooltip_says_probably() {
+    let feed = [deployment_written("ci-bot", "2024-05-01T11:54:40Z")];
+    let tooltip = rollout_entry(Some(&feed)).tooltip();
+    assert!(
+        tooltip.ends_with("probably ci-bot · last pod-template writer (field manager)"),
+        "{tooltip}"
+    );
+}
+
+#[test]
+fn rollout_actor_falls_back_outside_window() {
+    // A write 2 minutes after the event cannot have caused it; one 40 minutes before is too old.
+    for written in ["2024-05-01T11:57:00Z", "2024-05-01T11:15:00Z"] {
+        let feed = [deployment_written("ci-bot", written)];
+        let entry = rollout_entry(Some(&feed));
+        assert_eq!(
+            entry.actor.as_deref(),
+            Some("deployment-controller"),
+            "{written}"
+        );
+        assert_eq!(entry.actor_source, ActorSource::EventSource);
+        assert!(
+            entry.tooltip().ends_with("· event source"),
+            "{}",
+            entry.tooltip()
+        );
+    }
+    // The edges of the window count: 30 minutes before and 60 seconds after.
+    for written in ["2024-05-01T11:25:00Z", "2024-05-01T11:56:00Z"] {
+        let feed = [deployment_written("ci-bot", written)];
+        assert_eq!(
+            rollout_entry(Some(&feed)).actor_source,
+            ActorSource::FieldManager,
+            "{written}"
+        );
+    }
+}
+
+#[test]
+fn rollout_actor_without_feed_is_event_source() {
+    let entry = rollout_entry(None);
+    assert_eq!(entry.actor.as_deref(), Some("deployment-controller"));
+    assert_eq!(entry.actor_source, ActorSource::EventSource);
+    // A Deployment the feed does not hold, or one without a template writer, is the same.
+    let other = [deployment_written("ci-bot", "2024-05-01T11:54:40Z")];
+    let mut elsewhere = event("Deployment", Some("billing"), "api", Some(RECENT));
+    elsewhere.source = Some("deployment-controller".to_owned());
+    let entries = recent_changes(&ChangeInputs {
+        rollouts: Some(&[elsewhere]),
+        deployments: Some(&other),
+        ..inputs()
+    });
+    assert_eq!(entries[0].actor_source, ActorSource::EventSource);
+    let mut unwritten = crate::workload_actions::workload_actions_tests::deployment("api");
+    unwritten.namespace = "payments".to_owned();
+    let feed = [KindObject::Deployment(unwritten)];
+    assert_eq!(
+        rollout_entry(Some(&feed)).actor_source,
+        ActorSource::EventSource
+    );
+}
+
+#[test]
+fn other_rows_keep_their_actor() {
+    let feed = [deployment_written("ci-bot", "2024-05-01T11:54:40Z")];
+    let hpa = [event(
+        "HorizontalPodAutoscaler",
+        Some("payments"),
+        "api",
+        Some(RECENT),
+    )];
+    let nodes = [with_ready(
+        node("wk-1", LONG_AGO),
+        ConditionStatus::False,
+        RECENT,
+    )];
+    let namespaces = [namespace("new-team", RECENT)];
+    let entries = recent_changes(&ChangeInputs {
+        rescales: Some(&hpa),
+        nodes: Some(&nodes),
+        namespaces: Some(&namespaces),
+        deployments: Some(&feed),
+        ..inputs()
+    });
+    let actor = |kind| {
+        let entry = entries
+            .iter()
+            .find(|entry| entry.kind == kind)
+            .expect("a row");
+        (entry.actor.clone(), entry.actor_source, entry.tooltip())
+    };
+    let (hpa_actor, hpa_source, hpa_tooltip) = actor(ChangeKind::Autoscaler);
+    assert_eq!(hpa_actor.as_deref(), Some("deployment-controller"));
+    assert_eq!(hpa_source, ActorSource::EventSource);
+    assert!(!hpa_tooltip.contains("event source"), "{hpa_tooltip}");
+    assert_eq!(actor(ChangeKind::Node).0.as_deref(), Some("kubelet"));
+    assert_eq!(actor(ChangeKind::Namespace).0, None);
+}
+
+#[test]
+fn event_entry_reads_named_replica_set() {
+    let named = |message: &str| {
+        let mut rollout = event("Deployment", Some("payments"), "api", Some(RECENT));
+        rollout.message = message.to_owned();
+        recent_changes(&ChangeInputs {
+            rollouts: Some(&[rollout]),
+            ..inputs()
+        })
+        .remove(0)
+        .replica_set
+    };
+    assert_eq!(
+        named("Scaled down replica set api-7d9f8c to 0").as_deref(),
+        Some("api-7d9f8c")
+    );
+    assert_eq!(
+        named("Scaled up replica set api-7d9f8c to 3 from 2").as_deref(),
+        Some("api-7d9f8c")
+    );
+    assert_eq!(named("Deployment api paused"), None);
+    // Arbitrary text after the words is not a name.
+    assert_eq!(named("Scaled up replica set Not_A_Name to 3"), None);
+    // Only Deployment rows carry one.
+    let mut hpa = event(
+        "HorizontalPodAutoscaler",
+        Some("payments"),
+        "api",
+        Some(RECENT),
+    );
+    hpa.message = "Scaled up replica set api-7d9f8c to 3".to_owned();
+    let entries = recent_changes(&ChangeInputs {
+        rescales: Some(&[hpa]),
+        ..inputs()
+    });
+    assert_eq!(entries[0].replica_set, None);
 }

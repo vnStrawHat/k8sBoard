@@ -17,6 +17,7 @@ fn side(replica_set: &str, revision: Option<u64>, is_current: bool) -> RevisionS
         revision,
         tag: Some("v1".to_owned()),
         is_current,
+        created_at: None,
     }
 }
 
@@ -92,6 +93,7 @@ fn subtitle_names_revisions_and_tags() {
         revision: None,
         tag: None,
         is_current: false,
+        created_at: None,
     };
     assert_eq!(bare.label(), "rev —");
 }
@@ -127,4 +129,81 @@ fn env_toggle_shown_only_when_hidden() {
     assert!(shows_env_toggle(EnvValues::Hidden, 1));
     assert!(shows_env_toggle(EnvValues::Shown, 0));
     assert!(!shows_env_toggle(EnvValues::Hidden, 0));
+}
+
+fn numbered_set(name: &str, revision: Option<&str>) -> ReplicaSetSummary {
+    ReplicaSetSummary {
+        name: name.to_owned(),
+        ..replica_set(revision, "api:v1")
+    }
+}
+
+fn names(sides: &[RevisionSide]) -> Vec<&str> {
+    sides.iter().map(|side| side.replica_set.as_str()).collect()
+}
+
+#[test]
+fn revision_list_is_newest_first_with_current_marked() {
+    let sets = [
+        numbered_set("a36", Some("36")),
+        numbered_set("a38", Some("38")),
+        numbered_set("a37", Some("37")),
+        numbered_set("a-none", None),
+    ];
+    let sides = revision_list(&sets);
+    assert_eq!(names(&sides), ["a38", "a37", "a36", "a-none"]);
+    let current: Vec<bool> = sides.iter().map(|side| side.is_current).collect();
+    assert_eq!(current, [true, false, false, false]);
+}
+
+#[test]
+fn revision_list_never_marks_an_unnumbered_set_current() {
+    let sides = revision_list(&[numbered_set("only", None)]);
+    assert!(!sides[0].is_current);
+}
+
+#[test]
+fn latest_pair_needs_two_numbered_revisions() {
+    let one = revision_list(&[numbered_set("a1", Some("1")), numbered_set("x", None)]);
+    assert_eq!(latest_pair(&one), None);
+    let two = revision_list(&[numbered_set("a1", Some("1")), numbered_set("a2", Some("2"))]);
+    let (newest, previous) = latest_pair(&two).expect("two numbered revisions");
+    assert_eq!(
+        (newest.replica_set.as_str(), previous.replica_set.as_str()),
+        ("a2", "a1")
+    );
+}
+fn three() -> Vec<RevisionSide> {
+    revision_list(&[
+        numbered_set("a", Some("1")),
+        numbered_set("b", Some("2")),
+        numbered_set("c", Some("3")),
+    ])
+}
+
+#[test]
+fn change_pair_diffs_the_named_set_against_its_predecessor() {
+    let (newer, older) = change_pair(&three(), Some("b")).expect("a pair");
+    assert_eq!(
+        (newer.replica_set.as_str(), older.replica_set.as_str()),
+        ("b", "a")
+    );
+    assert!(!newer.is_current);
+}
+
+#[test]
+fn change_pair_falls_back_without_predecessor() {
+    // The lowest number has no predecessor, and an unlisted name has no side: both use the latest
+    // pair.
+    for named in [Some("a"), Some("gone"), None] {
+        let (newer, older) = change_pair(&three(), named).expect("a pair");
+        assert_eq!(
+            (newer.replica_set.as_str(), older.replica_set.as_str()),
+            ("c", "b")
+        );
+    }
+    assert_eq!(
+        change_pair(&revision_list(&[numbered_set("a", Some("1"))]), Some("a")),
+        None
+    );
 }

@@ -4,6 +4,7 @@
 
 use std::ops::Range;
 
+use cluster::ObjectKind;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Editor;
@@ -25,6 +26,7 @@ use super::{
     elide_middle, footer_text,
 };
 use crate::drawer::truncated_text_with_tooltip;
+use crate::edit_quota::QuotaLine;
 use crate::keymap::{ApplyEdit, YAML_EDIT};
 use crate::yaml_diff::{DiffRow, DiffRowKind};
 
@@ -37,6 +39,14 @@ const DIFF_ROW_HEIGHT: f32 = 20.;
 const LINE_NUMBER_WIDTH: f32 = 44.;
 /// How strongly a removed or added row is tinted by its theme token.
 const ROW_TINT: f32 = 0.14;
+
+/// The tabs of the edit of a `kind`, in order: the Revision history is for Deployments only.
+pub(crate) fn edit_tabs(kind: ObjectKind) -> &'static [EditTab] {
+    match kind {
+        ObjectKind::Deployment => &[EditTab::Editor, EditTab::Diff, EditTab::History],
+        _ => &[EditTab::Editor, EditTab::Diff],
+    }
+}
 
 /// The buttons that answer a banner.
 enum BannerAnswers {
@@ -126,25 +136,26 @@ impl YamlEditView {
             }
             _ => "Diff vs cluster".to_owned(),
         };
-        let selected = match self.tab {
-            EditTab::Editor => 0,
-            EditTab::Diff => 1,
-        };
-        TabBar::new("edit-tabs")
+        let tabs = edit_tabs(self.kind);
+        let selected = tabs.iter().position(|tab| *tab == self.tab).unwrap_or(0);
+        let mut bar = TabBar::new("edit-tabs")
             .underline()
             .selected_index(selected)
-            .on_click(cx.listener(|view, index: &usize, _, cx| {
-                let tab = if *index == 0 {
-                    EditTab::Editor
-                } else {
-                    EditTab::Diff
-                };
-                view.show_tab(tab, cx);
+            .on_click(cx.listener(move |view, index: &usize, _, cx| {
+                if let Some(tab) = tabs.get(*index) {
+                    view.show_tab(*tab, cx);
+                }
             }))
-            .prefix(div().w_4())
-            .child(Tab::new().label("Editor"))
-            .child(Tab::new().label(diff_label))
-            .into_any_element()
+            .prefix(div().w_4());
+        for tab in tabs {
+            let label = match tab {
+                EditTab::Editor => "Editor".to_owned(),
+                EditTab::Diff => diff_label.clone(),
+                EditTab::History => "Revision history".to_owned(),
+            };
+            bar = bar.child(Tab::new().label(label));
+        }
+        bar.into_any_element()
     }
 
     /// The condition of the object over the editor, with the buttons that answer it.
@@ -258,6 +269,10 @@ impl YamlEditView {
                 .size_full()
                 .into_any_element(),
             EditTab::Diff => self.render_diff(cx),
+            EditTab::History => self.history.as_ref().map_or_else(
+                || div().into_any_element(),
+                |history| history.clone().into_any_element(),
+            ),
         }
     }
 
@@ -374,6 +389,35 @@ impl YamlEditView {
                         .child(check.clone()),
                 );
             }
+            match &passed.quota {
+                QuotaLine::None => {}
+                QuotaLine::NotChecked(text) => {
+                    side = side.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(text.clone()),
+                    );
+                }
+                QuotaLine::Fits(text) => {
+                    side = side.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.success)
+                            .child(text.clone()),
+                    );
+                }
+                QuotaLine::Exceeds(lines) => {
+                    for line in lines {
+                        side = side.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.warning)
+                                .child(line.clone()),
+                        );
+                    }
+                }
+            }
         }
         if !self.server_changed.is_empty() {
             side = side.child(heading(
@@ -422,13 +466,7 @@ impl YamlEditView {
         let theme = cx.theme();
         let (_, tone) = dry_run_line(&self.preview, text, cx);
         let status = footer_text(&self.preview, text);
-        let apply_reason = if self.is_running() {
-            Some("Waiting for the dry-run…")
-        } else if !self.is_dirty {
-            Some("No changes")
-        } else {
-            None
-        };
+        let apply_reason = self.apply_block_reason();
         let apply = Button::new("edit-apply")
             .label("Apply…")
             .small()
@@ -499,7 +537,7 @@ impl Render for YamlEditView {
     }
 }
 
-fn busy(text: &str, cx: &App) -> AnyElement {
+pub(crate) fn busy(text: &str, cx: &App) -> AnyElement {
     v_flex()
         .size_full()
         .items_center()
@@ -515,7 +553,7 @@ fn busy(text: &str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn muted_center(text: impl Into<SharedString>, color: gpui_kit::Hsla) -> AnyElement {
+pub(crate) fn muted_center(text: impl Into<SharedString>, color: gpui_kit::Hsla) -> AnyElement {
     v_flex()
         .size_full()
         .items_center()

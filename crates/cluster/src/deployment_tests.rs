@@ -150,3 +150,76 @@ fn condition_message_is_kept() {
         Some("quota exceeded")
     );
 }
+
+fn managed_fields(entries: &[serde_json::Value]) -> Deployment {
+    serde_json::from_value(serde_json::json!({
+        "apiVersion": "apps/v1", "kind": "Deployment",
+        "metadata": {"name": "api", "managedFields": entries},
+    }))
+    .expect("a deployment")
+}
+
+fn entry(manager: &str, time: &str, fields: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "manager": manager, "operation": "Update", "apiVersion": "apps/v1",
+        "time": time, "fieldsType": "FieldsV1", "fieldsV1": fields,
+    })
+}
+
+fn owns_template() -> serde_json::Value {
+    serde_json::json!({"f:spec": {"f:template": {"f:spec": {"f:containers": {}}}}})
+}
+
+#[test]
+fn template_writer_is_the_newest_template_owner() {
+    let deployment = managed_fields(&[
+        entry("ci-bot", "2026-10-04T10:00:00Z", owns_template()),
+        entry("kubectl-edit", "2026-10-04T09:00:00Z", owns_template()),
+    ]);
+    let writer = deployment_summary(&deployment)
+        .template_change
+        .expect("a writer");
+    assert_eq!(writer.manager, "ci-bot");
+    assert_eq!(writer.at.to_string(), "2026-10-04T10:00:00Z");
+}
+
+#[test]
+fn template_writer_ignores_status_and_non_template_entries() {
+    let mut status = entry(
+        "deployment-controller",
+        "2026-10-04T11:00:00Z",
+        owns_template(),
+    );
+    status["subresource"] = "status".into();
+    let mut scale = entry("hpa", "2026-10-04T11:30:00Z", owns_template());
+    scale["subresource"] = "scale".into();
+    let metadata_only = entry(
+        "labeler",
+        "2026-10-04T11:45:00Z",
+        serde_json::json!({"f:metadata": {"f:labels": {}}}),
+    );
+    let replicas_only = entry(
+        "scaler",
+        "2026-10-04T11:50:00Z",
+        serde_json::json!({"f:spec": {"f:replicas": {}}}),
+    );
+    let deployment = managed_fields(&[
+        status,
+        scale,
+        metadata_only,
+        replicas_only,
+        entry("argocd", "2026-10-04T08:00:00Z", owns_template()),
+    ]);
+    let writer = deployment_summary(&deployment)
+        .template_change
+        .expect("a writer");
+    assert_eq!(writer.manager, "argocd");
+}
+
+#[test]
+fn template_writer_is_none_without_managed_fields() {
+    assert_eq!(
+        deployment_summary(&Deployment::default()).template_change,
+        None
+    );
+}

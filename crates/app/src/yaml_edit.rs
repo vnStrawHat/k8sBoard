@@ -11,9 +11,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cluster::{
-    ClusterConnection, EditBase, EditCheck, EditError, EnvValues, FieldChange, FieldPath,
-    ObjectEdit, ObjectKind, ObjectRef, WriteEffect, WriteError, WriteOperation, WriteOutcome,
-    WriteRequest, format_yaml, rebase,
+    ClusterConnection, EditBase, EditCheck, EditError, EditPreview, EnvValues, FieldChange,
+    FieldPath, ObjectEdit, ObjectKind, ObjectRef, WriteEffect, WriteError, WriteOperation,
+    WriteOutcome, WriteRequest, format_yaml, rebase,
 };
 use gpui_kit::component::input::{EditorState, InputEvent};
 use gpui_kit::{
@@ -26,7 +26,9 @@ use crate::app_shell::write_flow::{CheckedWriteError, WriteIntent, checked_write
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
+use crate::edit_quota::{QuotaLine, quota_line};
 use crate::resource_actions::ResourceAction;
+use crate::revision_history::{HistoryInputs, RevisionHistory};
 use crate::table_selection::ClusterObject;
 use crate::write_guard::ActionRisk;
 use crate::yaml_diff::{DiffRow, diff_rows};
@@ -35,6 +37,8 @@ use crate::yaml_diff::{DiffRow, diff_rows};
 pub(crate) enum EditTab {
     Editor,
     Diff,
+    /// The Revision history of a Deployment (spec 0041).
+    History,
 }
 
 /// Where the first read of the object stands.
@@ -67,6 +71,8 @@ pub(crate) struct PassedPreview {
     /// Changes beyond the cap of `changes`.
     pub(crate) more_changes: usize,
     pub(crate) checks: Vec<SharedString>,
+    /// What the namespace quotas say about the pods and resources the change adds (advisory).
+    pub(crate) quota: QuotaLine,
     pub(crate) rows: Vec<DiffRow>,
     pub(crate) elapsed: Duration,
 }
@@ -208,6 +214,8 @@ pub(crate) struct YamlEditView {
     /// A held Ctrl S was seen in this key event (see `apply_from_key`).
     is_apply_key_held: bool,
     diff_scroll: UniformListScrollHandle,
+    /// The Revision history tab, created on its first show and dropped with the view.
+    history: Option<Entity<RevisionHistory>>,
     focus_handle: FocusHandle,
     /// `--screen edit-yaml-diff`: a picture drawn from fixed data that sends nothing.
     #[cfg(feature = "screenshot")]
@@ -285,6 +293,7 @@ impl YamlEditView {
             overwritten: Vec::new(),
             is_apply_key_held: false,
             diff_scroll: UniformListScrollHandle::new(),
+            history: None,
             focus_handle: cx.focus_handle(),
             #[cfg(feature = "screenshot")]
             is_fixture: false,
@@ -465,7 +474,23 @@ impl YamlEditView {
 
     pub(crate) fn show_tab(&mut self, tab: EditTab, cx: &mut Context<Self>) {
         self.tab = tab;
+        if tab == EditTab::History && self.history.is_none() {
+            self.history = Some(self.new_history(cx));
+        }
         cx.notify();
+    }
+
+    /// The history of this Deployment, asked of the shell for the connection, the permission, and the
+    /// selector. It runs from the view's own click, so the shell can be read (see `reload`).
+    fn new_history(&self, cx: &mut Context<Self>) -> Entity<RevisionHistory> {
+        let inputs = match self.shell.upgrade() {
+            Some(shell) => shell
+                .read(cx)
+                .history_inputs(&self.target.cluster, &self.object, cx),
+            None => HistoryInputs::Unavailable("the window is closing".into()),
+        };
+        let (deployment, object) = (self.target.key.clone(), self.object.clone());
+        cx.new(|cx| RevisionHistory::new(deployment, object, inputs, cx))
     }
 
     /// Env values: reads the object again with the other setting. Only while the text is
@@ -532,6 +557,18 @@ impl YamlEditView {
         matches!(self.preview, PreviewState::Running { .. })
     }
 
+    /// Why Apply is off, or `None`. Only a running check or an unchanged text switch it off: a quota
+    /// warning never does (spec 0041, decision 11).
+    pub(super) fn apply_block_reason(&self) -> Option<&'static str> {
+        if self.is_running() {
+            Some("Waiting for the dry-run…")
+        } else if !self.is_dirty {
+            Some("No changes")
+        } else {
+            None
+        }
+    }
+
     /// Ctrl S and Apply…: the first press checks the edit with the server and shows the Diff, the
     /// next one for the same text opens the confirm dialog. Nothing while a check runs or while the
     /// text is unchanged (decision 15).
@@ -591,6 +628,7 @@ impl YamlEditView {
             return;
         };
         let mut warnings = passed.checks.clone();
+        warnings.extend(passed.quota.warnings().iter().cloned());
         warnings.extend(self.overwritten.iter().cloned());
         let intent = self.intent(request, warnings);
         let _ = self
@@ -693,12 +731,14 @@ impl YamlEditView {
                     .iter()
                     .map(|check| check_text(check, &text).into())
                     .collect();
+                let quota = self.quota_line_of(&preview, cx);
                 self.preview = PreviewState::Passed(Box::new(PassedPreview {
                     for_text: text,
                     request: Some(request),
                     changes: preview.changes.iter().map(ChangeLine::of).collect(),
                     more_changes: preview.more_changes,
                     checks,
+                    quota,
                     rows,
                     elapsed,
                 }));
@@ -711,6 +751,21 @@ impl YamlEditView {
             (Err(error), _) => self.apply_failure(edit_failure_of(&error), true),
         }
         cx.notify();
+    }
+
+    /// The quota line of a passed dry-run, from what the session's quota feed holds now. It is
+    /// computed once per preview: quotas change slowly, and a later check computes it again.
+    fn quota_line_of(&self, preview: &EditPreview, cx: &mut Context<Self>) -> QuotaLine {
+        let Some(namespace) = self.object.namespace() else {
+            return QuotaLine::None;
+        };
+        let input = match self.shell.upgrade() {
+            Some(shell) => shell
+                .read(cx)
+                .quota_input(&self.target.cluster, namespace, cx),
+            None => return QuotaLine::None,
+        };
+        quota_line(preview.demand.as_ref(), &input)
     }
 
     /// Shows a failed write. A check also reports the failures that are not the user's to fix
@@ -797,6 +852,11 @@ impl YamlEditView {
     #[cfg(test)]
     pub(crate) fn editor(&self) -> &Entity<EditorState> {
         &self.editor
+    }
+
+    #[cfg(test)]
+    pub(crate) fn history(&self) -> Option<&Entity<RevisionHistory>> {
+        self.history.as_ref()
     }
 }
 
@@ -914,11 +974,12 @@ pub(crate) fn footer_text(preview: &PreviewState, current: &str) -> String {
 
 #[cfg(feature = "screenshot")]
 impl YamlEditView {
-    /// `--screen edit-yaml-diff`: W10's diff drawn from fixed data. It has no base, so Apply is
-    /// off, and it never touches a connection.
+    /// `--screen edit-yaml-diff` and `edit-yaml-history`: W10 drawn from fixed data, on `tab` (the Diff
+    /// or the Revision history). It has no base, so Apply is off, and it never touches a connection.
     pub(crate) fn fixture(
         shell: WeakEntity<AppShell>,
         subject: EditSubject,
+        tab: EditTab,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -931,7 +992,10 @@ impl YamlEditView {
         view.is_dirty = true;
         view.is_fixture = true;
         view.resource_version = Some("88412093".into());
-        view.tab = EditTab::Diff;
+        view.tab = tab;
+        if tab == EditTab::History {
+            view.history = Some(history_fixture(&view.target.key, cx));
+        }
         view.preview = PreviewState::Passed(Box::new(PassedPreview {
             for_text: after.clone().into(),
             request: None,
@@ -957,11 +1021,44 @@ impl YamlEditView {
                 )
                 .into(),
             ],
+            quota: crate::edit_quota::fixture_line(),
             rows: diff_rows(before, &after),
             elapsed: Duration::from_millis(412),
         }));
         view
     }
+}
+
+/// The Revision history of `--screen edit-yaml-history`: three fixed revisions, the previous one
+/// selected, with the `--screen revision-diff` fixture diff.
+#[cfg(feature = "screenshot")]
+fn history_fixture(
+    deployment: &crate::table_selection::ResourceKey,
+    cx: &mut Context<YamlEditView>,
+) -> Entity<RevisionHistory> {
+    use crate::revision_diff::{RevisionDiffView, RevisionSide, diff_request};
+    use crate::screenshot::{REVISION_FIXTURE_NEWER, REVISION_FIXTURE_OLDER};
+    let side =
+        |replica_set: &str, revision: u64, tag: &str, hours: i64, is_current: bool| RevisionSide {
+            replica_set: replica_set.to_owned(),
+            revision: Some(revision),
+            tag: Some(tag.to_owned()),
+            is_current,
+            created_at: jiff::Timestamp::now()
+                .checked_sub(jiff::SignedDuration::from_hours(hours))
+                .ok(),
+        };
+    let sides = vec![
+        side("api-7d9f8c", 38, "2.14.0", 3, true),
+        side("api-6c8d9f", 37, "2.13.0", 52, false),
+        side("api-5b7c8e", 36, "2.12.1", 170, false),
+    ];
+    let request = diff_request(deployment.clone(), sides[1].clone(), sides[0].clone());
+    let diff = cx.new(|_| {
+        RevisionDiffView::fixture(request, REVISION_FIXTURE_OLDER, REVISION_FIXTURE_NEWER, 2)
+    });
+    let key = deployment.clone();
+    cx.new(|_| RevisionHistory::fixture(key, sides, 1, diff))
 }
 
 #[path = "yaml_edit_panels.rs"]

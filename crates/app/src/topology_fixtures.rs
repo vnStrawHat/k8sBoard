@@ -236,6 +236,7 @@ pub(crate) fn deployment(name: &str, desired: u32, ready: u32) -> DeploymentSumm
         selector: Vec::new(),
         containers: Vec::new(),
         conditions: Vec::new(),
+        template_change: None,
     }
 }
 

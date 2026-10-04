@@ -1,16 +1,21 @@
 use futures::future::Either;
 use futures::{Stream, future, stream};
 use k8s_openapi::api::apps::v1::ReplicaSet;
+use kube::api::{Api, ListParams};
 use kube::runtime::watcher;
 
-use crate::connection::ClusterConnection;
+use crate::connection::{ClusterConnection, ClusterError};
 use crate::namespace::NamespaceScope;
+use crate::object_yaml::{ObjectKind, ObjectRef};
 use crate::pod_status::non_negative;
 use crate::resource_watch::{WatchUpdate, selected_summary_watch, summary_watch};
 use crate::workload::{
     ControllerRef, TemplateContainer, controller_ref, label_terms, optional_count, revision,
     selector_terms, template_containers,
 };
+
+/// The action text of `deployment_revisions`.
+const REVISIONS_ACTION: &str = "listing the revisions of a deployment";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReplicaSetSummary {
@@ -68,6 +73,46 @@ impl ClusterConnection {
             "watching selected replica sets",
             replica_set_summary,
         ))
+    }
+
+    /// One LIST of `deployment`'s namespace's ReplicaSets with `labelSelector = selector` (kubectl
+    /// syntax, as `watch_selected_replica_sets`), kept when their controller owner is that
+    /// Deployment. An empty selector, or one with `<invalid>`, is `Ok(vec![])` with no request.
+    /// Order is as returned. Read-only; `deployment` must be a Deployment.
+    pub async fn deployment_revisions(
+        &self,
+        deployment: &ObjectRef,
+        selector: &str,
+    ) -> Result<Vec<ReplicaSetSummary>, ClusterError> {
+        let (Some(ObjectKind::Deployment), Some(namespace)) =
+            (deployment.builtin_kind(), deployment.namespace())
+        else {
+            return Err(ClusterError::UnexpectedResponse {
+                context: self.context().to_owned(),
+                action: REVISIONS_ACTION,
+                source: "the object is not a deployment".into(),
+            });
+        };
+        if selector.is_empty() || selector.contains("<invalid>") {
+            return Ok(Vec::new());
+        }
+        let api = Api::<ReplicaSet>::namespaced(self.client().clone(), namespace);
+        let list = self
+            .run(
+                REVISIONS_ACTION,
+                api.list(&ListParams::default().labels(selector)),
+            )
+            .await?;
+        Ok(list
+            .items
+            .iter()
+            .map(replica_set_summary)
+            .filter(|summary| {
+                summary.owner.as_ref().is_some_and(|owner| {
+                    owner.kind == "Deployment" && owner.name == deployment.name()
+                })
+            })
+            .collect())
     }
 }
 
@@ -149,3 +194,7 @@ mod tests {
         assert_eq!(summary.owner, None);
     }
 }
+
+#[cfg(test)]
+#[path = "replica_set_tests.rs"]
+mod replica_set_tests;

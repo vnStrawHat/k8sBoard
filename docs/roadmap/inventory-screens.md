@@ -10,7 +10,7 @@
 | O2 | Needs attention: rule engine (pod and container states, Warning events, node conditions, cert expiry (data source: 0016 `watch_tls_secrets`), PDB blocks, stuck namespace), plain-language cause, one primary action per row | Done (engine in 0020, panel in 0021 step 3) | 0021 |
 | O3 | Capacity: three-layer bars (used, requested, allocatable) for CPU, Memory, Pods, Volumes | Done (0021 step 1) | 0021 |
 | O4 | Node heatmap, NotReady outlined, click opens Nodes with the node selected | Done (0021 step 1) | 0021 |
-| O5 | Recent changes timeline (revisions, managedFields, events), click opens a diff | Partial (events and state rows, window 15 min or 1 h; managedFields "who" and the diff view are 0031 non-goals → audit 0041) | 0021 |
+| O5 | Recent changes timeline (revisions, managedFields, events), click opens a diff | Done for Deployments (0041: field-manager "who", inferred; click opens the revision diff); events and state rows, window 15 min or 1 h; ConfigMap rows dropped | 0021 |
 | I1 | Issues screen (sidebar top item with a red count) | Done (0020) | — |
 
 ## Pods (W4, W4b, W4c)
