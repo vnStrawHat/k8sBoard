@@ -37,7 +37,7 @@ use crate::cluster_session::{
 };
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::custom_rows::{FieldsSide, conditions_rows, field_list_rows};
-use crate::drawer::{link_text, truncated_text, wide_detail_row};
+use crate::drawer::{link_name, link_text, open_link, truncated_text, wide_detail_row};
 use crate::helm_release_view::ValuesLayout;
 use crate::helm_rows::{HistoryModel, HistoryRow, history_model};
 use crate::kind_diagnosis::{is_pod_not_ready, unready_node};
@@ -417,18 +417,17 @@ fn revision_element(
         .text_sm()
         .cursor_pointer()
         .hover(move |style| style.bg(hover_bg))
-        .on_click(cx.listener(move |shell, _, _, cx| {
+        .on_click(cx.listener(move |shell, _, window, cx| {
             if let Some(target) = &target {
-                shell.reveal(target.clone(), cx);
+                open_link(shell, target.clone(), window, cx);
             }
         }))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .truncate()
-                .font_family(theme.mono_font_family.clone())
-                .child(title),
+                .flex()
+                .child(link_name(ix, &title, cx)),
         )
         // Fixed slots keep the columns aligned from row to row: the current row leaves the
         // Roll back slot empty.
@@ -662,18 +661,17 @@ fn job_element(
         .text_sm()
         .cursor_pointer()
         .hover(move |style| style.bg(hover_bg))
-        .on_click(cx.listener(move |shell, _, _, cx| {
+        .on_click(cx.listener(move |shell, _, window, cx| {
             if let Some(target) = &target {
-                shell.reveal(target.clone(), cx);
+                open_link(shell, target.clone(), window, cx);
             }
         }))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .truncate()
-                .font_family(theme.mono_font_family.clone())
-                .child(job.name.clone()),
+                .flex()
+                .child(link_name(ix, &job.name, cx)),
         )
         .child(toned_text(job_status_label(job.status), cx).flex_shrink_0())
         .children(duration.map(|duration| {
@@ -752,14 +750,15 @@ fn not_ready_element(
         .text_sm()
         .cursor_pointer()
         .hover(move |style| style.bg(hover_bg))
-        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            open_link(shell, key.clone(), window, cx);
+        }))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .truncate()
-                .font_family(theme.mono_font_family.clone())
-                .child(title),
+                .flex()
+                .child(link_name(ix, &title, cx)),
         )
         .child(toned_text(not_ready_label(pod, nodes), cx).flex_shrink_0())
         .into_any_element()
@@ -773,11 +772,10 @@ const MAX_LISTED_ENDPOINTS: usize = 50;
 /// One endpoint of a Service as the drawer lists it.
 #[derive(Debug, PartialEq, Eq)]
 struct EndpointRow {
-    /// `10.0.0.5:8080 · api-7d9f8c-x2k4q`; the port moves to a "Ports" field when there are
-    /// several.
-    text: String,
+    /// `10.0.0.5:8080`; the port moves to a "Ports" field when there are several.
+    address: String,
     state: EndpointState,
-    /// The pod behind the endpoint, when it names one.
+    /// The pod behind the endpoint, when it names one; the row draws its name as a link.
     pod: Option<ResourceKey>,
 }
 
@@ -827,12 +825,8 @@ fn endpoints_content(
                     Some(port) => format!("{}:{port}", entry.endpoint.address),
                     None => entry.endpoint.address.clone(),
                 };
-                let text = match &entry.endpoint.pod {
-                    Some(pod) => format!("{address} · {pod}"),
-                    None => address,
-                };
                 EndpointRow {
-                    text,
+                    address,
                     state: entry.state,
                     pod: entry.endpoint.pod.as_deref().and_then(|pod| {
                         ResourceKey::of_object("Pod", Some(&service.namespace), pod)
@@ -913,22 +907,39 @@ fn endpoint_element(ix: usize, row: &EndpointRow, cx: &Context<AppShell>) -> Any
         .py_1()
         .rounded(theme.radius)
         .text_sm();
+    let mut cell = h_flex()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .font_family(theme.mono_font_family.clone())
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(theme.muted_foreground)
+                .child(row.address.clone()),
+        );
     if let Some(target) = row.pod.clone() {
         let hover_bg = theme.muted;
+        if let ResourceKey::Pod { name, .. } = &target {
+            cell = cell
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(theme.muted_foreground)
+                        .child(" · "),
+                )
+                .child(link_name(ix, name, cx));
+        }
         element = element
             .cursor_pointer()
             .hover(move |style| style.bg(hover_bg))
-            .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(target.clone(), cx)));
+            .on_click(cx.listener(move |shell, _, window, cx| {
+                open_link(shell, target.clone(), window, cx);
+            }));
     }
     element
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .font_family(theme.mono_font_family.clone())
-                .child(row.text.clone()),
-        )
+        .child(cell)
         .child(toned_text(endpoint_state_label(row.state), cx).flex_shrink_0())
         .into_any_element()
 }
@@ -1395,14 +1406,15 @@ fn selected_pod_element(ix: usize, entry: &SelectedPod, cx: &Context<AppShell>) 
         .text_sm()
         .cursor_pointer()
         .hover(move |style| style.bg(hover_bg))
-        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            open_link(shell, key.clone(), window, cx);
+        }))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .truncate()
-                .font_family(theme.mono_font_family.clone())
-                .child(entry.pod.name.clone()),
+                .flex()
+                .child(link_name(ix, &entry.pod.name, cx)),
         )
         .child(
             toned_text(
@@ -1581,14 +1593,15 @@ fn mounting_pod_element(
         .text_sm()
         .cursor_pointer()
         .hover(move |style| style.bg(hover_bg))
-        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            open_link(shell, key.clone(), window, cx);
+        }))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .truncate()
-                .font_family(theme.mono_font_family.clone())
-                .child(pod.name.clone()),
+                .flex()
+                .child(link_name(ix, &pod.name, cx)),
         )
         .child(
             div()

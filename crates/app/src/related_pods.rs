@@ -9,7 +9,7 @@ use gpui_kit::{
 
 use crate::app_shell::AppShell;
 use crate::cluster_session::{LiveCluster, namespaces_label};
-use crate::drawer::section_title;
+use crate::drawer::{link_name, open_link, section_title};
 use crate::kind_diagnosis::first_main_termination;
 use crate::kind_row::{
     DAEMON_SET_KIND, JOB_KIND, KindObject, PodOwner, STATEFUL_SET_KIND, owns_pod,
@@ -205,7 +205,9 @@ fn related_pod_row(
         .text_sm()
         .cursor_pointer()
         .hover(move |style| style.bg(hover_bg))
-        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            open_link(shell, key.clone(), window, cx);
+        }))
         .child(
             h_flex()
                 .flex_1()
@@ -223,7 +225,7 @@ fn related_pod_row(
                             .child(format!("{}/", pod.namespace)),
                     )
                 })
-                .child(div().min_w_0().truncate().child(pod.name.clone())),
+                .child(link_name(index, &pod.name, cx)),
         )
         .child(toned_text(pod_status_label(pod), cx))
         .children(matches!(detail, PodRowDetail::StatusAndNode).then(|| {

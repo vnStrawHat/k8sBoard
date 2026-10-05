@@ -33,7 +33,7 @@ Status: **draft 2026-10-05, revised after advisor review**, from the task-based 
 - [x] A1 history core and keys (AC 1-9; as built: `Back` takes an `is_served` predicate, the shell lives in `app_shell_history.rs`, and the terminal `NoAction` list is not needed because the workspace context already excludes `Terminal`)
 - [ ] A2 header Back, Prev / Next (AC 10, 14)
 - [ ] A3 `follow_link`: denied, out of scope (AC 12, 13)
-- [ ] B1 one link style, `open_link`, endpoint pod links (AC 11, 17)
+- [x] B1 one link style, `open_link`, endpoint pod links (AC 11, 17; as built: list rows keep their row click and draw the name with `link_name`; the Revisions row links its `rev N` title)
 - [ ] B2 Pod Overview without new watches (AC 19-21)
 - [ ] B3a Pod Services; B3b Service Exposed by (AC 16, 20, 22)
 - [ ] B4 Ingress Backends, NetworkPolicy Pods (AC 15, 18)

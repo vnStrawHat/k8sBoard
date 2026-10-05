@@ -680,6 +680,32 @@ pub(crate) fn created_text(
     created_at.map(|created_at| format!("created {} ago", format_age(Some(created_at), now)))
 }
 
+/// The one look of text that opens another object: link color, underline, pointer, and an
+/// `Open {name}` tooltip. A list row keeps its own click and draws only the name with this.
+pub(crate) fn link_style(element: Stateful<Div>, name: &SharedString, cx: &App) -> Stateful<Div> {
+    let theme = cx.theme();
+    let tooltip_text = SharedString::from(format!("Open {name}"));
+    element
+        .min_w_0()
+        .truncate()
+        .cursor_pointer()
+        .font_family(theme.mono_font_family.clone())
+        .text_color(theme.link)
+        .underline()
+        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+}
+
+/// The chokepoint every link click goes through, so a later step can refuse a denied or
+/// out-of-scope target in one place.
+pub(crate) fn open_link(
+    shell: &mut AppShell,
+    target: ResourceKey,
+    _window: &mut Window,
+    cx: &mut Context<AppShell>,
+) {
+    shell.reveal(target, cx);
+}
+
 /// A mono value that opens `target` on its own screen.
 pub(crate) fn link_text(
     id: usize,
@@ -687,18 +713,19 @@ pub(crate) fn link_text(
     target: ResourceKey,
     cx: &Context<AppShell>,
 ) -> AnyElement {
-    let theme = cx.theme();
-    let tooltip_text = SharedString::from(format!("Open {text}"));
-    div()
-        .id(("link", id))
-        .truncate()
-        .cursor_pointer()
-        .font_family(theme.mono_font_family.clone())
-        .text_color(theme.link)
-        .underline()
-        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
-        .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(target.clone(), cx)))
+    link_style(div().id(("link", id)), text, cx)
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            open_link(shell, target.clone(), window, cx);
+        }))
         .child(text.clone())
+        .into_any_element()
+}
+
+/// A list row's object name: link-styled text inside a row whose own click opens the object.
+pub(crate) fn link_name(id: usize, name: &str, cx: &App) -> AnyElement {
+    let name = SharedString::from(name.to_owned());
+    link_style(div().id(("link-name", id)), &name, cx)
+        .child(name)
         .into_any_element()
 }
 

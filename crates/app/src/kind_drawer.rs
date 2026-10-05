@@ -25,7 +25,7 @@ use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, chips, created_text,
     drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title, helm_body, link_text,
-    menu_button, port_row, section_title, shown_tab, tab_titles, truncated_text,
+    menu_button, open_link, port_row, section_title, shown_tab, tab_titles, truncated_text,
     truncated_text_with_tooltip, wide_detail_row, yaml_body,
 };
 use crate::helm_release_view::HelmReleaseView;
@@ -422,7 +422,9 @@ fn why_box(diagnosis: &KindDiagnosis, cx: &Context<AppShell>) -> AnyElement {
                 .text_sm()
                 .text_color(cx.theme().link)
                 .underline()
-                .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+                .on_click(cx.listener(move |shell, _, window, cx| {
+                    open_link(shell, key.clone(), window, cx);
+                }))
                 .child(label)
         }))
         .into_any_element()

@@ -457,14 +457,16 @@ fn endpoint_rows_single_and_multi_port() {
     // One port joins the address, and there is no Ports field.
     let single = endpoints_content(&service(), &[slice(&[(8080, "TCP")], endpoints.clone())]);
     assert_eq!(single.ports, None);
-    assert_eq!(single.rows[0].text, "10.0.0.1:8080 · api-1");
+    assert_eq!(single.rows[0].address, "10.0.0.1:8080");
+    assert_eq!(single.rows[0].pod, endpoint_pod("api-1"));
     // Several ports move to a Ports field, and the rows drop the port.
     let several = endpoints_content(
         &service(),
         &[slice(&[(8080, "TCP"), (9090, "UDP")], endpoints)],
     );
     assert_eq!(several.ports.as_deref(), Some("8080/TCP, 9090/UDP"));
-    assert_eq!(several.rows[0].text, "10.0.0.1 · api-1");
+    assert_eq!(several.rows[0].address, "10.0.0.1");
+    assert_eq!(several.rows[0].pod, endpoint_pod("api-1"));
 }
 
 #[test]
@@ -525,7 +527,7 @@ fn endpoint_rows_bracket_ipv6_addresses() {
         &service(),
         &[slice(&[(80, "TCP")], vec![endpoint("fd00::1", None, true)])],
     );
-    assert_eq!(content.rows[0].text, "[fd00::1]:80");
+    assert_eq!(content.rows[0].address, "[fd00::1]:80");
 }
 
 #[test]
