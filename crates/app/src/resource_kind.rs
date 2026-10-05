@@ -977,6 +977,15 @@ impl ResourceKind {
         }
     }
 
+    /// The kind as a drawer title names it: the Kubernetes `kind` (`StatefulSet`), or `Helm
+    /// release` for a release, which is stored as a Secret.
+    pub(crate) fn display_name(self) -> &'static str {
+        match self {
+            Self::HelmReleases => "Helm release",
+            _ => self.object_kind(),
+        }
+    }
+
     /// The reference to one object of this kind; `None` when the namespace does not fit its scope.
     pub(crate) fn object_ref(self, namespace: Option<String>, name: String) -> Option<ObjectRef> {
         match self {
@@ -1292,6 +1301,30 @@ mod tests {
             let last = kind.columns().last().expect("kinds have columns");
             assert_eq!(last.name, age_name(kind));
             assert_eq!(last.align, Align::Right);
+        }
+    }
+
+    #[test]
+    fn display_names_are_the_kubernetes_kinds() {
+        assert_eq!(ResourceKind::Deployments.display_name(), "Deployment");
+        assert_eq!(ResourceKind::StatefulSets.display_name(), "StatefulSet");
+        assert_eq!(ResourceKind::DaemonSets.display_name(), "DaemonSet");
+        assert_eq!(ResourceKind::ReplicaSets.display_name(), "ReplicaSet");
+        assert_eq!(ResourceKind::CronJobs.display_name(), "CronJob");
+        assert_eq!(ResourceKind::ConfigMaps.display_name(), "ConfigMap");
+        assert_eq!(ResourceKind::ClusterRoles.display_name(), "ClusterRole");
+        assert_eq!(ResourceKind::Secrets.display_name(), "Secret");
+    }
+
+    #[test]
+    fn a_release_is_not_titled_as_the_secret_that_stores_it() {
+        assert_eq!(ResourceKind::HelmReleases.display_name(), "Helm release");
+    }
+
+    #[test]
+    fn every_kind_has_a_display_name() {
+        for kind in ResourceKind::ALL {
+            assert!(!kind.display_name().is_empty(), "{}", kind.label());
         }
     }
 

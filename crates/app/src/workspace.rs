@@ -88,6 +88,8 @@ impl AppShell {
     /// The region right of the sidebar: the list region with the log dock below it, or the
     /// dock alone over the whole region when zoomed.
     pub(super) fn render_workspace(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        self.drawer
+            .set_workspace_width(window.viewport_size().width - SIDEBAR_WIDTH);
         let region = v_flex()
             .flex_1()
             .min_w_0()

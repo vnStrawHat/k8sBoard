@@ -13,7 +13,7 @@ div().absolute().top_0().right_0().bottom_0().w(width)
     .occlude()             // clicks do not fall through to the table
 ```
 
-- Width is `px(420.)` by default and `px(640.)` when expanded (⤢/⤡ toggle). The table never resizes.
+- Width: see "As built (2026-10-05)" below (it was a fixed `px(420.)` / `px(640.)`). The table never resizes.
 - Open = `AppShell.selected.is_some()`. Close:
   - ✕, which calls `table.clear_selection`;
   - Esc while the table is focused (the kit binds Esc to `Cancel`, which emits `ClearSelection`);
@@ -75,3 +75,9 @@ pub(crate) struct DrawerHeader { kind_badge: &'static str /* "Po" | "No" */, nam
 
 - Header: badge `No`, the node name, the status label, and `· created {age} ago`. Only ⋯ and ✕, with no expand (one column is enough).
 - No tab bar. Body rows: Status, Roles ("—" when empty), Taints (every taint, one per line, mono; "—"), Kubelet version, Internal IP, Created (timestamp, then the age).
+
+## As built (2026-10-05): drawer polish
+
+- Width is a share of the workspace (window width minus the 220 px sidebar), set on `DrawerState` by each paint of `render_workspace`: `drawer_width(is_expanded, workspace)` is 55 % by default and 90 % expanded, never below 480 px, never above the workspace (a window narrower than 480 px gets a full-width drawer), and expanded is never narrower than the default. At the default 1320 px window: 605 px, expanded 990 px. The selection bar and value popover still sit left of the drawer (`right(self.drawer.width())`); the Topology reveal and minimap use the default width for their canvas.
+- The title shows the kind before the name: a muted, uppercase mono caption (the Topology card caption style) from `ResourceKind::display_name` (the Kubernetes `kind`, `Helm release` for a release), then the semibold mono name, which alone truncates. `DrawerHeader.kind_name` feeds it; the chip lost its tooltip.
+- `section_title` (the one heading all drawers use, Overview and container detail) is `text_sm` semibold in `theme.foreground`, with a `theme.border` rule below and `mt_6` above.
