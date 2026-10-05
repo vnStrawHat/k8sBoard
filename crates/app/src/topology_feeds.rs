@@ -7,9 +7,10 @@ use std::collections::BTreeSet;
 use cluster::BindingSummary;
 
 use crate::cluster_runtime::WatchSubscription;
-use crate::cluster_session::{AccessState, CompanionLists, LiveList};
+use crate::cluster_session::{AccessState, CompanionKind, CompanionLists, LiveList};
 use crate::kind_row::{KindObject, KindRow};
 use crate::resource_kind::ResourceKind;
+use crate::topology_checks::TLS_SECRET_TYPE;
 use crate::topology_graph::{FeedRows, KindFilter, TopologyKind};
 
 /// The kinds the graph reads besides pods, which the session lists anyway. ClusterRoles are only
@@ -124,6 +125,24 @@ pub(crate) fn feed_plan(kind: ResourceKind, access: &AccessState) -> FeedStart {
     }
 }
 
+const NOT_WATCHED: &str = "not watched in Topology; open its screen";
+/// Why a kind has no feed: its chip is off.
+const LAYER_OFF: &str = "its Topology layer is off";
+
+/// The list of a companion kind that no Topology feed holds.
+fn not_watched<T>() -> LiveList<T> {
+    LiveList::Failed {
+        message: NOT_WATCHED.to_owned(),
+    }
+}
+
+fn binding_of(object: &KindObject) -> Option<BindingSummary> {
+    match object {
+        KindObject::Binding(binding) => Some(binding.clone()),
+        _ => None,
+    }
+}
+
 /// One kind's watch, or the reason it does not run. Dropping it stops the watch.
 pub(crate) struct TopologyFeed {
     pub(crate) kind: ResourceKind,
@@ -222,22 +241,53 @@ impl TopologyFeeds {
             .collect()
     }
 
-    /// The binding lists of the RBAC layer as a Bindings companion holds them, for a drawer open
-    /// over the graph, where no explorer runs a companion. The cluster role bindings are cluster
-    /// wide, the role bindings those of the Topology namespace. A feed that does not run reads as
-    /// failed, with the reason it is off.
-    pub(crate) fn bindings_companion(&self, with_cluster_role_bindings: bool) -> CompanionLists {
-        CompanionLists::Bindings {
-            role_bindings: self.binding_list(ResourceKind::RoleBindings),
-            cluster_role_bindings: with_cluster_role_bindings
-                .then(|| self.binding_list(ResourceKind::ClusterRoleBindings)),
+    /// The companion lists of a drawer open over the graph, where no explorer runs a companion,
+    /// read from the feeds that already hold them: the RBAC feeds for the bindings (cluster role
+    /// bindings are cluster wide, role bindings those of the Topology namespace), the Ingresses
+    /// feed for the Secret's users, the Secrets feed (its TLS ones) for an Ingress. Endpoint
+    /// slices and persistent volumes have no feed, so they read as failed with that reason. A feed
+    /// that does not run reads as failed too, with the reason it is off.
+    pub(crate) fn companion_lists(&self, companion: CompanionKind) -> CompanionLists {
+        match companion {
+            CompanionKind::EndpointSlices => CompanionLists::EndpointSlices(not_watched()),
+            CompanionKind::PersistentVolumes => CompanionLists::PersistentVolumes(not_watched()),
+            CompanionKind::Ingresses => {
+                CompanionLists::Ingresses(self.feed_list(ResourceKind::Ingresses, |object| {
+                    match object {
+                        KindObject::Ingress(ingress) => Some(ingress.clone()),
+                        _ => None,
+                    }
+                }))
+            }
+            CompanionKind::TlsSecrets => {
+                CompanionLists::TlsSecrets(self.feed_list(ResourceKind::Secrets, |object| {
+                    match object {
+                        KindObject::Secret(secret) if secret.secret_type == TLS_SECRET_TYPE => {
+                            Some(secret.clone())
+                        }
+                        _ => None,
+                    }
+                }))
+            }
+            CompanionKind::Bindings {
+                with_cluster_role_bindings,
+            } => CompanionLists::Bindings {
+                role_bindings: self.feed_list(ResourceKind::RoleBindings, binding_of),
+                cluster_role_bindings: with_cluster_role_bindings
+                    .then(|| self.feed_list(ResourceKind::ClusterRoleBindings, binding_of)),
+            },
         }
     }
 
-    fn binding_list(&self, kind: ResourceKind) -> LiveList<BindingSummary> {
+    /// The feed of `kind` as a companion list; `pick` keeps the rows that belong in it.
+    fn feed_list<T>(
+        &self,
+        kind: ResourceKind,
+        pick: impl Fn(&KindObject) -> Option<T>,
+    ) -> LiveList<T> {
         let Some(feed) = self.feeds.iter().find(|feed| feed.kind == kind) else {
             return LiveList::Failed {
-                message: "the RBAC layer is off".to_owned(),
+                message: LAYER_OFF.to_owned(),
             };
         };
         if let Some(reason) = &feed.off {
@@ -254,13 +304,7 @@ impl TopologyFeeds {
                 items,
                 interruption,
             } => LiveList::Ready {
-                items: items
-                    .iter()
-                    .filter_map(|row| match &row.object {
-                        KindObject::Binding(binding) => Some(binding.clone()),
-                        _ => None,
-                    })
-                    .collect(),
+                items: items.iter().filter_map(|row| pick(&row.object)).collect(),
                 interruption: interruption.clone(),
             },
         }
@@ -555,7 +599,9 @@ mod tests {
             binding_feed(ResourceKind::RoleBindings, vec![reader_binding()]),
             binding_feed(ResourceKind::ClusterRoleBindings, Vec::new()),
         ]);
-        let companion = feeds.bindings_companion(true);
+        let companion = feeds.companion_lists(CompanionKind::Bindings {
+            with_cluster_role_bindings: true,
+        });
         let crate::access_bindings::BindingsStatus::Ready(lists) =
             crate::access_bindings::bindings_status(
                 ResourceKind::ClusterRoles,
@@ -574,7 +620,9 @@ mod tests {
     fn empty_rbac_feeds_are_ready_not_loading() {
         let feeds = feeds_of(vec![binding_feed(ResourceKind::RoleBindings, Vec::new())]);
         // Roles do not read the cluster role bindings, so their missing feed does not matter.
-        let companion = feeds.bindings_companion(false);
+        let companion = feeds.companion_lists(CompanionKind::Bindings {
+            with_cluster_role_bindings: false,
+        });
         assert!(crate::access_bindings::ready_binding_lists(Some(&companion)).is_some());
     }
 
@@ -584,7 +632,9 @@ mod tests {
             binding_feed(ResourceKind::RoleBindings, Vec::new()),
             feed(ResourceKind::ClusterRoleBindings, LiveList::Loading),
         ]);
-        let companion = feeds.bindings_companion(true);
+        let companion = feeds.companion_lists(CompanionKind::Bindings {
+            with_cluster_role_bindings: true,
+        });
         assert!(crate::access_bindings::ready_binding_lists(Some(&companion)).is_none());
         assert!(matches!(
             crate::access_bindings::bindings_status(
@@ -605,14 +655,111 @@ mod tests {
         let CompanionLists::Bindings {
             role_bindings,
             cluster_role_bindings: Some(cluster_role_bindings),
-        } = feeds.bindings_companion(true)
+        } = feeds.companion_lists(CompanionKind::Bindings {
+            with_cluster_role_bindings: true,
+        })
         else {
             panic!("both lists were asked for");
         };
         assert_eq!(role_bindings.failure(), Some("not permitted"));
+        assert_eq!(cluster_role_bindings.failure(), Some(LAYER_OFF));
+    }
+
+    fn ingress_row_of(name: &str) -> KindRow {
+        use crate::topology_fixtures::ingress;
+        crate::network_rows::ingress_row(&ingress(name, &[], None, Some("web-tls")))
+    }
+
+    fn secret_row_of(name: &str, secret_type: &str) -> KindRow {
+        use crate::topology_fixtures::secret;
+        crate::secret_rows::secret_row(&secret(name, secret_type))
+    }
+
+    #[test]
+    fn the_ingresses_feed_becomes_the_secret_users_companion() {
+        let feeds = feeds_of(vec![binding_feed(
+            ResourceKind::Ingresses,
+            vec![ingress_row_of("web")],
+        )]);
+        let companion = feeds.companion_lists(CompanionKind::Ingresses);
+        let items = companion
+            .ingresses()
+            .and_then(LiveList::ready_items)
+            .expect("the feed is loaded");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "web");
+    }
+
+    #[test]
+    fn an_empty_ingresses_feed_is_ready() {
+        let feeds = feeds_of(vec![binding_feed(ResourceKind::Ingresses, Vec::new())]);
+        let companion = feeds.companion_lists(CompanionKind::Ingresses);
         assert_eq!(
-            cluster_role_bindings.failure(),
-            Some("the RBAC layer is off")
+            companion.ingresses().and_then(LiveList::ready_count),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn the_tls_companion_keeps_only_tls_secrets() {
+        let feeds = feeds_of(vec![binding_feed(
+            ResourceKind::Secrets,
+            vec![
+                secret_row_of("web-tls", TLS_SECRET_TYPE),
+                secret_row_of("token", "Opaque"),
+            ],
+        )]);
+        let companion = feeds.companion_lists(CompanionKind::TlsSecrets);
+        let items = companion
+            .tls_secrets()
+            .and_then(LiveList::ready_items)
+            .expect("the feed is loaded");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "web-tls");
+    }
+
+    #[test]
+    fn a_missing_feed_gives_a_reason_not_a_spinner() {
+        let feeds = feeds_of(Vec::new());
+        let ingresses = feeds.companion_lists(CompanionKind::Ingresses);
+        assert_eq!(
+            ingresses.ingresses().and_then(LiveList::failure),
+            Some(LAYER_OFF)
+        );
+        let secrets = feeds.companion_lists(CompanionKind::TlsSecrets);
+        assert_eq!(
+            secrets.tls_secrets().and_then(LiveList::failure),
+            Some(LAYER_OFF)
+        );
+    }
+
+    #[test]
+    fn kinds_without_a_topology_feed_fail_with_a_reason() {
+        let feeds = feeds_of(vec![feed(ResourceKind::Services, LiveList::Loading)]);
+        let slices = feeds.companion_lists(CompanionKind::EndpointSlices);
+        let volumes = feeds.companion_lists(CompanionKind::PersistentVolumes);
+        assert_eq!(
+            slices.endpoint_slices().and_then(LiveList::failure),
+            Some(NOT_WATCHED)
+        );
+        assert_eq!(
+            volumes.persistent_volumes().and_then(LiveList::failure),
+            Some(NOT_WATCHED)
+        );
+    }
+
+    #[test]
+    fn a_loading_feed_stays_loading_and_an_off_one_fails() {
+        let feeds = feeds_of(vec![
+            feed(ResourceKind::Ingresses, LiveList::Loading),
+            TopologyFeed::off(ResourceKind::Secrets, "not permitted".to_owned()),
+        ]);
+        let ingresses = feeds.companion_lists(CompanionKind::Ingresses);
+        assert!(ingresses.ingresses().is_some_and(LiveList::is_loading));
+        let secrets = feeds.companion_lists(CompanionKind::TlsSecrets);
+        assert_eq!(
+            secrets.tls_secrets().and_then(LiveList::failure),
+            Some("not permitted")
         );
     }
 }

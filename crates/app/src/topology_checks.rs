@@ -18,7 +18,7 @@ use crate::topology_graph::{
     health_of_matches,
 };
 
-const TLS_SECRET_TYPE: &str = "kubernetes.io/tls";
+pub(crate) const TLS_SECRET_TYPE: &str = "kubernetes.io/tls";
 /// The title of the Service box about a selector that finds no pod; `ServiceNoPods` covers it.
 const NO_MATCHING_PODS_TITLE: &str = "NO MATCHING PODS";
 

@@ -19,7 +19,7 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_registry::ClusterRef;
-use crate::cluster_session::{BindingsSource, CompanionLists, LiveCluster};
+use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
@@ -344,9 +344,11 @@ fn row_diagnosis(
     live: &LiveCluster,
     now: jiff::Timestamp,
 ) -> Option<KindDiagnosis> {
+    let source = live.companion_source(kind);
+    let companion = source.as_ref().map(CompanionSource::lists);
     let (pods, service) = match &row.object {
         KindObject::Service(service) => {
-            let slices = live.companion().and_then(CompanionLists::endpoint_slices);
+            let slices = companion.and_then(CompanionLists::endpoint_slices);
             let health = service_health_of(service, &live.pods, slices);
             // Only V2 reads the pods, and only when no endpoint is ready, so the pass over the pods
             // that finds the matching ones runs only then; `service_health_of` made the other.
@@ -363,8 +365,6 @@ fn row_diagnosis(
     };
     // Only a ClusterRole that grants everything and a service account read the bindings; the index
     // is built for them alone.
-    let source = live.bindings_source(kind);
-    let companion = source.as_ref().map(BindingsSource::lists);
     let lists = match &row.object {
         KindObject::Role(role) if role.namespace.is_none() && role.grants_everything() => {
             ready_binding_lists(companion)
@@ -380,8 +380,7 @@ fn row_diagnosis(
             nodes: live.nodes.items(),
             service,
             bindings: bindings.as_ref(),
-            tls_secrets: live
-                .companion()
+            tls_secrets: companion
                 .and_then(CompanionLists::tls_secrets)
                 .and_then(|list| list.ready_items()),
             now,

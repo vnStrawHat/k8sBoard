@@ -32,8 +32,8 @@ use crate::app_shell::AppShell;
 use crate::batch_rows::job_status_label;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{
-    BindingsSource, CompanionLists, CompanionPlan, LiveCluster, LiveList, RbacState, RelatedList,
-    companion_plan, denied_related_check,
+    CompanionPlan, CompanionSource, LiveCluster, LiveList, RbacState, RelatedList, companion_plan,
+    denied_related_check,
 };
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::custom_rows::{FieldsSide, conditions_rows, field_list_rows};
@@ -861,7 +861,11 @@ fn endpoints(
     live: &LiveCluster,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
-    let Some(slices) = live.companion().and_then(CompanionLists::endpoint_slices) else {
+    let source = live.companion_source(kind);
+    let Some(slices) = source
+        .as_ref()
+        .and_then(|source| source.lists().endpoint_slices())
+    else {
         // Without a companion the report denied it, or the explorer has not started it yet.
         if let CompanionPlan::Denied(check) = companion_plan(kind, &live.access) {
             return vec![note(&format!("Not permitted: {check}"), cx)];
@@ -1231,7 +1235,10 @@ fn secret_used_by_rows(
     let Some(pods) = live.pods.ready_items() else {
         return vec![note("Pods are unavailable", cx)];
     };
-    let list = live.companion().and_then(CompanionLists::ingresses);
+    let source = live.companion_source(ResourceKind::Secrets);
+    let list = source
+        .as_ref()
+        .and_then(|source| source.lists().ingresses());
     // Only the pods and ingresses of the Secret's namespace can use it.
     let users = secret_users(
         pods.iter().filter(|pod| pod.namespace == secret.namespace),
@@ -1268,7 +1275,10 @@ fn ingress_tls_section(
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
-    let list = live.companion().and_then(CompanionLists::tls_secrets);
+    let source = live.companion_source(kind);
+    let list = source
+        .as_ref()
+        .and_then(|source| source.lists().tls_secrets());
     let secrets = list.and_then(LiveList::ready_items);
     let state = match (secrets, list) {
         (Some(secrets), _) => TlsSecrets::Ready(secrets),
@@ -1630,9 +1640,10 @@ fn class_volumes_rows(
     live: &LiveCluster,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
-    let Some(volumes) = live
-        .companion()
-        .and_then(CompanionLists::persistent_volumes)
+    let source = live.companion_source(kind);
+    let Some(volumes) = source
+        .as_ref()
+        .and_then(|source| source.lists().persistent_volumes())
     else {
         // Without a companion the report denied it, or the explorer has not started it yet.
         if let CompanionPlan::Denied(check) = companion_plan(kind, &live.access) {
@@ -2071,11 +2082,11 @@ fn with_bindings(
     cx: &Context<AppShell>,
     rows: impl FnOnce(&BindingIndex) -> Vec<AnyElement>,
 ) -> Vec<AnyElement> {
-    let source = live.bindings_source(kind);
+    let source = live.companion_source(kind);
     match bindings_status(
         kind,
         &live.access,
-        source.as_ref().map(BindingsSource::lists),
+        source.as_ref().map(CompanionSource::lists),
     ) {
         BindingsStatus::Ready(lists) => rows(&BindingIndex::build(&lists)),
         BindingsStatus::Loading => vec![note("Loading bindings…", cx)],
