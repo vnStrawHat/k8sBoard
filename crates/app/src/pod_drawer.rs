@@ -24,9 +24,9 @@ use crate::container_detail::{
 };
 use crate::dock::Dock;
 use crate::drawer::{
-    DrawerBody, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, chips, created_text,
-    detail_row, drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title, link_text,
-    menu_button, section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
+    DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, chips,
+    created_text, detail_row, drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title,
+    link_text, menu_button, section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
 };
 use crate::kind_row::deployment_of_pod;
 use crate::monitor_tab::{MonitorView, monitor_tab};
@@ -55,10 +55,14 @@ pub(crate) fn pod_drawer(
     session: &Entity<ClusterSession>,
     row: &RowContext,
     dock: &WeakEntity<Dock>,
-    forward: &PortButtons<'_>,
+    chrome: DrawerChrome<'_>,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let now = jiff::Timestamp::now();
+    let DrawerChrome {
+        forward,
+        navigation,
+    } = chrome;
     let header = DrawerHeader {
         kind_icon: POD_ICON,
         kind_name: "Pod".into(),
@@ -66,6 +70,7 @@ pub(crate) fn pod_drawer(
         subtitle: subtitle(pod, now, cx),
         menu: pod_menu_button(pod, session, row, dock, cx.weak_entity()),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
+        navigation,
     };
     let events = pod_events(pod, session, cx);
     let tabs = drawer_tabs(&ResourceKey::of_pod(pod));

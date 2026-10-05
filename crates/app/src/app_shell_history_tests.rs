@@ -7,7 +7,7 @@ use super::app_shell_history::is_place_served;
 use super::app_shell_tests::{open_shell_on, served_kind};
 use super::*;
 use crate::cluster_registry::ClusterRef;
-use crate::drawer::{ContainerTab, DrawerTab};
+use crate::drawer::{ContainerTab, DrawerNavigation, DrawerTab};
 use crate::navigation_history::Place;
 use crate::table_selection::{ClusterObject, ResourceKey};
 
@@ -239,4 +239,53 @@ fn a_removed_custom_kind_is_not_served() {
     // An unknown list proves nothing, and built-in screens are always served.
     assert!(is_place_served(&place(gone), None));
     assert!(is_place_served(&place(Screen::Pods), Some(&[])));
+}
+
+fn drawer_navigation(shell: &Entity<AppShell>, cx: &mut TestAppContext) -> DrawerNavigation {
+    cx.update(|cx| shell.update(cx, |shell, cx| shell.drawer_navigation(cx)))
+}
+
+#[gpui_kit::test]
+fn the_back_button_names_the_place_a_link_left(cx: &mut TestAppContext) {
+    let shell = open_shell(cx);
+    assert!(drawer_navigation(&shell, cx).back.is_none());
+    show_pod_drawer(&shell, cx);
+    reveal(
+        &shell,
+        kind_object(ResourceKind::Secrets, "credentials"),
+        cx,
+    );
+    let back = drawer_navigation(&shell, cx).back.expect("a back target");
+    assert_eq!(back.label, "api-0");
+    assert_eq!(back.tooltip, "Back to Pod api-0 (Alt+Left)");
+    go_back(&shell, cx);
+    assert!(drawer_navigation(&shell, cx).back.is_none());
+}
+
+#[gpui_kit::test]
+fn row_controls_show_only_on_screens_with_a_table_cursor(cx: &mut TestAppContext) {
+    let shell = open_shell(cx);
+    for (screen, is_shown) in [
+        (Screen::Pods, true),
+        (Screen::Nodes, true),
+        (Screen::Kind(ResourceKind::Services), true),
+        (Screen::Overview, false),
+        (Screen::Topology, false),
+        (Screen::PortForwarding, false),
+        (Screen::Issues, false),
+    ] {
+        cx.update(|cx| shell.update(cx, |shell, cx| shell.show_screen(screen, cx)));
+        cx.run_until_parked();
+        let rows = drawer_navigation(&shell, cx).rows;
+        assert_eq!(rows.is_some(), is_shown, "{screen:?}");
+    }
+}
+
+#[gpui_kit::test]
+fn row_controls_are_disabled_without_a_visible_subject(cx: &mut TestAppContext) {
+    let shell = open_shell(cx);
+    cx.update(|cx| shell.update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx)));
+    cx.run_until_parked();
+    let rows = drawer_navigation(&shell, cx).rows.expect("row controls");
+    assert_eq!(rows.position, None);
 }

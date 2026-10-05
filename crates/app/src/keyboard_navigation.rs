@@ -258,7 +258,12 @@ impl AppShell {
     /// J, K, the arrows, Home, End, PgUp, PgDn: moves the row cursor of the visible table. The
     /// drawer follows only while it is open. Overview and Topology have no table: the graph is a
     /// canvas without a cursor, so the keys do nothing there.
-    fn step_cursor(&mut self, step: RowStep, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn step_cursor(
+        &mut self,
+        step: RowStep,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // The cursor is kept under the Edit YAML view; no key moves it there.
         if self.is_editing() {
             return;

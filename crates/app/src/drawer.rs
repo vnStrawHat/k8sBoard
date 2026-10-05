@@ -26,10 +26,11 @@ use crate::history_rings::Resolution;
 use crate::monitor_data::MonitorData;
 use crate::monitor_source::SourceFetch;
 use crate::object_events::events_title;
-use crate::port_forward_menu::PortButton;
+use crate::port_forward_menu::{PortButton, PortButtons};
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, SecretValuesView};
 use crate::table_selection::{ClusterObject, ResourceKey};
+use crate::usage_format::group_digits;
 use crate::yaml_view::{YamlView, object_ref};
 
 /// How long a drawer subject must rest before its background fetch starts (the object events
@@ -439,6 +440,44 @@ pub(crate) struct DrawerHeader {
     /// The ⋯ button with its dropdown menu.
     pub(crate) menu: AnyElement,
     pub(crate) on_close: ClickHandler,
+    pub(crate) navigation: DrawerNavigation,
+}
+
+/// The header's navigation controls (spec 0056): Back with its "from X" label, and Previous / Next
+/// over the table rows. The default shows neither.
+#[derive(Default)]
+pub(crate) struct DrawerNavigation {
+    pub(crate) back: Option<BackTarget>,
+    /// `None` hides Previous / Next.
+    pub(crate) rows: Option<RowControls>,
+}
+
+/// The Back button: the place it leads to, named.
+pub(crate) struct BackTarget {
+    pub(crate) label: SharedString,
+    pub(crate) tooltip: SharedString,
+    pub(crate) on_click: ClickHandler,
+}
+
+/// Previous / Next with the cursor position. `position` is `None` while the subject is not a
+/// visible row; the buttons are then disabled, as they are for a table of one row.
+pub(crate) struct RowControls {
+    pub(crate) position: Option<(usize, usize)>,
+    pub(crate) on_previous: ClickHandler,
+    pub(crate) on_next: ClickHandler,
+}
+
+impl RowControls {
+    fn can_step(&self) -> bool {
+        self.position.is_some_and(|(_, visible)| visible > 1)
+    }
+}
+
+/// What the shell hands a drawer besides its subject: the Forward buttons' state and the header's
+/// navigation controls.
+pub(crate) struct DrawerChrome<'a> {
+    pub(crate) forward: &'a PortButtons<'a>,
+    pub(crate) navigation: DrawerNavigation,
 }
 
 /// What fills a drawer below its tab bar.
@@ -511,6 +550,7 @@ pub(crate) fn drawer_frame(
 fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     let on_close = header.on_close;
+    let DrawerNavigation { back, rows } = header.navigation;
     v_flex()
         .flex_shrink_0()
         .gap_1()
@@ -522,6 +562,7 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
             h_flex()
                 .gap_2()
                 .items_center()
+                .children(back.map(back_button))
                 .child(
                     div()
                         .px_1p5()
@@ -550,6 +591,7 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                 .child(copy_button("drawer-title-copy", header.name))
                 // Pushes the menu and close buttons to the right edge.
                 .child(div().flex_1())
+                .children(rows.map(|rows| row_controls(rows, cx)))
                 .child(header.menu)
                 .child(
                     Button::new("drawer-close")
@@ -560,6 +602,55 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                 ),
         )
         .child(header.subtitle)
+}
+
+/// `← api`: the label is the name of the place Back leads to.
+fn back_button(back: BackTarget) -> impl IntoElement {
+    let on_click = back.on_click;
+    Button::new("drawer-back")
+        .ghost()
+        .small()
+        .icon(Icon::new(IconName::ArrowLeft))
+        .label(back.label)
+        .tooltip(back.tooltip)
+        .on_click(move |event, window, cx| on_click(event, window, cx))
+}
+
+/// `[^] [v] 12 of 40`: the row cursor controls. The text shows only while the buttons can step.
+fn row_controls(rows: RowControls, cx: &App) -> impl IntoElement {
+    let can_step = rows.can_step();
+    let position = rows
+        .position
+        .filter(|_| can_step)
+        .map(|(row, visible)| format!("{} of {}", group_digits(row), group_digits(visible)));
+    let (on_previous, on_next) = (rows.on_previous, rows.on_next);
+    h_flex()
+        .items_center()
+        .child(
+            Button::new("drawer-previous-row")
+                .ghost()
+                .small()
+                .icon(Icon::new(IconName::ChevronUp))
+                .tooltip("Previous row (K)")
+                .disabled(!can_step)
+                .on_click(move |event, window, cx| on_previous(event, window, cx)),
+        )
+        .child(
+            Button::new("drawer-next-row")
+                .ghost()
+                .small()
+                .icon(Icon::new(IconName::ChevronDown))
+                .tooltip("Next row (J)")
+                .disabled(!can_step)
+                .on_click(move |event, window, cx| on_next(event, window, cx)),
+        )
+        .children(position.map(|text| {
+            div()
+                .px_1()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(text)
+        }))
 }
 
 /// The ⋯ button; the caller attaches the dropdown menu to it.

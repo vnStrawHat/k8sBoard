@@ -1,11 +1,18 @@
 //! Back and forward (spec 0056 history): the shell reads the place it shows, records it when a
-//! link is followed, and restores one through the same setters a reveal uses.
+//! link is followed, and restores one through the same setters a reveal uses. It also follows a
+//! drawer link and builds the drawer header's navigation controls.
 
-use gpui_kit::{App, Context};
+use std::rc::Rc;
 
+use gpui_kit::component::table::{TableDelegate, TableState};
+use gpui_kit::{App, Context, Entity};
+
+use super::keyboard_navigation::RowStep;
 use super::{AppShell, Screen, remapped_screen};
 use crate::custom_kind::CustomKind;
-use crate::navigation_history::Place;
+use crate::drawer::{BackTarget, ClickHandler, DrawerNavigation, RowControls};
+
+use crate::navigation_history::{Place, row_position};
 use crate::table_filter::TableFilter;
 use crate::table_selection::ClusterObject;
 
@@ -81,6 +88,44 @@ impl AppShell {
         cx.notify();
     }
 
+    /// The drawer header's Back button and Previous / Next controls.
+    pub(crate) fn drawer_navigation(&self, cx: &Context<Self>) -> DrawerNavigation {
+        let back = self.navigation.previous().map(|place| BackTarget {
+            label: place.back_label().into(),
+            tooltip: place.back_tooltip().into(),
+            on_click: Rc::new(cx.listener(|shell, _, _, cx| shell.go_back(cx))),
+        });
+        DrawerNavigation {
+            back,
+            rows: self.row_controls(cx),
+        }
+    }
+
+    /// Previous / Next for the screens with a table cursor. The cursor is kept under the Edit YAML
+    /// view, so the controls are hidden there; a reveal that is still loading has no visible row
+    /// yet, so they are disabled.
+    fn row_controls(&self, cx: &Context<Self>) -> Option<RowControls> {
+        if self.is_editing() {
+            return None;
+        }
+        let position = match self.screen {
+            Screen::Pods => cursor_position(&self.pod_table, cx),
+            Screen::Nodes => cursor_position(&self.node_table, cx),
+            Screen::Kind(_) => cursor_position(&self.kind_table, cx),
+            Screen::Overview | Screen::Issues | Screen::Topology | Screen::PortForwarding => {
+                return None;
+            }
+        };
+        let step = |step: RowStep| -> ClickHandler {
+            Rc::new(cx.listener(move |shell, _, window, cx| shell.step_cursor(step, window, cx)))
+        };
+        Some(RowControls {
+            position: position.filter(|_| self.pending_reveal.is_none()),
+            on_previous: step(RowStep::Previous),
+            on_next: step(RowStep::Next),
+        })
+    }
+
     /// The custom kinds the open cluster serves, once its CRD list has loaded.
     fn served_custom_kinds(&self, cx: &App) -> Option<Vec<CustomKind>> {
         let crds = self.live(cx)?.crds.as_ref()?;
@@ -126,4 +171,13 @@ impl AppShell {
             });
         });
     }
+}
+
+/// The 1-based cursor row of `table` and the number of visible rows.
+fn cursor_position<D: TableDelegate>(
+    table: &Entity<TableState<D>>,
+    cx: &App,
+) -> Option<(usize, usize)> {
+    let table = table.read(cx);
+    row_position(table.selected_row(), table.delegate().rows_count(cx))
 }

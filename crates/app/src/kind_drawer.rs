@@ -23,10 +23,10 @@ use crate::cluster_registry::ClusterRef;
 use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
-    DrawerBody, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, chips, created_text,
-    drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title, helm_body, link_text,
-    menu_button, open_link, port_row, section_title, shown_tab, tab_titles, truncated_text,
-    truncated_text_with_tooltip, wide_detail_row, yaml_body,
+    DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, chips,
+    created_text, drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title, helm_body,
+    link_text, menu_button, open_link, port_row, section_title, shown_tab, tab_titles,
+    truncated_text, truncated_text_with_tooltip, wide_detail_row, yaml_body,
 };
 use crate::helm_release_view::HelmReleaseView;
 use crate::helm_rows::VALUES_CHANGE_TITLE;
@@ -57,11 +57,15 @@ pub(crate) fn kind_drawer(
     row: &KindRow,
     state: &DrawerState,
     live: &LiveCluster,
-    forward: &PortButtons<'_>,
+    chrome: DrawerChrome<'_>,
     context: &RowContext,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let now = jiff::Timestamp::now();
+    let DrawerChrome {
+        forward,
+        navigation,
+    } = chrome;
     let header = DrawerHeader {
         kind_icon: kind.icon(),
         kind_name: kind.display_name().into(),
@@ -69,6 +73,7 @@ pub(crate) fn kind_drawer(
         subtitle: subtitle(row, now, cx),
         menu: kind_menu_button(kind, row, context, cx.weak_entity()),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
+        navigation,
     };
     let key = ResourceKey::of_row(kind, row);
     let events = event_subject(&key).and_then(|subject| live.events_of(&subject));

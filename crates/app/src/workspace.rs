@@ -29,7 +29,7 @@ use crate::dock::{
     DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height, initial_dock_height,
     max_line_offset, saved_dock_height,
 };
-use crate::drawer::ClickHandler;
+use crate::drawer::{ClickHandler, DrawerChrome};
 use crate::file_export::ExportState;
 use crate::filter_bar::{ToolkitState, filter_bar};
 use crate::issue_board::IssueSummary;
@@ -949,6 +949,7 @@ impl AppShell {
             cluster: &object.cluster,
             gate,
         };
+        let navigation = self.drawer_navigation(cx);
         match key {
             ResourceKey::Pod { .. } => {
                 let pod = live.pods.items().iter().find(|pod| key.is_pod(pod))?;
@@ -958,13 +959,23 @@ impl AppShell {
                     session,
                     &row,
                     &self.dock.downgrade(),
-                    &forward,
+                    DrawerChrome {
+                        forward: &forward,
+                        navigation,
+                    },
                     cx,
                 ))
             }
             ResourceKey::Node { .. } => {
                 let node = live.nodes.items().iter().find(|node| key.is_node(node))?;
-                Some(node_drawer(node, &self.drawer, session, &row, cx))
+                Some(node_drawer(
+                    node,
+                    &self.drawer,
+                    session,
+                    &row,
+                    navigation,
+                    cx,
+                ))
             }
             ResourceKey::Kind { kind, .. } => {
                 // Over Topology the row comes from its feeds, not the explorer.
@@ -974,7 +985,10 @@ impl AppShell {
                     live_row,
                     &self.drawer,
                     live,
-                    &forward,
+                    DrawerChrome {
+                        forward: &forward,
+                        navigation,
+                    },
                     &row,
                     cx,
                 ))

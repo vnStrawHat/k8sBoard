@@ -1,4 +1,6 @@
 use super::*;
+use crate::cluster_registry::ClusterRef;
+use crate::resource_kind::ResourceKind;
 
 fn place(screen: Screen) -> Place {
     Place {
@@ -116,4 +118,91 @@ fn no_served_place_leaves_the_current_one_off_the_forward_stack() {
     history.record(place(Screen::Issues));
     assert_eq!(history.back(place(Screen::Nodes), |_| false), None);
     assert_eq!(history.forward(place(Screen::Pods), served), None);
+}
+
+fn place_on(key: ResourceKey) -> Place {
+    let cluster = ClusterRef {
+        kubeconfig: std::path::PathBuf::from("test.yaml"),
+        context: "ctx".to_owned(),
+    };
+    Place {
+        selection: Some(ClusterObject::new(cluster, key.clone())),
+        ..place(key.screen())
+    }
+}
+
+fn service(name: &str) -> ResourceKey {
+    ResourceKey::Kind {
+        kind: ResourceKind::Services,
+        namespace: Some("shop".to_owned()),
+        name: name.to_owned(),
+    }
+}
+
+#[test]
+fn row_position_is_one_based_over_the_visible_rows() {
+    assert_eq!(row_position(Some(0), 1), Some((1, 1)));
+    assert_eq!(row_position(Some(11), 40), Some((12, 40)));
+    assert_eq!(row_position(Some(39), 40), Some((40, 40)));
+}
+
+#[test]
+fn row_position_is_none_without_a_visible_cursor_row() {
+    assert_eq!(row_position(None, 40), None);
+    assert_eq!(row_position(Some(40), 40), None);
+    assert_eq!(row_position(Some(0), 0), None);
+}
+
+#[test]
+fn back_label_is_the_object_name() {
+    assert_eq!(place_on(service("api")).back_label(), "api");
+}
+
+#[test]
+fn back_label_cuts_a_long_name_to_twenty_characters() {
+    let label = place_on(service("a-very-long-service-name-indeed")).back_label();
+    assert_eq!(label, "a-very-long-service…");
+    assert_eq!(label.chars().count(), 20);
+    let exact = "a".repeat(20);
+    assert_eq!(place_on(service(&exact)).back_label(), exact);
+}
+
+#[test]
+fn a_place_without_a_selection_is_named_by_its_screen() {
+    assert_eq!(place(Screen::Overview).back_label(), "Overview");
+    assert_eq!(
+        place(Screen::Kind(ResourceKind::Services)).back_label(),
+        "Services"
+    );
+    assert_eq!(
+        place(Screen::Overview).back_tooltip(),
+        "Back to Overview (Alt+Left)"
+    );
+}
+
+#[test]
+fn back_tooltip_names_the_kind_and_the_object() {
+    assert_eq!(
+        place_on(service("api")).back_tooltip(),
+        "Back to Service api (Alt+Left)"
+    );
+    let pod = ResourceKey::Pod {
+        namespace: "shop".to_owned(),
+        name: "api-1".to_owned(),
+    };
+    assert_eq!(place_on(pod).back_tooltip(), "Back to Pod api-1 (Alt+Left)");
+    let node = ResourceKey::Node {
+        name: "n1".to_owned(),
+    };
+    assert_eq!(place_on(node).back_tooltip(), "Back to Node n1 (Alt+Left)");
+}
+
+#[test]
+fn previous_is_the_place_back_would_restore() {
+    let mut history = NavigationHistory::default();
+    history.record(place_on(service("api")));
+    assert_eq!(
+        history.previous().map(Place::back_label).as_deref(),
+        Some("api")
+    );
 }

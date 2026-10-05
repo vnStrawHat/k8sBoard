@@ -21,8 +21,9 @@ use super::AppShell;
 use super::port_forward_dialogs::NewForwardPrefill;
 use super::port_forward_open::target_key;
 use crate::drawer::{
-    DrawerBody, DrawerHeader, DrawerSize, absent_text, drawer_frame, first_section_title,
-    menu_button, section_title, truncated_text, truncated_text_with_tooltip, wide_detail_row,
+    DrawerBody, DrawerHeader, DrawerNavigation, DrawerSize, absent_text, drawer_frame,
+    first_section_title, menu_button, section_title, truncated_text, truncated_text_with_tooltip,
+    wide_detail_row,
 };
 use crate::environment::environment_badge;
 use crate::port_forwards::{Forward, ForwardId, ForwardState, byte_count_text};
@@ -324,6 +325,7 @@ impl AppShell {
                     cx.notify();
                 });
             })),
+            navigation: DrawerNavigation::default(),
         };
         let body = v_flex()
             .child(first_section_title("Forward", cx))

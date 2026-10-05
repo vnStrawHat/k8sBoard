@@ -2,12 +2,16 @@
 //! state into a `Place` and writes one back, so the stacks are tested without a window.
 
 use crate::app_shell::Screen;
+
 use crate::drawer::{ContainerTab, DrawerTab};
+
 use crate::table_filter::TableFilter;
-use crate::table_selection::ClusterObject;
+use crate::table_selection::{ClusterObject, ResourceKey};
 
 /// The most places `back` (and `forward`) keep; the oldest is dropped.
 const HISTORY_CAP: usize = 50;
+/// The most characters of the previous name the Back button shows.
+const BACK_LABEL_MAX: usize = 20;
 
 /// What the shell showed when a link was followed. Scroll offset, sort, hidden columns and the
 /// Monitor range are not stored: the first is restored by revealing the row, the next two live in
@@ -64,9 +68,7 @@ impl NavigationHistory {
         Some(place)
     }
 
-    /// The place Back would restore. The header's Back button label reads it (spec 0056 A2), so
-    /// until that lands only the tests do.
-    #[cfg(test)]
+    /// The place Back would restore; the drawer header's Back button names it.
     pub(crate) fn previous(&self) -> Option<&Place> {
         self.back.last()
     }
@@ -75,6 +77,73 @@ impl NavigationHistory {
         self.back.clear();
         self.forward.clear();
     }
+}
+
+impl Place {
+    /// The Back button text: the object's name, cut to 20 characters, or the screen title for a
+    /// place without a selection.
+    pub(crate) fn back_label(&self) -> String {
+        let name = match &self.selection {
+            Some(object) => key_name(&object.key),
+            None => screen_title(self.screen),
+        };
+        if name.chars().count() <= BACK_LABEL_MAX {
+            return name.to_owned();
+        }
+        let kept: String = name.chars().take(BACK_LABEL_MAX - 1).collect();
+        format!("{kept}…")
+    }
+
+    /// The Back button tooltip, such as `Back to Service api (Alt+Left)`.
+    pub(crate) fn back_tooltip(&self) -> String {
+        match &self.selection {
+            Some(object) => format!(
+                "Back to {} {} (Alt+Left)",
+                key_kind_name(&object.key),
+                key_name(&object.key)
+            ),
+            None => format!("Back to {} (Alt+Left)", screen_title(self.screen)),
+        }
+    }
+}
+
+fn key_name(key: &ResourceKey) -> &str {
+    match key {
+        ResourceKey::Pod { name, .. }
+        | ResourceKey::Node { name }
+        | ResourceKey::Kind { name, .. } => name,
+    }
+}
+
+fn key_kind_name(key: &ResourceKey) -> &'static str {
+    match key {
+        ResourceKey::Pod { .. } => "Pod",
+        ResourceKey::Node { .. } => "Node",
+        ResourceKey::Kind { kind, .. } => kind.display_name(),
+    }
+}
+
+/// The screen as the header names it.
+fn screen_title(screen: Screen) -> &'static str {
+    match screen {
+        Screen::Overview => "Overview",
+        Screen::Pods => "Pods",
+        Screen::Nodes => "Nodes",
+        Screen::Issues => "Issues",
+        Screen::Topology => "Topology",
+        Screen::PortForwarding => "Port Forwarding",
+        Screen::Kind(kind) => kind.label(),
+    }
+}
+
+/// The 1-based position of the cursor row among the visible rows, for `12 of 40`. `None` when
+/// there is no cursor or it lies past the end (the subject is not a visible row).
+pub(crate) fn row_position(
+    selected_row: Option<usize>,
+    visible_rows: usize,
+) -> Option<(usize, usize)> {
+    let row = selected_row.filter(|row| *row < visible_rows)?;
+    Some((row + 1, visible_rows))
 }
 
 fn push_capped(stack: &mut Vec<Place>, place: Place) {
