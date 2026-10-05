@@ -48,6 +48,7 @@ use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
 use crate::row_selection::selection_bar;
 use crate::settings::AppSettings;
+use crate::settings_window::manage_clusters;
 use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
 use crate::usage_format::group_digits;
@@ -772,8 +773,19 @@ impl AppShell {
         }
         match self.kubeconfig_state(cx) {
             KubeconfigState::Loading => return busy_view("Loading kubeconfig…", cx),
+            KubeconfigState::Empty(detail) => return no_clusters_view(&detail, cx),
             KubeconfigState::Failed(message) => {
-                return error_view("Cannot load the kubeconfig", &message, None, None, None, cx);
+                return v_flex()
+                    .child(error_view(
+                        "Cannot load the kubeconfig",
+                        &message,
+                        None,
+                        None,
+                        None,
+                        cx,
+                    ))
+                    .child(h_flex().px_4().child(open_clusters_settings_button()))
+                    .into_any_element();
             }
             KubeconfigState::Loaded => {}
         }
@@ -1043,6 +1055,41 @@ fn pick_cluster_view(cx: &App) -> AnyElement {
 }
 
 pub(crate) const NO_CLUSTER_SELECTED: &str = "No cluster selected. Pick one in the switcher.";
+
+fn open_clusters_settings_button() -> Button {
+    Button::new("open-clusters-settings")
+        .label("Open Settings › Clusters")
+        .primary()
+        .small()
+        .on_click(|_, _, cx| manage_clusters(cx))
+}
+
+/// First run: no kubeconfig file exists yet. `detail` is the reason, kept as a muted line.
+/// Import and Paste live on the Clusters page, which owns their dialogs; the button opens that
+/// page instead of duplicating the entry points here.
+fn no_clusters_view(detail: &str, cx: &App) -> AnyElement {
+    v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .child(div().text_lg().font_semibold().child("No clusters yet"))
+        .child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("Add a kubeconfig on the Clusters page to start."),
+        )
+        .child(open_clusters_settings_button())
+        .child(
+            div()
+                .max_w(px(640.))
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(detail.to_owned()),
+        )
+        .into_any_element()
+}
 
 fn busy_view(text: &str, cx: &App) -> AnyElement {
     v_flex()

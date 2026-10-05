@@ -73,7 +73,8 @@ Taken verbatim from the wireframe navigation model:
 | Condition | Workspace shows |
 |---|---|
 | kubeconfig `Loading` / session `Connecting` | centered spinner + "Loading kubeconfig…" / "Connecting to {context}…" |
-| kubeconfig `Failed`, no context, or session `Failed` | `Alert` (error variant) with the message. Session failure adds a "Retry" button; context errors add "Pick a context from the cluster menu." |
+| kubeconfig missing (no file or no cluster) | "No clusters yet" empty state: one help line, an "Open Settings › Clusters" button, the reason as a muted line |
+| kubeconfig `Failed` (file exists, does not load), no context, or session `Failed` | `Alert` (error variant) with the message. A kubeconfig failure adds an "Open Settings › Clusters" button; session failure adds a "Retry" button; context errors add "Pick a context from the cluster menu." |
 | list `Loading` | the table's built-in loading skeleton (`TableDelegate::loading` returns true) |
 | list `Failed` | `Alert` with the message + "Retrying automatically." |
 | list `Ready`, empty | `render_empty`: "No pods in {scope}" / "No nodes" |

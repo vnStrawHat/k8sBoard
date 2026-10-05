@@ -392,7 +392,9 @@ impl ClusterCatalog {
                 for standalone in parts {
                     match standalone.part {
                         super::CatalogPart::Loaded(_) => loaded += 1,
-                        super::CatalogPart::Failed(_) => others += 1,
+                        super::CatalogPart::Failed(_) | super::CatalogPart::Missing(_) => {
+                            others += 1
+                        }
                         super::CatalogPart::Loading => {}
                     }
                 }

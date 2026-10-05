@@ -299,6 +299,9 @@ impl Screen {
 enum KubeconfigState {
     Loading,
     Loaded,
+    /// No kubeconfig file or cluster exists yet; carries the reason as a muted detail.
+    Empty(String),
+    /// A kubeconfig exists but does not load.
     Failed(String),
 }
 
@@ -1443,7 +1446,10 @@ impl AppShell {
         }
         match catalog.kubeconfigs().next() {
             Some(_) => KubeconfigState::Loaded,
-            None => KubeconfigState::Failed(catalog.failure_text()),
+            None if catalog.has_invalid_start_file() => {
+                KubeconfigState::Failed(catalog.failure_text())
+            }
+            None => KubeconfigState::Empty(catalog.failure_text()),
         }
     }
 
@@ -4071,7 +4077,7 @@ impl AppShell {
     pub(crate) fn settle_input(&self, cx: &App) -> SettleInput {
         let target = match self.kubeconfig_state(cx) {
             KubeconfigState::Loading => TargetState::Loading,
-            KubeconfigState::Failed(_) => TargetState::Unavailable,
+            KubeconfigState::Empty(_) | KubeconfigState::Failed(_) => TargetState::Unavailable,
             KubeconfigState::Loaded => match self.session() {
                 Some(session) => self.slot_target(session.read(cx), cx),
                 // Between the release of the old session and the deferred connect of the new one,

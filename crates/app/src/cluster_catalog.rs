@@ -49,6 +49,8 @@ pub(crate) enum CatalogPart {
     Loaded(Arc<Kubeconfig>),
     /// The text of the load error; the file never reaches the list.
     Failed(String),
+    /// The file does not exist: no kubeconfig is set up yet, which is not an error to show in red.
+    Missing(String),
 }
 
 /// Something the user should read about the catalog; shown by the title-bar warning button.
@@ -216,7 +218,7 @@ impl ClusterCatalog {
     fn loaded(part: &CatalogPart) -> Option<&Arc<Kubeconfig>> {
         match part {
             CatalogPart::Loaded(kubeconfig) => Some(kubeconfig),
-            CatalogPart::Loading | CatalogPart::Failed(_) => None,
+            CatalogPart::Loading | CatalogPart::Failed(_) | CatalogPart::Missing(_) => None,
         }
     }
 
@@ -273,12 +275,18 @@ impl ClusterCatalog {
     /// Why nothing is listed: the first load error, or that no file was located.
     pub(crate) fn failure_text(&self) -> String {
         for part in self.start_parts() {
-            if let CatalogPart::Failed(message) = part {
+            if let CatalogPart::Failed(message) | CatalogPart::Missing(message) = part {
                 return message.clone();
             }
         }
         "no kubeconfig found: pass --kubeconfig, set KUBECONFIG, or create ~/.kube/config"
             .to_owned()
+    }
+
+    /// Whether a start file exists but does not load, as opposed to no file at all.
+    pub(crate) fn has_invalid_start_file(&self) -> bool {
+        self.start_parts()
+            .any(|part| matches!(part, CatalogPart::Failed(_)))
     }
 
     pub(crate) fn notices(&self) -> &[CatalogNotice] {
@@ -356,7 +364,7 @@ impl ClusterCatalog {
     pub(crate) fn chain(&self) -> Option<&Arc<Kubeconfig>> {
         match self.chain.as_ref()? {
             CatalogPart::Loaded(kubeconfig) => Some(kubeconfig),
-            CatalogPart::Loading | CatalogPart::Failed(_) => None,
+            CatalogPart::Loading | CatalogPart::Failed(_) | CatalogPart::Missing(_) => None,
         }
     }
 
@@ -736,9 +744,19 @@ fn load_part(request: LoadRequest) -> PartLoad {
         Err(error) => PartLoad {
             target,
             skipped: vec![skipped_notice(&error)],
-            part: CatalogPart::Failed(error_text(&error)),
+            part: failed_part(&error),
             is_reload: false,
         },
+    }
+}
+
+fn failed_part(error: &KubeconfigError) -> CatalogPart {
+    let text = error_text(error);
+    match error {
+        KubeconfigError::Read { source, .. } if source.kind() == io::ErrorKind::NotFound => {
+            CatalogPart::Missing(text)
+        }
+        _ => CatalogPart::Failed(text),
     }
 }
 

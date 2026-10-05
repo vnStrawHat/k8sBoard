@@ -208,6 +208,20 @@ fn nothing_loaded_reports_the_first_error(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_missing_file_is_not_an_invalid_one(cx: &mut TestAppContext) {
+    install_settings(&[], cx);
+    let missing = open_catalog(&[PathBuf::from("definitely-missing-kubeconfig.yaml")], cx);
+    assert!(missing.read_with(cx, |catalog, _| !catalog.has_invalid_start_file()));
+
+    let dir = temp_dir("invalid-start");
+    let broken = dir.join("broken.yaml");
+    std::fs::write(&broken, "not: [a kubeconfig").expect("write fixture");
+    let invalid = open_catalog(&[broken], cx);
+    assert!(invalid.read_with(cx, |catalog, _| catalog.has_invalid_start_file()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
 fn empty_catalog_says_no_kubeconfig_was_found(cx: &mut TestAppContext) {
     install_settings(&[], cx);
     let catalog = open_catalog(&[], cx);
