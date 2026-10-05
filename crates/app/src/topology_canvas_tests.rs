@@ -374,3 +374,20 @@ fn a_traffic_edge_flows_only_at_the_selected_node() {
     assert!(!is_animated(&edge(2, 3), Some(1), Some(1), 1.));
     assert!(!is_animated(&edge(1, 2), Some(1), None, 1.));
 }
+
+#[test]
+fn the_edges_of_the_focused_node_are_painted_last() {
+    let (first, second, third) = (edge(0, 1), edge(2, 3), edge(1, 2));
+    let order = |focus: Option<usize>| {
+        let mut edges = [
+            (&first, "first", None),
+            (&second, "second", None),
+            (&third, "third", None),
+        ];
+        sort_focused_last(&mut edges, focus);
+        edges.map(|(_, name, _)| name)
+    };
+    // Node 1 is on the first and the third edge; the rest keep their order.
+    assert_eq!(order(Some(1)), ["second", "first", "third"]);
+    assert_eq!(order(None), ["first", "second", "third"]);
+}

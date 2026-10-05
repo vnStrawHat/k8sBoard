@@ -12,7 +12,7 @@ pub(crate) fn edge_emphasis(edge: &TopologyEdge, focus: Option<usize>) -> Emphas
 
 - `focus = hovered.or(selected)`, where `hovered: Option<NodeId>` is a new `TopologyView` field. Card `on_hover(|is_hovered, ..|)` sets or clears it, and notifies **only when it changes**. During a drag the change is recorded but not painted (the cards move under the pointer); `finish_drag` repaints once. A `hovered` node that is not in `visible_nodes` is ignored.
 - `hovered` is cleared on a namespace change, a rebuild that drops the node, and Escape.
-- No focus: every edge is `Rest`. Focus: the edges touching the focus node are `Focused`, all others `Dimmed`.
+- No focus: every edge is `Rest`. Focus: the edges touching the focus node are `Focused`, all others `Dimmed`. The `Focused` edges are painted last (`sort_focused_last`), over the others (UX walk M22).
 
 | Emphasis | Alpha | Width |
 |---|---|---|
@@ -61,5 +61,5 @@ React Flow animates an edge with `stroke-dasharray: 5` and `dashdraw 0.5s linear
 ## Overlays and the drawer (polish round)
 
 - The minimap and the legend sit in the bottom strip that Fit keeps clear (`OVERLAY_GUTTER`). While the drawer is open they move left by its width (`DRAWER_WIDTH`), so both stay visible.
-- A click on a card pans it into the part of the canvas the drawer leaves free (`Viewport::reveal`: the least pan, or its center when it does not fit). `pending_focus` centers in that part. When the canvas size becomes known and the first view is made again, a selected node is revealed the same way.
+- A click on a card brings it and its direct neighbours into the part of the canvas the drawer leaves free (`Viewport::reveal_group`, UX walk M22): the least pan when they all fit at the current zoom; else centered at the largest grid zoom below the current one that fits them and still shows the card text (`MIN_TEXT_ZOOM`); else the nearest neighbours that fit with the node (the node alone, when it fills the area). `pending_focus` centers the node in that part and then does the same. When the canvas size becomes known and the first view is made again, a selected node is revealed the same way. The port label on `routes to` edges was skipped: `TopologyEdge` carries no port, and the graph build reads none.
 - The legend draws a 38 px swatch per relation with the stroke code of the edges (same dash, color, and arrow) and an 11 px label.

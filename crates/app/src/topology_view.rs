@@ -49,7 +49,7 @@ use crate::topology_graph::{
     resolve_group_by,
 };
 use crate::topology_layout::{
-    GraphPoint, GraphStructure, TopologyLayout, layout as lay_out, structure,
+    GraphPoint, GraphRect, GraphStructure, TopologyLayout, layout as lay_out, structure,
 };
 use crate::topology_traffic::{
     TrafficLayer, TrafficOverlay, TrafficSample, shown_caption, tooltip_with_traffic,
@@ -820,8 +820,13 @@ impl TopologyView {
             .viewport
             .center_on(center, free_width.max(width / 2.), height);
         self.pending_focus = None;
-        self.highlighted = (key.is_none()).then_some(id);
+        self.highlighted = key.is_none().then(|| id.clone());
+        let has_object = key.is_some();
         self.with_shell(cx, |shell, cx| shell.select_on_topology(key, cx));
+        // Centering puts the node in the middle; its neighbours may still be under the drawer.
+        if has_object {
+            self.reveal_node(&id);
+        }
         true
     }
 
@@ -1390,7 +1395,8 @@ impl TopologyView {
             || self.live(cx).is_some_and(|live| live.row_of(key).is_some())
     }
 
-    /// Pans the node into the part of the canvas the drawer leaves free, if it is not in it.
+    /// Brings the node and its direct neighbours into the part of the canvas the drawer leaves
+    /// free, if they are not in it: the drawer would hide what the node connects to.
     fn reveal_node(&mut self, id: &NodeId) {
         let (Some(Ok(graph)), Some((_, _, layout))) = (&self.build, &self.layout) else {
             return;
@@ -1404,9 +1410,13 @@ impl TopologyView {
             .as_ref()
             .map_or(DrawerSize::Standard, DrawerSize::of);
         let free_width = (width - f32::from(drawer_width(size, px(width)))).max(width / 2.);
-        self.viewport =
-            self.viewport
-                .reveal(layout.rects[index], free_width, height, REVEAL_MARGIN);
+        self.viewport = self.viewport.reveal_group(
+            layout.rects[index],
+            &neighbour_rects(graph, layout, index),
+            free_width,
+            height,
+            REVEAL_MARGIN,
+        );
     }
 
     /// Starts or stops the frame timer of the flow animation, as the canvas paints: the timer
@@ -2290,6 +2300,24 @@ fn count_text(namespace: &str, build: Option<&Built>) -> String {
         Some(Err(_)) => format!("ns: {namespace} \u{b7} too large"),
         None => format!("ns: {namespace} \u{b7} loading\u{2026}"),
     }
+}
+
+/// The cards at the other end of the edges of the node `index`.
+fn neighbour_rects(graph: &TopologyGraph, layout: &TopologyLayout, index: usize) -> Vec<GraphRect> {
+    graph
+        .edges
+        .iter()
+        .filter_map(|edge| {
+            if edge.from == index {
+                Some(edge.to)
+            } else if edge.to == index {
+                Some(edge.from)
+            } else {
+                None
+            }
+        })
+        .map(|other| layout.rects[other])
+        .collect()
 }
 
 /// `1 of {n} namespaces in scope` when the title-bar scope holds several: Topology draws one.

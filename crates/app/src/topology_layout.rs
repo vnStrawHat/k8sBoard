@@ -70,6 +70,16 @@ impl GraphRect {
         }
     }
 
+    /// The smallest rect that holds both.
+    pub(crate) fn union(&self, other: &Self) -> Self {
+        Self::spanning(
+            self.origin.x.min(other.origin.x),
+            self.origin.y.min(other.origin.y),
+            self.right().max(other.right()),
+            self.bottom().max(other.bottom()),
+        )
+    }
+
     fn node(x: f32, y: f32, width: f32) -> Self {
         Self {
             origin: GraphPoint { x, y },

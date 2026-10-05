@@ -142,6 +142,52 @@ impl Viewport {
         )
     }
 
+    /// Brings `focus` and its `neighbours` into the free area. The least pan when they all fit at
+    /// this zoom; else centered at the largest zoom of the grid below this one that fits them and
+    /// still shows the card text; else at this zoom, the nearest neighbours that fit with `focus`
+    /// (none, when the node alone fills the area).
+    pub(crate) fn reveal_group(
+        self,
+        focus: GraphRect,
+        neighbours: &[GraphRect],
+        width: f32,
+        height: f32,
+        margin: f32,
+    ) -> Self {
+        let fits = |group: &GraphRect, zoom: f32| {
+            group.width * zoom + 2. * margin <= width && group.height * zoom + 2. * margin <= height
+        };
+        let whole = neighbours
+            .iter()
+            .fold(focus, |group, other| group.union(other));
+        if fits(&whole, self.zoom()) {
+            return self.reveal(whole, width, height, margin);
+        }
+        let smaller = (MIN_FIT_STEP..self.zoom_step).rev().find(|zoom_step| {
+            let zoom = WHEEL_STEP.powi(*zoom_step);
+            zoom >= MIN_TEXT_ZOOM && fits(&whole, zoom)
+        });
+        if let Some(zoom_step) = smaller {
+            return Self { zoom_step, ..self }.center_on(whole.center(), width, height);
+        }
+        let center = focus.center();
+        let distance = |rect: &GraphRect| {
+            let other = rect.center();
+            (other.x - center.x).hypot(other.y - center.y)
+        };
+        let mut nearest: Vec<&GraphRect> = neighbours.iter().collect();
+        nearest.sort_by(|a, b| distance(a).total_cmp(&distance(b)));
+        let group = nearest.into_iter().fold(focus, |group, other| {
+            let wider = group.union(other);
+            if fits(&wider, self.zoom()) {
+                wider
+            } else {
+                group
+            }
+        });
+        self.reveal(group, width, height, margin)
+    }
+
     /// Puts `target` in the middle of a canvas of `width` by `height`.
     pub(crate) fn center_on(self, target: GraphPoint, width: f32, height: f32) -> Self {
         let zoom = self.zoom();
@@ -502,6 +548,72 @@ mod tests {
         let centered = view.reveal(card, 150., 700., 20.);
         let (x, _) = centered.to_screen(card.origin);
         assert!(close(x + card.width / 2., 75.));
+    }
+
+    fn card(x: f32, y: f32) -> GraphRect {
+        GraphRect {
+            origin: GraphPoint { x, y },
+            width: 200.,
+            height: 60.,
+        }
+    }
+
+    #[test]
+    fn reveal_group_pans_when_the_group_fits_the_free_area() {
+        let node = card(900., 300.);
+        let neighbours = [card(600., 250.), card(1_100., 390.)];
+        let whole = node.union(&neighbours[0]).union(&neighbours[1]);
+        let view = Viewport::default();
+        let moved = view.reveal_group(node, &neighbours, 900., 700., 20.);
+        assert!(close(moved.zoom(), view.zoom()), "the zoom is not changed");
+        let (left, top) = moved.to_screen(whole.origin);
+        assert!(left >= 20. - 0.01 && top >= 20. - 0.01);
+        assert!(left + whole.width <= 900. - 20. + 0.01);
+        // Already inside: nothing moves.
+        assert_eq!(
+            view.reveal_group(node, &neighbours, 1_400., 700., 20.),
+            view
+        );
+    }
+
+    #[test]
+    fn reveal_group_zooms_out_only_as_far_as_needed_and_keeps_the_text() {
+        let node = card(900., 300.);
+        let neighbours = [card(100., 100.), card(1_300., 440.)];
+        let whole = node.union(&neighbours[0]).union(&neighbours[1]);
+        let view = Viewport::default();
+        let zoomed = view.reveal_group(node, &neighbours, 1_000., 600., 20.);
+        assert!(zoomed.zoom() < view.zoom() && zoomed.zoom() >= MIN_TEXT_ZOOM);
+        assert!(whole.width * zoomed.zoom() + 40. <= 1_000.);
+        // One step further out would not be needed.
+        assert!(whole.width * zoomed.zoom() * WHEEL_STEP + 40. > 1_000.);
+        let (left, _) = zoomed.to_screen(whole.origin);
+        assert!(left >= 20. - 0.01);
+    }
+
+    #[test]
+    fn reveal_group_keeps_the_nearest_neighbours_when_no_readable_zoom_fits_all() {
+        let node = card(900., 300.);
+        let near = card(1_150., 300.);
+        let far = card(-3_000., 300.);
+        let view = Viewport::default();
+        let moved = view.reveal_group(node, &[far, near], 1_000., 600., 20.);
+        assert_eq!(moved.zoom(), view.zoom());
+        // The node and the near card are inside the area; the far one is not.
+        let inside = |rect: GraphRect| {
+            let (x, _) = moved.to_screen(rect.origin);
+            x >= 20. - 0.01 && x + rect.width <= 1_000. - 20. + 0.01
+        };
+        assert!(inside(node) && inside(near) && !inside(far));
+        // A node too wide for any readable zoom is revealed like before.
+        let wide = GraphRect {
+            width: 3_000.,
+            ..node
+        };
+        assert_eq!(
+            view.reveal_group(wide, &[near], 1_000., 600., 20.),
+            view.reveal(wide, 1_000., 600., 20.)
+        );
     }
 
     #[test]

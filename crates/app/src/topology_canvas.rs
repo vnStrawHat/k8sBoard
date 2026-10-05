@@ -502,6 +502,15 @@ pub(crate) fn drawn_edges<'a>(
         })
 }
 
+/// Puts the edges of the focused node last, so the ones painted over them never hide them (a stable
+/// sort: the rest keep their order).
+fn sort_focused_last<T>(
+    edges: &mut [(&TopologyEdge, T, Option<&EdgeTraffic>)],
+    focus: Option<usize>,
+) {
+    edges.sort_by_key(|(edge, _, _)| edge_emphasis(edge, focus) == Emphasis::Focused);
+}
+
 /// Paints the edges and their arrows. Returns how many of them flow.
 fn paint_edges(
     paint: &CanvasPaint,
@@ -520,7 +529,9 @@ fn paint_edges(
         point(left + x, top + y)
     };
     let mut animated = 0;
-    let edges = drawn_edges(&paint.graph, &paint.layout.routes, paint.traffic.as_deref());
+    let mut edges: Vec<_> =
+        drawn_edges(&paint.graph, &paint.layout.routes, paint.traffic.as_deref()).collect();
+    sort_focused_last(&mut edges, paint.focus);
     for (edge, route, edge_traffic) in edges {
         if !touches(viewport, route.bounds(), width, height) {
             continue;

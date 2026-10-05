@@ -912,3 +912,36 @@ fn a_namespace_change_is_remembered_per_context(cx: &mut gpui_kit::TestAppContex
         );
     });
 }
+
+#[test]
+fn the_neighbours_of_a_node_are_the_cards_at_the_other_end_of_its_edges() {
+    let graph = crate::topology_fixtures::traffic_namespace().graph();
+    let arranged = lay_out(&graph, GroupBy::Components, 1.6, &HashMap::new(), None);
+    let degree = |index: usize| {
+        graph
+            .edges
+            .iter()
+            .filter(|edge| edge.from == index || edge.to == index)
+            .count()
+    };
+    let busiest = (0..graph.nodes.len()).max_by_key(|index| degree(*index));
+    let busiest = busiest.expect("a node");
+    assert!(
+        degree(busiest) > 1,
+        "the fixture node has several neighbours"
+    );
+    let rects = neighbour_rects(&graph, &arranged, busiest);
+    assert_eq!(rects.len(), degree(busiest));
+    for edge in graph
+        .edges
+        .iter()
+        .filter(|edge| edge.from == busiest || edge.to == busiest)
+    {
+        let other = if edge.from == busiest {
+            edge.to
+        } else {
+            edge.from
+        };
+        assert!(rects.contains(&arranged.rects[other]));
+    }
+}
