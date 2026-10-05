@@ -481,13 +481,14 @@ pub(crate) fn drawer_frame(
         .child(header_row(header, cx))
         .when_some(tabs, |this, tabs| this.child(tabs))
         .child(match body {
+            // The padding sits on a child of the scrolled box: padding on the scrolled box itself is
+            // left out of the scroll extent, so the last line stopped short of the bottom edge.
             DrawerBody::Scrolling(body) => div()
                 .id("drawer-body")
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .p_4()
-                .child(body)
+                .child(div().p_4().child(body))
                 .into_any_element(),
             DrawerBody::Filling(body) => div()
                 .id("drawer-body")
@@ -495,14 +496,13 @@ pub(crate) fn drawer_frame(
                 .min_h_0()
                 .child(body)
                 .into_any_element(),
-            DrawerBody::Sections { sections, scroll } => v_flex()
+            DrawerBody::Sections { sections, scroll } => div()
                 .id("drawer-body")
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
                 .track_scroll(&scroll)
-                .p_4()
-                .children(sections)
+                .child(v_flex().p_4().children(sections))
                 .into_any_element(),
         })
 }
