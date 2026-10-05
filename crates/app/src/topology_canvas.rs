@@ -950,6 +950,28 @@ pub(crate) fn legend_entries(sources: Option<&[TrafficSourceKind]>) -> Vec<(Swat
     }
     entries
 }
+
+/// The legend text is 11 px mono; one glyph is about this wide.
+const LEGEND_GLYPH_WIDTH: f32 = 6.6;
+/// What the legend adds to its entries: its padding and border, and the Legend toggle.
+const LEGEND_FRAME_WIDTH: f32 = 26. + 84.;
+/// The gap between entries, and between a swatch and its text.
+const LEGEND_ENTRY_GAP: f32 = 16.;
+const LEGEND_SWATCH_GAP: f32 = 8.;
+
+/// About how wide the open legend is, in px, so the view can tell whether it fits the room beside
+/// the zoom panel and the minimap before it draws it.
+pub(crate) fn legend_width(entries: &[(Swatch, &str)]) -> f32 {
+    let entries_width: f32 = entries
+        .iter()
+        .map(|(_, text)| {
+            SWATCH_WIDTH + LEGEND_SWATCH_GAP + text.chars().count() as f32 * LEGEND_GLYPH_WIDTH
+        })
+        .sum();
+    let gaps = entries.len().saturating_sub(1) as f32 * LEGEND_ENTRY_GAP;
+    LEGEND_FRAME_WIDTH + entries_width + gaps
+}
+
 #[cfg(test)]
 #[path = "topology_canvas_tests.rs"]
 mod topology_canvas_tests;

@@ -945,3 +945,30 @@ fn the_neighbours_of_a_node_are_the_cards_at_the_other_end_of_its_edges() {
         assert!(rects.contains(&arranged.rects[other]));
     }
 }
+
+#[test]
+fn the_legend_collapses_where_it_would_cover_the_zoom_panel_or_the_minimap() {
+    let relations = crate::topology_canvas::legend_entries(None);
+    let width = legend_width(&relations);
+    let (minimap, _) = minimap_size(false);
+    // A 1320 px window: the canvas is about 1070 px wide.
+    assert!(width <= legend_room(1_070., minimap));
+    // An 800 px window: about 550 px, so it collapses.
+    assert!(width > legend_room(550., minimap));
+    // With the drawer open at 1320 px the canvas is cut in half again.
+    let drawer = 535.;
+    assert!(width > legend_room(1_070., minimap_size(true).0 + drawer));
+}
+
+#[gpui_kit::test]
+fn the_legend_choice_is_kept_and_starts_open_by_room(cx: &mut gpui_kit::TestAppContext) {
+    let view = view_of(cx);
+    cx.update(|cx| assert_eq!(view.read(cx).legend_choice, None));
+    notifications(&view, cx, |view, cx| view.set_legend_open(false, cx));
+    cx.update(|cx| assert_eq!(view.read(cx).legend_choice, Some(false)));
+    // A namespace change does not reset the choice: it lasts for the session.
+    notifications(&view, cx, |view, cx| {
+        view.change_namespace(Some("blog".to_owned()), cx);
+    });
+    cx.update(|cx| assert_eq!(view.read(cx).legend_choice, Some(false)));
+}

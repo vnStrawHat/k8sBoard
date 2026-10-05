@@ -36,7 +36,7 @@ use crate::table_selection::ResourceKey;
 use crate::topology_canvas::{
     CanvasPaint, MinimapPaint, TITLE_PILL_HEIGHT, TITLE_PILL_LEFT, TITLE_PILL_PADDING,
     TITLE_PILL_TOP, TITLE_SIZE, graph_canvas, handle_canvas, legend_entries, legend_swatch,
-    minimap_canvas,
+    legend_width, minimap_canvas,
 };
 use crate::topology_card::{CardFrame, CardState, node_card};
 use crate::topology_checks::{ConfigCheck, checks_chip, topology_coverage};
@@ -77,6 +77,8 @@ const REVEAL_MARGIN: f32 = 24.;
 const COMPACT_MINIMAP_SCALE: f32 = 0.5;
 /// The font size of the legend text, in pixels.
 const LEGEND_TEXT_SIZE: f32 = 11.;
+/// The legend sits this far left of the minimap.
+const LEGEND_RIGHT_GAP: f32 = 28.;
 /// The height of that title's pill, in pixels.
 const LOW_ZOOM_TITLE_HEIGHT: f32 = 18.;
 /// The height of the namespace list the dropdown shows before it scrolls.
@@ -317,6 +319,8 @@ pub(crate) struct TopologyView {
     /// The first view shows only part of the graph, because the whole is too small to read; Fit
     /// clears it.
     is_first_view_partial: bool,
+    /// Whether the user opened or hid the legend; `None` follows the room there is for it.
+    legend_choice: Option<bool>,
     /// The first view was made for `DEFAULT_CANVAS`: it is made again once the real size is known.
     fit_waits_for_size: bool,
     /// A ghost or unchecked node that was clicked.
@@ -368,6 +372,7 @@ impl TopologyView {
             viewport: Viewport::default(),
             needs_fit: true,
             is_first_view_partial: false,
+            legend_choice: None,
             fit_waits_for_size: false,
             highlighted: None,
             pending_focus: None,
@@ -2002,7 +2007,7 @@ impl TopologyView {
                     ))
                     .children(self.render_edge_labels(&graph, &layout, colors, cx))
                     .child(self.render_controls(cx))
-                    .child(self.render_legend(colors, minimap_size.0 + drawer, cx))
+                    .child(self.render_legend(colors, minimap_size.0 + drawer, width, cx))
                     .child(self.render_minimap(&graph, &layout, colors, minimap_size, drawer, cx)),
             )
             .into_any_element()
@@ -2141,36 +2146,84 @@ impl TopologyView {
             .collect()
     }
 
-    /// The legend, in the strip at the bottom that Fit keeps clear: a swatch drawn like a real
-    /// edge, and its meaning, for each relation (in Traffic mode, for each flow).
-    fn render_legend(&self, colors: CanvasColors, inset: f32, cx: &App) -> Div {
+    /// The legend, in the strip at the bottom that Fit keeps clear: a Legend toggle and, while it
+    /// is open, a swatch drawn like a real edge and its meaning for each relation (in Traffic mode,
+    /// for each flow). Without a choice of the user it is open only where it fits beside the zoom
+    /// panel and the minimap; opened by hand where it does not, it wraps instead of covering them.
+    fn render_legend(
+        &self,
+        colors: CanvasColors,
+        inset: f32,
+        canvas_width: f32,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let theme = cx.theme();
-        let mono = theme.mono_font_family.clone();
+        let (mono, background, muted) = (
+            theme.mono_font_family.clone(),
+            theme.background,
+            theme.muted_foreground,
+        );
         let sources = self
             .traffic
             .layer
             .as_ref()
             .map(|layer| layer.overlay.sources.as_slice());
-        let entries = legend_entries(sources).into_iter().map(|(swatch, text)| {
+        let entries = legend_entries(sources);
+        let room = legend_room(canvas_width, inset);
+        let is_open = self
+            .legend_choice
+            .unwrap_or_else(|| legend_width(&entries) <= room);
+        let toggle = Button::new("topology-legend")
+            .ghost()
+            .xsmall()
+            .label("Legend")
+            .icon(if is_open {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            })
+            .tooltip(if is_open {
+                "Hide the legend"
+            } else {
+                "Show the legend"
+            })
+            .on_click(cx.listener(move |view, _, _, cx| view.set_legend_open(!is_open, cx)));
+        let entries = entries.into_iter().map(|(swatch, text)| {
             h_flex()
                 .gap_2()
                 .items_center()
                 .child(legend_swatch(swatch, colors))
-                .child(div().text_color(theme.muted_foreground).child(text))
+                .child(div().text_color(muted).child(text))
         });
-        div().absolute().bottom_3().right(px(inset + 28.)).child(
-            h_flex()
-                .gap_4()
-                .px_3()
-                .py_1p5()
-                .rounded(px(6.))
-                .border_1()
-                .border_color(colors.card_border)
-                .bg(theme.background)
-                .font_family(mono)
-                .text_size(px(LEGEND_TEXT_SIZE))
-                .children(entries),
-        )
+        div()
+            .absolute()
+            .bottom_3()
+            .right(px(inset + LEGEND_RIGHT_GAP))
+            // A press on the legend must not start a pan of the canvas under it.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                h_flex()
+                    .max_w(px(room.max(0.)))
+                    .flex_wrap()
+                    .items_center()
+                    .gap_x_4()
+                    .px_2()
+                    .py_0p5()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(colors.card_border)
+                    .bg(background)
+                    .font_family(mono)
+                    .text_size(px(LEGEND_TEXT_SIZE))
+                    .child(toggle)
+                    .when(is_open, |row| row.children(entries)),
+            )
+    }
+
+    /// Shows or hides the legend; the choice is kept while the app runs.
+    fn set_legend_open(&mut self, is_open: bool, cx: &mut Context<Self>) {
+        self.legend_choice = Some(is_open);
+        cx.notify();
     }
 
     fn render_minimap(
@@ -2230,6 +2283,12 @@ impl Render for TopologyView {
                     .child(self.render_body(scale_factor, cx)),
             )
     }
+}
+
+/// The width the legend may take: the canvas without the zoom panel on the left and the minimap
+/// (and the drawer) on the right.
+fn legend_room(canvas_width: f32, inset: f32) -> f32 {
+    canvas_width - inset - LEGEND_RIGHT_GAP - CONTROLS_INSET
 }
 
 /// The size of the minimap: full, or `COMPACT_MINIMAP_SCALE` of it while the drawer is open.

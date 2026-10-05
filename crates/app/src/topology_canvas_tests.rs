@@ -391,3 +391,13 @@ fn the_edges_of_the_focused_node_are_painted_last() {
     assert_eq!(order(Some(1)), ["second", "first", "third"]);
     assert_eq!(order(None), ["first", "second", "third"]);
 }
+
+#[test]
+fn the_legend_is_wider_with_more_or_longer_entries() {
+    let relations = legend_entries(None);
+    let traffic = legend_entries(Some(&[TrafficSourceKind::Istio]));
+    assert!(legend_width(&traffic) > legend_width(&relations));
+    assert!(legend_width(&relations) > legend_width(&relations[..2]));
+    // Four short entries and the toggle fit a laptop canvas, with room to spare.
+    assert!((300. ..600.).contains(&legend_width(&relations)));
+}
