@@ -6,7 +6,8 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::{
     AnyElement, App, Context, Div, HighlightStyle, IntoElement, ParentElement as _, Pixels,
-    SharedString, Stateful, Styled as _, StyledText, WeakEntity, Window, div, px,
+    SharedString, Stateful, Styled as _, StyledText, WeakEntity, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::age::format_age;
@@ -19,7 +20,7 @@ use crate::resource_actions::{LogsMenu, PodMenuItems, PodMenuLinks, ShellMenu, p
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::row_context::TableSession;
 use crate::settings::TablePrefs;
-use crate::status_tone::{StatusTone, pod_status_label, toned_text};
+use crate::status_tone::{StatusTone, pod_status_label, tone_color, toned_text};
 use crate::table_filter::FilterPreset;
 use crate::table_layout::{
     ColumnPlan, TableLayout, centered_cell, clickable_row, header_cell, select_cell,
@@ -307,6 +308,9 @@ impl PodTableDelegate {
                 .w_full()
                 .text_right()
                 .font_family(mono)
+                .when(pod.restarts > 0, |this| {
+                    this.text_color(tone_color(StatusTone::Warn, cx))
+                })
                 .child(pod.restarts.to_string())
                 .into_any_element(),
             CPU | MEMORY => {

@@ -19,7 +19,7 @@ use gpui_kit::{
 use crate::app_shell::AppShell;
 use crate::clipboard_copy::copyable_mono;
 use crate::cluster_session::{ClusterSession, LiveList};
-use crate::container_detail::{ContainerDetailInput, container_detail};
+use crate::container_detail::{ContainerDetailInput, container_detail, last_state_text};
 use crate::dock::Dock;
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, created_text,
@@ -35,7 +35,9 @@ use crate::resource_actions::{
 };
 use crate::resource_kind::POD_ICON;
 use crate::row_context::RowContext;
-use crate::status_tone::{StatusTone, container_state_label, pod_status_label, toned_text};
+use crate::status_tone::{
+    StatusLabel, StatusTone, container_state_label, pod_status_label, toned_text,
+};
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::UsageBar;
 use crate::usage_format::{Measure, usage_tone};
@@ -253,7 +255,7 @@ fn overview(
             pod.containers
                 .iter()
                 .enumerate()
-                .map(|(index, container)| container_row(index, container, cx)),
+                .map(|(index, container)| container_row(index, container, now, cx)),
         )
         .into_any_element()
 }
@@ -334,40 +336,64 @@ fn conditions(pod: &PodSummary, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// One container of the Overview tab; clicking it opens the Containers tab on it.
-fn container_row(index: usize, container: &ContainerSummary, cx: &Context<AppShell>) -> AnyElement {
+/// "3 restarts" in the warning tone; `None` for a container that never restarted.
+fn restart_label(count: u32) -> Option<StatusLabel> {
+    (count > 0).then(|| StatusLabel {
+        text: format!("{count} restart{}", if count == 1 { "" } else { "s" }).into(),
+        tone: StatusTone::Warn,
+    })
+}
+
+/// One container of the Overview tab; clicking it opens the Containers tab on it. A container that
+/// ran before shows how its last run ended, so a crash loop that is quiet right now still shows.
+fn container_row(
+    index: usize,
+    container: &ContainerSummary,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> AnyElement {
     let theme = cx.theme();
     let name = container.name.clone();
     let mono = theme.mono_font_family.clone();
     let hover_bg = theme.secondary_hover;
-    h_flex()
+    let last_exit = container.last_termination.as_ref().map(|termination| {
+        div()
+            .pl_2()
+            .pb_1()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .truncate()
+            .child(format!("Last exit: {}", last_state_text(termination, now)))
+    });
+    v_flex()
         .id(("container-row", index))
-        .gap_2()
-        .items_center()
         .px_2()
-        .py_1()
         .rounded(theme.radius)
-        .text_sm()
         .cursor_pointer()
         .hover(move |style| style.bg(hover_bg))
         .on_click(cx.listener(move |shell, _, _, cx| shell.open_container(name.clone(), cx)))
-        .child(kind_tag(container.kind, cx))
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .font_family(mono.clone())
-                .child(container.name.clone()),
+            h_flex()
+                .gap_2()
+                .items_center()
+                .py_1()
+                .text_sm()
+                .child(kind_tag(container.kind, cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(mono)
+                        .child(container.name.clone()),
+                )
+                .child(toned_text(container_state_label(container), cx))
+                .children(
+                    restart_label(container.restart_count)
+                        .map(|label| div().text_xs().child(toned_text(label, cx))),
+                ),
         )
-        .child(toned_text(container_state_label(container), cx))
-        .child(
-            div()
-                .w(px(32.))
-                .text_right()
-                .font_family(mono)
-                .child(container.restart_count.to_string()),
-        )
+        .children(last_exit)
         .into_any_element()
 }
 
@@ -701,15 +727,24 @@ fn list_item(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .font_family(mono.clone())
+                .font_family(mono)
                 .child(container.name.clone()),
         )
-        .child(
+        .children(restart_label(container.restart_count).map(|label| {
+            // Only the number: the 240 px list has no room for the word next to the name.
+            let tooltip = label.text.clone();
             div()
-                .font_family(mono)
-                .text_color(theme.muted_foreground)
-                .child(container.restart_count.to_string()),
-        )
+                .id(("container-restarts", index))
+                .text_xs()
+                .child(toned_text(
+                    StatusLabel {
+                        text: container.restart_count.to_string().into(),
+                        tone: label.tone,
+                    },
+                    cx,
+                ))
+                .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        }))
         .child(toned_text(container_state_label(container), cx))
         .into_any_element()
 }

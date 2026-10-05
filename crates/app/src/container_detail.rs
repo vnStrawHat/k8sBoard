@@ -489,7 +489,7 @@ fn state_text(container: &ContainerSummary, label: &StatusLabel, now: jiff::Time
     }
 }
 
-fn last_state_text(termination: &Termination, now: jiff::Timestamp) -> String {
+pub(crate) fn last_state_text(termination: &Termination, now: jiff::Timestamp) -> String {
     let reason = termination
         .reason
         .as_ref()

@@ -192,3 +192,15 @@ fn container_display_order_groups_init_sidecar_main() {
     assert_eq!(container_display_order(&containers), [2, 4, 1, 0, 3]);
     assert!(container_display_order(&[]).is_empty());
 }
+
+#[test]
+fn restart_label_is_hidden_for_zero_and_warns_above() {
+    assert_eq!(restart_label(0), None);
+    let one = restart_label(1).expect("one restart is labelled");
+    assert_eq!(
+        (one.text.as_ref(), one.tone),
+        ("1 restart", StatusTone::Warn)
+    );
+    let many = restart_label(10).expect("ten restarts are labelled");
+    assert_eq!(many.text.as_ref(), "10 restarts");
+}
