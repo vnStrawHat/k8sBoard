@@ -193,6 +193,7 @@ fn pages_follow_w2_order() {
         [
             "General",
             "Clusters",
+            "Environments",
             "Appearance",
             "Keyboard Shortcuts",
             "Safety",
@@ -208,7 +209,9 @@ fn pages_follow_w2_order() {
 fn default_page_is_clusters() {
     assert_eq!(PAGES[1], SettingsPage::Clusters);
     assert_eq!(SettingsPage::Clusters.index(), 1);
-    assert_eq!(SettingsPage::About.index(), 8);
+    assert_eq!(PAGES[2], SettingsPage::Environments);
+    assert_eq!(PAGES.len(), 10);
+    assert_eq!(SettingsPage::About.index(), 9);
 }
 
 #[gpui_kit::test]

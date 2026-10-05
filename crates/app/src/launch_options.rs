@@ -31,7 +31,7 @@ Options:
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
-           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-general|settings-appearance|settings-terminal|settings-logs|settings-metrics|settings-metrics-fixture|settings-shortcuts
+           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-general|settings-environments|settings-appearance|settings-terminal|settings-logs|settings-metrics|settings-metrics-fixture|settings-shortcuts
                          screen to open (default: overview)
   --palette <text>       open the command palette with <text> typed (for example :po or > rest)
   --window-width <px>    window width, 800 to 3840 (default: 1320)
@@ -719,6 +719,10 @@ impl LaunchScreen {
             "settings-tall" => Some(Self::Settings(SettingsPage::Clusters, SettingsSize::Tall)),
             "settings-general" => Some(Self::Settings(
                 SettingsPage::General,
+                SettingsSize::Standard,
+            )),
+            "settings-environments" => Some(Self::Settings(
+                SettingsPage::Environments,
                 SettingsSize::Standard,
             )),
             "settings-logs" => Some(Self::Settings(SettingsPage::Logs, SettingsSize::Standard)),

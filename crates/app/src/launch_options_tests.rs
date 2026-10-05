@@ -1240,3 +1240,11 @@ fn topology_traffic_fixture_screens_parse() {
         assert!(screen.shows_topology());
     }
 }
+
+#[test]
+fn settings_environments_screen() {
+    assert_eq!(
+        run_options(&["--screen", "settings-environments"]).screen,
+        LaunchScreen::Settings(SettingsPage::Environments, SettingsSize::Standard)
+    );
+}

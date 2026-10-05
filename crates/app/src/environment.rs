@@ -71,6 +71,32 @@ pub(crate) enum EnvironmentColor {
     Gray,
 }
 
+impl EnvironmentColor {
+    /// Swatch order of the Environments page.
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Red,
+        Self::Amber,
+        Self::Green,
+        Self::Blue,
+        Self::Teal,
+        Self::Purple,
+        Self::Gray,
+    ];
+
+    /// The swatch tooltip.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Red => "Red",
+            Self::Amber => "Amber",
+            Self::Green => "Green",
+            Self::Blue => "Blue",
+            Self::Teal => "Teal",
+            Self::Purple => "Purple",
+            Self::Gray => "Gray",
+        }
+    }
+}
+
 /// The only place an environment color touches the theme.
 pub(crate) fn palette_color(color: EnvironmentColor, cx: &App) -> Hsla {
     let theme = cx.theme();

@@ -265,3 +265,15 @@ fn environment_color_follows_the_environment(cx: &mut gpui_kit::TestAppContext) 
         assert_eq!(environment_color(&teal, cx), cx.theme().cyan);
     });
 }
+
+#[test]
+fn palette_lists_seven_colors_with_names() {
+    let names: Vec<_> = EnvironmentColor::ALL
+        .iter()
+        .map(|color| color.name())
+        .collect();
+    assert_eq!(
+        names,
+        ["Red", "Amber", "Green", "Blue", "Teal", "Purple", "Gray"]
+    );
+}

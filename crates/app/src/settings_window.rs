@@ -23,6 +23,7 @@ use crate::cluster_catalog::CatalogHandle;
 use crate::cluster_form::MoveStep;
 use crate::clusters_page::{ClustersPage, add_cluster_button};
 use crate::environment::{CustomEnvironment, EnvironmentTier, usable_environments};
+use crate::environments_page::EnvironmentsPage;
 use crate::metrics_page::MetricsPage;
 use crate::settings::{
     AppSettings, COLOR_THEME_OPTIONS, DENSITY_OPTIONS, FONT_SIZE_OPTIONS, OptionTable,
@@ -54,9 +55,10 @@ const SEARCH_WIDTH: f32 = 200.;
 
 /// The pages in W2 nav order, keeping only those with content. A later spec inserts its page
 /// at its W2 position.
-const PAGES: [SettingsPage; 9] = [
+const PAGES: [SettingsPage; 10] = [
     SettingsPage::General,
     SettingsPage::Clusters,
+    SettingsPage::Environments,
     SettingsPage::Appearance,
     SettingsPage::KeyboardShortcuts,
     SettingsPage::Safety,
@@ -70,6 +72,7 @@ const PAGES: [SettingsPage; 9] = [
 pub(crate) enum SettingsPage {
     General,
     Clusters,
+    Environments,
     Appearance,
     KeyboardShortcuts,
     Safety,
@@ -84,6 +87,7 @@ impl SettingsPage {
         match self {
             Self::General => "General",
             Self::Clusters => "Clusters",
+            Self::Environments => "Environments",
             Self::Appearance => "Appearance",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::Safety => "Safety",
@@ -98,6 +102,7 @@ impl SettingsPage {
         match self {
             Self::General => IconName::Settings,
             Self::Clusters => IconName::Building2,
+            Self::Environments => IconName::Tag,
             Self::Appearance => IconName::Palette,
             Self::KeyboardShortcuts => IconName::Keyboard,
             Self::Safety => IconName::ShieldCheck,
@@ -260,6 +265,7 @@ pub(crate) struct SettingsWindow {
     /// Changes with each `show_page`: a new key gives the kit `Settings` a fresh selection.
     page_generation: usize,
     clusters: Entity<ClustersPage>,
+    environments: Entity<EnvironmentsPage>,
     metrics: Entity<MetricsPage>,
     focus_handle: FocusHandle,
     _observers: Vec<Subscription>,
@@ -271,11 +277,13 @@ impl SettingsWindow {
         // A status left over from a closed window must not show here.
         catalog.update(cx, |catalog, cx| catalog.reset_paste_status(cx));
         let clusters = cx.new(|cx| ClustersPage::new(catalog.clone(), window, cx));
+        let environments = cx.new(|cx| EnvironmentsPage::new(window, cx));
         let metrics = cx.new(|cx| MetricsPage::open(window, cx));
         Self {
             first_page,
             page_generation: 0,
             clusters,
+            environments,
             metrics,
             focus_handle: cx.focus_handle(),
             _observers: vec![
@@ -298,6 +306,7 @@ impl SettingsWindow {
                 let built = match page {
                     SettingsPage::General => general_page(),
                     SettingsPage::Clusters => clusters_page(&self.clusters, cx),
+                    SettingsPage::Environments => environments_page(&self.environments),
                     SettingsPage::Appearance => appearance_page(),
                     SettingsPage::KeyboardShortcuts => keyboard_shortcuts_page(),
                     SettingsPage::Safety => safety_page(),
@@ -370,6 +379,16 @@ fn clusters_page(page: &Entity<ClustersPage>, cx: &App) -> SettingPage {
                 .child(Input::new(&search).w(px(SEARCH_WIDTH)))
                 .child(add_cluster_button(add.clone(), blocked))
         })
+        .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| body.clone())))
+}
+
+/// The Environments page: one element item, because the rows and their inputs are a view of their
+/// own (the item closure only gets the app context).
+fn environments_page(page: &Entity<EnvironmentsPage>) -> SettingPage {
+    let body = page.clone();
+    SettingPage::new(SettingsPage::Environments.title())
+        .resettable(false)
+        .description("Group clusters and choose how changes to them are confirmed.")
         .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| body.clone())))
 }
 
@@ -660,7 +679,7 @@ fn tier_rows(custom: &[CustomEnvironment]) -> Vec<TierRow> {
 
 /// What the confirm dialog of `mode` asks for `risk`; a destructive action also gets a danger
 /// button.
-fn tier_cell(mode: ConfirmMode, risk: ActionRisk) -> String {
+pub(crate) fn tier_cell(mode: ConfirmMode, risk: ActionRisk) -> String {
     let expected = match risk {
         ActionRisk::Privileged => "the node name",
         ActionRisk::Change | ActionRisk::Destructive => "the cluster name",
