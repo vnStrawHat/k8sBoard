@@ -3,7 +3,7 @@ use crate::resource_kind::column;
 
 fn specs() -> Vec<KindColumn> {
     vec![
-        column("Name", 160., Align::Left),
+        column("Name", 160., Align::Left).grows(1),
         column("Status", 170., Align::Left),
         column("Restarts", 80., Align::Right),
         column("Age", 70., Align::Right),
@@ -26,7 +26,7 @@ fn names(layout: &TableColumns) -> Vec<&str> {
 
 #[test]
 fn layout_columns_skips_hidden_and_maps_logical() {
-    let layout = layout_columns(&specs(), 0, px(160.), px(1100.), &hidden(&[1, 3]));
+    let layout = layout_columns(&specs(), 0, px(1100.), &hidden(&[1, 3]));
     assert_eq!(names(&layout), ["Name", "Restarts"]);
     // The checkbox column comes first and has no logical column.
     assert!(layout.is_select(0));
@@ -39,13 +39,13 @@ fn layout_columns_skips_hidden_and_maps_logical() {
 
 #[test]
 fn layout_columns_never_hides_the_flexible_column() {
-    let layout = layout_columns(&specs(), 0, px(160.), px(1100.), &hidden(&[0, 1]));
+    let layout = layout_columns(&specs(), 0, px(1100.), &hidden(&[0, 1]));
     assert_eq!(names(&layout), ["Name", "Restarts", "Age"]);
 }
 
 #[test]
 fn layout_columns_gives_spare_width_to_flexible() {
-    let layout = layout_columns(&specs(), 0, px(160.), px(1100.), &BTreeSet::new());
+    let layout = layout_columns(&specs(), 0, px(1100.), &BTreeSet::new());
     let widths: Vec<_> = layout.columns.iter().map(|column| column.width).collect();
     assert_eq!(
         widths,
@@ -58,7 +58,7 @@ fn layout_columns_gives_spare_width_to_flexible() {
         ]
     );
     // A hidden column hands its width to the flexible one.
-    let narrower = layout_columns(&specs(), 0, px(160.), px(1100.), &hidden(&[1]));
+    let narrower = layout_columns(&specs(), 0, px(1100.), &hidden(&[1]));
     assert_eq!(
         narrower.columns.get(1).map(|column| column.width),
         Some(px(1100. - 28. - 32. - 150.))
@@ -67,7 +67,7 @@ fn layout_columns_gives_spare_width_to_flexible() {
 
 #[test]
 fn layout_columns_never_drops_below_the_minimum() {
-    let layout = layout_columns(&specs(), 0, px(160.), px(300.), &BTreeSet::new());
+    let layout = layout_columns(&specs(), 0, px(300.), &BTreeSet::new());
     assert_eq!(
         layout.columns.get(1).map(|column| column.width),
         Some(px(160.))
@@ -75,11 +75,36 @@ fn layout_columns_never_drops_below_the_minimum() {
 }
 
 #[test]
+fn spare_width_is_shared_by_weight() {
+    let name = column("Name", 100., Align::Left).grows(3);
+    let message = column("Message", 100., Align::Left).grows(1);
+    let status = column("Status", 80., Align::Left);
+    let widths = distribute_spare_width(&[&name, &status, &message], 580.);
+    // 300 spare: 225 for Name, 75 for Message, none for the fixed Status.
+    assert_eq!(widths, [325., 80., 175.]);
+}
+
+#[test]
+fn a_capped_column_hands_its_share_to_the_others() {
+    let name = column("Name", 100., Align::Left).grows(1).up_to(150.);
+    let message = column("Message", 100., Align::Left).grows(1);
+    let widths = distribute_spare_width(&[&name, &message], 500.);
+    assert_eq!(widths, [150., 350.]);
+}
+
+#[test]
+fn spare_width_nobody_can_take_stays_unused() {
+    let name = column("Name", 100., Align::Left).grows(1).up_to(150.);
+    let age = column("Age", 70., Align::Right);
+    assert_eq!(distribute_spare_width(&[&name, &age], 1000.), [150., 70.]);
+    let narrow = distribute_spare_width(&[&name, &age], 100.);
+    assert_eq!(narrow, [100., 70.]);
+}
+#[test]
 fn table_layout_reports_only_real_changes() {
     let plan = ColumnPlan {
         specs: specs(),
         flexible: 0,
-        flexible_min: px(160.),
     };
     let mut layout = TableLayout::new(plan);
     assert!(layout.fit_width(px(1100.), &BTreeSet::new()));
@@ -190,7 +215,7 @@ mod checkbox_clicks {
                 },
                 cx,
                 |window, cx| {
-                    let columns = layout_columns(&specs(), 0, px(160.), px(640.), &BTreeSet::new());
+                    let columns = layout_columns(&specs(), 0, px(640.), &BTreeSet::new());
                     cx.new(|cx| Host {
                         table: cx.new(|cx| {
                             TableState::new(Rows { columns, probe }, window, cx)

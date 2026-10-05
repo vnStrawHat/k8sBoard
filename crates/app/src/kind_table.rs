@@ -6,20 +6,19 @@ use std::collections::{BTreeMap, HashMap};
 
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Div, HighlightStyle, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, StyledText, WeakEntity, Window, div, px,
+    AnyElement, App, Context, Div, IntoElement, ParentElement as _, Pixels, SharedString, Stateful,
+    Styled as _, WeakEntity, Window, div,
 };
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
+use crate::cell_truncation::{mono_capacity, qualified_text};
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_registry::ClusterRef;
 use crate::custom_rows::{date_text, date_tone};
-use crate::drawer::truncated_text;
+use crate::drawer::truncated_text_with_tooltip;
 use crate::filter_bar::filtered_empty_state;
 use crate::kind_row::{KindCell, KindRow};
 use crate::live_sections::{loaded_replica_sets, next_run_text};
@@ -28,7 +27,7 @@ use crate::resource_actions::{
     MenuCluster, MenuExtras, browse_instances_item, kind_menu, open_url_choice, open_url_menu_item,
     secret_menu,
 };
-use crate::resource_kind::{Align, NAME_COLUMN, NameColumn, ResourceKind, kind_columns};
+use crate::resource_kind::{Align, NameColumn, ResourceKind, kind_columns};
 use crate::row_context::TableSession;
 use crate::secret_values::ValueAccess;
 use crate::settings::{TablePrefs, screen_key};
@@ -42,7 +41,6 @@ use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView,
 
 /// The logical column of the Name column, for the kinds that show it.
 const NAME: usize = 0;
-const NAME_MIN_WIDTH: Pixels = px(NAME_COLUMN.width);
 
 /// Rows come straight from the sessions, so the table never owns a copy of the rows.
 pub(crate) struct KindTableDelegate {
@@ -73,31 +71,23 @@ fn new_view(kind: ResourceKind, saved: &BTreeMap<String, TablePrefs>) -> TableVi
     }
     view
 }
-
-/// The logical columns of `kind`, and which one takes the rest of the table.
+/// The logical columns of `kind`, and which one is never hidden.
 fn kind_plan(kind: Option<ResourceKind>) -> ColumnPlan {
     let Some(kind) = kind else {
         return ColumnPlan {
             specs: Vec::new(),
             flexible: 0,
-            flexible_min: Pixels::ZERO,
         };
     };
-    let specs = kind_columns(kind);
-    let (flexible, flexible_min) = match kind.name_column() {
-        NameColumn::Flexible => (NAME, NAME_MIN_WIDTH),
-        NameColumn::Hidden { flexible } => {
-            let width = specs.get(flexible).map_or(0., |column| column.width);
-            (flexible, px(width))
-        }
+    let flexible = match kind.name_column() {
+        NameColumn::Flexible => NAME,
+        NameColumn::Hidden { flexible } => flexible,
     };
     ColumnPlan {
-        specs,
+        specs: kind_columns(kind),
         flexible,
-        flexible_min,
     }
 }
-
 /// The index into `KindRow::cells` that logical column `column` shows, or `None` for the Name
 /// column.
 fn cell_index(name_column: NameColumn, column: usize) -> Option<usize> {
@@ -418,6 +408,7 @@ impl KindTableDelegate {
             let is_checked = self.is_row_checked(row_ix, cx);
             return select_cell(row_ix, is_checked, &self.shell);
         }
+        let capacity = mono_capacity(self.layout.columns.columns.get(col_ix), cx);
         let (Some((_, row)), Some(logical), Some(kind)) = (
             self.row_at(row_ix, cx),
             self.layout.columns.logical(col_ix),
@@ -427,10 +418,17 @@ impl KindTableDelegate {
         };
         let mono = cx.theme().mono_font_family.clone();
         let Some(cell_ix) = cell_index(kind.name_column(), logical) else {
-            return name_cell(row, row_ix, mono, cx);
+            return name_cell(row, row_ix, capacity, cx);
         };
         match row.cells.get(cell_ix) {
-            Some(cell) => cell_element(cell, row_ix, self.align(logical), mono, cx),
+            Some(cell) => {
+                let slot = CellSlot {
+                    row_ix,
+                    col_ix,
+                    capacity,
+                };
+                cell_element(cell, slot, self.align(logical), mono, cx)
+            }
             None => div().into_any_element(),
         }
     }
@@ -590,56 +588,37 @@ fn empty_text(kind: ResourceKind, scope_label: &str) -> String {
 }
 
 /// `{namespace}/` is muted so the name stands out.
-fn name_cell(row: &KindRow, row_ix: usize, mono: SharedString, cx: &App) -> AnyElement {
+fn name_cell(row: &KindRow, row_ix: usize, capacity: usize, cx: &App) -> AnyElement {
     qualified_text(
         ("kind-name", row_ix),
         row.namespace.as_deref(),
         &row.name,
-        mono,
+        capacity,
         cx,
     )
 }
 
-/// Mono text with a muted `{prefix}/`. Both share one text run so a long value is cut with an
-/// ellipsis instead of wrapping, and the tooltip shows the whole text.
-fn qualified_text(
-    id: (&'static str, usize),
-    prefix: Option<&str>,
-    text: &str,
-    mono: SharedString,
-    cx: &App,
-) -> AnyElement {
-    let Some(prefix) = prefix else {
-        return truncated_text(id, text.to_owned())
-            .w_full()
-            .font_family(mono)
-            .into_any_element();
-    };
-    let prefix = format!("{prefix}/");
-    let muted = HighlightStyle {
-        color: Some(cx.theme().muted_foreground),
-        ..Default::default()
-    };
-    let highlights = vec![(0..prefix.len(), muted)];
-    let text = format!("{prefix}{text}");
-    let tooltip_text = SharedString::from(text.clone());
-    div()
-        .id(id)
-        .w_full()
-        .truncate()
-        .font_family(mono)
-        .child(StyledText::new(text).with_highlights(highlights))
-        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
-        .into_any_element()
+/// Where a body cell is and how much text its column holds, for its tooltip id and its cut.
+#[derive(Clone, Copy)]
+struct CellSlot {
+    row_ix: usize,
+    col_ix: usize,
+    /// Mono characters that fit in the column.
+    capacity: usize,
 }
 
 fn cell_element(
     cell: &KindCell,
-    row_ix: usize,
+    slot: CellSlot,
     align: Align,
     mono: SharedString,
     cx: &App,
 ) -> AnyElement {
+    let CellSlot {
+        row_ix,
+        col_ix,
+        capacity,
+    } = slot;
     let base = || {
         let cell = div().w_full().truncate();
         match align {
@@ -647,16 +626,32 @@ fn cell_element(
             Align::Right => cell.text_right(),
         }
     };
+    // Text can be cut by a narrow column, so it carries its full value as a tooltip. A row holds
+    // several of these, so the column joins the row in the id.
+    let hover_text = |text: &SharedString, tooltip: &SharedString, mono: Option<SharedString>| {
+        let id = ("kind-cell", (row_ix << 8) | col_ix);
+        let cut = truncated_text_with_tooltip(id, text.clone(), tooltip.clone()).w_full();
+        let cut = match align {
+            Align::Left => cut,
+            Align::Right => cut.text_right(),
+        };
+        match mono {
+            Some(mono) => cut.font_family(mono),
+            None => cut,
+        }
+        .into_any_element()
+    };
     match cell {
-        KindCell::Text(text) | KindCell::Hinted { text, .. } => base().child(text.clone()),
-        KindCell::Mono(text) => base().font_family(mono).child(text.clone()),
+        KindCell::Text(text) => return hover_text(text, text, None),
+        KindCell::Hinted { text, tooltip } => return hover_text(text, tooltip, None),
+        KindCell::Mono(text) => return hover_text(text, text, Some(mono)),
         // One qualified column per kind, so the row index alone makes the id unique.
         KindCell::Qualified { prefix, text } => {
             return qualified_text(
                 ("kind-qualified", row_ix),
                 prefix.as_deref(),
                 text,
-                mono,
+                capacity,
                 cx,
             );
         }
@@ -738,6 +733,9 @@ fn cell_element(
 mod tests {
     use std::collections::BTreeSet;
 
+    use gpui_kit::px;
+
+    use crate::resource_kind::NAME_COLUMN;
     use crate::status_tone::StatusLabel;
     use crate::table_layout::layout_columns;
 
@@ -804,7 +802,6 @@ mod tests {
         let layout = layout_columns(
             &plan.specs,
             plan.flexible,
-            plan.flexible_min,
             Pixels::ZERO,
             &Default::default(),
         );
@@ -827,7 +824,7 @@ mod tests {
         let mut deployments = delegate(Some(ResourceKind::Deployments));
         assert!(deployments.fit_width(px(1400.)));
         let name_width = deployments.layout.columns.columns.get(1).map(|c| c.width);
-        assert!(name_width > Some(NAME_MIN_WIDTH));
+        assert!(name_width > Some(px(NAME_COLUMN.width)));
     }
 
     #[test]

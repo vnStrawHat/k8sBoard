@@ -11,13 +11,14 @@ use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
     AnyElement, App, ClipboardItem, Context, Div, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, Stateful, StatefulInteractiveElement as _, Styled as _, WeakEntity,
-    Window, div, px,
+    Window, div,
 };
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
+use crate::cell_truncation::{middle_truncate, mono_capacity};
 use crate::dock::Dock;
-use crate::drawer::truncated_text;
+use crate::drawer::{truncated_text, truncated_text_with_tooltip};
 use crate::event_rows::message_line;
 use crate::filter_bar::filtered_empty_state;
 use crate::issue::{Issue, IssueAction};
@@ -43,16 +44,14 @@ const AGE: usize = 7;
 /// Marks a value the issue does not have.
 const ABSENT: &str = "—";
 
-const CAUSE_MIN_WIDTH: Pixels = px(200.);
-
-/// The Cause column takes the rest of the width: it holds the longest text.
+/// Cause takes most of the spare width: it holds the longest text.
 const ISSUE_COLUMNS: [KindColumn; 8] = [
     column("Severity", 80., Align::Left),
     column("Reason", 170., Align::Left),
     column("Kind", 110., Align::Left),
-    column("Object", 260., Align::Left),
+    column("Object", 260., Align::Left).grows(2),
     column("Namespace", 120., Align::Left),
-    column("Cause", 300., Align::Left),
+    column("Cause", 200., Align::Left).grows(3),
     column("Count", 64., Align::Right),
     column("Age", 60., Align::Right),
 ];
@@ -77,7 +76,6 @@ impl IssueTableDelegate {
         let plan = ColumnPlan {
             specs: ISSUE_COLUMNS.to_vec(),
             flexible: CAUSE,
-            flexible_min: CAUSE_MIN_WIDTH,
         };
         let mut view = TableView::new(default_filter(Screen::Issues));
         if let Some(saved) = saved {
@@ -201,6 +199,7 @@ impl IssueTableDelegate {
         col_ix: usize,
         cx: &mut Context<TableState<Self>>,
     ) -> AnyElement {
+        let capacity = mono_capacity(self.layout.columns.columns.get(col_ix), cx);
         let (Some(issue), Some(logical)) = (
             self.issue_at(row_ix, cx),
             self.layout.columns.logical(col_ix),
@@ -230,7 +229,7 @@ impl IssueTableDelegate {
                 .truncate()
                 .child(short_kind(&issue.shown.kind).to_owned())
                 .into_any_element(),
-            OBJECT => object_cell(issue, row_ix, mono, cx),
+            OBJECT => object_cell(issue, row_ix, mono, capacity, cx),
             NAMESPACE => match &issue.shown.namespace {
                 Some(namespace) => div().truncate().child(namespace.clone()).into_any_element(),
                 None => absent(cx),
@@ -377,14 +376,20 @@ fn count_text(count: usize) -> Option<String> {
     (count > 1).then(|| count.to_string())
 }
 
-/// The name in mono, then the container the issue is about, muted.
+/// The name in mono, then the container the issue is about, muted. A long name is cut in the
+/// middle, within the room the container note leaves.
 fn object_cell(
     issue: &Issue,
     row_ix: usize,
     mono: gpui_kit::SharedString,
+    capacity: usize,
     cx: &App,
 ) -> gpui_kit::AnyElement {
-    let container = container_suffix(issue).map(|suffix| {
+    let suffix = container_suffix(issue);
+    let name_capacity =
+        capacity.saturating_sub(suffix.as_ref().map_or(0, |suffix| suffix.chars().count()));
+    let name = &issue.shown.name;
+    let container = suffix.map(|suffix| {
         div()
             .flex_shrink_0()
             .text_color(cx.theme().muted_foreground)
@@ -393,7 +398,14 @@ fn object_cell(
     h_flex()
         .w_full()
         .font_family(mono)
-        .child(truncated_text(("issue-object", row_ix), issue.shown.name.clone()).min_w_0())
+        .child(
+            truncated_text_with_tooltip(
+                ("issue-object", row_ix),
+                middle_truncate(name, name_capacity).into_owned(),
+                name.clone(),
+            )
+            .min_w_0(),
+        )
         .children(container)
         .into_any_element()
 }

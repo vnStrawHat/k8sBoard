@@ -397,7 +397,6 @@ fn plan() -> ColumnPlan {
             column("Node", 80., Align::Left),
         ],
         flexible: 0,
-        flexible_min: gpui_kit::px(100.),
     }
 }
 

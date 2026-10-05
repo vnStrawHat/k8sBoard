@@ -87,15 +87,39 @@ pub(crate) enum NameColumn {
 }
 
 /// A column after the Name column, or all the columns when the Name column is hidden.
+///
+/// `width` is the width the column always has. A column with a `weight` also takes a share of the
+/// table's spare width in proportion to it, up to `max_width` (0 for no limit); weight 0 is a
+/// column whose values are short and fixed.
 #[derive(Clone, Copy)]
 pub(crate) struct KindColumn {
     pub(crate) name: &'static str,
     pub(crate) width: f32,
     pub(crate) align: Align,
+    pub(crate) weight: u8,
+    pub(crate) max_width: f32,
 }
 
 pub(crate) const fn column(name: &'static str, width: f32, align: Align) -> KindColumn {
-    KindColumn { name, width, align }
+    KindColumn {
+        name,
+        width,
+        align,
+        weight: 0,
+        max_width: 0.,
+    }
+}
+
+impl KindColumn {
+    /// Takes a share of the spare table width, `weight` parts of it.
+    pub(crate) const fn grows(self, weight: u8) -> Self {
+        Self { weight, ..self }
+    }
+
+    /// Stops growing at `max_width`.
+    pub(crate) const fn up_to(self, max_width: f32) -> Self {
+        Self { max_width, ..self }
+    }
 }
 
 const AGE_COLUMN: KindColumn = column("Age", 70., Align::Right);
@@ -197,7 +221,7 @@ static EVENTS: KindSpec = KindSpec {
         column("Type", 90., Align::Left),
         column("Reason", 170., Align::Left),
         column("Object", 260., Align::Left),
-        column("Message", 280., Align::Left),
+        column("Message", 280., Align::Left).grows(3),
         column("Count", 80., Align::Right),
         column("Last seen", 80., Align::Right),
     ],
@@ -835,7 +859,7 @@ static CRDS: KindSpec = KindSpec {
 };
 
 /// The Name column of a kind that shows it, as wide as its minimum.
-pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left);
+pub(crate) const NAME_COLUMN: KindColumn = column("Name", 200., Align::Left).grows(3).up_to(640.);
 
 /// Every logical column of a kind's table: Name first unless the kind hides it, then
 /// `ResourceKind::columns`.

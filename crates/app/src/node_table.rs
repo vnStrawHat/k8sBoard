@@ -11,7 +11,8 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
-use crate::drawer::truncated_text;
+use crate::cell_truncation::{middle_truncate, mono_capacity};
+use crate::drawer::{truncated_text, truncated_text_with_tooltip};
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::NodeUsageHistory;
 use crate::node_summary::{NodeCounts, node_counts, node_in_group};
@@ -43,15 +44,14 @@ const AGE: usize = 8;
 /// Marks a value the node does not have.
 const ABSENT: &str = "—";
 
-const TAINTS_MIN_WIDTH: Pixels = px(160.);
 const USAGE_BAR_WIDTH: f32 = 46.;
 
-/// The Taints column takes the rest of the width: it holds the longest values.
+/// Taints takes most of the spare width: it holds the longest values.
 const NODE_COLUMNS: [KindColumn; 9] = [
-    column("Name", 112., Align::Left),
-    column("Status", 200., Align::Left),
-    column("Roles", 110., Align::Left),
-    column("Taints", 160., Align::Left),
+    column("Name", 112., Align::Left).grows(1).up_to(200.),
+    column("Status", 130., Align::Left),
+    column("Roles", 140., Align::Left).grows(1).up_to(220.),
+    column("Taints", 160., Align::Left).grows(3),
     column("Version", 90., Align::Left),
     column("Internal IP", 120., Align::Left),
     column("CPU", 92., Align::Left),
@@ -79,7 +79,6 @@ fn node_plan() -> ColumnPlan {
     ColumnPlan {
         specs: NODE_COLUMNS.to_vec(),
         flexible: TAINTS,
-        flexible_min: TAINTS_MIN_WIDTH,
     }
 }
 
@@ -304,6 +303,7 @@ impl NodeTableDelegate {
             });
             return select_cell(row_ix, is_checked, &self.shell);
         }
+        let capacity = mono_capacity(self.layout.columns.columns.get(col_ix), cx);
         let (Some((session, node)), Some(logical)) = (
             self.node_at(row_ix, cx),
             self.layout.columns.logical(col_ix),
@@ -314,8 +314,11 @@ impl NodeTableDelegate {
         match logical {
             NAME => truncated_text("name", node.name.clone()).into_any_element(),
             STATUS => toned_text(node_status_label(node.status), cx).into_any_element(),
-            ROLES => cell_text(&roles_cell(&node.roles), cx),
-            TAINTS => taints_cell(&node.taints, mono, cx),
+            ROLES => match roles_cell(&node.roles) {
+                roles if roles == ABSENT => cell_text(ABSENT, cx),
+                roles => truncated_text(("node-roles", row_ix), roles).into_any_element(),
+            },
+            TAINTS => taints_cell(&node.taints, mono, capacity, cx),
             VERSION => {
                 let cell = div().font_family(mono).child(node.kubelet_version.clone());
                 match self.common_version.as_ref() {
@@ -483,9 +486,19 @@ fn taints_summary(taints: &[NodeTaint]) -> Option<TaintsSummary> {
     })
 }
 
-fn taints_cell(taints: &[NodeTaint], mono: gpui_kit::SharedString, cx: &App) -> AnyElement {
+fn taints_cell(
+    taints: &[NodeTaint],
+    mono: gpui_kit::SharedString,
+    capacity: usize,
+    cx: &App,
+) -> AnyElement {
     let Some(summary) = taints_summary(taints) else {
         return cell_text(ABSENT, cx);
+    };
+    let more_width = if summary.more > 0 {
+        format!(" +{}", summary.more).chars().count()
+    } else {
+        0
     };
     let more = (summary.more > 0).then(|| {
         div()
@@ -493,11 +506,18 @@ fn taints_cell(taints: &[NodeTaint], mono: gpui_kit::SharedString, cx: &App) -> 
             .text_color(cx.theme().muted_foreground)
             .child(format!(" +{}", summary.more))
     });
-    // The taint is cut with an ellipsis; the "+N" stays visible.
+    // The taint is cut in the middle, so its effect stays visible; the "+N" is never cut.
     h_flex()
         .w_full()
         .font_family(mono)
-        .child(truncated_text("taints", summary.first).min_w_0())
+        .child(
+            truncated_text_with_tooltip(
+                "taints",
+                middle_truncate(&summary.first, capacity.saturating_sub(more_width)).into_owned(),
+                summary.first,
+            )
+            .min_w_0(),
+        )
         .children(more)
         .into_any_element()
 }

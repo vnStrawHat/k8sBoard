@@ -5,13 +5,13 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::{
-    AnyElement, App, Context, Div, HighlightStyle, IntoElement, ParentElement as _, Pixels,
-    SharedString, Stateful, Styled as _, StyledText, WeakEntity, Window, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, Context, Div, IntoElement, ParentElement as _, Pixels, SharedString, Stateful,
+    Styled as _, WeakEntity, Window, div, prelude::FluentBuilder as _,
 };
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
+use crate::cell_truncation::{mono_capacity, qualified_text};
 use crate::dock::Dock;
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::PodUsageHistory;
@@ -38,17 +38,15 @@ const MEMORY: usize = 5;
 pub(crate) const NODE: usize = 6;
 const AGE: usize = 7;
 
-const NAME_MIN_WIDTH: Pixels = px(160.);
-
-/// The Name column takes the rest of the width: pod names are the longest values.
+/// Name takes most of the spare width, up to a cap: pod names are the longest values.
 const POD_COLUMNS: [KindColumn; 8] = [
-    column("Name", 160., Align::Left),
+    column("Name", 160., Align::Left).grows(3).up_to(640.),
     column("Status", 170., Align::Left),
     column("Ready", 70., Align::Left),
     column("Restarts", 80., Align::Right),
     column("CPU", 70., Align::Right),
     column("Memory", 80., Align::Right),
-    column("Node", 180., Align::Left),
+    column("Node", 180., Align::Left).grows(1).up_to(260.),
     column("Age", 70., Align::Right),
 ];
 
@@ -70,7 +68,6 @@ fn pod_plan() -> ColumnPlan {
     ColumnPlan {
         specs: POD_COLUMNS.to_vec(),
         flexible: NAME,
-        flexible_min: NAME_MIN_WIDTH,
     }
 }
 
@@ -291,6 +288,7 @@ impl PodTableDelegate {
                 .is_some_and(|(_, pod)| self.view.is_checked(&PodRow { pod, usage: None }));
             return select_cell(row_ix, is_checked, &self.shell);
         }
+        let capacity = mono_capacity(self.layout.columns.columns.get(col_ix), cx);
         let (Some((session, pod)), Some(logical)) =
             (self.pod_at(row_ix, cx), self.layout.columns.logical(col_ix))
         else {
@@ -298,7 +296,13 @@ impl PodTableDelegate {
         };
         let mono = cx.theme().mono_font_family.clone();
         match logical {
-            NAME => name_cell(pod, mono, cx),
+            NAME => qualified_text(
+                ("pod-name", row_ix),
+                Some(&pod.namespace),
+                &pod.name,
+                capacity,
+                cx,
+            ),
             STATUS => toned_text(pod_status_label(pod), cx).into_any_element(),
             READY => div()
                 .font_family(mono)
@@ -462,24 +466,6 @@ impl TableDelegate for PodTableDelegate {
             .and_then(|session| session.session.read(cx).live())
             .is_some_and(|live| live.pods.is_loading())
     }
-}
-
-/// `{namespace}/` is muted so the pod name stands out; both share one text run so a long
-/// name is cut with an ellipsis instead of wrapping.
-fn name_cell(pod: &PodSummary, mono: SharedString, cx: &App) -> AnyElement {
-    let prefix = format!("{}/", pod.namespace);
-    let muted = HighlightStyle {
-        color: Some(cx.theme().muted_foreground),
-        ..Default::default()
-    };
-    let highlights = vec![(0..prefix.len(), muted)];
-    let text = format!("{prefix}{}", pod.name);
-    div()
-        .w_full()
-        .truncate()
-        .font_family(mono)
-        .child(StyledText::new(text).with_highlights(highlights))
-        .into_any_element()
 }
 
 /// A usage value, right-aligned like the other numbers; a muted dash without a sample.

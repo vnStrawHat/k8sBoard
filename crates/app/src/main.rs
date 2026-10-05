@@ -8,6 +8,7 @@ mod age;
 mod app_shell;
 mod audit_log;
 mod batch_rows;
+mod cell_truncation;
 mod certificate_expiry;
 mod clipboard_copy;
 mod cluster_capacity;

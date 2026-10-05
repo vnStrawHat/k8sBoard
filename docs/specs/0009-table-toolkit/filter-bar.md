@@ -64,11 +64,14 @@ pub(crate) fn sortable_header(id: usize, column: &Column, sort: Option<SortDirec
 ```rust
 pub(crate) struct TableColumns { pub(crate) columns: Vec<Column>, logical: Vec<usize> }
 impl TableColumns { pub(crate) fn logical(&self, col_ix: usize) -> Option<usize>; }
-/// The visible columns; `flexible` takes the spare width and can never be hidden.
-pub(crate) fn layout_columns(specs: &[KindColumn], flexible: usize, flexible_min: Pixels,
+/// The visible columns; `flexible` can never be hidden. Spare width is shared by column weight.
+pub(crate) fn layout_columns(specs: &[KindColumn], flexible: usize,
     table_width: Pixels, hidden: &BTreeSet<usize>) -> TableColumns;
 ```
 
+Widths (as built): a `KindColumn` has a `width` it always keeps, a `weight` (0 = short fixed values: counts, IPs, ages) and an optional `max_width`. The width left over is shared among the weighted columns in proportion to their weights; a column stops at its max and the others take its share; width nobody can take stays empty. Name is weight 3, capped at 640; text-heavy columns (Message, Cause, Object, selectors, subjects) carry weights.
+
+Cell text (`cell_truncation.rs`): text cells carry a tooltip with the full value. Object names and `namespace/name` paths are cut in the middle (tail kept, namespace head kept) to the characters the column holds (`mono_capacity`), with the end ellipsis as the fallback.
 Pods and Nodes get `const POD_COLUMNS` / `NODE_COLUMNS: [KindColumn; _]` (today's widths); the `FIXED_WIDTH` consts go. Kinds: `kind_columns(kind) -> Vec<KindColumn>` (a `Name` spec of width 200 first for `NameColumn::Flexible`). `KindColumn` and `Align` derive `Clone, Copy`. `render_td` maps `col_ix` through `logical` and matches on the logical index.
 
 ## Columns ▾

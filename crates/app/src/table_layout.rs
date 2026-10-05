@@ -27,9 +27,8 @@ const SELECT_WIDTH: Pixels = px(32.);
 /// column is hidden.
 pub(crate) struct ColumnPlan {
     pub(crate) specs: Vec<KindColumn>,
-    /// The logical column that takes the spare width and can never be hidden.
+    /// The logical column that can never be hidden: the table is always about something.
     pub(crate) flexible: usize,
-    pub(crate) flexible_min: Pixels,
 }
 
 /// A plan and the columns it currently lays out at the last known table width.
@@ -74,13 +73,7 @@ impl TableLayout {
 }
 
 fn layout_plan(plan: &ColumnPlan, table_width: Pixels, hidden: &BTreeSet<usize>) -> TableColumns {
-    layout_columns(
-        &plan.specs,
-        plan.flexible,
-        plan.flexible_min,
-        table_width,
-        hidden,
-    )
+    layout_columns(&plan.specs, plan.flexible, table_width, hidden)
 }
 
 /// The visible columns, in order, and the logical column each one shows.
@@ -112,14 +105,13 @@ impl TableColumns {
     }
 }
 
-/// The visible columns of a table `table_width` wide, after the checkbox column. The `flexible`
-/// column takes the width the others leave over, never less than `flexible_min`, and is shown even
-/// when hidden. The columns are fixed pixel widths, so this runs again whenever the window size
-/// changes.
+/// The visible columns of a table `table_width` wide, after the checkbox column. Every column has
+/// its `width`; the width left over is shared among the columns that have a weight (see
+/// `distribute_spare_width`). The `flexible` column is shown even when hidden. The columns are
+/// fixed pixel widths, so this runs again whenever the window size changes.
 pub(crate) fn layout_columns(
     specs: &[KindColumn],
     flexible: usize,
-    flexible_min: Pixels,
     table_width: Pixels,
     hidden: &BTreeSet<usize>,
 ) -> TableColumns {
@@ -128,28 +120,26 @@ pub(crate) fn layout_columns(
         .enumerate()
         .filter(|(index, _)| *index == flexible || !hidden.contains(index))
         .collect();
-    let fixed_width: f32 = visible
-        .iter()
-        .filter(|(index, _)| *index != flexible)
-        .map(|(_, spec)| spec.width)
-        .sum();
-    let flexible_width =
-        (table_width - TABLE_GUTTER - SELECT_WIDTH - px(fixed_width)).max(flexible_min);
+    let shown: Vec<&KindColumn> = visible.iter().map(|(_, spec)| *spec).collect();
+    let available = f32::from(table_width - TABLE_GUTTER - SELECT_WIDTH);
+    let widths = distribute_spare_width(&shown, available);
     let select = Column::new("select", "")
         .width(SELECT_WIDTH)
         .resizable(false);
     let columns = visible
         .iter()
-        .map(|(index, spec)| {
+        .zip(widths)
+        .map(|((index, spec), width)| {
             let column = Column::new(spec.name, spec.name);
             let column = match spec.align {
                 Align::Left => column,
                 Align::Right => column.text_right(),
             };
+            let column = column.width(px(width));
             if *index == flexible {
-                column.width(flexible_width).min_width(flexible_min)
+                column.min_width(px(spec.width))
             } else {
-                column.width(px(spec.width))
+                column
             }
         })
         .collect::<Vec<_>>();
@@ -159,6 +149,45 @@ pub(crate) fn layout_columns(
             .chain(visible.iter().map(|(index, _)| Some(*index)))
             .collect(),
     }
+}
+
+/// The width of each column when `available` pixels are to be filled: its own width, plus a share
+/// of what the widths leave over in proportion to its weight. A column stops at its `max_width`
+/// and the share it cannot take goes to the others; width nobody can take stays unused, so short
+/// columns never pad out a wide table.
+fn distribute_spare_width(columns: &[&KindColumn], available: f32) -> Vec<f32> {
+    let mut widths: Vec<f32> = columns.iter().map(|column| column.width).collect();
+    let mut spare = available - widths.iter().sum::<f32>();
+    // Each round spends all the spare width or caps at least one more column.
+    for _ in 0..columns.len() {
+        let growing: Vec<usize> = (0..columns.len())
+            .filter(|&index| {
+                let column = columns[index];
+                column.weight > 0 && (column.max_width == 0. || widths[index] < column.max_width)
+            })
+            .collect();
+        if spare < 1. || growing.is_empty() {
+            break;
+        }
+        let total_weight: f32 = growing
+            .iter()
+            .map(|&index| f32::from(columns[index].weight))
+            .sum();
+        let mut spent = 0.;
+        for index in growing {
+            let column = columns[index];
+            let share = spare * f32::from(column.weight) / total_weight;
+            let grown = if column.max_width == 0. {
+                widths[index] + share
+            } else {
+                (widths[index] + share).min(column.max_width)
+            };
+            spent += grown - widths[index];
+            widths[index] = grown;
+        }
+        spare -= spent;
+    }
+    widths
 }
 
 /// The header cell of table column `col_ix`: a click cycles the sort of its logical column.
