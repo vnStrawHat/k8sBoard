@@ -6,7 +6,8 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, TitleBar, h_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, Hsla, IntoElement, ParentElement as _, Styled as _, div, px,
+    AnyElement, App, Context, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
+    Styled as _, div, px,
 };
 
 use crate::app_shell::{AppShell, Screen};
@@ -51,12 +52,19 @@ pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoEl
         )
 }
 
+/// A title-bar button that is not a popover trigger. On Windows the kit marks the whole bar as the
+/// caption (`WindowControlArea::Drag`), so a press reaching it is a non-client press: unless a
+/// handler stops it, the OS starts its window-move loop and swallows the release, and the click
+/// never completes. Occluding the button keeps the press in the client area. The popover triggers
+/// get the same from the kit popover, which stops the press itself, so they are not built here.
+fn title_bar_button(id: &'static str) -> Button {
+    Button::new(id).ghost().small().occlude()
+}
+
 /// The flag with the issue count, in the tone of the worst issue. Without a count it is a muted
 /// icon: nothing to show yet, or no issues.
 fn issues_button(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
-    let button = Button::new("issues")
-        .ghost()
-        .small()
+    let button = title_bar_button("issues")
         .on_click(cx.listener(|shell, _, _, cx| shell.show_screen(Screen::Issues, cx)));
     let muted = cx.theme().muted_foreground;
     let live_session = shell
@@ -136,9 +144,7 @@ fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
 /// shrinks before the groups on either side do.
 fn search_box(cx: &Context<AppShell>) -> AnyElement {
     let key = row_keys(&OpenPalette, cx).into_iter().next();
-    Button::new("palette-search")
-        .ghost()
-        .small()
+    title_bar_button("palette-search")
         .flex_1()
         .min_w_0()
         .max_w(px(280.))
@@ -202,9 +208,7 @@ fn write_lock_badge(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyEleme
     let lock = open.session.read(cx).lock();
     let (icon, text) = badge_face(lock);
     let target = open.cluster.clone();
-    let button = Button::new("write-lock")
-        .ghost()
-        .small()
+    let button = title_bar_button("write-lock")
         .child(
             h_flex()
                 .gap_1()
@@ -229,9 +233,7 @@ fn write_lock_badge(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyEleme
 }
 
 fn settings_button() -> impl IntoElement {
-    Button::new("settings")
-        .ghost()
-        .small()
+    title_bar_button("settings")
         .icon(Icon::new(IconName::Settings))
         .tooltip_with_action("Settings", &OpenSettings, None)
         .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx))
@@ -254,9 +256,7 @@ fn notices_button(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyElement
     }
     let warning = cx.theme().warning;
     Some(
-        Button::new("notices")
-            .ghost()
-            .small()
+        title_bar_button("notices")
             .child(
                 div()
                     .text_color(warning)
@@ -270,7 +270,84 @@ fn notices_button(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyElement
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui_kit::base::Root;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, MouseButton, Render, TestAppContext, Window};
+
     use super::*;
+
+    /// Stands in for the kit bar: a parent that sees every press that is not stopped below it.
+    struct BarHarness {
+        bar_presses: Rc<Cell<usize>>,
+        clicks: Rc<Cell<usize>>,
+        use_title_bar_button: bool,
+    }
+
+    impl Render for BarHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let presses = self.bar_presses.clone();
+            let clicks = self.clicks.clone();
+            let button = if self.use_title_bar_button {
+                title_bar_button("probe")
+            } else {
+                Button::new("probe").ghost().small()
+            };
+            div()
+                .id("bar")
+                .size_full()
+                .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                    presses.set(presses.get() + 1)
+                })
+                .child(
+                    button
+                        .label("probe")
+                        .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
+                )
+        }
+    }
+
+    /// Clicks the probe button; returns how many presses the parent saw and how many clicks the
+    /// button got.
+    fn click_probe(use_title_bar_button: bool, cx: &mut TestAppContext) -> (usize, usize) {
+        let bar_presses = Rc::new(Cell::new(0));
+        let clicks = Rc::new(Cell::new(0));
+        let (presses, button_clicks) = (bar_presses.clone(), clicks.clone());
+        let window = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(Default::default(), cx, move |_, cx| {
+                cx.new(|_| BarHarness {
+                    bar_presses: presses,
+                    clicks: button_clicks,
+                    use_title_bar_button,
+                })
+            })
+            .expect("open the test window")
+            .0
+        });
+        let window = window.downcast::<Root>().expect("a Root window");
+        cx.update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.click("probe", cx);
+        })
+        .expect("the window is open");
+        (bar_presses.get(), clicks.get())
+    }
+
+    // A press that reaches the bar is a caption press on Windows, which starts the OS move loop and
+    // eats the click. The test platform has no non-client hit test, so this asserts the cause: the
+    // press stays below the bar.
+    #[gpui_kit::test]
+    fn a_press_on_a_title_bar_button_does_not_reach_the_bar(cx: &mut TestAppContext) {
+        assert_eq!(click_probe(true, cx), (0, 1));
+    }
+
+    #[gpui_kit::test]
+    fn a_press_on_a_plain_button_reaches_the_bar(cx: &mut TestAppContext) {
+        assert_eq!(click_probe(false, cx), (1, 1));
+    }
 
     #[test]
     fn the_badge_shows_the_lock_state() {
