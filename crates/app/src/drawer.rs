@@ -583,9 +583,17 @@ pub(crate) fn menu_button() -> Button {
 /// A section heading inside a drawer body: semibold, with a rule below it and room above, so the
 /// groups of an Overview read as separate blocks. The one heading every drawer kind uses.
 pub(crate) fn section_title(text: impl Into<SharedString>, cx: &App) -> impl IntoElement {
+    section_heading(text, cx).mt_6()
+}
+
+/// The heading of the first section of a body: the body's own padding is the only room above it.
+pub(crate) fn first_section_title(text: impl Into<SharedString>, cx: &App) -> impl IntoElement {
+    section_heading(text, cx)
+}
+
+fn section_heading(text: impl Into<SharedString>, cx: &App) -> Div {
     let theme = cx.theme();
     div()
-        .mt_6()
         .mb_2()
         .pb_1p5()
         .border_b_1()

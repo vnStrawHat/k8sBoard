@@ -22,8 +22,8 @@ use crate::container_detail::{ContainerDetailInput, container_detail};
 use crate::dock::Dock;
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row,
-    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, link_text, menu_button,
-    section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
+    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, first_section_title, link_text,
+    menu_button, section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
 };
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
@@ -209,9 +209,16 @@ fn overview(
             None => div().truncate().child(text).into_any_element(),
         }
     });
+    let diagnosis = pod_diagnosis(pod, events, now);
+    // The first heading keeps its room above only when a box comes before it.
+    let pod_title = if diagnosis.is_some() {
+        section_title("Pod", cx).into_any_element()
+    } else {
+        first_section_title("Pod", cx).into_any_element()
+    };
     v_flex()
-        .children(pod_diagnosis(pod, events, now).map(|diagnosis| why_box(&diagnosis, cx)))
-        .child(section_title("Pod", cx))
+        .children(diagnosis.map(|diagnosis| why_box(&diagnosis, cx)))
+        .child(pod_title)
         .child(detail_row("Node", node, cx))
         .child(detail_row(
             "Pod IP",

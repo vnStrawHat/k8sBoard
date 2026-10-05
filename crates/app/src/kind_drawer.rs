@@ -23,9 +23,9 @@ use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
-    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, helm_body, link_text, menu_button,
-    port_row, section_title, shown_tab, tab_titles, truncated_text, truncated_text_with_tooltip,
-    wide_detail_row, yaml_body,
+    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, first_section_title, helm_body,
+    link_text, menu_button, port_row, section_title, shown_tab, tab_titles, truncated_text,
+    truncated_text_with_tooltip, wide_detail_row, yaml_body,
 };
 use crate::helm_release_view::HelmReleaseView;
 use crate::helm_rows::VALUES_CHANGE_TITLE;
@@ -303,7 +303,11 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
         section_starts.push((section.title, sections.len()));
         // The values view draws its own heading, which names the revision.
         if section.title != VALUES_CHANGE_TITLE {
-            sections.push(section_title(section.title, cx).into_any_element());
+            sections.push(if sections.is_empty() {
+                first_section_title(section.title, cx).into_any_element()
+            } else {
+                section_title(section.title, cx).into_any_element()
+            });
         }
         if section.rows.is_empty() {
             sections.push(absent_text(cx).into_any_element());
