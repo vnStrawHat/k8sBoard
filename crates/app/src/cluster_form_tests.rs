@@ -72,7 +72,6 @@ fn entry(context: &str, source: &str) -> ClusterEntry {
         allow_node_shell: None,
         debug_image: None,
         node_shell_namespace: None,
-        color: None,
         proxy: None,
         metrics: None,
     }
@@ -430,7 +429,7 @@ fn edit_entry_keeps_an_entry_that_only_sets_the_node_shell() {
     assert!(registry.clusters.is_empty());
 }
 
-// ---- Spec 0043 step 3: search, order, color ----
+// ---- Spec 0043 step 3: search, order ----
 
 fn reordered(registry: &ClusterRegistry, file: &Kubeconfig) -> Vec<ClusterGroup> {
     groups_of(&[file], registry, &[], None)
@@ -569,31 +568,6 @@ fn cluster_search_matches_label_context_env_and_file() {
     assert_eq!(matches("PROD"), ["prod-eu-1"]);
     assert!(matches("xyz").is_empty());
     assert_eq!(matches("").len(), 2);
-}
-
-#[test]
-fn a_color_equal_to_the_environment_stores_nothing() {
-    assert_eq!(
-        color_to_store(ClusterColor::Red, Environment::Production),
-        None
-    );
-    assert_eq!(
-        color_to_store(ClusterColor::Teal, Environment::Production),
-        Some(ClusterColor::Teal)
-    );
-    assert_eq!(color_to_store(ClusterColor::Gray, Environment::Local), None);
-}
-
-#[test]
-fn a_stored_color_keeps_its_entry() {
-    let mut registry = ClusterRegistry::default();
-    let target = cluster("prod-a", "a.yaml");
-    edit_entry(&mut registry, &target, |entry| {
-        entry.color = Some(ClusterColor::Teal);
-    });
-    assert_eq!(registry.clusters.len(), 1);
-    edit_entry(&mut registry, &target, |entry| entry.color = None);
-    assert!(registry.clusters.is_empty());
 }
 
 #[test]

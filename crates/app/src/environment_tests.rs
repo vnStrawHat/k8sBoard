@@ -92,61 +92,48 @@ fn environment_serializes_lowercase() {
 }
 
 #[test]
-fn cluster_color_defaults_to_the_environment() {
-    assert_eq!(ClusterColor::of(Production), ClusterColor::Red);
-    assert_eq!(ClusterColor::of(Staging), ClusterColor::Amber);
-    assert_eq!(ClusterColor::of(Development), ClusterColor::Blue);
-    assert_eq!(ClusterColor::of(Local), ClusterColor::Gray);
-    assert_eq!(
-        ClusterColor::ALL,
-        [
-            ClusterColor::Red,
-            ClusterColor::Amber,
-            ClusterColor::Blue,
-            ClusterColor::Purple,
-            ClusterColor::Teal,
-            ClusterColor::Gray
-        ]
-    );
-    let names: Vec<_> = ClusterColor::ALL.iter().map(|color| color.name()).collect();
-    assert_eq!(names, ["Red", "Amber", "Blue", "Purple", "Teal", "Gray"]);
+fn environment_color_defaults_to_the_tier() {
+    assert_eq!(EnvironmentColor::of(Production), EnvironmentColor::Red);
+    assert_eq!(EnvironmentColor::of(Staging), EnvironmentColor::Amber);
+    assert_eq!(EnvironmentColor::of(Development), EnvironmentColor::Blue);
+    assert_eq!(EnvironmentColor::of(Local), EnvironmentColor::Gray);
 }
 
 #[test]
-fn cluster_color_serializes_lowercase() {
+fn environment_color_serializes_lowercase() {
     assert_eq!(
-        serde_json::to_value(ClusterColor::Teal).expect("serializes"),
+        serde_json::to_value(EnvironmentColor::Teal).expect("serializes"),
         serde_json::json!("teal")
     );
 }
 
 #[gpui_kit::test]
-fn cluster_color_uses_theme_tokens(cx: &mut gpui_kit::TestAppContext) {
+fn palette_color_uses_theme_tokens(cx: &mut gpui_kit::TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         let theme = cx.theme().clone();
         let expected = [
-            (ClusterColor::Red, theme.danger),
-            (ClusterColor::Amber, theme.warning),
-            (ClusterColor::Blue, theme.info),
-            (ClusterColor::Purple, theme.magenta),
-            (ClusterColor::Teal, theme.cyan),
-            (ClusterColor::Gray, theme.muted_foreground),
+            (EnvironmentColor::Red, theme.danger),
+            (EnvironmentColor::Amber, theme.warning),
+            (EnvironmentColor::Blue, theme.info),
+            (EnvironmentColor::Purple, theme.magenta),
+            (EnvironmentColor::Teal, theme.cyan),
+            (EnvironmentColor::Gray, theme.muted_foreground),
         ];
         for (color, token) in expected {
-            assert_eq!(cluster_color(color, cx), token, "{color:?}");
+            assert_eq!(palette_color(color, cx), token, "{color:?}");
         }
     });
 }
 
 #[gpui_kit::test]
-fn environment_color_is_the_default_cluster_color(cx: &mut gpui_kit::TestAppContext) {
+fn environment_color_is_the_default_palette_color(cx: &mut gpui_kit::TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         for environment in [Local, Development, Staging, Production] {
             assert_eq!(
                 environment_color(environment, cx),
-                cluster_color(ClusterColor::of(environment), cx)
+                palette_color(EnvironmentColor::of(environment), cx)
             );
         }
         // The badge stays the risk signal: PROD is the danger token, not a user choice.

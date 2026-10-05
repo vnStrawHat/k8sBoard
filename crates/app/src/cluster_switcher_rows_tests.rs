@@ -26,7 +26,6 @@ fn row(context: &str, label: &str, environment: Environment) -> ClusterRow {
             allow_node_shell: false,
             debug_image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
             node_shell_namespace: "kube-system".to_owned(),
-            color: crate::environment::ClusterColor::of(environment),
             proxy: Ok(cluster::ProxyChoice::Kubeconfig),
             metrics: None,
         },

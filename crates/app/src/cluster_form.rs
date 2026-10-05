@@ -14,7 +14,7 @@ use crate::cluster_registry::{
     switcher_label,
 };
 use crate::cluster_switcher_rows::{normalize_query, search_text};
-use crate::environment::{ClusterColor, Environment, guess_environment};
+use crate::environment::{Environment, guess_environment};
 use crate::kubeconfig_import::is_app_owned;
 
 const MAX_DISPLAY_NAME_CHARS: usize = 64;
@@ -232,7 +232,6 @@ pub(crate) fn edit_entry(
             || entry.allow_node_shell.is_some()
             || entry.debug_image.is_some()
             || entry.node_shell_namespace.is_some()
-            || entry.color.is_some()
             || entry.proxy.is_some()
             || entry.metrics.is_some()
     });
@@ -267,15 +266,6 @@ pub(crate) fn filter_groups(groups: &[ClusterGroup], text: &str) -> Vec<ClusterG
             })
         })
         .collect()
-}
-
-/// What to store when the user picks `color`: nothing when it is the color of the cluster's
-/// environment, so a cluster on that color keeps following its environment.
-pub(crate) fn color_to_store(
-    color: ClusterColor,
-    environment: Environment,
-) -> Option<ClusterColor> {
-    (color != ClusterColor::of(environment)).then_some(color)
 }
 
 /// Moves `from` to the place of `to` inside `group` (display order). Every row of the group gets an

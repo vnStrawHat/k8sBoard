@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef, StoredMetrics};
-use crate::environment::{ClusterColor, Environment};
+use crate::environment::Environment;
 use crate::kubeconfig_folder::FileStamp;
 use crate::port_forwards::{ForwardPreset, ForwardSpec, LocalPortSpec, TargetSpec};
 use crate::settings_store::settings_path;
@@ -48,7 +48,6 @@ fn full_settings() -> Settings {
                 allow_node_shell: Some(true),
                 debug_image: Some("registry.local/busybox:1".to_owned()),
                 node_shell_namespace: Some("debug".to_owned()),
-                color: Some(ClusterColor::Teal),
                 proxy: Some(ClusterProxy::Url("http://proxy.example:3128".to_owned())),
                 metrics: Some(StoredMetrics::Fields(MetricsSourceFields {
                     namespace: "monitoring".to_owned(),
@@ -232,7 +231,6 @@ fn settings_keys_are_the_allow_list() {
             "registry",
             "registry.clusters",
             "registry.clusters.allow_node_shell",
-            "registry.clusters.color",
             "registry.clusters.confirm",
             "registry.clusters.context",
             "registry.clusters.debug_image",
@@ -568,6 +566,29 @@ fn unknown_color_theme_loads_as_zed_one() {
     assert_eq!(settings.appearance.color_theme, ColorTheme::ZedOne);
     assert_eq!(settings.appearance.density, RowDensity::Comfortable);
     assert_eq!(settings.theme, ThemePreference::Dark);
+}
+
+#[test]
+fn old_cluster_color_is_ignored() {
+    let value = json!({
+        "version": 1,
+        "registry": { "clusters": [{
+            "kubeconfig": "a.yaml",
+            "context": "ctx",
+            "display_name": "x",
+            "color": "teal"
+        }] }
+    });
+    let settings: Settings =
+        serde_json::from_value(value).expect("an old color key is not corrupt");
+    assert_eq!(settings.registry.clusters.len(), 1);
+    assert_eq!(
+        settings.registry.clusters[0].display_name.as_deref(),
+        Some("x")
+    );
+    let saved =
+        String::from_utf8(serialize_settings(&settings).expect("serializes")).expect("utf-8");
+    assert!(!saved.contains("\"color\""), "{saved}");
 }
 
 #[test]

@@ -29,7 +29,6 @@ fn entry(context: &str, source: &str) -> ClusterEntry {
         allow_node_shell: None,
         debug_image: None,
         node_shell_namespace: None,
-        color: None,
         proxy: None,
         metrics: None,
     }
@@ -56,7 +55,6 @@ fn profile_of_unregistered_context_uses_name_and_guess() {
             allow_node_shell: false,
             debug_image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
             node_shell_namespace: "kube-system".to_owned(),
-            color: crate::environment::ClusterColor::Red,
             proxy: Ok(cluster::ProxyChoice::Kubeconfig),
             metrics: None,
         }
@@ -441,26 +439,6 @@ fn debug_image_and_node_shell_namespace_default_and_override() {
     let profile = registry_with(blank).profile(&summary("dev-1", "a.yaml"));
     assert_eq!(profile.debug_image, cluster::DEFAULT_DEBUG_IMAGE);
     assert_eq!(profile.node_shell_namespace, "kube-system");
-}
-
-#[test]
-fn profile_color_prefers_the_entry() {
-    let mut teal = entry("prod-eu", "a.yaml");
-    teal.color = Some(ClusterColor::Teal);
-    let profile = registry_with(teal).profile(&summary("prod-eu", "a.yaml"));
-    assert_eq!(profile.color, ClusterColor::Teal);
-    // The badge follows the environment, not the stored color.
-    assert_eq!(profile.environment, Environment::Production);
-    let plain = ClusterRegistry::default().profile(&summary("prod-eu", "a.yaml"));
-    assert_eq!(plain.color, ClusterColor::Red);
-}
-
-#[test]
-fn a_color_follows_the_environment_when_none_is_stored() {
-    let mut moved = entry("dev-1", "a.yaml");
-    moved.environment = Some(Environment::Staging);
-    let profile = registry_with(moved).profile(&summary("dev-1", "a.yaml"));
-    assert_eq!(profile.color, ClusterColor::Amber);
 }
 
 // ---- Spec 0043 step 4: the proxy ----

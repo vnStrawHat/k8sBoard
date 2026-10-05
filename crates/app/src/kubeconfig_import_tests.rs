@@ -58,7 +58,6 @@ fn collisions_report_context_display_name_cluster_and_user() {
             allow_node_shell: None,
             debug_image: None,
             node_shell_namespace: None,
-            color: None,
             proxy: None,
             metrics: None,
         }],

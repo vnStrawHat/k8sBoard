@@ -648,7 +648,7 @@ fn the_node_shell_hint_is_the_wireframe_text() {
     );
 }
 
-// ---- Spec 0043 step 3: search, order, color ----
+// ---- Spec 0043 step 3: search, order ----
 
 fn row_contexts(page: &Entity<ClustersPage>, cx: &TestAppContext) -> Vec<String> {
     page.read_with(cx, |page, cx| {
@@ -673,36 +673,6 @@ fn type_into_search(
     })
     .expect("the window is open");
     cx.run_until_parked();
-}
-
-#[gpui_kit::test]
-fn picking_the_environment_colour_stores_none(cx: &mut TestAppContext) {
-    let (dir, window, page) = two_cluster_setup("color", cx);
-    let target = page
-        .read_with(cx, |page, _| page.selected.clone())
-        .expect("a selected cluster");
-    let color = |cx: &mut TestAppContext| {
-        page.read_with(cx, |page, cx| {
-            page.rows(cx)
-                .into_iter()
-                .find(|row| row.cluster == target)
-                .map(|row| row.profile.color)
-        })
-    };
-    // prod-a is a Production guess: its own color is Red, which stores nothing.
-    cx.update(|cx| set_cluster_color(&target, ClusterColor::Red, Environment::Production, cx));
-    assert!(cx.read(|cx| AppSettings::get(cx).registry.clusters.is_empty()));
-    cx.update(|cx| set_cluster_color(&target, ClusterColor::Teal, Environment::Production, cx));
-    render(window, cx);
-    let stored = cx.read(|cx| AppSettings::get(cx).registry.clusters.clone());
-    assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].color, Some(ClusterColor::Teal));
-    assert_eq!(color(cx), Some(ClusterColor::Teal));
-    // Picking the environment's color again drops the override and the entry with it.
-    cx.update(|cx| set_cluster_color(&target, ClusterColor::Red, Environment::Production, cx));
-    assert!(cx.read(|cx| AppSettings::get(cx).registry.clusters.is_empty()));
-    assert_eq!(color(cx), Some(ClusterColor::Red));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[gpui_kit::test]

@@ -12,7 +12,7 @@ use cluster::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::environment::{ClusterColor, Environment, guess_environment};
+use crate::environment::{Environment, guess_environment};
 use crate::kubeconfig_folder::FileStamp;
 use crate::write_guard::ConfirmMode;
 
@@ -71,9 +71,6 @@ pub(crate) struct ClusterEntry {
     /// Where the node shell pod is created; `None` is `kube-system`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) node_shell_namespace: Option<String>,
-    /// The title-bar border color; `None` follows the environment.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) color: Option<ClusterColor>,
     /// How the client reaches the API server; `None` is the kubeconfig's own `proxy-url`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) proxy: Option<ClusterProxy>,
@@ -143,8 +140,6 @@ pub(crate) struct ClusterProfile {
     pub(crate) allow_node_shell: bool,
     pub(crate) debug_image: String,
     pub(crate) node_shell_namespace: String,
-    /// The stored color, else the environment's: the title-bar border.
-    pub(crate) color: ClusterColor,
     /// The stored proxy, parsed here so that nothing past the profile holds an unchecked URL. A
     /// stored URL that does not parse is an `Err`: the connection fails instead of going direct.
     pub(crate) proxy: Result<ProxyChoice, ProxyUrlError>,
@@ -192,7 +187,6 @@ impl ClusterRegistry {
                 allow_node_shell: None,
                 debug_image: None,
                 node_shell_namespace: None,
-                color: None,
                 proxy: None,
                 metrics: None,
             });
@@ -249,9 +243,6 @@ impl ClusterRegistry {
                 entry.and_then(|entry| entry.node_shell_namespace.as_ref()),
             )
             .unwrap_or_else(|| DEFAULT_NODE_SHELL_NAMESPACE.to_owned()),
-            color: entry
-                .and_then(|entry| entry.color)
-                .unwrap_or_else(|| ClusterColor::of(environment)),
             proxy: stored_proxy(entry.and_then(|entry| entry.proxy.as_ref())),
             metrics: entry
                 .and_then(|entry| entry.metrics.as_ref())

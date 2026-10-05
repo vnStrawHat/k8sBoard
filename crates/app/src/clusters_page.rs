@@ -14,7 +14,6 @@ use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex,
     v_flex,
@@ -31,16 +30,16 @@ use crate::app_shell::find_cluster;
 use crate::cluster_catalog::{CatalogNotice, ClusterCatalog, PasteStatus};
 use crate::cluster_form::{
     ClusterGroup, ClusterRow, FieldError, MoveStep, ProxyMode, TEST_CONNECTION_TIMEOUT, TestState,
-    add_watched_folder, color_to_store, count_text, edit_entry, filter_groups, is_proxy_pending,
-    move_cluster, proxy_input_prefill, proxy_mode, proxy_mode_label, remove_block_reason,
-    remove_dialog_text, reset_entry, resolve_selection, step_cluster, stop_watching_folder,
-    test_connection, validate_display_name, validate_namespace, validate_proxy_url,
+    add_watched_folder, count_text, edit_entry, filter_groups, is_proxy_pending, move_cluster,
+    proxy_input_prefill, proxy_mode, proxy_mode_label, remove_block_reason, remove_dialog_text,
+    reset_entry, resolve_selection, step_cluster, stop_watching_folder, test_connection,
+    validate_display_name, validate_namespace, validate_proxy_url,
 };
 use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef, StoredMetrics};
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_switcher_rows::normalize_query;
 use crate::drawer::truncated_text;
-use crate::environment::{ClusterColor, Environment, cluster_color, environment_badge};
+use crate::environment::{Environment, environment_badge};
 use crate::resource_actions::disabled_menu_item;
 use crate::settings::AppSettings;
 use crate::settings_window::{ImportKubeconfig, show_metrics_page};
@@ -837,7 +836,6 @@ impl ClustersPage {
             centered(environment_menu(row, entry.as_ref())),
             cx,
         );
-        let color_row = form_row("Color", color_swatches(row, cx), cx);
         let cluster = row.cluster.clone();
         let read_only_row = form_row(
             "Open as read-only",
@@ -909,7 +907,7 @@ impl ClustersPage {
             .gap_3()
             .child(section(
                 "General",
-                [name_row, environment_row, color_row, namespace_row],
+                [name_row, environment_row, namespace_row],
                 cx,
             ))
             .child(section(
@@ -1384,43 +1382,4 @@ impl Render for DraggedCluster {
             .text_xs()
             .child(self.label.clone())
     }
-}
-
-/// Stores the title-bar color of `cluster`; a color equal to its environment's is not stored, so
-/// the cluster keeps following its environment.
-pub(crate) fn set_cluster_color(
-    cluster: &ClusterRef,
-    color: ClusterColor,
-    environment: Environment,
-    cx: &mut App,
-) {
-    let stored = color_to_store(color, environment);
-    AppSettings::update(cx, |settings| {
-        edit_entry(&mut settings.registry, cluster, |entry| {
-            entry.color = stored
-        });
-    });
-}
-
-/// Six round swatches, the current one ringed.
-fn color_swatches(row: &ClusterRow, cx: &App) -> AnyElement {
-    let ring = cx.theme().foreground;
-    let mut swatches = h_flex().h(px(CONTROL_HEIGHT)).items_center().gap_2();
-    for (index, color) in ClusterColor::ALL.into_iter().enumerate() {
-        let is_current = row.profile.color == color;
-        let (cluster, environment) = (row.cluster.clone(), row.profile.environment);
-        swatches = swatches.child(
-            div()
-                .id(ElementId::from(("cluster-color", index)))
-                .size(px(18.))
-                .flex_none()
-                .rounded_full()
-                .bg(cluster_color(color, cx))
-                .cursor_pointer()
-                .when(is_current, |swatch| swatch.border_2().border_color(ring))
-                .tooltip(move |window, cx| Tooltip::new(color.name()).build(window, cx))
-                .on_click(move |_, _, cx| set_cluster_color(&cluster, color, environment, cx)),
-        );
-    }
-    swatches.into_any_element()
 }
