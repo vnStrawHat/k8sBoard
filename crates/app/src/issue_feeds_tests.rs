@@ -608,3 +608,38 @@ fn watch_count_follows_the_condition_plan(cx: &mut TestAppContext) {
     });
     drop(waiting);
 }
+
+#[test]
+fn live_objects_exist_only_for_a_loaded_feed_that_runs() {
+    let mut feed = ConditionFeed::idle(ResourceKind::Deployments, None);
+    assert!(feed.live_objects().is_none(), "loading");
+    feed.apply(WatchUpdate::Snapshot(vec![KindObject::Plain]));
+    assert_eq!(feed.live_objects(), Some(&[KindObject::Plain][..]));
+    let off = ConditionFeed::idle(ResourceKind::Deployments, Some("not permitted".to_owned()));
+    assert!(off.live_objects().is_none(), "off");
+    let mut failed = ConditionFeed::idle(ResourceKind::Deployments, None);
+    failed.apply(forbidden());
+    assert!(failed.live_objects().is_none(), "failed");
+}
+
+#[test]
+fn the_palette_searches_only_the_live_feeds() {
+    let mut live = ConditionFeed::idle(ResourceKind::Deployments, None);
+    live.apply(WatchUpdate::Snapshot(vec![KindObject::Plain]));
+    let feeds = IssueFeeds {
+        events: WarningEvents::default(),
+        events_watch: None,
+        events_restart: None,
+        conditions: vec![
+            live,
+            // Waiting for its access review.
+            ConditionFeed::idle(ResourceKind::Jobs, None),
+            ConditionFeed::idle(ResourceKind::Secrets, Some("off in Settings".to_owned())),
+        ],
+    };
+    let searched: Vec<ResourceKind> = crate::palette_search::live_feed_objects(&feeds)
+        .iter()
+        .map(|feed| feed.kind)
+        .collect();
+    assert_eq!(searched, [ResourceKind::Deployments]);
+}

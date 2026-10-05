@@ -40,7 +40,7 @@ pub(crate) fn ranked(entries: Vec<PaletteEntry>, query: &PaletteQuery<'_>) -> Ve
 - `@` is a **single** switch through 0026; k8sBoard views one cluster at a time (0046, user decision 2026-10-03), so there is no multi-select.
 
 - No session (kubeconfig missing, connecting): only the commands and the screens are listed; Resources and namespaces show the group's empty text "Cluster not connected".
-- The Resources group says, under its heading when the text matches nothing, "Searched: Pods, Nodes{, visible kind}. Type :kind to open another kind." (decision 9).
+- The Resources group says, under its heading when the text matches nothing, "Searched: Pods, Nodes{, visible kind}{, live condition feeds}. Type :kind for other kinds." (decision 9, widened by 0056 C1: the Issues condition feeds that are live and loaded are searched too, scope-filtered, with no new request).
 
 ## Running an entry (on confirm)
 

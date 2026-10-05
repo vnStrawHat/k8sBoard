@@ -160,6 +160,7 @@ struct World {
     nodes: Vec<NodeSummary>,
     kind_rows: Option<(ResourceKind, Vec<KindRow>)>,
     replica_sets: Option<Vec<ReplicaSetSummary>>,
+    feeds: Vec<FeedObjects<'static>>,
     sections: Vec<SwitcherSection>,
 }
 
@@ -173,6 +174,7 @@ impl World {
             nodes: vec![node("node-1")],
             kind_rows: None,
             replica_sets: None,
+            feeds: Vec::new(),
             sections: Vec::new(),
         }
     }
@@ -197,6 +199,7 @@ impl World {
                     .as_ref()
                     .map(|(kind, rows)| (*kind, rows.as_slice())),
                 replica_sets: self.replica_sets.as_deref(),
+                feeds: &self.feeds,
             }),
             clusters: &self.sections,
         }
@@ -725,17 +728,37 @@ fn empty_text_hints_name_what_was_searched() {
         empty_text(
             PaletteMode::All,
             true,
-            Screen::Kind(ResourceKind::Deployments)
+            Screen::Kind(ResourceKind::Deployments),
+            &[]
         ),
-        "No matches. Searched: Pods, Nodes, Deployments. Type :kind to open another kind."
+        "No matches. Searched: Pods, Nodes, Deployments. Type :kind for other kinds."
     );
     assert_eq!(
-        empty_text(PaletteMode::Namespaces, false, Screen::Pods),
+        empty_text(PaletteMode::Namespaces, false, Screen::Pods, &[]),
         "No matches. Cluster not connected."
     );
     assert_eq!(
-        empty_text(PaletteMode::Kinds, true, Screen::Pods),
+        empty_text(PaletteMode::Kinds, true, Screen::Pods, &[]),
         "No matching kind."
+    );
+}
+
+#[test]
+fn empty_text_names_the_live_feeds_once() {
+    let feeds = [ResourceKind::Deployments, ResourceKind::Jobs];
+    assert_eq!(
+        empty_text(PaletteMode::All, true, Screen::Pods, &feeds),
+        "No matches. Searched: Pods, Nodes, Deployments, Jobs. Type :kind for other kinds."
+    );
+    // The visible kind is named once, in its own place.
+    assert_eq!(
+        empty_text(
+            PaletteMode::All,
+            true,
+            Screen::Kind(ResourceKind::Jobs),
+            &feeds
+        ),
+        "No matches. Searched: Pods, Nodes, Jobs, Deployments. Type :kind for other kinds."
     );
 }
 
@@ -1343,4 +1366,139 @@ fn attach_restart_pod_and_evict_are_cursor_entries_with_their_states() {
             .iter()
             .all(|(label, _)| *label != "Evict" && *label != "Restart pod")
     );
+}
+
+// ---- Condition feeds (spec 0056 C1) ----
+
+fn feed_deployment(namespace: &str, name: &str) -> KindObject {
+    let mut summary = crate::workload_actions::workload_actions_tests::deployment(name);
+    summary.namespace = namespace.to_owned();
+    KindObject::Deployment(summary)
+}
+
+/// A feed whose objects live for the rest of the test, like `guard_of`'s report.
+fn feed_of(kind: ResourceKind, objects: Vec<KindObject>) -> FeedObjects<'static> {
+    FeedObjects {
+        kind,
+        objects: Box::leak(objects.into_boxed_slice()),
+    }
+}
+
+fn resource_labels(ranked: &Ranked) -> Vec<&str> {
+    ranked
+        .entries
+        .iter()
+        .filter(|entry| entry.group == PaletteGroup::Resources)
+        .map(|entry| entry.label.as_ref())
+        .collect()
+}
+
+#[test]
+fn a_feed_deployment_is_found_by_name_without_a_status() {
+    let mut world = World::new();
+    world.feeds = vec![feed_of(
+        ResourceKind::Deployments,
+        vec![feed_deployment("shop", "checkout")],
+    )];
+    let found = search(&mut world.input(Screen::Pods, None), "checkout");
+    let entry = found
+        .entries
+        .iter()
+        .find(|entry| entry.group == PaletteGroup::Resources)
+        .expect("the deployment is listed");
+    assert_eq!(entry.label.as_ref(), "checkout");
+    assert_eq!(entry.detail.as_deref(), Some("shop/checkout"));
+    assert!(entry.status.is_none());
+    assert!(matches!(
+        &entry.target,
+        PaletteTarget::Resource(object) if object.key == ResourceKey::Kind {
+            kind: ResourceKind::Deployments,
+            namespace: Some("shop".to_owned()),
+            name: "checkout".to_owned(),
+        }
+    ));
+    // The kind words narrow to the kind.
+    let by_kind = search(&mut world.input(Screen::Pods, None), "deploy checkout");
+    assert_eq!(resource_labels(&by_kind), ["checkout"]);
+}
+
+#[test]
+fn a_feed_object_outside_the_scope_is_skipped() {
+    let mut world = World::new();
+    world.scope = NamespaceScope::Named("shop".to_owned());
+    world.feeds = vec![feed_of(
+        ResourceKind::Deployments,
+        vec![
+            feed_deployment("shop", "checkout"),
+            feed_deployment("billing", "checkout-batch"),
+        ],
+    )];
+    let found = search(&mut world.input(Screen::Pods, None), "checkout");
+    assert_eq!(resource_labels(&found), ["checkout"]);
+}
+
+#[test]
+fn the_on_screen_row_wins_over_its_feed_copy() {
+    let mut world = World::new();
+    let summary = crate::workload_actions::workload_actions_tests::deployment("checkout");
+    let mut row = kind_row(Some("team-a"), "checkout");
+    row.object = KindObject::Deployment(summary.clone());
+    world.kind_rows = Some((ResourceKind::Deployments, vec![row]));
+    world.feeds = vec![feed_of(
+        ResourceKind::Deployments,
+        vec![KindObject::Deployment(summary)],
+    )];
+    let found = search(
+        &mut world.input(Screen::Kind(ResourceKind::Deployments), None),
+        "checkout",
+    );
+    assert_eq!(resource_labels(&found), ["checkout"]);
+    let entry = found
+        .entries
+        .iter()
+        .find(|entry| entry.group == PaletteGroup::Resources)
+        .expect("listed");
+    assert!(entry.status.is_some(), "the row keeps its status");
+}
+
+#[test]
+fn a_feed_of_another_kind_is_kept_beside_the_visible_kind() {
+    let mut world = World::new();
+    world.kind_rows = Some((
+        ResourceKind::Services,
+        vec![kind_row(Some("shop"), "checkout")],
+    ));
+    world.feeds = vec![feed_of(
+        ResourceKind::Deployments,
+        vec![feed_deployment("shop", "checkout")],
+    )];
+    let found = search(
+        &mut world.input(Screen::Kind(ResourceKind::Services), None),
+        "checkout",
+    );
+    assert_eq!(resource_labels(&found), ["checkout", "checkout"]);
+}
+
+#[test]
+fn feed_objects_carry_no_action_pairs() {
+    let mut world = World::new();
+    world.feeds = vec![feed_of(
+        ResourceKind::Deployments,
+        vec![feed_deployment("shop", "checkout")],
+    )];
+    let found = search(&mut world.input(Screen::Pods, None), "restart checkout");
+    assert!(
+        found
+            .entries
+            .iter()
+            .all(|entry| !matches!(entry.target, PaletteTarget::ObjectAction(..)))
+    );
+}
+
+#[test]
+fn feed_objects_of_other_summaries_are_ignored() {
+    let mut world = World::new();
+    world.feeds = vec![feed_of(ResourceKind::Deployments, vec![KindObject::Plain])];
+    let found = search(&mut world.input(Screen::Pods, None), "plain");
+    assert!(resource_labels(&found).is_empty());
 }

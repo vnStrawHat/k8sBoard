@@ -14,9 +14,11 @@ use gpui_kit::{Action, SharedString};
 
 use crate::app_shell::Screen;
 use crate::cluster_registry::ClusterRef;
+use crate::cluster_session::scope_includes;
 use crate::cluster_switcher::SwitchToCluster1;
 use crate::cluster_switcher_rows::{SwitcherRow, SwitcherSection};
 use crate::fuzzy_score::{fuzzy_ranges, fuzzy_score};
+use crate::issue_feeds::IssueFeeds;
 use crate::keymap::{OpenKindPalette, OpenPalette, ShortcutGroup, shortcut_rows};
 use crate::kind_row::{KindObject, KindRow};
 use crate::navigation::{KindAvailability, kind_availability};
@@ -209,6 +211,27 @@ impl PaletteEntry {
     }
 }
 
+/// The objects of one live condition feed (Deployments, DaemonSets, Jobs, HPAs, PDBs, quotas,
+/// claims, TLS Secrets), which the Issues engine already holds.
+pub(crate) struct FeedObjects<'a> {
+    pub(crate) kind: ResourceKind,
+    pub(crate) objects: &'a [KindObject],
+}
+
+/// The feeds a search may read: only those whose list is live and loaded.
+pub(crate) fn live_feed_objects(feeds: &IssueFeeds) -> Vec<FeedObjects<'_>> {
+    feeds
+        .conditions
+        .iter()
+        .filter_map(|feed| {
+            Some(FeedObjects {
+                kind: feed.kind,
+                objects: feed.live_objects()?,
+            })
+        })
+        .collect()
+}
+
 /// The loaded lists of the open cluster the palette may read. All slices are what the shell
 /// already holds.
 pub(crate) struct PaletteSession<'a> {
@@ -224,6 +247,9 @@ pub(crate) struct PaletteSession<'a> {
     /// The ReplicaSets of the cursor Deployment, once its drawer has loaded them: the palette
     /// offers `Roll back to rev {n}` only from these, and starts no list for it.
     pub(crate) replica_sets: Option<&'a [ReplicaSetSummary]>,
+    /// The condition feeds that are live and loaded, searched by name (spec 0056); none of them
+    /// starts a request.
+    pub(crate) feeds: &'a [FeedObjects<'a>],
 }
 
 /// Everything the palette may show, borrowed from the shell. No session means no resources, no
@@ -400,6 +426,12 @@ enum Subject<'a> {
     Pod(&'a PodSummary),
     Node(&'a NodeSummary),
     Row(ResourceKind, &'a KindRow),
+    /// An object known by its name only: a condition feed object, no status, no action pairs.
+    Named {
+        kind: ResourceKind,
+        namespace: Option<&'a str>,
+        name: &'a str,
+    },
 }
 
 impl<'a> Subject<'a> {
@@ -408,6 +440,7 @@ impl<'a> Subject<'a> {
             Self::Pod(pod) => &pod.name,
             Self::Node(node) => &node.name,
             Self::Row(_, row) => &row.name,
+            Self::Named { name, .. } => name,
         }
     }
 
@@ -416,6 +449,7 @@ impl<'a> Subject<'a> {
             Self::Pod(pod) => Some(&pod.namespace),
             Self::Node(_) => None,
             Self::Row(_, row) => row.namespace.as_deref(),
+            Self::Named { namespace, .. } => namespace,
         }
     }
 
@@ -424,15 +458,17 @@ impl<'a> Subject<'a> {
         match self {
             Self::Pod(_) => ["pod", "pods"],
             Self::Node(_) => ["node", "nodes"],
-            Self::Row(kind, _) => [kind.singular(), kind.plural()],
+            Self::Row(kind, _) | Self::Named { kind, .. } => [kind.singular(), kind.plural()],
         }
     }
 
-    fn status(self) -> StatusLabel {
+    /// `None` for a name-only object: its list is not the one on screen, so no status is known.
+    fn status(self) -> Option<StatusLabel> {
         match self {
-            Self::Pod(pod) => pod_status_label(pod),
-            Self::Node(node) => node_status_label(node.status),
-            Self::Row(_, row) => row.status.clone(),
+            Self::Pod(pod) => Some(pod_status_label(pod)),
+            Self::Node(node) => Some(node_status_label(node.status)),
+            Self::Row(_, row) => Some(row.status.clone()),
+            Self::Named { .. } => None,
         }
     }
 
@@ -441,6 +477,15 @@ impl<'a> Subject<'a> {
             Self::Pod(pod) => ResourceKey::of_pod(pod),
             Self::Node(node) => ResourceKey::of_node(node),
             Self::Row(kind, row) => ResourceKey::of_row(kind, row),
+            Self::Named {
+                kind,
+                namespace,
+                name,
+            } => ResourceKey::Kind {
+                kind,
+                namespace: namespace.map(str::to_owned),
+                name: name.to_owned(),
+            },
         }
     }
 
@@ -450,6 +495,14 @@ impl<'a> Subject<'a> {
             Self::Pod(pod) => key.is_pod(pod),
             Self::Node(node) => key.is_node(node),
             Self::Row(kind, row) => key.is_row(kind, row),
+            Self::Named {
+                kind,
+                namespace,
+                name,
+            } => {
+                matches!(key, ResourceKey::Kind { kind: key_kind, namespace: key_namespace, name: key_name }
+                if *key_kind == kind && key_namespace.as_deref() == namespace && key_name == name)
+            }
         }
     }
 
@@ -562,16 +615,52 @@ fn object_tokens(tokens: &[&str]) -> Vec<bool> {
         .collect()
 }
 
-/// The visible explorer kind first (it is what the user is looking at), then pods, then nodes.
+/// The visible explorer kind first (it is what the user is looking at), then pods, then nodes, then
+/// the objects of the live condition feeds that the scope includes. A feed of the visible kind is
+/// left out once that list has rows: they hold the same objects, with their status.
 fn subjects<'a>(session: &PaletteSession<'a>) -> impl Iterator<Item = Subject<'a>> + use<'a> {
     // The slices are copied out, so the iterator borrows the lists and not the session value.
-    let (pods, nodes) = (session.pods, session.nodes);
+    let (pods, nodes, scope, feeds) = (session.pods, session.nodes, session.scope, session.feeds);
+    let shown_kind = session
+        .kind_rows
+        .filter(|(_, rows)| !rows.is_empty())
+        .map(|(kind, _)| kind);
     let rows = session
         .kind_rows
         .into_iter()
         .flat_map(|(kind, rows)| rows.iter().map(move |row| Subject::Row(kind, row)));
+    let fed = feeds
+        .iter()
+        .filter(move |feed| Some(feed.kind) != shown_kind)
+        .flat_map(move |feed| {
+            feed.objects.iter().filter_map(move |object| {
+                let (namespace, name) = condition_identity(object)?;
+                scope_includes(scope, namespace).then_some(Subject::Named {
+                    kind: feed.kind,
+                    namespace: Some(namespace),
+                    name,
+                })
+            })
+        });
     rows.chain(pods.iter().map(Subject::Pod))
         .chain(nodes.iter().map(Subject::Node))
+        .chain(fed)
+}
+
+/// The namespace and name a condition feed summary carries.
+fn condition_identity(object: &KindObject) -> Option<(&str, &str)> {
+    let (namespace, name) = match object {
+        KindObject::Deployment(item) => (&item.namespace, &item.name),
+        KindObject::DaemonSet(item) => (&item.namespace, &item.name),
+        KindObject::Job(item) => (&item.namespace, &item.name),
+        KindObject::HorizontalPodAutoscaler(item) => (&item.namespace, &item.name),
+        KindObject::PodDisruptionBudget(item) => (&item.namespace, &item.name),
+        KindObject::ResourceQuota(item) => (&item.namespace, &item.name),
+        KindObject::PersistentVolumeClaim(item) => (&item.namespace, &item.name),
+        KindObject::Secret(item) => (&item.namespace, &item.name),
+        _ => return None,
+    };
+    Some((namespace, name))
 }
 
 /// The Resources entry of an object: its name and status only, never cell text.
@@ -590,7 +679,7 @@ fn resource_entry(session: &PaletteSession<'_>, subject: Subject<'_>) -> Palette
         .into_iter()
         .map(SharedString::from)
         .collect();
-    entry.status = Some(subject.status());
+    entry.status = subject.status();
     entry
 }
 
@@ -636,7 +725,9 @@ fn scan_loaded_rows<'a>(input: &PaletteInput<'a>) -> Scan<'a> {
     let mut scores = Vec::with_capacity(tokens.len());
     for subject in subjects(session) {
         subject.token_scores(&tokens, &mut buffer, &mut scores);
+        // Name-only objects have no row to act on, so they never carry pairs.
         if wants_pairs
+            && !matches!(subject, Subject::Named { .. })
             && let Some(score) = score_sum(&scores, Some(&eligible))
             && !input
                 .cursor
@@ -700,12 +791,12 @@ fn subject_pairs(
     let object = ClusterObject::new(session.cluster.clone(), key.clone());
     let pod = match subject {
         Subject::Pod(pod) => Some(pod),
-        Subject::Node(_) | Subject::Row(..) => None,
+        Subject::Node(_) | Subject::Row(..) | Subject::Named { .. } => None,
     };
     // The loaded row: its state flips a label and can block an action (a paused Deployment).
     let loaded = match subject {
         Subject::Row(_, row) => Some(&row.object),
-        Subject::Pod(_) | Subject::Node(_) => None,
+        Subject::Pod(_) | Subject::Node(_) | Subject::Named { .. } => None,
     };
     let on_object = subject.token_hits(tokens, &mut String::new());
     let namespace = subject
@@ -987,12 +1078,18 @@ pub(crate) fn lists_resources(query: &PaletteQuery<'_>) -> bool {
 }
 
 /// What the list says when nothing matches: the group hint of decision 9, or why there is none.
-pub(crate) fn empty_text(mode: PaletteMode, has_session: bool, screen: Screen) -> String {
+/// `searched_feeds` are the condition feeds that were live (`live_feed_objects`).
+pub(crate) fn empty_text(
+    mode: PaletteMode,
+    has_session: bool,
+    screen: Screen,
+    searched_feeds: &[ResourceKind],
+) -> String {
     if !has_session && matches!(mode, PaletteMode::All | PaletteMode::Namespaces) {
         return "No matches. Cluster not connected.".to_owned();
     }
     match mode {
-        PaletteMode::All => format!("No matches. {}", resources_hint(screen)),
+        PaletteMode::All => format!("No matches. {}", resources_hint(screen, searched_feeds)),
         PaletteMode::Kinds => "No matching kind.".to_owned(),
         PaletteMode::Clusters => "No matching cluster.".to_owned(),
         PaletteMode::Namespaces => "No matching namespace.".to_owned(),
@@ -1000,13 +1097,22 @@ pub(crate) fn empty_text(mode: PaletteMode, has_session: bool, screen: Screen) -
     }
 }
 
-/// Which lists the Resources group searched (decision 9).
-fn resources_hint(screen: Screen) -> String {
-    let visible = match screen {
-        Screen::Kind(kind) => format!(", {}", kind.label()),
-        _ => String::new(),
-    };
-    format!("Searched: Pods, Nodes{visible}. Type :kind to open another kind.")
+/// Which lists the Resources group searched (decision 9): Pods, Nodes, the visible kind, then the
+/// live condition feeds. A feed that is loading or off is not named, for it was not searched.
+fn resources_hint(screen: Screen, searched_feeds: &[ResourceKind]) -> String {
+    let visible = screen.kind();
+    let mut searched = vec!["Pods", "Nodes"];
+    searched.extend(visible.map(ResourceKind::label));
+    searched.extend(
+        searched_feeds
+            .iter()
+            .filter(|kind| Some(**kind) != visible)
+            .map(|kind| kind.label()),
+    );
+    format!(
+        "Searched: {}. Type :kind for other kinds.",
+        searched.join(", ")
+    )
 }
 
 #[cfg(test)]

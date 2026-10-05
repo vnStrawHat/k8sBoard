@@ -72,8 +72,8 @@ use crate::object_events::{SubjectChange, event_subject, subject_change};
 use crate::overview::OverviewState;
 use crate::overview_report::live_report;
 use crate::palette_search::{
-    PaletteInput, PaletteQuery, PaletteSession, lists_pairs, lists_resources, palette_entries,
-    parse_query,
+    PaletteInput, PaletteQuery, PaletteSession, lists_pairs, lists_resources, live_feed_objects,
+    palette_entries, parse_query,
 };
 use crate::permissions_view::PermissionsView;
 use crate::pod_drawer::selected_container_index;
@@ -4214,6 +4214,8 @@ impl AppShell {
             .active_session
             .as_ref()
             .and_then(|open| open.session.read(cx).guard(cx));
+        // Only feeds that are live and loaded: a loading or off feed is not searched.
+        let feeds = live.map_or_else(Vec::new, |live| live_feed_objects(&live.issue_feeds));
         let session = self.active_session.as_ref().and_then(|open| {
             let guard = guard.as_ref()?;
             let live = open.session.read(cx).live()?;
@@ -4230,6 +4232,7 @@ impl AppShell {
                     .and_then(|kind| Some((kind, live.kind_list(kind)?.list.items()))),
                 // Only the cursor Deployment has revisions to offer, and only once its drawer
                 // has loaded them.
+                feeds: &feeds,
                 replica_sets: self
                     .selected
                     .as_ref()
@@ -4269,6 +4272,7 @@ impl AppShell {
             context: PaletteContext {
                 screen: self.screen,
                 has_session: live.is_some(),
+                searched_feeds: feeds.iter().map(|feed| feed.kind).collect(),
                 cluster: self.active_profile(cx).map(|profile| ActiveCluster {
                     environment: profile.environment.clone(),
                     name: profile.display_name.into(),

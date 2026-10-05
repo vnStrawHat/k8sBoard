@@ -37,7 +37,7 @@ use crate::palette_search::{
     entry_match_ranges, parse_query, ranked,
 };
 use crate::resource_actions::RowAction;
-use crate::resource_kind::{NODE_ICON, POD_ICON};
+use crate::resource_kind::{NODE_ICON, POD_ICON, ResourceKind};
 use crate::settings_window::OpenSettings;
 use crate::shortcut_sheet::row_keys;
 use crate::status_tone::{StatusLabel, StatusTone, tone_color, toned_text};
@@ -63,6 +63,8 @@ pub(crate) struct ActiveCluster {
 pub(crate) struct PaletteContext {
     pub(crate) screen: Screen,
     pub(crate) has_session: bool,
+    /// The condition feeds the Resources group searched, for the empty text.
+    pub(crate) searched_feeds: Vec<ResourceKind>,
     /// `None` without a profile.
     pub(crate) cluster: Option<ActiveCluster>,
     /// The `ns: …` chip text; `None` without a session.
@@ -498,7 +500,12 @@ impl Render for CommandPalette {
         self.schedule_reselect(window, cx);
         let palette = cx.weak_entity();
         let mode = parse_query(&self.query).mode;
-        let empty = empty_text(mode, self.context.has_session, self.context.screen);
+        let empty = empty_text(
+            mode,
+            self.context.has_session,
+            self.context.screen,
+            &self.context.searched_feeds,
+        );
         let header = HeaderChips::of(&self.context);
         let more = self.more;
         let mut command = Command::new(&self.state)

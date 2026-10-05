@@ -423,6 +423,15 @@ impl ConditionFeed {
         }
     }
 
+    /// The objects once the feed has loaded and runs; `None` while it is loading, waiting for its
+    /// access review, failed, or off, so a reader never mistakes "not loaded" for "none".
+    pub(crate) fn live_objects(&self) -> Option<&[KindObject]> {
+        if self.off.is_some() {
+            return None;
+        }
+        self.list.ready_items()
+    }
+
     /// The watches this feed runs now.
     fn watches(&self) -> usize {
         match (&self.subscription, &self.watch_scope) {
