@@ -32,8 +32,8 @@ use crate::app_shell::AppShell;
 use crate::batch_rows::job_status_label;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{
-    CompanionLists, CompanionPlan, LiveCluster, LiveList, RbacState, RelatedList, companion_plan,
-    denied_related_check,
+    BindingsSource, CompanionLists, CompanionPlan, LiveCluster, LiveList, RbacState, RelatedList,
+    companion_plan, denied_related_check,
 };
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::custom_rows::{FieldsSide, conditions_rows, field_list_rows};
@@ -2071,7 +2071,12 @@ fn with_bindings(
     cx: &Context<AppShell>,
     rows: impl FnOnce(&BindingIndex) -> Vec<AnyElement>,
 ) -> Vec<AnyElement> {
-    match bindings_status(kind, &live.access, live.companion()) {
+    let source = live.bindings_source(kind);
+    match bindings_status(
+        kind,
+        &live.access,
+        source.as_ref().map(BindingsSource::lists),
+    ) {
         BindingsStatus::Ready(lists) => rows(&BindingIndex::build(&lists)),
         BindingsStatus::Loading => vec![note("Loading bindings…", cx)],
         BindingsStatus::Failed(message) => vec![

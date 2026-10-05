@@ -387,6 +387,22 @@ fn bindings_plan(kind: ResourceKind, access: &AccessState) -> Option<CompanionPl
     }))
 }
 
+/// Where a drawer reads the Bindings lists from; see `LiveCluster::bindings_source`.
+pub(crate) enum BindingsSource<'a> {
+    Explorer(&'a CompanionLists),
+    /// Rebuilt from the Topology feeds on every read.
+    Topology(CompanionLists),
+}
+
+impl BindingsSource<'_> {
+    pub(crate) fn lists(&self) -> &CompanionLists {
+        match self {
+            Self::Explorer(lists) => lists,
+            Self::Topology(lists) => lists,
+        }
+    }
+}
+
 impl CompanionLists {
     fn loading_for(kind: CompanionKind) -> Self {
         match kind {
@@ -2605,6 +2621,20 @@ impl LiveCluster {
     pub(crate) fn companion(&self) -> Option<&CompanionLists> {
         let companion = self.explorer.as_ref()?.companion.as_ref()?;
         Some(&companion.lists)
+    }
+
+    /// The binding lists a drawer of `kind` reads, wherever it is open: the explorer's Bindings
+    /// companion on a kind screen, else the RBAC feeds of Topology (no explorer runs there, so a
+    /// drawer would wait on a companion that never starts). `None` when neither runs.
+    pub(crate) fn bindings_source(&self, kind: ResourceKind) -> Option<BindingsSource<'_>> {
+        if let Some(lists @ CompanionLists::Bindings { .. }) = self.companion() {
+            return Some(BindingsSource::Explorer(lists));
+        }
+        let topology = self.topology.as_ref()?;
+        let with_cluster_role_bindings = kind != ResourceKind::Roles;
+        Some(BindingsSource::Topology(
+            topology.bindings_companion(with_cluster_role_bindings),
+        ))
     }
 
     /// Rewrites the joined cells of the explorer rows from the current pods and companion lists.

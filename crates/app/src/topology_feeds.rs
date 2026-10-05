@@ -4,9 +4,11 @@
 
 use std::collections::BTreeSet;
 
+use cluster::BindingSummary;
+
 use crate::cluster_runtime::WatchSubscription;
-use crate::cluster_session::{AccessState, LiveList};
-use crate::kind_row::KindRow;
+use crate::cluster_session::{AccessState, CompanionLists, LiveList};
+use crate::kind_row::{KindObject, KindRow};
 use crate::resource_kind::ResourceKind;
 use crate::topology_graph::{FeedRows, KindFilter, TopologyKind};
 
@@ -218,6 +220,50 @@ impl TopologyFeeds {
             .filter_map(|feed| Some((TopologyKind::of_resource_kind(feed.kind)?, feed.rows())))
             .filter(|(kind, _)| *kind != TopologyKind::ClusterRole)
             .collect()
+    }
+
+    /// The binding lists of the RBAC layer as a Bindings companion holds them, for a drawer open
+    /// over the graph, where no explorer runs a companion. The cluster role bindings are cluster
+    /// wide, the role bindings those of the Topology namespace. A feed that does not run reads as
+    /// failed, with the reason it is off.
+    pub(crate) fn bindings_companion(&self, with_cluster_role_bindings: bool) -> CompanionLists {
+        CompanionLists::Bindings {
+            role_bindings: self.binding_list(ResourceKind::RoleBindings),
+            cluster_role_bindings: with_cluster_role_bindings
+                .then(|| self.binding_list(ResourceKind::ClusterRoleBindings)),
+        }
+    }
+
+    fn binding_list(&self, kind: ResourceKind) -> LiveList<BindingSummary> {
+        let Some(feed) = self.feeds.iter().find(|feed| feed.kind == kind) else {
+            return LiveList::Failed {
+                message: "the RBAC layer is off".to_owned(),
+            };
+        };
+        if let Some(reason) = &feed.off {
+            return LiveList::Failed {
+                message: reason.clone(),
+            };
+        }
+        match &feed.list {
+            LiveList::Loading => LiveList::Loading,
+            LiveList::Failed { message } => LiveList::Failed {
+                message: message.clone(),
+            },
+            LiveList::Ready {
+                items,
+                interruption,
+            } => LiveList::Ready {
+                items: items
+                    .iter()
+                    .filter_map(|row| match &row.object {
+                        KindObject::Binding(binding) => Some(binding.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                interruption: interruption.clone(),
+            },
+        }
     }
 
     pub(crate) fn remove(&mut self, kinds: &[ResourceKind]) {
@@ -479,6 +525,94 @@ mod tests {
         assert_eq!(
             subject_change(Some(&all_chips()), Some(&other)),
             SubjectChange::Restart
+        );
+    }
+
+    fn binding_feed(kind: ResourceKind, rows: Vec<KindRow>) -> TopologyFeed {
+        feed(
+            kind,
+            LiveList::Ready {
+                items: rows,
+                interruption: None,
+            },
+        )
+    }
+
+    fn reader_binding() -> KindRow {
+        use crate::access_rows::role_binding_row;
+        use crate::topology_fixtures::{NAMESPACE, account_subject, binding};
+        role_binding_row(&binding(
+            Some(NAMESPACE),
+            "reader-binding",
+            (cluster::RoleKind::Role, "reader"),
+            vec![account_subject("api")],
+        ))
+    }
+
+    #[test]
+    fn rbac_feeds_load_a_drawer_over_topology() {
+        let feeds = feeds_of(vec![
+            binding_feed(ResourceKind::RoleBindings, vec![reader_binding()]),
+            binding_feed(ResourceKind::ClusterRoleBindings, Vec::new()),
+        ]);
+        let companion = feeds.bindings_companion(true);
+        let crate::access_bindings::BindingsStatus::Ready(lists) =
+            crate::access_bindings::bindings_status(
+                ResourceKind::ClusterRoles,
+                &AccessState::Unknown,
+                Some(&companion),
+            )
+        else {
+            panic!("both feeds are loaded");
+        };
+        assert_eq!(lists.role_bindings.len(), 1);
+        assert_eq!(lists.role_bindings[0].name, "reader-binding");
+        assert!(lists.cluster_role_bindings.is_empty());
+    }
+
+    #[test]
+    fn empty_rbac_feeds_are_ready_not_loading() {
+        let feeds = feeds_of(vec![binding_feed(ResourceKind::RoleBindings, Vec::new())]);
+        // Roles do not read the cluster role bindings, so their missing feed does not matter.
+        let companion = feeds.bindings_companion(false);
+        assert!(crate::access_bindings::ready_binding_lists(Some(&companion)).is_some());
+    }
+
+    #[test]
+    fn a_loading_rbac_feed_keeps_the_drawer_loading() {
+        let feeds = feeds_of(vec![
+            binding_feed(ResourceKind::RoleBindings, Vec::new()),
+            feed(ResourceKind::ClusterRoleBindings, LiveList::Loading),
+        ]);
+        let companion = feeds.bindings_companion(true);
+        assert!(crate::access_bindings::ready_binding_lists(Some(&companion)).is_none());
+        assert!(matches!(
+            crate::access_bindings::bindings_status(
+                ResourceKind::ClusterRoles,
+                &AccessState::Unknown,
+                Some(&companion),
+            ),
+            crate::access_bindings::BindingsStatus::Loading
+        ));
+    }
+
+    #[test]
+    fn an_off_or_missing_rbac_feed_fails_with_its_reason() {
+        let feeds = feeds_of(vec![TopologyFeed::off(
+            ResourceKind::RoleBindings,
+            "not permitted".to_owned(),
+        )]);
+        let CompanionLists::Bindings {
+            role_bindings,
+            cluster_role_bindings: Some(cluster_role_bindings),
+        } = feeds.bindings_companion(true)
+        else {
+            panic!("both lists were asked for");
+        };
+        assert_eq!(role_bindings.failure(), Some("not permitted"));
+        assert_eq!(
+            cluster_role_bindings.failure(),
+            Some("the RBAC layer is off")
         );
     }
 }

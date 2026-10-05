@@ -384,6 +384,43 @@ mod status {
         let status = bindings_status(ResourceKind::Roles, &only_cluster, None);
         assert!(matches!(status, BindingsStatus::Loading));
     }
+
+    #[test]
+    fn denied_wins_over_a_list_that_never_loads() {
+        // Over Topology a denied feed reads as failed or loading; the drawer must still name the
+        // check, not wait on a list that will never arrive.
+        let access = denying(&[AccessCheck::ListRoleBindings]);
+        let stuck = bindings(LiveList::Loading, None);
+        let status = bindings_status(ResourceKind::Roles, &access, Some(&stuck));
+        assert!(
+            matches!(status, BindingsStatus::Denied(checks) if checks == [AccessCheck::ListRoleBindings])
+        );
+    }
+
+    #[test]
+    fn a_roles_page_companion_lists_the_bindings_of_a_role() {
+        let reader = binding(
+            Some("shop"),
+            "reader-binding",
+            (RoleKind::Role, "reader"),
+            vec![account("shop", "api")],
+        );
+        let companion = bindings(ready(vec![reader]), None);
+        let BindingsStatus::Ready(lists) =
+            bindings_status(ResourceKind::Roles, &AccessState::Unknown, Some(&companion))
+        else {
+            panic!("the role bindings are loaded");
+        };
+        let index = BindingIndex::build(&lists);
+        let bound = index.bindings_of_role(&role(Some("shop"), "reader"));
+        assert_eq!(names(&bound), ["reader-binding"]);
+        // A role nothing names has no bindings: the drawer prints its empty text.
+        assert!(
+            index
+                .bindings_of_role(&role(Some("shop"), "unused"))
+                .is_empty()
+        );
+    }
 }
 
 // ---- Service accounts ----

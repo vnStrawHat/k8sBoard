@@ -19,7 +19,7 @@ use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_registry::ClusterRef;
-use crate::cluster_session::{CompanionLists, LiveCluster};
+use crate::cluster_session::{BindingsSource, CompanionLists, LiveCluster};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
@@ -296,7 +296,7 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
     let mut next_id = 0_usize;
     let mut sections: Vec<AnyElement> = Vec::new();
     let mut section_starts = Vec::with_capacity(row.sections.len());
-    if let Some(diagnosis) = row_diagnosis(row, live, now) {
+    if let Some(diagnosis) = row_diagnosis(kind, row, live, now) {
         sections.push(why_box(&diagnosis, cx));
     }
     for section in &row.sections {
@@ -338,7 +338,12 @@ struct Overview {
 
 /// The WHY box of the row, read from its object, its owned pods (a Service's matching pods), and
 /// the nodes. Rules that need pods wait until the pods list has loaded.
-fn row_diagnosis(row: &KindRow, live: &LiveCluster, now: jiff::Timestamp) -> Option<KindDiagnosis> {
+fn row_diagnosis(
+    kind: ResourceKind,
+    row: &KindRow,
+    live: &LiveCluster,
+    now: jiff::Timestamp,
+) -> Option<KindDiagnosis> {
     let (pods, service) = match &row.object {
         KindObject::Service(service) => {
             let slices = live.companion().and_then(CompanionLists::endpoint_slices);
@@ -358,11 +363,13 @@ fn row_diagnosis(row: &KindRow, live: &LiveCluster, now: jiff::Timestamp) -> Opt
     };
     // Only a ClusterRole that grants everything and a service account read the bindings; the index
     // is built for them alone.
+    let source = live.bindings_source(kind);
+    let companion = source.as_ref().map(BindingsSource::lists);
     let lists = match &row.object {
         KindObject::Role(role) if role.namespace.is_none() && role.grants_everything() => {
-            ready_binding_lists(live.companion())
+            ready_binding_lists(companion)
         }
-        KindObject::ServiceAccount(_) => ready_binding_lists(live.companion()),
+        KindObject::ServiceAccount(_) => ready_binding_lists(companion),
         _ => None,
     };
     let bindings = lists.as_ref().map(BindingIndex::build);
