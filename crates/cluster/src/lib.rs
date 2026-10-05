@@ -83,6 +83,7 @@ mod service;
 mod service_account;
 mod stateful_set;
 mod storage_class;
+mod traffic;
 mod traffic_metrics;
 mod workload;
 mod workload_write_bodies;
@@ -212,6 +213,7 @@ pub use service::{ServicePortSummary, ServiceSummary};
 pub use service_account::{CloudIdentity, CloudProvider, ServiceAccountSummary};
 pub use stateful_set::{ClaimTemplate, StatefulSetSummary};
 pub use storage_class::{StorageClassSummary, StorageParameter};
+pub use traffic::TrafficCounter;
 pub use traffic_metrics::{
     TrafficEnd, TrafficMetricSource, TrafficRate, TrafficReading, TrafficSourceKind,
 };

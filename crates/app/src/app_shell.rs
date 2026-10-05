@@ -78,6 +78,7 @@ use crate::permissions_view::PermissionsView;
 use crate::pod_drawer::selected_container_index;
 use crate::pod_table::PodTableDelegate;
 use crate::port_forwards::{PortForwards, StartReport};
+use crate::process_usage::{ProcessUsage, TrafficTotals};
 use crate::recent_changes::ChangeWindow;
 use crate::related_objects::{RelatedSubject, related_subject};
 use crate::resource_actions::{
@@ -463,6 +464,8 @@ pub(crate) struct AppShell {
     /// The filter of the Port Forwarding page.
     forward_filter: Entity<InputState>,
     _forward_subscriptions: Vec<Subscription>,
+    /// The app's own CPU, memory and network use, at the right end of the status bar (spec 0054).
+    usage: Entity<ProcessUsage>,
     /// `--screen port-forwards` and its dialogs: the list holds fixed rows, which neither the
     /// presets nor a cluster may replace.
     #[cfg(feature = "screenshot")]
@@ -654,6 +657,8 @@ impl AppShell {
         let launch_filter = options.filter;
         let launch_select = options.select;
         let port_forwards = cx.new(|_| PortForwards::new());
+        let usage_owner = cx.weak_entity();
+        let usage = cx.new(|cx| ProcessUsage::new(usage_owner, cx));
         let forward_filter =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter targets and clusters"));
         let forward_subscriptions = vec![
@@ -726,6 +731,7 @@ impl AppShell {
             forward_starts: port_forward_open::ForwardStarts::default(),
             forward_filter,
             _forward_subscriptions: forward_subscriptions,
+            usage,
             #[cfg(feature = "screenshot")]
             forward_fixture: options.screen.is_port_forward_fixture(),
             #[cfg(feature = "screenshot")]
@@ -1425,6 +1431,11 @@ impl AppShell {
             Some(_) => KubeconfigState::Loaded,
             None => KubeconfigState::Failed(catalog.failure_text()),
         }
+    }
+
+    /// The status bar items for the app's own CPU, memory and network use.
+    pub(crate) fn usage(&self) -> &Entity<ProcessUsage> {
+        &self.usage
     }
 
     /// The session of the open cluster: what the screens read.
@@ -3245,6 +3256,15 @@ impl AppShell {
             }
             _ => {}
         }
+    }
+
+    /// The bytes the open cluster's client has sent and received; `None` without a live cluster.
+    pub(crate) fn traffic(&self, cx: &App) -> Option<TrafficTotals> {
+        let counter = self.live(cx)?.traffic();
+        Some(TrafficTotals {
+            received: counter.received(),
+            sent: counter.sent(),
+        })
     }
 
     /// The live data of the primary cluster.

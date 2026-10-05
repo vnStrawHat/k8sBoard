@@ -14,6 +14,7 @@ use {
     crate::app_shell::AppShell,
     gpui_kit::component::WindowExt as _,
     gpui_kit::test::TestWindowExt as _,
+    gpui_kit::{InputEvent as _, MouseMoveEvent},
     std::{cell::Cell, path::PathBuf, rc::Rc, time::Duration},
 };
 
@@ -30,6 +31,9 @@ const MIN_KUBELET_TICKS: u64 = 4;
 /// Animations and the first frame after the screen setup need a moment before capture.
 #[cfg(feature = "screenshot")]
 const SETTLE_DELAY: Duration = Duration::from_millis(300);
+/// The kit shows a tooltip 500 ms after the pointer rests on its item.
+#[cfg(feature = "screenshot")]
+const TOOLTIP_DELAY: Duration = Duration::from_millis(900);
 
 /// The pod the drawer screens open: the first one with at least two containers, so the
 /// Containers tab has something to choose from, else the first row.
@@ -656,6 +660,24 @@ async fn capture_when_settled(
         })?;
         cx.background_executor().timer(SETTLE_DELAY).await;
     }
+    if let Some(position) = hover_position() {
+        // A tooltip shows after the pointer rests on its item; the kit waits `SHOW_DELAY` for it.
+        shot.update(cx, |_, window, cx| {
+            window.render_frame(cx);
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        })?;
+        cx.background_executor().timer(TOOLTIP_DELAY).await;
+        shot.update(cx, |_, window, cx| window.render_frame(cx))?;
+    }
     shot.update(cx, |_, window, _| window.refresh())?;
     cx.background_executor().timer(POLL_INTERVAL).await;
 
@@ -692,6 +714,18 @@ async fn capture_when_settled(
         eprintln!("screenshot saved after timeout (screen not settled)");
         Ok(ScreenshotOutcome::TimedOut)
     }
+}
+
+/// `K8SBOARD_SCREENSHOT_HOVER=x,y`: where the pointer rests before the capture, in window pixels,
+/// so a tooltip shows in the shot. Nothing without the variable.
+#[cfg(feature = "screenshot")]
+fn hover_position() -> Option<gpui_kit::Point<gpui_kit::Pixels>> {
+    let spec = std::env::var("K8SBOARD_SCREENSHOT_HOVER").ok()?;
+    let (x, y) = spec.split_once(',')?;
+    Some(gpui_kit::point(
+        gpui_kit::px(x.trim().parse().ok()?),
+        gpui_kit::px(y.trim().parse().ok()?),
+    ))
 }
 
 /// Moves the active log tab of the main window to its own window, and waits for that window to

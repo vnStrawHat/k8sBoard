@@ -508,17 +508,27 @@ impl IssueFeeds {
     /// The watches the engine runs: the Warning events and the condition feeds, each over the
     /// namespaces of its scope (`namespaces` for the events).
     pub(crate) fn watch_count(&self, namespaces: usize) -> usize {
+        self.watched(namespaces)
+            .iter()
+            .map(|(_, count)| count)
+            .sum()
+    }
+
+    /// Each running watch of the engine with its kind name, so the status bar lists what the
+    /// count counts.
+    pub(crate) fn watched(&self, namespaces: usize) -> Vec<(&'static str, usize)> {
         let events = if self.is_watching_events() {
             namespaces
         } else {
             0
         };
-        events
-            + self
-                .conditions
-                .iter()
-                .map(ConditionFeed::watches)
-                .sum::<usize>()
+        let conditions = self
+            .conditions
+            .iter()
+            .map(|feed| (feed.kind.label(), feed.watches()));
+        std::iter::once(("Events (Warning)", events))
+            .chain(conditions)
+            .collect()
     }
 
     /// The condition feed of `kind`, read only.

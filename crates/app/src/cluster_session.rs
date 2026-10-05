@@ -13,7 +13,7 @@ use cluster::{
     MetricsSourceError, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, ObjectKind,
     PersistentVolumeSummary, PodSummary, ProxyChoice, ProxyUrlError, RbacSnapshot,
     ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, SourceCheck,
-    StorageClassSummary, TrafficMetricSource, WatchUpdate,
+    StorageClassSummary, TrafficCounter, TrafficMetricSource, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{App, Context, Task};
@@ -43,6 +43,7 @@ use crate::topology_feeds::{
     FeedStart, SubjectChange, TopologyFeed, TopologyFeeds, TopologySubject, feed_plan,
     subject_change,
 };
+use crate::watched_kinds::{WatchedKind, merge_watched};
 use crate::write_guard::{ClusterGuard, WriteLock};
 
 /// The next connection generation. One counter for the whole run, so a session that replaces another
@@ -524,6 +525,27 @@ impl CompanionLists {
                         .as_ref()
                         .is_some_and(LiveList::is_loading)
             }
+        }
+    }
+
+    /// The kinds the companion watches, with how many watches each takes (the same watches as
+    /// `watches`).
+    fn watched(&self, namespaces: usize) -> Vec<(&'static str, usize)> {
+        match self {
+            Self::EndpointSlices(_) => vec![("EndpointSlices", namespaces)],
+            Self::PersistentVolumes(_) => vec![(ResourceKind::PersistentVolumes.label(), 1)],
+            Self::Ingresses(_) => vec![(ResourceKind::Ingresses.label(), namespaces)],
+            Self::TlsSecrets(_) => vec![(ResourceKind::Secrets.label(), namespaces)],
+            Self::Bindings {
+                cluster_role_bindings,
+                ..
+            } => vec![
+                (ResourceKind::RoleBindings.label(), namespaces),
+                (
+                    ResourceKind::ClusterRoleBindings.label(),
+                    usize::from(cluster_role_bindings.is_some()),
+                ),
+            ],
         }
     }
 
@@ -2451,6 +2473,11 @@ impl ClusterSession {
 }
 
 impl LiveCluster {
+    /// The byte counters of this cluster's API client.
+    pub(crate) fn traffic(&self) -> TrafficCounter {
+        self.connection.traffic()
+    }
+
     /// Starts the change feeds unless a known review denies listing events.
     fn start_change_events(&mut self, runtime: &ClusterRuntime, cx: &mut Context<ClusterSession>) {
         self.change_events = Some(if is_change_feed_denied(&self.access) {
@@ -2615,6 +2642,54 @@ impl LiveCluster {
             },
             topology: self.topology.as_ref().map_or(0, TopologyFeeds::open_count),
         })
+    }
+
+    /// The kinds behind `watch_count`, by name: the same watches, listed. The totals match:
+    /// `watched_kinds` counts sum to `watch_count`.
+    pub(crate) fn watched_kinds(&self) -> Vec<WatchedKind> {
+        let namespaces = scope_multiplicity(&self.scope);
+        let explorer = self
+            .explorer
+            .as_ref()
+            .filter(|explorer| explorer.is_watching())
+            .map(|explorer| {
+                (
+                    explorer.kind.label(),
+                    explorer_watches(explorer.kind, namespaces),
+                )
+            });
+        let companion = self
+            .companion()
+            .into_iter()
+            .flat_map(|lists| lists.watched(namespaces));
+        let change_events = match self.change_events {
+            Some(ChangeEvents::Live { .. }) => namespaces,
+            Some(ChangeEvents::Denied) | None => 0,
+        };
+        let topology = self.topology.iter().flat_map(|topology| {
+            topology
+                .feeds
+                .iter()
+                .filter(|feed| feed.is_open())
+                .map(|feed| (feed.kind.label(), 1))
+        });
+        merge_watched(
+            [
+                ("Namespaces", 1),
+                ("Nodes", 1),
+                ("Pods", namespaces),
+                (ResourceKind::Crds.label(), usize::from(self.crds.is_some())),
+                ("Object events", usize::from(self.object_events.is_some())),
+                ("Related objects", usize::from(self.related.is_some())),
+                ("Rollout events", change_events),
+                ("Rescale events", change_events),
+            ]
+            .into_iter()
+            .chain(explorer)
+            .chain(companion)
+            .chain(self.issue_feeds.watched(namespaces))
+            .chain(topology),
+        )
     }
 
     /// The companion lists of the explorer, when it runs a companion watch.

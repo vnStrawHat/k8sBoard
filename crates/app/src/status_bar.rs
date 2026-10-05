@@ -3,12 +3,14 @@ use std::time::Duration;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
-    App, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
+    AnyElement, App, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
 };
 
 use crate::app_shell::{AppShell, Screen};
 use crate::cluster_session::{ClusterSession, SessionPhase, latency_millis};
+use crate::status_tooltip::{Section, table_tooltip};
+use crate::watched_kinds::{WatchedKind, watched_row};
 
 /// What the first status bar slot says about the live updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,24 +63,52 @@ pub(crate) fn status_bar(
         WatchState::Interrupted => ("Live updates interrupted".to_owned(), Some(theme.warning)),
         WatchState::Disconnected => ("Disconnected".to_owned(), Some(theme.danger)),
     };
+    let watched = match state {
+        WatchState::Watching(_) => session
+            .and_then(ClusterSession::live)
+            .map(|live| live.watched_kinds()),
+        _ => None,
+    };
     let version = session
         .and_then(ClusterSession::live)
         .map(|live| api_text(&live.server_version.git_version, live.api_latency));
     let user = session
         .and_then(ClusterSession::user)
         .map(|user| format!("user: {user}"));
-    let mut bar = StatusBar::new().left(watch_slot(text, dot));
-    if let Some(version) = version {
-        bar = bar.left(version);
-    }
-    if let Some(user) = user {
-        bar = bar.left(user);
-    }
+    let mut items = vec![watch_slot(text, dot, watched)];
+    items.extend(version.map(IntoElement::into_any_element));
+    items.extend(user.map(IntoElement::into_any_element));
     let forwards = shell.running_forward_count(cx);
     if forwards > 0 {
-        bar = bar.left(forwards_slot(forwards, handle));
+        items.push(forwards_slot(forwards, handle).into_any_element());
     }
-    bar.right(format!("k8sBoard {}", env!("CARGO_PKG_VERSION")))
+    let mut bar = StatusBar::new();
+    for item in separated(items, separator_color(cx)) {
+        bar = bar.left(item);
+    }
+    bar.right(shell.usage().clone())
+}
+
+/// `items` with a vertical rule between each pair.
+fn separated(items: Vec<AnyElement>, color: Hsla) -> Vec<AnyElement> {
+    let mut separated = Vec::with_capacity(items.len() * 2);
+    for (index, item) in items.into_iter().enumerate() {
+        if index > 0 {
+            separated.push(status_separator(color).into_any_element());
+        }
+        separated.push(item);
+    }
+    separated
+}
+
+/// The color of the rules between status bar items: muted text, softened.
+pub(crate) fn separator_color(cx: &App) -> Hsla {
+    cx.theme().muted_foreground.opacity(0.4)
+}
+
+/// The rule between two status bar items; the CPU and network items use the same one.
+pub(crate) fn status_separator(color: Hsla) -> impl IntoElement {
+    div().w_px().h_3().flex_none().bg(color)
 }
 
 /// `⇄ 3 port-forwards`; a click opens the Port Forwarding page.
@@ -109,12 +139,28 @@ fn api_text(git_version: &str, latency: Duration) -> String {
     format!("API {git_version} · {} ms", latency_millis(latency))
 }
 
-fn watch_slot(text: String, dot: Option<Hsla>) -> impl IntoElement {
-    h_flex()
+/// The dot and text of the live state; while watching, hovering lists the watched kinds.
+fn watch_slot(text: String, dot: Option<Hsla>, watched: Option<Vec<WatchedKind>>) -> AnyElement {
+    let slot = h_flex()
+        .id("status-watching")
         .gap_1()
         .items_center()
         .children(dot.map(|color| div().size_2().rounded_full().bg(color)))
-        .child(text)
+        .child(text);
+    match watched {
+        Some(kinds) => slot
+            .tooltip(table_tooltip(watched_sections(&kinds)))
+            .into_any_element(),
+        None => slot.into_any_element(),
+    }
+}
+
+/// The tooltip table of the watching slot: one row per kind, with `×N` for several watches.
+fn watched_sections(kinds: &[WatchedKind]) -> Vec<Section> {
+    vec![Section {
+        title: "Watched resources",
+        rows: kinds.iter().map(watched_row).collect(),
+    }]
 }
 
 #[cfg(test)]
@@ -142,5 +188,26 @@ mod tests {
             "API v1.29.5 · 1 ms"
         );
         assert_eq!(latency_millis(Duration::ZERO), 1);
+    }
+
+    #[test]
+    fn the_watching_tooltip_lists_each_kind_with_its_multiplier() {
+        let kinds = [
+            WatchedKind {
+                name: "Nodes",
+                count: 1,
+            },
+            WatchedKind {
+                name: "Pods",
+                count: 3,
+            },
+        ];
+        assert_eq!(
+            watched_sections(&kinds),
+            vec![Section {
+                title: "Watched resources",
+                rows: vec![("Nodes", String::new()), ("Pods", "×3".to_owned())],
+            }]
+        );
     }
 }

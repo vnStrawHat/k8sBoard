@@ -13,6 +13,7 @@ use crate::kubeconfig::{Kubeconfig, KubeconfigError};
 use crate::namespace::NamespaceScope;
 use crate::object_write::{ALLOW_WRITES_VARIABLE, WritePolicy};
 use crate::proxy::{ProxyChoice, ProxyUrlError};
+use crate::traffic::TrafficCounter;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -29,6 +30,7 @@ pub struct ClusterConnection {
     context: String,
     default_namespace: String,
     write_policy: WritePolicy,
+    traffic: TrafficCounter,
 }
 
 /// Server version as reported by `GET /version`.
@@ -169,8 +171,10 @@ impl ClusterConnection {
         }
         // No read timeout: watches (0002) need long reads.
         let default_namespace = config.default_namespace.clone();
-        let client =
-            kube::Client::try_from(config).map_err(|error| invalid_config(&name, error))?;
+        let traffic = TrafficCounter::default();
+        let builder = kube::client::ClientBuilder::try_from(config)
+            .map_err(|error| invalid_config(&name, error))?;
+        let client = traffic.client(builder);
         // Debug builds (every agent run) cannot write unless a human sets the variable, and the
         // screenshot build cannot write at all.
         let write_policy = WritePolicy::of_build(
@@ -183,6 +187,7 @@ impl ClusterConnection {
             context: name,
             default_namespace,
             write_policy,
+            traffic,
         })
     }
 
@@ -194,7 +199,13 @@ impl ClusterConnection {
             context: context.to_owned(),
             default_namespace: "default".to_owned(),
             write_policy,
+            traffic: TrafficCounter::default(),
         }
+    }
+
+    /// The bytes this connection has sent and received so far; clones of the counter share the totals.
+    pub fn traffic(&self) -> TrafficCounter {
+        self.traffic.clone()
     }
 
     pub fn context(&self) -> &str {

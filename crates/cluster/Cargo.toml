@@ -32,19 +32,19 @@ http = "1"
 # The metrics source query string and its capped body read (spec 0048); both already in Cargo.lock.
 form_urlencoded = "1"
 http-body-util = "0.1"
-# Only for the `test-support` feature: the fake transport. Already in Cargo.lock.
-tower = { version = "0.5", default-features = false, features = ["util"], optional = true }
+# The traffic counting layer (spec 0054) and the fake transport; already in Cargo.lock.
+tower = { version = "0.5", default-features = false, features = ["util"] }
+# The body size hint of a request (spec 0054); already in Cargo.lock.
+http-body = "1"
 
 [features]
 # Set by the app's screenshot build: every connection refuses writes, whatever the environment says.
 block-writes = []
 # A fake API server for the tests of other crates. Never enabled by a build of the app itself.
-test-support = ["dep:tower"]
+test-support = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-# The fake transport behind `fake_api`; already in Cargo.lock.
-tower = { version = "0.5", default-features = false, features = ["util"] }
 
 [lints]
 workspace = true
