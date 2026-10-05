@@ -133,6 +133,10 @@ impl LogBuffer {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "LogBuffer")
+    )]
     pub(crate) fn push(&mut self, lines: Vec<SourcedLine>) -> BufferChange {
         self.revision += 1;
         let first_new_seq = self.next_seq();

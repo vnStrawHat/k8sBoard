@@ -266,6 +266,7 @@ struct BandPlan {
 /// `pins` move nodes to the origins the user dragged them to. `previous` seeds the order, the
 /// offsets of the columns, and the band-columns from an earlier layout of the same namespace and
 /// grouping, and skips the sweeps; without it the order comes from sorting and the sweeps.
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 pub(crate) fn layout(
     graph: &TopologyGraph,
     group_by: GroupBy,

@@ -753,6 +753,10 @@ impl AppShell {
     }
 
     /// The first matching state of the priority list in the shell-layout spec.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "AppShell")
+    )]
     fn render_body(&self, cx: &Context<Self>) -> AnyElement {
         // The forwards are a local list: they show with no cluster, and while the kubeconfig loads.
         if self.screen == Screen::PortForwarding {
@@ -904,6 +908,10 @@ impl AppShell {
 
     /// An overlay on the workspace only, so it never covers the title bar, the sidebar, or
     /// the status bar. `None` when nothing is selected or the subject is not in the list.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "AppShell")
+    )]
     fn render_drawer(&self, cx: &Context<Self>) -> Option<AnyElement> {
         if self.screen == Screen::PortForwarding {
             return self.render_port_forward_drawer(cx);

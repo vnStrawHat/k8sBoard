@@ -15,6 +15,14 @@ path = "src/main.rs"
 # Dev-only: lets `--screenshot` render a window to a PNG. Never a default feature.
 screenshot = ["gpui-kit/test-support", "k8sboard-cluster/block-writes"]
 
+# Function-level time profiling with `hotpath` (spec 0055). Developer-only and off by default; see
+# docs/specs/0055-hotpath-profiling/README.md. The report goes to stdout or to `HOTPATH_OUTPUT_PATH`;
+# `HOTPATH_SHUTDOWN_MS=<ms>` writes it and exits after that time.
+hotpath-profiling = ["dep:hotpath", "hotpath/hotpath", "k8sboard-cluster/hotpath-profiling"]
+# The same sites, reporting bytes and allocation count instead of time. hotpath's counting
+# allocator becomes the global allocator.
+hotpath-profiling-alloc = ["hotpath-profiling", "hotpath/hotpath-alloc"]
+
 [dependencies]
 gpui-kit.workspace = true
 anyhow.workspace = true
@@ -34,6 +42,7 @@ oneterm-vt.workspace = true
 similar.workspace = true
 notify.workspace = true
 sysinfo.workspace = true
+hotpath = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

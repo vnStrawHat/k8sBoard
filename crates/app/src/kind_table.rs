@@ -387,6 +387,10 @@ impl FilteredTable for KindTableDelegate {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "KindTableDelegate")
+    )]
     fn rebuild_view(&mut self, cx: &App) -> bool {
         let Some(kind) = self.kind else {
             return false;

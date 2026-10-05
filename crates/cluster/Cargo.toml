@@ -36,8 +36,11 @@ http-body-util = "0.1"
 tower = { version = "0.5", default-features = false, features = ["util"] }
 # The body size hint of a request (spec 0054); already in Cargo.lock.
 http-body = "1"
+hotpath = { workspace = true, optional = true }
 
 [features]
+# Measured sites for `hotpath` (spec 0055); only `k8sboard`'s `hotpath-profiling` turns measuring on.
+hotpath-profiling = ["dep:hotpath"]
 # Set by the app's screenshot build: every connection refuses writes, whatever the environment says.
 block-writes = []
 # A fake API server for the tests of other crates. Never enabled by a build of the app itself.

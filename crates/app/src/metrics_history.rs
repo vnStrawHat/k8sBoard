@@ -155,6 +155,10 @@ impl PodUsageHistory {
     /// Adds one tick. A pod or container missing from `sample` reads `None` for it, and a
     /// series that stays missing is freed after an hour and dropped after a day. `pods` is the
     /// current pods list, for the controllers and the OOM kills; it may lag `sample`.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "PodUsageHistory")
+    )]
     pub(crate) fn record(
         &mut self,
         at: jiff::Timestamp,

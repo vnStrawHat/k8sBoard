@@ -242,6 +242,7 @@ where
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "Batcher"))]
     fn handle_event(&mut self, event: Event<K>) {
         let has_changed = match event {
             // The watcher emits `Init` before every list attempt, including retries of a
@@ -297,6 +298,7 @@ where
         self.deadline = None;
     }
 
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "Batcher"))]
     fn flush_snapshot(&mut self) {
         self.outbox
             .push_back(WatchUpdate::Snapshot(self.store.snapshot()));
@@ -456,6 +458,7 @@ impl<T: Clone> Merger<T> {
     /// Emits the merged snapshot when something changed, every input has settled, and at
     /// least one holds a snapshot, then repeats the failures still unresolved. Otherwise the
     /// change stays pending for a later input.
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "Merger"))]
     fn flush_if_ready(&mut self) {
         self.deadline = None;
         let is_settled = self

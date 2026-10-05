@@ -1197,6 +1197,7 @@ impl ResourceKind {
 }
 
 /// Maps a snapshot to rows and passes a failure through.
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 fn rows<T>(update: WatchUpdate<T>, row: impl Fn(&T) -> KindRow) -> WatchUpdate<KindRow> {
     match update {
         WatchUpdate::Snapshot(items) => WatchUpdate::Snapshot(items.iter().map(row).collect()),

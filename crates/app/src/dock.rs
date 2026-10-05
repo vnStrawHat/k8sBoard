@@ -820,6 +820,7 @@ impl Dock {
 }
 
 impl Render for Dock {
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "Dock"))]
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_minimized = self.mode == DockMode::Minimized;

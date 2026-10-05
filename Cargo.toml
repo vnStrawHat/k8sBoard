@@ -43,6 +43,9 @@ regex = "1"
 resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts"] }
 # The terminal engine for pod shells (spec 0036); not on crates.io, so a rev pin is the only reproducible form.
 oneterm-vt = { git = "https://github.com/vnStrawHat/OneTerm", rev = "e2f9c24bc747b26dbfe0e338e66f1c41a3ac30d8", default-features = false }
+# Function-level time and allocation profiling (spec 0055). Developer-only: reached only through the
+# `hotpath-profiling` feature of `k8sboard`, which fans out to the crates that carry measured sites.
+hotpath = "0.26"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

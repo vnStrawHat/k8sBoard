@@ -276,6 +276,7 @@ const ROW_ACTIONS: [RowAction; 26] = [
 
 /// Everything the palette may show, in source order, from in-memory state only. `scan_loaded_rows`
 /// states the cost of one rebuild.
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 pub(crate) fn palette_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
     let scan = scan_loaded_rows(input);
     let mut entries = Vec::new();

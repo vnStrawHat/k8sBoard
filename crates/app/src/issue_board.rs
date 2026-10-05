@@ -307,6 +307,10 @@ impl IssueBoard {
     }
 
     /// Runs the pipeline and says what changed.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "IssueBoard")
+    )]
     pub(crate) fn refresh(&mut self, inputs: &IssueInputs, coverage: Coverage) -> IssueChange {
         let now = inputs.now;
         let groups = dedupe(group_findings(evaluate(inputs)));

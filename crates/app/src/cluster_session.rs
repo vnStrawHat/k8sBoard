@@ -1096,6 +1096,10 @@ pub(crate) enum LiveList<T> {
 }
 
 impl<T> LiveList<T> {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "LiveList")
+    )]
     pub(crate) fn apply(&mut self, update: WatchUpdate<T>) {
         match update {
             WatchUpdate::Snapshot(items) => {

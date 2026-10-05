@@ -1781,6 +1781,10 @@ impl TopologyView {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TopologyView")
+    )]
     fn render_canvas(
         &self,
         graph: Rc<TopologyGraph>,
@@ -2132,6 +2136,10 @@ impl TopologyView {
 }
 
 impl Render for TopologyView {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TopologyView")
+    )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let scale_factor = window.scale_factor();
         if self._activation.is_none() {

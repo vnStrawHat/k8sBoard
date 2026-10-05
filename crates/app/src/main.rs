@@ -67,6 +67,8 @@ mod kubelet_history;
 mod kubelet_metrics;
 mod launch_options;
 mod line_matcher;
+#[cfg(feature = "hotpath-profiling-alloc")]
+mod live_heap;
 mod live_sections;
 mod log_buffer;
 mod log_filter;
@@ -233,7 +235,16 @@ fn main() -> ExitCode {
     }
 }
 
+/// Under `hotpath-profiling` (spec 0055) this is the profiler's scope: the report is written when
+/// `run` returns, or after `HOTPATH_SHUTDOWN_MS`. Under `hotpath-profiling-alloc` the attribute
+/// also declares the global allocator: hotpath's counting allocator around the live-heap tracker.
+#[cfg_attr(
+    feature = "hotpath-profiling",
+    hotpath::main(allocator = live_heap::LiveHeapAllocator, percentiles = [50, 95, 99], limit = 60)
+)]
 fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
+    #[cfg(feature = "hotpath-profiling-alloc")]
+    live_heap::report_every(Duration::from_secs(5));
     // The runtime lives on this stack frame until the UI loop ends; GPUI only gets a handle.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(RUNTIME_WORKER_THREADS)

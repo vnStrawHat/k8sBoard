@@ -105,6 +105,7 @@ impl EdgeRoute {
 
 /// The route of every edge of `edges`, in edge order: the graph's own, or the 0049 `Calls` edges
 /// routed over the same cards.
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 pub(crate) fn route_edges(edges: &[TopologyEdge], rects: &[GraphRect]) -> Vec<EdgeRoute> {
     edges
         .iter()

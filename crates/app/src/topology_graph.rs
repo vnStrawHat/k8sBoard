@@ -454,6 +454,7 @@ fn problem_tone(tone: StatusTone) -> Option<StatusTone> {
 
 /// The graph of `inputs`: nodes, edges, checks, then the filters. Nodes are sorted by `NodeId` and
 /// edges by `(from, to, relation)`, so the input order does not change the result.
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 pub(crate) fn build_topology(inputs: &TopologyInputs) -> TopologyBuild {
     let namespace_pods: Vec<&PodSummary> = inputs
         .pods

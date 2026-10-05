@@ -306,6 +306,10 @@ impl KubeletHistory {
     /// Adds one tick for the nodes of `round`. A series with no rate this tick reads `None`; a
     /// node that failed adds nothing. Only pods in `scope` are stored. `pods` is the current pods
     /// list, for host-network flags and controllers; it may lag `round`.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "KubeletHistory")
+    )]
     pub(crate) fn record(
         &mut self,
         at: jiff::Timestamp,

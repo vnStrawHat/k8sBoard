@@ -564,6 +564,10 @@ pub(crate) struct AppShell {
 }
 
 impl AppShell {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "AppShell")
+    )]
     pub(crate) fn new(options: LaunchOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let secret_value_access = value_access(&options);
         let catalog = CatalogHandle::of(cx);
@@ -4636,6 +4640,10 @@ impl AppShell {
 }
 
 impl Render for AppShell {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "AppShell")
+    )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.fit_table_widths(window, cx);
         self.sync_monitor_source(cx);

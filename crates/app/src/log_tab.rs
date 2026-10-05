@@ -1421,6 +1421,7 @@ pub(crate) enum LogTabEvent {
 impl EventEmitter<LogTabEvent> for LogTab {}
 
 impl Render for LogTab {
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "LogTab"))]
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let stream_failure = match self.phase() {
             TabPhase::Failed { message } => Some(("log-error", "Cannot read the logs", message)),

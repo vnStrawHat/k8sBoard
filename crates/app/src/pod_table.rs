@@ -263,6 +263,10 @@ impl FilteredTable for PodTableDelegate {
         self.all_checked = self.view.all_checked(&rows);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "PodTableDelegate")
+    )]
     fn rebuild_view(&mut self, cx: &App) -> bool {
         let rows = self.rows(cx);
         self.view

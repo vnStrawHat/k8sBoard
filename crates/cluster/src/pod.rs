@@ -236,6 +236,7 @@ impl ClusterConnection {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
     let display = pod_display(pod);
     PodSummary {
