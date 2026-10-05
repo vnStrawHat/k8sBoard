@@ -120,7 +120,9 @@ fn attention_section(text: &mut String, inputs: &ReportInputs) {
                     &issue.reason,
                     &object_line(issue),
                     &message_line(&issue.cause),
-                    &issue.since.to_string(),
+                    &issue
+                        .onset
+                        .map_or_else(|| "—".to_owned(), |onset| onset.to_string()),
                 ],
             );
         }

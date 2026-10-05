@@ -442,6 +442,7 @@ fn since_prefers_onset_over_first_seen() {
     refresh(&mut board, &inputs_at(&pods, &[], NOW - 60));
     refresh(&mut board, &inputs(&pods));
     assert_eq!(board.issues[0].since, ago(900));
+    assert_eq!(board.issues[0].onset, Some(ago(900)));
 }
 
 /// The pod of a Deployment that is unschedulable, with or without an onset.
@@ -678,6 +679,8 @@ fn first_seen_kept_while_events_reload() {
     let mut board = IssueBoard::default();
     refresh(&mut board, &with_events(NOW));
     assert_eq!(board.issues[0].since, at(NOW));
+    // The Age column has nothing to show: the first sighting is not when the problem began.
+    assert_eq!(board.issues[0].onset, None);
     // The events watch restarts after a scope change.
     refresh(&mut board, &inputs_at(&[], &[], NOW + 30));
     assert!(board.issues.is_empty());

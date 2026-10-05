@@ -37,7 +37,7 @@ impl TableRow for Issue { .. }  // namespace = shown.namespace, name = shown.nam
 | 4 | Namespace | 140 | `—` for cluster objects | `Text` |
 | 5 | Cause | fill | one line (`message_line`), full text as tooltip | `Text` |
 | 6 | Count | 64, right | `count` (`—` when 1) | `Number` |
-| 7 | Age | 70 | `format_age(since, now)` | `Age` |
+| 7 | Age | 70 | `format_age(onset, now)`; `—` when no rule knows the onset (never the first-seen time) | `Age` |
 
 Default order = the board order (severity, oldest, object); a column sort replaces it (0009). The quick filter matches Reason, Kind, Object, Namespace, and Cause text, which covers "by kind" and "by reason".
 

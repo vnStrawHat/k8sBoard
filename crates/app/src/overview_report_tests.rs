@@ -26,6 +26,7 @@ fn issue(name: &str, cause: &str) -> Issue {
         container: Some("api".to_owned()),
         count: 1,
         since: "2024-05-01T11:00:00Z".parse().unwrap(),
+        onset: Some("2024-05-01T11:00:00Z".parse().unwrap()),
         action: IssueAction::Open,
     }
 }

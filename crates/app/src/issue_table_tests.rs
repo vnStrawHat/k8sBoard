@@ -22,6 +22,7 @@ fn issue() -> Issue {
         container: Some("api".to_owned()),
         count: 3,
         since: at(1_000),
+        onset: Some(at(1_000)),
         action: IssueAction::ViewLogs {
             container: Some("api".to_owned()),
         },
@@ -168,4 +169,13 @@ fn long_kinds_show_short_and_still_match_in_full() {
     let columns = ISSUE_COLUMNS.len();
     assert!(matches(&hpa, &filter("hpa"), columns));
     assert!(matches(&hpa, &filter("autoscaler"), columns));
+}
+
+#[test]
+fn an_unknown_onset_has_no_age_and_sorts_last() {
+    let unknown = Issue {
+        onset: None,
+        ..issue()
+    };
+    assert!(matches!(unknown.value(AGE), CellValue::Age(None)));
 }

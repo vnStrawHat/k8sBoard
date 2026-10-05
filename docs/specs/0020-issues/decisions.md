@@ -31,7 +31,7 @@
 | 18 | Event issues are dropped when their object, or a pod of a group, already has an issue, or the Pod/Node is gone | events restate state the pod rules explain |
 | 19 | Two severities, **Critical** (Bad) and **Warning** (Warn); kind rules map tone → severity; HPA, PDB, quota capped at Warning | W3 shows `pill bad` and `pill warn` only; limits are constraints, not outages |
 | 20 | **Grace is generic**: `Finding.grace`; the board records first-seen for every finding but shows it only once `now − since ≥ grace`. A held finding still takes its object's slot (no fall-through) | one mechanism for every transient state; tests are one table |
-| 21 | Age `since` = the rule's onset (condition `changed_at`, event `first_seen`, the pod `Ready` transition for crash and exit rules), else first-seen | real onset when the API has it; `finished_at` is the last exit, not the onset, except for restarts |
+| 21 | Age `since` = the rule's onset (condition `changed_at`, event `first_seen`, the pod `Ready` transition for crash and exit rules), else first-seen for ordering and grace only; the Age column shows `—` without a real onset | real onset when the API has it; `finished_at` is the last exit, not the onset, except for restarts |
 | 22 | The board (`first_seen`) lives in `ClusterSession`: retries and scope changes keep it; a context switch makes a new session and clears it; it does **not survive an app restart** | no persistence (decision 27); stable ages while connected |
 | 23 | Cordoned nodes, SchedulingGated pods, `NoCertificate` secrets, Services matching no pods are not issues | intentional or config hygiene; Service checks are 0022 |
 

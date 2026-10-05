@@ -159,7 +159,7 @@ impl TableRow for Issue {
                 }),
             CAUSE => CellValue::Text(Cow::Borrowed(&self.cause)),
             COUNT => CellValue::Number(i64::try_from(self.count).unwrap_or(i64::MAX)),
-            AGE => CellValue::Age(Some(self.since)),
+            AGE => CellValue::Age(self.onset),
             _ => CellValue::Absent,
         }
     }
@@ -246,13 +246,16 @@ impl IssueTableDelegate {
                     .child(count)
                     .into_any_element(),
             },
-            AGE => div()
-                .w_full()
-                .text_right()
-                .font_family(mono)
-                // Read per cell: a render has no shared clock, and a second of skew is invisible.
-                .child(format_age(Some(issue.since), jiff::Timestamp::now()))
-                .into_any_element(),
+            AGE => match issue.onset {
+                None => absent_right(cx),
+                Some(onset) => div()
+                    .w_full()
+                    .text_right()
+                    .font_family(mono)
+                    // Read per cell: a render has no shared clock, and a second of skew is invisible.
+                    .child(format_age(Some(onset), jiff::Timestamp::now()))
+                    .into_any_element(),
+            },
             _ => div().into_any_element(),
         }
     }

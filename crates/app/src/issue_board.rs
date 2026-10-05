@@ -423,6 +423,7 @@ fn issue_of(group: Grouped, since: Timestamp) -> Issue {
         subject: finding.object,
         count,
         since,
+        onset: finding.onset,
         target: shown.target(),
         shown,
         action: finding.action,

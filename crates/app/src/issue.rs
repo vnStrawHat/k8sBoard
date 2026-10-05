@@ -147,8 +147,12 @@ pub(crate) struct Issue {
     pub(crate) container: Option<String>,
     /// At least 1: the pods of a group.
     pub(crate) count: usize,
-    /// When the problem began: the rule's onset, else when it was first seen.
+    /// When the problem began, as far as the board knows: the rule's onset, else when it was first
+    /// seen. Orders the board and ends the grace; the Age column shows `onset` instead.
     pub(crate) since: jiff::Timestamp,
+    /// When the cluster says the problem began; `None` when no rule knows, so the Age column
+    /// shows nothing rather than the time k8sBoard first saw it.
+    pub(crate) onset: Option<jiff::Timestamp>,
     /// The row a click reveals; `None` when k8sBoard has no screen for `shown`.
     pub(crate) target: Option<ResourceKey>,
     pub(crate) action: IssueAction,
