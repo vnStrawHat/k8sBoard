@@ -128,6 +128,7 @@ mod revision_history;
 mod row_context;
 mod row_selection;
 mod screenshot;
+mod scroll_list;
 mod secret_clipboard;
 mod secret_rows;
 mod secret_values;

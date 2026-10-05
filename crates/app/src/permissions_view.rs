@@ -9,7 +9,6 @@ use cluster::{
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::select::{Select, SelectState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
@@ -18,8 +17,8 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, WeakEntity, Window, div, px,
+    ParentElement as _, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Task, WeakEntity, Window, div, px,
 };
 
 use crate::access_bindings::{binding_key, binding_text, role_key, role_text, subject_text};
@@ -27,13 +26,19 @@ use crate::access_query::{QueryError, SubjectQuery, parse_request, parse_subject
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{ClusterSession, RbacState, error_text};
 use crate::permission_table::{PermissionTable, TABLE_VERBS, VerbCell, permission_table};
+use crate::scroll_list::scroll_list;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::{DialogOrigin, ResourceKey};
 use crate::who_can_view::{
     ALL_NAMESPACES, RBAC_CAVEATS, clock_text, coverage_notes, namespace_options,
 };
 
-const RESULT_MAX_HEIGHT: f32 = 300.;
+/// Every row of the matrix has this height, so the box can end on a row edge. The gap between rows
+/// is the 2 px of `gap_0p5`.
+const ROW_HEIGHT: f32 = 24.;
+const ROW_GAP: f32 = 2.;
+/// Rows (the header counts as one) the box shows before it scrolls.
+const VISIBLE_ROWS: f32 = 11.;
 const VERB_SLOT: f32 = 40.;
 const OTHER_SLOT: f32 = 80.;
 const VERB_HEADS: [&str; 8] = [
@@ -127,6 +132,7 @@ pub(crate) struct PermissionsView {
     question: Option<Result<AccessRequest, QueryError>>,
     answer: RequestState<Answer>,
     link_count: usize,
+    scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -377,6 +383,7 @@ impl PermissionsView {
             question: None,
             answer: RequestState::Idle,
             link_count: 0,
+            scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         };
         if check_now {
@@ -867,14 +874,23 @@ impl PermissionsView {
         let theme = cx.theme();
         let mono = theme.mono_font_family.clone();
         let verb_heads = VERB_HEADS.iter().map(|head| {
-            div()
+            let slot = div()
                 .w(px(VERB_SLOT))
                 .flex_none()
                 .text_center()
-                .child(*head)
-                .into_any_element()
+                .child(*head);
+            match *head {
+                // The slot is too narrow for the full verb.
+                "delcol" => slot
+                    .id("permission-head-delcol")
+                    .tooltip(|window, cx| Tooltip::new("deletecollection").build(window, cx))
+                    .into_any_element(),
+                _ => slot.into_any_element(),
+            }
         });
         let header = h_flex()
+            .h(px(ROW_HEIGHT))
+            .items_center()
             .gap_1()
             .text_xs()
             .text_color(theme.muted_foreground)
@@ -883,15 +899,27 @@ impl PermissionsView {
             .child(div().w(px(OTHER_SLOT)).flex_none().child("Other"));
         let mut rows: Vec<AnyElement> = vec![header.into_any_element()];
         for (ix, row) in table.rows.iter().enumerate() {
-            let resource = v_flex()
+            // One line, so every row has the same height: the group follows the resource and gives way
+            // first.
+            let resource = h_flex()
                 .flex_1()
                 .min_w_0()
-                .font_family(mono.clone())
-                .child(div().truncate().child(row.resource.clone()))
+                .gap_1()
+                .items_baseline()
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .max_w_full()
+                        .truncate()
+                        .font_family(mono.clone())
+                        .child(row.resource.clone()),
+                )
                 .when(shows_group(row), |resource| {
                     resource.child(
                         div()
+                            .min_w_0()
                             .truncate()
+                            .font_family(mono.clone())
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(format!(".{}", row.group)),
@@ -909,6 +937,8 @@ impl PermissionsView {
             let other = row.other_text();
             rows.push(
                 h_flex()
+                    .h(px(ROW_HEIGHT))
+                    .items_center()
                     .gap_1()
                     .text_sm()
                     .child(resource)
@@ -920,6 +950,8 @@ impl PermissionsView {
         for row in &table.url_rows {
             rows.push(
                 h_flex()
+                    .h(px(ROW_HEIGHT))
+                    .items_center()
                     .gap_1()
                     .text_sm()
                     .child(
@@ -930,19 +962,32 @@ impl PermissionsView {
                             .font_family(mono.clone())
                             .child(row.url.clone()),
                     )
-                    .child(div().truncate().child(row.verbs.join(", ")))
+                    .child(
+                        div()
+                            .w(px(OTHER_SLOT))
+                            .flex_none()
+                            .truncate()
+                            .text_xs()
+                            .child(row.verbs.join(", ")),
+                    )
                     .into_any_element(),
             );
         }
         if table.hidden_rows > 0 {
-            rows.push(self.muted(format!("… {} more rows", table.hidden_rows), cx));
+            rows.push(
+                h_flex()
+                    .h(px(ROW_HEIGHT))
+                    .items_center()
+                    .child(self.muted(format!("… {} more rows", table.hidden_rows), cx))
+                    .into_any_element(),
+            );
         }
-        v_flex()
-            .max_h(px(RESULT_MAX_HEIGHT))
-            .gap_0p5()
-            .children(rows)
-            .overflow_y_scrollbar()
-            .into_any_element()
+        scroll_list(
+            "permission-matrix",
+            &self.scroll,
+            px(VISIBLE_ROWS * ROW_HEIGHT + (VISIBLE_ROWS - 1.) * ROW_GAP),
+            v_flex().gap_0p5().children(rows),
+        )
     }
 }
 

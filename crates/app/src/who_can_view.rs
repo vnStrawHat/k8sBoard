@@ -8,21 +8,21 @@ use cluster::{
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::select::{Select, SelectState};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IndexPath, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, WeakEntity, Window, div, px,
+    ParentElement as _, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, WeakEntity, Window, div, px,
 };
 
 use crate::access_bindings::{binding_key, binding_text, role_key, role_text, subject_text};
 use crate::access_query::{ParsedRequest, QueryError, QueryHint, parse_request};
 use crate::cluster_session::{ClusterSession, RbacState};
 use crate::resource_kind::ResourceKind;
+use crate::scroll_list::scroll_list;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::{DialogOrigin, ResourceKey};
 
@@ -271,6 +271,7 @@ pub(crate) struct WhoCanView {
     namespace: Entity<SelectState<Vec<String>>>,
     question: Option<Result<Asked, QueryError>>,
     link_count: usize,
+    scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -325,6 +326,7 @@ impl WhoCanView {
             namespace,
             question: None,
             link_count: 0,
+            scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         };
         if check_now {
@@ -668,14 +670,12 @@ impl Render for WhoCanView {
                 match &asked.result {
                     Some(result) => {
                         let rows = self.render_result(result, cx);
-                        body.push(
-                            v_flex()
-                                .max_h(px(RESULT_MAX_HEIGHT))
-                                .gap_1()
-                                .children(rows)
-                                .overflow_y_scrollbar()
-                                .into_any_element(),
-                        );
+                        body.push(scroll_list(
+                            "who-can-list",
+                            &self.scroll,
+                            px(RESULT_MAX_HEIGHT),
+                            v_flex().gap_1().children(rows),
+                        ));
                         if result.groups.full.len() > SCROLL_HINT_SUBJECTS {
                             body.push(self.muted("Scroll the list to see every subject.", cx));
                         }
