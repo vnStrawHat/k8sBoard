@@ -304,6 +304,9 @@ pub(crate) struct TopologyView {
     /// `--screen topology-traffic-fixture`: the pods of the fixture graph. The view then shows a
     /// fixed graph and sample and reads no feed and no source.
     fixture_pods: Option<Rc<Vec<PodSummary>>>,
+    /// `--screen topology-traffic-fixture-selected`: the node drawn as selected, since the fixture
+    /// has no session whose drawer could select it.
+    fixture_selected: Option<NodeId>,
     viewport: Viewport,
     needs_fit: bool,
     /// The first view was made for `DEFAULT_CANVAS`: it is made again once the real size is known.
@@ -352,6 +355,7 @@ impl TopologyView {
             traffic: TrafficRun::default(),
             wants_traffic: false,
             fixture_pods: None,
+            fixture_selected: None,
             viewport: Viewport::default(),
             needs_fit: true,
             fit_waits_for_size: false,
@@ -984,7 +988,7 @@ impl TopologyView {
     /// `--screen topology-traffic-fixture`: the fixed namespace of W11 with its Istio and pod
     /// network readings, in Traffic mode. Nothing is read from the cluster.
     #[cfg(feature = "screenshot")]
-    pub(crate) fn show_traffic_fixture(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn show_traffic_fixture(&mut self, is_selected: bool, cx: &mut Context<Self>) {
         use crate::topology_traffic_fixture::{
             NAMESPACE, traffic_fixture_graph, traffic_fixture_pods, traffic_fixture_sample,
         };
@@ -993,7 +997,9 @@ impl TopologyView {
         self.mode = TopologyMode::Traffic;
         self.traffic.sample = Some(Rc::new(traffic_fixture_sample()));
         let aspect = self.aspect();
-        self.install(traffic_fixture_graph(), GroupBy::Components, aspect, cx);
+        let graph = traffic_fixture_graph();
+        self.fixture_selected = is_selected.then(|| first_deployment(&graph)).flatten();
+        self.install(graph, GroupBy::Components, aspect, cx);
         cx.notify();
     }
 
@@ -1759,6 +1765,10 @@ impl TopologyView {
                 .nodes
                 .iter()
                 .position(|node| node.key.as_ref() == Some(key))
+        });
+        let selected = selected.or_else(|| {
+            let id = self.fixture_selected.as_ref()?;
+            graph.nodes.iter().position(|node| node.id == *id)
         });
         let (width, height) = self.canvas_size.unwrap_or(DEFAULT_CANVAS);
         let viewport = self.viewport;

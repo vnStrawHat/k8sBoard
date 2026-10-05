@@ -51,3 +51,9 @@ Unchanged: `MetricsEndpoint::MetricNames` (`label/__name__/values`, `start` = no
 - A pod, Service, or workload of the namespace that is not a node (ended, not delivered yet, hidden by a filter) is skipped, not counted as an outside peer; only `TrafficEnd::Outside` is.
 - A source in the `Checking` state is waited for; Traffic mode ends only for a missing, invalid, or unreachable source.
 - Istio's `source_workload` carries no kind, so a Deployment wins over a StatefulSet or DaemonSet of the same name.
+
+## Selection motion in Traffic mode
+
+- `paint_edges` used to skip the flow animation for any edge with a traffic look (`look.is_none() &&`). Now the one `is_animated` predicate (selected node, focused, text zoom) and the one frame-request path (`needs_flow_frame`: reduced motion, inactive window, nothing selected) serve both modes.
+- A solid flow breaks into the dashes of its relation (`Calls` and `Owns`: long dashes), keeping its width, color, and arrow; an idle edge keeps its dots, which march (`traffic_flow_dash`). Reduced motion shows the dashes standing still.
+- Screenshot seam: `--screen topology-traffic-fixture-selected` (screenshot builds) draws the first Deployment of the fixture as selected, with motion reduced; the view keeps it in `fixture_selected` because the fixture has no session to select through.

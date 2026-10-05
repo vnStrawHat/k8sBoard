@@ -74,7 +74,7 @@ pub(crate) fn label_anchor(route: &EdgeRoute) -> GraphPoint;
 
 ## Drawing (step 3b)
 
-- **Canvas** (`paint_edges`): iterates `graph.edges` with `layout.routes`, then `calls` with `call_routes`, reading `overlay.edges[i]`. `Hidden` not drawn; `Idle` 0.75 px, muted, dashed `(2, 4)`; `Flow` **solid** (decision 13) at its width × zoom, `tone_color(tone)` or the relation color, `Owns` flows at 60 % alpha; the arrow takes the same color. No flow animation in Traffic mode.
+- **Canvas** (`paint_edges`): iterates `graph.edges` with `layout.routes`, then `calls` with `call_routes`, reading `overlay.edges[i]`. `Hidden` not drawn; `Idle` 0.75 px, muted, dashed `(2, 4)`; `Flow` **solid** (decision 13) at its width × zoom, `tone_color(tone)` or the relation color, `Owns` flows at 60 % alpha; the arrow takes the same color. The selected node's edges animate as in Resources mode (as-built: the flow breaks into dashes, an idle edge's dots march).
 - **Labels**: small `text_xs` mono divs centered on `label_anchor(route)` (the arc-length midpoint), on the theme background with a border, at zoom ≥ `MIN_TEXT_ZOOM`, skipped when they would overlap a card.
 - **Node text** (`topology_card.rs`): rule 7.
 - **Legend** in Traffic mode: `routes to · width = req/s` (bytes only: `width = receive bytes/s per pod`), `calls`, `owns`, a Warn swatch `≥ 1% 5xx`, a Bad swatch `≥ 5% 5xx`.

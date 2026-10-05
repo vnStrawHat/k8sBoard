@@ -1227,3 +1227,11 @@ fn settings_environments_screen() {
         LaunchScreen::Settings(SettingsPage::Environments, SettingsSize::Standard)
     );
 }
+
+#[test]
+fn topology_traffic_fixture_selected_screen_parses() {
+    let screen = run_options(&["--screen", "topology-traffic-fixture-selected"]).screen;
+    assert_eq!(screen, LaunchScreen::TopologyTrafficFixtureSelected);
+    assert_eq!(screen.screen(), Screen::Topology);
+    assert!(screen.shows_topology());
+}

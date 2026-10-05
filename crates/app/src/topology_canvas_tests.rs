@@ -356,3 +356,21 @@ fn the_legend_follows_the_sources() {
             .all(|(swatch, _)| !matches!(swatch, Swatch::Relation(_)))
     );
 }
+
+#[test]
+fn a_traffic_flow_breaks_into_relation_dashes_and_an_idle_edge_keeps_its_dots() {
+    let routes = traffic_look(&flow(4., None), Relation::RoutesTo).expect("drawn");
+    assert_eq!(traffic_flow_dash(&routes, Relation::RoutesTo), (7., 4.));
+    let calls = traffic_look(&flow(4., None), Relation::Calls).expect("drawn");
+    assert_eq!(traffic_flow_dash(&calls, Relation::Calls), OWNS_FLOW_DASH);
+    let idle = traffic_look(&EdgeTraffic::Idle, Relation::Calls).expect("drawn");
+    assert_eq!(traffic_flow_dash(&idle, Relation::Calls), IDLE_DASH);
+}
+
+#[test]
+fn a_traffic_edge_flows_only_at_the_selected_node() {
+    // Traffic edges use the same predicate as resource edges: selected node, focused, text zoom.
+    assert!(is_animated(&edge(1, 2), Some(1), Some(1), 1.));
+    assert!(!is_animated(&edge(2, 3), Some(1), Some(1), 1.));
+    assert!(!is_animated(&edge(1, 2), Some(1), None, 1.));
+}

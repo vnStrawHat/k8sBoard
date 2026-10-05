@@ -819,7 +819,10 @@ impl AppShell {
         .detach();
         let is_topology = shell.screen == Screen::Topology;
         let wants_problems = options.screen == LaunchScreen::TopologyProblems;
-        let wants_selection = options.screen == LaunchScreen::TopologySelected;
+        let wants_fixture_selection =
+            options.screen == LaunchScreen::TopologyTrafficFixtureSelected;
+        let wants_selection =
+            options.screen == LaunchScreen::TopologySelected || wants_fixture_selection;
         let wants_rbac = options.screen == LaunchScreen::TopologyRbac;
         let wants_traffic = options.screen == LaunchScreen::TopologyTraffic;
         if wants_selection {
@@ -832,8 +835,8 @@ impl AppShell {
             view.select_first_deployment_once(wants_selection);
             view.start_in_traffic(wants_traffic);
             #[cfg(feature = "screenshot")]
-            if options.screen == LaunchScreen::TopologyTrafficFixture {
-                view.show_traffic_fixture(cx);
+            if options.screen == LaunchScreen::TopologyTrafficFixture || wants_fixture_selection {
+                view.show_traffic_fixture(wants_fixture_selection, cx);
             }
             view.set_visible(is_topology, cx);
         });

@@ -180,6 +180,12 @@ fn flow_dash(relation: Relation) -> (f32, f32) {
     relation_stroke(relation).dash.unwrap_or(OWNS_FLOW_DASH)
 }
 
+/// The dash of an edge that flows in Traffic mode: an idle edge keeps its dots, which then
+/// march; a solid flow breaks into the dashes of its relation (its width and color stay).
+fn traffic_flow_dash(look: &TrafficLook, relation: Relation) -> (f32, f32) {
+    look.dash.unwrap_or_else(|| flow_dash(relation))
+}
+
 /// How an edge stands out from the focused node (the hovered one, else the selected one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Emphasis {
@@ -529,8 +535,7 @@ fn paint_edges(
         };
         let emphasis = edge_emphasis(edge, paint.focus);
         let stroke = relation_stroke(edge.relation);
-        // No flow animation in Traffic mode: width is the signal there.
-        let is_flowing = look.is_none() && is_animated(edge, paint.focus, paint.selected, zoom);
+        let is_flowing = is_animated(edge, paint.focus, paint.selected, zoom);
         let extra = if emphasis == Emphasis::Focused {
             FOCUS_EXTRA_WIDTH
         } else {
@@ -572,7 +577,10 @@ fn paint_edges(
         let line_width = edge_width(graph_width + extra, zoom);
         let dash = if is_flowing {
             animated += 1;
-            let (on, off) = flow_dash(edge.relation);
+            let (on, off) = match &look {
+                Some(look) => traffic_flow_dash(look, edge.relation),
+                None => flow_dash(edge.relation),
+            };
             // Reduced motion shows the flow dashes, standing still.
             let phase = if is_motion_reduced {
                 0.

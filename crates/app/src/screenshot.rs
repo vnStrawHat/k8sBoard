@@ -1124,6 +1124,7 @@ mod tests {
             LaunchScreen::TopologySelected,
             LaunchScreen::TopologyTraffic,
             LaunchScreen::TopologyTrafficFixture,
+            LaunchScreen::TopologyTrafficFixtureSelected,
         ] {
             assert!(!is_screen_settled(screen, &pending));
             assert!(is_screen_settled(screen, &input(TargetState::Loaded, true)));

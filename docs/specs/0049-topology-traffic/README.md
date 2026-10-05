@@ -11,7 +11,7 @@ Status: **draft 2026-10-04** against main `94e9c21`, amended after the opus advi
 
 ## Non-goals
 
-**Later sources** (each one row of the [traffic-sources.md](traffic-sources.md) table when a cluster needs it): OpenTelemetry service graph, ingress-nginx, Kong, OpenTelemetry span metrics, Linkerd, Hubble/Cilium, Pixie. Also: a window picker or history replay; objects outside the namespace as nodes (counted only); traffic in Overview, Issues, or drawers; persisting the mode; animated traffic edges; multi-namespace graphs (0022); edge hit-testing (0050 non-goal).
+**Later sources** (each one row of the [traffic-sources.md](traffic-sources.md) table when a cluster needs it): OpenTelemetry service graph, ingress-nginx, Kong, OpenTelemetry span metrics, Linkerd, Hubble/Cilium, Pixie. Also: a window picker or history replay; objects outside the namespace as nodes (counted only); traffic in Overview, Issues, or drawers; persisting the mode; multi-namespace graphs (0022); edge hit-testing (0050 non-goal).
 
 ## Decisions
 

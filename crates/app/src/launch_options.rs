@@ -27,7 +27,7 @@ Options:
   --color-theme default|zed-one
                          colour family (default: the saved one, else zed-one)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|topology-traffic|topology-traffic-fixture|pod-drawer|pod-containers|pod-events|pod-monitor|pod-monitor-source-fixture|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|topology-traffic|topology-traffic-fixture|topology-traffic-fixture-selected|pod-drawer|pod-containers|pod-events|pod-monitor|pod-monitor-source-fixture|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
@@ -60,6 +60,9 @@ pub(crate) enum LaunchScreen {
     /// `--screen topology-selected`: the first Deployment selected, its drawer open, and motion
     /// reduced so the capture does not depend on the clock.
     TopologySelected,
+    /// `--screen topology-traffic-fixture-selected`: the fixture with its first Deployment
+    /// selected and motion reduced, so the flow of its edges stands still in the capture.
+    TopologyTrafficFixtureSelected,
     /// `--screen topology-traffic` (spec 0049): Topology in Traffic mode, live, once the source of
     /// the cluster is ready.
     TopologyTraffic,
@@ -329,7 +332,8 @@ impl LaunchScreen {
             | Self::TopologyRbac
             | Self::TopologySelected
             | Self::TopologyTraffic
-            | Self::TopologyTrafficFixture => Screen::Topology,
+            | Self::TopologyTrafficFixture
+            | Self::TopologyTrafficFixtureSelected => Screen::Topology,
             Self::Kind(kind) | Self::KindDrawer(kind, _) | Self::KindMenu(kind) => {
                 Screen::Kind(kind)
             }
@@ -451,6 +455,7 @@ impl LaunchScreen {
                 | Self::TopologySelected
                 | Self::TopologyTraffic
                 | Self::TopologyTrafficFixture
+                | Self::TopologyTrafficFixtureSelected
         )
     }
 
@@ -646,6 +651,7 @@ impl LaunchScreen {
             "topology-selected" => Some(Self::TopologySelected),
             "topology-traffic" => Some(Self::TopologyTraffic),
             "topology-traffic-fixture" => Some(Self::TopologyTrafficFixture),
+            "topology-traffic-fixture-selected" => Some(Self::TopologyTrafficFixtureSelected),
             "pod-drawer" => Some(Self::PodDrawer(DrawerTab::Overview)),
             "pod-containers" => Some(Self::PodDrawer(DrawerTab::Containers)),
             "pod-events" => Some(Self::PodDrawer(DrawerTab::Events)),
