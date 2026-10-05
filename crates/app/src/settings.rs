@@ -265,7 +265,7 @@ pub(crate) const COLOR_THEME_OPTIONS: OptionTable<ColorTheme> = OptionTable {
         (ColorTheme::Default, "Default"),
         (ColorTheme::ZedOne, "Zed One"),
     ],
-    default: ColorTheme::Default,
+    default: ColorTheme::ZedOne,
 };
 
 pub(crate) const DENSITY_OPTIONS: OptionTable<RowDensity> = OptionTable {

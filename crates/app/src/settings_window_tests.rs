@@ -259,7 +259,7 @@ fn color_theme_labels_round_trip() {
         let label = COLOR_THEME_OPTIONS.label(colors, || unreachable!("every value is listed"));
         assert_eq!(COLOR_THEME_OPTIONS.value(&label), colors);
     }
-    assert_eq!(COLOR_THEME_OPTIONS.value("Solarized"), ColorTheme::Default);
+    assert_eq!(COLOR_THEME_OPTIONS.value("Solarized"), ColorTheme::ZedOne);
 }
 
 #[gpui_kit::test]

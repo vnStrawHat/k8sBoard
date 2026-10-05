@@ -21,3 +21,7 @@ The first build showed One Light's `Running` and drain result lines as plain dar
 - One Light: `Running`, "Will be rescheduled", and the dry-run line keep a visible green, and the 5xx edges and CrashLoop node are clearly red instead of brown. The muted green still reads olive, as 4.5:1 on `#fafafa` requires a dark green.
 - Default light: success and info are slightly lighter than before; amber is unchanged (it hits the cap and stays below 4.5:1, as before); danger is visibly brighter (lightness 0.36 to 0.54), because Default's red already reached 4.5:1 with less darkening. The test bounds the lightness change at 0.2 and requires at least the old contrast.
 - Dark mode is untouched.
+
+## Default changed (2026-10-05)
+
+At the user's request the default colour family is now `zed-one`: new installs, settings files without `appearance.color_theme`, and unknown values (the `#[serde(other)]` variant is now `ZedOne`) get Zed One. An explicit saved `"default"` stays Default. This supersedes the "Default" fallbacks above and in decisions.md.

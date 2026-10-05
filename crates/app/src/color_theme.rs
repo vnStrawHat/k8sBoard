@@ -13,12 +13,13 @@ const ZED_ONE: &str = include_str!("../themes/zed-one.json");
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ColorTheme {
-    /// One Light / One Dark, picked by the mode.
-    ZedOne,
-    /// The kit's own theme: today's look. Last because serde requires `other` on the last variant.
-    #[default]
-    #[serde(other)] // any unknown string loads as Default instead of resetting settings.json
+    /// The kit's own theme.
     Default,
+    /// One Light / One Dark, picked by the mode. Last because serde requires `other` on the last
+    /// variant.
+    #[default]
+    #[serde(other)] // any unknown string loads as ZedOne instead of resetting settings.json
+    ZedOne,
 }
 
 /// The light and dark configs of one family.

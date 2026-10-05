@@ -539,14 +539,33 @@ fn color_theme_round_trips() {
 }
 
 #[test]
-fn unknown_color_theme_loads_as_default() {
+fn a_file_without_the_color_theme_gets_zed_one() {
+    let settings: Settings = serde_json::from_value(json!({ "version": 1 })).expect("parses");
+    assert_eq!(settings.appearance.color_theme, ColorTheme::ZedOne);
+    assert_eq!(
+        Settings::default().appearance.color_theme,
+        ColorTheme::ZedOne
+    );
+}
+
+#[test]
+fn a_saved_default_color_theme_stays_default() {
+    let mut settings = Settings::default();
+    settings.appearance.color_theme = ColorTheme::Default;
+    let value = serde_json::to_value(&settings).expect("serializes");
+    let loaded: Settings = serde_json::from_value(value).expect("parses");
+    assert_eq!(loaded.appearance.color_theme, ColorTheme::Default);
+}
+
+#[test]
+fn unknown_color_theme_loads_as_zed_one() {
     let value = json!({
         "version": 1,
         "theme": "dark",
         "appearance": { "color_theme": "solarized", "density": "comfortable" }
     });
     let settings: Settings = serde_json::from_value(value).expect("an unknown name is not corrupt");
-    assert_eq!(settings.appearance.color_theme, ColorTheme::Default);
+    assert_eq!(settings.appearance.color_theme, ColorTheme::ZedOne);
     assert_eq!(settings.appearance.density, RowDensity::Comfortable);
     assert_eq!(settings.theme, ThemePreference::Dark);
 }
