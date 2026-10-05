@@ -59,6 +59,10 @@ pub(crate) fn service_row(service: &ServiceSummary) -> KindRow {
         title: "Endpoints",
         rows: vec![DetailRow::Live(LiveContent::Endpoints)],
     });
+    sections.push(DetailSection {
+        title: "Exposed by",
+        rows: vec![DetailRow::Live(LiveContent::ExposedBy)],
+    });
     KindRow {
         namespace: Some(service.namespace.clone()),
         name: service.name.clone(),
@@ -179,6 +183,51 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
         labels: chips(&ingress.labels),
         object: KindObject::Ingress(ingress.clone()),
     }
+}
+
+/// An ingress that routes to a service, with the routes that reach it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ExposingIngress {
+    pub(crate) name: String,
+    /// `api.example.com/v1, /health, default backend`: a host is spelled once while the next
+    /// routes keep it, and `*` stands for a rule without a host.
+    pub(crate) routes: String,
+}
+
+/// The ingresses of the service's namespace that route to it, by a rule or as the default
+/// backend, in list order. Pure.
+pub(crate) fn exposing_ingresses(
+    service: &ServiceSummary,
+    ingresses: &[IngressSummary],
+) -> Vec<ExposingIngress> {
+    ingresses
+        .iter()
+        .filter(|ingress| ingress.namespace == service.namespace)
+        .filter_map(|ingress| {
+            let mut routes: Vec<String> = Vec::new();
+            let mut previous_host = None;
+            for rule in &ingress.rules {
+                if rule.service.as_deref() != Some(service.name.as_str()) {
+                    continue;
+                }
+                let host = rule.host.as_deref().unwrap_or("*");
+                let path = rule.path.as_deref().unwrap_or("");
+                routes.push(if previous_host == Some(host) && !path.is_empty() {
+                    path.to_owned()
+                } else {
+                    format!("{host}{path}")
+                });
+                previous_host = Some(host);
+            }
+            if ingress.default_service.as_deref() == Some(service.name.as_str()) {
+                routes.push("default backend".to_owned());
+            }
+            (!routes.is_empty()).then(|| ExposingIngress {
+                name: ingress.name.clone(),
+                routes: routes.join(", "),
+            })
+        })
+        .collect()
 }
 
 /// What the TLS section can say about the secrets an Ingress names.

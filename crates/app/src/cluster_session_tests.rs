@@ -714,6 +714,26 @@ fn denied_services_subject_does_not_start() {
 }
 
 #[test]
+fn denied_ingresses_subject_does_not_start() {
+    let subject = RelatedSubject::ServiceIngresses {
+        namespace: "team-a".to_owned(),
+    };
+    assert_eq!(
+        denied_related_check(&subject, &access_with(AccessCheck::ListIngresses)),
+        Some(AccessCheck::ListIngresses)
+    );
+    // Denied services do not stop the ingresses watch, and an unknown report never does.
+    assert_eq!(
+        denied_related_check(&subject, &access_with(AccessCheck::ListServices)),
+        None
+    );
+    assert_eq!(denied_related_check(&subject, &AccessState::Unknown), None);
+    let list = RelatedList::loading_for(&subject, NamespaceListGates::OPEN);
+    assert!(list.ingresses().is_some_and(LiveList::is_loading));
+    assert!(list.services().is_none());
+}
+
+#[test]
 fn a_services_subject_lists_services_only() {
     let subject = RelatedSubject::PodServices {
         namespace: "team-a".to_owned(),

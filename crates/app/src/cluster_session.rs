@@ -651,6 +651,8 @@ pub(crate) enum RelatedList {
     CustomFields(LiveList<CustomObjectFields>),
     /// The Services of one namespace, for a Pod drawer.
     Services(LiveList<ServiceSummary>),
+    /// The Ingresses of one namespace, for a Service drawer.
+    Ingresses(LiveList<IngressSummary>),
 }
 
 /// One related watch update, typed on tokio so one subscription serves every subject.
@@ -664,6 +666,7 @@ enum RelatedUpdate {
     HelmHistory(WatchUpdate<HelmRevision>),
     CustomFields(WatchUpdate<CustomObjectFields>),
     Services(WatchUpdate<ServiceSummary>),
+    Ingresses(WatchUpdate<IngressSummary>),
 }
 
 impl RelatedList {
@@ -682,6 +685,7 @@ impl RelatedList {
             RelatedSubject::HelmHistory { .. } => Self::HelmHistory(LiveList::Loading),
             RelatedSubject::CustomFields { .. } => Self::CustomFields(LiveList::Loading),
             RelatedSubject::PodServices { .. } => Self::Services(LiveList::Loading),
+            RelatedSubject::ServiceIngresses { .. } => Self::Ingresses(LiveList::Loading),
         }
     }
 
@@ -703,6 +707,7 @@ impl RelatedList {
             (Self::HelmHistory(list), RelatedUpdate::HelmHistory(update)) => list.apply(update),
             (Self::CustomFields(list), RelatedUpdate::CustomFields(update)) => list.apply(update),
             (Self::Services(list), RelatedUpdate::Services(update)) => list.apply(update),
+            (Self::Ingresses(list), RelatedUpdate::Ingresses(update)) => list.apply(update),
             // A stale update of another subject's kind.
             _ => {}
         }
@@ -724,6 +729,7 @@ impl RelatedList {
             Self::HelmHistory(list) => list.mark_stopped(),
             Self::CustomFields(list) => list.mark_stopped(),
             Self::Services(list) => list.mark_stopped(),
+            Self::Ingresses(list) => list.mark_stopped(),
         }
     }
 
@@ -739,6 +745,14 @@ impl RelatedList {
     pub(crate) fn services(&self) -> Option<&LiveList<ServiceSummary>> {
         match self {
             Self::Services(list) => Some(list),
+            _ => None,
+        }
+    }
+
+    /// The Ingresses of a Service drawer's namespace, when this list holds them.
+    pub(crate) fn ingresses(&self) -> Option<&LiveList<IngressSummary>> {
+        match self {
+            Self::Ingresses(list) => Some(list),
             _ => None,
         }
     }
@@ -790,6 +804,7 @@ impl RelatedList {
             Self::HelmHistory(list) => list.is_loading(),
             Self::CustomFields(list) => list.is_loading(),
             Self::Services(list) => list.is_loading(),
+            Self::Ingresses(list) => list.is_loading(),
         }
     }
 }
@@ -876,6 +891,7 @@ pub(crate) fn denied_related_check(
     let check = match subject {
         RelatedSubject::QuotaRejections { .. } => AccessCheck::ListEvents,
         RelatedSubject::PodServices { .. } => AccessCheck::ListServices,
+        RelatedSubject::ServiceIngresses { .. } => AccessCheck::ListIngresses,
         // Its two lists are gated each by its own check: see `namespace_list_gates`.
         RelatedSubject::NamespaceQuotas { .. } => return None,
         // The history reads the same Secrets the Releases kind lists, which its access check gates.
@@ -3732,6 +3748,10 @@ impl RelatedObjects {
             RelatedSubject::PodServices { namespace } => connection
                 .watch_services(NamespaceScope::Named(namespace.clone()))
                 .map(RelatedUpdate::Services)
+                .boxed(),
+            RelatedSubject::ServiceIngresses { namespace } => connection
+                .watch_ingresses(NamespaceScope::Named(namespace.clone()))
+                .map(RelatedUpdate::Ingresses)
                 .boxed(),
         };
         let applied = subject.clone();

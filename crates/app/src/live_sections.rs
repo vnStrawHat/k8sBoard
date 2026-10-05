@@ -48,11 +48,11 @@ use crate::kind_join::{
 };
 use crate::kind_join::{UsageSample, claim_sample, is_shared_filesystem};
 use crate::kind_row::{DetailRow, KindObject, KindRow, LiveContent, owns_pod, percent};
-use crate::network_rows::{TlsSecrets, ingress_tls_rows};
+use crate::network_rows::{ExposingIngress, TlsSecrets, exposing_ingresses, ingress_tls_rows};
 use crate::object_events::event_subject;
 use crate::permission_table::{CanDoChips, can_do_chips, permission_table};
 use crate::policy_rows::{fullest_item, quota_text};
-use crate::related_objects::{RelatedSubject, related_subject};
+use crate::related_objects::{RelatedSubject, key_related_subject, related_subject};
 use crate::resource_actions::ActionAvailability;
 use crate::resource_kind::ResourceKind;
 use crate::revision_diff::{RevisionDiffRequest, RevisionSide, diff_request};
@@ -98,6 +98,9 @@ pub(crate) fn live_rows(
         (LiveContent::NotReadyPods, KindObject::DaemonSet(_)) => not_ready_rows(row, live, cx),
         (LiveContent::Endpoints, KindObject::Service(service)) => {
             endpoints(kind, service, live, cx)
+        }
+        (LiveContent::ExposedBy, KindObject::Service(service)) => {
+            exposed_by_rows(service, kind, row, live, cx)
         }
         (LiveContent::UsedBy, KindObject::ConfigMap(config_map)) => {
             used_by_rows(config_map, live, cx)
@@ -925,6 +928,77 @@ fn endpoint_element(ix: usize, row: &EndpointRow, cx: &Context<AppShell>) -> Any
     element
         .child(cell)
         .child(toned_text(endpoint_state_label(row.state), cx).flex_shrink_0())
+        .into_any_element()
+}
+
+// ---- Exposed by ----
+
+/// Element ids of the Exposed by links, clear of the other live sections' ids.
+const EXPOSED_BY_ID_BASE: usize = 30_000;
+/// How many ingresses a Service drawer lists.
+const MAX_LISTED_INGRESSES: usize = 20;
+
+/// The ingresses that route to the service, from the drawer-scoped ingresses watch: the ingress as
+/// a link, then the routes that reach this service.
+fn exposed_by_rows(
+    service: &ServiceSummary,
+    kind: ResourceKind,
+    row: &KindRow,
+    live: &LiveCluster,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let Some(subject) = key_related_subject(&ResourceKey::of_row(kind, row)) else {
+        return Vec::new();
+    };
+    if let Some(check) = denied_related_check(&subject, &live.access) {
+        return vec![note(&format!("Not permitted: {check}"), cx)];
+    }
+    match live.related_of(&subject).and_then(RelatedList::ingresses) {
+        None | Some(LiveList::Loading) => vec![note("Loading ingresses…", cx)],
+        Some(LiveList::Failed { message }) => vec![
+            note("Ingresses are unavailable", cx),
+            detail_note(message, cx),
+        ],
+        Some(LiveList::Ready { items, .. }) => {
+            let exposing = exposing_ingresses(service, items);
+            if exposing.is_empty() {
+                return vec![note("No ingress routes to this service", cx)];
+            }
+            let hidden = exposing.len().saturating_sub(MAX_LISTED_INGRESSES);
+            exposing
+                .into_iter()
+                .take(MAX_LISTED_INGRESSES)
+                .enumerate()
+                .map(|(ix, ingress)| exposing_ingress_element(ix, service, ingress, cx))
+                .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
+                .collect()
+        }
+    }
+}
+
+fn exposing_ingress_element(
+    ix: usize,
+    service: &ServiceSummary,
+    ingress: ExposingIngress,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let name = SharedString::from(ingress.name.clone());
+    let link = match ResourceKey::of_object("Ingress", Some(&service.namespace), &ingress.name) {
+        Some(target) => link_text(EXPOSED_BY_ID_BASE + ix, &name, target, cx),
+        None => div().truncate().child(name).into_any_element(),
+    };
+    h_flex()
+        .gap_2()
+        .py_1()
+        .text_sm()
+        .child(div().flex_shrink_0().child(link))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(cx.theme().muted_foreground)
+                .child(ingress.routes),
+        )
         .into_any_element()
 }
 

@@ -35,13 +35,22 @@ pub(crate) enum RelatedSubject {
     },
     /// Every Service of a Pod drawer's namespace; the drawer keeps those that select the pod.
     PodServices { namespace: String },
+    /// Every Ingress of a Service drawer's namespace; the drawer keeps those that route to it.
+    ServiceIngresses { namespace: String },
 }
 
-/// The related subject a drawer key names without a row: a Pod. The Pod drawer also opens over
-/// Topology, where the explorer holds no Pods list, so this subject cannot wait for a row.
+/// The related subject a drawer key names without a row: a Pod or a Service. These drawers also
+/// open over Topology, where the explorer holds no such list, so the subject cannot wait for a row.
 pub(crate) fn key_related_subject(key: &ResourceKey) -> Option<RelatedSubject> {
     match key {
         ResourceKey::Pod { namespace, .. } => Some(RelatedSubject::PodServices {
+            namespace: namespace.clone(),
+        }),
+        ResourceKey::Kind {
+            kind: ResourceKind::Services,
+            namespace: Some(namespace),
+            ..
+        } => Some(RelatedSubject::ServiceIngresses {
             namespace: namespace.clone(),
         }),
         ResourceKey::Node { .. } | ResourceKey::Kind { .. } => None,
@@ -254,6 +263,28 @@ mod tests {
             })
         );
         assert_eq!(related_subject(ResourceKind::Secrets, &row), None);
+    }
+
+    #[test]
+    fn a_service_key_names_its_namespace_ingresses() {
+        let service = ResourceKey::Kind {
+            kind: ResourceKind::Services,
+            namespace: Some("team-a".to_owned()),
+            name: "api".to_owned(),
+        };
+        assert_eq!(
+            key_related_subject(&service),
+            Some(RelatedSubject::ServiceIngresses {
+                namespace: "team-a".to_owned(),
+            })
+        );
+        // Another kind in the same namespace has no key-derived subject.
+        let config_map = ResourceKey::Kind {
+            kind: ResourceKind::ConfigMaps,
+            namespace: Some("team-a".to_owned()),
+            name: "settings".to_owned(),
+        };
+        assert_eq!(key_related_subject(&config_map), None);
     }
 
     #[test]

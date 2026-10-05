@@ -275,10 +275,15 @@ fn service_row_has_endpoints_placeholder() {
 }
 
 #[test]
-fn service_sections_end_with_endpoints() {
+fn service_sections_end_with_endpoints_and_exposed_by() {
     let row = service_row(&service("ClusterIP"));
     let titles: Vec<&str> = row.sections.iter().map(|section| section.title).collect();
-    assert_eq!(titles, ["Service", "Ports", "Selector", "Endpoints"]);
+    assert_eq!(
+        titles,
+        ["Service", "Ports", "Selector", "Endpoints", "Exposed by"]
+    );
+    let exposed = row.section("Exposed by").expect("an Exposed by section");
+    assert_eq!(exposed.rows, [DetailRow::Live(LiveContent::ExposedBy)]);
 }
 
 #[test]
@@ -551,5 +556,65 @@ fn ingress_drawer_offers_to_copy_its_hosts_and_address() {
     assert_eq!(
         copy_text_of(&ingress_row(&hostless), "Ingress", "Hosts"),
         None
+    );
+}
+
+fn route(host: Option<&str>, path: Option<&str>, service: Option<&str>) -> IngressPath {
+    IngressPath {
+        host: host.map(str::to_owned),
+        path: path.map(str::to_owned),
+        backend: service.map_or("Bucket/assets".to_owned(), |name| format!("{name}:80")),
+        service: service.map(str::to_owned),
+    }
+}
+
+fn routed(name: &str, rules: Vec<IngressPath>) -> IngressSummary {
+    IngressSummary {
+        name: name.to_owned(),
+        rules,
+        ..ingress()
+    }
+}
+
+#[test]
+fn exposing_ingresses_list_the_routes_that_reach_the_service() {
+    let web = routed(
+        "web",
+        vec![
+            route(Some("api.example.com"), Some("/v1"), Some("api")),
+            route(Some("api.example.com"), Some("/health"), Some("api")),
+            route(Some("api.example.com"), Some("/other"), Some("worker")),
+            route(Some("b.example.com"), Some("/"), Some("api")),
+        ],
+    );
+    assert_eq!(
+        exposing_ingresses(&service("ClusterIP"), &[web]),
+        [ExposingIngress {
+            name: "web".to_owned(),
+            routes: "api.example.com/v1, /health, b.example.com/".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn exposing_ingresses_include_the_default_backend() {
+    let mut fallback = routed("fallback", Vec::new());
+    fallback.default_service = Some("api".to_owned());
+    let mut mixed = routed("mixed", vec![route(None, None, Some("api"))]);
+    mixed.default_service = Some("api".to_owned());
+    let exposing = exposing_ingresses(&service("ClusterIP"), &[fallback, mixed]);
+    assert_eq!(exposing[0].routes, "default backend");
+    // A rule without a host reads `*`.
+    assert_eq!(exposing[1].routes, "*, default backend");
+}
+
+#[test]
+fn exposing_ingresses_skip_other_namespaces_and_resource_backends() {
+    let mut elsewhere = routed("elsewhere", vec![route(None, Some("/"), Some("api"))]);
+    elsewhere.namespace = "team-b".to_owned();
+    let assets = routed("assets", vec![route(None, Some("/static"), None)]);
+    let other_service = routed("other", vec![route(None, Some("/"), Some("worker"))]);
+    assert!(
+        exposing_ingresses(&service("ClusterIP"), &[elsewhere, assets, other_service]).is_empty()
     );
 }

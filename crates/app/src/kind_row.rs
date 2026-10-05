@@ -83,6 +83,8 @@ pub(crate) enum LiveContent {
     RecentJobs,
     NotReadyPods,
     Endpoints,
+    /// The ingresses that route to a service, from the drawer-scoped ingresses watch.
+    ExposedBy,
     UsedBy,
     ConfigMapData,
     SelectedPods,
