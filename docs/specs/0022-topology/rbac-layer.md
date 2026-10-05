@@ -12,7 +12,7 @@ Who the namespace's workloads run as, and what that grants: `workload → Servic
 | `RoleBinding` | `RoleBindings` (namespace) | it names a drawn ServiceAccount as a **direct** subject |
 | `ClusterRoleBinding` | `ClusterRoleBindings` (cluster-wide list) | the same |
 | `Role` | `Roles` (namespace) | a drawn binding refers to it |
-| `ClusterRole` | none (decision 45) | a drawn binding refers to it; `NodeLook::Plain`, never checked |
+| `ClusterRole` | drawer only (decision 45) | a drawn binding refers to it; `NodeLook::Plain`, never checked |
 
 - Joins reuse `BindingIndex::build(&BindingLists { role_bindings, cluster_role_bindings })`. The feeds hold `KindRow`s, so each graph build collects **cloned** `BindingSummary` values from `KindObject::Binding` rows into two `Vec`s and borrows them as `BindingLists`; the RoleBindings come from the namespace feed, the ClusterRoleBindings only after the namespace filter below. The copy is bounded by `RAW_LIMIT`; `BindingLists` is not generalized.
 - Drawn edges use `bound_roles(namespace, account)` entries with `group.is_none()`; group entries are not drawn, they only count in the caption (decision 44). The cluster-admin check reads `roles_held(namespace, account)` (`access_bindings.rs`), groups included, as the W7 boxes do.
@@ -37,7 +37,7 @@ Legend: a fourth entry `access` (`LEGEND` in `topology_canvas.rs`, the export le
 
 - `KindFilter::Rbac` (label `RBAC`); `KindFilter::ALL` gains it; new `KindFilter::DEFAULT` = the four of today. `TopologyFilter::everything()` is renamed `TopologyFilter::initial()` and starts from `DEFAULT`: **RBAC is off by default** (decision 42).
 - The toolbar loop over `KindFilter::ALL` draws the RBAC chip like the others; the disabled `topology-chip-rbac` button goes. Tooltip `Show service accounts, bindings, and roles`.
-- `TopologyKind::filter()` maps the five new kinds to `Rbac`; `TopologySubject::wants` starts their feeds only while the chip is on. `open_count()` ≤ 14.
+- `TopologyKind::filter()` maps the five new kinds to `Rbac`; `TopologySubject::wants` starts their feeds only while the chip is on. `open_count()` ≤ 15 (the ClusterRoles feed is the fifteenth, drawer only).
 - `feed_plan` (Known and denied → Off) applies unchanged: refs of an Off or failed kind draw `Unchecked` (decision 4).
 - `RAW_LIMIT` counts the RBAC rows like every feed, except that ClusterRoleBindings count **only those that name an account of the drawn namespace** (direct, or through `system:serviceaccounts` / `system:serviceaccounts:{ns}` / `system:authenticated`), filtered before counting. The full cluster-wide list stays in the feed's memory only (decision 50).
 - `ponytail:` a namespace change restarts every feed (`SubjectChange::Restart`), so the cluster-wide ClusterRoleBindings list is fetched again although it did not change; upgrade path: keep that one feed across `Restart` when the RBAC chip stays on.

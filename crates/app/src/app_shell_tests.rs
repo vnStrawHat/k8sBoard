@@ -1061,6 +1061,29 @@ fn a_topology_click_opens_the_drawer(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_topology_click_on_a_cluster_scoped_node_keeps_the_screen(cx: &mut TestAppContext) {
+    let fixture = open_switch_fixture_with("topology-cluster", &["--screen", "topology"], cx);
+    let shell = fixture.shell.clone();
+    render(fixture.window, cx);
+    for kind in [
+        ResourceKind::ClusterRoles,
+        ResourceKind::ClusterRoleBindings,
+    ] {
+        let key = ResourceKey::Kind {
+            kind,
+            namespace: None,
+            name: "cluster-admin".to_owned(),
+        };
+        shell.update(cx, |shell, cx| {
+            shell.select_on_topology(Some(key.clone()), cx);
+            assert_eq!(shell.screen, Screen::Topology);
+            assert!(shell.drawer.is_open);
+            assert_eq!(shell.drawer_subject().map(|object| &object.key), Some(&key));
+        });
+    }
+}
+
+#[gpui_kit::test]
 fn a_namespace_change_on_topology_clears_the_selection(cx: &mut TestAppContext) {
     let fixture = open_switch_fixture("topology-namespace", cx);
     let (window, shell) = (fixture.window, fixture.shell.clone());

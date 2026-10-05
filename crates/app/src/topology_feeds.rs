@@ -10,8 +10,9 @@ use crate::kind_row::KindRow;
 use crate::resource_kind::ResourceKind;
 use crate::topology_graph::{FeedRows, KindFilter, TopologyKind};
 
-/// The kinds the graph reads besides pods, which the session lists anyway.
-pub(crate) const TOPOLOGY_FEED_KINDS: [ResourceKind; 14] = [
+/// The kinds the graph reads besides pods, which the session lists anyway. ClusterRoles are only
+/// there to give the drawer of a ClusterRole node its row.
+pub(crate) const TOPOLOGY_FEED_KINDS: [ResourceKind; 15] = [
     ResourceKind::Ingresses,
     ResourceKind::Services,
     ResourceKind::Deployments,
@@ -26,6 +27,7 @@ pub(crate) const TOPOLOGY_FEED_KINDS: [ResourceKind; 14] = [
     ResourceKind::RoleBindings,
     ResourceKind::Roles,
     ResourceKind::ClusterRoleBindings,
+    ResourceKind::ClusterRoles,
 ];
 
 /// The namespace Topology draws and the kind chips that are on. It decides which feeds run.
@@ -209,11 +211,12 @@ impl TopologyFeeds {
     }
 
     /// The feeds with their kind, for the graph build and the coverage note: only kinds whose chip
-    /// is on.
+    /// is on. ClusterRoles are left out: their nodes come from the bindings that name them.
     pub(crate) fn feed_rows(&self) -> Vec<(TopologyKind, FeedRows<'_>)> {
         self.feeds
             .iter()
             .filter_map(|feed| Some((TopologyKind::of_resource_kind(feed.kind)?, feed.rows())))
+            .filter(|(kind, _)| *kind != TopologyKind::ClusterRole)
             .collect()
     }
 
@@ -305,7 +308,7 @@ mod tests {
     #[test]
     fn chip_off_kinds_get_no_feed() {
         let wanted = without_config().wanted_kinds();
-        assert_eq!(wanted.len(), TOPOLOGY_FEED_KINDS.len() - 7);
+        assert_eq!(wanted.len(), TOPOLOGY_FEED_KINDS.len() - 8);
         for kind in [
             ResourceKind::ConfigMaps,
             ResourceKind::Secrets,
@@ -319,21 +322,22 @@ mod tests {
         subject("shop", &KindFilter::DEFAULT)
     }
 
-    const RBAC_KINDS: [ResourceKind; 4] = [
+    const RBAC_KINDS: [ResourceKind; 5] = [
         ResourceKind::ServiceAccounts,
         ResourceKind::RoleBindings,
         ResourceKind::Roles,
         ResourceKind::ClusterRoleBindings,
+        ResourceKind::ClusterRoles,
     ];
 
     #[test]
-    fn rbac_chip_starts_four_feeds() {
+    fn rbac_chip_starts_five_feeds() {
         let wanted = all_chips().wanted_kinds();
         for kind in RBAC_KINDS {
             assert!(wanted.contains(&kind), "{kind:?}");
         }
         let default = default_chips().wanted_kinds();
-        assert_eq!(wanted.len(), default.len() + 4);
+        assert_eq!(wanted.len(), default.len() + 5);
     }
 
     #[test]
@@ -341,7 +345,7 @@ mod tests {
         let wanted = default_chips().wanted_kinds();
         assert_eq!(wanted.len(), 10);
         assert!(RBAC_KINDS.iter().all(|kind| !wanted.contains(kind)));
-        // Turning the chip on adds exactly the four feeds and stops none.
+        // Turning the chip on adds exactly the five feeds and stops none.
         let mut with_rbac = default_chips();
         with_rbac.kinds.insert(KindFilter::Rbac);
         assert_eq!(
@@ -379,14 +383,14 @@ mod tests {
     }
 
     #[test]
-    fn open_count_is_at_most_fourteen() {
+    fn open_count_is_at_most_fifteen() {
         let feeds: Vec<TopologyFeed> = all_chips()
             .wanted_kinds()
             .into_iter()
             .map(|kind| feed(kind, LiveList::Loading))
             .collect();
-        assert_eq!(feeds_of(feeds).open_count(), 14);
-        assert_eq!(TOPOLOGY_FEED_KINDS.len(), 14);
+        assert_eq!(feeds_of(feeds).open_count(), 15);
+        assert_eq!(TOPOLOGY_FEED_KINDS.len(), 15);
     }
 
     #[test]

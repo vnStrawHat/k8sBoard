@@ -140,8 +140,8 @@ impl TopologyKind {
         })
     }
 
-    /// The topology kind of an explorer kind that feeds the graph. ClusterRoles have no feed
-    /// (decision 45), so they are not here.
+    /// The topology kind of an explorer kind that feeds Topology. The ClusterRoles feed only backs
+    /// the drawer of a ClusterRole node (decision 45); the graph build ignores its rows.
     pub(crate) fn of_resource_kind(kind: ResourceKind) -> Option<Self> {
         [
             Self::Ingress,
@@ -158,6 +158,7 @@ impl TopologyKind {
             Self::RoleBinding,
             Self::ClusterRoleBinding,
             Self::Role,
+            Self::ClusterRole,
         ]
         .into_iter()
         .find(|candidate| candidate.resource_kind() == Some(kind))

@@ -1661,9 +1661,9 @@ fn open_watch_count_includes_topology() {
     let default = subject_with("shop", &KindFilter::DEFAULT).wanted_kinds();
     assert_eq!(default.len(), 10);
     assert_eq!(with(Some(&topology_feeds_of(&default, &[]))), base + 10);
-    // RBAC on: the four RBAC feeds run too.
+    // RBAC on: the five RBAC feeds run too.
     let all = topology_feeds_of(&TOPOLOGY_FEED_KINDS, &[]);
-    assert_eq!(with(Some(&all)), base + 14);
+    assert_eq!(with(Some(&all)), base + 15);
     // One kind denied: its Off feed counts 0.
     let denied = topology_feeds_of(&default[..9], &[ResourceKind::Secrets]);
     assert_eq!(with(Some(&denied)), base + 9);
@@ -2028,4 +2028,35 @@ fn related_watch_is_current_only_for_the_same_subject_and_gates() {
         Some(&replica_set_subject()),
         open
     ));
+}
+
+/// Regression: a ClusterRole node of Topology has a row for its drawer, so a click opens the
+/// drawer over the graph instead of revealing the object on the ClusterRoles screen.
+#[test]
+fn row_of_finds_a_cluster_role_in_the_topology_feeds() {
+    let role = cluster::RoleSummary {
+        namespace: None,
+        name: "cluster-admin".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        rules: Vec::new(),
+        aggregation: Vec::new(),
+    };
+    let mut feeds = topology_feeds_of(&[], &[]);
+    feeds.feeds.push(TopologyFeed::watching(
+        ResourceKind::ClusterRoles,
+        LiveList::Ready {
+            items: vec![crate::access_rows::cluster_role_row(&role)],
+            interruption: None,
+        },
+    ));
+    let key = ResourceKey::Kind {
+        kind: ResourceKind::ClusterRoles,
+        namespace: None,
+        name: "cluster-admin".to_owned(),
+    };
+    let row = row_in(&key, ResourceKind::ClusterRoles, None, Some(&feeds));
+    assert_eq!(row.map(|row| row.name.as_str()), Some("cluster-admin"));
+    // The feed gives the drawer a row only: the graph build never sees it.
+    assert!(feeds.feed_rows().is_empty());
 }

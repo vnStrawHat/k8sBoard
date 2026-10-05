@@ -8,7 +8,7 @@
 - `topology_graph.rs`: five new `TopologyKind`s appended at the end of the enum (existing node order is unchanged), `Relation::Access`, `KindFilter::Rbac` + `DEFAULT`, `TopologyFilter::initial()`, `counted_rows` for `RAW_LIMIT`, the account ref in `add_config_refs`, `add_access_edges`, `role_node`.
 - `topology_checks.rs`: `MissingServiceAccount`, `MissingRole`, `ClusterAdminAccount`; coverage names for the new feeds.
 - `topology_layout.rs`: `Placement::AccessRow`, `place_access_row`; `topology_route.rs`: an access edge is a curve only within a row.
-- `topology_feeds.rs`: `TOPOLOGY_FEED_KINDS` 14 (ServiceAccounts, RoleBindings, Roles, ClusterRoleBindings). `cluster_session.rs` needed no change: `topology_feed` already starts any kind through `watch_rows`, which ignores the namespace for ClusterRoleBindings.
+- `topology_feeds.rs`: `TOPOLOGY_FEED_KINDS` 15 (ServiceAccounts, RoleBindings, Roles, ClusterRoleBindings, and ClusterRoles for the drawer of a ClusterRole node only: `TopologyKind::of_resource_kind` knows it, `feed_rows` leaves it out of the graph build). `cluster_session.rs` needed no change: `topology_feed` already starts any kind through `watch_rows`, which ignores the namespace for ClusterRoleBindings.
 - `topology_view.rs`: the RBAC chip is a normal chip (the disabled button is gone), `card_click` (decision 51), `set_rbac`. `--screen topology-rbac`.
 - Colors: `KindHue::Access` and `Relation::Access` use `cyan_light`; the legend and the SVG export have a fourth `access` entry.
 
