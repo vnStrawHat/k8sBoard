@@ -46,6 +46,37 @@ fn compare_names(left: &EventSummary, right: &EventSummary) -> Ordering {
     (&left.namespace, &left.name).cmp(&(&right.namespace, &right.name))
 }
 
+/// The count as `187.8k` or `3.2M`, so a long-running event does not widen its column. It sorts by
+/// the exact number.
+fn compact_count_cell(count: u32) -> KindCell {
+    KindCell::Quantity {
+        text: compact_count(count).into(),
+        value: u64::from(count),
+        tone: None,
+    }
+}
+
+fn compact_count(count: u32) -> String {
+    let count = u64::from(count);
+    if count < 1_000 {
+        return count.to_string();
+    }
+    let units = [(1_000, 'k'), (1_000_000, 'M'), (1_000_000_000, 'B')];
+    for (unit, suffix) in units {
+        // Tenths of the unit, rounded; 1000.0k is not shown, the next unit says 1M.
+        let tenths = (count * 10 + unit / 2) / unit;
+        if tenths < 10_000 || unit == 1_000_000_000 {
+            let (whole, tenth) = (tenths / 10, tenths % 10);
+            return if tenth == 0 {
+                format!("{whole}{suffix}")
+            } else {
+                format!("{whole}.{tenth}{suffix}")
+            };
+        }
+    }
+    count.to_string()
+}
+
 fn event_row(event: &EventSummary) -> KindRow {
     let status = event_tone(event.event_type);
     let object = object_text(&event.object);
@@ -71,7 +102,8 @@ fn event_row(event: &EventSummary) -> KindRow {
             text: object.clone().into(),
         },
         KindCell::Text(message_line(&event.message).into()),
-        KindCell::count(event.count),
+        compact_count_cell(event.count),
+        KindCell::age(event.first_seen),
         KindCell::age(event.last_seen),
     ];
     KindRow {

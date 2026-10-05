@@ -914,7 +914,7 @@ fn attention_row(
                 .id(SharedString::from(format!("issue-cause-{index}")))
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .truncate()
+                .line_clamp(2)
                 .child(cause)
                 .tooltip(move |window, cx| Tooltip::new(tooltip_cause.clone()).build(window, cx)),
         );

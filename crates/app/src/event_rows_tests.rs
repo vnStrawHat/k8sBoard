@@ -226,3 +226,46 @@ fn event_title_falls_back_to_the_event_name_without_an_object_name() {
     };
     assert_eq!(detail(&event_row(&bare)).title, "api-0.17a2b");
 }
+
+#[test]
+fn compact_count_shortens_big_numbers() {
+    let shown = |count| compact_count(count);
+    assert_eq!(shown(0), "0");
+    assert_eq!(shown(999), "999");
+    assert_eq!(shown(1_000), "1k");
+    assert_eq!(shown(4_456), "4.5k");
+    assert_eq!(shown(187_803), "187.8k");
+    // Rounds up into the next unit instead of showing 1000k.
+    assert_eq!(shown(999_999), "1M");
+    assert_eq!(shown(3_232_850), "3.2M");
+    assert_eq!(shown(u32::MAX), "4.3B");
+}
+
+#[test]
+fn the_count_cell_sorts_by_the_exact_number() {
+    let row = event_row(&EventSummary {
+        count: 187_803,
+        ..summary()
+    });
+    assert_eq!(
+        row.cells.get(4),
+        Some(&KindCell::Quantity {
+            text: "187.8k".into(),
+            value: 187_803,
+            tone: None,
+        })
+    );
+}
+
+#[test]
+fn first_seen_is_a_column_before_last_seen() {
+    let names: Vec<_> = ResourceKind::Events
+        .columns()
+        .iter()
+        .map(|column| column.name)
+        .collect();
+    assert_eq!(names[names.len() - 2..], ["First seen", "Last seen"]);
+    let row = event_row(&summary());
+    assert_eq!(row.cells.get(5), Some(&KindCell::age(Some(at(100)))));
+    assert_eq!(row.cells.get(6), Some(&KindCell::age(Some(at(200)))));
+}

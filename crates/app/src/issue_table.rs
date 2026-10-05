@@ -49,7 +49,7 @@ const ISSUE_COLUMNS: [KindColumn; 8] = [
     column("Severity", 80., Align::Left),
     column("Reason", 170., Align::Left),
     column("Kind", 110., Align::Left),
-    column("Object", 260., Align::Left).grows(2),
+    column("Object", 260., Align::Left).grows(1),
     column("Namespace", 120., Align::Left),
     column("Cause", 200., Align::Left).grows(3),
     column("Count", 64., Align::Right),

@@ -723,7 +723,9 @@ impl AppShell {
     fn render_warnings_only(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let session = self.session()?;
         let is_on = session.read(cx).event_filter() == EventFilter::WarningsOnly;
+        // The check says "on" without relying on the fill colour alone.
         let button = toggle_button("warnings-only", "Warnings only", is_on)
+            .when(is_on, |button| button.icon(IconName::Check))
             .tooltip("Show only Warning events")
             .on_click(cx.listener(|shell, _, _, cx| shell.toggle_warnings_only(cx)));
         Some(button.into_any_element())

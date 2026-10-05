@@ -807,10 +807,10 @@ mod tests {
         );
         let message = layout.columns.get(4).expect("a Message column");
         assert_eq!(message.name.as_ref(), "Message");
-        assert_eq!(message.width, px(280.));
-        assert_eq!(message.min_width, px(280.));
+        assert_eq!(message.width, px(160.));
+        assert_eq!(message.min_width, px(160.));
         let reason = layout.columns.get(2).expect("a Reason column");
-        assert_eq!(reason.width, px(170.));
+        assert_eq!(reason.width, px(200.));
     }
 
     #[test]
@@ -819,7 +819,7 @@ mod tests {
         assert!(events.fit_width(px(1400.)));
         assert!(!events.fit_width(px(1400.)));
         let message_width = events.layout.columns.columns.get(4).map(|c| c.width);
-        assert!(message_width > Some(px(280.)));
+        assert!(message_width > Some(px(160.)));
 
         let mut deployments = delegate(Some(ResourceKind::Deployments));
         assert!(deployments.fit_width(px(1400.)));
@@ -883,7 +883,7 @@ mod tests {
         }
         assert!(delegate.set_kind(Some(ResourceKind::Events)));
         let message = delegate.layout.columns.columns.get(4).map(|c| c.width);
-        assert!(message > Some(px(280.)));
+        assert!(message > Some(px(160.)));
         assert!(delegate.view().is_some_and(|view| !view.is_filtering()));
         delegate.set_kind(Some(ResourceKind::Deployments));
         assert_eq!(

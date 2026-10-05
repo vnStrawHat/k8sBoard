@@ -37,12 +37,13 @@ Events arm: `connection.watch_events(scope, EventFilter::All).map(event_rows).bo
 
 | # | Column | Width | Align | Cell |
 |---|---|---|---|---|
-| 0 | Type | 90 | Left | `Toned(event_tone(type))` |
-| 1 | Reason | 170 | Left | `Text(reason)`, `Absent` when empty |
-| 2 | Object | 260 | Left | `Qualified { prefix: object.namespace, text: object_text }` |
-| 3 | Message | 280 (minimum) | Left | `Text(message_line(message))`, flexible |
-| 4 | Count | 64 | Right | `count(count)` |
-| 5 | Last seen | 80 | Right | `age(last_seen)` |
+| 0 | Type | 80 | Left | `Toned(event_tone(type))` |
+| 1 | Reason | 200, weight 1 | Left | `Text(reason)`, `Absent` when empty |
+| 2 | Object | 220, weight 2 | Left | `Qualified { prefix: object.namespace, text: object_text }`, cut in the middle |
+| 3 | Message | 160 (minimum), weight 3 | Left | `Text(message_line(message))`, flexible |
+| 4 | Count | 70 | Right | `Quantity`: compact text (`187.8k`, `3.2M`), sorts by the exact count; the drawer shows the full number |
+| 5 | First seen | 90 | Right | `age(first_seen)` |
+| 6 | Last seen | 80 | Right | `age(last_seen)` |
 
 ## Kind table (`kind_table.rs`)
 
