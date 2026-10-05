@@ -35,7 +35,7 @@ pub(crate) fn step_cluster(registry: &mut ClusterRegistry, group: &ClusterGroup,
 - Registering on move is intended (0024 decision 20 registers on edit; a move is an edit). `Reset to defaults` still drops the entry, so that row returns to the end of its group (known, documented in the Reset tooltip: `Clears the overrides and the place in the list.`).
 - Ctrl 1–9 in the switcher follow at once (`observe_global::<AppSettings>`).
 
-## Colour (W2 note 4, `Color` row)
+## Colour (W2 note 4, `Color` row) — removed by [0053](../0053-custom-environments/README.md): no per-cluster colour; colours belong to environments
 
 ```rust
 // environment.rs, next to environment_color (one token table)
