@@ -382,8 +382,9 @@ fn shortest(bottoms: &[f32]) -> usize {
         })
 }
 
-/// The flow whose extent has the aspect closest to `aspect`, trying one band-column up to
-/// `MAX_BAND_COLUMNS` (the fewer columns on a tie).
+/// The flow that a canvas of `aspect` shows at the largest zoom, trying one band-column up to
+/// `MAX_BAND_COLUMNS` (the fewer columns on a tie). A flow whose extent only matches the canvas
+/// shape can still be too wide to read whole, so the zoom decides, not the shape.
 fn best_columns(heights: &[f32], aspect: f32, band_width: f32) -> Vec<usize> {
     let remembered = vec![None; heights.len()];
     let mut best: Option<(f32, Vec<usize>)> = None;
@@ -396,9 +397,10 @@ fn best_columns(heights: &[f32], aspect: f32, band_width: f32) -> Vec<usize> {
         }
         let tallest = bottoms.iter().copied().fold(0., f32::max) - BAND_GAP;
         let width = used as f32 * band_width + (used - 1) as f32 * BAND_GAP;
-        let miss = ((width / tallest.max(1.)) / aspect.max(0.01)).ln().abs();
-        if best.as_ref().is_none_or(|(known, _)| miss < *known) {
-            best = Some((miss, columns));
+        // The zoom per unit of canvas height: the width or the height of the flow is what limits it.
+        let zoom = (aspect.max(0.01) / width).min(1. / tallest.max(1.));
+        if best.as_ref().is_none_or(|(known, _)| zoom > *known) {
+            best = Some((zoom, columns));
         }
     }
     best.map_or_else(Vec::new, |(_, columns)| columns)

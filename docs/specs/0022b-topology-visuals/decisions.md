@@ -50,6 +50,7 @@
 | 23 | Each relation keeps its dash while it flows; solid owns edges flow in long dashes (16, 4) | routes and mounts must stay distinguishable from owns when selected |
 | 24 | The legend swatches use the stroke code of the edges; the legend and the minimap move left of the drawer while it is open; the graph keeps 60 px clear of the zoom panel | overlays must not cover content |
 | 25 | `edge_stroke_budget` asserts a vertex ceiling, not a time | a wall-clock assertion fails on a loaded machine |
+| 26 | UX walk H5: the first view fits the whole graph down to `MIN_BADGE_ZOOM` (0.3) and says `Showing part of the graph` beside Fit when it cannot; band-columns are chosen for the largest zoom; the first paint with the real size lays out again | kong opened cut off at the right edge, argocd and monitoring opened cropped with no hint |
 
 ## Measurements (filled by the coder)
 

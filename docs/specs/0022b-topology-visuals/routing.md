@@ -27,6 +27,6 @@ A mounts edge therefore leaves by the side and runs down the gutter, instead of 
 
 ## First view and Fit
 
-- `Viewport::first_view` fits the whole graph when the fit zoom is at least `FIRST_VIEW_ZOOM` (0.8), or when the graph has at most 20 nodes and the fit zoom is at least `MIN_TEXT_ZOOM` (0.55). Otherwise it opens at 0.8, anchored at the top-left.
+- `Viewport::first_view` fits the whole graph when the fit zoom is at least `MIN_BADGE_ZOOM` (0.3), whatever the node count (UX walk H5; below `MIN_TEXT_ZOOM` the cards show badges only). Otherwise it opens at 0.8, anchored at the top-left, and the header says `Showing part of the graph · {zoom}%` beside Fit until Fit is pressed.
 - Both the first view and Fit use the canvas without its left `CONTROLS_INSET` (60) and move the graph right by that, so the zoom panel covers no card.
 - The legend and the minimap stay in the bottom strip (`OVERLAY_GUTTER`); with the drawer open they move left of it ([interaction.md](interaction.md)).

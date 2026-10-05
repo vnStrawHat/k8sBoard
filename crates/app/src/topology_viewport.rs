@@ -3,6 +3,7 @@
 
 use gpui_kit::ScrollDelta;
 
+use crate::topology_card::MIN_BADGE_ZOOM;
 use crate::topology_layout::{GraphPoint, GraphRect, TopologyLayout};
 
 /// One wheel notch multiplies the zoom by this.
@@ -22,8 +23,6 @@ const DRAG_SLOP: f32 = 4.;
 pub(crate) const MIN_TEXT_ZOOM: f32 = 0.55;
 /// The first view of a graph never goes below this zoom: the name is then about 10 px.
 const FIRST_VIEW_ZOOM: f32 = 0.8;
-/// A graph of at most this many nodes opens whole at any zoom that still shows the card text.
-const SMALL_GRAPH_NODES: usize = 20;
 /// The left strip the zoom panel covers (its width, its offset, and a gutter): the first view and
 /// Fit keep the graph out of it.
 pub(crate) const CONTROLS_INSET: f32 = 60.;
@@ -101,25 +100,24 @@ impl Viewport {
         .center_on(extent.center(), width, height)
     }
 
-    /// The view a graph opens with: Fit when the whole graph is readable at that zoom, else the
-    /// readable zoom (`FIRST_VIEW_ZOOM`) anchored at the top-left of the extent. The minimap gives
-    /// the overview of what is out of view.
-    pub(crate) fn first_view(
-        extent: GraphRect,
-        width: f32,
-        height: f32,
-        node_count: usize,
-    ) -> Self {
-        let readable = readable_step();
-        let fit = fit_step(extent, width, height);
-        let is_small = node_count <= SMALL_GRAPH_NODES && WHEEL_STEP.powi(fit) >= MIN_TEXT_ZOOM;
-        if fit >= readable || is_small {
+    /// The view a graph opens with: Fit when the whole graph keeps the kind badges
+    /// (`MIN_BADGE_ZOOM`; below `MIN_TEXT_ZOOM` the cards show no name), else the readable zoom
+    /// (`FIRST_VIEW_ZOOM`) anchored at the top-left of the extent. The minimap gives the overview
+    /// of what is out of view.
+    pub(crate) fn first_view(extent: GraphRect, width: f32, height: f32) -> Self {
+        if WHEEL_STEP.powi(fit_step(extent, width, height)) >= MIN_BADGE_ZOOM {
             return Self::fit(extent, width, height);
         }
         Self {
             origin: extent.origin,
-            zoom_step: readable,
+            zoom_step: readable_step(),
         }
+    }
+
+    /// Whether all of `extent` shows in a canvas of `width` by `height` at this zoom.
+    pub(crate) fn shows_whole(self, extent: GraphRect, width: f32, height: f32) -> bool {
+        let zoom = self.zoom();
+        extent.width * zoom <= width + 0.5 && extent.height * zoom <= height + 0.5
     }
 
     /// Pans just enough for `rect` to lie `margin` px inside an area of `width` by `height`, or
@@ -354,7 +352,7 @@ mod tests {
     fn first_view_fits_a_graph_that_is_readable_whole() {
         let small = extent(600., 300.);
         assert_eq!(
-            Viewport::first_view(small, 1000., 700., 100),
+            Viewport::first_view(small, 1000., 700.),
             Viewport::fit(small, 1000., 700.)
         );
     }
@@ -366,12 +364,12 @@ mod tests {
             width: 3_000.,
             height: 4_000.,
         };
-        let view = Viewport::first_view(large, 1000., 700., 100);
+        let view = Viewport::first_view(large, 1000., 700.);
         assert!(view.zoom() >= FIRST_VIEW_ZOOM);
         assert!(view.zoom() < FIRST_VIEW_ZOOM * WHEEL_STEP);
         assert_eq!(view.origin, large.origin);
         // The fit of the same graph is far smaller.
-        assert!(Viewport::fit(large, 1000., 700.).zoom() < MIN_TEXT_ZOOM);
+        assert!(Viewport::fit(large, 1000., 700.).zoom() < MIN_BADGE_ZOOM);
     }
 
     #[test]
@@ -466,19 +464,24 @@ mod tests {
     }
 
     #[test]
-    fn a_small_graph_opens_whole_while_its_text_shows() {
+    fn a_graph_opens_whole_while_its_badges_show_whatever_its_node_count() {
         // Fit would be 0.7: below the first-view zoom, above the text zoom.
         let wide = extent(1_400., 900.);
         let fit = Viewport::fit(wide, 1000., 700.);
         assert!(fit.zoom() < FIRST_VIEW_ZOOM && fit.zoom() >= MIN_TEXT_ZOOM);
-        assert_eq!(Viewport::first_view(wide, 1000., 700., 20), fit);
-        // A larger graph keeps the readable zoom, anchored top-left.
-        let big = Viewport::first_view(wide, 1000., 700., 21);
-        assert!(big.zoom() >= FIRST_VIEW_ZOOM);
-        assert_eq!(big.origin, wide.origin);
-        // A small graph that would fit below the text zoom is not shown whole.
+        assert_eq!(Viewport::first_view(wide, 1000., 700.), fit);
+        assert!(fit.shows_whole(wide, 1000., 700.));
+        // Below the text zoom the cards show badges only, which still reads as an overview.
+        let many = extent(3_000., 2_000.);
+        let overview = Viewport::first_view(many, 1000., 700.);
+        assert!(overview.zoom() < MIN_TEXT_ZOOM && overview.zoom() >= MIN_BADGE_ZOOM);
+        assert!(overview.shows_whole(many, 1000., 700.));
+        // A graph whose fit is below the badge zoom keeps the readable zoom, anchored top-left.
         let huge = extent(4_000., 3_000.);
-        assert!(Viewport::first_view(huge, 1000., 700., 5).zoom() >= FIRST_VIEW_ZOOM);
+        let part = Viewport::first_view(huge, 1000., 700.);
+        assert!(part.zoom() >= FIRST_VIEW_ZOOM);
+        assert_eq!(part.origin, huge.origin);
+        assert!(!part.shows_whole(huge, 1000., 700.));
     }
 
     #[test]

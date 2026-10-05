@@ -788,3 +788,36 @@ fn only_config_and_rbac_leave_in_traffic() {
     assert!(is_traffic_hidden(&config));
     assert!(!is_traffic_hidden(&service_key("web")));
 }
+
+fn installed_view(cx: &mut gpui_kit::TestAppContext, deployments: usize) -> Entity<TopologyView> {
+    let view = view_of(cx);
+    let graph = (0..deployments)
+        .fold(Fixture::default(), |fixture, n| {
+            fixture.with_deployment(&format!("app-{n:02}"), 1, 1)
+        })
+        .graph();
+    cx.update(|cx| {
+        view.update(cx, |view, cx| {
+            view.install(graph, GroupBy::Components, 1.6, cx);
+        });
+    });
+    view
+}
+
+#[gpui_kit::test]
+fn a_graph_that_fits_readably_opens_whole_without_a_hint(cx: &mut gpui_kit::TestAppContext) {
+    let view = installed_view(cx, 3);
+    cx.update(|cx| assert_eq!(view.read(cx).partial_view_hint(), None));
+}
+
+#[gpui_kit::test]
+fn a_partial_first_view_says_so_until_fit(cx: &mut gpui_kit::TestAppContext) {
+    let view = installed_view(cx, 80);
+    let hint = cx.update(|cx| view.read(cx).partial_view_hint());
+    assert!(
+        hint.is_some_and(|hint| hint.starts_with("Showing part of the graph \u{b7} ")),
+        "a tall graph is not readable whole"
+    );
+    notifications(&view, cx, |view, cx| view.fit(cx));
+    cx.update(|cx| assert_eq!(view.read(cx).partial_view_hint(), None));
+}

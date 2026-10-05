@@ -366,7 +366,7 @@ impl AppShell {
             .collect()
     }
 
-    /// The Topology header, right-aligned: the saved file name, Fit, and Export PNG. Both buttons
+    /// The Topology header, right-aligned: the saved file name, the partial-view hint, Fit, and Export PNG. Both buttons
     /// need a graph; Export PNG is also disabled while an export runs.
     fn topology_header_buttons(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         let topology = self.topology.read(cx);
@@ -376,6 +376,13 @@ impl AppShell {
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(detail)
+                .into_any_element()
+        });
+        let partial = topology.partial_view_hint().map(|hint| {
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(hint)
                 .into_any_element()
         });
         let fit = Button::new("topology-fit")
@@ -400,6 +407,7 @@ impl AppShell {
             }));
         saved
             .into_iter()
+            .chain(partial)
             .chain([fit.into_any_element(), export.into_any_element()])
             .collect()
     }

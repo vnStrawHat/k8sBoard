@@ -566,6 +566,17 @@ fn bands_flow_into_band_columns_to_match_a_wide_canvas() {
 }
 
 #[test]
+fn band_columns_are_chosen_for_the_largest_zoom_not_the_closest_shape() {
+    // A tall band and a small one on a wide canvas: two band-columns match the canvas shape, but
+    // the stack is readable at a larger zoom (the kong namespace).
+    let columns = best_columns(&[700., 100.], 2.03, 970.);
+    assert_eq!(columns, [0, 0]);
+    // Many bands still spread out when the stack would be tall.
+    let columns = best_columns(&[300.; 10], WIDE, 970.);
+    assert!(columns.iter().max().is_some_and(|last| *last > 0));
+}
+
+#[test]
 fn band_columns_do_not_overlap() {
     let graph = apps(10, 2).graph();
     let wide = layout(&graph, GroupBy::App, WIDE, &no_pins(), None);

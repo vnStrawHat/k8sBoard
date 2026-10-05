@@ -312,6 +312,9 @@ pub(crate) struct TopologyView {
     fixture_selected: Option<NodeId>,
     viewport: Viewport,
     needs_fit: bool,
+    /// The first view shows only part of the graph, because the whole is too small to read; Fit
+    /// clears it.
+    is_first_view_partial: bool,
     /// The first view was made for `DEFAULT_CANVAS`: it is made again once the real size is known.
     fit_waits_for_size: bool,
     /// A ghost or unchecked node that was clicked.
@@ -361,6 +364,7 @@ impl TopologyView {
             fixture_selected: None,
             viewport: Viewport::default(),
             needs_fit: true,
+            is_first_view_partial: false,
             fit_waits_for_size: false,
             highlighted: None,
             pending_focus: None,
@@ -469,6 +473,16 @@ impl TopologyView {
             return None;
         };
         Some(saved_detail(file_name, self.export_scale))
+    }
+
+    /// The hint beside Fit while the first view shows part of the graph.
+    pub(crate) fn partial_view_hint(&self) -> Option<String> {
+        self.is_first_view_partial.then(|| {
+            format!(
+                "Showing part of the graph \u{b7} {}%",
+                (self.viewport.zoom() * 100.).round()
+            )
+        })
     }
 
     /// Whether the graph exists, for the screenshot hook.
@@ -753,14 +767,10 @@ impl TopologyView {
             return;
         };
         let (width, height) = self.view_area();
-        let node_count = match &self.build {
-            Some(Ok(graph)) => graph.nodes.len(),
-            _ => 0,
-        };
+        let width = width - CONTROLS_INSET;
         // The graph starts to the right of the zoom panel.
-        self.viewport =
-            Viewport::first_view(layout.extent, width - CONTROLS_INSET, height, node_count)
-                .pan(CONTROLS_INSET, 0.);
+        self.viewport = Viewport::first_view(layout.extent, width, height).pan(CONTROLS_INSET, 0.);
+        self.is_first_view_partial = !self.viewport.shows_whole(layout.extent, width, height);
         self.needs_fit = false;
         self.fit_waits_for_size = self.canvas_size.is_none();
     }
@@ -812,6 +822,20 @@ impl TopologyView {
         ));
         self.layout = Some((shape, group_by, layout));
         self.reroute_traffic_calls();
+    }
+
+    /// The first layout aimed at `DEFAULT_CANVAS`: lays out from scratch for the shape the canvas
+    /// really has, so a wide window gets more band-columns.
+    fn lay_out_for_canvas(&mut self, cx: &App) {
+        let (Some(Ok(graph)), Some((shape, group_by, _))) = (&self.build, self.layout.take())
+        else {
+            return;
+        };
+        let no_pins = HashMap::new();
+        let pins = self.pins(cx).unwrap_or(&no_pins);
+        let layout = Rc::new(lay_out(graph, group_by, self.aspect(), pins, None));
+        self.layout = Some((shape, group_by, layout));
+        self.rebuild_traffic_layer(cx);
     }
 
     // ---- traffic (spec 0049) ----
@@ -1048,6 +1072,7 @@ impl TopologyView {
             self.viewport = Viewport::fit(layout.extent, width - CONTROLS_INSET, height)
                 .pan(CONTROLS_INSET, 0.);
         }
+        self.is_first_view_partial = false;
         self.needs_fit = false;
         cx.notify();
     }
@@ -1121,8 +1146,9 @@ impl TopologyView {
             return;
         }
         self.canvas_size = Some((width, height));
-        // The first view was made for a default size.
+        // The first layout and view were made for a default size.
         if self.fit_waits_for_size {
+            self.lay_out_for_canvas(cx);
             self.needs_fit = true;
         }
         self.apply_fit();
