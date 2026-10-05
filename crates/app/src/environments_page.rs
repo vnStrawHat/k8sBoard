@@ -20,11 +20,11 @@ use gpui_kit::{
 use crate::cluster_form::FieldError;
 use crate::environment::{
     CustomEnvironment, Environment, EnvironmentColor, EnvironmentTier, environment_badge,
-    palette_color,
+    is_usable, palette_color,
 };
 use crate::environment_form::{
     add_environment, clusters_using, delete_dialog_text, delete_environment, edit_environment,
-    is_usable, is_weaker, rename_environment, validate_environment_name, weaken_dialog_text,
+    is_weaker, rename_environment, validate_environment_name, weaken_dialog_text,
 };
 use crate::settings::AppSettings;
 use crate::settings_window::tier_cell;
@@ -34,6 +34,8 @@ const BADGE_WIDTH: f32 = 90.;
 const BUILT_IN_NAME_WIDTH: f32 = 140.;
 const NAME_WIDTH: f32 = 160.;
 const SWATCH_SIZE: f32 = 18.;
+/// Wide enough for the longest tier name, so the Delete column lines up.
+const TIER_WIDTH: f32 = 210.;
 
 /// The name input of one custom environment, and the message under it.
 struct NameRow {
@@ -157,7 +159,12 @@ impl EnvironmentsPage {
         let Some(environment) = registry.environments.get(at) else {
             return;
         };
-        let using = clusters_using(registry, &environment.name);
+        // A skipped row (reserved or repeated name) owns no references: delete moves none.
+        let using = if is_usable(&registry.environments, at) {
+            clusters_using(registry, &environment.name)
+        } else {
+            0
+        };
         let (title, body) = delete_dialog_text(environment, using);
         let page = cx.entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
@@ -172,6 +179,7 @@ impl EnvironmentsPage {
                         .ok_variant(ButtonVariant::Danger)
                         .show_cancel(true),
                 )
+                // `at` stays valid: the alert is modal, so nothing else edits the list meanwhile.
                 .on_ok(move |_, window, cx| {
                     AppSettings::update(cx, |settings| {
                         delete_environment(&mut settings.registry, at);
@@ -218,6 +226,7 @@ impl EnvironmentsPage {
                         .ok_variant(ButtonVariant::Danger)
                         .show_cancel(true),
                 )
+                // `at` stays valid: the alert is modal, so nothing else edits the list meanwhile.
                 .on_ok(move |_, _, cx| {
                     set_tier(at, tier, cx);
                     true
@@ -271,6 +280,7 @@ impl EnvironmentsPage {
         let tier_menu = Button::new(("environment-tier", at))
             .small()
             .outline()
+            .w(px(TIER_WIDTH))
             .label(format!("Behaves like {}", current.name()))
             .dropdown_caret(true)
             .dropdown_menu(move |menu, _, _| {
@@ -287,6 +297,7 @@ impl EnvironmentsPage {
             });
         let delete = Button::new(("environment-delete", at))
             .danger()
+            .outline()
             .small()
             .label("Delete")
             .on_click(cx.listener(move |page, _, window, cx| {
@@ -295,10 +306,7 @@ impl EnvironmentsPage {
         let under = match self.row_error(at, custom) {
             Some(error) => div().text_xs().text_color(danger).child(error.0),
             None => {
-                let using = clusters_using(
-                    &crate::settings::AppSettings::get(cx).registry,
-                    &environment.name,
-                );
+                let using = clusters_using(&AppSettings::get(cx).registry, &environment.name);
                 let text = match using {
                     0 => "Not used".to_owned(),
                     1 => "Used by 1 cluster".to_owned(),

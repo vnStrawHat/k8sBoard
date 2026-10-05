@@ -247,3 +247,58 @@ fn edit_environment_ignores_a_missing_row() {
     delete_environment(&mut registry, 3);
     assert!(registry.environments.is_empty());
 }
+
+fn tier_of(registry: &ClusterRegistry, at: usize) -> EnvironmentTier {
+    let key = registry.clusters[at].environment.as_ref().expect("stored");
+    crate::environment::resolve_environment(key, &registry.environments).tier()
+}
+
+#[test]
+fn renaming_onto_a_dangling_reference_keeps_its_tier() {
+    // `X` is stored but defined nowhere, so entry `b` is Production today.
+    let mut registry = ClusterRegistry {
+        environments: vec![custom("QA", EnvironmentTier::Local)],
+        clusters: vec![entry_on("a", on("QA")), entry_on("b", on("X"))],
+        ..ClusterRegistry::default()
+    };
+    assert_eq!(tier_of(&registry, 1), EnvironmentTier::Production);
+    rename_environment(&mut registry, 0, "X".to_owned());
+    // `a` followed the rename and stays Local; `b` is pinned instead of turning Local.
+    assert_eq!(tier_of(&registry, 0), EnvironmentTier::Local);
+    assert_eq!(tier_of(&registry, 1), EnvironmentTier::Production);
+    assert_eq!(
+        registry.clusters[1].environment,
+        Some(EnvironmentKey::BuiltIn(EnvironmentTier::Production))
+    );
+}
+
+#[test]
+fn removing_a_name_clash_keeps_the_skipped_rows_references_strict() {
+    // `QA` repeats `qa`, so entries on `QA` resolve to Production until `qa` goes or is renamed.
+    let rows = || ClusterRegistry {
+        environments: vec![
+            custom("qa", EnvironmentTier::Production),
+            custom("QA", EnvironmentTier::Local),
+        ],
+        clusters: vec![entry_on("a", on("QA"))],
+        ..ClusterRegistry::default()
+    };
+    let mut deleted = rows();
+    assert_eq!(tier_of(&deleted, 0), EnvironmentTier::Production);
+    delete_environment(&mut deleted, 0);
+    assert_eq!(tier_of(&deleted, 0), EnvironmentTier::Production);
+    let mut renamed = rows();
+    rename_environment(&mut renamed, 0, "zz".to_owned());
+    assert_eq!(tier_of(&renamed, 0), EnvironmentTier::Production);
+}
+
+#[test]
+fn a_rename_that_loosens_nothing_leaves_references_alone() {
+    let mut registry = ClusterRegistry {
+        environments: vec![custom("QA", EnvironmentTier::Staging)],
+        clusters: vec![entry_on("a", on("Gone"))],
+        ..ClusterRegistry::default()
+    };
+    rename_environment(&mut registry, 0, "QA2".to_owned());
+    assert_eq!(registry.clusters[0].environment, Some(on("Gone")));
+}

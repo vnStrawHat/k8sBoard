@@ -194,21 +194,29 @@ pub(crate) fn is_reserved(name: &str) -> bool {
             .any(|tier| folded(tier.name()) == name || folded(tier.badge()) == name)
 }
 
-/// The custom environments resolution may use, in list order: a reserved name, or one repeating an
-/// earlier custom name ignoring case, is skipped (only a hand edit can produce either).
+/// Whether the custom environment at `at` takes part in resolution: a reserved name, or one
+/// repeating an earlier custom name ignoring case, is skipped (only a hand edit can produce
+/// either). A missing row is not usable.
+pub(crate) fn is_usable(custom: &[CustomEnvironment], at: usize) -> bool {
+    let Some(environment) = custom.get(at) else {
+        return false;
+    };
+    let name = folded(&environment.name);
+    let repeats = custom[..at]
+        .iter()
+        .any(|earlier| folded(&earlier.name) == name);
+    !is_reserved(&name) && !repeats
+}
+
+/// The custom environments resolution may use, in list order.
 pub(crate) fn usable_environments(
     custom: &[CustomEnvironment],
 ) -> impl Iterator<Item = &CustomEnvironment> {
     custom
         .iter()
         .enumerate()
-        .filter_map(|(index, environment)| {
-            let name = folded(&environment.name);
-            let repeats = custom[..index]
-                .iter()
-                .any(|earlier| folded(&earlier.name) == name);
-            (!is_reserved(&name) && !repeats).then_some(environment)
-        })
+        .filter(|(index, _)| is_usable(custom, *index))
+        .map(|(_, environment)| environment)
 }
 
 /// Matches a `Custom` key exactly (case-sensitive) among the usable environments. A missing one

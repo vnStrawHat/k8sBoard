@@ -5,8 +5,8 @@
 use crate::cluster_form::FieldError;
 use crate::cluster_registry::ClusterRegistry;
 use crate::environment::{
-    CustomEnvironment, EnvironmentColor, EnvironmentKey, EnvironmentTier, is_reserved,
-    usable_environments,
+    CustomEnvironment, EnvironmentColor, EnvironmentKey, EnvironmentTier, is_reserved, is_usable,
+    resolve_environment,
 };
 
 const MAX_NAME_CHARS: usize = 16;
@@ -46,14 +46,6 @@ pub(crate) fn validate_environment_name(
     Ok(name.to_owned())
 }
 
-/// Whether the row at `at` takes part in resolution (a hand-edited reserved or repeated name does
-/// not), so that references to its name ever pointed at it.
-pub(crate) fn is_usable(custom: &[CustomEnvironment], at: usize) -> bool {
-    custom
-        .get(at)
-        .is_some_and(|row| usable_environments(custom).any(|usable| std::ptr::eq(usable, row)))
-}
-
 /// Appends a new environment: the strictest tier and the first hue no built-in uses (decision 9).
 pub(crate) fn add_environment(registry: &mut ClusterRegistry, name: String) {
     registry.environments.push(CustomEnvironment {
@@ -63,20 +55,52 @@ pub(crate) fn add_environment(registry: &mut ClusterRegistry, name: String) {
     });
 }
 
+/// The tier each entry resolves to now (`None`: no environment stored, so it is guessed and no
+/// environment row can change it).
+fn resolved_tiers(registry: &ClusterRegistry) -> Vec<Option<EnvironmentTier>> {
+    registry
+        .clusters
+        .iter()
+        .map(|entry| {
+            let key = entry.environment.as_ref()?;
+            Some(resolve_environment(key, &registry.environments).tier())
+        })
+        .collect()
+}
+
+/// Runs a rename or a delete so that it never loosens a cluster by side effect (decision 11): a
+/// reference that resolved to Production because its name was missing, reserved, or repeated
+/// can start to resolve to a weaker row once a name changes or a row goes. Such an entry is
+/// pinned to the built-in of the tier it had, so its guardrails stay as they were.
+fn keeping_tiers(registry: &mut ClusterRegistry, edit: impl FnOnce(&mut ClusterRegistry)) {
+    let before = resolved_tiers(registry);
+    edit(registry);
+    let after = resolved_tiers(registry);
+    for ((entry, before), after) in registry.clusters.iter_mut().zip(before).zip(after) {
+        if let (Some(before), Some(after)) = (before, after)
+            && after < before
+        {
+            entry.environment = Some(EnvironmentKey::BuiltIn(before));
+        }
+    }
+}
+
 /// Renames the environment at `at`; the cluster entries that referred to it follow.
 pub(crate) fn rename_environment(registry: &mut ClusterRegistry, at: usize, to: String) {
     if at >= registry.environments.len() {
         return;
     }
-    if is_usable(&registry.environments, at) {
-        let old = EnvironmentKey::Custom(registry.environments[at].name.clone());
-        for entry in &mut registry.clusters {
-            if entry.environment.as_ref() == Some(&old) {
-                entry.environment = Some(EnvironmentKey::Custom(to.clone()));
+    keeping_tiers(registry, |registry| {
+        if is_usable(&registry.environments, at) {
+            let old = EnvironmentKey::Custom(registry.environments[at].name.clone());
+            for entry in &mut registry.clusters {
+                if entry.environment.as_ref() == Some(&old) {
+                    entry.environment = Some(EnvironmentKey::Custom(to.clone()));
+                }
             }
         }
-    }
-    registry.environments[at].name = to;
+        registry.environments[at].name = to;
+    });
 }
 
 pub(crate) fn edit_environment(
@@ -92,19 +116,21 @@ pub(crate) fn edit_environment(
 /// Removes the environment at `at`; the clusters that used it move to the built-in of its tier,
 /// which has the same guardrails (decision 10).
 pub(crate) fn delete_environment(registry: &mut ClusterRegistry, at: usize) {
-    let Some(environment) = registry.environments.get(at) else {
+    if at >= registry.environments.len() {
         return;
-    };
-    if is_usable(&registry.environments, at) {
-        let old = EnvironmentKey::Custom(environment.name.clone());
-        let tier = environment.tier;
-        for entry in &mut registry.clusters {
-            if entry.environment.as_ref() == Some(&old) {
-                entry.environment = Some(EnvironmentKey::BuiltIn(tier));
+    }
+    keeping_tiers(registry, |registry| {
+        if is_usable(&registry.environments, at) {
+            let old = EnvironmentKey::Custom(registry.environments[at].name.clone());
+            let tier = registry.environments[at].tier;
+            for entry in &mut registry.clusters {
+                if entry.environment.as_ref() == Some(&old) {
+                    entry.environment = Some(EnvironmentKey::BuiltIn(tier));
+                }
             }
         }
-    }
-    registry.environments.remove(at);
+        registry.environments.remove(at);
+    });
 }
 
 /// The cluster entries that refer to `name` exactly, loaded or not.
