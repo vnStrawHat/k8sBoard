@@ -22,9 +22,9 @@ use crate::cluster_registry::ClusterRef;
 use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
-    DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, chips, created_text,
-    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, first_section_title, helm_body,
-    link_text, menu_button, port_row, section_title, shown_tab, tab_titles, truncated_text,
+    DrawerBody, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, chips, created_text,
+    drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title, helm_body, link_text,
+    menu_button, port_row, section_title, shown_tab, tab_titles, truncated_text,
     truncated_text_with_tooltip, wide_detail_row, yaml_body,
 };
 use crate::helm_release_view::HelmReleaseView;
@@ -67,7 +67,6 @@ pub(crate) fn kind_drawer(
         name: header_name(row),
         subtitle: subtitle(row, now, cx),
         menu: kind_menu_button(kind, row, context, cx.weak_entity()),
-        expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
     let key = ResourceKey::of_row(kind, row);
@@ -123,7 +122,7 @@ pub(crate) fn kind_drawer(
         }
     };
     let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
-    drawer_frame(header, tab_bar, body, state.width(), cx).into_any_element()
+    drawer_frame(header, tab_bar, body, state.width(DrawerSize::Standard), cx).into_any_element()
 }
 
 /// The event title for events, else the object name.

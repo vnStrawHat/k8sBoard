@@ -24,7 +24,6 @@ use crate::usage_chart::{UsageChartModel, usage_chart_card};
 use crate::usage_format::{Measure, format_offset};
 
 const CHART_HEIGHT: f32 = 110.;
-const CHART_HEIGHT_EXPANDED: f32 = 140.;
 const CHART_MIN_WIDTH: f32 = 280.;
 /// The most rows the Table view shows: the sampler holds every coarse point and the fine ticks newer
 /// than the last one (fewer than 20, or that tick would have closed a coarse point); a source answer
@@ -54,7 +53,6 @@ pub(crate) struct MonitorView<'a> {
     pub(crate) note: Option<&'a str>,
     /// The container sub-tab has no scope selector.
     has_scope: bool,
-    pub(crate) is_expanded: bool,
     /// The metrics source query (spec 0048): `Some` makes the tab a source view with six ranges.
     source: Option<&'a SourceFetch>,
     /// Why a saved source is not serving the tab (checking, unreachable, not valid).
@@ -70,7 +68,6 @@ impl<'a> MonitorView<'a> {
             kubelet_status: &live.metrics.kubelet.status,
             note: live.metrics.pods.note.as_deref(),
             has_scope: true,
-            is_expanded: state.is_expanded,
             source: state.monitor.source.as_ref(),
             source_note: source_note(&live.metrics.source),
         }
@@ -92,7 +89,6 @@ impl<'a> MonitorView<'a> {
             kubelet_status: &live.metrics.kubelet.status,
             note: None,
             has_scope: true,
-            is_expanded: state.is_expanded,
             source: state.monitor.source.as_ref(),
             source_note: source_note(&live.metrics.source),
         }
@@ -128,11 +124,7 @@ pub(crate) fn monitor_tab(view: &MonitorView<'_>, cx: &Context<AppShell>) -> Any
             column = if view.state.is_table {
                 column.child(table(&data.rows, true, cx))
             } else {
-                column.child(charts(
-                    data.charts.iter().chain(&data.kubelet_charts),
-                    view.is_expanded,
-                    cx,
-                ))
+                column.child(charts(data.charts.iter().chain(&data.kubelet_charts), cx))
             };
             column
                 .child(muted(format!(
@@ -248,11 +240,7 @@ fn sampler_tab(
     column = if view.state.is_table {
         column.child(table(&data.rows, !data.charts.is_empty(), cx))
     } else {
-        column.child(charts(
-            usage_charts.iter().chain(kubelet_charts),
-            view.is_expanded,
-            cx,
-        ))
+        column.child(charts(usage_charts.iter().chain(kubelet_charts), cx))
     };
     if is_kubelet_down {
         column = column.child(unavailable(
@@ -421,38 +409,22 @@ fn status_text(
     }
 }
 
-/// Two per row when the drawer is expanded, one otherwise.
+/// The cards wrap: one per row in a narrow drawer, two or more when the drawer is wide enough
+/// for `CHART_MIN_WIDTH` each.
 fn charts<'a>(
     models: impl Iterator<Item = &'a Rc<UsageChartModel>>,
-    is_expanded: bool,
     cx: &Context<AppShell>,
 ) -> AnyElement {
-    let height = px(if is_expanded {
-        CHART_HEIGHT_EXPANDED
-    } else {
-        CHART_HEIGHT
-    });
-    let cards = models.map(|model| {
-        let card = usage_chart_card(model.clone(), height, cx);
-        if is_expanded {
+    h_flex()
+        .flex_wrap()
+        .gap_3()
+        .children(models.map(|model| {
             div()
                 .flex_1()
                 .min_w(px(CHART_MIN_WIDTH))
-                .child(card)
-                .into_any_element()
-        } else {
-            div().w_full().child(card).into_any_element()
-        }
-    });
-    if is_expanded {
-        h_flex()
-            .flex_wrap()
-            .gap_3()
-            .children(cards)
-            .into_any_element()
-    } else {
-        v_flex().gap_3().children(cards).into_any_element()
-    }
+                .child(usage_chart_card(model.clone(), px(CHART_HEIGHT), cx))
+        }))
+        .into_any_element()
 }
 
 /// The points of the range, newest first: how long ago, CPU, memory, receive, transmit, read,

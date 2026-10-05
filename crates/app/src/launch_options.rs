@@ -406,17 +406,6 @@ impl LaunchScreen {
         }
     }
 
-    /// Whether the drawer opens expanded: W4b shows the Containers tab so, and W4c the Monitor tab.
-    pub(crate) fn opens_expanded(self) -> bool {
-        matches!(
-            self,
-            Self::PodDrawer(DrawerTab::Containers | DrawerTab::Monitor)
-                | Self::PodMonitorSourceFixture
-                | Self::NodeDrawer(DrawerTab::Monitor)
-                | Self::KindDrawer(_, DrawerTab::Monitor)
-        )
-    }
-
     /// How many ticks of its metrics feed the screen waits for: a chart needs two points.
     #[cfg(any(feature = "screenshot", test))]
     pub(crate) fn min_metrics_ticks(self) -> u64 {

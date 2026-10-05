@@ -29,7 +29,7 @@ use crate::app_shell::workspace::toggle_button;
 use crate::cluster_metrics::{SourceState, TrafficSources};
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{ClusterSession, LiveCluster, scope_includes};
-use crate::drawer::drawer_width;
+use crate::drawer::{DrawerSize, drawer_width};
 use crate::file_export::{ExportState, export_file_name, start_export_with};
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ResourceKey;
@@ -780,10 +780,9 @@ impl TopologyView {
         let center = layout.rects[index].center();
         let key = graph.nodes[index].key.clone();
         // A node with an object opens the drawer, which covers the right of the canvas.
-        let free_width = if key.is_some() {
-            width - f32::from(drawer_width(false, px(width)))
-        } else {
-            width
+        let free_width = match &key {
+            Some(key) => width - f32::from(drawer_width(DrawerSize::of(key), px(width))),
+            None => width,
         };
         self.viewport = self
             .viewport
@@ -1352,7 +1351,11 @@ impl TopologyView {
             return;
         };
         let (width, height) = self.view_area();
-        let free_width = (width - f32::from(drawer_width(false, px(width)))).max(width / 2.);
+        let size = graph.nodes[index]
+            .key
+            .as_ref()
+            .map_or(DrawerSize::Standard, DrawerSize::of);
+        let free_width = (width - f32::from(drawer_width(size, px(width)))).max(width / 2.);
         self.viewport =
             self.viewport
                 .reveal(layout.rects[index], free_width, height, REVEAL_MARGIN);
@@ -1813,11 +1816,9 @@ impl TopologyView {
             .filter(|index| visible.contains(index));
         // The drawer covers the right of the canvas: the minimap and the legend move left of it,
         // and the minimap shrinks so it covers fewer cards.
-        let drawer = if selected_key.is_some() {
-            f32::from(drawer_width(false, px(width)))
-        } else {
-            0.
-        };
+        let drawer = selected_key.as_ref().map_or(0., |key| {
+            f32::from(drawer_width(DrawerSize::of(key), px(width)))
+        });
         let minimap_size = minimap_size(drawer > 0.);
         let frame = CardFrame {
             viewport: self.viewport,

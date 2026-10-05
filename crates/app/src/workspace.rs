@@ -297,11 +297,7 @@ impl AppShell {
         };
         let text = format!("{} selected", count_label(state.checked, singular, plural));
         let bar = selection_bar(text, self.bulk_buttons(cx), &cx.weak_entity(), cx);
-        let right = if self.drawer_subject().is_some() {
-            self.drawer.width()
-        } else {
-            px(0.)
-        };
+        let right = self.open_drawer_width();
         Some(
             div()
                 .absolute()
@@ -324,11 +320,7 @@ impl AppShell {
         } else {
             px(0.)
         };
-        let right = if self.drawer_subject().is_some() {
-            self.drawer.width()
-        } else {
-            px(0.)
-        };
+        let right = self.open_drawer_width();
         Some(
             div()
                 .absolute()

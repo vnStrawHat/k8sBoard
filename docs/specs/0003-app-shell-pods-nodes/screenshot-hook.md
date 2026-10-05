@@ -36,7 +36,7 @@ Without the feature, `--screenshot` exits 2 before GPUI starts ([bootstrap.md](b
 | `pods` | screen Pods, no selection |
 | `nodes` | screen Nodes, no selection |
 | `pod-drawer` | Pods. Select the first pod with ≥ 2 containers, else row 0. Overview tab |
-| `pod-containers` | as `pod-drawer`, plus the Containers tab and `is_expanded = true` |
+| `pod-containers` | as `pod-drawer`, plus the Containers tab |
 | `pod-events` | as `pod-drawer`, on the Events tab (spec 0006); the capture waits for the debounced object events watch |
 | `node-drawer` | Nodes, select row 0 |
 | `node-events` / `<plural>-events` (spec 0007) | as the drawer screen, on the Events tab; the capture waits for the debounced object events watch |

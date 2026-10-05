@@ -35,40 +35,55 @@ use crate::yaml_view::{YamlView, object_ref};
 /// watch, the first YAML GET): arrowing through rows must not send one request per row.
 pub(crate) const DRAWER_SUBJECT_DELAY: Duration = Duration::from_millis(250);
 /// The drawer takes this share of the workspace, but never less than `DRAWER_MIN_WIDTH`.
-const DRAWER_DEFAULT_SHARE: f32 = 0.55;
-/// Expanded, it takes this share, so the table stays visible as a strip at the left.
-const DRAWER_EXPANDED_SHARE: f32 = 0.9;
+const DRAWER_STANDARD_SHARE: f32 = 0.5;
+/// The Pod drawer takes this share: its Containers tab shows the container list beside the detail.
+const DRAWER_WIDE_SHARE: f32 = 0.75;
 const DRAWER_MIN_WIDTH: f32 = 480.;
 /// The workspace width before the first paint has measured it.
 const WORKSPACE_FALLBACK_WIDTH: Pixels = px(1100.);
 
+/// How much of the workspace a drawer takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DrawerSize {
+    /// Every drawer but the Pod drawer's.
+    Standard,
+    /// The Pod drawer.
+    Wide,
+}
+
+impl DrawerSize {
+    /// The size of the drawer that opens for `key`.
+    pub(crate) fn of(key: &ResourceKey) -> Self {
+        match key {
+            ResourceKey::Pod { .. } => Self::Wide,
+            ResourceKey::Node { .. } | ResourceKey::Kind { .. } => Self::Standard,
+        }
+    }
+}
+
 /// The width of the drawer overlay in a workspace `workspace` wide: a share of it, at least
 /// `DRAWER_MIN_WIDTH`, and never wider than the workspace itself (a small window gets a drawer
-/// that fills it). Expanded is never narrower than the default.
-pub(crate) fn drawer_width(is_expanded: bool, workspace: Pixels) -> Pixels {
+/// that fills it).
+pub(crate) fn drawer_width(size: DrawerSize, workspace: Pixels) -> Pixels {
     let workspace = f32::from(workspace).max(0.);
-    let default = (workspace * DRAWER_DEFAULT_SHARE).max(DRAWER_MIN_WIDTH);
-    let width = if is_expanded {
-        default.max(workspace * DRAWER_EXPANDED_SHARE)
-    } else {
-        default
+    let share = match size {
+        DrawerSize::Standard => DRAWER_STANDARD_SHARE,
+        DrawerSize::Wide => DRAWER_WIDE_SHARE,
     };
-    px(width.min(workspace))
+    px((workspace * share).max(DRAWER_MIN_WIDTH).min(workspace))
 }
 const LABEL_WIDTH: Pixels = px(104.);
 /// The kind drawers have longer labels, such as "Concurrency policy". Anything longer still
 /// truncates with a tooltip, or uses `DetailRow::Stacked`.
 pub(crate) const WIDE_LABEL_WIDTH: Pixels = px(136.);
 
-/// What the user changes inside an open drawer, plus whether it is open. The tab and the
-/// expanded flag survive a change of subject on the same screen; `show_screen` resets the tab to
-/// Overview. The selected container does not survive a change of subject.
+/// What the user changes inside an open drawer, plus whether it is open. The tab survives a
+/// change of subject on the same screen; `show_screen` resets the tab to Overview. The selected container does not survive a change of subject.
 pub(crate) struct DrawerState {
     /// Whether the drawer is shown. The row cursor (`AppShell::selected`) can rest on a row while
     /// the drawer is closed; the flag implies a selection.
     pub(crate) is_open: bool,
     pub(crate) tab: DrawerTab,
-    pub(crate) is_expanded: bool,
     pub(crate) selected_container: Option<String>,
     /// The sub-tab of the container detail. Like `tab`, it survives a change of container and
     /// subject; `show_screen` resets it.
@@ -106,7 +121,6 @@ impl DrawerState {
         Self {
             is_open: false,
             tab: DrawerTab::Overview,
-            is_expanded: false,
             selected_container: None,
             container_tab: ContainerTab::Info,
             yaml: None,
@@ -126,8 +140,8 @@ impl DrawerState {
         self.workspace_width.set(width);
     }
 
-    pub(crate) fn width(&self) -> Pixels {
-        drawer_width(self.is_expanded, self.workspace_width.get())
+    pub(crate) fn width(&self, size: DrawerSize) -> Pixels {
+        drawer_width(size, self.workspace_width.get())
     }
 }
 
@@ -413,20 +427,7 @@ pub(crate) fn helm_body(state: &DrawerState) -> DrawerBody {
     })
 }
 
-/// The ⤢/⤡ button of every drawer.
-pub(crate) fn expand_toggle(state: &DrawerState, cx: &Context<AppShell>) -> ExpandToggle {
-    ExpandToggle {
-        is_expanded: state.is_expanded,
-        on_click: Rc::new(cx.listener(|shell, _, _, cx| shell.toggle_drawer_expanded(cx))),
-    }
-}
-
 pub(crate) type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-
-pub(crate) struct ExpandToggle {
-    pub(crate) is_expanded: bool,
-    pub(crate) on_click: ClickHandler,
-}
 
 pub(crate) struct DrawerHeader {
     /// The kind icon in the chip, and the kind name shown before the object name.
@@ -436,7 +437,6 @@ pub(crate) struct DrawerHeader {
     pub(crate) subtitle: AnyElement,
     /// The ⋯ button with its dropdown menu.
     pub(crate) menu: AnyElement,
-    pub(crate) expand: ExpandToggle,
     pub(crate) on_close: ClickHandler,
 }
 
@@ -510,12 +510,6 @@ pub(crate) fn drawer_frame(
 fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     let on_close = header.on_close;
-    let on_expand = header.expand.on_click;
-    let expand_icon = if header.expand.is_expanded {
-        IconName::Minimize2
-    } else {
-        IconName::Maximize2
-    };
     v_flex()
         .flex_shrink_0()
         .gap_1()
@@ -554,13 +548,6 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                         .font_family(theme.mono_font_family.clone()),
                 )
                 .child(header.menu)
-                .child(
-                    Button::new("drawer-expand")
-                        .ghost()
-                        .small()
-                        .icon(Icon::new(expand_icon))
-                        .on_click(move |event, window, cx| on_expand(event, window, cx)),
-                )
                 .child(
                     Button::new("drawer-close")
                         .ghost()
@@ -951,35 +938,54 @@ mod tests {
     }
 
     #[test]
-    fn drawer_is_wider_when_expanded() {
-        let mut state = DrawerState::new();
+    fn drawer_state_sizes_from_the_workspace() {
+        let state = DrawerState::new();
         state.set_workspace_width(px(1200.));
-        assert_eq!(state.width(), px(660.));
-        state.is_expanded = true;
-        assert_eq!(state.width(), px(1080.));
+        assert_eq!(state.width(DrawerSize::Standard), px(600.));
+        assert_eq!(state.width(DrawerSize::Wide), px(900.));
     }
 
     #[test]
-    fn drawer_width_is_a_share_of_the_workspace() {
-        assert_eq!(drawer_width(false, px(1000.)), px(550.));
-        assert_eq!(drawer_width(true, px(1000.)), px(900.));
-        assert_eq!(drawer_width(false, px(2000.)), px(1100.));
-        assert_eq!(drawer_width(true, px(2000.)), px(1800.));
+    fn drawer_width_is_half_the_workspace_and_three_quarters_for_the_wide_one() {
+        assert_eq!(drawer_width(DrawerSize::Standard, px(1000.)), px(500.));
+        assert_eq!(drawer_width(DrawerSize::Wide, px(1000.)), px(750.));
+        assert_eq!(drawer_width(DrawerSize::Standard, px(2000.)), px(1000.));
+        assert_eq!(drawer_width(DrawerSize::Wide, px(2000.)), px(1500.));
+    }
+
+    #[test]
+    fn only_a_pod_gets_the_wide_drawer() {
+        let kind = ResourceKey::Kind {
+            kind: ResourceKind::Deployments,
+            namespace: Some("shop".to_owned()),
+            name: "api".to_owned(),
+        };
+        let node = ResourceKey::Node {
+            name: "node-1".to_owned(),
+        };
+        let pod = ResourceKey::Pod {
+            namespace: "shop".to_owned(),
+            name: "api-0".to_owned(),
+        };
+        assert_eq!(DrawerSize::of(&kind), DrawerSize::Standard);
+        assert_eq!(DrawerSize::of(&node), DrawerSize::Standard);
+        assert_eq!(DrawerSize::of(&pod), DrawerSize::Wide);
     }
 
     #[test]
     fn drawer_width_has_a_floor_in_a_narrow_workspace() {
-        // 55% of 700 is 385: the floor wins, and expanded is not narrower than the default.
-        assert_eq!(drawer_width(false, px(700.)), px(480.));
-        assert_eq!(drawer_width(true, px(700.)), px(630.));
+        // 50% of 800 is 400: the floor wins; the wide share (600) is already above it.
+        assert_eq!(drawer_width(DrawerSize::Standard, px(800.)), px(480.));
+        assert_eq!(drawer_width(DrawerSize::Wide, px(800.)), px(600.));
+        assert_eq!(drawer_width(DrawerSize::Wide, px(600.)), px(480.));
     }
 
     #[test]
     fn drawer_width_never_exceeds_a_small_workspace() {
-        for expanded in [false, true] {
-            assert_eq!(drawer_width(expanded, px(400.)), px(400.));
-            assert_eq!(drawer_width(expanded, px(0.)), px(0.));
-            assert_eq!(drawer_width(expanded, px(-50.)), px(0.));
+        for size in [DrawerSize::Standard, DrawerSize::Wide] {
+            assert_eq!(drawer_width(size, px(400.)), px(400.));
+            assert_eq!(drawer_width(size, px(0.)), px(0.));
+            assert_eq!(drawer_width(size, px(-50.)), px(0.));
         }
     }
 }

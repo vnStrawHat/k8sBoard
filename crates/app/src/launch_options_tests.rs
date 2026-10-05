@@ -356,11 +356,9 @@ fn monitor_screens_parse() {
         screen("deployments-monitor"),
         LaunchScreen::KindDrawer(ResourceKind::Deployments, DrawerTab::Monitor)
     );
-    // They open expanded (W4c) and wait for two ticks of their feed.
-    assert!(screen("pod-monitor").opens_expanded());
+    // They wait for two ticks of their feed.
     assert_eq!(screen("pod-monitor").min_metrics_ticks(), 2);
     assert_eq!(screen("pods").min_metrics_ticks(), 1);
-    assert!(!screen("pod-drawer").opens_expanded());
     // Only the workloads that own pods have a Monitor tab.
     for name in ["configmaps-monitor", "cronjobs-monitor", "nope-monitor"] {
         assert!(

@@ -21,8 +21,8 @@ use crate::cluster_session::{ClusterSession, LiveList};
 use crate::container_detail::{ContainerDetailInput, container_detail};
 use crate::dock::Dock;
 use crate::drawer::{
-    DrawerBody, DrawerHeader, DrawerState, DrawerTab, absent_text, created_text, detail_row,
-    drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, first_section_title, link_text,
+    DrawerBody, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, created_text,
+    detail_row, drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title, link_text,
     menu_button, section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
 };
 use crate::monitor_tab::{MonitorView, monitor_tab};
@@ -57,7 +57,6 @@ pub(crate) fn pod_drawer(
         name: pod.name.clone().into(),
         subtitle: subtitle(pod, now, cx),
         menu: pod_menu_button(pod, session, row, dock, cx.weak_entity()),
-        expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
     let events = pod_events(pod, session, cx);
@@ -69,7 +68,7 @@ pub(crate) fn pod_drawer(
         DrawerTab::Overview | DrawerTab::Values | DrawerTab::Manifest | DrawerTab::Notes => {
             DrawerBody::Scrolling(overview(pod, loaded_events, now, cx))
         }
-        DrawerTab::Containers => DrawerBody::Scrolling(containers_tab(
+        DrawerTab::Containers => DrawerBody::Filling(containers_tab(
             pod,
             state,
             loaded_events,
@@ -87,7 +86,7 @@ pub(crate) fn pod_drawer(
     };
     let titles = tab_titles(tabs, pod.containers.len(), events);
     let tab_bar = drawer_tab_bar(titles, shown, cx);
-    drawer_frame(header, tab_bar, body, state.width(), cx).into_any_element()
+    drawer_frame(header, tab_bar, body, state.width(DrawerSize::Wide), cx).into_any_element()
 }
 
 fn subtitle(pod: &PodSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
@@ -308,7 +307,7 @@ fn condition_tooltip(condition: &PodCondition) -> Option<String> {
 
 fn conditions(pod: &PodSummary, cx: &App) -> AnyElement {
     if pod.conditions.is_empty() {
-        return absent_text(cx).into_any_element();
+        return div().p_4().child(absent_text(cx)).into_any_element();
     }
     let theme = cx.theme();
     h_flex()
@@ -492,7 +491,7 @@ fn containers_tab(
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let Some(selected) = selected_container_index(pod, state) else {
-        return absent_text(cx).into_any_element();
+        return div().p_4().child(absent_text(cx)).into_any_element();
     };
     let list = container_list(&pod.containers, selected, cx);
     let live = links.session.read(cx).live();
@@ -519,21 +518,30 @@ fn containers_tab(
         menu,
         cx,
     );
-    // At the default width the list stacks above the detail; expanded, they sit side by side.
-    if state.is_expanded {
-        h_flex()
-            .items_start()
-            .gap_4()
-            .child(div().w(CONTAINER_LIST_WIDTH).flex_shrink_0().child(list))
-            .child(div().flex_1().min_w_0().child(detail))
-            .into_any_element()
-    } else {
-        v_flex()
-            .gap_4()
-            .child(list)
-            .child(detail)
-            .into_any_element()
-    }
+    // Each side scrolls on its own, so the sidebar's border runs the full height of the tab.
+    h_flex()
+        .size_full()
+        .child(
+            div()
+                .id("container-list")
+                .w(CONTAINER_LIST_WIDTH)
+                .flex_shrink_0()
+                .h_full()
+                .overflow_y_scroll()
+                .border_r_1()
+                .border_color(cx.theme().border)
+                .child(div().p_4().child(list)),
+        )
+        .child(
+            div()
+                .id("container-detail")
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .overflow_y_scroll()
+                .child(div().p_4().child(detail)),
+        )
+        .into_any_element()
 }
 
 /// What the container ⋯ menu reads when it opens.

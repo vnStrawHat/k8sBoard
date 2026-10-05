@@ -43,8 +43,8 @@ use crate::command_palette::{ActiveCluster, PaletteContext, PaletteSnapshot, ope
 use crate::custom_kind::{CustomKind, CustomKindCache};
 use crate::dock::{Dock, DockMode, LogOrigin};
 use crate::drawer::{
-    ContainerTab, DRAWER_SUBJECT_DELAY, DrawerState, DrawerTab, MonitorCache, MonitorKey,
-    MonitorRange, MonitorScope, MonitorState, drawer_tabs, shown_tab,
+    ContainerTab, DRAWER_SUBJECT_DELAY, DrawerSize, DrawerState, DrawerTab, MonitorCache,
+    MonitorKey, MonitorRange, MonitorScope, MonitorState, drawer_tabs, shown_tab,
 };
 use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::filter_bar::ToolkitState;
@@ -652,8 +652,6 @@ impl AppShell {
         });
         let mut drawer = DrawerState::new();
         drawer.tab = options.screen.drawer_tab().unwrap_or(DrawerTab::Overview);
-        // W4b shows the Containers tab expanded, and W4c the Monitor tab.
-        drawer.is_expanded = options.screen.opens_expanded();
         let launch_filter = options.filter;
         let launch_select = options.select;
         let port_forwards = cx.new(|_| PortForwards::new());
@@ -2267,6 +2265,14 @@ impl AppShell {
         self.selected.as_ref().filter(|_| self.drawer.is_open)
     }
 
+    /// The width of the open drawer, zero while none is open: the bars at the bottom of the
+    /// workspace stop left of it.
+    pub(crate) fn open_drawer_width(&self) -> gpui_kit::Pixels {
+        self.drawer_subject().map_or(px(0.), |subject| {
+            self.drawer.width(DrawerSize::of(&subject.key))
+        })
+    }
+
     /// Opens or closes the drawer on the cursor row; opening without a cursor does nothing. A
     /// closing drawer stops its watches and its pending debounce, and wipes revealed Secret values.
     fn set_drawer_open(&mut self, is_open: bool, cx: &mut Context<Self>) {
@@ -2302,11 +2308,6 @@ impl AppShell {
         if tab != DrawerTab::Overview {
             self.drop_secret_values();
         }
-        cx.notify();
-    }
-
-    pub(crate) fn toggle_drawer_expanded(&mut self, cx: &mut Context<Self>) {
-        self.drawer.is_expanded = !self.drawer.is_expanded;
         cx.notify();
     }
 

@@ -31,7 +31,7 @@ There is still no `kube` or `k8s-openapi` dependency: the app sees only `cluster
 | `status_bar.rs` | watch state, API version, kubeconfig user, app version |
 | `pod_table.rs` | `PodTableDelegate` (columns, cells, context menu) |
 | `node_table.rs` | `NodeTableDelegate` |
-| `drawer.rs` | overlay frame: header (kind badge, name, ⋯ ⤢ ✕), width, tab bar |
+| `drawer.rs` | overlay frame: header (kind badge, name, ⋯ ✕), width, tab bar |
 | `pod_drawer.rs` | pod Overview and Containers tabs |
 | `node_drawer.rs` | node Overview |
 | `resource_actions.rs` | pod and node menus, `ActionAvailability` gating |
@@ -48,7 +48,7 @@ AppShell (root view, Entity)
  ├─ screen: Screen                          Pods | Nodes
  ├─ pod_table:  Entity<TableState<PodTableDelegate>>   delegate reads the session
  ├─ node_table: Entity<TableState<NodeTableDelegate>>
- └─ drawer: DrawerState                     tab, expanded, selected container
+ └─ drawer: DrawerState                     tab, selected container
 ClusterSession (Entity)
  ├─ context: String, user: Option<String>
  ├─ phase: SessionPhase

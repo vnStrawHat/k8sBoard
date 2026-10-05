@@ -21,7 +21,7 @@ use super::AppShell;
 use super::port_forward_dialogs::NewForwardPrefill;
 use super::port_forward_open::target_key;
 use crate::drawer::{
-    DrawerBody, DrawerHeader, absent_text, drawer_frame, expand_toggle, first_section_title,
+    DrawerBody, DrawerHeader, DrawerSize, absent_text, drawer_frame, first_section_title,
     menu_button, section_title, truncated_text, truncated_text_with_tooltip, wide_detail_row,
 };
 use crate::environment::environment_badge;
@@ -318,7 +318,6 @@ impl AppShell {
                 )
                 .into_any_element(),
             menu: self.forward_menu_button(id, cx.weak_entity()),
-            expand: expand_toggle(&self.drawer, cx),
             on_close: Rc::new(cx.listener(|shell, _, _, cx| {
                 shell.port_forwards.update(cx, |forwards, cx| {
                     forwards.select(None);
@@ -379,7 +378,7 @@ impl AppShell {
                 header,
                 None,
                 DrawerBody::Scrolling(body),
-                self.drawer.width(),
+                self.drawer.width(DrawerSize::Standard),
                 cx,
             )
             .into_any_element(),

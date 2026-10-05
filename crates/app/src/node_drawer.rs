@@ -16,8 +16,8 @@ use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::container_detail::resource_label;
 use crate::drawer::{
-    DrawerBody, DrawerHeader, DrawerState, DrawerTab, WIDE_LABEL_WIDTH, absent_text, chips,
-    created_text, drawer_frame, drawer_tab_bar, drawer_tabs, expand_toggle, first_section_title,
+    DrawerBody, DrawerHeader, DrawerSize, DrawerState, DrawerTab, WIDE_LABEL_WIDTH, absent_text,
+    chips, created_text, drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title,
     menu_button, section_title, shown_tab, tab_titles, truncated_text, value_or_absent,
     wide_detail_row, yaml_body,
 };
@@ -52,7 +52,6 @@ pub(crate) fn node_drawer(
         name: node.name.clone().into(),
         subtitle: subtitle(node, now, cx),
         menu: node_menu_button(node, session, row, cx.weak_entity()),
-        expand: expand_toggle(state, cx),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
     };
     let key = ResourceKey::of_node(node);
@@ -77,7 +76,7 @@ pub(crate) fn node_drawer(
         }
     };
     let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
-    drawer_frame(header, tab_bar, body, state.width(), cx).into_any_element()
+    drawer_frame(header, tab_bar, body, state.width(DrawerSize::Standard), cx).into_any_element()
 }
 
 fn subtitle(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
