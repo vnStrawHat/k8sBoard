@@ -81,7 +81,7 @@ use crate::pod_table::PodTableDelegate;
 use crate::port_forwards::{PortForwards, StartReport};
 use crate::process_usage::{ProcessUsage, TrafficTotals};
 use crate::recent_changes::ChangeWindow;
-use crate::related_objects::{RelatedSubject, related_subject};
+use crate::related_objects::{RelatedSubject, key_related_subject, related_subject};
 use crate::resource_actions::{
     KeyAvailability, RowAction, delete_kind, delete_kind_of, key_availability, view_logs_reason,
     workload_logs_owner,
@@ -3031,10 +3031,13 @@ impl AppShell {
     /// loaded the row.
     fn selected_related_subject(&self, cx: &App) -> Option<RelatedSubject> {
         let key = &self.drawer_subject()?.key;
+        let live = self.subject_live(cx)?;
+        if let Some(subject) = key_related_subject(key) {
+            return Some(subject).filter(|subject| !is_related_denied(subject, &live.access));
+        }
         let ResourceKey::Kind { kind, .. } = key else {
             return None;
         };
-        let live = self.subject_live(cx)?;
         let row = live
             .kind_list(*kind)?
             .list

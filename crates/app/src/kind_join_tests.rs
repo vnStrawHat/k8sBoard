@@ -526,6 +526,28 @@ fn selector_less_service_matches_no_pods() {
     assert!(matching_pods(&service(&[]), &api_pods()).is_empty());
 }
 
+#[test]
+fn services_selecting_a_pod_use_its_labels_in_its_namespace() {
+    let mut other_namespace = service(&["app=api"]);
+    other_namespace.namespace = "team-b".to_owned();
+    other_namespace.name = "api-b".to_owned();
+    let mut headless_web = service(&["app=web"]);
+    headless_web.name = "web".to_owned();
+    let services = vec![
+        service(&["app=api"]),
+        headless_web,
+        other_namespace,
+        service(&[]),
+    ];
+    let selected: Vec<&str> =
+        services_selecting(&pod("team-a", "api-1", &["app=api", "tier=web"]), &services)
+            .iter()
+            .map(|service| service.name.as_str())
+            .collect();
+    // The selector-less service and the other namespace's service never match.
+    assert_eq!(selected, ["api"]);
+}
+
 // ---- ConfigMaps and Namespaces ----
 
 fn container(kind: ContainerKind) -> ContainerSummary {

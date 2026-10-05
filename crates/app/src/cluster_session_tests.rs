@@ -693,6 +693,42 @@ fn denied_quota_subject_does_not_start() {
 }
 
 #[test]
+fn denied_services_subject_does_not_start() {
+    let subject = RelatedSubject::PodServices {
+        namespace: "team-a".to_owned(),
+    };
+    assert_eq!(
+        denied_related_check(&subject, &access_with(AccessCheck::ListServices)),
+        Some(AccessCheck::ListServices)
+    );
+    assert!(is_related_denied(
+        &subject,
+        &access_with(AccessCheck::ListServices)
+    ));
+    // Another denial does not stop it, and a report that is not known never does.
+    assert_eq!(
+        denied_related_check(&subject, &access_with(AccessCheck::ListEvents)),
+        None
+    );
+    assert_eq!(denied_related_check(&subject, &AccessState::Unknown), None);
+}
+
+#[test]
+fn a_services_subject_lists_services_only() {
+    let subject = RelatedSubject::PodServices {
+        namespace: "team-a".to_owned(),
+    };
+    let list = RelatedList::loading_for(&subject, NamespaceListGates::OPEN);
+    assert!(list.services().is_some_and(LiveList::is_loading));
+    assert!(list.events().is_none());
+    assert!(
+        RelatedList::loading_for(&replica_set_subject(), NamespaceListGates::OPEN)
+            .services()
+            .is_none()
+    );
+}
+
+#[test]
 fn kubelet_round_rejoins_pvc_rows() {
     for kind in ResourceKind::ALL {
         assert_eq!(

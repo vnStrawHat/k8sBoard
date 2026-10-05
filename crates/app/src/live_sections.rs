@@ -251,15 +251,7 @@ fn replica_set_list<'a>(
     let subject = related_subject(kind, row)?;
     match live.related_of(&subject) {
         Some(RelatedList::ReplicaSets(list)) => Some(list),
-        Some(
-            RelatedList::Jobs(_)
-            | RelatedList::ConfigMapValues(_)
-            | RelatedList::Events(_)
-            | RelatedList::NamespaceLimits { .. }
-            | RelatedList::HelmHistory(_)
-            | RelatedList::CustomFields(_),
-        )
-        | None => None,
+        Some(_) | None => None,
     }
 }
 
@@ -609,15 +601,7 @@ fn recent_jobs_rows(
 ) -> Vec<AnyElement> {
     let list = match related_subject(kind, row).and_then(|subject| live.related_of(&subject)) {
         Some(RelatedList::Jobs(list)) => Some(list),
-        Some(
-            RelatedList::ReplicaSets(_)
-            | RelatedList::ConfigMapValues(_)
-            | RelatedList::Events(_)
-            | RelatedList::NamespaceLimits { .. }
-            | RelatedList::HelmHistory(_)
-            | RelatedList::CustomFields(_),
-        )
-        | None => None,
+        Some(_) | None => None,
     };
     match list {
         None | Some(LiveList::Loading) => vec![note("Loading jobs…", cx)],
@@ -1000,15 +984,7 @@ fn config_map_data_rows(
     }
     let list = match related_subject(kind, row).and_then(|subject| live.related_of(&subject)) {
         Some(RelatedList::ConfigMapValues(list)) => Some(list),
-        Some(
-            RelatedList::ReplicaSets(_)
-            | RelatedList::Jobs(_)
-            | RelatedList::Events(_)
-            | RelatedList::NamespaceLimits { .. }
-            | RelatedList::HelmHistory(_)
-            | RelatedList::CustomFields(_),
-        )
-        | None => None,
+        Some(_) | None => None,
     };
     let values = list.and_then(|list| {
         list.ready_items()?.iter().find(|values| {

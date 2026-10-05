@@ -35,7 +35,8 @@ Status: **draft 2026-10-05, revised after advisor review**, from the task-based 
 - [ ] A3 `follow_link`: denied, out of scope (AC 12, 13)
 - [x] B1 one link style, `open_link`, endpoint pod links (AC 11, 17; as built: list rows keep their row click and draw the name with `link_name`; the Revisions row links its `rev N` title)
 - [x] B2 Pod Overview without new watches (AC 19-21; as built: `Volumes` is always shown, with a note when no container mounts a volume; Env / Mounts links open through `open_link`, A3 adds the denied refusal)
-- [ ] B3a Pod Services; B3b Service Exposed by (AC 16, 20, 22)
+- [x] B3a Pod Services (AC 20, 22); as built: `key_related_subject` (related_objects.rs) gives the Pod subject from the key, `services_selecting` lives in `kind_join.rs`, and the section is capped at 20 rows
+- [ ] B3b Service Exposed by (AC 16, 22)
 - [ ] B4 Ingress Backends, NetworkPolicy Pods (AC 15, 18)
 - [x] C1 palette searches the live condition feeds in scope (AC 23)
 - [x] C2 `list_object_names` (AC 24; AC 27 for the cluster half)

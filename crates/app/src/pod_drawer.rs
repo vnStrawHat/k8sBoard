@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cluster::{
     ByteAmount, ContainerKind, ContainerResource, ContainerState, ContainerSummary, CpuAmount,
-    EventSummary, PodCondition, PodSummary, ResourceUsage, VolumeSource,
+    EventSummary, PodCondition, PodSummary, ResourceUsage, ServiceSummary, VolumeSource,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
@@ -18,7 +18,9 @@ use gpui_kit::{
 
 use crate::app_shell::AppShell;
 use crate::clipboard_copy::copyable_mono;
-use crate::cluster_session::{ClusterSession, LiveList};
+use crate::cluster_session::{
+    ClusterSession, LiveCluster, LiveList, RelatedList, denied_related_check,
+};
 use crate::container_detail::{
     ContainerDetailInput, container_detail, last_state_text, volume_target,
 };
@@ -28,11 +30,13 @@ use crate::drawer::{
     created_text, detail_row, drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title,
     link_text, menu_button, section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
 };
+use crate::kind_join::services_selecting;
 use crate::kind_row::deployment_of_pod;
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
 use crate::port_forward_menu::{ForwardMenu, PortButtons, pod_subject};
+use crate::related_objects::key_related_subject;
 use crate::resource_actions::{
     LogsMenu, PodMenuItems, PodMenuLinks, ShellMenu, container_menu, pod_menu, view_logs_reason,
 };
@@ -48,6 +52,10 @@ use crate::usage_format::{Measure, usage_tone};
 const CONTAINER_LIST_WIDTH: Pixels = px(240.);
 /// Element ids of the Volumes links, clear of the overview's own link ids.
 const VOLUME_LINK_ID_BASE: usize = 100;
+/// Element ids of the Services links, clear of the Volumes links.
+const SERVICE_LINK_ID_BASE: usize = 1_000;
+/// Bounds the render cost of a pod that a namespace-wide selector puts behind many services.
+const MAX_LISTED_SERVICES: usize = 20;
 
 pub(crate) fn pod_drawer(
     pod: &PodSummary,
@@ -79,7 +87,13 @@ pub(crate) fn pod_drawer(
     let body = match shown {
         // A pod drawer has no Helm tabs, so `shown_tab` never yields them.
         DrawerTab::Overview | DrawerTab::Values | DrawerTab::Manifest | DrawerTab::Notes => {
-            DrawerBody::Scrolling(overview(pod, loaded_events, now, cx))
+            DrawerBody::Scrolling(overview(
+                pod,
+                loaded_events,
+                session.read(cx).live(),
+                now,
+                cx,
+            ))
         }
         DrawerTab::Containers => DrawerBody::Filling(containers_tab(
             pod,
@@ -194,6 +208,7 @@ fn pod_events<'a>(
 fn overview(
     pod: &PodSummary,
     events: Option<&[EventSummary]>,
+    live: Option<&LiveCluster>,
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -282,6 +297,7 @@ fn overview(
                 .enumerate()
                 .map(|(index, container)| container_row(index, container, now, cx)),
         )
+        .children(services_section(pod, live, cx))
         .children(volumes_section(pod, cx))
         .child(section_title("Labels", cx))
         .child(chips("pod-labels", &labels, cx))
@@ -317,6 +333,107 @@ fn why_box(diagnosis: &PodDiagnosis, cx: &Context<AppShell>) -> AnyElement {
                 .child(label)
         }))
         .into_any_element()
+}
+
+/// `ClusterIP · 80/TCP, 443/TCP`: the type and ports of a service that selects the pod.
+fn service_summary_text(service: &ServiceSummary) -> String {
+    let ports = service
+        .ports
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if ports.is_empty() {
+        service.service_type.clone()
+    } else {
+        format!("{} · {}", service.service_type, ports.join(", "))
+    }
+}
+
+/// The `Services` section: the services of the pod's namespace that select it, from the
+/// drawer-scoped services watch.
+fn services_section(
+    pod: &PodSummary,
+    live: Option<&LiveCluster>,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let note = |text: &str| {
+        div()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(text.to_owned())
+            .into_any_element()
+    };
+    let subject = key_related_subject(&ResourceKey::of_pod(pod));
+    let body = match (live, subject) {
+        (Some(live), Some(subject)) => {
+            if let Some(check) = denied_related_check(&subject, &live.access) {
+                vec![note(&format!("Not permitted: {check}"))]
+            } else {
+                match live.related_of(&subject).and_then(RelatedList::services) {
+                    None | Some(LiveList::Loading) => vec![note("Loading services…")],
+                    Some(LiveList::Failed { message }) => vec![
+                        note("Services are unavailable"),
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(message.clone())
+                            .into_any_element(),
+                    ],
+                    Some(LiveList::Ready { items, .. }) => service_rows(pod, items, cx)
+                        .unwrap_or_else(|| vec![note("No service selects this pod")]),
+                }
+            }
+        }
+        _ => vec![note("Loading services…")],
+    };
+    std::iter::once(section_title("Services", cx).into_any_element())
+        .chain(body)
+        .collect()
+}
+
+/// One row per service that selects the pod, capped; `None` when no service does.
+fn service_rows(
+    pod: &PodSummary,
+    services: &[ServiceSummary],
+    cx: &Context<AppShell>,
+) -> Option<Vec<AnyElement>> {
+    let selecting = services_selecting(pod, services);
+    if selecting.is_empty() {
+        return None;
+    }
+    let hidden = selecting.len().saturating_sub(MAX_LISTED_SERVICES);
+    let rows = selecting
+        .iter()
+        .take(MAX_LISTED_SERVICES)
+        .enumerate()
+        .map(|(index, service)| {
+            let name = SharedString::from(service.name.clone());
+            let target = ResourceKey::of_object("Service", Some(&service.namespace), &service.name);
+            let link = match target {
+                Some(target) => link_text(SERVICE_LINK_ID_BASE + index, &name, target, cx),
+                None => div().truncate().child(name).into_any_element(),
+            };
+            h_flex()
+                .gap_2()
+                .py_1()
+                .text_sm()
+                .child(link)
+                .child(
+                    div()
+                        .truncate()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(service_summary_text(service)),
+                )
+                .into_any_element()
+        })
+        .chain((hidden > 0).then(|| {
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("+{hidden} more"))
+                .into_any_element()
+        }));
+    Some(rows.collect())
 }
 
 /// One volume that a container of the pod mounts, as the Volumes section lists it.

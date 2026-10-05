@@ -4,6 +4,7 @@
 use crate::custom_kind::CustomKind;
 use crate::kind_row::{KindObject, KindRow};
 use crate::resource_kind::ResourceKind;
+use crate::table_selection::ResourceKey;
 
 /// The objects whose watch the open drawer needs. One watch runs at a time, like the object
 /// events watch.
@@ -32,6 +33,19 @@ pub(crate) enum RelatedSubject {
         namespace: Option<String>,
         name: String,
     },
+    /// Every Service of a Pod drawer's namespace; the drawer keeps those that select the pod.
+    PodServices { namespace: String },
+}
+
+/// The related subject a drawer key names without a row: a Pod. The Pod drawer also opens over
+/// Topology, where the explorer holds no Pods list, so this subject cannot wait for a row.
+pub(crate) fn key_related_subject(key: &ResourceKey) -> Option<RelatedSubject> {
+    match key {
+        ResourceKey::Pod { namespace, .. } => Some(RelatedSubject::PodServices {
+            namespace: namespace.clone(),
+        }),
+        ResourceKey::Node { .. } | ResourceKey::Kind { .. } => None,
+    }
 }
 
 /// The related subject of a row. A kind without related content, and a Deployment without a
@@ -240,6 +254,32 @@ mod tests {
             })
         );
         assert_eq!(related_subject(ResourceKind::Secrets, &row), None);
+    }
+
+    #[test]
+    fn a_pod_key_names_its_namespace_services() {
+        let pod = ResourceKey::Pod {
+            namespace: "team-a".to_owned(),
+            name: "api-1".to_owned(),
+        };
+        assert_eq!(
+            key_related_subject(&pod),
+            Some(RelatedSubject::PodServices {
+                namespace: "team-a".to_owned(),
+            })
+        );
+        // Two pods of a namespace share the one watch.
+        let sibling = ResourceKey::Pod {
+            namespace: "team-a".to_owned(),
+            name: "api-2".to_owned(),
+        };
+        assert_eq!(key_related_subject(&pod), key_related_subject(&sibling));
+        assert_eq!(
+            key_related_subject(&ResourceKey::Node {
+                name: "node-1".to_owned()
+            }),
+            None
+        );
     }
 
     fn custom_kind(scope: cluster::ResourceScope) -> crate::custom_kind::CustomKind {

@@ -324,3 +324,36 @@ fn volume_rows_name_sources_and_link_only_those_with_a_screen() {
         ResourceKey::of_object("PersistentVolumeClaim", Some("shop"), "data-0")
     );
 }
+
+fn service(ports: &[(u16, &str)]) -> ServiceSummary {
+    ServiceSummary {
+        namespace: "team-a".to_owned(),
+        name: "api".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        service_type: "ClusterIP".to_owned(),
+        cluster_ips: Vec::new(),
+        is_headless: false,
+        external_addresses: Vec::new(),
+        ports: ports
+            .iter()
+            .map(|(port, protocol)| cluster::ServicePortSummary {
+                name: None,
+                port: *port,
+                target_port: None,
+                node_port: None,
+                protocol: (*protocol).to_owned(),
+            })
+            .collect(),
+        selector: Vec::new(),
+    }
+}
+
+#[test]
+fn service_summary_text_names_the_type_and_ports() {
+    assert_eq!(
+        service_summary_text(&service(&[(80, "TCP"), (443, "TCP")])),
+        "ClusterIP · 80/TCP, 443/TCP"
+    );
+    assert_eq!(service_summary_text(&service(&[])), "ClusterIP");
+}

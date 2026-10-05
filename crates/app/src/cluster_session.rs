@@ -12,8 +12,8 @@ use cluster::{
     JobSummary, Kubeconfig, KubeletTargets, LimitRangeSummary, MetricsError, MetricsSource,
     MetricsSourceError, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, ObjectKind,
     PersistentVolumeSummary, PodSummary, ProxyChoice, ProxyUrlError, RbacSnapshot,
-    ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, SourceCheck,
-    StorageClassSummary, TrafficCounter, TrafficMetricSource, WatchUpdate,
+    ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, ServiceSummary,
+    SourceCheck, StorageClassSummary, TrafficCounter, TrafficMetricSource, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{App, Context, Task};
@@ -649,6 +649,8 @@ pub(crate) enum RelatedList {
     HelmHistory(LiveList<HelmRevision>),
     /// The masked, flattened spec and status of one custom object (0 or 1 item).
     CustomFields(LiveList<CustomObjectFields>),
+    /// The Services of one namespace, for a Pod drawer.
+    Services(LiveList<ServiceSummary>),
 }
 
 /// One related watch update, typed on tokio so one subscription serves every subject.
@@ -661,6 +663,7 @@ enum RelatedUpdate {
     LimitRanges(WatchUpdate<LimitRangeSummary>),
     HelmHistory(WatchUpdate<HelmRevision>),
     CustomFields(WatchUpdate<CustomObjectFields>),
+    Services(WatchUpdate<ServiceSummary>),
 }
 
 impl RelatedList {
@@ -678,6 +681,7 @@ impl RelatedList {
             },
             RelatedSubject::HelmHistory { .. } => Self::HelmHistory(LiveList::Loading),
             RelatedSubject::CustomFields { .. } => Self::CustomFields(LiveList::Loading),
+            RelatedSubject::PodServices { .. } => Self::Services(LiveList::Loading),
         }
     }
 
@@ -698,6 +702,7 @@ impl RelatedList {
             }
             (Self::HelmHistory(list), RelatedUpdate::HelmHistory(update)) => list.apply(update),
             (Self::CustomFields(list), RelatedUpdate::CustomFields(update)) => list.apply(update),
+            (Self::Services(list), RelatedUpdate::Services(update)) => list.apply(update),
             // A stale update of another subject's kind.
             _ => {}
         }
@@ -718,6 +723,7 @@ impl RelatedList {
             }
             Self::HelmHistory(list) => list.mark_stopped(),
             Self::CustomFields(list) => list.mark_stopped(),
+            Self::Services(list) => list.mark_stopped(),
         }
     }
 
@@ -725,12 +731,15 @@ impl RelatedList {
     pub(crate) fn events(&self) -> Option<&LiveList<EventSummary>> {
         match self {
             Self::Events(list) => Some(list),
-            Self::ReplicaSets(_)
-            | Self::Jobs(_)
-            | Self::ConfigMapValues(_)
-            | Self::NamespaceLimits { .. }
-            | Self::HelmHistory(_)
-            | Self::CustomFields(_) => None,
+            _ => None,
+        }
+    }
+
+    /// The Services of a Pod drawer's namespace, when this list holds them.
+    pub(crate) fn services(&self) -> Option<&LiveList<ServiceSummary>> {
+        match self {
+            Self::Services(list) => Some(list),
+            _ => None,
         }
     }
 
@@ -746,12 +755,7 @@ impl RelatedList {
                 quotas,
                 limit_ranges,
             } => Some((quotas, limit_ranges)),
-            Self::ReplicaSets(_)
-            | Self::Jobs(_)
-            | Self::ConfigMapValues(_)
-            | Self::Events(_)
-            | Self::HelmHistory(_)
-            | Self::CustomFields(_) => None,
+            _ => None,
         }
     }
 
@@ -759,12 +763,7 @@ impl RelatedList {
     pub(crate) fn helm_history(&self) -> Option<&LiveList<HelmRevision>> {
         match self {
             Self::HelmHistory(list) => Some(list),
-            Self::ReplicaSets(_)
-            | Self::Jobs(_)
-            | Self::ConfigMapValues(_)
-            | Self::Events(_)
-            | Self::NamespaceLimits { .. }
-            | Self::CustomFields(_) => None,
+            _ => None,
         }
     }
 
@@ -790,6 +789,7 @@ impl RelatedList {
             } => quotas.is_loading() || limit_ranges.is_loading(),
             Self::HelmHistory(list) => list.is_loading(),
             Self::CustomFields(list) => list.is_loading(),
+            Self::Services(list) => list.is_loading(),
         }
     }
 }
@@ -875,6 +875,7 @@ pub(crate) fn denied_related_check(
 ) -> Option<AccessCheck> {
     let check = match subject {
         RelatedSubject::QuotaRejections { .. } => AccessCheck::ListEvents,
+        RelatedSubject::PodServices { .. } => AccessCheck::ListServices,
         // Its two lists are gated each by its own check: see `namespace_list_gates`.
         RelatedSubject::NamespaceQuotas { .. } => return None,
         // The history reads the same Secrets the Releases kind lists, which its access check gates.
@@ -3728,6 +3729,10 @@ impl RelatedObjects {
                 // A row always fits its kind's scope; an end of stream reads as a failed list.
                 None => futures::stream::empty().boxed(),
             },
+            RelatedSubject::PodServices { namespace } => connection
+                .watch_services(NamespaceScope::Named(namespace.clone()))
+                .map(RelatedUpdate::Services)
+                .boxed(),
         };
         let applied = subject.clone();
         let closed = subject.clone();

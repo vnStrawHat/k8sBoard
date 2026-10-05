@@ -181,6 +181,22 @@ pub(crate) fn matching_pods<'a>(
         .collect()
 }
 
+/// The services of `services` that select `pod`, in list order: the reverse of `matching_pods`,
+/// by the same rule. A selector-less Service selects none.
+pub(crate) fn services_selecting<'a>(
+    pod: &PodSummary,
+    services: &'a [ServiceSummary],
+) -> Vec<&'a ServiceSummary> {
+    services
+        .iter()
+        .filter(|service| {
+            service.namespace == pod.namespace
+                && Selector::of_labels(&service.selector)
+                    .is_some_and(|selector| selector.matches(&pod.labels))
+        })
+        .collect()
+}
+
 /// The slices that belong to `service`: its namespace, the service-name label, no FQDN slices.
 pub(crate) fn service_slices<'a>(
     service: &ServiceSummary,
