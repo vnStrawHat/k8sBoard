@@ -34,8 +34,8 @@ pub(crate) struct TopologyView {
 }
 ```
 
-- Namespace default: `Named(ns)` → `ns`; `Several` → the first; `All` → `None`. A namespace that leaves the scope resets to the default.
-- With `None` the canvas area shows `Pick a namespace to draw its topology.` and the dropdown.
+- Namespace default: `Named(ns)` → `ns`; `Several` → the first, and the header adds `1 of {n} namespaces in scope` (the dropdown lists the scope only); `All` → the namespace Topology drew last in this context (`last_namespaces`, kept while the app runs), else the one with the most pods among the pods already loaded (no new watch). A namespace that leaves the scope resets to the default. UX walk H6.
+- With `None` (`All`, before the pods have loaded or when there are none) the canvas area shows `Pick a namespace above to draw its topology.` and the dropdown is the primary button, labelled `Pick a namespace`.
 - A context switch (new session) clears `build`, `layout`, `expanded`, and the selection. A namespace change clears `expanded` and lays out from scratch. `pins` is keyed by context, so other contexts keep theirs.
 
 ## Feeds and watch budget (`topology_feeds.rs`, `cluster_session.rs`)

@@ -690,7 +690,7 @@ fn show_in_topology_draws_the_namespace_of_the_object(cx: &mut TestAppContext) {
     render(window, cx);
     shell.read_with(cx, |shell, cx| {
         assert_eq!(shell.screen, Screen::Topology);
-        let count = shell.topology.read(cx).header_count();
+        let count = shell.topology.read(cx).header_count(cx);
         assert_eq!(count.as_deref(), Some("ns: shop \u{b7} loading\u{2026}"));
     });
 }

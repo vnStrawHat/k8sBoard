@@ -272,7 +272,7 @@ fn switch_leaves_no_topology_of_the_old_cluster(cx: &mut TestAppContext) {
         .update(cx, |shell, cx| shell.show_in_topology(&key, cx));
     cx.run_until_parked();
     fixture.shell.read_with(cx, |shell, cx| {
-        assert!(shell.topology.read(cx).header_count().is_some());
+        assert!(shell.topology.read(cx).header_count(cx).is_some());
     });
     fixture.switch("stg-b", cx);
     cx.run_until_parked();
@@ -280,7 +280,7 @@ fn switch_leaves_no_topology_of_the_old_cluster(cx: &mut TestAppContext) {
     // The view held the session and a namespace of the old cluster: both are gone.
     assert!(old.upgrade().is_none(), "the old session is still held");
     fixture.shell.read_with(cx, |shell, cx| {
-        assert_eq!(shell.topology.read(cx).header_count(), None);
+        assert_eq!(shell.topology.read(cx).header_count(cx), None);
     });
 }
 

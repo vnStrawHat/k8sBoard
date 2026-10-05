@@ -821,3 +821,94 @@ fn a_partial_first_view_says_so_until_fit(cx: &mut gpui_kit::TestAppContext) {
     notifications(&view, cx, |view, cx| view.fit(cx));
     cx.update(|cx| assert_eq!(view.read(cx).partial_view_hint(), None));
 }
+
+fn pod_in(namespace: &str, name: &str) -> PodSummary {
+    PodSummary {
+        namespace: namespace.to_owned(),
+        ..crate::topology_fixtures::pod(name, &[], None)
+    }
+}
+
+fn namespace_named(name: &str) -> NamespaceSummary {
+    NamespaceSummary {
+        name: name.to_owned(),
+        phase: cluster::NamespacePhase::Active,
+        created_at: None,
+        labels: Vec::new(),
+        deleting_since: None,
+        deletion_conditions: Vec::new(),
+    }
+}
+
+#[test]
+fn a_scope_of_several_namespaces_says_how_many_are_drawn() {
+    let several = NamespaceScope::Several(vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
+    assert_eq!(
+        scope_note(&several).as_deref(),
+        Some("1 of 3 namespaces in scope")
+    );
+    assert_eq!(scope_note(&NamespaceScope::All), None);
+    assert_eq!(scope_note(&named("shop")), None);
+}
+
+#[test]
+fn scope_all_opens_in_the_namespace_with_the_most_pods() {
+    let pods = [
+        pod_in("blog", "a"),
+        pod_in("shop", "b"),
+        pod_in("shop", "c"),
+        pod_in("blog", "d"),
+        pod_in("zeta", "e"),
+    ];
+    // A tie goes to the first name.
+    assert_eq!(
+        preselected_namespace(None, None, &pods).as_deref(),
+        Some("blog")
+    );
+    let pods = [pods.as_slice(), &[pod_in("shop", "f")]].concat();
+    assert_eq!(
+        preselected_namespace(None, None, &pods).as_deref(),
+        Some("shop")
+    );
+}
+
+#[test]
+fn scope_all_without_pods_has_no_namespace_to_open_in() {
+    assert_eq!(preselected_namespace(None, None, &[]), None);
+}
+
+#[test]
+fn the_last_namespace_wins_while_it_still_exists() {
+    let pods = [pod_in("blog", "a")];
+    let known = [namespace_named("blog"), namespace_named("shop")];
+    assert_eq!(
+        preselected_namespace(Some("shop"), Some(&known), &pods).as_deref(),
+        Some("shop")
+    );
+    // A namespace that is not in the loaded list any more is not opened.
+    assert_eq!(
+        preselected_namespace(Some("gone"), Some(&known), &pods).as_deref(),
+        Some("blog")
+    );
+    // Before the list loads, the memory is trusted.
+    assert_eq!(
+        preselected_namespace(Some("gone"), None, &pods).as_deref(),
+        Some("gone")
+    );
+}
+
+#[gpui_kit::test]
+fn a_namespace_change_is_remembered_per_context(cx: &mut gpui_kit::TestAppContext) {
+    let view = view_of(cx);
+    notifications(&view, cx, |view, cx| {
+        view.change_namespace(Some("blog".to_owned()), cx);
+    });
+    notifications(&view, cx, |view, cx| view.change_namespace(None, cx));
+    cx.update(|cx| {
+        // The test view has no session, so its context is the empty one.
+        assert_eq!(
+            view.read(cx).last_namespaces.get("").map(String::as_str),
+            Some("blog")
+        );
+    });
+}

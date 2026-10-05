@@ -212,7 +212,7 @@ impl AppShell {
                 self.issue_summary(cx)
                     .map(|summary| count_label(summary.total, "issue", "issues")),
             ),
-            Screen::Topology => ("Topology", self.topology.read(cx).header_count()),
+            Screen::Topology => ("Topology", self.topology.read(cx).header_count(cx)),
             Screen::PortForwarding => ("Port Forwarding", Some(self.port_forward_header_count(cx))),
             Screen::Kind(kind) => (
                 kind.label(),

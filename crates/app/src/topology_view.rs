@@ -2,7 +2,7 @@
 //! The graph and its layout are rebuilt at most every `TOPOLOGY_TICK`, and only when something
 //! changed; everything runs on the main thread because the input is bounded (decision 29).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -293,6 +293,8 @@ pub(crate) struct TopologyView {
     shell: WeakEntity<AppShell>,
     /// The namespace drawn; `None` until one is picked (scope `All`).
     namespace: Option<String>,
+    /// The namespace drawn last, per context, kept while the app runs: scope `All` opens in it.
+    last_namespaces: HashMap<String, String>,
     filter: TopologyFilter,
     /// The pod groups the user opened.
     expanded: BTreeSet<NodeId>,
@@ -352,6 +354,7 @@ impl TopologyView {
             session: None,
             shell,
             namespace: None,
+            last_namespaces: HashMap::new(),
             filter: TopologyFilter::initial(),
             expanded: BTreeSet::new(),
             pins: HashMap::new(),
@@ -453,9 +456,15 @@ impl TopologyView {
         }
     }
 
-    /// The count under the title: `ns: {ns} · {n} resources`.
-    pub(crate) fn header_count(&self) -> Option<String> {
-        Some(count_text(self.namespace.as_deref()?, self.build.as_ref()))
+    /// The count under the title: `ns: {ns} · {n} resources`, and how many of the namespaces of
+    /// the title-bar scope this graph is when the scope has several.
+    pub(crate) fn header_count(&self, cx: &App) -> Option<String> {
+        let count = count_text(self.namespace.as_deref()?, self.build.as_ref());
+        let note = self.live(cx).and_then(|live| scope_note(&live.scope));
+        Some(match note {
+            Some(note) => format!("{count} \u{b7} {note}"),
+            None => count,
+        })
     }
 
     /// Whether there is a graph to export.
@@ -568,7 +577,16 @@ impl TopologyView {
             return;
         };
         if let Some(live) = session.read(cx).live() {
-            let resolved = resolve_namespace(self.namespace.as_deref(), &live.scope);
+            // Scope `All` has no default namespace: open in one instead of an empty picker.
+            let resolved =
+                resolve_namespace(self.namespace.as_deref(), &live.scope).or_else(|| {
+                    let last = self.last_namespaces.get(self.context(cx));
+                    preselected_namespace(
+                        last.map(String::as_str),
+                        live.namespaces.ready_items(),
+                        live.pods.ready_items().unwrap_or_default(),
+                    )
+                });
             if resolved != self.namespace {
                 self.change_namespace(resolved, cx);
             }
@@ -589,6 +607,10 @@ impl TopologyView {
     /// Another namespace: nothing of the old one stays (decision 1), and the drawer closes if it
     /// shows an object of it.
     fn change_namespace(&mut self, namespace: Option<String>, cx: &mut Context<Self>) {
+        if let Some(namespace) = &namespace {
+            let context = self.context(cx).to_owned();
+            self.last_namespaces.insert(context, namespace.clone());
+        }
         self.namespace = namespace;
         self.expanded.clear();
         self.pending_focus = None;
@@ -1497,14 +1519,29 @@ impl TopologyView {
         };
         let namespaces = namespace_choices(&live.scope, live.namespaces.ready_items());
         let view = cx.weak_entity();
-        let namespace_label = format!("Namespace: {}", self.namespace.as_deref().unwrap_or("none"));
+        // Without a namespace the picker is the one thing to do: it is the primary button.
+        let namespace_label = match &self.namespace {
+            Some(namespace) => format!("Namespace: {namespace}"),
+            None => "Pick a namespace".to_owned(),
+        };
+        let namespace_tooltip = match scope_note(&live.scope) {
+            Some(note) => format!("The namespace to draw \u{b7} {note}"),
+            None => "The namespace to draw".to_owned(),
+        };
+        let has_namespace = self.namespace.is_some();
         let current = self.namespace.clone();
         let namespace_button = Button::new("topology-namespace")
-            .outline()
+            .map(|button| {
+                if has_namespace {
+                    button.outline()
+                } else {
+                    button.primary()
+                }
+            })
             .small()
             .label(namespace_label)
             .dropdown_caret(true)
-            .tooltip("The namespace to draw")
+            .tooltip(namespace_tooltip)
             .dropdown_menu({
                 let view = view.clone();
                 move |menu, _, _| {
@@ -1771,7 +1808,7 @@ impl TopologyView {
                 .into_any_element()
         };
         let Some(namespace) = self.namespace.clone() else {
-            return centered("Pick a namespace to draw its topology.".into());
+            return centered("Pick a namespace above to draw its topology.".into());
         };
         match &self.build {
             None => v_flex()
@@ -2253,6 +2290,42 @@ fn count_text(namespace: &str, build: Option<&Built>) -> String {
         Some(Err(_)) => format!("ns: {namespace} \u{b7} too large"),
         None => format!("ns: {namespace} \u{b7} loading\u{2026}"),
     }
+}
+
+/// `1 of {n} namespaces in scope` when the title-bar scope holds several: Topology draws one.
+fn scope_note(scope: &NamespaceScope) -> Option<String> {
+    match scope {
+        NamespaceScope::Several(namespaces) => {
+            Some(format!("1 of {} namespaces in scope", namespaces.len()))
+        }
+        NamespaceScope::All | NamespaceScope::Named(_) => None,
+    }
+}
+
+/// The namespace to open in when the scope is `All`: the one Topology drew last in this context,
+/// else the one with the most pods among the pods already loaded. `known` is the loaded
+/// namespace list, when there is one: a remembered name that is not in it is gone.
+fn preselected_namespace(
+    last: Option<&str>,
+    known: Option<&[NamespaceSummary]>,
+    pods: &[PodSummary],
+) -> Option<String> {
+    let last = last.filter(|last| {
+        known.is_none_or(|known| known.iter().any(|namespace| namespace.name == *last))
+    });
+    if let Some(last) = last {
+        return Some(last.to_owned());
+    }
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for pod in pods {
+        *counts.entry(pod.namespace.as_str()).or_default() += 1;
+    }
+    // A tie goes to the first name, since the map is sorted and `max_by_key` keeps the last.
+    counts
+        .into_iter()
+        .rev()
+        .max_by_key(|(_, count)| *count)
+        .map(|(namespace, _)| namespace.to_owned())
 }
 
 /// What a click on a card does.
