@@ -6,7 +6,7 @@ Status: draft (architect, 2026-10-05). Crate: `crates/app` only, no dependency c
 
 - Settings › Clusters loses its `Color` row. `ClusterEntry.color` / `ClusterProfile.color` go away (the title-bar stripe that read them was removed on 2026-10-04, commit 301f4f0).
 - Environments become data. The four built-ins stay exactly as they are. Users add **custom environments**, each with a name, a colour from a fixed theme-token palette, and a **tier** ("Behaves like": one of the four built-ins). All guardrails read the tier, so a custom environment is never weaker than the built-in it names.
-- A new Settings page, **Environments** (after Clusters): built-ins listed read-only, custom ones with rename, recolour, tier, move up/down, delete, and an add row.
+- A new Settings page, **Environments** (after Clusters): built-ins listed read-only, custom ones (in creation order) with rename, recolour, tier, delete, and an add row.
 - Custom environments show everywhere an environment shows today: the Environment dropdown, every badge, the Unlocked frame, the group headers of Settings › Clusters and the switcher, search text, and the Safety tier table.
 
 ## Non-goals
@@ -16,6 +16,8 @@ Status: draft (architect, 2026-10-05). Crate: `crates/app` only, no dependency c
 - Guessing a custom environment from names: `guess_environment` stays built-in only.
 - A separate badge text: a custom badge is its name in upper case.
 - Re-locking an open session when its environment or tier changes (same as today: the lock is chosen at open).
+- Reordering custom environments (creation order only; a possible follow-up).
+- Unicode lookalike names (`Рrod` with a Cyrillic `Р`): accepted, out of scope.
 
 ## Files in this spec
 
@@ -35,8 +37,8 @@ Also changed in this commit: [0024 persisted-prefs.md](../0024-settings-store/pe
 - [ ] 2. The 0003 colour-literal grep of `crates/app/src` stays clean: every environment colour is a `cx.theme()` token.
 - [ ] 3. Settings › Clusters has no `Color` row. A `settings.json` with `registry.clusters[].color` loads without a reset notice, and the next save drops the key.
 - [ ] 4. `registry.environments` round-trips; the settings key allow-list gains `registry.environments{,.name,.color,.tier}` and loses `registry.clusters.color`. A default file has no `environments` key.
-- [ ] 5. A cluster in a custom environment gets every default of its tier: Production tier opens Read-only, confirms by typing the name, and has the node shell off; other tiers match the built-in set explicitly. A reference to a missing custom environment resolves to Production.
-- [ ] 6. The Environments page adds, renames (cluster references follow), recolours, re-tiers, reorders, and deletes custom environments. Invalid names show the message under the field and save nothing. Delete moves its clusters to the built-in of the same tier, after a confirm dialog that names how many.
+- [ ] 5. A cluster in a custom environment gets every default of its tier: Production tier opens Read-only, confirms by typing the name, and has the node shell off; other tiers match the built-in set explicitly. A reference to a missing custom environment, or to one with a reserved or repeated name (hand edit), resolves to Production; references match exactly (case-sensitive).
+- [ ] 6. The Environments page adds, renames (cluster references follow), recolours, re-tiers, and deletes custom environments; a weaker tier on a used environment asks first, naming how many clusters. Rows skipped at resolution show their validation error. Invalid names show the message under the field and save nothing. Delete moves its clusters to the built-in of the same tier, after a confirm dialog that names how many.
 - [ ] 7. Custom badges (upper-case name, chosen colour) show in the title bar, switcher, Settings › Clusters list, palette, and confirm/drain/port-forward dialogs. Custom groups follow the built-in groups in the page's order, in both Settings › Clusters and the switcher. The Safety tier table lists custom names under their tier.
 - [ ] 8. ui-verifier shots (test-plan §5) in Default light/dark and One Dark: no unreadable badge, palette swatches distinct.
 

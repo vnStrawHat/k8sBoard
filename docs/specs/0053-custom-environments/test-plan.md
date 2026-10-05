@@ -24,6 +24,10 @@ Deleted: `a_color_equal_to_the_environment_stores_nothing`, `a_stored_color_keep
 | `custom_environment_round_trips` | `{"name":"QA","color":"green","tier":"staging"}` ↔ struct |
 | `resolve_finds_custom_by_name` | key `Custom("QA")` with a `QA` entry → `Custom(..)`, tier and colour from the entry |
 | `missing_custom_resolves_to_production` | key `Custom("Gone")`, empty list → `Environment::PRODUCTION` |
+| `reserved_custom_name_is_ignored_at_resolve` | `{name:"Production", tier:"local"}` and `{name:"PROD", …}` with keys `Custom("Production")`/`Custom("PROD")` → `Environment::PRODUCTION` (tier Production), not the custom |
+| `repeated_custom_name_is_ignored` | `QA` (Staging) then `qa` (Local): key `Custom("qa")` → Production; `usable_environments` yields only `QA` |
+| `reference_match_is_case_sensitive` | key `Custom("qa")` with only `QA` defined → Production |
+| `reserved_words_follow_the_tiers` | `is_reserved` is true for every `EnvironmentTier::ALL` name and badge, each `BUILT_IN_GROUP_TITLES` entry, and `auto`, in any case and with spaces around |
 | `custom_badge_is_upper_case_name` | `Pre-prod` → `PRE-PROD`; a built-in badge is unchanged |
 | `palette_color_uses_theme_tokens` (gpui) | seven colours, Green = `theme.success` |
 | `environment_color_follows_custom_color` (gpui) | custom Teal → `theme.cyan` |
@@ -48,6 +52,7 @@ Other files:
 | `cluster_switcher_rows_tests.rs` | `sections_include_custom_groups` | section titles carry the custom name; shortcuts run on across them |
 | `settings_window_tests.rs` | `tier_rows_list_custom_environments` | `DR` (Production tier) in the type-name row, `QA` (Staging) in the click row, after the built-ins |
 | `clusters_page_tests.rs` (gpui) | `picking_a_custom_environment_stores_its_name` | the menu value `Custom("QA")` is stored; the row moves to the `QA` group |
+| `clusters_page_tests.rs` | `dangling_reference_label_is_the_stored_key` | `environment_menu_label` for an entry on `Custom("Gone")` is `Gone`, and no choice is checked |
 | `settings_tests.rs` | allow-list (updated) | gains `registry.environments`, `.name`, `.color`, `.tier`; `full_settings()` has one custom environment and round-trips |
 | `settings_tests.rs` | `default_file_is_minimal` (unchanged) | no `environments` key |
 
@@ -56,11 +61,14 @@ Other files:
 | Test | Checks |
 |---|---|
 | `name_rules` | table: `""`, `"   "`, 17 chars, `"a\tb"`, `"production"`, `"PROD"`, `"Auto"`, `"Development · Local"`, `"qa"` with `QA` taken → each message of environments-page.md; `" QA "` → `Ok("QA")` |
-| `rename_to_other_case_is_allowed` | `own = Some("qa")`, text `QA` → `Ok` |
+| `rename_to_other_case_is_allowed` | `own = Some(0)` on `qa`, text `QA` → `Ok` |
 | `add_uses_purple_and_production` | appended last |
 | `rename_rewrites_references` | two entries on `QA` become `QA2`; a built-in entry is untouched |
 | `delete_moves_clusters_to_the_tier` | entries on `QA` (Staging tier) become `BuiltIn(Staging)`; their profiles' `confirm`/`read_only` equal those before the delete |
-| `step_environment_moves_and_stops_at_ends` | up/down swap; up at 0 and down at last are no-ops |
+| `is_weaker_follows_risk_order` | Production → Staging true; Local → Development false; same tier false |
+| `weaken_dialog_text_counts` | 1 and 3 → singular and plural bodies |
+| `deleting_a_skipped_row_keeps_references` | an unusable duplicate row is removed; entries on its name are untouched |
+| `edits_match_references_exactly` | `rename_environment` and `clusters_using` on `QA` ignore an entry stored as `qa` |
 | `clusters_using_counts_unloaded_entries` | counts entries whatever their kubeconfig |
 | `delete_dialog_text_counts` | 0, 1, 3 → the three bodies |
 
@@ -71,7 +79,9 @@ Other files:
 | `environments_page_tests.rs` | `add_saves_and_clears_the_input` | settings gain the environment, input empty, no error |
 | | `invalid_rename_keeps_the_stored_name` | typing `PROD` shows the reserved message; settings unchanged |
 | | `valid_rename_follows_in_entries` | typing `QA2` renames and rewrites the entry |
-| | `swatch_and_tier_save` | `edit_environment` via the click handlers sets colour and tier |
+| | `swatch_and_stronger_tier_save` | a swatch click and a Staging → Production pick save with no dialog |
+| | `weaker_tier_on_used_environment_asks` | Production → Staging with one cluster using it opens the alert; settings unchanged until OK; OK saves |
+| | `skipped_row_shows_its_error` | a seeded `{name:"Prod"}` row shows the reserved message under its input |
 | `settings_window_tests.rs` | page order (updated) | `PAGES[2] == Environments`, 10 pages, titles listed |
 | `launch_options_tests.rs` | `settings_environments_screen` | parses to `Settings(Environments, Standard)` |
 

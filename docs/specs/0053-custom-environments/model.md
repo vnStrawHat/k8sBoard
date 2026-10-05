@@ -51,7 +51,13 @@ impl Environment {
     pub(crate) fn key(&self) -> EnvironmentKey;
 }
 
-/// A missing custom name resolves to Production (decision 5).
+/// Built-in names and badges, `BUILT_IN_GROUP_TITLES`, and `auto`, compared trimmed and lower-case
+/// (decision 6). Shared by the form and resolution.
+pub(crate) fn is_reserved(name: &str) -> bool;
+/// The custom environments resolution may use, in list order: a reserved name, or one repeating an
+/// earlier custom name ignoring case, is skipped. Groups, the dropdown, and the Safety table read this too.
+pub(crate) fn usable_environments(custom: &[CustomEnvironment]) -> impl Iterator<Item = &CustomEnvironment>;
+/// Exact (case-sensitive) match of a `Custom` key among `usable_environments`; none → Production (decision 5).
 pub(crate) fn resolve_environment(key: &EnvironmentKey, custom: &[CustomEnvironment]) -> Environment;
 pub(crate) fn guess_environment(context: &str, cluster: &str) -> EnvironmentTier; // rules unchanged
 pub(crate) fn environment_color(environment: &Environment, cx: &App) -> Hsla;     // palette_color(environment.color())
@@ -64,7 +70,7 @@ Constants (`Environment::PRODUCTION` …) replace `Environment::Production` in f
 
 ```rust
 pub(crate) struct ClusterRegistry {
-    /// Custom environments, in display order (0053).
+    /// Custom environments, in creation order = display order (0053).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) environments: Vec<CustomEnvironment>,
     /* kubeconfigs, kubeconfig_folders, clusters, last_used, last_used_stamp: unchanged */
@@ -99,10 +105,10 @@ An unknown `color` or `tier` string fails the parse, as an unknown `confirm` doe
 ```rust
 pub(crate) struct ClusterGroup { pub(crate) title: SharedString, pub(crate) rows: Vec<ClusterRow> }
 fn group_index(environment: &Environment, custom: &[CustomEnvironment]) -> usize;
-// BuiltIn: Production 0, Staging 1, Development | Local 2. Custom: 3 + its position in `custom`.
+// BuiltIn: Production 0, Staging 1, Development | Local 2. Custom: 3 + its position in `usable_environments`.
 ```
 
-`cluster_groups` builds `GROUP_TITLES` plus one title per custom environment, fills by `group_index`, and drops empty groups (unchanged). `ClusterRow.guessed: EnvironmentTier`. `search_text(label, context, environment: &Environment, file)` reads `environment.badge()`.
+`cluster_groups` builds `BUILT_IN_GROUP_TITLES` (moved from `cluster_form.rs` to `environment.rs`, so `is_reserved` reads it) plus one title per usable custom environment, fills by `group_index`, and drops empty groups (unchanged). `ClusterRow.guessed: EnvironmentTier`. `search_text(label, context, environment: &Environment, file)` reads `environment.badge()`.
 
 ## Where a custom environment shows
 
@@ -111,6 +117,10 @@ fn group_index(environment: &Environment, custom: &[CustomEnvironment]) -> usize
 | Badge | title bar, switcher, Clusters list, palette, confirm, drain, port-forward dialogs and page | `environment_badge(&profile.environment, cx)` |
 | Unlocked dashed frame | `title_bar.rs` | `environment_color(&open.profile.environment, cx)` |
 | Group headers | Settings › Clusters, switcher | `ClusterGroup.title` |
-| Environment dropdown | `clusters_page.rs` | Auto, 4 built-ins, separator, `"{name} · like {tier name}"` per custom (only when any exist) |
-| Safety tier table | `settings_window.rs` | `tier_rows(&registry.environments)`: each row lists built-ins then customs whose `for_tier(tier)` matches |
+| Environment dropdown | `clusters_page.rs` | Auto, 4 built-ins, separator, `"{name} · like {tier name}"` per usable custom (only when any exist). Label: the resolved name, except a dangling `Custom(key)` shows the stored key string with nothing checked (behaviour still Production) |
+| Safety tier table | `settings_window.rs` | `tier_rows(&registry.environments)`: each row lists built-ins then usable customs whose `for_tier(tier)` matches |
 | Import preview | `clusters_page_import.rs` | `ContextPreview.environment: EnvironmentTier` (guess only), drawn as `Environment::BuiltIn(..)` |
+
+## Reference matching
+
+A `Custom(name)` key matches a custom environment by **exact, case-sensitive** string equality, in `resolve_environment`, `rename_environment`, `delete_environment`, and `clusters_using` alike. The case-insensitive comparison is only for validation and `usable_environments` (uniqueness and reserved words).

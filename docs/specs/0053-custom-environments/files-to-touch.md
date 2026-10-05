@@ -18,11 +18,11 @@
 
 | File | Change |
 |---|---|
-| `environment.rs` | [model.md](model.md) types: `EnvironmentTier` (old enum), `EnvironmentColor` (+`Green` → `success`), `CustomEnvironment`, `EnvironmentKey`, `Environment` + consts, `resolve_environment`, `EnvironmentTier::color` (was `ClusterColor::of`), `environment_color`/`environment_badge` take `&Environment`. `guess_environment` returns `EnvironmentTier`. |
+| `environment.rs` | [model.md](model.md) types: `EnvironmentTier` (old enum), `EnvironmentColor` (+`Green` → `success`), `CustomEnvironment`, `EnvironmentKey`, `Environment` + consts, `is_reserved`, `usable_environments`, `resolve_environment` (exact match, skips unusable; model.md), `BUILT_IN_GROUP_TITLES` (moved from `cluster_form.rs` `GROUP_TITLES`), `EnvironmentTier::color` (was `ClusterColor::of`), `environment_color`/`environment_badge` take `&Environment`. `guess_environment` returns `EnvironmentTier`. |
 | `cluster_registry.rs` | `registry.environments`; `entry.environment: Option<EnvironmentKey>`; `profile()` per model.md "Resolution" (tier match on `environment.tier()`). |
 | `write_guard.rs` | `ConfirmMode::for_tier`; `test_guard` takes `Environment`. |
-| `cluster_form.rs` | `ClusterGroup.title: SharedString`, `group_index(&Environment, &[CustomEnvironment])`, custom group titles, `ClusterRow.guessed: EnvironmentTier`, `cluster_matches` passes `&row.profile.environment`. |
-| `clusters_page.rs` | `environment_menu`: built-ins via `EnvironmentTier::ALL`, separator, custom items `"{name} · like {tier}"`, values `Option<EnvironmentKey>`, label = resolved `profile.environment.name()` when set. `confirm_menu`: `for_tier(..tier())`. `DraggedCluster.group_title: SharedString`. Badge `&`. |
+| `cluster_form.rs` | `ClusterGroup.title: SharedString`, `group_index(&Environment, &[CustomEnvironment])`, custom group titles from `usable_environments`, `ClusterRow.guessed: EnvironmentTier`, `cluster_matches` passes `&row.profile.environment`. |
+| `clusters_page.rs` | `environment_menu`: built-ins via `EnvironmentTier::ALL`, separator, usable custom items `"{name} · like {tier}"`, values `Option<EnvironmentKey>`; label = resolved `profile.environment.name()`, except a dangling `Custom(key)` shows the stored key with nothing checked (pure `environment_menu_label(entry, row) -> String`, tested). `confirm_menu`: `for_tier(..tier())`. `DraggedCluster.group_title: SharedString`. Badge `&`. |
 | `cluster_switcher_rows.rs` | `SwitcherSection.title: SharedString`; `row.profile.environment.clone()`; `search_text(.., &Environment, ..)`. |
 | `cluster_switcher.rs`, `title_bar.rs`, `port_forward_page.rs` | `environment_badge(&..)`, `environment_color(&..)`. |
 | `clusters_page_import.rs`, `kubeconfig_import.rs` | `ContextPreview.environment: EnvironmentTier`; badge of `Environment::BuiltIn(..)`. |
@@ -41,7 +41,7 @@
 
 | File | Change |
 |---|---|
-| `environment.rs` | `EnvironmentColor::ALL` (7) and `name()` back. |
+| `environment.rs` | Re-add `EnvironmentColor::ALL` (7) and `name()`. Step 1 deletes them on purpose (no caller between steps 1 and 3, and no `#[allow(dead_code)]`); this churn is expected. |
 | `environment_form.rs` (new) + `environment_form_tests.rs` | [environments-page.md](environments-page.md) "Pure functions". |
 | `environments_page.rs` (new) + `environments_page_tests.rs` | the view; swatch row moved from step 1's deleted code. |
 | `main.rs` | `mod environment_form; mod environments_page;` |
