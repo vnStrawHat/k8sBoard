@@ -54,5 +54,5 @@ pub(crate) fn action_availability(action: ResourceAction, access: &AccessState) 
 
 - `Cordon` and `Drain` are always disabled with "Read-only mode", whatever the access state. `CopyName` is always `Enabled`.
 - The decision is "disabled with a reason", never hidden, so users learn what exists.
-- Disabled items use `menu_element_with_disabled`: the label, then the reason in smaller muted text on a second line. A `PopupMenuItem` has no tooltip.
+- Menu items carry no description lines. An enabled item is the label (and its key, on the right) in the normal foreground colour, icon included. A disabled item (`disabled_menu_item`) is the label with a short reason on the right where the key would be (`short_reason`: `No permission`, `Read-only`, `Not running`, …; a reason it does not know shows as it is), all muted and faded (`DISABLED_ITEM_OPACITY`, label and icon), the reason cut at 120 px; the full reason is the tooltip of the row.
 - The access review uses the current `NamespaceScope`, and is re-run on scope change ([bootstrap.md](bootstrap.md)).

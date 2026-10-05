@@ -6,7 +6,7 @@
 
 | Where | Item | Action |
 |---|---|---|
-| Pod row / drawer ⋯ "Open shell ▸" submenu (W4 note 2) | last item after a separator: `Debug container…` with muted `ephemeral` | `DebugContainer` |
+| Pod row / drawer ⋯ "Open shell ▸" submenu (W4 note 2) | last item after a separator: `Debug container…` (no description) | `DebugContainer` |
 | 0036 Shell tab ended with `NoShell` | header button `Debug container…` | same, prefilled with that container |
 | Node row / drawer ⋯ (W5) | `Open node shell` (S) | `OpenNodeShell` |
 | S on a node row (0028), palette `>` Open node shell (0029) | the `OpenNodeShell` arm of `run_available_row_key` for the cursor node (its own slot) | same |

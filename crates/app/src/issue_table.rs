@@ -22,7 +22,7 @@ use crate::event_rows::message_line;
 use crate::filter_bar::filtered_empty_state;
 use crate::issue::{Issue, IssueAction};
 use crate::issue_feeds::Coverage;
-use crate::resource_actions::{disabled_menu_item, view_logs_item};
+use crate::resource_actions::{MenuItemIcon as _, disabled_menu_item, view_logs_item};
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::row_context::TableSession;
 use crate::settings::TablePrefs;
@@ -432,14 +432,14 @@ fn open_item(issue: &Issue, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
     let label = format!("Open {}", issue.shown.kind.to_lowercase());
     let Some(target) = issue.target.clone() else {
         let reason = format!("No screen for {}", issue.shown.kind);
-        return disabled_menu_item(label, reason.into()).icon(IconName::CornerDownRight);
+        return disabled_menu_item(label, reason.into()).menu_icon(IconName::CornerDownRight);
     };
     let shell = shell.clone();
     PopupMenuItem::new(label)
         .on_click(move |_, _, cx| {
             let _ = shell.update(cx, |shell, cx| shell.reveal(target.clone(), cx));
         })
-        .icon(IconName::CornerDownRight)
+        .menu_icon(IconName::CornerDownRight)
 }
 
 /// The pod View logs reads: the issue's subject, when the action asks for logs and the pod is
@@ -462,7 +462,7 @@ fn copy_name_item(issue: &Issue) -> PopupMenuItem {
         .on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(name.clone()));
         })
-        .icon(IconName::Copy)
+        .menu_icon(IconName::Copy)
 }
 
 /// How the issues were found, and what could not be checked, right of the Issues and Needs

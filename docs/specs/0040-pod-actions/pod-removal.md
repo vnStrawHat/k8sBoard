@@ -1,6 +1,6 @@
 # 0040 · Restart pod and Evict
 
-[Back to index](README.md) · Step 3 · Decisions 1, 2, 10–16. Wireframe: W4 menu (`Restart pod` · `delete & recreate`, `Evict`). Modules: `object_delete.rs` (+ tests), `resource_actions.rs`, `keymap.rs`, `keyboard_navigation.rs`, `palette_search.rs`, `screenshot.rs`.
+[Back to index](README.md) · Step 3 · Decisions 1, 2, 10–16. Wireframe: W4 menu (`Restart pod`, `Evict`; the menus no longer carry the muted descriptions). Modules: `object_delete.rs` (+ tests), `resource_actions.rs`, `keymap.rs`, `keyboard_navigation.rs`, `palette_search.rs`, `screenshot.rs`.
 
 ## Actions and gates (`resource_actions.rs`)
 
@@ -30,7 +30,7 @@ The uid read re-checks the one fact the row may lag on: `finish_delete_start` re
 
 ## Menu (`pod_menu`, W4 order)
 
-`View logs ▸` · `Open shell ▸` · [`Debug container…`] · `Port-forward ▸` · `Attach` (A) · separator · `Edit YAML` (E) · `View YAML` (Y) · `Restart pod` (muted `delete & recreate`) · `Evict` · separator · `Copy name` · `Copy kubectl command` · separator · `Delete pod…`. Restart and Evict items have no `on_click`: they dispatch their unit action, whose `run_available_row_key` arm calls `start_removal(Removal::{Restart, Evict}, vec![subject])` on the cursor pod. A disabled item shows the gate or block reason under its label.
+`View logs ▸` · `Open shell ▸` · [`Debug container…`] · `Port-forward ▸` · `Attach` (A) · separator · `Edit YAML` (E) · `View YAML` (Y) · `Restart pod` · `Evict` · separator · `Copy name` · `Copy kubectl command` · separator · `Delete pod…`. Restart and Evict items have no `on_click`: they dispatch their unit action, whose `run_available_row_key` arm calls `start_removal(Removal::{Restart, Evict}, vec![subject])` on the cursor pod. A disabled item shows a short form of the gate or block reason on the right (0003 actions.md).
 
 ## One start for three removals (`object_delete.rs`)
 

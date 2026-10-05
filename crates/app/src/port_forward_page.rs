@@ -26,7 +26,7 @@ use crate::drawer::{
 };
 use crate::environment::environment_badge;
 use crate::port_forwards::{Forward, ForwardId, ForwardState, byte_count_text};
-use crate::resource_actions::{ActionAvailability, disabled_menu_item};
+use crate::resource_actions::{ActionAvailability, MenuItemIcon as _, disabled_menu_item};
 use crate::status_tone::{tone_color, toned_text};
 use crate::table_selection::ClusterObject;
 
@@ -503,7 +503,7 @@ fn forward_menu(
     } else {
         disabled_menu_item(stop_label, "Not running".into())
     }
-    .icon(if is_stop {
+    .menu_icon(if is_stop {
         IconName::CircleStop
     } else {
         IconName::X
@@ -520,7 +520,7 @@ fn forward_menu(
             }))
         }
     }
-    .icon(if row.is_running {
+    .menu_icon(if row.is_running {
         IconName::RotateCw
     } else {
         IconName::Play
@@ -530,19 +530,19 @@ fn forward_menu(
             .on_click(move |_, _, cx| cx.open_url(&format!("http://127.0.0.1:{port}"))),
         _ => disabled_menu_item("Open in browser", "Not listening".into()),
     }
-    .icon(IconName::ExternalLink);
+    .menu_icon(IconName::ExternalLink);
     let copy = match row.local_port {
         Some(port) => PopupMenuItem::new("Copy local address").on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(format!("127.0.0.1:{port}")));
         }),
         None => disabled_menu_item("Copy local address", "Not listening".into()),
     }
-    .icon(IconName::Copy);
+    .menu_icon(IconName::Copy);
     let change = PopupMenuItem::new("Change local port…")
         .on_click(on_shell(|shell, id, window, cx| {
             shell.open_change_local_port(id, window, cx);
         }))
-        .icon(IconName::Pencil);
+        .menu_icon(IconName::Pencil);
     let save = if row.is_preset {
         disabled_menu_item("Save as preset", "Already a preset".into())
     } else {
@@ -550,7 +550,7 @@ fn forward_menu(
             shell.save_forward_preset(id, cx);
         }))
     }
-    .icon(IconName::Star);
+    .menu_icon(IconName::Star);
     let go = match &row.target {
         Some(target) => {
             let (shell, target) = (shell.clone(), target.clone());
@@ -563,7 +563,7 @@ fn forward_menu(
             format!("Open {} first", row.cluster_label).into(),
         ),
     }
-    .icon(IconName::CornerDownRight);
+    .menu_icon(IconName::CornerDownRight);
     let menu = menu
         .item(stop)
         .item(start)
@@ -580,6 +580,6 @@ fn forward_menu(
             .on_click(on_shell(|shell, id, window, cx| {
                 shell.open_remove_preset(id, window, cx);
             }))
-            .icon(IconName::X),
+            .menu_icon(IconName::X),
     )
 }

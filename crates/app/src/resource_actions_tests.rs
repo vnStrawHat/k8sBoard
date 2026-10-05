@@ -3971,3 +3971,61 @@ fn row_keyed_sets_key_and_icon() {
         }
     ));
 }
+
+#[test]
+fn short_reason_reduces_known_sentences_to_a_few_words() {
+    for (reason, short) in [
+        ("Not permitted: delete pods", "No permission"),
+        ("Not permitted: get and create pods/exec", "No permission"),
+        ("prod-eu is read-only", "Read-only"),
+        (NOT_SHIPPED_REASON, "Later version"),
+        (NOT_RUNNING_REASON, "Not running"),
+        (STATIC_POD_TEXT, "Static pod"),
+        ("Permissions could not be checked", "Not checked"),
+    ] {
+        assert_eq!(short_reason(reason), short, "{reason}");
+    }
+}
+
+#[test]
+fn short_reason_keeps_a_text_it_does_not_know() {
+    assert_eq!(short_reason("Already terminating"), "Already terminating");
+}
+
+#[test]
+fn a_disabled_item_has_a_reason_slot_and_no_key() {
+    // An element item never draws the key of its action, so the reason takes that place.
+    let item = row_keyed(
+        disabled_menu_item("Delete", "prod is read-only".into()),
+        RowAction::Delete,
+    );
+    assert!(matches!(
+        item,
+        PopupMenuItem::ElementItem { disabled: true, .. }
+    ));
+    // An enabled item is a plain item, which draws the key of its action.
+    let enabled = row_keyed(PopupMenuItem::new("Delete"), RowAction::Delete);
+    assert!(matches!(
+        enabled,
+        PopupMenuItem::Item {
+            action: Some(_),
+            disabled: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn only_the_icon_of_a_disabled_item_fades() {
+    fn opacity(item: PopupMenuItem) -> Option<f32> {
+        let (PopupMenuItem::ElementItem { icon, .. } | PopupMenuItem::Item { icon, .. }) = item
+        else {
+            return None;
+        };
+        icon?.style().opacity
+    }
+    let disabled = disabled_menu_item("Copy name", "No data".into()).menu_icon(IconName::Copy);
+    assert_eq!(opacity(disabled), Some(DISABLED_ITEM_OPACITY));
+    let enabled = PopupMenuItem::new("Copy name").menu_icon(IconName::Copy);
+    assert_eq!(opacity(enabled), None);
+}

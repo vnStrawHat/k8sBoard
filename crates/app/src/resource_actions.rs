@@ -7,10 +7,12 @@ use cluster::{
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::{
-    Action, App, ClipboardItem, ParentElement as _, SharedString, Styled as _, WeakEntity, Window,
-    div,
+    Action, AnyElement, App, ClipboardItem, InteractiveElement as _, IntoElement,
+    ParentElement as _, Pixels, SharedString, StatefulInteractiveElement as _, Styled as _,
+    WeakEntity, Window, div, px,
 };
 
 use crate::access_bindings::role_key;
@@ -1237,7 +1239,7 @@ fn container_shell_item(
             })
         }
     };
-    item.icon(RowAction::OpenShell.icon())
+    item.menu_icon(RowAction::OpenShell.icon())
 }
 
 /// Attach to one named container, through the guarded flow of `start_attach`. The item acts only
@@ -1270,7 +1272,7 @@ pub(crate) fn container_attach_item(
             })
         }
     };
-    guarded(row, item.icon(RowAction::Attach.icon()))
+    guarded(row, item.menu_icon(RowAction::Attach.icon()))
 }
 
 /// The gate of the session, then the container: one that is not running, is an init container, or
@@ -1289,8 +1291,7 @@ pub(crate) fn container_attach_availability(
 }
 
 /// Restart pod or Evict in a pod menu: the gate decides first, then the state of the pod. Neither
-/// has a click handler: the menu dispatches the unit action, which runs on the cursor pod. Restart
-/// carries the muted `delete & recreate` (W4).
+/// has a click handler: the menu dispatches the unit action, which runs on the cursor pod.
 fn pod_removal_item(
     action: ResourceAction,
     pod: &PodSummary,
@@ -1306,21 +1307,6 @@ fn pod_removal_item(
     };
     let item = match availability {
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
-        ActionAvailability::Enabled if action == ResourceAction::RestartPod => {
-            PopupMenuItem::element(move |_, cx| {
-                h_flex()
-                    .w_full()
-                    .gap_4()
-                    .justify_between()
-                    .child(label)
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("delete & recreate"),
-                    )
-            })
-        }
         ActionAvailability::Enabled => PopupMenuItem::new(label),
     };
     keyed(item, action)
@@ -1361,7 +1347,7 @@ fn copy_image_item(image: &str) -> PopupMenuItem {
         .on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(image.clone()));
         })
-        .icon(IconName::Copy)
+        .menu_icon(IconName::Copy)
 }
 
 /// Copies the read-only `kubectl describe` command for the pod.
@@ -1371,7 +1357,7 @@ fn copy_kubectl_command_item(context: &str, pod: &PodSummary) -> PopupMenuItem {
         .on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
         })
-        .icon(IconName::Terminal)
+        .menu_icon(IconName::Terminal)
 }
 
 /// `kubectl --context C -n NS describe pod NAME`. It has no `--kubeconfig`: a path is specific
@@ -1449,7 +1435,7 @@ fn plain_logs_item(
                 .on_click(move |_, window, cx| open(target.clone(), window, cx))
         }
     };
-    item.icon(RowAction::ViewLogs.icon())
+    item.menu_icon(RowAction::ViewLogs.icon())
 }
 
 /// The call every View logs entry makes: opens `target` in the dock under the row's origin, while
@@ -1677,7 +1663,7 @@ fn view_pods_on_node_item(
     .on_click(move |_, _, cx| {
         let _ = shell.update(cx, |shell, cx| shell.view_pods_on_node(&name, cx));
     })
-    .icon(IconName::List)
+    .menu_icon(IconName::List)
 }
 
 /// How many of `pods` are scheduled on `node`.
@@ -1761,7 +1747,7 @@ pub(crate) fn kind_menu(
         for (label, tab, icon) in HELM_VIEW_ITEMS {
             menu = menu.item(guarded(
                 context,
-                view_tab_item(label, object.clone(), tab, shell).icon(icon),
+                view_tab_item(label, object.clone(), tab, shell).menu_icon(icon),
             ));
         }
     }
@@ -1781,7 +1767,8 @@ pub(crate) fn kind_menu(
         }
         TopologyMenu::Disabled(reason) => {
             menu = menu.item(
-                disabled_menu_item("Show in Topology", reason.into()).icon(IconName::Waypoints),
+                disabled_menu_item("Show in Topology", reason.into())
+                    .menu_icon(IconName::Waypoints),
             );
         }
     }
@@ -1938,15 +1925,11 @@ fn delete_item(
         };
         let theme = cx.theme();
         match &availability {
-            ActionAvailability::Enabled => div().text_color(theme.danger).child(text),
-            ActionAvailability::Disabled { reason } => div().child(
-                v_flex().child(div().child(text)).child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(reason.clone()),
-                ),
-            ),
+            ActionAvailability::Enabled => div()
+                .text_color(theme.danger)
+                .child(text)
+                .into_any_element(),
+            ActionAvailability::Disabled { reason } => disabled_label(text.into(), reason.clone()),
         }
     })
     .disabled(is_disabled);
@@ -2012,7 +1995,7 @@ fn show_in_topology_item(key: ResourceKey, shell: &WeakEntity<AppShell>) -> Popu
         .on_click(move |_, _, cx| {
             let _ = shell.update(cx, |shell, cx| shell.show_in_topology(&key, cx));
         })
-        .icon(IconName::Waypoints)
+        .menu_icon(IconName::Waypoints)
 }
 
 /// A menu item that opens the drawer scrolled to one of its sections: the label, the section title,
@@ -2054,7 +2037,7 @@ fn show_section_item(
         block,
     } = show_section(row)?;
     if let Some(reason) = block {
-        return Some(disabled_menu_item(label, reason.into()).icon(IconName::List));
+        return Some(disabled_menu_item(label, reason.into()).menu_icon(IconName::List));
     }
     let shell = shell.clone();
     Some(
@@ -2064,7 +2047,7 @@ fn show_section_item(
                     shell.open_drawer_section(object.clone(), title, cx)
                 });
             })
-            .icon(IconName::List),
+            .menu_icon(IconName::List),
     )
 }
 
@@ -2117,7 +2100,8 @@ pub(crate) fn browse_instances_item(
     };
     let Some(kind) = browse_target(&crd.name, kinds) else {
         return Some(
-            disabled_menu_item(LABEL, "Not established or not served".into()).icon(IconName::List),
+            disabled_menu_item(LABEL, "Not established or not served".into())
+                .menu_icon(IconName::List),
         );
     };
     let shell = shell.clone();
@@ -2127,7 +2111,7 @@ pub(crate) fn browse_instances_item(
                 let screen = Screen::Kind(ResourceKind::Custom(kind));
                 let _ = shell.update(cx, |shell, cx| shell.show_screen(screen, cx));
             })
-            .icon(IconName::List),
+            .menu_icon(IconName::List),
     )
 }
 
@@ -2253,7 +2237,7 @@ pub(crate) fn secret_menu(
         ),
         MenuState::Disabled(reason) => disabled_menu_item("Reveal values (30s)", reason.into()),
     }
-    .icon(IconName::Eye);
+    .menu_icon(IconName::Eye);
     let (shell, context) = (shell.clone(), context.clone());
     let submenu = PopupMenu::build(window, cx, move |submenu, _, _| {
         model.copies.iter().fold(submenu, |submenu, entry| {
@@ -2277,7 +2261,7 @@ pub(crate) fn secret_menu(
     });
     Some(SecretMenu {
         reveal,
-        copy: PopupMenuItem::submenu("Copy value", submenu).icon(IconName::Copy),
+        copy: PopupMenuItem::submenu("Copy value", submenu).menu_icon(IconName::Copy),
     })
 }
 
@@ -2353,7 +2337,7 @@ pub(crate) fn open_url_menu_item(
             PopupMenuItem::submenu(LABEL, submenu)
         }
     };
-    item.icon(IconName::ExternalLink)
+    item.menu_icon(IconName::ExternalLink)
 }
 
 fn open_url_item(label: impl Into<SharedString>, url: String, row: &RowContext) -> PopupMenuItem {
@@ -2387,7 +2371,7 @@ fn go_to_item(
     shell: &WeakEntity<AppShell>,
 ) -> PopupMenuItem {
     let Some(key) = target else {
-        return disabled_menu_item(label, reason).icon(IconName::CornerDownRight);
+        return disabled_menu_item(label, reason).menu_icon(IconName::CornerDownRight);
     };
     let object = context.object(key);
     let shell = shell.clone();
@@ -2395,7 +2379,7 @@ fn go_to_item(
         .on_click(move |_, _, cx| {
             let _ = shell.update(cx, |shell, cx| shell.reveal_object(object.clone(), cx));
         })
-        .icon(IconName::CornerDownRight)
+        .menu_icon(IconName::CornerDownRight)
 }
 
 /// Reveals the owner (a Deployment, usually); disabled when there is none.
@@ -2530,7 +2514,7 @@ fn go_to_object_item(
     const LABEL: &str = "Go to object";
     let Some(key) = event.object.clone() else {
         return disabled_menu_item(LABEL, "No screen for this kind yet".into())
-            .icon(IconName::CornerDownRight);
+            .menu_icon(IconName::CornerDownRight);
     };
     let object = context.object(key);
     let shell = shell.clone();
@@ -2538,7 +2522,7 @@ fn go_to_object_item(
         .on_click(move |_, _, cx| {
             let _ = shell.update(cx, |shell, cx| shell.reveal_object(object.clone(), cx));
         })
-        .icon(IconName::CornerDownRight)
+        .menu_icon(IconName::CornerDownRight)
 }
 
 /// Filters the Events list to the reason of this event; disabled when it has none.
@@ -2546,7 +2530,7 @@ fn filter_similar_item(event: &EventDetail, shell: &WeakEntity<AppShell>) -> Pop
     const LABEL: &str = "Filter similar";
     let Some(reason) = similar_reason(event) else {
         return disabled_menu_item(LABEL, "This event has no reason".into())
-            .icon(IconName::ListFilter);
+            .menu_icon(IconName::ListFilter);
     };
     let reason = reason.clone();
     let shell = shell.clone();
@@ -2554,7 +2538,7 @@ fn filter_similar_item(event: &EventDetail, shell: &WeakEntity<AppShell>) -> Pop
         .on_click(move |_, _, cx| {
             let _ = shell.update(cx, |shell, cx| shell.filter_similar(&reason, cx));
         })
-        .icon(IconName::ListFilter)
+        .menu_icon(IconName::ListFilter)
 }
 
 /// What Filter similar matches on: the reason, when the event has one.
@@ -2568,7 +2552,7 @@ fn copy_message_item(event: &EventDetail) -> PopupMenuItem {
         .on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(message.to_string()));
         })
-        .icon(IconName::Copy)
+        .menu_icon(IconName::Copy)
 }
 
 /// Roles and ClusterRoles offer Who can… as their first menu item.
@@ -2600,7 +2584,7 @@ fn test_traffic_item(
                 shell.open_traffic_test(&cluster, policy.as_ref(), true, window, cx);
             });
         })
-        .icon(IconName::Activity)
+        .menu_icon(IconName::Activity)
 }
 
 /// Service accounts offer Check permissions as their first menu item.
@@ -2628,7 +2612,7 @@ fn check_permissions_item(
                 shell.open_permissions(&cluster, subject, namespace, true, window, cx);
             });
         })
-        .icon(IconName::ShieldQuestionMark)
+        .menu_icon(IconName::ShieldQuestionMark)
 }
 
 /// The Who can… query a role row prefills: its first resource rule, if it has one.
@@ -2659,7 +2643,7 @@ fn who_can_item(
                 shell.open_who_can(&cluster, query, namespace, check_now, window, cx);
             });
         })
-        .icon(IconName::UserSearch)
+        .menu_icon(IconName::UserSearch)
 }
 
 /// Opens the drawer of `object` on its YAML tab. Always enabled: a missing right shows inline
@@ -2915,7 +2899,7 @@ pub(crate) struct DebugPod {
 }
 
 /// The last item of the container submenu (W4 note 2): it opens the options dialog, where the
-/// container is picked. A disabled one keeps its reason under the label.
+/// container is picked.
 fn debug_container_item(
     state: DebugMenuState,
     pod: DebugPod,
@@ -2926,27 +2910,14 @@ fn debug_container_item(
         DebugMenuState::Disabled(reason) => disabled_menu_item(LABEL, reason),
         DebugMenuState::Ready => {
             let shell = shell.clone();
-            PopupMenuItem::element(move |_, cx| {
-                h_flex()
-                    .w_full()
-                    .gap_4()
-                    .justify_between()
-                    .child(LABEL)
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("ephemeral"),
-                    )
-            })
-            .on_click(move |_, window, cx| {
+            PopupMenuItem::new(LABEL).on_click(move |_, window, cx| {
                 let _ = shell.update(cx, |shell, cx| {
                     shell.open_debug_options(pod.clone(), None, window, cx);
                 });
             })
         }
     };
-    item.icon(RowAction::DebugContainer.icon())
+    item.menu_icon(RowAction::DebugContainer.icon())
 }
 
 /// The call an entry of the submenu makes when it is clicked.
@@ -3087,7 +3058,7 @@ fn row_action_item(
 /// `item` with the key hint and the icon of `row`. `.action()` is a no-op on a submenu, and the
 /// icon is what it shows.
 pub(crate) fn row_keyed(item: PopupMenuItem, row: RowAction) -> PopupMenuItem {
-    item.action(row.key_action()).icon(row.icon())
+    item.action(row.key_action()).menu_icon(row.icon())
 }
 
 /// `item` with the key hint of `action`: a menu item of a row action shows its key.
@@ -3098,21 +3069,101 @@ fn keyed(item: PopupMenuItem, action: ResourceAction) -> PopupMenuItem {
     }
 }
 
-/// A `PopupMenuItem` has no tooltip, so the reason sits under the label in smaller text.
+/// How far a disabled menu item fades, label and icon alike, so that it reads as unavailable next
+/// to the full-colour items that can be clicked. Opacity is not a colour: both stay theme tokens.
+const DISABLED_ITEM_OPACITY: f32 = 0.55;
+
+/// `PopupMenuItem::icon` that fades the icon of a disabled item with its label. Set `disabled`
+/// before the icon.
+pub(crate) trait MenuItemIcon {
+    fn menu_icon(self, icon: impl Into<Icon>) -> Self;
+}
+
+impl MenuItemIcon for PopupMenuItem {
+    fn menu_icon(self, icon: impl Into<Icon>) -> Self {
+        let is_disabled = matches!(
+            &self,
+            PopupMenuItem::Item { disabled: true, .. }
+                | PopupMenuItem::ElementItem { disabled: true, .. }
+                | PopupMenuItem::Submenu { disabled: true, .. }
+        );
+        let icon = icon.into();
+        self.icon(if is_disabled {
+            icon.opacity(DISABLED_ITEM_OPACITY)
+        } else {
+            icon
+        })
+    }
+}
+
+/// The widest the reason of a disabled item grows; a longer one is cut with an ellipsis, so that a
+/// reason never stretches the menu.
+const REASON_WIDTH: Pixels = px(120.);
+
+/// A disabled item: its label, then a short reason on the right where an enabled item shows its
+/// key. Both are muted like the rest of the row; the full reason is the tooltip.
 pub(crate) fn disabled_menu_item(
     label: impl Into<SharedString>,
     reason: SharedString,
 ) -> PopupMenuItem {
     let label = label.into();
-    PopupMenuItem::element(move |_, cx| {
-        v_flex().child(div().child(label.clone())).child(
+    PopupMenuItem::element(move |_, _| disabled_label(label.clone(), reason.clone())).disabled(true)
+}
+
+fn disabled_label(label: SharedString, reason: SharedString) -> AnyElement {
+    let short = short_reason(&reason);
+    h_flex()
+        .id(label.clone())
+        .w_full()
+        .gap_4()
+        .justify_between()
+        .child(div().flex_shrink_0().child(label))
+        .child(
             div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(reason.clone()),
+                .min_w_0()
+                .max_w(REASON_WIDTH)
+                .truncate()
+                .text_sm()
+                .child(short),
         )
-    })
-    .disabled(true)
+        .tooltip(move |window, cx| Tooltip::new(reason.clone()).build(window, cx))
+        .into_any_element()
+}
+
+/// The few words a disabled menu row shows for `reason`. Reasons travel as full sentences (they
+/// also fill notices and tooltips), so the short form is derived here, in the one place the menus
+/// read; a reason with no entry shows as it is and is cut at `REASON_WIDTH`.
+pub(crate) fn short_reason(reason: &str) -> SharedString {
+    let short = if reason.starts_with("Not permitted") {
+        "No permission"
+    } else if reason.ends_with(" is read-only") {
+        "Read-only"
+    } else if reason == NOT_SHIPPED_REASON {
+        "Later version"
+    } else if reason == "Permissions could not be checked" {
+        "Not checked"
+    } else if reason.starts_with("Node shell is off") {
+        "Off in Settings"
+    } else if reason == "Node shell needs a Linux node" {
+        "Linux only"
+    } else if reason.starts_with("Not managed by a controller") {
+        "No controller"
+    } else if reason.starts_with("The pod has finished") {
+        "Finished"
+    } else if reason == STATIC_POD_TEXT {
+        "Static pod"
+    } else if reason == NOT_RUNNING_REASON || reason == "The pod has no running container" {
+        "Not running"
+    } else if reason == "Init containers cannot be attached" {
+        "Init container"
+    } else if reason.contains("terminal (stdin and tty)") {
+        "No terminal"
+    } else if reason.contains("cannot be edited") || reason.contains("are managed by") {
+        "Managed"
+    } else {
+        return reason.to_owned().into();
+    };
+    short.into()
 }
 
 fn copy_name_item(name: &str, access: &AccessState) -> PopupMenuItem {
