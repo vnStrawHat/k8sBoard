@@ -7,7 +7,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, Context, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
-    Styled as _, div, px,
+    Pixels, Styled as _, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::{AppShell, Screen};
@@ -23,7 +23,12 @@ use crate::shortcut_sheet::row_keys;
 use crate::status_tone::tone_color;
 use crate::write_guard::WriteLock;
 
-pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoElement {
+pub(crate) fn title_bar(
+    shell: &AppShell,
+    viewport_width: Pixels,
+    cx: &Context<AppShell>,
+) -> impl IntoElement {
+    let widths = TitleBarWidths::of(viewport_width);
     // Linux draws its own X, which closes without asking the window: it asks the shell first, so a
     // node shell pod is deleted before the window goes (the hook of the platform window covers the
     // other platforms).
@@ -38,11 +43,13 @@ pub(crate) fn title_bar(shell: &AppShell, cx: &Context<AppShell>) -> impl IntoEl
                 .items_center()
                 .child(div().font_semibold().child("k8sBoard"))
                 .child(cluster_switcher(shell, cx))
-                .child(namespace_picker(shell, cx)),
+                .child(namespace_picker(shell, widths.namespace_label, cx)),
         )
-        .child(search_box(cx))
+        .child(search_box(widths.search, cx))
         .child(
+            // Never shrinks: the search box gives way first, so these stay reachable.
             h_flex()
+                .flex_shrink_0()
                 .gap_2()
                 .items_center()
                 .children(notices_button(shell, cx))
@@ -140,30 +147,36 @@ fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
     switcher_popover(trigger, shell, cx)
 }
 
-/// The search box of the middle slot (inventory T6): a click opens the command palette. It
-/// shrinks before the groups on either side do.
-fn search_box(cx: &Context<AppShell>) -> AnyElement {
+/// Below this the text would show as a sliver, so only the icon stays.
+const SEARCH_TEXT_MIN_WIDTH: Pixels = px(120.);
+
+/// The search box of the middle slot (inventory T6): a click opens the command palette. Its width
+/// comes from `TitleBarWidths`, so it gives way before the groups on either side do.
+fn search_box(width: Pixels, cx: &Context<AppShell>) -> AnyElement {
     let key = row_keys(&OpenPalette, cx).into_iter().next();
+    let has_text = width >= SEARCH_TEXT_MIN_WIDTH;
     title_bar_button("palette-search")
-        .flex_1()
-        .min_w_0()
-        .max_w(px(280.))
+        .flex_none()
+        .w(width)
         .child(
             h_flex()
                 .w_full()
                 .gap_2()
                 .items_center()
+                .when(!has_text, |this| this.justify_center())
                 .text_color(cx.theme().muted_foreground)
                 .child(Icon::new(IconName::Search).size_4())
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_left()
-                        .child("Search resources or run a command…"),
-                )
-                .children(key.map(Kbd::new)),
+                .when(has_text, |this| {
+                    this.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_left()
+                            .child("Search resources or run a command…"),
+                    )
+                    .children(key.map(Kbd::new))
+                }),
         )
         .on_click(cx.listener(|shell, _, window, cx| shell.open_palette("", window, cx)))
         .into_any_element()
@@ -178,13 +191,44 @@ pub(crate) fn scope_label(scope: &NamespaceScope) -> String {
     }
 }
 
-fn namespace_picker(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
+/// The widths the title bar gives its two elastic parts, from the window width. The kit bar sizes
+/// its children by content, so flex shrinking never happens and the buttons on the right would
+/// leave a narrow window. The search box gives way first, then the namespace label.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TitleBarWidths {
+    search: Pixels,
+    namespace_label: Pixels,
+}
+
+impl TitleBarWidths {
+    /// What the bar spends on everything but the two parts: the name, the cluster switcher, the
+    /// namespace caret, the buttons on the right, and the window controls. Measured at the
+    /// default font size.
+    const OTHER: f32 = 643.;
+    const SEARCH: (f32, f32) = (40., 280.);
+    const NAMESPACE_LABEL: (f32, f32) = (90., 200.);
+
+    fn of(viewport_width: Pixels) -> Self {
+        let spare = f32::from(viewport_width) - Self::OTHER;
+        let (search_min, search_max) = Self::SEARCH;
+        let (label_min, label_max) = Self::NAMESPACE_LABEL;
+        Self {
+            // The label keeps its full width until the search box is down to its icon.
+            search: px((spare - label_max).clamp(search_min, search_max)),
+            namespace_label: px((spare - search_min).clamp(label_min, label_max)),
+        }
+    }
+}
+
+fn namespace_picker(shell: &AppShell, label_width: Pixels, cx: &Context<AppShell>) -> AnyElement {
     let trigger = Button::new("namespace-picker").ghost().small();
     let Some(live) = shell.live(cx) else {
         return trigger.label("ns: —").disabled(true).into_any_element();
     };
     let label = scope_label(&live.scope);
-    let trigger = trigger.label(label).dropdown_caret(true);
+    let trigger = trigger
+        .child(div().max_w(label_width).truncate().child(label))
+        .dropdown_caret(true);
     picker(PickerAnchor::TitleBar, trigger, shell, cx)
 }
 
@@ -368,5 +412,18 @@ mod tests {
             badge_tooltip("stg-b", WriteLock::Unlocked),
             "stg-b: Unlocked"
         );
+    }
+
+    #[test]
+    fn the_search_box_shrinks_before_the_namespace_label() {
+        let wide = TitleBarWidths::of(px(1320.));
+        assert_eq!(wide.search, px(280.));
+        assert_eq!(wide.namespace_label, px(200.));
+        let medium = TitleBarWidths::of(px(900.));
+        assert!(medium.search < wide.search);
+        assert_eq!(medium.namespace_label, px(200.));
+        let narrow = TitleBarWidths::of(px(800.));
+        assert_eq!(narrow.search, px(40.));
+        assert!(narrow.namespace_label < px(200.));
     }
 }

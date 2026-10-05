@@ -4731,7 +4731,7 @@ impl Render for AppShell {
         let root = on_switch_to::<SwitchToCluster9>(root, 9, cx);
         root.bg(theme.background)
             .text_color(theme.foreground)
-            .child(title_bar(self, cx))
+            .child(title_bar(self, window.viewport_size().width, cx))
             .child(
                 h_flex()
                     .flex_1()

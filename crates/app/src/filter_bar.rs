@@ -99,8 +99,10 @@ pub(crate) fn filter_bar(
             .tooltip("Remove filter")
             .on_click(cx.listener(move |shell, _, _, cx| shell.remove_chip(index, cx)))
     });
+    // Wraps: with several namespace chips a narrow window would clip a chip mid-way.
     h_flex()
         .flex_shrink_0()
+        .flex_wrap()
         .gap_2()
         .items_center()
         .px_4()
