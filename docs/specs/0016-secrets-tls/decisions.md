@@ -37,7 +37,7 @@
 | # | Decision | Rationale |
 |---|---|---|
 | 15 | **Used by** = pods (env, env from, volume, projected, image pull) + ingresses (`tls`) + the token's account; the Secrets screen runs an **Ingresses companion** | TLS users are ingresses, not pods |
-| 16 | **unused** (muted) only when pods and the companion are Ready, no user exists, `!is_owned`, and the type is Opaque, basic-auth, ssh-auth, or a docker type. **TLS secrets are never "unused"** (S3) | Gateway API, Istio, and cert-manager reference TLS secrets without mounting them; a false "unused" invites a delete |
+| 16 | A secret nobody uses reads `none found` (muted), the same as a ConfigMap, once pods and the companion are Ready; the wording claims only what was checked (UX fix: "unused" overclaimed). `may_be_unused` and its eligibility rules are gone | Gateway API, Istio, CronJob templates, and cert-manager reference secrets without a running pod; the drawer note says so |
 | 17 | Ingress **TLS column replaces Ports** (W7), fed by a TLS-secrets companion | the column needs every referenced certificate |
 | 18 | Expiry text and tone are **computed at paint time** | days left change while the screen is open |
 | 19 | The Secrets **Age cell is not toned** (W7 `@warn 84d`); the Secrets list has **no expiry signal until 0020/0021** (N4) | a build-time tone goes stale |

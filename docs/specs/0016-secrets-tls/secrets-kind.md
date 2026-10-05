@@ -57,11 +57,10 @@ From `SecretDetails::Certificate { chain }`, leaf = `chain[0]`: Subject (Mono), 
 
 ```rust
 pub(crate) fn secret_users(pods: &[PodSummary], ingresses: &[IngressSummary]) -> SecretUsers; // ns → name → Vec<UsedBy>
-pub(crate) fn may_be_unused(secret: &SecretSummary) -> bool;  // decision 16: Opaque, basic-auth, ssh-auth, docker types (not TLS), and !is_owned
 ```
 
 - Ways (0012 `UsedBy.ways`): `env` (`EnvSource::SecretKey`), `env from` (`EnvFromSource::Secret`), `volume` (`VolumeSource::Secret`, `Projected.secrets`), `image pull` (`image_pull_secrets`), all container kinds; owners mapped as 0012 decision 9. Ingresses: owner `ingress/{name}`, way `tls`, target its Ingresses key, for every `tls[].secret_name`. Service-account token: owner `serviceaccount/{account}`, way `token`, added per row from `details`.
-- Cell (`SECRET_USED_BY`): first owner, plus ` +{n}`; no users and `may_be_unused` and both lists Ready → `Toned(Done, "unused")`; else `Absent`. Pods not Ready → `Absent`.
+- Cell (`SECRET_USED_BY`): first owner, plus ` +{n}`; no users and both lists Ready → `Toned(Done, "none found")`; else `Absent`. Pods not Ready → `Absent`.
 - Section: one `Link` row per user (owner text → target, ways joined `, ` as value). No users: Ready → `Note("No pod or ingress in this namespace uses it. Workloads with no running pod, CronJob templates, Gateway API and Istio references, and readers through the API are not checked.")`; not Ready → `Note("Loading…")`; companion denied → the same note starting "No pod in this namespace uses it." (ingresses were not checked) plus "Not permitted: list ingresses"; companion failed → that note plus "Ingresses are unavailable".
 - Triggers (0012 `join_explorer`): explorer, pods, and companion snapshots or failures while Secrets is shown.
 

@@ -735,7 +735,7 @@ fn used_by_cell_shows_first_and_more() {
     );
     assert_eq!(
         rows[1].cells.get(CONFIG_MAP_USED_BY),
-        Some(&KindCell::Absent)
+        Some(&none_found_cell())
     );
 }
 
@@ -1862,26 +1862,6 @@ fn secret_users_list_the_token_account() {
     assert_eq!(ways_of(&list[0]), ["token"]);
 }
 
-#[test]
-fn secret_unused_only_when_eligible() {
-    let mut owned = secret_of("Opaque", "owned");
-    owned.is_owned = true;
-    let cases = [
-        (secret_of("Opaque", "a"), true),
-        (secret_of("kubernetes.io/basic-auth", "a"), true),
-        (secret_of("kubernetes.io/ssh-auth", "a"), true),
-        (secret_of("kubernetes.io/dockerconfigjson", "a"), true),
-        (secret_of("kubernetes.io/dockercfg", "a"), true),
-        (secret_of("kubernetes.io/tls", "a"), false),
-        (secret_of("helm.sh/release.v1", "a"), false),
-        (secret_of("kubernetes.io/service-account-token", "a"), false),
-        (owned, false),
-    ];
-    for (secret, expected) in cases {
-        assert_eq!(may_be_unused(&secret), expected, "{}", secret.secret_type);
-    }
-}
-
 /// The Secrets rows after a join; `pods` and `ingresses` are `None` while not loaded.
 fn joined_secrets(
     secrets: &[cluster::SecretSummary],
@@ -1905,8 +1885,8 @@ fn joined_secrets(
     rows
 }
 
-fn unused_cell() -> KindCell {
-    KindCell::Toned(toned("unused", StatusTone::Done))
+fn none_found_cell() -> KindCell {
+    KindCell::Toned(toned("none found", StatusTone::Done))
 }
 
 #[test]
@@ -1919,7 +1899,7 @@ fn secret_used_by_absent_until_lists_ready() {
         rows.iter()
             .all(|row| row.cells[SECRET_USED_BY] == KindCell::Absent)
     );
-    // Ingresses not loaded: users show, but `unused` waits.
+    // Ingresses not loaded: users show, but `none found` waits.
     let rows = joined_secrets(&secrets, Some(pods.clone()), None);
     assert_eq!(rows[0].cells[SECRET_USED_BY], KindCell::Absent);
     assert_eq!(
@@ -1928,7 +1908,7 @@ fn secret_used_by_absent_until_lists_ready() {
     );
     // Both loaded.
     let rows = joined_secrets(&secrets, Some(pods), Some(Vec::new()));
-    assert_eq!(rows[0].cells[SECRET_USED_BY], unused_cell());
+    assert_eq!(rows[0].cells[SECRET_USED_BY], none_found_cell());
 }
 
 #[test]
@@ -1950,7 +1930,7 @@ fn secret_used_by_cell_names_first_owner_and_count() {
 }
 
 #[test]
-fn secret_in_use_by_an_ingress_is_not_unused() {
+fn secret_in_use_by_an_ingress_has_a_user() {
     let secrets = [secret_of("Opaque", "shop-cert")];
     let ingress = ingress_using("shop", &[Some("shop-cert")]);
     let rows = joined_secrets(&secrets, Some(Vec::new()), Some(vec![ingress]));
@@ -1961,10 +1941,10 @@ fn secret_in_use_by_an_ingress_is_not_unused() {
 }
 
 #[test]
-fn tls_secrets_are_never_unused() {
+fn a_tls_secret_nobody_mounts_says_none_found() {
     let secrets = [secret_of("kubernetes.io/tls", "shop-tls")];
     let rows = joined_secrets(&secrets, Some(Vec::new()), Some(Vec::new()));
-    assert_eq!(rows[0].cells[SECRET_USED_BY], KindCell::Absent);
+    assert_eq!(rows[0].cells[SECRET_USED_BY], none_found_cell());
 }
 
 // ---- Ingress TLS ----

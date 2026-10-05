@@ -588,10 +588,17 @@ fn join_config_maps(rows: &mut [KindRow], inputs: &JoinInputs) {
     }
 }
 
-/// The first owner, plus ` +{n}` for the others; `Absent` for none.
+/// What a Used by cell says when no user was found. It claims no more than the join checked: pods
+/// and ingresses, not CronJob templates, Gateway API, or Istio references.
+const NO_USER_FOUND: &str = "none found";
+
+/// The first owner, plus ` +{n}` for the others; `none found` for none.
 fn used_by_cell<'a>(mut users: impl Iterator<Item = &'a UsedBy>) -> KindCell {
     let Some(first) = users.next() else {
-        return KindCell::Absent;
+        return KindCell::Toned(StatusLabel {
+            text: NO_USER_FOUND.into(),
+            tone: StatusTone::Done,
+        });
     };
     match users.count() {
         0 => KindCell::Mono(first.owner.clone().into()),
@@ -606,16 +613,6 @@ fn used_by_cell<'a>(mut users: impl Iterator<Item = &'a UsedBy>) -> KindCell {
 
 /// Namespace, then secret name, then the users by owner text: the shape of `ConfigMapUsers`.
 pub(crate) type SecretUsers = ConfigMapUsers;
-
-/// The Secret types a workload can leave unused without anything else naming them. TLS secrets are
-/// left out on purpose: Gateway API, Istio, and cert-manager reference them without mounting.
-const UNUSED_CANDIDATE_TYPES: [&str; 5] = [
-    "Opaque",
-    "kubernetes.io/basic-auth",
-    "kubernetes.io/ssh-auth",
-    "kubernetes.io/dockerconfigjson",
-    "kubernetes.io/dockercfg",
-];
 
 /// Which secrets the pods and ingresses use: env, envFrom, volumes, projected sources, and image
 /// pull secrets of every container kind, and the `tls` secret of each ingress.
@@ -703,13 +700,7 @@ pub(crate) fn secret_user_list(secret: &SecretSummary, users: &SecretUsers) -> V
     list
 }
 
-/// Whether "unused" may be said of `secret` at all: only a type nothing else references, and
-/// never a secret another object owns.
-pub(crate) fn may_be_unused(secret: &SecretSummary) -> bool {
-    !secret.is_owned && UNUSED_CANDIDATE_TYPES.contains(&secret.secret_type.as_str())
-}
-
-/// The Used by cells of the Secrets rows. Nothing shows until the pods have loaded. `unused`
+/// The Used by cells of the Secrets rows. Nothing shows until the pods have loaded. `none found`
 /// also needs the ingresses: a secret an ingress names is in use.
 fn join_secrets(rows: &mut [KindRow], inputs: &JoinInputs) {
     let ingresses = inputs
@@ -733,19 +724,16 @@ fn join_secrets(rows: &mut [KindRow], inputs: &JoinInputs) {
     }
 }
 
-/// The first owner, plus ` +{n}`; `unused` for an eligible secret nobody uses once every list
-/// that could name a user has loaded.
+/// The first owner, plus ` +{n}`; `none found` for a secret nobody uses once every list that could
+/// name a user has loaded.
 fn secret_used_by_cell(
     secret: &SecretSummary,
     users: &SecretUsers,
     are_ingresses_loaded: bool,
 ) -> KindCell {
     let list = secret_user_list(secret, users);
-    if list.is_empty() && are_ingresses_loaded && may_be_unused(secret) {
-        return KindCell::Toned(StatusLabel {
-            text: "unused".into(),
-            tone: StatusTone::Done,
-        });
+    if list.is_empty() && !are_ingresses_loaded {
+        return KindCell::Absent;
     }
     used_by_cell(list.iter())
 }
