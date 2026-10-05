@@ -213,6 +213,12 @@ impl KindFilter {
     pub(crate) const DEFAULT: [Self; 4] =
         [Self::Ingress, Self::Service, Self::Workload, Self::Config];
 
+    /// Traffic mode shows the flow between workloads: it has no use for configuration or access
+    /// nodes, so it turns these two layers off.
+    pub(crate) fn is_off_in_traffic(self) -> bool {
+        matches!(self, Self::Config | Self::Rbac)
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Ingress => "Ingress",
@@ -376,6 +382,16 @@ pub(crate) struct TopologyFilter {
 }
 
 impl TopologyFilter {
+    /// The kinds the graph and the feeds use: the chips that are on, less the layers
+    /// Traffic mode turns off. The chips themselves keep the choice of the user.
+    pub(crate) fn shown_kinds(&self, is_traffic: bool) -> BTreeSet<KindFilter> {
+        self.kinds
+            .iter()
+            .copied()
+            .filter(|kind| !(is_traffic && kind.is_off_in_traffic()))
+            .collect()
+    }
+
     /// The default chips on, nothing filtered, the group chosen automatically.
     pub(crate) fn initial() -> Self {
         Self {

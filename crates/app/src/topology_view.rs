@@ -81,6 +81,9 @@ const LEGEND_TEXT_SIZE: f32 = 11.;
 const LOW_ZOOM_TITLE_HEIGHT: f32 = 18.;
 /// The height of the namespace list the dropdown shows before it scrolls.
 const NAMESPACE_MENU_HEIGHT: f32 = 320.;
+/// The tooltip of a layer chip that Traffic mode has turned off.
+const NOT_IN_TRAFFIC: &str = "Not shown in Traffic";
+
 /// How often the Traffic sample is read again, and the metric list tried again after a failure.
 const TRAFFIC_REFRESH: Duration = Duration::from_secs(30);
 
@@ -562,7 +565,7 @@ impl TopologyView {
             .filter(|_| self.is_visible)
             .map(|namespace| TopologySubject {
                 namespace,
-                kinds: self.filter.kinds.clone(),
+                kinds: self.shown_kinds(),
             });
         if session.read(cx).topology_subject() != subject.as_ref() {
             session.update(cx, |session, cx| session.set_topology_subject(subject, cx));
@@ -637,6 +640,11 @@ impl TopologyView {
         };
         let aspect = self.aspect();
         let selected = self.selected(cx);
+        let filter = TopologyFilter {
+            kinds: self.shown_kinds(),
+            problems_only: self.filter.problems_only,
+            group_by: self.filter.group_by,
+        };
         let (build, group_by, selection_is_gone) = {
             let session = session.read(cx);
             let Some(live) = session.live() else {
@@ -657,7 +665,7 @@ impl TopologyView {
                 pods: Some(pods),
                 rows: &rows,
                 nodes: live.nodes.items(),
-                filter: &self.filter,
+                filter: &filter,
                 expanded: &self.expanded,
                 now: jiff::Timestamp::now(),
             };
@@ -821,6 +829,15 @@ impl TopologyView {
         }
         self.mode = mode;
         self.traffic = TrafficRun::default();
+        // The layers Traffic turns off leave the graph and stop their feeds, and come back with
+        // the chips the user had.
+        if mode == TopologyMode::Traffic
+            && self.selected(cx).is_some_and(|key| is_traffic_hidden(&key))
+        {
+            self.clear_selection(cx);
+        }
+        self.is_dirty = true;
+        self.sync_subject(cx);
         self.sync_traffic(cx);
         cx.notify();
     }
@@ -1055,7 +1072,15 @@ impl TopologyView {
         self.rebuild(cx);
     }
 
+    /// The kinds the graph and the feeds use now.
+    fn shown_kinds(&self) -> BTreeSet<KindFilter> {
+        self.filter.shown_kinds(self.mode == TopologyMode::Traffic)
+    }
+
     fn toggle_kind(&mut self, kind: KindFilter, cx: &mut Context<Self>) {
+        if self.mode == TopologyMode::Traffic && kind.is_off_in_traffic() {
+            return;
+        }
         if !self.filter.kinds.remove(&kind) {
             self.filter.kinds.insert(kind);
         }
@@ -1496,9 +1521,16 @@ impl TopologyView {
                 }
             });
         let chips = KindFilter::ALL.into_iter().map(|kind| {
-            let is_on = self.filter.kinds.contains(&kind);
+            let is_off = self.mode == TopologyMode::Traffic && kind.is_off_in_traffic();
+            let is_on = self.filter.kinds.contains(&kind) && !is_off;
+            let tooltip = if is_off {
+                NOT_IN_TRAFFIC.to_owned()
+            } else {
+                kind.tooltip()
+            };
             toggle_button(chip_id(kind), kind.label(), is_on)
-                .tooltip(kind.tooltip())
+                .disabled(is_off)
+                .tooltip(tooltip)
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle_kind(kind, cx)))
         });
         // Amber while on, so it does not read like a kind chip: the graph shows the problems and what
@@ -1730,7 +1762,7 @@ impl TopologyView {
                 too_large_text(
                     *too_large,
                     &namespace,
-                    self.filter.kinds.contains(&KindFilter::Rbac),
+                    self.shown_kinds().contains(&KindFilter::Rbac),
                 )
                 .into(),
             ),
@@ -2205,6 +2237,15 @@ fn card_click(key: Option<ResourceKey>, has_row: bool, click_count: usize) -> Ca
         Some(key) => CardClick::Select(key),
         None => CardClick::Highlight,
     }
+}
+
+/// Whether the object of `key` is one of the layers Traffic mode turns off, so its drawer cannot
+/// stay open over a graph that no longer draws it.
+fn is_traffic_hidden(key: &ResourceKey) -> bool {
+    let ResourceKey::Kind { kind, .. } = key else {
+        return false;
+    };
+    TopologyKind::of_resource_kind(*kind).is_some_and(|kind| kind.filter().is_off_in_traffic())
 }
 
 /// The element id of a kind chip.

@@ -57,3 +57,9 @@ Unchanged: `MetricsEndpoint::MetricNames` (`label/__name__/values`, `start` = no
 - `paint_edges` used to skip the flow animation for any edge with a traffic look (`look.is_none() &&`). Now the one `is_animated` predicate (selected node, focused, text zoom) and the one frame-request path (`needs_flow_frame`: reduced motion, inactive window, nothing selected) serve both modes.
 - A solid flow breaks into the dashes of its relation (`Calls` and `Owns`: long dashes), keeping its width, color, and arrow; an idle edge keeps its dots, which march (`traffic_flow_dash`). Reduced motion shows the dashes standing still.
 - Screenshot seam: `--screen topology-traffic-fixture-selected` (screenshot builds) draws the first Deployment of the fixture as selected, with motion reduced; the view keeps it in `fixture_selected` because the fixture has no session to select through.
+
+## Config and RBAC layers off in Traffic mode
+
+- `KindFilter::is_off_in_traffic` names the two layers (Config, RBAC). `TopologyView::shown_kinds` (`TopologyFilter::shown_kinds(is_traffic)`) is the one place that applies it: the graph build (`TopologyInputs.filter`), the feeds (`sync_subject`, so those watches stop) and the too-large text all read it, so the Traffic layer is built from a graph without those nodes.
+- `filter.kinds` keeps the user's choice and is never rewritten; `set_mode` only marks the graph dirty and syncs the feeds. Back in Resources the layers return as the user had them (a layer the user had off stays off). Nothing of this is persisted.
+- The two chips are disabled while Traffic is on (shown off, tooltip `Not shown in Traffic`); `toggle_kind` ignores them. Ingress, Service, Workload, and Problems only are unchanged. Entering Traffic closes the drawer of a Config or RBAC object, which the graph no longer draws.

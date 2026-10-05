@@ -706,3 +706,85 @@ fn traffic_step_follows_the_list_and_the_clock() {
     };
     assert_eq!(traffic_step_of(&tried, failed()), TrafficStep::Wait);
 }
+
+#[gpui_kit::test]
+fn traffic_turns_the_config_and_rbac_layers_off_and_resources_restores_them(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    let view = view_of(cx);
+    notifications(&view, cx, |view, cx| view.set_rbac(true, cx));
+    let shown = |view: &Entity<TopologyView>, cx: &mut gpui_kit::TestAppContext| {
+        cx.update(|cx| view.read(cx).shown_kinds())
+    };
+    assert!(shown(&view, cx).contains(&KindFilter::Config));
+    assert!(shown(&view, cx).contains(&KindFilter::Rbac));
+
+    notifications(&view, cx, |view, cx| {
+        view.set_mode(TopologyMode::Traffic, cx)
+    });
+    let in_traffic = shown(&view, cx);
+    assert!(!in_traffic.contains(&KindFilter::Config));
+    assert!(!in_traffic.contains(&KindFilter::Rbac));
+    // The other layers stay as they are.
+    for kind in [
+        KindFilter::Ingress,
+        KindFilter::Service,
+        KindFilter::Workload,
+    ] {
+        assert!(in_traffic.contains(&kind), "{kind:?}");
+    }
+    // The choice of the user is not overwritten, so it comes back.
+    cx.update(|cx| {
+        let kinds = &view.read(cx).filter.kinds;
+        assert!(kinds.contains(&KindFilter::Config) && kinds.contains(&KindFilter::Rbac));
+    });
+
+    notifications(&view, cx, |view, cx| {
+        view.set_mode(TopologyMode::Resources, cx);
+    });
+    assert!(shown(&view, cx).contains(&KindFilter::Config));
+    assert!(shown(&view, cx).contains(&KindFilter::Rbac));
+}
+
+#[gpui_kit::test]
+fn a_layer_the_user_had_off_stays_off_after_traffic(cx: &mut gpui_kit::TestAppContext) {
+    let view = view_of(cx);
+    notifications(&view, cx, |view, cx| {
+        view.toggle_kind(KindFilter::Config, cx)
+    });
+    notifications(&view, cx, |view, cx| {
+        view.set_mode(TopologyMode::Traffic, cx)
+    });
+    notifications(&view, cx, |view, cx| {
+        view.set_mode(TopologyMode::Resources, cx);
+    });
+    cx.update(|cx| assert!(!view.read(cx).shown_kinds().contains(&KindFilter::Config)));
+}
+
+#[gpui_kit::test]
+fn the_layer_chips_do_not_toggle_in_traffic(cx: &mut gpui_kit::TestAppContext) {
+    let view = view_of(cx);
+    notifications(&view, cx, |view, cx| {
+        view.set_mode(TopologyMode::Traffic, cx)
+    });
+    notifications(&view, cx, |view, cx| {
+        view.toggle_kind(KindFilter::Config, cx)
+    });
+    cx.update(|cx| assert!(view.read(cx).filter.kinds.contains(&KindFilter::Config)));
+}
+
+#[test]
+fn only_config_and_rbac_leave_in_traffic() {
+    let off: Vec<KindFilter> = KindFilter::ALL
+        .into_iter()
+        .filter(|kind| kind.is_off_in_traffic())
+        .collect();
+    assert_eq!(off, [KindFilter::Config, KindFilter::Rbac]);
+    let config = ResourceKey::Kind {
+        kind: crate::resource_kind::ResourceKind::ConfigMaps,
+        namespace: Some("shop".to_owned()),
+        name: "settings".to_owned(),
+    };
+    assert!(is_traffic_hidden(&config));
+    assert!(!is_traffic_hidden(&service_key("web")));
+}
