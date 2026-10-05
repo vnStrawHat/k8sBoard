@@ -112,6 +112,7 @@ mod pod_table;
 mod policy_rows;
 mod port_forward_menu;
 mod port_forwards;
+mod process_memory;
 mod process_usage;
 mod recent_changes;
 mod related_objects;

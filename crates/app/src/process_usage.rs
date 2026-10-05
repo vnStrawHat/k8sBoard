@@ -14,13 +14,16 @@ use gpui_kit::{
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 use crate::app_shell::AppShell;
+use crate::process_memory::read_os_memory;
 use crate::status_bar::{separator_color, status_separator};
 use crate::status_tooltip::{Section, details_table};
 use crate::usage_format::Measure;
 
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
-/// What `sysinfo` calls the memory of a process, named as the OS does.
+/// What `sysinfo` calls the memory of a process, named as the OS does. On Windows the commit is
+/// `PrivateUsage` (`process_memory.rs`), not `sysinfo` 0.31's `virtual_memory()`, which there is
+/// the whole address space.
 const RESIDENT_NAME: &str = if cfg!(windows) {
     "Working set"
 } else {
@@ -75,13 +78,28 @@ pub(crate) fn machine_cpu_percent(per_core_percent: f32, cores: usize) -> f32 {
 pub(crate) struct ProcessReading {
     pub(crate) cpu_percent: f32,
     pub(crate) cores: usize,
+    /// Windows only: what Task Manager's "Memory" column shows.
+    pub(crate) private_working_set: Option<u64>,
     /// The working set on Windows, the resident set elsewhere.
-    pub(crate) memory: u64,
-    /// The commit on Windows, the virtual size elsewhere.
-    pub(crate) virtual_memory: u64,
+    pub(crate) resident: u64,
+    /// The commit on Windows (`None` if the OS call failed), the virtual size elsewhere.
+    pub(crate) commit_or_virtual: Option<u64>,
+    /// Windows only.
+    pub(crate) peak_working_set: Option<u64>,
     /// Only Linux lists the tasks of a process.
     pub(crate) threads: Option<usize>,
     pub(crate) uptime: Duration,
+}
+
+/// A figure the OS gave, or `None` for the 0 that means it did not.
+fn given(bytes: u64) -> Option<u64> {
+    (bytes > 0).then_some(bytes)
+}
+
+/// The figure `MEM` shows: the private working set when the OS gave one, otherwise the resident
+/// figure. A live process never has a private working set of 0, so 0 means it was not filled.
+pub(crate) fn displayed_memory(private_working_set: Option<u64>, resident: u64) -> u64 {
+    private_working_set.and_then(given).unwrap_or(resident)
 }
 
 /// The latest reading of everything the status bar shows.
@@ -155,11 +173,18 @@ impl ProcessSampler {
         );
         let process = system.process(self.pid)?;
         let cores = std::thread::available_parallelism().map_or(1, usize::from);
+        let os = read_os_memory();
         Some(ProcessReading {
             cpu_percent: machine_cpu_percent(process.cpu_usage(), cores),
             cores,
-            memory: process.memory(),
-            virtual_memory: process.virtual_memory(),
+            private_working_set: given(os.private_working_set),
+            resident: process.memory(),
+            commit_or_virtual: if cfg!(windows) {
+                given(os.commit)
+            } else {
+                Some(process.virtual_memory())
+            },
+            peak_working_set: given(os.peak_working_set),
             threads: process.tasks().map(|tasks| tasks.len()),
             uptime: Duration::from_secs(process.run_time()),
         })
@@ -171,7 +196,10 @@ pub(crate) fn resource_text(process: &ProcessReading) -> String {
     format!(
         "CPU {:.1}%  MEM {}",
         process.cpu_percent,
-        format_memory(process.memory)
+        format_memory(displayed_memory(
+            process.private_working_set,
+            process.resident
+        ))
     )
 }
 
@@ -245,34 +273,39 @@ pub(crate) fn network_sections(usage: &Usage) -> Vec<Section> {
     ]
 }
 
-/// The tooltip table of the CPU and memory item, in a fixed order.
+/// The tooltip table of the CPU and memory item, in a fixed order, as OneTerm's. A figure the
+/// OS does not give is left out.
 pub(crate) fn resource_sections(process: &ProcessReading) -> Vec<Section> {
+    let mut memory = Vec::new();
+    if let Some(bytes) = process.private_working_set {
+        memory.push(("Private working set", format_memory(bytes)));
+    }
+    memory.push((RESIDENT_NAME, format_memory(process.resident)));
+    if let Some(bytes) = process.commit_or_virtual {
+        memory.push((VIRTUAL_NAME, format_memory(bytes)));
+    }
+    if let Some(bytes) = process.peak_working_set {
+        memory.push(("Peak working set", format_memory(bytes)));
+    }
+    let mut cpu = vec![(
+        "Usage",
+        format!(
+            "{:.1}% of {} logical cores",
+            process.cpu_percent, process.cores
+        ),
+    )];
+    if let Some(threads) = process.threads {
+        cpu.push(("Threads", threads.to_string()));
+    }
+    cpu.push(("Uptime", format_uptime(process.uptime)));
     vec![
         Section {
             title: "Memory",
-            rows: vec![
-                (RESIDENT_NAME, format_memory(process.memory)),
-                (VIRTUAL_NAME, format_memory(process.virtual_memory)),
-            ],
+            rows: memory,
         },
         Section {
             title: "CPU",
-            rows: vec![
-                (
-                    "Usage",
-                    format!(
-                        "{:.1}% of {} logical cores",
-                        process.cpu_percent, process.cores
-                    ),
-                ),
-                (
-                    "Threads",
-                    process
-                        .threads
-                        .map_or_else(|| "n/a".to_owned(), |threads| threads.to_string()),
-                ),
-                ("Uptime", format_uptime(process.uptime)),
-            ],
+            rows: cpu,
         },
     ]
 }

@@ -4,7 +4,7 @@
 //!
 //! The decisions (what to write, when to clear, when to try again) are plain code behind
 //! `ClipboardPort`, so every test runs on every OS with a fake port and never touches the system
-//! clipboard. Only the Windows calls are `#[cfg(windows)]`, in `windows_clipboard`: the one module
+//! clipboard. Only the Windows calls are `#[cfg(windows)]`, in `windows_clipboard`: one of two modules
 //! of the workspace that may use `unsafe`. Nothing here logs a value or keeps one: the clear
 //! compares a keyed hash.
 //!

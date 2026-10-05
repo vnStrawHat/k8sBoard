@@ -8,8 +8,10 @@ fn process() -> ProcessReading {
     ProcessReading {
         cpu_percent: 1.25,
         cores: 16,
-        memory: 94 << 20,
-        virtual_memory: 182 << 20,
+        private_working_set: Some(49 << 20),
+        resident: 94 << 20,
+        commit_or_virtual: Some(182 << 20),
+        peak_working_set: Some(101 << 20),
         threads: Some(31),
         uptime: Duration::from_secs(245),
     }
@@ -120,7 +122,7 @@ fn uptime_scales_to_its_size() {
 
 #[test]
 fn the_items_read_as_the_wireframe_and_oneterm_do() {
-    assert_eq!(resource_text(&process()), "CPU 1.2%  MEM 94.0 MB");
+    assert_eq!(resource_text(&process()), "CPU 1.2%  MEM 49.0 MB");
     let rate = NetworkRate {
         received: 1_234_000.0,
         sent: 300.0,
@@ -144,8 +146,10 @@ fn the_resource_table_has_a_fixed_order() {
     assert_eq!(
         rows,
         vec![
+            ("Memory", "Private working set", "49.0 MB"),
             ("Memory", RESIDENT_NAME, "94.0 MB"),
             ("Memory", VIRTUAL_NAME, "182.0 MB"),
+            ("Memory", "Peak working set", "101.0 MB"),
             ("CPU", "Usage", "1.2% of 16 logical cores"),
             ("CPU", "Threads", "31"),
             ("CPU", "Uptime", "4m 05s"),
@@ -154,13 +158,39 @@ fn the_resource_table_has_a_fixed_order() {
 }
 
 #[test]
-fn a_missing_thread_count_reads_not_available() {
+fn figures_the_os_does_not_give_are_left_out() {
+    // macOS: no private or peak working set and no thread count.
     let reading = ProcessReading {
+        private_working_set: None,
+        peak_working_set: None,
+        commit_or_virtual: None,
         threads: None,
         ..process()
     };
-    let sections = resource_sections(&reading);
-    assert!(sections[1].rows.contains(&("Threads", "n/a".to_owned())));
+    let names: Vec<_> = resource_sections(&reading)
+        .iter()
+        .flat_map(|section| section.rows.iter().map(|(name, _)| *name))
+        .collect();
+    assert_eq!(names, vec![RESIDENT_NAME, "Usage", "Uptime"]);
+}
+
+#[test]
+fn the_memory_item_prefers_the_private_working_set() {
+    assert_eq!(displayed_memory(Some(49 << 20), 94 << 20), 49 << 20);
+}
+
+#[test]
+fn the_memory_item_falls_back_to_resident_when_unavailable() {
+    // Not Windows, or the call failed.
+    assert_eq!(displayed_memory(None, 94 << 20), 94 << 20);
+    // An older Windows may leave the field at 0.
+    assert_eq!(displayed_memory(Some(0), 94 << 20), 94 << 20);
+}
+
+#[test]
+fn zero_is_not_a_given_figure() {
+    assert_eq!(given(0), None);
+    assert_eq!(given(5), Some(5));
 }
 
 #[test]
@@ -208,7 +238,8 @@ fn without_a_cluster_the_totals_are_dashes() {
 fn the_sampler_reads_this_process() {
     let sampler = ProcessSampler::new().expect("the current process has an id");
     let reading = sampler.sample().expect("this process is listed");
-    assert!(reading.memory > 0);
+    assert!(reading.resident > 0);
+    assert!(displayed_memory(reading.private_working_set, reading.resident) > 0);
     assert!(reading.cores >= 1);
     assert!((0.0..=100.0).contains(&reading.cpu_percent));
 }
