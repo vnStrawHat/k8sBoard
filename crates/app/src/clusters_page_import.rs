@@ -95,12 +95,12 @@ impl ClustersPage {
     /// "Paste kubeconfig YAML…": says where the text comes from, then reads the clipboard.
     pub(crate) fn start_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let page = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_alert_dialog(cx, move |dialog, _, _| {
             let page = page.clone();
             dialog
                 .title("Paste kubeconfig YAML")
-                .w(px(DIALOG_WIDTH))
-                .child(
+                .width(px(DIALOG_WIDTH))
+                .description(
                     "k8sBoard reads the kubeconfig from the clipboard. Its content is never shown.",
                 )
                 .button_props(
@@ -200,7 +200,7 @@ impl ClustersPage {
         };
         self.paste_text = pasted;
         let page = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_alert_dialog(cx, move |dialog, _, cx| {
             let (ok_page, close_page, ok_preview) = (page.clone(), page.clone(), preview.clone());
             let (title, ok_text) = match preview.source {
                 ImportSource::File(_) => ("Import kubeconfig", "Add"),
@@ -208,7 +208,7 @@ impl ClustersPage {
             };
             dialog
                 .title(title)
-                .w(px(DIALOG_WIDTH))
+                .width(px(DIALOG_WIDTH))
                 .child(preview_body(&preview, cx))
                 .button_props(
                     DialogButtonProps::default()

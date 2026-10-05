@@ -551,3 +551,46 @@ fn a_window_on_another_page_lists_no_service_until_the_metrics_page_shows(cx: &m
     assert_eq!(api.requests()[0].path, "/api/v1/services");
     close(window, cx);
 }
+
+// ---- Add cluster in the Settings window ----
+
+fn press_confirm(window: AnyWindowHandle, cx: &mut TestAppContext) {
+    cx.update_window(window, |_, window, cx| {
+        window.click("ok", cx);
+    })
+    .expect("the window is open");
+    cx.run_until_parked();
+    render(window, cx);
+}
+
+fn has_cluster_form(window: AnyWindowHandle, cx: &mut TestAppContext) -> bool {
+    cx.update_window(window, |_, window, _| {
+        window.try_find("remove-cluster").is_some()
+    })
+    .expect("the window is open")
+}
+
+const ADDED_KUBECONFIG: &str = "apiVersion: v1\nkind: Config\nclusters:\n  - name: c\n    cluster: { server: 'https://127.0.0.1:1' }\nusers:\n  - name: u\n    user: { token: fixture-token-value }\ncontexts:\n  - name: added-ctx\n    context: { cluster: c, user: u }\n";
+
+#[gpui_kit::test]
+fn pasted_kubeconfig_appears_in_the_open_settings_window(cx: &mut TestAppContext) {
+    let dir = temp_dir("paste-flow");
+    install(Some(&dir), &[], cx);
+    let (window, view) = open_window(cx);
+    render(window, cx);
+    assert!(!has_cluster_form(window, cx));
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+        ADDED_KUBECONFIG.to_owned(),
+    ));
+    let page = view.read_with(cx, |view, _| view.clusters.clone());
+    cx.update_window(window, |_, window, cx| {
+        page.update(cx, |page, cx| page.start_paste(window, cx));
+    })
+    .expect("the window is open");
+    render(window, cx);
+    press_confirm(window, cx);
+    press_confirm(window, cx);
+    render(window, cx);
+    assert!(has_cluster_form(window, cx));
+    let _ = std::fs::remove_dir_all(&dir);
+}

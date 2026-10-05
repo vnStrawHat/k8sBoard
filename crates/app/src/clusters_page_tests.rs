@@ -427,7 +427,7 @@ fn import_file_adds_only_the_path(cx: &mut TestAppContext) {
     cx.run_until_parked();
     render(window, cx);
     assert!(has_dialog(window, cx));
-    press_confirm(window, cx);
+    click_ok(window, cx);
     assert_eq!(
         cx.read(|cx| AppSettings::get(cx).registry.kubeconfigs.clone()),
         std::slice::from_ref(&file)
@@ -531,6 +531,43 @@ fn read_clipboard_error_stays_open_after_the_paste_dialog_closes(cx: &mut TestAp
     press_confirm(window, cx);
     assert!(!has_dialog(window, cx));
     assert!(!paste_text_is_set(&page, cx));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A click on the dialog's own OK button, which must be on screen for a user to reach it.
+fn click_ok(window: AnyWindowHandle, cx: &mut TestAppContext) {
+    cx.update_window(window, |_, window, cx| {
+        assert!(
+            window.try_find("ok").is_some(),
+            "the dialog shows no OK button"
+        );
+        window.click("ok", cx);
+    })
+    .expect("the window is open");
+    cx.run_until_parked();
+    render(window, cx);
+}
+
+fn context_names(page: &Entity<ClustersPage>, cx: &TestAppContext) -> Vec<String> {
+    page.read_with(cx, |page, cx| {
+        page.rows(cx)
+            .into_iter()
+            .map(|row| row.cluster.context)
+            .collect()
+    })
+}
+
+#[gpui_kit::test]
+fn paste_through_both_dialogs_lists_the_new_cluster(cx: &mut TestAppContext) {
+    let (dir, window, page) = paste_setup("both-dialogs", cx);
+    start_paste_dialog(window, &page, cx);
+    click_ok(window, cx);
+    render(window, cx);
+    assert!(has_dialog(window, cx), "the preview is open");
+    assert!(paste_text_is_set(&page, cx));
+    click_ok(window, cx);
+    render(window, cx);
+    assert_eq!(context_names(&page, cx), ["pasted-ctx"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
