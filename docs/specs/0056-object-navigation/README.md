@@ -38,7 +38,7 @@ Status: **draft 2026-10-05, revised after advisor review**, from the task-based 
 - [ ] B3a Pod Services; B3b Service Exposed by (AC 16, 20, 22)
 - [ ] B4 Ingress Backends, NetworkPolicy Pods (AC 15, 18)
 - [x] C1 palette searches the live condition feeds in scope (AC 23)
-- [ ] C2 `list_object_names` (AC 24, 27)
+- [x] C2 `list_object_names` (AC 24; AC 27 for the cluster half)
 - [ ] C3 name index in the palette (AC 25-30)
 - [ ] General (AC 31-33)
 

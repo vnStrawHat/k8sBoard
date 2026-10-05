@@ -17,7 +17,7 @@ use crate::traffic::TrafficCounter;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const LIST_PAGE_SIZE: u32 = 500;
+pub(crate) const LIST_PAGE_SIZE: u32 = 500;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
