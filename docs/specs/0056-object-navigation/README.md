@@ -30,7 +30,7 @@ Status: **draft 2026-10-05, revised after advisor review**, from the task-based 
 
 ## Acceptance checklist (details in acceptance.md)
 
-- [ ] A1 history core and keys (AC 1-9)
+- [x] A1 history core and keys (AC 1-9; as built: `Back` takes an `is_served` predicate, the shell lives in `app_shell_history.rs`, and the terminal `NoAction` list is not needed because the workspace context already excludes `Terminal`)
 - [ ] A2 header Back, Prev / Next (AC 10, 14)
 - [ ] A3 `follow_link`: denied, out of scope (AC 12, 13)
 - [ ] B1 one link style, `open_link`, endpoint pod links (AC 11, 17)

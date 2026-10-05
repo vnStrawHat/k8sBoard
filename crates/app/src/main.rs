@@ -92,6 +92,7 @@ mod monitor_tab;
 mod namespace_picker;
 mod namespace_rows;
 mod navigation;
+mod navigation_history;
 mod network_policy_rows;
 mod network_rows;
 mod node_drawer;

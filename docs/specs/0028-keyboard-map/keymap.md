@@ -19,6 +19,7 @@ All actions are unit structs from `gpui_kit::actions!(k8sboard, [...])` in `keym
 | Esc (in a field) | `escape` | `LeaveInput` | FIELD | focus leaves the text field |
 | Space | `space` | `NoAction` | cluster switcher (both contexts) | `space` → `NoAction` in the switcher (0046); no tick, never confirms or closes |
 | `[` / `]` | `[` / `]` | `PreviousContainer` / `NextContainer` | WORKSPACE | pod drawer: previous/next container |
+| `Alt+Left` / `Alt+Right` | `Alt+Left` / `Alt+Right` | `GoBack` / `GoForward` | WORKSPACE | back / forward through the places a link left (0056); text fields and the terminal keep the keys |
 | L | `l` | `ViewLogs` | WORKSPACE | [row-actions.md](row-actions.md) |
 | Y | `y` | `ViewYaml` | WORKSPACE | drawer opens on the YAML tab |
 | Ctrl C (menu) | `secondary-c` | `CopyName` | WORKSPACE | copies the name; a text selection wins (decision 8) |

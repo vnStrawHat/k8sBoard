@@ -66,6 +66,7 @@ use crate::log_target::{LogTarget, NoLogTarget, check_logs_access};
 use crate::monitor_data::{MonitorInput, MonitorSubject, monitor_data};
 use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
 use crate::navigation::{NavigationCounts, issue_counts, sidebar};
+use crate::navigation_history::NavigationHistory;
 use crate::node_table::NodeTableDelegate;
 use crate::object_events::{SubjectChange, event_subject, subject_change};
 use crate::overview::OverviewState;
@@ -135,6 +136,8 @@ pub(crate) mod batch_write;
 #[path = "certificate_renewal.rs"]
 pub(crate) mod certificate_renewal;
 
+#[path = "app_shell_history.rs"]
+mod app_shell_history;
 #[path = "app_shell_monitor_source.rs"]
 mod app_shell_monitor_source;
 #[path = "app_shell_session.rs"]
@@ -186,6 +189,10 @@ use keyboard_navigation::shell_key_context;
 #[cfg(test)]
 #[path = "app_shell_tests.rs"]
 mod app_shell_tests;
+
+#[cfg(test)]
+#[path = "app_shell_history_tests.rs"]
+mod app_shell_history_tests;
 
 #[cfg(test)]
 #[path = "app_shell_switch_tests.rs"]
@@ -512,6 +519,8 @@ pub(crate) struct AppShell {
     pending_subjects: Option<PendingSubjects>,
     /// A reveal that waits for its list to load before it clears a filter hiding the row.
     pending_reveal: Option<ClusterObject>,
+    /// Where `reveal_object` came from, for Alt+Left and Alt+Right.
+    navigation: NavigationHistory,
     dock: Entity<Dock>,
     /// Keeps the dock height across zoom and minimize, which unmount the split.
     dock_split: Entity<ResizableState>,
@@ -761,6 +770,7 @@ impl AppShell {
             drawer,
             pending_subjects: None,
             pending_reveal: None,
+            navigation: NavigationHistory::default(),
             dock,
             dock_split,
             _dock_split_events: dock_split_events,
@@ -1092,6 +1102,8 @@ impl AppShell {
         self.pending_reveal = None;
         self.pending_custom_launch = None;
         self.pending_dialog_launch = None;
+        // The places hold objects of the cluster that left.
+        self.navigation.clear();
     }
 
     /// Creates the only session, for the active target. It runs after `release_all` released the
@@ -1602,6 +1614,10 @@ impl AppShell {
             return;
         }
         self.clear_selection(cx);
+        // A place outside the new scope could not be shown again.
+        if self.live(cx).is_none_or(|live| live.scope != scope) {
+            self.navigation.clear();
+        }
         if let Some(session) = self.session().cloned() {
             session.update(cx, |session, cx| session.set_scope(scope, cx));
         }
@@ -1665,7 +1681,17 @@ impl AppShell {
     /// the row is cleared, or the drawer would close at once. A list that is still loading keeps
     /// the object, and `on_session_changed` resolves it after the first snapshot; a loaded list
     /// without the row drops it.
+    ///
+    /// This is the one reveal that records a place for Back (spec 0056): a link, a palette Go to,
+    /// an Issues row. `reveal_then` callers (key actions on another row) do not.
     pub(crate) fn reveal_object(&mut self, object: ClusterObject, cx: &mut Context<Self>) {
+        // Ask before recording, so a refused discard leaves no phantom entry.
+        if self.has_unsaved_edit(cx) {
+            let wanted = object.clone();
+            self.ask_discard(move |shell, cx| shell.reveal_object(wanted, cx), cx);
+            return;
+        }
+        self.record_place_before_reveal(&object, cx);
         self.reveal_then(object, cx, |_, _| {});
     }
 

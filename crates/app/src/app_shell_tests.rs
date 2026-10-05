@@ -280,7 +280,7 @@ fn changing_the_selection_drops_an_existing_values_view(cx: &mut TestAppContext)
     shell.read_with(cx, |shell, _| assert!(shell.drawer.secret_values.is_none()));
 }
 
-fn served_kind(crd_name: &str, extra_column: bool) -> CustomKind {
+pub(super) fn served_kind(crd_name: &str, extra_column: bool) -> CustomKind {
     let (plural, group) = crd_name.split_once('.').expect("a CRD name has a group");
     let mut columns = Vec::new();
     if extra_column {

@@ -20,12 +20,12 @@ use crate::dock::{DockMode, TabStep};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
     Attach, CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels,
-    EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, LeaveInput, NextContainer,
-    NextDockTab, OpenDrawer, OpenShell, PauseRollout, PortForward, PreviousContainer,
-    PreviousDockTab, RenewCertificate, RerunJob, RestartPod, RestartRollout, RollBack, Scale,
-    SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage,
-    SelectPreviousRow, SetDefaultStorageClass, SuspendCronJob, ToggleDock, ToggleDockZoom,
-    ToggleReadOnly, TriggerCronJob, ViewLogs, ViewYaml,
+    EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, GoBack, GoForward, LeaveInput,
+    NextContainer, NextDockTab, OpenDrawer, OpenShell, PauseRollout, PortForward,
+    PreviousContainer, PreviousDockTab, RenewCertificate, RerunJob, RestartPod, RestartRollout,
+    RollBack, Scale, SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow,
+    SelectPreviousPage, SelectPreviousRow, SetDefaultStorageClass, SuspendCronJob, ToggleDock,
+    ToggleDockZoom, ToggleReadOnly, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_drawer::REVISIONS_TITLE;
 use crate::live_sections::loaded_replica_sets;
@@ -171,6 +171,8 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
         .on_action(cx.listener(|shell, _: &PreviousContainer, _, cx| {
             shell.step_container_at_cursor(ContainerStep::Previous, cx);
         }))
+        .on_action(cx.listener(|shell, _: &GoBack, _, cx| shell.go_back(cx)))
+        .on_action(cx.listener(|shell, _: &GoForward, _, cx| shell.go_forward(cx)))
         .on_action(
             cx.listener(|shell, _: &CopyName, window, cx| shell.copy_cursor_name(window, cx)),
         )

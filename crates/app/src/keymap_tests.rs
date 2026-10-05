@@ -942,3 +942,31 @@ fn alt_arrows_move_clusters_outside_text_fields(cx: &mut TestAppContext) {
         }
     }
 }
+
+#[gpui_kit::test]
+fn alt_arrows_go_back_and_forward_in_the_workspace(cx: &mut TestAppContext) {
+    bind_all(cx);
+    for path in [&SHELL[..], &TABLE_PATH[..]] {
+        assert_eq!(resolve("alt-left", path, cx), Some("k8sboard::GoBack"));
+        assert_eq!(resolve("alt-right", path, cx), Some("k8sboard::GoForward"));
+    }
+}
+
+#[gpui_kit::test]
+fn alt_arrows_never_navigate_in_fields_editors_and_the_terminal(cx: &mut TestAppContext) {
+    bind_all(cx);
+    let paths: [&[&str]; 6] = [
+        &INPUT_PATH,
+        &["Root", "AppShell", "QuickFilter", "Input"],
+        &["Root", "AppShell", "Drawer", "YamlEdit", "Input"],
+        &["Root", "AppShell", "Drawer", "ValuesEdit", "Input"],
+        &["Root", "AppShell", "Dock", "Terminal"],
+        &["Root", "AppShell", "Popover", "Input"],
+    ];
+    for path in paths {
+        for key in ["alt-left", "alt-right"] {
+            let name = resolve(key, path, cx);
+            assert!(!is_app_action(name), "{key} under {path:?}: {name:?}");
+        }
+    }
+}

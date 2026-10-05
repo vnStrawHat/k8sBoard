@@ -1156,6 +1156,67 @@ fn a_namespace_change_with_changes_asks_to_discard(cx: &mut TestAppContext) {
     assert!(t.has_edit(cx));
 }
 
+/// An object of the open cluster that is not the one being edited.
+fn other_object(t: &EditTest, cx: &mut TestAppContext) -> ClusterObject {
+    let selected = t
+        .shell()
+        .read_with(cx, |shell, _| shell.selected.clone())
+        .expect("the edited row is selected");
+    ClusterObject::new(
+        selected.cluster,
+        ResourceKey::Pod {
+            namespace: "team-a".to_owned(),
+            name: "api-0".to_owned(),
+        },
+    )
+}
+
+#[gpui_kit::test]
+fn a_reveal_with_changes_records_only_after_the_discard(cx: &mut TestAppContext) {
+    let t = edit_test("edit-reveal-record", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    let other = other_object(&t, cx);
+    t.shell()
+        .update(cx, |shell, cx| shell.reveal_object(other, cx));
+    cx.run_until_parked();
+    let previous = |cx: &mut TestAppContext| {
+        t.shell()
+            .read_with(cx, |shell, _| shell.navigation.previous().is_some())
+    };
+    assert!(
+        !previous(cx),
+        "nothing is recorded while the question is open"
+    );
+    t.press_dialog(Cancel, cx);
+    assert!(!previous(cx), "Keep editing leaves no entry");
+    let other = other_object(&t, cx);
+    t.shell()
+        .update(cx, |shell, cx| shell.reveal_object(other, cx));
+    cx.run_until_parked();
+    t.press_dialog(Confirm { secondary: false }, cx);
+    assert!(previous(cx));
+}
+
+#[gpui_kit::test]
+fn going_back_with_changes_asks_to_discard(cx: &mut TestAppContext) {
+    let t = edit_test("edit-back", cx);
+    t.open(cx);
+    let other = other_object(&t, cx);
+    t.shell()
+        .update(cx, |shell, cx| shell.record_place_before_reveal(&other, cx));
+    t.change("replicas: 3", "replicas: 5", cx);
+    t.shell().update(cx, |shell, cx| shell.go_back(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        t.shell()
+            .read_with(cx, |shell, _| shell.last_discard.clone()),
+        Some("Deployment/team-a/api".to_owned())
+    );
+    assert!(t.has_edit(cx));
+    t.press_dialog(Confirm { secondary: false }, cx);
+    assert!(!t.has_edit(cx));
+}
 #[gpui_kit::test]
 fn cancel_asks_only_when_the_text_has_changes(cx: &mut TestAppContext) {
     let t = edit_test("edit-cancel", cx);
