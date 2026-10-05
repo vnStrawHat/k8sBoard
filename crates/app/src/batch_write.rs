@@ -866,7 +866,7 @@ impl AppShell {
             DialogInputs {
                 shell: cx.weak_entity(),
                 confirm: confirm_step(guard.profile.confirm, intent.risk, intent.expected()),
-                environment: guard.profile.environment,
+                environment: guard.profile.environment.clone(),
                 generation: guard.generation,
                 kind: DialogKind::Batch(Rc::new(intent)),
             }

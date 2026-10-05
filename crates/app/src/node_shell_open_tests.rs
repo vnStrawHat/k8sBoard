@@ -635,7 +635,9 @@ fn making_the_cluster_production_while_the_dialog_is_open_creates_nothing(cx: &m
         crate::settings::AppSettings::update(cx, |settings| {
             crate::cluster_form::edit_entry(&mut settings.registry, &debugs.stg, |entry| {
                 entry.allow_node_shell = None;
-                entry.environment = Some(crate::environment::Environment::Production);
+                entry.environment = Some(crate::environment::EnvironmentKey::BuiltIn(
+                    crate::environment::EnvironmentTier::Production,
+                ));
             });
         });
     });

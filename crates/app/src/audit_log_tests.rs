@@ -119,7 +119,7 @@ fn lock_entry_names_the_guard_cluster() {
         &access,
         WriteLock::Unlocked,
         "prod-eu-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     let lock = lock_entry(&guard, WriteLock::Locked);
     assert_eq!(lock.action, "Lock");
@@ -141,7 +141,7 @@ fn a_lock_line_has_no_object_error_or_note_key() {
         &access,
         WriteLock::Locked,
         "dev-1",
-        Environment::Development,
+        Environment::DEVELOPMENT,
     );
     assert_eq!(
         keys_of(&lock_entry(&guard, WriteLock::Unlocked)),
@@ -272,7 +272,7 @@ fn write_entry_uses_the_intent_cluster() {
     };
     let access = AccessState::Unknown;
     // The guard is the intent's cluster, whatever else is viewed.
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     let entry = audit_entry(
         &intent,
         &guard,
@@ -326,7 +326,7 @@ fn audit_records_paths_only() {
         Vec::new(),
     );
     let access = AccessState::Unknown;
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     let entry = audit_entry(&intent, &guard, AuditOutcome::Applied, None, None);
     // The dialog says `Apply changes`; the line says what was done.
     assert_eq!(entry.action, "Edit YAML");
@@ -371,7 +371,7 @@ fn removal_entry(removal: Removal, kind: cluster::ObjectKind, name: &str) -> Aud
     let batch = delete_batch(&cluster, "stg-b", extras, jiff::Timestamp::UNIX_EPOCH);
     let intent = batch.item_intent(&batch.plan.items[0]);
     let access = AccessState::Unknown;
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     audit_entry(&intent, &guard, AuditOutcome::Applied, None, None)
 }
 
@@ -415,7 +415,7 @@ fn summary(outcome: SummaryOutcome) -> NodeSummary {
 #[test]
 fn a_drain_summary_is_one_line_of_counts_and_an_outcome() {
     let access = AccessState::Unknown;
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     let identity = AuditIdentity::of(&guard);
     let entry = drain_summary_entry(
         &identity,
@@ -456,7 +456,7 @@ fn a_drain_summary_is_one_line_of_counts_and_an_outcome() {
 #[test]
 fn every_drain_outcome_has_its_own_word() {
     let access = AccessState::Unknown;
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     let identity = AuditIdentity::of(&guard);
     for (outcome, word) in [
         (SummaryOutcome::Drained, "drained"),
@@ -474,7 +474,7 @@ fn every_drain_outcome_has_its_own_word() {
 #[test]
 fn a_stuck_summary_records_why_in_the_error() {
     let access = AccessState::Unknown;
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     let identity = AuditIdentity::of(&guard);
     let stuck = NodeSummary {
         reason: Some("Timed out after 5m: 2 pods left".into()),
@@ -501,7 +501,7 @@ fn a_stuck_summary_records_why_in_the_error() {
 #[test]
 fn the_unknown_count_is_a_field_only_when_there_is_one() {
     let access = AccessState::Unknown;
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     let identity = AuditIdentity::of(&guard);
     let value = |unknown| {
         let line = NodeSummary {
@@ -528,7 +528,7 @@ fn the_unknown_count_is_a_field_only_when_there_is_one() {
 fn a_commit_in_the_air_at_quit_is_an_unknown_line() {
     use crate::drain_plan::PodKey;
     let access = AccessState::Unknown;
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     let identity = AuditIdentity::of(&guard);
     let evict = NextStep::Evict(PodKey {
         namespace: "payments".to_owned(),
@@ -654,7 +654,7 @@ fn evict_records_the_grace_period_and_no_body() {
 #[test]
 fn skip_pdbs_summary_records_disable_eviction() {
     let access = AccessState::Unknown;
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     let identity = AuditIdentity::of(&guard);
     let line = summary(SummaryOutcome::Drained);
     let fields = |budgets| {
@@ -692,7 +692,7 @@ fn skip_pdbs_summary_records_disable_eviction() {
 fn a_skip_pdbs_commit_in_the_air_is_a_delete_line() {
     use crate::drain_plan::PodKey;
     let access = AccessState::Unknown;
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     let identity = AuditIdentity::of(&guard);
     let step = NextStep::Evict(PodKey {
         namespace: "payments".to_owned(),
@@ -736,7 +736,7 @@ fn audit_line_for_create() {
         Vec::new(),
     );
     let access = AccessState::Unknown;
-    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     let entry = audit_entry(&intent, &guard, AuditOutcome::Applied, None, None);
     assert_eq!(entry.action, "Create");
     let paths: Vec<_> = entry

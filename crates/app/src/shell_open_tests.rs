@@ -1170,7 +1170,7 @@ fn container_attach_item_is_inert_after_a_switch(cx: &mut TestAppContext) {
         &access,
         WriteLock::Unlocked,
         "stg-b",
-        crate::environment::Environment::Staging,
+        crate::environment::Environment::STAGING,
     );
     let attachable = pods().remove(0);
     let item = container_attach_item(

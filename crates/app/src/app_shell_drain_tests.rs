@@ -408,7 +408,7 @@ fn drain_uses_the_active_cluster(cx: &mut TestAppContext) {
     dialog.read_with(cx, |dialog, _| {
         // The guard and the tier are stg-b's own: a click on STG, never prod-a's typed name.
         assert_eq!(*dialog.tier(), DialogConfirm::Click);
-        assert_eq!(dialog.environment(), Environment::Staging);
+        assert_eq!(dialog.environment(), &Environment::STAGING);
         assert_eq!(dialog.expected_name(), "node-b");
         assert_eq!(dialog.plans().len(), 1);
         assert_eq!(dialog.plans()[0].node, "node-b");
@@ -480,7 +480,7 @@ fn drain_dialog_requires_the_node_name_on_prod(cx: &mut TestAppContext) {
                 expected: "node-a".to_owned()
             }
         );
-        assert_eq!(dialog.environment(), Environment::Production);
+        assert_eq!(dialog.environment(), &Environment::PRODUCTION);
     });
 }
 

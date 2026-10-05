@@ -1182,12 +1182,12 @@ impl AppShell {
             LaunchScreen::DeleteBulkConfirm | LaunchScreen::EvictConfirm => (
                 fixture_cluster("stg-eu-1"),
                 "stg-eu-1",
-                Environment::Staging,
+                Environment::STAGING,
             ),
             _ => (
                 fixture_cluster("prod-eu-1"),
                 "prod-eu-1",
-                Environment::Production,
+                Environment::PRODUCTION,
             ),
         };
         let batch = match launch {
@@ -1207,7 +1207,7 @@ impl AppShell {
             _ => fixture_single_batch(&cluster, cluster_name),
         };
         let confirm = confirm_step(
-            ConfirmMode::for_environment(environment),
+            ConfirmMode::for_tier(environment.tier()),
             batch.risk,
             batch.expected(),
         );

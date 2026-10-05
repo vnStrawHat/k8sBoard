@@ -22,7 +22,7 @@ use crate::audit_log::audit_path;
 use crate::cluster_catalog::CatalogHandle;
 use crate::cluster_form::MoveStep;
 use crate::clusters_page::{ClustersPage, add_cluster_button};
-use crate::environment::Environment;
+use crate::environment::{CustomEnvironment, EnvironmentTier, usable_environments};
 use crate::metrics_page::MetricsPage;
 use crate::settings::{
     AppSettings, COLOR_THEME_OPTIONS, DENSITY_OPTIONS, FONT_SIZE_OPTIONS, OptionTable,
@@ -632,21 +632,22 @@ struct TierRow {
 }
 
 /// The two tiers, read from the same rules the dialog uses: the environments are grouped by
-/// `ConfirmMode::for_environment`, and each cell is what `confirm_step` asks.
-fn tier_rows() -> Vec<TierRow> {
+/// `ConfirmMode::for_tier`, and each cell is what `confirm_step` asks. Custom environments list
+/// after the built-ins of their tier.
+fn tier_rows(custom: &[CustomEnvironment]) -> Vec<TierRow> {
     [ConfirmMode::TypeName, ConfirmMode::Click]
         .into_iter()
         .map(|mode| {
-            let environments: Vec<&str> = [
-                Environment::Production,
-                Environment::Staging,
-                Environment::Development,
-                Environment::Local,
-            ]
-            .into_iter()
-            .filter(|environment| ConfirmMode::for_environment(*environment) == mode)
-            .map(Environment::name)
-            .collect();
+            let mut environments: Vec<&str> = EnvironmentTier::ALL
+                .into_iter()
+                .filter(|tier| ConfirmMode::for_tier(*tier) == mode)
+                .map(EnvironmentTier::name)
+                .collect();
+            environments.extend(
+                usable_environments(custom)
+                    .filter(|environment| ConfirmMode::for_tier(environment.tier) == mode)
+                    .map(|environment| environment.name.as_str()),
+            );
             TierRow {
                 environments: environments.join(", "),
                 change: tier_cell(mode, ActionRisk::Change),
@@ -714,7 +715,7 @@ fn tier_table(cx: &App) -> AnyElement {
                 .child("Every change opens a confirm dialog. How it is confirmed follows the environment, and each cluster can override it under Clusters."),
         )
         .child(header)
-        .children(tier_rows().into_iter().map(|row| {
+        .children(tier_rows(&AppSettings::get(cx).registry.environments).into_iter().map(|row| {
             h_flex()
                 .w_full()
                 .gap_3()

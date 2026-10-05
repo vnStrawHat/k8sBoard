@@ -340,7 +340,7 @@ pub(crate) fn forward_fixtures(now: jiff::Timestamp) -> Vec<crate::port_forwards
             started_at: Some(ago(134)),
             ..row(
                 &production,
-                Environment::Production,
+                Environment::PRODUCTION,
                 spec("payments", TargetKind::Pod, "postgres-0", 5432, 15432),
                 ForwardState::Active,
             )
@@ -351,7 +351,7 @@ pub(crate) fn forward_fixtures(now: jiff::Timestamp) -> Vec<crate::port_forwards
             started_at: Some(ago(38)),
             ..row(
                 &production,
-                Environment::Production,
+                Environment::PRODUCTION,
                 spec("payments", TargetKind::Service, "payments-api", 80, 18080),
                 ForwardState::Active,
             )
@@ -360,14 +360,14 @@ pub(crate) fn forward_fixtures(now: jiff::Timestamp) -> Vec<crate::port_forwards
             local: local(19090),
             ..row(
                 &production,
-                Environment::Production,
+                Environment::PRODUCTION,
                 spec("payments", TargetKind::Pod, "api-7d9f8c-x2k4q", 9090, 19090),
                 ForwardState::Reconnecting { attempt: 2 },
             )
         },
         row(
             &staging,
-            Environment::Staging,
+            Environment::STAGING,
             spec("monitoring", TargetKind::Service, "grafana", 3000, 3000),
             ForwardState::Failed(ForwardFailure::PortInUse(3000)),
         ),
@@ -375,7 +375,7 @@ pub(crate) fn forward_fixtures(now: jiff::Timestamp) -> Vec<crate::port_forwards
             is_preset: true,
             ..row(
                 &staging,
-                Environment::Staging,
+                Environment::STAGING,
                 spec("data", TargetKind::Service, "kafka-bootstrap", 9092, 9092),
                 ForwardState::Stopped,
             )

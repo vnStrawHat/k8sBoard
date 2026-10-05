@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cluster_registry::{ClusterProfile, ClusterRef};
 use crate::cluster_session::AccessState;
-use crate::environment::Environment;
+use crate::environment::EnvironmentTier;
 use crate::kind_access::KindAccessMap;
 
 /// Whether a session may offer changes. Starts from the profile and toggles for the session only.
@@ -39,10 +39,12 @@ pub(crate) enum ConfirmMode {
 
 impl ConfirmMode {
     /// Production types the name; every other environment (an unknown one is Staging) clicks.
-    pub(crate) fn for_environment(environment: Environment) -> Self {
-        match environment {
-            Environment::Production => Self::TypeName,
-            Environment::Staging | Environment::Development | Environment::Local => Self::Click,
+    pub(crate) fn for_tier(tier: EnvironmentTier) -> Self {
+        match tier {
+            EnvironmentTier::Production => Self::TypeName,
+            EnvironmentTier::Staging | EnvironmentTier::Development | EnvironmentTier::Local => {
+                Self::Click
+            }
         }
     }
 }
@@ -132,14 +134,14 @@ pub(crate) fn test_guard<'a>(
     access: &'a AccessState,
     lock: WriteLock,
     name: &str,
-    environment: Environment,
+    environment: crate::environment::Environment,
 ) -> ClusterGuard<'a> {
     let profile = ClusterProfile {
         display_name: name.to_owned(),
+        confirm: ConfirmMode::for_tier(environment.tier()),
         environment,
         default_namespace: None,
         read_only: lock == WriteLock::Locked,
-        confirm: ConfirmMode::for_environment(environment),
         allow_node_shell: true,
         debug_image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
         node_shell_namespace: "kube-system".to_owned(),

@@ -1566,7 +1566,7 @@ impl AppShell {
                 shell: cx.weak_entity(),
                 kind: DialogKind::Write(Rc::new(intent)),
                 confirm,
-                environment: guard.profile.environment,
+                environment: guard.profile.environment.clone(),
                 generation: guard.generation,
             }
         };

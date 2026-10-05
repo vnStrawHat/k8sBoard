@@ -241,12 +241,12 @@ impl AppShell {
         use gpui_kit::AppContext as _;
 
         use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
-        use crate::environment::Environment;
+        use crate::environment::EnvironmentTier;
         use crate::write_guard::{ConfirmMode, confirm_step};
 
         const NODE: &str = "wk-03";
-        let fixture_cluster = match environment {
-            Environment::Production => crate::screenshot::SHELL_FIXTURE_CLUSTER,
+        let fixture_cluster = match environment.tier() {
+            EnvironmentTier::Production => crate::screenshot::SHELL_FIXTURE_CLUSTER,
             _ => "stg-eu-1",
         };
         let cluster = ClusterRef {
@@ -312,7 +312,7 @@ impl AppShell {
             }),
         };
         let confirm = confirm_step(
-            ConfirmMode::for_environment(environment),
+            ConfirmMode::for_tier(environment.tier()),
             risk,
             intent.expected(),
         );

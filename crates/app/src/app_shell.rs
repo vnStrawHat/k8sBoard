@@ -1986,9 +1986,9 @@ impl AppShell {
             LaunchScreen::NodeShellConfirm | LaunchScreen::NodeShellConfirmStaging
         ) {
             let environment = if launch == LaunchScreen::NodeShellConfirm {
-                crate::environment::Environment::Production
+                crate::environment::Environment::PRODUCTION
             } else {
-                crate::environment::Environment::Staging
+                crate::environment::Environment::STAGING
             };
             self.open_node_shell_confirm_fixture(environment, window, cx);
             self.pending_dialog_launch = None;
@@ -4233,7 +4233,7 @@ impl AppShell {
                 screen: self.screen,
                 has_session: live.is_some(),
                 cluster: self.active_profile(cx).map(|profile| ActiveCluster {
-                    environment: profile.environment,
+                    environment: profile.environment.clone(),
                     name: profile.display_name.into(),
                 }),
                 scope_label: live.map(|live| scope_label(&live.scope).into()),

@@ -47,7 +47,7 @@ fn unlocked(access: &AccessState) -> ClusterGuard<'_> {
         access,
         WriteLock::Unlocked,
         "dev-1",
-        Environment::Development,
+        Environment::DEVELOPMENT,
     )
 }
 
@@ -63,7 +63,7 @@ fn availability_of_gate(
     access: &AccessState,
     lock: WriteLock,
 ) -> ActionAvailability {
-    let guard = test_guard(access, lock, "dev-1", Environment::Development);
+    let guard = test_guard(access, lock, "dev-1", Environment::DEVELOPMENT);
     gate_availability(gate, &guard)
 }
 
@@ -168,7 +168,7 @@ fn read_only_actions_ignore_the_lock() {
         &allowed,
         WriteLock::Locked,
         "prod-eu-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     for action in [
         ResourceAction::ViewLogs,
@@ -190,13 +190,13 @@ fn gate_and_confirm_use_the_rows_cluster() {
         &allowed,
         WriteLock::Locked,
         "dev-1",
-        Environment::Development,
+        Environment::DEVELOPMENT,
     );
     let open_prod = test_guard(
         &allowed,
         WriteLock::Unlocked,
         "prod-eu-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     // Whichever guard is asked first, each answers for its own cluster.
     for (first, second) in [(&locked_dev, &open_prod), (&open_prod, &locked_dev)] {
@@ -221,7 +221,7 @@ fn gate_and_confirm_use_the_rows_cluster() {
             expected: "prod-eu-1".to_owned()
         }
     );
-    assert_eq!(open_prod.profile.environment, Environment::Production);
+    assert_eq!(open_prod.profile.environment, Environment::PRODUCTION);
     assert_eq!(
         confirm_step(
             locked_dev.profile.confirm,
@@ -246,7 +246,7 @@ fn cordon_follows_the_gate_order() {
     let denied = known_denying(&[AccessCheck::PatchNodes]);
     let (checking, unknown) = (checking(), unknown());
     let at = |access: &AccessState, lock| {
-        let guard = test_guard(access, lock, "dev-1", Environment::Development);
+        let guard = test_guard(access, lock, "dev-1", Environment::DEVELOPMENT);
         action_availability(ResourceAction::Cordon, &guard)
     };
     assert_eq!(
@@ -296,7 +296,7 @@ fn node_edits_and_uncordon_share_the_cordon_gate() {
                     &allowed,
                     WriteLock::Locked,
                     "dev-1",
-                    Environment::Development
+                    Environment::DEVELOPMENT
                 )
             )),
             "dev-1 is read-only",
@@ -387,7 +387,7 @@ fn drain_needs_eviction_and_cordon_rights_in_that_order() {
                 &known_denying(&[]),
                 WriteLock::Locked,
                 "dev-1",
-                Environment::Development
+                Environment::DEVELOPMENT
             )
         )),
         "dev-1 is read-only"
@@ -459,7 +459,7 @@ fn port_forward_is_off_while_the_cluster_is_locked() {
         &access,
         WriteLock::Locked,
         "prod-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     assert_eq!(
         reason(action_availability(ResourceAction::PortForward, &locked)),
@@ -1568,7 +1568,7 @@ fn open_shell_needs_get_and_create() {
     let no_get = known_denying(&[AccessCheck::GetPodExec]);
     let (checking, unknown) = (checking(), unknown());
     let at = |access: &AccessState, lock| {
-        let guard = test_guard(access, lock, "dev-1", Environment::Development);
+        let guard = test_guard(access, lock, "dev-1", Environment::DEVELOPMENT);
         action_availability(ResourceAction::OpenShell, &guard)
     };
     assert_eq!(
@@ -1789,7 +1789,7 @@ fn the_shell_menu_reads_the_gate_of_the_pods_own_cluster() {
         &allowed,
         WriteLock::Locked,
         "prod-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     assert_eq!(
         shell_menu_state(
@@ -1890,7 +1890,7 @@ fn gate_order_then_row_block() {
     let allowed = known_denying(&[]);
     let restart = ResourceAction::RestartRollout(ObjectKind::Deployment);
     let paused = paused_deployment();
-    let guard_at = |access, lock| test_guard(access, lock, "dev-1", Environment::Development);
+    let guard_at = |access, lock| test_guard(access, lock, "dev-1", Environment::DEVELOPMENT);
     // Locked wins over paused: the lock is what the user can change first.
     assert_eq!(
         reason(row_availability(
@@ -2071,7 +2071,7 @@ fn update_report(kind: ObjectKind, is_allowed: bool) -> KindAccess {
 /// `kind_access`.
 fn edit_gate(kind_access: &KindAccessMap, lock: WriteLock) -> ActionAvailability {
     let access = known_denying(&[]);
-    let mut guard = test_guard(&access, lock, "dev-1", Environment::Development);
+    let mut guard = test_guard(&access, lock, "dev-1", Environment::DEVELOPMENT);
     guard.kind_access = kind_access;
     action_availability(ResourceAction::EditYaml(ObjectKind::Deployment), &guard)
 }
@@ -2238,7 +2238,7 @@ fn delete_report(kind: ObjectKind, is_allowed: bool) -> KindAccess {
 
 fn delete_gate(kind_access: &KindAccessMap, lock: WriteLock) -> ActionAvailability {
     let access = known_denying(&[]);
-    let mut guard = test_guard(&access, lock, "dev-1", Environment::Development);
+    let mut guard = test_guard(&access, lock, "dev-1", Environment::DEVELOPMENT);
     guard.kind_access = kind_access;
     action_availability(ResourceAction::Delete(ObjectKind::Pod), &guard)
 }
@@ -2381,7 +2381,7 @@ fn debug_container_is_off_while_the_cluster_is_locked() {
         &access,
         WriteLock::Locked,
         "prod-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     assert_eq!(
         reason(action_availability(ResourceAction::DebugContainer, &locked)),
@@ -2555,7 +2555,7 @@ fn the_setting_is_read_before_the_lock() {
         &allowed,
         WriteLock::Locked,
         "prod-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     guard.profile.allow_node_shell = false;
     assert_eq!(
@@ -2691,7 +2691,7 @@ fn expand_item_is_gated_then_blocked_by_the_row() {
     pending.phase = "Pending".to_owned();
     let pending = KindObject::PersistentVolumeClaim(pending);
     let bound = KindObject::PersistentVolumeClaim(claim("data", "100Gi", "100Gi"));
-    let guard_at = |access, lock| test_guard(access, lock, "dev-1", Environment::Development);
+    let guard_at = |access, lock| test_guard(access, lock, "dev-1", Environment::DEVELOPMENT);
     assert_eq!(
         row_availability(
             ResourceAction::ExpandClaim,
@@ -2758,7 +2758,7 @@ fn set_default_item_is_gated_then_blocked_by_the_row() {
     let allowed = known_denying(&[]);
     let default = KindObject::StorageClass(class("io2", true, true));
     let other = KindObject::StorageClass(class("gp3", false, true));
-    let guard_at = |access, lock| test_guard(access, lock, "dev-1", Environment::Development);
+    let guard_at = |access, lock| test_guard(access, lock, "dev-1", Environment::DEVELOPMENT);
     let item = |guard: &ClusterGuard<'_>, object: &KindObject| {
         reason(row_availability(
             ResourceAction::SetDefaultStorageClass,
@@ -2923,7 +2923,7 @@ fn container_shell_follows_the_gate() {
         &allowed,
         WriteLock::Locked,
         "prod-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     assert_eq!(
         reason(container_shell_availability(&running, &locked)),
@@ -3060,7 +3060,7 @@ fn patch_report(kind: ObjectKind, is_allowed: bool) -> KindAccess {
 
 fn values_gate(kind_access: &KindAccessMap, lock: WriteLock) -> ActionAvailability {
     let access = known_denying(&[]);
-    let mut guard = test_guard(&access, lock, "dev-1", Environment::Development);
+    let mut guard = test_guard(&access, lock, "dev-1", Environment::DEVELOPMENT);
     guard.kind_access = kind_access;
     action_availability(ResourceAction::EditValues(ObjectKind::Secret), &guard)
 }
@@ -3371,7 +3371,7 @@ fn attach_gate_needs_both_attach_verbs() {
         &allowed,
         WriteLock::Locked,
         "prod-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     assert_eq!(
         reason(action_availability(ResourceAction::Attach, &locked)),
@@ -3661,7 +3661,7 @@ fn the_new_button_is_a_gated_header_action_with_no_row() {
 
 fn create_gate(kind_access: &KindAccessMap, lock: WriteLock) -> ActionAvailability {
     let access = known_denying(&[]);
-    let mut guard = test_guard(&access, lock, "dev-1", Environment::Development);
+    let mut guard = test_guard(&access, lock, "dev-1", Environment::DEVELOPMENT);
     guard.kind_access = kind_access;
     action_availability(ResourceAction::CreateObject(ObjectKind::ConfigMap), &guard)
 }
@@ -3747,7 +3747,7 @@ fn renew_key_availability(
     access: &AccessState,
     lock: WriteLock,
 ) -> KeyAvailability {
-    let guard = test_guard(access, lock, "dev-1", Environment::Development);
+    let guard = test_guard(access, lock, "dev-1", Environment::DEVELOPMENT);
     key_availability_of(
         RowAction::RenewCertificate,
         &kind_key(ResourceKind::Custom(kind)),

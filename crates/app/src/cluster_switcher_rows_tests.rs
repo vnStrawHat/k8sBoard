@@ -5,6 +5,7 @@ use super::*;
 use crate::cluster_form::{ClusterRow, RowOrigin};
 use crate::cluster_health::ProbeResult;
 use crate::cluster_registry::ClusterProfile;
+use crate::environment::CustomEnvironment;
 use crate::write_guard::ConfirmMode;
 
 fn cluster(context: &str) -> ClusterRef {
@@ -15,6 +16,7 @@ fn cluster(context: &str) -> ClusterRef {
 }
 
 fn row(context: &str, label: &str, environment: Environment) -> ClusterRow {
+    let tier = environment.tier();
     ClusterRow {
         cluster: cluster(context),
         profile: ClusterProfile {
@@ -31,32 +33,35 @@ fn row(context: &str, label: &str, environment: Environment) -> ClusterRow {
         },
         label: label.to_owned(),
         meta: String::new(),
-        guessed: environment,
+        guessed: tier,
         origin: RowOrigin::Chain,
         trust_note: None,
     }
 }
 
 fn group(title: &'static str, rows: Vec<ClusterRow>) -> ClusterGroup {
-    ClusterGroup { title, rows }
+    ClusterGroup {
+        title: title.into(),
+        rows,
+    }
 }
 
 fn three_groups() -> Vec<ClusterGroup> {
     vec![
         group(
             "Production",
-            vec![row("eu-ctx", "eu-prod", Environment::Production)],
+            vec![row("eu-ctx", "eu-prod", Environment::PRODUCTION)],
         ),
         group(
             "Staging",
             vec![
-                row("uat-ctx", "uat", Environment::Staging),
-                row("stg-ctx", "stg", Environment::Staging),
+                row("uat-ctx", "uat", Environment::STAGING),
+                row("stg-ctx", "stg", Environment::STAGING),
             ],
         ),
         group(
             "Development · Local",
-            vec![row("kind-ctx", "kind-dev", Environment::Local)],
+            vec![row("kind-ctx", "kind-dev", Environment::LOCAL)],
         ),
     ]
 }
@@ -85,11 +90,31 @@ fn labels(sections: &[SwitcherSection]) -> Vec<&str> {
 #[test]
 fn sections_follow_env_groups() {
     let sections = sections(&HealthBoard::default(), None);
-    let titles: Vec<_> = sections.iter().map(|section| section.title).collect();
+    let titles: Vec<_> = sections.iter().map(|section| &*section.title).collect();
     assert_eq!(titles, ["Production", "Staging", "Development · Local"]);
     let counts: Vec<_> = sections.iter().map(|section| section.rows.len()).collect();
     assert_eq!(counts, [1, 2, 1]);
     assert_eq!(row_count(&sections), 4);
+}
+
+#[test]
+fn sections_include_custom_groups() {
+    let qa = Environment::Custom(CustomEnvironment {
+        name: "QA".to_owned(),
+        color: crate::environment::EnvironmentColor::Teal,
+        tier: crate::environment::EnvironmentTier::Staging,
+    });
+    let mut groups = three_groups();
+    groups.push(group("QA", vec![row("qa-ctx", "qa-1", qa)]));
+    let sections = switcher_sections(&groups, &HealthBoard::default(), &[]);
+    let titles: Vec<_> = sections.iter().map(|section| &*section.title).collect();
+    assert_eq!(
+        titles,
+        ["Production", "Staging", "Development · Local", "QA"]
+    );
+    let last = &sections[3].rows[0];
+    assert_eq!(last.shortcut, Some(5));
+    assert!(last.search_text.contains("qa"));
 }
 
 #[test]
@@ -99,7 +124,7 @@ fn shortcuts_number_the_first_nine_rows() {
             row(
                 &format!("c{index}"),
                 &format!("c{index}"),
-                Environment::Staging,
+                Environment::STAGING,
             )
         })
         .collect();
@@ -279,7 +304,7 @@ fn highlight_resets_to_first_visible_on_edit() {
 #[test]
 fn query_ignores_whitespace() {
     assert_eq!(normalize_query(" Prod  EU\t1 "), "prodeu1");
-    let rows = vec![row("eu-ctx", "prod eu 1", Environment::Production)];
+    let rows = vec![row("eu-ctx", "prod eu 1", Environment::PRODUCTION)];
     let sections = switcher_sections(&[group("Production", rows)], &HealthBoard::default(), &[]);
     for query in ["prod eu", "prodeu", "PROD  EU 1", "eu1"] {
         let visible = visible_sections(&sections, query, SwitcherSegment::All);

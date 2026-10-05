@@ -47,7 +47,7 @@ fn rows_of(groups: Vec<ClusterGroup>) -> Vec<ClusterRow> {
 }
 
 fn titles(groups: &[ClusterGroup]) -> Vec<&str> {
-    groups.iter().map(|group| group.title).collect()
+    groups.iter().map(|group| &*group.title).collect()
 }
 
 fn labels(group: &ClusterGroup) -> Vec<&str> {
@@ -97,6 +97,50 @@ fn empty_groups_are_skipped() {
     let file = kubeconfig("a.yaml", &["prod-1"]);
     let groups = groups_of(&[&file], &ClusterRegistry::default(), &[], None);
     assert_eq!(titles(&groups), ["Production"]);
+}
+
+/// A registry with the custom environments `names` (all Staging tier) and the given
+/// `(context, custom name)` entries.
+fn registry_with_custom(names: &[&str], on_custom: &[(&str, &str)]) -> ClusterRegistry {
+    let mut registry = ClusterRegistry {
+        environments: names
+            .iter()
+            .map(|name| CustomEnvironment {
+                name: (*name).to_owned(),
+                color: crate::environment::EnvironmentColor::Teal,
+                tier: EnvironmentTier::Staging,
+            })
+            .collect(),
+        ..ClusterRegistry::default()
+    };
+    for (context, name) in on_custom {
+        registry.entry_mut(&cluster(context, "a.yaml")).environment = Some(
+            crate::environment::EnvironmentKey::Custom((*name).to_owned()),
+        );
+    }
+    registry
+}
+
+#[test]
+fn custom_groups_follow_builtins_in_list_order() {
+    let file = kubeconfig("a.yaml", &["prod-1", "stage-1", "dev-1", "x-qa", "x-dr"]);
+    let registry = registry_with_custom(&["QA", "Idle", "DR"], &[("x-qa", "QA"), ("x-dr", "DR")]);
+    let groups = groups_of(&[&file], &registry, &[], None);
+    assert_eq!(
+        titles(&groups),
+        ["Production", "Staging", "Development · Local", "QA", "DR"]
+    );
+    assert_eq!(labels(&groups[3]), ["x-qa"]);
+    assert_eq!(labels(&groups[4]), ["x-dr"]);
+}
+
+#[test]
+fn filter_matches_custom_badge() {
+    let file = kubeconfig("a.yaml", &["prod-1", "x-1"]);
+    let registry = registry_with_custom(&["QA"], &[("x-1", "QA")]);
+    let groups = groups_of(&[&file], &registry, &[], None);
+    let found = filter_groups(&groups, "qa");
+    assert_eq!(titles(&found), ["QA"]);
 }
 
 #[test]

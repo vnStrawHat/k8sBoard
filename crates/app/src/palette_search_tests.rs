@@ -129,7 +129,7 @@ fn cluster_row(context: &str, label: &str, shortcut: u8, is_active: bool) -> Swi
             context: context.to_owned(),
         },
         label: label.to_owned(),
-        environment: Environment::Staging,
+        environment: Environment::STAGING,
         health: RowHealth::NotChecked,
         failure: None,
         note: None,
@@ -147,7 +147,7 @@ fn guard_of(access: AccessState) -> ClusterGuard<'static> {
         access,
         WriteLock::Unlocked,
         "dev-1",
-        Environment::Development,
+        Environment::DEVELOPMENT,
     )
 }
 
@@ -647,11 +647,11 @@ fn cluster_mode_lists_switcher_rows_in_order() {
     let mut world = World::new();
     world.sections = vec![
         SwitcherSection {
-            title: "Production",
+            title: "Production".into(),
             rows: vec![cluster_row("eu-ctx", "eu-prod", 1, false)],
         },
         SwitcherSection {
-            title: "Staging",
+            title: "Staging".into(),
             rows: vec![
                 cluster_row("uat-ctx", "uat", 2, true),
                 cluster_row("stg-ctx", "stg", 3, false),
@@ -894,7 +894,7 @@ fn world_with_clusters(scope: NamespaceScope) -> World {
     let mut world = World::new();
     world.scope = scope;
     world.sections = vec![SwitcherSection {
-        title: "Staging",
+        title: "Staging".into(),
         rows: vec![
             cluster_row("uat-ctx", "uat", 1, true),
             cluster_row("stg-ctx", "stg", 2, false),
@@ -1263,7 +1263,7 @@ fn a_disabled_entry_never_needs_confirm() {
 fn commands_screens_resources_namespaces_and_clusters_never_need_confirm() {
     let mut world = World::new();
     world.sections = vec![SwitcherSection {
-        title: "Staging",
+        title: "Staging".into(),
         rows: vec![cluster_row("stg-ctx", "stg", 1, false)],
     }];
     let all = palette_entries(&world.input(Screen::Pods, None));

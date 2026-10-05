@@ -1,6 +1,8 @@
 //! What the cluster switcher lists, without any view code: the environment sections, the row
 //! texts the filter reads, the `Ctrl 1…9` numbers, and the keyboard highlight.
 
+use gpui_kit::SharedString;
+
 use crate::cluster_form::{ClusterGroup, RowOrigin, file_name_text};
 use crate::cluster_health::{HealthBoard, RowHealth};
 use crate::cluster_registry::ClusterRef;
@@ -40,7 +42,7 @@ impl SwitcherRow {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SwitcherSection {
-    pub(crate) title: &'static str,
+    pub(crate) title: SharedString,
     pub(crate) rows: Vec<SwitcherRow>,
 }
 
@@ -68,7 +70,7 @@ pub(crate) fn switcher_sections(
     groups
         .iter()
         .map(|group| SwitcherSection {
-            title: group.title,
+            title: group.title.clone(),
             rows: group
                 .rows
                 .iter()
@@ -77,7 +79,7 @@ pub(crate) fn switcher_sections(
                         .iter()
                         .find(|viewed| viewed.cluster == row.cluster)
                         .map(|viewed| viewed.health);
-                    let environment = row.profile.environment;
+                    let environment = row.profile.environment.clone();
                     // A row of a watched folder has no number: Ctrl n would start a cluster
                     // the user did not pick, and the numbers below must not shift for it.
                     let is_numbered = row.origin != RowOrigin::Folder;
@@ -97,7 +99,7 @@ pub(crate) fn switcher_sections(
                         search_text: search_text(
                             &row.label,
                             &row.cluster.context,
-                            environment,
+                            &environment,
                             &row.cluster.kubeconfig.to_string_lossy(),
                         ),
                         label: row.label.clone(),
@@ -115,12 +117,17 @@ pub(crate) fn switcher_sections(
 pub(crate) fn search_text(
     label: &str,
     context: &str,
-    environment: Environment,
+    environment: &Environment,
     file: &str,
 ) -> String {
-    [label, context, environment.badge(), file_name_text(file)]
-        .map(normalize_query)
-        .join("\u{1f}")
+    [
+        label,
+        context,
+        environment.badge().as_ref(),
+        file_name_text(file),
+    ]
+    .map(normalize_query)
+    .join("\u{1f}")
 }
 
 /// The filter text as the rows are searched: lowercase, with every whitespace removed, so
@@ -151,7 +158,7 @@ pub(crate) fn visible_sections(
                 .cloned()
                 .collect();
             (!rows.is_empty()).then_some(SwitcherSection {
-                title: section.title,
+                title: section.title.clone(),
                 rows,
             })
         })

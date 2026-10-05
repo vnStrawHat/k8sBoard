@@ -12,7 +12,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex,
@@ -39,7 +39,10 @@ use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef, StoredMetr
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_switcher_rows::normalize_query;
 use crate::drawer::truncated_text;
-use crate::environment::{Environment, environment_badge};
+use crate::environment::{
+    CustomEnvironment, Environment, EnvironmentKey, EnvironmentTier, environment_badge,
+    usable_environments,
+};
 use crate::resource_actions::disabled_menu_item;
 use crate::settings::AppSettings;
 use crate::settings_window::{ImportKubeconfig, show_metrics_page};
@@ -693,11 +696,12 @@ impl ClustersPage {
                     .text_xs()
                     .font_semibold()
                     .text_color(muted)
-                    .child(group.title)
+                    .child(group.title.clone())
                     .child(group.rows.len().to_string()),
             );
             for row in &group.rows {
-                list = list.child(self.render_row(index, group.title, row, is_searching, cx));
+                list =
+                    list.child(self.render_row(index, group.title.clone(), row, is_searching, cx));
                 index += 1;
             }
         }
@@ -718,7 +722,7 @@ impl ClustersPage {
     fn render_row(
         &self,
         index: usize,
-        group_title: &'static str,
+        group_title: SharedString,
         row: &ClusterRow,
         is_searching: bool,
         cx: &mut Context<Self>,
@@ -731,7 +735,7 @@ impl ClustersPage {
         let target = row.cluster.clone();
         let dragged = DraggedCluster {
             cluster: row.cluster.clone(),
-            group_title,
+            group_title: group_title.clone(),
             label: row.label.clone().into(),
         };
         h_flex()
@@ -760,7 +764,7 @@ impl ClustersPage {
             .on_drop(cx.listener(move |page, dragged: &DraggedCluster, _, cx| {
                 page.drop_cluster(dragged, &target, cx);
             }))
-            .child(environment_badge(row.profile.environment, cx))
+            .child(environment_badge(&row.profile.environment, cx))
             .child(
                 v_flex()
                     .min_w_0()
@@ -833,7 +837,11 @@ impl ClustersPage {
         );
         let environment_row = form_row(
             "Environment",
-            centered(environment_menu(row, entry.as_ref())),
+            centered(environment_menu(
+                row,
+                entry.as_ref(),
+                &AppSettings::get(cx).registry.environments,
+            )),
             cx,
         );
         let cluster = row.cluster.clone();
@@ -1108,51 +1116,73 @@ pub(crate) fn add_cluster_button(
         })
 }
 
-fn environment_menu(row: &ClusterRow, entry: Option<&ClusterEntry>) -> impl IntoElement {
-    let current = entry.and_then(|entry| entry.environment);
+/// The text of the Environment control. A stored custom name that no usable environment carries
+/// shows as stored (the profile behaves as Production, so Production would hide the dangling key).
+fn environment_menu_label(row: &ClusterRow, entry: Option<&ClusterEntry>) -> String {
+    match entry.and_then(|entry| entry.environment.as_ref()) {
+        None => format!("Auto ({})", row.guessed.badge()),
+        Some(EnvironmentKey::Custom(key))
+            if !matches!(row.profile.environment, Environment::Custom(_)) =>
+        {
+            key.clone()
+        }
+        Some(_) => row.profile.environment.name().to_owned(),
+    }
+}
+
+fn environment_menu(
+    row: &ClusterRow,
+    entry: Option<&ClusterEntry>,
+    custom: &[CustomEnvironment],
+) -> impl IntoElement {
+    let current = entry.and_then(|entry| entry.environment.clone());
     let auto = format!("Auto ({})", row.guessed.badge());
-    let label = current.map_or_else(|| auto.clone(), |environment| environment.name().to_owned());
+    let label = environment_menu_label(row, entry);
     let cluster = row.cluster.clone();
+    let mut choices: Vec<(String, Option<EnvironmentKey>)> = vec![(auto, None)];
+    choices.extend(
+        EnvironmentTier::ALL
+            .into_iter()
+            .map(|tier| (tier.name().to_owned(), Some(EnvironmentKey::BuiltIn(tier)))),
+    );
+    let customs: Vec<(String, Option<EnvironmentKey>)> = usable_environments(custom)
+        .map(|environment| {
+            (
+                format!("{} · like {}", environment.name, environment.tier.name()),
+                Some(EnvironmentKey::Custom(environment.name.clone())),
+            )
+        })
+        .collect();
     Button::new("environment")
         .small()
         .outline()
         .label(label)
         .dropdown_caret(true)
         .dropdown_menu(move |menu, _, _| {
-            let choices = [
-                (auto.clone(), None),
-                (
-                    Environment::Production.name().to_owned(),
-                    Some(Environment::Production),
-                ),
-                (
-                    Environment::Staging.name().to_owned(),
-                    Some(Environment::Staging),
-                ),
-                (
-                    Environment::Development.name().to_owned(),
-                    Some(Environment::Development),
-                ),
-                (
-                    Environment::Local.name().to_owned(),
-                    Some(Environment::Local),
-                ),
-            ];
-            choices.into_iter().fold(menu, |menu, (label, value)| {
+            let item = |menu: PopupMenu, (label, value): &(String, Option<EnvironmentKey>)| {
                 let cluster = cluster.clone();
+                let stored = value.clone();
                 menu.item(
-                    PopupMenuItem::new(label)
-                        .checked(value == current)
-                        .on_click(move |_, _, cx| {
-                            AppSettings::update(cx, |settings| {
-                                edit_entry(&mut settings.registry, &cluster, |entry| {
-                                    entry.environment = value;
-                                });
-                            });
-                        }),
+                    PopupMenuItem::new(label.clone())
+                        .checked(*value == current)
+                        .on_click(move |_, _, cx| set_environment(&cluster, stored.clone(), cx)),
                 )
-            })
+            };
+            let menu = choices.iter().fold(menu, item);
+            if customs.is_empty() {
+                return menu;
+            }
+            customs.iter().fold(menu.separator(), item)
         })
+}
+
+/// Stores the environment of `cluster`; `None` is Auto and drops the key.
+fn set_environment(cluster: &ClusterRef, key: Option<EnvironmentKey>, cx: &mut App) {
+    AppSettings::update(cx, |settings| {
+        edit_entry(&mut settings.registry, cluster, |entry| {
+            entry.environment = key;
+        });
+    });
 }
 
 /// The select text of a confirm mode, which the Auto entry repeats for the environment default.
@@ -1255,7 +1285,7 @@ fn confirm_menu(row: &ClusterRow, entry: Option<&ClusterEntry>) -> impl IntoElem
     let current = entry.and_then(|entry| entry.confirm);
     let auto = format!(
         "Auto ({})",
-        confirm_label(ConfirmMode::for_environment(row.profile.environment))
+        confirm_label(ConfirmMode::for_tier(row.profile.environment.tier()))
     );
     let label = current.map_or_else(|| auto.clone(), |mode| confirm_label(mode).to_owned());
     let cluster = row.cluster.clone();
@@ -1364,7 +1394,7 @@ fn section<const N: usize>(
 struct DraggedCluster {
     cluster: ClusterRef,
     /// A row only drops on its own group: the environment decides the group.
-    group_title: &'static str,
+    group_title: SharedString,
     label: SharedString,
 }
 

@@ -39,7 +39,7 @@ fn stub_identity() -> AuditIdentity {
         &access,
         crate::write_guard::WriteLock::Unlocked,
         "stg-b",
-        crate::environment::Environment::Staging,
+        crate::environment::Environment::STAGING,
     );
     AuditIdentity::of(&guard)
 }

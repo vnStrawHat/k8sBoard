@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::cluster_registry::{ClusterEntry, ClusterProxy, ClusterRef, StoredMetrics};
-use crate::environment::Environment;
+use crate::environment::{CustomEnvironment, EnvironmentColor, EnvironmentKey, EnvironmentTier};
 use crate::kubeconfig_folder::FileStamp;
 use crate::port_forwards::{ForwardPreset, ForwardSpec, LocalPortSpec, TargetSpec};
 use crate::settings_store::settings_path;
@@ -36,12 +36,17 @@ fn full_settings() -> Settings {
     Settings {
         theme: ThemePreference::Dark,
         registry: ClusterRegistry {
+            environments: vec![CustomEnvironment {
+                name: "QA".to_owned(),
+                color: EnvironmentColor::Purple,
+                tier: EnvironmentTier::Staging,
+            }],
             kubeconfigs: vec![PathBuf::from("extra.yaml")],
             kubeconfig_folders: vec![PathBuf::from("watched")],
             clusters: vec![ClusterEntry {
                 cluster: cluster.clone(),
                 display_name: Some("name".to_owned()),
-                environment: Some(Environment::Production),
+                environment: Some(EnvironmentKey::BuiltIn(EnvironmentTier::Production)),
                 read_only: Some(true),
                 confirm: Some(ConfirmMode::TypeName),
                 default_namespace: Some("ns".to_owned()),
@@ -248,6 +253,10 @@ fn settings_keys_are_the_allow_list() {
             "registry.clusters.proxy",
             "registry.clusters.proxy.url",
             "registry.clusters.read_only",
+            "registry.environments",
+            "registry.environments.color",
+            "registry.environments.name",
+            "registry.environments.tier",
             "registry.kubeconfig_folders",
             "registry.kubeconfigs",
             "registry.last_used",

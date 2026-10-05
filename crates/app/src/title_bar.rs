@@ -127,7 +127,7 @@ fn cluster_switcher(shell: &AppShell, cx: &Context<AppShell>) -> AnyElement {
         Some(profile) => h_flex()
             .gap_2()
             .items_center()
-            .child(environment_badge(profile.environment, cx))
+            .child(environment_badge(&profile.environment, cx))
             .child(profile.display_name)
             .into_any_element(),
         None => "No cluster".into_any_element(),
@@ -225,7 +225,7 @@ fn write_lock_badge(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyEleme
         div()
             .border_1()
             .border_dashed()
-            .border_color(environment_color(open.profile.environment, cx))
+            .border_color(environment_color(&open.profile.environment, cx))
             .rounded(cx.theme().radius)
             .child(button)
             .into_any_element(),

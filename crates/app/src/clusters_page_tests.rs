@@ -725,7 +725,7 @@ fn dropping_a_row_inside_its_group_reorders_and_across_groups_does_nothing(
     let (first, second) = (rows[0].cluster.clone(), rows[1].cluster.clone());
     let dragged = DraggedCluster {
         cluster: first.clone(),
-        group_title: "Production",
+        group_title: "Production".into(),
         label: "prod-a".into(),
     };
     page.update(cx, |page, cx| page.drop_cluster(&dragged, &second, cx));
@@ -735,7 +735,7 @@ fn dropping_a_row_inside_its_group_reorders_and_across_groups_does_nothing(
     let before = cx.read(|cx| AppSettings::get(cx).registry.clone());
     let stranger = DraggedCluster {
         cluster: first,
-        group_title: "Staging",
+        group_title: "Staging".into(),
         label: "prod-a".into(),
     };
     page.update(cx, |page, cx| page.drop_cluster(&stranger, &second, cx));
@@ -952,5 +952,58 @@ fn form_dropdown_clears_the_source(cx: &mut TestAppContext) {
     cx.update(|cx| set_metrics_source(&cluster, None, cx));
     assert_eq!(stored(cx), None);
     assert!(cx.read(|cx| AppSettings::get(cx).registry.clusters.is_empty()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- Spec 0053: custom environments ----
+
+fn custom_qa() -> crate::environment::CustomEnvironment {
+    crate::environment::CustomEnvironment {
+        name: "QA".to_owned(),
+        color: crate::environment::EnvironmentColor::Teal,
+        tier: crate::environment::EnvironmentTier::Staging,
+    }
+}
+
+fn first_row(page: &Entity<ClustersPage>, cx: &TestAppContext) -> ClusterRow {
+    page.read_with(cx, |page, cx| page.rows(cx).remove(0))
+}
+
+#[gpui_kit::test]
+fn picking_a_custom_environment_stores_its_name(cx: &mut TestAppContext) {
+    let (dir, window, page) = two_cluster_setup("pick-custom", cx);
+    let target = first_row(&page, cx).cluster;
+    cx.update(|cx| {
+        AppSettings::update(cx, |settings| {
+            settings.registry.environments.push(custom_qa())
+        });
+        set_environment(&target, Some(EnvironmentKey::Custom("QA".to_owned())), cx);
+    });
+    render(window, cx);
+    let stored = cx.read(|cx| AppSettings::get(cx).registry.clusters.clone());
+    assert_eq!(
+        stored[0].environment,
+        Some(EnvironmentKey::Custom("QA".to_owned()))
+    );
+    let titles = page.read_with(cx, |page, cx| {
+        page.groups(cx)
+            .into_iter()
+            .map(|group| group.title.to_string())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(titles, ["Production", "QA"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn dangling_reference_label_is_the_stored_key(cx: &mut TestAppContext) {
+    let (dir, _window, page) = two_cluster_setup("dangling", cx);
+    let target = first_row(&page, cx).cluster;
+    cx.update(|cx| set_environment(&target, Some(EnvironmentKey::Custom("Gone".to_owned())), cx));
+    let row = first_row(&page, cx);
+    let entry = cx.read(|cx| AppSettings::get(cx).registry.clusters[0].clone());
+    // The profile behaves as Production, but the control shows what is stored.
+    assert_eq!(row.profile.environment, Environment::PRODUCTION);
+    assert_eq!(environment_menu_label(&row, Some(&entry)), "Gone");
     let _ = std::fs::remove_dir_all(&dir);
 }

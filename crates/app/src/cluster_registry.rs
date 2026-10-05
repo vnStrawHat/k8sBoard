@@ -12,13 +12,19 @@ use cluster::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::environment::{Environment, guess_environment};
+use crate::environment::{
+    CustomEnvironment, Environment, EnvironmentKey, EnvironmentTier, guess_environment,
+    resolve_environment,
+};
 use crate::kubeconfig_folder::FileStamp;
 use crate::write_guard::ConfirmMode;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct ClusterRegistry {
+    /// Custom environments, in creation order = display order (spec 0053).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) environments: Vec<CustomEnvironment>,
     /// Files added by the user; each loads standalone, apart from the launch chain.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) kubeconfigs: Vec<PathBuf>,
@@ -52,7 +58,7 @@ pub(crate) struct ClusterEntry {
     pub(crate) display_name: Option<String>,
     /// `None` is guessed from the names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) environment: Option<Environment>,
+    pub(crate) environment: Option<EnvironmentKey>,
     /// The lock a session starts in (spec 0030); `None` is on for Production.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) read_only: Option<bool>,
@@ -204,14 +210,20 @@ impl ClusterRegistry {
             .unwrap_or(&summary.name)
             .to_owned();
         let environment = entry
-            .and_then(|entry| entry.environment)
-            .unwrap_or_else(|| guess_environment(&summary.name, &summary.cluster));
+            .and_then(|entry| entry.environment.as_ref())
+            .map(|key| resolve_environment(key, &self.environments))
+            .unwrap_or_else(|| {
+                Environment::BuiltIn(guess_environment(&summary.name, &summary.cluster))
+            });
+        // Every safety default reads the tier, so a custom environment is never weaker than the
+        // built-in it names.
+        let tier = environment.tier();
         let read_only = entry
             .and_then(|entry| entry.read_only)
-            .unwrap_or(environment == Environment::Production);
+            .unwrap_or(tier == EnvironmentTier::Production);
         let confirm = entry
             .and_then(|entry| entry.confirm)
-            .unwrap_or_else(|| ConfirmMode::for_environment(environment));
+            .unwrap_or_else(|| ConfirmMode::for_tier(tier));
         // A guess must never switch a privileged pod on. Staging is also what an unknown name falls
         // back to, and a Development guess comes from a `dev` token that a production cluster named
         // `devops-core` has too, so both count only when the entry sets the environment. Local is a
@@ -220,10 +232,10 @@ impl ClusterRegistry {
         let allow_node_shell =
             entry
                 .and_then(|entry| entry.allow_node_shell)
-                .unwrap_or(match environment {
-                    Environment::Local => true,
-                    Environment::Development | Environment::Staging => is_environment_set,
-                    Environment::Production => false,
+                .unwrap_or(match tier {
+                    EnvironmentTier::Local => true,
+                    EnvironmentTier::Development | EnvironmentTier::Staging => is_environment_set,
+                    EnvironmentTier::Production => false,
                 });
         let stored_text = |text: Option<&String>| {
             text.map(|text| text.trim())

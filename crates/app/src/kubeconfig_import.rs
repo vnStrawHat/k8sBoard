@@ -12,7 +12,7 @@ use cluster::{AuthKind, Kubeconfig, KubeconfigError};
 
 use crate::cluster_catalog::{PathStyle, same_path_text};
 use crate::cluster_form::{ClusterRow, file_name_text};
-use crate::environment::{Environment, guess_environment};
+use crate::environment::{EnvironmentTier, guess_environment};
 
 /// The folder under the config dir that holds pasted kubeconfig files.
 pub(crate) const PASTED_DIR: &str = "kubeconfigs";
@@ -45,7 +45,7 @@ pub(crate) struct ContextPreview {
     pub(crate) server: Option<String>,
     pub(crate) auth: AuthKind,
     /// Guessed from the names, as the list will show it.
-    pub(crate) environment: Environment,
+    pub(crate) environment: EnvironmentTier,
 }
 
 #[derive(Debug, PartialEq, Eq)]

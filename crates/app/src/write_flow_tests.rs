@@ -15,7 +15,7 @@ fn cluster() -> ClusterRef {
 }
 
 fn guard(access: &AccessState, lock: WriteLock) -> ClusterGuard<'_> {
-    test_guard(access, lock, "stg-b", Environment::Staging)
+    test_guard(access, lock, "stg-b", Environment::STAGING)
 }
 
 const PASSED: DryRunState = DryRunState::Passed {

@@ -219,7 +219,7 @@ impl AppShell {
                     .flex_shrink_0()
                     .gap_2()
                     .items_center()
-                    .child(environment_badge(forward.environment, cx))
+                    .child(environment_badge(&forward.environment, cx))
                     .child(
                         truncated_text(("forward-cluster", index), forward.cluster_label.clone())
                             .min_w_0(),

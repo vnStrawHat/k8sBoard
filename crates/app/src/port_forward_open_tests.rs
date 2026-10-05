@@ -615,7 +615,7 @@ fn running_fixture(cluster: &ClusterRef, pod: &str) -> ForwardFixture {
     ForwardFixture {
         cluster: cluster.clone(),
         cluster_label: "stg-b".into(),
-        environment: Environment::Staging,
+        environment: Environment::STAGING,
         spec: pod_spec(pod, 1, LocalPortSpec::Auto),
         state: ForwardState::Active,
         local: None,

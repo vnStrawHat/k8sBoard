@@ -165,7 +165,7 @@ fn preview_debug_has_no_credentials() {
     // Userinfo of the server URL is dropped too.
     assert!(!text.contains("u:p@"), "{text}");
     assert!(text.contains("https://127.0.0.1:1"), "{text}");
-    assert_eq!(preview.contexts[0].environment, Environment::Production);
+    assert_eq!(preview.contexts[0].environment, EnvironmentTier::Production);
 }
 
 #[test]

@@ -927,7 +927,7 @@ impl DrainDialog {
         h_flex()
             .gap_2()
             .items_center()
-            .child(environment_badge(self.environment, cx))
+            .child(environment_badge(&self.environment, cx))
             .child(div().flex_1().min_w_0().child(text))
             .into_any_element()
     }
@@ -1485,7 +1485,7 @@ impl AppShell {
             let target = DrainTarget {
                 cluster: cluster.clone(),
                 cluster_name: guard.display_name().to_owned().into(),
-                environment: guard.profile.environment,
+                environment: guard.profile.environment.clone(),
                 generation: guard.generation,
                 confirm: confirm_step(guard.profile.confirm, ActionRisk::Destructive, expected),
                 nodes: listed,
@@ -1602,10 +1602,11 @@ impl AppShell {
         const NODE: &str = "wk-04";
         let is_skip = launch == crate::launch_options::LaunchScreen::DrainDialogSkipPdbs;
         let environment = if is_skip {
-            Environment::Staging
+            Environment::STAGING
         } else {
-            Environment::Production
+            Environment::PRODUCTION
         };
+        let tier = environment.tier();
         let target = DrainTarget {
             cluster: ClusterRef {
                 kubeconfig: std::path::PathBuf::from("fixture.yaml"),
@@ -1614,11 +1615,7 @@ impl AppShell {
             cluster_name: "onprem-hn-1".into(),
             environment,
             generation: 0,
-            confirm: confirm_step(
-                ConfirmMode::for_environment(environment),
-                ActionRisk::Destructive,
-                NODE,
-            ),
+            confirm: confirm_step(ConfirmMode::for_tier(tier), ActionRisk::Destructive, NODE),
             nodes: vec![(NODE.to_owned(), false)],
         };
         let shell = cx.weak_entity();
@@ -1853,8 +1850,8 @@ impl DrainDialog {
         &self.confirm
     }
 
-    pub(crate) fn environment(&self) -> Environment {
-        self.environment
+    pub(crate) fn environment(&self) -> &Environment {
+        &self.environment
     }
 
     pub(crate) fn is_busy_loading(&self) -> bool {

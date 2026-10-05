@@ -204,7 +204,7 @@ impl AppShell {
         let (risk, expected) = (intent.risk, intent.expected().to_owned());
         self.open_fixed_dialog(
             DialogKind::Write(Rc::new(intent)),
-            Environment::Production,
+            Environment::PRODUCTION,
             (risk, &expected),
             window,
             cx,

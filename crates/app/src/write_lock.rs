@@ -82,7 +82,7 @@ impl AppShell {
                     ActionRisk::Change,
                     guard.display_name(),
                 ),
-                environment: guard.profile.environment,
+                environment: guard.profile.environment.clone(),
                 generation: guard.generation,
             }
         };

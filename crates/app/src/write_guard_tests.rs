@@ -1,13 +1,13 @@
 use super::*;
-use crate::environment::guess_environment;
+use crate::environment::{Environment, guess_environment};
 
 fn profile(environment: Environment, read_only: bool) -> ClusterProfile {
     ClusterProfile {
         display_name: "uat-monitor".to_owned(),
+        confirm: ConfirmMode::for_tier(environment.tier()),
         environment,
         default_namespace: None,
         read_only,
-        confirm: ConfirmMode::for_environment(environment),
         allow_node_shell: false,
         debug_image: cluster::DEFAULT_DEBUG_IMAGE.to_owned(),
         node_shell_namespace: "kube-system".to_owned(),
@@ -17,18 +17,18 @@ fn profile(environment: Environment, read_only: bool) -> ClusterProfile {
 }
 
 #[test]
-fn confirm_mode_defaults_per_environment() {
+fn confirm_mode_follows_tier() {
     assert_eq!(
-        ConfirmMode::for_environment(Environment::Production),
+        ConfirmMode::for_tier(EnvironmentTier::Production),
         ConfirmMode::TypeName
     );
     for environment in [
-        Environment::Staging,
-        Environment::Development,
-        Environment::Local,
+        EnvironmentTier::Staging,
+        EnvironmentTier::Development,
+        EnvironmentTier::Local,
     ] {
         assert_eq!(
-            ConfirmMode::for_environment(environment),
+            ConfirmMode::for_tier(environment),
             ConfirmMode::Click,
             "{environment:?}"
         );
@@ -57,12 +57,12 @@ fn non_prod_tiers_always_show_a_dialog() {
     // An unknown context name is classified Staging, so it clicks like the others.
     let unknown = guess_environment("mystery", "other");
     for environment in [
-        Environment::Staging,
-        Environment::Development,
-        Environment::Local,
+        EnvironmentTier::Staging,
+        EnvironmentTier::Development,
+        EnvironmentTier::Local,
         unknown,
     ] {
-        let mode = ConfirmMode::for_environment(environment);
+        let mode = ConfirmMode::for_tier(environment);
         for risk in [ActionRisk::Change, ActionRisk::Destructive] {
             assert_eq!(
                 confirm_step(mode, risk, "name"),
@@ -90,15 +90,15 @@ fn confirm_mode_serializes_kebab_case() {
 #[test]
 fn lock_at_open_follows_the_profile() {
     assert_eq!(
-        WriteLock::at_open(&profile(Environment::Production, true)),
+        WriteLock::at_open(&profile(Environment::PRODUCTION, true)),
         WriteLock::Locked
     );
     assert_eq!(
-        WriteLock::at_open(&profile(Environment::Production, false)),
+        WriteLock::at_open(&profile(Environment::PRODUCTION, false)),
         WriteLock::Unlocked
     );
     assert_eq!(
-        WriteLock::at_open(&profile(Environment::Development, true)),
+        WriteLock::at_open(&profile(Environment::DEVELOPMENT, true)),
         WriteLock::Locked
     );
 }
@@ -110,7 +110,7 @@ fn the_guard_names_its_own_cluster() {
         &access,
         WriteLock::Locked,
         "prod-eu-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     assert_eq!(guard.cluster.context, "prod-eu-1");
     assert_eq!(guard.display_name(), "prod-eu-1");
@@ -154,10 +154,10 @@ fn privileged_risk_always_types_the_name() {
         expected: "wk-03".to_owned(),
     };
     for environment in [
-        Environment::Production,
-        Environment::Staging,
-        Environment::Development,
-        Environment::Local,
+        EnvironmentTier::Production,
+        EnvironmentTier::Staging,
+        EnvironmentTier::Development,
+        EnvironmentTier::Local,
     ] {
         for mode in [ConfirmMode::TypeName, ConfirmMode::Click] {
             assert_eq!(

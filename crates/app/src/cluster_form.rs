@@ -14,7 +14,10 @@ use crate::cluster_registry::{
     switcher_label,
 };
 use crate::cluster_switcher_rows::{normalize_query, search_text};
-use crate::environment::{Environment, guess_environment};
+use crate::environment::{
+    BUILT_IN_GROUP_TITLES, CustomEnvironment, Environment, EnvironmentTier, guess_environment,
+    usable_environments,
+};
 use crate::kubeconfig_import::is_app_owned;
 
 const MAX_DISPLAY_NAME_CHARS: usize = 64;
@@ -45,7 +48,7 @@ pub(crate) struct ClusterRow {
     /// `{auth kind} · {source file name}`.
     pub(crate) meta: String,
     /// What the names alone suggest: the "Auto" choice of the Environment control.
-    pub(crate) guessed: Environment,
+    pub(crate) guessed: EnvironmentTier,
     pub(crate) origin: RowOrigin,
     /// For a row of a watched folder: where it comes from and what its file would read and run, so
     /// the user sees that before choosing it (`folder_trust_note`).
@@ -54,18 +57,24 @@ pub(crate) struct ClusterRow {
 
 #[derive(Clone)]
 pub(crate) struct ClusterGroup {
-    pub(crate) title: &'static str,
+    pub(crate) title: SharedString,
     pub(crate) rows: Vec<ClusterRow>,
 }
 
-/// Production, Staging, then Development and Local together (W2).
-const GROUP_TITLES: [&str; 3] = ["Production", "Staging", "Development · Local"];
-
-fn group_index(environment: Environment) -> usize {
+/// The built-in groups come first (W2), then one group per usable custom environment, in the
+/// order of the list.
+fn group_index(environment: &Environment, custom: &[CustomEnvironment]) -> usize {
     match environment {
-        Environment::Production => 0,
-        Environment::Staging => 1,
-        Environment::Development | Environment::Local => 2,
+        Environment::BuiltIn(EnvironmentTier::Production) => 0,
+        Environment::BuiltIn(EnvironmentTier::Staging) => 1,
+        Environment::BuiltIn(EnvironmentTier::Development | EnvironmentTier::Local) => 2,
+        // A resolved custom environment is usable, so it is always found.
+        Environment::Custom(wanted) => {
+            BUILT_IN_GROUP_TITLES.len()
+                + usable_environments(custom)
+                    .position(|environment| environment.name == wanted.name)
+                    .unwrap_or(0)
+        }
     }
 }
 
@@ -131,15 +140,21 @@ pub(crate) fn cluster_groups(
             .position(|entry| entry.cluster == row.cluster)
             .unwrap_or(usize::MAX)
     });
-    let mut groups: Vec<ClusterGroup> = GROUP_TITLES
+    let mut groups: Vec<ClusterGroup> = BUILT_IN_GROUP_TITLES
         .iter()
+        .map(|title| SharedString::from(*title))
+        .chain(
+            usable_environments(&registry.environments)
+                .map(|environment| SharedString::from(environment.name.clone())),
+        )
         .map(|title| ClusterGroup {
             title,
             rows: Vec::new(),
         })
         .collect();
     for row in rows {
-        groups[group_index(row.profile.environment)].rows.push(row);
+        let index = group_index(&row.profile.environment, &registry.environments);
+        groups[index].rows.push(row);
     }
     groups.retain(|group| !group.rows.is_empty());
     groups
@@ -243,7 +258,7 @@ pub(crate) fn cluster_matches(row: &ClusterRow, text: &str) -> bool {
     let haystack = search_text(
         &row.label,
         &row.cluster.context,
-        row.profile.environment,
+        &row.profile.environment,
         &row.cluster.kubeconfig.to_string_lossy(),
     );
     haystack.contains(&normalize_query(text))
@@ -261,7 +276,7 @@ pub(crate) fn filter_groups(groups: &[ClusterGroup], text: &str) -> Vec<ClusterG
                 .cloned()
                 .collect();
             (!rows.is_empty()).then_some(ClusterGroup {
-                title: group.title,
+                title: group.title.clone(),
                 rows,
             })
         })

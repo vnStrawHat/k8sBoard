@@ -418,7 +418,7 @@ fn confirm_auto_clears_the_value(cx: &mut TestAppContext) {
 
 #[test]
 fn the_tier_table_groups_environments_by_tier() {
-    let rows = tier_rows();
+    let rows = tier_rows(&[]);
     assert_eq!(
         rows,
         [
@@ -593,4 +593,23 @@ fn pasted_kubeconfig_appears_in_the_open_settings_window(cx: &mut TestAppContext
     render(window, cx);
     assert!(has_cluster_form(window, cx));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tier_rows_list_custom_environments() {
+    use crate::environment::{CustomEnvironment, EnvironmentColor, EnvironmentTier};
+
+    let custom = |name: &str, tier| CustomEnvironment {
+        name: name.to_owned(),
+        color: EnvironmentColor::Teal,
+        tier,
+    };
+    let rows = tier_rows(&[
+        custom("QA", EnvironmentTier::Staging),
+        custom("DR", EnvironmentTier::Production),
+        // A reserved name is skipped at resolution, so it is not listed either.
+        custom("Prod", EnvironmentTier::Local),
+    ]);
+    assert_eq!(rows[0].environments, "Production, DR");
+    assert_eq!(rows[1].environments, "Staging, Development, Local, QA");
 }

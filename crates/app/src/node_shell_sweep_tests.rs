@@ -242,18 +242,18 @@ fn a_sweep_asks_a_cluster_only_when_the_review_does_not_say_no() {
 #[test]
 fn the_delete_button_reads_lock_and_right_in_that_order() {
     let allowed = AccessState::Known(report_denying(&[]));
-    let open = test_guard(&allowed, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let open = test_guard(&allowed, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     assert_eq!(sweep_block(&open), None);
-    let locked = test_guard(&allowed, WriteLock::Locked, "stg-b", Environment::Staging);
+    let locked = test_guard(&allowed, WriteLock::Locked, "stg-b", Environment::STAGING);
     assert_eq!(sweep_block(&locked).as_deref(), Some("stg-b is read-only"));
     let denied = AccessState::Known(report_denying(&[AccessCheck::DeletePods]));
-    let guard = test_guard(&denied, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&denied, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     assert_eq!(
         sweep_block(&guard).as_deref(),
         Some("Not permitted: delete pods")
     );
     let unknown = AccessState::Unknown;
-    let guard = test_guard(&unknown, WriteLock::Unlocked, "stg-b", Environment::Staging);
+    let guard = test_guard(&unknown, WriteLock::Unlocked, "stg-b", Environment::STAGING);
     assert_eq!(
         sweep_block(&guard).as_deref(),
         Some("Permissions could not be checked")

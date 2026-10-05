@@ -339,7 +339,7 @@ fn cordon_on_a_staging_row_uses_that_clusters_connection_guard_and_tier(cx: &mut
     // The guard and the tier are stg-b's own: a click on STG, never prod-a's typed name.
     dialog.read_with(cx, |dialog, _| {
         assert_eq!(*dialog.tier(), DialogConfirm::Click);
-        assert_eq!(dialog.environment(), Environment::Staging);
+        assert_eq!(dialog.environment(), &Environment::STAGING);
         assert_eq!(dialog.generation(), stg_generation);
     });
     t.wait_for_dry_run(cx);
@@ -380,7 +380,7 @@ fn type_name_tier_needs_the_match(cx: &mut TestAppContext) {
                 expected: "prod-a".to_owned()
             }
         );
-        assert_eq!(dialog.environment(), Environment::Production);
+        assert_eq!(dialog.environment(), &Environment::PRODUCTION);
     });
     t.wait_for_dry_run(cx);
     assert_eq!(t.block(cx).as_deref(), Some("Type prod-a to confirm"));
@@ -1168,7 +1168,7 @@ fn renew_intent_has_warnings_and_audit_field() {
         &access,
         WriteLock::Unlocked,
         "prod-eu-1",
-        Environment::Production,
+        Environment::PRODUCTION,
     );
     let entry = audit_entry(&intent, &guard, AuditOutcome::Applied, None, None);
     assert_eq!(entry.action, "Renew");

@@ -29,7 +29,7 @@ fn fixture(cluster_name: &str, spec: ForwardSpec, state: ForwardState) -> Forwar
     ForwardFixture {
         cluster: cluster(cluster_name),
         cluster_label: cluster_name.to_owned().into(),
-        environment: Environment::Production,
+        environment: Environment::PRODUCTION,
         spec,
         state,
         local: None,
@@ -53,7 +53,7 @@ fn origin(name: &str) -> ForwardOrigin {
     ForwardOrigin {
         cluster: cluster(name),
         cluster_label: name.to_owned().into(),
-        environment: Environment::Staging,
+        environment: Environment::STAGING,
     }
 }
 
@@ -389,19 +389,19 @@ fn presets_load_as_stopped_rows() {
         ),
     }];
     forwards.load_presets(&presets, |cluster| {
-        (cluster.context.clone().into(), Environment::Staging)
+        (cluster.context.clone().into(), Environment::STAGING)
     });
     let rows = forwards.forwards();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].state, ForwardState::Stopped);
     assert!(rows[0].is_preset);
-    assert_eq!(rows[0].environment, Environment::Staging);
+    assert_eq!(rows[0].environment, Environment::STAGING);
     assert_eq!(forwards.running_count(), 0);
 
     // The settings changed elsewhere: the gone preset's row goes, a running row stays.
     let running = starting(&mut forwards);
     forwards.load_presets(&[], |cluster| {
-        (cluster.context.clone().into(), Environment::Staging)
+        (cluster.context.clone().into(), Environment::STAGING)
     });
     assert_eq!(forwards.forwards().len(), 1);
     assert!(forwards.get(running).is_some());
@@ -419,7 +419,7 @@ fn loading_presets_twice_keeps_the_rows_and_the_open_drawer() {
             LocalPortSpec::Exact(9092),
         ),
     }];
-    let describe = |cluster: &ClusterRef| (cluster.context.clone().into(), Environment::Staging);
+    let describe = |cluster: &ClusterRef| (cluster.context.clone().into(), Environment::STAGING);
     forwards.load_presets(&presets, describe);
     let id = forwards.forwards()[0].id;
     forwards.select(Some(id));
@@ -442,7 +442,7 @@ fn a_running_forward_that_matches_a_preset_is_not_listed_twice() {
         ),
     }];
     forwards.load_presets(&presets, |cluster| {
-        (cluster.context.clone().into(), Environment::Production)
+        (cluster.context.clone().into(), Environment::PRODUCTION)
     });
     assert_eq!(forwards.forwards().len(), 1);
     assert!(forwards.get(id).is_some_and(|f| f.is_preset));
@@ -743,16 +743,16 @@ fn a_stopped_preset_row_takes_the_label_environment_and_port_of_the_settings_aga
     };
     // Loaded before the catalog: a fallback label and a Staging badge.
     forwards.load_presets(&[preset(9092)], |cluster| {
-        (cluster.context.clone().into(), Environment::Staging)
+        (cluster.context.clone().into(), Environment::STAGING)
     });
     // The catalog loaded, and the port was edited in Settings.
     forwards.load_presets(&[preset(19092)], |_| {
-        ("prod-eu-1".into(), Environment::Production)
+        ("prod-eu-1".into(), Environment::PRODUCTION)
     });
     let row = &forwards.forwards()[0];
     assert_eq!(forwards.forwards().len(), 1);
     assert_eq!(row.cluster_label.as_ref(), "prod-eu-1");
-    assert_eq!(row.environment, Environment::Production);
+    assert_eq!(row.environment, Environment::PRODUCTION);
     assert_eq!(row.spec.local_port, LocalPortSpec::Exact(19092));
 }
 
@@ -769,10 +769,10 @@ fn a_running_row_keeps_its_spec_when_the_settings_change() {
             LocalPortSpec::Exact(25432),
         ),
     };
-    forwards.load_presets(&[preset], |_| ("other".into(), Environment::Production));
+    forwards.load_presets(&[preset], |_| ("other".into(), Environment::PRODUCTION));
     let row = forwards.get(id).expect("the row exists");
     assert_eq!(row.spec.local_port, LocalPortSpec::Auto);
-    assert_eq!(row.environment, Environment::Staging);
+    assert_eq!(row.environment, Environment::STAGING);
 }
 
 #[test]
@@ -796,7 +796,7 @@ fn presets_with_unsafe_names_or_no_port_are_dropped() {
     ];
     let mut forwards = PortForwards::new();
     forwards.load_presets(&presets, |cluster| {
-        (cluster.context.clone().into(), Environment::Staging)
+        (cluster.context.clone().into(), Environment::STAGING)
     });
     let names: Vec<&str> = forwards
         .forwards()

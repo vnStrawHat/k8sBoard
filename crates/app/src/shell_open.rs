@@ -537,7 +537,7 @@ impl AppShell {
             shell: cx.weak_entity(),
             kind: DialogKind::Connect(Rc::new(intent)),
             confirm,
-            environment: Environment::Production,
+            environment: Environment::PRODUCTION,
             generation: 0,
         };
         let dialog = cx.new(|cx| ConfirmDialog::new(inputs, window, cx));

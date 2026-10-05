@@ -253,7 +253,7 @@ impl ConfirmDialog {
         h_flex()
             .gap_2()
             .items_center()
-            .child(environment_badge(self.environment, cx))
+            .child(environment_badge(&self.environment, cx))
             // The label names the object, which can be long: it wraps instead of running out of the
             // dialog.
             .child(div().flex_1().min_w_0().child(text))
@@ -1122,8 +1122,8 @@ impl ConfirmDialog {
         &self.confirm
     }
 
-    pub(crate) fn environment(&self) -> Environment {
-        self.environment
+    pub(crate) fn environment(&self) -> &Environment {
+        &self.environment
     }
 
     pub(crate) fn generation(&self) -> u64 {

@@ -1,6 +1,10 @@
 use super::*;
 use crate::settings_store::{SettingsNotice, load_settings};
 
+fn built_in(tier: EnvironmentTier) -> Option<EnvironmentKey> {
+    Some(EnvironmentKey::BuiltIn(tier))
+}
+
 fn summary(name: &str, source: &str) -> ContextSummary {
     ContextSummary {
         name: name.to_owned(),
@@ -48,7 +52,7 @@ fn profile_of_unregistered_context_uses_name_and_guess() {
         profile,
         ClusterProfile {
             display_name: "prod-eu".to_owned(),
-            environment: Environment::Production,
+            environment: Environment::PRODUCTION,
             default_namespace: None,
             read_only: true,
             confirm: ConfirmMode::TypeName,
@@ -88,11 +92,11 @@ fn stored_read_only_overrides_the_environment_default() {
 fn entry_overrides_name_and_environment() {
     let mut overrides = entry("readonly@Monitor", "a.yaml");
     overrides.display_name = Some("uat-monitor".to_owned());
-    overrides.environment = Some(Environment::Production);
+    overrides.environment = built_in(EnvironmentTier::Production);
     overrides.default_namespace = Some("monitoring".to_owned());
     let profile = registry_with(overrides).profile(&summary("readonly@Monitor", "a.yaml"));
     assert_eq!(profile.display_name, "uat-monitor");
-    assert_eq!(profile.environment, Environment::Production);
+    assert_eq!(profile.environment, Environment::PRODUCTION);
     assert_eq!(profile.default_namespace.as_deref(), Some("monitoring"));
 }
 
@@ -203,7 +207,7 @@ fn entry_without_context_is_corrupt() {
 #[test]
 fn registry_serializes_only_what_is_set() {
     let mut overrides = entry("ctx", "a.yaml");
-    overrides.environment = Some(Environment::Staging);
+    overrides.environment = built_in(EnvironmentTier::Staging);
     let value = serde_json::to_value(registry_with(overrides)).expect("serializes");
     assert_eq!(
         value,
@@ -360,7 +364,7 @@ fn an_entry_without_confirm_omits_the_key() {
 
 fn allows_node_shell(
     context: &str,
-    environment: Option<Environment>,
+    environment: Option<EnvironmentKey>,
     stored: Option<bool>,
 ) -> bool {
     let mut overrides = entry(context, "a.yaml");
@@ -377,7 +381,7 @@ fn allow_node_shell_defaults_by_environment() {
     assert!(!allows_node_shell("prod-eu", None, None));
     assert!(!allows_node_shell(
         "anything",
-        Some(Environment::Production),
+        built_in(EnvironmentTier::Production),
         None
     ));
     // Development is on only when it is set (a `dev` in a name is a guess a production cluster can
@@ -386,19 +390,19 @@ fn allow_node_shell_defaults_by_environment() {
     assert!(!allows_node_shell("devops-core", None, None));
     assert!(allows_node_shell(
         "anything",
-        Some(Environment::Development),
+        built_in(EnvironmentTier::Development),
         None
     ));
     assert!(allows_node_shell("kind-local", None, None));
     assert!(allows_node_shell(
         "anything",
-        Some(Environment::Local),
+        built_in(EnvironmentTier::Local),
         None
     ));
     // Staging is on only when the entry sets it; a guessed or unknown one is off.
     assert!(allows_node_shell(
         "anything",
-        Some(Environment::Staging),
+        built_in(EnvironmentTier::Staging),
         None
     ));
     assert!(!allows_node_shell("stg-1", None, None));
@@ -416,7 +420,7 @@ fn an_explicit_allow_node_shell_wins() {
     assert!(!allows_node_shell("dev-1", None, Some(false)));
     assert!(!allows_node_shell(
         "anything",
-        Some(Environment::Local),
+        built_in(EnvironmentTier::Local),
         Some(false)
     ));
 }
@@ -572,4 +576,76 @@ fn metrics_entry_round_trips_without_a_credential_field() {
     );
     let back: ClusterEntry = serde_json::from_value(json).expect("parses");
     assert_eq!(back, stored);
+}
+
+// ---- Spec 0053: custom environments ----
+
+/// A registry with one custom environment and a `ctx` entry that refers to it by `key`.
+fn registry_on_custom(
+    custom: &[(&str, EnvironmentTier)],
+    key: &str,
+    tweak: impl FnOnce(&mut ClusterEntry),
+) -> ClusterProfile {
+    let mut overrides = entry("ctx", "a.yaml");
+    overrides.environment = Some(EnvironmentKey::Custom(key.to_owned()));
+    tweak(&mut overrides);
+    let mut registry = registry_with(overrides);
+    registry.environments = custom
+        .iter()
+        .map(|(name, tier)| CustomEnvironment {
+            name: (*name).to_owned(),
+            color: crate::environment::EnvironmentColor::Teal,
+            tier: *tier,
+        })
+        .collect();
+    registry.profile(&summary("ctx", "a.yaml"))
+}
+
+#[test]
+fn production_tier_custom_gets_production_defaults() {
+    let profile = registry_on_custom(&[("DR", EnvironmentTier::Production)], "DR", |_| {});
+    assert_eq!(profile.environment.name(), "DR");
+    assert!(profile.read_only);
+    assert_eq!(profile.confirm, ConfirmMode::TypeName);
+    assert!(!profile.allow_node_shell);
+}
+
+#[test]
+fn staging_tier_custom_counts_as_set() {
+    let profile = registry_on_custom(&[("QA", EnvironmentTier::Staging)], "QA", |_| {});
+    assert!(!profile.read_only);
+    assert_eq!(profile.confirm, ConfirmMode::Click);
+    assert!(profile.allow_node_shell);
+}
+
+#[test]
+fn missing_custom_is_locked() {
+    let profile = registry_on_custom(&[], "Gone", |_| {});
+    assert_eq!(profile.environment, Environment::PRODUCTION);
+    assert!(profile.read_only);
+    assert_eq!(profile.confirm, ConfirmMode::TypeName);
+}
+
+#[test]
+fn stored_overrides_beat_the_tier() {
+    let profile = registry_on_custom(&[("DR", EnvironmentTier::Production)], "DR", |entry| {
+        entry.read_only = Some(false);
+        entry.confirm = Some(ConfirmMode::Click);
+    });
+    assert!(!profile.read_only);
+    assert_eq!(profile.confirm, ConfirmMode::Click);
+}
+
+#[test]
+fn old_builtin_entry_loads_unchanged() {
+    let entry: ClusterEntry = serde_json::from_value(serde_json::json!({
+        "kubeconfig": "a.yaml",
+        "context": "ctx",
+        "environment": "production"
+    }))
+    .expect("parses");
+    assert_eq!(
+        entry.environment,
+        Some(EnvironmentKey::BuiltIn(EnvironmentTier::Production))
+    );
 }

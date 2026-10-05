@@ -327,7 +327,7 @@ fn running_forward(forwards: &mut PortForwards, context: &str, port: u16, local:
     forwards.insert_fixture(ForwardFixture {
         cluster: cluster(context),
         cluster_label: context.to_owned().into(),
-        environment: Environment::Staging,
+        environment: Environment::STAGING,
         spec: crate::port_forwards::ForwardSpec {
             namespace: "shop".to_owned(),
             target: TargetSpec::pod("api-0"),

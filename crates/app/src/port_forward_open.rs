@@ -242,7 +242,7 @@ impl AppShell {
                     .cluster_label(cluster, cx)
                     .unwrap_or_else(|| cluster.context.clone())
                     .into(),
-                environment: guard.profile.environment,
+                environment: guard.profile.environment.clone(),
             };
             (origin, abandoned)
         }) else {
@@ -412,8 +412,8 @@ impl AppShell {
                 rows.iter()
                     .find(|(known, ..)| known == cluster)
                     .map_or_else(
-                        || (cluster.context.clone().into(), Environment::Staging),
-                        |(_, label, environment)| (label.clone(), *environment),
+                        || (cluster.context.clone().into(), Environment::STAGING),
+                        |(_, label, environment)| (label.clone(), environment.clone()),
                     )
             });
             cx.notify();
@@ -607,7 +607,7 @@ impl AppShell {
             shell: cx.weak_entity(),
             kind: DialogKind::Connect(Rc::new(intent)),
             confirm,
-            environment: Environment::Production,
+            environment: Environment::PRODUCTION,
             generation: 0,
         };
         let dialog = cx.new(|cx| ConfirmDialog::new(inputs, window, cx));

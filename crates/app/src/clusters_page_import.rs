@@ -17,7 +17,7 @@ use gpui_kit::{
 
 use super::ClustersPage;
 use crate::cluster_catalog::{CatalogHandle, PasteStatus};
-use crate::environment::environment_badge;
+use crate::environment::{Environment, environment_badge};
 use crate::kubeconfig_import::{
     ImportError, ImportPreview, ImportSource, NO_CONFIG_DIR_MESSAGE, check_clipboard_text,
     check_new_file, import_preview, pasted_file_path,
@@ -271,7 +271,10 @@ fn preview_body(preview: &ImportPreview, cx: &App) -> AnyElement {
         h_flex()
             .gap_2()
             .items_center()
-            .child(environment_badge(context.environment, cx))
+            .child(environment_badge(
+                &Environment::BuiltIn(context.environment),
+                cx,
+            ))
             .child(
                 div()
                     .text_sm()

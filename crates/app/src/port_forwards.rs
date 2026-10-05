@@ -490,7 +490,7 @@ impl PortForwards {
                     id,
                     cluster: origin.cluster.clone(),
                     cluster_label: origin.cluster_label.clone(),
-                    environment: origin.environment,
+                    environment: origin.environment.clone(),
                     spec: spec.clone(),
                     state: ForwardState::Starting,
                     local: None,

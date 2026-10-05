@@ -332,7 +332,7 @@ fn list(content: &SwitcherContent, window: &Window, cx: &App) -> AnyElement {
                         .justify_between()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(section.title)
+                        .child(section.title.clone())
                         .child(section.rows.len().to_string()),
                 )
                 .children(rows),
@@ -394,7 +394,7 @@ fn render_row(
                             .then(|| Icon::new(IconName::Check).size_4().into_any_element()),
                     ),
                 )
-                .child(environment_badge(row.environment, cx))
+                .child(environment_badge(&row.environment, cx))
                 .child(
                     div()
                         .flex_1()

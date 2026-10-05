@@ -1374,7 +1374,7 @@ fn batch_in_production_types_the_cluster_name(cx: &mut TestAppContext) {
                 expected: "prod-a".to_owned()
             }
         );
-        assert_eq!(dialog.environment(), Environment::Production);
+        assert_eq!(dialog.environment(), &Environment::PRODUCTION);
     });
     t.wait_for_dry_run(cx);
     assert_eq!(t.block(cx).as_deref(), Some("Type prod-a to confirm"));

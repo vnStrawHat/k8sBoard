@@ -601,7 +601,7 @@ impl HeaderChips {
             Some(cluster) => h_flex()
                 .gap_1()
                 .items_center()
-                .child(environment_badge(cluster.environment, cx))
+                .child(environment_badge(&cluster.environment, cx))
                 .child(cluster.name.clone())
                 .into_any_element(),
             None => div().child("No cluster").into_any_element(),
@@ -739,7 +739,7 @@ fn command_item(shown: &ShownEntry) -> CommandItem {
 }
 
 /// A cluster row's environment and health, which stand in for the status pill.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ClusterLine {
     environment: Environment,
     health: RowHealth,
@@ -778,7 +778,7 @@ impl RowContent {
         };
         let cluster = match &entry.target {
             PaletteTarget::Cluster(row, _) => Some(ClusterLine {
-                environment: row.environment,
+                environment: row.environment.clone(),
                 health: row.health,
             }),
             _ => None,
@@ -819,8 +819,8 @@ impl RowContent {
             .gap_2()
             .items_center()
             .child(leading)
-            .when_some(self.cluster, |row, cluster| {
-                row.child(environment_badge(cluster.environment, cx))
+            .when_some(self.cluster.as_ref(), |row, cluster| {
+                row.child(environment_badge(&cluster.environment, cx))
             })
             .child(
                 div()
@@ -849,7 +849,7 @@ impl RowContent {
                     .clone()
                     .map(|status| div().text_xs().child(toned_text(status, cx))),
             )
-            .when_some(self.cluster, |row, cluster| {
+            .when_some(self.cluster.as_ref(), |row, cluster| {
                 row.child(
                     div()
                         .text_xs()
@@ -969,7 +969,7 @@ mod tests {
         SwitcherRow {
             cluster: cluster_ref(),
             label: "dev".to_owned(),
-            environment: Environment::Development,
+            environment: Environment::DEVELOPMENT,
             health: RowHealth::NotChecked,
             failure: None,
             note: None,

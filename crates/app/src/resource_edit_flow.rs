@@ -469,7 +469,7 @@ mod fixtures {
             window: &mut Window,
             cx: &mut Context<Self>,
         ) {
-            let confirm = confirm_step(ConfirmMode::for_environment(environment), risk, expected);
+            let confirm = confirm_step(ConfirmMode::for_tier(environment.tier()), risk, expected);
             let inputs = DialogInputs {
                 shell: cx.weak_entity(),
                 kind,
@@ -501,7 +501,7 @@ mod fixtures {
             let (risk, expected) = (intent.risk, intent.expected().to_owned());
             self.open_fixed_dialog(
                 DialogKind::Write(Rc::new(intent)),
-                Environment::Production,
+                Environment::PRODUCTION,
                 (risk, &expected),
                 window,
                 cx,
@@ -546,7 +546,7 @@ mod fixtures {
             let (risk, expected) = (batch.risk, batch.expected().to_owned());
             self.open_fixed_dialog(
                 DialogKind::Batch(Rc::new(batch)),
-                Environment::Staging,
+                Environment::STAGING,
                 (risk, &expected),
                 window,
                 cx,

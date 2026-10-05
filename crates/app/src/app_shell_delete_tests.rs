@@ -580,10 +580,10 @@ fn delete_uses_the_tier_of_the_active_cluster(cx: &mut TestAppContext) {
     t.open_dialog(cx);
     let environment =
         t.t.dialog(cx)
-            .read_with(cx, |dialog, _| dialog.environment());
+            .read_with(cx, |dialog, _| dialog.environment().clone());
     assert_ne!(
         environment,
-        crate::environment::Environment::Production,
+        crate::environment::Environment::PRODUCTION,
         "the tier is staging's, not production's"
     );
     t.t.confirm(cx);

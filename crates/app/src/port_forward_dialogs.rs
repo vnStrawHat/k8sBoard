@@ -203,7 +203,7 @@ impl Render for NewForwardForm {
                             .id("forward-cluster")
                             .gap_2()
                             .items_center()
-                            .child(environment_badge(self.cluster.environment, cx))
+                            .child(environment_badge(&self.cluster.environment, cx))
                             .child(
                                 div()
                                     .min_w_0()
@@ -352,7 +352,7 @@ impl AppShell {
         let cluster = FormCluster {
             cluster: open.cluster.clone(),
             label: open.label.clone(),
-            environment: open.profile.environment,
+            environment: open.profile.environment.clone(),
         };
         open_form(cluster, prefill, window, cx);
     }
@@ -364,7 +364,7 @@ impl AppShell {
         let cluster = FormCluster {
             cluster: production.0.clone(),
             label: production.1.to_owned(),
-            environment: Environment::Production,
+            environment: Environment::PRODUCTION,
         };
         let prefill = NewForwardPrefill {
             cluster: production.0,

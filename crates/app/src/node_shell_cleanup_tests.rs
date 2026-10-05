@@ -267,7 +267,7 @@ fn cleanup_over(connection: cluster::ClusterConnection) -> NodeShellCleanup {
         &access,
         WriteLock::Locked,
         "stg-b",
-        crate::environment::Environment::Staging,
+        crate::environment::Environment::STAGING,
     );
     NodeShellCleanup::new(connection, request, CleanupAudit::of(&guard)).expect("a cleanup")
 }
