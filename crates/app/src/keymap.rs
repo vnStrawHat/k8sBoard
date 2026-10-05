@@ -388,11 +388,7 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
             "Edit values (ConfigMaps, Secrets)",
             EditValues,
         ),
-        row(
-            SelectedResource,
-            "Apply the edit (Edit YAML and Edit values views)",
-            ApplyEdit,
-        ),
+        row(SelectedResource, "Apply edit", ApplyEdit),
         row(SelectedResource, "Restart rollout", RestartRollout),
         row(SelectedResource, "Scale", Scale),
         row(SelectedResource, "Delete", Delete),

@@ -3,27 +3,35 @@
 //! the OS.
 
 use gpui_kit::component::kbd::Kbd;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
-    Action, App, AsKeystroke as _, IntoElement, Keystroke, ParentElement as _, Styled as _, Window,
-    div, prelude::FluentBuilder as _, px,
+    Action, App, AsKeystroke as _, InteractiveElement as _, IntoElement, Keystroke,
+    ParentElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::cluster_switcher::SwitchToCluster1;
 use crate::keymap::{ShortcutGroup, ShortcutRow, shortcut_rows};
 
 const SHEET_WIDTH: f32 = 720.;
+/// What the dialog spends above and below the grid: its offset from the top, title, and padding.
+const SHEET_CHROME_HEIGHT: f32 = 210.;
 
 /// The wireframe line under its key grid.
 const SHEET_NOTE: &str = "Single-letter keys work only while a resource is selected and no text field has focus. Destructive actions always open a confirmation.";
 
 /// Opens the sheet in a kit dialog, which traps focus, closes on Esc, and restores focus.
 pub(crate) fn open_shortcut_sheet(window: &mut Window, cx: &mut App) {
-    window.open_dialog(cx, |dialog, _, cx| {
-        dialog
-            .title("Keyboard shortcuts")
-            .w(px(SHEET_WIDTH))
-            .child(shortcut_sheet(cx))
+    window.open_dialog(cx, |dialog, window, cx| {
+        // The sheet is taller than a small window: the body scrolls under the title.
+        let body_height = window.viewport_size().height - px(SHEET_CHROME_HEIGHT);
+        dialog.title("Keyboard shortcuts").w(px(SHEET_WIDTH)).child(
+            div()
+                .id("shortcut-sheet-body")
+                .max_h(body_height)
+                .overflow_y_scrollbar()
+                .child(shortcut_sheet(cx)),
+        )
     });
 }
 
@@ -70,9 +78,17 @@ fn sheet_row(row: &ShortcutRow, cx: &App) -> impl IntoElement {
         .gap_2()
         .items_center()
         .justify_between()
-        .child(div().text_sm().child(row.label))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_sm()
+                .child(row.label),
+        )
         .child(
             h_flex()
+                .flex_shrink_0()
                 .gap_1()
                 .items_center()
                 .children(row_keys(&*row.action, cx).into_iter().map(Kbd::new))

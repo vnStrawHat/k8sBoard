@@ -34,3 +34,11 @@ fn shortcut_sheet_lists_attach(cx: &mut TestAppContext) {
             .any(|row| row.label.starts_with("Attach"))
     );
 }
+
+#[test]
+fn every_label_fits_beside_its_keys_in_a_half_width_column() {
+    // A half column of the 720 px sheet is about 50 characters wide at the body size, less the keys.
+    for row in shortcut_rows() {
+        assert!(row.label.chars().count() <= 48, "{}", row.label);
+    }
+}
