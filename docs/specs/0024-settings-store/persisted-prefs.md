@@ -64,7 +64,6 @@ Each later spec adds one `#[serde(default)]` field to `Settings` (or to `Cluster
 | `general.watch_tls_secrets` | `bool`, true | 0043 (0020 decision 11) | opt out of the cluster-wide TLS Secrets watch, C13 budget (reserved earlier as `issues.watch_tls_secrets`) |
 | `topology.group_by` | enum, `app` | 0022 (decision 27) | last Group by choice |
 | `topology.pins` | map `"{context}/{namespace}"` → map node id → `{x, y}` | 0022 (decision 23) | dragged positions; cap 2,000 pins per key |
-| `topology.edges` | `"elbows"` (default) / `"curves"` | 0050 | Topology toolbar `Edges:` choice |
 | `appearance.density` | `"compact"`(28, default) / `"comfortable"`(36) | 0043 | row height of every `DataTable`, header included |
 | `appearance.color_theme` | `"default"` (default) / `"zed-one"`; any unknown string loads as `"default"` | 0052 | colour family: the kit theme or Zed One (One Light / One Dark, picked by `theme`); `--color-theme` overrides it for one run without saving |
 | `dock.height` | `Option<f32>` px | 0044 | remembered dock height in whole pixels, written on a resize end; absent = 280 px (a double-click reset forgets it) |

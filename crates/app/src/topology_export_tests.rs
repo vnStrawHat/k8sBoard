@@ -5,7 +5,6 @@ use crate::topology_canvas::LEGEND;
 use crate::topology_fixtures::{Fixture, Ref, crashing_pod, ingress, pod, pod_with, shop_access};
 use crate::topology_graph::GroupBy;
 use crate::topology_layout::layout;
-use crate::topology_route::EdgeShape;
 
 fn style() -> SvgStyle {
     SvgStyle {
@@ -29,14 +28,7 @@ fn style() -> SvgStyle {
 
 fn svg_of(fixture: &Fixture, title: &str) -> (TopologyGraph, String) {
     let graph = fixture.graph();
-    let arranged = layout(
-        &graph,
-        GroupBy::Components,
-        1.,
-        &Default::default(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let arranged = layout(&graph, GroupBy::Components, 1., &Default::default(), None);
     let svg = topology_svg(&graph, &arranged, None, title, &style());
     (graph, svg)
 }
@@ -208,14 +200,7 @@ fn svg_arrows_are_polygons_at_the_route_end() {
         svg.matches("<polygon ").count(),
         graph.edges.len() + LEGEND.len()
     );
-    let arranged = layout(
-        &graph,
-        GroupBy::Components,
-        1.,
-        &Default::default(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let arranged = layout(&graph, GroupBy::Components, 1., &Default::default(), None);
     for route in &arranged.routes {
         let points = arrow_head(route, ARROW_LENGTH, ARROW_HALF_WIDTH)
             .map(|at| format!("{} {}", at.x, at.y))
@@ -249,14 +234,7 @@ fn svg_bands_are_filled() {
         .with_service("web", &["app=web"])
         .with_pod(pod("web-1", &["app=web"], None));
     let graph = fixture.graph();
-    let arranged = layout(
-        &graph,
-        GroupBy::App,
-        1.,
-        &Default::default(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let arranged = layout(&graph, GroupBy::App, 1., &Default::default(), None);
     assert!(arranged.bands.iter().any(|band| band.title.is_some()));
     let svg = topology_svg(&graph, &arranged, None, "t", &style());
     let style = style();
@@ -382,56 +360,37 @@ fn export_in_traffic_mode_draws_tones_and_labels() {
     let graph = fixture.graph();
     let pods = fixture.pods.clone().expect("pods listed");
     let refs: Vec<&cluster::PodSummary> = pods.iter().collect();
-    for shape in [EdgeShape::Elbows, EdgeShape::Curves] {
-        let arranged = layout(
-            &graph,
-            GroupBy::Components,
-            1.6,
-            &Default::default(),
-            None,
-            shape,
-        );
-        let layer = TrafficLayer::build(&graph, &arranged, shape, &refs, Rc::new(istio_sample()));
-        let style = style();
-        let svg = topology_svg(&graph, &arranged, Some(&layer), "t", &style);
-        let edges = graph.edges.len() + layer.calls.len();
-        // Mounts and Access edges are hidden; every other edge has a path with its class.
-        let hidden = layer
-            .overlay
-            .edges
-            .iter()
-            .filter(|edge| matches!(edge, crate::topology_traffic::EdgeTraffic::Hidden))
-            .count();
-        assert_eq!(
-            svg.matches("class=\"edge\"").count(),
-            edges - hidden,
-            "{shape:?}"
-        );
-        // The 6 % call is Bad: its stroke and its arrow polygon take the Bad color.
-        let bad = &style.bad;
-        assert!(
-            svg.contains(&format!("stroke=\"{bad}\" stroke-opacity=\"1\"")),
-            "{shape:?}: the stroke"
-        );
-        assert!(
-            svg.contains(&format!("fill=\"{bad}\" fill-opacity=\"1\"/>")),
-            "{shape:?}: the arrow"
-        );
-        // Its label, its width, and the Traffic legend.
-        assert!(
-            svg.contains("35 req/s \u{b7} 6% 5xx"),
-            "{shape:?}: the label"
-        );
-        assert!(
-            svg.contains("stroke-width=\"6\""),
-            "{shape:?}: the widest flow"
-        );
-        assert!(svg.contains(">calls</text>"));
-        assert!(svg.contains("\u{2265} 5% 5xx"));
-        assert!(svg.contains("routes to \u{b7} width = req/s"));
-        // A Warn or Bad card keeps its caption, the others show their traffic.
-        assert!(svg.contains("CRASHLOOPBACKOFF"));
-    }
+    let arranged = layout(&graph, GroupBy::Components, 1.6, &Default::default(), None);
+    let layer = TrafficLayer::build(&graph, &arranged, &refs, Rc::new(istio_sample()));
+    let style = style();
+    let svg = topology_svg(&graph, &arranged, Some(&layer), "t", &style);
+    let edges = graph.edges.len() + layer.calls.len();
+    // Mounts and Access edges are hidden; every other edge has a path with its class.
+    let hidden = layer
+        .overlay
+        .edges
+        .iter()
+        .filter(|edge| matches!(edge, crate::topology_traffic::EdgeTraffic::Hidden))
+        .count();
+    assert_eq!(svg.matches("class=\"edge\"").count(), edges - hidden);
+    // The 6 % call is Bad: its stroke and its arrow polygon take the Bad color.
+    let bad = &style.bad;
+    assert!(
+        svg.contains(&format!("stroke=\"{bad}\" stroke-opacity=\"1\"")),
+        "the stroke"
+    );
+    assert!(
+        svg.contains(&format!("fill=\"{bad}\" fill-opacity=\"1\"/>")),
+        "the arrow"
+    );
+    // Its label, its width, and the Traffic legend.
+    assert!(svg.contains("35 req/s \u{b7} 6% 5xx"), "the label");
+    assert!(svg.contains("stroke-width=\"6\""), "the widest flow");
+    assert!(svg.contains(">calls</text>"));
+    assert!(svg.contains("\u{2265} 5% 5xx"));
+    assert!(svg.contains("routes to \u{b7} width = req/s"));
+    // A Warn or Bad card keeps its caption, the others show their traffic.
+    assert!(svg.contains("CRASHLOOPBACKOFF"));
 }
 
 #[test]
@@ -453,21 +412,8 @@ fn bytes_only_export_lists_no_calls_or_tones_in_the_legend() {
     let graph = fixture.graph();
     let pods = fixture.pods.clone().expect("pods listed");
     let refs: Vec<&cluster::PodSummary> = pods.iter().collect();
-    let arranged = layout(
-        &graph,
-        GroupBy::Components,
-        1.6,
-        &Default::default(),
-        None,
-        EdgeShape::Elbows,
-    );
-    let layer = TrafficLayer::build(
-        &graph,
-        &arranged,
-        EdgeShape::Elbows,
-        &refs,
-        Rc::new(bytes_sample()),
-    );
+    let arranged = layout(&graph, GroupBy::Components, 1.6, &Default::default(), None);
+    let layer = TrafficLayer::build(&graph, &arranged, &refs, Rc::new(bytes_sample()));
     let svg = topology_svg(&graph, &arranged, Some(&layer), "t", &style());
     assert!(svg.contains("routes to \u{b7} width = receive bytes/s per pod"));
     assert!(svg.contains(">owns</text>"));

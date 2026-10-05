@@ -530,15 +530,6 @@ fn screen_topology_selected_parses() {
 }
 
 #[test]
-fn topology_curves_screen_parses() {
-    let list = run_options(&["--screen", "topology-curves"]).screen;
-    assert_eq!(list, LaunchScreen::TopologyCurves);
-    assert_eq!(list.screen(), Screen::Topology);
-    assert!(!list.has_drawer());
-    assert!(list.shows_topology());
-}
-
-#[test]
 fn screen_issues_parses() {
     let list = run_options(&["--screen", "issues"]).screen;
     assert_eq!(list, LaunchScreen::Issues);
@@ -1207,37 +1198,25 @@ fn screen_settings_metrics_parses() {
 
 #[test]
 fn topology_traffic_screens_parse() {
-    for (text, expected) in [
-        ("topology-traffic", LaunchScreen::TopologyTraffic),
-        (
-            "topology-traffic-curves",
-            LaunchScreen::TopologyTrafficCurves,
-        ),
-    ] {
-        let screen = run_options(&["--screen", text]).screen;
-        assert_eq!(screen, expected);
-        assert_eq!(screen.screen(), Screen::Topology);
-        assert!(!screen.has_drawer());
-        assert!(screen.shows_topology());
-    }
+    let screen = run_options(&["--screen", "topology-traffic"]).screen;
+    assert_eq!(screen, LaunchScreen::TopologyTraffic);
+    assert_eq!(screen.screen(), Screen::Topology);
+    assert!(!screen.has_drawer());
+    assert!(screen.shows_topology());
 }
 
 #[test]
 fn topology_traffic_fixture_screens_parse() {
-    for (text, expected) in [
-        (
-            "topology-traffic-fixture",
-            LaunchScreen::TopologyTrafficFixture,
-        ),
-        (
-            "topology-traffic-fixture-curves",
-            LaunchScreen::TopologyTrafficFixtureCurves,
-        ),
-    ] {
-        let screen = run_options(&["--screen", text]).screen;
-        assert_eq!(screen, expected);
-        assert_eq!(screen.screen(), Screen::Topology);
-        assert!(screen.shows_topology());
+    let screen = run_options(&["--screen", "topology-traffic-fixture"]).screen;
+    assert_eq!(screen, LaunchScreen::TopologyTrafficFixture);
+    assert_eq!(screen.screen(), Screen::Topology);
+    assert!(screen.shows_topology());
+}
+
+#[test]
+fn the_removed_curves_screens_are_unknown() {
+    for text in ["topology-curves", "topology-traffic-curves"] {
+        assert!(parse(&["--screen", text]).is_err(), "{text}");
     }
 }
 

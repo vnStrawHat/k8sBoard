@@ -102,10 +102,6 @@ fn full_settings() -> Settings {
             density: RowDensity::Comfortable,
             color_theme: ColorTheme::ZedOne,
         },
-        // The default would be omitted from the value, and with it the key.
-        topology: TopologySettings {
-            edges: EdgeShape::Curves,
-        },
         tables: BTreeMap::from([(
             "pods".to_owned(),
             TablePrefs {
@@ -134,22 +130,12 @@ fn dock_height_round_trips_and_is_omitted_when_unset() {
 }
 
 #[test]
-fn topology_edges_round_trip_and_default_is_omitted() {
-    let settings = Settings {
-        topology: TopologySettings {
-            edges: EdgeShape::Curves,
-        },
-        ..Settings::default()
-    };
+fn the_removed_topology_edges_key_is_ignored() {
+    let old = r#"{ "version": 1, "topology": { "edges": "curves" } }"#;
+    let settings: Settings = serde_json::from_str(old).expect("parses");
+    assert_eq!(settings, Settings::default());
     let value = serde_json::to_value(&settings).expect("serializes");
-    assert_eq!(value["topology"], json!({ "edges": "curves" }));
-    let bytes = serialize_settings(&settings).expect("serializes");
-    let back: Settings = serde_json::from_slice(&bytes).expect("parses");
-    assert_eq!(back.topology.edges, EdgeShape::Curves);
-    let value = serde_json::to_value(Settings::default()).expect("serializes");
     assert!(value.get("topology").is_none(), "{value}");
-    let empty: Settings = serde_json::from_str(r#"{ "topology": {} }"#).expect("parses");
-    assert_eq!(empty.topology.edges, EdgeShape::Elbows);
 }
 
 #[test]
@@ -276,8 +262,6 @@ fn settings_keys_are_the_allow_list() {
             "terminal.font_size",
             "terminal.scrollback_lines",
             "theme",
-            "topology",
-            "topology.edges",
             "version",
         ]
     );

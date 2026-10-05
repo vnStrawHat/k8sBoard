@@ -6,7 +6,6 @@ use super::*;
 use crate::topology_fixtures::{Fixture, Ref, index_of, object, pod, pod_with, traffic_namespace};
 use crate::topology_graph::GroupBy;
 use crate::topology_layout::layout;
-use crate::topology_route::EdgeShape;
 use crate::topology_traffic_fixture::{bytes_sample, istio_sample, pod_rate};
 
 fn refs(pods: &[PodSummary]) -> Vec<&PodSummary> {
@@ -99,33 +98,21 @@ fn call_routes_leave_the_layout_alone() {
     let (graph, pods) = namespace();
     let calls = call_edges(&graph, &refs(&pods), &istio_sample());
     assert_eq!(calls.len(), 2);
-    for shape in [EdgeShape::Elbows, EdgeShape::Curves] {
-        let laid_out = layout(
-            &graph,
-            GroupBy::Components,
-            1.6,
-            &HashMap::new(),
-            None,
-            shape,
-        );
-        let rects = laid_out.rects.clone();
-        let routes = laid_out.route_extra(&calls, shape);
-        assert_eq!(laid_out.rects, rects, "{shape:?}: no card moved");
-        assert_eq!(routes.len(), calls.len());
-        for (edge, route) in calls.iter().zip(&routes) {
-            let (source, target) = (laid_out.rects[edge.from], laid_out.rects[edge.to]);
-            let on_side = |at: GraphPoint, card: crate::topology_layout::GraphRect| {
-                (at.x == card.origin.x || at.x == card.right()) && at.y == card.center().y
-            };
-            assert!(
-                on_side(route.start(), source),
-                "{shape:?}: starts on the source"
-            );
-            assert!(
-                on_side(route.end(), target),
-                "{shape:?}: ends on the target"
-            );
-        }
+    let laid_out = layout(&graph, GroupBy::Components, 1.6, &HashMap::new(), None);
+    let rects = laid_out.rects.clone();
+    let routes = laid_out.route_extra(&calls);
+    assert_eq!(laid_out.rects, rects, "no card moved");
+    assert_eq!(routes.len(), calls.len());
+    for (edge, route) in calls.iter().zip(&routes) {
+        let (source, target) = (laid_out.rects[edge.from], laid_out.rects[edge.to]);
+        let on_side = |at: GraphPoint, card: crate::topology_layout::GraphRect| {
+            let center = card.center();
+            let on_row = (at.x == card.origin.x || at.x == card.right()) && at.y == center.y;
+            let on_column = (at.y == card.origin.y || at.y == card.bottom()) && at.x == center.x;
+            on_row || on_column
+        };
+        assert!(on_side(route.start(), source), "starts on the source");
+        assert!(on_side(route.end(), target), "ends on the target");
     }
 }
 
@@ -533,10 +520,10 @@ fn labels_per_unit_and_relation() {
 fn label_anchor_is_the_arc_length_midpoint() {
     let at = |x, y| GraphPoint { x, y };
     // An L: 10 across and 10 down; the middle is the corner.
-    let elbow = EdgeRoute {
+    let l_shape = EdgeRoute {
         points: vec![at(0., 0.), at(10., 0.), at(10., 10.)],
     };
-    assert_eq!(label_anchor(&elbow), at(10., 0.));
+    assert_eq!(label_anchor(&l_shape), at(10., 0.));
     // Unequal legs: 2 across and 10 down, the middle is 4 down the second leg.
     let uneven = EdgeRoute {
         points: vec![at(0., 0.), at(2., 0.), at(2., 10.)],

@@ -140,3 +140,11 @@ fn the_card_chrome_matches_what_the_layout_reserves() {
     // `CARD_CHROME` of the layout is the bar, the chip, and three paddings.
     const { assert!(ACCENT_BAR + CHIP_SIZE + 3. * CARD_PADDING == 63.) };
 }
+
+#[test]
+fn the_accent_bar_ends_where_the_card_corners_end() {
+    // Regression: a full-height square bar stuck out of the rounded corners of the card. Now it is
+    // inset by the corner radius on both ends, so its rounded ends lie on the straight left edge.
+    assert_eq!(accent_bar_length() + 2. * CARD_RADIUS, NODE_HEIGHT);
+    assert!(accent_bar_length() > CHIP_SIZE);
+}

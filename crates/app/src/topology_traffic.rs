@@ -18,7 +18,7 @@ use crate::topology_graph::{
     controller_of,
 };
 use crate::topology_layout::{GraphPoint, TopologyLayout};
-use crate::topology_route::{EdgeRoute, EdgeShape};
+use crate::topology_route::EdgeRoute;
 use crate::usage_format::Measure;
 
 /// The thinnest flow, in graph units, and how much more the busiest one adds (decision 6).
@@ -613,12 +613,11 @@ impl TrafficLayer {
     pub(crate) fn build(
         graph: &TopologyGraph,
         layout: &TopologyLayout,
-        shape: EdgeShape,
         pods: &[&PodSummary],
         sample: Rc<TrafficSample>,
     ) -> Self {
         let calls = call_edges(graph, pods, &sample);
-        let call_routes = layout.route_extra(&calls, shape);
+        let call_routes = layout.route_extra(&calls);
         let overlay = Rc::new(traffic_overlay(graph, &calls, pods, &sample));
         Self {
             sample,
@@ -628,12 +627,12 @@ impl TrafficLayer {
         }
     }
 
-    /// The cards moved (a drag) or the shape changed: only the routes of the `Calls` edges change.
-    pub(crate) fn rerouted(&self, layout: &TopologyLayout, shape: EdgeShape) -> Self {
+    /// The cards moved (a drag): only the routes of the `Calls` edges change.
+    pub(crate) fn rerouted(&self, layout: &TopologyLayout) -> Self {
         Self {
             sample: Rc::clone(&self.sample),
             calls: self.calls.clone(),
-            call_routes: layout.route_extra(&self.calls, shape),
+            call_routes: layout.route_extra(&self.calls),
             overlay: Rc::clone(&self.overlay),
         }
     }
@@ -663,8 +662,7 @@ pub(crate) fn tooltip_with_traffic(
     }
 }
 
-/// The point at half the arc length of the route: the label of a curve and of an elbow both sit
-/// on the line.
+/// The point at half the arc length of the route: the label sits on the line.
 pub(crate) fn label_anchor(route: &EdgeRoute) -> GraphPoint {
     point_along(route, 0.5)
 }

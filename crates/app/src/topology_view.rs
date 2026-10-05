@@ -31,7 +31,6 @@ use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{ClusterSession, LiveCluster, scope_includes};
 use crate::drawer::DRAWER_WIDTH;
 use crate::file_export::{ExportState, export_file_name, start_export_with};
-use crate::settings::AppSettings;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ResourceKey;
 use crate::topology_canvas::{
@@ -52,7 +51,6 @@ use crate::topology_graph::{
 use crate::topology_layout::{
     GraphPoint, GraphStructure, TopologyLayout, layout as lay_out, structure,
 };
-use crate::topology_route::EdgeShape;
 use crate::topology_traffic::{
     TrafficLayer, TrafficOverlay, TrafficSample, shown_caption, tooltip_with_traffic,
 };
@@ -299,8 +297,6 @@ pub(crate) struct TopologyView {
     pins: HashMap<String, HashMap<String, HashMap<NodeId, GraphPoint>>>,
     build: Option<Built>,
     layout: Option<(GraphStructure, GroupBy, Rc<TopologyLayout>)>,
-    /// How the edges are drawn; the saved choice, or the one a launch screen set in memory.
-    edge_shape: EdgeShape,
     mode: TopologyMode,
     traffic: TrafficRun,
     /// `--screen topology-traffic`: switch to Traffic once the source is ready.
@@ -356,8 +352,6 @@ impl TopologyView {
             traffic: TrafficRun::default(),
             wants_traffic: false,
             fixture_pods: None,
-            edge_shape: AppSettings::try_get(cx)
-                .map_or_else(EdgeShape::default, |settings| settings.topology.edges),
             viewport: Viewport::default(),
             needs_fit: true,
             fit_waits_for_size: false,
@@ -713,18 +707,12 @@ impl TopologyView {
         let shape = structure(&graph);
         let no_pins = HashMap::new();
         let pins = self.pins(cx).unwrap_or(&no_pins);
-        let edges = self.edge_shape;
         let layout = match kept {
             Some((previous, _, layout)) if previous == shape => layout,
-            Some((_, _, previous)) => Rc::new(lay_out(
-                &graph,
-                group_by,
-                aspect,
-                pins,
-                Some(&previous),
-                edges,
-            )),
-            None => Rc::new(lay_out(&graph, group_by, aspect, pins, None, edges)),
+            Some((_, _, previous)) => {
+                Rc::new(lay_out(&graph, group_by, aspect, pins, Some(&previous)))
+            }
+            None => Rc::new(lay_out(&graph, group_by, aspect, pins, None)),
         };
         self.needs_fit |= is_fresh;
         self.layout = Some((shape, group_by, layout));
@@ -810,7 +798,6 @@ impl TopologyView {
             self.aspect(),
             pins,
             Some(&previous),
-            self.edge_shape,
         ));
         self.layout = Some((shape, group_by, layout));
         self.reroute_traffic_calls();
@@ -981,18 +968,17 @@ impl TopologyView {
         self.traffic.layer = Some(Rc::new(TrafficLayer::build(
             graph,
             layout,
-            self.edge_shape,
             &pods,
             Rc::clone(sample),
         )));
     }
 
-    /// The cards moved or the shape changed: only the `Calls` routes are computed again.
+    /// The cards moved: only the `Calls` routes are computed again.
     fn reroute_traffic_calls(&mut self) {
         let (Some(layer), Some((_, _, layout))) = (&self.traffic.layer, &self.layout) else {
             return;
         };
-        self.traffic.layer = Some(Rc::new(layer.rerouted(layout, self.edge_shape)));
+        self.traffic.layer = Some(Rc::new(layer.rerouted(layout)));
     }
 
     /// `--screen topology-traffic-fixture`: the fixed namespace of W11 with its Istio and pod
@@ -1061,16 +1047,6 @@ impl TopologyView {
         self.layout = None;
         self.needs_fit = true;
         self.rebuild(cx);
-    }
-
-    /// Draws the edges in `shape`: the cards stay where they are, only the routes change.
-    pub(crate) fn set_edge_shape(&mut self, shape: EdgeShape, cx: &mut Context<Self>) {
-        if self.edge_shape == shape {
-            return;
-        }
-        self.edge_shape = shape;
-        self.relayout(cx);
-        cx.notify();
     }
 
     fn toggle_kind(&mut self, kind: KindFilter, cx: &mut Context<Self>) {
@@ -1513,34 +1489,6 @@ impl TopologyView {
                         })
                 }
             });
-        let shape = self.edge_shape;
-        let edges_button = Button::new("topology-edges")
-            .outline()
-            .small()
-            .label(format!("Edges: {}", shape.label()))
-            .dropdown_caret(true)
-            .tooltip("How edges are drawn")
-            .dropdown_menu({
-                let view = view.clone();
-                move |menu, _, _| {
-                    [EdgeShape::Elbows, EdgeShape::Curves]
-                        .into_iter()
-                        .fold(menu, |menu, option| {
-                            let view = view.clone();
-                            menu.item(
-                                PopupMenuItem::new(option.label())
-                                    .checked(option == shape)
-                                    .on_click(move |_, _, cx| {
-                                        let _ = view
-                                            .update(cx, |view, cx| view.set_edge_shape(option, cx));
-                                        AppSettings::update(cx, |settings| {
-                                            settings.topology.edges = option
-                                        });
-                                    }),
-                            )
-                        })
-                }
-            });
         let chips = KindFilter::ALL.into_iter().map(|kind| {
             let is_on = self.filter.kinds.contains(&kind);
             toggle_button(chip_id(kind), kind.label(), is_on)
@@ -1620,7 +1568,6 @@ impl TopologyView {
             .child(segment)
             .child(namespace_button)
             .child(group_button)
-            .child(edges_button)
             .child(h_flex().gap_1().children(chips))
             .child(problems)
             .child(

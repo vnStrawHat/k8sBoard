@@ -1,6 +1,6 @@
 # 0050 — Topology curved edges
 
-Status: approved with changes (advisor, 2026-10-04). Follows 0022 / 0022b. Crate: `crates/app` only, no dependency change. User request (2026-10-04): an option to draw Topology edges as smooth curves instead of right-angle elbows. W11 already draws cubic `C` edges. Rules: theme tokens only, names only, English.
+Status: approved with changes (advisor, 2026-10-04). **Amended 2026-10-05: see [as-built.md](as-built.md); Elbows and the `Edges:` option were removed, so edges are always curves with four anchors per node.** Follows 0022 / 0022b. Crate: `crates/app` only, no dependency change. User request (2026-10-04): an option to draw Topology edges as smooth curves instead of right-angle elbows. W11 already draws cubic `C` edges. Rules: theme tokens only, names only, English.
 
 ## Goal
 

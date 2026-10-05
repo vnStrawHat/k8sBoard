@@ -5,7 +5,7 @@
 ## Graph and routing (step 2)
 
 - `Relation::Calls` (after `Access`): stroke width 1.5, solid, the `RoutesTo` accent color; legend text `calls`; export arm. Only Traffic mode creates such edges; they never enter `TopologyGraph.edges`.
-- `route_edges(edges: &[TopologyEdge], rects, bands, shape: EdgeShape) -> Vec<EdgeRoute>`: takes the edge slice instead of the graph (it only reads `from`, `to`, `relation`); `layout()` passes `&graph.edges`. No other routing change.
+- `route_edges(edges: &[TopologyEdge], rects) -> Vec<EdgeRoute>`: takes the edge slice instead of the graph (it only reads `from`, `to`, `relation`); `layout()` passes `&graph.edges`. No other routing change.
 
 ## Overlay (`topology_traffic.rs`)
 
@@ -29,7 +29,7 @@ pub(crate) struct EdgeFlow { pub(crate) rate: f64, pub(crate) unit: TrafficUnit,
 #[derive(Clone, Copy, PartialEq, Eq)] pub(crate) enum TrafficUnit { Requests, Bytes }
 pub(crate) struct NodeTraffic { pub(crate) requests: Option<f64>, pub(crate) error_share: Option<f64>,
     pub(crate) receive: Option<f64>, pub(crate) transmit: Option<f64>, pub(crate) text: SharedString }
-/// The point at half the arc length of a route's polyline (works for elbows and flattened curves).
+/// The point at half the arc length of a route's polyline (works for any polyline).
 pub(crate) fn label_anchor(route: &EdgeRoute) -> GraphPoint;
 ```
 
@@ -75,7 +75,7 @@ pub(crate) fn label_anchor(route: &EdgeRoute) -> GraphPoint;
 ## Drawing (step 3b)
 
 - **Canvas** (`paint_edges`): iterates `graph.edges` with `layout.routes`, then `calls` with `call_routes`, reading `overlay.edges[i]`. `Hidden` not drawn; `Idle` 0.75 px, muted, dashed `(2, 4)`; `Flow` **solid** (decision 13) at its width × zoom, `tone_color(tone)` or the relation color, `Owns` flows at 60 % alpha; the arrow takes the same color. No flow animation in Traffic mode.
-- **Labels**: small `text_xs` mono divs centered on `label_anchor(route)` (the arc-length midpoint, so curves and elbows both work), on the theme background with a border, at zoom ≥ `MIN_TEXT_ZOOM`, skipped when they would overlap a card.
+- **Labels**: small `text_xs` mono divs centered on `label_anchor(route)` (the arc-length midpoint), on the theme background with a border, at zoom ≥ `MIN_TEXT_ZOOM`, skipped when they would overlap a card.
 - **Node text** (`topology_card.rs`): rule 7.
 - **Legend** in Traffic mode: `routes to · width = req/s` (bytes only: `width = receive bytes/s per pod`), `calls`, `owns`, a Warn swatch `≥ 1% 5xx`, a Bad swatch `≥ 5% 5xx`.
 - **Export** (`topology_export.rs`): the same widths and tones; the tone also fills the arrow `<polygon>`; edge paths keep `class="edge"`; labels as `<text>` at the anchor; the Traffic legend.

@@ -1122,11 +1122,8 @@ mod tests {
             LaunchScreen::Topology,
             LaunchScreen::TopologyProblems,
             LaunchScreen::TopologySelected,
-            LaunchScreen::TopologyCurves,
             LaunchScreen::TopologyTraffic,
-            LaunchScreen::TopologyTrafficCurves,
             LaunchScreen::TopologyTrafficFixture,
-            LaunchScreen::TopologyTrafficFixtureCurves,
         ] {
             assert!(!is_screen_settled(screen, &pending));
             assert!(is_screen_settled(screen, &input(TargetState::Loaded, true)));

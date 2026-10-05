@@ -31,8 +31,8 @@ Live (coder-lite, UAT, read-only): `probe --metrics-source monitoring/vmselect-v
 
 | Test | File | Checks |
 |---|---|---|
-| `route_edges_routes_a_slice` | `topology_route_tests.rs` | routing `&graph.edges` equals today's result in both shapes |
-| `call_routes_leave_the_layout_alone` | `topology_traffic_tests.rs` | rects before and after routing the call edges are equal (Elbows and Curves) |
+| `route_edges_routes_a_slice` | `topology_route_tests.rs` | routing `&graph.edges` equals the layout routes |
+| `call_routes_leave_the_layout_alone` | `topology_traffic_tests.rs` | rects before and after routing the call edges are equal |
 | `missing_pair_becomes_a_calls_edge` | `topology_traffic_tests.rs` | `ledger` → `payments-api` |
 | `existing_edge_takes_the_flow` | `topology_traffic_tests.rs` | the `payments-api` → `api` `RoutesTo` edge carries the `api` pods' receive bytes, no `Calls` edge added |
 | `istio_wins_over_bytes_on_an_edge` | `topology_traffic_tests.rs` | an edge with both → `Requests` |
@@ -45,7 +45,7 @@ Live (coder-lite, UAT, read-only): `probe --metrics-source monitoring/vmselect-v
 | `width_scales_by_square_root_per_unit` | `topology_traffic_tests.rs` | max → 6; a quarter → 3.75; units apart |
 | `tone_thresholds` | `topology_traffic_tests.rs` | 0.9 % none, 1 % Warn, 5 % Bad; bytes no tone |
 | `labels_per_unit_and_relation` | `topology_traffic_tests.rs` | req/s text, 5xx part ≥ 0.1 %, no label on `Owns` bytes |
-| `label_anchor_is_the_arc_length_midpoint` | `topology_traffic_tests.rs` | an L-shaped elbow and a flattened curve |
+| `label_anchor_is_the_arc_length_midpoint` | `topology_traffic_tests.rs` | an L-shaped polyline and a flattened curve |
 | `bad_node_keeps_its_caption` | `topology_traffic_tests.rs` | the CrashLoopBackOff pod keeps its caption; tooltip has traffic |
 
 ## Step 3a (view state)
@@ -68,4 +68,4 @@ Live (coder-lite, UAT, read-only): `probe --metrics-source monitoring/vmselect-v
 
 ## Screens and ui-verifier
 
-`topology-traffic-fixture` (Istio + bytes on `traffic_namespace()`, light and dark, Elbows and Curves) and live UAT `topology-traffic` (a namespace with pods, bytes fallback, `--config-dir .tmp/cfg-0048` with the vmselect entry). Checklist: segment `Traffic` selected; flow edges solid with varying widths; the `ledger` → `payments-api` edge Bad with its label at mid-route; idle edges thin and muted; chip text; legend entries; no label over a card at the first view.
+`topology-traffic-fixture` (Istio + bytes on `traffic_namespace()`, light and dark) and live UAT `topology-traffic` (a namespace with pods, bytes fallback, `--config-dir .tmp/cfg-0048` with the vmselect entry). Checklist: segment `Traffic` selected; flow edges solid with varying widths; the `ledger` → `payments-api` edge Bad with its label at mid-route; idle edges thin and muted; chip text; legend entries; no label over a card at the first view.

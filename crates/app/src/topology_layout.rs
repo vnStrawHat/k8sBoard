@@ -10,7 +10,7 @@ use gpui_kit::SharedString;
 use crate::topology_graph::{
     GroupBy, NodeId, Relation, TopologyEdge, TopologyGraph, TopologyKind, TopologyNode,
 };
-use crate::topology_route::{EdgeRoute, EdgeShape, route_edges};
+use crate::topology_route::{EdgeRoute, route_edges};
 
 /// A card is at least this wide, and as wide as its longest name needs up to `MAX_NODE_WIDTH`.
 pub(crate) const MIN_NODE_WIDTH: f32 = 200.;
@@ -196,10 +196,9 @@ pub(crate) struct TopologyLayout {
 
 impl TopologyLayout {
     /// The routes of edges the graph does not hold (the 0049 `Calls` edges) over this layout's
-    /// cards and bands. Nothing moves, and the layout is not computed again.
-    pub(crate) fn route_extra(&self, edges: &[TopologyEdge], shape: EdgeShape) -> Vec<EdgeRoute> {
-        let frames: Vec<GraphRect> = self.bands.iter().map(|band| band.rect).collect();
-        route_edges(edges, &self.rects, &frames, shape)
+    /// cards. Nothing moves, and the layout is not computed again.
+    pub(crate) fn route_extra(&self, edges: &[TopologyEdge]) -> Vec<EdgeRoute> {
+        route_edges(edges, &self.rects)
     }
 }
 
@@ -266,15 +265,13 @@ struct BandPlan {
 /// from scratch, the bands flow into as many band-columns as make the extent look like it.
 /// `pins` move nodes to the origins the user dragged them to. `previous` seeds the order, the
 /// offsets of the columns, and the band-columns from an earlier layout of the same namespace and
-/// grouping, and skips the sweeps; without it the order comes from sorting and the sweeps. `edges`
-/// only shapes the routes: the cards do not move with it.
+/// grouping, and skips the sweeps; without it the order comes from sorting and the sweeps.
 pub(crate) fn layout(
     graph: &TopologyGraph,
     group_by: GroupBy,
     aspect: f32,
     pins: &HashMap<NodeId, GraphPoint>,
     previous: Option<&TopologyLayout>,
-    edges: EdgeShape,
 ) -> TopologyLayout {
     let seed = previous.map(Seed::of);
     let neighbours = neighbours(graph);
@@ -334,8 +331,7 @@ pub(crate) fn layout(
         }
     }
     let extent = extent_of(&rects, &bands);
-    let frames: Vec<GraphRect> = bands.iter().map(|band| band.rect).collect();
-    let routes = route_edges(&graph.edges, &rects, &frames, edges);
+    let routes = route_edges(&graph.edges, &rects);
     TopologyLayout {
         rects,
         routes,

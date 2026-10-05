@@ -1,61 +1,75 @@
-//! The routes of the edges (0022b polish): an edge never runs behind a card it does not join, so
-//! it can never look like a link it is not. An edge between neighbouring columns is one smooth
-//! curve through the gutter. Any other edge leaves its card by the side, bends along the vertical
-//! lane in the gutter, crosses over in a horizontal corridor that is free of cards, and enters the
-//! other card by the side. With `EdgeShape::Curves` (0050) every edge is one smooth curve while a
-//! free one exists, and the lane route with rounded corners otherwise. Pure, in graph units, and
-//! computed once per layout, not per frame.
+//! The routes of the edges (0022b polish, 0050): every edge is one smooth cubic curve between an
+//! anchor of its source card and an anchor of its target card. A card has four anchors, the
+//! middles of its sides. The pair is chosen from the geometry (`facing_sides`); when a card is in
+//! the way, the other pairs are tried before the curve is accepted as it is. Pure, in graph
+//! units, and computed once per layout, not per frame.
 
 use gpui_kit::{Point, point};
-use serde::{Deserialize, Serialize};
 
-use crate::topology_graph::{Relation, TopologyEdge};
+use crate::topology_graph::TopologyEdge;
 use crate::topology_layout::{GraphPoint, GraphRect};
 use crate::topology_stroke::flatten_cubic;
 
-/// How far a lane runs from the card side: the middle of the gutter between two columns.
-const LANE_OFFSET: f32 = 25.;
-const CORNER_RADIUS: f32 = 12.;
-const CORNER_STEPS: usize = 6;
 /// Cards are avoided with this much room.
 const CLEARANCE: f32 = 4.;
-/// A curve between columns needs at least this much room between the cards.
-const DIRECT_GAP: f32 = 20.;
 /// How far a curve may stray from its true shape, in graph units (0.2 px at the highest zoom).
 const FLATTEN_TOLERANCE: f32 = 0.1;
-/// The corridor above and below everything: always free.
-const MARGIN_CORRIDOR: f32 = 12.;
-/// Corridors tried for one edge before the margin one.
-const MAX_CORRIDORS: usize = 24;
-/// The straight horizontal run into the target card. It is the arrow: the canvas trims exactly
-/// `ARROW_LENGTH + ARROW_TIP_GAP` off the end, so the stroke stops on the true tangent and the
-/// arrow points straight along it (a test pins the sum, because this module must not import the
-/// canvas).
+/// The straight run into the target card, perpendicular to its side. It is the arrow: the canvas
+/// trims exactly `ARROW_LENGTH + ARROW_TIP_GAP` off the end, so the stroke stops on the true
+/// tangent and the arrow points straight along it (a test pins the sum, because this module must
+/// not import the canvas).
 const ARRIVAL_STUB: f32 = 13.;
-/// How far a curve bulges out of a card when it has to turn back (a U-turn).
+/// The least a curve bulges out of a card when its two sides do not face each other.
 const LOOP_REACH: f32 = 24.;
+/// How far into its own cards a curve may dip before the pair of anchors is rejected.
+const OWN_INSET: f32 = 1.;
 
-/// How the edges are drawn: geometry only. Color, dash, width, and emphasis ignore it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum EdgeShape {
-    /// Right-angle lanes with rounded corners, and a curve between neighbouring columns.
-    #[default]
-    Elbows,
-    /// One smooth curve per edge.
-    Curves,
+/// A side of a card, and so the anchor at its middle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
+    Top,
+    Bottom,
 }
 
-impl EdgeShape {
-    pub(crate) fn label(self) -> &'static str {
+impl Side {
+    const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Top, Self::Bottom];
+
+    /// The unit vector pointing out of the card; a curve leaves and enters along it.
+    fn normal(self) -> (f32, f32) {
         match self {
-            Self::Elbows => "Elbows",
-            Self::Curves => "Curves",
+            Self::Left => (-1., 0.),
+            Self::Right => (1., 0.),
+            Self::Top => (0., -1.),
+            Self::Bottom => (0., 1.),
+        }
+    }
+
+    fn anchor(self, rect: GraphRect) -> GraphPoint {
+        let center = rect.center();
+        match self {
+            Self::Left => GraphPoint {
+                x: rect.origin.x,
+                y: center.y,
+            },
+            Self::Right => GraphPoint {
+                x: rect.right(),
+                y: center.y,
+            },
+            Self::Top => GraphPoint {
+                x: center.x,
+                y: rect.origin.y,
+            },
+            Self::Bottom => GraphPoint {
+                x: center.x,
+                y: rect.bottom(),
+            },
         }
     }
 }
 
-/// An edge as a polyline in graph units, with its corners rounded.
+/// An edge as a polyline in graph units.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct EdgeRoute {
     pub(crate) points: Vec<GraphPoint>,
@@ -85,354 +99,215 @@ impl EdgeRoute {
 
     /// The box of the points: `(left, top, right, bottom)`.
     pub(crate) fn bounds(&self) -> (f32, f32, f32, f32) {
-        let fold = |value: fn(&GraphPoint) -> f32, init: f32, pick: fn(f32, f32) -> f32| {
-            self.points.iter().map(value).fold(init, pick)
-        };
-        (
-            fold(|p| p.x, f32::INFINITY, f32::min),
-            fold(|p| p.y, f32::INFINITY, f32::min),
-            fold(|p| p.x, f32::NEG_INFINITY, f32::max),
-            fold(|p| p.y, f32::NEG_INFINITY, f32::max),
-        )
+        bounds_of(&self.points)
     }
 }
 
 /// The route of every edge of `edges`, in edge order: the graph's own, or the 0049 `Calls` edges
-/// routed over the same cards. `bands` are the frames, which only decide where the corridors
-/// between rows of bands are.
-pub(crate) fn route_edges(
-    edges: &[TopologyEdge],
-    rects: &[GraphRect],
-    bands: &[GraphRect],
-    shape: EdgeShape,
-) -> Vec<EdgeRoute> {
-    let space = Space::new(rects, bands);
+/// routed over the same cards.
+pub(crate) fn route_edges(edges: &[TopologyEdge], rects: &[GraphRect]) -> Vec<EdgeRoute> {
     edges
         .iter()
-        .map(|edge| route_edge(edge.from, edge.to, edge.relation, shape, &space))
+        .map(|edge| route_edge(edge.from, edge.to, rects))
         .collect()
 }
-/// The cards, and the horizontal corridors between them.
-struct Space<'a> {
-    rects: &'a [GraphRect],
-    /// The y of every corridor candidate, sorted.
-    corridors: Vec<f32>,
-    top: f32,
-    bottom: f32,
+
+/// The anchors of an edge: where it leaves the source and where it enters the target.
+#[derive(Clone, Copy)]
+struct Anchors {
+    start: GraphPoint,
+    start_side: Side,
+    end: GraphPoint,
+    end_side: Side,
+    /// A curve that turns back or bends round a corner bulges out by a share of its span; a tight
+    /// one only by `LOOP_REACH`, so it fits in a narrow gutter between rows.
+    is_tight: bool,
 }
 
-impl<'a> Space<'a> {
-    fn new(rects: &'a [GraphRect], bands: &[GraphRect]) -> Self {
-        let mut corridors = Vec::new();
-        for rect in rects {
-            corridors.push(rect.origin.y - CLEARANCE * 2.5);
-            corridors.push(rect.bottom() + CLEARANCE * 2.5);
-        }
-        for band in bands {
-            corridors.push(band.origin.y - 22.);
-            corridors.push(band.bottom() + 22.);
-        }
-        corridors.sort_by(f32::total_cmp);
-        corridors.dedup_by(|a, b| (*a - *b).abs() < 1.);
-        let all = || rects.iter().chain(bands);
-        let top = all()
-            .map(|rect| rect.origin.y)
-            .fold(f32::INFINITY, f32::min);
-        let bottom = all()
-            .map(GraphRect::bottom)
-            .fold(f32::NEG_INFINITY, f32::max);
+impl Anchors {
+    fn between(source: GraphRect, start_side: Side, target: GraphRect, end_side: Side) -> Self {
         Self {
-            rects,
-            corridors,
-            top: top - MARGIN_CORRIDOR,
-            bottom: bottom + MARGIN_CORRIDOR,
+            start: start_side.anchor(source),
+            start_side,
+            end: end_side.anchor(target),
+            end_side,
+            is_tight: false,
         }
     }
 
-    /// Whether no card but `from` and `to` meets the box of `points`, grown by `CLEARANCE`.
-    fn box_is_clear(&self, points: &[GraphPoint], from: usize, to: usize) -> bool {
-        let fold = |value: fn(&GraphPoint) -> f32, init: f32, pick: fn(f32, f32) -> f32| {
-            points.iter().map(value).fold(init, pick)
-        };
-        let (left, right) = (
-            fold(|p| p.x, f32::INFINITY, f32::min),
-            fold(|p| p.x, f32::NEG_INFINITY, f32::max),
-        );
-        let (top, bottom) = (
-            fold(|p| p.y, f32::INFINITY, f32::min),
-            fold(|p| p.y, f32::NEG_INFINITY, f32::max),
-        );
-        self.rects.iter().enumerate().all(|(index, rect)| {
-            index == from
-                || index == to
-                || rect.right() + CLEARANCE < left
-                || rect.origin.x - CLEARANCE > right
-                || rect.bottom() + CLEARANCE < top
-                || rect.origin.y - CLEARANCE > bottom
-        })
-    }
-
-    /// Whether a polyline keeps clear of every card but `from` and `to`.
-    fn is_free(&self, points: &[GraphPoint], from: usize, to: usize) -> bool {
-        points.windows(2).all(|pair| {
-            let (left, right) = (pair[0].x.min(pair[1].x), pair[0].x.max(pair[1].x));
-            let (top, bottom) = (pair[0].y.min(pair[1].y), pair[0].y.max(pair[1].y));
-            self.rects.iter().enumerate().all(|(index, rect)| {
-                if index == from || index == to {
-                    return true;
-                }
-                let outside = rect.right() + CLEARANCE < left
-                    || rect.origin.x - CLEARANCE > right
-                    || rect.bottom() + CLEARANCE < top
-                    || rect.origin.y - CLEARANCE > bottom;
-                outside || !crosses(pair[0], pair[1], *rect, CLEARANCE)
-            })
-        })
+    fn tight(self) -> Self {
+        Self {
+            is_tight: true,
+            ..self
+        }
     }
 }
 
-fn route_edge(
-    from: usize,
-    to: usize,
-    relation: Relation,
-    shape: EdgeShape,
-    space: &Space,
-) -> EdgeRoute {
-    let (source, target) = (space.rects[from], space.rects[to]);
-    let wants_curve = match shape {
-        EdgeShape::Curves => true,
-        EdgeShape::Elbows => {
-            // A mount runs from the side lane to its config card; an access edge is a curve only
-            // along a row of the access layer, and takes the lanes when it comes down from a
-            // workload.
-            let is_level = (source.origin.y - target.origin.y).abs() < 1.;
-            let has_room = target.origin.x >= source.right() + DIRECT_GAP;
-            has_room
-                && match relation {
-                    Relation::Mounts => false,
-                    Relation::Access => is_level,
-                    Relation::Owns | Relation::RoutesTo | Relation::Calls => true,
-                }
+/// The sides an edge uses by default: when the horizontal gap between the cards is at least the
+/// vertical one, out of the right side into the left side (or the reverse for a target on the
+/// left); otherwise out of the bottom into the top (or the reverse for a target above). Cards
+/// that overlap on an axis have a negative gap there, so two cards in one column are joined
+/// vertically.
+fn facing_sides(source: GraphRect, target: GraphRect) -> (Side, Side) {
+    let gap_x = (target.origin.x - source.right()).max(source.origin.x - target.right());
+    let gap_y = (target.origin.y - source.bottom()).max(source.origin.y - target.bottom());
+    if gap_x >= gap_y {
+        if target.center().x >= source.center().x {
+            (Side::Right, Side::Left)
+        } else {
+            (Side::Left, Side::Right)
         }
-    };
-    if wants_curve {
-        let ports = ports(source, target);
-        let curve = bezier(ports);
-        let [start, c1, c2, base] = controls(ports);
-        let is_clear = space.box_is_clear(&[start, c1, c2, base, ports.end], from, to);
-        if is_clear || space.is_free(&curve, from, to) {
+    } else if target.center().y >= source.center().y {
+        (Side::Bottom, Side::Top)
+    } else {
+        (Side::Top, Side::Bottom)
+    }
+}
+
+fn route_edge(from: usize, to: usize, rects: &[GraphRect]) -> EdgeRoute {
+    let (source, target) = (rects[from], rects[to]);
+    let (start_side, end_side) = facing_sides(source, target);
+    // The default pair first; then, if a card is in the way, the other pairs (the nearest first,
+    // each also as a tight curve) may get round it.
+    let preferred = Anchors::between(source, start_side, target, end_side);
+    let mut others: Vec<Anchors> = Side::ALL
+        .into_iter()
+        .flat_map(|a| Side::ALL.into_iter().map(move |b| (a, b)))
+        .filter(|pair| *pair != (start_side, end_side))
+        .map(|(a, b)| Anchors::between(source, a, target, b))
+        .collect();
+    others.sort_by(|a, b| distance(a.start, a.end).total_cmp(&distance(b.start, b.end)));
+    let candidates = std::iter::once(preferred).chain(
+        others
+            .into_iter()
+            .flat_map(|anchors| [anchors, anchors.tight()]),
+    );
+    // ponytail: when every pair is blocked (a long edge across packed columns) the curve with the
+    // fewest cards in the way is kept and passes behind them; a waypoint search could avoid that.
+    let mut best: Option<Vec<GraphPoint>> = None;
+    let mut fewest = usize::MAX;
+    for anchors in candidates {
+        let curve = bezier(anchors);
+        let Some(blocked) = cards_in_the_way(anchors, &curve, from, to, rects, fewest) else {
+            continue;
+        };
+        if blocked == 0 {
             return EdgeRoute { points: curve };
+        }
+        if blocked < fewest {
+            fewest = blocked;
+            best = Some(curve);
         }
     }
     EdgeRoute {
-        points: round_corners(&along_lanes(from, to, space)),
-    }
-}
-
-/// Where an edge leaves and enters its cards, and the direction it travels in at both: `out` and
-/// `into` are +1 for rightward and -1 for leftward.
-#[derive(Clone, Copy)]
-struct Ports {
-    start: GraphPoint,
-    out: f32,
-    end: GraphPoint,
-    into: f32,
-}
-
-/// The ports of the lane route: out of the side that faces the target, into the side that faces
-/// the lane.
-fn ports(source: GraphRect, target: GraphRect) -> Ports {
-    let leaves_right = target.center().x >= source.center().x;
-    let start = side_port(source, leaves_right);
-    let out = if leaves_right { 1. } else { -1. };
-    let lane_out = start.x + out * LANE_OFFSET;
-    let arrives_right = lane_out > target.center().x;
-    Ports {
-        start,
-        out,
-        end: side_port(target, arrives_right),
-        into: if arrives_right { -1. } else { 1. },
+        points: best.unwrap_or_else(|| bezier(preferred)),
     }
 }
 
 /// The four points of the cubic: the start, two control points, and the base of the stub.
-fn controls(ports: Ports) -> [GraphPoint; 4] {
-    let Ports {
-        start,
-        out,
-        end,
-        into,
-    } = ports;
+fn controls(anchors: Anchors) -> [GraphPoint; 4] {
+    let (out_x, out_y) = anchors.start_side.normal();
+    let (in_x, in_y) = anchors.end_side.normal();
     let base = GraphPoint {
-        x: end.x - into * ARRIVAL_STUB,
-        y: end.y,
+        x: anchors.end.x + in_x * ARRIVAL_STUB,
+        y: anchors.end.y + in_y * ARRIVAL_STUB,
     };
-    let forward = (base.x - start.x) * out;
-    // The floor is for a U-turn only: on a forward S it would run the curve backwards when the
-    // gap is small after a drag.
-    let reach = if out == into && forward > 0. {
+    let forward = (base.x - anchors.start.x) * out_x + (base.y - anchors.start.y) * out_y;
+    let is_facing = (in_x, in_y) == (-out_x, -out_y);
+    // The reach is half the way for an S between facing sides. Elsewhere (a turn back, or a
+    // corner) it grows with the span, so the curve clears the card it leaves; the floor keeps a
+    // short one round.
+    let reach = if is_facing && forward > 0. {
         forward / 2.
-    } else {
+    } else if anchors.is_tight {
         LOOP_REACH
-    };
-    let shifted = |from: GraphPoint, dx: f32| GraphPoint {
-        x: from.x + dx,
-        y: from.y,
+    } else {
+        (distance(anchors.start, base) / 4.).max(LOOP_REACH)
     };
     [
-        start,
-        shifted(start, out * reach),
-        shifted(base, -into * reach),
+        anchors.start,
+        GraphPoint {
+            x: anchors.start.x + out_x * reach,
+            y: anchors.start.y + out_y * reach,
+        },
+        GraphPoint {
+            x: base.x + in_x * reach,
+            y: base.y + in_y * reach,
+        },
         base,
     ]
 }
 
-/// One cubic with horizontal tangents (React Flow's default edge) from the start to the base of
-/// a straight stub into the end.
-fn bezier(ports: Ports) -> Vec<GraphPoint> {
-    let [start, c1, c2, base] = controls(ports);
+/// One cubic, perpendicular to both sides (React Flow's default edge), from the start to the
+/// base of a straight stub into the end.
+fn bezier(anchors: Anchors) -> Vec<GraphPoint> {
+    let [start, c1, c2, base] = controls(anchors);
     let at = |p: GraphPoint| point(p.x, p.y);
     let mut points: Vec<GraphPoint> =
         flatten_cubic(at(start), at(c1), at(c2), at(base), FLATTEN_TOLERANCE)
             .into_iter()
             .map(graph_point)
             .collect();
-    points.push(ports.end);
+    points.push(anchors.end);
     points
 }
 
-/// The middle of the right or left side of a card.
-fn side_port(rect: GraphRect, is_right: bool) -> GraphPoint {
-    GraphPoint {
-        x: if is_right {
-            rect.right()
-        } else {
-            rect.origin.x
-        },
-        y: rect.center().y,
-    }
-}
-
-/// Out of the side of `from` that faces `to`, along the lane of the gutter, across in a free
-/// corridor, and into the side of `to` that faces that lane.
-fn along_lanes(from: usize, to: usize, space: &Space) -> Vec<GraphPoint> {
-    let (source, target) = (space.rects[from], space.rects[to]);
-    let Ports {
-        start,
-        out,
-        end,
-        into,
-    } = ports(source, target);
-    let lane_out = start.x + out * LANE_OFFSET;
-    let arrives_right = into < 0.;
-    let lane_in = end.x
-        + if arrives_right {
-            LANE_OFFSET
-        } else {
-            -LANE_OFFSET
-        };
-    let through = |corridor: f32| {
-        let mut points = vec![
-            start,
-            GraphPoint {
-                x: lane_out,
-                y: start.y,
-            },
-            GraphPoint {
-                x: lane_out,
-                y: corridor,
-            },
-        ];
-        if (lane_out - lane_in).abs() > 1. {
-            points.push(GraphPoint {
-                x: lane_in,
-                y: corridor,
-            });
-        }
-        points.push(GraphPoint {
-            x: lane_in,
-            y: end.y,
-        });
-        points.push(end);
-        simplified(points)
-    };
-    // The same lane up and down needs no corridor at all.
-    if (lane_out - lane_in).abs() <= 1. {
-        let points = through(start.y);
-        if space.is_free(&points, from, to) {
-            return points;
-        }
-    }
-    let wanted = (start.y + end.y) / 2.;
-    let mut candidates: Vec<f32> = space
-        .corridors
-        .iter()
-        .copied()
-        .chain([start.y, end.y])
-        .collect();
-    candidates.sort_by(|a, b| {
-        let cost = |y: f32| (y - start.y).abs() + (y - end.y).abs() + (y - wanted).abs() * 0.01;
-        cost(*a).total_cmp(&cost(*b))
+/// How many other cards the curve runs behind, or `None` when it enters one of its own two cards
+/// (which no pair of anchors may do).
+fn cards_in_the_way(
+    anchors: Anchors,
+    curve: &[GraphPoint],
+    from: usize,
+    to: usize,
+    rects: &[GraphRect],
+    cap: usize,
+) -> Option<usize> {
+    let enters_own = [from, to].iter().any(|card| {
+        curve
+            .windows(2)
+            .any(|pair| crosses(pair[0], pair[1], rects[*card], -OWN_INSET))
     });
-    for corridor in candidates.into_iter().take(MAX_CORRIDORS) {
-        let points = through(corridor);
-        if space.is_free(&points, from, to) {
-            return points;
-        }
+    if enters_own {
+        return None;
     }
-    // Above or below everything nothing is in the way.
-    let corridor = if (start.y - space.top).abs() + (end.y - space.top).abs()
-        <= (start.y - space.bottom).abs() + (end.y - space.bottom).abs()
-    {
-        space.top
-    } else {
-        space.bottom
+    // The curve lies inside the box of its control points: only the cards that meet that box need
+    // the per-segment test.
+    let [start, c1, c2, base] = controls(anchors);
+    let (left, top, right, bottom) = bounds_of(&[start, c1, c2, base, anchors.end]);
+    let in_the_way = rects
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != from && *index != to)
+        .filter(|(_, rect)| {
+            rect.right() + CLEARANCE >= left
+                && rect.origin.x - CLEARANCE <= right
+                && rect.bottom() + CLEARANCE >= top
+                && rect.origin.y - CLEARANCE <= bottom
+        })
+        .filter(|(_, rect)| {
+            curve
+                .windows(2)
+                .any(|pair| crosses(pair[0], pair[1], **rect, CLEARANCE))
+        })
+        .take(cap)
+        .count();
+    Some(in_the_way)
+}
+
+fn bounds_of(points: &[GraphPoint]) -> (f32, f32, f32, f32) {
+    let fold = |value: fn(&GraphPoint) -> f32, init: f32, pick: fn(f32, f32) -> f32| {
+        points.iter().map(value).fold(init, pick)
     };
-    through(corridor)
+    (
+        fold(|p| p.x, f32::INFINITY, f32::min),
+        fold(|p| p.y, f32::INFINITY, f32::min),
+        fold(|p| p.x, f32::NEG_INFINITY, f32::max),
+        fold(|p| p.y, f32::NEG_INFINITY, f32::max),
+    )
 }
 
-/// The points without a repeat, and without a middle point of a straight run.
-fn simplified(points: Vec<GraphPoint>) -> Vec<GraphPoint> {
-    let mut kept: Vec<GraphPoint> = Vec::with_capacity(points.len());
-    for at in points {
-        if kept.last().is_some_and(|last| distance(*last, at) < 1e-3) {
-            continue;
-        }
-        while kept.len() >= 2 {
-            let (a, b) = (kept[kept.len() - 2], kept[kept.len() - 1]);
-            let cross = (b.x - a.x) * (at.y - b.y) - (b.y - a.y) * (at.x - b.x);
-            if cross.abs() > 1e-3 {
-                break;
-            }
-            kept.pop();
-        }
-        kept.push(at);
-    }
-    kept
-}
-
-/// The polyline with each corner replaced by a quadratic curve through it, as wide as the two
-/// segments allow, at most `CORNER_RADIUS`.
-fn round_corners(points: &[GraphPoint]) -> Vec<GraphPoint> {
-    let mut rounded = vec![points[0]];
-    for corner in points.windows(3) {
-        let (before, at, after) = (corner[0], corner[1], corner[2]);
-        let (to_before, to_after) = (distance(before, at), distance(at, after));
-        let radius = CORNER_RADIUS.min(to_before / 2.).min(to_after / 2.);
-        let enter = lerp(at, before, radius / to_before);
-        let leave = lerp(at, after, radius / to_after);
-        rounded.push(enter);
-        for step in 1..CORNER_STEPS {
-            let t = step as f32 / CORNER_STEPS as f32;
-            rounded.push(lerp(lerp(enter, at, t), lerp(at, leave, t), t));
-        }
-        rounded.push(leave);
-    }
-    rounded.push(points[points.len() - 1]);
-    rounded
-}
-
-/// Whether the segment `a`-`b` meets `rect` grown by `margin` (Liang-Barsky).
+/// Whether the segment `a`-`b` meets `rect` grown by `margin` (Liang-Barsky); a negative margin
+/// shrinks the rect.
 fn crosses(a: GraphPoint, b: GraphPoint, rect: GraphRect, margin: f32) -> bool {
     let (left, top) = (rect.origin.x - margin, rect.origin.y - margin);
     let (right, bottom) = (rect.right() + margin, rect.bottom() + margin);
@@ -465,13 +340,6 @@ fn crosses(a: GraphPoint, b: GraphPoint, rect: GraphRect, margin: f32) -> bool {
 
 fn graph_point(at: Point<f32>) -> GraphPoint {
     GraphPoint { x: at.x, y: at.y }
-}
-
-fn lerp(a: GraphPoint, b: GraphPoint, t: f32) -> GraphPoint {
-    GraphPoint {
-        x: a.x + (b.x - a.x) * t,
-        y: a.y + (b.y - a.y) * t,
-    }
 }
 
 fn distance(a: GraphPoint, b: GraphPoint) -> f32 {

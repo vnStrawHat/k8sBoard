@@ -18,14 +18,7 @@ fn no_pins() -> HashMap<NodeId, GraphPoint> {
 }
 
 fn components(graph: &TopologyGraph) -> TopologyLayout {
-    layout(
-        graph,
-        GroupBy::Components,
-        TALL,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    )
+    layout(graph, GroupBy::Components, TALL, &no_pins(), None)
 }
 
 fn rect(graph: &TopologyGraph, layout: &TopologyLayout, id: &NodeId) -> GraphRect {
@@ -253,14 +246,7 @@ fn barycenter_untangles_shared_service_fixture() {
         .with_pod(pod("px", &["team=x"], Some(("ReplicaSet", "rs-x"))))
         .with_pod(pod("py", &["team=y"], Some(("ReplicaSet", "rs-y"))))
         .graph();
-    let layout = layout(
-        &graph,
-        GroupBy::App,
-        TALL,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let layout = layout(&graph, GroupBy::App, TALL, &no_pins(), None);
     assert_eq!(crossings(&graph, &layout), 0);
 }
 
@@ -349,14 +335,7 @@ fn new_pod_keeps_siblings_in_place() {
     let before = api_with(2);
     let first = components(&before);
     let after = api_with(3);
-    let second = layout(
-        &after,
-        GroupBy::Components,
-        TALL,
-        &no_pins(),
-        Some(&first),
-        EdgeShape::Elbows,
-    );
+    let second = layout(&after, GroupBy::Components, TALL, &no_pins(), Some(&first));
     for node in &before.nodes {
         assert_eq!(
             rect(&before, &first, &node.id),
@@ -385,14 +364,7 @@ fn previous_drops_removed_ids() {
             pod("api-1-2", &[], Some(("ReplicaSet", "api-1"))),
         ])
         .graph();
-    let second = layout(
-        &after,
-        GroupBy::Components,
-        TALL,
-        &no_pins(),
-        Some(&first),
-        EdgeShape::Elbows,
-    );
+    let second = layout(&after, GroupBy::Components, TALL, &no_pins(), Some(&first));
     assert_eq!(second.rects.len(), after.nodes.len());
     let kept_first = rect(&after, &second, &object(TopologyKind::Pod, "api-1-0"));
     let kept_last = rect(&after, &second, &object(TopologyKind::Pod, "api-1-2"));
@@ -407,14 +379,7 @@ fn app_bands_are_titled_and_sorted() {
             pod("a-1", &["app=alpha"], None),
         ])
         .graph();
-    let layout = layout(
-        &graph,
-        GroupBy::App,
-        TALL,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let layout = layout(&graph, GroupBy::App, TALL, &no_pins(), None);
     let titles: Vec<&str> = layout
         .bands
         .iter()
@@ -431,14 +396,7 @@ fn ungrouped_band_is_last() {
     let graph = Fixture::default()
         .with_pods([pod("loose", &[], None), pod("z-1", &["app=zeta"], None)])
         .graph();
-    let layout = layout(
-        &graph,
-        GroupBy::App,
-        TALL,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let layout = layout(&graph, GroupBy::App, TALL, &no_pins(), None);
     let titles: Vec<&str> = layout
         .bands
         .iter()
@@ -453,14 +411,7 @@ fn pinned_node_keeps_its_origin() {
     let free = components(&graph);
     let pinned_id = object(TopologyKind::Pod, "api-1-0");
     let pins = HashMap::from([(pinned_id.clone(), GraphPoint { x: 900., y: 500. })]);
-    let pinned = layout(
-        &graph,
-        GroupBy::Components,
-        TALL,
-        &pins,
-        None,
-        EdgeShape::Elbows,
-    );
+    let pinned = layout(&graph, GroupBy::Components, TALL, &pins, None);
     assert_eq!(
         rect(&graph, &pinned, &pinned_id).origin,
         GraphPoint { x: 900., y: 500. }
@@ -520,12 +471,12 @@ fn budget_fixture(services: usize, deployments: usize, accounts: Option<usize>) 
 }
 
 /// Builds and lays `fixture` out, prints the time, and returns the node and edge counts.
-fn measure_budget(name: &str, fixture: &Fixture, edges: EdgeShape) -> (usize, usize) {
+fn measure_budget(name: &str, fixture: &Fixture) -> (usize, usize) {
     let started = Instant::now();
     let TopologyBuild::Graph(graph) = fixture.build() else {
         panic!("the realistic input is within the limits");
     };
-    let built = layout(&graph, GroupBy::App, WIDE, &no_pins(), None, edges);
+    let built = layout(&graph, GroupBy::App, WIDE, &no_pins(), None);
     let elapsed = started.elapsed();
     eprintln!(
         "{name}: {elapsed:?} for {} nodes, {} edges",
@@ -542,14 +493,9 @@ fn topology_budget() {
     // is only printed: the work counts are the deterministic ceiling (measured: 340 nodes, 300
     // edges), so a busy machine cannot fail the test.
     let fixture = budget_fixture(40, 100, None);
-    for (name, shape) in [
-        ("topology_budget", EdgeShape::Elbows),
-        ("topology_budget_curves", EdgeShape::Curves),
-    ] {
-        let (nodes, edges) = measure_budget(name, &fixture, shape);
-        assert!(nodes <= 400, "{nodes} nodes");
-        assert!(edges <= 400, "{edges} edges");
-    }
+    let (nodes, edges) = measure_budget("topology_budget", &fixture);
+    assert!(nodes <= 400, "{nodes} nodes");
+    assert!(edges <= 400, "{edges} edges");
 }
 
 #[test]
@@ -560,7 +506,6 @@ fn topology_budget_with_rbac() {
     let (nodes, edges) = measure_budget(
         "topology_budget_with_rbac",
         &budget_fixture(10, 50, Some(30)),
-        EdgeShape::Elbows,
     );
     assert!(nodes <= 300, "{nodes} nodes");
     assert!(edges <= 360, "{edges} edges");
@@ -611,22 +556,8 @@ fn columns_of(layout: &TopologyLayout) -> usize {
 #[test]
 fn bands_flow_into_band_columns_to_match_a_wide_canvas() {
     let graph = apps(10, 2).graph();
-    let tall = layout(
-        &graph,
-        GroupBy::App,
-        TALL,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    );
-    let wide = layout(
-        &graph,
-        GroupBy::App,
-        WIDE,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let tall = layout(&graph, GroupBy::App, TALL, &no_pins(), None);
+    let wide = layout(&graph, GroupBy::App, WIDE, &no_pins(), None);
     assert_eq!(columns_of(&tall), 1);
     assert!(columns_of(&wide) > 1);
     // The wide layout is closer to the canvas shape than the stack.
@@ -637,14 +568,7 @@ fn bands_flow_into_band_columns_to_match_a_wide_canvas() {
 #[test]
 fn band_columns_do_not_overlap() {
     let graph = apps(10, 2).graph();
-    let wide = layout(
-        &graph,
-        GroupBy::App,
-        WIDE,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let wide = layout(&graph, GroupBy::App, WIDE, &no_pins(), None);
     for (n, a) in wide.bands.iter().enumerate() {
         for b in &wide.bands[n + 1..] {
             let apart = a.rect.right() <= b.rect.origin.x
@@ -659,22 +583,8 @@ fn band_columns_do_not_overlap() {
 #[test]
 fn band_packing_is_deterministic() {
     let graph = apps(10, 2).graph();
-    let first = layout(
-        &graph,
-        GroupBy::App,
-        WIDE,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    );
-    let second = layout(
-        &graph,
-        GroupBy::App,
-        WIDE,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let first = layout(&graph, GroupBy::App, WIDE, &no_pins(), None);
+    let second = layout(&graph, GroupBy::App, WIDE, &no_pins(), None);
     assert_eq!(first.rects, second.rects);
 }
 
@@ -692,14 +602,7 @@ fn adding_a_pod_moves_no_other_card() {
         fixture
     };
     let before = busy().graph();
-    let first = layout(
-        &before,
-        GroupBy::App,
-        WIDE,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let first = layout(&before, GroupBy::App, WIDE, &no_pins(), None);
     let after = busy()
         .with_pod(pod(
             "app-03-7d9f-9",
@@ -707,14 +610,7 @@ fn adding_a_pod_moves_no_other_card() {
             Some(("ReplicaSet", "app-03-7d9f")),
         ))
         .graph();
-    let second = layout(
-        &after,
-        GroupBy::App,
-        WIDE,
-        &no_pins(),
-        Some(&first),
-        EdgeShape::Elbows,
-    );
+    let second = layout(&after, GroupBy::App, WIDE, &no_pins(), Some(&first));
     assert_eq!(columns_of(&second), columns_of(&first));
     for (n, (was, is)) in first.bands.iter().zip(&second.bands).enumerate() {
         assert_eq!(was.rect, is.rect, "band {n}");
@@ -732,23 +628,9 @@ fn adding_a_pod_moves_no_other_card() {
 #[test]
 fn a_new_band_joins_the_shortest_column_and_keeps_the_others() {
     let before = apps(6, 2).graph();
-    let first = layout(
-        &before,
-        GroupBy::App,
-        WIDE,
-        &no_pins(),
-        None,
-        EdgeShape::Elbows,
-    );
+    let first = layout(&before, GroupBy::App, WIDE, &no_pins(), None);
     let after = apps(7, 2).graph();
-    let second = layout(
-        &after,
-        GroupBy::App,
-        WIDE,
-        &no_pins(),
-        Some(&first),
-        EdgeShape::Elbows,
-    );
+    let second = layout(&after, GroupBy::App, WIDE, &no_pins(), Some(&first));
     for node in &before.nodes {
         let was = rect(&before, &first, &node.id);
         let is = rect(&after, &second, &node.id);
@@ -989,14 +871,7 @@ fn new_pod_moves_no_access_card() {
     let before = busy(2);
     let first = components(&before);
     let after = busy(3);
-    let second = layout(
-        &after,
-        GroupBy::Components,
-        TALL,
-        &no_pins(),
-        Some(&first),
-        EdgeShape::Elbows,
-    );
+    let second = layout(&after, GroupBy::Components, TALL, &no_pins(), Some(&first));
     for node in &before.nodes {
         assert_eq!(
             rect(&before, &first, &node.id),
@@ -1012,14 +887,7 @@ fn a_new_binding_takes_a_free_slot_and_moves_nothing() {
     let before = access_chain(1, 1).graph();
     let first = components(&before);
     let after = access_chain(1, 2).graph();
-    let second = layout(
-        &after,
-        GroupBy::Components,
-        TALL,
-        &no_pins(),
-        Some(&first),
-        EdgeShape::Elbows,
-    );
+    let second = layout(&after, GroupBy::Components, TALL, &no_pins(), Some(&first));
     for node in &before.nodes {
         assert_eq!(
             rect(&before, &first, &node.id),

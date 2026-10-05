@@ -446,14 +446,7 @@ fn traffic_view(cx: &mut gpui_kit::TestAppContext) -> Entity<TopologyView> {
     cx.update(|cx| {
         view.update(cx, |view, cx| {
             view.namespace = Some(crate::topology_fixtures::NAMESPACE.to_owned());
-            let arranged = lay_out(
-                &graph,
-                GroupBy::Components,
-                1.6,
-                &HashMap::new(),
-                None,
-                view.edge_shape,
-            );
+            let arranged = lay_out(&graph, GroupBy::Components, 1.6, &HashMap::new(), None);
             view.layout = Some((structure(&graph), GroupBy::Components, Rc::new(arranged)));
             view.build = Some(Ok(Rc::new(graph)));
             view.set_mode(TopologyMode::Traffic, cx);

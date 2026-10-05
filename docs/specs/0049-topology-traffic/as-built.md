@@ -22,7 +22,7 @@ Step 1 is its own commit. Steps 2, 3a, and 3b ship as one: the overlay, the `Cal
 | 10 | HPA to workload `Owns` edge carries the target's bytes | It stays `Idle`, and an HPA is not an ancestor when pods are summed up | A scaler is not in the data path |
 | 11 | Namespace `payments` in the fixtures | `shop`, like every other topology fixture | The builders in `topology_fixtures.rs` are fixed to `shop` |
 | 12 | `istio_sample`, `bytes_sample` in `topology_fixtures.rs` | In `topology_traffic_fixture.rs`, which also holds a hand-written copy of the fixture graph and pods for the screenshot build; a test checks the copy equals what `build_topology` makes | `topology_fixtures.rs` is test-only, and the `topology-traffic-fixture` screen needs the data in a screenshot build |
-| 13 | Screens `topology-traffic`, `topology-traffic-fixture` | Also `topology-traffic-curves` and `topology-traffic-fixture-curves` | The ui-verifier checks both edge shapes |
+| 13 | Screens `topology-traffic`, `topology-traffic-fixture` | The `-curves` variants were removed when edges became always curves (0050 as-built) | The ui-verifier checks the one shape |
 | 14 | Session tests in `topology_view_tests.rs` | `first_traffic_click_loads_names_once` and two more in `app_shell_metrics_tests.rs` | They need the session fixtures of that file |
 | 15 | A failed names read retried "at the next refresh" | A `Loaded(Err)` is read again once the last try is 30 s old | Same, driven by the tick |
 

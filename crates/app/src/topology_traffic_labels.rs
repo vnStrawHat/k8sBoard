@@ -1,5 +1,5 @@
 //! Where the labels of the flow edges go (spec 0049): centered on the arc-length midpoint of the
-//! route, so curves and elbows both carry them, only at a zoom where cards show text, and never
+//! route, so every curve carries them, only at a zoom where cards show text, and never
 //! over a card or another label. Pure screen math, no GPUI context.
 
 use gpui_kit::SharedString;

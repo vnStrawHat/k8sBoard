@@ -113,7 +113,6 @@ use crate::table_sort::next_sort;
 use crate::table_view::{FilteredTable, RowCheck, TableView};
 use crate::title_bar::{scope_label, title_bar};
 use crate::topology_graph::{NodeId, TopologyKind};
-use crate::topology_route::EdgeShape;
 use crate::topology_view::TopologyView;
 use crate::traffic_test_view::{TrafficTestView, traffic_defaults};
 use crate::value_popover::ValuePopover;
@@ -822,16 +821,7 @@ impl AppShell {
         let wants_problems = options.screen == LaunchScreen::TopologyProblems;
         let wants_selection = options.screen == LaunchScreen::TopologySelected;
         let wants_rbac = options.screen == LaunchScreen::TopologyRbac;
-        let wants_traffic = matches!(
-            options.screen,
-            LaunchScreen::TopologyTraffic | LaunchScreen::TopologyTrafficCurves
-        );
-        let wants_curves = matches!(
-            options.screen,
-            LaunchScreen::TopologyCurves
-                | LaunchScreen::TopologyTrafficCurves
-                | LaunchScreen::TopologyTrafficFixtureCurves
-        );
+        let wants_traffic = options.screen == LaunchScreen::TopologyTraffic;
         if wants_selection {
             // The flow of the selected edges stands still, so the capture is deterministic.
             cx.set_reduce_motion(true);
@@ -839,17 +829,10 @@ impl AppShell {
         shell.topology.update(cx, |view, cx| {
             view.set_problems_only(wants_problems, cx);
             view.set_rbac(wants_rbac, cx);
-            if wants_curves {
-                // In memory only: the screen must not change the saved setting.
-                view.set_edge_shape(EdgeShape::Curves, cx);
-            }
             view.select_first_deployment_once(wants_selection);
             view.start_in_traffic(wants_traffic);
             #[cfg(feature = "screenshot")]
-            if matches!(
-                options.screen,
-                LaunchScreen::TopologyTrafficFixture | LaunchScreen::TopologyTrafficFixtureCurves
-            ) {
+            if options.screen == LaunchScreen::TopologyTrafficFixture {
                 view.show_traffic_fixture(cx);
             }
             view.set_visible(is_topology, cx);

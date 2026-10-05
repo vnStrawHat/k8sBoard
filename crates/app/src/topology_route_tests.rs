@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::*;
 use crate::topology_canvas::{ARROW_HALF_WIDTH, ARROW_LENGTH, ARROW_TIP_GAP, arrow_head};
 use crate::topology_fixtures::{Fixture, Ref, ingress, pod, pod_with};
-use crate::topology_graph::TopologyKind;
+use crate::topology_graph::Relation;
 use crate::topology_graph::{GroupBy, TopologyGraph};
 use crate::topology_layout::{NODE_HEIGHT, TopologyLayout, layout};
 
@@ -98,17 +98,18 @@ fn monitoring() -> TopologyGraph {
 }
 
 fn laid_out(graph: &TopologyGraph, group_by: GroupBy, aspect: f32) -> TopologyLayout {
-    laid_out_as(graph, group_by, aspect, EdgeShape::Elbows)
+    layout(graph, group_by, aspect, &HashMap::new(), None)
 }
 
-fn laid_out_as(
-    graph: &TopologyGraph,
-    group_by: GroupBy,
-    aspect: f32,
-    shape: EdgeShape,
-) -> TopologyLayout {
-    layout(graph, group_by, aspect, &HashMap::new(), None, shape)
+fn fixtures() -> [(&'static str, TopologyGraph); 2] {
+    [("keda", keda()), ("monitoring", monitoring())]
 }
+
+const ARRANGEMENTS: [(GroupBy, f32); 3] = [
+    (GroupBy::App, 0.1),
+    (GroupBy::App, 1.7),
+    (GroupBy::Components, 1.),
+];
 
 /// Every segment of every route, against every card that is not one of its ends.
 fn crossings(graph: &TopologyGraph, layout: &TopologyLayout) -> Vec<String> {
@@ -133,246 +134,6 @@ fn crossings(graph: &TopologyGraph, layout: &TopologyLayout) -> Vec<String> {
     found
 }
 
-#[test]
-fn no_edge_runs_through_a_card_it_does_not_join() {
-    for (name, graph) in [("keda", keda()), ("monitoring", monitoring())] {
-        for (group_by, aspect) in [
-            (GroupBy::App, 0.1),
-            (GroupBy::App, 1.7),
-            (GroupBy::Components, 1.),
-        ] {
-            let arranged = laid_out(&graph, group_by, aspect);
-            let found = crossings(&graph, &arranged);
-            assert!(
-                found.is_empty(),
-                "{name} {group_by:?} {aspect}: {} crossings, e.g. {:?}",
-                found.len(),
-                found.first()
-            );
-        }
-    }
-}
-
-#[test]
-fn the_fixtures_are_big_enough_to_test_the_routing() {
-    let graph = monitoring();
-    assert!(graph.nodes.len() >= 60, "{}", graph.nodes.len());
-    assert!(graph.edges.len() >= 80, "{}", graph.edges.len());
-    let arranged = laid_out(&graph, GroupBy::App, 1.7);
-    // Some edge skips a column or crosses bands, so some route has more than a curve's worth of
-    // bends.
-    assert!(arranged.routes.iter().any(|route| route.points.len() > 30));
-    assert!(!keda().edges.is_empty());
-}
-
-#[test]
-fn a_route_leaves_and_enters_by_the_side_of_its_cards() {
-    for graph in [keda(), monitoring()] {
-        let arranged = laid_out(&graph, GroupBy::App, 1.7);
-        for (index, edge) in graph.edges.iter().enumerate() {
-            let route = &arranged.routes[index];
-            for (at, card) in [(route.start(), edge.from), (route.end(), edge.to)] {
-                let rect = arranged.rects[card];
-                let on_side =
-                    (at.x - rect.origin.x).abs() < 1e-3 || (at.x - rect.right()).abs() < 1e-3;
-                assert!(on_side, "{:?}", graph.nodes[card].id);
-                assert!((at.y - rect.center().y).abs() < 1e-3);
-            }
-        }
-    }
-}
-
-#[test]
-fn neighbouring_columns_are_joined_by_one_smooth_curve() {
-    let graph = Fixture::default()
-        .with_service("web", &["app=web"])
-        .with_deployment("web", 1, 1)
-        .with_replica_set("web-rs", Some("web"), 1, 1)
-        .with_pod(app_pod("web", 0, &[]))
-        .graph();
-    let arranged = laid_out(&graph, GroupBy::Components, 1.);
-    let owns = graph
-        .edges
-        .iter()
-        .position(|edge| {
-            edge.relation == Relation::Owns
-                && graph.nodes[edge.from].kind == crate::topology_graph::TopologyKind::Deployment
-        })
-        .expect("a deployment owns the replica set");
-    let route = &arranged.routes[owns];
-    // A curve runs monotonically to the right, flat at both ends.
-    assert!(
-        route
-            .points
-            .windows(2)
-            .all(|pair| pair[1].x >= pair[0].x - 1e-3)
-    );
-    let flat = |a: GraphPoint, b: GraphPoint| (a.y - b.y).abs() < 0.5;
-    assert!(flat(route.points[0], route.points[1]));
-    let last = route.points.len() - 1;
-    assert!(flat(route.points[last - 1], route.points[last]));
-}
-
-#[test]
-fn a_mounts_edge_leaves_by_the_side_and_runs_in_a_gutter() {
-    let graph = keda();
-    let arranged = laid_out(&graph, GroupBy::App, 0.1);
-    let mounts: Vec<usize> = graph
-        .edges
-        .iter()
-        .enumerate()
-        .filter(|(_, edge)| edge.relation == Relation::Mounts)
-        .map(|(index, _)| index)
-        .collect();
-    assert!(!mounts.is_empty());
-    for index in mounts {
-        let route = &arranged.routes[index];
-        let source = arranged.rects[graph.edges[index].from];
-        // The first segment goes sideways, out of the card, into the gutter.
-        let (a, b) = (route.points[0], route.points[1]);
-        assert!((a.y - b.y).abs() < 1e-3 && (b.x - a.x).abs() > 1.);
-        let lane = (source.right() + LANE_OFFSET, source.origin.x - LANE_OFFSET);
-        let reaches_lane = route
-            .points
-            .iter()
-            .any(|at| (at.x - lane.0).abs() < 1e-3 || (at.x - lane.1).abs() < 1e-3);
-        assert!(reaches_lane);
-    }
-}
-
-#[test]
-fn an_edge_that_skips_a_column_bends_around_the_cards_between() {
-    // Service (column 1) to pod (column 3) with a ReplicaSet in column 2 between them.
-    let graph = with_app(Fixture::default(), "web", 1, &[]).graph();
-    let arranged = laid_out(&graph, GroupBy::Components, 1.);
-    let skip = graph
-        .edges
-        .iter()
-        .position(|edge| {
-            edge.relation == Relation::RoutesTo
-                && graph.nodes[edge.from].kind == crate::topology_graph::TopologyKind::Service
-        })
-        .expect("a service routes to the pod");
-    let route = &arranged.routes[skip];
-    let (source, target) = (
-        arranged.rects[graph.edges[skip].from],
-        arranged.rects[graph.edges[skip].to],
-    );
-    assert!(target.origin.x > source.right() + 200.);
-    assert!(crossings(&graph, &arranged).is_empty());
-    // It leaves the gutter vertically: some point is above or below the source card's row.
-    assert!(
-        route
-            .points
-            .iter()
-            .any(|at| (at.y - source.center().y).abs() > 20.)
-    );
-}
-
-#[test]
-fn a_route_ends_with_the_direction_it_arrives_in() {
-    let route = EdgeRoute {
-        points: vec![
-            GraphPoint { x: 0., y: 0. },
-            GraphPoint { x: 10., y: 0. },
-            GraphPoint { x: 10., y: 0. },
-        ],
-    };
-    // A repeated last point has no direction of its own.
-    assert_eq!(route.end_direction(), (1., 0.));
-    assert_eq!(route.bounds(), (0., 0., 10., 0.));
-    let single = EdgeRoute {
-        points: vec![GraphPoint { x: 3., y: 4. }],
-    };
-    assert_eq!(single.end_direction(), (1., 0.));
-}
-
-#[test]
-fn rounded_corners_keep_the_ends_and_cut_the_corner() {
-    let corner = [
-        GraphPoint { x: 0., y: 0. },
-        GraphPoint { x: 50., y: 0. },
-        GraphPoint { x: 50., y: 50. },
-    ];
-    let rounded = round_corners(&corner);
-    assert_eq!(rounded[0], corner[0]);
-    assert_eq!(rounded[rounded.len() - 1], corner[2]);
-    // No point of the curve is the sharp corner, and all stay inside its box.
-    assert!(rounded.iter().all(|at| *at != corner[1]));
-    assert!(
-        rounded
-            .iter()
-            .all(|at| at.x <= 50. + 1e-3 && at.y >= -1e-3 && at.y <= 50. + 1e-3)
-    );
-    let nearest = rounded
-        .iter()
-        .map(|at| distance(*at, corner[1]))
-        .fold(f32::INFINITY, f32::min);
-    assert!(nearest > 1.);
-}
-
-#[test]
-fn a_short_segment_limits_the_corner_radius() {
-    let corner = [
-        GraphPoint { x: 0., y: 0. },
-        GraphPoint { x: 6., y: 0. },
-        GraphPoint { x: 6., y: 40. },
-    ];
-    let rounded = round_corners(&corner);
-    // Half the short segment: the curve never starts before the middle of it.
-    assert!(rounded.iter().all(|at| at.x >= 0. - 1e-3));
-    assert!(rounded[1].x >= 3. - 1e-3);
-}
-
-#[test]
-fn simplified_drops_repeats_and_straight_runs() {
-    let points = vec![
-        GraphPoint { x: 0., y: 0. },
-        GraphPoint { x: 0., y: 0. },
-        GraphPoint { x: 5., y: 0. },
-        GraphPoint { x: 10., y: 0. },
-        GraphPoint { x: 10., y: 7. },
-    ];
-    assert_eq!(
-        simplified(points),
-        vec![
-            GraphPoint { x: 0., y: 0. },
-            GraphPoint { x: 10., y: 0. },
-            GraphPoint { x: 10., y: 7. },
-        ]
-    );
-}
-
-#[test]
-fn crosses_tells_a_segment_through_a_rect_from_one_beside_it() {
-    let rect = GraphRect {
-        origin: GraphPoint { x: 10., y: 10. },
-        width: 20.,
-        height: 20.,
-    };
-    let at = |x: f32, y: f32| GraphPoint { x, y };
-    assert!(crosses(at(0., 20.), at(40., 20.), rect, 0.));
-    assert!(crosses(at(20., 0.), at(20., 40.), rect, 0.));
-    assert!(crosses(at(12., 12.), at(14., 14.), rect, 0.));
-    assert!(!crosses(at(0., 5.), at(40., 5.), rect, 0.));
-    assert!(!crosses(at(5., 0.), at(5., 40.), rect, 0.));
-    // The clearance grows the rect.
-    assert!(crosses(at(0., 8.), at(40., 8.), rect, 4.));
-    assert!(!crosses(at(0., 8.), at(40., 8.), rect, 1.));
-    // A segment that stops short of the rect does not cross it.
-    assert!(!crosses(at(0., 20.), at(5., 20.), rect, 0.));
-}
-
-#[test]
-fn routes_are_computed_for_every_edge_in_edge_order() {
-    let graph = keda();
-    let arranged = laid_out(&graph, GroupBy::App, 1.);
-    assert_eq!(arranged.routes.len(), graph.edges.len());
-    assert!(arranged.routes.iter().all(|route| route.points.len() >= 2));
-}
-
-// ---- 0050: curved edges ----
-
 fn card(x: f32, y: f32) -> GraphRect {
     GraphRect {
         origin: GraphPoint { x, y },
@@ -381,15 +142,65 @@ fn card(x: f32, y: f32) -> GraphRect {
     }
 }
 
+/// The curve of the default sides of `source` and `target`.
 fn curve(source: GraphRect, target: GraphRect) -> Vec<GraphPoint> {
-    bezier(ports(source, target))
+    let (start_side, end_side) = facing_sides(source, target);
+    bezier(Anchors::between(source, start_side, target, end_side))
+}
+
+// ---- the anchor rule ----
+
+#[test]
+fn a_card_has_four_anchors_at_the_middles_of_its_sides() {
+    let rect = card(100., 40.);
+    let at = |side: Side| side.anchor(rect);
+    assert_eq!(at(Side::Left), GraphPoint { x: 100., y: 70. });
+    assert_eq!(at(Side::Right), GraphPoint { x: 260., y: 70. });
+    assert_eq!(at(Side::Top), GraphPoint { x: 180., y: 40. });
+    assert_eq!(at(Side::Bottom), GraphPoint { x: 180., y: 100. });
 }
 
 #[test]
-fn a_curve_leaves_flat_and_ends_in_a_horizontal_stub() {
+fn the_default_sides_follow_the_larger_gap() {
+    let source = card(0., 0.);
+    let cases = [
+        // Beside it, level or a little off: right to left, or left to right.
+        (card(300., 0.), Side::Right, Side::Left),
+        (card(300., 90.), Side::Right, Side::Left),
+        (card(-300., 20.), Side::Left, Side::Right),
+        // Stacked in one column: bottom to top, or top to bottom.
+        (card(0., 200.), Side::Bottom, Side::Top),
+        (card(30., -200.), Side::Top, Side::Bottom),
+        // Offset both ways: the larger gap wins.
+        (card(200., 400.), Side::Bottom, Side::Top),
+        (card(400., 200.), Side::Right, Side::Left),
+        // A tie is horizontal: gaps of 200 on both axes.
+        (card(360., 260.), Side::Right, Side::Left),
+    ];
+    for (target, start_side, end_side) in cases {
+        assert_eq!(
+            facing_sides(source, target),
+            (start_side, end_side),
+            "{target:?}"
+        );
+    }
+}
+
+#[test]
+fn overlapping_cards_are_joined_across_the_axis_they_overlap_less_on() {
+    // Both gaps are negative (-60 across, -40 down): the vertical one is nearer to a real gap.
+    assert_eq!(
+        facing_sides(card(0., 0.), card(100., 20.)),
+        (Side::Bottom, Side::Top)
+    );
+}
+
+// ---- the curve ----
+
+#[test]
+fn a_horizontal_curve_leaves_flat_and_ends_in_a_horizontal_stub() {
     let points = curve(card(0., 0.), card(400., 300.));
     let last = points.len() - 1;
-    // Flat where it leaves, within the flatness tolerance of the first chord.
     assert!((points[1].y - points[0].y).abs() < 0.5);
     let stub = points[last].x - points[last - 1].x;
     assert!((stub - ARRIVAL_STUB).abs() < 1e-3, "{stub}");
@@ -397,17 +208,29 @@ fn a_curve_leaves_flat_and_ends_in_a_horizontal_stub() {
 }
 
 #[test]
-fn a_same_column_edge_is_a_loop_in_the_gutter() {
-    let source = card(0., 0.);
-    let points = curve(source, card(0., 200.));
-    // Out of the right side, round the gutter, and back in by the right side.
+fn a_vertical_curve_leaves_and_enters_vertically() {
+    let (source, target) = (card(0., 0.), card(40., 300.));
+    let points = curve(source, target);
+    let last = points.len() - 1;
+    assert_eq!(points[0], Side::Bottom.anchor(source));
+    assert_eq!(points[last], Side::Top.anchor(target));
+    assert!((points[1].x - points[0].x).abs() < 0.5);
+    let stub = points[last].y - points[last - 1].y;
+    assert!((stub - ARRIVAL_STUB).abs() < 1e-3, "{stub}");
+    assert!((points[last].x - points[last - 1].x).abs() < 1e-3);
+}
+
+#[test]
+fn a_same_column_edge_runs_straight_down_from_bottom_to_top() {
+    let (source, target) = (card(0., 0.), card(0., 200.));
+    let points = curve(source, target);
+    // No loop into the gutter: it stays on the middle line and only goes down.
     for at in &points {
-        assert!(at.x >= source.right() - 1e-3, "{at:?}");
-        assert!(at.x <= source.right() + LANE_OFFSET + 1., "{at:?}");
+        assert!((at.x - source.center().x).abs() < 1e-3, "{at:?}");
     }
-    let peak = points.iter().map(|at| at.x).fold(f32::MIN, f32::max);
-    assert!(peak > source.right() + 20., "{peak}");
-    assert_eq!(points[points.len() - 1].x, source.right());
+    for pair in points.windows(2) {
+        assert!(pair[1].y >= pair[0].y - 1e-3, "{pair:?}");
+    }
 }
 
 #[test]
@@ -447,34 +270,36 @@ fn a_close_neighbour_curve_never_runs_backwards() {
             },
         ),
     ]);
-    for shape in [EdgeShape::Elbows, EdgeShape::Curves] {
-        let arranged = layout(&graph, GroupBy::Components, 1., &pins, None, shape);
-        for pair in arranged.routes[owns].points.windows(2) {
-            assert!(pair[1].x >= pair[0].x - 1e-3, "{shape:?} {pair:?}");
-        }
+    let arranged = layout(&graph, GroupBy::Components, 1., &pins, None);
+    for pair in arranged.routes[owns].points.windows(2) {
+        assert!(pair[1].x >= pair[0].x - 1e-3, "{pair:?}");
     }
 }
 
 #[test]
 fn the_arrow_of_a_curve_points_along_its_end_tangent() {
+    // The arrow arrives perpendicular to the side it enters: horizontal into a left or right
+    // side, vertical into a top or bottom side.
     let cases = [
-        (card(0., 0.), card(400., 300.)),
-        (card(0., 0.), card(0., 200.)),
-        (card(400., 0.), card(0., 200.)),
+        (card(0., 0.), card(400., 300.), (1., 0.)),
+        (card(400., 0.), card(0., 200.), (-1., 0.)),
+        (card(0., 0.), card(0., 200.), (0., 1.)),
+        (card(0., 300.), card(40., 0.), (0., -1.)),
     ];
-    for (source, target) in cases {
+    for (source, target, expected) in cases {
         let route = EdgeRoute {
             points: curve(source, target),
         };
         let [tip, left, right] = arrow_head(&route, ARROW_LENGTH, ARROW_HALF_WIDTH);
         let end = route.end();
         let (dx, dy) = route.end_direction();
-        assert!(dx.abs() == 1. && dy == 0., "{dx} {dy}");
+        assert!((dx - expected.0).abs() < 1e-3 && (dy - expected.1).abs() < 1e-3);
         assert!((tip.x - (end.x - dx * ARROW_TIP_GAP)).abs() < 1e-3);
-        assert!((tip.y - end.y).abs() < 1e-3);
-        // A horizontal axis: the base corners share x and sit above and below the tip.
-        assert!((left.x - right.x).abs() < 1e-3);
-        assert!((left.y + right.y - 2. * end.y).abs() < 1e-3);
+        assert!((tip.y - (end.y - dy * ARROW_TIP_GAP)).abs() < 1e-3);
+        // The base corners sit across the axis, centered on it.
+        let back = ARROW_TIP_GAP + ARROW_LENGTH;
+        assert!((left.x + right.x - 2. * (end.x - dx * back)).abs() < 1e-3);
+        assert!((left.y + right.y - 2. * (end.y - dy * back)).abs() < 1e-3);
     }
 }
 
@@ -483,36 +308,77 @@ fn arrival_stub_is_the_arrow_length_and_gap() {
     assert_eq!(ARRIVAL_STUB, ARROW_LENGTH + ARROW_TIP_GAP);
 }
 
-fn fixtures() -> [(&'static str, TopologyGraph); 2] {
-    [("keda", keda()), ("monitoring", monitoring())]
+#[test]
+fn a_blocked_edge_takes_another_pair_of_anchors() {
+    // A card sits right between the two on their row: the straight S would run behind it.
+    let (source, blocker, target) = (card(0., 0.), card(280., 0.), card(560., 0.));
+    let rects = [source, target, blocker];
+    let route = route_edge(0, 1, &rects);
+    let (start_side, end_side) = facing_sides(source, target);
+    let preferred = bezier(Anchors::between(source, start_side, target, end_side));
+    assert_ne!(route.points, preferred);
+    for pair in route.points.windows(2) {
+        assert!(!crosses(pair[0], pair[1], blocker, 0.));
+    }
+    let start = route.start();
+    assert!(Side::ALL.iter().any(|side| side.anchor(source) == start));
 }
 
+// ---- every edge is one curve ----
+
 #[test]
-fn curves_keep_the_ports_of_elbows() {
+fn every_route_is_a_curve_between_two_anchors() {
+    // Regression: a blocked edge used to fall back to a right-angle lane route with rounded
+    // corners, so some edges stayed elbows. Every route is now the curve of some pair of anchors.
     for (name, graph) in fixtures() {
-        let elbows = laid_out_as(&graph, GroupBy::App, 1.7, EdgeShape::Elbows);
-        let curves = laid_out_as(&graph, GroupBy::App, 1.7, EdgeShape::Curves);
-        for (index, (a, b)) in elbows.routes.iter().zip(&curves.routes).enumerate() {
-            assert!(distance(a.start(), b.start()) < 1e-3, "{name} {index}");
-            assert!(distance(a.end(), b.end()) < 1e-3, "{name} {index}");
+        for (group_by, aspect) in ARRANGEMENTS {
+            let arranged = laid_out(&graph, group_by, aspect);
+            for (index, edge) in graph.edges.iter().enumerate() {
+                let (source, target) = (arranged.rects[edge.from], arranged.rects[edge.to]);
+                let route = &arranged.routes[index];
+                let is_curve = Side::ALL.into_iter().any(|a| {
+                    Side::ALL.into_iter().any(|b| {
+                        let anchors = Anchors::between(source, a, target, b);
+                        [anchors, anchors.tight()]
+                            .iter()
+                            .any(|anchors| bezier(*anchors) == route.points)
+                    })
+                });
+                assert!(is_curve, "{name} {group_by:?} {aspect}: edge {index}");
+            }
         }
     }
 }
 
 #[test]
-fn no_curved_edge_runs_through_a_card_it_does_not_join() {
+fn routes_start_and_end_at_anchors_in_edge_order() {
     for (name, graph) in fixtures() {
-        for (group_by, aspect) in [
-            (GroupBy::App, 0.1),
-            (GroupBy::App, 1.7),
-            (GroupBy::Components, 1.),
-        ] {
-            let arranged = laid_out_as(&graph, group_by, aspect, EdgeShape::Curves);
+        let arranged = laid_out(&graph, GroupBy::App, 1.7);
+        assert_eq!(arranged.routes.len(), graph.edges.len());
+        for (route, edge) in arranged.routes.iter().zip(&graph.edges) {
+            for (at, card) in [(route.start(), edge.from), (route.end(), edge.to)] {
+                let rect = arranged.rects[card];
+                let is_anchor = Side::ALL.iter().any(|side| side.anchor(rect) == at);
+                assert!(is_anchor, "{name} {at:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn curves_keep_clear_of_most_cards_they_do_not_join() {
+    // A long edge across packed columns passes behind cards when no pair of anchors is clear
+    // (under half of the edge and card pairs in the big fixture); the bound catches a regression
+    // in the anchor search.
+    for (name, graph) in fixtures() {
+        for (group_by, aspect) in ARRANGEMENTS {
+            let arranged = laid_out(&graph, group_by, aspect);
             let found = crossings(&graph, &arranged);
             assert!(
-                found.is_empty(),
-                "{name} {group_by:?} {aspect}: {} crossings, e.g. {:?}",
+                found.len() * 2 <= graph.edges.len(),
+                "{name} {group_by:?} {aspect}: {} of {} edges, e.g. {:?}",
                 found.len(),
+                graph.edges.len(),
                 found.first()
             );
         }
@@ -520,52 +386,53 @@ fn no_curved_edge_runs_through_a_card_it_does_not_join() {
 }
 
 #[test]
-fn a_blocked_curve_keeps_the_lane_route() {
-    // The ReplicaSet sits between the Service and the pod: the straight curve would run behind it.
-    let graph = with_app(Fixture::default(), "web", 1, &[]).graph();
-    let curves = laid_out_as(&graph, GroupBy::Components, 1., EdgeShape::Curves);
-    let elbows = laid_out_as(&graph, GroupBy::Components, 1., EdgeShape::Elbows);
-    let skip = graph
-        .edges
-        .iter()
-        .position(|edge| {
-            edge.relation == Relation::RoutesTo
-                && graph.nodes[edge.from].kind == TopologyKind::Service
-        })
-        .expect("a service routes to the pod");
-    let (source, target) = (
-        curves.rects[graph.edges[skip].from],
-        curves.rects[graph.edges[skip].to],
-    );
-    assert_ne!(curves.routes[skip].points, curve(source, target));
-    assert_eq!(curves.routes[skip], elbows.routes[skip]);
-    assert!(crossings(&graph, &curves).is_empty());
+fn a_route_ends_with_the_direction_it_arrives_in() {
+    let route = EdgeRoute {
+        points: vec![
+            GraphPoint { x: 0., y: 0. },
+            GraphPoint { x: 10., y: 0. },
+            GraphPoint { x: 10., y: 0. },
+        ],
+    };
+    // A repeated last point has no direction of its own.
+    assert_eq!(route.end_direction(), (1., 0.));
+    assert_eq!(route.bounds(), (0., 0., 10., 0.));
+    let single = EdgeRoute {
+        points: vec![GraphPoint { x: 3., y: 4. }],
+    };
+    assert_eq!(single.end_direction(), (1., 0.));
 }
 
 #[test]
-fn the_edge_shape_does_not_move_cards() {
-    for (name, graph) in fixtures() {
-        let elbows = laid_out_as(&graph, GroupBy::App, 1.7, EdgeShape::Elbows);
-        let curves = laid_out_as(&graph, GroupBy::App, 1.7, EdgeShape::Curves);
-        assert_eq!(elbows.rects, curves.rects, "{name}");
-        assert_eq!(elbows.extent, curves.extent, "{name}");
-    }
+fn crosses_tells_a_segment_through_a_rect_from_one_beside_it() {
+    let rect = GraphRect {
+        origin: GraphPoint { x: 10., y: 10. },
+        width: 20.,
+        height: 20.,
+    };
+    let at = |x: f32, y: f32| GraphPoint { x, y };
+    assert!(crosses(at(0., 20.), at(40., 20.), rect, 0.));
+    assert!(crosses(at(20., 0.), at(20., 40.), rect, 0.));
+    assert!(crosses(at(12., 12.), at(14., 14.), rect, 0.));
+    assert!(!crosses(at(0., 5.), at(40., 5.), rect, 0.));
+    assert!(!crosses(at(5., 0.), at(5., 40.), rect, 0.));
+    // The clearance grows the rect.
+    assert!(crosses(at(0., 8.), at(40., 8.), rect, 4.));
+    assert!(!crosses(at(0., 8.), at(40., 8.), rect, 1.));
+    // A negative margin shrinks it: a segment along the edge no longer touches.
+    assert!(crosses(at(0., 10.), at(40., 10.), rect, 0.));
+    assert!(!crosses(at(0., 10.), at(40., 10.), rect, -1.));
+    // A segment that stops short of the rect does not cross it.
+    assert!(!crosses(at(0., 20.), at(5., 20.), rect, 0.));
 }
 
 #[test]
 fn route_edges_routes_a_slice() {
     let graph = monitoring();
-    for shape in [EdgeShape::Elbows, EdgeShape::Curves] {
-        let layout = laid_out_as(&graph, GroupBy::Components, 1.6, shape);
-        let frames: Vec<GraphRect> = layout.bands.iter().map(|band| band.rect).collect();
-        let routes = route_edges(&graph.edges, &layout.rects, &frames, shape);
-        assert_eq!(routes, layout.routes, "{shape:?}");
-        let half = graph.edges.len() / 2;
-        let tail = route_edges(&graph.edges[half..], &layout.rects, &frames, shape);
-        assert_eq!(
-            tail,
-            layout.routes[half..],
-            "{shape:?}: a slice routes alone"
-        );
-    }
+    let layout = laid_out(&graph, GroupBy::Components, 1.6);
+    let routes = route_edges(&graph.edges, &layout.rects);
+    assert_eq!(routes, layout.routes);
+    let half = graph.edges.len() / 2;
+    let tail = route_edges(&graph.edges[half..], &layout.rects);
+    assert_eq!(tail, layout.routes[half..], "a slice routes alone");
 }

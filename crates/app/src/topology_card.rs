@@ -1,6 +1,7 @@
 //! The node cards of the Topology canvas (W11 `.nd`): kit-styled divs, one per visible node, at the
-//! level of detail of the zoom. A card has a 3 px accent bar and a solid chip in the color of its
-//! kind, the caption and the name, and a surface that carries a trace of the kind.
+//! level of detail of the zoom. A card has a 3 px accent bar, rounded and set between the corners
+//! of the card, and a solid chip in the color of its kind, the caption and the name, and a surface
+//! that carries a trace of the kind.
 
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
@@ -21,6 +22,9 @@ pub(crate) const MIN_BADGE_ZOOM: f32 = 0.3;
 /// The card, in graph units: the accent bar on its left edge, the solid kind chip, the padding,
 /// and the font sizes (React Flow nodes use about 12 px text with 10 px padding).
 pub(crate) const ACCENT_BAR: f32 = 3.;
+/// The corner radius of a card. The accent bar stops where the left edge turns straight, so its
+/// rounded ends sit inside the corners and match them.
+pub(crate) const CARD_RADIUS: f32 = 8.;
 pub(crate) const CHIP_SIZE: f32 = 30.;
 /// The icon in the chip, as a share of the chip.
 const ICON_SHARE: f32 = 0.55;
@@ -77,7 +81,7 @@ pub(crate) fn node_card(
         .top(px(top))
         .w(px(right - left))
         .h(px(bottom - top))
-        .rounded(px(8. * zoom))
+        .rounded(px(CARD_RADIUS * zoom))
         .border(px(border_width))
         .border_color(border_color)
         .overflow_hidden()
@@ -105,6 +109,11 @@ pub(crate) fn node_card(
         NodeLook::Plain | NodeLook::Ghost => 1.,
     };
     card.child(card_body(node, &state.caption, zoom, detail, colors, cx).opacity(opacity))
+}
+
+/// The length of the accent bar in graph units: the left edge between its two rounded corners.
+fn accent_bar_length() -> f32 {
+    NODE_HEIGHT - 2. * CARD_RADIUS
 }
 
 /// The surface of a card: the highlight of a clicked ghost, the kind-tinted surface of an object,
@@ -227,7 +236,8 @@ fn card_body(
         div()
             .flex_shrink_0()
             .w(px(ACCENT_BAR * zoom))
-            .h_full()
+            .h(px(accent_bar_length() * zoom))
+            .rounded(px(ACCENT_BAR * zoom / 2.))
             .bg(colors.kind(hue))
     });
     let chip = has_chip.then(|| {

@@ -397,7 +397,6 @@ mod tests {
             1.,
             &std::collections::HashMap::new(),
             None,
-            crate::topology_route::EdgeShape::Elbows,
         );
         let all = visible_nodes(&layout, Viewport::default(), 2000., 2000.);
         assert_eq!(all.len(), graph.nodes.len());

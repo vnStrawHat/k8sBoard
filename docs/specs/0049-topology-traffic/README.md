@@ -7,7 +7,7 @@ Status: **draft 2026-10-04** against main `94e9c21`, amended after the opus advi
 - The **Traffic** segment works when the cluster has a Ready 0048 source: the same layout and card positions as Resources, with flow edges drawn **solid**, **width by rate**, a **label** with rate and 5xx share, and an **error tone**, over a fixed **5-minute** window refreshed every 30 s.
 - First-cut sources: **Istio** request metrics (edges between workloads and Services) and, as the fallback, **per-pod network bytes** (cAdvisor), drawn on the Resources edges and marked as per-pod throughput, not traffic between objects. UAT has only the fallback.
 - Without a source, or without either metric, the segment stays disabled with the reason in its tooltip.
-- Works with both 0050 edge shapes (`Edges: Elbows | Curves`): traffic styling is per edge and ignores the shape.
+- Edges are always curves (0050): traffic styling is per edge and ignores the geometry.
 
 ## Non-goals
 
@@ -46,11 +46,11 @@ Full list in [decisions.md](decisions.md). Key: sources are table rows built in 
 - [ ] 7. Bytes fallback: pod rates sum up to pod groups, ReplicaSets, workloads, Services (once per pod), and Ingresses; edges take their target's receive rate.
 - [ ] 8. Card positions in Traffic mode equal the Resources layout: `layout()` is not called for a sample; only the `Calls` edges are routed (`route_edges` over the same rects and bands, with the current `EdgeShape`) and appended.
 - [ ] 9. Disabled reasons: no source, invalid, checking, unreachable, no traffic metric — each tooltip text as [traffic-view.md](traffic-view.md).
-- [ ] 10. Traffic look: flow edges solid, width 1.5–6 graph units by √ share per unit; idle edges thin and muted; Mounts and Access edges hidden; labels at the arc-length midpoint of the route, `{n} req/s · {p}% 5xx` or `{rate}`, at zoom ≥ `MIN_TEXT_ZOOM`; Warn ≥ 1 %, Bad ≥ 5 %; theme tokens only; the same in Elbows and Curves.
+- [ ] 10. Traffic look: flow edges solid, width 1.5–6 graph units by √ share per unit; idle edges thin and muted; Mounts and Access edges hidden; labels at the arc-length midpoint of the route, `{n} req/s · {p}% 5xx` or `{rate}`, at zoom ≥ `MIN_TEXT_ZOOM`; Warn ≥ 1 %, Bad ≥ 5 %; theme tokens only.
 - [ ] 11. The chip reads `Traffic · Istio · last 5 min · {HH:MM:SS}` (plus `, pod network bytes` when both); bytes only: `Traffic · pod network bytes (per pod, not per connection) · last 5 min · {HH:MM:SS}`; a failed refresh keeps the last sample and shows `paused · {reason}`.
 - [ ] 12. Refresh every 30 s only while Topology is visible in Traffic mode; a namespace change, mode change, hide, or session switch drops the fetch and timer.
 - [ ] 13. Export PNG/SVG in Traffic mode draws widths, tones (stroke and the arrow `<polygon>` fill), labels, and the Traffic legend; edge paths keep `class="edge"`.
-- [ ] 14. ui-verifier (light, dark, Elbows and Curves): `topology-traffic-fixture` (Istio + bytes) and live UAT `topology-traffic` (bytes fallback) show no high-severity defect against W11; the coder-lite UAT trace shows only the GETs of AC 3.
+- [ ] 14. ui-verifier (light, dark): `topology-traffic-fixture` (Istio + bytes) and live UAT `topology-traffic` (bytes fallback) show no high-severity defect against W11; the coder-lite UAT trace shows only the GETs of AC 3.
 
 ## Open items
 
