@@ -146,9 +146,11 @@ pub(crate) fn non_empty(text: &str) -> Option<&str> {
 fn container_rows(containers: &[TemplateContainer]) -> Vec<DetailRow> {
     containers
         .iter()
-        .map(|container| DetailRow::Field {
-            label: container.name.clone().into(),
-            value: KindCell::Mono(container.image.clone().into()),
+        .map(|container| {
+            DetailRow::copyable_field(
+                container.name.clone(),
+                KindCell::Mono(container.image.clone().into()),
+            )
         })
         .collect()
 }
@@ -399,7 +401,7 @@ fn template_section(set: &ReplicaSetSummary) -> DetailSection {
     )];
     match set.containers.as_slice() {
         [] => {}
-        [only] => rows.push(DetailRow::field(
+        [only] => rows.push(DetailRow::copyable_field(
             "Image",
             KindCell::Mono(only.image.clone().into()),
         )),

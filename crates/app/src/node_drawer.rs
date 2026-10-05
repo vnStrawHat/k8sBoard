@@ -12,6 +12,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
+use crate::clipboard_copy::copyable_mono;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::container_detail::resource_label;
@@ -181,7 +182,7 @@ fn overview(
     for (index, address) in node.addresses.iter().enumerate() {
         column = column.child(wide_detail_row(
             address.kind.clone(),
-            truncated_text(("address", index), address.address.clone()).font_family(mono.clone()),
+            copyable_mono(("address", index), address.address.clone(), cx),
             cx,
         ));
     }
@@ -253,6 +254,7 @@ fn overview(
     column
         .child(section_title("Labels", cx))
         .child(chips(
+            "node-labels",
             &node
                 .labels
                 .iter()

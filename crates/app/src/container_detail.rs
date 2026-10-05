@@ -21,6 +21,7 @@ use gpui_kit::{
 
 use crate::age::{format_age, format_countdown};
 use crate::app_shell::AppShell;
+use crate::clipboard_copy::copyable_mono;
 use crate::drawer::{
     ContainerTab, absent_text, detail_row, link_text, section_title, truncated_text,
     value_or_absent,
@@ -227,15 +228,13 @@ fn info_body(input: &ContainerDetailInput<'_>, cx: &Context<AppShell>) -> AnyEle
         .child(section_title("Image", cx))
         .child(detail_row(
             "Image",
-            truncated_text("container-image", container.image.clone()).font_family(mono.clone()),
+            copyable_mono("container-image", container.image.clone(), cx),
             cx,
         ))
         .child(detail_row(
             "Digest",
             match &container.image_digest {
-                Some(digest) => truncated_text("container-digest", digest.clone())
-                    .font_family(mono.clone())
-                    .into_any_element(),
+                Some(digest) => copyable_mono("container-digest", digest.clone(), cx),
                 None => absent_text(cx).into_any_element(),
             },
             cx,

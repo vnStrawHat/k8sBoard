@@ -206,6 +206,11 @@ pub(crate) enum DetailRow {
         value: KindCell,
     },
     Chips(Vec<SharedString>),
+    /// A label and a mono value with a copy button after it: images, addresses, and hosts.
+    CopyField {
+        label: SharedString,
+        text: SharedString,
+    },
     /// A muted explanation that wraps, such as "No keys".
     Note(SharedString),
     /// A port, followed by its Forward button.
@@ -277,6 +282,17 @@ impl DetailRow {
         Self::Field {
             label: label.into(),
             value,
+        }
+    }
+
+    /// `field` with a copy button when `value` is mono text; any other cell has nothing to copy.
+    pub(crate) fn copyable_field(label: impl Into<SharedString>, value: KindCell) -> Self {
+        match value {
+            KindCell::Mono(text) => Self::CopyField {
+                label: label.into(),
+                text,
+            },
+            other => Self::field(label, other),
         }
     }
 

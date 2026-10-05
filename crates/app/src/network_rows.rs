@@ -25,8 +25,8 @@ pub(crate) fn service_row(service: &ServiceSummary) -> KindRow {
     let ports: Vec<String> = service.ports.iter().map(ToString::to_string).collect();
     let mut details = vec![
         DetailRow::field("Type", KindCell::Text(service.service_type.clone().into())),
-        DetailRow::field("Cluster IP", cluster_ip.clone()),
-        DetailRow::field("External", external.clone()),
+        DetailRow::copyable_field("Cluster IP", cluster_ip.clone()),
+        DetailRow::copyable_field("External", external.clone()),
     ];
     if service.selector.is_empty() {
         details.push(DetailRow::Note(
@@ -109,14 +109,22 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
         }
         (None, _) => DetailRow::field("Default backend", KindCell::Absent),
     };
+    let mut ingress_rows = vec![
+        DetailRow::field("Class", KindCell::text_or_absent(ingress.class.as_deref())),
+        DetailRow::copyable_field("Address", address.clone()),
+        default_backend,
+    ];
+    // The rules show each host with its path; this row has the bare hosts to copy.
+    if !ingress.hosts.is_empty() {
+        ingress_rows.insert(
+            1,
+            DetailRow::copyable_field("Hosts", KindCell::mono_or_absent(&ingress.hosts.join(", "))),
+        );
+    }
     let mut sections = vec![
         DetailSection {
             title: "Ingress",
-            rows: vec![
-                DetailRow::field("Class", KindCell::text_or_absent(ingress.class.as_deref())),
-                DetailRow::field("Address", address.clone()),
-                default_backend,
-            ],
+            rows: ingress_rows,
         },
         DetailSection {
             title: "Rules",

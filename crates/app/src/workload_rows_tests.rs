@@ -707,7 +707,7 @@ fn replica_set_template_shows_hash_and_image() {
         template.rows,
         [
             DetailRow::field("pod-template-hash", KindCell::Mono("7d9f8c".into())),
-            DetailRow::field("Image", KindCell::Mono("registry/api:1.4".into())),
+            DetailRow::copyable_field("Image", KindCell::Mono("registry/api:1.4".into())),
         ]
     );
     // Several containers: one row per container, no hash label: a dash.
@@ -722,8 +722,8 @@ fn replica_set_template_shows_hash_and_image() {
         template.rows,
         [
             DetailRow::field("pod-template-hash", KindCell::Absent),
-            DetailRow::field("web", KindCell::Mono("registry/api:1.4".into())),
-            DetailRow::field("sidecar", KindCell::Mono("proxy:2".into())),
+            DetailRow::copyable_field("web", KindCell::Mono("registry/api:1.4".into())),
+            DetailRow::copyable_field("sidecar", KindCell::Mono("proxy:2".into())),
         ]
     );
 }
@@ -736,4 +736,21 @@ fn retention_short_form_drops_the_field_names() {
     );
     // Any other shape is shown as it is.
     assert_eq!(retention_short("something else"), "something else");
+}
+
+#[test]
+fn deployment_containers_offer_to_copy_their_images() {
+    let row = deployment_row(&deployment());
+    let containers = row.section("Containers").expect("containers section");
+    assert_eq!(
+        containers.rows,
+        [DetailRow::copyable_field(
+            "web",
+            KindCell::Mono("nginx:1.27".into())
+        )]
+    );
+    assert!(matches!(
+        containers.rows[0],
+        DetailRow::CopyField { ref text, .. } if text.as_ref() == "nginx:1.27"
+    ));
 }

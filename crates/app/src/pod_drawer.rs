@@ -17,6 +17,7 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
+use crate::clipboard_copy::copyable_mono;
 use crate::cluster_session::{ClusterSession, LiveList};
 use crate::container_detail::{ContainerDetailInput, container_detail};
 use crate::dock::Dock;
@@ -221,7 +222,10 @@ fn overview(
         .child(detail_row("Node", node, cx))
         .child(detail_row(
             "Pod IP",
-            mono_or_absent(pod.pod_ip.as_deref(), cx),
+            match pod.pod_ip.as_deref() {
+                Some(ip) => copyable_mono("pod-ip", ip.to_owned(), cx),
+                None => absent_text(cx).into_any_element(),
+            },
             cx,
         ))
         .child(detail_row(
@@ -252,17 +256,6 @@ fn overview(
                 .map(|(index, container)| container_row(index, container, cx)),
         )
         .into_any_element()
-}
-
-fn mono_or_absent(value: Option<&str>, cx: &App) -> AnyElement {
-    match value {
-        Some(text) => div()
-            .truncate()
-            .font_family(cx.theme().mono_font_family.clone())
-            .child(text.to_owned())
-            .into_any_element(),
-        None => absent_text(cx).into_any_element(),
-    }
 }
 
 /// The WHY box. `Alert` has no children, so the link that opens the container is a sibling

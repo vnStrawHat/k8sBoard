@@ -87,3 +87,9 @@ pub(crate) struct DrawerHeader { kind_badge: &'static str /* "Po" | "No" */, nam
 - The Expand button, `DrawerState.is_expanded`, `toggle_drawer_expanded`, and the expanded launch-screen flag are gone. `drawer_width(DrawerSize, workspace)` is 50 % for every drawer (`DrawerSize::Standard`) and 75 % for the Pod drawer (`DrawerSize::Wide`, `DrawerSize::of(&ResourceKey)`), never below 480 px and never above the workspace. At a 1320 px window: 550 px, Pod 825 px. `AppShell::open_drawer_width` feeds the bars left of the drawer; the Topology reveal and minimap take the size from the selected key, so a Pod drawer there is 75 % too.
 - The Monitor tab no longer has an expanded layout: its cards wrap (`flex_1`, 280 px minimum), so two sit side by side whenever the drawer is wide enough.
 - The Overview body is scrolled by a box whose child carries the padding, and the first section heading (`first_section_title`) has no top margin, so nothing stacks above the first line. Padding on the scrolled box itself is left out of the scroll extent and cut the last lines.
+
+## As built (2026-10-05): copy buttons
+
+- `clipboard_copy.rs` holds the one helper set: `copy_button` (kit `Clipboard`: tooltip "Copy", the icon turns into a check for 2 s), `copyable_mono` (truncating mono text plus the button), and `copy_text`. They write the plain app clipboard; a Secret's values never use them and keep the masked `secret_clipboard` path.
+- Copy buttons sit after: the drawer title name; the container Image and Digest; Pod IP; node addresses (InternalIP, Hostname, …); Service Cluster IP and External; Ingress Hosts (a bare-hosts row) and Address; workload container images (`DetailRow::CopyField`, built by `DetailRow::copyable_field`).
+- `chips(id, terms, cx)` (selector, labels, TLS hosts): a click on a chip copies its text (`key=value`, tooltip "Click to copy"), and one button after the set copies all of them, one per line.

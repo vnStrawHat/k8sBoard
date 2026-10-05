@@ -18,6 +18,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
+use crate::clipboard_copy::{copy_button, copy_text, joined_terms};
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::LiveList;
 use crate::helm_release_view::{HelmReleaseView, ValuesLayout};
@@ -541,12 +542,14 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                         .child(header.kind_name.to_uppercase()),
                 )
                 .child(
-                    truncated_text("drawer-title", header.name)
-                        .flex_1()
+                    truncated_text("drawer-title", header.name.clone())
                         .min_w_0()
                         .font_semibold()
                         .font_family(theme.mono_font_family.clone()),
                 )
+                .child(copy_button("drawer-title-copy", header.name))
+                // Pushes the menu and close buttons to the right edge.
+                .child(div().flex_1())
                 .child(header.menu)
                 .child(
                     Button::new("drawer-close")
@@ -699,26 +702,46 @@ pub(crate) fn link_text(
         .into_any_element()
 }
 
-/// Wrapping chips, or a dash when there are none.
-pub(crate) fn chips(terms: &[SharedString], cx: &App) -> AnyElement {
+/// Wrapping chips, or a dash when there are none. A click on a chip copies its text, and a button
+/// after the set copies every chip, one per line. The `id` must be unique among the chip sets
+/// that can be on screen together.
+pub(crate) fn chips(id: impl Into<ElementId>, terms: &[SharedString], cx: &App) -> AnyElement {
     if terms.is_empty() {
         return absent_text(cx).into_any_element();
     }
+    let id = id.into();
     let theme = cx.theme();
+    let chips =
+        h_flex()
+            .flex_1()
+            .min_w_0()
+            .flex_wrap()
+            .gap_1()
+            .children(terms.iter().enumerate().map(|(index, term)| {
+                let chip_id: ElementId = (id.clone(), format!("chip-{index}")).into();
+                let selector = chip_id.to_string();
+                let text = term.clone();
+                div()
+                    .id(chip_id)
+                    .debug_selector(move || selector)
+                    .max_w_full()
+                    .truncate()
+                    .px_1p5()
+                    .rounded(theme.radius)
+                    .bg(theme.muted)
+                    .font_family(theme.mono_font_family.clone())
+                    .text_xs()
+                    .cursor_pointer()
+                    .hover(|chip| chip.bg(theme.accent))
+                    .tooltip(|window, cx| Tooltip::new("Click to copy").build(window, cx))
+                    .on_click(move |_, _, cx| copy_text(&text, cx))
+                    .child(term.clone())
+            }));
     h_flex()
-        .flex_wrap()
+        .items_start()
         .gap_1()
-        .children(terms.iter().map(|term| {
-            div()
-                .max_w_full()
-                .truncate()
-                .px_1p5()
-                .rounded(theme.radius)
-                .bg(theme.muted)
-                .font_family(theme.mono_font_family.clone())
-                .text_xs()
-                .child(term.clone())
-        }))
+        .child(chips)
+        .child(copy_button((id, "copy-all"), joined_terms(terms)))
         .into_any_element()
 }
 

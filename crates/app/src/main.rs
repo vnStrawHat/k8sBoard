@@ -9,6 +9,7 @@ mod app_shell;
 mod audit_log;
 mod batch_rows;
 mod certificate_expiry;
+mod clipboard_copy;
 mod cluster_capacity;
 mod cluster_catalog;
 mod cluster_form;

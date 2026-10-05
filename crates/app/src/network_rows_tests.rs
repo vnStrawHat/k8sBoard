@@ -496,3 +496,60 @@ fn ingress_tls_note_when_denied() {
         DetailRow::Note("TLS secrets are unavailable".into())
     );
 }
+
+fn copy_text_of(row: &KindRow, section: &str, label: &str) -> Option<gpui_kit::SharedString> {
+    row.section(section)?
+        .rows
+        .iter()
+        .find_map(|detail| match detail {
+            DetailRow::CopyField { label: found, text } if found.as_ref() == label => {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+}
+
+#[test]
+fn service_drawer_offers_to_copy_its_cluster_ip_and_external_address() {
+    let mut balancer = service("LoadBalancer");
+    balancer.external_addresses = vec!["203.0.113.7".to_owned()];
+    let row = service_row(&balancer);
+    assert_eq!(
+        copy_text_of(&row, "Service", "Cluster IP").as_deref(),
+        Some("10.0.0.5")
+    );
+    assert_eq!(
+        copy_text_of(&row, "Service", "External").as_deref(),
+        Some("203.0.113.7")
+    );
+}
+
+#[test]
+fn a_service_without_an_address_has_nothing_to_copy() {
+    let mut headless = service("ClusterIP");
+    headless.is_headless = true;
+    headless.cluster_ips.clear();
+    let row = service_row(&headless);
+    assert_eq!(copy_text_of(&row, "Service", "Cluster IP"), None);
+    // No external address: the dash, not an empty copy.
+    assert_eq!(copy_text_of(&row, "Service", "External"), None);
+}
+
+#[test]
+fn ingress_drawer_offers_to_copy_its_hosts_and_address() {
+    let row = ingress_row(&ingress());
+    assert_eq!(
+        copy_text_of(&row, "Ingress", "Hosts").as_deref(),
+        Some("a.example.com, b.example.com")
+    );
+    assert_eq!(
+        copy_text_of(&row, "Ingress", "Address").as_deref(),
+        Some("10.1.1.1")
+    );
+    let mut hostless = ingress();
+    hostless.hosts.clear();
+    assert_eq!(
+        copy_text_of(&ingress_row(&hostless), "Ingress", "Hosts"),
+        None
+    );
+}

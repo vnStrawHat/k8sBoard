@@ -31,6 +31,7 @@ There is still no `kube` or `k8s-openapi` dependency: the app sees only `cluster
 | `status_bar.rs` | watch state, API version, kubeconfig user, app version |
 | `pod_table.rs` | `PodTableDelegate` (columns, cells, context menu) |
 | `node_table.rs` | `NodeTableDelegate` |
+| `clipboard_copy.rs` | copy buttons and click-to-copy text of the drawers |
 | `drawer.rs` | overlay frame: header (kind badge, name, ⋯ ✕), width, tab bar |
 | `pod_drawer.rs` | pod Overview and Containers tabs |
 | `node_drawer.rs` | node Overview |

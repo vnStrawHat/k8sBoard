@@ -18,6 +18,7 @@ use crate::access_bindings::{BindingIndex, ready_binding_lists};
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::certificate_expiry::expiry_label;
+use crate::clipboard_copy::copyable_mono;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster};
 use crate::custom_rows::{date_text, date_tone};
@@ -321,7 +322,7 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
     }
     if kind.has_labels() {
         sections.push(section_title("Labels", cx).into_any_element());
-        sections.push(chips(&row.labels, cx));
+        sections.push(chips("labels", &row.labels, cx));
     }
     Overview {
         sections,
@@ -577,7 +578,13 @@ fn detail_element(
         DetailRow::Field { label, value } => {
             wide_detail_row(label.clone(), field_value(value, id, now, cx), cx).into_any_element()
         }
-        DetailRow::Chips(terms) => chips(terms, cx),
+        DetailRow::CopyField { label, text } => wide_detail_row(
+            label.clone(),
+            copyable_mono(("detail", id), text.clone(), cx),
+            cx,
+        )
+        .into_any_element(),
+        DetailRow::Chips(terms) => chips(("detail-chips", id), terms, cx),
         DetailRow::Note(text) => div()
             .text_sm()
             .text_color(cx.theme().muted_foreground)
