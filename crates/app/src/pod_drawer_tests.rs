@@ -204,3 +204,123 @@ fn restart_label_is_hidden_for_zero_and_warns_above() {
     let many = restart_label(10).expect("ten restarts are labelled");
     assert_eq!(many.text.as_ref(), "10 restarts");
 }
+
+fn mounting(name: &str, mounts: Vec<(&str, VolumeSource)>) -> ContainerSummary {
+    let mut summary = container(name, ContainerKind::Main, running(), true);
+    summary.mounts = mounts
+        .into_iter()
+        .map(|(volume, source)| cluster::MountEntry {
+            path: format!("/mnt/{volume}"),
+            volume: volume.to_owned(),
+            source,
+            is_read_only: false,
+            sub_path: None,
+        })
+        .collect();
+    summary
+}
+
+fn secret(name: &str) -> VolumeSource {
+    VolumeSource::Secret {
+        name: name.to_owned(),
+    }
+}
+
+#[test]
+fn volume_rows_dedupe_by_volume_name_in_first_seen_order() {
+    let containers = [
+        mounting(
+            "init",
+            vec![
+                ("certs", secret("tls")),
+                ("scratch", VolumeSource::EmptyDir),
+            ],
+        ),
+        mounting(
+            "app",
+            vec![
+                ("scratch", VolumeSource::EmptyDir),
+                ("certs", secret("tls")),
+            ],
+        ),
+        mounting("side", vec![("cache", VolumeSource::EmptyDir)]),
+    ];
+    let names: Vec<String> = volume_rows("shop", &containers)
+        .into_iter()
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(names, ["certs", "scratch", "cache"]);
+    assert!(volume_rows("shop", &[]).is_empty());
+}
+
+#[test]
+fn volume_rows_name_sources_and_link_only_those_with_a_screen() {
+    let containers = [mounting(
+        "app",
+        vec![
+            (
+                "config",
+                VolumeSource::ConfigMap {
+                    name: "api".to_owned(),
+                },
+            ),
+            ("key", secret("api-key")),
+            (
+                "data",
+                VolumeSource::PersistentVolumeClaim {
+                    claim: "data-0".to_owned(),
+                },
+            ),
+            ("tmp", VolumeSource::EmptyDir),
+            (
+                "logs",
+                VolumeSource::HostPath {
+                    path: "/var/log".to_owned(),
+                },
+            ),
+            ("labels", VolumeSource::DownwardApi),
+            (
+                "token",
+                VolumeSource::Projected {
+                    config_maps: vec!["ca".to_owned()],
+                    secrets: vec!["sa-token".to_owned()],
+                },
+            ),
+            (
+                "bare",
+                VolumeSource::Projected {
+                    config_maps: Vec::new(),
+                    secrets: Vec::new(),
+                },
+            ),
+            ("odd", VolumeSource::Other),
+        ],
+    )];
+    let rows = volume_rows("shop", &containers);
+    let listed: Vec<(&str, &str, bool)> = rows
+        .iter()
+        .map(|row| (row.name.as_str(), row.source.as_str(), row.target.is_some()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("config", "configmap/api", true),
+            ("key", "secret/api-key", true),
+            ("data", "pvc/data-0", true),
+            ("tmp", "emptyDir", false),
+            ("logs", "hostPath /var/log", false),
+            ("labels", "downwardAPI", false),
+            ("token", "projected · configmap/ca, secret/sa-token", false),
+            ("bare", "projected", false),
+            ("odd", "volume", false),
+        ]
+    );
+    assert_eq!(
+        rows[1].target,
+        ResourceKey::of_object("Secret", Some("shop"), "api-key")
+    );
+    assert_eq!(
+        rows[2].target,
+        ResourceKey::of_object("PersistentVolumeClaim", Some("shop"), "data-0")
+    );
+}

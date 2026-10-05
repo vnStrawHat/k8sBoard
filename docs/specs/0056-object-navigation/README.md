@@ -34,7 +34,7 @@ Status: **draft 2026-10-05, revised after advisor review**, from the task-based 
 - [ ] A2 header Back, Prev / Next (AC 10, 14)
 - [ ] A3 `follow_link`: denied, out of scope (AC 12, 13)
 - [x] B1 one link style, `open_link`, endpoint pod links (AC 11, 17; as built: list rows keep their row click and draw the name with `link_name`; the Revisions row links its `rev N` title)
-- [ ] B2 Pod Overview without new watches (AC 19-21)
+- [x] B2 Pod Overview without new watches (AC 19-21; as built: `Volumes` is always shown, with a note when no container mounts a volume; Env / Mounts links open through `open_link`, A3 adds the denied refusal)
 - [ ] B3a Pod Services; B3b Service Exposed by (AC 16, 20, 22)
 - [ ] B4 Ingress Backends, NetworkPolicy Pods (AC 15, 18)
 - [x] C1 palette searches the live condition feeds in scope (AC 23)

@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cluster::{
     ByteAmount, ContainerKind, ContainerResource, ContainerState, ContainerSummary, CpuAmount,
-    EventSummary, PodCondition, PodSummary, ResourceUsage,
+    EventSummary, PodCondition, PodSummary, ResourceUsage, VolumeSource,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
@@ -12,20 +12,23 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
+    Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
     prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::AppShell;
 use crate::clipboard_copy::copyable_mono;
 use crate::cluster_session::{ClusterSession, LiveList};
-use crate::container_detail::{ContainerDetailInput, container_detail, last_state_text};
+use crate::container_detail::{
+    ContainerDetailInput, container_detail, last_state_text, volume_target,
+};
 use crate::dock::Dock;
 use crate::drawer::{
-    DrawerBody, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, created_text,
+    DrawerBody, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, chips, created_text,
     detail_row, drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title, link_text,
     menu_button, section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
 };
+use crate::kind_row::deployment_of_pod;
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
@@ -43,6 +46,8 @@ use crate::usage_bar::UsageBar;
 use crate::usage_format::{Measure, usage_tone};
 
 const CONTAINER_LIST_WIDTH: Pixels = px(240.);
+/// Element ids of the Volumes links, clear of the overview's own link ids.
+const VOLUME_LINK_ID_BASE: usize = 100;
 
 pub(crate) fn pod_drawer(
     pod: &PodSummary,
@@ -211,6 +216,24 @@ fn overview(
             None => div().truncate().child(text).into_any_element(),
         }
     });
+    let service_account = pod
+        .service_account
+        .as_deref()
+        .and_then(|name| {
+            let target = ResourceKey::of_object("ServiceAccount", Some(&pod.namespace), name)?;
+            Some(link_text(3, &name.to_owned().into(), target, cx))
+        })
+        .unwrap_or_else(|| value_or_absent(pod.service_account.as_deref(), cx));
+    // Set only for a pod of a Deployment's ReplicaSet; the row is absent otherwise.
+    let deployment = deployment_of_pod(pod).and_then(|name| {
+        let target = ResourceKey::of_object("Deployment", Some(&pod.namespace), name)?;
+        Some(detail_row(
+            "Deployment",
+            link_text(4, &name.to_owned().into(), target, cx),
+            cx,
+        ))
+    });
+    let labels: Vec<SharedString> = pod.labels.iter().cloned().map(SharedString::from).collect();
     let diagnosis = pod_diagnosis(pod, events, now);
     // The first heading keeps its room above only when a box comes before it.
     let pod_title = if diagnosis.is_some() {
@@ -235,16 +258,13 @@ fn overview(
             value_or_absent(pod.qos_class.as_deref(), cx),
             cx,
         ))
-        .child(detail_row(
-            "Service account",
-            value_or_absent(pod.service_account.as_deref(), cx),
-            cx,
-        ))
+        .child(detail_row("Service account", service_account, cx))
         .child(detail_row(
             "Controlled by",
             controller.unwrap_or_else(|| absent_text(cx).into_any_element()),
             cx,
         ))
+        .children(deployment)
         .child(section_title("Conditions", cx))
         .child(conditions(pod, cx))
         .child(section_title(
@@ -257,6 +277,9 @@ fn overview(
                 .enumerate()
                 .map(|(index, container)| container_row(index, container, now, cx)),
         )
+        .children(volumes_section(pod, cx))
+        .child(section_title("Labels", cx))
+        .child(chips("pod-labels", &labels, cx))
         .into_any_element()
 }
 
@@ -289,6 +312,89 @@ fn why_box(diagnosis: &PodDiagnosis, cx: &Context<AppShell>) -> AnyElement {
                 .child(label)
         }))
         .into_any_element()
+}
+
+/// One volume that a container of the pod mounts, as the Volumes section lists it.
+#[derive(Debug, PartialEq, Eq)]
+struct VolumeRow {
+    name: String,
+    /// `secret/y`, `pvc/z`, `hostPath /p`, ...
+    source: String,
+    /// The screen of the source; `None` for volume kinds without one.
+    target: Option<ResourceKey>,
+}
+
+/// The volumes the containers mount, in first-seen order and once per volume name. `PodSummary`
+/// has no `spec.volumes`, so a volume that no container mounts is only in the YAML tab.
+fn volume_rows(namespace: &str, containers: &[ContainerSummary]) -> Vec<VolumeRow> {
+    let mut rows: Vec<VolumeRow> = Vec::new();
+    for mount in containers.iter().flat_map(|container| &container.mounts) {
+        if rows.iter().all(|row| row.name != mount.volume) {
+            rows.push(VolumeRow {
+                name: mount.volume.clone(),
+                source: volume_source_text(&mount.source),
+                target: volume_target(&mount.source, namespace),
+            });
+        }
+    }
+    rows
+}
+
+fn volume_source_text(source: &VolumeSource) -> String {
+    match source {
+        VolumeSource::ConfigMap { name } => format!("configmap/{name}"),
+        VolumeSource::Secret { name } => format!("secret/{name}"),
+        VolumeSource::PersistentVolumeClaim { claim } => format!("pvc/{claim}"),
+        VolumeSource::EmptyDir => "emptyDir".to_owned(),
+        VolumeSource::HostPath { path } => format!("hostPath {path}"),
+        VolumeSource::Projected {
+            config_maps,
+            secrets,
+        } => {
+            let names = config_maps
+                .iter()
+                .map(|name| format!("configmap/{name}"))
+                .chain(secrets.iter().map(|name| format!("secret/{name}")))
+                .collect::<Vec<_>>();
+            if names.is_empty() {
+                "projected".to_owned()
+            } else {
+                format!("projected · {}", names.join(", "))
+            }
+        }
+        VolumeSource::DownwardApi => "downwardAPI".to_owned(),
+        VolumeSource::Other => "volume".to_owned(),
+    }
+}
+
+/// The `Volumes` section: one row per mounted volume, its source a link when it has a screen.
+fn volumes_section(pod: &PodSummary, cx: &Context<AppShell>) -> Vec<AnyElement> {
+    let rows = volume_rows(&pod.namespace, &pod.containers);
+    let body = if rows.is_empty() {
+        vec![
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("No container mounts a volume; the YAML tab lists the others")
+                .into_any_element(),
+        ]
+    } else {
+        rows.into_iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let value = match row.target {
+                    Some(target) => {
+                        link_text(VOLUME_LINK_ID_BASE + index, &row.source.into(), target, cx)
+                    }
+                    None => div().truncate().child(row.source).into_any_element(),
+                };
+                detail_row(row.name, value, cx).into_any_element()
+            })
+            .collect()
+    };
+    std::iter::once(section_title("Volumes", cx).into_any_element())
+        .chain(body)
+        .collect()
 }
 
 /// `{reason}: {message}`, either part may be missing; `None` when both are.

@@ -714,13 +714,29 @@ fn source_text(source: &VolumeSource, volume: &str) -> String {
     }
 }
 
-/// The ConfigMap screen entry for a source in the pod's namespace. Secrets and claims have no
-/// screen yet, so an empty name never reaches a link.
-fn config_map_target(namespace: &str, name: &str) -> Option<ResourceKey> {
+/// The screen entry of a ConfigMap, Secret, or PersistentVolumeClaim source in the pod's
+/// namespace. An empty name never reaches a link.
+pub(crate) fn source_target(kind: &str, namespace: &str, name: &str) -> Option<ResourceKey> {
     if name.is_empty() {
         return None;
     }
-    ResourceKey::of_object("ConfigMap", Some(namespace), name)
+    ResourceKey::of_object(kind, Some(namespace), name)
+}
+
+/// The screen of a volume's source; the other volume kinds have none.
+pub(crate) fn volume_target(source: &VolumeSource, namespace: &str) -> Option<ResourceKey> {
+    match source {
+        VolumeSource::ConfigMap { name } => source_target("ConfigMap", namespace, name),
+        VolumeSource::Secret { name } => source_target("Secret", namespace, name),
+        VolumeSource::PersistentVolumeClaim { claim } => {
+            source_target("PersistentVolumeClaim", namespace, claim)
+        }
+        VolumeSource::EmptyDir
+        | VolumeSource::HostPath { .. }
+        | VolumeSource::Projected { .. }
+        | VolumeSource::DownwardApi
+        | VolumeSource::Other => None,
+    }
 }
 
 /// envFrom rows first, then the variables in spec order. Names and sources only.
@@ -731,13 +747,13 @@ fn env_rows(container: &ContainerSummary, namespace: &str) -> Vec<SourceRow> {
             EnvFromSource::ConfigMap { name: source } => SourceRow {
                 name,
                 source: format!("all keys of configmap/{source}"),
-                target: config_map_target(namespace, source),
+                target: source_target("ConfigMap", namespace, source),
                 usage: None,
             },
             EnvFromSource::Secret { name: source } => SourceRow {
                 name,
                 source: format!("all keys of secret/{source}"),
-                target: None,
+                target: source_target("Secret", namespace, source),
                 usage: None,
             },
             EnvFromSource::Unknown => SourceRow {
@@ -753,9 +769,12 @@ fn env_rows(container: &ContainerSummary, namespace: &str) -> Vec<SourceRow> {
             EnvSource::Literal => ("literal · value in the YAML tab".to_owned(), None),
             EnvSource::ConfigMapKey { name, key } => (
                 format!("configmap/{name} · {key}"),
-                config_map_target(namespace, name),
+                source_target("ConfigMap", namespace, name),
             ),
-            EnvSource::SecretKey { name, key } => (format!("secret/{name} · {key}"), None),
+            EnvSource::SecretKey { name, key } => (
+                format!("secret/{name} · {key}"),
+                source_target("Secret", namespace, name),
+            ),
             EnvSource::Field { path } => (format!("field {path}"), None),
             EnvSource::ResourceField { resource } => (format!("resource {resource}"), None),
             EnvSource::Unknown => ("unknown source".to_owned(), None),
@@ -786,10 +805,7 @@ fn mount_rows(
             if let Some(sub_path) = &mount.sub_path {
                 source.push_str(&format!(" · subPath {sub_path}"));
             }
-            let target = match &mount.source {
-                VolumeSource::ConfigMap { name } => config_map_target(namespace, name),
-                _ => None,
-            };
+            let target = volume_target(&mount.source, namespace);
             let usage = match &mount.source {
                 VolumeSource::PersistentVolumeClaim { claim } => kubelet
                     .and_then(|kubelet| kubelet.pvc_usage(namespace, claim))

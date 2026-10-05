@@ -294,6 +294,7 @@ fn env_rows_list_env_from_first_with_targets() {
     ];
     let rows = env_rows(&summary, "shop");
     let config_map = |name: &str| ResourceKey::of_object("ConfigMap", Some("shop"), name);
+    let secret = |name: &str| ResourceKey::of_object("Secret", Some("shop"), name);
     let listed: Vec<_> = rows
         .iter()
         .map(|row| (row.name.as_str(), row.source.as_str(), row.target.clone()))
@@ -306,14 +307,14 @@ fn env_rows_list_env_from_first_with_targets() {
                 "all keys of configmap/shared",
                 config_map("shared")
             ),
-            ("*", "all keys of secret/creds", None),
+            ("*", "all keys of secret/creds", secret("creds")),
             ("MODE", "literal · value in the YAML tab", None),
             (
                 "FROM_MAP",
                 "configmap/api-config · mode",
                 config_map("api-config")
             ),
-            ("PASSWORD", "secret/api-db · password", None),
+            ("PASSWORD", "secret/api-db · password", secret("api-db")),
             ("POD", "field metadata.name", None),
             ("CPU", "resource limits.cpu", None),
             ("ODD", "unknown source", None),
@@ -402,8 +403,36 @@ fn mount_rows_text_and_targets() {
         rows[0].target,
         ResourceKey::of_object("ConfigMap", Some("shop"), "api-config")
     );
-    // A Secret or claim has no screen yet, and an empty name never becomes a link.
-    assert!(rows[1..].iter().all(|row| row.target.is_none()));
+    assert_eq!(
+        rows[1].target,
+        ResourceKey::of_object("Secret", Some("shop"), "api-key")
+    );
+    assert_eq!(
+        rows[2].target,
+        ResourceKey::of_object("PersistentVolumeClaim", Some("shop"), "data-claim")
+    );
+    // The other volume kinds have no screen, and an empty name never becomes a link.
+    assert!(rows[3..].iter().all(|row| row.target.is_none()));
+}
+
+#[test]
+fn source_targets_need_a_name() {
+    for kind in ["ConfigMap", "Secret", "PersistentVolumeClaim"] {
+        assert!(source_target(kind, "shop", "x").is_some(), "{kind}");
+        assert_eq!(source_target(kind, "shop", ""), None, "{kind}");
+    }
+}
+
+#[test]
+fn empty_secret_and_claim_names_are_not_links() {
+    let secret = VolumeSource::Secret {
+        name: String::new(),
+    };
+    let claim = VolumeSource::PersistentVolumeClaim {
+        claim: String::new(),
+    };
+    assert_eq!(volume_target(&secret, "shop"), None);
+    assert_eq!(volume_target(&claim, "shop"), None);
 }
 
 fn history_with_claim(used: Option<u64>, capacity: Option<u64>) -> KubeletHistory {

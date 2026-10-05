@@ -431,6 +431,23 @@ pub(crate) fn deployment_of_replica_set(replica_set: &str) -> Option<&str> {
     (is_hash && !deployment.is_empty()).then_some(deployment)
 }
 
+/// The Deployment of a pod whose ReplicaSet is `{deployment}-{hash}` with `hash` equal to the pod's
+/// `pod-template-hash` label. Only the Deployment controller sets that label, so a standalone
+/// ReplicaSet (no label, or another suffix) yields `None` and no list is needed.
+pub(crate) fn deployment_of_pod(pod: &PodSummary) -> Option<&str> {
+    let controller = pod
+        .controller
+        .as_ref()
+        .filter(|controller| controller.kind == REPLICA_SET_KIND)?;
+    let hash = pod
+        .labels
+        .iter()
+        .find_map(|term| term.strip_prefix("pod-template-hash="))
+        .filter(|hash| !hash.is_empty())?;
+    let deployment = controller.name.strip_suffix(hash)?.strip_suffix('-')?;
+    (!deployment.is_empty()).then_some(deployment)
+}
+
 /// The workload a pod's problem belongs to: the Deployment behind a hashed ReplicaSet, else the
 /// controller itself; `None` for a pod without a controller.
 pub(crate) fn pod_workload(
@@ -641,6 +658,58 @@ mod tests {
         assert!(on("other", Some("node-1")));
         assert!(!on("ns", Some("node-2")));
         assert!(!on("ns", None));
+    }
+
+    fn hashed_pod(controller: Option<(&str, &str)>, labels: &[&str]) -> PodSummary {
+        let mut pod = pod("ns", controller);
+        pod.labels = labels.iter().map(|term| (*term).to_owned()).collect();
+        pod
+    }
+
+    #[test]
+    fn deployment_of_pod_matches_the_template_hash() {
+        let pod = hashed_pod(
+            Some(("ReplicaSet", "api-worker-7d9f8c")),
+            &["app=api", "pod-template-hash=7d9f8c"],
+        );
+        assert_eq!(deployment_of_pod(&pod), Some("api-worker"));
+    }
+
+    #[test]
+    fn deployment_of_pod_needs_the_hash_to_match_the_replica_set() {
+        let pod = hashed_pod(
+            Some(("ReplicaSet", "api-7d9f8c")),
+            &["pod-template-hash=55b6d4"],
+        );
+        assert_eq!(deployment_of_pod(&pod), None);
+    }
+
+    #[test]
+    fn deployment_of_pod_needs_the_hash_label() {
+        let pod = hashed_pod(Some(("ReplicaSet", "api-7d9f8c")), &["app=api"]);
+        assert_eq!(deployment_of_pod(&pod), None);
+    }
+
+    #[test]
+    fn deployment_of_pod_needs_a_replica_set_owner() {
+        let pod = hashed_pod(
+            Some(("DaemonSet", "api-7d9f8c")),
+            &["pod-template-hash=7d9f8c"],
+        );
+        assert_eq!(deployment_of_pod(&pod), None);
+        let orphan = hashed_pod(None, &["pod-template-hash=7d9f8c"]);
+        assert_eq!(deployment_of_pod(&orphan), None);
+    }
+
+    #[test]
+    fn deployment_of_pod_rejects_an_empty_name_or_hash() {
+        let no_name = hashed_pod(
+            Some(("ReplicaSet", "-7d9f8c")),
+            &["pod-template-hash=7d9f8c"],
+        );
+        assert_eq!(deployment_of_pod(&no_name), None);
+        let no_hash = hashed_pod(Some(("ReplicaSet", "api-")), &["pod-template-hash="]);
+        assert_eq!(deployment_of_pod(&no_hash), None);
     }
 
     #[test]
