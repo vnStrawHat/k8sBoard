@@ -179,6 +179,20 @@ fn aligned<P: Copy>(ring: Option<&VecDeque<Option<P>>>, len: usize) -> Vec<Optio
     values
 }
 
+/// Pushes `value` and drops the oldest entry once the ring holds `cap`. The ring grows by doubling
+/// but never past `cap`: plain doubling leaves 288 coarse points in a buffer of 512, and a long
+/// session keeps one such ring per series of every pod.
+fn push_capped<T>(ring: &mut VecDeque<T>, value: T, cap: usize) {
+    if ring.len() == cap {
+        ring.pop_front();
+    }
+    if ring.len() == ring.capacity() {
+        let room = cap - ring.len();
+        ring.reserve_exact(ring.capacity().clamp(4, room));
+    }
+    ring.push_back(value);
+}
+
 /// What `Rings::age` decided for a series.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Retention {
@@ -210,10 +224,7 @@ impl<P: Copy> Rings<P> {
         let Some(fine) = &mut self.fine else {
             return;
         };
-        if fine.len() == FINE_TICKS {
-            fine.pop_front();
-        }
-        fine.push_back(None);
+        push_capped(fine, None, FINE_TICKS);
     }
 
     /// Sets the entry of the open tick `tick`. A freed or new ring starts again with this tick.
@@ -239,11 +250,8 @@ impl<P: Copy> Rings<P> {
             .take(TICKS_PER_COARSE)
             .filter_map(|point| *point)
             .collect();
-        if self.coarse.len() == COARSE_POINTS {
-            self.coarse.pop_front();
-        }
-        self.coarse
-            .push_back((!recent.is_empty()).then(|| P::mean(&recent)));
+        let point = (!recent.is_empty()).then(|| P::mean(&recent));
+        push_capped(&mut self.coarse, point, COARSE_POINTS);
     }
 
     /// The value of the newest tick; `None` when the series did not report it.
@@ -317,6 +325,38 @@ mod tests {
         assert_eq!(closed, (FINE_TICKS + 10) / TICKS_PER_COARSE);
         assert_eq!(timelines.coarse_len(), closed);
         assert_eq!(timelines.newest(), Some(at((FINE_TICKS as i64 + 10) * 15)));
+    }
+
+    #[test]
+    fn rings_never_hold_more_room_than_their_caps() {
+        let mut rings = Rings::new();
+        for step in 1..=(COARSE_POINTS as u64 * TICKS_PER_COARSE as u64 + 40) {
+            tick(&mut rings, step, Some(step as u32));
+            if step.is_multiple_of(TICKS_PER_COARSE as u64) {
+                rings.fold();
+            }
+        }
+        assert_eq!(rings.len(), FINE_TICKS);
+        assert_eq!(rings.coarse_len(), COARSE_POINTS);
+        let fine = rings
+            .fine
+            .as_ref()
+            .expect("a live series keeps its fine ring");
+        assert_eq!(fine.capacity(), FINE_TICKS);
+        assert_eq!(rings.coarse.capacity(), COARSE_POINTS);
+    }
+
+    #[test]
+    fn a_young_ring_stays_small() {
+        let mut rings = Rings::new();
+        for step in 1..=3 {
+            tick(&mut rings, step, Some(step as u32));
+        }
+        let fine = rings
+            .fine
+            .as_ref()
+            .expect("a live series keeps its fine ring");
+        assert!(fine.capacity() <= 8);
     }
 
     #[test]
