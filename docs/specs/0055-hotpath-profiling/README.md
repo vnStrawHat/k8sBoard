@@ -58,6 +58,27 @@ Adding a site: put the `cfg_attr` line on a function (`hotpath::measure(impl_typ
 - **threads**: per-thread allocate / free; a growing `Diff` on one thread points at retained data.
 - Retained memory: compare `[heap] live` between screens and against a launch that never connects (`--screen overview` with no kubeconfig).
 
+## Memory findings (2026-10-05)
+
+UAT cluster (108 pods), Windows 11, Intel iGPU, debug build, after 45 s on the screen. Private bytes (`PrivateUsage`) and working set, MB:
+
+| Screen | none (no cluster) | overview | pods | topology | pod drawer | logs dock |
+|---|---|---|---|---|---|---|
+| private / working set | 97 / 121 | 108 / 137 | 119 / 149 | 105 / 127 | 123 / 153 | 122 / 151 |
+
+Where the 119 MB of Pods goes (`[heap]` tracker plus a throwaway stack-sampling allocator, hotpath's own ~5 MiB removed):
+
+| Component | MB | Evidence |
+|---|---|---|
+| Platform: GPU driver, DirectX, DirectWrite, DLL data (outside the Rust heap) | ~91 | A launch that never connects is 97 MB with 5-7 MB of Rust heap. Of it ~15 MB is window surfaces: width 800 / 1320 / 2400 reads 89 / 97 / 107 MB (about 13 B per pixel). |
+| Rust heap at start (GPUI arena, taffy, scene, text) | ~6 | Sampler, no cluster. |
+| GPUI frame buffers the Pods table grows | ~10 | Arena +3.3, scene +2.2, taffy +2.3, text +0.9, other +1.5; about 300 cells per frame. |
+| kube / hyper / rustls / tokio | ~2 | 56 connections, about 50 KB each. |
+| k8sBoard data | ~3 | Pod summaries (about 6 KB each, kept twice: watch store and UI list), rows, histories. |
+| Unattributed (atlas textures, heap slack) | ~7 | Private delta minus the sampled heap delta. |
+
+Findings: the live Rust heap is 20-25 MB on every screen and flat over 15 minutes (private 122.5 to 125 MB); the data k8sBoard keeps is about 3 MB. Two costs grow with cluster size, not with the UAT: the pod summaries (about 12 KB per pod) and the usage histories (about 32 KB per pod after a day, `history_rings.rs`). Ideas that need a decision: HTTP/2 for the watches, sharing summaries between watch store and UI, loading container env and mounts when the drawer opens, and `GPUI_DISABLE_DIRECT_COMPOSITION=1` (working set 121 to 98 MB, private -2 MB, changes how the window is presented).
+
 ## Tests
 
 `live_heap` has a unit test for the live and peak counters (`cargo test -p k8sboard --features hotpath-profiling-alloc live_heap`). The default gate never compiles `hotpath`.
