@@ -49,6 +49,7 @@ use crate::drain_plan::{
     preview_lines, timeout_text,
 };
 use crate::drain_writes::{DrainScope, cordon_write, removal_write};
+use crate::drawer::truncated_text_with_tooltip;
 use crate::environment::{Environment, environment_badge};
 use crate::keymap::FORWARD_FORM;
 use crate::resource_actions::{
@@ -1108,7 +1109,10 @@ impl DrainDialog {
                 PodsLoad::Ready(_) => {}
             }
         }
-        for line in preview_lines(&self.plans, |uid| self.drain_check(uid)) {
+        for (index, line) in preview_lines(&self.plans, |uid| self.drain_check(uid))
+            .into_iter()
+            .enumerate()
+        {
             let is_skipped = matches!(line, PreviewLine::Skipped { .. });
             let row = match line {
                 PreviewLine::Node(node) => div()
@@ -1123,6 +1127,7 @@ impl DrainDialog {
                     name,
                     result,
                     tone,
+                    detail,
                 } => h_flex()
                     .h(px(PREVIEW_ROW_HEIGHT))
                     .gap_2()
@@ -1142,9 +1147,16 @@ impl DrainDialog {
                             .max_w(px(RESULT_MAX_WIDTH))
                             .text_xs()
                             .text_right()
-                            .truncate()
                             .text_color(tone_color(tone, cx))
-                            .child(result),
+                            .child(match detail {
+                                Some(detail) => truncated_text_with_tooltip(
+                                    ("drain-result", index),
+                                    result,
+                                    detail,
+                                )
+                                .into_any_element(),
+                                None => div().truncate().child(result).into_any_element(),
+                            }),
                     )
                     .into_any_element(),
                 PreviewLine::Skipped { text } => h_flex()

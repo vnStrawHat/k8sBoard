@@ -518,6 +518,32 @@ fn passing_dry_run_downgrades_blocked_and_waits() {
 }
 
 #[test]
+fn a_budget_refusal_reads_in_a_short_form_with_the_full_words_as_detail() {
+    let full = "The disruption budget api-pdb needs 2 healthy pods and has 2 currently";
+    let pods = [pod("payments", "api-1")];
+    let plan = node_plan("wk-04", &pods, &[], &DrainOptions::default());
+    let refused = PodCheck::Refused(full.into());
+    let (text, tone) = pod_result(&plan.pods[0], &refused, BudgetPolicy::Respect);
+    assert_eq!(text, "PDB api-pdb: 0 allowed (2/2 healthy)");
+    assert_eq!(tone, StatusTone::Bad);
+    let lines = preview_lines(&[plan], |_| refused.clone());
+    let PreviewLine::Pod { detail, .. } = &lines[0] else {
+        panic!("a pod line");
+    };
+    assert_eq!(detail.as_deref(), Some(full));
+}
+
+#[test]
+fn a_budget_refusal_without_numbers_says_only_that_nothing_is_allowed() {
+    let refusal = BudgetRefusal::parse("The disruption budget api-pdb is exhausted");
+    assert_eq!(
+        refusal.map(|refusal| refusal.summary()).as_deref(),
+        Some("PDB api-pdb: 0 allowed")
+    );
+    assert!(BudgetRefusal::parse("needs 2 healthy pods").is_none());
+}
+
+#[test]
 fn a_refused_or_failed_dry_run_is_the_server_truth() {
     let pods = [pod("payments", "api-1")];
     let plan = node_plan("wk-04", &pods, &[], &DrainOptions::default());

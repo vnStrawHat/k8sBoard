@@ -419,9 +419,46 @@ pub(crate) enum PreviewLine {
         name: SharedString,
         result: SharedString,
         tone: StatusTone,
+        /// The server's own words behind a refusal or failure, for the tooltip of a cell that
+        /// shows a short form of them or is cut.
+        detail: Option<SharedString>,
     },
     /// Pods the drain leaves alone, grouped by reason: `6 DaemonSet pods`.
     Skipped { text: SharedString },
+}
+
+/// The budget a refusal names. The API words it
+/// `The disruption budget api-pdb needs 2 healthy pods and has 2 currently`.
+pub(crate) struct BudgetRefusal<'a> {
+    pub(crate) name: &'a str,
+    /// Healthy pods now, and healthy pods the budget needs.
+    healthy: Option<(u32, u32)>,
+}
+
+impl<'a> BudgetRefusal<'a> {
+    pub(crate) fn parse(message: &'a str) -> Option<Self> {
+        let (name, rest) = message
+            .strip_prefix("The disruption budget ")?
+            .split_once(' ')?;
+        let number_after = |word: &str| -> Option<u32> {
+            rest.split_once(word)?
+                .1
+                .split_whitespace()
+                .next()?
+                .parse()
+                .ok()
+        };
+        let healthy = number_after("has ").zip(number_after("needs "));
+        Some(Self { name, healthy })
+    }
+
+    /// `PDB api-pdb: 0 allowed (2/2 healthy)`: a refusal means the budget allows no disruption.
+    pub(crate) fn summary(&self) -> String {
+        match self.healthy {
+            Some((has, needs)) => format!("PDB {}: 0 allowed ({has}/{needs} healthy)", self.name),
+            None => format!("PDB {}: 0 allowed", self.name),
+        }
+    }
 }
 
 /// `api-pdb`, or `api-pdb and 2 more`.
@@ -489,7 +526,11 @@ pub(crate) fn pod_result(
             return (format!("Refused: {message}").into(), StatusTone::Bad);
         }
         PodCheck::Refused(message) => {
-            return (format!("Blocked by PDB: {message}").into(), StatusTone::Bad);
+            let text = BudgetRefusal::parse(message).map_or_else(
+                || format!("Blocked by PDB: {message}"),
+                |refusal| refusal.summary(),
+            );
+            return (text.into(), StatusTone::Bad);
         }
         PodCheck::Failed(error) => return (format!("Failed: {error}").into(), StatusTone::Bad),
         PodCheck::Accepted
@@ -550,11 +591,16 @@ pub(crate) fn preview_lines(
         shown.sort_by_key(|(rank, ..)| *rank);
         for (_, planned, check) in shown {
             let (result, tone) = pod_result(planned, &check, plan.budgets);
+            let detail = match &check {
+                PodCheck::Refused(message) | PodCheck::Failed(message) => Some(message.clone()),
+                _ => None,
+            };
             lines.push(PreviewLine::Pod {
                 namespace: planned.pod.namespace.clone().into(),
                 name: planned.pod.name.clone().into(),
                 result,
                 tone,
+                detail,
             });
         }
         let count = |reason: SkipReason| {

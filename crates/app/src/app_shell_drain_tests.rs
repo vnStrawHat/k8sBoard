@@ -562,12 +562,18 @@ fn a_429_is_a_wait_and_never_a_failure(cx: &mut TestAppContext) {
             "Server dry-run: cordon passed · 1 of 2 evictions accepted, 1 refused by PDB"
         );
     });
-    // The refused pod floats to the top with the server's words.
+    // The refused pod floats to the top: a short form, with the server's words as the tooltip.
     let first = dialog.read_with(cx, |dialog, _| dialog.preview()[0].clone());
     match first {
-        PreviewLine::Pod { name, result, .. } => {
+        PreviewLine::Pod {
+            name,
+            result,
+            detail,
+            ..
+        } => {
             assert_eq!(name.as_ref(), "api-2");
-            assert_eq!(result.as_ref(), format!("Blocked by PDB: {PDB_REFUSAL}"));
+            assert_eq!(result.as_ref(), "PDB api-pdb: 0 allowed (2/2 healthy)");
+            assert_eq!(detail.as_deref(), Some(PDB_REFUSAL));
         }
         other => panic!("expected a pod line, got {other:?}"),
     }
