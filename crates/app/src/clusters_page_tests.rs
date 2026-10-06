@@ -113,6 +113,15 @@ fn first_row_is_selected_by_default(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_page_without_clusters_renders_its_empty_state(cx: &mut TestAppContext) {
+    install(None, &[], cx);
+    let (window, page) = open_page(cx);
+    render(window, cx);
+    render(window, cx);
+    assert_eq!(selected(&page, cx), None);
+}
+
+#[gpui_kit::test]
 fn selection_change_recreates_inputs(cx: &mut TestAppContext) {
     let (dir, window, page) = two_cluster_setup("recreate", cx);
     let before = page.read_with(cx, |page, _| {

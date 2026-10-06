@@ -271,7 +271,7 @@ impl ClustersPage {
             state
         });
         let namespace = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).placeholder("none");
+            let mut state = InputState::new(window, cx).placeholder("(none)");
             state.set_value(namespace_text, window, cx);
             state
         });
@@ -520,9 +520,25 @@ impl Render for ClustersPage {
         if let Some(row) = &selected_row {
             self.sync_form(row, window, cx);
         }
-        let form = match &selected_row {
-            Some(row) => self.render_form(row, cx),
-            None => muted_text("Add a kubeconfig to see its clusters here.", cx).into_any_element(),
+        // One centred state instead of an empty list beside an empty form.
+        let body = match &selected_row {
+            Some(row) => {
+                let form = self.render_form(row, cx);
+                h_flex()
+                    .w_full()
+                    .gap_4()
+                    .items_start()
+                    .child(self.render_list(&groups, cx))
+                    .child(div().flex_1().min_w_0().child(form))
+                    .into_any_element()
+            }
+            None if groups.is_empty() => self.render_no_clusters(cx),
+            None => h_flex()
+                .w_full()
+                .gap_4()
+                .items_start()
+                .child(self.render_list(&groups, cx))
+                .into_any_element(),
         };
         v_flex()
             .w_full()
@@ -530,18 +546,25 @@ impl Render for ClustersPage {
             .children(self.render_notices(cx))
             .children(self.render_folder_lines(cx))
             .children(self.render_paste_status(cx))
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_4()
-                    .items_start()
-                    .child(self.render_list(&groups, cx))
-                    .child(div().flex_1().min_w_0().child(form)),
-            )
+            .child(body)
     }
 }
 
 impl ClustersPage {
+    /// The page when no cluster is registered: one centred message with the way to add one.
+    fn render_no_clusters(&self, cx: &mut Context<Self>) -> AnyElement {
+        let blocked = Self::paste_blocked_reason(cx);
+        v_flex()
+            .w_full()
+            .py_8()
+            .gap_2()
+            .items_center()
+            .child(div().text_lg().font_semibold().child("No clusters yet"))
+            .child(muted_text("Add a kubeconfig to see its clusters here.", cx))
+            .child(add_cluster_button(cx.entity(), blocked))
+            .into_any_element()
+    }
+
     /// One line per watched folder, with the way to stop watching it. Stopping only edits the
     /// settings: nothing in the folder is touched, so there is no dialog.
     fn render_folder_lines(&self, cx: &Context<Self>) -> Vec<AnyElement> {
@@ -674,15 +697,11 @@ impl ClustersPage {
             .overflow_y_scroll()
             .p_1()
             .gap_1();
-        if groups.is_empty() {
-            list = list.child(muted_text("No clusters yet.", cx));
-        } else {
-            list = list
-                .border_1()
-                .border_color(border)
-                .rounded(cx.theme().radius);
-        }
-        if !groups.is_empty() && visible.is_empty() {
+        list = list
+            .border_1()
+            .border_color(border)
+            .rounded(cx.theme().radius);
+        if visible.is_empty() {
             let text = format!("No clusters match '{}'.", search.trim());
             list = list.child(muted_text(text, cx));
         }
@@ -837,11 +856,20 @@ impl ClustersPage {
         );
         let environment_row = form_row(
             "Environment",
-            centered(environment_menu(
-                row,
-                entry.as_ref(),
-                &AppSettings::get(cx).registry.environments,
-            )),
+            v_flex()
+                .gap_1()
+                .child(centered(environment_menu(
+                    row,
+                    entry.as_ref(),
+                    &AppSettings::get(cx).registry.environments,
+                )))
+                .when(
+                    entry
+                        .as_ref()
+                        .is_none_or(|entry| entry.environment.is_none()),
+                    |column| column.child(muted_text(ENVIRONMENT_AUTO_HINT, cx)),
+                )
+                .into_any_element(),
             cx,
         );
         let cluster = row.cluster.clone();
@@ -1115,6 +1143,10 @@ pub(crate) fn add_cluster_button(
             )
         })
 }
+
+/// Says why Auto picked a tier: the rule of `guess_environment`. Shown only while Auto is chosen.
+const ENVIRONMENT_AUTO_HINT: &str =
+    "Auto is guessed from the context and cluster names; Staging when nothing matches.";
 
 /// The text of the Environment control. A stored custom name that no usable environment carries
 /// shows as stored (the profile behaves as Production, so Production would hide the dangling key).

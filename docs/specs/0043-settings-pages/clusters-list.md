@@ -56,3 +56,5 @@ pub(crate) fn cluster_color(color: ClusterColor, cx: &App) -> Hsla;
 - **Form**: row `Color` between Environment and Default namespace (W2 order): six 18 px round swatches, the current one ringed (`border_2`, `theme.foreground`), tooltip = name. Click → store `None` when the colour equals `ClusterColor::of(profile.environment)`, else `Some(color)`; so a cluster on its environment colour keeps following the environment.
 - Changing the environment with `color: None` moves the border with it; with `Some` it stays.
 - No new key for "labels in every table" (W2 note 4): after 0046 no table shows a cluster label.
+
+- UX batch 5c: with no cluster registered the page shows one centred `No clusters yet` state with its own `Add cluster` menu, not an empty list beside an empty form. The Default namespace placeholder reads `(none)`, and while the environment is Auto a muted line says it is guessed from the context and cluster names (Staging when nothing matches).
