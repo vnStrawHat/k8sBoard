@@ -2746,8 +2746,19 @@ pub(crate) fn shell_menu_state(pod: &PodSummary, guard: &ClusterGuard<'_>) -> Sh
     {
         return ShellMenuState::Disabled(reason);
     }
-    let choices: Vec<ShellChoice> = pod
-        .containers
+    let choices = shell_choices(pod);
+    match choices.as_slice() {
+        [] => ShellMenuState::Disabled("The pod has no containers".into()),
+        [only] if only.is_running => ShellMenuState::One(only.name.clone()),
+        [_] => ShellMenuState::Disabled(NOT_RUNNING_REASON.into()),
+        _ if choices.iter().any(|choice| choice.is_running) => ShellMenuState::Pick(choices),
+        _ => ShellMenuState::Disabled("No running container".into()),
+    }
+}
+
+/// The containers a shell can be asked for: every one but the init containers.
+fn shell_choices(pod: &PodSummary) -> Vec<ShellChoice> {
+    pod.containers
         .iter()
         .filter(|container| container.kind != ContainerKind::Init)
         .map(|container| ShellChoice {
@@ -2755,13 +2766,28 @@ pub(crate) fn shell_menu_state(pod: &PodSummary, guard: &ClusterGuard<'_>) -> Sh
             tag: kind_tag_text(container.kind),
             is_running: is_running(container),
         })
-        .collect();
-    match choices.as_slice() {
-        [] => ShellMenuState::Disabled("The pod has no containers".into()),
-        [only] if only.is_running => ShellMenuState::One(only.name.clone()),
-        [_] => ShellMenuState::Disabled(NOT_RUNNING_REASON.into()),
-        _ if choices.iter().any(|choice| choice.is_running) => ShellMenuState::Pick(choices),
-        _ => ShellMenuState::Disabled("No running container".into()),
+        .collect()
+}
+
+/// What S (and the palette's Open shell) does on a pod.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DefaultShell {
+    /// A pod with one container, or no choice to make: this container.
+    Open(String),
+    /// Several containers: the picker first, as the Open shell submenu offers.
+    Pick(Vec<ShellChoice>),
+    Unavailable,
+}
+
+/// The same split as the Open shell submenu, so S and the menu never disagree. Pure.
+pub(crate) fn default_shell(pod: &PodSummary) -> DefaultShell {
+    let choices = shell_choices(pod);
+    if choices.len() > 1 && choices.iter().any(|choice| choice.is_running) {
+        return DefaultShell::Pick(choices);
+    }
+    match default_shell_container(pod) {
+        Some(container) => DefaultShell::Open(container.name.clone()),
+        None => DefaultShell::Unavailable,
     }
 }
 
@@ -2948,35 +2974,18 @@ fn choice_items(
     })
 }
 
-/// `--screen shell-picker-fixture`: the container list of the Open shell submenu, in a dialog, since a
-/// submenu cannot be held open by a command line. Nothing in it opens a shell.
-#[cfg(feature = "screenshot")]
-pub(crate) fn open_shell_picker_fixture(window: &mut Window, cx: &mut App) {
+/// The container list of the Open shell submenu in a dialog: S on a pod with several containers shows
+/// it before the confirm, and `--screen shell-picker-fixture` shows it since a submenu cannot be held
+/// open by a command line.
+pub(crate) fn open_shell_picker(
+    choices: Vec<ShellChoice>,
+    open: impl Fn(String) -> StartShell + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
     use gpui_kit::component::WindowExt as _;
-    let choices = vec![
-        ShellChoice {
-            name: "api".to_owned(),
-            tag: "MAIN",
-            is_running: true,
-        },
-        ShellChoice {
-            name: "worker".to_owned(),
-            tag: "MAIN",
-            is_running: true,
-        },
-        ShellChoice {
-            name: "istio-proxy".to_owned(),
-            tag: "SIDECAR",
-            is_running: true,
-        },
-        ShellChoice {
-            name: "migrate".to_owned(),
-            tag: "SIDECAR",
-            is_running: false,
-        },
-    ];
     let menu = PopupMenu::build(window, cx, move |menu, _, _| {
-        choice_items(menu, &choices, &|_| Box::new(|_, _| {}))
+        choice_items(menu, &choices, &open)
     });
     window.open_dialog(cx, move |dialog, _, _| {
         // The menu draws its own border, so the dialog adds neither a title nor padding.
@@ -2986,6 +2995,23 @@ pub(crate) fn open_shell_picker_fixture(window: &mut Window, cx: &mut App) {
             .close_button(false)
             .child(menu.clone())
     });
+}
+
+/// `--screen shell-picker-fixture`: nothing in it opens a shell.
+#[cfg(feature = "screenshot")]
+pub(crate) fn open_shell_picker_fixture(window: &mut Window, cx: &mut App) {
+    let choice = |name: &str, tag, is_running| ShellChoice {
+        name: name.to_owned(),
+        tag,
+        is_running,
+    };
+    let choices = vec![
+        choice("api", "MAIN", true),
+        choice("worker", "MAIN", true),
+        choice("istio-proxy", "SIDECAR", true),
+        choice("migrate", "SIDECAR", false),
+    ];
+    open_shell_picker(choices, |_| Box::new(|_, _| {}), window, cx);
 }
 
 /// Cordon, or Uncordon on a cordoned node. It acts on the node of the row's own cluster, never on the

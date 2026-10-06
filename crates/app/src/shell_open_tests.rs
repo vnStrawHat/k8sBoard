@@ -231,6 +231,21 @@ impl Shells {
         });
     }
 
+    /// Moves the cursor of the Pods table to `pod` of the secondary cluster.
+    fn select_pod(&self, pod: &str, cx: &mut TestAppContext) {
+        let object = ClusterObject::new(
+            self.stg.clone(),
+            ResourceKey::Pod {
+                namespace: "shop".to_owned(),
+                name: pod.to_owned(),
+            },
+        );
+        self.fixture
+            .shell
+            .update(cx, |shell, cx| shell.change_selection(Some(object), cx));
+        cx.run_until_parked();
+    }
+
     fn dialog(&self, cx: &mut TestAppContext) -> Entity<ConfirmDialog> {
         self.fixture
             .shell
@@ -513,31 +528,37 @@ fn an_exec_connection_that_came_up_is_audited_as_applied(cx: &mut TestAppContext
 // ---- entry points ----
 
 #[gpui_kit::test]
-fn s_opens_the_default_container_of_the_cursor_pod_in_its_cluster(cx: &mut TestAppContext) {
-    let shells = two_clusters("s-key", cx);
-    let object = ClusterObject::new(
-        shells.stg.clone(),
-        ResourceKey::Pod {
-            namespace: "shop".to_owned(),
-            name: "multi-0".to_owned(),
-        },
-    );
-    shells
-        .fixture
-        .shell
-        .update(cx, |shell, cx| shell.change_selection(Some(object), cx));
-    cx.run_until_parked();
+fn s_on_a_multi_container_pod_shows_the_picker_before_any_confirm(cx: &mut TestAppContext) {
+    let shells = two_clusters("s-key-pick", cx);
+    shells.select_pod("multi-0", cx);
     shells.fixture.with_window(cx, |window, cx| {
         window.dispatch_action(Box::new(crate::keymap::OpenShell), cx);
     });
-    // The first running main container, not the sidecar before it or the init container.
+    // The picker is the only dialog: no confirm yet, and no shell until a container is chosen.
+    assert!(shells.has_dialog(cx));
+    assert!(
+        shells
+            .fixture
+            .shell
+            .read_with(cx, |shell, _| shell.last_dialog.is_none())
+    );
+    assert_eq!(shells.tab_count(cx), 0);
+}
+
+#[gpui_kit::test]
+fn s_opens_the_only_container_of_the_cursor_pod_in_its_cluster(cx: &mut TestAppContext) {
+    let shells = two_clusters("s-key", cx);
+    shells.select_pod("api-0", cx);
+    shells.fixture.with_window(cx, |window, cx| {
+        window.dispatch_action(Box::new(crate::keymap::OpenShell), cx);
+    });
     assert!(shells.has_dialog(cx));
     shells.confirm(cx);
     assert_eq!(shells.tabs_of(&shells.stg, cx), 1);
     assert_eq!(shells.tabs_of(&shells.prod, cx), 0);
     let tab = shells.tabs(cx).remove(0);
     let container = tab.read_with(cx, |tab, _| tab.target().container.clone());
-    assert_eq!(container, "web");
+    assert_eq!(container, "app");
 }
 
 #[gpui_kit::test]

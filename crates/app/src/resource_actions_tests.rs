@@ -4052,3 +4052,35 @@ fn a_blocked_reason_says_what_to_do_next_and_others_are_left_alone() {
     );
     assert_eq!(hint("Already terminating"), "Already terminating");
 }
+
+#[test]
+fn s_on_a_pod_with_several_containers_shows_the_picker_first() {
+    let pod = pod_with(vec![
+        container("init", ContainerKind::Init, true),
+        container("app", ContainerKind::Main, true),
+        container("proxy", ContainerKind::Sidecar, true),
+    ]);
+    let DefaultShell::Pick(choices) = default_shell(&pod) else {
+        panic!("two containers must pick");
+    };
+    let names: Vec<&str> = choices.iter().map(|choice| choice.name.as_str()).collect();
+    assert_eq!(names, ["app", "proxy"]);
+}
+
+#[test]
+fn s_skips_the_picker_on_a_single_container_pod() {
+    let pod = pod_with(vec![
+        container("init", ContainerKind::Init, true),
+        container("app", ContainerKind::Main, true),
+    ]);
+    assert_eq!(default_shell(&pod), DefaultShell::Open("app".to_owned()));
+}
+
+#[test]
+fn s_has_nothing_to_pick_when_no_container_runs() {
+    let pod = pod_with(vec![
+        container("app", ContainerKind::Main, false),
+        container("proxy", ContainerKind::Sidecar, false),
+    ]);
+    assert_eq!(default_shell(&pod), DefaultShell::Unavailable);
+}

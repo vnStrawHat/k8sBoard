@@ -24,7 +24,8 @@ use crate::cluster_registry::ClusterRef;
 use crate::dock::shell_cap_text;
 use crate::log_workload::pod_tab_name;
 use crate::resource_actions::{
-    ResourceAction, action_label, action_risk, default_attach_container, default_shell_container,
+    DefaultShell, ResourceAction, action_label, action_risk, default_attach_container,
+    default_shell, open_shell_picker,
 };
 use crate::settings::AppSettings;
 use crate::shell_tab::{AttachGrant, ShellEvent, ShellGrant, ShellKind, ShellTab, ShellTarget};
@@ -197,8 +198,9 @@ impl AppShell {
         self.start_connect(intent, window, cx);
     }
 
-    /// S on a pod: its default container (the first running main one, else the first running one),
-    /// in the cluster of the cursor row.
+    /// S on a pod: its default container (the first running main one, else the first running one), in
+    /// the cluster of the cursor row. A pod with several containers shows the container picker of
+    /// the Open shell submenu first.
     pub(crate) fn open_default_shell(
         &mut self,
         subject: &ClusterObject,
@@ -214,30 +216,49 @@ impl AppShell {
                 .items()
                 .iter()
                 .find(|pod| subject.key.is_pod(pod))?;
-            let container = default_shell_container(pod)?;
-            Some((
-                pod.namespace.clone(),
-                pod.name.clone(),
-                pod_tab_name(pod),
-                container.name.clone(),
-            ))
+            let open = ShellOpen {
+                cluster: subject.cluster.clone(),
+                namespace: pod.namespace.clone(),
+                pod: pod.name.clone(),
+                short_pod: pod_tab_name(pod),
+                container: String::new(),
+            };
+            Some((open, default_shell(pod)))
         });
-        let Some((namespace, pod, short_pod, container)) = found else {
-            let text = format!(
-                "{} is unavailable: No running container",
-                action_label(ResourceAction::OpenShell)
-            );
-            window.push_notification(Notification::warning(text), cx);
-            return;
-        };
-        let open = ShellOpen {
-            cluster: subject.cluster.clone(),
-            namespace,
-            pod,
-            short_pod,
-            container,
-        };
-        self.start_shell(open, window, cx);
+        match found {
+            Some((open, DefaultShell::Open(container))) => {
+                self.start_shell(ShellOpen { container, ..open }, window, cx);
+            }
+            Some((open, DefaultShell::Pick(choices))) => {
+                let shell = cx.entity().downgrade();
+                open_shell_picker(
+                    choices,
+                    move |container| {
+                        let open = ShellOpen {
+                            container,
+                            ..open.clone()
+                        };
+                        let shell = shell.clone();
+                        Box::new(move |window, cx| {
+                            // The confirm opens its own dialog, so the picker goes first.
+                            window.close_dialog(cx);
+                            let open = open.clone();
+                            let _ =
+                                shell.update(cx, |shell, cx| shell.start_shell(open, window, cx));
+                        })
+                    },
+                    window,
+                    cx,
+                );
+            }
+            Some((_, DefaultShell::Unavailable)) | None => {
+                let text = format!(
+                    "{} is unavailable: No running container",
+                    action_label(ResourceAction::OpenShell)
+                );
+                window.push_notification(Notification::warning(text), cx);
+            }
+        }
     }
 
     /// Attaches to `open.container` through the guarded flow of the pod's own cluster (spec 0040):
