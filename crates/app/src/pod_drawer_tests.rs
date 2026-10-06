@@ -357,3 +357,15 @@ fn service_summary_text_names_the_type_and_ports() {
     );
     assert_eq!(service_summary_text(&service(&[])), "ClusterIP");
 }
+
+#[test]
+fn container_list_fits_the_longest_name_within_its_limits() {
+    let named = |name: &str| container(name, ContainerKind::Main, running(), true);
+    assert_eq!(container_list_width(&[]), px(240.));
+    assert_eq!(container_list_width(&[named("web")]), px(240.));
+    assert_eq!(
+        container_list_width(&[named("web"), named("ingress-controller-nginx-extra")]),
+        px(30. * 8. + 96.)
+    );
+    assert_eq!(container_list_width(&[named(&"x".repeat(80))]), px(360.));
+}

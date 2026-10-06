@@ -754,3 +754,26 @@ fn deployment_containers_offer_to_copy_their_images() {
         DetailRow::CopyField { ref text, .. } if text.as_ref() == "nginx:1.27"
     ));
 }
+
+#[test]
+fn a_long_container_name_goes_above_its_image() {
+    let container = |name: &str, image: &str| TemplateContainer {
+        name: name.to_owned(),
+        image: image.to_owned(),
+        ports: Vec::new(),
+    };
+    let rows = container_rows(&[
+        container("web", "registry/api:1.4"),
+        container("argocd-applicationset-controller", "registry/argocd:2"),
+    ]);
+    assert_eq!(
+        rows,
+        [
+            DetailRow::copyable_field("web", KindCell::Mono("registry/api:1.4".into())),
+            DetailRow::stacked(
+                "argocd-applicationset-controller",
+                KindCell::Mono("registry/argocd:2".into())
+            ),
+        ]
+    );
+}

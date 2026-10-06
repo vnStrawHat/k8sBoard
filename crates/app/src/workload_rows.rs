@@ -143,14 +143,19 @@ pub(crate) fn non_empty(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }
 
+/// Container names that do not fit the label column (about 19 characters) go above their image,
+/// so the name is read whole instead of cut while the image is shown in full.
+const LABEL_FITS_CHARS: usize = 18;
+
 fn container_rows(containers: &[TemplateContainer]) -> Vec<DetailRow> {
     containers
         .iter()
         .map(|container| {
-            DetailRow::copyable_field(
-                container.name.clone(),
-                KindCell::Mono(container.image.clone().into()),
-            )
+            let image = KindCell::Mono(container.image.clone().into());
+            if container.name.chars().count() > LABEL_FITS_CHARS {
+                return DetailRow::stacked(container.name.clone(), image);
+            }
+            DetailRow::copyable_field(container.name.clone(), image)
         })
         .collect()
 }
@@ -273,7 +278,6 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
     } else {
         ready_status(set.ready, set.desired)
     };
-    let node_selector = (!set.node_selector.is_empty()).then(|| set.node_selector.join(", "));
     let mut rollout = vec![
         rollout_bar("Ready", set.ready, set.desired),
         rollout_bar("Updated", set.up_to_date, set.desired),
@@ -321,7 +325,7 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
             toned_number(set.ready, replica_tone(set.ready, set.desired)),
             KindCell::count(set.up_to_date),
             KindCell::count(set.available),
-            KindCell::text_or_absent(node_selector.as_deref()),
+            KindCell::label_terms(&set.node_selector),
             KindCell::age(set.created_at),
         ],
         sections,

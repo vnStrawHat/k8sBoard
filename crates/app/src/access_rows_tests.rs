@@ -569,3 +569,27 @@ fn service_account_sections_put_can_do_after_cloud_identity() {
         ["Bound roles", "Can do", "Used by", "Secrets"]
     );
 }
+
+#[test]
+fn rules_table_wraps_long_verb_lists_under_the_verbs_column() {
+    let lines = table(&[rule(
+        &["argoproj.io"],
+        &["applications"],
+        &[
+            "create", "get", "list", "watch", "update", "patch", "delete",
+        ],
+    )]);
+    assert_eq!(lines.len(), 3);
+    let verbs_column = "argoproj.io".len() + "applications".len() + 4;
+    assert_eq!(
+        lines[1],
+        format!(
+            "{:<11}  {:<12}  create, get, list, watch,",
+            "argoproj.io", "applications"
+        )
+    );
+    assert_eq!(
+        lines[2],
+        format!("{}update, patch, delete", " ".repeat(verbs_column))
+    );
+}

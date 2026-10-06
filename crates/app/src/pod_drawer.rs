@@ -49,13 +49,26 @@ use crate::table_selection::ResourceKey;
 use crate::usage_bar::UsageBar;
 use crate::usage_format::{Measure, usage_tone};
 
-const CONTAINER_LIST_WIDTH: Pixels = px(240.);
 /// Element ids of the Volumes links, clear of the overview's own link ids.
 const VOLUME_LINK_ID_BASE: usize = 100;
 /// Element ids of the Services links, clear of the Volumes links.
 const SERVICE_LINK_ID_BASE: usize = 1_000;
 /// Bounds the render cost of a pod that a namespace-wide selector puts behind many services.
 const MAX_LISTED_SERVICES: usize = 20;
+
+/// The sidebar fits the longest container name between these widths: 8 px per character plus the
+/// row's padding and state marks.
+const CONTAINER_LIST_MIN_WIDTH: f32 = 240.;
+const CONTAINER_LIST_MAX_WIDTH: f32 = 360.;
+
+fn container_list_width(containers: &[ContainerSummary]) -> Pixels {
+    let longest = containers
+        .iter()
+        .map(|container| container.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    px((longest as f32 * 8. + 96.).clamp(CONTAINER_LIST_MIN_WIDTH, CONTAINER_LIST_MAX_WIDTH))
+}
 
 pub(crate) fn pod_drawer(
     pod: &PodSummary,
@@ -771,7 +784,7 @@ fn containers_tab(
         .child(
             div()
                 .id("container-list")
-                .w(CONTAINER_LIST_WIDTH)
+                .w(container_list_width(&pod.containers))
                 .flex_shrink_0()
                 .h_full()
                 .overflow_y_scroll()

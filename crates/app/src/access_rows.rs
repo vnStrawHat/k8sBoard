@@ -18,6 +18,8 @@ const MAX_RULES: usize = 200;
 /// A rules table cell is cut here so a long list does not push the columns off the drawer.
 const MAX_CELL_CHARS: usize = 40;
 const RULES_HEADER: [&str; 3] = ["apiGroups", "resources", "verbs"];
+/// The verbs column wraps at this width; the drawer shows about 65 mono characters.
+const VERBS_LINE_CHARS: usize = 28;
 
 fn labeled(text: impl Into<gpui_kit::SharedString>, tone: StatusTone) -> StatusLabel {
     StatusLabel {
@@ -404,6 +406,30 @@ fn resource_cell(rule: &RbacRule) -> String {
     cut(text)
 }
 
+/// The verbs in lines of about `VERBS_LINE_CHARS`, broken after a comma, so a long list wraps in
+/// the drawer instead of running off its edge. A rule without verbs still takes one empty line.
+fn wrap_verbs(verbs: &[String]) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for (index, verb) in verbs.iter().enumerate() {
+        let word = if index + 1 < verbs.len() {
+            format!("{verb},")
+        } else {
+            verb.clone()
+        };
+        match lines.last_mut() {
+            Some(line) if line.chars().count() + 1 + word.chars().count() <= VERBS_LINE_CHARS => {
+                line.push(' ');
+                line.push_str(&word);
+            }
+            _ => lines.push(word),
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
 /// The rules as an aligned text table: resource rules under an `apiGroups resources verbs`
 /// header, then one line per non-resource rule.
 pub(crate) fn rules_table(rules: &[RbacRule]) -> String {
@@ -413,14 +439,13 @@ pub(crate) fn rules_table(rules: &[RbacRule]) -> String {
         .partition(|rule| rule.resources.is_empty() && !rule.non_resource_urls.is_empty());
     let mut lines = Vec::new();
     if !resources.is_empty() {
-        let mut table: Vec<[String; 3]> = vec![RULES_HEADER.map(str::to_owned)];
-        table.extend(resources.iter().map(|rule| {
-            [
-                group_cell(&rule.api_groups),
-                resource_cell(rule),
-                cut(rule.verbs.join(", ")),
-            ]
-        }));
+        let mut table: Vec<[String; 2]> =
+            vec![[RULES_HEADER[0].to_owned(), RULES_HEADER[1].to_owned()]];
+        table.extend(
+            resources
+                .iter()
+                .map(|rule| [group_cell(&rule.api_groups), resource_cell(rule)]),
+        );
         let widths: [usize; 2] = std::array::from_fn(|column| {
             table
                 .iter()
@@ -428,13 +453,23 @@ pub(crate) fn rules_table(rules: &[RbacRule]) -> String {
                 .max()
                 .unwrap_or(0)
         });
-        lines.extend(table.iter().map(|[groups, resources, verbs]| {
-            format!(
-                "{groups:<width_0$}  {resources:<width_1$}  {verbs}",
-                width_0 = widths[0],
-                width_1 = widths[1]
-            )
-        }));
+        let verbs = std::iter::once(vec![RULES_HEADER[2].to_owned()])
+            .chain(resources.iter().map(|rule| wrap_verbs(&rule.verbs)));
+        for ([groups, resources], verbs) in table.iter().zip(verbs) {
+            for (index, verbs) in verbs.iter().enumerate() {
+                // A wrapped line leaves the first two columns empty.
+                let (groups, resources) = if index == 0 {
+                    (groups.as_str(), resources.as_str())
+                } else {
+                    ("", "")
+                };
+                lines.push(format!(
+                    "{groups:<width_0$}  {resources:<width_1$}  {verbs}",
+                    width_0 = widths[0],
+                    width_1 = widths[1]
+                ));
+            }
+        }
     }
     lines.extend(urls.iter().map(|rule| {
         format!(
