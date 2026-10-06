@@ -24,6 +24,7 @@ pub(crate) fn intermediate_expires_first(chain: &[CertificateInfo]) -> Option<ji
 | `leaf.not_after - now <= EXPIRY_WARNING` | `ExpiringSoon` | Warn `expires in {format_age(now, not_after)}` |
 | else | `Valid` | Ok `{format_age(now, not_after)} left` |
 
+- The 90 px Expires table cell paints `expiry_short_label` in the same tone (`4d left`, `expired 3d`; the Warn `expires in` form also reads `{n}d left`) and shows `expiry_label` as its tooltip; the drawer keeps the full text.
 - `KindCell::Expiry { not_after }` paints `expiry_label(not_after, now)` as a toned cell (table and drawer field); `kind_table.rs` `value` → `Number(not_after.as_second())`.
 - Dates in box texts: UTC `Oct 7, 2026` (`%b %-d, %Y`); fields: UTC `YYYY-MM-DD HH:MM UTC` (the suffix is part of the text).
 - The Secrets **table** shows no expiry tone (decision 19); until 0020/0021 an expiring certificate is visible only in its drawer box and in the Ingresses TLS column.

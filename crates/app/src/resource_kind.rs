@@ -575,8 +575,8 @@ static RESOURCE_QUOTAS: KindSpec = KindSpec {
         access_check: AccessCheck::ListResourceQuotas,
     },
     columns: &[
-        column("CPU req", 130., Align::Right),
-        column("Memory req", 150., Align::Right),
+        column("CPU req", 150., Align::Right),
+        column("Memory req", 130., Align::Right),
         column("Pods", 100., Align::Right),
         column("Fullest", 160., Align::Left),
         AGE_COLUMN,

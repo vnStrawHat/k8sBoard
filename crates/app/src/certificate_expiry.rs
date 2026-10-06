@@ -58,6 +58,21 @@ pub(crate) fn expiry_label(not_after: Timestamp, now: Timestamp) -> StatusLabel 
     }
 }
 
+/// The table cell text, short enough for the 90 px Expires column: `4d left`, `expired 3d`. The
+/// tone is the full label's, and the tooltip shows the full label.
+pub(crate) fn expiry_short_label(not_after: Timestamp, now: Timestamp) -> StatusLabel {
+    let tone = expiry_label(not_after, now).tone;
+    let text = if not_after <= now {
+        format!("expired {}", format_age(Some(not_after), now))
+    } else {
+        format!("{} left", format_age(Some(now), not_after))
+    };
+    StatusLabel {
+        text: text.into(),
+        tone,
+    }
+}
+
 /// The drawer field text: the absolute date, then the relative one, `Dec 25, 2026 (81d left)`.
 pub(crate) fn expiry_detail_label(not_after: Timestamp, now: Timestamp) -> StatusLabel {
     let relative = expiry_label(not_after, now);
@@ -158,6 +173,20 @@ mod tests {
         let label = expiry_label(leaf.not_after, now);
         assert_eq!(label.text, "expires in 14d");
         assert_eq!(label.tone, StatusTone::Warn);
+    }
+
+    #[test]
+    fn the_short_label_fits_the_column_and_keeps_the_tone() {
+        let now = at(100 * DAY);
+        let expired = expiry_short_label(at(97 * DAY), now);
+        assert_eq!(expired.text, "expired 3d");
+        assert_eq!(expired.tone, StatusTone::Bad);
+        let soon = expiry_short_label(at(104 * DAY), now);
+        assert_eq!(soon.text, "4d left");
+        assert_eq!(soon.tone, StatusTone::Warn);
+        let valid = expiry_short_label(at(200 * DAY), now);
+        assert_eq!(valid.text, "100d left");
+        assert_eq!(valid.tone, StatusTone::Ok);
     }
 
     #[test]

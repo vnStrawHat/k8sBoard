@@ -18,7 +18,7 @@ use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
 use crate::batch_rows::cron_state_at;
 use crate::cell_truncation::{NameScope, Sibling, mono_capacity, qualified_text, scoped_name_text};
-use crate::certificate_expiry::expiry_label;
+use crate::certificate_expiry::{expiry_label, expiry_short_label};
 use crate::cluster_registry::ClusterRef;
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::truncated_text_with_tooltip;
@@ -821,9 +821,18 @@ fn cell_element<'a>(
             base().child(toned_text(label, cx))
         }
         KindCell::Expiry { not_after } => {
-            // Read per cell: days left change while the screen is open.
-            let label = expiry_label(*not_after, jiff::Timestamp::now());
-            base().child(toned_text(label, cx))
+            // Read per cell: days left change while the screen is open. The cell holds the short
+            // form; the tooltip says it in full.
+            let now = jiff::Timestamp::now();
+            let short = expiry_short_label(*not_after, now);
+            let full = expiry_label(*not_after, now);
+            base()
+                .text_color(tone_color(short.tone, cx))
+                .child(truncated_text_with_tooltip(
+                    ("kind-expiry", row_ix),
+                    short.text,
+                    full.text,
+                ))
         }
         KindCell::Date { at, rule } => {
             let now = jiff::Timestamp::now();
@@ -966,6 +975,17 @@ mod tests {
         // 37 mono characters of about 9.6 px each, plus the cell padding: the least at which
         // `tls-assets-vmagent-` and `tls-assets-vmalert-` are told apart.
         assert!(name >= Some(px(380.)), "{name:?}");
+    }
+
+    #[test]
+    fn quota_cpu_req_holds_cores_whole() {
+        let column = ResourceKind::ResourceQuotas
+            .columns()
+            .iter()
+            .find(|column| column.name == "CPU req")
+            .expect("a CPU req column");
+        // `80m / 2 cores`: 13 mono characters of about 9.6 px each, plus the cell padding.
+        assert!(column.width >= 13. * 9.6 + 24., "{}", column.width);
     }
 
     #[test]
