@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use cluster::fake_api::{FakeApi, RecordedRequest};
 use gpui_kit::InputEvent as _;
 use gpui_kit::component::dialog::{Cancel, Confirm};
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Entity, KeyDownEvent, Keystroke, TestAppContext};
 use serde_json::{Value, json};
 
@@ -1571,6 +1572,31 @@ fn history_never_changes_the_editor_text(cx: &mut TestAppContext) {
     let lists = replica_set_lists_of(&t.t.stg_api);
     assert_eq!(lists.len(), 1, "{lists:?}");
     assert!(lists[0].has_query("labelSelector", "app%3Dapi"));
+    assert!(puts_of(&t.t.stg_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn history_roll_back_asks_for_the_row_revision_while_editing(cx: &mut TestAppContext) {
+    let t = edit_test("edit-history-roll-back", cx);
+    t.open(cx);
+    let view = t.view(cx);
+    view.update(cx, |view, cx| view.show_tab(EditTab::History, cx));
+    t.t.wait_for("the revisions", cx, |cx| {
+        view.read_with(cx, |view, cx| {
+            view.history()
+                .is_some_and(|history| history.read(cx).is_ready())
+        })
+    });
+    t.t.fixture.draw_twice(cx);
+    // Newest first: rev 2 is current and has no button, rev 1 is the second row.
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.click(("history-roll-back", 1usize), cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        t.t.dialog_label(cx),
+        "Roll back deployment api to rev 1 (1)"
+    );
     assert!(puts_of(&t.t.stg_api).is_empty());
 }
 

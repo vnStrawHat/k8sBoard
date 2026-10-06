@@ -39,6 +39,7 @@ use crate::resource_actions::{
     ActionAvailability, NOT_PERMITTED, ResourceAction, action_availability, action_label,
     action_risk, unavailable_text,
 };
+use crate::revision_diff::RollBackOffer;
 use crate::settings::AppSettings;
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::value_popover::ValuePopover;
@@ -830,8 +831,8 @@ impl AppShell {
     }
 
     /// Roll back of the Deployment `subject` to `target`: a button of its drawer's Revisions, or the
-    /// palette entry. The Deployment is read again from its own cluster, so a rollout paused since
-    /// the button was drawn is refused here, and the dialog names what is there now.
+    /// palette entry. Refused while an edit is open; the Revision history tab of that edit and the
+    /// revision diff dialog come to `begin_roll_back` through their `RollBackOffer`.
     pub(crate) fn start_roll_back(
         &mut self,
         subject: &ClusterObject,
@@ -843,6 +844,47 @@ impl AppShell {
         if self.is_editing() {
             return;
         }
+        self.begin_roll_back(subject, target, window, cx);
+    }
+
+    /// What the Roll back buttons of the revision diff dialog and of the Revision history tab do,
+    /// from the gate of the cluster of the Deployment `subject`: the same reasons as the drawer's
+    /// buttons. The Deployment's own state is read again when the button is pressed.
+    pub(crate) fn roll_back_offer(
+        &self,
+        shell: WeakEntity<Self>,
+        subject: ClusterObject,
+        cx: &App,
+    ) -> RollBackOffer {
+        let Some(guard) = self.guard_for(&subject.cluster, cx) else {
+            return RollBackOffer::Disabled("Not connected".into());
+        };
+        if let ActionAvailability::Disabled { reason } =
+            action_availability(ResourceAction::RollBack, &guard)
+        {
+            return RollBackOffer::Disabled(reason);
+        }
+        let is_paused = self.live_of(&subject.cluster, cx).is_some_and(|live| {
+            matches!(
+                live.row_of(&subject.key).map(|row| &row.object),
+                Some(KindObject::Deployment(deployment)) if deployment.is_paused
+            )
+        });
+        if is_paused {
+            return RollBackOffer::Disabled(PAUSED_REASON.into());
+        }
+        RollBackOffer::Enabled { shell, subject }
+    }
+
+    /// The roll back itself. The Deployment is read again from its own cluster, so a rollout paused
+    /// since the button was drawn is refused here, and the dialog names what is there now.
+    pub(crate) fn begin_roll_back(
+        &mut self,
+        subject: &ClusterObject,
+        target: &RevisionTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let label = action_label(ResourceAction::RollBack);
         let intent = {
             let (Some(guard), Some(live)) = (

@@ -11,7 +11,7 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Div, Entity, IntoElement, ListAlignment, ListState,
+    AnyElement, App, Context, Div, ElementId, Entity, IntoElement, ListAlignment, ListState,
     ParentElement as _, Render, SharedString, Styled as _, Task, WeakEntity, Window, div, list,
     prelude::FluentBuilder as _, px,
 };
@@ -19,8 +19,8 @@ use gpui_kit::{
 use crate::app_shell::AppShell;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
-use crate::table_selection::ResourceKey;
-use crate::workload_actions::image_tag;
+use crate::table_selection::{ClusterObject, ResourceKey};
+use crate::workload_actions::{RevisionTarget, image_tag};
 use crate::yaml_diff::{DiffRow, DiffRowKind, diff_rows};
 use crate::yaml_edit::yaml_edit_panels::diff_row_element;
 use crate::yaml_view::shows_env_toggle;
@@ -83,6 +83,17 @@ impl RevisionSide {
             label.push_str(" (current)");
         }
         label
+    }
+
+    /// What rolling back to this side would go to; `None` for the current revision and for a
+    /// ReplicaSet without a revision number.
+    pub(crate) fn roll_back_target(&self) -> Option<RevisionTarget> {
+        let revision = self.revision.filter(|_| !self.is_current)?;
+        Some(RevisionTarget {
+            replica_set: self.replica_set.clone(),
+            revision,
+            tag: self.tag.clone(),
+        })
     }
 
     fn name_in_error(&self) -> String {
@@ -173,6 +184,16 @@ pub(crate) fn change_pair(
 }
 
 impl RevisionDiffRequest {
+    /// The revision the dialog's Roll back goes to: the side that is not current. `None` unless
+    /// exactly one side is current (a rollout pair in the middle of the history has none).
+    pub(crate) fn roll_back_target(&self) -> Option<RevisionTarget> {
+        match (self.older.is_current, self.newer.is_current) {
+            (false, true) => self.older.roll_back_target(),
+            (true, false) => self.newer.roll_back_target(),
+            _ => None,
+        }
+    }
+
     /// `rev 12 · v2.1 → rev 14 · v2.3 (current)`.
     pub(crate) fn subtitle(&self) -> String {
         format!("{} → {}", self.older.label(), self.newer.label())
@@ -226,6 +247,44 @@ fn same_note(rows: &[DiffRow], hidden_env_values: usize) -> Option<&'static str>
     }
 }
 
+/// What a Roll back button next to a revision does: starts the confirm flow of the shell, or says
+/// why it cannot (permission, lock, paused rollout), as the drawer's buttons do.
+#[derive(Clone)]
+pub(crate) enum RollBackOffer {
+    Enabled {
+        shell: WeakEntity<AppShell>,
+        subject: ClusterObject,
+    },
+    Disabled(SharedString),
+}
+
+impl RollBackOffer {
+    /// The button for `target`. A click closes the diff dialog it may sit in, then opens the same
+    /// confirm dialog as the drawer's button; the rest of the shell state is read at that moment.
+    pub(crate) fn button(
+        &self,
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        target: RevisionTarget,
+    ) -> Button {
+        let button = Button::new(id).label(label);
+        match self {
+            Self::Disabled(reason) => button.disabled(true).tooltip(reason.clone()),
+            Self::Enabled { shell, subject } => {
+                let (shell, subject) = (shell.clone(), subject.clone());
+                button.on_click(move |_, window, cx| {
+                    // The row behind a history button selects its revision on a click.
+                    cx.stop_propagation();
+                    window.close_dialog(cx);
+                    let _ = shell.update(cx, |shell, cx| {
+                        shell.begin_roll_back(&subject, &target, window, cx);
+                    });
+                })
+            }
+        }
+    }
+}
+
 /// The `Go to deployment` button of a dialog opened from the timeline: the row it reveals, and the
 /// shell that reveals it.
 struct GoTo {
@@ -245,6 +304,8 @@ pub(crate) struct RevisionDiffView {
     diff_list: ListState,
     /// The Deployment the footer button reveals; `None` where the dialog is already on it.
     go_to: Option<GoTo>,
+    /// The footer Roll back to the other revision; `None` where the dialog is read-only (no shell).
+    roll_back: Option<RollBackOffer>,
 }
 
 impl RevisionDiffView {
@@ -262,6 +323,7 @@ impl RevisionDiffView {
             },
             diff_list: ListState::new(0, ListAlignment::Top, px(200.)),
             go_to: None,
+            roll_back: None,
         };
         view.load(EnvValues::Hidden, cx);
         view
@@ -274,6 +336,12 @@ impl RevisionDiffView {
         shell: WeakEntity<AppShell>,
     ) -> Self {
         self.go_to = Some(GoTo { deployment, shell });
+        self
+    }
+
+    /// Adds the footer button that rolls the Deployment back to the revision being compared.
+    pub(crate) fn with_roll_back(mut self, offer: RollBackOffer) -> Self {
+        self.roll_back = Some(offer);
         self
     }
 
@@ -316,6 +384,7 @@ impl RevisionDiffView {
                 hidden_env_values,
             },
             go_to: None,
+            roll_back: None,
         }
     }
 
@@ -440,23 +509,39 @@ impl RevisionDiffView {
             .into_any_element()
     }
 
-    /// The footer of the dialog opened from the timeline: the button that goes to the Deployment.
+    /// The footer of the dialog: Roll back to the revision that is not current, and, for the dialog
+    /// opened from the timeline, the button that goes to the Deployment.
     fn render_footer(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        self.go_to.as_ref()?;
+        let roll_back = self
+            .roll_back
+            .as_ref()
+            .zip(self.request.roll_back_target())
+            .map(|(offer, target)| {
+                let label = format!("Roll back to rev {}…", target.revision);
+                offer
+                    .button("revision-diff-roll-back", label, target)
+                    .small()
+                    .outline()
+            });
+        if roll_back.is_none() && self.go_to.is_none() {
+            return None;
+        }
         Some(
             h_flex()
                 .flex_shrink_0()
                 .justify_end()
+                .gap_2()
                 .pt_2()
-                .child(
+                .children(roll_back)
+                .children(self.go_to.as_ref().map(|_| {
                     Button::new("revision-diff-go-to")
                         .label("Go to deployment")
                         .small()
                         .outline()
                         .on_click(cx.listener(|view, _, window, cx| {
                             view.go_to_deployment(window, cx);
-                        })),
-                )
+                        }))
+                }))
                 .into_any_element(),
         )
     }

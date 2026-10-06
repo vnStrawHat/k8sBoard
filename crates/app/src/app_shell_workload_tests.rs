@@ -1783,3 +1783,62 @@ fn a_used_by_restart_needs_no_loaded_row(cx: &mut TestAppContext) {
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0].path, restart_path());
 }
+
+// ---- Roll back from the revision diff dialog ----
+
+/// The dialog of the drawer's Deployment `api`: rev 6 against the current rev 7.
+fn open_revision_dialog(t: &Clusters, cx: &mut TestAppContext) {
+    use crate::revision_diff::{RevisionSide, diff_request};
+    let side = |replica_set: &str, revision: u64, tag: &str, is_current: bool| RevisionSide {
+        replica_set: replica_set.to_owned(),
+        revision: Some(revision),
+        tag: Some(tag.to_owned()),
+        is_current,
+        created_at: None,
+    };
+    let request = diff_request(
+        ResourceKey::Kind {
+            kind: ResourceKind::Deployments,
+            namespace: Some("team-a".to_owned()),
+            name: "api".to_owned(),
+        },
+        side("api-6c1e2a", 6, "2.13.4", false),
+        side("api-7d", 7, "2.14.0", true),
+    );
+    t.fixture.with_window(cx, |window, cx| {
+        t.fixture.shell.update(cx, |shell, cx| {
+            shell.open_revision_diff(request, window, cx)
+        });
+    });
+    cx.run_until_parked();
+    t.fixture.draw_twice(cx);
+}
+
+#[gpui_kit::test]
+fn the_diff_dialog_rolls_back_to_the_compared_revision(cx: &mut TestAppContext) {
+    let t = workload_clusters_answering("rollback-diff-dialog", roll_back_answers, cx);
+    t.with_revisions(cx);
+    open_revision_dialog(&t, cx);
+    t.fixture.with_window(cx, |window, cx| {
+        window.click("revision-diff-roll-back", cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        t.dialog_label(cx),
+        "Roll back deployment api to rev 6 (2.13.4)"
+    );
+}
+
+#[gpui_kit::test]
+fn a_locked_cluster_leaves_the_diff_dialog_roll_back_disabled(cx: &mut TestAppContext) {
+    let t = workload_clusters_answering("rollback-diff-locked", roll_back_answers, cx);
+    t.set_lock(&t.stg, WriteLock::Locked, cx);
+    t.with_revisions(cx);
+    open_revision_dialog(&t, cx);
+    t.fixture.with_window(cx, |window, cx| {
+        window.click("revision-diff-roll-back", cx);
+    });
+    cx.run_until_parked();
+    assert!(!t.has_dialog(cx));
+    assert!(writes(&t.stg_api).is_empty());
+}

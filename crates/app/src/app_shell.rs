@@ -1926,7 +1926,16 @@ impl AppShell {
         };
         let connection = live.connection().clone();
         let title = request.title();
-        let view = cx.new(|cx| RevisionDiffView::new(request, connection, cx));
+        let offer = self
+            .drawer_subject()
+            .map(|subject| self.roll_back_offer(cx.weak_entity(), subject.clone(), cx));
+        let view = cx.new(|cx| {
+            let view = RevisionDiffView::new(request, connection, cx);
+            match offer {
+                Some(offer) => view.with_roll_back(offer),
+                None => view,
+            }
+        });
         window.open_dialog(cx, move |dialog, window, _| {
             dialog
                 .title(title.clone())
@@ -1958,9 +1967,18 @@ impl AppShell {
         );
         let title = request.title();
         let (deployment, shell) = (request.deployment.clone(), cx.weak_entity());
+        // The fixture shows the enabled button: the gate of a live cluster is not asked.
+        let offer = crate::revision_diff::RollBackOffer::Enabled {
+            shell: shell.clone(),
+            subject: ClusterObject::new(
+                crate::screenshot::shell_fixture_target().cluster,
+                deployment.clone(),
+            ),
+        };
         let view = cx.new(|_| {
             RevisionDiffView::fixture(request, REVISION_FIXTURE_OLDER, REVISION_FIXTURE_NEWER, 2)
                 .with_go_to(deployment, shell)
+                .with_roll_back(offer)
         });
         window.open_dialog(cx, move |dialog, window, _| {
             dialog

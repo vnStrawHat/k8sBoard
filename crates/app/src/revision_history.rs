@@ -4,7 +4,8 @@
 //! touches the editor text, and nothing here logs a template.
 
 use cluster::{ClusterConnection, ClusterError, ObjectRef, ReplicaSetSummary};
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Task,
@@ -15,7 +16,7 @@ use crate::age::format_age;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
 use crate::revision_diff::{
-    RevisionDiffView, RevisionSide, diff_request, latest_pair, revision_list,
+    RevisionDiffView, RevisionSide, RollBackOffer, diff_request, latest_pair, revision_list,
 };
 use crate::table_selection::ResourceKey;
 use crate::yaml_edit::yaml_edit_panels::{busy, muted_center};
@@ -60,6 +61,8 @@ pub(crate) struct RevisionHistory {
     selected: Option<usize>,
     /// The diff of the selected revision; dropping it cancels its GETs.
     diff: Option<Entity<RevisionDiffView>>,
+    /// What the Roll back button of each older row does; `None` shows no button (the fixtures).
+    roll_back: Option<RollBackOffer>,
 }
 
 impl RevisionHistory {
@@ -77,6 +80,7 @@ impl RevisionHistory {
             state: HistoryState::Denied,
             selected: None,
             diff: None,
+            roll_back: None,
         };
         match inputs {
             HistoryInputs::Denied => {}
@@ -87,6 +91,12 @@ impl RevisionHistory {
             } => history.load(connection, object, selector, cx),
         }
         history
+    }
+
+    /// Adds a Roll back button to every revision that is not the current one.
+    pub(crate) fn with_roll_back(mut self, offer: RollBackOffer) -> Self {
+        self.roll_back = Some(offer);
+        self
     }
 
     /// Whether the list failed or could not be asked, so showing the tab again should ask again.
@@ -207,6 +217,14 @@ impl RevisionHistory {
                                 },
                             )),
                     )
+                    .children(self.roll_back.as_ref().zip(side.roll_back_target()).map(
+                        |(offer, target)| {
+                            offer
+                                .button(("history-roll-back", index), "Roll back…", target)
+                                .xsmall()
+                                .ghost()
+                        },
+                    ))
                     .children(side.is_current.then(|| {
                         div()
                             .flex_shrink_0()
@@ -303,6 +321,7 @@ impl RevisionHistory {
             state: HistoryState::Ready(sides),
             selected: Some(selected),
             diff: Some(diff),
+            roll_back: None,
         }
     }
 }

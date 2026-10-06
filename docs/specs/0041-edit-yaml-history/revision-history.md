@@ -57,3 +57,7 @@ pub(crate) fn latest_pair(sides: &[RevisionSide]) -> Option<(RevisionSide, Revis
 `--screen edit-yaml-history`: the 0031 fixture view on `History`, with a fixed `Ready` list (`rev 38 current`, `rev 37`, `rev 36`) and the `--screen revision-diff` fixture diff embedded. No connection call.
 
 On the History tab the side panel leaves out the editor's `N changes` list (it would read as the diff beside it); the Checks stay.
+
+## Roll back where the comparison happens (UX fix H3)
+
+Each older row of the list has `Roll back…`, and the revision diff dialog has `Roll back to rev N…` in its footer (the side that is not current, only when exactly one side is). Both come from `AppShell::roll_back_offer`: the gate of the Deployment's cluster (permission, lock, paused rollout) decides, and a disabled button carries the reason as its tooltip. A click closes the diff dialog, then `begin_roll_back` opens the usual confirm dialog (`roll_back_intent`). The history tab calls `begin_roll_back` directly, so it works while the edit is open; the Deployment change then reaches the editor as a conflict.

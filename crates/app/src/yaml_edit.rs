@@ -28,6 +28,7 @@ use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
 use crate::edit_quota::{QuotaLine, quota_line};
 use crate::resource_actions::ResourceAction;
+use crate::revision_diff::RollBackOffer;
 use crate::revision_history::{HistoryInputs, RevisionHistory};
 use crate::table_selection::ClusterObject;
 use crate::write_guard::ActionRisk;
@@ -496,7 +497,14 @@ impl YamlEditView {
             None => HistoryInputs::Unavailable("the window is closing".into()),
         };
         let (deployment, object) = (self.target.key.clone(), self.object.clone());
-        cx.new(|cx| RevisionHistory::new(deployment, object, inputs, cx))
+        let subject = ClusterObject::new(self.target.cluster.clone(), deployment.clone());
+        let offer = match self.shell.upgrade() {
+            Some(shell) => shell
+                .read(cx)
+                .roll_back_offer(self.shell.clone(), subject, cx),
+            None => RollBackOffer::Disabled("the window is closing".into()),
+        };
+        cx.new(|cx| RevisionHistory::new(deployment, object, inputs, cx).with_roll_back(offer))
     }
 
     /// Env values: reads the object again with the other setting. Only while the text is
@@ -1000,7 +1008,12 @@ impl YamlEditView {
         view.resource_version = Some("88412093".into());
         view.tab = tab;
         if tab == EditTab::History {
-            view.history = Some(history_fixture(&view.target.key, cx));
+            let subject = ClusterObject::new(view.target.cluster.clone(), view.target.key.clone());
+            let offer = RollBackOffer::Enabled {
+                shell: view.shell.clone(),
+                subject,
+            };
+            view.history = Some(history_fixture(&view.target.key, offer, cx));
         }
         let rows = diff_rows(before, &after);
         view.diff_list.reset(rows.len());
@@ -1042,6 +1055,7 @@ impl YamlEditView {
 #[cfg(feature = "screenshot")]
 fn history_fixture(
     deployment: &crate::table_selection::ResourceKey,
+    offer: RollBackOffer,
     cx: &mut Context<YamlEditView>,
 ) -> Entity<RevisionHistory> {
     use crate::revision_diff::{RevisionDiffView, RevisionSide, diff_request};
@@ -1066,7 +1080,7 @@ fn history_fixture(
         RevisionDiffView::fixture(request, REVISION_FIXTURE_OLDER, REVISION_FIXTURE_NEWER, 2)
     });
     let key = deployment.clone();
-    cx.new(|_| RevisionHistory::fixture(key, sides, 1, diff))
+    cx.new(|_| RevisionHistory::fixture(key, sides, 1, diff).with_roll_back(offer))
 }
 
 #[path = "yaml_edit_panels.rs"]

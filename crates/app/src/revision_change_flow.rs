@@ -14,7 +14,7 @@ use crate::cluster_session::{AccessState, error_text};
 use crate::revision_diff::{
     RevisionDiffView, RevisionSide, change_pair, dialog_body, diff_request, revision_list,
 };
-use crate::table_selection::ResourceKey;
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::yaml_view::object_ref;
 
 impl AppShell {
@@ -122,8 +122,17 @@ impl AppShell {
         let request = diff_request(deployment.clone(), older, newer);
         let title = request.title();
         let shell = cx.weak_entity();
-        let view = cx
-            .new(|cx| RevisionDiffView::new(request, connection, cx).with_go_to(deployment, shell));
+        let offer = self.active_cluster().map(|cluster| {
+            let subject = ClusterObject::new(cluster, deployment.clone());
+            self.roll_back_offer(shell.clone(), subject, cx)
+        });
+        let view = cx.new(|cx| {
+            let view = RevisionDiffView::new(request, connection, cx).with_go_to(deployment, shell);
+            match offer {
+                Some(offer) => view.with_roll_back(offer),
+                None => view,
+            }
+        });
         window.open_dialog(cx, move |dialog, window, _| {
             dialog
                 .title(title.clone())

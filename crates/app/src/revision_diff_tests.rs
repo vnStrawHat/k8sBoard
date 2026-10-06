@@ -207,3 +207,39 @@ fn change_pair_falls_back_without_predecessor() {
         None
     );
 }
+
+#[test]
+fn roll_back_goes_to_the_side_that_is_not_current() {
+    let request = diff_request(
+        deployment_key(),
+        side("api-old", Some(37), false),
+        side("api-new", Some(38), true),
+    );
+    let target = request.roll_back_target().expect("a target");
+    assert_eq!(
+        (target.replica_set.as_str(), target.revision),
+        ("api-old", 37)
+    );
+}
+
+#[test]
+fn roll_back_has_no_target_without_exactly_one_current_side() {
+    let neither = diff_request(
+        deployment_key(),
+        side("api-a", Some(1), false),
+        side("api-b", Some(2), false),
+    );
+    assert_eq!(neither.roll_back_target(), None);
+    // A ReplicaSet without a revision number cannot be named in a roll back.
+    let unnumbered = diff_request(
+        deployment_key(),
+        side("api-old", None, false),
+        side("api-new", Some(38), true),
+    );
+    assert_eq!(unnumbered.roll_back_target(), None);
+}
+
+#[test]
+fn the_current_revision_has_no_roll_back_target() {
+    assert_eq!(side("api-new", Some(38), true).roll_back_target(), None);
+}
