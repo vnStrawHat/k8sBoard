@@ -24,9 +24,9 @@ done
 
 # Node states: one worker carries a taint, the other a maintenance label; nothing is cordoned so a
 # drain can be tried from the app.
-data_node="$("${K[@]}" get nodes -l k8sboard.io/pool=data -o name | head -1)"
-web_node="$("${K[@]}" get nodes -l k8sboard.io/pool=web -o name | head -1)"
-"${K[@]}" taint "$data_node" workload=data:NoSchedule --overwrite >/dev/null
-"${K[@]}" label "$web_node" maintenance-window=sunday-02h --overwrite >/dev/null
+data_node="$("${K[@]}" get nodes -l k8sboard.io/pool=data -o jsonpath='{.items[0].metadata.name}')"
+web_node="$("${K[@]}" get nodes -l k8sboard.io/pool=web -o jsonpath='{.items[0].metadata.name}')"
+"${K[@]}" taint nodes "$data_node" workload=data:NoSchedule --overwrite >/dev/null
+"${K[@]}" label nodes "$web_node" maintenance-window=sunday-02h --overwrite >/dev/null
 
 echo "seeded: $("${K[@]}" get pods -A --no-headers | wc -l) pods across $("${K[@]}" get ns --no-headers | grep -c '^lab-') lab namespaces"
