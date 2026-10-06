@@ -578,8 +578,20 @@ impl TableDelegate for KindTableDelegate {
     }
 }
 
-/// `No namespaces`, or `No deployments in team-a` for a namespaced kind.
+/// `No namespaces`, or `No deployments in team-a` for a namespaced kind. An empty NetworkPolicies
+/// list adds what it means: nothing restricts the traffic.
 fn empty_text(kind: ResourceKind, scope_label: &str) -> String {
+    if kind == ResourceKind::NetworkPolicies {
+        let place = if scope_label == "all namespaces" {
+            "the whole cluster"
+        } else {
+            "this namespace"
+        };
+        return format!(
+            "No {} in {scope_label}\nNo policy means all traffic is allowed in {place}.",
+            kind.plural()
+        );
+    }
     if kind.is_namespaced() {
         format!("No {} in {scope_label}", kind.plural())
     } else {
@@ -755,6 +767,18 @@ mod tests {
         assert_eq!(
             empty_text(ResourceKind::Deployments, "all namespaces"),
             "No deployments in all namespaces"
+        );
+    }
+
+    #[test]
+    fn empty_network_policies_say_that_no_policy_allows_all_traffic() {
+        assert_eq!(
+            empty_text(ResourceKind::NetworkPolicies, "postgres"),
+            "No networkpolicies in postgres\nNo policy means all traffic is allowed in this namespace."
+        );
+        assert_eq!(
+            empty_text(ResourceKind::NetworkPolicies, "all namespaces"),
+            "No networkpolicies in all namespaces\nNo policy means all traffic is allowed in the whole cluster."
         );
     }
 
