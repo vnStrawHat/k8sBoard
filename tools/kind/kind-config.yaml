@@ -1,0 +1,16 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  # k8sBoard runs on the host, so the API server listens on the VM's address, not on loopback.
+  apiServerAddress: "__API_ADDRESS__"
+  apiServerPort: __API_PORT__
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      k8sboard.io/pool: web
+      topology.kubernetes.io/zone: lab-a
+  - role: worker
+    labels:
+      k8sboard.io/pool: data
+      topology.kubernetes.io/zone: lab-b

@@ -5,3 +5,4 @@
 *.kubeconfig
 /.claude/settings.local.json
 id_rsa
+/kind-lab.yml

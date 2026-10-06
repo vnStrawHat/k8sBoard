@@ -19,6 +19,12 @@ Cargo virtual workspace at the root; shared versions, lints, and profiles live i
 - It is read-only and contains a bearer token. NEVER print, cat, echo, or quote it. It is git-ignored.
 - The UAT cluster runs Kubernetes v1.29.5.
 
+## Lab cluster (kind in the VMware VM)
+
+- `tools/kind/lab.sh up|seed|status|down` drives a disposable kind cluster inside the VM over SSH (key `id_rsa`, git-ignored). It writes `kind-lab.yml` (cluster-admin, git-ignored, never print it); see `tools/kind/README.md`.
+- `K8SBOARD_ALLOW_WRITES=1` is allowed only together with `--kubeconfig .../kind-lab.yml`. Run `lab.sh down` when the lab is no longer needed.
+- The VM takes memory from the host: at most two cargo builds at once, each with `CARGO_BUILD_JOBS=4`.
+
 ## Environment rules
 
 - Work only inside this project folder. Temp files go to `.tmp/`, caches to `.cargo-home/`. Git worktrees are allowed only inside the project folder (e.g. `.tmp/wt-*`); check free disk space before creating one and keep the build cache under control.
@@ -30,7 +36,7 @@ Cargo virtual workspace at the root; shared versions, lints, and profiles live i
 export CARGO_HOME="D:/TrungKFC-Research/Rust/k8sBoard/.cargo-home" TMP="D:/TrungKFC-Research/Rust/k8sBoard/.tmp" TEMP="D:/TrungKFC-Research/Rust/k8sBoard/.tmp" TMPDIR="D:/TrungKFC-Research/Rust/k8sBoard/.tmp"
 ```
 
-- Kubernetes mutating calls go only through the `object_write.rs` allow-list and the named connect files (`pod_shell.rs`, `port_forward.rs`, `debug_shell.rs`), as specified in spec 0030; the user approved all mutating specs on 2026-10-02. Debug builds block writes unless `K8SBOARD_ALLOW_WRITES=1`; agents never set it, and live checks on the read-only UAT cluster stay on the denied path. Do not commit unless asked.
+- Kubernetes mutating calls go only through the `object_write.rs` allow-list and the named connect files (`pod_shell.rs`, `port_forward.rs`, `debug_shell.rs`), as specified in spec 0030; the user approved all mutating specs on 2026-10-02. Debug builds block writes unless `K8SBOARD_ALLOW_WRITES=1`; agents set it only for the kind lab (`kind-lab.yml`), and live checks on the read-only UAT cluster stay on the denied path. Do not commit unless asked.
 - Keep docs short: split by topic into files ≤ ~120 lines with a README.md index.
 
 ## Quality gate

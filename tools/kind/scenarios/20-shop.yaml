@@ -1,0 +1,211 @@
+# lab-shop: a healthy web tier with config/secret consumers, a StatefulSet guarded by a PDB that
+# allows no disruption (blocks drains), a Service, an Ingress and an HPA pinned at its maximum.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-config
+  namespace: lab-shop
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    meta.helm.sh/release-name: shop
+    meta.helm.sh/release-namespace: lab-shop
+data:
+  LOG_LEVEL: info
+  FEATURE_CART: "true"
+  nginx.conf: |
+    worker_processes 1;
+    events { worker_connections 64; }
+    http { server { listen 8080; location / { return 200 "shop ok\n"; } location /healthz { return 200 "ok\n"; } } }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: web-secret
+  namespace: lab-shop
+type: Opaque
+stringData:
+  API_KEY: lab-only-not-a-real-key
+  DB_PASSWORD: lab-only-password
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: lab-shop
+  labels:
+    app: web
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    meta.helm.sh/release-name: shop
+    meta.helm.sh/release-namespace: lab-shop
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: __NGINX__
+          args: ["nginx", "-g", "daemon off;", "-c", "/etc/nginx/lab/nginx.conf"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: web-config
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: web-secret
+                  key: API_KEY
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 64Mi }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/lab
+            - name: cache
+              mountPath: /var/cache/nginx
+      volumes:
+        - name: conf
+          configMap:
+            name: web-config
+            items: [{ key: nginx.conf, path: nginx.conf }]
+        - name: cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: lab-shop
+spec:
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shop
+  namespace: lab-shop
+spec:
+  tls:
+    - hosts: [shop.lab.local]
+      secretName: shop-tls
+  rules:
+    - host: shop.lab.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  name: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web
+  namespace: lab-shop
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 1
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: catalog-db
+  namespace: lab-shop
+spec:
+  serviceName: catalog-db
+  replicas: 2
+  selector:
+    matchLabels:
+      app: catalog-db
+  template:
+    metadata:
+      labels:
+        app: catalog-db
+    spec:
+      containers:
+        - name: db
+          image: __BUSYBOX__
+          command: ["sh", "-c", "echo db $(hostname) up; while true; do sleep 30; echo tick $(date +%T); done"]
+          resources:
+            requests: { cpu: 20m, memory: 16Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-db
+  namespace: lab-shop
+spec:
+  clusterIP: None
+  selector:
+    app: catalog-db
+  ports:
+    - port: 5432
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: catalog-db
+  namespace: lab-shop
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: catalog-db
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-toolbox
+  namespace: lab-shop
+  labels:
+    app: toolbox
+spec:
+  containers:
+    - name: toolbox
+      image: __BUSYBOX__
+      command: ["sleep", "infinity"]
+    - name: sidecar
+      image: __BUSYBOX__
+      command: ["sh", "-c", "while true; do echo sidecar heartbeat; sleep 60; done"]

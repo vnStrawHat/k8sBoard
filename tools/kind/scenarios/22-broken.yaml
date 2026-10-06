@@ -1,0 +1,120 @@
+# lab-broken: every unhealthy state the UAT cluster never shows.
+# A pod that crash-loops with a readable last exit.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crashloop
+  namespace: lab-broken
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crashloop
+  template:
+    metadata:
+      labels:
+        app: crashloop
+    spec:
+      containers:
+        - name: app
+          image: __BUSYBOX__
+          command: ["sh", "-c", "echo starting; sleep 5; echo 'panic: config key DATABASE_URL missing' >&2; exit 1"]
+---
+# A pod whose image cannot be pulled, with an image pull secret that does not exist.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: image-missing
+  namespace: lab-broken
+spec:
+  imagePullSecrets:
+    - name: registry-creds-missing
+  containers:
+    - name: app
+      image: registry.invalid/lab/does-not-exist:1.0
+---
+# A pod that cannot be scheduled: it asks for more CPU than any node has.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pending-too-big
+  namespace: lab-broken
+spec:
+  containers:
+    - name: app
+      image: __BUSYBOX__
+      command: ["sleep", "infinity"]
+      resources:
+        requests:
+          cpu: "64"
+          memory: 256Gi
+---
+# A pod that cannot be scheduled: it needs a node label that no node has.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pending-selector
+  namespace: lab-broken
+spec:
+  nodeSelector:
+    k8sboard.io/pool: gpu
+  containers:
+    - name: app
+      image: __BUSYBOX__
+      command: ["sleep", "infinity"]
+---
+# A PVC that stays Pending: the storage class does not exist.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-no-class
+  namespace: lab-broken
+spec:
+  storageClassName: fast-ssd
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+# A Deployment whose rollout is stuck: the new ReplicaSet's pods fail their readiness probe.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rollout-stuck
+  namespace: lab-broken
+  annotations:
+    kubernetes.io/change-cause: "v2: readiness path changed"
+spec:
+  replicas: 2
+  progressDeadlineSeconds: 60
+  selector:
+    matchLabels:
+      app: rollout-stuck
+  template:
+    metadata:
+      labels:
+        app: rollout-stuck
+    spec:
+      containers:
+        - name: app
+          image: __BUSYBOX__
+          command: ["sh", "-c", "while true; do sleep 30; done"]
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "test -f /tmp/never-ready"]
+            periodSeconds: 5
+---
+# A pod with a sidecar that keeps restarting while the main container is fine.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sidecar-flapping
+  namespace: lab-broken
+spec:
+  containers:
+    - name: main
+      image: __BUSYBOX__
+      command: ["sleep", "infinity"]
+    - name: exporter
+      image: __BUSYBOX__
+      command: ["sh", "-c", "sleep 20; echo 'exporter: scrape timeout' >&2; exit 2"]

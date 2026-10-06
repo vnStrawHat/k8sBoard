@@ -1,0 +1,68 @@
+# lab-batch: a Job that fails past its backoff limit, a Job that completes, a suspended CronJob,
+# and a CronJob that runs every two minutes so Last run / Next run have real values.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: report-failed
+  namespace: lab-batch
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: report
+          image: __BUSYBOX__
+          command: ["sh", "-c", "echo building report; sleep 2; echo ERROR: input file missing >&2; exit 3"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: report-ok
+  namespace: lab-batch
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: report
+          image: __BUSYBOX__
+          command: ["sh", "-c", "for i in 1 2 3; do echo line $i; sleep 1; done; echo done"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cleanup-suspended
+  namespace: lab-batch
+spec:
+  schedule: "0 3 * * *"
+  suspend: true
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: cleanup
+              image: __BUSYBOX__
+              command: ["sh", "-c", "echo cleanup"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: heartbeat
+  namespace: lab-batch
+spec:
+  schedule: "*/2 * * * *"
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  startingDeadlineSeconds: 60
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: beat
+              image: __BUSYBOX__
+              command: ["sh", "-c", "date; echo heartbeat"]
