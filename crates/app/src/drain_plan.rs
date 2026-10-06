@@ -407,6 +407,8 @@ pub(crate) enum PodCheck {
     /// A 429: the budget refuses it now. An expected wait, not a failure.
     Refused(SharedString),
     Failed(SharedString),
+    /// A preview sends nothing, so nothing was asked.
+    NotChecked,
 }
 
 /// One line of the preview list.
@@ -512,6 +514,9 @@ fn local_result(planned: &PlannedPod) -> (String, StatusTone) {
     }
 }
 
+/// What a preview says of a pod whose plan holds no warning.
+const NOT_CHECKED_TEXT: &str = "Not checked (preview)";
+
 /// The text and tone of a pod's result with its dry-run: a server refusal or failure replaces the
 /// local guess, and an accepted dry-run downgrades a local `Blocked` or `Waits` to `Dry-run
 /// accepted` (the server would evict the pod now).
@@ -541,9 +546,14 @@ pub(crate) fn pod_result(
         {
             return ("Dry-run accepted".into(), StatusTone::Ok);
         }
-        PodCheck::Accepted | PodCheck::Waiting | PodCheck::Running => {}
+        PodCheck::Accepted | PodCheck::Waiting | PodCheck::Running | PodCheck::NotChecked => {}
     }
     let (text, tone) = local_result(planned);
+    // The plan's own findings (a budget at 0, a missing option) stand; a guess that the pod will
+    // go quietly is not claimed without a dry-run.
+    if *check == PodCheck::NotChecked && !matches!(tone, StatusTone::Bad | StatusTone::Warn) {
+        return (NOT_CHECKED_TEXT.into(), StatusTone::Info);
+    }
     (text.into(), tone)
 }
 

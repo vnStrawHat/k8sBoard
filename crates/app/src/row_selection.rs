@@ -10,7 +10,7 @@ use gpui_kit::{
 };
 
 use crate::app_shell::{AppShell, Screen};
-use crate::resource_actions::{ResourceAction, with_next_step};
+use crate::resource_actions::{PREVIEW_HINT, ResourceAction, with_next_step};
 use crate::resource_kind::{KindAction, ResourceKind};
 
 /// Why Roll back has no bulk form: each Deployment needs its own revision choice.
@@ -136,7 +136,7 @@ pub(crate) fn selection_bar(
                 }
                 BulkState::Preview(action, reason) => {
                     let shell = shell.clone();
-                    base.tooltip(with_next_step(&reason))
+                    base.tooltip(format!("{PREVIEW_HINT} · {}", with_next_step(&reason)))
                         .on_click(move |_, window, cx| {
                             let _ =
                                 shell.update(cx, |shell, cx| shell.run_bulk(action, window, cx));

@@ -902,3 +902,22 @@ fn the_bypass_note_names_the_budgets_and_counts_the_pods() {
     assert_eq!(bypass_note(std::slice::from_ref(&respect)), None);
     assert!(heads_up(&[respect], DEFAULT_TIMEOUT).is_some());
 }
+
+#[test]
+fn an_unchecked_pod_keeps_its_plan_warnings_and_claims_nothing_else() {
+    let pods = [pod("payments", "api-1")];
+    let calm = node_plan("wk-04", &pods, &[], &DrainOptions::default());
+    let (text, tone) = pod_result(&calm.pods[0], &PodCheck::NotChecked, BudgetPolicy::Respect);
+    assert_eq!(
+        (text.as_ref(), tone),
+        ("Not checked (preview)", StatusTone::Info)
+    );
+    // A budget at zero is the plan's own finding, not a server answer, so it stays.
+    let blocked = [budget("api-pdb", 1, 1, 0)];
+    let plan = node_plan("wk-04", &pods, &blocked, &DrainOptions::default());
+    let (text, tone) = pod_result(&plan.pods[0], &PodCheck::NotChecked, BudgetPolicy::Respect);
+    assert_eq!(
+        (text.as_ref(), tone),
+        ("Blocked by PDB api-pdb (0 allowed)", StatusTone::Bad)
+    );
+}

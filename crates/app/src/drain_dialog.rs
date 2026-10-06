@@ -247,7 +247,11 @@ impl DrainDialog {
             })
             .collect();
         let mut checks = Checks::default();
-        for node in nodes.iter().filter(|node| !node.is_cordoned) {
+        // A preview sends nothing, so no cordon is ever dry-run.
+        for node in nodes
+            .iter()
+            .filter(|node| !node.is_cordoned && target.preview_reason.is_none())
+        {
             checks
                 .cordons
                 .insert(node.name.clone(), CordonCheck::Waiting);
@@ -389,7 +393,15 @@ impl DrainDialog {
             .collect();
         // A pod that left the plan keeps its answer; one that joined it waits for its dry-run.
         for planned in self.plans.iter().flat_map(|plan| plan.evictions()) {
-            self.checks.pods.entry(planned.pod.uid.clone()).or_default();
+            let check = if self.preview_reason.is_some() {
+                PodCheck::NotChecked
+            } else {
+                PodCheck::default()
+            };
+            self.checks
+                .pods
+                .entry(planned.pod.uid.clone())
+                .or_insert(check);
         }
     }
 
@@ -458,7 +470,8 @@ impl DrainDialog {
         if self.is_fixture {
             return;
         }
-        if self.is_checking {
+        // A preview never sends anything, not even a dry-run.
+        if self.is_checking || self.preview_reason.is_some() {
             return;
         }
         self.is_checking = true;
@@ -1255,6 +1268,13 @@ impl DrainDialog {
     }
 
     fn render_dry_run(&self, cx: &App) -> AnyElement {
+        if self.preview_reason.is_some() {
+            return div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("Not checked: a preview sends no requests")
+                .into_any_element();
+        }
         let state = self.drain_state();
         let text = dry_run_text(
             &state,

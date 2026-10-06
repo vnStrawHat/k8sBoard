@@ -88,7 +88,7 @@ Row: `Grace period` select `Pod default` · `10 s` · `30 s` · `60 s` · `120 s
 
 ## Preview mode (a session that cannot drain)
 
-`Drain…` (node menu, selection bar, `D`, palette) always opens the dialog. When `action_availability(Drain)` is `Disabled` (read-only, locked, a missing right), the dialog is a **preview**: it loads the plan and runs the dry-runs as usual, titled `Drain preview: node {name}`, but shows no typed-name field, note, or confirm buttons. The gate's reason takes their place, with only a `Close` button; `drain_block` and `cordon_block` return it, so Enter and the buttons never commit. The menu item and the bar button stay enabled and keep the reason as their tooltip (`BulkState::Preview`).
+`Drain…` (node menu, selection bar, `D`, palette) always opens the dialog. When `action_availability(Drain)` is `Disabled` (read-only, locked, a missing right), the dialog is a **preview**: it loads the plan but sends **nothing**, not even a dry-run (`PodCheck::NotChecked`: a pod with no plan warning reads `Not checked (preview)`, one the plan already flags keeps that text, and the dry-run line says `Not checked: a preview sends no requests`), titled `Drain preview: node {name}`, but shows no typed-name field, note, or confirm buttons. The gate's reason takes their place, with only a `Close` button; `drain_block` and `cordon_block` return it, so Enter and the buttons never commit. The menu item and the bar button stay enabled; the item's hint reads `Preview only` and the full reason is the tooltip (the bar's tooltip is `Preview only · {reason}`; `BulkState::Preview`).
 
 ## Pod tags in the node drawer
 

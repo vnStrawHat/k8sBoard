@@ -459,6 +459,8 @@ fn the_d_key_opens_a_dialog_and_nothing_runs_from_it(cx: &mut TestAppContext) {
 fn the_dialog_on_a_locked_cluster_opens_as_a_preview_with_no_confirm(cx: &mut TestAppContext) {
     let t = drain_test("drain-locked", three_pods, cx);
     let prod_api = t.activate_prod(cx);
+    t.prod_state.lock().expect("state").pods =
+        vec![pod_json("payments", "api-1", Some("ReplicaSet"), false)];
     let dialog = t.open_and_settle(&t.t.prod, &["node-a"], cx);
     let reason = Some("prod-a is read-only".into());
     dialog.read_with(cx, |dialog, cx| {
@@ -466,11 +468,16 @@ fn the_dialog_on_a_locked_cluster_opens_as_a_preview_with_no_confirm(cx: &mut Te
         // The gate's reason stands where the confirm buttons would be, for both of them.
         assert_eq!(dialog.drain_blocked_by(cx), reason);
         assert_eq!(dialog.cordon_blocked_by(cx), reason);
-        // The plan is read as usual.
+        // The plan is read as usual, and no pod was asked about.
         assert_eq!(dialog.plans().len(), 1);
+        let planned = dialog.plans()[0]
+            .evictions()
+            .next()
+            .expect("a pod to evict");
+        assert_eq!(dialog.check_of(&planned.pod.uid), PodCheck::NotChecked);
     });
     assert_eq!(pod_lists(&prod_api).len(), 1);
-    // Nothing the user presses commits: only dry-runs ever leave.
+    // A preview sends nothing at all, not even a dry-run, and nothing the user presses commits.
     t.t.fixture.with_window(cx, |window, cx| {
         dialog.update(cx, |dialog, cx| {
             dialog.press_drain(window, cx);
@@ -479,11 +486,7 @@ fn the_dialog_on_a_locked_cluster_opens_as_a_preview_with_no_confirm(cx: &mut Te
     });
     cx.run_until_parked();
     assert!(t.tab(cx).is_none());
-    assert!(
-        writes(&prod_api)
-            .iter()
-            .all(|request| request.has_query("dryRun", "All"))
-    );
+    assert!(writes(&prod_api).is_empty());
 }
 
 #[gpui_kit::test]

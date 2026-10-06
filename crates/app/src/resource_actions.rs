@@ -3034,7 +3034,9 @@ fn drain_item(guard: &ClusterGuard<'_>) -> PopupMenuItem {
     match action_availability(ResourceAction::Drain, guard) {
         ActionAvailability::Enabled => action_item(ResourceAction::Drain, guard),
         ActionAvailability::Disabled { reason } => keyed(
-            PopupMenuItem::element(move |_, _| disabled_label("Drain…".into(), reason.clone())),
+            PopupMenuItem::element(move |_, _| {
+                hinted_label("Drain…".into(), PREVIEW_HINT.into(), reason.clone())
+            }),
             ResourceAction::Drain,
         ),
     }
@@ -3160,6 +3162,15 @@ pub(crate) fn disabled_menu_item(
 
 fn disabled_label(label: SharedString, reason: SharedString) -> AnyElement {
     let short = short_reason(&reason);
+    hinted_label(label, short, reason)
+}
+
+/// What an enabled item that only opens a read-only preview shows where a key hint would be; the
+/// permission detail stays in the tooltip.
+pub(crate) const PREVIEW_HINT: &str = "Preview only";
+
+/// A menu label with `hint` on the right and the full `reason` as the tooltip.
+fn hinted_label(label: SharedString, hint: SharedString, reason: SharedString) -> AnyElement {
     h_flex()
         .id(label.clone())
         .w_full()
@@ -3172,7 +3183,7 @@ fn disabled_label(label: SharedString, reason: SharedString) -> AnyElement {
                 .max_w(REASON_WIDTH)
                 .truncate()
                 .text_sm()
-                .child(short),
+                .child(hint),
         )
         .tooltip(move |window, cx| Tooltip::new(with_next_step(&reason)).build(window, cx))
         .into_any_element()
