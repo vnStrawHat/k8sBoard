@@ -372,3 +372,69 @@ fn invalid_proxy_error_names_no_url() {
         "context 'ctx': the proxy URL in Settings is not valid"
     );
 }
+
+/// Answers every request with a 429 and counts the requests it read.
+async fn serve_too_many_requests(listener: tokio::net::TcpListener) -> usize {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let body = r#"{"kind":"Status","apiVersion":"v1","status":"Failure","message":"slow down","reason":"TooManyRequests","code":429}"#;
+    let response = format!(
+        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let mut requests = 0;
+    loop {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return requests;
+        };
+        let mut buffer = [0_u8; 4096];
+        if stream.read(&mut buffer).await.unwrap_or(0) == 0 {
+            continue;
+        }
+        requests += 1;
+        let _ = stream.write_all(response.as_bytes()).await;
+        if requests == 2 {
+            return requests;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_429_reaches_the_caller_without_a_retry() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("binds a local port");
+    let port = listener.local_addr().expect("has an address").port();
+    let server = tokio::spawn(serve_too_many_requests(listener));
+    let yaml = format!(
+        "\
+current-context: ctx
+clusters:
+  - name: c
+    cluster: {{ server: 'http://127.0.0.1:{port}' }}
+users:
+  - name: u
+    user: {{ token: fixture-token-do-not-print }}
+contexts:
+  - name: ctx
+    context: {{ cluster: c, user: u }}
+"
+    );
+    let kubeconfig =
+        Kubeconfig::parse(&yaml, std::path::Path::new("fixture.yaml")).expect("fixture parses");
+    let connection = ClusterConnection::open(&kubeconfig, "ctx", &ProxyChoice::Direct)
+        .await
+        .expect("a direct connection builds");
+
+    // The default retry layer would keep retrying for ~30 s; one answer is all there is.
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        connection.server_version(),
+    )
+    .await
+    .expect("the 429 is returned without waiting out a retry");
+    assert!(
+        matches!(outcome, Err(ClusterError::Api { code: 429, .. })),
+        "{outcome:?}"
+    );
+    server.abort();
+}

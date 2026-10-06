@@ -99,3 +99,7 @@ impl AppShell { pub(crate) fn guard_for(&self, cluster: &ClusterRef, cx: &App) -
 ## Environment on every screen (J3, 2026-10-06)
 
 The title-bar badge is not the only place the environment shows: the status bar starts with the same badge (`environment_badge`) and the cluster display name; the main window has a 2 px top border in the danger token when the environment's tier is Production (`Environment::is_production`); the pop-out log window is titled `{tab} — {cluster} · {ENV}`, and dock tab tooltips read `{title}` then `{cluster} · {ENV}` (`cluster_environment_label`, set on the dock when a session opens).
+
+## No retry layer (M1, 2026-10-06)
+
+The client is built with `default_retry = false` (decision 38): a 429 reaches `write_error_of` at once, so an eviction blocked by a PodDisruptionBudget reads `refused for now: {cause}` instead of timing out.

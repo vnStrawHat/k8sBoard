@@ -169,6 +169,9 @@ impl ClusterConnection {
             // Host only, as above.
             tracing::debug!(context = %name, proxy_host = url.host().unwrap_or("unknown"), "connecting through a proxy");
         }
+        // kube's default retry layer retries HTTP 429 for ~30 s, which hides the budget refusal of
+        // an eviction (a 429 `TooManyRequests`) behind a timeout. The app reconnects by itself.
+        config.default_retry = false;
         // No read timeout: watches (0002) need long reads.
         let default_namespace = config.default_namespace.clone();
         let traffic = TrafficCounter::default();
