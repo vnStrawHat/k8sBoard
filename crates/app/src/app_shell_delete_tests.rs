@@ -388,14 +388,6 @@ impl DeleteTest {
             .with_window(cx, |window, cx| window.notifications(cx).len())
     }
 
-    fn is_dialog_open(&self, cx: &mut TestAppContext) -> bool {
-        let dialog = self
-            .shell()
-            .read_with(cx, |shell, _| shell.last_dialog.clone())
-            .and_then(|dialog| dialog.upgrade());
-        dialog.is_some_and(|dialog| dialog.read_with(cx, |dialog, _| dialog.is_open()))
-    }
-
     fn dialog_label(&self, cx: &mut TestAppContext) -> String {
         let dialog = self.t.dialog(cx);
         dialog
@@ -816,11 +808,17 @@ fn a_uid_conflict_fails_the_delete_and_is_audited_as_failed(cx: &mut TestAppCont
     t.show_pods(&[pod("api-x", true)], cx);
     t.cursor_on_pod(&t.t.stg, "api-x", cx);
     t.open_dialog(cx);
+    let dialog = t.t.dialog(cx);
     *lock(&t.server.commit_answer) = Some(status(409, "Conflict"));
     t.t.confirm(cx);
     t.t.wait_for("the audit line", cx, |_| audit_lines(&dir).len() == 1);
     assert_eq!(audit_lines(&dir)[0]["outcome"], "failed");
-    t.t.wait_for("the dialog to close", cx, |cx| !t.is_dialog_open(cx));
+    // A failure keeps the dialog as the result, with Retry failed.
+    t.t.wait_for("the result", cx, |cx| {
+        dialog.read_with(cx, |dialog, _| {
+            dialog.is_open() && dialog.retry_labels().is_some()
+        })
+    });
 }
 
 #[gpui_kit::test]
@@ -1397,6 +1395,65 @@ fn stopping_a_running_batch_sends_nothing_more(cx: &mut TestAppContext) {
     assert_eq!(states[1].text(), "Not sent: stopped by user");
     assert_eq!(writes(&t.t.stg_api).len(), 4, "no second commit was sent");
     assert_eq!(audit_lines(&dir).len(), 1);
+    // The dialog stays as the result, and Retry failed sends the two unsent objects again.
+    dialog.read_with(cx, |dialog, _| {
+        assert!(dialog.is_open());
+        let notice = dialog.outcome_notice().expect("a result");
+        assert!(notice.contains("Not done:"), "{notice}");
+        assert_eq!(dialog.retry_labels().map(|labels| labels.len()), Some(2));
+    });
+    let retry = dialog.clone();
+    t.t.fixture.with_window(cx, |window, cx| {
+        retry.update(cx, |dialog, cx| dialog.press_retry_failed(window, cx));
+    });
+    t.t.wait_for("the retry dialog", cx, |cx| {
+        t.t.dialog(cx).entity_id() != dialog.entity_id()
+    });
+    t.t.wait_for_dry_run(cx);
+    assert_eq!(t.dialog_label(cx), "Delete 2 pods");
+    assert_eq!(t.items(cx), vec![ItemProgress::Passed; 2]);
+    dialog.read_with(cx, |dialog, _| assert!(!dialog.is_open()));
+}
+
+#[gpui_kit::test]
+fn a_batch_where_everything_fails_names_the_objects_and_stays_open(cx: &mut TestAppContext) {
+    let t = delete_test("delete-bulk-failed", cx);
+    let dir = t.t.enable_audit_folder("delete-bulk-failed", cx);
+    t.tick_staging_pods(&["api-0", "api-1", "api-2"], 3, cx);
+    let _ = t.cursor_on_first_ticked(cx);
+    t.open_dialog(cx);
+    let dialog = t.t.dialog(cx);
+    *lock(&t.server.commit_answer) = Some(status(403, "Forbidden"));
+    t.t.confirm(cx);
+    t.t.wait_for("three audit lines", cx, |_| audit_lines(&dir).len() == 3);
+    t.t.wait_for("the result", cx, |cx| {
+        dialog.read_with(cx, |dialog, _| dialog.outcome_notice().is_some())
+    });
+    dialog.read_with(cx, |dialog, _| {
+        assert!(dialog.is_open(), "the result stays for the user to read");
+        let notice = dialog.outcome_notice().expect("a result");
+        for name in ["api-0", "api-1", "api-2"] {
+            assert!(notice.contains(name), "{notice}");
+        }
+        assert_eq!(dialog.retry_labels().map(|labels| labels.len()), Some(3));
+        assert!(!dialog.is_stop_offered());
+    });
+}
+
+#[gpui_kit::test]
+fn a_batch_that_went_through_closes_its_dialog(cx: &mut TestAppContext) {
+    let t = delete_test("delete-bulk-clean", cx);
+    let dir = t.t.enable_audit_folder("delete-bulk-clean", cx);
+    t.tick_staging_pods(&["api-0", "api-1"], 2, cx);
+    let _ = t.cursor_on_first_ticked(cx);
+    t.open_dialog(cx);
+    let dialog = t.t.dialog(cx);
+    t.t.confirm(cx);
+    t.t.wait_for("two audit lines", cx, |_| audit_lines(&dir).len() == 2);
+    t.t.wait_for("the dialog to close", cx, |cx| {
+        dialog.read_with(cx, |dialog, _| !dialog.is_open())
+    });
+    dialog.read_with(cx, |dialog, _| assert!(dialog.outcome_notice().is_none()));
 }
 
 #[gpui_kit::test]

@@ -428,6 +428,97 @@ fn only_a_plan_that_continues_uses_the_counting_notice() {
     batch.plan.on_failure = BatchFailure::Continue;
     assert_eq!(
         batch.notice(&results),
-        "Set default: 1 done, 1 failed (boom)"
+        "Set default: 1 done, 1 failed (boom). Not done: team-a/api-1"
     );
+}
+
+// ---- The result of a batch that did not go through entirely ----
+
+fn plain_batch(count: usize) -> BatchIntent {
+    let cluster = test_cluster();
+    let objects = objects(count);
+    let plan = batch_plan(&rows(&cluster, &objects), item_of).expect("a plan");
+    BatchIntent {
+        cluster,
+        cluster_name: "stg-b".into(),
+        action: ResourceAction::PauseRollout,
+        label: format!("Pause {count} deployments").into(),
+        verb: "Pause".into(),
+        button: "Pause".into(),
+        risk: ActionRisk::Change,
+        warnings: Vec::new(),
+        plan,
+    }
+}
+
+fn failed() -> ItemProgress {
+    ItemProgress::Failed("Forbidden".into())
+}
+
+#[test]
+fn the_notice_names_up_to_five_objects_that_did_not_go_through() {
+    let batch = plain_batch(8);
+    let mut results = vec![ItemProgress::Done; 8];
+    results[1] = failed();
+    results[3] = ItemProgress::Unknown;
+    let name = |index: usize| batch.plan.items[index].object.clone();
+    assert_eq!(
+        batch.notice(&results),
+        format!(
+            "Pause: 6 done, 1 failed, 1 unknown (Forbidden). Not done: {}, {}",
+            name(1),
+            name(3)
+        )
+    );
+    let all_failed = vec![failed(); 8];
+    let text = batch.notice(&all_failed);
+    assert!(text.ends_with(&format!("{}, +3", name(4))), "{text}");
+    assert!(!text.contains("api-5"), "{text}");
+}
+
+#[test]
+fn a_clean_batch_and_a_batch_of_one_name_nothing() {
+    let batch = plain_batch(3);
+    assert_eq!(batch.notice(&vec![ItemProgress::Done; 3]), "Pause: 3 done");
+    let single = plain_batch(1);
+    assert_eq!(
+        single.notice(&[failed()]),
+        "Pause: 0 done, 1 failed (Forbidden)"
+    );
+}
+
+#[test]
+fn retry_failed_sends_the_failed_and_unsent_items_only() {
+    let batch = plain_batch(5);
+    let results = [
+        ItemProgress::Done,
+        failed(),
+        ItemProgress::Unknown,
+        ItemProgress::NotSent("stopped by user".into()),
+        ItemProgress::NotSent("stopped by user".into()),
+    ];
+    let retry = batch.retry_batch(&results).expect("something to retry");
+    let objects: Vec<&str> = retry.plan.items.iter().map(|i| i.object.as_ref()).collect();
+    let expected: Vec<&str> = [1, 3, 4]
+        .iter()
+        .map(|index| batch.plan.items[*index].object.as_ref())
+        .collect();
+    assert_eq!(objects, expected);
+    assert_eq!(retry.confirm_label(0), "Pause 3");
+    assert_eq!(retry.action, batch.action);
+    assert!(retry.plan.skipped.is_empty());
+}
+
+#[test]
+fn nothing_is_retried_when_nothing_failed_or_the_plan_is_ordered() {
+    let batch = plain_batch(2);
+    assert!(batch.retry_batch(&vec![ItemProgress::Done; 2]).is_none());
+    assert!(
+        batch
+            .retry_batch(&[ItemProgress::Done, ItemProgress::Unknown])
+            .is_none(),
+        "an unknown outcome may have been applied"
+    );
+    let ordered = ordered_batch();
+    assert!(ordered.retry_batch(&[failed(), failed()]).is_none());
 }

@@ -268,6 +268,38 @@ pub(crate) fn with_propagation(
     Some(rebuilt)
 }
 
+/// The same delete over `objects` only (`namespace/name`), for the Retry failed of a result. The
+/// dialog checks them all again. `None` for a batch that is not a delete, or when none is left.
+pub(crate) fn with_targets(
+    batch: &BatchIntent,
+    objects: &[SharedString],
+    now: jiff::Timestamp,
+) -> Option<BatchIntent> {
+    let BatchExtras::Delete(extras) = &batch.plan.extras else {
+        return None;
+    };
+    let targets: Vec<DeleteTarget> = extras
+        .targets
+        .iter()
+        .filter(|target| objects.contains(&target.text()))
+        .cloned()
+        .collect();
+    if targets.is_empty() {
+        return None;
+    }
+    let extras = DeleteExtras {
+        targets,
+        already_gone: Vec::new(),
+        ..extras.clone()
+    };
+    Some(delete_batch(
+        &batch.cluster,
+        &batch.cluster_name,
+        extras,
+        now,
+    ))
+}
+
 // ---- Warnings and hints ----
 
 /// The warnings of the kind table (decision 13), one line per kind of surprise.

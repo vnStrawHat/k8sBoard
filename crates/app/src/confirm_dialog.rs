@@ -171,6 +171,15 @@ pub(crate) struct DialogInputs {
     pub(crate) generation: u64,
 }
 
+/// What a batch that did not go through entirely leaves in its dialog.
+struct BatchOutcome {
+    /// The notice of the run, with the names of the objects that did not go through.
+    notice: SharedString,
+    /// The failed and unsent objects as a batch of their own, `None` when there is nothing to send
+    /// again (an unknown outcome, an ordered plan).
+    retry: Option<BatchIntent>,
+}
+
 pub(crate) struct ConfirmDialog {
     shell: WeakEntity<AppShell>,
     kind: DialogKind,
@@ -187,6 +196,8 @@ pub(crate) struct ConfirmDialog {
     is_committing: bool,
     /// The Stop button of a running batch was pressed; the commit loop reads it between items.
     stop_requested: Rc<Cell<bool>>,
+    /// How a batch ended when something did not go through: the dialog stays as its result.
+    outcome: Option<BatchOutcome>,
     /// The last failed check or commit was a 409: Retry of a taint edit then reads the node again.
     is_conflict: bool,
     /// False once the dialog is closed, by any button, Escape, or the overlay.
@@ -238,6 +249,7 @@ impl ConfirmDialog {
             is_note_shown: false,
             is_committing: false,
             stop_requested: Rc::new(Cell::new(false)),
+            outcome: None,
             is_conflict: false,
             is_open: true,
             needs_focus: true,
@@ -442,6 +454,41 @@ impl ConfirmDialog {
         self.is_committing && matches!(self.kind, DialogKind::Batch(_))
     }
 
+    /// The commit ended with objects that did not go through: the dialog stays open as the
+    /// per-object result, with Close and, when something can be sent again, Retry failed.
+    pub(crate) fn show_outcome(
+        &mut self,
+        notice: SharedString,
+        retry: Option<BatchIntent>,
+        cx: &mut Context<Self>,
+    ) {
+        self.is_committing = false;
+        self.outcome = Some(BatchOutcome { notice, retry });
+        cx.notify();
+    }
+
+    /// Retry failed: a new dialog over the failed and unsent objects, which checks them again and
+    /// asks the confirm of its own tier, as any batch does.
+    fn retry_failed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(retry) = self
+            .outcome
+            .as_mut()
+            .and_then(|outcome| outcome.retry.take())
+        else {
+            return;
+        };
+        let Some(shell) = self.shell.upgrade() else {
+            return;
+        };
+        self.close(window, cx);
+        // Opened after this dialog is gone, so the two never stack.
+        window.defer(cx, move |window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.start_batch(retry, window, cx);
+            });
+        });
+    }
+
     /// The Stop button of a running batch: the item in flight finishes, and the rest is not sent.
     fn stop_batch(&mut self, cx: &mut Context<Self>) {
         if !self.is_batch_committing() {
@@ -562,7 +609,7 @@ impl ConfirmDialog {
         if self.is_fixture {
             return;
         }
-        if self.is_committing || self.block(cx).is_some() {
+        if self.is_committing || self.outcome.is_some() || self.block(cx).is_some() {
             return;
         }
         let Some(shell) = self.shell.upgrade() else {
@@ -953,6 +1000,16 @@ impl ConfirmDialog {
     }
 
     fn render_dry_run(&self, cx: &App) -> Option<AnyElement> {
+        // The result of the run replaces the dry-run line, which is about a past check.
+        if let Some(outcome) = &self.outcome {
+            return Some(
+                div()
+                    .text_sm()
+                    .text_color(tone_color(StatusTone::Bad, cx))
+                    .child(outcome.notice.clone())
+                    .into_any_element(),
+            );
+        }
         let theme = cx.theme();
         let total = self.items.len();
         let is_batch = matches!(self.kind, DialogKind::Batch(_));
@@ -1013,7 +1070,7 @@ impl ConfirmDialog {
         let BatchExtras::Delete(extras) = &batch.plan.extras else {
             return None;
         };
-        if !extras.kind.owns_dependents() {
+        if self.outcome.is_some() || !extras.kind.owns_dependents() {
             return None;
         }
         let muted = cx.theme().muted_foreground;
@@ -1042,7 +1099,7 @@ impl ConfirmDialog {
     }
 
     fn render_typed(&self, cx: &App) -> Option<AnyElement> {
-        if matches!(self.live_tier(cx), DialogConfirm::Click) {
+        if self.outcome.is_some() || matches!(self.live_tier(cx), DialogConfirm::Click) {
             return None;
         }
         let matches = self.typed_match(cx) == TypedMatch::Matches;
@@ -1068,7 +1125,7 @@ impl ConfirmDialog {
 
     /// The note field once the checkbox is ticked, and where the line goes when it is not saved.
     fn render_note_input(&self, cx: &App) -> Option<AnyElement> {
-        if matches!(self.kind, DialogKind::Unlock { .. }) {
+        if self.outcome.is_some() || matches!(self.kind, DialogKind::Unlock { .. }) {
             return None;
         }
         let muted = cx.theme().muted_foreground;
@@ -1093,6 +1150,27 @@ impl ConfirmDialog {
     /// The button row: the audit note checkbox on the left (a change only), Retry, Back, and the
     /// confirm button on the right.
     fn render_buttons(&self, block: bool, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(outcome) = &self.outcome {
+            let retry = outcome.retry.as_ref().map(|_| {
+                Button::new("write-retry-failed")
+                    .label("Retry failed")
+                    .small()
+                    .primary()
+                    .on_click(cx.listener(|dialog, _, window, cx| dialog.retry_failed(window, cx)))
+            });
+            let close = Button::new("write-close")
+                .label("Close")
+                .small()
+                .outline()
+                .on_click(cx.listener(|dialog, _, window, cx| dialog.close(window, cx)));
+            return h_flex()
+                .w_full()
+                .gap_2()
+                .justify_end()
+                .child(close)
+                .children(retry)
+                .into_any_element();
+        }
         let (label, is_danger) = match &self.kind {
             DialogKind::Unlock { .. } => (SharedString::from("Unlock"), false),
             DialogKind::Write(intent) => (intent.button.clone(), has_danger_button(intent.risk)),
@@ -1179,6 +1257,7 @@ impl Render for ConfirmDialog {
             .as_ref()
             .filter(|reason| reason.as_ref() != typed_reason)
             .filter(|_| matches!(self.dry_run, None | Some(DryRunState::Passed { .. })))
+            .filter(|_| self.outcome.is_none())
             .cloned();
         let unlock_note = matches!(self.kind, DialogKind::Unlock { .. }).then(|| {
             div().text_sm().text_color(muted).child(
@@ -1293,6 +1372,28 @@ impl ConfirmDialog {
 
     pub(crate) fn press_stop(&mut self, cx: &mut Context<Self>) {
         self.stop_batch(cx);
+    }
+
+    /// The notice a finished batch left in the dialog, `None` while the dialog is a question.
+    pub(crate) fn outcome_notice(&self) -> Option<SharedString> {
+        self.outcome.as_ref().map(|outcome| outcome.notice.clone())
+    }
+
+    /// The objects Retry failed would send, `None` when the button is not offered.
+    pub(crate) fn retry_labels(&self) -> Option<Vec<SharedString>> {
+        let retry = self.outcome.as_ref()?.retry.as_ref()?;
+        Some(
+            retry
+                .plan
+                .items
+                .iter()
+                .map(|item| item.object.clone())
+                .collect(),
+        )
+    }
+
+    pub(crate) fn press_retry_failed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.retry_failed(window, cx);
     }
 
     pub(crate) fn is_stop_offered(&self) -> bool {

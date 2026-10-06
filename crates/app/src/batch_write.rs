@@ -16,7 +16,9 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{AnyWindowHandle, App, AppContext as _, Context, SharedString, WeakEntity, Window};
 
-use super::object_delete::{DeleteExtras, Removal, delete_commit_progress, delete_notice};
+use super::object_delete::{
+    DeleteExtras, Removal, delete_commit_progress, delete_notice, with_targets,
+};
 use super::write_flow::{
     CheckedWriteError, CommitMode, Confirmed, DryRunState, WriteIntent, WriteStep, checked_write,
     notify, notify_unavailable, notify_with, write_error_text,
@@ -244,14 +246,63 @@ impl BatchIntent {
         progress
     }
 
-    /// The notice after the last commit.
+    /// The notice after the last commit. A batch of several names the objects that did not go
+    /// through, so the toast says which ones to look at.
     fn notice(&self, results: &[ItemProgress]) -> String {
-        if matches!(self.plan.extras, BatchExtras::Delete(_)) {
-            return delete_notice(self, results);
+        let text = if self.is_delete() {
+            delete_notice(self, results)
+        } else if let Some(text) = self.stop_notice(results) {
+            return text;
+        } else {
+            batch_notice(&self.verb, results)
+        };
+        match not_done_names(&self.plan.items, results) {
+            Some(names) if results.len() > 1 => format!("{text}. Not done: {names}"),
+            _ => text,
         }
-        match self.stop_notice(results) {
-            Some(text) => text,
-            None => batch_notice(&self.verb, results),
+    }
+
+    /// The batch of the items that failed or were not sent, for the Retry failed of the result.
+    /// An unknown outcome is left out: the change may have been applied, and a second send could
+    /// apply it twice. `None` when nothing is left to retry, and for an ordered plan, whose Retry
+    /// starts the action again (`retry_subject`).
+    fn retry_batch(&self, results: &[ItemProgress]) -> Option<BatchIntent> {
+        let is_retried = |state: &ItemProgress| {
+            matches!(state, ItemProgress::Failed(_) | ItemProgress::NotSent(_))
+        };
+        if self.plan.on_failure == BatchFailure::Stop || !results.iter().any(is_retried) {
+            return None;
+        }
+        let items: Vec<BatchItem> = self
+            .plan
+            .items
+            .iter()
+            .zip(results)
+            .filter(|(_, state)| is_retried(state))
+            .map(|(item, _)| item.clone())
+            .collect();
+        match &self.plan.extras {
+            BatchExtras::Delete(_) => {
+                let objects: Vec<SharedString> =
+                    items.into_iter().map(|item| item.object).collect();
+                with_targets(self, &objects, jiff::Timestamp::now())
+            }
+            BatchExtras::DefaultClass(_) => None,
+            BatchExtras::None => Some(BatchIntent {
+                cluster: self.cluster.clone(),
+                cluster_name: self.cluster_name.clone(),
+                action: self.action,
+                label: format!("{} {} failed", self.verb, items.len()).into(),
+                verb: self.verb.clone(),
+                button: self.button.clone(),
+                risk: self.risk,
+                warnings: self.warnings.clone(),
+                plan: BatchPlan {
+                    items,
+                    skipped: Vec::new(),
+                    ..self.plan.clone()
+                },
+            }),
         }
     }
 
@@ -458,6 +509,33 @@ pub(crate) fn batch_notice(verb: &str, results: &[ItemProgress]) -> String {
     text
 }
 
+/// How many objects the notice names before it counts the rest.
+const NOT_DONE_NAMED: usize = 5;
+
+/// `a, b, c, d, e, +2`: the objects that failed, were not sent, or have an unknown outcome. `None`
+/// when every item went through.
+fn not_done_names(items: &[BatchItem], results: &[ItemProgress]) -> Option<String> {
+    let names: Vec<&str> = items
+        .iter()
+        .zip(results)
+        .filter(|(_, state)| {
+            matches!(
+                state,
+                ItemProgress::Failed(_) | ItemProgress::NotSent(_) | ItemProgress::Unknown
+            )
+        })
+        .map(|(item, _)| item.object.as_ref())
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    let mut text = names[..names.len().min(NOT_DONE_NAMED)].join(", ");
+    if names.len() > NOT_DONE_NAMED {
+        text.push_str(&format!(", +{}", names.len() - NOT_DONE_NAMED));
+    }
+    Some(text)
+}
+
 impl AppShell {
     /// The one entry of a guarded batch: the gate, then the list dialog with the dry-runs already
     /// running one after another. Nothing is sent without the dialog, for every tier and risk.
@@ -603,12 +681,21 @@ impl AppShell {
             let retry = batch
                 .retry_subject(&results)
                 .map(|subject| (subject, batch.action));
+            // An ordered plan keeps its own notice, which says what state it left and has its own
+            // Retry, so its dialog closes as before.
+            let is_kept = batch.plan.on_failure == BatchFailure::Continue
+                && !results.iter().all(ItemProgress::is_settled);
+            let outcome = is_kept.then(|| (notice.clone(), batch.retry_batch(&results)));
             let _ = cx.update_window(handle, |_, window, cx| {
-                // Only our own dialog closes, and only while it is open: after Escape or Back the
-                // notice is all there is.
+                // Only our own dialog is touched, and only while it is open. A clean run closes
+                // it; anything else keeps it as the per-object result, with Close and Retry.
                 let _ = dialog.update(cx, |dialog, cx| {
-                    if dialog.is_open() {
-                        dialog.close(window, cx);
+                    if !dialog.is_open() {
+                        return;
+                    }
+                    match outcome {
+                        None => dialog.close(window, cx),
+                        Some((text, retry)) => dialog.show_outcome(text.into(), retry, cx),
                     }
                 });
                 match retry {
