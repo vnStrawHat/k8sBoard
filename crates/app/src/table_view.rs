@@ -109,7 +109,14 @@ impl RowName {
 pub(crate) enum RowCheck {
     Toggle(usize),
     Range(usize),
+    /// Shift+J / Shift+K: ticks the rows from the anchor (the `from` row without one) to `to`.
+    Extend {
+        from: usize,
+        to: usize,
+    },
     All(bool),
+    /// Ctrl+A: ticks every shown row, or unticks them when all are ticked.
+    ToggleAll,
 }
 
 /// The filter a screen starts with: ReplicaSets hide the inactive ones (decision 26), and
@@ -310,7 +317,19 @@ impl TableView {
                 }
             }
             RowCheck::Range(row) => self.check_range(items, row),
+            RowCheck::Extend { from, to } => {
+                if self.anchor.is_none()
+                    && let Some(item) = self.item_index(from)
+                {
+                    self.anchor = Some(RowName::of(&items[item]));
+                }
+                self.check_range(items, to);
+            }
             RowCheck::All(checked) => self.set_all_checked(items, checked),
+            RowCheck::ToggleAll => {
+                let checked = !self.all_checked(items);
+                self.set_all_checked(items, checked);
+            }
         }
     }
 

@@ -35,6 +35,11 @@ impl TableView {
 | Ctrl+click a row (`secondary` modifier, Cmd on macOS) | `toggle_checked` |
 | Shift+click a row | `check_range` |
 | Plain click a row | unchanged: selects the row, opens the drawer |
+| Space | ticks or unticks the cursor row (`RowCheck::Toggle`) |
+| Shift+J / Shift+K | moves the cursor one row and ticks the range from the anchor to it (`RowCheck::Extend`; a step that wraps ticks nothing) |
+| Ctrl+A (Cmd on macOS) | ticks every shown row, or unticks them when all are ticked (`RowCheck::ToggleAll`) |
+
+The keys act only where Enter opens the row (the table or the shell root has focus), never in a text field; Issues has no ticks. The shortcut sheet lists them under Tables with a note for the mouse gestures.
 
 - Modifiers: each delegate's `render_tr(row_ix, ..)` returns `div().id(("row", row_ix)).on_click(..)`; the handler reads `event.modifiers()` and calls `AppShell::toggle_row_checked` / `check_row_range` only when Ctrl or Shift is held. The kit adds its own row click after ours, so a modified click also selects the row and the drawer follows it (known ceiling; no workaround).
 - Handlers are plain closures on `WeakEntity<AppShell>` (like `sortable_header`), going through `update_view`. If the checkbox cell still lets the kit select the row, the coder reports it instead of working around it (AC10).

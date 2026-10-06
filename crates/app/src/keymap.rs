@@ -25,6 +25,11 @@ gpui_kit::actions!(
         SelectLastRow,
         SelectNextPage,
         SelectPreviousPage,
+        // Ticking rows from the keyboard (spec 0009): Space, Shift J / Shift K, Ctrl A.
+        ToggleRowTick,
+        ExtendTickDown,
+        ExtendTickUp,
+        ToggleAllTicks,
         OpenDrawer,
         Dismiss,
         LeaveInput,
@@ -185,6 +190,10 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("end", SelectLastRow, Some(WORKSPACE)),
         KeyBinding::new("pageup", SelectPreviousPage, Some(WORKSPACE)),
         KeyBinding::new("pagedown", SelectNextPage, Some(WORKSPACE)),
+        KeyBinding::new("space", ToggleRowTick, Some(WORKSPACE)),
+        KeyBinding::new("shift-j", ExtendTickDown, Some(WORKSPACE)),
+        KeyBinding::new("shift-k", ExtendTickUp, Some(WORKSPACE)),
+        KeyBinding::new("secondary-a", ToggleAllTicks, Some(WORKSPACE)),
         KeyBinding::new("enter", OpenDrawer, Some(WORKSPACE)),
         KeyBinding::new("escape", Dismiss, Some(WORKSPACE)),
         KeyBinding::new("[", PreviousContainer, Some(WORKSPACE)),
@@ -337,6 +346,18 @@ impl ShortcutGroup {
             Self::Terminal => "Terminal",
         }
     }
+
+    /// The line under the group's rows for gestures that are not keys.
+    pub(crate) fn note(self) -> Option<&'static str> {
+        match self {
+            Self::Tables => Some(
+                "Mouse: Ctrl+click (Cmd on macOS) adds a row to the ticked rows, Shift+click ticks a range.",
+            ),
+            Self::General | Self::Drawer | Self::SelectedResource | Self::Dock | Self::Terminal => {
+                None
+            }
+        }
+    }
 }
 
 /// One line of the sheet. Its keys are read from the live keymap, never written here.
@@ -385,6 +406,14 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         row(Tables, "Last row", SelectLastRow),
         row(Tables, "Next page", SelectNextPage),
         row(Tables, "Previous page", SelectPreviousPage),
+        row(Tables, "Tick or untick the cursor row", ToggleRowTick),
+        row(Tables, "Move down and tick the range", ExtendTickDown),
+        row(Tables, "Move up and tick the range", ExtendTickUp),
+        row(
+            Tables,
+            "Tick every shown row (again to untick)",
+            ToggleAllTicks,
+        ),
         row(Tables, "Open the drawer", OpenDrawer),
         row(
             Tables,

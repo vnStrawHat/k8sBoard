@@ -42,3 +42,19 @@ fn every_label_fits_beside_its_keys_in_a_half_width_column() {
         assert!(row.label.chars().count() <= 48, "{}", row.label);
     }
 }
+
+#[gpui_kit::test]
+fn the_tables_group_lists_the_tick_keys(cx: &mut TestAppContext) {
+    use crate::keymap::{ExtendTickDown, ExtendTickUp, ToggleAllTicks, ToggleRowTick};
+    assert_eq!(keys_of(&ToggleRowTick, cx), ["space"]);
+    assert_eq!(keys_of(&ExtendTickDown, cx), ["j"]);
+    assert_eq!(keys_of(&ExtendTickUp, cx), ["k"]);
+    assert_eq!(keys_of(&ToggleAllTicks, cx), ["a"]);
+}
+
+#[test]
+fn the_tables_group_notes_the_mouse_gestures() {
+    let note = ShortcutGroup::Tables.note().unwrap_or_default();
+    assert!(note.contains("Ctrl+click") && note.contains("Shift+click"));
+    assert!(ShortcutGroup::General.note().is_none());
+}

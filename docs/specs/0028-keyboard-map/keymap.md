@@ -15,6 +15,9 @@ All actions are unit structs from `gpui_kit::actions!(k8sboard, [...])` in `keym
 | J / K, ↓ / ↑ | `j`, `down` / `k`, `up` | `SelectNextRow` / `SelectPreviousRow` | WORKSPACE, TABLE (arrows only) | moves the row cursor, wrapping at the ends as ↑↓ do today; the drawer follows only when open |
 | — (kit keys) | `home`, `end`, `pageup`, `pagedown` | `SelectFirstRow`, `SelectLastRow`, `SelectPreviousPage`, `SelectNextPage` | WORKSPACE, TABLE | same, re-bound so no kit key opens the drawer (decision 6) |
 | ⏎ | `enter` | `OpenDrawer` | WORKSPACE | opens the drawer on the cursor row (first row when none) |
+| Space | `space` | `ToggleRowTick` | WORKSPACE | ticks or unticks the cursor row (J4) |
+| Shift+J / Shift+K | `shift-j` / `shift-k` | `ExtendTickDown` / `ExtendTickUp` | WORKSPACE | moves the cursor and ticks the range from the anchor |
+| Ctrl+A | `secondary-a` | `ToggleAllTicks` | WORKSPACE | ticks every shown row, again unticks them |
 | Esc | `escape` | `Dismiss` | WORKSPACE, TABLE | ladder in [contexts-and-focus.md](contexts-and-focus.md) |
 | Esc (in a field) | `escape` | `LeaveInput` | FIELD | focus leaves the text field |
 | Space | `space` | `NoAction` | cluster switcher (both contexts) | `space` → `NoAction` in the switcher (0046); no tick, never confirms or closes |

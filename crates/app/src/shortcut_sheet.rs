@@ -3,15 +3,15 @@
 //! the OS.
 
 use gpui_kit::component::kbd::Kbd;
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
-    Action, App, AsKeystroke as _, InteractiveElement as _, IntoElement, Keystroke,
-    ParentElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    Action, App, AsKeystroke as _, IntoElement, Keystroke, ParentElement as _, ScrollHandle,
+    Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::cluster_switcher::SwitchToCluster1;
 use crate::keymap::{SelectDrawerTab1, ShortcutGroup, ShortcutRow, shortcut_rows};
+use crate::scroll_list::scroll_list;
 
 const SHEET_WIDTH: f32 = 720.;
 /// What the dialog spends above and below the grid: its offset from the top, title, and padding.
@@ -22,16 +22,22 @@ const SHEET_NOTE: &str = "Single-letter keys work only while a resource is selec
 
 /// Opens the sheet in a kit dialog, which traps focus, closes on Esc, and restores focus.
 pub(crate) fn open_shortcut_sheet(window: &mut Window, cx: &mut App) {
-    window.open_dialog(cx, |dialog, window, cx| {
-        // The sheet is taller than a small window: the body scrolls under the title.
+    // The dialog closure runs on every render; the handle keeps the scroll position across them.
+    let scroll = ScrollHandle::new();
+    window.open_dialog(cx, move |dialog, window, cx| {
+        // The sheet is taller than a small window: the body scrolls under the title, with a
+        // scrollbar that stays drawn so the rows below the fold are not a surprise.
         let body_height = window.viewport_size().height - px(SHEET_CHROME_HEIGHT);
-        dialog.title("Keyboard shortcuts").w(px(SHEET_WIDTH)).child(
-            div()
-                .id("shortcut-sheet-body")
-                .max_h(body_height)
-                .overflow_y_scrollbar()
-                .child(shortcut_sheet(cx)),
-        )
+        dialog
+            .title("Keyboard shortcuts")
+            .w(px(SHEET_WIDTH))
+            .child(scroll_list(
+                "shortcut-sheet-body",
+                &scroll,
+                body_height,
+                // The right padding keeps the keys clear of the scrollbar drawn over the body.
+                div().pr_3().child(shortcut_sheet(cx)),
+            ))
     });
 }
 
@@ -58,6 +64,13 @@ pub(crate) fn shortcut_sheet(cx: &App) -> impl IntoElement + use<> {
                             .map(|row| sheet_row(row, cx)),
                     ),
                 )
+                .children(group.note().map(|note| {
+                    div()
+                        .px_2()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(note)
+                }))
         }))
         .child(
             div()

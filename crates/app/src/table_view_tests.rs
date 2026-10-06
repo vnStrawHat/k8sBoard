@@ -491,3 +491,34 @@ fn checked_rows_follow_the_ticks() {
     view.rebuild(&rows, 2, now());
     assert!(view.checked_rows(&rows).is_empty());
 }
+
+#[test]
+fn extend_ticks_from_the_cursor_row_without_an_anchor() {
+    let rows = items();
+    let mut view = ticked_view(&rows);
+    view.apply_check(&rows, RowCheck::Extend { from: 1, to: 2 });
+    assert_eq!(checked_rows(&view, &rows), ["pod-2", "pod-1"]);
+    // The anchor is kept: the next step grows the same range.
+    view.apply_check(&rows, RowCheck::Extend { from: 2, to: 3 });
+    assert_eq!(checked_rows(&view, &rows), ["pod-2", "pod-1", "pod-3"]);
+}
+
+#[test]
+fn extend_keeps_the_anchor_of_an_earlier_tick() {
+    let rows = items();
+    let mut view = ticked_view(&rows);
+    view.apply_check(&rows, RowCheck::Toggle(0));
+    view.apply_check(&rows, RowCheck::Extend { from: 2, to: 3 });
+    assert_eq!(view.checked_count(), 4);
+}
+
+#[test]
+fn toggle_all_ticks_then_unticks_the_shown_rows() {
+    let rows = items();
+    let mut view = ticked_view(&rows);
+    view.apply_check(&rows, RowCheck::Toggle(1));
+    view.apply_check(&rows, RowCheck::ToggleAll);
+    assert!(view.all_checked(&rows));
+    view.apply_check(&rows, RowCheck::ToggleAll);
+    assert_eq!(view.checked_count(), 0);
+}

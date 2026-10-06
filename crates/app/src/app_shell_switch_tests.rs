@@ -1401,3 +1401,68 @@ fn session_of_is_none_for_a_cluster_that_is_not_active(cx: &mut TestAppContext) 
     assert!(has_session(&stg, cx));
     assert!(!has_session(&prod, cx), "the cluster just left");
 }
+
+fn ticked_pod_names(fixture: &SwitchFixture, cx: &mut TestAppContext) -> Vec<String> {
+    fixture.shell.read_with(cx, |shell, cx| {
+        shell
+            .pod_table
+            .read(cx)
+            .delegate()
+            .checked_objects(cx)
+            .into_iter()
+            .map(|object| match object.key {
+                ResourceKey::Pod { name, .. } => name,
+                other => panic!("not a pod: {other:?}"),
+            })
+            .collect()
+    })
+}
+
+#[gpui_kit::test]
+fn space_ticks_and_unticks_the_cursor_row(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("space-tick", cx);
+    fixture.press("j", cx);
+    fixture.press("space", cx);
+    assert_eq!(ticked_pod_names(&fixture, cx), ["api-0"]);
+    fixture.press("space", cx);
+    assert!(ticked_pod_names(&fixture, cx).is_empty());
+}
+
+#[gpui_kit::test]
+fn shift_j_moves_down_and_ticks_the_range(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("shift-j-tick", cx);
+    fixture.press("j", cx);
+    fixture.press("shift-j", cx);
+    assert_eq!(ticked_pod_names(&fixture, cx), ["api-0", "web-0"]);
+    assert_eq!(selected_name(&fixture, cx).as_deref(), Some("web-0"));
+}
+
+#[gpui_kit::test]
+fn shift_k_moves_up_and_ticks_the_range(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("shift-k-tick", cx);
+    select_pod_row(&fixture, 1, cx);
+    fixture.draw_twice(cx);
+    fixture.press("shift-k", cx);
+    assert_eq!(ticked_pod_names(&fixture, cx), ["api-0", "web-0"]);
+    assert_eq!(selected_name(&fixture, cx).as_deref(), Some("api-0"));
+}
+
+#[gpui_kit::test]
+fn a_wrapping_shift_step_ticks_nothing(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("shift-wrap", cx);
+    select_pod_row(&fixture, 1, cx);
+    fixture.draw_twice(cx);
+    // Shift J on the last row wraps the cursor to the top: it must not tick the whole table.
+    fixture.press("shift-j", cx);
+    assert!(ticked_pod_names(&fixture, cx).is_empty());
+}
+
+#[gpui_kit::test]
+fn ctrl_a_ticks_every_shown_row_and_again_unticks(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("ctrl-a-tick", cx);
+    fixture.press("j", cx);
+    fixture.press(&chord("a"), cx);
+    assert_eq!(ticked_pod_names(&fixture, cx), ["api-0", "web-0"]);
+    fixture.press(&chord("a"), cx);
+    assert!(ticked_pod_names(&fixture, cx).is_empty());
+}

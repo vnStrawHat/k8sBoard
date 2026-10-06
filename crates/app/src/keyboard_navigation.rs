@@ -20,13 +20,14 @@ use crate::dock::{DockMode, TabStep};
 use crate::drawer::{DrawerTab, drawer_tabs};
 use crate::keymap::{
     Attach, CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels,
-    EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, GoBack, GoForward, LeaveInput,
-    NextContainer, NextDockTab, OpenDrawer, OpenShell, PauseRollout, PortForward,
-    PreviousContainer, PreviousDockTab, RenewCertificate, RerunJob, RestartPod, RestartRollout,
-    RollBack, Scale, SelectDrawerTab1, SelectDrawerTab2, SelectDrawerTab3, SelectDrawerTab4,
-    SelectDrawerTab5, SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow,
-    SelectPreviousPage, SelectPreviousRow, SetDefaultStorageClass, SuspendCronJob, ToggleDock,
-    ToggleDockZoom, ToggleReadOnly, TriggerCronJob, ViewLogs, ViewYaml,
+    EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, ExtendTickDown, ExtendTickUp, GoBack,
+    GoForward, LeaveInput, NextContainer, NextDockTab, OpenDrawer, OpenShell, PauseRollout,
+    PortForward, PreviousContainer, PreviousDockTab, RenewCertificate, RerunJob, RestartPod,
+    RestartRollout, RollBack, Scale, SelectDrawerTab1, SelectDrawerTab2, SelectDrawerTab3,
+    SelectDrawerTab4, SelectDrawerTab5, SelectFirstRow, SelectLastRow, SelectNextPage,
+    SelectNextRow, SelectPreviousPage, SelectPreviousRow, SetDefaultStorageClass, SuspendCronJob,
+    ToggleAllTicks, ToggleDock, ToggleDockZoom, ToggleReadOnly, ToggleRowTick, TriggerCronJob,
+    ViewLogs, ViewYaml,
 };
 use crate::kind_drawer::REVISIONS_TITLE;
 use crate::live_sections::loaded_replica_sets;
@@ -36,6 +37,7 @@ use crate::resource_actions::{
     key_availability, subject_action, unavailable_text,
 };
 use crate::table_selection::{ClusterObject, ResourceKey};
+use crate::table_view::RowCheck as TickChange;
 use crate::workload_actions::{row_block, state_label};
 
 /// The key context of the shell root. `ValuesScreen` is added while ConfigMaps or Secrets is shown, so
@@ -158,6 +160,19 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_step::<SelectLastRow>(root, RowStep::Last, cx);
     let root = on_step::<SelectNextPage>(root, RowStep::NextPage, cx);
     let root = on_step::<SelectPreviousPage>(root, RowStep::PreviousPage, cx);
+    let root = root
+        .on_action(cx.listener(|shell, _: &ToggleRowTick, window, cx| {
+            shell.tick_cursor_row(window, cx);
+        }))
+        .on_action(cx.listener(|shell, _: &ExtendTickDown, window, cx| {
+            shell.extend_ticks(RowStep::Next, window, cx);
+        }))
+        .on_action(cx.listener(|shell, _: &ExtendTickUp, window, cx| {
+            shell.extend_ticks(RowStep::Previous, window, cx);
+        }))
+        .on_action(cx.listener(|shell, _: &ToggleAllTicks, window, cx| {
+            shell.tick_all_rows(window, cx);
+        }));
     let root = on_drawer_tab::<SelectDrawerTab1>(root, 1, cx);
     let root = on_drawer_tab::<SelectDrawerTab2>(root, 2, cx);
     let root = on_drawer_tab::<SelectDrawerTab3>(root, 3, cx);
@@ -319,6 +334,68 @@ impl AppShell {
         };
         self.select_table_row(table, row, cx);
         focus_table(table, window, cx);
+    }
+
+    /// The cursor row of the visible table. Overview, Topology, Port Forwarding, and Issues have
+    /// no ticked rows, so no cursor to tick.
+    fn cursor_row(&self, cx: &App) -> Option<usize> {
+        match self.screen {
+            Screen::Pods => self.pod_table.read(cx).selected_row(),
+            Screen::Nodes => self.node_table.read(cx).selected_row(),
+            Screen::Kind(_) => self.kind_table.read(cx).selected_row(),
+            Screen::Overview | Screen::Topology | Screen::PortForwarding | Screen::Issues => None,
+        }
+    }
+
+    /// Whether a tick key belongs to the table. A control the user tabbed to (a button of the
+    /// selection bar) keeps Space, as it keeps Enter.
+    fn takes_tick_key(&self, window: &Window, cx: &mut Context<Self>) -> bool {
+        if self.is_editing() {
+            return false;
+        }
+        if !self.is_cursor_surface_focused(window, cx) {
+            cx.propagate();
+            return false;
+        }
+        true
+    }
+
+    /// Space: ticks or unticks the cursor row.
+    fn tick_cursor_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.takes_tick_key(window, cx) {
+            return;
+        }
+        if let Some(row) = self.cursor_row(cx) {
+            self.check_rows(TickChange::Toggle(row), cx);
+        }
+    }
+
+    /// Shift+J / Shift+K: moves the cursor one row and ticks the rows from the range anchor to
+    /// it, as Shift+click does. A step that wraps around the table ticks nothing.
+    fn extend_ticks(&mut self, step: RowStep, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.takes_tick_key(window, cx) {
+            return;
+        }
+        let before = self.cursor_row(cx);
+        self.step_cursor(step, window, cx);
+        let Some(to) = self.cursor_row(cx) else {
+            return;
+        };
+        let from = before.unwrap_or(to);
+        let wrapped = match step {
+            RowStep::Previous => to > from,
+            _ => to < from,
+        };
+        if !wrapped {
+            self.check_rows(TickChange::Extend { from, to }, cx);
+        }
+    }
+
+    /// Ctrl+A: ticks every shown row, or unticks them when all are ticked.
+    fn tick_all_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.takes_tick_key(window, cx) {
+            self.check_rows(TickChange::ToggleAll, cx);
+        }
     }
 
     /// Enter: opens the drawer on the cursor row, or on the first row without a cursor. On Issues
