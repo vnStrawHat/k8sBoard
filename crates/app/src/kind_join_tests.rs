@@ -2251,3 +2251,93 @@ fn last_job_ignores_other_namespaces() {
     )];
     assert!(last_job_owner(&cron_job, &pods).is_err());
 }
+
+fn mounting_config_map(name: &str) -> ContainerSummary {
+    let mut container = container(ContainerKind::Main);
+    container.mounts = vec![MountEntry {
+        path: "/etc/c".to_owned(),
+        volume: "c".to_owned(),
+        source: VolumeSource::ConfigMap {
+            name: name.to_owned(),
+        },
+        is_read_only: true,
+        sub_path: None,
+    }];
+    container
+}
+
+#[test]
+fn env_consumers_are_the_env_reading_deployments_statefulsets_and_daemonsets_of_the_namespace() {
+    let using = |namespace: &str, name: &str, container: ContainerSummary| {
+        with_container(pod(namespace, name, &[]), container)
+    };
+    let pods = [
+        owned_by(
+            using("team-a", "api-1", env_from_config_map("c")),
+            "ReplicaSet",
+            "api-7d9f8c",
+        ),
+        owned_by(
+            using("team-a", "db-0", env_from_config_map("c")),
+            "StatefulSet",
+            "db",
+        ),
+        // Mounted files update on their own, a CronJob run starts fresh, a bare pod is not
+        // restarted, and another namespace's `c` is another object.
+        owned_by(
+            using("team-a", "agent-1", mounting_config_map("c")),
+            "DaemonSet",
+            "agent",
+        ),
+        owned_by(
+            using("team-a", "n-1", env_from_config_map("c")),
+            "Job",
+            "nightly-29012345",
+        ),
+        using("team-a", "debug", env_from_config_map("c")),
+        owned_by(
+            using("team-b", "web-1", env_from_config_map("c")),
+            "ReplicaSet",
+            "web-7d9f8c",
+        ),
+    ];
+    let consumers = env_consumers(&pods, ObjectKind::ConfigMap, "team-a", "c");
+    assert_eq!(
+        consumers,
+        [
+            (
+                ObjectKind::Deployment,
+                ResourceKey::of_object("Deployment", Some("team-a"), "api").unwrap()
+            ),
+            (
+                ObjectKind::StatefulSet,
+                ResourceKey::of_object("StatefulSet", Some("team-a"), "db").unwrap()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn env_consumers_of_a_secret_read_its_own_references() {
+    let pods = [
+        owned_by(
+            with_container(pod("team-a", "agent-1", &[]), env_from_secret("s")),
+            "DaemonSet",
+            "agent",
+        ),
+        // A ConfigMap of the same name is not the Secret.
+        owned_by(
+            with_container(pod("team-a", "api-1", &[]), env_from_config_map("s")),
+            "ReplicaSet",
+            "api-7d9f8c",
+        ),
+    ];
+    let consumers = env_consumers(&pods, ObjectKind::Secret, "team-a", "s");
+    assert_eq!(
+        consumers,
+        [(
+            ObjectKind::DaemonSet,
+            ResourceKey::of_object("DaemonSet", Some("team-a"), "agent").unwrap()
+        )]
+    );
+}

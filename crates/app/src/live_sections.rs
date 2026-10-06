@@ -44,7 +44,7 @@ use crate::kind_diagnosis::{is_pod_not_ready, unready_node};
 use crate::kind_drawer::{DrawerPaint, bar_row, live_detail_rows};
 use crate::kind_join::{
     EndpointState, UsedBy, WAY_ENV, WAY_ENV_FROM, config_map_users, endpoint_entries,
-    endpoint_ports, secret_user_list, secret_users, service_slices, users_of,
+    endpoint_ports, restart_target, secret_user_list, secret_users, service_slices, users_of,
 };
 use crate::kind_join::{UsageSample, claim_sample, is_shared_filesystem};
 use crate::kind_row::{DetailRow, KindObject, KindRow, LiveContent, PodOwner, owns_pod, percent};
@@ -1180,18 +1180,7 @@ enum RestartButton {
 /// A Deployment, StatefulSet, or DaemonSet that reads the value through env needs a restart to see
 /// a change; the gate of the drawer's cluster decides whether it may run now.
 fn restart_button(used_by: &UsedBy, gate: Option<&DrawerWriteGate>) -> RestartButton {
-    if !(used_by.ways.contains(WAY_ENV) || used_by.ways.contains(WAY_ENV_FROM)) {
-        return RestartButton::Absent;
-    }
-    let Some(key @ ResourceKey::Kind { kind, .. }) = &used_by.target else {
-        return RestartButton::Absent;
-    };
-    let Some(object) = kind.builtin_object().filter(|object| {
-        matches!(
-            object,
-            ObjectKind::Deployment | ObjectKind::StatefulSet | ObjectKind::DaemonSet
-        )
-    }) else {
+    let Some((object, key)) = restart_target(used_by) else {
         return RestartButton::Absent;
     };
     let Some(gate) = gate else {

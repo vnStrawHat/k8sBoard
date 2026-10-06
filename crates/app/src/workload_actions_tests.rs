@@ -159,6 +159,30 @@ fn restart_names_the_object_and_changes_one_field() {
 }
 
 #[test]
+fn a_named_restart_batch_lists_the_workloads_and_says_their_state_is_unchecked() {
+    let cluster = test_cluster();
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    let batch = named_restart_batch(
+        &scope,
+        ObjectKind::StatefulSet,
+        &[("team-a", "db"), ("team-b", "kafka")],
+        now(),
+    )
+    .expect("a batch");
+    assert_eq!(batch.label, "Restart 2 statefulsets");
+    assert_eq!(batch.action, restart_of(ObjectKind::StatefulSet));
+    let objects: Vec<&str> = batch.plan.items.iter().map(|i| i.object.as_ref()).collect();
+    assert_eq!(objects, ["team-a/db", "team-b/kafka"]);
+    assert_eq!(batch.warnings.len(), 1);
+    assert!(batch.warnings[0].contains("not loaded"));
+    let invalid = named_restart_batch(&scope, ObjectKind::Deployment, &[("team-a", "")], now());
+    assert!(invalid.is_err());
+}
+
+#[test]
 fn restart_timestamp_is_whole_seconds() {
     let object = KindObject::Deployment(deployment("api"));
     let cluster = test_cluster();

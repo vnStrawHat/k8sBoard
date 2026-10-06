@@ -5,18 +5,24 @@
 //! shared edit slot (`AppShell.edit`). Every step names the cluster of the edited object and takes
 //! its guard and its connection from that slot. Nothing here logs, and nothing here holds a value.
 
-use cluster::WriteOutcome;
-use gpui_kit::{AppContext as _, Context, SharedString, Window};
+use cluster::{ObjectKind, WriteOutcome};
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::notification::Notification;
+use gpui_kit::{App, AppContext as _, Context, SharedString, WeakEntity, Window};
 
 use super::AppShell;
 use super::edit_yaml_flow::OpenEdit;
 use super::write_flow::{CheckedWriteError, WriteIntent, notify};
+use crate::cluster_registry::ClusterRef;
+use crate::kind_join::env_consumers;
 use crate::kind_row::KindObject;
 use crate::resource_actions::{
     ActionAvailability, ResourceAction, RowAction, action_availability, action_label,
     subject_action, unavailable_text, values_edit_block,
 };
-use crate::table_selection::ClusterObject;
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::values_edit::{ValuesEditView, ValuesSubject};
 use crate::yaml_edit::{EditSubject, edit_failure_of};
 use crate::yaml_view::object_ref;
@@ -143,6 +149,70 @@ pub(crate) fn values_success_notice(kind_name: &str, name: &str, count: usize) -
     format!("Updated {count} {unit} of {kind_name} {name}")
 }
 
+/// The workloads that read the edited ConfigMap or Secret through env, once an Edit values commit
+/// went through: the pods list the drawer's Used by reads decides. Empty for any other write, a
+/// failed commit, or while that list is not loaded.
+pub(super) fn env_consumers_after(
+    shell: &WeakEntity<AppShell>,
+    intent: &WriteIntent,
+    is_success: bool,
+    cx: &mut App,
+) -> Vec<(ObjectKind, ResourceKey)> {
+    let ResourceAction::EditValues(kind) = intent.action else {
+        return Vec::new();
+    };
+    if !is_success {
+        return Vec::new();
+    }
+    let target = intent.request.target();
+    let Some(namespace) = target.namespace() else {
+        return Vec::new();
+    };
+    shell
+        .read_with(cx, |shell, cx| {
+            let pods = shell.live_of(&intent.cluster, cx)?.pods.ready_items()?;
+            Some(env_consumers(pods, kind, namespace, target.name()))
+        })
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// `Restart 3 consumers` (a count of one reads `Restart 1 consumer`).
+fn restart_consumers_label(count: usize) -> String {
+    let unit = if count == 1 { "consumer" } else { "consumers" };
+    format!("Restart {count} {unit}")
+}
+
+/// The success notice of a commit with a Restart button: the workloads that read the object
+/// through env keep the old value until restarted. The button opens the Restart rollout batch of
+/// each workload kind, which asks for its own confirmation.
+pub(super) fn notify_with_restart(
+    window: &mut Window,
+    cx: &mut App,
+    text: String,
+    shell: &WeakEntity<AppShell>,
+    cluster: &ClusterRef,
+    consumers: Vec<(ObjectKind, ResourceKey)>,
+) {
+    let (shell, cluster) = (shell.clone(), cluster.clone());
+    let notification = Notification::success(text).action(move |_, _, cx| {
+        let (shell, cluster, consumers) = (shell.clone(), cluster.clone(), consumers.clone());
+        Button::new("restart-consumers")
+            .label(restart_consumers_label(consumers.len()))
+            .small()
+            .outline()
+            .on_click(cx.listener(move |notification, _, window, cx| {
+                notification.dismiss(window, cx);
+                let (cluster, consumers) = (cluster.clone(), consumers.clone());
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.restart_consumers(&cluster, &consumers, window, cx);
+                });
+            }))
+    });
+    window.push_notification(notification, cx);
+}
+
 #[cfg(feature = "screenshot")]
 impl AppShell {
     /// `--screen values-edit`: the editor from fixed data over a fixed cluster. It waits for no
@@ -179,5 +249,16 @@ impl AppShell {
         let edit = cx.new(|cx| ValuesEditView::fixture(shell, subject, access, window, cx));
         self.edit = Some(OpenEdit::Values(edit));
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restart_consumers_label;
+
+    #[test]
+    fn the_restart_button_counts_consumers() {
+        assert_eq!(restart_consumers_label(1), "Restart 1 consumer");
+        assert_eq!(restart_consumers_label(3), "Restart 3 consumers");
     }
 }

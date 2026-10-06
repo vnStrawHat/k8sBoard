@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use cluster::{
     ByteAmount, CpuAmount, CronJobSummary, EndpointPort, EndpointSliceSummary, EndpointSummary,
-    EnvFromSource, EnvSource, IngressSummary, NamespaceScope, PodSummary, PvcUsage, SecretDetails,
-    SecretSummary, Selector, ServiceSummary, VolumeSource,
+    EnvFromSource, EnvSource, IngressSummary, NamespaceScope, ObjectKind, PodSummary, PvcUsage,
+    SecretDetails, SecretSummary, Selector, ServiceSummary, VolumeSource,
 };
 
 use gpui_kit::SharedString;
@@ -522,6 +522,48 @@ pub(crate) fn users_of<'a>(
         .and_then(|in_namespace| in_namespace.get(name))
         .into_iter()
         .flat_map(BTreeMap::values)
+}
+
+/// The workload a Used by row restarts to make a change of the value show: a Deployment,
+/// StatefulSet, or DaemonSet that reads the object through env (env values are read once, at
+/// container start). A volume is refreshed by the kubelet, and a bare pod, a Job, or a CronJob is
+/// not restarted.
+pub(crate) fn restart_target(used_by: &UsedBy) -> Option<(ObjectKind, &ResourceKey)> {
+    if !(used_by.ways.contains(WAY_ENV) || used_by.ways.contains(WAY_ENV_FROM)) {
+        return None;
+    }
+    let key = used_by.target.as_ref()?;
+    let ResourceKey::Kind { kind, .. } = key else {
+        return None;
+    };
+    let object = kind.builtin_object().filter(|object| {
+        matches!(
+            object,
+            ObjectKind::Deployment | ObjectKind::StatefulSet | ObjectKind::DaemonSet
+        )
+    })?;
+    Some((object, key))
+}
+
+/// The workloads that read the ConfigMap or Secret `name` of `namespace` through env, by the same
+/// Used by computation as the drawer: what a "Restart N consumers" action restarts. A Secret
+/// counts its pods only, since an Ingress or a token is never restarted. `kind` is the kind of the
+/// edited object.
+pub(crate) fn env_consumers(
+    pods: &[PodSummary],
+    kind: ObjectKind,
+    namespace: &str,
+    name: &str,
+) -> Vec<(ObjectKind, ResourceKey)> {
+    let in_namespace = pods.iter().filter(|pod| pod.namespace == namespace);
+    let users = match kind {
+        ObjectKind::Secret => secret_users(in_namespace, std::iter::empty()),
+        _ => config_map_users(in_namespace),
+    };
+    users_of(&users, namespace, name)
+        .filter_map(restart_target)
+        .map(|(kind, key)| (kind, key.clone()))
+        .collect()
 }
 
 /// The top owner by naming convention, without a lookup: a ReplicaSet `{d}-{hash}` is

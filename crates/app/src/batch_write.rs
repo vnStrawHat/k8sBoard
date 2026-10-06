@@ -31,10 +31,12 @@ use crate::resource_actions::{
 use crate::resource_edits::DefaultClassExtras;
 use crate::resource_edits::{bulk_default_class_intent, bulk_expand_intent, bulk_hpa_range_intent};
 use crate::row_selection::{BulkButton, BulkState, ROLL_BACK_BULK_REASON, bulk_actions};
-use crate::table_selection::ClusterObject;
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::table_view::{FilteredTable as _, TableView};
 use crate::value_popover::ValuePopover;
-use crate::workload_actions::{BulkInputs, all_suspended, bulk_intent, bulk_scale_intent};
+use crate::workload_actions::{
+    BulkInputs, WorkloadScope, all_suspended, bulk_intent, bulk_scale_intent, named_restart_batch,
+};
 #[cfg(feature = "screenshot")]
 use crate::write_guard::WriteLock;
 use crate::write_guard::{ActionRisk, confirm_step};
@@ -610,6 +612,67 @@ impl AppShell {
             });
         })
         .detach();
+    }
+
+    /// The Restart consumers button of an Edit values notice: one Restart rollout batch per
+    /// workload kind that reads the object through env, since a batch carries one action and the
+    /// gate of each kind is its own permission. Each opens its own confirm dialog, the first kind
+    /// on top. The workloads are named from the pods of the Used by section, so no list needs to
+    /// hold them.
+    pub(crate) fn restart_consumers(
+        &mut self,
+        cluster: &ClusterRef,
+        consumers: &[(ObjectKind, ResourceKey)],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = action_label(ResourceAction::RestartRollout(ObjectKind::Deployment));
+        let Some(name) = self
+            .guard_for(cluster, cx)
+            .map(|guard| guard.display_name().to_owned())
+        else {
+            notify(
+                window,
+                cx,
+                unavailable_text(label, "the cluster is not open"),
+            );
+            return;
+        };
+        let scope = WorkloadScope {
+            cluster,
+            cluster_name: &name,
+        };
+        let now = jiff::Timestamp::now();
+        let mut intents = Vec::new();
+        for kind in [
+            ObjectKind::Deployment,
+            ObjectKind::StatefulSet,
+            ObjectKind::DaemonSet,
+        ] {
+            let named: Vec<(&str, &str)> = consumers
+                .iter()
+                .filter(|(consumer, _)| *consumer == kind)
+                .filter_map(|(_, key)| match key {
+                    ResourceKey::Kind {
+                        namespace: Some(namespace),
+                        name,
+                        ..
+                    } => Some((namespace.as_str(), name.as_str())),
+                    _ => None,
+                })
+                .collect();
+            if named.is_empty() {
+                continue;
+            }
+            match named_restart_batch(&scope, kind, &named, now) {
+                Ok(intent) => intents.push(intent),
+                Err(reason) => notify(window, cx, unavailable_text(label, &reason)),
+            }
+        }
+        // The last dialog opened is the one on top, so the first kind opens last.
+        for intent in intents.into_iter().rev() {
+            self.start_batch(intent, window, cx);
+        }
     }
 }
 

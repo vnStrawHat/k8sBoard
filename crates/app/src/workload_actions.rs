@@ -10,7 +10,8 @@ use cluster::{
 use gpui_kit::SharedString;
 
 use crate::app_shell::batch_write::{
-    BatchIntent, BatchItem, BatchPlan, CheckedRow, SkippedItem, batch_plan,
+    BatchExtras, BatchFailure, BatchIntent, BatchItem, BatchPlan, CheckedRow, SkippedItem,
+    batch_plan,
 };
 use crate::app_shell::write_flow::WriteIntent;
 use crate::cluster_registry::ClusterRef;
@@ -109,17 +110,9 @@ pub(crate) fn workload_intent(
     let word = workload.word();
     let name = workload.name;
     let described = match (action, object) {
-        (ResourceAction::RestartRollout(_), _) => Described {
-            action,
-            label: format!("Restart rollout of {word} {name}"),
-            button: "Restart",
-            risk: action_risk(action),
-            // Whole seconds, so the dry-run and the commit send the same body.
-            operation: WriteOperation::RestartRollout {
-                restarted_at: jiff::Timestamp::from_second(now.as_second()).ok()?,
-            },
-            warnings: restart_warnings(object),
-        },
+        (ResourceAction::RestartRollout(_), _) => {
+            restart_described(action, &workload, now, restart_warnings(object))?
+        }
         (ResourceAction::PauseRollout, KindObject::Deployment(deployment)) => {
             let paused = !deployment.is_paused;
             let (verb, button) = if paused {
@@ -167,6 +160,93 @@ pub(crate) fn workload_intent(
         _ => return None,
     };
     intent_of(scope, &workload, described)
+}
+
+/// Restart rollout of `workload`, stamped at `now`.
+fn restart_described(
+    action: ResourceAction,
+    workload: &Workload<'_>,
+    now: jiff::Timestamp,
+    warnings: Vec<SharedString>,
+) -> Option<Described> {
+    Some(Described {
+        action,
+        label: format!("Restart rollout of {} {}", workload.word(), workload.name),
+        button: "Restart",
+        risk: action_risk(action),
+        // Whole seconds, so the dry-run and the commit send the same body.
+        operation: WriteOperation::RestartRollout {
+            restarted_at: jiff::Timestamp::from_second(now.as_second()).ok()?,
+        },
+        warnings,
+    })
+}
+
+/// What a restart of a workload known only by name cannot check: the Used by rows of a ConfigMap
+/// or Secret name their consumers while no list holds the workload itself.
+const NAMED_RESTART_WARNING: &str =
+    "Its state is not loaded: a paused rollout or an OnDelete strategy is not checked";
+
+/// Restart rollout of the workload `name` of `namespace`, which no loaded list holds.
+pub(crate) fn named_restart_intent(
+    scope: &WorkloadScope<'_>,
+    kind: ObjectKind,
+    namespace: &str,
+    name: &str,
+    now: jiff::Timestamp,
+) -> Option<WriteIntent> {
+    let workload = Workload {
+        kind,
+        namespace,
+        name,
+    };
+    let action = ResourceAction::RestartRollout(kind);
+    let warnings = vec![NAMED_RESTART_WARNING.into()];
+    let described = restart_described(action, &workload, now, warnings)?;
+    intent_of(scope, &workload, described)
+}
+
+/// The batch of Restart rollout over workloads of one `kind`, each `(namespace, name)`, which no
+/// loaded list holds: the consumers of an edited ConfigMap or Secret. `Err` is why nothing starts.
+pub(crate) fn named_restart_batch(
+    scope: &WorkloadScope<'_>,
+    kind: ObjectKind,
+    workloads: &[(&str, &str)],
+    now: jiff::Timestamp,
+) -> Result<BatchIntent, SharedString> {
+    let items: Vec<BatchItem> = workloads
+        .iter()
+        .filter_map(|(namespace, name)| {
+            let intent = named_restart_intent(scope, kind, namespace, name, now)?;
+            Some(BatchItem {
+                object: format!("{namespace}/{name}").into(),
+                label: intent.label,
+                request: intent.request,
+            })
+        })
+        .collect();
+    if items.is_empty() {
+        return Err("the object name is not valid".into());
+    }
+    let action = ResourceAction::RestartRollout(kind);
+    let noun = kind.name().to_ascii_lowercase();
+    Ok(BatchIntent {
+        cluster: scope.cluster.clone(),
+        cluster_name: scope.cluster_name.to_owned().into(),
+        action,
+        label: format!("Restart {} {noun}s", items.len()).into(),
+        verb: "Restart".into(),
+        button: "Restart".into(),
+        risk: action_risk(action),
+        warnings: vec![NAMED_RESTART_WARNING.into()],
+        plan: BatchPlan {
+            cluster: scope.cluster.clone(),
+            items,
+            skipped: Vec::new(),
+            extras: BatchExtras::None,
+            on_failure: BatchFailure::Continue,
+        },
+    })
 }
 
 /// A restart under `OnDelete` changes the template but no pod: the pods follow when deleted.

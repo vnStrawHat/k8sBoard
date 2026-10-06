@@ -25,7 +25,7 @@ use gpui_kit::{
 
 use super::AppShell;
 use super::certificate_renewal::renewal_notice;
-use super::values_edit_flow::values_success_notice;
+use super::values_edit_flow::{env_consumers_after, notify_with_restart, values_success_notice};
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, AuditReceipt, append_audit, audit_entry,
     created_name_field, submit_audit, timestamp_now,
@@ -43,8 +43,8 @@ use crate::settings::AppSettings;
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::value_popover::ValuePopover;
 use crate::workload_actions::{
-    PAUSED_REASON, RevisionTarget, ScaleTarget, WorkloadScope, roll_back_intent, row_block,
-    scale_intent, state_label, workload_intent,
+    PAUSED_REASON, RevisionTarget, ScaleTarget, WorkloadScope, named_restart_intent,
+    roll_back_intent, row_block, scale_intent, state_label, workload_intent,
 };
 use crate::write_guard::{ActionRisk, ClusterGuard, DialogConfirm, WriteLock, confirm_step};
 
@@ -787,21 +787,37 @@ impl AppShell {
                 );
                 return;
             };
-            let Some(row) = live.row_of(&subject.key) else {
-                let text = unavailable_text(label, "the object is no longer listed");
-                notify(window, cx, text);
-                return;
-            };
-            if let Some(reason) = row_block(action, &row.object, None) {
-                let label = state_label(action, label, &row.object);
-                notify(window, cx, unavailable_text(label, &reason));
-                return;
-            }
             let scope = WorkloadScope {
                 cluster: &subject.cluster,
                 cluster_name: guard.display_name(),
             };
-            workload_intent(action, &scope, &row.object, jiff::Timestamp::now())
+            let now = jiff::Timestamp::now();
+            match (live.row_of(&subject.key), action, &subject.key) {
+                (Some(row), _, _) => {
+                    if let Some(reason) = row_block(action, &row.object, None) {
+                        let label = state_label(action, label, &row.object);
+                        notify(window, cx, unavailable_text(label, &reason));
+                        return;
+                    }
+                    workload_intent(action, &scope, &row.object, now)
+                }
+                // A Restart of a Used by consumer: the drawer of a ConfigMap or Secret is open, so
+                // no list holds the workload, and it is restarted by the name its pods gave.
+                (
+                    None,
+                    ResourceAction::RestartRollout(kind),
+                    ResourceKey::Kind {
+                        namespace: Some(namespace),
+                        name,
+                        ..
+                    },
+                ) => named_restart_intent(&scope, kind, namespace, name, now),
+                (None, _, _) => {
+                    let text = unavailable_text(label, "the object is no longer listed");
+                    notify(window, cx, text);
+                    return;
+                }
+            }
         };
         match intent {
             Some(intent) => self.start_write(intent, window, cx),
@@ -1162,7 +1178,14 @@ fn finish_commit(
         });
         match rollout_subject(intent).filter(|_| result.is_ok()) {
             Some(subject) => notify_with_view(window, cx, notice, shell, subject),
-            None => notify_with(window, cx, notice, result.is_ok()),
+            None => {
+                let consumers = env_consumers_after(shell, intent, result.is_ok(), cx);
+                if consumers.is_empty() {
+                    notify_with(window, cx, notice, result.is_ok());
+                } else {
+                    notify_with_restart(window, cx, notice, shell, &intent.cluster, consumers);
+                }
+            }
         }
     });
 }

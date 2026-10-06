@@ -1733,3 +1733,53 @@ fn a_held_enter_never_confirms_a_palette_pair(cx: &mut TestAppContext) {
         t.has_dialog(cx) && t.dialog_label(cx) == "Restart rollout of deployment api"
     });
 }
+
+// ---- Restart consumers (Edit values notice, Used by Restart) ----
+
+fn consumer(kind: &str, name: &str) -> ResourceKey {
+    ResourceKey::of_object(kind, Some("team-a"), name).expect("a valid key")
+}
+
+#[gpui_kit::test]
+fn restart_consumers_opens_one_batch_dialog_per_workload_kind(cx: &mut TestAppContext) {
+    // No Deployments or StatefulSets list is loaded: the consumers are named by their pods.
+    let t = workload_clusters("restart-consumers", cx);
+    let consumers = [
+        (ObjectKind::Deployment, consumer("Deployment", "api")),
+        (ObjectKind::StatefulSet, consumer("StatefulSet", "db")),
+        (ObjectKind::Deployment, consumer("Deployment", "web")),
+    ];
+    t.fixture.with_window(cx, |window, cx| {
+        t.fixture.shell.update(cx, |shell, cx| {
+            shell.restart_consumers(&t.stg, &consumers, window, cx);
+        });
+    });
+    // The first kind opens last, so it is the one on top.
+    assert_eq!(t.dialog_label(cx), "Restart 2 deployments");
+    t.wait_for("both dry-runs", cx, |_| writes(&t.stg_api).len() == 3);
+    let paths: Vec<String> = writes(&t.stg_api)
+        .into_iter()
+        .map(|request| request.path)
+        .collect();
+    assert!(
+        paths.iter().any(|path| path.ends_with("/statefulsets/db")),
+        "{paths:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_used_by_restart_needs_no_loaded_row(cx: &mut TestAppContext) {
+    let t = workload_clusters("restart-named", cx);
+    let subject = ClusterObject::new(t.stg.clone(), consumer("Deployment", "api"));
+    t.fixture.with_window(cx, |window, cx| {
+        t.fixture.shell.update(cx, |shell, cx| {
+            let action = ResourceAction::RestartRollout(ObjectKind::Deployment);
+            shell.start_workload_action(action, &subject, window, cx);
+        });
+    });
+    assert_eq!(t.dialog_label(cx), "Restart rollout of deployment api");
+    t.wait_for_dry_run(cx);
+    let sent = writes(&t.stg_api);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].path, restart_path());
+}
