@@ -871,3 +871,67 @@ fn only_a_refused_pull_gets_the_pull_secrets_line() {
         plain
     );
 }
+
+fn pull_event(reason: &str, message: &str, last_seen: i64) -> EventSummary {
+    EventSummary {
+        reason: reason.to_owned(),
+        ..unhealthy("api", message, 1, last_seen)
+    }
+}
+
+fn pull_failing_pod() -> PodSummary {
+    running_pod(vec![main_container(
+        "api",
+        waiting(
+            StatusReason::ImagePullBackOff,
+            Some("Back-off pulling image \"registry/app:1\""),
+        ),
+    )])
+}
+
+#[test]
+fn image_pull_box_adds_the_network_cause_and_the_missing_pull_secret() {
+    let events = [
+        pull_event("Failed", "Error: ImagePullBackOff", 300),
+        pull_event(
+            "Failed",
+            "Failed to pull image \"registry/app:1\": failed to resolve reference: dial tcp: \
+             lookup registry.invalid on 10.0.0.1:53: no such host",
+            200,
+        ),
+        pull_event(
+            "FailedToRetrieveImagePullSecret",
+            "Unable to retrieve some image pull secrets (registry-creds-missing); attempting to \
+             pull the image may not succeed.",
+            100,
+        ),
+    ];
+    let diagnosis =
+        pod_diagnosis(&pull_failing_pod(), Some(&events), at(10_000)).expect("a diagnosis");
+    assert_eq!(
+        diagnosis.text,
+        "Cannot pull image registry/app:1: Back-off pulling image \"registry/app:1\"\n\
+         Cause: lookup registry.invalid on 10.0.0.1:53: no such host\n\
+         Pull secret registry-creds-missing not found in shop"
+    );
+}
+
+#[test]
+fn image_pull_box_ignores_events_that_add_nothing() {
+    let events = [pull_event("Failed", "Error: ErrImagePull", 100)];
+    let plain = pod_diagnosis(&pull_failing_pod(), None, at(10_000)).expect("a diagnosis");
+    let with_events =
+        pod_diagnosis(&pull_failing_pod(), Some(&events), at(10_000)).expect("a diagnosis");
+    assert_eq!(with_events.text, plain.text);
+}
+
+#[test]
+fn a_probe_that_failed_without_output_does_not_end_in_a_colon() {
+    let pod = running_pod(vec![main_container("api", running())]);
+    let events = [unhealthy("api", "Readiness probe failed:", 705, 9_700)];
+    let diagnosis = pod_diagnosis(&pod, Some(&events), at(10_000)).expect("a diagnosis");
+    assert_eq!(
+        diagnosis.text,
+        "Running but not ready. Readiness probe failed (no output) (×705, 5m ago)"
+    );
+}

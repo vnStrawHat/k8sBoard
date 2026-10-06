@@ -3,8 +3,8 @@
 //! here logs them.
 
 use cluster::{
-    ContainerKind, ContainerState, ContainerSummary, EventSummary, PodStatus, PodSummary,
-    ProbeSummary, StatusReason, Termination,
+    ContainerKind, ContainerState, ContainerSummary, EventSummary, EventType, PodStatus,
+    PodSummary, ProbeSummary, StatusReason, Termination,
 };
 use jiff::{SignedDuration, Timestamp};
 
@@ -248,7 +248,7 @@ fn container_problem(
 ) -> Option<Problem> {
     match &container.state {
         ContainerState::Waiting { reason, message } => {
-            waiting_problem(container, reason.as_ref()?, message.as_deref())
+            waiting_problem(container, reason.as_ref()?, message.as_deref(), events)
         }
         ContainerState::Terminated(termination) if termination.exit_code != 0 => {
             Some(terminated_problem(container, termination))
@@ -263,19 +263,32 @@ fn waiting_problem(
     container: &ContainerSummary,
     reason: &StatusReason,
     message: Option<&str>,
+    events: Option<&[EventSummary]>,
 ) -> Option<Problem> {
     let (text, cause) = match reason {
         StatusReason::ImagePullBackOff
         | StatusReason::ErrImagePull
         | StatusReason::InvalidImageName
-        | StatusReason::ErrImageNeverPull => (
-            format!(
+        | StatusReason::ErrImageNeverPull => {
+            let mut text = format!(
                 "Cannot pull image {}: {}",
                 container.image,
                 message.map_or_else(|| reason.to_string(), str::to_owned)
-            ),
-            DiagnosisCause::ImagePull(reason.clone()),
-        ),
+            );
+            // The waiting message only says the kubelet backs off; the events say why.
+            let is_retry = matches!(
+                reason,
+                StatusReason::ImagePullBackOff | StatusReason::ErrImagePull
+            );
+            for line in events
+                .filter(|_| is_retry)
+                .map_or_else(Vec::new, pull_event_lines)
+            {
+                text.push('\n');
+                text.push_str(&line);
+            }
+            (text, DiagnosisCause::ImagePull(reason.clone()))
+        }
         StatusReason::CrashLoopBackOff => (
             crash_loop_text(container, message),
             DiagnosisCause::CrashLoop,
@@ -294,6 +307,65 @@ fn waiting_problem(
         text,
         cause,
     })
+}
+
+/// The longest pull failure message the WHY box quotes.
+const PULL_CAUSE_CHARS: usize = 200;
+
+/// `Cause: …` from the newest Failed event that says more than `Error: ImagePullBackOff`, and
+/// `Pull secret X not found in ns` from the `FailedToRetrieveImagePullSecret` event.
+fn pull_event_lines(events: &[EventSummary]) -> Vec<String> {
+    let newest = |accepts: &dyn Fn(&EventSummary) -> bool| {
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::Warning && accepts(event))
+            .max_by_key(|event| event.last_seen)
+    };
+    let mut lines = Vec::new();
+    let failed = newest(&|event| {
+        event.reason == "Failed" && event.message.starts_with("Failed to pull image")
+    });
+    if let Some(event) = failed {
+        lines.push(format!(
+            "Cause: {}",
+            pull_cause(&message_line(&event.message))
+        ));
+    }
+    let secrets = newest(&|event| event.reason == "FailedToRetrieveImagePullSecret");
+    if let Some(event) = secrets
+        && let Some(names) = pull_secret_names(&event.message)
+    {
+        let noun = if names.contains(", ") {
+            "secrets"
+        } else {
+            "secret"
+        };
+        lines.push(format!(
+            "Pull {noun} {names} not found in {}",
+            event.namespace
+        ));
+    }
+    lines
+}
+
+/// The tail of a kubelet pull failure that names the network or registry error, else the message
+/// cut to `PULL_CAUSE_CHARS`. The head repeats the image name, which the box already shows.
+fn pull_cause(message: &str) -> String {
+    if let Some((_, tail)) = message.rsplit_once("dial tcp: ") {
+        return tail.to_owned();
+    }
+    let mut cut: String = message.chars().take(PULL_CAUSE_CHARS).collect();
+    if cut.len() < message.len() {
+        cut.push('…');
+    }
+    cut
+}
+
+/// `a, b` from `Unable to retrieve some image pull secrets (a, b); attempting …`.
+fn pull_secret_names(message: &str) -> Option<&str> {
+    let (_, rest) = message.split_once('(')?;
+    let (names, _) = rest.split_once(')')?;
+    (!names.is_empty()).then_some(names)
 }
 
 /// C2 to C4.
@@ -386,9 +458,14 @@ fn running_problem(
     })
 }
 
-/// ` {message} (×N, {age} ago)` for the newest failure event.
+/// ` {message} (×N, {age} ago)` for the newest failure event. A probe that failed without output
+/// leaves the message ending in a colon, which reads `failed (no output)` instead.
 fn event_suffix(event: &EventSummary, now: Timestamp) -> String {
-    let message = message_line(&event.message);
+    let line = message_line(&event.message);
+    let message = match line.strip_suffix(':') {
+        Some(head) => format!("{head} (no output)"),
+        None => line,
+    };
     format!(
         " {message} (×{}, {} ago)",
         event.count,

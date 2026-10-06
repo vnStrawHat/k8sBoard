@@ -67,6 +67,8 @@ C1 and C5 decide on `status_tone::is_bad_reason` (now `pub(crate)`, with the new
 | C7 | Running, a startup probe is set, `is_started == Some(false)` | Warn | `Startup probe has not passed yet.` + ` {event message} (×N, {age} ago)` for a startup match |
 | C8 | Running, not ready, kind Main or Sidecar | Warn | `Running but not ready.` + ` {event message} (×N, {age} ago)` for a readiness match, else ` The readiness probe ({probe text}) has not passed.` when one is set |
 
+C1 with `ImagePullBackOff` or `ErrImagePull` also reads the pod's Warning events: a line `Cause: {tail}` from the newest `Failed` event that starts `Failed to pull image` (the part after `dial tcp: `, else the message cut at 200 chars; `Error: …` events add nothing), and a line `Pull secret {names} not found in {namespace}` from the newest `FailedToRetrieveImagePullSecret` event. An event message that ends in a colon (an exec probe with no output) reads `{head} (no output)` in the C7/C8 suffix.
+
 - `{run}` = `format_age(started_at, finished_at)` of the termination; when either is missing, ` about {run} after each start` becomes ` on each start`.
 - `{limit}` = the `memory` limit from `resources`. `{n}` = `restart_count`; `N` = newest match's `count`; `{age}` = `format_age(last_seen, now)`; `{probe text}` is from [pod-drawer.md](pod-drawer.md).
 - Never problems: exit-0 terminated init containers, Waiting with a reason that is not bad (`ContainerCreating`, `PodInitializing`, unknown text), `NotReported` (ContainerCreating stuck on a mount: open item 2).
