@@ -19,10 +19,11 @@ use crate::resource_kind::{KindAction, ResourceKind};
 /// Why Roll back has no bulk form: each Deployment needs its own revision choice.
 pub(crate) const ROLL_BACK_BULK_REASON: &str = "Roll back one deployment at a time";
 
-const NODE_ACTIONS: [KindAction; 3] = [
+const NODE_ACTIONS: [KindAction; 4] = [
     KindAction::keyed("Cordon", ResourceAction::Cordon),
     KindAction::keyed("Uncordon", ResourceAction::Uncordon),
     KindAction::keyed("Drain…", ResourceAction::Drain),
+    KindAction::keyed("Edit labels…", ResourceAction::EditLabels),
 ];
 const DEPLOYMENT_ACTIONS: [KindAction; 3] = [
     KindAction::keyed("Scale…", ResourceAction::Scale(ObjectKind::Deployment)),

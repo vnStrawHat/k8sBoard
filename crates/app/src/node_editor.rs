@@ -32,7 +32,7 @@ use crate::fresh_enter::{confirms, is_enter};
 use crate::keymap::FORWARD_FORM;
 use crate::node_edits::{
     CordonMode, LabelRow, NO_EXECUTE_WARNING, NodeScope, TaintRow, TickedNode, cordon_batch,
-    label_batch, label_intent, label_rows, taint_intent, taint_rows,
+    label_batch, label_intent, label_rows, node_names_text, taint_intent, taint_rows,
 };
 use crate::resource_actions::{
     ActionAvailability, NOT_SHIPPED_REASON, ResourceAction, action_availability, action_label,
@@ -671,11 +671,11 @@ impl AppShell {
                     shell.open_node_editor(NodeEditKind::Labels, &cluster, &node, None, window, cx);
                 })),
             LabelTarget::Several { cluster, nodes } => {
-                let count = nodes.len();
+                let names: Vec<String> = nodes.into_iter().map(|node| node.name).collect();
                 button()
                     .tooltip("Edit the labels of the ticked nodes")
                     .on_click(cx.listener(move |shell, _, window, cx| {
-                        shell.open_bulk_label_editor(&cluster, count, window, cx);
+                        shell.open_bulk_label_editor(&cluster, &names, window, cx);
                     }))
             }
         };
@@ -817,6 +817,11 @@ impl AppShell {
         let mode = match action {
             ResourceAction::Cordon => CordonMode::Cordon,
             ResourceAction::Uncordon => CordonMode::Uncordon,
+            ResourceAction::EditLabels => {
+                return self
+                    .edit_labels_target(cx)
+                    .map_or_else(BulkState::Off, |_| BulkState::Ready(action));
+            }
             // Drain has its own dialog; the gate and the one drain per cluster decide its button.
             _ => {
                 if self.has_running_drain(&cluster, cx) {
@@ -849,6 +854,10 @@ impl AppShell {
         let mode = match action {
             ResourceAction::Cordon => CordonMode::Cordon,
             ResourceAction::Uncordon => CordonMode::Uncordon,
+            ResourceAction::EditLabels => {
+                self.open_label_editor_of_ticked(window, cx);
+                return;
+            }
             _ => {
                 self.start_drain_of_ticked(window, cx);
                 return;
@@ -857,6 +866,25 @@ impl AppShell {
         match self.node_cordon_batch(mode, cx) {
             Ok(intent) => self.start_batch(intent, window, cx),
             Err(reason) => notify(window, cx, unavailable_text(action_label(action), &reason)),
+        }
+    }
+
+    /// Edit labels of the Nodes selection bar: the editor of the one ticked node, or the bulk
+    /// editor for 2 to 50, as the header button opens them.
+    fn open_label_editor_of_ticked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.edit_labels_target(cx) {
+            Ok(LabelTarget::One { cluster, node }) => {
+                self.open_node_editor(NodeEditKind::Labels, &cluster, &node, None, window, cx);
+            }
+            Ok(LabelTarget::Several { cluster, nodes }) => {
+                let names: Vec<String> = nodes.into_iter().map(|node| node.name).collect();
+                self.open_bulk_label_editor(&cluster, &names, window, cx);
+            }
+            Err(reason) => notify(
+                window,
+                cx,
+                unavailable_text(action_label(ResourceAction::EditLabels), &reason),
+            ),
         }
     }
 }
@@ -897,6 +925,8 @@ impl BulkRow {
 pub(crate) struct BulkLabelEditor {
     shell: WeakEntity<AppShell>,
     cluster: ClusterRef,
+    /// The ticked nodes by name, as `node_names_text` writes them.
+    targets: SharedString,
     rows: Vec<BulkRow>,
     /// Why the batch of the changes now would not go; worked out when a row changes, not on every
     /// draw (it reads every ticked node).
@@ -907,12 +937,14 @@ impl BulkLabelEditor {
     fn new(
         shell: WeakEntity<AppShell>,
         cluster: ClusterRef,
+        targets: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut editor = Self {
             shell,
             cluster,
+            targets,
             rows: Vec::new(),
             problem: None,
         };
@@ -1103,6 +1135,7 @@ impl Render for BulkLabelEditor {
             .on_key_down(cx.listener(Self::on_key_down))
             .w_full()
             .gap_3()
+            .child(div().text_sm().child(self.targets.clone()))
             .child(
                 div()
                     .text_sm()
@@ -1134,13 +1167,13 @@ impl Render for BulkLabelEditor {
 }
 
 impl AppShell {
-    /// Opens the bulk label editor for the `count` ticked nodes of `cluster`. The gate is checked
+    /// Opens the bulk label editor for the ticked nodes `names` of `cluster`. The gate is checked
     /// again here (a stale button or a key pressed in a gap cannot bypass it); the nodes are read
     /// when Review… is pressed.
     pub(super) fn open_bulk_label_editor(
         &mut self,
         cluster: &ClusterRef,
-        count: usize,
+        names: &[String],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1164,8 +1197,9 @@ impl AppShell {
             return;
         }
         let (shell, cluster) = (cx.weak_entity(), cluster.clone());
-        let editor = cx.new(|cx| BulkLabelEditor::new(shell, cluster, window, cx));
-        self.show_bulk_label_editor(editor, count, window, cx);
+        let targets = node_names_text(names).into();
+        let editor = cx.new(|cx| BulkLabelEditor::new(shell, cluster, targets, window, cx));
+        self.show_bulk_label_editor(editor, names.len(), window, cx);
     }
 
     fn show_bulk_label_editor(
@@ -1316,18 +1350,19 @@ impl AppShell {
 #[cfg(feature = "screenshot")]
 impl AppShell {
     pub(super) fn open_bulk_label_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        const COUNT: usize = 3;
+        let names = ["node-a", "node-b", "node-c"].map(str::to_owned);
         let cluster = ClusterRef {
             kubeconfig: std::path::PathBuf::from("fixture.yaml"),
             context: "prod-eu-1".to_owned(),
         };
         let shell = cx.weak_entity();
         let editor = cx.new(|cx| {
-            let mut editor = BulkLabelEditor::new(shell, cluster, window, cx);
+            let targets = node_names_text(&names).into();
+            let mut editor = BulkLabelEditor::new(shell, cluster, targets, window, cx);
             editor.fill_fixture(window, cx);
             editor
         });
-        self.show_bulk_label_editor(editor, COUNT, window, cx);
+        self.show_bulk_label_editor(editor, names.len(), window, cx);
     }
 }
 
@@ -1433,6 +1468,10 @@ impl BulkLabelEditor {
 
     pub(crate) fn current_changes(&self, cx: &App) -> Vec<LabelChange> {
         self.changes(cx)
+    }
+
+    pub(crate) fn current_targets(&self) -> &str {
+        &self.targets
     }
 
     pub(crate) fn current_problem(&self) -> Option<SharedString> {

@@ -643,10 +643,10 @@ impl NodeTest {
     }
 
     /// Opens the bulk editor of the ticked nodes of `cluster`, as the header button does.
-    fn open_bulk(&self, cluster: &ClusterRef, count: usize, cx: &mut TestAppContext) {
+    fn open_bulk(&self, cluster: &ClusterRef, names: &[String], cx: &mut TestAppContext) {
         self.t.fixture.with_window(cx, |window, cx| {
             self.t.fixture.shell.update(cx, |shell, cx| {
-                shell.open_bulk_label_editor(cluster, count, window, cx);
+                shell.open_bulk_label_editor(cluster, names, window, cx);
             });
         });
     }
@@ -684,7 +684,7 @@ impl NodeTest {
             cx,
         );
         self.tick(&[0, 1, 2], cx);
-        self.open_bulk(&self.t.stg, 3, cx);
+        self.open_bulk(&self.t.stg, &["n1", "n2", "n3"].map(str::to_owned), cx);
         let editor = self.bulk_editor(cx).expect("the bulk editor opened");
         self.fill(&editor, ("team", "infra", false), cx);
         editor
@@ -805,7 +805,7 @@ fn a_review_that_finds_nothing_to_do_says_why_and_sends_nothing(cx: &mut TestApp
         cx,
     );
     t.tick(&[0, 1], cx);
-    t.open_bulk(&t.t.stg, 2, cx);
+    t.open_bulk(&t.t.stg, &["n1", "n2"].map(str::to_owned), cx);
     let editor = t.bulk_editor(cx).expect("the bulk editor opened");
     t.fill(&editor, ("team", "infra", false), cx);
     editor.read_with(cx, |editor, _| {
@@ -997,5 +997,46 @@ fn a_fresh_enter_in_a_bulk_label_field_presses_review(cx: &mut TestAppContext) {
     assert!(
         !writes(&t.t.stg_api).is_empty(),
         "the review dry-ran the batch"
+    );
+}
+
+#[gpui_kit::test]
+fn the_node_selection_bar_has_edit_labels(cx: &mut TestAppContext) {
+    let t = node_test("node-bar-labels", cx);
+    three_nodes(&t, cx);
+    t.tick(&[0, 1], cx);
+    let states = t.bulk_states(cx);
+    assert_eq!(
+        state_of(&states, "Edit labels…"),
+        BulkState::Ready(ResourceAction::EditLabels)
+    );
+    // Pressed on two nodes it opens the bulk editor, which names them.
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.t.fixture.shell.update(cx, |shell, cx| {
+            shell.run_bulk(ResourceAction::EditLabels, window, cx);
+        });
+    });
+    let editor = t.bulk_editor(cx).expect("the bulk editor opened");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.current_targets(), "n1, n2")
+    });
+}
+
+#[gpui_kit::test]
+fn edit_labels_on_the_bar_is_off_over_the_cap(cx: &mut TestAppContext) {
+    let t = node_test("node-bar-labels-cap", cx);
+    let names: Vec<String> = (0..51).map(|index| format!("n{index:02}")).collect();
+    t.set_nodes(
+        &t.t.stg,
+        names
+            .iter()
+            .map(|name| summary(name, NodeScheduling::Enabled))
+            .collect(),
+        cx,
+    );
+    t.tick(&(0..51).collect::<Vec<_>>(), cx);
+    assert_eq!(
+        state_of(&t.bulk_states(cx), "Edit labels…"),
+        BulkState::Off("Select at most 50 rows".into())
     );
 }

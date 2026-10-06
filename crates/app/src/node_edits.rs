@@ -39,6 +39,23 @@ const INVALID_LABEL: &str = "A key or value is not valid for Kubernetes (letters
 const REMOVED_LABEL_WARNING: &str =
     "Removing a label can make DaemonSets that select nodes by it delete their pods on these nodes";
 
+/// How many node names the bulk label editor lists before it counts the rest.
+const TARGET_NAMES_SHOWN: usize = 5;
+
+/// The nodes a bulk edit acts on, `a, b, c, d, e +3` after the first five.
+pub(crate) fn node_names_text(names: &[String]) -> String {
+    let mut text = names
+        .iter()
+        .take(TARGET_NAMES_SHOWN)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > TARGET_NAMES_SHOWN {
+        text.push_str(&format!(" +{}", names.len() - TARGET_NAMES_SHOWN));
+    }
+    text
+}
+
 /// A taint the editor must keep and never let the user change.
 pub(crate) fn is_system_taint(key: &str) -> bool {
     SYSTEM_TAINT_PREFIXES

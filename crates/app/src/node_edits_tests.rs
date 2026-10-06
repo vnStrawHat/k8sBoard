@@ -582,3 +582,11 @@ fn label_batch_trims_keys_and_values_like_the_single_editor() {
         [("wk-01".to_owned(), vec![set("team", "infra")])]
     );
 }
+
+#[test]
+fn the_target_names_stop_after_five_with_the_rest_counted() {
+    let names = |count: usize| -> Vec<String> { (1..=count).map(|n| format!("n{n}")).collect() };
+    assert_eq!(node_names_text(&names(2)), "n1, n2");
+    assert_eq!(node_names_text(&names(5)), "n1, n2, n3, n4, n5");
+    assert_eq!(node_names_text(&names(8)), "n1, n2, n3, n4, n5 +3");
+}

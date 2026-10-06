@@ -6,7 +6,10 @@ fn labels(screen: Screen) -> Vec<&'static str> {
 
 #[test]
 fn bulk_actions_follow_the_wireframe() {
-    assert_eq!(labels(Screen::Nodes), ["Cordon", "Uncordon", "Drain…"]);
+    assert_eq!(
+        labels(Screen::Nodes),
+        ["Cordon", "Uncordon", "Drain…", "Edit labels…"]
+    );
     assert_eq!(
         labels(Screen::Kind(ResourceKind::Deployments)),
         ["Scale…", "Restart rollout", "Roll back…"]

@@ -66,7 +66,7 @@ pub(crate) fn bulk_actions(screen: Screen) -> &'static [&'static str];
 
 | Screen | Actions |
 |---|---|
-| Nodes | Cordon, Uncordon, Drain… |
+| Nodes | Cordon, Uncordon, Drain…, Edit labels… (J16: the node editor for one ticked node, the bulk label editor for 2 to 50; the bulk editor lists the target names, five then `+N`) |
 | Deployments | Scale…, Restart, Roll back… |
 | StatefulSets | Scale…, Restart |
 | DaemonSets | Restart |
