@@ -1,9 +1,13 @@
 //! One rendered log row: time, level tag, text with filter highlights, and the JSON block.
 
+use std::borrow::Cow;
+
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Div, HighlightStyle, Hsla, IntoElement as _, ParentElement as _, Rems,
-    SharedString, Styled as _, StyledText, div, prelude::FluentBuilder as _, rems,
+    AnyElement, App, Div, HighlightStyle, Hsla, InteractiveElement as _, IntoElement as _,
+    ParentElement as _, Rems, SharedString, StatefulInteractiveElement as _, Styled as _,
+    StyledText, div, prelude::FluentBuilder as _, rems,
 };
 use jiff::tz::TimeZone;
 
@@ -21,6 +25,9 @@ const DATE_PREFIX_WIDTH: Rems = rems(2.7);
 const LEVEL_COLUMN_WIDTH: Rems = rems(2.9);
 /// `x2k4q/container` fits for the usual names; longer ones are cut.
 const PREFIX_COLUMN_WIDTH: Rems = rems(9.);
+/// A line this long may be cut by the row, so it gets a tooltip with the whole text. The width of
+/// the dock is not known here, so shorter lines never get one.
+const TOOLTIP_MIN_CHARS: usize = 80;
 const ERROR_TINT_OPACITY: f32 = 0.08;
 
 /// The `{pod}/{container}` cell of a workload tab.
@@ -44,23 +51,23 @@ pub(crate) struct RowStyle<'a> {
     pub(crate) prefix: Option<RowPrefix>,
 }
 
-pub(crate) fn log_row(line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyElement {
+pub(crate) fn log_row(index: usize, line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let is_marker = line.kind == LineKind::Marker;
     // The column is the one that sorts, so a time the line itself starts with would show twice.
     let text = match (style.shows_timestamps, line.line.timestamp, is_marker) {
-        (true, Some(_), false) => without_leading_timestamp(&line.line.text),
-        _ => line.line.text.as_str(),
+        (true, Some(_), false) => without_leading_time(&line.line.text),
+        _ => Cow::Borrowed(line.line.text.as_str()),
     };
     let json = (style.shows_json && !is_marker)
-        .then(|| json_line(text))
+        .then(|| json_line(&text))
         .flatten();
     let headline = match &json {
         Some(JsonLine {
             headline: Some(headline),
             ..
         }) => headline.as_str(),
-        _ => text,
+        _ => text.as_ref(),
     };
     // An empty line still needs a line box, or the row would collapse to nothing.
     let shown = if headline.is_empty() { " " } else { headline };
@@ -100,7 +107,15 @@ pub(crate) fn log_row(line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyEle
         })
         .child(
             no_wrap_unless(div(), style.wraps_lines)
-                .child(StyledText::new(shown.to_owned()).with_highlights(highlights)),
+                .id(("log-line", index))
+                .child(StyledText::new(shown.to_owned()).with_highlights(highlights))
+                .when(
+                    !style.wraps_lines && shown.chars().count() > TOOLTIP_MIN_CHARS,
+                    |cell| {
+                        let full = SharedString::from(shown.to_owned());
+                        cell.tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
+                    },
+                ),
         )
         .children(json.iter().flat_map(|json| &json.details).map(|detail| {
             no_wrap_unless(div(), style.wraps_lines)
@@ -170,6 +185,55 @@ fn level_tag(level: Option<LogLevel>, cx: &App) -> Div {
         .child(SharedString::from(level.label()))
 }
 
+/// `text` without the time it starts with, which the Timestamps column already shows: an ISO time,
+/// a logfmt `time=`/`ts=` field, or a JSON `"time":`/`"ts":` first member. The rest of the line is
+/// kept as it was.
+fn without_leading_time(text: &str) -> Cow<'_, str> {
+    let iso = without_leading_timestamp(text);
+    if iso.len() != text.len() {
+        return Cow::Borrowed(iso);
+    }
+    if let Some(rest) = without_logfmt_time(text) {
+        return Cow::Borrowed(rest);
+    }
+    match without_json_time(text) {
+        Some(rest) => Cow::Owned(rest),
+        None => Cow::Borrowed(text),
+    }
+}
+
+/// The text after a `time=` or `ts=` field, quoted or bare, whose value starts like a time (a
+/// digit).
+fn without_logfmt_time(text: &str) -> Option<&str> {
+    let value = ["time=", "ts="]
+        .iter()
+        .find_map(|key| text.strip_prefix(key))?;
+    let end = match value.strip_prefix('"') {
+        Some(quoted) => 1 + quoted.find('"')? + 1,
+        None => value.find(char::is_whitespace).unwrap_or(value.len()),
+    };
+    let first = value.trim_start_matches('"').chars().next()?;
+    first.is_ascii_digit().then(|| value[end..].trim_start())
+}
+
+/// `{rest}` for an object whose first member is `"time":"…"` or `"ts":"…"` followed by a comma.
+fn without_json_time(text: &str) -> Option<String> {
+    let members = text.trim_start().strip_prefix('{')?.trim_start();
+    let value = ["\"time\"", "\"ts\""]
+        .iter()
+        .find_map(|key| members.strip_prefix(key))?
+        .trim_start()
+        .strip_prefix(':')?
+        .trim_start()
+        .strip_prefix('"')?;
+    let (time, rest) = value.split_once('"')?;
+    if !time.starts_with(|first: char| first.is_ascii_digit()) {
+        return None;
+    }
+    let remaining = rest.trim_start().strip_prefix(',')?.trim_start();
+    Some(format!("{{{remaining}"))
+}
+
 /// `text` without a leading ISO 8601 time (`2026-10-05T11:09:25+07:00`, fractions and `Z` allowed)
 /// and the blanks after it; the text of a line that does not start with one.
 fn without_leading_timestamp(text: &str) -> &str {
@@ -233,16 +297,59 @@ mod tests {
     }
 
     #[test]
+    fn a_leading_logfmt_time_field_is_removed() {
+        for (text, rest) in [
+            (
+                "time=\"2026-10-05T02:16:23+07:00\" level=error msg=boom",
+                "level=error msg=boom",
+            ),
+            ("time=2026-10-05T02:16:23Z level=info", "level=info"),
+            (
+                "ts=\"2026-10-05T02:16:23.5Z\" caller=main.go:7",
+                "caller=main.go:7",
+            ),
+            ("ts=1759648583.5 level=warn", "level=warn"),
+        ] {
+            assert_eq!(without_leading_time(text), rest, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_leading_json_time_member_is_removed_and_the_rest_stays_valid() {
+        for (text, rest) in [
+            (
+                r#"{"ts":"2026-09-29T09:14:52.541Z","level":"info","msg":"hi"}"#,
+                r#"{"level":"info","msg":"hi"}"#,
+            ),
+            (
+                r#"{ "time": "2026-09-29T09:14:52Z" , "msg": "hi" }"#,
+                r#"{"msg": "hi" }"#,
+            ),
+        ] {
+            assert_eq!(without_leading_time(text), rest, "{text}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(rest).is_ok(),
+                "{rest}"
+            );
+        }
+    }
+
+    #[test]
     fn other_lines_keep_their_text() {
         for text in [
-            "time=\"2026-10-05T02:16:23+07:00\" level=error",
             "2026/10/05 02:21:42 http: TLS handshake error",
             "2026-10-05 11:09:25 started",
             "2026-10-05T11:09 started",
-            "{\"time\":\"2026-10-05T11:09:25Z\"}",
+            "level=error time=\"2026-10-05T02:16:23+07:00\"",
+            "time=soon level=error",
+            "ts=",
+            "time=\"2026-10-05",
+            r#"{"time":"2026-10-05T11:09:25Z"}"#,
+            r#"{"msg":"hi","ts":"2026-10-05T11:09:25Z"}"#,
+            r#"{"ts":"later","msg":"hi"}"#,
             "",
         ] {
-            assert_eq!(without_leading_timestamp(text), text, "{text}");
+            assert_eq!(without_leading_time(text), text, "{text}");
         }
     }
 }

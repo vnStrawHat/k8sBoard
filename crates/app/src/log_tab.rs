@@ -1421,7 +1421,7 @@ impl LogTab {
             matcher: self.buffer.view().matcher.as_ref(),
             prefix,
         };
-        log_row(line, &style, cx)
+        log_row(index, line, &style, cx)
     }
 }
 
