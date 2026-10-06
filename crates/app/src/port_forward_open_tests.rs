@@ -1368,3 +1368,20 @@ fn change_local_port_of_a_running_preset_is_saved_only_after_the_confirmed_start
     assert_eq!(saved, LocalPortSpec::Exact(port));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_started_notice_names_address_target_and_port() {
+    let spec = ForwardSpec {
+        namespace: "shop".to_owned(),
+        target: TargetSpec {
+            kind: crate::port_forwards::TargetKind::Service,
+            name: "api".to_owned(),
+        },
+        remote_port: 80,
+        local_port: LocalPortSpec::Auto,
+    };
+    assert_eq!(
+        forward_started_text(&spec, 19090),
+        "Forwarding localhost:19090 → svc/api:80"
+    );
+}

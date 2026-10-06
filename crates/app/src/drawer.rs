@@ -26,7 +26,9 @@ use crate::history_rings::Resolution;
 use crate::monitor_data::MonitorData;
 use crate::monitor_source::SourceFetch;
 use crate::object_events::events_title;
-use crate::port_forward_menu::{PortButton, PortButtons};
+use crate::port_forward_menu::{
+    PortButton, PortButtons, copy_address_tooltip, forward_address_text,
+};
 use crate::resource_actions::{short_reason, with_next_step};
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, SecretValuesView};
@@ -864,8 +866,8 @@ pub(crate) fn chips(id: impl Into<ElementId>, terms: &[SharedString], cx: &App) 
         .into_any_element()
 }
 
-/// A port with its Forward button: Forward to start, `● localhost:19090 · Stop` while a forward of
-/// the port runs, or a disabled button whose tooltip says why (spec 0035).
+/// A port with its Forward button: Forward to start, `● localhost:19090` (click copies) and a
+/// Stop button while a forward of the port runs, or a disabled button whose tooltip says why (spec 0035).
 pub(crate) fn port_row(
     text: &SharedString,
     id: usize,
@@ -877,15 +879,35 @@ pub(crate) fn port_row(
     // Under the port, so a disabled Forward says why without cutting the port's own text.
     let mut reason_line: Option<AnyElement> = None;
     let action: AnyElement = match (button, on_click) {
-        (PortButton::Live { local_port, .. }, Some(on_click)) => div()
-            .id(("forward-live", id))
-            .cursor_pointer()
-            .text_xs()
-            .text_color(theme.success)
-            .tooltip(|window, cx| Tooltip::new("Stop this forward").build(window, cx))
-            .on_click(move |event, window, cx| on_click(event, window, cx))
-            .child(format!("● localhost:{local_port} · Stop"))
-            .into_any_element(),
+        // The address copies and a separate Stop stops, so a click on the address never ends the
+        // forward (UX walk I3).
+        (PortButton::Live { local_port, .. }, Some(on_click)) => {
+            let address = forward_address_text(*local_port);
+            let tooltip = copy_address_tooltip(*local_port);
+            let shown = format!("● {address}");
+            h_flex()
+                .gap_1()
+                .items_center()
+                .child(
+                    div()
+                        .id(("forward-address", id))
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(theme.success)
+                        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                        .on_click(move |_, _, cx| copy_text(&address, cx))
+                        .child(shown),
+                )
+                .child(
+                    Button::new(("forward-stop", id))
+                        .label("Stop")
+                        .xsmall()
+                        .ghost()
+                        .tooltip("Stop this forward")
+                        .on_click(move |event, window, cx| on_click(event, window, cx)),
+                )
+                .into_any_element()
+        }
         (PortButton::Offer, Some(on_click)) => Button::new(("forward", id))
             .label("Forward")
             .icon(Icon::new(IconName::ArrowLeftRight))

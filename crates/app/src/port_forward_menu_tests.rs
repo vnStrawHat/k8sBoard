@@ -424,3 +424,10 @@ fn a_forward_of_another_cluster_does_not_make_the_button_live() {
         PortButton::Offer
     );
 }
+
+#[test]
+fn a_running_forward_shows_its_address_and_a_copy_tooltip_apart_from_stop() {
+    // The address is a copy link of its own: its text and tooltip name the address, never Stop.
+    assert_eq!(forward_address_text(19090), "localhost:19090");
+    assert_eq!(copy_address_tooltip(19090), "Copy localhost:19090");
+}

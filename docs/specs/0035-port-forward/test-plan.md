@@ -53,7 +53,7 @@ Window tests (`app_shell_tests.rs`): `status_bar_shows_running_count_and_opens_t
 | `start_needs_a_viewed_cluster` | preset of a non-viewed cluster → `Open {cluster} to start this forward` |
 | `run_guarded_picks_the_port_forward_permit` | `ConnectOpen::PortForward` gets a permit; no permit → `open` not called, no audit |
 | `start_appends_one_audit_line` | action `Port-forward`, object, fields `remote_port`, `local_port`; no traffic keys |
-| `forward_button_states` | Offer, Live (`● localhost:19090 · Stop`), Disabled (UDP, no selector, gate reason) |
+| `forward_button_states` | Offer, Live (`● localhost:19090` copies, apart from Stop; `forward_address_text`, `copy_address_tooltip`, `forward_started_text`), Disabled (UDP, no selector, gate reason) |
 | `pod_menu_lists_tcp_ports_with_tags` | MAIN/SIDECAR tags; one port → direct item |
 | `f_key_with_several_ports_opens_new_forward` | dialog prefilled with the cursor pod |
 | `forward_uses_the_rows_cluster` | 0027 fixture: drawer of cluster B → guard B, never the primary |

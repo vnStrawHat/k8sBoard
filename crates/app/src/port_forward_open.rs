@@ -13,17 +13,24 @@ use std::rc::Rc;
 use cluster::{ClusterConnection, PortForwardPermit};
 use futures::channel::mpsc;
 use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::Button;
 use gpui_kit::component::notification::Notification;
-use gpui_kit::{App, Context, SharedString, Subscription, Window};
+use gpui_kit::component::{Sizable as _, h_flex};
+use gpui_kit::{
+    App, AppContext as _, Context, IntoElement as _, ParentElement as _, SharedString, Styled as _,
+    Subscription, Window,
+};
 
 use super::AppShell;
 use super::write_flow::{ConnectIntent, ConnectOpen, PortForwardOpen};
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, connect_entry,
 };
+use crate::clipboard_copy::copy_text;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::environment::Environment;
+use crate::port_forward_menu::forward_address_text;
 use crate::port_forward_menu::{ForwardSubject, MenuState, first_tcp_port, menu_state};
 use crate::port_forwards::{
     ForwardId, ForwardOrigin, ForwardPreset, ForwardSpec, LocalPortSpec, MAX_RUNNING_FORWARDS,
@@ -118,6 +125,16 @@ fn store_preset_port(cluster: &ClusterRef, spec: &ForwardSpec, cx: &mut App) {
             }
         }
     });
+}
+
+/// `Forwarding localhost:19090 → svc/api:80`.
+fn forward_started_text(spec: &ForwardSpec, local_port: u16) -> String {
+    format!(
+        "Forwarding {} → {}:{}",
+        forward_address_text(local_port),
+        spec.short_target_text(),
+        spec.remote_port
+    )
 }
 
 fn warn(window: &mut Window, cx: &mut App, text: String) {
@@ -533,6 +550,7 @@ impl AppShell {
                 {
                     field.value = Some(local.port().to_string());
                 }
+                self.notify_forward_started(report.id, cx);
             }
             StartOutcome::Failed(error) => {
                 entry.outcome = AuditOutcome::Failed;
@@ -540,6 +558,51 @@ impl AppShell {
             }
         }
         self.write_audit_line(entry, cx);
+    }
+
+    /// Says where the new forward listens, with the two things to do with the address.
+    fn notify_forward_started(&self, id: ForwardId, cx: &mut Context<Self>) {
+        let Some(forward) = self.port_forwards.read(cx).get(id) else {
+            return;
+        };
+        let Some(local) = forward.local else {
+            return;
+        };
+        let text = forward_started_text(&forward.spec, local.port());
+        let (address, port) = (forward_address_text(local.port()), local.port());
+        let handle = self.window;
+        cx.defer(move |cx| {
+            let _ = cx.update_window(handle, |_, window, cx| {
+                let notification = Notification::success(text).content(move |_, _, cx| {
+                    let address = address.clone();
+                    h_flex()
+                        .gap_2()
+                        .mt_2()
+                        .child(
+                            Button::new("forward-started-copy")
+                                .label("Copy")
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(move |notification, _, window, cx| {
+                                    copy_text(&address, cx);
+                                    notification.dismiss(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("forward-started-open")
+                                .label("Open in browser")
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(move |notification, _, window, cx| {
+                                    cx.open_url(&format!("http://127.0.0.1:{port}"));
+                                    notification.dismiss(window, cx);
+                                })),
+                        )
+                        .into_any_element()
+                });
+                window.push_notification(notification, cx);
+            });
+        });
     }
 
     /// The forward is gone or replaced with its start unreported.
@@ -583,8 +646,6 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use gpui_kit::AppContext as _;
-
         use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
         use crate::screenshot::forward_fixture_clusters;
         use crate::write_guard::{ActionRisk, ConfirmMode, confirm_step};

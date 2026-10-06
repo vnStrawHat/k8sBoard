@@ -292,12 +292,22 @@ impl ForwardMenu {
     }
 }
 
+/// `localhost:19090`: what a running forward shows and copies.
+pub(crate) fn forward_address_text(local_port: u16) -> String {
+    format!("localhost:{local_port}")
+}
+
+/// The tooltip of the address of a running forward.
+pub(crate) fn copy_address_tooltip(local_port: u16) -> String {
+    format!("Copy {}", forward_address_text(local_port))
+}
+
 /// How one port of a drawer offers Forward.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PortButton {
     /// Click starts a forward with an automatic local port.
     Offer,
-    /// A forward of this port runs: `● localhost:19090 · Stop`.
+    /// A forward of this port runs: the address `● localhost:19090` copies, a Stop button stops.
     Live {
         id: ForwardId,
         local_port: u16,
