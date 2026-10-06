@@ -222,10 +222,6 @@ pub(crate) fn delete_batch(
         Removal::Restart => ("Restart pod".to_owned(), "Restart"),
         Removal::Evict => ("Evict pod".to_owned(), "Evict"),
     };
-    let expected_name = match (items.as_slice(), extras.targets.as_slice()) {
-        ([_], [target]) => Some(target.object.name().to_owned()),
-        _ => None,
-    };
     // The kind table is the warnings of a delete; a restart or an eviction has its own lines, so
     // the bare-pod line of an eviction shows once.
     let mut warnings = match removal {
@@ -243,7 +239,6 @@ pub(crate) fn delete_batch(
         button: action_label(action).into(),
         risk: action_risk(action),
         warnings,
-        expected_name,
         plan: BatchPlan {
             cluster: cluster.clone(),
             items,

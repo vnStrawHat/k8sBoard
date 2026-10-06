@@ -26,36 +26,33 @@ fn cluster_ref() -> ClusterRef {
 
 #[test]
 fn a_plain_draft_keeps_change_and_the_cluster_tier() {
-    let (risk, name) = confirm_risk(&request(ObjectKind::RoleBinding, &binding("view")));
+    let risk = confirm_risk(&request(ObjectKind::RoleBinding, &binding("view")));
     assert_eq!(risk, ActionRisk::Change);
-    assert_eq!(name, None);
 }
 
 #[test]
-fn a_powerful_role_types_the_binding_name() {
+fn a_powerful_role_is_privileged() {
     for role in ["cluster-admin", "admin", "edit"] {
-        let (risk, name) = confirm_risk(&request(ObjectKind::RoleBinding, &binding(role)));
+        let risk = confirm_risk(&request(ObjectKind::RoleBinding, &binding(role)));
         assert_eq!(risk, ActionRisk::Privileged, "{role}");
-        assert_eq!(name.as_deref(), Some("new-binding"));
     }
 }
 
 #[test]
-fn a_broad_subject_types_the_binding_name() {
+fn a_broad_subject_is_privileged() {
     let text = binding("view").replace(
         "  - kind: ServiceAccount\n    name: default\n    namespace: payments\n",
         "  - kind: Group\n    name: system:authenticated\n    apiGroup: rbac.authorization.k8s.io\n",
     );
-    let (risk, name) = confirm_risk(&request(ObjectKind::RoleBinding, &text));
+    let risk = confirm_risk(&request(ObjectKind::RoleBinding, &text));
     assert_eq!(risk, ActionRisk::Privileged);
-    assert_eq!(name.as_deref(), Some("new-binding"));
 }
 
 #[test]
 fn a_privileged_pod_security_warning_alone_keeps_the_tier() {
     let text = "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: team\n  labels:\n    pod-security.kubernetes.io/enforce: privileged\n";
-    let (risk, name) = confirm_risk(&request(ObjectKind::Namespace, text));
-    assert_eq!((risk, name), (ActionRisk::Change, None));
+    let risk = confirm_risk(&request(ObjectKind::Namespace, text));
+    assert_eq!(risk, ActionRisk::Change);
 }
 
 #[test]
@@ -167,7 +164,7 @@ fn five_hundred_broad_subjects_are_cut_at_ten_lines() {
     assert_eq!(lines[10], "\u{2026} and 490 more");
     // The warnings still ask for the binding name: only their lines are cut.
     let request = request(ObjectKind::RoleBinding, &text);
-    assert_eq!(confirm_risk(&request).0, ActionRisk::Privileged);
+    assert_eq!(confirm_risk(&request), ActionRisk::Privileged);
 }
 
 #[test]

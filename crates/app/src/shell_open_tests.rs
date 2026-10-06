@@ -407,7 +407,7 @@ fn open_shell_follows_the_0030_gate(cx: &mut TestAppContext) {
     assert_eq!(
         tier,
         DialogConfirm::TypeName {
-            expected: "prod-a".to_owned()
+            expected: "api-0".to_owned()
         }
     );
     shells.press_dialog(Cancel, cx);
@@ -955,7 +955,7 @@ fn attach_follows_the_0030_gate_and_tier(cx: &mut TestAppContext) {
     assert_eq!(
         tier,
         DialogConfirm::TypeName {
-            expected: "prod-a".to_owned()
+            expected: "api-0".to_owned()
         }
     );
     assert_eq!(dry_run, Some(DryRunState::NotSupported));

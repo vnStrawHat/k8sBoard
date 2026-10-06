@@ -446,7 +446,7 @@ fn forward_uses_the_rows_cluster(cx: &mut TestAppContext) {
     assert_eq!(
         tier,
         DialogConfirm::TypeName {
-            expected: "prod-a".to_owned()
+            expected: "api-0".to_owned()
         }
     );
     forwards.confirm(cx);

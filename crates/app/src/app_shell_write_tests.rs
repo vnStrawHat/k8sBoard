@@ -377,13 +377,13 @@ fn type_name_tier_needs_the_match(cx: &mut TestAppContext) {
         assert_eq!(
             *dialog.tier(),
             DialogConfirm::TypeName {
-                expected: "prod-a".to_owned()
+                expected: "node-a".to_owned()
             }
         );
         assert_eq!(dialog.environment(), &Environment::PRODUCTION);
     });
     t.wait_for_dry_run(cx);
-    assert_eq!(t.block(cx).as_deref(), Some("Type prod-a to confirm"));
+    assert_eq!(t.block(cx).as_deref(), Some("Type node-a to confirm"));
     // A press without the name sends nothing.
     t.confirm(cx);
     cx.run_until_parked();
@@ -392,7 +392,7 @@ fn type_name_tier_needs_the_match(cx: &mut TestAppContext) {
     t.confirm(cx);
     cx.run_until_parked();
     assert_eq!(writes(&prod_api).len(), 1);
-    t.type_name("  prod-a ", cx);
+    t.type_name("  node-a ", cx);
     assert!(t.block(cx).is_none());
     t.confirm(cx);
     t.wait_for("the commit", cx, |_| writes(&prod_api).len() == 2);
@@ -1003,11 +1003,11 @@ fn a_tier_made_stricter_after_opening_applies(cx: &mut TestAppContext) {
         );
     });
     cx.run_until_parked();
-    assert_eq!(t.block(cx).as_deref(), Some("Type stg-b to confirm"));
+    assert_eq!(t.block(cx).as_deref(), Some("Type node-b to confirm"));
     t.confirm(cx);
     cx.run_until_parked();
     assert_eq!(writes(&t.stg_api).len(), 1, "only the dry-run was sent");
-    t.type_name("stg-b", cx);
+    t.type_name("node-b", cx);
     assert_eq!(t.block(cx), None);
 }
 
@@ -1151,7 +1151,6 @@ fn renew_intent_has_warnings_and_audit_field() {
     assert_eq!(&*intent.button, "Renew");
     assert_eq!(intent.action, ResourceAction::RenewCertificate);
     assert_eq!(intent.risk, ActionRisk::Change);
-    assert_eq!(intent.expected_name, None);
     let warnings: Vec<&str> = intent.warnings.iter().map(|text| &**text).collect();
     assert_eq!(warnings, [RATE_LIMIT_WARNING, PRIVATE_KEY_WARNING]);
     assert!(

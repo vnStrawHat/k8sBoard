@@ -62,28 +62,22 @@ pub(crate) struct WriteIntent {
     pub(crate) button: SharedString,
     pub(crate) request: WriteRequest,
     pub(crate) risk: ActionRisk,
-    /// The text to type in the `TypeName` tier when the action names its object; `None` types the
-    /// cluster display name.
-    pub(crate) expected_name: Option<String>,
     /// Non-blocking context lines of the dialog.
     pub(crate) warnings: Vec<SharedString>,
 }
 
 impl WriteIntent {
-    /// What the `TypeName` tier asks to type.
+    /// What the `TypeName` tier asks to type: the name of the object the change is on.
     pub(crate) fn expected(&self) -> &str {
-        self.expected_name.as_deref().unwrap_or(&self.cluster_name)
+        self.request.target().name()
     }
 
-    /// `the cluster name`, or `the node name` for an action that names its object.
+    /// `the deployment name`, `the pod name`, and so on.
     pub(crate) fn typed_hint(&self) -> String {
-        match self.expected_name {
-            None => "the cluster name".to_owned(),
-            Some(_) => format!(
-                "the {} name",
-                self.request.target().kind_name().to_ascii_lowercase()
-            ),
-        }
+        format!(
+            "the {} name",
+            self.request.target().kind_name().to_ascii_lowercase()
+        )
     }
 }
 
@@ -108,9 +102,6 @@ pub(crate) struct ConnectIntent {
     /// stream bytes.
     pub(crate) object: AuditObject,
     pub(crate) fields: Vec<AuditField>,
-    /// The text the `TypeName` tier asks for when the start names its object (a node shell types
-    /// the node name); `None` types the cluster display name.
-    pub(crate) expected_name: Option<String>,
     /// Runs after the confirm, with the proof from the cluster's own report and its connection,
     /// both read at that moment.
     pub(crate) open: ConnectOpen,
@@ -250,18 +241,14 @@ impl GrantedOpen {
 }
 
 impl ConnectIntent {
-    /// What the `TypeName` tier asks to type: the node name for a node shell, else the cluster
-    /// name.
+    /// What the `TypeName` tier asks to type: the name of the object the session opens on.
     pub(crate) fn expected(&self) -> &str {
-        self.expected_name.as_deref().unwrap_or(&self.cluster_name)
+        &self.object.name
     }
 
-    /// `the node name`, or `the cluster name`.
-    pub(crate) fn typed_hint(&self) -> &'static str {
-        match self.expected_name {
-            Some(_) => "the node name",
-            None => "the cluster name",
-        }
+    /// `the pod name`, `the node name`, and so on.
+    pub(crate) fn typed_hint(&self) -> String {
+        format!("the {} name", self.object.kind.to_ascii_lowercase())
     }
 
     /// Why the gate of the action no longer allows this start, `None` when it does. The dialog reads
@@ -706,7 +693,6 @@ pub(crate) fn cordon_intent(
         button: verb.into(),
         request,
         risk: action_risk(ResourceAction::Cordon),
-        expected_name: None,
         warnings: Vec::new(),
     })
 }

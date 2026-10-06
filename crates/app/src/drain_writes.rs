@@ -68,7 +68,6 @@ pub(crate) fn removal_write(
         button: verb.into(),
         request,
         risk: action_risk(ResourceAction::Drain),
-        expected_name: None,
         warnings: Vec::new(),
     })
 }

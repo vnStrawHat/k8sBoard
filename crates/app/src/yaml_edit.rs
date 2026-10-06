@@ -889,7 +889,6 @@ pub(crate) fn edit_intent(
         button: "Apply changes".into(),
         request,
         risk: ActionRisk::Change,
-        expected_name: None,
         warnings,
     }
 }

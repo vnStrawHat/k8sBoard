@@ -267,7 +267,6 @@ fn write_entry_uses_the_intent_cluster() {
         button: "Cordon".into(),
         request,
         risk: ActionRisk::Change,
-        expected_name: None,
         warnings: Vec::new(),
     };
     let access = AccessState::Unknown;

@@ -153,6 +153,11 @@ fn the_dry_run_line_needs_every_item_to_pass() {
         summarize_dry_runs(&states, elapsed),
         DryRunState::Failed("Dry-run failed for 2 of 4: Forbidden".into())
     );
+    // A lone object says it once: its row reads `failed`, the line carries the cause.
+    assert_eq!(
+        summarize_dry_runs(&[rejected("refused for now")], elapsed),
+        DryRunState::Failed("Dry-run failed: refused for now".into())
+    );
     // Items still waiting or checking keep the line running, even after a failure.
     assert_eq!(
         summarize_dry_runs(&[rejected("Forbidden"), ItemProgress::Checking], elapsed),
@@ -273,7 +278,6 @@ fn an_item_intent_carries_the_batch_cluster_action_and_risk() {
         button: "Pause".into(),
         risk: ActionRisk::Change,
         warnings: vec!["a line".into()],
-        expected_name: None,
         plan,
     };
     assert_eq!(batch.confirm_label(0), "Pause 2");
@@ -285,6 +289,16 @@ fn an_item_intent_carries_the_batch_cluster_action_and_risk() {
     assert_eq!(item.button, "Pause");
     assert_eq!(item.request.target().name(), "api-1");
     assert_eq!(item.warnings.len(), 1);
+}
+
+#[test]
+fn a_batch_of_one_types_its_object_and_a_larger_one_the_cluster() {
+    let mut batch = ordered_batch();
+    assert_eq!(batch.expected(), "stg-b");
+    assert_eq!(batch.typed_hint(), "the cluster name");
+    batch.plan.items.truncate(1);
+    assert_eq!(batch.expected(), "api-0");
+    assert_eq!(batch.typed_hint(), "the deployment name");
 }
 
 #[test]
@@ -317,7 +331,6 @@ fn ordered_batch() -> BatchIntent {
         button: "Set default".into(),
         risk: ActionRisk::Change,
         warnings: Vec::new(),
-        expected_name: None,
         plan,
     }
 }

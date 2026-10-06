@@ -161,9 +161,9 @@ fn cordon_intent_targets_the_node() {
         intent.request.changed_fields()[0].value.as_deref(),
         Some("true")
     );
-    // The `TypeName` tier types the cluster, not the node.
-    assert_eq!(intent.expected(), "uat-monitor");
-    assert_eq!(intent.typed_hint(), "the cluster name");
+    // The `TypeName` tier types the node the change is on.
+    assert_eq!(intent.expected(), "wk-04");
+    assert_eq!(intent.typed_hint(), "the node name");
 }
 
 #[test]
@@ -181,15 +181,6 @@ fn a_cordoned_node_gets_an_uncordon_intent() {
 #[test]
 fn a_name_that_changes_the_path_makes_no_intent() {
     assert!(cordon_intent(&cluster(), "stg-b", "wk/04", &NodeScheduling::Enabled).is_none());
-}
-
-#[test]
-fn a_named_object_asks_for_its_own_name() {
-    let mut intent = cordon_intent(&cluster(), "stg-b", "wk-04", &NodeScheduling::Enabled)
-        .expect("a valid node name");
-    intent.expected_name = Some("wk-04".to_owned());
-    assert_eq!(intent.expected(), "wk-04");
-    assert_eq!(intent.typed_hint(), "the node name");
 }
 
 #[test]
@@ -475,12 +466,11 @@ fn debug_write_intent() -> Rc<WriteIntent> {
         button: "Add debug container".into(),
         request,
         risk: ActionRisk::Change,
-        expected_name: None,
         warnings: Vec::new(),
     })
 }
 
-fn connect_intent(open: ConnectOpen, expected_name: Option<String>) -> ConnectIntent {
+fn connect_intent(open: ConnectOpen) -> ConnectIntent {
     ConnectIntent {
         cluster: cluster(),
         cluster_name: "stg-b".into(),
@@ -495,7 +485,6 @@ fn connect_intent(open: ConnectOpen, expected_name: Option<String>) -> ConnectIn
             name: "multi-0".to_owned(),
         },
         fields: Vec::new(),
-        expected_name,
         open,
     }
 }
@@ -535,26 +524,31 @@ fn attach_open_takes_the_attach_permit() {
     assert!(open.granted(&exec_rights).is_none());
     assert!(open.granted(&AccessState::Unknown).is_none());
     // An attach writes nothing first, so its dialog has no dry-run.
-    assert!(connect_intent(open, None).create().is_none());
+    assert!(connect_intent(open).create().is_none());
 }
 
 #[test]
 fn a_start_that_writes_first_exposes_its_write() {
-    let writes = connect_intent(attach_open(), None);
+    let writes = connect_intent(attach_open());
     let create = writes.create().expect("a write comes first");
     assert_eq!(create.button, "Add debug container");
-    let plain = connect_intent(ConnectOpen::Exec(Rc::new(|_, _, _, _, _| {})), None);
+    let plain = connect_intent(ConnectOpen::Exec(Rc::new(|_, _, _, _, _| {})));
     assert!(plain.create().is_none());
 }
 
 #[test]
-fn a_node_shell_types_the_node_name_and_others_the_cluster_name() {
-    let node = connect_intent(attach_open(), Some("wk-03".to_owned()));
+fn a_start_types_the_name_of_the_object_it_opens_on() {
+    let debug = connect_intent(attach_open());
+    assert_eq!(debug.expected(), "multi-0");
+    assert_eq!(debug.typed_hint(), "the pod name");
+    let mut node = connect_intent(attach_open());
+    node.object = AuditObject {
+        kind: "Node".to_owned(),
+        namespace: None,
+        name: "wk-03".to_owned(),
+    };
     assert_eq!(node.expected(), "wk-03");
     assert_eq!(node.typed_hint(), "the node name");
-    let debug = connect_intent(attach_open(), None);
-    assert_eq!(debug.expected(), "stg-b");
-    assert_eq!(debug.typed_hint(), "the cluster name");
 }
 
 fn cleanup_request(name: &str, uid: &str) -> Option<WriteRequest> {
@@ -639,7 +633,7 @@ fn a_start_is_refused_by_its_gate_when_the_setting_is_off() {
             .collect(),
     });
     let mut guard = guard(&access, WriteLock::Unlocked);
-    let mut intent = connect_intent(attach_open(), Some("wk-03".to_owned()));
+    let mut intent = connect_intent(attach_open());
     intent.action = ResourceAction::OpenNodeShell;
     guard.profile.allow_node_shell = true;
     assert_eq!(intent.gate_block(&guard), None);

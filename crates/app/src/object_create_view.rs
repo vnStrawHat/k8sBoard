@@ -263,11 +263,10 @@ impl ObjectCreateView {
         let Some(request) = passed.request.clone() else {
             return;
         };
-        let (risk, expected_name) = confirm_risk(&request);
+        let risk = confirm_risk(&request);
         let warnings = passed.warnings.clone();
         let mut intent = self.intent(request, warnings);
         intent.risk = risk;
-        intent.expected_name = expected_name;
         let _ = self
             .shell
             .update(cx, |shell, cx| shell.start_write(intent, window, cx));
@@ -413,26 +412,22 @@ pub(crate) fn create_intent(
         button: "Create".into(),
         request,
         risk: ActionRisk::Change,
-        expected_name: None,
         warnings,
     }
 }
 
 /// A draft with a risky grant types its name on every environment (decision 15); any other draft
 /// keeps `Change` and the cluster's own tier.
-pub(crate) fn confirm_risk(request: &WriteRequest) -> (ActionRisk, Option<String>) {
+pub(crate) fn confirm_risk(request: &WriteRequest) -> ActionRisk {
     let is_risky = matches!(
         request.operation(),
         WriteOperation::CreateObject(draft)
             if draft.warnings().iter().any(DraftWarning::needs_typed_name)
     );
     if is_risky {
-        (
-            ActionRisk::Privileged,
-            Some(request.target().name().to_owned()),
-        )
+        ActionRisk::Privileged
     } else {
-        (ActionRisk::Change, None)
+        ActionRisk::Change
     }
 }
 

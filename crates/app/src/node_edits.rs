@@ -211,7 +211,6 @@ pub(crate) fn taint_intent(
         button: "Edit taints".into(),
         request,
         risk,
-        expected_name: Some(node.to_owned()),
         warnings,
     })
 }
@@ -282,7 +281,6 @@ pub(crate) fn label_intent(
         button: "Edit labels".into(),
         request,
         risk: action_risk(ResourceAction::EditLabels),
-        expected_name: Some(node.to_owned()),
         warnings: Vec::new(),
     })
 }
@@ -435,7 +433,6 @@ pub(crate) fn label_batch(
         risk: action_risk(ResourceAction::EditLabels),
         warnings,
         // A bulk names no single object: the TypeName tier types the cluster name.
-        expected_name: None,
         plan: BatchPlan {
             cluster: scope.cluster.clone(),
             items,
@@ -493,7 +490,6 @@ pub(crate) fn cordon_batch(
         button: mode.verb().into(),
         risk: action_risk(mode.action()),
         warnings: Vec::new(),
-        expected_name: None,
         plan: BatchPlan {
             cluster: scope.cluster.clone(),
             items,

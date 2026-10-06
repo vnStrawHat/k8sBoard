@@ -169,26 +169,34 @@ pub(crate) struct BatchIntent {
     pub(crate) risk: ActionRisk,
     /// Non-blocking context lines of the dialog.
     pub(crate) warnings: Vec<SharedString>,
-    /// The text to type in the `TypeName` tier when the batch names one object (a single delete);
-    /// `None` types the cluster name, since a batch names no single object.
-    pub(crate) expected_name: Option<String>,
     pub(crate) plan: BatchPlan,
 }
 
 impl BatchIntent {
-    /// What the `TypeName` tier asks to type.
+    /// What the `TypeName` tier asks to type: the object of a batch of one, else the cluster name,
+    /// since a larger batch names no single object.
     pub(crate) fn expected(&self) -> &str {
-        self.expected_name.as_deref().unwrap_or(&self.cluster_name)
+        match self.single_object() {
+            Some(item) => item.request.target().name(),
+            None => &self.cluster_name,
+        }
     }
 
-    /// `the cluster name`, or `the pod name` for a batch that names its one object.
+    /// `the cluster name`, or `the pod name` for a batch of one object.
     pub(crate) fn typed_hint(&self) -> String {
-        match (&self.expected_name, self.plan.items.first()) {
-            (Some(_), Some(item)) => format!(
+        match self.single_object() {
+            Some(item) => format!(
                 "the {} name",
                 item.request.target().kind_name().to_ascii_lowercase()
             ),
-            _ => "the cluster name".to_owned(),
+            None => "the cluster name".to_owned(),
+        }
+    }
+
+    fn single_object(&self) -> Option<&BatchItem> {
+        match self.plan.items.as_slice() {
+            [item] => Some(item),
+            _ => None,
         }
     }
 
@@ -278,7 +286,6 @@ impl BatchIntent {
             button: self.button.clone(),
             request: item.request.clone(),
             risk: self.risk,
-            expected_name: self.expected_name.clone(),
             warnings: self.warnings.clone(),
         }
     }
@@ -348,6 +355,10 @@ pub(crate) fn summarize_dry_runs(states: &[ItemProgress], elapsed: Duration) -> 
         .collect();
     match failed.first() {
         None => DryRunState::Passed { elapsed },
+        // One object: its row only says `failed`, so the cause is read once, here.
+        Some(first) if states.len() == 1 => {
+            DryRunState::Failed(format!("Dry-run failed: {first}").into())
+        }
         Some(first) => DryRunState::Failed(
             format!(
                 "Dry-run failed for {} of {}: {first}",

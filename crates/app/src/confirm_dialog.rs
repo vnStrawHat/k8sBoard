@@ -42,6 +42,19 @@ use crate::settings::AppSettings;
 use crate::write_guard::{ActionRisk, DialogConfirm, confirm_step};
 
 const DIALOG_WIDTH: f32 = 480.;
+
+/// The path `changed_fields` gives an eviction: a request to the eviction subresource, no field of
+/// the pod.
+const EVICTION_PATH: &str = "pods/eviction";
+
+/// `Eviction request · pod's own grace period`, from the `grace pod default` or `grace 30s` value.
+fn eviction_line(grace: &str) -> String {
+    match grace.strip_prefix("grace ") {
+        Some("pod default") => "Eviction request · pod's own grace period".to_owned(),
+        Some(seconds) => format!("Eviction request · grace period {seconds}"),
+        None => format!("Eviction request · {grace}"),
+    }
+}
 /// The object list of a batch scrolls past this height.
 const ITEMS_MAX_HEIGHT: f32 = 240.;
 
@@ -98,7 +111,7 @@ impl DialogKind {
             Self::Unlock { .. } => "the cluster name".to_owned(),
             Self::Write(intent) => intent.typed_hint(),
             Self::Batch(batch) => batch.typed_hint(),
-            Self::Connect(intent) => intent.typed_hint().to_owned(),
+            Self::Connect(intent) => intent.typed_hint(),
         }
     }
 
@@ -668,12 +681,18 @@ impl ConfirmDialog {
             | ItemProgress::NotSent(_)
             | ItemProgress::Gone => theme.muted_foreground,
         };
+        let is_single = batch.plan.items.len() == 1;
         let rows = batch
             .plan
             .items
             .iter()
             .zip(&self.items)
             .map(|(item, progress)| {
+                // A lone object's refusal is read in the dry-run line under the list, not cut here.
+                let state_text = match progress {
+                    ItemProgress::Rejected(_) if is_single => "failed".to_owned(),
+                    other => other.text(),
+                };
                 h_flex()
                     .gap_2()
                     .justify_between()
@@ -690,7 +709,7 @@ impl ConfirmDialog {
                             .truncate()
                             .text_xs()
                             .text_color(tone(progress))
-                            .child(progress.text()),
+                            .child(state_text),
                     )
             });
         let skipped = batch.plan.skipped.iter().map(|skip| {
@@ -835,6 +854,7 @@ impl ConfirmDialog {
             .flat_map(|request| request.changed_fields())
             .map(|field| {
                 let text = match field.value {
+                    Some(value) if field.path == EVICTION_PATH => eviction_line(&value),
                     Some(value) => format!("{} → {value}", field.path),
                     None if is_ordered => format!("{} → removed", field.path),
                     None => field.path.into_owned(),
@@ -1193,5 +1213,22 @@ impl ConfirmDialog {
 
     pub(crate) fn choose_propagation_for_test(&mut self, index: usize, cx: &mut Context<Self>) {
         self.choose_propagation(index, cx);
+    }
+}
+
+#[cfg(test)]
+mod eviction_line_tests {
+    use super::eviction_line;
+
+    #[test]
+    fn an_eviction_reads_as_a_sentence_not_a_path() {
+        assert_eq!(
+            eviction_line("grace pod default"),
+            "Eviction request · pod's own grace period"
+        );
+        assert_eq!(
+            eviction_line("grace 30s"),
+            "Eviction request · grace period 30s"
+        );
     }
 }

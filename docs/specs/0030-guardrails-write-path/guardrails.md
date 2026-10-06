@@ -61,7 +61,7 @@ pub(crate) fn confirm_step(mode: ConfirmMode, risk: ActionRisk, expected: &str) 
 - (user, 2026-10-02, decision 9) **Every guarded action opens a dialog**, for every tier, risk, and trigger (pointer, key, palette). The Enter, one-click-without-dialog, and None tiers are removed; `Trigger` and `ConfirmStep::Run` went with them, since they only chose between those tiers.
 - Enter inside the dialog activates the focused confirm button; held or repeated Enter is ignored (decision 28, write-flow.md).
 - `Change` and `Destructive` confirm the same way (the risk only picks the danger button). `Privileged` (0037, as built) is its own arm of the exhaustive `confirm_step` match: `TypeName { expected }` for every mode, with the node name as `expected`, and the danger button.
-- `expected`: the cluster display name (W10, W2 "Typing the cluster name") unless the action names its object (W6 drain types the node name; the feature passes it). Match: exact after trimming surrounding spaces; case-sensitive.
+- `expected` (UX walkthrough M13, one rule for every typed confirmation): the **name of the object** the action is on (`WriteIntent`: the request target; `ConnectIntent`: its `object`, so Attach, shells, and Forward type the pod, service, or node; a batch of one: that object). Only an action with no single object, a batch of several, types the **cluster display name** (W10, W2 "Typing the cluster name"); so does unlocking a cluster. The dialog's hint line says which (`Type the pod name to confirm`). Match: exact after trimming surrounding spaces; case-sensitive.
 - Cordon / Uncordon is `Change`.
 
 ## Settings

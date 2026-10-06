@@ -190,7 +190,7 @@ fn the_edit_intent_records_edit_yaml_with_a_paths_only_request() {
     );
     assert_eq!(intent.button.as_ref(), "Apply changes");
     assert_eq!(intent.risk, ActionRisk::Change);
-    assert_eq!(intent.expected(), "prod-a");
+    assert_eq!(intent.expected(), "api");
     assert_eq!(intent.warnings.len(), 1);
     let fields = intent.request.changed_fields();
     assert!(fields.iter().all(|field| field.value.is_none()));

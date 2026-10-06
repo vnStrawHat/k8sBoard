@@ -113,7 +113,6 @@ pub(crate) fn hpa_range_intent(
         button: "Set limits".into(),
         request,
         risk: action_risk(action),
-        expected_name: None,
         warnings: hpa_range_warnings(hpa, min, max),
     })
 }
@@ -149,7 +148,6 @@ fn edit_batch(
         button: verb.into(),
         risk: action_risk(action),
         warnings,
-        expected_name: None,
         plan,
     }
 }
@@ -352,7 +350,6 @@ pub(crate) fn expand_intent(
         button: "Expand".into(),
         request,
         risk: action_risk(action),
-        expected_name: None,
         warnings: expand_warnings(claim),
     })
 }
@@ -568,7 +565,6 @@ pub(crate) fn default_class_intent(
         button: "Set default".into(),
         risk: action_risk(action),
         warnings,
-        expected_name: None,
         plan: BatchPlan {
             cluster: scope.cluster.clone(),
             items,

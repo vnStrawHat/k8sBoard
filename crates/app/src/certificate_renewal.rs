@@ -49,7 +49,6 @@ pub(crate) fn renew_intent(
         button: "Renew".into(),
         request,
         risk: action_risk(action),
-        expected_name: None,
         warnings: vec![RATE_LIMIT_WARNING.into(), PRIVATE_KEY_WARNING.into()],
     })
 }

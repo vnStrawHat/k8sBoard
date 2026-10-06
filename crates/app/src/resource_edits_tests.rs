@@ -87,7 +87,6 @@ fn hpa_label_names_the_range() {
     assert_eq!(intent.button, "Set limits");
     assert_eq!(intent.action, ResourceAction::EditHpaRange);
     assert_eq!(intent.risk, ActionRisk::Change);
-    assert_eq!(intent.expected_name, None);
     assert_eq!(
         intent.request.operation(),
         &WriteOperation::SetHpaReplicaRange { min: 3, max: 20 }
@@ -359,7 +358,6 @@ fn expand_is_change_with_the_irreversible_warning() {
     );
     assert_eq!(intent.button, "Expand");
     assert_eq!(intent.action, ResourceAction::ExpandClaim);
-    assert_eq!(intent.expected_name, None);
     assert_eq!(texts(intent.warnings), [CANNOT_SHRINK]);
     assert_eq!(
         intent.request.operation(),
@@ -622,7 +620,6 @@ fn set_default_plan_sets_new_then_unsets_old() {
     assert_eq!(batch.label, "Make gp3 the default storage class");
     assert_eq!(batch.verb, "Set default");
     assert_eq!(batch.risk, ActionRisk::Change);
-    assert_eq!(batch.expected_name, None);
     assert_eq!(batch.confirm_label(0), "Set default 2");
     assert_eq!(
         texts(batch.warnings),

@@ -320,7 +320,7 @@ fn edit_min_max_without_patch_hpa_permission_opens_no_popover(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
-fn production_edit_min_max_types_the_cluster_name(cx: &mut TestAppContext) {
+fn production_edit_min_max_types_the_hpa_name(cx: &mut TestAppContext) {
     let t = edit_clusters("hpa-range-prod", cx);
     let prod_api = activate_prod(&t, cx);
     t.set_lock(&t.prod, WriteLock::Unlocked, cx);
@@ -334,7 +334,7 @@ fn production_edit_min_max_types_the_cluster_name(cx: &mut TestAppContext) {
         assert_eq!(
             *dialog.tier(),
             DialogConfirm::TypeName {
-                expected: "prod-a".to_owned()
+                expected: "frontend-hpa".to_owned()
             }
         );
     });
@@ -342,7 +342,7 @@ fn production_edit_min_max_types_the_cluster_name(cx: &mut TestAppContext) {
     t.confirm(cx);
     cx.run_until_parked();
     assert_eq!(writes(&prod_api).len(), 1, "the name was not typed");
-    t.type_name("prod-a", cx);
+    t.type_name("frontend-hpa", cx);
     t.confirm(cx);
     t.wait_for("the commit", cx, |_| writes(&prod_api).len() == 2);
     assert!(writes(&t.stg_api).is_empty());
@@ -720,7 +720,7 @@ fn expand_on_a_locked_production_row_opens_no_popover(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn production_expand_types_the_cluster_name(cx: &mut TestAppContext) {
+fn production_expand_types_the_claim_name(cx: &mut TestAppContext) {
     let t = edit_clusters("expand-prod", cx);
     let prod_api = activate_prod(&t, cx);
     t.set_lock(&t.prod, WriteLock::Unlocked, cx);
@@ -734,7 +734,7 @@ fn production_expand_types_the_cluster_name(cx: &mut TestAppContext) {
         assert_eq!(
             *dialog.tier(),
             DialogConfirm::TypeName {
-                expected: "prod-a".to_owned()
+                expected: "data-kafka-0".to_owned()
             }
         );
     });
@@ -742,7 +742,7 @@ fn production_expand_types_the_cluster_name(cx: &mut TestAppContext) {
     t.confirm(cx);
     cx.run_until_parked();
     assert_eq!(writes(&prod_api).len(), 1, "the name was not typed");
-    t.type_name("prod-a", cx);
+    t.type_name("data-kafka-0", cx);
     t.confirm(cx);
     t.wait_for("the commit", cx, |_| writes(&prod_api).len() == 2);
     assert!(writes(&t.stg_api).is_empty());

@@ -923,7 +923,6 @@ impl ValuesEditView {
             button: "Apply changes".into(),
             request,
             risk: ActionRisk::Change,
-            expected_name: None,
             warnings,
         };
         let open_id = self.open_id;

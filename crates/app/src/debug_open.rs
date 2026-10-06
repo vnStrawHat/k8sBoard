@@ -192,7 +192,6 @@ impl AppShell {
             button: BUTTON.into(),
             request,
             risk: action_risk(ResourceAction::DebugContainer),
-            expected_name: None,
             warnings: Vec::new(),
         });
         let plan = Rc::new(TabPlan {
@@ -228,7 +227,6 @@ impl AppShell {
                 name: pod.pod.clone(),
             },
             fields,
-            expected_name: None,
             open: ConnectOpen::CreateThenAttach(CreateThenAttach {
                 create,
                 open: Rc::new({

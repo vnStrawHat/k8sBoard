@@ -910,7 +910,7 @@ fn commit_rechecks_the_row_cluster(cx: &mut TestAppContext) {
         assert_eq!(
             *dialog.tier(),
             DialogConfirm::TypeName {
-                expected: "prod-a".to_owned()
+                expected: "api".to_owned()
             }
         );
     });

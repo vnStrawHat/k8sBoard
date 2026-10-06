@@ -93,7 +93,6 @@ fn intent_of(
         button: described.button.into(),
         request,
         risk: described.risk,
-        expected_name: None,
         warnings: described.warnings,
     })
 }
@@ -769,7 +768,6 @@ fn build_batch(
         button: words.audit.into(),
         risk: shape.risk,
         warnings: shape.warnings,
-        expected_name: None,
         plan,
     }
 }

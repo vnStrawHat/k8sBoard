@@ -169,7 +169,6 @@ impl AppShell {
             button: CREATE_ACTION.into(),
             request,
             risk,
-            expected_name: Some(node.to_owned()),
             warnings: Vec::new(),
         });
         let plan = Rc::new(TabPlan {
@@ -205,7 +204,6 @@ impl AppShell {
                 name: node.to_owned(),
             },
             fields,
-            expected_name: Some(node.to_owned()),
             open: ConnectOpen::CreateThenAttach(CreateThenAttach {
                 create,
                 open: Rc::new({
@@ -287,7 +285,6 @@ impl AppShell {
             button: CREATE_ACTION.into(),
             request,
             risk,
-            expected_name: Some(NODE.to_owned()),
             warnings: Vec::new(),
         });
         let intent = ConnectIntent {
@@ -304,7 +301,6 @@ impl AppShell {
                 name: NODE.to_owned(),
             },
             fields,
-            expected_name: Some(NODE.to_owned()),
             open: ConnectOpen::CreateThenAttach(CreateThenAttach {
                 create,
                 open: Rc::new(|_, _, _, _, _, _| {}),

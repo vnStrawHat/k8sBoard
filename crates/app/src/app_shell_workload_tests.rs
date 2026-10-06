@@ -188,7 +188,7 @@ fn r_restarts_the_cursor_row(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn restart_in_production_types_the_cluster_name(cx: &mut TestAppContext) {
+fn restart_in_production_types_the_workload_name(cx: &mut TestAppContext) {
     let t = workload_clusters("restart-cluster", cx);
     let prod_api = t.activate_prod(cx);
     t.set_lock(&t.prod, WriteLock::Unlocked, cx);
@@ -200,12 +200,12 @@ fn restart_in_production_types_the_cluster_name(cx: &mut TestAppContext) {
     );
     t.cursor_on(&t.prod, ResourceKind::Deployments, "api", cx);
     t.press("r", cx);
-    // The cluster is production: its tier asks for the cluster name.
+    // The cluster is production: its tier asks for the name of the workload.
     t.dialog(cx).read_with(cx, |dialog, _| {
         assert_eq!(
             *dialog.tier(),
             DialogConfirm::TypeName {
-                expected: "prod-a".to_owned()
+                expected: "api".to_owned()
             }
         );
     });
@@ -215,7 +215,7 @@ fn restart_in_production_types_the_cluster_name(cx: &mut TestAppContext) {
     t.confirm(cx);
     cx.run_until_parked();
     assert_eq!(writes(&prod_api).len(), 1, "the name was not typed");
-    t.type_name("prod-a", cx);
+    t.type_name("api", cx);
     t.confirm(cx);
     t.wait_for("the commit", cx, |_| writes(&prod_api).len() == 2);
     assert!(writes(&t.stg_api).is_empty());

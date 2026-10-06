@@ -578,7 +578,6 @@ fn attach_intent(
             path: "container".to_owned(),
             value: Some(target.container.clone()),
         }],
-        expected_name: None,
         open: ConnectOpen::Attach(open),
     }
 }
@@ -603,7 +602,6 @@ fn shell_intent(
         warnings: Vec::new(),
         object,
         fields,
-        expected_name: None,
         open: ConnectOpen::Exec(open),
     }
 }
