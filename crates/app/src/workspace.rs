@@ -21,7 +21,7 @@ use gpui_kit::{
     div, fill, point, prelude::FluentBuilder as _, px, size,
 };
 
-use cluster::{EVENT_LIMIT, EventFilter, ObjectKind};
+use cluster::{EVENT_LIMIT, EventFilter, NamespaceScope, ObjectKind};
 
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{FlowState, LiveCluster, SessionPhase};
@@ -205,7 +205,8 @@ impl AppShell {
                 "Nodes",
                 live.and_then(|live| {
                     let count = live.nodes.ready_count()?;
-                    Some(nodes_count_text(count, &role_counts(live.nodes.items())))
+                    let text = nodes_count_text(count, &role_counts(live.nodes.items()));
+                    Some(cluster_wide_text(text, &live.scope))
                 }),
             ),
             Screen::Issues => (
@@ -223,7 +224,7 @@ impl AppShell {
                     let text = if kind.is_namespaced() {
                         format!("{label} · {}", live.scope_label())
                     } else {
-                        label
+                        cluster_wide_text(label, &live.scope)
                     };
                     // The events store keeps only the newest ones, so say so at the cap.
                     Some(if kind == ResourceKind::Events && count >= EVENT_LIMIT {
@@ -1025,6 +1026,15 @@ fn nodes_count_text(count: usize, roles: &[(String, usize)]) -> String {
     text
 }
 
+/// The header count of a cluster-scoped list, which ignores the namespace scope: with a scope
+/// set, the extra `cluster-wide` keeps the list from reading as filtered by it.
+fn cluster_wide_text(count: String, scope: &NamespaceScope) -> String {
+    match scope {
+        NamespaceScope::All => count,
+        NamespaceScope::Named(_) | NamespaceScope::Several(_) => format!("{count} · cluster-wide"),
+    }
+}
+
 /// The count text of a paused list, with a note when new rows are waiting.
 fn paused_text(count: &str, has_held: bool) -> String {
     if has_held {
@@ -1313,6 +1323,24 @@ mod tests {
         assert_eq!(count_label(104, "node", "nodes"), "104 nodes");
         assert_eq!(count_label(1, "ingress", "ingresses"), "1 ingress");
         assert_eq!(count_label(2, "ingress", "ingresses"), "2 ingresses");
+    }
+
+    #[test]
+    fn cluster_scoped_headers_say_cluster_wide_under_a_namespace_scope() {
+        let named = NamespaceScope::Named("postgres".to_owned());
+        let several = NamespaceScope::Several(vec!["a".to_owned(), "b".to_owned()]);
+        assert_eq!(
+            cluster_wide_text("4 nodes".to_owned(), &NamespaceScope::All),
+            "4 nodes"
+        );
+        assert_eq!(
+            cluster_wide_text("4 nodes".to_owned(), &named),
+            "4 nodes · cluster-wide"
+        );
+        assert_eq!(
+            cluster_wide_text("20 namespaces".to_owned(), &several),
+            "20 namespaces · cluster-wide"
+        );
     }
 
     #[test]

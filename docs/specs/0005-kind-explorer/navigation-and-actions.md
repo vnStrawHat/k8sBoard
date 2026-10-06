@@ -43,7 +43,7 @@ impl Screen { pub(crate) fn kind(self) -> Option<ResourceKind>; }
 
 ## Workspace (`workspace.rs`, the post-0004 `upper` region)
 
-- Header: `kind.label()`, plus `count_label(n, singular, plural)`. For namespaced kinds, ` · {scope_label}` follows. `count_label` gains a `plural` parameter, so the existing callers pass `"pod", "pods"` and `"node", "nodes"`.
+- Header: `kind.label()`, plus `count_label(n, singular, plural)`. For namespaced kinds, ` · {scope_label}` follows; a cluster-scoped kind (and Nodes) gets ` · cluster-wide` while a namespace scope is set. `count_label` gains a `plural` parameter, so the existing callers pass `"pod", "pods"` and `"node", "nodes"`.
 - Interruption banner and failure view: from `explorer.list`, with the title "{label} are unavailable".
 - Body: `DataTable::new(&self.kind_table)`. Drawer: `ResourceKey::Kind` gives `kind_drawer(kind, row, ..)` ([kind-drawers.md](kind-drawers.md)).
 
