@@ -50,12 +50,20 @@ fn nice_max_steps_and_floors() {
     assert_eq!(cpu(7.0), 10.0);
     let bytes = |value| nice_max(value, Measure::Bytes);
     assert_eq!(bytes(0.0), MI);
-    // Powers of two in the value's own binary unit: the midline is a whole number too.
+    // Powers of two (and three quarters of them from 6 up) in the value's own binary unit: the
+    // midline is a whole number too.
     assert_eq!(bytes(477. * MI), 512. * MI);
-    assert_eq!(bytes(300. * MI), 512. * MI);
+    assert_eq!(bytes(300. * MI), 384. * MI);
     assert_eq!(bytes(100. * MI), 128. * MI);
     assert_eq!(bytes(900. * MI), 1024. * MI);
-    assert_eq!(bytes(513. * MI), 1024. * MI);
+    assert_eq!(bytes(513. * MI), 768. * MI);
+    assert_eq!(bytes(770. * MI), 1024. * MI);
+    // A pod near 4.8Gi gets a 6Gi chart, not an 8Gi one; below 6 the three-quarter step would
+    // halve into a fraction (3Mi to 1.5Mi, which the axis text would round).
+    assert_eq!(bytes(4.8 * 1024. * MI), 6. * 1024. * MI);
+    assert_eq!(bytes(2.6 * MI), 4. * MI);
+    assert_eq!(bytes(5.1 * 1024. * MI), 6. * 1024. * MI);
+    assert_eq!(bytes(6.1 * 1024. * MI), 8. * 1024. * MI);
     assert_eq!(bytes(1.3 * 1024. * MI), 2. * 1024. * MI);
     assert_eq!(bytes(1024. * MI), 1024. * MI);
     for value in [3., 90., 477., 900., 1500.] {
@@ -223,4 +231,60 @@ fn range_label_reads_whole_days_for_source_ranges() {
         chart.end = at(seconds);
         assert_eq!(range_label(&chart), label);
     }
+}
+
+fn model_over(seconds: &[i64], step: u64, unit: Measure) -> UsageChartModel {
+    UsageChartModel {
+        step: Duration::from_secs(step),
+        series: vec![ChartSeries {
+            name: "used".into(),
+            points: seconds
+                .iter()
+                .map(|second| (at(*second), Some(1.)))
+                .collect(),
+        }],
+        ..model(&[], &[], unit)
+    }
+}
+
+#[test]
+fn a_short_history_says_how_much_data_there_is() {
+    // Eight samples over the last 105 s of a 15 min range.
+    let seconds: Vec<i64> = (0..8).map(|index| 795 + index * 15).collect();
+    assert_eq!(
+        collecting_text(&model_over(&seconds, 15, Measure::Cpu)).as_deref(),
+        Some("Collecting · 1 min of data (kept 24 h)")
+    );
+    assert_eq!(
+        collecting_text(&model_over(&[900], 15, Measure::Cpu)).as_deref(),
+        Some("Collecting · under 1 min of data (kept 24 h)")
+    );
+}
+
+#[test]
+fn a_filled_chart_or_a_source_chart_does_not_collect() {
+    let seconds: Vec<i64> = (0..60).map(|index| index * 15).collect();
+    assert_eq!(
+        collecting_text(&model_over(&seconds, 15, Measure::Cpu)),
+        None
+    );
+    // A quarter of 900 s is 225 s: 240 s of data is enough.
+    assert_eq!(
+        collecting_text(&model_over(&[600, 840], 15, Measure::Cpu)),
+        None
+    );
+    // A coarse step means a metrics source, which has its own retention.
+    assert_eq!(
+        collecting_text(&model_over(&[900], 300, Measure::Cpu)),
+        None
+    );
+    assert_eq!(collecting_text(&model_over(&[], 15, Measure::Cpu)), None);
+}
+
+#[test]
+fn span_text_reads_minutes_then_hours() {
+    assert_eq!(span_text(20), "under 1 min");
+    assert_eq!(span_text(120), "2 min");
+    assert_eq!(span_text(3600), "1 h");
+    assert_eq!(span_text(4800), "1 h 20 min");
 }

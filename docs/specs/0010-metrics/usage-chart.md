@@ -41,7 +41,7 @@ pub(crate) fn usage_chart_card(model: Rc<UsageChartModel>, height: Pixels, cx: &
 ## Pure geometry (unit-tested)
 
 ```rust
-pub(crate) fn nice_max(value: f64, unit: Measure) -> f64;    // CPU 1, 2, 5 × 10^k (halves stay whole); bytes a power of two of the value's binary unit (900Mi → 1Gi); floor 10m CPU, 1 Mi bytes
+pub(crate) fn nice_max(value: f64, unit: Measure) -> f64;    // CPU 1, 2, 5 × 10^k (halves stay whole); bytes a power of two of the value's binary unit, or three quarters of one from 6 up (900Mi → 1Gi, 4.8Gi → 6Gi); floor 10m CPU, 1 Mi bytes
 fn y_max(model: &UsageChartModel) -> f64;                     // nice_max(max(values, references) × 1.06)
 fn x_at(at: jiff::Timestamp, start: jiff::Timestamp, end: jiff::Timestamp, width: f32) -> f32;
 fn segments(points: &[(jiff::Timestamp, Option<f64>)], start: jiff::Timestamp, max_gap: Duration)
@@ -50,6 +50,8 @@ fn nearest_tick(points: &[(jiff::Timestamp, Option<f64>)], at: jiff::Timestamp) 
 ```
 
 `max_gap` = 2.5 × `model.step` (decision 12). Points before `start` are dropped.
+
+**Short history.** A chart with a step of 60 s or finer (the app's own polling, kept 24 h) whose data spans under a quarter of its range puts `Collecting · {n} min of data (kept 24 h)` over the empty left of the plot (`collecting_text`); source charts (coarser step) never do.
 
 ## Paint (inside `bounds`)
 

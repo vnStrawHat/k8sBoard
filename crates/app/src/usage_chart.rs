@@ -12,7 +12,7 @@ use gpui_kit::component::plot::{Curve, Grid, IntoPlot, Plot, PlotLabel};
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, BorderStyle, Bounds, ElementId, Hsla, IntoElement, ParentElement as _, Pixels,
-    Point, SharedString, Styled as _, TextAlign, Window, div, point, px, quad, size,
+    Point, SharedString, Styled as _, TextAlign, Window, div, point, px, quad, relative, size,
 };
 
 use crate::drawer::truncated_text;
@@ -42,6 +42,9 @@ const NICE_STEPS: [f64; 4] = [1., 2., 5., 10.];
 /// Rates use 1, 2, 4, and 10 instead: the midline of a 5 KB/s top would read `3 KB/s` in whole
 /// units, while the halves of these are whole at every power of ten.
 const RATE_STEPS: [f64; 4] = [1., 2., 4., 10.];
+const THREE_QUARTERS: f64 = 0.75;
+/// Below this power of two, three quarters of it halves into a fraction the axis text would round.
+const MIN_THREE_QUARTER_POWER: f64 = 8.;
 /// A reference label keeps this far left of the right edge, clear of the newest value's dot.
 const LABEL_INSET: f32 = 14.;
 
@@ -91,7 +94,8 @@ pub(crate) struct UsageChart {
 
 /// The top of a y axis that holds `value`, at least the floor of the unit (10m for CPU, 1Mi for
 /// memory), chosen so that the midline is a round number too. CPU takes 1, 2, or 5 times a power
-/// of ten. Memory takes a power of two of its own binary unit, so 900Mi gives a 1Gi top and a
+/// of ten. Memory takes a power of two of its own binary unit, or three quarters of one from 6
+/// up (6Gi, not 8Gi, for 4.8Gi), so 900Mi gives a 1Gi top and a
 /// 512Mi midline. A rate takes 1, 2, 4, or 10 times a power of ten, so its midline is whole in
 /// its unit.
 pub(crate) fn nice_max(value: f64, unit: Measure) -> f64 {
@@ -107,6 +111,12 @@ pub(crate) fn nice_max(value: f64, unit: Measure) -> f64 {
             let mut power = 1.;
             while power * base < value {
                 power *= 2.;
+            }
+            // Three quarters of a power sits between two powers (6Gi between 4Gi and 8Gi), so a
+            // 4.8Gi pod does not get an 8Gi chart. Its half is whole from a power of 8 up.
+            let three_quarters = power * THREE_QUARTERS;
+            if power >= MIN_THREE_QUARTER_POWER && three_quarters * base >= value {
+                return three_quarters * base;
             }
             power * base
         }
@@ -532,6 +542,52 @@ fn has_points_in_range(model: &UsageChartModel) -> bool {
     })
 }
 
+/// How much of the chart's range the data may fill before the chart stops saying it is still
+/// collecting: a line a quarter of the way across is a stub, not a trend.
+const COLLECTING_SHARE: f64 = 0.25;
+/// The share of the plot width the collecting text may take, clear of the data on the right.
+const COLLECTING_OVERLAY_WIDTH: f32 = 0.5;
+/// Charts of this step or finer are fed by the app's own polling, which keeps 24 hours. The coarser
+/// ones come from a metrics source with its own retention, so they never say "collecting".
+const POLLED_STEP_LIMIT: Duration = Duration::from_secs(60);
+
+/// `Collecting · 2 min of data (kept 24 h)` while the polled history fills less than a quarter of
+/// the range, so the near-empty plot says why; `None` once it fills more, or for a source chart.
+fn collecting_text(model: &UsageChartModel) -> Option<String> {
+    if model.step > POLLED_STEP_LIMIT {
+        return None;
+    }
+    let times = || {
+        model.series.iter().flat_map(|series| {
+            series
+                .points
+                .iter()
+                .filter(|(at, value)| *at >= model.start && value.is_some())
+                .map(|(at, _)| *at)
+        })
+    };
+    let span = times().max()?.duration_since(times().min()?).as_secs_f64();
+    let range = model.end.duration_since(model.start).as_secs_f64();
+    if span >= range * COLLECTING_SHARE {
+        return None;
+    }
+    Some(format!(
+        "Collecting · {} of data (kept 24 h)",
+        span_text(span as u64)
+    ))
+}
+
+/// `under 1 min`, `2 min`, `1 h 20 min`.
+fn span_text(seconds: u64) -> String {
+    let minutes = seconds / 60;
+    match (minutes / 60, minutes % 60) {
+        (0, 0) => "under 1 min".to_owned(),
+        (0, minutes) => format!("{minutes} min"),
+        (hours, 0) => format!("{hours} h"),
+        (hours, minutes) => format!("{hours} h {minutes} min"),
+    }
+}
+
 // ---- card ----
 
 /// The chart in a bordered card, with its title above it and, on the right, its legend (two
@@ -632,6 +688,23 @@ pub(crate) fn usage_chart_card(
                     .child(text),
             )
     });
+    // The data sits against the right edge, so the text takes the empty left part of the plot.
+    let collecting_overlay = collecting_text(&model).filter(|_| has_points).map(|text| {
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(GUTTER_LEFT))
+            .w(relative(COLLECTING_OVERLAY_WIDTH))
+            .flex()
+            .items_center()
+            .justify_center()
+            .px_2()
+            .text_xs()
+            .text_color(muted)
+            .text_center()
+            .child(div().max_w_full().child(text))
+    });
     v_flex()
         .w_full()
         .gap_1()
@@ -647,7 +720,8 @@ pub(crate) fn usage_chart_card(
                 .w_full()
                 .h(height)
                 .child(UsageChart::new(model))
-                .children(notice_overlay),
+                .children(notice_overlay)
+                .children(collecting_overlay),
         )
 }
 
