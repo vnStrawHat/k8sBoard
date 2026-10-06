@@ -12,7 +12,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
-use crate::cell_truncation::{middle_truncate, mono_capacity};
+use crate::cell_truncation::{middle_truncate, mono_capacity, plain_text};
 use crate::drawer::{truncated_text, truncated_text_with_tooltip};
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::NodeUsageHistory;
@@ -53,14 +53,15 @@ const USAGE_BAR_WIDTH: f32 = 46.;
 const HIDDEN_BY_DEFAULT: [usize; 2] = [CPU_REQUESTED, MEMORY_REQUESTED];
 
 /// The base widths of the default columns add up to what a 1100 px window leaves for the table, so
-/// Memory and Age stay inside it. Taints takes most of the spare width (it holds the longest values)
-/// and is the column that gives way first; Internal IP is fixed at the width of `255.255.255.255`.
+/// Memory and Age stay inside it. Name takes most of the spare width, up to 300 px (28 mono characters),
+/// so node names stay whole at 1320 px; Taints is the column that gives way first. Internal IP is fixed
+/// at the width of `255.255.255.255`, and Version at that of `v1.29.5`.
 const NODE_COLUMNS: [KindColumn; 11] = [
-    column("Name", 96., Align::Left).grows(1).up_to(200.),
-    column("Status", 76., Align::Left).grows(2).up_to(250.),
-    column("Roles", 96., Align::Left).grows(1).up_to(220.),
-    column("Taints", 90., Align::Left).grows(4).up_to(420.),
-    column("Version", 80., Align::Left),
+    column("Name", 110., Align::Left).grows(8).up_to(300.),
+    column("Status", 76., Align::Left),
+    column("Roles", 106., Align::Left),
+    column("Taints", 56., Align::Left).grows(2).up_to(420.),
+    column("Version", 90., Align::Left),
     column("Internal IP", 140., Align::Left),
     column("CPU", 92., Align::Left),
     column("Memory", 92., Align::Left),
@@ -195,6 +196,12 @@ impl NodeTableDelegate {
     fn requests_of(&self, node: &NodeSummary, cx: &App) -> NodeUsage {
         self.pods_of_all_namespaces(cx)
             .map_or_else(NodeUsage::default, |pods| node_request_share(node, pods))
+    }
+
+    /// The nodes in table order: the rows a name is told apart from.
+    fn shown_nodes<'a>(&'a self, cx: &'a App) -> impl Iterator<Item = &'a NodeSummary> {
+        let nodes = self.nodes(cx);
+        self.view.rows().iter().filter_map(|&item| nodes.get(item))
     }
 
     /// The node shown at table row `row_ix`, and the session it belongs to.
@@ -349,7 +356,14 @@ impl NodeTableDelegate {
         };
         let mono = cx.theme().mono_font_family.clone();
         match logical {
-            NAME => truncated_text("name", node.name.clone()).into_any_element(),
+            NAME => plain_text(
+                ("node-name", row_ix),
+                &node.name,
+                &node.name,
+                capacity,
+                self.shown_nodes(cx).map(|node| (None, node.name.as_str())),
+                cx,
+            ),
             STATUS => {
                 // Pressure names can outgrow the column, so the full label is the tooltip.
                 let label = node_status_label(node.status, &node.conditions);
@@ -606,6 +620,8 @@ fn cell_text(text: &str, cx: &App) -> AnyElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cell_truncation::cut_name;
+    use crate::table_layout::layout_columns;
 
     fn taint(key: &str, effect: &str) -> NodeTaint {
         NodeTaint {
@@ -756,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn the_base_widths_fit_a_1100_px_window_and_taints_grows_most() {
+    fn the_base_widths_fit_a_1100_px_window_and_name_grows_most() {
         // The window less the 220 px sidebar, the table gutter, and the checkbox column.
         let room = 1100. - 220. - 28. - 32.;
         // The request columns are hidden by default, so they take no room until asked for.
@@ -772,8 +788,59 @@ mod tests {
             ip.width >= 130. && ip.weight == 0,
             "an IP never shrinks or grows"
         );
+        assert!(NODE_COLUMNS[VERSION].width >= 90., "v1.29.5 shows whole");
         let heaviest = NODE_COLUMNS.iter().map(|column| column.weight).max();
-        assert_eq!(heaviest, Some(NODE_COLUMNS[TAINTS].weight));
+        assert_eq!(heaviest, Some(NODE_COLUMNS[NAME].weight));
+        assert!(NODE_COLUMNS[TAINTS].width < NODE_COLUMNS[NAME].width);
+    }
+
+    /// The mono characters that fit in the Name column of a window `window` px wide: the table
+    /// is the window less the 220 px sidebar, and a mono glyph is about 9.6 px.
+    fn name_capacity(window: f32) -> usize {
+        let plan = node_plan();
+        let hidden = BTreeSet::from(HIDDEN_BY_DEFAULT);
+        let layout = layout_columns(&plan.specs, plan.flexible, px(window - 220.), &hidden);
+        let name = layout.columns.get(1).expect("a Name column").width;
+        (f32::from(name - px(24.)) / 9.6) as usize
+    }
+
+    #[test]
+    fn the_lab_node_names_stay_whole_at_1320_px() {
+        assert!(name_capacity(1320.) >= 26, "{}", name_capacity(1320.));
+    }
+
+    #[test]
+    fn the_lab_node_names_elide_to_different_strings_at_any_width() {
+        let names = [
+            "k8sboard-lab-control-plane",
+            "k8sboard-lab-worker",
+            "k8sboard-lab-worker2",
+        ];
+        for window in [900., 1100., 1320.] {
+            let capacity = name_capacity(window);
+            let shown: BTreeSet<_> = names
+                .iter()
+                .map(|name| cut_name(name, capacity, names.map(|name| (None, name))).into_owned())
+                .collect();
+            assert_eq!(
+                shown.len(),
+                3,
+                "{window} px, capacity {capacity}: {shown:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn node_names_that_share_both_ends_keep_their_start_apart() {
+        let names = [
+            "ip-10-0-1-11.eu-west-1.compute.internal",
+            "ip-10-0-1-12.eu-west-1.compute.internal",
+        ];
+        let shown: BTreeSet<_> = names
+            .iter()
+            .map(|name| cut_name(name, 24, names.map(|name| (None, name))).into_owned())
+            .collect();
+        assert_eq!(shown.len(), 2, "{shown:?}");
     }
 
     #[test]

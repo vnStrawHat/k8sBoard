@@ -122,6 +122,33 @@ fn cut_distinctly<'full, 'row>(
     }
 }
 
+/// `name` cut to `capacity` characters the way a name column cuts it: from the middle, or keeping
+/// the start when a sibling would read the same.
+pub(crate) fn cut_name<'full, 'row>(
+    name: &'full str,
+    capacity: usize,
+    siblings: impl IntoIterator<Item = Sibling<'row>>,
+) -> Cow<'full, str> {
+    cut_distinctly(name, 0, capacity, siblings)
+}
+
+/// Mono `text` cut by `cut_name`, with `tooltip` as its full value: the whole `namespace/name`
+/// when the namespace is left out because one namespace is in scope.
+pub(crate) fn plain_text<'a>(
+    id: (&'static str, usize),
+    text: &str,
+    tooltip: &str,
+    capacity: usize,
+    siblings: impl IntoIterator<Item = Sibling<'a>>,
+    cx: &App,
+) -> AnyElement {
+    let shown = cut_name(text, capacity, siblings).into_owned();
+    truncated_text_with_tooltip(id, shown, tooltip.to_owned())
+        .w_full()
+        .font_family(cx.theme().mono_font_family.clone())
+        .into_any_element()
+}
+
 /// Mono text with a muted `{prefix}/`. Both share one text run so a long value is cut instead of
 /// wrapping: in the middle once it passes `capacity` characters, so the end of the name stays
 /// visible, and with an ellipsis if the estimate was short. A name that would read like one of the
@@ -136,11 +163,7 @@ pub(crate) fn qualified_text<'a>(
 ) -> AnyElement {
     let mono = cx.theme().mono_font_family.clone();
     let Some(prefix) = prefix else {
-        let shown = cut_distinctly(text, 0, capacity, siblings).into_owned();
-        return truncated_text_with_tooltip(id, shown, text.to_owned())
-            .w_full()
-            .font_family(mono)
-            .into_any_element();
+        return plain_text(id, text, text, capacity, siblings, cx);
     };
     let prefix = format!("{prefix}/");
     let full = format!("{prefix}{text}");

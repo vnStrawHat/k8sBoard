@@ -11,7 +11,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
-use crate::cell_truncation::{mono_capacity, qualified_text};
+use crate::cell_truncation::{mono_capacity, plain_text, qualified_text};
 use crate::dock::Dock;
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::PodUsageHistory;
@@ -48,7 +48,7 @@ const POD_COLUMNS: [KindColumn; 8] = [
     column("Restarts", 80., Align::Right),
     column("CPU", 70., Align::Right),
     column("Memory", 80., Align::Right),
-    column("Node", 110., Align::Left).grows(1).up_to(260.),
+    column("Node", 110., Align::Left).grows(2).up_to(260.),
     column("Age", 70., Align::Right),
 ];
 
@@ -335,7 +335,16 @@ impl PodTableDelegate {
                 usage_cell(text, mono, cx)
             }
             NODE => match &pod.node_name {
-                Some(node_name) => div().child(node_name.clone()).into_any_element(),
+                Some(node_name) => plain_text(
+                    ("pod-node", row_ix),
+                    node_name,
+                    node_name,
+                    capacity,
+                    self.shown_pods(cx)
+                        .filter_map(|pod| pod.node_name.as_deref())
+                        .map(|node_name| (None, node_name)),
+                    cx,
+                ),
                 None => dash_cell(cx),
             },
             AGE => div()
